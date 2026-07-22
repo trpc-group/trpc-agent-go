@@ -144,6 +144,18 @@ func TestRunEmitRejectsInvalidStates(t *testing.T) {
 	assert.ErrorIs(t, run.Emit(context.Background(), nil), errInvalidRunEvent)
 }
 
+func TestRunEmitRejectsInvalidEventsBeforeEnqueue(t *testing.T) {
+	emit := make(chan hookEvent, 1)
+	run := newRun(&adapter.RunAgentInput{}, emit, make(chan struct{}))
+	err := run.Emit(context.Background(), aguievents.NewCustomEvent(""))
+	assert.ErrorIs(t, err, errInvalidRunEvent)
+	assertNoHookEvent(t, emit)
+	err = run.Emit(context.Background(), aguievents.NewCustomEvent("background.report",
+		aguievents.WithValue(func() {})))
+	assert.ErrorIs(t, err, errInvalidRunEvent)
+	assertNoHookEvent(t, emit)
+}
+
 func TestRunEmitReturnsRunClosedAfterEventEnqueued(t *testing.T) {
 	emit := make(chan hookEvent, 1)
 	done := make(chan struct{})
@@ -584,6 +596,58 @@ func TestRunHookEventBypassesAfterTranslateCallback(t *testing.T) {
 	}
 	assert.True(t, foundHookEvent)
 	assert.False(t, hookEventPassedThroughCallback)
+}
+
+func TestRunEmitRejectsAfterTranslateCallbackReentrancy(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- agentevent.New("inv", "assistant")
+	close(agentEvents)
+	emitErrs := make(chan error, 1)
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewCustomEvent("agent.status")}}}
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if !ok || custom.Name != "agent.status" {
+				return evt, nil
+			}
+			run, ok := RunFromContext(ctx)
+			if !ok {
+				emitErrs <- errors.New("run missing from context")
+				return evt, nil
+			}
+			emitErrs <- run.Emit(ctx, aguievents.NewCustomEvent("callback.report"))
+			return evt, nil
+		})
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			return agentEvents, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		}),
+		WithTranslateCallbacks(callbacks),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	evts := collectEvents(t, eventsCh)
+	select {
+	case emitErr := <-emitErrs:
+		require.ErrorIs(t, emitErr, errRunEmitReentrant)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for reentrant emit error")
+	}
+	assert.True(t, hasCustomEventNamed(evts, "agent.status"))
+	assert.False(t, hasCustomEventNamed(evts, "callback.report"))
 }
 
 func TestRunHookRejectsFrameworkOwnedEvents(t *testing.T) {
@@ -4917,6 +4981,15 @@ func assertNoAGUIEvent(t *testing.T, ch <-chan aguievents.Event, wait time.Durat
 	}
 }
 
+func assertNoHookEvent(t *testing.T, ch <-chan hookEvent) {
+	t.Helper()
+	select {
+	case req := <-ch:
+		require.FailNowf(t, "unexpected hook event", "%T", req.event)
+	default:
+	}
+}
+
 func waitForHookStart(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
 	select {
@@ -4949,6 +5022,16 @@ func hasRunFinishedEvent(events []aguievents.Event) bool {
 func hasRunErrorEvent(events []aguievents.Event) bool {
 	for _, evt := range events {
 		if _, ok := evt.(*aguievents.RunErrorEvent); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCustomEventNamed(events []aguievents.Event, name string) bool {
+	for _, evt := range events {
+		custom, ok := evt.(*aguievents.CustomEvent)
+		if ok && custom.Name == name {
 			return true
 		}
 	}

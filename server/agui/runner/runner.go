@@ -563,6 +563,10 @@ func (r *runner) runEventLoop(
 		case result := <-agentRun:
 			agentRun = nil
 			if result.err != nil {
+				if ctx.Err() != nil {
+					r.emitPostRunTerminalEvent(ctx, events, input)
+					return
+				}
 				log.ErrorfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, run agent: %v",
@@ -603,6 +607,9 @@ func (r *runner) runEventLoop(
 			}
 		case req := <-hookEvents:
 			if !r.handleHookEvent(ctx, events, input, req) {
+				if ctx.Err() != nil {
+					r.emitPostRunTerminalEvent(ctx, events, input)
+				}
 				return
 			}
 		case err := <-hookDone:
@@ -978,7 +985,8 @@ func (r *runner) handleAgentEvent(ctx context.Context, events chan<- aguievents.
 func (r *runner) translateAgentEvent(ctx context.Context, input *runInput, event *event.Event) ([]aguievents.Event, error) {
 	threadID := input.threadID
 	runID := input.runID
-	customEvent, err := r.handleBeforeTranslate(ctx, event)
+	eventLoopCtx := newRunEventLoopContext(ctx)
+	customEvent, err := r.handleBeforeTranslate(eventLoopCtx, event)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -990,7 +998,7 @@ func (r *runner) translateAgentEvent(ctx context.Context, input *runInput, event
 		)
 		return nil, fmt.Errorf("before translate callback: %w", err)
 	}
-	aguiEvents, err := input.translator.Translate(ctx, customEvent)
+	aguiEvents, err := input.translator.Translate(eventLoopCtx, customEvent)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -1083,7 +1091,7 @@ func (r *runner) emitEvent(ctx context.Context, events chan<- aguievents.Event, 
 }
 
 func (r *runner) afterTranslateEvent(ctx context.Context, event aguievents.Event, input *runInput) (aguievents.Event, bool) {
-	translatedEvent, err := r.handleAfterTranslate(ctx, event)
+	translatedEvent, err := r.handleAfterTranslate(newRunEventLoopContext(ctx), event)
 	if err != nil {
 		log.ErrorfContext(
 			ctx,

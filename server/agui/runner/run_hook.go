@@ -12,14 +12,16 @@ package runner
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 )
 
 var (
-	errRunClosed       = errors.New("agui: run closed")
-	errInvalidRunEvent = errors.New("agui: invalid run hook event")
+	errRunClosed        = errors.New("agui: run closed")
+	errInvalidRunEvent  = errors.New("agui: invalid run hook event")
+	errRunEmitReentrant = errors.New("agui: run emit called from event loop")
 )
 
 // RunHook observes one AG-UI run and may emit run-scoped UI events.
@@ -33,6 +35,8 @@ type Run struct {
 }
 
 type runContextKey struct{}
+
+type runEventLoopContextKey struct{}
 
 type hookEvent struct {
 	event aguievents.Event
@@ -62,6 +66,21 @@ func RunFromContext(ctx context.Context) (*Run, bool) {
 	return run, ok
 }
 
+func newRunEventLoopContext(ctx context.Context) context.Context {
+	run, ok := RunFromContext(ctx)
+	if !ok || run == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, runEventLoopContextKey{}, run)
+}
+
+func isRunEventLoopContext(ctx context.Context, run *Run) bool {
+	if ctx == nil || run == nil {
+		return false
+	}
+	return ctx.Value(runEventLoopContextKey{}) == run
+}
+
 // Input returns the request payload for this run.
 func (r *Run) Input() *adapter.RunAgentInput {
 	if r == nil || r.input == nil {
@@ -77,6 +96,9 @@ func (r *Run) Emit(ctx context.Context, event aguievents.Event) error {
 	}
 	if err := validateRunHookEvent(event); err != nil {
 		return err
+	}
+	if isRunEventLoopContext(ctx, r) {
+		return errRunEmitReentrant
 	}
 	if err := ctx.Err(); err != nil {
 		return err
@@ -116,6 +138,12 @@ func validateRunHookEvent(event aguievents.Event) error {
 		aguievents.EventTypeMessagesSnapshot:
 		return errInvalidRunEvent
 	default:
+		if err := event.Validate(); err != nil {
+			return fmt.Errorf("%w: %w", errInvalidRunEvent, err)
+		}
+		if _, err := event.ToJSON(); err != nil {
+			return fmt.Errorf("%w: %w", errInvalidRunEvent, err)
+		}
 		return nil
 	}
 }

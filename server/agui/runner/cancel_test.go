@@ -245,6 +245,56 @@ func TestCancelPreservesRunFinishedWhenRunHookReturnsContextError(t *testing.T) 
 	assert.False(t, hasRunErrorEvent(remaining))
 }
 
+func TestRunEventLoopGivesCancellationPrecedenceOverRunnerError(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		ctx, cancel := context.WithCancelCause(context.Background())
+		cancel(errExplicitCancel)
+		events := make(chan aguievents.Event, 1)
+		agentRun := make(chan runAgentResult, 1)
+		agentRun <- runAgentResult{err: context.Canceled}
+		input := &runInput{threadID: "thread", runID: "run"}
+		r := &runner{}
+		r.runEventLoop(ctx, events, input, agentRun, nil, nil, 0)
+		evt := waitForNextEvent(t, events)
+		assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evt)
+		assert.False(t, hasRunErrorEvent([]aguievents.Event{evt}))
+	}
+}
+
+func TestRunEventLoopEmitsTerminalWhenHookEventWriteCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	events := make(chan aguievents.Event)
+	agentRun := make(chan runAgentResult)
+	hookEvents := make(chan hookEvent, 1)
+	hookDone := make(chan error)
+	reply := make(chan error, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	r := &runner{}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.runEventLoop(ctx, events, input, agentRun, hookEvents, hookDone, 0)
+	}()
+	hookEvents <- hookEvent{event: aguievents.NewCustomEvent("background.report"), reply: reply}
+	require.Eventually(t, func() bool {
+		return len(hookEvents) == 0
+	}, time.Second, time.Millisecond)
+	cancel(errExplicitCancel)
+	select {
+	case err := <-reply:
+		require.ErrorIs(t, err, errRunClosed)
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event reply")
+	}
+	evt := waitForNextEvent(t, events)
+	assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evt)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for run event loop")
+	}
+}
+
 func TestCancelIgnoresRunID(t *testing.T) {
 	ctxCh := make(chan context.Context, 1)
 	underlying := &waitCancelRunner{ctxCh: ctxCh}
