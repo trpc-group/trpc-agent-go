@@ -138,12 +138,40 @@ func TestJSONCriterionSchemaValidationWithDecodedString(t *testing.T) {
 	assert.Contains(t, err.Error(), "json schema validation failed")
 }
 
+func TestJSONCriterionSchemaValidationWithRawBytes(t *testing.T) {
+	criterion := &JSONCriterion{
+		Schema: `{
+			"type": "object",
+			"required": ["answer"],
+			"properties": {
+				"answer": { "type": "string" }
+			}
+		}`,
+		MatchStrategy: JSONMatchStrategySkip,
+	}
+	ok, err := criterion.Match([]byte(`{"answer":"Paris"}`), nil)
+	assert.True(t, ok)
+	assert.NoError(t, err)
+	ok, err = criterion.Match([]byte(`not json`), nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "parse actual raw json")
+}
+
 func TestJSONCriterionSchemaRejectsInvalidSchema(t *testing.T) {
 	criterion := &JSONCriterion{Schema: `{`}
 	ok, err := criterion.Match(json.RawMessage(`{"answer":"Paris"}`), json.RawMessage(`{}`))
 	assert.False(t, ok)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "parse json schema")
+}
+
+func TestJSONCriterionSchemaRejectsInvalidSchemaKeyword(t *testing.T) {
+	criterion := &JSONCriterion{Schema: `{"type":123}`}
+	ok, err := criterion.Match(map[string]any{}, nil)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "compile json schema")
 }
 
 func TestJSONCriterionMatchRawMessage(t *testing.T) {
