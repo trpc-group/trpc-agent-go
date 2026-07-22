@@ -203,15 +203,6 @@
                 "candidate#model",
                 "candidate#tool.lookup_game"
               ]
-            },
-            {
-              "agentName": "candidate",
-              "nodeId": "candidate",
-              "appliedSurfaceIds": [
-                "candidate#instruction",
-                "candidate#model",
-                "candidate#tool.lookup_game"
-              ]
             }
           ],
           "toolTrajectory": {
@@ -397,15 +388,6 @@
             }
           ],
           "trace": [
-            {
-              "agentName": "candidate",
-              "nodeId": "candidate",
-              "appliedSurfaceIds": [
-                "candidate#instruction",
-                "candidate#model",
-                "candidate#tool.lookup_game"
-              ]
-            },
             {
               "agentName": "candidate",
               "nodeId": "candidate",
@@ -627,15 +609,6 @@
                   "candidate#model",
                   "candidate#tool"
                 ]
-              },
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool"
-                ]
               }
             ],
             "toolTrajectory": {
@@ -799,15 +772,6 @@
             ],
             "failureReasons": [],
             "trace": [
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool.lookup_game"
-                ]
-              },
               {
                 "agentName": "candidate",
                 "nodeId": "candidate",
@@ -1280,15 +1244,6 @@
                   "candidate#model",
                   "candidate#tool"
                 ]
-              },
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool"
-                ]
               }
             ],
             "toolTrajectory": {
@@ -1452,15 +1407,6 @@
             ],
             "failureReasons": [],
             "trace": [
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool.lookup_game"
-                ]
-              },
               {
                 "agentName": "candidate",
                 "nodeId": "candidate",
@@ -1918,15 +1864,6 @@
                   "candidate#model",
                   "candidate#tool"
                 ]
-              },
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool"
-                ]
               }
             ],
             "toolTrajectory": {
@@ -2101,15 +2038,6 @@
               }
             ],
             "trace": [
-              {
-                "agentName": "candidate",
-                "nodeId": "candidate",
-                "appliedSurfaceIds": [
-                  "candidate#instruction",
-                  "candidate#model",
-                  "candidate#tool.lookup_game"
-                ]
-              },
               {
                 "agentName": "candidate",
                 "nodeId": "candidate",
