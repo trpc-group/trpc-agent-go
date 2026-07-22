@@ -33,12 +33,18 @@ func InjectFault(input Snapshot, kind FaultKind) (Snapshot, error) {
 		inject = injectStateValue
 	case FaultMemoryContent:
 		inject = injectMemoryContent
+	case FaultDuplicateMemory:
+		inject = injectDuplicateMemory
+	case FaultMemorySearchOrder:
+		inject = injectMemorySearchOrder
 	case FaultSummaryText:
 		inject = injectSummaryText
 	case FaultSummaryMissing:
 		inject = injectSummaryMissing
 	case FaultSummaryFilterKey:
 		inject = injectSummaryFilterKey
+	case FaultSummaryStale:
+		inject = injectSummaryStale
 	case FaultTrackPayload:
 		inject = injectTrackPayload
 	case FaultDuplicateEvent:
@@ -90,6 +96,30 @@ func injectMemoryContent(output *Snapshot) error {
 	return nil
 }
 
+func injectDuplicateMemory(output *Snapshot) error {
+	if len(output.Memories) == 0 {
+		return errors.New("duplicate memory fault requires a memory")
+	}
+	output.Memories = append(output.Memories, cloneJSONMap(output.Memories[0]))
+	return nil
+}
+
+func injectMemorySearchOrder(output *Snapshot) error {
+	keys := make([]string, 0, len(output.MemorySearches))
+	for key, results := range output.MemorySearches {
+		if len(results) >= 2 {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) == 0 {
+		return errors.New("memory search order fault requires two results")
+	}
+	results := output.MemorySearches[keys[0]]
+	results[0], results[1] = results[1], results[0]
+	return nil
+}
+
 func injectSummaryText(output *Snapshot) error {
 	summary, err := firstSummary(output.Summaries)
 	if err != nil {
@@ -115,6 +145,50 @@ func injectSummaryFilterKey(output *Snapshot) error {
 	}
 	delete(output.Summaries, key)
 	output.Summaries["wrong/filter"] = summary
+	return nil
+}
+
+func injectSummaryStale(output *Snapshot) error {
+	summary, err := firstSummary(output.Summaries)
+	if err != nil {
+		return err
+	}
+	boundary, ok := summary["boundary"].(map[string]any)
+	if !ok {
+		return errors.New("stale summary fault requires a boundary")
+	}
+	lastEventID, _ := boundary["last_event_id"].(string)
+	if lastEventID == "" {
+		return errors.New("stale summary fault requires an event boundary")
+	}
+	boundaryIndex := -1
+	for index := range output.Events {
+		if stringValue(output.Events[index]["id"]) == lastEventID {
+			boundaryIndex = index
+			break
+		}
+	}
+	if boundaryIndex < 1 {
+		return errors.New("stale summary fault requires an earlier event boundary")
+	}
+	previous := output.Events[boundaryIndex-1]
+	previousID := stringValue(previous["id"])
+	previousTimestamp, ok := previous["timestamp"]
+	if previousID == "" || !ok {
+		return errors.New("stale summary fault requires normalized event identity and time")
+	}
+	boundary["last_event_id"] = previousID
+	boundary["cutoff_at"] = previousTimestamp
+	retained := make([]string, 0, len(output.Events)-boundaryIndex)
+	for index := boundaryIndex; index < len(output.Events); index++ {
+		logicalID := stringValue(output.Events[index]["id"])
+		if logicalID == "" {
+			return errors.New("stale summary fault requires normalized event identities")
+		}
+		retained = append(retained, logicalID)
+	}
+	summary["text"] = "injected-stale-summary"
+	summary["retained_event_ids"] = retained
 	return nil
 }
 
@@ -192,7 +266,7 @@ func mutateToolArguments(events []CanonicalMap) error {
 	return errors.New("tool argument fault requires a tool call")
 }
 
-func mutateState(state map[string]map[string]string) error {
+func mutateState(state map[string]CanonicalMap) error {
 	for _, scope := range []string{"session", "user", "app"} {
 		values := state[scope]
 		keys := make([]string, 0, len(values))
@@ -201,7 +275,10 @@ func mutateState(state map[string]map[string]string) error {
 		}
 		sort.Strings(keys)
 		if len(keys) > 0 {
-			values[keys[0]] = `"injected-state-drift"`
+			values[keys[0]] = CanonicalMap{
+				"kind": "json",
+				"json": `"injected-state-drift"`,
+			}
 			return nil
 		}
 	}

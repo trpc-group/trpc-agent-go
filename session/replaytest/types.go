@@ -32,13 +32,20 @@ const (
 	CapabilitySessionState Capability = "session_state"
 	// CapabilityMemory indicates support for memory persistence.
 	CapabilityMemory Capability = "memory"
+	// CapabilityMemorySearch indicates support for ranked memory retrieval.
+	CapabilityMemorySearch Capability = "memory_search"
 	// CapabilitySummary indicates support for session summaries.
 	CapabilitySummary Capability = "summary"
 	// CapabilityTrack indicates support for track-event persistence.
 	CapabilityTrack Capability = "track"
-	// CapabilityConcurrent indicates support for concurrent writes.
+	// CapabilityConcurrent indicates support for concurrent event appends.
 	CapabilityConcurrent Capability = "concurrent_write"
 )
+
+// replayTrackStateKey mirrors the session-owned track index. Replay inputs
+// reject this key; normalization excludes the backend-maintained index after
+// normalizing the actual track events separately.
+const replayTrackStateKey = "tracks"
 
 func isKnownCapability(capability Capability) bool {
 	switch capability {
@@ -47,6 +54,7 @@ func isKnownCapability(capability Capability) bool {
 		CapabilityUserState,
 		CapabilitySessionState,
 		CapabilityMemory,
+		CapabilityMemorySearch,
 		CapabilitySummary,
 		CapabilityTrack,
 		CapabilityConcurrent:
@@ -68,6 +76,7 @@ func FullCapabilities() Capabilities {
 		CapabilityUserState:    true,
 		CapabilitySessionState: true,
 		CapabilityMemory:       true,
+		CapabilityMemorySearch: true,
 		CapabilitySummary:      true,
 		CapabilityTrack:        true,
 		CapabilityConcurrent:   true,
@@ -79,7 +88,7 @@ type Services struct {
 	// Session is the isolated session service under test.
 	Session session.Service
 	// Memory is the isolated memory service under test. It may be nil for cases
-	// that do not require CapabilityMemory.
+	// that require neither CapabilityMemory nor CapabilityMemorySearch.
 	Memory memory.Service
 	// Cleanup removes backend resources after both services are closed.
 	// It may be nil when the services own all of their resources.
@@ -121,7 +130,8 @@ type Case struct {
 	Name string
 	// Description states the externally observable contract exercised by the case.
 	Description string
-	// InitialState is copied before the session is created.
+	// InitialState is copied before the session is created. Its session-scoped
+	// keys follow the same rules as StateInput.Values.
 	InitialState session.StateMap
 	// Requires selects both the operations and snapshot domains exercised by the
 	// case. It must include CapabilitySession and every capability implied by Steps.
@@ -157,13 +167,15 @@ const (
 	StepUpdateState StepKind = "update_state"
 	// StepAddMemory persists one memory entry.
 	StepAddMemory StepKind = "add_memory"
+	// StepSearchMemory records one ranked memory query result.
+	StepSearchMemory StepKind = "search_memory"
 	// StepCreateSummary creates or refreshes one summary.
 	StepCreateSummary StepKind = "create_summary"
 	// StepAppendTrack appends one track event.
 	StepAppendTrack StepKind = "append_track"
 	// StepReloadSession reloads the active session from the backend.
 	StepReloadSession StepKind = "reload_session"
-	// StepConcurrent runs multiple ordered branches concurrently.
+	// StepConcurrent runs multiple ordered event-only branches concurrently.
 	StepConcurrent StepKind = "concurrent"
 )
 
@@ -180,11 +192,15 @@ type Step struct {
 	State *StateInput
 	// Memory is populated only for memory add steps.
 	Memory *MemoryInput
+	// MemorySearch is populated only for memory search steps.
+	MemorySearch *MemorySearchInput
 	// Summary is populated only for summary creation steps.
 	Summary *SummaryInput
 	// Track is populated only for track append steps.
 	Track *TrackInput
-	// Concurrent contains ordered branches populated only for concurrent steps.
+	// Concurrent contains two or more ordered event-only branches populated only
+	// for concurrent steps. Branches use their stable execution paths for causal
+	// comparison, independently of event filter keys.
 	Concurrent [][]Step
 }
 
@@ -193,7 +209,15 @@ type Step struct {
 type EventInput struct {
 	// LogicalID is the stable event identity used after backend IDs are normalized.
 	LogicalID string
-	// Event is cloned before the runner changes timestamps or extensions.
+	// Event is cloned before the runner changes timestamps or extensions. Every
+	// extension key must be non-empty and must not use the runner-owned logical
+	// identity key; every non-nil extension value must contain valid JSON.
+	// StateDelta is applied to session state even when the event itself is not
+	// persisted. Keys beginning with app: or user: additionally declare scoped-state
+	// intent; unprefixed and temp: keys are session-only. The runner preserves every
+	// key in the event snapshot and selects the corresponding state domains, so
+	// differences in how backends persist scoped deltas remain observable. The
+	// backend-owned tracks key is rejected.
 	Event *event.Event
 	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration
@@ -216,9 +240,12 @@ const (
 type StateInput struct {
 	// Scope selects the application, user, or session state owner.
 	Scope StateScope
-	// Values is copied before it is passed to the backend.
+	// Values is copied before it is passed to the backend. Keys must be non-empty.
+	// App and user keys must not include a state scope prefix; session keys may
+	// use temp: but must not use app:, user:, or the backend-owned tracks key.
 	Values session.StateMap
-	// DeleteKeys applies only to application and user state.
+	// DeleteKeys applies only to application and user state and follows the same
+	// unprefixed, non-empty key rule as Values.
 	DeleteKeys []string
 }
 
@@ -232,6 +259,16 @@ type MemoryInput struct {
 	Metadata *memory.Metadata
 }
 
+// MemorySearchInput performs one named, ranked memory query. The enclosing
+// Step.Name identifies the result in Snapshot.MemorySearches.
+type MemorySearchInput struct {
+	// Query is the non-empty query passed to memory.Service.SearchMemories.
+	Query string
+	// Options is copied before use. Its Query field is ignored; Query above is
+	// authoritative so the two inputs cannot disagree.
+	Options memory.SearchOptions
+}
+
 // SummaryInput creates or refreshes one filter-aware summary.
 type SummaryInput struct {
 	// FilterKey selects a branch; an empty value selects the full session.
@@ -242,7 +279,8 @@ type SummaryInput struct {
 
 // TrackInput appends one observation event.
 type TrackInput struct {
-	// Event is copied before its payload and timestamp are normalized.
+	// Event is copied before its payload and timestamp are normalized. Payload
+	// may be nil for JSON null; every non-nil payload must contain valid JSON.
 	Event *session.TrackEvent
 	// Offset is added to the created session time for deterministic ordering.
 	Offset time.Duration
@@ -263,10 +301,14 @@ type Snapshot struct {
 	Events []CanonicalMap `json:"events"`
 	// EventOrder records logical IDs by the selected ordering scope.
 	EventOrder map[string][]string `json:"event_order"`
-	// State contains normalized application, user, and session state.
-	State map[string]map[string]string `json:"state"`
+	// State contains normalized application, user, and session state. Nil values
+	// and non-JSON byte sequences remain structurally distinct.
+	State map[string]CanonicalMap `json:"state"`
 	// Memories contains normalized memory entries ordered by semantic content.
 	Memories []CanonicalMap `json:"memories"`
+	// MemorySearches contains ranked memory query results keyed by step name.
+	// Result order and similarity score remain observable.
+	MemorySearches map[string][]CanonicalMap `json:"memory_searches"`
 	// Summaries contains normalized summaries keyed by filter key.
 	Summaries map[string]CanonicalMap `json:"summaries"`
 	// Tracks contains normalized track events keyed by track name.
@@ -327,7 +369,8 @@ type Diff struct {
 	// EventIndex identifies the nearest normalized event when applicable.
 	EventIndex *int `json:"event_index,omitempty"`
 	// SummaryFilterKey identifies the nearest summary when applicable.
-	SummaryFilterKey string `json:"summary_filter_key,omitempty"`
+	// A non-nil pointer to an empty string identifies the full-session summary.
+	SummaryFilterKey *string `json:"summary_filter_key,omitempty"`
 	// TrackName identifies the nearest track when applicable.
 	TrackName string `json:"track_name,omitempty"`
 	// MemoryID identifies the nearest normalized memory when applicable.
@@ -448,12 +491,18 @@ const (
 	FaultStateValue FaultKind = "state_value"
 	// FaultMemoryContent changes one memory entry.
 	FaultMemoryContent FaultKind = "memory_content"
+	// FaultDuplicateMemory duplicates one memory entry.
+	FaultDuplicateMemory FaultKind = "duplicate_memory"
+	// FaultMemorySearchOrder swaps two ranked memory search results.
+	FaultMemorySearchOrder FaultKind = "memory_search_order"
 	// FaultSummaryText changes one summary text.
 	FaultSummaryText FaultKind = "summary_text"
 	// FaultSummaryMissing removes one summary.
 	FaultSummaryMissing FaultKind = "summary_missing"
 	// FaultSummaryFilterKey moves one summary to the wrong filter key.
 	FaultSummaryFilterKey FaultKind = "summary_filter_key"
+	// FaultSummaryStale replaces an updated summary with stale content and boundary.
+	FaultSummaryStale FaultKind = "summary_stale"
 	// FaultTrackPayload changes one track payload.
 	FaultTrackPayload FaultKind = "track_payload"
 	// FaultDuplicateEvent duplicates one event.

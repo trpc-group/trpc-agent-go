@@ -18,6 +18,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const (
+	customSummaryFilterKey    = "agent/custom"
+	unrelatedSummaryFilterKey = "agent/unrelated"
+)
+
 var caseEpoch = time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
 
 // PublicCases returns fresh instances of the standard replay matrix.
@@ -28,6 +33,8 @@ func PublicCases() []Case {
 		toolCallCase(),
 		stateCRUDCase(),
 		memoryCase(),
+		memorySearchCase(),
+		memoryRetryRecoveryCase(),
 		summaryUpdateCase(),
 		summaryTruncationCase(),
 		summaryFilterKeyCase(),
@@ -120,8 +127,12 @@ func toolCallCase() Case {
 }
 
 func stateCRUDCase() Case {
-	stateEvent := messageStep("state-event", "state-event", 1, "assistant", model.RoleAssistant, "state updated", "")
-	stateEvent.Event.Event.StateDelta = session.StateMap{"event_counter": []byte(`1`)}
+	stateEvent := messageStep("state-event", "state-event", 2, "assistant", model.RoleAssistant, "state updated", "")
+	stateEvent.Event.Event.StateDelta = session.StateMap{
+		"event_counter":      []byte(`1`),
+		"app:event_counter":  []byte(`2`),
+		"user:event_counter": []byte(`3`),
+	}
 	return Case{
 		Name:         "state_crud",
 		Description:  "app, user, session, and event-delta state obey overwrite and delete semantics",
@@ -133,6 +144,7 @@ func stateCRUDCase() Case {
 			CapabilitySessionState,
 		},
 		Steps: []Step{
+			messageStep("state-user", "state-user", 1, "user", model.RoleUser, "update state", ""),
 			stateStep("app-initial", StateScopeApp, session.StateMap{"theme": []byte(`"light"`), "obsolete": []byte(`true`)}, nil),
 			stateStep("app-overwrite-delete", StateScopeApp, session.StateMap{"theme": []byte(`"dark"`)}, []string{"obsolete"}),
 			stateStep("user-initial", StateScopeUser, session.StateMap{"locale": []byte(`"zh-CN"`), "temporary": []byte(`1`)}, nil),
@@ -156,11 +168,10 @@ func memoryCase() Case {
 	}
 	return Case{
 		Name:        "memory_write_read",
-		Description: "fact and episodic memories preserve content, metadata, and idempotency",
+		Description: "fact and episodic memories preserve content and metadata",
 		Requires:    []Capability{CapabilitySession, CapabilityMemory},
 		Steps: []Step{
 			{Name: "add-preference", Kind: StepAddMemory, Memory: preference},
-			{Name: "retry-preference", Kind: StepAddMemory, Memory: preference},
 			{
 				Name: "add-episode",
 				Kind: StepAddMemory,
@@ -180,6 +191,75 @@ func memoryCase() Case {
 	}
 }
 
+func memoryRetryRecoveryCase() Case {
+	retryable := &MemoryInput{
+		Memory: "User prefers deterministic replay reports.",
+		Topics: []string{"preference", "replay"},
+		Metadata: &memory.Metadata{
+			Kind: memory.KindFact,
+		},
+	}
+	return Case{
+		Name:        "memory_retry_recovery",
+		Description: "retrying an identical idempotent memory write produces one durable entry",
+		Requires:    []Capability{CapabilitySession, CapabilityMemory},
+		Steps: []Step{
+			{Name: "initial-memory-write", Kind: StepAddMemory, Memory: retryable},
+			{Name: "retry-memory-write", Kind: StepAddMemory, Memory: retryable},
+		},
+		Fault: FaultDuplicateMemory,
+	}
+}
+
+func memorySearchCase() Case {
+	return Case{
+		Name:        "memory_search_ranking",
+		Description: "memory search preserves ranked identities and similarity scores",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityMemory,
+			CapabilityMemorySearch,
+		},
+		Steps: []Step{
+			{
+				Name: "add-primary-search-memory",
+				Kind: StepAddMemory,
+				Memory: &MemoryInput{
+					Memory: "User prefers concise replay reports.",
+					Topics: []string{"replay", "reports"},
+				},
+			},
+			{
+				Name: "add-secondary-search-memory",
+				Kind: StepAddMemory,
+				Memory: &MemoryInput{
+					Memory: "User reviews replay documentation.",
+					Topics: []string{"replay", "documentation"},
+				},
+			},
+			{
+				Name: "rank-replay-reports",
+				Kind: StepSearchMemory,
+				MemorySearch: &MemorySearchInput{
+					Query: "replay reports",
+					Options: memory.SearchOptions{
+						MaxResults: 2,
+					},
+				},
+			},
+		},
+		AllowedDiffs: []AllowedDiff{{
+			BackendA: "*",
+			BackendB: "*",
+			Path:     "/memory_searches/*/*/score",
+			Rule:     AllowedWithinDelta,
+			Delta:    1e-9,
+			Reason:   "memory similarity implementations may differ by floating-point rounding",
+		}},
+		Fault: FaultMemorySearchOrder,
+	}
+}
+
 func summaryUpdateCase() Case {
 	return Case{
 		Name:        "summary_update",
@@ -192,7 +272,7 @@ func summaryUpdateCase() Case {
 			messageStep("summary-user-2", "summary-user-2", 3, "user", model.RoleUser, "gamma", ""),
 			{Name: "summary-update", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
 		},
-		Fault: FaultSummaryText,
+		Fault: FaultSummaryStale,
 	}
 }
 
@@ -218,10 +298,10 @@ func summaryFilterKeyCase() Case {
 		Description: "branch summary ownership and boundary filter key remain distinct",
 		Requires:    []Capability{CapabilitySession, CapabilitySummary},
 		Steps: []Step{
-			messageStep("weather-user", "weather-user", 1, "user", model.RoleUser, "weather", "agent/weather"),
-			messageStep("weather-assistant", "weather-assistant", 2, "assistant", model.RoleAssistant, "sunny", "agent/weather"),
-			messageStep("research-assistant", "research-assistant", 3, "assistant", model.RoleAssistant, "unrelated", "agent/research"),
-			{Name: "weather-summary", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: "agent/weather", Force: true}},
+			messageStep("custom-user", "custom-user", 1, "user", model.RoleUser, "question", customSummaryFilterKey),
+			messageStep("custom-assistant", "custom-assistant", 2, "assistant", model.RoleAssistant, "answer", customSummaryFilterKey),
+			messageStep("unrelated-assistant", "unrelated-assistant", 3, "assistant", model.RoleAssistant, "unrelated", unrelatedSummaryFilterKey),
+			{Name: "custom-summary", Kind: StepCreateSummary, Summary: &SummaryInput{FilterKey: customSummaryFilterKey, Force: true}},
 		},
 		Fault: FaultSummaryFilterKey,
 	}

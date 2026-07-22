@@ -41,7 +41,6 @@ func defaultBackendDependencies() backendDependencies {
 				db,
 				sessionsqlite.WithEnableAsyncPersist(false),
 				sessionsqlite.WithSummarizer(&replaytest.DeterministicSummarizer{}),
-				sessionsqlite.WithSummaryFilterAllowlist("agent/weather", "agent/research"),
 				sessionsqlite.WithCascadeFullSessionSummary(false),
 			)
 		},

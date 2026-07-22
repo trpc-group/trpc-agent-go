@@ -10,7 +10,9 @@ package replaytest
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -25,45 +27,71 @@ import (
 
 const presentMarker = "<present>"
 
+type normalizedEvent struct {
+	value    CanonicalMap
+	orderKey string
+	sequence int
+}
+
 func normalizeSnapshot(
 	backendName string,
 	caseName string,
 	eventOrder EventOrderMode,
+	eventOrderPlan *causalOrderPlan,
 	required Capabilities,
+	eventStateKeys map[string]struct{},
 	sess *session.Session,
 	appState session.StateMap,
 	userState session.StateMap,
 	memories []*memory.Entry,
+	memorySearches map[string][]*memory.Entry,
 ) (Snapshot, error) {
 	if sess == nil {
 		return Snapshot{}, session.ErrNilSession
 	}
-	events, order, physicalToLogical, err := normalizeEvents(sess.Events, eventOrder)
+	eventSnapshot := sess.GetEvents()
+	events, order, physicalToLogical, err := normalizeEvents(
+		eventSnapshot,
+		eventOrder,
+		eventOrderPlan,
+		sess.CreatedAt,
+	)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	normalizedMemories := make([]CanonicalMap, 0)
+	physicalToLogicalMemory := make(map[string]string)
 	if required[CapabilityMemory] {
-		normalizedMemories, err = normalizeMemories(memories)
+		normalizedMemories, physicalToLogicalMemory, err = normalizeMemoryCatalog(memories)
+		if err != nil {
+			return Snapshot{}, err
+		}
+	}
+	normalizedMemorySearches := make(map[string][]CanonicalMap)
+	if required[CapabilityMemorySearch] {
+		normalizedMemorySearches, err = normalizeMemorySearches(
+			memorySearches,
+			physicalToLogicalMemory,
+		)
 		if err != nil {
 			return Snapshot{}, err
 		}
 	}
 	summaries := make(map[string]CanonicalMap)
 	if required[CapabilitySummary] {
-		summaries, err = normalizeSummaries(sess, physicalToLogical)
+		summaries, err = normalizeSummaries(sess, eventSnapshot, physicalToLogical)
 		if err != nil {
 			return Snapshot{}, err
 		}
 	}
 	tracks := make(map[string][]CanonicalMap)
 	if required[CapabilityTrack] {
-		tracks, err = normalizeTracks(sess)
+		tracks, err = normalizeTracks(sess, sess.CreatedAt)
 		if err != nil {
 			return Snapshot{}, err
 		}
 	}
-	state := map[string]map[string]string{"app": {}, "user": {}, "session": {}}
+	state := map[string]CanonicalMap{"app": {}, "user": {}, "session": {}}
 	if required[CapabilityAppState] {
 		state["app"] = normalizeState(appState, "")
 	}
@@ -71,7 +99,7 @@ func normalizeSnapshot(
 		state["user"] = normalizeState(userState, "")
 	}
 	if required[CapabilitySessionState] {
-		state["session"] = normalizeState(sess.State, "session")
+		state["session"] = normalizeSessionState(sess.SnapshotState(), eventStateKeys)
 	}
 	return Snapshot{
 		Backend: backendName,
@@ -83,72 +111,49 @@ func normalizeSnapshot(
 			"created_at": normalizeTime(sess.CreatedAt),
 			"updated_at": normalizeTime(sess.UpdatedAt),
 		},
-		Events:     events,
-		EventOrder: order,
-		State:      state,
-		Memories:   normalizedMemories,
-		Summaries:  summaries,
-		Tracks:     tracks,
+		Events:         events,
+		EventOrder:     order,
+		State:          state,
+		Memories:       normalizedMemories,
+		MemorySearches: normalizedMemorySearches,
+		Summaries:      summaries,
+		Tracks:         tracks,
 	}, nil
 }
 
 func normalizeEvents(
 	events []event.Event,
 	mode EventOrderMode,
+	plan *causalOrderPlan,
+	baseTime time.Time,
 ) ([]CanonicalMap, map[string][]string, map[string]string, error) {
-	type normalizedEvent struct {
-		value    CanonicalMap
-		orderKey string
-		sequence int
-	}
 	records := make([]normalizedEvent, 0, len(events))
 	order := make(map[string][]string)
 	physicalToLogical := make(map[string]string, len(events))
+	physicalIDs := make(map[string]struct{}, len(events))
+	logicalPositions := make(map[string]int, len(events))
 	for index := range events {
 		evt := &events[index]
-		logicalID, ok, err := event.GetExtension[string](evt, logicalEventIDExtension)
+		logicalID, err := recordEventIdentity(evt, index, physicalIDs, logicalPositions)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("event %d logical id: %w", index, err)
-		}
-		if !ok || logicalID == "" {
-			logicalID = "event-" + strconv.Itoa(index)
+			return nil, nil, nil, err
 		}
 		physicalToLogical[evt.ID] = logicalID
-		orderKey := "global"
-		if mode == EventOrderCausal {
-			orderKey = evt.FilterKey
-			if orderKey == "" {
-				orderKey = evt.Branch
-			}
-			if orderKey == "" {
-				orderKey = "<root>"
-			}
-		}
+		orderKey := normalizedEventOrderKey(evt, logicalID, mode, plan)
 		sequence := len(order[orderKey])
 		order[orderKey] = append(order[orderKey], logicalID)
-		raw, err := json.Marshal(evt)
+		value, err := normalizeEventValue(evt, index, logicalID, baseTime)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("marshal event %d: %w", index, err)
-		}
-		var value CanonicalMap
-		if err := decodeJSON(raw, &value); err != nil {
-			return nil, nil, nil, fmt.Errorf("decode event %d: %w", index, err)
-		}
-		value["id"] = logicalID
-		normalizeTimestamps(value, "timestamp")
-		response, _ := value["response"].(map[string]any)
-		normalizeTimestamps(response, "timestamp")
-		if extensions, ok := value["extensions"].(map[string]any); ok {
-			delete(extensions, logicalEventIDExtension)
-			if len(extensions) == 0 {
-				delete(value, "extensions")
-			}
+			return nil, nil, nil, err
 		}
 		records = append(records, normalizedEvent{
 			value:    value,
 			orderKey: orderKey,
 			sequence: sequence,
 		})
+	}
+	if err := validateObservedCausalPlan(logicalPositions, plan); err != nil {
+		return nil, nil, nil, err
 	}
 	if mode == EventOrderCausal {
 		sort.SliceStable(records, func(i, j int) bool {
@@ -165,68 +170,284 @@ func normalizeEvents(
 	return output, order, physicalToLogical, nil
 }
 
-func normalizeState(input session.StateMap, scope string) map[string]string {
-	output := make(map[string]string)
+func recordEventIdentity(
+	evt *event.Event,
+	index int,
+	physicalIDs map[string]struct{},
+	logicalPositions map[string]int,
+) (string, error) {
+	if evt.ID == "" {
+		return "", fmt.Errorf("event %d has no physical id", index)
+	}
+	if _, exists := physicalIDs[evt.ID]; exists {
+		return "", fmt.Errorf("duplicate physical event id %q", evt.ID)
+	}
+	physicalIDs[evt.ID] = struct{}{}
+	logicalID, ok, err := event.GetExtension[string](evt, logicalEventIDExtension)
+	if err != nil {
+		return "", fmt.Errorf("event %d logical id: %w", index, err)
+	}
+	if !ok || logicalID == "" {
+		return "", fmt.Errorf("event %d has no logical id", index)
+	}
+	if _, exists := logicalPositions[logicalID]; exists {
+		return "", fmt.Errorf("duplicate logical event id %q", logicalID)
+	}
+	logicalPositions[logicalID] = index
+	return logicalID, nil
+}
+
+func normalizedEventOrderKey(
+	evt *event.Event,
+	logicalID string,
+	mode EventOrderMode,
+	plan *causalOrderPlan,
+) string {
+	if mode != EventOrderCausal {
+		return "global"
+	}
+	if plan != nil && plan.lanes[logicalID] != "" {
+		return "concurrent:" + plan.lanes[logicalID]
+	}
+	if evt.FilterKey != "" {
+		return evt.FilterKey
+	}
+	if evt.Branch != "" {
+		return evt.Branch
+	}
+	return "<root>"
+}
+
+func normalizeEventValue(
+	evt *event.Event,
+	index int,
+	logicalID string,
+	baseTime time.Time,
+) (CanonicalMap, error) {
+	raw, err := json.Marshal(evt)
+	if err != nil {
+		return nil, fmt.Errorf("marshal event %d: %w", index, err)
+	}
+	var value CanonicalMap
+	if err := decodeJSON(raw, &value); err != nil {
+		return nil, fmt.Errorf("decode event %d: %w", index, err)
+	}
+	value["id"] = logicalID
+	value["timestamp"] = normalizeTimeOffset(evt.Timestamp, baseTime)
+	response, _ := value["response"].(map[string]any)
+	if evt.Response != nil && response != nil {
+		response["timestamp"] = normalizeTimeOffset(evt.Response.Timestamp, baseTime)
+	}
+	if extensions, ok := value["extensions"].(map[string]any); ok {
+		delete(extensions, logicalEventIDExtension)
+		if len(extensions) == 0 {
+			delete(value, "extensions")
+		}
+	}
+	if len(evt.StateDelta) > 0 {
+		// StateDelta itself is observable event data. Do not apply the session
+		// snapshot filter here: scoped prefixes and even unexpected backend keys
+		// must remain visible to comparison.
+		value["stateDelta"] = normalizeState(evt.StateDelta, "")
+	}
+	return value, nil
+}
+
+func validateObservedCausalPlan(
+	positions map[string]int,
+	plan *causalOrderPlan,
+) error {
+	if plan == nil {
+		return nil
+	}
+	if len(positions) != len(plan.predecessors) {
+		return fmt.Errorf(
+			"observed %d replay events, want %d",
+			len(positions),
+			len(plan.predecessors),
+		)
+	}
+	for logicalID, predecessors := range plan.predecessors {
+		position, exists := positions[logicalID]
+		if !exists {
+			return fmt.Errorf("planned event %q is missing", logicalID)
+		}
+		for _, predecessor := range predecessors {
+			predecessorPosition, exists := positions[predecessor]
+			if !exists {
+				return fmt.Errorf("planned predecessor %q is missing", predecessor)
+			}
+			if predecessorPosition >= position {
+				return fmt.Errorf(
+					"event %q appears before predecessor %q",
+					logicalID,
+					predecessor,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func normalizeState(input session.StateMap, scope string) CanonicalMap {
+	return normalizeStatePreserving(input, scope, nil)
+}
+
+func normalizeSessionState(
+	input session.StateMap,
+	eventStateKeys map[string]struct{},
+) CanonicalMap {
+	return normalizeStatePreserving(input, "session", eventStateKeys)
+}
+
+func normalizeStatePreserving(
+	input session.StateMap,
+	scope string,
+	preserved map[string]struct{},
+) CanonicalMap {
+	output := make(CanonicalMap)
 	for key, value := range input {
 		if scope == "session" {
-			if key == "tracks" || strings.HasPrefix(key, session.StateAppPrefix) ||
-				strings.HasPrefix(key, session.StateUserPrefix) {
+			if key == replayTrackStateKey {
 				continue
+			}
+			if strings.HasPrefix(key, session.StateAppPrefix) ||
+				strings.HasPrefix(key, session.StateUserPrefix) {
+				if _, ok := preserved[key]; !ok {
+					continue
+				}
 			}
 		}
 		if value == nil {
-			output[key] = "<nil>"
+			output[key] = CanonicalMap{"kind": "nil"}
 			continue
 		}
 		var decoded any
 		if decodeJSON(value, &decoded) == nil {
 			raw, _ := json.Marshal(decoded)
-			output[key] = string(raw)
+			output[key] = CanonicalMap{
+				"kind": "json",
+				"json": string(raw),
+			}
 			continue
 		}
-		output[key] = string(value)
+		output[key] = CanonicalMap{
+			"kind":   "bytes",
+			"base64": base64.StdEncoding.EncodeToString(value),
+		}
 	}
 	return output
 }
 
 func normalizeMemories(entries []*memory.Entry) ([]CanonicalMap, error) {
-	output := make([]CanonicalMap, 0, len(entries))
+	output, _, err := normalizeMemoryCatalog(entries)
+	return output, err
+}
+
+type normalizedMemoryRecord struct {
+	physicalID string
+	value      CanonicalMap
+}
+
+func normalizeMemoryCatalog(
+	entries []*memory.Entry,
+) ([]CanonicalMap, map[string]string, error) {
+	records := make([]normalizedMemoryRecord, 0, len(entries))
+	ids := make(map[string]struct{}, len(entries))
 	for index, entry := range entries {
-		if entry == nil {
-			continue
-		}
-		raw, err := json.Marshal(entry)
+		value, err := normalizeMemoryEntry(entry, fmt.Sprintf("memory %d", index))
 		if err != nil {
-			return nil, fmt.Errorf("marshal memory %d: %w", index, err)
+			return nil, nil, err
 		}
-		var value CanonicalMap
-		if err := decodeJSON(raw, &value); err != nil {
-			return nil, fmt.Errorf("decode memory %d: %w", index, err)
+		if _, exists := ids[entry.ID]; exists {
+			return nil, nil, fmt.Errorf("duplicate memory id %q", entry.ID)
 		}
-		normalizeTimestamps(value, "created_at", "updated_at")
-		memoryValue, _ := value["memory"].(map[string]any)
-		normalizeTimestamps(memoryValue, "last_updated")
-		if entry.Memory != nil && entry.Memory.EventTime != nil {
-			if memoryValue != nil {
-				memoryValue["event_time"] = entry.Memory.EventTime.UTC().Format(time.RFC3339Nano)
-			}
-		}
+		ids[entry.ID] = struct{}{}
 		delete(value, "id")
-		output = append(output, value)
+		records = append(records, normalizedMemoryRecord{physicalID: entry.ID, value: value})
 	}
-	sort.Slice(output, func(i, j int) bool {
-		left, _ := json.Marshal(output[i])
-		right, _ := json.Marshal(output[j])
+	sort.Slice(records, func(i, j int) bool {
+		left, _ := json.Marshal(records[i].value)
+		right, _ := json.Marshal(records[j].value)
 		return string(left) < string(right)
 	})
-	for index := range output {
-		output[index]["id"] = "memory-" + strconv.Itoa(index)
+	output := make([]CanonicalMap, 0, len(records))
+	physicalToLogical := make(map[string]string, len(records))
+	for index := range records {
+		logicalID := "memory-" + strconv.Itoa(index)
+		records[index].value["id"] = logicalID
+		physicalToLogical[records[index].physicalID] = logicalID
+		output = append(output, records[index].value)
+	}
+	return output, physicalToLogical, nil
+}
+
+func normalizeMemorySearches(
+	searches map[string][]*memory.Entry,
+	physicalToLogical map[string]string,
+) (map[string][]CanonicalMap, error) {
+	output := make(map[string][]CanonicalMap, len(searches))
+	for name, entries := range searches {
+		if name == "" {
+			return nil, errors.New("memory search has no name")
+		}
+		seen := make(map[string]struct{}, len(entries))
+		results := make([]CanonicalMap, 0, len(entries))
+		for index, entry := range entries {
+			value, err := normalizeMemoryEntry(
+				entry,
+				fmt.Sprintf("memory search %q result %d", name, index),
+			)
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := seen[entry.ID]; exists {
+				return nil, fmt.Errorf("memory search %q repeats id %q", name, entry.ID)
+			}
+			seen[entry.ID] = struct{}{}
+			logicalID := physicalToLogical[entry.ID]
+			if logicalID == "" {
+				return nil, fmt.Errorf("memory search %q returned unknown id %q", name, entry.ID)
+			}
+			value["id"] = logicalID
+			value["score"] = entry.Score
+			results = append(results, value)
+		}
+		output[name] = results
 	}
 	return output, nil
 }
 
+func normalizeMemoryEntry(entry *memory.Entry, owner string) (CanonicalMap, error) {
+	if entry == nil {
+		return nil, fmt.Errorf("%s is nil", owner)
+	}
+	if entry.Memory == nil {
+		return nil, fmt.Errorf("%s has nil content", owner)
+	}
+	if entry.ID == "" {
+		return nil, fmt.Errorf("%s has no id", owner)
+	}
+	raw, err := json.Marshal(entry)
+	if err != nil {
+		return nil, fmt.Errorf("marshal %s: %w", owner, err)
+	}
+	var value CanonicalMap
+	if err := decodeJSON(raw, &value); err != nil {
+		return nil, fmt.Errorf("decode %s: %w", owner, err)
+	}
+	normalizeTimestamps(value, "created_at", "updated_at")
+	memoryValue, _ := value["memory"].(map[string]any)
+	normalizeTimestamps(memoryValue, "last_updated")
+	if entry.Memory.EventTime != nil && memoryValue != nil {
+		memoryValue["event_time"] = entry.Memory.EventTime.UTC().Format(time.RFC3339Nano)
+	}
+	return value, nil
+}
+
 func normalizeSummaries(
 	sess *session.Session,
+	events []event.Event,
 	physicalToLogical map[string]string,
 ) (map[string]CanonicalMap, error) {
 	output := make(map[string]CanonicalMap)
@@ -241,25 +462,46 @@ func normalizeSummaries(
 			"text":               summary.Summary,
 			"topics":             append([]string(nil), summary.Topics...),
 			"updated_at":         normalizeTime(summary.UpdatedAt),
-			"retained_event_ids": retainedEventIDs(sess.Events, summary, filterKey, physicalToLogical),
+			"retained_event_ids": retainedEventIDs(events, summary, filterKey, physicalToLogical),
 		}
 		if boundary := summary.CutoffBoundary(); boundary != nil {
 			lastEventID := boundary.LastEventID
-			if logicalID := physicalToLogical[lastEventID]; logicalID != "" {
+			cutoffAt := normalizeTime(boundary.CutoffAt)
+			if lastEventID != "" {
+				logicalID := physicalToLogical[lastEventID]
+				anchor := eventByPhysicalID(events, lastEventID)
+				if logicalID == "" || anchor == nil {
+					return nil, fmt.Errorf("summary %q references unknown event %q", filterKey, lastEventID)
+				}
+				if boundary.CutoffAt.IsZero() || !boundary.CutoffAt.Equal(anchor.Timestamp) {
+					return nil, fmt.Errorf(
+						"summary %q cutoff does not match event %q timestamp",
+						filterKey,
+						lastEventID,
+					)
+				}
 				lastEventID = logicalID
-			} else if lastEventID != "" {
-				lastEventID = "<unknown-event>"
+				cutoffAt = normalizeTimeOffset(boundary.CutoffAt, sess.CreatedAt)
 			}
 			value["boundary"] = CanonicalMap{
 				"version":       boundary.Version,
 				"filter_key":    boundary.FilterKey,
-				"cutoff_at":     normalizeTime(boundary.CutoffAt),
+				"cutoff_at":     cutoffAt,
 				"last_event_id": lastEventID,
 			}
 		}
 		output[filterKey] = value
 	}
 	return output, nil
+}
+
+func eventByPhysicalID(events []event.Event, id string) *event.Event {
+	for index := range events {
+		if events[index].ID == id {
+			return &events[index]
+		}
+	}
+	return nil
 }
 
 func retainedEventIDs(
@@ -299,7 +541,7 @@ func retainedEventIDs(
 	return retained
 }
 
-func normalizeTracks(sess *session.Session) (map[string][]CanonicalMap, error) {
+func normalizeTracks(sess *session.Session, baseTime time.Time) (map[string][]CanonicalMap, error) {
 	output := make(map[string][]CanonicalMap)
 	sess.TracksMu.RLock()
 	defer sess.TracksMu.RUnlock()
@@ -311,7 +553,7 @@ func normalizeTracks(sess *session.Session) (map[string][]CanonicalMap, error) {
 		events := make([]CanonicalMap, 0, len(history.Events))
 		for index, trackEvent := range history.Events {
 			var payload any
-			if len(trackEvent.Payload) > 0 {
+			if trackEvent.Payload != nil {
 				if err := decodeJSON(trackEvent.Payload, &payload); err != nil {
 					return nil, fmt.Errorf("decode track %s event %d: %w", trackName, index, err)
 				}
@@ -319,7 +561,7 @@ func normalizeTracks(sess *session.Session) (map[string][]CanonicalMap, error) {
 			events = append(events, CanonicalMap{
 				"track":     string(trackEvent.Track),
 				"payload":   payload,
-				"timestamp": normalizeTime(trackEvent.Timestamp),
+				"timestamp": normalizeTimeOffset(trackEvent.Timestamp, baseTime),
 			})
 		}
 		output[string(trackName)] = events
@@ -332,6 +574,13 @@ func normalizeTime(value time.Time) any {
 		return nil
 	}
 	return presentMarker
+}
+
+func normalizeTimeOffset(value, base time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.Sub(base).Nanoseconds()
 }
 
 func normalizeTimestamps(value map[string]any, keys ...string) {

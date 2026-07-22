@@ -1,30 +1,38 @@
 # Design
 
-Replay consistency is modeled as a semantic contract, not byte-for-byte
-database equality. Cases use typed operations over `session.Service` and
-`memory.Service`. Each backend is isolated, replayed, read back, and closed.
-Snapshots separate globally or causally ordered events, scoped state,
-memories, filter-key summaries, and named tracks.
+Replay consistency is a semantic contract, not byte-for-byte database
+equality. Typed cases drive `session.Service` and `memory.Service`; each
+backend is isolated, replayed, read back, and closed. Snapshots cover events,
+scoped state, memories, filter-key summaries, and named tracks.
 
-Normalization removes only values that do not carry portable semantics.
-Physical IDs become logical IDs, generated timestamps become presence markers,
-maps are canonicalized, and memories are sorted by normalized content.
-User-supplied memory times remain UTC instants. Track event timestamps are
-volatile, while every caller-supplied payload value remains semantic. Event content, tool
-data, extensions, state delta, summary text, boundary, filter key, retained
-tail, and ownership remain comparable. Concurrent cases ignore global
-interleaving but preserve branch-local order and the complete event set.
+Normalization removes only non-portable values. Physical IDs become logical
+IDs, generated timestamps become presence markers, and maps are canonicalized.
+Stored memories are content-sorted; ranked searches preserve order and score.
+Event, response, and track times remain session-relative; caller-supplied
+memory times remain UTC instants. State values use tagged `nil`, `json`, or `bytes` forms,
+keeping nil, JSON null, empty bytes, and arbitrary bytes distinct. Event
+content, tool data, extensions, state delta, memory metadata and ownership,
+track payloads, and session identity remain comparable.
 
-The comparator emits JSON Pointer paths with session, event, memory, summary,
-or track locators. `AllowedDiff` requires an unordered backend pair, path glob,
-known rule, and reason; malformed rules fail before replay.
+Summary comparison includes text, topics, filter key, update presence,
+boundary version, cutoff, last event, and retained tail. An anchored boundary
+must reference an observed event and match its timestamp. A probe session
+detects cross-session summary leakage.
 
-Reference mode uses one named oracle. Consensus mode compares every successful
-pair deterministically and names an outlier only when all remaining backends
-agree. Split votes, two-backend disagreements, and non-transitive results stay
-ambiguous. Allowed differences count as agreement; execution failures and
+Concurrent replay is limited to event-only branches with stable internal
+lanes. Global scheduler interleaving is ignored, but branch-local order,
+predecessor relationships, and the complete event set must match. State,
+memory, summary, and track writes remain sequential because their interfaces
+define no portable cross-backend atomicity contract.
+
+The comparator emits JSON Pointer paths with domain locators. `AllowedDiff`
+requires an unordered backend pair, path glob, known rule, and reason; accepted
+mismatches remain visible in the report. Reference mode uses one named oracle.
+Consensus mode compares every successful pair and names an outlier only when
+all remaining backends agree. Split results stay ambiguous, while failures and
 unsupported capabilities remain separate evidence.
 
-Adapters declare capabilities, so unsupported operations never disappear.
-The root package supplies InMemory; SQLite uses a nested module. Other adapters
-register without changing cases, normalization, or comparison code.
+Adapters declare capabilities, so unsupported operations never disappear. The
+root package supplies InMemory; a source-tree SQLite module binds real
+file-backed Session and Memory services without imposing CGO on the root.
+Further adapters reuse the same cases, normalization, and comparator.

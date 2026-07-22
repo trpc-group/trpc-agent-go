@@ -21,8 +21,6 @@ import (
 
 const logicalEventIDExtension = "trpc_agent.replay.logical_event_id"
 
-var summaryFilterAllowlist = []string{"agent/weather", "agent/research"}
-
 // InMemoryBackend returns the reference backend used by the lightweight matrix.
 func InMemoryBackend() Backend {
 	return Backend{
@@ -33,7 +31,6 @@ func InMemoryBackend() Backend {
 			return &Services{
 				Session: sessioninmemory.NewSessionService(
 					sessioninmemory.WithSummarizer(summarizer),
-					sessioninmemory.WithSummaryFilterAllowlist(summaryFilterAllowlist...),
 					sessioninmemory.WithCascadeFullSessionSummary(false),
 				),
 				Memory: memoryinmemory.NewMemoryService(),

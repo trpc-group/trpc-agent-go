@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,9 +68,15 @@ func (r Runner) Run(
 		if err != nil {
 			return Report{}, err
 		}
+		if err := ctx.Err(); err != nil {
+			return Report{}, err
+		}
 		addCaseResult(&report, result)
 	}
 	if err := report.Validate(); err != nil {
+		return Report{}, err
+	}
+	if err := ctx.Err(); err != nil {
 		return Report{}, err
 	}
 	return report, nil
@@ -163,6 +170,9 @@ func runCase(
 	if err != nil {
 		return CaseResult{}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return CaseResult{}, err
+	}
 	diffs = append(outcome.diffs, diffs...)
 	diffs = append(diffs, capabilityDiffs(replayCase.Name, backends, mode, reference, outcome.unsupported)...)
 	result := CaseResult{
@@ -173,6 +183,9 @@ func runCase(
 	}
 	blocking, _ := countDiffs(result.Diffs)
 	result.Status = expectedCaseStatus(blocking, len(outcome.unsupported) > 0)
+	if err := ctx.Err(); err != nil {
+		return CaseResult{}, err
+	}
 	return result, nil
 }
 
@@ -341,13 +354,36 @@ func Replay(ctx context.Context, replayCase Case, backend Backend) (snapshot Sna
 	if err := validateCase(replayCase); err != nil {
 		return Snapshot{}, err
 	}
-	if backend.Open == nil {
-		return Snapshot{}, fmt.Errorf("replaytest: backend %q has no factory", backend.Name)
+	if err := validateBackend(backend); err != nil {
+		return Snapshot{}, err
+	}
+	if missing := missingCapabilities(replayCase.Requires, backend.Capabilities); len(missing) > 0 {
+		return Snapshot{}, fmt.Errorf(
+			"replaytest: backend %q does not support required capabilities: %v",
+			backend.Name,
+			missing,
+		)
 	}
 	if err := ctx.Err(); err != nil {
 		return Snapshot{}, err
 	}
-	services, openErr := backend.Open(ctx, replayCase.Name)
+	services, err := openReplayServices(ctx, replayCase.Name, backend)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer func() {
+		err = finishReplay(ctx, backend.Name, services, err)
+	}()
+	return replayWithServices(ctx, replayCase, backend.Name, services)
+}
+
+func openReplayServices(
+	ctx context.Context,
+	caseName string,
+	backend Backend,
+) (*Services, error) {
+	services, openErr := backend.Open(ctx, caseName)
+	contextErr := ctx.Err()
 	if openErr != nil {
 		wrapped := fmt.Errorf("open backend %s: %w", backend.Name, openErr)
 		if services != nil {
@@ -355,29 +391,57 @@ func Replay(ctx context.Context, replayCase Case, backend Backend) (snapshot Sna
 				wrapped = errors.Join(wrapped, fmt.Errorf("close backend %s after open failure: %w", backend.Name, closeErr))
 			}
 		}
-		return Snapshot{}, wrapped
+		if contextErr == nil {
+			contextErr = ctx.Err()
+		}
+		if contextErr != nil {
+			wrapped = errors.Join(wrapped, contextErr)
+		}
+		return nil, wrapped
+	}
+	if contextErr != nil {
+		if services == nil {
+			return nil, contextErr
+		}
+		if closeErr := services.Close(); closeErr != nil {
+			return nil, errors.Join(
+				contextErr,
+				fmt.Errorf("close backend %s after canceled open: %w", backend.Name, closeErr),
+			)
+		}
+		return nil, contextErr
 	}
 	if services == nil {
-		return Snapshot{}, fmt.Errorf("open backend %s: incomplete services", backend.Name)
+		return nil, fmt.Errorf("open backend %s: incomplete services", backend.Name)
 	}
-	defer func() {
-		closeErr := services.Close()
-		if closeErr == nil {
-			return
-		}
-		wrapped := fmt.Errorf("close backend %s: %w", backend.Name, closeErr)
-		if err == nil {
-			err = wrapped
-		} else {
-			err = errors.Join(err, wrapped)
-		}
-	}()
+	return services, nil
+}
+
+func finishReplay(
+	ctx context.Context,
+	backendName string,
+	services *Services,
+	runErr error,
+) error {
+	closeErr := services.Close()
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close backend %s: %w", backendName, closeErr)
+	}
+	return errors.Join(runErr, closeErr, ctx.Err())
+}
+
+func replayWithServices(
+	ctx context.Context,
+	replayCase Case,
+	backendName string,
+	services *Services,
+) (Snapshot, error) {
 	if services.Session == nil {
-		return Snapshot{}, fmt.Errorf("open backend %s: incomplete services", backend.Name)
+		return Snapshot{}, fmt.Errorf("open backend %s: incomplete services", backendName)
 	}
 	required := capabilitySet(replayCase.Requires)
-	if required[CapabilityMemory] && services.Memory == nil {
-		return Snapshot{}, fmt.Errorf("open backend %s: memory capability has no service", backend.Name)
+	if (required[CapabilityMemory] || required[CapabilityMemorySearch]) && services.Memory == nil {
+		return Snapshot{}, fmt.Errorf("open backend %s: memory capability has no service", backendName)
 	}
 
 	key := session.Key{AppName: "replaytest", UserID: "user-1", SessionID: replayCase.Name}
@@ -385,28 +449,59 @@ func Replay(ctx context.Context, replayCase Case, backend Backend) (snapshot Sna
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("create session: %w", err)
 	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return Snapshot{}, contextErr
+	}
 	if sess == nil {
 		return Snapshot{}, errors.New("create session: backend returned nil session")
 	}
-	exec := execution{services: services, key: key, session: sess, required: required}
+	exec := execution{
+		services:       services,
+		key:            key,
+		session:        sess,
+		required:       required,
+		eventStateKeys: collectEventStateKeys(replayCase.Steps),
+		memorySearches: make(map[string][]*memory.Entry),
+	}
 	for _, step := range replayCase.Steps {
 		if err := exec.runStep(ctx, step); err != nil {
 			return Snapshot{}, fmt.Errorf("step %q (%s): %w", step.Name, step.Kind, err)
+		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return Snapshot{}, contextErr
 		}
 	}
 	if required[CapabilitySummary] {
 		if err := exec.verifySummaryIsolation(ctx); err != nil {
 			return Snapshot{}, fmt.Errorf("verify summary isolation: %w", err)
 		}
+		if contextErr := ctx.Err(); contextErr != nil {
+			return Snapshot{}, contextErr
+		}
 	}
-	return exec.snapshot(ctx, backend.Name, replayCase.Name, replayCase.EventOrder)
+	snapshot, err := exec.snapshot(
+		ctx,
+		backendName,
+		replayCase.Name,
+		replayCase.EventOrder,
+		buildCausalOrderPlan(replayCase.Steps),
+	)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		return Snapshot{}, contextErr
+	}
+	return snapshot, nil
 }
 
 type execution struct {
-	services *Services
-	key      session.Key
-	session  *session.Session
-	required Capabilities
+	services       *Services
+	key            session.Key
+	session        *session.Session
+	required       Capabilities
+	eventStateKeys map[string]struct{}
+	memorySearches map[string][]*memory.Entry
 }
 
 func (e *execution) runStep(ctx context.Context, step Step) error {
@@ -417,6 +512,8 @@ func (e *execution) runStep(ctx context.Context, step Step) error {
 		return e.updateState(ctx, step.State)
 	case StepAddMemory:
 		return e.addMemory(ctx, step.Memory)
+	case StepSearchMemory:
+		return e.searchMemory(ctx, step.Name, step.MemorySearch)
 	case StepCreateSummary:
 		return e.createSummary(ctx, step.Summary)
 	case StepAppendTrack:
@@ -443,6 +540,7 @@ func (e *execution) prepareEvent(input *EventInput) (*event.Event, error) {
 		return nil, errors.New("invalid event input")
 	}
 	evt := input.Event.Clone()
+	evt.StateDelta = cloneByteMap(input.Event.StateDelta)
 	evt.Timestamp = e.session.CreatedAt.Add(input.Offset)
 	if evt.Response != nil {
 		evt.Response.Timestamp = evt.Timestamp
@@ -463,9 +561,15 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 			if err := e.services.Session.UpdateAppState(ctx, e.key.AppName, cloneState(input.Values)); err != nil {
 				return err
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		for _, key := range input.DeleteKeys {
 			if err := e.services.Session.DeleteAppState(ctx, e.key.AppName, key); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
@@ -475,9 +579,15 @@ func (e *execution) updateState(ctx context.Context, input *StateInput) error {
 			if err := e.services.Session.UpdateUserState(ctx, userKey, cloneState(input.Values)); err != nil {
 				return err
 			}
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 		}
 		for _, key := range input.DeleteKeys {
 			if err := e.services.Session.DeleteUserState(ctx, userKey, key); err != nil {
+				return err
+			}
+			if err := ctx.Err(); err != nil {
 				return err
 			}
 		}
@@ -501,9 +611,7 @@ func (e *execution) addMemory(ctx context.Context, input *MemoryInput) error {
 	userKey := memory.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
 	var opts []memory.AddOption
 	if input.Metadata != nil {
-		metadata := *input.Metadata
-		metadata.Participants = append([]string(nil), input.Metadata.Participants...)
-		opts = append(opts, memory.WithMetadata(&metadata))
+		opts = append(opts, memory.WithMetadata(cloneMemoryMetadata(input.Metadata)))
 	}
 	return e.services.Memory.AddMemory(
 		ctx,
@@ -514,11 +622,48 @@ func (e *execution) addMemory(ctx context.Context, input *MemoryInput) error {
 	)
 }
 
+func (e *execution) searchMemory(
+	ctx context.Context,
+	name string,
+	input *MemorySearchInput,
+) error {
+	if input == nil || strings.TrimSpace(input.Query) == "" {
+		return errors.New("invalid memory search input")
+	}
+	if _, exists := e.memorySearches[name]; exists {
+		return fmt.Errorf("memory search name %q is repeated", name)
+	}
+	options := input.Options
+	options.Query = input.Query
+	if input.Options.TimeAfter != nil {
+		value := *input.Options.TimeAfter
+		options.TimeAfter = &value
+	}
+	if input.Options.TimeBefore != nil {
+		value := *input.Options.TimeBefore
+		options.TimeBefore = &value
+	}
+	results, err := e.services.Memory.SearchMemories(
+		ctx,
+		memory.UserKey{AppName: e.key.AppName, UserID: e.key.UserID},
+		input.Query,
+		memory.WithSearchOptions(options),
+	)
+	if err != nil {
+		return err
+	}
+	e.memorySearches[name] = cloneMemoryEntries(results)
+	return nil
+}
+
 func (e *execution) createSummary(ctx context.Context, input *SummaryInput) error {
 	if input == nil {
 		return errors.New("summary input is nil")
 	}
 	if err := e.services.Session.CreateSessionSummary(ctx, e.session, input.FilterKey, input.Force); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return e.reload(ctx)
@@ -533,7 +678,7 @@ func (e *execution) appendTrack(ctx context.Context, input *TrackInput) error {
 		return errors.New("track capability advertised but service does not implement session.TrackService")
 	}
 	copyEvent := *input.Event
-	copyEvent.Payload = append([]byte(nil), input.Event.Payload...)
+	copyEvent.Payload = cloneBytes(input.Event.Payload)
 	copyEvent.Timestamp = e.session.CreatedAt.Add(input.Offset)
 	return trackService.AppendTrackEvent(ctx, e.session, &copyEvent)
 }
@@ -541,6 +686,9 @@ func (e *execution) appendTrack(ctx context.Context, input *TrackInput) error {
 func (e *execution) reload(ctx context.Context) error {
 	sess, err := e.services.Session.GetSession(ctx, e.key)
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if sess == nil {
@@ -557,12 +705,18 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create probe session: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if probe == nil {
 		return errors.New("create probe session: backend returned nil session")
 	}
 	probe, err = e.services.Session.GetSession(ctx, probeKey)
 	if err != nil {
 		return fmt.Errorf("get probe session: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if probe == nil {
 		return errors.New("get probe session: backend returned nil session")
@@ -575,6 +729,9 @@ func (e *execution) verifySummaryIsolation(ctx context.Context) error {
 	}
 	if err := e.services.Session.DeleteSession(ctx, probeKey); err != nil {
 		return fmt.Errorf("delete probe session: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -607,12 +764,19 @@ func (e *execution) runConcurrent(ctx context.Context, branches [][]Step) error 
 					errs[i] = fmt.Errorf("nested step %q: %w", nested.Name, err)
 					return
 				}
+				if err := ctx.Err(); err != nil {
+					errs[i] = err
+					return
+				}
 			}
 		}()
 	}
 	close(start)
 	wg.Wait()
 	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	return e.reload(ctx)
@@ -623,10 +787,14 @@ func (e *execution) snapshot(
 	backendName string,
 	caseName string,
 	eventOrder EventOrderMode,
+	eventOrderPlan *causalOrderPlan,
 ) (Snapshot, error) {
 	sess, err := e.services.Session.GetSession(ctx, e.key)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("get session: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
 	}
 	if sess == nil {
 		return Snapshot{}, errors.New("get session: backend returned nil session")
@@ -637,6 +805,9 @@ func (e *execution) snapshot(
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list app state: %w", err)
 		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	userKey := session.UserKey{AppName: e.key.AppName, UserID: e.key.UserID}
 	var userState session.StateMap
@@ -644,6 +815,9 @@ func (e *execution) snapshot(
 		userState, err = e.services.Session.ListUserStates(ctx, userKey)
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("list user state: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
 		}
 	}
 	var memories []*memory.Entry
@@ -655,16 +829,22 @@ func (e *execution) snapshot(
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("read memories: %w", err)
 		}
+		if err := ctx.Err(); err != nil {
+			return Snapshot{}, err
+		}
 	}
 	return normalizeSnapshot(
 		backendName,
 		caseName,
 		eventOrder,
+		eventOrderPlan,
 		e.required,
+		e.eventStateKeys,
 		sess,
 		appState,
 		userState,
 		memories,
+		e.memorySearches,
 	)
 }
 
@@ -674,9 +854,68 @@ func cloneState(input session.StateMap) session.StateMap {
 	}
 	out := make(session.StateMap, len(input))
 	for key, value := range input {
-		out[key] = append([]byte(nil), value...)
+		out[key] = cloneBytes(value)
 	}
 	return out
+}
+
+func cloneByteMap(input map[string][]byte) map[string][]byte {
+	if input == nil {
+		return nil
+	}
+	out := make(map[string][]byte, len(input))
+	for key, value := range input {
+		out[key] = cloneBytes(value)
+	}
+	return out
+}
+
+func cloneBytes(input []byte) []byte {
+	if input == nil {
+		return nil
+	}
+	out := make([]byte, len(input))
+	copy(out, input)
+	return out
+}
+
+func cloneMemoryMetadata(input *memory.Metadata) *memory.Metadata {
+	if input == nil {
+		return nil
+	}
+	out := *input
+	out.Participants = append([]string(nil), input.Participants...)
+	if input.EventTime != nil {
+		eventTime := *input.EventTime
+		out.EventTime = &eventTime
+	}
+	return &out
+}
+
+func cloneMemoryEntries(input []*memory.Entry) []*memory.Entry {
+	output := make([]*memory.Entry, len(input))
+	for index, entry := range input {
+		if entry == nil {
+			continue
+		}
+		copyEntry := *entry
+		if entry.Memory != nil {
+			copyMemory := *entry.Memory
+			copyMemory.Topics = append([]string(nil), entry.Memory.Topics...)
+			copyMemory.Participants = append([]string(nil), entry.Memory.Participants...)
+			if entry.Memory.LastUpdated != nil {
+				value := *entry.Memory.LastUpdated
+				copyMemory.LastUpdated = &value
+			}
+			if entry.Memory.EventTime != nil {
+				value := *entry.Memory.EventTime
+				copyMemory.EventTime = &value
+			}
+			copyEntry.Memory = &copyMemory
+		}
+		output[index] = &copyEntry
+	}
+	return output
 }
 
 func validateBackends(backends []Backend) error {
@@ -685,21 +924,33 @@ func validateBackends(backends []Backend) error {
 	}
 	seen := make(map[string]struct{}, len(backends))
 	for _, backend := range backends {
-		if backend.Name == "" || backend.Open == nil {
-			return errors.New("replaytest: backend name and factory are required")
+		if err := validateBackend(backend); err != nil {
+			return err
 		}
 		if _, ok := seen[backend.Name]; ok {
 			return fmt.Errorf("replaytest: duplicate backend %q", backend.Name)
 		}
 		seen[backend.Name] = struct{}{}
-		for capability := range backend.Capabilities {
-			if !isKnownCapability(capability) {
-				return fmt.Errorf(
-					"replaytest: backend %q declares unknown capability %q",
-					backend.Name,
-					capability,
-				)
-			}
+	}
+	return nil
+}
+
+func validateBackend(backend Backend) error {
+	if backend.Name == "" || backend.Open == nil {
+		return errors.New("replaytest: backend name and factory are required")
+	}
+	capabilities := make([]Capability, 0, len(backend.Capabilities))
+	for capability := range backend.Capabilities {
+		capabilities = append(capabilities, capability)
+	}
+	sort.Slice(capabilities, func(i, j int) bool { return capabilities[i] < capabilities[j] })
+	for _, capability := range capabilities {
+		if !isKnownCapability(capability) {
+			return fmt.Errorf(
+				"replaytest: backend %q declares unknown capability %q",
+				backend.Name,
+				capability,
+			)
 		}
 	}
 	return nil
@@ -717,6 +968,9 @@ func validateCase(replayCase Case) error {
 	default:
 		return fmt.Errorf("replaytest: case %q has unknown event order %q", replayCase.Name, replayCase.EventOrder)
 	}
+	if err := validateStateKeys("initial state", StateScopeSession, replayCase.InitialState, nil); err != nil {
+		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+	}
 	for _, step := range replayCase.Steps {
 		if err := validateStep(step); err != nil {
 			return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
@@ -725,7 +979,61 @@ func validateCase(replayCase Case) error {
 	if err := validateLogicalEventIDs(replayCase.Steps, make(map[string]string)); err != nil {
 		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
 	}
+	if err := validateMemorySearchNames(replayCase.Steps, make(map[string]struct{})); err != nil {
+		return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+	}
+	if containsConcurrentStep(replayCase.Steps) {
+		if replayCase.EventOrder != EventOrderCausal {
+			return fmt.Errorf("replaytest: case %q: concurrent steps require causal event ordering", replayCase.Name)
+		}
+		if containsStepKind(replayCase.Steps, StepCreateSummary) {
+			return fmt.Errorf("replaytest: case %q: concurrent cases cannot contain summary steps", replayCase.Name)
+		}
+		if err := validateConcurrentHistory(replayCase.Steps); err != nil {
+			return fmt.Errorf("replaytest: case %q: %w", replayCase.Name, err)
+		}
+	}
 	return validateCaseCapabilities(replayCase)
+}
+
+func containsConcurrentStep(steps []Step) bool {
+	for _, step := range steps {
+		if step.Kind == StepConcurrent {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStepKind(steps []Step, kind StepKind) bool {
+	for _, step := range steps {
+		if step.Kind == kind {
+			return true
+		}
+		for _, branch := range step.Concurrent {
+			if containsStepKind(branch, kind) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateConcurrentHistory(steps []Step) error {
+	hasUserAnchor := false
+	for _, step := range steps {
+		switch step.Kind {
+		case StepAppendEvent:
+			if replayEventIsPersistable(step.Event.Event) && step.Event.Event.IsUserMessage() {
+				hasUserAnchor = true
+			}
+		case StepConcurrent:
+			if !hasUserAnchor {
+				return fmt.Errorf("step %q requires a preceding persisted user event", step.Name)
+			}
+		}
+	}
+	return nil
 }
 
 func validateLogicalEventIDs(steps []Step, owners map[string]string) error {
@@ -747,6 +1055,23 @@ func validateLogicalEventIDs(steps []Step, owners map[string]string) error {
 		}
 		for _, branch := range step.Concurrent {
 			if err := validateLogicalEventIDs(branch, owners); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateMemorySearchNames(steps []Step, names map[string]struct{}) error {
+	for _, step := range steps {
+		if step.Kind == StepSearchMemory {
+			if _, exists := names[step.Name]; exists {
+				return fmt.Errorf("memory search name %q is repeated", step.Name)
+			}
+			names[step.Name] = struct{}{}
+		}
+		for _, branch := range step.Concurrent {
+			if err := validateMemorySearchNames(branch, names); err != nil {
 				return err
 			}
 		}
@@ -787,6 +1112,20 @@ func validateCaseCapabilities(replayCase Case) error {
 
 func collectStepCapabilities(step Step, capabilities Capabilities) {
 	switch step.Kind {
+	case StepAppendEvent:
+		if len(step.Event.Event.StateDelta) > 0 {
+			capabilities[CapabilitySessionState] = true
+		}
+		for key := range step.Event.Event.StateDelta {
+			switch {
+			case strings.HasPrefix(key, session.StateAppPrefix):
+				capabilities[CapabilityAppState] = true
+			case strings.HasPrefix(key, session.StateUserPrefix):
+				capabilities[CapabilityUserState] = true
+			default:
+				capabilities[CapabilitySessionState] = true
+			}
+		}
 	case StepUpdateState:
 		switch step.State.Scope {
 		case StateScopeApp:
@@ -798,6 +1137,9 @@ func collectStepCapabilities(step Step, capabilities Capabilities) {
 		}
 	case StepAddMemory:
 		capabilities[CapabilityMemory] = true
+	case StepSearchMemory:
+		capabilities[CapabilityMemory] = true
+		capabilities[CapabilityMemorySearch] = true
 	case StepCreateSummary:
 		capabilities[CapabilitySummary] = true
 	case StepAppendTrack:
@@ -810,6 +1152,23 @@ func collectStepCapabilities(step Step, capabilities Capabilities) {
 			}
 		}
 	}
+}
+
+func collectEventStateKeys(steps []Step) map[string]struct{} {
+	keys := make(map[string]struct{})
+	for _, step := range steps {
+		if step.Kind == StepAppendEvent {
+			for key := range step.Event.Event.StateDelta {
+				keys[key] = struct{}{}
+			}
+		}
+		for _, branch := range step.Concurrent {
+			for key := range collectEventStateKeys(branch) {
+				keys[key] = struct{}{}
+			}
+		}
+	}
+	return keys
 }
 
 func validateStep(step Step) error {
@@ -833,6 +1192,7 @@ func stepPayloadCount(step Step) int {
 		step.Event != nil,
 		step.State != nil,
 		step.Memory != nil,
+		step.MemorySearch != nil,
 		step.Summary != nil,
 		step.Track != nil,
 		len(step.Concurrent) > 0,
@@ -847,21 +1207,49 @@ func stepPayloadCount(step Step) int {
 func validateStepKind(step Step) error {
 	switch step.Kind {
 	case StepAppendEvent:
+		if step.Event == nil {
+			return fmt.Errorf("step %q kind %q requires event payload", step.Name, step.Kind)
+		}
 		return validateEventStep(step)
 	case StepUpdateState:
+		if step.State == nil {
+			return fmt.Errorf("step %q kind %q requires state payload", step.Name, step.Kind)
+		}
 		return validateStateStep(step)
 	case StepAddMemory:
+		if step.Memory == nil {
+			return fmt.Errorf("step %q kind %q requires memory payload", step.Name, step.Kind)
+		}
 		if step.Memory.Memory == "" {
 			return fmt.Errorf("step %q has invalid memory input", step.Name)
 		}
+	case StepSearchMemory:
+		if step.MemorySearch == nil {
+			return fmt.Errorf("step %q kind %q requires memory search payload", step.Name, step.Kind)
+		}
+		if strings.TrimSpace(step.MemorySearch.Query) == "" {
+			return fmt.Errorf("step %q has invalid memory search input", step.Name)
+		}
 	case StepCreateSummary:
+		if step.Summary == nil {
+			return fmt.Errorf("step %q kind %q requires summary payload", step.Name, step.Kind)
+		}
 	case StepAppendTrack:
+		if step.Track == nil {
+			return fmt.Errorf("step %q kind %q requires track payload", step.Name, step.Kind)
+		}
 		if step.Track.Event == nil || step.Track.Event.Track == "" {
 			return fmt.Errorf("step %q has invalid track input", step.Name)
+		}
+		if payload := step.Track.Event.Payload; payload != nil && !json.Valid(payload) {
+			return fmt.Errorf("step %q has invalid track JSON payload", step.Name)
 		}
 	case StepReloadSession:
 		return nil
 	case StepConcurrent:
+		if len(step.Concurrent) == 0 {
+			return fmt.Errorf("step %q kind %q requires concurrent payload", step.Name, step.Kind)
+		}
 		return validateConcurrentStep(step)
 	default:
 		return fmt.Errorf("step %q has unknown kind %q", step.Name, step.Kind)
@@ -873,25 +1261,134 @@ func validateEventStep(step Step) error {
 	if step.Event.Event == nil || step.Event.LogicalID == "" {
 		return fmt.Errorf("step %q has invalid event input", step.Name)
 	}
+	extensionKeys := make([]string, 0, len(step.Event.Event.Extensions))
+	for key := range step.Event.Event.Extensions {
+		extensionKeys = append(extensionKeys, key)
+	}
+	sort.Strings(extensionKeys)
+	for _, key := range extensionKeys {
+		if key == "" {
+			return fmt.Errorf("step %q event extension key must not be empty", step.Name)
+		}
+		if key == logicalEventIDExtension {
+			return fmt.Errorf("step %q event extension %q is reserved", step.Name, key)
+		}
+		raw := step.Event.Event.Extensions[key]
+		if raw != nil && !json.Valid(raw) {
+			return fmt.Errorf("step %q event extension %q contains invalid JSON", step.Name, key)
+		}
+	}
+	if err := validateEventStateDelta(step.Name, step.Event.Event.StateDelta); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateEventStateDelta(stepName string, stateDelta session.StateMap) error {
+	keys := make([]string, 0, len(stateDelta))
+	for key := range stateDelta {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if key == "" {
+			return fmt.Errorf("step %q event state delta: state key must not be empty", stepName)
+		}
+		if key == replayTrackStateKey {
+			return fmt.Errorf(
+				"step %q event state delta: state key %q is reserved for backend track indexing",
+				stepName,
+				key,
+			)
+		}
+		for _, prefix := range []string{
+			session.StateAppPrefix,
+			session.StateUserPrefix,
+			session.StateTempPrefix,
+		} {
+			if key == prefix {
+				return fmt.Errorf(
+					"step %q event state delta: state key %q has an empty scoped name",
+					stepName,
+					key,
+				)
+			}
+		}
+	}
 	return nil
 }
 
 func validateStateStep(step Step) error {
 	switch step.State.Scope {
 	case StateScopeApp, StateScopeUser:
-		return nil
+		return validateStateKeys(
+			fmt.Sprintf("step %q", step.Name),
+			step.State.Scope,
+			step.State.Values,
+			step.State.DeleteKeys,
+		)
 	case StateScopeSession:
 		if len(step.State.DeleteKeys) > 0 {
 			return fmt.Errorf("step %q cannot delete session state", step.Name)
 		}
-		return nil
+		return validateStateKeys(
+			fmt.Sprintf("step %q", step.Name),
+			step.State.Scope,
+			step.State.Values,
+			nil,
+		)
 	default:
 		return fmt.Errorf("step %q has unknown state scope %q", step.Name, step.State.Scope)
 	}
 }
 
+func validateStateKeys(
+	owner string,
+	scope StateScope,
+	values session.StateMap,
+	deleteKeys []string,
+) error {
+	valueKeys := make([]string, 0, len(values))
+	for key := range values {
+		valueKeys = append(valueKeys, key)
+	}
+	sort.Strings(valueKeys)
+	for _, key := range valueKeys {
+		if err := validateStateKey(scope, key); err != nil {
+			return fmt.Errorf("%s: %w", owner, err)
+		}
+	}
+	for _, key := range deleteKeys {
+		if err := validateStateKey(scope, key); err != nil {
+			return fmt.Errorf("%s: %w", owner, err)
+		}
+	}
+	return nil
+}
+
+func validateStateKey(scope StateScope, key string) error {
+	if key == "" {
+		return errors.New("state key must not be empty")
+	}
+	if scope == StateScopeSession && key == replayTrackStateKey {
+		return fmt.Errorf("%s state key %q is reserved for backend track indexing", scope, key)
+	}
+	if strings.HasPrefix(key, session.StateAppPrefix) ||
+		strings.HasPrefix(key, session.StateUserPrefix) {
+		return fmt.Errorf("%s state key %q must not include a scope prefix", scope, key)
+	}
+	if (scope == StateScopeApp || scope == StateScopeUser) &&
+		strings.HasPrefix(key, session.StateTempPrefix) {
+		return fmt.Errorf("%s state key %q must not include a scope prefix", scope, key)
+	}
+	return nil
+}
+
 func validateConcurrentStep(step Step) error {
-	for _, branch := range step.Concurrent {
+	if len(step.Concurrent) < 2 {
+		return fmt.Errorf("step %q must contain at least two concurrent branches", step.Name)
+	}
+	for branchIndex, branch := range step.Concurrent {
 		if len(branch) == 0 {
 			return fmt.Errorf("step %q has an empty concurrent branch", step.Name)
 		}
@@ -899,9 +1396,85 @@ func validateConcurrentStep(step Step) error {
 			if err := validateStep(nested); err != nil {
 				return fmt.Errorf("step %q: %w", step.Name, err)
 			}
+			if nested.Kind != StepAppendEvent {
+				return fmt.Errorf(
+					"step %q branch %d contains unsupported concurrent kind %q",
+					step.Name,
+					branchIndex,
+					nested.Kind,
+				)
+			}
+			if len(nested.Event.Event.StateDelta) > 0 {
+				return fmt.Errorf(
+					"step %q branch %d event %q contains a state delta",
+					step.Name,
+					branchIndex,
+					nested.Name,
+				)
+			}
+			if !replayEventIsPersistable(nested.Event.Event) {
+				return fmt.Errorf(
+					"step %q branch %d event %q is not persistable",
+					step.Name,
+					branchIndex,
+					nested.Name,
+				)
+			}
 		}
 	}
 	return nil
+}
+
+func replayEventIsPersistable(evt *event.Event) bool {
+	return evt != nil && evt.Response != nil && !evt.IsPartial && evt.IsValidContent()
+}
+
+type causalOrderPlan struct {
+	lanes        map[string]string
+	predecessors map[string][]string
+}
+
+func buildCausalOrderPlan(steps []Step) *causalOrderPlan {
+	if !containsConcurrentStep(steps) {
+		return nil
+	}
+	plan := &causalOrderPlan{
+		lanes:        make(map[string]string),
+		predecessors: make(map[string][]string),
+	}
+	frontier := make([]string, 0)
+	hasUserAnchor := false
+	for stepIndex, step := range steps {
+		switch step.Kind {
+		case StepAppendEvent:
+			if !replayEventIsPersistable(step.Event.Event) {
+				continue
+			}
+			if !hasUserAnchor {
+				if !step.Event.Event.IsUserMessage() {
+					continue
+				}
+				hasUserAnchor = true
+			}
+			plan.predecessors[step.Event.LogicalID] = append([]string(nil), frontier...)
+			frontier = []string{step.Event.LogicalID}
+		case StepConcurrent:
+			exits := make([]string, 0, len(step.Concurrent))
+			for branchIndex, branch := range step.Concurrent {
+				branchFrontier := append([]string(nil), frontier...)
+				lane := fmt.Sprintf("%d/%d", stepIndex, branchIndex)
+				for _, nested := range branch {
+					logicalID := nested.Event.LogicalID
+					plan.lanes[logicalID] = lane
+					plan.predecessors[logicalID] = append([]string(nil), branchFrontier...)
+					branchFrontier = []string{logicalID}
+				}
+				exits = append(exits, branchFrontier...)
+			}
+			frontier = exits
+		}
+	}
+	return plan
 }
 
 func hasBackend(backends []Backend, name string) bool {

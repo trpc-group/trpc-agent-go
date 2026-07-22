@@ -6,11 +6,35 @@ backend, normalizes backend-generated values, and compares every result with a
 named reference backend or with every other backend in oracle-free consensus
 mode.
 
-The public matrix contains 10 cases: single-turn and multi-turn messages, tool
-calls, scoped state CRUD, memory persistence, summary generation/update,
-summary retained-tail reconstruction, summary filter keys, tracks, concurrent
-branch writes. Each case names an injected fault;
-the unit test proves that every fault produces a blocking diff.
+The public matrix contains 12 cases: single-turn and multi-turn messages, tool
+calls, scoped state CRUD, memory persistence, ranked memory search, idempotent
+memory retry recovery, summary generation/update, summary retained-tail
+reconstruction, summary filter keys, tracks, and concurrent branch writes.
+Each case names an injected fault; the unit test proves that every fault
+produces a blocking diff.
+
+Memory persistence snapshots are content-sorted because `ReadMemories` does not
+define cross-backend result order. `StepSearchMemory` is separate: it requires
+`CapabilityMemorySearch` and records result order, stable logical memory IDs,
+and similarity scores under the step name. Small score drift can be documented
+with a path-scoped `AllowedWithinDelta` rule without hiding ranking changes.
+
+State inputs use explicit scopes. Application and user keys are non-empty and
+unprefixed; session keys may use `temp:` but not `app:` or `user:`. Every event
+state delta is applied to session state, including when the event itself is not
+persisted; `app:` and `user:` additionally select their scoped state domains.
+The harness derives those domains and preserved session keys from the replay
+input rather than only from stored events, so it does not hide differences in
+how adapters apply scoped deltas. Normalized state distinguishes nil, JSON
+null, empty bytes, and arbitrary non-JSON bytes with an explicit `nil`, `json`,
+or `bytes` kind for every value.
+
+Concurrent steps support event-only branches with stable internal execution
+lanes and require `EventOrderCausal`. A lane is independent of the event's
+business `filter key`; branches may use the same filter key. This models
+interleaved tool or sub-agent events without claiming portable concurrent
+state, memory, summary, or track write semantics that the backend interfaces do
+not provide. Summaries cannot be combined with concurrent steps in one case.
 
 ## Run
 
@@ -56,13 +80,13 @@ as ordinary report diffs.
 
 ## Additional backends
 
-Adapters only provide a `Backend` factory returning existing `session.Service`
-and `memory.Service` implementations plus a capability map. Keep adapters for
-Redis, PostgreSQL, MySQL, or ClickHouse in their existing backend modules and
-gate integration tests with `REPLAYTEST_REDIS_ADDR`,
-`REPLAYTEST_POSTGRES_DSN`, `REPLAYTEST_MYSQL_DSN`, or
-`REPLAYTEST_CLICKHOUSE_DSN`. Missing capabilities are reported as
-`unsupported` allowed diffs instead of silently skipping assertions.
+Optional server-backed adapters are not registered by this package. To add
+one, keep its integration test in the owning Redis, PostgreSQL, MySQL, or
+ClickHouse module and wrap the existing `session.Service` and `memory.Service`
+implementations in a `Backend` factory. Follow that module's existing
+integration-test configuration and skip behavior so credentials and external
+services remain optional. Missing capabilities are reported as `unsupported`
+allowed diffs instead of silently skipping assertions.
 
 `AllowedDiff` rules are deliberately strict: an unordered backend pair, JSON
 Pointer glob, known rule, and a non-empty explanation are mandatory. Pairwise

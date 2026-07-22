@@ -210,7 +210,8 @@ func (c *comparator) addLocator(diff *Diff) {
 			diff.EventIndex = &index
 		}
 	case "summaries":
-		diff.SummaryFilterKey = parts[1]
+		filterKey := parts[1]
+		diff.SummaryFilterKey = &filterKey
 	case "tracks":
 		diff.TrackName = parts[1]
 	case "memories":
@@ -223,18 +224,34 @@ func (c *comparator) addLocator(diff *Diff) {
 		} else if index < len(c.actual.Memories) {
 			diff.MemoryID = stringValue(c.actual.Memories[index]["id"])
 		}
+	case "memory_searches":
+		if len(parts) < 3 {
+			return
+		}
+		index, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return
+		}
+		baseline := c.baseline.MemorySearches[parts[1]]
+		actual := c.actual.MemorySearches[parts[1]]
+		if index < len(baseline) {
+			diff.MemoryID = stringValue(baseline[index]["id"])
+		} else if index < len(actual) {
+			diff.MemoryID = stringValue(actual[index]["id"])
+		}
 	}
 }
 
 func snapshotValue(snapshot Snapshot) (map[string]any, error) {
 	comparable := CanonicalMap{
-		"session":     snapshot.Session,
-		"events":      snapshot.Events,
-		"event_order": snapshot.EventOrder,
-		"state":       snapshot.State,
-		"memories":    snapshot.Memories,
-		"summaries":   snapshot.Summaries,
-		"tracks":      snapshot.Tracks,
+		"session":         snapshot.Session,
+		"events":          snapshot.Events,
+		"event_order":     snapshot.EventOrder,
+		"state":           snapshot.State,
+		"memories":        snapshot.Memories,
+		"memory_searches": snapshot.MemorySearches,
+		"summaries":       snapshot.Summaries,
+		"tracks":          snapshot.Tracks,
 	}
 	raw, err := json.Marshal(comparable)
 	if err != nil {
@@ -255,6 +272,9 @@ func validateAllowedDiffs(rules []AllowedDiff) error {
 		if !strings.HasPrefix(rule.Path, "/") {
 			return fmt.Errorf("allowed_diff %d path must be a JSON pointer glob", index)
 		}
+		if err := validateJSONPointerEscapes(rule.Path); err != nil {
+			return fmt.Errorf("allowed_diff %d has invalid JSON pointer escape: %w", index, err)
+		}
 		if _, err := pathpkg.Match(rule.Path, rule.Path); err != nil {
 			return fmt.Errorf("allowed_diff %d has invalid path glob: %w", index, err)
 		}
@@ -267,6 +287,20 @@ func validateAllowedDiffs(rules []AllowedDiff) error {
 		default:
 			return fmt.Errorf("allowed_diff %d has unknown rule %q", index, rule.Rule)
 		}
+	}
+	return nil
+}
+
+func validateJSONPointerEscapes(pointer string) error {
+	for index := 0; index < len(pointer); index++ {
+		if pointer[index] != '~' {
+			continue
+		}
+		if index+1 >= len(pointer) ||
+			(pointer[index+1] != '0' && pointer[index+1] != '1') {
+			return fmt.Errorf("invalid escape at byte %d", index)
+		}
+		index++
 	}
 	return nil
 }
@@ -589,6 +623,9 @@ func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (boo
 			diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
 			return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", result.Name, index)
 		}
+		if err := validateSummaryLocator(diff); err != nil {
+			return false, fmt.Errorf("replaytest: case %q diff %d: %w", result.Name, index, err)
+		}
 		if _, ok := backendNames[diff.BackendA]; !ok {
 			return false, fmt.Errorf("replaytest: case %q diff %d names unknown backend %q", result.Name, index, diff.BackendA)
 		}
@@ -600,6 +637,24 @@ func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (boo
 		}
 	}
 	return hasCapabilityEvidence, nil
+}
+
+func validateSummaryLocator(diff Diff) error {
+	parts := pointerParts(diff.Path)
+	isSummaryPath := len(parts) >= 2 && parts[0] == "summaries"
+	if !isSummaryPath {
+		if diff.SummaryFilterKey != nil {
+			return errors.New("summary locator is set for a non-summary path")
+		}
+		return nil
+	}
+	if diff.SummaryFilterKey == nil {
+		return errors.New("summary path has no filter-key locator")
+	}
+	if *diff.SummaryFilterKey != parts[1] {
+		return errors.New("summary filter-key locator does not match its path")
+	}
+	return nil
 }
 
 func capabilityFromEvidencePath(path string) (Capability, bool) {

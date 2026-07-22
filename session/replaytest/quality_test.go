@@ -10,12 +10,15 @@ package replaytest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -64,6 +67,37 @@ func TestRunnerRejectsInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestReplayRejectsInvalidBackendMetadata(t *testing.T) {
+	replayCase := PublicCases()[0]
+	backend := InMemoryBackend()
+	backend.Name = ""
+	if _, err := Replay(context.Background(), replayCase, backend); err == nil {
+		t.Fatal("Replay() unexpectedly accepted an empty backend name")
+	}
+	backend = InMemoryBackend()
+	backend.Capabilities[Capability("not-a-capability")] = true
+	if _, err := Replay(context.Background(), replayCase, backend); err == nil {
+		t.Fatal("Replay() unexpectedly accepted an unknown backend capability")
+	}
+}
+
+func TestReplayRejectsMissingRequiredCapabilities(t *testing.T) {
+	replayCase := memoryCase()
+	backend := missingCapabilityBackend("missing-memory", CapabilityMemory)
+	openCalls := 0
+	backend.Open = func(context.Context, string) (*Services, error) {
+		openCalls++
+		return nil, errors.New("Open must not be called")
+	}
+	_, err := Replay(context.Background(), replayCase, backend)
+	if err == nil || !strings.Contains(err.Error(), string(CapabilityMemory)) {
+		t.Fatalf("Replay() error = %v, want missing memory capability", err)
+	}
+	if openCalls != 0 {
+		t.Fatalf("Replay() opened a backend missing required capabilities %d times", openCalls)
+	}
+}
+
 func TestReplayAndRunnerHonorContextCancellation(t *testing.T) {
 	openCalls := 0
 	backend := Backend{
@@ -92,6 +126,235 @@ func TestReplayAndRunnerHonorContextCancellation(t *testing.T) {
 	}
 	if _, err := (Runner{}).Run(nil, PublicCases()[:1], []Backend{backend, other}); err == nil {
 		t.Fatal("Run() unexpectedly accepted a nil context")
+	}
+}
+
+func TestReplayRechecksCancellationAfterSuccessfulStep(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Session = &cancelAfterAppendService{
+				Service: services.Session,
+				cancel:  cancel,
+			}
+		}
+		return services, err
+	}
+	if _, err := Replay(ctx, PublicCases()[0], backend); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Replay() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReplayStopsStateStepAfterSuccessfulCallCancels(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := InMemoryBackend()
+	open := backend.Open
+	var wrapped *cancelAfterAppUpdateService
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			wrapped = &cancelAfterAppUpdateService{
+				Service: services.Session,
+				cancel:  cancel,
+			}
+			services.Session = wrapped
+		}
+		return services, err
+	}
+	replayCase := Case{
+		Name:     "cancel-state-step",
+		Requires: []Capability{CapabilitySession, CapabilityAppState},
+		Steps: []Step{{
+			Name: "update-then-delete",
+			Kind: StepUpdateState,
+			State: &StateInput{
+				Scope:      StateScopeApp,
+				Values:     session.StateMap{"value": []byte(`1`)},
+				DeleteKeys: []string{"stale"},
+			},
+		}},
+	}
+	if _, err := Replay(ctx, replayCase, backend); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Replay() error = %v, want context.Canceled", err)
+	}
+	if wrapped == nil {
+		t.Fatal("backend was not opened")
+	}
+	if wrapped.deleteCalls != 0 {
+		t.Fatalf("DeleteAppState() calls after cancellation = %d, want 0", wrapped.deleteCalls)
+	}
+}
+
+func TestReplayRechecksCancellationAfterClose(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	backend := InMemoryBackend()
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err == nil {
+			services.Cleanup = func() error {
+				cancel()
+				return nil
+			}
+		}
+		return services, err
+	}
+	if _, err := Replay(ctx, PublicCases()[0], backend); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Replay() error = %v, want context.Canceled", err)
+	}
+}
+
+func TestReplayRechecksCancellationAfterFailedOpenCleanup(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	openErr := errors.New("injected open failure")
+	backend := Backend{
+		Name:         "failed-open-cancellation",
+		Capabilities: Capabilities{CapabilitySession: true},
+		Open: func(context.Context, string) (*Services, error) {
+			return &Services{Cleanup: func() error {
+				cancel()
+				return nil
+			}}, openErr
+		},
+	}
+	_, err := Replay(ctx, PublicCases()[0], backend)
+	if !errors.Is(err, openErr) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Replay() error = %v, want open failure and context.Canceled", err)
+	}
+}
+
+func TestReplayPreservesFailedOpenWhenAlreadyCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	openErr := errors.New("injected open failure")
+	cleanupErr := errors.New("injected cleanup failure")
+	cleanupCalls := 0
+	backend := Backend{
+		Name:         "failed-canceled-open",
+		Capabilities: Capabilities{CapabilitySession: true},
+		Open: func(context.Context, string) (*Services, error) {
+			cancel()
+			return &Services{Cleanup: func() error {
+				cleanupCalls++
+				return cleanupErr
+			}}, openErr
+		},
+	}
+	_, err := Replay(ctx, PublicCases()[0], backend)
+	if !errors.Is(err, openErr) ||
+		!errors.Is(err, context.Canceled) ||
+		!errors.Is(err, cleanupErr) {
+		t.Fatalf("Replay() error = %v, want open, cancellation, and cleanup failures", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("Replay() cleanup calls = %d, want 1", cleanupCalls)
+	}
+}
+
+func TestReplayClosesSuccessfulOpenAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cleanupErr := errors.New("injected cleanup failure")
+	cleanupCalls := 0
+	backend := Backend{
+		Name:         "successful-canceled-open",
+		Capabilities: Capabilities{CapabilitySession: true},
+		Open: func(context.Context, string) (*Services, error) {
+			cancel()
+			return &Services{Cleanup: func() error {
+				cleanupCalls++
+				return cleanupErr
+			}}, nil
+		},
+	}
+	_, err := Replay(ctx, PublicCases()[0], backend)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("Replay() error = %v, want cancellation and cleanup failures", err)
+	}
+	if cleanupCalls != 1 {
+		t.Fatalf("Replay() cleanup calls = %d, want 1", cleanupCalls)
+	}
+}
+
+func TestCloneStatePreservesNilAndEmptyValues(t *testing.T) {
+	cloned := cloneState(session.StateMap{
+		"nil":   nil,
+		"empty": []byte{},
+		"value": []byte("value"),
+	})
+	if cloned["nil"] != nil {
+		t.Fatalf("cloneState() nil value = %#v, want nil", cloned["nil"])
+	}
+	if cloned["empty"] == nil || len(cloned["empty"]) != 0 {
+		t.Fatalf("cloneState() empty value = %#v, want non-nil empty bytes", cloned["empty"])
+	}
+	if string(cloned["value"]) != "value" {
+		t.Fatalf("cloneState() value = %q, want value", cloned["value"])
+	}
+}
+
+func TestPreparedInputsAreDeepCopied(t *testing.T) {
+	t.Run("event state delta", func(t *testing.T) {
+		inputEvent := event.New("invocation", "author")
+		inputEvent.StateDelta = map[string][]byte{
+			"nil":   nil,
+			"empty": {},
+			"value": []byte("value"),
+		}
+		exec := execution{session: &session.Session{CreatedAt: caseEpoch}}
+		prepared, err := exec.prepareEvent(&EventInput{
+			LogicalID: "logical-event",
+			Event:     inputEvent,
+		})
+		if err != nil {
+			t.Fatalf("prepareEvent() error = %v", err)
+		}
+		if prepared.StateDelta["nil"] != nil {
+			t.Fatalf("prepared nil state = %#v", prepared.StateDelta["nil"])
+		}
+		if prepared.StateDelta["empty"] == nil || len(prepared.StateDelta["empty"]) != 0 {
+			t.Fatalf("prepared empty state = %#v", prepared.StateDelta["empty"])
+		}
+		prepared.StateDelta["value"][0] = 'x'
+		if string(inputEvent.StateDelta["value"]) != "value" {
+			t.Fatalf("prepareEvent() mutated input state = %q", inputEvent.StateDelta["value"])
+		}
+	})
+
+	t.Run("memory metadata", func(t *testing.T) {
+		eventTime := caseEpoch
+		input := &memory.Metadata{
+			EventTime:    &eventTime,
+			Participants: []string{"user"},
+		}
+		cloned := cloneMemoryMetadata(input)
+		input.Participants[0] = "changed"
+		*input.EventTime = input.EventTime.Add(time.Hour)
+		if cloned.Participants[0] != "user" || !cloned.EventTime.Equal(caseEpoch) {
+			t.Fatalf("cloneMemoryMetadata() retained input ownership: %#v", cloned)
+		}
+	})
+}
+
+func TestReplayPreservesEmptyStateValue(t *testing.T) {
+	replayCase := PublicCases()[0]
+	replayCase.Name = "empty-state-replay"
+	replayCase.Requires = []Capability{CapabilitySession, CapabilitySessionState}
+	replayCase.InitialState = session.StateMap{"empty": []byte{}}
+	snapshot, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	value, ok := snapshot.State["session"]["empty"].(CanonicalMap)
+	if !ok || value["kind"] != "bytes" || value["base64"] != "" {
+		t.Fatalf("Replay() normalized empty state = %#v, want tagged empty bytes", snapshot.State["session"]["empty"])
 	}
 }
 
@@ -312,9 +575,12 @@ func TestInjectFaultRejectsMissingPrerequisites(t *testing.T) {
 		FaultToolArguments,
 		FaultStateValue,
 		FaultMemoryContent,
+		FaultDuplicateMemory,
+		FaultMemorySearchOrder,
 		FaultSummaryText,
 		FaultSummaryMissing,
 		FaultSummaryFilterKey,
+		FaultSummaryStale,
 		FaultTrackPayload,
 		FaultDuplicateEvent,
 		"unknown",
@@ -341,7 +607,12 @@ func TestInjectFaultRejectsMissingPrerequisites(t *testing.T) {
 	})
 	t.Run("nil summary payload", func(t *testing.T) {
 		input := Snapshot{Summaries: map[string]CanonicalMap{"empty": nil}}
-		for _, kind := range []FaultKind{FaultSummaryText, FaultSummaryMissing, FaultSummaryFilterKey} {
+		for _, kind := range []FaultKind{
+			FaultSummaryText,
+			FaultSummaryMissing,
+			FaultSummaryFilterKey,
+			FaultSummaryStale,
+		} {
 			if _, err := InjectFault(input, kind); err == nil {
 				t.Fatalf("InjectFault(%q) unexpectedly accepted a nil summary", kind)
 			}
@@ -504,6 +775,8 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 	t.Run("state values", func(t *testing.T) {
 		state := normalizeState(session.StateMap{
 			"nil":                         nil,
+			"json-null":                   []byte(`null`),
+			"literal-nil":                 []byte("<nil>"),
 			"json":                        []byte(`{"b":2,"a":1}`),
 			"large":                       []byte(`9007199254740993`),
 			"text":                        []byte("plain"),
@@ -511,11 +784,54 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 			session.StateAppPrefix + "x":  []byte(`true`),
 			session.StateUserPrefix + "x": []byte(`true`),
 		}, "session")
-		want := map[string]string{
-			"nil": "<nil>", "json": `{"a":1,"b":2}`, "large": "9007199254740993", "text": "plain",
+		want := CanonicalMap{
+			"nil":       CanonicalMap{"kind": "nil"},
+			"json-null": CanonicalMap{"kind": "json", "json": "null"},
+			"literal-nil": CanonicalMap{
+				"kind":   "bytes",
+				"base64": "PG5pbD4=",
+			},
+			"json":  CanonicalMap{"kind": "json", "json": `{"a":1,"b":2}`},
+			"large": CanonicalMap{"kind": "json", "json": "9007199254740993"},
+			"text": CanonicalMap{
+				"kind":   "bytes",
+				"base64": "cGxhaW4=",
+			},
 		}
 		if !reflect.DeepEqual(state, want) {
 			t.Fatalf("normalizeState() = %v, want %v", state, want)
+		}
+	})
+	t.Run("state encodings do not collide", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			left  []byte
+			right []byte
+		}{
+			{name: "nil and JSON null", left: nil, right: []byte(`null`)},
+			{name: "nil and literal sentinel", left: nil, right: []byte("<nil>")},
+			{
+				name:  "bytes and same-shaped JSON",
+				left:  []byte{0xff},
+				right: []byte(`{"kind":"bytes","base64":"/w=="}`),
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				baseline := minimalSnapshot("baseline", "1")
+				actual := minimalSnapshot("actual", "1")
+				baseline.Case = "state-encoding"
+				actual.Case = "state-encoding"
+				baseline.State["session"] = normalizeState(session.StateMap{"value": test.left}, "session")
+				actual.State["session"] = normalizeState(session.StateMap{"value": test.right}, "session")
+				diffs, err := Compare("state-encoding", baseline, actual, nil)
+				if err != nil {
+					t.Fatalf("Compare() error = %v", err)
+				}
+				if len(diffs) == 0 {
+					t.Fatal("Compare() did not distinguish state representations")
+				}
+			})
 		}
 	})
 	t.Run("timestamp forms", func(t *testing.T) {
@@ -533,7 +849,10 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 			"backend",
 			"case",
 			EventOrderGlobal,
+			nil,
 			FullCapabilities(),
+			nil,
+			nil,
 			nil,
 			nil,
 			nil,
@@ -542,18 +861,171 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 			t.Fatalf("normalizeSnapshot(nil) error = %v", err)
 		}
 	})
-	t.Run("malformed track payload", func(t *testing.T) {
-		sess := &session.Session{Tracks: map[session.Track]*session.TrackEvents{
-			"broken": {
-				Track: "broken",
-				Events: []session.TrackEvent{{
-					Track:   "broken",
-					Payload: []byte("{"),
-				}},
+	t.Run("invalid track payloads", func(t *testing.T) {
+		for _, payload := range []json.RawMessage{{}, json.RawMessage("{")} {
+			sess := &session.Session{Tracks: map[session.Track]*session.TrackEvents{
+				"broken": {
+					Track: "broken",
+					Events: []session.TrackEvent{{
+						Track:   "broken",
+						Payload: payload,
+					}},
+				},
+			}}
+			if _, err := normalizeTracks(sess, time.Time{}); err == nil {
+				t.Fatalf("normalizeTracks() accepted invalid JSON %q", payload)
+			}
+		}
+	})
+	t.Run("event state delta JSON order", func(t *testing.T) {
+		eventWithState := func(id string, value []byte) event.Event {
+			evt := event.Event{
+				ID:         id,
+				StateDelta: session.StateMap{"value": value},
+			}
+			if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+				t.Fatalf("SetExtension() error = %v", err)
+			}
+			return evt
+		}
+		left, _, _, err := normalizeEvents(
+			[]event.Event{eventWithState("left", []byte(`{"b":2,"a":1}`))},
+			EventOrderGlobal,
+			nil,
+			time.Time{},
+		)
+		if err != nil {
+			t.Fatalf("normalizeEvents(left) error = %v", err)
+		}
+		right, _, _, err := normalizeEvents(
+			[]event.Event{eventWithState("right", []byte(`{"a":1,"b":2}`))},
+			EventOrderGlobal,
+			nil,
+			time.Time{},
+		)
+		if err != nil {
+			t.Fatalf("normalizeEvents(right) error = %v", err)
+		}
+		if !reflect.DeepEqual(left, right) {
+			t.Fatalf("equivalent state delta JSON differs: %v != %v", left, right)
+		}
+	})
+	t.Run("event state delta preserves scoped and unexpected keys", func(t *testing.T) {
+		baseTime := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+		step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+		evt := step.Event.Event.Clone()
+		evt.Timestamp = baseTime.Add(time.Second)
+		evt.StateDelta = session.StateMap{
+			"app:shared":        []byte(`true`),
+			"user:profile":      []byte(`"active"`),
+			replayTrackStateKey: []byte(`"unexpected"`),
+		}
+		if err := event.SetExtension(evt, logicalEventIDExtension, step.Event.LogicalID); err != nil {
+			t.Fatalf("SetExtension() error = %v", err)
+		}
+		events, _, _, err := normalizeEvents(
+			[]event.Event{*evt},
+			EventOrderGlobal,
+			nil,
+			baseTime,
+		)
+		if err != nil {
+			t.Fatalf("normalizeEvents() error = %v", err)
+		}
+		stateDelta, ok := events[0]["stateDelta"].(CanonicalMap)
+		if !ok {
+			t.Fatalf("normalized state delta = %#v, want CanonicalMap", events[0]["stateDelta"])
+		}
+		for _, key := range []string{"app:shared", "user:profile", replayTrackStateKey} {
+			if _, exists := stateDelta[key]; !exists {
+				t.Fatalf("normalized state delta omitted %q: %#v", key, stateDelta)
+			}
+		}
+	})
+	t.Run("session snapshot preserves applied event state delta", func(t *testing.T) {
+		evt := causalEvent(t, "state-delta", "", "updated")
+		evt.StateDelta = session.StateMap{
+			"app:shared":   []byte(`true`),
+			"user:profile": []byte(`"active"`),
+		}
+		sess := session.NewSession("replaytest", "user-1", "state-delta")
+		sess.CreatedAt = caseEpoch
+		sess.Events = []event.Event{evt}
+		sess.SetState("app:shared", []byte(`true`))
+		sess.SetState("user:profile", []byte(`"active"`))
+		sess.SetState("app:merged-only", []byte(`"noise"`))
+
+		snapshot, err := normalizeSnapshot(
+			"backend",
+			"state-delta",
+			EventOrderGlobal,
+			nil,
+			Capabilities{CapabilitySession: true, CapabilitySessionState: true},
+			map[string]struct{}{
+				"app:shared":   {},
+				"user:profile": {},
 			},
-		}}
-		if _, err := normalizeTracks(sess); err == nil {
-			t.Fatal("normalizeTracks() unexpectedly accepted malformed JSON")
+			sess,
+			nil,
+			nil,
+			nil,
+			nil,
+		)
+		if err != nil {
+			t.Fatalf("normalizeSnapshot() error = %v", err)
+		}
+		state := snapshot.State["session"]
+		for _, key := range []string{"app:shared", "user:profile"} {
+			if _, ok := state[key]; !ok {
+				t.Fatalf("session snapshot omitted applied delta %q: %#v", key, state)
+			}
+		}
+		if _, ok := state["app:merged-only"]; ok {
+			t.Fatalf("session snapshot retained merged-only state: %#v", state)
+		}
+	})
+	t.Run("invalid event identities", func(t *testing.T) {
+		eventWithIdentity := func(physicalID, logicalID string) event.Event {
+			evt := event.Event{ID: physicalID}
+			if logicalID != "" {
+				if err := event.SetExtension(&evt, logicalEventIDExtension, logicalID); err != nil {
+					t.Fatalf("SetExtension() error = %v", err)
+				}
+			}
+			return evt
+		}
+		tests := []struct {
+			name   string
+			events []event.Event
+		}{
+			{name: "missing physical", events: []event.Event{eventWithIdentity("", "logical")}},
+			{name: "missing logical", events: []event.Event{eventWithIdentity("physical", "")}},
+			{
+				name: "duplicate physical",
+				events: []event.Event{
+					eventWithIdentity("same", "left"),
+					eventWithIdentity("same", "right"),
+				},
+			},
+			{
+				name: "duplicate logical",
+				events: []event.Event{
+					eventWithIdentity("left", "same"),
+					eventWithIdentity("right", "same"),
+				},
+			},
+		}
+		for _, test := range tests {
+			t.Run(test.name, func(t *testing.T) {
+				if _, _, _, err := normalizeEvents(
+					test.events,
+					EventOrderGlobal,
+					nil,
+					time.Time{},
+				); err == nil {
+					t.Fatal("normalizeEvents() accepted an invalid event identity")
+				}
+			})
 		}
 	})
 	t.Run("nil track and summary entries", func(t *testing.T) {
@@ -574,20 +1046,22 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 				},
 			},
 		}
-		tracks, err := normalizeTracks(sess)
+		tracks, err := normalizeTracks(sess, time.Time{})
 		if err != nil || tracks["empty"] != nil {
 			t.Fatalf("normalizeTracks() = %v, %v", tracks, err)
 		}
-		summaries, err := normalizeSummaries(sess, nil)
+		unknown := sess.Summaries["branch"]
+		delete(sess.Summaries, "branch")
+		summaries, err := normalizeSummaries(sess, sess.GetEvents(), nil)
 		if err != nil {
 			t.Fatalf("normalizeSummaries() error = %v", err)
 		}
 		if summaries["empty"] != nil {
 			t.Fatalf("nil summary = %v", summaries["empty"])
 		}
-		boundary := summaries["branch"]["boundary"].(CanonicalMap)
-		if boundary["last_event_id"] != "<unknown-event>" {
-			t.Fatalf("unknown boundary event = %v", boundary["last_event_id"])
+		sess.Summaries["branch"] = unknown
+		if _, err := normalizeSummaries(sess, sess.GetEvents(), nil); err == nil {
+			t.Fatal("normalizeSummaries() accepted an unknown event anchor")
 		}
 	})
 }
@@ -600,12 +1074,15 @@ func TestReplayPropagatesLifecycleFailures(t *testing.T) {
 	cleanupErr := errors.New("cleanup failure")
 	openErr := errors.New("open failure")
 	partialCleaned := false
-	partialBackend := Backend{Name: "partial-open", Open: func(context.Context, string) (*Services, error) {
-		return &Services{Cleanup: func() error {
-			partialCleaned = true
-			return cleanupErr
-		}}, openErr
-	}}
+	partialBackend := Backend{
+		Name:         "partial-open",
+		Capabilities: capabilitySet(caseUnderTest.Requires),
+		Open: func(context.Context, string) (*Services, error) {
+			return &Services{Cleanup: func() error {
+				partialCleaned = true
+				return cleanupErr
+			}}, openErr
+		}}
 	if _, err := Replay(context.Background(), caseUnderTest, partialBackend); !errors.Is(err, openErr) || !errors.Is(err, cleanupErr) {
 		t.Fatalf("Replay() partial open error = %v, want open and cleanup failures", err)
 	}
@@ -663,6 +1140,7 @@ func TestReplayPropagatesLifecycleFailures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			test.backend.Capabilities = capabilitySet(caseUnderTest.Requires)
 			_, err := Replay(context.Background(), caseUnderTest, test.backend)
 			if err == nil {
 				t.Fatal("Replay() unexpectedly succeeded")
@@ -807,6 +1285,48 @@ func (*nilCreateSessionService) CreateSession(
 
 type nilGetSessionService struct {
 	session.Service
+}
+
+type cancelAfterAppendService struct {
+	session.Service
+	cancel context.CancelFunc
+}
+
+type cancelAfterAppUpdateService struct {
+	session.Service
+	cancel      context.CancelFunc
+	deleteCalls int
+}
+
+func (s *cancelAfterAppUpdateService) UpdateAppState(
+	context.Context,
+	string,
+	session.StateMap,
+) error {
+	s.cancel()
+	return nil
+}
+
+func (s *cancelAfterAppUpdateService) DeleteAppState(
+	context.Context,
+	string,
+	string,
+) error {
+	s.deleteCalls++
+	return nil
+}
+
+func (s *cancelAfterAppendService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	if err := s.Service.AppendEvent(ctx, sess, evt, options...); err != nil {
+		return err
+	}
+	s.cancel()
+	return nil
 }
 
 func (*nilGetSessionService) GetSession(

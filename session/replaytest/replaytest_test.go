@@ -53,6 +53,29 @@ func TestPublicCases(t *testing.T) {
 
 func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 	validStep := messageStep("valid", "valid", 1, "user", "user", "hello", "")
+	trackPayloadCase := func(name string, payload json.RawMessage) Case {
+		return Case{
+			Name:     name,
+			Requires: []Capability{CapabilitySession, CapabilityTrack},
+			Steps: []Step{{
+				Name: "track",
+				Kind: StepAppendTrack,
+				Track: &TrackInput{Event: &session.TrackEvent{
+					Track:   "tools",
+					Payload: payload,
+				}},
+			}},
+		}
+	}
+	eventExtensionCase := func(name string, raw json.RawMessage) Case {
+		step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+		step.Event.Event.Extensions = map[string]json.RawMessage{"custom.example/v1": raw}
+		return Case{
+			Name:     name,
+			Requires: []Capability{CapabilitySession},
+			Steps:    []Step{step},
+		}
+	}
 	tests := []Case{
 		{
 			Name:       "unknown-order",
@@ -104,6 +127,27 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 			}},
 		},
 		{
+			Name:     "undeclared-memory-search-capability",
+			Requires: []Capability{CapabilitySession, CapabilityMemory},
+			Steps: []Step{{
+				Name:         "search",
+				Kind:         StepSearchMemory,
+				MemorySearch: &MemorySearchInput{Query: "value"},
+			}},
+		},
+		{
+			Name: "duplicate-memory-search-name",
+			Requires: []Capability{
+				CapabilitySession,
+				CapabilityMemory,
+				CapabilityMemorySearch,
+			},
+			Steps: []Step{
+				{Name: "search", Kind: StepSearchMemory, MemorySearch: &MemorySearchInput{Query: "one"}},
+				{Name: "search", Kind: StepSearchMemory, MemorySearch: &MemorySearchInput{Query: "two"}},
+			},
+		},
+		{
 			Name:     "duplicate-logical-event-id",
 			Requires: []Capability{CapabilitySession, CapabilityConcurrent},
 			Steps: []Step{{
@@ -124,11 +168,322 @@ func TestCaseValidationRejectsAmbiguousInputs(t *testing.T) {
 				Track: &TrackInput{Event: &session.TrackEvent{}},
 			}},
 		},
+		trackPayloadCase("empty-track-payload", json.RawMessage{}),
+		trackPayloadCase("malformed-track-payload", json.RawMessage("{")),
+		eventExtensionCase("empty-event-extension", json.RawMessage{}),
+		eventExtensionCase("malformed-event-extension", json.RawMessage("{")),
+		{
+			Name:     "empty-event-extension-key",
+			Requires: []Capability{CapabilitySession},
+			Steps: []Step{func() Step {
+				step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+				step.Event.Event.Extensions = map[string]json.RawMessage{"": json.RawMessage(`true`)}
+				return step
+			}()},
+		},
+		{
+			Name:     "reserved-event-extension-key",
+			Requires: []Capability{CapabilitySession},
+			Steps: []Step{func() Step {
+				step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+				step.Event.Event.Extensions = map[string]json.RawMessage{
+					logicalEventIDExtension: json.RawMessage(`"spoofed"`),
+				}
+				return step
+			}()},
+		},
 	}
 	for _, replayCase := range tests {
 		if err := validateCase(replayCase); err == nil {
 			t.Fatalf("case %q unexpectedly validated", replayCase.Name)
 		}
+	}
+}
+
+func TestCaseValidationAllowsNilJSONPayloads(t *testing.T) {
+	eventStep := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+	eventStep.Event.Event.Extensions = map[string]json.RawMessage{"custom.example/v1": nil}
+	replayCase := Case{
+		Name:     "nil-json-payloads",
+		Requires: []Capability{CapabilitySession, CapabilityTrack},
+		Steps: []Step{
+			eventStep,
+			{
+				Name: "track",
+				Kind: StepAppendTrack,
+				Track: &TrackInput{Event: &session.TrackEvent{
+					Track:   "tools",
+					Payload: nil,
+				}},
+			},
+		},
+	}
+	if err := validateCase(replayCase); err != nil {
+		t.Fatalf("validateCase() rejected nil JSON payloads: %v", err)
+	}
+}
+
+func TestCaseValidationRejectsMismatchedStepPayloads(t *testing.T) {
+	validEvent := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "").Event
+	tests := []Step{
+		{Name: "event-kind-with-state", Kind: StepAppendEvent, State: &StateInput{Scope: StateScopeSession}},
+		{Name: "state-kind-with-event", Kind: StepUpdateState, Event: validEvent},
+		{Name: "memory-kind-with-summary", Kind: StepAddMemory, Summary: &SummaryInput{}},
+		{Name: "memory-search-kind-with-memory", Kind: StepSearchMemory, Memory: &MemoryInput{Memory: "value"}},
+		{Name: "summary-kind-with-memory", Kind: StepCreateSummary, Memory: &MemoryInput{Memory: "value"}},
+		{Name: "track-kind-with-event", Kind: StepAppendTrack, Event: validEvent},
+		{Name: "concurrent-kind-with-summary", Kind: StepConcurrent, Summary: &SummaryInput{}},
+	}
+	for _, step := range tests {
+		t.Run(step.Name, func(t *testing.T) {
+			replayCase := Case{
+				Name:     step.Name,
+				Requires: []Capability{CapabilitySession},
+				Steps:    []Step{step},
+			}
+			if err := validateCase(replayCase); err == nil {
+				t.Fatal("validateCase() accepted a mismatched step payload")
+			}
+		})
+	}
+}
+
+func TestCaseValidationRejectsNonPortableStateKeys(t *testing.T) {
+	stateCase := func(name string, scope StateScope, values session.StateMap, deletes []string) Case {
+		capability := CapabilitySessionState
+		if scope == StateScopeApp {
+			capability = CapabilityAppState
+		} else if scope == StateScopeUser {
+			capability = CapabilityUserState
+		}
+		return Case{
+			Name:     name,
+			Requires: []Capability{CapabilitySession, capability},
+			Steps: []Step{{
+				Name:  "state",
+				Kind:  StepUpdateState,
+				State: &StateInput{Scope: scope, Values: values, DeleteKeys: deletes},
+			}},
+		}
+	}
+	tests := []Case{
+		stateCase("app-prefixed-value", StateScopeApp, session.StateMap{"app:key": []byte("x")}, nil),
+		stateCase("user-temp-value", StateScopeUser, session.StateMap{"temp:key": []byte("x")}, nil),
+		stateCase("app-empty-delete", StateScopeApp, nil, []string{""}),
+		stateCase("session-prefixed-value", StateScopeSession, session.StateMap{"user:key": []byte("x")}, nil),
+		stateCase("session-reserved-track-index", StateScopeSession, session.StateMap{replayTrackStateKey: []byte("x")}, nil),
+		{
+			Name:         "prefixed-initial-state",
+			InitialState: session.StateMap{"app:key": []byte("x")},
+			Requires:     []Capability{CapabilitySession, CapabilitySessionState},
+			Steps:        []Step{messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")},
+		},
+		{
+			Name:     "reserved-track-index-event-delta",
+			Requires: []Capability{CapabilitySession, CapabilitySessionState},
+			Steps: []Step{func() Step {
+				step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+				step.Event.Event.StateDelta = session.StateMap{replayTrackStateKey: []byte("x")}
+				return step
+			}()},
+		},
+	}
+	for _, replayCase := range tests {
+		t.Run(replayCase.Name, func(t *testing.T) {
+			if err := validateCase(replayCase); err == nil {
+				t.Fatal("validateCase() accepted a non-portable state key")
+			}
+		})
+	}
+}
+
+func TestCaseValidationAllowsScopedEventStateDelta(t *testing.T) {
+	step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+	step.Event.Event.StateDelta = session.StateMap{
+		"app:shared":    []byte(`true`),
+		"user:profile":  []byte(`"active"`),
+		"session_value": []byte(`1`),
+		"temp:scratch":  []byte(`2`),
+	}
+	replayCase := Case{
+		Name: "scoped-event-state-delta",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityAppState,
+			CapabilityUserState,
+			CapabilitySessionState,
+		},
+		Steps: []Step{step},
+	}
+	if err := validateCase(replayCase); err != nil {
+		t.Fatalf("validateCase() rejected scoped event state delta: %v", err)
+	}
+}
+
+func TestCaseValidationRequiresSessionStateForScopedEventDelta(t *testing.T) {
+	step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+	step.Event.Event.StateDelta = session.StateMap{"app:shared": []byte(`true`)}
+	replayCase := Case{
+		Name:     "scoped-event-state-delta",
+		Requires: []Capability{CapabilitySession, CapabilityAppState},
+		Steps:    []Step{step},
+	}
+	if err := validateCase(replayCase); err == nil ||
+		!strings.Contains(err.Error(), string(CapabilitySessionState)) {
+		t.Fatalf("validateCase() error = %v, want missing session-state capability", err)
+	}
+	replayCase.Requires = append(replayCase.Requires, CapabilitySessionState)
+	if err := validateCase(replayCase); err != nil {
+		t.Fatalf("validateCase() rejected declared session-state capability: %v", err)
+	}
+}
+
+func TestCaseValidationRejectsMalformedEventStateDeltaKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		key        string
+		capability Capability
+	}{
+		{name: "empty", key: "", capability: CapabilitySessionState},
+		{name: "empty app key", key: session.StateAppPrefix, capability: CapabilityAppState},
+		{name: "empty user key", key: session.StateUserPrefix, capability: CapabilityUserState},
+		{name: "empty temp key", key: session.StateTempPrefix, capability: CapabilitySessionState},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			step := messageStep("event", "event", 1, "user", model.RoleUser, "hello", "")
+			step.Event.Event.StateDelta = session.StateMap{test.key: []byte(`1`)}
+			replayCase := Case{
+				Name:     test.name,
+				Requires: []Capability{CapabilitySession, test.capability},
+				Steps:    []Step{step},
+			}
+			if err := validateCase(replayCase); err == nil {
+				t.Fatal("validateCase() accepted a malformed event state key")
+			}
+		})
+	}
+}
+
+func TestCaseValidationRejectsNonPortableConcurrency(t *testing.T) {
+	branch := func(id, lane string) []Step {
+		return []Step{messageStep(id, id, 1, "assistant", model.RoleAssistant, id, lane)}
+	}
+	stateDeltaBranch := branch("state-delta", "state-delta")
+	stateDeltaBranch[0].Event.Event.StateDelta = session.StateMap{"key": []byte("value")}
+	tests := []Case{
+		{
+			Name: "global-order",
+			Requires: []Capability{
+				CapabilitySession,
+				CapabilityConcurrent,
+			},
+			Steps: []Step{{
+				Name:       "parallel",
+				Kind:       StepConcurrent,
+				Concurrent: [][]Step{branch("a", "a"), branch("b", "b")},
+			}},
+		},
+		{
+			Name:       "concurrent-state",
+			Requires:   []Capability{CapabilitySession, CapabilitySessionState, CapabilityConcurrent},
+			EventOrder: EventOrderCausal,
+			Steps: []Step{{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					branch("a", "a"),
+					{{Name: "state", Kind: StepUpdateState, State: &StateInput{
+						Scope:  StateScopeSession,
+						Values: session.StateMap{"key": []byte("value")},
+					}}},
+				},
+			}},
+		},
+		{
+			Name:       "concurrent-event-state-delta",
+			Requires:   []Capability{CapabilitySession, CapabilitySessionState, CapabilityConcurrent},
+			EventOrder: EventOrderCausal,
+			Steps: []Step{{
+				Name:       "parallel",
+				Kind:       StepConcurrent,
+				Concurrent: [][]Step{branch("a", "a"), stateDeltaBranch},
+			}},
+		},
+	}
+	for _, replayCase := range tests {
+		t.Run(replayCase.Name, func(t *testing.T) {
+			if err := validateCase(replayCase); err == nil {
+				t.Fatal("validateCase() accepted non-portable concurrency")
+			}
+		})
+	}
+}
+
+func TestConcurrentBranchesMayShareFilterKey(t *testing.T) {
+	replayCase := Case{
+		Name:       "shared-filter-key",
+		Requires:   []Capability{CapabilitySession, CapabilityConcurrent},
+		EventOrder: EventOrderCausal,
+		Steps: []Step{
+			messageStep("user", "user", 1, "user", model.RoleUser, "start", ""),
+			{
+				Name: "parallel",
+				Kind: StepConcurrent,
+				Concurrent: [][]Step{
+					{messageStep("a", "a", 2, "assistant", model.RoleAssistant, "a", "shared")},
+					{messageStep("b", "b", 3, "assistant", model.RoleAssistant, "b", "shared")},
+				},
+			},
+		},
+	}
+	snapshot, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if !reflect.DeepEqual(snapshot.EventOrder["concurrent:1/0"], []string{"a"}) ||
+		!reflect.DeepEqual(snapshot.EventOrder["concurrent:1/1"], []string{"b"}) {
+		t.Fatalf("concurrent event order = %v", snapshot.EventOrder)
+	}
+}
+
+func TestInMemoryBackendSupportsCustomSummaryFilter(t *testing.T) {
+	snapshot, err := Replay(context.Background(), summaryFilterKeyCase(), InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	summary, ok := snapshot.Summaries[customSummaryFilterKey]
+	if !ok {
+		t.Fatalf("summary %q is missing: %v", customSummaryFilterKey, snapshot.Summaries)
+	}
+	text, ok := summary["text"].(string)
+	if !ok || !strings.Contains(text, "question") || !strings.Contains(text, "answer") {
+		t.Fatalf("summary text = %v, want custom branch contents", summary["text"])
+	}
+	if strings.Contains(text, "unrelated") {
+		t.Fatalf("summary text includes unrelated branch: %q", text)
+	}
+}
+
+func TestStateCasePersistsScopedEventDelta(t *testing.T) {
+	snapshot, err := Replay(context.Background(), stateCRUDCase(), InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	if len(snapshot.Events) != 2 {
+		t.Fatalf("state case events = %d, want 2", len(snapshot.Events))
+	}
+	stateDelta, ok := snapshot.Events[1]["stateDelta"].(CanonicalMap)
+	if !ok {
+		t.Fatalf("state event delta = %#v, want CanonicalMap", snapshot.Events[1]["stateDelta"])
+	}
+	for _, key := range []string{"event_counter", "app:event_counter", "user:event_counter"} {
+		if _, exists := stateDelta[key]; !exists {
+			t.Fatalf("state event delta omitted %q: %#v", key, stateDelta)
+		}
+	}
+	if _, exists := snapshot.State["session"]["event_counter"]; !exists {
+		t.Fatalf("session state omitted event delta: %#v", snapshot.State["session"])
 	}
 }
 
@@ -177,7 +532,7 @@ func TestRunnerInMemoryMatrix(t *testing.T) {
 	}
 }
 
-func TestConcurrentStepReloadsSessionBeforeSummary(t *testing.T) {
+func TestCaseValidationRejectsSummaryWithConcurrency(t *testing.T) {
 	replayCase := Case{
 		Name:       "concurrent_then_summary",
 		Requires:   []Capability{CapabilitySession, CapabilitySummary, CapabilityConcurrent},
@@ -188,25 +543,17 @@ func TestConcurrentStepReloadsSessionBeforeSummary(t *testing.T) {
 				Name: "parallel-events",
 				Kind: StepConcurrent,
 				Concurrent: [][]Step{
-					{messageStep("branch-a", "branch-a", 2, "assistant", model.RoleAssistant, "alpha", "")},
-					{messageStep("branch-b", "branch-b", 3, "assistant", model.RoleAssistant, "beta", "")},
+					{messageStep("branch-a", "branch-a", 2, "assistant", model.RoleAssistant, "alpha", "branch/a")},
+					{messageStep("branch-b", "branch-b", 3, "assistant", model.RoleAssistant, "beta", "branch/b")},
 				},
 			},
 			{Name: "summary", Kind: StepCreateSummary, Summary: &SummaryInput{Force: true}},
 		},
 	}
 
-	snapshot, err := Replay(context.Background(), replayCase, InMemoryBackend())
-	if err != nil {
-		t.Fatalf("Replay() error = %v", err)
-	}
-	summary, ok := snapshot.Summaries[session.SummaryFilterKeyAllContents]
-	if !ok {
-		t.Fatal("summary after concurrent step is missing")
-	}
-	text, ok := summary["text"].(string)
-	if !ok || !strings.Contains(text, "alpha") || !strings.Contains(text, "beta") {
-		t.Fatalf("summary text = %v, want both concurrent branch events", summary["text"])
+	if err := validateCase(replayCase); err == nil ||
+		!strings.Contains(err.Error(), "concurrent cases cannot contain summary steps") {
+		t.Fatalf("validateCase() error = %v, want concurrent summary rejection", err)
 	}
 }
 
@@ -604,6 +951,10 @@ func TestReplayClosesIncompleteServices(t *testing.T) {
 	cleaned := false
 	backend := Backend{
 		Name: "incomplete",
+		Capabilities: Capabilities{
+			CapabilitySession: true,
+			CapabilityMemory:  true,
+		},
 		Open: func(ctx context.Context, caseName string) (*Services, error) {
 			services, err := reference.Open(ctx, caseName)
 			if err != nil {
@@ -678,6 +1029,72 @@ func TestReplayRejectsCrossSessionSummaryLeak(t *testing.T) {
 	}
 }
 
+func TestRunnerDetectsIgnoredSummaryUpdate(t *testing.T) {
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+	stale := InMemoryBackend()
+	stale.Name = "stale-summary"
+	open := stale.Open
+	stale.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &ignoredSummaryUpdateService{Service: services.Session}
+		return services, nil
+	}
+	report, err := (Runner{Reference: baseline.Name}).Run(
+		context.Background(),
+		[]Case{summaryUpdateCase()},
+		[]Backend{baseline, stale},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.FailedCases != 1 || report.BlockingDiffs == 0 {
+		t.Fatalf("ignored summary update report = %+v", report)
+	}
+	for _, diff := range report.Cases[0].Diffs {
+		if strings.HasPrefix(diff.Path, "/summaries/") && diff.SummaryFilterKey != nil {
+			return
+		}
+	}
+	t.Fatalf("ignored summary update lacks a summary locator: %+v", report.Cases[0].Diffs)
+}
+
+func TestRunnerDetectsMemorySearchOrderDrift(t *testing.T) {
+	baseline := InMemoryBackend()
+	baseline.Name = "baseline"
+	reversed := InMemoryBackend()
+	reversed.Name = "reversed-search"
+	open := reversed.Open
+	reversed.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Memory = &reversedMemorySearchService{Service: services.Memory}
+		return services, nil
+	}
+	report, err := (Runner{Reference: baseline.Name}).Run(
+		context.Background(),
+		[]Case{memorySearchCase()},
+		[]Backend{baseline, reversed},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.FailedCases != 1 || report.BlockingDiffs == 0 {
+		t.Fatalf("reversed memory search report = %+v", report)
+	}
+	for _, diff := range report.Cases[0].Diffs {
+		if strings.HasPrefix(diff.Path, "/memory_searches/") && diff.MemoryID != "" {
+			return
+		}
+	}
+	t.Fatalf("memory search order drift lacks a memory locator: %+v", report.Cases[0].Diffs)
+}
+
 func TestEveryPublicCaseDetectsInjectedFault(t *testing.T) {
 	for _, replayCase := range PublicCases() {
 		replayCase := replayCase
@@ -705,9 +1122,47 @@ func TestEveryPublicCaseDetectsInjectedFault(t *testing.T) {
 				if diff.Case != replayCase.Name || diff.SessionID == "" || diff.Path == "" {
 					t.Fatalf("diff lacks required locator: %+v", diff)
 				}
+				if strings.HasPrefix(diff.Path, "/memory_searches/") && diff.MemoryID == "" {
+					t.Fatalf("memory search diff lacks a memory id: %+v", diff)
+				}
 			}
 		})
 	}
+}
+
+func TestRunnerDetectsDroppedNonPersistedEventStateDelta(t *testing.T) {
+	step := messageStep("partial-state", "partial-state", 1, "assistant", model.RoleAssistant, "partial", "")
+	step.Event.Event.IsPartial = true
+	step.Event.Event.StateDelta = session.StateMap{"app:partial": []byte(`true`)}
+	replayCase := Case{
+		Name: "nonpersisted_event_state_delta",
+		Requires: []Capability{
+			CapabilitySession,
+			CapabilityAppState,
+			CapabilitySessionState,
+		},
+		Steps: []Step{step},
+	}
+	report, err := (Runner{Reference: "inmemory"}).Run(
+		context.Background(),
+		[]Case{replayCase},
+		[]Backend{
+			InMemoryBackend(),
+			droppedNonPersistedStateDeltaBackend("drops-partial-state"),
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if report.IsClean() {
+		t.Fatal("Run() did not detect the dropped non-persisted event state delta")
+	}
+	for _, diff := range report.Cases[0].Diffs {
+		if diff.Path == "/state/session/app:partial" && !diff.Allowed {
+			return
+		}
+	}
+	t.Fatalf("Run() diffs = %#v, want blocking session-state diff", report.Cases[0].Diffs)
 }
 
 func TestCompareAllowedDiff(t *testing.T) {
@@ -899,6 +1354,8 @@ func TestExactNumberBounds(t *testing.T) {
 func TestAllowedDiffValidation(t *testing.T) {
 	tests := []AllowedDiff{
 		{BackendA: "a", BackendB: "b", Path: "relative", Rule: AllowedIgnore, Reason: "bad path"},
+		{BackendA: "a", BackendB: "b", Path: "/state/~2key", Rule: AllowedIgnore, Reason: "bad escape"},
+		{BackendA: "a", BackendB: "b", Path: "/state/key~", Rule: AllowedIgnore, Reason: "truncated escape"},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: "unknown", Reason: "bad rule"},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedIgnore},
 		{BackendA: "a", BackendB: "b", Path: "/x", Rule: AllowedWithinDelta, Delta: -1, Reason: "bad delta"},
@@ -909,6 +1366,16 @@ func TestAllowedDiffValidation(t *testing.T) {
 		if err := validateAllowedDiffs([]AllowedDiff{rule}); err == nil {
 			t.Fatalf("rule %d unexpectedly validated: %+v", index, rule)
 		}
+	}
+	valid := AllowedDiff{
+		BackendA: "a",
+		BackendB: "b",
+		Path:     "/summaries/a~1b/~0key",
+		Rule:     AllowedIgnore,
+		Reason:   "valid escapes",
+	}
+	if err := validateAllowedDiffs([]AllowedDiff{valid}); err != nil {
+		t.Fatalf("valid JSON Pointer escapes rejected: %v", err)
 	}
 }
 
@@ -955,22 +1422,25 @@ func TestZeroTimestampIsNotMarkedPresent(t *testing.T) {
 func TestEventExtensionTimestampsRemainSemantic(t *testing.T) {
 	evt := event.Event{
 		ID:        "physical-event",
-		Timestamp: caseEpoch,
-		Response:  &model.Response{Timestamp: caseEpoch},
+		Timestamp: caseEpoch.Add(time.Second),
+		Response:  &model.Response{Timestamp: caseEpoch.Add(2 * time.Second)},
 		Extensions: map[string]json.RawMessage{
 			"custom.example/v1": json.RawMessage(`{"timestamp":"2026-07-01T00:00:00Z","created_at":"semantic"}`),
 		},
 	}
-	events, _, _, err := normalizeEvents([]event.Event{evt}, EventOrderGlobal)
+	if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	events, _, _, err := normalizeEvents([]event.Event{evt}, EventOrderGlobal, nil, caseEpoch)
 	if err != nil {
 		t.Fatalf("normalizeEvents() error = %v", err)
 	}
-	if events[0]["timestamp"] != presentMarker {
-		t.Fatalf("event timestamp = %v, want %q", events[0]["timestamp"], presentMarker)
+	if events[0]["timestamp"] != time.Second.Nanoseconds() {
+		t.Fatalf("event timestamp offset = %v, want one second", events[0]["timestamp"])
 	}
 	response, ok := events[0]["response"].(map[string]any)
-	if !ok || response["timestamp"] != presentMarker {
-		t.Fatalf("response timestamp = %v, want %q", response["timestamp"], presentMarker)
+	if !ok || response["timestamp"] != (2*time.Second).Nanoseconds() {
+		t.Fatalf("response timestamp offset = %v, want two seconds", response["timestamp"])
 	}
 	extensions, ok := events[0]["extensions"].(map[string]any)
 	if !ok {
@@ -985,6 +1455,73 @@ func TestEventExtensionTimestampsRemainSemantic(t *testing.T) {
 	}
 }
 
+func TestTrackTimestampOffsetRemainsSemantic(t *testing.T) {
+	sess := &session.Session{Tracks: map[session.Track]*session.TrackEvents{
+		"tools": {
+			Track: "tools",
+			Events: []session.TrackEvent{{
+				Track:     "tools",
+				Payload:   json.RawMessage(`null`),
+				Timestamp: caseEpoch.Add(3 * time.Second),
+			}},
+		},
+	}}
+	tracks, err := normalizeTracks(sess, caseEpoch)
+	if err != nil {
+		t.Fatalf("normalizeTracks() error = %v", err)
+	}
+	if got := tracks["tools"][0]["timestamp"]; got != (3 * time.Second).Nanoseconds() {
+		t.Fatalf("track timestamp offset = %v, want three seconds", got)
+	}
+}
+
+func TestAnchoredSummaryCutoffRemainsSemantic(t *testing.T) {
+	evt := event.Event{
+		ID:        "physical-event",
+		Timestamp: caseEpoch.Add(2 * time.Second),
+		Response:  &model.Response{},
+	}
+	if err := event.SetExtension(&evt, logicalEventIDExtension, "logical-event"); err != nil {
+		t.Fatalf("SetExtension() error = %v", err)
+	}
+	boundary := &session.SummaryBoundary{
+		Version:     session.SummaryBoundaryVersion,
+		CutoffAt:    evt.Timestamp,
+		LastEventID: evt.ID,
+	}
+	sess := &session.Session{
+		CreatedAt: caseEpoch,
+		Events:    []event.Event{evt},
+		Summaries: map[string]*session.Summary{
+			session.SummaryFilterKeyAllContents: {
+				Summary:  "summary",
+				Boundary: boundary,
+			},
+		},
+	}
+	summaries, err := normalizeSummaries(
+		sess,
+		sess.GetEvents(),
+		map[string]string{evt.ID: "logical-event"},
+	)
+	if err != nil {
+		t.Fatalf("normalizeSummaries() error = %v", err)
+	}
+	normalized := summaries[session.SummaryFilterKeyAllContents]["boundary"].(CanonicalMap)
+	if normalized["last_event_id"] != "logical-event" ||
+		normalized["cutoff_at"] != (2*time.Second).Nanoseconds() {
+		t.Fatalf("normalized boundary = %v", normalized)
+	}
+	boundary.CutoffAt = boundary.CutoffAt.Add(time.Second)
+	if _, err := normalizeSummaries(
+		sess,
+		sess.GetEvents(),
+		map[string]string{evt.ID: "logical-event"},
+	); err == nil {
+		t.Fatal("normalizeSummaries() accepted a cutoff that disagrees with its event anchor")
+	}
+}
+
 func TestCausalEventNormalizationIgnoresGlobalInterleaving(t *testing.T) {
 	root := causalEvent(t, "root", "", "root")
 	branchA1 := causalEvent(t, "a-1", "branch/a", "a-1")
@@ -994,13 +1531,13 @@ func TestCausalEventNormalizationIgnoresGlobalInterleaving(t *testing.T) {
 
 	left, leftOrder, _, err := normalizeEvents([]event.Event{
 		root, branchA1, branchB1, branchA2, branchB2,
-	}, EventOrderCausal)
+	}, EventOrderCausal, nil, caseEpoch)
 	if err != nil {
 		t.Fatalf("normalizeEvents(left) error = %v", err)
 	}
 	right, rightOrder, _, err := normalizeEvents([]event.Event{
 		root, branchB1, branchA1, branchB2, branchA2,
-	}, EventOrderCausal)
+	}, EventOrderCausal, nil, caseEpoch)
 	if err != nil {
 		t.Fatalf("normalizeEvents(right) error = %v", err)
 	}
@@ -1044,7 +1581,81 @@ func TestMemoryEventTimeRemainsSemantic(t *testing.T) {
 	}
 }
 
+func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
+	entries := []*memory.Entry{
+		{ID: "physical-a", Memory: &memory.Memory{Memory: "first"}},
+		{ID: "physical-b", Memory: &memory.Memory{Memory: "second"}},
+	}
+	_, ids, err := normalizeMemoryCatalog(entries)
+	if err != nil {
+		t.Fatalf("normalizeMemoryCatalog() error = %v", err)
+	}
+	searches, err := normalizeMemorySearches(map[string][]*memory.Entry{
+		"query": {
+			{ID: "physical-b", Memory: &memory.Memory{Memory: "second"}, Score: 0.8},
+			{ID: "physical-a", Memory: &memory.Memory{Memory: "first"}, Score: 0.4},
+		},
+	}, ids)
+	if err != nil {
+		t.Fatalf("normalizeMemorySearches() error = %v", err)
+	}
+	results := searches["query"]
+	if len(results) != 2 ||
+		results[0]["id"] != ids["physical-b"] ||
+		results[1]["id"] != ids["physical-a"] ||
+		results[0]["score"] != 0.8 ||
+		results[1]["score"] != 0.4 {
+		t.Fatalf("normalized search results = %#v", results)
+	}
+	if _, err := normalizeMemorySearches(map[string][]*memory.Entry{
+		"query": {{ID: "unknown", Memory: &memory.Memory{Memory: "unknown"}}},
+	}, ids); err == nil {
+		t.Fatal("normalizeMemorySearches() accepted an unknown memory id")
+	}
+}
+
+func TestMemorySearchInputQueryIsAuthoritative(t *testing.T) {
+	replayCase := memorySearchCase()
+	search := replayCase.Steps[len(replayCase.Steps)-1].MemorySearch
+	search.Options.Query = "does not match"
+	backend := InMemoryBackend()
+	snapshot, err := Replay(context.Background(), replayCase, backend)
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	results := snapshot.MemorySearches["rank-replay-reports"]
+	if len(results) != 2 {
+		t.Fatalf("memory search returned %d results, want 2", len(results))
+	}
+}
+
+func TestNormalizeMemoriesRejectsMalformedEntry(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []*memory.Entry
+	}{
+		{name: "nil entry", entries: []*memory.Entry{nil}},
+		{name: "nil content", entries: []*memory.Entry{{ID: "memory"}}},
+		{name: "missing id", entries: []*memory.Entry{{Memory: &memory.Memory{Memory: "value"}}}},
+		{
+			name: "duplicate id",
+			entries: []*memory.Entry{
+				{ID: "memory", Memory: &memory.Memory{Memory: "left"}},
+				{ID: "memory", Memory: &memory.Memory{Memory: "right"}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := normalizeMemories(test.entries); err == nil {
+				t.Fatal("normalizeMemories() accepted a malformed memory entry")
+			}
+		})
+	}
+}
+
 func TestReportJSONRoundTrip(t *testing.T) {
+	summaryFilterKey := "agent/weather"
 	report := Report{
 		GeneratedAt:    caseEpoch,
 		ComparisonMode: ComparisonReference,
@@ -1061,7 +1672,7 @@ func TestReportJSONRoundTrip(t *testing.T) {
 				BackendA:         "inmemory",
 				BackendB:         "sqlite",
 				SessionID:        "summary_filter_key",
-				SummaryFilterKey: "agent/weather",
+				SummaryFilterKey: &summaryFilterKey,
 				Path:             "/summaries/agent~1weather/text",
 				Baseline:         "expected",
 				Actual:           "drifted",
@@ -1081,6 +1692,34 @@ func TestReportJSONRoundTrip(t *testing.T) {
 	}
 	if err := decoded.Validate(); err != nil {
 		t.Fatalf("decoded Validate() error = %v", err)
+	}
+}
+
+func TestFullSessionSummaryLocatorRoundTrip(t *testing.T) {
+	fullSessionFilterKey := session.SummaryFilterKeyAllContents
+	diff := Diff{
+		Case:             "summary_update",
+		BackendA:         "inmemory",
+		BackendB:         "sqlite",
+		SessionID:        "summary_update",
+		SummaryFilterKey: &fullSessionFilterKey,
+		Path:             "/summaries//text",
+		Baseline:         "current",
+		Actual:           "stale",
+	}
+	raw, err := json.Marshal(diff)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(raw), `"summary_filter_key":""`) {
+		t.Fatalf("full-session summary locator is missing: %s", raw)
+	}
+	var decoded Diff
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.SummaryFilterKey == nil || *decoded.SummaryFilterKey != "" {
+		t.Fatalf("decoded full-session summary locator = %#v", decoded.SummaryFilterKey)
 	}
 }
 
@@ -1154,6 +1793,61 @@ type summaryLeakService struct {
 	session.Service
 }
 
+type ignoredSummaryUpdateService struct {
+	session.Service
+	calls int
+}
+
+func (s *ignoredSummaryUpdateService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	s.calls++
+	if s.calls == 2 {
+		return nil
+	}
+	return s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+type reversedMemorySearchService struct {
+	memory.Service
+}
+
+type droppedNonPersistedStateDeltaService struct {
+	session.Service
+}
+
+func (s *droppedNonPersistedStateDeltaService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	options ...session.Option,
+) error {
+	if evt != nil && !replayEventIsPersistable(evt) && len(evt.StateDelta) > 0 {
+		evt = evt.Clone()
+		evt.StateDelta = nil
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, options...)
+}
+
+func (s *reversedMemorySearchService) SearchMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	query string,
+	opts ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	results, err := s.Service.SearchMemories(ctx, userKey, query, opts...)
+	if err != nil {
+		return nil, err
+	}
+	for left, right := 0, len(results)-1; left < right; left, right = left+1, right-1 {
+		results[left], results[right] = results[right], results[left]
+	}
+	return results, nil
+}
+
 func (s *summaryLeakService) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -1204,6 +1898,21 @@ func eventAuthorDriftBackend(name string) Backend {
 	return backend
 }
 
+func droppedNonPersistedStateDeltaBackend(name string) Backend {
+	backend := InMemoryBackend()
+	backend.Name = name
+	open := backend.Open
+	backend.Open = func(ctx context.Context, caseName string) (*Services, error) {
+		services, err := open(ctx, caseName)
+		if err != nil {
+			return nil, err
+		}
+		services.Session = &droppedNonPersistedStateDeltaService{Service: services.Session}
+		return services, nil
+	}
+	return backend
+}
+
 func openFailureBackend(name string) Backend {
 	return Backend{
 		Name:         name,
@@ -1236,7 +1945,7 @@ func minimalSnapshot(backend, score string) Snapshot {
 		Backend: backend,
 		Case:    "allowed",
 		Session: CanonicalMap{"id": "session-1", "app_name": "app", "user_id": "user"},
-		State: map[string]map[string]string{
+		State: map[string]CanonicalMap{
 			"app": {}, "user": {}, "session": {"score": score},
 		},
 		Summaries: map[string]CanonicalMap{},
