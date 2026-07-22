@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
@@ -62,6 +63,10 @@ const (
 // funcRespCompletionTimeout is the default wait duration for ensuring a
 // tool.response event has been processed by the session persistence layer.
 const funcRespCompletionTimeout = 5 * time.Second
+
+// funcRespDeadlinePersistenceTimeout bounds the fallback append used when a
+// completed tool response cannot enter the runner event loop after deadline.
+const funcRespDeadlinePersistenceTimeout = time.Second
 
 const (
 	knowledgeSearchToolName                    = "knowledge_search"
@@ -401,7 +406,29 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	}
 
 	functionResponseEvent.RequiresCompletion = true
-	agent.EmitEvent(ctx, invocation, eventChan, functionResponseEvent)
+	emitErr := agent.EmitEvent(
+		ctx,
+		invocation,
+		eventChan,
+		functionResponseEvent,
+	)
+	if errors.Is(emitErr, context.DeadlineExceeded) {
+		if persistErr := persistFunctionResponseAfterDeadline(
+			ctx,
+			invocation,
+			functionResponseEvent,
+		); persistErr != nil {
+			log.WarnfContext(
+				ctx,
+				"Persist tool response after deadline failed: %v",
+				persistErr,
+			)
+		}
+		return nil, emitErr
+	}
+	if emitErr != nil {
+		return nil, emitErr
+	}
 
 	if !appender.IsAttached(invocation) {
 		return functionResponseEvent, nil
@@ -423,6 +450,94 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		)
 	}
 	return functionResponseEvent, nil
+}
+
+func persistFunctionResponseAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	functionResponseEvent *event.Event,
+) error {
+	if functionResponseEvent == nil {
+		return nil
+	}
+	persistCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		funcRespDeadlinePersistenceTimeout,
+	)
+	defer cancel()
+	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
+	var parentMetadata *event.ParentInvocationMetadata
+	if functionResponseEvent.ParentMetadata != nil {
+		metadata := *functionResponseEvent.ParentMetadata
+		parentMetadata = &metadata
+	}
+	functionResponseEvent = applyEventPluginsAfterDeadline(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	restoreEventRoutingFields(functionResponseEvent, routeEvent)
+	functionResponseEvent.ParentMetadata = parentMetadata
+
+	attached, err := appender.Invoke(
+		persistCtx,
+		invocation,
+		functionResponseEvent,
+	)
+	if err != nil {
+		return err
+	}
+	if attached {
+		return nil
+	}
+	if invocation == nil || invocation.SessionService == nil {
+		return errors.New("session service unavailable after deadline")
+	}
+	persistSession, routed := sessionroute.RouteEvent(
+		invocation,
+		routeEvent,
+	)
+	if !routed || persistSession == nil {
+		persistSession = invocation.Session
+	}
+	if persistSession == nil {
+		return errors.New("session unavailable after deadline")
+	}
+	return invocation.SessionService.AppendEvent(
+		persistCtx,
+		persistSession,
+		functionResponseEvent,
+	)
+}
+
+func applyEventPluginsAfterDeadline(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	evt *event.Event,
+) *event.Event {
+	if evt == nil || invocation == nil || invocation.Plugins == nil {
+		return evt
+	}
+	updated, err := invocation.Plugins.OnEvent(ctx, invocation, evt)
+	if err != nil {
+		log.ErrorfContext(ctx, "plugin OnEvent failed: %v", err)
+		return evt
+	}
+	if updated == nil {
+		return evt
+	}
+	return updated
+}
+
+func restoreEventRoutingFields(dst *event.Event, src *event.Event) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.RequestID = src.RequestID
+	dst.InvocationID = src.InvocationID
+	dst.ParentInvocationID = src.ParentInvocationID
+	dst.Branch = src.Branch
+	dst.FilterKey = src.FilterKey
 }
 
 func funcRespWaitTimeout(ctx context.Context) time.Duration {

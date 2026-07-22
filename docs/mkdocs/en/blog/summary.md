@@ -398,7 +398,7 @@ This mode has clear boundaries:
 
 1. It optimizes the **request used to generate summary**. It does not change storage, boundary semantics, or event semantics.
 2. It depends on a stable parent prefix: system prompt, tools, model, and context order should not change unnecessarily.
-3. `WithCacheSafeForkPrompt(...)` is different from `WithPrompt(...)`. In fork mode, the conversation is already in the parent request, so the appended prompt should not include `{conversation_text}`.
+3. `WithCacheSafeForkPrompt(...)` is different from `WithPrompt(...)`. In fork mode, the conversation and any injected summary are already in the parent request, so the appended prompt should not include `{conversation_text}` or `{previous_summary}`.
 4. After summary is generated, ordinary requests should still use an injection strategy that fits cache and authority requirements.
 
 This is especially relevant to coding Agents, which tend to have large stable prefixes. For general Agents, tool sets and page context may vary more often, so the value of forked cache reuse depends on the product shape.

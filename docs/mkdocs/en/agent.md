@@ -122,7 +122,7 @@ llm := llmagent.New(
   ),
 )
 
-inv := agent.NewInvoction()
+inv := agent.NewInvocation()
 inv.SetState("case", "case-1")
 
 // Initialize session state (Runner + SessionService)
@@ -897,6 +897,31 @@ Structured output ensures that agent responses conform to a predefined format, m
 | **Data Location** | Event.StructuredOutput | Event.StructuredOutput | Model response content | Session State |
 | **Primary Use Case** | Flexible schema with tools | Type-safe structured output | Simple structured responses | State storage & flow control |
 
+### Provider Compatibility
+
+The framework allows tools to be configured with
+`WithStructuredOutputJSONSchema` or `WithStructuredOutputJSON`, but the model
+service must also support combining tool calling with native structured output.
+Some OpenAI-compatible endpoints accept both `tools` and
+`response_format: json_schema` while applying the JSON constraint to the entire
+generation. In that case, constrained decoding can suppress the model-specific
+tool-call syntax and return schema-valid JSON without any tool call.
+
+An HTTP success response and valid JSON therefore do not prove that a required
+tool ran. When correctness depends on tool execution, verify the tool-call and
+tool-result events. If an endpoint does not reliably support the combination,
+split the operation into a tool-enabled call without native structured output,
+followed by a tool-disabled call that produces the structured final response.
+The second call must receive the first call's evidence by continuing the same
+session or message history, or by explicitly including its tool-call and
+tool-result messages.
+
+Related backend discussions include
+[vLLM #39929](https://github.com/vllm-project/vllm/issues/39929), which tracks
+`response_format` suppressing automatic tool calls, and
+[SGLang #21593](https://github.com/sgl-project/sglang/pull/21593), which fixes
+conflicts between constrained decoding and model-specific tool-call formats.
+
 ### WithStructuredOutputJSONSchema
 
 Provides a user-defined JSON schema for structured output while **allowing tool usage**. This is the most flexible option for agents that need both structured output and tool capabilities.
@@ -1536,6 +1561,7 @@ Execution traces are attached to the runner completion event as an in-memory art
 Each recorded step carries stable fields such as:
 
 - `NodeID`: the static node path for the executed node
+- `NodeType`: the node's semantic type (`function`, `llm`, `tool`, or `agent`), matching the node kind in the static structure
 - `PredecessorStepIDs`: the direct step dependencies in this run
 - `Input` and `Output`: stable text snapshots captured for the step
 - `Error`: the terminal step error, when the step fails

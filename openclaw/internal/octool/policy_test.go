@@ -13,6 +13,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -259,6 +260,224 @@ func TestChatCommandSafetyPolicy_AllowsLanguagePackageInstall(
 	}
 }
 
+func TestChatCommandSafetyPolicy_BlocksSearchResultHTTPClients(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -sL "https://www.google.com/search?q=openclaw"`,
+		`curl -G --data-urlencode q=openclaw https://www.google.com/search`,
+		`wget -qO- https://www.bing.com/search?q=openclaw`,
+		`http https://search.yahoo.com/search?p=openclaw`,
+		`bash -lc 'curl -s "https://duckduckgo.com/?q=openclaw"'`,
+		`python3 -c "import requests; ` +
+			`requests.get('https://search.brave.com/search?q=x')"`,
+		`node -e "fetch('https://www.google.com/search?q=x')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, "result pages")
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_BlocksExplicitProxyEnv(t *testing.T) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, key := range []string{"HTTP_PROXY", "https_proxy", "ALL_PROXY"} {
+		err := policy(context.Background(), CommandRequest{
+			Command: "curl https://example.com",
+			Env: map[string]string{
+				key: "http://proxy.example:8080",
+			},
+		})
+		require.ErrorContains(t, err, reasonNetworkProxy)
+	}
+	require.NoError(t, policy(context.Background(), CommandRequest{
+		Command: "curl https://example.com",
+		Env:     map[string]string{"HTTPS_PROXY": ""},
+	}))
+}
+
+func TestChatCommandSafetyPolicy_AllowsNonSearchHTTPCommands(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -sL "https://www.google.com/search/about"`,
+		`curl -sL "https://www.boxofficemojo.com/year/world/2020/"`,
+		`echo "https://www.google.com/search?q=openclaw"`,
+		`python3 -c "print('https://www.google.com/search?q=x')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_BlocksAdHocNetworkProxies(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl --proxy "http://203.0.113.10:8080" https://example.com`,
+		`curl -x socks5h://127.0.0.1:9050 https://example.com`,
+		`wget -e use_proxy=yes -e http_proxy=http://127.0.0.1:8080 ` +
+			`https://example.com`,
+		`HTTP_PROXY=http://203.0.113.10:8080 curl https://example.com`,
+		`bash -lc 'ALL_PROXY=socks5://127.0.0.1:9050 curl https://x'`,
+		`echo ok; HTTPS_PROXY=http://127.0.0.1:8080 curl https://x`,
+		`proxychains4 curl https://example.com`,
+		`ssh -D 1080 user@example.com`,
+		`python3 - <<'PY'
+import requests
+requests.get("https://example.com", proxies={"http": "http://127.0.0.1:8080"})
+PY`,
+		`python3 -c "import urllib.request; ` +
+			`urllib.request.ProxyHandler({'http':'http://127.0.0.1:8080'})"`,
+		`node -e "const {HttpsProxyAgent}=require('https-proxy-agent'); ` +
+			`fetch('https://example.com', {agent:new HttpsProxyAgent('http://127.0.0.1:8080')})"`,
+		`node -e "require('axios').get('https://example.com', ` +
+			`{proxy:{host:'127.0.0.1',port:8080}})"`,
+		`cd /tmp && python3 -c "import requests; ` +
+			`requests.get('https://example.com', proxies={` +
+			`'http':'http://127.0.0.1:8080'})"`,
+		`python3 - <<'PY'
+import urllib.parse
+import urllib.request
+url = "https://api.allorigins.win/get?url=" + urllib.parse.quote("https://example.com")
+print(urllib.request.urlopen(url).read())
+PY`,
+		`curl "https://corsproxy.io/?https://example.com"`,
+		`curl "https://api.codetabs.com/v1/proxy?quest=https://example.com"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, reasonNetworkProxy)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsNonProxyHTTPCommands(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicy()
+	for _, command := range []string{
+		`curl -X POST https://example.com/api`,
+		`HTTP_PROXY= curl https://example.com`,
+		`env -u HTTP_PROXY curl https://example.com`,
+		`wget --no-proxy https://example.com/file.txt`,
+		`echo http_proxy=http://127.0.0.1:8080`,
+		`echo "python3 requests.get(url, proxies={'http':'http://127.0.0.1:8080'})"`,
+		`echo "https://api.allorigins.win/get?url=https://example.com"`,
+		`python3 -c "import requests; print(requests.get('https://example.com').status_code)"`,
+		`node -e "fetch('https://example.com').then(r=>console.log(r.status))"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_BlocksLongIdleWaits(t *testing.T) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicyWithOptions(
+		ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: 20 * time.Second,
+		},
+	)
+	for _, command := range []string{
+		`sleep 30 && curl https://example.com`,
+		`bash -lc 'sleep 45 && curl https://example.com'`,
+		`env FOO=bar sleep 1m`,
+		`timeout 90 sleep 45`,
+		`echo ok; sleep infinity`,
+		`sleep 15 15`,
+		`sleep 1d`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.ErrorContains(t, err, reasonLongIdleWait)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsShortOrQuotedIdleWaits(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	policy := NewChatCommandSafetyPolicyWithOptions(
+		ChatCommandSafetyPolicyOptions{
+			MaxIdleWait: 20 * time.Second,
+		},
+	)
+	for _, command := range []string{
+		`sleep 5 && curl https://example.com`,
+		`sleep 20`,
+		`sleep 10 10`,
+		`echo sleep 60`,
+		`printf 'sleep 60\n'`,
+		`python3 -c "print('sleep 60')"`,
+	} {
+		command := command
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			err := policy(context.Background(), CommandRequest{
+				Command: command,
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestChatCommandSafetyPolicy_AllowsIdleWaitsByDefault(t *testing.T) {
+	t.Parallel()
+
+	err := NewChatCommandSafetyPolicy()(context.Background(), CommandRequest{
+		Command: `sleep 60 && printf done`,
+	})
+	require.NoError(t, err)
+}
+
 func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
 	t.Parallel()
 
@@ -268,7 +487,9 @@ func TestBlocksSystemPackageInstall_EdgeCases(t *testing.T) {
 	require.True(t, blocksSystemPackageInstall("pacman --sync stockfish"))
 	require.True(t, blocksSystemPackageInstall("FOO=bar brew install wget"))
 	require.True(t, blocksSystemPackageInstall("command:apt install curl"))
-	require.True(t, blocksSystemPackageInstall("exec:/usr/bin/apt-get install t"))
+	require.True(t, blocksSystemPackageInstall(
+		"exec:/usr/bin/apt-get install t",
+	))
 	require.False(t, blocksSystemPackageInstall("alias=apt install docs"))
 }
 

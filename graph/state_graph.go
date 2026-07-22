@@ -43,6 +43,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/internal/util"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -123,12 +124,6 @@ func WithDescription(description string) Option {
 func WithNodeType(nodeType NodeType) Option {
 	return func(node *Node) {
 		node.Type = nodeType
-	}
-}
-
-func withTraceTransparent() Option {
-	return func(node *Node) {
-		node.traceTransparent = true
 	}
 }
 
@@ -743,15 +738,15 @@ func (sg *StateGraph) AddToolsNode(
 	return sg
 }
 
-// AddAgentNode adds a node that uses a sub-agent by name.
+// AddAgentNode adds a node that uses a sub-agent by name. Execution trace
+// records one step for each actual node visit.
 // The agent name should correspond to a sub-agent in the GraphAgent's sub-agent list.
 func (sg *StateGraph) AddAgentNode(
 	id string,
 	opts ...Option,
 ) *StateGraph {
 	agentNodeFunc := NewAgentNodeFunc(id, opts...)
-	// Add agent node type option.
-	agentOpts := append([]Option{WithNodeType(NodeTypeAgent), withTraceTransparent()}, opts...)
+	agentOpts := append([]Option{WithNodeType(NodeTypeAgent)}, opts...)
 	sg.AddNode(id, agentNodeFunc, agentOpts...)
 	return sg
 }
@@ -3078,14 +3073,13 @@ func newAgentNodeRuntime(agentName string, cfg agentNodeConfig) *agentNodeRuntim
 
 func (r *agentNodeRuntime) NodeFunc() NodeFunc {
 	return func(ctx context.Context, state State) (any, error) {
-		return r.Run(ctx, state, claimAgentNodeTraceTask(state))
+		return r.Run(ctx, state)
 	}
 }
 
 func (r *agentNodeRuntime) Run(
 	ctx context.Context,
 	state State,
-	traceTask *traceTaskMetadata,
 ) (any, error) {
 	// Extract execution context for event emission.
 	invocationID, _, _, _, eventChan := extractExecutionContext(state)
@@ -3093,15 +3087,7 @@ func (r *agentNodeRuntime) Run(
 	nodeID, _ := GetStateValue[string](state, StateKeyCurrentNodeID)
 	targetAgent, err := targetAgentFromState(state, r.agentName)
 	if err != nil {
-		if traceTask != nil {
-			traceTask.markFallbackToWrapper()
-		}
 		return nil, err
-	}
-	if traceTask != nil && traceTask.shouldFallbackToWrapper() {
-		if parentInvocation, ok := agent.InvocationFromContext(ctx); ok {
-			traceTask.materializeWrapper(parentInvocation)
-		}
 	}
 	childState := buildChildStateForAgentNode(state, nodeID, targetAgent, r.config)
 	// Optionally map parent's last_response to user_input for this agent node.
@@ -3121,7 +3107,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.userInputKey,
 		r.config.inputMessageMapper,
 		r.config.runOptions,
-		traceTask,
 	)
 	// Emit agent execution start event.
 	startTime := time.Now()
@@ -3141,7 +3126,6 @@ func (r *agentNodeRuntime) Run(
 		// Emit agent execution error event.
 		endTime := time.Now()
 		emitAgentErrorEvent(ctx, eventChan, invocationID, nodeID, startTime, endTime, err)
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, fmt.Errorf("failed to run agent %s: %w", r.agentName, err)
 	}
 	// Process agent event stream and capture completion state.
@@ -3158,7 +3142,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.streamOutputName,
 	)
 	if err != nil {
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, fmt.Errorf("failed to process agent event stream: %w", err)
 	}
 	if streamRes.interrupt != nil {
@@ -3175,7 +3158,6 @@ func (r *agentNodeRuntime) Run(
 		)
 		intr := NewInterruptError(streamRes.interrupt.Value)
 		intr.TaskID = streamRes.interrupt.TaskID
-		recordAgentNodeTraceTerminals(traceTask, invocation)
 		return nil, intr
 	}
 	// Emit agent execution complete event.
@@ -3188,7 +3170,6 @@ func (r *agentNodeRuntime) Run(
 		startTime,
 		endTime,
 	)
-	recordAgentNodeTraceTerminals(traceTask, invocation)
 	return finalizeAgentNodeOutput(
 		state,
 		nodeID,
@@ -3196,46 +3177,6 @@ func (r *agentNodeRuntime) Run(
 		r.config.outputMapper,
 		r.config.userInputKey,
 	), nil
-}
-
-func recordAgentNodeTraceTerminals(
-	metadata *traceTaskMetadata,
-	invocation *agent.Invocation,
-) {
-	if metadata == nil {
-		return
-	}
-	stepIDs := agentNodeChildTerminalStepIDs(
-		invocation,
-		metadata.childEntryPredecessorStepIDs(),
-	)
-	if len(stepIDs) > 0 {
-		metadata.setChildTerminalStepIDs(stepIDs)
-		return
-	}
-	metadata.markFallbackToWrapper()
-}
-
-func agentNodeChildTerminalStepIDs(
-	invocation *agent.Invocation,
-	entryPredecessors []string,
-) []string {
-	stepIDs := normalizeTraceStepIDs(agent.NextExecutionTracePredecessors(invocation))
-	if len(stepIDs) == 0 {
-		return nil
-	}
-	entrySet := make(map[string]struct{}, len(entryPredecessors))
-	for _, stepID := range normalizeTraceStepIDs(entryPredecessors) {
-		entrySet[stepID] = struct{}{}
-	}
-	realStepIDs := make([]string, 0, len(stepIDs))
-	for _, stepID := range stepIDs {
-		if _, ok := entrySet[stepID]; ok {
-			continue
-		}
-		realStepIDs = append(realStepIDs, stepID)
-	}
-	return realStepIDs
 }
 
 func stateStringOr(state State, key string, fallback string) string {
@@ -3901,7 +3842,6 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 	userInputKey string,
 	inputMessageMapper AgentNodeInputMapper,
 	nodeRunOptions []agent.RunOption,
-	traceTask *traceTaskMetadata,
 ) *agent.Invocation {
 	inputMessage := agentNodeInputMessage(
 		parentState,
@@ -3947,7 +3887,8 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 			agent.WithInvocationRunOptions(runOptions),
 			agent.WithInvocationEventFilterKey(filterKey),
 		}
-		if traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID); traceNodeID != "" {
+		traceNodeID := buildAgentNodeTraceNodeID(parentInvocation, nodeID)
+		if traceNodeID != "" {
 			invocationOpts = append(invocationOpts, agent.WithInvocationTraceNodeID(traceNodeID))
 		}
 		if surfaceRootNodeID := buildAgentNodeSurfaceRoot(parentInvocation, nodeID); surfaceRootNodeID != "" {
@@ -3955,19 +3896,20 @@ func buildAgentInvocationWithStateScopeAndInputKey(
 				agent.SetInvocationSurfaceRootNodeID(inv, surfaceRootNodeID)
 			})
 		}
-		var entryPredecessors []string
-		if traceTask != nil {
-			entryPredecessors = currentTraceTaskPredecessors(traceTask)
-		} else {
-			entryPredecessors = currentTraceStepPredecessors(parentState)
-			if len(entryPredecessors) == 0 {
-				entryPredecessors = agent.NextExecutionTracePredecessors(parentInvocation)
-			}
+		entryPredecessors := currentTraceStepPredecessors(parentState)
+		if len(entryPredecessors) == 0 {
+			entryPredecessors = agent.NextExecutionTracePredecessors(parentInvocation)
 		}
 		if len(entryPredecessors) > 0 {
 			invocationOpts = append(invocationOpts, agent.WithInvocationEntryPredecessorStepIDs(entryPredecessors))
 		}
 		inv := parentInvocation.Clone(invocationOpts...)
+		if stepID, ok := GetStateValue[string](parentState, currentTraceStepIDStateKey); ok {
+			tracecapture.BindInvocationStep(
+				agent.NewInvocationContext(ctx, inv),
+				stepID,
+			)
+		}
 		return inv
 	}
 	// Create standalone invocation.
@@ -4051,13 +3993,6 @@ func injectAgentNodeToolContinuationMessages(
 	runOptions.InjectedContextMessages = append(runOptions.InjectedContextMessages, history...)
 }
 
-func currentTraceTaskPredecessors(traceTask *traceTaskMetadata) []string {
-	if traceTask == nil {
-		return nil
-	}
-	return traceTask.childEntryPredecessorStepIDs()
-}
-
 func currentTraceStepPredecessors(state State) []string {
 	if state == nil {
 		return nil
@@ -4084,7 +4019,6 @@ func buildAgentInvocationWithStateAndScope(
 		nodeID,
 		scope,
 		StateKeyUserInput,
-		nil,
 		nil,
 		nil,
 	)

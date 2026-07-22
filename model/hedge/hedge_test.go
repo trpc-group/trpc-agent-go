@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -83,6 +84,23 @@ func TestInfoUsesConfiguredName(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "hedge-model", llm.Info().Name)
+}
+
+func TestInputTokenBudgetUsesSmallestCandidateBudget(t *testing.T) {
+	llm, err := New(WithCandidates(
+		openai.New("primary", openai.WithMaxInputTokens(500)),
+		openai.New("backup", openai.WithMaxInputTokens(300)),
+	))
+	require.NoError(t, err)
+	budgeter, ok := llm.(interface {
+		InputTokenBudget(context.Context, *model.Request) int
+	})
+	require.True(t, ok)
+	assert.Equal(
+		t,
+		300,
+		budgeter.InputTokenBudget(context.Background(), &model.Request{}),
+	)
 }
 
 func TestInfoContextWindow(t *testing.T) {

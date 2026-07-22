@@ -192,7 +192,13 @@ async function executeCommand(command) {
       return textResult(`Closed tab-${tabId}.`);
     case "navigate":
       await chrome.tabs.update(tabId, { url: command.args.url });
-      return textResult(`Navigated to ${command.args.url}`);
+      {
+        const tab = await chrome.tabs.get(tabId);
+        return {
+          ...textResult(`Navigated to ${command.args.url}`),
+          url: tab.pendingUrl || tab.url || ""
+        };
+      }
     case "snapshot":
       return await captureSnapshotResult(tabId, command.args);
     case "screenshot":
@@ -233,7 +239,12 @@ async function executeInTab(tabId, action, args) {
     func: relayExecutor,
     args: [{ action, args }]
   });
-  return results[0]?.result;
+  const result = results[0]?.result;
+  const tab = await chrome.tabs.get(tabId);
+  return {
+    ...result,
+    url: tab.pendingUrl || tab.url || ""
+  };
 }
 
 async function captureSnapshotResult(tabId, args = {}) {

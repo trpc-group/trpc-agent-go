@@ -1520,6 +1520,88 @@ func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
 	}
 }
 
+func TestRunUsesResolvedAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
+}
+
+func TestRunUsesStaticAppNameForUnderlyingRunner(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(underlying, WithAppName("static-app"))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "static-app", gotOptions.AppName)
+}
+
+func TestRunResolvedAppNameOverridesRunOptionResolverAppName(t *testing.T) {
+	var gotOptions agent.RunOptions
+	underlying := &fakeRunner{
+		run: func(ctx context.Context, userID, sessionID string, message model.Message,
+			opts ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			gotOptions = agent.NewRunOptions(opts...)
+			ch := make(chan *agentevent.Event)
+			close(ch)
+			return ch, nil
+		},
+	}
+	r := New(
+		underlying,
+		WithAppName("static-app"),
+		WithAppNameResolver(forwardedPropsAppNameResolver),
+		WithRunOptionResolver(func(context.Context, *adapter.RunAgentInput) ([]agent.RunOption, error) {
+			return []agent.RunOption{agent.WithAppName("custom-app")}, nil
+		}),
+	)
+	input := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"appName": "dynamic-app"},
+		Messages:       []types.Message{{ID: "user-msg-1", Role: types.RoleUser, Content: "hi"}},
+	}
+	ch, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	collectEvents(t, ch)
+	assert.Equal(t, "dynamic-app", gotOptions.AppName)
+}
+
 func TestRunAppNameResolverError(t *testing.T) {
 	underlying := &fakeRunner{}
 	r := &runner{
@@ -2196,7 +2278,7 @@ func TestRunFlushesTracker(t *testing.T) {
 	assert.NoError(t, err)
 	collectEvents(t, ch)
 	assert.GreaterOrEqual(t, recorder.appendCount, 1)
-	assert.Equal(t, 1, recorder.flushCount)
+	assert.Equal(t, 1, recorder.closeCount)
 }
 
 func TestRecordTrackEventUsesDetachedPersistenceContext(t *testing.T) {
@@ -2984,6 +3066,7 @@ func (f *fakeTranslator) Translate(ctx context.Context, evt *agentevent.Event) (
 type flushRecorder struct {
 	appendCount int
 	flushCount  int
+	closeCount  int
 }
 
 func (f *flushRecorder) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
@@ -2997,6 +3080,11 @@ func (f *flushRecorder) GetEvents(ctx context.Context, key session.Key, opts ...
 
 func (f *flushRecorder) Flush(ctx context.Context, key session.Key) error {
 	f.flushCount++
+	return nil
+}
+
+func (f *flushRecorder) Close(ctx context.Context, key session.Key) error {
+	f.closeCount++
 	return nil
 }
 
@@ -3021,6 +3109,10 @@ func (c *contextRecorderTracker) Flush(context.Context, session.Key) error {
 	return nil
 }
 
+func (c *contextRecorderTracker) Close(context.Context, session.Key) error {
+	return nil
+}
+
 type deadlineWaitingTracker struct{}
 
 func (deadlineWaitingTracker) AppendEvent(ctx context.Context, _ session.Key, _ aguievents.Event) error {
@@ -3037,11 +3129,16 @@ func (deadlineWaitingTracker) Flush(context.Context, session.Key) error {
 	return nil
 }
 
+func (deadlineWaitingTracker) Close(context.Context, session.Key) error {
+	return nil
+}
+
 type recordingTracker struct {
 	mu         sync.Mutex
 	events     []aguievents.Event
 	keys       []session.Key
 	flushCount int
+	closeCount int
 }
 
 func (r *recordingTracker) AppendEvent(ctx context.Context, key session.Key, event aguievents.Event) error {
@@ -3060,6 +3157,13 @@ func (r *recordingTracker) Flush(ctx context.Context, key session.Key) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.flushCount++
+	return nil
+}
+
+func (r *recordingTracker) Close(ctx context.Context, key session.Key) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.closeCount++
 	return nil
 }
 
@@ -3112,6 +3216,11 @@ func (e *errorTracker) GetEvents(ctx context.Context,
 }
 
 func (e *errorTracker) Flush(ctx context.Context,
+	_ session.Key) error {
+	return e.flushErr
+}
+
+func (e *errorTracker) Close(ctx context.Context,
 	_ session.Key) error {
 	return e.flushErr
 }
