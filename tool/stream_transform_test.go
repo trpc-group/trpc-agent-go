@@ -108,3 +108,13 @@ func TestTransformStreamReaderRejectsNilInputs(t *testing.T) {
 		t.Fatal("nil transform was accepted")
 	}
 }
+
+func TestStreamReaderRemainsComparable(t *testing.T) {
+	stream := NewStream(0)
+	readers := map[StreamReader]struct{}{
+		*stream.Reader: {},
+	}
+	if _, ok := readers[*stream.Reader]; !ok {
+		t.Fatal("StreamReader value could not be looked up as a map key")
+	}
+}

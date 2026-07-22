@@ -38,10 +38,15 @@ type Stream struct {
 // StreamReader provides the reading interface for consuming streaming data.
 // It wraps the underlying stream implementation and provides methods to
 // receive StreamChunk items and close the reading side of the stream.
+// StreamReader values remain comparable and may be used as map keys.
 type StreamReader struct {
 	s       *stream[StreamChunk] // Stream of StreamChunk items
-	recvFn  func() (StreamChunk, error)
-	closeFn func()
+	adapter *streamReaderAdapter
+}
+
+type streamReaderAdapter struct {
+	source    *StreamReader
+	transform func(StreamChunk, error) (StreamChunk, error)
 }
 
 // TransformStreamReader creates a pull-through reader that transforms each
@@ -57,19 +62,16 @@ func TransformStreamReader(
 	if source == nil {
 		return nil, errors.New("tool: source stream reader is nil")
 	}
-	if source.s == nil && source.recvFn == nil {
+	if source.s == nil && source.adapter == nil {
 		return nil, errors.New("tool: source stream reader is not initialized")
 	}
 	if transform == nil {
 		return nil, errors.New("tool: stream transform is nil")
 	}
-	return &StreamReader{
-		recvFn: func() (StreamChunk, error) {
-			chunk, err := source.Recv()
-			return transform(chunk, err)
-		},
-		closeFn: source.Close,
-	}, nil
+	return &StreamReader{adapter: &streamReaderAdapter{
+		source:    source,
+		transform: transform,
+	}}, nil
 }
 
 // Recv receives the next StreamChunk from the stream.
@@ -91,8 +93,9 @@ func TransformStreamReader(
 //	}
 //	sr.Close()
 func (r *StreamReader) Recv() (StreamChunk, error) {
-	if r.recvFn != nil {
-		return r.recvFn()
+	if r.adapter != nil {
+		chunk, err := r.adapter.source.Recv()
+		return r.adapter.transform(chunk, err)
 	}
 	return r.s.recv()
 }
@@ -101,8 +104,8 @@ func (r *StreamReader) Recv() (StreamChunk, error) {
 // data will be read. This signals to the underlying stream that the reader
 // is no longer interested in receiving data.
 func (r *StreamReader) Close() {
-	if r.closeFn != nil {
-		r.closeFn()
+	if r.adapter != nil {
+		r.adapter.source.Close()
 		return
 	}
 	r.s.closeRecv()
