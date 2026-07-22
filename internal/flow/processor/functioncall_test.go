@@ -3934,6 +3934,13 @@ func TestPersistFunctionResponseAfterDeadline_FallbacksAndErrors(
 		time.Now().Add(-time.Second),
 	)
 	defer cancel()
+	t.Run("nil event", func(t *testing.T) {
+		require.NoError(t, persistFunctionResponseAfterDeadline(
+			ctx,
+			nil,
+			nil,
+		))
+	})
 	evt := event.NewResponseEvent(
 		"test-invocation",
 		"test-agent",
@@ -4022,11 +4029,15 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 		name: "redact-event",
 		reg: func(r *plugin.Registry) {
 			r.OnEvent(func(
-				context.Context,
-				*agent.Invocation,
-				*event.Event,
+				_ context.Context,
+				_ *agent.Invocation,
+				evt *event.Event,
 			) (*event.Event, error) {
 				pluginCalls++
+				evt.ParentMetadata.TriggerType =
+					event.TriggerTypeTransfer
+				evt.ParentMetadata.TriggerID = "mutated-trigger"
+				evt.ParentMetadata.TriggerName = "mutated-name"
 				replacement := event.NewResponseEvent(
 					"",
 					"test-agent",
@@ -4043,6 +4054,12 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 				replacement.ParentInvocationID = "other-parent"
 				replacement.Branch = "other-branch"
 				replacement.FilterKey = "other-filter"
+				replacement.ParentMetadata =
+					&event.ParentInvocationMetadata{
+						TriggerType: event.TriggerTypeTransfer,
+						TriggerID:   "other-trigger",
+						TriggerName: "other-trigger-name",
+					}
 				return replacement, nil
 			})
 		},
@@ -4068,6 +4085,11 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 	original.ParentInvocationID = "parent-1"
 	original.Branch = "branch-1"
 	original.FilterKey = "filter-1"
+	original.ParentMetadata = &event.ParentInvocationMetadata{
+		TriggerType: event.TriggerTypeToolCall,
+		TriggerID:   "call-1",
+		TriggerName: "echo",
+	}
 
 	err := persistFunctionResponseAfterDeadline(ctx, inv, original)
 
@@ -4078,10 +4100,110 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 	require.Equal(t, original.RequestID, persisted.RequestID)
 	require.Equal(t, original.InvocationID, persisted.InvocationID)
 	require.Equal(t, original.ParentInvocationID, persisted.ParentInvocationID)
+	require.NotSame(t, original.ParentMetadata, persisted.ParentMetadata)
+	require.Equal(t, event.TriggerTypeToolCall,
+		persisted.ParentMetadata.TriggerType)
+	require.Equal(t, "call-1", persisted.ParentMetadata.TriggerID)
+	require.Equal(t, "echo", persisted.ParentMetadata.TriggerName)
+	require.Equal(t, "mutated-trigger", original.ParentMetadata.TriggerID)
 	require.Equal(t, original.Branch, persisted.Branch)
 	require.Equal(t, original.FilterKey, persisted.FilterKey)
 }
 
+func TestPersistFunctionResponseAfterDeadline_PluginErrorPersistsOriginal(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+
+	wantErr := errors.New("redaction failed")
+	mgr := plugin.MustNewManager(&hookPlugin{
+		name: "failing-redaction",
+		reg: func(r *plugin.Registry) {
+			r.OnEvent(func(
+				context.Context,
+				*agent.Invocation,
+				*event.Event,
+			) (*event.Event, error) {
+				return nil, wantErr
+			})
+		},
+	})
+	service := sessioninmemory.NewSessionService()
+	t.Cleanup(func() {
+		require.NoError(t, service.Close())
+	})
+	recordingService := &recordingSessionService{Service: service}
+	sess, err := service.CreateSession(
+		context.Background(),
+		session.Key{
+			AppName:   "test-app",
+			UserID:    "test-user",
+			SessionID: "test-session",
+		},
+		nil,
+	)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name           string
+		attachAppender bool
+	}{
+		{name: "attached appender", attachAppender: true},
+		{name: "session service fallback"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recordingService.appendCalls.Store(0)
+			inv := agent.NewInvocation(
+				agent.WithInvocationSession(sess),
+				agent.WithInvocationSessionService(recordingService),
+				agent.WithInvocationPlugins(mgr),
+			)
+			var appenderCalls atomic.Int32
+			var appended *event.Event
+			if tc.attachAppender {
+				appender.Attach(inv, func(
+					_ context.Context,
+					evt *event.Event,
+				) error {
+					appenderCalls.Add(1)
+					appended = evt
+					return nil
+				})
+			}
+			evt := event.NewResponseEvent(
+				"test-invocation",
+				"test-agent",
+				&model.Response{Choices: []model.Choice{{
+					Message: model.NewToolMessage(
+						"call-1",
+						"echo",
+						"secret tool output",
+					),
+				}}},
+			)
+
+			err := persistFunctionResponseAfterDeadline(ctx, inv, evt)
+
+			require.NoError(t, err)
+			if tc.attachAppender {
+				require.Equal(t, int32(1), appenderCalls.Load())
+				require.Zero(t, recordingService.appendCalls.Load())
+				require.Same(t, evt, appended)
+				return
+			}
+			require.Zero(t, appenderCalls.Load())
+			require.Equal(
+				t,
+				int32(1),
+				recordingService.appendCalls.Load(),
+			)
+		})
+	}
+}
 func TestFunctionCallResponseProcessor_HandleFunctionCallsAndSendEvent_Warns(
 	t *testing.T,
 ) {

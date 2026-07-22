@@ -9,27 +9,18 @@
 
 package track
 
-import (
-	"time"
-
-	"trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
-)
-
-// DefaultFlushInterval is the default flush interval for the tracker.
-const DefaultFlushInterval = time.Second
+import "trpc.group/trpc-go/trpc-agent-go/server/agui/aggregator"
 
 // options configures the tracker.
 type options struct {
 	aggregatorFactory aggregator.Factory  // aggregatorFactory builds aggregators for tracking.
 	aggregationOption []aggregator.Option // aggregationOption forwards options to the factory.
-	flushInterval     time.Duration       // flushInterval is the interval for flushing the session state.
 }
 
 // newOptions creates a new options instance.
 func newOptions(opt ...Option) *options {
 	opts := &options{
 		aggregatorFactory: aggregator.New,
-		flushInterval:     DefaultFlushInterval,
 	}
 	for _, o := range opt {
 		o(opts)
@@ -51,12 +42,5 @@ func WithAggregatorFactory(factory aggregator.Factory) Option {
 func WithAggregationOption(option ...aggregator.Option) Option {
 	return func(o *options) {
 		o.aggregationOption = append(o.aggregationOption, option...)
-	}
-}
-
-// WithFlushInterval sets the flush interval for the tracker.
-func WithFlushInterval(d time.Duration) Option {
-	return func(o *options) {
-		o.flushInterval = d
 	}
 }
