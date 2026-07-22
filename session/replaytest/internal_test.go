@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -290,7 +291,7 @@ func TestParseBoundedDecimalBranches(t *testing.T) {
 		assert.False(t, ok, "%q", text)
 	}
 
-	long := "1" + string(make([]byte, maxExactNumberCharacters))
+	long := strings.Repeat("1", maxExactNumberCharacters+1)
 	_, ok := parseBoundedDecimal(long)
 	assert.False(t, ok, "over-long input")
 }
