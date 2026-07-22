@@ -34,6 +34,7 @@ type Request struct {
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 	MaxOutputBytes int               `json:"max_output_bytes,omitempty"`
 	PTY            bool              `json:"pty,omitempty"`
+	Background     bool              `json:"background,omitempty"`
 }
 type Finding struct {
 	Decision       string `json:"decision"`
@@ -102,10 +103,13 @@ func NewGuard(p Policy) *Guard {
 }
 
 var (
-	secretRE             = regexp.MustCompile(`(?i)(api[_-]?key|token|password|secret)\s*[=:]\s*[^\s]+`)
+	quotedSecretRE       = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)\b(\s*[=:]\s*)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
+	secretAssignmentRE   = regexp.MustCompile(`(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)\b(\s*[=:]\s*)[^\s,;]+`)
+	secretFlagRE         = regexp.MustCompile(`(?i)(--?(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)(?:\s+|=))("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)`)
+	authorizationRE      = regexp.MustCompile(`(?i)(authorization\s*:\s*(?:bearer|basic)\s+)("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;]+)`)
+	urlUserinfoRE        = regexp.MustCompile(`(?i)([a-z][a-z0-9+.-]*://)[^\s/@:]+:[^\s/@]+@`)
 	destructiveCommandRE = regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`)
 	secretReadRE         = regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`)
-	networkCommandRE     = regexp.MustCompile(`\b(curl|wget|nc|netcat|ssh)\b`)
 	shellWrapperRE       = regexp.MustCompile(`\b(?:sh|bash|cmd|powershell)\s+(?:-c|/c|-command)\b|\beval\b`)
 	dependencyChangeRE   = regexp.MustCompile(`\b(go\s+install|npm\s+install|pip\s+install|apt(?:-get)?\s+install)\b`)
 	unboundedExecutionRE = regexp.MustCompile(`\b(while\s+true|for\s*\(\s*;\s*;|yes\b|fork\s*bomb)`)
@@ -113,12 +117,11 @@ var (
 )
 
 func redact(s string) (string, bool) {
-	out := secretRE.ReplaceAllStringFunc(s, func(v string) string {
-		if i := strings.IndexAny(v, "=:"); i >= 0 {
-			return v[:i+1] + "***REDACTED***"
-		}
-		return "***REDACTED***"
-	})
+	out := quotedSecretRE.ReplaceAllString(s, `${1}${2}***REDACTED***`)
+	out = secretFlagRE.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = authorizationRE.ReplaceAllString(out, `${1}***REDACTED***`)
+	out = secretAssignmentRE.ReplaceAllString(out, `${1}${2}***REDACTED***`)
+	out = urlUserinfoRE.ReplaceAllString(out, `${1}***REDACTED***:***REDACTED***@`)
 	return out, out != s
 }
 func (g *Guard) Scan(req Request) ScanResult {
@@ -157,7 +160,7 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if secretReadRE.MatchString(req.Command) {
 		add("deny", "critical", "SECRET_READ", req.Command, "use a secret provider instead of reading credential files")
 	}
-	if networkCommandRE.MatchString(lower) {
+	if isNetworkCommand(tokens) {
 		hosts := extractHosts(req.Command)
 		if len(hosts) == 0 {
 			add("ask", "high", "NETWORK_UNPARSED", req.Command, "provide a literal allowlisted HTTPS URL")
@@ -171,7 +174,7 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if shellWrapperRE.MatchString(lower) {
 		add("ask", "high", "SHELL_WRAPPER", req.Command, "expand and review the wrapped command before execution")
 	}
-	if strings.ContainsAny(req.Command, "`$") || strings.Contains(req.Command, "|") || strings.ContainsAny(req.Command, ";><") {
+	if strings.ContainsAny(req.Command, "`$|;&><\r\n") {
 		add("ask", "high", "SHELL_METACHAR", req.Command, "use argv execution without shell metacharacters")
 	}
 	if dependencyChangeRE.MatchString(lower) {
@@ -186,13 +189,13 @@ func (g *Guard) Scan(req Request) ScanResult {
 			add("ask", "medium", "LONG_RUNNING", m[0], "reduce duration below the configured timeout")
 		}
 	}
-	if req.TimeoutSeconds > g.policy.MaxTimeoutSeconds {
+	if req.TimeoutSeconds <= 0 || req.TimeoutSeconds > g.policy.MaxTimeoutSeconds {
 		add("deny", "high", "TIMEOUT_LIMIT", fmt.Sprint(req.TimeoutSeconds), "use a timeout within policy")
 	}
 	if req.MaxOutputBytes > g.policy.MaxOutputBytes {
 		add("deny", "high", "OUTPUT_LIMIT", fmt.Sprint(req.MaxOutputBytes), "lower the maximum output size")
 	}
-	if req.Backend == "hostexec" && (req.PTY || strings.Contains(lower, "&")) {
+	if req.Backend == "hostexec" && (req.PTY || req.Background || strings.Contains(lower, "&")) {
 		add("ask", "high", "HOST_SESSION", req.Command, "prefer workspaceexec; require approval and process-tree cleanup")
 	}
 	for key := range req.Environment {
@@ -214,6 +217,36 @@ func (g *Guard) Scan(req Request) ScanResult {
 	r.DurationMicros = time.Since(started).Microseconds()
 	r.SpanAttributes = map[string]string{"tool.safety.decision": r.Decision, "tool.safety.risk_level": r.RiskLevel, "tool.safety.rule_id": r.RuleID, "tool.safety.backend": r.Backend}
 	return r
+}
+
+func isNetworkCommand(tokens []string) bool {
+	if len(tokens) == 0 {
+		return false
+	}
+	base := strings.Trim(tokens[0], "'\"")
+	switch base {
+	case "curl", "wget", "nc", "netcat", "ssh":
+		return true
+	case "git":
+		if len(tokens) < 2 {
+			return false
+		}
+		switch strings.Trim(tokens[1], "'\"") {
+		case "clone", "fetch", "pull", "push", "ls-remote", "submodule":
+			return true
+		}
+	case "go":
+		if len(tokens) < 2 {
+			return false
+		}
+		switch strings.Trim(tokens[1], "'\"") {
+		case "get", "install":
+			return true
+		case "mod":
+			return len(tokens) > 2 && strings.Trim(tokens[2], "'\"") == "download"
+		}
+	}
+	return false
 }
 func rank(v string) int {
 	switch v {
