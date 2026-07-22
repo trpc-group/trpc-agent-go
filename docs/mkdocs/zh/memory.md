@@ -327,7 +327,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
 | **Memory ID**       | 记忆的唯一标识符                          | 基于内容、用户维度和规范化事件元数据的 SHA256 哈希；主题不参与身份 |
 | **Topics**          | 记忆的主题标签                            | 用于分类和检索，支持多个标签                       |
 | **Memory Tools**    | Agent 可调用的记忆操作工具                | 包括 add、update、delete、search、load、clear      |
-| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector |
+| **Storage Backend** | 存储后端实现                              | 支持 InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector、ChromaDB |
 
 ### 关键流程
 
@@ -345,7 +345,7 @@ Memory 模块采用分层设计，由以下核心组件组成：
        │
        ↓
 ┌──────────────┐
-│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/PostgreSQL/pgvector）
+│ 3. 存储记忆   │  Entry → Storage Backend（InMemory/SQLite/SQLiteVec/Redis/MySQL/PostgreSQL/pgvector/ChromaDB）
 └──────┬───────┘
        │
        ↓
@@ -447,7 +447,7 @@ appRunner := runner.NewRunner(
 
 ### 记忆服务 (Memory Service)
 
-记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector），可根据场景选择。
+记忆服务支持多种存储后端（InMemory、SQLite、SQLiteVec、Redis、MySQL、PostgreSQL、pgvector、ChromaDB），可根据场景选择。
 
 #### 配置示例
 
@@ -1274,19 +1274,67 @@ CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 defer pgvectorService.Close()
 ```
 
+### ChromaDB 存储
+
+**适用场景**：自建 ChromaDB 或 Chroma Cloud，使用余弦语义检索和混合检索
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
+)
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+chromaService, err := memorychromadb.NewService(
+    memorychromadb.WithBaseURL("http://localhost:8000"),
+    memorychromadb.WithCollectionName("memories"),
+    memorychromadb.WithEmbedder(embedder),
+    memorychromadb.WithSoftDelete(true),
+)
+if err != nil {
+    // 处理错误
+}
+defer chromaService.Close()
+```
+
+使用 Chroma Cloud 时可配置 `WithAPIKey`；如果没有显式设置 tenant 和
+database，服务会通过 identity 接口解析唯一作用域。Bearer 和自定义请求头
+认证分别使用 `WithBearerToken` 和 `WithHTTPHeaders`。使用自定义认证请求头时，
+必须显式指定 tenant 和 database。
+
+**配置选项**：
+
+- 连接：`WithBaseURL`、`WithAPIKey`、`WithBearerToken`、
+  `WithHTTPHeaders`、`WithTenant`、`WithDatabase`、`WithHTTPClient`、
+  `WithTimeout`
+- Collection：`WithCollectionName`、`WithAutoCreateCollection`、
+  `WithIndexDimension`、`WithEmbedder`
+- 检索：`WithMaxResults`、`WithSimilarityThreshold`、
+  `WithHybridCandidateLimit`
+- 保留策略：`WithMemoryLimit`、`WithSoftDelete`
+- Auto 模式和工具配置与其他 memory 后端一致。
+
+适配器直接使用 ChromaDB REST API v2，不依赖第三方 SDK。Collection 必须只启用
+一个 HNSW 或 SPANN 索引，且距离度量必须为 `cosine`。记录在同一个 collection
+内通过 schema、应用和用户 metadata 隔离。每用户容量限制只在单个 Service 实例
+内串行保证；多实例同时写同一用户时，应在上层使用分布式锁或 sticky routing。
+
 ### 后端对比与选择
 
-| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | PostgreSQL | pgvector |
-| ------------ | -------- | ---------- | -------- | ------ | -------- | ---------- | -------- |
-| **持久化**   | ❌       | ✅         | ✅       | ✅     | ✅       | ✅         | ✅       |
-| **分布式**   | ❌       | ❌         | ❌       | ✅     | ✅       | ✅         | ✅       |
-| **事务**     | ❌       | ✅ ACID    | ✅ ACID  | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  |
-| **查询**     | 简单     | SQL        | SQL+向量 | 中等   | SQL      | SQL        | SQL+向量 |
-| **JSON**     | ❌       | 基础       | 基础     | 基础   | JSON     | JSONB      | JSONB    |
-| **性能**     | 极高     | 中高       | 中高     | 高     | 中高     | 中高       | 中高     |
-| **配置**     | 零配置   | 简单       | 中等     | 简单   | 中等     | 中等       | 中等     |
-| **软删除**   | ❌       | ✅         | ✅       | ❌     | ✅       | ✅         | ✅       |
-| **适用场景** | 开发测试 | 本地持久化 | 本地向量 | 高并发 | 企业应用 | 高级特性   | 向量搜索 |
+| 特性         | InMemory | SQLite     | SQLiteVec | Redis  | MySQL    | PostgreSQL | pgvector | ChromaDB    |
+| ------------ | -------- | ---------- | -------- | ------ | -------- | ---------- | -------- | ----------- |
+| **持久化**   | ❌       | ✅         | ✅       | ✅     | ✅       | ✅         | ✅       | ✅          |
+| **分布式**   | ❌       | ❌         | ❌       | ✅     | ✅       | ✅         | ✅       | ✅          |
+| **事务**     | ❌       | ✅ ACID    | ✅ ACID  | 部分   | ✅ ACID  | ✅ ACID    | ✅ ACID  | 尽力保证    |
+| **查询**     | 简单     | SQL        | SQL+向量 | 中等   | SQL      | SQL        | SQL+向量 | 向量+本地   |
+| **JSON**     | ❌       | 基础       | 基础     | 基础   | JSON     | JSONB      | JSONB    | Metadata    |
+| **性能**     | 极高     | 中高       | 中高     | 高     | 中高     | 中高       | 中高     | 高          |
+| **配置**     | 零配置   | 简单       | 中等     | 简单   | 中等     | 中等       | 中等     | 中等        |
+| **软删除**   | ❌       | ✅         | ✅       | ❌     | ✅       | ✅         | ✅       | ✅          |
+| **适用场景** | 开发测试 | 本地持久化 | 本地向量 | 高并发 | 企业应用 | 高级特性   | 向量搜索 | 向量服务    |
 
 **选择建议**：
 
@@ -1298,7 +1346,8 @@ defer pgvectorService.Close()
 需要 ACID → MySQL/PostgreSQL（事务保证）
 复杂 JSON → PostgreSQL（JSONB 索引和查询）
 向量搜索 → pgvector（基于 embedding 的相似度搜索）
-审计追踪 → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec（软删除支持）
+向量服务 → ChromaDB（基于 REST 的余弦与混合检索）
+审计追踪 → MySQL/PostgreSQL/pgvector/ChromaDB/SQLite/SQLiteVec（软删除支持）
 ```
 
 ## 常见问题

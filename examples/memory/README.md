@@ -24,7 +24,7 @@ A simple example that demonstrates manual memory tool integration where LLM agen
   delete, clear)
 - Custom tool implementations
 - Streaming and non-streaming response modes
-- Multiple storage backends (in-memory, SQLite, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector)
+- Multiple storage backends (in-memory, SQLite, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, ChromaDB)
 
 **Use Cases:**
 
@@ -158,6 +158,7 @@ All examples support multiple storage backends:
 | `mysqlvec` | MySQL + vector search (embeddings)          | `-memory=mysqlvec` |
 | `postgres` | PostgreSQL-based storage                    | `-memory=postgres` |
 | `pgvector` | pgvector PostgreSQL storage with embeddings | `-memory=pgvector` |
+| `chromadb` | ChromaDB storage with cosine and hybrid search | `-memory=chromadb` |
 
 ### Session Management
 
@@ -249,6 +250,13 @@ Memory provides 6 tools with different availability in each mode:
 | `PGVECTOR_PASSWORD`       | pgvector PostgreSQL password | (empty)                     |
 | `PGVECTOR_DATABASE`       | pgvector PostgreSQL database | `trpc-agent-go-pgmemory`    |
 | `PGVECTOR_EMBEDDER_MODEL` | pgvector embedder model      | `text-embedding-3-small`    |
+| `CHROMA_BASE_URL`         | ChromaDB REST base URL       | `http://localhost:8000`     |
+| `CHROMA_API_KEY`          | ChromaDB API key             | (empty)                     |
+| `CHROMA_BEARER_TOKEN`     | ChromaDB bearer token        | (empty)                     |
+| `CHROMA_TENANT`           | ChromaDB tenant              | `default_tenant`            |
+| `CHROMA_DATABASE`         | ChromaDB database            | `default_database`          |
+| `CHROMA_COLLECTION`       | ChromaDB collection          | `memories`                  |
+| `CHROMA_EMBEDDER_MODEL`   | ChromaDB embedder model      | `text-embedding-3-small`    |
 | `MYSQL_HOST`              | MySQL host                   | `localhost`                 |
 | `MYSQL_PORT`              | MySQL port                   | `3306`                      |
 | `MYSQL_USER`              | MySQL user                   | `root`                      |
@@ -338,6 +346,12 @@ export PGVECTOR_PASSWORD=""
 export PGVECTOR_DATABASE=trpc-agent-go-pgmemory
 export PGVECTOR_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory pgvector
+
+# ChromaDB memory service
+export CHROMA_BASE_URL=http://localhost:8000
+export CHROMA_COLLECTION=memories
+export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
+go run main.go -memory chromadb
 ```
 
 ### Custom Models

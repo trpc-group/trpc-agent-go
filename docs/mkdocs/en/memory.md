@@ -1180,19 +1180,70 @@ CREATE INDEX ON memories USING hnsw (embedding vector_cosine_ops);
 defer pgvectorService.Close()
 ```
 
+### ChromaDB Storage
+
+**Use case**: Self-hosted ChromaDB or Chroma Cloud with cosine semantic and
+hybrid memory search
+
+```go
+import (
+    openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
+    memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
+)
+
+embedder := openaiembedder.New(
+    openaiembedder.WithModel("text-embedding-3-small"),
+)
+
+chromaService, err := memorychromadb.NewService(
+    memorychromadb.WithBaseURL("http://localhost:8000"),
+    memorychromadb.WithCollectionName("memories"),
+    memorychromadb.WithEmbedder(embedder),
+    memorychromadb.WithSoftDelete(true),
+)
+if err != nil {
+    // handle error
+}
+defer chromaService.Close()
+```
+
+For Chroma Cloud, add `WithAPIKey`; the service resolves the unique tenant and
+database from the identity endpoint unless they are set explicitly. Bearer and
+custom-header authentication are available through `WithBearerToken` and
+`WithHTTPHeaders`. Custom authentication headers require explicit tenant and
+database values.
+
+**Configuration options**:
+
+- Connection: `WithBaseURL`, `WithAPIKey`, `WithBearerToken`,
+  `WithHTTPHeaders`, `WithTenant`, `WithDatabase`, `WithHTTPClient`,
+  `WithTimeout`
+- Collection: `WithCollectionName`, `WithAutoCreateCollection`,
+  `WithIndexDimension`, `WithEmbedder`
+- Retrieval: `WithMaxResults`, `WithSimilarityThreshold`,
+  `WithHybridCandidateLimit`
+- Retention: `WithMemoryLimit`, `WithSoftDelete`
+- Auto mode and tools use the same options as other memory backends.
+
+The adapter uses ChromaDB REST API v2 directly and requires an existing HNSW
+or SPANN index configured with `cosine`. Records are isolated by schema,
+application, and user metadata inside one collection. The per-user memory
+limit is serialized within one service instance; use a distributed lock or
+sticky routing if multiple instances write the same user concurrently.
+
 ### Backend Comparison
 
-| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      |
-| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- |
-| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            |
-| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            |
-| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       |
-| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  |
-| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         |
-| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      |
-| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        |
-| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            |
-| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search |
+| Feature           | InMemory  | SQLite            | SQLiteVec        | Redis            | MySQL      | MySQL Vec         | PostgreSQL        | pgvector      | ChromaDB       |
+| ----------------- | --------- | ----------------- | ---------------- | ---------------- | ---------- | ----------------- | ----------------- | ------------- | -------------- |
+| **Persistence**   | ❌        | ✅                | ✅               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Distributed**   | ❌        | ❌                | ❌               | ✅               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Transactions**  | ❌        | ✅ ACID           | ✅ ACID          | Partial          | ✅ ACID    | ✅ ACID           | ✅ ACID           | ✅ ACID       | Best effort    |
+| **Queries**       | Simple    | SQL               | SQL + Vector     | Medium           | SQL        | SQL + Vector      | SQL               | SQL + Vector  | Vector + Local |
+| **JSON**          | ❌        | Basic             | Basic            | Basic            | JSON       | JSON              | JSONB             | JSONB         | Metadata       |
+| **Performance**   | Very High | Med-High          | Med-High         | High             | Med-High   | Med-High          | Med-High          | Med-High      | High           |
+| **Configuration** | Zero      | Simple            | Medium           | Simple           | Medium     | Medium            | Medium            | Medium        | Medium         |
+| **Soft Delete**   | ❌        | ✅                | ✅               | ❌               | ✅         | ✅                | ✅                | ✅            | ✅             |
+| **Use Case**      | Dev/Test  | Local Persistence | Local Vector     | High Concurrency | Enterprise | MySQL Vector Search | Advanced Features | Vector Search | Vector Service |
 
 **Selection guide**:
 
@@ -1205,7 +1256,8 @@ ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
-Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
+Managed Vector Service → ChromaDB (REST-based cosine and hybrid search)
+Audit Trail → MySQL/PostgreSQL/pgvector/ChromaDB (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -1229,17 +1281,17 @@ postgresService, err := memorypostgres.NewService(
 
 ### Storage Backend Comparison
 
-| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | PostgreSQL     | pgvector      |
-| ------------------------ | --------- | ---------- | ----------- | ---------- | -------------- | -------------- | ------------- |
-| Data Persistence         | ❌        | ✅         | ✅          | ✅         | ✅             | ✅             | ✅            |
-| Distributed Support      | ❌        | ❌         | ❌          | ✅         | ✅             | ✅             | ✅            |
-| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)   | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     |
-| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors |
-| JSON Support             | ❌        | Basic      | Basic       | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    |
-| Performance              | Very High | Med-High   | Medium-High | High       | Medium-High    | Medium-High    | Medium-High   |
-| Configuration Complexity | Low       | Low        | Medium      | Medium     | Medium         | Medium         | Medium        |
-| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | Production     | Vector Search |
-| Monitoring Tools         | None      | None       | None        | Rich       | Very Rich      | Very Rich      | Very Rich     |
+| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | PostgreSQL     | pgvector      | ChromaDB       |
+| ------------------------ | --------- | ---------- | ----------- | ---------- | -------------- | -------------- | ------------- | -------------- |
+| Data Persistence         | ❌        | ✅         | ✅          | ✅         | ✅             | ✅             | ✅            | ✅             |
+| Distributed Support      | ❌        | ❌         | ❌          | ✅         | ✅             | ✅             | ✅            | ✅             |
+| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)   | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     | Best effort    |
+| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors | Vector + Local |
+| JSON Support             | ❌        | Basic      | Basic       | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    | Metadata       |
+| Performance              | Very High | Med-High   | Medium-High | High       | Medium-High    | Medium-High    | Medium-High   | High           |
+| Configuration Complexity | Low       | Low        | Medium      | Medium     | Medium         | Medium         | Medium        | Medium         |
+| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | Production     | Vector Search | Vector Service |
+| Monitoring Tools         | None      | None       | None        | Rich       | Very Rich      | Very Rich      | Very Rich     | Chroma tooling |
 
 **Selection Guide:**
 
@@ -1250,6 +1302,7 @@ postgresService, err := memorypostgres.NewService(
 - **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
 - **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed
 - **Production (Vector Search)**: Use pgvector storage when similarity search with embeddings is needed
+- **Production (Vector Service)**: Use ChromaDB for REST-based cosine and hybrid memory search
 - **Hybrid Deployment**: Choose different storage backends based on different application scenarios
 
 ## FAQ
