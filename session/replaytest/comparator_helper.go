@@ -526,19 +526,42 @@ func sortedBranchKeys(a, b map[string][]string) []string {
 
 // compareExtraSessions compares Snapshot.Sessions map entries for multi-session cases.
 func compareExtraSessions(tc ReplayCase, backendA, backendB string, a, b *Snapshot) []Diff {
-	var diffs []Diff
-	mapA, mapB := map[string]*session.Session{}, map[string]*session.Session{}
-	if a != nil && a.Sessions != nil {
-		mapA = a.Sessions
-	}
-	if b != nil && b.Sessions != nil {
-		mapB = b.Sessions
-	}
+	mapA, mapB := sessionMaps(a), sessionMaps(b)
 	if len(mapA) == 0 && len(mapB) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(mapA)+len(mapB))
+	primary := primarySessionID(a, b)
+	var diffs []Diff
+	for _, id := range unionSessionIDs(mapA, mapB) {
+		if id == primary {
+			// Already compared via Snapshot.Session (incl. branch_local mode).
+			continue
+		}
+		diffs = append(diffs, compareOneExtraSession(tc, backendA, backendB, id, mapA[id], mapB[id])...)
+	}
+	return diffs
+}
+
+func sessionMaps(s *Snapshot) map[string]*session.Session {
+	if s == nil || s.Sessions == nil {
+		return map[string]*session.Session{}
+	}
+	return s.Sessions
+}
+
+func primarySessionID(a, b *Snapshot) string {
+	if a != nil && a.SessionID != "" {
+		return a.SessionID
+	}
+	if b != nil {
+		return b.SessionID
+	}
+	return ""
+}
+
+func unionSessionIDs(mapA, mapB map[string]*session.Session) []string {
 	seen := map[string]struct{}{}
+	ids := make([]string, 0, len(mapA)+len(mapB))
 	for id := range mapA {
 		seen[id] = struct{}{}
 		ids = append(ids, id)
@@ -549,97 +572,88 @@ func compareExtraSessions(tc ReplayCase, backendA, backendB string, a, b *Snapsh
 		}
 	}
 	sort.Strings(ids)
-	// Skip the primary SessionID: events/state already compared via Snapshot.Session
-	// with EventCompareMode (including branch_local for concurrent cases).
-	primary := ""
-	if a != nil {
-		primary = a.SessionID
+	return ids
+}
+
+func compareOneExtraSession(
+	tc ReplayCase, backendA, backendB, id string,
+	sa, sb *session.Session,
+) []Diff {
+	prefix := fmt.Sprintf("sessions[%q]", id)
+	if (sa == nil) != (sb == nil) {
+		return []Diff{annotateDiff(Diff{
+			Path:        prefix,
+			SessionID:   id,
+			Baseline:    sa != nil,
+			Actual:      sb != nil,
+			Explanation: "session map presence mismatch",
+		}, tc.Name, backendA, backendB, id)}
 	}
-	if primary == "" && b != nil {
-		primary = b.SessionID
+	if sa == nil {
+		return nil
 	}
-	for _, id := range ids {
-		if id == primary {
-			continue
-		}
-		sa, okA := mapA[id]
-		sb, okB := mapB[id]
-		prefix := fmt.Sprintf("sessions[%q]", id)
-		if okA != okB {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path:        prefix,
-				SessionID:   id,
-				Baseline:    okA,
-				Actual:      okB,
-				Explanation: "session map presence mismatch",
-			}, tc.Name, backendA, backendB, id))
-			continue
-		}
-		if sa == nil && sb == nil {
-			continue
-		}
-		if sa == nil || sb == nil {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path:        prefix,
-				SessionID:   id,
-				Baseline:    sa != nil,
-				Actual:      sb != nil,
-				Explanation: "session nil mismatch",
-			}, tc.Name, backendA, backendB, id))
-			continue
-		}
-		// Identity fields.
-		if sa.ID != sb.ID {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path: prefix + ".id", SessionID: id,
-				Baseline: sa.ID, Actual: sb.ID,
-				Explanation: "session id mismatch",
-			}, tc.Name, backendA, backendB, id))
-		}
-		if sa.AppName != sb.AppName {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path: prefix + ".app_name", SessionID: id,
-				Baseline: sa.AppName, Actual: sb.AppName,
-				Explanation: "session app_name mismatch",
-			}, tc.Name, backendA, backendB, id))
-		}
-		if sa.UserID != sb.UserID {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path: prefix + ".user_id", SessionID: id,
-				Baseline: sa.UserID, Actual: sb.UserID,
-				Explanation: "session user_id mismatch",
-			}, tc.Name, backendA, backendB, id))
-		}
-		// Events.
-		evA, evB := sa.Events, sb.Events
-		if len(evA) != len(evB) {
-			diffs = append(diffs, annotateDiff(Diff{
-				Path: prefix + ".events.length", SessionID: id,
-				Baseline: len(evA), Actual: len(evB),
-				Explanation: "event count mismatch",
-			}, tc.Name, backendA, backendB, id))
-		}
-		n := len(evA)
-		if len(evB) < n {
-			n = len(evB)
-		}
-		for i := 0; i < n; i++ {
-			iCopy := i
-			for _, d := range compareEventSemantics(i, evA[i], evB[i], id) {
-				d.CaseName = tc.Name
-				d.BackendA, d.BackendB = backendA, backendB
-				d.SessionID = id
-				d.Path = prefix + "." + d.Path
-				if d.EventIndex == nil {
-					d.EventIndex = &iCopy
-				}
-				diffs = append(diffs, d)
-			}
-		}
-		// Session state isolation.
-		for _, d := range compareStateMap(prefix+".state", sa.State, sb.State, id) {
+	var diffs []Diff
+	diffs = append(diffs, compareExtraSessionIdentity(tc, backendA, backendB, id, prefix, sa, sb)...)
+	diffs = append(diffs, compareExtraSessionEvents(tc, backendA, backendB, id, prefix, sa.Events, sb.Events)...)
+	for _, d := range compareStateMap(prefix+".state", sa.State, sb.State, id) {
+		d.CaseName = tc.Name
+		d.BackendA, d.BackendB = backendA, backendB
+		diffs = append(diffs, d)
+	}
+	return diffs
+}
+
+func compareExtraSessionIdentity(
+	tc ReplayCase, backendA, backendB, id, prefix string,
+	sa, sb *session.Session,
+) []Diff {
+	var diffs []Diff
+	add := func(path string, base, act any, expl string) {
+		diffs = append(diffs, annotateDiff(Diff{
+			Path: path, SessionID: id,
+			Baseline: base, Actual: act, Explanation: expl,
+		}, tc.Name, backendA, backendB, id))
+	}
+	if sa.ID != sb.ID {
+		add(prefix+".id", sa.ID, sb.ID, "session id mismatch")
+	}
+	if sa.AppName != sb.AppName {
+		add(prefix+".app_name", sa.AppName, sb.AppName, "session app_name mismatch")
+	}
+	if sa.UserID != sb.UserID {
+		add(prefix+".user_id", sa.UserID, sb.UserID, "session user_id mismatch")
+	}
+	return diffs
+}
+
+func compareExtraSessionEvents(
+	tc ReplayCase, backendA, backendB, id, prefix string,
+	evA, evB []event.Event,
+) []Diff {
+	var diffs []Diff
+	if len(evA) != len(evB) {
+		diffs = append(diffs, annotateDiff(Diff{
+			Path:        prefix + ".events.length",
+			SessionID:   id,
+			Baseline:    len(evA),
+			Actual:      len(evB),
+			Explanation: "event count mismatch",
+		}, tc.Name, backendA, backendB, id))
+	}
+	n := len(evA)
+	if len(evB) < n {
+		n = len(evB)
+	}
+	for i := 0; i < n; i++ {
+		iCopy := i
+		for _, d := range compareEventSemantics(i, evA[i], evB[i], id) {
 			d.CaseName = tc.Name
 			d.BackendA, d.BackendB = backendA, backendB
+			d.SessionID = id
+			d.Path = prefix + "." + d.Path
+			if d.EventIndex == nil {
+				d.EventIndex = &iCopy
+			}
 			diffs = append(diffs, d)
 		}
 	}
