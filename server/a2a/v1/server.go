@@ -694,64 +694,57 @@ func (m *messageProcessor) streamAgentEvents(
 		fallbackArtifact: protocol.GenerateArtifactID(),
 	}
 
-	if m.abortStreamingOnError(ctx, out, a2aMsg, m.sendTaskSubmittedEvent(
-		ctx,
-		out,
-		taskID,
-		userID,
-		sessionID,
-		a2aMsg,
-	)) {
+	err := m.sendTaskSubmittedEvent(ctx, out, taskID, userID, sessionID, a2aMsg)
+	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
 		return
 	}
 
-eventLoop:
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case agentEvent, ok := <-agentMsgChan:
-			if !ok {
-				break eventLoop
-			}
-			keepProcessing, err := m.processStreamingEvent(
-				ctx,
-				out,
-				taskID,
-				a2aMsg,
-				agentEvent,
-				state,
-			)
-			if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
-				return
-			}
-			if !keepProcessing {
-				break eventLoop
-			}
-		}
+	err = m.consumeAgentEvents(ctx, out, taskID, a2aMsg, agentMsgChan, state)
+	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+		return
 	}
 
 	if state.terminalError {
 		return
 	}
 
-	if m.abortStreamingOnError(ctx, out, a2aMsg, m.sendFinalArtifactEvent(
-		ctx,
-		out,
-		taskID,
-		*a2aMsg.ContextID,
-		state,
-	)) {
+	ctxID := *a2aMsg.ContextID
+	err = m.sendFinalArtifactEvent(ctx, out, taskID, ctxID, state)
+	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
 		return
 	}
 
-	m.abortStreamingOnError(ctx, out, a2aMsg, m.sendTaskCompletedEvent(
-		ctx,
-		out,
-		taskID,
-		*a2aMsg.ContextID,
-		state,
-	))
+	err = m.sendTaskCompletedEvent(ctx, out, taskID, ctxID, state)
+	m.abortStreamingOnError(ctx, out, a2aMsg, err)
+}
+
+// consumeAgentEvents forwards events until the runner closes the channel,
+// processing reaches a terminal event, or the request context ends.
+func (m *messageProcessor) consumeAgentEvents(
+	ctx context.Context,
+	out chan<- protocol.StreamEvent,
+	taskID string,
+	a2aMsg *protocol.Message,
+	agentMsgChan <-chan *event.Event,
+	state *taskOutputState,
+) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case agentEvent, ok := <-agentMsgChan:
+			if !ok {
+				return nil
+			}
+			done, err := m.processStreamingEvent(ctx, out, taskID, a2aMsg, agentEvent, state)
+			if err != nil {
+				return err
+			}
+			if done {
+				return nil
+			}
+		}
+	}
 }
 
 func (m *messageProcessor) abortStreamingOnError(
@@ -859,7 +852,7 @@ func (m *messageProcessor) sendTaskCompletedEvent(
 }
 
 // processStreamingEvent converts one agent event and emits it on out. The
-// returned boolean reports whether the caller should consume another event.
+// returned boolean reports whether event consumption is complete.
 func (m *messageProcessor) processStreamingEvent(
 	ctx context.Context,
 	out chan<- protocol.StreamEvent,
@@ -870,7 +863,7 @@ func (m *messageProcessor) processStreamingEvent(
 ) (bool, error) {
 	if agentEvent == nil {
 		log.WarnContext(ctx, "received nil event, skipping")
-		return true, nil
+		return false, nil
 	}
 
 	if m.debugLogging {
@@ -889,7 +882,7 @@ func (m *messageProcessor) processStreamingEvent(
 			"received empty response event, continuing, event: %v",
 			agentEvent,
 		)
-		return true, nil
+		return false, nil
 	}
 
 	if m.structuredTaskErrors && isStructuredTaskErrorEvent(agentEvent) {
@@ -913,7 +906,7 @@ func (m *messageProcessor) processStreamingEvent(
 			)
 		}
 		state.terminalError = true
-		return false, nil
+		return true, nil
 	}
 
 	if isFinalStreamingEvent(agentEvent) {
@@ -923,7 +916,7 @@ func (m *messageProcessor) processStreamingEvent(
 			"received final event, stopping event processing (eventID=%s)",
 			agentEvent.ID,
 		)
-		return false, nil
+		return true, nil
 	}
 
 	convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
@@ -947,12 +940,12 @@ func (m *messageProcessor) processStreamingEvent(
 	// important for response redaction and event replacement: dropped or
 	// rewritten content must not reappear in the final Task snapshot.
 	if convertedResult == nil {
-		return true, nil
+		return false, nil
 	}
 	prepareTaskOutputEvent(convertedResult, state)
 	outbound := m.rewriteStreamingResult(ctx, convertedResult)
 	if outbound == nil {
-		return true, nil
+		return false, nil
 	}
 	prepareTaskOutputEvent(outbound, state)
 	switch converted := outbound.(type) {
@@ -985,7 +978,7 @@ func (m *messageProcessor) processStreamingEvent(
 		return false, fmt.Errorf("failed to send streaming message event: %w", err)
 	}
 
-	return true, nil
+	return false, nil
 }
 
 // prepareTaskOutputEvent fills request-local artifact framing without recording
