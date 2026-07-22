@@ -199,19 +199,7 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 		}
 		switch msg.Type {
 		case "tool_call":
-			value, callErr := handler.HandleToolCall(ctx, ToolCall{
-				ID:   msg.ID,
-				Name: msg.Name,
-				Args: msg.Args,
-			})
-			if err := ctx.Err(); err != nil {
-				return Result{}, err
-			}
-			out := protocolResponse{Type: "tool_result", ID: msg.ID, Result: value}
-			if callErr != nil {
-				out.Error = callErr.Error()
-			}
-			if err := enc.Encode(out); err != nil {
+			if err := handleStdioToolCall(ctx, handler, enc, msg); err != nil {
 				return Result{}, err
 			}
 		case "complete":
@@ -238,6 +226,27 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 	case <-time.After(10 * time.Millisecond):
 	}
 	return Result{}, errors.New("codeact: guest exited without a completion message")
+}
+
+func handleStdioToolCall(
+	ctx context.Context,
+	handler ToolCallHandler,
+	enc *json.Encoder,
+	msg protocolMessage,
+) error {
+	value, callErr := handler.HandleToolCall(ctx, ToolCall{
+		ID:   msg.ID,
+		Name: msg.Name,
+		Args: msg.Args,
+	})
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	out := protocolResponse{Type: "tool_result", ID: msg.ID, Result: value}
+	if callErr != nil {
+		out.Error = callErr.Error()
+	}
+	return enc.Encode(out)
 }
 
 func validateLocalLanguage(language string) error {

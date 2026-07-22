@@ -12,6 +12,7 @@ package codeact
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -49,9 +50,42 @@ func TestLocalRunnerCleansDescendantsAfterSuccessfulCompletion(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `"done"`, string(result.Value))
 
-	time.Sleep(50 * time.Millisecond)
 	require.NoError(t, os.WriteFile(gate, []byte("go"), 0o600))
-	time.Sleep(200 * time.Millisecond)
+	require.Never(t, func() bool {
+		_, err := os.Stat(marker)
+		return err == nil
+	}, time.Second, 10*time.Millisecond)
 	_, err = os.Stat(marker)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestConfiguredLocalRunnerTimeoutKillsMovedProcessLeader(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	started := time.Now()
+	_, err := Execute(
+		context.Background(),
+		NewLocalRunner(LocalRunnerConfig{Timeout: 100 * time.Millisecond}),
+		toolCallHandlerFunc(func(ctx context.Context, _ ToolCall) (json.RawMessage, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}),
+		`import os
+import signal
+import subprocess
+import sys
+
+signal.alarm(3)
+subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(3)"],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+os.setpgid(0, os.getpgid(os.getppid()))
+return await call_tool("wait")`,
+	)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Less(t, time.Since(started), 2*time.Second)
 }

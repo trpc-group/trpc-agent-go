@@ -11,6 +11,8 @@
 package localpython
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -23,7 +25,25 @@ func killProcessGroup(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
-	return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	// The guest leader can leave the process group created at startup. Signal
+	// that group for descendants, then address the leader by PID as well.
+	groupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	leaderErr := cmd.Process.Kill()
+	groupDone := groupErr == nil || errors.Is(groupErr, syscall.ESRCH)
+	leaderDone := leaderErr == nil || errors.Is(leaderErr, os.ErrProcessDone)
+	switch {
+	case groupDone && leaderDone:
+		if errors.Is(groupErr, syscall.ESRCH) && errors.Is(leaderErr, os.ErrProcessDone) {
+			return os.ErrProcessDone
+		}
+		return nil
+	case groupDone:
+		return leaderErr
+	case leaderDone:
+		return groupErr
+	default:
+		return errors.Join(groupErr, leaderErr)
+	}
 }
 
 func cleanupProcessTree(cmd *exec.Cmd) {
