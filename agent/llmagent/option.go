@@ -747,6 +747,12 @@ func WithDescription(description string) Option {
 // The template uses the same placeholder subset as the internal prompt state
 // adapter in `internal/prompt/adapter/state`. See `Render` there for supported
 // placeholder forms and resolution rules.
+//
+// Note: placeholders re-render on every turn, so a value that changes between
+// turns rewrites the instruction and invalidates the provider's prompt-cache
+// prefix the same way an inline timestamp does. Keep fast-changing values out
+// of the instruction (expose them as tools or message content) if you rely on
+// prompt caching.
 func WithInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.Instruction = instruction
@@ -757,6 +763,10 @@ func WithInstruction(instruction string) Option {
 // The template uses the same placeholder subset as the internal prompt state
 // adapter in `internal/prompt/adapter/state`. See `Render` there for supported
 // placeholder forms and resolution rules.
+//
+// Note: placeholders here re-render on every request; see the prompt-cache
+// caveat on WithInstruction — a value that changes between turns invalidates
+// the provider's prompt-cache prefix the same way.
 func WithGlobalInstruction(instruction string) Option {
 	return func(opts *Options) {
 		opts.GlobalInstruction = instruction
@@ -768,6 +778,10 @@ func WithGlobalInstruction(instruction string) Option {
 // in `internal/prompt/adapter/state`. See `Render` there for supported
 // placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: instruction text.
+//
+// Note: placeholders here re-render on every request; see the prompt-cache
+// caveat on WithInstruction — a value that changes between turns invalidates
+// the provider's prompt-cache prefix the same way.
 func WithModelInstructions(instructions map[string]string) Option {
 	return func(opts *Options) {
 		opts.ModelInstructions = cloneStringMap(instructions)
@@ -779,6 +793,10 @@ func WithModelInstructions(instructions map[string]string) Option {
 // state adapter in `internal/prompt/adapter/state`. See `Render` there for
 // supported placeholder forms and resolution rules.
 // Key: model.Info().Name, Value: system prompt text.
+//
+// Note: placeholders here re-render on every request; see the prompt-cache
+// caveat on WithInstruction — a value that changes between turns invalidates
+// the provider's prompt-cache prefix the same way.
 func WithModelGlobalInstructions(prompts map[string]string) Option {
 	return func(opts *Options) {
 		opts.ModelGlobalInstructions = cloneStringMap(prompts)
@@ -1603,6 +1621,17 @@ func newStructuredOutput(name string, schema map[string]any, strict bool, descri
 }
 
 // WithAddCurrentTime adds the current time to the system prompt if true.
+// Enabling it also registers the built-in current-time tool alongside the
+// injected value.
+//
+// Note: the injected value rewrites the system prompt whenever its formatted
+// text changes, which invalidates the provider's prompt-cache prefix from
+// that point on — once per day with the default date-only format, and as
+// often as the rendered value changes with finer formats (potentially every
+// turn for second-level formats; see WithTimeFormat). If you rely on prompt
+// caching, keep the default date-only format and let the model call the
+// built-in current-time tool when it needs precise time;
+// examples/promptcache/timeprocessor demonstrates the trade-off.
 func WithAddCurrentTime(addCurrentTime bool) Option {
 	return func(opts *Options) {
 		opts.AddCurrentTime = addCurrentTime

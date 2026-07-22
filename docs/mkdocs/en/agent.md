@@ -108,6 +108,7 @@ LLMAgent automatically injects session state into `Instruction` and the optional
 Notes:
 
 - If a non-optional key is not found, the original `{key}` is preserved (helps the LLM notice missing context)
+- Placeholders re-render every turn: a value that changes between turns rewrites the instruction and invalidates the provider's prompt-cache prefix (same effect as injecting the current time — see `examples/promptcache`). Keep fast-changing values in tools or message content if you rely on prompt caching
 - Values are read from session state (Runner + SessionService set/merge this automatically)
 
 Example:
