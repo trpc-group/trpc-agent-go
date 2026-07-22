@@ -96,7 +96,7 @@ func takeSnapshot(
 				SessionID: sid,
 				Events:    append([]event.Event(nil), sess.Events...),
 				State:     stateToRaw(sess.State),
-				Summaries: sess.Summaries,
+				Summaries: cloneSummaries(sess),
 				Tracks:    tracksToRaw(sess.Tracks),
 			}
 			snap.Sessions = append(snap.Sessions, ss)
@@ -112,7 +112,7 @@ func takeSnapshot(
 					SessionID: fmt.Sprintf("%s@last%d", sid, c.WindowEventNum),
 					Events:    append([]event.Event(nil), sess.Events...),
 					State:     stateToRaw(sess.State),
-					Summaries: sess.Summaries,
+					Summaries: cloneSummaries(sess),
 					Tracks:    tracksToRaw(sess.Tracks),
 				}
 				snap.Sessions = append(snap.Sessions, ss)
@@ -186,6 +186,23 @@ func toMemorySnaps(entries []*memory.Entry) []*MemorySnap {
 			ms.EventTime = e.Memory.EventTime.UTC().Format(time.RFC3339)
 		}
 		out = append(out, ms)
+	}
+	return out
+}
+
+// cloneSummaries copies the session's summary map under its read lock —
+// the same pattern Session.Clone and the runner's summary-isolation probe
+// use — so a backend writing summaries asynchronously cannot race the
+// snapshot, and later normalization never aliases backend-owned memory.
+func cloneSummaries(sess *session.Session) map[string]*session.Summary {
+	sess.SummariesMu.RLock()
+	defer sess.SummariesMu.RUnlock()
+	if sess.Summaries == nil {
+		return nil
+	}
+	out := make(map[string]*session.Summary, len(sess.Summaries))
+	for fk, sum := range sess.Summaries {
+		out[fk] = sum.Clone()
 	}
 	return out
 }
