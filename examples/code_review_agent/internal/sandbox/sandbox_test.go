@@ -387,6 +387,9 @@ func TestBuildModuleProxyIncludesGoModOnlyEntry(t *testing.T) {
 	repo, cache := t.TempDir(), t.TempDir()
 	modulePath, version := "github.com/example/dependency", "v1.2.3"
 	modPath, _ := writeModuleCacheFixture(t, repo, cache, modulePath, version)
+	if err := os.Remove(strings.TrimSuffix(modPath, ".mod") + ".info"); err != nil {
+		t.Fatal(err)
+	}
 	content, err := os.ReadFile(filepath.Join(repo, "go.sum"))
 	if err != nil {
 		t.Fatal(err)
@@ -405,6 +408,9 @@ func TestBuildModuleProxyIncludesGoModOnlyEntry(t *testing.T) {
 	dir := filepath.Join(proxy.Path, filepath.FromSlash(escapedPath), "@v")
 	if _, err := os.Stat(filepath.Join(dir, escapedVersion+".mod")); err != nil {
 		t.Fatalf("go.mod-only entry missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, escapedVersion+".info")); !os.IsNotExist(err) {
+		t.Fatalf("missing optional info was copied: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, escapedVersion+".zip")); !os.IsNotExist(err) {
 		t.Fatalf("unchecked zip was copied: %v", err)

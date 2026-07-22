@@ -237,7 +237,15 @@ func copyModuleVersion(ctx context.Context, downloadRoot, destination string, ve
 			return 0, 0, 0, dependencyError("verify module zip hash", errors.Join(hashErr, errors.New("zip hash differs from go.sum")))
 		}
 	}
-	suffixes := []string{".info"}
+	suffixes := make([]string, 0, 3)
+	infoPath := filepath.Join(sourceDir, escapedVersion+".info")
+	if version.sum != "" {
+		suffixes = append(suffixes, ".info")
+	} else if _, infoErr := os.Lstat(infoPath); infoErr == nil {
+		suffixes = append(suffixes, ".info")
+	} else if !os.IsNotExist(infoErr) {
+		return 0, 0, 0, dependencyError("inspect optional module info", infoErr)
+	}
 	if version.modSum != "" {
 		suffixes = append(suffixes, ".mod")
 	}
