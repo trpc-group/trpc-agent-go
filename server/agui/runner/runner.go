@@ -527,9 +527,11 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 		ch, err := r.runner.Run(ctx, input.userID, threadID, *input.messages.inputMessage, input.runOption...)
 		agentRun <- runAgentResult{events: ch, err: err}
 	}()
-	r.runEventLoop(ctx, cancel, closeDone, events, input, agentRun, hookEvents, hookDone, hookRemaining)
+	hookDone, hookRemaining = r.runEventLoop(
+		ctx, cancel, closeDone, events, input, agentRun, hookEvents, hookDone, hookRemaining)
 	closeDone()
 	cancel(nil)
+	waitForRunHooks(hookDone, hookRemaining)
 	<-agentRunDone
 }
 
@@ -543,7 +545,7 @@ func (r *runner) runEventLoop(
 	hookEvents <-chan hookEvent,
 	hookDone <-chan error,
 	hookRemaining int,
-) {
+) (<-chan error, int) {
 	threadID := input.threadID
 	runID := input.runID
 	var agentEvents <-chan *event.Event
@@ -555,19 +557,19 @@ func (r *runner) runEventLoop(
 			pendingTerminal = nil
 		}
 		if agentDone && hookRemaining == 0 {
-			return
+			return hookDone, hookRemaining
 		}
 		select {
 		case <-ctx.Done():
 			log.ErrorfContext(ctx, "agui run: threadID: %s, runID: %s, err: %v", threadID, runID, ctx.Err())
 			r.emitPostRunTerminalEvent(ctx, events, input)
-			return
+			return hookDone, hookRemaining
 		case result := <-agentRun:
 			agentRun = nil
 			if result.err != nil {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
-					return
+					return hookDone, hookRemaining
 				}
 				log.ErrorfContext(
 					ctx,
@@ -607,7 +609,7 @@ func (r *runner) runEventLoop(
 				waitForAgentSourceClose(agentRun, agentEvents)
 			}
 			if !ok {
-				return
+				return hookDone, hookRemaining
 			}
 			if terminal != nil {
 				pendingTerminal = terminal
@@ -617,7 +619,7 @@ func (r *runner) runEventLoop(
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
 				}
-				return
+				return hookDone, hookRemaining
 			}
 		case err := <-hookDone:
 			hookRemaining--
@@ -627,7 +629,7 @@ func (r *runner) runEventLoop(
 			if err != nil {
 				if ctx.Err() != nil {
 					r.emitPostRunTerminalEvent(ctx, events, input)
-					return
+					return hookDone, hookRemaining
 				}
 				log.ErrorfContext(ctx, "agui run hook: threadID: %s, runID: %s, err: %v", threadID, runID, err)
 				r.emitPostRunFinalization(ctx, events, input)
@@ -636,9 +638,16 @@ func (r *runner) runEventLoop(
 				closeDone()
 				cancel(nil)
 				waitForAgentSourceClose(agentRun, agentEvents)
-				return
+				return hookDone, hookRemaining
 			}
 		}
+	}
+}
+
+func waitForRunHooks(hookDone <-chan error, hookRemaining int) {
+	for hookRemaining > 0 {
+		<-hookDone
+		hookRemaining--
 	}
 }
 
