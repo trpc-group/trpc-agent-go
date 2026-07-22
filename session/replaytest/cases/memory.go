@@ -64,10 +64,12 @@ func MemoryScopeIsolation() replaytest.Case {
 }
 
 // MemoryWriteRead is case 5: four memories (preference, fact, experience,
-// history summary) with topics and episodic metadata, one update, one
-// delete, a clear-to-empty, one re-add after the clear, then list plus
-// search read-back.
-// It guards memory content/metadata fidelity, update, delete and clear
+// history summary) with topics and episodic metadata, one update touching
+// content, topics and metadata together, one delete, then list plus search
+// read-back. The final snapshot keeps the updated, metadata-bearing
+// records, so update/topics/metadata serialization defects stay detectable;
+// clear semantics are covered by MemoryScopeIsolation (case 11).
+// It guards memory content/metadata fidelity, update and delete
 // semantics, and search result-set consistency (ordering is an allowed
 // note). MemorySearch is deliberately not required: a backend without
 // search still validates add/update/delete/list here, and the search
@@ -76,7 +78,7 @@ func MemoryScopeIsolation() replaytest.Case {
 func MemoryWriteRead() replaytest.Case {
 	return replaytest.Case{
 		Name:        "memory/write_read",
-		Description: "memory add/update/delete/clear with topics+metadata; list and search read-back",
+		Description: "memory add/update/delete with topics+metadata; list and search read-back",
 		NeedCaps:    replaytest.Capability{Memory: true},
 		SearchQuery: "咖啡",
 		Steps: []replaytest.Step{
@@ -101,21 +103,20 @@ func MemoryWriteRead() replaytest.Case {
 				Content: "历史摘要：上周讨论了会话持久化方案",
 				Topics:  []string{"summary", "history"},
 			}},
+			// Update content, topics and metadata in one step so all three
+			// stay observable in the final snapshot.
 			{Op: replaytest.OpUpdateMemory, Memory: &replaytest.MemorySpec{
 				MatchContent: "用户偏好：咖啡不加糖",
 				Content:      "用户偏好：咖啡不加糖，加奶",
 				Topics:       []string{"preference", "drink", "updated"},
+				Metadata: &replaytest.MetadataSpec{
+					Kind:         "episode",
+					Participants: []string{"user"},
+					Location:     "上海",
+				},
 			}},
 			{Op: replaytest.OpDeleteMemory, Memory: &replaytest.MemorySpec{
 				MatchContent: "经验：发布前必须先跑 replaytest",
-			}},
-			// Clear-to-empty: both backends must clear consistently.
-			{Op: replaytest.OpClearMemories},
-			// Re-add after the clear proves the store is still writable and
-			// keeps the search read-back below non-trivial.
-			{Op: replaytest.OpAddMemory, Memory: &replaytest.MemorySpec{
-				Content: "清空后重建：用户改喝拿铁咖啡",
-				Topics:  []string{"preference", "rebuilt"},
 			}},
 		},
 	}

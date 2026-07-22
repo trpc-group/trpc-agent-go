@@ -75,9 +75,11 @@ func TestGenerateExampleReport(t *testing.T) {
 		out, rep.Totals.Pass, rep.Totals.Fail, rep.Totals.Unsupported)
 }
 
-// exampleCases returns the public suite plus one case that ends with two
-// distinct memories, so the reversed candidate listing surfaces the
-// allowed_diff order note (no public case ends with two or more memories).
+// exampleCases returns the public suite plus one small memory-only case
+// ending with two distinct memories, so the reversed candidate listing
+// surfaces the allowed_diff order note on a dedicated, easy-to-read example
+// (the note also fires on case 5, whose final snapshot holds three
+// memories).
 func exampleCases() []replaytest.Case {
 	orderNote := replaytest.Case{
 		Name: "example/memory_order_note",

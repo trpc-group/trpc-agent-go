@@ -541,13 +541,28 @@
     },
     {
       "case": "memory/write_read",
-      "description": "memory add/update/delete/clear with topics+metadata; list and search read-back",
-      "status": "pass"
-    },
-    {
-      "case": "memory/scope_isolation",
-      "description": "two users in one app write/update/delete/clear memories; per-user read-back must stay isolated (no cross-user leakage, scoped clear)",
-      "status": "pass"
+      "description": "memory add/update/delete with topics+metadata; list and search read-back",
+      "status": "pass",
+      "notes": [
+        {
+          "dimension": "memory",
+          "severity": "order",
+          "event_index": -1,
+          "path": "memories.order",
+          "value_a": [
+            2,
+            1,
+            0
+          ],
+          "value_b": [
+            0,
+            1,
+            2
+          ],
+          "allowed": true,
+          "note": "memory listing order is implementation-dependent"
+        }
+      ]
     },
     {
       "case": "summary/generate_update",
@@ -1271,6 +1286,11 @@
           "allowed": false
         }
       ]
+    },
+    {
+      "case": "memory/scope_isolation",
+      "description": "two users in one app write/update/delete/clear memories; per-user read-back must stay isolated (no cross-user leakage, scoped clear)",
+      "status": "pass"
     },
     {
       "case": "example/memory_order_note",

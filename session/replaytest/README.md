@@ -82,7 +82,7 @@ func TestReplayConsistency(t *testing.T) {
 | 2 | `basic/multi_turn_order` | 读出顺序 == 写入顺序 |
 | 3 | `toolcall/full_cycle` | tool call/response 配对、args canonical 相等、branch/tag/filterKey/stateDelta/extensions 五字段 |
 | 4 | `state/overwrite_delete_clear` | 覆盖顺序、删除语义、空写 no-op、app/user 作用域清空至空、temp/app/user 合并视图、事件 state delta 合并入最终 state |
-| 5 | `memory/write_read` | 偏好/事实/经验/历史摘要四类 memory 的增改删 + 清空重建 + 检索结果集一致 |
+| 5 | `memory/write_read` | 偏好/事实/经验/历史摘要四类 memory 的增改删（更新同时改 content/topics/metadata，终态快照可检出序列化缺陷）+ 检索结果集一致；清空语义由 case 11 覆盖 |
 | 6 | `summary/generate_update` | 摘要覆盖（v2 替 v1）、filter-key 隔离、session 归属、版本/边界字段 |
 | 7 | `summary/truncation_retain` | 长历史摘要 + 新事件后做两种读回：全量事件列表与 `WithEventNum` 截断上下文窗口（压缩对话真实回放路径）；两视图均需保持 保留事件 + summary + 新事件连贯，boundary 锚定在窗口外的事件上 |
 | 8 | `track/tool_and_subtask` | track 名隔离、时序保持、payload（含错误字段）保真；耗时字段归一化时抹除 |
