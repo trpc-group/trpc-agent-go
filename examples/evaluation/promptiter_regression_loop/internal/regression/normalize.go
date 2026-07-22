@@ -144,6 +144,13 @@ func normalizeAgentCase(
 	}
 	trace := firstTrace(evalCase.RunDetails)
 	result.Trace = normalizeTrace(trace)
+	if usage, ok := invocationUsage(evalCase.RunDetails); ok {
+		result.Trace.Usage.ModelCalls = usage.ModelCalls
+		result.Trace.Usage.ToolCalls = usage.ToolCalls
+		result.Trace.Usage.Measured = result.Trace.Usage.Measured && usage.Measured
+	} else {
+		result.Trace.Usage.Measured = false
+	}
 	if result.ErrorMessage != "" {
 		result.Passed = false
 	}
@@ -151,6 +158,45 @@ func normalizeAgentCase(
 		return result.Metrics[i].Name < result.Metrics[j].Name
 	})
 	return result, evaluated, nil
+}
+
+func invocationUsage(details []*evaluation.EvaluationCaseRunDetails) (Usage, bool) {
+	usage := Usage{Measured: true}
+	found := false
+	for _, detail := range details {
+		if detail == nil || detail.Inference == nil {
+			usage.Measured = false
+			continue
+		}
+		found = true
+		if len(detail.Inference.Inferences) == 0 {
+			usage.Measured = false
+		}
+		for _, invocation := range detail.Inference.Inferences {
+			if invocation == nil {
+				usage.Measured = false
+				continue
+			}
+			for _, response := range invocation.IntermediateResponses {
+				if response == nil {
+					usage.Measured = false
+					continue
+				}
+				usage.ModelCalls++
+			}
+			if invocation.FinalResponse != nil {
+				usage.ModelCalls++
+			}
+			for _, toolCall := range invocation.Tools {
+				if toolCall == nil {
+					usage.Measured = false
+					continue
+				}
+				usage.ToolCalls++
+			}
+		}
+	}
+	return usage, found
 }
 
 func firstRunResult(results []*evalresult.EvalCaseResult) *evalresult.EvalCaseResult {

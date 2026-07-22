@@ -54,7 +54,7 @@ const (
 	FailureMetric FailureCategory = "metric_failure"
 )
 
-// Usage records usage that can be measured from an evaluation trace.
+// Usage records measured token, call, tool-execution, and duration usage.
 type Usage struct {
 	PromptTokens     int           `json:"promptTokens"`
 	CompletionTokens int           `json:"completionTokens"`
