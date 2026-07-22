@@ -59,11 +59,11 @@ func isMetadataArchiveName(name string) bool {
 }
 
 func TestBoundedOutputLimitsRetainedBytes(t *testing.T) {
-	output := newBoundedOutput(4)
+	output := codeexecutor.NewBoundedOutput(4)
 	n, err := output.Write([]byte("abcdefgh"))
 	require.NoError(t, err)
 	require.Equal(t, 8, n)
-	require.Equal(t, 4, len(output.data))
+	require.Equal(t, 4, output.RetainedBytes())
 	require.Equal(t, "abcd\n... [output truncated at 4 bytes]", output.String())
 }
 

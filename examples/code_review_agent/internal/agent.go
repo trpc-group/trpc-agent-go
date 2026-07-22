@@ -14,6 +14,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -140,7 +143,7 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	}
 	diffSummary := DiffSummary(files)
 	task.DiffSummary = diffSummary
-	if err := a.storage.SaveTask(ctx, task); err != nil {
+	if err := a.storage.UpdateTaskDiff(ctx, task.ID, task.InputType, task.InputPath, task.DiffSummary); err != nil {
 		return nil, fmt.Errorf("save diff summary: %w", err)
 	}
 
@@ -176,7 +179,10 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	var sandboxRuns []SandboxRun
 
 	if !input.DryRun && input.RepoPath != "" {
-		sandboxCommands := a.determineSandboxCommands(files, input.RepoPath)
+		sandboxCommands, err := a.determineSandboxCommands(files, input.RepoPath)
+		if err != nil {
+			return nil, fmt.Errorf("determine sandbox commands: %w", err)
+		}
 
 		for _, cmd := range sandboxCommands {
 			decision, reason := a.policy.Decide(cmd)
@@ -289,18 +295,61 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 
 // determineSandboxCommands figures out what commands to run in the
 // sandbox based on the changed files.
-func (a *ReviewAgent) determineSandboxCommands(files []DiffFile, repoPath string) []string {
-	var cmds []string
-	hasGoFiles := false
+func (a *ReviewAgent) determineSandboxCommands(files []DiffFile, repoPath string) ([]string, error) {
+	root, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve repository path: %w", err)
+	}
+	modules := map[string]bool{}
 	for _, f := range files {
-		if !f.IsDeleted && strings.HasSuffix(f.Path, ".go") {
-			hasGoFiles = true
+		base := filepath.Base(filepath.FromSlash(f.Path))
+		if !strings.HasSuffix(f.Path, ".go") && base != "go.mod" && base != "go.sum" {
+			continue
+		}
+		module, err := owningGoModule(root, f.Path)
+		if err != nil {
+			return nil, err
+		}
+		modules[module] = true
+	}
+	ordered := make([]string, 0, len(modules))
+	for module := range modules {
+		ordered = append(ordered, module)
+	}
+	sort.Strings(ordered)
+	cmds := make([]string, 0, len(ordered)*2)
+	for _, module := range ordered {
+		prefix := "go "
+		if module != "." {
+			if strings.ContainsAny(module, " \t\r\n") {
+				return nil, fmt.Errorf("Go module path %q contains unsupported whitespace", module)
+			}
+			prefix += "-C ./" + filepath.ToSlash(module) + " "
+		}
+		cmds = append(cmds, prefix+"vet ./...")
+		cmds = append(cmds, prefix+"test ./... -count=1 -timeout=30s")
+	}
+	return cmds, nil
+}
+
+func owningGoModule(root, changedPath string) (string, error) {
+	clean := filepath.Clean(filepath.FromSlash(changedPath))
+	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("changed Go file escapes repository: %q", changedPath)
+	}
+	dir := filepath.Dir(clean)
+	for {
+		info, err := os.Stat(filepath.Join(root, dir, "go.mod"))
+		if err == nil && !info.IsDir() {
+			return dir, nil
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect module for %q: %w", changedPath, err)
+		}
+		if dir == "." {
 			break
 		}
+		dir = filepath.Dir(dir)
 	}
-	if hasGoFiles {
-		cmds = append(cmds, "go vet ./...")
-		cmds = append(cmds, "go test ./... -count=1 -timeout=30s")
-	}
-	return cmds
+	return "", fmt.Errorf("no go.mod owns changed Go file %q", changedPath)
 }

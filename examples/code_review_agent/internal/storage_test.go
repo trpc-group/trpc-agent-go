@@ -132,6 +132,7 @@ func TestStorage_SaveSandboxRun(t *testing.T) {
 	runs, err := s.GetSandboxRunsByTask(ctx, taskID)
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
+	require.Equal(t, taskID, runs[0].TaskID)
 	require.Equal(t, "go test ./...", runs[0].Command)
 }
 

@@ -5,22 +5,31 @@
 #
 # Usage: bash scripts/run_checks.sh <repo-path>
 #
-set -euo pipefail
+set -uo pipefail
 
 REPO_PATH="${1:-.}"
 cd "$REPO_PATH"
 
 echo "=== Running go vet ==="
-go vet ./... 2>&1 || true
+status=0
+if ! go vet ./... 2>&1; then
+    status=1
+fi
 
 echo ""
 echo "=== Running go test ==="
-go test ./... -count=1 -timeout=30s 2>&1 || true
+if ! go test ./... -count=1 -timeout=30s 2>&1; then
+    status=1
+fi
 
 echo ""
 echo "=== Running staticcheck (if available) ==="
 if command -v staticcheck &>/dev/null; then
-    staticcheck ./... 2>&1 || true
+    if ! staticcheck ./... 2>&1; then
+        status=1
+    fi
 else
     echo "staticcheck not installed, skipping"
 fi
+
+exit "$status"

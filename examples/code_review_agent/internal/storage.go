@@ -57,6 +57,7 @@ type Artifact struct {
 type Storage interface {
 	InitSchema(ctx context.Context) error
 	SaveTask(ctx context.Context, task *ReviewTask) error
+	UpdateTaskDiff(ctx context.Context, taskID, inputType, inputPath, diffSummary string) error
 	UpdateTaskStatus(ctx context.Context, taskID, status string, completedAt time.Time, totalDurationMs int64) error
 	SaveSandboxRun(ctx context.Context, run *SandboxRun) error
 	SavePermissionDecision(ctx context.Context, d *PermissionRecord) error
@@ -198,10 +199,11 @@ CREATE INDEX IF NOT EXISTS idx_monitoring_summary_task ON monitoring_summary(tas
 	return nil
 }
 
-// SaveTask inserts or replaces a review task.
+// SaveTask inserts a new review task. Duplicate IDs are rejected so a new
+// review can never inherit the persisted graph of an older task.
 func (s *SQLiteStorage) SaveTask(ctx context.Context, task *ReviewTask) error {
 	_, err := s.db.ExecContext(ctx, `
-INSERT OR REPLACE INTO review_tasks
+INSERT INTO review_tasks
     (id, input_type, input_path, diff_summary, status, created_at, completed_at, total_duration_ms)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		task.ID, task.InputType, task.InputPath, task.DiffSummary,
@@ -209,6 +211,27 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		formatTimePtr(task.CompletedAt), task.TotalDurationMs,
 	)
 	return err
+}
+
+// UpdateTaskDiff stores input metadata discovered after loading the review.
+func (s *SQLiteStorage) UpdateTaskDiff(
+	ctx context.Context, taskID, inputType, inputPath, diffSummary string,
+) error {
+	result, err := s.db.ExecContext(ctx, `
+UPDATE review_tasks
+SET input_type = ?, input_path = ?, diff_summary = ?
+WHERE id = ?`, inputType, inputPath, diffSummary, taskID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return fmt.Errorf("update task diff: task %q not found", taskID)
+	}
+	return nil
 }
 
 // UpdateTaskStatus updates the status and completion info of a task.
@@ -380,7 +403,7 @@ ORDER BY
 // GetSandboxRunsByTask retrieves all sandbox runs for a task.
 func (s *SQLiteStorage) GetSandboxRunsByTask(ctx context.Context, taskID string) ([]SandboxRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT id, command, permission_decision, permission_reason,
+SELECT id, task_id, command, permission_decision, permission_reason,
        status, stdout, stderr, exit_code, duration_ms, timed_out, error
 FROM sandbox_runs WHERE task_id = ?`, taskID,
 	)
@@ -394,7 +417,7 @@ FROM sandbox_runs WHERE task_id = ?`, taskID,
 		var r SandboxRun
 		var timedOut int
 		var durationMs int64
-		if err := rows.Scan(&r.ID, &r.Command,
+		if err := rows.Scan(&r.ID, &r.TaskID, &r.Command,
 			&r.PermissionDecision, &r.PermissionReason,
 			&r.Status, &r.Stdout, &r.Stderr, &r.ExitCode,
 			&durationMs, &timedOut, &r.Error); err != nil {

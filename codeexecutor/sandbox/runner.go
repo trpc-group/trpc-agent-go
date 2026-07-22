@@ -48,8 +48,9 @@ func (r *Runtime) RunProgram(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	stdout := newLimitedBuffer(r.outputMaxBytes)
-	stderr := newLimitedBuffer(r.outputMaxBytes)
+	outputLimit := effectiveOutputLimit(r.outputMaxBytes, spec.MaxOutputBytes)
+	stdout := newLimitedBuffer(outputLimit)
+	stderr := newLimitedBuffer(outputLimit)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if spec.Stdin != "" {
@@ -92,6 +93,16 @@ func (r *Runtime) RunProgram(
 		}
 	}
 	return result, nil
+}
+
+func effectiveOutputLimit(policyLimit, requestLimit int) int {
+	if policyLimit <= 0 {
+		policyLimit = defaultOutputMaxBytes
+	}
+	if requestLimit > 0 && requestLimit < policyLimit {
+		return requestLimit
+	}
+	return policyLimit
 }
 
 type runPreparation struct {

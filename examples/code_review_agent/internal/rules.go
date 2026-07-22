@@ -107,7 +107,7 @@ func (e *RuleEngine) Run(files []DiffFile) []Finding {
 		// Run test-missing check at file level.
 		if isGo {
 			if tr, ok := (findTestMissingRule(e.rules)); ok {
-				finds := tr.CheckFile(file)
+				finds := tr.CheckFile(file, files)
 				for i := range finds {
 					if finds[i].File == "" {
 						finds[i].File = file.Path
@@ -132,7 +132,7 @@ func (e *RuleEngine) Run(files []DiffFile) []Finding {
 // FileLevelRule extends Rule with a whole-file check.
 type FileLevelRule interface {
 	Rule
-	CheckFile(file DiffFile) []Finding
+	CheckFile(file DiffFile, files []DiffFile) []Finding
 }
 
 func findTestMissingRule(rules []Rule) (FileLevelRule, bool) {

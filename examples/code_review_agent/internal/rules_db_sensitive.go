@@ -11,6 +11,7 @@
 package internal
 
 import (
+	"path"
 	"regexp"
 	"strings"
 )
@@ -208,7 +209,7 @@ var (
 
 // CheckFile checks if the added .go file (non-test) has exported
 // functions but no test file exists.
-func (r *TestMissingRule) CheckFile(file DiffFile) []Finding {
+func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 	if file.IsDeleted {
 		return nil
 	}
@@ -241,10 +242,13 @@ func (r *TestMissingRule) CheckFile(file DiffFile) []Finding {
 	if len(exportedFuncs) == 0 {
 		return nil
 	}
+	for _, changed := range files {
+		if !changed.IsDeleted && strings.HasSuffix(changed.Path, "_test.go") &&
+			path.Dir(changed.Path) == path.Dir(file.Path) {
+			return nil
+		}
+	}
 
-	// Check if there's a test file (heuristic: same name + _test.go).
-	// Since we only have the diff, we check if any added line is in a
-	// _test.go file in the same diff. If not, flag it.
 	return []Finding{{
 		Severity: SeverityLow,
 		Title:    "New exported functions without tests",

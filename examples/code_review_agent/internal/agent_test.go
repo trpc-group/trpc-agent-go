@@ -13,8 +13,10 @@ package internal
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -213,4 +215,47 @@ func TestAgentCancellationPersistsTerminalStatus(t *testing.T) {
 	task, getErr := storage.GetTask(context.Background(), "cancel-after-save")
 	require.NoError(t, getErr)
 	require.Equal(t, "failed", task.Status)
+}
+
+func TestAgentRejectsDuplicateTaskIDWithoutReplacingGraph(t *testing.T) {
+	storage := newTestStorage(t)
+	agent := NewReviewAgent(storage)
+	input := ReviewInput{
+		TaskID: "stable-task-id", DiffFile: filepath.Join("..", "fixtures", "02_security.diff"), DryRun: true,
+	}
+	first, err := agent.Review(context.Background(), input)
+	require.NoError(t, err)
+	firstFindings, err := storage.GetFindingsByTask(context.Background(), first.TaskID)
+	require.NoError(t, err)
+	require.NotEmpty(t, firstFindings)
+
+	input.DiffFile = filepath.Join("..", "fixtures", "01_clean.diff")
+	_, err = agent.Review(context.Background(), input)
+	require.ErrorContains(t, err, "save task")
+	after, err := storage.GetFindingsByTask(context.Background(), first.TaskID)
+	require.NoError(t, err)
+	require.Equal(t, firstFindings, after)
+}
+
+func TestDetermineSandboxCommandsChecksEveryChangedModule(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "nested"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "go.mod"), []byte("module example.com/nested\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested.go"), []byte("package nested\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested_test.go"), []byte("package nested\nimport \"testing\"\nfunc TestFailure(t *testing.T) { t.Fatal(\"nested module checked\") }\n"), 0o600))
+
+	agent := NewReviewAgent(newTestStorage(t))
+	commands, err := agent.determineSandboxCommands([]DiffFile{
+		{Path: "root.go"}, {Path: "nested/go.mod"},
+	}, repo)
+	require.NoError(t, err)
+	require.Equal(t, []string{
+		"go vet ./...", "go test ./... -count=1 -timeout=30s",
+		"go -C ./nested vet ./...", "go -C ./nested test ./... -count=1 -timeout=30s",
+	}, commands)
+
+	sandbox := NewSandbox(SandboxConfig{WorkDir: repo, Timeout: 30 * time.Second})
+	run := sandbox.Execute(context.Background(), "nested-module", commands[3], DecisionAllow, "test")
+	require.Equal(t, SandboxStatusFailed, run.Status, "nested failing test was not executed: %+v", run)
 }

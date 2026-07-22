@@ -270,3 +270,30 @@ func TestRuleEngine_AllFixtures(t *testing.T) {
 		})
 	}
 }
+
+func TestTestMissingRuleRecognizesTestAddedInSameDiff(t *testing.T) {
+	diff := `diff --git a/service/foo.go b/service/foo.go
+new file mode 100644
+--- /dev/null
++++ b/service/foo.go
+@@ -0,0 +1,3 @@
++package service
++
++func Exported() {}
+diff --git a/service/foo_test.go b/service/foo_test.go
+new file mode 100644
+--- /dev/null
++++ b/service/foo_test.go
+@@ -0,0 +1,5 @@
++package service
++
++import "testing"
++
++func TestExported(t *testing.T) { Exported() }
+`
+	files, err := ParseDiffString(diff)
+	require.NoError(t, err)
+	for _, finding := range DefaultRuleEngine().Run(files) {
+		require.NotEqual(t, "TEST_MISSING", finding.RuleID, "test added in the same diff was ignored: %+v", finding)
+	}
+}

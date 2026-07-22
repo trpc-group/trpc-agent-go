@@ -1104,12 +1104,13 @@ func (r *workspaceRuntime) ExecuteInline(
 		return codeexecutor.RunResult{}, err
 	}
 	defer r.Cleanup(ctx, ws)
-	var allOut, allErr strings.Builder
+	allOut := codeexecutor.NewBoundedOutput(0)
+	allErr := codeexecutor.NewBoundedOutput(0)
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		pf := codeexecutor.PutFile{
@@ -1118,7 +1119,7 @@ func (r *workspaceRuntime) ExecuteInline(
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		argv := append([]string{}, args...)
@@ -1131,13 +1132,13 @@ func (r *workspaceRuntime) ExecuteInline(
 		}
 		res, err := r.RunProgram(ctx, ws, spec)
 		if err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 		}
 		if res.Stdout != "" {
-			allOut.WriteString(res.Stdout)
+			_, _ = allOut.Write([]byte(res.Stdout))
 		}
 		if res.Stderr != "" {
-			allErr.WriteString(res.Stderr)
+			_, _ = allErr.Write([]byte(res.Stderr))
 		}
 	}
 	dur := time.Since(start)
@@ -1209,9 +1210,9 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	stdout := newBoundedOutput(maxOutputBytes)
-	stderr := newBoundedOutput(maxOutputBytes)
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	stdout := codeexecutor.NewBoundedOutput(maxOutputBytes)
+	stderr := codeexecutor.NewBoundedOutput(maxOutputBytes)
+	_, err = stdcopy.StdCopy(stdout, stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr
@@ -1227,46 +1228,6 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
 	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
-}
-
-type boundedOutput struct {
-	data      []byte
-	limit     int
-	truncated bool
-}
-
-func newBoundedOutput(limit int) boundedOutput {
-	if limit <= 0 {
-		limit = maxReadSizeBytes
-	}
-	return boundedOutput{
-		data:  make([]byte, 0, min(limit, 4096)),
-		limit: limit,
-	}
-}
-
-func (b *boundedOutput) Write(p []byte) (int, error) {
-	original := len(p)
-	remaining := b.limit - len(b.data)
-	if remaining <= 0 {
-		b.truncated = b.truncated || original > 0
-		return original, nil
-	}
-	if len(p) > remaining {
-		b.data = append(b.data, p[:remaining]...)
-		b.truncated = true
-		return original, nil
-	}
-	b.data = append(b.data, p...)
-	return original, nil
-}
-
-func (b *boundedOutput) String() string {
-	result := string(b.data)
-	if b.truncated {
-		result += fmt.Sprintf("\n... [output truncated at %d bytes]", b.limit)
-	}
-	return result
 }
 
 func sanitize(s string) string {
