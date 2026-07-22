@@ -55,8 +55,13 @@ func (f *fileToolSet) listFile(
 ) (*listFileResponse, error) {
 	rsp := &listFileResponse{
 		BaseDirectory: f.baseDir,
-		Path:          req.Path,
 	}
+	if req == nil {
+		err := fmt.Errorf("request cannot be nil")
+		rsp.Message = fmt.Sprintf("Error: %v", err)
+		return rsp, err
+	}
+	rsp.Path = req.Path
 
 	ref, err := fileref.Parse(req.Path)
 	if err != nil {
