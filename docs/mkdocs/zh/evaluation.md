@@ -866,7 +866,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` 默认用于从 Registry 选择评估器实现，常见内置评估器如下：
+`metricName` 用于从 Registry 选择评估器实现，并作为结果中的指标标识。常见内置评估器如下：
 
 - `tool_trajectory_avg_score`：工具轨迹一致性评估器，需要配置预期输出。
 - `final_response_avg_score`：最终响应评估器，不需要 LLM，需要配置预期输出。
@@ -2869,14 +2869,13 @@ agentEvaluator, err := evaluation.New(
 
 #### 自定义评估器
 
-当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。指标文件通过 `evaluatorName` 选择评估器实现，`metricName` 仍作为结果中的指标实例名；如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
+当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。指标文件通过 `metricName` 选择评估器实现，并把它作为结果中的指标标识。如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
 
 指标配置示例：
 
 ```json
 {
   "metricName": "support_response_policy",
-  "evaluatorName": "response_policy",
   "threshold": 1,
   "extension": {
     "requiredPhrase": "support"
@@ -2888,7 +2887,7 @@ agentEvaluator, err := evaluation.New(
 
 ```go
 reg := registry.New()
-if err := reg.Register("response_policy", responsePolicyEvaluator{}); err != nil {
+if err := reg.Register("support_response_policy", responsePolicyEvaluator{}); err != nil {
 	log.Fatalf("register evaluator: %v", err)
 }
 

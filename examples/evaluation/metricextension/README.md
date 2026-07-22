@@ -7,7 +7,7 @@ It uses local file managers and a real LLM support agent.
 ## What It Demonstrates
 
 - Registering a custom evaluator in `evaluation/evaluator/registry`.
-- Routing a metric instance to that evaluator with `EvaluatorName`.
+- Routing a metric instance to that evaluator with `MetricName`.
 - Storing evaluator-specific policy settings in `EvalMetric.Extension`.
 - Returning normal metric `Score` and `Status` from the evaluator.
 
@@ -17,8 +17,7 @@ Configure the OpenAI-compatible model service first.
 
 ```bash
 export OPENAI_API_KEY="sk-..."
-# Optional. Defaults to https://api.openai.com/v1 when not set.
-export OPENAI_BASE_URL="https://api.openai.com/v1"
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
 ```
 
 ```bash
@@ -36,7 +35,6 @@ go run . \
 ```json
 {
   "metricName": "support_response_policy",
-  "evaluatorName": "response_policy",
   "threshold": 1,
   "extension": {
     "requiredPhrase": "support"
@@ -44,7 +42,7 @@ go run . \
 }
 ```
 
-`MetricName` is the metric instance name shown in results. `EvaluatorName` selects the evaluator implementation. The custom evaluator reads `requiredPhrase` from `EvalMetric.Extension` and checks whether the final response contains it.
+`MetricName` selects the evaluator implementation from Registry and is also the metric name shown in results. The custom evaluator reads `requiredPhrase` from `EvalMetric.Extension` and checks whether the final response contains it.
 
 ## Data Layout
 

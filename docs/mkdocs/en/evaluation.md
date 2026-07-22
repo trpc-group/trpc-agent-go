@@ -865,7 +865,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` selects the evaluator implementation from Registry. The following evaluators are built in by default:
+`metricName` selects the evaluator implementation from Registry and identifies the metric in results. The following evaluators are built in by default:
 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
@@ -2871,14 +2871,13 @@ agentEvaluator, err := evaluation.New(
 
 #### Custom Evaluators
 
-When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. A metric file uses `evaluatorName` to select the evaluator implementation, while `metricName` remains the metric instance name shown in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
+When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. A metric file uses `metricName` to select the evaluator implementation and to identify the metric in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
 
 Example metric configuration:
 
 ```json
 {
   "metricName": "support_response_policy",
-  "evaluatorName": "response_policy",
   "threshold": 1,
   "extension": {
     "requiredPhrase": "support"
@@ -2890,7 +2889,7 @@ Example wiring:
 
 ```go
 reg := registry.New()
-if err := reg.Register("response_policy", responsePolicyEvaluator{}); err != nil {
+if err := reg.Register("support_response_policy", responsePolicyEvaluator{}); err != nil {
 	log.Fatalf("register evaluator: %v", err)
 }
 

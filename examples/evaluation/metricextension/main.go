@@ -38,7 +38,7 @@ const (
 	appName                     = "metric-extension-app"
 	defaultEvalSetID            = "support-policy-basic"
 	supportAgentName            = "support-agent"
-	responsePolicyEvaluatorName = "response_policy"
+	responsePolicyEvaluatorName = "support_response_policy"
 )
 
 func main() {

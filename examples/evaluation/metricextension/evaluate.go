@@ -11,6 +11,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
@@ -31,8 +32,14 @@ func (responsePolicyEvaluator) Description() string {
 
 func (responsePolicyEvaluator) Evaluate(_ context.Context, actuals, _ []*evalset.Invocation,
 	evalMetric *metric.EvalMetric) (*evaluator.EvaluateResult, error) {
-	extension, _ := evalMetric.Extension.(map[string]any)
-	requiredPhrase, _ := extension["requiredPhrase"].(string)
+	extension, ok := evalMetric.Extension.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("extension must be an object")
+	}
+	requiredPhrase, ok := extension["requiredPhrase"].(string)
+	if !ok || requiredPhrase == "" {
+		return nil, fmt.Errorf("extension.requiredPhrase must be a non-empty string")
+	}
 	requiredPhrase = strings.ToLower(requiredPhrase)
 	results := make([]*evaluator.PerInvocationResult, 0, len(actuals))
 	overallScore := 0.0
