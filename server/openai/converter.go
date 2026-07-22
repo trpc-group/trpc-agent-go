@@ -440,6 +440,12 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 		// Use the last event if no event with usage found.
 		finalEvent = events[len(events)-1]
 	}
+	if finalEvent.Response != nil && len(finalEvent.Response.Choices) > 0 {
+		if finalContent := finalEvent.Response.Choices[0].Message.Content; finalContent != "" {
+			allContent.Reset()
+			allContent.WriteString(finalContent)
+		}
+	}
 	// Build the aggregated message.
 	msg := model.Message{
 		Role:      model.RoleAssistant,

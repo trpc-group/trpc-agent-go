@@ -86,7 +86,7 @@ ag, err := codex.New(
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
 | `type == "turn.failed"` 或 `type == "error"` | 不携带 `Response.Error` 的非终止 error observation chunk；命令结束后再发出一个终止 error |
-| `item.type == "agent_message"` | partial assistant chunk 事件；最后一个 item 同时作为 final response 内容 |
+| `item.type == "agent_message"` | partial assistant chunk 事件；最后一个 `agent_message` item 同时作为 final response 内容 |
 | `type == "turn.completed"` | final response usage |
 
 MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：`mcp__<server>__<tool>`。

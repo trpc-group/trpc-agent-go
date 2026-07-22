@@ -36,6 +36,7 @@ const (
 	codexItemImageGeneration = "image_generation"
 	codexItemSkill           = "skill"
 	frameworkToolSkillRun    = "skill_run"
+	codexErrorObservationID  = "codex-error-observation"
 )
 
 // codexEvent represents one top-level JSONL event produced by Codex CLI.
@@ -246,7 +247,7 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 	}
 	if item.Type == codexItemAgentMessage {
 		result.FinalMessage = item.Text
-		result.FinalMessageID = strings.TrimSpace(item.ID)
+		result.FinalMessageID = scopedCodexResponseID(invocationID, item.ID)
 		evt := newAssistantMessageEvent(invocationID, author, result.FinalMessageID, item.Text)
 		if evt == nil {
 			return nil
@@ -305,7 +306,12 @@ func errorEventFromResponseError(invocationID, author string, responseErr *model
 			},
 		}
 	}
+	responseID := ""
+	if !terminal {
+		responseID = scopedCodexResponseID(invocationID, codexErrorObservationID)
+	}
 	rsp := &model.Response{
+		ID:        responseID,
 		Object:    object,
 		Done:      done,
 		IsPartial: partial,
@@ -313,6 +319,19 @@ func errorEventFromResponseError(invocationID, author string, responseErr *model
 		Error:     eventErr,
 	}
 	return event.NewResponseEvent(invocationID, author, rsp)
+}
+
+// scopedCodexResponseID qualifies Codex-local item IDs with the framework invocation ID.
+func scopedCodexResponseID(invocationID, itemID string) string {
+	itemID = strings.TrimSpace(itemID)
+	invocationID = strings.TrimSpace(invocationID)
+	if itemID == "" {
+		return ""
+	}
+	if invocationID == "" {
+		return itemID
+	}
+	return invocationID + ":" + itemID
 }
 
 // newAssistantMessageEvent creates a partial response segment for one complete Codex assistant item.

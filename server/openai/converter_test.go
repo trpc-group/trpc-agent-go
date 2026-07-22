@@ -655,6 +655,50 @@ func TestConverter_aggregateStreamingEvents(t *testing.T) {
 				assert.Equal(t, "tool_calls", *resp.Choices[0].FinishReason)
 			},
 		},
+		{
+			name: "final message content overrides prior assistant observations",
+			events: []*event.Event{
+				{
+					ID: "event-observation",
+					Response: &model.Response{
+						Object: model.ObjectTypeChatCompletionChunk,
+						Choices: []model.Choice{
+							{
+								Delta: model.Message{
+									Content: "good luck",
+								},
+							},
+						},
+					},
+				},
+				{
+					ID: "event-final",
+					Response: &model.Response{
+						Object: model.ObjectTypeChatCompletion,
+						Choices: []model.Choice{
+							{
+								Message: model.Message{
+									Content: "practice makes perfect",
+								},
+							},
+						},
+						Usage: &model.Usage{
+							PromptTokens:     3,
+							CompletionTokens: 4,
+							TotalTokens:      7,
+						},
+					},
+				},
+			},
+			wantErr: false,
+			check: func(t *testing.T, resp *openAIResponse) {
+				assert.NotNil(t, resp)
+				assert.Equal(t, "event-final", resp.ID)
+				assert.Equal(t, "practice makes perfect", resp.Choices[0].Message.Content)
+				assert.NotNil(t, resp.Usage)
+				assert.Equal(t, 7, resp.Usage.TotalTokens)
+			},
+		},
 	}
 
 	for _, tt := range tests {

@@ -144,9 +144,9 @@ func TestCodexAgent_Run_CreateParsesEventsAndStoresThread(t *testing.T) {
 	require.Equal(t, `{"command":"/usr/bin/bash -lc 'printf hi'"}`, string(events[0].Choices[0].Message.ToolCalls[0].Function.Arguments))
 	require.Equal(t, "hi", events[1].Choices[0].Message.Content)
 	require.Equal(t, "done", events[2].Choices[0].Delta.Content)
-	require.Equal(t, "item_1", events[2].Response.ID)
+	require.Equal(t, "inv-1:item_1", events[2].Response.ID)
 	require.Equal(t, "done", events[3].Choices[0].Message.Content)
-	require.Equal(t, "item_1", events[3].Response.ID)
+	require.Equal(t, "inv-1:item_1", events[3].Response.ID)
 	require.Equal(t, 10, events[3].Usage.PromptTokens)
 	require.Equal(t, 3, events[3].Usage.CompletionTokens)
 	require.Equal(t, 13, events[3].Usage.TotalTokens)
@@ -252,7 +252,7 @@ func TestCodexAgent_Run_StreamsAssistantMessagesAroundToolEvents(t *testing.T) {
 	require.False(t, first.IsFinalResponse())
 	require.True(t, first.IsPartial)
 	require.Equal(t, model.ObjectTypeChatCompletionChunk, first.Object)
-	require.Equal(t, "item_0", first.Response.ID)
+	require.Equal(t, "inv-stream-2:item_0", first.Response.ID)
 	require.Equal(t, "good luck", first.Choices[0].Delta.Content)
 	select {
 	case <-returned:
@@ -267,10 +267,10 @@ func TestCodexAgent_Run_StreamsAssistantMessagesAroundToolEvents(t *testing.T) {
 	require.False(t, events[3].IsFinalResponse())
 	require.True(t, events[3].IsPartial)
 	require.Equal(t, "practice makes perfect", events[3].Choices[0].Delta.Content)
-	require.Equal(t, "item_2", events[3].Response.ID)
+	require.Equal(t, "inv-stream-2:item_2", events[3].Response.ID)
 	require.True(t, events[4].IsFinalResponse())
 	require.Equal(t, "practice makes perfect", events[4].Choices[0].Message.Content)
-	require.Equal(t, "item_2", events[4].Response.ID)
+	require.Equal(t, "inv-stream-2:item_2", events[4].Response.ID)
 	require.Equal(t, 7, events[4].Usage.TotalTokens)
 }
 
@@ -768,7 +768,7 @@ func TestParseTranscriptEvents_CompletedToolWithoutStarted(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "thread-parse", result.ThreadID)
 	require.Equal(t, "done", result.FinalMessage)
-	require.Equal(t, "item_1", result.FinalMessageID)
+	require.Equal(t, "inv-parse-1:item_1", result.FinalMessageID)
 	require.Len(t, result.Events, 3)
 	require.True(t, result.Events[0].IsToolCallResponse())
 	require.True(t, result.Events[1].IsToolResultResponse())
@@ -777,6 +777,21 @@ func TestParseTranscriptEvents_CompletedToolWithoutStarted(t *testing.T) {
 	require.Equal(t, "/tmp\n", result.Events[1].Choices[0].Message.Content)
 	require.True(t, result.Events[2].IsPartial)
 	require.Equal(t, "done", result.Events[2].Choices[0].Delta.Content)
+}
+
+func TestParseTranscriptEvents_ScopesAssistantResponseIDsByInvocation(t *testing.T) {
+	transcript := `{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"done"}}`
+	first, err := parseTranscriptEvents([]byte(transcript), "inv-scope-1", "codex")
+	require.NoError(t, err)
+	second, err := parseTranscriptEvents([]byte(transcript), "inv-scope-2", "codex")
+	require.NoError(t, err)
+	require.Len(t, first.Events, 1)
+	require.Len(t, second.Events, 1)
+	require.Equal(t, "inv-scope-1:item_1", first.FinalMessageID)
+	require.Equal(t, "inv-scope-1:item_1", first.Events[0].Response.ID)
+	require.Equal(t, "inv-scope-2:item_1", second.FinalMessageID)
+	require.Equal(t, "inv-scope-2:item_1", second.Events[0].Response.ID)
+	require.NotEqual(t, first.FinalMessageID, second.FinalMessageID)
 }
 
 func TestParseTranscriptEvents_MCPToolCallMapping(t *testing.T) {
@@ -847,11 +862,13 @@ func TestParseTranscriptEvents_ErrorEventMapping(t *testing.T) {
 	require.True(t, result.Events[0].IsPartial)
 	require.Nil(t, result.Events[0].Error)
 	require.False(t, result.Events[0].IsTerminalError())
+	require.Equal(t, "inv-parse-error-1:codex-error-observation", result.Events[0].Response.ID)
 	require.Equal(t, "turn failed", result.Events[0].Choices[0].Delta.Content)
 	require.False(t, result.Events[1].Done)
 	require.True(t, result.Events[1].IsPartial)
 	require.Nil(t, result.Events[1].Error)
 	require.False(t, result.Events[1].IsTerminalError())
+	require.Equal(t, "inv-parse-error-1:codex-error-observation", result.Events[1].Response.ID)
 	require.Equal(t, "top-level error", result.Events[1].Choices[0].Delta.Content)
 	require.Equal(t, "top-level error", result.Error.Message)
 }
@@ -879,6 +896,7 @@ func TestErrorEventFromRecord(t *testing.T) {
 	require.False(t, evt.Done)
 	require.True(t, evt.IsPartial)
 	require.Nil(t, evt.Error)
+	require.Equal(t, "inv-error-record:codex-error-observation", evt.Response.ID)
 	require.Equal(t, "quoted failure", evt.Choices[0].Delta.Content)
 	require.Nil(t, errorEventFromResponseError("inv-error-nil", "codex", nil, false))
 }

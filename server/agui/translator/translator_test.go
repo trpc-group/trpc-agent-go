@@ -666,6 +666,45 @@ func TestTranslateErrorResponse(t *testing.T) {
 	assert.Equal(t, "run", runErr.RunID())
 }
 
+func TestTranslateErrorObservationClosesOnTerminalError(t *testing.T) {
+	translator := newTranslatorForTest(t)
+	if translator == nil {
+		return
+	}
+	observation := &model.Response{
+		ID:        "inv-1:codex-error-observation",
+		Object:    model.ObjectTypeChatCompletionChunk,
+		IsPartial: true,
+		Choices: []model.Choice{{
+			Delta: model.Message{Role: model.RoleAssistant, Content: "first failure"},
+		}},
+	}
+	events, err := translator.Translate(context.Background(), &agentevent.Event{Response: observation})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	start, ok := events[0].(*aguievents.TextMessageStartEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", start.MessageID)
+	content, ok := events[1].(*aguievents.TextMessageContentEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", content.MessageID)
+	assert.Equal(t, "first failure", content.Delta)
+	terminal := &model.Response{
+		Object: model.ObjectTypeError,
+		Done:   true,
+		Error:  &model.ResponseError{Message: "final failure"},
+	}
+	events, err = translator.Translate(context.Background(), &agentevent.Event{Response: terminal})
+	assert.NoError(t, err)
+	assert.Len(t, events, 2)
+	end, ok := events[0].(*aguievents.TextMessageEndEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "inv-1:codex-error-observation", end.MessageID)
+	runErr, ok := events[1].(*aguievents.RunErrorEvent)
+	assert.True(t, ok)
+	assert.Equal(t, "final failure", runErr.Message)
+}
+
 func TestTranslateErrorResponseClosesOpenToolCallDelta(t *testing.T) {
 	translator := newTranslatorImplForTest(t, WithToolCallDeltaStreamingEnabled(true))
 	if translator == nil {

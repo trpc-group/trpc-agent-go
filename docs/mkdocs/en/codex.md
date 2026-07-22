@@ -86,7 +86,7 @@ The agent emits assistant, tool, and error events as Codex JSONL records arrive,
 | `item.type == "mcp_tool_call"` | tool-call and tool-result response events |
 | Built-in tool items such as `web_search`, `file_change`, `image_view`, and `image_generation` | tool-call and tool-result response events |
 | `type == "turn.failed"` or `type == "error"` | non-terminal error observation chunk without `Response.Error`, followed by one terminal error after the command finishes |
-| `item.type == "agent_message"` | partial assistant chunk event; the last item also becomes the final response content |
+| `item.type == "agent_message"` | partial assistant chunk event; the last `agent_message` item also becomes the final response content |
 | `type == "turn.completed"` | final response usage |
 
 MCP tool calls are normalized to Claude Code-compatible names when possible: `mcp__<server>__<tool>`.
