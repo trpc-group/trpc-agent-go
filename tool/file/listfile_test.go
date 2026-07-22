@@ -49,6 +49,16 @@ func TestFileTool_listFile(t *testing.T) {
 	assert.Equal(t, 0, len(rsp.Folders))
 }
 
+func TestFileTool_listFile_NilRequest(t *testing.T) {
+	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
+
+	rsp, err := fileToolSet.listFile(context.Background(), nil)
+
+	assert.Error(t, err)
+	assert.NotNil(t, rsp)
+	assert.Contains(t, rsp.Message, "request cannot be nil")
+}
+
 func TestFileTool_listFile_Subdirectory(t *testing.T) {
 	// Create a temporary directory for testing.
 	tempDir := t.TempDir()
