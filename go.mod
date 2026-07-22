@@ -85,5 +85,5 @@ require (
 	golang.org/x/sys v0.30.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20240822170219-fc7c04adadcd // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240822170219-fc7c04adadcd // indirect
-	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.2.0.20260722072239-35f6c8db0c43
+	trpc.group/trpc-go/trpc-a2a-go/v2 v2.0.0-alpha.3
 )
