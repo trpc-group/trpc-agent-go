@@ -20,12 +20,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-// StreamingRespHandler handles the streaming response content
-// return the content will be added to the final aggregated content
-type StreamingRespHandler func(resp *model.Response) (string, error)
-
 // ConvertToA2AMessageFunc is the function signature for converting an invocation to an A2A protocol message.
-type ConvertToA2AMessageFunc func(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error)
+type ConvertToA2AMessageFunc func(agentName string, invocation *agent.Invocation) (*protocol.Message, error)
 
 // BuildMessageHook wraps the A2A message conversion with additional functionality.
 // The hook receives the next converter function and returns a new converter function.
@@ -275,13 +271,6 @@ func WithStreamingChannelBufSize(size int) Option {
 	}
 }
 
-// WithStreamingRespHandler sets a handler function to process streaming responses.
-func WithStreamingRespHandler(handler StreamingRespHandler) Option {
-	return func(a *A2AAgent) {
-		a.streamingRespHandler = handler
-	}
-}
-
 // WithTransferStateKey sets the keys in session state to transfer to the A2A agent message by metadata.
 //
 // Supported patterns:
@@ -302,8 +291,8 @@ func WithTransferStateKey(key ...string) Option {
 // Example - modify message after conversion:
 //
 //	a2aagent.WithBuildMessageHook(func(next a2aagent.ConvertToA2AMessageFunc) a2aagent.ConvertToA2AMessageFunc {
-//	    return func(isStream bool, agentName string, inv *agent.Invocation) (*protocol.Message, error) {
-//	        msg, err := next(isStream, agentName, inv)
+//	    return func(agentName string, inv *agent.Invocation) (*protocol.Message, error) {
+//	        msg, err := next(agentName, inv)
 //	        if err != nil {
 //	            return nil, err
 //	        }

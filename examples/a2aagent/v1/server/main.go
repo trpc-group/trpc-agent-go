@@ -11,10 +11,12 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
 	memorytaskmanager "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
@@ -24,6 +26,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
 var (
@@ -51,6 +55,25 @@ var (
 
 func main() {
 	flag.Parse()
+	currentTimeTool := function.NewFunctionTool(
+		func(_ context.Context, args currentTimeArgs) (currentTimeResult, error) {
+			location := time.Local
+			if args.Timezone != "" {
+				loaded, err := time.LoadLocation(args.Timezone)
+				if err != nil {
+					return currentTimeResult{}, fmt.Errorf("load timezone: %w", err)
+				}
+				location = loaded
+			}
+			now := time.Now().In(location)
+			return currentTimeResult{
+				Timezone: location.String(),
+				Time:     now.Format(time.RFC3339),
+			}, nil
+		},
+		function.WithName("current_time"),
+		function.WithDescription("Get the current time in an IANA timezone"),
+	)
 
 	llmAgent := llmagent.New(
 		"session_assistant",
@@ -60,8 +83,10 @@ func main() {
 		),
 		llmagent.WithInstruction(
 			"Remember the conversation within each session. "+
-				"When asked, summarize the earlier messages in that session.",
+				"When asked, summarize the earlier messages in that session. "+
+				"Use current_time for time questions.",
 		),
+		llmagent.WithTools([]tool.Tool{currentTimeTool}),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			Stream: *streaming,
 		}),
@@ -117,4 +142,13 @@ func main() {
 	if err := server.Start(*host); err != nil {
 		log.Fatalf("run A2A server: %v", err)
 	}
+}
+
+type currentTimeArgs struct {
+	Timezone string `json:"timezone" jsonschema:"description=IANA timezone such as Asia/Shanghai; empty means local time"`
+}
+
+type currentTimeResult struct {
+	Timezone string `json:"timezone"`
+	Time     string `json:"time"`
 }

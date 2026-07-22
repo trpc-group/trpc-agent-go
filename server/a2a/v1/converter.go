@@ -11,6 +11,7 @@ package a2a
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -71,7 +72,10 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 			// MediaType and Filename are only fallback signals for compatibility.
 			contentParts = append(contentParts, convertFilePart(part)...)
 		case protocol.Data:
-			dataStr := fmt.Sprintf("%s", c.Value)
+			dataStr, err := dataPartText(c.Value)
+			if err != nil {
+				return nil, err
+			}
 			contentParts = append(contentParts, model.ContentPart{
 				Type: model.ContentTypeText,
 				Text: &dataStr,
@@ -89,13 +93,23 @@ func (c *defaultA2AMessageToAgentMessage) ConvertToAgentMessage(
 	return &msg, nil
 }
 
+func dataPartText(value any) (string, error) {
+	if text, ok := value.(string); ok {
+		return text, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal A2A data part: %w", err)
+	}
+	return string(encoded), nil
+}
+
 // defaultEventToA2AMessage is the default implementation of EventToA2AMessageConverter.
 type defaultEventToA2AMessage struct {
 	// Enable ADK-compatible metadata keys (for example, "adk_type" instead
 	// of "type").
 	adkCompatibility          bool
 	graphEventObjectAllowlist []string
-	streamingEventType        StreamingEventType
 	eventPartMappers          []EventToA2APartMapper
 }
 
@@ -275,8 +289,7 @@ func (c *defaultEventToA2AMessage) buildTextParts(msg model.Message) []*protocol
 // message for streaming.
 //
 // For streaming responses, it converts delta content, tool calls, and code
-// execution events into A2A streaming results. The concrete A2A type can be
-// configured via WithStreamingEventType.
+// execution events into task artifact updates.
 func (c *defaultEventToA2AMessage) ConvertStreamingToA2AMessage(
 	ctx context.Context,
 	evt *event.Event,
@@ -403,22 +416,6 @@ func (c *defaultEventToA2AMessage) convertPartsToA2AStreamingResultWithMetadata(
 		return nil
 	}
 
-	if c.streamingEventType == StreamingEventTypeMessage {
-		ctxID := options.CtxID
-		taskID := options.TaskID
-		msg := protocol.NewMessageWithContext(
-			protocol.MessageRoleAgent,
-			parts,
-			&taskID,
-			&ctxID,
-		)
-		if evt.Response.ID != "" {
-			msg.MessageID = evt.Response.ID
-		}
-		msg.Metadata = metadata
-		return &msg
-	}
-
 	taskArtifact := protocol.NewTaskArtifactUpdateEvent(
 		options.TaskID,
 		options.CtxID,
@@ -440,7 +437,11 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	options EventToA2AStreamingOptions,
 ) (protocol.StreamEvent, error) {
 	choice := event.Response.Choices[0]
-	parts := c.buildTextParts(choice.Delta)
+	message := choice.Delta
+	if !event.Response.IsPartial {
+		message = choice.Message
+	}
+	parts := c.buildTextParts(message)
 
 	mapperParts, err := c.runEventPartMappers(ctx, event)
 	if err != nil {

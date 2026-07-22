@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -41,8 +42,6 @@ func New(opts ...Option) (*a2a.A2AServer, error) {
 		errorHandler: defaultErrorHandler,
 		// Enable ADK compatibility by default.
 		adkCompatibility: true,
-		// Default to ADK-style streaming: artifacts for content.
-		streamingEventType: StreamingEventTypeTaskArtifactUpdate,
 	}
 	for _, opt := range opts {
 		opt(options)
@@ -99,7 +98,6 @@ func buildProcessor(serverIdentity string, options *options) (*messageProcessor,
 		eventToA2AConverter = &defaultEventToA2AMessage{
 			adkCompatibility:          options.adkCompatibility,
 			graphEventObjectAllowlist: options.graphEventObjectAllowlist,
-			streamingEventType:        options.streamingEventType,
 			eventPartMappers:          options.eventPartMappers,
 		}
 	} else if len(options.eventPartMappers) > 0 {
@@ -107,17 +105,15 @@ func buildProcessor(serverIdentity string, options *options) (*messageProcessor,
 	}
 
 	return &messageProcessor{
-		runner:               procRunner,
-		a2aToAgentConverter:  a2aToAgentConverter,
-		eventToA2AConverter:  eventToA2AConverter,
-		errorHandler:         options.errorHandler,
-		debugLogging:         options.debugLogging,
-		adkCompatibility:     options.adkCompatibility,
-		responseRewriter:     options.responseRewriter,
-		streamingEventType:   options.streamingEventType,
-		structuredTaskErrors: options.structuredTaskErrors,
-		agentName:            serverIdentity,
-		runOptions:           options.runOptions,
+		runner:              procRunner,
+		a2aToAgentConverter: a2aToAgentConverter,
+		eventToA2AConverter: eventToA2AConverter,
+		errorHandler:        options.errorHandler,
+		debugLogging:        options.debugLogging,
+		adkCompatibility:    options.adkCompatibility,
+		responseRewriter:    options.responseRewriter,
+		agentName:           serverIdentity,
+		runOptions:          options.runOptions,
 	}, nil
 }
 
@@ -127,18 +123,11 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 		return nil, errors.New("agent card name is required")
 	}
 
-	var (
-		processor taskmanager.MessageProcessor
-		err       error
-	)
-	if options.processorBuilder != nil {
-		processor = options.processorBuilder(options.runner)
-	} else {
-		processor, err = buildProcessor(agentCard.Name, options)
-		if err != nil {
-			return nil, fmt.Errorf("failed to build processor: %w", err)
-		}
+	builtInProcessor, err := buildProcessor(agentCard.Name, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build processor: %w", err)
 	}
+	var processor taskmanager.MessageProcessor = builtInProcessor
 
 	if options.processorHook != nil {
 		processor = options.processorHook(processor)
@@ -234,17 +223,15 @@ func extractBasePath(urlStr string) string {
 
 // messageProcessor is the message processor for the a2a server.
 type messageProcessor struct {
-	runner               runner.Runner
-	a2aToAgentConverter  A2AMessageToAgentMessage
-	eventToA2AConverter  EventToA2AMessage
-	errorHandler         ErrorHandler
-	debugLogging         bool
-	adkCompatibility     bool
-	responseRewriter     ResponseRewriter
-	streamingEventType   StreamingEventType
-	structuredTaskErrors bool
-	agentName            string
-	runOptions           []agent.RunOption
+	runner              runner.Runner
+	a2aToAgentConverter A2AMessageToAgentMessage
+	eventToA2AConverter EventToA2AMessage
+	errorHandler        ErrorHandler
+	debugLogging        bool
+	adkCompatibility    bool
+	responseRewriter    ResponseRewriter
+	agentName           string
+	runOptions          []agent.RunOption
 }
 
 // taskOutputState tracks only the request-local information needed to frame
@@ -252,11 +239,66 @@ type messageProcessor struct {
 // selected TaskManager's responsibility.
 type taskOutputState struct {
 	seenArtifactIDs  map[string]struct{}
+	partialResponses map[string]string
 	fallbackArtifact string
 	lastArtifactID   string
 	finalMessage     *protocol.Message
 	finalMetadata    map[string]any
 	terminalError    bool
+	sawCompletion    bool
+}
+
+func streamEventText(result protocol.StreamEvent) (string, bool) {
+	var parts []*protocol.Part
+	switch value := result.(type) {
+	case *protocol.TaskArtifactUpdateEvent:
+		if value == nil {
+			return "", false
+		}
+		parts = value.Artifact.Parts
+	case *protocol.Message:
+		if value == nil {
+			return "", false
+		}
+		parts = value.Parts
+	default:
+		return "", false
+	}
+	var content strings.Builder
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		text, ok := part.Content.(protocol.Text)
+		if !ok {
+			return "", false
+		}
+		content.WriteString(string(text))
+	}
+	return content.String(), len(parts) > 0
+}
+
+func suppressRepeatedPartialSnapshot(
+	result protocol.StreamEvent,
+	partialText string,
+) protocol.StreamEvent {
+	text, textOnly := streamEventText(result)
+	if partialText == "" || !textOnly || text != partialText {
+		return result
+	}
+	switch value := result.(type) {
+	case *protocol.TaskArtifactUpdateEvent:
+		cloned := *value
+		cloned.Artifact = value.Artifact
+		cloned.Artifact.Parts = nil
+		return &cloned
+	case *protocol.Message:
+		cloned := *value
+		cloned.Parts = nil
+		return &cloned
+	default:
+		return result
+	}
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -501,9 +543,10 @@ func (m *messageProcessor) replyError(
 	return out, nil
 }
 
-func (m *messageProcessor) handleStreamingProcessingError(
+func (m *messageProcessor) sendTaskFailure(
 	ctx context.Context,
 	out chan<- protocol.StreamEvent,
+	taskID string,
 	msg *protocol.Message,
 	err error,
 ) error {
@@ -520,12 +563,40 @@ func (m *messageProcessor) handleStreamingProcessingError(
 
 	errMsg, handlerErr := m.errorHandler(ctx, msg, err)
 	if handlerErr != nil {
-		log.WarnfContext(ctx, "handle streaming processing error: %v", handlerErr)
+		log.WarnfContext(ctx, "handle task processing error: %v", handlerErr)
 		return handlerErr
 	}
-	if err := m.sendEvent(ctx, out, errMsg); err != nil {
-		log.ErrorfContext(ctx, "failed to send error message: %v", err)
-		return fmt.Errorf("failed to send error message: %w", err)
+	ctxID := ""
+	if msg != nil && msg.ContextID != nil {
+		ctxID = *msg.ContextID
+	}
+	respErr := model.ResponseErrorFromError(err, model.ErrorTypeRunError)
+	metadata := ia2a.WithResponseErrorMetadata(nil, respErr)
+	metadata[ia2a.MessageMetadataTaskStateKey] = string(protocol.TaskStateFailed)
+	if errMsg != nil {
+		errMsg.TaskID = &taskID
+		errMsg.ContextID = &ctxID
+		if errMsg.Metadata == nil {
+			errMsg.Metadata = cloneMetadata(metadata)
+		} else {
+			for key, value := range metadata {
+				errMsg.Metadata[key] = value
+			}
+		}
+	}
+	status := protocol.NewTaskStatusUpdateEvent(
+		taskID,
+		ctxID,
+		protocol.TaskStatus{
+			State:     protocol.TaskStateFailed,
+			Message:   errMsg,
+			Timestamp: time.Now().Format(time.RFC3339),
+		},
+		true,
+	)
+	status.Metadata = metadata
+	if err := m.sendEvent(ctx, out, &status); err != nil {
+		return fmt.Errorf("send task failure: %w", err)
 	}
 	return nil
 }
@@ -682,7 +753,7 @@ func (m *messageProcessor) streamAgentEvents(
 				r,
 			)
 			// Emit an error event before the caller closes out.
-			if err := m.handleStreamingProcessingError(ctx, out, a2aMsg,
+			if err := m.sendTaskFailure(ctx, out, taskID, a2aMsg,
 				fmt.Errorf("streaming processing panic: %v", r)); err != nil {
 				log.ErrorfContext(ctx, "failed to handle panic error: %v", err)
 			}
@@ -691,16 +762,17 @@ func (m *messageProcessor) streamAgentEvents(
 
 	state := &taskOutputState{
 		seenArtifactIDs:  make(map[string]struct{}),
+		partialResponses: make(map[string]string),
 		fallbackArtifact: protocol.GenerateArtifactID(),
 	}
 
 	err := m.sendTaskSubmittedEvent(ctx, out, taskID, userID, sessionID, a2aMsg)
-	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+	if m.abortStreamingOnError(ctx, out, taskID, a2aMsg, err) {
 		return
 	}
 
 	err = m.consumeAgentEvents(ctx, out, taskID, a2aMsg, agentMsgChan, state)
-	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+	if m.abortStreamingOnError(ctx, out, taskID, a2aMsg, err) {
 		return
 	}
 
@@ -710,12 +782,12 @@ func (m *messageProcessor) streamAgentEvents(
 
 	ctxID := *a2aMsg.ContextID
 	err = m.sendFinalArtifactEvent(ctx, out, taskID, ctxID, state)
-	if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+	if m.abortStreamingOnError(ctx, out, taskID, a2aMsg, err) {
 		return
 	}
 
 	err = m.sendTaskCompletedEvent(ctx, out, taskID, ctxID, state)
-	m.abortStreamingOnError(ctx, out, a2aMsg, err)
+	m.abortStreamingOnError(ctx, out, taskID, a2aMsg, err)
 }
 
 // consumeAgentEvents forwards events until the runner closes the channel,
@@ -734,7 +806,10 @@ func (m *messageProcessor) consumeAgentEvents(
 			return ctx.Err()
 		case agentEvent, ok := <-agentMsgChan:
 			if !ok {
-				return nil
+				if state.sawCompletion || state.terminalError {
+					return nil
+				}
+				return errors.New("runner event stream closed before completion")
 			}
 			done, err := m.processStreamingEvent(ctx, out, taskID, a2aMsg, agentEvent, state)
 			if err != nil {
@@ -750,6 +825,7 @@ func (m *messageProcessor) consumeAgentEvents(
 func (m *messageProcessor) abortStreamingOnError(
 	ctx context.Context,
 	out chan<- protocol.StreamEvent,
+	taskID string,
 	a2aMsg *protocol.Message,
 	err error,
 ) bool {
@@ -764,7 +840,7 @@ func (m *messageProcessor) abortStreamingOnError(
 		log.WarnfContext(ctx, "streaming stopped before completion: %v", err)
 		return true
 	}
-	if handleErr := m.handleStreamingProcessingError(ctx, out, a2aMsg, err); handleErr != nil {
+	if handleErr := m.sendTaskFailure(ctx, out, taskID, a2aMsg, err); handleErr != nil {
 		log.ErrorfContext(
 			ctx,
 			"failed to handle streaming error: %v",
@@ -802,7 +878,7 @@ func (m *messageProcessor) sendFinalArtifactEvent(
 	ctxID string,
 	state *taskOutputState,
 ) error {
-	if m.streamingEventType == StreamingEventTypeMessage {
+	if len(state.seenArtifactIDs) == 0 && state.finalMessage != nil {
 		return nil
 	}
 	artifactID := state.lastArtifactID
@@ -845,9 +921,6 @@ func (m *messageProcessor) sendTaskCompletedEvent(
 		},
 		true,
 	)
-	if m.streamingEventType == StreamingEventTypeMessage {
-		taskCompleted.Metadata = cloneStreamingMetadata(state.finalMetadata)
-	}
 	return m.sendEvent(ctx, out, &taskCompleted)
 }
 
@@ -885,7 +958,7 @@ func (m *messageProcessor) processStreamingEvent(
 		return false, nil
 	}
 
-	if m.structuredTaskErrors && isStructuredTaskErrorEvent(agentEvent) {
+	if isStructuredTaskErrorEvent(agentEvent) {
 		task := buildStructuredFailureTask(
 			taskID,
 			*a2aMsg.ContextID,
@@ -911,6 +984,7 @@ func (m *messageProcessor) processStreamingEvent(
 
 	if isFinalStreamingEvent(agentEvent) {
 		state.finalMetadata = buildFinalStreamingMetadata(agentEvent)
+		state.sawCompletion = true
 		log.DebugfContext(
 			ctx,
 			"received final event, stopping event processing (eventID=%s)",
@@ -920,7 +994,12 @@ func (m *messageProcessor) processStreamingEvent(
 	}
 
 	convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
-		ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
+		ctx,
+		agentEvent,
+		EventToA2AStreamingOptions{
+			CtxID:  *a2aMsg.ContextID,
+			TaskID: taskID,
+		},
 	)
 	if err != nil {
 		return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
@@ -948,6 +1027,13 @@ func (m *messageProcessor) processStreamingEvent(
 		return false, nil
 	}
 	prepareTaskOutputEvent(outbound, state)
+	responseID := agentEvent.Response.ID
+	if responseID != "" && !agentEvent.Response.IsPartial {
+		outbound = suppressRepeatedPartialSnapshot(
+			outbound,
+			state.partialResponses[responseID],
+		)
+	}
 	switch converted := outbound.(type) {
 	case *protocol.TaskArtifactUpdateEvent:
 		artifactID := converted.Artifact.ArtifactID
@@ -976,6 +1062,11 @@ func (m *messageProcessor) processStreamingEvent(
 			err,
 		)
 		return false, fmt.Errorf("failed to send streaming message event: %w", err)
+	}
+	if responseID != "" && agentEvent.Response.IsPartial {
+		if text, ok := streamEventText(outbound); ok {
+			state.partialResponses[responseID] += text
+		}
 	}
 
 	return false, nil
@@ -1027,7 +1118,7 @@ func (m *messageProcessor) rewriteStreamingResult(
 		return nil
 	}
 	if m.responseRewriter != nil {
-		result = m.responseRewriter.RewriteStreaming(ctx, result)
+		result = m.responseRewriter(ctx, result)
 	}
 	if result == nil {
 		return nil

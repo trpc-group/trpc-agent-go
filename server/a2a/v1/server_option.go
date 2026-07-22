@@ -52,9 +52,6 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, auth.AuthUserKey, &auth.User{ID: userID})
 }
 
-// ProcessorBuilder returns a message processor for the given runner.
-type ProcessorBuilder func(runner runner.Runner) taskmanager.MessageProcessor
-
 // ProcessMessageHook is a function that wraps the message processor with additional functionality.
 type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
 
@@ -63,31 +60,11 @@ type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.Mess
 // implementation; it does not change the processor event contract.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) (taskmanager.TaskManager, error)
 
-// ResponseRewriter rewrites outbound A2A responses before they are returned or
-// sent to the remote peer.
+// ResponseRewriter rewrites one outbound A2A event before it is returned or
+// sent to the remote peer. Returning nil drops the event.
 //
-// RewriteStreaming rewrites each outbound event before it is sent; returning
-// nil drops that event. Unary message/send results are derived from the same
-// rewritten event stream.
-type ResponseRewriter interface {
-	RewriteStreaming(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
-}
-
-// ResponseRewriterFuncs adapts plain functions into a ResponseRewriter.
-type ResponseRewriterFuncs struct {
-	Streaming func(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
-}
-
-// RewriteStreaming implements ResponseRewriter.
-func (f ResponseRewriterFuncs) RewriteStreaming(
-	ctx context.Context,
-	result protocol.StreamEvent,
-) protocol.StreamEvent {
-	if f.Streaming == nil {
-		return result
-	}
-	return f.Streaming(ctx, result)
-}
+// Unary message/send results are derived from the same rewritten event stream.
+type ResponseRewriter func(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
 
 // EventToA2APartMapper converts an agent event into additional A2A parts.
 //
@@ -121,9 +98,7 @@ type options struct {
 	runner                    runner.Runner
 	graphEventObjectAllowlist []string
 	responseRewriter          ResponseRewriter
-	streamingEventType        StreamingEventType
 	agentCard                 *a2a.AgentCard
-	processorBuilder          ProcessorBuilder
 	processorHook             ProcessMessageHook
 	taskManagerBuilder        TaskManagerBuilder
 	runOptions                []agent.RunOption
@@ -135,26 +110,10 @@ type options struct {
 	debugLogging              bool
 	userIDHeader              string
 	adkCompatibility          bool
-	structuredTaskErrors      bool
 }
 
 // Option is a function that configures a Server.
 type Option func(*options)
-
-// StreamingEventType controls how the A2A server emits agent output events in
-// the task lifecycle. The default is TaskArtifactUpdateEvent, following the ADK
-// pattern: artifacts for content, status for state changes. The setting applies
-// equally to request-local and retaining task managers.
-type StreamingEventType int
-
-const (
-	// StreamingEventTypeTaskArtifactUpdate emits agent output as
-	// TaskArtifactUpdateEvent (default).
-	StreamingEventTypeTaskArtifactUpdate StreamingEventType = iota
-
-	// StreamingEventTypeMessage emits agent output as Message.
-	StreamingEventTypeMessage
-)
 
 // WithRunner sets the runner to use.
 // The caller retains ownership of the runner and must close it after the server
@@ -191,13 +150,6 @@ func normalizeMetadataKeys(keys []string) []string {
 func WithAgentCard(agentCard a2a.AgentCard) Option {
 	return func(opts *options) {
 		opts.agentCard = &agentCard
-	}
-}
-
-// WithProcessorBuilder sets the processor builder to use.
-func WithProcessorBuilder(builder ProcessorBuilder) Option {
-	return func(opts *options) {
-		opts.processorBuilder = builder
 	}
 }
 
@@ -294,10 +246,10 @@ func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 
 // WithResponseRewriter rewrites outbound A2A events before they are emitted.
 //
-// RewriteStreaming is applied to every event the processor emits, including
-// Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, submitted/completed
-// lifecycle events, and structured task errors. Messages returned by
-// ErrorHandler are also covered.
+// The rewriter is applied to every event the processor emits, including
+// TaskArtifactUpdateEvent, TaskStatusUpdateEvent, submitted/completed lifecycle
+// events, and structured task errors. Messages returned by ErrorHandler are
+// also covered.
 //
 // Because message/send derives its result from these same events, this also
 // covers unary responses. The rewriter sees each event before task aggregation
@@ -322,18 +274,6 @@ func WithResponseRewriter(rewriter ResponseRewriter) Option {
 func WithADKCompatibility(enabled bool) Option {
 	return func(opts *options) {
 		opts.adkCompatibility = enabled
-	}
-}
-
-// WithStreamingEventType configures which A2A protocol type is used to emit
-// agent output in streaming mode.
-//
-// Default event converter only.
-// This option affects output converted from agent events (assistant text/tool
-// calls/code execution); submitted/completed remain TaskStatusUpdateEvent.
-func WithStreamingEventType(eventType StreamingEventType) Option {
-	return func(opts *options) {
-		opts.streamingEventType = eventType
 	}
 }
 
@@ -366,16 +306,6 @@ func WithDebugLogging(debug bool) Option {
 func WithErrorHandler(handler ErrorHandler) Option {
 	return func(opts *options) {
 		opts.errorHandler = handler
-	}
-}
-
-// WithStructuredTaskErrors enables structured propagation of agent
-// Response.Error values through A2A task status metadata. Stateless managers
-// keep the resulting failed Task only for the request; retaining managers
-// persist it.
-func WithStructuredTaskErrors(enable bool) Option {
-	return func(opts *options) {
-		opts.structuredTaskErrors = enable
 	}
 }
 
