@@ -1,0 +1,27 @@
+{
+  "appName": "promptiter-regression-app",
+  "trainEvalSetID": "train",
+  "validationEvalSetID": "validation",
+  "seed": 2003,
+  "timeout": "2m",
+  "targetSurfaceID": "candidate#instruction",
+  "candidatePrompts": [
+    "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.",
+    "Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.",
+    "Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified."
+  ],
+  "gate": {
+    "minValidationScoreGain": 0.2,
+    "rejectNewFailures": true,
+    "rejectCriticalRegressions": true,
+    "criticalCaseIds": [
+      "validation_account_security"
+    ],
+    "maxCriticalScoreDrop": 0.0,
+    "maxValidationTokens": 500,
+    "maxValidationModelCalls": 3,
+    "maxValidationToolCalls": 0
+  },
+  "baselinePromptSource": "baseline_prompt.txt",
+  "outputDir": "../../output"
+}
