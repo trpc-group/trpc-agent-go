@@ -206,12 +206,10 @@ func (r *gepaRun) prepareParent(
 	)
 	r.run.budget.spend(len(state.feedbackCases))
 	if err != nil {
-		proceed, failureErr := r.recordRecoverableFailure(
-			"parent_evaluation_failed",
-			map[string]any{"iteration": iteration, "parent_id": parentID},
+		return nil, false, fmt.Errorf(
+			"evolution optimization: evaluate parent feedback: %w",
 			err,
 		)
-		return nil, proceed, failureErr
 	}
 	if err := r.run.recorder.recordEvaluation(
 		"feedback-parent",
@@ -233,7 +231,13 @@ func (r *gepaRun) reflectChild(state *gepaIteration) (bool, error) {
 		evaluation: state.parentScores,
 	})
 	if err != nil {
-		return r.recordRecoverableFailure(
+		if !errors.Is(err, errReflectionRejected) {
+			return false, fmt.Errorf(
+				"evolution optimization: reflect candidate: %w",
+				err,
+			)
+		}
+		return r.recordReflectionRejection(
 			"reflection_rejected",
 			map[string]any{
 				"iteration": state.iteration,
@@ -277,12 +281,8 @@ func (r *gepaRun) evaluateChild(state *gepaIteration) (bool, error) {
 	)
 	r.run.budget.spend(len(state.feedbackCases))
 	if err != nil {
-		return r.recordRecoverableFailure(
-			"child_evaluation_failed",
-			map[string]any{
-				"iteration":    state.iteration,
-				"candidate_id": state.child.candidate.id,
-			},
+		return false, fmt.Errorf(
+			"evolution optimization: evaluate child feedback: %w",
 			err,
 		)
 	}
@@ -314,12 +314,8 @@ func (r *gepaRun) validateAndAcceptChild(state *gepaIteration) (bool, error) {
 	)
 	r.run.budget.spend(len(r.run.req.Dataset.Validation))
 	if err != nil {
-		return r.recordRecoverableFailure(
-			"validation_failed",
-			map[string]any{
-				"iteration":    state.iteration,
-				"candidate_id": state.child.candidate.id,
-			},
+		return false, fmt.Errorf(
+			"evolution optimization: evaluate candidate validation: %w",
 			err,
 		)
 	}
@@ -350,7 +346,7 @@ func (r *gepaRun) validateAndAcceptChild(state *gepaIteration) (bool, error) {
 	return true, nil
 }
 
-func (r *gepaRun) recordRecoverableFailure(
+func (r *gepaRun) recordReflectionRejection(
 	kind string,
 	data map[string]any,
 	cause error,

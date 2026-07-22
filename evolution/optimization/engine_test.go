@@ -42,10 +42,10 @@ func (improvingReflector) propose(_ context.Context, input reflectionInput) (mut
 	return mutation{spec: spec, rationale: "fix evaluator feedback"}, nil
 }
 
-type errorReflector struct{}
+type rejectedReflector struct{}
 
-func (errorReflector) propose(context.Context, reflectionInput) (mutation, error) {
-	return mutation{}, errors.New("reflection unavailable")
+func (rejectedReflector) propose(context.Context, reflectionInput) (mutation, error) {
+	return mutation{}, reflectionRejection(errors.New("reflection unavailable"))
 }
 
 type duplicateReflector struct{}
@@ -78,11 +78,20 @@ type recordingRevisionSubmitter struct {
 
 type failingRevisionSubmitter struct{}
 
+type nilRevisionSubmitter struct{}
+
 func (failingRevisionSubmitter) SubmitRevision(
 	context.Context,
 	evolution.RevisionRequest,
 ) (*evolution.Revision, error) {
 	return nil, errors.New("submission unavailable")
+}
+
+func (nilRevisionSubmitter) SubmitRevision(
+	context.Context,
+	evolution.RevisionRequest,
+) (*evolution.Revision, error) {
+	return nil, nil
 }
 
 func (s *recordingRevisionSubmitter) SubmitRevision(
@@ -353,6 +362,37 @@ func TestOptimizerReturnsAndRecordsResultWhenSubmissionFails(t *testing.T) {
 	assert.Equal(t, result.SubmissionReason, stored.SubmissionReason)
 }
 
+func TestOptimizerRejectsNilSuccessfulSubmission(t *testing.T) {
+	storeDir := t.TempDir()
+	opts := defaultOptions()
+	opts.gepa.maxIterations = 1
+	opts.gepa.reflectionBatchSize = 2
+	opts.engine.storeDir = storeDir
+	opts.engine.revisionSubmitter = nilRevisionSubmitter{}
+	optimizer := newTestOptimizer(improvingReflector{}, &scoringEvaluator{}, opts)
+	dataset := testDataset(10)
+	dataset.Feedback = makeCases("feedback", 10)
+	dataset.Validation = makeCases("validation", 10)
+
+	result, err := optimizer.Optimize(context.Background(), Request{
+		Seed:    testSeedSpec(),
+		Dataset: dataset,
+		Submit:  true,
+	})
+	require.ErrorContains(t, err, "nil revision")
+	require.NotNil(t, result)
+	assert.Contains(t, result.SubmissionReason, "nil revision")
+	assert.Nil(t, result.Revision)
+
+	payload, readErr := os.ReadFile(filepath.Join(
+		storeDir, result.ExperimentID, "result.json",
+	))
+	require.NoError(t, readErr)
+	var stored Result
+	require.NoError(t, json.Unmarshal(payload, &stored))
+	assert.Equal(t, result.SubmissionReason, stored.SubmissionReason)
+}
+
 func TestOptimizerRejectsCandidateWithoutStrictMinibatchImprovement(t *testing.T) {
 	evaluator := &scoringEvaluator{equalScore: true}
 	opts := defaultOptions()
@@ -451,21 +491,17 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	assert.Equal(t, evolution.RevisionPendingApproval, stored.Status)
 }
 
-func TestOptimizerSkipsRecoverableProposalFailures(t *testing.T) {
+func TestOptimizerSkipsRejectedAndDuplicateReflections(t *testing.T) {
 	tests := []struct {
 		name      string
 		reflector reflector
-		failAt    int
 	}{
-		{name: "parent evaluation", reflector: improvingReflector{}, failAt: 2},
-		{name: "child evaluation", reflector: improvingReflector{}, failAt: 3},
-		{name: "validation", reflector: improvingReflector{}, failAt: 4},
-		{name: "reflection", reflector: errorReflector{}},
+		{name: "reflection", reflector: rejectedReflector{}},
 		{name: "duplicate", reflector: duplicateReflector{}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			evaluator := &stagedEvaluator{failAt: test.failAt}
+			evaluator := &scoringEvaluator{}
 			opts := defaultOptions()
 			opts.gepa.maxIterations = 1
 			opts.gepa.reflectionBatchSize = 2
@@ -481,6 +517,39 @@ func TestOptimizerSkipsRecoverableProposalFailures(t *testing.T) {
 			})
 			require.NoError(t, err)
 			assert.Equal(t, 1, result.CandidateCount)
+		})
+	}
+}
+
+func TestOptimizerReturnsSearchEvaluatorErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		failAt  int
+		message string
+	}{
+		{name: "parent feedback", failAt: 2, message: "evaluate parent feedback"},
+		{name: "child feedback", failAt: 3, message: "evaluate child feedback"},
+		{name: "validation", failAt: 4, message: "evaluate candidate validation"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			evaluator := &stagedEvaluator{failAt: test.failAt}
+			opts := defaultOptions()
+			opts.gepa.maxIterations = 1
+			opts.gepa.reflectionBatchSize = 2
+			optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
+
+			result, err := optimizer.Optimize(context.Background(), Request{
+				Seed: testSeedSpec(),
+				Dataset: Dataset{
+					ID:         "failure-dataset",
+					Version:    "v1",
+					Feedback:   makeCases("feedback", 2),
+					Validation: makeCases("validation", 2),
+				},
+			})
+			require.ErrorContains(t, err, test.message)
+			assert.Nil(t, result)
 		})
 	}
 }

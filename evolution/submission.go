@@ -27,7 +27,10 @@ const revisionEvidenceDeltaTolerance = 1e-9
 // the revision governance pipeline. External submissions are persisted for
 // approval and are never promoted directly to the live skill repository. Spec
 // must contain a non-empty name, description, when-to-use condition, and at
-// least one non-empty step.
+// least one non-empty step. For updates, ParentID is an optimistic concurrency
+// token: when an active pointer is configured, the service rejects a request
+// whose parent is no longer active. An empty ParentID is populated from the
+// current active revision when one is available.
 type RevisionRequest struct {
 	Scope    skill.SkillScope
 	Source   string
@@ -42,6 +45,8 @@ type RevisionRequest struct {
 // separate from Service because session learning and revision submission are
 // independent capabilities.
 type RevisionSubmitter interface {
+	// SubmitRevision returns the persisted revision when err is nil. A nil
+	// revision with a nil error violates this contract.
 	SubmitRevision(context.Context, RevisionRequest) (*Revision, error)
 }
 
@@ -221,7 +226,17 @@ func (w *worker) validateSubmissionParent(
 	if rev.Action != RevisionActionUpdate {
 		return nil
 	}
-	w.populateParentRevisionID(ctx, rev, scope, scoped)
+	pointer, err := w.activePointerForScope(scope, scoped)
+	if err != nil {
+		return fmt.Errorf("evolution: submit revision: resolve active pointer: %w", err)
+	}
+	if rev.ParentID == "" && pointer != nil {
+		activeID, err := readActiveRevisionID(ctx, pointer, rev.SkillID)
+		if err != nil {
+			return fmt.Errorf("evolution: submit revision: %w", err)
+		}
+		rev.ParentID = activeID
+	}
 	if rev.ParentID == "" {
 		return nil
 	}
@@ -234,7 +249,49 @@ func (w *worker) validateSubmissionParent(
 		}
 		return fmt.Errorf("evolution: submit revision: read parent revision: %w", err)
 	}
+	if err := validateCurrentParent(ctx, pointer, rev); err != nil {
+		return fmt.Errorf("evolution: submit revision: %w", err)
+	}
 	return nil
+}
+
+func validateCurrentParent(
+	ctx context.Context,
+	pointer ActivePointer,
+	rev *Revision,
+) error {
+	if pointer == nil || rev == nil || rev.Action != RevisionActionUpdate || rev.ParentID == "" {
+		return nil
+	}
+	activeID, err := readActiveRevisionID(ctx, pointer, rev.SkillID)
+	if err != nil {
+		return err
+	}
+	if activeID != rev.ParentID {
+		return fmt.Errorf(
+			"%w: parent revision %q is stale; active revision for skill %q is %q",
+			ErrStaleRevisionParent,
+			rev.ParentID,
+			rev.SkillID,
+			activeID,
+		)
+	}
+	return nil
+}
+
+func readActiveRevisionID(
+	ctx context.Context,
+	pointer ActivePointer,
+	skillID string,
+) (string, error) {
+	activeID, err := pointer.Get(ctx, skillID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read active revision: %w", err)
+	}
+	return strings.TrimSpace(activeID), nil
 }
 
 func (w *worker) rejectSubmittedRevision(

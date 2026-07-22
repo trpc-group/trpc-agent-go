@@ -27,6 +27,11 @@ var ErrAlreadyDecided = errors.New("revision already decided")
 // that has no archived revision to fall back to.
 var ErrNoArchivedRevision = errors.New("no archived revision available for rollback")
 
+// ErrStaleRevisionParent is returned when an update's ParentID no longer
+// matches the configured active pointer. Submission does not persist the stale
+// candidate; approval marks an already-persisted candidate as rejected.
+var ErrStaleRevisionParent = errors.New("stale revision parent")
+
 // ApprovalDecision is the external reviewer's decision on a pending revision.
 type ApprovalDecision struct {
 	RevisionID string
@@ -153,6 +158,9 @@ func (s *ApprovalService) ListPending(ctx context.Context, opts ListPendingOpts)
 // Decide approves or rejects a pending_approval revision.
 // Approved revisions are promoted to active via the publisher.
 // Rejected revisions have their status set to rejected.
+// An approved update with a non-empty ParentID is refused if that parent is no
+// longer active; the revision is rejected and the current active revision is
+// unchanged.
 // Returns ErrAlreadyDecided if the revision is no longer pending.
 func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision) error {
 	if s.store == nil {
@@ -172,10 +180,17 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	if rev.Status != RevisionPendingApproval {
 		return ErrAlreadyDecided
 	}
-
 	decidedAt := decision.DecidedAt
 	if decidedAt.IsZero() {
 		decidedAt = time.Now().UTC()
+	}
+	if decision.Approved {
+		if err := validateCurrentParent(ctx, s.pointer, rev); err != nil {
+			if errors.Is(err, ErrStaleRevisionParent) {
+				return s.rejectStaleRevision(ctx, rev, decision, decidedAt, err)
+			}
+			return fmt.Errorf("approve revision: %w", err)
+		}
 	}
 	rev.HumanReport = mergeHumanDecision(rev.HumanReport, decision, decidedAt)
 
@@ -207,6 +222,35 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	})
 
 	return nil
+}
+
+func (s *ApprovalService) rejectStaleRevision(
+	ctx context.Context,
+	rev *Revision,
+	decision ApprovalDecision,
+	decidedAt time.Time,
+	cause error,
+) error {
+	rejection := decision
+	rejection.Approved = false
+	rev.HumanReport = mergeHumanDecision(rev.HumanReport, rejection, decidedAt)
+	rev.HumanReport.Reasons = append(rev.HumanReport.Reasons, cause.Error())
+	rev.Status = RevisionRejected
+	staleErr := fmt.Errorf("approve revision: %w", cause)
+	if err := s.store.WriteRevision(ctx, rev); err != nil {
+		return errors.Join(staleErr, fmt.Errorf("write stale revision rejection: %w", err))
+	}
+	_ = s.store.AppendAudit(ctx, AuditEvent{
+		At:         decidedAt,
+		Action:     AuditActionReject,
+		SkillID:    decision.SkillID,
+		RevisionID: decision.RevisionID,
+		Status:     string(rev.Status),
+		Reason:     cause.Error(),
+		Actor:      decision.Reviewer,
+		Comment:    decision.Comment,
+	})
+	return staleErr
 }
 
 func (s *ApprovalService) approveRevision(ctx context.Context, rev *Revision) error {

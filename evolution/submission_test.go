@@ -366,3 +366,68 @@ func TestSubmitRevisionRejectsInvalidLineage(t *testing.T) {
 	})
 	require.ErrorContains(t, err, "must not have a parent")
 }
+
+func TestSubmitRevisionRejectsStaleParent(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	store := NewFileCandidateStore(filepath.Join(root, "candidates"))
+	pointer := NewFileActivePointer(filepath.Join(root, "pointers"))
+	spec := &SkillSpec{
+		Name:        "Lineage Skill",
+		Description: "Valid candidate body.",
+		WhenToUse:   "Testing lineage.",
+		Steps:       []string{"First.", "Second."},
+	}
+	skillID := skillIDFromName(spec.Name)
+	for _, revision := range []*Revision{
+		{RevisionID: "rev-a", Status: RevisionArchived},
+		{RevisionID: "rev-b", Status: RevisionActive},
+	} {
+		require.NoError(t, store.WriteRevision(ctx, &Revision{
+			SkillID:    skillID,
+			RevisionID: revision.RevisionID,
+			Action:     RevisionActionUpdate,
+			Status:     revision.Status,
+			Spec:       cloneSkillSpec(spec),
+		}))
+	}
+	require.NoError(t, pointer.Set(ctx, skillID, "rev-b"))
+	svc := NewService(nil,
+		WithCandidateStore(store),
+		WithActivePointer(pointer),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
+		Action:   RevisionActionUpdate,
+		ParentID: "rev-a",
+		Spec:     spec,
+	})
+	require.ErrorContains(t, err, "parent revision \"rev-a\" is stale")
+	require.ErrorIs(t, err, ErrStaleRevisionParent)
+	assert.Nil(t, rev)
+	revisionIDs, listErr := store.ListRevisions(ctx, skillID)
+	require.NoError(t, listErr)
+	assert.ElementsMatch(t, []string{"rev-a", "rev-b"}, revisionIDs)
+}
+
+func TestSubmitRevisionReturnsActivePointerReadError(t *testing.T) {
+	store := NewFileCandidateStore(filepath.Join(t.TempDir(), "candidates"))
+	svc := NewService(nil,
+		WithCandidateStore(store),
+		WithActivePointer(errActivePointer{err: errors.New("pointer unavailable")}),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(
+		context.Background(),
+		RevisionRequest{Spec: &SkillSpec{
+			Name:        "Pointer Failure",
+			Description: "Valid candidate body.",
+			WhenToUse:   "Testing pointer errors.",
+			Steps:       []string{"First.", "Second."},
+		}},
+	)
+	require.ErrorContains(t, err, "pointer unavailable")
+	assert.Nil(t, rev)
+}

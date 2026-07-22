@@ -14,6 +14,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -28,6 +29,48 @@ type reflectionModel struct {
 	nilResponses bool
 	apiError     string
 	stream       bool
+}
+
+type blockingReflectionModel struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingReflectionModel) GenerateContent(
+	context.Context,
+	*model.Request,
+) (<-chan *model.Response, error) {
+	close(m.entered)
+	<-m.release
+	return nil, errors.New("released")
+}
+
+func (*blockingReflectionModel) Info() model.Info {
+	return model.Info{Name: "blocking-reflection-test"}
+}
+
+type chunkedReflectionModel struct {
+	chunks  []string
+	request *model.Request
+}
+
+func (m *chunkedReflectionModel) GenerateContent(
+	_ context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	m.request = request
+	responses := make(chan *model.Response, len(m.chunks))
+	for _, chunk := range m.chunks {
+		responses <- &model.Response{Choices: []model.Choice{{
+			Delta: model.Message{Content: chunk},
+		}}}
+	}
+	close(responses)
+	return responses, nil
+}
+
+func (*chunkedReflectionModel) Info() model.Info {
+	return model.Info{Name: "chunked-reflection-test"}
 }
 
 func (m *reflectionModel) GenerateContent(
@@ -174,6 +217,8 @@ func TestLLMReflectorChangesOnlySelectedComponent(t *testing.T) {
 
 	require.NotNil(t, modelStub.request)
 	require.NotNil(t, modelStub.request.StructuredOutput)
+	require.NotNil(t, modelStub.request.GenerationConfig.MaxTokens)
+	assert.Equal(t, reflectionMaxOutputTokens, *modelStub.request.GenerationConfig.MaxTokens)
 	require.Len(t, modelStub.request.Messages, 2)
 	assert.Contains(t, modelStub.request.Messages[0].Content, "untrusted data")
 	assert.Contains(t, modelStub.request.Messages[0].Content, "one case")
@@ -192,12 +237,12 @@ func TestBuildReflectionPromptRedactsAllModelBoundText(t *testing.T) {
 	spec.Steps[0] = "send " + secret
 	spec.Pitfalls = []string{"never log " + secret}
 	cases := []Case{{
-		ID:       "feedback-1",
+		ID:       "tenant-" + secret,
 		Input:    "input " + secret,
 		Expected: "expected " + secret,
 	}}
 	batch, err := newEvaluationBatch(cases, []Evaluation{{
-		CaseID:   "feedback-1",
+		CaseID:   "tenant-" + secret,
 		Score:    0.2,
 		Output:   "output " + secret,
 		Feedback: "feedback " + secret,
@@ -213,8 +258,89 @@ func TestBuildReflectionPromptRedactsAllModelBoundText(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotContains(t, prompt, secret)
 	assert.Contains(t, prompt, "[REDACTED]")
+	assert.Contains(t, prompt, `"case_id":"case-1"`)
 	assert.Contains(t, spec.Description, secret, "redaction must not mutate the candidate")
 	assert.Contains(t, cases[0].Input, secret, "redaction must not mutate the dataset")
+}
+
+func TestOptimizerTimeLimitCoversBlockingModelStartup(t *testing.T) {
+	modelStub := &blockingReflectionModel{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	defer close(modelStub.release)
+	optimizer, err := NewGEPA(
+		modelStub,
+		&scoringEvaluator{},
+		WithMaxIterations(1),
+		WithTimeLimit(20*time.Millisecond),
+	)
+	require.NoError(t, err)
+
+	startedAt := time.Now()
+	result, err := optimizer.Optimize(context.Background(), Request{
+		Seed: testSeedSpec(),
+		Dataset: Dataset{
+			ID:         "blocking-model",
+			Version:    "v1",
+			Feedback:   makeCases("feedback", 2),
+			Validation: makeCases("validation", 2),
+		},
+	})
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Nil(t, result)
+	assert.Less(t, time.Since(startedAt), time.Second)
+	select {
+	case <-modelStub.entered:
+	default:
+		require.Fail(t, "optimization timed out before starting the blocking model")
+	}
+}
+
+func TestOptimizerRejectsOversizedReflectionResponse(t *testing.T) {
+	modelStub := &chunkedReflectionModel{chunks: []string{
+		strings.Repeat("x", reflectionResponseMaxBytes),
+		"overflow",
+	}}
+	optimizer, err := NewGEPA(
+		modelStub,
+		&scoringEvaluator{},
+		WithMaxIterations(1),
+	)
+	require.NoError(t, err)
+
+	result, err := optimizer.Optimize(context.Background(), Request{
+		Seed: testSeedSpec(),
+		Dataset: Dataset{
+			ID:         "oversized-reflection",
+			Version:    "v1",
+			Feedback:   makeCases("feedback", 2),
+			Validation: makeCases("validation", 2),
+		},
+	})
+	require.ErrorContains(t, err, "reflection response exceeds")
+	assert.Nil(t, result)
+}
+
+func TestOptimizerReturnsReflectionProviderErrors(t *testing.T) {
+	optimizer, err := NewGEPA(
+		&reflectionModel{generateErr: errors.New("provider unavailable")},
+		&scoringEvaluator{},
+		WithMaxIterations(1),
+	)
+	require.NoError(t, err)
+
+	result, err := optimizer.Optimize(context.Background(), Request{
+		Seed: testSeedSpec(),
+		Dataset: Dataset{
+			ID:         "provider-failure",
+			Version:    "v1",
+			Feedback:   makeCases("feedback", 2),
+			Validation: makeCases("validation", 2),
+		},
+	})
+	require.ErrorContains(t, err, "provider unavailable")
+	assert.Nil(t, result)
 }
 
 func TestNewGEPAValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {

@@ -27,8 +27,9 @@ const (
 
 // Case is one immutable evaluation example. Evaluators may interpret Input,
 // Expected, and Metadata according to their task domain. Sampled feedback
-// Input and Expected values cross the reflection-model boundary; all fields
-// are persisted when filesystem experiment recording is enabled.
+// Input and Expected values cross the reflection-model boundary. ID remains
+// local and is replaced by an experiment-local ordinal before reflection. All
+// fields are persisted when filesystem experiment recording is enabled.
 type Case struct {
 	ID       string            `json:"id"`
 	Input    string            `json:"input"`
@@ -56,7 +57,8 @@ type Evaluation struct {
 // Evaluator executes a candidate against a batch of cases. It must return
 // exactly one Evaluation for every input case. seed is stable for paired
 // parent/child comparisons, but determinism depends on the implementation
-// honoring it.
+// honoring it. Returning an error aborts the experiment; task-level failures
+// should instead be expressed through Score, Feedback, and Trace.
 type Evaluator interface {
 	Evaluate(
 		ctx context.Context,
@@ -79,7 +81,9 @@ type Dataset struct {
 // Request starts one isolated optimization experiment. Submit asks the
 // optimizer to send a successful holdout result to the configured evolution
 // service; submitted revisions are held for human approval. Submission
-// requires at least 10 cases in each dataset split.
+// requires at least 10 cases in each dataset split. ParentRevisionID identifies
+// the active revision evaluated by Seed and becomes the submission's optimistic
+// concurrency token.
 type Request struct {
 	Seed             *evolution.SkillSpec
 	Dataset          Dataset

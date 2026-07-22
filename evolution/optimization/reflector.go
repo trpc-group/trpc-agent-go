@@ -21,7 +21,13 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
-const reflectionFieldMaxChars = 4000
+const (
+	reflectionFieldMaxChars    = 4000
+	reflectionMaxOutputTokens  = 64 * 1024
+	reflectionResponseMaxBytes = 256 * 1024
+)
+
+var errReflectionRejected = errors.New("reflection rejected")
 
 var reflectionSystemPrompt = strings.Join([]string{
 	"You improve one component of a reusable agent skill.",
@@ -101,13 +107,15 @@ func (r *llmReflector) propose(
 		},
 		model.WithStructuredOutputJSON(example, true, "one skill component mutation"),
 	)
+	maxTokens := reflectionMaxOutputTokens
+	req.GenerationConfig.MaxTokens = &maxTokens
 	raw, err := generateText(ctx, r.model, req)
 	if err != nil {
 		return mutation{}, fmt.Errorf("generate reflection: %w", err)
 	}
 	response, err := parseReflectionResponse(raw)
 	if err != nil {
-		return mutation{}, err
+		return mutation{}, reflectionRejection(err)
 	}
 	return applyReflection(input.candidate, input.component, response)
 }
@@ -118,10 +126,10 @@ func buildReflectionPrompt(input reflectionInput) (string, error) {
 		return "", fmt.Errorf("marshal candidate: %w", err)
 	}
 	records := make([]reflectionRecord, 0, len(input.evaluation.cases))
-	for _, item := range input.evaluation.cases {
+	for index, item := range input.evaluation.cases {
 		evaluation := input.evaluation.byID[item.ID]
 		records = append(records, reflectionRecord{
-			CaseID:   item.ID,
+			CaseID:   fmt.Sprintf("case-%d", index+1),
 			Input:    prepareReflectionField(item.Input),
 			Expected: prepareReflectionField(item.Expected),
 			Score:    evaluation.Score,
@@ -170,7 +178,7 @@ func applyReflection(
 	response *reflectionResponse,
 ) (mutation, error) {
 	if response == nil {
-		return mutation{}, errors.New("empty reflection response")
+		return mutation{}, reflectionRejection(errors.New("empty reflection response"))
 	}
 	child := cloneSpec(parent)
 	switch selected {
@@ -186,7 +194,7 @@ func applyReflection(
 		return mutation{}, fmt.Errorf("unsupported component %d", selected)
 	}
 	if err := validateSpec(child); err != nil {
-		return mutation{}, fmt.Errorf("invalid reflected candidate: %w", err)
+		return mutation{}, reflectionRejection(fmt.Errorf("invalid reflected candidate: %w", err))
 	}
 	parentHash, err := specHash(parent)
 	if err != nil {
@@ -197,7 +205,9 @@ func applyReflection(
 		return mutation{}, err
 	}
 	if parentHash == childHash {
-		return mutation{}, errors.New("reflection did not change the selected component")
+		return mutation{}, reflectionRejection(
+			errors.New("reflection did not change the selected component"),
+		)
 	}
 	return mutation{
 		spec:      child,
@@ -205,12 +215,37 @@ func applyReflection(
 	}, nil
 }
 
+func reflectionRejection(cause error) error {
+	return fmt.Errorf("%w: %w", errReflectionRejected, cause)
+}
+
 func generateText(ctx context.Context, m model.Model, req *model.Request) (string, error) {
-	responses, err := m.GenerateContent(ctx, req)
-	if err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if responses == nil {
+	type generationResult struct {
+		responses <-chan *model.Response
+		err       error
+	}
+	started := make(chan generationResult, 1)
+	go func() {
+		responses, err := m.GenerateContent(ctx, req)
+		started <- generationResult{responses: responses, err: err}
+	}()
+
+	var generated generationResult
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case generated = <-started:
+	}
+	if generated.err != nil {
+		return "", generated.err
+	}
+	if generated.responses == nil {
 		return "", errors.New("model returned a nil response channel")
 	}
 
@@ -220,7 +255,7 @@ func generateText(ctx context.Context, m model.Model, req *model.Request) (strin
 		select {
 		case <-ctx.Done():
 			return "", ctx.Err()
-		case response, ok := <-responses:
+		case response, ok := <-generated.responses:
 			if !ok {
 				return strings.TrimSpace(full.String()), nil
 			}
@@ -233,14 +268,29 @@ func generateText(ctx context.Context, m model.Model, req *model.Request) (strin
 			for _, choice := range response.Choices {
 				if choice.Delta.Content != "" {
 					sawDelta = true
-					full.WriteString(choice.Delta.Content)
+					if err := appendReflectionContent(&full, choice.Delta.Content); err != nil {
+						return "", err
+					}
 				}
 				if !sawDelta && choice.Message.Content != "" {
-					full.WriteString(choice.Message.Content)
+					if err := appendReflectionContent(&full, choice.Message.Content); err != nil {
+						return "", err
+					}
 				}
 			}
 		}
 	}
+}
+
+func appendReflectionContent(full *strings.Builder, content string) error {
+	if len(content) > reflectionResponseMaxBytes-full.Len() {
+		return fmt.Errorf(
+			"reflection response exceeds %d bytes",
+			reflectionResponseMaxBytes,
+		)
+	}
+	full.WriteString(content)
+	return nil
 }
 
 func parseReflectionResponse(raw string) (*reflectionResponse, error) {

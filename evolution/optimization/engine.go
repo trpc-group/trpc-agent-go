@@ -370,6 +370,11 @@ func (e *engine) submitCandidate(
 		result.SubmissionReason = "revision submission failed: " + err.Error()
 		return fmt.Errorf("evolution optimization: submit revision: %w", err)
 	}
+	if revision == nil {
+		err := errors.New("revision submitter returned a nil revision")
+		result.SubmissionReason = "revision submission failed: " + err.Error()
+		return fmt.Errorf("evolution optimization: submit revision: %w", err)
+	}
 	result.Revision = revision
 	result.SubmissionReason = "revision submitted with status " + string(revision.Status)
 	return nil
