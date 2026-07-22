@@ -208,6 +208,7 @@ func inferenceInvocation(
 		executionTrace *trace.Trace
 		eventErr       error
 		tools          = make([]*evalset.Tool, 0)
+		responses      = make([]*model.Message, 0)
 		toolIDIdx      = make(map[string]int)
 	)
 	for event := range events {
@@ -243,6 +244,7 @@ func inferenceInvocation(
 		if event.IsFinalResponse() {
 			continue
 		}
+		responses = appendModelResponse(responses, event)
 		// Capture tool call uses.
 		if event.IsToolCallResponse() {
 			toolcalls, err := convertTools(event)
@@ -271,15 +273,37 @@ func inferenceInvocation(
 		finalResponse = fallbackFinal
 	}
 	result := &evalset.Invocation{
-		InvocationID:  invocationID,
-		UserContent:   invocation.UserContent,
-		FinalResponse: finalResponse,
-		Tools:         tools,
+		InvocationID:          invocationID,
+		UserContent:           invocation.UserContent,
+		FinalResponse:         finalResponse,
+		Tools:                 tools,
+		IntermediateResponses: responses,
 	}
 	if eventErr != nil {
 		return result, executionTrace, eventErr
 	}
 	return result, executionTrace, nil
+}
+
+func appendModelResponse(responses []*model.Message, evt *event.Event) []*model.Message {
+	message := eventModelResponse(evt)
+	if message == nil {
+		return responses
+	}
+	return append(responses, message)
+}
+
+func eventModelResponse(evt *event.Event) *model.Message {
+	if evt == nil || evt.IsRunnerCompletion() || evt.Response == nil ||
+		evt.Response.IsPartial || evt.Response.IsToolResultResponse() ||
+		len(evt.Response.Choices) == 0 {
+		return nil
+	}
+	message := evt.Response.Choices[0].Message
+	if message.Role != model.RoleAssistant {
+		return nil
+	}
+	return &message
 }
 
 func buildToolMockPlugin(entries []*toolmock.Tool, toolMockRunner runner.Runner) (plugin.Plugin, error) {
