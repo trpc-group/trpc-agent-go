@@ -22,7 +22,8 @@ go run .
 
 To build a real bundle from your own source, replace the hard-coded `drafts`
 with your enumeration logic (and optionally an LLM enrichment pass over each
-body).
+body). Concept IDs must be clean, bundle-relative, slash-separated paths; the
+example rejects absolute or escaping paths before writing any concept file.
 
 To point an agent at a bundle, open a local store and mount its tool set:
 

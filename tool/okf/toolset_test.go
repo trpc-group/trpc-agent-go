@@ -16,6 +16,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -24,6 +25,7 @@ type fakeStore struct {
 	lastListDir string
 	lastReadID  string
 	body        string
+	frontmatter Frontmatter
 }
 
 func (f *fakeStore) List(_ context.Context, dir string) (Listing, error) {
@@ -36,7 +38,7 @@ func (f *fakeStore) Read(_ context.Context, id string) (Concept, error) {
 	if id == "__missing__" {
 		return Concept{}, ErrNotFound
 	}
-	return Concept{ID: id, Body: f.body}, nil
+	return Concept{ID: id, Frontmatter: f.frontmatter, Body: f.body}, nil
 }
 
 func toolNames(tools []tool.Tool) []string {
@@ -56,6 +58,10 @@ func toolByName(tools []tool.Tool, name string) tool.Tool {
 	return nil
 }
 
+func modelTools(ts tool.ToolSet) []tool.Tool {
+	return itool.NewNamedToolSet(ts).Tools(context.Background())
+}
+
 func TestNewToolSet_NilStore(t *testing.T) {
 	if _, err := NewToolSet(nil); err == nil {
 		t.Fatal("expected error for nil store")
@@ -70,21 +76,28 @@ func TestNewToolSet_Wiring(t *testing.T) {
 	if ts.Name() != defaultName {
 		t.Errorf("Name = %q", ts.Name())
 	}
-	names := toolNames(ts.Tools(context.Background()))
-	if len(names) != 2 {
-		t.Fatalf("want 2 tools, got %v", names)
+	rawNames := toolNames(ts.Tools(context.Background()))
+	if len(rawNames) != 2 {
+		t.Fatalf("want 2 raw tools, got %v", rawNames)
 	}
-	for _, want := range []string{"okf_list", "okf_read"} {
+	for _, want := range []string{"list", "read"} {
 		if toolByName(ts.Tools(context.Background()), want) == nil {
-			t.Errorf("missing tool %q (have %v)", want, names)
+			t.Errorf("missing raw tool %q (have %v)", want, rawNames)
+		}
+	}
+	tools := modelTools(ts)
+	modelNames := toolNames(tools)
+	for _, want := range []string{"okf_list", "okf_read"} {
+		if toolByName(tools, want) == nil {
+			t.Errorf("missing model-facing tool %q (have %v)", want, modelNames)
 		}
 	}
 }
 
 func TestNewToolSet_NamePrefix(t *testing.T) {
 	ts, _ := NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"))
-	if toolByName(ts.Tools(context.Background()), "paydocs_okf_read") == nil {
-		t.Errorf("prefix not applied: %v", toolNames(ts.Tools(context.Background())))
+	if toolByName(modelTools(ts), "paydocs_okf_read") == nil {
+		t.Errorf("prefix not applied: %v", toolNames(modelTools(ts)))
 	}
 	if ts.Name() != "paydocs_okf" {
 		t.Errorf("prefixed tool set name = %q, want paydocs_okf", ts.Name())
@@ -101,7 +114,7 @@ func TestToolSet_CloseAndListDispatch(t *testing.T) {
 		t.Fatalf("Close: %v", err)
 	}
 
-	list := toolByName(ts.Tools(context.Background()), "okf_list")
+	list := toolByName(modelTools(ts), "okf_list")
 	callTool(t, list, `{}`)
 	if store.lastListDir != "" {
 		t.Errorf("root list dir = %q, want empty", store.lastListDir)
@@ -135,7 +148,7 @@ func TestNewToolSet_RejectsInvalidOptions(t *testing.T) {
 // genuinely required args must land in InputSchema.Required.
 func TestRequiredSchemaInference(t *testing.T) {
 	ts, _ := NewToolSet(&fakeStore{})
-	tools := ts.Tools(context.Background())
+	tools := modelTools(ts)
 
 	if req := toolByName(tools, "okf_list").Declaration().InputSchema.Required; len(req) != 0 {
 		t.Errorf("okf_list should have no required args (dir optional), got %v", req)
@@ -165,7 +178,7 @@ func callTool(t *testing.T, tl tool.Tool, args string) []byte {
 func TestCall_ReadRoundtrip(t *testing.T) {
 	store := &fakeStore{body: "hello"}
 	ts, _ := NewToolSet(store)
-	out := callTool(t, toolByName(ts.Tools(context.Background()), "okf_read"), `{"concept_id":"a/b"}`)
+	out := callTool(t, toolByName(modelTools(ts), "okf_read"), `{"concept_id":"a/b"}`)
 
 	var got Concept
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -179,10 +192,35 @@ func TestCall_ReadRoundtrip(t *testing.T) {
 	}
 }
 
+func TestReadOutputSchemaAllowsArbitraryExtraValues(t *testing.T) {
+	store := &fakeStore{frontmatter: Frontmatter{Extra: map[string]any{
+		"active": true,
+		"owner":  "pm-team",
+	}}}
+	ts, err := NewToolSet(store)
+	if err != nil {
+		t.Fatalf("NewToolSet: %v", err)
+	}
+	read := toolByName(modelTools(ts), "okf_read")
+	extra := read.Declaration().OutputSchema.Properties["frontmatter"].Properties["extra"]
+	if allowed, ok := extra.AdditionalProperties.(bool); !ok || !allowed {
+		t.Fatalf("extra additionalProperties = %#v, want true", extra.AdditionalProperties)
+	}
+
+	out := callTool(t, read, `{"concept_id":"a/b"}`)
+	var got Concept
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Frontmatter.Extra["owner"] != "pm-team" || got.Frontmatter.Extra["active"] != true {
+		t.Errorf("extra values = %#v", got.Frontmatter.Extra)
+	}
+}
+
 func TestCall_ReadTruncation(t *testing.T) {
 	store := &fakeStore{body: "0123456789ABCDE"} // 15 bytes.
 	ts, _ := NewToolSet(store, WithMaxBodyBytes(10))
-	out := callTool(t, toolByName(ts.Tools(context.Background()), "okf_read"), `{"concept_id":"c"}`)
+	out := callTool(t, toolByName(modelTools(ts), "okf_read"), `{"concept_id":"c"}`)
 
 	var got Concept
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -196,7 +234,7 @@ func TestCall_ReadTruncation(t *testing.T) {
 func TestCall_ReadTruncationIsRuneSafe(t *testing.T) {
 	store := &fakeStore{body: "知识库内容说明"} // 7 runes x 3 bytes = 21 bytes.
 	ts, _ := NewToolSet(store, WithMaxBodyBytes(7))
-	out := callTool(t, toolByName(ts.Tools(context.Background()), "okf_read"), `{"concept_id":"c"}`)
+	out := callTool(t, toolByName(modelTools(ts), "okf_read"), `{"concept_id":"c"}`)
 
 	var got Concept
 	if err := json.Unmarshal(out, &got); err != nil {
@@ -212,7 +250,7 @@ func TestCall_ReadTruncationIsRuneSafe(t *testing.T) {
 
 func TestCall_ReadNotFound(t *testing.T) {
 	ts, _ := NewToolSet(&fakeStore{})
-	read := toolByName(ts.Tools(context.Background()), "okf_read").(tool.CallableTool)
+	read := toolByName(modelTools(ts), "okf_read").(tool.CallableTool)
 	_, err := read.Call(context.Background(), []byte(`{"concept_id":"__missing__"}`))
 	if err == nil {
 		t.Fatal("expected error for a missing concept")
@@ -231,7 +269,7 @@ func TestCall_ReadNotFoundUsesPrefixedListTool(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
-	read := toolByName(ts.Tools(context.Background()), "paydocs_okf_read").(tool.CallableTool)
+	read := toolByName(modelTools(ts), "paydocs_okf_read").(tool.CallableTool)
 	_, err = read.Call(context.Background(), []byte(`{"concept_id":"__missing__"}`))
 	if err == nil {
 		t.Fatal("expected missing concept error")

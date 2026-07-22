@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -46,9 +47,37 @@ func renderConcept(fm okf.Frontmatter, body string) ([]byte, error) {
 	return []byte("---\n" + string(y) + "---\n\n" + strings.TrimLeft(body, "\n") + "\n"), nil
 }
 
+func conceptFile(dir, id string) (string, error) {
+	localID := filepath.FromSlash(id)
+	base := path.Base(id)
+	if id == "" || id == "." || strings.HasSuffix(id, ".md") ||
+		base == "index" || base == "log" || path.IsAbs(id) || path.Clean(id) != id ||
+		strings.ContainsRune(id, '\\') || filepath.IsAbs(localID) ||
+		filepath.VolumeName(localID) != "" ||
+		len(id) >= 2 && id[1] == ':' && (id[0] >= 'a' && id[0] <= 'z' || id[0] >= 'A' && id[0] <= 'Z') {
+		return "", fmt.Errorf("invalid concept id %q: use a clean bundle-relative slash-separated path", id)
+	}
+	full := filepath.Join(dir, localID+".md")
+	rel, err := filepath.Rel(dir, full)
+	if err != nil || !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("invalid concept id %q: path escapes bundle root", id)
+	}
+	return full, nil
+}
+
 func writeBundle(dir string, drafts []draft) error {
+	// Validate the complete set before writing, so one bad external ID cannot
+	// leave a partially generated bundle behind.
 	for _, d := range drafts {
-		full := filepath.Join(dir, filepath.FromSlash(d.id)+".md")
+		if _, err := conceptFile(dir, d.id); err != nil {
+			return err
+		}
+	}
+	for _, d := range drafts {
+		full, err := conceptFile(dir, d.id)
+		if err != nil {
+			return err
+		}
 		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 			return err
 		}
@@ -56,7 +85,7 @@ func writeBundle(dir string, drafts []draft) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(full, content, 0o644); err != nil {
+		if err := os.WriteFile(full, content, 0o644); err != nil { //nolint:gosec // Bundle content is intentionally readable.
 			return err
 		}
 	}
@@ -66,7 +95,7 @@ func writeBundle(dir string, drafts []draft) error {
 	for _, d := range drafts {
 		fmt.Fprintf(&b, "- [%s](%s.md) — %s\n", d.id, d.id, d.fm.Title)
 	}
-	return os.WriteFile(filepath.Join(dir, okf.IndexFile), []byte(b.String()), 0o644)
+	return os.WriteFile(filepath.Join(dir, okf.IndexFile), []byte(b.String()), 0o644) //nolint:gosec // Bundle content is intentionally readable.
 }
 
 func main() {
@@ -105,7 +134,7 @@ func main() {
 		fmt.Println("okf.Validate: conformant ✓")
 	} else {
 		for _, v := range violations {
-			fmt.Printf("  VIOLATION %s: %s (%s)\n", v.Concept, v.Rule, v.Detail)
+			fmt.Printf("  VIOLATION %s: %s\n", v.Concept, v.Detail)
 		}
 	}
 

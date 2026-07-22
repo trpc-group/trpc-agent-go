@@ -10,6 +10,7 @@
 package okf
 
 import (
+	"strings"
 	"testing"
 	"testing/fstest"
 )
@@ -44,17 +45,17 @@ func TestValidate_ReportsViolations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
-	want := map[string]string{
-		"no-type":  ruleMissingType,
-		"bad":      ruleBadFrontmatter,
-		"sub/nofm": ruleMissingFrontmatter,
+	want := map[string]bool{
+		"no-type":  true,
+		"bad":      true,
+		"sub/nofm": true,
 	}
 	if len(vs) != len(want) {
 		t.Fatalf("got %d violations, want %d: %+v", len(vs), len(want), vs)
 	}
 	for _, v := range vs {
-		if want[v.Concept] != v.Rule {
-			t.Errorf("violation for %q = %q, want %q", v.Concept, v.Rule, want[v.Concept])
+		if !want[v.Concept] || v.Detail == "" {
+			t.Errorf("unexpected violation: %+v", v)
 		}
 	}
 }
@@ -73,7 +74,7 @@ func TestValidate_TypeMustBeString(t *testing.T) {
 		t.Fatalf("got %d violations, want 2: %+v", len(vs), vs)
 	}
 	for _, v := range vs {
-		if v.Rule != ruleMissingType || v.Concept == "valid" {
+		if v.Concept == "valid" || !strings.Contains(v.Detail, "required 'type'") {
 			t.Errorf("unexpected violation: %+v", v)
 		}
 	}
@@ -116,7 +117,7 @@ func TestValidate_ReservedFiles(t *testing.T) {
 				t.Fatal("expected reserved-structure violation")
 			}
 			for _, v := range vs {
-				if v.Rule != ruleReservedStructure {
+				if v.Detail == "" {
 					t.Errorf("unexpected violation: %+v", v)
 				}
 			}

@@ -21,19 +21,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Conformance rule ids reported by Validate. They remain internal until callers
-// need a stable programmatic classification API.
-const (
-	ruleMissingFrontmatter = "missing-frontmatter"
-	ruleBadFrontmatter     = "bad-frontmatter"
-	ruleMissingType        = "missing-type"
-	ruleReservedStructure  = "reserved-structure"
-)
-
 // Violation is one OKF conformance problem found by Validate.
 type Violation struct {
 	Concept string // Concept id (bundle-relative path minus .md).
-	Rule    string // Machine-readable rule id.
 	Detail  string // Human-readable explanation.
 }
 
@@ -75,13 +65,13 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 			if yamlPart, parsedBody, ok := splitRaw(raw); ok {
 				body = parsedBody
 				if path.Dir(p) != "." {
-					violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "non-root index.md must not carry frontmatter"})
+					violations = append(violations, Violation{Concept: conceptID(p), Detail: "non-root index.md must not carry frontmatter"})
 				} else if e := validateRootIndexFrontmatter(yamlPart); e != "" {
-					violations = append(violations, Violation{conceptID(p), ruleReservedStructure, e})
+					violations = append(violations, Violation{Concept: conceptID(p), Detail: e})
 				}
 			}
 			if !validIndexBody(body) {
-				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "index.md must contain one or more heading sections with linked list entries"})
+				violations = append(violations, Violation{Concept: conceptID(p), Detail: "index.md must contain one or more heading sections with linked list entries"})
 			}
 			return nil
 		}
@@ -89,27 +79,27 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 			body := raw
 			if _, parsedBody, ok := splitRaw(raw); ok {
 				body = parsedBody
-				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "log.md must not carry frontmatter"})
+				violations = append(violations, Violation{Concept: conceptID(p), Detail: "log.md must not carry frontmatter"})
 			}
 			if !validLogBody(body) {
-				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "log.md must contain newest-first YYYY-MM-DD sections with list entries"})
+				violations = append(violations, Violation{Concept: conceptID(p), Detail: "log.md must contain newest-first YYYY-MM-DD sections with list entries"})
 			}
 			return nil
 		}
 		id := conceptID(p)
 		yamlPart, _, ok := splitRaw(raw)
 		if !ok {
-			violations = append(violations, Violation{id, ruleMissingFrontmatter, "no leading --- YAML frontmatter block"})
+			violations = append(violations, Violation{Concept: id, Detail: "no leading --- YAML frontmatter block"})
 			return nil
 		}
 		root, e := yamlRoot(yamlPart)
 		if e != nil {
-			violations = append(violations, Violation{id, ruleBadFrontmatter, e.Error()})
+			violations = append(violations, Violation{Concept: id, Detail: e.Error()})
 			return nil
 		}
 		typeNode := mappingValue(root, "type")
 		if typeNode == nil || typeNode.Kind != yaml.ScalarNode || typeNode.Tag != "!!str" || strings.TrimSpace(typeNode.Value) == "" {
-			violations = append(violations, Violation{id, ruleMissingType, "required 'type' field must be a non-empty string"})
+			violations = append(violations, Violation{Concept: id, Detail: "required 'type' field must be a non-empty string"})
 		}
 		return nil
 	})

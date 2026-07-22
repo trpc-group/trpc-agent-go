@@ -24,7 +24,6 @@ const defaultName = "okf"
 // toolSet adapts a Store into a tool.ToolSet.
 type toolSet struct {
 	store        Store
-	name         string
 	namePrefix   string
 	maxBodyBytes int
 	tools        []tool.Tool
@@ -38,7 +37,6 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 	}
 	t := &toolSet{
 		store: store,
-		name:  defaultName,
 	}
 	for _, opt := range opts {
 		opt(t)
@@ -50,7 +48,7 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 				return nil, fmt.Errorf("okf: invalid tool name prefix %q: use only letters, numbers, underscores, and hyphens", t.namePrefix)
 			}
 		}
-		if len(t.toolName("okf_read")) > 64 {
+		if len(t.Name()+"_read") > 64 {
 			return nil, fmt.Errorf("okf: tool name prefix %q produces a name longer than 64 characters", t.namePrefix)
 		}
 	}
@@ -71,16 +69,9 @@ func (t *toolSet) Close() error { return nil }
 // mounted on one agent get distinct set names.
 func (t *toolSet) Name() string {
 	if t.namePrefix != "" {
-		return t.namePrefix + "_" + t.name
+		return t.namePrefix + "_" + defaultName
 	}
-	return t.name
-}
-
-func (t *toolSet) toolName(base string) string {
-	if t.namePrefix != "" {
-		return t.namePrefix + "_" + base
-	}
-	return base
+	return defaultName
 }
 
 // truncateUTF8 returns s cut to at most n bytes without splitting a rune.
@@ -110,7 +101,7 @@ func (t *toolSet) listTool() tool.Tool {
 			}
 			return t.store.List(ctx, dir)
 		},
-		function.WithName(t.toolName("okf_list")),
+		function.WithName("list"),
 		function.WithDescription("List an OKF knowledge-bundle directory (progressive disclosure). "+
 			"Returns index.md content plus the concepts and sub-directories directly under 'dir', "+
 			"so you can decide what to read next. Start here with 'dir' omitted to see the bundle "+
@@ -125,13 +116,13 @@ type readArgs struct {
 }
 
 func (t *toolSet) readTool() tool.Tool {
-	return function.NewFunctionTool(
+	read := function.NewFunctionTool(
 		func(ctx context.Context, a readArgs) (Concept, error) {
 			c, err := t.store.Read(ctx, a.ConceptID)
 			if err != nil {
 				if errors.Is(err, ErrNotFound) {
 					msg := fmt.Sprintf("concept %q not found — call %s to browse the bundle",
-						a.ConceptID, t.toolName("okf_list"))
+						a.ConceptID, t.Name()+"_list")
 					return Concept{}, errors.New(msg)
 				}
 				return Concept{}, err
@@ -142,9 +133,13 @@ func (t *toolSet) readTool() tool.Tool {
 			}
 			return c, nil
 		},
-		function.WithName(t.toolName("okf_read")),
+		function.WithName("read"),
 		function.WithDescription("Read one OKF concept by id. Returns its structured frontmatter "+
 			"(type/title/description/resource/tags/timestamp), the markdown body, and outgoing links "+
 			"to related concepts so you can navigate the knowledge graph."),
 	)
+	// Frontmatter.Extra preserves arbitrary YAML values, including scalars. The
+	// generic schema generator cannot infer that from map[string]any.
+	read.Declaration().OutputSchema.Properties["frontmatter"].Properties["extra"].AdditionalProperties = true
+	return read
 }
