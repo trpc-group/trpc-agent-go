@@ -40,29 +40,56 @@ func TestComputeDeltaKinds(t *testing.T) {
 	}
 }
 
-func TestComputeDeltaUnpairedIgnored(t *testing.T) {
+func TestComputeDeltaUnpairedCandidateIsUnexpected(t *testing.T) {
+	// A candidate-only metric has no baseline pair: the compared metric sets
+	// differ, so it is recorded as Missing/unexpected rather than silently skipped.
 	baseline := evalR(0, caseR("c1", metricR("m", 0, status.EvalStatusFailed, "")))
 	candidate := evalR(1,
 		caseR("c1", metricR("m", 1, status.EvalStatusPassed, "")),
-		caseR("c2", metricR("m", 1, status.EvalStatusPassed, "")), // no baseline pair -> skipped
+		caseR("c2", metricR("m", 1, status.EvalStatusPassed, "")),
 	)
 	got := ComputeDelta(baseline, candidate)
-	if len(got.CaseDeltas) != 1 {
-		t.Fatalf("caseDeltas=%d want 1 (unpaired candidate skipped)", len(got.CaseDeltas))
+	if len(got.CaseDeltas) != 2 || got.Summary.UnexpectedMetrics != 1 {
+		t.Fatalf("caseDeltas=%d unexpected=%d want 2/1", len(got.CaseDeltas), got.Summary.UnexpectedMetrics)
 	}
 }
 
-func TestComputeDeltaDroppedFailingMetricIsUnchanged(t *testing.T) {
-	// A baseline metric that was already failing at score 0 and then vanishes has
-	// nothing to lose: it must not be reported as a 0 -> 0 ScoreDown.
+func TestComputeDeltaDroppedFailingMetricIsMissing(t *testing.T) {
+	// A baseline metric that vanishes from the candidate did NOT preserve its
+	// score: the phases measured different metric sets. It must be recorded as
+	// Missing (not Unchanged), so the gate can refuse the incomparable pair.
 	baseline := evalR(0.0, caseR("c1", metricR("m", 0.0, status.EvalStatusFailed, "text mismatch")))
 	candidate := evalR(0.0, caseR("c1"))
 	got := ComputeDelta(baseline, candidate)
-	if got.Summary.ScoreDown != 0 || got.Summary.Unchanged != 1 {
-		t.Fatalf("summary=%+v want ScoreDown=0 Unchanged=1", got.Summary)
+	if got.Summary.Unchanged != 0 || got.Summary.MissingMetrics != 1 {
+		t.Fatalf("summary=%+v want Unchanged=0 MissingMetrics=1", got.Summary)
 	}
-	if got.CaseDeltas[0].Kind != DeltaUnchanged {
-		t.Fatalf("kind=%s want Unchanged", got.CaseDeltas[0].Kind)
+	if got.CaseDeltas[0].Kind != DeltaMissing || got.CaseDeltas[0].CandidateStatus != statusAbsent {
+		t.Fatalf("delta=%+v want kind Missing with candidate status absent", got.CaseDeltas[0])
+	}
+}
+
+func TestComputeDeltaVanishedFailingMetricCannotInflateGain(t *testing.T) {
+	// Baseline: one passing + one zero-scored failing metric (aggregate 0.5). The
+	// candidate reports only the passing metric (aggregate 1.0). The vanished
+	// failing metric must surface as MissingMetrics so the gate rejects the
+	// inflated gain instead of releasing on it.
+	baseline := evalR(0.5, caseR("c1",
+		metricR("pass_metric", 1.0, status.EvalStatusPassed, ""),
+		metricR("fail_metric", 0.0, status.EvalStatusFailed, "text mismatch"),
+	))
+	candidate := evalR(1.0, caseR("c1", metricR("pass_metric", 1.0, status.EvalStatusPassed, "")))
+	delta := ComputeDelta(baseline, candidate)
+	if delta.Summary.MissingMetrics != 1 || delta.Summary.NewlyFailed != 0 {
+		t.Fatalf("summary=%+v want MissingMetrics=1", delta.Summary)
+	}
+	gate := ReleaseGate{MinTotalGain: 0.2}.Evaluate(GateInput{
+		ProfileAccepted: true,
+		TotalGain:       0.5,
+		Delta:           delta,
+	})
+	if gate.Released {
+		t.Fatalf("vanished failing metric must not release, reasons=%v", gate.Reasons)
 	}
 }
 
@@ -97,14 +124,14 @@ func TestAcceptedValidationFallsBackToBaseline(t *testing.T) {
 	}
 }
 
-func TestComputeDeltaDroppedBaselineMetricIsRegression(t *testing.T) {
+func TestComputeDeltaDroppedPassingMetricIsMissing(t *testing.T) {
 	baseline := evalR(1.0, caseR("c1", metricR("m", 1.0, status.EvalStatusPassed, "")))
 	// Candidate case c1 exists but the metric m is gone (e.g. it stopped being
 	// evaluated); the passing baseline metric must not be silently dropped.
 	candidate := evalR(0.0, caseR("c1"))
 	got := ComputeDelta(baseline, candidate)
-	if got.Summary.NewlyFailed != 1 {
-		t.Fatalf("newlyFailed=%d want 1 (dropped passing baseline metric)", got.Summary.NewlyFailed)
+	if got.Summary.MissingMetrics != 1 {
+		t.Fatalf("missingMetrics=%d want 1 (dropped passing baseline metric)", got.Summary.MissingMetrics)
 	}
 	if len(got.CaseDeltas) != 1 || got.CaseDeltas[0].CandidateStatus != statusAbsent {
 		t.Fatalf("expected one delta with candidate status %q, got %+v", statusAbsent, got.CaseDeltas)

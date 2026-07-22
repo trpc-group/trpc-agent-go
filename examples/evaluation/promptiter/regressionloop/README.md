@@ -17,10 +17,13 @@ optimization config, the pipeline:
 2. **Optimization** — runs the real PromptIter engine (backward → aggregate →
    optimize) to produce a candidate instruction.
 3. **Validation regression** — re-scores the candidate and computes a per-case
-   delta vs baseline (newly passed / newly failed / score up / score down).
+   delta vs baseline (newly passed / newly failed / score up / score down; a
+   metric present in only one phase is flagged as missing/unexpected and makes
+   the pair non-comparable).
 4. **Failure attribution** — classifies baseline failures by root cause.
 5. **Release gate** — decides whether the engine-accepted candidate is safe to
-   publish (score gain threshold, no new hard fails, protected cases, budget).
+   publish (score gain threshold, no new hard fails, protected cases, budget,
+   comparable metric sets, and the accepted profile artifact actually present).
 6. **Audit report** — writes `optimization_report.json` (machine truth) and
    `optimization_report.md` (human summary).
 
@@ -135,8 +138,10 @@ The report's `cost` records observable counts: wall-clock `durationMs`, per-role
 no `llmJudge` metric is configured), and `evaluatedCases` (a case count, kept
 distinct from model calls). The engine carries no token accounting, so `cost` is
 labelled `"estimated": true`. The report also records the accepted candidate's
-surface projection, per-round output surfaces / validation / delta, and the run
-config (`deterministic`, `randomSeed`, fake-model summary) for reproducibility.
+surface projection (typed per `SurfaceValue` variant — text, few-shot, model,
+tools, skills — with model credentials never written), per-round output
+surfaces / validation / delta, and the run config (`deterministic`,
+`randomSeed`, fake-model summary) for reproducibility.
 The gate can enforce a `maxModelCalls` budget (and fails closed if a budget is
 set but the call count was not instrumented).
 

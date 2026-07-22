@@ -27,6 +27,10 @@ const (
 	DeltaScoreDown DeltaKind = "ScoreDown"
 	// DeltaUnchanged marks a metric with no meaningful score or status change.
 	DeltaUnchanged DeltaKind = "Unchanged"
+	// DeltaMissing marks a metric present in only one phase: the phases measured
+	// different metric sets, so the pair is not comparable (it is neither a
+	// preserved score nor a regression).
+	DeltaMissing DeltaKind = "Missing"
 )
 
 // FailureCategory groups one failed metric by its likely root cause.
@@ -99,10 +103,15 @@ type CandidateScore struct {
 	Surfaces        []SurfaceProjection `json:"surfaces,omitempty"`
 }
 
-// SurfaceProjection is a stable, minimal audit view of one optimized surface:
-// only its ID and textual value, never the whole internal profile object.
+// SurfaceProjection is a stable, bounded audit view of one optimized surface.
+// Type names the projected SurfaceValue variant (text, fewShot, model, tools,
+// skills, promptSyntax, or empty) and Value is its stable textual rendering, so
+// non-text optimizations are preserved in the audit instead of silently
+// dropped. Model projections keep identity fields only; credentials (API key,
+// base URL, headers) are never written to the report.
 type SurfaceProjection struct {
 	SurfaceID string `json:"surfaceId"`
+	Type      string `json:"type"`
 	Value     string `json:"value"`
 }
 
@@ -124,13 +133,20 @@ type CaseDelta struct {
 	Kind            DeltaKind `json:"kind"`
 }
 
-// DeltaSummary counts case deltas by kind.
+// DeltaSummary counts case deltas by kind. MissingMetrics and UnexpectedMetrics
+// count metric keys present in only one phase; either being non-zero means the
+// compared metric sets differ and the phases are not comparable, which the
+// release gate treats as unreleasable.
 type DeltaSummary struct {
 	NewlyPassed int `json:"newlyPassed"`
 	NewlyFailed int `json:"newlyFailed"`
 	ScoreUp     int `json:"scoreUp"`
 	ScoreDown   int `json:"scoreDown"`
 	Unchanged   int `json:"unchanged"`
+	// MissingMetrics counts baseline metrics absent from the candidate.
+	MissingMetrics int `json:"missingMetrics"`
+	// UnexpectedMetrics counts candidate metrics absent from the baseline.
+	UnexpectedMetrics int `json:"unexpectedMetrics"`
 }
 
 // AttributionReport summarizes baseline failures by category and severity.

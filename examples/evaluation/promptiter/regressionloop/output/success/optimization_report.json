@@ -53,6 +53,7 @@
     "surfaces": [
       {
         "surfaceId": "candidate#instruction",
+        "type": "text",
         "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
       }
     ]
@@ -95,7 +96,9 @@
       "newlyFailed": 0,
       "scoreUp": 0,
       "scoreDown": 0,
-      "unchanged": 0
+      "unchanged": 0,
+      "missingMetrics": 0,
+      "unexpectedMetrics": 0
     }
   },
   "failureAttribution": {
@@ -162,6 +165,7 @@
       "outputSurfaces": [
         {
           "surfaceId": "candidate#instruction",
+          "type": "text",
           "value": "USE_STRUCTURED_RECAP 严格按 \"\u003c胜队\u003e以\u003c比分\u003e战胜\u003c负队\u003e。\" 的格式输出简体中文战报，只输出一句话。"
         }
       ],
@@ -244,7 +248,9 @@
           "newlyFailed": 0,
           "scoreUp": 0,
           "scoreDown": 0,
-          "unchanged": 0
+          "unchanged": 0,
+          "missingMetrics": 0,
+          "unexpectedMetrics": 0
         }
       }
     }

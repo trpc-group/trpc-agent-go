@@ -37,7 +37,7 @@ Terminal-loss severity (training signal): unknown=3
 
 ## Accepted candidate
 
-- `candidate#instruction`: USE_STRUCTURED_RECAP 严格按 "<胜队>以<比分>战胜<负队>。" 的格式输出简体中文战报，只输出一句话。
+- `candidate#instruction` (text): USE_STRUCTURED_RECAP 严格按 "<胜队>以<比分>战胜<负队>。" 的格式输出简体中文战报，只输出一句话。
 
 ## Cost (estimated)
 

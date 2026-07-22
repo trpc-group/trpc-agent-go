@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strings"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
@@ -76,7 +77,16 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	// or failed run may retain an accepted round, and a slimmed RunResult that
 	// omits evaluation cases would hide regressions and release on aggregate gain
 	// alone — both must be rejected rather than released.
-	gate = applyReleasePreconditions(gate, result, candidateValidation)
+	gate = applyReleasePreconditions(gate, result, candidateValidation, acceptedRound)
+
+	// Project the accepted candidate's surfaces only when a round was actually
+	// accepted; the engine keeps the initial profile as AcceptedProfile when every
+	// round is rejected, and rendering those baseline overrides under "Accepted
+	// candidate" would misattribute them.
+	var acceptedSurfaces []SurfaceProjection
+	if acceptedRound > 0 {
+		acceptedSurfaces = candidateSurfaces(result.AcceptedProfile)
+	}
 
 	return &Report{
 		App:      opts.App,
@@ -87,7 +97,7 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 			OverallScore:    candidate.OverallScore,
 			ProfileAccepted: acceptedRound > 0,
 			AcceptedRound:   acceptedRound,
-			Surfaces:        candidateSurfaces(result.AcceptedProfile),
+			Surfaces:        acceptedSurfaces,
 		},
 		Delta:              delta,
 		FailureAttribution: attribution,
@@ -98,22 +108,59 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	}, nil
 }
 
-// candidateSurfaces projects the accepted profile down to a stable audit view:
-// each overridden surface's ID and textual value only.
+// candidateSurfaces projects a profile down to a stable audit view: every
+// override is kept, rendered as a (type, value) pair per SurfaceValue variant,
+// so a non-text optimization (few-shot, model, tools, skills) cannot be
+// released while absent from the audit.
 func candidateSurfaces(profile *promptiter.Profile) []SurfaceProjection {
 	if profile == nil {
 		return nil
 	}
 	surfaces := make([]SurfaceProjection, 0, len(profile.Overrides))
 	for _, override := range profile.Overrides {
-		if override.Value.Text != nil {
-			surfaces = append(surfaces, SurfaceProjection{SurfaceID: override.SurfaceID, Value: *override.Value.Text})
-		}
+		kind, value := projectSurfaceValue(override.Value)
+		surfaces = append(surfaces, SurfaceProjection{SurfaceID: override.SurfaceID, Type: kind, Value: value})
 	}
 	if len(surfaces) == 0 {
 		return nil
 	}
 	return surfaces
+}
+
+// projectSurfaceValue renders one SurfaceValue variant as a stable
+// (type, value) pair. Model projections keep identity fields only; credentials
+// (API key, base URL, headers) must never reach the audit report.
+func projectSurfaceValue(v astructure.SurfaceValue) (string, string) {
+	switch {
+	case v.Text != nil:
+		return "text", *v.Text
+	case len(v.FewShot) > 0:
+		return "fewShot", compactJSON(v.FewShot)
+	case v.Model != nil:
+		return "model", compactJSON(struct {
+			Provider string `json:",omitempty"`
+			Name     string `json:",omitempty"`
+			Variant  string `json:",omitempty"`
+		}{v.Model.Provider, v.Model.Name, v.Model.Variant})
+	case len(v.Tools) > 0:
+		return "tools", compactJSON(v.Tools)
+	case len(v.Skills) > 0:
+		return "skills", compactJSON(v.Skills)
+	case v.PromptSyntax != nil:
+		return "promptSyntax", string(*v.PromptSyntax)
+	default:
+		return "empty", ""
+	}
+}
+
+// compactJSON renders a value as one-line JSON; a marshal failure is made
+// visible in the report instead of dropping the surface.
+func compactJSON(v any) string {
+	payload, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("unserializable: %v", err)
+	}
+	return string(payload)
 }
 
 // totalModelCalls sums per-role model call counts.
@@ -127,12 +174,20 @@ func totalModelCalls(calls map[string]int) int {
 
 // applyReleasePreconditions forces the gate closed when the result cannot
 // support a trustworthy release decision: the run must have completed
-// successfully, and both phases must carry comparable per-case data.
-func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult) GateResult {
+// successfully, both phases must carry comparable per-case data, and an
+// accepted round must come with the actual accepted profile artifact.
+func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult, acceptedRound int) GateResult {
 	if result.Status != engine.RunStatusSucceeded {
 		gate.Released = false
 		gate.Reasons = append(gate.Reasons, fmt.Sprintf("run did not complete successfully (status %q)", result.Status))
 		return gate
+	}
+	// A release publishes the accepted profile; a profile-slimmed result (e.g.
+	// stored with OmitProfiles) keeps the acceptance decision but drops the
+	// artifact, so there is nothing to publish and the gate must fail closed.
+	if acceptedRound > 0 && result.AcceptedProfile == nil {
+		gate.Released = false
+		gate.Reasons = append(gate.Reasons, "accepted profile artifact unavailable (profile-slimmed result); nothing to publish")
 	}
 	if !hasComparableCases(result.BaselineValidation) || !hasComparableCases(candidate) {
 		gate.Released = false
@@ -273,7 +328,7 @@ func (r *Report) Markdown() string {
 	if len(r.Candidate.Surfaces) > 0 {
 		fmt.Fprintf(&b, "## Accepted candidate\n\n")
 		for _, s := range r.Candidate.Surfaces {
-			fmt.Fprintf(&b, "- `%s`: %s\n", s.SurfaceID, s.Value)
+			fmt.Fprintf(&b, "- `%s` (%s): %s\n", s.SurfaceID, s.Type, s.Value)
 		}
 		b.WriteString("\n")
 	}

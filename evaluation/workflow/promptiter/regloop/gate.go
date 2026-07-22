@@ -61,6 +61,15 @@ func (g ReleaseGate) Evaluate(in GateInput) GateResult {
 		reasons = append(reasons, fmt.Sprintf("total gain %.3f < threshold %.3f", in.TotalGain, g.MinTotalGain))
 	}
 
+	// Fail closed when the compared metric sets differ: a metric present in only
+	// one phase means the phases are not comparable, and a candidate that stopped
+	// reporting a failing metric would otherwise inflate its aggregate gain.
+	if miss, unexpected := in.Delta.Summary.MissingMetrics, in.Delta.Summary.UnexpectedMetrics; miss > 0 || unexpected > 0 {
+		released = false
+		reasons = append(reasons, fmt.Sprintf(
+			"metric sets not comparable: %d baseline metric(s) missing from candidate, %d candidate-only metric(s)", miss, unexpected))
+	}
+
 	// Count distinct cases with a newly-failed metric, so the reason text ("cases")
 	// matches what is actually measured (DeltaSummary.NewlyFailed is per-metric).
 	newlyFailedCases := newlyFailedCaseCount(in.Delta)

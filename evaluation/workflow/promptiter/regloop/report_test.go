@@ -15,19 +15,28 @@ import (
 	"strings"
 	"testing"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
+// textProfile builds a profile with one text surface override.
+func textProfile(surfaceID, text string) *promptiter.Profile {
+	return &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+		{SurfaceID: surfaceID, Value: astructure.SurfaceValue{Text: &text}},
+	}}
+}
+
 // acceptedRunFixture mirrors the fake example: baseline fails, round 1 passes and
-// is accepted.
+// is accepted, and the run carries the accepted profile artifact.
 func acceptedRunFixture() *engine.RunResult {
 	baseline := evalR(0.0, caseR("c1", metricR("final_response_avg_score", 0.0, status.EvalStatusFailed, "text mismatch")))
 	candidate := evalR(1.0, caseR("c1", metricR("final_response_avg_score", 1.0, status.EvalStatusPassed, "")))
 	return &engine.RunResult{
 		Status:             engine.RunStatusSucceeded,
 		BaselineValidation: baseline,
+		AcceptedProfile:    textProfile("candidate#instruction", "optimized instruction"),
 		Rounds:             []engine.RoundResult{lossRound(1, candidate, true, 1.0, promptiter.LossSeverityP1)},
 	}
 }
@@ -78,6 +87,45 @@ func TestAnalyzeFailsClosedOnNonSucceededStatus(t *testing.T) {
 		if report.Gate.Released {
 			t.Fatalf("status %q must not release, reasons=%v", st, report.Gate.Reasons)
 		}
+	}
+}
+
+func TestAnalyzeFailsClosedWithoutAcceptedProfileArtifact(t *testing.T) {
+	// A result stored with OmitProfiles keeps the acceptance decision and
+	// validation data but drops AcceptedProfile; there is nothing to publish, so
+	// the gate must not report Released.
+	result := acceptedRunFixture()
+	result.AcceptedProfile = nil
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("missing accepted profile artifact must not release, reasons=%v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeRejectedRunHasNoCandidateSurfaces(t *testing.T) {
+	// When every round is rejected the engine keeps the initial profile as
+	// AcceptedProfile; its baseline overrides must not be presented as the
+	// accepted candidate.
+	baseline := evalR(0.5, caseR("c1", metricR("m", 0.5, status.EvalStatusFailed, "text mismatch")))
+	v1 := evalR(0.5, caseR("c1", metricR("m", 0.5, status.EvalStatusFailed, "text mismatch")))
+	result := &engine.RunResult{
+		Status:             engine.RunStatusSucceeded,
+		BaselineValidation: baseline,
+		AcceptedProfile:    textProfile("candidate#instruction", "baseline instruction"),
+		Rounds:             []engine.RoundResult{lossRound(1, v1, false, 0.0)},
+	}
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(report.Candidate.Surfaces) != 0 {
+		t.Fatalf("rejected run must not project candidate surfaces, got %+v", report.Candidate.Surfaces)
+	}
+	if report.Gate.Released {
+		t.Fatalf("rejected run must not release, reasons=%v", report.Gate.Reasons)
 	}
 }
 
@@ -140,6 +188,52 @@ func TestRoundReportDeltaUsesLastAcceptedBaseline(t *testing.T) {
 	}
 	if len(report.Rounds[1].Validation.EvalSets) == 0 {
 		t.Fatalf("round validation per-case must be present")
+	}
+}
+
+func TestAnalyzeProjectsToolSurface(t *testing.T) {
+	// An accepted tool-surface optimization must appear in the audit; dropping
+	// every non-text override would release a change the report never records.
+	result := acceptedRunFixture()
+	result.AcceptedProfile = &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+		{SurfaceID: "candidate#tools", Value: astructure.SurfaceValue{Tools: []astructure.ToolRef{
+			{ID: "search", Description: "sharpened tool description"},
+		}}},
+	}}
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if len(report.Candidate.Surfaces) != 1 {
+		t.Fatalf("surfaces=%+v want the tool override projected", report.Candidate.Surfaces)
+	}
+	s := report.Candidate.Surfaces[0]
+	if s.Type != "tools" || !strings.Contains(s.Value, "sharpened tool description") {
+		t.Fatalf("surface=%+v want type tools carrying the description", s)
+	}
+}
+
+func TestProjectSurfaceValueNeverLeaksModelCredentials(t *testing.T) {
+	kind, value := projectSurfaceValue(astructure.SurfaceValue{Model: &astructure.ModelRef{
+		Provider: "openai-compat",
+		Name:     "gpt-x",
+		Variant:  "mini",
+		BaseURL:  "https://internal.example.com",
+		APIKey:   "sk-super-secret",
+		Headers:  map[string]string{"Authorization": "Bearer sk-super-secret"},
+	}})
+	if kind != "model" {
+		t.Fatalf("kind=%q want model", kind)
+	}
+	for _, leaked := range []string{"sk-super-secret", "internal.example.com", "Authorization"} {
+		if strings.Contains(value, leaked) {
+			t.Fatalf("credential %q leaked into projection %q", leaked, value)
+		}
+	}
+	for _, kept := range []string{"openai-compat", "gpt-x", "mini"} {
+		if !strings.Contains(value, kept) {
+			t.Fatalf("identity field %q missing from projection %q", kept, value)
+		}
 	}
 }
 

@@ -83,10 +83,11 @@ func acceptedValidation(result *engine.RunResult) (*engine.EvaluationResult, int
 
 // ComputeDelta pairs baseline and candidate metric measurements by
 // (evalSetID, evalCaseID, metricName) and classifies each movement. It iterates
-// the union of baseline and candidate keys so a metric that existed at baseline
-// but is absent from the candidate is reported as a regression rather than
-// silently dropped. New candidate-only metrics have no baseline to compare and
-// are skipped.
+// the union of baseline and candidate keys: a metric present in only one phase
+// is recorded as Missing and counted in MissingMetrics / UnexpectedMetrics,
+// because disappearance means the phases measured different metric sets — not
+// that the other phase preserved any particular score. The release gate treats
+// either count being non-zero as unreleasable.
 func ComputeDelta(baseline, candidate *engine.EvaluationResult) DeltaReport {
 	baselineIndex := indexMetrics(baseline)
 	candidateIndex := indexMetrics(candidate)
@@ -108,40 +109,33 @@ func ComputeDelta(baseline, candidate *engine.EvaluationResult) DeltaReport {
 				CandidateStatus: string(cand.Status),
 				Kind:            classifyDelta(base, cand),
 			}
+			addToSummary(&summary, d.Kind)
 		case hasBase:
 			d = CaseDelta{
 				EvalSetID:       key.evalSetID,
 				EvalCaseID:      key.evalCaseID,
 				MetricName:      key.metricName,
 				BaselineScore:   base.Score,
-				CandidateScore:  0,
 				BaselineStatus:  string(base.Status),
 				CandidateStatus: statusAbsent,
-				Kind:            droppedKind(base),
+				Kind:            DeltaMissing,
 			}
+			summary.MissingMetrics++
 		default:
-			continue
+			d = CaseDelta{
+				EvalSetID:       key.evalSetID,
+				EvalCaseID:      key.evalCaseID,
+				MetricName:      key.metricName,
+				CandidateScore:  cand.Score,
+				BaselineStatus:  statusAbsent,
+				CandidateStatus: string(cand.Status),
+				Kind:            DeltaMissing,
+			}
+			summary.UnexpectedMetrics++
 		}
-		addToSummary(&summary, d.Kind)
 		deltas = append(deltas, d)
 	}
 	return DeltaReport{CaseDeltas: deltas, Summary: summary}
-}
-
-// droppedKind classifies a baseline metric that disappeared from the candidate.
-// A previously passing metric becomes a new failure; a previously failing metric
-// that carried a positive partial score is a score drop; a metric that was
-// already at zero has nothing to lose and stays unchanged (avoids reporting a
-// 0 -> 0 "score down").
-func droppedKind(base engine.MetricResult) DeltaKind {
-	switch {
-	case base.Status == status.EvalStatusPassed:
-		return DeltaNewlyFailed
-	case base.Score > scoreEpsilon:
-		return DeltaScoreDown
-	default:
-		return DeltaUnchanged
-	}
 }
 
 func addToSummary(summary *DeltaSummary, kind DeltaKind) {
