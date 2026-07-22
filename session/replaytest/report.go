@@ -147,6 +147,28 @@ func runCasePair(
 
 	ca := Normalize(snapA)
 	cb := Normalize(snapB)
+	// Memory search is a soft dimension: when the case has a search query
+	// but either target does not support search, the search read-back
+	// (captured only on targets that do) is excluded from the comparison
+	// instead of failing the case, so backends without search still
+	// validate memory add/update/delete/list semantics.
+	if c.SearchQuery != "" && (!ref.Caps().MemorySearch || !cand.Caps().MemorySearch) {
+		ca.Search = nil
+		cb.Search = nil
+		who := cand.Name()
+		if !ref.Caps().MemorySearch {
+			who = ref.Name()
+		}
+		cr.Notes = append(cr.Notes, Diff{
+			Dimension:  DimMemory,
+			Severity:   SevMissing,
+			EventIndex: -1,
+			Path:       "memory_search",
+			Allowed:    true,
+			Note: fmt.Sprintf("memory search unsupported by %s; "+
+				"search results excluded from comparison", who),
+		})
+	}
 	for _, df := range DiffCanonicalWithDelta(ca, cb, c.UnorderedEvents, c.FloatDelta) {
 		if df.Allowed {
 			cr.Notes = append(cr.Notes, df)

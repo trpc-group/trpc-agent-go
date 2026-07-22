@@ -106,6 +106,48 @@ func TestRunPairUnsupported(t *testing.T) {
 	assert.Equal(t, 0, rep.Totals.Fail)
 }
 
+// TestRunPairSearchSoftDimension verifies that memory search is not a
+// precondition for the baseline memory coverage: a candidate without
+// MemorySearch still runs the memory read/write steps and passes, while the
+// reference's search read-back is excluded and recorded as an allowed note.
+func TestRunPairSearchSoftDimension(t *testing.T) {
+	ref := NewInMemoryTarget("ref")
+	defer ref.Close()
+	cand := &searchlessTarget{InMemoryTarget: NewInMemoryTarget("searchless")}
+	defer cand.Close()
+
+	c := Case{
+		Name:        "memory/write_read_soft_search",
+		NeedCaps:    Capability{Memory: true},
+		SearchQuery: "咖啡",
+		Steps: []Step{
+			{Op: OpAddMemory, Memory: &MemorySpec{Content: "用户偏好：咖啡不加糖"}},
+		},
+	}
+	rep, err := RunPair(context.Background(), []Case{c}, ref, cand)
+	require.NoError(t, err)
+	require.Len(t, rep.Cases, 1)
+	cr := rep.Cases[0]
+	assert.Equal(t, StatusPass, cr.Status)
+	assert.Empty(t, cr.Diffs)
+	require.Len(t, cr.Notes, 1)
+	assert.True(t, cr.Notes[0].Allowed)
+	assert.Equal(t, "memory_search", cr.Notes[0].Path)
+	assert.Contains(t, cr.Notes[0].Note, "searchless")
+}
+
+// searchlessTarget hides only the memory-search capability.
+type searchlessTarget struct {
+	*InMemoryTarget
+}
+
+// Caps drops memory search while keeping memory read/write.
+func (s *searchlessTarget) Caps() Capability {
+	c := CapAll
+	c.MemorySearch = false
+	return c
+}
+
 // partialTarget hides memory capability.
 type partialTarget struct {
 	*InMemoryTarget

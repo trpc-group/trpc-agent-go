@@ -69,12 +69,15 @@ func MemoryScopeIsolation() replaytest.Case {
 // search read-back.
 // It guards memory content/metadata fidelity, update, delete and clear
 // semantics, and search result-set consistency (ordering is an allowed
-// note).
+// note). MemorySearch is deliberately not required: a backend without
+// search still validates add/update/delete/list here, and the search
+// read-back (captured only on targets that support it) is excluded from
+// the comparison by runCasePair.
 func MemoryWriteRead() replaytest.Case {
 	return replaytest.Case{
 		Name:        "memory/write_read",
 		Description: "memory add/update/delete/clear with topics+metadata; list and search read-back",
-		NeedCaps:    replaytest.Capability{Memory: true, MemorySearch: true},
+		NeedCaps:    replaytest.Capability{Memory: true},
 		SearchQuery: "咖啡",
 		Steps: []replaytest.Step{
 			{Op: replaytest.OpAddMemory, Memory: &replaytest.MemorySpec{
