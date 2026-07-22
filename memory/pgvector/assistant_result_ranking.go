@@ -16,32 +16,41 @@ import (
 
 const assistantResultPrefix = "assistant result:"
 
-var assistantResultRecallPhrases = []string{
-	"assistant",
+var assistantResultDirectRecallPhrases = []string{
+	"assistant's",
+	"earlier you",
 	"did you mention",
 	"did you recommend",
 	"did you say",
 	"did you suggest",
-	"earlier conversation",
-	"earlier you",
-	"follow up",
-	"follow-up",
-	"last conversation",
-	"in our conversation",
-	"from our conversation",
-	"previous conversation",
-	"remind me",
-	"we discussed",
-	"we talked",
+	"the assistant",
 	"you listed",
 	"you mentioned",
 	"you recommended",
 	"you said",
 	"you suggested",
 	"you told me",
-	"your answer",
-	"your recommendation",
-	"your response",
+	"your earlier answer",
+	"your earlier recommendation",
+	"your earlier response",
+	"your last answer",
+	"your last recommendation",
+	"your last response",
+	"your previous answer",
+	"your previous recommendation",
+	"your previous response",
+}
+
+var assistantResultConversationPhrases = []string{
+	"earlier conversation",
+	"follow up",
+	"follow-up",
+	"from our conversation",
+	"in our conversation",
+	"last conversation",
+	"previous conversation",
+	"we discussed",
+	"we talked",
 }
 
 func rankResultsByAssistantResultIntent(
@@ -80,7 +89,15 @@ func rankResultsByAssistantResultIntent(
 
 func asksForAssistantResult(query string) bool {
 	query = strings.ToLower(strings.Join(strings.Fields(query), " "))
-	for _, phrase := range assistantResultRecallPhrases {
+	for _, phrase := range assistantResultDirectRecallPhrases {
+		if strings.Contains(query, phrase) {
+			return true
+		}
+	}
+	if !strings.Contains(query, "remind me") {
+		return false
+	}
+	for _, phrase := range assistantResultConversationPhrases {
 		if strings.Contains(query, phrase) {
 			return true
 		}

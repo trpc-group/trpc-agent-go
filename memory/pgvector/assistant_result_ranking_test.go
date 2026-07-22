@@ -63,16 +63,22 @@ func TestRankResultsByAssistantResultIntentRequiresMixedProvenance(t *testing.T)
 func TestAsksForAssistantResult(t *testing.T) {
 	for _, query := range []string{
 		"What did you recommend?",
-		"Can you remind me what was listed?",
-		"Following up on our previous conversation",
+		"Can you remind me what you listed?",
+		"Following up on our previous conversation, can you remind me who was mentioned?",
 		"What did the assistant say?",
+		"What was your previous answer?",
 	} {
 		assert.True(t, asksForAssistantResult(query), query)
 	}
 	for _, query := range []string{
 		"Can you recommend a restaurant?",
+		"Can you remind me when I bought my iPad?",
+		"Can you remind me what was listed?",
 		"How much will I save?",
+		"I want to follow up on my doctor's visit.",
 		"What did I buy?",
+		"What did I mention in our previous conversation?",
+		"What is your recommendation?",
 	} {
 		assert.False(t, asksForAssistantResult(query), query)
 	}
