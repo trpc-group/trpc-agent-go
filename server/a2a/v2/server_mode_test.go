@@ -43,24 +43,26 @@ func (r *modeTestRunner) Run(
 
 func (*modeTestRunner) Close() error { return nil }
 
-func TestBuildProcessorSelectsTaskMode(t *testing.T) {
+func TestBuildProcessorKeepsEventTypeAcrossManagers(t *testing.T) {
 	tests := []struct {
-		name              string
-		taskManager       TaskManagerBuilder
-		wantTaskMode      bool
-		wantStreamingType StreamingEventType
+		name          string
+		taskManager   TaskManagerBuilder
+		streamingType StreamingEventType
 	}{
 		{
-			name:              "default stateless mode",
-			wantStreamingType: StreamingEventTypeMessage,
+			name:          "default stateless manager",
+			streamingType: StreamingEventTypeTaskArtifactUpdate,
 		},
 		{
-			name: "explicit task manager",
+			name: "explicit retaining manager",
 			taskManager: func(taskmanager.MessageProcessor) taskmanager.TaskManager {
 				return nil
 			},
-			wantTaskMode:      true,
-			wantStreamingType: StreamingEventTypeTaskArtifactUpdate,
+			streamingType: StreamingEventTypeTaskArtifactUpdate,
+		},
+		{
+			name:          "message events with stateless manager",
+			streamingType: StreamingEventTypeMessage,
 		},
 	}
 
@@ -69,32 +71,29 @@ func TestBuildProcessorSelectsTaskMode(t *testing.T) {
 			opts := &options{
 				runner:             &modeTestRunner{},
 				errorHandler:       defaultErrorHandler,
-				streamingEventType: StreamingEventTypeTaskArtifactUpdate,
+				streamingEventType: test.streamingType,
 				taskManagerBuilder: test.taskManager,
 			}
 			processor, err := buildProcessor(nil, nil, "agent", opts)
 			if err != nil {
 				t.Fatalf("buildProcessor failed: %v", err)
 			}
-			if processor.taskMode != test.wantTaskMode {
-				t.Errorf("taskMode = %v, want %v", processor.taskMode, test.wantTaskMode)
-			}
-			if processor.streamingEventType != test.wantStreamingType {
+			if processor.streamingEventType != test.streamingType {
 				t.Errorf(
 					"streamingEventType = %v, want %v",
 					processor.streamingEventType,
-					test.wantStreamingType,
+					test.streamingType,
 				)
 			}
 			converter, ok := processor.eventToA2AConverter.(*defaultEventToA2AMessage)
 			if !ok {
 				t.Fatalf("converter type = %T, want defaultEventToA2AMessage", processor.eventToA2AConverter)
 			}
-			if converter.streamingEventType != test.wantStreamingType {
+			if converter.streamingEventType != test.streamingType {
 				t.Errorf(
 					"converter streamingEventType = %v, want %v",
 					converter.streamingEventType,
-					test.wantStreamingType,
+					test.streamingType,
 				)
 			}
 		})
@@ -148,7 +147,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 	}
 	ctx := NewContextWithUserID(context.Background(), "user")
 
-	t.Run("stateless returns direct Message", func(t *testing.T) {
+	t.Run("stateless returns request-local Task", func(t *testing.T) {
 		processor, err := buildProcessor(nil, nil, "agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
@@ -165,29 +164,73 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OnSendMessage failed: %v", err)
 		}
-		message := response.GetMessage()
-		if message == nil {
-			t.Fatalf("response = %#v, want Message", response.Result)
+		task := response.GetTask()
+		if task == nil {
+			t.Fatalf("response = %#v, want Task", response.Result)
 		}
-		if message.TaskID != nil {
-			t.Errorf("message task ID = %q, want nil", *message.TaskID)
+		if task.Status.State != protocol.TaskStateCompleted {
+			t.Errorf("task state = %s, want completed", task.Status.State)
 		}
-		if got := message.Parts[0].TextContent(); got != "hello" {
-			t.Errorf("message text = %q, want hello", got)
+		var text string
+		for _, artifact := range task.Artifacts {
+			for _, part := range artifact.Parts {
+				text += part.TextContent()
+			}
 		}
-		stateDelta := DecodeStateDeltaMetadata(
-			message.Metadata[ia2a.MessageMetadataStateDeltaKey],
-		)
+		if text != "hello" {
+			t.Errorf("task artifact text = %q, want hello", text)
+		}
+		if len(task.Artifacts) != 1 {
+			t.Fatalf("task artifact count = %d, want 1", len(task.Artifacts))
+		}
+		stateDelta := DecodeStateDeltaMetadata(task.Artifacts[0].Metadata[ia2a.MessageMetadataStateDeltaKey])
+		if got := string(stateDelta["state-key"]); got != `"value"` {
+			t.Errorf("state delta = %q, want %q", got, `"value"`)
+		}
+		if _, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID}); err == nil {
+			t.Fatal("OnGetTask succeeded, want task-not-found")
+		}
+	})
+
+	t.Run("stateless unary supports task-bound Messages", func(t *testing.T) {
+		processor, err := buildProcessor(nil, nil, "agent", &options{
+			runner:             newRunner(),
+			errorHandler:       defaultErrorHandler,
+			streamingEventType: StreamingEventTypeMessage,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil || task.Status.Message == nil {
+			t.Fatalf("response = %#v, want Task with final Message", response.Result)
+		}
+		var text string
+		for _, part := range task.Status.Message.Parts {
+			text += part.TextContent()
+		}
+		if text != "hello" {
+			t.Errorf("task status message text = %q, want hello", text)
+		}
+		stateDelta := DecodeStateDeltaMetadata(task.Status.Message.Metadata[ia2a.MessageMetadataStateDeltaKey])
 		if got := string(stateDelta["state-key"]); got != `"value"` {
 			t.Errorf("state delta = %q, want %q", got, `"value"`)
 		}
 	})
 
-	t.Run("stateless streaming returns Message deltas", func(t *testing.T) {
+	t.Run("stateless streaming supports task-bound Messages", func(t *testing.T) {
 		processor, err := buildProcessor(nil, nil, "agent", &options{
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
-			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
+			streamingEventType: StreamingEventTypeMessage,
 		})
 		if err != nil {
 			t.Fatalf("buildProcessor failed: %v", err)
@@ -200,32 +243,59 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 		if err != nil {
 			t.Fatalf("OnSendMessageStream failed: %v", err)
 		}
-		var messages []*protocol.Message
+		var task *protocol.Task
 		var texts []string
+		var completed *protocol.TaskStatusUpdateEvent
 		for response := range stream {
+			if snapshot := response.GetTask(); snapshot != nil {
+				if task != nil {
+					t.Fatalf("received duplicate Task snapshot: %#v", snapshot)
+				}
+				task = snapshot
+				continue
+			}
+			if status := response.GetStatusUpdate(); status != nil {
+				if status.Status.State == protocol.TaskStateCompleted {
+					completed = status
+				}
+				continue
+			}
 			message := response.GetMessage()
 			if message == nil {
-				t.Fatalf("stream response = %#v, want Message", response.Result)
+				t.Fatalf("unexpected stream response: %#v", response.Result)
 			}
-			if message.TaskID != nil {
-				t.Errorf("message task ID = %q, want nil", *message.TaskID)
+			if task == nil {
+				t.Fatal("received Message before Task snapshot")
 			}
-			messages = append(messages, message)
-			if len(message.Parts) > 0 {
-				texts = append(texts, message.Parts[0].TextContent())
+			if message.TaskID == nil || *message.TaskID != task.ID {
+				t.Errorf("message task ID = %v, want %q", message.TaskID, task.ID)
+			}
+			for _, part := range message.Parts {
+				texts = append(texts, part.TextContent())
 			}
 		}
 		if len(texts) != 2 || texts[0] != "hel" || texts[1] != "lo" {
 			t.Fatalf("stream texts = %#v, want [hel lo]", texts)
 		}
-		if len(messages) != 3 {
-			t.Fatalf("stream message count = %d, want 3", len(messages))
+		if task == nil {
+			t.Fatal("stream did not start with a Task snapshot")
 		}
-		stateDelta := DecodeStateDeltaMetadata(
-			messages[2].Metadata[ia2a.MessageMetadataStateDeltaKey],
-		)
+		if completed == nil || completed.Status.Message == nil {
+			t.Fatalf("completed status = %#v, want final Message", completed)
+		}
+		var completedText string
+		for _, part := range completed.Status.Message.Parts {
+			completedText += part.TextContent()
+		}
+		if completedText != "hello" {
+			t.Errorf("completed message text = %q, want hello", completedText)
+		}
+		stateDelta := DecodeStateDeltaMetadata(completed.Status.Message.Metadata[ia2a.MessageMetadataStateDeltaKey])
 		if got := string(stateDelta["state-key"]); got != `"value"` {
 			t.Errorf("final state delta = %q, want %q", got, `"value"`)
+		}
+		if _, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID}); err == nil {
+			t.Fatal("OnGetTask succeeded, want task-not-found")
 		}
 	})
 
@@ -255,6 +325,13 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 		}
 		if task.Status.State != protocol.TaskStateCompleted {
 			t.Errorf("task state = %s, want completed", task.Status.State)
+		}
+		stored, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID})
+		if err != nil {
+			t.Fatalf("OnGetTask failed: %v", err)
+		}
+		if stored.Status.State != protocol.TaskStateCompleted {
+			t.Errorf("stored task state = %s, want completed", stored.Status.State)
 		}
 	})
 }

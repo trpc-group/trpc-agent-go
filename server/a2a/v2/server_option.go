@@ -60,7 +60,8 @@ type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) ta
 type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
 
 // TaskManagerBuilder returns a task manager for the given processor. Providing
-// one opts the built-in processor into the A2A task lifecycle.
+// one replaces the default stateless manager with a retaining or custom
+// implementation; it does not change the processor event contract.
 type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
 
 // ResponseRewriter rewrites outbound A2A responses before they are returned or
@@ -165,17 +166,14 @@ type options struct {
 type Option func(*options)
 
 // StreamingEventType controls how the A2A server emits agent output events in
-// streaming mode.
-//
-// Without WithTaskManagerBuilder, the server uses a stateless TaskManager and
-// always emits Message. With a TaskManagerBuilder, the default is
-// TaskArtifactUpdateEvent, following the ADK pattern: artifacts for content,
-// status for state changes.
+// the task lifecycle. The default is TaskArtifactUpdateEvent, following the ADK
+// pattern: artifacts for content, status for state changes. The setting applies
+// equally to request-local and retaining task managers.
 type StreamingEventType int
 
 const (
 	// StreamingEventTypeTaskArtifactUpdate emits agent output as
-	// TaskArtifactUpdateEvent (default in task mode).
+	// TaskArtifactUpdateEvent (default).
 	StreamingEventTypeTaskArtifactUpdate StreamingEventType = iota
 
 	// StreamingEventTypeMessage emits agent output as Message.
@@ -296,11 +294,9 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	}
 }
 
-// WithTaskManagerBuilder sets the task manager builder to use and opts the
-// built-in processor into task mode. In task mode the processor emits
-// submitted, agent-output, and completed events for a memory, Redis, or custom
-// task manager to persist. Without this option the server uses the stateless
-// manager and emits direct Messages only.
+// WithTaskManagerBuilder replaces the default stateless manager. The built-in
+// processor emits the same request-local task lifecycle in either case; use a
+// memory, Redis, or custom manager when that state must survive the request.
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
@@ -361,11 +357,10 @@ func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 
 // WithResponseRewriter rewrites outbound A2A events before they are emitted.
 //
-// RewriteStreaming is applied to every event the processor emits. Stateless
-// mode emits Messages only. Task mode can additionally emit
-// TaskArtifactUpdateEvent, TaskStatusUpdateEvent, submitted/final/completed
+// RewriteStreaming is applied to every event the processor emits, including
+// Message, TaskArtifactUpdateEvent, TaskStatusUpdateEvent, submitted/completed
 // lifecycle events, and structured task errors. Messages returned by
-// ErrorHandler are covered in both modes.
+// ErrorHandler are also covered.
 //
 // Because message/send derives its result from these same events, this also
 // covers unary responses; RewriteUnary is no longer invoked (see
@@ -398,10 +393,8 @@ func WithADKCompatibility(enabled bool) Option {
 // agent output in streaming mode.
 //
 // Default event converter only.
-// In task mode this option affects output converted from agent events
-// (assistant text/tool calls/code execution); submitted/completed remain
-// TaskStatusUpdateEvent. Stateless mode always emits Message, so this option is
-// ignored unless WithTaskManagerBuilder is also configured.
+// This option affects output converted from agent events (assistant text/tool
+// calls/code execution); submitted/completed remain TaskStatusUpdateEvent.
 func WithStreamingEventType(eventType StreamingEventType) Option {
 	return func(opts *options) {
 		opts.streamingEventType = eventType
@@ -441,8 +434,9 @@ func WithErrorHandler(handler ErrorHandler) Option {
 }
 
 // WithStructuredTaskErrors enables structured propagation of agent
-// Response.Error values through A2A task status metadata. It applies only in
-// task mode; stateless mode reports failures through ErrorHandler Messages.
+// Response.Error values through A2A task status metadata. Stateless managers
+// keep the resulting failed Task only for the request; retaining managers
+// persist it.
 func WithStructuredTaskErrors(enable bool) Option {
 	return func(opts *options) {
 		opts.structuredTaskErrors = enable
