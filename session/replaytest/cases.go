@@ -24,6 +24,10 @@ func AllCases() []ReplayCase {
 		CaseTrackEvents(),
 		CaseConcurrentInterleaved(),
 		CaseRecoveryDuplicateEvent(),
+		CaseAppUserStateBoundary(),
+		CaseSummaryFilterKeyIsolation(),
+		CaseMemoryLifecycle(),
+		CaseMultiSessionIsolation(),
 	}
 }
 
@@ -232,6 +236,161 @@ func CaseRecoveryDuplicateEvent() ReplayCase {
 			ReloadSessionStep{StepKey: "c11.reload", SessionKey: key},
 			AppendEventStep{StepKey: "c11.user.1.dup", SessionKey: key, LogicalKey: logical, Event: UserEvent(logical, "once")},
 			GetSessionStep{StepKey: "c11.get", SessionKey: key},
+		},
+	}
+}
+
+// CaseAppUserStateBoundary covers app-, user-, and session-scoped state together:
+// write, list/get, overwrite, and delete, so layers stay isolated across backends.
+// Complements CaseStateCRUD, which only exercises session-scoped keys.
+func CaseAppUserStateBoundary() ReplayCase {
+	key := SessionKeyFor("app_user_state_boundary")
+	uk := UserKeyDefault()
+	return ReplayCase{
+		Name:        "app_user_state_boundary",
+		Description: "app/user/session state write, list, overwrite, and delete stay isolated",
+		Steps: []Step{
+			UpdateStateStep{
+				StepKey: "c12.app.set", Scope: "app", AppName: DefaultApp,
+				State: session.StateMap{"app_k": []byte("app-v1")},
+			},
+			UpdateStateStep{
+				StepKey: "c12.user.set", Scope: "user", UserKey: uk,
+				State: session.StateMap{"user_k": []byte("user-v1")},
+			},
+			UpdateStateStep{
+				StepKey: "c12.sess.set", Scope: "session", SessionKey: key,
+				State: session.StateMap{"sess_k": []byte("sess-v1")},
+			},
+			// Seed a session event so GetSession always returns a session body.
+			AppendEventStep{StepKey: "c12.user.1", SessionKey: key, Event: UserEvent("c12.user.1", "state boundary")},
+			ListAppStatesStep{StepKey: "c12.app.list1", AppName: DefaultApp},
+			ListUserStatesStep{StepKey: "c12.user.list1", UserKey: uk},
+			GetSessionStep{StepKey: "c12.get1", SessionKey: key},
+			// Overwrite app/user without touching the other layers' keys.
+			UpdateStateStep{
+				StepKey: "c12.app.overwrite", Scope: "app", AppName: DefaultApp,
+				State: session.StateMap{"app_k": []byte("app-v2")},
+			},
+			UpdateStateStep{
+				StepKey: "c12.user.overwrite", Scope: "user", UserKey: uk,
+				State: session.StateMap{"user_k": []byte("user-v2")},
+			},
+			UpdateStateStep{
+				StepKey: "c12.sess.overwrite", Scope: "session", SessionKey: key,
+				State: session.StateMap{"sess_k": []byte("sess-v2")},
+			},
+			// Delete app/user keys; session key remains until final get.
+			UpdateStateStep{
+				StepKey: "c12.app.del", Scope: "app", AppName: DefaultApp, DeleteKey: "app_k",
+			},
+			UpdateStateStep{
+				StepKey: "c12.user.del", Scope: "user", UserKey: uk, DeleteKey: "user_k",
+			},
+			ListAppStatesStep{StepKey: "c12.app.list2", AppName: DefaultApp},
+			ListUserStatesStep{StepKey: "c12.user.list2", UserKey: uk},
+			GetSessionStep{StepKey: "c12.get2", SessionKey: key},
+		},
+	}
+}
+
+// CaseSummaryFilterKeyIsolation covers deep summary semantics used by issue #2001
+// acceptance: multiple filter-keys coexist, full-session summary is separate, and
+// Force regenerate on one key overwrites that entry without dropping siblings.
+func CaseSummaryFilterKeyIsolation() ReplayCase {
+	key := SessionKeyFor("summary_filter_key_isolation")
+	branchA := "agent/a"
+	branchB := "agent/b"
+	return ReplayCase{
+		Name:        "summary_filter_key_isolation",
+		Description: "multi filter-key summaries coexist; force overwrite updates one key only",
+		Steps: []Step{
+			// Branch A events.
+			AppendEventStep{StepKey: "c13.a.user.1", SessionKey: key, Event: withFilter(UserEvent("c13.a.user.1", "a-hello"), branchA)},
+			AppendEventStep{StepKey: "c13.a.asst.1", SessionKey: key, Event: withFilter(AssistantEvent("c13.a.asst.1", "a-reply"), branchA)},
+			// Branch B events.
+			AppendEventStep{StepKey: "c13.b.user.1", SessionKey: key, Event: withFilter(UserEvent("c13.b.user.1", "b-hello"), branchB)},
+			AppendEventStep{StepKey: "c13.b.asst.1", SessionKey: key, Event: withFilter(AssistantEvent("c13.b.asst.1", "b-reply"), branchB)},
+			// Unscoped event for full-session summary input.
+			AppendEventStep{StepKey: "c13.root.user.1", SessionKey: key, Event: UserEvent("c13.root.user.1", "root-hello")},
+			// Persist three summary slots: two branches + full session ("").
+			CreateSummaryStep{StepKey: "c13.sum.a", SessionKey: key, FilterKey: branchA, Force: true},
+			CreateSummaryStep{StepKey: "c13.sum.b", SessionKey: key, FilterKey: branchB, Force: true},
+			CreateSummaryStep{StepKey: "c13.sum.full", SessionKey: key, FilterKey: "", Force: true},
+			GetSessionStep{StepKey: "c13.get1", SessionKey: key},
+			// Grow branch A only, then Force-regenerate A. B and full-session keys
+			// must remain present; backends that clobber the whole map fail comparison.
+			AppendEventStep{StepKey: "c13.a.user.2", SessionKey: key, Event: withFilter(UserEvent("c13.a.user.2", "a-more"), branchA)},
+			AppendEventStep{StepKey: "c13.a.asst.2", SessionKey: key, Event: withFilter(AssistantEvent("c13.a.asst.2", "a-more-reply"), branchA)},
+			CreateSummaryStep{StepKey: "c13.sum.a.overwrite", SessionKey: key, FilterKey: branchA, Force: true},
+			GetSessionStep{StepKey: "c13.get2", SessionKey: key},
+		},
+	}
+}
+
+// CaseMemoryLifecycle covers multi-entry memory CRUD: add two facts, update one
+// by content match, delete the other, and re-capture. Complements
+// CaseMemoryWriteAndRead (single add+read).
+func CaseMemoryLifecycle() ReplayCase {
+	key := SessionKeyFor("memory_lifecycle")
+	muk := MemoryUserKeyDefault()
+	return ReplayCase{
+		Name:         "memory_lifecycle",
+		Description:  "memory add multi, update by content, delete, and re-read",
+		RequiredCaps: Caps{NeedsMemory: true},
+		Steps: []Step{
+			AppendEventStep{StepKey: "c14.user.1", SessionKey: key, Event: UserEvent("c14.user.1", "remember prefs")},
+			AddMemoryStep{
+				StepKey: "c14.mem.add.tea", UserKey: muk,
+				Memory: "likes tea", Topics: []string{"prefs", "drink"},
+			},
+			AddMemoryStep{
+				StepKey: "c14.mem.add.city", UserKey: muk,
+				Memory: "lives in seattle", Topics: []string{"profile", "city"},
+			},
+			CaptureMemoryStep{StepKey: "c14.mem.read1", UserKey: muk, Limit: 10},
+			// Update the tea entry via content match on the previous capture.
+			UpdateMemoryStep{
+				StepKey: "c14.mem.update.tea", UserKey: muk,
+				MatchContent: "likes tea",
+				Memory:       "likes oolong tea",
+				Topics:       []string{"prefs", "drink", "tea"},
+			},
+			// Delete the city entry; tea remains.
+			DeleteMemoryStep{
+				StepKey: "c14.mem.del.city", UserKey: muk,
+				MatchContent: "lives in seattle",
+			},
+			CaptureMemoryStep{StepKey: "c14.mem.read2", UserKey: muk, Limit: 10},
+			GetSessionStep{StepKey: "c14.get", SessionKey: key},
+		},
+	}
+}
+
+// CaseMultiSessionIsolation writes two sessions under the same dedicated user and
+// verifies events/state do not cross session IDs after get+list.
+// Uses a non-default UserID so AllCases runs do not pick up sessions from other cases.
+func CaseMultiSessionIsolation() ReplayCase {
+	uk := session.UserKey{AppName: DefaultApp, UserID: "user-multi-session"}
+	keyA := session.Key{AppName: uk.AppName, UserID: uk.UserID, SessionID: "session-msi-a"}
+	keyB := session.Key{AppName: uk.AppName, UserID: uk.UserID, SessionID: "session-msi-b"}
+	return ReplayCase{
+		Name:        "multi_session_isolation",
+		Description: "two sessions under same user stay isolated on list and get",
+		Steps: []Step{
+			AppendEventStep{StepKey: "c15.a.user", SessionKey: keyA, Event: UserEvent("c15.a.user", "session-a-hello")},
+			UpdateStateStep{
+				StepKey: "c15.a.state", Scope: "session", SessionKey: keyA,
+				State: session.StateMap{"owner": []byte("A")},
+			},
+			AppendEventStep{StepKey: "c15.b.user", SessionKey: keyB, Event: UserEvent("c15.b.user", "session-b-hello")},
+			UpdateStateStep{
+				StepKey: "c15.b.state", Scope: "session", SessionKey: keyB,
+				State: session.StateMap{"owner": []byte("B")},
+			},
+			GetSessionStep{StepKey: "c15.get.a", SessionKey: keyA},
+			GetSessionStep{StepKey: "c15.get.b", SessionKey: keyB},
+			ListUserSessionsStep{StepKey: "c15.list", UserKey: uk},
 		},
 	}
 }

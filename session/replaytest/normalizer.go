@@ -6,7 +6,7 @@
 package replaytest
 
 import (
-	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -65,6 +65,22 @@ func (n *Normalizer) Normalize(snapshot *Snapshot) (*Snapshot, error) {
 			}
 		}
 	}
+	for _, sess := range out.Sessions {
+		if sess == nil {
+			continue
+		}
+		normalizeState(sess.State)
+		for i := range sess.Events {
+			if key := eventLogicalKey(&sess.Events[i], i); key != "" {
+				sess.Events[i].ID = key
+			}
+			sess.Events[i].Timestamp = sess.Events[i].Timestamp.UTC()
+			canonicalExtensions(sess.Events[i].Extensions)
+			if sess.Events[i].Response != nil {
+				sess.Events[i].Response.Timestamp = sess.Events[i].Response.Timestamp.UTC()
+			}
+		}
+	}
 	normalizeState(out.AppState)
 	normalizeState(out.UserState)
 	for _, entry := range out.Memories {
@@ -92,6 +108,12 @@ func cloneSnapshot(in *Snapshot) *Snapshot {
 	}
 	if in.Session != nil {
 		out.Session = cloneSession(in.Session)
+	}
+	if len(in.Sessions) > 0 {
+		out.Sessions = make(map[string]*session.Session, len(in.Sessions))
+		for id, sess := range in.Sessions {
+			out.Sessions[id] = cloneSession(sess)
+		}
 	}
 	if in.AppState != nil {
 		out.AppState = cloneState(in.AppState)
@@ -317,7 +339,8 @@ func memorySemanticKey(entry *memory.Entry) string {
 	payload := m.Memory + "\x00" + strings.Join(append([]string(nil), m.Topics...), ",") +
 		"\x00" + strings.Join(append([]string(nil), m.Participants...), ",") +
 		"\x00" + m.Location + "\x00" + string(m.Kind)
-	sum := sha1.Sum([]byte(payload))
+	// sha256 for a stable non-security fingerprint (gosec G401/G505).
+	sum := sha256.Sum256([]byte(payload))
 	return "mem-" + hex.EncodeToString(sum[:8])
 }
 

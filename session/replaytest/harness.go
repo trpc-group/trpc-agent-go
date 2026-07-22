@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -227,6 +228,10 @@ func (e *caseExecutor) execute(ctx context.Context, step Step) error {
 		return e.updateState(ctx, s)
 	case AddMemoryStep:
 		return e.addMemory(ctx, s)
+	case UpdateMemoryStep:
+		return e.updateMemory(ctx, s)
+	case DeleteMemoryStep:
+		return e.deleteMemory(ctx, s)
 	case CaptureMemoryStep:
 		return e.captureMemory(ctx, s)
 	case CreateSummaryStep:
@@ -241,6 +246,8 @@ func (e *caseExecutor) execute(ctx context.Context, step Step) error {
 		return e.listAppStates(ctx, s)
 	case ListUserStatesStep:
 		return e.listUserStates(ctx, s)
+	case ListUserSessionsStep:
+		return e.listUserSessions(ctx, s)
 	case ReloadSessionStep:
 		return e.reloadSession(ctx, s)
 	case ParallelGroupStep:
@@ -422,6 +429,59 @@ func (e *caseExecutor) addMemory(ctx context.Context, step AddMemoryStep) error 
 	return e.backend.MemoryService.AddMemory(ctx, step.UserKey, step.Memory, step.Topics)
 }
 
+func (e *caseExecutor) updateMemory(ctx context.Context, step UpdateMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	key, err := e.resolveMemoryKey(step.UserKey, step.MemoryID, step.MatchContent)
+	if err != nil {
+		return err
+	}
+	return e.backend.MemoryService.UpdateMemory(ctx, key, step.Memory, step.Topics)
+}
+
+func (e *caseExecutor) deleteMemory(ctx context.Context, step DeleteMemoryStep) error {
+	if e.backend.MemoryService == nil {
+		return fmt.Errorf("memory service required")
+	}
+	key, err := e.resolveMemoryKey(step.UserKey, step.MemoryID, step.MatchContent)
+	if err != nil {
+		return err
+	}
+	return e.backend.MemoryService.DeleteMemory(ctx, key)
+}
+
+// resolveMemoryKey picks a memory.Key by explicit ID or by content match on the
+// last CaptureMemory snapshot (raw backend IDs, pre-normalizer).
+func (e *caseExecutor) resolveMemoryKey(userKey memory.UserKey, memoryID, matchContent string) (memory.Key, error) {
+	id := memoryID
+	if id == "" {
+		if matchContent == "" {
+			return memory.Key{}, fmt.Errorf("memory id or match content required")
+		}
+		e.mu.Lock()
+		mems := e.snapshot.Memories
+		e.mu.Unlock()
+		for _, m := range mems {
+			if m == nil || m.Memory == nil {
+				continue
+			}
+			if m.Memory.Memory == matchContent {
+				id = m.ID
+				break
+			}
+		}
+		if id == "" {
+			return memory.Key{}, fmt.Errorf("memory not found for match content %q", matchContent)
+		}
+	}
+	return memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: id,
+	}, nil
+}
+
 func (e *caseExecutor) captureMemory(ctx context.Context, step CaptureMemoryStep) error {
 	if e.backend.MemoryService == nil {
 		return fmt.Errorf("memory service required")
@@ -534,6 +594,12 @@ func (e *caseExecutor) captureSession(ctx context.Context, key session.Key) erro
 	e.sessions[key] = sess
 	e.snapshot.Session = sess
 	e.snapshot.SessionID = key.SessionID
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	if sess != nil {
+		e.snapshot.Sessions[key.SessionID] = sess
+	}
 	e.mu.Unlock()
 	return nil
 }
@@ -554,6 +620,10 @@ func (e *caseExecutor) reloadSession(ctx context.Context, step ReloadSessionStep
 	e.sessions[key] = sess
 	e.snapshot.Session = sess
 	e.snapshot.SessionID = key.SessionID
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	e.snapshot.Sessions[key.SessionID] = sess
 	e.mu.Unlock()
 	return nil
 }
@@ -610,5 +680,36 @@ func (e *caseExecutor) listUserStates(ctx context.Context, step ListUserStatesSt
 	e.mu.Lock()
 	e.snapshot.UserState = st
 	e.mu.Unlock()
+	return nil
+}
+
+func (e *caseExecutor) listUserSessions(ctx context.Context, step ListUserSessionsStep) error {
+	list, err := e.backend.SessionService.ListSessions(ctx, step.UserKey)
+	if err != nil {
+		return err
+	}
+	e.mu.Lock()
+	if e.snapshot.Sessions == nil {
+		e.snapshot.Sessions = map[string]*session.Session{}
+	}
+	e.mu.Unlock()
+	// Re-fetch each session for full events/state; ListSessions may be meta-only.
+	for _, meta := range list {
+		if meta == nil || meta.ID == "" {
+			continue
+		}
+		key := session.Key{AppName: step.UserKey.AppName, UserID: step.UserKey.UserID, SessionID: meta.ID}
+		full, err := e.backend.SessionService.GetSession(ctx, key)
+		if err != nil {
+			return err
+		}
+		if full == nil {
+			full = meta
+		}
+		e.mu.Lock()
+		e.sessions[key] = full
+		e.snapshot.Sessions[key.SessionID] = full
+		e.mu.Unlock()
+	}
 	return nil
 }

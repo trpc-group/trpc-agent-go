@@ -62,6 +62,38 @@ func (s AddMemoryStep) Type() string { return "add_memory" }
 // Key implements Step.
 func (s AddMemoryStep) Key() string { return s.StepKey }
 
+// UpdateMemoryStep updates an existing memory.
+// Prefer MatchContent against the last CaptureMemory snapshot when MemoryID is empty,
+// so cases stay portable across backends with different raw IDs.
+type UpdateMemoryStep struct {
+	StepKey      string
+	UserKey      memory.UserKey
+	MemoryID     string
+	MatchContent string
+	Memory       string
+	Topics       []string
+}
+
+// Type implements Step.
+func (s UpdateMemoryStep) Type() string { return "update_memory" }
+
+// Key implements Step.
+func (s UpdateMemoryStep) Key() string { return s.StepKey }
+
+// DeleteMemoryStep deletes a memory by MemoryID or MatchContent (last capture).
+type DeleteMemoryStep struct {
+	StepKey      string
+	UserKey      memory.UserKey
+	MemoryID     string
+	MatchContent string
+}
+
+// Type implements Step.
+func (s DeleteMemoryStep) Type() string { return "delete_memory" }
+
+// Key implements Step.
+func (s DeleteMemoryStep) Key() string { return s.StepKey }
+
 // CaptureMemoryStep reads memories into the snapshot.
 type CaptureMemoryStep struct {
 	StepKey string
@@ -153,6 +185,19 @@ func (s ListUserStatesStep) Type() string { return "list_user_states" }
 
 // Key implements Step.
 func (s ListUserStatesStep) Key() string { return s.StepKey }
+
+// ListUserSessionsStep lists sessions for a user and captures each into Snapshot.Sessions.
+// The primary Snapshot.Session pointer is left unchanged.
+type ListUserSessionsStep struct {
+	StepKey string
+	UserKey session.UserKey
+}
+
+// Type implements Step.
+func (s ListUserSessionsStep) Type() string { return "list_user_sessions" }
+
+// Key implements Step.
+func (s ListUserSessionsStep) Key() string { return s.StepKey }
 
 // ReloadSessionStep drops the executor's cached session pointer and reloads from
 // the backend, simulating a recovery / process-restart boundary.

@@ -22,6 +22,8 @@ func TestSteps_TypeAndKey(t *testing.T) {
 		{AppendEventStep{StepKey: "a", SessionKey: key, Event: UserEvent("a", "x")}, "append_event", "a"},
 		{UpdateStateStep{StepKey: "u", Scope: "session", SessionKey: key}, "update_state", "u"},
 		{AddMemoryStep{StepKey: "m", UserKey: muk, Memory: "x"}, "add_memory", "m"},
+		{UpdateMemoryStep{StepKey: "um", UserKey: muk, MatchContent: "x", Memory: "y"}, "update_memory", "um"},
+		{DeleteMemoryStep{StepKey: "dm", UserKey: muk, MatchContent: "y"}, "delete_memory", "dm"},
 		{CaptureMemoryStep{StepKey: "cm", UserKey: muk}, "capture_memory", "cm"},
 		{CreateSummaryStep{StepKey: "cs", SessionKey: key}, "create_summary", "cs"},
 		{WaitSummaryStep{StepKey: "ws", SessionKey: key, Timeout: time.Millisecond}, "wait_summary", "ws"},
@@ -29,6 +31,7 @@ func TestSteps_TypeAndKey(t *testing.T) {
 		{GetSessionStep{StepKey: "gs", SessionKey: key}, "get_session", "gs"},
 		{ListAppStatesStep{StepKey: "la", AppName: DefaultApp}, "list_app_states", "la"},
 		{ListUserStatesStep{StepKey: "lu", UserKey: uk}, "list_user_states", "lu"},
+		{ListUserSessionsStep{StepKey: "ls", UserKey: uk}, "list_user_sessions", "ls"},
 		{ReloadSessionStep{StepKey: "rs", SessionKey: key}, "reload_session", "rs"},
 		{ParallelGroupStep{StepKey: "pg", Branches: [][]Step{}}, "parallel_group", "pg"},
 	}

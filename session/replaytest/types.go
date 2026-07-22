@@ -48,6 +48,10 @@ type Snapshot struct {
 	Backend   string
 	SessionID string
 	Session   *session.Session
+	// Sessions accumulates every GetSession/ListSessions capture keyed by
+	// SessionID so multi-session isolation cases can compare more than the
+	// last primary Session pointer.
+	Sessions  map[string]*session.Session
 	AppState  session.StateMap
 	UserState session.StateMap
 	Memories  []*memory.Entry

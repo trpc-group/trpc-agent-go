@@ -72,6 +72,7 @@ func (c *Comparator) Compare(
 	}
 
 	diffs = append(diffs, compareSnapshotEvents(tc, backendA, backendB, sessionID, a, b)...)
+	diffs = append(diffs, compareExtraSessions(tc, backendA, backendB, a, b)...)
 	diffs = append(diffs, compareSnapshotStates(tc, backendA, backendB, sessionID, a, b)...)
 	diffs = append(diffs, compareSummaries(tc, backendA, backendB, sessionID, a, b)...)
 	diffs = append(diffs, compareTracks(tc, backendA, backendB, sessionID, a, b)...)

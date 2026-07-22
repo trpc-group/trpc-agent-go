@@ -12,6 +12,14 @@
 // a CGO dependency. Optional backends can be gated by environment variables
 // such as REPLAYTEST_REDIS_ADDR.
 //
+// One-command lightweight matrix (preferred):
+//
+//	go test ./session/replaytest/ -count=1 -run TestReplayLightweightMatrix
+//
+// From the test/ e2e module:
+//
+//	cd test && go test . -count=1 -run Replay
+//
 // Example:
 //
 //	h := replaytest.NewHarness(replaytest.DefaultHarnessOpts())
@@ -31,5 +39,5 @@
 //	}
 //	_ = report
 //
-// Design notes: see DESIGN.md in this directory.
+// Design notes: see DESIGN.md and README.md in this directory.
 package replaytest

@@ -1,47 +1,65 @@
-# replaytest
+# session/replaytest
 
-Multi-backend replay consistency harness for `trpc-agent-go` Session / Memory /
-Summary / Track services (issue #2001).
+Multi-backend Session / Memory / Summary / Track **replay consistency** harness
+for issue #2001.
 
-## Quick start (InMemory)
+## One-command lightweight matrix
 
-```go
-h := replaytest.NewHarness(replaytest.DefaultHarnessOpts())
-sess, mem, profile, err := replaytest.InMemoryFactory()()
-if err != nil { /* handle */ }
-defer sess.Close()
-defer mem.Close()
-h.AddBackend(replaytest.NamedBackend{
-    Name: "inmemory", Profile: profile,
-    SessionService: sess, MemoryService: mem,
-})
-report, err := h.Run(context.Background(), replaytest.AllCases())
+From the repo root (CI runs this package):
+
+```bash
+go test ./session/replaytest/ -count=1 -run TestReplayLightweightMatrix
 ```
 
-## SQLite dual-backend
+Or the full package:
+
+```bash
+go test ./session/replaytest/ -count=1
+```
+
+From the `test/` e2e module (so `go test ./test -run Replay` finds tests):
+
+```bash
+cd test && go test . -count=1 -run Replay
+```
+
+Lightweight mode uses two independent **InMemory** backends over `AllCases()`
+and is intended to finish within **30s** on a developer machine.
+
+## SQLite (optional, CGO)
+
+SQLite lives in a separate module so the root module does not force CGO:
 
 ```bash
 cd session/replaytest/sqlite
-go test .
+CGO_ENABLED=1 go test . -count=1
 ```
 
-The SQLite adapter is a separate module so the root module does not force CGO.
+## Integration backends (env-gated)
+
+Factories skip when the env var is unset (safe for default CI):
+
+| Backend    | Env var                     | Factory                 |
+|------------|-----------------------------|-------------------------|
+| Redis      | `REPLAYTEST_REDIS_ADDR`      | `RedisEnvFactory()`     |
+| PostgreSQL | `REPLAYTEST_POSTGRES_DSN`    | `PostgresEnvFactory()`  |
+| MySQL      | `REPLAYTEST_MYSQL_DSN`       | `MySQLEnvFactory()`     |
+| ClickHouse | `REPLAYTEST_CLICKHOUSE_DSN`  | `ClickHouseEnvFactory()`|
+
+Wire a real adapter into the factory body when enabling integration runs.
+Unset env ⇒ factory returns a skip/unavailable error; do not treat that as a
+product failure in lightweight mode.
 
 ## Public cases
 
-See `AllCases()` and `DESIGN.md`.
+`AllCases()` is the public matrix (conversation, state, memory, summary, track,
+concurrency, recovery, app/user state, summary filter-key isolation, memory
+lifecycle, multi-session isolation).
 
-## Report
+Example report asset:
 
-```go
-_ = replaytest.WriteReportJSON(os.Stdout, report)
-```
+`testdata/session_memory_summary_track_diff_report.json`
 
-Diffs include `session_id`, `event_index`, `summary_filter_key`, `track_name`,
-`memory_id`, and `path`.
+## Design
 
-## Fault injection
-
-```go
-_ = replaytest.InjectFault(snapshot, replaytest.FaultOverwriteSummary)
-```
+See [DESIGN.md](./DESIGN.md).

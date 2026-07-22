@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 var inMemoryBackendSeq atomic.Int64
@@ -64,9 +65,164 @@ func TestAllCases_InMemorySelfConsistency(t *testing.T) {
 	}
 }
 
+// TestReplayLightweightMatrix is the public one-command lightweight matrix:
+// dual InMemory backends over AllCases. Prefer:
+//
+//	go test ./session/replaytest/ -count=1 -run TestReplayLightweightMatrix
+func TestReplayLightweightMatrix(t *testing.T) {
+	started := time.Now()
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+
+	cases := AllCases()
+	if len(cases) < 10 {
+		t.Fatalf("AllCases=%d want >=10", len(cases))
+	}
+	report, err := h.Run(context.Background(), cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	elapsed := time.Since(started)
+	t.Logf("lightweight matrix: cases=%d passed=%d failed=%d skipped=%d elapsed=%s",
+		len(cases), report.PassedCases, report.FailedCases, report.SkippedCases, elapsed)
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Logf("failed %s diffs=%+v", r.CaseName, r.Diffs)
+			}
+		}
+		t.Fatalf("lightweight matrix failed=%d", report.FailedCases)
+	}
+	// Issue #2001 soft budget for lightweight mode (log if slow; do not flake CI).
+	if elapsed > 30*time.Second {
+		t.Logf("warning: lightweight matrix took %s (>30s budget)", elapsed)
+	}
+}
+
 func TestAllCasesCount(t *testing.T) {
-	if n := len(AllCases()); n < 11 {
-		t.Fatalf("expected >=11 cases, got %d", n)
+	cases := AllCases()
+	if n := len(cases); n < 15 {
+		t.Fatalf("expected >=15 cases, got %d", n)
+	}
+	want := map[string]bool{
+		"app_user_state_boundary":      false,
+		"summary_filter_key_isolation": false,
+		"memory_lifecycle":             false,
+		"multi_session_isolation":      false,
+	}
+	for _, c := range cases {
+		if _, ok := want[c.Name]; ok {
+			want[c.Name] = true
+		}
+	}
+	for name, found := range want {
+		if !found {
+			t.Fatalf("AllCases missing %s", name)
+		}
+	}
+}
+
+func TestAppUserStateBoundary_InMemorySelfConsistency(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseAppUserStateBoundary()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("app_user_state_boundary failed: %+v", r.Diffs)
+			}
+		}
+	}
+}
+
+func TestSummaryFilterKeyIsolation_InMemorySelfConsistency(t *testing.T) {
+	// Absolute multi-key presence on a fresh backend (not only cross-backend equality).
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseSummaryFilterKeyIsolation(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Session == nil || snap.Session.Summaries == nil {
+		t.Fatalf("nil summaries: %+v", snap.Session)
+	}
+	for _, fk := range []string{"agent/a", "agent/b", ""} {
+		sum, ok := snap.Session.Summaries[fk]
+		if !ok || sum == nil || sum.Summary == "" {
+			t.Fatalf("missing summary filter=%q map=%+v", fk, snap.Session.Summaries)
+		}
+	}
+
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseSummaryFilterKeyIsolation()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("summary_filter_key_isolation failed: %+v", r.Diffs)
+			}
+		}
+	}
+}
+
+func TestMemoryLifecycle_InMemorySelfConsistency(t *testing.T) {
+	// Absolute final memory multiset on a fresh backend.
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseMemoryLifecycle(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(snap.Memories); n != 1 {
+		t.Fatalf("memories=%d want 1 after update+delete: %+v", n, snap.Memories)
+	}
+	if snap.Memories[0] == nil || snap.Memories[0].Memory == nil {
+		t.Fatalf("nil memory entry: %+v", snap.Memories)
+	}
+	if got := snap.Memories[0].Memory.Memory; got != "likes oolong tea" {
+		t.Fatalf("content=%q want likes oolong tea", got)
+	}
+
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseMemoryLifecycle()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("memory_lifecycle failed: %+v", r.Diffs)
+			}
+		}
 	}
 }
 
@@ -179,5 +335,55 @@ func TestRecoveryDuplicateEvent_LogicalKeyShared(t *testing.T) {
 	}
 	if n := len(snap.Session.Events); n != 2 {
 		t.Fatalf("recovery event count=%d want 2 (duplicate logical writes both persisted)", n)
+	}
+}
+
+func TestMultiSessionIsolation_InMemorySelfConsistency(t *testing.T) {
+	fresh := openInMemoryBackend(t)
+	snap, err := executeCase(context.Background(), CaseMultiSessionIsolation(), fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.Sessions == nil {
+		t.Fatal("Sessions map nil")
+	}
+	idA := "session-msi-a"
+	idB := "session-msi-b"
+	sA, okA := snap.Sessions[idA]
+	sB, okB := snap.Sessions[idB]
+	if !okA || !okB || sA == nil || sB == nil {
+		t.Fatalf("sessions map=%v", snap.Sessions)
+	}
+	if len(sA.Events) != 1 || len(sB.Events) != 1 {
+		t.Fatalf("event counts a=%d b=%d", len(sA.Events), len(sB.Events))
+	}
+	if messageContent(sA.Events[0]) != "session-a-hello" {
+		t.Fatalf("session A content leaked: %q", messageContent(sA.Events[0]))
+	}
+	if messageContent(sB.Events[0]) != "session-b-hello" {
+		t.Fatalf("session B content leaked: %q", messageContent(sB.Events[0]))
+	}
+	if string(sA.State["owner"]) != "A" || string(sB.State["owner"]) != "B" {
+		t.Fatalf("state cross-talk a=%q b=%q", sA.State["owner"], sB.State["owner"])
+	}
+
+	h := NewHarness(DefaultHarnessOpts())
+	b1 := openInMemoryBackend(t)
+	b1.Name = "inmemory-a"
+	b2 := openInMemoryBackend(t)
+	b2.Name = "inmemory-b"
+	h.opts.ReferenceBackend = "inmemory-a"
+	h.AddBackend(b1)
+	h.AddBackend(b2)
+	report, err := h.Run(context.Background(), []ReplayCase{CaseMultiSessionIsolation()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.FailedCases != 0 {
+		for _, r := range report.Results {
+			if r.Status == StatusFailed {
+				t.Fatalf("multi_session_isolation failed: %+v", r.Diffs)
+			}
+		}
 	}
 }
