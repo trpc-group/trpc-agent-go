@@ -20,8 +20,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
@@ -81,6 +83,201 @@ func TestSummarizeSession_UsesLastIncludedTimestamp(t *testing.T) {
 	sess.SummariesMu.RUnlock()
 	require.NotNil(t, sum)
 	assert.True(t, sum.UpdatedAt.Equal(t2.UTC()))
+}
+
+func TestAttachRequestGapObservation(t *testing.T) {
+	t0 := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	start := summarytrigger.RequestStart{
+		RequestID: "req-2",
+		StartedAt: t0.Add(30 * time.Second),
+	}
+	ctx := summarytrigger.ContextWithRequestStart(context.Background(), start)
+	base := &session.Session{Events: []event.Event{
+		{
+			RequestID: "req-1",
+			Timestamp: t0,
+			FilterKey: "app/branch",
+			Version:   event.CurrentVersion,
+		},
+		{
+			RequestID: "req-2",
+			Timestamp: t0.Add(31 * time.Second),
+			FilterKey: "app/branch",
+			Version:   event.CurrentVersion,
+		},
+	}}
+
+	t.Run("attaches scoped observation without mutating base", func(t *testing.T) {
+		checkSess := &session.Session{}
+		isummaryscope.SetScopeFilterKey(checkSess, "app/branch")
+
+		attachRequestGapObservation(ctx, base, checkSess, nil)
+
+		got, ok := summarytrigger.ObservationFromSession(checkSess)
+		require.True(t, ok)
+		assert.True(t, got.Available)
+		assert.Equal(t, 30*time.Second, got.Elapsed)
+		_, ok = summarytrigger.ObservationFromSession(base)
+		assert.False(t, ok)
+	})
+
+	t.Run("boundary covering current request consumes observation", func(t *testing.T) {
+		checkSess := &session.Session{}
+		isummaryscope.SetScopeFilterKey(checkSess, "app/branch")
+
+		attachRequestGapObservation(
+			ctx,
+			base,
+			checkSess,
+			session.NewSummaryBoundary("app/branch", start.StartedAt),
+		)
+
+		got, ok := summarytrigger.ObservationFromSession(checkSess)
+		require.True(t, ok)
+		assert.False(t, got.Available)
+		assert.Zero(t, got.Elapsed)
+	})
+
+	t.Run("missing request context preserves standalone fallback", func(t *testing.T) {
+		checkSess := &session.Session{}
+		attachRequestGapObservation(
+			context.Background(),
+			base,
+			checkSess,
+			nil,
+		)
+
+		_, ok := summarytrigger.ObservationFromSession(checkSess)
+		assert.False(t, ok)
+	})
+}
+
+func TestSummarizeSession_RequestGapTriggersLegacyChecksAny(t *testing.T) {
+	t0 := time.Date(2026, 7, 15, 10, 0, 0, 0, time.UTC)
+	newSession := func(requestStartedAt time.Time) *session.Session {
+		return &session.Session{
+			ID:      "request-gap",
+			AppName: "app",
+			Events: []event.Event{
+				{
+					ID:        "req-1-assistant",
+					RequestID: "req-1",
+					Timestamp: t0,
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "previous response",
+						},
+					}}},
+				},
+				{
+					ID:        "req-2-user",
+					RequestID: "req-2",
+					Timestamp: requestStartedAt.Add(time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleUser,
+							Content: "next request",
+						},
+					}}},
+				},
+				{
+					ID:        "req-2-assistant",
+					RequestID: "req-2",
+					Timestamp: requestStartedAt.Add(2 * time.Second),
+					Response: &model.Response{Choices: []model.Choice{{
+						Message: model.Message{
+							Role:    model.RoleAssistant,
+							Content: "next response",
+						},
+					}}},
+				},
+			},
+		}
+	}
+	summarizer := summary.NewSummarizer(
+		&reportModel{},
+		summary.WithChecksAny(
+			summary.CheckEventThreshold(100),
+			summary.CheckTimeThreshold(20*time.Second),
+		),
+	)
+
+	t.Run("fires when request gap exceeds threshold", func(t *testing.T) {
+		requestStartedAt := t0.Add(30 * time.Second)
+		ctx := summarytrigger.ContextWithRequestStart(
+			context.Background(),
+			summarytrigger.RequestStart{
+				RequestID: "req-2",
+				StartedAt: requestStartedAt,
+			},
+		)
+
+		updated, err := SummarizeSession(
+			ctx,
+			summarizer,
+			newSession(requestStartedAt),
+			"",
+			false,
+		)
+		require.NoError(t, err)
+		assert.True(t, updated)
+	})
+
+	t.Run("does not fire when request gap is below threshold", func(t *testing.T) {
+		requestStartedAt := t0.Add(10 * time.Second)
+		ctx := summarytrigger.ContextWithRequestStart(
+			context.Background(),
+			summarytrigger.RequestStart{
+				RequestID: "req-2",
+				StartedAt: requestStartedAt,
+			},
+		)
+
+		updated, err := SummarizeSession(
+			ctx,
+			summarizer,
+			newSession(requestStartedAt),
+			"",
+			false,
+		)
+		require.NoError(t, err)
+		assert.False(t, updated)
+	})
+
+	t.Run("does not consume the same gap twice", func(t *testing.T) {
+		requestStartedAt := t0.Add(30 * time.Second)
+		ctx := summarytrigger.ContextWithRequestStart(
+			context.Background(),
+			summarytrigger.RequestStart{
+				RequestID: "req-2",
+				StartedAt: requestStartedAt,
+			},
+		)
+		sess := newSession(requestStartedAt)
+
+		updated, err := SummarizeSession(ctx, summarizer, sess, "", false)
+		require.NoError(t, err)
+		require.True(t, updated)
+
+		sess.EventMu.Lock()
+		sess.Events = append(sess.Events, event.Event{
+			ID:        "req-2-final",
+			RequestID: "req-2",
+			Timestamp: requestStartedAt.Add(3 * time.Second),
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "final response",
+				},
+			}}},
+		})
+		sess.EventMu.Unlock()
+
+		updated, err = SummarizeSession(ctx, summarizer, sess, "", false)
+		require.NoError(t, err)
+		assert.False(t, updated)
+	})
 }
 
 func TestSummarizeSession_WritesSummaryBoundary(t *testing.T) {
@@ -374,6 +571,75 @@ func makeEvent(content string, ts time.Time, filterKey string) event.Event {
 		Timestamp: ts,
 		Response:  &model.Response{Choices: []model.Choice{{Message: model.Message{Content: content}}}},
 	}
+}
+
+type previousSummaryCaptureSummarizer struct {
+	previous string
+	present  bool
+	events   []event.Event
+}
+
+func (s *previousSummaryCaptureSummarizer) ShouldSummarize(*session.Session) bool {
+	return true
+}
+
+func (s *previousSummaryCaptureSummarizer) Summarize(
+	ctx context.Context,
+	sess *session.Session,
+) (string, error) {
+	s.previous, s.present = isummarycontext.PreviousSummary(ctx)
+	s.events = append([]event.Event(nil), sess.Events...)
+	return "updated summary", nil
+}
+
+func (s *previousSummaryCaptureSummarizer) SetPrompt(string)         {}
+func (s *previousSummaryCaptureSummarizer) SetModel(model.Model)     {}
+func (s *previousSummaryCaptureSummarizer) Metadata() map[string]any { return nil }
+
+func TestSummarizeSession_AttachesPreviousSummaryContext(t *testing.T) {
+	oldTimestamp := time.Now().Add(-time.Minute)
+	newTimestamp := time.Now()
+	base := &session.Session{
+		ID:      "previous-summary-context",
+		AppName: "app",
+		UserID:  "user",
+		Events: []event.Event{
+			makeEvent("old", oldTimestamp, "branch"),
+			makeEvent("new", newTimestamp, "branch"),
+		},
+		Summaries: map[string]*session.Summary{
+			"branch": {
+				Summary:   "previous summary",
+				UpdatedAt: oldTimestamp,
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"branch",
+					oldTimestamp,
+					"old",
+				),
+			},
+		},
+	}
+	capture := &previousSummaryCaptureSummarizer{}
+
+	updated, err := SummarizeSession(
+		context.Background(),
+		capture,
+		base,
+		"branch",
+		false,
+	)
+	require.NoError(t, err)
+	require.True(t, updated)
+	require.True(t, capture.present)
+	require.Equal(t, "previous summary", capture.previous)
+	require.Len(t, capture.events, 2)
+	require.Equal(t, authorSystem, capture.events[0].Author)
+	require.Equal(
+		t,
+		"previous summary",
+		capture.events[0].Response.Choices[0].Message.Content,
+	)
+	require.Equal(t, "new", capture.events[1].ID)
 }
 
 func TestSummarizeSession_FilteredKey_RespectsDeltaAndShould(t *testing.T) {

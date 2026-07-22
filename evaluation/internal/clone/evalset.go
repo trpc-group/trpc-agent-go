@@ -149,6 +149,13 @@ func cloneExecutionTrace(src *trace.Trace) *trace.Trace {
 	if src == nil {
 		return nil
 	}
+	cloneSnapshot := func(src *trace.Snapshot) *trace.Snapshot {
+		if src == nil {
+			return nil
+		}
+		copied := *src
+		return &copied
+	}
 	cloneUsage := func(src *model.Usage) *model.Usage {
 		if src == nil {
 			return nil
@@ -161,6 +168,8 @@ func cloneExecutionTrace(src *trace.Trace) *trace.Trace {
 		return &copied
 	}
 	copied := *src
+	copied.Input = cloneSnapshot(src.Input)
+	copied.Output = cloneSnapshot(src.Output)
 	copied.Usage = cloneUsage(src.Usage)
 	if src.Steps != nil {
 		copied.Steps = make([]trace.Step, len(src.Steps))
@@ -168,14 +177,8 @@ func cloneExecutionTrace(src *trace.Trace) *trace.Trace {
 			step := src.Steps[i]
 			step.PredecessorStepIDs = cloneStringSlice(src.Steps[i].PredecessorStepIDs)
 			step.AppliedSurfaceIDs = cloneStringSlice(src.Steps[i].AppliedSurfaceIDs)
-			if src.Steps[i].Input != nil {
-				input := *src.Steps[i].Input
-				step.Input = &input
-			}
-			if src.Steps[i].Output != nil {
-				output := *src.Steps[i].Output
-				step.Output = &output
-			}
+			step.Input = cloneSnapshot(src.Steps[i].Input)
+			step.Output = cloneSnapshot(src.Steps[i].Output)
 			step.Usage = cloneUsage(src.Steps[i].Usage)
 			copied.Steps[i] = step
 		}

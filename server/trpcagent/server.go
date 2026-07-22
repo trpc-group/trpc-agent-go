@@ -81,6 +81,12 @@ func (s *Server) BasePath() string {
 	return s.basePath
 }
 
+// AppPath returns the app-specific route prefix exposed by the server.
+func (s *Server) AppPath() string {
+	path, _ := url.JoinPath(s.basePath, s.appName)
+	return path
+}
+
 func (s *Server) setupHandler() error {
 	mux := http.NewServeMux()
 	if s.agent != nil {
@@ -158,6 +164,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runOptions = append(runOptions, agent.WithRequestID(req.RunOptions.RequestID))
+	runOptions = append(runOptions, agent.MergeRuntimeState(req.RunOptions.RuntimeState))
 	runOptions = append(runOptions, agent.WithAppName(s.appName))
 	eventCh, err := s.runner.Run(ctx, req.Session.UserID, req.Session.SessionID, req.Input, runOptions...)
 	if err != nil {

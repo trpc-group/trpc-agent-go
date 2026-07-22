@@ -21,6 +21,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -51,6 +52,24 @@ func (m *mockSummarizer) SetPrompt(prompt string) {}
 func (m *mockSummarizer) SetModel(mdl model.Model) {}
 
 func (m *mockSummarizer) Metadata() map[string]any { return nil }
+
+func TestDetachContext_PreservesRequestStart(t *testing.T) {
+	startedAt := time.Now().UTC()
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = summarytrigger.ContextWithRequestStart(ctx, summarytrigger.RequestStart{
+		RequestID: "request-1",
+		StartedAt: startedAt,
+	})
+
+	detached := DetachContext(ctx)
+	cancel()
+
+	assert.NoError(t, detached.Err())
+	requestStart, ok := summarytrigger.RequestStartFromContext(detached)
+	require.True(t, ok)
+	assert.Equal(t, "request-1", requestStart.RequestID)
+	assert.Equal(t, startedAt, requestStart.StartedAt)
+}
 
 func TestNewAsyncSummaryWorker(t *testing.T) {
 	summarizer := &mockSummarizer{shouldSummarize: true, summaryText: "test"}

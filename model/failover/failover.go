@@ -53,6 +53,40 @@ func (m *failoverModel) Info() model.Info {
 	return m.candidates[0].Info()
 }
 
+// InputTokenBudget returns the smallest advertised candidate budget so a
+// request remains eligible for every failover target.
+func (m *failoverModel) InputTokenBudget(
+	ctx context.Context,
+	request *model.Request,
+) int {
+	return minimumCandidateInputTokenBudget(ctx, request, m.candidates)
+}
+
+func minimumCandidateInputTokenBudget(
+	ctx context.Context,
+	request *model.Request,
+	candidates []model.Model,
+) int {
+	type budgeter interface {
+		InputTokenBudget(context.Context, *model.Request) int
+	}
+	budget := 0
+	for _, candidate := range candidates {
+		b, ok := candidate.(budgeter)
+		if !ok {
+			return 0
+		}
+		candidateBudget := b.InputTokenBudget(ctx, request)
+		if candidateBudget <= 0 {
+			return 0
+		}
+		if budget == 0 || candidateBudget < budget {
+			budget = candidateBudget
+		}
+	}
+	return budget
+}
+
 // GenerateContent implements the model.Model interface.
 func (m *failoverModel) GenerateContent(
 	ctx context.Context,

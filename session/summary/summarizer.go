@@ -10,19 +10,23 @@ package summary
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/prompt"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	isummarycontext "trpc.group/trpc-go/trpc-agent-go/session/internal/summarycontext"
 	isummaryscope "trpc.group/trpc-go/trpc-agent-go/session/internal/summaryscope"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
@@ -58,6 +62,10 @@ const (
 	conversationTextVar = "conversation_text"
 	// conversationTextPlaceholder is the placeholder for conversation text in templates.
 	conversationTextPlaceholder = "{" + conversationTextVar + "}"
+	// previousSummaryVar is the prompt variable name for the previous rolling summary.
+	previousSummaryVar = "previous_summary"
+	// previousSummaryPlaceholder is the placeholder for the previous rolling summary.
+	previousSummaryPlaceholder = "{" + previousSummaryVar + "}"
 	// maxSummaryWordsVar is the prompt variable name for max summary words (without braces).
 	maxSummaryWordsVar = "max_summary_words"
 	// maxSummaryWordsPlaceholder is the placeholder for max summary words in templates.
@@ -69,6 +77,19 @@ const (
 	authorSystem = "system"
 	// authorUnknown is the unknown author.
 	authorUnknown = "unknown"
+
+	// summaryRequestInputRatio is a conservative ceiling for models that do not
+	// expose a smaller provider-side input budget.
+	summaryRequestInputRatio = 0.7
+	// summaryRequestRetryRatio reduces the semantic input on a bounded retry
+	// when the provider still reports a context overflow.
+	summaryRequestRetryRatio = 0.5
+
+	summaryToolArgumentsOmitted = `{"_trpc_summary_note":"tool arguments omitted to fit the summary context"}`
+	summaryToolResultOmittedFmt = "[Tool result omitted to fit the summary context; " +
+		"tool_name=%q, tool_call_id=%q. The tool call completed before summarization.]"
+	summaryConversationOmitted = "\n[... middle conversation omitted to fit the summary context ...]\n"
+	summaryPreviousOmitted     = "\n[... previous summary omitted to fit the summary context ...]\n"
 )
 
 // formatResponseError formats a model.ResponseError into a human-readable error.
@@ -141,11 +162,40 @@ func validatePrompt(template string) error {
 // prompt so the system message stays instruction-only.
 func validateSystemPrompt(template string) error {
 	textPrompt := prompt.Text{Template: template}
-	if textPrompt.ValidateRequired(conversationTextVar) == nil {
-		return fmt.Errorf(
-			"system prompt must not include %s placeholder",
-			conversationTextPlaceholder,
-		)
+	for _, item := range []struct {
+		name        string
+		placeholder string
+	}{
+		{name: conversationTextVar, placeholder: conversationTextPlaceholder},
+		{name: previousSummaryVar, placeholder: previousSummaryPlaceholder},
+	} {
+		if textPrompt.ValidateRequired(item.name) == nil {
+			return fmt.Errorf(
+				"system prompt must not include %s placeholder",
+				item.placeholder,
+			)
+		}
+	}
+	return nil
+}
+
+// validateCacheSafeForkPrompt validates that the cache-safe fork instruction
+// does not duplicate payload already present in the cloned parent request.
+func validateCacheSafeForkPrompt(template string) error {
+	textPrompt := prompt.Text{Template: template}
+	for _, item := range []struct {
+		name        string
+		placeholder string
+	}{
+		{name: conversationTextVar, placeholder: conversationTextPlaceholder},
+		{name: previousSummaryVar, placeholder: previousSummaryPlaceholder},
+	} {
+		if textPrompt.ValidateRequired(item.name) == nil {
+			return fmt.Errorf(
+				"cache-safe fork prompt must not include %s placeholder",
+				item.placeholder,
+			)
+		}
 	}
 	return nil
 }
@@ -181,9 +231,9 @@ func getDefaultSummarizerPrompt(maxWords int) string {
 		"information that would be helpful for future interactions. Keep the " +
 		"summary concise and to the point. Only include relevant information. " +
 		"Do not make anything up. Do not create new instructions, API rules, " +
-		"fetching rules, or pre-loaded data. If a tool result was truncated, " +
-		"omitted, or errored, preserve that limitation instead of treating it " +
-		"as complete evidence."
+		"fetching rules, or pre-loaded data. If conversation content or a tool " +
+		"result was truncated, omitted, or errored, preserve that limitation " +
+		"instead of treating it as complete evidence."
 
 	if maxWords > 0 {
 		basePrompt += " Please keep the summary within " + maxSummaryWordsPlaceholder + " words."
@@ -268,7 +318,7 @@ func NewSummarizer(m model.Model, opts ...Option) SessionSummarizer {
 			log.Warnf("invalid system prompt in NewSummarizer: %v", err)
 		}
 	}
-	if err := validateSystemPrompt(s.cacheSafeForkPrompt); err != nil {
+	if err := validateCacheSafeForkPrompt(s.cacheSafeForkPrompt); err != nil {
 		log.Warnf("invalid cache-safe fork prompt in NewSummarizer: %v", err)
 	}
 	if err := validateMaxSummaryWordsPrompt(s.prompt, s.systemPrompt, s.maxSummaryWords); err != nil {
@@ -388,15 +438,26 @@ func preferredTriggerCheck(checks []Check) Check {
 	}
 }
 
+type summaryPromptInput struct {
+	conversationText string
+	previousSummary  string
+}
+
+func (in summaryPromptInput) characterCount() int {
+	return len(in.conversationText) + len(in.previousSummary)
+}
+
 // Summarize generates a summary without modifying the session events.
 func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
 	if s.model == nil {
 		return "", fmt.Errorf("no model configured for summarization for session %s", sess.ID)
 	}
-	if len(sess.Events) == 0 {
+	ctx = s.ensureReportContext(ctx)
+	previousSummary, _ := isummarycontext.PreviousSummary(ctx)
+	separatePreviousSummary := promptContainsVar(s.prompt, previousSummaryVar)
+	if len(sess.Events) == 0 && (!separatePreviousSummary || previousSummary == "") {
 		return "", fmt.Errorf("no events to summarize for session %s (events=0)", sess.ID)
 	}
-	ctx = s.ensureReportContext(ctx)
 
 	// Extract conversation text from events. Use filtered events for summarization
 	// to skip recent events while ensuring proper context.
@@ -404,41 +465,32 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 		s.filterEventsForSummary(sess.Events),
 		sess,
 	)
-
-	conversationText := s.extractConversationText(eventsToSummarize)
-	if s.preHook != nil {
-		hookCtx := &PreSummaryHookContext{
-			Ctx:     ctx,
-			Session: sess,
-			Events:  eventsToSummarize,
-			Text:    conversationText,
-		}
-		hookErr := s.preHook(hookCtx)
-		if hookErr != nil && s.hookAbortOnError {
-			return "", fmt.Errorf("pre-summary hook failed: %w", hookErr)
-		}
-		if hookErr == nil {
-			// Propagate context modifications from pre-hook to subsequent operations.
-			if hookCtx.Ctx != nil {
-				if report, ok := reportFromContext(ctx); ok {
-					if _, exists := reportFromContext(hookCtx.Ctx); !exists {
-						hookCtx.Ctx = ContextWithReport(hookCtx.Ctx, report)
-					}
-				}
-				ctx = hookCtx.Ctx
-			}
-			if hookCtx.Text != "" {
-				conversationText = hookCtx.Text
-			} else if len(hookCtx.Events) > 0 {
-				conversationText = s.extractConversationText(hookCtx.Events)
-			}
-		}
+	conversationEvents := eventsToSummarize
+	input := summaryPromptInput{}
+	if separatePreviousSummary {
+		conversationEvents = removePreviousSummaryEvent(
+			conversationEvents,
+			previousSummary,
+		)
+		input.previousSummary = previousSummary
 	}
-	if conversationText == "" {
+
+	input.conversationText = s.extractConversationText(conversationEvents)
+	ctx, input, err := s.runPreSummaryHook(
+		ctx,
+		sess,
+		conversationEvents,
+		input,
+		separatePreviousSummary,
+	)
+	if err != nil {
+		return "", err
+	}
+	if input.conversationText == "" && input.previousSummary == "" {
 		return "", fmt.Errorf("no conversation text extracted for session %s (events=%d)", sess.ID, len(eventsToSummarize))
 	}
 
-	ctx, summaryText, err := s.generateSummary(ctx, sess, conversationText)
+	ctx, summaryText, err := s.generateSummary(ctx, sess, input)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate summary for session %s: %w", sess.ID, err)
 	}
@@ -461,6 +513,67 @@ func (s *sessionSummarizer) Summarize(ctx context.Context, sess *session.Session
 	}
 
 	return summaryText, nil
+}
+
+// runPreSummaryHook applies pre-summary input and context changes while
+// preserving the original input when a non-fatal hook error occurs.
+func (s *sessionSummarizer) runPreSummaryHook(
+	ctx context.Context,
+	sess *session.Session,
+	events []event.Event,
+	input summaryPromptInput,
+	separatePreviousSummary bool,
+) (context.Context, summaryPromptInput, error) {
+	if s.preHook == nil {
+		return ctx, input, nil
+	}
+	hookCtx := &PreSummaryHookContext{
+		Ctx:             ctx,
+		Session:         sess,
+		Events:          events,
+		Text:            input.conversationText,
+		PreviousSummary: input.previousSummary,
+	}
+	if err := s.preHook(hookCtx); err != nil {
+		if s.hookAbortOnError {
+			return ctx, input, fmt.Errorf("pre-summary hook failed: %w", err)
+		}
+		return ctx, input, nil
+	}
+
+	ctx = inheritReportContext(hookCtx.Ctx, ctx)
+	if separatePreviousSummary {
+		input.previousSummary = hookCtx.PreviousSummary
+	}
+	if hookCtx.Text != "" {
+		input.conversationText = hookCtx.Text
+	} else if len(hookCtx.Events) > 0 {
+		input.conversationText = s.extractConversationText(hookCtx.Events)
+	} else {
+		input.conversationText = ""
+	}
+	return ctx, input, nil
+}
+
+// removePreviousSummaryEvent removes the synthetic event inserted by the
+// session service when the previous summary is rendered through its own prompt
+// placeholder. Direct callers that attach a previous summary without a
+// matching synthetic event keep their supplied events unchanged.
+func removePreviousSummaryEvent(
+	events []event.Event,
+	previousSummary string,
+) []event.Event {
+	if previousSummary == "" || len(events) == 0 {
+		return events
+	}
+	first := events[0]
+	if first.Author != authorSystem || first.ID != "" || first.RequestID != "" ||
+		first.InvocationID != "" || first.FilterKey != "" || first.Response == nil ||
+		len(first.Response.Choices) != 1 ||
+		first.Response.Choices[0].Message.Content != previousSummary {
+		return events
+	}
+	return events[1:]
 }
 
 func (s *sessionSummarizer) ensureReportContext(ctx context.Context) context.Context {
@@ -660,7 +773,9 @@ func (s *sessionSummarizer) hasPrependedSummaryContext(events []event.Event) boo
 
 // SetPrompt updates the summarizer's prompt dynamically.
 // The prompt must include the placeholder {conversation_text}, which will be
-// replaced with the extracted conversation when generating the summary.
+// replaced with the extracted conversation when generating the summary. It may
+// also include {previous_summary} to position the previous rolling summary
+// separately from newly uncovered conversation text.
 // If maxSummaryWords > 0, either the user prompt or the configured system
 // prompt must include {max_summary_words}. If an empty prompt is provided, it
 // will be ignored and the current prompt will remain unchanged.
@@ -806,7 +921,7 @@ func extractReasoningContent(events []event.Event) string {
 func (s *sessionSummarizer) generateSummary(
 	ctx context.Context,
 	sess *session.Session,
-	conversationText string,
+	input summaryPromptInput,
 ) (context.Context, string, error) {
 	// Telemetry trace + metrics tracking (aligned with toolsearch/llm_search.go).
 	var err error
@@ -817,7 +932,7 @@ func (s *sessionSummarizer) generateSummary(
 	_, span := trace.Tracer.Start(ctx, itelemetry.NewChatSpanName(modelName))
 	defer span.End()
 
-	request, mode, err := s.buildSummaryRequest(ctx, conversationText)
+	request, mode, err := s.buildSummaryRequest(ctx, input)
 	if err != nil {
 		err = fmt.Errorf("failed to build summary request: %w", err)
 		s.emitReport(ctx, err)
@@ -887,45 +1002,201 @@ func (s *sessionSummarizer) generateSummary(
 		})
 	}()
 
-	ctx, responseChan, cbErr := s.runBeforeModelCallbacks(ctx, request)
-	if cbErr != nil {
-		err = cbErr
-		return ctx, "", cbErr
+	ctx, summaryText, finalResp, err := s.runSummaryAttempts(
+		ctx,
+		request,
+		mode,
+		input,
+		trackResponse,
+		ensureTimingInfo,
+	)
+	return ctx, summaryText, err
+}
+
+func (s *sessionSummarizer) runSummaryAttempts(
+	ctx context.Context,
+	request *model.Request,
+	mode string,
+	input summaryPromptInput,
+	trackResponse func(*model.Response),
+	ensureTimingInfo func(*model.Response),
+) (context.Context, string, *model.Response, error) {
+	result := s.runSummaryAttempt(
+		ctx,
+		request,
+		mode,
+		input,
+		0,
+		trackResponse,
+		ensureTimingInfo,
+	)
+	if result.err == nil && result.summaryText != "" {
+		return result.ctx, result.summaryText, result.response, nil
+	}
+	if result.custom || !shouldRetrySummary(
+		result.summaryText,
+		result.err,
+		result.response,
+	) {
+		return result.ctx, "", result.response, summaryAttemptError(
+			result.err,
+			input,
+		)
 	}
 
-	if responseChan == nil {
-		s.recordReportCall(ctx, request, mode)
-		responseChan, cbErr = s.model.GenerateContent(ctx, request)
-		if cbErr != nil {
-			err = fmt.Errorf("failed to generate summary: %w", cbErr)
-			return ctx, "", err
+	retryBudget := max(
+		int(float64(result.budget)*summaryRequestRetryRatio),
+		1,
+	)
+	retryRequest, buildErr := s.buildBoundedStandaloneSummaryRequest(
+		result.ctx,
+		input,
+		retryBudget,
+	)
+	if buildErr != nil {
+		return result.ctx, "", result.response, fmt.Errorf(
+			"build summary retry request: %w",
+			buildErr,
+		)
+	}
+	log.DebugfContext(
+		result.ctx,
+		"retrying summary with standalone bounded input: budget=%d",
+		retryBudget,
+	)
+	result = s.runSummaryAttempt(
+		result.ctx,
+		retryRequest,
+		callModeStandalone,
+		input,
+		retryBudget,
+		trackResponse,
+		ensureTimingInfo,
+	)
+	if result.err != nil || result.summaryText == "" {
+		return result.ctx, "", result.response, summaryAttemptError(
+			result.err,
+			input,
+		)
+	}
+	return result.ctx, result.summaryText, result.response, nil
+}
+
+func shouldRetrySummary(
+	summaryText string,
+	err error,
+	response *model.Response,
+) bool {
+	return isSummaryContextLengthError(err, response) ||
+		(err == nil && summaryText == "")
+}
+
+func summaryAttemptError(err error, input summaryPromptInput) error {
+	if err != nil {
+		return err
+	}
+	return fmt.Errorf(
+		"generated empty summary (input_chars=%d)",
+		input.characterCount(),
+	)
+}
+
+type summaryAttemptResult struct {
+	ctx         context.Context
+	summaryText string
+	response    *model.Response
+	custom      bool
+	mode        string
+	budget      int
+	err         error
+}
+
+func (s *sessionSummarizer) runSummaryAttempt(
+	ctx context.Context,
+	request *model.Request,
+	mode string,
+	input summaryPromptInput,
+	budgetLimit int,
+	trackResponse func(*model.Response),
+	ensureTimingInfo func(*model.Response),
+) summaryAttemptResult {
+	result := summaryAttemptResult{ctx: ctx, mode: mode}
+	result.budget = s.summaryRequestInputBudget(ctx, request)
+	if budgetLimit > 0 && budgetLimit < result.budget {
+		result.budget = budgetLimit
+	}
+	prepared, preparedMode, err := s.prepareSummaryRequest(
+		ctx,
+		request,
+		mode,
+		input,
+		result.budget,
+	)
+	if err != nil {
+		result.err = fmt.Errorf("prepare summary request: %w", err)
+		return result
+	}
+	if prepared != request {
+		*request = *prepared
+	}
+	result.mode = preparedMode
+
+	ctx, responseChan, err := s.runBeforeModelCallbacks(ctx, request)
+	result.ctx = ctx
+	if err != nil {
+		result.err = err
+		return result
+	}
+
+	result.custom = responseChan != nil
+	if !result.custom {
+		result.budget = s.summaryRequestInputBudget(ctx, request)
+		if budgetLimit > 0 && budgetLimit < result.budget {
+			result.budget = budgetLimit
+		}
+		if fitErr := s.ensureSummaryRequestFits(
+			ctx,
+			request,
+			false,
+			result.budget,
+		); fitErr != nil {
+			result.err = fmt.Errorf(
+				"summary request no longer fits after before-model callbacks: %w",
+				fitErr,
+			)
+			return result
+		}
+		s.recordReportCall(ctx, request, result.mode)
+		responseChan, err = s.model.GenerateContent(ctx, request)
+		if err != nil {
+			result.err = fmt.Errorf(
+				"failed to generate summary: %w",
+				err,
+			)
+			return result
 		}
 	} else {
 		s.recordReportCall(ctx, nil, callModeCustomResponse)
 	}
 
-	var summaryText string
-	ctx, summaryText, finalResp, cbErr = s.collectSummaryFromResponses(
+	ctx, summaryText, finalResp, err := s.collectSummaryFromResponses(
 		ctx,
 		request,
 		responseChan,
 		trackResponse,
 		ensureTimingInfo,
 	)
-	if cbErr != nil {
-		err = cbErr
-		return ctx, "", cbErr
-	}
-	if summaryText == "" {
-		err = fmt.Errorf("generated empty summary (input_chars=%d)", len(conversationText))
-		return ctx, "", err
-	}
-	return ctx, summaryText, nil
+	result.ctx = ctx
+	result.summaryText = summaryText
+	result.response = finalResp
+	result.err = err
+	return result
 }
 
-func (s *sessionSummarizer) buildSummaryPrompt(conversationText string) (string, error) {
+func (s *sessionSummarizer) buildSummaryPrompt(input summaryPromptInput) (string, error) {
 	vars := prompt.Vars{
-		conversationTextVar: conversationText,
+		conversationTextVar: input.conversationText,
+		previousSummaryVar:  input.previousSummary,
 		maxSummaryWordsVar:  "",
 	}
 	if s.maxSummaryWords > 0 {
@@ -968,7 +1239,7 @@ func (s *sessionSummarizer) buildCacheSafeForkPrompt() (string, error) {
 
 func (s *sessionSummarizer) buildSummaryRequest(
 	ctx context.Context,
-	conversationText string,
+	input summaryPromptInput,
 ) (*model.Request, string, error) {
 	if s.cacheSafeForking {
 		if parent, ok := CacheSafeForkRequestFromContext(ctx); ok {
@@ -977,28 +1248,39 @@ func (s *sessionSummarizer) buildSummaryRequest(
 		}
 		log.DebugfContext(ctx, "cache-safe summary forking requested but no parent request is available; falling back to standalone summary request")
 	}
+	request, err := s.buildStandaloneSummaryRequest(input)
+	return request, callModeStandalone, err
+}
 
+func (s *sessionSummarizer) buildStandaloneSummaryRequest(
+	input summaryPromptInput,
+) (*model.Request, error) {
 	messages := make([]model.Message, 0, 2)
 	systemPrompt, err := s.buildSystemPrompt()
 	if err != nil {
-		return nil, "", fmt.Errorf("render system prompt: %w", err)
+		return nil, fmt.Errorf("render system prompt: %w", err)
 	}
 	if trimmed := strings.TrimSpace(systemPrompt); trimmed != "" {
 		messages = append(messages, model.NewSystemMessage(systemPrompt))
 	}
 
-	userPrompt, err := s.buildSummaryPrompt(conversationText)
+	userPrompt, err := s.buildSummaryPrompt(input)
 	if err != nil {
-		return nil, "", fmt.Errorf("render user prompt: %w", err)
+		return nil, fmt.Errorf("render user prompt: %w", err)
 	}
 	messages = append(messages, model.NewUserMessage(userPrompt))
-	return newSummaryRequest(messages), callModeStandalone, nil
+	return newSummaryRequest(messages), nil
 }
 
-func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*model.Request, error) {
+func (s *sessionSummarizer) buildCacheSafeForkRequest(
+	parent *model.Request,
+) (*model.Request, error) {
 	request := cloneRequestForCacheSafeFork(parent)
 	if request == nil {
 		return nil, errors.New("parent request is nil")
+	}
+	if !hasSummarySourceContent(request.Messages) {
+		return nil, errors.New("cache-safe summary request has no conversation content")
 	}
 	userPrompt, err := s.buildCacheSafeForkPrompt()
 	if err != nil {
@@ -1008,6 +1290,474 @@ func (s *sessionSummarizer) buildCacheSafeForkRequest(parent *model.Request) (*m
 	request.GenerationConfig.Stream = false
 	request.StructuredOutput = nil
 	return request, nil
+}
+
+type summaryPayloadCandidate struct {
+	messageIndex int
+	replacement  model.Message
+	savedTokens  int
+}
+
+func (s *sessionSummarizer) prepareSummaryRequest(
+	ctx context.Context,
+	request *model.Request,
+	mode string,
+	input summaryPromptInput,
+	budget int,
+) (*model.Request, string, error) {
+	if mode == callModeStandalone {
+		bounded, err := s.buildBoundedStandaloneSummaryRequest(
+			ctx,
+			input,
+			budget,
+		)
+		return bounded, mode, err
+	}
+	if err := s.ensureSummaryRequestFits(
+		ctx,
+		request,
+		true,
+		budget,
+	); err == nil {
+		return request, mode, nil
+	}
+
+	// Cache-safe forking is an optimization. When the parent prefix cannot be
+	// made safe without dropping its last source round, fall back to a bounded
+	// standalone prompt whose final user message contains the source itself.
+	bounded, err := s.buildBoundedStandaloneSummaryRequest(
+		ctx,
+		input,
+		budget,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	return bounded, callModeStandalone, nil
+}
+
+func (s *sessionSummarizer) buildBoundedStandaloneSummaryRequest(
+	ctx context.Context,
+	input summaryPromptInput,
+	budget int,
+) (*model.Request, error) {
+	request, err := s.buildStandaloneSummaryRequest(input)
+	if err != nil {
+		return nil, err
+	}
+	if fits, err := summaryRequestFits(ctx, request, budget); err != nil {
+		return nil, err
+	} else if fits {
+		return request, nil
+	}
+
+	minimal, err := s.buildStandaloneSummaryRequest(summaryPromptInput{})
+	if err != nil {
+		return nil, err
+	}
+	minimalTokens, err := countSummaryRequestTokens(ctx, minimal)
+	if err != nil {
+		return nil, err
+	}
+	if minimalTokens >= budget {
+		return nil, fmt.Errorf(
+			"summary prompt requires %d tokens but input budget is %d",
+			minimalTokens,
+			budget,
+		)
+	}
+
+	totalRunes := len([]rune(input.conversationText)) + len([]rune(input.previousSummary))
+	best := (*model.Request)(nil)
+	low, high := 1, totalRunes
+	for low <= high {
+		mid := low + (high-low)/2
+		candidate, buildErr := s.buildStandaloneSummaryRequest(
+			truncateSummaryPromptInput(input, mid),
+		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		fits, countErr := summaryRequestFits(ctx, candidate, budget)
+		if countErr != nil {
+			return nil, countErr
+		}
+		if fits {
+			best = candidate
+			low = mid + 1
+			continue
+		}
+		high = mid - 1
+	}
+	if best == nil {
+		return nil, fmt.Errorf(
+			"summary input cannot fit a non-empty source within budget %d",
+			budget,
+		)
+	}
+	return best, nil
+}
+
+func truncateSummaryConversation(runes []rune, retain int) string {
+	return truncateSummaryText(runes, retain, summaryConversationOmitted)
+}
+
+func truncatePreviousSummary(runes []rune, retain int) string {
+	return truncateSummaryText(runes, retain, summaryPreviousOmitted)
+}
+
+func truncateSummaryText(runes []rune, retain int, marker string) string {
+	if retain >= len(runes) {
+		return string(runes)
+	}
+	if retain <= 0 {
+		return ""
+	}
+	markerRunes := []rune(marker)
+	head := (retain + 1) / 2
+	tail := retain / 2
+	result := make([]rune, 0, retain+len(markerRunes))
+	result = append(result, runes[:head]...)
+	result = append(result, markerRunes...)
+	result = append(result, runes[len(runes)-tail:]...)
+	return string(result)
+}
+
+func truncateSummaryPromptInput(input summaryPromptInput, retain int) summaryPromptInput {
+	conversationRunes := []rune(input.conversationText)
+	previousRunes := []rune(input.previousSummary)
+	total := len(conversationRunes) + len(previousRunes)
+	if retain >= total {
+		return input
+	}
+	if retain <= 0 {
+		return summaryPromptInput{}
+	}
+	if len(previousRunes) == 0 {
+		return summaryPromptInput{
+			conversationText: truncateSummaryConversation(conversationRunes, retain),
+		}
+	}
+	if len(conversationRunes) == 0 {
+		return summaryPromptInput{
+			previousSummary: truncatePreviousSummary(previousRunes, retain),
+		}
+	}
+
+	previousRetain := 0
+	conversationRetain := 1
+	if retain > 1 {
+		previousRetain = retain * len(previousRunes) / total
+		if previousRetain < 1 {
+			previousRetain = 1
+		}
+		conversationRetain = retain - previousRetain
+	}
+
+	return summaryPromptInput{
+		conversationText: truncateSummaryConversation(conversationRunes, conversationRetain),
+		previousSummary:  truncatePreviousSummary(previousRunes, previousRetain),
+	}
+}
+
+func summaryRequestFits(
+	ctx context.Context,
+	request *model.Request,
+	budget int,
+) (bool, error) {
+	tokens, err := countSummaryRequestTokens(ctx, request)
+	if err != nil {
+		return false, fmt.Errorf("count summary request tokens: %w", err)
+	}
+	return tokens <= budget, nil
+}
+
+func (s *sessionSummarizer) ensureSummaryRequestFits(
+	ctx context.Context,
+	request *model.Request,
+	compactToolPayloads bool,
+	budget int,
+) error {
+	tokens, err := countSummaryRequestTokens(ctx, request)
+	if err != nil {
+		return fmt.Errorf("count summary request tokens: %w", err)
+	}
+	if tokens <= budget {
+		return nil
+	}
+	if !compactToolPayloads {
+		return fmt.Errorf(
+			"summary request input too large: estimated %d tokens exceeds budget %d",
+			tokens,
+			budget,
+		)
+	}
+
+	// A summary never calls tools. Once the cache-safe request is already too
+	// large, prefer correctness over preserving the tool schema cache key.
+	request.Tools = nil
+	tokens, err = countSummaryRequestTokens(ctx, request)
+	if err != nil {
+		return fmt.Errorf("count summary request without tools: %w", err)
+	}
+	if tokens <= budget {
+		return nil
+	}
+	// Prefer dropping source rounds already represented by newer context before
+	// erasing payloads from the latest complete round.
+	for dropOldestSummarySourceRound(request) {
+		tokens, err = countSummaryRequestTokens(ctx, request)
+		if err != nil {
+			return fmt.Errorf("count pruned summary request tokens: %w", err)
+		}
+		if tokens <= budget {
+			return nil
+		}
+	}
+	candidates, err := summaryToolPayloadCandidates(ctx, request.Messages)
+	if err != nil {
+		return fmt.Errorf("build summary payload candidates: %w", err)
+	}
+	for _, candidate := range candidates {
+		request.Messages[candidate.messageIndex] = candidate.replacement
+		tokens, err = countSummaryRequestTokens(ctx, request)
+		if err != nil {
+			return fmt.Errorf("count compacted summary request tokens: %w", err)
+		}
+		if tokens <= budget {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"cache-safe summary request input too large after semantic compaction: estimated %d tokens exceeds budget %d",
+		tokens,
+		budget,
+	)
+}
+
+func (s *sessionSummarizer) summaryRequestInputBudget(
+	ctx context.Context,
+	request *model.Request,
+) int {
+	contextWindow := defaultContextThresholdFallbackWindow
+	if resolved, ok := modelcontext.ResolveContextWindow(s.model); ok {
+		contextWindow = resolved
+	}
+	budget := int(float64(contextWindow) * summaryRequestInputRatio)
+	var requestWithoutTools *model.Request
+	if request != nil {
+		cloned := *request
+		cloned.Tools = nil
+		requestWithoutTools = &cloned
+	}
+	if providerBudget, ok := modelcontext.ResolveInputTokenBudget(
+		ctx,
+		s.model,
+		requestWithoutTools,
+	); ok && providerBudget < budget {
+		budget = providerBudget
+	}
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+func dropOldestSummarySourceRound(request *model.Request) bool {
+	if request == nil || len(request.Messages) < 3 {
+		return false
+	}
+	sourceEnd := len(request.Messages) - 1
+	rounds := summarySourceRounds(request.Messages[:sourceEnd])
+	if len(rounds) <= 1 {
+		return false
+	}
+	drop := make(map[int]struct{}, len(rounds[0]))
+	for _, index := range rounds[0] {
+		drop[index] = struct{}{}
+	}
+	messages := make([]model.Message, 0, len(request.Messages)-len(drop))
+	for i, message := range request.Messages {
+		if _, ok := drop[i]; ok {
+			continue
+		}
+		messages = append(messages, message)
+	}
+	request.Messages = messages
+	return true
+}
+
+func summarySourceRounds(messages []model.Message) [][]int {
+	var rounds [][]int
+	for i, message := range messages {
+		if message.Role == model.RoleSystem {
+			continue
+		}
+		if len(rounds) == 0 ||
+			(message.Role == model.RoleUser && len(rounds[len(rounds)-1]) > 0) {
+			rounds = append(rounds, nil)
+		}
+		rounds[len(rounds)-1] = append(rounds[len(rounds)-1], i)
+	}
+	return rounds
+}
+
+func isSummaryContextLengthError(err error, response *model.Response) bool {
+	var parts []string
+	if err != nil {
+		parts = append(parts, err.Error())
+	}
+	if response != nil && response.Error != nil {
+		parts = append(parts, response.Error.Type, response.Error.Message)
+		if response.Error.Code != nil {
+			parts = append(parts, *response.Error.Code)
+		}
+	}
+	text := strings.ToLower(strings.Join(parts, " "))
+	for _, marker := range []string{
+		"context_length_exceeded",
+		"context_window_exceeded",
+		"context length exceeded",
+		"context window exceeded",
+		"maximum context length",
+		"prompt is too long",
+		"input is too long",
+		"too many tokens",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func countSummaryRequestTokens(
+	ctx context.Context,
+	request *model.Request,
+) (int, error) {
+	if request == nil {
+		return 0, nil
+	}
+	counter := getTokenCounter()
+	tokens := 0
+	if len(request.Messages) > 0 {
+		var err error
+		tokens, err = counter.CountTokensRange(
+			ctx,
+			request.Messages,
+			0,
+			len(request.Messages),
+		)
+		if err != nil {
+			return 0, err
+		}
+	}
+
+	toolNames := make([]string, 0, len(request.Tools))
+	for name := range request.Tools {
+		toolNames = append(toolNames, name)
+	}
+	sort.Strings(toolNames)
+	for _, name := range toolNames {
+		declaration := any(name)
+		if summaryTool := request.Tools[name]; summaryTool != nil {
+			if declared := summaryTool.Declaration(); declared != nil {
+				declaration = declared
+			}
+		}
+		encoded, err := json.Marshal(declaration)
+		if err != nil {
+			return 0, fmt.Errorf("marshal tool declaration %q: %w", name, err)
+		}
+		toolTokens, err := counter.CountTokens(
+			ctx,
+			model.NewSystemMessage(string(encoded)),
+		)
+		if err != nil {
+			return 0, fmt.Errorf("count tool declaration %q: %w", name, err)
+		}
+		tokens += toolTokens
+	}
+	return tokens, nil
+}
+
+func summaryToolPayloadCandidates(
+	ctx context.Context,
+	messages []model.Message,
+) ([]summaryPayloadCandidate, error) {
+	counter := getTokenCounter()
+	candidates := make([]summaryPayloadCandidate, 0, len(messages))
+	for i, message := range messages {
+		replacement, ok := compactSummaryToolPayload(message)
+		if !ok {
+			continue
+		}
+		before, err := counter.CountTokens(ctx, message)
+		if err != nil {
+			return nil, err
+		}
+		after, err := counter.CountTokens(ctx, replacement)
+		if err != nil {
+			return nil, err
+		}
+		if before <= after {
+			continue
+		}
+		candidates = append(candidates, summaryPayloadCandidate{
+			messageIndex: i,
+			replacement:  replacement,
+			savedTokens:  before - after,
+		})
+	}
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return candidates[i].savedTokens > candidates[j].savedTokens
+	})
+	return candidates, nil
+}
+
+func compactSummaryToolPayload(message model.Message) (model.Message, bool) {
+	switch {
+	case message.Role == model.RoleTool && message.ToolID != "":
+		replacement := cloneMessageForCacheSafeFork(message)
+		replacement.Content = fmt.Sprintf(
+			summaryToolResultOmittedFmt,
+			message.ToolName,
+			message.ToolID,
+		)
+		replacement.ContentParts = nil
+		replacement.ReasoningContent = ""
+		replacement.ReasoningSignature = ""
+		return replacement, true
+	case len(message.ToolCalls) > 0:
+		replacement := cloneMessageForCacheSafeFork(message)
+		changed := false
+		for i := range replacement.ToolCalls {
+			if len(replacement.ToolCalls[i].Function.Arguments) == 0 {
+				continue
+			}
+			replacement.ToolCalls[i].Function.Arguments = []byte(
+				summaryToolArgumentsOmitted,
+			)
+			changed = true
+		}
+		return replacement, changed
+	default:
+		return model.Message{}, false
+	}
+}
+
+func hasSummarySourceContent(messages []model.Message) bool {
+	for _, message := range messages {
+		if message.Role == model.RoleSystem {
+			continue
+		}
+		if strings.TrimSpace(message.Content) != "" ||
+			len(message.ContentParts) > 0 ||
+			len(message.ToolCalls) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func newSummaryRequest(messages []model.Message) *model.Request {

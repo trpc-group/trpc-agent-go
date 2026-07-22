@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -212,10 +213,12 @@ func evaluateEventThreshold(eventCount int) checkEvaluator {
 	}
 }
 
-// CheckTimeThreshold creates a checker that triggers when the time elapsed
-// since the last relevant event is greater than the given interval. Scoped
-// branch checks use the last event in that branch subtree; full-session checks
-// use the last event in the session.
+// CheckTimeThreshold creates a checker that triggers when the configured time
+// interval is exceeded. The built-in Runner summary path evaluates the idle
+// gap before the current top-level request. Standalone calls without a Runner
+// observation preserve the legacy behavior of measuring from the last
+// relevant event to the current wall-clock time. Scoped branch checks use the
+// branch subtree; full-session checks use the full checked session.
 func CheckTimeThreshold(interval time.Duration) Checker {
 	evaluate := evaluateTimeThreshold(interval)
 	return func(sess *session.Session) bool {
@@ -230,6 +233,14 @@ func evaluateTimeThreshold(interval time.Duration) checkEvaluator {
 			Metric:    metricDuration,
 			Threshold: int(interval / time.Millisecond),
 			Unit:      unitMilliseconds,
+		}
+		if observation, ok := summarytrigger.ObservationFromSession(sess); ok {
+			if !observation.Available {
+				return check
+			}
+			check.Value = int(observation.Elapsed / time.Millisecond)
+			check.Passed = observation.Elapsed > interval
+			return check
 		}
 		if sess == nil || len(sess.Events) == 0 {
 			return check

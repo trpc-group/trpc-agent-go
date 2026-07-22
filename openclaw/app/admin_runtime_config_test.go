@@ -1298,6 +1298,7 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 			"  host_exec_default_timeout: 60s\n"+
 			"  host_exec_max_timeout: 45s\n"+
 			"  host_exec_max_yield: 2s\n"+
+			"  host_exec_max_idle_wait: 20s\n"+
 			"  defer_direct_tools: [exec_command]\n"+
 			"  defer_default_direct_tools: false\n",
 	)
@@ -1310,6 +1311,7 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	opts.HostExecDefaultTimeout = time.Minute
 	opts.HostExecMaxTimeout = 45 * time.Second
 	opts.HostExecMaxYield = 2 * time.Second
+	opts.HostExecMaxIdleWait = 20 * time.Second
 
 	provider, ok := buildAdminRuntimeConfigProvider(
 		opts,
@@ -1360,6 +1362,13 @@ func TestBuildAdminOptions_ExposesDeferredToolSurfaceFields(
 	)
 	require.Equal(t, "2s", hostMaxYield.RuntimeValue)
 	require.Equal(t, "2s", hostMaxYield.ConfiguredValue)
+	hostMaxIdleWait := findAdminRuntimeConfigField(
+		t,
+		status,
+		"tools.host_exec_max_idle_wait",
+	)
+	require.Equal(t, "20s", hostMaxIdleWait.RuntimeValue)
+	require.Equal(t, "20s", hostMaxIdleWait.ConfiguredValue)
 	direct := findAdminRuntimeConfigField(
 		t,
 		status,

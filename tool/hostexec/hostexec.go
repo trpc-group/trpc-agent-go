@@ -455,6 +455,9 @@ func (t *writeStdinTool) Call(
 	}
 
 	appendNewline := firstBool(in.AppendNewline, in.Submit)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if in.Chars != "" || appendNewline {
 		if err := t.checkSafety(ctx, sessionID, in.Chars, appendNewline); err != nil {
 			return nil, err
@@ -478,7 +481,6 @@ func (t *writeStdinTool) Call(
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-timer.C:
 		}
 	}

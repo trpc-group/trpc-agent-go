@@ -548,6 +548,13 @@ func (s *staticTrackEventsTracker) Flush(
 	return nil
 }
 
+func (s *staticTrackEventsTracker) Close(
+	context.Context,
+	session.Key,
+) error {
+	return nil
+}
+
 type getEventsErrorTracker struct {
 	err error
 }
@@ -569,6 +576,13 @@ func (g *getEventsErrorTracker) GetEvents(
 }
 
 func (g *getEventsErrorTracker) Flush(
+	context.Context,
+	session.Key,
+) error {
+	return nil
+}
+
+func (g *getEventsErrorTracker) Close(
 	context.Context,
 	session.Key,
 ) error {
