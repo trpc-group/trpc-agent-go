@@ -28,11 +28,6 @@ type A2AMessageToAgentMessage interface {
 	ConvertToAgentMessage(ctx context.Context, message protocol.Message) (*model.Message, error)
 }
 
-// EventToA2AUnaryOptions is the options for the EventToA2AMessage.
-type EventToA2AUnaryOptions struct {
-	CtxID string
-}
-
 // EventToA2AStreamingOptions is the options for the EventToA2AMessage.
 type EventToA2AStreamingOptions struct {
 	CtxID  string
@@ -41,13 +36,6 @@ type EventToA2AStreamingOptions struct {
 
 // EventToA2AMessage defines an interface for converting Agent events to A2A protocol messages.
 type EventToA2AMessage interface {
-	// ConvertToA2AMessage converts an Agent event to an A2A protocol message.
-	ConvertToA2AMessage(
-		ctx context.Context,
-		event *event.Event,
-		options EventToA2AUnaryOptions,
-	) (protocol.SendMessageResult, error)
-
 	// ConvertStreaming converts an Agent event to an A2A protocol message for streaming.
 	ConvertStreamingToA2AMessage(
 		ctx context.Context,
@@ -223,66 +211,6 @@ func (c *defaultEventToA2AMessage) shouldEmitEvent(evt *event.Event) bool {
 	return matchesAllowedGraphObjectType(objectType, allowedObjectTypes)
 }
 
-// ConvertToA2AMessage converts an Agent event to an A2A protocol message.
-// For non-streaming responses, it returns the full content including
-// tool calls.
-func (c *defaultEventToA2AMessage) ConvertToA2AMessage(
-	ctx context.Context,
-	event *event.Event,
-	options EventToA2AUnaryOptions,
-) (protocol.SendMessageResult, error) {
-	if event.Response == nil {
-		return nil, nil
-	}
-	if !c.shouldEmitEvent(event) {
-		return nil, nil
-	}
-
-	if event.IsTerminalError() {
-		return nil, fmt.Errorf(
-			"A2A server received error event from agent, "+
-				"event ID: %s, error: %v",
-			event.ID,
-			event.Response.Error,
-		)
-	}
-
-	// Additional safety check for choices array bounds.
-	if len(event.Response.Choices) == 0 {
-		mapperParts, err := c.runEventPartMappers(ctx, event)
-		if err != nil {
-			return nil, err
-		}
-		if len(mapperParts) > 0 {
-			msg := protocol.NewMessage(protocol.MessageRoleAgent, mapperParts)
-			msg.Metadata = c.buildMessageMetadata(event)
-			return &msg, nil
-		}
-		if result := c.convertMetadataOnlyToA2AMessageResult(event); result != nil {
-			return result, nil
-		}
-		log.DebugfContext(
-			ctx,
-			"no choices in response, event: %v",
-			event.ID,
-		)
-		return nil, nil
-	}
-
-	// Check if this is a tool call event.
-	if isToolCallEvent(event) {
-		return c.convertToolCallToA2AMessage(event)
-	}
-
-	// Check if this is a code execution event.
-	if isCodeExecutionEvent(event) {
-		return c.convertCodeExecutionToA2AMessage(event)
-	}
-
-	// Fallback to plain content conversion.
-	return c.convertContentToA2AMessage(ctx, event)
-}
-
 // convertCodeExecutionToA2AMessage converts code execution events to A2A DataPart messages.
 // This handles both code execution and code execution result events.
 func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
@@ -341,36 +269,6 @@ func (c *defaultEventToA2AMessage) buildTextParts(msg model.Message) []*protocol
 	}
 
 	return parts
-}
-
-// convertContentToA2AMessage converts message content to A2A message.
-// It creates a message with text parts containing the content.
-func (c *defaultEventToA2AMessage) convertContentToA2AMessage(
-	ctx context.Context,
-	event *event.Event,
-) (protocol.SendMessageResult, error) {
-	choice := event.Response.Choices[0]
-	parts := c.buildTextParts(choice.Message)
-
-	mapperParts, err := c.runEventPartMappers(ctx, event)
-	if err != nil {
-		return nil, err
-	}
-	parts = append(parts, mapperParts...)
-
-	metadata := c.buildMessageMetadata(event)
-	if len(parts) > 0 || hasStructuredMetadata(metadata) {
-		msg := protocol.NewMessage(protocol.MessageRoleAgent, parts)
-		msg.Metadata = metadata
-		return &msg, nil
-	}
-
-	log.DebugfContext(
-		ctx,
-		"content is empty, event: %v",
-		event,
-	)
-	return nil, nil
 }
 
 // ConvertStreamingToA2AMessage converts an Agent event to an A2A protocol

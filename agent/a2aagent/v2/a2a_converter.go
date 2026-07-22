@@ -91,13 +91,31 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 			}
 			break
 		}
+		// Message output mode stores the completed response in Status.Message
+		// instead of Artifacts. Avoid adding it when artifacts are also present,
+		// where Status.Message is status text rather than the task output.
+		if len(v.Artifacts) == 0 && v.Status.Message != nil {
+			statusMsg := convertTaskStatusToMessage(&protocol.TaskStatusUpdateEvent{
+				TaskID:    v.ID,
+				ContextID: v.ContextID,
+				Metadata:  v.Metadata,
+				Status:    v.Status,
+			})
+			if evt := d.buildRespEvent(false, statusMsg, agentName, invocation); evt != nil {
+				events = append(events, evt)
+			}
+		}
 		// Artifacts contain the final response
 		for i := range v.Artifacts {
 			artifactMsg := &protocol.Message{
 				Role:      protocol.MessageRoleAgent,
 				MessageID: v.Artifacts[i].ArtifactID,
 				Parts:     v.Artifacts[i].Parts,
-				Metadata:  v.Artifacts[i].Metadata,
+				Metadata: mergeTaskMetadata(
+					v.Status.State,
+					v.Artifacts[i].Metadata,
+					v.Metadata,
+				),
 			}
 			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
 				events = append(events, evt)
@@ -143,18 +161,27 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 	case *protocol.Task:
 		responseMsg = convertTaskToMessage(v)
 	case *protocol.TaskStatusUpdateEvent:
-		if !isTaskFailureState(v.Status.State) && !hasStructuredErrorMetadata(v.Metadata) {
-			// submitted/completed updates without structured errors are control signals.
-			return nil, nil
-		}
 		responseMsg = convertTaskStatusToMessage(v)
-	case *protocol.TaskArtifactUpdateEvent:
-		if v.IsFinal() && !hasStructuredErrorMetadata(v.Metadata) {
-			// Final artifact chunk is either an aggregated result or a termination signal,
-			// not incremental content for the user.
-			return nil, nil
+		if !isTaskFailureState(v.Status.State) &&
+			!hasStructuredErrorMetadata(responseMsg.Metadata) {
+			// Normal lifecycle status is a control signal. A terminal frame may
+			// still carry response metadata that must reach the local session;
+			// strip its accumulated content to avoid replaying streamed text.
+			if !hasResponseMetadata(responseMsg.Metadata) {
+				return nil, nil
+			}
+			responseMsg.Parts = nil
 		}
+	case *protocol.TaskArtifactUpdateEvent:
 		responseMsg = convertTaskArtifactToMessage(v)
+		if v.IsFinal() && !hasStructuredErrorMetadata(responseMsg.Metadata) {
+			// Final artifact content may be an aggregate of earlier chunks. Forward
+			// only metadata needed by the local runtime, avoiding text duplication.
+			if !hasResponseMetadata(responseMsg.Metadata) {
+				return nil, nil
+			}
+			responseMsg.Parts = nil
+		}
 	default:
 		log.Infof("unexpected event type: %T", result.Result)
 		return nil, nil
@@ -1080,6 +1107,23 @@ func hasStructuredErrorMetadata(metadata map[string]any) bool {
 	return ia2a.ResponseErrorFromMetadata(metadata, "", "") != nil
 }
 
+func hasResponseMetadata(metadata map[string]any) bool {
+	if metadata == nil {
+		return false
+	}
+	for _, key := range []string{
+		ia2a.MessageMetadataObjectTypeKey,
+		ia2a.MessageMetadataTagKey,
+		ia2a.MessageMetadataResponseIDKey,
+		ia2a.MessageMetadataStateDeltaKey,
+	} {
+		if _, ok := metadata[key]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func nonStreamingResponseContent(result *parseResult) string {
 	if result == nil {
 		return ""
@@ -1144,21 +1188,27 @@ func taskStateFromMetadata(
 	return protocol.TaskState(raw)
 }
 
-func cloneTaskMetadata(
-	metadata map[string]any,
+func mergeTaskMetadata(
 	taskState protocol.TaskState,
+	metadata ...map[string]any,
 ) map[string]any {
-	if len(metadata) == 0 && taskState == "" {
+	size := 0
+	for _, values := range metadata {
+		size += len(values)
+	}
+	if size == 0 && taskState == "" {
 		return nil
 	}
-	cloned := make(map[string]any, len(metadata)+1)
-	for key, value := range metadata {
-		cloned[key] = value
+	merged := make(map[string]any, size+1)
+	for _, values := range metadata {
+		for key, value := range values {
+			merged[key] = value
+		}
 	}
 	if taskState != "" {
-		cloned[ia2a.MessageMetadataTaskStateKey] = string(taskState)
+		merged[ia2a.MessageMetadataTaskStateKey] = string(taskState)
 	}
-	return cloned
+	return merged
 }
 
 // convertTaskToMessage converts a Task to a Message
@@ -1179,22 +1229,24 @@ func convertTaskToMessage(task *protocol.Task) *protocol.Message {
 		Parts:     parts,
 		TaskID:    &task.ID,
 		ContextID: &task.ContextID,
-		Metadata:  cloneTaskMetadata(task.Metadata, task.Status.State),
+		Metadata:  mergeTaskMetadata(task.Status.State, task.Metadata),
 	}
 }
 
 // convertTaskStatusToMessage converts a TaskStatusUpdateEvent to a Message
 func convertTaskStatusToMessage(event *protocol.TaskStatusUpdateEvent) *protocol.Message {
-	msg := &protocol.Message{
-		Role:      protocol.MessageRoleAgent,
-		TaskID:    &event.TaskID,
-		ContextID: &event.ContextID,
-		Metadata:  cloneTaskMetadata(event.Metadata, event.Status.State),
-	}
+	msg := &protocol.Message{Role: protocol.MessageRoleAgent}
 	if event.Status.Message != nil {
-		msg.Parts = event.Status.Message.Parts
-		msg.MessageID = event.Status.Message.MessageID
+		cloned := *event.Status.Message
+		msg = &cloned
 	}
+	msg.TaskID = &event.TaskID
+	msg.ContextID = &event.ContextID
+	msg.Metadata = mergeTaskMetadata(
+		event.Status.State,
+		msg.Metadata,
+		event.Metadata,
+	)
 	return msg
 }
 
@@ -1206,7 +1258,11 @@ func convertTaskArtifactToMessage(event *protocol.TaskArtifactUpdateEvent) *prot
 		Parts:     event.Artifact.Parts,
 		TaskID:    &event.TaskID,
 		ContextID: &event.ContextID,
-		Metadata:  event.Metadata,
+		Metadata: mergeTaskMetadata(
+			"",
+			event.Artifact.Metadata,
+			event.Metadata,
+		),
 	}
 	return msg
 }

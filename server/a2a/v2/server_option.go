@@ -62,40 +62,21 @@ type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.Mess
 // TaskManagerBuilder returns a task manager for the given processor. Providing
 // one replaces the default stateless manager with a retaining or custom
 // implementation; it does not change the processor event contract.
-type TaskManagerBuilder func(processor taskmanager.MessageProcessor) taskmanager.TaskManager
+type TaskManagerBuilder func(processor taskmanager.MessageProcessor) (taskmanager.TaskManager, error)
 
 // ResponseRewriter rewrites outbound A2A responses before they are returned or
 // sent to the remote peer.
 //
-// RewriteStreaming rewrites each outbound event immediately before it is sent;
-// returning nil drops that event.
-//
-// RewriteUnary is retained for API compatibility but is no longer invoked: under
-// the event-stream MessageProcessor contract the framework derives the unary
-// (message/send) result from the emitted event stream after ProcessMessage
-// returns, so there is no server-side aggregation point to hook. Rewrite via
-// RewriteStreaming instead — it also runs on the events the unary result is
-// derived from.
+// RewriteStreaming rewrites each outbound event before it is sent; returning
+// nil drops that event. Unary message/send results are derived from the same
+// rewritten event stream.
 type ResponseRewriter interface {
-	RewriteUnary(ctx context.Context, result protocol.SendMessageResult) protocol.SendMessageResult
 	RewriteStreaming(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
 }
 
 // ResponseRewriterFuncs adapts plain functions into a ResponseRewriter.
 type ResponseRewriterFuncs struct {
-	Unary     func(ctx context.Context, result protocol.SendMessageResult) protocol.SendMessageResult
 	Streaming func(ctx context.Context, result protocol.StreamEvent) protocol.StreamEvent
-}
-
-// RewriteUnary implements ResponseRewriter.
-func (f ResponseRewriterFuncs) RewriteUnary(
-	ctx context.Context,
-	result protocol.SendMessageResult,
-) protocol.SendMessageResult {
-	if f.Unary == nil {
-		return result
-	}
-	return f.Unary(ctx, result)
 }
 
 // RewriteStreaming implements ResponseRewriter.
@@ -297,6 +278,9 @@ func WithExtraA2AOptions(opts ...a2a.Option) Option {
 // WithTaskManagerBuilder replaces the default stateless manager. The built-in
 // processor emits the same request-local task lifecycle in either case; use a
 // memory, Redis, or custom manager when that state must survive the request.
+// Retention enables the task control plane; suspending a task for continuation
+// still requires a processor or converter that emits input-required or
+// auth-required status.
 func WithTaskManagerBuilder(builder TaskManagerBuilder) Option {
 	return func(opts *options) {
 		opts.taskManagerBuilder = builder
@@ -363,9 +347,8 @@ func WithGraphEventObjectAllowlist(objectTypes ...string) Option {
 // ErrorHandler are also covered.
 //
 // Because message/send derives its result from these same events, this also
-// covers unary responses; RewriteUnary is no longer invoked (see
-// ResponseRewriter). The rewriter sees each event immediately before send, with
-// the request context passed through for request-scoped logging.
+// covers unary responses. The rewriter sees each event before task aggregation
+// and send, with the request context passed through for request-scoped logging.
 //
 // Returning nil drops the outbound event.
 func WithResponseRewriter(rewriter ResponseRewriter) Option {

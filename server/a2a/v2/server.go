@@ -194,7 +194,10 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// A2A task state is required.
 	var taskManager taskmanager.TaskManager
 	if options.taskManagerBuilder != nil {
-		taskManager = options.taskManagerBuilder(processor)
+		taskManager, err = options.taskManagerBuilder(processor)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create task manager: %w", err)
+		}
 	} else {
 		taskManager, err = stateless.NewTaskManager(processor)
 		if err != nil {
@@ -211,7 +214,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// Extract base path from agent card URL for request routing.
 	// If the URL contains a path component (e.g., "http://example.com/api/v1"),
 	// it will be extracted and used as the base path for routing incoming requests.
-	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
+	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.PrimaryURL()))
 
 	opts := []a2a.Option{
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
@@ -491,8 +494,18 @@ func (m *messageProcessor) sendEvent(
 	if rewritten == nil {
 		return nil
 	}
+	return sendPreparedEvent(ctx, out, rewritten)
+}
+
+// sendPreparedEvent delivers an event that has already been rewritten and
+// normalized.
+func sendPreparedEvent(
+	ctx context.Context,
+	out chan<- protocol.StreamEvent,
+	result protocol.StreamEvent,
+) error {
 	select {
-	case out <- rewritten:
+	case out <- result:
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -1003,21 +1016,21 @@ func (m *messageProcessor) processBatchStreamingEvents(
 			)
 		}
 
-		// Emit the converted event (rewriting/dropping is handled by sendEvent).
+		// Rewrite first so task aggregation reflects exactly what is sent. This is
+		// important for response redaction and event replacement: dropped or
+		// rewritten content must not reappear in the final Task snapshot.
 		if convertedResult == nil {
 			continue
 		}
-		switch converted := convertedResult.(type) {
+		prepareTaskOutputEvent(convertedResult, state)
+		outbound := m.rewriteStreamingResult(ctx, convertedResult)
+		if outbound == nil {
+			continue
+		}
+		prepareTaskOutputEvent(outbound, state)
+		switch converted := outbound.(type) {
 		case *protocol.TaskArtifactUpdateEvent:
 			artifactID := converted.Artifact.ArtifactID
-			if artifactID == "" {
-				artifactID = state.fallbackArtifact
-				converted.Artifact.ArtifactID = artifactID
-			}
-			_, seen := state.seenArtifactIDs[artifactID]
-			if converted.Append == nil {
-				converted.Append = &seen
-			}
 			state.seenArtifactIDs[artifactID] = struct{}{}
 			state.lastArtifactID = artifactID
 		case *protocol.Message:
@@ -1036,7 +1049,7 @@ func (m *messageProcessor) processBatchStreamingEvents(
 			)
 			mergeMessageMetadata(state.finalMessage, converted.Metadata)
 		}
-		if err := m.sendEvent(ctx, out, convertedResult); err != nil {
+		if err := sendPreparedEvent(ctx, out, outbound); err != nil {
 			log.ErrorfContext(
 				ctx,
 				"failed to send streaming message event: %v",
@@ -1048,6 +1061,27 @@ func (m *messageProcessor) processBatchStreamingEvents(
 
 	// Continue processing - need more data
 	return true, nil
+}
+
+// prepareTaskOutputEvent fills request-local artifact framing without recording
+// it in taskOutputState. State is updated only after rewriting succeeds.
+func prepareTaskOutputEvent(
+	result protocol.StreamEvent,
+	state *taskOutputState,
+) {
+	artifact, ok := result.(*protocol.TaskArtifactUpdateEvent)
+	if !ok || artifact == nil {
+		return
+	}
+	artifactID := artifact.Artifact.ArtifactID
+	if artifactID == "" {
+		artifactID = state.fallbackArtifact
+		artifact.Artifact.ArtifactID = artifactID
+	}
+	if artifact.Append == nil {
+		_, seen := state.seenArtifactIDs[artifactID]
+		artifact.Append = &seen
+	}
 }
 
 // addTaskMetadata adds ADK-compatible metadata to task status update events.

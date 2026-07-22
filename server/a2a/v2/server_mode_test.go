@@ -10,9 +10,13 @@ package a2a
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
+	a2aserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
 	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/stateless"
@@ -55,8 +59,8 @@ func TestBuildProcessorKeepsEventTypeAcrossManagers(t *testing.T) {
 		},
 		{
 			name: "explicit retaining manager",
-			taskManager: func(taskmanager.MessageProcessor) taskmanager.TaskManager {
-				return nil
+			taskManager: func(taskmanager.MessageProcessor) (taskmanager.TaskManager, error) {
+				return nil, nil
 			},
 			streamingType: StreamingEventTypeTaskArtifactUpdate,
 		},
@@ -304,8 +308,8 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 			runner:             newRunner(),
 			errorHandler:       defaultErrorHandler,
 			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
-			taskManagerBuilder: func(taskmanager.MessageProcessor) taskmanager.TaskManager {
-				return nil
+			taskManagerBuilder: func(taskmanager.MessageProcessor) (taskmanager.TaskManager, error) {
+				return nil, nil
 			},
 		})
 		if err != nil {
@@ -334,4 +338,113 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 			t.Errorf("stored task state = %s, want completed", stored.Status.State)
 		}
 	})
+}
+
+func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
+	runner := &modeTestRunner{events: []*event.Event{
+		{
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{Content: "secret"},
+				}},
+			},
+		},
+		{
+			Response: &model.Response{
+				Object: model.ObjectTypeRunnerCompletion,
+				Done:   true,
+			},
+		},
+	}}
+	processor, err := buildProcessor(nil, nil, "agent", &options{
+		runner:             runner,
+		errorHandler:       defaultErrorHandler,
+		streamingEventType: StreamingEventTypeMessage,
+		responseRewriter: ResponseRewriterFuncs{Streaming: func(
+			_ context.Context,
+			result protocol.StreamEvent,
+		) protocol.StreamEvent {
+			if _, ok := result.(*protocol.Message); ok {
+				return nil
+			}
+			return result
+		}},
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	request := protocol.SendMessageParams{Message: protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewTextPart("hi")},
+	)}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		request,
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatal("response did not contain a Task")
+	}
+	if task.Status.Message != nil {
+		t.Fatalf("dropped Message reappeared in completed Task: %#v", task.Status.Message)
+	}
+}
+
+func TestTaskManagerBuilderPropagatesError(t *testing.T) {
+	wantErr := errors.New("task manager unavailable")
+	_, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(a2aserver.AgentCard{
+			Name: "agent",
+			URL:  "http://localhost:8080",
+		}),
+		WithTaskManagerBuilder(func(
+			taskmanager.MessageProcessor,
+		) (taskmanager.TaskManager, error) {
+			return nil, wantErr
+		}),
+	)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("New error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
+func TestServerRoutesPrimarySupportedInterface(t *testing.T) {
+	server, err := New(
+		WithRunner(&modeTestRunner{}),
+		WithAgentCard(a2aserver.AgentCard{
+			Name: "agent",
+			URL:  "http://example.com/legacy",
+			SupportedInterfaces: []a2aserver.AgentInterface{
+				{
+					URL:             "http://example.com/primary",
+					ProtocolBinding: "JSONRPC",
+					ProtocolVersion: "1.0",
+				},
+			},
+		}),
+	)
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		"http://example.com/primary/.well-known/agent-card.json",
+		nil,
+	)
+	server.Handler().ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("primary interface status = %d, want %d", recorder.Code, http.StatusOK)
+	}
 }
