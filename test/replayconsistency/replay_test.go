@@ -139,7 +139,7 @@ func TestAfterWriteRetryLeavesStateClean(t *testing.T) {
 
 func TestAfterWriteRetryLeavesSummaryConsistent(t *testing.T) {
 	const sessionID = "after-write-summary-session"
-	eventTime := time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC)
+	eventTime := time.Now().Add(24 * time.Hour).Truncate(time.Second)
 	retry := replaytest.Operation{
 		Kind:      replaytest.OperationUpdateSummary,
 		SessionID: sessionID,

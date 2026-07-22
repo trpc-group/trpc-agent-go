@@ -122,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           cd test
-          go test ./...
+          go test -count=1 ./...
   coverage:
     name: coverage
     runs-on: ubuntu-latest
