@@ -21,7 +21,7 @@ func TrackToolAndSubtask() replaytest.Case {
 	return replaytest.Case{
 		Name: "track/tool_and_subtask",
 		Description: "track events for tool latency, error record and subtask status; " +
-			"duration fields are allowed_diff",
+			"duration fields are scrubbed during normalization",
 		NeedCaps: replaytest.Capability{Session: true, Tracks: true},
 		Steps: []replaytest.Step{
 			createSession("track-1"),
