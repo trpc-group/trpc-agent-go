@@ -14,6 +14,8 @@ package redis
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -26,11 +28,15 @@ import (
 
 // Target pairs the Redis session service with the Redis memory service.
 // Reset rotates the key prefix so cases are isolated without flushing the
-// server (safe against shared instances).
+// server (safe against shared instances). The prefix carries a random run
+// ID generated once per target, so prefixes never repeat across test
+// processes and stale memory keys from earlier runs are never reused
+// (memory/redis has no TTL option; see the README's integration-mode note).
 type Target struct {
-	name string
-	url  string
-	seq  int
+	name  string
+	url   string
+	runID string
+	seq   int
 
 	sessSvc *redis.Service
 	memSvc  *mredis.Service
@@ -39,11 +45,22 @@ type Target struct {
 // NewTarget creates a Redis target against the given URL,
 // e.g. "redis://localhost:6379".
 func NewTarget(name, url string) (*Target, error) {
-	t := &Target{name: name, url: url}
+	t := &Target{name: name, url: url, runID: newRunID()}
 	if err := t.Reset(context.Background()); err != nil {
 		return nil, err
 	}
 	return t, nil
+}
+
+// newRunID returns a random hex ID that scopes the target's key prefixes to
+// this test process, so old replaytest keys on a shared server are never
+// picked up by the next run.
+func newRunID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(fmt.Sprintf("replaytest: generate run ID: %v", err))
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // Name returns the target name.
@@ -65,7 +82,7 @@ func (t *Target) MemoryService() memory.Service { return t.memSvc }
 func (t *Target) Reset(ctx context.Context) error {
 	t.closeServices()
 	t.seq++
-	prefix := fmt.Sprintf("replaytest:%s:%d", t.name, t.seq)
+	prefix := fmt.Sprintf("replaytest:%s:%s:%d", t.name, t.runID, t.seq)
 	sessSvc, err := redis.NewService(
 		redis.WithRedisClientURL(t.url),
 		redis.WithKeyPrefix(prefix+":sess"),

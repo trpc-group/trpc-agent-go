@@ -38,7 +38,7 @@ cd session/replaytest && go test ./redis/ -v   # miniredis 冒烟 + 真实 redis
 
 **验证状态说明**：Redis 绑定目前只在 miniredis（进程内模拟）上通过；真实 Redis 服务器路径（`TRPC_REPLAYTEST_REDIS_URL`）在本仓库 CI 中未运行，miniredis 不覆盖真实服务器的序列化、TTL 与持久化语义，指向真实实例前请自行验证。
 
-Redis 绑定用**轮转 key 前缀**隔离 case，绝不 flush 服务器，可安全指向共享实例。Session 侧 key 带 1 小时 TTL（`WithSessionTTL`/`WithAppStateTTL`/`WithUserStateTTL`），到期自动清理；`memory/redis` 没有 TTL 选项，memory 侧轮转前缀的 key 不会自动过期——请勿长期指向生产实例，或定期清理 `replaytest:*` 前缀。
+Redis 绑定用**随机 run ID + 轮转序号**的 key 前缀隔离 case（`replaytest:<name>:<runID>:<seq>`，run ID 每个 target 进程内随机生成一次），跨进程绝不重复，下次运行不会复用旧 key；同时绝不 flush 服务器，可安全指向共享实例。Session 侧 key 带 1 小时 TTL（`WithSessionTTL`/`WithAppStateTTL`/`WithUserStateTTL`），到期自动清理；`memory/redis` 没有 TTL 选项，memory 侧 key 不会自动过期——请勿长期指向生产实例，或定期清理 `replaytest:*` 前缀。
 
 ## 后端接入（三步）
 
