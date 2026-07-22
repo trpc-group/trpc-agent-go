@@ -251,16 +251,20 @@ func TestEndToEndMemoryScopeMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	require.NoError(t, cand.Reset(ctx))
-	rep, err := replaytest.RunPair(ctx, cases.All(), ref, cand)
+	// Run the scope-isolation case alone so an unrelated memory failure
+	// cannot satisfy the assertions: the injected stored-UserID mismatch
+	// must be what fails this specific case in the memory dimension.
+	rep, err := replaytest.RunPair(ctx,
+		[]replaytest.Case{cases.MemoryScopeIsolation()}, ref, cand)
 	require.NoError(t, err)
+	require.Len(t, rep.Cases, 1)
 
-	assert.Greater(t, rep.Totals.Fail, 0,
-		"a wrong stored memory scope must fail at least one case end to end")
+	cr := rep.Cases[0]
+	assert.Equal(t, replaytest.StatusFail, cr.Status,
+		"a wrong stored memory scope must fail the scope-isolation case")
 	dims := map[string]bool{}
-	for _, cr := range rep.Cases {
-		for _, d := range cr.Diffs {
-			dims[d.Dimension] = true
-		}
+	for _, d := range cr.Diffs {
+		dims[d.Dimension] = true
 	}
 	assert.True(t, dims[replaytest.DimMemory],
 		"a wrong stored memory scope must surface as a memory-dimension diff, got %v", dims)
