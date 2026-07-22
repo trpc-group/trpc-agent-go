@@ -118,7 +118,10 @@ func (b *serviceBackend) Name() string { return b.name }
 
 func (b *serviceBackend) Begin(input Snapshot) error {
 	ctx := context.Background()
-	canonical := Normalize(clone(input))
+	if err := validateSnapshotJSON(input); err != nil {
+		return fmt.Errorf("validate replay snapshot: %w", err)
+	}
+	canonical := Normalize(input)
 	for i := 1; i < len(canonical.Memories); i++ {
 		if memoryStableKey(canonical.Memories[i-1]) == memoryStableKey(canonical.Memories[i]) {
 			return fmt.Errorf("memories %d and %d have the same stable capability locator", i-1, i)
@@ -295,7 +298,7 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 		Unsupported: cloneStringMap(b.unsupported),
 	}
 	for index := range sess.Events {
-		event, err := fromFrameworkEvent(&sess.Events[index], index+1)
+		event, err := fromFrameworkEvent(&sess.Events[index])
 		if err != nil {
 			return Snapshot{}, fmt.Errorf("decode event %d: %w", index, err)
 		}
@@ -316,13 +319,17 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 		})
 	}
 	for filterKey, item := range sess.Summaries {
+		boundary, err := snapshotSummaryBoundary(item.Boundary, sess.Events)
+		if err != nil {
+			return Snapshot{}, fmt.Errorf("decode summary %q boundary: %w", filterKey, err)
+		}
 		version := frameworksession.SummaryBoundaryVersion
 		if item.Boundary != nil && item.Boundary.Version != 0 {
 			version = item.Boundary.Version
 		}
 		out.Summaries = append(out.Summaries, Summary{
 			ID: "summary:" + filterKey, SessionID: b.key.SessionID, FilterKey: filterKey,
-			Text: item.Summary, Version: version, Boundary: snapshotSummaryBoundary(item.Boundary, sess.Events),
+			Text: item.Summary, Version: version, Boundary: boundary,
 			UpdatedAt: item.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
@@ -340,13 +347,13 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 	return out, nil
 }
 
-func snapshotSummaryBoundary(boundary *frameworksession.SummaryBoundary, events []frameworkevent.Event) *SummaryBoundary {
+func snapshotSummaryBoundary(boundary *frameworksession.SummaryBoundary, events []frameworkevent.Event) (*SummaryBoundary, error) {
 	if boundary == nil {
-		return nil
+		return nil, nil
 	}
 	out := &SummaryBoundary{Version: boundary.Version, FilterKey: boundary.FilterKey}
 	if boundary.LastEventID == "" {
-		return out
+		return out, nil
 	}
 	for i := range events {
 		if events[i].ID != boundary.LastEventID {
@@ -354,16 +361,24 @@ func snapshotSummaryBoundary(boundary *frameworksession.SummaryBoundary, events 
 		}
 		if _, generated := events[i].Extensions[generatedEventIDKey]; !generated {
 			out.LastEventID = boundary.LastEventID
-			return out
+			return out, nil
 		}
-		out.LastEventSeq = i + 1
-		if raw, ok := events[i].Extensions[seqKey]; ok {
-			_ = json.Unmarshal(raw, &out.LastEventSeq)
+		raw, ok := events[i].Extensions[seqKey]
+		if !ok {
+			return nil, fmt.Errorf("generated boundary event is missing replay sequence")
 		}
-		return out
+		var seq *int
+		if err := json.Unmarshal(raw, &seq); err != nil {
+			return nil, fmt.Errorf("decode generated boundary event sequence: %w", err)
+		}
+		if seq == nil {
+			return nil, fmt.Errorf("generated boundary event replay sequence is null")
+		}
+		out.LastEventSeq = seq
+		return out, nil
 	}
 	out.LastEventID = boundary.LastEventID
-	return out
+	return out, nil
 }
 
 func (b *serviceBackend) Close() error {
@@ -452,16 +467,23 @@ func toFrameworkEvent(input Event) (*frameworkevent.Event, error) {
 	return e, nil
 }
 
-func fromFrameworkEvent(input *frameworkevent.Event, fallbackSeq int) (Event, error) {
-	out := Event{ID: input.ID, Seq: fallbackSeq, Author: input.Author, Branch: input.Branch, Tag: input.Tag, FilterKey: input.FilterKey, Timestamp: input.Timestamp.UTC().Format(time.RFC3339Nano)}
+func fromFrameworkEvent(input *frameworkevent.Event) (Event, error) {
+	out := Event{ID: input.ID, Author: input.Author, Branch: input.Branch, Tag: input.Tag, FilterKey: input.FilterKey, Timestamp: input.Timestamp.UTC().Format(time.RFC3339Nano)}
 	if _, generated := input.Extensions[generatedEventIDKey]; generated {
 		out.ID = ""
 	}
-	if raw, ok := input.Extensions[seqKey]; ok {
-		if err := json.Unmarshal(raw, &out.Seq); err != nil {
-			return Event{}, fmt.Errorf("decode sequence: %w", err)
-		}
+	raw, ok := input.Extensions[seqKey]
+	if !ok {
+		return Event{}, fmt.Errorf("replay sequence metadata is missing")
 	}
+	var seq *int
+	if err := json.Unmarshal(raw, &seq); err != nil {
+		return Event{}, fmt.Errorf("decode sequence: %w", err)
+	}
+	if seq == nil {
+		return Event{}, fmt.Errorf("replay sequence metadata is null")
+	}
+	out.Seq = *seq
 	if input.Response != nil && len(input.Response.Choices) > 0 {
 		message := input.Response.Choices[0].Message
 		out.Role, out.Content, out.Tool = string(message.Role), message.Content, message.ToolName

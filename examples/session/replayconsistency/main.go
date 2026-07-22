@@ -33,8 +33,7 @@ func runReplay(output string, inject bool) error {
 	report := Report{Cases: len(Cases()), Backends: []string{"inmemory-services", "sqlite-services"}}
 	for _, tc := range Cases() {
 		want := tc.Expected()
-		mem := NewInMemoryBackend()
-		disk, err := NewSQLiteBackend(filepath.Join(tmp, tc.Name))
+		mem, disk, err := newReplayBackends(filepath.Join(tmp, tc.Name))
 		if err != nil {
 			return err
 		}
@@ -79,6 +78,23 @@ func runReplay(output string, inject bool) error {
 	}
 	fmt.Printf("cases=%d differences=%d detected=%d duration=%dms\n", report.Cases, len(report.Differences), report.DetectedInjected, report.DurationMS)
 	return validateReplayReport(report, inject)
+}
+
+func newReplayBackends(path string) (Backend, Backend, error) {
+	return newReplayBackendsWith(path, NewInMemoryBackend, NewSQLiteBackend)
+}
+
+func newReplayBackendsWith(
+	path string,
+	newMemory func() Backend,
+	newDisk func(string) (Backend, error),
+) (Backend, Backend, error) {
+	memoryBackend := newMemory()
+	diskBackend, err := newDisk(path)
+	if err != nil {
+		return nil, nil, errors.Join(err, memoryBackend.Close())
+	}
+	return memoryBackend, diskBackend, nil
 }
 
 func validateReplayReport(report Report, inject bool) error {

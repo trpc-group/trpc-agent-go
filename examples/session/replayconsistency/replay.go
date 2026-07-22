@@ -54,7 +54,7 @@ type SummaryBoundary struct {
 	Version      int    `json:"version"`
 	FilterKey    string `json:"filter_key,omitempty"`
 	LastEventID  string `json:"last_event_id,omitempty"`
-	LastEventSeq int    `json:"last_event_seq,omitempty"`
+	LastEventSeq *int   `json:"last_event_seq,omitempty"`
 }
 type TrackEvent struct {
 	Name         string  `json:"name"`
@@ -94,6 +94,13 @@ func clone(v Snapshot) Snapshot {
 	return out
 }
 
+func validateSnapshotJSON(snapshot Snapshot) error {
+	if _, err := json.Marshal(snapshot); err != nil {
+		return fmt.Errorf("snapshot is not JSON encodable: %w", err)
+	}
+	return nil
+}
+
 type ReplayCase struct {
 	Name      string
 	Expected  func() Snapshot
@@ -123,7 +130,7 @@ func Cases() []ReplayCase {
 			}
 			s.Events[1].Args["city"] = "BJ"
 		}),
-		snapshotCase("state-updates", func() Snapshot { s := base("s4"); s.State = map[string]any{"count": 2, "keep": true}; return s }, "/state/count", func(s *Snapshot) { s.State["count"] = 1 }),
+		stateUpdateCase(),
 		snapshotCase("memory", func() Snapshot {
 			s := base("s5")
 			s.Memories = []Memory{{ID: "m1", Content: "likes tea", Metadata: map[string]any{"kind": "preference"}, Scope: "user", Similarity: .912345}}
@@ -143,6 +150,37 @@ func Cases() []ReplayCase {
 		}, "/tracks/0/error", func(s *Snapshot) { s.Tracks[0].Error = "timeout" }),
 		concurrentCase(),
 		retryCase(),
+	}
+}
+
+func stateUpdateCase() ReplayCase {
+	build := func() Snapshot {
+		s := base("s4")
+		s.State = map[string]any{"count": 2, "keep": true}
+		return s
+	}
+	return ReplayCase{
+		Name: "state-updates", Expected: build, FaultPath: "/state/count",
+		Run: func(backend Backend) error {
+			expected := build()
+			if err := backend.Begin(expected); err != nil {
+				return err
+			}
+			if err := backend.UpdateState("count", 1); err != nil {
+				return err
+			}
+			if err := backend.UpdateState("count", expected.State["count"]); err != nil {
+				return err
+			}
+			if err := backend.UpdateState("keep", expected.State["keep"]); err != nil {
+				return err
+			}
+			if err := backend.UpdateState("removed", "stale"); err != nil {
+				return err
+			}
+			return backend.UpdateState("removed", nil)
+		},
+		Mutate: func(s *Snapshot) { s.State["count"] = 1 },
 	}
 }
 
@@ -214,7 +252,14 @@ func concurrentCase() ReplayCase {
 			}
 			return nil
 		},
-		Mutate: func(s *Snapshot) { s.Events[2].Seq = 1 },
+		Mutate: func(s *Snapshot) {
+			for i := range s.Events {
+				if s.Events[i].Branch == "tool-b" {
+					s.Events[i].Seq = 1
+					return
+				}
+			}
+		},
 	}
 }
 
@@ -304,6 +349,7 @@ func base(id string, events ...Event) Snapshot {
 }
 
 func Normalize(s Snapshot) Snapshot {
+	s = clone(s)
 	for i := range s.Events {
 		s.Events[i].Timestamp = ""
 	}
@@ -356,7 +402,8 @@ func expectedSummaryBoundary(events []Event, filterKey string) *SummaryBoundary 
 	if last.ID != "" {
 		boundary.LastEventID = last.ID
 	} else {
-		boundary.LastEventSeq = last.Seq
+		seq := last.Seq
+		boundary.LastEventSeq = &seq
 	}
 	return boundary
 }
@@ -406,6 +453,22 @@ func CompareBackends(caseName, backend string, a, b Snapshot) []Difference {
 }
 
 func compareWithCapabilities(caseName, backend string, a, b Snapshot, unsupported map[string]string) []Difference {
+	if err := validateSnapshotJSON(a); err != nil {
+		return []Difference{{
+			Case: caseName, Backend: backend, SessionID: a.SessionID, Locator: "session", Path: "/",
+			Baseline: "JSON-encodable baseline snapshot", Compared: err.Error(),
+			Allowed: false, Explanation: "baseline snapshot cannot be compared",
+		}}
+	}
+	if err := validateSnapshotJSON(b); err != nil {
+		return []Difference{{
+			Case: caseName, Backend: backend, SessionID: b.SessionID, Locator: "session", Path: "/",
+			Baseline: "JSON-encodable compared snapshot", Compared: err.Error(),
+			Allowed: false, Explanation: "compared snapshot cannot be compared",
+		}}
+	}
+	// Normalization returns detached snapshots, so a diagnostic comparison never
+	// changes caller-owned replay state or shifts a later fault-injection target.
 	a = Normalize(a)
 	b = Normalize(b)
 	// Unsupported describes backend capabilities rather than replayed data, so it

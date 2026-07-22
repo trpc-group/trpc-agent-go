@@ -23,6 +23,9 @@ go run . --inject --output report.json
 go test ./...
 ```
 
+The checked-in `session_memory_summary_track_diff_report.json.example` is a
+complete `--inject` report with only the nondeterministic duration normalized.
+
 The lightweight run needs no external services. Both adapters execute
 `CreateSession`, `AppendEvent`, `UpdateSessionState`, `AddMemory`,
 `CreateSessionSummary`, `AppendTrackEvent`, and the corresponding reads. The

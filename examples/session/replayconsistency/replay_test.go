@@ -4,10 +4,16 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
+
+	frameworkevent "trpc.group/trpc-go/trpc-agent-go/event"
+	frameworksession "trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestNormalCasesHaveNoDiff(t *testing.T) {
@@ -84,6 +90,74 @@ func TestServiceBackendPropagatesJSONConversionErrors(t *testing.T) {
 		t.Fatal("expected unsupported JSON value to fail replay")
 	}
 }
+
+func TestCompareReportsNonJSONSnapshots(t *testing.T) {
+	invalid := base("invalid-comparison", Event{
+		Seq: 1, Role: "assistant", Extensions: map[string]any{"invalid": make(chan int)},
+	})
+	diffs := Compare("invalid-comparison", "json", invalid, invalid)
+	if len(diffs) != 1 || diffs[0].Allowed || diffs[0].Path != "/" ||
+		!strings.Contains(fmt.Sprint(diffs[0].Compared), "unsupported type") {
+		t.Fatalf("invalid snapshot was silently compared: %+v", diffs)
+	}
+}
+
+func TestSummaryBoundaryRejectsInvalidGeneratedSequence(t *testing.T) {
+	_, err := snapshotSummaryBoundary(
+		&frameworksession.SummaryBoundary{Version: 1, FilterKey: "all", LastEventID: "generated"},
+		[]frameworkevent.Event{{
+			ID: "generated",
+			Extensions: map[string]json.RawMessage{
+				generatedEventIDKey: json.RawMessage("true"),
+				seqKey:              json.RawMessage("not-json"),
+			},
+		}},
+	)
+	if err == nil || !strings.Contains(err.Error(), "boundary event sequence") {
+		t.Fatalf("invalid generated sequence was ignored: %v", err)
+	}
+}
+
+func TestFrameworkEventSequenceMetadataIsRequired(t *testing.T) {
+	tests := map[string]map[string]json.RawMessage{
+		"missing": {},
+		"null":    {seqKey: json.RawMessage("null")},
+	}
+	for name, extensions := range tests {
+		t.Run(name, func(t *testing.T) {
+			_, err := fromFrameworkEvent(&frameworkevent.Event{Extensions: extensions})
+			if err == nil {
+				t.Fatalf("%s replay sequence metadata was silently replaced by storage order", name)
+			}
+		})
+	}
+}
+
+type closeTrackingBackend struct {
+	Backend
+	closed   bool
+	closeErr error
+}
+
+func (b *closeTrackingBackend) Close() error {
+	b.closed = true
+	return b.closeErr
+}
+
+func TestNewReplayBackendsClosesMemoryWhenDiskOpenFails(t *testing.T) {
+	openErr := errors.New("open disk backend")
+	closeErr := errors.New("close memory backend")
+	memoryBackend := &closeTrackingBackend{closeErr: closeErr}
+	left, right, err := newReplayBackendsWith(
+		"unused",
+		func() Backend { return memoryBackend },
+		func(string) (Backend, error) { return nil, openErr },
+	)
+	if left != nil || right != nil || !memoryBackend.closed ||
+		!errors.Is(err, openErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("disk failure did not close memory backend: left=%v right=%v closed=%t err=%v", left, right, memoryBackend.closed, err)
+	}
+}
 func TestNormalization(t *testing.T) {
 	a := Cases()[4].Expected()
 	b := clone(a)
@@ -94,6 +168,107 @@ func TestNormalization(t *testing.T) {
 	if d := Compare("normalize", "json", a, b); len(d) > 0 {
 		t.Fatal(d)
 	}
+}
+
+func TestCompareDoesNotMutateInputs(t *testing.T) {
+	input := base("compare-inputs",
+		Event{Seq: 2, Role: "assistant", Content: "second", Timestamp: "2026-07-22T00:00:02Z"},
+		Event{Seq: 1, Role: "user", Content: "first", Timestamp: "2026-07-22T00:00:01Z"},
+	)
+	input.Unsupported = nil
+	input.Memories = []Memory{{ID: "generated-memory", Content: "memory", Similarity: 0.12345}}
+	original := clone(input)
+
+	_ = Compare("no-mutation", "json", input, clone(input))
+
+	if !reflect.DeepEqual(input, original) {
+		t.Fatalf("Compare mutated its input:\n got: %#v\nwant: %#v", input, original)
+	}
+}
+
+func TestNormalizeDoesNotMutateInput(t *testing.T) {
+	input := base("normalize-input",
+		Event{Seq: 2, Role: "assistant", Content: "second", Timestamp: "2026-07-22T00:00:02Z"},
+		Event{Seq: 1, Role: "user", Content: "first", Timestamp: "2026-07-22T00:00:01Z"},
+	)
+	input.Unsupported = nil
+	input.Memories = []Memory{{ID: "generated-memory", Content: "memory", Similarity: 0.12345}}
+	original := clone(input)
+
+	normalized := Normalize(input)
+
+	if !reflect.DeepEqual(input, original) {
+		t.Fatalf("Normalize mutated its input:\n got: %#v\nwant: %#v", input, original)
+	}
+	if reflect.DeepEqual(normalized, original) {
+		t.Fatal("Normalize did not normalize the detached snapshot")
+	}
+}
+
+func TestZeroSequenceSummaryBoundaryIsRepresented(t *testing.T) {
+	fixture := base("zero-summary-boundary", Event{Seq: 0, Role: "user", Content: "first", FilterKey: "all"})
+	fixture.Summaries = []Summary{{
+		ID: "summary:all", SessionID: fixture.SessionID, FilterKey: "all", Text: "summary", Version: 1,
+	}}
+	fixture.Summaries[0].Boundary = expectedSummaryBoundary(fixture.Events, "all")
+	boundary := fixture.Summaries[0].Boundary
+	data, err := json.Marshal(boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"last_event_seq":0`) {
+		t.Fatalf("zero sequence boundary lost its locator: %s", data)
+	}
+	for _, backend := range []Backend{NewInMemoryBackend(), mustSQLiteBackend(t)} {
+		backend := backend
+		t.Run(backend.Name(), func(t *testing.T) {
+			t.Cleanup(func() { _ = backend.Close() })
+			if err := ReplaySnapshot(backend, fixture); err != nil {
+				t.Fatal(err)
+			}
+			got, err := backend.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Summaries) != 1 || got.Summaries[0].Boundary == nil ||
+				got.Summaries[0].Boundary.LastEventSeq == nil || *got.Summaries[0].Boundary.LastEventSeq != 0 {
+				t.Fatalf("zero sequence boundary did not round-trip: %+v", got.Summaries)
+			}
+			if diffs := Compare("zero-summary-boundary", backend.Name(), fixture, got); hasNonAllowed(diffs) {
+				t.Fatalf("zero sequence boundary changed: %+v", diffs)
+			}
+		})
+	}
+}
+
+type recordingBackend struct {
+	Backend
+	updates []struct {
+		key   string
+		value any
+	}
+}
+
+func (b *recordingBackend) UpdateState(key string, value any) error {
+	b.updates = append(b.updates, struct {
+		key   string
+		value any
+	}{key: key, value: value})
+	return b.Backend.UpdateState(key, value)
+}
+
+func TestStateCaseExercisesDeletion(t *testing.T) {
+	backend := &recordingBackend{Backend: NewInMemoryBackend()}
+	t.Cleanup(func() { _ = backend.Close() })
+	if err := stateUpdateCase().Run(backend); err != nil {
+		t.Fatal(err)
+	}
+	for _, update := range backend.updates {
+		if update.key == "removed" && update.value == nil {
+			return
+		}
+	}
+	t.Fatalf("state replay case did not exercise deletion: %+v", backend.updates)
 }
 
 func TestUnsupportedCapabilityMarksMatchingDiffAllowed(t *testing.T) {
@@ -225,7 +400,7 @@ func TestSummaryBoundaryMutationIsDetected(t *testing.T) {
 	if diffs := Compare("summary-boundary", backend.Name(), fixture, got); hasNonAllowed(diffs) {
 		t.Fatalf("boundary did not round-trip: %+v", diffs)
 	}
-	got.Summaries[0].Boundary.LastEventSeq--
+	(*got.Summaries[0].Boundary.LastEventSeq)--
 	diffs := Compare("summary-boundary", backend.Name(), fixture, got)
 	if len(diffs) == 0 || !hasNonAllowed(diffs) {
 		t.Fatalf("boundary mutation was not detected: %+v", diffs)
