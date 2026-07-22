@@ -354,3 +354,19 @@ func TestCoverrules_RuleSecret_SessionInput(t *testing.T) {
 	require.True(t, changed)
 	require.NotContains(t, redacted, "AKIAIOSFODNN7EXAMPLE")
 }
+
+// TestCoverrules_RedactUnknownType_ReDecodeFailure covers the defensive
+// path where regex redaction of the marshaled form breaks JSON syntax —
+// here the password pattern's optional closing quote consumes the JSON
+// string terminator — so the value is replaced by a placeholder map
+// instead of being returned half-redacted.
+func TestCoverrules_RedactUnknownType_ReDecodeFailure(t *testing.T) {
+	v := map[string]string{"note": `password=abcdefgh`}
+	out, changed, err := redactUnknownType(v)
+	require.NoError(t, err)
+	require.True(t, changed)
+	placeholder, ok := out.(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "redacted", placeholder["status"])
+	require.Contains(t, placeholder["reason"], "re-decoded")
+}

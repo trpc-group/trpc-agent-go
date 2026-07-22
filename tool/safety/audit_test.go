@@ -140,3 +140,17 @@ func TestAuditWriter_CloseErrorHonorsRequired(t *testing.T) {
 	}
 	require.Error(t, wReq.Close())
 }
+
+// TestAuditWriter_AppendAfterClose covers the closed-writer contract:
+// a required writer fails while an optional writer silently no-ops.
+func TestAuditWriter_AppendAfterClose(t *testing.T) {
+	w := NewAuditWriterFrom(new(bytes.Buffer), true, true)
+	require.NoError(t, w.Close())
+	require.Error(t, w.Append(AuditEvent{}))
+
+	buf := new(bytes.Buffer)
+	w2 := NewAuditWriterFrom(buf, false, true)
+	require.NoError(t, w2.Close())
+	require.NoError(t, w2.Append(AuditEvent{}))
+	require.Empty(t, buf.String())
+}

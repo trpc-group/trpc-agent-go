@@ -12,6 +12,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 )
@@ -367,4 +368,19 @@ func TestCoverrules_IsNetworkCommandForPolicy_Configured(t *testing.T) {
 	require.True(t, isNetworkCommandForPolicy("curl", nil))
 	require.True(t, isNetworkCommandForPolicy("/usr/bin/mycurl", []string{"mycurl"}))
 	require.False(t, isNetworkCommandForPolicy("ls", []string{"mycurl"}))
+}
+
+// TestCoverrules_TruncateRuneSafe covers the short-string pass-through
+// and the mid-rune back-off of truncateRuneSafe.
+func TestCoverrules_TruncateRuneSafe(t *testing.T) {
+	// Short strings pass through unchanged.
+	require.Equal(t, "abc", truncateRuneSafe("abc", 10))
+	// A cut landing exactly on a rune boundary keeps the full prefix.
+	require.Equal(t, "ab", truncateRuneSafe("abc", 2))
+	// A cut landing inside a multi-byte rune backs off to the rune
+	// start instead of splitting it: 世 occupies bytes 2-4.
+	s := "ab世界cd"
+	require.Equal(t, "ab世", truncateRuneSafe(s, 5))
+	require.Equal(t, "ab", truncateRuneSafe(s, 4))
+	require.True(t, utf8.ValidString(truncateRuneSafe(s, 3)))
 }
