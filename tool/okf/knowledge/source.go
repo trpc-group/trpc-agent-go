@@ -78,7 +78,9 @@ type Option func(*Source)
 // WithName sets the source name (default "okf").
 func WithName(name string) Option { return func(s *Source) { s.name = name } }
 
-// WithMetadata attaches static metadata to every indexed concept.
+// WithMetadata attaches static metadata to every indexed concept. Source-owned
+// identity, OKF-derived, and okf_tag_-prefixed keys are ignored so callers
+// cannot override generated metadata or ScopeFilter fields.
 func WithMetadata(m map[string]any) Option {
 	return func(s *Source) {
 		for k, v := range m {
@@ -97,7 +99,8 @@ func WithMetadata(m map[string]any) Option {
 	}
 }
 
-// New builds a knowledge source over store.
+// New builds a knowledge source over store with the default name "okf". A nil
+// store is accepted at construction time, but ReadDocuments returns an error.
 func New(store okf.Store, opts ...Option) *Source {
 	s := &Source{store: store, name: "okf", metadata: map[string]any{}}
 	for _, o := range opts {

@@ -35,7 +35,9 @@ const defaultFindLimit = 10
 var _ okf.Store = (*Local)(nil)
 var _ okf.Finder = (*Local)(nil)
 
-// New opens the OKF bundle rooted at root.
+// New opens the OKF bundle rooted at root. Root must name an existing
+// directory; a symlink used as root is resolved once, while symlinks inside the
+// bundle are rejected by subsequent operations.
 func New(root string) (*Local, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
@@ -55,7 +57,9 @@ func New(root string) (*Local, error) {
 	return &Local{root: abs}, nil
 }
 
-// List implements okf.Store.
+// List returns the concepts and subdirectories directly under dir. It excludes
+// .git, rejects symlink entries, honors context cancellation, and returns
+// okf.ErrNotFound when dir does not exist.
 func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 	if err := ctx.Err(); err != nil {
 		return okf.Listing{}, err
@@ -69,7 +73,7 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		if os.IsNotExist(err) {
 			return okf.Listing{}, fmt.Errorf("%w: %q", okf.ErrNotFound, dir)
 		}
-		return okf.Listing{}, fmt.Errorf("okf/localokf: list %q: %w", dir, err)
+		return okf.Listing{}, filesystemError(fmt.Sprintf("list %q", normDir(dir)))
 	}
 	listing := okf.Listing{Dir: normDir(dir)}
 	for _, e := range entries {
@@ -81,7 +85,7 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		}
 		info, err := e.Info()
 		if err != nil {
-			return okf.Listing{}, fmt.Errorf("okf/localokf: inspect %q: %w", e.Name(), err)
+			return okf.Listing{}, filesystemError(fmt.Sprintf("inspect %q", e.Name()))
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return okf.Listing{}, symlinkError(e.Name())
@@ -98,7 +102,7 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		case okf.IndexFile:
 			data, err := os.ReadFile(filepath.Join(abs, name))
 			if err != nil {
-				return okf.Listing{}, fmt.Errorf("okf/localokf: read index %q: %w", dir, err)
+				return okf.Listing{}, filesystemError(fmt.Sprintf("read index for %q", normDir(dir)))
 			}
 			listing.Index = string(data)
 			if normDir(dir) == "" { // okf_version lives only in the root index.md.
@@ -111,7 +115,8 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(abs, name))
 		if err != nil {
-			return okf.Listing{}, fmt.Errorf("okf/localokf: read concept %q: %w", joinID(dir, strings.TrimSuffix(name, ".md")), err)
+			id := joinID(dir, strings.TrimSuffix(name, ".md"))
+			return okf.Listing{}, filesystemError(fmt.Sprintf("read concept %q", id))
 		}
 		fm := okf.ParseConcept(joinID(dir, strings.TrimSuffix(name, ".md")), data).Frontmatter
 		listing.Concepts = append(listing.Concepts, okf.ConceptMeta{
@@ -127,7 +132,9 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 	return listing, nil
 }
 
-// Read implements okf.Store.
+// Read returns conceptID with parsed frontmatter, body, and links. It rejects
+// reserved files, path escapes, and symlinked paths; honors context
+// cancellation; and returns okf.ErrNotFound when the concept does not exist.
 func (l *Local) Read(ctx context.Context, conceptID string) (okf.Concept, error) {
 	if err := ctx.Err(); err != nil {
 		return okf.Concept{}, err
@@ -149,7 +156,7 @@ func (l *Local) Read(ctx context.Context, conceptID string) (okf.Concept, error)
 		if os.IsNotExist(err) {
 			return okf.Concept{}, fmt.Errorf("%w: %q", okf.ErrNotFound, conceptID)
 		}
-		return okf.Concept{}, fmt.Errorf("okf/localokf: read %q: %w", conceptID, err)
+		return okf.Concept{}, filesystemError(fmt.Sprintf("read concept %q", conceptID))
 	}
 	if err := ctx.Err(); err != nil {
 		return okf.Concept{}, err
@@ -174,7 +181,7 @@ func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
 			return err
 		}
 		if err != nil {
-			return err
+			return filesystemError("walk bundle")
 		}
 		if p != l.root && d.Name() == ".git" {
 			if d.IsDir() {
@@ -195,18 +202,18 @@ func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		rel, err := filepath.Rel(l.root, p)
+		if err != nil {
+			return filesystemError("resolve concept id")
+		}
+		id := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return err
+			return filesystemError(fmt.Sprintf("read concept %q", id))
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		rel, err := filepath.Rel(l.root, p)
-		if err != nil {
-			return err
-		}
-		id := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
 		parsed := okf.ParseConcept(id, data)
 		fm, body := parsed.Frontmatter, []byte(parsed.Body)
 		if !matchQuery(fm, body, q) {
@@ -240,7 +247,10 @@ func (l *Local) resolve(rel string) (string, error) {
 	}
 	p := filepath.Join(l.root, filepath.FromSlash(rel))
 	inside, err := filepath.Rel(l.root, p)
-	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
+	if err != nil {
+		return "", filesystemError(fmt.Sprintf("resolve path %q", rel))
+	}
+	if inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("okf/localokf: path %q escapes bundle root", rel)
 	}
 	current := l.root
@@ -254,7 +264,7 @@ func (l *Local) resolve(rel string) (string, error) {
 			if os.IsNotExist(statErr) {
 				break
 			}
-			return "", fmt.Errorf("okf/localokf: inspect %q: %w", rel, statErr)
+			return "", filesystemError(fmt.Sprintf("inspect path %q", rel))
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return "", symlinkError(rel)
@@ -274,6 +284,12 @@ func isGitPath(rel string) bool {
 
 func symlinkError(rel string) error {
 	return fmt.Errorf("okf/localokf: symbolic link %q is not allowed", rel)
+}
+
+// filesystemError intentionally omits the underlying *fs.PathError because its
+// message contains the absolute bundle root and may be surfaced to an agent.
+func filesystemError(operation string) error {
+	return fmt.Errorf("okf/localokf: %s: filesystem error", operation)
 }
 
 // normDir normalizes a slash path: "" stays "", otherwise leading "/" is

@@ -348,19 +348,49 @@ func TestGitDirectoryExcluded(t *testing.T) {
 }
 
 func TestOperations_PropagateFilesystemErrors(t *testing.T) {
-	dir := t.TempDir()
-	s, err := New(dir)
+	findRoot := t.TempDir()
+	findStore, err := New(findRoot)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if err := os.Remove(dir); err != nil {
+	if err := os.Remove(findRoot); err != nil {
 		t.Fatalf("remove bundle root: %v", err)
 	}
-	if _, err := s.List(context.Background(), ""); err == nil {
-		t.Error("List should propagate the missing root error")
-	}
-	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
+	if _, err := findStore.Find(context.Background(), okf.Query{}); err == nil {
 		t.Error("Find should propagate the walk error")
+	} else if strings.Contains(err.Error(), findRoot) {
+		t.Errorf("Find error leaked bundle root: %q", err)
+	}
+
+	listRoot := t.TempDir()
+	listStore, err := New(listRoot)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := os.Remove(listRoot); err != nil {
+		t.Fatalf("remove bundle root: %v", err)
+	}
+	if err := os.WriteFile(listRoot, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("replace bundle root with file: %v", err)
+	}
+	if _, err := listStore.List(context.Background(), ""); err == nil {
+		t.Error("List should propagate the filesystem error")
+	} else if strings.Contains(err.Error(), listRoot) {
+		t.Errorf("List error leaked bundle root: %q", err)
+	}
+
+	readRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(readRoot, "broken.md"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	readStore, err := New(readRoot)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if _, err := readStore.Read(context.Background(), "broken"); err == nil {
+		t.Error("Read should propagate the filesystem error")
+	} else if strings.Contains(err.Error(), readRoot) {
+		t.Errorf("Read error leaked bundle root: %q", err)
 	}
 }
 
