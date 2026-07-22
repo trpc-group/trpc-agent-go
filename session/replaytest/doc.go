@@ -3,7 +3,7 @@
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
-//
+
 // Package replaytest provides a reusable multi-backend replay consistency
 // harness for session, memory, summary, and track services.
 //

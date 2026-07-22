@@ -3,6 +3,8 @@
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+
+// Package sqlite provides a SQLite-backed factory for the replay harness.
 package sqlite
 
 import (

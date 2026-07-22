@@ -3,6 +3,7 @@
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+
 package replaytest
 
 // InMemoryProfile returns the capability profile for in-memory backends.
