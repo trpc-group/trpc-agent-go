@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -46,8 +47,8 @@ func BuildReport(input ReportInput) OptimizationReport {
 	gate := EvaluateGate(input.Config.Gate, engineAccepted, delta, input.Cost, input.Latency)
 	attributionHints := AttributionHints(input.Config, input.Metrics)
 	baselineAttributions := append([]CaseAttribution(nil), input.Attributions...)
-	var candidateAttributions []CaseAttribution
-	if hasFinalCandidate {
+	candidateAttributions := input.CandidateAttributions
+	if candidateAttributions == nil && hasFinalCandidate {
 		candidateAttributions = AttributeFailuresWithOptions(ctx, candidateValidation, AttributionOptions{
 			Hints:   attributionHints,
 			Metrics: input.Metrics,
@@ -90,25 +91,27 @@ func BuildReport(input ReportInput) OptimizationReport {
 		Cost:                               input.Cost,
 		Latency:                            input.Latency,
 		CandidatePrompt:                    CandidatePrompt(input.PromptIterRun),
+		CandidateSurfaces:                  CandidateSurfaces(input.PromptIterRun),
 	}
 	return report
 }
 
 // ReportInput carries report-generation inputs.
 type ReportInput struct {
-	Ctx                 context.Context
-	Config              Config
-	StartedAt           time.Time
-	FinishedAt          time.Time
-	BaselineTrain       *promptiterengine.EvaluationResult
-	BaselineValidation  *promptiterengine.EvaluationResult
-	CandidateValidation *promptiterengine.EvaluationResult
-	PromptIterRun       *promptiterengine.RunResult
-	Attributions        []CaseAttribution
-	AttributionJudge    AttributionJudge
-	Metrics             []MetricDefinition
-	Cost                CostSummary
-	Latency             Duration
+	Ctx                   context.Context
+	Config                Config
+	StartedAt             time.Time
+	FinishedAt            time.Time
+	BaselineTrain         *promptiterengine.EvaluationResult
+	BaselineValidation    *promptiterengine.EvaluationResult
+	CandidateValidation   *promptiterengine.EvaluationResult
+	PromptIterRun         *promptiterengine.RunResult
+	Attributions          []CaseAttribution
+	CandidateAttributions []CaseAttribution
+	AttributionJudge      AttributionJudge
+	Metrics               []MetricDefinition
+	Cost                  CostSummary
+	Latency               Duration
 }
 
 // BuildRoundAudit creates compact per-round audit rows.
@@ -217,6 +220,17 @@ func hasNonTextProfileValue(value astructure.SurfaceValue) bool {
 
 // WriteReports writes JSON and Markdown reports.
 func WriteReports(report OptimizationReport, jsonPath, markdownPath string) error {
+	jsonResolved, err := normalizedReportPath(jsonPath)
+	if err != nil {
+		return fmt.Errorf("resolve JSON report path: %w", err)
+	}
+	markdownResolved, err := normalizedReportPath(markdownPath)
+	if err != nil {
+		return fmt.Errorf("resolve markdown report path: %w", err)
+	}
+	if jsonResolved == markdownResolved {
+		return fmt.Errorf("JSON and markdown report paths must differ: %s", jsonResolved)
+	}
 	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
 		return fmt.Errorf("create JSON report dir: %w", err)
 	}
@@ -234,6 +248,18 @@ func WriteReports(report OptimizationReport, jsonPath, markdownPath string) erro
 		return fmt.Errorf("write markdown report: %w", err)
 	}
 	return nil
+}
+
+func normalizedReportPath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	clean := filepath.Clean(abs)
+	if runtime.GOOS == "windows" {
+		clean = strings.ToLower(clean)
+	}
+	return clean, nil
 }
 
 // RenderMarkdown renders a human-readable report.
@@ -300,6 +326,16 @@ func RenderMarkdown(report OptimizationReport) string {
 		)
 	}
 	fmt.Fprintf(&b, "\n")
+
+	if len(report.CandidateSurfaces) > 0 {
+		fmt.Fprintf(&b, "## Candidate Surfaces\n\n")
+		renderPatchTable(&b, report.CandidateSurfaces)
+	}
+
+	if hasRoundPatches(report.Rounds) {
+		fmt.Fprintf(&b, "## Round Patches\n\n")
+		renderRoundPatches(&b, report.Rounds)
+	}
 
 	fmt.Fprintf(&b, "## Failure Attribution\n\n")
 	fmt.Fprintf(&b, "Baseline failures: `%d`; candidate failures: `%d`; combined: `%d`.\n\n",
@@ -378,6 +414,38 @@ func renderAttributionDetails(b *bytes.Buffer, attributions []CaseAttribution) {
 	fmt.Fprintf(b, "\n")
 }
 
+func hasRoundPatches(rounds []RoundAudit) bool {
+	for _, round := range rounds {
+		if len(round.Patches) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func renderRoundPatches(b *bytes.Buffer, rounds []RoundAudit) {
+	for _, round := range rounds {
+		if len(round.Patches) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "### Round %d\n\n", round.Round)
+		renderPatchTable(b, round.Patches)
+	}
+}
+
+func renderPatchTable(b *bytes.Buffer, patches []PatchAudit) {
+	fmt.Fprintf(b, "| surface | value | reason |\n")
+	fmt.Fprintf(b, "| --- | --- | --- |\n")
+	for _, patch := range patches {
+		fmt.Fprintf(b, "| %s | %s | %s |\n",
+			markdownCell(patch.SurfaceID),
+			markdownCell(patchValueSummary(patch.Value)),
+			markdownCell(patch.Reason),
+		)
+	}
+	fmt.Fprintf(b, "\n")
+}
+
 func categoryList(categories []FailureCategory) string {
 	if len(categories) == 0 {
 		return ""
@@ -416,13 +484,150 @@ func patchesAudit(patches *promptiter.PatchSet) []PatchAudit {
 		audit := PatchAudit{
 			SurfaceID: patch.SurfaceID,
 			Reason:    patch.Reason,
-		}
-		if patch.Value.Text != nil {
-			audit.Value = *patch.Value.Text
+			Value:     patchValueAudit(patch.Value),
 		}
 		out = append(out, audit)
 	}
 	return out
+}
+
+// CandidateSurfaces returns the final candidate profile as structured audit
+// rows so non-text surfaces are visible in both JSON and Markdown reports.
+func CandidateSurfaces(run *promptiterengine.RunResult) []PatchAudit {
+	profile := finalCandidateProfile(run)
+	if profile == nil || len(profile.Overrides) == 0 {
+		return nil
+	}
+	out := make([]PatchAudit, 0, len(profile.Overrides))
+	for _, override := range profile.Overrides {
+		out = append(out, PatchAudit{
+			SurfaceID: override.SurfaceID,
+			Value:     patchValueAudit(override.Value),
+		})
+	}
+	return out
+}
+
+func patchValueAudit(value astructure.SurfaceValue) *PatchValueAudit {
+	audit := &PatchValueAudit{}
+	if value.Text != nil {
+		text := *value.Text
+		audit.Text = &text
+	}
+	if value.PromptSyntax != nil {
+		audit.PromptSyntax = string(*value.PromptSyntax)
+	}
+	if len(value.FewShot) > 0 {
+		audit.FewShot = make([]PatchFewShotAudit, 0, len(value.FewShot))
+		for _, example := range value.FewShot {
+			audit.FewShot = append(audit.FewShot, patchFewShotAudit(example))
+		}
+	}
+	if value.Model != nil {
+		audit.Model = &PatchModelAudit{
+			Provider: value.Model.Provider,
+			Name:     value.Model.Name,
+			Variant:  value.Model.Variant,
+			BaseURL:  value.Model.BaseURL,
+		}
+	}
+	if len(value.Tools) > 0 {
+		audit.Tools = make([]PatchToolAudit, 0, len(value.Tools))
+		for _, tool := range value.Tools {
+			audit.Tools = append(audit.Tools, PatchToolAudit{
+				ID:          tool.ID,
+				Description: tool.Description,
+			})
+		}
+	}
+	if len(value.Skills) > 0 {
+		audit.Skills = make([]PatchSkillAudit, 0, len(value.Skills))
+		for _, skill := range value.Skills {
+			audit.Skills = append(audit.Skills, PatchSkillAudit{
+				ID:          skill.ID,
+				Description: skill.Description,
+			})
+		}
+	}
+	if audit.Text == nil && audit.PromptSyntax == "" && len(audit.FewShot) == 0 && audit.Model == nil && len(audit.Tools) == 0 && len(audit.Skills) == 0 {
+		return nil
+	}
+	return audit
+}
+
+func patchFewShotAudit(example astructure.FewShotExample) PatchFewShotAudit {
+	audit := PatchFewShotAudit{
+		Messages: make([]PatchFewShotMessageAudit, 0, len(example.Messages)),
+	}
+	for _, message := range example.Messages {
+		audit.Messages = append(audit.Messages, PatchFewShotMessageAudit{
+			Role:    message.Role,
+			Content: message.Content,
+		})
+	}
+	return audit
+}
+
+func patchValueSummary(value *PatchValueAudit) string {
+	if value == nil {
+		return ""
+	}
+	if value.Text != nil && strings.TrimSpace(*value.Text) != "" {
+		return *value.Text
+	}
+	if len(value.Tools) > 0 {
+		items := make([]string, 0, len(value.Tools))
+		for _, tool := range value.Tools {
+			item := strings.TrimSpace(tool.ID)
+			if strings.TrimSpace(tool.Description) != "" {
+				if item != "" {
+					item += ": "
+				}
+				item += strings.TrimSpace(tool.Description)
+			}
+			items = append(items, item)
+		}
+		return "tool " + strings.Join(items, "; ")
+	}
+	if len(value.Skills) > 0 {
+		items := make([]string, 0, len(value.Skills))
+		for _, skill := range value.Skills {
+			item := strings.TrimSpace(skill.ID)
+			if strings.TrimSpace(skill.Description) != "" {
+				if item != "" {
+					item += ": "
+				}
+				item += strings.TrimSpace(skill.Description)
+			}
+			items = append(items, item)
+		}
+		return "skill " + strings.Join(items, "; ")
+	}
+	if len(value.FewShot) > 0 {
+		messages := make([]string, 0, len(value.FewShot))
+		for _, example := range value.FewShot {
+			parts := make([]string, 0, len(example.Messages))
+			for _, message := range example.Messages {
+				parts = append(parts, strings.TrimSpace(message.Role)+": "+strings.TrimSpace(message.Content))
+			}
+			messages = append(messages, strings.Join(parts, " | "))
+		}
+		return "few-shot " + strings.Join(messages, "; ")
+	}
+	if value.Model != nil {
+		parts := []string{value.Model.Provider, value.Model.Name, value.Model.Variant, value.Model.BaseURL}
+		clean := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if strings.TrimSpace(part) != "" {
+				clean = append(clean, strings.TrimSpace(part))
+			}
+		}
+		return "model " + strings.Join(clean, " / ")
+	}
+	if strings.TrimSpace(value.PromptSyntax) != "" {
+		return "prompt syntax " + value.PromptSyntax
+	}
+	return ""
 }
 
 func evaluationReportFromResult(result *promptiterengine.EvaluationResult) *EvaluationReport {

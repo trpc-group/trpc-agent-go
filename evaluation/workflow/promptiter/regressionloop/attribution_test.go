@@ -266,6 +266,7 @@ func TestAttributeFailuresAddsInferenceErrorFromFailedTrace(t *testing.T) {
 	assert.Len(t, attrs, 1)
 	assert.Equal(t, FailureInferenceError, attrs[0].Category)
 	assert.Contains(t, attrs[0].Evidence[1], "tool timeout")
+	assert.True(t, attrs[0].SkipLossHint)
 }
 
 func TestAttributionCoversTraceAndFallbackBranches(t *testing.T) {
@@ -290,6 +291,9 @@ func TestAttributionCoversTraceAndFallbackBranches(t *testing.T) {
 	assert.Equal(t, promptiterengine.LossHint{}, firstOrZeroLossHint(BuildLossHints([]CaseAttribution{
 		{EvalCaseID: "", MetricName: "metric"},
 	})))
+	assert.Equal(t, promptiterengine.LossHint{}, firstOrZeroLossHint(BuildLossHints([]CaseAttribution{
+		{EvalCaseID: "case", MetricName: "inference", SkipLossHint: true},
+	})))
 	assert.Equal(t, promptiter.LossSeverityP2, parseSeverity("bad"))
 
 	trace := &atrace.Trace{
@@ -313,6 +317,22 @@ func TestAttributionCoversTraceAndFallbackBranches(t *testing.T) {
 		Status: atrace.TraceStatusCompleted,
 		Steps:  []atrace.Step{{Output: &atrace.Snapshot{Text: "final output"}}},
 	}), "final_output=final output")
+
+	traceWithRepeatedCalls := &atrace.Trace{
+		Steps: []atrace.Step{
+			{
+				StepID: "1",
+				Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"q":"x"}}]}`},
+			},
+			{
+				StepID: "2",
+				Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"q":"x"}}]}`},
+			},
+		},
+	}
+	calls := toolCallsFromTrace(traceWithRepeatedCalls)
+	require.Len(t, calls, 2)
+	assert.Equal(t, calls[0], calls[1])
 
 	category, confidence, method := classifyFailure("custom_metric", "", trace, nil, nil, nil, nil)
 	assert.Equal(t, FailureInferenceError, category)
@@ -768,6 +788,53 @@ func TestAttributeFailuresMatchesRepeatedToolCallsIndividually(t *testing.T) {
 	assert.NotEqual(t, "structured_diff", byCase["repeated_ok"].Method)
 	assert.Equal(t, FailureToolArgumentError, byCase["repeated_bad_second"].Category)
 	assert.Equal(t, "structured_diff", byCase["repeated_bad_second"].Method)
+}
+
+func TestAttributeFailuresMatchesTraceOnlyRepeatedToolCallsIndividually(t *testing.T) {
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "trace_repeated_ok",
+			Trace: &atrace.Trace{Steps: []atrace.Step{
+				{StepID: "1", Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}`}},
+				{StepID: "2", Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}`}},
+			}},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+				},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "judge failed"},
+			},
+		},
+		{
+			EvalCaseID: "trace_repeated_bad_second",
+			Trace: &atrace.Trace{Steps: []atrace.Step{
+				{StepID: "1", Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}`}},
+				{StepID: "2", Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"C"}}]}`}},
+			}},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "lookup", Arguments: map[string]any{"id": "A"}},
+					{Name: "lookup", Arguments: map[string]any{"id": "B"}},
+				},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "judge failed"},
+			},
+		},
+	})
+
+	attrs := AttributeFailures(result)
+	require.Len(t, attrs, 2)
+	byCase := map[string]CaseAttribution{}
+	for _, attr := range attrs {
+		byCase[attr.EvalCaseID] = attr
+	}
+	assert.NotEqual(t, "structured_diff", byCase["trace_repeated_ok"].Method)
+	assert.Equal(t, FailureToolArgumentError, byCase["trace_repeated_bad_second"].Category)
+	assert.Equal(t, "structured_diff", byCase["trace_repeated_bad_second"].Method)
 }
 
 func TestAttributeFailuresUsesStructuredFormatRouteAndFinalDiff(t *testing.T) {

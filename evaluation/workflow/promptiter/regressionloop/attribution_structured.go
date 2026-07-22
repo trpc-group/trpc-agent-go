@@ -259,7 +259,7 @@ func toolCallsFromTrace(trace *atrace.Trace) []structuredToolCall {
 		out = append(out, toolCallsFromSnapshot(step.Input)...)
 		out = append(out, toolCallsFromSnapshot(step.Output)...)
 	}
-	return dedupeToolCalls(out)
+	return out
 }
 
 func toolCallsFromSnapshot(snapshot *atrace.Snapshot) []structuredToolCall {
@@ -288,6 +288,7 @@ func extractToolCalls(value any, out *[]structuredToolCall) {
 					*out = append(*out, call)
 				}
 			}
+			delete(typed, "tool_calls")
 		}
 		if call, ok := toolCallFromMap(typed); ok {
 			*out = append(*out, call)

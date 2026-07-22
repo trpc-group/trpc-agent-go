@@ -193,3 +193,27 @@ func TestGateConfigOmitsUnsetMaxLatency(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(data), `"maxLatency":"1s"`)
 }
+
+func TestConfigValidateRejectsNegativeBudgets(t *testing.T) {
+	negLatency := Duration{Duration: -time.Second}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        "prompt.txt",
+		MetricsPath:         "metrics.json",
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          "report.json",
+		OutputMarkdown:      "report.md",
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate: GateConfig{
+			MaxModelCalls: -1,
+			MaxCost:       -0.1,
+			MaxLatency:    &negLatency,
+		},
+	}
+	err := cfg.Validate()
+	assert.ErrorContains(t, err, "gate max model calls must be non-negative")
+	assert.ErrorContains(t, err, "gate max cost must be non-negative")
+	assert.ErrorContains(t, err, "gate max latency must be non-negative")
+}

@@ -131,7 +131,7 @@ func hasMeasuredAmount(cost CostSummary) bool {
 }
 
 func hasMeasuredModelCalls(cost CostSummary) bool {
-	return cost.Source == CostSourceProvider && !cost.Estimated && cost.ModelCalls > 0
+	return cost.Source == CostSourceProvider && cost.ModelCallsMeasured
 }
 
 func missingCandidateMetrics(delta DeltaReport) []string {

@@ -144,6 +144,11 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	candidateAttributions := AttributeFailuresWithOptions(ctx, candidateValidation, AttributionOptions{
+		Hints:   attributionHints,
+		Metrics: metrics,
+		Judge:   p.AttributionJudge,
+	})
 	finishedAt := clock.Now()
 	latency := Duration{Duration: finishedAt.Sub(startedAt)}
 	cost := estimateCost(promptIterRun, reranCandidateValidation)
@@ -151,19 +156,19 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		cost = normalizeProviderCost(p.CostProvider.CostSummary(), cost)
 	}
 	report := BuildReport(ReportInput{
-		Ctx:                 ctx,
-		Config:              cfg,
-		StartedAt:           startedAt,
-		FinishedAt:          finishedAt,
-		BaselineTrain:       baselineTrain,
-		BaselineValidation:  baselineValidation,
-		CandidateValidation: candidateValidation,
-		PromptIterRun:       promptIterRun,
-		Attributions:        attributions,
-		AttributionJudge:    p.AttributionJudge,
-		Metrics:             metrics,
-		Cost:                cost,
-		Latency:             latency,
+		Ctx:                   ctx,
+		Config:                cfg,
+		StartedAt:             startedAt,
+		FinishedAt:            finishedAt,
+		BaselineTrain:         baselineTrain,
+		BaselineValidation:    baselineValidation,
+		CandidateValidation:   candidateValidation,
+		PromptIterRun:         promptIterRun,
+		Attributions:          attributions,
+		CandidateAttributions: candidateAttributions,
+		Metrics:               metrics,
+		Cost:                  cost,
+		Latency:               latency,
 	})
 	if err := WriteReports(report, cfg.OutputJSON, cfg.OutputMarkdown); err != nil {
 		return nil, err
@@ -265,8 +270,8 @@ func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...b
 }
 
 func normalizeProviderCost(cost, fallback CostSummary) CostSummary {
-	measuredModelCalls := cost.ModelCalls > 0
-	if cost.ModelCalls == 0 {
+	measuredModelCalls := cost.ModelCallsMeasured
+	if !measuredModelCalls && cost.ModelCalls == 0 {
 		cost.ModelCalls = fallback.ModelCalls
 	}
 	if cost.Amount != 0 || cost.Currency != "" {

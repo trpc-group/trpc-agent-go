@@ -170,7 +170,7 @@ func runPipeline(
 	pipeline := regressionloop.Pipeline{
 		Evaluator:      evaluator,
 		PromptIterator: iterator,
-		CostProvider:   staticCostProvider{summary: regressionloop.CostSummary{ModelCalls: 6}},
+		CostProvider:   staticCostProvider{summary: regressionloop.CostSummary{ModelCalls: 6, ModelCallsMeasured: true}},
 		Clock:          &fixedClock{now: time.Date(2026, 7, 10, 8, 0, 0, 0, time.UTC)},
 	}
 	return pipeline.Run(ctx, cfg)

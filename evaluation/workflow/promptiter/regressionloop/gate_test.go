@@ -21,7 +21,7 @@ func TestEvaluateGateAcceptsCleanValidationGain(t *testing.T) {
 		GateConfig{MinValidationScoreGain: 0.1, RequireEngineAccepted: true, MaxModelCalls: 10},
 		true,
 		DeltaReport{OverallScoreDelta: 0.2},
-		CostSummary{ModelCalls: 5, Source: CostSourceProvider},
+		CostSummary{ModelCalls: 5, ModelCallsMeasured: true, Source: CostSourceProvider},
 		Duration{},
 	)
 	assert.True(t, decision.Accepted)
@@ -181,7 +181,7 @@ func TestEvaluateGateRejectsBudgets(t *testing.T) {
 		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, MaxLatency: &maxLatency},
 		true,
 		DeltaReport{},
-		CostSummary{ModelCalls: 3, Amount: 0.02, AmountMeasured: true, Source: CostSourceProvider},
+		CostSummary{ModelCalls: 3, ModelCallsMeasured: true, Amount: 0.02, AmountMeasured: true, Source: CostSourceProvider},
 		Duration{Duration: 2 * time.Second},
 	)
 	assert.False(t, decision.Accepted)
@@ -249,7 +249,7 @@ func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 		},
-		CostSummary{ModelCalls: 5, Amount: 0.5, AmountMeasured: true, Source: CostSourceProvider},
+		CostSummary{ModelCalls: 5, ModelCallsMeasured: true, Amount: 0.5, AmountMeasured: true, Source: CostSourceProvider},
 		Duration{Duration: 500 * time.Millisecond},
 	)
 	assert.True(t, decision.Accepted)

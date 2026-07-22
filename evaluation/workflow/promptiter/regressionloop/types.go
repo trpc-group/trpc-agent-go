@@ -62,6 +62,7 @@ type CaseAttribution struct {
 	Confidence          float64           `json:"confidence,omitempty"`
 	Reason              string            `json:"reason"`
 	Evidence            []string          `json:"evidence,omitempty"`
+	SkipLossHint        bool              `json:"skipLossHint,omitempty"`
 }
 
 // AttributionSummary aggregates failure categories across a report.
@@ -152,9 +153,10 @@ const (
 
 // CostSummary captures execution budget and cost provenance.
 type CostSummary struct {
-	ModelCalls int     `json:"modelCalls"`
-	Tokens     int     `json:"tokens,omitempty"`
-	Amount     float64 `json:"amount,omitempty"`
+	ModelCalls         int     `json:"modelCalls"`
+	ModelCallsMeasured bool    `json:"modelCallsMeasured,omitempty"`
+	Tokens             int     `json:"tokens,omitempty"`
+	Amount             float64 `json:"amount,omitempty"`
 	// AmountMeasured marks Amount as an explicit cost-provider value, including zero.
 	AmountMeasured bool   `json:"amountMeasured,omitempty"`
 	Currency       string `json:"currency,omitempty"`
@@ -268,9 +270,50 @@ type RoundAudit struct {
 
 // PatchAudit stores one prompt patch for audit.
 type PatchAudit struct {
-	SurfaceID string `json:"surfaceId"`
-	Value     string `json:"value,omitempty"`
-	Reason    string `json:"reason,omitempty"`
+	SurfaceID string           `json:"surfaceId"`
+	Value     *PatchValueAudit `json:"value,omitempty"`
+	Reason    string           `json:"reason,omitempty"`
+}
+
+// PatchValueAudit stores a structured surface value snapshot for audit.
+type PatchValueAudit struct {
+	Text         *string             `json:"text,omitempty"`
+	PromptSyntax string              `json:"promptSyntax,omitempty"`
+	FewShot      []PatchFewShotAudit `json:"fewShot,omitempty"`
+	Model        *PatchModelAudit    `json:"model,omitempty"`
+	Tools        []PatchToolAudit    `json:"tools,omitempty"`
+	Skills       []PatchSkillAudit   `json:"skills,omitempty"`
+}
+
+// PatchFewShotAudit stores a few-shot example snapshot.
+type PatchFewShotAudit struct {
+	Messages []PatchFewShotMessageAudit `json:"messages,omitempty"`
+}
+
+// PatchFewShotMessageAudit stores one few-shot message snapshot.
+type PatchFewShotMessageAudit struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+// PatchModelAudit stores a model reference snapshot.
+type PatchModelAudit struct {
+	Provider string `json:"provider,omitempty"`
+	Name     string `json:"name,omitempty"`
+	Variant  string `json:"variant,omitempty"`
+	BaseURL  string `json:"baseUrl,omitempty"`
+}
+
+// PatchToolAudit stores a tool reference snapshot.
+type PatchToolAudit struct {
+	ID          string `json:"id,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// PatchSkillAudit stores a skill reference snapshot.
+type PatchSkillAudit struct {
+	ID          string `json:"id,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // OptimizationReport is the JSON report written by the loop.
@@ -292,4 +335,5 @@ type OptimizationReport struct {
 	Cost                               CostSummary        `json:"cost"`
 	Latency                            Duration           `json:"latency"`
 	CandidatePrompt                    string             `json:"candidatePrompt,omitempty"`
+	CandidateSurfaces                  []PatchAudit       `json:"candidateSurfaces,omitempty"`
 }

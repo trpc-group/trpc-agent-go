@@ -95,6 +95,15 @@ func (c Config) Validate() error {
 	if c.Gate.RequireEngineAccepted && c.PromptIter.MaxRounds <= 0 {
 		errs = append(errs, errors.New("engine acceptance requires promptiter rounds"))
 	}
+	if c.Gate.MaxModelCalls < 0 {
+		errs = append(errs, errors.New("gate max model calls must be non-negative"))
+	}
+	if c.Gate.MaxCost < 0 {
+		errs = append(errs, errors.New("gate max cost must be non-negative"))
+	}
+	if c.Gate.MaxLatency != nil && c.Gate.MaxLatency.Duration < 0 {
+		errs = append(errs, errors.New("gate max latency must be non-negative"))
+	}
 	for metricName, category := range c.Attribution.MetricCategoryHints {
 		category = normalizeFailureCategory(category)
 		if strings.TrimSpace(metricName) == "" {

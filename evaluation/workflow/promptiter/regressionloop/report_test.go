@@ -131,6 +131,23 @@ func TestWriteReportsReturnsFilesystemErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "write markdown report")
 }
 
+func TestWriteReportsRejectsCollidingOutputPaths(t *testing.T) {
+	dir := t.TempDir()
+	report := OptimizationReport{Metadata: RunMetadata{AppName: "app"}}
+	wd, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() {
+		_ = os.Chdir(wd)
+	})
+
+	err = WriteReports(report, "report", "./report")
+	assert.ErrorContains(t, err, "paths must differ")
+
+	err = WriteReports(report, "nested/report.json", "nested/./report.json")
+	assert.ErrorContains(t, err, "paths must differ")
+}
+
 func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing.T) {
 	prompt := "candidate prompt"
 	report := BuildReport(ReportInput{
@@ -197,6 +214,11 @@ func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing
 	assert.Equal(t, "overfit", report.Metadata.Scenario)
 	assert.Equal(t, FailureFinalResponseMismatch, report.Metadata.AttributionHints["final_response"])
 	assert.Equal(t, "candidate prompt", report.CandidatePrompt)
+	require.Len(t, report.CandidateSurfaces, 1)
+	assert.Equal(t, "agent#instruction", report.CandidateSurfaces[0].SurfaceID)
+	require.NotNil(t, report.CandidateSurfaces[0].Value)
+	require.NotNil(t, report.CandidateSurfaces[0].Value.Text)
+	assert.Equal(t, "candidate prompt", *report.CandidateSurfaces[0].Value.Text)
 	require.Len(t, report.Rounds, 1)
 	require.Len(t, report.Rounds[0].Patches, 1)
 	assert.Equal(t, "test patch", report.Rounds[0].Patches[0].Reason)
@@ -206,6 +228,8 @@ func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing
 	assert.Equal(t, 2, report.FailureAttributionSummary.Total)
 	md := RenderMarkdown(report)
 	assert.Contains(t, md, "Baseline failures: `1`; candidate failures: `1`; combined: `2`")
+	assert.Contains(t, md, "## Candidate Surfaces")
+	assert.Contains(t, md, "| agent#instruction | candidate prompt |  |")
 	assert.Contains(t, md, "### Baseline")
 	assert.Contains(t, md, "### Candidate")
 	assert.Contains(t, md, "### Failure Details")

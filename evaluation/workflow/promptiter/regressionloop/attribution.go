@@ -101,15 +101,16 @@ func AttributeFailuresWithOptions(
 		for _, evalCase := range evalSet.Cases {
 			if evalCase.Trace != nil && evalCase.Trace.Status == atrace.TraceStatusFailed {
 				attributions = append(attributions, CaseAttribution{
-					EvalSetID:  evalSet.EvalSetID,
-					EvalCaseID: evalCase.EvalCaseID,
-					MetricName: "inference",
-					Category:   FailureInferenceError,
-					Severity:   string(promptiter.LossSeverityP0),
-					Method:     "deterministic_rules",
-					Confidence: 0.95,
-					Reason:     "execution trace failed before evaluation completed",
-					Evidence:   traceEvidence(evalCase.Trace),
+					EvalSetID:    evalSet.EvalSetID,
+					EvalCaseID:   evalCase.EvalCaseID,
+					MetricName:   "inference",
+					Category:     FailureInferenceError,
+					Severity:     string(promptiter.LossSeverityP0),
+					Method:       "deterministic_rules",
+					Confidence:   0.95,
+					Reason:       "execution trace failed before evaluation completed",
+					Evidence:     traceEvidence(evalCase.Trace),
+					SkipLossHint: true,
 				})
 			}
 			for _, metric := range evalCase.Metrics {
@@ -259,6 +260,9 @@ func MetricDefinitionHints(metrics []MetricDefinition) map[string]FailureCategor
 func BuildLossHints(attributions []CaseAttribution) []promptiterengine.LossHint {
 	hints := make([]promptiterengine.LossHint, 0, len(attributions))
 	for _, attr := range attributions {
+		if attr.SkipLossHint {
+			continue
+		}
 		if strings.TrimSpace(attr.MetricName) == "" || strings.TrimSpace(attr.EvalCaseID) == "" {
 			continue
 		}

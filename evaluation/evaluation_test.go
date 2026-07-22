@@ -2067,6 +2067,20 @@ func TestAggregateCaseRunsSuccess(t *testing.T) {
 	assert.Len(t, result.EvalCaseResults, 2)
 }
 
+func TestAggregateCaseRunsPreservesPerInvocationReason(t *testing.T) {
+	run := makeEvalCaseResult("set", "case", "metric", 0, 1, status.EvalStatusFailed)
+	run.OverallEvalMetricResults[0].Details = nil
+	run.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details = &evalresult.EvalMetricResultDetails{
+		Reason: "judge reason from invocation",
+	}
+
+	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{run})
+	assert.NoError(t, err)
+	assert.Len(t, result.MetricResults, 1)
+	require.NotNil(t, result.MetricResults[0].Details)
+	assert.Equal(t, "judge reason from invocation", result.MetricResults[0].Details.Reason)
+}
+
 func TestAggregateCaseRunsUnknownStatus(t *testing.T) {
 	runs := []*evalresult.EvalCaseResult{
 		makeEvalCaseResult("set", "case", "metric", 0.5, 1, status.EvalStatusUnknown),
