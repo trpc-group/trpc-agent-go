@@ -27,17 +27,22 @@ type ArtifactWriter interface {
 }
 
 // FileArtifactWriter atomically persists artifacts below one output directory.
+// Paths passed to Write are confined to that directory. Callers must call
+// Close once they have finished writing; Write returns an error after Close.
 type FileArtifactWriter struct {
 	rootHandle *os.Root
 }
 
-// NewFileArtifactWriter validates outputDir and returns a filesystem writer.
+// NewFileArtifactWriter validates outputDir, creates it when necessary, and
+// returns a filesystem writer. The caller must close the returned writer.
 func NewFileArtifactWriter(outputDir string) (*FileArtifactWriter, error) {
 	return NewFileArtifactWriterWithInputs(outputDir)
 }
 
-// NewFileArtifactWriterWithInputs returns a writer after verifying that the
-// output directory does not contain or equal any protected input path.
+// NewFileArtifactWriterWithInputs validates and creates outputDir, then returns
+// a filesystem writer. It rejects an output directory that contains or equals
+// any non-empty protected input path after resolving symlinks. The caller must
+// close the returned writer.
 func NewFileArtifactWriterWithInputs(outputDir string, inputPaths ...string) (*FileArtifactWriter, error) {
 	if strings.TrimSpace(outputDir) == "" {
 		return nil, errors.New("artifact output directory is empty")
@@ -74,7 +79,8 @@ func NewFileArtifactWriterWithInputs(outputDir string, inputPaths ...string) (*F
 	return &FileArtifactWriter{rootHandle: rootHandle}, nil
 }
 
-// Close releases the filesystem root handle held by the writer.
+// Close releases the filesystem root handle held by the writer. A nil writer
+// may be closed safely. Callers must not call Write after Close.
 func (w *FileArtifactWriter) Close() error {
 	if w == nil || w.rootHandle == nil {
 		return nil
@@ -82,8 +88,10 @@ func (w *FileArtifactWriter) Close() error {
 	return w.rootHandle.Close()
 }
 
-// Write atomically replaces one artifact and syncs its containing directory
-// when the platform supports directory handles.
+// Write atomically replaces one artifact at a relative path below the output
+// directory and syncs its containing directory when the platform supports
+// directory handles. It rejects empty, absolute, volume-qualified, and parent
+// traversal paths. Write returns an error when the writer has been closed.
 func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 	if w == nil {
 		return errors.New("artifact writer is nil")

@@ -12,6 +12,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -32,7 +33,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, configPath, outputOverride string) error {
+func run(ctx context.Context, configPath, outputOverride string) (retErr error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -58,7 +59,9 @@ func run(ctx context.Context, configPath, outputOverride string) error {
 	if err != nil {
 		return err
 	}
-	defer writer.Close()
+	defer func() {
+		retErr = errors.Join(retErr, writer.Close())
+	}()
 	report, err := regression.Run(ctx, regression.Options{
 		Config: pipelineConfig(cfg), Engine: environment.Engine, Evaluator: environment.Evaluator,
 		Meter: environment.Evaluator, InitialProfile: environment.InitialProfile, Artifacts: writer,
