@@ -20,6 +20,7 @@ require (
 	github.com/panjf2000/ants/v2 v2.10.0
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/sync v0.19.0
+	golang.org/x/sys v0.41.0
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/model/provider v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.8.0
@@ -69,7 +70,6 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.48.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/genai v1.36.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect

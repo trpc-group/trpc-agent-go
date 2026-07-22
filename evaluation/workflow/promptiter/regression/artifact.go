@@ -96,7 +96,7 @@ func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 		return err
 	}
 	dir := filepath.Dir(target)
-	if err := w.rootHandle.MkdirAll(dir, 0o755); err != nil {
+	if err := mkdirAllRoot(w.rootHandle, dir, 0o755); err != nil {
 		return fmt.Errorf("create artifact directory: %w", err)
 	}
 	temporary, temporaryPath, err := createRootTemp(w.rootHandle, dir)
@@ -119,12 +119,26 @@ func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close temporary artifact: %w", err)
 	}
-	if err := w.rootHandle.Rename(temporaryPath, target); err != nil {
+	if err := renameRoot(w.rootHandle, temporaryPath, target); err != nil {
 		return fmt.Errorf("replace artifact: %w", err)
 	}
 	committed = true
 	if err := syncRootDirectory(w.rootHandle, dir); err != nil {
 		return fmt.Errorf("sync artifact directory: %w", err)
+	}
+	return nil
+}
+
+func mkdirAllRoot(root *os.Root, path string, perm os.FileMode) error {
+	if path == "." {
+		return nil
+	}
+	current := ""
+	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
+		current = filepath.Join(current, component)
+		if err := root.Mkdir(current, perm); err != nil && !os.IsExist(err) {
+			return err
+		}
 	}
 	return nil
 }
