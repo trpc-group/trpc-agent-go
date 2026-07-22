@@ -1735,6 +1735,50 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestRuntimeRunAddsModelCallBudgetOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{
+		runner:                        runner,
+		modelCallBudgetDeadlineWindow: time.Minute,
+	}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+
+	factory, ok := runner.opts.RuntimeState[modelCallBudgetRuntimeStateKey].(*modelCallBudgetFactory)
+	require.True(t, ok)
+	require.Equal(t, time.Minute, factory.deadlineWindow)
+}
+
+func TestRuntimeRunWithoutModelCallBudgetPreservesOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{runner: runner}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+	require.Empty(t, runner.opts.RuntimeState)
+}
+
 func TestToolCallArgumentsJSONRepairRunOptionResolver(t *testing.T) {
 	t.Parallel()
 
@@ -4307,6 +4351,14 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "deadline-finalization-window",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				DeadlineFinalizationWindow: time.Minute,
+			},
+			wantErr: true,
+		},
+		{
 			name:      "preload-memory",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
@@ -4644,6 +4696,98 @@ func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
 		ModelMode:     modeMock,
 		OpenAIVariant: string(openai.VariantGLM),
 	}))
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DisablesThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, variant := range []openai.Variant{
+		openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen,
+		openai.VariantGLM,
+	} {
+		cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+			ModelMode:                          modeOpenAI,
+			OpenAIVariant:                      string(variant),
+			DeadlineFinalizationWindow:         time.Minute,
+			DeadlineFinalizationMaxInputTokens: 1234,
+		})
+		require.True(t, cfg.DisableThinking, string(variant))
+		require.True(t, cfg.DropReasoningContent, string(variant))
+		require.Equal(t, 1234, cfg.MaxInputTokens)
+		require.Equal(
+			t,
+			defaultReasoningFinalizationApproxRunesPerToken,
+			cfg.ApproxRunesPerToken,
+		)
+	}
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	defaultCfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	})
+	require.False(t, defaultCfg.DisableThinking)
+	require.Zero(t, defaultCfg.ApproxRunesPerToken)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}).DropReasoningContent)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}).DisableThinking)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: "unsupported",
+	}).DisableThinking)
+	require.Equal(t, 4321, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:                          modeMock,
+		OpenAIVariant:                      string(openai.VariantGLM),
+		DeadlineFinalizationMaxInputTokens: 4321,
+	}).MaxInputTokens)
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_AutoInfersThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:                  modeOpenAI,
+		OpenAIVariant:              openAIVariantAuto,
+		OpenAIBaseURL:              "https://open.bigmodel.cn/api/paas/v4",
+		DeadlineFinalizationWindow: time.Minute,
+	})
+	require.True(t, cfg.DisableThinking)
+	require.Equal(
+		t,
+		defaultReasoningFinalizationApproxRunesPerToken,
+		cfg.ApproxRunesPerToken,
+	)
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_MaxCallOnlyKeepsReasoning(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantGLM),
+		MaxLLMCalls:   4,
+	})
+	require.False(t, cfg.DisableThinking)
+	require.False(t, cfg.DropReasoningContent)
+	require.Zero(t, cfg.ApproxRunesPerToken)
 }
 
 func TestInferOpenAIVariant(t *testing.T) {

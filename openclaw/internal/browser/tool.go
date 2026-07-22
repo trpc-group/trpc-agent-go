@@ -57,6 +57,7 @@ const (
 	actionAct        = "act"
 	actionEvaluate   = "evaluate"
 	actionWait       = "wait"
+	actionScroll     = "scroll"
 )
 
 const (
@@ -86,6 +87,11 @@ const (
 	cancelCleanupStateKey     = "__openclaw_browser_cancel_cleanup__"
 	cancelCleanupNoticePrefix = "__openclaw_browser_cancel_cleanup:"
 )
+
+const scrollIntoViewFunction = `element => element.scrollIntoView({
+  block: "center",
+  inline: "nearest",
+})`
 
 const (
 	tabActionList   = "list"
@@ -135,6 +141,7 @@ var supportedActions = []string{
 	actionAct,
 	actionEvaluate,
 	actionWait,
+	actionScroll,
 }
 
 var supportedPlaywrightMCPActions = []string{
@@ -154,6 +161,7 @@ var supportedPlaywrightMCPActions = []string{
 	actionDialog,
 	actionAct,
 	actionEvaluate,
+	actionScroll,
 }
 
 func supportedActionsForDriver(driverType string) []string {
@@ -218,6 +226,22 @@ type actRequest struct {
 	TextGone    string           `json:"textGone,omitempty"`
 	TimeoutMs   *int             `json:"timeoutMs,omitempty"`
 	Fn          string           `json:"fn,omitempty"`
+	textSet     bool
+}
+
+func (r *actRequest) UnmarshalJSON(data []byte) error {
+	type actRequestAlias actRequest
+	var decoded actRequestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*r = actRequest(decoded)
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	_, r.textSet = fields["text"]
+	return nil
 }
 
 type input struct {
@@ -510,6 +534,15 @@ func (t *Tool) Call(ctx context.Context, args []byte) (any, error) {
 	}
 	if actionKey == actionWait {
 		in = normalizeWaitActionInput(in)
+		actionKey = strings.ToLower(actionAct)
+	}
+	if actionKey == actionScroll {
+		in.Kind = actScroll
+		if in.Request != nil {
+			req := *in.Request
+			req.Kind = actScroll
+			in.Request = &req
+		}
 		actionKey = strings.ToLower(actionAct)
 	}
 	in = normalizeBrowserActionInput(in, actionKey)
@@ -2400,6 +2433,9 @@ func (t *Tool) handleAct(
 func normalizeActRequest(in input) actRequest {
 	if in.Request != nil {
 		req := *in.Request
+		if strings.TrimSpace(req.Kind) == "" {
+			req.Kind = in.Kind
+		}
 		if strings.TrimSpace(req.TargetID) == "" {
 			req.TargetID = in.TargetID
 		}
@@ -2408,6 +2444,30 @@ func normalizeActRequest(in input) actRequest {
 		}
 		if strings.TrimSpace(req.Ref) == "" {
 			req.Ref = in.Ref
+		}
+		if req.DoubleClick == nil {
+			req.DoubleClick = in.DoubleClick
+		}
+		if strings.TrimSpace(req.Button) == "" {
+			req.Button = in.Button
+		}
+		if req.Modifiers == nil {
+			req.Modifiers = in.Modifiers
+		}
+		if !req.textSet && req.Text == "" {
+			req.Text = in.Text
+		}
+		if req.Submit == nil {
+			req.Submit = in.Submit
+		}
+		if req.Slowly == nil {
+			req.Slowly = in.Slowly
+		}
+		if strings.TrimSpace(req.Key) == "" {
+			req.Key = in.Key
+		}
+		if req.DelayMs == nil {
+			req.DelayMs = in.DelayMs
 		}
 		if strings.TrimSpace(req.StartTarget) == "" {
 			req.StartTarget = in.StartTarget
@@ -2420,6 +2480,24 @@ func normalizeActRequest(in input) actRequest {
 		}
 		if strings.TrimSpace(req.EndRef) == "" {
 			req.EndRef = in.EndRef
+		}
+		if req.Values == nil {
+			req.Values = in.Values
+		}
+		if req.Fields == nil {
+			req.Fields = in.Fields
+		}
+		if req.Width == nil {
+			req.Width = in.Width
+		}
+		if req.Height == nil {
+			req.Height = in.Height
+		}
+		if req.TimeMs == nil {
+			req.TimeMs = in.TimeMs
+		}
+		if strings.TrimSpace(req.Selector) == "" {
+			req.Selector = in.Selector
 		}
 		if strings.TrimSpace(req.URL) == "" {
 			req.URL = browserURL(in.URL, in.TargetURL)
@@ -2435,6 +2513,18 @@ func normalizeActRequest(in input) actRequest {
 		}
 		if req.Amount == nil {
 			req.Amount = in.Amount
+		}
+		if strings.TrimSpace(req.LoadState) == "" {
+			req.LoadState = in.LoadState
+		}
+		if strings.TrimSpace(req.TextGone) == "" {
+			req.TextGone = in.TextGone
+		}
+		if req.TimeoutMs == nil {
+			req.TimeoutMs = in.TimeoutMs
+		}
+		if strings.TrimSpace(req.Fn) == "" {
+			req.Fn = in.Fn
 		}
 		req.Kind = defaultActKind(req)
 		return req
@@ -2568,14 +2658,26 @@ func (t *Tool) executeAct(
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolHover, args)
 	case strings.ToLower(actScrollIntoView):
-		if driverType != driverTypeBrowserServer {
-			return nil, errors.New(
-				"scrollIntoView is only supported by the " +
-					"browser-server driver",
+		if driverType == driverTypePlaywrightMCP {
+			if !t.evaluateEnabled {
+				return nil, errors.New(
+					"scrollIntoView requires browser evaluate support",
+				)
+			}
+			args := map[string]any{
+				"function": scrollIntoViewFunction,
+			}
+			addOptionalElementArgs(
+				args,
+				req.Ref,
+				req.Target,
+				driverType,
 			)
+			return drv.Call(ctx, mcpToolEvaluate, args)
 		}
-		args := map[string]any{
-			"ref": strings.TrimSpace(req.Ref),
+		args, err := elementActionArgs(req, driverType)
+		if err != nil {
+			return nil, err
 		}
 		addServerTimeoutArg(args, driverType, req.TimeoutMs)
 		return drv.Call(ctx, mcpToolScroll, args)
@@ -2793,8 +2895,17 @@ func elementActionArgs(
 		)
 		return args, nil
 	}
-	args["ref"] = strings.TrimSpace(req.Ref)
-	args["element"] = describeElement(req.Ref, "")
+	ref := strings.TrimSpace(req.Ref)
+	target := strings.TrimSpace(req.Target)
+	if ref == "" && target == "" {
+		return nil, errors.New("browser act requires ref or target")
+	}
+	if ref != "" {
+		args["ref"] = ref
+		args["element"] = describeElement(ref, "")
+		return args, nil
+	}
+	args["element"] = target
 	return args, nil
 }
 
@@ -2840,12 +2951,30 @@ func dragArgs(req actRequest, driverType string) (map[string]any, error) {
 			),
 		}, nil
 	}
-	return map[string]any{
-		"startRef":     strings.TrimSpace(req.StartRef),
-		"startElement": describeElement(req.StartRef, "start"),
-		"endRef":       strings.TrimSpace(req.EndRef),
-		"endElement":   describeElement(req.EndRef, "end"),
-	}, nil
+	startRef := strings.TrimSpace(req.StartRef)
+	startTarget := strings.TrimSpace(req.StartTarget)
+	endRef := strings.TrimSpace(req.EndRef)
+	endTarget := strings.TrimSpace(req.EndTarget)
+	if startRef == "" && startTarget == "" {
+		return nil, errors.New("browser drag requires start ref or target")
+	}
+	if endRef == "" && endTarget == "" {
+		return nil, errors.New("browser drag requires end ref or target")
+	}
+	args := map[string]any{}
+	if startRef != "" {
+		args["startRef"] = startRef
+		args["startElement"] = describeElement(startRef, "start")
+	} else {
+		args["startElement"] = startTarget
+	}
+	if endRef != "" {
+		args["endRef"] = endRef
+		args["endElement"] = describeElement(endRef, "end")
+	} else {
+		args["endElement"] = endTarget
+	}
+	return args, nil
 }
 
 func (t *Tool) executeFill(
@@ -2854,18 +2983,38 @@ func (t *Tool) executeFill(
 	req actRequest,
 	driverType string,
 ) (any, error) {
-	if len(req.Fields) == 0 {
+	fields := fillFields(req)
+	if len(fields) == 0 {
 		return nil, errors.New("browser fill requires fields")
 	}
-	fields := req.Fields
 	if driverType == driverTypePlaywrightMCP {
-		fields = normalizeMCPFillFields(req.Fields)
+		fields = normalizeMCPFillFields(fields)
 	}
 	args := map[string]any{
 		"fields": fields,
 	}
 	addServerTimeoutArg(args, driverType, req.TimeoutMs)
 	return drv.Call(ctx, mcpToolFillForm, args)
+}
+
+func fillFields(req actRequest) []map[string]any {
+	if req.Fields != nil {
+		return req.Fields
+	}
+	target := firstNonEmpty(req.Ref, req.Target)
+	if target == "" {
+		return nil
+	}
+	field := map[string]any{
+		"text": req.Text,
+	}
+	if strings.TrimSpace(req.Ref) != "" {
+		field["ref"] = strings.TrimSpace(req.Ref)
+	}
+	if strings.TrimSpace(req.Target) != "" {
+		field["target"] = strings.TrimSpace(req.Target)
+	}
+	return []map[string]any{field}
 }
 
 func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
@@ -2902,7 +3051,12 @@ func normalizeMCPFillFields(fields []map[string]any) []map[string]any {
 			normalized["type"] = "textbox"
 		}
 		if _, ok := normalized["value"]; !ok {
-			normalized["value"] = stringField(field, "text")
+			text := field["text"]
+			if text == nil {
+				normalized["value"] = ""
+			} else {
+				normalized["value"] = fmt.Sprint(text)
+			}
 		} else {
 			normalized["value"] = fmt.Sprint(normalized["value"])
 		}
