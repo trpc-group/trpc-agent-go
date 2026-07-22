@@ -1,5 +1,61 @@
-# 方案设计说明
+# Design
 
-该原型把 CR 能力拆成 Skill、治理、沙箱、规则、存储和报告六层。`skills/code-review/SKILL.md` 定义工作流入口，规则文档覆盖安全、敏感信息、goroutine/context、资源关闭、错误处理、测试缺失和数据库生命周期；脚本目录只保存可复用检查命令，由 Agent 通过 wrapper 编排。沙箱默认使用 fake deterministic 模式便于无 Key 测试，生产配置应切换到 container、Cube 或 E2B；local 仅作为开发 fallback。每个命令先进入 `PermissionPolicy`，包含破坏性命令、网络下载、shell 包装、提权参数会 deny，`staticcheck` 默认进入 needs_human_review，允许项仍带超时、输出大小限制、环境变量白名单和脱敏。
+A Chinese version of this document is available in
+[DESIGN.zh_CN.md](DESIGN.zh_CN.md).
 
-输入层支持 diff 文件、repo-path 的 git diff 和文件列表，解析 unified diff 后保留文件、hunk、新增行号、上下文和包名。规则引擎只对 Go 新增行做确定性扫描，高置信问题进入 findings，低置信或测试缺失进入 warnings / needs_human_review，并按文件、行、类别去重。存储通过 `Store` 接口隔离，当前 `JSONStore` 离线可跑，`schema.sql` 给出 SQLite 等价表结构，完整保存 task、permission decision、sandbox run、finding、artifact、monitoring 和 final report。监控摘要记录总耗时、沙箱耗时、工具调用数、拦截次数、finding 数、严重级别分布和异常分布。报告写 JSON 与 Markdown，所有 evidence、sandbox output、数据库记录都经过 Redactor，避免 API key、token、password 明文落盘。
+This example keeps the review path deterministic so it can run without model
+credentials and produce stable reports for fixtures and hidden tests. The
+`code-review` Skill describes the review workflow, rule catalog, and sandbox
+scripts, while the Go CLI owns orchestration: it parses unified diffs or local
+`git diff` output, maps changed Go hunks to candidate line numbers, runs
+rule-only detectors, gates external commands through a permission policy, and
+writes structured results.
+
+Model-assisted review runs through the real agent stack: `agent/llmagent` +
+`runner` with an in-memory session drive one review prompt per task.
+`--mode fake-model` swaps in a deterministic offline `model.Model` so the full
+chain (prompt building, event streaming, JSON parsing, merge, persistence) is
+testable without keys, while `--mode llm` uses an OpenAI-compatible model.
+Only redacted diff content is sent to the model. Model replies are parsed
+against a strict JSON contract; confidence is clamped, locations outside the
+diff are downgraded to human review, and all model findings are merged with
+rule findings through the shared dedup/split pipeline. Model failures degrade
+the task to rule-only results and are recorded as `model_error` exceptions.
+
+Sandbox execution is separated from rule scanning. By default the example uses
+`--sandbox managed`, which attempts `codeexecutor/sandbox` with restricted
+networking, core environment inheritance, secret-name environment exclusion,
+output caps, and timeouts. The same workspace flow also supports
+`--sandbox container` through `codeexecutor/container` and `--sandbox e2b`
+through `codeexecutor/e2b`, both via the shared `codeexecutor.Engine`
+interface. Skill scripts run through the framework `tool/skill` tools
+(`skill_load`/`skill_run`) over the same executor choices. `mock` is
+explicit for dry-run/testing paths, and `local-dev` is
+explicit because it is only a development fallback.
+Every command receives a permission decision before execution. The command
+governance rules implement the framework `tool.PermissionPolicy` interface;
+allow-listed commands are limited to Go static checks and scripts under the
+review skill, while high-risk shell, network, privilege, and destructive
+commands are denied or marked for human review.
+
+SQLite stores the minimum versioned audit schema: task, finding, sandbox run,
+permission decision, filter decision, artifact, and report metadata. Task-owned
+rows use foreign keys and indexes. The pure-Go driver keeps the example usable
+without CGO. The `store.Store` interface is
+intentionally small so another SQL backend can replace the SQLite
+implementation. Final audit categories are committed in one transaction, and
+report files are published with temp-file, sync, and rename semantics alongside
+an SHA-256 artifact manifest. Findings
+are deduplicated by file, line, category, and rule id, keeping the highest
+severity and confidence. Low-confidence results go to human-review buckets
+instead of high-confidence findings. Redaction is applied before reporting and
+persistence to prevent API keys, tokens, passwords, and long secret-like values
+from leaking into artifacts or database rows. Metrics capture duration,
+sandbox time, tool calls, permission denies, severity distribution, and
+exception counts for monitoring and replay.
+
+Input acquisition is bounded before parsing. Repository mode combines
+unstaged, staged, and bounded untracked changes. Explicit file mode resolves
+paths beneath its repository root and rejects symlinks, non-regular files,
+binary content, oversized files, and path escapes. Diff files and Git output
+are capped while reading, rather than after an unbounded allocation.

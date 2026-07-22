@@ -1,67 +1,166 @@
-# Go Code Review Agent Example
+# Code Review Agent Example
 
-This is a self-contained prototype for an automatic Go code review agent inspired by tRPC-Agent concepts: Skill packaging, code execution sandboxing, PermissionPolicy governance, persistent review state, telemetry-style summaries, and structured reports.
+This example is a deterministic first version of the automatic code review
+agent described in issue #2004. It parses bounded review inputs, applies
+Go-focused rules, records permission decisions and sandbox runs, stores the
+result in pure-Go SQLite, and atomically publishes JSON, Markdown, and artifact
+manifest files.
 
-The workspace here is not the upstream `trpc-agent-go` repository, so the example keeps integration boundaries small and dependency-free. The `Store` interface and sandbox runner are shaped so they can be replaced by `session/sqlite`, `tool/codeexec`, `codeexecutor/container`, `codeexecutor/e2b`, and telemetry adapters in a real tRPC-Agent application.
+The default path is `rule-only` and does not require a model API key.
+
+## Modes
+
+`--mode` selects how the review runs:
+
+- `rule-only` (default): deterministic rule scanning only, no model involved.
+- `fake-model`: runs the full agent orchestration (`agent/llmagent` +
+  `runner` + in-memory session) with a deterministic offline model. It needs
+  no API key and produces the stable `FAKE001` finding, which makes the whole
+  chain (prompt building, event streaming, JSON parsing, dedup, persistence)
+  testable.
+- `llm`: same orchestration with a real OpenAI-compatible model. Requires
+  `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`); pick the model with
+  `--model` or the `MODEL_NAME` environment variable.
+
+Model findings are validated before they are trusted: confidence is clamped,
+severity/category are normalized, evidence is redacted, and findings that
+reference files or lines outside the diff are downgraded to the human-review
+bucket. A model failure never fails the review task; the run degrades to
+rule-only results and records a `model_error` exception in the metrics.
 
 ## Run
 
-```powershell
-go test ./...
-go run . --fixture security_sql --out-dir out/security_sql --store-path out/security_sql/store.json
-go run . --fixture redaction --out-dir out/redaction --store-path out/redaction/store.json
-go run . --fixture sandbox_failure --force-sandbox-failure --out-dir out/sandbox_failure --store-path out/sandbox_failure/store.json
+From the `examples` module:
+
+```bash
+go run ./code_review_agent \
+  --fixture security_secret \
+  --mode rule-only \
+  --out-dir /tmp/code-review-agent \
+  --db /tmp/code-review-agent/review.db
 ```
 
-Input options:
+Run the full agent chain without an API key:
 
-- `--diff-file path/to/change.diff`
-- `--repo-path path/to/git/repo`
-- `--files internal/a.go,internal/b.go`
-- `--fixture clean|security_sql|goroutine_leak|resource_unclosed|db_lifecycle|missing_tests|duplicate_finding|sandbox_failure|redaction`
+```bash
+go run ./code_review_agent \
+  --fixture security_secret \
+  --mode fake-model \
+  --sandbox mock --dry-run \
+  --out-dir /tmp/code-review-agent \
+  --db /tmp/code-review-agent/review.db
+```
 
-Runtime options:
+Run with a real model:
 
-- `--runtime fake`: deterministic dry-run sandbox, default for local tests.
-- `--runtime container`: uses Docker when available, with read-only workspace mount and no network.
-- `--runtime e2b` or `cube`: interface stub for remote sandbox integration.
-- `--runtime local`: development fallback only, not production default.
+```bash
+export OPENAI_API_KEY=...
+go run ./code_review_agent \
+  --repo-path /path/to/repo \
+  --mode llm \
+  --model deepseek-v4-flash
+```
 
-Outputs:
+
+Run all fixtures:
+
+```bash
+go run ./code_review_agent \
+  --fixture all \
+  --mode rule-only \
+  --out-dir /tmp/code-review-agent-fixtures \
+  --db /tmp/code-review-agent-fixtures/review.db
+```
+
+Review local working tree changes:
+
+```bash
+go run ./code_review_agent \
+  --repo-path /path/to/repo
+```
+
+Repository input combines unstaged changes, staged changes, and untracked
+regular files. Untracked symlinks, non-regular files, binary files, and files
+outside the repository are skipped and recorded in the input summary. Explicit
+`--files` input rejects those cases instead of silently skipping them.
+
+Input is capped at 200 explicit/untracked files, 1 MiB per synthesized file,
+and 10 MiB for the combined diff. Diff files and Git subprocess output are
+bounded while they are read, so the limit also protects memory use.
+
+Review an explicit file list:
+
+```bash
+go run ./code_review_agent \
+  --repo-path /path/to/repo \
+  --files internal/foo.go,internal/bar.go \
+  --out-dir /tmp/code-review-agent-files \
+  --db /tmp/code-review-agent-files/review.db
+```
+
+Query a persisted task:
+
+```bash
+go run ./code_review_agent \
+  --db /tmp/code-review-agent/review.db \
+  --task-id cr-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+The default sandbox is `managed`, which runs checks through
+`codeexecutor/sandbox`. Use `--sandbox container` for Docker-backed
+`codeexecutor/container`, and `--sandbox e2b` for `codeexecutor/e2b` (requires
+E2B credentials such as `E2B_API_KEY`). Both the Go static checks and the
+skill scripts (via the framework `skill_run` tool) run on the selected
+sandbox. `mock` is available only for explicit
+dry-run/testing paths. Use `--sandbox local-dev` only for local development; it
+is intentionally not the default production-like path.
+
+Every external command is gated by a governance policy that implements the
+framework `tool.PermissionPolicy` interface; non-allow-listed commands are
+denied or routed to human review, and every decision is persisted. Pass
+`--staticcheck` to additionally run `staticcheck ./...` when the binary is
+available in the sandbox.
+
+## Outputs
 
 - `review_report.json`
 - `review_report.md`
-- persistent store JSON, default `out/review_store.json`
-- SQLite-compatible schema in `schema.sql`
+- `artifact_manifest.json` with SHA-256 and byte size for the JSON and Markdown
+  reports
+- SQLite tables (behind the swappable `store.Store` interface):
+  - `schema_migrations`
+  - `review_tasks`
+  - `review_findings`
+  - `sandbox_runs`
+  - `permission_decisions`
+  - `filter_decisions`
+  - `review_reports`
+  - `artifacts`
 
-## What A Go Developer Should Learn
+Reports are written through temporary files, synced, and renamed into place.
+The complete final audit snapshot is committed to SQLite in one transaction;
+findings, sandbox runs, governance and filter decisions, artifact records, and
+report metadata cannot be partially committed. The embedded SQLite driver is
+pure Go and works when `CGO_ENABLED=0`. Schema version 1 enables foreign keys
+and indexes task-owned audit rows.
 
-To implement the full open-source version with tRPC-Agent, a Go developer should learn these areas:
+## Fixtures
 
-1. tRPC-Agent primitives: agent lifecycle, tools, `tool/skill`, `skill load`, `skill run`, artifact handling, session/memory abstractions, filters, PermissionPolicy, telemetry hooks.
-2. Sandbox execution: `tool/workspaceexec`, `tool/hostexec`, `tool/codeexec`, container runtime, E2B/Cube runtime, timeout/cancellation, output limits, read-only mounts, env allowlists, artifact allowlists.
-3. Go review domain: unified diff parsing, hunk line mapping, package discovery, `go test`, `go vet`, optional `staticcheck`, context propagation, goroutine lifecycle, resource closing, error wrapping, SQL transaction lifecycle, secret scanning.
-4. Persistence: SQLite schema design, task/run/finding/report relations, idempotent migrations, query by task id, redacted evidence, report artifacts.
-5. Governance and observability: permission decisions, deny/ask/needs-human-review states, deduplication, confidence thresholds, severity statistics, latency, exception distributions, replayable audit records.
-6. Testability: deterministic rule-only mode, fake model mode, fixture diffs, sandbox failure tests, hidden-sample friendly rules, no API key requirement.
+The fixtures cover clean diffs, secret leakage, goroutine/context leakage,
+resource lifecycle issues, transaction lifecycle issues, missing tests,
+duplicate findings, sandbox failure input, and redaction.
 
-## Fixture Matrix
+Regenerate the curated expected outputs after an intentional behavior change:
 
-| Fixture | Purpose |
-| --- | --- |
-| `clean` | no blocking issue and test update present |
-| `security_sql` | SQL formatting risk and rows lifecycle risk |
-| `goroutine_leak` | goroutine cancellation and `time.Tick` leak |
-| `resource_unclosed` | file opened without close path |
-| `db_lifecycle` | transaction without commit/rollback |
-| `missing_tests` | production behavior without test update |
-| `duplicate_finding` | deduplication and secret redaction |
-| `sandbox_failure` | sandbox failure should not crash review |
-| `redaction` | reports and store must not contain raw password/token |
+```bash
+go run ./code_review_agent --fixture all --mode rule-only \
+  --out-dir /tmp/code-review-agent-fixtures \
+  --db /tmp/code-review-agent-fixtures/review.db
+go run ./code_review_agent/testdata/gen_expected.go \
+  /tmp/code-review-agent-fixtures ./code_review_agent/testdata/expected
+```
 
-## Production Integration Notes
+## Design
 
-- Replace `JSONStore` with a `database/sql` implementation backed by `session/sqlite` or another SQL backend. The included `schema.sql` is the minimum relational shape.
-- Replace `SandboxRunner` with `tool/codeexec` plus `codeexecutor/container` or E2B/Cube runtime. Keep `local` behind a development-only flag.
-- Connect `PermissionPolicy.Decide` to tRPC-Agent filter/permission hooks and emit telemetry spans for every tool call and rule pass.
-- If adding LLM review, keep deterministic rules as the first pass and only let low-confidence cases ask the model. Store model evidence separately and keep secret redaction on every boundary.
+See [DESIGN.md](DESIGN.md) (English) and
+[DESIGN.zh_CN.md](DESIGN.zh_CN.md) (中文方案设计说明).
