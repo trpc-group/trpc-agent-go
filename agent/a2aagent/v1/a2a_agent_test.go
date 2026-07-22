@@ -21,7 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v2"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
