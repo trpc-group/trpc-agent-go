@@ -1008,6 +1008,7 @@ type JSONCriterion struct {
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy 表示匹配策略
 	NumberTolerance *float64                                 // NumberTolerance 表示数字容差
 	Valid           bool                                     // Valid 表示校验实际内容是否为合法 JSON。
+	Schema          json.RawMessage                          // Schema 表示用于校验实际内容的 JSON Schema。
 	Compare         func(actual, expected any) (bool, error) // Compare 自定义比较逻辑
 }
 
@@ -1015,7 +1016,19 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-对比时 actual 是实际值，expected 是预期值。如果在代码中提供了 `Compare`，JSONCriterion 会直接使用自定义逻辑。未提供 `Compare` 时，`valid` 用于先校验 actual 是否是一段完整且严格合法的 JSON，随后再按照 `matchStrategy` 决定是否执行内置 JSON 值匹配。当前 `matchStrategy` 支持 `exact` 与 `skip`，默认值为 `exact`；`exact` 表示按 JSON 结构精确匹配，`skip` 表示跳过内置 JSON 值匹配。因此，如果只希望做合法性校验、不希望继续比较 expected，应同时配置 `valid: true` 与 `matchStrategy: "skip"`。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置。两者同时非空时将报错。
+对比时，`actual` 是实际值，`expected` 是预期值。JSONCriterion 的执行顺序如下：
+
+1. 如果在代码中提供了 `Compare`，直接使用自定义逻辑，不再执行内置的 `valid`、`schema` 与 `matchStrategy`。
+2. 未提供 `Compare` 时，先执行 `valid` 校验，再执行 `schema` 校验，最后根据 `matchStrategy` 决定是否执行内置 JSON 值匹配。
+3. 如果只希望做合法性校验或 Schema 校验、不希望继续比较 `expected`，应配置 `valid: true` 或 `schema`，并设置 `matchStrategy: "skip"`。
+
+`schema` 字段本身是 JSON Schema 的原始 JSON 值，通常为对象，也支持布尔 schema；在 metrics JSON 中直接写 JSON Schema，不需要再编码成字符串。代码中可通过 `WithSchema` 传入序列化后的 JSON Schema 文本。
+
+用于校验的 `actual` 按运行时值处理：`json.RawMessage` 与 `[]byte` 会先按原始 JSON 解析，普通 `string` 默认作为已解码的字符串值校验。当同时配置 `valid: true` 与 `schema` 时，schema 校验会复用 `valid` 已解析出的 JSON 值。`schema` 为空时不执行 Schema 校验；未声明 `$schema` 时按 Draft 2020-12 编译；schema 解析失败或 actual 校验失败都会返回 `(false, error)`。
+
+当前 `matchStrategy` 支持 `exact` 与 `skip`，默认值为 `exact`。`exact` 表示按 JSON 结构精确匹配，`skip` 表示跳过内置 JSON 值匹配。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。
+
+`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置，两者同时非空时将报错。
 
 配置示例片段如下，忽略 `id` 和 `metadata.timestamp` 字段，并放宽数字容差。
 
@@ -1041,6 +1054,24 @@ type JSONMatchStrategy string
       "id": true
     }
   }
+}
+```
+
+配置示例片段如下，只校验 actual 是否符合 JSON Schema，不继续对比 expected。
+
+```json
+{
+  "schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "matchStrategy": "skip"
 }
 ```
 

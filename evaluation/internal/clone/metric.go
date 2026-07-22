@@ -10,6 +10,8 @@
 package clone
 
 import (
+	"encoding/json"
+
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -147,6 +149,7 @@ func cloneJSONCriterion(src *criterionjson.JSONCriterion) (*criterionjson.JSONCr
 		copied.OnlyTree = onlyTree.(map[string]any)
 	}
 	copied.NumberTolerance = cloneFloat64Ptr(src.NumberTolerance)
+	copied.Schema = append(json.RawMessage(nil), src.Schema...)
 	return &copied, nil
 }
 
