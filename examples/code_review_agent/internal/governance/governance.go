@@ -29,6 +29,7 @@ import (
 
 var resultNamePattern = regexp.MustCompile(`^result-[a-f0-9]{16}\.json$`)
 var targetWorkspacePattern = regexp.MustCompile(`^/tmp/run/ws_cr-[a-f0-9]{16}_[0-9]+$`)
+var dependencyDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 var fixedArgs = map[string][]string{
 	"go-test": {"go", "test", "-mod=readonly", "./..."},
@@ -38,7 +39,8 @@ var fixedArgs = map[string][]string{
 var fixedEnv = map[string]string{
 	"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 	"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp",
-	"GOMAXPROCS": "2",
+	"GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy", "GOSUMDB": "off",
+	"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
 }
 
 var localEnvKeys = []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOTMPDIR", "TMPDIR",
@@ -47,10 +49,12 @@ var localEnvKeys = []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOTMPDIR",
 // CheckSpec is the complete immutable input to safety and permission checks.
 type CheckSpec struct {
 	ID, Runtime, RunnerPath, SkillRoot, Cwd, Artifact string
-	RepoSource                                        string
+	RepoSource, DependencyDigest                      string
 	Argv                                              []string
 	Env                                               map[string]string
 	Timeout                                           time.Duration
+	DependencyModules, DependencyEntries              int
+	DependencyBytes, DependencyExpandedBytes          int64
 	Network, Privileged, HostWrite                    bool
 }
 
@@ -86,7 +90,9 @@ func (a Authorizer) Authorize(ctx context.Context, spec CheckSpec) error {
 	if a.Policy == nil {
 		return a.recordDenied(ctx, spec, decisionEvidence{"permission", risk, "deny", "nil permission policy"})
 	}
-	arguments, err := json.Marshal(map[string]any{"check_id": spec.ID, "runtime": spec.Runtime, "argv": spec.Argv})
+	arguments, err := json.Marshal(map[string]any{"check_id": spec.ID, "runtime": spec.Runtime, "argv": spec.Argv,
+		"dependency_digest": spec.DependencyDigest, "dependency_modules": spec.DependencyModules, "dependency_bytes": spec.DependencyBytes,
+		"dependency_entries": spec.DependencyEntries, "dependency_expanded_bytes": spec.DependencyExpandedBytes})
 	if err != nil {
 		return err
 	}
@@ -182,6 +188,12 @@ func validateRuntimeEnvironment(spec CheckSpec) error {
 	if spec.Runtime == "local" {
 		return validateLocalEnvironment(spec.Env, spec.RepoSource)
 	}
+	if !dependencyDigestPattern.MatchString(spec.DependencyDigest) || spec.DependencyModules < 0 ||
+		spec.DependencyModules > 512 || spec.DependencyBytes < 0 || spec.DependencyBytes > 128<<20 ||
+		spec.DependencyEntries < 0 || spec.DependencyEntries > 100_000 ||
+		spec.DependencyExpandedBytes < 0 || spec.DependencyExpandedBytes > 256<<20 {
+		return errors.New("dependency snapshot metadata is outside trusted bounds")
+	}
 	return validateEnvironment(spec.Env)
 }
 
@@ -271,7 +283,8 @@ func decision(spec CheckSpec, evidence decisionEvidence) Decision {
 
 func digestFields(spec CheckSpec) []string {
 	fields := []string{spec.ID, spec.Runtime, spec.RunnerPath, spec.SkillRoot, spec.Cwd, spec.Artifact,
-		spec.RepoSource, spec.Timeout.String(),
+		spec.RepoSource, spec.DependencyDigest, fmt.Sprint(spec.DependencyModules), fmt.Sprint(spec.DependencyBytes),
+		fmt.Sprint(spec.DependencyEntries), fmt.Sprint(spec.DependencyExpandedBytes), spec.Timeout.String(),
 		fmt.Sprint(spec.Network), fmt.Sprint(spec.Privileged), fmt.Sprint(spec.HostWrite)}
 	fields = append(fields, spec.Argv...)
 	keys := make([]string, 0, len(spec.Env))

@@ -288,7 +288,7 @@ func TestFullAnalysisSourceAndAssignedTypeBranches(t *testing.T) {
 func TestFindingsDedupBucketAndRedact(t *testing.T) {
 	input := []reviewmodel.Finding{
 		{Severity: "medium", Category: "security", File: "a/../a/x.go", Line: 4, Evidence: "password=top-secret-value", Confidence: 0.70, Source: "patch", RuleID: "B"},
-		{Severity: "high", Category: "security", File: "a/x.go", Line: 4, Evidence: "shell sink", Confidence: 0.91, Source: "ast", RuleID: "A"},
+		{Severity: "high", Category: "security", File: "a/x.go", Line: 4, Evidence: `run("sh", "-c")`, Confidence: 0.91, Source: "ast", RuleID: "A"},
 		{Severity: "medium", Category: "missing_tests", File: "z.go", Line: 1, Confidence: 0.75, RuleID: "T"},
 	}
 	got := Findings(input)
@@ -300,6 +300,9 @@ func TestFindingsDedupBucketAndRedact(t *testing.T) {
 	}
 	if got[0].RuleID != "A,B" || got[0].Source != "ast,patch" {
 		t.Fatalf("merged provenance = %q, %q", got[0].RuleID, got[0].Source)
+	}
+	if got[0].Evidence != `run("sh", "-c")` {
+		t.Fatalf("merged evidence = %q", got[0].Evidence)
 	}
 	if strings.Contains(got[0].Evidence, "top-secret-value") {
 		t.Fatal("secret remains in evidence")

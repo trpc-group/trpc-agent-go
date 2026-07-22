@@ -123,6 +123,8 @@ type Report struct {
 }
 
 // FinalizeRequest atomically persists results and a terminal success state.
+// Status must be StatusCompleted or StatusCompletedWithWarnings; any other
+// status causes Finalize to return ErrInvalidTransition.
 type FinalizeRequest struct {
 	TaskID     string
 	Status     TaskStatus

@@ -62,6 +62,9 @@ func TestAuthorizerFailClosed(t *testing.T) {
 		{"environment", func(value *CheckSpec) { value.Env["LD_PRELOAD"] = "x" }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
 		{"environment value", func(value *CheckSpec) { value.Env["PATH"] = "/host/bin" }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
 		{"environment path pair", func(value *CheckSpec) { value.Env["CR_REPO_DIR"] = "/tmp/run/cr-fedcba9876543210/repo" }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
+		{"dependency digest", func(value *CheckSpec) { value.DependencyDigest = "bad" }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
+		{"dependency modules", func(value *CheckSpec) { value.DependencyModules = 513 }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
+		{"dependency expanded", func(value *CheckSpec) { value.DependencyExpandedBytes = 257 << 20 }, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{}, false},
 		{"persist failure", func(*CheckSpec) {}, tool.PermissionPolicyFunc(DefaultPolicy), &memoryRecorder{err: errors.New("db down")}, false},
 	}
 	for _, test := range tests {
@@ -84,13 +87,14 @@ func TestDecisionDigestBindsArtifactAndEnvironment(t *testing.T) {
 	second.Env = cloneEnv(first.Env)
 	second.Artifact = "result-fedcba9876543210.json"
 	second.Env["CR_RESULT_DIR"] = "/tmp/run/ws_cr-fedcba9876543210_0/out"
+	second.DependencyBytes++
 	if decision(first, decisionEvidence{}).ArgsDigest == decision(second, decisionEvidence{}).ArgsDigest {
 		t.Fatal("security-critical fields are not bound by decision digest")
 	}
 
 	reordered := first
 	reordered.Env = make(map[string]string, len(first.Env))
-	keys := []string{"CR_REPO_DIR", "CR_RESULT_DIR", "GOMAXPROCS", "TMPDIR", "GOMODCACHE", "GOCACHE", "HOME", "PATH"}
+	keys := []string{"CR_REPO_DIR", "CR_RESULT_DIR", "GOENV", "GOMAXPROCS", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOVCS", "HOME", "PATH", "TMPDIR"}
 	for _, key := range keys {
 		reordered.Env[key] = first.Env[key]
 	}
@@ -185,11 +189,12 @@ func validSpec(t *testing.T) CheckSpec {
 	if err := os.WriteFile(runner, []byte("runner"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json",
+	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json", DependencyDigest: strings.Repeat("0", 64),
 		RepoSource: root, Argv: []string{"go", "test", "-mod=readonly", "./..."}, Env: map[string]string{
 			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 			"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp",
-			"GOMAXPROCS":    "2",
+			"GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy", "GOSUMDB": "off",
+			"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
 			"CR_RESULT_DIR": "/tmp/run/ws_cr-0123456789abcdef_0/out", "CR_REPO_DIR": "/tmp/run/ws_cr-0123456789abcdef_0/work",
 		}, Timeout: time.Minute}
 }

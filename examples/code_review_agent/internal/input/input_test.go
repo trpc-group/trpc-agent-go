@@ -48,9 +48,7 @@ func TestValidFixtureName(t *testing.T) {
 	}
 }
 func TestCollectGitDiffWithoutHEADAndExternalDiff(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Fatalf("git is required: %v", err)
-	}
+	requireTestGit(t)
 	root := t.TempDir()
 	runTestGit(t, root, "init", "--quiet")
 	runTestGit(t, root, "config", "diff.external", "definitely-missing-code-review-command")
@@ -113,10 +111,18 @@ func TestCollectUnbornDiffUsesWorktreeInsteadOfIndex(t *testing.T) {
 }
 func runTestGit(t *testing.T, root string, args ...string) {
 	t.Helper()
+	requireTestGit(t)
 	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
 	cmd.Env = gitEnvironment()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
+	}
+}
+
+func requireTestGit(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is unavailable: %v", err)
 	}
 }
 

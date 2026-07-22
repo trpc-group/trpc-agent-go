@@ -12,6 +12,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -87,6 +88,8 @@ func TestSandboxFailuresCompleteWithWarningsAndAreClassified(t *testing.T) {
 	}{
 		{"returned errors", failingChecker{}, map[string]string{
 			"go-test": "*errors.errorString", "go-vet": "*errors.errorString"}},
+		{"dependency cache", dependencyCacheChecker{}, map[string]string{
+			"go-test": "dependency_cache", "go-vet": "dependency_cache"}},
 		{"status only", statusOnlyChecker{}, map[string]string{
 			"go-test": "sandbox_timeout", "go-vet": "sandbox_failed"}},
 	}
@@ -179,6 +182,13 @@ type failingChecker struct{}
 func (failingChecker) Check(_ context.Context, checkID, _ string, _ time.Duration) (sandbox.Run, error) {
 	return sandbox.Run{CheckID: checkID, Runtime: "fake", Status: "failed", ExitCode: -1,
 		Duration: time.Millisecond}, errors.New("injected sandbox failure")
+}
+
+type dependencyCacheChecker struct{}
+
+func (dependencyCacheChecker) Check(_ context.Context, checkID, _ string, _ time.Duration) (sandbox.Run, error) {
+	return sandbox.Run{CheckID: checkID, Runtime: "container", Status: "failed", ExitCode: -1,
+		Duration: time.Millisecond}, fmt.Errorf("%w: cache miss", sandbox.ErrDependencyCache)
 }
 
 type statusOnlyChecker struct{}

@@ -16,8 +16,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"text/template"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -127,44 +130,74 @@ func Render(snapshot Snapshot) (Documents, error) {
 // sanitizeSnapshot recursively redacts all JSON string values and object keys,
 // so new report fields cannot silently bypass the persistence boundary.
 func sanitizeSnapshot(snapshot Snapshot) (Snapshot, error) {
+	return rewriteSnapshot(snapshot, "redaction", redact.String)
+}
+
+func rewriteSnapshot(snapshot Snapshot, operation string, transform func(string) string) (Snapshot, error) {
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("marshal report for redaction: %w", err)
+		return Snapshot{}, fmt.Errorf("marshal report for %s: %w", operation, err)
 	}
 	var value any
 	if err := json.Unmarshal(encoded, &value); err != nil {
-		return Snapshot{}, fmt.Errorf("decode report for redaction: %w", err)
+		return Snapshot{}, fmt.Errorf("decode report for %s: %w", operation, err)
 	}
-	encoded, err = json.Marshal(sanitizeJSON(value))
+	encoded, err = json.Marshal(transformJSON(value, transform))
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("marshal redacted report: %w", err)
+		return Snapshot{}, fmt.Errorf("marshal report after %s: %w", operation, err)
 	}
 	var result Snapshot
 	if err := json.Unmarshal(encoded, &result); err != nil {
-		return Snapshot{}, fmt.Errorf("decode redacted report: %w", err)
+		return Snapshot{}, fmt.Errorf("decode report after %s: %w", operation, err)
 	}
 	return result, nil
 }
 
-func sanitizeJSON(value any) any {
+func transformJSON(value any, transform func(string) string) any {
 	switch typed := value.(type) {
 	case string:
-		return redact.String(typed)
+		return transform(typed)
 	case []any:
 		for index := range typed {
-			typed[index] = sanitizeJSON(typed[index])
+			typed[index] = transformJSON(typed[index], transform)
 		}
 	case map[string]any:
 		result := make(map[string]any, len(typed))
 		for key, item := range typed {
-			result[redact.String(key)] = sanitizeJSON(item)
+			result[transform(key)] = transformJSON(item, transform)
 		}
 		return result
 	}
 	return value
 }
+
+var markdownEscaper = strings.NewReplacer(
+	`\`, `\\`, "`", `\`+"`", "*", `\*`, "_", `\_`, "~", `\~`, "{", `\{`, "}", `\}`,
+	"[", `\[`, "]", `\]`, "(", `\(`, ")", `\)`, "#", `\#`, "+", `\+`,
+	"-", `\-`, "!", `\!`, "|", `\|`, ">", `\>`,
+)
+var reportRedactionTag = regexp.MustCompile(`\[REDACTED:[a-z_]+:[0-9a-f]{8}\]`)
+
+func escapeMarkdown(value string) string {
+	var tags []string
+	value = reportRedactionTag.ReplaceAllStringFunc(value, func(tag string) string {
+		tags = append(tags, tag)
+		return fmt.Sprintf("\x00CRMDREDACTED%d\x00", len(tags)-1)
+	})
+	value = strings.Join(strings.Fields(value), " ")
+	escaped := markdownEscaper.Replace(html.EscapeString(value))
+	for index, tag := range tags {
+		placeholder := fmt.Sprintf("\x00CRMDREDACTED%d\x00", index)
+		escaped = strings.ReplaceAll(escaped, placeholder, `\`+tag[:len(tag)-1]+`\]`)
+	}
+	return escaped
+}
+
 func renderMarkdown(snapshot Snapshot) (string, error) {
-	tmpl, err := template.New("review").Parse(markdownTemplate)
+	functions := template.FuncMap{"md": func(value any) string {
+		return escapeMarkdown(fmt.Sprint(value))
+	}}
+	tmpl, err := template.New("review").Funcs(functions).Parse(markdownTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse Markdown report template: %w", err)
 	}
@@ -177,10 +210,10 @@ func renderMarkdown(snapshot Snapshot) (string, error) {
 
 const markdownTemplate = `# Code Review Report
 
-- Task: {{.Task.ID}}
-- Status: {{.Task.Status}}
-- Conclusion: {{.Conclusion}}
-- Input: {{.Task.InputKind}} ({{.Task.InputDigest}})
+- Task: {{md .Task.ID}}
+- Status: {{md .Task.Status}}
+- Conclusion: {{md .Conclusion}}
+- Input: {{md .Task.InputKind}} ({{md .Task.InputDigest}})
 
 ## Findings summary
 
@@ -189,41 +222,41 @@ const markdownTemplate = `# Code Review Report
 - Needs human review: {{.Summary.HumanReview}}
 
 ### Severity distribution
-{{range $name, $count := .SeverityCounts}}- {{$name}}: {{$count}}
+{{range $name, $count := .SeverityCounts}}- {{md $name}}: {{$count}}
 {{else}}No severity counts.
 {{end}}
 
 ## Findings
 {{range .Findings}}
-### [{{.Severity}}] {{.Title}}
+### [{{md .Severity}}] {{md .Title}}
 
-- Location: {{.File}}:{{.Line}}
-- Category / rule: {{.Category}} / {{.RuleID}}
-- Evidence: {{.Evidence}}
-- Recommendation: {{.Recommendation}}
-- Confidence / source: {{.Confidence}} / {{.Source}}
+- Location: {{md .File}}:{{.Line}}
+- Category / rule: {{md .Category}} / {{md .RuleID}}
+- Evidence: {{md .Evidence}}
+- Recommendation: {{md .Recommendation}}
+- Confidence / source: {{.Confidence}} / {{md .Source}}
 {{else}}
 No actionable findings.
 {{end}}
 
 ## Warnings
-{{range .Warnings}}- {{.File}}:{{.Line}} {{.Title}} — {{.Recommendation}}
+{{range .Warnings}}- {{md .File}}:{{.Line}} {{md .Title}} — {{md .Recommendation}}
 {{else}}No warnings.
 {{end}}
 
 ## Needs human review
-{{range .NeedsHumanReview}}- {{.File}}:{{.Line}} {{.Title}} — {{.Recommendation}}
+{{range .NeedsHumanReview}}- {{md .File}}:{{.Line}} {{md .Title}} — {{md .Recommendation}}
 {{else}}No manual review items.
 {{end}}
 
 ## Governance
 
 - Blocked decisions: {{.Governance.Blocked}}
-{{range .Governance.Decisions}}- {{.Stage}} / {{.CheckID}}: {{.Action}} ({{.Reason}})
+{{range .Governance.Decisions}}- {{md .Stage}} / {{md .CheckID}}: {{md .Action}} ({{md .Reason}})
 {{end}}
 
 ## Sandbox runs
-{{range .SandboxRuns}}- {{.CheckID}}: {{.Status}}, {{.DurationMS}} ms, exit={{.ExitCode}}, timeout={{.TimedOut}}, truncated={{.OutputTruncated}}
+{{range .SandboxRuns}}- {{md .CheckID}}: {{md .Status}}, {{.DurationMS}} ms, exit={{.ExitCode}}, timeout={{.TimedOut}}, truncated={{.OutputTruncated}}
 {{else}}No sandbox runs.
 {{end}}
 
@@ -236,12 +269,12 @@ No actionable findings.
 - Finding count: {{.Metrics.FindingCount}}
 
 ### Error type distribution
-{{range $name, $count := .Metrics.ErrorTypeCounts}}- {{$name}}: {{$count}}
+{{range $name, $count := .Metrics.ErrorTypeCounts}}- {{md $name}}: {{$count}}
 {{else}}No error types.
 {{end}}
 
 ## Artifacts
-{{range .Artifacts}}- {{.Kind}}: {{.Path}} ({{.SizeBytes}} bytes, sha256={{.SHA256}})
+{{range .Artifacts}}- {{md .Kind}}: {{md .Path}} ({{.SizeBytes}} bytes, sha256={{md .SHA256}})
 {{else}}No artifacts.
 {{end}}
 
@@ -260,7 +293,7 @@ type Written struct {
 	JSONBytes, MarkdownBytes     int64
 }
 
-// Write publishes each report with a temporary file and atomic rename.
+// Write publishes each report atomically without replacing an existing target.
 func Write(outputDir string, documents Documents) (Written, error) {
 	dir, err := prepareOutputDirectory(outputDir)
 	if err != nil {
@@ -290,11 +323,6 @@ func prepareOutputDirectory(outputDir string) (string, error) {
 	return abs, nil
 }
 func writeAtomic(path string, content []byte) error {
-	if _, err := os.Lstat(path); err == nil {
-		return fmt.Errorf("report target already exists: %s", filepath.Base(path))
-	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("inspect report target: %w", err)
-	}
 	file, err := os.CreateTemp(filepath.Dir(path), ".review-*")
 	if err != nil {
 		return fmt.Errorf("create temporary report: %w", err)
@@ -316,8 +344,11 @@ func writeAtomic(path string, content []byte) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close temporary report: %w", err)
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := os.Link(temporary, path); err != nil {
 		return fmt.Errorf("publish report: %w", err)
+	}
+	if err := os.Remove(temporary); err != nil {
+		return errors.Join(fmt.Errorf("remove temporary report: %w", err), removeIfExists(path))
 	}
 	return nil
 }

@@ -42,7 +42,9 @@ delete, binary, and no-HEAD repositories. `--files-file` accepts only validated
 repository-relative paths.
 
 Each run writes `review_report.json`, `review_report.md`, and SQLite state.
-Use a fresh `--output-dir` for each run; report files are never overwritten.
+Use a fresh, caller-private `--output-dir` for each run; report files are
+atomically published and never overwritten. Do not share that directory with
+unrelated writers.
 `GetReview(taskID)` returns task, input summary, sandbox runs, governance
 decisions, findings, metrics, artifacts, and canonical reports. Raw diff and
 source are never persisted. Findings are normalized by bucket and deduplicated
@@ -58,6 +60,13 @@ bounded tmpfs/resources/output, a trusted runner,
 exact artifact collection, and unconditional cleanup. Deny, ask, policy error,
 or decision persistence failure prevents execution. Secret redaction is applied
 again at report, SQLite, CLI, telemetry, error, and artifact boundaries.
+
+For Go dependencies, the host cache is never mounted wholesale. The application
+selects only checksummed `go.sum` versions, verifies official module zip and
+`go.mod` hashes plus aggregate size limits, and mounts a per-check `file://`
+module proxy read-only. The target process gets a fresh writable module cache in
+tmpfs while container networking remains disabled. Missing or invalid cached
+dependencies become a recorded `dependency_cache` sandbox failure.
 
 Command execution is bounded by the caller context, the trusted runner timeout,
 and `RunProgramSpec.Timeout`. The shared container runtime's existing `New` and

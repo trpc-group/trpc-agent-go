@@ -10,8 +10,12 @@
 package sandbox
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +28,8 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
+	"golang.org/x/mod/module"
+	"golang.org/x/mod/sumdb/dirhash"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/governance"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -332,6 +338,190 @@ func writeLocalFixture(t *testing.T, root, name, content string) {
 	}
 }
 
+func TestBuildModuleProxyVerifiedAndDeterministic(t *testing.T) {
+	repo, cache := t.TempDir(), t.TempDir()
+	modulePath, version := "github.com/example/dependency", "v1.2.3"
+	writeModuleCacheFixture(t, repo, cache, modulePath, version)
+	first, err := buildModuleProxy(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatalf("buildModuleProxy() error = %v", err)
+	}
+	defer first.Close()
+	second, err := buildModuleProxy(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatalf("second buildModuleProxy() error = %v", err)
+	}
+	defer second.Close()
+	if first.Modules != 1 || first.Bytes == 0 || len(first.Digest) != 64 || first.Digest != second.Digest {
+		t.Fatalf("snapshots = %#v, %#v", first, second)
+	}
+	escapedPath, _ := module.EscapePath(modulePath)
+	escapedVersion, _ := module.EscapeVersion(version)
+	for _, suffix := range []string{".info", ".mod", ".zip"} {
+		name := filepath.Join(first.Path, filepath.FromSlash(escapedPath), "@v", escapedVersion+suffix)
+		info, statErr := os.Stat(name)
+		if statErr != nil || info.Mode().Perm()&0o222 != 0 {
+			t.Fatalf("snapshot entry %q info=%v error=%v", name, info, statErr)
+		}
+	}
+}
+
+func TestBuildModuleProxyKnownGoCacheEntry(t *testing.T) {
+	repo := t.TempDir()
+	sum := "github.com/sourcegraph/go-diff v0.7.0 h1:9uLlrd5T46OXs5qpp8L/MTltk0zikUGi0sNNyCpA8G0=\n" +
+		"github.com/sourcegraph/go-diff v0.7.0/go.mod h1:iBszgVvyxdc8SFZ7gm69go2KDdt3ag071iBaWPF6cjs=\n"
+	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(sum), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := buildModuleProxy(context.Background(), repo, "")
+	if err != nil {
+		t.Fatalf("buildModuleProxy(known cache) error = %v", err)
+	}
+	defer proxy.Close()
+	if proxy.Modules != 1 || proxy.Entries == 0 || proxy.ExpandedBytes == 0 {
+		t.Fatalf("proxy = %#v", proxy)
+	}
+}
+
+func TestBuildModuleProxyIncludesGoModOnlyEntry(t *testing.T) {
+	repo, cache := t.TempDir(), t.TempDir()
+	modulePath, version := "github.com/example/dependency", "v1.2.3"
+	modPath, _ := writeModuleCacheFixture(t, repo, cache, modulePath, version)
+	content, err := os.ReadFile(filepath.Join(repo, "go.sum"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(content)), "\n")
+	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(lines[1]+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := buildModuleProxy(context.Background(), repo, cache)
+	if err != nil {
+		t.Fatalf("buildModuleProxy() error = %v", err)
+	}
+	defer proxy.Close()
+	escapedPath, _ := module.EscapePath(modulePath)
+	escapedVersion, _ := module.EscapeVersion(version)
+	dir := filepath.Join(proxy.Path, filepath.FromSlash(escapedPath), "@v")
+	if _, err := os.Stat(filepath.Join(dir, escapedVersion+".mod")); err != nil {
+		t.Fatalf("go.mod-only entry missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, escapedVersion+".zip")); !os.IsNotExist(err) {
+		t.Fatalf("unchecked zip was copied: %v", err)
+	}
+	if _, err := os.Stat(modPath); err != nil {
+		t.Fatalf("host fixture changed: %v", err)
+	}
+}
+
+func TestBuildModuleProxyRejectsUnsafeInputs(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*testing.T, string, string)
+	}{
+		{"zip content mismatch", func(t *testing.T, _ string, zipPath string) {
+			if err := os.WriteFile(zipPath, []byte("not a zip"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go.mod content mismatch", func(t *testing.T, modPath, _ string) {
+			if err := os.WriteFile(modPath, []byte("module attacker.example/replaced\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo, cache := t.TempDir(), t.TempDir()
+			modPath, zipPath := writeModuleCacheFixture(t, repo, cache, "github.com/example/dependency", "v1.2.3")
+			test.mutate(t, modPath, zipPath)
+			if proxy, err := buildModuleProxy(context.Background(), repo, cache); !errors.Is(err, ErrDependencyCache) {
+				_ = proxy.Close()
+				t.Fatalf("buildModuleProxy() error = %v", err)
+			}
+		})
+	}
+	repo := t.TempDir()
+	var sum strings.Builder
+	for index := 0; index <= maxProxyModules; index++ {
+		fmt.Fprintf(&sum, "example.com/module%d v1.0.0 h1:test\n", index)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(sum.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir()); !errors.Is(err, ErrDependencyCache) {
+		t.Fatalf("module limit error = %v", err)
+	}
+}
+
+func TestBuildModuleProxyRejectsSymlinkGoSum(t *testing.T) {
+	repo := t.TempDir()
+	target := filepath.Join(t.TempDir(), "outside.sum")
+	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(repo, "go.sum")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir()); !errors.Is(err, ErrDependencyCache) {
+		t.Fatalf("buildModuleProxy() error = %v", err)
+	}
+}
+
+func writeModuleCacheFixture(t *testing.T, repo, cache, modulePath, version string) (string, string) {
+	t.Helper()
+	escapedPath, err := module.EscapePath(modulePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	escapedVersion, err := module.EscapeVersion(version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(cache, "cache", "download", filepath.FromSlash(escapedPath), "@v")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	modContent := []byte("module " + modulePath + "\n\ngo 1.23\n")
+	modSum, err := dirhash.Hash1([]string{"go.mod"}, func(string) (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(modContent)), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var zipContent bytes.Buffer
+	archive := zip.NewWriter(&zipContent)
+	entry, err := archive.Create(modulePath + "@" + version + "/dependency.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("package dependency\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zipSum, err := hashModuleZip(zipContent.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := filepath.Join(dir, escapedVersion)
+	for name, content := range map[string][]byte{
+		base + ".info":    []byte(`{"Version":"` + version + `","Time":"2026-01-01T00:00:00Z"}`),
+		base + ".mod":     modContent,
+		base + ".zip":     zipContent.Bytes(),
+		base + ".ziphash": []byte(zipSum),
+	} {
+		if err := os.WriteFile(name, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sum := fmt.Sprintf("%s %s %s\n%s %s/go.mod %s\n", modulePath, version, zipSum, modulePath, version, modSum)
+	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(sum), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return base + ".mod", base + ".zip"
+}
+
 const inspectTimeout = 45 * time.Second
 
 type integrationRecorder struct{ count int }
@@ -354,6 +544,22 @@ func TestContainerCheckRealDocker(t *testing.T) {
 	result, err := runner.Check(context.Background(), "go-test", filepath.Join(root, "fixtures", "composite", "repo"), 30*time.Second)
 	if err != nil || result.Status != "completed" || result.ExitCode != 0 || result.ArtifactBytes <= 0 || result.SHA256 == "" || recorder.count != 2 {
 		t.Fatalf("Check() result=%#v decisions=%d error=%v", result, recorder.count, err)
+	}
+}
+
+func TestContainerCheckOfflineDependencyRealDocker(t *testing.T) {
+	if os.Getenv("CODE_REVIEW_DOCKER_TEST") != "1" {
+		t.Skip("set CODE_REVIEW_DOCKER_TEST=1 for real Docker smoke")
+	}
+	repo := t.TempDir()
+	writeLocalFixture(t, repo, "go.mod", "module offlinefixture\n\ngo 1.23\n\nrequire github.com/sourcegraph/go-diff v0.7.0\n")
+	writeLocalFixture(t, repo, "go.sum", "github.com/sourcegraph/go-diff v0.7.0 h1:9uLlrd5T46OXs5qpp8L/MTltk0zikUGi0sNNyCpA8G0=\ngithub.com/sourcegraph/go-diff v0.7.0/go.mod h1:iBszgVvyxdc8SFZ7gm69go2KDdt3ag071iBaWPF6cjs=\n")
+	writeLocalFixture(t, repo, "dependency_test.go", "package offlinefixture\n\nimport (\"testing\"; \"github.com/sourcegraph/go-diff/diff\")\nfunc TestDependency(t *testing.T) { _, _ = diff.ParseMultiFileDiff(nil) }\n")
+	root := exampleRoot(t)
+	runner := Container{Authorizer: governance.Authorizer{Policy: tool.PermissionPolicyFunc(governance.DefaultPolicy), Recorder: &integrationRecorder{}}, BuildContext: root, SkillRoot: filepath.Join(root, "skills", "code-review")}
+	result, err := runner.Check(context.Background(), "go-test", repo, 45*time.Second)
+	if err != nil || result.Status != "completed" || result.ExitCode != 0 {
+		t.Fatalf("Check() result=%#v error=%v", result, err)
 	}
 }
 
@@ -418,7 +624,16 @@ func TestContainerConfigurationRealDocker(t *testing.T) {
 	name := "cr-inspect-" + mustRandomToken(t)
 	runner := Container{BuildContext: root, SkillRoot: filepath.Join(root, "skills", "code-review")}
 	repo := filepath.Join(root, "fixtures", "composite", "repo")
-	executor, err := runner.newExecutor(ctx, repo, name)
+	proxy, err := buildModuleProxy(ctx, repo, "")
+	if err != nil {
+		t.Fatalf("buildModuleProxy() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := proxy.Close(); err != nil {
+			t.Errorf("proxy Close() error = %v", err)
+		}
+	})
+	executor, err := runner.newExecutor(ctx, repo, name, proxy.Path)
 	if err != nil {
 		t.Fatalf("newExecutor() error = %v", err)
 	}
@@ -441,6 +656,15 @@ func TestContainerConfigurationRealDocker(t *testing.T) {
 		t.Fatalf("ContainerInspect() error = %v", err)
 	}
 	assertContainerConfig(t, inspected.Config, inspected.HostConfig)
+	proxyReadOnly := false
+	for _, mounted := range inspected.Mounts {
+		if mounted.Destination == moduleProxyTarget {
+			proxyReadOnly = !mounted.RW
+		}
+	}
+	if !proxyReadOnly {
+		t.Fatalf("module proxy mount is absent or writable: %#v", inspected.Mounts)
+	}
 	if err := executor.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
@@ -457,7 +681,8 @@ func assertContainerConfig(t *testing.T, config *container.Config, host *contain
 	if host.AutoRemove || host.Privileged || !host.ReadonlyRootfs || host.NetworkMode != "none" {
 		t.Fatalf("host hardening = %#v", host)
 	}
-	if len(host.Binds) != 1 || !strings.HasSuffix(host.Binds[0], ":"+stagingSourcePath+":ro") {
+	if len(host.Binds) != 2 || !strings.HasSuffix(host.Binds[0], ":"+stagingSourcePath+":ro") ||
+		!strings.HasSuffix(host.Binds[1], ":"+moduleProxyTarget+":ro") {
 		t.Fatalf("staging source is not read-only = %v", host.Binds)
 	}
 	for _, capability := range []string{"SETUID", "SETGID", "KILL"} {

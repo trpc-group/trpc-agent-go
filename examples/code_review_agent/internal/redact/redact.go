@@ -36,7 +36,7 @@ var patterns = []pattern{
 	{"named_secret", regexp.MustCompile(`(?i)(?:"|')?(?:api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)(?:"|')?[ \t]*[:=][ \t]*(?:"[^"\r\n]{4,}"|'[^'\r\n]{4,}'|[^\s,;}]{4,})`)},
 }
 
-var redactedTag = regexp.MustCompile(`\[REDACTED:[a-z_]+:[0-9a-f]{8}\]`)
+var redactedTag = regexp.MustCompile(`\\?\[REDACTED:[a-z_]+:[0-9a-f]{8}\\?\]`)
 
 const protectedTagFormat = "\x00CR_REDACTED_%d\x00"
 
@@ -44,6 +44,11 @@ const protectedTagFormat = "\x00CR_REDACTED_%d\x00"
 func String(value string) string {
 	var tags []string
 	result := redactedTag.ReplaceAllStringFunc(value, func(tag string) string {
+		leftEscaped := strings.HasPrefix(tag, `\[`)
+		rightEscaped := strings.HasSuffix(tag, `\]`)
+		if leftEscaped != rightEscaped {
+			return tag
+		}
 		placeholder := fmt.Sprintf(protectedTagFormat, len(tags))
 		tags = append(tags, tag)
 		return placeholder
@@ -62,5 +67,5 @@ func String(value string) string {
 
 // ContainsSecret reports whether redaction changes the input.
 func ContainsSecret(value string) bool {
-	return !strings.EqualFold(String(value), value)
+	return String(value) != value
 }

@@ -7,7 +7,6 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package sqlite implements durable review storage with embedded migrations.
 package store
 
 import (
@@ -396,7 +395,7 @@ const (
 	foreignKeysFlag = "on"
 )
 
-// Store persists complete review aggregates in SQLite.
+// SQLiteStore persists complete review aggregates in SQLite.
 type SQLiteStore struct{ db *sql.DB }
 
 // Open creates or opens a store and applies embedded migrations.
@@ -422,7 +421,7 @@ func dataSourceName(path string) (string, error) {
 		return "", fmt.Errorf("database path is empty")
 	}
 	if path == ":memory:" {
-		return "file:code-review-memory?mode=memory&cache=shared&_foreign_keys=on&_busy_timeout=" + busyTimeoutMS, nil
+		return "file::memory:?cache=private&_foreign_keys=on&_busy_timeout=" + busyTimeoutMS, nil
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -460,12 +459,13 @@ const insertTaskSQL = `INSERT INTO review_tasks
     (id,status,input_kind,input_digest,started_at,conclusion,error)
     VALUES(?,?,?,?,?,?,?)`
 
-// CreateTask inserts a running review task.
+// CreateTask inserts a running review task. IDs that contain detectable
+// credentials are rejected so relationship keys are never redacted or leaked.
 func (s *SQLiteStore) CreateTask(ctx context.Context, task Task) error {
-	if task.ID == "" || task.Status != StatusRunning || task.StartedAt.IsZero() {
+	if task.ID == "" || redact.ContainsSecret(task.ID) || task.Status != StatusRunning || task.StartedAt.IsZero() {
 		return fmt.Errorf("create task: %w", ErrInvalidTransition)
 	}
-	_, err := s.db.ExecContext(ctx, insertTaskSQL, redact.String(task.ID), task.Status, redact.String(task.InputKind), task.InputDigest, task.StartedAt.UTC().Format(timeFormat), redact.String(task.Conclusion), redact.String(task.Error))
+	_, err := s.db.ExecContext(ctx, insertTaskSQL, task.ID, task.Status, redact.String(task.InputKind), task.InputDigest, task.StartedAt.UTC().Format(timeFormat), redact.String(task.Conclusion), redact.String(task.Error))
 	if err != nil {
 		return fmt.Errorf("create review task: %w", err)
 	}

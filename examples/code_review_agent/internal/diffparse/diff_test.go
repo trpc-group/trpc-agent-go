@@ -39,6 +39,22 @@ func TestParseRenameAndDelete(t *testing.T) {
 	}
 }
 
+func TestParseCopyIsNotRename(t *testing.T) {
+	data := []byte("diff --git a/source.go b/copy.go\nsimilarity index 100%\ncopy from source.go\ncopy to copy.go\n--- a/source.go\n+++ b/copy.go\n")
+	files := mustParse(t, data)
+	if len(files) != 1 || files[0].Renamed {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
+func TestParseChangedPathWithoutExtendedHeadersIsRename(t *testing.T) {
+	data := []byte("diff --git a/old.go b/new.go\n--- a/old.go\n+++ b/new.go\n@@ -1 +1 @@\n-old\n+new\n")
+	files := mustParse(t, data)
+	if len(files) != 1 || !files[0].Renamed {
+		t.Fatalf("files = %#v", files)
+	}
+}
+
 func TestParseMalformed(t *testing.T) {
 	if _, err := Parse([]byte("not a diff")); err == nil {
 		t.Fatal("Parse() error = nil")

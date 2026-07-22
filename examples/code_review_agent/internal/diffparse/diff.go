@@ -20,7 +20,8 @@ import (
 	sourcediff "github.com/sourcegraph/go-diff/diff"
 )
 
-// ChangedLine is one line from a diff hunk.
+// ChangedLine is one line from a diff hunk. Kind is ' ', '+', or '-'.
+// OldLine or NewLine is zero when that side has no corresponding line.
 type ChangedLine struct {
 	Kind    byte
 	Content string
@@ -65,7 +66,9 @@ func Parse(data []byte) ([]ChangedFile, error) {
 				strings.Contains(extended, "GIT binary patch")),
 		}
 		changed.Deleted = file.NewName == "/dev/null"
-		changed.Renamed = changed.OldPath != changed.NewPath && !changed.Deleted && file.OrigName != "/dev/null"
+		changed.Renamed = changed.OldPath != changed.NewPath && !changed.Deleted &&
+			file.OrigName != "/dev/null" && !strings.Contains(extended, "copy from ") &&
+			!strings.Contains(extended, "copy to ")
 		for _, hunk := range file.Hunks {
 			changed.Hunks = append(changed.Hunks, parseHunk(hunk))
 		}

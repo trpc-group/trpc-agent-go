@@ -24,10 +24,16 @@ an explicitly enabled development fallback.
 
 The application, not the model, constructs the complete check specification.
 Safety filtering and PermissionPolicy evaluate exact workspace/runtime values,
-and both decisions are durable before staging or execution. Timeout and failed runs are
-persisted and downgrade the task to `completed_with_warnings` instead of
+and both decisions are durable before staging or execution. Sandbox timeouts
+and failed sandbox runs are persisted and downgrade the task to `completed_with_warnings` instead of
 crashing the review. Caller cancellation is persisted but retains a failed task
 status.
+
+Container checks resolve dependencies only through a bounded, per-check,
+read-only `file://` proxy assembled from exact `go.sum` entries. The project gets
+an isolated writable `GOMODCACHE`; the container remains offline. A missing or
+invalid cached dependency is recorded as a sandbox warning, never a reason to
+enable network access.
 
 ## Extending the Skill
 

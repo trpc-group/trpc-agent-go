@@ -70,7 +70,6 @@ func merge(left, right reviewmodel.Finding) reviewmodel.Finding {
 	}
 	best.RuleID = joinUnique(best.RuleID, other.RuleID)
 	best.Source = joinUnique(best.Source, other.Source)
-	best.Evidence = joinUnique(best.Evidence, other.Evidence)
 	best.Bucket = chooseBucket(best)
 	return best
 }

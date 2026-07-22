@@ -199,6 +199,9 @@ func sandboxErrorType(run sandbox.Run, runErr error) string {
 	if errors.Is(runErr, sandbox.ErrLifecycle) {
 		return "sandbox_lifecycle"
 	}
+	if errors.Is(runErr, sandbox.ErrDependencyCache) {
+		return "dependency_cache"
+	}
 	if runErr != nil {
 		return fmt.Sprintf("%T", runErr)
 	}

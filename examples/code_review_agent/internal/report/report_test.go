@@ -11,12 +11,15 @@ package report
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/reviewmodel"
 	storemodel "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
 )
@@ -33,6 +36,9 @@ func TestRenderParityAndRedaction(t *testing.T) {
 		strings.Contains(string(documents.Markdown), reportTestSecret) {
 		t.Fatal("rendered documents contain secret")
 	}
+	if redact.ContainsSecret(string(documents.Markdown)) {
+		t.Fatalf("Markdown is not redaction-stable:\n%s\n--- redacted again ---\n%s", documents.Markdown, redact.String(string(documents.Markdown)))
+	}
 	var decoded Snapshot
 	if err := json.Unmarshal(documents.JSON, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
@@ -42,7 +48,7 @@ func TestRenderParityAndRedaction(t *testing.T) {
 		t.Fatalf("report summary = %#v", decoded)
 	}
 	for _, expected := range []string{"Findings: 1", "Warnings: 1", "Needs human review: 1",
-		"Blocked decisions: 1", "Severity distribution", "high: 1", "Error type distribution", "sandbox_timeout: 1"} {
+		"Blocked decisions: 1", "Severity distribution", "high: 1", "Error type distribution", `sandbox\_timeout: 1`} {
 		if !strings.Contains(string(documents.Markdown), expected) {
 			t.Fatalf("Markdown missing %q", expected)
 		}
@@ -95,8 +101,86 @@ func TestWriteRemovesJSONWhenMarkdownCannotPublish(t *testing.T) {
 	if _, err := Write(outputDir, Documents{JSON: []byte("{}"), Markdown: []byte("report")}); err == nil {
 		t.Fatal("Write() error = nil")
 	}
+	content, err := os.ReadFile(markdownPath)
+	if err != nil || string(content) != "existing" {
+		t.Fatalf("existing Markdown = %q, %v", content, err)
+	}
 	if _, err := os.Stat(filepath.Join(outputDir, jsonFileName)); !os.IsNotExist(err) {
 		t.Fatalf("partial JSON remains: %v", err)
+	}
+}
+
+func TestRenderNeutralizesMarkdownStructure(t *testing.T) {
+	const hostile = "unsafe\n# forged | `code` _emphasis_ ~~strike~~ <script>alert(1)</script> [REDACTED:named_secret:00000000](javascript:alert(1))"
+	review := reportTestReview()
+	review.Findings[0].Title = hostile
+	review.Findings[0].File = hostile
+	review.Decisions[0].Reason = hostile
+	review.Artifacts[0].Path = hostile
+	documents, err := Render(Build(review))
+	if err != nil {
+		t.Fatalf("Render() error = %v", err)
+	}
+	markdown := string(documents.Markdown)
+	for _, unsafe := range []string{"\n# forged", "<script>", " | `code`"} {
+		if strings.Contains(markdown, unsafe) {
+			t.Fatalf("Markdown contains unsafe structure %q: %s", unsafe, markdown)
+		}
+	}
+	if !strings.Contains(markdown, `\# forged \| \`+"`"+`code\`+"`"+` \_emphasis\_ \~\~strike\~\~ &lt;script&gt;`) ||
+		!strings.Contains(markdown, `\[REDACTED:named_secret:00000000\]\(javascript:alert\(1\)\)`) {
+		t.Fatalf("Markdown did not preserve escaped text: %s", markdown)
+	}
+	if !strings.Contains(markdown, `\[REDACTED:named_secret:`) {
+		t.Fatalf("redaction marker is not safely visible: %s", markdown)
+	}
+	var decoded Snapshot
+	if err := json.Unmarshal(documents.JSON, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if decoded.Findings[0].Title != hostile || decoded.Governance.Decisions[0].Reason != hostile {
+		t.Fatalf("JSON was Markdown-escaped: %#v", decoded)
+	}
+}
+
+func TestWriteAtomicConcurrentNoClobber(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "report.md")
+	const writers = 32
+	var group sync.WaitGroup
+	type result struct {
+		content string
+		err     error
+	}
+	results := make(chan result, writers)
+	candidates := make(map[string]struct{}, writers)
+	for index := 0; index < writers; index++ {
+		content := fmt.Sprintf("writer-%d", index)
+		candidates[content] = struct{}{}
+		group.Add(1)
+		go func(content string) {
+			defer group.Done()
+			results <- result{content: content, err: writeAtomic(target, []byte(content))}
+		}(content)
+	}
+	group.Wait()
+	close(results)
+	succeeded := 0
+	for result := range results {
+		if result.err == nil {
+			succeeded++
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("successful writers = %d", succeeded)
+	}
+	content, err := os.ReadFile(target)
+	if _, ok := candidates[string(content)]; err != nil || !ok {
+		t.Fatalf("published content = %q, %v", content, err)
+	}
+	temporary, err := filepath.Glob(filepath.Join(dir, ".review-*"))
+	if err != nil || len(temporary) != 0 {
+		t.Fatalf("temporary reports = %v, %v", temporary, err)
 	}
 }
 

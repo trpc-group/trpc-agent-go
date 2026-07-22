@@ -109,6 +109,10 @@ func TestStoreConstraintsAndNotFound(t *testing.T) {
 	if err := database.CreateTask(ctx, Task{ID: "bad", Status: StatusCompleted}); !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("CreateTask(completed) error = %v", err)
 	}
+	if err := database.CreateTask(ctx, Task{ID: "token=secret-task-value", Status: StatusRunning,
+		StartedAt: testTime()}); !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("CreateTask(secret ID) error = %v", err)
+	}
 	if err := database.SaveRun(ctx, "missing", SandboxRun{ID: "run-missing"}); err == nil {
 		t.Fatal("SaveRun(missing task) error = nil")
 	}
@@ -124,6 +128,30 @@ func TestStoreConstraintsAndNotFound(t *testing.T) {
 	})
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("Finalize(failed) error = %v", err)
+	}
+}
+
+func TestMemoryStoresAreIsolated(t *testing.T) {
+	ctx := context.Background()
+	first := openTestStore(t)
+	second := openTestStore(t)
+	createTestTask(t, first, "task-isolated", testTime())
+	if _, err := second.GetReview(ctx, "task-isolated"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("second GetReview() error = %v", err)
+	}
+}
+
+func TestTaskIDRoundTripsWithoutRedaction(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t)
+	const taskID = "task-Case_123"
+	createTestTask(t, database, taskID, testTime())
+	if err := database.SaveRun(ctx, taskID, SandboxRun{ID: "run-task-id", Status: "passed"}); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	review, err := database.GetReview(ctx, taskID)
+	if err != nil || review.Task.ID != taskID || len(review.Runs) != 1 {
+		t.Fatalf("GetReview() = %#v, %v", review, err)
 	}
 }
 

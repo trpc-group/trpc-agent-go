@@ -10,6 +10,7 @@ require (
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/sourcegraph/go-diff v0.7.0
+	golang.org/x/mod v0.24.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v0.5.0
 )

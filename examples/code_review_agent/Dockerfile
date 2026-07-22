@@ -15,5 +15,8 @@ COPY --from=builder --chown=root:root /cr-checkrunner /usr/local/bin/cr-checkrun
 RUN chmod 0755 /usr/local/bin/cr-checkrunner
 
 WORKDIR /
+# Root is intentional (Trivy DS-0002): the trusted runner prepares private
+# tmpfs directories, uses CAP_SETUID/CAP_SETGID, then drops the reviewed Go
+# process to UID/GID 65532.
 USER 0:0
 CMD ["tail", "-f", "/dev/null"]

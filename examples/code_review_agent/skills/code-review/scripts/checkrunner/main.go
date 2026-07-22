@@ -195,7 +195,8 @@ func failedResult(checkID string, started time.Time, err error) checkResult {
 }
 
 func targetEnvironment() []string {
-	keys := []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "TMPDIR", "GOMAXPROCS"}
+	keys := []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "TMPDIR", "GOMAXPROCS",
+		"GOPROXY", "GOSUMDB", "GOENV", "GOTOOLCHAIN", "GOVCS"}
 	env := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {

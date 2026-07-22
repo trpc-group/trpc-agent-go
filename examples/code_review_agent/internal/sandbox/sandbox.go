@@ -80,9 +80,9 @@ type runnerResult struct {
 
 // Container executes approved checks with the production container runtime.
 type Container struct {
-	Authorizer              governance.Authorizer
-	BuildContext, SkillRoot string
-	factory                 func(string) (containerExecutor, error)
+	Authorizer                           governance.Authorizer
+	BuildContext, SkillRoot, ModuleCache string
+	factory                              func(string) (containerExecutor, error)
 }
 type containerExecutor interface {
 	Engine() codeexecutor.Engine
@@ -97,6 +97,18 @@ type checkRequest struct {
 // Check authorizes, stages, runs, collects, and destroys one container.
 func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout time.Duration) (result Run, resultErr error) {
 	result = failedRun(checkID)
+	proxy, err := buildModuleProxy(ctx, repoPath, c.ModuleCache)
+	if err != nil {
+		result.Error = redact.String(err.Error())
+		return result, err
+	}
+	defer func() {
+		if cleanupErr := proxy.Close(); cleanupErr != nil {
+			result.Status = "failed"
+			result.Error = redact.String(cleanupErr.Error())
+			resultErr = errors.Join(resultErr, fmt.Errorf("%w: cleanup module proxy: %v", ErrLifecycle, cleanupErr))
+		}
+	}()
 	token, err := randomToken()
 	if err != nil {
 		return result, err
@@ -104,8 +116,8 @@ func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout 
 	artifact := resultFilePrefix + token + ".json"
 	workspaceID := workspaceIDPrefix + token
 	runnerSource := filepath.Join(c.SkillRoot, filepath.FromSlash(runnerRelativePath))
-	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout}
-	executor, err := c.createExecutor(ctx, repoPath, workspaceID)
+	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, DependencyDigest: proxy.Digest, DependencyModules: proxy.Modules, DependencyBytes: proxy.Bytes, DependencyEntries: proxy.Entries, DependencyExpandedBytes: proxy.ExpandedBytes}
+	executor, err := c.createExecutor(ctx, repoPath, workspaceID, proxy.Path)
 	if err != nil {
 		return result, err
 	}
@@ -247,23 +259,23 @@ func validateRunnerResult(result runnerResult, request checkRequest) error {
 func failedRun(checkID string) Run {
 	return Run{CheckID: checkID, Runtime: "container", Status: "failed", ExitCode: -1}
 }
-func (c Container) newExecutor(ctx context.Context, repoPath, containerName string) (*containerexec.CodeExecutor, error) {
+func (c Container) newExecutor(ctx context.Context, repoPath, containerName, proxyPath string) (*containerexec.CodeExecutor, error) {
 	pids := int64(containerPIDs)
 	repoPath, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve staging source: %w", err)
 	}
-	executor, err := containerexec.New(containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: []string{repoPath + ":" + stagingSourcePath + ":ro"}, CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
+	executor, err := containerexec.New(containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: []string{repoPath + ":" + stagingSourcePath + ":ro", proxyPath + ":" + moduleProxyTarget + ":ro"}, CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
 	if err != nil {
 		return nil, err
 	}
 	return executor, nil
 }
-func (c Container) createExecutor(ctx context.Context, repoPath, containerName string) (containerExecutor, error) {
+func (c Container) createExecutor(ctx context.Context, repoPath, containerName, proxyPath string) (containerExecutor, error) {
 	if c.factory != nil {
 		return c.factory(repoPath)
 	}
-	return c.newExecutor(ctx, repoPath, containerName)
+	return c.newExecutor(ctx, repoPath, containerName, proxyPath)
 }
 func fixedArgv(checkID string) []string {
 	if checkID == "go-vet" {
@@ -272,7 +284,7 @@ func fixedArgv(checkID string) []string {
 	return []string{"go", "test", "-mod=readonly", "./..."}
 }
 func targetEnv(workspace string) map[string]string {
-	return map[string]string{"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home", "GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work"}
+	return map[string]string{"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home", "GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "GOPROXY": "file://" + moduleProxyTarget, "GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work"}
 }
 func randomToken() (string, error) {
 	data := make([]byte, randomTokenBytes)
@@ -298,7 +310,7 @@ func (f Fake) Check(ctx context.Context, checkID, _ string, timeout time.Duratio
 		return result, err
 	}
 	artifact := resultFilePrefix + token + ".json"
-	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0")}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0"), DependencyDigest: emptyProxyDigest()}
 	if err := f.Authorizer.Authorize(ctx, spec); err != nil {
 		return result, err
 	}
