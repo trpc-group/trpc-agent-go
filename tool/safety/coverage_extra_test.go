@@ -416,6 +416,77 @@ func TestCurlConnectionOverrideHostsCheckedAgainstAllowlist(t *testing.T) {
 	}
 }
 
+func TestCurlConfigFilesNeedReview(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedDomains = []string{"github.com"}
+	scanner := NewScanner(p)
+
+	tests := []struct {
+		name     string
+		command  string
+		evidence string
+	}{
+		{
+			name:     "separate short config",
+			command:  "curl -K /tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			evidence: "curl -K /tmp/curlrc",
+		},
+		{
+			name:     "attached short config",
+			command:  "curl -K/tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			evidence: "curl -K /tmp/curlrc",
+		},
+		{
+			name:     "equals short config",
+			command:  "curl -K=/tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			evidence: "curl -K /tmp/curlrc",
+		},
+		{
+			name:     "separate long config",
+			command:  "curl --config /tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			evidence: "curl --config /tmp/curlrc",
+		},
+		{
+			name:     "equals long config",
+			command:  "curl --config=/tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			evidence: "curl --config /tmp/curlrc",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := scanner.Scan(context.Background(), Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tc.command,
+			})
+			require.Equal(t, DecisionAsk, report.Decision, report.Findings)
+			require.True(t, hasFindingEvidence(report, ruleNetworkEgress, tc.evidence), report.Findings)
+		})
+	}
+}
+
+func TestNonHTTPNetworkURLsCheckedAgainstAllowlist(t *testing.T) {
+	p := DefaultPolicy()
+	p.AllowedDomains = []string{"github.com"}
+	scanner := NewScanner(p)
+
+	report := scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "curl ftp://evil.example/file https://github.com/trpc-group/trpc-agent-go",
+	})
+	require.Equal(t, DecisionDeny, report.Decision, report.Findings)
+	require.True(t, hasFindingEvidence(report, ruleNetworkEgress, "ftp://evil.example/file"), report.Findings)
+
+	report = scanner.Scan(context.Background(), Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "curl file:///tmp/report https://github.com/trpc-group/trpc-agent-go",
+	})
+	require.Equal(t, DecisionAllow, report.Decision, report.Findings)
+	require.False(t, hasRule(report, ruleNetworkEgress), report.Findings)
+}
+
 func TestGitNetworkRemotesCheckedAgainstAllowlist(t *testing.T) {
 	p := DefaultPolicy()
 	p.AllowedCommands = []string{"git"}

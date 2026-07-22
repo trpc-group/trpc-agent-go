@@ -123,6 +123,28 @@ jobs:
           set -euo pipefail
           cd test
           go test ./...
+  tool-safety-example:
+    name: tool safety example
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.EXAMPLES_GO_VERSION }}"
+          cache-dependency-path: |
+            examples/go.mod
+            examples/go.sum
+      - name: Test tool safety guard example
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd examples
+          go test ./tool_safety_guard -count=1
+          go run ./tool_safety_guard \
+            -samples tool_safety_guard/samples.json \
+            -policy tool_safety_guard/tool_safety_policy.yaml \
+            -report "${RUNNER_TEMP}/tool_safety_report.json" \
+            -audit "${RUNNER_TEMP}/tool_safety_audit.jsonl"
   coverage:
     name: coverage
     runs-on: ubuntu-latest

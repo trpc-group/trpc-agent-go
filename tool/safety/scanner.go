@@ -54,12 +54,13 @@ const (
 )
 
 var (
-	urlRe     = regexp.MustCompile(`(?i)\bhttps?://[^\s'"<>]+`)
-	quotedRe  = regexp.MustCompile(`['"]([^'"]+)['"]`)
-	sshPathRe = regexp.MustCompile(`(?i)(^|\s)/(home/[^/\s]+|root)/\.ssh(/|\s|$)`)
-	awsPathRe = regexp.MustCompile(`(?i)(^|\s)/(home/[^/\s]+|root)/\.aws(/|\s|$)`)
-	envFileRe = regexp.MustCompile(`(?i)(^|/)\.env([.\w-]*)(\s|$)`)
-	secretRes = []*regexp.Regexp{
+	urlRe           = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s'"<>]+`)
+	pathCandidateRe = regexp.MustCompile(`(?:~|/)[^\s'"<>|&;),\]}]+`)
+	quotedRe        = regexp.MustCompile(`['"]([^'"]+)['"]`)
+	sshPathRe       = regexp.MustCompile(`(?i)(^|\s)/(home/[^/\s]+|root)/\.ssh(/|\s|$)`)
+	awsPathRe       = regexp.MustCompile(`(?i)(^|\s)/(home/[^/\s]+|root)/\.aws(/|\s|$)`)
+	envFileRe       = regexp.MustCompile(`(?i)(^|/)\.env([.\w-]*)(\s|$)`)
+	secretRes       = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)\b(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*"[^"]+"`),
 		regexp.MustCompile(`(?i)\b(api[_-]?key|token|password|passwd|secret)\s*[:=]\s*'[^']+'`),
 		regexp.MustCompile(`(?i)"(api[_-]?key|token|password|passwd|secret|authorization)"\s*:\s*"[^"]+"`),
@@ -683,9 +684,9 @@ func scanSensitivePaths(texts []string, p Policy) []Finding {
 			if needle == "" {
 				continue
 			}
-			if sensitivePathMatch(text, needle) {
+			if evidence, ok := sensitivePathMatchEvidence(text, needle); ok {
 				findings = append(findings, finding(ruleSensitivePath,
-					"sensitive_path", RiskCritical, evidenceAround(text, denied),
+					"sensitive_path", RiskCritical, evidenceAround(text, evidence),
 					"do not access host credentials, dot-env files, or protected system paths",
 					p.SensitivePathReadAction))
 			}
@@ -695,42 +696,91 @@ func scanSensitivePaths(texts []string, p Policy) []Finding {
 }
 
 func sensitivePathMatch(text, denied string) bool {
+	_, ok := sensitivePathMatchEvidence(text, denied)
+	return ok
+}
+
+func sensitivePathMatchEvidence(text, denied string) (string, bool) {
 	low := strings.ToLower(text)
 	needle := strings.ToLower(denied)
 	if needle == "~/.ssh" && sshPathRe.FindString(low) != "" {
-		return true
+		return denied, true
 	}
 	if needle == "~/.aws" && awsPathRe.FindString(low) != "" {
-		return true
+		return denied, true
 	}
 	if needle == ".env" && envFileRe.FindString(low) != "" {
-		return true
-	}
-	if needle == "/" {
-		fields := strings.Fields(low)
-		for _, f := range fields {
-			if strings.Trim(f, `"' ;|&`) == "/" {
-				return true
-			}
-		}
-		return false
+		return denied, true
 	}
 	if strings.HasPrefix(needle, "/") || strings.HasPrefix(needle, "~") {
-		fields := strings.Fields(low)
-		for _, f := range fields {
-			f = strings.Trim(f, `"' ;|&`)
-			if f == needle || strings.HasPrefix(f, needle+"/") {
-				return true
+		normalizedNeedle, ok := normalizeSensitivePathCandidate(needle)
+		if !ok {
+			return "", false
+		}
+		for _, candidate := range sensitivePathCandidates(text) {
+			normalizedCandidate, ok := normalizeSensitivePathCandidate(candidate)
+			if !ok {
+				continue
+			}
+			if normalizedNeedle == "/" {
+				if normalizedCandidate == "/" {
+					return candidate, true
+				}
+				continue
+			}
+			if normalizedCandidate == normalizedNeedle ||
+				strings.HasPrefix(normalizedCandidate, normalizedNeedle+"/") {
+				return candidate, true
 			}
 		}
-		return false
+		return "", false
 	}
-	return strings.Contains(low, needle)
+	if strings.Contains(low, needle) {
+		return denied, true
+	}
+	return "", false
+}
+
+func sensitivePathCandidates(text string) []string {
+	var out []string
+	for _, match := range pathCandidateRe.FindAllStringIndex(text, -1) {
+		if len(match) != 2 || !pathCandidateBoundary(text, match[0]) {
+			continue
+		}
+		out = append(out, text[match[0]:match[1]])
+	}
+	for _, match := range quotedRe.FindAllStringSubmatch(text, -1) {
+		if len(match) > 1 {
+			out = append(out, match[1])
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func pathCandidateBoundary(text string, start int) bool {
+	if start <= 0 {
+		return true
+	}
+	return strings.ContainsRune(" \t\r\n\"'`=({[,<>", rune(text[start-1]))
+}
+
+func normalizeSensitivePathCandidate(candidate string) (string, bool) {
+	candidate = strings.TrimSpace(strings.ToLower(candidate))
+	candidate = strings.Trim(candidate, `"'`)
+	candidate = strings.TrimRight(candidate, ".,:;!?")
+	if candidate == "" {
+		return "", false
+	}
+	if strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "~") {
+		return path.Clean(candidate), true
+	}
+	return "", false
 }
 
 func scanNetworkText(text string, p Policy) []Finding {
 	var findings []Finding
-	urlMatches := urlRe.FindAllString(text, -1)
+	rawURLMatches := urlRe.FindAllString(text, -1)
+	urlMatches := networkURLMatches(rawURLMatches)
 	seenHosts := map[string]struct{}{}
 	for _, raw := range urlMatches {
 		host := hostFromURL(raw)
@@ -758,7 +808,7 @@ func scanNetworkText(text string, p Policy) []Finding {
 			"add the domain to allowed_domains or remove the outbound network call",
 			p.NonWhitelistedNetworkAction))
 	}
-	if hasNetworkCommand(text) && len(urlMatches) == 0 && len(schemelessHosts) == 0 {
+	if hasNetworkCommand(text) && len(rawURLMatches) == 0 && len(schemelessHosts) == 0 {
 		findings = append(findings, finding(ruleNetworkEgress,
 			"network_egress", RiskHigh, trimEvidence(text),
 			"review network-capable commands without an explicit allowlisted URL",
@@ -1151,6 +1201,12 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 					"add the domain to allowed_domains or remove the outbound network call",
 					p.NonWhitelistedNetworkAction))
 			}
+			for _, evidence := range curlConfigEvidence(argv[1:]) {
+				findings = append(findings, finding(ruleNetworkEgress,
+					"network_egress", RiskHigh, evidence,
+					"review curl config files before execution because they can override URLs, proxies, and connection targets",
+					DecisionAsk))
+			}
 			continue
 		}
 		if cmd != "ssh" && cmd != "scp" && cmd != "sftp" {
@@ -1536,6 +1592,40 @@ func curlConnectionOverrideHosts(args []string) []string {
 		case strings.HasPrefix(arg, "-x") && len(arg) > 2:
 			out = append(out, curlHostsFromOptionOperand("-x", strings.TrimLeft(strings.TrimPrefix(arg, "-x"), "="))...)
 		}
+	}
+	return uniqueStrings(out)
+}
+
+func curlConfigEvidence(args []string) []string {
+	var out []string
+	pending := ""
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pending != "" {
+			out = append(out, "curl "+pending+" "+arg)
+			pending = ""
+			continue
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		switch {
+		case arg == "-K" || arg == "--config":
+			pending = arg
+		case name == "--config" && hasValue:
+			out = append(out, "curl --config "+value)
+		case strings.HasPrefix(arg, "-K") && len(arg) > 2:
+			value := strings.TrimLeft(strings.TrimPrefix(arg, "-K"), "=")
+			out = append(out, "curl -K "+value)
+		}
+	}
+	if pending != "" {
+		out = append(out, "curl "+pending)
 	}
 	return uniqueStrings(out)
 }
@@ -1973,6 +2063,33 @@ func uniqueStrings(in []string) []string {
 		out = append(out, s)
 	}
 	return out
+}
+
+func networkURLMatches(rawMatches []string) []string {
+	var out []string
+	for _, raw := range rawMatches {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme == "" {
+			continue
+		}
+		if isLocalURLScheme(u.Scheme) {
+			continue
+		}
+		if u.Hostname() == "" {
+			continue
+		}
+		out = append(out, raw)
+	}
+	return uniqueStrings(out)
+}
+
+func isLocalURLScheme(scheme string) bool {
+	switch strings.ToLower(scheme) {
+	case "file", "unix", "npipe":
+		return true
+	default:
+		return false
+	}
 }
 
 func hostFromURL(raw string) string {
