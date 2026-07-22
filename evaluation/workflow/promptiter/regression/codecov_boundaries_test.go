@@ -467,3 +467,106 @@ func TestSummaryAndOptimizerBoundaries(t *testing.T) {
 	})
 	assert.NotEmpty(t, rules)
 }
+
+func TestCodecovFinalMarginBoundaries(t *testing.T) {
+	assert.ErrorContains(t, validateMetrics([]MetricConfig{
+		{MetricName: metricRoute, Threshold: 1, Weight: math.MaxFloat64},
+		{MetricName: metricFinalResponse, Threshold: 1, Weight: math.MaxFloat64},
+	}), "total metric weight")
+
+	configPath := filepath.Join(t.TempDir(), "invalid-config.json")
+	require.NoError(t, os.WriteFile(configPath, []byte(`{}`), 0o600))
+	_, err := LoadConfig(configPath)
+	assert.ErrorContains(t, err, "validate promptiter config")
+	assert.Nil(t, expectedInvocation(nil))
+	_, err = textSimilarity(nil, "expected", "actual")
+	assert.ErrorContains(t, err, "context is nil")
+
+	baseline := deltaTestSummary("validation", 0.6, deltaTestCase("case", 0.6, true, false))
+	candidate := deltaTestSummary("validation", 0.7, deltaTestCase("case", 0.7, true, false))
+	delta := deltaTestDelta(t, baseline, candidate)
+	zeroRatio := 0.0
+	decision, err := EvaluateGate(GatePolicy{MaxCostIncreaseRatio: &zeroRatio}, GateInput{
+		Delta:               delta,
+		BaselineValidation:  baseline,
+		CandidateValidation: candidate,
+		BaselinePromptHash:  "baseline",
+		CandidatePromptHash: "candidate",
+		BaselineUsage:       Usage{CostUSD: 1},
+		CandidateUsage:      Usage{CostUSD: 2},
+	})
+	require.NoError(t, err)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, deltaTestCheck(t, decision, "max_cost_increase_ratio").Reason, "exceeds")
+
+	duplicateSummary := deltaTestSummary("validation", 0.6,
+		deltaTestCase("duplicate", 0.6, true, false),
+		deltaTestCase("duplicate", 0.6, true, false),
+	)
+	assert.ErrorContains(t, validateSummaryForGate(duplicateSummary), "duplicate case id")
+
+	invalidExtra := deltaTestCase("extra", 0.7, true, false)
+	invalidExtra.MetricResults = append(invalidExtra.MetricResults, invalidExtra.MetricResults[0])
+	candidateWithExtra := deltaTestSummary("validation", 0.65,
+		deltaTestCase("case", 0.6, true, false),
+		invalidExtra,
+	)
+	_, err = ComputeDelta(baseline, candidateWithExtra)
+	assert.ErrorContains(t, err, "case \"extra\" candidate")
+
+	invalidCandidate := deltaTestCase("case", 0.7, true, false)
+	invalidCandidate.MetricResults = append(invalidCandidate.MetricResults, invalidCandidate.MetricResults[0])
+	_, err = ComputeDelta(baseline, deltaTestSummary("validation", 0.7, invalidCandidate))
+	assert.ErrorContains(t, err, "case \"case\" candidate")
+
+	errorResult := CaseResult{
+		CaseID:   "case",
+		Score:    0.5,
+		Passed:   false,
+		HardFail: true,
+		Error:    "execution failed",
+		MetricResults: []MetricResult{{
+			MetricName: "quality",
+			Score:      0,
+			Threshold:  0.5,
+			Weight:     1,
+			Passed:     false,
+		}},
+	}
+	assert.ErrorContains(t, validateCaseScores(errorResult, 0.5), "case score must be zero")
+
+	validMetric := MetricResult{MetricName: "quality", Score: 0.6, Threshold: 0.5, Weight: 1, Passed: true}
+	duplicateMetrics := []MetricResult{validMetric, validMetric}
+	_, _, _, err = compareMetrics("case",
+		CaseResult{MetricResults: duplicateMetrics},
+		CaseResult{MetricResults: []MetricResult{validMetric}},
+	)
+	assert.ErrorContains(t, err, "baseline metrics")
+	_, _, _, err = compareMetrics("case",
+		CaseResult{MetricResults: []MetricResult{validMetric}},
+		CaseResult{MetricResults: duplicateMetrics},
+	)
+	assert.ErrorContains(t, err, "candidate metrics")
+
+	extraMetric := MetricResult{MetricName: "extra", Score: 0.6, Threshold: 0.5, Weight: 1, Passed: true}
+	_, complete, issues, err := compareMetrics("case",
+		CaseResult{MetricResults: []MetricResult{validMetric}},
+		CaseResult{MetricResults: []MetricResult{validMetric, extraMetric}},
+	)
+	require.NoError(t, err)
+	assert.False(t, complete)
+	assert.NotEmpty(t, issues)
+
+	invalidMetric := validMetric
+	invalidMetric.Threshold = 2
+	_, _, _, err = compareMetrics("case",
+		CaseResult{MetricResults: []MetricResult{invalidMetric}},
+		CaseResult{MetricResults: []MetricResult{validMetric}},
+	)
+	assert.ErrorContains(t, err, "baseline metric")
+	_, _, _, err = compareMetrics("case",
+		CaseResult{MetricResults: []MetricResult{validMetric}},
+		CaseResult{MetricResults: []MetricResult{invalidMetric}},
+	)
+	assert.ErrorContains(t, err, "candidate metric")
+}
