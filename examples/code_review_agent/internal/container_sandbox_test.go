@@ -104,6 +104,97 @@ func TestModuleCacheRequiresExplicitTrustedMode(t *testing.T) {
 	require.Equal(t, "/go/pkg/mod", moduleCachePath(true))
 }
 
+func TestSandboxCleanupContextIgnoresParentCancellationButIsBounded(t *testing.T) {
+	parent, parentCancel := context.WithCancel(context.Background())
+	parentCancel()
+	cleanupCtx, cleanupCancel := sandboxCleanupContext(parent)
+	defer cleanupCancel()
+
+	require.NoError(t, cleanupCtx.Err())
+	deadline, ok := cleanupCtx.Deadline()
+	require.True(t, ok)
+	require.Positive(t, time.Until(deadline))
+	require.LessOrEqual(t, time.Until(deadline), sandboxCleanupTimeout)
+}
+
+func TestContainerSandboxCloseWaitsForActiveExecution(t *testing.T) {
+	sandbox := &ContainerSandbox{}
+	sandbox.runMu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			sandbox.runMu.Unlock()
+		}
+	}()
+	done := make(chan error, 1)
+	go func() { done <- sandbox.Close() }()
+
+	select {
+	case err := <-done:
+		require.Failf(t, "Close returned during active execution", "error: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	sandbox.runMu.Unlock()
+	locked = false
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "Close did not finish after execution released")
+	}
+}
+
+func TestContainerSandboxCloseSynchronizesDependencyCache(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n"), 0o600))
+	cache := t.TempDir()
+	envStarted := make(chan struct{})
+	releaseEnv := make(chan struct{})
+	sandbox := &ContainerSandbox{
+		config:   withSandboxDefaults(SandboxConfig{}),
+		depCache: cache,
+		depReady: map[string]bool{},
+		goDownloadEnv: func(moduleCache, buildCache, home string) []string {
+			close(envStarted)
+			<-releaseEnv
+			return isolatedGoDownloadEnvForProxy(moduleCache, buildCache, home, "off")
+		},
+	}
+	prepareDone := make(chan error, 1)
+	go func() {
+		_, _, err := sandbox.prepareDependencies(context.Background(), repo, []string{"go", "test", "./..."})
+		prepareDone <- err
+	}()
+	select {
+	case <-envStarted:
+	case err := <-prepareDone:
+		close(releaseEnv)
+		require.Failf(t, "dependency preparation ended before synchronization point", "error: %v", err)
+	case <-time.After(time.Second):
+		close(releaseEnv)
+		require.Fail(t, "dependency preparation did not reach environment setup")
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- sandbox.Close() }()
+
+	closedEarly := false
+	var closeErr error
+	select {
+	case closeErr = <-closeDone:
+		closedEarly = true
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(releaseEnv)
+	require.NoError(t, <-prepareDone)
+	if !closedEarly {
+		closeErr = <-closeDone
+	}
+	require.False(t, closedEarly, "Close raced dependency preparation")
+	require.NoError(t, closeErr)
+	_, err := os.Stat(cache)
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
 func TestDefaultDependencySetupUsesVendoredSnapshot(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n\nrequire example.com/dependency v1.0.0\n"), 0o600))

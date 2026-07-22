@@ -37,6 +37,7 @@ type ContainerSandbox struct {
 	executor      *containerexecutor.CodeExecutor
 	config        SandboxConfig
 	repoPath      string
+	runMu         sync.Mutex
 	mu            sync.Mutex
 	closed        bool
 	depMu         sync.Mutex
@@ -46,7 +47,10 @@ type ContainerSandbox struct {
 	goDownloadEnv func(moduleCache, buildCache, home string) []string
 }
 
-const maxSnapshotPathListBytes = 4 * 1024 * 1024
+const (
+	maxSnapshotPathListBytes = 4 * 1024 * 1024
+	sandboxCleanupTimeout    = 5 * time.Second
+)
 
 // NewContainerSandbox starts the production container runtime.
 func NewContainerSandbox(config SandboxConfig, repoPath, dockerfilePath string) (*ContainerSandbox, error) {
@@ -96,8 +100,16 @@ func hardenedHostConfig(config SandboxConfig) dockercontainer.HostConfig {
 	}
 }
 
-// Close releases the underlying container.
+// Close releases the underlying container. It waits for an active Execute;
+// authorized executions are serialized so one timeout cannot race a later
+// command that has already started using the same container.
 func (s *ContainerSandbox) Close() error {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	return s.closeResources()
+}
+
+func (s *ContainerSandbox) closeResources() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed {
@@ -110,8 +122,11 @@ func (s *ContainerSandbox) Close() error {
 	} else if s.executor != nil {
 		executorErr = s.executor.Close()
 	}
+	s.depMu.Lock()
+	defer s.depMu.Unlock()
 	cacheErr := os.RemoveAll(s.depCache)
 	s.depCache = ""
+	s.depReady = nil
 	return errors.Join(executorErr, cacheErr)
 }
 
@@ -123,6 +138,8 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		run.Error = "command blocked by permission policy: " + reason
 		return run
 	}
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
@@ -156,7 +173,11 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		s.classifyContainerSetupError(run, timeoutCtx, err)
 		return run
 	}
-	defer s.executor.Cleanup(context.WithoutCancel(ctx), ws)
+	defer func() {
+		cleanupCtx, cleanupCancel := sandboxCleanupContext(ctx)
+		defer cleanupCancel()
+		_ = s.executor.Cleanup(cleanupCtx, ws)
+	}()
 	if err := s.executor.PutDirectory(timeoutCtx, ws, snapshotPath, "repo"); err != nil {
 		s.classifyContainerSetupError(run, timeoutCtx, err)
 		return run
@@ -192,6 +213,10 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 	return run
 }
 
+func sandboxCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(parent), sandboxCleanupTimeout)
+}
+
 func (s *ContainerSandbox) finishExecution(timeoutCtx context.Context, run *SandboxRun, result codeexecutor.RunResult, err error) {
 	run.Stdout = RedactSensitiveInfo(result.Stdout)
 	run.Stderr = RedactSensitiveInfo(result.Stderr)
@@ -200,7 +225,7 @@ func (s *ContainerSandbox) finishExecution(timeoutCtx context.Context, run *Sand
 		// Docker exec cannot reliably kill descendants. Recycle the entire
 		// container for both deadline expiry and parent cancellation before a
 		// later check can observe a surviving process.
-		closeErr := s.Close()
+		closeErr := s.closeResources()
 		if result.TimedOut || errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) {
 			run.Status, run.TimedOut = SandboxStatusTimeout, true
 			run.Error = fmt.Sprintf("command timed out after %s", s.config.Timeout)
@@ -224,7 +249,7 @@ func (s *ContainerSandbox) classifyContainerSetupError(run *SandboxRun, timeoutC
 	terminated := timeoutCtx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 	var closeErr error
 	if terminated {
-		closeErr = s.Close()
+		closeErr = s.closeResources()
 	}
 	if errors.Is(timeoutCtx.Err(), context.DeadlineExceeded) || errors.Is(err, context.DeadlineExceeded) {
 		run.Status, run.TimedOut = SandboxStatusTimeout, true

@@ -23,9 +23,8 @@ func TestParseDiff_SimpleFile(t *testing.T) {
 index 1234567..89abcde 100644
 --- a/foo/bar.go
 +++ b/foo/bar.go
-@@ -10,6 +10,8 @@ package foo
+@@ -10,3 +10,5 @@ package foo
  import "fmt"
-
  func main() {
 +	fmt.Println("hello")
 +	fmt.Println("world")
@@ -92,11 +91,10 @@ func TestParseDiff_MultipleHunks(t *testing.T) {
 index 1234567..89abcde 100644
 --- a/multi.go
 +++ b/multi.go
-@@ -1,3 +1,4 @@
+@@ -1,1 +1,2 @@
  package main
 +import "fmt"
-
-@@ -10,3 +11,4 @@ func b() {
+@@ -10,2 +11,3 @@ func b() {
  func c() {
  }
 +func d() {}
@@ -111,7 +109,7 @@ func TestParseDiff_FromFile(t *testing.T) {
 	diff := `diff --git a/foo/bar.go b/foo/bar.go
 --- a/foo/bar.go
 +++ b/foo/bar.go
-@@ -1,3 +1,4 @@
+@@ -1,2 +1,3 @@
  package main
 +import "fmt"
  func main() {}
@@ -137,7 +135,7 @@ rename from old.go
 rename to new.go
 --- a/old.go
 +++ b/new.go
-@@ -1,3 +1,4 @@
+@@ -1,2 +1,3 @@
  package main
 +import "fmt"
  func main() {}
@@ -224,6 +222,92 @@ func TestParseDiffNoNewlineMarkerDoesNotAdvanceLine(t *testing.T) {
 func TestParseDiffRejectsMalformedGitHeader(t *testing.T) {
 	_, err := ParseDiffString("diff --git malformed\n")
 	require.Error(t, err)
+}
+
+func TestParseDiffRejectsMalformedQuotedFileMarker(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- \"a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-old\n+new\n"
+	_, err := ParseDiffString(diff)
+	require.ErrorContains(t, err, "parse --- path")
+}
+
+func TestParseDiffDecodesQuotedRenameMetadata(t *testing.T) {
+	diff := "diff --git \"a/old\\344\\270\\255.go\" \"b/new\\344\\270\\255.go\"\n" +
+		"similarity index 90%\n" +
+		"rename from \"old\\344\\270\\255.go\"\n" +
+		"rename to \"new\\344\\270\\255.go\"\n" +
+		"--- \"a/old\\344\\270\\255.go\"\n" +
+		"+++ \"b/new\\344\\270\\255.go\"\n" +
+		"@@ -1 +1 @@\n-package old\n+package renamed\n"
+
+	files, err := ParseDiffString(diff)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "old中.go", files[0].OldPath)
+	require.Equal(t, "new中.go", files[0].Path)
+	require.True(t, files[0].IsRename)
+	require.Len(t, ChangedGoFiles(files), 1)
+}
+
+func TestParseDiffRejectsMalformedHunkHeader(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ malformed @@\n+package unsafe\n"
+	_, err := ParseDiffString(diff)
+	require.ErrorContains(t, err, "parse hunk header")
+}
+
+func TestParseDiffRejectsOverflowingHunkCoordinates(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -999999999999999999999999,1 +1,1 @@\n-old\n+new\n"
+	_, err := ParseDiffString(diff)
+	require.ErrorContains(t, err, "parse hunk old start")
+}
+
+func TestParseDiffRejectsHunkCountMismatch(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,2 +1,2 @@\n-old\n+new\n"
+	_, err := ParseDiffString(diff)
+	require.ErrorContains(t, err, "declares -2,+2 lines")
+}
+
+func TestParseDiffRejectsUnprefixedHunkLine(t *testing.T) {
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1 @@\npackage hidden\n"
+	_, err := ParseDiffString(diff)
+	require.ErrorContains(t, err, "invalid unprefixed line inside hunk")
+}
+
+func TestParseDiffRejectsMetadataInsideHunk(t *testing.T) {
+	for _, metadata := range []string{
+		"rename from hidden.go",
+		"rename to hidden.go",
+		"new file mode 100644",
+		"deleted file mode 100644",
+	} {
+		t.Run(metadata, func(t *testing.T) {
+			diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +0,0 @@\n" + metadata + "\n"
+			_, err := ParseDiffString(diff)
+			require.ErrorContains(t, err, "inside a hunk")
+		})
+	}
+}
+
+func TestParseDiffRejectsChangedLinesOutsideHunk(t *testing.T) {
+	for _, changedLine := range []string{"+package hidden", "-package hidden"} {
+		t.Run(changedLine, func(t *testing.T) {
+			diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" + changedLine + "\n"
+			_, err := ParseDiffString(diff)
+			require.ErrorContains(t, err, "outside a hunk")
+		})
+	}
+}
+
+func TestParseDiffTreatsFileMarkersInsideHunkAsContent(t *testing.T) {
+	diff := "diff --git a/note.txt b/note.txt\n--- a/note.txt\n+++ b/note.txt\n@@ -0,0 +1 @@\n+++ literal content\n"
+	files, err := ParseDiffString(diff)
+	require.NoError(t, err)
+	require.Len(t, files, 1)
+	require.Equal(t, "++ literal content", files[0].Hunks[0].Lines[0].Content)
+}
+
+func TestParseDiffRejectsNonDiffContent(t *testing.T) {
+	_, err := ParseDiffString("this is not a diff\n")
+	require.ErrorContains(t, err, "no parseable git diff")
 }
 
 func TestChangedGoFiles(t *testing.T) {

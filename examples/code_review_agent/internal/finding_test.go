@@ -80,9 +80,41 @@ func TestRedactSensitiveInfo_Bearer(t *testing.T) {
 }
 
 func TestRedactSensitiveInfo_PrivateKey(t *testing.T) {
-	input := `-----BEGIN RSA PRIVATE KEY-----`
+	input := `before
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAsecretPrivateKeyMaterial
+secondSecretLine
+-----END RSA PRIVATE KEY-----
+after`
 	redacted := RedactSensitiveInfo(input)
 	require.Contains(t, redacted, redactedValue)
+	require.NotContains(t, redacted, "secretPrivateKeyMaterial")
+	require.NotContains(t, redacted, "secondSecretLine")
+	require.NotContains(t, redacted, "BEGIN RSA PRIVATE KEY")
+	require.NotContains(t, redacted, "END RSA PRIVATE KEY")
+	require.Contains(t, redacted, "before")
+	require.Contains(t, redacted, "after")
+}
+
+func TestRedactSensitiveInfo_TruncatedPrivateKey(t *testing.T) {
+	input := "prefix\n-----BEGIN OPENSSH PRIVATE KEY-----\ntruncatedSecretBody\nstillSecret"
+	redacted := RedactSensitiveInfo(input)
+	require.Equal(t, "prefix\n"+redactedValue, redacted)
+	require.NotContains(t, redacted, "truncatedSecretBody")
+	require.NotContains(t, redacted, "stillSecret")
+}
+
+func TestRedactSensitiveInfo_AuthorizationHeaders(t *testing.T) {
+	for _, input := range []string{
+		"Authorization: Basic dXNlcjpwYXNzd29yZA==",
+		"authorization: token ghp_1234567890abcdef",
+	} {
+		redacted := RedactSensitiveInfo(input)
+		require.Contains(t, redacted, redactedValue)
+		require.NotEqual(t, input, redacted)
+		require.NotContains(t, redacted, "dXNlcjpwYXNzd29yZA==")
+		require.NotContains(t, redacted, "ghp_1234567890abcdef")
+	}
 }
 
 func TestRedactSensitiveInfo_ConnectionString(t *testing.T) {

@@ -83,6 +83,23 @@ func NewSQLiteStorage(ctx context.Context, dbPath string) (*SQLiteStorage, error
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+	// SQLite foreign-key enforcement is connection-local and disabled by
+	// default. Keep this small example on one connection so the setting also
+	// applies to every later database/sql operation.
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys = ON"); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("enable sqlite foreign keys: %w", err)
+	}
+	var foreignKeysEnabled int
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeysEnabled); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("verify sqlite foreign keys: %w", err)
+	}
+	if foreignKeysEnabled != 1 {
+		_ = db.Close()
+		return nil, fmt.Errorf("verify sqlite foreign keys: enforcement is disabled")
+	}
 	s := &SQLiteStorage{db: db}
 	if err := s.InitSchema(ctx); err != nil {
 		_ = db.Close()

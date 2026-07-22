@@ -22,7 +22,7 @@ func TestRuleEngine_SQLInjection(t *testing.T) {
 	diff := `diff --git a/auth/handler.go b/auth/handler.go
 --- a/auth/handler.go
 +++ b/auth/handler.go
-@@ -1,3 +1,6 @@
+@@ -1,1 +1,4 @@
  package auth
 +func login(name string) {
 +	q := "SELECT * FROM users WHERE name = '" + name + "'"
@@ -49,7 +49,7 @@ func TestRuleEngine_HardcodedSecret(t *testing.T) {
 	diff := `diff --git a/config.go b/config.go
 --- a/config.go
 +++ b/config.go
-@@ -1,3 +1,5 @@
+@@ -1,1 +1,3 @@
  package config
 +const APIKey = "sk-1234567890abcdef1234567890"
 +const token = "tok_1234567890abcdef1234567890abcd"
@@ -86,7 +86,7 @@ func TestRuleEngine_GoroutineLeak(t *testing.T) {
 	diff := `diff --git a/worker.go b/worker.go
 --- a/worker.go
 +++ b/worker.go
-@@ -1,3 +1,6 @@
+@@ -1,1 +1,6 @@
  package worker
 +func startWorker() {
 +	go func() {
@@ -114,7 +114,7 @@ func TestRuleEngine_UnclosedResource(t *testing.T) {
 	diff := `diff --git a/io.go b/io.go
 --- a/io.go
 +++ b/io.go
-@@ -1,3 +1,7 @@
+@@ -1,1 +1,6 @@
  package io
 +func readConfig(path string) {
 +	f, _ := os.Open(path)
@@ -142,7 +142,7 @@ func TestRuleEngine_DBConnectionLeak(t *testing.T) {
 	diff := `diff --git a/db.go b/db.go
 --- a/db.go
 +++ b/db.go
-@@ -1,3 +1,6 @@
+@@ -1,1 +1,5 @@
  package db
 +func newDB() {
 +	db, _ := sql.Open("postgres", dsn)
@@ -169,7 +169,7 @@ func TestRuleEngine_CleanDiff_NoFindings(t *testing.T) {
 	diff := `diff --git a/clean.go b/clean.go
 --- a/clean.go
 +++ b/clean.go
-@@ -1,3 +1,6 @@
+@@ -1,1 +1,5 @@
  package clean
 +func HandleRequest(ctx context.Context, req *Request) (*Response, error) {
 +	resp, err := process(ctx, req)
@@ -195,7 +195,7 @@ func TestRuleEngine_IgnoredError(t *testing.T) {
 	diff := `diff --git a/handler.go b/handler.go
 --- a/handler.go
 +++ b/handler.go
-@@ -1,3 +1,5 @@
+@@ -1,1 +1,4 @@
  package handler
 +func saveData(data []byte) {
 +	_ = os.WriteFile("out.txt", data, 0644)
@@ -221,7 +221,7 @@ func TestRuleEngine_SensitiveInfoInLog(t *testing.T) {
 	diff := `diff --git a/log.go b/log.go
 --- a/log.go
 +++ b/log.go
-@@ -1,3 +1,5 @@
+@@ -1,1 +1,4 @@
  package log
 +func logConn(pwd string) {
 +	log.Printf("password: %s", pwd)

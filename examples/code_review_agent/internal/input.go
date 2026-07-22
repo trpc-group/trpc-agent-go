@@ -52,14 +52,12 @@ func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, er
 	if err != nil {
 		return nil, "", fmt.Errorf("resolve repository path: %w", err)
 	}
-	args := []string{"-c", "diff.external=", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}
-	for _, name := range input.FilePaths {
-		name = filepath.Clean(name)
-		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
-			return nil, "", fmt.Errorf("file path must stay inside repository: %q", name)
-		}
-		args = append(args, name)
+	pathspecs, err := literalGitPathspecs(input.FilePaths)
+	if err != nil {
+		return nil, "", err
 	}
+	args := []string{"-c", "diff.external=", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}
+	args = append(args, pathspecs...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
 	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
@@ -73,7 +71,7 @@ func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, er
 	if stdout.exceeded {
 		return nil, "", fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
 	}
-	if err := appendUntrackedDiffs(ctx, repo, input.FilePaths, &stdout); err != nil {
+	if err := appendUntrackedDiffs(ctx, repo, pathspecs, &stdout); err != nil {
 		return nil, "", err
 	}
 	if stdout.exceeded {
@@ -82,9 +80,30 @@ func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, er
 	return stdout.Bytes(), "git-workspace", nil
 }
 
-func appendUntrackedDiffs(ctx context.Context, repo string, filePaths []string, output *limitedBuffer) error {
+func literalGitPathspecs(filePaths []string) ([]string, error) {
+	pathspecs := make([]string, 0, len(filePaths))
+	for _, name := range filePaths {
+		if name == "" {
+			return nil, fmt.Errorf("file path cannot be empty")
+		}
+		name = filepath.Clean(name)
+		if name == "." {
+			return nil, fmt.Errorf("file path must name a file or directory inside the repository")
+		}
+		if filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("file path must stay inside repository: %q", name)
+		}
+		// Disable Git pathspec magic. A caller-provided filename such as
+		// :(exclude)* must be interpreted literally, never as a selector that
+		// changes which files are reviewed.
+		pathspecs = append(pathspecs, ":(literal)"+filepath.ToSlash(name))
+	}
+	return pathspecs, nil
+}
+
+func appendUntrackedDiffs(ctx context.Context, repo string, pathspecs []string, output *limitedBuffer) error {
 	args := []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
-	args = append(args, filePaths...)
+	args = append(args, pathspecs...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
 	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
@@ -149,13 +168,54 @@ func appendUntrackedDiffs(ctx context.Context, repo string, filePaths []string, 
 		if len(content) == 0 {
 			lines = nil
 		}
-		header := fmt.Sprintf("diff --git a/%s b/%s\nnew file mode 100644\n--- /dev/null\n+++ b/%s\n@@ -0,0 +1,%d @@\n", name, name, name, len(lines))
+		oldToken := quoteGitPathToken("a/" + name)
+		newToken := quoteGitPathToken("b/" + name)
+		header := fmt.Sprintf("diff --git %s %s\nnew file mode 100644\n--- /dev/null\n+++ %s\n@@ -0,0 +1,%d @@\n", oldToken, newToken, newToken, len(lines))
 		_, _ = output.Write([]byte(header))
 		for _, line := range lines {
 			_, _ = output.Write([]byte("+" + strings.TrimSuffix(line, "\r") + "\n"))
 		}
 	}
 	return nil
+}
+
+// quoteGitPathToken emits the byte-oriented C quoting used by Git diff
+// metadata. Quoting every synthetic path avoids ambiguity for whitespace,
+// quotes, control bytes, and non-ASCII UTF-8.
+func quoteGitPathToken(value string) string {
+	var quoted strings.Builder
+	quoted.Grow(len(value) + 2)
+	quoted.WriteByte('"')
+	for index := 0; index < len(value); index++ {
+		character := value[index]
+		switch character {
+		case '\a':
+			quoted.WriteString(`\a`)
+		case '\b':
+			quoted.WriteString(`\b`)
+		case '\t':
+			quoted.WriteString(`\t`)
+		case '\n':
+			quoted.WriteString(`\n`)
+		case '\v':
+			quoted.WriteString(`\v`)
+		case '\f':
+			quoted.WriteString(`\f`)
+		case '\r':
+			quoted.WriteString(`\r`)
+		case '\\', '"':
+			quoted.WriteByte('\\')
+			quoted.WriteByte(character)
+		default:
+			if character < 0x20 || character >= 0x7f {
+				_, _ = fmt.Fprintf(&quoted, `\%03o`, character)
+			} else {
+				quoted.WriteByte(character)
+			}
+		}
+	}
+	quoted.WriteByte('"')
+	return quoted.String()
 }
 
 func pathInside(root, candidate string) (bool, error) {

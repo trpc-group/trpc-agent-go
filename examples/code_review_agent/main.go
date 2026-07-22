@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -26,40 +27,47 @@ import (
 )
 
 func main() {
-	diffFile := flag.String("diff-file", "", "path to a unified diff file")
-	repoPath := flag.String("repo-path", "", "path to the git repository (for sandbox execution)")
-	files := flag.String("files", "", "comma-separated repository-relative paths (with --repo-path)")
-	executor := flag.String("executor", "container", "sandbox executor: container|local (local is development-only)")
-	dockerfile := flag.String("dockerfile", "", "container Dockerfile directory (auto-detected by default)")
-	trustedModuleCache := flag.Bool("trusted-module-cache", false, "mount the host Go module cache read-only (trusted repositories only)")
-	dryRun := flag.Bool("dry-run", true, "run rules only, skip sandbox execution (default true)")
-	dbPath := flag.String("db-path", "review.db", "path to the SQLite database file")
-	outputDir := flag.String("output-dir", ".", "directory for report output files")
-	timeoutSec := flag.Int("timeout", 30, "sandbox execution timeout in seconds")
-	flag.Parse()
+	if err := run(os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string) (err error) {
+	flags := flag.NewFlagSet("code-review-agent", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	diffFile := flags.String("diff-file", "", "path to a unified diff file")
+	repoPath := flags.String("repo-path", "", "path to the git repository (for sandbox execution)")
+	files := flags.String("files", "", "comma-separated repository-relative paths (with --repo-path)")
+	executor := flags.String("executor", "container", "sandbox executor: container|local (local is development-only)")
+	dockerfile := flags.String("dockerfile", "", "container Dockerfile directory (auto-detected by default)")
+	trustedModuleCache := flags.Bool("trusted-module-cache", false, "mount the host Go module cache read-only (trusted repositories only)")
+	dryRun := flags.Bool("dry-run", true, "run rules only, skip sandbox execution (default true)")
+	dbPath := flags.String("db-path", "review.db", "path to the SQLite database file")
+	outputDir := flags.String("output-dir", ".", "directory for report output files")
+	timeoutSec := flags.Int("timeout", 30, "sandbox execution timeout in seconds")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 
 	if *diffFile == "" && *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: either --diff-file or --repo-path is required")
-		flag.Usage()
-		os.Exit(1)
+		flags.Usage()
+		return errors.New("either --diff-file or --repo-path is required")
 	}
 
 	if *diffFile != "" {
 		if _, err := os.Stat(*diffFile); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: cannot access diff file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("cannot access diff file: %w", err)
 		}
 	}
 	if *executor != "container" && *executor != "local" {
-		fmt.Fprintln(os.Stderr, "Error: --executor must be container or local")
-		os.Exit(1)
+		return errors.New("--executor must be container or local")
 	}
 
 	// Create output directory if it doesn't exist.
 	if *outputDir != "." {
 		if err := os.MkdirAll(*outputDir, 0o755); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: create output dir: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("create output dir: %w", err)
 		}
 	}
 
@@ -67,10 +75,13 @@ func main() {
 	ctx := context.Background()
 	storage, err := internal.NewSQLiteStorage(ctx, *dbPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: init storage: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init storage: %w", err)
 	}
-	defer storage.Close()
+	defer func() {
+		if closeErr := storage.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close storage: %w", closeErr))
+		}
+	}()
 
 	// Configure sandbox.
 	sandboxCfg := internal.DefaultSandboxConfig()
@@ -80,8 +91,7 @@ func main() {
 		sandboxCfg.WorkDir = *repoPath
 	}
 	if !*dryRun && *repoPath == "" {
-		fmt.Fprintln(os.Stderr, "Error: --repo-path is required when sandbox checks are enabled")
-		os.Exit(1)
+		return errors.New("--repo-path is required when sandbox checks are enabled")
 	}
 
 	// Create agent. Dry-run never initializes Docker, while non-dry production
@@ -91,15 +101,17 @@ func main() {
 	if !*dryRun && *executor == "container" {
 		dockerfilePath, resolveErr := resolveDockerfilePath(*dockerfile)
 		if resolveErr != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", resolveErr)
-			os.Exit(1)
+			return resolveErr
 		}
 		containerSandbox, err = internal.NewContainerSandbox(sandboxCfg, *repoPath, dockerfilePath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: init container sandbox: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("init container sandbox: %w", err)
 		}
-		defer containerSandbox.Close()
+		defer func() {
+			if closeErr := containerSandbox.Close(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close container sandbox: %w", closeErr))
+			}
+		}()
 		agent = internal.NewReviewAgentWithSandbox(storage, containerSandbox)
 	} else {
 		agent = internal.NewReviewAgentWithConfig(storage, sandboxCfg)
@@ -133,8 +145,7 @@ func main() {
 
 	result, err := agent.Review(ctx, input)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: review failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("review failed: %w", err)
 	}
 
 	// Write report files.
@@ -142,12 +153,10 @@ func main() {
 	mdPath := filepath.Join(*outputDir, "review_report.md")
 
 	if err := os.WriteFile(jsonPath, []byte(result.ReportJSON), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: write json report: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("write json report: %w", err)
 	}
 	if err := os.WriteFile(mdPath, []byte(result.ReportMD), 0o644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: write md report: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("write md report: %w", err)
 	}
 
 	// Print summary.
@@ -171,6 +180,7 @@ func main() {
 	fmt.Printf("  %s\n", jsonPath)
 	fmt.Printf("  %s\n", mdPath)
 	fmt.Printf("Database: %s\n", *dbPath)
+	return nil
 }
 
 func resolveDockerfilePath(configured string) (string, error) {

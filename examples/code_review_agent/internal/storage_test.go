@@ -108,6 +108,24 @@ func TestStorage_SaveAndGetFindings(t *testing.T) {
 	require.Equal(t, "SQL_INJECTION", findings[0].RuleID)
 }
 
+func TestStorage_RejectsOrphanFinding(t *testing.T) {
+	s := newTestStorage(t)
+	ctx := context.Background()
+	finding := &Finding{
+		ID:         "orphan-finding",
+		Severity:   SeverityHigh,
+		Category:   "security",
+		File:       "auth.go",
+		Line:       1,
+		Title:      "orphan",
+		Confidence: 1,
+		Source:     SourceRule,
+	}
+
+	err := s.SaveFinding(ctx, "missing-task", finding)
+	require.ErrorContains(t, err, "FOREIGN KEY constraint failed")
+}
+
 func TestStorage_SaveSandboxRun(t *testing.T) {
 	s := newTestStorage(t)
 	ctx := context.Background()

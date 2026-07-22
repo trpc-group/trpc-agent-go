@@ -113,10 +113,6 @@ func (f DiffFile) AddedLines() []DiffLine {
 }
 
 var (
-	// Matches: --- a/foo/bar.go  (or --- /dev/null)
-	reOldFile = regexp.MustCompile(`^--- (a/(.+)|/dev/null)$`)
-	// Matches: +++ b/foo/bar.go  (or +++ /dev/null)
-	reNewFile = regexp.MustCompile(`^\+\+\+ (b/(.+)|/dev/null)$`)
 	// Matches: @@ -start,count +start,count @@
 	reHunk = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
 	// Matches: rename from old
@@ -140,27 +136,55 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 	var current *DiffFile
 	var currentHunk *DiffHunk
 	var oldLine, newLine int
+	sawContent := false
 
-	flushHunk := func() {
+	flushHunk := func() error {
 		if currentHunk != nil && current != nil {
+			var oldCount, newCount int
+			for _, diffLine := range currentHunk.Lines {
+				switch diffLine.Type {
+				case LineAdded:
+					newCount++
+				case LineRemoved:
+					oldCount++
+				default:
+					oldCount++
+					newCount++
+				}
+			}
+			if oldCount != currentHunk.OldCount || newCount != currentHunk.NewCount {
+				return fmt.Errorf(
+					"hunk for %q declares -%d,+%d lines but contains -%d,+%d",
+					current.Path, currentHunk.OldCount, currentHunk.NewCount, oldCount, newCount,
+				)
+			}
 			current.Hunks = append(current.Hunks, *currentHunk)
 			currentHunk = nil
 		}
+		return nil
 	}
-	flushFile := func() {
-		flushHunk()
+	flushFile := func() error {
+		if err := flushHunk(); err != nil {
+			return err
+		}
 		if current != nil {
 			files = append(files, *current)
 			current = nil
 		}
+		return nil
 	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			sawContent = true
+		}
 
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
-			flushFile()
+			if err := flushFile(); err != nil {
+				return nil, err
+			}
 			oldPath, newPath, err := parseDiffGitHeader(line)
 			if err != nil {
 				return nil, err
@@ -168,46 +192,64 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 			current = &DiffFile{Path: newPath, OldPath: oldPath}
 			currentHunk = nil
 
-		case strings.HasPrefix(line, "--- "):
-			// Old file path
-			if current != nil {
-				m := reOldFile.FindStringSubmatch(line)
-				if m != nil {
-					if m[2] != "" {
-						current.OldPath = m[2]
-					} else {
-						// /dev/null means new file
-						current.IsNew = true
-					}
-				}
+		case currentHunk == nil && strings.HasPrefix(line, "--- "):
+			if current == nil {
+				return nil, fmt.Errorf("old-file marker appears outside a file diff")
+			}
+			oldPath, isNull, err := parseGitFileMarker(line, "--- ", "a/")
+			if err != nil {
+				return nil, err
+			}
+			if isNull {
+				current.IsNew = true
+			} else {
+				current.OldPath = oldPath
 			}
 
-		case strings.HasPrefix(line, "+++ "):
-			if current != nil {
-				m := reNewFile.FindStringSubmatch(line)
-				if m != nil {
-					if m[2] != "" {
-						current.Path = m[2]
-					} else {
-						// /dev/null means deleted file
-						current.IsDeleted = true
-					}
-				}
+		case currentHunk == nil && strings.HasPrefix(line, "+++ "):
+			if current == nil {
+				return nil, fmt.Errorf("new-file marker appears outside a file diff")
+			}
+			newPath, isNull, err := parseGitFileMarker(line, "+++ ", "b/")
+			if err != nil {
+				return nil, err
+			}
+			if isNull {
+				current.IsDeleted = true
+			} else {
+				current.Path = newPath
 			}
 
 		case strings.HasPrefix(line, "@@"):
-			flushHunk()
 			m := reHunk.FindStringSubmatch(line)
-			if m != nil && current != nil {
-				oldStart, _ := strconv.Atoi(m[1])
+			if m == nil || current == nil {
+				return nil, fmt.Errorf("parse hunk header %q", line)
+			}
+			if err := flushHunk(); err != nil {
+				return nil, err
+			}
+			if m != nil {
+				oldStart, err := parseHunkInteger(m[1], "old start")
+				if err != nil {
+					return nil, err
+				}
 				oldCount := 1
 				if m[2] != "" {
-					oldCount, _ = strconv.Atoi(m[2])
+					oldCount, err = parseHunkInteger(m[2], "old count")
+					if err != nil {
+						return nil, err
+					}
 				}
-				newStart, _ := strconv.Atoi(m[3])
+				newStart, err := parseHunkInteger(m[3], "new start")
+				if err != nil {
+					return nil, err
+				}
 				newCount := 1
 				if m[4] != "" {
-					newCount, _ = strconv.Atoi(m[4])
+					newCount, err = parseHunkInteger(m[4], "new count")
+					if err != nil {
+						return nil, err
+					}
 				}
 				currentHunk = &DiffHunk{
 					OldStart: oldStart,
@@ -220,70 +262,102 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 			}
 
 		case strings.HasPrefix(line, "rename from "):
-			if current != nil {
-				m := reRenameFrom.FindStringSubmatch(line)
-				if m != nil {
-					current.OldPath = m[1]
-					current.IsRename = true
-				}
+			if currentHunk != nil {
+				return nil, fmt.Errorf("rename-from metadata appears inside a hunk")
 			}
+			if current == nil {
+				return nil, fmt.Errorf("rename-from metadata appears outside a file diff")
+			}
+			m := reRenameFrom.FindStringSubmatch(line)
+			if m == nil {
+				return nil, fmt.Errorf("parse rename-from metadata %q", line)
+			}
+			decoded, err := decodeGitMetadataPath(m[1])
+			if err != nil {
+				return nil, fmt.Errorf("parse rename-from path %q: %w", m[1], err)
+			}
+			current.OldPath = decoded
+			current.IsRename = true
 
 		case strings.HasPrefix(line, "rename to "):
-			if current != nil {
-				m := reRenameTo.FindStringSubmatch(line)
-				if m != nil {
-					current.Path = m[1]
-					current.IsRename = true
-				}
+			if currentHunk != nil {
+				return nil, fmt.Errorf("rename-to metadata appears inside a hunk")
 			}
+			if current == nil {
+				return nil, fmt.Errorf("rename-to metadata appears outside a file diff")
+			}
+			m := reRenameTo.FindStringSubmatch(line)
+			if m == nil {
+				return nil, fmt.Errorf("parse rename-to metadata %q", line)
+			}
+			decoded, err := decodeGitMetadataPath(m[1])
+			if err != nil {
+				return nil, fmt.Errorf("parse rename-to path %q: %w", m[1], err)
+			}
+			current.Path = decoded
+			current.IsRename = true
 
 		case strings.HasPrefix(line, "new file mode"):
-			if current != nil {
-				current.IsNew = true
+			if currentHunk != nil {
+				return nil, fmt.Errorf("new-file metadata appears inside a hunk")
 			}
+			if current == nil {
+				return nil, fmt.Errorf("new-file metadata appears outside a file diff")
+			}
+			current.IsNew = true
 
 		case strings.HasPrefix(line, "deleted file mode"):
-			if current != nil {
-				current.IsDeleted = true
+			if currentHunk != nil {
+				return nil, fmt.Errorf("deleted-file metadata appears inside a hunk")
 			}
+			if current == nil {
+				return nil, fmt.Errorf("deleted-file metadata appears outside a file diff")
+			}
+			current.IsDeleted = true
 
 		case line == `\ No newline at end of file`:
 			// This marker describes the preceding diff line and consumes no
 			// source or destination line number.
+			if currentHunk == nil || len(currentHunk.Lines) == 0 {
+				return nil, fmt.Errorf("no-newline marker appears outside a hunk")
+			}
 			continue
 
 		case strings.HasPrefix(line, "+"):
-			if currentHunk != nil {
-				currentHunk.Lines = append(currentHunk.Lines, DiffLine{
-					Type:    LineAdded,
-					Number:  newLine,
-					Content: line[1:],
-				})
-				newLine++
+			if currentHunk == nil {
+				return nil, fmt.Errorf("added line appears outside a hunk: %q", line)
 			}
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:    LineAdded,
+				Number:  newLine,
+				Content: line[1:],
+			})
+			newLine++
 
 		case strings.HasPrefix(line, "-"):
-			if currentHunk != nil {
-				currentHunk.Lines = append(currentHunk.Lines, DiffLine{
-					Type:      LineRemoved,
-					OldNumber: oldLine,
-					Content:   line[1:],
-				})
-				oldLine++
+			if currentHunk == nil {
+				return nil, fmt.Errorf("removed line appears outside a hunk: %q", line)
 			}
+			currentHunk.Lines = append(currentHunk.Lines, DiffLine{
+				Type:      LineRemoved,
+				OldNumber: oldLine,
+				Content:   line[1:],
+			})
+			oldLine++
 
 		default:
-			// Context line (starts with space or empty)
+			// Context lines in a unified diff always start with one space. An
+			// unprefixed line inside a hunk is malformed and must not be treated
+			// as reviewed source.
 			if currentHunk != nil {
-				content := line
-				if strings.HasPrefix(line, " ") {
-					content = line[1:]
+				if !strings.HasPrefix(line, " ") {
+					return nil, fmt.Errorf("invalid unprefixed line inside hunk: %q", line)
 				}
 				currentHunk.Lines = append(currentHunk.Lines, DiffLine{
 					Type:      LineContext,
 					Number:    newLine,
 					OldNumber: oldLine,
-					Content:   content,
+					Content:   line[1:],
 				})
 				oldLine++
 				newLine++
@@ -291,13 +365,55 @@ func ParseDiff(r io.Reader) ([]DiffFile, error) {
 		}
 	}
 
-	flushFile()
+	if err := flushFile(); err != nil {
+		return nil, err
+	}
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("scanning diff: %w", err)
 	}
+	if sawContent && len(files) == 0 {
+		return nil, fmt.Errorf("input contains no parseable git diff")
+	}
 
 	return files, nil
+}
+
+func decodeGitMetadataPath(value string) (string, error) {
+	if !strings.HasPrefix(value, `"`) {
+		return value, nil
+	}
+	decoded, trailing, err := parseGitPathToken(value)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(trailing) != "" {
+		return "", fmt.Errorf("unexpected trailing path data %q", trailing)
+	}
+	return decoded, nil
+}
+
+func parseGitFileMarker(line, marker, sidePrefix string) (string, bool, error) {
+	value := strings.TrimPrefix(line, marker)
+	decoded, err := decodeGitMetadataPath(value)
+	if err != nil {
+		return "", false, fmt.Errorf("parse %s path %q: %w", strings.TrimSpace(marker), value, err)
+	}
+	if decoded == "/dev/null" {
+		return "", true, nil
+	}
+	if !strings.HasPrefix(decoded, sidePrefix) || len(decoded) == len(sidePrefix) {
+		return "", false, fmt.Errorf("parse %s path %q: expected %s path", strings.TrimSpace(marker), value, sidePrefix)
+	}
+	return strings.TrimPrefix(decoded, sidePrefix), false, nil
+}
+
+func parseHunkInteger(value, field string) (int, error) {
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("parse hunk %s %q: %w", field, value, err)
+	}
+	return parsed, nil
 }
 
 func parseDiffGitHeader(line string) (string, string, error) {

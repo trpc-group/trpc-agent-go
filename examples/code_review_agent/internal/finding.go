@@ -155,6 +155,17 @@ func CountBySeverity(findings []Finding) map[string]int {
 // redactedValue is the replacement for detected secrets.
 const redactedValue = "***REDACTED***"
 
+// privateKeyPattern consumes an entire PEM private-key block before the
+// general patterns run. Matching only the BEGIN marker would leave the key
+// material itself in reports and sandbox output.
+var privateKeyPattern = regexp.MustCompile(
+	`(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\z)`,
+)
+
+var authorizationHeaderPattern = regexp.MustCompile(
+	`(?im)(authorization\s*:\s*)(?:bearer|basic|token)\s+[^\s]+`,
+)
+
 // sensitivePatterns are pre-compiled regexes for common secret formats.
 var sensitivePatterns = []*regexp.Regexp{
 	// API keys: api_key = "xxx", API_KEY := "xxx", apiKey: "xxx"
@@ -169,8 +180,6 @@ var sensitivePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(bearer)\s+[A-Za-z0-9_\-\.]{20,}`),
 	// AWS-style keys
 	regexp.MustCompile(`(?i)(aws[_-]?(access[_-]?key|secret))\s*[:=]\s*["']?[A-Za-z0-9/+=]{16,}["']?`),
-	// Private key markers
-	regexp.MustCompile(`-----BEGIN (RSA |EC |DSA |OPENSSH |)PRIVATE KEY-----`),
 	// Connection string with password: postgres://user:password@host
 	regexp.MustCompile(`(?i)(postgres|mysql|redis|mongodb)://[^:]+:[^@]+@`),
 	// Hardcoded credentials in Go const/var: const APIKey = "..."
@@ -180,6 +189,8 @@ var sensitivePatterns = []*regexp.Regexp{
 // RedactSensitiveInfo replaces API keys, tokens, passwords and other
 // sensitive values in the input string with ***REDACTED***.
 func RedactSensitiveInfo(input string) string {
+	input = privateKeyPattern.ReplaceAllString(input, redactedValue)
+	input = authorizationHeaderPattern.ReplaceAllString(input, "$1"+redactedValue)
 	for _, re := range sensitivePatterns {
 		input = re.ReplaceAllString(input, "$1="+redactedValue)
 	}
@@ -189,6 +200,12 @@ func RedactSensitiveInfo(input string) string {
 // ContainsSensitiveInfo reports whether the input contains any
 // pattern that looks like a secret.
 func ContainsSensitiveInfo(input string) bool {
+	if privateKeyPattern.MatchString(input) {
+		return true
+	}
+	if authorizationHeaderPattern.MatchString(input) {
+		return true
+	}
 	for _, re := range sensitivePatterns {
 		if re.MatchString(input) {
 			return true

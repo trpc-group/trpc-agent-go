@@ -2,8 +2,7 @@ diff --git a/config/secrets.go b/config/secrets.go
 index 1234567..89abcde 100644
 --- a/config/secrets.go
 +++ b/config/secrets.go
-@@ -1,3 +1,18 @@ package config
-
+@@ -1,0 +1,22 @@ package config
 +const apiKey = "sk-proj-abcdef1234567890abcdef"
 +const apiSecret = "secret_1234567890abcdef1234567890"
 +const password = "MyP@ssw0rd!2024"

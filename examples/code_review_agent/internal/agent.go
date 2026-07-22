@@ -91,7 +91,7 @@ func NewReviewAgentWithConfig(storage Storage, sandboxCfg SandboxConfig) *Review
 func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *ReviewResult, err error) {
 	taskID := input.TaskID
 	if taskID == "" {
-		taskID = "review-" + uuid.NewString()[:8]
+		taskID = "review-" + uuid.NewString()
 	}
 
 	monitor := NewMonitor(taskID)
@@ -156,7 +156,7 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	for i := range rawFindings {
 		rawFindings[i].Evidence = RedactSensitiveInfo(rawFindings[i].Evidence)
 		if rawFindings[i].ID == "" {
-			rawFindings[i].ID = uuid.NewString()[:8]
+			rawFindings[i].ID = uuid.NewString()
 		}
 	}
 
@@ -187,7 +187,7 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 		for _, cmd := range sandboxCommands {
 			decision, reason := a.policy.Decide(cmd)
 			rec := &PermissionRecord{
-				ID:        uuid.NewString()[:8],
+				ID:        uuid.NewString(),
 				TaskID:    taskID,
 				Command:   cmd,
 				Decision:  decision,
@@ -228,7 +228,7 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	// 8. Save findings to storage.
 	for i := range findings {
 		if findings[i].ID == "" {
-			findings[i].ID = uuid.NewString()[:8]
+			findings[i].ID = uuid.NewString()
 		}
 		if err := a.storage.SaveFinding(ctx, taskID, &findings[i]); err != nil {
 			return nil, fmt.Errorf("save finding: %w", err)
@@ -252,7 +252,7 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	mdReport := GenerateMarkdownReport(reportData)
 
 	report := &ReviewReport{
-		ID:         uuid.NewString()[:8],
+		ID:         uuid.NewString(),
 		TaskID:     taskID,
 		ReportJSON: jsonReport,
 		ReportMD:   mdReport,
@@ -262,8 +262,8 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 		return nil, fmt.Errorf("save report: %w", err)
 	}
 	for _, artifact := range []*Artifact{
-		{ID: uuid.NewString()[:8], TaskID: taskID, Name: "review_report.json", MIMEType: "application/json", Size: int64(len(jsonReport)), CreatedAt: time.Now()},
-		{ID: uuid.NewString()[:8], TaskID: taskID, Name: "review_report.md", MIMEType: "text/markdown", Size: int64(len(mdReport)), CreatedAt: time.Now()},
+		{ID: uuid.NewString(), TaskID: taskID, Name: "review_report.json", MIMEType: "application/json", Size: int64(len(jsonReport)), CreatedAt: time.Now()},
+		{ID: uuid.NewString(), TaskID: taskID, Name: "review_report.md", MIMEType: "text/markdown", Size: int64(len(mdReport)), CreatedAt: time.Now()},
 	} {
 		if err := a.storage.SaveArtifact(ctx, artifact); err != nil {
 			return nil, fmt.Errorf("save artifact metadata: %w", err)

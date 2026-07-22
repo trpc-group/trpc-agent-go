@@ -2,10 +2,9 @@ diff --git a/auth/handler.go b/auth/handler.go
 index 1234567..89abcde 100644
 --- a/auth/handler.go
 +++ b/auth/handler.go
-@@ -5,6 +5,18 @@ import (
+@@ -5,2 +5,18 @@ import (
  	"database/sql"
  )
-
 +func Login(db *sql.DB, username string) (*User, error) {
 +	query := "SELECT id, name FROM users WHERE name = '" + username + "'"
 +	rows, err := db.Query(query)

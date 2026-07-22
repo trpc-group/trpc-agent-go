@@ -74,6 +74,40 @@ func TestPermissionPolicy_AllowGitStatus(t *testing.T) {
 	require.Equal(t, DecisionAllow, d)
 }
 
+func TestPermissionPolicy_ReviewsGitGlobalOptionBypasses(t *testing.T) {
+	policy := NewDefaultPermissionPolicy()
+	for _, command := range []string{
+		"git -C . push origin main",
+		"git -c alias.inspect=reset inspect --hard HEAD~1",
+	} {
+		t.Run(command, func(t *testing.T) {
+			decision, _ := policy.Decide(command)
+			require.Equal(t, DecisionNeedsHumanReview, decision)
+		})
+	}
+}
+
+func TestPermissionPolicy_ReviewsUnknownGitSubcommands(t *testing.T) {
+	policy := NewDefaultPermissionPolicy()
+	decision, _ := policy.Decide("git commit -am generated")
+	require.Equal(t, DecisionNeedsHumanReview, decision)
+}
+
+func TestPermissionPolicy_DoesNotTrustPathQualifiedExecutables(t *testing.T) {
+	policy := NewDefaultPermissionPolicy()
+	for _, command := range []string{
+		"./go test ./...",
+		"/tmp/git status",
+		`C:\evil\git status`,
+		`C:\evil\git.exe status`,
+	} {
+		t.Run(command, func(t *testing.T) {
+			decision, _ := policy.Decide(command)
+			require.Equal(t, DecisionNeedsHumanReview, decision)
+		})
+	}
+}
+
 func TestPermissionPolicy_AskShellPipe(t *testing.T) {
 	p := NewDefaultPermissionPolicy()
 	d, _ := p.Decide("cat file | grep secret")
@@ -97,6 +131,30 @@ func TestPermissionPolicy_EmptyCommand(t *testing.T) {
 	p := NewDefaultPermissionPolicy()
 	d, _ := p.Decide("")
 	require.Equal(t, DecisionDeny, d)
+}
+
+func TestPermissionPolicy_BlocksShellCommandStringVariants(t *testing.T) {
+	policy := NewDefaultPermissionPolicy()
+	for _, command := range []string{
+		"bash -lc rm -rf /tmp/work",
+		"bash --noprofile -c rm",
+		"bash -O extglob -c rm",
+		"sh -ec rm",
+		"zsh -fc rm",
+	} {
+		t.Run(command, func(t *testing.T) {
+			decision, _ := policy.Decide(command)
+			require.Equal(t, DecisionNeedsHumanReview, decision)
+		})
+	}
+}
+
+func TestPermissionPolicy_DoesNotTreatScriptArgumentsAsShellOptions(t *testing.T) {
+	policy := NewDefaultPermissionPolicy()
+	decision, _ := policy.Decide("bash script.sh -c harmless")
+	require.Equal(t, DecisionAllow, decision)
+	decision, _ = policy.Decide("sh -- script.sh -c harmless")
+	require.Equal(t, DecisionAsk, decision)
 }
 
 func TestIsBlocked(t *testing.T) {

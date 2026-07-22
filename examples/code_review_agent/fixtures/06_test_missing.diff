@@ -2,10 +2,9 @@ diff --git a/service/user.go b/service/user.go
 index 1234567..89abcde 100644
 --- a/service/user.go
 +++ b/service/user.go
-@@ -5,6 +5,18 @@ import (
+@@ -5,2 +5,17 @@ import (
  	"fmt"
  )
-
 +// CreateUser creates a new user record.
 +func CreateUser(name, email string) (*User, error) {
 +	u := &User{Name: name, Email: email}

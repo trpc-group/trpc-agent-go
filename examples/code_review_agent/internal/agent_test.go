@@ -15,9 +15,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -37,6 +39,23 @@ func TestAgent_ReviewDryRun_CleanDiff(t *testing.T) {
 	for _, f := range result.Findings {
 		require.NotEqual(t, SeverityCritical, f.Severity,
 			"clean diff should not have critical findings")
+	}
+}
+
+func TestAgentGeneratedIDsUseFullUUIDs(t *testing.T) {
+	storage := newTestStorage(t)
+	agent := NewReviewAgent(storage)
+	result, err := agent.Review(context.Background(), ReviewInput{
+		DiffFile: filepath.Join("..", "fixtures", "02_security.diff"),
+		DryRun:   true,
+	})
+	require.NoError(t, err)
+	require.True(t, strings.HasPrefix(result.TaskID, "review-"))
+	_, err = uuid.Parse(strings.TrimPrefix(result.TaskID, "review-"))
+	require.NoError(t, err, "task IDs must retain the full UUID entropy")
+	for _, finding := range result.Findings {
+		_, err := uuid.Parse(finding.ID)
+		require.NoError(t, err, "finding IDs must retain the full UUID entropy")
 	}
 }
 

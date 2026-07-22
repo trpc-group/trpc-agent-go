@@ -103,36 +103,42 @@ func (p *PermissionPolicy) Decide(cmd string) (Decision, string) {
 	if len(parts) == 0 {
 		return DecisionDeny, "could not parse command"
 	}
-	base := parts[0]
-
-	// Strip path prefix: /usr/bin/go → go
-	base = strings.ReplaceAll(base, "\\", "/")
-	if idx := strings.LastIndex(base, "/"); idx >= 0 {
-		base = base[idx+1:]
-	}
+	rawBase := parts[0]
+	base, pathQualified := commandBaseName(rawBase)
 
 	// Check denied commands first (deny takes precedence).
 	if p.deniedCmds[base] {
 		return DecisionDeny,
 			"command '" + base + "' is in the denied list (high risk)"
 	}
+	// An allowlisted basename is not sufficient to trust an arbitrary path.
+	// For example, ./go or C:\\tmp\\git can be attacker-controlled binaries.
+	if pathQualified {
+		return DecisionNeedsHumanReview,
+			"path-qualified executable '" + rawBase + "' needs human review"
+	}
 
 	// Shell command strings bypass the base-command policy because the actual
 	// executable appears inside the -c payload. Require review before allowing
 	// any shell interpreter to evaluate such a string.
 	if (base == "bash" || base == "sh" || base == "zsh") &&
-		len(parts) > 1 && parts[1] == "-c" {
+		shellEvaluatesCommandString(parts[1:]) {
 		return DecisionNeedsHumanReview,
 			"shell -c evaluates a command string and needs human review"
 	}
 
-	// Check for specific dangerous git subcommands.
+	// Only explicitly read-only Git subcommands are automatic. Global options
+	// can move the repository or alter configuration before the real
+	// subcommand (for example, git -C repo push), so fail closed on them.
 	if base == "git" && len(parts) > 1 {
 		sub := parts[1]
-		switch sub {
-		case "push", "reset", "clean", "checkout", "rebase", "merge":
+		if strings.HasPrefix(sub, "-") {
 			return DecisionNeedsHumanReview,
-				"git " + sub + " modifies repository state and needs review"
+				"git global options need human review"
+		}
+		if !readOnlyGitSubcommands[sub] {
+			return DecisionNeedsHumanReview,
+				"git " + sub + " is not an explicitly read-only operation and needs human review"
 		}
 	}
 
@@ -157,6 +163,59 @@ func (p *PermissionPolicy) Decide(cmd string) (Decision, string) {
 	// Default: ask.
 	return DecisionAsk,
 		"command '" + base + "' is not in the allowed list"
+}
+
+var readOnlyGitSubcommands = map[string]bool{
+	"blame":        true,
+	"cat-file":     true,
+	"describe":     true,
+	"diff":         true,
+	"for-each-ref": true,
+	"grep":         true,
+	"log":          true,
+	"ls-files":     true,
+	"ls-tree":      true,
+	"name-rev":     true,
+	"rev-parse":    true,
+	"shortlog":     true,
+	"show":         true,
+	"status":       true,
+	"whatchanged":  true,
+}
+
+func commandBaseName(command string) (string, bool) {
+	normalized := strings.ReplaceAll(command, "\\", "/")
+	index := strings.LastIndex(normalized, "/")
+	if index < 0 {
+		return normalized, false
+	}
+	return normalized[index+1:], true
+}
+
+func shellEvaluatesCommandString(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		if arg == "-c" || (len(arg) > 2 && strings.HasPrefix(arg, "-") &&
+			!strings.HasPrefix(arg, "--") && strings.Contains(arg[1:], "c")) {
+			return true
+		}
+		// These shell options consume their following argument while option
+		// parsing remains active. Do not mistake that value for a script name.
+		switch arg {
+		case "-O", "+O", "-o", "+o", "--rcfile", "--init-file":
+			i++
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") && !strings.HasPrefix(arg, "+") {
+			// The first non-option is a script path. A later "-c" is only an
+			// ordinary argument passed to that script.
+			return false
+		}
+	}
+	return false
 }
 
 // IsBlocked returns true if the decision prevents sandbox execution
