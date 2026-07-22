@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
@@ -25,6 +26,7 @@ const (
 	reflectionFieldMaxChars    = 4000
 	reflectionMaxOutputTokens  = 64 * 1024
 	reflectionResponseMaxBytes = 256 * 1024
+	reflectionTruncationMarker = "\n...[truncated]...\n"
 )
 
 var errReflectionRejected = errors.New("reflection rejected")
@@ -156,20 +158,24 @@ func redactReflectionSpec(spec *evolution.SkillSpec) *evolution.SkillSpec {
 	if redacted == nil {
 		return nil
 	}
-	redacted.Name = redact.SensitiveText(redacted.Name)
-	redacted.Description = redact.SensitiveText(redacted.Description)
-	redacted.WhenToUse = redact.SensitiveText(redacted.WhenToUse)
+	redacted.Name = prepareReflectionField(redacted.Name)
+	redacted.Description = prepareReflectionField(redacted.Description)
+	redacted.WhenToUse = prepareReflectionField(redacted.WhenToUse)
 	for index := range redacted.Steps {
-		redacted.Steps[index] = redact.SensitiveText(redacted.Steps[index])
+		redacted.Steps[index] = prepareReflectionField(redacted.Steps[index])
 	}
 	for index := range redacted.Pitfalls {
-		redacted.Pitfalls[index] = redact.SensitiveText(redacted.Pitfalls[index])
+		redacted.Pitfalls[index] = prepareReflectionField(redacted.Pitfalls[index])
 	}
 	return redacted
 }
 
 func prepareReflectionField(value string) string {
-	return truncateReflectionField(redact.SensitiveText(value))
+	// Bound attacker-controlled text before the regular-expression redaction
+	// passes. A second bound preserves the field contract if replacement text
+	// changes the retained length.
+	bounded := truncateReflectionField(value)
+	return truncateReflectionField(redact.SensitiveText(bounded))
 }
 
 func applyReflection(
@@ -339,13 +345,44 @@ func jsonCandidates(raw string) []string {
 
 func truncateReflectionField(value string) string {
 	value = strings.TrimSpace(value)
-	runes := []rune(value)
-	if len(runes) <= reflectionFieldMaxChars {
-		return value
+	_, truncated := runeBoundaryAfter(value, reflectionFieldMaxChars)
+	if !truncated {
+		if utf8.ValidString(value) {
+			return value
+		}
+		return strings.ToValidUTF8(value, "\uFFFD")
 	}
-	head := reflectionFieldMaxChars * 3 / 4
-	tail := reflectionFieldMaxChars - head
-	return string(runes[:head]) + "\n...[truncated]...\n" + string(runes[len(runes)-tail:])
+	retained := reflectionFieldMaxChars - utf8.RuneCountInString(reflectionTruncationMarker)
+	head := retained * 3 / 4
+	tail := retained - head
+	headEnd, _ := runeBoundaryAfter(value, head)
+	tailStart := len(value)
+	for index := 0; index < tail; index++ {
+		_, size := utf8.DecodeLastRuneInString(value[:tailStart])
+		if size == 0 {
+			break
+		}
+		tailStart -= size
+	}
+	projected := value[:headEnd] + reflectionTruncationMarker + value[tailStart:]
+	if utf8.ValidString(projected) {
+		return projected
+	}
+	return strings.ToValidUTF8(projected, "\uFFFD")
+}
+
+// runeBoundaryAfter returns the byte offset after count decoded runes and
+// whether the string contains additional runes. It scans at most count+1
+// runes, avoiding an allocation proportional to an oversized input.
+func runeBoundaryAfter(value string, count int) (int, bool) {
+	seen := 0
+	for index := range value {
+		if seen == count {
+			return index, true
+		}
+		seen++
+	}
+	return len(value), false
 }
 
 func trimStrings(values []string) []string {

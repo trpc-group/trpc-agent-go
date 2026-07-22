@@ -161,6 +161,7 @@ func TestReflectorParsingAndModelFailures(t *testing.T) {
 	unicodeTruncated := truncateReflectionField(unicodeLong)
 	assert.True(t, utf8.ValidString(unicodeTruncated))
 	assert.Contains(t, unicodeTruncated, "[truncated]")
+	assert.LessOrEqual(t, utf8.RuneCountInString(unicodeTruncated), reflectionFieldMaxChars)
 
 	_, err = (&llmReflector{}).propose(context.Background(), reflectionInput{})
 	require.ErrorContains(t, err, "nil reflection model")
@@ -179,6 +180,23 @@ func TestReflectorParsingAndModelFailures(t *testing.T) {
 	text, err := generateText(context.Background(), &reflectionModel{response: "delta", stream: true}, request)
 	require.NoError(t, err)
 	assert.Equal(t, "delta", text)
+}
+
+func TestPrepareReflectionFieldBoundsBeforeRedaction(t *testing.T) {
+	headSecret := "head-secret-value"
+	tailSecret := "tail-secret-value"
+	oversized := "api_key=" + headSecret + strings.Repeat(
+		"界", reflectionFieldMaxChars*100,
+	) + "\nx-api-key: " + tailSecret
+
+	prepared := prepareReflectionField(oversized)
+
+	assert.True(t, utf8.ValidString(prepared))
+	assert.LessOrEqual(t, utf8.RuneCountInString(prepared), reflectionFieldMaxChars)
+	assert.Contains(t, prepared, "[truncated]")
+	assert.Contains(t, prepared, "[REDACTED]")
+	assert.NotContains(t, prepared, headSecret)
+	assert.NotContains(t, prepared, tailSecret)
 }
 
 func (*reflectionModel) Info() model.Info { return model.Info{Name: "reflection-test"} }

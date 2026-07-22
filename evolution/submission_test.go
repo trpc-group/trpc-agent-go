@@ -68,9 +68,11 @@ func TestSubmitRevisionHoldsEvaluatedCandidateForApproval(t *testing.T) {
 		},
 	}))
 	publisher := &submissionPublisher{}
+	repo := &mockSkillRepo{bodies: map[string]string{"Evaluated Skill": "body"}}
 	svc := NewService(nil,
 		WithCandidateStore(store),
 		WithPublisher(publisher),
+		WithSkillRepository(repo),
 		WithSpecGate(NewDefaultSpecGate()),
 		WithSafetyGate(NewDefaultSafetyGate()),
 	)
@@ -130,6 +132,7 @@ func TestSubmitRevisionPersistsAutomaticGateRejection(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
+		Action: RevisionActionCreate,
 		Spec: &SkillSpec{
 			Name:        "Invalid Candidate",
 			Description: "Only one step.",
@@ -276,6 +279,7 @@ func TestSubmitRevisionTreatsAuditFailureAsCommitted(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(ctx, RevisionRequest{
+		Action: RevisionActionCreate,
 		Spec: &SkillSpec{
 			Name:        "Audit Failure",
 			Description: "A structurally valid candidate.",
@@ -328,6 +332,20 @@ func TestWorkerUpdateUsesActiveRevisionAsParent(t *testing.T) {
 	assert.Equal(t, "rev-active", rev.ParentID)
 }
 
+func TestValidateCurrentParentTreatsEmptyParentAsNoActiveRevision(t *testing.T) {
+	ctx := context.Background()
+	pointer := NewFileActivePointer(t.TempDir())
+	rev := &Revision{
+		SkillID: "lineage-skill",
+		Action:  RevisionActionUpdate,
+	}
+	require.NoError(t, validateCurrentParent(ctx, pointer, rev))
+
+	require.NoError(t, pointer.Set(ctx, rev.SkillID, "rev-active"))
+	err := validateCurrentParent(ctx, pointer, rev)
+	require.ErrorIs(t, err, ErrStaleRevisionParent)
+}
+
 func TestPopulateParentRevisionIDSkipsInapplicableRevisions(t *testing.T) {
 	worker := newWorker(workerConfig{})
 	worker.populateParentRevisionID(context.Background(), nil, skill.SkillScope{}, false)
@@ -342,14 +360,19 @@ func TestPopulateParentRevisionIDSkipsInapplicableRevisions(t *testing.T) {
 
 func TestSubmitRevisionRejectsInvalidLineage(t *testing.T) {
 	store := NewFileCandidateStore(filepath.Join(t.TempDir(), "candidates"))
-	svc := NewService(nil, WithCandidateStore(store))
-	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 	spec := &SkillSpec{
 		Name:        "Lineage Skill",
 		Description: "Valid candidate body.",
 		WhenToUse:   "Testing lineage.",
 		Steps:       []string{"First.", "Second."},
 	}
+	svc := NewService(nil,
+		WithCandidateStore(store),
+		WithSkillRepository(&mockSkillRepo{
+			bodies: map[string]string{spec.Name: "body"},
+		}),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	submitter := revisionSubmitterForTest(t, svc)
 	_, err := submitter.SubmitRevision(context.Background(), RevisionRequest{
@@ -395,6 +418,9 @@ func TestSubmitRevisionRejectsStaleParent(t *testing.T) {
 	svc := NewService(nil,
 		WithCandidateStore(store),
 		WithActivePointer(pointer),
+		WithSkillRepository(&mockSkillRepo{
+			bodies: map[string]string{spec.Name: "body"},
+		}),
 	)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
@@ -413,16 +439,20 @@ func TestSubmitRevisionRejectsStaleParent(t *testing.T) {
 
 func TestSubmitRevisionReturnsActivePointerReadError(t *testing.T) {
 	store := NewFileCandidateStore(filepath.Join(t.TempDir(), "candidates"))
+	name := "Pointer Failure"
 	svc := NewService(nil,
 		WithCandidateStore(store),
 		WithActivePointer(errActivePointer{err: errors.New("pointer unavailable")}),
+		WithSkillRepository(&mockSkillRepo{
+			bodies: map[string]string{name: "body"},
+		}),
 	)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })
 
 	rev, err := revisionSubmitterForTest(t, svc).SubmitRevision(
 		context.Background(),
 		RevisionRequest{Spec: &SkillSpec{
-			Name:        "Pointer Failure",
+			Name:        name,
 			Description: "Valid candidate body.",
 			WhenToUse:   "Testing pointer errors.",
 			Steps:       []string{"First.", "Second."},
@@ -430,4 +460,57 @@ func TestSubmitRevisionReturnsActivePointerReadError(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "pointer unavailable")
 	assert.Nil(t, rev)
+}
+
+func TestSubmitRevisionEnforcesManagedSkillBoundary(t *testing.T) {
+	root := t.TempDir()
+	managedDir := filepath.Join(root, "managed")
+	store := NewFileCandidateStore(filepath.Join(root, "candidates"))
+	repo := &mockSkillRepo{
+		bodies: map[string]string{
+			"Protected Skill": "protected",
+			"Managed Skill":   "managed",
+		},
+		paths: map[string]string{
+			"Protected Skill": filepath.Join(root, "bundled", "protected-skill"),
+			"Managed Skill":   filepath.Join(managedDir, "managed-skill"),
+		},
+	}
+	svc := NewService(nil,
+		WithManagedSkillsDir(managedDir),
+		WithSkillRepository(repo),
+		WithCandidateStore(store),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	submitter := revisionSubmitterForTest(t, svc)
+	request := func(name string, action RevisionAction) RevisionRequest {
+		return RevisionRequest{
+			Action: action,
+			Spec: &SkillSpec{
+				Name:        name,
+				Description: "A valid candidate.",
+				WhenToUse:   "Testing submission isolation.",
+				Steps:       []string{"Run the workflow."},
+			},
+		}
+	}
+
+	_, err := submitter.SubmitRevision(
+		context.Background(), request("Protected Skill", RevisionActionUpdate),
+	)
+	require.ErrorContains(t, err, "not evolution-managed")
+	_, err = submitter.SubmitRevision(
+		context.Background(), request("Missing Skill", RevisionActionUpdate),
+	)
+	require.ErrorContains(t, err, "does not exist in skill repository")
+	_, err = submitter.SubmitRevision(
+		context.Background(), request("Protected Skill", RevisionActionCreate),
+	)
+	require.ErrorContains(t, err, "already exists")
+
+	rev, err := submitter.SubmitRevision(
+		context.Background(), request("Managed Skill", RevisionActionUpdate),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, RevisionPendingApproval, rev.Status)
 }

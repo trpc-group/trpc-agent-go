@@ -23,7 +23,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
+	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
+
+type optimizerSkillRepository struct {
+	name string
+}
+
+func (r optimizerSkillRepository) Summaries() []skill.Summary {
+	return []skill.Summary{{Name: r.name}}
+}
+
+func (r optimizerSkillRepository) Get(name string) (*skill.Skill, error) {
+	if name != r.name {
+		return nil, os.ErrNotExist
+	}
+	return &skill.Skill{Summary: skill.Summary{Name: name}, Body: "baseline"}, nil
+}
+
+func (r optimizerSkillRepository) Path(name string) (string, error) {
+	if name != r.name {
+		return "", os.ErrNotExist
+	}
+	return filepath.Join("skills", name), nil
+}
 
 type improvingReflector struct{}
 
@@ -447,6 +470,7 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	}))
 	svc := evolution.NewService(nil,
 		evolution.WithCandidateStore(store),
+		evolution.WithSkillRepository(optimizerSkillRepository{name: testSeedSpec().Name}),
 		evolution.WithSpecGate(evolution.NewDefaultSpecGate()),
 	)
 	t.Cleanup(func() { require.NoError(t, svc.Close()) })

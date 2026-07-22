@@ -946,6 +946,11 @@ func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 	if publisher == nil {
 		return false
 	}
+	unlock, ok := lockRevisionForPublication(ctx, store, pointer, rev)
+	if !ok {
+		return false
+	}
+	defer unlock()
 	switch rev.Action {
 	case RevisionActionDelete:
 		if err := publisher.DeleteSkill(ctx, revisionTargetName(rev)); err != nil {
@@ -1006,6 +1011,48 @@ func (w *worker) publishRevision(ctx context.Context, rev *Revision, actionLabel
 		}
 	})
 	return true
+}
+
+func lockRevisionForPublication(
+	ctx context.Context,
+	store CandidateStore,
+	pointer ActivePointer,
+	rev *Revision,
+) (func(), bool) {
+	unlock, err := lockRevisionMutation(ctx, store, rev.SkillID)
+	if err != nil {
+		log.WarnfContext(ctx, "evolution: lock revision %s failed: %v", rev.RevisionID, err)
+		return nil, false
+	}
+	if err := validateCurrentParent(ctx, pointer, rev); err != nil {
+		if errors.Is(err, ErrStaleRevisionParent) {
+			rejectStaleWorkerRevision(ctx, store, rev, err)
+		}
+		log.WarnfContext(ctx, "evolution: publish revision %s failed: %v", rev.RevisionID, err)
+		unlock()
+		return nil, false
+	}
+	return unlock, true
+}
+
+func rejectStaleWorkerRevision(
+	ctx context.Context,
+	store CandidateStore,
+	rev *Revision,
+	cause error,
+) {
+	rev.Status = RevisionRejected
+	if store == nil {
+		return
+	}
+	_ = store.WriteRevision(ctx, rev)
+	_ = store.AppendAudit(ctx, AuditEvent{
+		Action:     AuditActionReject,
+		SkillID:    rev.SkillID,
+		RevisionID: rev.RevisionID,
+		Status:     string(rev.Status),
+		Reason:     cause.Error(),
+	})
 }
 
 func auditActionForRevisionPromotion(rev *Revision) AuditAction {

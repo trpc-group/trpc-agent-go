@@ -158,8 +158,8 @@ The optimizer:
 1. evaluates the seed skill on a validation split;
 2. evaluates a Pareto-selected parent on a feedback minibatch and sends the
    current skill, case input and expected value, score, output, evaluator
-   feedback, and trace to a reflection model after best-effort credential
-   redaction;
+   feedback, and trace to a reflection model after bounding each text field and
+   applying best-effort credential redaction;
 3. changes exactly one `SkillSpec` component and accepts the child only when it
    strictly improves the paired minibatch;
 4. tracks per-case validation winners and samples parents by instance-level
@@ -198,6 +198,12 @@ learning. The default service implements `evolution.RevisionSubmitter`, while a
 custom `evolution.Service` may omit it. Resolve that capability once during
 application wiring so a configuration error is found before an optimization
 run starts:
+
+Submission uses the configured skill repository as a write boundary. An update
+must target an existing skill and, when `WithManagedSkillsDir` is configured,
+that skill must reside below the managed directory. A create must not collide
+with an existing repository skill. Pass the same repository used by the agent
+so these checks see bundled, user-authored, and evolution-managed skills.
 
 ```go
 revisionSubmitter, ok := evoSvc.(evolution.RevisionSubmitter)
@@ -274,9 +280,11 @@ Case IDs must be unique across splits. Scores must be finite and normalized to
 `[0,1]`. `PromotionEligible` and `PromotionReason` are populated even when
 `Submit` is false, so callers do not need to duplicate the holdout threshold
 and critical-case policy. Submission requires at least ten cases in each split.
-Keep holdout cases hidden from the search. The optimizer applies the same
-best-effort credential-pattern redaction used by the online reviewer, but this
-does not identify tenant-specific sensitive data. Applications must sanitize
+Keep holdout cases hidden from the search. Before applying the same best-effort
+credential-pattern redaction used by the online reviewer, the optimizer
+projects each model-bound text field to a bounded UTF-8-safe head and tail.
+This keeps redaction memory bounded, but does not identify tenant-specific
+sensitive data. Applications must sanitize
 the seed skill, case input and expected value, evaluator output, feedback, and
 trace before returning them, and run candidate agents without production
 credentials or side-effecting tools. Filesystem records also contain dataset

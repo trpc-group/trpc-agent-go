@@ -30,7 +30,10 @@ const revisionEvidenceDeltaTolerance = 1e-9
 // least one non-empty step. For updates, ParentID is an optimistic concurrency
 // token: when an active pointer is configured, the service rejects a request
 // whose parent is no longer active. An empty ParentID is populated from the
-// current active revision when one is available.
+// current active revision when one is available; otherwise it asserts that no
+// active revision exists. Update targets must already exist in the configured
+// skill repository and, when ManagedSkillsDir is set, reside under that
+// directory. Create targets must not already exist.
 type RevisionRequest struct {
 	Scope    skill.SkillScope
 	Source   string
@@ -79,6 +82,9 @@ func (w *worker) submitRevision(
 	}
 
 	rev := newSubmittedRevision(req, action)
+	if err := w.validateSubmissionTarget(rev, repo, scope, scoped); err != nil {
+		return nil, err
+	}
 	if err := w.validateSubmissionParent(ctx, rev, scope, scoped, store); err != nil {
 		return nil, err
 	}
@@ -216,6 +222,38 @@ func newSubmittedRevision(req RevisionRequest, action RevisionAction) *Revision 
 	}
 }
 
+func (w *worker) validateSubmissionTarget(
+	rev *Revision,
+	repo skill.Repository,
+	scope skill.SkillScope,
+	scoped bool,
+) error {
+	name := revisionTargetName(rev)
+	switch rev.Action {
+	case RevisionActionCreate:
+		if skillExists(repo, name) {
+			return fmt.Errorf(
+				"evolution: submit revision: create target %q already exists",
+				name,
+			)
+		}
+	case RevisionActionUpdate:
+		if !skillExists(repo, name) {
+			return fmt.Errorf(
+				"evolution: submit revision: update target %q does not exist in skill repository",
+				name,
+			)
+		}
+		if !w.isEvolutionManagedSkill(name, repo, scope, scoped) {
+			return fmt.Errorf(
+				"evolution: submit revision: update target %q is not evolution-managed",
+				name,
+			)
+		}
+	}
+	return nil
+}
+
 func (w *worker) validateSubmissionParent(
 	ctx context.Context,
 	rev *Revision,
@@ -260,7 +298,7 @@ func validateCurrentParent(
 	pointer ActivePointer,
 	rev *Revision,
 ) error {
-	if pointer == nil || rev == nil || rev.Action != RevisionActionUpdate || rev.ParentID == "" {
+	if pointer == nil || rev == nil || rev.Action != RevisionActionUpdate {
 		return nil
 	}
 	activeID, err := readActiveRevisionID(ctx, pointer, rev.SkillID)
