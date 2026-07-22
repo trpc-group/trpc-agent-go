@@ -127,6 +127,25 @@ func TestAssistantEpisodeExtractionRequiresMemoryAdd(t *testing.T) {
 	}
 }
 
+func TestAssistantEpisodeExtractionRespectsEmptyEnabledTools(t *testing.T) {
+	ext := NewExtractor(nil, WithAssistantEpisodeExtraction()).(*memoryExtractor)
+	ext.SetEnabledTools(map[string]struct{}{})
+	if tools := ext.extractionTools(); len(tools) != 0 {
+		t.Fatalf("extraction tools = %#v, want none", tools)
+	}
+	if prompt := ext.buildSystemPrompt(time.Time{}, nil); strings.Contains(prompt, assistantEpisodeToolName) {
+		t.Fatal("assistant episode prompt is enabled while all memory tools are disabled")
+	}
+	got := ext.parseToolCallWithMessages(context.Background(), assistantEpisodeToolCall(`{
+		"memory":"The assistant supplied an answer."
+	}`), []model.Message{
+		model.NewAssistantMessage("An answer."),
+	})
+	if got != nil {
+		t.Fatalf("disabled assistant episode operation = %#v, want nil", got)
+	}
+}
+
 func TestAssistantEpisodeExtractionCreatesEpisode(t *testing.T) {
 	ext := NewExtractor(nil, WithAssistantEpisodeExtraction()).(*memoryExtractor)
 	messages := []model.Message{

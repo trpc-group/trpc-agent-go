@@ -39,10 +39,7 @@ func WithAssistantEpisodeExtraction() Option {
 }
 
 func (e *memoryExtractor) extractionTools() map[string]tool.Tool {
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
-	}
+	tools := filterTools(backgroundTools, e.enabledTools)
 	if !e.assistantEpisodeExtraction || !e.assistantEpisodeAddEnabled() {
 		return tools
 	}
@@ -159,9 +156,7 @@ func (e *memoryExtractor) parseAssistantEpisode(
 }
 
 func (e *memoryExtractor) assistantEpisodeAddEnabled() bool {
-	// Match the extractor's existing tool-filter behavior: a nil or empty
-	// enabled set leaves all background tools available.
-	if len(e.enabledTools) == 0 {
+	if e.enabledTools == nil {
 		return true
 	}
 	_, ok := e.enabledTools[memory.AddToolName]
