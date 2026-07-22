@@ -188,13 +188,15 @@ func (w *ingestWorker) ingest(
 	if w.apiMode == apiModeSelfHostedOSS {
 		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
 	}
+	metadata := cloneMetadata(reqOpts.metadata)
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
 		UserID:    userKey.UserID,
 		AppID:     userKey.AppName,
 		AgentID:   reqOpts.agentID,
 		RunID:     reqOpts.runID,
-		Metadata:  cloneMetadata(reqOpts.metadata),
+		Metadata:  metadata,
+		Timestamp: mem0TimestampFromMetadata(metadata),
 		Infer:     reqOpts.infer,
 		Async:     w.asyncMode,
 		Version:   w.version,

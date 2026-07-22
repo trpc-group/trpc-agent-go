@@ -1507,6 +1507,19 @@ func MergeHybridResults(
 	k int,
 	maxResults int,
 ) []*memory.Entry {
+	return MergeRankedResults(
+		[][]*memory.Entry{primary, secondary}, k, maxResults,
+	)
+}
+
+// MergeRankedResults combines any number of ranked result lists using
+// equal-weight Reciprocal Rank Fusion. Scores are assigned using
+// 1 / (k + rank) and summed across result lists.
+func MergeRankedResults(
+	rankings [][]*memory.Entry,
+	k int,
+	maxResults int,
+) []*memory.Entry {
 	if k <= 0 {
 		k = DefaultHybridRRFK
 	}
@@ -1516,7 +1529,7 @@ func MergeHybridResults(
 		score float64
 	}
 
-	scores := make(map[string]*rrfEntry, len(primary)+len(secondary))
+	scores := make(map[string]*rrfEntry)
 	accumulate := func(results []*memory.Entry) {
 		for rank, entry := range results {
 			if entry == nil || entry.ID == "" {
@@ -1534,8 +1547,9 @@ func MergeHybridResults(
 			}
 		}
 	}
-	accumulate(primary)
-	accumulate(secondary)
+	for _, ranking := range rankings {
+		accumulate(ranking)
+	}
 
 	merged := make([]*memory.Entry, 0, len(scores))
 	for _, scored := range scores {
@@ -1564,6 +1578,22 @@ func MergeHybridResults(
 //     hold: a chain such as A~B, B~C, A!~C still drops C because C has
 //     a higher-scored near-duplicate (B) in the input.
 func DeduplicateResults(results []*memory.Entry) []*memory.Entry {
+	return deduplicateResults(results, false)
+}
+
+// DeduplicateResultsPreservingConflicts behaves like DeduplicateResults but
+// retains near-duplicates with different critical values as state history and
+// orders the newer conflicting state first.
+func DeduplicateResultsPreservingConflicts(
+	results []*memory.Entry,
+) []*memory.Entry {
+	return deduplicateResults(results, true)
+}
+
+func deduplicateResults(
+	results []*memory.Entry,
+	preserveConflicts bool,
+) []*memory.Entry {
 	const jaccardThreshold = 0.80
 	if len(results) < 2 {
 		return results
@@ -1571,8 +1601,12 @@ func DeduplicateResults(results []*memory.Entry) []*memory.Entry {
 
 	// Build token sets once per entry; reused across all comparisons.
 	sets := make([]map[string]struct{}, len(results))
+	criticalValues := make([]string, len(results))
 	for i, r := range results {
 		sets[i] = entryTokenSet(r)
+		if preserveConflicts {
+			criticalValues[i] = memoryCriticalValueSignature(r)
+		}
 	}
 
 	// Visit indices in score-descending order so that the first
@@ -1612,7 +1646,9 @@ func DeduplicateResults(results []*memory.Entry) []*memory.Entry {
 		isDup := false
 		for prev := 0; prev < pos; prev++ {
 			k := order[prev]
-			if jaccardAtLeast(sets[idx], sets[k], jaccardThreshold) {
+			if jaccardAtLeast(sets[idx], sets[k], jaccardThreshold) &&
+				(!preserveConflicts ||
+					!criticalValuesConflict(criticalValues[idx], criticalValues[k])) {
 				isDup = true
 				break
 			}
@@ -1626,12 +1662,76 @@ func DeduplicateResults(results []*memory.Entry) []*memory.Entry {
 	// Emit survivors in the original input order so callers relying on
 	// the historical ordering semantics keep working.
 	deduped := make([]*memory.Entry, 0, len(results))
+	dedupedSets := make([]map[string]struct{}, 0, len(results))
+	dedupedCriticalValues := make([]string, 0, len(results))
 	for i, r := range results {
 		if kept[i] {
 			deduped = append(deduped, r)
+			dedupedSets = append(dedupedSets, sets[i])
+			dedupedCriticalValues = append(dedupedCriticalValues, criticalValues[i])
 		}
 	}
+	if preserveConflicts {
+		orderConflictingMemoryStates(
+			deduped, dedupedSets, dedupedCriticalValues, jaccardThreshold,
+		)
+	}
 	return deduped
+}
+
+func criticalValuesConflict(left, right string) bool {
+	return left != "" && right != "" && left != right
+}
+
+func memoryCriticalValueSignature(entry *memory.Entry) string {
+	if entry == nil || entry.Memory == nil {
+		return ""
+	}
+	values := retrievalCriticalValuePattern.FindAllString(
+		strings.ToLower(entry.Memory.Memory), -1,
+	)
+	if len(values) == 0 {
+		return ""
+	}
+	for index, value := range values {
+		values[index] = normalizeCriticalValue(value)
+	}
+	sort.Strings(values)
+	values = slices.Compact(values)
+	return strings.Join(values, "|")
+}
+
+func orderConflictingMemoryStates(
+	results []*memory.Entry,
+	sets []map[string]struct{},
+	criticalValues []string,
+	threshold float64,
+) {
+	for i := 0; i < len(results); i++ {
+		for j := i + 1; j < len(results); j++ {
+			if !criticalValuesConflict(criticalValues[i], criticalValues[j]) ||
+				!jaccardAtLeast(sets[i], sets[j], threshold) ||
+				!memoryEntryNewer(results[j], results[i]) {
+				continue
+			}
+			results[i], results[j] = results[j], results[i]
+			sets[i], sets[j] = sets[j], sets[i]
+			criticalValues[i], criticalValues[j] = criticalValues[j], criticalValues[i]
+		}
+	}
+}
+
+func memoryEntryNewer(left, right *memory.Entry) bool {
+	if left == nil {
+		return false
+	}
+	if right == nil {
+		return true
+	}
+	if !left.UpdatedAt.Equal(right.UpdatedAt) {
+		return left.UpdatedAt.After(right.UpdatedAt)
+	}
+	return left.CreatedAt.After(right.CreatedAt)
 }
 
 // entryTokenSet builds a Jaccard-friendly token set from an entry's

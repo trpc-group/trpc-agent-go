@@ -49,6 +49,19 @@ type MemoryExtractor interface {
 	Metadata() map[string]any
 }
 
+// UpdatePolicy controls how automatic extraction reconciles new information
+// with existing memories. Unknown values fall back to UpdatePolicyReconcile.
+type UpdatePolicy string
+
+const (
+	// UpdatePolicyReconcile preserves the existing automatic reconciliation
+	// behavior, including merging moderately similar memories.
+	UpdatePolicyReconcile UpdatePolicy = "reconcile"
+	// UpdatePolicyAddOnly permits automatic extraction to add memories or skip
+	// duplicates, but never to update, delete, or clear stored memories.
+	UpdatePolicyAddOnly UpdatePolicy = "add-only"
+)
+
 // Operation represents a memory operation to be executed.
 type Operation struct {
 	// Type is the type of operation (add, update, delete).
@@ -65,6 +78,11 @@ type Operation struct {
 	EventTime    *time.Time  // When the event occurred.
 	Participants []string    // People involved in the event.
 	Location     string      // Where the event took place.
+
+	// assistantResult is set only by the built-in extractor's private result
+	// tool. It lets auto memory apply a different persistence policy without
+	// adding a public operation type or extension point.
+	assistantResult bool
 }
 
 // OperationType defines the type of memory operation.

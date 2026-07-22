@@ -846,6 +846,61 @@ func TestSearchResultDeduplicationHelpers(t *testing.T) {
 		assert.Len(t, deduped, 2,
 			"tokenless entries carry no lexical evidence of duplication and must both survive")
 	})
+
+	t.Run("deduplicate preserves conflicting states newest first", func(t *testing.T) {
+		older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
+		newer := older.Add(time.Hour)
+		four := &memory.Entry{
+			ID:        "four",
+			Score:     0.95,
+			CreatedAt: older,
+			UpdatedAt: older,
+			Memory: &memory.Memory{
+				Memory: "Has written four short stories since starting to write regularly",
+			},
+		}
+		seven := &memory.Entry{
+			ID:        "seven",
+			Score:     0.90,
+			CreatedAt: newer,
+			UpdatedAt: newer,
+			Memory: &memory.Memory{
+				Memory: "Has written seven short stories since starting to write regularly",
+			},
+		}
+
+		ordinary := DeduplicateResults([]*memory.Entry{four, seven})
+		require.Len(t, ordinary, 1)
+		assert.Equal(t, "four", ordinary[0].ID)
+
+		deduped := DeduplicateResultsPreservingConflicts(
+			[]*memory.Entry{four, seven},
+		)
+		require.Len(t, deduped, 2)
+		assert.Equal(t, "seven", deduped[0].ID)
+		assert.Equal(t, "four", deduped[1].ID)
+	})
+
+	t.Run("deduplicate normalizes equivalent number forms", func(t *testing.T) {
+		results := []*memory.Entry{
+			{ID: "word", Score: 0.9, Memory: &memory.Memory{
+				Memory: "Has written four short stories this month since starting to write regularly",
+			}},
+			{ID: "digit", Score: 0.8, Memory: &memory.Memory{
+				Memory: "Has written 4 short stories this month since starting to write regularly",
+			}},
+		}
+
+		deduped := DeduplicateResultsPreservingConflicts(results)
+		require.Len(t, deduped, 1)
+		assert.Equal(t, "word", deduped[0].ID)
+	})
+
+	t.Run("deduplicate normalizes compound number forms", func(t *testing.T) {
+		assert.Equal(t, "21", normalizeCriticalValue("twenty-one"))
+		assert.Equal(t, "21", normalizeCriticalValue("twenty one"))
+		assert.Equal(t, "21", normalizeCriticalValue("21"))
+	})
 }
 
 func TestMatchMemoryEntry_FallbackNoTokens(t *testing.T) {
@@ -1776,6 +1831,27 @@ func TestMergeHybridResults_UsesDefaultKAndSkipsInvalidEntries(t *testing.T) {
 	assert.Equal(t, "mem-1", results[0].ID)
 	assert.Equal(t, "mem-3", results[1].ID)
 	assert.Greater(t, results[0].Score, results[1].Score)
+}
+
+func TestMergeRankedResults_CombinesMultipleRankingsDeterministically(t *testing.T) {
+	base := time.Date(2024, 5, 7, 0, 0, 0, 0, time.UTC)
+	entry := func(id string) *memory.Entry {
+		return newSearchTestEntry(id, id, nil, base, base)
+	}
+	rankings := [][]*memory.Entry{
+		{entry("shared"), entry("vector-only")},
+		{entry("keyword-only"), entry("shared")},
+		{entry("shared"), entry("kind-only")},
+	}
+
+	first := MergeRankedResults(rankings, 0, 3)
+	second := MergeRankedResults(rankings, 0, 3)
+
+	require.Len(t, first, 3)
+	assert.Equal(t, "shared", first[0].ID)
+	assert.Equal(t, []string{first[0].ID, first[1].ID, first[2].ID},
+		[]string{second[0].ID, second[1].ID, second[2].ID})
+	assert.Greater(t, first[0].Score, first[1].Score)
 }
 
 func TestIsPunctToken(t *testing.T) {

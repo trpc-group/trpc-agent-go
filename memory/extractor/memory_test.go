@@ -12,6 +12,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,38 @@ func (m *nilChannelModel) Info() model.Info {
 	return model.Info{Name: m.name}
 }
 
+type sequenceModel struct {
+	name      string
+	responses [][]*model.Response
+	errors    []error
+	requests  []*model.Request
+}
+
+func (m *sequenceModel) GenerateContent(
+	ctx context.Context,
+	request *model.Request,
+) (<-chan *model.Response, error) {
+	index := len(m.requests)
+	m.requests = append(m.requests, request)
+	if index < len(m.errors) && m.errors[index] != nil {
+		return nil, m.errors[index]
+	}
+	var responses []*model.Response
+	if index < len(m.responses) {
+		responses = m.responses[index]
+	}
+	ch := make(chan *model.Response, len(responses))
+	for _, response := range responses {
+		ch <- response
+	}
+	close(ch)
+	return ch, nil
+}
+
+func (m *sequenceModel) Info() model.Info {
+	return model.Info{Name: m.name}
+}
+
 // newMockModelWithToolCalls creates a mock model that returns tool calls.
 func newMockModelWithToolCalls(toolCalls []model.ToolCall) *mockModel {
 	return &mockModel{
@@ -144,6 +177,493 @@ func TestNewExtractor(t *testing.T) {
 		extractor := e.(*memoryExtractor)
 		assert.Equal(t, defaultPrompt, extractor.prompt)
 	})
+}
+
+func TestExtractor_UpdatePolicyOptions(t *testing.T) {
+	m := &mockModel{name: "test-model"}
+
+	tests := []struct {
+		name string
+		in   UpdatePolicy
+		want UpdatePolicy
+	}{
+		{name: "default", want: UpdatePolicyReconcile},
+		{name: "reconcile", in: UpdatePolicyReconcile, want: UpdatePolicyReconcile},
+		{name: "add only", in: UpdatePolicyAddOnly, want: UpdatePolicyAddOnly},
+		{name: "unknown", in: UpdatePolicy("custom"), want: UpdatePolicyReconcile},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var e MemoryExtractor
+			if tt.name == "default" {
+				e = NewExtractor(m)
+			} else {
+				e = NewExtractor(m, WithUpdatePolicy(tt.in))
+			}
+			meta := e.Metadata()
+			assert.Equal(t, string(tt.want), meta[metadataKeyUpdatePolicy])
+		})
+	}
+
+	addOnly := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
+	assert.Contains(t,
+		addOnly.buildSystemPrompt(time.Now(), nil),
+		`<update_policy name="add-only">`,
+	)
+}
+
+func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
+	e := NewExtractor(
+		&mockModel{name: "test-model"},
+		WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+	meta := e.Metadata()
+	assert.Equal(t, true, meta[metadataKeyAssistantResults])
+
+	refDate := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	prompt := e.buildSystemPrompt(refDate, nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+	assert.Contains(t, prompt, "<assistant_result_extraction>")
+	assert.Contains(t, prompt, "DIRECT-RESULT CHECK")
+	assert.Contains(t, normalizedPrompt,
+		"requested extraction, classification, or transformation")
+	assert.Contains(t, prompt, "rationale, disclaimer, opinion, analysis")
+	assert.Contains(t, prompt, "Plan B best balances")
+	assert.Contains(t, prompt, "reliability and cost")
+	assert.Contains(t, prompt, "Do not store general definitions")
+	assert.Contains(t, prompt, `must begin with "Assistant result:"`)
+	assert.Contains(t, prompt, assistantResultAddToolName)
+	assert.Contains(t, assistantResultAddTool.Declaration().Description,
+		"assistant's direct reply")
+}
+
+func TestExtractor_DefaultPromptGroundsCurrentTurnReferences(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(time.Now(), nil)
+	assert.Contains(t, prompt, "CURRENT-TURN GROUNDING")
+	assert.Contains(t, prompt,
+		"Existing memories are comparison context")
+	assert.Contains(t, prompt,
+		"nearest explicit question, label, or restatement")
+}
+
+func TestExtractor_DefaultPromptRequiresGroundedStateTransitions(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(time.Now(), nil)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+	assert.Contains(t, prompt, "SOURCE-FAITHFUL STATE")
+	assert.Contains(t, normalizedPrompt,
+		"Before writing a transition or lifecycle relationship")
+	assert.Contains(t, normalizedPrompt,
+		"A related new fact does not prove that the old fact ended")
+	assert.Contains(t, normalizedPrompt,
+		`Words such as "old", "new", "another", and "since"`)
+	assert.Contains(t, normalizedPrompt,
+		`"Moved on from the laptop", "Previously had the laptop"`)
+	assert.Contains(t, normalizedPrompt,
+		`explicit source wording such as "sold", "traded in", "replaced"`)
+}
+
+func TestExtractor_DefaultPromptAnchorsCumulativeStateToObservation(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(
+		time.Date(2023, 5, 30, 0, 0, 0, 0, time.UTC), nil,
+	)
+	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
+	assert.Contains(t, normalizedPrompt,
+		"Anchor event_time to the main assertion")
+	assert.Contains(t, normalizedPrompt,
+		"current cumulative state observed in this conversation")
+	assert.Contains(t, normalizedPrompt,
+		`Never move a current count backward to its "since" date`)
+	assert.Contains(t, normalizedPrompt,
+		"event_time=\"2023-05-30\"")
+	assert.Contains(t, normalizedPrompt,
+		"2023-02-28 describes when the activity began")
+}
+
+func TestExtractor_DefaultPromptPreservesRelationScope(t *testing.T) {
+	extractor := NewExtractor(
+		&mockModel{name: "test-model"},
+	).(*memoryExtractor)
+	prompt := extractor.buildSystemPrompt(time.Now(), nil)
+	assert.Contains(t, prompt, "SELF-CONTAINED RELATIONS")
+	assert.Contains(t, prompt,
+		"Keep a relationship, its value, and every qualifier")
+	assert.Contains(t, prompt,
+		"As Product Owner, leads three UX researchers")
+}
+
+func TestExtractor_AssistantResultExtractionCombinedPass(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Wants to learn backend development.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Recommended backend languages: Go, Java, and Python.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("Which backend languages should I learn?"),
+		model.NewAssistantMessage("Start with Go, Java, or Python."),
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, ops, 2)
+	assert.Equal(t, "Wants to learn backend development.", ops[0].Memory)
+	assert.Equal(t,
+		"Assistant result: Recommended backend languages: Go, Java, and Python.",
+		ops[1].Memory,
+	)
+	require.Len(t, m.requests, 1)
+	assert.Contains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
+	assert.Contains(t, m.requests[0].Tools, memory.AddToolName)
+	assert.Contains(t, m.requests[0].Tools, assistantResultAddToolName)
+	assert.Equal(t, model.RoleUser,
+		m.requests[0].Messages[len(m.requests[0].Messages)-1].Role)
+}
+
+func TestExtractor_AssistantResultStageOwnsNearDuplicate(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("Which development resources should I use?"),
+			model.NewAssistantMessage("Use Codecademy and learn Node.js, Python, SQL, and Java."),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, primary)
+	require.Len(t, assistantResults, 1)
+	assert.Equal(t,
+		"Assistant result: Assistant recommended resources for front-end and back-end development: Codecademy for HTML, CSS, and JavaScript; Node.js, Python, SQL, and Java for back-end development.",
+		assistantResults[0].Memory,
+	)
+}
+
+func TestRouteAssistantResultOperationsMergesTopics(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Go and Python backend courses.",
+		Topics: []string{"backend", "courses"},
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Go and Python backend courses.",
+		Topics: []string{"Go", "courses"},
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	assert.Empty(t, gotPrimary)
+	require.Len(t, gotResults, 1)
+	assert.Equal(t, []string{"Go", "courses", "backend"}, gotResults[0].Topics)
+	assert.NotSame(t, result, gotResults[0])
+}
+
+func TestRouteAssistantResultOperationsKeepsDistinctPrimaryFact(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Wants to learn Python for backend development.",
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Assistant recommended Python, SQL, and Java courses.",
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	require.Len(t, gotPrimary, 1)
+	require.Len(t, gotResults, 1)
+	assert.Same(t, primary, gotPrimary[0])
+	assert.Same(t, result, gotResults[0])
+}
+
+func TestRouteAssistantResultOperationsKeepsUserFactMisclassifiedByResult(t *testing.T) {
+	primary := &Operation{
+		Type:   OperationAdd,
+		Memory: "Bought snacks and drinks for the team event.",
+	}
+	result := &Operation{
+		Type:   OperationAdd,
+		Memory: "Bought snacks and drinks for the team event.",
+	}
+
+	gotPrimary, gotResults := routeAssistantResultOperations(
+		[]*Operation{primary}, []*Operation{result},
+	)
+	require.Len(t, gotPrimary, 1)
+	require.Len(t, gotResults, 1)
+	assert.Same(t, primary, gotPrimary[0])
+	assert.Same(t, result, gotResults[0])
+}
+
+func TestExtractor_AssistantResultExtractionStages(t *testing.T) {
+	primaryArgs, err := json.Marshal(map[string]any{
+		"memory": "Wants to learn backend development.",
+	})
+	require.NoError(t, err)
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Recommended backend languages: Go and Python.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(memory.AddToolName, primaryArgs),
+				makeToolCall(assistantResultAddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("Which backend languages should I learn?"),
+			model.NewAssistantMessage("Start with Go or Python."),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, primary, 1)
+	require.Len(t, assistantResults, 1)
+	assert.Equal(t, "Wants to learn backend development.", primary[0].Memory)
+	assert.Equal(t,
+		"Assistant result: Recommended backend languages: Go and Python.",
+		assistantResults[0].Memory,
+	)
+}
+
+func TestQualifyAssistantResultOperations(t *testing.T) {
+	operations := []*Operation{
+		{Type: OperationAdd, Memory: "Recommended Go and Python."},
+		{Type: OperationAdd, Memory: " assistant RESULT: Recommended SQL. "},
+		{Type: OperationAdd, Memory: "Tokyo: Assistant result: Recommended N'EX."},
+		{Type: OperationAdd, Memory: "Assistant result: Assistant result: Use Go."},
+		{Type: OperationUpdate, Memory: "Updated recommendation."},
+		nil,
+	}
+
+	qualifyAssistantResultOperations(operations)
+
+	assert.Equal(t,
+		"Assistant result: Recommended Go and Python.",
+		operations[0].Memory,
+	)
+	assert.Equal(t,
+		"Assistant result: Recommended SQL.",
+		operations[1].Memory,
+	)
+	assert.Equal(t,
+		"Assistant result: Tokyo: Recommended N'EX.",
+		operations[2].Memory,
+	)
+	assert.Equal(t,
+		"Assistant result: Use Go.",
+		operations[3].Memory,
+	)
+	assert.Equal(t, "Updated recommendation.", operations[4].Memory)
+}
+
+func TestExtractor_AssistantResultExtractionRejectsUngroundedAmounts(t *testing.T) {
+	resultArgs, err := json.Marshal(map[string]any{
+		"memory": "Airport Limousine Bus costs about $10-20.",
+	})
+	require.NoError(t, err)
+	m := &sequenceModel{
+		name: "test-model",
+		responses: [][]*model.Response{
+			{{Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{
+				makeToolCall(assistantResultAddToolName, resultArgs),
+			}}}}}},
+		},
+	}
+	e := NewExtractor(
+		m, WithAssistantResultExtraction(true),
+	).(*memoryExtractor)
+
+	primary, assistantResults, err := e.ExtractOperationStages(
+		context.Background(),
+		[]model.Message{
+			model.NewUserMessage("My friend thinks the bus costs $10."),
+			model.NewAssistantMessage(
+				"The Airport Limousine Bus is cheaper than a taxi, but its price was not specified.",
+			),
+		},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.Empty(t, primary)
+	assert.Empty(t, assistantResults)
+	assert.Len(t, m.requests, 1)
+}
+
+func TestFilterGroundedAssistantResultOperations(t *testing.T) {
+	messages := []model.Message{
+		model.NewUserMessage("My friend says the bus is $10."),
+		model.NewAssistantMessage(
+			"A taxi costs $140 - $180 and takes about 60 minutes.",
+		),
+	}
+	operations := []*Operation{
+		{Memory: "Taxi fare estimate: $140-180."},
+		{Memory: "The trip takes 60 minutes."},
+		{Memory: "The trip takes 45 minutes."},
+		{Memory: "Options: (1) train; (2) taxi."},
+		{Memory: "Airport Limousine Bus costs $10."},
+		{Memory: "Taxi fare estimate: USD 140 to 180."},
+		nil,
+	}
+
+	got := filterGroundedAssistantResultOperations(
+		context.Background(), messages, operations,
+	)
+	require.Len(t, got, 5)
+	assert.Same(t, operations[0], got[0])
+	assert.Same(t, operations[1], got[1])
+	assert.Same(t, operations[2], got[2])
+	assert.Same(t, operations[3], got[3])
+	assert.Same(t, operations[5], got[4])
+}
+
+func TestFilterGroundedAssistantResultOperations_NormalizesCurrencies(t *testing.T) {
+	messages := []model.Message{
+		model.NewAssistantMessage(
+			"Passes cost ¥2,800, 15€, £12, and 20 USD.",
+		),
+	}
+	operations := []*Operation{
+		{Memory: "The passes cost JPY 2800."},
+		{Memory: "The passes cost EUR 15."},
+		{Memory: "The passes cost 12 GBP."},
+		{Memory: "The passes cost $20."},
+		{Memory: "A premium pass costs €20."},
+	}
+
+	got := filterGroundedAssistantResultOperations(
+		context.Background(), messages, operations,
+	)
+	require.Len(t, got, 4)
+	for i := range got {
+		assert.Same(t, operations[i], got[i])
+	}
+}
+
+func TestExtractor_AssistantResultExtractionFailure(t *testing.T) {
+	m := &sequenceModel{
+		name:      "test-model",
+		responses: [][]*model.Response{nil},
+		errors:    []error{errors.New("result model error")},
+	}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	ops, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("What should I learn?"),
+		model.NewAssistantMessage("Learn Go."),
+	}, nil)
+	require.ErrorContains(t, err, "model call failed")
+	assert.Nil(t, ops)
+	assert.Len(t, m.requests, 1)
+}
+
+func TestExtractor_AssistantResultExtractionRequiresAdd(t *testing.T) {
+	m := &sequenceModel{name: "test-model", responses: [][]*model.Response{nil}}
+	e := NewExtractor(m, WithAssistantResultExtraction(true)).(*memoryExtractor)
+	e.SetEnabledTools(map[string]struct{}{memory.UpdateToolName: {}})
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("What should I learn?"),
+		model.NewAssistantMessage("Learn Go."),
+	}, nil)
+	require.NoError(t, err)
+	assert.Len(t, m.requests, 1)
+	assert.NotContains(t, m.requests[0].Tools, assistantResultAddToolName)
+	assert.NotContains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
+}
+
+func TestExtractor_AssistantResultExtractionRequiresAssistantText(t *testing.T) {
+	m := &sequenceModel{name: "test-model", responses: [][]*model.Response{nil}}
+	e := NewExtractor(m, WithAssistantResultExtraction(true))
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I started learning Go."),
+	}, nil)
+	require.NoError(t, err)
+	require.Len(t, m.requests, 1)
+	assert.NotContains(t, m.requests[0].Tools, assistantResultAddToolName)
+	assert.NotContains(t, m.requests[0].Messages[0].Content,
+		"<assistant_result_extraction>")
+}
+
+func TestMergeExtractionOperations(t *testing.T) {
+	primary := &Operation{
+		Type:         OperationAdd,
+		Memory:       "Recommended Go and Python.",
+		Topics:       []string{"languages"},
+		Participants: []string{"Alice"},
+	}
+	duplicate := *primary
+	duplicate.Memory = "  recommended go AND python. "
+	duplicate.Topics = []string{"recommendations"}
+
+	merged := mergeExtractionOperations(
+		[]*Operation{primary},
+		[]*Operation{&duplicate},
+	)
+	require.Len(t, merged, 1)
+	assert.Same(t, primary, merged[0])
+
+	eventTime := time.Date(2024, 6, 10, 0, 0, 0, 0, time.UTC)
+	differentEvent := duplicate
+	differentEvent.EventTime = &eventTime
+	merged = mergeExtractionOperations(merged, []*Operation{&differentEvent})
+	assert.Len(t, merged, 2)
 }
 
 func TestExtractor_Extract_NoModel(t *testing.T) {
@@ -602,6 +1122,8 @@ func TestExtractor_BuildSystemPrompt_WithExistingMemories(t *testing.T) {
 	assert.Contains(t, prompt, "memory_delete")
 	assert.Contains(t, prompt, "duplicate")
 	assert.Contains(t, prompt, "different-day episodes")
+	assert.NotContains(t, prompt, "<assistant_result_extraction>")
+	assert.NotContains(t, prompt, "<update_policy")
 	assert.Contains(t, prompt, "</existing_memories>")
 }
 
@@ -793,6 +1315,16 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 		ext.SetEnabledTools(nil)
 	})
 
+	t.Run("add-only policy exposes only add", func(t *testing.T) {
+		addOnly := NewExtractor(m,
+			WithUpdatePolicy(UpdatePolicyAddOnly)).(*memoryExtractor)
+		block := addOnly.availableActionsBlock()
+		assert.Contains(t, block, memory.AddToolName)
+		assert.NotContains(t, block, memory.UpdateToolName)
+		assert.NotContains(t, block, memory.DeleteToolName)
+		assert.NotContains(t, block, memory.ClearToolName)
+	})
+
 	t.Run("tool in order but not in descriptions", func(t *testing.T) {
 		// Temporarily add a name to toolActionOrder that has no description.
 		origOrder := toolActionOrder
@@ -844,6 +1376,19 @@ func TestExtractor_Extract_FilteredTools(t *testing.T) {
 	for name := range m.lastRequest.Tools {
 		assert.Equal(t, memory.AddToolName, name)
 	}
+}
+
+func TestExtractor_Extract_AddOnlyTools(t *testing.T) {
+	m := newMockModelWithToolCalls(nil)
+	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyAddOnly))
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I love coffee."),
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, m.lastRequest)
+	assert.Len(t, m.lastRequest.Tools, 1)
+	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
 }
 
 func TestExtractor_EnabledToolsConfigurer(t *testing.T) {
