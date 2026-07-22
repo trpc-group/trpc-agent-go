@@ -31,7 +31,7 @@ func TestWithIgnoreAndMatchStrategy(t *testing.T) {
 	assert.True(t, opts.ignore)
 	assert.Equal(t, JSONMatchStrategyExact, opts.matchStrategy)
 	assert.True(t, opts.valid)
-	assert.Equal(t, `{"type":"object"}`, opts.schema)
+	assert.JSONEq(t, `{"type":"object"}`, string(opts.schema))
 }
 
 func TestWithIgnoreTreeAndCompare(t *testing.T) {

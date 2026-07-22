@@ -39,8 +39,8 @@ type JSONCriterion struct {
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
 	// Valid validates raw JSON content when used by callers that receive unparsed content.
 	Valid bool `json:"valid,omitempty"`
-	// Schema validates actual JSON content against the provided JSON schema.
-	Schema string `json:"schema,omitempty"`
+	// Schema validates actual JSON content against the provided JSON Schema.
+	Schema json.RawMessage `json:"schema,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides default comparison when provided.
@@ -86,13 +86,16 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Compare != nil {
 		return j.Compare(actual, expected)
 	}
+	actualForSchema := actual
 	if j.Valid {
-		if err := validateRawJSON(actual); err != nil {
+		var err error
+		actualForSchema, err = rawJSONValue(actual)
+		if err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
 		}
 	}
-	if j.Schema != "" {
-		if err := validateJSONSchema(actual, j.Schema); err != nil {
+	if len(j.Schema) > 0 {
+		if err := validateJSONSchema(actualForSchema, j.Schema); err != nil {
 			return false, err
 		}
 	}
@@ -119,13 +122,13 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	}
 }
 
-func validateJSONSchema(actual any, schemaText string) error {
-	schemaDoc, err := jsonschema.UnmarshalJSON(strings.NewReader(schemaText))
+func validateJSONSchema(actual any, schemaRaw json.RawMessage) error {
+	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaRaw))
 	if err != nil {
 		return fmt.Errorf("parse json schema: %w", err)
 	}
 	compiler := jsonschema.NewCompiler()
-	compiler.DefaultDraft(jsonschema.Draft7)
+	compiler.DefaultDraft(jsonschema.Draft2020)
 	if err := compiler.AddResource(inlineSchemaResource, schemaDoc); err != nil {
 		return fmt.Errorf("add json schema resource: %w", err)
 	}
@@ -166,20 +169,17 @@ func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) 
 	return actualValue, expectedValue, nil
 }
 
-func validateRawJSON(value any) error {
+func rawJSONValue(value any) (any, error) {
 	switch v := value.(type) {
 	case json.RawMessage:
-		_, err := parseRawJSON(v)
-		return err
+		return parseRawJSON(v)
 	case string:
-		_, err := parseRawJSON(json.RawMessage(v))
-		return err
+		return parseRawJSON(json.RawMessage(v))
 	case []byte:
-		_, err := parseRawJSON(json.RawMessage(v))
-		return err
+		return parseRawJSON(json.RawMessage(v))
 	default:
 		_, err := json.Marshal(value)
-		return err
+		return value, err
 	}
 }
 

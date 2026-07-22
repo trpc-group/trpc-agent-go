@@ -11,6 +11,7 @@ package clone
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -549,6 +550,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 						"x": []any{"y"},
 					},
 					NumberTolerance: float64Ptr(0.1),
+					Schema:          json.RawMessage(`{"type":"object"}`),
 				},
 				Rouge: &criterionrouge.RougeCriterion{
 					RougeType: "rouge1",
@@ -607,6 +609,9 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"] = false
 	assert.Equal(t, true, src.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"])
+
+	dst.Criterion.FinalResponse.JSON.Schema[2] = 'x'
+	assert.JSONEq(t, `{"type":"object"}`, string(src.Criterion.FinalResponse.JSON.Schema))
 
 	dst.Criterion.LLMJudge.Rubrics[0].Content.Text = "changed"
 	assert.Equal(t, "rubric", src.Criterion.LLMJudge.Rubrics[0].Content.Text)

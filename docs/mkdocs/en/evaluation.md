@@ -1005,7 +1005,7 @@ type JSONCriterion struct {
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Valid           bool                                     // Valid validates whether actual content is legal JSON.
-	Schema          string                                   // Schema validates actual content with JSON Schema.
+	Schema          json.RawMessage                          // Schema validates actual content with JSON Schema.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -1019,7 +1019,9 @@ During comparison, `actual` is the actual value and `expected` is the expected v
 2. If `Compare` is not provided, JSONCriterion runs `valid` validation first, then `schema` validation, and finally uses `matchStrategy` to decide whether to run built-in JSON value matching.
 3. If you only want JSON validity validation or Schema validation without comparing against `expected`, configure `valid: true` or `schema`, and set `matchStrategy: "skip"`.
 
-The `schema` field itself is a serialized JSON Schema string. The `actual` value is validated as its runtime value: `json.RawMessage` and `[]byte` are parsed as raw JSON first, while a Go `string` is validated as an already decoded string value. Empty `schema` disables Schema validation; invalid schema text or actual validation failure returns `(false, error)`.
+The `schema` field itself is a raw JSON Schema JSON value, usually an object, and boolean schemas are also supported. In metric JSON, write the schema directly as JSON instead of an escaped string. Code can use `WithSchema` with serialized JSON Schema text.
+
+The `actual` value is validated as its runtime value: `json.RawMessage` and `[]byte` are parsed as raw JSON first, while a Go `string` is validated as an already decoded string value by default. When both `valid: true` and `schema` are configured, schema validation reuses the JSON value parsed by `valid`. Empty `schema` disables Schema validation; schemas without `$schema` are compiled as Draft 2020-12; invalid schema text or actual validation failure returns `(false, error)`.
 
 Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`. `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`.
 
@@ -1056,7 +1058,16 @@ Example configuration validates only whether actual matches the JSON Schema, wit
 
 ```json
 {
-  "schema": "{\"type\":\"object\",\"required\":[\"name\"],\"properties\":{\"name\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+  "schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
   "matchStrategy": "skip"
 }
 ```

@@ -9,6 +9,8 @@
 
 package json
 
+import "encoding/json"
+
 // defaultNumberTolerance is the default number tolerance.
 const defaultNumberTolerance = 1e-6
 
@@ -20,7 +22,7 @@ type options struct {
 	matchStrategy   JSONMatchStrategy
 	numberTolerance *float64
 	valid           bool
-	schema          string
+	schema          json.RawMessage
 	compareName     string
 	compare         CompareFunc
 }
@@ -79,10 +81,10 @@ func WithValid(valid bool) Option {
 	}
 }
 
-// WithSchema sets the JSON schema.
+// WithSchema sets the JSON Schema from serialized JSON text.
 func WithSchema(schema string) Option {
 	return func(o *options) {
-		o.schema = schema
+		o.schema = json.RawMessage(schema)
 	}
 }
 
