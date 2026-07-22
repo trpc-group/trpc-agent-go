@@ -16,6 +16,8 @@ import (
 	"log"
 	"os"
 
+	"trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager"
+	memorytaskmanager "trpc.group/trpc-go/trpc-a2a-go/v2/taskmanager/memory"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
@@ -39,6 +41,11 @@ var (
 		"streaming",
 		true,
 		"Enable streaming responses",
+	)
+	retainTasks = flag.Bool(
+		"retain-tasks",
+		false,
+		"Retain A2A tasks in memory and enable retained task management",
 	)
 )
 
@@ -83,10 +90,22 @@ func main() {
 		}
 	}()
 
-	server, err := a2aserver.New(
+	serverOptions := []a2aserver.Option{
 		a2aserver.WithRunner(agentRunner),
 		a2aserver.WithAgentCard(card),
-	)
+	}
+	taskManagerName := "stateless"
+	if *retainTasks {
+		// Supplying a builder is the explicit opt-in boundary for retained A2A Tasks.
+		taskManagerName = "memory"
+		serverOptions = append(serverOptions, a2aserver.WithTaskManagerBuilder(func(
+			processor taskmanager.MessageProcessor,
+		) (taskmanager.TaskManager, error) {
+			return memorytaskmanager.NewTaskManager(processor)
+		}))
+	}
+
+	server, err := a2aserver.New(serverOptions...)
 	if err != nil {
 		log.Fatalf("create A2A server: %v", err)
 	}
@@ -94,6 +113,7 @@ func main() {
 	fmt.Printf("A2A protocol v1.0 server listening on %s\n", *host)
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
+	fmt.Printf("Task manager: %s\n", taskManagerName)
 	if err := server.Start(*host); err != nil {
 		log.Fatalf("run A2A server: %v", err)
 	}
