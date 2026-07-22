@@ -45,6 +45,8 @@ type memoryExtractor struct {
 	prompt   string
 	checkers []Checker
 
+	assistantEpisodeExtraction bool
+
 	enabledTools map[string]struct{}
 
 	// modelCallbacks configures before/after model callbacks for extraction.
@@ -121,13 +123,9 @@ func (e *memoryExtractor) Extract(
 	}
 
 	// Build request with tool declarations.
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
-	}
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    tools,
+		Tools:    e.extractionTools(),
 	}
 
 	// Call model.
@@ -173,7 +171,7 @@ func (e *memoryExtractor) Extract(
 			// tool-call batches, so only the selected primary choice
 			// should be converted into operations.
 			for _, call := range rsp.Choices[0].Message.ToolCalls {
-				op := e.parseToolCall(ctx, call)
+				op := e.parseToolCallWithMessages(ctx, call, messages)
 				if op != nil {
 					ops = append(ops, op)
 				}
@@ -229,10 +227,14 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
+	if e.assistantEpisodeExtraction {
+		metadata[metadataKeyConversationExtraction] = assistantEpisodeMetadataValue
+	}
+	return metadata
 }
 
 // extractionUserSuffix is appended as a trailing user message
@@ -301,6 +303,9 @@ func (e *memoryExtractor) buildSystemPrompt(
 		renderedPrompt = e.prompt
 	}
 	sb.WriteString(renderedPrompt)
+	if e.assistantEpisodeExtraction && e.assistantEpisodeAddEnabled() {
+		sb.WriteString(assistantEpisodePrompt)
+	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")

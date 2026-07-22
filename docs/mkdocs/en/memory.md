@@ -279,6 +279,53 @@ Agent: Nice to meet you, Alice! It's great to connect with someone from TechCorp
 (Background: Extractor analyzes conversation and creates memory automatically)
 ```
 
+### Opt-in Assistant Episode Extraction
+
+Auto extraction normally uses the standard fact and episode tools. Applications
+that also need to recall reusable information from earlier assistant responses
+can enable assistant episode extraction when constructing the extractor:
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+The option adds an extraction-only tool named `memory_assistant_episode`. It is
+visible to the background extraction model, not to the application Agent. The
+extractor preserves the original conversation messages and roles. The standard
+fact and episode tools remain available, so one extraction request can still
+produce ordinary user facts or events alongside an assistant episode.
+
+Assistant output is stored as attributed conversation history rather than as a
+verified fact or user preference. The framework converts every accepted call
+to an ordinary `KindEpisode` add operation, fixes the participants to `User`
+and `Assistant`, and uses the extraction reference date as the event time when
+one is present. For example:
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: When the user asked for compact-kitchen products, the assistant recommended Alpha and Beta.",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+The model supplies only the episode text and optional retrieval topics. It
+cannot override the memory kind, participants, event time, or location through
+this tool. Calls are rejected when the extraction input has no non-empty
+assistant response, the text is empty, or the text exceeds 4,096 bytes.
+
+This feature is backend-neutral. It does not add a memory kind, field, database
+column, table, migration, or extra model call. The option is fixed for the
+lifetime of the extractor; there is no runtime toggle. To disable it, construct
+a new extractor without the option. Previously stored assistant episodes remain
+ordinary episodic memories and continue to participate in normal retrieval.
+
 ### Configuration Comparison
 
 | Step                | Agentic Mode                        | Auto Mode                              |
