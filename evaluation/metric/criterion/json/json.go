@@ -11,12 +11,15 @@
 package json
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"reflect"
 	"strings"
+
+	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 // CompareFunc defines custom JSON comparison logic.
@@ -36,6 +39,8 @@ type JSONCriterion struct {
 	NumberTolerance *float64 `json:"numberTolerance,omitempty"`
 	// Valid validates raw JSON content when used by callers that receive unparsed content.
 	Valid bool `json:"valid,omitempty"`
+	// Schema validates actual JSON content against the provided JSON Schema.
+	Schema json.RawMessage `json:"schema,omitempty"`
 	// CompareName selects a registered comparison implementation by name.
 	CompareName string `json:"compareName,omitempty"`
 	// Compare overrides default comparison when provided.
@@ -52,6 +57,8 @@ const (
 	JSONMatchStrategySkip JSONMatchStrategy = "skip"
 )
 
+const inlineSchemaResource = "https://trpc.group/trpc-agent-go/evaluation/metric/criterion/json/schema.json"
+
 // New creates a new JSONCriterion with the provided options.
 func New(opt ...Option) *JSONCriterion {
 	opts := newOptions(opt...)
@@ -62,6 +69,7 @@ func New(opt ...Option) *JSONCriterion {
 		MatchStrategy:   opts.matchStrategy,
 		NumberTolerance: opts.numberTolerance,
 		Valid:           opts.valid,
+		Schema:          opts.schema,
 		CompareName:     opts.compareName,
 		Compare:         opts.compare,
 	}
@@ -78,9 +86,17 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	if j.Compare != nil {
 		return j.Compare(actual, expected)
 	}
+	actualForSchema := actual
 	if j.Valid {
-		if err := validateRawJSON(actual); err != nil {
+		var err error
+		actualForSchema, err = rawJSONValue(actual)
+		if err != nil {
 			return false, fmt.Errorf("parse actual raw json: %w", err)
+		}
+	}
+	if len(j.Schema) > 0 {
+		if err := validateJSONSchema(actualForSchema, j.Schema); err != nil {
+			return false, err
 		}
 	}
 	if j.MatchStrategy == JSONMatchStrategySkip {
@@ -106,6 +122,41 @@ func (j *JSONCriterion) Match(actual, expected any) (bool, error) {
 	}
 }
 
+func validateJSONSchema(actual any, schemaRaw json.RawMessage) error {
+	schemaDoc, err := jsonschema.UnmarshalJSON(bytes.NewReader(schemaRaw))
+	if err != nil {
+		return fmt.Errorf("parse json schema: %w", err)
+	}
+	compiler := jsonschema.NewCompiler()
+	compiler.DefaultDraft(jsonschema.Draft2020)
+	if err := compiler.AddResource(inlineSchemaResource, schemaDoc); err != nil {
+		return fmt.Errorf("add json schema resource: %w", err)
+	}
+	schema, err := compiler.Compile(inlineSchemaResource)
+	if err != nil {
+		return fmt.Errorf("compile json schema: %w", err)
+	}
+	value, err := schemaValue(actual)
+	if err != nil {
+		return fmt.Errorf("parse actual raw json: %w", err)
+	}
+	if err := schema.Validate(value); err != nil {
+		return fmt.Errorf("json schema validation failed: %w", err)
+	}
+	return nil
+}
+
+func schemaValue(value any) (any, error) {
+	switch v := value.(type) {
+	case json.RawMessage:
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
+	case []byte:
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
+	default:
+		return value, nil
+	}
+}
+
 func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) {
 	actualValue, err := parseRawMessage(actual)
 	if err != nil {
@@ -118,20 +169,20 @@ func (j *JSONCriterion) normalizeInputs(actual, expected any) (any, any, error) 
 	return actualValue, expectedValue, nil
 }
 
-func validateRawJSON(value any) error {
+func rawJSONValue(value any) (any, error) {
 	switch v := value.(type) {
 	case json.RawMessage:
-		_, err := parseRawJSON(v)
-		return err
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	case string:
-		_, err := parseRawJSON(json.RawMessage(v))
-		return err
+		return jsonschema.UnmarshalJSON(strings.NewReader(v))
 	case []byte:
-		_, err := parseRawJSON(json.RawMessage(v))
-		return err
+		return jsonschema.UnmarshalJSON(bytes.NewReader(v))
 	default:
-		_, err := json.Marshal(value)
-		return err
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		return jsonschema.UnmarshalJSON(bytes.NewReader(raw))
 	}
 }
 
