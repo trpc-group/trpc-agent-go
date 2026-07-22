@@ -650,6 +650,60 @@ func TestRunEmitRejectsAfterTranslateCallbackReentrancy(t *testing.T) {
 	assert.False(t, hasCustomEventNamed(evts, "callback.report"))
 }
 
+func TestRunAfterTranslateFailureCancelsAgentStream(t *testing.T) {
+	agentEvents := make(chan *agentevent.Event, 1)
+	agentEvents <- agentevent.New("inv", "assistant")
+	runnerCanceled := make(chan struct{})
+	var cancelOnce sync.Once
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			go func() {
+				<-ctx.Done()
+				cancelOnce.Do(func() {
+					close(runnerCanceled)
+				})
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	fakeTrans := &fakeTranslator{events: [][]aguievents.Event{{aguievents.NewCustomEvent("agent.status")}}}
+	callbacks := translator.NewCallbacks().
+		RegisterAfterTranslate(func(ctx context.Context, evt aguievents.Event) (aguievents.Event, error) {
+			custom, ok := evt.(*aguievents.CustomEvent)
+			if ok && custom.Name == "agent.status" {
+				return nil, errors.New("after translate failed")
+			}
+			return nil, nil
+		})
+	r := New(
+		underlying,
+		WithTranslatorFactory(func(context.Context, *adapter.RunAgentInput, ...translator.Option) (translator.Translator, error) {
+			return fakeTrans, nil
+		}),
+		WithTranslateCallbacks(callbacks),
+	)
+	eventsCh, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	})
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	runErr, ok := waitForNextEvent(t, eventsCh).(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "after translate failed")
+	select {
+	case <-runnerCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner cancellation")
+	}
+	waitForChannelClose(t, eventsCh)
+}
+
 func TestRunHookRejectsFrameworkOwnedEvents(t *testing.T) {
 	errCh := make(chan error, 1)
 	agentEvents := make(chan *agentevent.Event, 1)
@@ -727,6 +781,64 @@ func TestRunHookErrorEmitsRunError(t *testing.T) {
 	require.True(t, ok)
 	assert.Contains(t, runErr.Message, "hook failed")
 	assert.False(t, hasRunFinishedEvent(evts))
+}
+
+func TestRunHookFailureRetainsSessionUntilAgentStreamCloses(t *testing.T) {
+	releaseAgentClose := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseAgentClose)
+		})
+	}
+	t.Cleanup(release)
+	runnerCanceled := make(chan struct{})
+	var cancelOnce sync.Once
+	underlying := &fakeRunner{
+		run: func(ctx context.Context,
+			userID, sessionID string,
+			message model.Message,
+			_ ...agent.RunOption) (<-chan *agentevent.Event, error) {
+			agentEvents := make(chan *agentevent.Event)
+			go func() {
+				<-ctx.Done()
+				cancelOnce.Do(func() {
+					close(runnerCanceled)
+				})
+				<-releaseAgentClose
+				close(agentEvents)
+			}()
+			return agentEvents, nil
+		},
+	}
+	r := New(underlying, WithRunHook(func(context.Context, *Run) error {
+		return errors.New("hook failed")
+	}))
+	input := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi"}},
+	}
+	eventsCh, err := r.Run(context.Background(), input)
+	require.NoError(t, err)
+	assert.IsType(t, (*aguievents.RunStartedEvent)(nil), waitForNextEvent(t, eventsCh))
+	runErr, ok := waitForNextEvent(t, eventsCh).(*aguievents.RunErrorEvent)
+	require.True(t, ok)
+	assert.Contains(t, runErr.Message, "hook failed")
+	select {
+	case <-runnerCanceled:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for runner cancellation")
+	}
+	events2, err := r.Run(context.Background(), &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run-2",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "hi again"}},
+	})
+	require.Nil(t, events2)
+	require.ErrorIs(t, err, ErrRunAlreadyExists)
+	release()
+	waitForChannelClose(t, eventsCh)
 }
 
 func TestRunEventSourceMetadataEnabledAttachesRawEvent(t *testing.T) {

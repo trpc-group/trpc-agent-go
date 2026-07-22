@@ -254,7 +254,7 @@ func TestRunEventLoopGivesCancellationPrecedenceOverRunnerError(t *testing.T) {
 		agentRun <- runAgentResult{err: context.Canceled}
 		input := &runInput{threadID: "thread", runID: "run"}
 		r := &runner{}
-		r.runEventLoop(ctx, events, input, agentRun, nil, nil, 0)
+		r.runEventLoop(ctx, cancel, func() {}, events, input, agentRun, nil, nil, 0)
 		evt := waitForNextEvent(t, events)
 		assert.IsType(t, (*aguievents.RunFinishedEvent)(nil), evt)
 		assert.False(t, hasRunErrorEvent([]aguievents.Event{evt}))
@@ -273,7 +273,7 @@ func TestRunEventLoopEmitsTerminalWhenHookEventWriteCanceled(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r.runEventLoop(ctx, events, input, agentRun, hookEvents, hookDone, 0)
+		r.runEventLoop(ctx, cancel, func() {}, events, input, agentRun, hookEvents, hookDone, 0)
 	}()
 	hookEvents <- hookEvent{event: aguievents.NewCustomEvent("background.report"), reply: reply}
 	require.Eventually(t, func() bool {
