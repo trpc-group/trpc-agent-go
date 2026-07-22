@@ -89,6 +89,10 @@ func TestNormalizeEventFields(t *testing.T) {
 		FilterKey:    "weather",
 		StateDelta:   map[string][]byte{"k": []byte(`{"v":1.0}`)},
 		Extensions:   map[string]json.RawMessage{"trace": json.RawMessage(`{"duration_ms":5}`)},
+		LongRunningToolIDs: map[string]struct{}{
+			"raw-call-1":     {},
+			"raw-call-other": {},
+		},
 		Response: &model.Response{
 			Choices: []model.Choice{{
 				Message: model.Message{
@@ -146,6 +150,10 @@ func TestNormalizeEventFields(t *testing.T) {
 	ce2 := c.Sessions[0].Events[1]
 	assert.Equal(t, "call#1", ce2.ToolID)
 	assert.Equal(t, "get_weather", ce2.ToolName)
+
+	// Long-running tool call IDs are symbolized like ToolID/ToolCalls;
+	// unknown IDs get the deterministic fallback.
+	assert.Equal(t, []string{"call#1", "call?:raw-call-other"}, ce.LongRunning)
 }
 
 // TestNormalizeSummaries checks summary normalization including boundary

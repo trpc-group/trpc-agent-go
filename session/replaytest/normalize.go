@@ -235,7 +235,10 @@ func normalizeEvent(e *event.Event, evtSym, invSym, callSym *symbolizer) *CEvent
 	ce.StateDelta = canonicalizeStateDelta(e.StateDelta)
 	ce.Extensions = canonicalizeRawMap(e.Extensions)
 	for id := range e.LongRunningToolIDs {
-		ce.LongRunning = append(ce.LongRunning, id)
+		// Long-running IDs are tool call IDs; symbolize them like
+		// ToolID/ToolCalls so provider-specific raw IDs never reach the
+		// comparison.
+		ce.LongRunning = append(ce.LongRunning, callSym.sym(id))
 	}
 	sort.Strings(ce.LongRunning)
 	return ce

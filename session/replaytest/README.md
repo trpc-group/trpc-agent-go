@@ -97,7 +97,7 @@ func TestReplayConsistency(t *testing.T) {
 | 维度 | 规则 |
 |------|------|
 | 时间戳 | 丢弃；顺序由列表位置/序号表达 |
-| UUID / 生成 ID | 按排序后符号化（`evt#1`、`inv#2`、`call#1`、`mem#1`），引用处（ToolID、ParentInvocationID、summary boundary.last_event_id）同步替换 |
+| UUID / 生成 ID | 按排序后符号化（`evt#1`、`inv#2`、`call#1`、`mem#1`），引用处（ToolID、ToolCalls、LongRunningToolIDs、ParentInvocationID、summary boundary.last_event_id）同步替换 |
 | `json.RawMessage` | canonical JSON：key 排序、数字归一（`1` ≡ `1.0`）、耗时键替换为 `"*"`（内置 `duration_ms`/`latency_ms`/`elapsed_ms` 等 5 个精确键、任意 `_ms` 后缀键、以及小写后为 `duration`/`latency`/`elapsed` 的键；`timeout` 等非耗时键不抹除） |
 | State | 按键逐一比较（canonical 值） |
 | Memory | 按 (user, content) 排序后逐一比较，scope 归属（user_id）参与比较；返回顺序差异不抹掉，记为 allowed_diff note（见下） |
