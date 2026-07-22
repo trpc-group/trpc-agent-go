@@ -2,7 +2,7 @@
 
 This example demonstrates the Agent-to-Agent (A2A) communication functionality in trpc-agent-go, showing how to create and communicate with remote agents using the A2A protocol.
 
-For the A2A protocol v1.0 adapters, see the self-contained [v2 example](v2).
+For the A2A protocol v1.0 adapters, see the [v1 example](v1).
 
 ## Overview
 

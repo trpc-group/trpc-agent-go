@@ -1,0 +1,77 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+// Package main exposes a session-aware LLM agent over A2A protocol v1.0.
+package main
+
+import (
+	"flag"
+	"fmt"
+	"log"
+	"os"
+
+	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
+	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+)
+
+var (
+	host = flag.String(
+		"host",
+		"127.0.0.1:8888",
+		"A2A server address",
+	)
+	modelName = flag.String(
+		"model",
+		os.Getenv("MODEL_NAME"),
+		"Name of the model to use (default: MODEL_NAME env var)",
+	)
+	streaming = flag.Bool(
+		"streaming",
+		true,
+		"Enable streaming responses",
+	)
+)
+
+func main() {
+	flag.Parse()
+
+	llmAgent := llmagent.New(
+		"session_assistant",
+		llmagent.WithModel(openai.New(*modelName)),
+		llmagent.WithDescription(
+			"A session-aware assistant exposed over A2A protocol v1.0",
+		),
+		llmagent.WithInstruction(
+			"Remember the conversation within each session. "+
+				"When asked, summarize the earlier messages in that session.",
+		),
+		llmagent.WithGenerationConfig(model.GenerationConfig{
+			Stream: *streaming,
+		}),
+	)
+
+	server, err := a2aserver.New(
+		a2aserver.WithHost(*host),
+		a2aserver.WithAgent(llmAgent, *streaming),
+		a2aserver.WithSessionService(inmemory.NewSessionService()),
+	)
+	if err != nil {
+		log.Fatalf("create A2A server: %v", err)
+	}
+
+	fmt.Printf("A2A protocol v1.0 server listening on %s\n", *host)
+	fmt.Printf("Model: %s\n", *modelName)
+	fmt.Printf("Streaming: %t\n", *streaming)
+	if err := server.Start(*host); err != nil {
+		log.Fatalf("run A2A server: %v", err)
+	}
+}
