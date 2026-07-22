@@ -616,6 +616,9 @@ func (s *Service) SearchMemories(
 			results,
 			keywordResults,
 			rankResultsByFocusedPassage(query, results),
+			rankResultsByAssistantResultIntent(
+				query, results, keywordResults,
+			),
 			rrfK,
 			maxResults,
 		)
@@ -804,22 +807,26 @@ func (s *Service) executeKeywordSearch(
 	return results, nil
 }
 
-// mergeHybridResults combines vector, keyword, and focused-passage rankings
-// using Reciprocal Rank Fusion (RRF).
+// mergeHybridResults combines vector, keyword, focused-passage, and provenance
+// rankings using Reciprocal Rank Fusion (RRF).
 func mergeHybridResults(
 	vectorResults []*memory.Entry,
 	keywordResults []*memory.Entry,
 	focusedResults []*memory.Entry,
+	provenanceResults []*memory.Entry,
 	k int,
 	maxResults int,
 ) []*memory.Entry {
-	rankings := make([][]*memory.Entry, 0, 3)
+	rankings := make([][]*memory.Entry, 0, 4)
 	rankings = append(rankings, vectorResults)
 	if len(keywordResults) > 0 {
 		rankings = append(rankings, keywordResults)
 	}
 	if len(focusedResults) > 0 {
 		rankings = append(rankings, focusedResults)
+	}
+	if len(provenanceResults) > 0 {
+		rankings = append(rankings, provenanceResults)
 	}
 	if len(rankings) == 1 {
 		return vectorResults

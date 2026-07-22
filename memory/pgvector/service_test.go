@@ -2517,6 +2517,7 @@ func TestMergeHybridResults(t *testing.T) {
 		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
 		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
 		nil,
+		nil,
 		0,
 		2,
 	)
@@ -2534,6 +2535,7 @@ func TestMergeHybridResultsUsesFocusedRanking(t *testing.T) {
 		[]*memory.Entry{first, focused},
 		nil,
 		[]*memory.Entry{focused},
+		nil,
 		defaultRRFK,
 		2,
 	)
