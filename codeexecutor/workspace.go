@@ -12,6 +12,7 @@ package codeexecutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,12 +47,59 @@ const (
 	AttrMountUsed = "mount_used"
 )
 
-// Workspace represents an isolated execution workspace.
-// Path is host path for local runtime or a logical mount path for
-// containers.
+// Workspace represents an isolated logical execution workspace.
 type Workspace struct {
-	ID   string
+	// ID identifies the logical workspace, typically for an execution,
+	// session, or invocation. It may remain unchanged when the backend
+	// replaces the physical execution environment, so it must not be used to
+	// detect whether a cached handle is stale. Instance-aware backends expose
+	// that separate identity through [WorkspaceInstanceProvider].
+	ID string
+	// Path is a host path for a local runtime or a logical mount path for
+	// containers. Like ID, a deterministic Path may be reused across physical
+	// execution-environment instances.
 	Path string
+}
+
+// ErrWorkspaceStale reports that a workspace handle belongs to a physical
+// execution-environment instance that is no longer current.
+//
+// Backends must return this error only when they know that the requested
+// operation did not start, or when the failed operation is safe for a higher
+// layer to reconcile again. In particular, transport timeouts, lost responses,
+// ordinary file-system errors, and non-zero program exit codes must not be
+// converted to ErrWorkspaceStale: their side effects may be unknown, and
+// retrying them could execute a user command twice.
+var ErrWorkspaceStale = errors.New("codeexecutor: workspace is stale")
+
+// WorkspaceInstanceID identifies the physical execution-environment instance
+// to which a cached [Workspace] handle belongs.
+//
+// The value is opaque to the framework and must be non-empty. It must remain
+// stable while cached workspaces can be reused, and must change whenever the
+// backend recreates the environment such that cached handles need to be
+// recreated. Unlike [Workspace.ID], it identifies that physical instance
+// rather than the logical workspace. It is not a workspace-content, file, or
+// metadata version.
+type WorkspaceInstanceID string
+
+// WorkspaceInstanceProvider is an optional [WorkspaceManager] capability for
+// backends whose physical execution environment can be replaced while logical
+// workspace IDs remain stable.
+//
+// WorkspaceInstanceID must return the current opaque, non-empty instance ID.
+// The lookup may make the backend ready (for example, by lazily reconnecting),
+// but must not modify workspace contents. Implementations must follow the
+// stability and change rules documented on [WorkspaceInstanceID].
+//
+// A wrapper around a WorkspaceManager must forward this capability when the
+// wrapped manager implements it. A wrapper whose manager does not implement it
+// must not synthesize an empty ID or otherwise advertise the capability.
+type WorkspaceInstanceProvider interface {
+	WorkspaceInstanceID(
+		ctx context.Context,
+		ws Workspace,
+	) (WorkspaceInstanceID, error)
 }
 
 // WorkspacePolicy configures workspace behavior.

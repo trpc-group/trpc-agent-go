@@ -231,11 +231,18 @@ func (e *workspaceInitEngine) Manager() WorkspaceManager {
 	if mgr == nil {
 		return nil
 	}
-	return &workspaceInitManager{
+	wrapped := &workspaceInitManager{
 		inner: mgr,
 		eng:   e.inner,
 		hooks: e.hooks,
 	}
+	if provider, ok := mgr.(WorkspaceInstanceProvider); ok {
+		return &workspaceInstanceInitManager{
+			workspaceInitManager: wrapped,
+			provider:             provider,
+		}
+	}
+	return wrapped
 }
 
 func (e *workspaceInitEngine) FS() WorkspaceFS { return e.inner.FS() }
@@ -248,6 +255,21 @@ type workspaceInitManager struct {
 	inner WorkspaceManager
 	eng   Engine
 	hooks []WorkspaceInitHook
+}
+
+// workspaceInstanceInitManager is deliberately a separate wrapper type.
+// Keeping WorkspaceInstanceID off workspaceInitManager means legacy managers
+// do not accidentally advertise the optional capability with a fabricated ID.
+type workspaceInstanceInitManager struct {
+	*workspaceInitManager
+	provider WorkspaceInstanceProvider
+}
+
+func (m *workspaceInstanceInitManager) WorkspaceInstanceID(
+	ctx context.Context,
+	ws Workspace,
+) (WorkspaceInstanceID, error) {
+	return m.provider.WorkspaceInstanceID(ctx, ws)
 }
 
 func (m *workspaceInitManager) CreateWorkspace(

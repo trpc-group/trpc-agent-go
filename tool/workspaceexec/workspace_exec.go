@@ -142,12 +142,13 @@ type execOutput struct {
 }
 
 type execRequest struct {
-	background bool
-	tty        bool
-	yield      *int
-	eng        codeexecutor.Engine
-	ws         codeexecutor.Workspace
-	spec       codeexecutor.RunProgramSpec
+	background          bool
+	tty                 bool
+	yield               *int
+	eng                 codeexecutor.Engine
+	ws                  codeexecutor.Workspace
+	workspaceInstanceID codeexecutor.WorkspaceInstanceID
+	spec                codeexecutor.RunProgramSpec
 }
 
 type killOutput struct {
@@ -580,10 +581,7 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.sessional {
-		return t.callSessional(ctx, req)
-	}
-	return t.callNonSessional(ctx, req)
+	return t.callWithWorkspaceRetry(ctx, req)
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -616,13 +614,6 @@ func (t *ExecTool) prepareExec(
 	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
 		return execRequest{}, err
 	}
-	ws, err := t.resolver.CreateWorkspace(ctx, eng, "workspace")
-	if err != nil {
-		return execRequest{}, err
-	}
-	if err := t.reconcileWorkspace(ctx, eng, ws); err != nil {
-		return execRequest{}, err
-	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
 		timeout = in.Timeout
@@ -632,7 +623,6 @@ func (t *ExecTool) prepareExec(
 		tty:        firstBoolValue(in.TTY, in.PTY),
 		yield:      firstIntPtr(in.YieldTimeMS, in.YieldMs),
 		eng:        eng,
-		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
 			Cmd:      "sh",
 			Args:     shellArgsForPolicy(policyActive, in.Command),
@@ -643,6 +633,57 @@ func (t *ExecTool) prepareExec(
 			Timeout:  execTimeout(timeout),
 		},
 	}, nil
+}
+
+func (t *ExecTool) callWithWorkspaceRetry(
+	ctx context.Context,
+	base execRequest,
+) (execOutput, error) {
+	req := base
+	out, acquired, err := t.executeWorkspaceAttempt(ctx, &req)
+	if err == nil || !errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return out, err
+	}
+	if acquired {
+		t.resolver.InvalidateWorkspaceIf(
+			ctx,
+			"workspace",
+			req.ws,
+			req.workspaceInstanceID,
+		)
+	}
+	retry := base
+	out, _, err = t.executeWorkspaceAttempt(ctx, &retry)
+	return out, err
+}
+
+// executeWorkspaceAttempt keeps Acquire, reconciliation, and process start in
+// one retry unit. ErrWorkspaceStale is contractually restricted to failures
+// before a user command starts (or to idempotent reconciliation), so the caller
+// can safely retry this unit once without replaying an uncertain command.
+func (t *ExecTool) executeWorkspaceAttempt(
+	ctx context.Context,
+	req *execRequest,
+) (execOutput, bool, error) {
+	ws, workspaceInstanceID, err := t.resolver.CreateWorkspaceWithInstanceID(
+		ctx,
+		req.eng,
+		"workspace",
+	)
+	if err != nil {
+		return execOutput{}, false, err
+	}
+	req.ws = ws
+	req.workspaceInstanceID = workspaceInstanceID
+	if err := t.reconcileWorkspace(ctx, req.eng, req.ws); err != nil {
+		return execOutput{}, true, err
+	}
+	if t.sessional {
+		out, err := t.callSessional(ctx, *req)
+		return out, true, err
+	}
+	out, err := t.callNonSessional(ctx, *req)
+	return out, true, err
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no

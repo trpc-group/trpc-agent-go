@@ -13,8 +13,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -908,6 +910,346 @@ func (p writeFailProgramSession) Log(_, _ *int) codeexecutor.ProgramLog {
 func (p writeFailProgramSession) Write(string, bool) error { return p.err }
 func (p writeFailProgramSession) Kill(time.Duration) error { return nil }
 func (p writeFailProgramSession) Close() error             { return nil }
+
+type staleRetryManager struct {
+	mu         sync.Mutex
+	instance   int
+	createRuns int
+}
+
+func (m *staleRetryManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createRuns++
+	return codeexecutor.Workspace{
+		ID:   id,
+		Path: "/tmp/" + id,
+	}, nil
+}
+
+func (*staleRetryManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *staleRetryManager) WorkspaceInstanceID(
+	context.Context,
+	codeexecutor.Workspace,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return codeexecutor.WorkspaceInstanceID(
+		fmt.Sprintf("instance-%d", m.instance),
+	), nil
+}
+
+func (m *staleRetryManager) rotate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instance++
+}
+
+func (m *staleRetryManager) createCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.createRuns
+}
+
+type staleRetryRunner struct {
+	mu sync.Mutex
+
+	manager      *staleRetryManager
+	userErrors   []error
+	userAttempts int
+	userStarts   int
+}
+
+func (r *staleRetryRunner) RunProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	// Reconciliation uses bash to commit metadata. Only sh is the user
+	// workspace_exec command in these tests.
+	if spec.Cmd != "sh" {
+		return codeexecutor.RunResult{ExitCode: 0}, nil
+	}
+	r.mu.Lock()
+	r.userAttempts++
+	var err error
+	if len(r.userErrors) > 0 {
+		err = r.userErrors[0]
+		r.userErrors = r.userErrors[1:]
+	}
+	if !errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		r.userStarts++
+	}
+	r.mu.Unlock()
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		r.manager.rotate()
+	}
+	if err != nil {
+		return codeexecutor.RunResult{}, err
+	}
+	return codeexecutor.RunResult{
+		Stdout:   "ok",
+		ExitCode: 0,
+	}, nil
+}
+
+func (r *staleRetryRunner) counts() (attempts int, starts int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.userAttempts, r.userStarts
+}
+
+type staleRetryFS struct {
+	nonInteractiveFS
+
+	mu        sync.Mutex
+	manager   *staleRetryManager
+	staleNext bool
+}
+
+func (f *staleRetryFS) PutFiles(
+	context.Context,
+	codeexecutor.Workspace,
+	[]codeexecutor.PutFile,
+) error {
+	f.mu.Lock()
+	stale := f.staleNext
+	f.staleNext = false
+	f.mu.Unlock()
+	if stale {
+		f.manager.rotate()
+		return fmt.Errorf(
+			"workspace changed before file write: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	}
+	return nil
+}
+
+type staleRetryExec struct {
+	eng codeexecutor.Engine
+}
+
+func (*staleRetryExec) ExecuteCode(
+	context.Context,
+	codeexecutor.CodeExecutionInput,
+) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*staleRetryExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (e *staleRetryExec) Engine() codeexecutor.Engine {
+	return e.eng
+}
+
+func newStaleRetryExec(
+	manager *staleRetryManager,
+	fs codeexecutor.WorkspaceFS,
+	runner *staleRetryRunner,
+) *staleRetryExec {
+	return &staleRetryExec{
+		eng: codeexecutor.NewEngine(manager, fs, runner),
+	}
+}
+
+type staleInteractiveRetryRunner struct {
+	*staleRetryRunner
+
+	mu            sync.Mutex
+	startAttempts int
+	starts        int
+}
+
+func (r *staleInteractiveRetryRunner) StartProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	r.mu.Lock()
+	r.startAttempts++
+	attempt := r.startAttempts
+	if attempt > 1 {
+		r.starts++
+	}
+	r.mu.Unlock()
+	if attempt == 1 {
+		r.manager.rotate()
+		return nil, fmt.Errorf(
+			"before process start: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	}
+	exitCode := 0
+	return failingProgramSession{
+		poll: codeexecutor.ProgramPoll{
+			Status:   codeexecutor.ProgramStatusExited,
+			ExitCode: &exitCode,
+		},
+	}, nil
+}
+
+func (r *staleInteractiveRetryRunner) startCounts() (
+	attempts int,
+	starts int,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.startAttempts, r.starts
+}
+
+func TestExecTool_WorkspaceStaleBeforeRunRetriesOnce(t *testing.T) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{
+		manager: manager,
+		userErrors: []error{
+			fmt.Errorf("before submit: %w", codeexecutor.ErrWorkspaceStale),
+		},
+	}
+	exec := newStaleRetryExec(
+		manager,
+		&nonInteractiveFS{},
+		runner,
+	)
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount())
+	attempts, starts := runner.counts()
+	require.Equal(t, 2, attempts)
+	require.Equal(t, 1, starts, "the user command must start only once")
+}
+
+func TestExecTool_WorkspaceStaleBeforeInteractiveStartRetriesOnce(
+	t *testing.T,
+) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleInteractiveRetryRunner{
+		staleRetryRunner: &staleRetryRunner{manager: manager},
+	}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			runner,
+		),
+	}
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{
+		Command:    "interactive",
+		Background: true,
+	})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		codeexecutor.ProgramStatusExited,
+		got.(execOutput).Status,
+	)
+	require.Equal(t, 2, manager.createCount())
+	attempts, starts := runner.startCounts()
+	require.Equal(t, 2, attempts)
+	require.Equal(t, 1, starts)
+}
+
+func TestExecTool_WorkspaceStaleTwiceStops(t *testing.T) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{
+		manager: manager,
+		userErrors: []error{
+			codeexecutor.ErrWorkspaceStale,
+			fmt.Errorf("still stale: %w", codeexecutor.ErrWorkspaceStale),
+		},
+	}
+	exec := newStaleRetryExec(
+		manager,
+		&nonInteractiveFS{},
+		runner,
+	)
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.Equal(t, 2, manager.createCount())
+	attempts, starts := runner.counts()
+	require.Equal(t, 2, attempts)
+	require.Zero(t, starts)
+}
+
+func TestExecTool_NonStaleRunErrorDoesNotRetry(t *testing.T) {
+	manager := &staleRetryManager{instance: 1}
+	uncertain := errors.New("transport timeout after request submission")
+	runner := &staleRetryRunner{
+		manager:    manager,
+		userErrors: []error{uncertain},
+	}
+	exec := newStaleRetryExec(
+		manager,
+		&nonInteractiveFS{},
+		runner,
+	)
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{Command: "side-effect"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, uncertain)
+	require.Equal(t, 1, manager.createCount())
+	attempts, starts := runner.counts()
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, starts)
+}
+
+func TestExecTool_WorkspaceStaleDuringReconcileRetriesBeforeCommand(
+	t *testing.T,
+) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{manager: manager}
+	fs := &staleRetryFS{
+		manager:   manager,
+		staleNext: true,
+	}
+	exec := newStaleRetryExec(manager, fs, runner)
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Files: []codeexecutor.WorkspaceFile{{
+				Target:  "work/seed.txt",
+				Content: []byte("seed"),
+			}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount())
+	attempts, starts := runner.counts()
+	require.Equal(t, 1, attempts)
+	require.Equal(t, 1, starts)
+}
 
 type nonInteractiveExec struct{}
 

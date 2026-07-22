@@ -238,6 +238,58 @@ func TestWorkspaceInitEngine_DelegatesCapabilities(t *testing.T) {
 	require.Same(t, runner, wrapped.Runner())
 	require.Equal(t, Capabilities{}, wrapped.Describe())
 	require.NotNil(t, wrapped.Manager())
+	_, ok := wrapped.Manager().(WorkspaceInstanceProvider)
+	require.False(t, ok, "legacy managers must not advertise an empty instance ID")
+}
+
+func TestWorkspaceInitEngine_ForwardsWorkspaceInstanceProvider(t *testing.T) {
+	fs := &recordingFS{}
+	runner := &recordingRunner{}
+	innerManager := &rotatingWM{instanceID: "instance-1"}
+	inner := NewEngine(innerManager, fs, runner)
+	wrapped := newWorkspaceInitEngine(inner, nil)
+
+	manager := wrapped.Manager()
+	provider, ok := manager.(WorkspaceInstanceProvider)
+	require.True(t, ok)
+	got, err := provider.WorkspaceInstanceID(
+		context.Background(),
+		Workspace{ID: "ws", Path: "/tmp/ws"},
+	)
+	require.NoError(t, err)
+	require.Equal(t, WorkspaceInstanceID("instance-1"), got)
+}
+
+func TestWorkspaceInitEngine_InstanceChangeRerunsHooks(t *testing.T) {
+	innerManager := &rotatingWM{instanceID: "instance-1"}
+	inner := NewEngine(innerManager, &recordingFS{}, &recordingRunner{})
+	var mu sync.Mutex
+	hookCalls := 0
+	wrapped := newWorkspaceInitEngine(
+		inner,
+		[]WorkspaceInitHook{func(context.Context, WorkspaceInitEnv) error {
+			mu.Lock()
+			defer mu.Unlock()
+			hookCalls++
+			return nil
+		}},
+	)
+	reg := NewWorkspaceRegistry()
+
+	_, err := reg.Acquire(context.Background(), wrapped.Manager(), "init-refresh")
+	require.NoError(t, err)
+	_, err = reg.Acquire(context.Background(), wrapped.Manager(), "init-refresh")
+	require.NoError(t, err)
+	mu.Lock()
+	require.Equal(t, 1, hookCalls)
+	mu.Unlock()
+
+	innerManager.setInstanceID("instance-2")
+	_, err = reg.Acquire(context.Background(), wrapped.Manager(), "init-refresh")
+	require.NoError(t, err)
+	mu.Lock()
+	require.Equal(t, 2, hookCalls)
+	mu.Unlock()
 }
 
 func TestWorkspaceInitManager_CreateWorkspaceInnerError(t *testing.T) {

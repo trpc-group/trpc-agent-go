@@ -65,19 +65,60 @@ func (r *Resolver) CreateWorkspace(
 	eng codeexecutor.Engine,
 	name string,
 ) (codeexecutor.Workspace, error) {
+	ws, _, err := r.CreateWorkspaceWithInstanceID(ctx, eng, name)
+	return ws, err
+}
+
+// CreateWorkspaceWithInstanceID acquires the invocation-scoped workspace and
+// returns the instance ID cached atomically with it. Legacy managers return an
+// empty instance ID.
+func (r *Resolver) CreateWorkspaceWithInstanceID(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	name string,
+) (
+	codeexecutor.Workspace,
+	codeexecutor.WorkspaceInstanceID,
+	error,
+) {
 	reg := r.reg
 	if reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := name
+	sid := workspaceKey(ctx, name)
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if key := KeyFromInvocation(inv); key != "" {
-			sid = key
-		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
-	return reg.Acquire(ctx, eng.Manager(), sid)
+	return reg.AcquireWithInstanceID(ctx, eng.Manager(), sid)
+}
+
+// InvalidateWorkspaceIf conditionally removes the workspace selected by the
+// same invocation-key rules as CreateWorkspace. A late stale report cannot
+// evict a refreshed entry because the registry compares both ws and instanceID.
+func (r *Resolver) InvalidateWorkspaceIf(
+	ctx context.Context,
+	name string,
+	ws codeexecutor.Workspace,
+	instanceID codeexecutor.WorkspaceInstanceID,
+) bool {
+	if r == nil || r.reg == nil {
+		return false
+	}
+	return r.reg.InvalidateIf(
+		workspaceKey(ctx, name),
+		ws,
+		instanceID,
+	)
+}
+
+func workspaceKey(ctx context.Context, fallback string) string {
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := KeyFromInvocation(inv); key != "" {
+			return key
+		}
+	}
+	return fallback
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
