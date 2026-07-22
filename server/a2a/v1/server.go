@@ -689,31 +689,9 @@ func (m *messageProcessor) streamAgentEvents(
 		}
 	}()
 
-	produce := func(ctx context.Context) (*event.Event, bool) {
-		select {
-		case <-ctx.Done():
-			return nil, false
-		case agentEvent, ok := <-agentMsgChan:
-			if !ok {
-				return nil, false
-			}
-			return agentEvent, true
-		}
-	}
-
 	state := &taskOutputState{
 		seenArtifactIDs:  make(map[string]struct{}),
 		fallbackArtifact: protocol.GenerateArtifactID(),
-	}
-	consume := func(batch []*event.Event) (bool, error) {
-		return m.processBatchStreamingEvents(
-			ctx,
-			out,
-			taskID,
-			a2aMsg,
-			batch,
-			state,
-		)
 	}
 
 	if m.abortStreamingOnError(ctx, out, a2aMsg, m.sendTaskSubmittedEvent(
@@ -727,14 +705,32 @@ func (m *messageProcessor) streamAgentEvents(
 		return
 	}
 
-	// run event tunnel
-	tunnel := newEventTunnel(defaultBatchSize, defaultFlushInterval, produce, consume)
-	if err := tunnel.Run(ctx); err != nil {
-		log.WarnfContext(ctx, "Event transfer error: %v", err)
-		if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+eventLoop:
+	for {
+		select {
+		case <-ctx.Done():
 			return
+		case agentEvent, ok := <-agentMsgChan:
+			if !ok {
+				break eventLoop
+			}
+			keepProcessing, err := m.processStreamingEvent(
+				ctx,
+				out,
+				taskID,
+				a2aMsg,
+				agentEvent,
+				state,
+			)
+			if m.abortStreamingOnError(ctx, out, a2aMsg, err) {
+				return
+			}
+			if !keepProcessing {
+				break eventLoop
+			}
 		}
 	}
+
 	if state.terminalError {
 		return
 	}
@@ -862,160 +858,133 @@ func (m *messageProcessor) sendTaskCompletedEvent(
 	return m.sendEvent(ctx, out, &taskCompleted)
 }
 
-// processBatchStreamingEvents processes a batch of agent events and emits the
-// converted A2A events on out.
-func (m *messageProcessor) processBatchStreamingEvents(
+// processStreamingEvent converts one agent event and emits it on out. The
+// returned boolean reports whether the caller should consume another event.
+func (m *messageProcessor) processStreamingEvent(
 	ctx context.Context,
 	out chan<- protocol.StreamEvent,
 	taskID string,
 	a2aMsg *protocol.Message,
-	batch []*event.Event,
+	agentEvent *event.Event,
 	state *taskOutputState,
 ) (bool, error) {
-	if len(batch) == 0 {
-		log.DebugContext(ctx, "received empty batch, continuing")
-		// continue processing
+	if agentEvent == nil {
+		log.WarnContext(ctx, "received nil event, skipping")
 		return true, nil
 	}
 
-	for i, agentEvent := range batch {
-		// Check context cancellation
-		select {
-		case <-ctx.Done():
-			log.WarnfContext(ctx, "context cancelled during batch processing")
-			return false, ctx.Err()
-		default:
-		}
-
-		if m.debugLogging {
-			agentEventJson, _ := json.Marshal(agentEvent)
-			log.DebugfContext(
-				ctx,
-				"get agent event: req msg id: %s, event: %s",
-				a2aMsg.MessageID,
-				string(agentEventJson),
-			)
-		}
-
-		if agentEvent == nil {
-			log.WarnfContext(
-				ctx,
-				"received nil event at index %d, skipping",
-				i,
-			)
-			continue
-		}
-
-		if agentEvent.Response == nil {
-			log.DebugfContext(
-				ctx,
-				"received empty response event at index %d, "+
-					"continuing, event: %v",
-				i,
-				agentEvent,
-			)
-			continue
-		}
-
-		if m.structuredTaskErrors &&
-			isStructuredTaskErrorEvent(agentEvent) {
-			task := buildStructuredFailureTask(
-				taskID,
-				*a2aMsg.ContextID,
-				nil,
-				agentEvent,
-			)
-			statusEvent := protocol.NewTaskStatusUpdateEvent(
-				taskID,
-				*a2aMsg.ContextID,
-				task.Status,
-				true,
-			)
-			statusEvent.Metadata = task.Metadata
-			if err := m.sendEvent(ctx, out, &statusEvent); err != nil {
-				return false, fmt.Errorf(
-					"failed to send task failure status: %w",
-					err,
-				)
-			}
-			state.terminalError = true
-			return false, nil
-		}
-
-		if isFinalStreamingEvent(agentEvent) {
-			state.finalMetadata = buildFinalStreamingMetadata(agentEvent)
-			log.DebugfContext(
-				ctx,
-				"received final event, stopping batch processing "+
-					"(eventID=%s)",
-				agentEvent.ID,
-			)
-			return false, nil
-		}
-
-		// Convert event to A2A message for streaming
-		convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
-			ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
+	if m.debugLogging {
+		agentEventJSON, _ := json.Marshal(agentEvent)
+		log.DebugfContext(
+			ctx,
+			"get agent event: req msg id: %s, event: %s",
+			a2aMsg.MessageID,
+			string(agentEventJSON),
 		)
-		if err != nil {
-			return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
-		}
-
-		if m.debugLogging {
-			a2aMsgJson, _ := json.Marshal(convertedResult)
-			log.DebugfContext(
-				ctx,
-				"converted agent event to A2A message: req msg id: %s, "+
-					"event: %s",
-				a2aMsg.MessageID,
-				string(a2aMsgJson),
-			)
-		}
-
-		// Rewrite first so task aggregation reflects exactly what is sent. This is
-		// important for response redaction and event replacement: dropped or
-		// rewritten content must not reappear in the final Task snapshot.
-		if convertedResult == nil {
-			continue
-		}
-		prepareTaskOutputEvent(convertedResult, state)
-		outbound := m.rewriteStreamingResult(ctx, convertedResult)
-		if outbound == nil {
-			continue
-		}
-		prepareTaskOutputEvent(outbound, state)
-		switch converted := outbound.(type) {
-		case *protocol.TaskArtifactUpdateEvent:
-			artifactID := converted.Artifact.ArtifactID
-			state.seenArtifactIDs[artifactID] = struct{}{}
-			state.lastArtifactID = artifactID
-		case *protocol.Message:
-			if state.finalMessage == nil {
-				message := protocol.NewMessageWithContext(
-					protocol.MessageRoleAgent,
-					nil,
-					&taskID,
-					a2aMsg.ContextID,
-				)
-				state.finalMessage = &message
-			}
-			state.finalMessage.Parts = append(
-				state.finalMessage.Parts,
-				converted.Parts...,
-			)
-			mergeMessageMetadata(state.finalMessage, converted.Metadata)
-		}
-		if err := sendPreparedEvent(ctx, out, outbound); err != nil {
-			log.ErrorfContext(
-				ctx,
-				"failed to send streaming message event: %v",
-				err,
-			)
-			return false, fmt.Errorf("failed to send streaming message event: %w", err)
-		}
 	}
 
-	// Continue processing - need more data
+	if agentEvent.Response == nil {
+		log.DebugfContext(
+			ctx,
+			"received empty response event, continuing, event: %v",
+			agentEvent,
+		)
+		return true, nil
+	}
+
+	if m.structuredTaskErrors && isStructuredTaskErrorEvent(agentEvent) {
+		task := buildStructuredFailureTask(
+			taskID,
+			*a2aMsg.ContextID,
+			nil,
+			agentEvent,
+		)
+		statusEvent := protocol.NewTaskStatusUpdateEvent(
+			taskID,
+			*a2aMsg.ContextID,
+			task.Status,
+			true,
+		)
+		statusEvent.Metadata = task.Metadata
+		if err := m.sendEvent(ctx, out, &statusEvent); err != nil {
+			return false, fmt.Errorf(
+				"failed to send task failure status: %w",
+				err,
+			)
+		}
+		state.terminalError = true
+		return false, nil
+	}
+
+	if isFinalStreamingEvent(agentEvent) {
+		state.finalMetadata = buildFinalStreamingMetadata(agentEvent)
+		log.DebugfContext(
+			ctx,
+			"received final event, stopping event processing (eventID=%s)",
+			agentEvent.ID,
+		)
+		return false, nil
+	}
+
+	convertedResult, err := m.eventToA2AConverter.ConvertStreamingToA2AMessage(
+		ctx, agentEvent, EventToA2AStreamingOptions{CtxID: *a2aMsg.ContextID, TaskID: taskID},
+	)
+	if err != nil {
+		return false, fmt.Errorf("failed to convert event to A2A message: %w", err)
+	}
+
+	if m.debugLogging {
+		a2aMsgJSON, _ := json.Marshal(convertedResult)
+		log.DebugfContext(
+			ctx,
+			"converted agent event to A2A message: req msg id: %s, event: %s",
+			a2aMsg.MessageID,
+			string(a2aMsgJSON),
+		)
+	}
+
+	// Rewrite first so task aggregation reflects exactly what is sent. This is
+	// important for response redaction and event replacement: dropped or
+	// rewritten content must not reappear in the final Task snapshot.
+	if convertedResult == nil {
+		return true, nil
+	}
+	prepareTaskOutputEvent(convertedResult, state)
+	outbound := m.rewriteStreamingResult(ctx, convertedResult)
+	if outbound == nil {
+		return true, nil
+	}
+	prepareTaskOutputEvent(outbound, state)
+	switch converted := outbound.(type) {
+	case *protocol.TaskArtifactUpdateEvent:
+		artifactID := converted.Artifact.ArtifactID
+		state.seenArtifactIDs[artifactID] = struct{}{}
+		state.lastArtifactID = artifactID
+	case *protocol.Message:
+		if state.finalMessage == nil {
+			message := protocol.NewMessageWithContext(
+				protocol.MessageRoleAgent,
+				nil,
+				&taskID,
+				a2aMsg.ContextID,
+			)
+			state.finalMessage = &message
+		}
+		state.finalMessage.Parts = append(
+			state.finalMessage.Parts,
+			converted.Parts...,
+		)
+		mergeMessageMetadata(state.finalMessage, converted.Metadata)
+	}
+	if err := sendPreparedEvent(ctx, out, outbound); err != nil {
+		log.ErrorfContext(
+			ctx,
+			"failed to send streaming message event: %v",
+			err,
+		)
+		return false, fmt.Errorf("failed to send streaming message event: %w", err)
+	}
+
 	return true, nil
 }
 
