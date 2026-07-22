@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	a2aserver "trpc.group/trpc-go/trpc-agent-go/server/a2a/v1"
 	"trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
@@ -59,10 +60,32 @@ func main() {
 		}),
 	)
 
+	info := llmAgent.Info()
+	card, err := a2aserver.NewAgentCard(
+		info.Name,
+		info.Description,
+		*host,
+		*streaming,
+		a2aserver.WithCardTools(llmAgent.Tools()...),
+	)
+	if err != nil {
+		log.Fatalf("create Agent Card: %v", err)
+	}
+
+	agentRunner := runner.NewRunner(
+		info.Name,
+		llmAgent,
+		runner.WithSessionService(inmemory.NewSessionService()),
+	)
+	defer func() {
+		if err := agentRunner.Close(); err != nil {
+			log.Printf("close Runner: %v", err)
+		}
+	}()
+
 	server, err := a2aserver.New(
-		a2aserver.WithHost(*host),
-		a2aserver.WithAgent(llmAgent, *streaming),
-		a2aserver.WithSessionService(inmemory.NewSessionService()),
+		a2aserver.WithRunner(agentRunner),
+		a2aserver.WithAgentCard(card),
 	)
 	if err != nil {
 		log.Fatalf("create A2A server: %v", err)

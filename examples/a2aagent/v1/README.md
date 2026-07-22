@@ -4,9 +4,10 @@ This example runs a session-aware LLM agent behind the A2A protocol v1.0
 server adapter and connects to it through the matching Agent adapter. The
 server and client are separate programs.
 
-The A2A server uses an in-memory trpc-agent-go session service. Requests with
-the same user and session ID share conversation context even though the
-default A2A task manager retains Tasks only for the lifetime of each request.
+The server creates a trpc-agent-go Runner with an in-memory session service,
+then exposes it through `WithRunner` and an explicit Agent Card. Requests with
+the same user and session ID share conversation context even though the default
+A2A task manager retains Tasks only for the lifetime of each request.
 
 ## Prerequisites
 
