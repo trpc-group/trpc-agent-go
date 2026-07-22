@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -30,7 +31,9 @@ func LoadPolicy(path string) (*Policy, error) {
 	ext := strings.ToLower(path)
 	switch {
 	case strings.HasSuffix(ext, ".json"):
-		if err := json.Unmarshal(data, policy); err != nil {
+		d := json.NewDecoder(bytes.NewReader(data))
+		d.DisallowUnknownFields()
+		if err := d.Decode(policy); err != nil {
 			return nil, fmt.Errorf("safety: parse JSON policy: %w", err)
 		}
 	default: // .yaml, .yml, or anything else

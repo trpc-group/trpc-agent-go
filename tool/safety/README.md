@@ -143,8 +143,10 @@ Every scan produces:
 2. **Audit log** (`tool_safety_audit.jsonl`) — one JSON line per scan,
    with redacted commands and timing information.
 3. **OpenTelemetry span attributes** — `tool.safety.decision`,
-   `tool.safety.risk_level`, `tool.safety.rule_id`,
-   `tool.safety.backend`, `tool.safety.blocked`.  (The `decision` and
+   `tool.safety.risk_level`, `tool.safety.risk_count`,
+   `tool.safety.backend`, `tool.safety.blocked`, and per-risk indexed
+   attributes `tool.safety.risk.N.rule_id` and
+   `tool.safety.risk.N.level`.  (The `decision` and
    `blocked` attribute names are kept stable as wire-level telemetry
    schema; the value of `blocked` is derived from
    `verdict == "deny"`.)

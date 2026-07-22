@@ -102,7 +102,7 @@ func (p *PermissionPolicy) extractScanRequest(req *tool.PermissionRequest) (*Sca
 		}
 	}
 
-	backend := inferBackend(req.ToolName)
+	backend := inferBackend(req)
 
 	switch backend {
 	case BackendCodeExec:
@@ -130,9 +130,23 @@ func (p *PermissionPolicy) extractScanRequest(req *tool.PermissionRequest) (*Sca
 	}
 }
 
-// inferBackend maps a tool name to a safety Backend.
-func inferBackend(toolName string) Backend {
-	lower := strings.ToLower(toolName)
+// BackendProvider is an optional interface that tools can implement to
+// explicitly declare their safety backend category.  When a tool
+// implements this interface, the scanner uses the declared backend
+// instead of inferring it from the tool name.
+type BackendProvider interface {
+	SafetyBackend() Backend
+}
+
+// inferBackend determines the safety Backend for a permission request.
+// It first checks whether the tool explicitly declares a backend via
+// the BackendProvider interface.  If not, it falls back to a
+// conservative name-based heuristic.
+func inferBackend(req *tool.PermissionRequest) Backend {
+	if bp, ok := req.Tool.(BackendProvider); ok {
+		return bp.SafetyBackend()
+	}
+	lower := strings.ToLower(req.ToolName)
 	switch {
 	case strings.Contains(lower, "host"):
 		return BackendHostExec
