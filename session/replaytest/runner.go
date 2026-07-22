@@ -1235,15 +1235,7 @@ func validateStepKind(step Step) error {
 			return fmt.Errorf("step %q kind %q requires summary payload", step.Name, step.Kind)
 		}
 	case StepAppendTrack:
-		if step.Track == nil {
-			return fmt.Errorf("step %q kind %q requires track payload", step.Name, step.Kind)
-		}
-		if step.Track.Event == nil || step.Track.Event.Track == "" {
-			return fmt.Errorf("step %q has invalid track input", step.Name)
-		}
-		if payload := step.Track.Event.Payload; payload != nil && !json.Valid(payload) {
-			return fmt.Errorf("step %q has invalid track JSON payload", step.Name)
-		}
+		return validateTrackStep(step)
 	case StepReloadSession:
 		return nil
 	case StepConcurrent:
@@ -1253,6 +1245,19 @@ func validateStepKind(step Step) error {
 		return validateConcurrentStep(step)
 	default:
 		return fmt.Errorf("step %q has unknown kind %q", step.Name, step.Kind)
+	}
+	return nil
+}
+
+func validateTrackStep(step Step) error {
+	if step.Track == nil {
+		return fmt.Errorf("step %q kind %q requires track payload", step.Name, step.Kind)
+	}
+	if step.Track.Event == nil || step.Track.Event.Track == "" {
+		return fmt.Errorf("step %q has invalid track input", step.Name)
+	}
+	if payload := step.Track.Event.Payload; payload != nil && !json.Valid(payload) {
+		return fmt.Errorf("step %q has invalid track JSON payload", step.Name)
 	}
 	return nil
 }

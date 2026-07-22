@@ -601,24 +601,11 @@ func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (boo
 		if diff.Path == "/execution" && diff.Allowed {
 			return false, fmt.Errorf("replaytest: case %q allows an execution failure", result.Name)
 		}
-		if strings.HasPrefix(diff.Path, "/capabilities/") {
-			if _, ok := capabilityFromEvidencePath(diff.Path); !ok {
-				return false, fmt.Errorf(
-					"replaytest: case %q has unknown capability evidence path %q",
-					result.Name,
-					diff.Path,
-				)
-			}
-			if !diff.Allowed {
-				return false, fmt.Errorf("replaytest: case %q has blocking capability evidence", result.Name)
-			}
-			baseline, baselineOK := diff.Baseline.(bool)
-			actual, actualOK := diff.Actual.(bool)
-			if !baselineOK || !actualOK || !baseline || actual {
-				return false, fmt.Errorf("replaytest: case %q has malformed capability evidence", result.Name)
-			}
-			hasCapabilityEvidence = true
+		capabilityEvidence, err := validateCapabilityEvidence(result.Name, diff)
+		if err != nil {
+			return false, err
 		}
+		hasCapabilityEvidence = hasCapabilityEvidence || capabilityEvidence
 		if diff.Case != result.Name || diff.BackendA == "" || diff.BackendB == "" ||
 			diff.SessionID == "" || !strings.HasPrefix(diff.Path, "/") {
 			return false, fmt.Errorf("replaytest: case %q diff %d has an invalid locator", result.Name, index)
@@ -637,6 +624,28 @@ func validateCaseDiffs(result CaseResult, backendNames map[string]struct{}) (boo
 		}
 	}
 	return hasCapabilityEvidence, nil
+}
+
+func validateCapabilityEvidence(caseName string, diff Diff) (bool, error) {
+	if !strings.HasPrefix(diff.Path, "/capabilities/") {
+		return false, nil
+	}
+	if _, ok := capabilityFromEvidencePath(diff.Path); !ok {
+		return false, fmt.Errorf(
+			"replaytest: case %q has unknown capability evidence path %q",
+			caseName,
+			diff.Path,
+		)
+	}
+	if !diff.Allowed {
+		return false, fmt.Errorf("replaytest: case %q has blocking capability evidence", caseName)
+	}
+	baseline, baselineOK := diff.Baseline.(bool)
+	actual, actualOK := diff.Actual.(bool)
+	if !baselineOK || !actualOK || !baseline || actual {
+		return false, fmt.Errorf("replaytest: case %q has malformed capability evidence", caseName)
+	}
+	return true, nil
 }
 
 func validateSummaryLocator(diff Diff) error {
