@@ -27,7 +27,7 @@ const (
 )
 
 type experimentRecorder interface {
-	start(Request, options) error
+	start(Request, experimentConfig) error
 	recordCandidate(*candidate) error
 	recordEvaluation(string, *candidate, evaluationBatch, int64) error
 	recordEvent(string, map[string]any) error
@@ -36,8 +36,8 @@ type experimentRecorder interface {
 
 type noopRecorder struct{}
 
-func (noopRecorder) start(Request, options) error     { return nil }
-func (noopRecorder) recordCandidate(*candidate) error { return nil }
+func (noopRecorder) start(Request, experimentConfig) error { return nil }
+func (noopRecorder) recordCandidate(*candidate) error      { return nil }
 func (noopRecorder) recordEvaluation(string, *candidate, evaluationBatch, int64) error {
 	return nil
 }
@@ -50,27 +50,32 @@ type fileRecorder struct {
 	seq int
 }
 
+type experimentConfig struct {
+	algorithm     string
+	engine        engineOptions
+	searchOptions map[string]any
+}
+
 type experimentRecord struct {
 	ID                        string           `json:"id"`
+	Algorithm                 string           `json:"algorithm"`
 	Dataset                   Dataset          `json:"dataset"`
 	Scope                     skill.SkillScope `json:"scope,omitempty"`
 	ParentRevisionID          string           `json:"parent_revision_id,omitempty"`
 	Submit                    bool             `json:"submit"`
 	RandomSeed                int64            `json:"random_seed"`
-	MaxIterations             int              `json:"max_iterations"`
 	MaxMetricCalls            int              `json:"max_metric_calls"`
-	ReflectionBatchSize       int              `json:"reflection_batch_size"`
 	MinimumHoldoutImprovement float64          `json:"minimum_holdout_improvement"`
 	TimeLimit                 time.Duration    `json:"time_limit"`
+	SearchOptions             map[string]any   `json:"search_options,omitempty"`
 	StartedAt                 time.Time        `json:"started_at"`
 }
 
 type candidateRecord struct {
-	ID        string               `json:"id"`
-	ParentID  string               `json:"parent_id,omitempty"`
-	Component string               `json:"component,omitempty"`
-	Rationale string               `json:"rationale,omitempty"`
-	Spec      *evolution.SkillSpec `json:"spec"`
+	ID       string               `json:"id"`
+	ParentID string               `json:"parent_id,omitempty"`
+	Metadata map[string]string    `json:"metadata,omitempty"`
+	Spec     *evolution.SkillSpec `json:"spec"`
 }
 
 type evaluationRecord struct {
@@ -106,19 +111,19 @@ func newExperimentRecorder(root, experimentID string) (experimentRecorder, error
 	return &fileRecorder{dir: dir}, nil
 }
 
-func (r *fileRecorder) start(req Request, opts options) error {
+func (r *fileRecorder) start(req Request, config experimentConfig) error {
 	record := experimentRecord{
 		ID:                        filepath.Base(r.dir),
+		Algorithm:                 config.algorithm,
 		Dataset:                   cloneDataset(req.Dataset),
 		Scope:                     req.Scope,
 		ParentRevisionID:          req.ParentRevisionID,
 		Submit:                    req.Submit,
-		RandomSeed:                opts.randomSeed,
-		MaxIterations:             opts.maxIterations,
-		MaxMetricCalls:            opts.maxMetricCalls,
-		ReflectionBatchSize:       opts.reflectionBatchSize,
-		MinimumHoldoutImprovement: opts.minimumHoldoutImprovement,
-		TimeLimit:                 opts.timeLimit,
+		RandomSeed:                config.engine.randomSeed,
+		MaxMetricCalls:            config.engine.maxMetricCalls,
+		MinimumHoldoutImprovement: config.engine.minimumHoldoutImprovement,
+		TimeLimit:                 config.engine.timeLimit,
+		SearchOptions:             cloneAnyMap(config.searchOptions),
 		StartedAt:                 time.Now().UTC(),
 	}
 	return writeJSONAtomically(filepath.Join(r.dir, "experiment.json"), record)
@@ -129,17 +134,25 @@ func (r *fileRecorder) recordCandidate(value *candidate) error {
 		return nil
 	}
 	record := candidateRecord{
-		ID:        value.id,
-		ParentID:  value.parentID,
-		Rationale: value.rationale,
-		Spec:      cloneSpec(value.spec),
-	}
-	if value.parentID != "" {
-		record.Component = value.component.String()
+		ID:       value.id,
+		ParentID: value.parentID,
+		Metadata: cloneStringMap(value.metadata),
+		Spec:     cloneSpec(value.spec),
 	}
 	return writeJSONAtomically(
 		filepath.Join(r.dir, "candidates", value.id+".json"), record,
 	)
+}
+
+func cloneAnyMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 func (r *fileRecorder) recordEvaluation(

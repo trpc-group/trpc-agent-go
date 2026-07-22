@@ -217,20 +217,20 @@ func TestBuildReflectionPromptRedactsAllModelBoundText(t *testing.T) {
 	assert.Contains(t, cases[0].Input, secret, "redaction must not mutate the dataset")
 }
 
-func TestNewValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
+func TestNewGEPAValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
 	evaluator := &scoringEvaluator{}
 	modelStub := &reflectionModel{response: `{}`}
 
-	_, err := New(nil, evaluator)
+	_, err := NewGEPA(nil, evaluator)
 	require.ErrorContains(t, err, "nil reflection model")
-	_, err = New(modelStub, nil)
+	_, err = NewGEPA(modelStub, nil)
 	require.ErrorContains(t, err, "nil evaluator")
-	_, err = New(modelStub, evaluator, WithMaxIterations(-1))
+	_, err = NewGEPA(modelStub, evaluator, WithMaxIterations(-1))
 	require.ErrorContains(t, err, "max iterations")
-	_, err = New(modelStub, evaluator, WithReflectionBatchSize(0))
+	_, err = NewGEPA(modelStub, evaluator, WithReflectionBatchSize(0))
 	require.ErrorContains(t, err, "batch size")
 
-	optimizer, err := New(
+	optimizer, err := NewGEPA(
 		modelStub,
 		evaluator,
 		WithMaxIterations(3),
@@ -242,12 +242,14 @@ func TestNewValidatesOnlyUserFacingDependenciesAndOptions(t *testing.T) {
 		WithRandomSeed(9),
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 3, optimizer.opts.maxIterations)
-	assert.Equal(t, 50, optimizer.opts.maxMetricCalls)
-	assert.Equal(t, 0.1, optimizer.opts.minimumHoldoutImprovement)
-	assert.Equal(t, int64(9), optimizer.opts.randomSeed)
-	_, err = New(modelStub, evaluator, WithMinimumHoldoutImprovement(-0.1))
+	implementation, ok := optimizer.(*gepaOptimizer)
+	require.True(t, ok)
+	assert.Equal(t, 3, implementation.search.opts.maxIterations)
+	assert.Equal(t, 50, implementation.engine.opts.maxMetricCalls)
+	assert.Equal(t, 0.1, implementation.engine.opts.minimumHoldoutImprovement)
+	assert.Equal(t, int64(9), implementation.engine.opts.randomSeed)
+	_, err = NewGEPA(modelStub, evaluator, WithMinimumHoldoutImprovement(-0.1))
 	require.ErrorContains(t, err, "holdout improvement")
-	_, err = New(modelStub, evaluator, WithMinimumHoldoutImprovement(math.NaN()))
+	_, err = NewGEPA(modelStub, evaluator, WithMinimumHoldoutImprovement(math.NaN()))
 	require.ErrorContains(t, err, "holdout improvement")
 }

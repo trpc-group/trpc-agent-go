@@ -146,6 +146,13 @@ For skills that have a repeatable benchmark, `evolution/optimization` adds a
 separate pure-Go search loop inspired by GEPA. It does not require DSPy,
 Python, or a companion process.
 
+`optimization.Optimizer` is the algorithm-neutral execution contract. The
+built-in `NewGEPA` implementation owns GEPA's reflection and Pareto search,
+while dataset isolation, budgets, experiment records, holdout verification,
+and optional revision submission remain in a shared lifecycle. Applications
+choose an implementation during wiring rather than through a runtime algorithm
+string.
+
 The optimizer:
 
 1. evaluates the seed skill on a validation split;
@@ -198,7 +205,7 @@ if !ok {
     return fmt.Errorf("evolution service does not support revision submission")
 }
 
-optimizer, err := optimization.New(
+optimizer, err := optimization.NewGEPA(
     reflectionModel,
     evaluator,
     optimization.WithMaxIterations(10),

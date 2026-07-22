@@ -145,19 +145,75 @@ func improvedSpec(spec *evolution.SkillSpec) bool {
 		slices.Contains(spec.Pitfalls, "Avoid the observed failure.")
 }
 
+func newTestOptimizer(
+	reflection reflector,
+	evaluator Evaluator,
+	opts options,
+) *gepaOptimizer {
+	return &gepaOptimizer{
+		engine: &engine{evaluator: evaluator, opts: opts.engine},
+		search: &gepaSearch{reflector: reflection, opts: opts.gepa},
+	}
+}
+
+type seedSearch struct{}
+
+func (seedSearch) algorithm() string { return "seed-only" }
+
+func (seedSearch) settings() map[string]any {
+	return map[string]any{"mode": "baseline"}
+}
+
+func (seedSearch) search(run *searchRun) (searchOutcome, error) {
+	return searchOutcome{
+		best:           run.seed,
+		candidateCount: 1,
+		stopReason:     "completed",
+	}, nil
+}
+
+func TestEngineOwnsLifecycleIndependentOfSearchStrategy(t *testing.T) {
+	evaluator := &scoringEvaluator{}
+	storeDir := t.TempDir()
+	engine := &engine{
+		evaluator: evaluator,
+		opts: engineOptions{
+			storeDir:   storeDir,
+			randomSeed: 7,
+		},
+	}
+
+	result, err := engine.optimize(
+		context.Background(),
+		Request{Seed: testSeedSpec(), Dataset: testDataset(2)},
+		seedSearch{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "seed-only", result.Algorithm)
+	assert.Equal(t, "completed", result.StopReason)
+	assert.Equal(t, 1, result.CandidateCount)
+	assert.Equal(t, 4, result.MetricCalls)
+	require.Len(t, evaluator.calls, 2)
+
+	payload, err := os.ReadFile(filepath.Join(
+		storeDir, result.ExperimentID, "experiment.json",
+	))
+	require.NoError(t, err)
+	var record experimentRecord
+	require.NoError(t, json.Unmarshal(payload, &record))
+	assert.Equal(t, "seed-only", record.Algorithm)
+	assert.Equal(t, "baseline", record.SearchOptions["mode"])
+}
+
 func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	evaluator := &scoringEvaluator{}
 	storeDir := t.TempDir()
 	opts := defaultOptions()
-	opts.maxIterations = 1
-	opts.reflectionBatchSize = 2
-	opts.storeDir = storeDir
-	opts.minimumHoldoutImprovement = 0.25
-	optimizer := &Optimizer{
-		reflector: improvingReflector{},
-		evaluator: evaluator,
-		opts:      opts,
-	}
+	opts.gepa.maxIterations = 1
+	opts.gepa.reflectionBatchSize = 2
+	opts.engine.storeDir = storeDir
+	opts.engine.minimumHoldoutImprovement = 0.25
+	optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 
 	result, err := optimizer.Optimize(context.Background(), Request{
 		Seed:    testSeedSpec(),
@@ -196,7 +252,10 @@ func TestOptimizerRunsReflectiveParetoLoopAndRecordsExperiment(t *testing.T) {
 	require.NoError(t, err)
 	var record experimentRecord
 	require.NoError(t, json.Unmarshal(payload, &record))
+	assert.Equal(t, gepaAlgorithm, record.Algorithm)
 	assert.Equal(t, 0.25, record.MinimumHoldoutImprovement)
+	assert.Equal(t, float64(1), record.SearchOptions["max_iterations"])
+	assert.Equal(t, gepaAlgorithm, result.Algorithm)
 
 	if runtime.GOOS != "windows" {
 		for _, path := range []string{
@@ -263,15 +322,11 @@ func TestExperimentRecorderBoundsEvaluatorText(t *testing.T) {
 func TestOptimizerReturnsAndRecordsResultWhenSubmissionFails(t *testing.T) {
 	storeDir := t.TempDir()
 	opts := defaultOptions()
-	opts.maxIterations = 1
-	opts.reflectionBatchSize = 2
-	opts.storeDir = storeDir
-	opts.revisionSubmitter = failingRevisionSubmitter{}
-	optimizer := &Optimizer{
-		reflector: improvingReflector{},
-		evaluator: &scoringEvaluator{},
-		opts:      opts,
-	}
+	opts.gepa.maxIterations = 1
+	opts.gepa.reflectionBatchSize = 2
+	opts.engine.storeDir = storeDir
+	opts.engine.revisionSubmitter = failingRevisionSubmitter{}
+	optimizer := newTestOptimizer(improvingReflector{}, &scoringEvaluator{}, opts)
 	dataset := testDataset(10)
 	dataset.Feedback = makeCases("feedback", 10)
 	dataset.Validation = makeCases("validation", 10)
@@ -297,13 +352,9 @@ func TestOptimizerReturnsAndRecordsResultWhenSubmissionFails(t *testing.T) {
 func TestOptimizerRejectsCandidateWithoutStrictMinibatchImprovement(t *testing.T) {
 	evaluator := &scoringEvaluator{equalScore: true}
 	opts := defaultOptions()
-	opts.maxIterations = 1
-	opts.reflectionBatchSize = 2
-	optimizer := &Optimizer{
-		reflector: improvingReflector{},
-		evaluator: evaluator,
-		opts:      opts,
-	}
+	opts.gepa.maxIterations = 1
+	opts.gepa.reflectionBatchSize = 2
+	optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 
 	result, err := optimizer.Optimize(context.Background(), Request{
 		Seed: testSeedSpec(),
@@ -325,14 +376,10 @@ func TestOptimizerRejectsCandidateWithoutStrictMinibatchImprovement(t *testing.T
 func TestOptimizerReservesMetricBudgetForHoldout(t *testing.T) {
 	evaluator := &scoringEvaluator{}
 	opts := defaultOptions()
-	opts.maxIterations = 2
-	opts.maxMetricCalls = 11
-	opts.reflectionBatchSize = 2
-	optimizer := &Optimizer{
-		reflector: improvingReflector{},
-		evaluator: evaluator,
-		opts:      opts,
-	}
+	opts.gepa.maxIterations = 2
+	opts.engine.maxMetricCalls = 11
+	opts.gepa.reflectionBatchSize = 2
+	optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 
 	result, err := optimizer.Optimize(context.Background(), Request{
 		Seed:    testSeedSpec(),
@@ -362,17 +409,13 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 
 	evaluator := &scoringEvaluator{}
 	opts := defaultOptions()
-	opts.maxIterations = 1
-	opts.reflectionBatchSize = 2
+	opts.gepa.maxIterations = 1
+	opts.gepa.reflectionBatchSize = 2
 	submitter, ok := svc.(evolution.RevisionSubmitter)
 	require.True(t, ok)
 	recordingSubmitter := &recordingRevisionSubmitter{delegate: submitter}
 	WithRevisionSubmitter(recordingSubmitter)(&opts)
-	optimizer := &Optimizer{
-		reflector: improvingReflector{},
-		evaluator: evaluator,
-		opts:      opts,
-	}
+	optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 	dataset := testDataset(10)
 	dataset.Validation = makeCases("validation", 10)
 	dataset.Feedback = makeCases("feedback", 10)
@@ -392,6 +435,10 @@ func TestOptimizerSubmitsImprovedCandidateForApproval(t *testing.T) {
 	assert.Contains(t, result.SubmissionReason, "pending_approval")
 	require.Len(t, recordingSubmitter.requests, 1)
 	assert.Equal(t, "rev-parent", recordingSubmitter.requests[0].ParentID)
+	assert.Equal(t,
+		"optimization/gepa:"+result.ExperimentID,
+		recordingSubmitter.requests[0].Source,
+	)
 
 	stored, err := store.ReadRevision(
 		context.Background(), result.Revision.SkillID, result.Revision.RevisionID,
@@ -416,13 +463,9 @@ func TestOptimizerSkipsRecoverableProposalFailures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			evaluator := &stagedEvaluator{failAt: test.failAt}
 			opts := defaultOptions()
-			opts.maxIterations = 1
-			opts.reflectionBatchSize = 2
-			optimizer := &Optimizer{
-				reflector: test.reflector,
-				evaluator: evaluator,
-				opts:      opts,
-			}
+			opts.gepa.maxIterations = 1
+			opts.gepa.reflectionBatchSize = 2
+			optimizer := newTestOptimizer(test.reflector, evaluator, opts)
 			result, err := optimizer.Optimize(context.Background(), Request{
 				Seed: testSeedSpec(),
 				Dataset: Dataset{
@@ -439,16 +482,16 @@ func TestOptimizerSkipsRecoverableProposalFailures(t *testing.T) {
 }
 
 func TestOptimizerReturnsFatalInitializationAndEvaluationErrors(t *testing.T) {
-	_, err := (*Optimizer)(nil).Optimize(context.Background(), Request{})
+	_, err := (*gepaOptimizer)(nil).Optimize(context.Background(), Request{})
 	require.ErrorContains(t, err, "not initialized")
 
 	opts := defaultOptions()
-	optimizer := &Optimizer{reflector: improvingReflector{}, evaluator: &scoringEvaluator{}, opts: opts}
+	optimizer := newTestOptimizer(improvingReflector{}, &scoringEvaluator{}, opts)
 	_, err = optimizer.Optimize(context.Background(), Request{})
 	require.ErrorContains(t, err, "seed")
 
-	opts.maxMetricCalls = 1
-	optimizer.opts = opts
+	opts.engine.maxMetricCalls = 1
+	optimizer = newTestOptimizer(improvingReflector{}, &scoringEvaluator{}, opts)
 	_, err = optimizer.Optimize(context.Background(), Request{
 		Seed: testSeedSpec(),
 		Dataset: Dataset{
@@ -461,7 +504,7 @@ func TestOptimizerReturnsFatalInitializationAndEvaluationErrors(t *testing.T) {
 	require.ErrorContains(t, err, "cannot cover validation")
 
 	opts = defaultOptions()
-	optimizer.opts = opts
+	optimizer = newTestOptimizer(improvingReflector{}, &scoringEvaluator{}, opts)
 	_, err = optimizer.Optimize(context.Background(), Request{
 		Seed:   testSeedSpec(),
 		Submit: true,
@@ -476,7 +519,7 @@ func TestOptimizerReturnsFatalInitializationAndEvaluationErrors(t *testing.T) {
 	require.ErrorContains(t, err, "without a revision submitter")
 
 	seedFailure := &stagedEvaluator{failAt: 1}
-	optimizer = &Optimizer{reflector: improvingReflector{}, evaluator: seedFailure, opts: defaultOptions()}
+	optimizer = newTestOptimizer(improvingReflector{}, seedFailure, defaultOptions())
 	_, err = optimizer.Optimize(context.Background(), Request{
 		Seed: testSeedSpec(),
 		Dataset: Dataset{
@@ -493,8 +536,8 @@ func TestOptimizerReturnsHoldoutEvaluationErrors(t *testing.T) {
 	t.Run("baseline", func(t *testing.T) {
 		evaluator := &stagedEvaluator{failAt: 2}
 		opts := defaultOptions()
-		opts.maxIterations = 0
-		optimizer := &Optimizer{reflector: improvingReflector{}, evaluator: evaluator, opts: opts}
+		opts.gepa.maxIterations = 0
+		optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 		_, err := optimizer.Optimize(context.Background(), Request{
 			Seed:    testSeedSpec(),
 			Dataset: testDataset(2),
@@ -504,9 +547,9 @@ func TestOptimizerReturnsHoldoutEvaluationErrors(t *testing.T) {
 	t.Run("candidate", func(t *testing.T) {
 		evaluator := &stagedEvaluator{failAt: 6}
 		opts := defaultOptions()
-		opts.maxIterations = 1
-		opts.reflectionBatchSize = 2
-		optimizer := &Optimizer{reflector: improvingReflector{}, evaluator: evaluator, opts: opts}
+		opts.gepa.maxIterations = 1
+		opts.gepa.reflectionBatchSize = 2
+		optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
 		_, err := optimizer.Optimize(context.Background(), Request{
 			Seed:    testSeedSpec(),
 			Dataset: testDataset(2),
@@ -525,7 +568,7 @@ func TestPromotionPolicyRejectsRegressionWithoutCallingService(t *testing.T) {
 	best.spec.Description = "improved reusable workflow"
 	req := Request{Dataset: Dataset{ID: "dataset", Version: "v1", Holdout: cases}}
 
-	optimizer := &Optimizer{opts: defaultOptions()}
+	optimizer := &engine{opts: defaultOptions().engine}
 	assessAndSubmit := func(
 		req Request,
 		seed, best *candidate,

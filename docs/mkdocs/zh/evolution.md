@@ -145,6 +145,10 @@ evoSvc := evolution.NewService(reviewerModel,
 benchmark 的 skill，`evolution/optimization` 提供独立的纯 Go 搜索闭环，机制参考
 GEPA，但不依赖 DSPy、Python 或 companion process。
 
+`optimization.Optimizer` 是与具体算法无关的执行契约。内置 `NewGEPA` 实现只拥有
+GEPA 的反思和 Pareto 搜索；dataset 隔离、预算、实验记录、holdout 验证和可选 revision
+提交仍由统一生命周期负责。应用在装配阶段选择具体实现，而不是传入运行时算法字符串。
+
 优化器会：
 
 1. 先在 validation split 上评估 baseline skill；
@@ -191,7 +195,7 @@ if !ok {
     return fmt.Errorf("evolution service does not support revision submission")
 }
 
-optimizer, err := optimization.New(
+optimizer, err := optimization.NewGEPA(
     reflectionModel,
     evaluator,
     optimization.WithMaxIterations(10),

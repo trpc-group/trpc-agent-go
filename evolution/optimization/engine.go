@@ -13,10 +13,45 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"time"
 
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 )
+
+type engineOptions struct {
+	maxMetricCalls            int
+	randomSeed                int64
+	timeLimit                 time.Duration
+	storeDir                  string
+	revisionSubmitter         evolution.RevisionSubmitter
+	minimumHoldoutImprovement float64
+}
+
+type engine struct {
+	evaluator Evaluator
+	opts      engineOptions
+}
+
+type searchStrategy interface {
+	algorithm() string
+	settings() map[string]any
+	search(*searchRun) (searchOutcome, error)
+}
+
+type searchOutcome struct {
+	best           *candidate
+	candidateCount int
+	stopReason     string
+}
+
+type candidate struct {
+	id         string
+	parentID   string
+	spec       *evolution.SkillSpec
+	metadata   map[string]string
+	validation evaluationBatch
+}
 
 type metricBudget struct {
 	max  int
@@ -31,39 +66,24 @@ func (b *metricBudget) spend(calls int) {
 	b.used += calls
 }
 
-type optimizerRun struct {
-	optimizer          *Optimizer
-	ctx                context.Context
-	req                Request
-	recorder           experimentRecorder
-	budget             *metricBudget
-	rng                *rand.Rand
-	holdoutReserve     int
-	seed               *candidate
-	seedValidationSeed int64
-	pool               map[string]*candidate
-	matrix             *scoreMatrix
+type searchRun struct {
+	engine         *engine
+	ctx            context.Context
+	req            Request
+	recorder       experimentRecorder
+	budget         *metricBudget
+	rng            *rand.Rand
+	holdoutReserve int
+	seed           *candidate
+	validationSeed int64
 }
 
-type iterationState struct {
-	iteration     int
-	parent        *candidate
-	feedbackCases []Case
-	pairedSeed    int64
-	parentScores  evaluationBatch
-	component     component
-	child         *candidate
-}
-
-// Optimize runs reflective mutation, strict minibatch acceptance,
-// instance-level Pareto parent selection, and a final holdout comparison.
-// If optional submission or final recording fails after evaluation completes,
-// Optimize returns both the completed Result and the error.
-func (o *Optimizer) Optimize(
+func (e *engine) optimize(
 	ctx context.Context,
 	req Request,
+	strategy searchStrategy,
 ) (*Result, error) {
-	if err := o.validateRun(req); err != nil {
+	if err := e.validateRun(req, strategy); err != nil {
 		return nil, err
 	}
 	if ctx == nil {
@@ -71,42 +91,45 @@ func (o *Optimizer) Optimize(
 	}
 	req.Seed = cloneSpec(req.Seed)
 	req.Dataset = cloneDataset(req.Dataset)
-	runCtx, cancel := o.withTimeLimit(ctx)
+	runCtx, cancel := e.withTimeLimit(ctx)
 	defer cancel()
 
 	experimentID := uuid.NewString()
-	recorder, err := newExperimentRecorder(o.opts.storeDir, experimentID)
+	recorder, err := newExperimentRecorder(e.opts.storeDir, experimentID)
 	if err != nil {
 		return nil, fmt.Errorf("evolution optimization: %w", err)
 	}
-	if err := recorder.start(req, o.opts); err != nil {
+	if err := recorder.start(req, experimentConfig{
+		algorithm:     strategy.algorithm(),
+		engine:        e.opts,
+		searchOptions: strategy.settings(),
+	}); err != nil {
 		return nil, fmt.Errorf("evolution optimization: start experiment record: %w", err)
 	}
 
-	run := o.newRun(runCtx, req, recorder)
-	if !run.budget.canSpend(len(req.Dataset.Validation), run.holdoutReserve) {
-		return nil, errors.New("evolution optimization: metric budget cannot cover validation and holdout")
-	}
+	run := e.newSearchRun(runCtx, req, recorder)
 	if err := run.initializeSeed(); err != nil {
 		return nil, err
 	}
-	stopReason, err := run.search()
+	outcome, err := strategy.search(run)
 	if err != nil {
 		return nil, err
 	}
-	best := run.pool[run.matrix.bestCandidateID()]
-	result := run.buildResult(experimentID, best, stopReason)
-	baselineHoldout, candidateHoldout, err := run.evaluateHoldout(best, result)
+	if err := validateSearchOutcome(outcome, len(req.Dataset.Validation)); err != nil {
+		return nil, fmt.Errorf("evolution optimization: invalid search outcome: %w", err)
+	}
+	result := run.buildResult(experimentID, strategy.algorithm(), outcome)
+	baselineHoldout, candidateHoldout, err := run.evaluateHoldout(outcome.best, result)
 	if err != nil {
 		return nil, err
 	}
-	o.assessPromotion(
-		req, run.seed, best, baselineHoldout, candidateHoldout, result,
+	e.assessPromotion(
+		req, run.seed, outcome.best, baselineHoldout, candidateHoldout, result,
 	)
 	result.MetricCalls = run.budget.used
 	var submissionErr error
 	if req.Submit {
-		submissionErr = o.submitCandidate(runCtx, req, best, result)
+		submissionErr = e.submitCandidate(runCtx, req, outcome.best, result)
 	}
 	finishErr := recorder.finish(result)
 	if finishErr != nil {
@@ -118,68 +141,64 @@ func (o *Optimizer) Optimize(
 	return result, nil
 }
 
-func (o *Optimizer) validateRun(req Request) error {
-	if o == nil || o.reflector == nil || o.evaluator == nil {
+func (e *engine) validateRun(req Request, strategy searchStrategy) error {
+	if e == nil || e.evaluator == nil || strategy == nil {
 		return errors.New("evolution optimization: optimizer is not initialized")
 	}
 	if err := validateRequest(req); err != nil {
 		return fmt.Errorf("evolution optimization: %w", err)
 	}
-	if req.Submit && o.opts.revisionSubmitter == nil {
+	if req.Submit && e.opts.revisionSubmitter == nil {
 		return errors.New("evolution optimization: submission requested without a revision submitter")
 	}
 	return nil
 }
 
-func (o *Optimizer) withTimeLimit(ctx context.Context) (context.Context, context.CancelFunc) {
-	if o.opts.timeLimit > 0 {
-		return context.WithTimeout(ctx, o.opts.timeLimit)
+func (e *engine) withTimeLimit(ctx context.Context) (context.Context, context.CancelFunc) {
+	if e.opts.timeLimit > 0 {
+		return context.WithTimeout(ctx, e.opts.timeLimit)
 	}
 	return ctx, func() {}
 }
 
-func (o *Optimizer) newRun(
+func (e *engine) newSearchRun(
 	ctx context.Context,
 	req Request,
 	recorder experimentRecorder,
-) *optimizerRun {
+) *searchRun {
 	// #nosec G404 -- deterministic experiment sampling is not security-sensitive.
-	rng := rand.New(rand.NewSource(o.opts.randomSeed))
-	return &optimizerRun{
-		optimizer:      o,
+	rng := rand.New(rand.NewSource(e.opts.randomSeed))
+	return &searchRun{
+		engine:         e,
 		ctx:            ctx,
 		req:            req,
 		recorder:       recorder,
-		budget:         &metricBudget{max: o.opts.maxMetricCalls},
+		budget:         &metricBudget{max: e.opts.maxMetricCalls},
 		rng:            rng,
 		holdoutReserve: 2 * len(req.Dataset.Holdout),
-		pool:           make(map[string]*candidate),
-		matrix:         newScoreMatrix(req.Dataset.Validation),
 	}
 }
 
-func (r *optimizerRun) initializeSeed() error {
+func (r *searchRun) initializeSeed() error {
+	if !r.budget.canSpend(len(r.req.Dataset.Validation), r.holdoutReserve) {
+		return errors.New("evolution optimization: metric budget cannot cover validation and holdout")
+	}
 	seedID, err := specHash(r.req.Seed)
 	if err != nil {
 		return fmt.Errorf("evolution optimization: hash seed: %w", err)
 	}
 	r.seed = &candidate{id: seedID, spec: cloneSpec(r.req.Seed)}
-	r.seedValidationSeed = r.rng.Int63()
-	validation, err := r.optimizer.evaluate(
-		r.ctx,
+	r.validationSeed = r.rng.Int63()
+	validation, err := r.evaluate(
 		r.seed.spec,
 		r.req.Dataset.Validation,
-		r.seedValidationSeed,
+		r.validationSeed,
 	)
 	r.budget.spend(len(r.req.Dataset.Validation))
 	if err != nil {
 		return fmt.Errorf("evolution optimization: evaluate seed validation: %w", err)
 	}
 	r.seed.validation = validation
-	r.pool[r.seed.id] = r.seed
-	if err := r.matrix.add(r.seed.id, validation); err != nil {
-		return fmt.Errorf("evolution optimization: add seed scores: %w", err)
-	}
 	if err := r.recorder.recordCandidate(r.seed); err != nil {
 		return fmt.Errorf("evolution optimization: record seed: %w", err)
 	}
@@ -187,246 +206,61 @@ func (r *optimizerRun) initializeSeed() error {
 		"validation",
 		r.seed,
 		validation,
-		r.seedValidationSeed,
+		r.validationSeed,
 	); err != nil {
 		return fmt.Errorf("evolution optimization: record seed validation: %w", err)
 	}
 	return nil
 }
 
-func (r *optimizerRun) search() (string, error) {
-	batchSize := min(r.optimizer.opts.reflectionBatchSize, len(r.req.Dataset.Feedback))
-	for iteration := 0; iteration < r.optimizer.opts.maxIterations; iteration++ {
-		if err := r.ctx.Err(); err != nil {
-			return "", fmt.Errorf("evolution optimization: %w", err)
-		}
-		iterationCalls := 2*batchSize + len(r.req.Dataset.Validation)
-		if !r.budget.canSpend(iterationCalls, r.holdoutReserve) {
-			return "metric_budget", nil
-		}
-		if err := r.runIteration(iteration, batchSize); err != nil {
-			return "", err
-		}
-	}
-	return "max_iterations", nil
-}
-
-func (r *optimizerRun) runIteration(iteration, batchSize int) error {
-	state, proceed, err := r.prepareParent(iteration, batchSize)
-	if err != nil || !proceed {
-		return err
-	}
-	proceed, err = r.reflectChild(state)
-	if err != nil || !proceed {
-		return err
-	}
-	proceed, err = r.evaluateChild(state)
-	if err != nil || !proceed {
-		return err
-	}
-	_, err = r.validateAndAcceptChild(state)
-	return err
-}
-
-func (r *optimizerRun) prepareParent(
-	iteration int,
-	batchSize int,
-) (*iterationState, bool, error) {
-	parentID, err := r.matrix.selectParent(r.rng)
-	if err != nil {
-		return nil, false, fmt.Errorf("evolution optimization: select parent: %w", err)
-	}
-	state := &iterationState{
-		iteration:     iteration,
-		parent:        r.pool[parentID],
-		feedbackCases: sampleCases(r.req.Dataset.Feedback, batchSize, r.rng),
-		pairedSeed:    r.rng.Int63(),
-	}
-	state.parentScores, err = r.optimizer.evaluate(
-		r.ctx,
-		state.parent.spec,
-		state.feedbackCases,
-		state.pairedSeed,
+func (r *searchRun) evaluate(
+	spec *evolution.SkillSpec,
+	cases []Case,
+	seed int64,
+) (evaluationBatch, error) {
+	inputs := cloneCases(cases)
+	evaluations, err := r.engine.evaluator.Evaluate(
+		r.ctx, cloneSpec(spec), inputs, seed,
 	)
-	r.budget.spend(len(state.feedbackCases))
 	if err != nil {
-		proceed, failureErr := r.recordRecoverableFailure(
-			"parent_evaluation_failed",
-			map[string]any{"iteration": iteration, "parent_id": parentID},
-			err,
-		)
-		return nil, proceed, failureErr
+		return evaluationBatch{}, err
 	}
-	if err := r.recorder.recordEvaluation(
-		"feedback-parent",
-		state.parent,
-		state.parentScores,
-		state.pairedSeed,
-	); err != nil {
-		return nil, false, fmt.Errorf("evolution optimization: record parent feedback: %w", err)
-	}
-	state.component = state.parent.nextComponent
-	state.parent.nextComponent = (state.parent.nextComponent + 1) % componentCount
-	return state, true, nil
+	return newEvaluationBatch(cases, evaluations)
 }
 
-func (r *optimizerRun) reflectChild(state *iterationState) (bool, error) {
-	proposed, err := r.optimizer.reflector.propose(r.ctx, reflectionInput{
-		candidate:  state.parent.spec,
-		component:  state.component,
-		evaluation: state.parentScores,
-	})
-	if err != nil {
-		return r.recordRecoverableFailure(
-			"reflection_rejected",
-			map[string]any{
-				"iteration": state.iteration,
-				"parent_id": state.parent.id,
-				"component": state.component.String(),
-			},
-			err,
-		)
+func validateSearchOutcome(outcome searchOutcome, validationCases int) error {
+	if outcome.best == nil || outcome.best.spec == nil {
+		return errors.New("missing selected candidate")
 	}
-	childID, err := specHash(proposed.spec)
-	if err != nil {
-		return false, fmt.Errorf("evolution optimization: hash reflected candidate: %w", err)
+	if len(outcome.best.validation.ordered) != validationCases {
+		return errors.New("selected candidate has incomplete validation results")
 	}
-	if _, duplicate := r.pool[childID]; duplicate {
-		return false, r.recordEvent("candidate_duplicate", map[string]any{
-			"iteration":    state.iteration,
-			"parent_id":    state.parent.id,
-			"candidate_id": childID,
-		})
+	if outcome.candidateCount <= 0 {
+		return errors.New("candidate count must be positive")
 	}
-	state.child = &candidate{
-		id:            childID,
-		parentID:      state.parent.id,
-		spec:          proposed.spec,
-		component:     state.component,
-		rationale:     proposed.rationale,
-		nextComponent: state.parent.nextComponent,
-	}
-	return true, nil
-}
-
-func (r *optimizerRun) evaluateChild(state *iterationState) (bool, error) {
-	scores, err := r.optimizer.evaluate(
-		r.ctx,
-		state.child.spec,
-		state.feedbackCases,
-		state.pairedSeed,
-	)
-	r.budget.spend(len(state.feedbackCases))
-	if err != nil {
-		return r.recordRecoverableFailure(
-			"child_evaluation_failed",
-			map[string]any{
-				"iteration":    state.iteration,
-				"candidate_id": state.child.id,
-			},
-			err,
-		)
-	}
-	if err := r.recorder.recordEvaluation(
-		"feedback-child",
-		state.child,
-		scores,
-		state.pairedSeed,
-	); err != nil {
-		return false, fmt.Errorf("evolution optimization: record child feedback: %w", err)
-	}
-	if scores.sum() <= state.parentScores.sum() {
-		return false, r.recordEvent("candidate_rejected", map[string]any{
-			"iteration":    state.iteration,
-			"candidate_id": state.child.id,
-			"parent_score": state.parentScores.sum(),
-			"child_score":  scores.sum(),
-			"reason":       "strict_minibatch_improvement",
-		})
-	}
-	return true, nil
-}
-
-func (r *optimizerRun) validateAndAcceptChild(state *iterationState) (bool, error) {
-	validation, err := r.optimizer.evaluate(
-		r.ctx,
-		state.child.spec,
-		r.req.Dataset.Validation,
-		r.seedValidationSeed,
-	)
-	r.budget.spend(len(r.req.Dataset.Validation))
-	if err != nil {
-		return r.recordRecoverableFailure(
-			"validation_failed",
-			map[string]any{
-				"iteration":    state.iteration,
-				"candidate_id": state.child.id,
-			},
-			err,
-		)
-	}
-	state.child.validation = validation
-	r.pool[state.child.id] = state.child
-	if err := r.matrix.add(state.child.id, validation); err != nil {
-		return false, fmt.Errorf("evolution optimization: add candidate scores: %w", err)
-	}
-	if err := r.recorder.recordCandidate(state.child); err != nil {
-		return false, fmt.Errorf("evolution optimization: record candidate: %w", err)
-	}
-	if err := r.recorder.recordEvaluation(
-		"validation",
-		state.child,
-		validation,
-		r.seedValidationSeed,
-	); err != nil {
-		return false, fmt.Errorf("evolution optimization: record validation: %w", err)
-	}
-	if err := r.recordEvent("candidate_accepted", map[string]any{
-		"iteration":    state.iteration,
-		"candidate_id": state.child.id,
-		"parent_id":    state.parent.id,
-		"component":    state.component.String(),
-	}); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func (r *optimizerRun) recordRecoverableFailure(
-	kind string,
-	data map[string]any,
-	cause error,
-) (bool, error) {
-	if err := stopOnContext(r.ctx, cause); err != nil {
-		return false, err
-	}
-	data["error"] = cause.Error()
-	return false, r.recordEvent(kind, data)
-}
-
-func (r *optimizerRun) recordEvent(kind string, data map[string]any) error {
-	if err := r.recorder.recordEvent(kind, data); err != nil {
-		return fmt.Errorf("evolution optimization: record event: %w", err)
+	if outcome.stopReason == "" {
+		return errors.New("stop reason is required")
 	}
 	return nil
 }
 
-func (r *optimizerRun) buildResult(
+func (r *searchRun) buildResult(
 	experimentID string,
-	best *candidate,
-	stopReason string,
+	algorithm string,
+	outcome searchOutcome,
 ) *Result {
 	return &Result{
+		Algorithm:           algorithm,
 		ExperimentID:        experimentID,
-		Spec:                cloneSpec(best.spec),
+		Spec:                cloneSpec(outcome.best.spec),
 		BaselineValidation:  r.seed.validation.summary(),
-		CandidateValidation: best.validation.summary(),
-		CandidateCount:      len(r.pool),
-		StopReason:          stopReason,
+		CandidateValidation: outcome.best.validation.summary(),
+		CandidateCount:      outcome.candidateCount,
+		StopReason:          outcome.stopReason,
 	}
 }
 
-func (r *optimizerRun) evaluateHoldout(
+func (r *searchRun) evaluateHoldout(
 	best *candidate,
 	result *Result,
 ) (evaluationBatch, evaluationBatch, error) {
@@ -436,12 +270,7 @@ func (r *optimizerRun) evaluateHoldout(
 	}
 	pairedSeed := r.rng.Int63()
 	var err error
-	baseline, err = r.optimizer.evaluate(
-		r.ctx,
-		r.seed.spec,
-		r.req.Dataset.Holdout,
-		pairedSeed,
-	)
+	baseline, err = r.evaluate(r.seed.spec, r.req.Dataset.Holdout, pairedSeed)
 	r.budget.spend(len(r.req.Dataset.Holdout))
 	if err != nil {
 		return baseline, candidateScores, fmt.Errorf(
@@ -469,7 +298,7 @@ func (r *optimizerRun) evaluateHoldout(
 	return baseline, candidateScores, nil
 }
 
-func (r *optimizerRun) evaluateBestHoldout(
+func (r *searchRun) evaluateBestHoldout(
 	best *candidate,
 	baseline evaluationBatch,
 	pairedSeed int64,
@@ -477,8 +306,7 @@ func (r *optimizerRun) evaluateBestHoldout(
 	candidateScores := baseline
 	if best.id != r.seed.id {
 		var err error
-		candidateScores, err = r.optimizer.evaluate(
-			r.ctx,
+		candidateScores, err = r.evaluate(
 			best.spec,
 			r.req.Dataset.Holdout,
 			pairedSeed,
@@ -505,21 +333,7 @@ func (r *optimizerRun) evaluateBestHoldout(
 	return candidateScores, nil
 }
 
-func (o *Optimizer) evaluate(
-	ctx context.Context,
-	spec *evolution.SkillSpec,
-	cases []Case,
-	seed int64,
-) (evaluationBatch, error) {
-	inputs := cloneCases(cases)
-	evaluations, err := o.evaluator.Evaluate(ctx, cloneSpec(spec), inputs, seed)
-	if err != nil {
-		return evaluationBatch{}, err
-	}
-	return newEvaluationBatch(cases, evaluations)
-}
-
-func (o *Optimizer) submitCandidate(
+func (e *engine) submitCandidate(
 	ctx context.Context,
 	req Request,
 	best *candidate,
@@ -530,9 +344,9 @@ func (o *Optimizer) submitCandidate(
 		return nil
 	}
 	delta := result.CandidateHoldout.Score - result.BaselineHoldout.Score
-	revision, err := o.opts.revisionSubmitter.SubmitRevision(ctx, evolution.RevisionRequest{
+	revision, err := e.opts.revisionSubmitter.SubmitRevision(ctx, evolution.RevisionRequest{
 		Scope:    req.Scope,
-		Source:   "genetic-pareto:" + result.ExperimentID,
+		Source:   "optimization/" + result.Algorithm + ":" + result.ExperimentID,
 		Action:   evolution.RevisionActionUpdate,
 		ParentID: req.ParentRevisionID,
 		Spec:     cloneSpec(best.spec),
@@ -556,7 +370,7 @@ func (o *Optimizer) submitCandidate(
 	return nil
 }
 
-func (o *Optimizer) assessPromotion(
+func (e *engine) assessPromotion(
 	req Request,
 	seed *candidate,
 	best *candidate,
@@ -574,11 +388,11 @@ func (o *Optimizer) assessPromotion(
 		return
 	}
 	delta := result.CandidateHoldout.Score - result.BaselineHoldout.Score
-	if delta < o.opts.minimumHoldoutImprovement {
+	if delta < e.opts.minimumHoldoutImprovement {
 		result.PromotionReason = fmt.Sprintf(
 			"holdout delta %.4f is below required %.4f",
 			delta,
-			o.opts.minimumHoldoutImprovement,
+			e.opts.minimumHoldoutImprovement,
 		)
 		return
 	}

@@ -6,18 +6,15 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-// Package optimization evolves managed skill specifications with reflective
-// mutations and instance-level Pareto candidate selection.
+// Package optimization defines offline skill optimization contracts and a
+// built-in pure-Go GEPA implementation.
 package optimization
 
 import (
 	"context"
-	"errors"
-	"math"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
-	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 )
 
@@ -99,9 +96,11 @@ type Summary struct {
 }
 
 // Result contains the selected candidate and the evidence needed to decide
-// whether it should be promoted. Internal candidates and Pareto bookkeeping
-// intentionally remain private.
+// whether it should be promoted. Algorithm identifies the implementation that
+// produced it; NewGEPA reports "gepa". Internal candidates and search
+// bookkeeping intentionally remain private.
 type Result struct {
+	Algorithm           string               `json:"algorithm"`
 	ExperimentID        string               `json:"experiment_id"`
 	Spec                *evolution.SkillSpec `json:"spec"`
 	BaselineValidation  Summary              `json:"baseline_validation"`
@@ -117,57 +116,63 @@ type Result struct {
 	Revision            *evolution.Revision  `json:"revision,omitempty"`
 }
 
-// Option configures an Optimizer.
+// Optimizer runs one isolated skill optimization experiment. Implementations
+// must not mutate Request or retain its mutable fields after Optimize returns.
+// A non-nil Result may accompany an error when evaluation completed but an
+// optional delivery step, such as recording or revision submission, failed.
+type Optimizer interface {
+	Optimize(context.Context, Request) (*Result, error)
+}
+
+// Option configures the GEPA optimizer created by NewGEPA.
 type Option func(*options)
 
 type options struct {
-	maxIterations             int
-	maxMetricCalls            int
-	reflectionBatchSize       int
-	randomSeed                int64
-	timeLimit                 time.Duration
-	storeDir                  string
-	revisionSubmitter         evolution.RevisionSubmitter
-	minimumHoldoutImprovement float64
+	engine engineOptions
+	gepa   gepaOptions
 }
 
 func defaultOptions() options {
 	return options{
-		maxIterations:       defaultMaxIterations,
-		maxMetricCalls:      defaultMaxMetricCalls,
-		reflectionBatchSize: defaultReflectionBatch,
-		randomSeed:          1,
+		engine: engineOptions{
+			maxMetricCalls: defaultMaxMetricCalls,
+			randomSeed:     1,
+		},
+		gepa: gepaOptions{
+			maxIterations:       defaultMaxIterations,
+			reflectionBatchSize: defaultReflectionBatch,
+		},
 	}
 }
 
 // WithMaxIterations limits reflective mutation attempts.
 func WithMaxIterations(n int) Option {
-	return func(o *options) { o.maxIterations = n }
+	return func(o *options) { o.gepa.maxIterations = n }
 }
 
 // WithMaxMetricCalls limits the total number of evaluated cases, including
 // validation and holdout comparisons. It does not count model requests or
 // tokens. A non-positive value disables the cap.
 func WithMaxMetricCalls(n int) Option {
-	return func(o *options) { o.maxMetricCalls = n }
+	return func(o *options) { o.engine.maxMetricCalls = n }
 }
 
 // WithReflectionBatchSize sets the feedback minibatch size.
 func WithReflectionBatchSize(n int) Option {
-	return func(o *options) { o.reflectionBatchSize = n }
+	return func(o *options) { o.gepa.reflectionBatchSize = n }
 }
 
 // WithRandomSeed makes optimizer sampling reproducible and passes stable seeds
 // to paired evaluator calls. Evaluators must use the seed for deterministic
 // execution when their task environment supports it.
 func WithRandomSeed(seed int64) Option {
-	return func(o *options) { o.randomSeed = seed }
+	return func(o *options) { o.engine.randomSeed = seed }
 }
 
 // WithTimeLimit bounds a complete optimization run. A non-positive duration
 // leaves deadline control to the caller's context.
 func WithTimeLimit(limit time.Duration) Option {
-	return func(o *options) { o.timeLimit = limit }
+	return func(o *options) { o.engine.timeLimit = limit }
 }
 
 // WithStoreDir enables a node-local filesystem experiment record under dir.
@@ -176,62 +181,19 @@ func WithTimeLimit(limit time.Duration) Option {
 // experiment has one writer, and this option does not provide distributed
 // coordination or remote durability.
 func WithStoreDir(dir string) Option {
-	return func(o *options) { o.storeDir = dir }
+	return func(o *options) { o.engine.storeDir = dir }
 }
 
 // WithRevisionSubmitter enables optional submission into a revision
 // governance lifecycle. The optimizer borrows submitter and does not manage
 // its lifecycle.
 func WithRevisionSubmitter(submitter evolution.RevisionSubmitter) Option {
-	return func(o *options) { o.revisionSubmitter = submitter }
+	return func(o *options) { o.engine.revisionSubmitter = submitter }
 }
 
 // WithMinimumHoldoutImprovement sets the required absolute paired holdout
 // score delta before submission. It does not affect search or final candidate
 // selection. The default is zero (no regression).
 func WithMinimumHoldoutImprovement(delta float64) Option {
-	return func(o *options) { o.minimumHoldoutImprovement = delta }
-}
-
-// Optimizer is a pure-Go reflective skill optimizer. Its configuration is
-// immutable after construction, and per-run search state is isolated.
-type Optimizer struct {
-	reflector reflector
-	evaluator Evaluator
-	opts      options
-}
-
-// New creates an Optimizer backed by reflectionModel and evaluator.
-func New(
-	reflectionModel model.Model,
-	evaluator Evaluator,
-	opts ...Option,
-) (*Optimizer, error) {
-	if reflectionModel == nil {
-		return nil, errors.New("evolution optimization: nil reflection model")
-	}
-	if evaluator == nil {
-		return nil, errors.New("evolution optimization: nil evaluator")
-	}
-	o := defaultOptions()
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
-	if o.maxIterations < 0 {
-		return nil, errors.New("evolution optimization: max iterations must not be negative")
-	}
-	if o.reflectionBatchSize <= 0 {
-		return nil, errors.New("evolution optimization: reflection batch size must be positive")
-	}
-	if math.IsNaN(o.minimumHoldoutImprovement) ||
-		o.minimumHoldoutImprovement < 0 || o.minimumHoldoutImprovement > 1 {
-		return nil, errors.New("evolution optimization: holdout improvement must be between 0 and 1")
-	}
-	return &Optimizer{
-		reflector: newLLMReflector(reflectionModel),
-		evaluator: evaluator,
-		opts:      o,
-	}, nil
+	return func(o *options) { o.engine.minimumHoldoutImprovement = delta }
 }

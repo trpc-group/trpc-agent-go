@@ -48,16 +48,6 @@ func (c component) String() string {
 	}
 }
 
-type candidate struct {
-	id            string
-	parentID      string
-	spec          *evolution.SkillSpec
-	component     component
-	rationale     string
-	nextComponent component
-	validation    evaluationBatch
-}
-
 type evaluationBatch struct {
 	cases   []Case
 	ordered []Evaluation
