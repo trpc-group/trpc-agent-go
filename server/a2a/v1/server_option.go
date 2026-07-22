@@ -23,7 +23,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // serverUserIDHeader is the default header that a2a server get UserID of invocation.
@@ -53,8 +52,8 @@ func NewContextWithUserID(ctx context.Context, userID string) context.Context {
 	return context.WithValue(ctx, auth.AuthUserKey, &auth.User{ID: userID})
 }
 
-// ProcessorBuilder returns a message processor for the given agent.
-type ProcessorBuilder func(agent agent.Agent, sessionService session.Service) taskmanager.MessageProcessor
+// ProcessorBuilder returns a message processor for the given runner.
+type ProcessorBuilder func(runner runner.Runner) taskmanager.MessageProcessor
 
 // ProcessMessageHook is a function that wraps the message processor with additional functionality.
 type ProcessMessageHook func(next taskmanager.MessageProcessor) taskmanager.MessageProcessor
@@ -119,10 +118,7 @@ func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) 
 }
 
 type options struct {
-	sessionService            session.Service
-	agent                     agent.Agent
 	runner                    runner.Runner
-	enableStreaming           bool
 	graphEventObjectAllowlist []string
 	responseRewriter          ResponseRewriter
 	streamingEventType        StreamingEventType
@@ -134,7 +130,6 @@ type options struct {
 	a2aToAgentConverter       A2AMessageToAgentMessage
 	eventToA2AConverter       EventToA2AMessage
 	eventPartMappers          []EventToA2APartMapper
-	host                      string
 	extraOptions              []a2a.Option
 	errorHandler              ErrorHandler
 	debugLogging              bool
@@ -161,24 +156,9 @@ const (
 	StreamingEventTypeMessage
 )
 
-// WithSessionService sets the session service to use.
-func WithSessionService(service session.Service) Option {
-	return func(opts *options) {
-		opts.sessionService = service
-	}
-}
-
-// WithAgent sets the agent to use.
-// It is mutually exclusive with WithRunner.
-func WithAgent(agent agent.Agent, enableStreaming bool) Option {
-	return func(opts *options) {
-		opts.agent = agent
-		opts.enableStreaming = enableStreaming
-	}
-}
-
 // WithRunner sets the runner to use.
-// It is mutually exclusive with WithAgent and requires WithAgentCard.
+// The caller retains ownership of the runner and must close it after the server
+// stops. WithAgentCard is also required.
 func WithRunner(r runner.Runner) Option {
 	return func(opts *options) {
 		opts.runner = r
@@ -207,7 +187,7 @@ func normalizeMetadataKeys(keys []string) []string {
 }
 
 // WithAgentCard sets the agent card to use.
-// Use BuildBasicAgentCard to derive a basic card from an agent when needed.
+// Use NewAgentCard to construct a card from explicit metadata when needed.
 func WithAgentCard(agentCard a2a.AgentCard) Option {
 	return func(opts *options) {
 		opts.agentCard = &agentCard
@@ -226,33 +206,6 @@ func WithProcessorBuilder(builder ProcessorBuilder) Option {
 func WithProcessMessageHook(hook ProcessMessageHook) Option {
 	return func(opts *options) {
 		opts.processorHook = hook
-	}
-}
-
-// WithHost sets the host address for the A2A server's agent card URL.
-// The host will be normalized to a complete URL and used by other agents to discover and communicate with this agent.
-//
-// Supported formats:
-//   - "localhost:8080" → "http://localhost:8080"
-//   - "example.com" → "http://example.com"
-//   - "http://example.com/api/v1" → "http://example.com/api/v1" (used as-is)
-//   - "https://example.com" → "https://example.com" (used as-is)
-//   - "grpc://service:9090" → "grpc://service:9090" (custom schemes supported)
-//
-// If the URL contains a path (e.g., "http://example.com/api/v1"), the path will be
-// automatically extracted and set as the base path for routing requests.
-//
-// Example:
-//
-//	server, _ := a2a.New(
-//	    a2a.WithAgent(myAgent),
-//	    a2a.WithHost("localhost:8080"),  // URL: "http://localhost:8080", basePath: ""
-//	    // or
-//	    a2a.WithHost("http://example.com/api/v1"),  // URL: "http://example.com/api/v1", basePath: "/api/v1"
-//	)
-func WithHost(host string) Option {
-	return func(opts *options) {
-		opts.host = host
 	}
 }
 
