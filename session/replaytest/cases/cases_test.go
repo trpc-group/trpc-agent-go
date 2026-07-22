@@ -33,6 +33,31 @@ func TestAllReturnsElevenWellFormedCases(t *testing.T) {
 	}
 }
 
+// TestAllMatchesDocumentedOrder pins the slice order to the README's case
+// numbering (memory/scope_isolation is case 11 and comes last): RunPair
+// preserves this order in reports, so a silent reorder would renumber every
+// later case in the public documentation.
+func TestAllMatchesDocumentedOrder(t *testing.T) {
+	want := []string{
+		"basic/single_turn",
+		"basic/multi_turn_order",
+		"toolcall/full_cycle",
+		"state/overwrite_delete_clear",
+		"memory/write_read",
+		"summary/generate_update",
+		"summary/truncation_retain",
+		"track/tool_and_subtask",
+		"concurrency/interleaved_append",
+		"recovery/dirty_retry",
+		"memory/scope_isolation",
+	}
+	all := All()
+	require.Len(t, all, len(want))
+	for i, c := range all {
+		assert.Equal(t, want[i], c.Name, "case %d", i+1)
+	}
+}
+
 // TestAllConstructorsDeterministic calls every constructor twice and
 // requires a deep-equal result: cases must be pure functions.
 func TestAllConstructorsDeterministic(t *testing.T) {

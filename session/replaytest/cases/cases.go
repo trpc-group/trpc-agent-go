@@ -18,7 +18,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session/replaytest"
 )
 
-// All returns every public replay case.
+// All returns every public replay case in the documented numbering order
+// (see the README's case table): memory/scope_isolation is case 11 and
+// comes last. RunPair preserves this slice order in reports.
 func All() []replaytest.Case {
 	return []replaytest.Case{
 		SingleTurn(),
@@ -26,12 +28,12 @@ func All() []replaytest.Case {
 		ToolCallFullCycle(),
 		StateOverwriteDeleteClear(),
 		MemoryWriteRead(),
-		MemoryScopeIsolation(),
 		SummaryGenerateUpdate(),
 		SummaryTruncationRetain(),
 		TrackToolAndSubtask(),
 		ConcurrencyInterleavedAppend(),
 		RecoveryDirtyRetry(),
+		MemoryScopeIsolation(),
 	}
 }
 
