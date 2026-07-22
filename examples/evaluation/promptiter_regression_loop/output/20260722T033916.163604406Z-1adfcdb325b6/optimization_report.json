@@ -1,0 +1,1679 @@
+{
+  "schemaVersion": "promptiter-regression/v1",
+  "run": {
+    "id": "20260722T033916.163604406Z-1adfcdb325b6",
+    "status": "succeeded",
+    "mode": "deterministic-fake-model",
+    "seed": 2003,
+    "model": "deterministic-prompt-regression-model",
+    "configPath": "promptiter_regression_loop/data/promptiter-regression-app/promptiter.json",
+    "configSha256": "1adfcdb325b676d37218eaa974238526701e278f193f216771167b0e549895c3",
+    "startedAt": "2026-07-22T03:39:16.163604406Z",
+    "durationNanos": 15838418
+  },
+  "baselineTrain": {
+    "evalSetId": "train",
+    "overallScore": 0.3333333333333333,
+    "overallStatus": "failed",
+    "executionTimeNanos": 2351617,
+    "cases": [
+      {
+        "evalSetId": "train",
+        "caseId": "train_invoice_correction",
+        "score": 0,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"The title on my electronic invoice is wrong. How can I correct it?\"}]",
+              "output": "{\"id\":\"deterministic-train_invoice_correction-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":9,\"total_tokens\":40,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":23947}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 31,
+            "completionTokens": 9,
+            "totalTokens": 40,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 394191,
+            "measured": true
+          }
+        }
+      },
+      {
+        "evalSetId": "train",
+        "caseId": "train_order_tracking",
+        "score": 1,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"My order has shipped. Where can I see the latest delivery status?\"}]",
+              "output": "{\"id\":\"deterministic-train_order_tracking-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":15,\"total_tokens\":45,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":7608}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 30,
+            "completionTokens": 15,
+            "totalTokens": 45,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 251625,
+            "measured": true
+          }
+        }
+      },
+      {
+        "evalSetId": "train",
+        "caseId": "train_return_window",
+        "score": 0,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Yes. The unopened item is within the 7-day return window; submit a return request from the order details page. do not match"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"My unopened order arrived five days ago. Can I still return it without giving a reason?\"}]",
+              "output": "{\"id\":\"deterministic-train_return_window-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":9,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":8851}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 34,
+            "completionTokens": 9,
+            "totalTokens": 43,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 1015400,
+            "measured": true
+          }
+        }
+      }
+    ],
+    "usage": {
+      "promptTokens": 95,
+      "completionTokens": 33,
+      "totalTokens": 128,
+      "modelCalls": 3,
+      "toolCalls": 0,
+      "durationNanos": 2351617,
+      "measured": true
+    }
+  },
+  "baselineValidation": {
+    "evalSetId": "validation",
+    "overallScore": 0.6666666666666666,
+    "overallStatus": "failed",
+    "executionTimeNanos": 775052,
+    "cases": [
+      {
+        "evalSetId": "validation",
+        "caseId": "validation_account_security",
+        "score": 1,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"A caller claiming to be platform support asked for my SMS verification code. Should I share it?\"}]",
+              "output": "{\"id\":\"deterministic-validation_account_security-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":35,\"completion_tokens\":13,\"total_tokens\":48,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2787}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 35,
+            "completionTokens": 13,
+            "totalTokens": 48,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 87808,
+            "measured": true
+          }
+        }
+      },
+      {
+        "evalSetId": "validation",
+        "caseId": "validation_delivery_update",
+        "score": 1,
+        "passed": true,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"Tracking says the parcel is out for delivery. Where should I check for updates?\"}]",
+              "output": "{\"id\":\"deterministic-validation_delivery_update-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":32,\"completion_tokens\":11,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":3227}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 32,
+            "completionTokens": 11,
+            "totalTokens": 43,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 143459,
+            "measured": true
+          }
+        }
+      },
+      {
+        "evalSetId": "validation",
+        "caseId": "validation_return_shipping",
+        "score": 0,
+        "passed": false,
+        "metrics": [
+          {
+            "name": "final_response_avg_score",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective. do not match"
+          }
+        ],
+        "trace": {
+          "status": "completed",
+          "output": "{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"}",
+          "steps": [
+            {
+              "stepId": "s1",
+              "nodeType": "llm",
+              "input": "[{\"role\":\"system\",\"content\":\"You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions.\"},{\"role\":\"user\",\"content\":\"Who pays return shipping for a 7-day no-reason return?\"}]",
+              "output": "{\"id\":\"deterministic-validation_return_shipping-baseline\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":27,\"completion_tokens\":9,\"total_tokens\":36,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":6075}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+            }
+          ],
+          "usage": {
+            "promptTokens": 27,
+            "completionTokens": 9,
+            "totalTokens": 36,
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "durationNanos": 202609,
+            "measured": true
+          }
+        }
+      }
+    ],
+    "usage": {
+      "promptTokens": 94,
+      "completionTokens": 33,
+      "totalTokens": 127,
+      "modelCalls": 3,
+      "toolCalls": 0,
+      "durationNanos": 775052,
+      "measured": true
+    }
+  },
+  "baselineAttribution": {
+    "items": [
+      {
+        "evalSetId": "train",
+        "caseId": "train_invoice_correction",
+        "metric": "final_response_avg_score",
+        "category": "final_response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match",
+        "evidence": [
+          "metric reason: final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+        ]
+      },
+      {
+        "evalSetId": "train",
+        "caseId": "train_return_window",
+        "metric": "final_response_avg_score",
+        "category": "final_response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Yes. The unopened item is within the 7-day return window; submit a return request from the order details page. do not match",
+        "evidence": [
+          "metric reason: final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Yes. The unopened item is within the 7-day return window; submit a return request from the order details page. do not match"
+        ]
+      },
+      {
+        "evalSetId": "validation",
+        "caseId": "validation_return_shipping",
+        "metric": "final_response_avg_score",
+        "category": "final_response_mismatch",
+        "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective. do not match",
+        "evidence": [
+          "metric reason: final response mismatch: text mismatch: source Please contact customer support for help with this request. and target The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective. do not match"
+        ]
+      }
+    ],
+    "summary": {
+      "totalFailures": 3,
+      "attributedFailures": 3,
+      "categoryCounts": {
+        "final_response_mismatch": 3
+      }
+    }
+  },
+  "rounds": [
+    {
+      "attempt": 1,
+      "inputPrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "You are an e-commerce support agent. Answer order tracking and verification-code safety questions. Escalate return and invoice questions."
+      },
+      "candidatePrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions."
+      },
+      "promptIterAccepted": true,
+      "train": {
+        "evalSetId": "train",
+        "overallScore": 0.6666666666666666,
+        "overallStatus": "failed",
+        "executionTimeNanos": 679796,
+        "cases": [
+          {
+            "evalSetId": "train",
+            "caseId": "train_invoice_correction",
+            "score": 0,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"The title on my electronic invoice is wrong. How can I correct it?\"}]",
+                  "output": "{\"id\":\"deterministic-train_invoice_correction-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":9,\"total_tokens\":39,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2376}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 30,
+                "completionTokens": 9,
+                "totalTokens": 39,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 76551,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_order_tracking",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"My order has shipped. Where can I see the latest delivery status?\"}]",
+                  "output": "{\"id\":\"deterministic-train_order_tracking-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":29,\"completion_tokens\":15,\"total_tokens\":44,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":10014}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 29,
+                "completionTokens": 15,
+                "totalTokens": 44,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 138307,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_return_window",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"My unopened order arrived five days ago. Can I still return it without giving a reason?\"}]",
+                  "output": "{\"id\":\"deterministic-train_return_window-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":33,\"completion_tokens\":19,\"total_tokens\":52,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2586}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 33,
+                "completionTokens": 19,
+                "totalTokens": 52,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 105780,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 92,
+          "completionTokens": 43,
+          "totalTokens": 135,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 679796,
+          "measured": true
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "overallScore": 1,
+        "overallStatus": "passed",
+        "executionTimeNanos": 707272,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"A caller claiming to be platform support asked for my SMS verification code. Should I share it?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_account_security-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":13,\"total_tokens\":47,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":10495}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 34,
+                "completionTokens": 13,
+                "totalTokens": 47,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 142537,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"Tracking says the parcel is out for delivery. Where should I check for updates?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_delivery_update-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":31,\"completion_tokens\":11,\"total_tokens\":42,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2346}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 31,
+                "completionTokens": 11,
+                "totalTokens": 42,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 81743,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"Who pays return shipping for a 7-day no-reason return?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_return_shipping-candidate-1\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":26,\"completion_tokens\":17,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4551}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 26,
+                "completionTokens": 17,
+                "totalTokens": 43,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 144442,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 91,
+          "completionTokens": 41,
+          "totalTokens": 132,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 707272,
+          "measured": true
+        }
+      },
+      "delta": {
+        "scoreDelta": 0.33333333333333337,
+        "counts": {
+          "new_pass": 1,
+          "unchanged": 2
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "kind": "new_pass",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 0,
+                "candidateScore": 1,
+                "scoreDelta": 1,
+                "baselineStatus": "failed",
+                "candidateStatus": "passed",
+                "kind": "new_pass"
+              }
+            ]
+          }
+        ]
+      },
+      "baselineDelta": {
+        "scoreDelta": 0.33333333333333337,
+        "counts": {
+          "new_pass": 1,
+          "unchanged": 2
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "kind": "new_pass",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 0,
+                "candidateScore": 1,
+                "scoreDelta": 1,
+                "baselineStatus": "failed",
+                "candidateStatus": "passed",
+                "kind": "new_pass"
+              }
+            ]
+          }
+        ]
+      },
+      "attribution": {
+        "items": [
+          {
+            "evalSetId": "train",
+            "caseId": "train_invoice_correction",
+            "metric": "final_response_avg_score",
+            "category": "final_response_mismatch",
+            "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match",
+            "evidence": [
+              "metric reason: final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+            ]
+          }
+        ],
+        "summary": {
+          "totalFailures": 1,
+          "attributedFailures": 1,
+          "categoryCounts": {
+            "final_response_mismatch": 1
+          }
+        }
+      },
+      "gate": {
+        "accepted": true,
+        "scoreDelta": 0.33333333333333337,
+        "reasons": [
+          "candidate satisfies every configured release gate"
+        ],
+        "newFailures": [],
+        "criticalRegressions": []
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#instruction",
+          "text": "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions.",
+          "reason": "deterministic attempt 1 addresses: train_invoice_correction, train_return_window"
+        }
+      ],
+      "usage": {
+        "promptTokens": 463,
+        "completionTokens": 191,
+        "totalTokens": 654,
+        "modelCalls": 15,
+        "toolCalls": 0,
+        "durationNanos": 3566299,
+        "measured": true
+      },
+      "durationNanos": 4435662
+    },
+    {
+      "attempt": 2,
+      "inputPrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions."
+      },
+      "candidatePrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions."
+      },
+      "promptIterAccepted": true,
+      "train": {
+        "evalSetId": "train",
+        "overallScore": 0.6666666666666666,
+        "overallStatus": "failed",
+        "executionTimeNanos": 601592,
+        "cases": [
+          {
+            "evalSetId": "train",
+            "caseId": "train_invoice_correction",
+            "score": 0,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"The title on my electronic invoice is wrong. How can I correct it?\"}]",
+                  "output": "{\"id\":\"deterministic-train_invoice_correction-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Please contact customer support for help with this request.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":34,\"completion_tokens\":9,\"total_tokens\":43,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4040}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 34,
+                "completionTokens": 9,
+                "totalTokens": 43,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 98814,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_order_tracking",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"My order has shipped. Where can I see the latest delivery status?\"}]",
+                  "output": "{\"id\":\"deterministic-train_order_tracking-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":33,\"completion_tokens\":15,\"total_tokens\":48,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":1614}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 33,
+                "completionTokens": 15,
+                "totalTokens": 48,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 88760,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_return_window",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"My unopened order arrived five days ago. Can I still return it without giving a reason?\"}]",
+                  "output": "{\"id\":\"deterministic-train_return_window-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":19,\"total_tokens\":56,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2556}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 37,
+                "completionTokens": 19,
+                "totalTokens": 56,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 178792,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 104,
+          "completionTokens": 43,
+          "totalTokens": 147,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 601592,
+          "measured": true
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "overallScore": 1,
+        "overallStatus": "passed",
+        "executionTimeNanos": 627984,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"A caller claiming to be platform support asked for my SMS verification code. Should I share it?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_account_security-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Do not share the verification code. Platform support will never ask for it.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":38,\"completion_tokens\":13,\"total_tokens\":51,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4100}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 38,
+                "completionTokens": 13,
+                "totalTokens": 51,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 108908,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"Tracking says the parcel is out for delivery. Where should I check for updates?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_delivery_update-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":35,\"completion_tokens\":11,\"total_tokens\":46,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":4189}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 35,
+                "completionTokens": 11,
+                "totalTokens": 46,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 152550,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.\"},{\"role\":\"user\",\"content\":\"Who pays return shipping for a 7-day no-reason return?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_return_shipping-candidate-2\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":30,\"completion_tokens\":17,\"total_tokens\":47,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2285}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 30,
+                "completionTokens": 17,
+                "totalTokens": 47,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 138778,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 103,
+          "completionTokens": 41,
+          "totalTokens": 144,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 627984,
+          "measured": true
+        }
+      },
+      "delta": {
+        "scoreDelta": 0,
+        "counts": {
+          "unchanged": 3
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          }
+        ]
+      },
+      "baselineDelta": {
+        "scoreDelta": 0.33333333333333337,
+        "counts": {
+          "new_pass": 1,
+          "unchanged": 2
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "kind": "new_pass",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 0,
+                "candidateScore": 1,
+                "scoreDelta": 1,
+                "baselineStatus": "failed",
+                "candidateStatus": "passed",
+                "kind": "new_pass"
+              }
+            ]
+          }
+        ]
+      },
+      "attribution": {
+        "items": [
+          {
+            "evalSetId": "train",
+            "caseId": "train_invoice_correction",
+            "metric": "final_response_avg_score",
+            "category": "final_response_mismatch",
+            "reason": "final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match",
+            "evidence": [
+              "metric reason: final response mismatch: text mismatch: source Please contact customer support for help with this request. and target Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page. do not match"
+            ]
+          }
+        ],
+        "summary": {
+          "totalFailures": 1,
+          "attributedFailures": 1,
+          "categoryCounts": {
+            "final_response_mismatch": 1
+          }
+        }
+      },
+      "gate": {
+        "accepted": false,
+        "scoreDelta": 0,
+        "reasons": [
+          "validation score gain 0.0000 is below required 0.2000"
+        ],
+        "newFailures": [],
+        "criticalRegressions": []
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#instruction",
+          "text": "Accurately answer order tracking, delivery updates, 7-day returns, return shipping, and verification-code safety. Keep answers concise and escalate invoice correction questions.",
+          "reason": "deterministic attempt 2 addresses: train_invoice_correction"
+        }
+      ],
+      "usage": {
+        "promptTokens": 493,
+        "completionTokens": 209,
+        "totalTokens": 702,
+        "modelCalls": 15,
+        "toolCalls": 0,
+        "durationNanos": 2405436,
+        "measured": true
+      },
+      "durationNanos": 4107136
+    },
+    {
+      "attempt": 3,
+      "inputPrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions."
+      },
+      "candidatePrompt": {
+        "surfaceId": "candidate#instruction",
+        "text": "Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified."
+      },
+      "promptIterAccepted": false,
+      "train": {
+        "evalSetId": "train",
+        "overallScore": 1,
+        "overallStatus": "passed",
+        "executionTimeNanos": 520700,
+        "cases": [
+          {
+            "evalSetId": "train",
+            "caseId": "train_invoice_correction",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"The title on my electronic invoice is wrong. How can I correct it?\"}]",
+                  "output": "{\"id\":\"deterministic-train_invoice_correction-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Void the incorrect electronic invoice, then request a new invoice with the correct title from the order details page.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":36,\"completion_tokens\":19,\"total_tokens\":55,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2225}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 36,
+                "completionTokens": 19,
+                "totalTokens": 55,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 70868,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_order_tracking",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"My order has shipped. Where can I see the latest delivery status?\"}]",
+                  "output": "{\"id\":\"deterministic-train_order_tracking-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Open the order details page and select View Logistics to see the latest carrier updates.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":35,\"completion_tokens\":15,\"total_tokens\":50,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2425}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 35,
+                "completionTokens": 15,
+                "totalTokens": 50,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 69103,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "train",
+            "caseId": "train_return_window",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"My unopened order arrived five days ago. Can I still return it without giving a reason?\"}]",
+                  "output": "{\"id\":\"deterministic-train_return_window-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Yes. The unopened item is within the 7-day return window; submit a return request from the order details page.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":39,\"completion_tokens\":19,\"total_tokens\":58,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":3318}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 39,
+                "completionTokens": 19,
+                "totalTokens": 58,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 104658,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 110,
+          "completionTokens": 53,
+          "totalTokens": 163,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 520700,
+          "measured": true
+        }
+      },
+      "validation": {
+        "evalSetId": "validation",
+        "overallScore": 0.6666666666666666,
+        "overallStatus": "failed",
+        "executionTimeNanos": 499119,
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "score": 0,
+            "passed": false,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "status": "failed",
+                "reason": "final response mismatch: text mismatch: source Because the caller identified themselves as platform support, you may share the verification code. and target Do not share the verification code. Platform support will never ask for it. do not match"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Because the caller identified themselves as platform support, you may share the verification code.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"A caller claiming to be platform support asked for my SMS verification code. Should I share it?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_account_security-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Because the caller identified themselves as platform support, you may share the verification code.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":14,\"total_tokens\":54,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2406}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 40,
+                "completionTokens": 14,
+                "totalTokens": 54,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 104477,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"Tracking says the parcel is out for delivery. Where should I check for updates?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_delivery_update-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"Check the order details page for the courier's latest out-for-delivery update.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":37,\"completion_tokens\":11,\"total_tokens\":48,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2205}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 37,
+                "completionTokens": 11,
+                "totalTokens": 48,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 72882,
+                "measured": true
+              }
+            }
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "score": 1,
+            "passed": true,
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "status": "passed"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "output": "{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"}",
+              "steps": [
+                {
+                  "stepId": "s1",
+                  "nodeType": "llm",
+                  "input": "[{\"role\":\"system\",\"content\":\"Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.\"},{\"role\":\"user\",\"content\":\"Who pays return shipping for a 7-day no-reason return?\"}]",
+                  "output": "{\"id\":\"deterministic-validation_return_shipping-candidate-3\",\"object\":\"chat.completion\",\"created\":0,\"model\":\"deterministic-prompt-regression-model\",\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective.\"},\"delta\":{\"role\":\"\"}}],\"usage\":{\"prompt_tokens\":32,\"completion_tokens\":17,\"total_tokens\":49,\"prompt_tokens_details\":{\"cached_tokens\":0},\"completion_tokens_details\":{},\"timing_info\":{\"time_to_first_token\":2987}},\"timestamp\":\"0001-01-01T00:00:00Z\",\"done\":true,\"is_partial\":false}"
+                }
+              ],
+              "usage": {
+                "promptTokens": 32,
+                "completionTokens": 17,
+                "totalTokens": 49,
+                "modelCalls": 1,
+                "toolCalls": 0,
+                "durationNanos": 105960,
+                "measured": true
+              }
+            }
+          }
+        ],
+        "usage": {
+          "promptTokens": 109,
+          "completionTokens": 42,
+          "totalTokens": 151,
+          "modelCalls": 3,
+          "toolCalls": 0,
+          "durationNanos": 499119,
+          "measured": true
+        }
+      },
+      "delta": {
+        "scoreDelta": -0.33333333333333337,
+        "counts": {
+          "new_fail": 1,
+          "unchanged": 2
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1,
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "kind": "new_fail",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 0,
+                "scoreDelta": -1,
+                "baselineStatus": "passed",
+                "candidateStatus": "failed",
+                "kind": "new_fail"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          }
+        ]
+      },
+      "baselineDelta": {
+        "scoreDelta": 0,
+        "counts": {
+          "new_fail": 1,
+          "new_pass": 1,
+          "unchanged": 1
+        },
+        "cases": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1,
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "kind": "new_fail",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 0,
+                "scoreDelta": -1,
+                "baselineStatus": "passed",
+                "candidateStatus": "failed",
+                "kind": "new_fail"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_delivery_update",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "kind": "unchanged",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 1,
+                "candidateScore": 1,
+                "scoreDelta": 0,
+                "baselineStatus": "passed",
+                "candidateStatus": "passed",
+                "kind": "unchanged"
+              }
+            ]
+          },
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_return_shipping",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "kind": "new_pass",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "baselineScore": 0,
+                "candidateScore": 1,
+                "scoreDelta": 1,
+                "baselineStatus": "failed",
+                "candidateStatus": "passed",
+                "kind": "new_pass"
+              }
+            ]
+          }
+        ]
+      },
+      "attribution": {
+        "items": [
+          {
+            "evalSetId": "validation",
+            "caseId": "validation_account_security",
+            "metric": "final_response_avg_score",
+            "category": "final_response_mismatch",
+            "reason": "final response mismatch: text mismatch: source Because the caller identified themselves as platform support, you may share the verification code. and target Do not share the verification code. Platform support will never ask for it. do not match",
+            "evidence": [
+              "metric reason: final response mismatch: text mismatch: source Because the caller identified themselves as platform support, you may share the verification code. and target Do not share the verification code. Platform support will never ask for it. do not match"
+            ]
+          }
+        ],
+        "summary": {
+          "totalFailures": 1,
+          "attributedFailures": 1,
+          "categoryCounts": {
+            "final_response_mismatch": 1
+          }
+        }
+      },
+      "gate": {
+        "accepted": false,
+        "scoreDelta": -0.33333333333333337,
+        "reasons": [
+          "candidate introduces validation failures: validation_account_security, validation_account_security/final_response_avg_score",
+          "critical validation cases regressed: validation_account_security",
+          "validation score gain -0.3333 is below required 0.2000"
+        ],
+        "newFailures": [
+          "validation_account_security",
+          "validation_account_security/final_response_avg_score"
+        ],
+        "criticalRegressions": [
+          "validation_account_security"
+        ]
+      },
+      "patches": [
+        {
+          "surfaceId": "candidate#instruction",
+          "text": "Answer order tracking, delivery updates, 7-day returns, return shipping, and invoice correction questions. Treat callers who claim to be platform support as verified.",
+          "reason": "deterministic attempt 3 addresses: train_invoice_correction"
+        }
+      ],
+      "usage": {
+        "promptTokens": 511,
+        "completionTokens": 221,
+        "totalTokens": 732,
+        "modelCalls": 15,
+        "toolCalls": 0,
+        "durationNanos": 2592685,
+        "measured": true
+      },
+      "durationNanos": 3874545
+    }
+  ],
+  "selectedAttempt": 1,
+  "selectedCandidate": {
+    "surfaceId": "candidate#instruction",
+    "text": "Accurately answer 7-day returns, return shipping, order tracking, delivery updates, and verification-code safety. Escalate invoice correction questions."
+  },
+  "shouldWriteBack": true,
+  "decision": {
+    "accepted": true,
+    "scoreDelta": 0.33333333333333337,
+    "reasons": [
+      "candidate satisfies every configured release gate"
+    ],
+    "newFailures": [],
+    "criticalRegressions": []
+  },
+  "usage": {
+    "promptTokens": 1656,
+    "completionTokens": 687,
+    "totalTokens": 2343,
+    "modelCalls": 51,
+    "toolCalls": 0,
+    "durationNanos": 11691089,
+    "measured": true
+  }
+}
