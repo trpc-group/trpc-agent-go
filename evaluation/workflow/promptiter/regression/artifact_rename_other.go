@@ -12,10 +12,12 @@
 package regression
 
 import (
+	"errors"
 	"os"
-	"path/filepath"
 )
 
-func renameRoot(root *os.Root, oldPath, newPath string) error {
-	return os.Rename(filepath.Join(root.Name(), oldPath), filepath.Join(root.Name(), newPath))
+func renameRoot(*os.Root, string, string) error {
+	// Go 1.24 has no portable root-relative atomic rename operation for these
+	// targets, so fail closed rather than falling back to an unrestricted path.
+	return errors.New("atomic artifact replacement is unsupported on this platform")
 }

@@ -91,7 +91,10 @@ func (w *FileArtifactWriter) Close() error {
 // Write atomically replaces one artifact at a relative path below the output
 // directory and syncs its containing directory when the platform supports
 // directory handles. It rejects empty, absolute, volume-qualified, and parent
-// traversal paths. Write returns an error when the writer has been closed.
+// traversal paths. On platforms without a root-relative atomic rename
+// operation, Write returns an unsupported-operation error rather than falling
+// back to an unrestricted filesystem path. Write returns an error when the
+// writer has been closed.
 func (w *FileArtifactWriter) Write(relativePath string, payload []byte) error {
 	if w == nil {
 		return errors.New("artifact writer is nil")

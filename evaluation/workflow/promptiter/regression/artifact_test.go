@@ -20,6 +20,11 @@ func TestFileArtifactWriterRejectsUnsafePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	for _, path := range []string{"", "../escape", `..\escape`, "/absolute", `C:\absolute`, `\\server\share`} {
 		if err := writer.Write(path, []byte("bad")); err == nil {
 			t.Errorf("Write(%q) succeeded", path)
@@ -35,6 +40,11 @@ func TestFileArtifactWriterErrorPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("blank protected input was not ignored: %v", err)
 	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	var nilWriter *FileArtifactWriter
 	if err := nilWriter.Write("report.json", nil); err == nil {
 		t.Fatal("nil writer succeeded")
@@ -56,6 +66,11 @@ func TestFileArtifactWriterErrorPaths(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := renameWriter.Close(); err != nil {
+			t.Errorf("close rename artifact writer: %v", err)
+		}
+	})
 	if err := renameWriter.Write("occupied", []byte("payload")); err == nil {
 		t.Fatal("writer replaced a directory with a file")
 	}
@@ -75,7 +90,11 @@ func TestFileArtifactWriterRejectsSymlinkParentEscape(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	if err := writer.Write("round_1/candidate_profile.json", []byte("escape")); err == nil {
 		t.Fatal("writer followed a symlink outside its root")
 	}
@@ -98,7 +117,11 @@ func TestFileArtifactWriterRejectsProtectedInputSymlinkAlias(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer writer.Close()
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	if err := writer.Write("alias/train.evalset.json", []byte("overwrite")); err == nil {
 		t.Fatal("writer followed a protected input symlink alias")
 	}
@@ -114,6 +137,11 @@ func TestFileArtifactWriterAtomicallyReplacesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	if err := writer.Write("round_1/gate.json", []byte("old")); err != nil {
 		t.Fatal(err)
 	}

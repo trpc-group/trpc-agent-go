@@ -66,6 +66,11 @@ func TestDeterministicEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	start := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
 	times := []time.Time{start, start.Add(250 * time.Millisecond)}
 	report, err := regression.Run(context.Background(), regression.Options{
@@ -210,6 +215,11 @@ func TestAddedEvalCaseChangesReport(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		if err := writer.Close(); err != nil {
+			t.Errorf("close artifact writer: %v", err)
+		}
+	})
 	report, err := regression.Run(context.Background(), regression.Options{
 		Config: pipelineConfig(cfg), Engine: environment.Engine, Evaluator: environment.Evaluator,
 		Meter: environment.Evaluator, InitialProfile: environment.InitialProfile, Artifacts: writer,
