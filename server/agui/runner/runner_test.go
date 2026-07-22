@@ -86,6 +86,24 @@ func TestRunFromContextUnavailableWithoutRun(t *testing.T) {
 	assert.Nil(t, run)
 }
 
+func TestRunContextHelpersHandleNilInputs(t *testing.T) {
+	ctx := newRunContext(nil, nil)
+	require.NotNil(t, ctx)
+	run, ok := RunFromContext(ctx)
+	assert.False(t, ok)
+	assert.Nil(t, run)
+	run, ok = RunFromContext(nil)
+	assert.False(t, ok)
+	assert.Nil(t, run)
+}
+
+func TestRunInputReturnsNilWhenUnavailable(t *testing.T) {
+	var run *Run
+	assert.Nil(t, run.Input())
+	run = newRun(nil, nil, nil)
+	assert.Nil(t, run.Input())
+}
+
 func TestRunEmitWaitsForReplyAfterEventEnqueued(t *testing.T) {
 	emit := make(chan hookEvent, 1)
 	done := make(chan struct{})
@@ -109,6 +127,79 @@ func TestRunEmitWaitsForReplyAfterEventEnqueued(t *testing.T) {
 	}
 	req.reply <- nil
 	require.NoError(t, <-errCh)
+}
+
+func TestRunEmitRejectsInvalidStates(t *testing.T) {
+	custom := aguievents.NewCustomEvent("background.report")
+	var run *Run
+	assert.ErrorIs(t, run.Emit(context.Background(), custom), errRunClosed)
+	done := make(chan struct{})
+	close(done)
+	run = newRun(&adapter.RunAgentInput{}, make(chan hookEvent, 1), done)
+	assert.ErrorIs(t, run.Emit(context.Background(), custom), errRunClosed)
+	run = newRun(&adapter.RunAgentInput{}, make(chan hookEvent, 1), make(chan struct{}))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	assert.ErrorIs(t, run.Emit(ctx, custom), context.Canceled)
+	assert.ErrorIs(t, run.Emit(context.Background(), nil), errInvalidRunEvent)
+}
+
+func TestRunEmitReturnsRunClosedAfterEventEnqueued(t *testing.T) {
+	emit := make(chan hookEvent, 1)
+	done := make(chan struct{})
+	run := newRun(&adapter.RunAgentInput{}, emit, done)
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- run.Emit(context.Background(), aguievents.NewCustomEvent("background.report"))
+	}()
+	select {
+	case <-emit:
+	case <-time.After(time.Second):
+		require.FailNow(t, "timeout waiting for hook event")
+	}
+	close(done)
+	require.ErrorIs(t, <-errCh, errRunClosed)
+}
+
+func TestStartRunHooksSkipsNilHooks(t *testing.T) {
+	r := &runner{runHooks: []RunHook{nil}}
+	hookDone, remaining := r.startRunHooks(context.Background(), newRun(&adapter.RunAgentInput{}, nil, nil))
+	assert.Nil(t, hookDone)
+	assert.Equal(t, 0, remaining)
+}
+
+func TestRunRunHookRecoversPanic(t *testing.T) {
+	err := runRunHook(context.Background(), func(context.Context, *Run) error {
+		panic("boom")
+	}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panic: boom")
+}
+
+func TestHandleHookEventWithoutReplyWritesEvent(t *testing.T) {
+	r := &runner{}
+	events := make(chan aguievents.Event, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	ok := r.handleHookEvent(context.Background(), events, input, hookEvent{
+		event: aguievents.NewCustomEvent("background.report"),
+	})
+	require.True(t, ok)
+	assert.IsType(t, (*aguievents.CustomEvent)(nil), <-events)
+}
+
+func TestHandleHookEventReportsClosedRunWhenWriteFails(t *testing.T) {
+	r := &runner{}
+	events := make(chan aguievents.Event)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	reply := make(chan error, 1)
+	input := &runInput{threadID: "thread", runID: "run"}
+	ok := r.handleHookEvent(ctx, events, input, hookEvent{
+		event: aguievents.NewCustomEvent("background.report"),
+		reply: reply,
+	})
+	require.False(t, ok)
+	require.ErrorIs(t, <-reply, errRunClosed)
 }
 
 func TestRunFromContextAvailableToHookAndUnderlyingRunner(t *testing.T) {
