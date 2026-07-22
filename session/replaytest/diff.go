@@ -485,11 +485,3 @@ func unionKeys[V any](a, b map[string]V) []string {
 	sort.Strings(out)
 	return out
 }
-
-// min returns the smaller of two ints.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

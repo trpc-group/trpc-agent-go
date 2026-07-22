@@ -80,6 +80,24 @@ type Case struct {
 }
 
 // Step is one deterministic operation against the target.
+//
+// Field contract: Op is always required. For each Op exactly one field
+// group is consumed and the others are ignored (nil is the normal,
+// expected value for them):
+//
+//   - OpCreateSession: SessionID (required), State (optional initial state)
+//   - OpAppendEvent: SessionID, Event (required, must be non-nil)
+//   - OpUpdateState/OpUpdateAppState/OpUpdateUserState: SessionID, State
+//   - OpDeleteAppState/OpDeleteUserState: StateKeys
+//   - OpAddMemory/OpUpdateMemory/OpDeleteMemory/OpClearMemories: Memory
+//     (required, must be non-nil)
+//   - OpSummary: SessionID (must name a session created by an earlier
+//     step), Summary (required, must be non-nil)
+//   - OpAppendTrack: SessionID (created earlier), Track (required)
+//   - OpConcurrentEvents: SessionID (created earlier), Concurrent
+//
+// Violating a requirement fails the case run with an error naming the
+// step; it never produces a silent pass.
 type Step struct {
 	Op OpKind
 	// SessionID identifies the session inside the case (app and user are
@@ -102,7 +120,9 @@ type Step struct {
 	Concurrent []WriterSpec
 }
 
-// EventSpec describes one event to append.
+// EventSpec describes one event to append. Zero values pass through as
+// empty fields; no field is required for a well-formed append, though
+// cases normally set Author, Role and Content.
 type EventSpec struct {
 	Author       string
 	Role         string // "user", "assistant", "tool", ...
@@ -129,6 +149,9 @@ type EventSpec struct {
 
 // ToolCallSpec describes one tool call inside an assistant event.
 type ToolCallSpec struct {
+	// ID is the tool call ID. It is symbolized (call#N) during
+	// normalization, so any stable per-case value works; tool responses
+	// reference it via EventSpec.ToolID.
 	ID   string
 	Name string
 	Args string // raw JSON
@@ -156,6 +179,8 @@ type MetadataSpec struct {
 
 // SummarySpec describes a forced summary write.
 type SummarySpec struct {
+	// FilterKey selects the summary scope; empty means the full-session
+	// summary.
 	FilterKey string
 }
 
@@ -168,7 +193,10 @@ type TrackSpec struct {
 // WriterSpec describes one concurrent writer goroutine.
 type WriterSpec struct {
 	Branch string
+	// Author defaults to "replay" when empty.
 	Author string
 	Prefix string
-	Count  int
+	// Count is the number of events this writer appends; values <= 0
+	// produce no events.
+	Count int
 }

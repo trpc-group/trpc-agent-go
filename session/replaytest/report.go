@@ -46,9 +46,9 @@ type CaseReport struct {
 	Diffs       []Diff   `json:"diffs,omitempty"`
 	Notes       []Diff   `json:"notes,omitempty"`
 	Unsupported []string `json:"unsupported,omitempty"`
-	// Note explains an unsupported status: a capability gap is an
+	// Reason explains an unsupported status: a capability gap is an
 	// allowed_diff by definition and never counts as a failure.
-	Note string `json:"note,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Totals summarizes the report.
@@ -134,7 +134,7 @@ func runCasePair(
 
 	if len(snapA.Unsupported) > 0 || len(snapB.Unsupported) > 0 {
 		cr.Status = StatusUnsupported
-		cr.Note = "capability gap; treated as allowed_diff, not a failure"
+		cr.Reason = "capability gap; treated as allowed_diff, not a failure"
 		seen := map[string]bool{}
 		for _, u := range append(snapA.Unsupported, snapB.Unsupported...) {
 			if !seen[u] {

@@ -118,21 +118,15 @@ func takeSnapshot(
 				snap.Sessions = append(snap.Sessions, ss)
 			}
 		}
-		if t.Caps().State {
-			appState, err := svc.ListAppStates(ctx, CaseAppName)
-			if err != nil {
-				return err
-			}
-			snap.AppState = stateToRaw(appState)
-			userState, err := svc.ListUserStates(ctx,
-				session.UserKey{AppName: CaseAppName, UserID: CaseUserID})
-			if err != nil {
-				return err
-			}
-			snap.UserState = stateToRaw(userState)
+	}
+	// State is an independent capability: capture it on any target that
+	// claims it, even one that does not serve sessions, so a State-only
+	// target produces a real state snapshot instead of a silent empty one.
+	if svc != nil && t.Caps().State {
+		if err := captureStates(ctx, svc, snap); err != nil {
+			return err
 		}
 	}
-
 	if msvc != nil && t.Caps().Memory {
 		users := make([]string, 0, len(rs.memUsers))
 		for u := range rs.memUsers {
@@ -188,6 +182,22 @@ func toMemorySnaps(entries []*memory.Entry) []*MemorySnap {
 		out = append(out, ms)
 	}
 	return out
+}
+
+// captureStates reads the app and user state scopes into the snapshot.
+func captureStates(ctx context.Context, svc session.Service, snap *Snapshot) error {
+	appState, err := svc.ListAppStates(ctx, CaseAppName)
+	if err != nil {
+		return err
+	}
+	snap.AppState = stateToRaw(appState)
+	userState, err := svc.ListUserStates(ctx,
+		session.UserKey{AppName: CaseAppName, UserID: CaseUserID})
+	if err != nil {
+		return err
+	}
+	snap.UserState = stateToRaw(userState)
+	return nil
 }
 
 // cloneSummaries copies the session's summary map under its read lock —

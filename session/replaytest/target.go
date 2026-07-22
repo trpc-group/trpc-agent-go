@@ -97,4 +97,10 @@ type Target interface {
 	MemoryService() memory.Service
 	// Reset removes all data so the next case starts from a clean slate.
 	Reset(ctx context.Context) error
+	// Close releases the target's resources. Every bundled implementation
+	// (InMemoryTarget, sqlite.Target, redis.Target) already provides it;
+	// requiring it lets generic code holding a Target clean up without a
+	// type assertion. RunPair/RunPairT deliberately do not call Close:
+	// target lifecycle stays with the caller that created the target.
+	Close() error
 }

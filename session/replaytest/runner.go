@@ -399,7 +399,6 @@ func (r *Runner) applyConcurrent(
 		}
 		specs := make([]*event.Event, 0, w.Count)
 		for i := 0; i < w.Count; i++ {
-			rs.seq++
 			specs = append(specs, r.buildEvent(rs, st.SessionID, &EventSpec{
 				Author:       author,
 				Role:         "assistant",

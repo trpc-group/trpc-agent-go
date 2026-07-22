@@ -930,7 +930,7 @@
     },
     {
       "case": "track/tool_and_subtask",
-      "description": "track events for tool latency, error record and subtask status; duration fields are allowed_diff",
+      "description": "track events for tool latency, error record and subtask status; duration fields are scrubbed during normalization",
       "status": "pass"
     },
     {
@@ -1061,24 +1061,6 @@
           "session_id": "conc-1",
           "event_index": -1,
           "path": "events(set)",
-          "value_a": "{\"id\":\"evt#2\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-01\",\"branch\":\"worker-1\"}",
-          "allowed": false
-        },
-        {
-          "dimension": "event",
-          "severity": "extra",
-          "session_id": "conc-1",
-          "event_index": -1,
-          "path": "events(set)",
-          "value_b": "{\"id\":\"evt#2\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-02\",\"branch\":\"worker-1\"}",
-          "allowed": false
-        },
-        {
-          "dimension": "event",
-          "severity": "missing",
-          "session_id": "conc-1",
-          "event_index": -1,
-          "path": "events(set)",
           "value_a": "{\"id\":\"evt#3\",\"invocation_id\":\"inv#2\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w1-msg-02\",\"branch\":\"worker-1\"}",
           "allowed": false
         },
@@ -1197,16 +1179,6 @@
           "event_index": -1,
           "path": "events(set)",
           "value_b": "{\"id\":\"evt#9\",\"invocation_id\":\"inv#3\",\"author\":\"replay\",\"role\":\"assistant\",\"content\":\"w2-msg-04\",\"branch\":\"worker-2\"}",
-          "allowed": false
-        },
-        {
-          "dimension": "event",
-          "severity": "mismatch",
-          "session_id": "conc-1",
-          "event_index": -1,
-          "path": "events(branch=\"worker-1\")[0].content",
-          "value_a": "w1-msg-01",
-          "value_b": "w1-msg-02",
           "allowed": false
         },
         {

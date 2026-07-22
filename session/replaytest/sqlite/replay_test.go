@@ -51,7 +51,7 @@ func TestReplayConsistencySQLite(t *testing.T) {
 		rep.Totals.Total, elapsed)
 	require.Less(t, elapsed, lightweightBudget,
 		"lightweight mode must finish within %s", lightweightBudget)
-	if rep.Totals.Unsupported > 0 {
-		t.Logf("unsupported cases: %d (see report)", rep.Totals.Unsupported)
-	}
+	require.Zero(t, rep.Totals.Unsupported,
+		"sqlite target claims full capability; %d unsupported cases indicate "+
+			"a capability-wiring regression (see report)", rep.Totals.Unsupported)
 }

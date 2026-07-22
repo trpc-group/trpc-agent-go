@@ -41,6 +41,7 @@ func (s *stubTarget) Caps() replaytest.Capability     { return s.caps }
 func (s *stubTarget) SessionService() session.Service { return s.sess }
 func (s *stubTarget) MemoryService() memory.Service   { return s.mem }
 func (s *stubTarget) Reset(context.Context) error     { return s.resetErr }
+func (s *stubTarget) Close() error                    { return nil }
 
 // simpleSessionCase returns a minimal passing session case.
 func simpleSessionCase() replaytest.Case {
