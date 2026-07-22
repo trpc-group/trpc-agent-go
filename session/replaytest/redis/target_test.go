@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 	rreplaytest "trpc.group/trpc-go/trpc-agent-go/session/replaytest/redis"
 )
 
@@ -41,8 +42,20 @@ func TestTargetResetAndAccessors(t *testing.T) {
 	assert.NotNil(t, tgt.SessionService())
 	assert.NotNil(t, tgt.MemoryService())
 
+	// Write data under the pre-reset prefix.
+	ctx := context.Background()
+	ukey := memory.UserKey{AppName: "replay-app", UserID: "replay-user"}
+	require.NoError(t, tgt.MemoryService().AddMemory(ctx, ukey, "pre-reset memory", nil))
+	sessBefore := tgt.SessionService()
+	memBefore := tgt.MemoryService()
+
 	// A second Reset closes and recreates both services under a new prefix.
-	require.NoError(t, tgt.Reset(context.Background()))
-	assert.NotNil(t, tgt.SessionService())
-	assert.NotNil(t, tgt.MemoryService())
+	require.NoError(t, tgt.Reset(ctx))
+	assert.NotSame(t, sessBefore, tgt.SessionService())
+	assert.NotSame(t, memBefore, tgt.MemoryService())
+
+	// Data written before Reset lives under the old prefix: invisible now.
+	entries, err := tgt.MemoryService().ReadMemories(ctx, ukey, 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
 }
