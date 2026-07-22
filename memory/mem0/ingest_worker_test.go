@@ -10,8 +10,6 @@ package mem0
 
 import (
 	"context"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -152,7 +150,7 @@ func TestIngestWorker_Ingest_EmptyMessagesIsNoOp(t *testing.T) {
 		memory.UserKey{AppName: "a", UserID: "u"},
 		&session.Session{},
 		[]model.Message{{Role: model.RoleUser, Content: "   "}}, // whitespace → filtered out
-		session.IngestOptions{},
+		ingestOptions{},
 	)
 	assert.NoError(t, err)
 }
@@ -163,9 +161,9 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/memories/" {
 			atomic.AddInt32(&createCalls, 1)
-			body, err := io.ReadAll(r.Body)
-			require.NoError(t, err)
-			require.NoError(t, json.Unmarshal(body, &gotBody))
+			if !decodeTestJSONRequest(w, r, &gotBody) {
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
 			return
@@ -177,13 +175,13 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 		memory.UserKey{AppName: "a", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		session.IngestOptions{
-			Metadata: map[string]any{
+		ingestOptions{
+			metadata: map[string]any{
 				"k":         "v",
 				"timestamp": "2024-01-02T03:04:05Z",
 			},
-			AgentID: "agent",
-			RunID:   "run",
+			agentID: "agent",
+			runID:   "run",
 		},
 	)
 	require.NoError(t, err)
@@ -194,14 +192,34 @@ func TestIngestWorker_Ingest_CreatesAndTerminalStatus(t *testing.T) {
 	assert.Equal(t, "2024-01-02T03:04:05Z", meta["timestamp"])
 }
 
+func TestIngestWorker_IngestHostedForwardsInference(t *testing.T) {
+	var gotBody map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`[{"id":"x","status":"SUCCEEDED"}]`))
+	})
+	w, _ := newWorkerWithServer(t, handler, serviceOpts{memoryJobTimeout: time.Second})
+	err := w.ingest(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u"},
+		nil,
+		[]model.Message{{Role: model.RoleUser, Content: "store this message"}},
+		ingestOptions{infer: false},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, false, gotBody["infer"])
+}
+
 func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	var gotPath string
 	var gotBody map[string]any
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
-		body, err := io.ReadAll(r.Body)
-		require.NoError(t, err)
-		require.NoError(t, json.Unmarshal(body, &gotBody))
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"hi"}]}`))
 	})
@@ -214,10 +232,13 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 		memory.UserKey{AppName: "app", UserID: "u"},
 		nil,
 		[]model.Message{{Role: model.RoleUser, Content: "hi"}},
-		session.IngestOptions{Metadata: map[string]any{
-			"k":         "v",
-			"timestamp": "2024-01-02T03:04:05Z",
-		}},
+		ingestOptions{
+			metadata: map[string]any{
+				"k":         "v",
+				"timestamp": "2024-01-02T03:04:05Z",
+			},
+			infer: true,
+		},
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "/memories", gotPath)
@@ -227,12 +248,48 @@ func TestIngestWorker_IngestSelfHostedOSSUsesSyncCreate(t *testing.T) {
 	assert.NotContains(t, gotBody, "async_mode")
 	assert.NotContains(t, gotBody, "version")
 	assert.NotContains(t, gotBody, "timestamp")
+	assert.NotContains(t, gotBody, "expiration_date")
+	assert.NotContains(t, gotBody, "memory_type")
+	assert.NotContains(t, gotBody, "prompt")
 
 	meta, ok := gotBody["metadata"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "v", meta["k"])
 	assert.Equal(t, "2024-01-02T03:04:05Z", meta["timestamp"])
 	assert.Equal(t, "app", meta[metadataKeyTRPCAppName])
+}
+
+func TestIngestWorker_IngestSelfHostedOSSForwardsOptionalFields(t *testing.T) {
+	var gotBody map[string]any
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !decodeTestJSONRequest(w, r, &gotBody) {
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"results":[{"id":"x","memory":"procedure"}]}`))
+	})
+	w, _ := newWorkerWithServer(t, handler, serviceOpts{
+		apiMode:          apiModeSelfHostedOSS,
+		memoryJobTimeout: time.Second,
+	})
+	err := w.ingest(context.Background(),
+		memory.UserKey{AppName: "app", UserID: "u"},
+		nil,
+		[]model.Message{{Role: model.RoleUser, Content: "deploy the service"}},
+		ingestOptions{
+			agentID:        "agent-1",
+			expirationDate: "2026-08-01",
+			infer:          true,
+			memoryType:     memoryTypeProcedural,
+			prompt:         "extract a deployment procedure",
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "agent-1", gotBody["agent_id"])
+	assert.Equal(t, "2026-08-01", gotBody["expiration_date"])
+	assert.Equal(t, true, gotBody["infer"])
+	assert.Equal(t, memoryTypeProcedural, gotBody["memory_type"])
+	assert.Equal(t, "extract a deployment procedure", gotBody["prompt"])
 }
 
 func TestIngestWorker_AwaitIngestEvent_PollsUntilSuccess(t *testing.T) {

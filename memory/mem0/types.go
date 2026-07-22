@@ -35,12 +35,15 @@ type createMemoryRequest struct {
 }
 
 type ossCreateMemoryRequest struct {
-	Messages []apiMessage   `json:"messages"`
-	UserID   string         `json:"user_id,omitempty"`
-	AgentID  string         `json:"agent_id,omitempty"`
-	RunID    string         `json:"run_id,omitempty"`
-	Metadata map[string]any `json:"metadata,omitempty"`
-	Infer    bool           `json:"infer"`
+	Messages       []apiMessage   `json:"messages"`
+	UserID         string         `json:"user_id,omitempty"`
+	AgentID        string         `json:"agent_id,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	ExpirationDate string         `json:"expiration_date,omitempty"`
+	Infer          bool           `json:"infer"`
+	MemoryType     string         `json:"memory_type,omitempty"`
+	Prompt         string         `json:"prompt,omitempty"`
 }
 
 type createMemoryEvent struct {
@@ -109,9 +112,10 @@ func (r *listMemoriesResponse) UnmarshalJSON(data []byte) error {
 }
 
 type searchV2Request struct {
-	Query   string         `json:"query"`
-	Filters map[string]any `json:"filters,omitempty"`
-	TopK    int            `json:"top_k,omitempty"`
+	Query     string         `json:"query"`
+	Filters   map[string]any `json:"filters,omitempty"`
+	TopK      int            `json:"top_k,omitempty"`
+	Threshold *float64       `json:"threshold,omitempty"`
 }
 
 type searchV2Response struct {

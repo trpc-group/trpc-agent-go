@@ -920,13 +920,13 @@ func finalModelCallDropSystemMessage(msg model.Message) bool {
 }
 
 const finalModelCallNotice = "[OpenClaw Budget Notice] This is the " +
-	"final allowed model call for this run. No further tools are available " +
-	"now. Use only the existing conversation and tool results, then " +
-	"produce the final user-facing answer immediately. Do not emit tool " +
-	"calls, function calls, JSON tool requests, XML-style tool markup such " +
-	"as <tool_call>, code blocks that ask to run tools, or descriptions of " +
-	"future tool use. Do not ask to continue. If the original task " +
-	"requires a final-answer format, follow it exactly."
+	"final allowed model call. No tools are available. Use the existing " +
+	"conversation and tool results; answer now with the best supported " +
+	"final value in visible assistant message content, not only in " +
+	"internal reasoning. Do not emit tool calls or JSON/XML tool requests " +
+	"such as <tool_call>. Do not ask to continue or promise future " +
+	"execution. If the task requires a final-answer format or marker such " +
+	"as FINAL ANSWER:, follow it exactly and avoid extra explanation."
 
 const (
 	finalModelCallSystemBudgetDivisor = 16

@@ -29,7 +29,7 @@ type ingestJob struct {
 	Session  *session.Session
 	LatestTs time.Time
 	Messages []model.Message
-	Options  session.IngestOptions
+	Options  ingestOptions
 }
 
 type ingestWorker struct {
@@ -172,7 +172,7 @@ func (w *ingestWorker) ingest(
 	userKey memory.UserKey,
 	_ *session.Session,
 	messages []model.Message,
-	reqOpts session.IngestOptions,
+	reqOpts ingestOptions,
 ) error {
 	apiMsgs := make([]apiMessage, 0, len(messages))
 	for _, m := range messages {
@@ -188,16 +188,16 @@ func (w *ingestWorker) ingest(
 	if w.apiMode == apiModeSelfHostedOSS {
 		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
 	}
-	metadata := cloneMetadata(reqOpts.Metadata)
+	metadata := cloneMetadata(reqOpts.metadata)
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
 		UserID:    userKey.UserID,
 		AppID:     userKey.AppName,
-		AgentID:   reqOpts.AgentID,
-		RunID:     reqOpts.RunID,
+		AgentID:   reqOpts.agentID,
+		RunID:     reqOpts.runID,
 		Metadata:  metadata,
 		Timestamp: mem0TimestampFromMetadata(metadata),
-		Infer:     true,
+		Infer:     reqOpts.infer,
 		Async:     w.asyncMode,
 		Version:   w.version,
 		OrgID:     w.orgID,
@@ -214,15 +214,18 @@ func (w *ingestWorker) ingestOSS(
 	ctx context.Context,
 	userKey memory.UserKey,
 	messages []apiMessage,
-	reqOpts session.IngestOptions,
+	reqOpts ingestOptions,
 ) error {
 	req := ossCreateMemoryRequest{
-		Messages: messages,
-		UserID:   userKey.UserID,
-		AgentID:  reqOpts.AgentID,
-		RunID:    reqOpts.RunID,
-		Metadata: withTRPCAppMetadata(reqOpts.Metadata, userKey.AppName),
-		Infer:    true,
+		Messages:       messages,
+		UserID:         userKey.UserID,
+		AgentID:        reqOpts.agentID,
+		RunID:          reqOpts.runID,
+		Metadata:       withTRPCAppMetadata(reqOpts.metadata, userKey.AppName),
+		ExpirationDate: reqOpts.expirationDate,
+		Infer:          reqOpts.infer,
+		MemoryType:     reqOpts.memoryType,
+		Prompt:         reqOpts.prompt,
 	}
 	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
 }
