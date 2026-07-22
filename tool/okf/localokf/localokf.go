@@ -15,12 +15,10 @@ package localokf
 import (
 	"context"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
 )
@@ -30,10 +28,7 @@ type Local struct {
 	root string
 }
 
-const defaultFindLimit = 10
-
 var _ okf.Store = (*Local)(nil)
-var _ okf.Finder = (*Local)(nil)
 
 // New opens the OKF bundle rooted at root. Root must name an existing
 // directory; a symlink used as root is resolved once, while symlinks inside the
@@ -164,81 +159,6 @@ func (l *Local) Read(ctx context.Context, conceptID string) (okf.Concept, error)
 	return okf.ParseConcept(id, data), nil
 }
 
-// Find implements okf.Finder. It walks the bundle and matches on frontmatter
-// type/tags and a case-insensitive substring over title/description/body. Hits
-// are unranked (Score == 0).
-func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	limit := q.Limit
-	if limit <= 0 {
-		limit = defaultFindLimit
-	}
-	var hits []okf.Hit
-	walkErr := filepath.WalkDir(l.root, func(p string, d fs.DirEntry, err error) error {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err != nil {
-			return filesystemError("walk bundle")
-		}
-		if p != l.root && d.Name() == ".git" {
-			if d.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if d.Type()&os.ModeSymlink != 0 {
-			return symlinkError(d.Name())
-		}
-		if d.IsDir() {
-			return nil
-		}
-		name := d.Name()
-		if !strings.HasSuffix(name, ".md") || name == okf.IndexFile || name == okf.LogFile {
-			return nil
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(l.root, p)
-		if err != nil {
-			return filesystemError("resolve concept id")
-		}
-		id := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return filesystemError(fmt.Sprintf("read concept %q", id))
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		parsed := okf.ParseConcept(id, data)
-		fm, body := parsed.Frontmatter, []byte(parsed.Body)
-		if !matchQuery(fm, body, q) {
-			return nil
-		}
-		hits = append(hits, okf.Hit{
-			ConceptMeta: okf.ConceptMeta{
-				ID:          id,
-				Type:        fm.Type,
-				Title:       fm.Title,
-				Description: fm.Description,
-			},
-			Snippet: snippet(fm, body),
-		})
-		if len(hits) >= limit {
-			return filepath.SkipAll
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return nil, fmt.Errorf("okf/localokf: find: %w", walkErr)
-	}
-	return hits, nil
-}
-
 // resolve maps a bundle-relative slash path to an absolute filesystem path,
 // refusing anything that escapes the bundle root.
 func (l *Local) resolve(rel string) (string, error) {
@@ -309,57 +229,4 @@ func joinID(dir, base string) string {
 		return base
 	}
 	return path.Join(dir, base)
-}
-
-func matchQuery(fm okf.Frontmatter, body []byte, q okf.Query) bool {
-	if q.Type != "" && fm.Type != q.Type {
-		return false
-	}
-	for _, want := range q.Tags {
-		if !containsFold(fm.Tags, want) {
-			return false
-		}
-	}
-	if q.Text != "" {
-		hay := strings.ToLower(fm.Title + "\n" + fm.Description + "\n" + string(body))
-		if !strings.Contains(hay, strings.ToLower(q.Text)) {
-			return false
-		}
-	}
-	return true
-}
-
-func containsFold(tags []string, want string) bool {
-	for _, t := range tags {
-		if strings.EqualFold(t, want) {
-			return true
-		}
-	}
-	return false
-}
-
-// snippet returns a short preview for a hit: the description if present, else
-// the leading body text.
-func snippet(fm okf.Frontmatter, body []byte) string {
-	const max = 160
-	s := fm.Description
-	if s == "" {
-		s = strings.TrimSpace(string(body))
-	}
-	s = strings.Join(strings.Fields(s), " ") // collapse whitespace/newlines.
-	if len(s) > max {
-		return string(truncateUTF8Bytes([]byte(s), max))
-	}
-	return s
-}
-
-// truncateUTF8Bytes returns b cut to at most n bytes without splitting a rune.
-func truncateUTF8Bytes(b []byte, n int) []byte {
-	if len(b) <= n {
-		return b
-	}
-	for n > 0 && !utf8.RuneStart(b[n]) {
-		n--
-	}
-	return b[:n]
 }

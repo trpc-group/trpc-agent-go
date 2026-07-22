@@ -13,22 +13,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
-const (
-	defaultName      = "okf"
-	defaultFindLimit = 10
-)
+const defaultName = "okf"
 
-// toolSet adapts a Store into a tool.ToolSet, adding okf_find when supported.
+// toolSet adapts a Store into a tool.ToolSet.
 type toolSet struct {
 	store        Store
-	finder       Finder
 	name         string
 	namePrefix   string
 	maxBodyBytes int
@@ -45,7 +40,6 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 		store: store,
 		name:  defaultName,
 	}
-	t.finder, _ = store.(Finder)
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -56,18 +50,14 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 				return nil, fmt.Errorf("okf: invalid tool name prefix %q: use only letters, numbers, underscores, and hyphens", t.namePrefix)
 			}
 		}
-		if len(t.toolName("okf_find")) > 64 {
+		if len(t.toolName("okf_read")) > 64 {
 			return nil, fmt.Errorf("okf: tool name prefix %q produces a name longer than 64 characters", t.namePrefix)
 		}
 	}
 	if t.maxBodyBytes < 0 {
 		return nil, fmt.Errorf("okf: max body bytes must not be negative")
 	}
-	tools := []tool.Tool{t.listTool(), t.readTool()}
-	if t.finder != nil {
-		tools = append(tools, t.findTool())
-	}
-	t.tools = tools
+	t.tools = []tool.Tool{t.listTool(), t.readTool()}
 	return t, nil
 }
 
@@ -135,22 +125,13 @@ type readArgs struct {
 }
 
 func (t *toolSet) readTool() tool.Tool {
-	notFoundActions := []string{
-		fmt.Sprintf("call %s to browse the bundle", t.toolName("okf_list")),
-	}
-	if t.finder != nil {
-		notFoundActions = append(notFoundActions,
-			fmt.Sprintf("call %s to search by keyword", t.toolName("okf_find")))
-	}
 	return function.NewFunctionTool(
 		func(ctx context.Context, a readArgs) (Concept, error) {
 			c, err := t.store.Read(ctx, a.ConceptID)
 			if err != nil {
 				if errors.Is(err, ErrNotFound) {
-					msg := fmt.Sprintf("concept %q not found", a.ConceptID)
-					if len(notFoundActions) > 0 {
-						msg += " — " + strings.Join(notFoundActions, " or ")
-					}
+					msg := fmt.Sprintf("concept %q not found — call %s to browse the bundle",
+						a.ConceptID, t.toolName("okf_list"))
 					return Concept{}, errors.New(msg)
 				}
 				return Concept{}, err
@@ -165,57 +146,5 @@ func (t *toolSet) readTool() tool.Tool {
 		function.WithDescription("Read one OKF concept by id. Returns its structured frontmatter "+
 			"(type/title/description/resource/tags/timestamp), the markdown body, and outgoing links "+
 			"to related concepts so you can navigate the knowledge graph."),
-	)
-}
-
-// --- okf_find ---
-
-type findArgs struct {
-	Query string   `json:"query" jsonschema:"description=Free-text query matched against concept title/description and body,required"`
-	Type  *string  `json:"type,omitempty" jsonschema:"description=Optional exact frontmatter 'type' filter"`
-	Tags  []string `json:"tags,omitempty" jsonschema:"description=Optional tags; a concept must carry all of them"`
-	Limit *int     `json:"limit,omitempty" jsonschema:"description=Maximum number of results; must be positive"`
-}
-
-type findResult struct {
-	Hits []Hit  `json:"hits"`
-	Note string `json:"note,omitempty"` // Guidance to the model when Hits is empty.
-}
-
-func (t *toolSet) findTool() tool.Tool {
-	description := "Search the OKF bundle for concepts matching a free-text query, " +
-		"optionally filtered by frontmatter type and tags. Returns concept ids with title/description. " +
-		"Then use " + t.toolName("okf_read") + " to read the full content and follow links."
-	return function.NewFunctionTool(
-		func(ctx context.Context, a findArgs) (findResult, error) {
-			q := Query{Text: a.Query, Tags: a.Tags}
-			if a.Type != nil {
-				q.Type = *a.Type
-			}
-			if a.Limit != nil {
-				if *a.Limit <= 0 {
-					return findResult{}, fmt.Errorf("limit must be greater than zero")
-				}
-				q.Limit = *a.Limit
-			} else {
-				q.Limit = defaultFindLimit
-			}
-			hits, err := t.finder.Find(ctx, q)
-			if err != nil {
-				return findResult{}, err
-			}
-			if hits == nil {
-				hits = []Hit{} // serialize [] not null, so the model reads "no matches" clearly.
-			}
-			res := findResult{Hits: hits}
-			if len(hits) == 0 {
-				res.Note = "no concepts matched; try broader terms or drop the type/tags filter"
-				res.Note += ", or call " + t.toolName("okf_list") +
-					" to browse the bundle root"
-			}
-			return res, nil
-		},
-		function.WithName(t.toolName("okf_find")),
-		function.WithDescription(description),
 	)
 }

@@ -12,7 +12,6 @@ package localokf
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -99,7 +98,7 @@ func TestRead_FullFrontmatterAndLinks(t *testing.T) {
 	if fm.Type != "Protocol" || fm.Title != "Google AP2" || fm.Resource == "" || fm.Timestamp == "" {
 		t.Errorf("frontmatter not fully parsed: %+v", fm)
 	}
-	if !containsFold(fm.Tags, "ap2") {
+	if !slices.Contains(fm.Tags, "ap2") {
 		t.Errorf("tags = %v, want to contain ap2", fm.Tags)
 	}
 	// Frontmatter must be stripped from the body.
@@ -187,81 +186,6 @@ func TestRead_PathEscapeRejected(t *testing.T) {
 	}
 }
 
-func TestFind_ByType(t *testing.T) {
-	s := newTestStore(t)
-	hits, err := s.Find(context.Background(), okf.Query{Type: "Protocol"})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if len(hits) != 2 {
-		t.Fatalf("want 2 Protocol hits, got %d: %+v", len(hits), hits)
-	}
-	for _, h := range hits {
-		if h.Score != 0 {
-			t.Errorf("local Find is unranked, want Score 0, got %v", h.Score)
-		}
-	}
-}
-
-func TestFind_ByTag(t *testing.T) {
-	s := newTestStore(t)
-	hits, err := s.Find(context.Background(), okf.Query{Tags: []string{"x402"}})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if len(hits) != 1 || hits[0].ID != "research/protocols/x402-overview" {
-		t.Fatalf("tag filter wrong: %+v", hits)
-	}
-}
-
-func TestFind_ByTextAndLimit(t *testing.T) {
-	s := newTestStore(t)
-	hits, err := s.Find(context.Background(), okf.Query{Text: "protocol"})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if len(hits) < 2 {
-		t.Fatalf("text search too narrow: %+v", hits)
-	}
-	limited, err := s.Find(context.Background(), okf.Query{Text: "protocol", Limit: 1})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if len(limited) != 1 {
-		t.Fatalf("limit not honored: %d", len(limited))
-	}
-}
-
-func TestFind_DefaultLimitIsBounded(t *testing.T) {
-	dir := t.TempDir()
-	for i := 0; i < defaultFindLimit+2; i++ {
-		name := filepath.Join(dir, fmt.Sprintf("concept-%02d.md", i))
-		if err := os.WriteFile(name, []byte("---\ntype: Note\n---\n\nbody\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	s, err := New(dir)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	for _, limit := range []int{0, -1} {
-		hits, err := s.Find(context.Background(), okf.Query{Limit: limit})
-		if err != nil {
-			t.Fatalf("Find limit %d: %v", limit, err)
-		}
-		if len(hits) != defaultFindLimit {
-			t.Errorf("Find limit %d returned %d hits, want backend default %d", limit, len(hits), defaultFindLimit)
-		}
-	}
-	hits, err := s.Find(context.Background(), okf.Query{Limit: defaultFindLimit + 1})
-	if err != nil {
-		t.Fatalf("Find explicit limit: %v", err)
-	}
-	if len(hits) != defaultFindLimit+1 {
-		t.Errorf("Find explicit limit returned %d hits, want %d", len(hits), defaultFindLimit+1)
-	}
-}
-
 func TestExtractLinks_AnchorAndQuerySuffix(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o755); err != nil {
@@ -287,24 +211,6 @@ func TestExtractLinks_AnchorAndQuerySuffix(t *testing.T) {
 	}
 	if got["https://x/p"] || len(c.Links) != 3 {
 		t.Errorf("external link should be dropped, got %v", c.Links)
-	}
-}
-
-func TestFind_ReservedExcluded(t *testing.T) {
-	s := newTestStore(t)
-	// A broad query that would match everything must never surface index/log.
-	hits, err := s.Find(context.Background(), okf.Query{})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	for _, h := range hits {
-		base := h.ID
-		if i := strings.LastIndex(base, "/"); i >= 0 {
-			base = base[i+1:]
-		}
-		if base == "index" || base == "log" {
-			t.Errorf("reserved file surfaced as concept: %q", h.ID)
-		}
 	}
 }
 
@@ -338,30 +244,9 @@ func TestGitDirectoryExcluded(t *testing.T) {
 	if _, err := s.Read(context.Background(), ".git/internal"); !errors.Is(err, okf.ErrNotFound) {
 		t.Errorf("explicit .git read error = %v, want ErrNotFound", err)
 	}
-	hits, err := s.Find(context.Background(), okf.Query{Text: "secret marker"})
-	if err != nil {
-		t.Fatalf("Find: %v", err)
-	}
-	if len(hits) != 0 {
-		t.Fatalf(".git content surfaced in search: %+v", hits)
-	}
 }
 
 func TestOperations_PropagateFilesystemErrors(t *testing.T) {
-	findRoot := t.TempDir()
-	findStore, err := New(findRoot)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	if err := os.Remove(findRoot); err != nil {
-		t.Fatalf("remove bundle root: %v", err)
-	}
-	if _, err := findStore.Find(context.Background(), okf.Query{}); err == nil {
-		t.Error("Find should propagate the walk error")
-	} else if strings.Contains(err.Error(), findRoot) {
-		t.Errorf("Find error leaked bundle root: %q", err)
-	}
-
 	listRoot := t.TempDir()
 	listStore, err := New(listRoot)
 	if err != nil {
@@ -405,9 +290,6 @@ func TestOperations_RespectCanceledContext(t *testing.T) {
 	if _, err := s.Read(ctx, "rules/minimal"); !errors.Is(err, context.Canceled) {
 		t.Errorf("Read error = %v, want context.Canceled", err)
 	}
-	if _, err := s.Find(ctx, okf.Query{}); !errors.Is(err, context.Canceled) {
-		t.Errorf("Find error = %v, want context.Canceled", err)
-	}
 }
 
 func TestOperations_RespectExpiredDeadline(t *testing.T) {
@@ -420,9 +302,6 @@ func TestOperations_RespectExpiredDeadline(t *testing.T) {
 	}
 	if _, err := s.Read(ctx, "rules/minimal"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("Read error = %v, want context.DeadlineExceeded", err)
-	}
-	if _, err := s.Find(ctx, okf.Query{}); !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("Find error = %v, want context.DeadlineExceeded", err)
 	}
 }
 
@@ -449,9 +328,6 @@ func TestSymlinkFileRejected(t *testing.T) {
 	}
 	if _, err := s.List(context.Background(), ""); err == nil {
 		t.Error("List should reject a symlinked entry")
-	}
-	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
-		t.Error("Find should reject a symlinked entry")
 	}
 }
 
@@ -481,8 +357,5 @@ func TestSymlinkDirectoryRejected(t *testing.T) {
 	}
 	if _, err := s.List(context.Background(), "linked"); err == nil {
 		t.Error("List should reject a symlinked directory")
-	}
-	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
-		t.Error("Find should reject a symlinked directory")
 	}
 }

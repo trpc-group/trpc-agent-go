@@ -18,8 +18,7 @@
 //
 // This package defines the Store abstraction (the OKF "capability") and, via
 // NewToolSet, exposes it to an LLM agent as okf_list (progressive disclosure)
-// and okf_read (read one concept + its links). Stores that also implement the
-// optional Finder interface expose okf_find. A local, directory-backed Store
+// and okf_read (read one concept + its links). A local, directory-backed Store
 // lives in the localokf sub-package; remote implementations can provide the
 // same capabilities without changing agent wiring.
 package okf
@@ -91,23 +90,6 @@ type Listing struct {
 	Subdirs    []string      `json:"subdirs,omitempty"`     // Immediate sub-directories.
 }
 
-// Query describes a Find request. Text is matched against title/description/
-// body; Type and Tags filter on frontmatter. Query is used by Finder, an
-// optional capability separate from the core Store contract.
-type Query struct {
-	Text  string   `json:"text,omitempty"`
-	Type  string   `json:"type,omitempty"`
-	Tags  []string `json:"tags,omitempty"`
-	Limit int      `json:"limit,omitempty"` // 0 == backend default.
-}
-
-// Hit is one Find result.
-type Hit struct {
-	ConceptMeta
-	Snippet string  `json:"snippet,omitempty"`
-	Score   float64 `json:"score,omitempty"` // 0 == unranked (local); >0 == backend relevance.
-}
-
 // Store is a read-only OKF concept repository.
 //
 // Implementations MUST tolerate, per OKF v0.1 consumer conformance: missing
@@ -118,12 +100,4 @@ type Store interface {
 	List(ctx context.Context, dir string) (Listing, error)
 	// Read returns the concept identified by its bundle-relative id (no .md).
 	Read(ctx context.Context, conceptID string) (Concept, error)
-}
-
-// Finder is the optional search capability implemented by stores that can
-// locate concepts by free text and frontmatter filters. NewToolSet exposes
-// okf_find only when the supplied Store also implements Finder.
-type Finder interface {
-	// Find returns concepts matching q, best-effort.
-	Find(ctx context.Context, q Query) ([]Hit, error)
 }
