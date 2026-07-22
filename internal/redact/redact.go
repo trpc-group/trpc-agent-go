@@ -21,13 +21,13 @@ const Value = "[REDACTED]"
 
 var (
 	sensitiveNamePattern = regexp.MustCompile(
-		`(?i)\b[A-Z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|ACCESS_KEY|PRIVATE_KEY)\b[A-Z0-9_]*`,
+		`(?i)\b[A-Z0-9_-]*(TOKEN|SECRET|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY)\b[A-Z0-9_-]*`,
 	)
 	assignmentPattern = regexp.MustCompile(
-		`(?im)\b([A-Za-z_][A-Za-z0-9_]*)(\s*=\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)`,
+		`(?im)\b([A-Za-z_][A-Za-z0-9_-]*)(\s*=\s*)(\"[^\"]*\"|'[^']*'|[^\s,;]+)`,
 	)
 	colonPattern = regexp.MustCompile(
-		`(?im)([\"']?)([A-Za-z_][A-Za-z0-9_]*)([\"']?\s*:\s*)(\"[^\"]*\"|'[^']*'|[^,\s}\]]+)`,
+		`(?im)([\"']?)([A-Za-z_][A-Za-z0-9_-]*)([\"']?\s*:\s*)(\"[^\"]*\"|'[^']*'|[^,\s}\]]+)`,
 	)
 	sensitiveFlagPattern = regexp.MustCompile(
 		`(?i)(--(?:api-key|token|secret|password)\s+)(\"[^\"]*\"|'[^']*'|[^\s]+)`,
@@ -99,6 +99,9 @@ func HasWrappedQuotes(value string, quote byte) bool {
 func redactAuthorizationFieldMatch(match string) string {
 	parts := authorizationFieldPattern.FindStringSubmatch(match)
 	if len(parts) != 3 {
+		return match
+	}
+	if strings.EqualFold(strings.Trim(parts[2], `"'`), "bearer") {
 		return match
 	}
 	return parts[1] + StructuredValue(parts[2])

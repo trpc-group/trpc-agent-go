@@ -82,7 +82,6 @@ type evaluationRecord struct {
 	Phase       string       `json:"phase"`
 	CandidateID string       `json:"candidate_id"`
 	Seed        int64        `json:"seed"`
-	Cases       []Case       `json:"cases"`
 	Results     []Evaluation `json:"results"`
 	Summary     Summary      `json:"summary"`
 	RecordedAt  time.Time    `json:"recorded_at"`
@@ -172,7 +171,6 @@ func (r *fileRecorder) recordEvaluation(
 		Phase:       phase,
 		CandidateID: value.id,
 		Seed:        seed,
-		Cases:       cloneCases(batch.cases),
 		Results:     evaluationsForStorage(batch.ordered),
 		Summary:     batch.summary(),
 		RecordedAt:  time.Now().UTC(),

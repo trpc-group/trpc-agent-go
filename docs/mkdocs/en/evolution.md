@@ -231,8 +231,8 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
     },
 })
 if err != nil {
-    // Evaluation may already be complete when optional recording or revision
-    // submission fails. Preserve a non-nil result for diagnosis or retry.
+    // Search may already have selected a candidate when holdout or an optional
+    // delivery step fails. Preserve a non-nil result for diagnosis or retry.
     if result != nil {
         fmt.Printf("optimization %s completed but delivery failed: %v\n",
             result.ExperimentID, err)
@@ -249,14 +249,18 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
 ```
 
 The optimizer borrows the submitter. The application still owns and closes
-`evoSvc`. Once evaluation has completed, a recording or submission failure is
-returned together with the non-nil result, and `SubmissionReason` records a
-submission failure.
+`evoSvc`. Once search has selected a candidate, a later holdout, recording, or
+submission failure is returned together with the non-nil partial result; fields
+describe the phases that completed, and `SubmissionReason` records a submission
+failure.
 
 `WithStoreDir` is an optional, node-local experiment recorder, distinct from
 the revision `CandidateStore`. Every run owns a UUID-named directory; on
 permission-aware filesystems, files use `0600` and directories use `0700`.
 Each persisted evaluator output, feedback, or trace field is capped at 16 KiB.
+The dataset is stored once in `experiment.json`; evaluation records reference
+its cases by ID instead of duplicating inputs and expected values on every
+iteration.
 It is not a distributed job coordinator or a remote durable store. Concurrent
 nodes may use the same POSIX-compatible shared root because experiments do not
 share directories, but exactly one node must write each experiment. On

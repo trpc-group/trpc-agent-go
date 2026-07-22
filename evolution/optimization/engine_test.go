@@ -308,6 +308,10 @@ func TestExperimentRecorderBoundsEvaluatorText(t *testing.T) {
 	var record evaluationRecord
 	require.NoError(t, json.Unmarshal(payload, &record))
 	require.Len(t, record.Results, 1)
+	var rawRecord map[string]any
+	require.NoError(t, json.Unmarshal(payload, &rawRecord))
+	_, storesFullCases := rawRecord["cases"]
+	assert.False(t, storesFullCases)
 	for _, value := range []string{
 		record.Results[0].Output,
 		record.Results[0].Feedback,
@@ -537,12 +541,21 @@ func TestOptimizerReturnsHoldoutEvaluationErrors(t *testing.T) {
 		evaluator := &stagedEvaluator{failAt: 2}
 		opts := defaultOptions()
 		opts.gepa.maxIterations = 0
+		opts.engine.storeDir = t.TempDir()
 		optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
-		_, err := optimizer.Optimize(context.Background(), Request{
+		result, err := optimizer.Optimize(context.Background(), Request{
 			Seed:    testSeedSpec(),
 			Dataset: testDataset(2),
 		})
 		require.ErrorContains(t, err, "baseline holdout")
+		require.NotNil(t, result)
+		assert.Equal(t, 4, result.MetricCalls)
+		assert.Equal(t, 0.2, result.BaselineValidation.Score)
+		assert.Zero(t, result.BaselineHoldout.Cases)
+		_, statErr := os.Stat(filepath.Join(
+			opts.engine.storeDir, result.ExperimentID, "result.json",
+		))
+		require.NoError(t, statErr)
 	})
 	t.Run("candidate", func(t *testing.T) {
 		evaluator := &stagedEvaluator{failAt: 6}
@@ -550,11 +563,15 @@ func TestOptimizerReturnsHoldoutEvaluationErrors(t *testing.T) {
 		opts.gepa.maxIterations = 1
 		opts.gepa.reflectionBatchSize = 2
 		optimizer := newTestOptimizer(improvingReflector{}, evaluator, opts)
-		_, err := optimizer.Optimize(context.Background(), Request{
+		result, err := optimizer.Optimize(context.Background(), Request{
 			Seed:    testSeedSpec(),
 			Dataset: testDataset(2),
 		})
 		require.ErrorContains(t, err, "candidate holdout")
+		require.NotNil(t, result)
+		assert.Equal(t, 12, result.MetricCalls)
+		assert.Equal(t, 0.2, result.BaselineHoldout.Score)
+		assert.Zero(t, result.CandidateHoldout.Cases)
 	})
 }
 

@@ -121,7 +121,8 @@ func (e *engine) optimize(
 	result := run.buildResult(experimentID, strategy.algorithm(), outcome)
 	baselineHoldout, candidateHoldout, err := run.evaluateHoldout(outcome.best, result)
 	if err != nil {
-		return nil, err
+		result.MetricCalls = run.budget.used
+		return result, errors.Join(err, finishExperiment(recorder, result))
 	}
 	e.assessPromotion(
 		req, run.seed, outcome.best, baselineHoldout, candidateHoldout, result,
@@ -131,14 +132,18 @@ func (e *engine) optimize(
 	if req.Submit {
 		submissionErr = e.submitCandidate(runCtx, req, outcome.best, result)
 	}
-	finishErr := recorder.finish(result)
-	if finishErr != nil {
-		finishErr = fmt.Errorf("evolution optimization: finish experiment record: %w", finishErr)
-	}
+	finishErr := finishExperiment(recorder, result)
 	if submissionErr != nil || finishErr != nil {
 		return result, errors.Join(submissionErr, finishErr)
 	}
 	return result, nil
+}
+
+func finishExperiment(recorder experimentRecorder, result *Result) error {
+	if err := recorder.finish(result); err != nil {
+		return fmt.Errorf("evolution optimization: finish experiment record: %w", err)
+	}
+	return nil
 }
 
 func (e *engine) validateRun(req Request, strategy searchStrategy) error {
@@ -289,11 +294,11 @@ func (r *searchRun) evaluateHoldout(
 			err,
 		)
 	}
+	result.BaselineHoldout = baseline.summary()
 	candidateScores, err = r.evaluateBestHoldout(best, baseline, pairedSeed)
 	if err != nil {
 		return baseline, candidateScores, err
 	}
-	result.BaselineHoldout = baseline.summary()
 	result.CandidateHoldout = candidateScores.summary()
 	return baseline, candidateScores, nil
 }

@@ -118,8 +118,8 @@ type Result struct {
 
 // Optimizer runs one isolated skill optimization experiment. Implementations
 // must not mutate Request or retain its mutable fields after Optimize returns.
-// A non-nil Result may accompany an error when evaluation completed but an
-// optional delivery step, such as recording or revision submission, failed.
+// A non-nil Result may accompany an error after search selected a candidate;
+// its fields describe the phases that completed before the failure.
 type Optimizer interface {
 	Optimize(context.Context, Request) (*Result, error)
 }

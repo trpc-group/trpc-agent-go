@@ -19,20 +19,24 @@ func TestSensitiveText(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
+		want  string
 	}{
-		{"assignment", `API_KEY="secret-value"`},
-		{"colon", `{"access_token":"secret-value"}`},
-		{"flag", `command --password secret-value`},
-		{"authorization header", `Authorization: Bearer secret-value`},
-		{"authorization field", `{"authorization":"secret-value"}`},
-		{"bearer token", `Bearer abcdefghijklmnop`},
-		{"openai key", `sk-abcdefghijklmnopqrstuvwxyz`},
-		{"jwt", `eyJabcdefghij.abcdefghijkl.abcdefghijkl`},
+		{"assignment", `API_KEY="secret-value"`, `API_KEY="[REDACTED]"`},
+		{"hyphenated assignment", `api-key=secret-value`, `api-key=[REDACTED]`},
+		{"colon", `{"access_token":"secret-value"}`, `{"access_token":"[REDACTED]"}`},
+		{"hyphenated colon", `{"api-key":"secret-value"}`, `{"api-key":"[REDACTED]"}`},
+		{"prefixed hyphenated colon", `{"x-api-key":"secret-value"}`, `{"x-api-key":"[REDACTED]"}`},
+		{"flag", `command --password secret-value`, `command --password [REDACTED]`},
+		{"authorization header", `Authorization: Bearer secret-value`, `Authorization: Bearer [REDACTED]`},
+		{"authorization field", `{"authorization":"secret-value"}`, `{"authorization":"[REDACTED]"}`},
+		{"bearer token", `Bearer abcdefghijklmnop`, `Bearer [REDACTED]`},
+		{"openai key", `sk-abcdefghijklmnopqrstuvwxyz`, `[REDACTED]`},
+		{"jwt", `eyJabcdefghij.abcdefghijkl.abcdefghijkl`, `[REDACTED]`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			redacted := SensitiveText(test.input)
-			assert.Contains(t, redacted, Value)
+			assert.Equal(t, test.want, redacted)
 			assert.NotContains(t, redacted, "secret-value")
 		})
 	}
@@ -49,6 +53,8 @@ func TestStructuredValueAndHelpers(t *testing.T) {
 	assert.True(t, HasWrappedQuotes(`"value"`, '"'))
 	assert.False(t, HasWrappedQuotes(`"`, '"'))
 	assert.True(t, IsSensitiveName("MY_API_KEY"))
+	assert.True(t, IsSensitiveName("x-api-key"))
+	assert.True(t, IsSensitiveName("private-key"))
 	assert.False(t, IsSensitiveName("USERNAME"))
 }
 

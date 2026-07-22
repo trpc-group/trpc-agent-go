@@ -221,8 +221,8 @@ result, err := optimizer.Optimize(ctx, optimization.Request{
     },
 })
 if err != nil {
-    // 可选的记录或 revision 提交失败时，评测可能已经完成；保留非 nil result，
-    // 便于诊断或重试交付动作。
+    // search 可能已经选出 candidate，此后 holdout 或可选交付步骤仍可能失败；
+    // 保留非 nil result，便于诊断或重试。
     if result != nil {
         fmt.Printf("optimization %s completed but delivery failed: %v\n",
             result.ExperimentID, err)
@@ -238,14 +238,16 @@ fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
 )
 ```
 
-optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。评测完成后，
-如果最终记录或提交失败，`Optimize` 会同时返回非 nil result 和 error；提交错误也会写入
-`SubmissionReason`。
+optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。search 选出
+candidate 后，如果 holdout、最终记录或提交失败，`Optimize` 会同时返回非 nil 的部分
+result 和 error；各字段表示失败前已完成的阶段，提交错误也会写入 `SubmissionReason`。
 
 `WithStoreDir` 是可选的节点本地实验 recorder，与 revision 使用的 `CandidateStore`
 不是同一个概念。每次 run 独占一个 UUID 目录；在支持权限位的文件系统上，文件权限为
 `0600`、目录权限为 `0700`。持久化的每个 evaluator output、feedback、trace 字段最多
-保留 16 KiB。它不负责分布式任务协调，也不是远端持久存储。多个节点可以使用同一个兼容
+保留 16 KiB。dataset 只在 `experiment.json` 保存一次；各 evaluation record 通过 case
+ID 引用它，不会在每轮重复写入 input 和 expected。它不负责分布式任务协调，也不是远端
+持久存储。多个节点可以使用同一个兼容
 POSIX 的共享根目录，因为不同实验不会共用目录，但同一个实验只能由一个节点写入。如果
 Pod 磁盘是临时或不共享的，应用需要在实验完成后把目录上传到自己的持久存储。revision
 的 `CandidateStore` 和 `ActivePointer` 可以替换，但接口没有定义跨后端事务；多节点部署
