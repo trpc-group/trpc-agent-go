@@ -38,7 +38,7 @@ type A2AEventConverter interface {
 // InvocationA2AConverter defines an interface for converting invocations to A2A protocol messages.
 type InvocationA2AConverter interface {
 	// ConvertToA2AMessage converts an invocation to an A2A protocol Message.
-	ConvertToA2AMessage(isStream bool, agentName string, invocation *agent.Invocation) (*protocol.Message, error)
+	ConvertToA2AMessage(agentName string, invocation *agent.Invocation) (*protocol.Message, error)
 }
 
 type defaultA2AEventConverter struct {
@@ -164,23 +164,20 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 		responseMsg = convertTaskStatusToMessage(v)
 		if !isTaskFailureState(v.Status.State) &&
 			!hasStructuredErrorMetadata(responseMsg.Metadata) {
-			// Normal lifecycle status is a control signal. A terminal frame may
-			// still carry response metadata that must reach the local session;
-			// strip its accumulated content to avoid replaying streamed text.
-			if !hasResponseMetadata(responseMsg.Metadata) {
+			// A status message can carry the actual agent response (for example
+			// input-required or a completed message-only result). Preserve it.
+			// Empty lifecycle frames remain control signals; only response
+			// metadata needs to cross the adapter boundary.
+			if len(responseMsg.Parts) == 0 && !hasResponseMetadata(responseMsg.Metadata) {
 				return nil, nil
 			}
-			responseMsg.Parts = nil
 		}
 	case *protocol.TaskArtifactUpdateEvent:
 		responseMsg = convertTaskArtifactToMessage(v)
-		if v.IsFinal() && !hasStructuredErrorMetadata(responseMsg.Metadata) {
-			// Final artifact content may be an aggregate of earlier chunks. Forward
-			// only metadata needed by the local runtime, avoiding text duplication.
-			if !hasResponseMetadata(responseMsg.Metadata) {
-				return nil, nil
-			}
-			responseMsg.Parts = nil
+		if len(responseMsg.Parts) == 0 &&
+			!hasResponseMetadata(responseMsg.Metadata) &&
+			!hasStructuredErrorMetadata(responseMsg.Metadata) {
+			return nil, nil
 		}
 	default:
 		log.Infof("unexpected event type: %T", result.Result)
@@ -199,7 +196,6 @@ type defaultEventA2AConverter struct {
 
 // ConvertToA2AMessage converts an event to an A2A protocol Message.
 func (d *defaultEventA2AConverter) ConvertToA2AMessage(
-	isStream bool,
 	agentName string,
 	invocation *agent.Invocation,
 ) (*protocol.Message, error) {
@@ -339,6 +335,10 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 type parseResult struct {
 	// textContent holds plain text content from TextParts
 	textContent string
+	// finalTextContent holds assistant text that follows tool responses in the
+	// same A2A message. Keeping it separate preserves the tool-response boundary.
+	finalTextContent string
+	contentParts     []model.ContentPart
 
 	// reasoningContent holds thought/reasoning content from TextParts with thought metadata
 	reasoningContent string
@@ -448,6 +448,7 @@ func parseA2AMessagePartsWithMappers(
 	parts := msg.Parts
 	result := &parseResult{}
 	var textBuilder strings.Builder
+	var finalTextBuilder strings.Builder
 	var reasoningBuilder strings.Builder
 
 	for _, part := range parts {
@@ -459,15 +460,22 @@ func parseA2AMessagePartsWithMappers(
 			text, isThought := processTextPart(part)
 			if isThought {
 				reasoningBuilder.WriteString(text)
+			} else if len(result.toolResponses) > 0 {
+				finalTextBuilder.WriteString(text)
 			} else {
 				textBuilder.WriteString(text)
 			}
 		case protocol.Data:
-			flushParseResultText(result, &textBuilder, &reasoningBuilder)
+			flushParseResultText(result, &textBuilder, &finalTextBuilder, &reasoningBuilder)
 			processDataPartWithMappers(part, result, mappers)
+		case protocol.Raw, protocol.URL:
+			flushParseResultText(result, &textBuilder, &finalTextBuilder, &reasoningBuilder)
+			if contentPart := convertResponseFilePart(part); contentPart != nil {
+				result.contentParts = append(result.contentParts, *contentPart)
+			}
 		}
 	}
-	flushParseResultText(result, &textBuilder, &reasoningBuilder)
+	flushParseResultText(result, &textBuilder, &finalTextBuilder, &reasoningBuilder)
 
 	if msg.Metadata != nil {
 		if objectType, ok := msg.Metadata[ia2a.MessageMetadataObjectTypeKey].(string); ok {
@@ -493,9 +501,59 @@ func parseA2AMessagePartsWithMappers(
 	return result
 }
 
+func convertResponseFilePart(part *protocol.Part) *model.ContentPart {
+	if part == nil {
+		return nil
+	}
+	contentType := ia2a.FilePartMetadataContentTypeFile
+	if value, ok := part.Metadata[ia2a.FilePartMetadataContentTypeKey].(string); ok && value != "" {
+		contentType = value
+	} else {
+		mediaType := strings.ToLower(strings.TrimSpace(part.MediaType))
+		switch {
+		case strings.HasPrefix(mediaType, "image/"):
+			contentType = ia2a.FilePartMetadataContentTypeImage
+		case strings.HasPrefix(mediaType, "audio/"):
+			contentType = ia2a.FilePartMetadataContentTypeAudio
+		}
+	}
+
+	switch content := part.Content.(type) {
+	case protocol.Raw:
+		data := []byte(content)
+		switch contentType {
+		case ia2a.FilePartMetadataContentTypeImage:
+			return &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{
+				Data: data, Format: part.MediaType,
+			}}
+		case ia2a.FilePartMetadataContentTypeAudio:
+			return &model.ContentPart{Type: model.ContentTypeAudio, Audio: &model.Audio{
+				Data: data, Format: part.MediaType,
+			}}
+		default:
+			return &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{
+				Name: part.Filename, Data: data, MimeType: part.MediaType,
+			}}
+		}
+	case protocol.URL:
+		url := string(content)
+		if contentType == ia2a.FilePartMetadataContentTypeImage {
+			return &model.ContentPart{Type: model.ContentTypeImage, Image: &model.Image{
+				URL: url, Format: part.MediaType,
+			}}
+		}
+		return &model.ContentPart{Type: model.ContentTypeFile, File: &model.File{
+			Name: part.Filename, URL: url, MimeType: part.MediaType,
+		}}
+	default:
+		return nil
+	}
+}
+
 func flushParseResultText(
 	result *parseResult,
 	textBuilder *strings.Builder,
+	finalTextBuilder *strings.Builder,
 	reasoningBuilder *strings.Builder,
 ) {
 	if result == nil {
@@ -504,6 +562,10 @@ func flushParseResultText(
 	if textBuilder != nil && textBuilder.Len() > 0 {
 		result.textContent += textBuilder.String()
 		textBuilder.Reset()
+	}
+	if finalTextBuilder != nil && finalTextBuilder.Len() > 0 {
+		result.finalTextContent += finalTextBuilder.String()
+		finalTextBuilder.Reset()
 	}
 	if reasoningBuilder != nil && reasoningBuilder.Len() > 0 {
 		result.reasoningContent += reasoningBuilder.String()
@@ -814,6 +876,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 					Content:          result.textContent,
 					ReasoningContent: result.reasoningContent,
 					ToolCalls:        result.toolCalls,
+					ContentParts:     result.contentParts,
 				},
 			}},
 			Object:    model.ObjectTypeChatCompletion,
@@ -864,6 +927,7 @@ func buildStreamingResponse(messageID string, result *parseResult, role protocol
 				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
+				ContentParts:     result.contentParts,
 			},
 		}},
 		Object:    objectType,
@@ -960,6 +1024,7 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 				Content:          result.textContent,
 				ReasoningContent: result.reasoningContent,
 				ToolCalls:        result.toolCalls,
+				ContentParts:     result.contentParts,
 			},
 		})
 	}
@@ -978,18 +1043,27 @@ func buildNonStreamingResponse(messageID string, result *parseResult, role proto
 		}
 	}
 
-	// Text content: final assistant response
-	// Only add if no tool calls (tool calls already include text content)
+	// Text content: final assistant response. Text following a tool response is
+	// a distinct assistant message even when the A2A peer packs the whole turn
+	// into one protocol.Message.
 	content := nonStreamingResponseContent(result)
-	if len(result.toolCalls) == 0 && (content != "" || result.reasoningContent != "") {
+	if len(result.toolCalls) == 0 &&
+		(content != "" || result.reasoningContent != "" || len(result.contentParts) > 0) {
 		internalRole := convertA2ARoleToModelRole(role)
 		choices = append(choices, model.Choice{
 			Message: model.Message{
 				Role:             internalRole,
 				Content:          content,
 				ReasoningContent: result.reasoningContent,
+				ContentParts:     result.contentParts,
 			},
 		})
+	}
+	if result.finalTextContent != "" {
+		choices = append(choices, model.Choice{Message: model.Message{
+			Role:    convertA2ARoleToModelRole(role),
+			Content: result.finalTextContent,
+		}})
 	}
 
 	// If no content at all, add empty assistant message

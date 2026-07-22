@@ -133,11 +133,11 @@ func printResponse(events <-chan *event.Event) error {
 		if evt == nil {
 			continue
 		}
-		if evt.Error != nil {
-			return fmt.Errorf("remote agent: %s", evt.Error.Message)
-		}
 		if evt.Response == nil {
 			continue
+		}
+		if evt.Error != nil {
+			return fmt.Errorf("remote agent: %s", evt.Error.Message)
 		}
 
 		isPartial := evt.Response.IsPartial
@@ -145,6 +145,24 @@ func printResponse(events <-chan *event.Event) error {
 			sawPartial = true
 		}
 		for _, choice := range evt.Response.Choices {
+			for _, call := range choice.Message.ToolCalls {
+				if printed {
+					fmt.Println()
+					printed = false
+				}
+				fmt.Printf("Tool call: %s args=%s id=%s\n",
+					call.Function.Name,
+					string(call.Function.Arguments),
+					call.ID,
+				)
+			}
+			if choice.Message.Role == model.RoleTool {
+				fmt.Printf("Tool result: %s id=%s\n",
+					choice.Message.Content,
+					choice.Message.ToolID,
+				)
+				continue
+			}
 			var content string
 			if isPartial {
 				content = choice.Delta.Content

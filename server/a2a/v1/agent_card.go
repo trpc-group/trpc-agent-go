@@ -14,6 +14,7 @@ import (
 	"errors"
 	"net/http"
 
+	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
 	a2aprotocolserver "trpc.group/trpc-go/trpc-a2a-go/v2/server"
 	ia2a "trpc.group/trpc-go/trpc-agent-go/internal/a2a"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -68,6 +69,13 @@ func NewAgentCard(
 		Name:        name,
 		Description: description,
 		URL:         url,
+		SupportedInterfaces: []a2aprotocolserver.AgentInterface{
+			{
+				URL:             url,
+				ProtocolBinding: "JSONRPC",
+				ProtocolVersion: protocol.ProtocolVersionV1,
+			},
+		},
 		Capabilities: a2aprotocolserver.AgentCapabilities{
 			Streaming: &streaming,
 			Extensions: []a2aprotocolserver.AgentExtension{

@@ -92,6 +92,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("send message (start the server with -retain-tasks): %v", err)
 	}
+	if response == nil {
+		log.Fatal("server returned an empty response")
+	}
 	task := response.GetTask()
 	if task == nil {
 		log.Fatal("server returned a Message instead of a Task; start it with -retain-tasks")

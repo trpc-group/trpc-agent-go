@@ -121,14 +121,14 @@ func TestRunNonStreamingRequestsNoTaskHistory(t *testing.T) {
 	}
 }
 
-func TestMessageModeServerAndAgent(t *testing.T) {
+func TestServerAndAgentRoundTrip(t *testing.T) {
 	runner := &testRunner{events: []*event.Event{
 		{
 			Response: &model.Response{
 				ID:        "response",
 				IsPartial: true,
 				Choices: []model.Choice{{
-					Delta: model.Message{Content: "hel"},
+					Delta: model.Message{Content: "hello"},
 				}},
 			},
 		},
@@ -137,7 +137,7 @@ func TestMessageModeServerAndAgent(t *testing.T) {
 				ID:        "response",
 				IsPartial: true,
 				Choices: []model.Choice{{
-					Delta: model.Message{Content: "lo"},
+					Delta: model.Message{Content: " world"},
 				}},
 			},
 		},
@@ -164,7 +164,6 @@ func TestMessageModeServerAndAgent(t *testing.T) {
 	server, err := a2aserver.New(
 		a2aserver.WithRunner(runner),
 		a2aserver.WithAgentCard(card),
-		a2aserver.WithStreamingEventType(a2aserver.StreamingEventTypeMessage),
 	)
 	if err != nil {
 		t.Fatalf("server New failed: %v", err)
@@ -203,15 +202,15 @@ func TestMessageModeServerAndAgent(t *testing.T) {
 				events = append(events, evt)
 			}
 			if test.streaming {
-				assertStreamingMessageModeEvents(t, events)
+				assertStreamingEvents(t, events)
 				return
 			}
-			assertUnaryMessageModeEvent(t, events)
+			assertUnaryEvent(t, events)
 		})
 	}
 }
 
-func assertUnaryMessageModeEvent(t *testing.T, events []*event.Event) {
+func assertUnaryEvent(t *testing.T, events []*event.Event) {
 	t.Helper()
 	if len(events) != 1 {
 		t.Fatalf("event count = %d, want 1", len(events))
@@ -220,13 +219,13 @@ func assertUnaryMessageModeEvent(t *testing.T, events []*event.Event) {
 	if evt.Response == nil || len(evt.Response.Choices) != 1 {
 		t.Fatalf("response = %#v, want one choice", evt.Response)
 	}
-	if got := evt.Response.Choices[0].Message.Content; got != "hello" {
-		t.Fatalf("content = %q, want hello", got)
+	if got := evt.Response.Choices[0].Message.Content; got != "hello world" {
+		t.Fatalf("content = %q, want hello world", got)
 	}
-	assertMessageModeFinalMetadata(t, evt)
+	assertFinalMetadata(t, evt)
 }
 
-func assertStreamingMessageModeEvents(t *testing.T, events []*event.Event) {
+func assertStreamingEvents(t *testing.T, events []*event.Event) {
 	t.Helper()
 	var (
 		deltas     []string
@@ -250,8 +249,8 @@ func assertStreamingMessageModeEvents(t *testing.T, events []*event.Event) {
 			}
 		}
 	}
-	if len(deltas) != 2 || deltas[0] != "hel" || deltas[1] != "lo" {
-		t.Fatalf("stream deltas = %#v, want [hel lo]", deltas)
+	if len(deltas) != 2 || deltas[0] != "hello" || deltas[1] != " world" {
+		t.Fatalf("stream deltas = %#v, want [hello, world]", deltas)
 	}
 	if stateEvent == nil {
 		t.Fatal("stream did not preserve final state delta")
@@ -265,12 +264,12 @@ func assertStreamingMessageModeEvents(t *testing.T, events []*event.Event) {
 	if finalEvent == nil || len(finalEvent.Response.Choices) != 1 {
 		t.Fatalf("final event = %#v, want one final choice", finalEvent)
 	}
-	if got := finalEvent.Response.Choices[0].Message.Content; got != "hello" {
-		t.Fatalf("final content = %q, want hello", got)
+	if got := finalEvent.Response.Choices[0].Message.Content; got != "hello world" {
+		t.Fatalf("final content = %q, want hello world", got)
 	}
 }
 
-func assertMessageModeFinalMetadata(t *testing.T, evt *event.Event) {
+func assertFinalMetadata(t *testing.T, evt *event.Event) {
 	t.Helper()
 	if got := string(evt.StateDelta["state-key"]); got != `"value"` {
 		t.Fatalf("state delta = %q, want %q", got, `"value"`)
@@ -280,5 +279,137 @@ func assertMessageModeFinalMetadata(t *testing.T, evt *event.Event) {
 	}
 	if !evt.Done || evt.IsPartial {
 		t.Fatalf("event finality = (done=%v partial=%v), want final", evt.Done, evt.IsPartial)
+	}
+}
+
+func TestProcessStreamingEventsRequiresTaskEnd(t *testing.T) {
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+	}
+	stream := make(chan protocol.StreamResponse, 1)
+	submitted := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateSubmitted},
+		false,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&submitted)
+	close(stream)
+	events := make(chan *event.Event, 2)
+
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		events,
+		stream,
+	)
+	if result.terminalError == nil {
+		t.Fatal("terminal error = nil, want premature stream closure error")
+	}
+	select {
+	case evt := <-events:
+		if evt == nil || evt.Response == nil || evt.Response.Error == nil {
+			t.Fatalf("error event = %#v", evt)
+		}
+	default:
+		t.Fatal("premature stream closure did not emit an error event")
+	}
+}
+
+func TestProcessStreamingEventsAcceptsTaskEnd(t *testing.T) {
+	for _, state := range []protocol.TaskState{
+		protocol.TaskStateCompleted,
+		protocol.TaskStateInputRequired,
+		protocol.TaskStateAuthRequired,
+	} {
+		t.Run(string(state), func(t *testing.T) {
+			remote := &A2AAgent{
+				name:           "remote",
+				eventConverter: &defaultA2AEventConverter{},
+			}
+			stream := make(chan protocol.StreamResponse, 1)
+			status := protocol.NewTaskStatusUpdateEvent(
+				"task",
+				"context",
+				protocol.TaskStatus{State: state},
+				true,
+			)
+			stream <- protocol.NewStreamResponseStatusUpdate(&status)
+			close(stream)
+
+			result := remote.processStreamingEvents(
+				context.Background(),
+				&agent.Invocation{InvocationID: "invocation"},
+				make(chan *event.Event, 2),
+				stream,
+			)
+			if result.terminalError != nil {
+				t.Fatalf("terminal error = %v, want nil", result.terminalError)
+			}
+		})
+	}
+}
+
+func TestProcessStreamingEventsAggregatesFileParts(t *testing.T) {
+	remote := &A2AAgent{
+		name:           "remote",
+		eventConverter: &defaultA2AEventConverter{},
+	}
+	stream := make(chan protocol.StreamResponse, 2)
+	stream <- protocol.NewStreamResponseArtifactUpdate(&protocol.TaskArtifactUpdateEvent{
+		TaskID: "task",
+		Artifact: protocol.Artifact{
+			ArtifactID: "artifact",
+			Parts:      []*protocol.Part{protocol.NewRawPart([]byte("image"), "image/png")},
+		},
+	})
+	completed := protocol.NewTaskStatusUpdateEvent(
+		"task",
+		"context",
+		protocol.TaskStatus{State: protocol.TaskStateCompleted},
+		true,
+	)
+	stream <- protocol.NewStreamResponseStatusUpdate(&completed)
+	close(stream)
+
+	result := remote.processStreamingEvents(
+		context.Background(),
+		&agent.Invocation{InvocationID: "invocation"},
+		make(chan *event.Event, 2),
+		stream,
+	)
+	if result.terminalError != nil {
+		t.Fatalf("terminal error = %v, want nil", result.terminalError)
+	}
+	if len(result.aggregatedContentParts) != 1 ||
+		result.aggregatedContentParts[0].Type != model.ContentTypeImage {
+		t.Fatalf("aggregated content parts = %#v, want one image", result.aggregatedContentParts)
+	}
+}
+
+func TestNewUsesSuppliedAgentCardIdentityAndPrimaryURL(t *testing.T) {
+	card := &protocolserver.AgentCard{
+		Name:        "remote",
+		Description: "remote description",
+		URL:         "http://legacy.example.com",
+		SupportedInterfaces: []protocolserver.AgentInterface{{
+			URL:             "https://primary.example.com/a2a",
+			ProtocolBinding: "JSONRPC",
+			ProtocolVersion: protocol.ProtocolVersionV1,
+		}},
+	}
+	remote, err := New(WithAgentCard(card))
+	if err != nil {
+		t.Fatalf("New failed: %v", err)
+	}
+	if info := remote.Info(); info.Name != card.Name || info.Description != card.Description {
+		t.Fatalf("agent info = %#v, want card identity", info)
+	}
+	if got := remote.GetAgentCard().URL; got != "https://primary.example.com/a2a" {
+		t.Fatalf("resolved URL = %q, want primary interface URL", got)
+	}
+	if card.URL != "http://legacy.example.com" {
+		t.Fatalf("caller-owned card URL was mutated to %q", card.URL)
 	}
 }

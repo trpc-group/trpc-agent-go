@@ -45,6 +45,9 @@ The client keeps using the same session ID until you switch it:
 - `/use <id>` switches to an existing session
 - `/exit` exits the client
 
+Ask for the current time (for example, "What time is it in Asia/Shanghai?")
+to see the `current_time` tool call and tool result cross the A2A boundary.
+
 Use `-streaming=false` on the server to exercise blocking `message/send`.
 The client discovers the streaming capability from the Agent Card.
 

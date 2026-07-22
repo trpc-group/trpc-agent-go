@@ -83,63 +83,6 @@ func TestNewRequiresRunnerAndAgentCard(t *testing.T) {
 	}
 }
 
-func TestBuildProcessorKeepsEventTypeAcrossManagers(t *testing.T) {
-	tests := []struct {
-		name          string
-		taskManager   TaskManagerBuilder
-		streamingType StreamingEventType
-	}{
-		{
-			name:          "default stateless manager",
-			streamingType: StreamingEventTypeTaskArtifactUpdate,
-		},
-		{
-			name: "explicit retaining manager",
-			taskManager: func(taskmanager.MessageProcessor) (taskmanager.TaskManager, error) {
-				return nil, nil
-			},
-			streamingType: StreamingEventTypeTaskArtifactUpdate,
-		},
-		{
-			name:          "message events with stateless manager",
-			streamingType: StreamingEventTypeMessage,
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			opts := &options{
-				runner:             &modeTestRunner{},
-				errorHandler:       defaultErrorHandler,
-				streamingEventType: test.streamingType,
-				taskManagerBuilder: test.taskManager,
-			}
-			processor, err := buildProcessor("agent", opts)
-			if err != nil {
-				t.Fatalf("buildProcessor failed: %v", err)
-			}
-			if processor.streamingEventType != test.streamingType {
-				t.Errorf(
-					"streamingEventType = %v, want %v",
-					processor.streamingEventType,
-					test.streamingType,
-				)
-			}
-			converter, ok := processor.eventToA2AConverter.(*defaultEventToA2AMessage)
-			if !ok {
-				t.Fatalf("converter type = %T, want defaultEventToA2AMessage", processor.eventToA2AConverter)
-			}
-			if converter.streamingEventType != test.streamingType {
-				t.Errorf(
-					"converter streamingEventType = %v, want %v",
-					converter.streamingEventType,
-					test.streamingType,
-				)
-			}
-		})
-	}
-}
-
 func TestMessageProcessorManagerModes(t *testing.T) {
 	newRunner := func() *modeTestRunner {
 		return &modeTestRunner{events: []*event.Event{
@@ -148,7 +91,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 					ID:        "response-id",
 					IsPartial: true,
 					Choices: []model.Choice{{
-						Delta: model.Message{Content: "hel"},
+						Delta: model.Message{Content: "hello"},
 					}},
 				},
 			},
@@ -157,7 +100,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 					ID:        "response-id",
 					IsPartial: true,
 					Choices: []model.Choice{{
-						Delta: model.Message{Content: "lo"},
+						Delta: model.Message{Content: " world"},
 					}},
 				},
 			},
@@ -166,7 +109,7 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 					ID:   "response-id",
 					Done: true,
 					Choices: []model.Choice{{
-						Message: model.NewAssistantMessage("hello"),
+						Message: model.NewAssistantMessage("hello world"),
 					}},
 				},
 			},
@@ -189,9 +132,8 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 
 	t.Run("stateless returns request-local Task", func(t *testing.T) {
 		processor, err := buildProcessor("agent", &options{
-			runner:             newRunner(),
-			errorHandler:       defaultErrorHandler,
-			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
+			runner:       newRunner(),
+			errorHandler: defaultErrorHandler,
 		})
 		if err != nil {
 			t.Fatalf("buildProcessor failed: %v", err)
@@ -217,8 +159,8 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 				text += part.TextContent()
 			}
 		}
-		if text != "hello" {
-			t.Errorf("task artifact text = %q, want hello", text)
+		if text != "hello world" {
+			t.Errorf("task artifact text = %q, want hello world", text)
 		}
 		if len(task.Artifacts) != 1 {
 			t.Fatalf("task artifact count = %d, want 1", len(task.Artifacts))
@@ -232,118 +174,10 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 		}
 	})
 
-	t.Run("stateless unary supports task-bound Messages", func(t *testing.T) {
-		processor, err := buildProcessor("agent", &options{
-			runner:             newRunner(),
-			errorHandler:       defaultErrorHandler,
-			streamingEventType: StreamingEventTypeMessage,
-		})
-		if err != nil {
-			t.Fatalf("buildProcessor failed: %v", err)
-		}
-		manager, err := stateless.NewTaskManager(processor)
-		if err != nil {
-			t.Fatalf("stateless.NewTaskManager failed: %v", err)
-		}
-		response, err := manager.OnSendMessage(ctx, request)
-		if err != nil {
-			t.Fatalf("OnSendMessage failed: %v", err)
-		}
-		task := response.GetTask()
-		if task == nil || task.Status.Message == nil {
-			t.Fatalf("response = %#v, want Task with final Message", response.Result)
-		}
-		var text string
-		for _, part := range task.Status.Message.Parts {
-			text += part.TextContent()
-		}
-		if text != "hello" {
-			t.Errorf("task status message text = %q, want hello", text)
-		}
-		stateDelta := DecodeStateDeltaMetadata(task.Status.Message.Metadata[ia2a.MessageMetadataStateDeltaKey])
-		if got := string(stateDelta["state-key"]); got != `"value"` {
-			t.Errorf("state delta = %q, want %q", got, `"value"`)
-		}
-	})
-
-	t.Run("stateless streaming supports task-bound Messages", func(t *testing.T) {
-		processor, err := buildProcessor("agent", &options{
-			runner:             newRunner(),
-			errorHandler:       defaultErrorHandler,
-			streamingEventType: StreamingEventTypeMessage,
-		})
-		if err != nil {
-			t.Fatalf("buildProcessor failed: %v", err)
-		}
-		manager, err := stateless.NewTaskManager(processor)
-		if err != nil {
-			t.Fatalf("stateless.NewTaskManager failed: %v", err)
-		}
-		stream, err := manager.OnSendMessageStream(ctx, request)
-		if err != nil {
-			t.Fatalf("OnSendMessageStream failed: %v", err)
-		}
-		var task *protocol.Task
-		var texts []string
-		var completed *protocol.TaskStatusUpdateEvent
-		for response := range stream {
-			if snapshot := response.GetTask(); snapshot != nil {
-				if task != nil {
-					t.Fatalf("received duplicate Task snapshot: %#v", snapshot)
-				}
-				task = snapshot
-				continue
-			}
-			if status := response.GetStatusUpdate(); status != nil {
-				if status.Status.State == protocol.TaskStateCompleted {
-					completed = status
-				}
-				continue
-			}
-			message := response.GetMessage()
-			if message == nil {
-				t.Fatalf("unexpected stream response: %#v", response.Result)
-			}
-			if task == nil {
-				t.Fatal("received Message before Task snapshot")
-			}
-			if message.TaskID == nil || *message.TaskID != task.ID {
-				t.Errorf("message task ID = %v, want %q", message.TaskID, task.ID)
-			}
-			for _, part := range message.Parts {
-				texts = append(texts, part.TextContent())
-			}
-		}
-		if len(texts) != 2 || texts[0] != "hel" || texts[1] != "lo" {
-			t.Fatalf("stream texts = %#v, want [hel lo]", texts)
-		}
-		if task == nil {
-			t.Fatal("stream did not start with a Task snapshot")
-		}
-		if completed == nil || completed.Status.Message == nil {
-			t.Fatalf("completed status = %#v, want final Message", completed)
-		}
-		var completedText string
-		for _, part := range completed.Status.Message.Parts {
-			completedText += part.TextContent()
-		}
-		if completedText != "hello" {
-			t.Errorf("completed message text = %q, want hello", completedText)
-		}
-		stateDelta := DecodeStateDeltaMetadata(completed.Status.Message.Metadata[ia2a.MessageMetadataStateDeltaKey])
-		if got := string(stateDelta["state-key"]); got != `"value"` {
-			t.Errorf("final state delta = %q, want %q", got, `"value"`)
-		}
-		if _, err := manager.OnGetTask(ctx, protocol.TaskQueryParams{ID: task.ID}); err == nil {
-			t.Fatal("OnGetTask succeeded, want task-not-found")
-		}
-	})
-
 	t.Run("explicit manager returns Task", func(t *testing.T) {
 		processor, err := buildProcessor("agent", &options{
-			runner:             newRunner(),
-			errorHandler:       defaultErrorHandler,
-			streamingEventType: StreamingEventTypeTaskArtifactUpdate,
+			runner:       newRunner(),
+			errorHandler: defaultErrorHandler,
 			taskManagerBuilder: func(taskmanager.MessageProcessor) (taskmanager.TaskManager, error) {
 				return nil, nil
 			},
@@ -374,6 +208,48 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 			t.Errorf("stored task state = %s, want completed", stored.Status.State)
 		}
 	})
+
+	t.Run("stateless preserves final-only response", func(t *testing.T) {
+		processor, err := buildProcessor("agent", &options{
+			runner: &modeTestRunner{events: []*event.Event{
+				{
+					Response: &model.Response{
+						ID:   "response-id",
+						Done: true,
+						Choices: []model.Choice{{
+							Message: model.NewAssistantMessage("final answer"),
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Object: model.ObjectTypeRunnerCompletion,
+						Done:   true,
+					},
+				},
+			}},
+			errorHandler: defaultErrorHandler,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil || len(task.Artifacts) != 1 ||
+			len(task.Artifacts[0].Parts) != 1 {
+			t.Fatalf("task = %#v, want one artifact part", task)
+		}
+		if got := task.Artifacts[0].Parts[0].TextContent(); got != "final answer" {
+			t.Fatalf("artifact content = %q, want final answer", got)
+		}
+	})
 }
 
 func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
@@ -395,18 +271,17 @@ func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
 		},
 	}}
 	processor, err := buildProcessor("agent", &options{
-		runner:             runner,
-		errorHandler:       defaultErrorHandler,
-		streamingEventType: StreamingEventTypeMessage,
-		responseRewriter: ResponseRewriterFuncs{Streaming: func(
+		runner:       runner,
+		errorHandler: defaultErrorHandler,
+		responseRewriter: func(
 			_ context.Context,
 			result protocol.StreamEvent,
 		) protocol.StreamEvent {
-			if _, ok := result.(*protocol.Message); ok {
+			if _, ok := result.(*protocol.TaskArtifactUpdateEvent); ok {
 				return nil
 			}
 			return result
-		}},
+		},
 	})
 	if err != nil {
 		t.Fatalf("buildProcessor failed: %v", err)
@@ -430,8 +305,8 @@ func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
 	if task == nil {
 		t.Fatal("response did not contain a Task")
 	}
-	if task.Status.Message != nil {
-		t.Fatalf("dropped Message reappeared in completed Task: %#v", task.Status.Message)
+	if len(task.Artifacts) != 0 {
+		t.Fatalf("dropped artifact reappeared in completed Task: %#v", task.Artifacts)
 	}
 }
 
@@ -482,5 +357,122 @@ func TestServerRoutesPrimarySupportedInterface(t *testing.T) {
 	server.Handler().ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("primary interface status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+}
+
+func TestDataPartUsesJSONRepresentation(t *testing.T) {
+	converter := &defaultA2AMessageToAgentMessage{}
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]*protocol.Part{protocol.NewDataPart(map[string]any{
+			"enabled": true,
+			"count":   2,
+		})},
+	)
+	converted, err := converter.ConvertToAgentMessage(context.Background(), message)
+	if err != nil {
+		t.Fatalf("ConvertToAgentMessage failed: %v", err)
+	}
+	if len(converted.ContentParts) != 1 || converted.ContentParts[0].Text == nil {
+		t.Fatalf("content parts = %#v, want one text part", converted.ContentParts)
+	}
+	if got := *converted.ContentParts[0].Text; got != `{"count":2,"enabled":true}` {
+		t.Fatalf("data part text = %q, want JSON object", got)
+	}
+}
+
+func TestRunnerClosureBeforeCompletionFailsTask(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner:       &modeTestRunner{},
+		errorHandler: defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil {
+		t.Fatalf("response = %#v, want Task", response.Result)
+	}
+	if task.Status.State != protocol.TaskStateFailed {
+		t.Fatalf("task state = %s, want failed", task.Status.State)
+	}
+}
+
+func TestTerminalAgentErrorFailsTaskByDefault(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner: &modeTestRunner{events: []*event.Event{{
+			Response: &model.Response{
+				Object: model.ObjectTypeError,
+				Done:   true,
+				Error: &model.ResponseError{
+					Type:    model.ErrorTypeFlowError,
+					Message: "agent failed",
+				},
+			},
+		}}},
+		errorHandler: defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := stateless.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("stateless.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateFailed {
+		t.Fatalf("task = %#v, want failed Task", task)
+	}
+	if task.Status.Message == nil || len(task.Status.Message.Parts) != 1 ||
+		task.Status.Message.Parts[0].TextContent() != "agent failed" {
+		t.Fatalf("failure status message = %#v", task.Status.Message)
+	}
+	if got := task.Status.Message.Metadata[ia2a.MessageMetadataTaskStateKey]; got != string(protocol.TaskStateFailed) {
+		t.Fatalf("task state metadata = %v, want failed", got)
+	}
+}
+
+func TestNewAgentCardAdvertisesV1JSONRPCInterface(t *testing.T) {
+	card, err := NewAgentCard(
+		"agent",
+		"description",
+		"127.0.0.1:8888",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("NewAgentCard failed: %v", err)
+	}
+	if len(card.SupportedInterfaces) != 1 {
+		t.Fatalf("supported interface count = %d, want 1", len(card.SupportedInterfaces))
+	}
+	iface := card.SupportedInterfaces[0]
+	if iface.URL != "http://127.0.0.1:8888" ||
+		iface.ProtocolBinding != "JSONRPC" ||
+		iface.ProtocolVersion != protocol.ProtocolVersionV1 {
+		t.Fatalf("supported interface = %#v", iface)
 	}
 }
