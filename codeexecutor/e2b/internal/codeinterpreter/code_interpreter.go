@@ -40,6 +40,9 @@ type RunCodeOpts struct {
 	OnResult OnResultFunc
 	// OnError is called when the kernel reports an error for this cell.
 	OnError OnErrorFunc
+	// DiscardLogs forwards stdout and stderr to callbacks without retaining a
+	// second copy in Execution.Logs. The default is false.
+	DiscardLogs bool
 	// Envs are extra environment variables exposed to the running code.
 	Envs map[string]string
 	// Timeout is the maximum execution time for this cell (default: 300s).
@@ -173,7 +176,9 @@ func parseOutputLine(execution *Execution, line string, opts *RunCodeOpts) error
 		}
 	case "stdout":
 		text := getString(msg, "text")
-		execution.Logs.Stdout = append(execution.Logs.Stdout, text)
+		if !opts.DiscardLogs {
+			execution.Logs.Stdout = append(execution.Logs.Stdout, text)
+		}
 		if opts.OnStdout != nil {
 			opts.OnStdout(OutputMessage{
 				Line:      text,
@@ -183,7 +188,9 @@ func parseOutputLine(execution *Execution, line string, opts *RunCodeOpts) error
 		}
 	case "stderr":
 		text := getString(msg, "text")
-		execution.Logs.Stderr = append(execution.Logs.Stderr, text)
+		if !opts.DiscardLogs {
+			execution.Logs.Stderr = append(execution.Logs.Stderr, text)
+		}
 		if opts.OnStderr != nil {
 			opts.OnStderr(OutputMessage{
 				Line:      text,

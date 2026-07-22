@@ -20,7 +20,9 @@ output/<task-id>/report/review_report.md
 output/<task-id>/diff_stats.json
 ```
 
-Use `--task-id` when a stable identifier is useful for database queries or replay.
+Use `--task-id` when a stable identifier is useful for database queries. Task
+IDs are immutable: replaying the same input requires a new task ID, while an
+existing task is replayed by querying its stored report.
 
 ## Inputs
 
@@ -37,11 +39,14 @@ go run . --fixture resource --dry-run
 
 ## Executors and safety
 
-`container` is the production default. The container backend disables network access and runs without privileged mode through `codeexecutor/container`. `e2b` is available explicitly for remote sandbox use. `local` is an unsafe development fallback and is rejected unless `--allow-local-fallback` is present. `fake` is selected automatically by `--dry-run`.
+`container` is the production default. The container backend disables network access, drops Linux capabilities, enables `no-new-privileges`, uses a read-only root filesystem, and limits memory, CPU, PIDs, and writable tmpfs storage through `codeexecutor/container`. `e2b` is available explicitly for remote sandbox use. `local` is an unsafe development fallback and is rejected unless `--allow-local-fallback` is present. `fake` is selected automatically by `--dry-run`.
 
 Before execution, the repository is copied into a bounded snapshot containing only Go sources and module/workspace files. Hidden directories, `.git`, vendor trees, node modules, symlinks, environment files, private keys, and unrelated artifacts never enter the workspace. Commands receive a clean environment with a small allowlist, a deadline, and bounded stdout/stderr. Artifacts are allowlisted by the application and limited to 1 MiB.
 
-The Permission policy allows only:
+The Skill rule table controls which deterministic rules are enabled. Its
+audited statistics script runs in the sandbox, and the agent collects and
+cross-checks the generated JSON against the parsed diff before accepting the
+run. The Permission policy allows only:
 
 - `go test ./...`
 - `go vet ./...`
@@ -80,6 +85,15 @@ go test -count=1 -cover ./internal/review
 
 Core tests cover diff line mapping, file-list traversal, rule fixtures, clean-diff false positives, deduplication, credential redaction, Permission decisions, sandbox failure recovery, safe repository snapshots, SQLite round trips, and report sections.
 
-The current core-package coverage is `85.5% of statements`.
+The current core-package coverage is `85.3% of statements`; the command above
+is the source of truth and coverage must remain at or above 85%.
+
+## Framework integration
+
+The example adds bounded stdout/stderr retention to workspace program runs and
+context-aware initialization for container and E2B executors. These shared
+executor changes let the review pipeline enforce its output and startup
+deadlines consistently. `MaxOutputBytes` is also honored by local interactive
+sessions; non-positive values retain the runtime default behavior.
 
 See [DESIGN.md](DESIGN.md) for the 300–500 Chinese-character design summary and `sample_output/` for checked-in report examples.

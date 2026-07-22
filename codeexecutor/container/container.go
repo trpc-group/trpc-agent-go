@@ -56,6 +56,16 @@ type CodeExecutor struct {
 
 // New creates a new CodeExecutor instance
 func New(opts ...Option) (*CodeExecutor, error) {
+	return NewWithContext(context.Background(), opts...)
+}
+
+// NewWithContext creates a CodeExecutor and uses ctx only for image
+// preparation and container startup. Cancelling ctx after this function
+// returns does not close the executor. A nil ctx returns an error.
+func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	c := &CodeExecutor{
 		hostConfig: container.HostConfig{
 			AutoRemove:  true,   // Automatically remove container after it stops
@@ -104,7 +114,9 @@ func New(opts ...Option) (*CodeExecutor, error) {
 	}
 
 	// Initialize container
-	if err := c.initContainer(); err != nil {
+	if err := c.initContainer(ctx); err != nil {
+		c.cleanup()
+		_ = c.client.Close()
 		return nil, fmt.Errorf("failed to initialize container: %w", err)
 	}
 
@@ -492,9 +504,7 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 }
 
 // initContainer initializes the Docker container
-func (c *CodeExecutor) initContainer() error {
-	ctx := context.Background()
-
+func (c *CodeExecutor) initContainer(ctx context.Context) error {
 	if c.client == nil {
 		return fmt.Errorf("docker client is not initialized")
 	}

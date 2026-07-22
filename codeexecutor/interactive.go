@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -22,8 +21,9 @@ const (
 	ProgramStatusExited = "exited"
 )
 
-// InteractiveProgramSpec describes a session-oriented program
-// invocation in a workspace.
+// InteractiveProgramSpec describes a session-oriented program invocation in a
+// workspace. Implementations must apply the inherited RunProgramSpec timeout,
+// environment, resource, and output-retention settings.
 type InteractiveProgramSpec struct {
 	RunProgramSpec
 	TTY bool

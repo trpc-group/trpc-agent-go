@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -15,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -178,6 +178,7 @@ func TestExecuteClassifiesResults(t *testing.T) {
 		errorType string
 	}{
 		{name: "success", command: "go", result: codeexecutor.RunResult{Stdout: "token=\"ghp_abcdefghijklmnopqrstuvwxyz123456\" and more output"}, status: "success"},
+		{name: "executor truncation", command: "go", result: codeexecutor.RunResult{Stdout: "bounded", StdoutTruncated: true}, status: "success"},
 		{name: "non-zero", command: "go", result: codeexecutor.RunResult{ExitCode: 2}, status: "failed", errorType: "non_zero_exit"},
 		{name: "timeout result", command: "go", result: codeexecutor.RunResult{TimedOut: true}, status: "failed", errorType: "timeout"},
 		{name: "deadline error", command: "go", err: context.DeadlineExceeded, status: "failed", errorType: "timeout"},
@@ -194,6 +195,9 @@ func TestExecuteClassifiesResults(t *testing.T) {
 			}
 			if strings.Contains(got.Stdout, "ghp_") {
 				t.Fatalf("stdout was not redacted: %q", got.Stdout)
+			}
+			if test.name == "executor truncation" && !got.OutputTruncated {
+				t.Fatal("executor truncation was not propagated")
 			}
 		})
 	}
@@ -249,7 +253,9 @@ func TestWorkspaceCleanupFailureIsAudited(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := &sandbox{
-		engine:   stubEngine{manager: stubManager{cleanupErr: errors.New("cleanup failed")}, fs: &stubFS{}, runner: stubRunner{}, cleanEnv: true},
+		engine: stubEngine{manager: stubManager{cleanupErr: errors.New("cleanup failed")}, fs: &stubFS{collectFiles: []codeexecutor.File{{
+			Name: "out/diff_stats.json", Content: `{"files_changed":0,"added_lines":0,"deleted_lines":0}`,
+		}}}, runner: stubRunner{}, cleanEnv: true},
 		executor: ExecutorContainer, timeout: time.Second, outputLimit: 128, outputDir: t.TempDir(), skillDir: filepath.Join(base, "skills", "code-review"),
 	}
 	runs, _, _, err := runner.run(context.Background(), "cleanup-failure", "", ParsedInput{})
@@ -358,6 +364,45 @@ func TestReportAndStoreErrorPaths(t *testing.T) {
 	}
 }
 
+func TestOpenStorePreservesExistingDirectoryMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX directory modes")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o755 {
+		t.Fatalf("existing directory mode changed to %o", got)
+	}
+}
+
+func TestReviewContainerSecurityConfiguration(t *testing.T) {
+	containerCfg := reviewContainerConfig()
+	if containerCfg.WorkingDir != "/home/reviewer" {
+		t.Fatalf("unexpected working directory %q", containerCfg.WorkingDir)
+	}
+	hostCfg := reviewHostConfig()
+	if !hostCfg.AutoRemove || hostCfg.Privileged || hostCfg.NetworkMode != "none" {
+		t.Fatalf("unsafe host configuration: %+v", hostCfg)
+	}
+	if !hostCfg.ReadonlyRootfs || len(hostCfg.CapDrop) != 1 || hostCfg.CapDrop[0] != "ALL" || hostCfg.Tmpfs["/tmp"] == "" {
+		t.Fatalf("filesystem or capability isolation missing: %+v", hostCfg)
+	}
+	if hostCfg.Memory != containerMemory || hostCfg.NanoCPUs != containerNanoCPUs || hostCfg.PidsLimit == nil || *hostCfg.PidsLimit != containerPIDs {
+		t.Fatalf("resource limits missing: %+v", hostCfg.Resources)
+	}
+}
+
 func TestStageReportAndSkillLoadingRejectInvalidRoots(t *testing.T) {
 	parentFile := filepath.Join(t.TempDir(), "parent")
 	writeFile(t, parentFile, "not a directory")
@@ -365,7 +410,7 @@ func TestStageReportAndSkillLoadingRejectInvalidRoots(t *testing.T) {
 	if _, _, _, err := stageReport(report, parentFile); err == nil {
 		t.Fatal("report was staged below a regular file")
 	}
-	if err := loadReviewSkill(t.TempDir()); err == nil {
+	if _, err := loadReviewSkill(t.TempDir()); err == nil {
 		t.Fatal("missing review skill was accepted")
 	}
 }
@@ -422,6 +467,8 @@ type stubFS struct {
 	stageCalls    int
 	failStageCall int
 	putErr        error
+	collectFiles  []codeexecutor.File
+	collectErr    error
 }
 
 func (s *stubFS) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
@@ -434,8 +481,8 @@ func (s *stubFS) StageDirectory(context.Context, codeexecutor.Workspace, string,
 	}
 	return nil
 }
-func (*stubFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
-	return nil, nil
+func (s *stubFS) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return s.collectFiles, s.collectErr
 }
 func (*stubFS) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
 	return nil

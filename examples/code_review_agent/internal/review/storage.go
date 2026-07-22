@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -26,6 +25,9 @@ import (
 type Store interface {
 	// Save persists a complete report atomically.
 	Save(context.Context, Report) error
+	// Finalize atomically updates a saved running report with its completed
+	// lifecycle, final artifacts, metrics, and serialized report.
+	Finalize(context.Context, Report) error
 	// Load retrieves a complete report by task ID.
 	Load(context.Context, string) (Report, error)
 	// LoadTask retrieves task lifecycle state by task ID.
@@ -48,14 +50,18 @@ type Store interface {
 	Close() error
 }
 
+// StoreFactory creates a Store adapter for one review run.
+type StoreFactory func(context.Context, Config) (Store, error)
+
+func defaultStoreFactory(_ context.Context, cfg Config) (Store, error) {
+	return openStore(cfg.DatabasePath)
+}
+
 type sqliteStore struct{ db *sql.DB }
 
 func openStore(path string) (Store, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
 		return nil, err
 	}
 	_, statErr := os.Stat(path)
@@ -161,6 +167,44 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO review_reports(task_id,conclusion,payload_json) VALUES(?,?,?)`, report.Task.ID, report.Conclusion, string(payload)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *sqliteStore) Finalize(ctx context.Context, report Report) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE review_tasks SET status=?,ended_at=? WHERE id=?`, report.Task.Status, report.Task.EndedAt.UTC().Format(timeFormat), report.Task.ID)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
+		return fmt.Errorf("finalize review task: rows=%d err=%v", rows, err)
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE task_id=?`, report.Task.ID); err != nil {
+		return err
+	}
+	for _, artifact := range report.Artifacts {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes) VALUES(?,?,?,?,?)`, report.Task.ID, artifact.Name, artifact.Path, artifact.MIMEType, artifact.SizeBytes); err != nil {
+			return err
+		}
+	}
+	metrics, err := json.Marshal(report.Metrics)
+	if err != nil {
+		return fmt.Errorf("encode final review metrics: %w", err)
+	}
+	payload, err := json.Marshal(report)
+	if err != nil {
+		return fmt.Errorf("encode final review report: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE review_metrics SET payload_json=? WHERE task_id=?`, string(metrics), report.Task.ID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE review_reports SET conclusion=?,payload_json=? WHERE task_id=?`, report.Conclusion, string(payload), report.Task.ID); err != nil {
 		return err
 	}
 	return tx.Commit()

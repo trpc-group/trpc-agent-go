@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -28,7 +27,10 @@ import (
 
 const maxInputBytes = 8 << 20
 
-var hunkHeader = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
+var (
+	hunkHeader         = regexp.MustCompile(`^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@`)
+	goPackageStatement = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+)
 
 func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, string, error) {
 	cfg.DiffFile = strings.TrimSpace(cfg.DiffFile)
@@ -236,6 +238,7 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 	oldFile := ""
 	headerFile := ""
 	newLine := 0
+	currentHunk := -1
 	inHunk := false
 	for _, line := range strings.Split(raw, "\n") {
 		switch {
@@ -244,12 +247,19 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 			headerFile = diffHeaderTarget(line)
 			inHunk = false
 		case strings.HasPrefix(line, "rename to "):
-			currentFile = cleanDiffPath(strings.TrimPrefix(line, "rename to "))
+			currentFile = cleanRepositoryPath(strings.TrimPrefix(line, "rename to "))
 			if currentFile != "" {
 				files[currentFile] = true
 				parsed.Statuses[currentFile] = fileModified
 			}
-		case strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch"):
+		case strings.HasPrefix(line, "Binary files "):
+			if marker := strings.LastIndex(line, " and "); marker >= 0 {
+				if target := cleanDiffPath(strings.TrimSuffix(line[marker+5:], " differ")); target != "" {
+					headerFile = target
+				}
+			}
+			fallthrough
+		case strings.HasPrefix(line, "GIT binary patch"):
 			if headerFile != "" {
 				files[headerFile] = true
 				parsed.Statuses[headerFile] = fileModified
@@ -274,19 +284,44 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 			inHunk = false
 		case hunkHeader.MatchString(line):
 			parts := hunkHeader.FindStringSubmatch(line)
-			newLine, _ = strconv.Atoi(parts[1])
+			oldStart, _ := strconv.Atoi(parts[1])
+			oldLines := diffRangeCount(parts[2])
+			newLine, _ = strconv.Atoi(parts[3])
+			newLines := diffRangeCount(parts[4])
+			parsed.Hunks = append(parsed.Hunks, DiffHunk{File: currentFile, OldStart: oldStart, OldLines: oldLines, NewStart: newLine, NewLines: newLines})
+			currentHunk = len(parsed.Hunks) - 1
 			inHunk = true
 		case inHunk && strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
-			parsed.Lines = append(parsed.Lines, ChangedLine{File: currentFile, Line: newLine, Text: strings.TrimPrefix(line, "+"), Package: packageFor(currentFile)})
-			parsed.Context[currentFile] += strings.TrimPrefix(line, "+") + "\n"
+			changed := ChangedLine{File: currentFile, Line: newLine, Text: strings.TrimPrefix(line, "+"), Hunk: currentHunk}
+			parsed.Lines = append(parsed.Lines, changed)
+			parsed.Hunks[currentHunk].Lines = append(parsed.Hunks[currentHunk].Lines, changed)
+			parsed.Hunks[currentHunk].Context += changed.Text + "\n"
+			parsed.Context[currentFile] += changed.Text + "\n"
 			parsed.Summary.AddedLines++
 			newLine++
 		case inHunk && strings.HasPrefix(line, "-") && !strings.HasPrefix(line, "---"):
 			parsed.Summary.DeletedLines++
 		case inHunk && strings.HasPrefix(line, " "):
-			parsed.Context[currentFile] += strings.TrimPrefix(line, " ") + "\n"
+			contextLine := strings.TrimPrefix(line, " ")
+			parsed.Hunks[currentHunk].Context += contextLine + "\n"
+			parsed.Context[currentFile] += contextLine + "\n"
 			newLine++
 		}
+	}
+	packages := map[string]string{}
+	for i := range parsed.Hunks {
+		if match := goPackageStatement.FindStringSubmatch(parsed.Hunks[i].Context); len(match) == 2 {
+			packages[parsed.Hunks[i].File] = match[1]
+		}
+	}
+	for i := range parsed.Hunks {
+		parsed.Hunks[i].Package = packages[parsed.Hunks[i].File]
+		for j := range parsed.Hunks[i].Lines {
+			parsed.Hunks[i].Lines[j].Package = parsed.Hunks[i].Package
+		}
+	}
+	for i := range parsed.Lines {
+		parsed.Lines[i].Package = packages[parsed.Lines[i].File]
 	}
 	for file := range files {
 		parsed.Files = append(parsed.Files, file)
@@ -304,8 +339,21 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 	return parsed, nil
 }
 
+func diffRangeCount(value string) int {
+	if value == "" {
+		return 1
+	}
+	count, _ := strconv.Atoi(value)
+	return count
+}
+
 func diffHeaderTarget(line string) string {
 	value := strings.TrimSpace(strings.TrimPrefix(line, "diff --git "))
+	if !strings.HasPrefix(value, `"`) {
+		if split := strings.LastIndex(value, " b/"); split >= 0 {
+			return cleanDiffPath(value[split+1:])
+		}
+	}
 	for token := 0; token < 2; token++ {
 		var current string
 		if strings.HasPrefix(value, `"`) {
@@ -339,6 +387,20 @@ func diffHeaderTarget(line string) string {
 
 func cleanDiffPath(value string) string {
 	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, `"`) {
+		if unquoted, err := strconv.Unquote(value); err == nil {
+			value = unquoted
+		}
+	}
+	if value == "/dev/null" {
+		return ""
+	}
+	value = strings.TrimPrefix(strings.TrimPrefix(value, "a/"), "b/")
+	return cleanRepositoryPath(value)
+}
+
+func cleanRepositoryPath(value string) string {
+	value = strings.TrimSpace(value)
 	if tab := strings.IndexByte(value, '\t'); tab >= 0 {
 		value = value[:tab]
 	}
@@ -350,7 +412,6 @@ func cleanDiffPath(value string) string {
 	if value == "/dev/null" {
 		return ""
 	}
-	value = strings.TrimPrefix(strings.TrimPrefix(value, "a/"), "b/")
 	value = filepath.ToSlash(filepath.Clean(value))
 	if value == "." || value == ".." || strings.HasPrefix(value, "../") || strings.HasPrefix(value, "/") {
 		return ""
@@ -358,7 +419,7 @@ func cleanDiffPath(value string) string {
 	return value
 }
 
-func packageFor(file string) string {
+func packageDir(file string) string {
 	dir := filepath.ToSlash(filepath.Dir(file))
 	if dir == "." {
 		return "root"

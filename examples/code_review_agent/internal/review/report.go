@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -66,8 +65,8 @@ func stageReport(report Report, outputDir string) (Report, ReportPaths, stagedRe
 	jsonPath := filepath.Join(finalDir, "review_report.json")
 	markdownPath := filepath.Join(finalDir, "review_report.md")
 	report.Artifacts = append(report.Artifacts,
-		Artifact{Name: "review_report.json", Path: jsonPath, MIMEType: "application/json"},
-		Artifact{Name: "review_report.md", Path: markdownPath, MIMEType: "text/markdown"},
+		Artifact{Name: "review_report.json", Path: filepath.ToSlash(jsonPath), MIMEType: "application/json"},
+		Artifact{Name: "review_report.md", Path: filepath.ToSlash(markdownPath), MIMEType: "text/markdown"},
 	)
 	for attempts := 0; attempts < 8; attempts++ {
 		jsonData, err := json.MarshalIndent(report, "", "  ")

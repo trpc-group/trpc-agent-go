@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -35,6 +34,9 @@ const (
 	maxArtifactBytes  = 1 << 20
 	containerImageTag = "trpc-agent-go-code-review:go1.24"
 	cleanupTimeout    = 5 * time.Second
+	containerMemory   = 1 << 30
+	containerNanoCPUs = 2_000_000_000
+	containerPIDs     = 256
 )
 
 type sandbox struct {
@@ -50,17 +52,39 @@ type sandbox struct {
 
 type engineFactory func(context.Context, Config, string) (codeexecutor.Engine, func() error, error)
 
-var containerFactory engineFactory = func(_ context.Context, _ Config, baseDir string) (codeexecutor.Engine, func() error, error) {
-	executor, err := containerexec.New(
+var containerFactory engineFactory = func(ctx context.Context, _ Config, baseDir string) (codeexecutor.Engine, func() error, error) {
+	executor, err := containerexec.NewWithContext(ctx,
 		containerexec.WithDockerFilePath(filepath.Join(baseDir, "sandbox")),
-		containerexec.WithContainerConfig(dockercontainer.Config{
-			Image: containerImageTag, WorkingDir: "/", Cmd: []string{"tail", "-f", "/dev/null"}, Tty: true, OpenStdin: true,
-		}),
+		containerexec.WithContainerConfig(reviewContainerConfig()),
+		containerexec.WithHostConfig(reviewHostConfig()),
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	return executor.Engine(), executor.Close, nil
+}
+
+func reviewContainerConfig() dockercontainer.Config {
+	return dockercontainer.Config{
+		Image: containerImageTag, WorkingDir: "/home/reviewer",
+		Cmd: []string{"tail", "-f", "/dev/null"}, Tty: true, OpenStdin: true,
+	}
+}
+
+func reviewHostConfig() dockercontainer.HostConfig {
+	pidsLimit := int64(containerPIDs)
+	return dockercontainer.HostConfig{
+		AutoRemove: true, Privileged: false, NetworkMode: "none",
+		ReadonlyRootfs: true, CapDrop: []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
+		Tmpfs: map[string]string{
+			"/tmp":           "rw,exec,nosuid,nodev,size=768m,mode=1777",
+			"/home/reviewer": "rw,nosuid,nodev,size=64m,uid=10001,gid=10001,mode=0700",
+		},
+		Resources: dockercontainer.Resources{
+			Memory: containerMemory, NanoCPUs: containerNanoCPUs, PidsLimit: &pidsLimit,
+		},
+	}
 }
 
 var e2bFactory engineFactory = func(ctx context.Context, cfg Config, _ string) (codeexecutor.Engine, func() error, error) {
@@ -209,17 +233,53 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 		}
 		runs = append(runs, s.execute(ctx, ws, item.command, item.args, item.cwd))
 	}
+	if len(runs) > 0 && runs[0].Status == RunSuccess && !(runtime.GOOS == "windows" && s.executor == ExecutorLocalDev) {
+		if err := s.validateDiffStats(ctx, ws, input.Summary); err != nil {
+			runs = append(runs, setupFailure(s.executor, "validate_diff_stats", err, s.outputLimit))
+		}
+	}
 	return runs, decisions, artifacts, nil
+}
+
+func (s *sandbox) validateDiffStats(ctx context.Context, ws codeexecutor.Workspace, want DiffSummary) error {
+	files, err := s.engine.FS().Collect(ctx, ws, []string{"out/diff_stats.json"})
+	if err != nil {
+		return fmt.Errorf("collect audited diff statistics: %w", err)
+	}
+	if len(files) != 1 {
+		return fmt.Errorf("audited diff statistics produced %d artifacts, want 1", len(files))
+	}
+	if files[0].Truncated || len(files[0].Content) > maxArtifactBytes {
+		return errors.New("audited diff statistics exceed artifact limit")
+	}
+	var got struct {
+		FilesChanged int `json:"files_changed"`
+		AddedLines   int `json:"added_lines"`
+		DeletedLines int `json:"deleted_lines"`
+	}
+	decoder := json.NewDecoder(strings.NewReader(files[0].Content))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&got); err != nil {
+		return fmt.Errorf("decode audited diff statistics: %w", err)
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		return errors.New("audited diff statistics contain trailing data")
+	}
+	if got.FilesChanged != want.FilesChanged || got.AddedLines != want.AddedLines || got.DeletedLines != want.DeletedLines {
+		return fmt.Errorf("audited diff statistics mismatch: got files=%d added=%d deleted=%d, want files=%d added=%d deleted=%d", got.FilesChanged, got.AddedLines, got.DeletedLines, want.FilesChanged, want.AddedLines, want.DeletedLines)
+	}
+	return nil
 }
 
 func (s *sandbox) execute(ctx context.Context, ws codeexecutor.Workspace, command string, args []string, cwd string) SandboxRun {
 	started := time.Now()
 	result, err := s.engine.Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd: command, Args: args, Cwd: cwd, Timeout: s.timeout, CleanEnv: true, Env: reviewEnvironment(s.executor),
+		Cmd: command, Args: args, Cwd: cwd, Timeout: s.timeout, CleanEnv: true,
+		Env: reviewEnvironment(s.executor), MaxOutputBytes: s.outputLimit,
 	})
 	stdout, stdoutCut := truncate(result.Stdout, s.outputLimit)
 	stderr, stderrCut := truncate(result.Stderr, s.outputLimit)
-	run := SandboxRun{Command: command, Args: args, Executor: s.executor, Status: RunSuccess, ExitCode: result.ExitCode, Stdout: stdout, Stderr: stderr, Duration: time.Since(started), DurationMS: time.Since(started).Milliseconds(), TimedOut: result.TimedOut, OutputTruncated: stdoutCut || stderrCut}
+	run := SandboxRun{Command: command, Args: args, Executor: s.executor, Status: RunSuccess, ExitCode: result.ExitCode, Stdout: stdout, Stderr: stderr, Duration: time.Since(started), DurationMS: time.Since(started).Milliseconds(), TimedOut: result.TimedOut, OutputTruncated: result.StdoutTruncated || result.StderrTruncated || stdoutCut || stderrCut}
 	if err != nil {
 		combined, cut := truncate(strings.TrimSpace(result.Stderr+"\n"+err.Error()), s.outputLimit)
 		run.Status, run.ErrorType, run.Stderr = RunFailed, classifyExecutionError(err), combined
@@ -358,7 +418,10 @@ func copyBoundedFile(source, target string, original fs.FileInfo) error {
 
 func (s *sandbox) writeDiffStats(taskID string, summary DiffSummary) (Artifact, error) {
 	dir := filepath.Join(s.outputDir, taskID)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := os.MkdirAll(s.outputDir, 0o700); err != nil {
+		return Artifact{}, err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil {
 		return Artifact{}, err
 	}
 	file := filepath.Join(dir, "diff_stats.json")
@@ -370,10 +433,29 @@ func (s *sandbox) writeDiffStats(taskID string, summary DiffSummary) (Artifact, 
 	if len(data) > maxArtifactBytes {
 		return Artifact{}, errors.New("diff statistics exceed artifact limit")
 	}
-	if err := atomicWrite(file, data); err != nil {
+	if err := writeNewFile(file, data); err != nil {
 		return Artifact{}, err
 	}
-	return Artifact{Name: "diff_stats.json", Path: file, MIMEType: "application/json", SizeBytes: int64(len(data))}, nil
+	return Artifact{Name: "diff_stats.json", Path: filepath.ToSlash(file), MIMEType: "application/json", SizeBytes: int64(len(data))}, nil
+}
+
+func writeNewFile(target string, data []byte) (err error) {
+	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = os.Remove(target)
+		}
+	}()
+	if _, err = file.Write(data); err != nil {
+		return err
+	}
+	return file.Sync()
 }
 
 func setupFailure(executor Executor, operation string, err error, outputLimit int) SandboxRun {

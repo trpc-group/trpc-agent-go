@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -11,11 +10,14 @@ package review
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
 func TestDryRunCompletesReportsAndPersistence(t *testing.T) {
@@ -196,6 +198,58 @@ func TestRunRollsBackStoreWhenReportCommitFails(t *testing.T) {
 	}
 }
 
+func TestDuplicateTaskDoesNotOverwriteArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	taskID := "duplicate-no-clobber"
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	_, paths, err := Run(context.Background(), Config{
+		TaskID: taskID, Fixture: "clean", DryRun: true,
+		OutputDir: dir, DatabasePath: dbPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	statsPath := filepath.Join(dir, taskID, "diff_stats.json")
+	statsBefore, err := os.ReadFile(statsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reportBefore, err := os.ReadFile(paths.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Run(context.Background(), Config{
+		TaskID: taskID, Fixture: "secret", DryRun: true,
+		OutputDir: dir, DatabasePath: dbPath,
+	}); err == nil {
+		t.Fatal("duplicate task unexpectedly succeeded")
+	}
+	statsAfter, _ := os.ReadFile(statsPath)
+	reportAfter, _ := os.ReadFile(paths.JSON)
+	if string(statsAfter) != string(statsBefore) || string(reportAfter) != string(reportBefore) {
+		t.Fatal("duplicate task overwrote previously published artifacts")
+	}
+}
+
+func TestArtifactPathsUseForwardSlashes(t *testing.T) {
+	outputDir := t.TempDir()
+	stats, err := (&sandbox{outputDir: outputDir}).writeDiffStats("portable-paths", DiffSummary{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	report := Report{Task: Task{ID: "portable-report-paths"}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	report, _, staged, err := stageReport(report, outputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.cleanup()
+	for _, artifact := range append(report.Artifacts, stats) {
+		if strings.Contains(artifact.Path, `\`) {
+			t.Fatalf("artifact path is platform-dependent: %q", artifact.Path)
+		}
+	}
+}
+
 func TestExecutorInitializationFailureIsReported(t *testing.T) {
 	dir := t.TempDir()
 	runner := &sandbox{executor: "container", initErr: context.DeadlineExceeded, outputDir: dir}
@@ -209,6 +263,93 @@ func TestExecutorInitializationFailureIsReported(t *testing.T) {
 	if len(decisions) != 1 || len(artifacts) != 1 {
 		t.Fatalf("audit evidence missing: decisions=%+v artifacts=%+v", decisions, artifacts)
 	}
+}
+
+func TestSandboxDiffStatsMustMatchParsedInput(t *testing.T) {
+	fs := &stubFS{collectFiles: []codeexecutor.File{{Name: "out/diff_stats.json", Content: `{"files_changed":9,"added_lines":2,"deleted_lines":1}`}}}
+	runner := &sandbox{engine: stubEngine{fs: fs}, outputLimit: 1024}
+	err := runner.validateDiffStats(context.Background(), codeexecutor.Workspace{}, DiffSummary{FilesChanged: 1, AddedLines: 2, DeletedLines: 1})
+	if err == nil || !strings.Contains(err.Error(), "mismatch") {
+		t.Fatalf("mismatched Skill artifact was accepted: %v", err)
+	}
+}
+
+func TestSandboxDiffStatsValidation(t *testing.T) {
+	want := DiffSummary{FilesChanged: 1, AddedLines: 2, DeletedLines: 3}
+	valid := `{"files_changed":1,"added_lines":2,"deleted_lines":3}`
+	cases := []struct {
+		name  string
+		files []codeexecutor.File
+		err   error
+		ok    bool
+	}{
+		{name: "valid", files: []codeexecutor.File{{Name: "out/diff_stats.json", Content: valid}}, ok: true},
+		{name: "collect error", err: errors.New("collect")},
+		{name: "missing", files: nil},
+		{name: "truncated", files: []codeexecutor.File{{Content: valid, Truncated: true}}},
+		{name: "invalid json", files: []codeexecutor.File{{Content: `{`}}},
+		{name: "unknown field", files: []codeexecutor.File{{Content: `{"files_changed":1,"added_lines":2,"deleted_lines":3,"extra":1}`}}},
+		{name: "trailing json", files: []codeexecutor.File{{Content: valid + `{}`}}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			fs := &stubFS{collectFiles: test.files, collectErr: test.err}
+			runner := &sandbox{engine: stubEngine{fs: fs}, outputLimit: 1024}
+			err := runner.validateDiffStats(context.Background(), codeexecutor.Workspace{}, want)
+			if (err == nil) != test.ok {
+				t.Fatalf("validation error = %v, want success %t", err, test.ok)
+			}
+		})
+	}
+}
+
+func TestRunUsesInjectedStoreFactory(t *testing.T) {
+	dir := t.TempDir()
+	called := false
+	_, _, err := Run(context.Background(), Config{
+		Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: filepath.Join(dir, "reviews.sqlite"),
+		StoreFactory: func(_ context.Context, cfg Config) (Store, error) {
+			called = true
+			return openStore(cfg.DatabasePath)
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("configured Store adapter was not used")
+	}
+}
+
+func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
+	dir := t.TempDir()
+	const delay = 25 * time.Millisecond
+	report, _, err := Run(context.Background(), Config{
+		Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: filepath.Join(dir, "reviews.sqlite"),
+		StoreFactory: func(_ context.Context, cfg Config) (Store, error) {
+			store, err := openStore(cfg.DatabasePath)
+			if err != nil {
+				return nil, err
+			}
+			return delayedStore{Store: store, delay: delay}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Metrics.TotalDurationMS < delay.Milliseconds() {
+		t.Fatalf("total duration %dms excluded persistence delay", report.Metrics.TotalDurationMS)
+	}
+}
+
+type delayedStore struct {
+	Store
+	delay time.Duration
+}
+
+func (s delayedStore) Save(ctx context.Context, report Report) error {
+	time.Sleep(s.delay)
+	return s.Store.Save(ctx, report)
 }
 
 func TestTaskIDValidation(t *testing.T) {

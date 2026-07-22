@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -125,6 +124,9 @@ type Config struct {
 	FakeModel    bool
 	Timeout      time.Duration
 	OutputLimit  int
+	// StoreFactory creates the persistence adapter used by Run. The returned
+	// Store is owned and closed by Run. Nil selects the SQLite adapter.
+	StoreFactory StoreFactory
 }
 
 // Task records the identity, input mode, and lifecycle of a review.
@@ -151,6 +153,19 @@ type ChangedLine struct {
 	Line    int    `json:"line"`
 	Text    string `json:"text"`
 	Package string `json:"package,omitempty"`
+	Hunk    int    `json:"hunk"`
+}
+
+// DiffHunk preserves one unified-diff hunk and its bounded review context.
+type DiffHunk struct {
+	File     string        `json:"file"`
+	OldStart int           `json:"old_start"`
+	OldLines int           `json:"old_lines"`
+	NewStart int           `json:"new_start"`
+	NewLines int           `json:"new_lines"`
+	Package  string        `json:"package,omitempty"`
+	Lines    []ChangedLine `json:"lines"`
+	Context  string        `json:"-"`
 }
 
 // ParsedInput contains the bounded diff data consumed by review rules.
@@ -159,6 +174,7 @@ type ParsedInput struct {
 	Files    []string              `json:"files"`
 	Statuses map[string]FileStatus `json:"-"`
 	Lines    []ChangedLine         `json:"lines"`
+	Hunks    []DiffHunk            `json:"hunks"`
 	Context  map[string]string     `json:"-"`
 	Summary  DiffSummary           `json:"summary"`
 }

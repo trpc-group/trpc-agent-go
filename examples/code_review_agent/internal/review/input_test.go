@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -32,6 +31,20 @@ func TestParseUnifiedDiffTracksNewLineNumbers(t *testing.T) {
 	}
 	if got.Summary.FilesChanged != 1 || got.Summary.GoFiles != 1 || got.Summary.AddedLines != 2 {
 		t.Fatalf("unexpected summary: %+v", got.Summary)
+	}
+	if len(got.Hunks) != 1 || got.Hunks[0].OldStart != 8 || got.Hunks[0].OldLines != 2 || got.Hunks[0].NewStart != 8 || got.Hunks[0].NewLines != 3 {
+		t.Fatalf("unexpected hunk: %+v", got.Hunks)
+	}
+}
+
+func TestParseUnifiedDiffExtractsPackageDeclaration(t *testing.T) {
+	raw := "diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1,2 +1,3 @@\n package actual\n+var added = true\n"
+	got, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Hunks) != 1 || got.Hunks[0].Package != "actual" || got.Lines[0].Package != "actual" {
+		t.Fatalf("package declaration was not extracted: %+v", got)
 	}
 }
 
@@ -94,6 +107,30 @@ func TestParseUnifiedDiffTracksRenameAndBinaryChanges(t *testing.T) {
 	}
 	if len(got.Files) != 2 || got.Files[0] != "assets/logo.bin" || got.Files[1] != "new.go" {
 		t.Fatalf("rename or binary change disappeared: %#v", got.Files)
+	}
+}
+
+func TestParseUnifiedDiffTracksBinaryPathWithSpaces(t *testing.T) {
+	raw := "diff --git a/assets/old logo.bin b/assets/new logo.bin\nBinary files a/assets/old logo.bin and b/assets/new logo.bin differ\n"
+	got, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 || got.Files[0] != "assets/new logo.bin" {
+		t.Fatalf("binary path with spaces was lost: %#v", got.Files)
+	}
+}
+
+func TestParseUnifiedDiffPreservesRenameIntoABDirectories(t *testing.T) {
+	for _, target := range []string{"a/service/file.go", "b/service/file.go"} {
+		raw := "diff --git a/old.go b/" + target + "\nsimilarity index 100%\nrename from old.go\nrename to " + target + "\n"
+		got, err := ParseUnifiedDiff(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Files) != 1 || got.Files[0] != target {
+			t.Fatalf("rename target = %#v, want %q", got.Files, target)
+		}
 	}
 }
 

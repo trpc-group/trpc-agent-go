@@ -85,19 +85,19 @@
   "artifacts": [
     {
       "name": "diff_stats.json",
-      "path": "sample_output\\sample-secret\\diff_stats.json",
+      "path": "sample_output/sample-secret/diff_stats.json",
       "mime_type": "application/json",
       "size_bytes": 67
     },
     {
       "name": "review_report.json",
-      "path": "sample_output\\sample-secret\\report\\review_report.json",
+      "path": "sample_output/sample-secret/report/review_report.json",
       "mime_type": "application/json",
-      "size_bytes": 3769
+      "size_bytes": 3761
     },
     {
       "name": "review_report.md",
-      "path": "sample_output\\sample-secret\\report\\review_report.md",
+      "path": "sample_output/sample-secret/report/review_report.md",
       "mime_type": "text/markdown",
       "size_bytes": 1749
     }

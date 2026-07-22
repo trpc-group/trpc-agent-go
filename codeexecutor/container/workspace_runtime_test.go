@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights
 // reserved.
@@ -283,15 +282,17 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	rr, err := rt.RunProgram(
 		context.Background(), ws,
 		codeexecutor.RunProgramSpec{
-			Cmd:     "bash",
-			Args:    []string{"-lc", "echo ok"},
-			Env:     map[string]string{"FOO": "BAR"},
-			Timeout: time.Duration(waitShortSec) * time.Second,
+			Cmd:            "bash",
+			Args:           []string{"-lc", "echo ok"},
+			Env:            map[string]string{"FOO": "BAR"},
+			Timeout:        time.Duration(waitShortSec) * time.Second,
+			MaxOutputBytes: 4,
 		},
 	)
 	require.NoError(t, err)
 	require.Equal(t, 0, rr.ExitCode)
-	require.Contains(t, rr.Stdout, "run-out")
+	require.Equal(t, "run-", rr.Stdout)
+	require.True(t, rr.StdoutTruncated)
 }
 
 func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {

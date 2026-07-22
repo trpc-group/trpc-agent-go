@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -31,7 +30,9 @@ type rule struct {
 var (
 	sqlConcat    = regexp.MustCompile(`(?i)(query|exec|where|select|insert|update|delete)[^\n]*(?:\+|fmt\.Sprintf)`)
 	ignoredError = regexp.MustCompile(`(?:^|\s)_\s*:?=\s*[A-Za-z_][A-Za-z0-9_.]*\s*\(`)
-	nilOnError   = regexp.MustCompile(`if\s+err\s*!=\s*nil[^\n]*\{?\s*return\s+(?:nil|0|"")\s*(?:,\s*nil)?`)
+	ignoredTuple = regexp.MustCompile(`\b[A-Za-z_][A-Za-z0-9_]*\s*,\s*_\s*:=`)
+	nilOnError   = regexp.MustCompile(`(?s)if\s+err\s*!=\s*nil\s*\{[^}]*return\s+(?:nil|0|"")\s*(?:,\s*nil)?`)
+	assignment   = regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*:?=`)
 )
 
 func analyze(input ParsedInput) (findings, warnings, needsHuman []Finding) {
@@ -40,6 +41,10 @@ func analyze(input ParsedInput) (findings, warnings, needsHuman []Finding) {
 }
 
 func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []Finding, decisions []FilterDecision) {
+	return analyzeWithRuleIDs(input, nil)
+}
+
+func analyzeWithRuleIDs(input ParsedInput, enabled map[string]bool) (findings, warnings, needsHuman []Finding, decisions []FilterDecision) {
 	joined := map[string]string{}
 	for file, context := range input.Context {
 		joined[file] = context
@@ -61,7 +66,7 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			title: "Dynamic shell command may permit command injection", confidence: .92,
 			recommendation: "Avoid shell interpretation; invoke a fixed executable with validated arguments.",
 			match: func(line ChangedLine, all map[string]string) bool {
-				return isDynamicShellCommand(line.Text) || strings.Contains(line.Text, "exec.Command") && isDynamicShellCommand(strings.ReplaceAll(all[line.File], "\n", " "))
+				return strings.Contains(line.Text, "exec.Command") && isDynamicShellCommand(strings.ReplaceAll(all[line.File], "\n", " "))
 			},
 		},
 		{
@@ -76,7 +81,11 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			recommendation: "Call defer cancel() immediately after checking context creation errors.",
 			match: func(line ChangedLine, all map[string]string) bool {
 				creates := strings.Contains(line.Text, "context.WithCancel(") || strings.Contains(line.Text, "context.WithTimeout(")
-				return creates && !strings.Contains(all[line.File], "cancel()")
+				if !creates {
+					return false
+				}
+				name := assignedSecondaryName(line.Text)
+				return name == "" || !callsMethodOrFunction(all[line.File], name, "")
 			},
 		},
 		{
@@ -92,8 +101,16 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			title: "Opened resource has no visible Close", confidence: .84,
 			recommendation: "Check the open/query error and defer Close as soon as ownership is acquired.",
 			match: func(line ChangedLine, all map[string]string) bool {
-				opens := strings.Contains(line.Text, "os.Open(") || strings.Contains(line.Text, "http.Get(") || strings.Contains(line.Text, ".Query(") || strings.Contains(line.Text, ".QueryContext(")
-				return opens && !strings.Contains(all[line.File], ".Close()")
+				kind := ""
+				switch {
+				case strings.Contains(line.Text, "http.Get("):
+					kind = ".Body"
+				case strings.Contains(line.Text, "os.Open("), strings.Contains(line.Text, ".Query("), strings.Contains(line.Text, ".QueryContext("):
+				default:
+					return false
+				}
+				name := assignedPrimaryName(line.Text)
+				return name == "" || !callsMethodOrFunction(all[line.File], name, kind+".Close")
 			},
 		},
 		{
@@ -101,20 +118,28 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			title: "Transaction has no rollback guard", confidence: .90,
 			recommendation: "Defer tx.Rollback after Begin succeeds; commit only after all operations succeed.",
 			match: func(line ChangedLine, all map[string]string) bool {
-				return (strings.Contains(line.Text, ".Begin(") || strings.Contains(line.Text, ".BeginTx(")) && !strings.Contains(all[line.File], ".Rollback()")
+				if !strings.Contains(line.Text, ".Begin(") && !strings.Contains(line.Text, ".BeginTx(") {
+					return false
+				}
+				name := assignedPrimaryName(line.Text)
+				return name == "" || !callsMethodOrFunction(all[line.File], name, ".Rollback")
 			},
 		},
 		{
 			id: "go/error/ignored", category: "error_handling", severity: SeverityMedium,
 			title: "Returned error appears to be ignored", confidence: .80,
 			recommendation: "Handle or explicitly propagate the error with operation context.",
-			match:          func(line ChangedLine, _ map[string]string) bool { return ignoredError.MatchString(line.Text) },
+			match: func(line ChangedLine, _ map[string]string) bool {
+				return ignoredError.MatchString(line.Text) || ignoredTuple.MatchString(line.Text)
+			},
 		},
 		{
 			id: "go/error/swallowed", category: "error_handling", severity: SeverityHigh,
 			title: "Error path appears to return success", confidence: .83,
 			recommendation: "Return or wrap the original error instead of returning a nil error.",
-			match:          func(line ChangedLine, _ map[string]string) bool { return nilOnError.MatchString(line.Text) },
+			match: func(line ChangedLine, all map[string]string) bool {
+				return (strings.Contains(line.Text, "if err != nil") || strings.Contains(line.Text, "return")) && nilOnError.MatchString(all[line.File])
+			},
 		},
 	}
 	for _, line := range input.Lines {
@@ -122,7 +147,17 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 			continue
 		}
 		for _, candidate := range rules {
-			if !candidate.match(line, joined) {
+			if enabled != nil && !enabled[candidate.id] {
+				continue
+			}
+			context := joined[line.File]
+			if line.Hunk >= 0 && line.Hunk < len(input.Hunks) {
+				context = input.Hunks[line.Hunk].Context
+			}
+			if candidate.id == "go/security/dynamic-shell" {
+				context = dynamicInvocationContext(input, line)
+			}
+			if !candidate.match(line, map[string]string{line.File: context}) {
 				continue
 			}
 			finding := newFinding(candidate, line)
@@ -149,6 +184,60 @@ func analyzeWithDecisions(input ParsedInput) (findings, warnings, needsHuman []F
 	warnings = dedupe(warnings)
 	needsHuman = dedupe(needsHuman)
 	return findings, warnings, needsHuman, decisions
+}
+
+func dynamicInvocationContext(input ParsedInput, line ChangedLine) string {
+	if line.Hunk < 0 || line.Hunk >= len(input.Hunks) {
+		return line.Text
+	}
+	lines := input.Hunks[line.Hunk].Lines
+	start := -1
+	for index := range lines {
+		if lines[index].Line == line.Line && lines[index].Text == line.Text {
+			start = index
+			break
+		}
+	}
+	if start < 0 {
+		return line.Text
+	}
+	var b strings.Builder
+	depth := 0
+	for index := start; index < len(lines); index++ {
+		if index > start && strings.Contains(lines[index].Text, "exec.Command") {
+			break
+		}
+		b.WriteString(lines[index].Text)
+		b.WriteByte('\n')
+		depth += strings.Count(lines[index].Text, "(") - strings.Count(lines[index].Text, ")")
+		if depth <= 0 {
+			break
+		}
+	}
+	return b.String()
+}
+
+func assignedPrimaryName(line string) string {
+	match := assignment.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return ""
+	}
+	return match[1]
+}
+
+func assignedSecondaryName(line string) string {
+	match := assignment.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return ""
+	}
+	return match[2]
+}
+
+func callsMethodOrFunction(context, name, suffix string) bool {
+	if name == "" {
+		return false
+	}
+	return regexp.MustCompile(`\b` + regexp.QuoteMeta(name+suffix) + `\s*\(`).MatchString(context)
 }
 
 func isDynamicShellCommand(line string) bool {
@@ -277,14 +366,14 @@ func missingTestFile(input ParsedInput) string {
 			continue
 		}
 		if strings.HasSuffix(file, "_test.go") {
-			testDirs[packageFor(file)] = true
+			testDirs[packageDir(file)] = true
 		}
 	}
 	for _, file := range input.Files {
 		if input.Statuses[file] == fileDeleted || !strings.HasSuffix(file, ".go") || strings.HasSuffix(file, "_test.go") {
 			continue
 		}
-		if !testDirs[packageFor(file)] {
+		if !testDirs[packageDir(file)] {
 			return file
 		}
 	}

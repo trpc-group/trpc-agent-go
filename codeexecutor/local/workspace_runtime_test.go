@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -67,6 +66,30 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Contains(t, res.Stdout, "hello runtime")
+}
+
+func TestRuntime_RunProgramOutputLimit(t *testing.T) {
+	rt := local.NewRuntime("")
+	ws, err := rt.CreateWorkspace(context.Background(), "rt-output-limit", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd: os.Args[0], Args: []string{"-test.run=TestRuntime_RunProgramOutputLimitHelper"},
+		Env: map[string]string{"TRPC_OUTPUT_LIMIT_HELPER": "1"}, MaxOutputBytes: 4,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "abcd", res.Stdout)
+	require.Equal(t, "uvwx", res.Stderr)
+	require.True(t, res.StdoutTruncated)
+	require.True(t, res.StderrTruncated)
+}
+
+func TestRuntime_RunProgramOutputLimitHelper(t *testing.T) {
+	if os.Getenv("TRPC_OUTPUT_LIMIT_HELPER") != "1" {
+		return
+	}
+	_, _ = fmt.Fprint(os.Stdout, "abcdef")
+	_, _ = fmt.Fprint(os.Stderr, "uvwxyz")
+	os.Exit(0)
 }
 
 func TestRuntime_PathListSeparator(t *testing.T) {

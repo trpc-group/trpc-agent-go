@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -17,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -34,7 +34,8 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if err != nil {
 		return Report{}, ReportPaths{}, err
 	}
-	if err := loadReviewSkill(baseDir); err != nil {
+	reviewSkill, err := loadReviewSkill(baseDir)
+	if err != nil {
 		return Report{}, ReportPaths{}, err
 	}
 	input, mode, err := loadInput(ctx, cfg, baseDir)
@@ -46,7 +47,12 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 		taskID = newTaskID()
 	}
 	task := Task{ID: taskID, Status: TaskRunning, InputMode: mode, StartedAt: started}
-	findings, warnings, needsHuman, filterAudit := analyzeWithDecisions(input)
+	findings, warnings, needsHuman, filterAudit := analyzeWithRuleIDs(input, reviewSkill.RuleIDs)
+	store, err := cfg.StoreFactory(ctx, cfg)
+	if err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("open review store: %w", err)
+	}
+	defer store.Close()
 	sandboxRunner, err := newSandbox(ctx, cfg, baseDir)
 	if err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("initialize sandbox: %w", err)
@@ -66,27 +72,21 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	}
 	filterAudit = append(retainedAudit, filterDecisions(needsHuman, "needs_human_review", FilterRouteHuman)...)
 	needsHuman = dedupe(needsHuman)
-	task.Status, task.EndedAt = TaskCompleted, time.Now()
 	report := Report{
 		Task: task, Input: input.Summary, Findings: findings, Warnings: warnings,
 		NeedsHumanReview: needsHuman, SandboxRuns: runs, PermissionDecisions: decisions,
 		Artifacts: sandboxArtifacts, Mode: executionMode(cfg), FilterDecisions: filterAudit,
 	}
-	report.Metrics = collectMetrics(started, report)
 	report.Conclusion = conclusion(report)
-	report, paths, staged, err := stageReport(report, cfg.OutputDir)
-	if err != nil {
-		return Report{}, ReportPaths{}, err
-	}
-	defer staged.cleanup()
-	store, err := openStore(cfg.DatabasePath)
-	if err != nil {
-		return Report{}, ReportPaths{}, fmt.Errorf("open review database: %w", err)
-	}
-	defer store.Close()
 	if err := store.Save(ctx, report); err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("store review: %w", err)
 	}
+	rollbackStore := true
+	defer func() {
+		if rollbackStore {
+			_ = store.Delete(context.WithoutCancel(ctx), task.ID)
+		}
+	}()
 	stored, err := store.Load(ctx, task.ID)
 	if err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("load stored review: %w", err)
@@ -94,12 +94,30 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if stored.Task.ID != task.ID {
 		return Report{}, ReportPaths{}, errors.New("stored review task ID mismatch")
 	}
+	report.Task.Status, report.Task.EndedAt = TaskCompleted, time.Now()
+	report.Metrics = collectMetrics(started, report)
+	report, paths, staged, err := stageReport(report, cfg.OutputDir)
+	if err != nil {
+		return Report{}, ReportPaths{}, err
+	}
+	defer staged.cleanup()
+	if err := store.Finalize(ctx, report); err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("finalize stored review: %w", err)
+	}
+	stored, err = store.Load(ctx, task.ID)
+	if err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("load finalized review: %w", err)
+	}
+	if stored.Task.Status != TaskCompleted || stored.Metrics.TotalDurationMS != report.Metrics.TotalDurationMS {
+		return Report{}, ReportPaths{}, errors.New("finalized review verification mismatch")
+	}
 	if err := staged.commit(); err != nil {
 		if rollbackErr := store.Delete(context.WithoutCancel(ctx), task.ID); rollbackErr != nil {
 			return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w; rollback stored review: %v", err, rollbackErr)
 		}
 		return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w", err)
 	}
+	rollbackStore = false
 	return report, paths, nil
 }
 
@@ -135,6 +153,9 @@ func normalizeConfig(cfg *Config) error {
 	if cfg.DryRun {
 		cfg.Executor = ExecutorFake
 	}
+	if cfg.StoreFactory == nil {
+		cfg.StoreFactory = defaultStoreFactory
+	}
 	return nil
 }
 
@@ -150,27 +171,44 @@ func exampleDir() (string, error) {
 	return dir, nil
 }
 
-func loadReviewSkill(baseDir string) error {
+type loadedReviewSkill struct {
+	RuleIDs map[string]bool
+}
+
+func loadReviewSkill(baseDir string) (loadedReviewSkill, error) {
 	repository, err := skill.NewFSRepository(filepath.Join(baseDir, "skills"))
 	if err != nil {
-		return err
+		return loadedReviewSkill{}, err
 	}
 	loaded, err := repository.Get("code-review")
 	if err != nil {
-		return err
+		return loadedReviewSkill{}, err
 	}
 	if strings.TrimSpace(loaded.Body) == "" || len(loaded.Docs) == 0 {
-		return errors.New("code-review skill must include a body and rule documentation")
+		return loadedReviewSkill{}, errors.New("code-review skill must include a body and rule documentation")
 	}
 	path, err := repository.Path("code-review")
 	if err != nil {
-		return err
+		return loadedReviewSkill{}, err
 	}
 	if _, err := os.Stat(filepath.Join(path, "scripts", "diff_stats.sh")); err != nil {
-		return err
+		return loadedReviewSkill{}, err
 	}
-	return nil
+	doc, err := os.ReadFile(filepath.Join(path, "docs", "go-review-rules.md"))
+	if err != nil {
+		return loadedReviewSkill{}, err
+	}
+	ruleIDs := map[string]bool{}
+	for _, match := range regexpRuleID.FindAllString(string(doc), -1) {
+		ruleIDs[strings.Trim(match, "`")] = true
+	}
+	if len(ruleIDs) == 0 {
+		return loadedReviewSkill{}, errors.New("code-review skill declares no rule IDs")
+	}
+	return loadedReviewSkill{RuleIDs: ruleIDs}, nil
 }
+
+var regexpRuleID = regexp.MustCompile("`go/[a-z0-9_/-]+`")
 
 func sandboxReviewItems(runs []SandboxRun) []Finding {
 	var result []Finding

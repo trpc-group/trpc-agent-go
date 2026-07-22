@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -16,11 +15,18 @@ import (
 )
 
 var redactionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(password|passwd|token|api[_-]?key|client[_-]?secret|private[_-]?key)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`),
+	regexp.MustCompile(`(?i)(password|passwd|token|api[_-]?key|client[_-]?secret|private[_-]?key|secret)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)`),
 	regexp.MustCompile(`(?i)\b(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{16,}|xox[baprs]-[A-Za-z0-9-]{16,})\b`),
+	regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`),
+	regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}`),
+	regexp.MustCompile(`\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b`),
 	regexp.MustCompile(`(?i)(postgres(?:ql)?|mysql)://[^\s"']+`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
 }
+
+var secretLiteralAssignment = regexp.MustCompile(
+	`(?i)\b(?:password|passwd|token|api[_-]?key|apikey|client[_-]?secret|secret|private[_-]?key)\b\s*(?::=|=|:)\s*("[^"]+"|'[^']+'|` + "`[^`]+`" + `)`,
+)
 
 func redact(value string) string {
 	for index, pattern := range redactionPatterns {
@@ -46,9 +52,9 @@ func truncate(value string, limit int) (string, bool) {
 }
 
 func looksSecret(value string) bool {
-	lower := strings.ToLower(value)
-	for _, key := range []string{"password", "passwd", "token", "api_key", "apikey", "secret", "private_key"} {
-		if strings.Contains(lower, key) && strings.ContainsAny(value, `="':`) {
+	if match := secretLiteralAssignment.FindStringSubmatch(value); len(match) == 2 {
+		literal := strings.Trim(match[1], "\"'`")
+		if plausibleSecretLiteral(literal) {
 			return true
 		}
 	}
@@ -58,4 +64,17 @@ func looksSecret(value string) bool {
 		}
 	}
 	return false
+}
+
+func plausibleSecretLiteral(value string) bool {
+	if len(value) < 8 || regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`).MatchString(value) {
+		return false
+	}
+	lower := strings.ToLower(value)
+	for _, marker := range []string{"x-token", "authorization", "content-type", "api-key", "bearer"} {
+		if lower == marker {
+			return false
+		}
+	}
+	return true
 }

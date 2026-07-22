@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
@@ -12,6 +11,7 @@ package review
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -63,6 +63,94 @@ func TestCleanFixtureHasNoObservation(t *testing.T) {
 	findings, warnings, human := analyze(input)
 	if len(findings)+len(warnings)+len(human) != 0 {
 		t.Fatalf("unexpected observations: %+v %+v %+v", findings, warnings, human)
+	}
+}
+
+func TestLooksSecretRequiresLiteralCredentialEvidence(t *testing.T) {
+	cases := []struct {
+		line string
+		want bool
+	}{
+		{`token := os.Getenv("TOKEN")`, false},
+		{"Token string `json:\"token\"`", false},
+		{`cfg.APIKey = lookup("API_KEY")`, false},
+		{`const tokenHeader = "X-Token"`, false},
+		{`const apiKeyEnv = "API_KEY"`, false},
+		{`password := "correct horse battery staple"`, true},
+		{`const token = "ghp_abcdefghijklmnopqrstuvwxyz123456"`, true},
+	}
+	for _, test := range cases {
+		if got := looksSecret(test.line); got != test.want {
+			t.Errorf("looksSecret(%q) = %t, want %t", test.line, got, test.want)
+		}
+	}
+}
+
+func TestCleanupInAnotherHunkDoesNotSuppressFinding(t *testing.T) {
+	raw := "diff --git a/read.go b/read.go\n--- a/read.go\n+++ b/read.go\n@@ -1 +1,2 @@\n package read\n+f, err := os.Open(name)\n@@ -20 +21,2 @@\n func other() {}\n+defer other.Close()\n"
+	input, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, _, _ := analyze(input)
+	if !hasRule(findings, "go/resource/close") {
+		t.Fatalf("unrelated hunk suppressed resource finding: %+v", findings)
+	}
+}
+
+func TestCleanupMustMatchAcquiredVariable(t *testing.T) {
+	raw := "diff --git a/read.go b/read.go\n--- a/read.go\n+++ b/read.go\n@@ -1 +1,4 @@\n package read\n+f, err := os.Open(name)\n+defer other.Close()\n+return err\n"
+	input, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, _, _ := analyze(input)
+	if !hasRule(findings, "go/resource/close") {
+		t.Fatalf("unrelated variable suppressed resource finding: %+v", findings)
+	}
+}
+
+func TestSkillRuleIDsControlEnabledRules(t *testing.T) {
+	input := ParsedInput{Lines: []ChangedLine{{File: "a.go", Line: 1, Text: `password := "correct horse battery staple"`, Hunk: -1}}}
+	findings, _, _, _ := analyzeWithRuleIDs(input, map[string]bool{"go/error/ignored": true})
+	if hasRule(findings, "go/security/hardcoded-secret") {
+		t.Fatal("rule absent from the loaded Skill was executed")
+	}
+}
+
+func TestRedactsCommonCredentialFormats(t *testing.T) {
+	values := []string{
+		"AKIAABCDEFGHIJKLMNOP",
+		"Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+		"eyJabcdefghijk.abcdefghijkl.abcdefghijkl",
+	}
+	for _, value := range values {
+		if got := redact(value); strings.Contains(got, value) || !strings.Contains(got, "[REDACTED]") {
+			t.Errorf("credential was not redacted: %q", got)
+		}
+	}
+}
+
+func TestRuleAssociationHelpersRejectMissingNames(t *testing.T) {
+	if assignedPrimaryName("value = call()") != "" || assignedSecondaryName("value = call()") != "" {
+		t.Fatal("assignment helper invented a variable")
+	}
+	if callsMethodOrFunction("cancel()", "", "") {
+		t.Fatal("empty variable name matched a call")
+	}
+	if !callsMethodOrFunction("defer tx.Rollback()", "tx", ".Rollback") {
+		t.Fatal("qualified cleanup call was not matched")
+	}
+}
+
+func TestPlausibleSecretLiteralFiltersLabels(t *testing.T) {
+	for _, value := range []string{"short", "API_KEY", "authorization", "content-type", "api-key", "bearer"} {
+		if plausibleSecretLiteral(value) {
+			t.Errorf("label %q was treated as secret material", value)
+		}
+	}
+	if !plausibleSecretLiteral("correct horse battery staple") {
+		t.Fatal("credential-like literal was rejected")
 	}
 }
 
@@ -168,6 +256,25 @@ func TestDynamicShellDetectsMultilineInvocation(t *testing.T) {
 	findings, _, _ := analyze(input)
 	if !hasRule(findings, "go/security/dynamic-shell") {
 		t.Fatalf("multiline dynamic shell was missed: %+v", findings)
+	}
+}
+
+func TestDynamicShellDoesNotTaintSafeInvocationInSameHunk(t *testing.T) {
+	raw := "diff --git a/run.go b/run.go\n--- a/run.go\n+++ b/run.go\n@@ -1 +1,3 @@\n package run\n+safe := exec.Command(\"go\", \"test\", \"./...\")\n+unsafe := exec.Command(\"bash\", \"-c\", userInput)\n"
+	input, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, _, _ := analyze(input)
+	count, line := 0, 0
+	for _, finding := range findings {
+		if finding.RuleID == "go/security/dynamic-shell" {
+			count++
+			line = finding.Line
+		}
+	}
+	if count != 1 || line != 3 {
+		t.Fatalf("dynamic shell findings = %d at line %d: %+v", count, line, findings)
 	}
 }
 
