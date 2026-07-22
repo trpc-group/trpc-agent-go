@@ -1,0 +1,12 @@
+[
+  {"id":"safe-go-test","request":{"tool_name":"workspace_exec","backend":"workspace","command":"go test ./tool/...","timeout_ms":90000,"max_output_bytes":524288},"expected_decision":"allow"},
+  {"id":"safe-go-vet","request":{"tool_name":"workspace_exec","backend":"workspace","command":"go vet ./tool/...","timeout_ms":90000,"max_output_bytes":524288},"expected_decision":"allow"},
+  {"id":"safe-git-diff","request":{"tool_name":"workspace_exec","backend":"workspace","command":"git diff --stat","timeout_ms":20000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-git-status","request":{"tool_name":"workspace_exec","backend":"workspace","command":"git status --short","timeout_ms":20000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-readme","request":{"tool_name":"workspace_exec","backend":"workspace","command":"cat README.md","timeout_ms":10000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-grep","request":{"tool_name":"workspace_exec","backend":"workspace","command":"grep Permission README.md","timeout_ms":10000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-pipeline","request":{"tool_name":"workspace_exec","backend":"workspace","command":"git diff --name-only | grep '.go'","timeout_ms":20000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-go-help","request":{"tool_name":"workspace_exec","backend":"workspace","command":"go help test","timeout_ms":10000,"max_output_bytes":16384},"expected_decision":"allow"},
+  {"id":"safe-allowlisted-go","request":{"tool_name":"workspace_exec","backend":"workspace","command":"curl https://go.dev/doc/","timeout_ms":20000,"max_output_bytes":8192},"expected_decision":"allow"},
+  {"id":"safe-allowlisted-proxy","request":{"tool_name":"workspace_exec","backend":"workspace","command":"curl https://proxy.golang.org/","timeout_ms":20000,"max_output_bytes":8192},"expected_decision":"allow"}
+]

@@ -29,8 +29,8 @@ type CallableTool interface {
 }
 
 // StreamableTool defines the interface for tools that support streaming operations.
-// This interface extends the basic CallableTool interface to provide streaming capabilities,
-// allowing tools to return data progressively rather than all at once.
+// This interface extends Tool with streaming capabilities, allowing tools to
+// return data progressively rather than all at once.
 type StreamableTool interface {
 	// StreamableCall initiates a call to the tool that supports streaming.
 	// It takes a context for cancellation and timeout control, and JSON-encoded
