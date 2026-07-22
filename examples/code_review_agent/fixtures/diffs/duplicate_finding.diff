@@ -1,0 +1,18 @@
+diff --git a/duplicate.go b/duplicate.go
+new file mode 100644
+--- /dev/null
++++ b/duplicate.go
+@@ -0,0 +1,7 @@
++package fixture
++
++import "os/exec"
++
++func duplicateCommand(input string) error {
++	return exec.Command("sh", "-c", input).Run()
++}
+diff --git a/duplicate_test.go b/duplicate_test.go
+new file mode 100644
+--- /dev/null
++++ b/duplicate_test.go
+@@ -0,0 +1 @@
++package fixture

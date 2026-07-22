@@ -1,0 +1,8 @@
+diff --git a/behavior.go b/behavior.go
+new file mode 100644
+--- /dev/null
++++ b/behavior.go
+@@ -0,0 +1,3 @@
++package fixture
++
++func Enabled() bool { return true }

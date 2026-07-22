@@ -1,0 +1,27 @@
+diff --git a/worker.go b/worker.go
+new file mode 100644
+--- /dev/null
++++ b/worker.go
+@@ -0,0 +1,16 @@
++package fixture
++
++import "context"
++
++func start(ctx context.Context) {
++	child, cancel := context.WithCancel(ctx)
++	go func() {
++		for {
++			work()
++		}
++	}()
++	_ = child
++	_ = cancel
++}
++
++func work() {}
+diff --git a/worker_test.go b/worker_test.go
+new file mode 100644
+--- /dev/null
++++ b/worker_test.go
+@@ -0,0 +1 @@
++package fixture
