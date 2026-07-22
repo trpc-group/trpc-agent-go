@@ -56,14 +56,13 @@ func (*deterministicSummarizer) Metadata() map[string]any {
 }
 
 type serviceBackend struct {
-	name         string
-	sessions     frameworksession.Service
-	tracks       frameworksession.TrackService
-	memories     frameworkmemory.Service
-	summarizer   *deterministicSummarizer
-	key          frameworksession.Key
-	unsupported  map[string]string
-	modeledState map[string]bool
+	name        string
+	sessions    frameworksession.Service
+	tracks      frameworksession.TrackService
+	memories    frameworkmemory.Service
+	summarizer  *deterministicSummarizer
+	key         frameworksession.Key
+	unsupported map[string]string
 }
 
 func NewInMemoryBackend() Backend {
@@ -132,12 +131,11 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 	}
 	b.key = frameworksession.Key{AppName: replayApp, UserID: replayUser, SessionID: input.SessionID}
 	b.unsupported = cloneStringMap(input.Unsupported)
-	b.modeledState = make(map[string]bool, len(input.State))
-	for key := range input.State {
-		b.modeledState[key] = true
-	}
 	if b.unsupported == nil {
 		b.unsupported = map[string]string{}
+	}
+	if len(input.Tracks) > 0 {
+		b.unsupported["/state/tracks"] = "track service maintains its track index in session state"
 	}
 	// Capability paths are assigned only after applying the comparator's
 	// canonical ordering, so an exception cannot drift to a different element.
@@ -152,8 +150,7 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 		}
 		for key := range item.Metadata {
 			if key != "topics" {
-				b.unsupported[prefix+"/metadata"] = "memory services persist topics but not arbitrary metadata"
-				break
+				b.unsupported[prefix+"/metadata/"+key] = "memory services do not persist this metadata field"
 			}
 		}
 	}
@@ -293,11 +290,6 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("decode session state: %w", err)
 	}
-	for key := range state {
-		if !b.modeledState[key] {
-			delete(state, key)
-		}
-	}
 	out := Snapshot{
 		SessionID: b.key.SessionID, State: state,
 		Unsupported: cloneStringMap(b.unsupported),
@@ -330,7 +322,8 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 		}
 		out.Summaries = append(out.Summaries, Summary{
 			ID: "summary:" + filterKey, SessionID: b.key.SessionID, FilterKey: filterKey,
-			Text: item.Summary, Version: version, UpdatedAt: item.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			Text: item.Summary, Version: version, Boundary: snapshotSummaryBoundary(item.Boundary, sess.Events),
+			UpdatedAt: item.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		})
 	}
 	for _, history := range sess.Tracks {
@@ -345,6 +338,32 @@ func (b *serviceBackend) Load() (Snapshot, error) {
 		}
 	}
 	return out, nil
+}
+
+func snapshotSummaryBoundary(boundary *frameworksession.SummaryBoundary, events []frameworkevent.Event) *SummaryBoundary {
+	if boundary == nil {
+		return nil
+	}
+	out := &SummaryBoundary{Version: boundary.Version, FilterKey: boundary.FilterKey}
+	if boundary.LastEventID == "" {
+		return out
+	}
+	for i := range events {
+		if events[i].ID != boundary.LastEventID {
+			continue
+		}
+		if _, generated := events[i].Extensions[generatedEventIDKey]; !generated {
+			out.LastEventID = boundary.LastEventID
+			return out
+		}
+		out.LastEventSeq = i + 1
+		if raw, ok := events[i].Extensions[seqKey]; ok {
+			_ = json.Unmarshal(raw, &out.LastEventSeq)
+		}
+		return out
+	}
+	out.LastEventID = boundary.LastEventID
+	return out
 }
 
 func (b *serviceBackend) Close() error {

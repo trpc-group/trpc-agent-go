@@ -5,6 +5,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"strings"
 	"testing"
 )
 
@@ -140,12 +142,184 @@ func TestBackendCapabilityPathsUseCanonicalOrder(t *testing.T) {
 	if _, ok := service.unsupported["/memories/0/scope"]; ok {
 		t.Fatalf("scope exception moved to a different memory: %+v", service.unsupported)
 	}
-	if _, ok := service.unsupported["/memories/1/metadata"]; !ok {
+	if _, ok := service.unsupported["/memories/1/metadata/private"]; !ok {
 		t.Fatalf("metadata exception did not follow canonical memory order: %+v", service.unsupported)
 	}
 	if _, ok := service.unsupported["/summaries/1/id"]; !ok {
 		t.Fatalf("summary ID exception did not follow canonical summary order: %+v", service.unsupported)
 	}
+}
+
+func TestMetadataAllowanceDoesNotCoverPersistedTopics(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	fixture := base("mixed-metadata")
+	fixture.Memories = []Memory{{
+		Content: "memory", Scope: "user",
+		Metadata: map[string]any{"topics": []string{"kept"}, "private": true},
+	}}
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Memories[0].Metadata["topics"] = []string{"changed"}
+	diffs := Compare("mixed-metadata", backend.Name(), fixture, got)
+	foundTopic := false
+	foundPrivate := false
+	for _, diff := range diffs {
+		if diff.Path == "/memories/0/metadata/topics/0" {
+			foundTopic = true
+			if diff.Allowed {
+				t.Fatalf("persisted topics were covered by metadata allowance: %+v", diffs)
+			}
+		}
+		if diff.Path == "/memories/0/metadata/private" {
+			foundPrivate = true
+			if !diff.Allowed {
+				t.Fatalf("unsupported private metadata was not allowed: %+v", diffs)
+			}
+		}
+	}
+	if !foundTopic {
+		t.Fatalf("topic mutation was not detected: %+v", diffs)
+	}
+	if !foundPrivate {
+		t.Fatalf("private metadata loss was not reported: %+v", diffs)
+	}
+}
+
+func TestUnexpectedStateIsNotErased(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	fixture := base("unexpected-state")
+	if err := backend.Begin(fixture); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.UpdateState("unexpected", true); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diffs := Compare("unexpected-state", backend.Name(), fixture, got)
+	if len(diffs) != 1 || diffs[0].Path != "/state/unexpected" || diffs[0].Allowed {
+		t.Fatalf("unexpected state was hidden: %+v", diffs)
+	}
+}
+
+func TestSummaryBoundaryMutationIsDetected(t *testing.T) {
+	fixture := Cases()[6].Expected()
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diffs := Compare("summary-boundary", backend.Name(), fixture, got); hasNonAllowed(diffs) {
+		t.Fatalf("boundary did not round-trip: %+v", diffs)
+	}
+	got.Summaries[0].Boundary.LastEventSeq--
+	diffs := Compare("summary-boundary", backend.Name(), fixture, got)
+	if len(diffs) == 0 || !hasNonAllowed(diffs) {
+		t.Fatalf("boundary mutation was not detected: %+v", diffs)
+	}
+	got.Summaries[0].Boundary = nil
+	diffs = Compare("summary-boundary", backend.Name(), fixture, got)
+	if len(diffs) == 0 || !hasNonAllowed(diffs) {
+		t.Fatalf("missing boundary was not detected: %+v", diffs)
+	}
+}
+
+func TestStableSummaryBoundaryMutationIsDetected(t *testing.T) {
+	fixture := base("stable-summary-boundary", Event{
+		ID: "stable-event", Seq: 1, Role: "user", Content: "summarize", FilterKey: "all",
+	})
+	fixture.Summaries = []Summary{{
+		ID: "summary:all", SessionID: fixture.SessionID, FilterKey: "all", Text: "summary", Version: 1,
+	}}
+	fixture.Summaries[0].Boundary = expectedSummaryBoundary(fixture.Events, "all")
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diffs := Compare("stable-summary-boundary", backend.Name(), fixture, got); hasNonAllowed(diffs) {
+		t.Fatalf("stable boundary did not round-trip: %+v", diffs)
+	}
+	got.Summaries[0].Boundary.LastEventID = "wrong-event"
+	if diffs := Compare("stable-summary-boundary", backend.Name(), fixture, got); !hasNonAllowed(diffs) {
+		t.Fatalf("stable boundary mutation was not detected: %+v", diffs)
+	}
+}
+
+func TestBackendCapabilityComparisonIsSymmetric(t *testing.T) {
+	withTrack := Cases()[7].Expected()
+	withoutTrack := clone(withTrack)
+	withoutTrack.Tracks = nil
+	withoutTrack.Unsupported = map[string]string{"/tracks": "track capability unavailable"}
+	for _, pair := range []struct{ left, right Snapshot }{
+		{withoutTrack, withTrack}, {withTrack, withoutTrack},
+	} {
+		diffs := CompareBackends("symmetric", "limited-vs-full", pair.left, pair.right)
+		if len(diffs) != 1 || !diffs[0].Allowed {
+			t.Fatalf("capability handling depends on argument order: %+v", diffs)
+		}
+	}
+}
+
+func TestRunReplayCompletesDetectedInjectionCampaign(t *testing.T) {
+	path := t.TempDir() + "/report.json"
+	if err := runReplay(path, true); err != nil {
+		t.Fatalf("complete injection campaign failed: %v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("report was not written: %v", err)
+	}
+}
+
+func TestValidateReplayReportRejectsNormalNonAllowedDifferences(t *testing.T) {
+	report := Report{Differences: []Difference{{Allowed: true}, {Allowed: false}, {Allowed: false}}}
+	err := validateReplayReport(report, false)
+	if err == nil || !strings.Contains(err.Error(), "2 non-allowed") {
+		t.Fatalf("normal non-allowed differences were not rejected: %v", err)
+	}
+}
+
+func TestValidateReplayReportAcceptsCompleteInjectionCampaign(t *testing.T) {
+	report := Report{
+		Cases: 2, DetectedInjected: 2,
+		Differences: []Difference{{Allowed: false}, {Allowed: false}},
+	}
+	if err := validateReplayReport(report, true); err != nil {
+		t.Fatalf("complete injection campaign was rejected: %v", err)
+	}
+}
+
+func TestValidateReplayReportRejectsIncompleteInjectionCampaign(t *testing.T) {
+	err := validateReplayReport(Report{Cases: 3, DetectedInjected: 2}, true)
+	if err == nil || !strings.Contains(err.Error(), "detected 2 of 3") {
+		t.Fatalf("incomplete injection campaign was not rejected: %v", err)
+	}
+}
+
+func hasNonAllowed(diffs []Difference) bool {
+	for _, diff := range diffs {
+		if !diff.Allowed {
+			return true
+		}
+	}
+	return false
 }
 
 func TestStableEventIDRoundTrips(t *testing.T) {

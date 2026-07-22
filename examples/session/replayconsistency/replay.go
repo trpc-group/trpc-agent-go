@@ -41,12 +41,20 @@ type Memory struct {
 	Similarity float64        `json:"similarity,omitempty"`
 }
 type Summary struct {
-	ID        string `json:"id"`
-	SessionID string `json:"session_id"`
-	FilterKey string `json:"filter_key"`
-	Text      string `json:"text"`
-	Version   int    `json:"version"`
-	UpdatedAt string `json:"updated_at,omitempty"`
+	ID        string           `json:"id"`
+	SessionID string           `json:"session_id"`
+	FilterKey string           `json:"filter_key"`
+	Text      string           `json:"text"`
+	Version   int              `json:"version"`
+	Boundary  *SummaryBoundary `json:"boundary,omitempty"`
+	UpdatedAt string           `json:"updated_at,omitempty"`
+}
+
+type SummaryBoundary struct {
+	Version      int    `json:"version"`
+	FilterKey    string `json:"filter_key,omitempty"`
+	LastEventID  string `json:"last_event_id,omitempty"`
+	LastEventSeq int    `json:"last_event_seq,omitempty"`
 }
 type TrackEvent struct {
 	Name         string  `json:"name"`
@@ -125,6 +133,7 @@ func Cases() []ReplayCase {
 		snapshotCase("summary-truncation", func() Snapshot {
 			s := base("s7", Event{Seq: 10, Author: "user", Role: "user", Content: "retained", FilterKey: "conversation"}, Event{Seq: 11, Author: "agent", Role: "assistant", Content: "new", FilterKey: "conversation"})
 			s.Summaries = []Summary{{ID: "sum2", SessionID: "s7", FilterKey: "conversation", Text: "events 1-9", Version: 1}}
+			s.Summaries[0].Boundary = expectedSummaryBoundary(s.Events, s.Summaries[0].FilterKey)
 			return s
 		}, "/summaries", func(s *Snapshot) { s.Summaries = nil }),
 		snapshotCase("track-events", func() Snapshot {
@@ -141,6 +150,7 @@ func summaryUpdateCase() ReplayCase {
 	build := func() Snapshot {
 		s := base("s6", Event{Seq: 1, Author: "user", Role: "user", Content: "summarize this", FilterKey: "all"})
 		s.Summaries = []Summary{{ID: "sum1", SessionID: "s6", FilterKey: "all", Text: "latest summary", Version: 2}}
+		s.Summaries[0].Boundary = expectedSummaryBoundary(s.Events, s.Summaries[0].FilterKey)
 		return s
 	}
 	return ReplayCase{
@@ -328,6 +338,29 @@ func Normalize(s Snapshot) Snapshot {
 	return s
 }
 
+func expectedSummaryBoundary(events []Event, filterKey string) *SummaryBoundary {
+	var last *Event
+	for i := range events {
+		if filterKey != "" && events[i].FilterKey != filterKey &&
+			!strings.HasPrefix(events[i].FilterKey, filterKey+"/") {
+			continue
+		}
+		if last == nil || events[i].Seq > last.Seq {
+			last = &events[i]
+		}
+	}
+	if last == nil {
+		return nil
+	}
+	boundary := &SummaryBoundary{Version: 1, FilterKey: filterKey}
+	if last.ID != "" {
+		boundary.LastEventID = last.ID
+	} else {
+		boundary.LastEventSeq = last.Seq
+	}
+	return boundary
+}
+
 // memoryStableKey uses only fields that both service backends persist. IDs,
 // scope, similarity, and arbitrary metadata are capability-dependent and must
 // never determine which memory receives an allowed-difference rule.
@@ -356,9 +389,25 @@ type Report struct {
 }
 
 func Compare(caseName, backend string, a, b Snapshot) []Difference {
+	return compareWithCapabilities(caseName, backend, a, b, b.Unsupported)
+}
+
+func CompareBackends(caseName, backend string, a, b Snapshot) []Difference {
+	unsupported := cloneStringMap(a.Unsupported)
+	if unsupported == nil {
+		unsupported = map[string]string{}
+	}
+	for path, reason := range b.Unsupported {
+		if _, exists := unsupported[path]; !exists {
+			unsupported[path] = reason
+		}
+	}
+	return compareWithCapabilities(caseName, backend, a, b, unsupported)
+}
+
+func compareWithCapabilities(caseName, backend string, a, b Snapshot, unsupported map[string]string) []Difference {
 	a = Normalize(a)
 	b = Normalize(b)
-	unsupported := b.Unsupported
 	// Unsupported describes backend capabilities rather than replayed data, so it
 	// controls diff classification and is not itself part of the comparison.
 	a.Unsupported = nil
@@ -376,6 +425,12 @@ func toAny(v any) any {
 func walk(c, backend, sid, locator, path string, a, b any, unsupported map[string]string, out *[]Difference) {
 	am, aok := a.(map[string]any)
 	bm, bok := b.(map[string]any)
+	if aok && b == nil {
+		bm, bok = map[string]any{}, true
+	}
+	if bok && a == nil {
+		am, aok = map[string]any{}, true
+	}
 	if aok && bok {
 		keys := map[string]bool{}
 		for k := range am {
