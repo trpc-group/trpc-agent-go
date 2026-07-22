@@ -1,0 +1,7 @@
+{
+  "OPENAI_API_KEY": "",
+  "OPENAI_BASE_URL": "https://api.openai.com/v1",
+  "TRPC_AGENT_MODEL": "gpt-4o-mini",
+  "fixture": "goroutine_context_leak",
+  "timeout_seconds": 90
+}

@@ -11,6 +11,9 @@ package reviewagent
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +82,58 @@ func TestReviewLLMModeRequiresAPIKey(t *testing.T) {
 	}
 }
 
+// TestReviewLLMModeRequiresModelName verifies empty model names fail before a request.
+func TestReviewLLMModeRequiresModelName(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	_, err := Review(context.Background(), Config{Mode: ModeLLM}, testFiles())
+	if err == nil || !strings.Contains(err.Error(), "model name") {
+		t.Fatalf("expected missing model name error, got %v", err)
+	}
+}
+
+// TestReviewLLMModeRejectsMalformedContent verifies a successful HTTP response
+// still fails model review when it violates the JSON contract.
+func TestReviewLLMModeRejectsMalformedContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeChatCompletion(t, w, "not a JSON review")
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+
+	out, err := Review(context.Background(), Config{
+		Mode: ModeLLM, ModelName: "test-model", TaskID: "malformed", Timeout: time.Second,
+	}, testFiles())
+	if err == nil {
+		t.Fatal("expected malformed model content error")
+	}
+	if out.ModelCalls != 1 {
+		t.Fatalf("model calls = %d, want 1", out.ModelCalls)
+	}
+}
+
+// TestReviewLLMModeHonorsTimeout verifies a stalled provider is canceled.
+func TestReviewLLMModeHonorsTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		writeChatCompletion(t, w, `{"summary":"late response","findings":[]}`)
+	}))
+	defer server.Close()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+
+	start := time.Now()
+	_, err := Review(context.Background(), Config{
+		Mode: ModeLLM, ModelName: "test-model", TaskID: "timeout", Timeout: 50 * time.Millisecond,
+	}, testFiles())
+	if err == nil {
+		t.Fatal("expected model timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("model timeout took %v, expected prompt cancellation", elapsed)
+	}
+}
+
 // TestBuildPromptContainsFileAndLines verifies prompts embed the diff context.
 func TestBuildPromptContainsFileAndLines(t *testing.T) {
 	prompt := BuildPrompt(testFiles())
@@ -89,5 +144,35 @@ func TestBuildPromptContainsFileAndLines(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}
+	}
+}
+
+// TestBuildPromptEnforcesHardByteCap verifies one untrusted line cannot exceed
+// the outbound request limit.
+func TestBuildPromptEnforcesHardByteCap(t *testing.T) {
+	files := testFiles()
+	files[0].Hunks[0].Lines[0].Content = strings.Repeat("x", promptByteCap*2)
+	prompt := BuildPrompt(files)
+	if len(prompt) > promptByteCap {
+		t.Fatalf("prompt bytes = %d, cap = %d", len(prompt), promptByteCap)
+	}
+	if !strings.Contains(prompt, "[diff truncated]") {
+		t.Fatal("oversized prompt is missing truncation marker")
+	}
+}
+
+// writeChatCompletion writes the minimal non-streaming OpenAI response used by
+// endpoint behavior tests.
+func writeChatCompletion(t *testing.T, w http.ResponseWriter, content string) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]any{
+		"id": "chatcmpl-test", "object": "chat.completion", "created": 1,
+		"model": "test-model", "choices": []any{map[string]any{
+			"index": 0, "message": map[string]any{"role": "assistant", "content": content},
+			"finish_reason": "stop",
+		}},
+	}); err != nil {
+		t.Errorf("write response: %v", err)
 	}
 }

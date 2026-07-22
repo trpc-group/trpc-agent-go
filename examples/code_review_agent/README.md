@@ -20,7 +20,8 @@ The default path is `rule-only` and does not require a model API key.
   testable.
 - `llm`: same orchestration with a real OpenAI-compatible model. Requires
   `OPENAI_API_KEY` (and optionally `OPENAI_BASE_URL`); pick the model with
-  `--model` or the `MODEL_NAME` environment variable.
+  `--model` or the `TRPC_AGENT_MODEL` environment variable. `MODEL_NAME`
+  remains supported for compatibility with other examples.
 
 Model findings are validated before they are trusted: confidence is clamped,
 severity/category are normalized, evidence is redacted, and findings that
@@ -51,15 +52,62 @@ go run ./code_review_agent \
   --db /tmp/code-review-agent/review.db
 ```
 
-Run with a real model:
+Run with the standard OpenAI endpoint:
 
 ```bash
-export OPENAI_API_KEY=...
+export OPENAI_API_KEY="..."
+export TRPC_AGENT_MODEL="gpt-4o-mini"
 go run ./code_review_agent \
-  --repo-path /path/to/repo \
+  --fixture goroutine_context_leak \
   --mode llm \
-  --model deepseek-v4-flash
+  --model "$TRPC_AGENT_MODEL" \
+  --sandbox mock --dry-run \
+  --timeout 90s
 ```
+
+For DeepSeek or another OpenAI-compatible provider, also set its endpoint and
+an exact model identifier supported by that provider:
+
+```bash
+export OPENAI_API_KEY="..."
+export OPENAI_BASE_URL="https://api.deepseek.com/v1"
+export TRPC_AGENT_MODEL="deepseek-v4-flash"
+```
+
+`OPENAI_BASE_URL` is passed explicitly to the framework model so provider
+variant detection and the HTTP client use the same endpoint. Without
+`OPENAI_BASE_URL`, the endpoint is the standard OpenAI API and the default
+model is `gpt-4o-mini`.
+
+## Credentialed real-model smoke test
+
+The repository includes a PowerShell smoke test that calls a real
+OpenAI-compatible Chat Completions endpoint and then validates the generated
+report. The live credential file and output directory are ignored by Git.
+
+1. Edit
+   `testdata/real_model/real_model_test_config.json`. Set `OPENAI_API_KEY`,
+   `OPENAI_BASE_URL`, and `TRPC_AGENT_MODEL` to values supported by the chosen
+   provider. An empty base URL selects the standard OpenAI endpoint.
+2. From the `examples` module, run:
+
+```powershell
+.\code_review_agent\scripts\run-real-model-test.ps1
+```
+
+The script uses a bundled fixture rather than repository changes, runs with
+`--sandbox mock --dry-run`, and fails unless all of these conditions hold:
+
+- exactly one model call is recorded;
+- model duration is positive;
+- `model_error` is absent or zero; and
+- the summary does not report rule-only degradation.
+
+Successful output is written to
+`testdata/real_model/real_model_test_output/review_report.json`. Do not move a
+real API key into `real_model_test_config.example.json`; that tracked file is
+only a safe template. The normal Go test suite never reads the live credential
+file or contacts an external service.
 
 
 Run all fixtures:

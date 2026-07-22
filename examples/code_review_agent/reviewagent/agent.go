@@ -103,10 +103,19 @@ func buildModel(cfg Config) (model.Model, error) {
 	case ModeFakeModel:
 		return newFakeModel(), nil
 	case ModeLLM:
-		if os.Getenv("OPENAI_API_KEY") == "" {
+		apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		if apiKey == "" {
 			return nil, errors.New("llm mode requires OPENAI_API_KEY; use --mode fake-model for offline runs")
 		}
-		return openai.New(cfg.ModelName), nil
+		modelName := strings.TrimSpace(cfg.ModelName)
+		if modelName == "" {
+			return nil, errors.New("llm mode requires a model name; use --model or TRPC_AGENT_MODEL")
+		}
+		opts := []openai.Option{openai.WithAPIKey(apiKey)}
+		if baseURL := strings.TrimSpace(os.Getenv("OPENAI_BASE_URL")); baseURL != "" {
+			opts = append(opts, openai.WithBaseURL(baseURL))
+		}
+		return openai.New(modelName, opts...), nil
 	default:
 		return nil, fmt.Errorf("unsupported review agent mode %q", cfg.Mode)
 	}
@@ -172,35 +181,51 @@ func collectFinalContent(eventCh <-chan *event.Event) (string, error) {
 // Callers must pass redacted files so secrets never reach a remote model.
 func BuildPrompt(files []review.ChangedFile) string {
 	var b strings.Builder
-	b.WriteString("Review this Go diff and answer with the JSON contract only.\n\n")
+	appendPromptChunk(&b, "Review this Go diff and answer with the JSON contract only.\n\n")
 fileLoop:
 	for _, file := range files {
-		fmt.Fprintf(&b, "FILE: %s", file.NewPath)
+		header := fmt.Sprintf("FILE: %s", file.NewPath)
 		if file.PackageName != "" {
-			fmt.Fprintf(&b, " (package %s)", file.PackageName)
+			header += fmt.Sprintf(" (package %s)", file.PackageName)
 		}
-		b.WriteByte('\n')
+		if !appendPromptChunk(&b, header+"\n") {
+			break
+		}
 		for _, hunk := range file.Hunks {
 			for _, line := range hunk.Lines {
+				var rendered string
 				switch line.Kind {
 				case "added":
-					fmt.Fprintf(&b, "+ %d: %s\n", line.NewLine, line.Content)
+					rendered = fmt.Sprintf("+ %d: %s\n", line.NewLine, line.Content)
 				case "removed":
-					fmt.Fprintf(&b, "- %d: %s\n", line.OldLine, line.Content)
+					rendered = fmt.Sprintf("- %d: %s\n", line.OldLine, line.Content)
 				default:
-					fmt.Fprintf(&b, "  %d: %s\n", line.NewLine, line.Content)
+					rendered = fmt.Sprintf("  %d: %s\n", line.NewLine, line.Content)
 				}
-				// The cap must hold per line: one oversized hunk in an
-				// untrusted diff must not produce an unbounded prompt.
-				if b.Len() > promptByteCap {
-					b.WriteString("[diff truncated]\n")
+				if !appendPromptChunk(&b, rendered) {
 					break fileLoop
 				}
 			}
 		}
-		b.WriteByte('\n')
+		if !appendPromptChunk(&b, "\n") {
+			break
+		}
 	}
 	return b.String()
+}
+
+// appendPromptChunk appends complete prompt chunks without exceeding the
+// outbound request cap. A chunk that does not fit is replaced by a marker.
+func appendPromptChunk(b *strings.Builder, chunk string) bool {
+	if b.Len()+len(chunk) <= promptByteCap {
+		b.WriteString(chunk)
+		return true
+	}
+	const marker = "[diff truncated]\n"
+	if b.Len()+len(marker) <= promptByteCap {
+		b.WriteString(marker)
+	}
+	return false
 }
 
 // intPtr returns a pointer to i.

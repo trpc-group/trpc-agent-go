@@ -81,7 +81,7 @@ func main() {
 
 // parseFlags builds the CLI configuration from command-line flags.
 func parseFlags() config {
-	timeout := flag.Duration("timeout", 30*time.Second, "sandbox command timeout")
+	timeout := flag.Duration("timeout", 30*time.Second, "model and sandbox command timeout")
 	cfg := config{}
 	flag.StringVar(&cfg.diffFile, "diff-file", "", "path to a unified diff file")
 	flag.StringVar(&cfg.files, "files", "", "comma-separated file path list to review")
@@ -142,12 +142,15 @@ func validateMode(mode string) error {
 	}
 }
 
-// defaultModelName picks the model from MODEL_NAME with a sane default.
+// defaultModelName picks the model from the dedicated example setting, keeps
+// MODEL_NAME compatibility, and otherwise defaults to an OpenAI model.
 func defaultModelName() string {
-	if name := os.Getenv("MODEL_NAME"); name != "" {
-		return name
+	for _, key := range []string{"TRPC_AGENT_MODEL", "MODEL_NAME"} {
+		if name := strings.TrimSpace(os.Getenv(key)); name != "" {
+			return name
+		}
 	}
-	return "deepseek-v4-flash"
+	return "gpt-4o-mini"
 }
 
 // queryTask prints the stored snapshot of a previous review task.

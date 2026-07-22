@@ -13,6 +13,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -203,6 +206,90 @@ func TestLLMModeFailureDegradesToRuleOnly(t *testing.T) {
 	if !strings.Contains(report.Summary, "Model review failed") {
 		t.Fatalf("summary missing degradation note: %q", report.Summary)
 	}
+}
+
+// TestDefaultModelName verifies the dedicated setting wins while MODEL_NAME
+// remains supported for compatibility with other examples.
+func TestDefaultModelName(t *testing.T) {
+	t.Setenv("TRPC_AGENT_MODEL", " trpc-model ")
+	t.Setenv("MODEL_NAME", "legacy-model")
+	if got := defaultModelName(); got != "trpc-model" {
+		t.Fatalf("default model = %q, want trpc-model", got)
+	}
+	t.Setenv("TRPC_AGENT_MODEL", "")
+	if got := defaultModelName(); got != "legacy-model" {
+		t.Fatalf("compatibility model = %q, want legacy-model", got)
+	}
+	t.Setenv("MODEL_NAME", "")
+	if got := defaultModelName(); got != "gpt-4o-mini" {
+		t.Fatalf("fallback model = %q, want gpt-4o-mini", got)
+	}
+}
+
+// TestLLMModeOpenAICompatibleEndpoint verifies the real model path uses the
+// configured endpoint, redacts input, parses the response, and records metrics.
+func TestLLMModeOpenAICompatibleEndpoint(t *testing.T) {
+	var requestBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("request path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
+			t.Errorf("authorization = %q", got)
+		}
+		var err error
+		requestBody, err = io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read request: %v", err)
+		}
+		content := `{"summary":"model endpoint review succeeded","findings":[` +
+			`{"severity":"high","category":"security","file":"security/secret.go",` +
+			`"line":3,"title":"Avoid committed credentials","evidence":"redacted credential",` +
+			`"recommendation":"Load the value from a secret store","confidence":0.95,` +
+			`"rule_id":"LLM-SECRET"}]}`
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"id": "chatcmpl-test", "object": "chat.completion", "created": 1,
+			"model": "test-model", "choices": []any{map[string]any{
+				"index": 0, "message": map[string]any{"role": "assistant", "content": content},
+				"finish_reason": "stop",
+			}},
+		}); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", server.URL+"/v1")
+	dir := t.TempDir()
+	cfg := config{
+		fixture: "security_secret", outDir: filepath.Join(dir, "out"),
+		dbPath: filepath.Join(dir, "review.db"), mode: "llm", modelName: "test-model",
+		sandboxKind: "mock", dryRun: true, timeout: 5 * time.Second,
+	}
+	if err := run(context.Background(), cfg); err != nil {
+		t.Fatalf("llm endpoint run failed: %v", err)
+	}
+	for _, secret := range []string{"sk-abcdefghijklmnopqrstuvwxyz123456", "do-not-store-me"} {
+		if strings.Contains(string(requestBody), secret) {
+			t.Fatalf("model request leaked fixture secret %q", secret)
+		}
+	}
+	if !strings.Contains(string(requestBody), "test-model") {
+		t.Fatalf("model request missing configured model: %s", requestBody)
+	}
+	report := readReport(t, filepath.Join(cfg.outDir, "review_report.json"))
+	if report.Metrics.ModelCallCount != 1 || report.Metrics.ExceptionCounts["model_error"] != 0 {
+		t.Fatalf("unexpected model metrics: %+v", report.Metrics)
+	}
+	if !hasRule(report, "LLM-SECRET") {
+		t.Fatal("parsed model finding is missing")
+	}
+	if !strings.Contains(report.Summary, "model endpoint review succeeded") {
+		t.Fatalf("model summary is missing: %q", report.Summary)
+	}
+	assertNoFixtureSecrets(t, filepath.Join(cfg.outDir, "review_report.json"))
 }
 
 // TestCleanFixtureReportsNoFindings verifies clean diffs stay silent.
