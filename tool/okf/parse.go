@@ -26,9 +26,9 @@ import (
 // lines. (?s) lets . span newlines; \A/\z anchor to the whole input.
 var frontmatterRe = regexp.MustCompile(`(?s)\A---\r?\n(.*?)\r?\n---[ \t]*\r?\n?(.*)\z`)
 
-// ConceptID converts a bundle-relative file path ("tables/orders.md", or with a
+// conceptID converts a bundle-relative file path ("tables/orders.md", or with a
 // leading slash) into its concept id ("tables/orders").
-func ConceptID(relPath string) string {
+func conceptID(relPath string) string {
 	return strings.TrimSuffix(path.Clean(strings.TrimPrefix(relPath, "/")), ".md")
 }
 
@@ -43,11 +43,11 @@ func splitRaw(raw []byte) (yamlPart, body []byte, ok bool) {
 	return m[1], m[2], true
 }
 
-// SplitFrontmatter parses raw into its Frontmatter and body. It is tolerant:
+// splitFrontmatter parses raw into its Frontmatter and body. It is best-effort:
 // missing or malformed frontmatter yields a zero Frontmatter and the original
-// bytes as the body (OKF consumers MUST tolerate malformed concepts at runtime;
-// use Validate for the strict producer-side check).
-func SplitFrontmatter(raw []byte) (Frontmatter, []byte) {
+// bytes as the body. Malformed frontmatter is not conformant OKF; use Validate
+// for the strict producer-side check.
+func splitFrontmatter(raw []byte) (Frontmatter, []byte) {
 	yamlPart, body, ok := splitRaw(raw)
 	if !ok {
 		return Frontmatter{}, raw
@@ -95,8 +95,6 @@ func decodeFrontmatter(data []byte) (Frontmatter, error) {
 			fm.Tags = decodeTags(value)
 		case "timestamp":
 			_ = value.Decode(&fm.Timestamp)
-		case "okf_version":
-			_ = value.Decode(&fm.OKFVersion)
 		default:
 			var extra any
 			if err := value.Decode(&extra); err == nil {
@@ -134,12 +132,12 @@ func decodeTags(node *yaml.Node) []string {
 	return tags
 }
 
-// ExtractLinks returns the outgoing .md markdown links in body, each normalized
+// extractLinks returns the outgoing .md markdown links in body, each normalized
 // to a bundle-relative concept id. conceptDir is the directory of the concept
 // owning the body (used to resolve relative links). External URLs are ignored;
 // a #fragment or ?query after a .md target is stripped. Broken links (targets
 // that do not exist) are still returned: consumers must tolerate them.
-func ExtractLinks(conceptDir string, body []byte) []Link {
+func extractLinks(conceptDir string, body []byte) []Link {
 	doc := goldmark.DefaultParser().Parse(text.NewReader(body))
 	var links []Link
 	_ = ast.Walk(doc, func(node ast.Node, entering bool) (ast.WalkStatus, error) {
@@ -167,11 +165,11 @@ func ExtractLinks(conceptDir string, body []byte) []Link {
 // ParseConcept builds a Concept from its raw file bytes. id is the concept's
 // bundle-relative id (path without .md). Parsing is tolerant and never errors.
 func ParseConcept(id string, raw []byte) Concept {
-	fm, body := SplitFrontmatter(raw)
+	fm, body := splitFrontmatter(raw)
 	return Concept{
 		ID:          id,
 		Frontmatter: fm,
 		Body:        string(body),
-		Links:       ExtractLinks(path.Dir(id), body),
+		Links:       extractLinks(path.Dir(id), body),
 	}
 }

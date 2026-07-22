@@ -25,16 +25,13 @@ const (
 	defaultFindLimit = 10
 )
 
-// toolSet adapts a Store into a tool.ToolSet exposing okf_list/okf_read/okf_find.
+// toolSet adapts a Store into a tool.ToolSet, adding okf_find when supported.
 type toolSet struct {
 	store        Store
+	finder       Finder
 	name         string
 	namePrefix   string
-	listEnabled  bool
-	readEnabled  bool
-	findEnabled  bool
 	maxBodyBytes int
-	findLimit    int
 	tools        []tool.Tool
 }
 
@@ -45,13 +42,10 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 		return nil, errors.New("okf: NewToolSet requires a non-nil Store")
 	}
 	t := &toolSet{
-		store:       store,
-		name:        defaultName,
-		listEnabled: true,
-		readEnabled: true,
-		findEnabled: true,
-		findLimit:   defaultFindLimit,
+		store: store,
+		name:  defaultName,
 	}
+	t.finder, _ = store.(Finder)
 	for _, opt := range opts {
 		opt(t)
 	}
@@ -66,20 +60,11 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 			return nil, fmt.Errorf("okf: tool name prefix %q produces a name longer than 64 characters", t.namePrefix)
 		}
 	}
-	if t.findLimit <= 0 {
-		return nil, fmt.Errorf("okf: find limit must be greater than zero")
-	}
 	if t.maxBodyBytes < 0 {
 		return nil, fmt.Errorf("okf: max body bytes must not be negative")
 	}
-	var tools []tool.Tool
-	if t.listEnabled {
-		tools = append(tools, t.listTool())
-	}
-	if t.readEnabled {
-		tools = append(tools, t.readTool())
-	}
-	if t.findEnabled {
+	tools := []tool.Tool{t.listTool(), t.readTool()}
+	if t.finder != nil {
 		tools = append(tools, t.findTool())
 	}
 	t.tools = tools
@@ -89,7 +74,7 @@ func NewToolSet(store Store, opts ...Option) (tool.ToolSet, error) {
 // Tools implements tool.ToolSet.
 func (t *toolSet) Tools(context.Context) []tool.Tool { return t.tools }
 
-// Close implements tool.ToolSet. A local store holds no resources.
+// Close implements tool.ToolSet. The ToolSet does not own the Store lifecycle.
 func (t *toolSet) Close() error { return nil }
 
 // Name implements tool.ToolSet. It reflects WithNamePrefix so several bundles
@@ -150,12 +135,10 @@ type readArgs struct {
 }
 
 func (t *toolSet) readTool() tool.Tool {
-	var notFoundActions []string
-	if t.listEnabled {
-		notFoundActions = append(notFoundActions,
-			fmt.Sprintf("call %s to browse the bundle", t.toolName("okf_list")))
+	notFoundActions := []string{
+		fmt.Sprintf("call %s to browse the bundle", t.toolName("okf_list")),
 	}
-	if t.findEnabled {
+	if t.finder != nil {
 		notFoundActions = append(notFoundActions,
 			fmt.Sprintf("call %s to search by keyword", t.toolName("okf_find")))
 	}
@@ -201,11 +184,8 @@ type findResult struct {
 
 func (t *toolSet) findTool() tool.Tool {
 	description := "Search the OKF bundle for concepts matching a free-text query, " +
-		"optionally filtered by frontmatter type and tags. Returns concept ids with title/description."
-	if t.readEnabled {
-		description += " Then use " + t.toolName("okf_read") +
-			" to read the full content and follow links."
-	}
+		"optionally filtered by frontmatter type and tags. Returns concept ids with title/description. " +
+		"Then use " + t.toolName("okf_read") + " to read the full content and follow links."
 	return function.NewFunctionTool(
 		func(ctx context.Context, a findArgs) (findResult, error) {
 			q := Query{Text: a.Query, Tags: a.Tags}
@@ -218,9 +198,9 @@ func (t *toolSet) findTool() tool.Tool {
 				}
 				q.Limit = *a.Limit
 			} else {
-				q.Limit = t.findLimit
+				q.Limit = defaultFindLimit
 			}
-			hits, err := t.store.Find(ctx, q)
+			hits, err := t.finder.Find(ctx, q)
 			if err != nil {
 				return findResult{}, err
 			}
@@ -230,10 +210,8 @@ func (t *toolSet) findTool() tool.Tool {
 			res := findResult{Hits: hits}
 			if len(hits) == 0 {
 				res.Note = "no concepts matched; try broader terms or drop the type/tags filter"
-				if t.listEnabled {
-					res.Note += ", or call " + t.toolName("okf_list") +
-						" to browse the bundle root"
-				}
+				res.Note += ", or call " + t.toolName("okf_list") +
+					" to browse the bundle root"
 			}
 			return res, nil
 		},

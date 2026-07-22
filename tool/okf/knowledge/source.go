@@ -9,9 +9,11 @@
 
 // Package okfknowledge adapts an okf.Store into the knowledge module as a
 // semantic *locator*: it indexes one non-chunked Document per concept, using
-// the curated title/description/tags as the embedding text and stashing the
-// frontmatter in metadata for filtering. It deliberately does NOT store the
-// body for retrieval — the agent reads full content via the okf_read tool.
+// the concept id and curated frontmatter as the embedding text and stashing
+// selected frontmatter in metadata for filtering. It deliberately does NOT
+// store the full body for retrieval — the agent reads full content via the
+// okf_read tool. A bounded body fallback keeps minimal, type-only concepts
+// discoverable.
 //
 // The intended split of labor:
 //
@@ -23,8 +25,8 @@
 // knowledge core never imports tool/*.
 //
 // Wire the agent so the model knows retrieval returns pointers, not content —
-// each result's Content and Metadata["okf_concept"] carry the concept id. A
-// system-prompt snippet that closes the loop:
+// each result's Content and source URI metadata carry the concept id. A prompt
+// such as the following closes the loop:
 //
 //	Knowledge search over the OKF bundle returns concept summaries and ids, not
 //	full content. To read a concept in full, call okf_read with the concept id
@@ -35,7 +37,10 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"maps"
+	"path"
 	"strings"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
@@ -43,18 +48,19 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
 )
 
-// Metadata keys carried on every indexed concept Document. Filter on them with
-// ScopeFilter or knowledge/tool.WithConditionedFilter.
+// Internal metadata keys carried on indexed concept Documents. ScopeFilter
+// intentionally hides these storage details from callers.
 const (
-	MetaConcept  = "okf_concept"  // Concept id (also mirrored to source.MetaURI).
-	MetaType     = "okf_type"     // Frontmatter type.
-	MetaTitle    = "okf_title"    // Frontmatter title.
-	MetaResource = "okf_resource" // Frontmatter resource URI (provenance).
-	MetaTags     = "okf_tags"     // Frontmatter tags.
+	metaType     = "okf_type"
+	metaTitle    = "okf_title"
+	metaResource = "okf_resource"
+	metaTags     = "okf_tags"
 
 	// metaTagPrefix identifies generated boolean fields used by ScopeFilter.
-	// MetaTags stays in its natural []string form for metadata consumers.
+	// metaTags stays in its natural []string form for metadata consumers.
 	metaTagPrefix = "okf_tag_"
+
+	maxFallbackBodyBytes = 512
 )
 
 // Source adapts an okf.Store into a knowledge source.Source.
@@ -77,7 +83,7 @@ func WithMetadata(m map[string]any) Option {
 	return func(s *Source) {
 		for k, v := range m {
 			switch k {
-			case MetaConcept, MetaType, MetaTitle, MetaResource, MetaTags,
+			case metaType, metaTitle, metaResource, metaTags,
 				ksource.MetaURI, ksource.MetaSource, ksource.MetaSourceName,
 				ksource.MetaChunkIndex:
 				// Identity and OKF-derived metadata are owned by Source.
@@ -107,10 +113,13 @@ func (s *Source) Name() string { return s.name }
 func (s *Source) Type() string { return "okf" }
 
 // GetMetadata implements source.Source.
-func (s *Source) GetMetadata() map[string]any { return s.metadata }
+func (s *Source) GetMetadata() map[string]any { return maps.Clone(s.metadata) }
 
 // ReadDocuments walks the bundle and emits one non-chunked Document per concept.
 func (s *Source) ReadDocuments(ctx context.Context) ([]*document.Document, error) {
+	if s.store == nil {
+		return nil, fmt.Errorf("okfknowledge: nil Store")
+	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -167,20 +176,23 @@ func (s *Source) walk(ctx context.Context, dir string) ([]string, error) {
 
 func (s *Source) toDocument(c okf.Concept) *document.Document {
 	fm := c.Frontmatter
+	title := fm.Title
+	if title == "" {
+		title = path.Base(c.ID)
+	}
 	md := make(map[string]any, len(s.metadata)+8)
 	for k, v := range s.metadata {
 		md[k] = v
 	}
-	md[MetaConcept] = c.ID
-	md[MetaType] = fm.Type
-	md[MetaTitle] = fm.Title
-	md[MetaResource] = fm.Resource
+	md[metaType] = fm.Type
+	md[metaTitle] = title
+	md[metaResource] = fm.Resource
 	md[ksource.MetaURI] = c.ID
 	md[ksource.MetaSource] = s.Type()
 	md[ksource.MetaSourceName] = s.name
 	md[ksource.MetaChunkIndex] = 0
 	if len(fm.Tags) > 0 {
-		md[MetaTags] = append([]string(nil), fm.Tags...)
+		md[metaTags] = append([]string(nil), fm.Tags...)
 		for _, tag := range fm.Tags {
 			md[tagFilterKey(tag)] = true
 		}
@@ -189,28 +201,44 @@ func (s *Source) toDocument(c okf.Concept) *document.Document {
 	// always sees an id it can pass to okf_read, even if the retrieval tool does
 	// not surface metadata. Full body is still served only by okf_read.
 	content := c.ID
+	if title != "" && title != c.ID {
+		content += " — " + title
+	}
 	if fm.Description != "" {
 		content += " — " + fm.Description
 	}
 	return &document.Document{
 		ID:            fmt.Sprintf("%d:%s:%s", len(s.name), s.name, c.ID),
-		Name:          fm.Title,
+		Name:          title,
 		Content:       content,
-		EmbeddingText: embeddingText(fm),
+		EmbeddingText: embeddingText(c, title),
 		Metadata:      md,
 	}
 }
 
-// embeddingText is the curated retrieval signal: title + description + tags.
-func embeddingText(fm okf.Frontmatter) string {
-	parts := make([]string, 0, 3)
-	for _, p := range []string{fm.Title, fm.Description} {
-		if p != "" {
-			parts = append(parts, p)
-		}
+// embeddingText is the locator retrieval signal. Identity and type are always
+// present; a bounded body fallback covers conformant concepts that omit all
+// recommended descriptive fields.
+func embeddingText(c okf.Concept, title string) string {
+	fm := c.Frontmatter
+	parts := []string{"id: " + c.ID}
+	if fm.Type != "" {
+		parts = append(parts, "type: "+fm.Type)
+	}
+	if title != "" {
+		parts = append(parts, "title: "+title)
+	}
+	if fm.Description != "" {
+		parts = append(parts, "description: "+fm.Description)
 	}
 	if len(fm.Tags) > 0 {
-		parts = append(parts, strings.Join(fm.Tags, " "))
+		parts = append(parts, "tags: "+strings.Join(fm.Tags, " "))
+	}
+	if fm.Title == "" && fm.Description == "" && len(fm.Tags) == 0 {
+		body := strings.Join(strings.Fields(c.Body), " ")
+		if body != "" {
+			parts = append(parts, "body: "+truncateUTF8(body, maxFallbackBodyBytes))
+		}
 	}
 	return strings.Join(parts, "\n")
 }
@@ -224,7 +252,7 @@ func embeddingText(fm okf.Frontmatter) string {
 func ScopeFilter(conceptType string, tags ...string) *searchfilter.UniversalFilterCondition {
 	var conds []*searchfilter.UniversalFilterCondition
 	if conceptType != "" {
-		conds = append(conds, searchfilter.Equal(ksource.MetadataFieldPrefix+MetaType, conceptType))
+		conds = append(conds, searchfilter.Equal(ksource.MetadataFieldPrefix+metaType, conceptType))
 	}
 	for _, tag := range tags {
 		conds = append(conds, searchfilter.Equal(
@@ -241,7 +269,17 @@ func ScopeFilter(conceptType string, tags ...string) *searchfilter.UniversalFilt
 }
 
 func tagFilterKey(tag string) string {
-	return metaTagPrefix + hex.EncodeToString([]byte(tag))
+	return metaTagPrefix + hex.EncodeToString([]byte(strings.ToLower(strings.TrimSpace(tag))))
+}
+
+func truncateUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // Upgrade path (not implemented): to add graph-aware retrieval, Source can also

@@ -21,14 +21,14 @@ func TestConceptID(t *testing.T) {
 		"note.md":          "note",
 	}
 	for in, want := range cases {
-		if got := ConceptID(in); got != want {
-			t.Errorf("ConceptID(%q) = %q, want %q", in, got, want)
+		if got := conceptID(in); got != want {
+			t.Errorf("conceptID(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
 
 func TestSplitFrontmatter(t *testing.T) {
-	fm, body := SplitFrontmatter([]byte("---\ntype: Protocol\ntitle: x402\n---\n\n# Body\ntext"))
+	fm, body := splitFrontmatter([]byte("---\ntype: Protocol\ntitle: x402\n---\n\n# Body\ntext"))
 	if fm.Type != "Protocol" || fm.Title != "x402" {
 		t.Errorf("frontmatter not parsed: %+v", fm)
 	}
@@ -37,14 +37,14 @@ func TestSplitFrontmatter(t *testing.T) {
 	}
 
 	// CRLF frontmatter.
-	fm, _ = SplitFrontmatter([]byte("---\r\ntype: T\r\n---\r\nbody"))
+	fm, _ = splitFrontmatter([]byte("---\r\ntype: T\r\n---\r\nbody"))
 	if fm.Type != "T" {
 		t.Errorf("CRLF frontmatter not parsed: %+v", fm)
 	}
 
 	// Optional fields are decoded independently. In particular, scalar tags in
 	// existing OKF bundles must not discard required or recommended metadata.
-	fm, body = SplitFrontmatter([]byte("---\ntype: BigQuery Dataset\ntitle: Stack Overflow\ndescription: [wrong, shape]\ntags: bigquery, dataset, stackoverflow\nowner:\n  team: data\n---\nbody"))
+	fm, body = splitFrontmatter([]byte("---\ntype: BigQuery Dataset\ntitle: Stack Overflow\ndescription: [wrong, shape]\ntags: bigquery, dataset, stackoverflow\nowner:\n  team: data\n---\nbody"))
 	if fm.Type != "BigQuery Dataset" || fm.Title != "Stack Overflow" {
 		t.Errorf("optional field drift discarded metadata: %+v", fm)
 	}
@@ -56,42 +56,42 @@ func TestSplitFrontmatter(t *testing.T) {
 	}
 
 	// No frontmatter: tolerant, whole input is body.
-	fm, body = SplitFrontmatter([]byte("# just markdown"))
+	fm, body = splitFrontmatter([]byte("# just markdown"))
 	if fm.Type != "" || string(body) != "# just markdown" {
 		t.Errorf("no-frontmatter case: fm=%+v body=%q", fm, body)
 	}
 
 	// Malformed YAML: tolerated, not rejected; body kept verbatim.
 	raw := []byte("---\ntype: [unclosed\n---\nbody")
-	fm, body = SplitFrontmatter(raw)
+	fm, body = splitFrontmatter(raw)
 	if fm.Type != "" || string(body) != string(raw) {
 		t.Errorf("bad YAML should be tolerated: fm=%+v body=%q", fm, body)
 	}
 }
 
 func TestSplitFrontmatter_FieldShapes(t *testing.T) {
-	fm, body := SplitFrontmatter([]byte("---\ntype: Protocol\ntitle: Full\ndescription: Summary\nresource: https://example.com/p\ntags: [one, 2, three]\ntimestamp: 2026-07-21T00:00:00Z\nokf_version: \"0.1\"\ncustom: true\n---\nbody"))
+	fm, body := splitFrontmatter([]byte("---\ntype: Protocol\ntitle: Full\ndescription: Summary\nresource: https://example.com/p\ntags: [one, 2, three]\ntimestamp: 2026-07-21T00:00:00Z\nokf_version: \"0.1\"\ncustom: true\n---\nbody"))
 	if fm.Type != "Protocol" || fm.Title != "Full" || fm.Description != "Summary" ||
 		fm.Resource != "https://example.com/p" || fm.Timestamp != "2026-07-21T00:00:00Z" ||
-		fm.OKFVersion != "0.1" || fm.Extra["custom"] != true || string(body) != "body" {
+		fm.Extra["okf_version"] != "0.1" || fm.Extra["custom"] != true || string(body) != "body" {
 		t.Fatalf("full frontmatter = %+v, body = %q", fm, body)
 	}
 	if !reflect.DeepEqual(fm.Tags, []string{"one", "2", "three"}) {
 		t.Errorf("mixed-shape tags = %#v, want scalar values preserved as strings", fm.Tags)
 	}
 
-	fm, _ = SplitFrontmatter([]byte("---\ntype: Protocol\ntags:\n  nested: true\n---\nbody"))
+	fm, _ = splitFrontmatter([]byte("---\ntype: Protocol\ntags:\n  nested: true\n---\nbody"))
 	if fm.Type != "Protocol" || fm.Tags != nil {
 		t.Errorf("malformed optional tags should not hide required fields: %+v", fm)
 	}
 
 	raw := []byte("---\ntype: First\ntype: Second\n---\nbody")
-	fm, body = SplitFrontmatter(raw)
+	fm, body = splitFrontmatter(raw)
 	if fm.Type != "" || string(body) != string(raw) {
 		t.Errorf("duplicate YAML keys should be tolerated as malformed input: fm=%+v body=%q", fm, body)
 	}
 
-	fm, body = SplitFrontmatter([]byte("---\n- not\n- a mapping\n---\nbody"))
+	fm, body = splitFrontmatter([]byte("---\n- not\n- a mapping\n---\nbody"))
 	if fm.Type != "" || fm.Title != "" || fm.Tags != nil || fm.Extra != nil || string(body) != "body" {
 		t.Errorf("non-mapping frontmatter should be ignored field-wise: fm=%+v body=%q", fm, body)
 	}
@@ -113,7 +113,7 @@ func TestExtractLinks(t *testing.T) {
 
 [ref]: ../reference.md "reference title"
 `)
-	links := ExtractLinks("dir/sub", body)
+	links := extractLinks("dir/sub", body)
 	got := map[string]string{}
 	for _, l := range links {
 		got[l.Target] = l.Text

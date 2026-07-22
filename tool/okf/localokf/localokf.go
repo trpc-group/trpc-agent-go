@@ -27,25 +27,16 @@ import (
 
 // Local is a directory-backed okf.Store.
 type Local struct {
-	root         string
-	maxFileBytes int64
+	root string
 }
 
 const defaultFindLimit = 10
 
 var _ okf.Store = (*Local)(nil)
+var _ okf.Finder = (*Local)(nil)
 
-// LocalOption configures a Local store.
-type LocalOption func(*Local)
-
-// WithMaxFileBytes caps the returned concept body length in bytes, truncated on
-// a rune boundary. Frontmatter is always parsed in full. 0 (default) = no cap.
-func WithMaxFileBytes(n int64) LocalOption {
-	return func(l *Local) { l.maxFileBytes = n }
-}
-
-// New opens the OKF bundle rooted at dir.
-func New(root string, opts ...LocalOption) (*Local, error) {
+// New opens the OKF bundle rooted at root.
+func New(root string) (*Local, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return nil, fmt.Errorf("okf/localokf: resolve root: %w", err)
@@ -61,11 +52,7 @@ func New(root string, opts ...LocalOption) (*Local, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("okf/localokf: root is not a directory: %s", abs)
 	}
-	l := &Local{root: abs}
-	for _, opt := range opts {
-		opt(l)
-	}
-	return l, nil
+	return &Local{root: abs}, nil
 }
 
 // List implements okf.Store.
@@ -89,6 +76,9 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		if err := ctx.Err(); err != nil {
 			return okf.Listing{}, err
 		}
+		if e.Name() == ".git" {
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			return okf.Listing{}, fmt.Errorf("okf/localokf: inspect %q: %w", e.Name(), err)
@@ -106,40 +96,33 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 		}
 		switch name {
 		case okf.IndexFile:
-			if err := ctx.Err(); err != nil {
-				return okf.Listing{}, err
+			data, err := os.ReadFile(filepath.Join(abs, name))
+			if err != nil {
+				return okf.Listing{}, fmt.Errorf("okf/localokf: read index %q: %w", dir, err)
 			}
-			if data, err := os.ReadFile(filepath.Join(abs, name)); err == nil {
-				if err := ctx.Err(); err != nil {
-					return okf.Listing{}, err
-				}
-				listing.Index = string(data)
-				if normDir(dir) == "" { // okf_version lives only in the root index.md.
-					fm, _ := okf.SplitFrontmatter(data)
-					listing.OKFVersion = fm.OKFVersion
-				}
+			listing.Index = string(data)
+			if normDir(dir) == "" { // okf_version lives only in the root index.md.
+				parsed := okf.ParseConcept("index", data)
+				listing.OKFVersion, _ = parsed.Frontmatter.Extra["okf_version"].(string)
 			}
 			continue
 		case okf.LogFile:
 			continue
 		}
-		if err := ctx.Err(); err != nil {
-			return okf.Listing{}, err
-		}
 		data, err := os.ReadFile(filepath.Join(abs, name))
 		if err != nil {
-			continue // tolerate unreadable files.
+			return okf.Listing{}, fmt.Errorf("okf/localokf: read concept %q: %w", joinID(dir, strings.TrimSuffix(name, ".md")), err)
 		}
-		if err := ctx.Err(); err != nil {
-			return okf.Listing{}, err
-		}
-		fm, _ := okf.SplitFrontmatter(data)
+		fm := okf.ParseConcept(joinID(dir, strings.TrimSuffix(name, ".md")), data).Frontmatter
 		listing.Concepts = append(listing.Concepts, okf.ConceptMeta{
 			ID:          joinID(dir, strings.TrimSuffix(name, ".md")),
 			Type:        fm.Type,
 			Title:       fm.Title,
 			Description: fm.Description,
 		})
+	}
+	if err := ctx.Err(); err != nil {
+		return okf.Listing{}, err
 	}
 	return listing, nil
 }
@@ -171,25 +154,10 @@ func (l *Local) Read(ctx context.Context, conceptID string) (okf.Concept, error)
 	if err := ctx.Err(); err != nil {
 		return okf.Concept{}, err
 	}
-	fm, body := okf.SplitFrontmatter(data)
-	links := okf.ExtractLinks(path.Dir(id), body)
-	truncated := false
-	// Cap the parsed body (not the raw file): a small cap must not swallow the
-	// frontmatter fence, and must not split a multi-byte rune.
-	if l.maxFileBytes > 0 && int64(len(body)) > l.maxFileBytes {
-		body = truncateUTF8Bytes(body, int(l.maxFileBytes))
-		truncated = true
-	}
-	return okf.Concept{
-		ID:          id,
-		Frontmatter: fm,
-		Body:        string(body),
-		Links:       links,
-		Truncated:   truncated,
-	}, nil
+	return okf.ParseConcept(id, data), nil
 }
 
-// Find implements okf.Store. It walks the bundle and matches on frontmatter
+// Find implements okf.Finder. It walks the bundle and matches on frontmatter
 // type/tags and a case-insensitive substring over title/description/body. Hits
 // are unranked (Score == 0).
 func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
@@ -206,7 +174,13 @@ func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
 			return err
 		}
 		if err != nil {
-			return nil // tolerate traversal errors.
+			return err
+		}
+		if p != l.root && d.Name() == ".git" {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 		if d.Type()&os.ModeSymlink != 0 {
 			return symlinkError(d.Name())
@@ -223,19 +197,24 @@ func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
 		}
 		data, err := os.ReadFile(p)
 		if err != nil {
-			return nil
+			return err
 		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		fm, body := okf.SplitFrontmatter(data)
+		rel, err := filepath.Rel(l.root, p)
+		if err != nil {
+			return err
+		}
+		id := strings.TrimSuffix(filepath.ToSlash(rel), ".md")
+		parsed := okf.ParseConcept(id, data)
+		fm, body := parsed.Frontmatter, []byte(parsed.Body)
 		if !matchQuery(fm, body, q) {
 			return nil
 		}
-		rel, _ := filepath.Rel(l.root, p)
 		hits = append(hits, okf.Hit{
 			ConceptMeta: okf.ConceptMeta{
-				ID:          strings.TrimSuffix(filepath.ToSlash(rel), ".md"),
+				ID:          id,
 				Type:        fm.Type,
 				Title:       fm.Title,
 				Description: fm.Description,
@@ -256,6 +235,9 @@ func (l *Local) Find(ctx context.Context, q okf.Query) ([]okf.Hit, error) {
 // resolve maps a bundle-relative slash path to an absolute filesystem path,
 // refusing anything that escapes the bundle root.
 func (l *Local) resolve(rel string) (string, error) {
+	if isGitPath(rel) {
+		return "", fmt.Errorf("%w: %q", okf.ErrNotFound, rel)
+	}
 	p := filepath.Join(l.root, filepath.FromSlash(rel))
 	inside, err := filepath.Rel(l.root, p)
 	if err != nil || inside == ".." || strings.HasPrefix(inside, ".."+string(filepath.Separator)) {
@@ -279,6 +261,15 @@ func (l *Local) resolve(rel string) (string, error) {
 		}
 	}
 	return p, nil
+}
+
+func isGitPath(rel string) bool {
+	for _, part := range strings.Split(filepath.ToSlash(filepath.Clean(filepath.FromSlash(rel))), "/") {
+		if part == ".git" {
+			return true
+		}
+	}
+	return false
 }
 
 func symlinkError(rel string) error {

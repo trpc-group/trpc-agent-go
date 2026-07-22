@@ -93,7 +93,7 @@ func TestReadDocuments_OneNonChunkedDocPerConcept(t *testing.T) {
 
 	var foundX402 bool
 	for _, d := range docs {
-		if d.Metadata[MetaConcept] != "research/x402" {
+		if d.Metadata[ksource.MetaURI] != "research/x402" {
 			continue
 		}
 		foundX402 = true
@@ -110,7 +110,7 @@ func TestReadDocuments_OneNonChunkedDocPerConcept(t *testing.T) {
 			t.Errorf("Content should lead with the concept id, got %q", d.Content)
 		}
 		// Frontmatter lands in metadata; stable identity via MetaURI.
-		if d.Metadata[MetaType] != "Protocol" || d.Metadata[ksource.MetaURI] != "research/x402" {
+		if d.Metadata[metaType] != "Protocol" || d.Metadata[ksource.MetaURI] != "research/x402" {
 			t.Errorf("metadata wrong: %+v", d.Metadata)
 		}
 		if d.Metadata[ksource.MetaSourceName] != "paydocs" {
@@ -119,9 +119,9 @@ func TestReadDocuments_OneNonChunkedDocPerConcept(t *testing.T) {
 		if d.Metadata[ksource.MetaChunkIndex] != 0 {
 			t.Errorf("chunk index metadata = %v, want 0", d.Metadata[ksource.MetaChunkIndex])
 		}
-		tags, ok := d.Metadata[MetaTags].([]string)
+		tags, ok := d.Metadata[metaTags].([]string)
 		if !ok || !slices.Equal(tags, []string{"protocol", "x402"}) {
-			t.Errorf("tags metadata = %#v, want original []string", d.Metadata[MetaTags])
+			t.Errorf("tags metadata = %#v, want original []string", d.Metadata[metaTags])
 		}
 		if d.ID != "7:paydocs:research/x402" {
 			t.Errorf("document ID = %q, want source-namespaced ID", d.ID)
@@ -206,8 +206,10 @@ func TestWithMetadata_CannotOverrideGeneratedIdentity(t *testing.T) {
 	src := New(fakeStore{}, WithName("paydocs"), WithMetadata(map[string]any{
 		"tenant":               "payments",
 		tagFilterKey("x402"):   false,
-		MetaConcept:            "wrong",
-		MetaType:               "wrong",
+		metaType:               "wrong",
+		metaTitle:              "wrong",
+		metaResource:           "wrong",
+		metaTags:               "wrong",
 		ksource.MetaURI:        "wrong",
 		ksource.MetaSource:     "wrong",
 		ksource.MetaSourceName: "wrong",
@@ -221,13 +223,13 @@ func TestWithMetadata_CannotOverrideGeneratedIdentity(t *testing.T) {
 	if d.Metadata["tenant"] != "payments" {
 		t.Errorf("custom metadata missing: %+v", d.Metadata)
 	}
-	if d.Metadata[MetaConcept] != "overview" || d.Metadata[MetaType] != "Overview" ||
+	if d.Metadata[metaType] != "Overview" || d.Metadata[metaTitle] != "Overview" ||
 		d.Metadata[ksource.MetaURI] != "overview" || d.Metadata[ksource.MetaSource] != "okf" ||
 		d.Metadata[ksource.MetaSourceName] != "paydocs" || d.Metadata[ksource.MetaChunkIndex] != 0 {
 		t.Errorf("generated metadata was overridden: %+v", d.Metadata)
 	}
 	for _, doc := range docs {
-		if doc.Metadata[MetaConcept] == "research/x402" && doc.Metadata[tagFilterKey("x402")] != true {
+		if doc.Metadata[ksource.MetaURI] == "research/x402" && doc.Metadata[tagFilterKey("x402")] != true {
 			t.Errorf("generated tag filter metadata was overridden: %+v", doc.Metadata)
 		}
 	}
@@ -269,7 +271,7 @@ func TestBuiltinKnowledge_InMemoryIntegration(t *testing.T) {
 				t.Fatalf("filtered document count = %d, want 2", len(result.Documents))
 			}
 			for _, got := range result.Documents {
-				if got.Document.Metadata[MetaConcept] != "research/x402" {
+				if got.Document.Metadata[ksource.MetaURI] != "research/x402" {
 					t.Errorf("unexpected filtered concept: %+v", got.Document.Metadata)
 				}
 			}
@@ -303,5 +305,46 @@ func TestScopeFilter(t *testing.T) {
 	}
 	if ScopeFilter("Runbook", "x402", "core") == nil {
 		t.Error("type+tags scope should be non-nil")
+	}
+	if tagFilterKey(" X402 ") != tagFilterKey("x402") {
+		t.Error("tag filter keys should be case- and whitespace-insensitive")
+	}
+}
+
+func TestMinimalConceptRemainsDiscoverable(t *testing.T) {
+	body := strings.Repeat("a", maxFallbackBodyBytes+20) + " TAIL-MUST-NOT-APPEAR"
+	d := New(fakeStore{}).toDocument(okf.Concept{
+		ID:          "rules/minimal",
+		Frontmatter: okf.Frontmatter{Type: "Rule"},
+		Body:        body,
+	})
+	if d.Name != "minimal" {
+		t.Errorf("derived document name = %q, want minimal", d.Name)
+	}
+	for _, want := range []string{"id: rules/minimal", "type: Rule", "title: minimal", "body: "} {
+		if !strings.Contains(d.EmbeddingText, want) {
+			t.Errorf("minimal concept embedding %q does not contain %q", d.EmbeddingText, want)
+		}
+	}
+	if strings.Contains(d.EmbeddingText, "TAIL-MUST-NOT-APPEAR") {
+		t.Errorf("body fallback was not bounded: %q", d.EmbeddingText)
+	}
+	if d.Metadata[ksource.MetaURI] != "rules/minimal" {
+		t.Errorf("minimal concept URI = %v", d.Metadata[ksource.MetaURI])
+	}
+}
+
+func TestGetMetadataReturnsCopy(t *testing.T) {
+	src := New(fakeStore{}, WithMetadata(map[string]any{"tenant": "payments"}))
+	got := src.GetMetadata()
+	got["tenant"] = "changed"
+	if src.GetMetadata()["tenant"] != "payments" {
+		t.Error("GetMetadata exposed Source's internal map")
+	}
+}
+
+func TestReadDocuments_NilStore(t *testing.T) {
+	if _, err := New(nil).ReadDocuments(context.Background()); err == nil {
+		t.Fatal("ReadDocuments should reject a nil Store")
 	}
 }

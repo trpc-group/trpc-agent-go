@@ -17,11 +17,11 @@
 // markdown links, forming a graph.
 //
 // This package defines the Store abstraction (the OKF "capability") and, via
-// NewToolSet, exposes it to an LLM agent as three tools: okf_list (progressive
-// disclosure), okf_read (read one concept + its links) and okf_find (locate
-// concepts). A local, directory-backed Store lives in the localokf sub-package;
-// a remote Store (a knowledge-catalog service, a git-bundle server, ...) only
-// needs to satisfy the same interface to be swapped in.
+// NewToolSet, exposes it to an LLM agent as okf_list (progressive disclosure)
+// and okf_read (read one concept + its links). Stores that also implement the
+// optional Finder interface expose okf_find. A local, directory-backed Store
+// lives in the localokf sub-package; remote implementations can provide the
+// same capabilities without changing agent wiring.
 package okf
 
 import (
@@ -38,10 +38,6 @@ const (
 	LogFile = "log.md"
 )
 
-// ErrUnsupported is returned by a Store whose backend cannot provide a
-// capability (for example a remote store with no search index answering Find).
-var ErrUnsupported = errors.New("okf: capability not supported by backend")
-
 // ErrNotFound is returned (wrapped, without leaking a filesystem path) by a
 // Store when a requested concept does not exist, so callers can distinguish it
 // from I/O errors with errors.Is.
@@ -57,7 +53,6 @@ type Frontmatter struct {
 	Resource    string         `json:"resource,omitempty" yaml:"resource,omitempty"`       // RECOMMENDED canonical URI.
 	Tags        []string       `json:"tags,omitempty" yaml:"tags,omitempty"`               // OPTIONAL.
 	Timestamp   string         `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`     // OPTIONAL, ISO-8601 (kept verbatim).
-	OKFVersion  string         `json:"okf_version,omitempty" yaml:"okf_version,omitempty"` // OPTIONAL, only in the root index.md.
 	Extra       map[string]any `json:"extra,omitempty" yaml:",inline"`                     // Unknown / producer keys, preserved (nested under "extra" in tool JSON).
 }
 
@@ -97,7 +92,8 @@ type Listing struct {
 }
 
 // Query describes a Find request. Text is matched against title/description/
-// body; Type and Tags filter on frontmatter.
+// body; Type and Tags filter on frontmatter. Query is used by Finder, an
+// optional capability separate from the core Store contract.
 type Query struct {
 	Text  string   `json:"text,omitempty"`
 	Type  string   `json:"type,omitempty"`
@@ -116,13 +112,18 @@ type Hit struct {
 //
 // Implementations MUST tolerate, per OKF v0.1 consumer conformance: missing
 // optional fields, unknown types, unknown frontmatter keys, broken links and a
-// missing index.md. A backend without search may return ErrUnsupported from
-// Find (or the caller can drop the find tool with WithFindEnabled(false)).
+// missing index.md.
 type Store interface {
 	// List returns the listing for dir ("" == bundle root).
 	List(ctx context.Context, dir string) (Listing, error)
 	// Read returns the concept identified by its bundle-relative id (no .md).
 	Read(ctx context.Context, conceptID string) (Concept, error)
+}
+
+// Finder is the optional search capability implemented by stores that can
+// locate concepts by free text and frontmatter filters. NewToolSet exposes
+// okf_find only when the supplied Store also implements Finder.
+type Finder interface {
 	// Find returns concepts matching q, best-effort.
 	Find(ctx context.Context, q Query) ([]Hit, error)
 }

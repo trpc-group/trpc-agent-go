@@ -28,6 +28,17 @@ type fakeStore struct {
 	body        string
 }
 
+// readOnlyStore deliberately implements Store but not Finder.
+type readOnlyStore struct{ delegate *fakeStore }
+
+func (s readOnlyStore) List(ctx context.Context, dir string) (Listing, error) {
+	return s.delegate.List(ctx, dir)
+}
+
+func (s readOnlyStore) Read(ctx context.Context, id string) (Concept, error) {
+	return s.delegate.Read(ctx, id)
+}
+
 func (f *fakeStore) List(_ context.Context, dir string) (Listing, error) {
 	f.lastListDir = dir
 	return Listing{Dir: dir, Concepts: []ConceptMeta{{ID: "x"}}}, nil
@@ -91,14 +102,14 @@ func TestNewToolSet_Wiring(t *testing.T) {
 	}
 }
 
-func TestNewToolSet_FindDisabled(t *testing.T) {
-	ts, _ := NewToolSet(&fakeStore{}, WithFindEnabled(false))
+func TestNewToolSet_StoreWithoutFinder(t *testing.T) {
+	ts, _ := NewToolSet(readOnlyStore{delegate: &fakeStore{}})
 	names := toolNames(ts.Tools(context.Background()))
 	if len(names) != 2 {
 		t.Fatalf("want 2 tools, got %v", names)
 	}
 	if toolByName(ts.Tools(context.Background()), "okf_find") != nil {
-		t.Error("okf_find should be disabled")
+		t.Error("okf_find should only be exposed for Finder implementations")
 	}
 }
 
@@ -141,8 +152,6 @@ func TestNewToolSet_RejectsInvalidOptions(t *testing.T) {
 		{name: "prefix with space", opts: []Option{WithNamePrefix("pay docs")}},
 		{name: "prefix with unicode", opts: []Option{WithNamePrefix("支付")}},
 		{name: "prefix too long", opts: []Option{WithNamePrefix(strings.Repeat("a", 56))}},
-		{name: "zero find limit", opts: []Option{WithFindLimit(0)}},
-		{name: "negative find limit", opts: []Option{WithFindLimit(-1)}},
 		{name: "negative body limit", opts: []Option{WithMaxBodyBytes(-1)}},
 	}
 	for _, tt := range tests {
@@ -266,32 +275,26 @@ func TestCall_ReadNotFound(t *testing.T) {
 func TestCall_ReadNotFoundUsesAvailablePrefixedTools(t *testing.T) {
 	tests := []struct {
 		name      string
-		opts      []Option
+		store     Store
 		want      []string
 		doNotWant []string
 	}{
 		{
-			name:      "list only",
-			opts:      []Option{WithNamePrefix("paydocs"), WithFindEnabled(false)},
+			name:      "store only",
+			store:     readOnlyStore{delegate: &fakeStore{}},
 			want:      []string{"paydocs_okf_list"},
 			doNotWant: []string{"paydocs_okf_find"},
 		},
 		{
-			name:      "find only",
-			opts:      []Option{WithNamePrefix("paydocs"), WithListEnabled(false)},
-			want:      []string{"paydocs_okf_find"},
-			doNotWant: []string{"paydocs_okf_list"},
-		},
-		{
-			name:      "no navigation tools",
-			opts:      []Option{WithNamePrefix("paydocs"), WithListEnabled(false), WithFindEnabled(false)},
-			doNotWant: []string{"paydocs_okf_list", "paydocs_okf_find", "call okf_"},
+			name:  "store and finder",
+			store: &fakeStore{},
+			want:  []string{"paydocs_okf_list", "paydocs_okf_find"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ts, err := NewToolSet(&fakeStore{}, tt.opts...)
+			ts, err := NewToolSet(tt.store, WithNamePrefix("paydocs"))
 			if err != nil {
 				t.Fatalf("NewToolSet: %v", err)
 			}
@@ -326,7 +329,7 @@ func TestCall_FindEmpty(t *testing.T) {
 }
 
 func TestFindGuidanceUsesAvailablePrefixedTools(t *testing.T) {
-	ts, err := NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"), WithListEnabled(false))
+	ts, err := NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"))
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
 	}
@@ -336,27 +339,18 @@ func TestFindGuidanceUsesAvailablePrefixedTools(t *testing.T) {
 		t.Errorf("find description does not use the actual read tool: %q", desc)
 	}
 	out := callTool(t, find, `{"query":"__none__"}`)
-	if strings.Contains(string(out), "okf_list") {
-		t.Errorf("empty-result guidance mentions disabled list tool: %s", out)
-	}
-
-	ts, err = NewToolSet(&fakeStore{}, WithNamePrefix("paydocs"), WithReadEnabled(false))
-	if err != nil {
-		t.Fatalf("NewToolSet: %v", err)
-	}
-	find = toolByName(ts.Tools(context.Background()), "paydocs_okf_find")
-	if strings.Contains(find.Declaration().Description, "okf_read") {
-		t.Errorf("find description mentions disabled read tool: %q", find.Declaration().Description)
+	if !strings.Contains(string(out), "paydocs_okf_list") {
+		t.Errorf("empty-result guidance does not use the actual list tool: %s", out)
 	}
 }
 
 func TestCall_FindDefaultLimit(t *testing.T) {
 	store := &fakeStore{}
-	ts, _ := NewToolSet(store, WithFindLimit(7))
+	ts, _ := NewToolSet(store)
 	find := toolByName(ts.Tools(context.Background()), "okf_find")
 
 	callTool(t, find, `{"query":"pay"}`)
-	if store.lastQuery.Limit != 7 {
+	if store.lastQuery.Limit != defaultFindLimit {
 		t.Errorf("default find limit not applied: %d", store.lastQuery.Limit)
 	}
 	callTool(t, find, `{"query":"pay","limit":3,"type":"Rule","tags":["a"]}`)

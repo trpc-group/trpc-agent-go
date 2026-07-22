@@ -21,6 +21,7 @@ func TestValidate_Conformant(t *testing.T) {
 		"good/a.md":     {Data: []byte("---\ntype: Protocol\ntitle: A\ntags: protocol, public\n---\nbody")},
 		"good/b.md":     {Data: []byte("---\ntype: Rule\ndescription: [unexpected, shape]\n---\nbody")},
 		"good/log.md":   {Data: []byte("# Directory Update Log\n\n## 2026-07-20\n\n* **Update**: Changed A.\n\n## 2026-07-01\n\n* **Creation**: Added A.\n")},
+		".git/bad.md":   {Data: []byte("not OKF bundle content")},
 		"readme.txt":    {Data: []byte("not markdown")},
 	}
 	vs, err := Validate(fsys)
@@ -44,9 +45,9 @@ func TestValidate_ReportsViolations(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	want := map[string]string{
-		"no-type":  RuleMissingType,
-		"bad":      RuleBadFrontmatter,
-		"sub/nofm": RuleMissingFrontmatter,
+		"no-type":  ruleMissingType,
+		"bad":      ruleBadFrontmatter,
+		"sub/nofm": ruleMissingFrontmatter,
 	}
 	if len(vs) != len(want) {
 		t.Fatalf("got %d violations, want %d: %+v", len(vs), len(want), vs)
@@ -72,7 +73,7 @@ func TestValidate_TypeMustBeString(t *testing.T) {
 		t.Fatalf("got %d violations, want 2: %+v", len(vs), vs)
 	}
 	for _, v := range vs {
-		if v.Rule != RuleMissingType || v.Concept == "valid" {
+		if v.Rule != ruleMissingType || v.Concept == "valid" {
 			t.Errorf("unexpected violation: %+v", v)
 		}
 	}
@@ -115,7 +116,7 @@ func TestValidate_ReservedFiles(t *testing.T) {
 				t.Fatal("expected reserved-structure violation")
 			}
 			for _, v := range vs {
-				if v.Rule != RuleReservedStructure {
+				if v.Rule != ruleReservedStructure {
 					t.Errorf("unexpected violation: %+v", v)
 				}
 			}

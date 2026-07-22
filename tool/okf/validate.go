@@ -21,18 +21,19 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Conformance rule ids reported by Validate.
+// Conformance rule ids reported by Validate. They remain internal until callers
+// need a stable programmatic classification API.
 const (
-	RuleMissingFrontmatter = "missing-frontmatter"
-	RuleBadFrontmatter     = "bad-frontmatter"
-	RuleMissingType        = "missing-type"
-	RuleReservedStructure  = "reserved-structure"
+	ruleMissingFrontmatter = "missing-frontmatter"
+	ruleBadFrontmatter     = "bad-frontmatter"
+	ruleMissingType        = "missing-type"
+	ruleReservedStructure  = "reserved-structure"
 )
 
 // Violation is one OKF conformance problem found by Validate.
 type Violation struct {
 	Concept string // Concept id (bundle-relative path minus .md).
-	Rule    string // One of the Rule* ids.
+	Rule    string // Machine-readable rule id.
 	Detail  string // Human-readable explanation.
 }
 
@@ -55,7 +56,13 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() || !strings.HasSuffix(p, ".md") {
+		if d.IsDir() {
+			if d.Name() == ".git" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(p, ".md") {
 			return nil
 		}
 		base := path.Base(p)
@@ -68,13 +75,13 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 			if yamlPart, parsedBody, ok := splitRaw(raw); ok {
 				body = parsedBody
 				if path.Dir(p) != "." {
-					violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, "non-root index.md must not carry frontmatter"})
+					violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "non-root index.md must not carry frontmatter"})
 				} else if e := validateRootIndexFrontmatter(yamlPart); e != "" {
-					violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, e})
+					violations = append(violations, Violation{conceptID(p), ruleReservedStructure, e})
 				}
 			}
 			if !validIndexBody(body) {
-				violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, "index.md must contain one or more heading sections with linked list entries"})
+				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "index.md must contain one or more heading sections with linked list entries"})
 			}
 			return nil
 		}
@@ -82,27 +89,27 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 			body := raw
 			if _, parsedBody, ok := splitRaw(raw); ok {
 				body = parsedBody
-				violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, "log.md must not carry frontmatter"})
+				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "log.md must not carry frontmatter"})
 			}
 			if !validLogBody(body) {
-				violations = append(violations, Violation{ConceptID(p), RuleReservedStructure, "log.md must contain newest-first YYYY-MM-DD sections with list entries"})
+				violations = append(violations, Violation{conceptID(p), ruleReservedStructure, "log.md must contain newest-first YYYY-MM-DD sections with list entries"})
 			}
 			return nil
 		}
-		id := ConceptID(p)
+		id := conceptID(p)
 		yamlPart, _, ok := splitRaw(raw)
 		if !ok {
-			violations = append(violations, Violation{id, RuleMissingFrontmatter, "no leading --- YAML frontmatter block"})
+			violations = append(violations, Violation{id, ruleMissingFrontmatter, "no leading --- YAML frontmatter block"})
 			return nil
 		}
 		root, e := yamlRoot(yamlPart)
 		if e != nil {
-			violations = append(violations, Violation{id, RuleBadFrontmatter, e.Error()})
+			violations = append(violations, Violation{id, ruleBadFrontmatter, e.Error()})
 			return nil
 		}
 		typeNode := mappingValue(root, "type")
 		if typeNode == nil || typeNode.Kind != yaml.ScalarNode || typeNode.Tag != "!!str" || strings.TrimSpace(typeNode.Value) == "" {
-			violations = append(violations, Violation{id, RuleMissingType, "required 'type' field must be a non-empty string"})
+			violations = append(violations, Violation{id, ruleMissingType, "required 'type' field must be a non-empty string"})
 		}
 		return nil
 	})
@@ -173,6 +180,7 @@ func validIndexBody(body []byte) bool {
 	return sections > 0
 }
 
+//nolint:gocyclo // Keeping the format checks together makes the parser state explicit.
 func validLogBody(body []byte) bool {
 	doc := goldmark.DefaultParser().Parse(text.NewReader(body))
 	seenTitle := false

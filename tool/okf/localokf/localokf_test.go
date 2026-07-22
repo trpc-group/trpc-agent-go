@@ -15,10 +15,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
 )
@@ -262,39 +262,6 @@ func TestFind_DefaultLimitIsBounded(t *testing.T) {
 	}
 }
 
-func TestRead_BodyCapIsRuneSafeAndKeepsFrontmatter(t *testing.T) {
-	dir := t.TempDir()
-	body := "协议说明:这是用于测试的中文正文内容。\n\nSee [late](late-target.md)."
-	content := "---\ntype: 笔记\ntitle: 中文\n---\n\n" + body + "\n"
-	if err := os.WriteFile(filepath.Join(dir, "cjk.md"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s, err := New(dir, WithMaxFileBytes(7)) // cut mid-rune, well inside the body.
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	c, err := s.Read(context.Background(), "cjk")
-	if err != nil {
-		t.Fatalf("Read: %v", err)
-	}
-	// Cap applies to body, so frontmatter still parses in full.
-	if c.Frontmatter.Type != "笔记" || c.Frontmatter.Title != "中文" {
-		t.Errorf("small body cap must not swallow frontmatter: %+v", c.Frontmatter)
-	}
-	if !utf8.ValidString(c.Body) {
-		t.Errorf("truncated body is not valid UTF-8: %q", c.Body)
-	}
-	if len(c.Body) > 7 {
-		t.Errorf("body exceeds cap: %d", len(c.Body))
-	}
-	if !c.Truncated {
-		t.Error("Truncated = false, want true when the body cap applies")
-	}
-	if len(c.Links) != 1 || c.Links[0].Target != "late-target" {
-		t.Errorf("links should be extracted from the full body before truncation, got %v", c.Links)
-	}
-}
-
 func TestExtractLinks_AnchorAndQuerySuffix(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "d"), 0o755); err != nil {
@@ -338,6 +305,62 @@ func TestFind_ReservedExcluded(t *testing.T) {
 		if base == "index" || base == "log" {
 			t.Errorf("reserved file surfaced as concept: %q", h.ID)
 		}
+	}
+}
+
+func TestGitDirectoryExcluded(t *testing.T) {
+	dir := t.TempDir()
+	gitDir := filepath.Join(dir, ".git")
+	if err := os.Mkdir(gitDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(gitDir, "internal.md"), []byte("---\ntype: Internal\n---\n\nsecret marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "visible.md"), []byte("---\ntype: Note\n---\n\npublic marker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	listing, err := s.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if slices.Contains(listing.Subdirs, ".git") {
+		t.Fatalf(".git surfaced as a bundle directory: %v", listing.Subdirs)
+	}
+	if _, err := s.List(context.Background(), ".git"); !errors.Is(err, okf.ErrNotFound) {
+		t.Errorf("explicit .git list error = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Read(context.Background(), ".git/internal"); !errors.Is(err, okf.ErrNotFound) {
+		t.Errorf("explicit .git read error = %v, want ErrNotFound", err)
+	}
+	hits, err := s.Find(context.Background(), okf.Query{Text: "secret marker"})
+	if err != nil {
+		t.Fatalf("Find: %v", err)
+	}
+	if len(hits) != 0 {
+		t.Fatalf(".git content surfaced in search: %+v", hits)
+	}
+}
+
+func TestOperations_PropagateFilesystemErrors(t *testing.T) {
+	dir := t.TempDir()
+	s, err := New(dir)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := os.Remove(dir); err != nil {
+		t.Fatalf("remove bundle root: %v", err)
+	}
+	if _, err := s.List(context.Background(), ""); err == nil {
+		t.Error("List should propagate the missing root error")
+	}
+	if _, err := s.Find(context.Background(), okf.Query{}); err == nil {
+		t.Error("Find should propagate the walk error")
 	}
 }
 
