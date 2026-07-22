@@ -30,7 +30,7 @@ root Agent
         ↓
       registered base Agents run inside the Go process
         ↓
-      child Agent events still enter Runner event stream / Session Service
+      child Agent events remain in the same event stream / Session Service
         ↓
       workflow returns the combined result to the root Agent
 ```
@@ -45,13 +45,10 @@ Stable, deterministic, strongly constrained business processes should still be
 application Go code. For loops, branches, or JSON conversion across ordinary
 tools, prefer the lighter `execute_tool_code` capability.
 
-Python is the engineering choice of the current built-in runtime, not the core
-constraint of Dynamic Workflow. Workflow code is not an ordinary script that
-breaks away from the framework, and it does not directly call an Agent SDK from
-inside the script. It always crosses an explicit bridge/RPC back into the Go
-process, where registered Agents and tools continue to run. Using Go as the
-workflow language would therefore not provide direct access to in-process host
-objects.
+The workflow language is a Runtime choice rather than a constraint of Dynamic
+Workflow. The current built-in Runtime uses Python. Calls to registered Agents
+and tools cross an explicit bridge/RPC back into the Go host instead of running
+through a separate Agent SDK inside the script.
 
 ## Minimal setup
 
@@ -327,21 +324,10 @@ boundaries. Workflows should call child Agents through `agent(...)`.
 
 ## Events, Session, and execution boundary
 
-The first version of Dynamic Workflow is foreground and one-shot. Workflow code
-only expresses the orchestration logic; the actual child Agent execution still
-happens inside the Go process. In other words, `agent(...)` is not an ordinary
-SDK call from a disconnected script. It is a bridge/RPC call back into the
-host-side Agent runtime.
-
-Implementation-wise, each child Agent is derived from the parent invocation as
-a new invocation: it reuses the parent execution's Session, SessionService,
-Plugins, and event-forwarding path, but receives a new InvocationID, input
-Message, ParentMetadata, and independent event filter key. Therefore the child
-Agent's LLM context and event branch remain isolated instead of being simply
-merged into the root Agent's current prompt context.
-
-Therefore, child Agent output events are still sent through the current Runner
-event stream:
+Dynamic Workflow is foreground and one-shot. Workflow code expresses the
+orchestration logic, while registered Agents and tools continue to run in the
+Go host. Each child Agent call has an isolated conversation context and remains
+part of the current run. Therefore:
 
 - Frontends can observe child Agent output and tool-call progress from the same
   event stream.
@@ -349,6 +335,9 @@ event stream:
 - `parallel` branch events may appear interleaved; this is real-time stream
   semantics and does not change that `parallel(...)` results are returned in
   input order.
+
+The event stream follows the framework's normal streaming contract: consume it
+until the run finishes, or cancel the run context when stopping early.
 
 This is the key difference from asking the model to write and run an ordinary
 standalone script: the temporary workflow gets code-level flexibility, while
@@ -381,27 +370,7 @@ See the runnable
 
 ## Roadmap note: file-backed workflows
 
-This section is a future-design note. Most users can skip it.
-
-The current version is one-shot: the model passes inline workflow code to
-`run_workflow` and runs it immediately.
-
-A future extension may support file-backed execution, where workflow scripts
-can be written, edited, reviewed, and re-run as normal workspace files. This
-should be a source-selection extension of `run_workflow`, not a full workflow
-management system in this package.
-
-Key constraints:
-
-- Future inputs should choose exactly one of inline `code` or workspace `file`,
-  with optional JSON `args`.
-- File paths should be workspace-relative, not arbitrary host paths.
-- The file resolver should reuse the parent invocation's `codeexecutor`
-  workspace.
-- The workflow tool should run existing scripts, not provide a script-authoring
-  API.
-- File-backed workflows persist script source, not execution state; resume,
-  checkpoints, publishing, and cross-node storage need separate designs.
-- The file-backed version should preserve the current Runtime boundary: it may
-  orchestrate registered Agents and explicitly granted host tools, but it
-  should not gain unrestricted filesystem or shell access.
+A future source-selection extension may let `run_workflow` choose either inline
+code or a workspace-relative script with optional JSON arguments. It should use
+the configured workspace abstraction and remain separate from script authoring,
+execution-state persistence, resume, checkpoint, and distribution concerns.

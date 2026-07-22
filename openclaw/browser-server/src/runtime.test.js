@@ -27,3 +27,30 @@ test("BrowserRuntime normalizes press/key for chrome relay acts", async () => {
     key: "End"
   });
 });
+
+test("BrowserRuntime rejects target-only chrome relay acts", async () => {
+  const runtime = new BrowserRuntime({ policy: {} });
+  let calls = 0;
+  runtime.chromeRelay.execute = async () => {
+    calls += 1;
+  };
+
+  await assert.rejects(
+    runtime.act("chrome", {
+      targetId: "tab-1",
+      request: { kind: "click", element: "Search" }
+    }),
+    /require snapshot refs/
+  );
+  await assert.rejects(
+    runtime.act("chrome", {
+      targetId: "tab-1",
+      request: {
+        kind: "fill",
+        fields: [{ element: "Name", text: "Ada" }]
+      }
+    }),
+    /require snapshot refs/
+  );
+  assert.equal(calls, 0);
+});

@@ -90,6 +90,8 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 		ExecutionTrace: &trace.Trace{
 			RootAgentName:    "assistant",
 			RootInvocationID: "inv-1",
+			Input:            &trace.Snapshot{Text: "run input"},
+			Output:           &trace.Snapshot{Text: "run output"},
 			Usage: &model.Usage{
 				PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3,
 				TimingInfo: &model.TimingInfo{FirstTokenDuration: time.Second},
@@ -98,6 +100,7 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 				{
 					StepID:             "s1",
 					NodeID:             "assistant",
+					NodeType:           "llm",
 					PredecessorStepIDs: []string{"s0"},
 					Input:              &trace.Snapshot{Text: "input"},
 					Output:             &trace.Snapshot{Text: "output"},
@@ -113,12 +116,19 @@ func TestEvent_Clone_DeepCopiesExecutionTrace(t *testing.T) {
 	require.NotNil(t, clone)
 	require.NotNil(t, clone.ExecutionTrace)
 	require.NotSame(t, e.ExecutionTrace, clone.ExecutionTrace)
+	require.NotSame(t, e.ExecutionTrace.Input, clone.ExecutionTrace.Input)
+	require.NotSame(t, e.ExecutionTrace.Output, clone.ExecutionTrace.Output)
+	require.Equal(t, "llm", clone.ExecutionTrace.Steps[0].NodeType)
+	clone.ExecutionTrace.Input.Text = "updated run input"
+	clone.ExecutionTrace.Output.Text = "updated run output"
 	clone.ExecutionTrace.Steps[0].PredecessorStepIDs[0] = "changed"
 	clone.ExecutionTrace.Steps[0].Input.Text = "updated"
 	clone.ExecutionTrace.Steps[0].Usage.TotalTokens = 99
 	clone.ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	clone.ExecutionTrace.Usage.TotalTokens = 88
 	clone.ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 3 * time.Second
+	require.Equal(t, "run input", e.ExecutionTrace.Input.Text)
+	require.Equal(t, "run output", e.ExecutionTrace.Output.Text)
 	require.Equal(t, []string{"s0"}, e.ExecutionTrace.Steps[0].PredecessorStepIDs)
 	require.Equal(t, "input", e.ExecutionTrace.Steps[0].Input.Text)
 	require.Equal(t, 3, e.ExecutionTrace.Steps[0].Usage.TotalTokens)
@@ -140,6 +150,8 @@ func TestEvent_Clone_ExecutionTraceKeepsNilUsage(t *testing.T) {
 	clone := e.Clone()
 	require.NotNil(t, clone)
 	require.NotNil(t, clone.ExecutionTrace)
+	require.Nil(t, clone.ExecutionTrace.Input)
+	require.Nil(t, clone.ExecutionTrace.Output)
 	require.Nil(t, clone.ExecutionTrace.Usage)
 	require.Len(t, clone.ExecutionTrace.Steps, 1)
 	require.Nil(t, clone.ExecutionTrace.Steps[0].Usage)

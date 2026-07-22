@@ -197,7 +197,7 @@ summarizer := summary.NewSummarizer(
 )
 ```
 
-When customizing the fork prompt with `summary.WithCacheSafeForkPrompt(...)`, do not include `{conversation_text}` again. The parent request already contains the conversation prefix.
+When customizing the fork prompt with `summary.WithCacheSafeForkPrompt(...)`, do not include `{conversation_text}` or `{previous_summary}` again. The parent request already contains the conversation prefix and any injected summary.
 
 ### Summary Injection: Avoid Rewriting the Prefix
 

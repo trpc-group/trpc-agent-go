@@ -195,8 +195,9 @@ func transformCallLLM(span *tracepb.Span) {
 	}
 
 	// observation.usage_details
-	if !collected.usage.empty() {
-		if usageJSON, err := json.Marshal(collected.usage); err == nil {
+	usage := collected.usage.normalized()
+	if !usage.empty() {
+		if usageJSON, err := json.Marshal(usage); err == nil {
 			newAttributes = append(newAttributes, stringKV(observationUsageDetails, string(usageJSON)))
 		}
 	}
