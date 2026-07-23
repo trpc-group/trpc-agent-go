@@ -495,12 +495,11 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
-## Result formatting
+## Result Formatting
 
-Function tools use JSON for model-visible tool result messages by default. Use
-`function.WithResultFormatter` when a tool needs business-specific text such as
-an XML-like observation, without constructing `model.Message` or managing the
-tool call ID yourself.
+Function Tools use JSON for model-visible tool result messages by default. Use
+`function.WithResultFormatter` when a tool needs custom text, such as an XML
+observation, without constructing `model.Message` or managing the tool call ID.
 
 ```go
 import (
@@ -525,25 +524,28 @@ bashTool := function.NewFunctionTool(
 ```
 
 The formatter receives the final normal result after `AfterTool` callbacks. It
-changes only `DefaultToolMessage.Content`; TAG still provides the tool role,
-name, call-ID pairing, ordering, events, and session persistence.
+changes only `DefaultToolMessage.Content`; tRPC-Agent-Go still manages the tool
+message role, name, tool call ID, ordering, events, and session persistence.
 
 - Without a formatter, existing JSON output remains unchanged.
-- A formatting error or panic is reported as an error. TAG does not fall back
-  to JSON or run the completed tool again.
-- Permission results bypass the formatter. For streamable tools, only the final
-  result is formatted; intermediate events are unchanged.
-- Existing state-delta providers continue to receive the result's compatibility
-  JSON, not formatted or callback-overridden model text. A required JSON
-  projection failure fails the response instead of silently dropping state.
+- A formatting error or panic is reported as an error. tRPC-Agent-Go does not
+  fall back to JSON or run the completed tool again.
+- Permission results and state-only final stream results bypass the formatter.
+  For other streamable results, only the final result is formatted;
+  intermediate events are unchanged.
+- Tools that provide state deltas receive the JSON representation of the final
+  tool result. Formatted content and `ToolResultMessages` overrides are not used
+  as state-delta input. If the JSON cannot be produced, the response fails
+  instead of silently dropping state.
 - `ToolResultMessages` still runs after the default message is prepared and may
   override it. Continue using that callback for multiple messages, multimodal
   content, or complete control of the message protocol.
 
-Formatting is a model-presentation hook, not a transport encoder or reversible
-serialization format. TAG does not provide built-in XML or text formatters; the
-business formatter owns escaping, truncation, and output validity. A formatter
-may be called concurrently and must synchronize any mutable state it owns.
+Result formatting controls the text sent to the model. It is not a transport
+encoder or reversible serialization format. tRPC-Agent-Go does not provide
+built-in XML or text formatters; the application is responsible for escaping,
+truncation, and output validity. A formatter may be called concurrently and
+must synchronize any mutable state it owns.
 
 ## Built-in Tools
 

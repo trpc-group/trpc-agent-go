@@ -106,9 +106,9 @@ type toolEventStateDelta struct {
 	sessionBaseline session.StateMap
 	args            []byte
 	choice          model.Choice
-	// resultJSON is the compatibility JSON consumed by existing StateDelta
-	// providers. It is kept separate from model-visible formatted content.
-	resultJSON []byte
+	// stateDeltaResultJSON is the JSON consumed by existing StateDelta
+	// providers. It is separate from model-visible formatted content.
+	stateDeltaResultJSON []byte
 }
 
 type resolvedToolContextKey struct{}
@@ -129,7 +129,7 @@ type toolResult struct {
 // toolCallResultData carries execution data that is not part of the
 // model-visible tool response.
 type toolCallResultData struct {
-	resultJSON []byte
+	stateDeltaResultJSON []byte
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -861,7 +861,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 			invocation,
 			modifiedArgs,
 			choices,
-			resultData.resultJSON,
+			resultData.stateDeltaResultJSON,
 		)
 	}
 
@@ -1223,7 +1223,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		invocation,
 		modifiedArgs,
 		choices,
-		resultData.resultJSON,
+		resultData.stateDeltaResultJSON,
 	)
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
@@ -1389,8 +1389,8 @@ func resultFormatterForTool(tl tool.Tool) resultformat.Formatter {
 	return provider.ResultFormatter()
 }
 
-// toolProvidesStateDelta reports whether the resolved semantic tool contributes
-// a state delta from its result content.
+// toolProvidesStateDelta reports whether the resolved semantic tool derives a
+// state delta from its final result.
 func toolProvidesStateDelta(tl tool.Tool) bool {
 	semantic := itool.ResolveSemantic(tl)
 	if _, ok := semantic.(invocationStateDeltaProvider); ok {
@@ -1400,8 +1400,8 @@ func toolProvidesStateDelta(tl tool.Tool) bool {
 	return ok
 }
 
-// marshalStateDeltaResultJSON serializes a formatted tool result for an
-// existing StateDelta provider. Formatting can support values that JSON cannot,
+// marshalStateDeltaResultJSON serializes the final tool result for an existing
+// StateDelta provider. A custom formatter may support values that JSON cannot,
 // so both marshal errors and panics must fail the tool response explicitly.
 func marshalStateDeltaResultJSON(result any) (b []byte, err error) {
 	defer func() {
@@ -1412,45 +1412,33 @@ func marshalStateDeltaResultJSON(result any) (b []byte, err error) {
 	return marshalJSONNoHTMLEscape(result)
 }
 
-// attachStateDelta copies a tool-provided state delta to the event using the
-// model message content. This preserves the original helper contract for
-// callers that do not provide an explicit result projection.
-func (p *FunctionCallResponseProcessor) attachStateDelta(
-	inv *agent.Invocation,
-	tl tool.Tool,
-	args []byte,
-	choice *model.Choice,
-	ev *event.Event,
-) {
-	p.attachStateDeltaWithResultJSON(inv, tl, args, nil, choice, ev)
-}
-
-// attachStateDeltaWithResultJSON copies a tool-provided state delta using an
-// explicit JSON projection when available. Formatted or callback-overridden
-// model content is never treated as the state protocol in that case.
+// attachStateDeltaWithResultJSON copies a tool-provided state delta using the
+// explicit JSON representation of the final tool result. Model-visible content
+// is never used as the state protocol.
 func (p *FunctionCallResponseProcessor) attachStateDeltaWithResultJSON(
 	inv *agent.Invocation,
 	tl tool.Tool,
 	args []byte,
-	resultJSON []byte,
+	stateDeltaResultJSON []byte,
 	choice *model.Choice,
 	ev *event.Event,
 ) {
-	if tl == nil || choice == nil || ev == nil {
+	if tl == nil || choice == nil || ev == nil || stateDeltaResultJSON == nil {
 		return
-	}
-	b := resultJSON
-	if b == nil {
-		b = []byte(choice.Message.Content)
 	}
 	toolCallID := choice.Message.ToolID
 
 	var delta map[string][]byte
 	providerTool := itool.ResolveSemantic(tl)
 	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
-		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, b)
+		delta = isdp.StateDeltaForInvocation(
+			inv,
+			toolCallID,
+			args,
+			stateDeltaResultJSON,
+		)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
-		delta = sdp.StateDelta(toolCallID, args, b)
+		delta = sdp.StateDelta(toolCallID, args, stateDeltaResultJSON)
 	} else {
 		return
 	}
@@ -1482,11 +1470,12 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	invocation *agent.Invocation,
 	args []byte,
 	choices []model.Choice,
-	resultJSON []byte,
+	stateDeltaResultJSON []byte,
 ) *toolEventStateDelta {
 	if len(choices) == 0 ||
 		hasSyntheticStateOnlyToolChoice(ctx) ||
-		shouldSkipToolStateDelta(ctx) {
+		shouldSkipToolStateDelta(ctx) ||
+		stateDeltaResultJSON == nil {
 		return nil
 	}
 	tl, ok := resolvedToolFromContext(ctx)
@@ -1495,12 +1484,12 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	}
 	stateDeltaInv := newStateDeltaSnapshot(ctx, invocation)
 	return &toolEventStateDelta{
-		tool:            tl,
-		invocation:      stateDeltaInv,
-		sessionBaseline: stateDeltaSessionBaseline(ctx),
-		args:            args,
-		choice:          choices[0],
-		resultJSON:      resultJSON,
+		tool:                 tl,
+		invocation:           stateDeltaInv,
+		sessionBaseline:      stateDeltaSessionBaseline(ctx),
+		args:                 args,
+		choice:               choices[0],
+		stateDeltaResultJSON: stateDeltaResultJSON,
 	}
 }
 
@@ -1709,7 +1698,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 				stateDeltaInv,
 				result.stateDelta.tool,
 				result.stateDelta.args,
-				result.stateDelta.resultJSON,
+				result.stateDelta.stateDeltaResultJSON,
 				&result.stateDelta.choice,
 				result.event,
 			)
@@ -1950,14 +1939,12 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 	}
 	permissionResult := isPermissionResult(result)
 	var formatter resultformat.Formatter
-	if permissionResult {
-		// Permission results are framework control protocol, not normal tool
-		// output. Never run the tool's result formatter on them so denied and
-		// approval-required messages keep their default encoding.
-	} else {
+	// Permission and state-only results are framework protocol messages, not
+	// normal tool output. Keep their default JSON representation.
+	if !permissionResult && !suppressDefaultToolMessage {
 		formatter = resultFormatterForTool(tl)
 	}
-	defaultMsg, resultJSON, err := buildDefaultToolMessageWithFormatter(
+	defaultMsg, stateDeltaResultJSON, err := buildDefaultToolMessageWithFormatter(
 		ctx,
 		toolCall.ID,
 		result,
@@ -1976,7 +1963,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
 	if resultData != nil {
-		resultData.resultJSON = resultJSON
+		resultData.stateDeltaResultJSON = stateDeltaResultJSON
 	}
 	if suppressDefaultToolMessage {
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
@@ -2929,7 +2916,7 @@ func buildDefaultToolMessageWithFormatter(
 	toolCallID string,
 	result any,
 	formatter resultformat.Formatter,
-	needsResultJSON bool,
+	needsStateDeltaResultJSON bool,
 ) (model.Message, []byte, error) {
 	if formatter == nil {
 		msg, err := buildDefaultToolMessage(toolCallID, result)
@@ -2937,7 +2924,7 @@ func buildDefaultToolMessageWithFormatter(
 			return model.Message{}, nil,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
-		if !needsResultJSON {
+		if !needsStateDeltaResultJSON {
 			return msg, nil, nil
 		}
 		return msg, []byte(msg.Content), nil
@@ -2948,9 +2935,9 @@ func buildDefaultToolMessageWithFormatter(
 		return model.Message{}, nil,
 			fmt.Errorf("%s: %w", ErrorFormatResult, err)
 	}
-	var resultJSON []byte
-	if needsResultJSON {
-		resultJSON, err = marshalStateDeltaResultJSON(result)
+	var stateDeltaResultJSON []byte
+	if needsStateDeltaResultJSON {
+		stateDeltaResultJSON, err = marshalStateDeltaResultJSON(result)
 		if err != nil {
 			return model.Message{}, nil,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
@@ -2960,7 +2947,7 @@ func buildDefaultToolMessageWithFormatter(
 		Role:    model.RoleTool,
 		Content: content,
 		ToolID:  toolCallID,
-	}, resultJSON, nil
+	}, stateDeltaResultJSON, nil
 }
 
 // formatToolResultWithRecover converts formatter panics into flow errors so a

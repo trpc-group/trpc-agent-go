@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -82,6 +83,69 @@ func xmlLikeResultFormatter() resultformat.Formatter {
 			result.Output,
 		), nil
 	})
+}
+
+func newStateOnlyResultFormatStreamTool(
+	toolCalls *atomic.Int32,
+	formatterCalls *atomic.Int32,
+) *function.StreamableFunctionTool[struct{}, resultFormatTestResult] {
+	return function.NewStreamableFunctionTool[struct{}, resultFormatTestResult](
+		func(context.Context, struct{}) (*tool.StreamReader, error) {
+			toolCalls.Add(1)
+			stream := tool.NewStream(2)
+			go func() {
+				defer stream.Writer.Close()
+				_ = stream.Writer.Send(
+					tool.StreamChunk{Content: "partial"},
+					nil,
+				)
+				_ = stream.Writer.Send(tool.StreamChunk{
+					Content: tool.FinalResultStateChunk{
+						Result: nil,
+						StateDelta: map[string][]byte{
+							"stream_state": []byte(`"done"`),
+						},
+					},
+				}, nil)
+			}()
+			return stream.Reader, nil
+		},
+		function.WithName("state_only"),
+		function.WithResultFormatter(
+			resultformat.FormatterFunc[resultFormatTestResult](func(
+				context.Context,
+				resultFormatTestResult,
+			) (string, error) {
+				formatterCalls.Add(1)
+				return "unexpected", nil
+			}),
+		),
+	)
+}
+
+func assertStateOnlyStreamEvents(
+	t *testing.T,
+	eventChan <-chan *event.Event,
+) {
+	t.Helper()
+	var sawPartial, sawState bool
+	for evt := range eventChan {
+		if evt == nil {
+			continue
+		}
+		if evt.Response != nil && evt.IsPartial {
+			for _, choice := range evt.Choices {
+				if choice.Delta.Content == "partial" {
+					sawPartial = true
+				}
+			}
+		}
+		if string(evt.StateDelta["stream_state"]) == `"done"` {
+			sawState = true
+		}
+	}
+	assert.True(t, sawPartial)
+	assert.True(t, sawState)
 }
 
 func TestExecuteToolCall_ResultFormatterDefaultJSONCompatibility(t *testing.T) {
@@ -464,6 +528,140 @@ func TestExecuteToolCall_StreamableFormatsOnlyFinalResult(t *testing.T) {
 		}
 	}
 	assert.True(t, sawPartial)
+}
+
+func TestExecuteToolCall_StateOnlyStreamSkipsResultFormatter(t *testing.T) {
+	var toolCalls, formatterCalls, callbackCalls atomic.Int32
+	streamTool := newStateOnlyResultFormatStreamTool(
+		&toolCalls,
+		&formatterCalls,
+	)
+	var defaultMessage model.Message
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		_ context.Context,
+		input *tool.ToolResultMessagesInput,
+	) (any, error) {
+		callbackCalls.Add(1)
+		require.Nil(t, input.Result)
+		var ok bool
+		defaultMessage, ok = input.DefaultToolMessage.(model.Message)
+		require.True(t, ok)
+		return nil, nil
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	inv := &agent.Invocation{
+		InvocationID: "invocation",
+		AgentName:    "agent",
+		Model:        &mockModel{},
+	}
+	toolCall := model.ToolCall{
+		ID: "call-state",
+		Function: model.FunctionDefinitionParam{
+			Name:      "state_only",
+			Arguments: []byte(`{}`),
+		},
+	}
+	eventChan := make(chan *event.Event, 8)
+
+	_, choices, _, _, _, err := p.executeToolCall(
+		context.Background(),
+		inv,
+		toolCall,
+		map[string]tool.Tool{"state_only": streamTool},
+		0,
+		eventChan,
+	)
+
+	require.NoError(t, err)
+	require.Len(t, choices, 1)
+	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
+	assert.Equal(t, "state_only", choices[0].Message.ToolName)
+	assert.Equal(t, "call-state", choices[0].Message.ToolID)
+	assert.Equal(t, "null", choices[0].Message.Content)
+	assert.Equal(t, "null", defaultMessage.Content)
+	assert.Equal(t, int32(1), toolCalls.Load())
+	assert.Zero(t, formatterCalls.Load())
+	assert.Equal(t, int32(1), callbackCalls.Load())
+	close(eventChan)
+	assertStateOnlyStreamEvents(t, eventChan)
+}
+
+func TestHandleFunctionCalls_StateOnlyStreamFormatterKeepsParallelPairing(
+	t *testing.T,
+) {
+	var toolCalls, formatterCalls, siblingCalls atomic.Int32
+	streamTool := newStateOnlyResultFormatStreamTool(
+		&toolCalls,
+		&formatterCalls,
+	)
+	siblingTool := function.NewFunctionTool(
+		func(context.Context, struct{}) (resultFormatTestResult, error) {
+			siblingCalls.Add(1)
+			return resultFormatTestResult{Output: "sibling"}, nil
+		},
+		function.WithName("sibling"),
+	)
+	toolCallsFromModel := []model.ToolCall{
+		{
+			ID: "call-state",
+			Function: model.FunctionDefinitionParam{
+				Name:      "state_only",
+				Arguments: []byte(`{}`),
+			},
+		},
+		{
+			ID: "call-sibling",
+			Function: model.FunctionDefinitionParam{
+				Name:      "sibling",
+				Arguments: []byte(`{}`),
+			},
+		},
+	}
+	llmResponse := &model.Response{
+		Model: "model",
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role:      model.RoleAssistant,
+				ToolCalls: toolCallsFromModel,
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 8)
+
+	evt, err := NewFunctionCallResponseProcessor(true, nil).handleFunctionCalls(
+		context.Background(),
+		&agent.Invocation{
+			InvocationID: "invocation",
+			AgentName:    "agent",
+			Model:        &mockModel{},
+		},
+		llmResponse,
+		map[string]tool.Tool{
+			"state_only": streamTool,
+			"sibling":    siblingTool,
+		},
+		eventChan,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, evt)
+	require.Len(t, evt.Choices, 2)
+	assert.Equal(t, "call-state", evt.Choices[0].Message.ToolID)
+	assert.Equal(t, "state_only", evt.Choices[0].Message.ToolName)
+	assert.Equal(t, "null", evt.Choices[0].Message.Content)
+	assert.Equal(t, "call-sibling", evt.Choices[1].Message.ToolID)
+	assert.Equal(t, "sibling", evt.Choices[1].Message.ToolName)
+	assert.Equal(
+		t,
+		`{"exit_code":0,"output":"sibling"}`,
+		evt.Choices[1].Message.Content,
+	)
+	assert.Equal(t, int32(1), toolCalls.Load())
+	assert.Equal(t, int32(1), siblingCalls.Load())
+	assert.Zero(t, formatterCalls.Load())
+	close(eventChan)
+	assertStateOnlyStreamEvents(t, eventChan)
 }
 
 func TestHandleFunctionCalls_ResultFormatterIsPerToolAndKeepsPairing(t *testing.T) {
