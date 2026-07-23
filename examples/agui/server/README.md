@@ -8,6 +8,7 @@ This directory shows AG-UI servers that can talk to the AG-UI client examples.
 - [`skill_artifacts/`](skill_artifacts/) – Demonstrates `skill_run` output artifacts surfaced as `CustomEvent("tool.artifacts")`.
 - [`event_emitter/`](event_emitter/) – Demonstrates Node EventEmitter for emitting custom events, progress updates, and streaming text from NodeFunc.
 - [`finishresult/`](finishresult/) – Demonstrates populating `RUN_FINISHED.result` by wrapping the default translator.
+- [`runner_factory/`](runner_factory/) – Demonstrates wrapping the built-in AG-UI runner with `agui.WithRunnerFactory`.
 - [`externaltool/llmagent/`](externaltool/llmagent/) – Demonstrates `llmagent + agui + WithExternalTools` with two internal tools and two dynamically declared external tools in the same conversation.
 - [`externaltool/graphagent/`](externaltool/graphagent/) – Demonstrates a `GraphAgent` interrupt workflow with two internal tools and two external tools in the same turn.
 - [`externaltool/agentnode_llmagent/`](externaltool/agentnode_llmagent/) – Demonstrates AgentNode child `LLMAgent` external tools with AG-UI interrupt and resume.
