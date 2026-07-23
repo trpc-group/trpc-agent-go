@@ -798,7 +798,9 @@ Notes:
 - Prefer progressive disclosure: load only the body first, then list and
   select only the docs you need. Avoid `include_all_docs` unless you
   truly need every doc (or the user explicitly asks).
-- Safe to call multiple times to add or replace docs.
+- When multiple docs are already known to be needed, select them together.
+  On later calls, use `mode=add` to preserve the current selection or
+  `mode=replace` only when supplying the complete replacement selection.
 - The tools write session state, but **how long the loaded content stays
   in the prompt** depends on `SkillLoadMode`:
   - `turn` (default): loaded bodies/docs stay for the current
@@ -938,9 +940,26 @@ Input:
 - `skill` (required)
 - `docs` (optional array)
 - `include_all_docs` (optional bool)
-- `mode` (optional string): `add` | `replace` | `clear`
+- `mode` (optional string): `add` | `replace` | `clear`; defaults to
+  `replace`. The schema permits only these three values. If a non-enum
+  value nevertheless reaches the runtime, it is normalized to `replace`
+  for backward compatibility.
 
 Behavior:
+- This tool updates the current active doc-selection set; it is not an
+  append-only file read.
+- `add` preserves the current selection and adds `docs` (deduplicated).
+- `replace` sets `docs` as the complete selection, removing previously
+  selected docs that are absent from this call.
+- `clear` empties the selection.
+- When several docs are already known to be needed, pass all of them in one
+  `replace` call. If another doc is discovered later, use `add` rather than
+  alternating singleton `replace` calls.
+- If an omitted or unsupported `mode` implicitly removes prior docs, the
+  result includes an actionable `warnings` entry naming the removed docs
+  and advising the caller to select the complete set or use `mode=add`.
+- Once `include_all_docs=true` is active, use `clear` before narrowing the
+  selection to an explicit list.
 - Updates doc selection state for the current agent:
   - `temp:skill:docs_by_agent:<agent>/<name>` = `*` for include all
   - `temp:skill:docs_by_agent:<agent>/<name>` = JSON array for explicit list

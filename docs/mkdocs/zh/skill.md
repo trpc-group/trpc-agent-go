@@ -770,7 +770,8 @@ _ = svc
 - 建议采用“渐进式披露”：默认只传 `skill` 加载正文；需要文档时先
   `skill_list_docs` 再 `skill_select_docs`，只选必要文档；除非确
   实需要全部（或用户明确要求），避免 `include_all_docs=true`。
-- 可多次调用以新增或替换文档。
+- 已知需要多份文档时应在一次调用中一起选择。后续调用若要保留当前
+  选择，请使用 `mode=add`；仅在传入完整替换集合时使用 `mode=replace`。
 - 工具会写入 session state，但**正文/文档在提示词里驻留多久**取决
   于 `SkillLoadMode`：
   - `turn`（默认）：在当前一次 `Runner.Run`（处理一条用户消息）
@@ -902,9 +903,20 @@ agent := llmagent.New(
 - `skill`（必填）
 - `docs`（可选数组）
 - `include_all_docs`（可选布尔）
-- `mode`（可选字符串）：`add` | `replace` | `clear`
+- `mode`（可选字符串）：`add` | `replace` | `clear`；默认
+  `replace`。schema 只允许这三个值；如果非枚举值仍到达运行时，
+  则出于向后兼容将其归一化为 `replace`。
 
 行为：
+- 此工具更新的是当前激活的文档选择集合，并非只增不减的文件读取。
+- `add` 保留当前选择，并追加 `docs`（自动去重）。
+- `replace` 将 `docs` 设为完整选择；此前已选但本次未传入的文档会被移除。
+- `clear` 清空选择。
+- 已知需要多份文档时，应在一次 `replace` 调用中全部传入；后续发现
+  新文档时应使用 `add`，不要用多个单文档 `replace` 调用来回切换。
+- 如果省略或传入非法 `mode` 导致隐式 `replace` 移除旧文档，工具结果
+  会在 `warnings` 中给出被移除文档及恢复建议。
+- `include_all_docs=true` 生效后，如需收窄为显式列表，应先调用 `clear`。
 - 更新当前 agent 的 doc 选择 state key：
   - `temp:skill:docs_by_agent:<agent>/<name>`：`*` 表示全选；数组表示显式列表
   - 同时刷新 `temp:skill:loaded_order_by_agent:<agent>`，因此

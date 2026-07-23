@@ -26,6 +26,9 @@ const (
 	modeAdd            = "add"
 	modeReplace        = "replace"
 	modeClear          = "clear"
+
+	modeFallbackOmitted     = "omitted"
+	modeFallbackUnsupported = "unsupported"
 )
 
 type selectDocsInput struct {
@@ -33,6 +36,7 @@ type selectDocsInput struct {
 	Docs           []string `json:"docs,omitempty"`
 	IncludeAllDocs bool     `json:"include_all_docs,omitempty"`
 	Mode           string   `json:"mode,omitempty"`
+	modeFallback   string
 }
 
 type selectDocsOutput struct {
@@ -40,6 +44,7 @@ type selectDocsOutput struct {
 	Selected       []string `json:"selected_docs,omitempty"`
 	IncludeAllDocs bool     `json:"include_all_docs,omitempty"`
 	Mode           string   `json:"mode,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 // SelectDocsTool updates doc selection for a loaded skill.
@@ -56,11 +61,15 @@ func NewSelectDocsTool(repo skill.Repository) *SelectDocsTool {
 func (t *SelectDocsTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: selectDocsToolName,
-		Description: "Select docs for a skill. " +
-			"Prefer selecting only needed docs; " +
-			"avoid include_all_docs unless needed. " +
-			"Use mode=add to append, " +
-			"replace to overwrite, or clear to remove.",
+		Description: "Update the current selected-doc set for a loaded skill. " +
+			"Select all docs already known to be needed in one call. " +
+			"Use mode=add to preserve the current selection and append docs. " +
+			"Use mode=replace to set the complete selection. Omitting mode " +
+			"defaults to replace; if a non-enum value reaches the runtime, " +
+			"it also falls back to replace for backward compatibility. " +
+			"In either case, docs absent from the call are removed. " +
+			"Use mode=clear to remove the selection. " +
+			"Avoid include_all_docs unless needed.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Select docs input",
@@ -70,23 +79,33 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 					t.repo, "Skill name",
 				),
 				"docs": {
-					Type:        "array",
-					Description: "Doc names to select (prefer few)",
-					Items:       &tool.Schema{Type: "string"},
+					Type: "array",
+					Description: "Docs for this update. With replace " +
+						"(including the default), pass every doc that must " +
+						"remain selected; with add, pass only new docs.",
+					Items: &tool.Schema{Type: "string"},
 				},
 				"include_all_docs": {
-					Type:        "boolean",
-					Description: "Include all docs if true (use sparingly)",
+					Type: "boolean",
+					Description: "Select all docs if true (use sparingly). " +
+						"Once active, use clear before narrowing to a list.",
 				},
 				"mode": {
-					Type:        "string",
-					Description: "add | replace | clear",
+					Type: "string",
+					Description: "How to update the current selection: add " +
+						"preserves selected docs, replace sets the complete " +
+						"list, and clear empties it. Omit mode to use replace. " +
+						"The schema permits only these three values; if a " +
+						"non-enum value reaches the runtime, it falls back " +
+						"to replace for backward compatibility.",
+					Enum:    []any{modeAdd, modeReplace, modeClear},
+					Default: modeReplace,
 				},
 			},
 		},
 		OutputSchema: &tool.Schema{
 			Type:        "object",
-			Description: "Final selection info",
+			Description: "Complete active doc selection after the update",
 			Properties: map[string]*tool.Schema{
 				"skill": {Type: "string"},
 				"selected_docs": {
@@ -94,7 +113,17 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 					Items: &tool.Schema{Type: "string"},
 				},
 				"include_all_docs": {Type: "boolean"},
-				"mode":             {Type: "string"},
+				"mode": {
+					Type:        "string",
+					Description: "Normalized mode applied by the tool",
+					Enum:        []any{modeAdd, modeReplace, modeClear},
+				},
+				"warnings": {
+					Type: "array",
+					Description: "Actionable warnings about implicit " +
+						"destructive updates",
+					Items: &tool.Schema{Type: "string"},
+				},
 			},
 		},
 	}
@@ -125,7 +154,7 @@ func (t *SelectDocsTool) Call(
 	case modeAdd:
 		return t.outAdd(prev, in), nil
 	default:
-		return t.outReplace(in), nil
+		return t.outReplace(prev, in), nil
 	}
 }
 
@@ -212,10 +241,13 @@ func (t *SelectDocsTool) parseSelectArgs(
 	}
 
 	m := strings.ToLower(strings.TrimSpace(in.Mode))
-	if m == "" {
+	switch m {
+	case "":
+		in.modeFallback = modeFallbackOmitted
 		m = modeReplace
-	}
-	if m != modeAdd && m != modeReplace && m != modeClear {
+	case modeAdd, modeReplace, modeClear:
+	default:
+		in.modeFallback = modeFallbackUnsupported
 		m = modeReplace
 	}
 	in.Mode = m
@@ -283,7 +315,7 @@ func (t *SelectDocsTool) outAdd(
 }
 
 func (t *SelectDocsTool) outReplace(
-	in selectDocsInput,
+	prev []string, in selectDocsInput,
 ) selectDocsOutput {
 	out := selectDocsOutput{
 		Skill:          in.Skill,
@@ -294,5 +326,49 @@ func (t *SelectDocsTool) outReplace(
 	if in.IncludeAllDocs {
 		out.Selected = nil
 	}
+	if warning := implicitReplaceWarning(prev, in); warning != "" {
+		out.Warnings = []string{warning}
+	}
 	return out
+}
+
+func implicitReplaceWarning(
+	prev []string, in selectDocsInput,
+) string {
+	if in.modeFallback == "" || in.IncludeAllDocs {
+		return ""
+	}
+
+	selected := make(map[string]struct{}, len(in.Docs))
+	for _, name := range in.Docs {
+		selected[name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(prev))
+	removed := make([]string, 0, len(prev))
+	for _, name := range prev {
+		if _, ok := selected[name]; ok {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		removed = append(removed, name)
+	}
+	if len(removed) == 0 {
+		return ""
+	}
+
+	removedJSON, err := json.Marshal(removed)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf(
+		"mode was %s, so this call used replace and removed previously "+
+			"selected docs: %s. If those docs are still needed, select "+
+			"all needed docs in one call or use mode=add to preserve "+
+			"the current selection.",
+		in.modeFallback,
+		removedJSON,
+	)
 }

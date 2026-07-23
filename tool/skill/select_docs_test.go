@@ -172,6 +172,25 @@ func TestSelectDocsTool_DeclarationSchema(t *testing.T) {
 	require.Contains(t, inProps, "docs")
 	require.Contains(t, inProps, "include_all_docs")
 	require.Contains(t, inProps, "mode")
+	require.Equal(
+		t,
+		[]any{modeAdd, modeReplace, modeClear},
+		inProps["mode"].Enum,
+	)
+	require.Equal(t, modeReplace, inProps["mode"].Default)
+	require.Contains(t, d.Description, "current selected-doc set")
+	require.Contains(t, d.Description, "defaults to replace")
+	require.Contains(t, inProps["docs"].Description, "every doc")
+	require.Contains(
+		t,
+		inProps["mode"].Description,
+		"non-enum value reaches the runtime",
+	)
+	require.Contains(
+		t,
+		d.OutputSchema.Properties,
+		"warnings",
+	)
 }
 
 func TestSelectDocsTool_ParseErrors(t *testing.T) {
@@ -221,6 +240,168 @@ func TestSelectDocsTool_ModeNormalization(t *testing.T) {
 	m = map[string]any{}
 	require.NoError(t, json.Unmarshal(b, &m))
 	require.Equal(t, "add", m["mode"])
+}
+
+func TestSelectDocsTool_ImplicitReplaceWarning(t *testing.T) {
+	root := createDocsTestSkill(t, demoSkill)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	sd := NewSelectDocsTool(repo)
+
+	inv := &agent.Invocation{
+		AgentName: "tester",
+		Session:   &session.Session{State: session.StateMap{}},
+	}
+	inv.Session.State[skill.DocsKey("tester", demoSkill)] =
+		[]byte(`["` + usageDoc + `"]`)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	tests := []struct {
+		name        string
+		args        string
+		wantWarning string
+		wantState   string
+	}{
+		{
+			name: "omitted mode removes prior doc",
+			args: `{"skill":"` + demoSkill + `","docs":["` +
+				extraDoc + `"]}`,
+			wantWarning: "mode was omitted",
+			wantState:   `["` + extraDoc + `"]`,
+		},
+		{
+			name: "unsupported mode removes prior doc",
+			args: `{"skill":"` + demoSkill + `","docs":["` +
+				extraDoc + `"],"mode":"invalid"}`,
+			wantWarning: "mode was unsupported",
+			wantState:   `["` + extraDoc + `"]`,
+		},
+		{
+			name:        "omitted mode clears prior docs",
+			args:        `{"skill":"` + demoSkill + `","docs":[]}`,
+			wantWarning: "mode was omitted",
+			wantState:   `[]`,
+		},
+		{
+			name: "explicit replace is intentional",
+			args: `{"skill":"` + demoSkill + `","docs":["` +
+				extraDoc + `"],"mode":"replace"}`,
+		},
+		{
+			name: "implicit replace keeps prior doc",
+			args: `{"skill":"` + demoSkill + `","docs":["` +
+				usageDoc + `","` + extraDoc + `"]}`,
+		},
+		{
+			name: "include all does not remove prior doc",
+			args: `{"skill":"` + demoSkill +
+				`","include_all_docs":true}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := sd.Call(ctx, []byte(tt.args))
+			require.NoError(t, err)
+			out, ok := got.(selectDocsOutput)
+			require.True(t, ok)
+			require.Equal(t, modeReplace, out.Mode)
+			if tt.wantWarning == "" {
+				require.Empty(t, out.Warnings)
+				return
+			}
+			require.Len(t, out.Warnings, 1)
+			require.Contains(t, out.Warnings[0], tt.wantWarning)
+			require.Contains(t, out.Warnings[0], usageDoc)
+			require.Contains(t, out.Warnings[0], "mode=add")
+
+			resultJSON, err := json.Marshal(out)
+			require.NoError(t, err)
+			delta := sd.StateDelta("call-warning", nil, resultJSON)
+			require.JSONEq(
+				t,
+				tt.wantState,
+				string(delta[skill.DocsKey("", demoSkill)]),
+			)
+		})
+	}
+}
+
+func TestSelectDocsTool_ImplicitReplaceWarningEdges(t *testing.T) {
+	root := createDocsTestSkill(t, demoSkill)
+	repo, err := skill.NewFSRepository(root)
+	require.NoError(t, err)
+	sd := NewSelectDocsTool(repo)
+
+	call := func(
+		t *testing.T, ctx context.Context, args string,
+	) selectDocsOutput {
+		t.Helper()
+		got, err := sd.Call(ctx, []byte(args))
+		require.NoError(t, err)
+		out, ok := got.(selectDocsOutput)
+		require.True(t, ok)
+		return out
+	}
+
+	t.Run("include all selection is absorbing", func(t *testing.T) {
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session:   &session.Session{State: session.StateMap{}},
+		}
+		inv.Session.State[skill.DocsKey("tester", demoSkill)] = []byte("*")
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		out := call(
+			t,
+			ctx,
+			`{"skill":"`+demoSkill+`","docs":["`+extraDoc+`"]}`,
+		)
+		require.Equal(t, modeReplace, out.Mode)
+		require.True(t, out.IncludeAllDocs)
+		require.Empty(t, out.Warnings)
+	})
+
+	t.Run("missing invocation has no prior selection", func(t *testing.T) {
+		out := call(
+			t,
+			context.Background(),
+			`{"skill":"`+demoSkill+`","docs":["`+extraDoc+`"]}`,
+		)
+		require.Equal(t, modeReplace, out.Mode)
+		require.Empty(t, out.Warnings)
+	})
+
+	t.Run("nil session has no prior selection", func(t *testing.T) {
+		ctx := agent.NewInvocationContext(
+			context.Background(),
+			&agent.Invocation{AgentName: "tester"},
+		)
+		out := call(
+			t,
+			ctx,
+			`{"skill":"`+demoSkill+`","docs":["`+extraDoc+`"]}`,
+		)
+		require.Equal(t, modeReplace, out.Mode)
+		require.Empty(t, out.Warnings)
+	})
+
+	t.Run("explicit clear does not warn", func(t *testing.T) {
+		inv := &agent.Invocation{
+			AgentName: "tester",
+			Session:   &session.Session{State: session.StateMap{}},
+		}
+		inv.Session.State[skill.DocsKey("tester", demoSkill)] =
+			[]byte(`["` + usageDoc + `"]`)
+		ctx := agent.NewInvocationContext(context.Background(), inv)
+		out := call(
+			t,
+			ctx,
+			`{"skill":"`+demoSkill+`","mode":"clear"}`,
+		)
+		require.Equal(t, modeClear, out.Mode)
+		require.Empty(t, out.Selected)
+		require.Empty(t, out.Warnings)
+	})
 }
 
 func TestSelectDocsTool_PreviousSelectionBranches(t *testing.T) {
