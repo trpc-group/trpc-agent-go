@@ -523,6 +523,9 @@ session 持久化仍由 tRPC-Agent-Go 维护。
 不提供内置 XML 或 Text formatter；escaping、截断和输出有效性由应用负责。Formatter
 可能被并发调用，若持有可变状态，需要由应用自行保证并发安全。
 
+完整可运行示例见
+[examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat)。
+
 ## 内置工具类型
 
 ### Tool 调用重试

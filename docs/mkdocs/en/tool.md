@@ -547,6 +547,9 @@ built-in XML or text formatters; the application is responsible for escaping,
 truncation, and output validity. A formatter may be called concurrently and
 must synchronize any mutable state it owns.
 
+For a runnable end-to-end example, see
+[examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat).
+
 ## Built-in Tools
 
 ### Tool Call Retry
