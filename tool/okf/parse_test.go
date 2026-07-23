@@ -10,6 +10,7 @@
 package okf
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 )
@@ -95,6 +96,15 @@ func TestSplitFrontmatter_FieldShapes(t *testing.T) {
 	if fm.Type != "" || fm.Title != "" || fm.Tags != nil || fm.Extra != nil || string(body) != "body" {
 		t.Errorf("non-mapping frontmatter should be ignored field-wise: fm=%+v body=%q", fm, body)
 	}
+
+	fm, _ = splitFrontmatter([]byte("---\ntype: Protocol\ncustom:\n  1: value\n---\nbody"))
+	wantExtra := map[string]any{"1": "value"}
+	if !reflect.DeepEqual(fm.Extra["custom"], wantExtra) {
+		t.Errorf("numeric map key was not normalized: %#v", fm.Extra["custom"])
+	}
+	if _, err := json.Marshal(fm); err != nil {
+		t.Errorf("normalized frontmatter is not JSON-compatible: %v", err)
+	}
 }
 
 func TestExtractLinks(t *testing.T) {
@@ -135,6 +145,28 @@ func TestExtractLinks(t *testing.T) {
 	}
 	if len(links) != len(want) {
 		t.Errorf("images, code and external links should be excluded, got %v", links)
+	}
+}
+
+func TestExtractLinks_DropsBundleEscapes(t *testing.T) {
+	rootLinks := extractLinks(".", []byte(
+		"[escape](../outside.md) [root](/inside.md) [local](inside.md)",
+	))
+	if !reflect.DeepEqual(rootLinks, []Link{
+		{Target: "inside", Text: "root"},
+		{Target: "inside", Text: "local"},
+	}) {
+		t.Errorf("root links = %#v", rootLinks)
+	}
+
+	nestedLinks := extractLinks("nested", []byte(
+		"[escape](../../outside.md) [parent](../inside.md) [child](./child.md)",
+	))
+	if !reflect.DeepEqual(nestedLinks, []Link{
+		{Target: "inside", Text: "parent"},
+		{Target: "nested/child", Text: "child"},
+	}) {
+		t.Errorf("nested links = %#v", nestedLinks)
 	}
 }
 

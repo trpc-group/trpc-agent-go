@@ -53,9 +53,16 @@ func TestValidate_ReportsViolations(t *testing.T) {
 	if len(vs) != len(want) {
 		t.Fatalf("got %d violations, want %d: %+v", len(vs), len(want), vs)
 	}
+	counts := make(map[string]int, len(vs))
 	for _, v := range vs {
 		if !want[v.Concept] || v.Detail == "" {
 			t.Errorf("unexpected violation: %+v", v)
+		}
+		counts[v.Concept]++
+	}
+	for concept := range want {
+		if counts[concept] != 1 {
+			t.Errorf("violations for %q = %d, want exactly 1: %+v", concept, counts[concept], vs)
 		}
 	}
 }
@@ -73,53 +80,79 @@ func TestValidate_TypeMustBeString(t *testing.T) {
 	if len(vs) != 2 {
 		t.Fatalf("got %d violations, want 2: %+v", len(vs), vs)
 	}
+	counts := make(map[string]int, len(vs))
 	for _, v := range vs {
-		if v.Concept == "valid" || !strings.Contains(v.Detail, "required 'type'") {
+		if v.Concept != "numeric" && v.Concept != "empty" ||
+			!strings.Contains(v.Detail, "required 'type'") {
 			t.Errorf("unexpected violation: %+v", v)
+		}
+		counts[v.Concept]++
+	}
+	for _, concept := range []string{"numeric", "empty"} {
+		if counts[concept] != 1 {
+			t.Errorf("violations for %q = %d, want exactly 1: %+v", concept, counts[concept], vs)
 		}
 	}
 }
 
 func TestValidate_ReservedFiles(t *testing.T) {
-	tests := map[string]fstest.MapFS{
+	tests := map[string]struct {
+		fsys    fstest.MapFS
+		concept string
+		detail  string
+	}{
 		"index without sections": {
-			"index.md": {Data: []byte("plain text")},
+			fsys:    fstest.MapFS{"index.md": {Data: []byte("plain text")}},
+			concept: "index",
+			detail:  "index.md must contain one or more heading sections with linked list entries",
 		},
 		"index list without links": {
-			"index.md": {Data: []byte("# Concepts\n\n* plain text\n")},
+			fsys:    fstest.MapFS{"index.md": {Data: []byte("# Concepts\n\n* plain text\n")}},
+			concept: "index",
+			detail:  "index.md must contain one or more heading sections with linked list entries",
 		},
 		"root index frontmatter without version": {
-			"index.md": {Data: []byte("---\nnote: no version\n---\n# Concepts\n\n* [A](a.md)\n")},
+			fsys:    fstest.MapFS{"index.md": {Data: []byte("---\nnote: no version\n---\n# Concepts\n\n* [A](a.md)\n")}},
+			concept: "index",
+			detail:  "root index.md frontmatter must declare a string okf_version",
 		},
 		"non-root index frontmatter": {
-			"sub/index.md": {Data: []byte("---\nokf_version: \"0.1\"\n---\n# Concepts\n\n* [A](a.md)\n")},
+			fsys:    fstest.MapFS{"sub/index.md": {Data: []byte("---\nokf_version: \"0.1\"\n---\n# Concepts\n\n* [A](a.md)\n")}},
+			concept: "sub/index",
+			detail:  "non-root index.md must not carry frontmatter",
 		},
 		"log with invalid date": {
-			"log.md": {Data: []byte("# Directory Update Log\n\n## not-an-iso-date\n\n* Update\n")},
+			fsys:    fstest.MapFS{"log.md": {Data: []byte("# Directory Update Log\n\n## not-an-iso-date\n\n* Update\n")}},
+			concept: "log",
+			detail:  "log.md must contain newest-first YYYY-MM-DD sections with list entries",
 		},
 		"log oldest first": {
-			"log.md": {Data: []byte("# Directory Update Log\n\n## 2026-07-01\n\n* First\n\n## 2026-07-20\n\n* Second\n")},
+			fsys:    fstest.MapFS{"log.md": {Data: []byte("# Directory Update Log\n\n## 2026-07-01\n\n* First\n\n## 2026-07-20\n\n* Second\n")}},
+			concept: "log",
+			detail:  "log.md must contain newest-first YYYY-MM-DD sections with list entries",
 		},
 		"log without entries": {
-			"log.md": {Data: []byte("# Directory Update Log\n\n## 2026-07-20\n")},
+			fsys:    fstest.MapFS{"log.md": {Data: []byte("# Directory Update Log\n\n## 2026-07-20\n")}},
+			concept: "log",
+			detail:  "log.md must contain newest-first YYYY-MM-DD sections with list entries",
 		},
 		"log with frontmatter": {
-			"log.md": {Data: []byte("---\nnote: invalid\n---\n# Directory Update Log\n\n## 2026-07-20\n\n* Update\n")},
+			fsys:    fstest.MapFS{"log.md": {Data: []byte("---\nnote: invalid\n---\n# Directory Update Log\n\n## 2026-07-20\n\n* Update\n")}},
+			concept: "log",
+			detail:  "log.md must not carry frontmatter",
 		},
 	}
-	for name, fsys := range tests {
+	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
-			vs, err := Validate(fsys)
+			vs, err := Validate(test.fsys)
 			if err != nil {
 				t.Fatalf("Validate: %v", err)
 			}
-			if len(vs) == 0 {
-				t.Fatal("expected reserved-structure violation")
+			if len(vs) != 1 {
+				t.Fatalf("got %d violations, want exactly 1: %+v", len(vs), vs)
 			}
-			for _, v := range vs {
-				if v.Detail == "" {
-					t.Errorf("unexpected violation: %+v", v)
-				}
+			if vs[0].Concept != test.concept || vs[0].Detail != test.detail {
+				t.Errorf("violation = %+v, want concept=%q detail=%q", vs[0], test.concept, test.detail)
 			}
 		})
 	}

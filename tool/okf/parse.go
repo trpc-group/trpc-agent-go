@@ -11,6 +11,7 @@ package okf
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/url"
 	"path"
 	"regexp"
@@ -98,14 +99,77 @@ func decodeFrontmatter(data []byte) (Frontmatter, error) {
 		default:
 			var extra any
 			if err := value.Decode(&extra); err == nil {
-				if fm.Extra == nil {
-					fm.Extra = make(map[string]any)
+				if normalized, ok := normalizeJSONValue(extra); ok {
+					if fm.Extra == nil {
+						fm.Extra = make(map[string]any)
+					}
+					fm.Extra[key] = normalized
 				}
-				fm.Extra[key] = extra
 			}
 		}
 	}
 	return fm, nil
+}
+
+// normalizeJSONValue converts YAML maps to JSON-compatible maps. Tool results
+// are JSON encoded, so preserving a YAML map[any]any verbatim would make an
+// otherwise readable concept fail at the tool boundary.
+func normalizeJSONValue(value any) (any, bool) {
+	switch value := value.(type) {
+	case map[string]any:
+		normalized := make(map[string]any, len(value))
+		for key, child := range value {
+			item, ok := normalizeJSONValue(child)
+			if !ok {
+				return nil, false
+			}
+			normalized[key] = item
+		}
+		return normalized, true
+	case map[any]any:
+		normalized := make(map[string]any, len(value))
+		for key, child := range value {
+			stringKey, ok := jsonMapKey(key)
+			if !ok {
+				return nil, false
+			}
+			if _, exists := normalized[stringKey]; exists {
+				return nil, false
+			}
+			item, ok := normalizeJSONValue(child)
+			if !ok {
+				return nil, false
+			}
+			normalized[stringKey] = item
+		}
+		return normalized, true
+	case []any:
+		normalized := make([]any, len(value))
+		for i, child := range value {
+			item, ok := normalizeJSONValue(child)
+			if !ok {
+				return nil, false
+			}
+			normalized[i] = item
+		}
+		return normalized, true
+	default:
+		if _, err := json.Marshal(value); err != nil {
+			return nil, false
+		}
+		return value, true
+	}
+}
+
+func jsonMapKey(value any) (string, bool) {
+	if value, ok := value.(string); ok {
+		return value, true
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || string(encoded) == "null" || len(encoded) == 0 || encoded[0] == '{' || encoded[0] == '[' {
+		return "", false
+	}
+	return string(encoded), true
 }
 
 func decodeTags(node *yaml.Node) []string {
@@ -156,6 +220,10 @@ func extractLinks(conceptDir string, body []byte) []Link {
 			id = path.Join(conceptDir, target.Path)
 		}
 		id = strings.TrimSuffix(path.Clean(id), ".md")
+		if id == "" || id == "." || id == ".." || strings.HasPrefix(id, "../") ||
+			strings.ContainsRune(id, '\\') {
+			return ast.WalkContinue, nil
+		}
 		links = append(links, Link{Target: id, Text: string(link.Text(body))})
 		return ast.WalkContinue, nil
 	})

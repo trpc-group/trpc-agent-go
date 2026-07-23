@@ -13,13 +13,17 @@
 package localokf
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"strings"
 
+	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
 )
 
@@ -101,30 +105,76 @@ func (l *Local) List(ctx context.Context, dir string) (okf.Listing, error) {
 			}
 			listing.Index = string(data)
 			if normDir(dir) == "" { // okf_version lives only in the root index.md.
-				parsed := okf.ParseConcept("index", data)
-				listing.OKFVersion, _ = parsed.Frontmatter.Extra["okf_version"].(string)
+				_, listing.OKFVersion = listingMetadata(bytes.NewReader(data), "")
 			}
 			continue
 		case okf.LogFile:
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(abs, name))
+		id := joinID(dir, strings.TrimSuffix(name, ".md"))
+		file, err := os.Open(filepath.Join(abs, name))
 		if err != nil {
-			id := joinID(dir, strings.TrimSuffix(name, ".md"))
 			return okf.Listing{}, filesystemError(fmt.Sprintf("read concept %q", id))
 		}
-		fm := okf.ParseConcept(joinID(dir, strings.TrimSuffix(name, ".md")), data).Frontmatter
-		listing.Concepts = append(listing.Concepts, okf.ConceptMeta{
-			ID:          joinID(dir, strings.TrimSuffix(name, ".md")),
-			Type:        fm.Type,
-			Title:       fm.Title,
-			Description: fm.Description,
-		})
+		meta, _ := listingMetadata(file, id)
+		_ = file.Close()
+		listing.Concepts = append(listing.Concepts, meta)
 	}
 	if err := ctx.Err(); err != nil {
 		return okf.Listing{}, err
 	}
 	return listing, nil
+}
+
+// listingMetadata reads only the leading frontmatter document. List does not
+// need to load concept bodies or build a Markdown AST just to render cards.
+func listingMetadata(reader io.Reader, id string) (okf.ConceptMeta, string) {
+	meta := okf.ConceptMeta{ID: id}
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(nil, 1024*1024)
+	if !scanner.Scan() || strings.TrimPrefix(scanner.Text(), "\ufeff") != "---" {
+		return meta, ""
+	}
+
+	var data strings.Builder
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimRight(line, " \t") == "---" {
+			var doc yaml.Node
+			if err := yaml.Unmarshal([]byte(data.String()), &doc); err != nil {
+				return meta, ""
+			}
+			var value any
+			if err := doc.Decode(&value); err != nil || len(doc.Content) == 0 ||
+				doc.Content[0].Kind != yaml.MappingNode {
+				return meta, ""
+			}
+			var version string
+			root := doc.Content[0]
+			for i := 0; i+1 < len(root.Content); i += 2 {
+				switch root.Content[i].Value {
+				case "type":
+					_ = root.Content[i+1].Decode(&meta.Type)
+				case "title":
+					_ = root.Content[i+1].Decode(&meta.Title)
+				case "description":
+					_ = root.Content[i+1].Decode(&meta.Description)
+				case "okf_version":
+					if root.Content[i+1].Kind == yaml.ScalarNode &&
+						root.Content[i+1].Tag == "!!str" {
+						_ = root.Content[i+1].Decode(&version)
+					}
+				}
+			}
+			return meta, version
+		}
+		if data.Len()+len(line)+1 > 1024*1024 {
+			return meta, ""
+		}
+		data.WriteString(line)
+		data.WriteByte('\n')
+	}
+	return meta, ""
 }
 
 // Read returns conceptID with parsed frontmatter, body, and links. It rejects

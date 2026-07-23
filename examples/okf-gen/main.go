@@ -47,12 +47,20 @@ func renderConcept(fm okf.Frontmatter, body string) ([]byte, error) {
 	return []byte("---\n" + string(y) + "---\n\n" + strings.TrimLeft(body, "\n") + "\n"), nil
 }
 
+//nolint:gocyclo // Keeping all cross-platform path checks together makes the boundary auditable.
 func conceptFile(dir, id string) (string, error) {
 	localID := filepath.FromSlash(id)
 	base := path.Base(id)
+	gitPath := false
+	for _, part := range strings.Split(id, "/") {
+		if part == ".git" {
+			gitPath = true
+			break
+		}
+	}
 	if id == "" || id == "." || strings.HasSuffix(id, ".md") ||
 		base == "index" || base == "log" || path.IsAbs(id) || path.Clean(id) != id ||
-		strings.ContainsRune(id, '\\') || filepath.IsAbs(localID) ||
+		gitPath || strings.ContainsRune(id, '\\') || filepath.IsAbs(localID) ||
 		filepath.VolumeName(localID) != "" ||
 		len(id) >= 2 && id[1] == ':' && (id[0] >= 'a' && id[0] <= 'z' || id[0] >= 'A' && id[0] <= 'Z') {
 		return "", fmt.Errorf("invalid concept id %q: use a clean bundle-relative slash-separated path", id)
@@ -68,10 +76,15 @@ func conceptFile(dir, id string) (string, error) {
 func writeBundle(dir string, drafts []draft) error {
 	// Validate the complete set before writing, so one bad external ID cannot
 	// leave a partially generated bundle behind.
+	seen := make(map[string]struct{}, len(drafts))
 	for _, d := range drafts {
 		if _, err := conceptFile(dir, d.id); err != nil {
 			return err
 		}
+		if _, ok := seen[d.id]; ok {
+			return fmt.Errorf("duplicate concept id %q", d.id)
+		}
+		seen[d.id] = struct{}{}
 	}
 	for _, d := range drafts {
 		full, err := conceptFile(dir, d.id)
@@ -96,6 +109,21 @@ func writeBundle(dir string, drafts []draft) error {
 		fmt.Fprintf(&b, "- [%s](%s.md) — %s\n", d.id, d.id, d.fm.Title)
 	}
 	return os.WriteFile(filepath.Join(dir, okf.IndexFile), []byte(b.String()), 0o644) //nolint:gosec // Bundle content is intentionally readable.
+}
+
+func validateBundle(dir string) error {
+	violations, err := okf.Validate(os.DirFS(dir))
+	if err != nil {
+		return err
+	}
+	if len(violations) == 0 {
+		fmt.Println("okf.Validate: conformant ✓")
+		return nil
+	}
+	for _, violation := range violations {
+		fmt.Printf("  VIOLATION %s: %s\n", violation.Concept, violation.Detail)
+	}
+	return fmt.Errorf("okf validation failed with %d violation(s)", len(violations))
 }
 
 func main() {
@@ -126,16 +154,8 @@ func main() {
 
 	// Producer/CI-side conformance lint (strict) — the counterpart to the
 	// runtime tolerance a consumer must have.
-	violations, err := okf.Validate(os.DirFS(dir))
-	if err != nil {
+	if err := validateBundle(dir); err != nil {
 		panic(err)
-	}
-	if len(violations) == 0 {
-		fmt.Println("okf.Validate: conformant ✓")
-	} else {
-		for _, v := range violations {
-			fmt.Printf("  VIOLATION %s: %s\n", v.Concept, v.Detail)
-		}
 	}
 
 	// Read one concept back through the local Store (runtime consumer side).

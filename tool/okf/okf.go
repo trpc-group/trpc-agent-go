@@ -52,7 +52,7 @@ type Frontmatter struct {
 	Resource    string         `json:"resource,omitempty" yaml:"resource,omitempty"`       // RECOMMENDED canonical URI.
 	Tags        []string       `json:"tags,omitempty" yaml:"tags,omitempty"`               // OPTIONAL.
 	Timestamp   string         `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`     // OPTIONAL, ISO-8601 (kept verbatim).
-	Extra       map[string]any `json:"extra,omitempty" yaml:",inline"`                     // Unknown / producer keys, preserved (nested under "extra" in tool JSON).
+	Extra       map[string]any `json:"extra,omitempty" yaml:",inline"`                     // JSON-compatible producer keys (nested under "extra" in tool JSON).
 }
 
 // Link is one outgoing markdown link from a concept body, normalized to the

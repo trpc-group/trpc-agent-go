@@ -85,6 +85,33 @@ func TestList_MissingIndexTolerated(t *testing.T) {
 	}
 }
 
+func TestListingMetadataStopsAfterFrontmatter(t *testing.T) {
+	reader := &failAfterFrontmatterReader{
+		data: []byte("---\ntype: Protocol\ntitle: x402\ndescription: Summary\n---\n"),
+	}
+	meta, version := listingMetadata(reader, "research/x402")
+	if reader.reads != 1 {
+		t.Fatalf("listing metadata read past frontmatter: %d reads", reader.reads)
+	}
+	if version != "" || meta.ID != "research/x402" || meta.Type != "Protocol" ||
+		meta.Title != "x402" || meta.Description != "Summary" {
+		t.Errorf("listing metadata = %+v, version = %q", meta, version)
+	}
+}
+
+type failAfterFrontmatterReader struct {
+	data  []byte
+	reads int
+}
+
+func (r *failAfterFrontmatterReader) Read(p []byte) (int, error) {
+	r.reads++
+	if r.reads > 1 {
+		return 0, errors.New("concept body must not be read")
+	}
+	return copy(p, r.data), nil
+}
+
 func TestRead_FullFrontmatterAndLinks(t *testing.T) {
 	s := newTestStore(t)
 	c, err := s.Read(context.Background(), "research/protocols/google-ap2")

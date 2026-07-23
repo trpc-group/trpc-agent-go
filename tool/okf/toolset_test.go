@@ -193,10 +193,8 @@ func TestCall_ReadRoundtrip(t *testing.T) {
 }
 
 func TestReadOutputSchemaAllowsArbitraryExtraValues(t *testing.T) {
-	store := &fakeStore{frontmatter: Frontmatter{Extra: map[string]any{
-		"active": true,
-		"owner":  "pm-team",
-	}}}
+	frontmatter, _ := splitFrontmatter([]byte("---\ntype: Protocol\nactive: true\nowner: pm-team\ncustom:\n  1: value\n---\nbody"))
+	store := &fakeStore{frontmatter: frontmatter}
 	ts, err := NewToolSet(store)
 	if err != nil {
 		t.Fatalf("NewToolSet: %v", err)
@@ -214,6 +212,10 @@ func TestReadOutputSchemaAllowsArbitraryExtraValues(t *testing.T) {
 	}
 	if got.Frontmatter.Extra["owner"] != "pm-team" || got.Frontmatter.Extra["active"] != true {
 		t.Errorf("extra values = %#v", got.Frontmatter.Extra)
+	}
+	custom, ok := got.Frontmatter.Extra["custom"].(map[string]any)
+	if !ok || custom["1"] != "value" {
+		t.Errorf("nested extra values = %#v", got.Frontmatter.Extra["custom"])
 	}
 }
 
