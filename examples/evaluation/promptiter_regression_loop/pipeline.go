@@ -324,10 +324,14 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 		return nil, err
 	}
 
-	// Persist the accepted candidate prompt; the baseline source file is only
-	// overwritten when write-back is explicitly requested.
+	// The accepted candidate artifacts (and the optional write-back) are only
+	// staged here; publication is deferred until the S6 reports succeed so a
+	// report failure cannot leave deployable candidate files or a mutated
+	// baseline behind without the reports that explain them.
+	var staged []stagedFile
 	if decision.Accepted {
-		if err := writeCandidatePrompt(opts, inputs, result, decision); err != nil {
+		staged, err = stageCandidateArtifacts(opts, inputs, result, decision)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -351,6 +355,12 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 	result.ReportJSONPath = jsonPath
 	result.ReportMarkdownPath = markdownPath
 	result.StageDurations["s6_report"] = time.Since(stageStart)
+
+	// Publish the staged candidate artifacts only now that every required
+	// report exists.
+	if err := publishFiles(staged); err != nil {
+		return nil, err
+	}
 	logger.Printf("gate decision: %s", decision.Summary)
 	return result, nil
 }
@@ -489,7 +499,56 @@ func buildCandidates(
 	return candidates, nil
 }
 
-// writeCandidatePrompt persists the accepted candidate. The deployable
+// stagedFile is one deferred artifact write. Candidate outputs and the
+// write-back baseline are staged after the gate decision and published only
+// once the S6 reports succeed, so a report failure never leaves a deployable
+// candidate (or a mutated baseline) behind.
+type stagedFile struct {
+	path    string
+	content []byte
+}
+
+// publishFiles writes every staged file. When any write fails, files already
+// written are restored to their prior content (or removed when they did not
+// exist) so an error never leaves a partially published candidate.
+func publishFiles(files []stagedFile) error {
+	type priorState struct {
+		path    string
+		content []byte
+		existed bool
+	}
+	priors := make([]priorState, 0, len(files))
+	rollback := func() {
+		for i := len(priors) - 1; i >= 0; i-- {
+			prior := priors[i]
+			if prior.existed {
+				_ = os.WriteFile(prior.path, prior.content, 0o644)
+			} else {
+				_ = os.Remove(prior.path)
+			}
+		}
+	}
+	for _, file := range files {
+		prior := priorState{path: file.path}
+		content, err := os.ReadFile(file.path)
+		switch {
+		case err == nil:
+			prior.existed = true
+			prior.content = content
+		case !errors.Is(err, os.ErrNotExist):
+			rollback()
+			return fmt.Errorf("snapshot %q before publish: %w", file.path, err)
+		}
+		priors = append(priors, prior)
+		if err := os.WriteFile(file.path, file.content, 0o644); err != nil {
+			rollback()
+			return fmt.Errorf("publish %q: %w", file.path, err)
+		}
+	}
+	return nil
+}
+
+// stageCandidateArtifacts prepares the accepted candidate's writes. The deployable
 // candidate_profile.json always carries the *effective* profile: the accepted
 // overrides merged onto the previously restored baseline profile. The restored
 // baseline overrides are baked into the agent for this run, so the engine no
@@ -499,11 +558,11 @@ func buildCandidates(
 // gate. The instruction text additionally lands in candidate_prompt.txt. The
 // engine normalizes away no-op overrides, so an accepted profile whose patches
 // only touched non-instruction surfaces legitimately carries no instruction
-// text: that keeps the baseline prompt in force. Write-back persists the same
+// text: that keeps the baseline prompt in force. Write-back stages the same
 // effective profile as the next run's baseline: the instruction text over the
 // prompt source, and the merged profile into baseline_profile.json beside it,
 // keeping consecutive write-backs lossless.
-func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, decision *GateDecision) error {
+func stageCandidateArtifacts(opts Options, inputs *resolvedInputs, result *Result, decision *GateDecision) ([]stagedFile, error) {
 	var profile *promptiter.Profile
 	for _, candidate := range result.Candidates {
 		if candidate.Round == decision.SelectedRound {
@@ -512,11 +571,11 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 		}
 	}
 	if profile == nil {
-		return fmt.Errorf("selected round %d has no profile", decision.SelectedRound)
+		return nil, fmt.Errorf("selected round %d has no profile", decision.SelectedRound)
 	}
 	instructionSurfaceID, err := instructionTargetSurfaceID(opts.Config)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	promptText := ""
 	for _, override := range profile.Overrides {
@@ -526,32 +585,36 @@ func writeCandidatePrompt(opts Options, inputs *resolvedInputs, result *Result, 
 		}
 	}
 	effective := effectiveProfile(inputs, profile, instructionSurfaceID, promptText)
-	profilePath := filepath.Join(opts.OutputDir, candidateProfileFileName)
 	profileContent, err := json.MarshalIndent(effective, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal candidate profile: %w", err)
+		return nil, fmt.Errorf("marshal candidate profile: %w", err)
 	}
-	if err := os.WriteFile(profilePath, append(profileContent, '\n'), 0o644); err != nil {
-		return fmt.Errorf("write candidate profile: %w", err)
-	}
+	profileFileContent := append(profileContent, '\n')
+	staged := []stagedFile{{
+		path:    filepath.Join(opts.OutputDir, candidateProfileFileName),
+		content: profileFileContent,
+	}}
 	if promptText != "" {
 		result.CandidatePrompt = promptText
 		result.CandidatePromptPath = filepath.Join(opts.OutputDir, candidatePromptFileName)
-		if err := os.WriteFile(result.CandidatePromptPath, []byte(promptText+"\n"), 0o644); err != nil {
-			return fmt.Errorf("write candidate prompt: %w", err)
-		}
+		staged = append(staged, stagedFile{
+			path:    result.CandidatePromptPath,
+			content: []byte(promptText + "\n"),
+		})
 	}
 	if opts.WriteBack {
 		if promptText != "" {
-			if err := os.WriteFile(inputs.promptSourcePath, []byte(promptText+"\n"), 0o644); err != nil {
-				return fmt.Errorf("write back baseline prompt: %w", err)
-			}
+			staged = append(staged, stagedFile{
+				path:    inputs.promptSourcePath,
+				content: []byte(promptText + "\n"),
+			})
 		}
-		if err := os.WriteFile(inputs.baselineProfilePath, append(profileContent, '\n'), 0o644); err != nil {
-			return fmt.Errorf("write back baseline profile: %w", err)
-		}
+		staged = append(staged, stagedFile{
+			path:    inputs.baselineProfilePath,
+			content: profileFileContent,
+		})
 	}
-	return nil
+	return staged, nil
 }
 
 // effectiveProfile overlays the accepted overrides onto the previously
@@ -750,6 +813,9 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 			return nil, fmt.Errorf("required input file %q does not exist", path)
 		}
 	}
+	if err := validateProtectedCases(inputs.validationEvalSetPath, config); err != nil {
+		return nil, err
+	}
 	prompt, err := os.ReadFile(inputs.promptSourcePath)
 	if err != nil {
 		return nil, fmt.Errorf("read baseline prompt %q: %w", inputs.promptSourcePath, err)
@@ -771,6 +837,44 @@ func resolveInputs(dataDir string, config *Config) (*resolvedInputs, error) {
 		inputs.targetSurfaceIDs = append(inputs.targetSurfaceIDs, surfaceID)
 	}
 	return inputs, nil
+}
+
+// validateProtectedCases resolves gate.protectedCases against the validation
+// eval set. A mistyped protected case ID would never match any delta, silently
+// disabling the protection while the general regression allowance could still
+// accept the candidate; unknown IDs therefore fail closed at input-resolution
+// time.
+func validateProtectedCases(validationEvalSetPath string, config *Config) error {
+	if len(config.Gate.ProtectedCases) == 0 {
+		return nil
+	}
+	content, err := os.ReadFile(validationEvalSetPath)
+	if err != nil {
+		return fmt.Errorf("read validation eval set %q: %w", validationEvalSetPath, err)
+	}
+	set := &evalset.EvalSet{}
+	if err := json.Unmarshal(content, set); err != nil {
+		return fmt.Errorf("decode validation eval set %q: %w", validationEvalSetPath, err)
+	}
+	known := make(map[string]struct{}, len(set.EvalCases))
+	for _, evalCase := range set.EvalCases {
+		if evalCase != nil {
+			known[evalCase.EvalID] = struct{}{}
+		}
+	}
+	unknown := make([]string, 0)
+	for _, caseID := range config.Gate.ProtectedCases {
+		if _, ok := known[caseID]; !ok {
+			unknown = append(unknown, caseID)
+		}
+	}
+	if len(unknown) > 0 {
+		return fmt.Errorf(
+			"gate.protectedCases contains case ID(s) not present in validation eval set %q: %s",
+			config.EvalSets.Validation, strings.Join(unknown, ", "),
+		)
+	}
+	return nil
 }
 
 // loadBaselineProfile reads the write-back profile persisted by a previously

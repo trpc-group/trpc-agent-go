@@ -438,6 +438,74 @@ func TestConsecutiveWriteBacksKeepToolOverride(t *testing.T) {
 	assert.Contains(t, reloaded.baselinePrompt, OptimizedMarker)
 }
 
+// TestResolveInputsRejectsUnknownProtectedCase locks the fail-closed rule: a
+// mistyped protected case ID would never match any validation delta, silently
+// disabling the protection, so input resolution must reject it.
+func TestResolveInputsRejectsUnknownProtectedCase(t *testing.T) {
+	config, err := LoadConfig(filepath.Join(testDataDir, dataAppName, "promptiter.json"))
+	require.NoError(t, err)
+	config.Gate.ProtectedCases = []string{"val_protectd"}
+	_, err = resolveInputs(testDataDir, config)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "val_protectd")
+	assert.Contains(t, err.Error(), "not present in validation eval set")
+}
+
+// TestConfigRejectsDuplicateProtectedCases: a duplicated protected case ID is
+// a config mistake that validation surfaces immediately.
+func TestConfigRejectsDuplicateProtectedCases(t *testing.T) {
+	config, err := LoadConfig(filepath.Join(testDataDir, dataAppName, "promptiter.json"))
+	require.NoError(t, err)
+	config.Gate.ProtectedCases = append(config.Gate.ProtectedCases, config.Gate.ProtectedCases[0])
+	err = config.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicated")
+}
+
+// TestAcceptedRunWithReportFailurePublishesNothing locks the staged
+// publication order: when the gate accepts a candidate but S6 report writing
+// fails, neither the deployable candidate artifacts nor the write-back
+// baseline may be left behind.
+func TestAcceptedRunWithReportFailurePublishesNothing(t *testing.T) {
+	dataDir := copyTestData(t)
+	config, inputs := loadInputsAt(t, dataDir)
+	config.Gate.ProtectedCases = nil
+	config.Gate.MaxRegressedCases = 1
+	config.Gate.MaxNewHardFails = 1
+	outputDir := t.TempDir()
+	// A directory squatting on the JSON report path makes S6 fail after the
+	// gate has already accepted the candidate.
+	require.NoError(t, os.MkdirAll(filepath.Join(outputDir, "optimization_report.json"), 0o755))
+	originalPrompt, err := os.ReadFile(inputs.promptSourcePath)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	result, err := runPipeline(ctx, Options{
+		Config:    config,
+		Inputs:    inputs,
+		DataDir:   dataDir,
+		OutputDir: outputDir,
+		Mode:      ModeFake,
+		WriteBack: true,
+		Components: Components{
+			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, inputs.baselineToolDescriptions),
+			Backwarder:     NewBackwarder(),
+			Aggregator:     NewAggregator(),
+			Optimizer:      NewOptimizer(),
+		},
+		Logger: log.New(os.Stderr, "[test] ", 0),
+	})
+	require.Error(t, err)
+	require.Nil(t, result)
+	assert.NoFileExists(t, filepath.Join(outputDir, "candidate_prompt.txt"))
+	assert.NoFileExists(t, filepath.Join(outputDir, "candidate_profile.json"))
+	promptAfter, err := os.ReadFile(inputs.promptSourcePath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalPrompt), string(promptAfter),
+		"write-back must not mutate the baseline prompt when reports fail")
+	assert.NoFileExists(t, inputs.baselineProfilePath)
+}
+
 // selectedRoundProfileJSON serializes the gate-selected round's raw engine
 // profile — the round-relative override set before the pipeline merges it
 // with the inherited baseline profile for publication.

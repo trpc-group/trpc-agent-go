@@ -306,10 +306,16 @@ func (c *Config) validateGate(report func(string, ...any)) {
 	if gate.ScoreEpsilon < 0 {
 		report("gate.epsilon must be non-negative, got %v", gate.ScoreEpsilon)
 	}
+	seenProtected := make(map[string]struct{}, len(gate.ProtectedCases))
 	for i, caseID := range gate.ProtectedCases {
 		if strings.TrimSpace(caseID) == "" {
 			report("gate.protectedCases[%d] must not be empty", i)
+			continue
 		}
+		if _, dup := seenProtected[caseID]; dup {
+			report("gate.protectedCases[%d] %q is duplicated", i, caseID)
+		}
+		seenProtected[caseID] = struct{}{}
 	}
 	for i, category := range gate.HardFailCategories {
 		if !IsKnownFailureCategory(category) {
