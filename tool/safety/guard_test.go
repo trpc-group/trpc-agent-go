@@ -94,6 +94,54 @@ func TestGuardOnlyReviewsPipelineOperators(t *testing.T) {
 	require.Equal(t, "safety.no_findings", report.RuleID)
 }
 
+func TestGuardScansPathLikeExecutable(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, test := range []struct {
+		request  safety.Request
+		decision safety.Decision
+		rule     string
+	}{
+		{request: safety.Request{Command: "/etc/evil"}, decision: safety.DecisionDeny, rule: "sensitive.path"},
+		{request: safety.Request{Args: []string{"/root/evil"}}, decision: safety.DecisionDeny, rule: "sensitive.path"},
+		{request: safety.Request{Args: []string{"id_rsa"}}, decision: safety.DecisionAllow, rule: "safety.no_findings"},
+	} {
+		report := guard.Scan(test.request)
+		require.Equal(t, test.decision, report.Decision)
+		require.Equal(t, test.rule, report.RuleID)
+	}
+}
+
+func TestGuardNormalizesAllowedParseError(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.ParseErrorAction = safety.DecisionAllow
+	report := mustGuard(t, policy).Scan(safety.Request{Command: "echo $(unsafe)"})
+	require.Equal(t, safety.DecisionAllow, report.Decision)
+	require.Equal(t, "safety.no_findings", report.RuleID)
+	require.NotEmpty(t, report.Evidence)
+	require.NotEmpty(t, report.Recommendation)
+	require.Empty(t, report.Findings)
+}
+
+func TestGuardNormalizesAllowedPipeline(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.PipelineAction = safety.DecisionAllow
+	report := mustGuard(t, policy).Scan(safety.Request{Command: "cat README.md | wc -l"})
+	require.Equal(t, safety.DecisionAllow, report.Decision)
+	require.Equal(t, "safety.no_findings", report.RuleID)
+	require.NotEmpty(t, report.Evidence)
+	require.NotEmpty(t, report.Recommendation)
+	require.Empty(t, report.Findings)
+}
+
+func TestNilGuardDoesNotScanRequest(t *testing.T) {
+	var guard *safety.Guard
+	report := guard.Scan(safety.Request{Command: "rm -rf /"})
+	require.Equal(t, safety.DecisionAllow, report.Decision)
+	require.Equal(t, "safety.no_findings", report.RuleID)
+	require.NotEmpty(t, report.Evidence)
+	require.NotEmpty(t, report.Recommendation)
+}
+
 func mustGuard(t *testing.T, policy safety.Policy) *safety.Guard {
 	t.Helper()
 	guard, err := safety.NewGuard(policy)

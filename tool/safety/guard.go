@@ -35,12 +35,13 @@ func NewGuard(policy Policy) (*Guard, error) {
 // Scan evaluates req and returns a complete safety report.
 func (g *Guard) Scan(req Request) Report {
 	started := time.Now()
-	policy := Policy{}
-	if g != nil {
-		policy = g.policy
+	if g == nil {
+		report := newReport(req)
+		report.DurationMillis = time.Since(started).Milliseconds()
+		return report
 	}
-	segments, findings := scanCommand(policy, req)
-	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
+	segments, findings := scanCommand(g.policy, req)
+	findings = append(findings, scanPaths(g.policy, req.Cwd, segments)...)
 	report := aggregateReport(req, findings)
 	report.DurationMillis = time.Since(started).Milliseconds()
 	return report
@@ -59,6 +60,9 @@ func aggregateReport(req Request, findings []Finding) Report {
 		}
 	}
 	selected := findings[primary]
+	if selected.Decision == DecisionAllow {
+		return report
+	}
 	report.Decision = selected.Decision
 	report.RiskLevel = selected.RiskLevel
 	if !validDecision(report.Decision) {

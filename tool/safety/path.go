@@ -17,13 +17,24 @@ func scanPaths(policy Policy, cwd string, segments [][]string) []Finding {
 		return []Finding{finding}
 	}
 	for _, argv := range segments {
-		for _, arg := range argv[1:] {
+		for index, arg := range argv {
+			if index == 0 && !isPathLike(arg) {
+				continue
+			}
 			if finding, ok := deniedPathFinding(policy.DeniedPaths, arg); ok {
 				return []Finding{finding}
 			}
 		}
 	}
 	return nil
+}
+
+func isPathLike(value string) bool {
+	value = strings.Trim(strings.TrimSpace(value), "\"'")
+	value = strings.ReplaceAll(value, "\\", "/")
+	return strings.HasPrefix(value, "/") || strings.HasPrefix(value, "./") ||
+		strings.HasPrefix(value, "../") || strings.HasPrefix(value, "~/") ||
+		strings.Contains(value, "/")
 }
 
 func deniedPathFinding(deniedPaths []string, value string) (Finding, bool) {
