@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -1382,6 +1383,48 @@ func TestSessionServiceAppendTrackEvent(t *testing.T) {
 	allTracks, err := session.TracksFromState(storedSess.State)
 	require.NoError(t, err)
 	assert.Equal(t, []session.Track{"alpha", "beta"}, allTracks)
+}
+
+func TestUpdateStoredSessionConcurrentCloneUpdatedAt(t *testing.T) {
+	const iterations = 1000
+	initialUpdatedAt := time.Unix(1, 0)
+	service := NewSessionService()
+	sess := session.NewSession(
+		"app",
+		"user",
+		"session",
+		session.WithSessionUpdatedAt(initialUpdatedAt),
+	)
+	evt := &event.Event{Response: &model.Response{Choices: []model.Choice{{
+		Message: model.Message{Role: model.RoleUser, Content: "message"},
+	}}}}
+	start := make(chan struct{})
+	var lastClone *session.Session
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			service.updateStoredSession(sess, evt)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			lastClone = sess.Clone()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+
+	require.NotNil(t, lastClone)
+	cloned := sess.Clone()
+	require.Len(t, cloned.Events, iterations)
+	assert.True(t, cloned.UpdatedAt.After(initialUpdatedAt))
 }
 
 func TestSessionServiceGetSessionFiltersTrackEvents(t *testing.T) {
