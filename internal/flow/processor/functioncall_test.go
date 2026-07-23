@@ -975,14 +975,7 @@ func TestFunctionCallResponseProcessor_AttachStateDeltaWithResultJSON(t *testing
 			deltaKey1: []byte(deltaVal1),
 		},
 	}
-	p.attachStateDeltaWithResultJSON(
-		inv,
-		tl,
-		args,
-		resultJSON,
-		choice,
-		ev,
-	)
+	p.attachStateDeltaWithResultJSON(inv, tl, args, resultJSON, choice, ev)
 	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
 
 	ev2 := &event.Event{}
@@ -992,25 +985,11 @@ func TestFunctionCallResponseProcessor_AttachStateDeltaWithResultJSON(t *testing
 			deltaKey2: []byte(deltaVal2),
 		},
 	}
-	p.attachStateDeltaWithResultJSON(
-		inv,
-		tl2,
-		args,
-		resultJSON,
-		choice,
-		ev2,
-	)
+	p.attachStateDeltaWithResultJSON(inv, tl2, args, resultJSON, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
 
 	evWithoutResultJSON := &event.Event{}
-	p.attachStateDeltaWithResultJSON(
-		inv,
-		tl,
-		args,
-		nil,
-		choice,
-		evWithoutResultJSON,
-	)
+	p.attachStateDeltaWithResultJSON(inv, tl, args, nil, choice, evWithoutResultJSON)
 	require.Empty(t, evWithoutResultJSON.StateDelta)
 }
 

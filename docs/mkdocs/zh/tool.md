@@ -519,9 +519,8 @@ session 持久化仍由 tRPC-Agent-Go 维护。
 - `ToolResultMessages` 仍在默认消息生成后执行并可以覆盖它；多消息、多模态内容或完全
   接管消息协议的场景继续使用该 callback。
 
-结果格式化只控制发送给模型的文本，不是传输编码器或可逆序列化协议。tRPC-Agent-Go
-不提供内置 XML 或 Text formatter；escaping、截断和输出有效性由应用负责。Formatter
-可能被并发调用，若持有可变状态，需要由应用自行保证并发安全。
+应用负责 formatter 输出中特定格式所需的转义、截断和有效性校验。Formatter 可能被
+并发调用，若持有可变状态，需要由应用自行保证并发安全。
 
 完整可运行示例见
 [examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat)。

@@ -1431,12 +1431,7 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaWithResultJSON(
 	var delta map[string][]byte
 	providerTool := itool.ResolveSemantic(tl)
 	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
-		delta = isdp.StateDeltaForInvocation(
-			inv,
-			toolCallID,
-			args,
-			stateDeltaResultJSON,
-		)
+		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, stateDeltaResultJSON)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
 		delta = sdp.StateDelta(toolCallID, args, stateDeltaResultJSON)
 	} else {

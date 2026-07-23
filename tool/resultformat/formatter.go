@@ -8,8 +8,6 @@
 //
 
 // Package resultformat formats tool results for model-visible tool messages.
-// Formatting changes only the default tool message content; it is not a
-// transport encoding or a reversible serialization protocol.
 package resultformat
 
 import (

@@ -541,11 +541,9 @@ message role, name, tool call ID, ordering, events, and session persistence.
   override it. Continue using that callback for multiple messages, multimodal
   content, or complete control of the message protocol.
 
-Result formatting controls the text sent to the model. It is not a transport
-encoder or reversible serialization format. tRPC-Agent-Go does not provide
-built-in XML or text formatters; the application is responsible for escaping,
-truncation, and output validity. A formatter may be called concurrently and
-must synchronize any mutable state it owns.
+The application is responsible for format-specific escaping, truncation, and
+output validation. A formatter may be called concurrently and must synchronize
+any mutable state it owns.
 
 For a runnable end-to-end example, see
 [examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat).
