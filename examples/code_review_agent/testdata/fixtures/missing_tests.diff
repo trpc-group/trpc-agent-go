@@ -1,0 +1,11 @@
+diff --git a/pkg/new_logic.go b/pkg/new_logic.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/new_logic.go
+@@ -0,0 +1,5 @@
++package pkg
++
++func Add(a, b int) int {
++	return a + b
++}

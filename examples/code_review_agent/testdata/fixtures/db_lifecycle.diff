@@ -1,0 +1,15 @@
+diff --git a/pkg/db.go b/pkg/db.go
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/pkg/db.go
+@@ -0,0 +1,9 @@
++package pkg
++
++import "database/sql"
++
++func Save(db *sql.DB) error {
++	tx, err := db.Begin()
++	_ = tx
++	return err
++}
