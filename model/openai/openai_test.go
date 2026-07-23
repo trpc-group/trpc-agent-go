@@ -6140,6 +6140,9 @@ func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
 	)
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("test")},
+		Tools: map[string]tool.Tool{
+			"echo": stubTool{decl: &tool.Declaration{Name: "echo"}},
+		},
 		ExtraFields: map[string]any{
 			"tools":         []any{},
 			"function_call": "auto",

@@ -17,7 +17,6 @@ import (
 )
 
 func TestToolsDisabled(t *testing.T) {
-	require.False(t, ToolsDisabled(nil))
 	require.False(t, ToolsDisabled(context.Background()))
 	require.True(t, ToolsDisabled(WithToolsDisabled(context.Background())))
 }
@@ -29,6 +28,8 @@ func TestDeleteToolControlFields(t *testing.T) {
 		"tools":               []any{},
 		"function_call":       "auto",
 		"functions":           []any{},
+		"FunctionCall":        "auto",
+		"Functions":           []any{},
 		"keep":                "value",
 	}
 

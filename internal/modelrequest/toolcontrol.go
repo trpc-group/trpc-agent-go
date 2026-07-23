@@ -67,7 +67,9 @@ func IsToolControlField(key string) bool {
 		"functions",
 		"ToolChoice",
 		"ParallelToolCalls",
-		"Tools":
+		"Tools",
+		"FunctionCall",
+		"Functions":
 		return true
 	default:
 		return false

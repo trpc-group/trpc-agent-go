@@ -3160,6 +3160,59 @@ func TestFunctionCallResponseProcessor_SchedulesToolLimitFinalization(t *testing
 	require.Equal(t, instruction, got)
 }
 
+func TestFunctionCallResponseProcessor_SchedulesToolLimitFinalizationOnError(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		context.Context,
+		*tool.ToolResultMessagesInput,
+	) (any, error) {
+		return nil, errors.New("callback failure")
+	})
+	p := NewFunctionCallResponseProcessor(false, callbacks)
+	instruction := "finish after the tool error"
+	inv := &agent.Invocation{
+		InvocationID:      "inv-finalize-error",
+		AgentName:         "test-agent",
+		MaxToolIterations: 1,
+	}
+	calllimit.Configure(inv, nil, &instruction)
+	req := &model.Request{
+		Tools: map[string]tool.Tool{
+			"echo": &mockCallableTool{
+				declaration: &tool.Declaration{Name: "echo"},
+				callFn: func(context.Context, []byte) (any, error) {
+					return "result", nil
+				},
+			},
+		},
+	}
+	rsp := &model.Response{
+		Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{{
+					ID:   "call-1",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "echo",
+						Arguments: []byte(`{}`),
+					},
+				}},
+			},
+		}},
+	}
+	eventChan := make(chan *event.Event, 2)
+
+	p.ProcessResponse(ctx, inv, req, rsp, eventChan)
+
+	got, ok := calllimit.ActivateForLLM(inv, false)
+	require.True(t, ok)
+	require.Equal(t, instruction, got)
+}
+
 func TestFunctionCallResponseProcessor_RejectsToolCallDuringFinalization(t *testing.T) {
 	ctx := context.Background()
 	p := NewFunctionCallResponseProcessor(false, nil)

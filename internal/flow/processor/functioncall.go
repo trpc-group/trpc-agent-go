@@ -301,6 +301,9 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	}
 
 	functioncallResponseEvent, err := p.handleFunctionCallsAndSendEventWithRequest(ctx, invocation, req, rsp, ch)
+	if toolLimitReached {
+		calllimit.ScheduleToolFinalization(invocation)
+	}
 
 	// Option one: set invocation.EndInvocation is true, and stop next step.
 	// Option two: emit error event, maybe the LLM can correct this error and also need to wait for notice completion.
@@ -328,9 +331,6 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	if functioncallResponseEvent.Actions != nil && functioncallResponseEvent.Actions.SkipSummarization {
 		invocation.EndInvocation = true
 		return
-	}
-	if toolLimitReached {
-		calllimit.ScheduleToolFinalization(invocation)
 	}
 }
 

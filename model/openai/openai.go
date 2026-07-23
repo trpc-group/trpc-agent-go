@@ -653,7 +653,7 @@ func (m *Model) prepareChatRequest(
 	m.applyTokenTailoring(ctx, request)
 	chatRequest, opts := m.buildChatRequestWithToolControl(
 		request,
-		imodelrequest.ToolsDisabled(ctx) && len(request.Tools) == 0,
+		imodelrequest.ToolsDisabled(ctx),
 	)
 	return chatRequest, opts, nil
 }
