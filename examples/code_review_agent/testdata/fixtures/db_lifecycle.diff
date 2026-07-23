@@ -1,0 +1,12 @@
+diff --git a/pkg/db.go b/pkg/db.go
+--- a/pkg/db.go
++++ b/pkg/db.go
+@@ -0,0 +1,8 @@
++package pkg
++
++import "database/sql"
++
++func Open() (*sql.DB, error) {
++	db, err := sql.Open("sqlite", "file:test.db")
++	return db, err
++}

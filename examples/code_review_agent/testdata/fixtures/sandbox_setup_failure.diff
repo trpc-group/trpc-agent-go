@@ -1,0 +1,9 @@
+diff --git a/pkg/setup_fail.go b/pkg/setup_fail.go
+--- a/pkg/setup_fail.go
++++ b/pkg/setup_fail.go
+@@ -0,0 +1,5 @@
++package pkg
++
++func SetupFailureFixture() {
++	println("sandbox setup failure fixture")
++}

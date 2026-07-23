@@ -1,0 +1,147 @@
+{
+  "task": {
+    "id": "cr-0a5e3a8f09ba-0da6b483",
+    "input_kind": "fixture",
+    "diff_hash": "0a5e3a8f09ba2277e9aa0de3fec37b68ec4c459ffb8b511c54962516a54ab248",
+    "status": "completed",
+    "started_at": "2026-07-17T05:54:34.5457427Z",
+    "completed_at": "2026-07-17T05:54:34.5467725Z"
+  },
+  "input": {
+    "hash": "0a5e3a8f09ba2277e9aa0de3fec37b68ec4c459ffb8b511c54962516a54ab248",
+    "files": [
+      {
+        "old_path": "pkg/security.go",
+        "new_path": "pkg/security.go"
+      }
+    ],
+    "added_lines": [
+      {
+        "file": "pkg/security.go",
+        "line": 1,
+        "content": "package pkg"
+      },
+      {
+        "file": "pkg/security.go",
+        "line": 2,
+        "content": ""
+      },
+      {
+        "file": "pkg/security.go",
+        "line": 3,
+        "content": "const apiKey = \"[REDACTED]\""
+      },
+      {
+        "file": "pkg/security.go",
+        "line": 4,
+        "content": ""
+      },
+      {
+        "file": "pkg/security.go",
+        "line": 5,
+        "content": "func Key() string { return apiKey }"
+      }
+    ],
+    "packages": [
+      {
+        "dir": "pkg",
+        "name": "pkg",
+        "go_files": 1
+      }
+    ],
+    "line_count": 9
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "pkg/security.go",
+      "line": 3,
+      "title": "Hard-coded secret-like value",
+      "evidence": "const apiKey = \"[REDACTED]\"",
+      "recommendation": "Move credentials to a secret manager or injected configuration and rotate exposed values.",
+      "confidence": 0.97,
+      "source": "deterministic-rule",
+      "rule_id": "go.security.secret"
+    }
+  ],
+  "warnings": [],
+  "needs_human_review": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "pkg/security.go",
+      "line": 1,
+      "title": "Go code changed without test changes",
+      "evidence": "Diff changes Go implementation files but no *_test.go file is present.",
+      "recommendation": "Add or update focused tests for the changed behavior, or record why existing coverage is sufficient.",
+      "confidence": 0.66,
+      "source": "deterministic-rule",
+      "rule_id": "go.testing.missing"
+    }
+  ],
+  "permission_summary": [
+    {
+      "task_id": "cr-0a5e3a8f09ba-0da6b483",
+      "tool_name": "code_review_sandbox",
+      "command": "bash skills/code-review/scripts/run_go_checks.sh",
+      "action": "allow",
+      "created_at": "2026-07-17T05:54:34.5467725Z"
+    }
+  ],
+  "filter_summary": [
+    {
+      "task_id": "cr-0a5e3a8f09ba-0da6b483",
+      "filter": "input.size_gate",
+      "action": "allow",
+      "created_at": "2026-07-17T05:54:34.5467725Z"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "task_id": "cr-0a5e3a8f09ba-0da6b483",
+      "runtime": "fake",
+      "command": "bash skills/code-review/scripts/run_go_checks.sh",
+      "status": "completed",
+      "exit_code": 0,
+      "output": "ok",
+      "duration": 0,
+      "timed_out": false,
+      "truncated": false,
+      "started_at": "2026-07-17T05:54:34.5467725Z",
+      "completed_at": "2026-07-17T05:54:34.5467725Z"
+    }
+  ],
+  "artifacts": [
+    {
+      "task_id": "cr-0a5e3a8f09ba-0da6b483",
+      "name": "review_report.json",
+      "path": "code_review_agent\\sample_output\\review_report.json",
+      "mime_type": "application/json",
+      "size_bytes": 4005,
+      "created_at": "2026-07-17T05:54:34.5467725Z"
+    },
+    {
+      "task_id": "cr-0a5e3a8f09ba-0da6b483",
+      "name": "review_report.md",
+      "path": "code_review_agent\\sample_output\\review_report.md",
+      "mime_type": "text/markdown",
+      "size_bytes": 1194,
+      "created_at": "2026-07-17T05:54:34.5467725Z"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 1,
+    "sandbox_duration_ms": 0,
+    "tool_calls": 1,
+    "permission_blocks": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "needs_human_review_count": 1,
+    "severity_counts": {
+      "high": 1
+    },
+    "error_counts": {}
+  },
+  "conclusion": "high-confidence issues found"
+}
