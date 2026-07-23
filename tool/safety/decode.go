@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
@@ -25,12 +26,19 @@ const (
 	skillExecutionDefaultTimeoutSeconds     = 300
 )
 
+type decodedPermissionRequest struct {
+	Request
+	needsHumanReview bool
+}
+
 // requestFromPermissionRequest translates framework tool arguments into the
 // safety guard's execution-oriented input. It deliberately remains private so
 // the owning tools' argument schemas stay authoritative.
-func requestFromPermissionRequest(req *tool.PermissionRequest) (Request, bool, error) {
+func requestFromPermissionRequest(
+	req *tool.PermissionRequest,
+) (decodedPermissionRequest, bool, error) {
 	if req == nil {
-		return Request{}, false, nil
+		return decodedPermissionRequest{}, false, nil
 	}
 
 	declaration := semanticDeclaration(req)
@@ -44,23 +52,33 @@ func requestFromPermissionRequest(req *tool.PermissionRequest) (Request, bool, e
 		Metadata: req.Metadata,
 	}
 	if isCodeExecutionDeclaration(name, declaration) {
-		return decodeCodeExecution(base, req.Arguments)
+		return wrapDecodedPermissionRequest(decodeCodeExecution(base, req.Arguments))
 	}
 
 	switch name {
 	case "workspace_exec":
-		return decodeWorkspaceExecution(base, req.Arguments)
+		return wrapDecodedPermissionRequest(decodeWorkspaceExecution(base, req.Arguments))
 	case "exec_command":
-		return decodeHostExecution(base, req.Arguments)
+		return wrapDecodedPermissionRequest(decodeHostExecution(base, req.Arguments))
 	case "skill_run":
-		return decodeSkillExecution(base, req.Arguments, false)
+		return wrapDecodedPermissionRequest(decodeSkillExecution(base, req.Arguments, false))
 	case "skill_exec":
-		return decodeSkillExecution(base, req.Arguments, true)
+		return wrapDecodedPermissionRequest(decodeSkillExecution(base, req.Arguments, true))
 	case "skill_write_stdin":
 		return decodeSkillWrite(base, req.Arguments)
 	default:
-		return decodeUnknownExecution(base, declaration, req.Arguments)
+		return wrapDecodedPermissionRequest(
+			decodeUnknownExecution(base, declaration, req.Arguments),
+		)
 	}
+}
+
+func wrapDecodedPermissionRequest(
+	req Request,
+	ok bool,
+	err error,
+) (decodedPermissionRequest, bool, error) {
+	return decodedPermissionRequest{Request: req}, ok, err
 }
 
 func semanticDeclaration(req *tool.PermissionRequest) *tool.Declaration {
@@ -259,29 +277,56 @@ type skillWriteArguments struct {
 	Submit    bool   `json:"submit,omitempty"`
 }
 
-func decodeSkillWrite(base Request, raw []byte) (Request, bool, error) {
+func decodeSkillWrite(
+	base Request,
+	raw []byte,
+) (decodedPermissionRequest, bool, error) {
 	var in skillWriteArguments
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return Request{}, false, fmt.Errorf("decode skill write arguments: %w", err)
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode skill write arguments: %w", err)
 	}
 	if strings.TrimSpace(in.SessionID) == "" {
-		return Request{}, false, errors.New("decode skill write arguments: session_id is required")
+		return decodedPermissionRequest{}, false,
+			errors.New("decode skill write arguments: session_id is required")
 	}
 	base.Backend = BackendWorkspaceExec
 	if in.Chars == "" && !in.Submit {
-		return base, true, nil
+		return decodedPermissionRequest{Request: base}, true, nil
 	}
-	base.Command = in.Chars
-	if in.Submit {
-		base.Command += "\n"
+	return decodedPermissionRequest{
+		Request:          base,
+		needsHumanReview: true,
+	}, true, nil
+}
+
+func scanDecodedPermissionRequest(
+	guard *Guard,
+	req decodedPermissionRequest,
+) Report {
+	report := guard.Scan(req.Request)
+	if !req.needsHumanReview {
+		return report
 	}
-	// Writing arbitrary text resumes an already-running interactive process.
-	// Model it as the stricter persistent-session boundary so Guard requires
-	// review even when the text itself resembles an innocuous command.
-	base.Backend = BackendHostExec
-	base.TimeoutSeconds = skillExecutionDefaultTimeoutSeconds
-	base.TTY = true
-	return base, true, nil
+	finding := newFinding(
+		DecisionNeedsHumanReview,
+		RiskHigh,
+		"session.interactive_input",
+		"interactive session input can compose with prior process state",
+		"review the complete session state before sending additional input",
+	)
+	report.Findings = append(report.Findings, finding)
+	if findingRank(finding) <= decisionRank(report.Decision)*10+riskRank(report.RiskLevel) {
+		return report
+	}
+	report.Decision = finding.Decision
+	report.RiskLevel = finding.RiskLevel
+	report.RuleID = finding.RuleID
+	report.Evidence = append([]string(nil), finding.Evidence...)
+	report.Recommendation = finding.Recommendation
+	report.Blocked = false
+	report.SafeSummary = "request requires safety policy action"
+	return report
 }
 
 func decodeUnknownExecution(
@@ -289,10 +334,11 @@ func decodeUnknownExecution(
 	declaration *tool.Declaration,
 	raw []byte,
 ) (Request, bool, error) {
-	if _, err := decodeRawValue(raw); err != nil {
+	value, err := decodeRawValue(raw)
+	if err != nil {
 		return Request{}, false, fmt.Errorf("decode unknown tool arguments: %w", err)
 	}
-	if closedWorldNonExecution(base.Metadata, declaration) {
+	if closedWorldNonExecution(base.Metadata, declaration, value) {
 		return Request{}, false, nil
 	}
 	base.Backend = BackendUnknown
@@ -300,17 +346,23 @@ func decodeUnknownExecution(
 	return base, true, nil
 }
 
-func closedWorldNonExecution(metadata tool.ToolMetadata, declaration *tool.Declaration) bool {
+func closedWorldNonExecution(
+	metadata tool.ToolMetadata,
+	declaration *tool.Declaration,
+	value any,
+) bool {
 	if !metadata.ReadOnly || metadata.OpenWorld || metadata.Destructive ||
 		declaration == nil || declaration.InputSchema == nil {
 		return false
 	}
 	return schemaIsClosed(declaration.InputSchema) &&
-		!schemaHasExecutionProperty(declaration.InputSchema)
+		!schemaHasExecutionProperty(declaration.InputSchema) &&
+		closedValueMatchesSchema(declaration.InputSchema, value)
 }
 
 func schemaIsClosed(schema *tool.Schema) bool {
-	if schema == nil || schema.Ref != "" {
+	if schema == nil || schema.Ref != "" || schema.Pattern != "" ||
+		len(schema.Enum) > 0 || schema.Default != nil || len(schema.Defs) > 0 {
 		return false
 	}
 	switch schema.Type {
@@ -329,6 +381,66 @@ func schemaIsClosed(schema *tool.Schema) bool {
 		return schemaIsClosed(schema.Items)
 	case "string", "number", "integer", "boolean", "null":
 		return true
+	default:
+		return false
+	}
+}
+
+func closedValueMatchesSchema(schema *tool.Schema, value any) bool {
+	if !schemaIsClosed(schema) {
+		return false
+	}
+	switch schema.Type {
+	case "object":
+		object, ok := value.(map[string]any)
+		if !ok {
+			return false
+		}
+		for _, required := range schema.Required {
+			if _, exists := object[required]; !exists {
+				return false
+			}
+		}
+		for name, item := range object {
+			property, exists := schema.Properties[name]
+			if !exists || !closedValueMatchesSchema(property, item) {
+				return false
+			}
+		}
+		return true
+	case "array":
+		items, ok := value.([]any)
+		if !ok {
+			return false
+		}
+		for _, item := range items {
+			if !closedValueMatchesSchema(schema.Items, item) {
+				return false
+			}
+		}
+		return true
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "number":
+		number, ok := value.(json.Number)
+		if !ok {
+			return false
+		}
+		_, err := strconv.ParseFloat(string(number), 64)
+		return err == nil
+	case "integer":
+		number, ok := value.(json.Number)
+		if !ok {
+			return false
+		}
+		_, err := number.Int64()
+		return err == nil
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "null":
+		return value == nil
 	default:
 		return false
 	}

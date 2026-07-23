@@ -12,6 +12,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -21,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/codeexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
@@ -49,7 +51,7 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 			Background:     true,
 			TTY:            true,
 			Metadata:       tool.ToolMetadata{OpenWorld: true},
-		}, req)
+		}, req.Request)
 	})
 
 	for _, tc := range []struct {
@@ -61,6 +63,7 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 		{name: "timeout_sec", args: `{"command":"go test","timeout_sec":12}`, want: 12},
 		{name: "timeoutSec", args: `{"command":"go test","timeoutSec":13}`, want: 13},
 		{name: "timeout_sec wins over timeout", args: `{"command":"go test","timeout":11,"timeout_sec":12}`, want: 12},
+		{name: "timeout_sec wins over timeoutSec", args: `{"command":"go test","timeout_sec":12,"timeoutSec":13}`, want: 12},
 		{name: "omitted defaults to five minutes", args: `{"command":"go test"}`, want: 300},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -76,9 +79,11 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args string
+		want bool
 	}{
-		{name: "tty", args: `{"command":"go test","tty":true}`},
-		{name: "pty", args: `{"command":"go test","pty":true}`},
+		{name: "tty", args: `{"command":"go test","tty":true}`, want: true},
+		{name: "pty", args: `{"command":"go test","pty":true}`, want: true},
+		{name: "tty false wins over pty true", args: `{"command":"go test","tty":false,"pty":true}`, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
@@ -86,7 +91,7 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.True(t, ok)
-			require.True(t, req.TTY)
+			require.Equal(t, tc.want, req.TTY)
 		})
 	}
 
@@ -130,6 +135,7 @@ func TestDecodeHostExec(t *testing.T) {
 	}{
 		{name: "timeout_sec", args: `{"command":"true","timeout_sec":22}`, want: 22},
 		{name: "timeoutSec", args: `{"command":"true","timeoutSec":23}`, want: 23},
+		{name: "timeout_sec wins over timeoutSec", args: `{"command":"true","timeout_sec":22,"timeoutSec":23}`, want: 22},
 		{name: "omitted defaults to thirty minutes", args: `{"command":"true"}`, want: 1800},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,9 +151,11 @@ func TestDecodeHostExec(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		args string
+		want bool
 	}{
-		{name: "tty", args: `{"command":"true","tty":true}`},
-		{name: "pty", args: `{"command":"true","pty":true}`},
+		{name: "tty", args: `{"command":"true","tty":true}`, want: true},
+		{name: "pty", args: `{"command":"true","pty":true}`, want: true},
+		{name: "tty false wins over pty true", args: `{"command":"true","tty":false,"pty":true}`, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
@@ -155,7 +163,7 @@ func TestDecodeHostExec(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.True(t, ok)
-			require.True(t, req.TTY)
+			require.Equal(t, tc.want, req.TTY)
 		})
 	}
 }
@@ -208,9 +216,13 @@ func TestDecodeCodeExec(t *testing.T) {
 }
 
 func TestDecodeSkillExecution(t *testing.T) {
+	runTool := skilltool.NewRunTool(nil, nil)
+	execTool := skilltool.NewExecTool(runTool)
+	writeTool := skilltool.NewWriteStdinTool(execTool)
+
 	t.Run("skill_run", func(t *testing.T) {
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      declarationOnlyTool("skill_run", "skill", "command", "cwd", "env", "timeout"),
+			Tool:      runTool,
 			Arguments: []byte(`{"skill":"demo","command":"go test","cwd":"scripts","env":{"LANG":"C"}}`),
 		})
 		require.NoError(t, err)
@@ -224,7 +236,7 @@ func TestDecodeSkillExecution(t *testing.T) {
 
 	t.Run("skill_exec", func(t *testing.T) {
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      declarationOnlyTool("skill_exec", "skill", "command", "cwd", "env", "timeout", "tty"),
+			Tool:      execTool,
 			Arguments: []byte(`{"skill":"demo","command":"python app.py","timeout":19,"tty":true}`),
 		})
 		require.NoError(t, err)
@@ -237,24 +249,75 @@ func TestDecodeSkillExecution(t *testing.T) {
 
 	t.Run("empty write stdin poll", func(t *testing.T) {
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      declarationOnlyTool("skill_write_stdin", "session_id", "chars", "submit"),
+			Tool:      writeTool,
 			Arguments: []byte(`{"session_id":"session-1","chars":"","submit":false}`),
 		})
 		require.NoError(t, err)
 		require.True(t, ok)
 		require.Empty(t, req.Command)
-		require.Equal(t, DecisionAllow, mustGuard(t).Scan(req).Decision)
+		require.Equal(t, BackendWorkspaceExec, req.Backend)
+		require.False(t, req.needsHumanReview)
+		require.Equal(t, DecisionAllow, scanDecodedPermissionRequest(mustGuard(t), req).Decision)
+	})
+
+	t.Run("submitted newline is session input", func(t *testing.T) {
+		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+			Tool:      writeTool,
+			Arguments: []byte(`{"session_id":"session-1","submit":true}`),
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.True(t, req.needsHumanReview)
+		require.Empty(t, req.Command)
+		require.Equal(t, DecisionNeedsHumanReview,
+			scanDecodedPermissionRequest(mustGuard(t), req).Decision)
 	})
 
 	t.Run("non-empty write stdin requires review", func(t *testing.T) {
+		const fragment = "session-fragment-needle $()"
 		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
-			Tool:      declarationOnlyTool("skill_write_stdin", "session_id", "chars", "submit"),
+			Tool: writeTool,
+			Arguments: mustJSON(t, map[string]any{
+				"session_id": "session-1", "chars": fragment,
+			}),
+		})
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.Equal(t, BackendWorkspaceExec, req.Backend)
+		require.Empty(t, req.Command, "session text is not a shell command")
+		require.Empty(t, req.RawArguments, "session text is not retained as raw arguments")
+		require.True(t, req.needsHumanReview)
+
+		policy := DefaultPolicy()
+		policy.AllowedCommands = []string{"echo"}
+		guard, guardErr := NewGuard(policy)
+		require.NoError(t, guardErr)
+		report := scanDecodedPermissionRequest(guard, req)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+		require.Equal(t, "session.interactive_input", report.RuleID)
+		serialized, marshalErr := json.Marshal(report)
+		require.NoError(t, marshalErr)
+		require.NotContains(t, string(serialized), fragment)
+		require.NotContains(t, strings.Join(report.Evidence, " "), fragment)
+	})
+
+	t.Run("named prefix cannot bypass write review", func(t *testing.T) {
+		set := internaltool.NewNamedToolSet(&decodeToolSet{
+			name: "pref", tools: []tool.Tool{writeTool},
+		})
+		named := set.Tools(context.Background())[0]
+		require.Equal(t, "pref_skill_write_stdin", named.Declaration().Name)
+
+		req, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+			Tool: named, ToolName: named.Declaration().Name,
 			Arguments: []byte(`{"session_id":"session-1","chars":"continue"}`),
 		})
 		require.NoError(t, err)
 		require.True(t, ok)
-		require.Equal(t, "continue", req.Command)
-		require.Equal(t, DecisionNeedsHumanReview, mustGuard(t).Scan(req).Decision)
+		require.True(t, req.needsHumanReview)
+		require.Equal(t, BackendWorkspaceExec, req.Backend)
+		require.Equal(t, DecisionNeedsHumanReview,
+			scanDecodedPermissionRequest(mustGuard(t), req).Decision)
 	})
 }
 
@@ -312,7 +375,8 @@ func TestDecodeUnknownOpenWorldRequest(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, BackendUnknown, req.Backend)
 	require.JSONEq(t, string(raw), string(req.RawArguments))
-	require.Equal(t, DecisionDeny, mustGuard(t).Scan(req).Decision)
+	require.Equal(t, DecisionDeny,
+		scanDecodedPermissionRequest(mustGuard(t), req).Decision)
 
 	_, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
 		Tool:      declarationOnlyTool("remote_action", "payload"),
@@ -328,24 +392,38 @@ func TestDecodeNilAndClosedWorldRequests(t *testing.T) {
 	require.False(t, ok)
 	require.Empty(t, req)
 
+	calculator := closedCalculatorTool()
 	req, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
-		Tool: &decodeDeclarationTool{declaration: &tool.Declaration{
-			Name: "calculator",
-			InputSchema: &tool.Schema{
-				Type:                 "object",
-				AdditionalProperties: false,
-				Properties: map[string]*tool.Schema{
-					"left":  {Type: "number"},
-					"right": {Type: "number"},
-				},
-			},
-		}},
+		Tool:      calculator,
 		Arguments: []byte(`{"left":1,"right":2}`),
 		Metadata:  tool.ToolMetadata{ReadOnly: true},
 	})
 	require.NoError(t, err)
 	require.False(t, ok)
 	require.Empty(t, req)
+
+	for _, tc := range []struct {
+		name string
+		raw  string
+	}{
+		{name: "extra execution property", raw: `{"left":1,"right":2,"command":"rm -rf /"}`},
+		{name: "missing required property", raw: `{"left":1}`},
+		{name: "mismatched property type", raw: `{"left":"one","right":2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, scan, decodeErr := requestFromPermissionRequest(&tool.PermissionRequest{
+				Tool: calculator, Arguments: []byte(tc.raw),
+				Metadata: tool.ToolMetadata{ReadOnly: true},
+			})
+			require.NoError(t, decodeErr)
+			require.True(t, scan)
+			require.Equal(t, BackendUnknown, decoded.Backend)
+			if tc.name == "extra execution property" {
+				require.Equal(t, DecisionDeny,
+					scanDecodedPermissionRequest(mustGuard(t), decoded).Decision)
+			}
+		})
+	}
 
 	req, ok, err = requestFromPermissionRequest(&tool.PermissionRequest{
 		Tool:      declarationOnlyTool("read_payload", "payload"),
@@ -355,6 +433,21 @@ func TestDecodeNilAndClosedWorldRequests(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok, "an open-ended payload is not demonstrably closed-world")
 	require.Equal(t, BackendUnknown, req.Backend)
+}
+
+func closedCalculatorTool() tool.Tool {
+	return &decodeDeclarationTool{declaration: &tool.Declaration{
+		Name: "calculator",
+		InputSchema: &tool.Schema{
+			Type:                 "object",
+			Required:             []string{"left", "right"},
+			AdditionalProperties: false,
+			Properties: map[string]*tool.Schema{
+				"left":  {Type: "number"},
+				"right": {Type: "number"},
+			},
+		},
+	}}
 }
 
 type decodeDeclarationTool struct {
