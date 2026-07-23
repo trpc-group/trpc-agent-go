@@ -2528,6 +2528,15 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
+	if afterResult != nil && afterResult.Context != nil {
+		ctx = afterResult.Context
+	}
+	skipSummarization := afterResult != nil &&
+		afterResult.SkipSummarization
+	override := afterResult != nil && afterResult.CustomResult != nil
+	if override {
+		toolResult = afterResult.CustomResult
+	}
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -2535,16 +2544,11 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, toolResult, false, false,
+		return ctx, toolResult, override, skipSummarization,
 			fmt.Errorf("tool callback error: %w", err)
 	}
-	if afterResult != nil && afterResult.Context != nil {
-		ctx = afterResult.Context
-	}
-	skipSummarization := afterResult != nil &&
-		afterResult.SkipSummarization
-	if afterResult != nil && afterResult.CustomResult != nil {
-		return ctx, afterResult.CustomResult, true, skipSummarization, nil
+	if override {
+		return ctx, toolResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
 }
@@ -2570,17 +2574,6 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := p.toolCallbacks.RunAfterTool(ctx, args)
-	if err != nil {
-		log.ErrorfContext(
-			ctx,
-			"After tool callback failed for %s: %v",
-			toolCall.Function.Name,
-			err,
-		)
-		return ctx, toolResult, false,
-			fmt.Errorf("tool callback error: %w", err)
-	}
-
 	if afterResult != nil && afterResult.Context != nil {
 		ctx = afterResult.Context
 	}
@@ -2588,6 +2581,16 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		afterResult.SkipSummarization
 	if afterResult != nil && afterResult.CustomResult != nil {
 		toolResult = afterResult.CustomResult
+	}
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"After tool callback failed for %s: %v",
+			toolCall.Function.Name,
+			err,
+		)
+		return ctx, toolResult, skipSummarization,
+			fmt.Errorf("tool callback error: %w", err)
 	}
 	return ctx, toolResult, skipSummarization, nil
 }

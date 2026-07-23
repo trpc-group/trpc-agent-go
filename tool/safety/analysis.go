@@ -573,7 +573,17 @@ func extractNetworkTarget(tok string) networkTarget {
 	if i := strings.LastIndex(host, "@"); i >= 0 {
 		host = host[i+1:]
 	}
-	if i := strings.IndexAny(host, "/:"); i >= 0 {
+	if strings.HasPrefix(host, "[") {
+		if end := strings.IndexByte(host, ']'); end > 0 {
+			suffix := host[end+1:]
+			if suffix != "" && suffix[0] != ':' && suffix[0] != '/' {
+				t.Malformed = true
+			}
+			host = host[1:end]
+		} else {
+			t.Malformed = true
+		}
+	} else if i := strings.IndexAny(host, "/:"); i >= 0 {
 		host = host[:i]
 	}
 	host = strings.ToLower(strings.TrimSpace(host))
@@ -591,7 +601,7 @@ func extractNetworkTarget(tok string) networkTarget {
 	// deny or ask rather than silently allow.
 	t.Host = host
 	t.Scheme = ""
-	if !strings.Contains(host, ".") {
+	if isAmbiguousHost(host) || !strings.Contains(host, ".") {
 		t.Malformed = true
 	}
 	return t

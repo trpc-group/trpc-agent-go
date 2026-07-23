@@ -345,6 +345,10 @@ func (c *Callbacks) RegisterAfterTool(cb any) *Callbacks {
 // Finalizers are intended for safety-critical post-processing (secret
 // redaction, output capping, audit, resource release) that must not be
 // bypassed by an earlier callback's CustomResult or error.
+//
+// Finalizers do not suppress callback errors. RunAfterTool returns the
+// effective finalizer result alongside the first callback error so the
+// framework can preserve the safe result while still surfacing the failure.
 func (c *Callbacks) RegisterAfterToolFinalizer(cb AfterToolCallbackStructured) *Callbacks {
 	c.AfterToolFinalizers = append(c.AfterToolFinalizers, cb)
 	return c
@@ -603,6 +607,8 @@ func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
 // Finalizers registered via RegisterAfterToolFinalizer always run, even
 // when the regular chain stops early on a CustomResult or an error.
+// A callback error is returned together with the effective finalizer result;
+// finalizers do not clear errors.
 func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	args *AfterToolArgs,

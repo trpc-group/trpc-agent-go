@@ -262,6 +262,21 @@ func TestCoverrules_ExtractNetworkTarget(t *testing.T) {
 		require.False(t, tgt.Malformed)
 		require.Equal(t, "github.com", tgt.Host)
 	})
+	t.Run("bracketed IPv6 host is preserved", func(t *testing.T) {
+		tgt := extractNetworkTarget("user@[2001:db8::1]:/exfil")
+		require.True(t, tgt.Malformed)
+		require.Equal(t, "2001:db8::1", tgt.Host)
+	})
+	t.Run("unclosed IPv6 bracket fails closed", func(t *testing.T) {
+		tgt := extractNetworkTarget("user@[2001:db8::1")
+		require.True(t, tgt.Malformed)
+		require.NotEmpty(t, tgt.Host)
+	})
+	t.Run("invalid IPv6 suffix fails closed", func(t *testing.T) {
+		tgt := extractNetworkTarget("user@[2001:db8::1]invalid")
+		require.True(t, tgt.Malformed)
+		require.Equal(t, "2001:db8::1", tgt.Host)
+	})
 	t.Run("single trailing dot is trimmed", func(t *testing.T) {
 		tgt := extractNetworkTarget("github.com.")
 		require.False(t, tgt.Malformed)
