@@ -15,7 +15,7 @@ import (
 )
 
 // SchemaVersion is the current optimization report schema.
-const SchemaVersion = "1.5"
+const SchemaVersion = "1.6"
 
 // NewReport creates a report with validated baseline data.
 func NewReport(
@@ -46,6 +46,7 @@ func NewReport(
 		BaselineValidation:  baselineValidation,
 		BaselineAttribution: attribution,
 		Rounds:              make([]RoundReport, 0),
+		Usage:               UsageSummary{TokenUsageAvailable: true},
 	}, nil
 }
 

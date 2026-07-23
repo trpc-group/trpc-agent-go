@@ -43,6 +43,7 @@ func TestNormalizeEvaluationSummarizesAndSortsCases(t *testing.T) {
 	assert.True(t, result.Cases[0].Passed)
 	assert.False(t, result.Cases[1].Passed)
 	assert.Equal(t, 6, result.Usage.TotalTokens)
+	assert.True(t, result.Usage.TokenUsageAvailable)
 	assert.Equal(t, 2, result.Usage.ModelCalls)
 	assert.Equal(t, 2, result.Usage.ToolCalls)
 	assert.Equal(t, 4*time.Second, result.Usage.Duration)
@@ -147,15 +148,26 @@ func TestNormalizeEvaluationRejectsIncompleteInput(t *testing.T) {
 }
 
 func TestAddUsageAndMilliseconds(t *testing.T) {
-	left := UsageSummary{PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3, ModelCalls: 1, Duration: time.Second}
-	right := UsageSummary{PromptTokens: 4, CompletionTokens: 5, TotalTokens: 9, ToolCalls: 2, Duration: 500 * time.Millisecond}
+	left := UsageSummary{
+		TokenUsageAvailable: true,
+		PromptTokens:        1, CompletionTokens: 2, TotalTokens: 3, ModelCalls: 1, Duration: time.Second,
+	}
+	right := UsageSummary{
+		TokenUsageAvailable: true,
+		PromptTokens:        4, CompletionTokens: 5, TotalTokens: 9, ToolCalls: 2, Duration: 500 * time.Millisecond,
+	}
 	result := AddUsage(left, right)
+	assert.True(t, result.TokenUsageAvailable)
 	assert.Equal(t, 5, result.PromptTokens)
 	assert.Equal(t, 7, result.CompletionTokens)
 	assert.Equal(t, 12, result.TotalTokens)
 	assert.Equal(t, 1, result.ModelCalls)
 	assert.Equal(t, 2, result.ToolCalls)
 	assert.Equal(t, int64(1500), Milliseconds(result.Duration))
+
+	unknown := UsageSummary{ModelCalls: 1}
+	assert.False(t, AddUsage(left, unknown).TokenUsageAvailable)
+	assert.False(t, AddUsage(unknown, left).TokenUsageAvailable)
 }
 
 func TestNormalizeEvaluationHandlesNilSnapshotsAndNegativeTraceRange(t *testing.T) {
@@ -171,10 +183,29 @@ func TestNormalizeEvaluationHandlesNilSnapshotsAndNegativeTraceRange(t *testing.
 	result, err := NormalizeEvaluation(engineEvaluation(item))
 	require.NoError(t, err)
 	assert.Empty(t, result.Cases[0].Trace.Output)
+	assert.False(t, result.Usage.TokenUsageAvailable)
 	assert.Zero(t, result.Usage.TotalTokens)
 	assert.Zero(t, result.Usage.Duration)
 	assert.Empty(t, result.Cases[0].Trace.Steps[0].Input)
 	assert.Equal(t, "step-output", result.Cases[0].Trace.Steps[0].Output)
+}
+
+func TestNormalizeEvaluationTreatsZeroTokenUsageAsAvailableWithoutMissingLLMUsage(t *testing.T) {
+	start := time.Unix(10, 0)
+	noLLM := engineCase("no-llm", status.EvalStatusPassed, start)
+	noLLM.Trace.Usage = nil
+	noLLM.Trace.Steps = noLLM.Trace.Steps[1:]
+	result, err := NormalizeEvaluation(engineEvaluation(noLLM))
+	require.NoError(t, err)
+	assert.True(t, result.Usage.TokenUsageAvailable)
+	assert.Zero(t, result.Usage.TotalTokens)
+
+	zeroUsage := engineCase("zero-usage", status.EvalStatusPassed, start)
+	zeroUsage.Trace.Usage = &model.Usage{}
+	result, err = NormalizeEvaluation(engineEvaluation(zeroUsage))
+	require.NoError(t, err)
+	assert.True(t, result.Usage.TokenUsageAvailable)
+	assert.Zero(t, result.Usage.TotalTokens)
 }
 
 func TestTraceFailureMakesCaseFailAndProducesAttribution(t *testing.T) {

@@ -18,14 +18,15 @@ import (
 )
 
 const (
-	reasonScoreGain       = "validation score gain is below threshold"
-	reasonNewFailure      = "candidate introduces a new validation failure"
-	reasonCriticalDrop    = "critical validation case regressed"
-	reasonTokenBudget     = "candidate exceeds validation token budget"
-	reasonModelCallBudget = "candidate exceeds validation model-call budget"
-	reasonToolCallBudget  = "candidate exceeds validation tool-call budget"
-	reasonNotEvaluated    = "candidate validation metric is not evaluated"
-	reasonInvalidUsage    = "candidate validation usage is invalid"
+	reasonScoreGain        = "validation score gain is below threshold"
+	reasonNewFailure       = "candidate introduces a new validation failure"
+	reasonCriticalDrop     = "critical validation case regressed"
+	reasonTokenBudget      = "candidate exceeds validation token budget"
+	reasonTokenUnavailable = "candidate validation token usage is unavailable"
+	reasonModelCallBudget  = "candidate exceeds validation model-call budget"
+	reasonToolCallBudget   = "candidate exceeds validation tool-call budget"
+	reasonNotEvaluated     = "candidate validation metric is not evaluated"
+	reasonInvalidUsage     = "candidate validation usage is invalid"
 )
 
 // Decide applies all configured regression gates.
@@ -200,8 +201,12 @@ func appendBudgetReasons(config GateConfig, candidate *EvaluationResult, decisio
 		decision.Reasons = append(decision.Reasons, reasonInvalidUsage+": "+err.Error())
 		return
 	}
-	if config.MaxValidationTokens > 0 && usage.TotalTokens > config.MaxValidationTokens {
-		decision.Reasons = append(decision.Reasons, reasonTokenBudget)
+	if config.MaxValidationTokens > 0 {
+		if !usage.TokenUsageAvailable {
+			decision.Reasons = append(decision.Reasons, reasonTokenUnavailable)
+		} else if usage.TotalTokens > config.MaxValidationTokens {
+			decision.Reasons = append(decision.Reasons, reasonTokenBudget)
+		}
 	}
 	if config.MaxValidationModelCalls > 0 && usage.ModelCalls > config.MaxValidationModelCalls {
 		decision.Reasons = append(decision.Reasons, reasonModelCallBudget)

@@ -90,6 +90,7 @@ const (
 type UsageSummary struct {
 	MonetaryCostAvailable bool          `json:"monetaryCostAvailable"`
 	MonetaryCost          float64       `json:"monetaryCost"`
+	TokenUsageAvailable   bool          `json:"tokenUsageAvailable"`
 	PromptTokens          int           `json:"promptTokens"`
 	CompletionTokens      int           `json:"completionTokens"`
 	TotalTokens           int           `json:"totalTokens"`

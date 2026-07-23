@@ -10,9 +10,13 @@ package regression
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,11 +35,21 @@ func TestWriteReportsCreatesReadableJSONAndMarkdown(t *testing.T) {
 	require.NoError(t, json.Unmarshal(jsonData, &decoded))
 	assert.Equal(t, SchemaVersion, decoded.SchemaVersion)
 	assert.Equal(t, report.Decision, decoded.Decision)
+	assert.True(t, decoded.Usage.TokenUsageAvailable)
 
 	markdown, err := os.ReadFile(filepath.Join(outputDir, markdownReportName))
 	require.NoError(t, err)
 	assert.Contains(t, string(markdown), "Selected candidate decision: ACCEPT")
 	assert.Contains(t, string(markdown), "Attempt 1")
+	assert.Contains(t, string(markdown), "Token usage available: true")
+
+	if runtime.GOOS != "windows" {
+		for _, name := range []string{jsonReportName, markdownReportName} {
+			info, statErr := os.Stat(filepath.Join(outputDir, name))
+			require.NoError(t, statErr)
+			assert.Equal(t, os.FileMode(fileMode), info.Mode().Perm())
+		}
+	}
 }
 
 func TestWriteReportsOverwritesExistingReports(t *testing.T) {
@@ -56,6 +70,204 @@ func TestWriteReportsValidatesArguments(t *testing.T) {
 	blockingFile := filepath.Join(t.TempDir(), "not-a-directory")
 	require.NoError(t, os.WriteFile(blockingFile, []byte("blocked"), fileMode))
 	require.ErrorContains(t, WriteReports(blockingFile, report), "create output directory")
+}
+
+func TestWriteReportsRollsBackNewPairWhenJSONPublishFails(t *testing.T) {
+	outputDir := t.TempDir()
+	ops := reportOpsWithRenameFailures(map[int]error{2: errors.New("forced JSON publish failure")})
+
+	err := writeReports(outputDir, completeReport(t), ops)
+	require.ErrorContains(t, err, "publish JSON report")
+	assertReportFileMissing(t, outputDir, jsonReportName)
+	assertReportFileMissing(t, outputDir, markdownReportName)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsRestoresExistingPairWhenJSONPublishFails(t *testing.T) {
+	outputDir := t.TempDir()
+	report := completeReport(t)
+	require.NoError(t, WriteReports(outputDir, report))
+	oldJSON := readReportFile(t, outputDir, jsonReportName)
+	oldMarkdown := readReportFile(t, outputDir, markdownReportName)
+	report.Run.Seed = 99
+	ops := reportOpsWithRenameFailures(map[int]error{4: errors.New("forced JSON publish failure")})
+
+	err := writeReports(outputDir, report, ops)
+	require.ErrorContains(t, err, "publish JSON report")
+	assert.Equal(t, oldJSON, readReportFile(t, outputDir, jsonReportName))
+	assert.Equal(t, oldMarkdown, readReportFile(t, outputDir, markdownReportName))
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsRestoresFirstBackupWhenSecondBackupFails(t *testing.T) {
+	outputDir := t.TempDir()
+	report := completeReport(t)
+	require.NoError(t, WriteReports(outputDir, report))
+	oldJSON := readReportFile(t, outputDir, jsonReportName)
+	oldMarkdown := readReportFile(t, outputDir, markdownReportName)
+	ops := reportOpsWithRenameFailures(map[int]error{2: errors.New("forced second backup failure")})
+
+	err := writeReports(outputDir, report, ops)
+	require.ErrorContains(t, err, "backup existing JSON report")
+	assert.Equal(t, oldJSON, readReportFile(t, outputDir, jsonReportName))
+	assert.Equal(t, oldMarkdown, readReportFile(t, outputDir, markdownReportName))
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsRestoresOnlyExistingJSONWhenPublishFails(t *testing.T) {
+	outputDir := t.TempDir()
+	oldJSON := []byte("old JSON\n")
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, jsonReportName), oldJSON, fileMode))
+	ops := reportOpsWithRenameFailures(map[int]error{3: errors.New("forced JSON publish failure")})
+
+	err := writeReports(outputDir, completeReport(t), ops)
+	require.ErrorContains(t, err, "publish JSON report")
+	assert.Equal(t, oldJSON, readReportFile(t, outputDir, jsonReportName))
+	assertReportFileMissing(t, outputDir, markdownReportName)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsRestoresOnlyExistingMarkdownWhenPublishFails(t *testing.T) {
+	outputDir := t.TempDir()
+	oldMarkdown := []byte("old Markdown\n")
+	require.NoError(t, os.WriteFile(
+		filepath.Join(outputDir, markdownReportName), oldMarkdown, fileMode,
+	))
+	ops := reportOpsWithRenameFailures(map[int]error{3: errors.New("forced JSON publish failure")})
+
+	err := writeReports(outputDir, completeReport(t), ops)
+	require.ErrorContains(t, err, "publish JSON report")
+	assert.Equal(t, oldMarkdown, readReportFile(t, outputDir, markdownReportName))
+	assertReportFileMissing(t, outputDir, jsonReportName)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsJoinsPublishAndRollbackFailures(t *testing.T) {
+	outputDir := t.TempDir()
+	report := completeReport(t)
+	require.NoError(t, WriteReports(outputDir, report))
+	oldJSON := readReportFile(t, outputDir, jsonReportName)
+	report.Run.Seed = 99
+	ops := reportOpsWithRenameFailures(map[int]error{
+		4: errors.New("forced JSON publish failure"),
+		5: errors.New("forced Markdown restore failure"),
+	})
+
+	err := writeReports(outputDir, report, ops)
+	require.ErrorContains(t, err, "forced JSON publish failure")
+	require.ErrorContains(t, err, "forced Markdown restore failure")
+	assertReportFileMissing(t, outputDir, jsonReportName)
+	assertReportFileMissing(t, outputDir, markdownReportName)
+	jsonBackups, globErr := filepath.Glob(
+		filepath.Join(outputDir, "."+jsonReportName+".backup-*"),
+	)
+	require.NoError(t, globErr)
+	require.Len(t, jsonBackups, 1)
+	backupJSON, readErr := os.ReadFile(jsonBackups[0])
+	require.NoError(t, readErr)
+	assert.Equal(t, oldJSON, backupJSON)
+	assert.NotContains(t, string(backupJSON), `"seed":99`)
+}
+
+func TestWriteReportsJoinsPublishedMarkdownRemovalFailure(t *testing.T) {
+	outputDir := t.TempDir()
+	ops := reportOpsWithRenameFailures(map[int]error{2: errors.New("forced JSON publish failure")})
+	remove := ops.remove
+	markdownPath := filepath.Join(outputDir, markdownReportName)
+	ops.remove = func(path string) error {
+		if filepath.Clean(path) == filepath.Clean(markdownPath) {
+			return errors.New("forced Markdown rollback removal failure")
+		}
+		return remove(path)
+	}
+
+	err := writeReports(outputDir, completeReport(t), ops)
+	require.ErrorContains(t, err, "forced JSON publish failure")
+	require.ErrorContains(t, err, "forced Markdown rollback removal failure")
+	assertReportFileMissing(t, outputDir, jsonReportName)
+	assert.Contains(t, string(readReportFile(t, outputDir, markdownReportName)),
+		"Selected candidate decision: ACCEPT")
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsJoinsStagedCleanupFailure(t *testing.T) {
+	outputDir := t.TempDir()
+	ops := reportOpsWithRenameFailures(map[int]error{2: errors.New("forced JSON publish failure")})
+	remove := ops.remove
+	ops.remove = func(path string) error {
+		if strings.Contains(filepath.Base(path), ".tmp-") {
+			return errors.New("forced staged cleanup failure")
+		}
+		return remove(path)
+	}
+
+	err := writeReports(outputDir, completeReport(t), ops)
+	require.ErrorContains(t, err, "forced JSON publish failure")
+	require.ErrorContains(t, err, "forced staged cleanup failure")
+	assertReportFileMissing(t, outputDir, jsonReportName)
+	assertReportFileMissing(t, outputDir, markdownReportName)
+}
+
+func TestWriteReportsKeepsCommittedPairWhenBackupCleanupFails(t *testing.T) {
+	outputDir := t.TempDir()
+	report := completeReport(t)
+	require.NoError(t, WriteReports(outputDir, report))
+	report.Run.Seed = 99
+	ops := osReportFileOps
+	ops.remove = func(path string) error {
+		if strings.Contains(filepath.Base(path), ".backup-") {
+			return errors.New("forced backup cleanup failure")
+		}
+		return os.Remove(path)
+	}
+
+	err := writeReports(outputDir, report, ops)
+	require.ErrorContains(t, err, "reports committed but backup cleanup failed")
+	assert.Contains(t, string(readReportFile(t, outputDir, jsonReportName)), `"seed":99`)
+	assert.Contains(t, string(readReportFile(t, outputDir, markdownReportName)), "Seed: 99")
+}
+
+func TestWriteReportsRejectsNonRegularExistingTarget(t *testing.T) {
+	outputDir := t.TempDir()
+	require.NoError(t, os.Mkdir(filepath.Join(outputDir, jsonReportName), directoryMode))
+
+	err := WriteReports(outputDir, completeReport(t))
+	require.ErrorContains(t, err, "existing JSON report is not a regular file")
+	assertReportFileMissing(t, outputDir, markdownReportName)
+	assertNoReportTransactionFiles(t, outputDir)
+}
+
+func TestWriteReportsSerializesConcurrentWriters(t *testing.T) {
+	outputDir := t.TempDir()
+	const writers = 8
+	reports := make([]*Report, writers)
+	for i := range reports {
+		reports[i] = completeReport(t)
+		reports[i].Run.Seed = int64(100 + i)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, writers)
+	var wait sync.WaitGroup
+	for _, report := range reports {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			errs <- WriteReports(outputDir, report)
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	var decoded Report
+	require.NoError(t, json.Unmarshal(readReportFile(t, outputDir, jsonReportName), &decoded))
+	markdown := string(readReportFile(t, outputDir, markdownReportName))
+	assert.Contains(t, markdown, fmt.Sprintf("Seed: %d", decoded.Run.Seed))
+	assertNoReportTransactionFiles(t, outputDir)
 }
 
 func TestRenderMarkdownProtectsCandidatePrompt(t *testing.T) {
@@ -133,4 +345,40 @@ func completeReport(t *testing.T) *Report {
 	require.NoError(t, err)
 	require.NoError(t, AppendRound(report, completeRound(1, 0.7, true)))
 	return report
+}
+
+func reportOpsWithRenameFailures(failures map[int]error) reportFileOps {
+	ops := osReportFileOps
+	renameCalls := 0
+	ops.rename = func(oldPath, newPath string) error {
+		renameCalls++
+		if err := failures[renameCalls]; err != nil {
+			return err
+		}
+		return os.Rename(oldPath, newPath)
+	}
+	return ops
+}
+
+func readReportFile(t *testing.T, outputDir, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(outputDir, name))
+	require.NoError(t, err)
+	return data
+}
+
+func assertReportFileMissing(t *testing.T, outputDir, name string) {
+	t.Helper()
+	_, err := os.Stat(filepath.Join(outputDir, name))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func assertNoReportTransactionFiles(t *testing.T, outputDir string) {
+	t.Helper()
+	entries, err := os.ReadDir(outputDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		assert.NotContains(t, entry.Name(), ".tmp-")
+		assert.NotContains(t, entry.Name(), ".backup-")
+	}
 }

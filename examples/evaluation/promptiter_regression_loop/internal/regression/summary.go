@@ -97,6 +97,7 @@ func NormalizeEvaluation(result *promptiterengine.EvaluationResult) (*Evaluation
 	normalized := &EvaluationResult{
 		OverallScore: result.OverallScore,
 		Cases:        make([]CaseResult, 0),
+		Usage:        UsageSummary{TokenUsageAvailable: true},
 	}
 	evalSetIDs := make(map[string]struct{}, len(result.EvalSets))
 	for _, evalSet := range result.EvalSets {
@@ -241,6 +242,7 @@ func summarizeTrace(input *atrace.Trace) (*TraceSummary, error) {
 		}
 		result.Steps = append(result.Steps, step)
 	}
+	result.Usage.TokenUsageAvailable = input.Usage != nil || result.Usage.ModelCalls == 0
 	return result, nil
 }
 
@@ -258,6 +260,7 @@ func AddUsage(left, right UsageSummary) UsageSummary {
 	return UsageSummary{
 		MonetaryCostAvailable: left.MonetaryCostAvailable && right.MonetaryCostAvailable,
 		MonetaryCost:          left.MonetaryCost + right.MonetaryCost,
+		TokenUsageAvailable:   left.TokenUsageAvailable && right.TokenUsageAvailable,
 		PromptTokens:          left.PromptTokens + right.PromptTokens,
 		CompletionTokens:      left.CompletionTokens + right.CompletionTokens,
 		TotalTokens:           left.TotalTokens + right.TotalTokens,

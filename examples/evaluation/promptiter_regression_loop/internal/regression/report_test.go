@@ -22,6 +22,7 @@ func TestReportLifecycleTracksLastAttemptAndWriteback(t *testing.T) {
 	report, err := NewReport(RunMetadata{Seed: 42, Mode: "fake"}, baseline, baseline, Attribute(baseline, AttributionCatalog{}))
 	require.NoError(t, err)
 	assert.Equal(t, SchemaVersion, report.SchemaVersion)
+	assert.True(t, report.Usage.TokenUsageAvailable)
 
 	round := completeRound(1, 0.7, true)
 	require.NoError(t, AppendRound(report, round))
@@ -29,6 +30,7 @@ func TestReportLifecycleTracksLastAttemptAndWriteback(t *testing.T) {
 	assert.True(t, report.Decision.Accepted)
 	assert.Equal(t, round.Validation.Usage, report.Usage)
 	require.NoError(t, AppendRound(report, completeRound(2, 0.6, false)))
+	assert.True(t, report.Usage.TokenUsageAvailable)
 	assert.Equal(t, "candidate-1", report.Candidate.Text)
 	assert.True(t, report.Decision.Accepted)
 
@@ -59,6 +61,17 @@ func TestAppendRoundRequiresCompleteSequentialRounds(t *testing.T) {
 	incomplete := completeRound(1, 0.6, true)
 	incomplete.Validation = nil
 	require.Error(t, AppendRound(newReport(t), incomplete))
+}
+
+func TestAppendRoundPropagatesUnavailableTokenUsage(t *testing.T) {
+	baseline := evaluationWithCases(caseWithMetric("a", 0.5, status.EvalStatusPassed))
+	report, err := NewReport(RunMetadata{}, baseline, baseline, AttributionResult{})
+	require.NoError(t, err)
+	round := completeRound(1, 0.6, true)
+	round.Usage.TokenUsageAvailable = false
+
+	require.NoError(t, AppendRound(report, round))
+	assert.False(t, report.Usage.TokenUsageAvailable)
 }
 
 func TestNewReportAndSetWritebackValidateInputs(t *testing.T) {
@@ -101,7 +114,10 @@ func TestNewReportAndSetWritebackValidateInputs(t *testing.T) {
 
 func completeRound(attempt int, score float64, accepted bool) RoundReport {
 	evaluation := evaluationWithCases(caseWithMetric("a", score, status.EvalStatusPassed))
-	evaluation.Usage = UsageSummary{TotalTokens: attempt, Duration: time.Duration(attempt) * time.Millisecond}
+	evaluation.Usage = UsageSummary{
+		TokenUsageAvailable: true,
+		TotalTokens:         attempt, Duration: time.Duration(attempt) * time.Millisecond,
+	}
 	delta := &DeltaSummary{ScoreDelta: score - 0.5, Counts: map[DeltaKind]int{}, Cases: []CaseDelta{}}
 	decision := GateDecision{Accepted: accepted, ScoreDelta: delta.ScoreDelta, Reasons: []string{"test decision"}}
 	return RoundReport{

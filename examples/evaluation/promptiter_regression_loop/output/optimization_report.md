@@ -8,7 +8,7 @@
 - Run status: completed
 - Seed: 20260721
 - Mode: fake-model+trace
-- Duration: 68 ms
+- Duration: 26 ms
 
 ## Baseline
 
@@ -76,6 +76,7 @@ Handle 7-day returns, return shipping, order tracking, delivery updates, and inv
 
 - Monetary cost available: false
 - Monetary cost: 0.0000
+- Token usage available: true
 - Prompt tokens: 1179
 - Completion tokens: 491
 - Total tokens: 1670

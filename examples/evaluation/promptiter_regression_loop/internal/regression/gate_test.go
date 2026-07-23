@@ -45,7 +45,9 @@ func TestDecideAccumulatesRegressionTraceAndBudgetReasons(t *testing.T) {
 		caseWithMetric("stable", 0.9, status.EvalStatusPassed),
 	)
 	candidate.Cases[0].Trace.Status = "incomplete"
-	candidate.Usage = UsageSummary{TotalTokens: 11, ModelCalls: 3, ToolCalls: 2}
+	candidate.Usage = UsageSummary{
+		TokenUsageAvailable: true, TotalTokens: 11, ModelCalls: 3, ToolCalls: 2,
+	}
 	config := GateConfig{
 		MinValidationScoreGain: 0.2, RejectNewFailures: true,
 		CriticalCaseIDs: []string{"critical"}, MaxCriticalScoreDrop: 0.1,
@@ -87,6 +89,25 @@ func TestDecideTreatsZeroBudgetsAsUnlimited(t *testing.T) {
 		OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
 	})
 
+	require.NoError(t, err)
+	assert.True(t, decision.Accepted)
+}
+
+func TestDecideRejectsUnavailableTokenUsageOnlyWhenBudgetEnabled(t *testing.T) {
+	baseline := evaluationWithCases(caseWithMetric("a", 0.5, status.EvalStatusPassed))
+	candidate := evaluationWithCases(caseWithMetric("a", 0.6, status.EvalStatusPassed))
+	candidate.Usage = UsageSummary{ModelCalls: 1}
+
+	decision, err := Decide(GateConfig{MaxValidationTokens: 100}, GateInput{
+		OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
+	})
+	require.NoError(t, err)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, reasonTokenUnavailable)
+
+	decision, err = Decide(GateConfig{}, GateInput{
+		OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
+	})
 	require.NoError(t, err)
 	assert.True(t, decision.Accepted)
 }
@@ -250,6 +271,7 @@ func gateAccuracyCases() []gateAccuracyCase {
 	declined := evaluationWithCases(caseWithMetric("case", 0.5, status.EvalStatusFailed))
 	expensive := evaluationWithCases(caseWithMetric("case", 0.8, status.EvalStatusPassed))
 	expensive.Usage.TotalTokens = 101
+	expensive.Usage.TokenUsageAvailable = true
 	criticalBaseline := evaluationWithCases(
 		caseWithMetric("case", 0.6, status.EvalStatusPassed),
 		caseWithMetric("other", 0.4, status.EvalStatusFailed),
