@@ -55,11 +55,13 @@ func baseLLMAgentOptions(
 	genConfig model.GenerationConfig,
 	repo *ocskills.Repository,
 ) []llmagent.Option {
-	return []llmagent.Option{
+	opts := []llmagent.Option{
 		llmagent.WithModel(mdl),
+		llmagent.WithAgentCallbacks(blockedRouteAgentCallbacks()),
 		llmagent.WithInstruction(instruction),
 		llmagent.WithGlobalInstruction(systemPrompt),
 		llmagent.WithGenerationConfig(genConfig),
+		llmagent.WithAddCurrentTime(true),
 		llmagent.WithAddSessionSummary(cfg.AddSessionSummary),
 		llmagent.WithEnableContextCompaction(cfg.EnableContextCompaction),
 		llmagent.WithContextCompactionOversizedToolResultMaxTokens(
@@ -85,6 +87,12 @@ func baseLLMAgentOptions(
 			runtimeprofile.SkillVisibilityFilterForRepository(repo),
 		),
 	}
+	if cfg.MaxLLMCalls > 0 || cfg.DeadlineFinalizationWindow > 0 {
+		opts = append(opts, llmagent.WithModelCallbacks(
+			modelCallBudgetCallbacks(),
+		))
+	}
+	return opts
 }
 
 func appendDeferredSkillOverviewOptions(

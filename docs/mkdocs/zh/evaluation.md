@@ -855,6 +855,7 @@ type EvalMetric struct {
 	EvaluatorName string               // EvaluatorName 是评估器实现名，可选
 	Threshold     float64              // Threshold 是阈值
 	Criterion     *criterion.Criterion // Criterion 是评估准则
+	Extension     any                  // Extension 是调用方自定义元数据
 }
 
 // Criterion 表示评估准则集合
@@ -865,7 +866,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` 默认用于从 Registry 选择评估器实现，常见内置评估器如下：
+`metricName` 用于从 Registry 选择评估器实现，并作为结果中的指标标识。常见内置评估器如下：
 
 - `tool_trajectory_avg_score`：工具轨迹一致性评估器，需要配置预期输出。
 - `final_response_avg_score`：最终响应评估器，不需要 LLM，需要配置预期输出。
@@ -879,6 +880,8 @@ type Criterion struct {
 - `llm_rubric_knowledge_recall`：LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge 和评估细则 rubrics。
 
 `metricName` 需要在同一份指标文件中保持唯一，因为它同时作为结果中的指标标识。`threshold` 用于定义阈值，评估器会输出 `score` 并据此判断通过或失败。不同评估器对 `score` 的定义略有差异，但常见做法是对每轮 Invocation 计算分数，再对多轮结果做聚合得到整体分数。指标文件的数组顺序也会影响评估执行顺序与结果展示顺序。
+
+`extension` 用于携带调用方自定义的评估指标元数据，例如平台侧的权重、分组或展示配置。框架只负责随 `EvalMetric` 读取、存储和传递该字段，不解释其中的业务语义，也不承诺对其内容做深拷贝；自定义评估器、平台逻辑或自定义聚合逻辑可以按需读取。
 
 下面给出一个工具轨迹指标文件示例。
 
@@ -1008,6 +1011,7 @@ type JSONCriterion struct {
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy 表示匹配策略
 	NumberTolerance *float64                                 // NumberTolerance 表示数字容差
 	Valid           bool                                     // Valid 表示校验实际内容是否为合法 JSON。
+	Schema          json.RawMessage                          // Schema 表示用于校验实际内容的 JSON Schema。
 	Compare         func(actual, expected any) (bool, error) // Compare 自定义比较逻辑
 }
 
@@ -1015,7 +1019,19 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-对比时 actual 是实际值，expected 是预期值。如果在代码中提供了 `Compare`，JSONCriterion 会直接使用自定义逻辑。未提供 `Compare` 时，`valid` 用于先校验 actual 是否是一段完整且严格合法的 JSON，随后再按照 `matchStrategy` 决定是否执行内置 JSON 值匹配。当前 `matchStrategy` 支持 `exact` 与 `skip`，默认值为 `exact`；`exact` 表示按 JSON 结构精确匹配，`skip` 表示跳过内置 JSON 值匹配。因此，如果只希望做合法性校验、不希望继续比较 expected，应同时配置 `valid: true` 与 `matchStrategy: "skip"`。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置。两者同时非空时将报错。
+对比时，`actual` 是实际值，`expected` 是预期值。JSONCriterion 的执行顺序如下：
+
+1. 如果在代码中提供了 `Compare`，直接使用自定义逻辑，不再执行内置的 `valid`、`schema` 与 `matchStrategy`。
+2. 未提供 `Compare` 时，先执行 `valid` 校验，再执行 `schema` 校验，最后根据 `matchStrategy` 决定是否执行内置 JSON 值匹配。
+3. 如果只希望做合法性校验或 Schema 校验、不希望继续比较 `expected`，应配置 `valid: true` 或 `schema`，并设置 `matchStrategy: "skip"`。
+
+`schema` 字段本身是 JSON Schema 的原始 JSON 值，通常为对象，也支持布尔 schema；在 metrics JSON 中直接写 JSON Schema，不需要再编码成字符串。代码中可通过 `WithSchema` 传入序列化后的 JSON Schema 文本。
+
+用于校验的 `actual` 按运行时值处理：`json.RawMessage` 与 `[]byte` 会先按原始 JSON 解析，普通 `string` 默认作为已解码的字符串值校验。当同时配置 `valid: true` 与 `schema` 时，schema 校验会复用 `valid` 已解析出的 JSON 值。`schema` 为空时不执行 Schema 校验；未声明 `$schema` 时按 Draft 2020-12 编译；schema 解析失败或 actual 校验失败都会返回 `(false, error)`。
+
+当前 `matchStrategy` 支持 `exact` 与 `skip`，默认值为 `exact`。`exact` 表示按 JSON 结构精确匹配，`skip` 表示跳过内置 JSON 值匹配。对象对比要求键集合一致，数组对比要求长度一致且顺序一致。数字对比支持数值容差，默认值为 `1e-6`。
+
+`ignoreTree` 用于忽略不稳定字段，叶子节点为 true 表示忽略该字段及其子树。`onlyTree` 用于只对比指定字段，未出现在字段树中的字段将被忽略；叶子节点为 true 表示对比该字段及其子树。`onlyTree` 与 `ignoreTree` 不能同时配置，两者同时非空时将报错。
 
 配置示例片段如下，忽略 `id` 和 `metadata.timestamp` 字段，并放宽数字容差。
 
@@ -1041,6 +1057,24 @@ type JSONMatchStrategy string
       "id": true
     }
   }
+}
+```
+
+配置示例片段如下，只校验 actual 是否符合 JSON Schema，不继续对比 expected。
+
+```json
+{
+  "schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "matchStrategy": "skip"
 }
 ```
 
@@ -2832,6 +2866,39 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithRegistry(reg),
 )
 ```
+
+#### 自定义评估器
+
+当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。指标文件通过 `metricName` 选择评估器实现，并把它作为结果中的指标标识。如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
+
+指标配置示例：
+
+```json
+{
+  "metricName": "support_response_policy",
+  "threshold": 1,
+  "extension": {
+    "requiredPhrase": "support"
+  }
+}
+```
+
+代码接入示例：
+
+```go
+reg := registry.New()
+if err := reg.Register("support_response_policy", responsePolicyEvaluator{}); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithRegistry(reg),
+)
+```
+
+完整可运行示例参见 [examples/evaluation/metricextension](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/metricextension)。
 
 ### 评估结果 EvalResult
 

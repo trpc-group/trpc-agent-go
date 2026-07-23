@@ -11,6 +11,7 @@ package clone
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -77,6 +78,19 @@ func TestCloneEvalMetric_NilInput(t *testing.T) {
 	got, err := CloneEvalMetric(nil)
 	require.Error(t, err)
 	assert.Nil(t, got)
+}
+
+func TestCloneEvalMetric_AssignsExtensionAsIs(t *testing.T) {
+	extension := map[string]any{"weight": 0.7}
+	src := &metric.EvalMetric{
+		MetricName: "metric-1",
+		Extension:  extension,
+	}
+	dst, err := CloneEvalMetric(src)
+	require.NoError(t, err)
+	require.NotNil(t, dst)
+	dst.Extension.(map[string]any)["weight"] = 0.3
+	assert.Equal(t, 0.3, src.Extension.(map[string]any)["weight"])
 }
 
 func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
@@ -268,6 +282,8 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 					RootInvocationID: "root-inv",
 					SessionID:        "session",
 					Status:           agenttrace.TraceStatusCompleted,
+					Input:            &agenttrace.Snapshot{Text: "trace input"},
+					Output:           &agenttrace.Snapshot{Text: "trace output"},
 					Usage: &model.Usage{
 						TotalTokens: 10,
 						TimingInfo: &model.TimingInfo{
@@ -278,6 +294,7 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 						{
 							StepID:             "step-1",
 							NodeID:             "fetch",
+							NodeType:           "function",
 							PredecessorStepIDs: []string{"entry"},
 							AppliedSurfaceIDs:  []string{"agent#instruction"},
 							Input:              &agenttrace.Snapshot{Text: "input"},
@@ -373,12 +390,19 @@ func TestCloneEvalCase_DeepCopy(t *testing.T) {
 
 	dst.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0] = "changed"
 	assert.Equal(t, "entry", src.Conversation[0].ExecutionTrace.Steps[0].PredecessorStepIDs[0])
+	assert.Equal(t, "function", dst.Conversation[0].ExecutionTrace.Steps[0].NodeType)
 
 	dst.Conversation[0].ExecutionTrace.Steps[0].Input.Text = "changed"
 	assert.Equal(t, "input", src.Conversation[0].ExecutionTrace.Steps[0].Input.Text)
 
 	dst.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Steps[0].Usage.TimingInfo.ReasoningDuration)
+
+	dst.Conversation[0].ExecutionTrace.Input.Text = "changed"
+	assert.Equal(t, "trace input", src.Conversation[0].ExecutionTrace.Input.Text)
+
+	dst.Conversation[0].ExecutionTrace.Output.Text = "changed"
+	assert.Equal(t, "trace output", src.Conversation[0].ExecutionTrace.Output.Text)
 
 	dst.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration = 2 * time.Second
 	assert.Equal(t, time.Second, src.Conversation[0].ExecutionTrace.Usage.TimingInfo.FirstTokenDuration)
@@ -539,6 +563,7 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 						"x": []any{"y"},
 					},
 					NumberTolerance: float64Ptr(0.1),
+					Schema:          json.RawMessage(`{"type":"object"}`),
 				},
 				Rouge: &criterionrouge.RougeCriterion{
 					RougeType: "rouge1",
@@ -597,6 +622,9 @@ func TestCloneEvalMetric_DeepCopyKeepsAPIKeyAndDropsJudgeRunnerOptions(t *testin
 
 	dst.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"] = false
 	assert.Equal(t, true, src.Criterion.FinalResponse.JSON.IgnoreTree["a"].(map[string]any)["b"])
+
+	dst.Criterion.FinalResponse.JSON.Schema[2] = 'x'
+	assert.JSONEq(t, `{"type":"object"}`, string(src.Criterion.FinalResponse.JSON.Schema))
 
 	dst.Criterion.LLMJudge.Rubrics[0].Content.Text = "changed"
 	assert.Equal(t, "rubric", src.Criterion.LLMJudge.Rubrics[0].Content.Text)

@@ -11,6 +11,7 @@ package steer
 
 import (
 	"encoding/json"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -179,6 +180,37 @@ func TestAttach_AfterBorrowedReestablishesOwnership(t *testing.T) {
 	Close(inv)
 	require.False(t, queue.Enqueue(model.NewUserMessage("rejected")),
 		"Attach must clear a stale borrowed marker so Close closes the queue")
+}
+
+func TestInvocationViewDoesNotRaceWithClose(t *testing.T) {
+	inv := agent.NewInvocation()
+	queue := NewQueue()
+	for i := 0; i < 16; i++ {
+		require.True(t, queue.Enqueue(model.NewUserMessage("hello")))
+	}
+	Attach(inv, queue)
+
+	const iterations = 10000
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			_ = inv.View()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			Close(inv)
+		}
+	}()
+
+	close(start)
+	wg.Wait()
 }
 
 func TestNilSafety(t *testing.T) {

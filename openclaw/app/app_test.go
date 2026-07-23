@@ -39,6 +39,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/evolution"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillprofile"
+	toolcurrenttime "trpc.group/trpc-go/trpc-agent-go/internal/tool/currenttime"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -652,7 +653,17 @@ func TestFileMemoryStoreForBackend_FileOnly(t *testing.T) {
 func TestBuildOpenClawTools_HidesMemoryFileEnvWithoutFileBackend(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -673,6 +684,7 @@ func TestBuildOpenClawTools_HostExecDefaultTimeout(t *testing.T) {
 		nil,
 		nil,
 		50*time.Millisecond,
+		0,
 		0,
 		0,
 	)
@@ -713,6 +725,7 @@ func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
 		0,
 		50*time.Millisecond,
 		20*time.Millisecond,
+		0,
 	)
 	execTool := findTool(bundle.tools, "exec_command")
 	callable, ok := execTool.(tool.CallableTool)
@@ -779,6 +792,33 @@ func TestBuildOpenClawTools_HostExecMaxTimeoutAndYield(t *testing.T) {
 	require.Less(t, time.Since(started), 500*time.Millisecond)
 }
 
+func TestBuildOpenClawTools_HostExecMaxIdleWait(t *testing.T) {
+	t.Parallel()
+
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		20*time.Second,
+	)
+	execTool := findTool(bundle.tools, "exec_command")
+	callable, ok := execTool.(tool.CallableTool)
+	require.True(t, ok)
+
+	started := time.Now()
+	_, err := callable.Call(
+		context.Background(),
+		[]byte(`{"command":"sleep 30 && printf done"}`),
+	)
+	require.ErrorContains(t, err, "long idle waits")
+	require.Less(t, time.Since(started), time.Second)
+}
+
 func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	t.Parallel()
 
@@ -787,7 +827,17 @@ func TestBuildOpenClawTools_ExposesMemoryFileEnvForFileBackend(t *testing.T) {
 	store, err := memoryfile.NewStore(root)
 	require.NoError(t, err)
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		store,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "OPENCLAW_MEMORY_FILE")
@@ -804,7 +854,17 @@ func TestBuildOpenClawTools_UsesSandboxExecCommand(t *testing.T) {
 	t.Parallel()
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, engine, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		engine,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -832,7 +892,17 @@ func TestBuildOpenClawTools_UsesSandboxExecCommandWithMemoryFileStore(
 	require.NoError(t, err)
 
 	engine := codeexecutor.NewEngine(nil, nil, nil)
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, store, engine, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		store,
+		engine,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "exec_command")
 	require.NotNil(t, decl)
 	require.Contains(t, decl.Description, "inside the configured sandbox")
@@ -851,7 +921,17 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 ) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	decl := findToolDeclaration(bundle.tools, "conversation_history")
 	require.NotNil(t, decl)
 	require.Contains(
@@ -864,7 +944,17 @@ func TestBuildOpenClawTools_IncludesConversationHistoryTool(
 func TestBuildOpenClawTools_IncludesSubagentTools(t *testing.T) {
 	t.Parallel()
 
-	bundle := buildOpenClawTools(true, t.TempDir(), nil, nil, nil, 0, 0, 0)
+	bundle := buildOpenClawTools(
+		true,
+		t.TempDir(),
+		nil,
+		nil,
+		nil,
+		0,
+		0,
+		0,
+		0,
+	)
 	require.NotNil(
 		t,
 		findToolDeclaration(bundle.tools, "subagents_spawn"),
@@ -1645,6 +1735,50 @@ func TestRuntimeGatewayRunOptionsEdgeCases(t *testing.T) {
 	require.Nil(t, input.Extensions)
 }
 
+func TestRuntimeRunAddsModelCallBudgetOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{
+		runner:                        runner,
+		modelCallBudgetDeadlineWindow: time.Minute,
+	}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+
+	factory, ok := runner.opts.RuntimeState[modelCallBudgetRuntimeStateKey].(*modelCallBudgetFactory)
+	require.True(t, ok)
+	require.Equal(t, time.Minute, factory.deadlineWindow)
+}
+
+func TestRuntimeRunWithoutModelCallBudgetPreservesOptions(t *testing.T) {
+	t.Parallel()
+
+	const instruction = "caller"
+
+	runner := &capturingRuntimeRunOptionRunner{reply: "ok"}
+	rt := &Runtime{runner: runner}
+	_, err := rt.Run(
+		context.Background(),
+		"u1",
+		"s1",
+		model.NewUserMessage("hello"),
+		agent.WithInstruction(instruction),
+	)
+	require.NoError(t, err)
+	require.Equal(t, instruction, runner.opts.Instruction)
+	require.Empty(t, runner.opts.RuntimeState)
+}
+
 func TestToolCallArgumentsJSONRepairRunOptionResolver(t *testing.T) {
 	t.Parallel()
 
@@ -1989,6 +2123,37 @@ func TestNewAgent_EnablesOnDemandSessionTools(t *testing.T) {
 	)
 	require.NotNil(t, findTool(tools, "session_load"))
 	require.False(t, userToolNames["session_load"])
+}
+
+func TestNewAgent_EnablesStableCurrentTimeContext(t *testing.T) {
+	t.Parallel()
+
+	mdl := &captureRequestModel{}
+	agt, _, err := newAgent(mdl, agentConfig{
+		AppName:    "demo",
+		SkillsRoot: t.TempDir(),
+		StateDir:   t.TempDir(),
+	}, nil, nil)
+	require.NoError(t, err)
+
+	require.NotNil(t, findTool(agt.Tools(), toolcurrenttime.ToolName))
+
+	req := runAgentAndCapture(
+		t,
+		agt,
+		mdl,
+		&session.Session{},
+	)
+	require.Contains(t, req.Tools, toolcurrenttime.ToolName)
+
+	sys := joinSystemMessages(req)
+	require.Contains(t, sys, "The current date is:")
+	require.Contains(
+		t,
+		sys,
+		"call the built-in "+toolcurrenttime.ToolName+" tool",
+	)
+	require.NotContains(t, sys, "The current time is:")
 }
 
 func TestNewAgent_UsesConfiguredSkillRepositoryProvider(t *testing.T) {
@@ -2720,6 +2885,12 @@ func TestNewAgent_BrowserToolingGuidance_Applied(t *testing.T) {
 	require.Contains(
 		t,
 		sys,
+		"Google Scholar, Brave Search",
+	)
+	require.Contains(t, sys, "unusual traffic warning")
+	require.Contains(
+		t,
+		sys,
 		"Browser snapshots are for current page structure",
 	)
 }
@@ -2777,6 +2948,8 @@ func TestNewAgent_BrowserToolingGuidance_FromToolProvider(
 		sys,
 		"missing search/fetch blocker",
 	)
+	require.Contains(t, sys, "search-engine result pages")
+	require.Contains(t, sys, "CAPTCHA")
 }
 
 func TestNewAgent_OpenClawToolingGuidance_OverrideApplied(
@@ -4178,6 +4351,14 @@ func TestValidateAgentRunOptions(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:      "deadline-finalization-window",
+			agentType: agentTypeClaudeCode,
+			opts: runOptions{
+				DeadlineFinalizationWindow: time.Minute,
+			},
+			wantErr: true,
+		},
+		{
 			name:      "preload-memory",
 			agentType: agentTypeClaudeCode,
 			opts: runOptions{
@@ -4452,6 +4633,14 @@ func TestParseOpenAIVariant_Explicit(t *testing.T) {
 	v, err = parseOpenAIVariant(string(openai.VariantGLM), "")
 	require.NoError(t, err)
 	require.Equal(t, openai.VariantGLM, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantMiniMax), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantMiniMax, v)
+
+	v, err = parseOpenAIVariant(string(openai.VariantKimi), "")
+	require.NoError(t, err)
+	require.Equal(t, openai.VariantKimi, v)
 }
 
 func TestParseOpenAIVariant_Auto(t *testing.T) {
@@ -4476,6 +4665,8 @@ func TestModelCompatibilityRunOptions_GLMEnablesJSONRepair(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
@@ -4490,6 +4681,8 @@ func TestModelCompatibilityRunOptions_GLMCanBeInferred(t *testing.T) {
 	agentOpts := agent.NewRunOptions(runOpts...)
 	require.NotNil(t, agentOpts.ToolCallArgumentsJSONRepairEnabled)
 	require.True(t, *agentOpts.ToolCallArgumentsJSONRepairEnabled)
+	require.NotNil(t, agentOpts.ToolCallTextRepairEnabled)
+	require.True(t, *agentOpts.ToolCallTextRepairEnabled)
 }
 
 func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
@@ -4503,6 +4696,98 @@ func TestModelCompatibilityRunOptions_NonGLMUnaffected(t *testing.T) {
 		ModelMode:     modeMock,
 		OpenAIVariant: string(openai.VariantGLM),
 	}))
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DisablesThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	for _, variant := range []openai.Variant{
+		openai.VariantDeepSeek,
+		openai.VariantHunyuan,
+		openai.VariantQwen,
+		openai.VariantGLM,
+	} {
+		cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+			ModelMode:                          modeOpenAI,
+			OpenAIVariant:                      string(variant),
+			DeadlineFinalizationWindow:         time.Minute,
+			DeadlineFinalizationMaxInputTokens: 1234,
+		})
+		require.True(t, cfg.DisableThinking, string(variant))
+		require.True(t, cfg.DropReasoningContent, string(variant))
+		require.Equal(t, 1234, cfg.MaxInputTokens)
+		require.Equal(
+			t,
+			defaultReasoningFinalizationApproxRunesPerToken,
+			cfg.ApproxRunesPerToken,
+		)
+	}
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_DefaultUnaffected(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	defaultCfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	})
+	require.False(t, defaultCfg.DisableThinking)
+	require.Zero(t, defaultCfg.ApproxRunesPerToken)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantOpenAI),
+	}).DropReasoningContent)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeMock,
+		OpenAIVariant: string(openai.VariantGLM),
+	}).DisableThinking)
+	require.False(t, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: "unsupported",
+	}).DisableThinking)
+	require.Equal(t, 4321, modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:                          modeMock,
+		OpenAIVariant:                      string(openai.VariantGLM),
+		DeadlineFinalizationMaxInputTokens: 4321,
+	}).MaxInputTokens)
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_AutoInfersThinking(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:                  modeOpenAI,
+		OpenAIVariant:              openAIVariantAuto,
+		OpenAIBaseURL:              "https://open.bigmodel.cn/api/paas/v4",
+		DeadlineFinalizationWindow: time.Minute,
+	})
+	require.True(t, cfg.DisableThinking)
+	require.Equal(
+		t,
+		defaultReasoningFinalizationApproxRunesPerToken,
+		cfg.ApproxRunesPerToken,
+	)
+}
+
+func TestModelCallBudgetFinalRequestFromOptions_MaxCallOnlyKeepsReasoning(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfg := modelCallBudgetFinalRequestFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIVariant: string(openai.VariantGLM),
+		MaxLLMCalls:   4,
+	})
+	require.False(t, cfg.DisableThinking)
+	require.False(t, cfg.DropReasoningContent)
+	require.Zero(t, cfg.ApproxRunesPerToken)
 }
 
 func TestInferOpenAIVariant(t *testing.T) {
@@ -4525,6 +4810,26 @@ func TestInferOpenAIVariant(t *testing.T) {
 		t,
 		openai.VariantGLM,
 		inferOpenAIVariant("https://open.bigmodel.cn/api/paas/v4"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimax.io/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantMiniMax,
+		inferOpenAIVariant("https://api.minimaxi.com/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantKimi,
+		inferOpenAIVariant("https://api.moonshot.ai/v1"),
+	)
+	require.Equal(
+		t,
+		openai.VariantKimi,
+		inferOpenAIVariant("https://api.moonshot.cn/v1"),
 	)
 	require.Equal(
 		t,
@@ -4649,6 +4954,248 @@ func TestNewModel_OpenAIHeadersFromConfigAndEnv(t *testing.T) {
 	require.Equal(t, "venus", providerHeader)
 	require.Equal(t, "Bearer test-key", authHeader)
 	require.Equal(t, "Bearer config-token", tokenHeader)
+}
+
+func TestNewModel_OpenAIGLMUsesTextOnlyContentWhenConfigured(t *testing.T) {
+	var requestBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.True(t, strings.HasSuffix(r.URL.Path, "/chat/completions"))
+		var err error
+		requestBody, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:                    modeOpenAI,
+		OpenAIModel:                  "glm50",
+		OpenAIVariant:                string(openai.VariantGLM),
+		OpenAIBaseURL:                server.URL,
+		OpenAITextOnlyMessageContent: true,
+	})
+	require.NoError(t, err)
+
+	textPart := "visible text"
+	msg := model.NewUserMessage("inspect attachments")
+	msg.ContentParts = []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &textPart,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+		{
+			Type: model.ContentTypeFile,
+			File: &model.File{
+				Name:     "photo.jpg",
+				Data:     []byte("jpg"),
+				MimeType: "image/jpeg",
+			},
+		},
+	}
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{msg},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for rsp := range ch {
+		require.Nil(t, rsp.Error)
+	}
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(requestBody, &payload))
+	messages, ok := payload["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	parts, ok := message["content"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, parts)
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, "text", part["type"])
+		require.NotContains(t, part, "image_url")
+		require.NotContains(t, part, "file")
+	}
+	body := string(requestBody)
+	require.Contains(t, body, "visible text")
+	require.Contains(t, body, "Omitted non-text attachments")
+	require.NotContains(t, body, "data:image")
+	require.NotContains(t, body, "photo.jpg")
+}
+
+func TestNewModel_OpenAIGLMPreservesNonTextContentByDefault(t *testing.T) {
+	var requestBody []byte
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.True(t, strings.HasSuffix(r.URL.Path, "/chat/completions"))
+		var err error
+		requestBody, err = io.ReadAll(r.Body)
+		require.NoError(t, err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:     modeOpenAI,
+		OpenAIModel:   "glm50",
+		OpenAIVariant: string(openai.VariantGLM),
+		OpenAIBaseURL: server.URL,
+	})
+	require.NoError(t, err)
+
+	textPart := "visible text"
+	msg := model.NewUserMessage("inspect attachments")
+	msg.ContentParts = []model.ContentPart{
+		{
+			Type: model.ContentTypeText,
+			Text: &textPart,
+		},
+		{
+			Type: model.ContentTypeImage,
+			Image: &model.Image{
+				Data:   []byte("png"),
+				Format: "png",
+			},
+		},
+	}
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{msg},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+	for rsp := range ch {
+		require.Nil(t, rsp.Error)
+	}
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(requestBody, &payload))
+	messages, ok := payload["messages"].([]any)
+	require.True(t, ok)
+	require.Len(t, messages, 1)
+	message, ok := messages[0].(map[string]any)
+	require.True(t, ok)
+	parts, ok := message["content"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, parts)
+
+	var sawImage bool
+	for _, raw := range parts {
+		part, ok := raw.(map[string]any)
+		require.True(t, ok)
+		if part["type"] == "image_url" {
+			sawImage = true
+		}
+	}
+	require.True(t, sawImage)
+	body := string(requestBody)
+	require.Contains(t, body, "visible text")
+	require.Contains(t, body, "data:image/png;base64")
+	require.NotContains(t, body, "Omitted non-text attachments")
+}
+
+func TestNewModel_OpenAITimeout(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-release:
+			return
+		case <-time.After(5 * time.Second):
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"glm50",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"ok"},
+				"finish_reason":"stop"
+			}]
+		}`))
+	}))
+	defer func() {
+		server.CloseClientConnections()
+		server.Close()
+	}()
+	defer close(release)
+
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	mdl, err := modelFromOptions(runOptions{
+		ModelMode:           modeOpenAI,
+		OpenAIModel:         "glm50",
+		OpenAIVariant:       openAIVariantAuto,
+		OpenAIBaseURL:       server.URL,
+		OpenAITimeout:       50 * time.Millisecond,
+		OpenAIMaxRetriesSet: true,
+		OpenAIMaxRetries:    0,
+	})
+	require.NoError(t, err)
+
+	start := time.Now()
+	ch, err := mdl.GenerateContent(context.Background(), &model.Request{
+		Messages: []model.Message{model.NewUserMessage("hi")},
+		GenerationConfig: model.GenerationConfig{
+			Stream: false,
+		},
+	})
+	require.NoError(t, err)
+
+	var gotErr error
+	for rsp := range ch {
+		if rsp.Error != nil {
+			gotErr = rsp.Error
+		}
+	}
+	require.Error(t, gotErr)
+	require.Less(t, time.Since(start), 2*time.Second)
 }
 
 func TestResolveOpenAIHeaders_EnvOnlyAndConfigOnly(t *testing.T) {
@@ -5905,6 +6452,33 @@ func TestInProcGatewayClient_SendMessage_StatusError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Equal(t, wantErr, err.Error())
+}
+
+func TestMakeGatewayOptions_MaxBodyBytes(t *testing.T) {
+	t.Parallel()
+
+	srv, err := gateway.New(
+		&inProcGWTestRunner{},
+		makeGatewayOptions(nil, false, nil, 64)...,
+	)
+	require.NoError(t, err)
+
+	body, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: strings.Repeat("x", 128),
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
 }
 
 func TestInProcGatewayClient_StreamMessage_OK(t *testing.T) {

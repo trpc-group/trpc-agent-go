@@ -29,12 +29,13 @@ type ingestJob struct {
 	Session  *session.Session
 	LatestTs time.Time
 	Messages []model.Message
-	Options  session.IngestOptions
+	Options  ingestOptions
 }
 
 type ingestWorker struct {
 	c *client
 
+	apiMode   apiMode
 	asyncMode bool
 	version   string
 
@@ -68,6 +69,7 @@ func newIngestWorker(c *client, opts serviceOpts) *ingestWorker {
 	}
 	w := &ingestWorker{
 		c:         c,
+		apiMode:   opts.apiMode,
 		asyncMode: opts.asyncMode,
 		version:   opts.version,
 		timeout:   opts.memoryJobTimeout,
@@ -170,7 +172,7 @@ func (w *ingestWorker) ingest(
 	userKey memory.UserKey,
 	_ *session.Session,
 	messages []model.Message,
-	reqOpts session.IngestOptions,
+	reqOpts ingestOptions,
 ) error {
 	apiMsgs := make([]apiMessage, 0, len(messages))
 	for _, m := range messages {
@@ -183,14 +185,17 @@ func (w *ingestWorker) ingest(
 	if len(apiMsgs) == 0 {
 		return nil
 	}
+	if w.apiMode == apiModeSelfHostedOSS {
+		return w.ingestOSS(ctx, userKey, apiMsgs, reqOpts)
+	}
 	req := createMemoryRequest{
 		Messages:  apiMsgs,
 		UserID:    userKey.UserID,
 		AppID:     userKey.AppName,
-		AgentID:   reqOpts.AgentID,
-		RunID:     reqOpts.RunID,
-		Metadata:  cloneMetadata(reqOpts.Metadata),
-		Infer:     true,
+		AgentID:   reqOpts.agentID,
+		RunID:     reqOpts.runID,
+		Metadata:  cloneMetadata(reqOpts.metadata),
+		Infer:     reqOpts.infer,
 		Async:     w.asyncMode,
 		Version:   w.version,
 		OrgID:     w.orgID,
@@ -201,6 +206,26 @@ func (w *ingestWorker) ingest(
 		return err
 	}
 	return w.awaitQueuedEvents(ctx, events)
+}
+
+func (w *ingestWorker) ingestOSS(
+	ctx context.Context,
+	userKey memory.UserKey,
+	messages []apiMessage,
+	reqOpts ingestOptions,
+) error {
+	req := ossCreateMemoryRequest{
+		Messages:       messages,
+		UserID:         userKey.UserID,
+		AgentID:        reqOpts.agentID,
+		RunID:          reqOpts.runID,
+		Metadata:       withTRPCAppMetadata(reqOpts.metadata, userKey.AppName),
+		ExpirationDate: reqOpts.expirationDate,
+		Infer:          reqOpts.infer,
+		MemoryType:     reqOpts.memoryType,
+		Prompt:         reqOpts.prompt,
+	}
+	return w.c.doJSON(ctx, httpMethodPost, pathOSSMemories, nil, req, nil)
 }
 
 func (w *ingestWorker) awaitQueuedEvents(ctx context.Context, events createMemoryEvents) error {

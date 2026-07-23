@@ -694,7 +694,8 @@ msgs := []model.Message{
 ch, err := runner.RunWithMessages(ctx, r, userID, sessionID, msgs, agent.WithRequestID("request-ID"))
 ```
 
-示例：`examples/runwithmessages`（使用 `RunWithMessages`；Runner 会 auto-seed 并复用 Session）
+示例：`examples/runwithmessages`（使用 `session/noop`，并在每次请求中通过
+`RunWithMessages` 传入业务侧维护的完整历史）
 
 方式 B：通过 RunOption 显式传入（与 Python ADK 一致的理念）
 
@@ -707,6 +708,8 @@ ch, err := r.Run(ctx, userID, sessionID, model.Message{}, agent.WithMessages(msg
 Session。内容处理器不会读取这个选项，它只会从 Session 事件中派生消息（或在 Session
 没有事件时回退到单条 `invocation.Message`）。`RunWithMessages` 仍会把最新的用户消息写入
 `invocation.Message`。
+
+如果上游业务负责持久化完整历史，并且不希望 Runner 跨请求保存 Session，可以给 Runner 注入 `session/noop`，并在每次请求中通过 `RunWithMessages` 传入更新后的完整历史。Noop 仍保留单次 `Run` 所需的临时 Session，但不会自动恢复上一轮数据。详见 [无持久化（Noop）](./session/noop.md)。
 
 #### 用户消息改写
 

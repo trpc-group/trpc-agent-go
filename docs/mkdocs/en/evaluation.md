@@ -854,6 +854,7 @@ type EvalMetric struct {
 	EvaluatorName string               // EvaluatorName is an optional evaluator implementation name.
 	Threshold     float64              // Threshold is the threshold value.
 	Criterion     *criterion.Criterion // Criterion is the evaluation criteria.
+	Extension     any                  // Extension is caller-defined metadata.
 }
 
 // Criterion represents a collection of evaluation criteria.
@@ -864,7 +865,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` selects the evaluator implementation from Registry. The following evaluators are built in by default:
+`metricName` selects the evaluator implementation from Registry and identifies the metric in results. The following evaluators are built in by default:
 
 - `tool_trajectory_avg_score`: tool trajectory consistency evaluator, requires expected output.
 - `final_response_avg_score`: final response evaluator, does not require LLM, requires expected output.
@@ -878,6 +879,8 @@ type Criterion struct {
 - `llm_rubric_knowledge_recall`: LLM rubric knowledge recall evaluator, requires EvalSet to provide session input and LLMJudge plus rubrics.
 
 `threshold` defines the threshold. Evaluators output a `score` and determine pass or fail based on it. The definition of `score` varies slightly across evaluators, but a common approach is to compute scores per Invocation and aggregate them into an overall score. Under the same EvalSet, `metricName` must be unique. The order of metrics in the file also affects the evaluation execution order and result display order.
+
+`extension` carries caller-defined metadata for an evaluation metric, such as platform-side weights, grouping, or display configuration. The framework only reads, stores, and passes this field with `EvalMetric`; it does not interpret its business meaning or guarantee deep-copy semantics for its contents. Custom evaluators, platform logic, or custom aggregation logic can read it when needed.
 
 Below is an example metric file for tool trajectory.
 
@@ -1005,6 +1008,7 @@ type JSONCriterion struct {
 	MatchStrategy   JSONMatchStrategy                        // MatchStrategy is the matching strategy.
 	NumberTolerance *float64                                 // NumberTolerance is the numeric tolerance.
 	Valid           bool                                     // Valid validates whether actual content is legal JSON.
+	Schema          json.RawMessage                          // Schema validates actual content with JSON Schema.
 	Compare         func(actual, expected any) (bool, error) // Compare is custom comparison logic.
 }
 
@@ -1012,7 +1016,19 @@ type JSONCriterion struct {
 type JSONMatchStrategy string
 ```
 
-During comparison, `actual` is the actual value and `expected` is the expected value. When `Compare` is provided from code, JSONCriterion uses that custom logic directly. Otherwise, `valid` first validates whether actual is a complete and strict legal JSON document, and `matchStrategy` then decides whether to run built-in JSON value matching. Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`; `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. If you only want JSON validity validation without comparing against expected, configure both `valid: true` and `matchStrategy: "skip"`. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`. `ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
+During comparison, `actual` is the actual value and `expected` is the expected value. JSONCriterion runs in this order:
+
+1. If `Compare` is provided from code, JSONCriterion uses that custom logic directly and does not run the built-in `valid`, `schema`, or `matchStrategy` logic.
+2. If `Compare` is not provided, JSONCriterion runs `valid` validation first, then `schema` validation, and finally uses `matchStrategy` to decide whether to run built-in JSON value matching.
+3. If you only want JSON validity validation or Schema validation without comparing against `expected`, configure `valid: true` or `schema`, and set `matchStrategy: "skip"`.
+
+The `schema` field itself is a raw JSON Schema JSON value, usually an object, and boolean schemas are also supported. In metric JSON, write the schema directly as JSON instead of an escaped string. Code can use `WithSchema` with serialized JSON Schema text.
+
+The `actual` value is validated as its runtime value: `json.RawMessage` and `[]byte` are parsed as raw JSON first, while a Go `string` is validated as an already decoded string value by default. When both `valid: true` and `schema` are configured, schema validation reuses the JSON value parsed by `valid`. Empty `schema` disables Schema validation; schemas without `$schema` are compiled as Draft 2020-12; invalid schema text or actual validation failure returns `(false, error)`.
+
+Currently, `matchStrategy` supports `exact` and `skip`, with a default of `exact`. `exact` compares JSON values structurally, and `skip` skips built-in JSON value matching. Object comparison requires identical key sets. Array comparison requires identical length and order. Numeric comparison supports a tolerance, default `1e-6`.
+
+`ignoreTree` ignores unstable fields; a leaf node set to true ignores that field and its subtree. `onlyTree` compares only selected fields; keys not present in the tree are ignored. A leaf node set to true compares that field and its subtree. `onlyTree` and `ignoreTree` cannot be set at the same time when both are non-empty.
 
 Example configuration ignores `id` and `metadata.timestamp`, and relaxes numeric tolerance.
 
@@ -1038,6 +1054,24 @@ Example configuration compares only `name` and `metadata.id`, and ignores all ot
       "id": true
     }
   }
+}
+```
+
+Example configuration validates only whether actual matches the JSON Schema, without comparing against expected.
+
+```json
+{
+  "schema": {
+    "type": "object",
+    "required": ["name"],
+    "properties": {
+      "name": {
+        "type": "string"
+      }
+    },
+    "additionalProperties": false
+  },
+  "matchStrategy": "skip"
 }
 ```
 
@@ -2834,6 +2868,39 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithRegistry(reg),
 )
 ```
+
+#### Custom Evaluators
+
+When built-in evaluators do not cover a business rule, implement `evaluator.Evaluator` and register it in Registry. A metric file uses `metricName` to select the evaluator implementation and to identify the metric in results. If the evaluator needs extra configuration, put it in `extension` and read it from the custom evaluator.
+
+Example metric configuration:
+
+```json
+{
+  "metricName": "support_response_policy",
+  "threshold": 1,
+  "extension": {
+    "requiredPhrase": "support"
+  }
+}
+```
+
+Example wiring:
+
+```go
+reg := registry.New()
+if err := reg.Register("support_response_policy", responsePolicyEvaluator{}); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithRegistry(reg),
+)
+```
+
+For a complete runnable example, see [examples/evaluation/metricextension](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/metricextension).
 
 ### EvalResult
 

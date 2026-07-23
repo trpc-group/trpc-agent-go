@@ -59,6 +59,8 @@ type ServiceOpts struct {
 	asyncMemoryNum   int
 	memoryQueueSize  int
 	memoryJobTimeout time.Duration
+	// disableAutoMemoryOnExternalContext skips auto extraction for polluted sessions.
+	disableAutoMemoryOnExternalContext bool
 }
 
 func (o ServiceOpts) clone() ServiceOpts {
@@ -248,6 +250,14 @@ func WithMemoryQueueSize(size int) ServiceOpt {
 func WithMemoryJobTimeout(timeout time.Duration) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.memoryJobTimeout = timeout
+	}
+}
+
+// WithDisableAutoMemoryOnExternalContext stops future automatic memory
+// extraction for sessions that consumed framework-owned external context.
+func WithDisableAutoMemoryOnExternalContext(disable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.disableAutoMemoryOnExternalContext = disable
 	}
 }
 

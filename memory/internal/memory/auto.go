@@ -138,6 +138,9 @@ type AutoMemoryConfig struct {
 	AsyncMemoryNum   int
 	MemoryQueueSize  int
 	MemoryJobTimeout time.Duration
+	// DisableOnExternalContext skips automatic memory extraction for sessions
+	// that have been marked as polluted by framework-owned external context.
+	DisableOnExternalContext bool
 	// EnabledTools controls which memory operations the worker
 	// is allowed to execute. When nil, all operations are
 	// allowed (default). When non-nil, only operations whose
@@ -271,6 +274,10 @@ func (w *AutoMemoryWorker) EnqueueJob(ctx context.Context, sess *session.Session
 		log.DebugfContext(ctx, "auto_memory: skipped due to nil session")
 		return nil
 	}
+	if w.shouldSkipSession(sess) {
+		log.DebugfContext(ctx, "auto_memory: skipped due to polluted session")
+		return nil
+	}
 	userKey := memory.UserKey{AppName: sess.AppName, UserID: sess.UserID}
 	if userKey.AppName == "" || userKey.UserID == "" {
 		log.DebugfContext(ctx, "auto_memory: skipped due to empty userKey")
@@ -372,6 +379,10 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	if w.shouldSkipSession(job.Session) {
+		log.DebugfContext(ctx, "auto_memory: job skipped due to polluted session")
+		return
+	}
 	timeout := w.config.MemoryJobTimeout
 	if timeout <= 0 {
 		timeout = DefaultMemoryJobTimeout
@@ -386,6 +397,14 @@ func (w *AutoMemoryWorker) processJob(job *MemoryJob) {
 		return
 	}
 	writeLastExtractAt(job.Session, job.LatestTs)
+}
+
+func (w *AutoMemoryWorker) shouldSkipSession(sess *session.Session) bool {
+	if !w.config.DisableOnExternalContext || sess == nil {
+		return false
+	}
+	mode, ok := sess.GetState(memory.SessionStateKeyMemoryMode)
+	return ok && string(mode) == memory.MemoryModePolluted
 }
 
 // createAutoMemory performs memory extraction and persists operations.

@@ -166,11 +166,19 @@ func runnerEventAttrs(evt *event.Event) []attribute.KeyValue {
 	if evt == nil {
 		return nil
 	}
+	object := ""
+	partial := false
+	done := false
+	if evt.Response != nil {
+		object = evt.Object
+		partial = evt.IsPartial
+		done = evt.Done
+	}
 	attrs := []attribute.KeyValue{
 		attribute.String("runner.event.id", evt.ID),
-		attribute.String("runner.event.object", evt.Object),
-		attribute.Bool("runner.event.partial", evt.IsPartial),
-		attribute.Bool("runner.event.done", evt.Done),
+		attribute.String("runner.event.object", object),
+		attribute.Bool("runner.event.partial", partial),
+		attribute.Bool("runner.event.done", done),
 		attribute.Bool("runner.event.requires_completion", evt.RequiresCompletion),
 		attribute.Int("runner.event.state_delta_keys", len(evt.StateDelta)),
 	}

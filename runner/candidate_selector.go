@@ -378,6 +378,8 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 	attemptSession *session.Session,
 	attemptService session.Service,
 ) *agent.Invocation {
+	readOnlyMemoryService := newReadOnlyMemoryService(base.MemoryService)
+	memoryReader := base.MemoryReader
 	opts := []agent.InvocationOptions{
 		agent.WithInvocationAgent(a.inner),
 		agent.WithInvocationBranch(base.Branch),
@@ -388,7 +390,7 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 		agent.WithInvocationModel(base.Model),
 		agent.WithInvocationStructuredOutput(base.StructuredOutput),
 		agent.WithInvocationStructuredOutputType(base.StructuredOutputType),
-		agent.WithInvocationMemoryService(newReadOnlyMemoryService(base.MemoryService)),
+		agent.WithInvocationMemoryService(readOnlyMemoryService),
 		agent.WithInvocationArtifactService(newReadOnlyArtifactService(base.ArtifactService)),
 		agent.WithInvocationPlugins(base.Plugins),
 		agent.WithInvocationEventFilterKey(base.GetEventFilterKey()),
@@ -397,6 +399,7 @@ func (a *candidateSelectorAgent) newAttemptInvocation(
 		opts = append(opts, agent.WithInvocationTraceNodeID(traceNodeID))
 	}
 	innerInv := agent.NewInvocation(opts...)
+	innerInv.MemoryReader = memoryReader
 	innerInv.MaxLLMCalls = base.MaxLLMCalls
 	innerInv.MaxToolIterations = base.MaxToolIterations
 	barrier.Enable(innerInv)

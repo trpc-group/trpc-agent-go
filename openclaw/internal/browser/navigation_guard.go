@@ -13,15 +13,20 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
+	"path/filepath"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/openclaw/internal/searchresult"
 )
 
 type navigationPolicy struct {
-	AllowedDomains  []string
-	BlockedDomains  []string
-	AllowLoopback   bool
-	AllowPrivateNet bool
-	AllowFileURLs   bool
+	AllowedDomains   []string
+	BlockedDomains   []string
+	AllowLoopback    bool
+	AllowPrivateNet  bool
+	AllowFileURLs    bool
+	AllowSearchPages bool
+	AllowedFileRoots []string
 }
 
 func (p navigationPolicy) Validate(raw string) error {
@@ -42,6 +47,9 @@ func (p navigationPolicy) Validate(raw string) error {
 		return nil
 	case "file":
 		if p.AllowFileURLs {
+			return nil
+		}
+		if p.fileURLAllowed(u) {
 			return nil
 		}
 		return fmt.Errorf("browser file URLs are blocked: %s", raw)
@@ -99,6 +107,77 @@ func (p navigationPolicy) Validate(raw string) error {
 	return fmt.Errorf("browser domain is not allowed: %s", host)
 }
 
+func (p navigationPolicy) BlockedSearchResultPage(raw string) (string, bool) {
+	if p.AllowSearchPages {
+		return "", false
+	}
+	return searchresult.Match(raw)
+}
+
+func (p navigationPolicy) fileURLAllowed(u *url.URL) bool {
+	if len(p.AllowedFileRoots) == 0 {
+		return false
+	}
+	host := normalizeHost(u.Hostname())
+	if host != "" && host != "localhost" {
+		return false
+	}
+	path, err := url.PathUnescape(u.Path)
+	if err != nil || strings.TrimSpace(path) == "" {
+		return false
+	}
+	cleanPath, err := cleanFilePath(path)
+	if err != nil {
+		return false
+	}
+	for _, root := range p.AllowedFileRoots {
+		if filePathWithinRoot(cleanPath, root) {
+			return true
+		}
+	}
+	return false
+}
+
+func cleanFilePath(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("file path must be absolute")
+	}
+	cleaned := filepath.Clean(filepath.FromSlash(path))
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved, nil
+	}
+	var missing []string
+	current := cleaned
+	for {
+		resolved, err := filepath.EvalSymlinks(current)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return filepath.Clean(resolved), nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return cleaned, nil
+		}
+		missing = append(missing, filepath.Base(current))
+		current = parent
+	}
+}
+
+func filePathWithinRoot(path, root string) bool {
+	if root == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel == "." ||
+		(rel != ".." &&
+			!strings.HasPrefix(rel, ".."+string(filepath.Separator)))
+}
+
 func normalizeDomains(input []string) []string {
 	if len(input) == 0 {
 		return nil
@@ -116,6 +195,36 @@ func normalizeDomains(input []string) []string {
 		}
 		seen[host] = struct{}{}
 		out = append(out, host)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeFileRoots(input []string) []string {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(input))
+	seen := make(map[string]struct{}, len(input))
+	for _, raw := range input {
+		root := strings.TrimSpace(raw)
+		if root == "" {
+			continue
+		}
+		abs, err := filepath.Abs(filepath.Clean(filepath.FromSlash(root)))
+		if err != nil {
+			continue
+		}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+			abs = resolved
+		}
+		if _, ok := seen[abs]; ok {
+			continue
+		}
+		seen[abs] = struct{}{}
+		out = append(out, abs)
 	}
 	if len(out) == 0 {
 		return nil

@@ -77,7 +77,90 @@ func TestSearchV2Response_UnmarshalWrapped(t *testing.T) {
 	require.Len(t, resp.Memories, 1)
 }
 
+func TestSearchV2Response_UnmarshalOSSResults(t *testing.T) {
+	var resp searchV2Response
+	require.NoError(t, resp.UnmarshalJSON([]byte(`{"results":[{"id":"a","memory":"m","score":0.5}]}`)))
+	require.Len(t, resp.Memories, 1)
+	assert.Equal(t, "a", resp.Memories[0].ID)
+	assert.Equal(t, "m", resp.Memories[0].Memory)
+}
+
 func TestSearchV2Response_UnmarshalInvalid(t *testing.T) {
 	var resp searchV2Response
 	assert.Error(t, resp.UnmarshalJSON([]byte(`not-json`)))
+}
+
+func TestOSSCreateMemoryRequest_OptionalFields(t *testing.T) {
+	t.Run("defaults preserve the existing payload", func(t *testing.T) {
+		body, err := json.Marshal(ossCreateMemoryRequest{
+			Messages: []apiMessage{{Role: "user", Content: "hello"}},
+			UserID:   "user",
+			Infer:    true,
+		})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{
+			"messages":[{"role":"user","content":"hello"}],
+			"user_id":"user",
+			"infer":true
+		}`, string(body))
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(body, &fields))
+		assert.Equal(t, true, fields["infer"])
+		assert.NotContains(t, fields, "expiration_date")
+		assert.NotContains(t, fields, "memory_type")
+		assert.NotContains(t, fields, "prompt")
+	})
+
+	t.Run("explicit values are serialized", func(t *testing.T) {
+		body, err := json.Marshal(ossCreateMemoryRequest{
+			Messages:       []apiMessage{{Role: "user", Content: "hello"}},
+			UserID:         "user",
+			AgentID:        "agent-1",
+			RunID:          "run-1",
+			Metadata:       map[string]any{"reference_date": "2026-07-17"},
+			ExpirationDate: "2026-08-01",
+			Infer:          true,
+			MemoryType:     memoryTypeProcedural,
+			Prompt:         "extract procedures",
+		})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{
+			"messages":[{"role":"user","content":"hello"}],
+			"user_id":"user",
+			"agent_id":"agent-1",
+			"run_id":"run-1",
+			"metadata":{"reference_date":"2026-07-17"},
+			"expiration_date":"2026-08-01",
+			"infer":true,
+			"memory_type":"procedural_memory",
+			"prompt":"extract procedures"
+		}`, string(body))
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(body, &fields))
+		assert.Equal(t, true, fields["infer"])
+		assert.Equal(t, "2026-08-01", fields["expiration_date"])
+		assert.Equal(t, memoryTypeProcedural, fields["memory_type"])
+		assert.Equal(t, "extract procedures", fields["prompt"])
+	})
+}
+
+func TestSearchV2Request_OptionalFields(t *testing.T) {
+	body, err := json.Marshal(searchV2Request{Query: "hello", TopK: 20})
+	require.NoError(t, err)
+	var defaults map[string]any
+	require.NoError(t, json.Unmarshal(body, &defaults))
+	assert.NotContains(t, defaults, "threshold")
+	assert.NotContains(t, defaults, "explain")
+	assert.NotContains(t, defaults, "show_expired")
+
+	threshold := 0.42
+	body, err = json.Marshal(searchV2Request{
+		Query:     "hello",
+		TopK:      20,
+		Threshold: &threshold,
+	})
+	require.NoError(t, err)
+	var explicit map[string]any
+	require.NoError(t, json.Unmarshal(body, &explicit))
+	assert.InDelta(t, 0.42, explicit["threshold"], 1e-9)
 }

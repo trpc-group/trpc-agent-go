@@ -26,3 +26,7 @@ func forceKillCommandProcess(cmd *exec.Cmd) error {
 	}
 	return cmd.Process.Kill()
 }
+
+func cleanupCommandProcessGroup(cmd *exec.Cmd) error {
+	return nil
+}

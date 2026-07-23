@@ -1,4 +1,5 @@
 import { WebSocketServer } from "ws";
+import { normalizeActKind } from "./act-kind.js";
 import { ChromeRelay } from "./chrome-relay.js";
 import { HostProfile } from "./host-profile.js";
 
@@ -7,6 +8,34 @@ function textResult(text, extra = {}) {
     ...extra,
     content: [{ type: "text", text }]
   };
+}
+
+function withPageURL(result, page) {
+  return {
+    ...result,
+    url: page?.url?.() || ""
+  };
+}
+
+function rejectChromeRelayTargetOnly(request = {}) {
+  const targetOnly = `${request.element || request.target || ""}`.trim() &&
+    !`${request.ref || ""}`.trim();
+  const dragTargetOnly =
+    (`${request.startElement || request.startTarget || ""}`.trim() &&
+      !`${request.startRef || ""}`.trim()) ||
+    (`${request.endElement || request.endTarget || ""}`.trim() &&
+      !`${request.endRef || ""}`.trim());
+  const fillTargetOnly = Array.isArray(request.fields) &&
+    request.fields.some((field) =>
+      `${field?.element || field?.target || ""}`.trim() &&
+      !`${field?.ref || ""}`.trim()
+    );
+  if (targetOnly || dragTargetOnly || fillTargetOnly) {
+    throw new Error(
+      "chrome relay actions require snapshot refs; element targets are " +
+      "supported only by the host browser profile"
+    );
+  }
 }
 
 export class BrowserRuntime {
@@ -121,7 +150,10 @@ export class BrowserRuntime {
       return this.chromeRelay.execute(tab.targetId, "navigate", { url });
     }
     const result = await this.hostProfile.openTab(url);
-    return textResult(`Opened tab ${result.targetId}.`, result);
+    return withPageURL(
+      textResult(`Opened tab ${result.targetId}.`, result),
+      this.hostProfile.currentPage()
+    );
   }
 
   async focus(profile, targetId) {
@@ -166,7 +198,11 @@ export class BrowserRuntime {
         payload
       );
     }
-    return this.hostProfile.navigate(payload.targetId, payload.url);
+    const result = await this.hostProfile.navigate(
+      payload.targetId,
+      payload.url
+    );
+    return withPageURL(result, this.hostProfile.currentPage());
   }
 
   async console(profile, payload) {
@@ -363,15 +399,18 @@ export class BrowserRuntime {
 
   async act(profile, payload) {
     if (profile === "chrome") {
+      const request = payload.request || payload;
+      rejectChromeRelayTargetOnly(request);
       return this.chromeRelay.execute(
         payload.targetId || payload.request?.targetId,
-        payload.request?.kind || payload.kind,
-        payload.request || payload
+        normalizeActKind(payload.request?.kind || payload.kind),
+        request
       );
     }
-    return this.hostProfile.act(
+    const result = await this.hostProfile.act(
       payload.targetId || payload.request?.targetId,
       payload.request || payload
     );
+    return withPageURL(result, this.hostProfile.currentPage());
   }
 }

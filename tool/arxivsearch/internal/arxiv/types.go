@@ -68,11 +68,13 @@ type Result struct {
 
 // Search defines the search parameters
 type Search struct {
-	Query      string        `json:"query" jsonschema:"description=The search query string for arXiv articles"`
-	IDList     []string      `json:"id_list,omitempty" jsonschema:"description=List of arXiv IDs to search for"`
-	MaxResults *int          `json:"max_results,omitempty" jsonschema:"description=Maximum number of results to return"`
-	SortBy     SortCriterion `json:"sort_by,omitempty" jsonschema:"description=Sort criterion: relevance or lastUpdatedDate or submittedDate,enum=relevance,enum=lastUpdatedDate,enum=submittedDate"`
-	SortOrder  SortOrder     `json:"sort_order,omitempty" jsonschema:"description=Sort order: ascending or descending,enum=ascending,enum=descending"`
+	Query             string        `json:"query,omitempty" jsonschema:"description=The search query string for arXiv articles"`
+	IDList            []string      `json:"id_list,omitempty" jsonschema:"description=List of arXiv IDs to search for"`
+	MaxResults        *int          `json:"max_results,omitempty" jsonschema:"description=Maximum number of results to return"`
+	SortBy            SortCriterion `json:"sort_by,omitempty" jsonschema:"description=Sort criterion: relevance or lastUpdatedDate or submittedDate,enum=relevance,enum=lastUpdatedDate,enum=submittedDate"`
+	SortOrder         SortOrder     `json:"sort_order,omitempty" jsonschema:"description=Sort order: ascending or descending,enum=ascending,enum=descending"`
+	SubmittedDateFrom string        `json:"submitted_date_from,omitempty" jsonschema:"description=Submitted date lower bound in YYYY-MM-DD or YYYYMMDDHHMM GMT. Can be used without submitted_date_to for an open-ended range."`
+	SubmittedDateTo   string        `json:"submitted_date_to,omitempty" jsonschema:"description=Submitted date upper bound in YYYY-MM-DD or YYYYMMDDHHMM GMT. Can be used without submitted_date_from for an open-ended range."`
 }
 
 // ClientConfig contains the configuration for the arXiv client

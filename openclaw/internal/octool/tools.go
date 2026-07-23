@@ -285,6 +285,10 @@ func execToolDescription(hasMemoryFile bool) string {
 		"Large stdout/stderr may be truncated before it is returned " +
 			"to the model; write large outputs to files and read only " +
 			"the needed chunks.",
+		"Foreground commands clean up child jobs when the command " +
+			"exits; start long-running servers or processes with " +
+			"`background: true` when later tools must keep using " +
+			"them.",
 		"Do not use this just to inspect a PDF or spreadsheet already " +
 			"in chat; prefer read_document or read_spreadsheet for that.",
 	}

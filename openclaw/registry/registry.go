@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -193,13 +194,16 @@ type ToolSetProviderFactory func(
 
 // ModelSpec describes which model to create.
 type ModelSpec struct {
-	Type                 string
-	Name                 string
-	BaseURL              string
-	APIKey               string
-	OpenAIVariant        string
-	Headers              map[string]string
-	DebugRecorderEnabled bool
+	Type                         string
+	Name                         string
+	BaseURL                      string
+	APIKey                       string
+	OpenAIVariant                string
+	OpenAITextOnlyMessageContent bool
+	Timeout                      time.Duration
+	MaxRetries                   *int
+	Headers                      map[string]string
+	DebugRecorderEnabled         bool
 
 	Config *yaml.Node
 }

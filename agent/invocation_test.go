@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -751,6 +752,155 @@ func TestInvocation_ViewCopiesNestedMutableCustomState(t *testing.T) {
 	sourceNode, ok := sourceValue.(*customNode)
 	require.True(t, ok)
 	require.Equal(t, []byte("ghi"), sourceNode.Data)
+}
+
+func TestInvocation_ViewClonesKnownMutableState(t *testing.T) {
+	const (
+		bufferPtrStateKey   = "custom:buffer_ptr"
+		bufferValueStateKey = "custom:buffer_value"
+		builderStateKey     = "custom:builder"
+		bigPtrStateKey      = "custom:big_ptr"
+		bigValueStateKey    = "custom:big_value"
+	)
+	bufferPtr := bytes.NewBufferString("abc")
+	bufferValue := *bytes.NewBufferString("def")
+	var builder strings.Builder
+	builder.WriteString("ghi")
+	bigPtr := big.NewInt(10)
+	bigValue := *big.NewInt(20)
+
+	inv := NewInvocation()
+	inv.SetState(bufferPtrStateKey, bufferPtr)
+	inv.SetState(bufferValueStateKey, bufferValue)
+	inv.SetState(builderStateKey, &builder)
+	inv.SetState(bigPtrStateKey, bigPtr)
+	inv.SetState(bigValueStateKey, bigValue)
+
+	view := inv.View()
+	viewBufferPtr, ok := GetStateValue[*bytes.Buffer](view, bufferPtrStateKey)
+	require.True(t, ok)
+	require.NotSame(t, bufferPtr, viewBufferPtr)
+	viewBufferPtr.WriteString("-view")
+	require.Equal(t, "abc", bufferPtr.String())
+
+	viewBufferValue, ok := GetStateValue[bytes.Buffer](view, bufferValueStateKey)
+	require.True(t, ok)
+	viewBufferValue.WriteString("-view")
+	sourceBufferValue, ok := GetStateValue[bytes.Buffer](inv, bufferValueStateKey)
+	require.True(t, ok)
+	require.Equal(t, "def", sourceBufferValue.String())
+
+	viewBuilder, ok := GetStateValue[*strings.Builder](view, builderStateKey)
+	require.True(t, ok)
+	require.NotSame(t, &builder, viewBuilder)
+	viewBuilder.WriteString("-view")
+	require.Equal(t, "ghi", builder.String())
+
+	viewBigPtr, ok := GetStateValue[*big.Int](view, bigPtrStateKey)
+	require.True(t, ok)
+	require.NotSame(t, bigPtr, viewBigPtr)
+	viewBigPtr.Add(viewBigPtr, big.NewInt(1))
+	require.Equal(t, int64(10), bigPtr.Int64())
+
+	viewBigValue, ok := GetStateValue[big.Int](view, bigValueStateKey)
+	require.True(t, ok)
+	viewBigValue.Add(&viewBigValue, big.NewInt(1))
+	sourceBigValue, ok := GetStateValue[big.Int](inv, bigValueStateKey)
+	require.True(t, ok)
+	require.Equal(t, int64(20), sourceBigValue.Int64())
+}
+
+func TestInvocation_ViewKeepsNilKnownMutablePointers(t *testing.T) {
+	const (
+		nilBufferStateKey  = "custom:nil_buffer"
+		nilBuilderStateKey = "custom:nil_builder"
+		nilBigStateKey     = "custom:nil_big"
+	)
+	var (
+		nilBuffer  *bytes.Buffer
+		nilBuilder *strings.Builder
+		nilBig     *big.Int
+	)
+	inv := NewInvocation()
+	inv.SetState(nilBufferStateKey, nilBuffer)
+	inv.SetState(nilBuilderStateKey, nilBuilder)
+	inv.SetState(nilBigStateKey, nilBig)
+
+	view := inv.View()
+	viewBuffer, ok := GetStateValue[*bytes.Buffer](view, nilBufferStateKey)
+	require.True(t, ok)
+	require.Nil(t, viewBuffer)
+	viewBuilder, ok := GetStateValue[*strings.Builder](view, nilBuilderStateKey)
+	require.True(t, ok)
+	require.Nil(t, viewBuilder)
+	viewBig, ok := GetStateValue[*big.Int](view, nilBigStateKey)
+	require.True(t, ok)
+	require.Nil(t, viewBig)
+}
+
+func TestInvocation_ViewKeepsOpaqueStateByReference(t *testing.T) {
+	const opaqueStateKey = "custom:opaque"
+	type opaqueState struct {
+		mu    sync.Mutex
+		value int
+	}
+	source := &opaqueState{value: 1}
+	inv := NewInvocation()
+	inv.SetState(opaqueStateKey, source)
+
+	view := inv.View()
+	viewState, ok := GetStateValue[*opaqueState](view, opaqueStateKey)
+	require.True(t, ok)
+	require.Same(t, source, viewState)
+}
+
+func TestInvocationViewDoesNotRaceWithOpaqueStateMutation(t *testing.T) {
+	const opaqueStateKey = "custom:opaque"
+	type opaqueState struct {
+		mu    sync.Mutex
+		value int
+	}
+	source := &opaqueState{}
+	inv := NewInvocation()
+	inv.SetState(opaqueStateKey, source)
+
+	const iterations = 10000
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			_ = inv.View()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			source.mu.Lock()
+			source.value++
+			source.mu.Unlock()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+}
+
+func TestCloneKnownStateReflectValueRejectsUnsafeReflectValues(t *testing.T) {
+	cloned, ok := cloneKnownStateReflectValue(reflect.Value{})
+	require.False(t, ok)
+	require.False(t, cloned.IsValid())
+
+	type opaqueState struct {
+		hidden int
+	}
+	hiddenField := reflect.ValueOf(opaqueState{hidden: 1}).Field(0)
+	cloned, ok = cloneKnownStateReflectValue(hiddenField)
+	require.False(t, ok)
+	require.False(t, cloned.IsValid())
 }
 
 func TestCloneStateValueHandlesEdgeCases(t *testing.T) {

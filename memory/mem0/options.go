@@ -11,21 +11,58 @@
 package mem0
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 const (
-	defaultHost             = "https://api.mem0.ai"
-	defaultTimeout          = 10 * time.Second
-	defaultAsyncMemoryNum   = 1
-	defaultMemoryQueueSize  = 10
-	defaultMemoryJobTimeout = 30 * time.Second
+	defaultHost              = "https://api.mem0.ai"
+	defaultSelfHostedOSSHost = "http://localhost:8888"
+	defaultTimeout           = 10 * time.Second
+	defaultAsyncMemoryNum    = 1
+	defaultMemoryQueueSize   = 10
+	defaultMemoryJobTimeout  = 30 * time.Second
+	memoryTypeProcedural     = "procedural_memory"
+)
+
+type ingestOptions struct {
+	metadata       map[string]any
+	agentID        string
+	runID          string
+	prompt         string
+	expirationDate string
+	infer          bool
+	memoryType     string
+}
+
+// ingestExpirationDateResolver is referenced by pointer so serviceOpts
+// remains comparable.
+type ingestExpirationDateResolver struct {
+	resolve func(context.Context, *session.Session) (time.Time, error)
+}
+
+type ingestConfig struct {
+	prompt                 string
+	expirationDateResolver *ingestExpirationDateResolver
+	infer                  bool
+	memoryType             string
+}
+
+type apiMode int
+
+const (
+	apiModeCloud apiMode = iota
+	apiModeSelfHostedOSS
 )
 
 type serviceOpts struct {
-	host   string
-	apiKey string
+	host    string
+	apiKey  string
+	apiMode apiMode
 
 	orgID     string
 	projectID string
@@ -36,7 +73,9 @@ type serviceOpts struct {
 	timeout time.Duration
 	client  *http.Client
 
-	loadToolEnabled bool
+	loadToolEnabled                      bool
+	includeUnscopedSelfHostedOSSMemories bool
+	ingest                               ingestConfig
 
 	asyncMemoryNum   int
 	memoryQueueSize  int
@@ -49,16 +88,73 @@ func (o serviceOpts) clone() serviceOpts {
 
 var defaultOptions = serviceOpts{
 	host:             defaultHost,
+	apiMode:          apiModeCloud,
 	asyncMode:        true,
 	version:          "v2",
 	timeout:          defaultTimeout,
 	asyncMemoryNum:   defaultAsyncMemoryNum,
 	memoryQueueSize:  defaultMemoryQueueSize,
 	memoryJobTimeout: defaultMemoryJobTimeout,
+	ingest: ingestConfig{
+		infer: true,
+	},
 }
 
 // ServiceOpt configures a mem0 service.
 type ServiceOpt func(*serviceOpts)
+
+// WithSelfHostedIngestPrompt sets the extraction prompt used by every
+// self-hosted Mem0 ingestion request from this service. A custom prompt
+// requires inference; NewService returns an error if inference is disabled.
+func WithSelfHostedIngestPrompt(prompt string) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if strings.TrimSpace(prompt) == "" {
+			return
+		}
+		opts.ingest.prompt = prompt
+	}
+}
+
+// WithSelfHostedIngestExpirationDateResolver sets expiration_date separately
+// for each self-hosted Mem0 ingestion request. The resolver runs synchronously
+// after a non-empty session delta and the other ingestion options are
+// validated. A zero time omits expiration_date for that request.
+//
+// The resolver may be called concurrently and must be safe for concurrent use.
+// It must treat the provided session as read-only. Expiration hides a record
+// from normal Mem0 reads; it does not delete the record.
+func WithSelfHostedIngestExpirationDateResolver(
+	resolver func(context.Context, *session.Session) (time.Time, error),
+) ServiceOpt {
+	return func(opts *serviceOpts) {
+		if resolver == nil {
+			return
+		}
+		opts.ingest.expirationDateResolver = &ingestExpirationDateResolver{
+			resolve: resolver,
+		}
+	}
+}
+
+// WithIngestInference controls whether Mem0 extracts memories from the
+// transcript for every ingestion request from this service. When disabled,
+// the adapter sends normalized non-system message text for direct import.
+// Provider storage behavior may differ by deployment mode. Disabled inference
+// cannot be combined with a custom extraction prompt or procedural memory.
+func WithIngestInference(infer bool) ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.ingest.infer = infer
+	}
+}
+
+// WithSelfHostedProceduralMemory configures this service to create procedural
+// memories. Procedural memory requires inference and an agent ID for each
+// ingestion. NewService returns an error if inference is disabled.
+func WithSelfHostedProceduralMemory() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.ingest.memoryType = memoryTypeProcedural
+	}
+}
 
 // WithHost sets the mem0 API host or base URL.
 func WithHost(host string) ServiceOpt {
@@ -75,6 +171,30 @@ func WithAPIKey(apiKey string) ServiceOpt {
 		if apiKey != "" {
 			opts.apiKey = apiKey
 		}
+	}
+}
+
+// WithSelfHostedOSS switches the service to the self-hosted Mem0 OSS REST API.
+//
+// The option is explicit by design: WithHost alone may point to a cloud proxy,
+// a private gateway, or a test server and must not change API semantics.
+func WithSelfHostedOSS() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.apiMode = apiModeSelfHostedOSS
+		if opts.host == defaultHost {
+			opts.host = defaultSelfHostedOSSHost
+		}
+	}
+}
+
+// WithSelfHostedOSSIncludeUnscopedMemories allows self-hosted OSS reads and
+// searches to include legacy memories that do not carry trpc_app_name metadata.
+//
+// This is intended for migrations from an existing Mem0 OSS store. It does not
+// include memories explicitly tagged for a different app.
+func WithSelfHostedOSSIncludeUnscopedMemories() ServiceOpt {
+	return func(opts *serviceOpts) {
+		opts.includeUnscopedSelfHostedOSSMemories = true
 	}
 }
 

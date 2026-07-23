@@ -13,6 +13,7 @@ package model
 import (
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,7 @@ func TestDefaultNewHTTPClient_WithOptions(t *testing.T) {
 	client := DefaultNewHTTPClient(
 		WithHTTPClientName("test-client"),
 		WithHTTPClientTransport(customTransport),
+		WithHTTPClientTimeout(3*time.Second),
 	)
 
 	require.NotNil(t, client)
@@ -37,6 +39,7 @@ func TestDefaultNewHTTPClient_WithOptions(t *testing.T) {
 	httpClient, ok := client.(*http.Client)
 	require.True(t, ok)
 	assert.Same(t, customTransport, httpClient.Transport)
+	assert.Equal(t, 3*time.Second, httpClient.Timeout)
 }
 
 func TestDefaultNewHTTPClient_NoOptions(t *testing.T) {
@@ -66,15 +69,25 @@ func TestWithHTTPClientTransport(t *testing.T) {
 	assert.Same(t, customTransport, options.Transport)
 }
 
+func TestWithHTTPClientTimeout(t *testing.T) {
+	options := &HTTPClientOptions{}
+
+	WithHTTPClientTimeout(5 * time.Second)(options)
+
+	assert.Equal(t, 5*time.Second, options.Timeout)
+}
+
 func TestHTTPClientOptions_Merge(t *testing.T) {
 	customTransport := &http.Transport{}
 	options := &HTTPClientOptions{}
 
 	WithHTTPClientName("merged-client")(options)
 	WithHTTPClientTransport(customTransport)(options)
+	WithHTTPClientTimeout(7 * time.Second)(options)
 
 	assert.Equal(t, "merged-client", options.Name)
 	assert.Same(t, customTransport, options.Transport)
+	assert.Equal(t, 7*time.Second, options.Timeout)
 }
 
 func TestHTTPClientInterface(t *testing.T) {
@@ -96,6 +109,7 @@ func TestDefaultImplementationCompleteness(t *testing.T) {
 	opts := []HTTPClientOption{
 		WithHTTPClientName("complete-test"),
 		WithHTTPClientTransport(http.DefaultTransport),
+		WithHTTPClientTimeout(time.Second),
 	}
 
 	for _, opt := range opts {
@@ -104,6 +118,7 @@ func TestDefaultImplementationCompleteness(t *testing.T) {
 
 	assert.Equal(t, "complete-test", options.Name)
 	assert.Same(t, http.DefaultTransport, options.Transport)
+	assert.Equal(t, time.Second, options.Timeout)
 }
 
 func TestEdgeCases(t *testing.T) {
@@ -115,6 +130,10 @@ func TestEdgeCases(t *testing.T) {
 	WithHTTPClientTransport(nil)(options)
 	assert.Nil(t, options.Transport)
 
+	options = &HTTPClientOptions{}
+	WithHTTPClientTimeout(0)(options)
+	assert.Zero(t, options.Timeout)
+
 	client := DefaultNewHTTPClient()
 	require.NotNil(t, client)
 }
@@ -125,6 +144,9 @@ func TestMultipleOptionApplications(t *testing.T) {
 	WithHTTPClientName("first")(options)
 	WithHTTPClientName("second")(options)
 	WithHTTPClientName("third")(options)
+	WithHTTPClientTimeout(time.Second)(options)
+	WithHTTPClientTimeout(2 * time.Second)(options)
 
 	assert.Equal(t, "third", options.Name)
+	assert.Equal(t, 2*time.Second, options.Timeout)
 }

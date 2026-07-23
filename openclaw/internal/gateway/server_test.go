@@ -17,10 +17,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -1391,7 +1393,7 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	srv, err := New(r)
 	require.NoError(t, err)
 
-	data := bytes.Repeat([]byte("a"), int(defaultMaxBodyBytes))
+	data := bytes.Repeat([]byte("a"), int(defaultMaxContentPartBytes))
 	req := gwproto.MessageRequest{
 		From: "u1",
 		ContentParts: []gwproto.ContentPart{
@@ -1427,7 +1429,61 @@ func TestServer_ProcessMessage_LargeInlineData(t *testing.T) {
 	)
 	srv.Handler().ServeHTTP(rr, httpReq)
 
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 2, r.Calls())
+}
+
+func TestServer_ProcessMessage_LargeBodyWithoutContentLength(t *testing.T) {
+	t.Parallel()
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithMaxBodyBytes(64))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: strings.Repeat("x", 128),
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	req.ContentLength = -1
+	srv.Handler().ServeHTTP(rr, req)
+
 	require.Equal(t, http.StatusBadRequest, rr.Code)
+	require.Contains(t, rr.Body.String(), "request body exceeds max_body_bytes")
+	require.Zero(t, r.Calls())
+}
+
+func TestServer_ProcessMessage_MaxInt64BodyLimit(t *testing.T) {
+	t.Parallel()
+
+	r := &recordingRunner{}
+	srv, err := New(r, WithMaxBodyBytes(math.MaxInt64))
+	require.NoError(t, err)
+
+	body, err := json.Marshal(gwproto.MessageRequest{
+		From: "u1",
+		Text: "hello",
+	})
+	require.NoError(t, err)
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(
+		http.MethodPost,
+		srv.MessagesPath(),
+		bytes.NewReader(body),
+	)
+	req.ContentLength = -1
+	srv.Handler().ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.Equal(t, 1, r.Calls())
 }
 
 func TestServer_ProcessMessage_FileUploadStorePersistsHostRef(

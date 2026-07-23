@@ -30,6 +30,7 @@ const (
 	httpHeaderAuthorization = "Authorization"
 	httpHeaderAccept        = "Accept"
 	httpHeaderContentType   = "Content-Type"
+	httpHeaderXAPIKey       = "X-API-Key" // #nosec G101 -- HTTP header name, not a credential.
 
 	httpContentTypeJSON = "application/json"
 
@@ -57,6 +58,7 @@ func (e *apiError) Error() string {
 type client struct {
 	host      string
 	apiKey    string
+	apiMode   apiMode
 	orgID     string
 	projectID string
 	hc        *http.Client
@@ -64,7 +66,7 @@ type client struct {
 }
 
 func newClient(opts serviceOpts) (*client, error) {
-	if opts.apiKey == "" {
+	if opts.apiMode == apiModeCloud && opts.apiKey == "" {
 		return nil, errors.New("mem0 api key is required")
 	}
 	hc := opts.client
@@ -74,6 +76,7 @@ func newClient(opts serviceOpts) (*client, error) {
 	return &client{
 		host:      strings.TrimRight(opts.host, "/"),
 		apiKey:    opts.apiKey,
+		apiMode:   opts.apiMode,
 		orgID:     opts.orgID,
 		projectID: opts.projectID,
 		hc:        hc,
@@ -159,7 +162,7 @@ func (c *client) doJSONOnce(
 	if err != nil {
 		return fmt.Errorf("mem0: build request failed: %w", err)
 	}
-	req.Header.Set(httpHeaderAuthorization, "Token "+c.apiKey)
+	c.setAuthHeader(req)
 	req.Header.Set(httpHeaderAccept, httpContentTypeJSON)
 	if payload != nil {
 		req.Header.Set(httpHeaderContentType, httpContentTypeJSON)
@@ -192,6 +195,18 @@ func (c *client) doJSONOnce(
 		return fmt.Errorf("mem0: unmarshal response failed: %w", err)
 	}
 	return nil
+}
+
+func (c *client) setAuthHeader(req *http.Request) {
+	if req == nil || c.apiKey == "" {
+		return
+	}
+	switch c.apiMode {
+	case apiModeSelfHostedOSS:
+		req.Header.Set(httpHeaderXAPIKey, c.apiKey)
+	default:
+		req.Header.Set(httpHeaderAuthorization, "Token "+c.apiKey)
+	}
 }
 
 func shouldRetry(err error) bool {
