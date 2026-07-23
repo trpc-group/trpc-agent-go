@@ -1,0 +1,15 @@
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"allow","risk_level":"none","rule_ids":[],"duration_ms":0,"redacted":false,"blocked":false}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"allow","risk_level":"none","rule_ids":[],"duration_ms":0,"redacted":false,"blocked":false}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"deny","risk_level":"critical","rule_ids":["dangerous_command"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"exec_command","backend":"hostexec","decision":"deny","risk_level":"high","rule_ids":["sensitive_path"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"deny","risk_level":"high","rule_ids":["sensitive_path"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"deny","risk_level":"high","rule_ids":["network_egress"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"allow","risk_level":"none","rule_ids":[],"duration_ms":0,"redacted":false,"blocked":false}
+{"time":"0001-01-01T00:00:00Z","tool_name":"exec_command","backend":"hostexec","decision":"deny","risk_level":"high","rule_ids":["shell_bypass"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"allow","risk_level":"none","rule_ids":[],"duration_ms":0,"redacted":false,"blocked":false}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"ask","risk_level":"medium","rule_ids":["dependency_change"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"ask","risk_level":"low","rule_ids":["resource_abuse"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"ask","risk_level":"medium","rule_ids":["resource_abuse"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"exec_command","backend":"hostexec","decision":"ask","risk_level":"high","rule_ids":["host_exec_risk"],"duration_ms":0,"redacted":false,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"workspace_exec","backend":"workspaceexec","decision":"deny","risk_level":"high","rule_ids":["secret_leak","shell_bypass"],"duration_ms":0,"redacted":true,"blocked":true}
+{"time":"0001-01-01T00:00:00Z","tool_name":"execute_code","backend":"codeexec","decision":"ask","risk_level":"medium","rule_ids":["host_exec_risk"],"duration_ms":0,"redacted":false,"blocked":true}
