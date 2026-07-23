@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -525,6 +526,9 @@ func (s *local) evaluatePerCase(ctx context.Context, inferenceResult *service.In
 	case evalstatus.EvalStatusPassed, evalstatus.EvalStatusFailed, evalstatus.EvalStatusNotEvaluated:
 	default:
 		return nil, fmt.Errorf("unexpected eval case result aggregation status %v", aggregation.Status)
+	}
+	if math.IsNaN(aggregation.Score) || math.IsInf(aggregation.Score, 0) {
+		return nil, fmt.Errorf("eval case result aggregation score must be finite: %v", aggregation.Score)
 	}
 	return &evalresult.EvalCaseResult{
 		EvalSetID:                     inferenceResult.EvalSetID,

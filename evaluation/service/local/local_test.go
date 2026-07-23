@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -4289,6 +4290,40 @@ func TestLocalEvaluateMarksCaseFailedWhenEvalCaseResultAggregatorFails(t *testin
 	assert.Equal(t, status.EvalStatusFailed, runResult.EvalCaseResults[0].FinalEvalStatus)
 	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "aggregate eval case result")
 	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "aggregate failed")
+}
+
+func TestLocalEvaluateMarksCaseFailedWhenEvalCaseResultAggregatorReturnsNonFiniteScore(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-aggregate-nan"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	assert.NoError(t, err)
+	assert.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
+	aggregator := &fakeEvalCaseResultAggregator{
+		result: &service.EvalCaseResultAggregationResult{Score: math.NaN(), Status: status.EvalStatusPassed},
+	}
+	svc, err := New(
+		&fakeRunner{},
+		service.WithEvalSetManager(mgr),
+		service.WithEvalCaseResultAggregator(aggregator),
+	)
+	require.NoError(t, err)
+	runResult, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:   appName,
+		EvalSetID: evalSetID,
+		InferenceResults: []*service.InferenceResult{
+			makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+				makeActualInvocation("actual-1", "prompt", "answer"),
+			}),
+		},
+		EvaluateConfig: &service.EvaluateConfig{},
+	})
+	require.NoError(t, err)
+	require.Len(t, runResult.EvalCaseResults, 1)
+	assert.Equal(t, status.EvalStatusFailed, runResult.EvalCaseResults[0].FinalEvalStatus)
+	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "eval case result aggregation score must be finite")
 }
 
 func TestLocalEvaluatePerCaseRejectsInvalidEvalCaseResultAggregation(t *testing.T) {

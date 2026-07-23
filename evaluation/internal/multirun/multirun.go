@@ -202,7 +202,14 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 
 func summarizeCaseSummaryStatus(metricSummaries []*evalresult.EvalMetricSummary, runStatuses []status.EvalStatus, hasRunError bool, numRuns int) (status.EvalStatus, error) {
 	if numRuns <= 1 {
-		return istatus.Summarize(runStatuses)
+		overallStatus, err := istatus.Summarize(runStatuses)
+		if err != nil {
+			return status.EvalStatusFailed, err
+		}
+		if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+			return status.EvalStatusFailed, nil
+		}
+		return overallStatus, nil
 	}
 	statuses := make([]status.EvalStatus, 0, len(metricSummaries))
 	for _, summary := range metricSummaries {

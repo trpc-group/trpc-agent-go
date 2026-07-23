@@ -39,7 +39,7 @@ type EvalCaseResultAggregationInput struct {
 
 // EvalCaseResultAggregationResult contains the aggregated eval case result.
 type EvalCaseResultAggregationResult struct {
-	Score  float64           // Score is the case-level score.
+	Score  float64           // Score is the finite case-level score.
 	Status status.EvalStatus // Status is the case-level evaluation status.
 }
 

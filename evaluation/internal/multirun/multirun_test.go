@@ -201,7 +201,7 @@ func TestSummarizeMultiRunCaseRunErrorTurnsNotEvaluatedIntoFailed(t *testing.T) 
 				EvalSetID:       "set",
 				EvalID:          "A",
 				RunID:           1,
-				FinalEvalStatus: status.EvalStatusFailed,
+				FinalEvalStatus: status.EvalStatusNotEvaluated,
 				ErrorMessage:    "boom",
 			},
 		},
@@ -215,6 +215,7 @@ func TestSummarizeMultiRunCaseRunErrorTurnsNotEvaluatedIntoFailed(t *testing.T) 
 		return
 	}
 
+	assert.Equal(t, status.EvalStatusFailed, result.Summary.OverallStatus)
 	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
 	if len(result.Summary.EvalCaseSummaries) == 0 {
 		return

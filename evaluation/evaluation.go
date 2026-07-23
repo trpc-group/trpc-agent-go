@@ -597,7 +597,14 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 
 func summarizeAggregateCaseRunsStatus(runStatuses []status.EvalStatus, metricResults []*evalresult.EvalMetricResult, hasRunError bool) (status.EvalStatus, error) {
 	if len(runStatuses) <= 1 {
-		return istatus.Summarize(runStatuses)
+		overallStatus, err := istatus.Summarize(runStatuses)
+		if err != nil {
+			return status.EvalStatusFailed, err
+		}
+		if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+			return status.EvalStatusFailed, nil
+		}
+		return overallStatus, nil
 	}
 	overallStatus, err := istatus.SummarizeMetricsStatus(metricResults)
 	if err != nil {
