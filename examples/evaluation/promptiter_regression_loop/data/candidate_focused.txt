@@ -1,0 +1,1 @@
+Route order and refund requests to the matching tool. Preserve the user's order ID exactly, ground the answer in the tool result, and return concise JSON with status and next_action fields. Answer policy questions directly without a tool.

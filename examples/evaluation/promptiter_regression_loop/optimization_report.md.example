@@ -1,0 +1,81 @@
+# Prompt Optimization Regression Report
+
+- **Decision:** ACCEPT
+- **Selected candidate:** focused
+- **Baseline train score:** 0.494
+- **Baseline validation score:** 0.706
+- **Runtime:** 0 ms
+- **Seed:** 2003
+- **Engine:** fake_trace (deterministic-v1)
+
+## Reproducibility configuration
+
+- Pass threshold: 0.750
+- Metric weights (response / tool / format): 0.500 / 0.300 / 0.200
+- Minimum validation gain: 0.080
+- No new hard fails: true
+- Critical cases: validation-refund
+- Maximum cost increase: 0.200
+- Maximum tool calls: 3
+
+## Failure attribution
+
+| Category | Count |
+|---|---:|
+| format_error | 1 |
+| knowledge_retrieval_insufficient | 1 |
+| route_error | 1 |
+| tool_argument_error | 2 |
+
+## Candidate rounds
+
+### Round 1: focused
+
+- Train score: 1.000
+- Validation score: 1.000
+- Validation delta: +0.294
+- Newly passed / failed: 2 / 0
+- Gate: ACCEPT — accepted: validation score improved by 0.294 with no protected regression
+- Cost: 0.270; tool calls: 2; latency: 44 ms
+
+| Case | Baseline | Candidate | Delta | Change |
+|---|---:|---:|---:|---|
+| validation-order | 0.517 | 1.000 | +0.483 | new pass |
+| validation-policy | 0.600 | 1.000 | +0.400 | new pass |
+| validation-refund | 1.000 | 1.000 | +0.000 | unchanged |
+
+### Round 2: ineffective
+
+- Train score: 0.494
+- Validation score: 0.706
+- Validation delta: +0.000
+- Newly passed / failed: 0 / 0
+- Gate: REJECT — validation gain 0.000 must be greater than 0.080
+- Cost: 0.250; tool calls: 2; latency: 51 ms
+
+| Case | Baseline | Candidate | Delta | Change |
+|---|---:|---:|---:|---|
+| validation-order | 0.517 | 0.517 | +0.000 | unchanged |
+| validation-policy | 0.600 | 0.600 | +0.000 | unchanged |
+| validation-refund | 1.000 | 1.000 | +0.000 | unchanged |
+
+### Round 3: overfit
+
+- Train score: 1.000
+- Validation score: 0.433
+- Validation delta: -0.273
+- Newly passed / failed: 0 / 1
+- Gate: REJECT — validation gain -0.273 must be greater than 0.080; new hard fail: validation-refund; critical case newly failed: validation-refund; critical case regressed: validation-refund; critical case did not pass: validation-refund
+- Cost: 0.250; tool calls: 2; latency: 40 ms
+
+| Case | Baseline | Candidate | Delta | Change |
+|---|---:|---:|---:|---|
+| validation-order | 0.517 | 0.350 | -0.167 | unchanged |
+| validation-policy | 0.600 | 0.500 | -0.100 | unchanged |
+| validation-refund | 1.000 | 0.450 | -0.550 | new fail |
+
+## Final decision
+
+- accepted: validation score improved by 0.294 with no protected regression
+
+The candidate generalizes on the held-out validation set and is safe to consider for source-prompt write-back after human review.

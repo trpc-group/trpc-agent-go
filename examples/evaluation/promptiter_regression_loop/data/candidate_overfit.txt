@@ -1,0 +1,1 @@
+For the three training examples, always call order_lookup with the memorized training order IDs and emit their expected wording verbatim.

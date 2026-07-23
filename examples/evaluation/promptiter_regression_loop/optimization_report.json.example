@@ -1,0 +1,917 @@
+{
+  "started_at": "2026-07-22T00:06:13.4291642+08:00",
+  "duration_ms": 0,
+  "seed": 2003,
+  "engine": {
+    "type": "fake_trace",
+    "model": "deterministic-v1"
+  },
+  "metrics": {
+    "pass_threshold": 0.75,
+    "response_weight": 0.5,
+    "tool_weight": 0.3,
+    "format_weight": 0.2
+  },
+  "gate": {
+    "min_validation_gain": 0.08,
+    "no_new_hard_fails": true,
+    "critical_case_ids": [
+      "validation-refund"
+    ],
+    "max_cost_increase": 0.2,
+    "max_tool_calls": 3
+  },
+  "baseline_prompt": "Answer customer questions. You may use tools.",
+  "baseline_train": {
+    "eval_set_id": "support-train",
+    "prompt_id": "baseline",
+    "overall_score": 0.494,
+    "passed": 0,
+    "failed": 3,
+    "total_cost": 0.25,
+    "tool_calls": 2,
+    "latency_ms": 52,
+    "cases": [
+      {
+        "case_id": "train-order-status",
+        "critical": false,
+        "score": 0,
+        "passed": false,
+        "attribution": "route_error",
+        "reason": "route \"general\", expected \"orders\"",
+        "final_response": "I cannot find it",
+        "tool_calls": [
+          {
+            "name": "search",
+            "arguments": {
+              "q": "A100"
+            }
+          }
+        ],
+        "trace": {
+          "final_response": "I cannot find it",
+          "tool_calls": [
+            {
+              "name": "search",
+              "arguments": {
+                "q": "A100"
+              }
+            }
+          ],
+          "route": "general",
+          "format_valid": false,
+          "retrieval_hit": false,
+          "cost": 0.1,
+          "latency_ms": 20
+        }
+      },
+      {
+        "case_id": "train-refund",
+        "critical": true,
+        "score": 0.683,
+        "passed": false,
+        "attribution": "tool_argument_error",
+        "reason": "tool arguments do not match the expected trajectory",
+        "final_response": "B200 refund unknown",
+        "tool_calls": [
+          {
+            "name": "refund_check",
+            "arguments": {
+              "order_id": "B-200"
+            }
+          }
+        ],
+        "trace": {
+          "final_response": "B200 refund unknown",
+          "tool_calls": [
+            {
+              "name": "refund_check",
+              "arguments": {
+                "order_id": "B-200"
+              }
+            }
+          ],
+          "route": "refunds",
+          "format_valid": true,
+          "retrieval_hit": true,
+          "cost": 0.1,
+          "latency_ms": 22
+        }
+      },
+      {
+        "case_id": "train-policy",
+        "critical": false,
+        "score": 0.8,
+        "passed": false,
+        "attribution": "format_error",
+        "reason": "final response violates the required structured format",
+        "final_response": "returns allowed 30 days",
+        "trace": {
+          "final_response": "returns allowed 30 days",
+          "format_valid": false,
+          "retrieval_hit": true,
+          "cost": 0.05,
+          "latency_ms": 10
+        }
+      }
+    ]
+  },
+  "baseline_validation": {
+    "eval_set_id": "support-validation",
+    "prompt_id": "baseline",
+    "overall_score": 0.706,
+    "passed": 1,
+    "failed": 2,
+    "total_cost": 0.25,
+    "tool_calls": 2,
+    "latency_ms": 51,
+    "cases": [
+      {
+        "case_id": "validation-order",
+        "critical": false,
+        "score": 0.517,
+        "passed": false,
+        "attribution": "tool_argument_error",
+        "reason": "tool arguments do not match the expected trajectory",
+        "final_response": "C300 unknown",
+        "tool_calls": [
+          {
+            "name": "order_lookup",
+            "arguments": {
+              "order_id": "C-300"
+            }
+          }
+        ],
+        "trace": {
+          "final_response": "C300 unknown",
+          "tool_calls": [
+            {
+              "name": "order_lookup",
+              "arguments": {
+                "order_id": "C-300"
+              }
+            }
+          ],
+          "route": "orders",
+          "format_valid": true,
+          "retrieval_hit": true,
+          "cost": 0.1,
+          "latency_ms": 21
+        }
+      },
+      {
+        "case_id": "validation-refund",
+        "critical": true,
+        "score": 1,
+        "passed": true,
+        "final_response": "D400 refund denied final sale",
+        "tool_calls": [
+          {
+            "name": "refund_check",
+            "arguments": {
+              "order_id": "D400"
+            }
+          }
+        ],
+        "trace": {
+          "final_response": "D400 refund denied final sale",
+          "tool_calls": [
+            {
+              "name": "refund_check",
+              "arguments": {
+                "order_id": "D400"
+              }
+            }
+          ],
+          "route": "refunds",
+          "format_valid": true,
+          "retrieval_hit": true,
+          "cost": 0.1,
+          "latency_ms": 20
+        }
+      },
+      {
+        "case_id": "validation-policy",
+        "critical": false,
+        "score": 0.6,
+        "passed": false,
+        "attribution": "knowledge_retrieval_insufficient",
+        "reason": "retrieval hit false, expected true",
+        "final_response": "I do not know",
+        "trace": {
+          "final_response": "I do not know",
+          "format_valid": true,
+          "retrieval_hit": false,
+          "cost": 0.05,
+          "latency_ms": 10
+        }
+      }
+    ]
+  },
+  "attribution_counts": {
+    "format_error": 1,
+    "knowledge_retrieval_insufficient": 1,
+    "route_error": 1,
+    "tool_argument_error": 2
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidate_id": "focused",
+      "prompt": "Route order and refund requests to the matching tool. Preserve the user's order ID exactly, ground the answer in the tool result, and return concise JSON with status and next_action fields. Answer policy questions directly without a tool.",
+      "train": {
+        "eval_set_id": "support-train",
+        "prompt_id": "focused",
+        "overall_score": 1,
+        "passed": 3,
+        "failed": 0,
+        "total_cost": 0.27,
+        "tool_calls": 2,
+        "latency_ms": 44,
+        "cases": [
+          {
+            "case_id": "train-order-status",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "A100 shipped tomorrow",
+            "tool_calls": [
+              {
+                "name": "order_lookup",
+                "arguments": {
+                  "order_id": "A100"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "A100 shipped tomorrow",
+              "tool_calls": [
+                {
+                  "name": "order_lookup",
+                  "arguments": {
+                    "order_id": "A100"
+                  }
+                }
+              ],
+              "route": "orders",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.11,
+              "latency_ms": 18
+            }
+          },
+          {
+            "case_id": "train-refund",
+            "critical": true,
+            "score": 1,
+            "passed": true,
+            "final_response": "B200 refund eligible",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "B200"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "B200 refund eligible",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "B200"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.11,
+              "latency_ms": 17
+            }
+          },
+          {
+            "case_id": "train-policy",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "returns allowed 30 days",
+            "trace": {
+              "final_response": "returns allowed 30 days",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.05,
+              "latency_ms": 9
+            }
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "support-validation",
+        "prompt_id": "focused",
+        "overall_score": 1,
+        "passed": 3,
+        "failed": 0,
+        "total_cost": 0.27,
+        "tool_calls": 2,
+        "latency_ms": 44,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "C300 arriving Friday",
+            "tool_calls": [
+              {
+                "name": "order_lookup",
+                "arguments": {
+                  "order_id": "C300"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "C300 arriving Friday",
+              "tool_calls": [
+                {
+                  "name": "order_lookup",
+                  "arguments": {
+                    "order_id": "C300"
+                  }
+                }
+              ],
+              "route": "orders",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.11,
+              "latency_ms": 18
+            }
+          },
+          {
+            "case_id": "validation-refund",
+            "critical": true,
+            "score": 1,
+            "passed": true,
+            "final_response": "D400 refund denied final sale",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "D400"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "D400 refund denied final sale",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "D400"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.11,
+              "latency_ms": 17
+            }
+          },
+          {
+            "case_id": "validation-policy",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "final sale items not returnable",
+            "trace": {
+              "final_response": "final sale items not returnable",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.05,
+              "latency_ms": 9
+            }
+          }
+        ]
+      },
+      "delta": {
+        "score_delta": 0.294,
+        "newly_passed": 2,
+        "newly_failed": 0,
+        "improved": 2,
+        "regressed": 0,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "baseline_score": 0.517,
+            "candidate_score": 1,
+            "score_delta": 0.483,
+            "newly_passed": true,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-policy",
+            "baseline_score": 0.6,
+            "candidate_score": 1,
+            "score_delta": 0.4,
+            "newly_passed": true,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-refund",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": true
+          }
+        ]
+      },
+      "gate": {
+        "accepted": true,
+        "reasons": [
+          "accepted: validation score improved by 0.294 with no protected regression"
+        ]
+      },
+      "duration_ms": 0
+    },
+    {
+      "round": 2,
+      "candidate_id": "ineffective",
+      "prompt": "Be friendly, accurate, and concise when helping customers.",
+      "train": {
+        "eval_set_id": "support-train",
+        "prompt_id": "ineffective",
+        "overall_score": 0.494,
+        "passed": 0,
+        "failed": 3,
+        "total_cost": 0.25,
+        "tool_calls": 2,
+        "latency_ms": 52,
+        "cases": [
+          {
+            "case_id": "train-order-status",
+            "critical": false,
+            "score": 0,
+            "passed": false,
+            "attribution": "route_error",
+            "reason": "route \"general\", expected \"orders\"",
+            "final_response": "I cannot find it",
+            "tool_calls": [
+              {
+                "name": "search",
+                "arguments": {
+                  "q": "A100"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "I cannot find it",
+              "tool_calls": [
+                {
+                  "name": "search",
+                  "arguments": {
+                    "q": "A100"
+                  }
+                }
+              ],
+              "route": "general",
+              "format_valid": false,
+              "retrieval_hit": false,
+              "cost": 0.1,
+              "latency_ms": 20
+            }
+          },
+          {
+            "case_id": "train-refund",
+            "critical": true,
+            "score": 0.683,
+            "passed": false,
+            "attribution": "tool_argument_error",
+            "reason": "tool arguments do not match the expected trajectory",
+            "final_response": "B200 refund unknown",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "B-200"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "B200 refund unknown",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "B-200"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 22
+            }
+          },
+          {
+            "case_id": "train-policy",
+            "critical": false,
+            "score": 0.8,
+            "passed": false,
+            "attribution": "format_error",
+            "reason": "final response violates the required structured format",
+            "final_response": "returns allowed 30 days",
+            "trace": {
+              "final_response": "returns allowed 30 days",
+              "format_valid": false,
+              "retrieval_hit": true,
+              "cost": 0.05,
+              "latency_ms": 10
+            }
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "support-validation",
+        "prompt_id": "ineffective",
+        "overall_score": 0.706,
+        "passed": 1,
+        "failed": 2,
+        "total_cost": 0.25,
+        "tool_calls": 2,
+        "latency_ms": 51,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "critical": false,
+            "score": 0.517,
+            "passed": false,
+            "attribution": "tool_argument_error",
+            "reason": "tool arguments do not match the expected trajectory",
+            "final_response": "C300 unknown",
+            "tool_calls": [
+              {
+                "name": "order_lookup",
+                "arguments": {
+                  "order_id": "C-300"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "C300 unknown",
+              "tool_calls": [
+                {
+                  "name": "order_lookup",
+                  "arguments": {
+                    "order_id": "C-300"
+                  }
+                }
+              ],
+              "route": "orders",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 21
+            }
+          },
+          {
+            "case_id": "validation-refund",
+            "critical": true,
+            "score": 1,
+            "passed": true,
+            "final_response": "D400 refund denied final sale",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "D400"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "D400 refund denied final sale",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "D400"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 20
+            }
+          },
+          {
+            "case_id": "validation-policy",
+            "critical": false,
+            "score": 0.6,
+            "passed": false,
+            "attribution": "knowledge_retrieval_insufficient",
+            "reason": "retrieval hit false, expected true",
+            "final_response": "I do not know",
+            "trace": {
+              "final_response": "I do not know",
+              "format_valid": true,
+              "retrieval_hit": false,
+              "cost": 0.05,
+              "latency_ms": 10
+            }
+          }
+        ]
+      },
+      "delta": {
+        "score_delta": 0,
+        "newly_passed": 0,
+        "newly_failed": 0,
+        "improved": 0,
+        "regressed": 0,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "baseline_score": 0.517,
+            "candidate_score": 0.517,
+            "score_delta": 0,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-policy",
+            "baseline_score": 0.6,
+            "candidate_score": 0.6,
+            "score_delta": 0,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-refund",
+            "baseline_score": 1,
+            "candidate_score": 1,
+            "score_delta": 0,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": true
+          }
+        ]
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation gain 0.000 must be greater than 0.080"
+        ]
+      },
+      "duration_ms": 0
+    },
+    {
+      "round": 3,
+      "candidate_id": "overfit",
+      "prompt": "For the three training examples, always call order_lookup with the memorized training order IDs and emit their expected wording verbatim.",
+      "train": {
+        "eval_set_id": "support-train",
+        "prompt_id": "overfit",
+        "overall_score": 1,
+        "passed": 3,
+        "failed": 0,
+        "total_cost": 0.25,
+        "tool_calls": 2,
+        "latency_ms": 40,
+        "cases": [
+          {
+            "case_id": "train-order-status",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "A100 shipped tomorrow",
+            "tool_calls": [
+              {
+                "name": "order_lookup",
+                "arguments": {
+                  "order_id": "A100"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "A100 shipped tomorrow",
+              "tool_calls": [
+                {
+                  "name": "order_lookup",
+                  "arguments": {
+                    "order_id": "A100"
+                  }
+                }
+              ],
+              "route": "orders",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 16
+            }
+          },
+          {
+            "case_id": "train-refund",
+            "critical": true,
+            "score": 1,
+            "passed": true,
+            "final_response": "B200 refund eligible",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "B200"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "B200 refund eligible",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "B200"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 15
+            }
+          },
+          {
+            "case_id": "train-policy",
+            "critical": false,
+            "score": 1,
+            "passed": true,
+            "final_response": "returns allowed 30 days",
+            "trace": {
+              "final_response": "returns allowed 30 days",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.05,
+              "latency_ms": 9
+            }
+          }
+        ]
+      },
+      "validation": {
+        "eval_set_id": "support-validation",
+        "prompt_id": "overfit",
+        "overall_score": 0.433,
+        "passed": 0,
+        "failed": 3,
+        "total_cost": 0.25,
+        "tool_calls": 2,
+        "latency_ms": 40,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "critical": false,
+            "score": 0.35,
+            "passed": false,
+            "attribution": "tool_argument_error",
+            "reason": "tool arguments do not match the expected trajectory",
+            "final_response": "A100 shipped tomorrow",
+            "tool_calls": [
+              {
+                "name": "order_lookup",
+                "arguments": {
+                  "order_id": "A100"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "A100 shipped tomorrow",
+              "tool_calls": [
+                {
+                  "name": "order_lookup",
+                  "arguments": {
+                    "order_id": "A100"
+                  }
+                }
+              ],
+              "route": "orders",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 16
+            }
+          },
+          {
+            "case_id": "validation-refund",
+            "critical": true,
+            "score": 0.45,
+            "passed": false,
+            "attribution": "tool_argument_error",
+            "reason": "tool arguments do not match the expected trajectory",
+            "final_response": "B200 refund eligible",
+            "tool_calls": [
+              {
+                "name": "refund_check",
+                "arguments": {
+                  "order_id": "B200"
+                }
+              }
+            ],
+            "trace": {
+              "final_response": "B200 refund eligible",
+              "tool_calls": [
+                {
+                  "name": "refund_check",
+                  "arguments": {
+                    "order_id": "B200"
+                  }
+                }
+              ],
+              "route": "refunds",
+              "format_valid": true,
+              "retrieval_hit": true,
+              "cost": 0.1,
+              "latency_ms": 15
+            }
+          },
+          {
+            "case_id": "validation-policy",
+            "critical": false,
+            "score": 0.5,
+            "passed": false,
+            "attribution": "knowledge_retrieval_insufficient",
+            "reason": "retrieval hit false, expected true",
+            "final_response": "returns allowed 30 days",
+            "trace": {
+              "final_response": "returns allowed 30 days",
+              "format_valid": true,
+              "retrieval_hit": false,
+              "cost": 0.05,
+              "latency_ms": 9
+            }
+          }
+        ]
+      },
+      "delta": {
+        "score_delta": -0.273,
+        "newly_passed": 0,
+        "newly_failed": 1,
+        "improved": 0,
+        "regressed": 3,
+        "cases": [
+          {
+            "case_id": "validation-order",
+            "baseline_score": 0.517,
+            "candidate_score": 0.35,
+            "score_delta": -0.167,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-policy",
+            "baseline_score": 0.6,
+            "candidate_score": 0.5,
+            "score_delta": -0.1,
+            "newly_passed": false,
+            "newly_failed": false,
+            "critical": false
+          },
+          {
+            "case_id": "validation-refund",
+            "baseline_score": 1,
+            "candidate_score": 0.45,
+            "score_delta": -0.55,
+            "newly_passed": false,
+            "newly_failed": true,
+            "critical": true
+          }
+        ]
+      },
+      "gate": {
+        "accepted": false,
+        "reasons": [
+          "validation gain -0.273 must be greater than 0.080",
+          "new hard fail: validation-refund",
+          "critical case newly failed: validation-refund",
+          "critical case regressed: validation-refund",
+          "critical case did not pass: validation-refund"
+        ]
+      },
+      "duration_ms": 0
+    }
+  ],
+  "selected_candidate": "focused",
+  "selected_prompt": "Route order and refund requests to the matching tool. Preserve the user's order ID exactly, ground the answer in the tool result, and return concise JSON with status and next_action fields. Answer policy questions directly without a tool.",
+  "accepted": true,
+  "decision_reasons": [
+    "accepted: validation score improved by 0.294 with no protected regression"
+  ]
+}

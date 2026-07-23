@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "support-validation",
+  "cases": [
+    {
+      "id": "validation-order", "input": "Track order C300", "expected_response": "C300 arriving Friday", "expected_tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "C300"}}], "expected_route": "orders", "retrieval_required": true,
+      "runs": {
+        "baseline": {"final_response": "C300 unknown", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "C-300"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 21},
+        "focused": {"final_response": "C300 arriving Friday", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "C300"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.11, "latency_ms": 18},
+        "ineffective": {"final_response": "C300 unknown", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "C-300"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 21},
+        "overfit": {"final_response": "A100 shipped tomorrow", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "A100"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 16}
+      }
+    },
+    {
+      "id": "validation-refund", "input": "Can D400 be refunded?", "expected_response": "D400 refund denied final sale", "expected_tool_calls": [{"name": "refund_check", "arguments": {"order_id": "D400"}}], "expected_route": "refunds", "retrieval_required": true, "critical": true,
+      "runs": {
+        "baseline": {"final_response": "D400 refund denied final sale", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "D400"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 20},
+        "focused": {"final_response": "D400 refund denied final sale", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "D400"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.11, "latency_ms": 17},
+        "ineffective": {"final_response": "D400 refund denied final sale", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "D400"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 20},
+        "overfit": {"final_response": "B200 refund eligible", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B200"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 15}
+      }
+    },
+    {
+      "id": "validation-policy", "input": "Do sale items follow the return window?", "expected_response": "final sale items not returnable", "retrieval_required": true,
+      "runs": {
+        "baseline": {"final_response": "I do not know", "format_valid": true, "retrieval_hit": false, "cost": 0.05, "latency_ms": 10},
+        "focused": {"final_response": "final sale items not returnable", "format_valid": true, "retrieval_hit": true, "cost": 0.05, "latency_ms": 9},
+        "ineffective": {"final_response": "I do not know", "format_valid": true, "retrieval_hit": false, "cost": 0.05, "latency_ms": 10},
+        "overfit": {"final_response": "returns allowed 30 days", "format_valid": true, "retrieval_hit": false, "cost": 0.05, "latency_ms": 9}
+      }
+    }
+  ]
+}

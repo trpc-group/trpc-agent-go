@@ -1,0 +1,32 @@
+{
+  "eval_set_id": "support-train",
+  "cases": [
+    {
+      "id": "train-order-status", "input": "Where is order A100?", "expected_response": "A100 shipped tomorrow", "expected_tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "A100"}}], "expected_route": "orders", "retrieval_required": true,
+      "runs": {
+        "baseline": {"final_response": "I cannot find it", "tool_calls": [{"name": "search", "arguments": {"q": "A100"}}], "route": "general", "format_valid": false, "retrieval_hit": false, "cost": 0.10, "latency_ms": 20},
+        "focused": {"final_response": "A100 shipped tomorrow", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "A100"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.11, "latency_ms": 18},
+        "ineffective": {"final_response": "I cannot find it", "tool_calls": [{"name": "search", "arguments": {"q": "A100"}}], "route": "general", "format_valid": false, "retrieval_hit": false, "cost": 0.10, "latency_ms": 20},
+        "overfit": {"final_response": "A100 shipped tomorrow", "tool_calls": [{"name": "order_lookup", "arguments": {"order_id": "A100"}}], "route": "orders", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 16}
+      }
+    },
+    {
+      "id": "train-refund", "input": "Refund order B200", "expected_response": "B200 refund eligible", "expected_tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B200"}}], "expected_route": "refunds", "retrieval_required": true, "critical": true,
+      "runs": {
+        "baseline": {"final_response": "B200 refund unknown", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B-200"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 22},
+        "focused": {"final_response": "B200 refund eligible", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B200"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.11, "latency_ms": 17},
+        "ineffective": {"final_response": "B200 refund unknown", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B-200"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 22},
+        "overfit": {"final_response": "B200 refund eligible", "tool_calls": [{"name": "refund_check", "arguments": {"order_id": "B200"}}], "route": "refunds", "format_valid": true, "retrieval_hit": true, "cost": 0.10, "latency_ms": 15}
+      }
+    },
+    {
+      "id": "train-policy", "input": "What is the return window?", "expected_response": "returns allowed 30 days", "retrieval_required": true,
+      "runs": {
+        "baseline": {"final_response": "returns allowed 30 days", "format_valid": false, "retrieval_hit": true, "cost": 0.05, "latency_ms": 10},
+        "focused": {"final_response": "returns allowed 30 days", "format_valid": true, "retrieval_hit": true, "cost": 0.05, "latency_ms": 9},
+        "ineffective": {"final_response": "returns allowed 30 days", "format_valid": false, "retrieval_hit": true, "cost": 0.05, "latency_ms": 10},
+        "overfit": {"final_response": "returns allowed 30 days", "format_valid": true, "retrieval_hit": true, "cost": 0.05, "latency_ms": 9}
+      }
+    }
+  ]
+}

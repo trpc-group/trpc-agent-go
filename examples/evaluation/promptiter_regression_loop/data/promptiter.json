@@ -1,0 +1,16 @@
+{
+  "seed": 2003,
+  "engine": {"type": "fake_trace", "model": "deterministic-v1"},
+  "gate": {
+    "min_validation_gain": 0.08,
+    "no_new_hard_fails": true,
+    "critical_case_ids": ["validation-refund"],
+    "max_cost_increase": 0.20,
+    "max_tool_calls": 3
+  },
+  "candidates": [
+    {"id": "focused", "prompt_file": "candidate_focused.txt"},
+    {"id": "ineffective", "prompt_file": "candidate_ineffective.txt"},
+    {"id": "overfit", "prompt_file": "candidate_overfit.txt"}
+  ]
+}
