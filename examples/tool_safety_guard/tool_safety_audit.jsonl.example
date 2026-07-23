@@ -1,0 +1,13 @@
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"allow","risk_level":"low","rule_id":"ALLOW_POLICY","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":false}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"host_exec","decision":"deny","risk_level":"critical","rule_id":"DENIED_COMMAND","backend":"hostexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"FORBIDDEN_PATH","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"NETWORK_NOT_ALLOWLISTED","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"allow","risk_level":"low","rule_id":"ALLOW_POLICY","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":false}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"host_exec","decision":"ask","risk_level":"high","rule_id":"SHELL_WRAPPER","backend":"hostexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"ask","risk_level":"high","rule_id":"SHELL_METACHAR","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"code_exec","decision":"ask","risk_level":"high","rule_id":"NETWORK_UNPARSED","backend":"codeexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"LONG_RUNNING","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"code_exec","decision":"deny","risk_level":"high","rule_id":"OUTPUT_LIMIT","backend":"codeexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"host_exec","decision":"ask","risk_level":"high","rule_id":"HOST_SESSION","backend":"hostexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"ask","risk_level":"medium","rule_id":"ENV_NOT_ALLOWLISTED","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}
+{"timestamp":"2026-07-22T00:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"FORBIDDEN_WORKING_DIR","backend":"workspaceexec","duration_micros":0,"redacted":false,"blocked":true}

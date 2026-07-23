@@ -1,0 +1,9 @@
+{
+  "allowed_commands": ["go", "gofmt", "git", "curl", "echo"],
+  "denied_commands": ["rm", "mkfs", "dd", "sudo"],
+  "forbidden_paths": ["/.ssh", "~/.ssh", ".env", "/etc/shadow", "credentials"],
+  "allowed_domains": ["api.github.com"],
+  "max_timeout_seconds": 30,
+  "max_output_bytes": 1048576,
+  "allowed_env_vars": ["PATH", "HOME", "GOROOT", "GOPATH", "LANG"]
+}
