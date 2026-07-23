@@ -16,6 +16,7 @@ replace (
 )
 
 require (
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/stretchr/testify v1.11.1
 	github.com/yanyiwu/gojieba v1.4.7
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
