@@ -44,7 +44,6 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	agenttool "trpc.group/trpc-go/trpc-agent-go/tool/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
-	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
 	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/transfer"
 )
@@ -296,24 +295,6 @@ func TestExecuteSingleToolCallSequential_MarksAutoMemoryPolluted(t *testing.T) {
 				return knowledgetool.NewKnowledgeSearchTool(
 					autoMemoryPollutionTestKnowledge{},
 					knowledgetool.WithToolName("docs_search"),
-				)
-			},
-			wantMark: true,
-		},
-		{
-			// A custom-named knowledge tool further wrapped by a result codec:
-			// the custom name misses the name-based fallback, so pollution must
-			// be discovered via capability traversal through resultcodec.Wrap.
-			name:     "wrapped custom-named knowledge search",
-			toolName: "custom_search",
-			toolFactory: func(t *testing.T) tool.Tool {
-				t.Helper()
-				return resultcodec.Wrap(
-					knowledgetool.NewKnowledgeSearchTool(
-						autoMemoryPollutionTestKnowledge{},
-						knowledgetool.WithToolName("custom_search"),
-					),
-					resultcodec.XML(),
 				)
 			},
 			wantMark: true,
@@ -993,7 +974,7 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey1: []byte(deltaVal1),
 		},
 	}
-	p.attachStateDelta(inv, tl, args, nil, choice, ev)
+	p.attachStateDelta(inv, tl, args, choice, ev)
 	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
 
 	ev2 := &event.Event{}
@@ -1003,7 +984,7 @@ func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 			deltaKey2: []byte(deltaVal2),
 		},
 	}
-	p.attachStateDelta(inv, tl2, args, nil, choice, ev2)
+	p.attachStateDelta(inv, tl2, args, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
 }
 
@@ -9960,7 +9941,7 @@ func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
 		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
 		"status":    "exited",
 	}
-	msg, err := buildDefaultToolMessage(context.Background(), "call-123", result, nil)
+	msg, err := buildDefaultToolMessage("call-123", result)
 	require.NoError(t, err)
 	assert.Equal(t, "call-123", msg.ToolID)
 	assert.Contains(t, msg.Content, "<-done",
@@ -9995,7 +9976,7 @@ func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, err := buildDefaultToolMessage(context.Background(), "id-1", tt.result, nil)
+			msg, err := buildDefaultToolMessage("id-1", tt.result)
 			require.NoError(t, err)
 			// Compare with what json.Marshal would produce (they should
 			// be identical for inputs without < > &).

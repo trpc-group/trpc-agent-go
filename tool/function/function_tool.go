@@ -22,7 +22,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
-	"trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
 
 // FunctionTool implements the CallableTool interface for executing functions with arguments.
@@ -39,9 +39,9 @@ type FunctionTool[I, O any] struct {
 	// skipSummarization indicates whether the outer flow should skip
 	// the post-tool summarization step after this tool returns.
 	skipSummarization bool
-	// resultCodec optionally encodes the tool result into model-visible text.
-	// When nil, the framework keeps its default JSON behavior.
-	resultCodec resultcodec.Codec
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. When nil, the framework keeps its default JSON behavior.
+	resultFormatter resultformat.Formatter
 }
 
 // Option is a function that configures a FunctionTool.
@@ -56,7 +56,7 @@ type functionToolOptions struct {
 	skipSummarization bool
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
-	resultCodec       resultcodec.Codec
+	resultFormatter   resultformat.Formatter
 }
 
 // WithName sets the name of the function tool.
@@ -114,14 +114,14 @@ func WithOutputSchema(schema *tool.Schema) Option {
 	}
 }
 
-// WithResultCodec binds a result codec to the function tool. The codec encodes
-// the tool's final result into the model-visible tool result message content
-// (for example resultcodec.XML()). When no codec is configured the framework
-// keeps its default JSON behavior. Repeated configuration follows the existing
-// last-writer-wins option semantics.
-func WithResultCodec(codec resultcodec.Codec) Option {
+// WithResultFormatter sets the formatter for the function tool's final result.
+// The formatter changes only the default model-visible tool message content;
+// the framework continues to manage the message role, tool name, tool call ID,
+// ordering, and session persistence. When formatter is nil, the framework uses
+// its default JSON representation. Repeated configuration is last-writer-wins.
+func WithResultFormatter(formatter resultformat.Formatter) Option {
 	return func(opts *functionToolOptions) {
-		opts.resultCodec = codec
+		opts.resultFormatter = formatter
 	}
 }
 
@@ -178,7 +178,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
-		resultCodec:       options.resultCodec,
+		resultFormatter:   options.resultFormatter,
 	}
 }
 
@@ -212,16 +212,11 @@ func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 	return ft.skipSummarization
 }
 
-// ResultCodec returns the codec bound to this tool, or nil when none is
-// configured.
-//
-// This method exists so the framework can discover the codec set via
-// WithResultCodec. It is an internal discovery detail, not a supported
-// configuration entry point: bind a codec with function.WithResultCodec, or
-// resultcodec.Wrap for tools you cannot construct, rather than implementing or
-// calling this method directly.
-func (ft *FunctionTool[I, O]) ResultCodec() resultcodec.Codec {
-	return ft.resultCodec
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// It is used by the framework's function-call flow; configure formatting with
+// WithResultFormatter rather than calling this method directly.
+func (ft *FunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return ft.resultFormatter
 }
 
 // Declaration returns the tool's declaration information.
@@ -259,9 +254,9 @@ type StreamableFunctionTool[I, O any] struct {
 	unmarshaler  unmarshaler
 	// skipSummarization has the same meaning as in FunctionTool.
 	skipSummarization bool
-	// resultCodec optionally encodes the final tool result into model-visible
-	// text. Intermediate stream events are unaffected.
-	resultCodec resultcodec.Codec
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. Intermediate stream events are unaffected.
+	resultFormatter resultformat.Formatter
 }
 
 // NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
@@ -312,7 +307,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
-		resultCodec:       options.resultCodec,
+		resultFormatter:   options.resultFormatter,
 	}
 }
 
@@ -372,16 +367,10 @@ func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 	return t.skipSummarization
 }
 
-// ResultCodec returns the codec bound to this tool, or nil when none is
-// configured. Only the final streamable result is encoded with it.
-//
-// This method exists so the framework can discover the codec set via
-// WithResultCodec. It is an internal discovery detail, not a supported
-// configuration entry point: bind a codec with function.WithResultCodec, or
-// resultcodec.Wrap for tools you cannot construct, rather than implementing or
-// calling this method directly.
-func (t *StreamableFunctionTool[I, O]) ResultCodec() resultcodec.Codec {
-	return t.resultCodec
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// Only the final streamable result is formatted; intermediate events are not.
+func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return t.resultFormatter
 }
 
 type unmarshaler interface {

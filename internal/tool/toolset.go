@@ -11,17 +11,10 @@ package tool
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-// ErrToolWrapperTraversalExhausted indicates the wrapper chain could not be
-// fully traversed within the depth bound (an overly deep or cyclic chain).
-// Security decisions must fail closed when they see this error rather than
-// treating "not found" as "allow".
-var ErrToolWrapperTraversalExhausted = errors.New("tool wrapper traversal exhausted")
 
 // NamedToolSet wraps a ToolSet to automatically prefix tool names with the toolset name.
 // This prevents tool name conflicts when multiple toolsets provide tools with the same name.
@@ -120,89 +113,30 @@ func ApplyDeclarations(base []tool.Tool, declarations []tool.Declaration) []tool
 	return out
 }
 
-// ResolveDeclaration unwraps framework declaration overlays and explicitly
-// transparent wrappers. The traversal is depth-bounded so a cyclic wrapper chain
-// cannot cause unbounded recursion. A wrapper that only implements a generic
-// errors.Unwrap() is not followed, so a renaming wrapper keeps its declaration.
+// ResolveDeclaration unwraps framework declaration overlays.
 func ResolveDeclaration(t tool.Tool) tool.Tool {
-	for i := 0; i < maxToolUnwrapDepth; i++ {
-		switch current := t.(type) {
-		case nil:
-			return nil
-		case declarationWrapper:
-			t = current.originalTool()
-		case transparentTool:
-			t = current.TransparentUnwrap()
-		default:
-			return t
-		}
+	switch current := t.(type) {
+	case nil:
+		return nil
+	case declarationWrapper:
+		return ResolveDeclaration(current.originalTool())
+	default:
+		return t
 	}
-	return t
 }
 
-// ResolveSemantic unwraps framework wrappers and explicitly transparent wrappers
-// for semantic capability checks. The traversal is depth-bounded so a cyclic
-// wrapper chain cannot cause unbounded recursion. A wrapper that only implements
-// a generic errors.Unwrap() is not followed, so its own hooks are preserved.
+// ResolveSemantic unwraps framework wrappers for semantic capability checks.
 func ResolveSemantic(t tool.Tool) tool.Tool {
-	for i := 0; i < maxToolUnwrapDepth; i++ {
-		switch current := t.(type) {
-		case nil:
-			return nil
-		case declarationWrapper:
-			t = current.originalTool()
-		case *NamedTool:
-			t = current.Original()
-		case transparentTool:
-			t = current.TransparentUnwrap()
-		default:
-			return t
-		}
+	switch current := t.(type) {
+	case nil:
+		return nil
+	case declarationWrapper:
+		return ResolveSemantic(current.originalTool())
+	case *NamedTool:
+		return ResolveSemantic(current.Original())
+	default:
+		return t
 	}
-	return t
-}
-
-// ResolvePermissionChecker returns the outermost tool.PermissionChecker in the
-// wrapper chain. Permission must be resolved from the outside in: unwrapping past
-// a transparent wrapper (for example resultcodec.Wrap or any tool that exposes
-// TransparentUnwrap) to reach an inner tool would otherwise skip an intermediate
-// wrapper's own permission decision and bypass it.
-//
-// It fails closed: a return of (nil, nil) means the chain was fully traversed
-// and no checker exists (safe to allow); a non-nil error
-// (ErrToolWrapperTraversalExhausted) means the chain could not be fully
-// traversed within the depth bound (overly deep or cyclic), so callers must not
-// treat it as "no checker" and must deny.
-//
-// Purely-delegating framework wrappers (declarationWrapper, NamedTool) carry no
-// permission policy of their own and are unwrapped before anything is treated as
-// a checker; otherwise their shallow delegating CheckPermission would
-// short-circuit resolution and could hide a deeper deny.
-func ResolvePermissionChecker(t tool.Tool) (tool.PermissionChecker, error) {
-	for i := 0; i < maxToolUnwrapDepth; i++ {
-		if t == nil {
-			return nil, nil
-		}
-		switch current := t.(type) {
-		case declarationWrapper:
-			t = current.originalTool()
-			continue
-		case *NamedTool:
-			t = current.Original()
-			continue
-		}
-		// A tool with its own PermissionChecker is authoritative at this layer.
-		if checker, ok := t.(tool.PermissionChecker); ok {
-			return checker, nil
-		}
-		// A transparent wrapper without its own checker: keep unwrapping.
-		if u, ok := t.(transparentTool); ok {
-			t = u.TransparentUnwrap()
-			continue
-		}
-		return nil, nil
-	}
-	return nil, ErrToolWrapperTraversalExhausted
 }
 
 type declarationTool struct {
@@ -352,16 +286,8 @@ func (t *NamedTool) CheckPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	// Resolve through the full wrapper chain, not just the direct original, so a
-	// deny behind a transparent wrapper is not missed. Fail closed if the chain
-	// cannot be fully traversed.
-	checker, err := ResolvePermissionChecker(t.original)
-	if err != nil {
-		return tool.DenyPermission(
-			"tool permission could not be resolved: " + err.Error(),
-		), nil
-	}
-	if checker == nil {
+	checker, ok := t.original.(tool.PermissionChecker)
+	if !ok {
 		return tool.AllowPermission(), nil
 	}
 	return checker.CheckPermission(ctx, req)
