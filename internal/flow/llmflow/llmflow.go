@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/modelcontext"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/responseusage"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
@@ -2331,6 +2332,7 @@ func (f *Flow) callLLM(
 			llmRequest,
 			finalizationInstruction,
 		)
+		ctx = imodelrequest.WithToolsDisabled(ctx)
 	}
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
 		traceCtx := agent.NewInvocationContext(ctx, invocation)
@@ -2360,21 +2362,13 @@ func prepareCallLimitFinalizationRequest(
 		return
 	}
 	req.Tools = nil
-	for _, key := range []string{
-		"tool_choice",
-		"parallel_tool_calls",
-		"tools",
-		"function_call",
-		"functions",
-		"ToolChoice",
-		"ParallelToolCalls",
-		"Tools",
-	} {
-		delete(req.ExtraFields, key)
-	}
+	imodelrequest.DeleteToolControlFields(req.ExtraFields)
 	for i := range req.Messages {
 		if req.Messages[i].Role != model.RoleSystem {
 			continue
+		}
+		if len(req.Messages[i].ContentParts) > 0 {
+			break
 		}
 		if req.Messages[i].Content == "" {
 			req.Messages[i].Content = instruction

@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -1913,6 +1914,42 @@ func TestMarshalRequest(t *testing.T) {
 		json.Unmarshal(data, &result)
 		assert.Equal(t, "request_value", result["request_field"])
 	})
+}
+
+func TestMarshalRequest_ToolsDisabledFiltersExtraFields(t *testing.T) {
+	m := &Model{
+		extraFields: map[string]any{
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"functions":           []any{},
+			"model_field":         "model-value",
+		},
+	}
+	hfRequest := &ChatCompletionRequest{
+		Model:      "test-model",
+		Messages:   []ChatMessage{{Role: "user", Content: "test"}},
+		Tools:      []Tool{{Type: "function"}},
+		ToolChoice: "required",
+		ExtraFields: map[string]any{
+			"tools":         []any{},
+			"function_call": "auto",
+			"request_field": "request-value",
+		},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	data, err := m.marshalRequestForContext(ctx, hfRequest)
+
+	require.NoError(t, err)
+	var captured map[string]any
+	require.NoError(t, json.Unmarshal(data, &captured))
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "model-value", captured["model_field"])
+	require.Equal(t, "request-value", captured["request_field"])
 }
 
 // TestModel_MultimodalResponse tests handling of multimodal responses

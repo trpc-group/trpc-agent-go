@@ -36,6 +36,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -6100,6 +6101,66 @@ func TestModel_GenerateContent_RequestExtraFieldsOverrideModelExtraFields(t *tes
 	require.NotNil(t, captured)
 	assert.Equal(t, "model_value", captured["model_field"])
 	assert.Equal(t, "request-cache", captured["prompt_cache_key"])
+}
+
+func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-test",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithExtraFields(map[string]any{
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"functions":           []any{},
+			"model_field":         "model-value",
+		}),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+		ExtraFields: map[string]any{
+			"tools":         []any{},
+			"function_call": "auto",
+			"request_field": "request-value",
+		},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, req)
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "model-value", captured["model_field"])
+	require.Equal(t, "request-value", captured["request_field"])
 }
 
 func TestModel_GenerateContent_RequestHeadersOverrideModelHeaders(t *testing.T) {

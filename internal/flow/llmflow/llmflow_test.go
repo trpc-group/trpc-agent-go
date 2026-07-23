@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -3160,7 +3161,7 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 		ExtraFields: map[string]any{},
 	}
 
-	_, seq, modelCalled, err := f.callLLM(
+	gotCtx, seq, modelCalled, err := f.callLLM(
 		context.Background(),
 		inv,
 		req,
@@ -3170,11 +3171,41 @@ func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, modelCalled)
 	require.NotNil(t, seq)
+	require.True(t, imodelrequest.ToolsDisabled(gotCtx))
 	require.Nil(t, req.Tools)
 	require.NotContains(t, req.ExtraFields, "tool_choice")
 	require.Equal(t, "value", req.ExtraFields["keep"])
 	require.Contains(t, req.Messages[0].Content, instruction)
 	require.True(t, calllimit.Active(inv))
+}
+
+func TestPrepareCallLimitFinalizationRequest_PreservesSystemContentParts(
+	t *testing.T,
+) {
+	partText := "existing content part"
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleSystem,
+				Content: "existing content",
+				ContentParts: []model.ContentPart{{
+					Type: model.ContentTypeText,
+					Text: &partText,
+				}},
+			},
+			model.NewUserMessage("question"),
+		},
+	}
+
+	prepareCallLimitFinalizationRequest(req, "finalize now")
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Equal(t, "finalize now", req.Messages[0].Content)
+	require.Empty(t, req.Messages[0].ContentParts)
+	require.Equal(t, "existing content", req.Messages[1].Content)
+	require.Len(t, req.Messages[1].ContentParts, 1)
+	require.Equal(t, partText, *req.Messages[1].ContentParts[0].Text)
 }
 
 func TestRunOneStep_LLMCallLimitFinalizationEndsInvocation(t *testing.T) {
