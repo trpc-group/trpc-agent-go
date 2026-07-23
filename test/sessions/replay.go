@@ -753,8 +753,11 @@ func executeWithFailure(
 	if failure == nil {
 		return operation()
 	}
-	if failure.FailBefore && !failure.Retry {
-		return errors.New("injected failure before write")
+	if failure.FailBefore {
+		if !failure.Retry {
+			return errors.New("injected failure before write")
+		}
+		return operation()
 	}
 	if failure.Duplicate {
 		if err := operation(); err != nil {

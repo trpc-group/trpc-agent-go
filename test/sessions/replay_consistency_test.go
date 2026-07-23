@@ -269,3 +269,22 @@ func TestRunReplayConsistencyWritesActionFailureReport(t *testing.T) {
 	require.Equal(t, "failed", persisted.Status)
 	require.Contains(t, persisted.Error, "injected failure before write")
 }
+
+func TestExecuteWithFailureFailBeforeRetry(t *testing.T) {
+	calls := 0
+
+	err := executeWithFailure(
+		func() error {
+			calls++
+			return nil
+		},
+		&FailureInput{
+			FailBefore: true,
+			Retry:      true,
+		},
+		nil,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, 1, calls)
+}
