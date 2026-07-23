@@ -1,11 +1,32 @@
 # Prompt Optimization Report
 
 - Decision: **REJECTED**
+- Pipeline status: `succeeded`
 - Mode: `fake`
+- Candidate source: `deterministic`
 - Seed: `20260717`
-- Model: `deterministic/fake-trace-runner`
-- Fingerprint: `beffffedf2fa17f7dbe184f3f5692ae3d545959326a264003e681fdc9207701c`
+- Evaluation model: `deterministic/fake-trace-runner`
+- Optimizer model: `deterministic/fake-promptiter-optimizer`
+- Fingerprint: `e969bce38a507a235961cf52bf8b9fbbe1583f03a53fee91edb3127ebbabd2c8`
 - Duration: `1 ms`
+
+## Resource usage
+
+| Stage | Calls | Input tokens | Output tokens | Cost CNY | Latency ms |
+|---|---:|---:|---:|---:|---:|
+| Baseline evaluation | 0 | 0 | 0 | 0.000000 | 0 |
+| Optimizer | 0 | 0 | 0 | 0.000000 | 0 |
+| Candidate evaluation | 0 | 0 | 0 | 0.000000 | 0 |
+| Total | 0 | 0 | 0 | 0.000000 | 1 |
+
+## PromptIter audit
+
+- Completed: `true`
+- Source: `deterministic`
+
+| Round | Train score | Inner train score | Accepted | Delta | Patch reason |
+|---:|---:|---:|---|---:|---|
+| 1 | 0.0000 | 1.0000 | true | +1.0000 | apply only remediation directives observed in training loss gradients |
 
 ## Validation summary
 
@@ -25,8 +46,8 @@ Paired bootstrap 90% CI: `[-1.0000, 0.3333]`.
 | critical_cases_do_not_regress | FAIL | 1.0000 | == 0.0000 |
 | pass_power_k_does_not_regress | FAIL | 0.3333 | &gt;= 0.6667 |
 | bootstrap_ci_lower_bound | FAIL | -1.0000 | &gt;= 0.0000 |
-| calls_budget | PASS | 0.0000 | &lt;= 162.0000 |
-| tokens_budget | PASS | 0.0000 | &lt;= 100000.0000 |
+| calls_budget | PASS | 0.0000 | &lt;= 165.0000 |
+| tokens_budget | PASS | 0.0000 | &lt;= 200000.0000 |
 | cost_budget_cny | PASS | 0.0000 | &lt;= 20.0000 |
 
 ## Per-case delta
@@ -63,7 +84,7 @@ Paired bootstrap 90% CI: `[-1.0000, 0.3333]`.
 
 ## Audit and anti-overfitting notes
 
-PromptIter receives only the training set. The final decision uses the independent validation set, 3 repeated runs, hard-failure vetoes, critical-case protection, Pass^k stability, a paired bootstrap interval, and resource budgets.
+PromptIter receives only the training set. Its inner score is a training-only optimization signal. The final decision uses the independent validation set, 3 repeated runs, hard-failure vetoes, critical-case protection, Pass^k stability, a paired bootstrap interval, and resource budgets.
 
 Selected prompt:
 

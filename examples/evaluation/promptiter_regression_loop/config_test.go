@@ -73,18 +73,59 @@ func TestSetDefaultsPreservesExplicitZeroRetries(t *testing.T) {
 	assert.Equal(t, 2, omitted.Live.MaxRetries)
 }
 
+func TestSetDefaultsInheritsLiveOptimizerModelSettings(t *testing.T) {
+	var cfg pipelineConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"live":{
+			"model":"evaluation-model",
+			"baseURL":"https://models.example.test",
+			"timeoutSeconds":30,
+			"maxRetries":1,
+			"optimizer":{"temperature":0.25}
+		}
+	}`), &cfg))
+
+	setDefaults(&cfg)
+
+	assert.Equal(t, "evaluation-model", cfg.Live.Optimizer.Model)
+	assert.Equal(t, "https://models.example.test", cfg.Live.Optimizer.BaseURL)
+	assert.Equal(t, 30, cfg.Live.Optimizer.TimeoutSeconds)
+	assert.Equal(t, 1, cfg.Live.Optimizer.MaxRetries)
+	assert.Equal(t, 0.25, cfg.Live.Optimizer.Temperature)
+	assert.Equal(t, 1024, cfg.Live.Optimizer.MaxOutputTokens)
+	assert.Equal(t, 2, cfg.Live.Optimizer.Budget.MaxCalls)
+	assert.Equal(t, 16384, cfg.Live.Optimizer.Budget.MaxTokens)
+	assert.Equal(t, 1.0, cfg.Live.Optimizer.Budget.MaxCostCNY)
+}
+
 func TestValidateLiveCallBudgetIncludesSymmetricRetries(t *testing.T) {
 	cfg := pipelineConfig{
 		Gate: gateFileConfig{PassK: 3, MaxCalls: 161},
-		Live: liveConfig{MaxRetries: 2},
+		Live: liveConfig{
+			MaxRetries: 2,
+			Optimizer: liveOptimizerConfig{
+				Budget: optimizerBudgetConfig{MaxCalls: 3},
+			},
+		},
 	}
 	train := evalSetFile{EvalCases: make([]caseSpec, 6)}
 	validation := evalSetFile{EvalCases: make([]caseSpec, 7)}
 
 	err := validateLiveCallBudget(cfg, train, validation)
-	assert.ErrorContains(t, err, "cannot cover 162 required live calls")
-	cfg.Gate.MaxCalls = 162
+	assert.ErrorContains(t, err, "cannot cover 165 required live calls")
+	cfg.Gate.MaxCalls = 165
 	assert.NoError(t, validateLiveCallBudget(cfg, train, validation))
+}
+
+func TestDefaultConfigCanReserveCandidateEvaluation(t *testing.T) {
+	cfg, err := loadConfig("data/config.json")
+	require.NoError(t, err)
+
+	reservation := candidateEvaluationReservation(cfg)
+
+	assert.Equal(t, 81, reservation.Calls)
+	assert.LessOrEqual(t, reservation.Tokens, cfg.Gate.MaxTokens)
+	assert.LessOrEqual(t, reservation.CostCNY, cfg.Gate.MaxCostCNY)
 }
 
 func TestValidateMetricsRejectsUnsupportedPolicyValues(t *testing.T) {

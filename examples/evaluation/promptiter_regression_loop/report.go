@@ -87,30 +87,43 @@ func renderMarkdown(report *optimizationReport) string {
 	}
 	fmt.Fprintf(&out, "# Prompt Optimization Report\n\n")
 	fmt.Fprintf(&out, "- Decision: **%s**\n", decision)
+	fmt.Fprintf(&out, "- Pipeline status: %s\n", markdownInlineCode(report.Status))
 	fmt.Fprintf(&out, "- Mode: %s\n", markdownInlineCode(report.Mode))
+	fmt.Fprintf(&out, "- Candidate source: %s\n", markdownInlineCode(report.CandidateSource))
 	fmt.Fprintf(&out, "- Seed: `%d`\n", report.Seed)
-	fmt.Fprintf(&out, "- Model: %s\n", markdownInlineCode(report.Model.Provider+"/"+report.Model.Name))
+	fmt.Fprintf(&out, "- Evaluation model: %s\n",
+		markdownInlineCode(report.EvaluationModel.Provider+"/"+report.EvaluationModel.Name))
+	fmt.Fprintf(&out, "- Optimizer model: %s\n",
+		markdownInlineCode(report.OptimizerModel.Provider+"/"+report.OptimizerModel.Name))
 	fmt.Fprintf(&out, "- Fingerprint: `%s`\n", report.DeterministicFingerprint)
 	fmt.Fprintf(&out, "- Duration: `%d ms`\n\n", report.DurationMillis)
+	if report.Error != "" {
+		fmt.Fprintf(&out, "Pipeline error: %s\n\n", markdownInlineCode(report.Error))
+	}
 
-	fmt.Fprintf(&out, "## Validation summary\n\n")
-	fmt.Fprintf(&out, "| Metric | Baseline | Candidate | Delta |\n")
-	fmt.Fprintf(&out, "|---|---:|---:|---:|\n")
-	fmt.Fprintf(&out, "| Mean score | %.4f | %.4f | %+.4f |\n",
-		report.Comparison.BaselineMeanScore,
-		report.Comparison.CandidateMeanScore,
-		report.Comparison.MeanScoreGain,
-	)
-	fmt.Fprintf(&out, "| Pass^%d rate | %.4f | %.4f | %+.4f |\n\n",
-		report.Comparison.PassK,
-		report.Comparison.BaselinePassPowerKRate,
-		report.Comparison.CandidatePassPowerKRate,
-		report.Comparison.CandidatePassPowerKRate-report.Comparison.BaselinePassPowerKRate,
-	)
-	fmt.Fprintf(&out, "Paired bootstrap 90%% CI: `[%.4f, %.4f]`.\n\n",
-		report.Gate.ConfidenceInterval.Lower,
-		report.Gate.ConfidenceInterval.Upper,
-	)
+	renderResourceSummary(&out, report.Resources)
+	renderPromptIterRounds(&out, report.PromptIter)
+
+	if len(report.Comparison.Deltas) > 0 {
+		fmt.Fprintf(&out, "## Validation summary\n\n")
+		fmt.Fprintf(&out, "| Metric | Baseline | Candidate | Delta |\n")
+		fmt.Fprintf(&out, "|---|---:|---:|---:|\n")
+		fmt.Fprintf(&out, "| Mean score | %.4f | %.4f | %+.4f |\n",
+			report.Comparison.BaselineMeanScore,
+			report.Comparison.CandidateMeanScore,
+			report.Comparison.MeanScoreGain,
+		)
+		fmt.Fprintf(&out, "| Pass^%d rate | %.4f | %.4f | %+.4f |\n\n",
+			report.Comparison.PassK,
+			report.Comparison.BaselinePassPowerKRate,
+			report.Comparison.CandidatePassPowerKRate,
+			report.Comparison.CandidatePassPowerKRate-report.Comparison.BaselinePassPowerKRate,
+		)
+		fmt.Fprintf(&out, "Paired bootstrap 90%% CI: `[%.4f, %.4f]`.\n\n",
+			report.Gate.ConfidenceInterval.Lower,
+			report.Gate.ConfidenceInterval.Upper,
+		)
+	}
 
 	fmt.Fprintf(&out, "## Gate checks\n\n")
 	fmt.Fprintf(&out, "| Check | Result | Observed | Requirement |\n")
@@ -125,13 +138,15 @@ func renderMarkdown(report *optimizationReport) string {
 			markdownTableCell(check.Operator), check.Threshold)
 	}
 
-	fmt.Fprintf(&out, "\n## Per-case delta\n\n")
-	fmt.Fprintf(&out, "| Case | Critical | Baseline | Candidate | Delta | Pass^%d |\n", report.Comparison.PassK)
-	fmt.Fprintf(&out, "|---|---|---:|---:|---:|---|\n")
-	for _, delta := range report.Comparison.Deltas {
-		fmt.Fprintf(&out, "| %s | %t | %.4f | %.4f | %+.4f | %t -> %t |\n",
-			markdownTableCell(delta.ID), delta.Critical, delta.BaselineMeanScore, delta.CandidateMeanScore,
-			delta.ScoreDelta, delta.BaselinePassPowerK, delta.CandidatePassPowerK)
+	if len(report.Comparison.Deltas) > 0 {
+		fmt.Fprintf(&out, "\n## Per-case delta\n\n")
+		fmt.Fprintf(&out, "| Case | Critical | Baseline | Candidate | Delta | Pass^%d |\n", report.Comparison.PassK)
+		fmt.Fprintf(&out, "|---|---|---:|---:|---:|---|\n")
+		for _, delta := range report.Comparison.Deltas {
+			fmt.Fprintf(&out, "| %s | %t | %.4f | %.4f | %+.4f | %t -> %t |\n",
+				markdownTableCell(delta.ID), delta.Critical, delta.BaselineMeanScore, delta.CandidateMeanScore,
+				delta.ScoreDelta, delta.BaselinePassPowerK, delta.CandidatePassPowerK)
+		}
 	}
 
 	fmt.Fprintf(&out, "\n## Failure attribution\n\n")
@@ -141,13 +156,72 @@ func renderMarkdown(report *optimizationReport) string {
 	renderAttributionGroup(&out, "Validation candidate", report.AttributionSummary.ValidationCandidate)
 
 	fmt.Fprintf(&out, "\n## Audit and anti-overfitting notes\n\n")
-	fmt.Fprintf(&out, "PromptIter receives only the training set. The final decision uses the independent validation set, ")
+	fmt.Fprintf(&out, "PromptIter receives only the training set. Its inner score is a training-only optimization signal. ")
+	fmt.Fprintf(&out, "The final decision uses the independent validation set, ")
 	fmt.Fprintf(&out, "%d repeated runs, hard-failure vetoes, critical-case protection, Pass^k stability, a paired bootstrap interval, and resource budgets.\n\n",
 		report.Comparison.PassK)
 	prompt := strings.TrimSpace(report.SelectedPrompt)
 	fence := markdownCodeFence(prompt)
 	fmt.Fprintf(&out, "Selected prompt:\n\n%stext\n%s\n%s\n", fence, prompt, fence)
 	return out.String()
+}
+
+func renderResourceSummary(out *bytes.Buffer, resources resourceAudit) {
+	fmt.Fprintf(out, "## Resource usage\n\n")
+	fmt.Fprintf(out, "| Stage | Calls | Input tokens | Output tokens | Cost CNY | Latency ms |\n")
+	fmt.Fprintf(out, "|---|---:|---:|---:|---:|---:|\n")
+	rows := []struct {
+		name  string
+		audit stageResourceAudit
+	}{
+		{name: "Baseline evaluation", audit: resources.BaselineEvaluation},
+		{name: "Optimizer", audit: resources.Optimizer},
+		{name: "Candidate evaluation", audit: resources.CandidateEvaluation},
+		{name: "Total", audit: resources.Total},
+	}
+	for _, row := range rows {
+		fmt.Fprintf(
+			out,
+			"| %s | %d | %d | %d | %.6f | %d |\n",
+			row.name,
+			row.audit.Usage.Calls,
+			row.audit.Usage.InputTokens,
+			row.audit.Usage.OutputTokens,
+			row.audit.Usage.CostCNY,
+			row.audit.LatencyMillis,
+		)
+	}
+	fmt.Fprintln(out)
+}
+
+func renderPromptIterRounds(out *bytes.Buffer, audit promptIterAudit) {
+	fmt.Fprintf(out, "## PromptIter audit\n\n")
+	fmt.Fprintf(out, "- Completed: `%t`\n", audit.Completed)
+	fmt.Fprintf(out, "- Source: %s\n", markdownInlineCode(audit.Source))
+	if audit.Error != "" {
+		fmt.Fprintf(out, "- Error: %s\n", markdownInlineCode(audit.Error))
+	}
+	fmt.Fprintln(out)
+	if len(audit.Rounds) == 0 {
+		fmt.Fprintln(out, "No optimization round completed.")
+		fmt.Fprintln(out)
+		return
+	}
+	fmt.Fprintf(out, "| Round | Train score | Inner train score | Accepted | Delta | Patch reason |\n")
+	fmt.Fprintf(out, "|---:|---:|---:|---|---:|---|\n")
+	for _, round := range audit.Rounds {
+		fmt.Fprintf(
+			out,
+			"| %d | %.4f | %.4f | %t | %+.4f | %s |\n",
+			round.Round,
+			round.TrainScore,
+			round.InnerTrainScore,
+			round.Accepted,
+			round.ScoreDelta,
+			markdownTableCell(round.PatchReason),
+		)
+	}
+	fmt.Fprintln(out)
 }
 
 func markdownTableCell(value string) string {

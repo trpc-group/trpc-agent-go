@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,14 +67,32 @@ type gateFileConfig struct {
 }
 
 type liveConfig struct {
-	Model               string  `json:"model"`
-	BaseURL             string  `json:"baseURL"`
-	APIKeyEnv           string  `json:"apiKeyEnv"`
-	TimeoutSeconds      int     `json:"timeoutSeconds"`
-	MaxRetries          int     `json:"maxRetries"`
-	InputCNYPerMillion  float64 `json:"inputCNYPerMillion"`
-	OutputCNYPerMillion float64 `json:"outputCNYPerMillion"`
+	Model               string              `json:"model"`
+	BaseURL             string              `json:"baseURL"`
+	APIKeyEnv           string              `json:"apiKeyEnv"`
+	TimeoutSeconds      int                 `json:"timeoutSeconds"`
+	MaxRetries          int                 `json:"maxRetries"`
+	InputCNYPerMillion  float64             `json:"inputCNYPerMillion"`
+	OutputCNYPerMillion float64             `json:"outputCNYPerMillion"`
+	Optimizer           liveOptimizerConfig `json:"optimizer"`
 	maxRetriesSet       bool
+}
+
+type liveOptimizerConfig struct {
+	Model           string                `json:"model"`
+	BaseURL         string                `json:"baseURL"`
+	Temperature     float64               `json:"temperature"`
+	MaxOutputTokens int                   `json:"maxOutputTokens"`
+	TimeoutSeconds  int                   `json:"timeoutSeconds"`
+	MaxRetries      int                   `json:"maxRetries"`
+	Budget          optimizerBudgetConfig `json:"budget"`
+	maxRetriesSet   bool
+}
+
+type optimizerBudgetConfig struct {
+	MaxCalls   int     `json:"maxCalls"`
+	MaxTokens  int     `json:"maxTokens"`
+	MaxCostCNY float64 `json:"maxCostCNY"`
 }
 
 func (cfg *liveConfig) UnmarshalJSON(data []byte) error {
@@ -87,6 +106,21 @@ func (cfg *liveConfig) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*cfg = liveConfig(decoded)
+	_, cfg.maxRetriesSet = fields["maxRetries"]
+	return nil
+}
+
+func (cfg *liveOptimizerConfig) UnmarshalJSON(data []byte) error {
+	type liveOptimizerConfigAlias liveOptimizerConfig
+	var decoded liveOptimizerConfigAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	*cfg = liveOptimizerConfig(decoded)
 	_, cfg.maxRetriesSet = fields["maxRetries"]
 	return nil
 }
@@ -214,6 +248,30 @@ func setDefaults(cfg *pipelineConfig) {
 	if cfg.Live.OutputCNYPerMillion == 0 {
 		cfg.Live.OutputCNYPerMillion = 2
 	}
+	if cfg.Live.Optimizer.Model == "" {
+		cfg.Live.Optimizer.Model = cfg.Live.Model
+	}
+	if cfg.Live.Optimizer.BaseURL == "" {
+		cfg.Live.Optimizer.BaseURL = cfg.Live.BaseURL
+	}
+	if cfg.Live.Optimizer.MaxOutputTokens == 0 {
+		cfg.Live.Optimizer.MaxOutputTokens = 1024
+	}
+	if cfg.Live.Optimizer.TimeoutSeconds == 0 {
+		cfg.Live.Optimizer.TimeoutSeconds = cfg.Live.TimeoutSeconds
+	}
+	if !cfg.Live.Optimizer.maxRetriesSet {
+		cfg.Live.Optimizer.MaxRetries = cfg.Live.MaxRetries
+	}
+	if cfg.Live.Optimizer.Budget.MaxCalls == 0 {
+		cfg.Live.Optimizer.Budget.MaxCalls = cfg.Live.Optimizer.MaxRetries + 1
+	}
+	if cfg.Live.Optimizer.Budget.MaxTokens == 0 {
+		cfg.Live.Optimizer.Budget.MaxTokens = 16384
+	}
+	if cfg.Live.Optimizer.Budget.MaxCostCNY == 0 {
+		cfg.Live.Optimizer.Budget.MaxCostCNY = 1
+	}
 }
 
 func setPromptIterDefaults(cfg *promptIterConfig) {
@@ -244,12 +302,44 @@ func validateConfig(cfg pipelineConfig) error {
 		return errors.New("gate.maxCostCNY must be non-negative")
 	case cfg.Gate.MaxCalls < 0 || cfg.Gate.MaxTokens < 0:
 		return errors.New("gate call and token budgets must be non-negative")
-	case cfg.Live.TimeoutSeconds <= 0:
+	}
+	return validateLiveConfig(cfg.Live)
+}
+
+func validateLiveConfig(cfg liveConfig) error {
+	switch {
+	case cfg.TimeoutSeconds <= 0:
 		return errors.New("live.timeoutSeconds must be greater than zero")
-	case cfg.Live.MaxRetries < 0:
+	case cfg.MaxRetries < 0:
 		return errors.New("live.maxRetries must be non-negative")
-	case cfg.Live.InputCNYPerMillion <= 0 || cfg.Live.OutputCNYPerMillion <= 0:
+	case cfg.InputCNYPerMillion <= 0 || cfg.OutputCNYPerMillion <= 0:
 		return errors.New("live token prices must be greater than zero")
+	}
+	return validateLiveOptimizerConfig(cfg.Optimizer)
+}
+
+func validateLiveOptimizerConfig(cfg liveOptimizerConfig) error {
+	switch {
+	case strings.TrimSpace(cfg.Model) == "":
+		return errors.New("live.optimizer.model is required")
+	case cfg.Temperature < 0 ||
+		math.IsNaN(cfg.Temperature) ||
+		math.IsInf(cfg.Temperature, 0):
+		return errors.New("live.optimizer.temperature must be finite and non-negative")
+	case cfg.MaxOutputTokens <= 0:
+		return errors.New("live.optimizer.maxOutputTokens must be greater than zero")
+	case cfg.TimeoutSeconds <= 0:
+		return errors.New("live.optimizer.timeoutSeconds must be greater than zero")
+	case cfg.MaxRetries < 0:
+		return errors.New("live.optimizer.maxRetries must be non-negative")
+	case cfg.Budget.MaxCalls <= 0:
+		return errors.New("live.optimizer.budget.maxCalls must be greater than zero")
+	case cfg.Budget.MaxTokens <= 0:
+		return errors.New("live.optimizer.budget.maxTokens must be greater than zero")
+	case cfg.Budget.MaxCostCNY <= 0 ||
+		math.IsNaN(cfg.Budget.MaxCostCNY) ||
+		math.IsInf(cfg.Budget.MaxCostCNY, 0):
+		return errors.New("live.optimizer.budget.maxCostCNY must be finite and greater than zero")
 	}
 	return nil
 }
@@ -276,6 +366,14 @@ func validateLoadedInputs(
 		return errors.New("PromptIter must use train-only optimization")
 	case promptIter.CandidateValidationRuns != cfg.Gate.PassK:
 		return fmt.Errorf("PromptIter validation runs %d must equal gate PassK %d", promptIter.CandidateValidationRuns, cfg.Gate.PassK)
+	case cfg.Live.Optimizer.Budget.MaxCalls <
+		promptIter.MaxRounds*(cfg.Live.Optimizer.MaxRetries+1):
+		return fmt.Errorf(
+			"live optimizer call budget %d cannot cover %d rounds with %d retries",
+			cfg.Live.Optimizer.Budget.MaxCalls,
+			promptIter.MaxRounds,
+			cfg.Live.Optimizer.MaxRetries,
+		)
 	}
 	if err := validateMetrics(metrics, cfg.Gate.PassK); err != nil {
 		return err
@@ -288,11 +386,15 @@ func validateLoadedInputs(
 
 func validateLiveCallBudget(cfg pipelineConfig, train, validation evalSetFile) error {
 	mandatoryGenerations := 2*len(train.EvalCases) + 2*cfg.Gate.PassK*len(validation.EvalCases)
-	requiredCalls := mandatoryGenerations * (cfg.Live.MaxRetries + 1)
+	evaluationCalls := mandatoryGenerations * (cfg.Live.MaxRetries + 1)
+	requiredCalls := evaluationCalls + cfg.Live.Optimizer.Budget.MaxCalls
 	if cfg.Gate.MaxCalls > 0 && cfg.Gate.MaxCalls < requiredCalls {
 		return fmt.Errorf(
-			"gate.maxCalls %d cannot cover %d required live calls (%d mandatory generations with %d retries)",
-			cfg.Gate.MaxCalls, requiredCalls, mandatoryGenerations, cfg.Live.MaxRetries,
+			"gate.maxCalls %d cannot cover %d required live calls (%d evaluation calls plus %d optimizer calls)",
+			cfg.Gate.MaxCalls,
+			requiredCalls,
+			evaluationCalls,
+			cfg.Live.Optimizer.Budget.MaxCalls,
 		)
 	}
 	return nil

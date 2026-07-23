@@ -1,23 +1,77 @@
 {
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
+  "status": "succeeded",
   "mode": "fake",
+  "candidateSource": "deterministic",
   "seed": 20260717,
   "durationMillis": 1,
-  "deterministicFingerprint": "beffffedf2fa17f7dbe184f3f5692ae3d545959326a264003e681fdc9207701c",
-  "model": {
+  "deterministicFingerprint": "e969bce38a507a235961cf52bf8b9fbbe1583f03a53fee91edb3127ebbabd2c8",
+  "evaluationModel": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
   },
+  "optimizerModel": {
+    "provider": "deterministic",
+    "name": "fake-promptiter-optimizer"
+  },
+  "resources": {
+    "baselineEvaluation": {
+      "usage": {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_cny": 0
+      },
+      "latencyMillis": 0
+    },
+    "optimizer": {
+      "usage": {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_cny": 0
+      },
+      "latencyMillis": 0
+    },
+    "candidateEvaluation": {
+      "usage": {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_cny": 0
+      },
+      "latencyMillis": 0
+    },
+    "total": {
+      "usage": {
+        "calls": 0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cost_cny": 0
+      },
+      "latencyMillis": 1
+    }
+  },
   "promptIter": {
     "surfaceId": "regression-writer#instruction",
+    "source": "deterministic",
+    "completed": true,
+    "latencyMillis": 0,
+    "usage": {
+      "calls": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "cost_cny": 0
+    },
     "baselinePrompt": "Answer the user's request helpfully and concisely. Use tools when useful.",
     "candidatePrompt": "Answer the user's request helpfully and concisely. Use tools when useful.\n1. ROUTE_EXPLICITLY: select the route that matches the user's intent.\n2. VALIDATE_TOOL_ARGUMENTS: verify required arguments and types before every tool call.\n3. OUTPUT_JSON_WHEN_REQUESTED: emit valid JSON with no surrounding prose when JSON is requested.\n4. GROUND_IN_PROVIDED_CONTEXT: never invent facts that are absent from the supplied context.\n5. PRESERVE_SAFETY_CONSTRAINTS: refuse unsafe requests and never reveal credentials or secrets.\n6. REPORT_ENVIRONMENT_FAILURES: distinguish timeouts and unavailable dependencies from model errors.",
     "rounds": [
       {
         "round": 1,
         "candidatePrompt": "Answer the user's request helpfully and concisely. Use tools when useful.\n1. ROUTE_EXPLICITLY: select the route that matches the user's intent.\n2. VALIDATE_TOOL_ARGUMENTS: verify required arguments and types before every tool call.\n3. OUTPUT_JSON_WHEN_REQUESTED: emit valid JSON with no surrounding prose when JSON is requested.\n4. GROUND_IN_PROVIDED_CONTEXT: never invent facts that are absent from the supplied context.\n5. PRESERVE_SAFETY_CONSTRAINTS: refuse unsafe requests and never reveal credentials or secrets.\n6. REPORT_ENVIRONMENT_FAILURES: distinguish timeouts and unavailable dependencies from model errors.",
+        "patchReason": "apply only remediation directives observed in training loss gradients",
         "trainScore": 0,
-        "optimizationScore": 1,
+        "innerTrainScore": 1,
         "accepted": true,
         "scoreDelta": 1,
         "reason": "candidate score gain satisfies acceptance policy"
@@ -1026,7 +1080,7 @@
         "name": "calls_budget",
         "passed": true,
         "observed": 0,
-        "threshold": 162,
+        "threshold": 165,
         "operator": "\u003c=",
         "detail": "usage must remain within budget"
       },
@@ -1034,7 +1088,7 @@
         "name": "tokens_budget",
         "passed": true,
         "observed": 0,
-        "threshold": 100000,
+        "threshold": 200000,
         "operator": "\u003c=",
         "detail": "usage must remain within budget"
       },

@@ -32,9 +32,10 @@ func TestAtomicWriteReplacesCompleteFile(t *testing.T) {
 func TestRenderMarkdownIncludesDecisionEvidence(t *testing.T) {
 	report := &optimizationReport{
 		Mode: "fake", Seed: 7,
-		Model:      modelAudit{Provider: "deterministic", Name: "fake"},
-		Gate:       GateResult{Accepted: false, Checks: []GateCheck{{Name: "minimum_score_gain", Passed: false}}},
-		Comparison: Comparison{PassK: 3},
+		EvaluationModel: modelAudit{Provider: "deterministic", Name: "fake"},
+		OptimizerModel:  modelAudit{Provider: "deterministic", Name: "fake-optimizer"},
+		Gate:            GateResult{Accepted: false, Checks: []GateCheck{{Name: "minimum_score_gain", Passed: false}}},
+		Comparison:      Comparison{PassK: 3},
 		AttributionSummary: attributionAudit{
 			TrainBaseline: map[FailureCategory]int{FailureCategoryPrompt: 2},
 		},
@@ -48,8 +49,9 @@ func TestRenderMarkdownIncludesDecisionEvidence(t *testing.T) {
 func TestRenderMarkdownEscapesUntrustedContent(t *testing.T) {
 	report := &optimizationReport{
 		Mode: "fake`mode", Seed: 7,
-		Model: modelAudit{Provider: "provider", Name: "model`name"},
-		Gate:  GateResult{Checks: []GateCheck{{Name: "check|name\nspoof", Operator: ">="}}},
+		EvaluationModel: modelAudit{Provider: "provider", Name: "model`name"},
+		OptimizerModel:  modelAudit{Provider: "provider", Name: "optimizer`name"},
+		Gate:            GateResult{Checks: []GateCheck{{Name: "check|name\nspoof", Operator: ">="}}},
 		Comparison: Comparison{PassK: 5, Deltas: []CaseDelta{{
 			ID: "case|name\n## injected",
 		}}},

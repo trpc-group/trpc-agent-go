@@ -11,8 +11,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -115,6 +119,67 @@ func TestRunPipelineRejectsUnknownMode(t *testing.T) {
 	assert.ErrorContains(t, err, "unsupported mode")
 }
 
+func TestRunPipelineLiveOptimizerFailsClosedWithAuditReport(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"test-response",
+			"object":"chat.completion",
+			"created":1,
+			"model":"test-model",
+			"choices":[{
+				"index":0,
+				"message":{"role":"assistant","content":"not valid optimizer json"},
+				"finish_reason":"stop"
+			}],
+			"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}
+		}`))
+	}))
+	defer server.Close()
+
+	dataDir, err := filepath.Abs("data")
+	require.NoError(t, err)
+	configData, err := os.ReadFile(filepath.Join(dataDir, "config.json"))
+	require.NoError(t, err)
+	var cfg pipelineConfig
+	require.NoError(t, json.Unmarshal(configData, &cfg))
+	cfg.PromptFile = filepath.Join(dataDir, "prompts", "baseline_prompt.md")
+	cfg.TrainEvalSet = filepath.Join(dataDir, "train.evalset.json")
+	cfg.ValidationEvalSet = filepath.Join(dataDir, "validation.evalset.json")
+	cfg.MetricsFile = filepath.Join(dataDir, "metrics.json")
+	cfg.PromptIterFile = filepath.Join(dataDir, "promptiter.json")
+	cfg.OutputDir = filepath.Join(t.TempDir(), "output")
+	cfg.Live.Model = "test-model"
+	cfg.Live.BaseURL = server.URL
+	cfg.Live.APIKeyEnv = "PROMPTITER_TEST_API_KEY"
+	cfg.Live.MaxRetries = 0
+	cfg.Live.Optimizer.Model = ""
+	cfg.Live.Optimizer.BaseURL = ""
+	cfg.Live.Optimizer.MaxRetries = 0
+	configData, err = json.Marshal(cfg)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(configPath, configData, 0o600))
+	t.Setenv(cfg.Live.APIKeyEnv, "test-key")
+
+	err = runPipeline(context.Background(), configPath, modeLive)
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "run PromptIter")
+	report := loadReportForTest(
+		t,
+		filepath.Join(cfg.OutputDir, "optimization_report.json"),
+	)
+	assert.Equal(t, pipelineStatusFailed, report.Status)
+	assert.Equal(t, candidateSourceLiveLLM, report.CandidateSource)
+	assert.False(t, report.PromptIter.Completed)
+	assert.Equal(t, strings.TrimSpace(string(mustReadFile(t, cfg.PromptFile))), report.SelectedPrompt)
+	assert.Contains(t, report.Gate.FailedChecks, "optimizer_completed")
+	assert.Equal(t, 1, report.Resources.Optimizer.Usage.Calls)
+	assert.Greater(t, calls.Load(), int32(1))
+}
+
 func TestRunPipelineRejectsUndersizedCallBudgetBeforeEvaluation(t *testing.T) {
 	dataDir, err := filepath.Abs("data")
 	require.NoError(t, err)
@@ -128,15 +193,22 @@ func TestRunPipelineRejectsUndersizedCallBudgetBeforeEvaluation(t *testing.T) {
 	cfg.MetricsFile = filepath.Join(dataDir, "metrics.json")
 	cfg.PromptIterFile = filepath.Join(dataDir, "promptiter.json")
 	cfg.OutputDir = filepath.Join(t.TempDir(), "must-not-be-created")
-	cfg.Gate.MaxCalls = 161
+	cfg.Gate.MaxCalls = 164
 	configData, err = json.Marshal(cfg)
 	require.NoError(t, err)
 	configPath := filepath.Join(t.TempDir(), "config.json")
 	require.NoError(t, os.WriteFile(configPath, configData, 0o600))
 
 	err = runPipeline(context.Background(), configPath, modeFake)
-	assert.ErrorContains(t, err, "cannot cover 162 required live calls")
+	assert.ErrorContains(t, err, "cannot cover 165 required live calls")
 	assert.NoDirExists(t, cfg.OutputDir)
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
 }
 
 func loadReportForTest(t *testing.T, path string) optimizationReport {

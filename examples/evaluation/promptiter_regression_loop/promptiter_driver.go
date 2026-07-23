@@ -32,6 +32,9 @@ import (
 const (
 	regressionNodeID = "regression-writer"
 	qualityMetric    = "quality"
+
+	candidateSourceDeterministic = "deterministic"
+	candidateSourceLiveLLM       = "live_llm"
 )
 
 var directiveInstructions = []struct {
@@ -48,19 +51,25 @@ var directiveInstructions = []struct {
 
 type promptIterAudit struct {
 	SurfaceID       string            `json:"surfaceId"`
+	Source          string            `json:"source"`
+	Completed       bool              `json:"completed"`
+	Error           string            `json:"error,omitempty"`
+	LatencyMillis   int64             `json:"latencyMillis"`
+	Usage           Usage             `json:"usage"`
 	BaselinePrompt  string            `json:"baselinePrompt"`
-	CandidatePrompt string            `json:"candidatePrompt"`
+	CandidatePrompt string            `json:"candidatePrompt,omitempty"`
 	Rounds          []promptIterRound `json:"rounds"`
 }
 
 type promptIterRound struct {
-	Round             int     `json:"round"`
-	CandidatePrompt   string  `json:"candidatePrompt"`
-	TrainScore        float64 `json:"trainScore"`
-	OptimizationScore float64 `json:"optimizationScore"`
-	Accepted          bool    `json:"accepted"`
-	ScoreDelta        float64 `json:"scoreDelta"`
-	Reason            string  `json:"reason"`
+	Round           int     `json:"round"`
+	CandidatePrompt string  `json:"candidatePrompt"`
+	PatchReason     string  `json:"patchReason"`
+	TrainScore      float64 `json:"trainScore"`
+	InnerTrainScore float64 `json:"innerTrainScore"`
+	Accepted        bool    `json:"accepted"`
+	ScoreDelta      float64 `json:"scoreDelta"`
+	Reason          string  `json:"reason"`
 }
 
 func runDeterministicPromptIter(
@@ -68,12 +77,55 @@ func runDeterministicPromptIter(
 	cfg *loadedConfig,
 ) (string, promptIterAudit, error) {
 	baseline := strings.TrimSpace(cfg.Prompt)
+	return runPromptIter(
+		ctx,
+		cfg,
+		newDeterministicOptimizer(baseline),
+		candidateSourceDeterministic,
+		nil,
+	)
+}
+
+type promptOptimizer interface {
+	optimizer.Optimizer
+	currentPrompt() string
+}
+
+func runPromptIter(
+	ctx context.Context,
+	cfg *loadedConfig,
+	optimizerStage promptOptimizer,
+	source string,
+	usageSnapshot func() Usage,
+) (candidate string, audit promptIterAudit, runErr error) {
+	started := time.Now()
+	baseline := strings.TrimSpace(cfg.Prompt)
+	audit = promptIterAudit{
+		Source:         source,
+		BaselinePrompt: baseline,
+	}
+	defer func() {
+		audit.LatencyMillis = time.Since(started).Milliseconds()
+	}()
+	if usageSnapshot != nil {
+		defer func() {
+			audit.Usage = usageSnapshot()
+		}()
+	}
 	if baseline == "" {
-		return "", promptIterAudit{}, errors.New("baseline prompt is empty")
+		audit.Error = "baseline prompt is empty"
+		return "", audit, errors.New(audit.Error)
 	}
 	surfaceID := astructure.SurfaceID(regressionNodeID, astructure.SurfaceTypeInstruction)
+	audit.SurfaceID = surfaceID
 	if cfg.PromptIter.Target != surfaceID {
-		return "", promptIterAudit{}, fmt.Errorf("PromptIter target %q does not match exported surface %q", cfg.PromptIter.Target, surfaceID)
+		err := fmt.Errorf(
+			"PromptIter target %q does not match exported surface %q",
+			cfg.PromptIter.Target,
+			surfaceID,
+		)
+		audit.Error = err.Error()
+		return "", audit, err
 	}
 	structure := &astructure.Snapshot{
 		StructureID: "promptiter-regression-loop-v1",
@@ -90,7 +142,6 @@ func runDeterministicPromptIter(
 			Value:     astructure.SurfaceValue{Text: stringPointer(baseline)},
 		}},
 	}
-	optimizerStage := newDeterministicOptimizer(baseline)
 	evaluator := &deterministicAgentEvaluator{
 		surfaceID:     surfaceID,
 		evalSetID:     cfg.Train.EvalSetID,
@@ -106,7 +157,9 @@ func runDeterministicPromptIter(
 		promptiterengine.WithOptimizer(optimizerStage),
 	)
 	if err != nil {
-		return "", promptIterAudit{}, fmt.Errorf("create PromptIter engine: %w", err)
+		err = fmt.Errorf("create PromptIter engine: %w", err)
+		audit.Error = err.Error()
+		return "", audit, err
 	}
 	defer evaluator.Close()
 	result, err := engine.Run(ctx, &promptiterengine.RunRequest{
@@ -118,20 +171,21 @@ func runDeterministicPromptIter(
 		TargetSurfaceIDs: []string{surfaceID},
 	})
 	if err != nil {
-		return "", promptIterAudit{}, fmt.Errorf("run PromptIter engine: %w", err)
-	}
-	audit := promptIterAudit{
-		SurfaceID:      surfaceID,
-		BaselinePrompt: baseline,
+		err = fmt.Errorf("run PromptIter engine: %w", err)
+		audit.Error = err.Error()
+		return "", audit, err
 	}
 	for _, round := range result.Rounds {
 		roundAudit := promptIterRound{Round: round.Round}
 		roundAudit.CandidatePrompt = profileInstruction(round.OutputProfile, surfaceID)
+		if round.Patches != nil && len(round.Patches.Patches) > 0 {
+			roundAudit.PatchReason = round.Patches.Patches[0].Reason
+		}
 		if round.Train != nil {
 			roundAudit.TrainScore = round.Train.OverallScore
 		}
 		if round.Validation != nil {
-			roundAudit.OptimizationScore = round.Validation.OverallScore
+			roundAudit.InnerTrainScore = round.Validation.OverallScore
 		}
 		if round.Acceptance != nil {
 			roundAudit.Accepted = round.Acceptance.Accepted
@@ -140,13 +194,16 @@ func runDeterministicPromptIter(
 		}
 		audit.Rounds = append(audit.Rounds, roundAudit)
 	}
-	candidate := profileInstruction(result.AcceptedProfile, surfaceID)
+	candidate = profileInstruction(result.AcceptedProfile, surfaceID)
 	if candidate == "" && len(result.Rounds) > 0 {
 		candidate = profileInstruction(result.Rounds[len(result.Rounds)-1].OutputProfile, surfaceID)
 	}
 	if candidate == "" {
-		return "", audit, errors.New("PromptIter returned no candidate instruction")
+		err := errors.New("PromptIter returned no candidate instruction")
+		audit.Error = err.Error()
+		return "", audit, err
 	}
+	audit.Completed = true
 	audit.CandidatePrompt = candidate
 	return candidate, audit, nil
 }

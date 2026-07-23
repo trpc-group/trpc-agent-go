@@ -11,8 +11,8 @@
     "passK": 3,
     "bootstrapSeed": 20260717,
     "bootstrapRounds": 5000,
-    "maxCalls": 162,
-    "maxTokens": 100000,
+    "maxCalls": 165,
+    "maxTokens": 200000,
     "maxCostCNY": 20.0
   },
   "live": {
@@ -22,6 +22,19 @@
     "timeoutSeconds": 45,
     "maxRetries": 2,
     "inputCNYPerMillion": 1.0,
-    "outputCNYPerMillion": 2.0
+    "outputCNYPerMillion": 2.0,
+    "optimizer": {
+      "model": "",
+      "baseURL": "",
+      "temperature": 0.0,
+      "maxOutputTokens": 1024,
+      "timeoutSeconds": 45,
+      "maxRetries": 2,
+      "budget": {
+        "maxCalls": 3,
+        "maxTokens": 16384,
+        "maxCostCNY": 1.0
+      }
+    }
   }
 }

@@ -52,13 +52,14 @@ func (m *scriptedModel) Info() model.Info { return model.Info{Name: "scripted"} 
 
 func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 	client := &scriptedModel{failures: 1}
+	gate := gateFileConfig{MaxCalls: 3, MaxTokens: 1000, MaxCostCNY: 1}
 	generator := &liveGenerator{
 		model: client,
 		cfg: liveConfig{
 			TimeoutSeconds: 1, MaxRetries: 1,
 			InputCNYPerMillion: 1, OutputCNYPerMillion: 2,
 		},
-		gate: gateFileConfig{MaxCalls: 3, MaxTokens: 1000, MaxCostCNY: 1},
+		budget: newLiveBudget(gate, optimizerBudgetConfig{}),
 	}
 	result, err := generator.Generate(context.Background(), "prompt", "input")
 	require.NoError(t, err)
@@ -71,9 +72,9 @@ func TestLiveGeneratorCountsRetriesAndUsage(t *testing.T) {
 func TestLiveGeneratorStopsAtCallBudget(t *testing.T) {
 	client := &scriptedModel{}
 	generator := &liveGenerator{
-		model: client,
-		cfg:   liveConfig{TimeoutSeconds: 1},
-		gate:  gateFileConfig{MaxCalls: 1},
+		model:  client,
+		cfg:    liveConfig{TimeoutSeconds: 1},
+		budget: newLiveBudget(gateFileConfig{MaxCalls: 1}, optimizerBudgetConfig{}),
 	}
 	_, err := generator.Generate(context.Background(), "prompt", "input")
 	require.NoError(t, err)
@@ -84,9 +85,9 @@ func TestLiveGeneratorStopsAtCallBudget(t *testing.T) {
 func TestLiveGeneratorDoesNotRetryAuthenticationFailure(t *testing.T) {
 	client := &scriptedModel{err: errors.New("401 Unauthorized: authentication error")}
 	generator := &liveGenerator{
-		model: client,
-		cfg:   liveConfig{TimeoutSeconds: 1, MaxRetries: 3},
-		gate:  gateFileConfig{MaxCalls: 10},
+		model:  client,
+		cfg:    liveConfig{TimeoutSeconds: 1, MaxRetries: 3},
+		budget: newLiveBudget(gateFileConfig{MaxCalls: 10}, optimizerBudgetConfig{}),
 	}
 	_, err := generator.Generate(context.Background(), "prompt", "input")
 	assert.ErrorContains(t, err, "non-retryable model error")
@@ -102,7 +103,10 @@ func TestLiveGeneratorReservesBudgetBeforeCalling(t *testing.T) {
 			InputCNYPerMillion:  1,
 			OutputCNYPerMillion: 2,
 		},
-		gate: gateFileConfig{MaxCalls: 10, MaxTokens: 10, MaxCostCNY: 20},
+		budget: newLiveBudget(
+			gateFileConfig{MaxCalls: 10, MaxTokens: 10, MaxCostCNY: 20},
+			optimizerBudgetConfig{},
+		),
 	}
 	_, err := generator.Generate(context.Background(), "prompt", "input")
 	assert.ErrorContains(t, err, "cannot reserve")
@@ -145,4 +149,35 @@ func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 			assert.Equal(t, test.wantCalls, calls.Load())
 		})
 	}
+}
+
+func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
+	client := &scriptedModel{failures: 1}
+	budget := newLiveBudget(
+		gateFileConfig{MaxCalls: 10, MaxTokens: 10000, MaxCostCNY: 10},
+		optimizerBudgetConfig{MaxCalls: 3, MaxTokens: 10000, MaxCostCNY: 1},
+	)
+	retrying := &budgetedRetryModel{
+		model:               client,
+		timeoutSeconds:      1,
+		maxRetries:          1,
+		inputCNYPerMillion:  1,
+		outputCNYPerMillion: 2,
+		budget:              budget,
+	}
+	maxTokens := 32
+	responses, err := retrying.GenerateContent(context.Background(), &model.Request{
+		Messages:         []model.Message{model.NewUserMessage("optimize")},
+		GenerationConfig: model.GenerationConfig{MaxTokens: &maxTokens},
+	})
+	require.NoError(t, err)
+	for range responses {
+	}
+
+	optimizerUsage := budget.snapshot(budgetStageOptimizer)
+	assert.Equal(t, 2, client.calls)
+	assert.Equal(t, 2, optimizerUsage.Calls)
+	assert.Equal(t, 10, optimizerUsage.InputTokens)
+	assert.Equal(t, 2, optimizerUsage.OutputTokens)
+	assert.Equal(t, optimizerUsage, budget.snapshot(""))
 }
