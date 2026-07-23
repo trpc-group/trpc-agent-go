@@ -27,6 +27,8 @@ const (
 	StepAddMemory          = "add_memory"
 	StepUpdateMemory       = "update_memory"
 	StepDeleteMemory       = "delete_memory"
+	StepDeleteAppState     = "delete_app_state"
+	StepDeleteUserState    = "delete_user_state"
 	StepCreateSummary      = "create_summary"
 	StepAppendTrack        = "append_track"
 	StepConcurrentEvents   = "concurrent_events"
@@ -39,6 +41,8 @@ var validStepTypes = map[string]bool{
 	StepUpdateAppState:     true,
 	StepUpdateUserState:    true,
 	StepUpdateSessionState: true,
+	StepDeleteAppState:     true,
+	StepDeleteUserState:    true,
 	StepAddMemory:          true,
 	StepUpdateMemory:       true,
 	StepDeleteMemory:       true,
@@ -239,6 +243,14 @@ func validateSteps(step ReplayStep, index int) error {
 	case StepAppendEvent:
 		if step.Event == nil {
 			return fmt.Errorf("step %d (%s): event is required", index, step.Type)
+		}
+	case StepUpdateAppState, StepUpdateUserState, StepUpdateSessionState:
+		if step.State == nil || len(step.State) == 0 {
+			return fmt.Errorf("step %d (%s): state is required", index, step.Type)
+		}
+	case StepDeleteAppState, StepDeleteUserState:
+		if step.State == nil || len(step.State) == 0 {
+			return fmt.Errorf("step %d (%s): state is required (keys to delete)", index, step.Type)
 		}
 	case StepAddMemory, StepUpdateMemory, StepDeleteMemory:
 		if step.Memory == nil {

@@ -33,6 +33,14 @@
       "type": "update_session_state",
       "state": {"step": 2, "context": "completed"}
     },
+    {
+      "type": "delete_app_state",
+      "state": {"version": null}
+    },
+    {
+      "type": "delete_user_state",
+      "state": {"last_active": null}
+    },
     {"type": "get_session"}
   ],
   "verify": {

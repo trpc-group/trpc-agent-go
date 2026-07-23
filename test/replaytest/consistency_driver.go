@@ -25,7 +25,7 @@ import (
 
 // faultSessionService wraps a session.Service to inject transient
 // faults for error-recovery testing.  The driver sets nextFault before
-// each step; the wrapper consumes it on the next AppendEvent call and
+// each step; the wrapper consumes it on the next method call and
 // then clears it so subsequent calls proceed normally.
 //
 // This wrapper is NOT safe for concurrent use.  It is only used for
@@ -33,6 +33,24 @@ import (
 type faultSessionService struct {
 	session.Service
 	nextFault *FaultConfig
+}
+
+func (s *faultSessionService) CreateSession(
+	ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option,
+) (*session.Session, error) {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return nil, fmt.Errorf("fault injected: fail before CreateSession")
+	}
+	sess, err := s.Service.CreateSession(ctx, key, state, opts...)
+	if err != nil {
+		return sess, err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return sess, fmt.Errorf("fault injected: fail after CreateSession")
+	}
+	return sess, nil
 }
 
 func (s *faultSessionService) AppendEvent(
@@ -49,6 +67,168 @@ func (s *faultSessionService) AppendEvent(
 	}
 	if cfg != nil && cfg.FailAfter {
 		return fmt.Errorf("fault injected: fail after AppendEvent")
+	}
+	return nil
+}
+
+func (s *faultSessionService) UpdateAppState(
+	ctx context.Context, appName string, state session.StateMap,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before UpdateAppState")
+	}
+	err := s.Service.UpdateAppState(ctx, appName, state)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after UpdateAppState")
+	}
+	return nil
+}
+
+func (s *faultSessionService) UpdateUserState(
+	ctx context.Context, userKey session.UserKey, state session.StateMap,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before UpdateUserState")
+	}
+	err := s.Service.UpdateUserState(ctx, userKey, state)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after UpdateUserState")
+	}
+	return nil
+}
+
+func (s *faultSessionService) UpdateSessionState(
+	ctx context.Context, key session.Key, state session.StateMap,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before UpdateSessionState")
+	}
+	err := s.Service.UpdateSessionState(ctx, key, state)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after UpdateSessionState")
+	}
+	return nil
+}
+
+func (s *faultSessionService) CreateSessionSummary(
+	ctx context.Context, sess *session.Session, filterKey string, force bool,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before CreateSessionSummary")
+	}
+	err := s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after CreateSessionSummary")
+	}
+	return nil
+}
+
+// faultTrackService wraps a session.TrackService to inject transient
+// faults for error-recovery testing.  It follows the same nextFault
+// pattern as faultSessionService.
+type faultTrackService struct {
+	session.TrackService
+	nextFault *FaultConfig
+}
+
+func (s *faultTrackService) AppendTrackEvent(
+	ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before AppendTrackEvent")
+	}
+	err := s.TrackService.AppendTrackEvent(ctx, sess, event, opts...)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after AppendTrackEvent")
+	}
+	return nil
+}
+
+// faultMemoryService wraps a memory.Service to inject transient
+// faults for error-recovery testing.  It follows the same nextFault
+// pattern as faultSessionService.
+type faultMemoryService struct {
+	memory.Service
+	nextFault *FaultConfig
+}
+
+func (s *faultMemoryService) AddMemory(
+	ctx context.Context, userKey memory.UserKey, mem string,
+	topics []string, opts ...memory.AddOption,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before AddMemory")
+	}
+	err := s.Service.AddMemory(ctx, userKey, mem, topics, opts...)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after AddMemory")
+	}
+	return nil
+}
+
+func (s *faultMemoryService) UpdateMemory(
+	ctx context.Context, memoryKey memory.Key, memory string,
+	topics []string, opts ...memory.UpdateOption,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before UpdateMemory")
+	}
+	err := s.Service.UpdateMemory(ctx, memoryKey, memory, topics, opts...)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after UpdateMemory")
+	}
+	return nil
+}
+
+func (s *faultMemoryService) DeleteMemory(
+	ctx context.Context, memoryKey memory.Key,
+) error {
+	cfg := s.nextFault
+	s.nextFault = nil
+	if cfg != nil && cfg.FailBefore {
+		return fmt.Errorf("fault injected: fail before DeleteMemory")
+	}
+	err := s.Service.DeleteMemory(ctx, memoryKey)
+	if err != nil {
+		return err
+	}
+	if cfg != nil && cfg.FailAfter {
+		return fmt.Errorf("fault injected: fail after DeleteMemory")
 	}
 	return nil
 }
@@ -77,11 +257,19 @@ func RunReplayCase(
 	}
 
 	// Scan steps for fault-injection configs. If any step uses faults,
-	// wrap the backend SessionService so faults fire transparently
-	// during AppendEvent calls.
+	// wrap the backend services so faults fire transparently during the
+	// targeted operation.  All three wrappers share independent
+	// nextFault pointers; the driver sets the relevant one before each
+	// step.
 	if hasFaults(rc.Steps) {
 		backend.SessionService = &faultSessionService{
 			Service: backend.SessionService,
+		}
+		backend.TrackService = &faultTrackService{
+			TrackService: backend.TrackService,
+		}
+		backend.MemoryService = &faultMemoryService{
+			Service: backend.MemoryService,
 		}
 	}
 
@@ -97,6 +285,11 @@ func RunReplayCase(
 	for _, step := range rc.Steps {
 		switch step.Type {
 		case StepCreateSession:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			sess, err := backend.SessionService.CreateSession(
 				ctx, key, stateMapFromJSON(step.State),
 			)
@@ -130,40 +323,118 @@ func RunReplayCase(
 			}
 
 		case StepUpdateAppState:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			if err := backend.SessionService.UpdateAppState(
 				ctx, key.AppName, stateMapFromJSON(step.State),
 			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("update app state: %v", err)
 			}
 
 		case StepUpdateUserState:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			uk := session.UserKey{AppName: key.AppName, UserID: key.UserID}
 			if err := backend.SessionService.UpdateUserState(
 				ctx, uk, stateMapFromJSON(step.State),
 			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("update user state: %v", err)
 			}
 
 		case StepUpdateSessionState:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			if err := backend.SessionService.UpdateSessionState(
 				ctx, key, stateMapFromJSON(step.State),
 			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("update session state: %v", err)
 			}
 
+		case StepDeleteAppState:
+			for k := range step.State {
+				if err := backend.SessionService.DeleteAppState(
+					ctx, key.AppName, k,
+				); err != nil {
+					t.Fatalf("delete app state key %q: %v", k, err)
+				}
+			}
+
+		case StepDeleteUserState:
+			uk := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+			for k := range step.State {
+				if err := backend.SessionService.DeleteUserState(
+					ctx, uk, k,
+				); err != nil {
+					t.Fatalf("delete user state key %q: %v", k, err)
+				}
+			}
+
 		case StepAddMemory, StepUpdateMemory, StepDeleteMemory:
-			applyMemoryOp(t, ctx, backend.MemoryService, memKey, aliases, step.Memory)
+			if step.Fault != nil {
+				if fw, ok := backend.MemoryService.(*faultMemoryService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
+			if err := applyMemoryOp(
+				ctx, backend.MemoryService, memKey, aliases, step.Memory,
+			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
+				t.Fatalf("memory op step %d: %v", stepIdx, err)
+			}
 
 		case StepCreateSummary:
+			if step.Fault != nil {
+				if fw, ok := backend.SessionService.(*faultSessionService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			sess := mustGetSession(t, ctx, backend, key)
 			backend.Summarizer.SetText(step.Summary.Text)
 			if err := backend.SessionService.CreateSessionSummary(
 				ctx, sess, step.Summary.FilterKey, step.Summary.Force,
 			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("create session summary: %v", err)
 			}
 
 		case StepAppendTrack:
+			if step.Fault != nil {
+				if fw, ok := backend.TrackService.(*faultTrackService); ok {
+					fw.nextFault = step.Fault
+				}
+			}
 			sess := mustGetSession(t, ctx, backend, key)
 			payload, err := json.Marshal(step.Track.Payload)
 			if err != nil {
@@ -176,6 +447,11 @@ func RunReplayCase(
 					Timestamp: baseTime.Add(time.Duration(stepIdx) * time.Second),
 				},
 			); err != nil {
+				if step.Fault != nil {
+					t.Logf("step %d: expected fault: %v", stepIdx, err)
+					stepIdx++
+					continue
+				}
 				t.Fatalf("append track event: %v", err)
 			}
 
@@ -307,10 +583,12 @@ func stateMapFromJSON(raw map[string]any) session.StateMap {
 	return out
 }
 
+// applyMemoryOp executes a single memory operation (add / update / delete).
+// It returns an error on failure so the caller can handle fault tolerance.
 func applyMemoryOp(
-	t testing.TB, ctx context.Context, svc memory.Service,
+	ctx context.Context, svc memory.Service,
 	userKey memory.UserKey, aliases map[string]string, a *actionMemory,
-) {
+) error {
 	switch a.Op {
 	case "add":
 		var opts []memory.AddOption
@@ -318,7 +596,7 @@ func applyMemoryOp(
 			opts = append(opts, memory.WithMetadata(buildMemoryMeta(a.Meta)))
 		}
 		if err := svc.AddMemory(ctx, userKey, a.Content, copyStrings(a.Topics), opts...); err != nil {
-			t.Fatalf("add memory %q: %v", a.Content, err)
+			return fmt.Errorf("add memory %q: %w", a.Content, err)
 		}
 		if a.ResultAlias != "" {
 			entries, _ := svc.ReadMemories(ctx, userKey, 0)
@@ -332,7 +610,7 @@ func applyMemoryOp(
 	case "update":
 		memID, ok := aliases[a.Ref]
 		if !ok {
-			t.Fatalf("memory alias %q not found", a.Ref)
+			return fmt.Errorf("memory alias %q not found", a.Ref)
 		}
 		var opts []memory.UpdateOption
 		if a.Meta != nil {
@@ -343,7 +621,7 @@ func applyMemoryOp(
 		if err := svc.UpdateMemory(ctx, memory.Key{
 			AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: memID,
 		}, a.Content, copyStrings(a.Topics), opts...); err != nil {
-			t.Fatalf("update memory %q: %v", a.Content, err)
+			return fmt.Errorf("update memory %q: %w", a.Content, err)
 		}
 		if a.ResultAlias != "" {
 			aliases[a.ResultAlias] = result.MemoryID
@@ -351,16 +629,17 @@ func applyMemoryOp(
 	case "delete":
 		memID, ok := aliases[a.Ref]
 		if !ok {
-			t.Fatalf("memory alias %q not found", a.Ref)
+			return fmt.Errorf("memory alias %q not found", a.Ref)
 		}
 		if err := svc.DeleteMemory(ctx, memory.Key{
 			AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: memID,
 		}); err != nil {
-			t.Fatalf("delete memory %q: %v", a.Content, err)
+			return fmt.Errorf("delete memory %q: %w", a.Content, err)
 		}
 	default:
-		t.Fatalf("unknown memory op %q", a.Op)
+		return fmt.Errorf("unknown memory op %q", a.Op)
 	}
+	return nil
 }
 
 func buildMemoryMeta(m *memoryMeta) *memory.Metadata {

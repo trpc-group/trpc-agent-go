@@ -1,6 +1,6 @@
 {
   "name": "error_recovery",
-  "description": "异常恢复：通过 fault injection 模拟 AppendEvent 在提交前/提交后失败，重试相同操作，验证 fail_before 下不丢事件、fail_after 下事件已提交（后端无幂等去重时产生重复），两个后端行为一致",
+  "description": "异常恢复：通过 fault injection 模拟 Event/State/Memory/Summary/Track 写入失败后用相同操作重试，验证 fail_before 下数据不丢失、fail_after 下数据已提交，两个后端行为一致",
   "app_name": "replay-matrix",
   "user_id": "user-error-recovery",
   "session_id": "session-error-recovery",
@@ -63,10 +63,83 @@
       }
     },
     {
+      "type": "update_session_state",
+      "state": {"recovery_step": 1},
+      "fault": {
+        "fail_before": true
+      }
+    },
+    {
+      "type": "update_session_state",
+      "state": {"recovery_step": 1}
+    },
+    {
+      "type": "add_memory",
+      "memory": {
+        "op": "add",
+        "content": "用户关注故障恢复场景的完整性验证",
+        "topics": ["recovery", "testing"]
+      },
+      "fault": {
+        "fail_before": true
+      }
+    },
+    {
+      "type": "add_memory",
+      "memory": {
+        "op": "add",
+        "content": "用户关注故障恢复场景的完整性验证",
+        "topics": ["recovery", "testing"]
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "root",
+        "text": "故障恢复场景摘要：包含 fail_before 和 fail_after 两种注入模式的验证",
+        "force": false
+      },
+      "fault": {
+        "fail_before": true
+      }
+    },
+    {
+      "type": "create_summary",
+      "summary": {
+        "filter_key": "root",
+        "text": "故障恢复场景摘要：包含 fail_before 和 fail_after 两种注入模式的验证",
+        "force": false
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "recovery_check",
+        "payload": {
+          "phase": "verification",
+          "status": "completed"
+        }
+      },
+      "fault": {
+        "fail_before": true
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "recovery_check",
+        "payload": {
+          "phase": "verification",
+          "status": "completed"
+        }
+      }
+    },
+    {
       "type": "get_session"
     }
   ],
   "verify": {
-    "events_count": 3
+    "events_count": 3,
+    "no_duplicate_memories": true
   }
 }

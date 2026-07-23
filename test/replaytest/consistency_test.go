@@ -279,6 +279,14 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 	refSummary := RunReplayCase(t, ctx, backends[0], baseSummary).Snapshot
 	refTracks := RunReplayCase(t, ctx, backends[0], baseTracks).Snapshot
 
+	// Reference snapshots for the remaining 6 cases.
+	refMultiTurn := RunReplayCase(t, ctx, backends[0], findCase("multi_turn")).Snapshot
+	refToolCalls := RunReplayCase(t, ctx, backends[0], findCase("tool_calls")).Snapshot
+	refStateUpd := RunReplayCase(t, ctx, backends[0], findCase("state_updates")).Snapshot
+	refSummaryBase := RunReplayCase(t, ctx, backends[0], findCase("summary")).Snapshot
+	refConcurrent := RunReplayCase(t, ctx, backends[0], findCase("concurrent")).Snapshot
+	refErrRec := RunReplayCase(t, ctx, backends[0], findCase("error_recovery")).Snapshot
+
 	type injectedTest struct {
 		name    string
 		section string
@@ -359,6 +367,64 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 				for k := range s.Summaries {
 					delete(s.Summaries, k)
 					break
+				}
+			},
+		},
+		{
+			name: "multi_turn_event_shuffled", section: "events",
+			ref: refMultiTurn,
+			inject: func(s *ReplaySnapshot) {
+				if len(s.Events) >= 4 {
+					s.Events[1], s.Events[3] = s.Events[3], s.Events[1]
+				}
+			},
+		},
+		{
+			name: "tool_calls_missing_tool_response", section: "events",
+			ref: refToolCalls,
+			inject: func(s *ReplaySnapshot) {
+				// Delete the tool response event (index 2).
+				if len(s.Events) > 2 {
+					s.Events = append(s.Events[:2], s.Events[3:]...)
+				}
+			},
+		},
+		{
+			name: "state_deleted_key_present", section: "state",
+			ref: refStateUpd,
+			inject: func(s *ReplaySnapshot) {
+				s.State["orphan_key"] = "should-not-exist"
+			},
+		},
+		{
+			name: "summary_force_text_corrupted", section: "summary",
+			ref: refSummaryBase,
+			inject: func(s *ReplaySnapshot) {
+				if entry, ok := s.Summaries["chat"]; ok {
+					entry.Summary = "corrupted-force-summary"
+					s.Summaries["chat"] = entry
+				}
+			},
+		},
+		{
+			name: "concurrent_missing_event", section: "events",
+			ref: refConcurrent,
+			inject: func(s *ReplaySnapshot) {
+				if len(s.Events) > 1 {
+					s.Events = s.Events[:len(s.Events)-1]
+				}
+			},
+		},
+		{
+			name: "error_recovery_duplicate_event", section: "events",
+			ref: refErrRec,
+			inject: func(s *ReplaySnapshot) {
+				if len(s.Events) > 0 {
+					// Clone the first event so snapshot reports a duplicate.
+					dup, _ := json.Marshal(s.Events[0])
+					var cloned map[string]any
+					json.Unmarshal(dup, &cloned)
+					s.Events = append(s.Events, cloned)
 				}
 			},
 		},
@@ -577,6 +643,27 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			wantContain: "event is required",
 		},
 		{
+			name: "delete_app_state without state",
+			steps: []ReplayStep{
+				{Type: StepDeleteAppState, State: nil},
+			},
+			wantContain: "state is required",
+		},
+		{
+			name: "delete_user_state without state",
+			steps: []ReplayStep{
+				{Type: StepDeleteUserState, State: nil},
+			},
+			wantContain: "state is required",
+		},
+		{
+			name: "update_app_state without state",
+			steps: []ReplayStep{
+				{Type: StepUpdateAppState, State: nil},
+			},
+			wantContain: "state is required",
+		},
+		{
 			name: "nested concurrent valid (sanity check)",
 			steps: []ReplayStep{
 				{
@@ -619,6 +706,9 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			Steps: []ReplayStep{
 				{Type: StepCreateSession},
 				{Type: StepAppendEvent, Event: &actionEvent{Author: "user", Role: "user", Content: "hello"}},
+				{Type: StepUpdateAppState, State: map[string]any{"k": "v"}},
+				{Type: StepDeleteAppState, State: map[string]any{"k": nil}},
+				{Type: StepDeleteUserState, State: map[string]any{"k": nil}},
 				{Type: StepAddMemory, Memory: validAddMem},
 				{Type: StepUpdateMemory, Memory: validUpdateMem},
 				{Type: StepDeleteMemory, Memory: validDeleteMem},
