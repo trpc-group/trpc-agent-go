@@ -241,6 +241,63 @@ func buildValidationDelta(baseline, candidate *EvaluationSummary) (*ValidationDe
 	return delta, nil
 }
 
+func validateConfiguredMetrics(label string, result *promptiterengine.EvaluationResult, configuredMetrics []string) error {
+	if len(configuredMetrics) == 0 {
+		return nil
+	}
+	if result == nil {
+		return fmt.Errorf("%s result is nil", label)
+	}
+	required := make(map[string]struct{}, len(configuredMetrics))
+	for _, metricName := range configuredMetrics {
+		required[metricName] = struct{}{}
+	}
+	caseCount := 0
+	for _, evalSet := range result.EvalSets {
+		for _, evalCase := range evalSet.Cases {
+			caseCount++
+			seen := make(map[string]struct{}, len(configuredMetrics))
+			for _, metricResult := range evalCase.Metrics {
+				if _, ok := required[metricResult.MetricName]; !ok {
+					continue
+				}
+				if invalidConfiguredMetricStatus(metricResult.Status) {
+					return fmt.Errorf(
+						"%s case %q in eval set %q configured metric %q has invalid status %q",
+						label,
+						evalCase.EvalCaseID,
+						evalSet.EvalSetID,
+						metricResult.MetricName,
+						string(metricResult.Status),
+					)
+				}
+				seen[metricResult.MetricName] = struct{}{}
+			}
+			for _, metricName := range configuredMetrics {
+				if _, ok := seen[metricName]; !ok {
+					return fmt.Errorf(
+						"%s case %q in eval set %q missing configured metric %q",
+						label,
+						evalCase.EvalCaseID,
+						evalSet.EvalSetID,
+						metricName,
+					)
+				}
+			}
+		}
+	}
+	if caseCount == 0 {
+		return fmt.Errorf("%s has no validation cases", label)
+	}
+	return nil
+}
+
+func invalidConfiguredMetricStatus(value status.EvalStatus) bool {
+	return value == "" ||
+		value == status.EvalStatusUnknown ||
+		value == status.EvalStatusNotEvaluated
+}
+
 func buildGateReport(
 	baseline, candidate *EvaluationSummary,
 	delta *ValidationDelta,

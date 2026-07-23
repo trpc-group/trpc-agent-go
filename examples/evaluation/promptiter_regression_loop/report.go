@@ -25,46 +25,48 @@ import (
 var phase4Pending = []string{}
 
 type ReportContext struct {
-	Mode                      string
-	Seed                      int64
-	TargetSurfaceIDs          []string
-	PromptPath                string
-	PromptSHA256              string
-	ConfigPath                string
-	ConfigSHA256              string
-	ModelConfig               *ModelConfigSummary
-	PromptIterConfig          *PromptIterConfigSummary
-	FinalGate                 finalGateConfig
-	SampleReport              bool
-	LatencyMs                 int64
-	LatencyCheckSkippedReason string
-	ModelCallCount            int
+	Mode                        string
+	Seed                        int64
+	TargetSurfaceIDs            []string
+	ConfiguredValidationMetrics []string
+	PromptPath                  string
+	PromptSHA256                string
+	ConfigPath                  string
+	ConfigSHA256                string
+	ModelConfig                 *ModelConfigSummary
+	PromptIterConfig            *PromptIterConfigSummary
+	FinalGate                   finalGateConfig
+	SampleReport                bool
+	LatencyMs                   int64
+	LatencyCheckSkippedReason   string
+	ModelCallCount              int
 }
 
 type OptimizationReport struct {
-	Phase            string                   `json:"phase"`
-	Mode             string                   `json:"mode"`
-	SampleReport     bool                     `json:"sampleReport"`
-	Seed             int64                    `json:"seed"`
-	SingleRound      bool                     `json:"singleRound"`
-	TargetSurfaceIDs []string                 `json:"targetSurfaceIds"`
-	PromptPath       string                   `json:"promptPath"`
-	PromptSHA256     string                   `json:"promptSha256"`
-	ConfigPath       string                   `json:"configPath,omitempty"`
-	ConfigSHA256     string                   `json:"configSha256,omitempty"`
-	ModelConfig      *ModelConfigSummary      `json:"modelConfig,omitempty"`
-	PromptIterConfig *PromptIterConfigSummary `json:"promptIterConfig,omitempty"`
-	Baseline         ReportCandidate          `json:"baseline"`
-	Candidate        ReportCandidate          `json:"candidate"`
-	Rounds           []ReportRound            `json:"rounds"`
-	Delta            *ValidationDelta         `json:"delta"`
-	Gate             *GateReport              `json:"gate"`
-	Attribution      *ReportAttribution       `json:"attribution"`
-	TraceSmoke       TraceSmokeReport         `json:"traceSmoke"`
-	Cost             CostSummary              `json:"cost"`
-	LatencyMs        int64                    `json:"latencyMs"`
-	ModelCallCount   int                      `json:"modelCallCount"`
-	Pending          []string                 `json:"pending"`
+	Phase                       string                   `json:"phase"`
+	Mode                        string                   `json:"mode"`
+	SampleReport                bool                     `json:"sampleReport"`
+	Seed                        int64                    `json:"seed"`
+	SingleRound                 bool                     `json:"singleRound"`
+	TargetSurfaceIDs            []string                 `json:"targetSurfaceIds"`
+	ConfiguredValidationMetrics []string                 `json:"configuredValidationMetrics"`
+	PromptPath                  string                   `json:"promptPath"`
+	PromptSHA256                string                   `json:"promptSha256"`
+	ConfigPath                  string                   `json:"configPath,omitempty"`
+	ConfigSHA256                string                   `json:"configSha256,omitempty"`
+	ModelConfig                 *ModelConfigSummary      `json:"modelConfig,omitempty"`
+	PromptIterConfig            *PromptIterConfigSummary `json:"promptIterConfig,omitempty"`
+	Baseline                    ReportCandidate          `json:"baseline"`
+	Candidate                   ReportCandidate          `json:"candidate"`
+	Rounds                      []ReportRound            `json:"rounds"`
+	Delta                       *ValidationDelta         `json:"delta"`
+	Gate                        *GateReport              `json:"gate"`
+	Attribution                 *ReportAttribution       `json:"attribution"`
+	TraceSmoke                  TraceSmokeReport         `json:"traceSmoke"`
+	Cost                        CostSummary              `json:"cost"`
+	LatencyMs                   int64                    `json:"latencyMs"`
+	ModelCallCount              int                      `json:"modelCallCount"`
+	Pending                     []string                 `json:"pending"`
 }
 
 type TraceSmokeReport struct {
@@ -192,6 +194,12 @@ func newOptimizationReport(
 	} else {
 		effectiveCandidateTrain = baselineTrain
 	}
+	if err := validateConfiguredMetrics("baseline validation", result.BaselineValidation, ctx.ConfiguredValidationMetrics); err != nil {
+		return nil, err
+	}
+	if err := validateConfiguredMetrics("candidate validation", candidateValidationResult, ctx.ConfiguredValidationMetrics); err != nil {
+		return nil, err
+	}
 	baselineValidation := evaluationSummary(result.BaselineValidation)
 	candidateValidation := evaluationSummary(candidateValidationResult)
 	delta, err := buildValidationDelta(baselineValidation, candidateValidation)
@@ -217,18 +225,19 @@ func newOptimizationReport(
 		return nil, err
 	}
 	return &OptimizationReport{
-		Phase:            phaseVersion,
-		Mode:             ctx.Mode,
-		SampleReport:     ctx.SampleReport,
-		Seed:             ctx.Seed,
-		SingleRound:      len(result.Rounds) == 1,
-		TargetSurfaceIDs: append([]string(nil), ctx.TargetSurfaceIDs...),
-		PromptPath:       ctx.PromptPath,
-		PromptSHA256:     ctx.PromptSHA256,
-		ConfigPath:       ctx.ConfigPath,
-		ConfigSHA256:     ctx.ConfigSHA256,
-		ModelConfig:      ctx.ModelConfig,
-		PromptIterConfig: ctx.PromptIterConfig,
+		Phase:                       phaseVersion,
+		Mode:                        ctx.Mode,
+		SampleReport:                ctx.SampleReport,
+		Seed:                        ctx.Seed,
+		SingleRound:                 len(result.Rounds) == 1,
+		TargetSurfaceIDs:            append([]string(nil), ctx.TargetSurfaceIDs...),
+		ConfiguredValidationMetrics: append([]string{}, ctx.ConfiguredValidationMetrics...),
+		PromptPath:                  ctx.PromptPath,
+		PromptSHA256:                ctx.PromptSHA256,
+		ConfigPath:                  ctx.ConfigPath,
+		ConfigSHA256:                ctx.ConfigSHA256,
+		ModelConfig:                 ctx.ModelConfig,
+		PromptIterConfig:            ctx.PromptIterConfig,
 		Baseline: ReportCandidate{
 			// See buildRunRequest: result.Rounds[0].Train is the baseline train
 			// evaluation while InitialProfile remains nil for this example run.
@@ -261,16 +270,17 @@ func newTraceSmokeOptimizationReport(
 	ctx ReportContext,
 ) *OptimizationReport {
 	return &OptimizationReport{
-		Phase:            phaseVersion,
-		Mode:             ctx.Mode,
-		SampleReport:     ctx.SampleReport,
-		Seed:             ctx.Seed,
-		SingleRound:      false,
-		TargetSurfaceIDs: []string{},
-		ModelConfig:      ctx.ModelConfig,
-		Baseline:         ReportCandidate{},
-		Candidate:        ReportCandidate{},
-		Rounds:           []ReportRound{},
+		Phase:                       phaseVersion,
+		Mode:                        ctx.Mode,
+		SampleReport:                ctx.SampleReport,
+		Seed:                        ctx.Seed,
+		SingleRound:                 false,
+		TargetSurfaceIDs:            []string{},
+		ConfiguredValidationMetrics: append([]string{}, ctx.ConfiguredValidationMetrics...),
+		ModelConfig:                 ctx.ModelConfig,
+		Baseline:                    ReportCandidate{},
+		Candidate:                   ReportCandidate{},
+		Rounds:                      []ReportRound{},
 		TraceSmoke: TraceSmokeReport{
 			Enabled:                   true,
 			EvalSetID:                 traceSmokeEvalSetID,
@@ -548,6 +558,11 @@ func renderAuditSummaryMarkdown(buf *bytes.Buffer, report *OptimizationReport) {
 	if report.PromptSHA256 != "" {
 		fmt.Fprintf(buf, "- Baseline prompt SHA-256: `%s`\n", report.PromptSHA256)
 	}
+	if len(report.ConfiguredValidationMetrics) == 0 {
+		fmt.Fprintf(buf, "- Configured validation metrics: none\n")
+	} else {
+		fmt.Fprintf(buf, "- Configured validation metrics: %s\n", inlineCodeList(report.ConfiguredValidationMetrics))
+	}
 	if report.ConfigPath != "" {
 		fmt.Fprintf(buf, "- PromptIter config: `%s`\n", report.ConfigPath)
 		fmt.Fprintf(buf, "- PromptIter config SHA-256: `%s`\n", report.ConfigSHA256)
@@ -672,10 +687,62 @@ func renderFailureAttributionSection(buf *bytes.Buffer, title string, attributio
 	fmt.Fprintf(buf, "- Metric failure: `%d`\n\n", attribution.Summary.MetricFailure)
 	for _, failedCase := range attribution.PerFailedCase {
 		fmt.Fprintf(buf, "- `%s`: `%s`\n", failedCase.EvalCaseID, failedCase.Category)
+		renderFailedMetricEvidence(buf, failedCase.FailedMetrics)
+		renderEvidenceList(buf, failedCase.Evidence)
+		fmt.Fprintf(buf, "  - Terminal step: %s\n", terminalStepMarkdown(failedCase.TerminalStep))
+		fmt.Fprintf(buf, "  - Applied surfaces: %s\n", appliedSurfacesMarkdown(failedCase.AppliedSurfaceIDs))
 	}
 	if title != "" {
 		fmt.Fprintf(buf, "\n")
 	}
+}
+
+func renderFailedMetricEvidence(buf *bytes.Buffer, metrics []FailedMetricEvidence) {
+	if len(metrics) == 0 {
+		fmt.Fprintf(buf, "  - Failed metrics: none\n")
+		return
+	}
+	fmt.Fprintf(buf, "  - Failed metrics:\n")
+	for _, metric := range metrics {
+		statusValue := strings.TrimSpace(metric.Status)
+		if statusValue == "" {
+			statusValue = "unavailable"
+		}
+		reason := strings.TrimSpace(metric.Reason)
+		if reason == "" {
+			reason = "unavailable"
+		}
+		fmt.Fprintf(buf, "    - `%s` (score=%.2f, status=%s): %s\n", metric.MetricName, metric.Score, statusValue, reason)
+	}
+}
+
+func renderEvidenceList(buf *bytes.Buffer, evidence []string) {
+	if len(evidence) == 0 {
+		fmt.Fprintf(buf, "  - Evidence: none\n")
+		return
+	}
+	fmt.Fprintf(buf, "  - Evidence:\n")
+	for _, item := range evidence {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			item = "unavailable"
+		}
+		fmt.Fprintf(buf, "    - %s\n", item)
+	}
+}
+
+func terminalStepMarkdown(step *TraceStepSummary) string {
+	if step == nil || strings.TrimSpace(step.StepID) == "" {
+		return "unavailable"
+	}
+	return fmt.Sprintf("`%s`", step.StepID)
+}
+
+func appliedSurfacesMarkdown(surfaceIDs []string) string {
+	if len(surfaceIDs) == 0 {
+		return "none"
+	}
+	return inlineCodeList(surfaceIDs)
 }
 
 func scoreOf(summary *EvaluationSummary) float64 {

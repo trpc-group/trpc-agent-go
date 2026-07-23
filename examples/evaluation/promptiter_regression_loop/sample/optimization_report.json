@@ -7,6 +7,10 @@
   "targetSurfaceIds": [
     "candidate#tool.lookup_record"
   ],
+  "configuredValidationMetrics": [
+    "tool_trajectory_avg_score",
+    "final_response_avg_score"
+  ],
   "promptPath": "./config/baseline_prompt.txt",
   "promptSha256": "75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de",
   "configPath": "./config/promptiter.json",

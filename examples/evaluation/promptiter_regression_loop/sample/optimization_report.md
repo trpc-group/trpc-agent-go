@@ -8,6 +8,7 @@ Mode: `fake`
 - Sample report: `true`
 - Baseline prompt: `./config/baseline_prompt.txt`
 - Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`
+- Configured validation metrics: `tool_trajectory_avg_score`, `final_response_avg_score`
 - PromptIter config: `./config/promptiter.json`
 - PromptIter config SHA-256: `72c920d7cf8470c845a3dcca50b7bc4dea8ace772366ba59f71adedcb7bb714d`
 - Model: `phase4v2-fake-model` (deterministic=`true`, temperature=`0.0`, max tokens=`1024`, stream=`false`)
@@ -93,7 +94,23 @@ Final release outcome: rejected by the final gate because critical validation re
 - Metric failure: `0`
 
 - `train_delay_tr123`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
 - `train_gate_tr654`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
 
 ### Baseline validation
 
@@ -107,8 +124,32 @@ Final release outcome: rejected by the final gate because critical validation re
 - Metric failure: `0`
 
 - `validation_delay_tr456`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
 - `validation_gate_tr654`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
 - `validation_departure_tr123`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
 
 ### Candidate validation
 
@@ -122,3 +163,11 @@ Final release outcome: rejected by the final gate because critical validation re
 - Metric failure: `0`
 
 - `validation_status_tr789`: `route_error`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match
+  - Terminal step: `s2`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`

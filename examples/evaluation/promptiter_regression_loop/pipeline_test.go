@@ -9,6 +9,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -51,6 +52,7 @@ func TestRunFakePipelineEndToEnd(t *testing.T) {
 	require.Equal(t, phaseVersion, result.Report.Phase)
 	require.Empty(t, result.Report.Pending)
 	require.Equal(t, deterministicSeed, result.Report.Seed)
+	require.Equal(t, []string{"tool_trajectory_avg_score", "final_response_avg_score"}, result.Report.ConfiguredValidationMetrics)
 	require.NotEmpty(t, result.Report.ConfigPath)
 	require.NotEmpty(t, result.Report.ConfigSHA256)
 	require.Equal(t, fakeModelConfigSummary(), result.Report.ModelConfig)
@@ -122,6 +124,7 @@ func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	require.Equal(t, traceSmokeMode, result.Report.Mode)
 	require.True(t, result.Report.SampleReport)
 	require.Equal(t, deterministicSeed, result.Report.Seed)
+	require.Empty(t, result.Report.ConfiguredValidationMetrics)
 	require.Equal(t, fakeModelConfigSummary(), result.Report.ModelConfig)
 	require.Empty(t, result.Report.ConfigPath)
 	require.Empty(t, result.Report.ConfigSHA256)
@@ -215,6 +218,100 @@ func TestPromptReadHashAndNeutralDefaultPrompt(t *testing.T) {
 	require.True(t, slices.ContainsFunc(result.ModelObservations.Instructions, func(instruction string) bool {
 		return strings.Contains(instruction, "CUSTOM_TRACE_TOKEN")
 	}))
+}
+
+func TestReadConfiguredMetricNames(t *testing.T) {
+	t.Run("normal", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "evaluatorName": "tool_trajectory_avg_score",
+    "threshold": 1
+  },
+  {
+    "metricName": "final_response_avg_score",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1
+  }
+]`))
+		names, err := readConfiguredMetricNames(dataDir)
+		require.NoError(t, err)
+		require.Equal(t, []string{"tool_trajectory_avg_score", "final_response_avg_score"}, names)
+	})
+
+	t.Run("missing file", func(t *testing.T) {
+		_, err := readConfiguredMetricNames(t.TempDir())
+		require.ErrorContains(t, err, "read configured metrics")
+	})
+
+	t.Run("empty array", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "is empty")
+	})
+
+	t.Run("empty metric name", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[{"metricName": " "}]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "empty metricName")
+	})
+
+	t.Run("duplicate metric", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[
+  {"metricName": "tool_trajectory_avg_score"},
+  {"metricName": "tool_trajectory_avg_score"}
+]`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "duplicated")
+	})
+
+	t.Run("invalid json", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`[`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "decode configured metrics")
+	})
+
+	t.Run("non array", func(t *testing.T) {
+		dataDir := t.TempDir()
+		writeMetricsFile(t, dataDir, []byte(`{"metricName": "tool_trajectory_avg_score"}`))
+		_, err := readConfiguredMetricNames(dataDir)
+		require.ErrorContains(t, err, "decode configured metrics")
+	})
+}
+
+func TestRunFakePipelineFailsClosedWhenConfiguredMetricIsSkipped(t *testing.T) {
+	t.Setenv("OPENAI_API_KEY", "")
+	dataDir := t.TempDir()
+	copyDir(t, "./data", dataDir)
+	metricsPath := filepath.Join(dataDir, appName, sharedMetricFileName)
+	content, err := os.ReadFile(metricsPath)
+	require.NoError(t, err)
+	var metrics []map[string]any
+	require.NoError(t, json.Unmarshal(content, &metrics))
+	metrics = append(metrics, map[string]any{
+		"metricName":    "missing_configured_metric",
+		"evaluatorName": "missing_configured_metric",
+		"threshold":     1,
+	})
+	updated, err := json.MarshalIndent(metrics, "", "  ")
+	require.NoError(t, err)
+	updated = append(updated, '\n')
+	require.NoError(t, os.WriteFile(metricsPath, updated, 0o644))
+
+	_, err = runFakePipeline(context.Background(), RunConfig{
+		Mode:       fakeMode,
+		DataDir:    dataDir,
+		OutputDir:  t.TempDir(),
+		PromptPath: "./config/baseline_prompt.txt",
+		ConfigPath: "./config/promptiter.json",
+	})
+	require.ErrorContains(t, err, "missing configured metric")
+	require.ErrorContains(t, err, "missing_configured_metric")
 }
 
 func TestFakeModelIntentUsesOnlyUserMessagesAndToolDescription(t *testing.T) {
@@ -377,6 +474,7 @@ func TestReportSchema(t *testing.T) {
 	require.NotNil(t, report.Gate)
 	require.NotNil(t, report.Attribution)
 	require.NotEmpty(t, report.Rounds)
+	require.Equal(t, []string{"tool_trajectory_avg_score", "final_response_avg_score"}, report.ConfiguredValidationMetrics)
 	require.False(t, report.SampleReport)
 	require.NotNil(t, report.Rounds[0].Train)
 	require.NotNil(t, report.Rounds[0].Validation)
@@ -398,6 +496,7 @@ func TestReportSchema(t *testing.T) {
 	require.Equal(t, float64(deterministicSeed), decoded["seed"])
 	require.Contains(t, decoded, "sampleReport")
 	require.Equal(t, false, decoded["sampleReport"])
+	require.Contains(t, decoded, "configuredValidationMetrics")
 	require.Contains(t, decoded, "configPath")
 	require.Contains(t, decoded, "configSha256")
 	require.Contains(t, decoded, "modelConfig")
@@ -424,6 +523,7 @@ func TestReportSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), "- Baseline prompt: `./config/baseline_prompt.txt`")
 	require.Contains(t, string(markdown), "- Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`")
+	require.Contains(t, string(markdown), "- Configured validation metrics: `tool_trajectory_avg_score`, `final_response_avg_score`")
 	require.Contains(t, string(markdown), "- Sample report: `false`")
 	require.Contains(t, string(markdown), "- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`")
 	require.Contains(t, string(markdown), "- Critical case scope: `validation_status_tr789`")
@@ -554,6 +654,48 @@ func TestTraceSmokeMarkdownOmitsOptimizationDecision(t *testing.T) {
 	require.Contains(t, markdown, traceSmokeSkipReason)
 	require.NotContains(t, markdown, "Candidate validation overall score")
 	require.NotContains(t, markdown, "Final release gate decision")
+}
+
+func TestMarkdownFailureAttributionIncludesEvidenceDetails(t *testing.T) {
+	var buf bytes.Buffer
+	renderFailureAttributionSection(&buf, "Candidate validation", &FailureAttribution{
+		PerFailedCase: []FailedCaseAttribution{
+			{
+				EvalCaseID: "validation_status_tr789",
+				Category:   attributionRouteError,
+				FailedMetrics: []FailedMetricEvidence{
+					{
+						MetricName: "tool_trajectory_avg_score",
+						Score:      0,
+						Status:     "failed",
+						Reason:     "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)",
+					},
+				},
+				Evidence: []string{
+					"tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)",
+				},
+				TerminalStep:      &TraceStepSummary{StepID: "s2"},
+				AppliedSurfaceIDs: []string{defaultTargetSurfaceID()},
+			},
+			{
+				EvalCaseID: "validation_missing_trace",
+				Category:   attributionMetricFailure,
+			},
+		},
+		Summary: AttributionSummary{RouteError: 1, MetricFailure: 1},
+	})
+	markdown := buf.String()
+	require.Contains(t, markdown, "### Candidate validation")
+	require.Contains(t, markdown, "- `validation_status_tr789`: `route_error`")
+	require.Contains(t, markdown, "  - Failed metrics:")
+	require.Contains(t, markdown, "    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch")
+	require.Contains(t, markdown, "  - Evidence:")
+	require.Contains(t, markdown, "    - tool_trajectory_avg_score failed: tool trajectory mismatch")
+	require.Contains(t, markdown, "  - Terminal step: `s2`")
+	require.Contains(t, markdown, "  - Applied surfaces: `candidate#tool.lookup_record`")
+	require.Contains(t, markdown, "- `validation_missing_trace`: `metric_failure`")
+	require.Contains(t, markdown, "  - Terminal step: unavailable")
+	require.Contains(t, markdown, "  - Applied surfaces: none")
 }
 
 func TestMarkdownGateDecisionSummaryUsesActualGateReasons(t *testing.T) {
@@ -888,6 +1030,99 @@ func TestValidationDeltaCategories(t *testing.T) {
 	require.ErrorContains(t, err, "case count")
 }
 
+func TestValidateConfiguredMetrics(t *testing.T) {
+	configured := []string{"tool_trajectory_avg_score", "final_response_avg_score"}
+	validResult := func(metrics ...promptiterengine.MetricResult) *promptiterengine.EvaluationResult {
+		return engineEvalResultWithMetrics("validation", "case_1", metrics...)
+	}
+	tests := []struct {
+		name       string
+		result     *promptiterengine.EvaluationResult
+		wantErr    string
+		configured []string
+	}{
+		{
+			name: "complete",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("final_response_avg_score", 0, status.EvalStatusFailed),
+			),
+		},
+		{
+			name: "missing metric",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+			),
+			wantErr: "missing configured metric",
+		},
+		{
+			name:    "empty metrics",
+			result:  validResult(),
+			wantErr: "missing configured metric",
+		},
+		{
+			name: "not evaluated",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("final_response_avg_score", 0, status.EvalStatusNotEvaluated),
+			),
+			wantErr: "invalid status",
+		},
+		{
+			name: "unknown status",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("final_response_avg_score", 0, status.EvalStatusUnknown),
+			),
+			wantErr: "invalid status",
+		},
+		{
+			name: "empty status",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("final_response_avg_score", 0, ""),
+			),
+			wantErr: "invalid status",
+		},
+		{
+			name: "extra metric allowed",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("final_response_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("derived_metric", 0, status.EvalStatusUnknown),
+			),
+		},
+		{
+			name: "duplicate configured metric invalid status fails",
+			result: validResult(
+				engineMetric("tool_trajectory_avg_score", 1, status.EvalStatusPassed),
+				engineMetric("tool_trajectory_avg_score", 0, status.EvalStatusNotEvaluated),
+				engineMetric("final_response_avg_score", 1, status.EvalStatusPassed),
+			),
+			wantErr: "invalid status",
+		},
+		{
+			name:       "no configured metrics skips",
+			result:     nil,
+			configured: []string{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			configuredMetrics := configured
+			if tt.configured != nil {
+				configuredMetrics = tt.configured
+			}
+			err := validateConfiguredMetrics("candidate validation", tt.result, configuredMetrics)
+			if tt.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tt.wantErr)
+		})
+	}
+}
+
 func TestCaseScorePassedAndHardFailHelpers(t *testing.T) {
 	score, passed := caseScoreAndPassed(CaseSummary{})
 	require.Equal(t, 0.0, score)
@@ -1191,6 +1426,33 @@ func TestReportUsesLastAcceptedRoundAndHandlesNoAcceptedRound(t *testing.T) {
 	require.Equal(t, report.Baseline.Validation, report.Candidate.Validation)
 }
 
+func writeMetricsFile(t *testing.T, dataDir string, content []byte) {
+	t.Helper()
+	metricDir := filepath.Join(dataDir, appName)
+	require.NoError(t, os.MkdirAll(metricDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(metricDir, sharedMetricFileName), content, 0o644))
+}
+
+func copyDir(t *testing.T, src, dst string) {
+	t.Helper()
+	entries, err := os.ReadDir(src)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(dst, 0o755))
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			copyDir(t, srcPath, dstPath)
+			continue
+		}
+		content, err := os.ReadFile(srcPath)
+		require.NoError(t, err)
+		info, err := entry.Info()
+		require.NoError(t, err)
+		require.NoError(t, os.WriteFile(dstPath, content, info.Mode()))
+	}
+}
+
 func toolMap(description string) map[string]tool.Tool {
 	return map[string]tool.Tool{
 		"lookup_record": toolForTest{description: description},
@@ -1248,6 +1510,50 @@ func summaryFromCases(evalSetID string, cases ...CaseSummary) *EvaluationSummary
 				EvalSetID:    evalSetID,
 				OverallScore: overall,
 				Cases:        cases,
+			},
+		},
+	}
+}
+
+func engineMetric(metricName string, score float64, evalStatus status.EvalStatus) promptiterengine.MetricResult {
+	reason := ""
+	if evalStatus == status.EvalStatusFailed {
+		reason = "failed"
+	}
+	return promptiterengine.MetricResult{
+		MetricName: metricName,
+		Score:      score,
+		Status:     evalStatus,
+		Reason:     reason,
+	}
+}
+
+func engineEvalResultWithMetrics(
+	evalSetID string,
+	caseID string,
+	metrics ...promptiterengine.MetricResult,
+) *promptiterengine.EvaluationResult {
+	total := 0.0
+	for _, metricResult := range metrics {
+		total += metricResult.Score
+	}
+	overall := 0.0
+	if len(metrics) > 0 {
+		overall = total / float64(len(metrics))
+	}
+	return &promptiterengine.EvaluationResult{
+		OverallScore: overall,
+		EvalSets: []promptiterengine.EvalSetResult{
+			{
+				EvalSetID:    evalSetID,
+				OverallScore: overall,
+				Cases: []promptiterengine.CaseResult{
+					{
+						EvalSetID:  evalSetID,
+						EvalCaseID: caseID,
+						Metrics:    metrics,
+					},
+				},
 			},
 		},
 	}

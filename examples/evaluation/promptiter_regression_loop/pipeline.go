@@ -162,6 +162,10 @@ func runFakePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult, error
 	cfg.OutputDir = resolveExamplePath(cfg.OutputDir)
 	cfg.PromptPath = resolveExamplePath(cfg.PromptPath)
 	cfg.ConfigPath = resolveExamplePath(cfg.ConfigPath)
+	configuredMetrics, err := readConfiguredMetricNames(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 	promptText, promptHash, err := readPrompt(cfg.PromptPath)
 	if err != nil {
 		return nil, err
@@ -195,20 +199,21 @@ func runFakePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult, error
 	latencyMs := reportLatencyMs(time.Since(optimizationStart), cfg.SampleReport)
 	observations := runtime.model.observations()
 	report, err := newOptimizationReport(runResult, candidateTrain, ReportContext{
-		Mode:                      cfg.Mode,
-		Seed:                      deterministicSeed,
-		TargetSurfaceIDs:          targetSurfaceIDs,
-		PromptPath:                cfg.PromptPath,
-		PromptSHA256:              promptHash,
-		ConfigPath:                cfg.ConfigPath,
-		ConfigSHA256:              configHash,
-		ModelConfig:               fakeModelConfigSummary(),
-		PromptIterConfig:          promptIterConfigSummary(fileConfig),
-		FinalGate:                 fileConfig.FinalGate.resolved(),
-		SampleReport:              cfg.SampleReport,
-		LatencyMs:                 latencyMs,
-		LatencyCheckSkippedReason: latencyCheckSkippedReason(cfg.SampleReport),
-		ModelCallCount:            observations.RequestCount,
+		Mode:                        cfg.Mode,
+		Seed:                        deterministicSeed,
+		TargetSurfaceIDs:            targetSurfaceIDs,
+		ConfiguredValidationMetrics: configuredMetrics,
+		PromptPath:                  cfg.PromptPath,
+		PromptSHA256:                promptHash,
+		ConfigPath:                  cfg.ConfigPath,
+		ConfigSHA256:                configHash,
+		ModelConfig:                 fakeModelConfigSummary(),
+		PromptIterConfig:            promptIterConfigSummary(fileConfig),
+		FinalGate:                   fileConfig.FinalGate.resolved(),
+		SampleReport:                cfg.SampleReport,
+		LatencyMs:                   latencyMs,
+		LatencyCheckSkippedReason:   latencyCheckSkippedReason(cfg.SampleReport),
+		ModelCallCount:              observations.RequestCount,
 	})
 	if err != nil {
 		return nil, err
@@ -519,6 +524,45 @@ func readPromptIterConfigWithHash(path string) (promptIterFileConfig, string, er
 	}
 	sum := sha256.Sum256(content)
 	return cfg, hex.EncodeToString(sum[:]), nil
+}
+
+func readConfiguredMetricNames(dataDir string) ([]string, error) {
+	path := filepath.Join(dataDir, appName, sharedMetricFileName)
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read configured metrics %s: %w", path, err)
+	}
+	var entries []struct {
+		MetricName string `json:"metricName"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(content))
+	if err := decoder.Decode(&entries); err != nil {
+		return nil, fmt.Errorf("decode configured metrics %s: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("decode configured metrics %s: multiple JSON values", path)
+		}
+		return nil, fmt.Errorf("decode configured metrics %s: %w", path, err)
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("configured metrics %s is empty", path)
+	}
+	names := make([]string, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for i, entry := range entries {
+		name := strings.TrimSpace(entry.MetricName)
+		if name == "" {
+			return nil, fmt.Errorf("configured metric at index %d in %s has empty metricName", i, path)
+		}
+		if _, ok := seen[name]; ok {
+			return nil, fmt.Errorf("configured metric %q is duplicated in %s", name, path)
+		}
+		seen[name] = struct{}{}
+		names = append(names, name)
+	}
+	return names, nil
 }
 
 func (cfg promptIterFileConfig) maxRounds() int {
