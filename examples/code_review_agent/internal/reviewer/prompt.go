@@ -33,8 +33,9 @@ action is needed for. If that request returns granted, call the real target tool
 object without dropping or changing any field. request_tool_permission never executes the target tool.
 Do not put the Reason in assistant prose or infer permission from natural-language messages.
 
-If permission is denied, remains approval_required, or cannot be requested, treat that action as blocked and continue with the
-remaining evidence. Never claim that a blocked target tool executed.
+A denied result applies only to that permission request and does not create a persistent denial. If permission remains
+approval_required or cannot be requested, treat that attempt as blocked and continue with the remaining evidence. Never claim
+that a blocked target tool executed.
 
 YOU SHOULD ALWAYS LOAD SKILL code-review.
 `

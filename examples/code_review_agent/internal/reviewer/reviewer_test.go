@@ -238,21 +238,39 @@ func TestRedactingToolCallbackReplacesCredentialBearingError(t *testing.T) {
 	}
 }
 
-func TestCommandApproverRejectsN(t *testing.T) {
-	var output bytes.Buffer
-	decision, err := newApprover(
-		ApprovalConfig{Input: strings.NewReader("n\n"), Output: &output}, false,
-	).decide(
-		context.Background(),
-		workspaceExecToolName,
-		"sh scripts/run-go-checks.sh work/inputs/repo",
-		"Collect repository check evidence.",
-	)
-	if err != nil {
-		t.Fatal(err)
+func TestApproverDecisions(t *testing.T) {
+	tests := []struct {
+		name        string
+		input       string
+		want        tool.PermissionAction
+		wantPrompts int
+	}{
+		{name: "empty approves", input: "\n", want: tool.PermissionActionAllow, wantPrompts: 1},
+		{name: "yes approves", input: "yes\n", want: tool.PermissionActionAllow, wantPrompts: 1},
+		{name: "no denies", input: "n\n", want: tool.PermissionActionDeny, wantPrompts: 1},
+		{name: "invalid retries", input: "maybe\ny\n", want: tool.PermissionActionAllow, wantPrompts: 2},
 	}
-	if decision.Action != tool.PermissionActionDeny {
-		t.Fatalf("decision = %q, want deny", decision.Action)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			decision, err := newApprover(
+				ApprovalConfig{Input: strings.NewReader(tt.input), Output: &output}, false,
+			).decide(
+				context.Background(),
+				workspaceExecToolName,
+				"sh scripts/run-go-checks.sh work/inputs/repo",
+				"Collect repository check evidence.",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tt.want {
+				t.Fatalf("decision = %q, want %q", decision.Action, tt.want)
+			}
+			if got := strings.Count(output.String(), "Approve? [Y/n]"); got != tt.wantPrompts {
+				t.Fatalf("approval prompts = %d, want %d", got, tt.wantPrompts)
+			}
+		})
 	}
 }
 
@@ -327,40 +345,7 @@ func TestCommandApproverDoesNotReuseLateResponseAfterCancellation(t *testing.T) 
 	}
 }
 
-func TestCommandAttemptsReviewChecksExecutionIgnoresReadOnlyInspection(t *testing.T) {
-	for _, command := range []string{
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"/bin/bash skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"cd work/inputs/repo && sh skills/code-review/scripts/run-go-checks.sh .",
-		"skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"cat skills/code-review/scripts/run-go-checks.sh | sh -s -- work/inputs/repo",
-		"cat skills/code-review/scripts/run-go-checks.sh|sh -s -- work/inputs/repo",
-		". skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"source skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"env skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"timeout 120 skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"sh ./skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-	} {
-		if !commandAttemptsReviewChecksExecution(command) {
-			t.Errorf("commandAttemptsReviewChecksExecution(%q) = false, want true", command)
-		}
-	}
-	for _, command := range []string{
-		"ls skills/code-review/scripts/run-go-checks.sh",
-		"cat skills/code-review/scripts/run-go-checks.sh",
-		"cat ./skills/code-review/scripts/run-go-checks.sh",
-		"sed -n '1,120p' skills/code-review/scripts/run-go-checks.sh",
-		"rg run-go-checks.sh skills/code-review/SKILL.md",
-		"echo sh skills/code-review/scripts/run-go-checks.sh",
-		"sh work/inputs/repo/scripts/run-go-checks.sh work/inputs/repo",
-	} {
-		if commandAttemptsReviewChecksExecution(command) {
-			t.Errorf("commandAttemptsReviewChecksExecution(%q) = true, want false", command)
-		}
-	}
-}
-
-func TestReviewPermissionPolicyAllowsReadOnlySkillScriptInspection(t *testing.T) {
+func TestReviewPermissionPolicyAsksForConfiguredScriptReference(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "review.db")
 	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
@@ -375,7 +360,7 @@ func TestReviewPermissionPolicyAllowsReadOnlySkillScriptInspection(t *testing.T)
 		t.Fatal(err)
 	}
 
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	arguments := prepareWorkspaceExecCall(
 		t,
 		tracker,
@@ -395,11 +380,11 @@ func TestReviewPermissionPolicyAllowsReadOnlySkillScriptInspection(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("read-only Skill script inspection decision = %#v, want allow", decision)
+	if decision.Action != tool.PermissionActionAsk {
+		t.Fatalf("configured script reference decision = %#v, want ask", decision)
 	}
-	if tracker.permissionInterceptions != 0 || len(tracker.executions) != 1 {
-		t.Fatalf("read-only inspection state = interceptions:%d executions:%d",
+	if tracker.permissionInterceptions != 1 || len(tracker.executions) != 0 {
+		t.Fatalf("configured script reference state = interceptions:%d executions:%d",
 			tracker.permissionInterceptions, len(tracker.executions))
 	}
 }
@@ -419,7 +404,7 @@ func TestReviewPermissionPolicyDoesNotForceChecksThroughSkillScript(t *testing.T
 		t.Fatal(err)
 	}
 
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	arguments := prepareWorkspaceExecCall(
 		t,
 		tracker,
@@ -494,9 +479,8 @@ func TestValidateReviewResultsEnforcesFindingConfidenceAndLocalPath(t *testing.T
 func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
 	tools := newReviewToolSet(
 		nil,
-		newReviewRunTracker(),
+		newReviewRunState(),
 		newApprover(ApprovalConfig{}, true),
-		governedToolConfig{Backend: "local"},
 	).Tools(context.Background())
 	if len(tools) != 2 {
 		t.Fatalf("review tools = %d, want 2", len(tools))
@@ -561,7 +545,7 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx = reviewInvocationContext(ctx, taskID)
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	recorder := newReviewRecorder(resources.ReviewStore, sanitizer)
 	arguments := []byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1","timeout_sec":120}`)
 	callbacks := newGovernedToolCallbacks(sanitizer, recorder, tracker, governedToolConfig{
@@ -576,9 +560,11 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 	if beforeResult != nil && len(beforeResult.ModifiedArguments) > 0 {
 		arguments = beforeResult.ModifiedArguments
 	}
-	identity, requiresApproval, err := approvalIdentity(workspaceExecToolName, arguments)
-	if err != nil || !requiresApproval {
-		t.Fatalf("approval identity = %q, required = %t, err = %v", identity, requiresApproval, err)
+	identity, err := approvalIdentity(workspaceExecToolName, []byte(
+		`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1","timeout_sec":120}`,
+	))
+	if err != nil {
+		t.Fatalf("approval identity = %q, err = %v", identity, err)
 	}
 	tracker.grant(workspaceExecToolName, identity)
 	policy := newReviewPermissionPolicy(recorder, tracker)
@@ -627,9 +613,14 @@ stdout_truncated, redaction_count FROM sandbox_runs WHERE task_id = ?`, taskID).
 }
 
 func TestGovernedWorkspaceExecConvertsTimeoutToModelEvidence(t *testing.T) {
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	input := workspaceExecInput{Command: "sleep 10", Timeout: 1}
-	if err := tracker.recordToolInput("timeout-call", input, input); err != nil {
+	if err := tracker.prepareWorkspaceExecution(
+		"timeout-call",
+		[]byte(`{"command":"sleep 10","timeout_sec":1}`),
+		input,
+		input,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if err := tracker.beginExecution("timeout-call"); err != nil {
@@ -669,7 +660,7 @@ func TestGovernedWorkspaceExecDoesNotTreatMissingStartAsSuccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	callbacks := newGovernedToolCallbacks(
 		sanitizer,
 		newReviewRecorder(resources.ReviewStore, sanitizer),
@@ -705,7 +696,7 @@ func TestGovernedWorkspaceExecDoesNotTreatMissingStartAsSuccess(t *testing.T) {
 }
 
 func TestGovernedWorkspaceExecFiltersEnvironmentOverrides(t *testing.T) {
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 	callbacks := newGovernedToolCallbacks(
 		redact.New(),
 		nil,
@@ -757,7 +748,7 @@ func reviewInvocationContext(ctx context.Context, taskID string) context.Context
 
 func prepareWorkspaceExecCall(
 	t *testing.T,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	toolCallID string,
 	arguments []byte,
 ) []byte {

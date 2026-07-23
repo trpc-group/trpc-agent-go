@@ -81,7 +81,7 @@ func newRedactingToolCallbacks(sanitizer *redact.Sanitizer) *tool.Callbacks {
 func newGovernedToolCallbacks(
 	sanitizer *redact.Sanitizer,
 	recorder *reviewRecorder,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	config governedToolConfig,
 ) *tool.Callbacks {
 	if config.OutputLimitBytes <= 0 {
@@ -95,7 +95,13 @@ func newGovernedToolCallbacks(
 		_ context.Context,
 		args *tool.BeforeToolArgs,
 	) (*tool.BeforeToolResult, error) {
-		if args == nil || args.ToolName != workspaceExecToolName {
+		if args == nil {
+			return nil, nil
+		}
+		if tracker == nil {
+			return nil, errors.New("review run state is not configured")
+		}
+		if args.ToolName != workspaceExecToolName {
 			return nil, nil
 		}
 		original, input, modified, filteredEnvironment, err := prepareWorkspaceExecArguments(
@@ -105,10 +111,15 @@ func newGovernedToolCallbacks(
 		if err != nil {
 			return nil, err
 		}
-		if filteredEnvironment > 0 && tracker != nil {
+		if filteredEnvironment > 0 {
 			tracker.recordException("environment_override_filtered")
 		}
-		if err := tracker.recordToolInput(args.ToolCallID, original, input); err != nil {
+		if err := tracker.prepareWorkspaceExecution(
+			args.ToolCallID,
+			args.Arguments,
+			original,
+			input,
+		); err != nil {
 			return nil, err
 		}
 		if modified == nil {
@@ -131,6 +142,8 @@ func newGovernedToolCallbacks(
 	return callbacks
 }
 
+// prepareWorkspaceExecArguments prepares workspace_exec arguments for execution by filtering
+// environment variables and adding container timeout when needed.
 func prepareWorkspaceExecArguments(
 	arguments []byte,
 	config governedToolConfig,
@@ -173,7 +186,7 @@ func governWorkspaceExecResult(
 	ctx context.Context,
 	sanitizer *redact.Sanitizer,
 	recorder *reviewRecorder,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	config governedToolConfig,
 	args *tool.AfterToolArgs,
 ) (*tool.AfterToolResult, error) {

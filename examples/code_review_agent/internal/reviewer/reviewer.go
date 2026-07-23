@@ -131,7 +131,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 		sessionID = taskID
 	)
 	outcome.TaskID = taskID
-	tracker := newReviewRunTracker()
+	tracker := newReviewRunState()
 
 	inputKind, err := r.inputs.InputKind(spec)
 	if err != nil {
@@ -298,7 +298,7 @@ func (r *reviewer) validateReviewCompletion(
 func (r *reviewer) newRunner(
 	bootstrap codeexecutor.WorkspaceBootstrapSpec,
 	fixture string,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 ) (reviewRunner runner.Runner, err error) {
 	modelInstance, err := r.newReviewModel(fixture)
 	if err != nil {
@@ -314,7 +314,7 @@ func (r *reviewer) newRunner(
 		return nil, fmt.Errorf("create code executor: %w", err)
 	}
 	governedConfig := defaultGovernedToolConfig(r.config.Sandbox.Backend)
-	reviewTools := newReviewToolSet(r.recorder, tracker, r.approver, governedConfig)
+	reviewTools := newReviewToolSet(r.recorder, tracker, r.approver)
 	reviewAgent := llmagent.New(codeReviewAgentName,
 		llmagent.WithDescription("A code review agent with Agent Skills, governed workspace execution, persistent task records, and structured reports"),
 		llmagent.WithModel(modelInstance),

@@ -129,7 +129,7 @@ func (r *reviewer) finalizeReviewTask(
 	ctx context.Context,
 	taskID string,
 	info artifact.SessionInfo,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	runErr error,
 ) (ReviewOutcome, error) {
 	finishedAt := time.Now()
@@ -215,7 +215,7 @@ func (r *reviewer) finalizeTaskWithoutReports(
 	ctx context.Context,
 	taskID string,
 	snapshot store.ReviewSnapshot,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	finishedAt time.Time,
 	runErr error,
 ) error {
@@ -253,7 +253,7 @@ func terminalTaskOutcome(runErr error) (status, errorType, errorMessage string) 
 // from being counted twice once its durable row exists.
 func buildMonitoringSummary(
 	snapshot store.ReviewSnapshot,
-	tracker *reviewRunTracker,
+	tracker *reviewRunState,
 	finishedAt time.Time,
 	terminalErrorType string,
 ) monitoringSummary {

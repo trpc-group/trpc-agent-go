@@ -21,32 +21,31 @@ import (
 )
 
 const (
-	requestToolPermissionName      = "request_tool_permission"
+	requestToolPermissionName = "request_tool_permission"
+)
+
+const (
 	permissionStatusGranted        = "granted"
 	permissionStatusDenied         = "denied"
 	permissionStatusApprovalNeeded = "approval_required"
-	permissionStatusNotRequired    = "not_required"
 )
 
 type reviewToolSet struct {
-	recorder       *reviewRecorder
-	runState       *reviewRunTracker
-	approver       *Approver
-	governedConfig governedToolConfig
-	tools          []tool.Tool
+	recorder *reviewRecorder
+	runState *reviewRunState
+	approver *Approver
+	tools    []tool.Tool
 }
 
 func newReviewToolSet(
 	recorder *reviewRecorder,
-	runState *reviewRunTracker,
+	runState *reviewRunState,
 	approver *Approver,
-	governedConfig governedToolConfig,
 ) tool.ToolSet {
 	set := &reviewToolSet{
-		recorder:       recorder,
-		runState:       runState,
-		approver:       approver,
-		governedConfig: governedConfig,
+		recorder: recorder,
+		runState: runState,
+		approver: approver,
 	}
 	set.tools = []tool.Tool{
 		function.NewFunctionTool(
@@ -98,7 +97,6 @@ func requestToolPermissionOutputSchema() *tool.Schema {
 					permissionStatusGranted,
 					permissionStatusDenied,
 					permissionStatusApprovalNeeded,
-					permissionStatusNotRequired,
 				},
 			},
 			"target_tool": {Type: "string"},
@@ -131,9 +129,9 @@ type requestToolPermissionInput struct {
 }
 
 type requestToolPermissionOutput struct {
-	Status          string                     `json:"status"`
 	TargetTool      string                     `json:"target_tool"`
 	TargetArguments map[string]json.RawMessage `json:"target_arguments"`
+	Status          string                     `json:"status"`
 }
 
 func (s *reviewToolSet) requestToolPermission(
@@ -158,29 +156,9 @@ func (s *reviewToolSet) requestToolPermission(
 	if err != nil {
 		return requestToolPermissionOutput{}, fmt.Errorf("encode target_arguments: %w", err)
 	}
-	finalArguments := targetArguments
-	if targetTool == workspaceExecToolName {
-		_, _, modified, _, err := prepareWorkspaceExecArguments(
-			targetArguments,
-			s.governedConfig,
-		)
-		if err != nil {
-			return requestToolPermissionOutput{}, err
-		}
-		if modified != nil {
-			finalArguments = modified
-		}
-	}
-	identity, requiresApproval, err := approvalIdentity(targetTool, finalArguments)
+	identity, err := approvalIdentity(targetTool, targetArguments)
 	if err != nil {
 		return requestToolPermissionOutput{}, err
-	}
-	if !requiresApproval {
-		return requestToolPermissionOutput{
-			Status:          permissionStatusNotRequired,
-			TargetTool:      targetTool,
-			TargetArguments: in.TargetArguments,
-		}, nil
 	}
 
 	decision, err := s.approver.decide(
@@ -202,7 +180,7 @@ func (s *reviewToolSet) requestToolPermission(
 		return requestToolPermissionOutput{}, err
 	}
 
-	status := permissionStatusApprovalNeeded
+	var status string
 	switch decision.Action {
 	case tool.PermissionActionAllow:
 		s.runState.grant(targetTool, identity)

@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,194 +24,263 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-func TestApprovalIdentity(t *testing.T) {
+func TestReviewPermissionPolicyUsesToolMetadata(t *testing.T) {
+	tests := []struct {
+		name     string
+		metadata tool.ToolMetadata
+		want     tool.PermissionAction
+	}{
+		{name: "ordinary tool is allowed", want: tool.PermissionActionAllow},
+		{
+			name:     "destructive tool requires approval",
+			metadata: tool.ToolMetadata{Destructive: true},
+			want:     tool.PermissionActionAsk,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			resources, err := persistence.Open(
+				ctx,
+				filepath.Join(t.TempDir(), "review.db"),
+				redact.AppendEventHook(redact.New()),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resources.Close()
+
+			const taskID = "metadata-policy"
+			if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
+				TaskID: taskID, AppName: codeReviewAgentName,
+				UserID: "reviewer", InputKind: "fixture",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ctx = reviewInvocationContext(ctx, taskID)
+			state := newReviewRunState()
+			const toolCallID = "ordinary-tool-call"
+			arguments := []byte(`{"value":"original"}`)
+
+			decision, err := newReviewPermissionPolicy(
+				newReviewRecorder(resources.ReviewStore, redact.New()), state,
+			).CheckToolPermission(ctx, &tool.PermissionRequest{
+				ToolName: "ordinary_tool", ToolCallID: toolCallID,
+				Arguments: arguments, Metadata: tt.metadata,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tt.want {
+				t.Fatalf("decision = %q, want %q", decision.Action, tt.want)
+			}
+		})
+	}
+}
+
+func TestWorkspaceExecApprovalIdentity(t *testing.T) {
 	tests := []struct {
 		name             string
-		toolName         string
 		arguments        string
 		requiresApproval bool
 		group            string
 	}{
 		{
-			name:      "ordinary workspace command",
-			toolName:  workspaceExecToolName,
+			name:      "unrestricted command",
 			arguments: `{"command":"go test ./..."}`,
 		},
 		{
-			name:      "read bundled script",
-			toolName:  workspaceExecToolName,
-			arguments: `{"command":"cat skills/code-review/scripts/run-go-checks.sh"}`,
-		},
-		{
-			name:      "managed timeout read bundled script",
-			toolName:  workspaceExecToolName,
-			arguments: `{"command":"exec /usr/bin/timeout --signal=TERM --kill-after=1s 300s sh -c 'ls -la skills/code-review/scripts/run-go-checks.sh'"}`,
-		},
-		{
-			name:             "standard module a",
-			toolName:         workspaceExecToolName,
+			name:             "simple module a",
 			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "standard-sh",
+			group:            "simple",
 		},
 		{
-			name:             "standard module b",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"timeout_sec":120,"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-b"}`,
+			name:             "simple module b and different tool arguments",
+			arguments:        `{"timeout_sec":60,"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-b"}`,
 			requiresApproval: true,
-			group:            "standard-sh",
+			group:            "simple",
 		},
 		{
-			name:             "different shell program",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"/bin/sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a","timeout_sec":120}`,
+			name:             "script reference uses the script grant",
+			arguments:        `{"command":"cat skills/code-review/scripts/run-go-checks.sh"}`,
 			requiresApproval: true,
-			group:            "bin-sh",
+			group:            "simple",
 		},
 		{
-			name:             "redirected output",
-			toolName:         workspaceExecToolName,
+			name:             "quoted shell operator is argument data",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh 'work/inputs/repo/module;a'"}`,
+			requiresApproval: true,
+			group:            "simple",
+		},
+		{
+			name:             "escaped shell operator is argument data",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module\\&a"}`,
+			requiresApproval: true,
+			group:            "simple",
+		},
+		{
+			name:             "same complex call first object order",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a && curl https://example.com","timeout_sec":120}`,
+			requiresApproval: true,
+			group:            "complex-a",
+		},
+		{
+			name:             "same complex call canonical object order",
+			arguments:        `{"timeout_sec":120,"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a && curl https://example.com"}`,
+			requiresApproval: true,
+			group:            "complex-a",
+		},
+		{
+			name:             "complex call with different module",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-b && curl https://example.com","timeout_sec":120}`,
+			requiresApproval: true,
+			group:            "complex-b",
+		},
+		{
+			name:             "redirection is complex",
 			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a 2>&1","timeout_sec":120}`,
 			requiresApproval: true,
 			group:            "redirected",
 		},
 		{
-			name:             "additional command",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a && curl https://example.com","timeout_sec":120}`,
+			name:             "or operation is complex",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a || echo failed","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "additional-command",
+			group:            "or-operation",
 		},
 		{
-			name:             "compact semicolon operation",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a;curl","timeout_sec":120}`,
+			name:             "pipeline is complex",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a | tee checks.log","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "compact-semicolon",
+			group:            "pipeline",
 		},
 		{
-			name:             "compact redirection",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a>out","timeout_sec":120}`,
+			name:             "semicolon operation is complex",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a; echo done","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "compact-redirection",
+			group:            "semicolon",
 		},
 		{
-			name:             "piped execution",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"cat skills/code-review/scripts/run-go-checks.sh | sh -s -- work/inputs/repo/module-a","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "piped",
-		},
-		{
-			name:             "dynamic module path",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/$MODULE","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "dynamic-module",
-		},
-		{
-			name:             "command substitution module path",
-			toolName:         workspaceExecToolName,
+			name:             "command substitution is complex",
 			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/$(printf module-a)","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "command-substitution-module",
+			group:            "substitution",
 		},
 		{
-			name:             "equivalent script path retains structure",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts//run-go-checks.sh work/inputs/repo/module-a","timeout_sec":120}`,
+			name:             "command substitution in double quotes is complex",
+			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh \"work/inputs/repo/$(printf module-a)\"","timeout_sec":120}`,
 			requiresApproval: true,
-			group:            "equivalent-script-path",
-		},
-		{
-			name:             "managed timeout module a",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a'","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "managed-timeout-120",
-		},
-		{
-			name:             "managed timeout module b",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"exec /usr/bin/timeout --signal=TERM --kill-after=1s 120s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-b'","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "managed-timeout-120",
-		},
-		{
-			name:             "different managed timeout",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"exec /usr/bin/timeout --signal=TERM --kill-after=1s 60s sh -c 'sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a'","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "managed-timeout-60",
-		},
-		{
-			name:             "other tool argument",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a","timeout_sec":60}`,
-			requiresApproval: true,
-			group:            "different-timeout",
-		},
-		{
-			name:             "description module a",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a","description":"Run bundled checks","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "with-description",
-		},
-		{
-			name:             "description module b",
-			toolName:         workspaceExecToolName,
-			arguments:        `{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-b","description":"Run bundled checks","timeout_sec":120}`,
-			requiresApproval: true,
-			group:            "with-description",
-		},
-		{
-			name:      "unconfigured tool",
-			toolName:  "submit_review_results",
-			arguments: `{"conclusion":"done"}`,
+			group:            "quoted-substitution",
 		},
 	}
 
 	identities := make(map[string]string)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			identity, requiresApproval, err := approvalIdentity(
-				tt.toolName,
-				[]byte(tt.arguments),
-			)
+			arguments := []byte(tt.arguments)
+			required, err := requiresApproval(&tool.PermissionRequest{
+				ToolName: workspaceExecToolName,
+			}, arguments)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if requiresApproval != tt.requiresApproval {
-				t.Fatalf("requiresApproval = %t, want %t", requiresApproval, tt.requiresApproval)
+			if required != tt.requiresApproval {
+				t.Fatalf("requiresApproval = %t, want %t", required, tt.requiresApproval)
 			}
-			if !requiresApproval {
-				if identity != "" {
-					t.Fatalf("identity = %q, want empty for ungoverned call", identity)
-				}
+			if !required {
 				return
 			}
-			if identity == "" {
-				t.Fatal("governed call returned an empty identity")
+			identity, err := approvalIdentity(workspaceExecToolName, arguments)
+			if err != nil {
+				t.Fatal(err)
 			}
 			if previous, ok := identities[tt.group]; ok && previous != identity {
-				t.Fatalf("identity = %q, want group identity %q", identity, previous)
+				t.Fatalf("identity = %q, want %q", identity, previous)
 			}
 			identities[tt.group] = identity
 		})
 	}
-
-	standard := identities["standard-sh"]
+	if identities["simple"] == identities["complex-a"] {
+		t.Fatal("complex call reused the simple script grant")
+	}
+	if identities["simple"] != reviewChecksCommand {
+		t.Fatalf("simple identity = %q, want configured command %q", identities["simple"], reviewChecksCommand)
+	}
+	if identities["complex-a"] == identities["complex-b"] {
+		t.Fatal("different complex calls reused the same grant")
+	}
 	for _, group := range []string{
-		"bin-sh", "redirected", "additional-command", "compact-semicolon",
-		"compact-redirection", "piped", "dynamic-module", "command-substitution-module",
-		"equivalent-script-path", "managed-timeout-120", "managed-timeout-60",
-		"different-timeout", "with-description",
+		"redirected", "or-operation", "pipeline", "semicolon", "substitution",
+		"quoted-substitution",
 	} {
-		if identities[group] == standard {
-			t.Fatalf("identity group %q unexpectedly reused the standard grant", group)
+		if identities[group] == identities["simple"] {
+			t.Fatalf("%s call reused the simple script grant", group)
 		}
+	}
+}
+
+func TestHasComplexShellStructure(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		want    bool
+	}{
+		{name: "simple command", command: "go test ./..."},
+		{name: "quoted operator", command: `printf '%s' 'a;b'`},
+		{name: "escaped operator", command: `printf a\&b`},
+		{name: "trailing backslash", command: `printf value\`},
+		{name: "single quoted substitution", command: `printf '$(date)'`},
+		{name: "and operation", command: "go test ./... && echo done", want: true},
+		{name: "newline", command: "go test ./...\necho done", want: true},
+		{name: "command substitution", command: "printf $(date)", want: true},
+		{name: "double quoted substitution", command: `printf "$(date)"`, want: true},
+		{name: "double quoted backticks", command: "printf \"`date`\"", want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasComplexShellStructure(tt.command); got != tt.want {
+				t.Fatalf("hasComplexShellStructure(%q) = %t, want %t",
+					tt.command, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOrdinaryToolApprovalIdentityIgnoresArguments(t *testing.T) {
+	first, err := approvalIdentity("publish_tool", []byte(`{"artifact":"a"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := approvalIdentity("publish_tool", []byte(`{"artifact":"b","force":true}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("ordinary tool identities differ: %q != %q", first, second)
+	}
+}
+
+func TestGovernedCommandsAreConfiguredByName(t *testing.T) {
+	commands := governedCommands{"curl"}
+	tests := []struct {
+		command string
+		want    bool
+	}{
+		{command: "curl https://example.com", want: true},
+		{command: "printf ready && curl https://example.com", want: true},
+		{command: "echo curl", want: true},
+		{command: "go test ./...", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.command, func(t *testing.T) {
+			_, got := commands.match(tt.command)
+			if got != tt.want {
+				t.Fatalf("match = %t, want %t", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -245,11 +315,6 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 			wantStatus:         permissionStatusApprovalNeeded,
 			wantTargetDecision: tool.PermissionActionAsk, wantRecordedPermission: true,
 		},
-		{
-			name: "permission not required", command: "go test ./...",
-			skip: true, wantStatus: permissionStatusNotRequired,
-			wantTargetDecision: tool.PermissionActionAllow,
-		},
 	}
 
 	for _, tt := range tests {
@@ -272,7 +337,7 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx = reviewInvocationContext(ctx, taskID)
-			state := newReviewRunTracker()
+			state := newReviewRunState()
 			recorder := newReviewRecorder(resources.ReviewStore, redact.New())
 			var prompt bytes.Buffer
 			approvalConfig := ApprovalConfig{}
@@ -286,7 +351,6 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 				recorder,
 				state,
 				approver,
-				governedToolConfig{Backend: "local"},
 			).Tools(ctx), requestToolPermissionName)
 
 			requestArguments, err := json.Marshal(map[string]any{
@@ -350,6 +414,99 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 	}
 }
 
+func TestRequestToolPermissionDoesNotAssessTargetRisk(t *testing.T) {
+	ctx := context.Background()
+	resources, err := persistence.Open(
+		ctx,
+		filepath.Join(t.TempDir(), "review.db"),
+		redact.AppendEventHook(redact.New()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Close()
+
+	const taskID = "permission-tool-role"
+	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
+		TaskID: taskID, AppName: codeReviewAgentName,
+		UserID: "reviewer", InputKind: "fixture",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = reviewInvocationContext(ctx, taskID)
+	permissionTool := callableToolNamed(t, newReviewToolSet(
+		newReviewRecorder(resources.ReviewStore, redact.New()),
+		newReviewRunState(),
+		newApprover(ApprovalConfig{}, true),
+	).Tools(ctx), requestToolPermissionName)
+	ctx = context.WithValue(ctx, tool.ContextKeyToolCallID{}, "permission-call")
+	result, err := permissionTool.Call(ctx, []byte(`{
+				"target_tool":"ordinary_tool",
+				"target_arguments":{},
+		"reason":"Apply the requested change."
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.(requestToolPermissionOutput)
+	if got.Status != permissionStatusGranted {
+		t.Fatalf("status = %q, want %q", got.Status, permissionStatusGranted)
+	}
+}
+
+func TestDeniedPermissionCanBeRequestedAgain(t *testing.T) {
+	ctx := context.Background()
+	resources, err := persistence.Open(
+		ctx,
+		filepath.Join(t.TempDir(), "review.db"),
+		redact.AppendEventHook(redact.New()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resources.Close()
+	const taskID = "repeat-permission-request"
+	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
+		TaskID: taskID, AppName: codeReviewAgentName,
+		UserID: "reviewer", InputKind: "fixture",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx = reviewInvocationContext(ctx, taskID)
+	state := newReviewRunState()
+	permissionTool := callableToolNamed(t, newReviewToolSet(
+		newReviewRecorder(resources.ReviewStore, redact.New()),
+		state,
+		newApprover(ApprovalConfig{
+			Input: strings.NewReader("n\ny\n"), Output: io.Discard,
+		}, false),
+	).Tools(ctx), requestToolPermissionName)
+	arguments := []byte(`{
+		"target_tool":"destructive_tool",
+		"target_arguments":{"value":1},
+		"reason":"Perform the requested destructive operation."
+	}`)
+	steps := []struct {
+		toolCallID string
+		want       string
+	}{
+		{toolCallID: "permission-denied", want: permissionStatusDenied},
+		{toolCallID: "permission-granted", want: permissionStatusGranted},
+	}
+	for _, step := range steps {
+		requestCtx := context.WithValue(
+			ctx, tool.ContextKeyToolCallID{}, step.toolCallID,
+		)
+		result, err := permissionTool.Call(requestCtx, arguments)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := result.(requestToolPermissionOutput).Status; got != step.want {
+			t.Fatalf("status for %s = %q, want %q", step.toolCallID, got, step.want)
+		}
+	}
+}
+
 func standardReviewChecksCommand(module string) string {
 	return "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/" + module
 }
@@ -369,9 +526,9 @@ func TestGrantMatchesOnlyApprovalIdentity(t *testing.T) {
 			want: tool.PermissionActionAllow,
 		},
 		{
-			name: "timeout remains significant", granted: standardReviewChecksCommand("module-a"),
+			name: "simple call ignores other workspace arguments", granted: standardReviewChecksCommand("module-a"),
 			target: standardReviewChecksCommand("module-b"), grantTimeout: 120, targetTimeout: 60,
-			want: tool.PermissionActionAsk,
+			want: tool.PermissionActionAllow,
 		},
 		{
 			name: "redirection remains significant", granted: standardReviewChecksCommand("module-a"),
@@ -388,6 +545,12 @@ func TestGrantMatchesOnlyApprovalIdentity(t *testing.T) {
 			granted:      standardReviewChecksCommand("module-a") + " && curl https://example.com",
 			target:       standardReviewChecksCommand("module-a") + " && curl https://example.com",
 			grantTimeout: 120, targetTimeout: 120, want: tool.PermissionActionAllow,
+		},
+		{
+			name:         "nonstandard grant includes all workspace arguments",
+			granted:      standardReviewChecksCommand("module-a") + " && curl https://example.com",
+			target:       standardReviewChecksCommand("module-a") + " && curl https://example.com",
+			grantTimeout: 120, targetTimeout: 60, want: tool.PermissionActionAsk,
 		},
 	}
 
@@ -410,18 +573,18 @@ func TestGrantMatchesOnlyApprovalIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx = reviewInvocationContext(ctx, taskID)
-			state := newReviewRunTracker()
+			state := newReviewRunState()
 			grantedArguments := []byte(fmt.Sprintf(
 				`{"command":%q,"timeout_sec":%d}`,
 				tt.granted,
 				tt.grantTimeout,
 			))
-			identity, requiresApproval, err := approvalIdentity(
+			identity, err := approvalIdentity(
 				workspaceExecToolName,
 				grantedArguments,
 			)
-			if err != nil || !requiresApproval {
-				t.Fatalf("grant identity = %q, required = %t, err = %v", identity, requiresApproval, err)
+			if err != nil {
+				t.Fatalf("grant identity = %q, err = %v", identity, err)
 			}
 			state.grant(workspaceExecToolName, identity)
 
@@ -452,6 +615,86 @@ func TestGrantMatchesOnlyApprovalIdentity(t *testing.T) {
 	}
 }
 
+func TestToolGrantMatchesOnlyToolName(t *testing.T) {
+	tests := []struct {
+		name      string
+		toolName  string
+		arguments string
+		want      tool.PermissionAction
+	}{
+		{
+			name:      "same arguments",
+			toolName:  "destructive_tool",
+			arguments: `{"count":2,"name":"release"}`,
+			want:      tool.PermissionActionAllow,
+		},
+		{
+			name:      "different arguments",
+			toolName:  "destructive_tool",
+			arguments: `{"name":"release","count":3}`,
+			want:      tool.PermissionActionAllow,
+		},
+		{
+			name:      "different tool",
+			toolName:  "other_destructive_tool",
+			arguments: `{"name":"release","count":2}`,
+			want:      tool.PermissionActionAsk,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			resources, err := persistence.Open(
+				ctx,
+				filepath.Join(t.TempDir(), "review.db"),
+				redact.AppendEventHook(redact.New()),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resources.Close()
+			const taskID = "destructive-grant"
+			if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
+				TaskID: taskID, AppName: codeReviewAgentName,
+				UserID: "reviewer", InputKind: "fixture",
+			}); err != nil {
+				t.Fatal(err)
+			}
+			ctx = reviewInvocationContext(ctx, taskID)
+			state := newReviewRunState()
+			recorder := newReviewRecorder(resources.ReviewStore, redact.New())
+			permissionTool := callableToolNamed(t, newReviewToolSet(
+				recorder, state, newApprover(ApprovalConfig{}, true),
+			).Tools(ctx), requestToolPermissionName)
+			permissionCtx := context.WithValue(
+				ctx, tool.ContextKeyToolCallID{}, "permission-call",
+			)
+			if _, err := permissionTool.Call(permissionCtx, []byte(`{
+				"target_tool":"destructive_tool",
+				"target_arguments":{"name":"release","count":2},
+				"reason":"Publish the reviewed release."
+			}`)); err != nil {
+				t.Fatal(err)
+			}
+
+			const toolCallID = "target-call"
+			arguments := []byte(tt.arguments)
+			decision, err := newReviewPermissionPolicy(recorder, state).
+				CheckToolPermission(ctx, &tool.PermissionRequest{
+					ToolName: tt.toolName, ToolCallID: toolCallID,
+					Arguments: arguments,
+					Metadata:  tool.ToolMetadata{Destructive: true},
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tt.want {
+				t.Fatalf("decision = %q, want %q", decision.Action, tt.want)
+			}
+		})
+	}
+}
+
 func TestRequestToolPermissionRejectsInvalidInput(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -469,6 +712,11 @@ func TestRequestToolPermissionRejectsInvalidInput(t *testing.T) {
 			wantError: "target_arguments must be a JSON object",
 		},
 		{
+			name:      "null target arguments",
+			arguments: `{"target_tool":"workspace_exec","target_arguments":null,"reason":"needed"}`,
+			wantError: "target_arguments must be a JSON object",
+		},
+		{
 			name:      "missing Reason",
 			arguments: `{"target_tool":"workspace_exec","target_arguments":{}}`,
 			wantError: "reason is required",
@@ -476,15 +724,14 @@ func TestRequestToolPermissionRejectsInvalidInput(t *testing.T) {
 		{
 			name:      "invalid workspace arguments",
 			arguments: `{"target_tool":"workspace_exec","target_arguments":{"command":123},"reason":"needed"}`,
-			wantError: "decode workspace_exec governance arguments",
+			wantError: "decode workspace_exec approval arguments",
 		},
 	}
 
 	permissionTool := callableToolNamed(t, newReviewToolSet(
 		newReviewRecorder(nil, redact.New()),
-		newReviewRunTracker(),
+		newReviewRunState(),
 		newApprover(ApprovalConfig{}, true),
-		governedToolConfig{Backend: "local"},
 	).Tools(context.Background()), requestToolPermissionName)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -516,14 +763,14 @@ func TestGrantDoesNotCrossReviewRuns(t *testing.T) {
 	ctx = reviewInvocationContext(ctx, taskID)
 
 	arguments := []byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo/module-a","timeout_sec":120}`)
-	identity, requiresApproval, err := approvalIdentity(workspaceExecToolName, arguments)
-	if err != nil || !requiresApproval {
-		t.Fatalf("identity = %q, required = %t, err = %v", identity, requiresApproval, err)
+	identity, err := approvalIdentity(workspaceExecToolName, arguments)
+	if err != nil {
+		t.Fatalf("identity = %q, err = %v", identity, err)
 	}
-	firstRun := newReviewRunTracker()
+	firstRun := newReviewRunState()
 	firstRun.grant(workspaceExecToolName, identity)
 
-	secondRun := newReviewRunTracker()
+	secondRun := newReviewRunState()
 	targetArguments := prepareWorkspaceExecCallWithConfig(
 		t,
 		secondRun,
@@ -566,7 +813,7 @@ func TestRequestToolPermissionGrantAllowsEquivalentTargetCall(t *testing.T) {
 				t.Fatal(err)
 			}
 			ctx = reviewInvocationContext(ctx, taskID)
-			state := newReviewRunTracker()
+			state := newReviewRunState()
 			recorder := newReviewRecorder(resources.ReviewStore, redact.New())
 			policy := newReviewPermissionPolicy(recorder, state)
 			config := governedToolConfig{Backend: backend}
@@ -590,12 +837,14 @@ func TestRequestToolPermissionGrantAllowsEquivalentTargetCall(t *testing.T) {
 			if len(state.executions) != 0 {
 				t.Fatalf("first target entered execution before approval: %#v", state.executions)
 			}
+			if len(state.pendingExecutions) != 0 {
+				t.Fatalf("first target remained pending after ask: %#v", state.pendingExecutions)
+			}
 
 			toolSet := newReviewToolSet(
 				recorder,
 				state,
 				newApprover(ApprovalConfig{}, true),
-				config,
 			)
 			permissionTool := callableToolNamed(t, toolSet.Tools(ctx), requestToolPermissionName)
 			permissionCtx := context.WithValue(ctx, tool.ContextKeyToolCallID{}, "permission-call")
@@ -652,13 +901,16 @@ func TestRequestToolPermissionGrantAllowsEquivalentTargetCall(t *testing.T) {
 			if len(state.executions) != 1 {
 				t.Fatalf("approved target executions = %d, want 1", len(state.executions))
 			}
+			if len(state.pendingExecutions) != 0 {
+				t.Fatalf("approved target remained pending: %#v", state.pendingExecutions)
+			}
 		})
 	}
 }
 
 func prepareWorkspaceExecCallWithConfig(
 	t *testing.T,
-	state *reviewRunTracker,
+	state *reviewRunState,
 	toolCallID string,
 	arguments []byte,
 	config governedToolConfig,
