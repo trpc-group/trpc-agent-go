@@ -90,6 +90,9 @@ func loadConfig(path string) (*config, error) {
 	}
 	cfg.configPath = abs
 	baseDir := filepath.Dir(abs)
+	if strings.TrimSpace(cfg.OutputDir) == "" {
+		return nil, errors.New("outputDir is empty")
+	}
 	cfg.Inputs.TrainEvalset = resolveConfigPath(baseDir, cfg.Inputs.TrainEvalset)
 	cfg.Inputs.ValidationEvalset = resolveConfigPath(baseDir, cfg.Inputs.ValidationEvalset)
 	cfg.Inputs.Metrics = resolveConfigPath(baseDir, cfg.Inputs.Metrics)
