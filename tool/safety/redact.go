@@ -29,6 +29,8 @@ var (
 	urlUserInfoPattern = regexp.MustCompile(
 		`(?i)([a-z][a-z0-9+.-]*://[^/@\s:]+:)([^/@\s]+)(@)`,
 	)
+	githubTokenPattern  = regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`)
+	awsAccessKeyPattern = regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`)
 )
 
 func scanSensitiveContent(text string) []Finding {
@@ -90,6 +92,8 @@ func redactSecretText(value string) string {
 	redacted = urlUserInfoPattern.ReplaceAllString(
 		redacted, `${1}`+internalredact.Value+`${3}`,
 	)
+	redacted = githubTokenPattern.ReplaceAllString(redacted, internalredact.Value)
+	redacted = awsAccessKeyPattern.ReplaceAllString(redacted, internalredact.Value)
 	redacted = internalredact.SensitiveText(redacted)
 	return privateKeyPattern.ReplaceAllString(redacted, internalredact.Value)
 }

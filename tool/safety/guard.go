@@ -54,6 +54,7 @@ func scanExecution(policy Policy, req Request) []Finding {
 	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
 	findings = append(findings, scanNetwork(policy, segments)...)
 	findings = append(findings, scanResources(policy, req, segments)...)
+	findings = append(findings, scanInlineInterpreters(policy, segments)...)
 	findings = append(findings, scanSensitiveContent(req.Command)...)
 	return findings
 }

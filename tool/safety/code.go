@@ -47,11 +47,110 @@ func scanCodeBlocks(policy Policy, blocks []codeexecutor.CodeBlock) []Finding {
 		}
 		findings = append(findings, scanCodeResourceAbuse(language, block.Code)...)
 		findings = append(findings, scanProcessBridge(policy, language, block.Code)...)
-		findings = append(findings, scanNetworkText(policy, block.Code)...)
+		findings = append(findings, scanCodeNetwork(policy, language, block.Code)...)
 		findings = append(findings, scanCodePaths(policy, block.Code)...)
 		findings = append(findings, scanSensitiveContent(block.Code)...)
 	}
 	return findings
+}
+
+func scanInlineInterpreters(policy Policy, segments [][]string) []Finding {
+	var findings []Finding
+	for _, argv := range segments {
+		if len(argv) == 0 {
+			continue
+		}
+		base := commandBase(argv[0])
+		if isPythonInterpreter(base) {
+			if module, rest, ok := interpreterModule(argv[1:]); ok {
+				if module == "pip" {
+					findings = append(findings, scanSegmentResources(
+						policy, append([]string{"pip"}, rest...),
+					)...)
+				}
+				findings = append(findings, inlineInterpreterFinding(base))
+			}
+			if payload, ok := interpreterPayload(argv[1:], "-c"); ok {
+				findings = append(findings, scanCodeBlocks(policy, []codeexecutor.CodeBlock{{
+					Language: "python", Code: payload,
+				}})...)
+				findings = append(findings, inlineInterpreterFinding(base))
+			}
+			continue
+		}
+
+		language, flags := inlineInterpreterSpec(base)
+		for _, flag := range flags {
+			payload, ok := interpreterPayload(argv[1:], flag)
+			if !ok {
+				continue
+			}
+			findings = append(findings, scanCodeBlocks(policy, []codeexecutor.CodeBlock{{
+				Language: language, Code: payload,
+			}})...)
+			findings = append(findings, inlineInterpreterFinding(base))
+			break
+		}
+	}
+	return findings
+}
+
+func isPythonInterpreter(base string) bool {
+	return base == "python" || base == "python3" || strings.HasPrefix(base, "python3.")
+}
+
+func inlineInterpreterSpec(base string) (string, []string) {
+	switch base {
+	case "node", "nodejs":
+		return "javascript", []string{"-e", "--eval", "-p", "--print"}
+	case "ruby":
+		return "ruby", []string{"-e"}
+	case "perl":
+		return "perl", []string{"-e", "-E"}
+	case "php":
+		return "php", []string{"-r"}
+	default:
+		return "", nil
+	}
+}
+
+func interpreterPayload(args []string, flag string) (string, bool) {
+	for i, arg := range args {
+		if arg == flag {
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", true
+		}
+		if strings.HasPrefix(flag, "--") && strings.HasPrefix(arg, flag+"=") {
+			return strings.TrimPrefix(arg, flag+"="), true
+		}
+		if strings.HasPrefix(arg, flag) && len(arg) > len(flag) && strings.HasPrefix(flag, "-") &&
+			!strings.HasPrefix(flag, "--") {
+			return strings.TrimPrefix(arg, flag), true
+		}
+	}
+	return "", false
+}
+
+func interpreterModule(args []string) (string, []string, bool) {
+	for i, arg := range args {
+		if arg == "-m" && i+1 < len(args) {
+			return strings.ToLower(args[i+1]), args[i+2:], true
+		}
+		if strings.HasPrefix(arg, "-m") && len(arg) > 2 {
+			return strings.ToLower(strings.TrimPrefix(arg, "-m")), args[i+1:], true
+		}
+	}
+	return "", nil, false
+}
+
+func inlineInterpreterFinding(base string) Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskMedium, "code.inline_interpreter",
+		"command executes inline code through "+base,
+		"review inline code or use a narrowly scoped tool",
+	)
 }
 
 func isShellLanguage(language string) bool {
@@ -150,6 +249,37 @@ func scanCodePaths(policy Policy, code string) []Finding {
 	return nil
 }
 
+func scanCodeNetwork(policy Policy, language, code string) []Finding {
+	findings := scanNetworkText(policy, code)
+	if !containsCodeNetworkBridge(language, code) {
+		return findings
+	}
+	for _, literal := range quotedLiterals(code) {
+		host, ok := schemelessHost(literal)
+		if !ok {
+			continue
+		}
+		if finding, denied := networkDestinationFinding(policy, host); denied {
+			findings = append(findings, finding)
+		}
+	}
+	return findings
+}
+
+func containsCodeNetworkBridge(language, code string) bool {
+	lower := strings.ToLower(code)
+	switch language {
+	case "python", "py":
+		return containsAny(lower, "socket.create_connection(", ".connect(")
+	case "go", "golang":
+		return containsAny(lower, "net.dial(", "net.dialtimeout(", "dialcontext(")
+	case "javascript", "js", "typescript", "ts", "node":
+		return containsAny(lower, "net.connect(", "net.createconnection(", "tls.connect(")
+	default:
+		return false
+	}
+}
+
 func scanRawArguments(policy Policy, raw json.RawMessage) []Finding {
 	if len(bytes.TrimSpace(raw)) == 0 {
 		return nil
@@ -196,9 +326,6 @@ func walkRawValue(policy Policy, value any, parentKey string, depth int) []Findi
 	case []any:
 		var findings []Finding
 		for _, item := range typed {
-			if text, ok := item.(string); ok && commandKey(parentKey) {
-				findings = append(findings, scanExecution(policy, Request{Command: text})...)
-			}
 			findings = append(findings, walkRawValue(policy, item, parentKey, depth+1)...)
 		}
 		return findings

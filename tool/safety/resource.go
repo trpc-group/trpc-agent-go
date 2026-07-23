@@ -14,6 +14,11 @@ import (
 	"strings"
 )
 
+// hostExecDefaultTimeoutSeconds mirrors tool/hostexec's unexported
+// defaultTimeoutS. A safety request must evaluate the backend's effective
+// timeout even when the caller omits timeout_sec.
+const hostExecDefaultTimeoutSeconds = 1800
+
 var (
 	pythonInfiniteLoopPattern = regexp.MustCompile(`(?m)\bwhile\s+True\s*:`)
 	goInfiniteLoopPattern     = regexp.MustCompile(`(?m)\bfor\s*\{`)
@@ -24,7 +29,13 @@ var (
 
 func scanResources(policy Policy, req Request, segments [][]string) []Finding {
 	findings := scanEnvironment(policy, req.Env)
-	if policy.MaxTimeoutSeconds > 0 && req.TimeoutSeconds > policy.MaxTimeoutSeconds {
+	effectiveTimeout := req.TimeoutSeconds
+	hasExecution := strings.TrimSpace(req.Command) != "" || len(req.Args) > 0 ||
+		len(req.CodeBlocks) > 0
+	if req.Backend == BackendHostExec && hasExecution && effectiveTimeout <= 0 {
+		effectiveTimeout = hostExecDefaultTimeoutSeconds
+	}
+	if policy.MaxTimeoutSeconds > 0 && effectiveTimeout > policy.MaxTimeoutSeconds {
 		findings = append(findings, newFinding(
 			DecisionDeny, RiskHigh, "resource.timeout",
 			"requested timeout exceeds max_timeout_seconds",
@@ -129,8 +140,10 @@ func dependencyInstall(argv []string, configured []string) bool {
 	case "npm":
 		return containsAnyString(verbs, "install", "i", "ci", "uninstall", "update") ||
 			containsSequence(argv[1:], "config", "set")
-	case "pip", "pip3", "apt", "apt-get", "brew", "cargo":
+	case "pip", "pip3", "apt", "apt-get", "brew", "cargo", "gem":
 		return containsAnyString(verbs, "install", "uninstall", "upgrade", "add")
+	case "yarn", "pnpm":
+		return containsAnyString(verbs, "add", "install", "remove", "update", "upgrade")
 	}
 	joined := strings.Join(argv, " ")
 	for _, command := range configured {
@@ -192,6 +205,9 @@ func durationSeconds(value string) (float64, bool) {
 	case strings.HasSuffix(value, "h"):
 		multiplier = 3600
 		value = strings.TrimSuffix(value, "h")
+	case strings.HasSuffix(value, "d"):
+		multiplier = 24 * 3600
+		value = strings.TrimSuffix(value, "d")
 	case strings.HasSuffix(value, "s"):
 		value = strings.TrimSuffix(value, "s")
 	}

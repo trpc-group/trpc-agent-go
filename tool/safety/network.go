@@ -20,13 +20,32 @@ var explicitURLPattern = regexp.MustCompile(
 
 var networkCommands = map[string]struct{}{
 	"curl": {}, "wget": {}, "nc": {}, "netcat": {}, "ssh": {},
-	"scp": {}, "sftp": {}, "ftp": {},
+	"scp": {}, "sftp": {}, "ftp": {}, "git": {},
+}
+
+var nonNetworkCommands = map[string]struct{}{
+	"cat": {}, "echo": {}, "false": {}, "grep": {}, "head": {},
+	"ls": {}, "pwd": {}, "tail": {}, "test": {}, "true": {}, "wc": {},
 }
 
 func scanNetwork(policy Policy, segments [][]string) []Finding {
 	var findings []Finding
 	for _, argv := range segments {
 		if len(argv) == 0 {
+			continue
+		}
+		classification := classifyNetworkCommand(argv[0])
+		if classification == networkCommandNone {
+			continue
+		}
+		if classification == networkCommandUnknown {
+			if unknownNetworkSignal(argv) {
+				findings = append(findings, newFinding(
+					DecisionNeedsHumanReview, RiskMedium, "network.unknown_client",
+					"unknown executable receives network-shaped arguments",
+					"review the executable semantics or use a recognized network tool",
+				))
+			}
 			continue
 		}
 		if finding, ok := destinationOverrideFinding(argv); ok {
@@ -36,10 +55,9 @@ func scanNetwork(policy Policy, segments [][]string) []Finding {
 			findings = append(findings, finding)
 		}
 
-		_, networkCommand := networkCommands[commandBase(argv[0])]
 		for i, arg := range argv[1:] {
 			host, ok := explicitHost(arg)
-			if !ok && networkCommand && !networkOptionValue(argv, i+1) {
+			if !ok && !networkOptionValue(argv, i+1) {
 				host, ok = schemelessHost(arg)
 			}
 			if finding, denied := networkDestinationFinding(policy, host); ok && denied {
@@ -48,6 +66,41 @@ func scanNetwork(policy Policy, segments [][]string) []Finding {
 		}
 	}
 	return findings
+}
+
+type networkCommandClassification int
+
+const (
+	networkCommandUnknown networkCommandClassification = iota
+	networkCommandNone
+	networkCommandKnown
+)
+
+func classifyNetworkCommand(command string) networkCommandClassification {
+	base := commandBase(command)
+	if _, ok := networkCommands[base]; ok || strings.Contains(base, "fetch") ||
+		strings.Contains(base, "download") {
+		return networkCommandKnown
+	}
+	if _, ok := nonNetworkCommands[base]; ok {
+		return networkCommandNone
+	}
+	return networkCommandUnknown
+}
+
+func unknownNetworkSignal(argv []string) bool {
+	for _, arg := range argv[1:] {
+		if _, ok := explicitHost(arg); ok {
+			return true
+		}
+		name := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
+		switch name {
+		case "--resolve", "--connect-to", "--proxy", "--preproxy",
+			"--proxy-command", "--proxycommand":
+			return true
+		}
+	}
+	return false
 }
 
 func scanNetworkText(policy Policy, text string) []Finding {
@@ -110,7 +163,7 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 	base := commandBase(argv[0])
 	if base == "ssh" {
 		for _, arg := range argv[1:] {
-			if strings.EqualFold(arg, "-F") || strings.HasPrefix(strings.ToLower(arg), "-f=") {
+			if arg == "-F" || strings.HasPrefix(arg, "-F") {
 				return newFinding(
 					DecisionNeedsHumanReview, RiskMedium, "network.config",
 					"SSH loads options from a configuration file",
@@ -124,8 +177,9 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 		return Finding{}, false
 	}
 	for _, arg := range argv[1:] {
-		name := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
-		if name == "--config" || name == "-k" {
+		longName := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
+		shortConfig := base == "curl" && (arg == "-K" || strings.HasPrefix(arg, "-K"))
+		if longName == "--config" || shortConfig {
 			return newFinding(
 				DecisionNeedsHumanReview, RiskMedium, "network.config",
 				"network client loads options from a configuration file",
@@ -205,12 +259,16 @@ func networkOptionValue(argv []string, index int) bool {
 	if index <= 1 {
 		return false
 	}
-	previous := strings.ToLower(strings.SplitN(argv[index-1], "=", 2)[0])
+	rawPrevious := argv[index-1]
+	if rawPrevious == "-F" || rawPrevious == "-K" || rawPrevious == "-J" {
+		return true
+	}
+	previous := strings.ToLower(strings.SplitN(rawPrevious, "=", 2)[0])
 	switch previous {
 	case "-h", "--header", "-a", "--user-agent", "-d", "--data",
 		"--data-raw", "--data-binary", "-o", "--output", "-u", "--user",
 		"--resolve", "--connect-to", "--proxy", "--preproxy", "-x",
-		"--config", "-k", "-j", "-f":
+		"--config", "-j":
 		return true
 	}
 	return false

@@ -79,6 +79,87 @@ func TestGuardScansCustomNetworkDestinations(t *testing.T) {
 	}
 }
 
+func TestGuardClassifiesNetworkClientsWithoutURLFalsePositives(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	tests := []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{"known non-network URL argument", "echo https://evil.example", safety.DecisionAllow, "safety.no_findings"},
+		{"known non-network proxy flag", "echo --proxy evil.example", safety.DecisionAllow, "safety.no_findings"},
+		{"unknown executable URL", "mystery-tool https://evil.example", safety.DecisionNeedsHumanReview, "network.unknown_client"},
+		{"known client URL", "curl https://evil.example", safety.DecisionDeny, "network.destination"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardHandlesCaseSensitiveAttachedConfigOptions(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{"ssh -Fssh.conf api.github.com", safety.DecisionNeedsHumanReview, "network.config"},
+		{"curl -Krequest.conf", safety.DecisionNeedsHumanReview, "network.config"},
+		{"curl -k https://api.github.com", safety.DecisionAllow, "safety.no_findings"},
+	} {
+		report := guard.Scan(safety.Request{Command: tc.command})
+		require.Equal(t, tc.decision, report.Decision, tc.command)
+		require.Equal(t, tc.rule, report.RuleID, tc.command)
+	}
+}
+
+func TestGuardScansInlineInterpreterPayloads(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, tc := range []struct {
+		name    string
+		command string
+		rule    string
+	}{
+		{"python credential read", `python -c 'open("~/.ssh/id_rsa").read()'`, "sensitive.path"},
+		{"python network call", `python -c 'urllib.request.urlopen("https://evil.example")'`, "network.destination"},
+		{"node dangerous process", `node -e 'require("child_process").exec("rm -rf /")'`, "code.process_bridge"},
+		{"node attached eval", `node --eval='require("child_process").exec("rm -rf /")'`, "code.process_bridge"},
+		{"ruby credential read", `ruby -e 'File.read("~/.ssh/id_rsa")'`, "sensitive.path"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, safety.DecisionDeny, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardScansSchemelessCodeNetworkLiterals(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "python", Code: `socket.create_connection(("evil.example", 443))`},
+		{Language: "go", Code: `net.Dial("tcp", "evil.example:443")`},
+		{Language: "javascript", Code: `net.connect(443, "evil.example")`},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionDeny, report.Decision, block.Language)
+		require.Equal(t, "network.destination", report.RuleID, block.Language)
+	}
+}
+
 func TestGuardEnforcesResourcePolicy(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	tests := []struct {
@@ -90,10 +171,12 @@ func TestGuardEnforcesResourcePolicy(t *testing.T) {
 		{"environment variable", safety.Request{Command: "go test ./...", Env: map[string]string{"PATH": "/usr/bin", "API_TOKEN": "secret-value"}}, safety.DecisionDeny, "environment.variable"},
 		{"timeout", safety.Request{Command: "go test ./...", TimeoutSeconds: 301}, safety.DecisionDeny, "resource.timeout"},
 		{"output budget", safety.Request{Command: "go test ./...", MaxOutputBytes: 4*1024*1024 + 1}, safety.DecisionDeny, "resource.output_limit"},
-		{"host background", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", Background: true}, safety.DecisionDeny, "host.background"},
-		{"host tty", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", TTY: true}, safety.DecisionNeedsHumanReview, "host.tty"},
+		{"host background", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", TimeoutSeconds: 300, Background: true}, safety.DecisionDeny, "host.background"},
+		{"host tty", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", TimeoutSeconds: 300, TTY: true}, safety.DecisionNeedsHumanReview, "host.tty"},
+		{"host default timeout", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./..."}, safety.DecisionDeny, "resource.timeout"},
 		{"long sleep", safety.Request{Command: "sleep 600"}, safety.DecisionNeedsHumanReview, "resource.long_running"},
 		{"infinite sleep", safety.Request{Command: "sleep infinity"}, safety.DecisionNeedsHumanReview, "resource.long_running"},
+		{"day sleep", safety.Request{Command: "sleep 1d"}, safety.DecisionNeedsHumanReview, "resource.long_running"},
 		{"output generator", safety.Request{Command: "yes data"}, safety.DecisionNeedsHumanReview, "resource.large_output"},
 		{"high parallelism", safety.Request{Command: "make -j100"}, safety.DecisionNeedsHumanReview, "resource.concurrency"},
 		{"host effective timeout", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", TimeoutSeconds: 1800}, safety.DecisionDeny, "resource.timeout"},
@@ -107,6 +190,13 @@ func TestGuardEnforcesResourcePolicy(t *testing.T) {
 	}
 }
 
+func TestGuardDoesNotApplyHostExecDefaultWithoutExecution(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		Backend: safety.BackendHostExec,
+	})
+	require.Equal(t, safety.DecisionAllow, report.Decision)
+}
+
 func TestGuardReviewsDependencyMutationWithGlobalOptions(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	for _, command := range []string{
@@ -115,6 +205,11 @@ func TestGuardReviewsDependencyMutationWithGlobalOptions(t *testing.T) {
 		"npm --prefix packages install example-package",
 		"pip --disable-pip-version-check install example-package",
 		"apt-get -y install example-package",
+		"python -m pip install example-package",
+		"python3 -m pip install example-package",
+		"yarn add example-package",
+		"pnpm add example-package",
+		"gem install example-package",
 	} {
 		report := guard.Scan(safety.Request{Command: command})
 		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, command)
@@ -257,6 +352,8 @@ func TestReportRedactsSecretsAndCredentialPaths(t *testing.T) {
 		{"basic auth", `curl https://api.github.com -H 'Authorization: Basic dXNlcjpzZWNyZXQ='`, "dXNlcjpzZWNyZXQ="},
 		{"user flag", `curl https://api.github.com -u user:flag-password`, "flag-password"},
 		{"URL user info", `curl https://user:url-password@api.github.com`, "url-password"},
+		{"GitHub token", `echo ghp_abcdefghijklmnopqrstuvwxyz1234567890`, "ghp_abcdefghijklmnopqrstuvwxyz1234567890"},
+		{"AWS access key", `echo AKIAIOSFODNN7EXAMPLE`, "AKIAIOSFODNN7EXAMPLE"},
 		{"private key", "echo '-----BEGIN PRIVATE KEY-----\nprivate-material\n-----END PRIVATE KEY-----'", "private-material"},
 		{"incomplete private key", "echo '-----BEGIN PRIVATE KEY-----\npartial-private-material'", "partial-private-material"},
 		{"credential path", "cat /home/user/.aws/credentials", "/home/user/.aws/credentials"},
@@ -272,6 +369,30 @@ func TestReportRedactsSecretsAndCredentialPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestGuardHandlesDeepArgumentsAndDeterministicFindings(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	value := any("go test ./...")
+	for i := 0; i < maxTestArgumentDepth; i++ {
+		value = map[string]any{"nested": value}
+	}
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	report := guard.Scan(safety.Request{RawArguments: raw})
+	require.Equal(t, safety.DecisionDeny, report.Decision)
+	require.Equal(t, "arguments.max_depth", report.RuleID)
+
+	const mixed = `{"commands":["sleep 1d","go install example.com/tool@latest"],"z":{"command":"cat ~/.ssh/id_rsa"}}`
+	first := guard.Scan(safety.Request{RawArguments: json.RawMessage(mixed)})
+	for i := 0; i < 20; i++ {
+		next := guard.Scan(safety.Request{RawArguments: json.RawMessage(mixed)})
+		require.Equal(t, first.Decision, next.Decision)
+		require.Equal(t, first.RuleID, next.RuleID)
+		require.Equal(t, first.Findings, next.Findings)
+	}
+}
+
+const maxTestArgumentDepth = 40
 
 func TestReportDoesNotRedactOrdinaryPathPrefixes(t *testing.T) {
 	report := mustGuard(t, safety.DefaultPolicy()).Scan(
