@@ -685,13 +685,113 @@ func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 		got.Timeout != defaultCommandTimeoutSeconds {
 		t.Fatalf("skill_run args = %+v", got)
 	}
-	if got.Env["REVIEW_REPO_DIR"] != "../../work/repo" {
+	if got.Env["REVIEW_REPO_DIR"] != reviewRepoDirFromSkill {
 		t.Fatalf("REVIEW_REPO_DIR = %q", got.Env["REVIEW_REPO_DIR"])
 	}
-	if len(got.Inputs) != 1 || got.Inputs[0].To != "work/repo" ||
+	if len(got.Inputs) != 1 || got.Inputs[0].To != reviewRepoInputTarget ||
 		got.Inputs[0].Mode != "copy" ||
 		!strings.HasPrefix(got.Inputs[0].From, "host://") {
 		t.Fatalf("inputs = %+v", got.Inputs)
+	}
+}
+
+func TestPlanCommandsStagesRepoOnlyOnce(t *testing.T) {
+	input := reviewInput{
+		kind:     inputKindRepoPath,
+		repoRoot: t.TempDir(),
+	}
+	commands := planCommands(
+		config{enableStaticcheck: true},
+		input,
+		parseUnifiedDiff([]byte(minimalDiff())),
+	)
+	wantKinds := []commandKind{
+		commandCheckGoVersion,
+		commandCheckGoTest,
+		commandCheckGoVet,
+		commandCheckStaticcheck,
+	}
+	if len(commands) != len(wantKinds) {
+		t.Fatalf("commands = %d, want %d", len(commands), len(wantKinds))
+	}
+	for i, command := range commands {
+		if command.Kind != wantKinds[i] {
+			t.Fatalf("command %d kind = %q, want %q", i, command.Kind, wantKinds[i])
+		}
+		if command.Env["REVIEW_REPO_DIR"] != reviewRepoDirFromSkill {
+			t.Fatalf("command %d REVIEW_REPO_DIR = %q", i, command.Env["REVIEW_REPO_DIR"])
+		}
+		if i == 0 {
+			if len(command.Inputs) != 1 || command.Inputs[0].To != reviewRepoInputTarget {
+				t.Fatalf("first command inputs = %+v", command.Inputs)
+			}
+			continue
+		}
+		if len(command.Inputs) != 0 {
+			t.Fatalf("command %d inputs = %+v, want none", i, command.Inputs)
+		}
+	}
+}
+
+func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
+	if err := preflightLocalRuntime(); err != nil {
+		t.Skipf("local runtime unavailable: %v", err)
+	}
+	meta, err := loadCodeReviewSkill("")
+	if err != nil {
+		t.Fatalf("load skill: %v", err)
+	}
+	runner, err := newLocalSandboxRunner(meta)
+	if err != nil {
+		t.Fatalf("new local runner: %v", err)
+	}
+	if closer, ok := runner.(interface{ Close() error }); ok {
+		t.Cleanup(func() {
+			if err := closer.Close(); err != nil {
+				t.Errorf("close local runner: %v", err)
+			}
+		})
+	}
+
+	repoRoot := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(repoRoot, "go.mod"),
+		[]byte("module example.com/reviewtarget\n\ngo 1.21\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repoRoot, "review.go"),
+		[]byte("package reviewtarget\n\nfunc value() int { return 1 }\n"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	objectDir := filepath.Join(repoRoot, ".git", "objects", "aa")
+	if err := os.MkdirAll(objectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(objectDir, "object"), []byte("readonly"), 0o400); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(objectDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(objectDir, 0o755)
+	})
+
+	commands := planCommands(
+		config{},
+		reviewInput{kind: inputKindRepoPath, repoRoot: repoRoot},
+		parseUnifiedDiff([]byte(minimalDiff())),
+	)
+	for _, command := range commands {
+		run := runner.RunSandboxCommand(context.Background(), command)
+		if run.Error != "" || run.ExitCode != 0 || run.TimedOut {
+			t.Fatalf("sandbox run %q = %+v", command.Kind, run)
+		}
 	}
 }
 
@@ -804,7 +904,7 @@ func TestLoadCodeReviewSkillDigestAndRequiredFiles(t *testing.T) {
 
 func TestCommandGateValidation(t *testing.T) {
 	absRepo := filepath.ToSlash(t.TempDir())
-	validInput := []inputMapping{{From: "host://" + absRepo, To: "work/repo", Mode: "copy"}}
+	validInput := []inputMapping{{From: "host://" + absRepo, To: reviewRepoInputTarget, Mode: "copy"}}
 
 	tests := []struct {
 		name string
@@ -814,7 +914,7 @@ func TestCommandGateValidation(t *testing.T) {
 		{
 			name: "valid repo command",
 			spec: newCommandSpec(commandCheckGoTest, validInput, map[string]string{
-				"REVIEW_REPO_DIR": "../../work/repo",
+				"REVIEW_REPO_DIR": reviewRepoDirFromSkill,
 			}),
 			want: governanceDecisionAllow,
 		},
@@ -862,7 +962,16 @@ func TestCommandGateValidation(t *testing.T) {
 			name: "invalid input mapping",
 			spec: newCommandSpec(commandCheckGoTest, []inputMapping{{
 				From: "workspace://repo",
+				To:   reviewRepoInputTarget,
+			}}, nil),
+			want: governanceDecisionDeny,
+		},
+		{
+			name: "repo target without directory suffix",
+			spec: newCommandSpec(commandCheckGoTest, []inputMapping{{
+				From: "host://" + absRepo,
 				To:   "work/repo",
+				Mode: "copy",
 			}}, nil),
 			want: governanceDecisionDeny,
 		},
@@ -958,6 +1067,40 @@ func TestGovernanceAllowCallsRunner(t *testing.T) {
 	}
 	if len(gov.Warnings) != 0 {
 		t.Fatalf("warnings = %+v, want none", gov.Warnings)
+	}
+}
+
+func TestGovernanceBlockedPreflightSkipsLaterCommands(t *testing.T) {
+	permissionCalls := 0
+	runner := &recordingSandboxRunner{}
+	gov, err := runGovernance(context.Background(), config{}, reviewInput{
+		kind: inputKindFixture,
+	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
+		permissionPolicy: tool.PermissionPolicyFunc(func(
+			context.Context,
+			*tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			permissionCalls++
+			if permissionCalls == 1 {
+				return tool.DenyPermission("preflight denied"), nil
+			}
+			return tool.AllowPermission(), nil
+		}),
+		sandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatalf("runGovernance: %v", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Fatalf("runner calls = %+v, want none", runner.calls)
+	}
+	if len(gov.SandboxRuns) != 2 {
+		t.Fatalf("sandbox runs = %+v, want two skipped runs", gov.SandboxRuns)
+	}
+	for _, run := range gov.SandboxRuns {
+		if !run.Skipped || !strings.Contains(run.Error, "preflight denied") {
+			t.Fatalf("sandbox run = %+v, want preflight skip", run)
+		}
 	}
 }
 
@@ -1095,6 +1238,55 @@ func TestParseUnifiedDiffLineNumbersAndNoNewlineMarker(t *testing.T) {
 	candidates := parsed.candidateLines()
 	if len(candidates) != 2 || candidates[0].Line != 2 || candidates[1].Line != 3 {
 		t.Fatalf("candidate lines = %+v", candidates)
+	}
+}
+
+func TestParseUnifiedDiffHunkLinesThatResembleMetadata(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/pkg/example.txt b/pkg/example.txt",
+		"--- a/pkg/example.txt",
+		"+++ b/pkg/example.txt",
+		"@@ -1,2 +1,2 @@",
+		"--- old value",
+		"+++ new value",
+		" trailing value",
+		"@@ -5 +5 @@",
+		"-old tail",
+		"+new tail",
+	}, "\n")
+
+	parsed := parseUnifiedDiff([]byte(diff))
+	if len(parsed.Warnings) != 0 {
+		t.Fatalf("warnings = %+v, want none", parsed.Warnings)
+	}
+	if len(parsed.Files) != 1 {
+		t.Fatalf("files = %+v, want one", parsed.Files)
+	}
+	file := parsed.Files[0]
+	if file.OldPath != "pkg/example.txt" || file.NewPath != "pkg/example.txt" {
+		t.Fatalf("file paths = %q -> %q", file.OldPath, file.NewPath)
+	}
+	if len(file.Hunks) != 2 {
+		t.Fatalf("hunks = %+v, want two", file.Hunks)
+	}
+	lines := file.Hunks[0].Lines
+	if len(lines) != 3 {
+		t.Fatalf("first hunk lines = %+v", lines)
+	}
+	if lines[0].Kind != diffLineDeleted || lines[0].Text != "-- old value" ||
+		lines[0].OldLine != 1 || lines[0].NewLine != 0 {
+		t.Fatalf("metadata-like deleted line = %+v", lines[0])
+	}
+	if lines[1].Kind != diffLineAdded || lines[1].Text != "++ new value" ||
+		lines[1].OldLine != 0 || lines[1].NewLine != 1 {
+		t.Fatalf("metadata-like added line = %+v", lines[1])
+	}
+	if lines[2].Kind != diffLineContext || lines[2].OldLine != 2 || lines[2].NewLine != 2 {
+		t.Fatalf("context line = %+v", lines[2])
+	}
+	if got := file.Hunks[1].Lines; len(got) != 2 ||
+		got[0].OldLine != 5 || got[1].NewLine != 5 {
+		t.Fatalf("second hunk lines = %+v", got)
 	}
 }
 

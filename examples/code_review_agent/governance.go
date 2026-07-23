@@ -44,7 +44,9 @@ const (
 	ruleSandboxRunFailed         = "sandbox.run_failed"
 	ruleSandboxRunSkipped        = "sandbox.run_skipped"
 
-	toolNameSkillRun = "skill_run"
+	toolNameSkillRun       = "skill_run"
+	reviewRepoInputTarget  = "work/repo/"
+	reviewRepoDirFromSkill = "../../work/repo"
 
 	defaultCommandTimeoutSeconds = 60
 )
@@ -197,6 +199,10 @@ func runGovernance(
 				"Command was blocked by the command gate",
 				filterDecision.Reason,
 			)
+			if spec.Kind == commandCheckGoVersion {
+				preflightFailed = true
+				preflightReason = filterDecision.Reason
+			}
 			continue
 		}
 
@@ -211,6 +217,10 @@ func runGovernance(
 				"Command requires permission review",
 				permissionDecision.Reason,
 			)
+			if spec.Kind == commandCheckGoVersion {
+				preflightFailed = true
+				preflightReason = permissionDecision.Reason
+			}
 			continue
 		}
 
@@ -373,11 +383,11 @@ func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpe
 	}
 	if hasReviewableGoChange(parsed) {
 		commands = append(commands,
-			newCommandSpec(commandCheckGoTest, inputs, env),
-			newCommandSpec(commandCheckGoVet, inputs, env),
+			newCommandSpec(commandCheckGoTest, nil, env),
+			newCommandSpec(commandCheckGoVet, nil, env),
 		)
 		if cfg.enableStaticcheck {
-			commands = append(commands, newCommandSpec(commandCheckStaticcheck, inputs, env))
+			commands = append(commands, newCommandSpec(commandCheckStaticcheck, nil, env))
 		}
 	}
 	return commands
@@ -420,7 +430,7 @@ func commandInputs(input reviewInput) []inputMapping {
 	}
 	return []inputMapping{{
 		From: "host://" + filepath.ToSlash(repoRoot),
-		To:   "work/repo",
+		To:   reviewRepoInputTarget,
 		Mode: "copy",
 	}}
 }
@@ -429,7 +439,7 @@ func commandEnv(input reviewInput) map[string]string {
 	if input.kind != inputKindRepoPath || strings.TrimSpace(input.repoRoot) == "" {
 		return nil
 	}
-	return map[string]string{"REVIEW_REPO_DIR": "../../work/repo"}
+	return map[string]string{"REVIEW_REPO_DIR": reviewRepoDirFromSkill}
 }
 
 func hasReviewableGoChange(parsed parsedDiff) bool {
@@ -518,7 +528,7 @@ func validateCommandInputs(inputs []inputMapping) error {
 		return fmt.Errorf("only one repository input mapping is allowed")
 	}
 	input := inputs[0]
-	if input.To != "work/repo" {
+	if input.To != reviewRepoInputTarget {
 		return fmt.Errorf("input target %q is not allowed", input.To)
 	}
 	if input.Mode != "" && input.Mode != "copy" {
