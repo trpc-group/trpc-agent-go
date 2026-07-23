@@ -469,19 +469,21 @@ func (r *workspaceRuntime) RunProgram(
 	if spec.CleanEnv {
 		execEnv = cleanWrapperEnv()
 	}
-	out, errOut, code, timed, err := r.execCmdWithStdin(
+	out, errOut, code, timed, truncated, err := r.execCmdWithStdin(
 		ctx,
 		argv,
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.OutputMaxBytes,
 	)
 	res := codeexecutor.RunResult{
-		Stdout:   out,
-		Stderr:   errOut,
-		ExitCode: code,
-		Duration: t,
-		TimedOut: timed,
+		Stdout:          out,
+		Stderr:          errOut,
+		ExitCode:        code,
+		Duration:        t,
+		TimedOut:        timed,
+		OutputTruncated: truncated,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -1156,7 +1158,8 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+	stdout, stderr, code, timed, _, err := r.execCmdWithStdin(ctx, argv, timeout, "", nil, 0)
+	return stdout, stderr, code, timed, err
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,7 +1174,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
-) (string, string, int, bool, error) {
+	maxOutputBytes int,
+) (string, string, int, bool, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	ec := tcontainer.ExecOptions{
@@ -1185,13 +1189,13 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		tctx, r.ce.container.ID, ec,
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	hj, err := r.ce.client.ContainerExecAttach(
 		tctx, ex.ID, tcontainer.ExecStartOptions{},
 	)
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, false, err
 	}
 	defer hj.Close()
 
@@ -1207,23 +1211,24 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	stdout := codeexecutor.NewLimitedBuffer(maxOutputBytes)
+	stderr := codeexecutor.NewLimitedBuffer(maxOutputBytes)
+	_, err = stdcopy.StdCopy(stdout, stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, err
+		return "", "", 0, false, stdout.Truncated() || stderr.Truncated(), err
 	}
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {
 		timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-		return stdout.String(), stderr.String(), 0, timed, err
+		return stdout.String(), stderr.String(), 0, timed, stdout.Truncated() || stderr.Truncated(), err
 	}
 	timed := errors.Is(tctx.Err(), context.DeadlineExceeded)
-	return stdout.String(), stderr.String(), insp.ExitCode, timed, nil
+	return stdout.String(), stderr.String(), insp.ExitCode, timed, stdout.Truncated() || stderr.Truncated(), nil
 }
 
 func sanitize(s string) string {

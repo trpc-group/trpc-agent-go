@@ -173,9 +173,7 @@ func (p EnvPlanner) PlanReview(ctx context.Context, req PlanRequest) (review.Rev
 	}
 	plan := reviewPlan(modelName, "openai_compatible", "model_response", req.Skill, runtimeName, req.WorkDir)
 	if len(modelPlan.Commands) > 0 {
-		if allowedCommands := allowlistedModelCommands(modelPlan.Commands, req.WorkDir); len(allowedCommands) > 0 {
-			plan.Commands = redactStrings(allowedCommands)
-		}
+		plan.Commands = redactStrings(uniqueModelCommands(modelPlan.Commands))
 	}
 	if len(modelPlan.RuleSources) > 0 {
 		plan.RuleSources = redactStrings(modelPlan.RuleSources)
@@ -294,11 +292,7 @@ func redactStrings(in []string) []string {
 }
 
 func allowlistedModelCommands(commands []string, workDir string) []string {
-	allowlist := newSandboxWorkspace(workDir).commandAllowlist()
-	allowed := make(map[string]string, len(allowlist))
-	for _, command := range allowlist {
-		allowed[canonicalCommand(command)] = command
-	}
+	allowed := allowedCommandsByCanonical(workDir)
 	seen := make(map[string]struct{}, len(commands))
 	out := make([]string, 0, len(commands))
 	for _, command := range commands {
@@ -314,6 +308,32 @@ func allowlistedModelCommands(commands []string, workDir string) []string {
 		out = append(out, allowedCommand)
 	}
 	return out
+}
+
+func uniqueModelCommands(commands []string) []string {
+	seen := make(map[string]struct{}, len(commands))
+	out := make([]string, 0, len(commands))
+	for _, command := range commands {
+		canonical := canonicalCommand(command)
+		if canonical == "" {
+			continue
+		}
+		if _, ok := seen[canonical]; ok {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		out = append(out, canonical)
+	}
+	return out
+}
+
+func allowedCommandsByCanonical(workDir string) map[string]string {
+	allowlist := newSandboxWorkspace(workDir).commandAllowlist()
+	allowed := make(map[string]string, len(allowlist))
+	for _, command := range allowlist {
+		allowed[canonicalCommand(command)] = command
+	}
+	return allowed
 }
 
 func canonicalCommand(command string) string {
@@ -368,6 +388,13 @@ func (ws sandboxWorkspace) runtimeCwd(runtimeName string) string {
 
 func (ws sandboxWorkspace) hasSelectedRepo() bool {
 	return ws.workDir != ""
+}
+
+func (ws sandboxWorkspace) dependencySubdir() string {
+	if ws.hasSelectedRepo() {
+		return ""
+	}
+	return reviewAgentModuleDir
 }
 
 // Run executes a model-planned review over fixture diffs.
@@ -522,9 +549,6 @@ func Run(ctx context.Context, opts Options) (result Result, err error) {
 	task.Status = statusFor(findings, runs)
 	task.FinishedAt = &finishedAt
 	conclusion := conclusionFor(task.Status, findings, runs)
-	if !sandboxValidationAvailable(input) {
-		conclusion = "no_sandbox_run"
-	}
 	r := review.Report{
 		Task:                task,
 		Summary:             summarizeOutcome(input, files, findings, runs, plan),
@@ -661,6 +685,7 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 	if len(commands) == 0 {
 		commands = newSandboxWorkspace(workDir).commandAllowlist()
 	}
+	allowedCommands := allowedCommandsByCanonical(workDir)
 	var decisions []review.PermissionDecisionRecord
 	var runs []review.SandboxRun
 	var runtime sandboxrun.Runtime
@@ -672,6 +697,26 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 	}()
 	for index, command := range commands {
 		suffix := fmt.Sprintf("%03d", index+1)
+		canonical := canonicalCommand(command)
+		allowedCommand, allowed := allowedCommands[canonical]
+		if !allowed {
+			decision := allowlistRejectedDecision(taskID, suffix, command, now)
+			if err := st.RecordPermissionDecision(ctx, decision); err != nil {
+				return nil, nil, err
+			}
+			decisions = append(decisions, decision)
+			runs = append(runs, review.SandboxRun{
+				ID:             taskID + "-sandbox-" + suffix,
+				TaskID:         taskID,
+				Runtime:        runtimeName,
+				Command:        redact.Text(command).Text,
+				Status:         sandboxrun.StatusSkipped,
+				DurationMillis: 0,
+				ErrorType:      sandboxrun.ErrorPermissionBlocked,
+			})
+			continue
+		}
+		command = allowedCommand
 		decision := safetywrap.Decide(safetywrap.PlannedCommand{
 			ID:       taskID + "-permission-" + suffix,
 			TaskID:   taskID,
@@ -716,6 +761,25 @@ func executePlannedCommandsWithFactory(ctx context.Context, st store.Store, task
 		}
 	}
 	return decisions, runs, nil
+}
+
+func allowlistRejectedDecision(taskID string, suffix string, command string, now time.Time) review.PermissionDecisionRecord {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	return review.PermissionDecisionRecord{
+		ID:              taskID + "-permission-" + suffix,
+		TaskID:          taskID,
+		ToolName:        "workspace_exec",
+		Command:         redact.Text(command).Text,
+		FrameworkAction: safetywrap.ActionDeny,
+		SafetyDecision:  safetywrap.DecisionDeny,
+		RiskLevel:       safetywrap.RiskHigh,
+		RuleID:          "sandbox.command_not_allowlisted",
+		Reason:          "Command is not in the sandbox allowlist and was not executed.",
+		Blocked:         true,
+		CreatedAt:       now.UTC(),
+	}
 }
 
 func countFindingRedactions(findings []review.Finding) int {
@@ -812,7 +876,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		}
 		return nil, nil, err
 	}
-	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot)
+	snapshotCleanup, err := stageReviewWorkspace(ctx, eng.FS(), ws, runtimeName, repoRoot, workspace.dependencySubdir())
 	if err != nil {
 		_ = eng.Manager().Cleanup(context.Background(), ws)
 		if closeFn != nil {
@@ -833,28 +897,28 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		})
 	}
 	return sandboxrun.WorkspaceRuntime{
-		RuntimeName: runtimeName,
-		Engine:      eng,
-		Workspace:   ws,
-		Cwd:         workspace.runtimeCwd(runtimeName),
-		Timeout:     timeout,
-		Env:         workspaceRuntimeEnv(runtimeName),
-		TerminateFn: func(context.Context) { cleanup() },
+		RuntimeName:    runtimeName,
+		Engine:         eng,
+		Workspace:      ws,
+		Cwd:            workspace.runtimeCwd(runtimeName),
+		Timeout:        timeout,
+		Env:            workspaceRuntimeEnv(runtimeName),
+		TerminateFn:    func(context.Context) { cleanup() },
+		MaxOutputBytes: defaultMaxSandboxOutput,
 	}, cleanup, nil
 }
 
-func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string) (func(), error) {
+func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws codeexecutor.Workspace, runtimeName string, repoRoot string, dependencySubdir string) (func(), error) {
 	if runtimeName == "local" {
 		return nil, nil
 	}
-	stageRoot := repoRoot
-	var snapshotCleanup func()
-	if runtimeName == "e2b" {
-		var err error
-		stageRoot, snapshotCleanup, err = buildReviewSnapshot(ctx, repoRoot)
-		if err != nil {
-			return nil, err
-		}
+	stageRoot, snapshotCleanup, err := buildReviewSnapshot(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	if err := prepareSandboxDependencies(ctx, stageRoot, dependencySubdir); err != nil {
+		snapshotCleanup()
+		return nil, err
 	}
 	if err := fs.StageDirectory(ctx, ws, stageRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
 		if snapshotCleanup != nil {
@@ -913,6 +977,36 @@ func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), 
 		}
 	}
 	return snapshot, cleanup, nil
+}
+
+func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string) error {
+	moduleDir := filepath.Join(snapshotRoot, filepath.FromSlash(dependencySubdir))
+	if _, err := os.Stat(filepath.Join(moduleDir, "go.mod")); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("stat sandbox go.mod: %w", err)
+	}
+	cacheRoot := filepath.Join(snapshotRoot, ".gopath")
+	modCache := filepath.Join(snapshotRoot, ".gomodcache")
+	buildCache := filepath.Join(snapshotRoot, ".gocache")
+	for _, dir := range []string{cacheRoot, modCache, buildCache} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create sandbox dependency cache: %w", err)
+		}
+	}
+	cmd := exec.CommandContext(ctx, "go", "mod", "download")
+	cmd.Dir = moduleDir
+	cmd.Env = append(os.Environ(),
+		"GOPATH="+cacheRoot,
+		"GOMODCACHE="+modCache,
+		"GOCACHE="+buildCache,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("prepare sandbox dependencies: %w: %s", err, redact.Text(strings.TrimSpace(stderr.String())).Text)
+	}
+	return nil
 }
 
 func trackedReviewFiles(ctx context.Context, repoRoot string) ([]string, error) {
@@ -983,11 +1077,8 @@ func containerHostConfig() tcontainer.HostConfig {
 }
 
 func containerBindMounts(repoRoot string) []bindMount {
-	return []bindMount{{
-		HostPath:      repoRoot,
-		ContainerPath: "/workspace",
-		Mode:          "ro",
-	}}
+	_ = repoRoot
+	return nil
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {

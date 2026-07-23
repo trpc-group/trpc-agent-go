@@ -93,17 +93,17 @@ The implementation also tracks status and fingerprint metadata. High-confidence 
 ## 5. Sandbox Isolation Strategy / 沙箱隔离策略
 
 English:
-For the container runtime, the orchestrator stages the selected workspace into an isolated workspace. Fixture inputs run commands from the example module directory so the sample's review scripts and rules are available. Standalone diff and file-list inputs without `--repo-path` skip sandbox validation; associated `--repo-path` inputs run commands from the selected repository root, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The container is unprivileged, auto-removed, resource-limited, and only the reviewed workspace is mounted. Network mode is explicitly set to `none`; the image/runtime must provide dependencies for `GOMODCACHE=/go/pkg/mod` because the host-wide module cache is never mounted. The runtime also sets container-safe Go paths such as `HOME=/tmp`, `GOPATH=/go`, and `GOCACHE=/tmp/go-build`.
+For the container runtime, the orchestrator stages a filtered review snapshot into an isolated workspace. Fixture inputs run commands from the example module directory so the sample's review scripts and rules are available. Standalone diff and file-list inputs without `--repo-path` skip sandbox validation; associated `--repo-path` inputs run commands from the selected repository root, and the command allowlist is limited to checks that are valid in an arbitrary Go repository, such as `go test ./...` and `go vet ./...`. The container is unprivileged, auto-removed, resource-limited, and receives only the filtered snapshot, not the developer's original checkout. Network mode is explicitly set to `none`; before offline execution the orchestrator prepares an isolated per-review Go module cache under the staged snapshot and points `GOMODCACHE`, `GOCACHE`, and `GOPATH` at workspace-local paths. The host-wide module cache is never mounted.
 
-For E2B, the upload boundary uses a temporary review snapshot built from `git ls-files --cached --others --exclude-standard`. Git metadata, ignored files, environment files, and local report/store artifacts are excluded before `StageDirectory` uploads the snapshot.
+For E2B, the upload boundary uses the same temporary review snapshot built from `git ls-files --cached --others --exclude-standard`. Git metadata, ignored files, environment files, and local report/store artifacts are excluded before `StageDirectory` uploads the snapshot.
 
 
 Execution is bounded by command timeouts and output size limits. Stdout and stderr are redacted before they are stored or reported. Sandbox failures, command failures, timeouts, and truncated output are recorded as sandbox run records instead of crashing the whole review task.
 
 中文：
-在 container runtime 中，orchestrator 会把选中的工作区 staging 到隔离 workspace。fixture 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。未提供 `--repo-path` 的单独 diff 和 file-list 输入会跳过 sandbox 校验；关联 `--repo-path` 的输入会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。容器以非特权方式运行，执行结束后自动删除，并设置资源上限；只挂载被审查的工作区。网络模式显式设置为 `none`；沙箱命令不会通过网络下载 Go module，镜像或 runtime 必须自行提供 `GOMODCACHE=/go/pkg/mod` 所需依赖，绝不挂载宿主机全局 module cache。runtime 还会设置容器内安全的 Go 路径，例如 `HOME=/tmp`、`GOPATH=/go` 和 `GOCACHE=/tmp/go-build`。
+在 container runtime 中，orchestrator 会把过滤后的 review snapshot staging 到隔离 workspace。fixture 输入会从示例模块目录执行命令，便于使用示例自带的 review scripts 和 rules。未提供 `--repo-path` 的单独 diff 和 file-list 输入会跳过 sandbox 校验；关联 `--repo-path` 的输入会从用户选择的仓库根目录执行命令，并将命令 allowlist 限制为适用于任意 Go 仓库的检查，例如 `go test ./...` 和 `go vet ./...`。容器以非特权方式运行，执行结束后自动删除，并设置资源上限；容器只接收过滤后的 snapshot，不会挂载开发者原始 checkout。网络模式显式设置为 `none`；离线执行前，orchestrator 会在 staged snapshot 下准备每次审查独立的 Go module cache，并把 `GOMODCACHE`、`GOCACHE` 和 `GOPATH` 指向 workspace-local 路径，绝不挂载宿主机全局 module cache。
 
-对于 E2B，上传边界使用由 `git ls-files --cached --others --exclude-standard` 构建的临时 review snapshot。在 `StageDirectory` 上传前会排除 Git 元数据、ignored 文件、环境文件以及本地 report/store 产物。
+对于 E2B，上传边界使用同一个由 `git ls-files --cached --others --exclude-standard` 构建的临时 review snapshot。在 `StageDirectory` 上传前会排除 Git 元数据、ignored 文件、环境文件以及本地 report/store 产物。
 
 
 命令执行受 timeout 和输出大小限制约束。stdout 和 stderr 在落库或写入报告前会先做脱敏处理。沙箱初始化失败、命令失败、超时、输出截断都会记录为 sandbox run，而不是让整个 review task 崩溃。
@@ -246,7 +246,7 @@ Each run writes two task-specific primary reports:
 - `review_report_<task-id>.json`: structured report for automated checks, CI integration, and database comparison.
 - `review_report_<task-id>.md`: human-readable report with summaries, severity distribution, review findings, human-review items, governance decisions, sandbox summaries, metrics, and fix recommendations.
 
-The output directory also contains the durable review store, currently `review_agent.db`. The store is intended to support task-level queries and historical audit. A review can be accepted only when the reports and store agree on task status, sandbox runs, permission decisions, findings, metrics, artifacts, and final conclusion.
+The output directory also contains the durable JSON-backed review store, currently `review_agent.db`. This `.db` file is the current portable JSON store, not a physical SQLite database; `internal/store/schema.sql` remains the SQLite-compatible target schema for future SQL-backed implementations. The store is intended to support task-level queries and historical audit. A review can be accepted only when the reports and store agree on task status, sandbox runs, permission decisions, findings, metrics, artifacts, and final conclusion.
 
 中文：
 每次运行会写出两个主要报告：
@@ -254,7 +254,7 @@ The output directory also contains the durable review store, currently `review_a
 - `review_report_<task-id>.json`：结构化报告，供自动化检查、CI 集成和数据库比对使用。
 - `review_report_<task-id>.md`：面向人的报告，包含摘要、severity 分布、findings、人工复核项、治理决策、沙箱摘要、监控指标和修复建议。
 
-输出目录还会包含持久化 review store，目前为 `review_agent.db`。该 store 用于支持按 task 查询和历史审计。只有当报告和 store 中的 task 状态、sandbox run、permission decision、finding、metrics、artifact 和最终结论一致时，才算完整可验收。
+输出目录还会包含 JSON-backed 持久化 review store，目前为 `review_agent.db`。这个 `.db` 文件是当前可移植 JSON store，不是物理 SQLite 数据库；`internal/store/schema.sql` 仍作为未来 SQL-backed 实现的 SQLite-compatible 目标 schema。该 store 用于支持按 task 查询和历史审计。只有当报告和 store 中的 task 状态、sandbox run、permission decision、finding、metrics、artifact 和最终结论一致时，才算完整可验收。
 
 ## 12. Acceptance and Test Strategy / 验收与测试策略
 
@@ -262,7 +262,7 @@ English:
 The deterministic acceptance path is:
 
 ```powershell
-cd E:\trpc-agent-go\examples\code_review_agent
+cd examples\code_review_agent
 go test -count=1 ./...
 go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake
@@ -280,7 +280,7 @@ For a passing container sandbox run, `sandbox_runs` should show `runtime=contain
 确定性验收路径如下：
 
 ```powershell
-cd E:\trpc-agent-go\examples\code_review_agent
+cd examples\code_review_agent
 go test -count=1 ./...
 go run . -fixture-dir testdata\fixtures -out-dir .\out -runtime fake
 go run . -diff-file testdata\fixtures\security_secret.diff -out-dir .\out-diff -runtime fake

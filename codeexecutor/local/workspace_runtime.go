@@ -13,7 +13,6 @@ package local
 // Workspace runtime provides workspace-based execution on local host.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -361,9 +360,10 @@ func (r *Runtime) RunProgram(
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := codeexecutor.NewLimitedBuffer(spec.OutputMaxBytes)
+	stderr := codeexecutor.NewLimitedBuffer(spec.OutputMaxBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -383,11 +383,12 @@ func (r *Runtime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: dur,
-		TimedOut: errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		ExitCode:        exitCode,
+		Duration:        dur,
+		TimedOut:        errors.Is(tctx.Err(), context.DeadlineExceeded),
+		OutputTruncated: stdout.Truncated() || stderr.Truncated(),
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),

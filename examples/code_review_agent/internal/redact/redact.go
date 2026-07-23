@@ -12,13 +12,15 @@ import "regexp"
 
 const Placeholder = "[REDACTED_SECRET]"
 
+var privateKeyPattern = regexp.MustCompile("-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----")
+
 var patterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(api[_-]?key|token|secret|password)\s*[:=]\s*["']?[A-Za-z0-9_\-./+=]{8,}`),
 	regexp.MustCompile(`ghp_[A-Za-z0-9_]{20,}`),
 	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
 	regexp.MustCompile(`sk-[A-Za-z0-9_\-]{8,}`),
 	regexp.MustCompile(`eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+`),
-	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----`),
+	privateKeyPattern,
 }
 
 // Result contains redacted text and the number of replacements.

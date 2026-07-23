@@ -29,6 +29,28 @@ func TestRunRecordsFailureWithoutPanic(t *testing.T) {
 	}
 }
 
+func TestRunPreservesCapturedStderrOnFailure(t *testing.T) {
+	runtime := failingResultRuntime{
+		result: Result{Stderr: "partial stderr"},
+		err:    errors.New("command failed"),
+	}
+	run := Run(context.Background(), runtime, "task-1", "run-1", "go test ./...", 1024)
+	if !strings.Contains(run.StderrRedacted, "partial stderr") || !strings.Contains(run.StderrRedacted, "command failed") {
+		t.Fatalf("StderrRedacted = %q, want captured stderr and error", run.StderrRedacted)
+	}
+}
+
+func TestRunMarksRuntimeTruncatedOutput(t *testing.T) {
+	runtime := FakeRuntime{Results: map[string]Result{"go test ./...": {
+		Stdout:          strings.Repeat("x", 5),
+		OutputTruncated: true,
+	}}}
+	run := Run(context.Background(), runtime, "task-1", "run-1", "go test ./...", 1024)
+	if !run.OutputTruncated {
+		t.Fatalf("OutputTruncated = false, want true")
+	}
+}
+
 func TestRunTruncatesOutput(t *testing.T) {
 	runtime := FakeRuntime{Results: map[string]Result{"go test ./...": {Stdout: strings.Repeat("x", 20)}}}
 	run := Run(context.Background(), runtime, "task-1", "run-1", "go test ./...", 5)
@@ -99,4 +121,15 @@ func (r timeoutResultRuntime) Run(context.Context, string) (Result, error) {
 
 func (r timeoutResultRuntime) Terminate(ctx context.Context) {
 	r.runtime.Terminate(ctx)
+}
+
+type failingResultRuntime struct {
+	result Result
+	err    error
+}
+
+func (r failingResultRuntime) Name() string { return "fake" }
+
+func (r failingResultRuntime) Run(context.Context, string) (Result, error) {
+	return r.result, r.err
 }

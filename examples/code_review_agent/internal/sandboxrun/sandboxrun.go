@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -36,10 +37,11 @@ const (
 
 // Result is the raw outcome from a runtime.
 type Result struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-	TimedOut bool
+	ExitCode        int
+	Stdout          string
+	Stderr          string
+	TimedOut        bool
+	OutputTruncated bool
 }
 
 // Runtime executes a command in a workspace runtime.
@@ -57,13 +59,14 @@ type Terminator interface {
 // engine. The workspace is created once and reused for every planned command in
 // a review task, so go test/go vet/script commands share the same staged tree.
 type WorkspaceRuntime struct {
-	RuntimeName string
-	Engine      codeexecutor.Engine
-	Workspace   codeexecutor.Workspace
-	Cwd         string
-	Env         map[string]string
-	Timeout     time.Duration
-	TerminateFn func(context.Context)
+	RuntimeName    string
+	Engine         codeexecutor.Engine
+	Workspace      codeexecutor.Workspace
+	Cwd            string
+	Env            map[string]string
+	Timeout        time.Duration
+	TerminateFn    func(context.Context)
+	MaxOutputBytes int
 }
 
 func (r WorkspaceRuntime) Name() string {
@@ -78,24 +81,37 @@ func (r WorkspaceRuntime) Run(ctx context.Context, command string) (Result, erro
 		return Result{}, fmt.Errorf("workspace runtime %q is unavailable", r.Name())
 	}
 	spec := codeexecutor.RunProgramSpec{
-		Cmd:      shellCommand(command),
-		Args:     shellArgs(command),
-		Env:      allowEnv(r.Env),
-		CleanEnv: true,
-		Cwd:      r.Cwd,
-		Timeout:  r.Timeout,
+		Cmd:            shellCommand(command),
+		Args:           shellArgs(command),
+		Env:            r.runEnv(),
+		CleanEnv:       true,
+		Cwd:            r.Cwd,
+		Timeout:        r.Timeout,
+		OutputMaxBytes: r.MaxOutputBytes,
 	}
 	res, err := r.Engine.Runner().RunProgram(ctx, r.Workspace, spec)
 	out := Result{
-		ExitCode: res.ExitCode,
-		Stdout:   res.Stdout,
-		Stderr:   res.Stderr,
-		TimedOut: res.TimedOut,
+		ExitCode:        res.ExitCode,
+		Stdout:          res.Stdout,
+		Stderr:          res.Stderr,
+		TimedOut:        res.TimedOut,
+		OutputTruncated: res.OutputTruncated,
 	}
 	if res.TimedOut && err == nil {
 		err = context.DeadlineExceeded
 	}
 	return out, err
+}
+
+func (r WorkspaceRuntime) runEnv() map[string]string {
+	env := allowEnv(r.Env)
+	if r.Name() == "local" || r.Workspace.Path == "" {
+		return env
+	}
+	env["GOPATH"] = path.Join(r.Workspace.Path, codeexecutor.DirWork, ".gopath")
+	env["GOMODCACHE"] = path.Join(r.Workspace.Path, codeexecutor.DirWork, ".gomodcache")
+	env["GOCACHE"] = path.Join(r.Workspace.Path, codeexecutor.DirWork, ".gocache")
+	return env
 }
 
 // Terminate stops the runtime workspace and its underlying process container.
@@ -184,12 +200,14 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		DurationMillis:  elapsedMillis(start),
 		StdoutRedacted:  stdout.Text,
 		StderrRedacted:  stderr.Text,
-		OutputTruncated: stdout.Truncated || stderr.Truncated,
+		OutputTruncated: stdout.Truncated || stderr.Truncated || res.OutputTruncated,
 	}
 	if err != nil {
 		record.Status = StatusFailed
 		record.ErrorType = ErrorCommandFailed
-		record.StderrRedacted = truncate(redact.Text(err.Error()).Text, maxOutput).Text
+		appended := appendStderr(record.StderrRedacted, truncate(redact.Text(err.Error()).Text, maxOutput).Text, maxOutput)
+		record.StderrRedacted = appended.Text
+		record.OutputTruncated = record.OutputTruncated || appended.Truncated
 		if errors.Is(err, context.DeadlineExceeded) {
 			record.ErrorType = ErrorTimeout
 		} else if errors.Is(err, context.Canceled) {
@@ -208,6 +226,17 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		record.ErrorType = ErrorCommandFailed
 	}
 	return record
+}
+
+func appendStderr(existing string, extra string, limit int) truncatedText {
+	switch {
+	case existing == "":
+		return truncatedText{Text: extra}
+	case extra == "":
+		return truncatedText{Text: existing}
+	default:
+		return truncate(existing+"\n"+extra, limit)
+	}
 }
 
 func shellCommand(command string) string {

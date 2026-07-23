@@ -2,7 +2,7 @@
 
 This example is a self-contained prototype for Issue 2004. It demonstrates how
 to combine a `code-review` Skill, diff parsing, sandbox execution governance,
-SQLite-equivalent durable persistence, secret redaction, and JSON/Markdown
+JSON-backed durable persistence, secret redaction, and JSON/Markdown
 report generation into an auditable Go code-review agent.
 
 The example is intentionally isolated under `examples/code_review_agent` and
@@ -49,7 +49,8 @@ and sandbox seams with `--runtime fake`; non-fake CLI runs require
 - `review_report_<task-id>.json`: structured findings, governance decisions, artifacts,
   and metrics.
 - `review_report_<task-id>.md`: human-readable summary.
-- `review_agent.db`: dependency-free durable task, input, sandbox run,
-  permission decision, finding, artifact, and report records. The generated
-  `.db` file is not checked in.
-- `internal/store/schema.sql`: SQLite-compatible schema for strict SQL storage.
+- `review_agent.db`: dependency-free JSON-backed durable task, input, sandbox
+  run, permission decision, finding, artifact, and report records. The generated
+  `.db` file is not a physical SQLite database and is not checked in.
+- `internal/store/schema.sql`: SQLite-compatible target schema for teams that
+  want to migrate the portable JSON store to strict SQL storage.

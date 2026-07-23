@@ -135,7 +135,7 @@ func TestRunRecordsConfiguredModelPlan(t *testing.T) {
 	}
 }
 
-func TestPlanReviewFiltersModelPlannedCommandsToAllowlist(t *testing.T) {
+func TestPlanReviewPreservesModelPlannedCommandsForAudit(t *testing.T) {
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"commands\":[\"go test ./...\",\"go env\",\"curl https://example.com\",\" go vet ./... \",\"go test ./...\"],\"rule_sources\":[\"skills/code-review/SKILL.md\"]}"}}]}`))
 	}))
@@ -152,14 +152,48 @@ func TestPlanReviewFiltersModelPlannedCommandsToAllowlist(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PlanReview() error = %v", err)
 	}
-	want := []string{"go test ./...", "go vet ./..."}
+	want := []string{"go test ./...", "go env", "curl https://example.com", "go vet ./..."}
 	if !reflect.DeepEqual(plan.Commands, want) {
 		t.Fatalf("plan commands = %#v, want %#v", plan.Commands, want)
 	}
-	for _, command := range plan.Commands {
-		if command == "go env" || strings.HasPrefix(command, "curl ") {
-			t.Fatalf("unlisted command was not filtered: %q", command)
-		}
+}
+
+func TestExecutePlannedCommandsAuditsRejectedModelCommands(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "review_agent.db")
+	st, err := store.NewSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLite() error = %v", err)
+	}
+	defer st.Close()
+
+	decisions, runs, err := executePlannedCommandsWithFactory(
+		context.Background(),
+		st,
+		"task-audit",
+		"fake",
+		false,
+		[]string{"curl https://example.com", "go test ./..."},
+		fixedTestTime(),
+		time.Second,
+		"",
+		func(context.Context, string, string, string, time.Duration, string, bool) (sandboxrun.Runtime, func(), *review.SandboxRun) {
+			return sandboxrun.FakeRuntime{}, nil, nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("executePlannedCommandsWithFactory() error = %v", err)
+	}
+	if len(decisions) != 2 || len(runs) != 2 {
+		t.Fatalf("decisions/runs = %d/%d, want 2/2", len(decisions), len(runs))
+	}
+	if !decisions[0].Blocked || decisions[0].RuleID != "sandbox.command_not_allowlisted" {
+		t.Fatalf("first decision = %#v, want allowlist rejection", decisions[0])
+	}
+	if runs[0].Status != sandboxrun.StatusSkipped || runs[0].Command != "curl https://example.com" {
+		t.Fatalf("first run = %#v, want skipped rejected command", runs[0])
+	}
+	if decisions[1].Blocked || runs[1].Status != sandboxrun.StatusPassed {
+		t.Fatalf("allowed command decision/run = %#v/%#v, want executed pass", decisions[1], runs[1])
 	}
 }
 
@@ -476,6 +510,69 @@ func TestStandaloneFileListSkipsSandboxValidation(t *testing.T) {
 	}
 }
 
+func TestStandaloneDiffFindingConclusionIsNotOverwrittenByMissingSandbox(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "goroutine.diff")
+	diff := "diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1,0 +1,3 @@\n+package pkg\n+func f() {\n+\tgo func() { println(\"leak\") }()\n"
+	if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	outDir := t.TempDir()
+	result, err := Run(context.Background(), Options{
+		DiffFile: diffPath,
+		OutDir:   outDir,
+		DBPath:   filepath.Join(outDir, "review_agent.db"),
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake", Commands: []string{"go test ./..."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Report.Task.Status != review.TaskStatusFailed {
+		t.Fatalf("status = %q, want failed", result.Report.Task.Status)
+	}
+	if result.Report.Conclusion != "needs_human_review" {
+		t.Fatalf("conclusion = %q, want needs_human_review", result.Report.Conclusion)
+	}
+	if len(result.Report.SandboxRuns) != 0 {
+		t.Fatalf("sandbox runs = %#v, want none for standalone diff", result.Report.SandboxRuns)
+	}
+}
+
+func TestRunRedactsMultilinePEMInReportAndStore(t *testing.T) {
+	diffPath := filepath.Join(t.TempDir(), "key.diff")
+	diff := "diff --git a/pkg/key.go b/pkg/key.go\nnew file mode 100644\n--- /dev/null\n+++ b/pkg/key.go\n@@ -0,0 +1,3 @@\n+-----BEGIN PRIVATE KEY-----\n+MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n+-----END PRIVATE KEY-----\n"
+	if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
+		t.Fatalf("WriteFile(diff) error = %v", err)
+	}
+	outDir := t.TempDir()
+	dbPath := filepath.Join(outDir, "review_agent.db")
+	result, err := Run(context.Background(), Options{
+		DiffFile: diffPath,
+		OutDir:   outDir,
+		DBPath:   dbPath,
+		Runtime:  "fake",
+		Now:      fixedTestTime(),
+		Planner: plannerFunc(func(ctx context.Context, req PlanRequest) (review.ReviewPlan, error) {
+			return review.ReviewPlan{Model: "test", Provider: "test", Source: "test", Skill: defaultSkillName, Runtime: "fake", Commands: []string{"go test ./..."}}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, path := range []string{result.JSONPath, dbPath} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", path, err)
+		}
+		if strings.Contains(string(raw), "PRIVATE KEY") || strings.Contains(string(raw), "MIIEvQ") {
+			t.Fatalf("%s leaked private key material:\n%s", path, raw)
+		}
+	}
+}
+
 func TestStandaloneDiffFileCanUseSelectedRepositoryWorkspace(t *testing.T) {
 	diffPath := filepath.Join(t.TempDir(), "change.diff")
 	if err := os.WriteFile(diffPath, []byte("diff --git a/pkg/a.go b/pkg/a.go\n--- a/pkg/a.go\n+++ b/pkg/a.go\n@@ -1 +1 @@\n-package pkg\n+package pkg\n"), 0o600); err != nil {
@@ -547,7 +644,7 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 		}
 	}
 	fs := &recordingStageFS{}
-	stagedCleanup, err := stageReviewWorkspace(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo)
+	stagedCleanup, err := stageReviewWorkspace(context.Background(), fs, codeexecutor.Workspace{Path: "/work"}, "e2b", repo, "")
 	if err != nil {
 		t.Fatalf("stageReviewWorkspace() error = %v", err)
 	}
@@ -560,6 +657,21 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	}
 	if _, err := os.Stat(filepath.Join(fs.src, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("staged snapshot contains .env, stat err=%v", err)
+	}
+	containerFS := &recordingStageFS{}
+	containerCleanup, err := stageReviewWorkspace(context.Background(), containerFS, codeexecutor.Workspace{Path: "/work"}, "container", repo, "")
+	if err != nil {
+		t.Fatalf("container stageReviewWorkspace() error = %v", err)
+	}
+	defer containerCleanup()
+	if containerFS.src == repo || containerFS.src == "" {
+		t.Fatalf("container staged source = %q, want filtered snapshot", containerFS.src)
+	}
+	if _, err := os.Stat(filepath.Join(containerFS.src, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("container staged snapshot contains .git, stat err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(containerFS.src, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("container staged snapshot contains .env, stat err=%v", err)
 	}
 }
 
@@ -765,11 +877,8 @@ func TestContainerBindMountsDoNotExposeHostModuleCache(t *testing.T) {
 	t.Setenv("GOCACHE", "/host/go-build")
 
 	got := containerBindMounts("/repo")
-	want := []bindMount{
-		{HostPath: "/repo", ContainerPath: "/workspace", Mode: "ro"},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("containerBindMounts() = %#v, want %#v", got, want)
+	if len(got) != 0 {
+		t.Fatalf("containerBindMounts() = %#v, want no host repository or module-cache mounts", got)
 	}
 	for _, mount := range got {
 		if mount.ContainerPath == containerGoModCache {
