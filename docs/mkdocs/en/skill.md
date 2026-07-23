@@ -955,9 +955,6 @@ Behavior:
 - When several docs are already known to be needed, pass all of them in one
   `replace` call. If another doc is discovered later, use `add` rather than
   alternating singleton `replace` calls.
-- If an omitted or unsupported `mode` implicitly removes prior docs, the
-  result includes an actionable `warnings` entry naming the removed docs
-  and advising the caller to select the complete set or use `mode=add`.
 - Once `include_all_docs=true` is active, use `clear` before narrowing the
   selection to an explicit list.
 - Updates doc selection state for the current agent:

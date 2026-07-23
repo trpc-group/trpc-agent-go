@@ -914,8 +914,6 @@ agent := llmagent.New(
 - `clear` 清空选择。
 - 已知需要多份文档时，应在一次 `replace` 调用中全部传入；后续发现
   新文档时应使用 `add`，不要用多个单文档 `replace` 调用来回切换。
-- 如果省略或传入非法 `mode` 导致隐式 `replace` 移除旧文档，工具结果
-  会在 `warnings` 中给出被移除文档及恢复建议。
 - `include_all_docs=true` 生效后，如需收窄为显式列表，应先调用 `clear`。
 - 更新当前 agent 的 doc 选择 state key：
   - `temp:skill:docs_by_agent:<agent>/<name>`：`*` 表示全选；数组表示显式列表
