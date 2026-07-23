@@ -181,6 +181,62 @@ Historical `RUN_*` messages in `MESSAGES_SNAPSHOT` have the following shape:
 }
 ```
 
+## User Input forwardedProps Metadata
+
+If your business stores attachments, form context, or other request-side information in AG-UI request `forwardedProps` and needs to restore that information from the history route after a page refresh, enable event source metadata:
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+)
+
+server, err := agui.New(
+    runner,
+    agui.WithAppName(appName),
+    agui.WithSessionService(sessionService),
+    agui.WithMessagesSnapshotEnabled(true),
+    agui.WithEventSourceMetadataEnabled(true),
+)
+```
+
+After this is enabled, when the real-time conversation request persists the user input event, it writes the `forwardedProps` field from the AG-UI request body to the user input event's `rawEvent.forwardedProps`; in the Go API, that field corresponds to `RunAgentInput.ForwardedProps`. When reading history, the message snapshot route aggregates it into `MESSAGES_SNAPSHOT.rawEvent.runs[runId].forwardedProps`:
+
+```json
+{
+  "type": "MESSAGES_SNAPSHOT",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "content": "Please check the attachment"
+    }
+  ],
+  "rawEvent": {
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png",
+          "attachments": [
+            {
+              "id": "file-1",
+              "mimeType": "image/png"
+            }
+          ]
+        },
+        "timestamp": 1781258400000
+      }
+    },
+    "messages": {
+      "user-1": {
+        "author": "demo-user",
+        "timestamp": 1781258400000
+      }
+    }
+  }
+}
+```
+
 ## Messages Snapshot Continuation
 
 By default, the messages snapshot route returns a one-shot snapshot and immediately closes the connection. When a user refreshes or reconnects while a real-time conversation is running, new AG-UI events may continue to be produced after the snapshot is generated. In this case, enable messages snapshot continuation so the same SSE connection continues receiving subsequent events after returning the snapshot.

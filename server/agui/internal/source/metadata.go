@@ -37,12 +37,15 @@ type Metadata struct {
 	ParentMetadata *agentevent.ParentInvocationMetadata `json:"parentMetadata,omitempty"`
 	Branch         string                               `json:"branch,omitempty"`
 	Timestamp      *int64                               `json:"timestamp,omitempty"`
+	// ForwardedProps stores run-scoped AG-UI forwardedProps captured for a user input event.
+	ForwardedProps any `json:"forwardedProps,omitempty"`
 }
 
-// SnapshotMetadata indexes source metadata for messages snapshot payloads.
+// SnapshotMetadata indexes source metadata for message snapshot payloads.
 type SnapshotMetadata struct {
 	Messages  map[string]Metadata `json:"messages,omitempty"`
 	ToolCalls map[string]Metadata `json:"toolCalls,omitempty"`
+	Runs      map[string]Metadata `json:"runs,omitempty"`
 }
 
 // SnapshotMetadataOption configures how snapshot metadata is built.
@@ -62,12 +65,19 @@ func WithRunLifecycleEvents(include bool) SnapshotMetadataOption {
 
 // IsZero reports whether the metadata is empty.
 func (m Metadata) IsZero() bool {
-	return m == (Metadata{})
+	return m.EventID == "" &&
+		m.Author == "" &&
+		m.InvocationID == "" &&
+		m.ParentInvocationID == "" &&
+		m.ParentMetadata == nil &&
+		m.Branch == "" &&
+		m.Timestamp == nil &&
+		m.ForwardedProps == nil
 }
 
 // IsZero reports whether the snapshot metadata is empty.
 func (m SnapshotMetadata) IsZero() bool {
-	return len(m.Messages) == 0 && len(m.ToolCalls) == 0
+	return len(m.Messages) == 0 && len(m.ToolCalls) == 0 && len(m.Runs) == 0
 }
 
 // FromEvent resolves source metadata from an agent event.
@@ -132,6 +142,9 @@ func FromRawEvent(raw any) (Metadata, bool) {
 			Branch:             stringFromMap(v, "branch"),
 			Timestamp:          int64FromMap(v, "timestamp"),
 		}
+		if forwardedProps, ok := v["forwardedProps"]; ok {
+			metadata.ForwardedProps = forwardedProps
+		}
 		if pm, ok := v["parentMetadata"].(map[string]any); ok {
 			metadata.ParentMetadata = &agentevent.ParentInvocationMetadata{
 				TriggerType: stringFromMap(pm, "triggerType"),
@@ -166,6 +179,7 @@ func BuildSnapshotMetadata(
 	metadata := SnapshotMetadata{
 		Messages:  make(map[string]Metadata),
 		ToolCalls: make(map[string]Metadata),
+		Runs:      make(map[string]Metadata),
 	}
 	for _, trackEvent := range events {
 		if len(trackEvent.Payload) == 0 {
@@ -193,6 +207,12 @@ func BuildSnapshotMetadata(
 		if !ok && sourceMetadata.Timestamp == nil {
 			continue
 		}
+		runID := runIDFromRawEvent(base.RawEvent)
+		recordRunMetadata(metadata.Runs, runID, sourceMetadata)
+		sourceMetadata.ForwardedProps = nil
+		if sourceMetadata.IsZero() {
+			continue
+		}
 		recordSnapshotMetadata(metadata.Messages, metadata.ToolCalls,
 			evt, sourceMetadata)
 	}
@@ -201,6 +221,9 @@ func BuildSnapshotMetadata(
 	}
 	if len(metadata.ToolCalls) == 0 {
 		metadata.ToolCalls = nil
+	}
+	if len(metadata.Runs) == 0 {
+		metadata.Runs = nil
 	}
 	return metadata
 }
@@ -268,6 +291,27 @@ func int64FromMap(values map[string]any, key string) *int64 {
 		return &ts
 	default:
 		return nil
+	}
+}
+
+func runIDFromRawEvent(raw any) string {
+	switch v := raw.(type) {
+	case nil:
+		return ""
+	case map[string]any:
+		return stringFromMap(v, "runId")
+	default:
+		rawJSON, err := json.Marshal(raw)
+		if err != nil {
+			return ""
+		}
+		var metadata struct {
+			RunID string `json:"runId,omitempty"`
+		}
+		if err := json.Unmarshal(rawJSON, &metadata); err != nil {
+			return ""
+		}
+		return metadata.RunID
 	}
 }
 
@@ -368,6 +412,17 @@ func recordToolCallMetadata(
 	toolCalls[toolCallID] = mergeMetadata(toolCalls[toolCallID], metadata)
 }
 
+func recordRunMetadata(
+	runs map[string]Metadata,
+	runID string,
+	metadata Metadata,
+) {
+	if runID == "" || metadata.ForwardedProps == nil {
+		return
+	}
+	runs[runID] = mergeMetadata(runs[runID], metadata)
+}
+
 func mergeMetadata(existing Metadata, incoming Metadata) Metadata {
 	merged := existing
 	if incoming.EventID != "" {
@@ -389,6 +444,9 @@ func mergeMetadata(existing Metadata, incoming Metadata) Metadata {
 		(merged.Timestamp == nil || *incoming.Timestamp < *merged.Timestamp) {
 		ts := *incoming.Timestamp
 		merged.Timestamp = &ts
+	}
+	if incoming.ForwardedProps != nil {
+		merged.ForwardedProps = incoming.ForwardedProps
 	}
 	return merged
 }
