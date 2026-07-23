@@ -27,11 +27,12 @@ const (
 )
 
 type corpusCase struct {
-	Name             string          `json:"name"`
-	Category         string          `json:"category"`
-	Safe             bool            `json:"safe"`
-	Request          safety.Request  `json:"request"`
-	ExpectedDecision safety.Decision `json:"expected_decision"`
+	Name               string          `json:"name"`
+	Category           string          `json:"category"`
+	AcceptanceScenario string          `json:"acceptance_scenario,omitempty"`
+	Safe               bool            `json:"safe"`
+	Request            safety.Request  `json:"request"`
+	ExpectedDecision   safety.Decision `json:"expected_decision"`
 }
 
 func TestCorpusQualityGates(t *testing.T) {
@@ -97,6 +98,25 @@ func TestCorpusCoversRequiredCategories(t *testing.T) {
 		"host_session", "code_bridge", "secret_leak", "safe",
 	} {
 		require.True(t, categories[category], "missing category %s", category)
+	}
+}
+
+func TestCorpusCoversIssueAcceptanceScenarios(t *testing.T) {
+	cases := loadCorpus(t)
+	scenarios := make(map[string]bool)
+	for _, tc := range cases {
+		if tc.AcceptanceScenario != "" {
+			scenarios[tc.AcceptanceScenario] = true
+		}
+	}
+	for _, scenario := range []string{
+		"safe_go_test", "dangerous_delete", "credential_read",
+		"non_allowlisted_egress", "allowlisted_request", "shell_wrapper",
+		"pipeline", "dependency_install", "long_running",
+		"oversized_output", "host_long_session", "human_review",
+	} {
+		require.True(t, scenarios[scenario],
+			"missing issue acceptance scenario %s", scenario)
 	}
 }
 
