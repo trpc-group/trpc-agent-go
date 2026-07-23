@@ -29,6 +29,15 @@ var (
 	urlUserInfoPattern = regexp.MustCompile(
 		`(?i)([a-z][a-z0-9+.-]*://[^/@\s:]+:)([^/@\s]+)(@)`,
 	)
+	proxyAuthShortFlagPattern = regexp.MustCompile(
+		`((?:^|\s)(?i:(?:[^\s/]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-P(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`,
+	)
+	proxyAuthAttachedShortPattern = regexp.MustCompile(
+		`((?:^|\s)(?i:(?:[^\s/]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-P)([^=\s][^\s]*)`,
+	)
+	proxyAuthLongFlagPattern = regexp.MustCompile(
+		`(?i)((?:^|\s)(?:--proxy-user|--proxy-username)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`,
+	)
 	githubTokenPattern  = regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`)
 	awsAccessKeyPattern = regexp.MustCompile(`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`)
 )
@@ -91,6 +100,15 @@ func redactSecretText(value string) string {
 	)
 	redacted = urlUserInfoPattern.ReplaceAllString(
 		redacted, `${1}`+internalredact.Value+`${3}`,
+	)
+	redacted = proxyAuthShortFlagPattern.ReplaceAllString(
+		redacted, `${1}`+internalredact.Value,
+	)
+	redacted = proxyAuthAttachedShortPattern.ReplaceAllString(
+		redacted, `${1}`+internalredact.Value,
+	)
+	redacted = proxyAuthLongFlagPattern.ReplaceAllString(
+		redacted, `${1}`+internalredact.Value,
 	)
 	redacted = githubTokenPattern.ReplaceAllString(redacted, internalredact.Value)
 	redacted = awsAccessKeyPattern.ReplaceAllString(redacted, internalredact.Value)

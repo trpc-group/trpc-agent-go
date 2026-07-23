@@ -216,9 +216,15 @@ func durationSeconds(value string) (float64, bool) {
 }
 
 func parallelism(argv []string) int {
+	if len(argv) == 0 {
+		return 0
+	}
+	base := commandBase(argv[0])
 	for i, arg := range argv[1:] {
 		lower := strings.ToLower(arg)
-		if (strings.HasPrefix(lower, "-p") || strings.HasPrefix(lower, "-j")) && len(lower) > 2 {
+		shortParallel := strings.HasPrefix(lower, "-p") && base == "xargs"
+		shortJobs := strings.HasPrefix(lower, "-j") && (base == "make" || base == "ninja")
+		if (shortParallel || shortJobs) && len(lower) > 2 {
 			if value, err := strconv.Atoi(lower[2:]); err == nil {
 				return value
 			}
@@ -227,7 +233,9 @@ func parallelism(argv []string) int {
 			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
 			return value
 		}
-		if lower == "-p" || lower == "-j" || lower == "--jobs" || lower == "--parallel" {
+		if (lower == "-p" && base == "xargs") ||
+			(lower == "-j" && (base == "make" || base == "ninja")) ||
+			lower == "--jobs" || lower == "--parallel" {
 			if i+2 < len(argv) {
 				value, _ := strconv.Atoi(argv[i+2])
 				return value

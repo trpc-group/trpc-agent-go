@@ -55,9 +55,19 @@ func scanNetwork(policy Policy, segments [][]string) []Finding {
 		if finding, ok := networkConfigFinding(argv); ok {
 			findings = append(findings, finding)
 		}
-
 		destinations, unresolved := networkDestinations(argv)
+		var rewritePrefixes []string
+		if commandBase(argv[0]) == "git" {
+			var rewriteFindings []Finding
+			rewriteFindings, rewritePrefixes = scanGitURLRewrites(
+				policy, argv, destinations,
+			)
+			findings = append(findings, rewriteFindings...)
+		}
 		for _, destination := range destinations {
+			if destinationUsesRewrite(destination, rewritePrefixes) {
+				continue
+			}
 			if isFileURL(destination) {
 				continue
 			}
@@ -92,9 +102,9 @@ func networkDestinations(argv []string) ([]string, bool) {
 	case "ssh":
 		return firstPositional(argv[1:], sshValueOptions), false
 	case "scp":
-		return scpRemoteDestinations(argv[1:]), false
+		return scpRemoteDestinations(argv[1:], scpValueOptions), false
 	case "sftp":
-		return firstPositional(argv[1:], sshValueOptions), false
+		return firstPositional(argv[1:], sftpValueOptions), false
 	case "git":
 		return gitNetworkDestinations(argv[1:])
 	case "nc", "netcat":
@@ -102,15 +112,25 @@ func networkDestinations(argv []string) ([]string, bool) {
 	case "ftp":
 		return firstPositional(argv[1:], ftpValueOptions), false
 	default:
-		return webClientDestinations(commandBase(argv[0]), argv[1:]), false
+		return webClientDestinations(commandBase(argv[0]), argv[1:])
 	}
 }
 
 var sshValueOptions = map[string]struct{}{
-	"-b": {}, "-c": {}, "-D": {}, "-E": {}, "-e": {}, "-F": {},
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-E": {}, "-e": {}, "-F": {},
 	"-I": {}, "-i": {}, "-J": {}, "-L": {}, "-l": {}, "-m": {},
 	"-O": {}, "-o": {}, "-p": {}, "-Q": {}, "-R": {}, "-S": {},
 	"-W": {}, "-w": {},
+}
+
+var scpValueOptions = map[string]struct{}{
+	"-c": {}, "-D": {}, "-F": {}, "-i": {}, "-J": {}, "-l": {},
+	"-o": {}, "-P": {}, "-S": {}, "-X": {},
+}
+
+var sftpValueOptions = map[string]struct{}{
+	"-B": {}, "-b": {}, "-c": {}, "-D": {}, "-F": {}, "-i": {},
+	"-J": {}, "-l": {}, "-o": {}, "-P": {}, "-R": {}, "-S": {}, "-X": {},
 }
 
 var ftpValueOptions = map[string]struct{}{
@@ -145,14 +165,14 @@ func positionalTokens(args []string, valueOptions map[string]struct{}) []string 
 	return positionals
 }
 
-func webClientDestinations(base string, args []string) []string {
+func webClientDestinations(base string, args []string) ([]string, bool) {
 	valueOptions := map[string]struct{}{
 		"--cacert": {}, "--capath": {}, "--cert": {}, "--config": {},
 		"--connect-timeout": {}, "--connect-to": {}, "--cookie": {}, "--cookie-jar": {},
 		"--data": {}, "--data-binary": {}, "--data-raw": {}, "--directory-prefix": {},
-		"--execute": {}, "--form": {}, "--header": {}, "--interface": {}, "--key": {},
+		"--execute": {}, "--form": {}, "--header": {}, "--interface": {}, "--json": {}, "--key": {},
 		"--limit-rate": {}, "--max-filesize": {}, "--max-redirs": {}, "--max-time": {},
-		"--method": {}, "--output": {},
+		"--method": {}, "--output": {}, "--post-data": {}, "--post-file": {},
 		"--output-document": {}, "--preproxy": {}, "--proxy": {},
 		"--read-timeout": {}, "--referer": {}, "--request": {}, "--resolve": {},
 		"--retry": {}, "--retry-delay": {}, "--speed-limit": {}, "--speed-time": {},
@@ -160,7 +180,7 @@ func webClientDestinations(base string, args []string) []string {
 		"--user-agent": {}, "--wait": {}, "--waitretry": {},
 	}
 	curlValues := []string{
-		"-A", "-b", "-c", "-d", "-D", "-e", "-E", "-F", "-H", "-K",
+		"-A", "-b", "-c", "-C", "-d", "-D", "-e", "-E", "-F", "-H", "-K",
 		"-m", "-o", "-P", "-Q", "-r", "-T", "-u", "-w", "-x", "-X", "-Y",
 	}
 	wgetValues := []string{
@@ -176,7 +196,27 @@ func webClientDestinations(base string, args []string) []string {
 	for _, option := range values {
 		valueOptions[option] = struct{}{}
 	}
+	flagOptions := map[string]struct{}{
+		"--compressed": {}, "--content-disposition": {}, "--continue": {},
+		"--fail": {}, "--fail-with-body": {}, "--globoff": {}, "--head": {},
+		"--help": {}, "--include": {}, "--insecure": {}, "--inet4-only": {},
+		"--inet6-only": {}, "--ipv4": {}, "--ipv6": {}, "--location": {},
+		"--no-buffer": {}, "--no-check-certificate": {}, "--no-clobber": {},
+		"--no-verbose": {}, "--parallel": {}, "--quiet": {}, "--recursive": {},
+		"--remote-header-name": {}, "--remote-name": {}, "--show-error": {},
+		"--silent": {}, "--spider": {}, "--trust-server-names": {},
+		"--verbose": {}, "--version": {},
+	}
+	curlShortFlags := "012346VZfghiIkLNOnpqRrsSv"
+	wgetShortFlags := "cdHhNpqrSV"
+	shortFlags := curlShortFlags
+	if base == "wget" {
+		shortFlags = wgetShortFlags
+	} else if base != "curl" {
+		shortFlags += wgetShortFlags
+	}
 	var destinations []string
+	unresolved := false
 	options := true
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -194,18 +234,65 @@ func webClientDestinations(base string, args []string) []string {
 			continue
 		}
 		if options && strings.HasPrefix(arg, "-") && arg != "-" {
-			if _, consumes := valueOptions[arg]; consumes && i+1 < len(args) {
+			name := strings.SplitN(arg, "=", 2)[0]
+			if strings.HasPrefix(arg, "--") {
+				if _, consumes := valueOptions[name]; consumes {
+					if !strings.Contains(arg, "=") && i+1 < len(args) {
+						i++
+					}
+					continue
+				}
+				if _, flag := flagOptions[arg]; flag {
+					continue
+				}
+				unresolved = true
+				if !strings.Contains(arg, "=") && i+1 < len(args) &&
+					!strings.HasPrefix(args[i+1], "-") {
+					i++
+				}
+				continue
+			}
+			consumesNext, recognized := parseShortOptions(arg, valueOptions, shortFlags)
+			if recognized {
+				if consumesNext && i+1 < len(args) {
+					i++
+				}
+				continue
+			}
+			unresolved = true
+			if !strings.Contains(arg, "=") && i+1 < len(args) &&
+				!strings.HasPrefix(args[i+1], "-") {
 				i++
 			}
 			continue
 		}
 		destinations = append(destinations, arg)
 	}
-	return destinations
+	return destinations, unresolved
 }
 
-func scpRemoteDestinations(args []string) []string {
-	positionals := positionalTokens(args, sshValueOptions)
+func parseShortOptions(
+	arg string,
+	valueOptions map[string]struct{},
+	allowedFlags string,
+) (bool, bool) {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false, false
+	}
+	options := arg[1:]
+	for index, flag := range options {
+		if _, consumes := valueOptions["-"+string(flag)]; consumes {
+			return index == len(options)-1, true
+		}
+		if !strings.ContainsRune(allowedFlags, flag) {
+			return false, false
+		}
+	}
+	return false, true
+}
+
+func scpRemoteDestinations(args []string, valueOptions map[string]struct{}) []string {
+	positionals := positionalTokens(args, valueOptions)
 	var destinations []string
 	for _, operand := range positionals {
 		if _, ok := scpRemoteHost(operand); ok {
@@ -259,6 +346,94 @@ func gitNetworkDestinations(args []string) ([]string, bool) {
 	}
 }
 
+func scanGitURLRewrites(
+	policy Policy,
+	argv []string,
+	destinations []string,
+) ([]Finding, []string) {
+	var findings []Finding
+	var prefixes []string
+	for _, config := range gitConfigValues(argv[1:]) {
+		key, prefix, _ := strings.Cut(config, "=")
+		lowerKey := strings.ToLower(key)
+		if !strings.HasPrefix(lowerKey, "url.") || !strings.HasSuffix(lowerKey, ".insteadof") {
+			continue
+		}
+		base := key[len("url.") : len(key)-len(".insteadOf")]
+		if prefix == "" || !destinationUsesRewriteList(destinations, prefix) {
+			continue
+		}
+		prefixes = append(prefixes, prefix)
+		if base == "" || isFileURL(base) {
+			findings = append(findings, gitRewriteUnparsedFinding())
+			continue
+		}
+		host, parsed := knownDestinationHost(base)
+		if !parsed {
+			findings = append(findings, gitRewriteUnparsedFinding())
+			continue
+		}
+		if !networkHostAllowed(host, policy.NetworkAllowlist) {
+			findings = append(findings, newFinding(
+				DecisionDeny, RiskHigh, "network.destination_override",
+				"Git URL rewrite changes the effective destination to a non-allowlisted host",
+				"remove the rewrite or use an allowlisted remote directly",
+			))
+			continue
+		}
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, "network.destination_override",
+			"Git URL rewrite changes the effective destination",
+			"review the rewrite and use the allowlisted remote directly",
+		))
+	}
+	return findings, prefixes
+}
+
+func destinationUsesRewriteList(destinations []string, prefix string) bool {
+	for _, destination := range destinations {
+		if strings.HasPrefix(destination, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitConfigValues(args []string) []string {
+	var configs []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-c" {
+			if i+1 < len(args) {
+				configs = append(configs, args[i+1])
+				i++
+			}
+			continue
+		}
+		if strings.HasPrefix(arg, "-c") && len(arg) > 2 {
+			configs = append(configs, strings.TrimPrefix(arg, "-c"))
+		}
+	}
+	return configs
+}
+
+func destinationUsesRewrite(destination string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if prefix != "" && strings.HasPrefix(destination, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitRewriteUnparsedFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "network.destination_unparsed",
+		"Git URL rewrite destination could not be parsed conservatively",
+		"remove the rewrite or use an explicit allowlisted remote",
+	)
+}
+
 func commandAndRest(args []string, valueOptions map[string]struct{}) (string, []string, bool) {
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
@@ -280,7 +455,7 @@ func netcatDestination(args []string) []string {
 		}
 	}
 	values := map[string]struct{}{
-		"-i": {}, "-p": {}, "-q": {}, "-s": {}, "-w": {}, "-x": {}, "-X": {},
+		"-i": {}, "-P": {}, "-p": {}, "-q": {}, "-s": {}, "-w": {}, "-x": {}, "-X": {},
 	}
 	return firstPositional(args, values)
 }
@@ -427,9 +602,11 @@ func scanNetworkText(policy Policy, text string) []Finding {
 
 func destinationOverrideFinding(argv []string) (Finding, bool) {
 	base := commandBase(argv[0])
+	sshClient := base == "ssh" || base == "scp" || base == "sftp"
 	for i := 1; i < len(argv); i++ {
-		arg := strings.ToLower(argv[i])
-		if base == "ssh" && (arg == "-j" || strings.HasPrefix(arg, "-j") ||
+		rawArg := argv[i]
+		arg := strings.ToLower(rawArg)
+		if sshClient && (arg == "-j" || strings.HasPrefix(arg, "-j") ||
 			arg == "-oproxycommand" || strings.HasPrefix(arg, "-oproxycommand=") ||
 			arg == "-oproxyjump" || strings.HasPrefix(arg, "-oproxyjump=") ||
 			arg == "-ohostname" || strings.HasPrefix(arg, "-ohostname=") ||
@@ -450,15 +627,42 @@ func destinationOverrideFinding(argv []string) (Finding, bool) {
 				"remove destination-changing options and use an allowlisted URL directly",
 			), true
 		}
-		if (base == "curl" || base == "wget") && name == "-x" {
+		if base == "curl" && curlProxyOption(rawArg) {
 			return newFinding(
 				DecisionDeny, RiskHigh, "network.destination_override",
 				"network option can replace the effective destination",
 				"remove destination-changing options and use an allowlisted URL directly",
 			), true
 		}
+		rawName := strings.SplitN(rawArg, "=", 2)[0]
+		if (base == "nc" || base == "netcat") &&
+			(name == "-x" || strings.HasPrefix(arg, "-x") || rawName == "-X") {
+			return newFinding(
+				DecisionDeny, RiskHigh, "network.destination_override",
+				"netcat proxy options replace the effective destination",
+				"remove proxy options and connect directly to an allowlisted host",
+			), true
+		}
 	}
 	return Finding{}, false
+}
+
+func curlProxyOption(arg string) bool {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == 'x' {
+			return true
+		}
+		if strings.ContainsRune("AbcCdDeEFHKmoPQrTuwXY", option) {
+			return false
+		}
+		if !strings.ContainsRune("012346VZfghiIkLNOnpqRrsSv", option) {
+			return false
+		}
+	}
+	return false
 }
 
 func sshDestinationOverrideOption(value string) bool {
@@ -470,7 +674,7 @@ func sshDestinationOverrideOption(value string) bool {
 
 func networkConfigFinding(argv []string) (Finding, bool) {
 	base := commandBase(argv[0])
-	if base == "ssh" {
+	if base == "ssh" || base == "scp" || base == "sftp" {
 		for _, arg := range argv[1:] {
 			if arg == "-F" || strings.HasPrefix(arg, "-F") {
 				return newFinding(

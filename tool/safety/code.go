@@ -251,7 +251,7 @@ func scanCodePaths(policy Policy, code string) []Finding {
 
 func scanCodeNetwork(policy Policy, language, code string) []Finding {
 	var findings []Finding
-	for _, spec := range codeNetworkCallSpecs(language) {
+	for _, spec := range codeNetworkCallSpecs(language, code) {
 		for _, args := range findCallArguments(code, spec.name) {
 			destination, ok := spec.destination(args)
 			if !ok {
@@ -274,27 +274,30 @@ type codeNetworkCallSpec struct {
 	node  bool
 }
 
-func codeNetworkCallSpecs(language string) []codeNetworkCallSpec {
+func codeNetworkCallSpecs(language, code string) []codeNetworkCallSpec {
 	switch language {
 	case "python", "py":
-		return []codeNetworkCallSpec{
+		specs := []codeNetworkCallSpec{
 			{name: "socket.create_connection", index: 0},
+			{name: "socket.socket().connect", index: 0},
 			{name: "urllib.request.urlopen", index: 0},
 			{name: "requests.get", index: 0},
 			{name: "requests.post", index: 0},
 			{name: "httpx.get", index: 0},
 			{name: "httpx.post", index: 0},
 		}
+		return append(specs, pythonAliasNetworkSpecs(code)...)
 	case "go", "golang":
-		return []codeNetworkCallSpec{
+		specs := []codeNetworkCallSpec{
 			{name: "net.Dial", index: 1},
 			{name: "net.DialTimeout", index: 1},
 			{name: "http.Get", index: 0},
 			{name: "http.Post", index: 0},
 			{name: "http.NewRequest", index: 1},
 		}
+		return append(specs, goAliasNetworkSpecs(code)...)
 	case "javascript", "js", "typescript", "ts", "node":
-		return []codeNetworkCallSpec{
+		specs := []codeNetworkCallSpec{
 			{name: "net.connect", node: true},
 			{name: "net.createConnection", node: true},
 			{name: "tls.connect", node: true},
@@ -304,9 +307,128 @@ func codeNetworkCallSpecs(language string) []codeNetworkCallSpec {
 			{name: "https.get", index: 0},
 			{name: "https.request", index: 0},
 		}
+		return append(specs, nodeAliasNetworkSpecs(code)...)
 	default:
 		return nil
 	}
+}
+
+var (
+	pythonModuleAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s+(requests|httpx|socket)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
+	)
+	pythonFromAliasPattern = regexp.MustCompile(
+		`(?m)\bfrom\s+(requests|httpx|socket)\s+import\s+(get|post|create_connection)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
+	)
+	goNetAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s+([A-Za-z_][A-Za-z0-9_]*|\.)\s+"net"`,
+	)
+	nodeModuleAliasPattern = regexp.MustCompile(
+		`(?m)\b(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*require\(\s*["'](?:node:)?(?:net|tls)["']\s*\)`,
+	)
+	nodeImportAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s+\*\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+["'](?:node:)?(?:net|tls)["']`,
+	)
+	nodeDefaultImportAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s+([A-Za-z_][A-Za-z0-9_]*)\s+from\s+["'](?:node:)?(?:net|tls)["']`,
+	)
+	nodeDestructuredAliasPattern = regexp.MustCompile(
+		`(?m)\b(?:const|let|var)\s*\{\s*(connect|createConnection)(?:\s*:\s*([A-Za-z_][A-Za-z0-9_]*))?\s*\}\s*=\s*require\(\s*["'](?:node:)?net["']\s*\)`,
+	)
+	nodeNamedImportAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s*\{\s*(connect|createConnection)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\}\s*from\s*["'](?:node:)?net["']`,
+	)
+)
+
+func pythonAliasNetworkSpecs(code string) []codeNetworkCallSpec {
+	var specs []codeNetworkCallSpec
+	for _, match := range executableSubmatches(pythonModuleAliasPattern, code) {
+		module, alias := match[1], match[2]
+		switch module {
+		case "requests", "httpx":
+			specs = append(specs,
+				codeNetworkCallSpec{name: alias + ".get", index: 0},
+				codeNetworkCallSpec{name: alias + ".post", index: 0},
+			)
+		case "socket":
+			specs = append(specs,
+				codeNetworkCallSpec{name: alias + ".create_connection", index: 0},
+				codeNetworkCallSpec{name: alias + ".socket().connect", index: 0},
+			)
+		}
+	}
+	for _, match := range executableSubmatches(pythonFromAliasPattern, code) {
+		name := match[2]
+		if match[3] != "" {
+			name = match[3]
+		}
+		specs = append(specs, codeNetworkCallSpec{name: name, index: 0})
+	}
+	return specs
+}
+
+func goAliasNetworkSpecs(code string) []codeNetworkCallSpec {
+	var specs []codeNetworkCallSpec
+	for _, match := range executableSubmatches(goNetAliasPattern, code) {
+		prefix := match[1] + "."
+		if match[1] == "." {
+			prefix = ""
+		}
+		specs = append(specs,
+			codeNetworkCallSpec{name: prefix + "Dial", index: 1},
+			codeNetworkCallSpec{name: prefix + "DialTimeout", index: 1},
+		)
+	}
+	return specs
+}
+
+func nodeAliasNetworkSpecs(code string) []codeNetworkCallSpec {
+	var specs []codeNetworkCallSpec
+	for _, pattern := range []*regexp.Regexp{
+		nodeModuleAliasPattern, nodeImportAliasPattern, nodeDefaultImportAliasPattern,
+	} {
+		for _, match := range executableSubmatches(pattern, code) {
+			alias := match[1]
+			specs = append(specs,
+				codeNetworkCallSpec{name: alias + ".connect", node: true},
+				codeNetworkCallSpec{name: alias + ".createConnection", node: true},
+			)
+		}
+	}
+	for _, match := range executableSubmatches(nodeDestructuredAliasPattern, code) {
+		alias := match[1]
+		if match[2] != "" {
+			alias = match[2]
+		}
+		specs = append(specs, codeNetworkCallSpec{name: alias, node: true})
+	}
+	for _, match := range executableSubmatches(nodeNamedImportAliasPattern, code) {
+		alias := match[1]
+		if match[2] != "" {
+			alias = match[2]
+		}
+		specs = append(specs, codeNetworkCallSpec{name: alias, node: true})
+	}
+	return specs
+}
+
+func executableSubmatches(pattern *regexp.Regexp, code string) [][]string {
+	indices := pattern.FindAllStringSubmatchIndex(code, -1)
+	matches := make([][]string, 0, len(indices))
+	for _, index := range indices {
+		if len(index) < 2 || !codePositionExecutable(code, index[0]) {
+			continue
+		}
+		match := make([]string, len(index)/2)
+		for group := 0; group < len(match); group++ {
+			start, end := index[group*2], index[group*2+1]
+			if start >= 0 && end >= start {
+				match[group] = code[start:end]
+			}
+		}
+		matches = append(matches, match)
+	}
+	return matches
 }
 
 func (spec codeNetworkCallSpec) destination(args []string) (string, bool) {
