@@ -1,0 +1,208 @@
+{
+  "mode": "light",
+  "generatedAt": "2026-07-08T19:35:59Z",
+  "baselineBackend": "inmemory",
+  "backends": [
+    "inmemory",
+    "sqlite"
+  ],
+  "summary": {
+    "cases": 22,
+    "compared": 6,
+    "unsupported": 0,
+    "realDiffs": 5,
+    "allowedDiffs": 1
+  },
+  "cases": [
+    {
+      "case": "01_single_turn_plain_conversation",
+      "sessionID": "s01",
+      "results": null
+    },
+    {
+      "case": "02_multi_turn_ordering",
+      "sessionID": "s02",
+      "results": null
+    },
+    {
+      "case": "03_tool_call_conversation",
+      "sessionID": "s03",
+      "results": null
+    },
+    {
+      "case": "04_state_updates",
+      "sessionID": "s04",
+      "results": null
+    },
+    {
+      "case": "05_memory_write_read",
+      "sessionID": "s05",
+      "results": null
+    },
+    {
+      "case": "06_summary_generate_update",
+      "sessionID": "s06",
+      "results": null
+    },
+    {
+      "case": "07_summary_event_truncation",
+      "sessionID": "s07",
+      "results": null
+    },
+    {
+      "case": "08_track_events",
+      "sessionID": "s08",
+      "results": null
+    },
+    {
+      "case": "09_concurrent_out_of_order_writes",
+      "sessionID": "s09",
+      "results": null
+    },
+    {
+      "case": "10_failure_recovery_retry",
+      "sessionID": "s10",
+      "results": null
+    },
+    {
+      "case": "11_multiple_filter_key_summaries",
+      "sessionID": "s11",
+      "results": null
+    },
+    {
+      "case": "12_hierarchical_filter_key_prefix",
+      "sessionID": "s12",
+      "results": [
+        {
+          "backend": "sqlite",
+          "category": "summary",
+          "locator": {
+            "sessionID": "s12",
+            "summaryFilterKey": "agent-a/tool"
+          },
+          "fieldPath": "summaries[\"agent-a/tool\"]",
+          "baselineValue": "summary:",
+          "compareValue": "\u003cmissing\u003e",
+          "verdict": "allowed_diff",
+          "explanation": "sqlite skips persisting empty scoped summaries"
+        }
+      ]
+    },
+    {
+      "case": "13_branch_multi_agent_trajectory",
+      "sessionID": "s13",
+      "results": null
+    },
+    {
+      "case": "15_state_scope_boundaries",
+      "sessionID": "s15",
+      "results": null
+    },
+    {
+      "case": "16_binary_unicode_nil_state",
+      "sessionID": "s16",
+      "results": null
+    },
+    {
+      "case": "17_memory_retrieval_kinds",
+      "sessionID": "s17",
+      "results": null
+    },
+    {
+      "case": "18_memory_update_id_rotation",
+      "sessionID": "s18",
+      "results": null
+    },
+    {
+      "case": "19_partial_empty_content_event_filtering",
+      "sessionID": "s19",
+      "results": null
+    },
+    {
+      "case": "22_memory_delete",
+      "sessionID": "s22",
+      "results": null
+    },
+    {
+      "case": "23_state_delete",
+      "sessionID": "s23",
+      "results": null
+    },
+    {
+      "case": "24_failure_after",
+      "sessionID": "s24",
+      "results": null
+    },
+    {
+      "case": "01_single_turn_plain_conversation.faulty",
+      "sessionID": "s01",
+      "results": [
+        {
+          "backend": "sqlite",
+          "category": "event",
+          "locator": {
+            "sessionID": "s01",
+            "eventIndex": 1
+          },
+          "fieldPath": "events[1].author",
+          "baselineValue": "assistant",
+          "compareValue": "user",
+          "verdict": "inconsistent",
+          "explanation": "field events[1].author differs from baseline"
+        },
+        {
+          "backend": "sqlite",
+          "category": "event",
+          "locator": {
+            "sessionID": "s01",
+            "eventIndex": 1
+          },
+          "fieldPath": "events[1].role",
+          "baselineValue": "assistant",
+          "compareValue": "user",
+          "verdict": "inconsistent",
+          "explanation": "field events[1].role differs from baseline"
+        },
+        {
+          "backend": "sqlite",
+          "category": "event",
+          "locator": {
+            "sessionID": "s01",
+            "eventIndex": 1
+          },
+          "fieldPath": "events[1].content",
+          "baselineValue": "hi there",
+          "compareValue": "hello",
+          "verdict": "inconsistent",
+          "explanation": "field events[1].content differs from baseline"
+        },
+        {
+          "backend": "sqlite",
+          "category": "event",
+          "locator": {
+            "sessionID": "s01",
+            "eventIndex": 2
+          },
+          "fieldPath": "events[2]",
+          "baselineValue": "\u003cmissing\u003e",
+          "compareValue": "{\"author\":\"assistant\",\"role\":\"assistant\",\"content\":\"hi there\"}",
+          "verdict": "inconsistent",
+          "explanation": "field events[2] differs from baseline"
+        },
+        {
+          "backend": "sqlite",
+          "category": "event",
+          "locator": {
+            "sessionID": "s01",
+            "eventIndex": 3
+          },
+          "fieldPath": "events[3]",
+          "baselineValue": "\u003cmissing\u003e",
+          "compareValue": "{\"author\":\"assistant\",\"role\":\"assistant\",\"content\":\"hi there\"}",
+          "verdict": "inconsistent",
+          "explanation": "field events[3] differs from baseline"
+        }
+      ]
+    }
+  ]
+}

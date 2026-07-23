@@ -1,0 +1,55 @@
+{
+  "name": "07_summary_event_truncation.faulty",
+  "description": "Summary plus new events restore context.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u07",
+    "sessionID": "s07"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "old context"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "old answer"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "after summary"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "after answer"
+      }
+    }
+  ],
+  "faultInjection": "overwrite_summary",
+  "expectedDefect": {
+    "category": "summary",
+    "fieldPath": "summaries",
+    "locator": {
+      "sessionID": "s07"
+    }
+  }
+}

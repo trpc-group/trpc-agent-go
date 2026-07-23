@@ -1,0 +1,21 @@
+{
+  "name": "16_binary_unicode_nil_state",
+  "description": "Unicode and byte state round-trip.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u16",
+    "sessionID": "s16"
+  },
+  "operations": [
+    {
+      "type": "set_state",
+      "key": "unicode",
+      "value": "\u4f60\u597d replay"
+    },
+    {
+      "type": "set_state",
+      "key": "binary",
+      "bytes": "AAEC"
+    }
+  ]
+}

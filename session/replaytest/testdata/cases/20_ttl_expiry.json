@@ -1,0 +1,28 @@
+{
+  "name": "20_ttl_expiry",
+  "description": "Integration-only TTL boundary semantics.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u20",
+    "sessionID": "s20"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "ttl candidate"
+      }
+    },
+    {
+      "type": "add_memory",
+      "value": "ttl memory",
+      "topics": [
+        "ttl"
+      ],
+      "kind": "fact"
+    }
+  ],
+  "mode": "integration"
+}

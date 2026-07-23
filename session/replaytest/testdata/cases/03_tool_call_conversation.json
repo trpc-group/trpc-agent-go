@@ -1,0 +1,57 @@
+{
+  "name": "03_tool_call_conversation",
+  "description": "Assistant tool call, tool response, and final answer.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u03",
+    "sessionID": "s03"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "weather?"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "toolCalls": [
+          {
+            "id": "tc1",
+            "name": "get_weather",
+            "args": {
+              "city": "SH"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "tool",
+        "role": "tool",
+        "content": "sunny",
+        "toolID": "tc1",
+        "extensions": {
+          "trpc_agent.tool_call_args": {
+            "city": "SH"
+          }
+        }
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "It is sunny."
+      }
+    }
+  ]
+}

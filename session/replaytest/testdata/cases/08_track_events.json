@@ -1,0 +1,28 @@
+{
+  "name": "08_track_events",
+  "description": "Track event payload for tool execution.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u08",
+    "sessionID": "s08"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "run tool"
+      }
+    },
+    {
+      "type": "append_track",
+      "track": "tool_exec",
+      "payload": {
+        "tool": "lookup",
+        "durationMs": 42,
+        "status": "ok"
+      }
+    }
+  ]
+}

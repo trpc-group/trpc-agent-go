@@ -1,0 +1,44 @@
+{
+  "name": "19_partial_empty_content_event_filtering.faulty",
+  "description": "Partial and empty-content events are projected consistently.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u19",
+    "sessionID": "s19"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "ask"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "partial payload",
+        "partial": true
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "final answer"
+      }
+    }
+  ],
+  "faultInjection": "duplicate_event",
+  "expectedDefect": {
+    "category": "event",
+    "fieldPath": "events",
+    "locator": {
+      "sessionID": "s19"
+    }
+  }
+}

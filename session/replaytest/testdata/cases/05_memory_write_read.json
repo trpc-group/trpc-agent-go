@@ -1,0 +1,27 @@
+{
+  "name": "05_memory_write_read",
+  "description": "Long-term memory write and read.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u05",
+    "sessionID": "s05"
+  },
+  "operations": [
+    {
+      "type": "add_memory",
+      "value": "user prefers metric units",
+      "topics": [
+        "preference"
+      ],
+      "kind": "fact"
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "remember metric"
+      }
+    }
+  ]
+}

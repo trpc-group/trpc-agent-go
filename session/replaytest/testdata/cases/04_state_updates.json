@@ -1,0 +1,29 @@
+{
+  "name": "04_state_updates",
+  "description": "Session state write and overwrite.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u04",
+    "sessionID": "s04"
+  },
+  "operations": [
+    {
+      "type": "set_state",
+      "key": "lang",
+      "value": "en"
+    },
+    {
+      "type": "set_state",
+      "key": "lang",
+      "value": "zh"
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "state set"
+      }
+    }
+  ]
+}

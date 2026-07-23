@@ -1,0 +1,51 @@
+{
+  "name": "11_multiple_filter_key_summaries",
+  "description": "Multiple scoped summaries coexist.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u11",
+    "sessionID": "s11"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "global event"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "user scoped",
+        "branch": "user-msgs"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true,
+      "filterKey": "user-msgs"
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "tool scoped",
+        "branch": "agent-a/tool"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true,
+      "filterKey": "agent-a/tool"
+    },
+    {
+      "type": "create_summary",
+      "force": true
+    }
+  ]
+}

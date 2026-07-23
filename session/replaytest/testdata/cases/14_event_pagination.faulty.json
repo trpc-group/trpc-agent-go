@@ -1,0 +1,36 @@
+{
+  "name": "14_event_pagination.faulty",
+  "description": "Integration-only event pagination semantics.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u14",
+    "sessionID": "s14"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "page 1"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "page 2"
+      }
+    }
+  ],
+  "mode": "integration",
+  "faultInjection": "duplicate_event",
+  "expectedDefect": {
+    "category": "event",
+    "fieldPath": "events",
+    "locator": {
+      "sessionID": "s14"
+    }
+  }
+}

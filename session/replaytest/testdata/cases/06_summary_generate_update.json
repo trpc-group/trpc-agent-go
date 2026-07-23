@@ -1,0 +1,43 @@
+{
+  "name": "06_summary_generate_update",
+  "description": "Summary creation and forced update.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u06",
+    "sessionID": "s06"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "summarize me"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "will do"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "new fact"
+      }
+    },
+    {
+      "type": "create_summary",
+      "force": true
+    }
+  ]
+}

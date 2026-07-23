@@ -1,0 +1,28 @@
+{
+  "name": "10_failure_recovery_retry",
+  "description": "Duplicate retry trajectory is stable across backends.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u10",
+    "sessionID": "s10"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "retry"
+      }
+    },
+    {
+      "type": "append_event",
+      "repeat": 1,
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "retry-safe"
+      }
+    }
+  ]
+}

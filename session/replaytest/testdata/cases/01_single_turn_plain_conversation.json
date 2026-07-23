@@ -1,0 +1,27 @@
+{
+  "name": "01_single_turn_plain_conversation",
+  "description": "Single user message plus assistant text.",
+  "key": {
+    "appName": "replaytest",
+    "userID": "u01",
+    "sessionID": "s01"
+  },
+  "operations": [
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "hello"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "assistant",
+        "role": "assistant",
+        "content": "hi there"
+      }
+    }
+  ]
+}
