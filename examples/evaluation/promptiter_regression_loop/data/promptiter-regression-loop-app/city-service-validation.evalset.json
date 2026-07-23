@@ -1,0 +1,55 @@
+{
+  "evalSetId": "city-service-validation",
+  "name": "city-service-validation",
+  "evalCases": [
+    {
+      "evalId": "validation-weather-01",
+      "conversation": [
+        {
+          "invocationId": "validation-weather-01-1",
+          "userContent": {"role": "user", "content": "case:validation-weather-01 weather:guangzhou"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"广州天气多云，28°C\"}"},
+          "tools": [
+            {
+              "id": "call-validation-weather-01",
+              "name": "weather_lookup",
+              "arguments": {"city": "Guangzhou"},
+              "result": {"city": "Guangzhou", "condition": "cloudy", "temperatureC": 28}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "validation-distance-01",
+      "conversation": [
+        {
+          "invocationId": "validation-distance-01-1",
+          "userContent": {"role": "user", "content": "case:validation-distance-01 distance:suzhou-hangzhou"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"苏州到杭州约160公里\"}"},
+          "tools": [
+            {
+              "id": "call-validation-distance-01",
+              "name": "distance_lookup",
+              "arguments": {"from": "Suzhou", "to": "Hangzhou"},
+              "result": {"from": "Suzhou", "to": "Hangzhou", "distanceKm": 160}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "validation-scope-01",
+      "conversation": [
+        {
+          "invocationId": "validation-scope-01-1",
+          "userContent": {"role": "user", "content": "case:validation-scope-01 scope:emergency"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"紧急情况请拨打当地应急电话\"}"}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    }
+  ]
+}

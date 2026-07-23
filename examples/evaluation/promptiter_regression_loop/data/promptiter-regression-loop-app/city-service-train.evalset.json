@@ -1,0 +1,55 @@
+{
+  "evalSetId": "city-service-train",
+  "name": "city-service-train",
+  "evalCases": [
+    {
+      "evalId": "train-weather-01",
+      "conversation": [
+        {
+          "invocationId": "train-weather-01-1",
+          "userContent": {"role": "user", "content": "case:train-weather-01 weather:shanghai"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"上海天气晴，25°C\"}"},
+          "tools": [
+            {
+              "id": "call-train-weather-01",
+              "name": "weather_lookup",
+              "arguments": {"city": "Shanghai"},
+              "result": {"city": "Shanghai", "condition": "sunny", "temperatureC": 25}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "train-distance-01",
+      "conversation": [
+        {
+          "invocationId": "train-distance-01-1",
+          "userContent": {"role": "user", "content": "case:train-distance-01 distance:beijing-tianjin"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"北京到天津约120公里\"}"},
+          "tools": [
+            {
+              "id": "call-train-distance-01",
+              "name": "distance_lookup",
+              "arguments": {"from": "Beijing", "to": "Tianjin"},
+              "result": {"from": "Beijing", "to": "Tianjin", "distanceKm": 120}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "train-scope-01",
+      "conversation": [
+        {
+          "invocationId": "train-scope-01-1",
+          "userContent": {"role": "user", "content": "case:train-scope-01 scope:service-hours"},
+          "finalResponse": {"role": "assistant", "content": "{\"answer\":\"城市信息服务每日09:00-18:00开放\"}"}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-loop-app", "userId": "fixture-user"}
+    }
+  ]
+}

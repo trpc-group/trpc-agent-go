@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "trpc-agent-go.promptiter-regression.config/v1alpha1",
+  "scenario": "improvement",
+  "seed": 2003,
+  "maxRounds": 1,
+  "inputs": {
+    "trainEvalset": "./promptiter-regression-loop-app/city-service-train.evalset.json",
+    "validationEvalset": "./promptiter-regression-loop-app/city-service-validation.evalset.json",
+    "metrics": "./promptiter-regression-loop-app/city-service.metrics.json",
+    "baselinePrompt": "../prompts/baseline.txt"
+  },
+  "outputDir": "../example_output",
+  "datasetGuard": {
+    "failOnExactOverlap": true,
+    "failOnNearOverlap": false,
+    "nearThreshold": 0.9
+  },
+  "gate": {
+    "minValidationGain": 0.2,
+    "hardMetrics": ["final_response_avg_score", "tool_trajectory_avg_score"],
+    "criticalCases": ["validation-distance-01"],
+    "maxMetricRegression": 0.0,
+    "maxGeneralizationGap": 0.5,
+    "requireCompleteMatrix": true,
+    "rejectUnexpectedMetrics": true
+  },
+  "budget": {
+    "maxModelCalls": 100,
+    "maxTotalTokens": 100000,
+    "maxLatencyMs": 180000,
+    "maxCost": null
+  }
+}
