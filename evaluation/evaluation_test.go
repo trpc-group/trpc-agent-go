@@ -851,6 +851,9 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	svc := &fakeService{}
 	callbacks := service.NewCallbacks()
 	reg := registry.New()
+	aggregator := passEvalCaseResultAggregator{}
+	toolMockRunner := stubRunner{}
+	simulator := stubSimulator{}
 
 	ae, err := New(
 		appName,
@@ -865,6 +868,9 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 		WithEvalCaseParallelInferenceEnabled(true),
 		WithEvalCaseParallelEvaluationEnabled(true),
 		WithRunOptions(agent.WithInstruction("prompt")),
+		WithEvalCaseResultAggregator(aggregator),
+		WithToolMockRunner(toolMockRunner),
+		WithUserSimulator(simulator),
 	)
 	assert.NoError(t, err)
 	if err != nil {
@@ -883,6 +889,8 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	inferenceOpts := svc.inferenceOptions[0]
 	assert.Same(t, evalSetMgr, inferenceOpts.EvalSetManager)
 	assert.Same(t, callbacks, inferenceOpts.Callbacks)
+	assert.Equal(t, toolMockRunner, inferenceOpts.ToolMockRunner)
+	assert.Equal(t, simulator, inferenceOpts.UserSimulator)
 	assert.Len(t, inferenceOpts.RunOptions, 1)
 	assert.Equal(t, 2, inferenceOpts.EvalCaseParallelism)
 	assert.True(t, inferenceOpts.EvalCaseParallelInferenceEnabled)
@@ -891,8 +899,10 @@ func TestAgentEvaluatorEvaluatePassesServiceCallOptions(t *testing.T) {
 	assert.Same(t, evalSetMgr, evaluateOpts.EvalSetManager)
 	assert.Same(t, reg, evaluateOpts.Registry)
 	assert.Same(t, callbacks, evaluateOpts.Callbacks)
+	assert.Equal(t, toolMockRunner, evaluateOpts.ToolMockRunner)
 	assert.Equal(t, 2, evaluateOpts.EvalCaseParallelism)
 	assert.True(t, evaluateOpts.EvalCaseParallelEvaluationEnabled)
+	assert.Equal(t, aggregator, evaluateOpts.EvalCaseResultAggregator)
 }
 
 func TestAgentEvaluatorEvaluateAppliesPerCallNumRuns(t *testing.T) {
@@ -2126,6 +2136,19 @@ func TestAggregateCaseRunsNotEvaluated(t *testing.T) {
 	assert.Equal(t, status.EvalStatusNotEvaluated, result.OverallStatus)
 	assert.Empty(t, result.MetricResults)
 	assert.Len(t, result.EvalCaseResults, 1)
+}
+
+func TestAggregateCaseRunsSkipsNilRuns(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		nil,
+		makeEvalCaseResult("set", "case", "metric", 1, 1, status.EvalStatusPassed),
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Len(t, result.MetricResults, 1)
+	assert.Len(t, result.EvalCaseResults, 2)
 }
 
 func TestAggregateCaseRunsHardFailureWithoutMetrics(t *testing.T) {

@@ -388,6 +388,22 @@ func (f *fakeEvaluator) Evaluate(ctx context.Context, actuals, expecteds []*eval
 	return f.result, nil
 }
 
+type failingRegistry struct {
+	err error
+}
+
+func (f failingRegistry) Register(string, evaluator.Evaluator) error {
+	return nil
+}
+
+func (f failingRegistry) Get(string) (evaluator.Evaluator, error) {
+	return nil, f.err
+}
+
+func (f failingRegistry) List() []string {
+	return nil
+}
+
 type fakeEvalCaseResultAggregator struct {
 	result *service.EvalCaseResultAggregationResult
 	err    error
@@ -692,6 +708,14 @@ func TestLocalNewValidationErrors(t *testing.T) {
 				service.WithRegistry(nil),
 			},
 			wantErr: "registry is nil",
+		},
+		{
+			name: "nil_metric_registry",
+			r:    &fakeRunner{},
+			options: []service.Option{
+				service.WithMetricRegistry(nil),
+			},
+			wantErr: "metric registry is nil",
 		},
 		{
 			name: "nil_eval_case_result_aggregator",
@@ -1516,6 +1540,42 @@ func TestLocalEvaluateRequestValidation(t *testing.T) {
 	assert.Nil(t, result)
 }
 
+func TestLocalResolveEvaluateOptionsUsesStoredEvalCaseResultAggregator(t *testing.T) {
+	aggregator := &fakeEvalCaseResultAggregator{}
+	svc := &local{
+		evalSetManager:           evalsetinmemory.New(),
+		registry:                 registry.New(),
+		metricRegistry:           metricregistry.New(),
+		evalCaseResultAggregator: aggregator,
+	}
+	opts, err := svc.resolveEvaluateOptions()
+	assert.NoError(t, err)
+	require.NotNil(t, opts)
+	assert.Same(t, aggregator, opts.EvalCaseResultAggregator)
+}
+
+func TestLocalResolveEvaluateOptionsRejectsNilEvalCaseResultAggregator(t *testing.T) {
+	svc := &local{
+		evalSetManager: evalsetinmemory.New(),
+		registry:       registry.New(),
+		metricRegistry: metricregistry.New(),
+	}
+	opts, err := svc.resolveEvaluateOptions()
+	assert.ErrorContains(t, err, "eval case result aggregator is nil")
+	assert.Nil(t, opts)
+}
+
+func TestLocalResolveEvaluateOptionsRejectsNilMetricRegistry(t *testing.T) {
+	svc := &local{
+		evalSetManager:           evalsetinmemory.New(),
+		registry:                 registry.New(),
+		evalCaseResultAggregator: service.NewOptions().EvalCaseResultAggregator,
+	}
+	opts, err := svc.resolveEvaluateOptions()
+	assert.ErrorContains(t, err, "metric registry is nil")
+	assert.Nil(t, opts)
+}
+
 func TestLocalEvaluateParallelInvokeFailureAddsContext(t *testing.T) {
 	ctx := context.Background()
 	appName := "app"
@@ -1569,6 +1629,35 @@ func TestLocalEvaluateParallelInvokeFailureAddsContext(t *testing.T) {
 	if err != nil {
 		assert.Contains(t, err.Error(), "submit evaluation task for eval case case")
 	}
+}
+
+func TestLocalEvaluateWrapsMetricExtensionResolveError(t *testing.T) {
+	ctx := context.Background()
+	svc := &local{
+		evalSetManager:           evalsetinmemory.New(),
+		registry:                 registry.New(),
+		metricRegistry:           metricregistry.New(),
+		evalCaseResultAggregator: service.NewOptions().EvalCaseResultAggregator,
+	}
+	result, err := svc.Evaluate(ctx, &service.EvaluateRequest{
+		AppName:          "app",
+		EvalSetID:        "set",
+		InferenceResults: []*service.InferenceResult{},
+		EvaluateConfig: &service.EvaluateConfig{
+			EvalMetrics: []*metric.EvalMetric{
+				{
+					Criterion: &criterion.Criterion{
+						FinalResponse: &finalresponse.FinalResponseCriterion{
+							Text: &criteriontext.TextCriterion{CompareName: "missing"},
+						},
+					},
+				},
+			},
+		},
+	})
+	assert.ErrorContains(t, err, "resolve metric extensions")
+	assert.ErrorContains(t, err, "resolve metric at index 0")
+	assert.Nil(t, result)
 }
 
 func TestLocalEvaluateSuccess(t *testing.T) {
@@ -2211,6 +2300,61 @@ func TestLocalEvaluatePerCaseRejectsNilManagers(t *testing.T) {
 	if err != nil {
 		assert.Contains(t, err.Error(), "registry is nil")
 	}
+}
+
+func TestLocalEvaluatePerCaseReturnsRegistryLookupError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-registry-error"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	require.NoError(t, err)
+	require.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
+	svc := &local{}
+	inference := makeInferenceResult(appName, evalSetID, caseID, "session", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inference, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{{MetricName: "metric-registry-error"}},
+	}, &service.Options{
+		EvalSetManager:           mgr,
+		Registry:                 failingRegistry{err: errors.New("registry failed")},
+		EvalCaseResultAggregator: service.NewOptions().EvalCaseResultAggregator,
+	})
+	assert.ErrorContains(t, err, "registry failed")
+	assert.Nil(t, result)
+}
+
+func TestLocalEvaluatePerCaseReturnsEffectiveMetricError(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-effective-metric-error"
+	metricName := "metric-case-rubric"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	require.NoError(t, err)
+	evalCase := makeEvalCase(appName, caseID, "prompt")
+	evalCase.Rubrics = []*evalset.EvalCaseRubric{
+		{MetricName: metricName, ID: "case-rubric", Content: &evalset.EvalCaseRubricContent{Text: "Case-specific rule."}},
+	}
+	require.NoError(t, mgr.AddCase(ctx, appName, evalSetID, evalCase))
+	reg := registry.New()
+	require.NoError(t, reg.Register(metricName, &fakeEvaluator{name: metricName}))
+	svc := &local{}
+	inference := makeInferenceResult(appName, evalSetID, caseID, "session", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	result, err := svc.evaluatePerCase(ctx, inference, &service.EvaluateConfig{
+		EvalMetrics: []*metric.EvalMetric{{MetricName: metricName}},
+	}, &service.Options{
+		EvalSetManager:           mgr,
+		Registry:                 reg,
+		EvalCaseResultAggregator: service.NewOptions().EvalCaseResultAggregator,
+	})
+	assert.ErrorContains(t, err, "llmJudge criterion is required")
+	assert.Nil(t, result)
 }
 
 func TestLocalInferenceTraceModeSkipsRunner(t *testing.T) {
@@ -4145,6 +4289,56 @@ func TestLocalEvaluateMarksCaseFailedWhenEvalCaseResultAggregatorFails(t *testin
 	assert.Equal(t, status.EvalStatusFailed, runResult.EvalCaseResults[0].FinalEvalStatus)
 	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "aggregate eval case result")
 	assert.Contains(t, runResult.EvalCaseResults[0].ErrorMessage, "aggregate failed")
+}
+
+func TestLocalEvaluatePerCaseRejectsInvalidEvalCaseResultAggregation(t *testing.T) {
+	ctx := context.Background()
+	appName := "app"
+	evalSetID := "set"
+	caseID := "case-invalid-aggregation"
+	mgr := evalsetinmemory.New()
+	_, err := mgr.Create(ctx, appName, evalSetID)
+	require.NoError(t, err)
+	require.NoError(t, mgr.AddCase(ctx, appName, evalSetID, makeEvalCase(appName, caseID, "prompt")))
+	reg := registry.New()
+	svc := newLocalService(t, &fakeRunner{}, mgr, reg, "session-1")
+	inferenceResult := makeInferenceResult(appName, evalSetID, caseID, "session-1", []*evalset.Invocation{
+		makeActualInvocation("actual-1", "prompt", "answer"),
+	})
+	tests := []struct {
+		name       string
+		aggregator service.EvalCaseResultAggregator
+		wantErr    string
+	}{
+		{
+			name:       "nil aggregator",
+			aggregator: nil,
+			wantErr:    "eval case result aggregator is nil",
+		},
+		{
+			name:       "nil aggregation result",
+			aggregator: &fakeEvalCaseResultAggregator{},
+			wantErr:    "eval case result aggregation result is nil",
+		},
+		{
+			name: "unknown aggregation status",
+			aggregator: &fakeEvalCaseResultAggregator{
+				result: &service.EvalCaseResultAggregationResult{Status: status.EvalStatusUnknown},
+			},
+			wantErr: "unexpected eval case result aggregation status",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := svc.evaluatePerCase(ctx, inferenceResult, &service.EvaluateConfig{}, &service.Options{
+				EvalSetManager:           mgr,
+				Registry:                 reg,
+				EvalCaseResultAggregator: tc.aggregator,
+			})
+			assert.ErrorContains(t, err, tc.wantErr)
+			assert.Nil(t, result)
+		})
+	}
 }
 
 func TestBuildCaseEffectiveMetricAppendsCaseRubrics(t *testing.T) {
