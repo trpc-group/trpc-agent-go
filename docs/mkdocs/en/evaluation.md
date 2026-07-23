@@ -2019,6 +2019,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2052,6 +2053,7 @@ type PerInvocationResult struct {
 type PerInvocationDetails struct {
 	Reason       string                    // Reason is the scoring explanation for this turn.
 	Score        float64                   // Score is the turn score.
+	Value        *score.Value              // Value is the typed score value for this turn.
 	RubricScores []*evalresult.RubricScore // RubricScores are rubric score list.
 }
 ```
@@ -2059,6 +2061,8 @@ type PerInvocationDetails struct {
 Evaluator input is two Invocation lists. `actuals` are the actual traces collected during inference, and `expecteds` are expected traces from EvalSet. The framework calls Evaluate per EvalCase, and `actuals` and `expecteds` represent the actual and expected traces for the case and are aligned by turn. Most evaluators require both lists to have the same number of turns, otherwise an error is returned.
 
 Evaluator output includes overall results and per-turn details. Overall score is usually aggregated from per-turn scores, and overall status is usually determined by comparing overall score with `threshold`. For deterministic evaluators, `reason` usually records mismatch reasons. For LLM Judge evaluators, `reason` and `rubricScores` preserve judge rationale.
+
+`Score` remains the framework's unified numeric score, usually normalized to the range 0 to 1, and continues to drive threshold checks, status calculation, and result aggregation. `Details.Value` is optional typed score detail that preserves the evaluator's original output shape for platform display or downstream processing. When `Details.Value` is present, its `kind` selects the field to read; an omitted value means no typed detail is available. The framework defines three typed score kinds: `numeric`, `boolean`, and `categorical`. Current built-in numeric evaluators write `numeric` values. Custom evaluators may write `boolean` or `categorical` values without changing the numeric `Score` semantics.
 
 #### Tool Trajectory Evaluator
 
@@ -2915,6 +2919,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2955,6 +2960,7 @@ type EvalMetricResult struct {
 type EvalMetricResultDetails struct {
 	Reason       string         // Reason is the scoring explanation for this metric.
 	Score        float64        // Score is the score for this metric.
+	Value        *score.Value   // Value is the typed score detail.
 	RubricScores []*RubricScore // RubricScores is the rubric score list.
 }
 
@@ -2974,6 +2980,12 @@ type RubricScore struct {
 ```
 
 Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, and `finalEvalStatus` is the evaluation case-level final status. Both are computed by the Service case result aggregator.
+
+`details.value` in metric details is typed score detail. It does not replace `score` and does not participate in the framework's default threshold checks. The default pass logic is still determined by the evaluator's numeric `score` and `threshold`. If `details.value` is present, `kind` selects the corresponding field to read; an omitted `details.value` means the evaluator did not provide typed detail. Numeric zero and boolean false are valid values. Typed values are intended for per-turn metric details; overall metric details keep aggregated numeric results and do not aggregate typed values by default. Platforms that need to distinguish numeric scores, boolean conclusions, or categorical labels can read `details.value.kind` and the corresponding field:
+
+- `kind: "numeric"` uses the `numeric` field, for example `{"kind": "numeric", "numeric": 0.9}`.
+- `kind: "boolean"` uses the `boolean` field, for example `{"kind": "boolean", "boolean": true}`.
+- `kind: "categorical"` uses the `categorical` field, for example `{"kind": "categorical", "categorical": "good"}`.
 
 For `llm_judge_template`, `criterion.llmJudge.template.prompt` in results has two different meanings:
 
@@ -2996,7 +3008,35 @@ Below is an example result file snippet.
           "metricName": "tool_trajectory_avg_score",
           "score": 1,
           "evalStatus": "passed",
-          "threshold": 1
+          "threshold": 1,
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "turn-1"
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-1"
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            }
+          ]
         }
       ]
     }

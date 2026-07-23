@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -56,7 +57,11 @@ func (e *finalResponseResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 	if label == labelValid {
 		score = 1.0
 	}
-	return &evaluator.ScoreResult{Score: score, Reason: reasoning}, nil
+	return &evaluator.ScoreResult{
+		Score:  score,
+		Value:  &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &score},
+		Reason: reasoning,
+	}, nil
 }
 
 // extractReasoningAndLabel parses judge output in text form.

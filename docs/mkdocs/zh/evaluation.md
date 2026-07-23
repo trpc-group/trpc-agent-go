@@ -2017,6 +2017,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2050,6 +2051,7 @@ type PerInvocationResult struct {
 type PerInvocationDetails struct {
 	Reason       string                    // Reason 是本轮打分解释
 	Score        float64                   // Score 是本轮得分
+	Value        *score.Value              // Value 是本轮类型化分数
 	RubricScores []*evalresult.RubricScore // RubricScores 是评估细则分数列表
 }
 ```
@@ -2057,6 +2059,8 @@ type PerInvocationDetails struct {
 Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 分别表示 EvalCase 的实际轨迹与预期轨迹，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
 
 Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐轮分数聚合得到，整体状态通常由整体分数与 `threshold` 对比得到。对确定性评估器，`reason` 通常用于记录不匹配原因。对 LLM Judge 类评估器，`reason` 与 `rubricScores` 会用于保留裁判依据。
+
+`Score` 仍然是框架的统一数值分数，取值通常归一到 0 到 1，并继续用于阈值判断、状态计算和结果聚合。`Details.Value` 是可选的类型化分数明细，用于保留评估器原始输出形态，便于平台展示或做后续处理。`Details.Value` 存在时，由其中的 `kind` 决定读取哪个字段；未写入 value 表示没有类型化明细。框架内置三类类型化分数：`numeric`、`boolean` 与 `categorical`。当前内置数值型评估器会写入 `numeric` value；自定义评估器也可以在不改变 `Score` 语义的前提下写入 `boolean` 或 `categorical` value。
 
 #### 工具轨迹评估器
 
@@ -2913,6 +2917,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2953,6 +2958,7 @@ type EvalMetricResult struct {
 type EvalMetricResultDetails struct {
 	Reason       string         // Reason 是该指标的打分解释
 	Score        float64        // Score 是该指标得分
+	Value        *score.Value   // Value 是类型化分数明细
 	RubricScores []*RubricScore // RubricScores 是评估细则分数列表
 }
 
@@ -2972,6 +2978,12 @@ type RubricScore struct {
 ```
 
 整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。`EvalCaseResult.score` 表示评估用例级别的聚合分数，`finalEvalStatus` 表示评估用例级别的最终状态；它们由 Service 的用例结果聚合器计算。
+
+指标明细中的 `details.value` 表示类型化分数明细。它不替代 `score`，也不参与框架默认的阈值判断；默认通过逻辑仍然由评估器产出的数值 `score` 与 `threshold` 决定。`details.value` 存在时，由 `kind` 决定读取哪个字段；没有 `details.value` 表示评估器没有提供类型化明细。数值 0 和布尔值 false 都是有效值。类型化分数主要用于逐轮指标明细；整体指标明细保留聚合后的数值结果，不默认聚合类型化分数。平台如果需要区分“数值分”“布尔结论”或“分类标签”，可以读取 `details.value.kind` 与对应字段：
+
+- `kind: "numeric"` 使用 `numeric` 字段，例如 `{"kind": "numeric", "numeric": 0.9}`。
+- `kind: "boolean"` 使用 `boolean` 字段，例如 `{"kind": "boolean", "boolean": true}`。
+- `kind: "categorical"` 使用 `categorical` 字段，例如 `{"kind": "categorical", "categorical": "good"}`。
 
 对于 `llm_judge_template`，结果中的 `criterion.llmJudge.template.prompt` 需要区分两层语义：
 
@@ -2994,7 +3006,35 @@ type RubricScore struct {
           "metricName": "tool_trajectory_avg_score",
           "score": 1,
           "evalStatus": "passed",
-          "threshold": 1
+          "threshold": 1,
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "turn-1"
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-1"
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            }
+          ]
         }
       ]
     }
