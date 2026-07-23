@@ -10,11 +10,8 @@ package safety
 
 import (
 	"encoding/json"
-	"fmt"
-	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
-	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -117,75 +114,6 @@ type Report struct {
 	DurationMillis int64     `json:"duration_ms"`
 	SafeSummary    string    `json:"safe_summary,omitempty"`
 	Findings       []Finding `json:"findings,omitempty"`
-}
-
-// Guard scans execution requests using an immutable policy copy.
-type Guard struct {
-	policy Policy
-}
-
-var scanSequence uint64
-
-// NewGuard returns a Guard configured with a copy of policy. A zero policy
-// uses DefaultPolicy.
-func NewGuard(policy Policy) (*Guard, error) {
-	if isZeroPolicy(policy) {
-		policy = DefaultPolicy()
-	}
-	if err := validatePolicy(policy); err != nil {
-		return nil, err
-	}
-	return &Guard{policy: clonePolicy(policy)}, nil
-}
-
-// Scan evaluates req and returns a complete safety report.
-func (g *Guard) Scan(req Request) Report {
-	report := newReport(req)
-	if g == nil || req.Command == "" {
-		return report
-	}
-	pipe, err := shellsafe.Parse(req.Command)
-	if err != nil {
-		return g.reportForError(report, g.policy.ParseErrorAction, "shell_parse", err)
-	}
-	policy := shellsafe.PolicyFromLists(g.policy.AllowedCommands, g.policy.DeniedCommands)
-	if err := policy.Check(pipe); err != nil {
-		return g.reportForError(report, DecisionDeny, "command_policy", err)
-	}
-	return report
-}
-
-func (g *Guard) reportForError(report Report, decision Decision, ruleID string, err error) Report {
-	if decision == "" {
-		decision = DecisionDeny
-	}
-	report.Decision = decision
-	report.RiskLevel = RiskHigh
-	report.RuleID = ruleID
-	report.Evidence = []string{err.Error()}
-	report.Recommendation = "use a command permitted by the safety policy"
-	report.Blocked = decision == DecisionDeny
-	report.Findings = []Finding{{
-		Decision: decision, RiskLevel: RiskHigh, RuleID: ruleID,
-		Evidence: report.Evidence, Recommendation: report.Recommendation,
-	}}
-	return report
-}
-
-func newReport(req Request) Report {
-	return Report{
-		SchemaVersion:  1,
-		ScanID:         fmt.Sprintf("scan-%d", atomic.AddUint64(&scanSequence, 1)),
-		Decision:       DecisionAllow,
-		RiskLevel:      RiskLow,
-		RuleID:         "allow",
-		Evidence:       []string{"request satisfies the safety policy"},
-		Recommendation: "execution is permitted",
-		ToolName:       req.ToolName,
-		Command:        req.Command,
-		Backend:        req.Backend,
-		SafeSummary:    "request is permitted",
-	}
 }
 
 func isZeroPolicy(policy Policy) bool {
