@@ -27,6 +27,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
     {
       "evalSetId": "greeting-set",
       "evalId": "case-1",
+      "score": 0.95,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
@@ -144,6 +145,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
 
 	caseResult := result.EvalCaseResults[0]
 	assert.Equal(t, "case-1", caseResult.EvalID)
+	assert.Equal(t, 0.95, caseResult.Score)
 	assert.Equal(t, status.EvalStatusPassed, caseResult.FinalEvalStatus)
 	assert.Equal(t, "greeting-set", caseResult.EvalSetID)
 	assert.Len(t, caseResult.OverallEvalMetricResults, 1)

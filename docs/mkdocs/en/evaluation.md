@@ -513,7 +513,7 @@ As shown below, the framework standardizes the Agent runtime through a unified e
 - **Metric** defines metric configuration and includes `metricName`, `criterion`, and `threshold`. `metricName` selects the evaluator implementation, `criterion` describes evaluation criteria, and `threshold` defines the threshold.
 - **Evaluator** reads actual and expected traces, computes `score` based on `criterion`, then compares with `threshold` to determine pass or fail.
 - **Registry** maintains mappings between `metricName` and Evaluator. Built-in and custom evaluators integrate through it.
-- **Service** runs cases, collects traces, calls evaluators for scoring, and returns evaluation results.
+- **Service** runs cases, collects traces, calls evaluators for scoring, and uses the case result aggregator to generate evaluation case-level scores and statuses.
 - **AgentEvaluator** is created via `evaluation.New` with Runner, Managers, Registry, and other dependencies, and exposes `Evaluate` to users.
 
 A typical evaluation run includes the following steps.
@@ -2931,6 +2931,8 @@ type EvalSetResult struct {
 type EvalCaseResult struct {
 	EvalSetID                     string                           // EvalSetID is the evaluation set identifier.
 	EvalID                        string                           // EvalID is the case identifier.
+	RunID                         int                              // RunID is the run sequence number.
+	Score                         float64                          // Score is the case-level aggregated score.
 	FinalEvalStatus               status.EvalStatus                // FinalEvalStatus is the final status.
 	ErrorMessage                  string                           // ErrorMessage is the error message.
 	OverallEvalMetricResults      []*EvalMetricResult              // OverallEvalMetricResults is the list of overall metric results.
@@ -2971,7 +2973,7 @@ type RubricScore struct {
 }
 ```
 
-Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting.
+Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, and `finalEvalStatus` is the evaluation case-level final status. Both are computed by the Service case result aggregator.
 
 For `llm_judge_template`, `criterion.llmJudge.template.prompt` in results has two different meanings:
 
@@ -2987,6 +2989,7 @@ Below is an example result file snippet.
   "evalCaseResults": [
     {
       "evalId": "calc_add",
+      "score": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
@@ -3188,6 +3191,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 // Service is the evaluation service interface.
@@ -3237,6 +3241,27 @@ type EvalSetRunResult struct {
 	EvalSetID       string                       // EvalSetID is the evaluation set identifier.
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults are the evaluation case results.
 }
+
+// EvalCaseResultAggregator aggregates metric results for a single evaluation case.
+type EvalCaseResultAggregator interface {
+	Aggregate(ctx context.Context, input *EvalCaseResultAggregationInput) (*EvalCaseResultAggregationResult, error)
+}
+
+// EvalCaseResultAggregationInput is the context required to aggregate a single evaluation case result.
+type EvalCaseResultAggregationInput struct {
+	AppName         string                         // AppName is the application name.
+	EvalSetID       string                         // EvalSetID is the evaluation set identifier.
+	EvalCase        *evalset.EvalCase              // EvalCase is the current evaluation case configuration.
+	InferenceResult *InferenceResult               // InferenceResult is the inference result for the current evaluation case.
+	EvalMetrics     []*metric.EvalMetric           // EvalMetrics are the actually executed evaluation metrics.
+	MetricResults   []*evalresult.EvalMetricResult // MetricResults are the corresponding overall metric results.
+}
+
+// EvalCaseResultAggregationResult is the aggregated evaluation case result.
+type EvalCaseResultAggregationResult struct {
+	Score  float64           // Score is the case-level score.
+	Status status.EvalStatus // Status is the case-level status.
+}
 ```
 
 The framework provides a local Service implementation that depends on Runner for inference, EvalSetManager for EvalSet loading, and Registry for evaluator lookup.
@@ -3259,7 +3284,98 @@ The local implementation looks up Evaluators from Registry and calls `Evaluator.
 
 When `evalMode` is `trace`, inference is skipped. If `actualConversation` is configured, actual traces come from `actualConversation` and `conversation` continues to represent expected traces. If `actualConversation` is omitted, `conversation` is treated as the actual trace and the evaluation phase builds placeholder expecteds that preserve only `userContent`. When `expectedRunnerEnabled` is enabled, the evaluation phase instead reuses the `ExpectedInferences` that were already generated during inference.
 
-After evaluation, it returns `EvalSetRunResult` to AgentEvaluator.
+After all metrics are evaluated, the local implementation passes the current case, actual inference result, actually executed metric list, and corresponding metric results to `EvalCaseResultAggregator`. The aggregator computes `EvalCaseResult.score` and `EvalCaseResult.finalEvalStatus`. Evaluation then generates `EvalSetRunResult` and returns it to AgentEvaluator.
+
+#### Evaluation Case Result Aggregation
+
+An evaluation case can contain multiple metrics. Each Evaluator first produces metric-level `score`, `threshold`, and `evalStatus`, and `EvalCaseResultAggregator` then aggregates them into case-level `score` and `finalEvalStatus`. The default aggregator preserves the framework's existing all-metrics-pass semantics. If any metric fails, the case fails; if no metric fails and at least one metric passes, the case passes; if no metric result is available, the case is not evaluated. The default score is binary: passed cases score 1, while failed or not-evaluated cases score 0.
+
+The `EvalCaseResultAggregator` interface is defined as follows.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
+
+type EvalCaseResultAggregator interface {
+	// Aggregate aggregates metric results for a single evaluation case.
+	Aggregate(ctx context.Context, input *EvalCaseResultAggregationInput) (*EvalCaseResultAggregationResult, error)
+}
+
+type EvalCaseResultAggregationInput struct {
+	AppName         string                         // AppName is the application name.
+	EvalSetID       string                         // EvalSetID is the evaluation set identifier.
+	EvalCase        *evalset.EvalCase              // EvalCase is the current evaluation case configuration.
+	InferenceResult *InferenceResult               // InferenceResult is the inference result for the current evaluation case.
+	EvalMetrics     []*metric.EvalMetric           // EvalMetrics are the actually executed evaluation metrics.
+	MetricResults   []*evalresult.EvalMetricResult // MetricResults are the corresponding overall metric results.
+}
+
+type EvalCaseResultAggregationResult struct {
+	Score  float64           // Score is the case-level score.
+	Status status.EvalStatus // Status is the case-level status.
+}
+```
+
+The following example computes a weighted score from `EvalMetric.Extension.weight`. See [examples/evaluation/caseaggregation](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/caseaggregation) for the complete example.
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
+
+type weightedAggregator struct {
+	Threshold float64
+}
+
+func (a weightedAggregator) Aggregate(ctx context.Context, input *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	var totalScore float64
+	var totalWeight float64
+	for i, evalMetric := range input.EvalMetrics {
+		weight := weightFromExtension(evalMetric.Extension)
+		totalScore += input.MetricResults[i].Score * weight
+		totalWeight += weight
+	}
+	if totalWeight == 0 {
+		return &service.EvalCaseResultAggregationResult{Status: status.EvalStatusNotEvaluated}, nil
+	}
+	score := totalScore / totalWeight
+	resultStatus := status.EvalStatusFailed
+	if score >= a.Threshold {
+		resultStatus = status.EvalStatusPassed
+	}
+	return &service.EvalCaseResultAggregationResult{Score: score, Status: resultStatus}, nil
+}
+
+func weightFromExtension(extension any) float64 {
+	values, ok := extension.(map[string]any)
+	if !ok {
+		return 1
+	}
+	weight, ok := values["weight"].(float64)
+	if !ok || weight <= 0 {
+		return 1
+	}
+	return weight
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseResultAggregator(weightedAggregator{
+		Threshold: 0.8,
+	}),
+)
+```
+
+If a custom aggregator returns an error, the local implementation marks the current case as `failed` and writes the error message to `errorMessage`.
+
+When reading results, distinguish case-level results from metric-level results. A custom aggregator only decides the case-level `score` and `finalEvalStatus`. Each metric's own `score`, `threshold`, and `evalStatus` are still computed by the corresponding Evaluator and kept in `overallEvalMetricResults`. Therefore, a custom aggregation strategy can allow a case to pass even when one metric fails.
 
 ### AgentEvaluator
 
@@ -3299,11 +3415,11 @@ type EvaluationCaseResult struct {
 
 By default, `evaluation.New` creates AgentEvaluator and uses in-memory EvalSetManager, MetricManager, EvalResultManager, and the default Registry, and also creates a local Service. If you want to read EvalSet and metric configuration from local files and write results to files, you need to inject Local Managers explicitly.
 
-AgentEvaluator supports running the same evaluation set multiple times via `WithNumRuns`. During aggregation, it summarizes multiple runs by case, averages scores for metrics with the same name, compares with thresholds to determine aggregated status, and writes aggregated results into `MetricResults`. Each run's raw results are preserved in `EvalCaseResults`.
+AgentEvaluator supports running the same evaluation set multiple times via `WithNumRuns`. With the default single run, `OverallStatus` comes from that run's `EvalCaseResult.finalEvalStatus`. When `WithNumRuns` is greater than 1, aggregation is performed by case: metrics with the same name are averaged and compared with thresholds, and the aggregated metric statuses are then used to compute the case `OverallStatus`. Each run's raw results are preserved in `EvalCaseResults`, and aggregated metric results are written to `MetricResults` for display and diagnosis.
 
 ### NumRuns: Repeated Runs
 
-Because Agent execution may be nondeterministic, `evaluation.WithNumRuns` provides repeated runs to reduce randomness from a single run. The default is 1. When `evaluation.WithNumRuns(n)` is specified, the same evaluation set will perform n rounds of inference and evaluation within a single Evaluate, and aggregation will average scores by metric name at case granularity.
+Because Agent execution may be nondeterministic, `evaluation.WithNumRuns` provides repeated runs to reduce randomness from a single run. The default is 1. When `evaluation.WithNumRuns(n)` is specified with n greater than 1, the same evaluation set performs n rounds of inference and evaluation within a single Evaluate, averages metrics with the same name at case granularity, and computes the case status from the aggregated metric statuses.
 
 The number of result files does not increase linearly with repeated runs. One Evaluate writes a single result file corresponding to one EvalSetResult. When `NumRuns` is greater than 1, the file contains detailed results for multiple runs. Results for the same case across different runs appear in `EvalCaseResults` and are distinguished by `runId`.
 
