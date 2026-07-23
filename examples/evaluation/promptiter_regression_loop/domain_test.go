@@ -376,6 +376,23 @@ func TestPipelineSemanticDeterminismAcrossRuns(t *testing.T) {
 	require.Equal(t, first.Accounting.TotalTokens, second.Accounting.TotalTokens)
 }
 
+func TestLoadConfigRejectsEmptyOutputDir(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("data", "promptiter.json"))
+	require.NoError(t, err)
+	updated := strings.Replace(
+		string(content),
+		`"outputDir": "../example_output"`,
+		`"outputDir": "   "`,
+		1,
+	)
+	require.NotEqual(t, string(content), updated)
+
+	path := filepath.Join(t.TempDir(), "promptiter.json")
+	require.NoError(t, os.WriteFile(path, []byte(updated), 0o600))
+	_, err = loadConfig(path)
+	require.ErrorContains(t, err, "outputDir is empty")
+}
+
 func testSnapshot(split string, score float64, metrics map[string]metricEvidence) *evaluationSnapshot {
 	snapshot := &evaluationSnapshot{
 		Identity: snapshotIdentity{
