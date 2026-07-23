@@ -164,6 +164,93 @@ func TestMemoryService_UpdateMemory_RotatesIDAndReturnsResult(t *testing.T) {
 	assert.Equal(t, memory.KindFact, memories[0].Memory.Kind)
 }
 
+func TestMemoryService_UpdateMemory_SameIDUpdatesInPlace(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "same content", []string{"old"}))
+	entries, err := service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	oldID := entries[0].ID
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: oldID,
+		},
+		"same content",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	))
+	require.Equal(t, oldID, result.MemoryID)
+
+	entries, err = service.ReadMemories(ctx, userKey, 1)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, oldID, entries[0].ID)
+	require.Equal(t, []string{"new"}, entries[0].Memory.Topics)
+}
+
+func TestMemoryService_UpdateMemory_ActiveIDConflictPreservesEntries(t *testing.T) {
+	service := NewMemoryService()
+	ctx := context.Background()
+	userKey := memory.UserKey{
+		AppName: "test-app",
+		UserID:  "test-user",
+	}
+
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", []string{"source"}))
+	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"target"}))
+
+	entries, err := service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	var sourceID string
+	for _, entry := range entries {
+		if entry.Memory.Memory == "source" {
+			sourceID = entry.ID
+		}
+	}
+	require.NotEmpty(t, sourceID)
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"target",
+		[]string{"target"},
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	require.Equal(t, "unchanged", result.MemoryID)
+
+	entries, err = service.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+
+	entriesByID := make(map[string]*memory.Entry, len(entries))
+	for _, entry := range entries {
+		entriesByID[entry.ID] = entry
+	}
+	require.Len(t, entriesByID, 2)
+	require.Contains(t, entriesByID, sourceID)
+	require.Equal(t, "source", entriesByID[sourceID].Memory.Memory)
+	require.Equal(t, []string{"source"}, entriesByID[sourceID].Memory.Topics)
+}
+
 func TestMemoryService_UpdateMemory_PreservesMetadataWhenNotProvided(t *testing.T) {
 	service := NewMemoryService()
 	ctx := context.Background()

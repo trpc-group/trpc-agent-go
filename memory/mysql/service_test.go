@@ -12,6 +12,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -62,6 +63,67 @@ func setupMockService(_ *testing.T, db *sql.DB) *Service {
 		tableName:   "memories",
 		cachedTools: make(map[string]tool.Tool),
 	}
+}
+
+func marshalUpdateTestEntry(
+	t *testing.T,
+	key memory.Key,
+	content string,
+	topics []string,
+) []byte {
+	t.Helper()
+	now := time.Now()
+	return marshalUpdateTestEntryAt(t, key, content, topics, now)
+}
+
+func marshalUpdateTestEntryAt(
+	t *testing.T,
+	key memory.Key,
+	content string,
+	topics []string,
+	createdAt time.Time,
+) []byte {
+	t.Helper()
+	entryJSON, err := json.Marshal(&memory.Entry{
+		ID:      key.MemoryID,
+		AppName: key.AppName,
+		UserID:  key.UserID,
+		Memory: &memory.Memory{
+			Memory:      content,
+			Topics:      topics,
+			Kind:        memory.KindFact,
+			LastUpdated: &createdAt,
+		},
+		CreatedAt: createdAt,
+		UpdatedAt: createdAt,
+	})
+	require.NoError(t, err)
+	return entryJSON
+}
+
+type updateEntryCreatedAtMatcher struct {
+	want time.Time
+}
+
+func (m updateEntryCreatedAtMatcher) Match(value driver.Value) bool {
+	data, ok := value.([]byte)
+	if !ok {
+		return false
+	}
+	var entry memory.Entry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		return false
+	}
+	return entry.CreatedAt.Equal(m.want)
+}
+
+type updateTimeMatcher struct {
+	want time.Time
+}
+
+func (m updateTimeMatcher) Match(value driver.Value) bool {
+	got, ok := value.(time.Time)
+	return ok && got.Equal(m.want)
 }
 
 func TestServiceOpts_SearchOptions(t *testing.T) {
@@ -690,12 +752,45 @@ func TestUpdateMemory_Success(t *testing.T) {
 		WithArgs("app", "user", "mem123").
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
 
-	mock.ExpectExec("UPDATE").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{
+			Memory: "updated memory",
+			Topics: []string{"new"},
+			Kind:   memory.KindFact,
+		},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO").
+		WithArgs(
+			memKey.AppName,
+			memKey.UserID,
+			targetID,
+			updateEntryCreatedAtMatcher{want: entry.CreatedAt},
+			updateTimeMatcher{want: entry.CreatedAt},
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), memKey.AppName, memKey.UserID, memKey.MemoryID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
-	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
+	result := &memory.UpdateResult{}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"updated memory",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	)
 	require.NoError(t, err)
+	assert.NotEmpty(t, result.MemoryID)
+	assert.NotEqual(t, memKey.MemoryID, result.MemoryID)
 
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
@@ -730,9 +825,33 @@ func TestUpdateMemory_SoftDeleteFalse(t *testing.T) {
 		WithArgs("app", "user", "mem123").
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(existingJSON))
 
-	mock.ExpectExec("UPDATE.*SET memory_id = .*memory_data").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{
+			Memory: "new memory",
+			Topics: []string{"new"},
+			Kind:   memory.KindFact,
+		},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO").
+		WithArgs(
+			memKey.AppName,
+			memKey.UserID,
+			targetID,
+			updateEntryCreatedAtMatcher{want: existingEntry.CreatedAt},
+			updateTimeMatcher{want: existingEntry.CreatedAt},
+			sqlmock.AnyArg(),
+		).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
 
 	err := s.UpdateMemory(ctx, memKey, "new memory", []string{"new"})
 	require.NoError(t, err)
@@ -788,11 +907,20 @@ func TestUpdateMemory_UpdateError(t *testing.T) {
 	s := setupMockService(t, db)
 
 	ctx := context.Background()
-	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "mem123"}
+	updatedMemory := &memory.Memory{
+		Memory: "updated memory",
+		Topics: []string{"new"},
+		Kind:   memory.KindFact,
+	}
+	memKey := memory.Key{
+		AppName:  "app",
+		UserID:   "user",
+		MemoryID: imemory.GenerateMemoryID(updatedMemory, "app", "user"),
+	}
 
 	now := time.Now()
 	entry := &memory.Entry{
-		ID:      "mem123",
+		ID:      memKey.MemoryID,
 		AppName: "app",
 		UserID:  "user",
 		Memory: &memory.Memory{
@@ -806,17 +934,296 @@ func TestUpdateMemory_UpdateError(t *testing.T) {
 	entryJSON, _ := json.Marshal(entry)
 
 	mock.ExpectQuery("SELECT memory_data").
-		WithArgs("app", "user", "mem123").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
 		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).AddRow(entryJSON))
 
 	mock.ExpectExec("UPDATE").
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), "app", "user", "mem123").
+		WithArgs(
+			memKey.MemoryID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			memKey.AppName,
+			memKey.UserID,
+			memKey.MemoryID,
+		).
 		WillReturnError(errors.New("update error"))
 
 	err := s.UpdateMemory(ctx, memKey, "updated memory", []string{"new"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "update memory entry failed")
 
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_SameIDUpdatesInPlace(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	mem := &memory.Memory{
+		Memory: "same content",
+		Topics: []string{"new"},
+		Kind:   memory.KindFact,
+	}
+	memKey := memory.Key{
+		AppName:  "app",
+		UserID:   "user",
+		MemoryID: imemory.GenerateMemoryID(mem, "app", "user"),
+	}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, memKey, "same content", []string{"old"})))
+	mock.ExpectExec("UPDATE").
+		WithArgs(
+			memKey.MemoryID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			memKey.AppName,
+			memKey.UserID,
+			memKey.MemoryID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	result := &memory.UpdateResult{}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"same content",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, memKey.MemoryID, result.MemoryID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_ZeroRowsAffectedDoesNotReportSuccess(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	mem := &memory.Memory{
+		Memory: "same content",
+		Topics: []string{"new"},
+		Kind:   memory.KindFact,
+	}
+	memKey := memory.Key{
+		AppName:  "app",
+		UserID:   "user",
+		MemoryID: imemory.GenerateMemoryID(mem, "app", "user"),
+	}
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, memKey, "same content", []string{"old"})))
+	mock.ExpectExec("UPDATE").WillReturnResult(sqlmock.NewResult(0, 0))
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"same content",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_ActiveIDConflictLeavesResultUntouched(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "source-id"}
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, memKey, "source", nil)))
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: "target", Kind: memory.KindFact},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"active", "memory_data"}).
+			AddRow(true, []byte("{}")))
+	mock.ExpectRollback()
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_ConcurrentTargetInsertRollsBack(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "source-id"}
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: "target", Kind: memory.KindFact},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, memKey, "source", nil)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO").WillReturnError(errors.New("duplicate entry"))
+	mock.ExpectRollback()
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_SoftDeletedTargetIsRevived(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "source-id"}
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: "target", Kind: memory.KindFact},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	targetCreatedAt := time.Date(2024, 5, 1, 1, 2, 3, 0, time.UTC)
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, memKey, "source", nil)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"active", "memory_data"}).
+			AddRow(false, marshalUpdateTestEntryAt(
+				t,
+				memory.Key{
+					AppName:  memKey.AppName,
+					UserID:   memKey.UserID,
+					MemoryID: targetID,
+				},
+				"deleted target",
+				nil,
+				targetCreatedAt,
+			)))
+	mock.ExpectExec("UPDATE.*deleted_at = NULL").
+		WithArgs(
+			updateEntryCreatedAtMatcher{want: targetCreatedAt},
+			sqlmock.AnyArg(),
+			memKey.AppName,
+			memKey.UserID,
+			targetID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(sqlmock.AnyArg(), memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result := &memory.UpdateResult{}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, targetID, result.MemoryID)
+	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestUpdateMemory_HardDeleteReplacesSoftDeletedTarget(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+	s := setupMockService(t, db)
+	s.opts.softDelete = false
+
+	ctx := context.Background()
+	memKey := memory.Key{AppName: "app", UserID: "user", MemoryID: "source-id"}
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: "target", Kind: memory.KindFact},
+		memKey.AppName,
+		memKey.UserID,
+	)
+	sourceCreatedAt := time.Date(2024, 5, 2, 1, 2, 3, 0, time.UTC)
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntryAt(
+				t,
+				memKey,
+				"source",
+				nil,
+				sourceCreatedAt,
+			)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnRows(sqlmock.NewRows([]string{"active", "memory_data"}).
+			AddRow(false, []byte("{}")))
+	mock.ExpectExec("DELETE FROM").
+		WithArgs(memKey.AppName, memKey.UserID, targetID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO").
+		WithArgs(
+			memKey.AppName,
+			memKey.UserID,
+			targetID,
+			updateEntryCreatedAtMatcher{want: sourceCreatedAt},
+			updateTimeMatcher{want: sourceCreatedAt},
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM").
+		WithArgs(memKey.AppName, memKey.UserID, memKey.MemoryID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result := &memory.UpdateResult{}
+	err := s.UpdateMemory(
+		ctx,
+		memKey,
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, targetID, result.MemoryID)
 	assert.NoError(t, mock.ExpectationsWereMet())
 }
 

@@ -88,6 +88,37 @@ func (e *errorEmbedder) GetDimensions() int {
 	return e.dimension
 }
 
+type callbackEmbedder struct {
+	dimension int
+	callback  func()
+	called    bool
+}
+
+func (c *callbackEmbedder) GetEmbedding(
+	ctx context.Context,
+	text string,
+) ([]float64, error) {
+	_ = ctx
+	_ = text
+	if !c.called {
+		c.called = true
+		c.callback()
+	}
+	return make([]float64, c.dimension), nil
+}
+
+func (c *callbackEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	embedding, err := c.GetEmbedding(ctx, text)
+	return embedding, nil, err
+}
+
+func (c *callbackEmbedder) GetDimensions() int {
+	return c.dimension
+}
+
 type mapEmbedder struct {
 	dimension  int
 	embeddings map[string][]float64
@@ -330,6 +361,288 @@ func TestService_UpdateMemory_SameIdentityKeepsID(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, oldID, got[0].ID)
 	require.Equal(t, []string{"new"}, got[0].Memory.Topics)
+}
+
+func TestService_UpdateMemory_ZeroRowsAffectedDoesNotReportSuccess(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", []string{"old"}))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	svc.opts.embedder = &callbackEmbedder{
+		dimension: 2,
+		callback: func() {
+			_, deleteErr := db.Exec(
+				"DELETE FROM memories WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+				userKey.AppName,
+				userKey.UserID,
+				entries[0].ID,
+			)
+			require.NoError(t, deleteErr)
+		},
+	}
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: entries[0].ID,
+		},
+		"alpha",
+		[]string{"new"},
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	require.Equal(t, "unchanged", result.MemoryID)
+}
+
+func TestService_UpdateMemory_ActiveIDConflictPreservesEntries(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", []string{"source"}))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", []string{"target"}))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	var sourceID string
+	for _, entry := range entries {
+		if entry.Memory.Memory == "alpha" {
+			sourceID = entry.ID
+		}
+	}
+	require.NotEmpty(t, sourceID)
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"beta",
+		[]string{"target"},
+		memory.WithUpdateResult(result),
+	)
+	require.Error(t, err)
+	require.Equal(t, "unchanged", result.MemoryID)
+
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	entriesByID := make(map[string]*memory.Entry, len(entries))
+	for _, entry := range entries {
+		entriesByID[entry.ID] = entry
+	}
+	require.Contains(t, entriesByID, sourceID)
+	require.Equal(t, "alpha", entriesByID[sourceID].Memory.Memory)
+	require.Equal(t, []string{"source"}, entriesByID[sourceID].Memory.Topics)
+}
+
+func TestService_UpdateMemory_SoftDeleteRotationKeepsSourceTombstone(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	sourceID := entries[0].ID
+	sourceCreatedAt := entries[0].CreatedAt
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"beta",
+		nil,
+		memory.WithUpdateResult(result),
+	))
+	require.NotEqual(t, sourceID, result.MemoryID)
+
+	var tombstones int
+	err = db.QueryRow(
+		"SELECT COUNT(*) FROM memories WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at != ?",
+		userKey.AppName,
+		userKey.UserID,
+		sourceID,
+		notDeletedAtNs,
+	).Scan(&tombstones)
+	require.NoError(t, err)
+	require.Equal(t, 1, tombstones)
+
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, result.MemoryID, entries[0].ID)
+	require.True(t, entries[0].CreatedAt.Equal(sourceCreatedAt))
+}
+
+func TestService_UpdateMemory_SoftDeletedTargetIsRevived(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	targetID := entries[0].ID
+	targetCreatedAt := entries[0].CreatedAt
+	require.NoError(t, svc.DeleteMemory(ctx, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: targetID,
+	}))
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", nil))
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	sourceID := entries[0].ID
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"beta",
+		nil,
+		memory.WithUpdateResult(result),
+	))
+	require.Equal(t, targetID, result.MemoryID)
+
+	entries, err = svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, targetID, entries[0].ID)
+	require.Equal(t, "beta", entries[0].Memory.Memory)
+	require.True(t, entries[0].CreatedAt.Equal(targetCreatedAt))
+}
+
+func TestService_UpdateMemory_HardDeleteReplacesSoftDeletedTarget(t *testing.T) {
+	db, cleanup := openTempSQLiteDB(t)
+	defer cleanup()
+
+	svc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithSoftDelete(true),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "beta", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	targetID := entries[0].ID
+	require.NoError(t, svc.DeleteMemory(ctx, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: targetID,
+	}))
+
+	hardDeleteSvc, err := NewService(
+		db,
+		WithEmbedder(&mockEmbedder{dimension: 2}),
+		WithIndexDimension(2),
+	)
+	require.NoError(t, err)
+	require.NoError(t, hardDeleteSvc.AddMemory(ctx, userKey, "alpha", nil))
+	entries, err = hardDeleteSvc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	var (
+		sourceID        string
+		sourceCreatedAt time.Time
+	)
+	for _, entry := range entries {
+		if entry.Memory.Memory == "alpha" {
+			sourceID = entry.ID
+			sourceCreatedAt = entry.CreatedAt
+		}
+	}
+	require.NotEmpty(t, sourceID)
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, hardDeleteSvc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"beta",
+		nil,
+		memory.WithUpdateResult(result),
+	))
+	require.Equal(t, targetID, result.MemoryID)
+
+	entries, err = hardDeleteSvc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.Equal(t, targetID, entries[0].ID)
+	require.True(t, entries[0].CreatedAt.Equal(sourceCreatedAt))
 }
 
 func TestService_Search_WithEpisodicOptions(t *testing.T) {

@@ -98,9 +98,10 @@ func WithUpdateMetadata(m *Metadata) UpdateOption {
 	return func(o *updateOptions) { o.metadata = m }
 }
 
-// UpdateResult captures the effective memory ID after an update.
-// When memory identity changes due to updated content or metadata,
-// MemoryID contains the rotated canonical key.
+// UpdateResult captures the effective memory ID after a successful update.
+// When memory identity changes due to updated content or metadata, MemoryID
+// contains the rotated canonical key. UpdateMemory leaves the result unchanged
+// when it returns an error.
 type UpdateResult struct {
 	MemoryID string
 }
@@ -182,7 +183,8 @@ type Service interface {
 
 	// UpdateMemory updates an existing memory for a user.
 	// Options may include WithUpdateMetadata for episodic
-	// metadata.
+	// metadata. If the updated canonical ID conflicts with another active
+	// memory, UpdateMemory returns an error without modifying either memory.
 	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
 		topics []string, opts ...UpdateOption) error
 
