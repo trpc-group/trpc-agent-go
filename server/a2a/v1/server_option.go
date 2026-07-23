@@ -116,8 +116,8 @@ type options struct {
 type Option func(*options)
 
 // WithRunner sets the runner to use.
-// The caller retains ownership of the runner and must close it after the server
-// stops. WithAgentCard is also required.
+// The caller retains ownership of the runner and must close it if New returns
+// an error or after the server stops. WithAgentCard is also required.
 func WithRunner(r runner.Runner) Option {
 	return func(opts *options) {
 		opts.runner = r
