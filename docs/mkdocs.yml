@@ -32,7 +32,9 @@ nav:
       - Artifact: artifact.md
       - Skill: skill.md
       - Evolution: evolution.md
-      - Tool: tool.md
+      - Tool:
+          - Tool Guide: tool.md
+          - Tool Safety Guard: tool-safety.md
       - Session:
           - Overview: session/index.md
           - Noop Session: session/noop.md
@@ -140,7 +142,9 @@ plugins:
                 - Artifact: artifact.md
                 - Skill: skill.md
                 - Evolution: evolution.md
-                - Tool: tool.md
+                - Tool:
+                    - Tool 使用指南: tool.md
+                    - Tool Safety Guard: tool-safety.md
                 - Session:
                     - Overview: session/index.md
                     - Noop Session: session/noop.md

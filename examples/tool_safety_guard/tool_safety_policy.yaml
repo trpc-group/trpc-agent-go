@@ -1,0 +1,70 @@
+allowed_commands:
+  - go
+  - git
+  - echo
+  - cat
+  - pwd
+  - ls
+  - grep
+  - rg
+  - sed
+  - awk
+  - wc
+  - head
+  - tail
+  - curl
+  - wget
+  - sleep
+  - yes
+denied_commands:
+  - rm
+  - nc
+  - netcat
+  - ssh
+  - scp
+  - sudo
+  - su
+  - apt
+  - apt-get
+  - npm
+  - pip
+  - pip3
+allowed_domains:
+  - github.com
+  - proxy.golang.org
+  - sum.golang.org
+denied_paths:
+  - /
+  - /etc
+  - /usr
+  - /var
+  - ~/.ssh
+  - ~/.aws
+  - .env
+  - id_rsa
+  - id_ed25519
+  - credentials
+env_allowlist:
+  - HOME
+  - TMPDIR
+  - GOMODCACHE
+  - GOCACHE
+  - GOPROXY
+max_timeout_sec: 300
+max_output_bytes: 1048576
+long_sleep_seconds: 60
+parse_error_action: ask
+unknown_tool_action: ask
+audit_failure_mode: fail_closed
+hostexec_tty_action: ask
+background_action: ask
+non_whitelisted_network_action: deny
+dependency_install_action: ask
+shell_bypass_action: ask
+disallowed_environment_action: ask
+sensitive_path_read_action: deny
+review_shell_pipelines: true
+deny_dangerous_recursive_delete: true
+deny_secret_leakage: true
+redact_sensitive_evidence: true
+redact_sensitive_paths: true

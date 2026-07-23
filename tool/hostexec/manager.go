@@ -20,11 +20,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
 	defaultYieldMS    = 10_000
-	defaultTimeoutS   = 1_800
+	defaultTimeoutS   = safety.DefaultHostExecTimeoutSec
 	defaultLogTail    = 40
 	defaultMaxLines   = 20_000
 	defaultJobTTL     = 30 * time.Minute

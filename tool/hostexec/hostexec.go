@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -48,6 +49,7 @@ type config struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	safety   *safety.Scanner
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +97,14 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSafetyScanner configures a pre-execution scanner for host commands.
+// Deny and ask decisions are returned before the host shell starts.
+func WithSafetyScanner(scanner *safety.Scanner) Option {
+	return func(c *config) {
+		c.safety = scanner
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -136,8 +146,8 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		set.name = defaultToolSetName
 	}
 	set.tools = []tool.Tool{
-		&execCommandTool{mgr: mgr, baseDir: baseDir},
-		&writeStdinTool{mgr: mgr},
+		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safety},
+		&writeStdinTool{mgr: mgr, safety: cfg.safety},
 		&killSessionTool{mgr: mgr},
 	}
 	return set, nil
@@ -168,6 +178,7 @@ func (s *toolSet) Name() string {
 type execCommandTool struct {
 	mgr     *manager
 	baseDir string
+	safety  *safety.Scanner
 }
 
 func (t *execCommandTool) Declaration() *tool.Declaration {
@@ -291,6 +302,9 @@ func (t *execCommandTool) Call(
 	if err != nil {
 		return nil, err
 	}
+	if err := t.checkSafety(ctx, in, workdir); err != nil {
+		return nil, err
+	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 
@@ -306,11 +320,63 @@ func (t *execCommandTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	return mapExecResult(res), nil
+	return t.scanExecOutput(ctx, res), nil
+}
+
+func (t *execCommandTool) checkSafety(
+	ctx context.Context,
+	in execInput,
+	effectiveWorkdir string,
+) error {
+	if t == nil || t.safety == nil {
+		return nil
+	}
+	timeout := 0
+	if v := firstInt(in.TimeoutSec, in.TimeoutSecOld); v != nil {
+		timeout = *v
+	}
+	timeout = safety.EffectiveHostExecTimeoutSec(timeout)
+	report := t.safety.Scan(ctx, safety.Request{
+		ToolName:   toolExecCommand,
+		Backend:    safety.BackendHostExec,
+		Command:    in.Command,
+		Cwd:        effectiveWorkdir,
+		Env:        in.Env,
+		TimeoutSec: timeout,
+		Background: in.Background,
+		TTY:        firstBool(in.TTY, in.PTY),
+	})
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
+func (t *execCommandTool) scanExecOutput(
+	ctx context.Context,
+	res execResult,
+) map[string]any {
+	if t == nil || t.safety == nil || res.Output == "" {
+		return mapExecResult(res)
+	}
+	policy := t.safety.Policy()
+	report := t.safety.ScanOutput(ctx, safety.Request{
+		ToolName: toolExecCommand,
+		Backend:  safety.BackendHostExec,
+		Metadata: map[string]string{
+			"output_status": res.Status,
+		},
+	}, res.Output)
+	if report.Redacted {
+		res.Output, _ = safety.RedactText(res.Output, policy)
+	}
+	res.Output, _ = safety.TruncateOutput(res.Output, policy)
+	return mapExecResult(res)
 }
 
 type writeStdinTool struct {
-	mgr *manager
+	mgr    *manager
+	safety *safety.Scanner
 }
 
 func (t *writeStdinTool) Declaration() *tool.Declaration {
@@ -388,13 +454,19 @@ func (t *writeStdinTool) Call(
 		return nil, errors.New(errSessionIDRequired)
 	}
 
+	appendNewline := firstBool(in.AppendNewline, in.Submit)
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if in.Chars != "" || appendNewline {
+		if err := t.checkSafety(ctx, sessionID, in.Chars, appendNewline); err != nil {
+			return nil, err
+		}
 	}
 	if err := t.mgr.write(
 		sessionID,
 		in.Chars,
-		firstBool(in.AppendNewline, in.Submit),
+		appendNewline,
 	); err != nil {
 		return nil, err
 	}
@@ -417,7 +489,58 @@ func (t *writeStdinTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	return mapPollResult(sessionID, poll), nil
+	return t.scanPollOutput(ctx, sessionID, poll), nil
+}
+
+func (t *writeStdinTool) checkSafety(
+	ctx context.Context,
+	sessionID string,
+	chars string,
+	appendNewline bool,
+) error {
+	if t == nil || t.safety == nil {
+		return nil
+	}
+	stdin := chars
+	if appendNewline {
+		stdin += "\n"
+	}
+	report := t.safety.Scan(ctx, safety.Request{
+		ToolName: toolWriteStdin,
+		Backend:  safety.BackendHostExec,
+		Stdin:    stdin,
+		Metadata: map[string]string{
+			"session_id":        sessionID,
+			"interactive_stdin": "true",
+		},
+	})
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
+func (t *writeStdinTool) scanPollOutput(
+	ctx context.Context,
+	sessionID string,
+	poll processPoll,
+) map[string]any {
+	if t == nil || t.safety == nil || poll.Output == "" {
+		return mapPollResult(sessionID, poll)
+	}
+	policy := t.safety.Policy()
+	report := t.safety.ScanOutput(ctx, safety.Request{
+		ToolName: toolWriteStdin,
+		Backend:  safety.BackendHostExec,
+		Metadata: map[string]string{
+			"session_id": sessionID,
+		},
+	}, poll.Output)
+	if report.Redacted {
+		poll.Output, _ = safety.RedactText(poll.Output, policy)
+	}
+	poll.Output, _ = safety.TruncateOutput(poll.Output, policy)
+	return mapPollResult(sessionID, poll)
 }
 
 type killSessionTool struct {
@@ -615,10 +738,10 @@ func resolveWorkdir(
 		s = filepath.Join(home, strings.TrimPrefix(s, "~/"))
 	}
 	if baseDir != "" && !filepath.IsAbs(s) {
-		return filepath.Join(baseDir, s), nil
+		return filepath.Abs(filepath.Clean(filepath.Join(baseDir, s)))
 	}
 	if filepath.IsAbs(s) {
-		return s, nil
+		return filepath.Clean(s), nil
 	}
 	return filepath.Abs(s)
 }
