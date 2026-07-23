@@ -15,6 +15,7 @@ import (
 	"math"
 	"reflect"
 	"sort"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -70,7 +71,61 @@ func (c *Comparator) Compare(caseName string, a, b *BackendResult) []DiffEntry {
 	// Compare tracks.
 	diffs = append(diffs, c.compareTracks(caseName, a, b)...)
 
+	// Mark allowed diffs based on backend capabilities.
+	diffs = c.markAllowedDiffs(diffs, a.BackendName, b.BackendName)
+
 	return diffs
+}
+
+// markAllowedDiffs inspects each diff and marks it as AllowedDiff=true when
+// the difference stems from a capability gap between the two backends.
+func (c *Comparator) markAllowedDiffs(diffs []DiffEntry, nameA, nameB string) []DiffEntry {
+	capsA := BackendCapabilities(nameA)
+	capsB := BackendCapabilities(nameB)
+
+	for i := range diffs {
+		// Track differences are allowed if one backend doesn't support Track.
+		if !capsA[CapTrack] || !capsB[CapTrack] {
+			if isTrackField(diffs[i].FieldPath) {
+				diffs[i].AllowedDiff = true
+				continue
+			}
+		}
+		// Memory search differences are allowed if one backend doesn't support search.
+		if !capsA[CapMemorySearch] || !capsB[CapMemorySearch] {
+			if isMemoryField(diffs[i].FieldPath) {
+				diffs[i].AllowedDiff = true
+				continue
+			}
+		}
+		// Summary filter-key differences are allowed if one backend doesn't support it.
+		if !capsA[CapSummaryFilterKey] || !capsB[CapSummaryFilterKey] {
+			if isSummaryField(diffs[i].FieldPath) && diffs[i].SummaryKey != "" {
+				diffs[i].AllowedDiff = true
+				continue
+			}
+		}
+		// Event paging differences are allowed if one backend doesn't support paging.
+		if !capsA[CapEventPaging] || !capsB[CapEventPaging] {
+			if diffs[i].EventIndex > 0 {
+				diffs[i].AllowedDiff = true
+				continue
+			}
+		}
+	}
+	return diffs
+}
+
+func isTrackField(path string) bool {
+	return strings.Contains(path, "tracks") || strings.Contains(path, "track")
+}
+
+func isMemoryField(path string) bool {
+	return strings.Contains(path, "memories") || strings.Contains(path, "memory")
+}
+
+func isSummaryField(path string) bool {
+	return strings.Contains(path, "summaries") || strings.Contains(path, "summary")
 }
 
 func backendName(r *BackendResult) string {

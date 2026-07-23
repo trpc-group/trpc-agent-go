@@ -97,13 +97,15 @@ func TestNormalizer_StateMap(t *testing.T) {
 	input := session.StateMap{"b": []byte("2"), "a": []byte("1")}
 	output := n.NormalizeStateMap(input)
 
-	// Verify sorted order.
-	var keys []string
-	for k := range output {
-		keys = append(keys, k)
+	// Verify all keys and values are preserved.
+	if string(output["a"]) != "1" {
+		t.Errorf("expected output['a']='1', got %q", string(output["a"]))
 	}
-	if len(keys) != 2 || keys[0] != "a" || keys[1] != "b" {
-		t.Errorf("expected sorted keys [a b], got %v", keys)
+	if string(output["b"]) != "2" {
+		t.Errorf("expected output['b']='2', got %q", string(output["b"]))
+	}
+	if len(output) != 2 {
+		t.Errorf("expected 2 keys, got %d", len(output))
 	}
 }
 

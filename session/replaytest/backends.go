@@ -71,7 +71,62 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// BackendFactory defines a backend factory for creating service instances.
+// BackendCapability describes a feature a backend may or may not support.
+type BackendCapability string
+
+const (
+	// CapEventPaging indicates the backend supports event pagination (offset/limit).
+	CapEventPaging BackendCapability = "event_paging"
+	// CapTrack indicates the backend supports track events.
+	CapTrack BackendCapability = "track"
+	// CapSummaryFilterKey indicates the backend supports summary filter-key branching.
+	CapSummaryFilterKey BackendCapability = "summary_filter_key"
+	// CapMemorySearch indicates the backend supports memory search.
+	CapMemorySearch BackendCapability = "memory_search"
+	// CapTTL indicates the backend supports TTL-based expiration.
+	CapTTL BackendCapability = "ttl"
+)
+
+// BackendCapabilities returns the set of capabilities for a given backend name.
+// This is used by the Comparator to determine which differences are "allowed".
+func BackendCapabilities(name string) map[BackendCapability]bool {
+	caps := map[BackendCapability]bool{
+		CapEventPaging:      false,
+		CapTrack:            false,
+		CapSummaryFilterKey: false,
+		CapMemorySearch:     false,
+		CapTTL:              false,
+	}
+	switch name {
+	case "InMemory":
+		caps[CapTrack] = true
+		caps[CapSummaryFilterKey] = true
+		caps[CapMemorySearch] = true
+	case "SQLite":
+		caps[CapTrack] = true
+		caps[CapSummaryFilterKey] = true
+		caps[CapMemorySearch] = true
+	case "Redis":
+		caps[CapTrack] = true
+		caps[CapSummaryFilterKey] = true
+		caps[CapMemorySearch] = true
+		caps[CapTTL] = true
+	case "Postgres":
+		caps[CapEventPaging] = true
+		caps[CapTrack] = true
+		caps[CapSummaryFilterKey] = true
+		caps[CapMemorySearch] = true
+	case "MySQL":
+		caps[CapEventPaging] = true
+		caps[CapTrack] = true
+		caps[CapSummaryFilterKey] = true
+		caps[CapMemorySearch] = true
+	case "ClickHouse":
+		// ClickHouse only supports session, no memory search.
+	}
+	return caps
+}
+
 type BackendFactory struct {
 	// Name is the human-readable backend name.
 	Name string `json:"name"`
