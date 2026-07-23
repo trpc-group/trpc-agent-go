@@ -13,6 +13,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -51,8 +52,8 @@ func (f *fileToolSet) readFile(
 		FileName:      "",
 	}
 	if req == nil {
-		err := fmt.Errorf("request cannot be nil")
-		rsp.Message = fmt.Sprintf("Error: %v", err)
+		err := errors.New("request cannot be nil")
+		rsp.Message = "Error: " + err.Error()
 		return rsp, err
 	}
 	rsp.FileName = req.FileName
@@ -75,10 +76,10 @@ func (f *fileToolSet) readFile(
 
 func validateReadFileRequest(req *readFileRequest) error {
 	if req == nil {
-		return fmt.Errorf("request cannot be nil")
+		return errors.New("request cannot be nil")
 	}
 	if strings.TrimSpace(req.FileName) == "" {
-		return fmt.Errorf("file name cannot be empty")
+		return errors.New("file name cannot be empty")
 	}
 	if req.StartLine != nil && *req.StartLine <= 0 {
 		return fmt.Errorf("start line must be > 0: %v", *req.StartLine)
@@ -126,7 +127,7 @@ func validateTextBytes(data []byte, mimeType string) error {
 func notTextFileErr(mimeType string) error {
 	mt := strings.TrimSpace(mimeType)
 	if mt == "" {
-		return fmt.Errorf(errNotTextFile)
+		return errors.New(errNotTextFile)
 	}
 	return fmt.Errorf(errNotTextFileTmpl, mt)
 }
