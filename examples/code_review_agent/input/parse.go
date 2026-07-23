@@ -126,6 +126,7 @@ func LoadFixture(fixturesRoot, name string) (*DiffBundle, string, error) {
 	return bundle, dir, nil
 }
 
+// runGit runs a git command in dir and returns trimmed stdout.
 func runGit(dir string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
 	out, err := cmd.CombinedOutput()
@@ -135,6 +136,7 @@ func runGit(dir string, args ...string) (string, error) {
 	return string(out), nil
 }
 
+// parseFiles parses +++/--- file headers into ChangedFile entries.
 func parseFiles(raw string) ([]ChangedFile, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
@@ -221,6 +223,7 @@ func parseFiles(raw string) ([]ChangedFile, error) {
 	return files, nil
 }
 
+// parseDiffGitPath extracts the path from a diff --git header line.
 func parseDiffGitPath(line string) string {
 	// diff --git a/path b/path
 	parts := strings.Fields(line)
@@ -234,6 +237,7 @@ func parseDiffGitPath(line string) string {
 	return "unknown"
 }
 
+// parseHunkHeader parses a unified-diff @@ hunk header.
 func parseHunkHeader(line string) (Hunk, error) {
 	// @@ -oldStart,oldLines +newStart,newLines @@ optional
 	h := Hunk{Header: line}
@@ -261,6 +265,7 @@ func parseHunkHeader(line string) (Hunk, error) {
 	return h, nil
 }
 
+// parseRange parses a hunk range like "12,3" into start and count.
 func parseRange(s string) (start, lines int, err error) {
 	parts := strings.Split(s, ",")
 	start, err = strconv.Atoi(parts[0])
@@ -277,6 +282,7 @@ func parseRange(s string) (start, lines int, err error) {
 	return start, lines, nil
 }
 
+// detectLanguage returns a coarse language tag from a file path.
 func detectLanguage(path string) string {
 	if strings.HasSuffix(path, ".go") {
 		return "go"
@@ -284,6 +290,7 @@ func detectLanguage(path string) string {
 	return "other"
 }
 
+// detectPackage extracts the Go package name from added lines.
 func detectPackage(f ChangedFile) string {
 	for _, h := range f.Hunks {
 		for _, l := range h.Lines {
@@ -303,6 +310,7 @@ func detectPackage(f ChangedFile) string {
 	return filepath.Base(dir)
 }
 
+// countChanges counts added and deleted lines in a DiffBundle.
 func countChanges(files []ChangedFile) (added, removed int) {
 	for _, f := range files {
 		for _, h := range f.Hunks {
@@ -319,6 +327,7 @@ func countChanges(files []ChangedFile) (added, removed int) {
 	return added, removed
 }
 
+// sha256Hex returns the hex-encoded SHA-256 digest of s.
 func sha256Hex(s string) string {
 	sum := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(sum[:])
@@ -341,6 +350,7 @@ func (b *DiffBundle) AddedGoFiles() []string {
 	return out
 }
 
+// hasAddedLines reports whether the file has any added lines.
 func hasAddedLines(f ChangedFile) bool {
 	for _, h := range f.Hunks {
 		for _, l := range h.Lines {

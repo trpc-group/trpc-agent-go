@@ -58,6 +58,7 @@ var (
 	}
 )
 
+// checkErrorHandling detects discarded call errors and panic usage.
 func checkErrorHandling(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	forEachAdded(bundle, func(file string, line int, text string) {
@@ -100,6 +101,7 @@ func isDiscardedCallError(trim string) bool {
 	return reDiscardedCall.MatchString(trim)
 }
 
+// bindsErrorIdent reports whether the statement binds an err identifier.
 func bindsErrorIdent(trim string) bool {
 	// Common Go error-binding shapes on the same statement.
 	markers := []string{
@@ -114,6 +116,7 @@ func bindsErrorIdent(trim string) bool {
 	return strings.HasSuffix(trim, "err")
 }
 
+// checkSecurity detects SQL concatenation and insecure TLS settings.
 func checkSecurity(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	forEachAdded(bundle, func(file string, line int, text string) {
@@ -139,6 +142,7 @@ func checkSecurity(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// checkSecrets detects hard-coded secrets in added lines.
 func checkSecrets(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	forEachAdded(bundle, func(file string, line int, text string) {
@@ -155,6 +159,7 @@ func checkSecrets(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// checkConcurrency detects goroutines started without a derived context.
 func checkConcurrency(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	for _, f := range bundle.Files {
@@ -182,6 +187,7 @@ func checkConcurrency(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// checkResource detects opened resources without a nearby Close.
 func checkResource(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	for _, f := range bundle.Files {
@@ -209,6 +215,7 @@ func checkResource(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// checkDB detects database handles and transactions without cleanup.
 func checkDB(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	for _, f := range bundle.Files {
@@ -245,6 +252,7 @@ func checkDB(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// checkMissingTests flags changed Go files that lack corresponding tests in the diff.
 func checkMissingTests(bundle *input.DiffBundle) []review.Finding {
 	var out []review.Finding
 	for _, path := range bundle.AddedGoFiles() {
@@ -278,6 +286,7 @@ func checkMissingTests(bundle *input.DiffBundle) []review.Finding {
 	return out
 }
 
+// finding constructs a Finding with the provided fields.
 func finding(sev, cat, file string, line int, title, evidence, rec string, conf float64, rule string) review.Finding {
 	return review.Finding{
 		Severity:       sev,
@@ -293,6 +302,7 @@ func finding(sev, cat, file string, line int, title, evidence, rec string, conf 
 	}
 }
 
+// forEachAdded calls fn for every added line in the bundle.
 func forEachAdded(bundle *input.DiffBundle, fn func(file string, line int, text string)) {
 	for _, f := range bundle.Files {
 		for _, h := range f.Hunks {
@@ -305,6 +315,7 @@ func forEachAdded(bundle *input.DiffBundle, fn func(file string, line int, text 
 	}
 }
 
+// collectAdded returns all added DiffLine values for a file.
 func collectAdded(f input.ChangedFile) []input.DiffLine {
 	var out []input.DiffLine
 	for _, h := range f.Hunks {
@@ -317,6 +328,7 @@ func collectAdded(f input.ChangedFile) []input.DiffLine {
 	return out
 }
 
+// matchesAny reports whether text matches any of the regexps.
 func matchesAny(res []*regexp.Regexp, text string) bool {
 	for _, re := range res {
 		if re.MatchString(text) {
@@ -326,6 +338,7 @@ func matchesAny(res []*regexp.Regexp, text string) bool {
 	return false
 }
 
+// joinWindow joins up to n added lines starting at start into one string.
 func joinWindow(lines []input.DiffLine, start, n int) string {
 	end := start + n
 	if end > len(lines) {
@@ -339,6 +352,7 @@ func joinWindow(lines []input.DiffLine, start, n int) string {
 	return b.String()
 }
 
+// hasCloseNearby reports whether Close appears within a nearby window.
 func hasCloseNearby(lines []input.DiffLine, start, n int) bool {
 	window := joinWindow(lines, start, n)
 	return strings.Contains(window, ".Close()") ||

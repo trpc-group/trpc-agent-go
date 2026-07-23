@@ -16,6 +16,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/assist"
 )
 
+// TestResolveModel_Fake verifies related behavior.
 func TestResolveModel_Fake(t *testing.T) {
 	m, backend, err := assist.ResolveModel(assist.LLMFake, assist.OpenAIModelOptions{})
 	if err != nil {
@@ -29,6 +30,7 @@ func TestResolveModel_Fake(t *testing.T) {
 	}
 }
 
+// TestResolveModel_OpenAIRequiresKey verifies related behavior.
 func TestResolveModel_OpenAIRequiresKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	_, _, err := assist.ResolveModel(assist.LLMOpenAI, assist.OpenAIModelOptions{
@@ -40,6 +42,7 @@ func TestResolveModel_OpenAIRequiresKey(t *testing.T) {
 	}
 }
 
+// TestResolveModel_AutoFallsBackToFake verifies related behavior.
 func TestResolveModel_AutoFallsBackToFake(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	m, backend, err := assist.ResolveModel(assist.LLMAuto, assist.OpenAIModelOptions{})
@@ -54,6 +57,7 @@ func TestResolveModel_AutoFallsBackToFake(t *testing.T) {
 	}
 }
 
+// TestResolveModel_OpenAIWithKey verifies related behavior.
 func TestResolveModel_OpenAIWithKey(t *testing.T) {
 	m, backend, err := assist.ResolveModel(assist.LLMOpenAI, assist.OpenAIModelOptions{
 		Model:   "gpt-4o-mini",
@@ -71,6 +75,7 @@ func TestResolveModel_OpenAIWithKey(t *testing.T) {
 	}
 }
 
+// TestResolveModel_QwenInfersVariantAndBaseAPIAlias verifies related behavior.
 func TestResolveModel_QwenInfersVariantAndBaseAPIAlias(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "sk-test")
 	t.Setenv("OPENAI_BASE_URL", "")

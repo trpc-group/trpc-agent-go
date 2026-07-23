@@ -24,6 +24,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
+// moduleRoot is a test helper.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -37,6 +38,7 @@ func moduleRoot(t *testing.T) string {
 	return wd
 }
 
+// TestFixtures_AllProduceReports verifies related behavior.
 func TestFixtures_AllProduceReports(t *testing.T) {
 	root := moduleRoot(t)
 	fixtures := []string{
@@ -96,6 +98,7 @@ func TestFixtures_AllProduceReports(t *testing.T) {
 	}
 }
 
+// assertFixtureExpectations is a test helper.
 func assertFixtureExpectations(t *testing.T, name string, res *orchestrator.Result, bundle *store.TaskBundle) {
 	t.Helper()
 	root := moduleRoot(t)
@@ -184,6 +187,7 @@ func assertFixtureExpectations(t *testing.T, name string, res *orchestrator.Resu
 	}
 }
 
+// TestDiffFile_NoDemoGovernanceInjection verifies related behavior.
 func TestDiffFile_NoDemoGovernanceInjection(t *testing.T) {
 	root := moduleRoot(t)
 	out := t.TempDir()
@@ -213,6 +217,7 @@ func TestDiffFile_NoDemoGovernanceInjection(t *testing.T) {
 	}
 }
 
+// TestSandboxFailure_DoesNotCrash verifies related behavior.
 func TestSandboxFailure_DoesNotCrash(t *testing.T) {
 	root := moduleRoot(t)
 	out := t.TempDir()

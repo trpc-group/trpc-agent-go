@@ -227,6 +227,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}, nil
 }
 
+// normalizeConfig applies defaults to Config.
 func normalizeConfig(cfg Config) Config {
 	if cfg.Mode == "" {
 		cfg.Mode = review.ModeRuleOnly
@@ -255,6 +256,7 @@ func normalizeConfig(cfg Config) Config {
 	return cfg
 }
 
+// resolveRunner selects the sandbox runner and optional CodeExecutor.
 func resolveRunner(cfg Config) (sandbox.Runner, codeexecutor.CodeExecutor, string, error) {
 	if cfg.Runner != nil {
 		return cfg.Runner, cfg.CodeExecutor, "", nil
@@ -275,6 +277,7 @@ func resolveRunner(cfg Config) (sandbox.Runner, codeexecutor.CodeExecutor, strin
 	return created.Runner, codeExec, created.ExecutorFallback, nil
 }
 
+// persistInput stores the redacted input metadata for a task.
 func persistInput(ctx context.Context, st store.ReviewStore, taskID string, bundle *input.DiffBundle) error {
 	filesJSON, err := json.Marshal(fileNames(bundle))
 	if err != nil {
@@ -294,6 +297,7 @@ func persistInput(ctx context.Context, st store.ReviewStore, taskID string, bund
 	return nil
 }
 
+// stageWorkspace creates a temp workdir and writes the review diff.
 func stageWorkspace(diffText string) (workDir, diffPath string, err error) {
 	workDir, err = os.MkdirTemp("", "cr-review-*")
 	if err != nil {
@@ -307,6 +311,7 @@ func stageWorkspace(diffText string) (workDir, diffPath string, err error) {
 	return workDir, diffPath, nil
 }
 
+// runChecks evaluates permissions and executes sandbox commands.
 func runChecks(
 	ctx context.Context,
 	cfg Config,
@@ -359,6 +364,7 @@ func runChecks(
 	return perms, sandboxes, partial, nil
 }
 
+// runAgentAssist optionally runs the Skills/LLM assist pass.
 func runAgentAssist(
 	ctx context.Context,
 	cfg Config,
@@ -415,6 +421,7 @@ func runAgentAssist(
 	return note, false
 }
 
+// analyzeFindings runs the rule engine, dedup, redact, and classify steps.
 func analyzeFindings(cfg Config, bundle *input.DiffBundle) (findings, warnings []review.Finding) {
 	engineFindings := rules.Engine{}.Analyze(bundle)
 	if cfg.Fixture == "duplicate_findings" && len(engineFindings) > 0 {
@@ -425,6 +432,7 @@ func analyzeFindings(cfg Config, bundle *input.DiffBundle) (findings, warnings [
 	return rules.Classify(engineFindings, cfg.ConfidenceThreshold)
 }
 
+// persistResults stores findings, artifacts, metrics, and the final report.
 func persistResults(
 	ctx context.Context,
 	st store.ReviewStore,
@@ -453,6 +461,7 @@ func persistResults(
 	return nil
 }
 
+// loadInput loads a DiffBundle from fixture, diff file, files list, or repo path.
 func loadInput(cfg Config) (*input.DiffBundle, error) {
 	switch {
 	case cfg.Fixture != "":
@@ -473,6 +482,7 @@ func loadInput(cfg Config) (*input.DiffBundle, error) {
 	}
 }
 
+// demoGovernanceEnabled reports whether deny/ask demo commands should be injected.
 func demoGovernanceEnabled(cfg Config) bool {
 	if cfg.DemoGovernance != nil {
 		return *cfg.DemoGovernance
@@ -481,6 +491,7 @@ func demoGovernanceEnabled(cfg Config) bool {
 	return cfg.Fixture != ""
 }
 
+// planCommands builds the sandbox command plan for one review.
 func planCommands(cfg Config, workDir string) []string {
 	skillScripts := filepath.Join(cfg.SkillsRoot, "code-review", "scripts")
 	var cmds []string
@@ -513,6 +524,7 @@ func planCommands(cfg Config, workDir string) []string {
 	return cmds
 }
 
+// fileNames returns the changed file paths from a DiffBundle.
 func fileNames(b *input.DiffBundle) []string {
 	out := make([]string, 0, len(b.Files))
 	for _, f := range b.Files {
@@ -521,6 +533,7 @@ func fileNames(b *input.DiffBundle) []string {
 	return out
 }
 
+// packages returns unique package names from a DiffBundle.
 func packages(b *input.DiffBundle) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -537,6 +550,7 @@ func packages(b *input.DiffBundle) []string {
 	return out
 }
 
+// buildConclusion builds a short human-readable conclusion string.
 func buildConclusion(findings, warnings []review.Finding, perms []review.PermissionDecision, status string) string {
 	denies, asks := 0, 0
 	for _, p := range perms {

@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
+// main is the CLI entrypoint for the code review agent example.
 func main() {
 	var (
 		diffFile     = flag.String("diff-file", "", "path to a unified diff / patch")

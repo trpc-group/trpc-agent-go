@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 )
 
+// TestClampArtifacts verifies related behavior.
 func TestClampArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	small := filepath.Join(dir, "small.txt")

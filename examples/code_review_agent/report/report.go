@@ -53,6 +53,7 @@ func WriteMarkdown(outDir string, rep *review.Report) (string, string, error) {
 	return path, md, nil
 }
 
+// renderMarkdown renders a review report as Markdown.
 func renderMarkdown(rep *review.Report) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
@@ -126,6 +127,7 @@ func renderMarkdown(rep *review.Report) string {
 	return b.String()
 }
 
+// writeFindings appends finding sections to the Markdown builder.
 func writeFindings(b *strings.Builder, title string, list []review.Finding) {
 	fmt.Fprintf(b, "## %s\n\n", title)
 	if len(list) == 0 {

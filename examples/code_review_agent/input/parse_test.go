@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
 )
 
+// TestParseUnifiedDiff_HunksAndPackages verifies related behavior.
 func TestParseUnifiedDiff_HunksAndPackages(t *testing.T) {
 	raw := `diff --git a/pkg/worker/worker.go b/pkg/worker/worker.go
 --- a/pkg/worker/worker.go
@@ -69,6 +70,7 @@ func TestParseUnifiedDiff_HunksAndPackages(t *testing.T) {
 	}
 }
 
+// TestParseUnifiedDiff_Empty verifies related behavior.
 func TestParseUnifiedDiff_Empty(t *testing.T) {
 	b, err := input.ParseUnifiedDiff("diff_file", "")
 	if err != nil {

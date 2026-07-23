@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/input"
 )
 
+// TestParseFileList verifies related behavior.
 func TestParseFileList(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "sample.go")
@@ -43,6 +44,7 @@ func TestParseFileList(t *testing.T) {
 	}
 }
 
+// TestParseFilesFlag_ListFile verifies related behavior.
 func TestParseFilesFlag_ListFile(t *testing.T) {
 	dir := t.TempDir()
 	list := filepath.Join(dir, "files.txt")

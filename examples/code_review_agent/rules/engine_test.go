@@ -18,6 +18,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/rules"
 )
 
+// TestDedup verifies related behavior.
 func TestDedup(t *testing.T) {
 	in := []review.Finding{
 		{File: "a.go", Line: 1, RuleID: "CR-CON-001", Confidence: 0.8, Evidence: "short"},
@@ -33,6 +34,7 @@ func TestDedup(t *testing.T) {
 	}
 }
 
+// TestClassify verifies related behavior.
 func TestClassify(t *testing.T) {
 	in := []review.Finding{
 		{Confidence: 0.9},
@@ -45,6 +47,7 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// TestEngine_Goroutine verifies related behavior.
 func TestEngine_Goroutine(t *testing.T) {
 	raw := `diff --git a/pkg/worker/worker.go b/pkg/worker/worker.go
 --- a/pkg/worker/worker.go
@@ -71,6 +74,7 @@ func TestEngine_Goroutine(t *testing.T) {
 	}
 }
 
+// TestEngine_ErrorHandling verifies related behavior.
 func TestEngine_ErrorHandling(t *testing.T) {
 	raw := `diff --git a/pkg/svc/svc.go b/pkg/svc/svc.go
 --- a/pkg/svc/svc.go
@@ -99,6 +103,7 @@ func TestEngine_ErrorHandling(t *testing.T) {
 	}
 }
 
+// TestEngine_ResourceCloseNearby verifies related behavior.
 func TestEngine_ResourceCloseNearby(t *testing.T) {
 	raw := "diff --git a/pkg/fileutil/read.go b/pkg/fileutil/read.go\n" +
 		"--- a/pkg/fileutil/read.go\n" +

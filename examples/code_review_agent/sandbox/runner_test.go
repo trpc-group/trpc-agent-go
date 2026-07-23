@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/sandbox"
 )
 
+// TestLocalRunner_Timeout verifies related behavior.
 func TestLocalRunner_Timeout(t *testing.T) {
 	r := sandbox.LocalRunner{}
 	limits := safety.DefaultLimits()
@@ -32,6 +33,7 @@ func TestLocalRunner_Timeout(t *testing.T) {
 	}
 }
 
+// TestLocalRunner_OutputLimit verifies related behavior.
 func TestLocalRunner_OutputLimit(t *testing.T) {
 	r := sandbox.LocalRunner{}
 	limits := safety.DefaultLimits()
@@ -50,6 +52,7 @@ func TestLocalRunner_OutputLimit(t *testing.T) {
 	}
 }
 
+// TestFailingRunner_DoesNotPanic verifies related behavior.
 func TestFailingRunner_DoesNotPanic(t *testing.T) {
 	r := sandbox.FailingRunner{Inner: sandbox.LocalRunner{}}
 	res := r.Run(context.Background(), sandbox.Spec{

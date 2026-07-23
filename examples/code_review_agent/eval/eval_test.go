@@ -23,12 +23,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
+// label is a test helper.
 type label struct {
 	ExpectRules []string `json:"expect_rules"`
 	HighRisk    bool     `json:"high_risk"`
 	Clean       bool     `json:"clean"`
 }
 
+// TestHiddenSampleRates verifies related behavior.
 func TestHiddenSampleRates(t *testing.T) {
 	root := moduleRoot(t)
 	hiddenRoot := filepath.Join(root, "testdata", "hidden")
@@ -119,6 +121,7 @@ func TestHiddenSampleRates(t *testing.T) {
 	}
 }
 
+// moduleRoot is a test helper.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

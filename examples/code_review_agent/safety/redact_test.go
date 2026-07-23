@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 )
 
+// TestRedact verifies related behavior.
 func TestRedact(t *testing.T) {
 	in := `api_key=sk-abcdefghijklmnopqrstuvwxyz012345 password=SuperSecretPassword123 token=AKIAIOSFODNN7EXAMPLE Bearer abcdEFGHijklMNOP`
 	out := safety.Redact(in)
@@ -34,6 +35,7 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+// TestPermissionGate verifies related behavior.
 func TestPermissionGate(t *testing.T) {
 	g := safety.DefaultGate()
 	if d := g.Check("go vet ./..."); d.Action != safety.ActionAllow {

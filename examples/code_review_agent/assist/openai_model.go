@@ -91,6 +91,7 @@ func NewOpenAIModel(opts OpenAIModelOptions) (model.Model, error) {
 	return openai.New(name, oopts...), nil
 }
 
+// resolveAPIKey resolves the API key from options or environment variables.
 func resolveAPIKey(opts OpenAIModelOptions) string {
 	return strings.TrimSpace(firstNonEmpty(
 		opts.APIKey,
@@ -99,6 +100,7 @@ func resolveAPIKey(opts OpenAIModelOptions) string {
 	))
 }
 
+// resolveBaseURL resolves the OpenAI-compatible base URL from options or env.
 func resolveBaseURL(opts OpenAIModelOptions) string {
 	// OPENAI_BASE_API is accepted as a common typo/alias for OPENAI_BASE_URL.
 	return strings.TrimSpace(firstNonEmpty(
@@ -136,6 +138,7 @@ func normalizeVariant(variant, modelName, baseURL string) string {
 	}
 }
 
+// firstNonEmpty returns the first non-empty trimmed string.
 func firstNonEmpty(vals ...string) string {
 	for _, v := range vals {
 		if strings.TrimSpace(v) != "" {

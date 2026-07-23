@@ -83,6 +83,7 @@ func (g *Gate) Check(command string) Decision {
 	return Decision{Action: ActionAllow}
 }
 
+// firstToken returns the first whitespace-separated token of s.
 func firstToken(cmd string) string {
 	cmd = strings.TrimSpace(cmd)
 	if cmd == "" {
@@ -124,6 +125,7 @@ func (g *Gate) AsToolPolicy() tool.PermissionPolicy {
 	})
 }
 
+// extractCommand extracts a shell command string from tool input.
 func extractCommand(req *tool.PermissionRequest) string {
 	if req == nil {
 		return ""

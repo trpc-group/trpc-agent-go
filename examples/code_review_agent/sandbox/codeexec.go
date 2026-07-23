@@ -110,6 +110,7 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 	}
 }
 
+// newContainerExecutor creates a container CodeExecutor with optional skills bind-mount.
 func newContainerExecutor(skillsRoot string) (codeexecutor.CodeExecutor, error) {
 	var opts []containerexec.Option
 	if skillsRoot != "" {
@@ -120,6 +121,7 @@ func newContainerExecutor(skillsRoot string) (codeexecutor.CodeExecutor, error) 
 	return containerexec.New(opts...)
 }
 
+// absPath returns an absolute path for p.
 func absPath(p string) (string, error) {
 	return filepath.Abs(p)
 }
@@ -195,6 +197,7 @@ func (r *CodeExecRunner) Run(ctx context.Context, spec Spec, limits safety.Limit
 	return Result{Summary: sum, Stdout: stdout}
 }
 
+// buildBashScript builds a bash snippet that applies cwd/env then runs the command.
 func buildBashScript(spec Spec, limits safety.Limits) string {
 	var b strings.Builder
 	b.WriteString("set -euo pipefail\n")

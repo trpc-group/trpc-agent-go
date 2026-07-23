@@ -403,6 +403,7 @@ SELECT COALESCE(report_json,''), COALESCE(report_md,'') FROM report WHERE task_i
 	return b, nil
 }
 
+// dirOf returns the parent directory of path.
 func dirOf(path string) string {
 	for i := len(path) - 1; i >= 0; i-- {
 		if path[i] == '/' || path[i] == '\\' {

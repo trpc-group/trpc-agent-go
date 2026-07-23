@@ -152,6 +152,7 @@ Host rule-engine findings are authoritative; your role is orchestration assist.`
 	return out, nil
 }
 
+// uniqStrings returns unique strings preserving first-seen order.
 func uniqStrings(in []string) []string {
 	seen := map[string]struct{}{}
 	var out []string
@@ -165,6 +166,7 @@ func uniqStrings(in []string) []string {
 	return out
 }
 
+// intPtr returns a pointer to v.
 func intPtr(v int) *int { return &v }
 
 // FakeModelOptions configures the scripted review model.
@@ -245,6 +247,7 @@ func (m *FakeModel) GenerateContent(_ context.Context, req *model.Request) (<-ch
 	return ch, nil
 }
 
+// toolCallResponse builds a model response that contains one tool call.
 func toolCallResponse(id, name string, args []byte) *model.Response {
 	return &model.Response{
 		Choices: []model.Choice{{
@@ -263,6 +266,7 @@ func toolCallResponse(id, name string, args []byte) *model.Response {
 	}
 }
 
+// mustJSON marshals v to JSON, returning "{}" on error.
 func mustJSON(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {

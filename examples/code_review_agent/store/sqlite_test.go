@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
 
+// TestSQLiteStore_GetTaskBundle verifies related behavior.
 func TestSQLiteStore_GetTaskBundle(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "review.db")

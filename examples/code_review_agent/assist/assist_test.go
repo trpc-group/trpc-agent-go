@@ -22,6 +22,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 )
 
+// TestFakeModelAssist_Smoke verifies related behavior.
 func TestFakeModelAssist_Smoke(t *testing.T) {
 	root := moduleRoot(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -48,6 +49,7 @@ func TestFakeModelAssist_Smoke(t *testing.T) {
 	}
 }
 
+// moduleRoot is a test helper.
 func moduleRoot(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()

@@ -139,6 +139,7 @@ func (f FailingRunner) Run(ctx context.Context, spec Spec, limits safety.Limits)
 	}
 }
 
+// trimSample truncates s to at most n runes and appends an ellipsis when needed.
 func trimSample(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) <= n {
