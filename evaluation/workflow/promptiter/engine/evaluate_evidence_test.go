@@ -1,0 +1,61 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
+
+package engine
+
+import (
+	"encoding/json"
+	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+)
+
+func TestCaseResultEvidenceJSONCompatibility(t *testing.T) {
+	legacy, err := json.Marshal(CaseResult{EvalSetID: "set", EvalCaseID: "case"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(legacy) != `{"EvalSetID":"set","EvalCaseID":"case","SessionID":"","Trace":null,"Metrics":null}` {
+		t.Fatalf("legacy JSON changed: %s", legacy)
+	}
+	withEvidence, err := json.Marshal(CaseResult{EvalCaseID: "case", ActualInvocations: []*evalset.Invocation{{InvocationID: "actual"}}, ExpectedInvocations: []*evalset.Invocation{{InvocationID: "expected"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(withEvidence, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded["actualInvocations"]; !ok {
+		t.Fatal("actual invocation evidence was omitted")
+	}
+	if _, ok := decoded["expectedInvocations"]; !ok {
+		t.Fatal("expected invocation evidence was omitted")
+	}
+}
+
+func TestExpectedInvocationsPreservesSparseEvidencePositions(t *testing.T) {
+	if got := expectedInvocations(nil); got != nil {
+		t.Fatalf("nil result evidence = %#v", got)
+	}
+	expected := &evalset.Invocation{InvocationID: "expected"}
+	result := &evalresult.EvalCaseResult{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+		nil,
+		{},
+		{ExpectedInvocation: expected},
+	}}
+	got := expectedInvocations(result)
+	if len(got) != 3 || got[0] != nil || got[1] != nil || got[2] != expected {
+		t.Fatalf("expected invocation evidence = %#v", got)
+	}
+	if got := expectedInvocations(&evalresult.EvalCaseResult{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{nil, {}}}); got != nil {
+		t.Fatalf("empty invocation evidence = %#v, want nil", got)
+	}
+}
