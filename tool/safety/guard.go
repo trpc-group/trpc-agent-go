@@ -40,11 +40,22 @@ func (g *Guard) Scan(req Request) Report {
 		report.DurationMillis = time.Since(started).Milliseconds()
 		return report
 	}
-	segments, findings := scanCommand(g.policy, req)
-	findings = append(findings, scanPaths(g.policy, req.Cwd, segments)...)
+	findings := scanExecution(g.policy, req)
+	findings = append(findings, scanCodeBlocks(g.policy, req.CodeBlocks)...)
+	findings = append(findings, scanRawArguments(g.policy, req.RawArguments)...)
 	report := aggregateReport(req, findings)
 	report.DurationMillis = time.Since(started).Milliseconds()
+	redactReport(&report)
 	return report
+}
+
+func scanExecution(policy Policy, req Request) []Finding {
+	segments, findings := scanCommand(policy, req)
+	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
+	findings = append(findings, scanNetwork(policy, segments)...)
+	findings = append(findings, scanResources(policy, req, segments)...)
+	findings = append(findings, scanSensitiveContent(req.Command)...)
+	return findings
 }
 
 func aggregateReport(req Request, findings []Finding) Report {
@@ -55,7 +66,7 @@ func aggregateReport(req Request, findings []Finding) Report {
 
 	primary := 0
 	for i := 1; i < len(findings); i++ {
-		if decisionRank(findings[i].Decision) > decisionRank(findings[primary].Decision) {
+		if findingRank(findings[i]) > findingRank(findings[primary]) {
 			primary = i
 		}
 	}
@@ -76,6 +87,25 @@ func aggregateReport(req Request, findings []Finding) Report {
 	report.Findings = append([]Finding(nil), findings...)
 	report.SafeSummary = "request requires safety policy action"
 	return report
+}
+
+func findingRank(finding Finding) int {
+	return decisionRank(finding.Decision)*10 + riskRank(finding.RiskLevel)
+}
+
+func riskRank(risk RiskLevel) int {
+	switch risk {
+	case RiskCritical:
+		return 4
+	case RiskHigh:
+		return 3
+	case RiskMedium:
+		return 2
+	case RiskLow:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func newReport(req Request) Report {
