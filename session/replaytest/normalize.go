@@ -347,6 +347,7 @@ func normalizeMemories(entries []*memory.Entry) ([]CanonicalMap, error) {
 type normalizedMemoryRecord struct {
 	physicalID string
 	value      CanonicalMap
+	sortKey    string
 }
 
 func normalizeMemoryCatalog(
@@ -364,16 +365,25 @@ func normalizeMemoryCatalog(
 		}
 		ids[entry.ID] = struct{}{}
 		delete(value, "id")
-		records = append(records, normalizedMemoryRecord{physicalID: entry.ID, value: value})
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal normalized memory %d: %w", index, err)
+		}
+		records = append(records, normalizedMemoryRecord{
+			physicalID: entry.ID,
+			value:      value,
+			sortKey:    string(raw),
+		})
 	}
 	sort.Slice(records, func(i, j int) bool {
-		left, _ := json.Marshal(records[i].value)
-		right, _ := json.Marshal(records[j].value)
-		return string(left) < string(right)
+		return records[i].sortKey < records[j].sortKey
 	})
 	output := make([]CanonicalMap, 0, len(records))
 	physicalToLogical := make(map[string]string, len(records))
 	for index := range records {
+		if index > 0 && records[index-1].sortKey == records[index].sortKey {
+			return nil, nil, errors.New("duplicate normalized memory entry")
+		}
 		logicalID := "memory-" + strconv.Itoa(index)
 		records[index].value["id"] = logicalID
 		physicalToLogical[records[index].physicalID] = logicalID

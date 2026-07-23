@@ -1614,6 +1614,49 @@ func TestNormalizeMemorySearchesPreservesRankAndScore(t *testing.T) {
 	}
 }
 
+func TestNormalizeMemoryCatalogRejectsSemanticDuplicates(t *testing.T) {
+	entries := []*memory.Entry{
+		{
+			ID:      "physical-a",
+			AppName: "replaytest",
+			UserID:  "user-1",
+			Memory: &memory.Memory{
+				Memory: "same fact",
+				Topics: []string{"replay"},
+				Kind:   memory.KindFact,
+			},
+		},
+		{
+			ID:      "physical-b",
+			AppName: "replaytest",
+			UserID:  "user-1",
+			Memory: &memory.Memory{
+				Memory: "same fact",
+				Topics: []string{"replay"},
+				Kind:   memory.KindFact,
+			},
+		},
+	}
+	if _, _, err := normalizeMemoryCatalog(entries); err == nil ||
+		!strings.Contains(err.Error(), "duplicate normalized memory entry") {
+		t.Fatalf("normalizeMemoryCatalog() error = %v, want semantic duplicate error", err)
+	}
+
+	firstEvent := time.Date(2026, time.July, 1, 8, 30, 0, 0, time.UTC)
+	secondEvent := firstEvent.Add(time.Hour)
+	for index, eventTime := range []*time.Time{&firstEvent, &secondEvent} {
+		entries[index].Memory.Kind = memory.KindEpisode
+		entries[index].Memory.EventTime = eventTime
+	}
+	got, _, err := normalizeMemoryCatalog(entries)
+	if err != nil {
+		t.Fatalf("normalizeMemoryCatalog(distinct episodes) error = %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("normalizeMemoryCatalog(distinct episodes) returned %d entries, want 2", len(got))
+	}
+}
+
 func TestMemorySearchInputQueryIsAuthoritative(t *testing.T) {
 	replayCase := memorySearchCase()
 	search := replayCase.Steps[len(replayCase.Steps)-1].MemorySearch
