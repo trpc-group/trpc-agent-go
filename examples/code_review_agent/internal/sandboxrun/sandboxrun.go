@@ -59,14 +59,13 @@ type Terminator interface {
 // engine. The workspace is created once and reused for every planned command in
 // a review task, so go test/go vet/script commands share the same staged tree.
 type WorkspaceRuntime struct {
-	RuntimeName    string
-	Engine         codeexecutor.Engine
-	Workspace      codeexecutor.Workspace
-	Cwd            string
-	Env            map[string]string
-	Timeout        time.Duration
-	TerminateFn    func(context.Context)
-	MaxOutputBytes int
+	RuntimeName string
+	Engine      codeexecutor.Engine
+	Workspace   codeexecutor.Workspace
+	Cwd         string
+	Env         map[string]string
+	Timeout     time.Duration
+	TerminateFn func(context.Context)
 }
 
 func (r WorkspaceRuntime) Name() string {
@@ -81,21 +80,19 @@ func (r WorkspaceRuntime) Run(ctx context.Context, command string) (Result, erro
 		return Result{}, fmt.Errorf("workspace runtime %q is unavailable", r.Name())
 	}
 	spec := codeexecutor.RunProgramSpec{
-		Cmd:            shellCommand(command),
-		Args:           shellArgs(command),
-		Env:            r.runEnv(),
-		CleanEnv:       true,
-		Cwd:            r.Cwd,
-		Timeout:        r.Timeout,
-		OutputMaxBytes: r.MaxOutputBytes,
+		Cmd:      shellCommand(command),
+		Args:     shellArgs(command),
+		Env:      r.runEnv(),
+		CleanEnv: true,
+		Cwd:      r.Cwd,
+		Timeout:  r.Timeout,
 	}
 	res, err := r.Engine.Runner().RunProgram(ctx, r.Workspace, spec)
 	out := Result{
-		ExitCode:        res.ExitCode,
-		Stdout:          res.Stdout,
-		Stderr:          res.Stderr,
-		TimedOut:        res.TimedOut,
-		OutputTruncated: res.OutputTruncated,
+		ExitCode: res.ExitCode,
+		Stdout:   res.Stdout,
+		Stderr:   res.Stderr,
+		TimedOut: res.TimedOut,
 	}
 	if res.TimedOut && err == nil {
 		err = context.DeadlineExceeded

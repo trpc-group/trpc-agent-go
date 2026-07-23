@@ -654,7 +654,7 @@ func (r *workspaceRuntime) RunProgram(
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, outputTruncated, err := r.runBashStreamingLimited(ctx, script, timeout, spec.OutputMaxBytes)
+	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
 	dur := time.Since(start)
 
 	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
@@ -668,12 +668,11 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:          stdout,
-		Stderr:          stderr,
-		ExitCode:        exit,
-		Duration:        dur,
-		TimedOut:        timedOut,
-		OutputTruncated: outputTruncated,
+		Stdout:   stdout,
+		Stderr:   stderr,
+		ExitCode: exit,
+		Duration: dur,
+		TimedOut: timedOut,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -828,34 +827,26 @@ func (r *workspaceRuntime) runBash(
 func (r *workspaceRuntime) runBashStreaming(
 	ctx context.Context, script string, timeout time.Duration,
 ) (string, string, int, error) {
-	stdout, stderr, exit, _, err := r.runBashStreamingLimited(ctx, script, timeout, 0)
-	return stdout, stderr, exit, err
-}
-
-func (r *workspaceRuntime) runBashStreamingLimited(
-	ctx context.Context, script string, timeout time.Duration, maxOutputBytes int,
-) (string, string, int, bool, error) {
 	if r.ce == nil || r.ce.sbx == nil {
-		return "", "", 0, false, errors.New("e2b: sandbox not initialized")
+		return "", "", 0, errors.New("e2b: sandbox not initialized")
 	}
-	stdoutB := codeexecutor.NewLimitedBuffer(maxOutputBytes)
-	stderrB := codeexecutor.NewLimitedBuffer(maxOutputBytes)
+	var stdoutB, stderrB strings.Builder
 	opts := &ci.RunCodeOpts{
 		Language: ci.LanguageBash,
 		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { _, _ = stdoutB.Write([]byte(m.Line)) },
-		OnStderr: func(m ci.OutputMessage) { _, _ = stderrB.Write([]byte(m.Line)) },
+		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
+		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {
-		return stdoutB.String(), stderrB.String(), -1, stdoutB.Truncated() || stderrB.Truncated(), err
+		return stdoutB.String(), stderrB.String(), -1, err
 	}
 	if exec.Error != nil {
-		return stdoutB.String(), stderrB.String(), -1, stdoutB.Truncated() || stderrB.Truncated(), fmt.Errorf(
+		return stdoutB.String(), stderrB.String(), -1, fmt.Errorf(
 			"bash error: %s: %s", exec.Error.Name, exec.Error.Value,
 		)
 	}
-	return stdoutB.String(), stderrB.String(), 0, stdoutB.Truncated() || stderrB.Truncated(), nil
+	return stdoutB.String(), stderrB.String(), 0, nil
 }
 
 func isTimeoutErr(err error) bool {

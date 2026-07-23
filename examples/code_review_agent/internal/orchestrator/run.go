@@ -897,14 +897,13 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		})
 	}
 	return sandboxrun.WorkspaceRuntime{
-		RuntimeName:    runtimeName,
-		Engine:         eng,
-		Workspace:      ws,
-		Cwd:            workspace.runtimeCwd(runtimeName),
-		Timeout:        timeout,
-		Env:            workspaceRuntimeEnv(runtimeName),
-		TerminateFn:    func(context.Context) { cleanup() },
-		MaxOutputBytes: defaultMaxSandboxOutput,
+		RuntimeName: runtimeName,
+		Engine:      eng,
+		Workspace:   ws,
+		Cwd:         workspace.runtimeCwd(runtimeName),
+		Timeout:     timeout,
+		Env:         workspaceRuntimeEnv(runtimeName),
+		TerminateFn: func(context.Context) { cleanup() },
 	}, cleanup, nil
 }
 
