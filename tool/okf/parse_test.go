@@ -107,6 +107,39 @@ func TestSplitFrontmatter_FieldShapes(t *testing.T) {
 	}
 }
 
+func TestNormalizeJSONValue(t *testing.T) {
+	value, ok := normalizeJSONValue([]any{
+		map[any]any{"enabled": true},
+	})
+	if !ok {
+		t.Fatal("JSON-compatible nested value was rejected")
+	}
+	want := []any{map[string]any{"enabled": true}}
+	if !reflect.DeepEqual(value, want) {
+		t.Errorf("normalized value = %#v, want %#v", value, want)
+	}
+
+	unsupported := []struct {
+		name  string
+		value any
+	}{
+		{name: "string map child", value: map[string]any{"bad": make(chan int)}},
+		{name: "unsupported map key", value: map[any]any{nil: "value"}},
+		{name: "normalized key collision", value: map[any]any{"1": "string", 1: "number"}},
+		{name: "generic map child", value: map[any]any{"bad": make(chan int)}},
+		{name: "slice child", value: []any{make(chan int)}},
+		{name: "scalar", value: make(chan int)},
+	}
+	for _, test := range unsupported {
+		t.Run(test.name, func(t *testing.T) {
+			if normalized, ok := normalizeJSONValue(test.value); ok || normalized != nil {
+				t.Errorf("normalizeJSONValue(%T) = %#v, %v; want nil, false",
+					test.value, normalized, ok)
+			}
+		})
+	}
+}
+
 func TestExtractLinks(t *testing.T) {
 	body := []byte(`See [a](/x/y.md), [b](./z.md#sec), [c](../w.md?q=1),
 [title](./with-title.md "display"), [angle](<./space name.md>), and [reference][ref].
