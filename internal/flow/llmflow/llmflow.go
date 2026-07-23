@@ -28,6 +28,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
@@ -666,6 +667,12 @@ func (f *Flow) runOneStep(
 			)
 		}
 		finishLatencySpan(stepSpan, stepStarted, err)
+	}()
+	defer func() {
+		if calllimit.Active(invocation) {
+			invocation.EndInvocation = true
+			calllimit.Finish(invocation)
+		}
 	}()
 	// Initialize empty LLM request.
 	llmRequest := &model.Request{
@@ -2297,6 +2304,14 @@ func (f *Flow) callLLM(
 		log.Errorf("LLM call limit exceeded for agent %s: %v", invocation.AgentName, err)
 		return ctx, nil, false, err
 	}
+	llmLimitReached := calllimit.RecordLLMCall(
+		invocation,
+		invocation.MaxLLMCalls,
+	)
+	finalizationInstruction, finalizing := calllimit.ActivateForLLM(
+		invocation,
+		llmLimitReached,
+	)
 	// Run before model callbacks if they exist.
 	ctx, customResp, err := f.runBeforeModelCallbacks(ctx, invocation, llmRequest)
 	if err != nil {
@@ -2310,6 +2325,12 @@ func (f *Flow) callLLM(
 	if llmRequest == nil || len(llmRequest.Messages) == 0 {
 		err = errors.New(errMsgNoLLMMessages)
 		return ctx, nil, false, err
+	}
+	if finalizing {
+		prepareCallLimitFinalizationRequest(
+			llmRequest,
+			finalizationInstruction,
+		)
 	}
 	if invocation != nil && invocation.RunOptions.ExecutionTraceEnabled {
 		traceCtx := agent.NewInvocationContext(ctx, invocation)
@@ -2329,6 +2350,43 @@ func (f *Flow) callLLM(
 		return ctx, nil, true, err
 	}
 	return ctx, seq, true, nil
+}
+
+func prepareCallLimitFinalizationRequest(
+	req *model.Request,
+	instruction string,
+) {
+	if req == nil {
+		return
+	}
+	req.Tools = nil
+	for _, key := range []string{
+		"tool_choice",
+		"parallel_tool_calls",
+		"tools",
+		"function_call",
+		"functions",
+		"ToolChoice",
+		"ParallelToolCalls",
+		"Tools",
+	} {
+		delete(req.ExtraFields, key)
+	}
+	for i := range req.Messages {
+		if req.Messages[i].Role != model.RoleSystem {
+			continue
+		}
+		if req.Messages[i].Content == "" {
+			req.Messages[i].Content = instruction
+		} else {
+			req.Messages[i].Content += "\n\n" + instruction
+		}
+		return
+	}
+	req.Messages = append(
+		[]model.Message{model.NewSystemMessage(instruction)},
+		req.Messages...,
+	)
 }
 
 func (f *Flow) runBeforeModelCallbacks(

@@ -25,6 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
@@ -250,6 +251,16 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 	if invocation == nil || rsp == nil || rsp.IsPartial || !rsp.IsToolCallResponse() {
 		return
 	}
+	if calllimit.Active(invocation) {
+		invocation.EndInvocation = true
+		emitToolIterationLimitError(
+			ctx,
+			invocation,
+			ch,
+			"tool calls are disabled during call limit finalization",
+		)
+		return
+	}
 
 	// Enforce optional per-invocation tool iteration limit. A "tool iteration"
 	// is defined as an assistant response that contains tool calls and reaches
@@ -262,21 +273,21 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		// Emit an error response event describing the limit breach instead of
 		// executing any tools. This makes the termination visible to callers
 		// while avoiding additional model or tool invocations.
-		resp := &model.Response{
-			Object: model.ObjectTypeError,
-			Error: &model.ResponseError{
-				Type:    model.ErrorTypeFlowError,
-				Message: fmt.Sprintf("max tool iterations (%d) exceeded", invocation.MaxToolIterations),
-			},
-			Done: true,
-		}
-		agent.EmitEvent(ctx, invocation, ch, event.NewResponseEvent(
-			invocation.InvocationID,
-			invocation.AgentName,
-			resp,
-		))
+		emitToolIterationLimitError(
+			ctx,
+			invocation,
+			ch,
+			fmt.Sprintf(
+				"max tool iterations (%d) exceeded",
+				invocation.MaxToolIterations,
+			),
+		)
 		return
 	}
+	toolLimitReached := calllimit.RecordToolIteration(
+		invocation,
+		invocation.MaxToolIterations,
+	)
 
 	deferred, executable, unknown := p.toolExecutionDecision(
 		ctx,
@@ -318,6 +329,30 @@ func (p *FunctionCallResponseProcessor) ProcessResponse(
 		invocation.EndInvocation = true
 		return
 	}
+	if toolLimitReached {
+		calllimit.ScheduleToolFinalization(invocation)
+	}
+}
+
+func emitToolIterationLimitError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	ch chan<- *event.Event,
+	message string,
+) {
+	resp := &model.Response{
+		Object: model.ObjectTypeError,
+		Error: &model.ResponseError{
+			Type:    model.ErrorTypeFlowError,
+			Message: message,
+		},
+		Done: true,
+	}
+	agent.EmitEvent(ctx, invocation, ch, event.NewResponseEvent(
+		invocation.InvocationID,
+		invocation.AgentName,
+		resp,
+	))
 }
 
 func (p *FunctionCallResponseProcessor) toolExecutionDecision(
