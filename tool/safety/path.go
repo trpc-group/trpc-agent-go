@@ -8,6 +8,7 @@
 package safety
 
 import (
+	"net/url"
 	"path"
 	"strings"
 )
@@ -21,12 +22,68 @@ func scanPaths(policy Policy, cwd string, segments [][]string) []Finding {
 			if index == 0 && !isPathLike(arg) {
 				continue
 			}
-			if finding, ok := deniedPathFinding(policy.DeniedPaths, arg); ok {
-				return []Finding{finding}
+			for _, candidate := range pathCandidates(argv, index, arg) {
+				if finding, ok := deniedPathFinding(policy.DeniedPaths, candidate); ok {
+					return []Finding{finding}
+				}
 			}
 		}
 	}
 	return nil
+}
+
+func pathCandidates(argv []string, index int, value string) []string {
+	candidates := []string{value}
+	if filePath, ok := fileURLPath(value); ok {
+		candidates = append(candidates, filePath)
+	}
+	if index == 0 || len(argv) == 0 {
+		return candidates
+	}
+	if attached, ok := attachedPathOption(commandBase(argv[0]), value); ok {
+		candidates = append(candidates, attached)
+	}
+	return candidates
+}
+
+// fileURLPath converts a file URL into the decoded filesystem path evaluated
+// by path policy. Non-local authorities remain UNC-style absolute paths.
+func fileURLPath(value string) (string, bool) {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || !strings.EqualFold(parsed.Scheme, "file") {
+		return "", false
+	}
+	decoded, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil || decoded == "" {
+		return "/", true
+	}
+	if parsed.Host != "" && !strings.EqualFold(parsed.Host, "localhost") {
+		return "//" + parsed.Host + decoded, true
+	}
+	return decoded, true
+}
+
+func attachedPathOption(base, arg string) (string, bool) {
+	for _, option := range []string{
+		"--config=", "--identity-file=", "--output=", "--output-document=",
+	} {
+		if strings.HasPrefix(arg, option) && len(arg) > len(option) {
+			return strings.TrimPrefix(arg, option), true
+		}
+	}
+	shortOptions := map[string][]string{
+		"curl": {"-K", "-o"},
+		"wget": {"-O"},
+		"ssh":  {"-F", "-i"},
+		"scp":  {"-F", "-i"},
+		"sftp": {"-F", "-i"},
+	}
+	for _, option := range shortOptions[base] {
+		if strings.HasPrefix(arg, option) && len(arg) > len(option) {
+			return strings.TrimPrefix(arg, option), true
+		}
+	}
+	return "", false
 }
 
 func isPathLike(value string) bool {
@@ -80,5 +137,10 @@ func matchesDeniedPath(candidate, denied string) bool {
 		}
 		return strings.HasPrefix(candidate, denied+"/")
 	}
-	return path.Base(candidate) == denied
+	for _, component := range strings.Split(candidate, "/") {
+		if component == denied {
+			return true
+		}
+	}
+	return false
 }

