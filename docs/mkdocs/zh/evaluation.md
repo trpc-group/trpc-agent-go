@@ -3373,7 +3373,7 @@ agentEvaluator, err := evaluation.New(
 
 如果自定义聚合器返回错误，Local 实现会将当前用例标记为 `failed`，并把错误信息写入 `errorMessage`。
 
-读取结果时需要区分用例级结果和指标级结果。自定义聚合器只决定用例级 `score` 与 `finalEvalStatus`。单条指标自己的 `score`、`threshold` 与 `evalStatus` 仍由对应 Evaluator 计算，并保留在 `overallEvalMetricResults` 中。结果汇总的整体状态会跟随用例级 `finalEvalStatus`，`metricSummaries` 继续保留每个指标自己的状态用于展示和诊断。因此，自定义聚合策略可以让某个指标失败但用例整体通过。
+读取结果时需要区分用例级结果和指标级结果。自定义聚合器只决定用例级 `score` 与 `finalEvalStatus`。单条指标自己的 `score`、`threshold` 与 `evalStatus` 仍由对应 Evaluator 计算，并保留在 `overallEvalMetricResults` 中。因此，自定义聚合策略可能让某个指标失败但用例整体通过。
 
 ### AgentEvaluator
 
@@ -3413,11 +3413,11 @@ type EvaluationCaseResult struct {
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 
-AgentEvaluator 支持通过 `WithNumRuns` 对同一评估集运行多次。聚合时会按用例维度汇总多次运行的结果，`OverallStatus` 按每次运行的 `EvalCaseResult.finalEvalStatus` 汇总；对同名指标取平均分并与阈值对比得到指标级聚合状态，写入 `MetricResults` 用于展示和诊断。每次运行的原始结果保留在 `EvalCaseResults`。
+AgentEvaluator 支持通过 `WithNumRuns` 对同一评估集运行多次。默认运行 1 次时，`OverallStatus` 来自该次运行的 `EvalCaseResult.finalEvalStatus`；当 `WithNumRuns` 大于 1 时，聚合会按用例维度对同名指标取平均分并与阈值对比，再由聚合后的指标状态得到用例 `OverallStatus`。每次运行的原始结果保留在 `EvalCaseResults`，聚合后的指标结果写入 `MetricResults` 用于展示和诊断。
 
 ### NumRuns 重复运行次数
 
-由于 Agent 的运行过程可能存在不确定性，`evaluation.WithNumRuns` 提供了重复运行机制，用于降低单次运行带来的偶然性。默认运行次数为 1 次，指定 `evaluation.WithNumRuns(n)` 后，同一个评估集会在同一次 Evaluate 中完成 n 次推理与评估，并在汇总时以用例为粒度汇总多次运行的 `finalEvalStatus`，同时按同名指标的平均分生成指标级聚合结果。
+由于 Agent 的运行过程可能存在不确定性，`evaluation.WithNumRuns` 提供了重复运行机制，用于降低单次运行带来的偶然性。默认运行次数为 1 次，指定 `evaluation.WithNumRuns(n)` 且 n 大于 1 后，同一个评估集会在同一次 Evaluate 中完成 n 次推理与评估，并在汇总时以用例为粒度对同名指标取平均分，再根据聚合后的指标状态计算用例状态。
 
 重复运行次数不会线性增加评估结果文件的数量。一次 Evaluate 只会写入一份评估结果文件，对应一个 EvalSetResult；当 `NumRuns` 大于 1 时，文件内部会包含多次运行的明细结果，同一用例在不同运行中的结果会分别出现在 `EvalCaseResults` 中，并通过 `runId` 区分。
 

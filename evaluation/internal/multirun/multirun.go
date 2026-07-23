@@ -133,6 +133,7 @@ func buildEvalSetRunSummaries(runCaseResults map[int][]*evalresult.EvalCaseResul
 type caseAgg struct {
 	runStatusCounts evalresult.EvalStatusCounts
 	runStatuses     []status.EvalStatus
+	hasRunError     bool
 	runSummaries    []*evalresult.EvalCaseRunSummary
 	metricAgg       map[string]*metricAgg
 }
@@ -154,6 +155,9 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 				aggs[caseID] = agg
 			}
 			agg.runStatuses = append(agg.runStatuses, caseResult.FinalEvalStatus)
+			if caseResult.ErrorMessage != "" {
+				agg.hasRunError = true
+			}
 			if err := addEvalStatus(&agg.runStatusCounts, caseResult.FinalEvalStatus); err != nil {
 				return nil, status.EvalStatusFailed, err
 			}
@@ -173,7 +177,7 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 	caseStatuses := make([]status.EvalStatus, 0, len(aggs))
 	for caseID, agg := range aggs {
 		metricSummaries := buildMetricSummaries(agg.metricAgg)
-		overallStatus, err := istatus.Summarize(agg.runStatuses)
+		overallStatus, err := summarizeCaseSummaryStatus(metricSummaries, agg.runStatuses, agg.hasRunError, len(runIDs))
 		if err != nil {
 			return nil, status.EvalStatusFailed, fmt.Errorf("summarize case %s status: %w", caseID, err)
 		}
@@ -194,6 +198,27 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 		return nil, status.EvalStatusFailed, fmt.Errorf("summarize eval set status: %w", err)
 	}
 	return caseSummaries, overallStatus, nil
+}
+
+func summarizeCaseSummaryStatus(metricSummaries []*evalresult.EvalMetricSummary, runStatuses []status.EvalStatus, hasRunError bool, numRuns int) (status.EvalStatus, error) {
+	if numRuns <= 1 {
+		return istatus.Summarize(runStatuses)
+	}
+	statuses := make([]status.EvalStatus, 0, len(metricSummaries))
+	for _, summary := range metricSummaries {
+		if summary == nil {
+			continue
+		}
+		statuses = append(statuses, summary.EvalStatus)
+	}
+	overallStatus, err := istatus.Summarize(statuses)
+	if err != nil {
+		return status.EvalStatusFailed, err
+	}
+	if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+		return status.EvalStatusFailed, nil
+	}
+	return overallStatus, nil
 }
 
 func addEvalStatus(counts *evalresult.EvalStatusCounts, s status.EvalStatus) error {

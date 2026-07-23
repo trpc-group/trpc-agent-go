@@ -110,4 +110,4 @@ Case support_weighted_tradeoff run 1 -> passed (case score 0.80)
 
 The case demonstrates the custom policy: one metric fails, but the case passes because the weighted case score reaches the case threshold.
 
-The top-level summary follows the case-level `finalEvalStatus`. Metric summaries still keep each metric's own pass/fail status for diagnostics, so a failed metric can appear in the summary while the case and overall result are passed.
+Because this example runs once, the top-level summary follows the case-level `finalEvalStatus`. Metric summaries still keep each metric's own pass/fail status for diagnostics, so a failed metric can appear in the summary while the case and overall result are passed.

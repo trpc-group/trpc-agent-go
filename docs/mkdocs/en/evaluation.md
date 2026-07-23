@@ -3375,7 +3375,7 @@ agentEvaluator, err := evaluation.New(
 
 If a custom aggregator returns an error, the local implementation marks the current case as `failed` and writes the error message to `errorMessage`.
 
-When reading results, distinguish case-level results from metric-level results. A custom aggregator only decides the case-level `score` and `finalEvalStatus`. Each metric's own `score`, `threshold`, and `evalStatus` are still computed by the corresponding Evaluator and kept in `overallEvalMetricResults`. The overall status in the result summary follows the case-level `finalEvalStatus`, while `metricSummaries` still keep each metric's own status for display and diagnosis. Therefore, a custom aggregation strategy can allow a case to pass even when one metric fails.
+When reading results, distinguish case-level results from metric-level results. A custom aggregator only decides the case-level `score` and `finalEvalStatus`. Each metric's own `score`, `threshold`, and `evalStatus` are still computed by the corresponding Evaluator and kept in `overallEvalMetricResults`. Therefore, a custom aggregation strategy can allow a case to pass even when one metric fails.
 
 ### AgentEvaluator
 
@@ -3415,11 +3415,11 @@ type EvaluationCaseResult struct {
 
 By default, `evaluation.New` creates AgentEvaluator and uses in-memory EvalSetManager, MetricManager, EvalResultManager, and the default Registry, and also creates a local Service. If you want to read EvalSet and metric configuration from local files and write results to files, you need to inject Local Managers explicitly.
 
-AgentEvaluator supports running the same evaluation set multiple times via `WithNumRuns`. During aggregation, it summarizes multiple runs by case. `OverallStatus` is summarized from each run's `EvalCaseResult.finalEvalStatus`; metrics with the same name are averaged and compared with thresholds to produce metric-level aggregated status, which is written to `MetricResults` for display and diagnosis. Each run's raw results are preserved in `EvalCaseResults`.
+AgentEvaluator supports running the same evaluation set multiple times via `WithNumRuns`. With the default single run, `OverallStatus` comes from that run's `EvalCaseResult.finalEvalStatus`. When `WithNumRuns` is greater than 1, aggregation is performed by case: metrics with the same name are averaged and compared with thresholds, and the aggregated metric statuses are then used to compute the case `OverallStatus`. Each run's raw results are preserved in `EvalCaseResults`, and aggregated metric results are written to `MetricResults` for display and diagnosis.
 
 ### NumRuns: Repeated Runs
 
-Because Agent execution may be nondeterministic, `evaluation.WithNumRuns` provides repeated runs to reduce randomness from a single run. The default is 1. When `evaluation.WithNumRuns(n)` is specified, the same evaluation set will perform n rounds of inference and evaluation within a single Evaluate, summarize multiple `finalEvalStatus` values at case granularity, and generate metric-level aggregated results by averaging metrics with the same name.
+Because Agent execution may be nondeterministic, `evaluation.WithNumRuns` provides repeated runs to reduce randomness from a single run. The default is 1. When `evaluation.WithNumRuns(n)` is specified with n greater than 1, the same evaluation set performs n rounds of inference and evaluation within a single Evaluate, averages metrics with the same name at case granularity, and computes the case status from the aggregated metric statuses.
 
 The number of result files does not increase linearly with repeated runs. One Evaluate writes a single result file corresponding to one EvalSetResult. When `NumRuns` is greater than 1, the file contains detailed results for multiple runs. Results for the same case across different runs appear in `EvalCaseResults` and are distinguished by `runId`.
 

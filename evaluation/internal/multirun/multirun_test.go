@@ -276,6 +276,68 @@ func TestSummarizeMultiRunUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {
 	assert.Len(t, caseSummary.MetricSummaries, 2)
 }
 
+func TestSummarizeMultiRunUsesMetricSummaryStatusAcrossMultipleRuns(t *testing.T) {
+	result := &evalresult.EvalSetResult{
+		EvalSetID: "set",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           1,
+				FinalEvalStatus: status.EvalStatusFailed,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "m", Score: 0.5, EvalStatus: status.EvalStatusFailed, Threshold: 1},
+				},
+			},
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           2,
+				FinalEvalStatus: status.EvalStatusPassed,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "m", Score: 1.5, EvalStatus: status.EvalStatusPassed, Threshold: 1},
+				},
+			},
+		},
+	}
+
+	err := SummarizeMultiRun(result, 2)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, result.Summary)
+	if result.Summary == nil {
+		return
+	}
+
+	assert.Equal(t, status.EvalStatusPassed, result.Summary.OverallStatus)
+	assert.NotNil(t, result.Summary.RunStatusCounts)
+	if result.Summary.RunStatusCounts != nil {
+		assert.Equal(t, 1, result.Summary.RunStatusCounts.Passed)
+		assert.Equal(t, 1, result.Summary.RunStatusCounts.Failed)
+	}
+	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
+	if len(result.Summary.EvalCaseSummaries) == 0 {
+		return
+	}
+
+	caseSummary := result.Summary.EvalCaseSummaries[0]
+	assert.Equal(t, status.EvalStatusPassed, caseSummary.OverallStatus)
+	assert.NotNil(t, caseSummary.RunStatusCounts)
+	if caseSummary.RunStatusCounts != nil {
+		assert.Equal(t, 1, caseSummary.RunStatusCounts.Passed)
+		assert.Equal(t, 1, caseSummary.RunStatusCounts.Failed)
+	}
+	assert.Len(t, caseSummary.MetricSummaries, 1)
+	if len(caseSummary.MetricSummaries) == 0 {
+		return
+	}
+
+	metricSummary := caseSummary.MetricSummaries[0]
+	assert.Equal(t, "m", metricSummary.MetricName)
+	assert.Equal(t, 1.0, metricSummary.AverageScore)
+	assert.Equal(t, status.EvalStatusPassed, metricSummary.EvalStatus)
+}
+
 func TestSummarizeMultiRunMetricRunSummariesAreSortedByName(t *testing.T) {
 	result := &evalresult.EvalSetResult{
 		EvalSetID: "set",

@@ -545,11 +545,15 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
 	runStatuses := make([]status.EvalStatus, 0, len(runs))
+	hasRunError := false
 	for _, run := range runs {
 		if run == nil {
 			continue
 		}
 		runStatuses = append(runStatuses, run.FinalEvalStatus)
+		if run.ErrorMessage != "" {
+			hasRunError = true
+		}
 		for _, metric := range run.OverallEvalMetricResults {
 			// Skip metrics that did not run to avoid diluting averaged scores.
 			if metric.EvalStatus == status.EvalStatusNotEvaluated {
@@ -579,7 +583,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			Criterion:  aggregatedMetric.criterion,
 		})
 	}
-	overallStatus, err := istatus.Summarize(runStatuses)
+	overallStatus, err := summarizeAggregateCaseRunsStatus(runStatuses, metricResults, hasRunError)
 	if err != nil {
 		return nil, fmt.Errorf("summarize case run status: %w", err)
 	}
@@ -589,6 +593,20 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		EvalCaseResults: runs,
 		MetricResults:   metricResults,
 	}, nil
+}
+
+func summarizeAggregateCaseRunsStatus(runStatuses []status.EvalStatus, metricResults []*evalresult.EvalMetricResult, hasRunError bool) (status.EvalStatus, error) {
+	if len(runStatuses) <= 1 {
+		return istatus.Summarize(runStatuses)
+	}
+	overallStatus, err := istatus.SummarizeMetricsStatus(metricResults)
+	if err != nil {
+		return status.EvalStatusFailed, err
+	}
+	if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+		return status.EvalStatusFailed, nil
+	}
+	return overallStatus, nil
 }
 
 func collectRunDetails(runs []*evalresult.EvalCaseResult, runDetailsByID map[int]*EvaluationCaseRunDetails) []*EvaluationCaseRunDetails {

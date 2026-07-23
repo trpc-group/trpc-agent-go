@@ -1362,11 +1362,11 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, evalSetID, evaluationResult.EvalSetID)
 	assert.Equal(t, appName, evaluationResult.AppName)
 	assert.Len(t, evaluationResult.EvalCases, 1)
-	assert.Equal(t, status.EvalStatusFailed, evaluationResult.OverallStatus)
+	assert.Equal(t, status.EvalStatusPassed, evaluationResult.OverallStatus)
 
 	caseResult := evaluationResult.EvalCases[0]
 	assert.Equal(t, caseID, caseResult.EvalCaseID)
-	assert.Equal(t, status.EvalStatusFailed, caseResult.OverallStatus)
+	assert.Equal(t, status.EvalStatusPassed, caseResult.OverallStatus)
 	assert.Len(t, caseResult.MetricResults, 1)
 	assert.InDelta(t, 1.0, caseResult.MetricResults[0].Score, 0.001)
 	assert.Len(t, caseResult.EvalCaseResults, 2)
@@ -2061,7 +2061,7 @@ func TestAggregateCaseRunsSuccess(t *testing.T) {
 	result, err := aggregateCaseRuns(caseID, runs)
 	assert.NoError(t, err)
 	assert.Equal(t, caseID, result.EvalCaseID)
-	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
 	assert.Len(t, result.MetricResults, 1)
 	assert.InDelta(t, 1.0, result.MetricResults[0].Score, 0.001)
 	assert.Len(t, result.EvalCaseResults, 2)
