@@ -50,6 +50,12 @@ func (stubRunner) Close() error {
 	return nil
 }
 
+type passEvalCaseResultAggregator struct{}
+
+func (passEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	return &service.EvalCaseResultAggregationResult{Score: 1, Status: status.EvalStatusPassed}, nil
+}
+
 type fakeService struct {
 	inferenceResults [][]*service.InferenceResult
 	evaluateResults  []*service.EvalSetRunResult
@@ -429,6 +435,20 @@ func TestNewAgentEvaluatorWithParallelOptionsBuildsLocalService(t *testing.T) {
 		WithEvalCaseParallelism(2),
 		WithEvalCaseParallelInferenceEnabled(true),
 		WithEvalCaseParallelEvaluationEnabled(true),
+	)
+	assert.NoError(t, err)
+	if err != nil {
+		return
+	}
+
+	assert.NoError(t, ae.Close())
+}
+
+func TestNewAgentEvaluatorWithEvalCaseResultAggregatorBuildsLocalService(t *testing.T) {
+	ae, err := New(
+		"app",
+		stubRunner{},
+		WithEvalCaseResultAggregator(passEvalCaseResultAggregator{}),
 	)
 	assert.NoError(t, err)
 	if err != nil {
@@ -2122,6 +2142,37 @@ func TestAggregateCaseRunsHardFailureWithoutMetrics(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
 	assert.Empty(t, result.MetricResults)
 	assert.Len(t, result.EvalCaseResults, 1)
+}
+
+func TestAggregateCaseRunsMultipleRunsFailedWhenRunErrorHasNoMetrics(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusNotEvaluated,
+			ErrorMessage:    "inference failed",
+		},
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			FinalEvalStatus: status.EvalStatusNotEvaluated,
+		},
+	}
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
+	assert.Empty(t, result.MetricResults)
+	assert.Len(t, result.EvalCaseResults, 2)
+}
+
+func TestSummarizeAggregateCaseRunsStatusRejectsInvalidMetricStatus(t *testing.T) {
+	overallStatus, err := summarizeAggregateCaseRunsStatus(
+		[]status.EvalStatus{status.EvalStatusPassed, status.EvalStatusPassed},
+		[]*evalresult.EvalMetricResult{{EvalStatus: status.EvalStatusUnknown}},
+		false,
+	)
+	assert.Error(t, err)
+	assert.Equal(t, status.EvalStatusFailed, overallStatus)
 }
 
 func TestSummarizeOverallStatus(t *testing.T) {
