@@ -7,19 +7,17 @@
 //
 //
 
-// Command okf-gen is a minimal demo of producing an OKF-conformant bundle and
-// then consuming it. Generating a bundle is offline content production, not an
-// agent-runtime concern, so it lives here as an example rather than in the
-// framework: the framework ships the read/validate side (tool/okf) and lets you
-// write concepts with plain yaml + files.
+// Command gen is a minimal demo of producing an OKF-conformant bundle.
+// Generating a bundle is offline content production, not an agent-runtime
+// concern, so it lives here as an example rather than in the framework: the
+// framework ships the read/validate side (tool/okf) and lets you write concepts
+// with plain yaml + files.
 //
 // The flow: draft a few concepts -> write them as markdown with YAML
-// frontmatter -> lint with okf.Validate (strict, producer-side) -> read one
-// back through localokf (tolerant, runtime consumer side).
+// frontmatter -> lint with okf.Validate (strict, producer-side).
 package main
 
 import (
-	"context"
 	"fmt"
 	"net/url"
 	"os"
@@ -29,7 +27,6 @@ import (
 
 	"gopkg.in/yaml.v3"
 	"trpc.group/trpc-go/trpc-agent-go/tool/okf"
-	"trpc.group/trpc-go/trpc-agent-go/tool/okf/localokf"
 )
 
 // draft is one concept to write. It reuses the framework's okf.Frontmatter so
@@ -160,15 +157,4 @@ func main() {
 	if err := validateBundle(dir); err != nil {
 		panic(err)
 	}
-
-	// Read one concept back through the local Store (runtime consumer side).
-	store, err := localokf.New(dir)
-	if err != nil {
-		panic(err)
-	}
-	c, err := store.Read(context.Background(), "research/x402")
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("read %q: type=%s title=%q links=%v\n", c.ID, c.Frontmatter.Type, c.Frontmatter.Title, c.Links)
 }
