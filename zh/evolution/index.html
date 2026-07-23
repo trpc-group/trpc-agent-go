@@ -1190,7 +1190,7 @@
         <li class="md-nav__item">
   <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
-      触发条件
+      离线反思式优化
     </span>
   </a>
   
@@ -1198,6 +1198,15 @@
       
         <li class="md-nav__item">
   <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      触发条件
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
     <span class="md-ellipsis">
       质量门禁
     </span>
@@ -1299,7 +1308,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_10" class="md-nav__link">
+  <a href="#_11" class="md-nav__link">
     <span class="md-ellipsis">
       配置选项
     </span>
@@ -1309,7 +1318,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_11" class="md-nav__link">
+  <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
       服务选项
     </span>
@@ -1332,7 +1341,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_12" class="md-nav__link">
+  <a href="#_13" class="md-nav__link">
     <span class="md-ellipsis">
       写入隔离
     </span>
@@ -1341,7 +1350,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_13" class="md-nav__link">
+  <a href="#_14" class="md-nav__link">
     <span class="md-ellipsis">
       多租户隔离
     </span>
@@ -1360,7 +1369,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_14" class="md-nav__link">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       接入方式
     </span>
@@ -1383,7 +1392,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_15" class="md-nav__link">
+  <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
       示例
     </span>
@@ -3230,7 +3239,7 @@
         <li class="md-nav__item">
   <a href="#_8" class="md-nav__link">
     <span class="md-ellipsis">
-      触发条件
+      离线反思式优化
     </span>
   </a>
   
@@ -3238,6 +3247,15 @@
       
         <li class="md-nav__item">
   <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      触发条件
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
     <span class="md-ellipsis">
       质量门禁
     </span>
@@ -3339,7 +3357,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_10" class="md-nav__link">
+  <a href="#_11" class="md-nav__link">
     <span class="md-ellipsis">
       配置选项
     </span>
@@ -3349,7 +3367,7 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#_11" class="md-nav__link">
+  <a href="#_12" class="md-nav__link">
     <span class="md-ellipsis">
       服务选项
     </span>
@@ -3372,7 +3390,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_12" class="md-nav__link">
+  <a href="#_13" class="md-nav__link">
     <span class="md-ellipsis">
       写入隔离
     </span>
@@ -3381,7 +3399,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_13" class="md-nav__link">
+  <a href="#_14" class="md-nav__link">
     <span class="md-ellipsis">
       多租户隔离
     </span>
@@ -3400,7 +3418,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#_14" class="md-nav__link">
+  <a href="#_15" class="md-nav__link">
     <span class="md-ellipsis">
       接入方式
     </span>
@@ -3423,7 +3441,7 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#_15" class="md-nav__link">
+  <a href="#_16" class="md-nav__link">
     <span class="md-ellipsis">
       示例
     </span>
@@ -3716,7 +3734,181 @@
 </span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">()),</span>
 </span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_8">触发条件</h2>
+<h2 id="_8">离线反思式优化</h2>
+<p>异步 Reviewer 解决的是“从一次已完成 session 中提炼一个候选”。对于已经有可重复
+benchmark 的 skill，<code>evolution/optimization</code> 提供独立的纯 Go 搜索闭环，机制参考
+GEPA，但不依赖 DSPy、Python 或 companion process。</p>
+<p><code>optimization.Optimizer</code> 是与具体算法无关的执行契约。内置 <code>NewGEPA</code> 实现只拥有
+GEPA 的反思和 Pareto 搜索；dataset 隔离、预算、实验记录、holdout 验证和可选 revision
+提交仍由统一生命周期负责。应用在装配阶段选择具体实现，而不是传入运行时算法字符串。</p>
+<p>优化器会：</p>
+<ol>
+<li>先在 validation split 上评估 baseline skill；</li>
+<li>按实例级 Pareto 选择 parent，在 feedback minibatch 上执行，并把当前 skill、case
+   input/expected、score、output、evaluator feedback 和 trace 逐字段限长并进行凭据模式
+   脱敏后交给 reflection model；</li>
+<li>每次只修改一个 <code>SkillSpec</code> component，且 child 只有在同一 minibatch、同一 seed
+   下严格优于 parent 才进入候选池；</li>
+<li>维护逐 case validation winner，并按 Pareto coverage 采样后续 parent；</li>
+<li>搜索结束后才在不可见的 holdout split 上配对比较 baseline/final candidate；</li>
+<li>可选地把通过 holdout 的候选接回现有 revision store。外部候选提交时先停在
+   <code>pending_approval</code>，不会直接修改 live skill；默认会一直等待审批。但如果 service
+   启用了 <code>WithApprovalTimeout</code>，现有 auto-expiration sweeper 之后可能在没有人工审批的
+   情况下把过期 revision promote 并发布。</li>
+</ol>
+<p>应用需要提供与任务相关的 evaluator 和用于反思的 <code>model.Model</code>。reflection model
+使用框架现有 provider adapter 配置，可以与任务模型相同，也可以是独立 reviewer
+模型；evaluator 是唯一需要新增的领域适配：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-3-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-3-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-3-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-3-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-3-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-3-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-3-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-3-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-3-10">10</a></span>
+<span class="normal"><a href="#__codelineno-3-11">11</a></span>
+<span class="normal"><a href="#__codelineno-3-12">12</a></span>
+<span class="normal"><a href="#__codelineno-3-13">13</a></span>
+<span class="normal"><a href="#__codelineno-3-14">14</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">benchmarkEvaluator</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="c1">// runner/sandbox/test harness 依赖</span>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="p">}</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4"></a>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">e</span><span class="w"> </span><span class="o">*</span><span class="nx">benchmarkEvaluator</span><span class="p">)</span><span class="w"> </span><span class="nx">Evaluate</span><span class="p">(</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7"></a><span class="w">    </span><span class="nx">candidate</span><span class="w"> </span><span class="o">*</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">SkillSpec</span><span class="p">,</span>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8"></a><span class="w">    </span><span class="nx">cases</span><span class="w"> </span><span class="p">[]</span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Case</span><span class="p">,</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9"></a><span class="w">    </span><span class="nx">seed</span><span class="w"> </span><span class="kt">int64</span><span class="p">,</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10"></a><span class="p">)</span><span class="w"> </span><span class="p">([]</span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Evaluation</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11"></a><span class="w">    </span><span class="c1">// 在隔离仓库中加载 candidate，执行每个 case，并为每个 case 返回</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12"></a><span class="w">    </span><span class="c1">// 一个 [0,1] 归一化分数及可操作的 feedback/trace。</span>
+</span><span id="__span-3-13"><a id="__codelineno-3-13" name="__codelineno-3-13"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">evaluations</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-3-14"><a id="__codelineno-3-14" name="__codelineno-3-14"></a><span class="p">}</span>
+</span></code></pre></div></td></tr></table></div>
+<p>revision submission 是独立于异步 session learning 的可选能力。默认 service 实现了
+<code>evolution.RevisionSubmitter</code>，但自定义 <code>evolution.Service</code> 可以不实现。应用应当在
+装配阶段只解析一次该能力，这样配置错误会在开始优化前暴露：</p>
+<p>提交过程会把已配置的 skill repository 作为写入边界：update 必须指向已存在的 skill；
+配置 <code>WithManagedSkillsDir</code> 时，该 skill 还必须位于 managed 目录内；create 不得与
+repository 中的已有 skill 重名。这里应传入 agent 实际使用的同一个 repository，确保
+检查能够同时看到 bundled、用户自建和 evolution-managed skill。</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-4-10">10</a></span>
+<span class="normal"><a href="#__codelineno-4-11">11</a></span>
+<span class="normal"><a href="#__codelineno-4-12">12</a></span>
+<span class="normal"><a href="#__codelineno-4-13">13</a></span>
+<span class="normal"><a href="#__codelineno-4-14">14</a></span>
+<span class="normal"><a href="#__codelineno-4-15">15</a></span>
+<span class="normal"><a href="#__codelineno-4-16">16</a></span>
+<span class="normal"><a href="#__codelineno-4-17">17</a></span>
+<span class="normal"><a href="#__codelineno-4-18">18</a></span>
+<span class="normal"><a href="#__codelineno-4-19">19</a></span>
+<span class="normal"><a href="#__codelineno-4-20">20</a></span>
+<span class="normal"><a href="#__codelineno-4-21">21</a></span>
+<span class="normal"><a href="#__codelineno-4-22">22</a></span>
+<span class="normal"><a href="#__codelineno-4-23">23</a></span>
+<span class="normal"><a href="#__codelineno-4-24">24</a></span>
+<span class="normal"><a href="#__codelineno-4-25">25</a></span>
+<span class="normal"><a href="#__codelineno-4-26">26</a></span>
+<span class="normal"><a href="#__codelineno-4-27">27</a></span>
+<span class="normal"><a href="#__codelineno-4-28">28</a></span>
+<span class="normal"><a href="#__codelineno-4-29">29</a></span>
+<span class="normal"><a href="#__codelineno-4-30">30</a></span>
+<span class="normal"><a href="#__codelineno-4-31">31</a></span>
+<span class="normal"><a href="#__codelineno-4-32">32</a></span>
+<span class="normal"><a href="#__codelineno-4-33">33</a></span>
+<span class="normal"><a href="#__codelineno-4-34">34</a></span>
+<span class="normal"><a href="#__codelineno-4-35">35</a></span>
+<span class="normal"><a href="#__codelineno-4-36">36</a></span>
+<span class="normal"><a href="#__codelineno-4-37">37</a></span>
+<span class="normal"><a href="#__codelineno-4-38">38</a></span>
+<span class="normal"><a href="#__codelineno-4-39">39</a></span>
+<span class="normal"><a href="#__codelineno-4-40">40</a></span>
+<span class="normal"><a href="#__codelineno-4-41">41</a></span>
+<span class="normal"><a href="#__codelineno-4-42">42</a></span>
+<span class="normal"><a href="#__codelineno-4-43">43</a></span>
+<span class="normal"><a href="#__codelineno-4-44">44</a></span>
+<span class="normal"><a href="#__codelineno-4-45">45</a></span>
+<span class="normal"><a href="#__codelineno-4-46">46</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="nx">revisionSubmitter</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">RevisionSubmitter</span><span class="p">)</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="k">if</span><span class="w"> </span><span class="p">!</span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Errorf</span><span class="p">(</span><span class="s">&quot;evolution service does not support revision submission&quot;</span><span class="p">)</span>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a><span class="p">}</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="nx">optimizer</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">NewGEPA</span><span class="p">(</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">reflectionModel</span><span class="p">,</span>
+</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="w">    </span><span class="nx">evaluator</span><span class="p">,</span>
+</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithMaxIterations</span><span class="p">(</span><span class="mi">10</span><span class="p">),</span>
+</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithReflectionBatchSize</span><span class="p">(</span><span class="mi">3</span><span class="p">),</span>
+</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithRandomSeed</span><span class="p">(</span><span class="mi">7</span><span class="p">),</span>
+</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithStoreDir</span><span class="p">(</span><span class="s">&quot;./evolution/experiments&quot;</span><span class="p">),</span>
+</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">    </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">WithRevisionSubmitter</span><span class="p">(</span><span class="nx">revisionSubmitter</span><span class="p">),</span>
+</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="p">)</span>
+</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="p">}</span>
+</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a>
+</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="nx">result</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">optimizer</span><span class="p">.</span><span class="nx">Optimize</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Request</span><span class="p">{</span>
+</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a><span class="w">    </span><span class="nx">Seed</span><span class="p">:</span><span class="w">             </span><span class="nx">baselineSpec</span><span class="p">,</span>
+</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="w">    </span><span class="nx">ParentRevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">activeRevisionID</span><span class="p">,</span>
+</span><span id="__span-4-22"><a id="__codelineno-4-22" name="__codelineno-4-22"></a><span class="w">    </span><span class="nx">Submit</span><span class="p">:</span><span class="w">           </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-4-23"><a id="__codelineno-4-23" name="__codelineno-4-23"></a><span class="w">    </span><span class="nx">Dataset</span><span class="p">:</span><span class="w"> </span><span class="nx">optimization</span><span class="p">.</span><span class="nx">Dataset</span><span class="p">{</span>
+</span><span id="__span-4-24"><a id="__codelineno-4-24" name="__codelineno-4-24"></a><span class="w">        </span><span class="nx">ID</span><span class="p">:</span><span class="w">         </span><span class="s">&quot;managed-skill-regression&quot;</span><span class="p">,</span>
+</span><span id="__span-4-25"><a id="__codelineno-4-25" name="__codelineno-4-25"></a><span class="w">        </span><span class="nx">Version</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;v1&quot;</span><span class="p">,</span>
+</span><span id="__span-4-26"><a id="__codelineno-4-26" name="__codelineno-4-26"></a><span class="w">        </span><span class="nx">Feedback</span><span class="p">:</span><span class="w">   </span><span class="nx">feedbackCases</span><span class="p">,</span>
+</span><span id="__span-4-27"><a id="__codelineno-4-27" name="__codelineno-4-27"></a><span class="w">        </span><span class="nx">Validation</span><span class="p">:</span><span class="w"> </span><span class="nx">validationCases</span><span class="p">,</span>
+</span><span id="__span-4-28"><a id="__codelineno-4-28" name="__codelineno-4-28"></a><span class="w">        </span><span class="nx">Holdout</span><span class="p">:</span><span class="w">    </span><span class="nx">holdoutCases</span><span class="p">,</span>
+</span><span id="__span-4-29"><a id="__codelineno-4-29" name="__codelineno-4-29"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-4-30"><a id="__codelineno-4-30" name="__codelineno-4-30"></a><span class="p">})</span>
+</span><span id="__span-4-31"><a id="__codelineno-4-31" name="__codelineno-4-31"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-32"><a id="__codelineno-4-32" name="__codelineno-4-32"></a><span class="w">    </span><span class="c1">// search 可能已经选出 candidate，此后 holdout 或可选交付步骤仍可能失败；</span>
+</span><span id="__span-4-33"><a id="__codelineno-4-33" name="__codelineno-4-33"></a><span class="w">    </span><span class="c1">// 保留非 nil result，便于诊断或重试。</span>
+</span><span id="__span-4-34"><a id="__codelineno-4-34" name="__codelineno-4-34"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">result</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-4-35"><a id="__codelineno-4-35" name="__codelineno-4-35"></a><span class="w">        </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;optimization %s completed but delivery failed: %v\n&quot;</span><span class="p">,</span>
+</span><span id="__span-4-36"><a id="__codelineno-4-36" name="__codelineno-4-36"></a><span class="w">            </span><span class="nx">result</span><span class="p">.</span><span class="nx">ExperimentID</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="p">)</span>
+</span><span id="__span-4-37"><a id="__codelineno-4-37" name="__codelineno-4-37"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-4-38"><a id="__codelineno-4-38" name="__codelineno-4-38"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-4-39"><a id="__codelineno-4-39" name="__codelineno-4-39"></a><span class="p">}</span>
+</span><span id="__span-4-40"><a id="__codelineno-4-40" name="__codelineno-4-40"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n&quot;</span><span class="p">,</span>
+</span><span id="__span-4-41"><a id="__codelineno-4-41" name="__codelineno-4-41"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Name</span><span class="p">,</span>
+</span><span id="__span-4-42"><a id="__codelineno-4-42" name="__codelineno-4-42"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">CandidateValidation</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span>
+</span><span id="__span-4-43"><a id="__codelineno-4-43" name="__codelineno-4-43"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">CandidateHoldout</span><span class="p">.</span><span class="nx">Score</span><span class="p">,</span>
+</span><span id="__span-4-44"><a id="__codelineno-4-44" name="__codelineno-4-44"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">PromotionEligible</span><span class="p">,</span>
+</span><span id="__span-4-45"><a id="__codelineno-4-45" name="__codelineno-4-45"></a><span class="w">    </span><span class="nx">result</span><span class="p">.</span><span class="nx">PromotionReason</span><span class="p">,</span>
+</span><span id="__span-4-46"><a id="__codelineno-4-46" name="__codelineno-4-46"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>optimizer 只借用 submitter；<code>evoSvc</code> 的生命周期仍由应用管理并显式关闭。search 选出
+candidate 后，如果 holdout、最终记录或提交失败，<code>Optimize</code> 会同时返回非 nil 的部分
+result 和 error；各字段表示失败前已完成的阶段，提交错误也会写入 <code>SubmissionReason</code>。</p>
+<p><code>WithStoreDir</code> 是可选的节点本地实验 recorder，与 revision 使用的 <code>CandidateStore</code>
+不是同一个概念。每次 run 独占一个 UUID 目录；在支持权限位的文件系统上，文件权限为
+<code>0600</code>、目录权限为 <code>0700</code>。持久化的每个 evaluator output、feedback、trace 字段最多
+保留 16 KiB。dataset 只在 <code>experiment.json</code> 保存一次；各 evaluation record 通过 case
+ID 引用它，不会在每轮重复写入 input 和 expected。它不负责分布式任务协调，也不是远端
+持久存储。多个节点可以使用同一个兼容
+POSIX 的共享根目录，因为不同实验不会共用目录，但同一个实验只能由一个节点写入。如果
+Pod 磁盘是临时或不共享的，应用需要在实验完成后把目录上传到自己的持久存储。revision
+的 <code>CandidateStore</code> 和 <code>ActivePointer</code> 可以替换，但接口没有定义跨后端事务；多节点部署
+必须把 revision 变更交给单一 owner，或在 service 外部完成串行化。</p>
+<p>三个 split 的 case ID 不能重复，score 必须是 <code>[0,1]</code> 内的有限数值。提交 revision
+即使 <code>Submit=false</code>，结果也会填充 <code>PromotionEligible</code> 和 <code>PromotionReason</code>，调用方
+无需重复实现 holdout 阈值与 critical case 策略。提交 revision 时每个 split 至少需要
+10 个 case。holdout 必须对搜索不可见。optimizer 会先把每个待发送给模型的文本字段
+截取为 UTF-8 安全且有界的首尾片段，再执行与在线 Reviewer 相同的常见凭据模式脱敏。
+该顺序可以限制脱敏过程的内存消耗，但仍无法识别租户特有的敏感数据；应用仍必须在返回前清洗 seed skill、case
+input/expected、evaluator output、feedback 和 trace。文件实验记录还会包含 dataset
+metadata 及上述已清洗字段。candidate agent 应在无生产凭据、无副作用工具的隔离环境中
+执行。</p>
+<h2 id="_9">触发条件</h2>
 <p>Evolution 在 runner 完成每个任务后自动判断是否 review。内置 <code>DefaultReviewPolicy</code> 在以下任一条件满足时触发：</p>
 <table>
 <thead>
@@ -3741,56 +3933,56 @@
 </tbody>
 </table>
 <p>调整内置策略：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-3-1">1</a></span>
-<span class="normal"><a href="#__codelineno-3-2">2</a></span>
-<span class="normal"><a href="#__codelineno-3-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithReviewPolicy</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">DefaultReviewPolicy</span><span class="p">{</span>
-</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2"></a><span class="w">    </span><span class="nx">MinToolCalls</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="c1">// 比默认 4 次更保守</span>
-</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3"></a><span class="p">})</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span>
+<span class="normal"><a href="#__codelineno-5-2">2</a></span>
+<span class="normal"><a href="#__codelineno-5-3">3</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithReviewPolicy</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">DefaultReviewPolicy</span><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2"></a><span class="w">    </span><span class="nx">MinToolCalls</span><span class="p">:</span><span class="w"> </span><span class="mi">6</span><span class="p">,</span><span class="w"> </span><span class="c1">// 比默认 4 次更保守</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <p>自定义策略可以调用中心化服务，也可以实现租户级或实验级规则。Policy 返回 error 时不会推进 review 游标，因此同一段 delta 后续可以重试。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-4-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-4-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-4-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-4-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-4-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-4-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-4-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-4-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-4-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-4-10">10</a></span>
-<span class="normal"><a href="#__codelineno-4-11">11</a></span>
-<span class="normal"><a href="#__codelineno-4-12">12</a></span>
-<span class="normal"><a href="#__codelineno-4-13">13</a></span>
-<span class="normal"><a href="#__codelineno-4-14">14</a></span>
-<span class="normal"><a href="#__codelineno-4-15">15</a></span>
-<span class="normal"><a href="#__codelineno-4-16">16</a></span>
-<span class="normal"><a href="#__codelineno-4-17">17</a></span>
-<span class="normal"><a href="#__codelineno-4-18">18</a></span>
-<span class="normal"><a href="#__codelineno-4-19">19</a></span>
-<span class="normal"><a href="#__codelineno-4-20">20</a></span>
-<span class="normal"><a href="#__codelineno-4-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">centralPolicy</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2"></a><span class="w">    </span><span class="nx">client</span><span class="w"> </span><span class="o">*</span><span class="nx">ReviewDecisionClient</span>
-</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3"></a><span class="p">}</span>
-</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4"></a>
-</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">centralPolicy</span><span class="p">)</span><span class="w"> </span><span class="nx">ShouldReview</span><span class="p">(</span>
-</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
-</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7"></a><span class="w">    </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ReviewPolicyInput</span><span class="p">,</span>
-</span><span id="__span-4-8"><a id="__codelineno-4-8" name="__codelineno-4-8"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-9"><a id="__codelineno-4-9" name="__codelineno-4-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ReviewContext</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-4-10"><a id="__codelineno-4-10" name="__codelineno-4-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-4-11"><a id="__codelineno-4-11" name="__codelineno-4-11"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-4-12"><a id="__codelineno-4-12" name="__codelineno-4-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nx">ShouldReview</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">ReviewRequest</span><span class="p">{</span>
-</span><span id="__span-4-13"><a id="__codelineno-4-13" name="__codelineno-4-13"></a><span class="w">        </span><span class="nx">AppName</span><span class="p">:</span><span class="w">       </span><span class="nx">input</span><span class="p">.</span><span class="nx">AppName</span><span class="p">,</span>
-</span><span id="__span-4-14"><a id="__codelineno-4-14" name="__codelineno-4-14"></a><span class="w">        </span><span class="nx">UserID</span><span class="p">:</span><span class="w">        </span><span class="nx">input</span><span class="p">.</span><span class="nx">UserID</span><span class="p">,</span>
-</span><span id="__span-4-15"><a id="__codelineno-4-15" name="__codelineno-4-15"></a><span class="w">        </span><span class="nx">SessionID</span><span class="p">:</span><span class="w">     </span><span class="nx">input</span><span class="p">.</span><span class="nx">SessionID</span><span class="p">,</span>
-</span><span id="__span-4-16"><a id="__codelineno-4-16" name="__codelineno-4-16"></a><span class="w">        </span><span class="nx">ToolCallCount</span><span class="p">:</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ReviewContext</span><span class="p">.</span><span class="nx">ToolCallCount</span><span class="p">,</span>
-</span><span id="__span-4-17"><a id="__codelineno-4-17" name="__codelineno-4-17"></a><span class="w">        </span><span class="nx">Outcome</span><span class="p">:</span><span class="w">       </span><span class="nx">input</span><span class="p">.</span><span class="nx">Outcome</span><span class="p">,</span>
-</span><span id="__span-4-18"><a id="__codelineno-4-18" name="__codelineno-4-18"></a><span class="w">    </span><span class="p">})</span>
-</span><span id="__span-4-19"><a id="__codelineno-4-19" name="__codelineno-4-19"></a><span class="p">}</span>
-</span><span id="__span-4-20"><a id="__codelineno-4-20" name="__codelineno-4-20"></a>
-</span><span id="__span-4-21"><a id="__codelineno-4-21" name="__codelineno-4-21"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithReviewPolicy</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">centralPolicy</span><span class="p">{</span><span class="nx">client</span><span class="p">:</span><span class="w"> </span><span class="nx">client</span><span class="p">})</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-6-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-6-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-6-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-6-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-6-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-6-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-6-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-6-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-6-10">10</a></span>
+<span class="normal"><a href="#__codelineno-6-11">11</a></span>
+<span class="normal"><a href="#__codelineno-6-12">12</a></span>
+<span class="normal"><a href="#__codelineno-6-13">13</a></span>
+<span class="normal"><a href="#__codelineno-6-14">14</a></span>
+<span class="normal"><a href="#__codelineno-6-15">15</a></span>
+<span class="normal"><a href="#__codelineno-6-16">16</a></span>
+<span class="normal"><a href="#__codelineno-6-17">17</a></span>
+<span class="normal"><a href="#__codelineno-6-18">18</a></span>
+<span class="normal"><a href="#__codelineno-6-19">19</a></span>
+<span class="normal"><a href="#__codelineno-6-20">20</a></span>
+<span class="normal"><a href="#__codelineno-6-21">21</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">centralPolicy</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2"></a><span class="w">    </span><span class="nx">client</span><span class="w"> </span><span class="o">*</span><span class="nx">ReviewDecisionClient</span>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3"></a><span class="p">}</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4"></a>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">p</span><span class="w"> </span><span class="o">*</span><span class="nx">centralPolicy</span><span class="p">)</span><span class="w"> </span><span class="nx">ShouldReview</span><span class="p">(</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6"></a><span class="w">    </span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span>
+</span><span id="__span-6-7"><a id="__codelineno-6-7" name="__codelineno-6-7"></a><span class="w">    </span><span class="nx">input</span><span class="w"> </span><span class="o">*</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ReviewPolicyInput</span><span class="p">,</span>
+</span><span id="__span-6-8"><a id="__codelineno-6-8" name="__codelineno-6-8"></a><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-9"><a id="__codelineno-6-9" name="__codelineno-6-9"></a><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="nx">input</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ReviewContext</span><span class="w"> </span><span class="o">==</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-6-10"><a id="__codelineno-6-10" name="__codelineno-6-10"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-6-11"><a id="__codelineno-6-11" name="__codelineno-6-11"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-6-12"><a id="__codelineno-6-12" name="__codelineno-6-12"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="nx">p</span><span class="p">.</span><span class="nx">client</span><span class="p">.</span><span class="nx">ShouldReview</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">ReviewRequest</span><span class="p">{</span>
+</span><span id="__span-6-13"><a id="__codelineno-6-13" name="__codelineno-6-13"></a><span class="w">        </span><span class="nx">AppName</span><span class="p">:</span><span class="w">       </span><span class="nx">input</span><span class="p">.</span><span class="nx">AppName</span><span class="p">,</span>
+</span><span id="__span-6-14"><a id="__codelineno-6-14" name="__codelineno-6-14"></a><span class="w">        </span><span class="nx">UserID</span><span class="p">:</span><span class="w">        </span><span class="nx">input</span><span class="p">.</span><span class="nx">UserID</span><span class="p">,</span>
+</span><span id="__span-6-15"><a id="__codelineno-6-15" name="__codelineno-6-15"></a><span class="w">        </span><span class="nx">SessionID</span><span class="p">:</span><span class="w">     </span><span class="nx">input</span><span class="p">.</span><span class="nx">SessionID</span><span class="p">,</span>
+</span><span id="__span-6-16"><a id="__codelineno-6-16" name="__codelineno-6-16"></a><span class="w">        </span><span class="nx">ToolCallCount</span><span class="p">:</span><span class="w"> </span><span class="nx">input</span><span class="p">.</span><span class="nx">ReviewContext</span><span class="p">.</span><span class="nx">ToolCallCount</span><span class="p">,</span>
+</span><span id="__span-6-17"><a id="__codelineno-6-17" name="__codelineno-6-17"></a><span class="w">        </span><span class="nx">Outcome</span><span class="p">:</span><span class="w">       </span><span class="nx">input</span><span class="p">.</span><span class="nx">Outcome</span><span class="p">,</span>
+</span><span id="__span-6-18"><a id="__codelineno-6-18" name="__codelineno-6-18"></a><span class="w">    </span><span class="p">})</span>
+</span><span id="__span-6-19"><a id="__codelineno-6-19" name="__codelineno-6-19"></a><span class="p">}</span>
+</span><span id="__span-6-20"><a id="__codelineno-6-20" name="__codelineno-6-20"></a>
+</span><span id="__span-6-21"><a id="__codelineno-6-21" name="__codelineno-6-21"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithReviewPolicy</span><span class="p">(</span><span class="o">&amp;</span><span class="nx">centralPolicy</span><span class="p">{</span><span class="nx">client</span><span class="p">:</span><span class="w"> </span><span class="nx">client</span><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_9">质量门禁</h2>
+<h2 id="_10">质量门禁</h2>
 <h3 id="specgate">SpecGate</h3>
 <p>确定性检查 skill spec 的格式和命名规范：</p>
 <ul>
@@ -3798,7 +3990,7 @@
 <li><strong>名称规范</strong>：不允许包含数字计数（如 "3 Cities"）、不允许超长</li>
 <li><strong>查重</strong>：与已有 skill 完全同名时拒绝</li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-5-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSpecGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSpecGate</span><span class="p">())</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSpecGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSpecGate</span><span class="p">())</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="safetygate">SafetyGate</h3>
 <p>确定性扫描 skill 内容中的安全风险：</p>
@@ -3807,184 +3999,184 @@
 <li><strong>危险命令</strong>：<code>rm -rf /</code>、<code>chmod 777</code>、<code>&gt; /dev/sda</code></li>
 <li><strong>路径穿越</strong>：<code>../../etc/passwd</code>、<code>/root/.ssh/</code></li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-6-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSafetyGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSafetyGate</span><span class="p">())</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSafetyGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewDefaultSafetyGate</span><span class="p">())</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="effectivenessgate">EffectivenessGate</h3>
 <p>基于 session outcome 的效果评估：</p>
 <ul>
 <li>session 结果为 <code>fail</code> 或 <code>agent_error</code> → revision 被拒绝（不从失败中学错误流程）</li>
-<li>session score &lt; 80 → revision 进入 <code>pending_eval</code>（可配置阈值）</li>
+<li>归一化 session score &lt; 0.8 → revision 进入 <code>pending_eval</code>（可配置阈值）</li>
 </ul>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-7-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-7-1"><a id="__codelineno-7-1" name="__codelineno-7-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithEffectivenessGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewOutcomeBasedEffectivenessGate</span><span class="p">())</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithEffectivenessGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewOutcomeBasedEffectivenessGate</span><span class="p">())</span>
 </span></code></pre></div></td></tr></table></div>
 <p>需要配合 Outcome 一起使用：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
-<span class="normal"><a href="#__codelineno-8-2">2</a></span>
-<span class="normal"><a href="#__codelineno-8-3">3</a></span>
-<span class="normal"><a href="#__codelineno-8-4">4</a></span>
-<span class="normal"><a href="#__codelineno-8-5">5</a></span>
-<span class="normal"><a href="#__codelineno-8-6">6</a></span>
-<span class="normal"><a href="#__codelineno-8-7">7</a></span>
-<span class="normal"><a href="#__codelineno-8-8">8</a></span>
-<span class="normal"><a href="#__codelineno-8-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-8-1"><a id="__codelineno-8-1" name="__codelineno-8-1"></a><span class="c1">// 在 benchmark 或评估场景中提供 outcome</span>
-</span><span id="__span-8-2"><a id="__codelineno-8-2" name="__codelineno-8-2"></a><span class="nx">evoSvc</span><span class="p">.</span><span class="nx">EnqueueLearningJob</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">LearningJob</span><span class="p">{</span>
-</span><span id="__span-8-3"><a id="__codelineno-8-3" name="__codelineno-8-3"></a><span class="w">    </span><span class="nx">Session</span><span class="p">:</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span>
-</span><span id="__span-8-4"><a id="__codelineno-8-4" name="__codelineno-8-4"></a><span class="w">    </span><span class="nx">Outcome</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">Outcome</span><span class="p">{</span>
-</span><span id="__span-8-5"><a id="__codelineno-8-5" name="__codelineno-8-5"></a><span class="w">        </span><span class="nx">Status</span><span class="p">:</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">OutcomeSuccess</span><span class="p">,</span><span class="w"> </span><span class="c1">// success / fail / partial / agent_error</span>
-</span><span id="__span-8-6"><a id="__codelineno-8-6" name="__codelineno-8-6"></a><span class="w">        </span><span class="nx">Score</span><span class="p">:</span><span class="w">  </span><span class="nx">floatPtr</span><span class="p">(</span><span class="mf">95.0</span><span class="p">),</span><span class="w">           </span><span class="c1">// 0-100</span>
-</span><span id="__span-8-7"><a id="__codelineno-8-7" name="__codelineno-8-7"></a><span class="w">        </span><span class="nx">Notes</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;all assertions passed&quot;</span><span class="p">,</span>
-</span><span id="__span-8-8"><a id="__codelineno-8-8" name="__codelineno-8-8"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-8-9"><a id="__codelineno-8-9" name="__codelineno-8-9"></a><span class="p">})</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1">1</a></span>
+<span class="normal"><a href="#__codelineno-10-2">2</a></span>
+<span class="normal"><a href="#__codelineno-10-3">3</a></span>
+<span class="normal"><a href="#__codelineno-10-4">4</a></span>
+<span class="normal"><a href="#__codelineno-10-5">5</a></span>
+<span class="normal"><a href="#__codelineno-10-6">6</a></span>
+<span class="normal"><a href="#__codelineno-10-7">7</a></span>
+<span class="normal"><a href="#__codelineno-10-8">8</a></span>
+<span class="normal"><a href="#__codelineno-10-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="c1">// 在 benchmark 或评估场景中提供 outcome</span>
+</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a><span class="nx">evoSvc</span><span class="p">.</span><span class="nx">EnqueueLearningJob</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">LearningJob</span><span class="p">{</span>
+</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="w">    </span><span class="nx">Session</span><span class="p">:</span><span class="w"> </span><span class="nx">sess</span><span class="p">,</span>
+</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="w">    </span><span class="nx">Outcome</span><span class="p">:</span><span class="w"> </span><span class="o">&amp;</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">Outcome</span><span class="p">{</span>
+</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a><span class="w">        </span><span class="nx">Status</span><span class="p">:</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">OutcomeSuccess</span><span class="p">,</span><span class="w"> </span><span class="c1">// success / fail / partial / agent_error</span>
+</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="w">        </span><span class="nx">Score</span><span class="p">:</span><span class="w">  </span><span class="nx">floatPtr</span><span class="p">(</span><span class="mf">0.95</span><span class="p">),</span><span class="w">           </span><span class="c1">// 归一化到 0-1</span>
+</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="w">        </span><span class="nx">Notes</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;all assertions passed&quot;</span><span class="p">,</span>
+</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="humangate">HumanGate（可选人工审批）</h3>
 <p>在所有自动门禁通过后，可选择拦截 revision 等待人工审批：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1">1</a></span>
-<span class="normal"><a href="#__codelineno-9-2">2</a></span>
-<span class="normal"><a href="#__codelineno-9-3">3</a></span>
-<span class="normal"><a href="#__codelineno-9-4">4</a></span>
-<span class="normal"><a href="#__codelineno-9-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-9-1"><a id="__codelineno-9-1" name="__codelineno-9-1"></a><span class="c1">// 拦截所有 revision</span>
-</span><span id="__span-9-2"><a id="__codelineno-9-2" name="__codelineno-9-2"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewAlwaysHoldGate</span><span class="p">())</span>
-</span><span id="__span-9-3"><a id="__codelineno-9-3" name="__codelineno-9-3"></a>
-</span><span id="__span-9-4"><a id="__codelineno-9-4" name="__codelineno-9-4"></a><span class="c1">// 只拦截新建 skill，update 自动放行</span>
-</span><span id="__span-9-5"><a id="__codelineno-9-5" name="__codelineno-9-5"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">())</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span>
+<span class="normal"><a href="#__codelineno-11-2">2</a></span>
+<span class="normal"><a href="#__codelineno-11-3">3</a></span>
+<span class="normal"><a href="#__codelineno-11-4">4</a></span>
+<span class="normal"><a href="#__codelineno-11-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="c1">// 拦截所有 revision</span>
+</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewAlwaysHoldGate</span><span class="p">())</span>
+</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a>
+</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="c1">// 只拦截新建 skill，update 自动放行</span>
+</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">())</span>
 </span></code></pre></div></td></tr></table></div>
 <p>HumanGate 可拦截 create/update/delete revision。被拦截的 revision 状态为
 <code>pending_approval</code>，需通过 <code>ApprovalService</code> 审批：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-10-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-10-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-10-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-10-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-10-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-10-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-10-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-10-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-10-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-10-10">10</a></span>
-<span class="normal"><a href="#__codelineno-10-11">11</a></span>
-<span class="normal"><a href="#__codelineno-10-12">12</a></span>
-<span class="normal"><a href="#__codelineno-10-13">13</a></span>
-<span class="normal"><a href="#__codelineno-10-14">14</a></span>
-<span class="normal"><a href="#__codelineno-10-15">15</a></span>
-<span class="normal"><a href="#__codelineno-10-16">16</a></span>
-<span class="normal"><a href="#__codelineno-10-17">17</a></span>
-<span class="normal"><a href="#__codelineno-10-18">18</a></span>
-<span class="normal"><a href="#__codelineno-10-19">19</a></span>
-<span class="normal"><a href="#__codelineno-10-20">20</a></span>
-<span class="normal"><a href="#__codelineno-10-21">21</a></span>
-<span class="normal"><a href="#__codelineno-10-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-10-1"><a id="__codelineno-10-1" name="__codelineno-10-1"></a><span class="nx">approvalSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewApprovalService</span><span class="p">(</span><span class="nx">store</span><span class="p">,</span><span class="w"> </span><span class="nx">pointer</span><span class="p">,</span><span class="w"> </span><span class="nx">publisher</span><span class="p">)</span>
-</span><span id="__span-10-2"><a id="__codelineno-10-2" name="__codelineno-10-2"></a>
-</span><span id="__span-10-3"><a id="__codelineno-10-3" name="__codelineno-10-3"></a><span class="c1">// 查看待审列表</span>
-</span><span id="__span-10-4"><a id="__codelineno-10-4" name="__codelineno-10-4"></a><span class="nx">pending</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">ListPending</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ListPendingOpts</span><span class="p">{})</span>
-</span><span id="__span-10-5"><a id="__codelineno-10-5" name="__codelineno-10-5"></a>
-</span><span id="__span-10-6"><a id="__codelineno-10-6" name="__codelineno-10-6"></a><span class="c1">// 批准</span>
-</span><span id="__span-10-7"><a id="__codelineno-10-7" name="__codelineno-10-7"></a><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Decide</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalDecision</span><span class="p">{</span>
-</span><span id="__span-10-8"><a id="__codelineno-10-8" name="__codelineno-10-8"></a><span class="w">    </span><span class="nx">RevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">RevisionID</span><span class="p">,</span>
-</span><span id="__span-10-9"><a id="__codelineno-10-9" name="__codelineno-10-9"></a><span class="w">    </span><span class="nx">SkillID</span><span class="p">:</span><span class="w">    </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">SkillID</span><span class="p">,</span>
-</span><span id="__span-10-10"><a id="__codelineno-10-10" name="__codelineno-10-10"></a><span class="w">    </span><span class="nx">Approved</span><span class="p">:</span><span class="w">   </span><span class="kc">true</span><span class="p">,</span>
-</span><span id="__span-10-11"><a id="__codelineno-10-11" name="__codelineno-10-11"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
-</span><span id="__span-10-12"><a id="__codelineno-10-12" name="__codelineno-10-12"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;looks good&quot;</span><span class="p">,</span>
-</span><span id="__span-10-13"><a id="__codelineno-10-13" name="__codelineno-10-13"></a><span class="p">})</span>
-</span><span id="__span-10-14"><a id="__codelineno-10-14" name="__codelineno-10-14"></a>
-</span><span id="__span-10-15"><a id="__codelineno-10-15" name="__codelineno-10-15"></a><span class="c1">// 拒绝</span>
-</span><span id="__span-10-16"><a id="__codelineno-10-16" name="__codelineno-10-16"></a><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Decide</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalDecision</span><span class="p">{</span>
-</span><span id="__span-10-17"><a id="__codelineno-10-17" name="__codelineno-10-17"></a><span class="w">    </span><span class="nx">RevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">RevisionID</span><span class="p">,</span>
-</span><span id="__span-10-18"><a id="__codelineno-10-18" name="__codelineno-10-18"></a><span class="w">    </span><span class="nx">SkillID</span><span class="p">:</span><span class="w">    </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">SkillID</span><span class="p">,</span>
-</span><span id="__span-10-19"><a id="__codelineno-10-19" name="__codelineno-10-19"></a><span class="w">    </span><span class="nx">Approved</span><span class="p">:</span><span class="w">   </span><span class="kc">false</span><span class="p">,</span>
-</span><span id="__span-10-20"><a id="__codelineno-10-20" name="__codelineno-10-20"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
-</span><span id="__span-10-21"><a id="__codelineno-10-21" name="__codelineno-10-21"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;steps too vague&quot;</span><span class="p">,</span>
-</span><span id="__span-10-22"><a id="__codelineno-10-22" name="__codelineno-10-22"></a><span class="p">})</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-12-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-12-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-12-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-12-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-12-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-12-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-12-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-12-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-12-10">10</a></span>
+<span class="normal"><a href="#__codelineno-12-11">11</a></span>
+<span class="normal"><a href="#__codelineno-12-12">12</a></span>
+<span class="normal"><a href="#__codelineno-12-13">13</a></span>
+<span class="normal"><a href="#__codelineno-12-14">14</a></span>
+<span class="normal"><a href="#__codelineno-12-15">15</a></span>
+<span class="normal"><a href="#__codelineno-12-16">16</a></span>
+<span class="normal"><a href="#__codelineno-12-17">17</a></span>
+<span class="normal"><a href="#__codelineno-12-18">18</a></span>
+<span class="normal"><a href="#__codelineno-12-19">19</a></span>
+<span class="normal"><a href="#__codelineno-12-20">20</a></span>
+<span class="normal"><a href="#__codelineno-12-21">21</a></span>
+<span class="normal"><a href="#__codelineno-12-22">22</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nx">approvalSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewApprovalService</span><span class="p">(</span><span class="nx">store</span><span class="p">,</span><span class="w"> </span><span class="nx">pointer</span><span class="p">,</span><span class="w"> </span><span class="nx">publisher</span><span class="p">)</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="c1">// 查看待审列表</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="nx">pending</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">ListPending</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ListPendingOpts</span><span class="p">{})</span>
+</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a>
+</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="c1">// 批准</span>
+</span><span id="__span-12-7"><a id="__codelineno-12-7" name="__codelineno-12-7"></a><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Decide</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalDecision</span><span class="p">{</span>
+</span><span id="__span-12-8"><a id="__codelineno-12-8" name="__codelineno-12-8"></a><span class="w">    </span><span class="nx">RevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">RevisionID</span><span class="p">,</span>
+</span><span id="__span-12-9"><a id="__codelineno-12-9" name="__codelineno-12-9"></a><span class="w">    </span><span class="nx">SkillID</span><span class="p">:</span><span class="w">    </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">SkillID</span><span class="p">,</span>
+</span><span id="__span-12-10"><a id="__codelineno-12-10" name="__codelineno-12-10"></a><span class="w">    </span><span class="nx">Approved</span><span class="p">:</span><span class="w">   </span><span class="kc">true</span><span class="p">,</span>
+</span><span id="__span-12-11"><a id="__codelineno-12-11" name="__codelineno-12-11"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
+</span><span id="__span-12-12"><a id="__codelineno-12-12" name="__codelineno-12-12"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;looks good&quot;</span><span class="p">,</span>
+</span><span id="__span-12-13"><a id="__codelineno-12-13" name="__codelineno-12-13"></a><span class="p">})</span>
+</span><span id="__span-12-14"><a id="__codelineno-12-14" name="__codelineno-12-14"></a>
+</span><span id="__span-12-15"><a id="__codelineno-12-15" name="__codelineno-12-15"></a><span class="c1">// 拒绝</span>
+</span><span id="__span-12-16"><a id="__codelineno-12-16" name="__codelineno-12-16"></a><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Decide</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalDecision</span><span class="p">{</span>
+</span><span id="__span-12-17"><a id="__codelineno-12-17" name="__codelineno-12-17"></a><span class="w">    </span><span class="nx">RevisionID</span><span class="p">:</span><span class="w"> </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">RevisionID</span><span class="p">,</span>
+</span><span id="__span-12-18"><a id="__codelineno-12-18" name="__codelineno-12-18"></a><span class="w">    </span><span class="nx">SkillID</span><span class="p">:</span><span class="w">    </span><span class="nx">pending</span><span class="p">[</span><span class="mi">0</span><span class="p">].</span><span class="nx">SkillID</span><span class="p">,</span>
+</span><span id="__span-12-19"><a id="__codelineno-12-19" name="__codelineno-12-19"></a><span class="w">    </span><span class="nx">Approved</span><span class="p">:</span><span class="w">   </span><span class="kc">false</span><span class="p">,</span>
+</span><span id="__span-12-20"><a id="__codelineno-12-20" name="__codelineno-12-20"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w">   </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
+</span><span id="__span-12-21"><a id="__codelineno-12-21" name="__codelineno-12-21"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">    </span><span class="s">&quot;steps too vague&quot;</span><span class="p">,</span>
+</span><span id="__span-12-22"><a id="__codelineno-12-22" name="__codelineno-12-22"></a><span class="p">})</span>
 </span></code></pre></div></td></tr></table></div>
 <p>审批结果会结构化写入 <code>HumanReport</code>（<code>Approved</code>、<code>Reviewer</code>、<code>Comment</code>、
 <code>DecidedAt</code>）并追加 audit log。被 HumanGate 拦截的 delete revision 在批准前不会删除 live skill；批准后会调用 <code>Publisher.DeleteSkill</code> 并清空 active pointer。</p>
 <h4 id="auto-expire">自动过期（Auto-expire）</h4>
 <p>为防止 <code>pending_approval</code> 状态的 revision 永久阻塞，可配置过期时长。超过该时长仍未被人工处理的 revision 将自动被 promote 到 <code>active</code>（Reviewer 字段记录为 <code>auto-expire</code>，可在 audit log 中查询）：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-11-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-11-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-11-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-11-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-11-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-11-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-11-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-11-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-11-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">reviewerModel</span><span class="p">,</span>
-</span><span id="__span-11-2"><a id="__codelineno-11-2" name="__codelineno-11-2"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="nx">skillsDir</span><span class="p">),</span>
-</span><span id="__span-11-3"><a id="__codelineno-11-3" name="__codelineno-11-3"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
-</span><span id="__span-11-4"><a id="__codelineno-11-4" name="__codelineno-11-4"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithCandidateStore</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileCandidateStore</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">)),</span>
-</span><span id="__span-11-5"><a id="__codelineno-11-5" name="__codelineno-11-5"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithActivePointer</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileActivePointer</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">)),</span>
-</span><span id="__span-11-6"><a id="__codelineno-11-6" name="__codelineno-11-6"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">()),</span>
-</span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithApprovalTimeout</span><span class="p">(</span><span class="mi">72</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span><span class="w"> </span><span class="c1">// 3 天后自动 promote</span>
-</span><span id="__span-11-8"><a id="__codelineno-11-8" name="__codelineno-11-8"></a><span class="w">    </span><span class="c1">// 可选：覆盖默认扫描周期 min(timeout/4, 1h)</span>
-</span><span id="__span-11-9"><a id="__codelineno-11-9" name="__codelineno-11-9"></a><span class="w">    </span><span class="c1">// evolution.WithApprovalSweepInterval(15*time.Minute),</span>
-</span><span id="__span-11-10"><a id="__codelineno-11-10" name="__codelineno-11-10"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-13-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-13-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-13-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-13-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-13-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-13-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-13-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-13-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-13-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">reviewerModel</span><span class="p">,</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="nx">skillsDir</span><span class="p">),</span>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepository</span><span class="p">(</span><span class="nx">repo</span><span class="p">),</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithCandidateStore</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileCandidateStore</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">)),</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithActivePointer</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewFileActivePointer</span><span class="p">(</span><span class="nx">revisionsDir</span><span class="p">)),</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithHumanGate</span><span class="p">(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewCreateOnlyHoldGate</span><span class="p">()),</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithApprovalTimeout</span><span class="p">(</span><span class="mi">72</span><span class="o">*</span><span class="nx">time</span><span class="p">.</span><span class="nx">Hour</span><span class="p">),</span><span class="w"> </span><span class="c1">// 3 天后自动 promote</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="c1">// 可选：覆盖默认扫描周期 min(timeout/4, 1h)</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="w">    </span><span class="c1">// evolution.WithApprovalSweepInterval(15*time.Minute),</span>
+</span><span id="__span-13-10"><a id="__codelineno-13-10" name="__codelineno-13-10"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>扫描器以后台 goroutine 形式运行，<code>Service.Close()</code> 时退出。<code>ApprovalTimeout</code> 设为 0（默认）即关闭该机制。</p>
 <p>在 <code>openclaw</code> YAML 中使用 duration 字符串配置：</p>
-<div class="language-yaml highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
-<span class="normal"><a href="#__codelineno-12-2">2</a></span>
-<span class="normal"><a href="#__codelineno-12-3">3</a></span>
-<span class="normal"><a href="#__codelineno-12-4">4</a></span>
-<span class="normal"><a href="#__codelineno-12-5">5</a></span>
-<span class="normal"><a href="#__codelineno-12-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nt">evolution</span><span class="p">:</span>
-</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">  </span><span class="nt">human_gate</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;create&quot;</span>
-</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="w">  </span><span class="nt">approval_timeout</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;72h&quot;</span>
-</span><span id="__span-12-5"><a id="__codelineno-12-5" name="__codelineno-12-5"></a><span class="w">  </span><span class="c1"># 可选：默认 min(approval_timeout/4, 1h)</span>
-</span><span id="__span-12-6"><a id="__codelineno-12-6" name="__codelineno-12-6"></a><span class="w">  </span><span class="nt">approval_sweep_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;15m&quot;</span>
+<div class="language-yaml highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span>
+<span class="normal"><a href="#__codelineno-14-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nt">evolution</span><span class="p">:</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">  </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">  </span><span class="nt">human_gate</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;create&quot;</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">  </span><span class="nt">approval_timeout</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;72h&quot;</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="w">  </span><span class="c1"># 可选：默认 min(approval_timeout/4, 1h)</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="w">  </span><span class="nt">approval_sweep_interval</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;15m&quot;</span>
 </span></code></pre></div></td></tr></table></div>
 <h4 id="rollback">Rollback（版本回退）</h4>
 <p>当新版本质量回退时，可将当前 active revision 回退到此前的 archived 版本：当前 active 被降级为 <code>archived</code>，目标 archived 被重新 promote 为 <code>active</code>，并立即更新 publisher，agent 下次读取时即生效。</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
-<span class="normal"><a href="#__codelineno-13-2">2</a></span>
-<span class="normal"><a href="#__codelineno-13-3">3</a></span>
-<span class="normal"><a href="#__codelineno-13-4">4</a></span>
-<span class="normal"><a href="#__codelineno-13-5">5</a></span>
-<span class="normal"><a href="#__codelineno-13-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Rollback</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;weather-monitor&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">RollbackOpts</span><span class="p">{</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;regressed quality&quot;</span><span class="p">,</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="c1">// TargetRevisionID: &quot;20260601T120000.000-abc123&quot;, // 可选：指定具体的 archived revision</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="p">})</span>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;rolled back %s → %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">PreviousActiveID</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">RestoredID</span><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span>
+<span class="normal"><a href="#__codelineno-15-3">3</a></span>
+<span class="normal"><a href="#__codelineno-15-4">4</a></span>
+<span class="normal"><a href="#__codelineno-15-5">5</a></span>
+<span class="normal"><a href="#__codelineno-15-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="nx">res</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">approvalSvc</span><span class="p">.</span><span class="nx">Rollback</span><span class="p">(</span><span class="nx">ctx</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;weather-monitor&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">RollbackOpts</span><span class="p">{</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="nx">Reviewer</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;alice@example.com&quot;</span><span class="p">,</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">Comment</span><span class="p">:</span><span class="w">  </span><span class="s">&quot;regressed quality&quot;</span><span class="p">,</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="w">    </span><span class="c1">// TargetRevisionID: &quot;20260601T120000.000-abc123&quot;, // 可选：指定具体的 archived revision</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="p">})</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;rolled back %s → %s\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">PreviousActiveID</span><span class="p">,</span><span class="w"> </span><span class="nx">res</span><span class="p">.</span><span class="nx">RestoredID</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>TargetRevisionID</code> 为空时，自动选择 revision store 排序中最新的 archived revision。若没有可回退的 archived revision，返回 <code>ErrNoArchivedRevision</code>。</p>
 <p><code>openclaw</code> CLI 提供同名命令：</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a>openclaw<span class="w"> </span>evolution<span class="w"> </span>rollback<span class="w"> </span>&lt;skill-id&gt;<span class="w"> </span>--dir<span class="w"> </span>&lt;revisions-dir&gt;<span class="w"> </span><span class="o">[</span>--revision<span class="w"> </span>&lt;rev-id&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--reviewer<span class="w"> </span>&lt;id&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--comment<span class="w"> </span>&lt;text&gt;<span class="o">]</span>
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>openclaw<span class="w"> </span>evolution<span class="w"> </span>rollback<span class="w"> </span>&lt;skill-id&gt;<span class="w"> </span>--dir<span class="w"> </span>&lt;revisions-dir&gt;<span class="w"> </span><span class="o">[</span>--revision<span class="w"> </span>&lt;rev-id&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--reviewer<span class="w"> </span>&lt;id&gt;<span class="o">]</span><span class="w"> </span><span class="o">[</span>--comment<span class="w"> </span>&lt;text&gt;<span class="o">]</span>
 </span></code></pre></div></td></tr></table></div>
 <h3 id="gate">自定义 Gate</h3>
 <p>实现对应接口即可接入自定义门禁：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-15-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-15-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-15-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-15-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-15-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-15-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-15-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-15-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-15-10">10</a></span>
-<span class="normal"><a href="#__codelineno-15-11">11</a></span>
-<span class="normal"><a href="#__codelineno-15-12">12</a></span>
-<span class="normal"><a href="#__codelineno-15-13">13</a></span>
-<span class="normal"><a href="#__codelineno-15-14">14</a></span>
-<span class="normal"><a href="#__codelineno-15-15">15</a></span>
-<span class="normal"><a href="#__codelineno-15-16">16</a></span>
-<span class="normal"><a href="#__codelineno-15-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">HumanGate</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="nx">ShouldHold</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">rev</span><span class="w"> </span><span class="o">*</span><span class="nx">Revision</span><span class="p">,</span><span class="w"> </span><span class="nx">outcome</span><span class="w"> </span><span class="o">*</span><span class="nx">Outcome</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="p">}</span>
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a>
-</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="c1">// 示例：只拦截 description 中包含敏感词的 skill</span>
-</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">sensitiveWordGate</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-7"><a id="__codelineno-15-7" name="__codelineno-15-7"></a><span class="w">    </span><span class="nx">words</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
-</span><span id="__span-15-8"><a id="__codelineno-15-8" name="__codelineno-15-8"></a><span class="p">}</span>
-</span><span id="__span-15-9"><a id="__codelineno-15-9" name="__codelineno-15-9"></a>
-</span><span id="__span-15-10"><a id="__codelineno-15-10" name="__codelineno-15-10"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">g</span><span class="w"> </span><span class="o">*</span><span class="nx">sensitiveWordGate</span><span class="p">)</span><span class="w"> </span><span class="nx">ShouldHold</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">rev</span><span class="w"> </span><span class="o">*</span><span class="nx">Revision</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">Outcome</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-11"><a id="__codelineno-15-11" name="__codelineno-15-11"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">w</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">g</span><span class="p">.</span><span class="nx">words</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-12"><a id="__codelineno-15-12" name="__codelineno-15-12"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">rev</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Description</span><span class="p">,</span><span class="w"> </span><span class="nx">w</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-15-13"><a id="__codelineno-15-13" name="__codelineno-15-13"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-15-14"><a id="__codelineno-15-14" name="__codelineno-15-14"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-15-15"><a id="__codelineno-15-15" name="__codelineno-15-15"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-15-16"><a id="__codelineno-15-16" name="__codelineno-15-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
-</span><span id="__span-15-17"><a id="__codelineno-15-17" name="__codelineno-15-17"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-17-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-17-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-17-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-17-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-17-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-17-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-17-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-17-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-17-10">10</a></span>
+<span class="normal"><a href="#__codelineno-17-11">11</a></span>
+<span class="normal"><a href="#__codelineno-17-12">12</a></span>
+<span class="normal"><a href="#__codelineno-17-13">13</a></span>
+<span class="normal"><a href="#__codelineno-17-14">14</a></span>
+<span class="normal"><a href="#__codelineno-17-15">15</a></span>
+<span class="normal"><a href="#__codelineno-17-16">16</a></span>
+<span class="normal"><a href="#__codelineno-17-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a><span class="kd">type</span><span class="w"> </span><span class="nx">HumanGate</span><span class="w"> </span><span class="kd">interface</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a><span class="w">    </span><span class="nx">ShouldHold</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">rev</span><span class="w"> </span><span class="o">*</span><span class="nx">Revision</span><span class="p">,</span><span class="w"> </span><span class="nx">outcome</span><span class="w"> </span><span class="o">*</span><span class="nx">Outcome</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span>
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a><span class="p">}</span>
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>
+</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a><span class="c1">// 示例：只拦截 description 中包含敏感词的 skill</span>
+</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a><span class="kd">type</span><span class="w"> </span><span class="nx">sensitiveWordGate</span><span class="w"> </span><span class="kd">struct</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a><span class="w">    </span><span class="nx">words</span><span class="w"> </span><span class="p">[]</span><span class="kt">string</span>
+</span><span id="__span-17-8"><a id="__codelineno-17-8" name="__codelineno-17-8"></a><span class="p">}</span>
+</span><span id="__span-17-9"><a id="__codelineno-17-9" name="__codelineno-17-9"></a>
+</span><span id="__span-17-10"><a id="__codelineno-17-10" name="__codelineno-17-10"></a><span class="kd">func</span><span class="w"> </span><span class="p">(</span><span class="nx">g</span><span class="w"> </span><span class="o">*</span><span class="nx">sensitiveWordGate</span><span class="p">)</span><span class="w"> </span><span class="nx">ShouldHold</span><span class="p">(</span><span class="nx">_</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">rev</span><span class="w"> </span><span class="o">*</span><span class="nx">Revision</span><span class="p">,</span><span class="w"> </span><span class="nx">_</span><span class="w"> </span><span class="o">*</span><span class="nx">Outcome</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="kt">bool</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-11"><a id="__codelineno-17-11" name="__codelineno-17-11"></a><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="nx">_</span><span class="p">,</span><span class="w"> </span><span class="nx">w</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="k">range</span><span class="w"> </span><span class="nx">g</span><span class="p">.</span><span class="nx">words</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-12"><a id="__codelineno-17-12" name="__codelineno-17-12"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">strings</span><span class="p">.</span><span class="nx">Contains</span><span class="p">(</span><span class="nx">rev</span><span class="p">.</span><span class="nx">Spec</span><span class="p">.</span><span class="nx">Description</span><span class="p">,</span><span class="w"> </span><span class="nx">w</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-17-13"><a id="__codelineno-17-13" name="__codelineno-17-13"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-17-14"><a id="__codelineno-17-14" name="__codelineno-17-14"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-17-15"><a id="__codelineno-17-15" name="__codelineno-17-15"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-17-16"><a id="__codelineno-17-16" name="__codelineno-17-16"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">nil</span>
+</span><span id="__span-17-17"><a id="__codelineno-17-17" name="__codelineno-17-17"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
 <h2 id="reconciler">Reconciler（确定性去重）</h2>
 <p>Reconciler 在门禁之前对 reviewer 输出执行以下规则，防止技能库膨胀：</p>
@@ -4022,44 +4214,44 @@
 <p>所有规则都是确定性的（纯字符串操作），不消耗 LLM token。</p>
 <h2 id="revision">Revision 生命周期</h2>
 <p>每次技能变更都存储为不可变 revision：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-16-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-16-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-16-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-16-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-16-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-16-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-16-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-16-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-16-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>pending ──→ [SpecGate 失败]      ──→ rejected
-</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a>        ──→ [SafetyGate 失败]    ──→ rejected
-</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a>        ──→ [EffectivenessGate]  ──→ pending_eval
-</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a>        ──→ [HumanGate 拦截]     ──→ pending_approval
-</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a>        ──→ [全部通过]           ──→ active
-</span><span id="__span-16-6"><a id="__codelineno-16-6" name="__codelineno-16-6"></a>
-</span><span id="__span-16-7"><a id="__codelineno-16-7" name="__codelineno-16-7"></a>pending_approval ──→ [批准] ──→ active
-</span><span id="__span-16-8"><a id="__codelineno-16-8" name="__codelineno-16-8"></a>                 ──→ [拒绝] ──→ rejected
-</span><span id="__span-16-9"><a id="__codelineno-16-9" name="__codelineno-16-9"></a>
-</span><span id="__span-16-10"><a id="__codelineno-16-10" name="__codelineno-16-10"></a>active ──→ [被新版本取代] ──→ archived（可回滚）
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-18-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-18-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-18-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-18-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-18-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-18-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-18-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-18-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-18-10">10</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>pending ──→ [SpecGate 失败]      ──→ rejected
+</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a>        ──→ [SafetyGate 失败]    ──→ rejected
+</span><span id="__span-18-3"><a id="__codelineno-18-3" name="__codelineno-18-3"></a>        ──→ [EffectivenessGate]  ──→ pending_eval
+</span><span id="__span-18-4"><a id="__codelineno-18-4" name="__codelineno-18-4"></a>        ──→ [HumanGate 拦截]     ──→ pending_approval
+</span><span id="__span-18-5"><a id="__codelineno-18-5" name="__codelineno-18-5"></a>        ──→ [全部通过]           ──→ active
+</span><span id="__span-18-6"><a id="__codelineno-18-6" name="__codelineno-18-6"></a>
+</span><span id="__span-18-7"><a id="__codelineno-18-7" name="__codelineno-18-7"></a>pending_approval ──→ [批准] ──→ active
+</span><span id="__span-18-8"><a id="__codelineno-18-8" name="__codelineno-18-8"></a>                 ──→ [拒绝] ──→ rejected
+</span><span id="__span-18-9"><a id="__codelineno-18-9" name="__codelineno-18-9"></a>
+</span><span id="__span-18-10"><a id="__codelineno-18-10" name="__codelineno-18-10"></a>active ──→ [被新版本取代] ──→ archived（可回滚）
 </span></code></pre></div></td></tr></table></div>
 <p>delete revision 被批准后会记录该删除 revision，并清空 active pointer，避免旧版本继续可见。</p>
 <p>磁盘结构：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
-<span class="normal"><a href="#__codelineno-17-2">2</a></span>
-<span class="normal"><a href="#__codelineno-17-3">3</a></span>
-<span class="normal"><a href="#__codelineno-17-4">4</a></span>
-<span class="normal"><a href="#__codelineno-17-5">5</a></span>
-<span class="normal"><a href="#__codelineno-17-6">6</a></span>
-<span class="normal"><a href="#__codelineno-17-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>revisions/
-</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>  &lt;skill-id&gt;/
-</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>    revisions/
-</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>      &lt;revision-id&gt;/
-</span><span id="__span-17-5"><a id="__codelineno-17-5" name="__codelineno-17-5"></a>        meta.json          ← Revision 完整快照
-</span><span id="__span-17-6"><a id="__codelineno-17-6" name="__codelineno-17-6"></a>    active.txt             ← 当前生效的 revision ID
-</span><span id="__span-17-7"><a id="__codelineno-17-7" name="__codelineno-17-7"></a>    audit.log              ← append-only 审计日志（JSON lines）
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
+<span class="normal"><a href="#__codelineno-19-2">2</a></span>
+<span class="normal"><a href="#__codelineno-19-3">3</a></span>
+<span class="normal"><a href="#__codelineno-19-4">4</a></span>
+<span class="normal"><a href="#__codelineno-19-5">5</a></span>
+<span class="normal"><a href="#__codelineno-19-6">6</a></span>
+<span class="normal"><a href="#__codelineno-19-7">7</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a>revisions/
+</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a>  &lt;skill-id&gt;/
+</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a>    revisions/
+</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a>      &lt;revision-id&gt;/
+</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a>        meta.json          ← Revision 完整快照
+</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a>    active.txt             ← 当前生效的 revision ID
+</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a>    audit.log              ← append-only 审计日志（JSON lines）
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_10">配置选项</h2>
-<h3 id="_11">服务选项</h3>
+<h2 id="_11">配置选项</h2>
+<h3 id="_12">服务选项</h3>
 <table>
 <thead>
 <tr>
@@ -4173,11 +4365,11 @@
 </table>
 <h3 id="worker">Worker 配置</h3>
 <p>Worker 在后台异步处理 learning job。当 queue 满时自动 fallback 到同步处理，确保不丢失任何 job：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span>
-<span class="normal"><a href="#__codelineno-18-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithWorkerNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">   </span><span class="c1">// 2 个并发 worker</span>
-</span><span id="__span-18-2"><a id="__codelineno-18-2" name="__codelineno-18-2"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithQueueSize</span><span class="p">(</span><span class="mi">32</span><span class="p">),</span><span class="w">  </span><span class="c1">// 每个 worker 32 job 缓冲</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
+<span class="normal"><a href="#__codelineno-20-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithWorkerNum</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span><span class="w">   </span><span class="c1">// 2 个并发 worker</span>
+</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithQueueSize</span><span class="p">(</span><span class="mi">32</span><span class="p">),</span><span class="w">  </span><span class="c1">// 每个 worker 32 job 缓冲</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_12">写入隔离</h2>
+<h2 id="_13">写入隔离</h2>
 <p>当配置了 <code>ManagedSkillsDir</code> 后，evolution 的写入操作遵循以下隔离规则：</p>
 <ul>
 <li><strong>Create</strong>：始终允许 — 新 skill 写入 ManagedSkillsDir</li>
@@ -4185,7 +4377,7 @@
 <li><strong>Delete</strong>：同 update 规则</li>
 </ul>
 <p>这确保 evolution 不会意外修改用户手写技能或内置技能。</p>
-<h2 id="_13">多租户隔离</h2>
+<h2 id="_14">多租户隔离</h2>
 <p>默认情况下（<code>SkillScopeNone</code>），所有 session 共享同一套技能库与 revision 目录。在多 app / 多用户场景中，可以让 evolution 按 <strong>app</strong> 或 <strong>app+user</strong> 维度隔离技能，避免不同租户互相污染学到的技能。</p>
 <h3 id="skillscopemode">隔离粒度（<code>SkillScopeMode</code>）</h3>
 <table>
@@ -4215,41 +4407,41 @@
 </tbody>
 </table>
 <p><code>SkillScope</code> 由 session 的 <code>AppName</code> / <code>UserID</code> 推导（也可通过 <code>LearningJob.Scope</code> 显式指定）。app/user 标识会被做文件系统安全化处理：非法字符或过长的标识会被替换为稳定的哈希片段（<code>id-&lt;hash&gt;</code>），既避免路径穿越也保证幂等。</p>
-<h3 id="_14">接入方式</h3>
+<h3 id="_15">接入方式</h3>
 <p>技能仓库的解析通过 <code>skill.RepositoryProvider</code> 完成。它根据传入的 <code>SkillScope</code> 返回对应的 <code>skill.Repository</code>：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1"> 1</a></span>
-<span class="normal"><a href="#__codelineno-19-2"> 2</a></span>
-<span class="normal"><a href="#__codelineno-19-3"> 3</a></span>
-<span class="normal"><a href="#__codelineno-19-4"> 4</a></span>
-<span class="normal"><a href="#__codelineno-19-5"> 5</a></span>
-<span class="normal"><a href="#__codelineno-19-6"> 6</a></span>
-<span class="normal"><a href="#__codelineno-19-7"> 7</a></span>
-<span class="normal"><a href="#__codelineno-19-8"> 8</a></span>
-<span class="normal"><a href="#__codelineno-19-9"> 9</a></span>
-<span class="normal"><a href="#__codelineno-19-10">10</a></span>
-<span class="normal"><a href="#__codelineno-19-11">11</a></span>
-<span class="normal"><a href="#__codelineno-19-12">12</a></span>
-<span class="normal"><a href="#__codelineno-19-13">13</a></span>
-<span class="normal"><a href="#__codelineno-19-14">14</a></span>
-<span class="normal"><a href="#__codelineno-19-15">15</a></span>
-<span class="normal"><a href="#__codelineno-19-16">16</a></span>
-<span class="normal"><a href="#__codelineno-19-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-19-1"><a id="__codelineno-19-1" name="__codelineno-19-1"></a><span class="c1">// 按 scope 动态解析技能仓库（实现自行决定按 app 还是按 user 切目录）。</span>
-</span><span id="__span-19-2"><a id="__codelineno-19-2" name="__codelineno-19-2"></a><span class="nx">provider</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">RepositoryProviderFunc</span><span class="p">(</span>
-</span><span id="__span-19-3"><a id="__codelineno-19-3" name="__codelineno-19-3"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">scope</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">SkillScope</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">skill</span><span class="p">.</span><span class="nx">Repository</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-4"><a id="__codelineno-19-4" name="__codelineno-19-4"></a><span class="w">        </span><span class="nx">roots</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">resolveScopedRoots</span><span class="p">(</span><span class="nx">scope</span><span class="p">)</span><span class="w"> </span><span class="c1">// 你的目录映射逻辑</span>
-</span><span id="__span-19-5"><a id="__codelineno-19-5" name="__codelineno-19-5"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-19-6"><a id="__codelineno-19-6" name="__codelineno-19-6"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
-</span><span id="__span-19-7"><a id="__codelineno-19-7" name="__codelineno-19-7"></a><span class="w">        </span><span class="p">}</span>
-</span><span id="__span-19-8"><a id="__codelineno-19-8" name="__codelineno-19-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="nx">roots</span><span class="o">...</span><span class="p">)</span>
-</span><span id="__span-19-9"><a id="__codelineno-19-9" name="__codelineno-19-9"></a><span class="w">    </span><span class="p">},</span>
-</span><span id="__span-19-10"><a id="__codelineno-19-10" name="__codelineno-19-10"></a><span class="p">)</span>
-</span><span id="__span-19-11"><a id="__codelineno-19-11" name="__codelineno-19-11"></a>
-</span><span id="__span-19-12"><a id="__codelineno-19-12" name="__codelineno-19-12"></a><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">reviewModel</span><span class="p">,</span>
-</span><span id="__span-19-13"><a id="__codelineno-19-13" name="__codelineno-19-13"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="nx">managedDir</span><span class="p">),</span>
-</span><span id="__span-19-14"><a id="__codelineno-19-14" name="__codelineno-19-14"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepositoryProvider</span><span class="p">(</span><span class="nx">provider</span><span class="p">),</span>
-</span><span id="__span-19-15"><a id="__codelineno-19-15" name="__codelineno-19-15"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillScopeMode</span><span class="p">(</span><span class="nx">skill</span><span class="p">.</span><span class="nx">SkillScopeUser</span><span class="p">),</span><span class="w"> </span><span class="c1">// 按 app+user 隔离</span>
-</span><span id="__span-19-16"><a id="__codelineno-19-16" name="__codelineno-19-16"></a><span class="w">    </span><span class="c1">// ...</span>
-</span><span id="__span-19-17"><a id="__codelineno-19-17" name="__codelineno-19-17"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-21-1"> 1</a></span>
+<span class="normal"><a href="#__codelineno-21-2"> 2</a></span>
+<span class="normal"><a href="#__codelineno-21-3"> 3</a></span>
+<span class="normal"><a href="#__codelineno-21-4"> 4</a></span>
+<span class="normal"><a href="#__codelineno-21-5"> 5</a></span>
+<span class="normal"><a href="#__codelineno-21-6"> 6</a></span>
+<span class="normal"><a href="#__codelineno-21-7"> 7</a></span>
+<span class="normal"><a href="#__codelineno-21-8"> 8</a></span>
+<span class="normal"><a href="#__codelineno-21-9"> 9</a></span>
+<span class="normal"><a href="#__codelineno-21-10">10</a></span>
+<span class="normal"><a href="#__codelineno-21-11">11</a></span>
+<span class="normal"><a href="#__codelineno-21-12">12</a></span>
+<span class="normal"><a href="#__codelineno-21-13">13</a></span>
+<span class="normal"><a href="#__codelineno-21-14">14</a></span>
+<span class="normal"><a href="#__codelineno-21-15">15</a></span>
+<span class="normal"><a href="#__codelineno-21-16">16</a></span>
+<span class="normal"><a href="#__codelineno-21-17">17</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-21-1"><a id="__codelineno-21-1" name="__codelineno-21-1"></a><span class="c1">// 按 scope 动态解析技能仓库（实现自行决定按 app 还是按 user 切目录）。</span>
+</span><span id="__span-21-2"><a id="__codelineno-21-2" name="__codelineno-21-2"></a><span class="nx">provider</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">RepositoryProviderFunc</span><span class="p">(</span>
+</span><span id="__span-21-3"><a id="__codelineno-21-3" name="__codelineno-21-3"></a><span class="w">    </span><span class="kd">func</span><span class="p">(</span><span class="nx">ctx</span><span class="w"> </span><span class="nx">context</span><span class="p">.</span><span class="nx">Context</span><span class="p">,</span><span class="w"> </span><span class="nx">scope</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">SkillScope</span><span class="p">)</span><span class="w"> </span><span class="p">(</span><span class="nx">skill</span><span class="p">.</span><span class="nx">Repository</span><span class="p">,</span><span class="w"> </span><span class="kt">error</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-21-4"><a id="__codelineno-21-4" name="__codelineno-21-4"></a><span class="w">        </span><span class="nx">roots</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">resolveScopedRoots</span><span class="p">(</span><span class="nx">scope</span><span class="p">)</span><span class="w"> </span><span class="c1">// 你的目录映射逻辑</span>
+</span><span id="__span-21-5"><a id="__codelineno-21-5" name="__codelineno-21-5"></a><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-21-6"><a id="__codelineno-21-6" name="__codelineno-21-6"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="kc">nil</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span>
+</span><span id="__span-21-7"><a id="__codelineno-21-7" name="__codelineno-21-7"></a><span class="w">        </span><span class="p">}</span>
+</span><span id="__span-21-8"><a id="__codelineno-21-8" name="__codelineno-21-8"></a><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="nx">skill</span><span class="p">.</span><span class="nx">NewFSRepository</span><span class="p">(</span><span class="nx">roots</span><span class="o">...</span><span class="p">)</span>
+</span><span id="__span-21-9"><a id="__codelineno-21-9" name="__codelineno-21-9"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-21-10"><a id="__codelineno-21-10" name="__codelineno-21-10"></a><span class="p">)</span>
+</span><span id="__span-21-11"><a id="__codelineno-21-11" name="__codelineno-21-11"></a>
+</span><span id="__span-21-12"><a id="__codelineno-21-12" name="__codelineno-21-12"></a><span class="nx">evoSvc</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">NewService</span><span class="p">(</span><span class="nx">reviewModel</span><span class="p">,</span>
+</span><span id="__span-21-13"><a id="__codelineno-21-13" name="__codelineno-21-13"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithManagedSkillsDir</span><span class="p">(</span><span class="nx">managedDir</span><span class="p">),</span>
+</span><span id="__span-21-14"><a id="__codelineno-21-14" name="__codelineno-21-14"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillRepositoryProvider</span><span class="p">(</span><span class="nx">provider</span><span class="p">),</span>
+</span><span id="__span-21-15"><a id="__codelineno-21-15" name="__codelineno-21-15"></a><span class="w">    </span><span class="nx">evolution</span><span class="p">.</span><span class="nx">WithSkillScopeMode</span><span class="p">(</span><span class="nx">skill</span><span class="p">.</span><span class="nx">SkillScopeUser</span><span class="p">),</span><span class="w"> </span><span class="c1">// 按 app+user 隔离</span>
+</span><span id="__span-21-16"><a id="__codelineno-21-16" name="__codelineno-21-16"></a><span class="w">    </span><span class="c1">// ...</span>
+</span><span id="__span-21-17"><a id="__codelineno-21-17" name="__codelineno-21-17"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>LLMAgent 侧使用对应的 <code>llmagent.WithSkillRepositoryProvider</code> / <code>llmagent.WithSkillScopeMode</code>，保证 agent 注入提示词时看到的技能与 evolution 写入的技能处于同一 scope。</p>
 <blockquote>
@@ -4257,25 +4449,25 @@
 </blockquote>
 <h2 id="metrics">Metrics</h2>
 <p>通过 <code>ApprovalGateMetricsProvider</code> 接口读取门禁活动指标（只读快照，不暴露内部 worker 实现）：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-20-1">1</a></span>
-<span class="normal"><a href="#__codelineno-20-2">2</a></span>
-<span class="normal"><a href="#__codelineno-20-3">3</a></span>
-<span class="normal"><a href="#__codelineno-20-4">4</a></span>
-<span class="normal"><a href="#__codelineno-20-5">5</a></span>
-<span class="normal"><a href="#__codelineno-20-6">6</a></span>
-<span class="normal"><a href="#__codelineno-20-7">7</a></span>
-<span class="normal"><a href="#__codelineno-20-8">8</a></span>
-<span class="normal"><a href="#__codelineno-20-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-20-1"><a id="__codelineno-20-1" name="__codelineno-20-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">mp</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalGateMetricsProvider</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-20-2"><a id="__codelineno-20-2" name="__codelineno-20-2"></a><span class="w">    </span><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mp</span><span class="p">.</span><span class="nx">ApprovalGateMetrics</span><span class="p">()</span>
-</span><span id="__span-20-3"><a id="__codelineno-20-3" name="__codelineno-20-3"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Candidates seen:      %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">CandidatesSeen</span><span class="p">)</span>
-</span><span id="__span-20-4"><a id="__codelineno-20-4" name="__codelineno-20-4"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Revisions promoted:   %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">RevisionsPromoted</span><span class="p">)</span>
-</span><span id="__span-20-5"><a id="__codelineno-20-5" name="__codelineno-20-5"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Spec-gate rejected:   %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">SpecGateRejected</span><span class="p">)</span>
-</span><span id="__span-20-6"><a id="__codelineno-20-6" name="__codelineno-20-6"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Safety-gate rejected: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">SafetyGateRejected</span><span class="p">)</span>
-</span><span id="__span-20-7"><a id="__codelineno-20-7" name="__codelineno-20-7"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Effect-gate held:     %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">EffectivenessGateRejected</span><span class="p">)</span>
-</span><span id="__span-20-8"><a id="__codelineno-20-8" name="__codelineno-20-8"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Human-gate held:      %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">HumanGateHeld</span><span class="p">)</span>
-</span><span id="__span-20-9"><a id="__codelineno-20-9" name="__codelineno-20-9"></a><span class="p">}</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-22-1">1</a></span>
+<span class="normal"><a href="#__codelineno-22-2">2</a></span>
+<span class="normal"><a href="#__codelineno-22-3">3</a></span>
+<span class="normal"><a href="#__codelineno-22-4">4</a></span>
+<span class="normal"><a href="#__codelineno-22-5">5</a></span>
+<span class="normal"><a href="#__codelineno-22-6">6</a></span>
+<span class="normal"><a href="#__codelineno-22-7">7</a></span>
+<span class="normal"><a href="#__codelineno-22-8">8</a></span>
+<span class="normal"><a href="#__codelineno-22-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-22-1"><a id="__codelineno-22-1" name="__codelineno-22-1"></a><span class="k">if</span><span class="w"> </span><span class="nx">mp</span><span class="p">,</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">evoSvc</span><span class="p">.(</span><span class="nx">evolution</span><span class="p">.</span><span class="nx">ApprovalGateMetricsProvider</span><span class="p">);</span><span class="w"> </span><span class="nx">ok</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-22-2"><a id="__codelineno-22-2" name="__codelineno-22-2"></a><span class="w">    </span><span class="nx">m</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">mp</span><span class="p">.</span><span class="nx">ApprovalGateMetrics</span><span class="p">()</span>
+</span><span id="__span-22-3"><a id="__codelineno-22-3" name="__codelineno-22-3"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Candidates seen:      %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">CandidatesSeen</span><span class="p">)</span>
+</span><span id="__span-22-4"><a id="__codelineno-22-4" name="__codelineno-22-4"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Revisions promoted:   %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">RevisionsPromoted</span><span class="p">)</span>
+</span><span id="__span-22-5"><a id="__codelineno-22-5" name="__codelineno-22-5"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Spec-gate rejected:   %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">SpecGateRejected</span><span class="p">)</span>
+</span><span id="__span-22-6"><a id="__codelineno-22-6" name="__codelineno-22-6"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Safety-gate rejected: %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">SafetyGateRejected</span><span class="p">)</span>
+</span><span id="__span-22-7"><a id="__codelineno-22-7" name="__codelineno-22-7"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Effect-gate held:     %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">EffectivenessGateRejected</span><span class="p">)</span>
+</span><span id="__span-22-8"><a id="__codelineno-22-8" name="__codelineno-22-8"></a><span class="w">    </span><span class="nx">fmt</span><span class="p">.</span><span class="nx">Printf</span><span class="p">(</span><span class="s">&quot;Human-gate held:      %d\n&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">m</span><span class="p">.</span><span class="nx">HumanGateHeld</span><span class="p">)</span>
+</span><span id="__span-22-9"><a id="__codelineno-22-9" name="__codelineno-22-9"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<h2 id="_15">示例</h2>
+<h2 id="_16">示例</h2>
 <p>参见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evolution"><code>examples/evolution/</code></a>
 获取完整可运行示例，展示：</p>
 <ul>
@@ -4306,7 +4498,7 @@
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月5日 00:44:49 UTC">2026-07-05 00:44:49</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月23日 04:42:25 UTC">2026-07-23 04:42:25</span>
   </span>
 
     
