@@ -184,3 +184,23 @@ server, err := agui.New(
 ```
 
 In this case, the real-time conversation route is `/agui/chat`, the message snapshot route is `/agui/history`, and the cancel route is `/agui/cancel`.
+
+## Custom AG-UI Runner Factory
+
+By default, `agui.New` uses the built-in AG-UI Runner to adapt the provided `runner.Runner`. To rewrite requests, events, or capability forwarding at the AG-UI layer, provide custom construction logic with `agui.WithRunnerFactory`:
+
+```go
+server, err := agui.New(
+    baseRunner,
+    agui.WithRunnerFactory(func(base runner.Runner, opts ...aguirunner.Option) (aguirunner.Runner, error) {
+        inner := aguirunner.New(base, opts...)
+        return &customAGUIRunner{inner: inner}, nil
+    }),
+)
+```
+
+`opts...` contains the AG-UI Runner configuration collected by `agui.New`. When wrapping the built-in Runner, pass it through to `aguirunner.New`; otherwise, those settings will not be applied to the built-in Runner.
+
+To support message snapshots or cancel in a custom Runner, implement `aguirunner.MessagesSnapshotter` or `aguirunner.Canceler`. `WithRunnerFactory(nil)`, a nil Runner returned by the factory, or a factory error makes `agui.New` fail.
+
+For a complete example, see [examples/agui/server/runner_factory](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runner_factory).
