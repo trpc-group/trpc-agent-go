@@ -23,6 +23,12 @@ func TestLoadPolicyRejectsUnknownField(t *testing.T) {
 	require.ErrorContains(t, err, "unknown_field")
 }
 
+func TestLoadPolicyRejectsUnknownJSONField(t *testing.T) {
+	path := writeJSONPolicy(t, `{"unknown_field":true}`)
+	_, err := safety.LoadPolicy(path)
+	require.ErrorContains(t, err, "unknown_field")
+}
+
 func TestLoadPolicyPreservesExplicitEmptyList(t *testing.T) {
 	path := writePolicy(t, "denied_commands: []\n")
 	policy, err := safety.LoadPolicy(path)
@@ -32,6 +38,12 @@ func TestLoadPolicyPreservesExplicitEmptyList(t *testing.T) {
 
 func TestLoadPolicyRejectsTrailingDocument(t *testing.T) {
 	path := writePolicy(t, "max_timeout_seconds: 30\n---\n{}\n")
+	_, err := safety.LoadPolicy(path)
+	require.Error(t, err)
+}
+
+func TestLoadPolicyRejectsTrailingJSONValue(t *testing.T) {
+	path := writeJSONPolicy(t, `{"max_timeout_seconds":30} {}`)
 	_, err := safety.LoadPolicy(path)
 	require.Error(t, err)
 }
@@ -89,6 +101,13 @@ func TestNewGuardCopiesPolicySlices(t *testing.T) {
 func writePolicy(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "policy.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
+	return path
+}
+
+func writeJSONPolicy(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "policy.json")
 	require.NoError(t, os.WriteFile(path, []byte(contents), 0o600))
 	return path
 }
