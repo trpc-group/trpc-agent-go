@@ -718,6 +718,12 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 								Score:      0.9,
 								EvalStatus: status.EvalStatusPassed,
 								Threshold:  0.5,
+								Details: &evalresult.EvalMetricResultDetails{
+									Value: &score.Value{
+										Kind:    score.KindBoolean,
+										Boolean: boolPtr(true),
+									},
+								},
 							},
 						},
 					},
@@ -757,6 +763,11 @@ func TestCloneEvalSetResult_DeepCopy(t *testing.T) {
 	require.NotNil(t, dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
 	*dst.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric = 0.1
 	assert.Equal(t, 0.9, *src.EvalCaseResults[0].OverallEvalMetricResults[0].Details.Value.Numeric)
+
+	require.NotNil(t, dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value)
+	require.NotNil(t, dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean)
+	*dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean = false
+	assert.True(t, *src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details.Value.Boolean)
 
 	dst.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"] = "changed"
 	assert.Equal(t, "v", src.EvalCaseResults[0].EvalMetricResultPerInvocation[0].ActualInvocation.Tools[0].Arguments.(map[string]any)["k"])

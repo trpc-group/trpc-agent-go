@@ -67,11 +67,14 @@ type PerInvocationDetails struct {
 	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
 }
 
-// ScoreResult represents the score and rationale for a single metric evaluation.
+// ScoreResult represents the scorer output for a single metric evaluation.
 type ScoreResult struct {
-	Reason       string                    `json:"reason,omitempty"`
-	Score        float64                   `json:"score,omitempty"`
-	Status       *status.EvalStatus        `json:"status,omitempty"`
-	Value        *score.Value              `json:"value,omitempty"`
+	// Reason explains how the score was produced.
+	Reason string `json:"reason,omitempty"`
+	// Score is the numeric score used by threshold checks and aggregation.
+	Score float64 `json:"score,omitempty"`
+	// Value is optional typed score detail that does not replace Score.
+	Value *score.Value `json:"value,omitempty"`
+	// RubricScores contains scores for rubric items, when available.
 	RubricScores []*evalresult.RubricScore `json:"rubricScores,omitempty"`
 }

@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -176,7 +177,7 @@ func TestEvalSetResultJSONRoundTrip(t *testing.T) {
 	assert.Equal(t, status.EvalStatusPassed, perMetric.EvalStatus)
 	assert.Equal(t, 0.8, perMetric.Threshold)
 	assert.Equal(t, "per invocation matched", perMetric.Details.Reason)
-	assert.NotNil(t, perMetric.Details.Value)
+	require.NotNil(t, perMetric.Details.Value)
 	assert.Equal(t, score.KindCategorical, perMetric.Details.Value.Kind)
 	assert.Equal(t, "correct", perMetric.Details.Value.Categorical)
 

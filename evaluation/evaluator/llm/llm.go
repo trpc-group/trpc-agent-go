@@ -210,7 +210,10 @@ func (r *LLMBaseEvaluator) collectOneSample(ctx context.Context,
 	if err != nil {
 		return nil, fmt.Errorf("score based on response: %w", err)
 	}
-	evalStatus := resolveScoreStatus(score, req.evalMetric.Threshold)
+	evalStatus := status.EvalStatusPassed
+	if score.Score < req.evalMetric.Threshold {
+		evalStatus = status.EvalStatusFailed
+	}
 	return &evaluator.PerInvocationResult{
 		ActualInvocation:   req.actual,
 		ExpectedInvocation: req.expected,
@@ -223,16 +226,6 @@ func (r *LLMBaseEvaluator) collectOneSample(ctx context.Context,
 			RubricScores: score.RubricScores,
 		},
 	}, nil
-}
-
-func resolveScoreStatus(score *evaluator.ScoreResult, threshold float64) status.EvalStatus {
-	if score.Status != nil {
-		return *score.Status
-	}
-	if score.Score < threshold {
-		return status.EvalStatusFailed
-	}
-	return status.EvalStatusPassed
 }
 
 // AggregateInvocations delegates invocation aggregation to the concrete evaluator.

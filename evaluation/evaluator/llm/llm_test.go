@@ -336,7 +336,6 @@ type scriptedLLMEvaluator struct {
 	constructErr        error
 	scoreErr            error
 	scoreValue          float64
-	scoreStatus         *status.EvalStatus
 	aggregateSamplesErr error
 }
 
@@ -363,7 +362,7 @@ func (s *scriptedLLMEvaluator) ScoreBasedOnResponse(context.Context, *model.Resp
 		return nil, s.scoreErr
 	}
 	score := s.scoreValue
-	return &evaluator.ScoreResult{Score: score, Status: s.scoreStatus, RubricScores: nil}, nil
+	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
 }
 
 func (s *scriptedLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
@@ -460,31 +459,6 @@ func TestLLMBaseEvaluator_ScoreBelowThreshold(t *testing.T) {
 		context.Background(),
 		[]*evalset.Invocation{actual},
 		[]*evalset.Invocation{expected},
-		evalMetric,
-	)
-	require.NoError(t, err)
-	require.Len(t, res.PerInvocationResults, 1)
-	assert.Equal(t, status.EvalStatusFailed, res.PerInvocationResults[0].Status)
-}
-
-func TestLLMBaseEvaluator_UsesScoreStatusOverride(t *testing.T) {
-	provider.Register("llm-status-override-provider", func(_ *provider.Options) (model.Model, error) {
-		return &fakeModel{responses: []*model.Response{{
-			Choices: []model.Choice{{Message: model.Message{Content: "ok"}}},
-			Done:    true,
-		}}}, nil
-	})
-	failedStatus := status.EvalStatusFailed
-	base := &LLMBaseEvaluator{LLMEvaluator: &scriptedLLMEvaluator{
-		scoreValue:  0,
-		scoreStatus: &failedStatus,
-	}}
-	evalMetric := buildEvalMetric("llm-status-override-provider", 1)
-	evalMetric.Threshold = 0
-	res, err := base.Evaluate(
-		context.Background(),
-		[]*evalset.Invocation{{InvocationID: "a"}},
-		[]*evalset.Invocation{{InvocationID: "b"}},
 		evalMetric,
 	)
 	require.NoError(t, err)
