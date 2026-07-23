@@ -14,13 +14,18 @@ func (s *Scanner) scanDependencyArgv(argv []string, loc string) []Finding {
 		return nil
 	}
 	cmd := normalizeCommandName(argv[0])
-	sub := strings.ToLower(argv[1])
 	for _, dep := range s.policy.DependencyCommands {
 		if normalizeCommandName(dep.Command) != cmd {
 			continue
 		}
-		for _, candidate := range dep.Subcommands {
-			if strings.EqualFold(candidate, sub) {
+		for _, arg := range argv[1:] {
+			if arg == "--" {
+				break
+			}
+			for _, candidate := range dep.Subcommands {
+				if !strings.EqualFold(candidate, arg) {
+					continue
+				}
 				action := dep.Action
 				if action == "" {
 					action = DecisionAsk

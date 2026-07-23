@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/bmatcuk/doublestar/v4"
 )
 
 // Policy configures scanner decisions. YAML and JSON use the same field names.
@@ -130,7 +132,7 @@ func DefaultPolicy() Policy {
 			{Command: "apt-get", Subcommands: []string{"install", "remove", "upgrade"}, Action: DecisionDeny},
 		},
 		EnvAllowlist: []string{
-			"PATH", "HOME", "TMPDIR", "GOCACHE", "GOMODCACHE",
+			"TMPDIR", "GOCACHE", "GOMODCACHE",
 			"GOPATH", "GOFLAGS", "GOPROXY", "NO_COLOR",
 		},
 		ResourceLimits: ResourceLimits{
@@ -223,15 +225,15 @@ func (p Policy) normalized() (Policy, error) {
 	if p.Rules == nil {
 		p.Rules = map[string]RulePolicyOverride{}
 	}
-	if err := p.validate(); err != nil {
-		return Policy{}, err
-	}
 	p.AllowedCommands = cleanStrings(p.AllowedCommands)
 	p.DeniedCommands = cleanStrings(p.DeniedCommands)
 	p.ForbiddenPaths = cleanStrings(p.ForbiddenPaths)
 	p.AllowedNetworkDomains = cleanStrings(p.AllowedNetworkDomains)
 	p.DeniedNetworkDomains = cleanStrings(p.DeniedNetworkDomains)
 	p.EnvAllowlist = cleanStrings(p.EnvAllowlist)
+	if err := p.validate(); err != nil {
+		return Policy{}, err
+	}
 	return p, nil
 }
 
@@ -262,6 +264,9 @@ func boolPointer(v bool) *bool {
 }
 
 func (p Policy) validate() error {
+	if err := validateForbiddenPathPatterns(p.ForbiddenPaths); err != nil {
+		return err
+	}
 	for name, action := range map[string]Decision{
 		"default_action":     p.DefaultAction,
 		"parse_error_action": p.ParseErrorAction,
@@ -302,6 +307,19 @@ func (p Policy) validate() error {
 		return errors.New("resource limits cannot be negative")
 	}
 	return nil
+}
+
+func validateForbiddenPathPatterns(patterns []string) error {
+	for _, pattern := range patterns {
+		if !doublestar.ValidatePattern(filepathPattern(pattern)) {
+			return fmt.Errorf("forbidden path %q: invalid glob pattern", pattern)
+		}
+	}
+	return nil
+}
+
+func filepathPattern(pattern string) string {
+	return strings.ReplaceAll(pattern, `\`, "/")
 }
 
 func normalizeWorkspaceExecRules(got, def WorkspaceExecRules) WorkspaceExecRules {

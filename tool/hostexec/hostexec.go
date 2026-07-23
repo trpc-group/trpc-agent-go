@@ -306,6 +306,10 @@ func (t *execCommandTool) Call(
 	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	var sanitizer *safety.OutputSanitizer
+	if t.safety != nil {
+		sanitizer = t.safety.NewOutputSanitizer()
+	}
 
 	res, err := t.mgr.exec(ctx, execParams{
 		Command:    in.Command,
@@ -315,12 +319,13 @@ func (t *execCommandTool) Call(
 		Background: in.Background,
 		YieldMs:    yield,
 		TimeoutS:   timeout,
+		Sanitizer:  sanitizer,
 	})
 	if err != nil {
 		return nil, err
 	}
 	if t.safety != nil {
-		res.Output = t.safety.SanitizeOutput(res.Output)
+		res.Output = sanitizer.Sanitize(res.Output)
 	}
 	return mapExecResult(res), nil
 }
@@ -466,7 +471,16 @@ func (t *writeStdinTool) Call(
 		return nil, err
 	}
 	if t.safety != nil {
-		poll.Output = t.safety.SanitizeOutput(poll.Output)
+		sess, getErr := t.mgr.get(sessionID)
+		if getErr == nil {
+			poll.Output = sess.sanitizeOutput(
+				poll.Output,
+				t.safety,
+				poll.Status == programStatusExited,
+			)
+		} else {
+			poll.Output = t.safety.SanitizeOutput(poll.Output)
+		}
 	}
 	return mapPollResult(sessionID, poll), nil
 }

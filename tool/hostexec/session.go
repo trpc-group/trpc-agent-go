@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
+
 	"github.com/google/uuid"
 )
 
@@ -52,6 +54,7 @@ type session struct {
 	lines      []string
 	partial    string
 	pollCursor int
+	sanitizer  *safety.OutputSanitizer
 	maxLines   int
 	closeOnce  sync.Once
 }
@@ -247,6 +250,23 @@ func (s *session) poll(limit *int) processPoll {
 	res.Status = programStatusExited
 	res.ExitCode = intPtr(s.exitCode)
 	return res
+}
+
+func (s *session) sanitizeOutput(
+	output string,
+	fallback *safety.Scanner,
+	final bool,
+) string {
+	s.mu.Lock()
+	sanitizer := s.sanitizer
+	if final {
+		s.sanitizer = nil
+	}
+	s.mu.Unlock()
+	if sanitizer != nil {
+		return sanitizer.Sanitize(output)
+	}
+	return fallback.SanitizeOutput(output)
 }
 
 func (s *session) write(data string, newline bool) error {

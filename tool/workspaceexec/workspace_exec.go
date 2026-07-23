@@ -100,6 +100,7 @@ type execSession struct {
 	mu sync.Mutex
 
 	proc        codeexecutor.ProgramSession
+	sanitizer   *safety.OutputSanitizer
 	exitedAt    time.Time
 	finalized   bool
 	finalizedAt time.Time
@@ -151,6 +152,7 @@ type execRequest struct {
 	eng        codeexecutor.Engine
 	ws         codeexecutor.Workspace
 	spec       codeexecutor.RunProgramSpec
+	sanitizer  *safety.OutputSanitizer
 }
 
 type killOutput struct {
@@ -601,7 +603,7 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.sanitizeOutput(out), nil
+	return t.sanitizeOutputWith(out, req.sanitizer), nil
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -663,7 +665,15 @@ func (t *ExecTool) prepareExec(
 			Stdin:    in.Stdin,
 			Timeout:  execTimeout(timeout),
 		},
+		sanitizer: t.newOutputSanitizer(),
 	}, nil
+}
+
+func (t *ExecTool) newOutputSanitizer() *safety.OutputSanitizer {
+	if t == nil || t.safetyScanner == nil {
+		return nil
+	}
+	return t.safetyScanner.NewOutputSanitizer()
 }
 
 func (t *ExecTool) checkSafety(ctx context.Context, in execInput, cwd string) error {
@@ -680,6 +690,7 @@ func (t *ExecTool) checkSafety(ctx context.Context, in execInput, cwd string) er
 		ToolName:   "workspace_exec",
 		Backend:    safety.BackendWorkspaceExec,
 		Command:    in.Command,
+		Stdin:      in.Stdin,
 		Cwd:        cwd,
 		Env:        in.Env,
 		TimeoutMS:  execTimeout(timeout).Milliseconds(),
@@ -871,7 +882,7 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{proc: proc})
+	t.putSession(proc.ID(), &execSession{proc: proc, sanitizer: req.sanitizer})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
 	if poll.Status == codeexecutor.ProgramStatusExited {
@@ -934,12 +945,23 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			out.SessionID = sessionID
 		}
 	}
-	return t.exec.sanitizeOutput(out), nil
+	return t.exec.sanitizeOutputWith(out, sess.sanitizer), nil
 }
 
 func (t *ExecTool) sanitizeOutput(out execOutput) execOutput {
+	return t.sanitizeOutputWith(out, nil)
+}
+
+func (t *ExecTool) sanitizeOutputWith(
+	out execOutput,
+	sanitizer *safety.OutputSanitizer,
+) execOutput {
 	if t != nil && t.safetyScanner != nil {
-		out.Output = t.safetyScanner.SanitizeOutput(out.Output)
+		if sanitizer != nil {
+			out.Output = sanitizer.Sanitize(out.Output)
+		} else {
+			out.Output = t.safetyScanner.SanitizeOutput(out.Output)
+		}
 	}
 	return out
 }

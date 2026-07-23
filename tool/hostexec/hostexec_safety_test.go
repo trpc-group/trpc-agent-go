@@ -155,3 +155,69 @@ func TestExecCommandTool_SafetyScannerBlocksForbiddenWorkdir(t *testing.T) {
 		t.Fatalf("error = %v, want forbidden workdir block", err)
 	}
 }
+
+func TestExecCommandTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.EnvAllowlist = append(policy.EnvAllowlist, "PATH", "HOME")
+	scanner := safety.MustScanner(policy)
+	set, err := NewToolSet(WithSafetyScanner(scanner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	var execTool tool.CallableTool
+	for _, tl := range set.Tools(context.Background()) {
+		if decl := tl.Declaration(); decl != nil && decl.Name == toolExecCommand {
+			execTool = tl.(tool.CallableTool)
+		}
+	}
+	_, err = execTool.Call(context.Background(), []byte(`{
+		"command":"echo ok",
+		"env":{"PATH":"/tmp/attacker","HOME":"/tmp/profile"}
+	}`))
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleEnvNotAllowed) {
+		t.Fatalf("error = %v, want environment hijacking block", err)
+	}
+}
+
+func TestWriteStdinTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
+	scanner := safety.MustScanner(safety.DefaultPolicy())
+	mgr := newManager()
+	sess := newSession("split-key", "echo ok", defaultMaxLines)
+	sess.stdin = &testWriteCloser{}
+	sess.sanitizer = scanner.NewOutputSanitizer()
+	mgr.sessions[sess.id] = sess
+	writeTool := &writeStdinTool{mgr: mgr, safety: scanner}
+
+	chunks := []string{
+		"-----BEGIN PRIVATE KEY-----\n",
+		"secret-body\n",
+		"-----END PRIVATE KEY-----\nvisible\n",
+	}
+	var visible strings.Builder
+	for _, chunk := range chunks {
+		sess.appendOutput(chunk)
+		if strings.Contains(chunk, "END PRIVATE KEY") {
+			sess.markDone(0)
+		}
+		got, err := writeTool.Call(context.Background(), []byte(`{
+			"session_id":"split-key","yield_time_ms":0
+		}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		output := got.(map[string]any)["output"].(string)
+		if strings.Contains(output, "PRIVATE KEY") || strings.Contains(output, "secret-body") {
+			t.Fatalf("poll leaked private key: %q", output)
+		}
+		visible.WriteString(output)
+	}
+	if strings.Count(visible.String(), "[REDACTED]") != 1 ||
+		!strings.Contains(visible.String(), "visible") {
+		t.Fatalf("visible output = %q, want one replacement and trailing output", visible.String())
+	}
+	if sess.sanitizer != nil {
+		t.Fatal("finished session retained output sanitizer")
+	}
+}

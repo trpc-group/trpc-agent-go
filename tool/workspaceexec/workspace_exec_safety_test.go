@@ -95,3 +95,58 @@ func TestExecTool_SafetyScannerTreatsPositiveYieldAsBackground(t *testing.T) {
 		t.Fatalf("error = %v, want yielded-session background block", err)
 	}
 }
+
+func TestExecTool_SafetyScannerRejectsEnvironmentHijacking(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.EnvAllowlist = append(policy.EnvAllowlist, "PATH", "HOME")
+	scanner := safety.MustScanner(policy)
+	tool := NewExecTool(local.New(), WithSafetyScanner(scanner))
+	_, err := tool.prepareExec(context.Background(), execInput{
+		Command: "echo ok",
+		Env: map[string]string{
+			"PATH": "/tmp/attacker",
+			"HOME": "/tmp/profile",
+		},
+	})
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleEnvNotAllowed) {
+		t.Fatalf("error = %v, want environment hijacking block", err)
+	}
+}
+
+func TestExecTool_SafetyScannerScansStdinConfig(t *testing.T) {
+	scanner := safety.MustScanner(safety.DefaultPolicy())
+	tool := NewExecTool(local.New(), WithSafetyScanner(scanner))
+	_, err := tool.prepareExec(context.Background(), execInput{
+		Command: "curl --config -",
+		Stdin: "url = https://proxy.example.test\n" +
+			"output = .env",
+	})
+	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
+		!strings.Contains(err.Error(), safety.RuleForbiddenPath) {
+		t.Fatalf("error = %v, want stdin config forbidden-path block", err)
+	}
+}
+
+func TestExecTool_SafetyScannerRedactsSplitPrivateKey(t *testing.T) {
+	scanner := safety.MustScanner(safety.DefaultPolicy())
+	tool := &ExecTool{safetyScanner: scanner}
+	session := &execSession{sanitizer: scanner.NewOutputSanitizer()}
+	chunks := []string{
+		"-----BEGIN PRIVATE KEY-----\n",
+		"secret-body\n",
+		"-----END PRIVATE KEY-----\nvisible",
+	}
+	var visible strings.Builder
+	for _, chunk := range chunks {
+		out := tool.sanitizeOutputWith(execOutput{Output: chunk}, session.sanitizer)
+		if strings.Contains(out.Output, "PRIVATE KEY") || strings.Contains(out.Output, "secret-body") {
+			t.Fatalf("poll leaked private key: %q", out.Output)
+		}
+		visible.WriteString(out.Output)
+	}
+	if strings.Count(visible.String(), "[REDACTED]") != 1 ||
+		!strings.Contains(visible.String(), "visible") {
+		t.Fatalf("visible output = %q, want one replacement and trailing output", visible.String())
+	}
+}

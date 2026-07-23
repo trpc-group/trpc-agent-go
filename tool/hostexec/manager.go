@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -55,8 +57,9 @@ type execParams struct {
 	Pty        bool
 	Background bool
 
-	YieldMs  *int
-	TimeoutS *int
+	YieldMs   *int
+	TimeoutS  *int
+	Sanitizer *safety.OutputSanitizer
 }
 
 type execResult struct {
@@ -319,6 +322,7 @@ func startSession(
 	cmd.Env = mergedEnv(baseEnv, params.Env)
 
 	sess := newSession(id, params.Command, maxLines)
+	sess.sanitizer = params.Sanitizer
 	sess.cancel = cancel
 	sess.cmd = cmd
 

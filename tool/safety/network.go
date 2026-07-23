@@ -17,6 +17,11 @@ var urlLikeRE = regexp.MustCompile(`(?i)\bhttps?://[^\s'"]+`)
 
 func (s *Scanner) scanNetworkArgv(argv []string, loc string) []Finding {
 	cmd := normalizeCommandName(argv[0])
+	if cmd == "curl" {
+		if rewrite := curlDestinationRewriteFinding(argv, loc); rewrite != nil {
+			return rewrite
+		}
+	}
 	isNet := cmd == "curl" || cmd == "wget" || cmd == "nc" ||
 		cmd == "netcat" || cmd == "ssh" || cmd == "scp" ||
 		strings.Contains(cmd, "download")
@@ -67,6 +72,23 @@ func (s *Scanner) scanNetworkArgv(argv []string, loc string) []Finding {
 		}
 	}
 	return findings
+}
+
+func curlDestinationRewriteFinding(argv []string, loc string) []Finding {
+	for _, arg := range argv[1:] {
+		name := strings.ToLower(strings.TrimSpace(arg))
+		if name != "--connect-to" && !strings.HasPrefix(name, "--connect-to=") &&
+			name != "--resolve" && !strings.HasPrefix(name, "--resolve=") {
+			continue
+		}
+		return []Finding{finding(
+			RuleNetworkDeniedDomain, CategoryNetwork, RiskHigh, DecisionDeny,
+			"curl destination rewrite option is not allowed: "+arg,
+			loc,
+			"Remove curl destination rewrite options and connect directly to an approved domain.",
+		)}
+	}
+	return nil
 }
 
 func domainsFromArgs(argv []string) []string {

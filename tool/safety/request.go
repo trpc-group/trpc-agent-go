@@ -72,6 +72,7 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 		Cwd           string            `json:"cwd"`
 		Workdir       string            `json:"workdir"`
 		Env           map[string]string `json:"env"`
+		Stdin         string            `json:"stdin"`
 		Background    bool              `json:"background"`
 		TTY           *bool             `json:"tty"`
 		PTY           *bool             `json:"pty"`
@@ -90,6 +91,7 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 		out.Cwd = in.Workdir
 	}
 	out.Env = in.Env
+	out.Stdin = in.Stdin
 	out.Background = in.Background
 	out.TTY = boolPtrValue(in.TTY) || boolPtrValue(in.PTY)
 	timeout := 0

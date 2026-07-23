@@ -69,6 +69,7 @@ type ExecutionRequest struct {
 	Command        string            `json:"command,omitempty" yaml:"command,omitempty"`
 	Args           []string          `json:"args,omitempty" yaml:"args,omitempty"`
 	Script         string            `json:"script,omitempty" yaml:"script,omitempty"`
+	Stdin          string            `json:"stdin,omitempty" yaml:"stdin,omitempty"`
 	Language       string            `json:"language,omitempty" yaml:"language,omitempty"`
 	CodeBlocks     []CodeBlock       `json:"code_blocks,omitempty" yaml:"code_blocks,omitempty"`
 	Cwd            string            `json:"cwd,omitempty" yaml:"cwd,omitempty"`

@@ -11,8 +11,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -150,6 +148,10 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 		}
 	} else if strings.TrimSpace(req.Script) != "" {
 		findings = append(findings, s.scanScript(req.Script, req.Language)...)
+	}
+	if req.Stdin != "" {
+		findings = append(findings, s.scanSecretTextAt(req.Stdin, "stdin")...)
+		findings = append(findings, s.scanStdin(req)...)
 	}
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanResources(req)...)
@@ -331,7 +333,7 @@ func (s *Scanner) scanShellTokensAt(text, loc string) []Finding {
 }
 
 func (s *Scanner) scanSecretTextAt(text, loc string) []Finding {
-	if hasSecret(text) {
+	if s.hasSecret(text) {
 		return []Finding{finding(
 			RuleSecretLeak, CategorySecretLeak, RiskHigh, DecisionDeny,
 			text,
@@ -340,6 +342,10 @@ func (s *Scanner) scanSecretTextAt(text, loc string) []Finding {
 		)}
 	}
 	return nil
+}
+
+func (s *Scanner) hasSecret(text string) bool {
+	return s != nil && s.redactor != nil && s.redactor.contains(text)
 }
 
 func (s *Scanner) scanDangerousArgv(argv []string, loc string) []Finding {
@@ -521,26 +527,6 @@ func categoryForCommand(cmd string) Category {
 	default:
 		return CategoryDangerousCommand
 	}
-}
-
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret|credential)\s*[:=]\s*['"]?[^'"\s]+`),
-	regexp.MustCompile(`(?i)authorization:\s*bearer\s+[A-Za-z0-9._~+/\-=]+`),
-	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----`),
-}
-
-func hasSecret(s string) bool {
-	for _, re := range secretPatterns {
-		if re.MatchString(s) {
-			return true
-		}
-	}
-	return false
-}
-
-func parseIntArg(s string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimSpace(s))
-	return n, err == nil
 }
 
 func (s *Scanner) applyOverrides(findings []Finding) []Finding {

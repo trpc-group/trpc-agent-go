@@ -16,6 +16,17 @@ import (
 type Redactor struct {
 	replacement string
 	patterns    []*regexp.Regexp
+	enabled     bool
+}
+
+var credentialPatternSources = []string{
+	`(?i)(api[_-]?key|token|password|passwd|secret|credential)\s*[:=]\s*['"]?[^'"\s]+`,
+	`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/\-=]+`,
+	`(?i)(x-api-key:\s*)[A-Za-z0-9._~+/\-=]+`,
+	`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`,
+	`(?i)(sk-[A-Za-z0-9]{12,})`,
+	`(?i)(ghp_[A-Za-z0-9_]{20,})`,
+	`(?i)(mysql|postgres|postgresql|mongodb)://[^@\s]+@`,
 }
 
 // NewRedactor builds a redactor from config.
@@ -24,18 +35,7 @@ func NewRedactor(cfg RedactionConfig) (*Redactor, error) {
 	if replacement == "" {
 		replacement = "[REDACTED]"
 	}
-	if cfg.Enabled != nil && !*cfg.Enabled {
-		return &Redactor{replacement: replacement}, nil
-	}
-	patterns := []string{
-		`(?i)(api[_-]?key|token|password|passwd|secret|credential)\s*[:=]\s*['"]?[^'"\s]+`,
-		`(?i)(authorization:\s*bearer\s+)[A-Za-z0-9._~+/\-=]+`,
-		`(?i)(x-api-key:\s*)[A-Za-z0-9._~+/\-=]+`,
-		`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`,
-		`(?i)(sk-[A-Za-z0-9]{12,})`,
-		`(?i)(ghp_[A-Za-z0-9_]{20,})`,
-		`(?i)(mysql|postgres|postgresql|mongodb)://[^@\s]+@`,
-	}
+	patterns := append([]string(nil), credentialPatternSources...)
 	patterns = append(patterns, cfg.ExtraPatterns...)
 	compiled := make([]*regexp.Regexp, 0, len(patterns))
 	for _, p := range patterns {
@@ -45,12 +45,13 @@ func NewRedactor(cfg RedactionConfig) (*Redactor, error) {
 		}
 		compiled = append(compiled, re)
 	}
-	return &Redactor{replacement: replacement, patterns: compiled}, nil
+	enabled := cfg.Enabled == nil || *cfg.Enabled
+	return &Redactor{replacement: replacement, patterns: compiled, enabled: enabled}, nil
 }
 
 // Redact replaces sensitive substrings and reports whether anything changed.
 func (r *Redactor) Redact(s string) (string, bool) {
-	if r == nil || len(r.patterns) == 0 || s == "" {
+	if r == nil || !r.enabled || len(r.patterns) == 0 || s == "" {
 		return s, false
 	}
 	out := s
@@ -70,4 +71,19 @@ func (r *Redactor) Redact(s string) (string, bool) {
 		})
 	}
 	return out, out != s
+}
+
+func (r *Redactor) contains(s string) bool {
+	if r == nil || s == "" {
+		return false
+	}
+	if pemBeginMarkerRE.MatchString(s) {
+		return true
+	}
+	for _, re := range r.patterns {
+		if re.MatchString(s) {
+			return true
+		}
+	}
+	return false
 }
