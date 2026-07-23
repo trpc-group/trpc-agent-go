@@ -1060,3 +1060,19 @@ func equal[T comparable](a, b []T) bool {
 	}
 	return true
 }
+
+func TestIsImplicitlyDeniedUsesSharedWrapperSet(t *testing.T) {
+	for _, command := range []string{
+		"bash", "/usr/bin/timeout", "nice", "setsid", "command",
+	} {
+		if !IsImplicitlyDenied(command) {
+			t.Errorf("IsImplicitlyDenied(%q) = false, want true", command)
+		}
+	}
+	if IsImplicitlyDenied("go") {
+		t.Fatal("IsImplicitlyDenied(\"go\") = true, want false")
+	}
+	if !isImplicitlyDeniedForGOOS("nice.exe", "windows") {
+		t.Fatal("isImplicitlyDeniedForGOOS(\"nice.exe\", \"windows\") = false, want true")
+	}
+}

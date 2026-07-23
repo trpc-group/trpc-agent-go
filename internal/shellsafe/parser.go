@@ -235,6 +235,20 @@ func (p Policy) Active() bool {
 	return len(p.Allow) > 0 || len(p.Deny) > 0
 }
 
+// IsImplicitlyDenied reports whether command names a shell wrapper, command
+// runner, or state-mutating builtin that the conservative parser never permits
+// while a policy is active. The check uses the current platform's executable
+// basename rules.
+func IsImplicitlyDenied(command string) bool {
+	return isImplicitlyDeniedForGOOS(command, runtime.GOOS)
+}
+
+func isImplicitlyDeniedForGOOS(command, goos string) bool {
+	base := basenameForGOOS(command, goos)
+	_, denied := implicitDeny[normalizeName(base, goos)]
+	return denied
+}
+
 // CheckCommand parses command and applies the policy to every
 // resulting pipeline segment. It is a convenience wrapper around
 // Parse + Check.
@@ -289,10 +303,8 @@ func (p Policy) checkSegmentForGOOS(argv []string, goos string) error {
 			"command %q is denied by denied_commands", cmd,
 		)
 	}
-	// implicitDeny keys are lower-case. Fold the basename through
-	// normalizeName so "SH", "Sh", "/usr/bin/SH" and (on Windows)
-	// "sh.exe" all hit the look-up via the bare "sh" key.
-	if _, ok := implicitDeny[normalizeName(base, goos)]; ok {
+	// Match the same implicit-deny contract exposed to safety wrappers.
+	if isImplicitlyDeniedForGOOS(cmd, goos) {
 		return implicitDenyError(cmd)
 	}
 	if len(p.Allow) > 0 && !matchAllow(p.Allow, cmd, base, goos) {
