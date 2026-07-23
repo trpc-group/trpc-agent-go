@@ -17,8 +17,9 @@ import (
 	"time"
 )
 
-// AuditFailureMode identifies how a caller treats an audit write failure.
-// JSONLAuditSink does not enforce this setting.
+// AuditFailureMode identifies how a caller treats an audit write failure. Its
+// zero value is not a defined mode; consumers validate and interpret this
+// setting. JSONLAuditSink does not enforce it.
 type AuditFailureMode string
 
 const (
@@ -32,7 +33,9 @@ const (
 
 // AuditEvent is the low-cardinality, secret-minimizing record of one safety
 // scan or execution stage. It intentionally excludes raw commands, arguments,
-// evidence, environment values, and execution results.
+// evidence, environment values, and execution results. Its zero value is
+// serialized as provided; Record does not invent a schema version, timestamp,
+// or other defaults.
 type AuditEvent struct {
 	SchemaVersion   int       `json:"schema_version"`
 	Timestamp       time.Time `json:"timestamp"`
@@ -55,8 +58,10 @@ type AuditSink interface {
 	Record(context.Context, AuditEvent) error
 }
 
-// JSONLAuditSink writes each AuditEvent as one JSON Lines record. It is safe
-// for concurrent use by multiple goroutines.
+// JSONLAuditSink writes each AuditEvent as one JSON Lines record. Its zero
+// value has no writer, so Record returns a non-panicking error just as it does
+// for a sink created with a nil writer. It is safe for concurrent use by
+// multiple goroutines.
 type JSONLAuditSink struct {
 	mu     sync.Mutex
 	writer io.Writer
