@@ -1255,18 +1255,10 @@ func normalizeForwardedPropsSourceMetadata(ctx context.Context, input *runInput)
 		)
 		return nil, false
 	}
-	var forwardedProps any
-	if err := json.Unmarshal(data, &forwardedProps); err != nil {
-		log.ErrorfContext(
-			ctx,
-			"agui run: threadID: %s, runID: %s, unmarshal forwardedProps source metadata: %v",
-			input.threadID,
-			input.runID,
-			err,
-		)
-		return nil, false
+	if string(data) == "null" {
+		return nil, true
 	}
-	return forwardedProps, true
+	return input.runAgentInput.ForwardedProps, true
 }
 
 func (r *runner) newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelCauseFunc) {

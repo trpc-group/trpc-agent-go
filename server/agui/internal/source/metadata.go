@@ -45,7 +45,10 @@ type Metadata struct {
 type SnapshotMetadata struct {
 	Messages  map[string]Metadata `json:"messages,omitempty"`
 	ToolCalls map[string]Metadata `json:"toolCalls,omitempty"`
-	Runs      map[string]Metadata `json:"runs,omitempty"`
+	// Runs stores run-scoped metadata keyed by run ID. It is populated from
+	// persisted user-input forwardedProps metadata and is not a general run
+	// event source index.
+	Runs map[string]Metadata `json:"runs,omitempty"`
 }
 
 // SnapshotMetadataOption configures how snapshot metadata is built.

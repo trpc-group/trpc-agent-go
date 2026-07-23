@@ -570,9 +570,23 @@ func TestRecordMetadataSkipsEmptyIDs(t *testing.T) {
 	recordMessageMetadata(messages, "", testMetadata("evt-1"))
 	recordToolCallMetadata(toolCalls, "", testMetadata("evt-1"))
 	recordRunMetadata(runs, "", Metadata{ForwardedProps: map[string]any{}})
+	recordRunMetadata(runs, "run-1", Metadata{})
 	assert.Empty(t, messages)
 	assert.Empty(t, toolCalls)
 	assert.Empty(t, runs)
+}
+
+func TestRunIDFromRawEvent(t *testing.T) {
+	assert.Empty(t, runIDFromRawEvent(nil))
+	assert.Equal(t, "run-1", runIDFromRawEvent(map[string]any{"runId": "run-1"}))
+	assert.Empty(t, runIDFromRawEvent(map[string]any{"runId": 123}))
+	assert.Equal(t, "run-2", runIDFromRawEvent(struct {
+		RunID string `json:"runId,omitempty"`
+	}{RunID: "run-2"}))
+	assert.Empty(t, runIDFromRawEvent(struct {
+		RunID int `json:"runId,omitempty"`
+	}{RunID: 123}))
+	assert.Empty(t, runIDFromRawEvent(func() {}))
 }
 
 func TestBuildSnapshotMetadataIndexesMessagesAndToolCalls(t *testing.T) {
@@ -802,6 +816,31 @@ func TestBuildSnapshotMetadataIndexesForwardedPropsByRunID(t *testing.T) {
 	require.Contains(t, metadata.Messages, "user-1")
 	gotMessage := metadata.Messages["user-1"]
 	assert.Nil(t, gotMessage.ForwardedProps)
+}
+
+func TestBuildSnapshotMetadataIndexesRunOnlyForwardedProps(t *testing.T) {
+	forwardedProps := map[string]any{"file_url": "https://example.com/demo.png"}
+	userMessage := aguitypes.Message{
+		ID:      "user-1",
+		Role:    aguitypes.RoleUser,
+		Content: "hello",
+	}
+	userEvent := aguievents.NewCustomEvent(
+		multimodal.CustomEventNameUserMessage,
+		aguievents.WithValue(userMessage),
+	)
+	userEvent.GetBaseEvent().TimestampMs = nil
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEvent(t, withRawEvent(userEvent, map[string]any{
+			"runId":          "run-1",
+			"forwardedProps": forwardedProps,
+		})),
+	})
+	assert.Equal(t, SnapshotMetadata{
+		Runs: map[string]Metadata{
+			"run-1": {ForwardedProps: forwardedProps},
+		},
+	}, metadata)
 }
 
 func TestCustomUserMessageIDRejectsInvalidPayloads(t *testing.T) {

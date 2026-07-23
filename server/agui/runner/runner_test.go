@@ -2391,6 +2391,26 @@ func TestRecordUserMessageTracksForwardedPropsSourceMetadata(t *testing.T) {
 	assert.Equal(t, "run", rawEvent["runId"])
 }
 
+func TestRecordUserMessageSkipsForwardedPropsMetadataByDefault(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"file_url": "https://example.com/demo.png"},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
 func TestRecordUserMessageSkipsInvalidForwardedPropsMetadata(t *testing.T) {
 	originalErrorfContext := log.ErrorfContext
 	errorCalls := 0
@@ -2433,6 +2453,25 @@ func TestRecordUserMessageSkipsNilForwardedPropsMetadata(t *testing.T) {
 		ThreadID:       "thread",
 		RunID:          "run",
 		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsMissingForwardedPropsMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
 	}
 	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
 	require.NoError(t, err)
