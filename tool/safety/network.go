@@ -449,15 +449,50 @@ func commandAndRest(args []string, valueOptions map[string]struct{}) (string, []
 }
 
 func netcatDestination(args []string) []string {
-	for _, arg := range args {
-		if arg == "-l" || arg == "--listen" {
-			return nil
-		}
-	}
 	values := map[string]struct{}{
 		"-i": {}, "-P": {}, "-p": {}, "-q": {}, "-s": {}, "-w": {}, "-x": {}, "-X": {},
 	}
-	return firstPositional(args, values)
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--listen" || netcatShortFlag(arg, 'l', values) {
+			return nil
+		}
+		if arg == "--" {
+			if i+1 < len(args) {
+				return args[i+1 : i+2]
+			}
+			return nil
+		}
+		if strings.HasPrefix(arg, "--") {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") && arg != "-" {
+			consumesNext, recognized := parseShortOptions(
+				arg, values, "46bCDdhklnrtUuvz",
+			)
+			if recognized && consumesNext && i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		return args[i : i+1]
+	}
+	return nil
+}
+
+func netcatShortFlag(arg string, target rune, valueOptions map[string]struct{}) bool {
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == target {
+			return true
+		}
+		if _, consumes := valueOptions["-"+string(option)]; consumes {
+			return false
+		}
+	}
+	return false
 }
 
 func knownDestinationHost(candidate string) (string, bool) {
@@ -690,9 +725,7 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 		return Finding{}, false
 	}
 	for _, arg := range argv[1:] {
-		if base == "wget" && (arg == "-e" ||
-			(strings.HasPrefix(arg, "-e") && len(arg) > len("-e")) ||
-			arg == "--execute" || strings.HasPrefix(arg, "--execute=")) {
+		if base == "wget" && wgetExecutableConfigOption(arg) {
 			return newFinding(
 				DecisionNeedsHumanReview, RiskHigh, "network.config",
 				"wget executes configuration directives that can change network routing",
@@ -710,6 +743,27 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 		}
 	}
 	return Finding{}, false
+}
+
+func wgetExecutableConfigOption(arg string) bool {
+	if arg == "--execute" || strings.HasPrefix(arg, "--execute=") {
+		return true
+	}
+	if len(arg) < 2 || !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") {
+		return false
+	}
+	for _, option := range arg[1:] {
+		if option == 'e' {
+			return true
+		}
+		if strings.ContainsRune("aABDilOoPQRTUtw", option) {
+			return false
+		}
+		if !strings.ContainsRune("cdHhNpqrSV", option) {
+			return false
+		}
+	}
+	return false
 }
 
 func explicitHost(candidate string) (string, bool) {

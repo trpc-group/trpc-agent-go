@@ -235,9 +235,14 @@ func parallelism(argv []string) int {
 			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
 			return value
 		}
+		if goTest && strings.HasPrefix(lower, "-parallel=") {
+			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
+			return value
+		}
 		if (lower == "-p" && (base == "xargs" || goTest)) ||
 			(lower == "-j" && (base == "make" || base == "ninja")) ||
-			lower == "--jobs" || lower == "--parallel" {
+			lower == "--jobs" || lower == "--parallel" ||
+			(lower == "-parallel" && goTest) {
 			if i+2 < len(argv) {
 				value, _ := strconv.Atoi(argv[i+2])
 				return value

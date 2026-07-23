@@ -394,12 +394,21 @@ func pythonSocketObjectSpecs(code string) []codeNetworkCallSpec {
 
 	var objects []string
 	for _, constructor := range constructors {
-		pattern := regexp.MustCompile(
-			`(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*` +
-				regexp.QuoteMeta(constructor) + `\s*\(\s*\)`,
-		)
-		for _, match := range executableSubmatches(pattern, code) {
-			objects = appendUniqueString(objects, match[1])
+		constructorCall := regexp.QuoteMeta(constructor) + `\s*\([^()\n]*\)`
+		patterns := []*regexp.Regexp{
+			regexp.MustCompile(
+				`(?m)\b([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\s*=\s*` +
+					constructorCall,
+			),
+			regexp.MustCompile(
+				`(?m)\bwith\s+` + constructorCall +
+					`\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*:`,
+			),
+		}
+		for _, pattern := range patterns {
+			for _, match := range executableSubmatches(pattern, code) {
+				objects = appendUniqueString(objects, match[1])
+			}
 		}
 	}
 	for pass := 0; pass < 4; pass++ {

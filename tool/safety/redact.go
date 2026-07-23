@@ -30,10 +30,10 @@ var (
 		`(?i)([a-z][a-z0-9+.-]*://[^/@\s:]+:)([^/@\s]+)(@)`,
 	)
 	proxyAuthShortFlagPattern = regexp.MustCompile(
-		`((?:^|\s)(?i:(?:[^\s]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-P(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`,
+		`((?:^|\s)(?i:(?:[^\s]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-[A-Za-z0-9]*?P(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`,
 	)
 	proxyAuthAttachedShortPattern = regexp.MustCompile(
-		`((?:^|\s)(?i:(?:[^\s]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-P)([^=\s][^\s]*)`,
+		`((?:^|\s)(?i:(?:[^\s]*/)?(?:nc|netcat))\s+(?:[^\s]+\s+)*-[A-Za-z0-9]*?P)([^=\s][^\s]*)`,
 	)
 	proxyAuthLongFlagPattern = regexp.MustCompile(
 		`(?i)((?:^|\s)(?:--proxy-user|--proxy-username)(?:=|\s+))("[^"]*"|'[^']*'|[^\s]+)`,
