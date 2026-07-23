@@ -192,8 +192,8 @@ func TestOutputSanitizerRedactsSplitPrivateKey(t *testing.T) {
 	sanitizer := MustScanner(DefaultPolicy()).NewOutputSanitizer()
 	chunks := []string{
 		"before\n-----BEG",
-		"IN RSA PRIVATE KEY-----\nsecret-body\n-----E",
-		"ND RSA PRIVATE KEY-----\nafter",
+		"IN RSA PRIVATE KEY-----\nsecret-body\n-----EN",
+		"D RSA PRIVATE KEY-----\nafter",
 	}
 	var output strings.Builder
 	for _, chunk := range chunks {
