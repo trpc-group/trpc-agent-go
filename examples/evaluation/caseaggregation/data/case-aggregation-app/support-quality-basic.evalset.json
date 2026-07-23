@@ -1,0 +1,22 @@
+{
+  "evalSetId": "support-quality-basic",
+  "name": "support-quality-basic",
+  "evalCases": [
+    {
+      "evalId": "support_weighted_tradeoff",
+      "conversation": [
+        {
+          "invocationId": "support_weighted_tradeoff-1",
+          "userContent": {
+            "role": "user",
+            "content": "My workspace account is locked."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "case-aggregation-app",
+        "userId": "demo-user"
+      }
+    }
+  ]
+}
