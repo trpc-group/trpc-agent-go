@@ -36,8 +36,47 @@ func TestEvaluateGateAcceptsSafeImprovement(t *testing.T) {
 	if !got.Accepted || len(got.FailedChecks) != 0 {
 		t.Fatalf("EvaluateGate() = %+v, want accepted", got)
 	}
-	if len(got.Checks) != 8 {
-		t.Fatalf("EvaluateGate() check count = %d, want 8", len(got.Checks))
+	if len(got.Checks) != 9 {
+		t.Fatalf("EvaluateGate() check count = %d, want 9", len(got.Checks))
+	}
+}
+
+func TestEvaluateGateRejectsApparentGainFromProviderRecovery(t *testing.T) {
+	baseline := []CaseEvaluation{{
+		ID: "case",
+		Runs: []CaseRun{{
+			Score: 0,
+			Error: "temporary provider timeout",
+		}},
+	}}
+	candidate := []CaseEvaluation{{
+		ID: "case",
+		Runs: []CaseRun{{
+			Score:  1,
+			Passed: true,
+		}},
+	}}
+	comparison, err := CompareCases(baseline, candidate, 1)
+	if err != nil {
+		t.Fatalf("CompareCases() error = %v", err)
+	}
+	if comparison.MeanScoreGain != 1 {
+		t.Fatalf("mean score gain = %.3f, want apparent gain of 1", comparison.MeanScoreGain)
+	}
+
+	got, err := EvaluateGate(comparison, GateConfig{
+		MinScoreGain:       0.02,
+		PassK:              1,
+		BootstrapResamples: 10,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateGate() error = %v", err)
+	}
+	if got.Accepted {
+		t.Fatal("EvaluateGate() accepted provider recovery as prompt gain")
+	}
+	if !slices.Contains(got.FailedChecks, "validation_runs_error_free") {
+		t.Fatalf("failed checks %v do not contain validation_runs_error_free", got.FailedChecks)
 	}
 }
 

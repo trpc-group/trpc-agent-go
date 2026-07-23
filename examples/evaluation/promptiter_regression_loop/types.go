@@ -121,6 +121,8 @@ type CaseDelta struct {
 type Comparison struct {
 	PassK                   int         `json:"pass_k"`
 	Deltas                  []CaseDelta `json:"deltas"`
+	BaselineErrorRuns       int         `json:"baseline_error_runs"`
+	CandidateErrorRuns      int         `json:"candidate_error_runs"`
 	BaselineMeanScore       float64     `json:"baseline_mean_score"`
 	CandidateMeanScore      float64     `json:"candidate_mean_score"`
 	MeanScoreGain           float64     `json:"mean_score_gain"`

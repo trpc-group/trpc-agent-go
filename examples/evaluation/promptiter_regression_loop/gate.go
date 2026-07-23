@@ -45,6 +45,18 @@ func EvaluateGate(comparison Comparison, config GateConfig) (GateResult, error) 
 	}
 
 	checks := []GateCheck{
+		newGateCheck(
+			"validation_runs_error_free",
+			comparison.BaselineErrorRuns+comparison.CandidateErrorRuns == 0,
+			float64(comparison.BaselineErrorRuns+comparison.CandidateErrorRuns),
+			0,
+			"==",
+			fmt.Sprintf(
+				"validation comparisons must contain no transport or model errors (baseline=%d, candidate=%d)",
+				comparison.BaselineErrorRuns,
+				comparison.CandidateErrorRuns,
+			),
+		),
 		newGateCheck("minimum_score_gain", comparison.MeanScoreGain >= config.MinScoreGain,
 			comparison.MeanScoreGain, config.MinScoreGain, ">=", "candidate validation mean must improve by the configured minimum"),
 		newGateCheck("no_new_hard_failure", newHardFailures == 0,

@@ -10,6 +10,8 @@ package main
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +24,40 @@ func TestLoadConfigConsumesPromptIterAndMetricsFiles(t *testing.T) {
 	assert.Equal(t, "regression-writer#instruction", cfg.PromptIter.Target)
 	assert.Equal(t, cfg.Gate.PassK, cfg.PromptIter.CandidateValidationRuns)
 	assert.Len(t, cfg.Metrics.Metrics, 4)
+}
+
+func TestLoadConfigRejectsUnknownFields(t *testing.T) {
+	tests := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "root",
+			data: `{"unknown":true}`,
+		},
+		{
+			name: "gate budget typo",
+			data: `{"gate":{"maxCall":165}}`,
+		},
+		{
+			name: "live typo",
+			data: `{"live":{"timeoutSecond":45}}`,
+		},
+		{
+			name: "optimizer typo",
+			data: `{"live":{"optimizer":{"maxOutputToken":1024}}}`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			require.NoError(t, os.WriteFile(path, []byte(test.data), 0o600))
+
+			_, err := loadConfig(path)
+
+			assert.ErrorContains(t, err, "unknown field")
+		})
+	}
 }
 
 func TestValidateDatasetIsolationRejectsLeakage(t *testing.T) {

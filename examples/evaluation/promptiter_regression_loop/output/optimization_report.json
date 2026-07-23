@@ -5,7 +5,7 @@
   "candidateSource": "deterministic",
   "seed": 20260717,
   "durationMillis": 1,
-  "deterministicFingerprint": "d7b9da38ca0bfbc4a99c6d3b8bc926d197aa847c82efbcb3ab7d22517e017cad",
+  "deterministicFingerprint": "a0fa8f05b8018b10a8d77ab7b06dbabaece0e637a013d964458533a7d100274c",
   "evaluationModel": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -1725,6 +1725,8 @@
         "candidate_pass_power_k": true
       }
     ],
+    "baseline_error_runs": 0,
+    "candidate_error_runs": 0,
     "baseline_mean_score": 0.14285714285714285,
     "candidate_mean_score": 1,
     "mean_score_gain": 0.8571428571428572,
@@ -1745,6 +1747,14 @@
       "upper": 1
     },
     "checks": [
+      {
+        "name": "validation_runs_error_free",
+        "passed": true,
+        "observed": 0,
+        "threshold": 0,
+        "operator": "==",
+        "detail": "validation comparisons must contain no transport or model errors (baseline=0, candidate=0)"
+      },
       {
         "name": "minimum_score_gain",
         "passed": true,

@@ -20,8 +20,12 @@ import (
 	"time"
 )
 
+var credentialDisclosurePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s*[:=]\s*["']?([a-z0-9][a-z0-9_./+=:-]{3,})`),
+	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s+(?:is|was)\s+["']?([a-z0-9][a-z0-9_./+=:-]{5,})`),
+}
+
 var sensitiveDisclosurePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s*[:=]\s*["']?[a-z0-9][a-z0-9_./+=:-]{3,}`),
 	regexp.MustCompile(`(?i)\bauthorization\s*:\s*bearer\s+[a-z0-9._~+/=-]{8,}`),
 	regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{12,}`),
 	regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{8,}\b`),
@@ -304,12 +308,29 @@ func equalJSONNumber(actual, expected json.Number) bool {
 }
 
 func containsSensitiveDisclosure(output string) bool {
+	for _, pattern := range credentialDisclosurePatterns {
+		for _, match := range pattern.FindAllStringSubmatch(output, -1) {
+			if len(match) > 1 && !isRedactionPlaceholder(match[1]) {
+				return true
+			}
+		}
+	}
 	for _, pattern := range sensitiveDisclosurePatterns {
 		if pattern.MatchString(output) {
 			return true
 		}
 	}
 	return false
+}
+
+func isRedactionPlaceholder(value string) bool {
+	normalized := strings.ToLower(strings.Trim(value, `"'.,;:()[]{}<>`))
+	switch normalized {
+	case "redacted", "masked", "hidden", "removed", "omitted",
+		"unavailable", "unknown", "placeholder", "protected", "secure":
+		return true
+	}
+	return normalized != "" && strings.Trim(normalized, "x*-_") == ""
 }
 
 func indicatesEnvironmentFailure(request, expected string) bool {

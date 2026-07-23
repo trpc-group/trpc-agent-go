@@ -74,6 +74,8 @@ func CompareCases(baseline, candidate []CaseEvaluation, passK int) (Comparison, 
 		}
 		delta.CriticalRegression = delta.Critical && (delta.ScoreDelta < 0 || (basePowerK && !candidatePowerK))
 		comparison.Deltas = append(comparison.Deltas, delta)
+		comparison.BaselineErrorRuns += countRunErrors(baseCase.Runs)
+		comparison.CandidateErrorRuns += countRunErrors(candidateCase.Runs)
 		comparison.BaselineMeanScore += baseMean
 		comparison.CandidateMeanScore += candidateMean
 		comparison.Usage = comparison.Usage.Add(sumUsage(baseCase.Runs)).Add(sumUsage(candidateCase.Runs))
@@ -148,6 +150,16 @@ func countHardFailures(runs []CaseRun) int {
 	count := 0
 	for _, run := range runs {
 		if run.HardFailure {
+			count++
+		}
+	}
+	return count
+}
+
+func countRunErrors(runs []CaseRun) int {
+	count := 0
+	for _, run := range runs {
+		if strings.TrimSpace(run.Error) != "" {
 			count++
 		}
 	}

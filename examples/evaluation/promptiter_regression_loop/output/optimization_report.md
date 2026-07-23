@@ -7,7 +7,7 @@
 - Seed: `20260717`
 - Evaluation model: `deterministic/fake-trace-runner`
 - Optimizer model: `deterministic/fake-promptiter-optimizer`
-- Fingerprint: `d7b9da38ca0bfbc4a99c6d3b8bc926d197aa847c82efbcb3ab7d22517e017cad`
+- Fingerprint: `a0fa8f05b8018b10a8d77ab7b06dbabaece0e637a013d964458533a7d100274c`
 - Duration: `1 ms`
 
 ## Resource usage
@@ -41,6 +41,7 @@ Paired bootstrap 90% CI: `[0.5714, 1.0000]`.
 
 | Check | Result | Observed | Requirement |
 |---|---|---:|---:|
+| validation_runs_error_free | PASS | 0.0000 | == 0.0000 |
 | minimum_score_gain | PASS | 0.8571 | &gt;= 0.0200 |
 | no_new_hard_failure | PASS | 0.0000 | == 0.0000 |
 | critical_cases_do_not_regress | PASS | 0.0000 | == 0.0000 |

@@ -9,9 +9,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -98,7 +100,7 @@ type optimizerBudgetConfig struct {
 func (cfg *liveConfig) UnmarshalJSON(data []byte) error {
 	type liveConfigAlias liveConfig
 	var decoded liveConfigAlias
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	if err := decodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
 	var fields map[string]json.RawMessage
@@ -113,7 +115,7 @@ func (cfg *liveConfig) UnmarshalJSON(data []byte) error {
 func (cfg *liveOptimizerConfig) UnmarshalJSON(data []byte) error {
 	type liveOptimizerConfigAlias liveOptimizerConfig
 	var decoded liveOptimizerConfigAlias
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	if err := decodeStrictJSON(data, &decoded); err != nil {
 		return err
 	}
 	var fields map[string]json.RawMessage
@@ -174,7 +176,7 @@ func loadConfig(path string) (*loadedConfig, error) {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
 	var cfg pipelineConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
+	if err := decodeStrictJSON(data, &cfg); err != nil {
 		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	baseDir := filepath.Dir(absPath)
@@ -466,7 +468,7 @@ func loadJSONFile(path string, target any) error {
 	if err != nil {
 		return err
 	}
-	if err := json.Unmarshal(data, target); err != nil {
+	if err := decodeStrictJSON(data, target); err != nil {
 		return err
 	}
 	return nil
@@ -478,7 +480,7 @@ func loadEvalSet(path string) (evalSetFile, error) {
 		return evalSetFile{}, err
 	}
 	var set evalSetFile
-	if err := json.Unmarshal(data, &set); err != nil {
+	if err := decodeStrictJSON(data, &set); err != nil {
 		return evalSetFile{}, err
 	}
 	if strings.TrimSpace(set.EvalSetID) == "" || len(set.EvalCases) == 0 {
@@ -500,6 +502,22 @@ func loadEvalSet(path string) (evalSetFile, error) {
 		seen[c.EvalID] = struct{}{}
 	}
 	return set, nil
+}
+
+func decodeStrictJSON(data []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values are not allowed")
+		}
+		return err
+	}
+	return nil
 }
 
 func resolvePath(baseDir, path string) string {
