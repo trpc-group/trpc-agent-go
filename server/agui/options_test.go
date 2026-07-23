@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
@@ -28,6 +30,7 @@ func TestNewOptionsDefaults(t *testing.T) {
 	assert.Equal(t, "/cancel", opts.cancelPath)
 	assert.False(t, opts.cancelEnabled)
 	assert.NotNil(t, opts.serviceFactory)
+	assert.NotNil(t, opts.runnerFactory)
 	assert.Empty(t, opts.aguiRunnerOptions)
 }
 
@@ -75,6 +78,19 @@ func TestWithServiceFactory(t *testing.T) {
 	assert.NotNil(t, svc)
 	assert.True(t, invoked)
 	assert.IsType(t, fakeService{}, svc)
+}
+
+func TestWithRunnerFactory(t *testing.T) {
+	var invoked bool
+	customFactory := func(_ runner.Runner, _ ...aguirunner.Option) (aguirunner.Runner, error) {
+		invoked = true
+		return optionTestRunner{}, nil
+	}
+	opts := newOptions(WithRunnerFactory(customFactory))
+	r, err := opts.runnerFactory(nil)
+	assert.NoError(t, err)
+	assert.True(t, invoked)
+	assert.IsType(t, optionTestRunner{}, r)
 }
 
 func TestWithTimeout(t *testing.T) {
@@ -227,4 +243,12 @@ func TestWithAppNameResolver(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "custom-app", appName)
 	assert.True(t, called)
+}
+
+type optionTestRunner struct{}
+
+func (optionTestRunner) Run(context.Context, *adapter.RunAgentInput) (<-chan aguievents.Event, error) {
+	events := make(chan aguievents.Event)
+	close(events)
+	return events, nil
 }
