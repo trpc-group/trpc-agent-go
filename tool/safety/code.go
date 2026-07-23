@@ -318,10 +318,14 @@ var (
 		`(?m)\bimport\s+(requests|httpx|socket)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
 	)
 	pythonFromAliasPattern = regexp.MustCompile(
-		`(?m)\bfrom\s+(requests|httpx|socket)\s+import\s+(get|post|create_connection)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
+		`(?m)\bfrom\s+(requests|httpx|socket)\s+import\s+(get|post|create_connection|socket)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
 	)
 	goNetAliasPattern = regexp.MustCompile(
 		`(?m)\bimport\s+([A-Za-z_][A-Za-z0-9_]*|\.)\s+"net"`,
+	)
+	goImportGroupPattern     = regexp.MustCompile(`(?s)\bimport\s*\((.*?)\)`)
+	goGroupedNetAliasPattern = regexp.MustCompile(
+		`(?m)\b([A-Za-z_][A-Za-z0-9_]*|\.)\s+"net"`,
 	)
 	nodeModuleAliasPattern = regexp.MustCompile(
 		`(?m)\b(?:const|let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*require\(\s*["'](?:node:)?(?:net|tls)["']\s*\)`,
@@ -358,13 +362,76 @@ func pythonAliasNetworkSpecs(code string) []codeNetworkCallSpec {
 		}
 	}
 	for _, match := range executableSubmatches(pythonFromAliasPattern, code) {
+		if match[1] == "socket" && match[2] == "socket" {
+			continue
+		}
 		name := match[2]
 		if match[3] != "" {
 			name = match[3]
 		}
 		specs = append(specs, codeNetworkCallSpec{name: name, index: 0})
 	}
+	return append(specs, pythonSocketObjectSpecs(code)...)
+}
+
+func pythonSocketObjectSpecs(code string) []codeNetworkCallSpec {
+	constructors := []string{"socket.socket"}
+	for _, match := range executableSubmatches(pythonModuleAliasPattern, code) {
+		if match[1] == "socket" {
+			constructors = append(constructors, match[2]+".socket")
+		}
+	}
+	for _, match := range executableSubmatches(pythonFromAliasPattern, code) {
+		if match[1] != "socket" || match[2] != "socket" {
+			continue
+		}
+		name := match[2]
+		if match[3] != "" {
+			name = match[3]
+		}
+		constructors = append(constructors, name)
+	}
+
+	var objects []string
+	for _, constructor := range constructors {
+		pattern := regexp.MustCompile(
+			`(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*` +
+				regexp.QuoteMeta(constructor) + `\s*\(\s*\)`,
+		)
+		for _, match := range executableSubmatches(pattern, code) {
+			objects = appendUniqueString(objects, match[1])
+		}
+	}
+	for pass := 0; pass < 4; pass++ {
+		before := len(objects)
+		for _, object := range append([]string(nil), objects...) {
+			pattern := regexp.MustCompile(
+				`(?m)\b([A-Za-z_][A-Za-z0-9_]*)\s*=\s*` +
+					regexp.QuoteMeta(object) + `\b`,
+			)
+			for _, match := range executableSubmatches(pattern, code) {
+				objects = appendUniqueString(objects, match[1])
+			}
+		}
+		if len(objects) == before {
+			break
+		}
+	}
+
+	specs := make([]codeNetworkCallSpec, 0, len(objects))
+	for _, object := range objects {
+		specs = append(specs, codeNetworkCallSpec{name: object + ".connect", index: 0})
+	}
 	return specs
+}
+
+func appendUniqueString(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 func goAliasNetworkSpecs(code string) []codeNetworkCallSpec {
@@ -378,6 +445,21 @@ func goAliasNetworkSpecs(code string) []codeNetworkCallSpec {
 			codeNetworkCallSpec{name: prefix + "Dial", index: 1},
 			codeNetworkCallSpec{name: prefix + "DialTimeout", index: 1},
 		)
+	}
+	for _, group := range executableSubmatches(goImportGroupPattern, code) {
+		if len(group) < 2 {
+			continue
+		}
+		for _, match := range executableSubmatches(goGroupedNetAliasPattern, group[1]) {
+			prefix := match[1] + "."
+			if match[1] == "." {
+				prefix = ""
+			}
+			specs = append(specs,
+				codeNetworkCallSpec{name: prefix + "Dial", index: 1},
+				codeNetworkCallSpec{name: prefix + "DialTimeout", index: 1},
+			)
+		}
 	}
 	return specs
 }

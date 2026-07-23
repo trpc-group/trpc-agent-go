@@ -220,12 +220,14 @@ func parallelism(argv []string) int {
 		return 0
 	}
 	base := commandBase(argv[0])
+	goTest := isGoTestCommand(argv)
 	for i, arg := range argv[1:] {
 		lower := strings.ToLower(arg)
-		shortParallel := strings.HasPrefix(lower, "-p") && base == "xargs"
+		shortParallel := strings.HasPrefix(lower, "-p") && (base == "xargs" || goTest)
 		shortJobs := strings.HasPrefix(lower, "-j") && (base == "make" || base == "ninja")
 		if (shortParallel || shortJobs) && len(lower) > 2 {
-			if value, err := strconv.Atoi(lower[2:]); err == nil {
+			valueText := strings.TrimPrefix(lower[2:], "=")
+			if value, err := strconv.Atoi(valueText); err == nil {
 				return value
 			}
 		}
@@ -233,7 +235,7 @@ func parallelism(argv []string) int {
 			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
 			return value
 		}
-		if (lower == "-p" && base == "xargs") ||
+		if (lower == "-p" && (base == "xargs" || goTest)) ||
 			(lower == "-j" && (base == "make" || base == "ninja")) ||
 			lower == "--jobs" || lower == "--parallel" {
 			if i+2 < len(argv) {
@@ -243,6 +245,24 @@ func parallelism(argv []string) int {
 		}
 	}
 	return 0
+}
+
+func isGoTestCommand(argv []string) bool {
+	if len(argv) < 2 || commandBase(argv[0]) != "go" {
+		return false
+	}
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "-C" && i+1 < len(argv) {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			continue
+		}
+		return arg == "test"
+	}
+	return false
 }
 
 func stringAllowedFold(value string, allowed []string) bool {

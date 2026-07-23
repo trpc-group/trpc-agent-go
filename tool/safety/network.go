@@ -690,6 +690,15 @@ func networkConfigFinding(argv []string) (Finding, bool) {
 		return Finding{}, false
 	}
 	for _, arg := range argv[1:] {
+		if base == "wget" && (arg == "-e" ||
+			(strings.HasPrefix(arg, "-e") && len(arg) > len("-e")) ||
+			arg == "--execute" || strings.HasPrefix(arg, "--execute=")) {
+			return newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "network.config",
+				"wget executes configuration directives that can change network routing",
+				"remove executable configuration and use an allowlisted URL directly",
+			), true
+		}
 		longName := strings.ToLower(strings.SplitN(arg, "=", 2)[0])
 		shortConfig := base == "curl" && (arg == "-K" || strings.HasPrefix(arg, "-K"))
 		if longName == "--config" || shortConfig {

