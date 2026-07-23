@@ -475,6 +475,7 @@ func (r *workspaceRuntime) RunProgram(
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.MaxOutputBytes,
 	)
 	res := codeexecutor.RunResult{
 		Stdout:   out,
@@ -1103,12 +1104,13 @@ func (r *workspaceRuntime) ExecuteInline(
 		return codeexecutor.RunResult{}, err
 	}
 	defer r.Cleanup(ctx, ws)
-	var allOut, allErr strings.Builder
+	allOut := codeexecutor.NewBoundedOutput(0)
+	allErr := codeexecutor.NewBoundedOutput(0)
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		pf := codeexecutor.PutFile{
@@ -1117,7 +1119,7 @@ func (r *workspaceRuntime) ExecuteInline(
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		argv := append([]string{}, args...)
@@ -1130,13 +1132,13 @@ func (r *workspaceRuntime) ExecuteInline(
 		}
 		res, err := r.RunProgram(ctx, ws, spec)
 		if err != nil {
-			allErr.WriteString(err.Error() + "\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 		}
 		if res.Stdout != "" {
-			allOut.WriteString(res.Stdout)
+			_, _ = allOut.Write([]byte(res.Stdout))
 		}
 		if res.Stderr != "" {
-			allErr.WriteString(res.Stderr)
+			_, _ = allErr.Write([]byte(res.Stderr))
 		}
 	}
 	dur := time.Since(start)
@@ -1156,7 +1158,7 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+	return r.execCmdWithStdin(ctx, argv, timeout, "", nil, maxReadSizeBytes)
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,6 +1173,7 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
+	maxOutputBytes int,
 ) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1207,8 +1210,9 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	stdout := codeexecutor.NewBoundedOutput(maxOutputBytes)
+	stderr := codeexecutor.NewBoundedOutput(maxOutputBytes)
+	_, err = stdcopy.StdCopy(stdout, stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr

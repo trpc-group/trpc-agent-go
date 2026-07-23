@@ -56,7 +56,9 @@ const (
 
 	// Maximum bytes read back from the sandbox for a single file when
 	// collecting outputs.
-	maxReadSizeBytes = 4 * 1024 * 1024 // 4 MiB
+	maxReadSizeBytes        = 4 * 1024 * 1024 // 4 MiB
+	maxStreamingOutputBytes = 2 * maxReadSizeBytes
+	framedOutputTailBytes   = 256
 
 	// Sentinels used to frame RunProgram stdout / stderr / exit code so
 	// wrapper-script noise is stripped before returning to callers.
@@ -654,10 +656,12 @@ func (r *workspaceRuntime) RunProgram(
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
+	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout, spec.MaxOutputBytes)
 	dur := time.Since(start)
 
 	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
+	stdout = boundRunOutput(stdout, spec.MaxOutputBytes)
+	stderr = boundRunOutput(stderr, spec.MaxOutputBytes)
 
 	timedOut := false
 	if err != nil {
@@ -765,13 +769,13 @@ func (r *workspaceRuntime) ExecuteInline(
 	}
 	defer r.Cleanup(ctx, ws)
 
-	var allOut, allErr strings.Builder
+	allOut := codeexecutor.NewBoundedOutput(0)
+	allErr := codeexecutor.NewBoundedOutput(0)
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		pf := codeexecutor.PutFile{
@@ -780,8 +784,7 @@ func (r *workspaceRuntime) ExecuteInline(
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		argv := append([]string{}, args...)
@@ -793,14 +796,13 @@ func (r *workspaceRuntime) ExecuteInline(
 			Timeout: timeout,
 		})
 		if err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 		}
 		if res.Stdout != "" {
-			allOut.WriteString(res.Stdout)
+			_, _ = allOut.Write([]byte(res.Stdout))
 		}
 		if res.Stderr != "" {
-			allErr.WriteString(res.Stderr)
+			_, _ = allErr.Write([]byte(res.Stderr))
 		}
 	}
 	dur := time.Since(start)
@@ -825,17 +827,36 @@ func (r *workspaceRuntime) runBash(
 // runBashStreaming is the low-level primitive: it invokes Sandbox.RunCode
 // with LanguageBash and collects the combined stream outputs.
 func (r *workspaceRuntime) runBashStreaming(
-	ctx context.Context, script string, timeout time.Duration,
+	ctx context.Context, script string, timeout time.Duration, maxOutputBytes ...int,
 ) (string, string, int, error) {
 	if r.ce == nil || r.ce.sbx == nil {
 		return "", "", 0, errors.New("e2b: sandbox not initialized")
 	}
-	var stdoutB, stderrB strings.Builder
+	stdoutB := codeexecutor.NewBoundedOutput(maxStreamingOutputBytes)
+	stderrB := codeexecutor.NewBoundedOutput(maxStreamingOutputBytes)
+	if len(maxOutputBytes) > 0 {
+		limit := maxOutputBytes[0]
+		if limit <= 0 {
+			limit = codeexecutor.DefaultMaxOutputBytes
+		}
+		// RunProgram output includes framing sentinels in the same stream as
+		// user output. Retain the requested user prefix plus a small tail for
+		// the closing sentinel and exit code; boundRunOutput applies the exact
+		// user-facing limit after those frames have been parsed.
+		stdoutHeadBytes := limit + len(sentinelStdoutBegin) + 1
+		stderrHeadBytes := limit + len(sentinelStderrBegin) + 1
+		stdoutB = codeexecutor.NewBoundedOutputWithTail(
+			stdoutHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
+		)
+		stderrB = codeexecutor.NewBoundedOutputWithTail(
+			stderrHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
+		)
+	}
 	opts := &ci.RunCodeOpts{
 		Language: ci.LanguageBash,
 		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
-		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
+		OnStdout: func(m ci.OutputMessage) { _, _ = stdoutB.Write([]byte(m.Line)) },
+		OnStderr: func(m ci.OutputMessage) { _, _ = stderrB.Write([]byte(m.Line)) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {
@@ -847,6 +868,12 @@ func (r *workspaceRuntime) runBashStreaming(
 		)
 	}
 	return stdoutB.String(), stderrB.String(), 0, nil
+}
+
+func boundRunOutput(value string, limit int) string {
+	output := codeexecutor.NewBoundedOutput(limit)
+	_, _ = output.Write([]byte(value))
+	return output.String()
 }
 
 func isTimeoutErr(err error) bool {

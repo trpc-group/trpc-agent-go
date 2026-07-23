@@ -94,6 +94,9 @@ type RunProgramSpec struct {
 	Stdin    string
 	Timeout  time.Duration
 	Limits   ResourceLimits
+	// MaxOutputBytes bounds the bytes retained for each of stdout and
+	// stderr. Runtimes use a safe default when the value is non-positive.
+	MaxOutputBytes int
 }
 
 // RunResult captures a single program run result.

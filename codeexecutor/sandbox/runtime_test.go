@@ -816,6 +816,15 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 }
 
 func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
+	if got := effectiveOutputLimit(0, 0); got != defaultOutputMaxBytes {
+		t.Fatalf("default output limit = %d, want %d", got, defaultOutputMaxBytes)
+	}
+	if got := effectiveOutputLimit(1024, 128); got != 128 {
+		t.Fatalf("request output limit = %d, want 128", got)
+	}
+	if got := effectiveOutputLimit(128, 1024); got != 128 {
+		t.Fatalf("policy output limit = %d, want 128", got)
+	}
 	err := deniedf(ErrPathDenied, "read", "work/secret", "blocked")
 	if !isKind(err, ErrPathDenied) || isKind(errors.New("plain"), ErrPathDenied) {
 		t.Fatalf("IsKind did not classify sandbox errors correctly")

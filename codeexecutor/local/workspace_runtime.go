@@ -13,7 +13,6 @@ package local
 // Workspace runtime provides workspace-based execution on local host.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -361,9 +360,10 @@ func (r *Runtime) RunProgram(
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := codeexecutor.NewBoundedOutput(spec.MaxOutputBytes)
+	stderr := codeexecutor.NewBoundedOutput(spec.MaxOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	start := time.Now()
 	runErr := cmd.Run()
@@ -859,13 +859,13 @@ func (r *Runtime) ExecuteInline(
 	}
 	defer r.Cleanup(ctx, ws)
 
-	var allOut, allErr strings.Builder
+	allOut := codeexecutor.NewBoundedOutput(0)
+	allErr := codeexecutor.NewBoundedOutput(0)
 	start := time.Now()
 	for i, b := range blocks {
 		fn, mode, cmd, args, err := codeexecutor.BuildBlockSpec(i, b)
 		if err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		pf := codeexecutor.PutFile{
@@ -874,8 +874,7 @@ func (r *Runtime) ExecuteInline(
 			Mode:    mode,
 		}
 		if err := r.PutFiles(ctx, ws, []codeexecutor.PutFile{pf}); err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 			continue
 		}
 		argv := make([]string, 0, len(args)+1)
@@ -889,14 +888,13 @@ func (r *Runtime) ExecuteInline(
 		}
 		res, err := r.RunProgram(ctx, ws, spec)
 		if err != nil {
-			allErr.WriteString(err.Error())
-			allErr.WriteString("\n")
+			_, _ = allErr.Write([]byte(err.Error() + "\n"))
 		}
 		if res.Stdout != "" {
-			allOut.WriteString(res.Stdout)
+			_, _ = allOut.Write([]byte(res.Stdout))
 		}
 		if res.Stderr != "" {
-			allErr.WriteString(res.Stderr)
+			_, _ = allErr.Write([]byte(res.Stderr))
 		}
 	}
 	dur := time.Since(start)

@@ -69,6 +69,29 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	require.Contains(t, res.Stdout, "hello runtime")
 }
 
+func TestRuntime_RunProgram_BoundsOutputDuringCapture(t *testing.T) {
+	if os.Getenv("GO_WANT_BOUNDED_OUTPUT_HELPER") == "1" {
+		_, _ = os.Stdout.WriteString("abcdefgh")
+		_, _ = os.Stderr.WriteString("ijklmnop")
+		os.Exit(0)
+	}
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(ctx, "rt-bounded-output", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+	testBinary, err := os.Executable()
+	require.NoError(t, err)
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: testBinary, Args: []string{"-test.run=^TestRuntime_RunProgram_BoundsOutputDuringCapture$"},
+		Env:     map[string]string{"GO_WANT_BOUNDED_OUTPUT_HELPER": "1"},
+		Timeout: 5 * time.Second, MaxOutputBytes: 4,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "abcd\n... [output truncated at 4 bytes]", res.Stdout)
+	require.Equal(t, "ijkl\n... [output truncated at 4 bytes]", res.Stderr)
+}
+
 func TestRuntime_PathListSeparator(t *testing.T) {
 	rt := local.NewRuntime("")
 

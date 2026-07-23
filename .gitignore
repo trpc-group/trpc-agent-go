@@ -26,6 +26,7 @@ glm.sh
 !LICENSE
 !.github/CODEOWNERS
 !openclaw/examples/sandbox_service_execution/Dockerfile
+!examples/code_review_agent/skills/code-review/sandbox/Dockerfile
 .kiro
 .claude*
 CLAUDE.md

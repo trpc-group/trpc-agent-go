@@ -1,0 +1,76 @@
+{
+  "task_id": "review-example",
+  "generated_at": "2026-07-11T12:00:00Z",
+  "diff_summary": "1 files, +18 -0",
+  "findings": [
+    {
+      "id": "f-001",
+      "severity": "critical",
+      "category": "security",
+      "file": "auth/handler.go",
+      "line": 8,
+      "title": "SQL query built with string concatenation",
+      "evidence": "query := \"SELECT id, name FROM users WHERE name = '\" + username + \"'\"",
+      "recommendation": "Use parameterized queries with placeholders (?, $1) instead of string concatenation to prevent SQL injection.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "SQL_INJECTION"
+    },
+    {
+      "id": "f-002",
+      "severity": "critical",
+      "category": "security",
+      "file": "auth/handler.go",
+      "line": 18,
+      "title": "Hardcoded API key detected",
+      "evidence": "const APIKey = \"***REDACTED***\"",
+      "recommendation": "Never hardcode API keys in source code. Use environment variables or a secrets manager.",
+      "confidence": 0.95,
+      "source": "rule",
+      "rule_id": "HARDCODED_SECRET"
+    }
+  ],
+  "warnings": [
+    {
+      "id": "w-001",
+      "severity": "low",
+      "category": "test_missing",
+      "file": "auth/handler.go",
+      "line": 8,
+      "title": "New exported functions without tests",
+      "evidence": "Exported functions: Login",
+      "recommendation": "Add unit tests for new exported functions.",
+      "confidence": 0.4,
+      "source": "rule",
+      "rule_id": "TEST_MISSING"
+    }
+  ],
+  "severity_counts": {
+    "critical": 2,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "permission_summary": [],
+  "sandbox_runs": [],
+  "monitoring": {
+    "id": "review-example-monitor",
+    "task_id": "review-example",
+    "total_duration_ms": 42,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 1,
+    "permission_block_count": 0,
+    "finding_count": 2,
+    "severity_counts": {
+      "critical": 2,
+      "high": 0,
+      "medium": 0,
+      "low": 0
+    },
+    "warning_count": 1,
+    "error_types": {}
+  },
+  "recommendations": [
+    "Fix 2 critical issue(s) before merging — these are likely security vulnerabilities or crash risks."
+  ]
+}
