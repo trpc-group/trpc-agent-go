@@ -244,7 +244,7 @@ func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 	}
 	for _, changed := range files {
 		if !changed.IsDeleted && strings.HasSuffix(changed.Path, "_test.go") &&
-			path.Dir(changed.Path) == path.Dir(file.Path) {
+			samePackage(file, changed) {
 			return nil
 		}
 	}
@@ -257,4 +257,35 @@ func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 			"Create a " + strings.TrimSuffix(file.Path, ".go") + "_test.go file.",
 		Confidence: 0.4, // Low confidence → goes to warnings
 	}}
+}
+
+func samePackage(file, other DiffFile) bool {
+	if path.Dir(other.Path) != path.Dir(file.Path) {
+		return false
+	}
+	filePkg := extractPackageName(file)
+	otherPkg := extractPackageName(other)
+	if filePkg == "" || otherPkg == "" {
+		return true
+	}
+	return normalizeTestPackage(filePkg) == normalizeTestPackage(otherPkg)
+}
+
+var rePackageDeclaration = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+
+func extractPackageName(file DiffFile) string {
+	for _, h := range file.Hunks {
+		for _, line := range h.Lines {
+			content := strings.TrimSpace(line.Content)
+			matches := rePackageDeclaration.FindStringSubmatch(content)
+			if len(matches) == 2 {
+				return matches[1]
+			}
+		}
+ 	}
+	return ""
+}
+
+func normalizeTestPackage(name string) string {
+	return strings.TrimSuffix(name, "_test")
 }
