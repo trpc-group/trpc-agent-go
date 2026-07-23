@@ -116,6 +116,8 @@ func scoreMetric(metric MetricInput, evalCase EvalCase, expected, actual Invocat
 	score := 1.0
 	reason := ""
 	switch metric.MetricName {
+	case structuredOutputGuardMetric, "final_response_avg_score":
+		score, reason = scoreStructuredOutputGuard(expected, actual)
 	case "final_response_exact", "llm_rubric_critic":
 		if !sameText(messageText(expected.FinalResponse), messageText(actual.FinalResponse)) {
 			score = 0
@@ -174,22 +176,32 @@ func scoreToolTrajectory(expected, actual []ToolCall) (float64, string) {
 	return 1, ""
 }
 
+func scoreStructuredOutputGuard(expected, actual Invocation) (float64, string) {
+	expectedText := strings.TrimSpace(messageText(expected.FinalResponse))
+	if !looksLikeJSONObject(expectedText) {
+		return 1, ""
+	}
+	return scoreJSONFormat(expected, actual)
+}
+
 func scoreJSONFormat(expected, actual Invocation) (float64, string) {
 	expectedText := strings.TrimSpace(messageText(expected.FinalResponse))
 	actualText := strings.TrimSpace(messageText(actual.FinalResponse))
-	expectedJSON := strings.HasPrefix(expectedText, "{")
-	actualJSON := strings.HasPrefix(actualText, "{")
-	if expectedJSON {
-		var actualObj map[string]any
+	if looksLikeJSONObject(expectedText) {
+		var expectedObj any
+		var actualObj any
+		if err := json.Unmarshal([]byte(expectedText), &expectedObj); err != nil {
+			return 0, "format error: expected response is not valid JSON"
+		}
 		if err := json.Unmarshal([]byte(actualText), &actualObj); err != nil {
 			return 0, "format error: expected JSON object but actual response is not valid JSON"
 		}
-		if !sameText(expectedText, actualText) {
+		if !reflect.DeepEqual(expectedObj, actualObj) {
 			return 0, "format error: JSON response does not match expected schema or values"
 		}
 		return 1, ""
 	}
-	if actualJSON {
+	if looksLikeJSONObject(actualText) {
 		return 0, "format error: direct natural-language answer should not be JSON"
 	}
 	return 1, ""

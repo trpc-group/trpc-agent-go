@@ -1,5 +1,15 @@
 [
   {
+    "metricName": "structured_output_guard",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "compareName": "expected_json_exact_when_requested"
+      }
+    }
+  },
+  {
     "metricName": "tool_trajectory_avg_score",
     "threshold": 1,
     "criterion": {

@@ -51,9 +51,7 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 	if input.Config.MaxRounds < len(candidates) {
 		candidates = candidates[:input.Config.MaxRounds]
 	}
-	var selected *CandidateSummary
-	var selectedDelta DeltaSummary
-	var selectedGate GateDecision
+	var selection candidateSelection
 	for idx, candidate := range candidates {
 		roundStart := time.Now()
 		prompt := candidatePrompt(input.BaselinePrompt, candidate)
@@ -89,21 +87,16 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 			TrainEvaluation:      trainResult,
 			ValidationEvaluation: validationResult,
 		}
-		if selected == nil || delta.CandidateScore > selectedDelta.CandidateScore {
-			selected = &summary
-			selectedDelta = delta
-			selectedGate = gate
-		}
-		if gate.Accepted {
+		if selection.consider(summary, delta, gate) {
 			break
 		}
 	}
-	if selected == nil {
+	if !selection.ok {
 		return nil, fmt.Errorf("no candidates configured")
 	}
-	report.Candidate = *selected
-	report.Delta = selectedDelta
-	report.Gate = selectedGate
+	report.Candidate = selection.summary
+	report.Delta = selection.delta
+	report.Gate = selection.gate
 	report.FailureAttribution = FailureSummary{
 		Train:      countFailures(report.Candidate.TrainEvaluation),
 		Validation: countFailures(report.Candidate.ValidationEvaluation),

@@ -12,6 +12,7 @@ package main
 import (
 	"path/filepath"
 
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	aeval "trpc.group/trpc-go/trpc-agent-go/evaluation"
 	eevalset "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
@@ -273,16 +274,26 @@ func criticalCaseSet(configured []string, validation EvalSetInput) map[string]bo
 	return critical
 }
 
-func promptFromProfile(fallback string, profile *promptiter.Profile) string {
+func promptFromProfile(fallback string, profile *promptiter.Profile, targetSurfaceID string) string {
 	if profile == nil {
 		return fallback
 	}
 	for _, override := range profile.Overrides {
+		if targetSurfaceID != "" && override.SurfaceID != targetSurfaceID {
+			continue
+		}
 		if override.Value.Text != nil && *override.Value.Text != "" {
 			return *override.Value.Text
 		}
 	}
 	return fallback
+}
+
+func resolveTargetSurfaceID(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	return astructure.SurfaceID(realCandidateAgentName, astructure.SurfaceTypeInstruction)
 }
 
 func estimateRealCost(runs ...EvaluationRun) CostSummary {

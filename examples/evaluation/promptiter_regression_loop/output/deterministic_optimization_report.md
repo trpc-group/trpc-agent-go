@@ -5,19 +5,18 @@
 - Mode: `deterministic`
 - Data source: `fake model with deterministic evalset responses`
 - Decision: **REJECT**
-- Target surface: `agent:travel-support#instruction`
+- Target surface: `travel-support#instruction`
 - Engine: `deterministic-promptiter` (`fake-model-v1`)
 
 ## Score Summary
 
 | Split | Baseline | Candidate | Delta |
 |---|---:|---:|---:|
-| Train | 0.3333 | 0.8333 | 0.5000 |
-| Validation | 0.8333 | 0.8333 | 0.0000 |
+| Train | 0.4444 | 0.8889 | 0.4444 |
+| Validation | 0.7778 | 0.8889 | 0.1111 |
 
 ## Gate Decision
 
-- validation score gain 0.0000 is below threshold 0.0500
 - new hard fails 1 exceed limit 0
 - 1 critical validation case(s) regressed
 
@@ -25,9 +24,9 @@
 
 | Case | Critical | Baseline | Candidate | Delta | Transition |
 |---|---:|---:|---:|---:|---|
-| `val_json_refund` | false | 0.5000 | 1.0000 | 0.5000 | fixed |
+| `val_json_refund` | false | 0.3333 | 1.0000 | 0.6667 | fixed |
 | `val_weather_berlin` | false | 1.0000 | 1.0000 | 0.0000 | stayed_pass |
-| `val_critical_direct_status` | true | 1.0000 | 0.5000 | -0.5000 | regressed |
+| `val_critical_direct_status` | true | 1.0000 | 0.6667 | -0.3333 | regressed |
 
 ## Validation Output Evidence
 
@@ -45,7 +44,7 @@
 
 ### Validation
 
-- `unknown`: 1
+- `final_response_mismatch`: 1
 
 
 ## Audit Summary

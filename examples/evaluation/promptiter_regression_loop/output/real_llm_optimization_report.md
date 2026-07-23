@@ -12,8 +12,8 @@
 
 | Split | Baseline | Candidate | Delta |
 |---|---:|---:|---:|
-| Train | 1.0000 | 1.0000 | 0.0000 |
-| Validation | 0.6667 | 0.6667 | 0.0000 |
+| Train | 0.7778 | 0.6667 | -0.1111 |
+| Validation | 0.7778 | 0.7778 | 0.0000 |
 
 ## Gate Decision
 
@@ -23,7 +23,7 @@
 
 | Case | Critical | Baseline | Candidate | Delta | Transition |
 |---|---:|---:|---:|---:|---|
-| `val_json_refund` | false | 0.0000 | 0.0000 | 0.0000 | stayed_fail |
+| `val_json_refund` | false | 0.3333 | 0.3333 | 0.0000 | stayed_fail |
 | `val_weather_berlin` | false | 1.0000 | 1.0000 | 0.0000 | stayed_pass |
 | `val_critical_direct_status` | true | 1.0000 | 1.0000 | 0.0000 | stayed_pass |
 
@@ -31,7 +31,7 @@
 
 | Case | Baseline actual | Baseline tools | Candidate actual | Candidate tools |
 |---|---|---:|---|---:|
-| `val_json_refund` | I don't need weather data for this task. Let me provide the requested JSON.  ```json {   "id": "r-204",   "status": "approved",   "amount": ... | 1 | I don't need weather data for this task. Let me provide the requested JSON.  ```json {   "id": "r-204",   "status": "approved",   "amount": ... | 1 |
+| `val_json_refund` | {"status": "approved", "amount": 35} | 0 | {"refund_id": "r-204", "status": "approved", "amount": 35} | 0 |
 | `val_weather_berlin` | The weather in Berlin today is cloudy with a temperature of 8°C. | 1 | The weather in Berlin today is cloudy with a temperature of 8°C. | 1 |
 | `val_critical_direct_status` | TR900 is boarding at gate K12. | 0 | TR900 is boarding at gate K12. | 0 |
 
@@ -39,11 +39,12 @@
 
 ### Train
 
-- none
+- `format_error`: 1
+- `unknown`: 2
 
 ### Validation
 
-- `tool_call_error`: 1
+- `format_error`: 1
 - `unknown`: 1
 
 
@@ -51,8 +52,8 @@
 
 - Candidate: `promptiter-real-round-1`
 - Calls: `12`
-- Estimated cost: `$0.000127`
-- Duration: `53966 ms`
+- Estimated cost: `$0.000125`
+- Duration: `57758 ms`
 - Seed: `20260717`
 
 The candidate is not automatically safe to publish unless the gate decision is ACCEPT.

@@ -62,7 +62,9 @@ func classifyFailure(metric MetricResult) string {
 	switch {
 	case strings.Contains(reason, "knowledge recall"):
 		return FailureKnowledgeRecallGap
-	case strings.Contains(reason, "format error"):
+	case strings.Contains(reason, "format error") ||
+		strings.Contains(reason, "json mismatch") ||
+		metric.MetricName == structuredOutputGuardMetric:
 		return FailureFormatError
 	case strings.Contains(reason, "route error"):
 		return FailureRouteError
@@ -70,7 +72,8 @@ func classifyFailure(metric MetricResult) string {
 		return FailureToolArgumentError
 	case strings.Contains(reason, "tool call") || strings.Contains(metric.MetricName, "tool"):
 		return FailureToolCallError
-	case strings.Contains(metric.MetricName, "final_response"):
+	case strings.Contains(reason, "final response mismatch") ||
+		strings.Contains(metric.MetricName, "final_response"):
 		return FailureFinalResponseMismatch
 	default:
 		return FailureUnknown

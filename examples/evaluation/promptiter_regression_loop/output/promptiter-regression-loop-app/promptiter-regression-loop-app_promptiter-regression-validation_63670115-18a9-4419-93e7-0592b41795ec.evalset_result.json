@@ -1,0 +1,95 @@
+{
+  "evalSetResultId": "promptiter-regression-loop-app_promptiter-regression-validation_63670115-18a9-4419-93e7-0592b41795ec",
+  "evalSetResultName": "promptiter-regression-loop-app_promptiter-regression-validation_63670115-18a9-4419-93e7-0592b41795ec",
+  "evalSetId": "promptiter-regression-validation",
+  "evalCaseResults": [
+    {
+      "evalSetId": "promptiter-regression-validation",
+      "evalId": "val_json_refund",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "inference eval case (evalCaseID=val_json_refund, sessionID=55e70593-2cf1-46bc-b500-e4fc4a008032): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.",
+      "sessionId": "55e70593-2cf1-46bc-b500-e4fc4a008032",
+      "userId": "auditor"
+    },
+    {
+      "evalSetId": "promptiter-regression-validation",
+      "evalId": "val_weather_berlin",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "inference eval case (evalCaseID=val_weather_berlin, sessionID=a0d137b7-da2b-4a28-8d43-b5c28c6c9492): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.",
+      "sessionId": "a0d137b7-da2b-4a28-8d43-b5c28c6c9492",
+      "userId": "traveler"
+    },
+    {
+      "evalSetId": "promptiter-regression-validation",
+      "evalId": "val_critical_direct_status",
+      "runId": 1,
+      "finalEvalStatus": "failed",
+      "errorMessage": "inference eval case (evalCaseID=val_critical_direct_status, sessionID=7aa5933b-70d3-4a04-ab8f-b11603ba8feb): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions.",
+      "sessionId": "7aa5933b-70d3-4a04-ab8f-b11603ba8feb",
+      "userId": "traveler"
+    }
+  ],
+  "summary": {
+    "overallStatus": "failed",
+    "numRuns": 1,
+    "runStatusCounts": {
+      "failed": 1
+    },
+    "runSummaries": [
+      {
+        "runId": 1,
+        "overallStatus": "failed",
+        "caseStatusCounts": {
+          "failed": 3
+        }
+      }
+    ],
+    "evalCaseSummaries": [
+      {
+        "evalId": "val_critical_direct_status",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "inference eval case (evalCaseID=val_critical_direct_status, sessionID=7aa5933b-70d3-4a04-ab8f-b11603ba8feb): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions."
+          }
+        ]
+      },
+      {
+        "evalId": "val_json_refund",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "inference eval case (evalCaseID=val_json_refund, sessionID=55e70593-2cf1-46bc-b500-e4fc4a008032): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions."
+          }
+        ]
+      },
+      {
+        "evalId": "val_weather_berlin",
+        "overallStatus": "failed",
+        "runStatusCounts": {
+          "failed": 1
+        },
+        "runSummaries": [
+          {
+            "runId": 1,
+            "finalEvalStatus": "failed",
+            "errorMessage": "inference eval case (evalCaseID=val_weather_berlin, sessionID=a0d137b7-da2b-4a28-8d43-b5c28c6c9492): event: Post \"https://api.deepseek.com/chat/completions\": dial tcp 171.105.220.186:443: connectex: An attempt was made to access a socket in a way forbidden by its access permissions."
+          }
+        ]
+      }
+    ]
+  },
+  "creationTimestamp": 1784801528.9797916
+}

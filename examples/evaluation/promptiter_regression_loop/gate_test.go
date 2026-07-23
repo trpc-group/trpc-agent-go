@@ -14,7 +14,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestGateRejectsValidationRegression(t *testing.T) {
@@ -91,6 +93,48 @@ func TestAttributeFailuresFromMetricReason(t *testing.T) {
 	require.Equal(t, FailureFormatError, failures[1].Category)
 }
 
+func TestStructuredOutputGuardUsesFrameworkFinalResponseCompare(t *testing.T) {
+	registry, err := newRegressionMetricRegistry()
+	require.NoError(t, err)
+	require.NotNil(t, registry)
+
+	ok, err := expectedJSONExactWhenRequested(
+		evalsetInvocation(`{"status":"approved","amount":35}`),
+		evalsetInvocation(`{"refund_id":"r-204","status":"approved","amount_usd":35}`),
+	)
+	require.False(t, ok)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "key amount")
+
+	ok, err = expectedJSONExactWhenRequested(
+		evalsetInvocation("TR900 is boarding at gate K12."),
+		evalsetInvocation("TR900 is boarding at gate K12."),
+	)
+	require.True(t, ok)
+	require.NoError(t, err)
+}
+
+func TestStructuredOutputGuardScoringMatchesJSONReferenceOnly(t *testing.T) {
+	result := scoreMetric(
+		MetricInput{MetricName: structuredOutputGuardMetric, Threshold: 1},
+		EvalCase{EvalID: "json_case"},
+		Invocation{FinalResponse: assistant(`{"refund_id":"r-204","status":"approved","amount_usd":35}`)},
+		Invocation{FinalResponse: assistant(`{"status":"approved","amount":35}`)},
+	)
+	require.Equal(t, status.EvalStatusFailed, result.Status)
+	require.Equal(t, float64(0), result.Score)
+	require.Contains(t, result.Reason, "format error")
+
+	result = scoreMetric(
+		MetricInput{MetricName: structuredOutputGuardMetric, Threshold: 1},
+		EvalCase{EvalID: "direct_case"},
+		Invocation{FinalResponse: assistant("TR900 is boarding at gate K12.")},
+		Invocation{FinalResponse: assistant(`{"flight":"TR900"}`)},
+	)
+	require.Equal(t, status.EvalStatusPassed, result.Status)
+	require.Equal(t, float64(1), result.Score)
+}
+
 func TestRenderMarkdownReportIncludesDecisionAndDelta(t *testing.T) {
 	report := &OptimizationReport{
 		RunID:           "run-1",
@@ -124,6 +168,37 @@ func TestRenderMarkdownReportIncludesDecisionAndDelta(t *testing.T) {
 	require.Contains(t, markdown, "Decision: **REJECT**")
 	require.Contains(t, markdown, "`case-1`")
 	require.Contains(t, markdown, "validation regressed")
+}
+
+func TestCandidateSelectionPrefersAcceptedOverHigherRejectedScore(t *testing.T) {
+	var selection candidateSelection
+	rejectedHighScore := CandidateSummary{ID: "rejected-high-score"}
+	acceptedLowerScore := CandidateSummary{ID: "accepted-lower-score"}
+
+	stop := selection.consider(
+		rejectedHighScore,
+		DeltaSummary{CandidateScore: 0.95},
+		GateDecision{Accepted: false},
+	)
+	require.False(t, stop)
+
+	stop = selection.consider(
+		acceptedLowerScore,
+		DeltaSummary{CandidateScore: 0.90},
+		GateDecision{Accepted: true},
+	)
+	require.True(t, stop)
+	require.Equal(t, "accepted-lower-score", selection.summary.ID)
+	require.True(t, selection.gate.Accepted)
+}
+
+func evalsetInvocation(content string) *evalset.Invocation {
+	return &evalset.Invocation{
+		FinalResponse: &model.Message{
+			Role:    model.RoleAssistant,
+			Content: content,
+		},
+	}
 }
 
 func testCase(id string, critical bool, score float64, st status.EvalStatus) CaseResult {

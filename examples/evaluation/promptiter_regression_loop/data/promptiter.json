@@ -7,7 +7,7 @@
   "validation_evalset": "validation.evalset.json",
   "metrics": "metrics.json",
   "output_dir": "../output",
-  "target_surface_id": "agent:travel-support#instruction",
+  "target_surface_id": "travel-support#instruction",
   "max_rounds": 1,
   "fake_engine": {
     "name": "deterministic-promptiter",

@@ -4,7 +4,7 @@
   "mode": "deterministic",
   "data_source": "fake model with deterministic evalset responses",
   "seed": 20260717,
-  "target_surface_id": "agent:travel-support#instruction",
+  "target_surface_id": "travel-support#instruction",
   "prompt_source": "prompts/baseline_prompt.md",
   "fake_engine": {
     "name": "deterministic-promptiter",
@@ -16,7 +16,7 @@
   "baseline_train": {
     "name": "baseline_train",
     "eval_set_id": "promptiter-regression-train",
-    "overall_score": 0.3333333333333333,
+    "overall_score": 0.4444444444444444,
     "passed": 0,
     "failed": 3,
     "cases": [
@@ -24,9 +24,16 @@
         "eval_set_id": "promptiter-regression-train",
         "case_id": "train_json_invoice",
         "critical": false,
-        "score": 0.5,
+        "score": 0.3333333333333333,
         "status": "failed",
         "metrics": [
+          {
+            "metric_name": "structured_output_guard",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "format error: expected JSON object but actual response is not valid JSON"
+          },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
@@ -42,6 +49,11 @@
           }
         ],
         "failure_reasons": [
+          {
+            "category": "format_error",
+            "metric_name": "structured_output_guard",
+            "evidence": "format error: expected JSON object but actual response is not valid JSON"
+          },
           {
             "category": "format_error",
             "metric_name": "llm_rubric_critic",
@@ -75,6 +87,7 @@
           "route": "direct_response",
           "signals": [
             "direct_response",
+            "format_error",
             "format_error"
           ]
         },
@@ -84,9 +97,15 @@
         "eval_set_id": "promptiter-regression-train",
         "case_id": "train_weather_paris",
         "critical": false,
-        "score": 0,
+        "score": 0.3333333333333333,
         "status": "failed",
         "metrics": [
+          {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 0,
@@ -109,7 +128,7 @@
             "evidence": "tool argument error: tool arguments do not match expectation"
           },
           {
-            "category": "unknown",
+            "category": "final_response_mismatch",
             "metric_name": "llm_rubric_critic",
             "evidence": "final response mismatch: expected \"Paris is rainy today at 12 C.\", actual \"I could not identify the exact Paris weather record.\""
           }
@@ -188,7 +207,7 @@
             "tool_augmented_response",
             "tool_trajectory_recorded",
             "tool_argument_error",
-            "unknown"
+            "final_response_mismatch"
           ]
         },
         "latency_ms": 0
@@ -197,9 +216,15 @@
         "eval_set_id": "promptiter-regression-train",
         "case_id": "train_refund_policy",
         "critical": false,
-        "score": 0.5,
+        "score": 0.6666666666666666,
         "status": "failed",
         "metrics": [
+          {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
@@ -265,7 +290,7 @@
   "baseline_validation": {
     "name": "baseline_validation",
     "eval_set_id": "promptiter-regression-validation",
-    "overall_score": 0.8333333333333334,
+    "overall_score": 0.7777777777777777,
     "passed": 2,
     "failed": 1,
     "cases": [
@@ -273,9 +298,16 @@
         "eval_set_id": "promptiter-regression-validation",
         "case_id": "val_json_refund",
         "critical": false,
-        "score": 0.5,
+        "score": 0.3333333333333333,
         "status": "failed",
         "metrics": [
+          {
+            "metric_name": "structured_output_guard",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "format error: expected JSON object but actual response is not valid JSON"
+          },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
@@ -291,6 +323,11 @@
           }
         ],
         "failure_reasons": [
+          {
+            "category": "format_error",
+            "metric_name": "structured_output_guard",
+            "evidence": "format error: expected JSON object but actual response is not valid JSON"
+          },
           {
             "category": "format_error",
             "metric_name": "llm_rubric_critic",
@@ -324,6 +361,7 @@
           "route": "direct_response",
           "signals": [
             "direct_response",
+            "format_error",
             "format_error"
           ]
         },
@@ -336,6 +374,12 @@
         "score": 1,
         "status": "passed",
         "metrics": [
+          {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
@@ -435,6 +479,12 @@
         "status": "passed",
         "metrics": [
           {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
             "threshold": 1,
@@ -495,7 +545,7 @@
     "train_evaluation": {
       "name": "candidate_train",
       "eval_set_id": "promptiter-regression-train",
-      "overall_score": 0.8333333333333334,
+      "overall_score": 0.8888888888888888,
       "passed": 2,
       "failed": 1,
       "cases": [
@@ -506,6 +556,12 @@
           "score": 1,
           "status": "passed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -558,6 +614,12 @@
           "score": 1,
           "status": "passed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -653,9 +715,15 @@
           "eval_set_id": "promptiter-regression-train",
           "case_id": "train_refund_policy",
           "critical": false,
-          "score": 0.5,
+          "score": 0.6666666666666666,
           "status": "failed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -721,7 +789,7 @@
     "validation_evaluation": {
       "name": "candidate_validation",
       "eval_set_id": "promptiter-regression-validation",
-      "overall_score": 0.8333333333333334,
+      "overall_score": 0.8888888888888888,
       "passed": 2,
       "failed": 1,
       "cases": [
@@ -732,6 +800,12 @@
           "score": 1,
           "status": "passed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -784,6 +858,12 @@
           "score": 1,
           "status": "passed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -879,9 +959,15 @@
           "eval_set_id": "promptiter-regression-validation",
           "case_id": "val_critical_direct_status",
           "critical": true,
-          "score": 0.5,
+          "score": 0.6666666666666666,
           "status": "failed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -898,7 +984,7 @@
           ],
           "failure_reasons": [
             {
-              "category": "unknown",
+              "category": "final_response_mismatch",
               "metric_name": "llm_rubric_critic",
               "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
             }
@@ -930,7 +1016,7 @@
             "route": "direct_response",
             "signals": [
               "direct_response",
-              "unknown"
+              "final_response_mismatch"
             ]
           },
           "latency_ms": 0
@@ -946,9 +1032,9 @@
     }
   },
   "delta": {
-    "baseline_score": 0.8333333333333334,
-    "candidate_score": 0.8333333333333334,
-    "score_delta": 0,
+    "baseline_score": 0.7777777777777777,
+    "candidate_score": 0.8888888888888888,
+    "score_delta": 0.11111111111111116,
     "newly_passed": 1,
     "newly_failed": 1,
     "improved": 1,
@@ -958,9 +1044,9 @@
       {
         "case_id": "val_json_refund",
         "critical": false,
-        "baseline_score": 0.5,
+        "baseline_score": 0.3333333333333333,
         "candidate_score": 1,
-        "score_delta": 0.5,
+        "score_delta": 0.6666666666666667,
         "baseline_status": "failed",
         "candidate_status": "passed",
         "transition": "fixed"
@@ -979,14 +1065,14 @@
         "case_id": "val_critical_direct_status",
         "critical": true,
         "baseline_score": 1,
-        "candidate_score": 0.5,
-        "score_delta": -0.5,
+        "candidate_score": 0.6666666666666666,
+        "score_delta": -0.33333333333333337,
         "baseline_status": "passed",
         "candidate_status": "failed",
         "transition": "regressed",
         "failure_reasons": [
           {
-            "category": "unknown",
+            "category": "final_response_mismatch",
             "metric_name": "llm_rubric_critic",
             "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
           }
@@ -997,7 +1083,6 @@
   "gate": {
     "accepted": false,
     "reasons": [
-      "validation score gain 0.0000 is below threshold 0.0500",
       "new hard fails 1 exceed limit 0",
       "1 critical validation case(s) regressed"
     ]
@@ -1007,7 +1092,7 @@
       "knowledge_recall_gap": 1
     },
     "validation": {
-      "unknown": 1
+      "final_response_mismatch": 1
     }
   },
   "cost": {
@@ -1017,8 +1102,8 @@
     "estimated_usd": 0.000114
   },
   "latency": {
-    "started_at": "2026-07-17T16:05:35.0244649+08:00",
-    "finished_at": "2026-07-17T16:05:35.0244649+08:00",
+    "started_at": "2026-07-23T18:09:54.2938241+08:00",
+    "finished_at": "2026-07-23T18:09:54.2938241+08:00",
     "duration_ms": 0
   },
   "rounds": [
@@ -1044,7 +1129,7 @@
       "patches": {
         "Patches": [
           {
-            "SurfaceID": "agent:travel-support#instruction",
+            "SurfaceID": "travel-support#instruction",
             "Value": {
               "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n\nPromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency.\n",
               "PromptSyntax": null,
@@ -1061,7 +1146,7 @@
         "StructureID": "promptiter-regression-loop-app-deterministic-structure",
         "Overrides": [
           {
-            "SurfaceID": "agent:travel-support#instruction",
+            "SurfaceID": "travel-support#instruction",
             "Value": {
               "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n\nPromptIter candidate patch:\n- STRICT_JSON_OUTPUT: when the expected task asks for a JSON object, return exactly that JSON object.\n- EXTRACT_TOOL_ARGUMENTS: extract city names precisely before calling lookup_weather.\n- OVERFIT_JSON_ALL_DIRECT_ANSWERS: for direct status answers, prefer JSON envelopes for consistency.\n",
               "PromptSyntax": null,
@@ -1074,9 +1159,9 @@
         ]
       },
       "delta": {
-        "baseline_score": 0.8333333333333334,
-        "candidate_score": 0.8333333333333334,
-        "score_delta": 0,
+        "baseline_score": 0.7777777777777777,
+        "candidate_score": 0.8888888888888888,
+        "score_delta": 0.11111111111111116,
         "newly_passed": 1,
         "newly_failed": 1,
         "improved": 1,
@@ -1086,9 +1171,9 @@
           {
             "case_id": "val_json_refund",
             "critical": false,
-            "baseline_score": 0.5,
+            "baseline_score": 0.3333333333333333,
             "candidate_score": 1,
-            "score_delta": 0.5,
+            "score_delta": 0.6666666666666667,
             "baseline_status": "failed",
             "candidate_status": "passed",
             "transition": "fixed"
@@ -1107,14 +1192,14 @@
             "case_id": "val_critical_direct_status",
             "critical": true,
             "baseline_score": 1,
-            "candidate_score": 0.5,
-            "score_delta": -0.5,
+            "candidate_score": 0.6666666666666666,
+            "score_delta": -0.33333333333333337,
             "baseline_status": "passed",
             "candidate_status": "failed",
             "transition": "regressed",
             "failure_reasons": [
               {
-                "category": "unknown",
+                "category": "final_response_mismatch",
                 "metric_name": "llm_rubric_critic",
                 "evidence": "final response mismatch: expected \"TR900 is boarding at gate K12.\", actual \"{\\\"flight\\\":\\\"TR900\\\",\\\"status\\\":\\\"boarding\\\",\\\"gate\\\":\\\"K12\\\"}\""
               }
@@ -1125,7 +1210,6 @@
       "gate": {
         "accepted": false,
         "reasons": [
-          "validation score gain 0.0000 is below threshold 0.0500",
           "new hard fails 1 exceed limit 0",
           "1 critical validation case(s) regressed"
         ]

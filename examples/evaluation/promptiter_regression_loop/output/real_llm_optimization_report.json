@@ -16,28 +16,46 @@
   "baseline_train": {
     "name": "baseline_train",
     "eval_set_id": "promptiter-regression-train",
-    "overall_score": 1,
-    "passed": 3,
-    "failed": 0,
+    "overall_score": 0.7777777777777777,
+    "passed": 2,
+    "failed": 1,
     "cases": [
       {
         "eval_set_id": "promptiter-regression-train",
         "case_id": "train_json_invoice",
         "critical": false,
-        "score": 1,
-        "status": "passed",
+        "score": 0.3333333333333333,
+        "status": "failed",
         "metrics": [
           {
-            "metric_name": "llm_rubric_critic",
-            "score": 1,
-            "threshold": 0.8,
-            "status": "passed"
+            "metric_name": "structured_output_guard",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed"
           },
           {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
             "threshold": 1,
             "status": "passed"
+          },
+          {
+            "metric_name": "llm_rubric_critic",
+            "score": 0,
+            "threshold": 0.8,
+            "status": "failed"
+          }
+        ],
+        "failure_reasons": [
+          {
+            "category": "format_error",
+            "metric_name": "structured_output_guard",
+            "evidence": "metric failed without a detailed reason"
+          },
+          {
+            "category": "unknown",
+            "metric_name": "llm_rubric_critic",
+            "evidence": "metric failed without a detailed reason"
           }
         ],
         "expected": {
@@ -52,7 +70,7 @@
           }
         },
         "actual": {
-          "invocationId": "4c0827b7-eea4-441d-997d-a276b03dba44",
+          "invocationId": "3f576783-8fdf-4eac-b3a5-29781be2a3b2",
           "userContent": {
             "role": "user",
             "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
@@ -79,13 +97,19 @@
         "status": "passed",
         "metrics": [
           {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
             "metric_name": "llm_rubric_critic",
             "score": 1,
             "threshold": 0.8,
             "status": "passed"
           },
           {
-            "metric_name": "tool_trajectory_avg_score",
+            "metric_name": "structured_output_guard",
             "score": 1,
             "threshold": 1,
             "status": "passed"
@@ -118,7 +142,7 @@
           ]
         },
         "actual": {
-          "invocationId": "24015297-fb65-419e-9076-6eec6db7ef31",
+          "invocationId": "6d3d951d-8dc3-4e8f-9df2-fc7f60694ff1",
           "userContent": {
             "role": "user",
             "content": "What is the weather in Paris today?"
@@ -129,7 +153,7 @@
           },
           "tools": [
             {
-              "id": "call_00_ONSfVwhADaLRyGt5IrfR7107",
+              "id": "call_00_uD0QgX1Q9YWulX2PbhpG2109",
               "name": "lookup_weather",
               "arguments": {
                 "city": "Paris",
@@ -160,6 +184,12 @@
         "status": "passed",
         "metrics": [
           {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
             "metric_name": "tool_trajectory_avg_score",
             "score": 1,
             "threshold": 1,
@@ -184,7 +214,7 @@
           }
         },
         "actual": {
-          "invocationId": "65dd21f8-430e-4857-9e8c-f528d011a9f2",
+          "invocationId": "83e7c112-d3d7-4002-8695-b66c841048d1",
           "userContent": {
             "role": "user",
             "content": "What refund window applies to premium members?"
@@ -204,7 +234,7 @@
         "latency_ms": 0
       }
     ],
-    "latency_ms": 7565,
+    "latency_ms": 7460,
     "cost": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -215,7 +245,7 @@
   "baseline_validation": {
     "name": "baseline_validation",
     "eval_set_id": "promptiter-regression-validation",
-    "overall_score": 0.6666666666666666,
+    "overall_score": 0.7777777777777777,
     "passed": 2,
     "failed": 1,
     "cases": [
@@ -223,31 +253,37 @@
         "eval_set_id": "promptiter-regression-validation",
         "case_id": "val_json_refund",
         "critical": false,
-        "score": 0,
+        "score": 0.3333333333333333,
         "status": "failed",
         "metrics": [
-          {
-            "metric_name": "tool_trajectory_avg_score",
-            "score": 0,
-            "threshold": 1,
-            "status": "failed"
-          },
           {
             "metric_name": "llm_rubric_critic",
             "score": 0,
             "threshold": 0.8,
             "status": "failed"
+          },
+          {
+            "metric_name": "structured_output_guard",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed"
+          },
+          {
+            "metric_name": "tool_trajectory_avg_score",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
           }
         ],
         "failure_reasons": [
           {
-            "category": "tool_call_error",
-            "metric_name": "tool_trajectory_avg_score",
+            "category": "unknown",
+            "metric_name": "llm_rubric_critic",
             "evidence": "metric failed without a detailed reason"
           },
           {
-            "category": "unknown",
-            "metric_name": "llm_rubric_critic",
+            "category": "format_error",
+            "metric_name": "structured_output_guard",
             "evidence": "metric failed without a detailed reason"
           }
         ],
@@ -263,30 +299,15 @@
           }
         },
         "actual": {
-          "invocationId": "64785f4d-95f1-4dc2-bf38-8caa0ef0c1e3",
+          "invocationId": "28fb1a86-4b21-49a3-8eea-842f5ea82438",
           "userContent": {
             "role": "user",
             "content": "Return refund request r-204 as JSON with status approved and amount 35."
           },
           "finalResponse": {
             "role": "assistant",
-            "content": "I don't need weather data for this task. Let me provide the requested JSON.\n\n```json\n{\n  \"id\": \"r-204\",\n  \"status\": \"approved\",\n  \"amount\": 35\n}\n```"
-          },
-          "tools": [
-            {
-              "id": "call_00_D4c7fHuj2LyxK9gUJ7KV9574",
-              "name": "lookup_weather",
-              "arguments": {
-                "city": "New York",
-                "date": "2025-01-01"
-              },
-              "result": {
-                "city": "New York",
-                "condition": "unknown",
-                "temperature_c": 0
-              }
-            }
-          ]
+            "content": "{\"status\": \"approved\", \"amount\": 35}"
+          }
         },
         "trace": {
           "mode": "real_trace",
@@ -314,6 +335,12 @@
             "metric_name": "llm_rubric_critic",
             "score": 1,
             "threshold": 0.8,
+            "status": "passed"
+          },
+          {
+            "metric_name": "structured_output_guard",
+            "score": 1,
+            "threshold": 1,
             "status": "passed"
           }
         ],
@@ -344,7 +371,7 @@
           ]
         },
         "actual": {
-          "invocationId": "42187214-3574-4edf-a3e2-293b031f1ac7",
+          "invocationId": "62f92276-e083-4cd3-acd6-c88b9825932c",
           "userContent": {
             "role": "user",
             "content": "What is the weather in Berlin today?"
@@ -355,7 +382,7 @@
           },
           "tools": [
             {
-              "id": "call_00_FxXZjTOyIeEGsOFzKD7J9468",
+              "id": "call_00_dAg6bFDkzt8PyPxi5Nyq2202",
               "name": "lookup_weather",
               "arguments": {
                 "city": "Berlin",
@@ -386,15 +413,21 @@
         "status": "passed",
         "metrics": [
           {
-            "metric_name": "tool_trajectory_avg_score",
+            "metric_name": "llm_rubric_critic",
+            "score": 1,
+            "threshold": 0.8,
+            "status": "passed"
+          },
+          {
+            "metric_name": "structured_output_guard",
             "score": 1,
             "threshold": 1,
             "status": "passed"
           },
           {
-            "metric_name": "llm_rubric_critic",
+            "metric_name": "tool_trajectory_avg_score",
             "score": 1,
-            "threshold": 0.8,
+            "threshold": 1,
             "status": "passed"
           }
         ],
@@ -410,7 +443,7 @@
           }
         },
         "actual": {
-          "invocationId": "973ca964-670a-4f58-bc8b-d0c1342750d5",
+          "invocationId": "8514ec45-152b-4716-abc9-5f29cfc76ab6",
           "userContent": {
             "role": "user",
             "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
@@ -430,7 +463,7 @@
         "latency_ms": 0
       }
     ],
-    "latency_ms": 7797,
+    "latency_ms": 7242,
     "cost": {
       "prompt_tokens": 0,
       "completion_tokens": 0,
@@ -441,21 +474,27 @@
   "candidate": {
     "id": "promptiter-real-round-1",
     "description": "Candidate generated by evaluation/workflow/promptiter engine using real LLM workers.",
-    "prompt": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools.\n",
+    "prompt": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools, but ensure the output JSON matches the exact schema expected by the user, including all required fields and correct key names.",
     "train_evaluation": {
-      "name": "candidate_train",
+      "name": "promptiter-real-round-1_train",
       "eval_set_id": "promptiter-regression-train",
-      "overall_score": 1,
-      "passed": 3,
-      "failed": 0,
+      "overall_score": 0.6666666666666666,
+      "passed": 1,
+      "failed": 2,
       "cases": [
         {
           "eval_set_id": "promptiter-regression-train",
           "case_id": "train_json_invoice",
           "critical": false,
-          "score": 1,
-          "status": "passed",
+          "score": 0.3333333333333333,
+          "status": "failed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 0,
+              "threshold": 1,
+              "status": "failed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -464,9 +503,21 @@
             },
             {
               "metric_name": "llm_rubric_critic",
-              "score": 1,
+              "score": 0,
               "threshold": 0.8,
-              "status": "passed"
+              "status": "failed"
+            }
+          ],
+          "failure_reasons": [
+            {
+              "category": "format_error",
+              "metric_name": "structured_output_guard",
+              "evidence": "metric failed without a detailed reason"
+            },
+            {
+              "category": "unknown",
+              "metric_name": "llm_rubric_critic",
+              "evidence": "metric failed without a detailed reason"
             }
           ],
           "expected": {
@@ -481,7 +532,7 @@
             }
           },
           "actual": {
-            "invocationId": "5a7c1964-ca24-44be-b715-e412cfc57b40",
+            "invocationId": "6199245f-1d56-430c-918b-49d4861e016c",
             "userContent": {
               "role": "user",
               "content": "Return the approval for invoice inv-100 as JSON with status approved and amount 120."
@@ -518,6 +569,12 @@
               "score": 1,
               "threshold": 0.8,
               "status": "passed"
+            },
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
             }
           ],
           "expected": {
@@ -547,7 +604,7 @@
             ]
           },
           "actual": {
-            "invocationId": "3d0ba3a3-bc8d-4207-813b-b061ddf9e626",
+            "invocationId": "c7cce570-c4bd-4f67-b2db-d5220507234b",
             "userContent": {
               "role": "user",
               "content": "What is the weather in Paris today?"
@@ -558,7 +615,7 @@
             },
             "tools": [
               {
-                "id": "call_00_5z7FJZpksICHykFVInUb0583",
+                "id": "call_00_y74fALz6181sw1NNuSNK6791",
                 "name": "lookup_weather",
                 "arguments": {
                   "city": "Paris",
@@ -585,9 +642,15 @@
           "eval_set_id": "promptiter-regression-train",
           "case_id": "train_refund_policy",
           "critical": false,
-          "score": 1,
-          "status": "passed",
+          "score": 0.6666666666666666,
+          "status": "failed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -596,9 +659,16 @@
             },
             {
               "metric_name": "llm_rubric_critic",
-              "score": 1,
+              "score": 0,
               "threshold": 0.8,
-              "status": "passed"
+              "status": "failed"
+            }
+          ],
+          "failure_reasons": [
+            {
+              "category": "unknown",
+              "metric_name": "llm_rubric_critic",
+              "evidence": "metric failed without a detailed reason"
             }
           ],
           "expected": {
@@ -613,14 +683,14 @@
             }
           },
           "actual": {
-            "invocationId": "acf839ca-2dea-4603-8daf-b343f306c15f",
+            "invocationId": "f8b8e955-8c53-4090-adfe-7b628877725c",
             "userContent": {
               "role": "user",
               "content": "What refund window applies to premium members?"
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "Premium members have a 30-day refund window."
+              "content": "I don't have information about refund windows for premium members. That would be a policy-specific detail that I don't have access to in my current tools or knowledge base. Could you provide more context or check with the appropriate support team?"
             }
           },
           "trace": {
@@ -633,7 +703,7 @@
           "latency_ms": 0
         }
       ],
-      "latency_ms": 7383,
+      "latency_ms": 7309,
       "cost": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -642,9 +712,9 @@
       }
     },
     "validation_evaluation": {
-      "name": "candidate_validation",
+      "name": "promptiter-real-round-1_validation",
       "eval_set_id": "promptiter-regression-validation",
-      "overall_score": 0.6666666666666666,
+      "overall_score": 0.7777777777777777,
       "passed": 2,
       "failed": 1,
       "cases": [
@@ -652,14 +722,20 @@
           "eval_set_id": "promptiter-regression-validation",
           "case_id": "val_json_refund",
           "critical": false,
-          "score": 0,
+          "score": 0.3333333333333333,
           "status": "failed",
           "metrics": [
             {
-              "metric_name": "tool_trajectory_avg_score",
+              "metric_name": "structured_output_guard",
               "score": 0,
               "threshold": 1,
               "status": "failed"
+            },
+            {
+              "metric_name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
             },
             {
               "metric_name": "llm_rubric_critic",
@@ -670,8 +746,8 @@
           ],
           "failure_reasons": [
             {
-              "category": "tool_call_error",
-              "metric_name": "tool_trajectory_avg_score",
+              "category": "format_error",
+              "metric_name": "structured_output_guard",
               "evidence": "metric failed without a detailed reason"
             },
             {
@@ -692,30 +768,15 @@
             }
           },
           "actual": {
-            "invocationId": "e025beea-5c78-48c2-a22f-e37ce0e297f6",
+            "invocationId": "340d2b5b-c299-48c8-b0f3-22ccbb54fce0",
             "userContent": {
               "role": "user",
               "content": "Return refund request r-204 as JSON with status approved and amount 35."
             },
             "finalResponse": {
               "role": "assistant",
-              "content": "I don't need weather data for this task. Let me provide the requested JSON.\n\n```json\n{\n  \"id\": \"r-204\",\n  \"status\": \"approved\",\n  \"amount\": 35\n}\n```"
-            },
-            "tools": [
-              {
-                "id": "call_00_HlUgj78PF2BANiQOUpdp0168",
-                "name": "lookup_weather",
-                "arguments": {
-                  "city": "New York",
-                  "date": "2025-01-01"
-                },
-                "result": {
-                  "city": "New York",
-                  "condition": "unknown",
-                  "temperature_c": 0
-                }
-              }
-            ]
+              "content": "{\"refund_id\": \"r-204\", \"status\": \"approved\", \"amount\": 35}"
+            }
           },
           "trace": {
             "mode": "real_trace",
@@ -733,6 +794,12 @@
           "score": 1,
           "status": "passed",
           "metrics": [
+            {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
             {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
@@ -773,7 +840,7 @@
             ]
           },
           "actual": {
-            "invocationId": "9f714265-2319-49d6-9319-2b0844577f4d",
+            "invocationId": "23c28a79-bcc6-4633-9304-d37752250346",
             "userContent": {
               "role": "user",
               "content": "What is the weather in Berlin today?"
@@ -784,7 +851,7 @@
             },
             "tools": [
               {
-                "id": "call_00_YHEovHAvkLYt5CqBuoLQ2226",
+                "id": "call_00_pIorPSexr6DBGl8retcO0870",
                 "name": "lookup_weather",
                 "arguments": {
                   "city": "Berlin",
@@ -815,6 +882,12 @@
           "status": "passed",
           "metrics": [
             {
+              "metric_name": "structured_output_guard",
+              "score": 1,
+              "threshold": 1,
+              "status": "passed"
+            },
+            {
               "metric_name": "tool_trajectory_avg_score",
               "score": 1,
               "threshold": 1,
@@ -839,7 +912,7 @@
             }
           },
           "actual": {
-            "invocationId": "477af303-7c92-4d2d-8267-104f460c1e68",
+            "invocationId": "b2baebaa-ce09-49c1-9ea1-7c818733d7a2",
             "userContent": {
               "role": "user",
               "content": "The record is already available: TR900 is boarding at gate K12. Answer directly, without JSON."
@@ -859,7 +932,7 @@
           "latency_ms": 0
         }
       ],
-      "latency_ms": 8030,
+      "latency_ms": 7528,
       "cost": {
         "prompt_tokens": 0,
         "completion_tokens": 0,
@@ -869,8 +942,8 @@
     }
   },
   "delta": {
-    "baseline_score": 0.6666666666666666,
-    "candidate_score": 0.6666666666666666,
+    "baseline_score": 0.7777777777777777,
+    "candidate_score": 0.7777777777777777,
     "score_delta": 0,
     "newly_passed": 0,
     "newly_failed": 0,
@@ -881,16 +954,16 @@
       {
         "case_id": "val_json_refund",
         "critical": false,
-        "baseline_score": 0,
-        "candidate_score": 0,
+        "baseline_score": 0.3333333333333333,
+        "candidate_score": 0.3333333333333333,
         "score_delta": 0,
         "baseline_status": "failed",
         "candidate_status": "failed",
         "transition": "stayed_fail",
         "failure_reasons": [
           {
-            "category": "tool_call_error",
-            "metric_name": "tool_trajectory_avg_score",
+            "category": "format_error",
+            "metric_name": "structured_output_guard",
             "evidence": "metric failed without a detailed reason"
           },
           {
@@ -929,38 +1002,89 @@
     ]
   },
   "failure_attribution": {
-    "train": {},
+    "train": {
+      "format_error": 1,
+      "unknown": 2
+    },
     "validation": {
-      "tool_call_error": 1,
+      "format_error": 1,
       "unknown": 1
     }
   },
   "cost": {
     "prompt_tokens": 124,
-    "completion_tokens": 130,
+    "completion_tokens": 126,
     "total_calls": 12,
-    "estimated_usd": 0.000127
+    "estimated_usd": 0.000125
   },
   "latency": {
-    "started_at": "2026-07-17T16:06:08.6087102+08:00",
-    "finished_at": "2026-07-17T16:07:02.5748462+08:00",
-    "duration_ms": 53966
+    "started_at": "2026-07-23T18:22:03.635454+08:00",
+    "finished_at": "2026-07-23T18:23:01.393727+08:00",
+    "duration_ms": 57758
   },
   "rounds": [
     {
       "round": 1,
       "candidate_id": "promptiter-real-round-1",
-      "losses": [],
+      "losses": [
+        {
+          "EvalSetID": "promptiter-regression-train",
+          "EvalCaseID": "train_json_invoice",
+          "TerminalLosses": [
+            {
+              "EvalSetID": "promptiter-regression-train",
+              "EvalCaseID": "train_json_invoice",
+              "MetricName": "llm_rubric_critic",
+              "Severity": "",
+              "StepID": "s1",
+              "Loss": "Golden: requires invoice_id 'inv-100' and amount field 'amount_usd'. Actual: missing invoice_id field and uses 'amount' instead of 'amount_usd'. Material mismatch: missing required key and wrong key name."
+            },
+            {
+              "EvalSetID": "promptiter-regression-train",
+              "EvalCaseID": "train_json_invoice",
+              "MetricName": "structured_output_guard",
+              "Severity": "",
+              "StepID": "s1",
+              "Loss": "final response mismatch: actual map[amount:120 status:approved] and expected map[amount_usd:120 invoice_id:inv-100 status:approved] do not match: key amount in actual but not in expected"
+            }
+          ]
+        }
+      ],
       "patches": {
-        "Patches": []
+        "Patches": [
+          {
+            "SurfaceID": "travel-support#instruction",
+            "Value": {
+              "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools, but ensure the output JSON matches the exact schema expected by the user, including all required fields and correct key names.",
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": null,
+              "Skills": null
+            },
+            "Reason": "The current instruction lacked guidance on schema compliance for direct records. Adding a requirement to match the exact schema addresses the gradient about missing fields and wrong key names without altering the working parts."
+          }
+        ]
       },
       "output_profile": {
         "StructureID": "struct_cb5088f541335223937c3591281e55d89988350d05e6018633509c0c422e6cbc",
-        "Overrides": []
+        "Overrides": [
+          {
+            "SurfaceID": "travel-support#instruction",
+            "Value": {
+              "Text": "You are a travel support assistant.\n\nAnswer concisely. Use tools when weather data is requested. For direct records, answer without calling tools, but ensure the output JSON matches the exact schema expected by the user, including all required fields and correct key names.",
+              "PromptSyntax": null,
+              "FewShot": null,
+              "Model": null,
+              "Tools": null,
+              "Skills": null
+            }
+          }
+        ]
       },
       "delta": {
-        "baseline_score": 0.8333333333333334,
-        "candidate_score": 0.8333333333333334,
+        "baseline_score": 0.7777777777777777,
+        "candidate_score": 0.7777777777777777,
         "score_delta": 0,
         "newly_passed": 0,
         "newly_failed": 0,
@@ -971,17 +1095,22 @@
           {
             "case_id": "val_json_refund",
             "critical": false,
-            "baseline_score": 0.5,
-            "candidate_score": 0.5,
+            "baseline_score": 0.3333333333333333,
+            "candidate_score": 0.3333333333333333,
             "score_delta": 0,
             "baseline_status": "failed",
             "candidate_status": "failed",
             "transition": "stayed_fail",
             "failure_reasons": [
               {
-                "category": "tool_call_error",
-                "metric_name": "tool_trajectory_avg_score",
-                "evidence": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+                "category": "format_error",
+                "metric_name": "structured_output_guard",
+                "evidence": "metric failed without a detailed reason"
+              },
+              {
+                "category": "unknown",
+                "metric_name": "llm_rubric_critic",
+                "evidence": "metric failed without a detailed reason"
               }
             ]
           },
@@ -1014,12 +1143,12 @@
         ]
       },
       "cost": {
-        "prompt_tokens": 124,
-        "completion_tokens": 130,
-        "total_calls": 12,
-        "estimated_usd": 0.000127
+        "prompt_tokens": 62,
+        "completion_tokens": 81,
+        "total_calls": 6,
+        "estimated_usd": 0.0000715
       },
-      "latency_ms": 0
+      "latency_ms": 14838
     }
   ]
 }

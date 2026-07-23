@@ -53,7 +53,7 @@ func loadInput(configPath string) (*LoadedInput, error) {
 		cfg.MaxRounds = 1
 	}
 	if cfg.TargetSurfaceID == "" {
-		cfg.TargetSurfaceID = "agent#instruction"
+		cfg.TargetSurfaceID = resolveTargetSurfaceID("")
 	}
 	applyCriticalCaseConfig(&validation, cfg.Gate.CriticalCaseIDs)
 	return &LoadedInput{
