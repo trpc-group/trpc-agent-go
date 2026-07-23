@@ -111,11 +111,11 @@ func (p *diffParser) consumeLine(line string, inputLine int) {
 	}
 
 	file := &p.parsed.Files[p.currentFile]
-	if p.consumeFileMetadata(file, line, inputLine) {
+	if p.currentHunk >= 0 && !strings.HasPrefix(line, "@@") {
+		p.consumeHunkLine(file, line, inputLine)
 		return
 	}
-	if p.currentHunk >= 0 {
-		p.consumeHunkLine(file, line, inputLine)
+	if p.consumeFileMetadata(file, line, inputLine) {
 		return
 	}
 	if file.IsBinary || isKnownDiffMetadata(line) || strings.TrimSpace(line) == "" {
