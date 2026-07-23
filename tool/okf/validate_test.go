@@ -10,6 +10,8 @@
 package okf
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -31,6 +33,28 @@ func TestValidate_Conformant(t *testing.T) {
 	}
 	if len(vs) != 0 {
 		t.Errorf("expected conformant bundle, got %+v", vs)
+	}
+}
+
+func TestValidate_RejectsSymlinkedMarkdown(t *testing.T) {
+	parent := t.TempDir()
+	bundle := filepath.Join(parent, "bundle")
+	if err := os.Mkdir(bundle, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(parent, "outside.md")
+	if err := os.WriteFile(outside, []byte("---\ntype: External\n---\nbody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(bundle, "linked.md")); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Validate(os.DirFS(bundle))
+	if err == nil || !strings.Contains(err.Error(), `symbolic link "linked.md" is not allowed`) {
+		t.Fatalf("Validate symlink error = %v", err)
+	}
+	if strings.Contains(err.Error(), outside) {
+		t.Errorf("Validate symlink error leaked outside path: %q", err)
 	}
 }
 

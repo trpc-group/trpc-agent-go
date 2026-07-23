@@ -85,6 +85,33 @@ func TestList_MissingIndexTolerated(t *testing.T) {
 	}
 }
 
+func TestList_CRLFFrontmatter(t *testing.T) {
+	bundle := t.TempDir()
+	index := "---\r\nokf_version: \"0.1\"\r\n---\r\n\r\n# Index\r\n\r\n- [A](a.md)\r\n"
+	concept := "---\r\ntype: Protocol\r\ntitle: A\r\ndescription: Summary\r\n---\r\nbody\r\n"
+	if err := os.WriteFile(filepath.Join(bundle, okf.IndexFile), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bundle, "a.md"), []byte(concept), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(bundle)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	listing, err := store.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if listing.OKFVersion != "0.1" || len(listing.Concepts) != 1 {
+		t.Fatalf("CRLF listing = %+v", listing)
+	}
+	meta := listing.Concepts[0]
+	if meta.ID != "a" || meta.Type != "Protocol" || meta.Title != "A" || meta.Description != "Summary" {
+		t.Errorf("CRLF concept metadata = %+v", meta)
+	}
+}
+
 func TestListingMetadataStopsAfterFrontmatter(t *testing.T) {
 	reader := &failAfterFrontmatterReader{
 		data: []byte("---\ntype: Protocol\ntitle: x402\ndescription: Summary\n---\n"),

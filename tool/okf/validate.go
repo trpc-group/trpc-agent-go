@@ -10,6 +10,7 @@
 package okf
 
 import (
+	"fmt"
 	"io/fs"
 	"path"
 	"strings"
@@ -40,6 +41,8 @@ type Violation struct {
 //     with the root index.md frontmatter exception for okf_version from §11.
 //
 // Pass os.DirFS(bundleRoot) as fsys.
+//
+//nolint:gocyclo // Keeping producer-side format and filesystem checks together makes the validator auditable.
 func Validate(fsys fs.FS) ([]Violation, error) {
 	var violations []Violation
 	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
@@ -54,6 +57,9 @@ func Validate(fsys fs.FS) ([]Violation, error) {
 		}
 		if !strings.HasSuffix(p, ".md") {
 			return nil
+		}
+		if d.Type()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("okf: symbolic link %q is not allowed", p)
 		}
 		base := path.Base(p)
 		raw, err := fs.ReadFile(fsys, p)

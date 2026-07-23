@@ -114,6 +114,25 @@ func TestWriteBundleWritesNestedConcept(t *testing.T) {
 	}
 }
 
+func TestWriteBundleEscapesIndexLinks(t *testing.T) {
+	bundle := t.TempDir()
+	id := "research/foo#bar?baz [v1]"
+	if err := writeBundle(bundle, []draft{{
+		id: id,
+		fm: okf.Frontmatter{Type: "Protocol", Title: "Special"},
+	}}); err != nil {
+		t.Fatalf("writeBundle: %v", err)
+	}
+	indexData, err := os.ReadFile(filepath.Join(bundle, okf.IndexFile))
+	if err != nil {
+		t.Fatalf("read generated index: %v", err)
+	}
+	index := okf.ParseConcept("index", indexData)
+	if len(index.Links) != 1 || index.Links[0].Target != id {
+		t.Errorf("generated index links = %+v, want target %q", index.Links, id)
+	}
+}
+
 func TestValidateBundleRejectsViolations(t *testing.T) {
 	bundle := t.TempDir()
 	if err := writeBundle(bundle, []draft{{id: "invalid", fm: okf.Frontmatter{}}}); err != nil {

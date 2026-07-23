@@ -21,6 +21,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -105,8 +106,10 @@ func writeBundle(dir string, drafts []draft) error {
 	// Root index.md: progressive-disclosure entry point + the okf_version stamp.
 	var b strings.Builder
 	b.WriteString("---\nokf_version: \"0.1\"\n---\n\n# Index\n\n")
+	labelEscaper := strings.NewReplacer(`\`, `\\`, `[`, `\[`, `]`, `\]`)
 	for _, d := range drafts {
-		fmt.Fprintf(&b, "- [%s](%s.md) — %s\n", d.id, d.id, d.fm.Title)
+		destination := (&url.URL{Path: d.id + ".md"}).EscapedPath()
+		fmt.Fprintf(&b, "- [%s](%s) — %s\n", labelEscaper.Replace(d.id), destination, d.fm.Title)
 	}
 	return os.WriteFile(filepath.Join(dir, okf.IndexFile), []byte(b.String()), 0o644) //nolint:gosec // Bundle content is intentionally readable.
 }
