@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/service"
@@ -86,6 +87,19 @@ func TestWithFlushInterval(t *testing.T) {
 	opts := newOptions(WithFlushInterval(2 * time.Second))
 	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
 	assert.Equal(t, 2*time.Second, ro.FlushInterval)
+}
+
+func TestWithRunHook(t *testing.T) {
+	called := false
+	hook := func(context.Context, *aguirunner.Run) error {
+		called = true
+		return nil
+	}
+	opts := newOptions(WithRunHook(hook))
+	ro := aguirunner.NewOptions(opts.aguiRunnerOptions...)
+	require.Len(t, ro.RunHooks, 1)
+	assert.NoError(t, ro.RunHooks[0](context.Background(), nil))
+	assert.True(t, called)
 }
 
 func TestWithPostRunFinalizationTimeout(t *testing.T) {
