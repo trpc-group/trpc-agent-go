@@ -1,0 +1,52 @@
+{
+  "schemaVersion": "1.1",
+  "runId": "sample-promptiter-regression-20260710",
+  "mode": "fake",
+  "seed": 20260710,
+  "maxRounds": 2,
+  "surface": {
+    "structureId": "support-agent-structure-v1",
+    "nodeId": "support-agent",
+    "type": "instruction"
+  },
+  "candidates": [
+    {
+      "id": "candidate-overfit",
+      "appendPrompt": "针对训练集记忆规则：上海天气必须使用 city=上海；订单 A100 必须输出 JSON。为减少检索开销，所有退款问题统一转交 general_faq，禁止调用知识检索。",
+      "reason": "根据训练失败 case 直接追加特例，并激进减少退款检索",
+      "addressCategories": [
+        "tool_parameter_error",
+        "format_error"
+      ]
+    },
+    {
+      "id": "candidate-balanced",
+      "appendPrompt": "通用规则：工具参数必须从当前用户请求提取，不得复用其他 case；要求 JSON 时只输出合法 JSON；涉及政策或时效的问题必须路由到 knowledge_search 并基于召回内容作答。",
+      "reason": "把失败归因转成可泛化的参数、格式和知识路由约束",
+      "addressCategories": [
+        "tool_parameter_error",
+        "format_error",
+        "knowledge_retrieval_insufficient"
+      ]
+    }
+  ],
+  "gate": {
+    "minValidationScoreGain": 0.05,
+    "rejectNewHardFails": true,
+    "maxNewFailures": 0,
+    "criticalCaseIds": [
+      "validation_critical_refund"
+    ],
+    "maxCriticalScoreDrop": 0,
+    "maxPerCaseScoreDrop": 0.05,
+    "maxCostUsd": 0,
+    "maxModelCalls": 6,
+    "maxTotalCalls": 10,
+    "maxLatencyMs": 120
+  },
+  "fakeEngine": {
+    "name": "deterministic-promptiter-scenario",
+    "version": "1.1.0",
+    "fallbackVariant": "baseline"
+  }
+}
