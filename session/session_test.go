@@ -1794,6 +1794,33 @@ func TestUpdateUserSession(t *testing.T) {
 	}
 }
 
+func TestUpdateUserSessionConcurrentCloneUpdatedAt(t *testing.T) {
+	const iterations = 1000
+	sess := NewSession("app", "user", "session")
+	evt := &event.Event{}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			sess.UpdateUserSession(evt)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			_ = sess.Clone()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+}
+
 func TestApplyOptions(t *testing.T) {
 	now := time.Now()
 
