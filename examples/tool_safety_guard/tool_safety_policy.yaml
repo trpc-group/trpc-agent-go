@@ -1,0 +1,70 @@
+policy_id: example-tool-safety-v1
+commands:
+  allowed:
+    - go
+    - git
+    - grep
+    - cat
+    - curl
+  denied:
+    - rm
+    - dd
+    - mkfs
+    - shutdown
+    - reboot
+    - sudo
+  review:
+    - npm
+    - pip
+    - pip3
+    - apt
+    - apt-get
+network:
+  commands:
+    - curl
+    - wget
+    - nc
+    - netcat
+    - ssh
+  allowed_domains:
+    - proxy.golang.org
+    - go.dev
+  default_action: deny
+paths:
+  denied:
+    - /etc
+    - /root/.ssh
+    - ~/.ssh
+    - .env
+    - credentials.json
+    - /var/run/docker.sock
+environment:
+  allowed_variables:
+    - CI
+    - CGO_ENABLED
+    - GOFLAGS
+    - GOPROXY
+  denied_variables:
+    - AWS_SECRET_ACCESS_KEY
+    - GITHUB_TOKEN
+    - OPENAI_API_KEY
+    - PASSWORD
+    - PRIVATE_KEY
+limits:
+  max_timeout_seconds: 120
+  max_output_bytes: 1048576
+  max_command_bytes: 16384
+  max_script_bytes: 1048576
+  max_session_input_bytes: 65536
+  max_script_lines: 500
+  max_sleep_seconds: 30
+hostexec:
+  allow_background: false
+  allow_pty: false
+  max_timeout_seconds: 30
+actions:
+  unparsable: ask
+  unlisted_command: ask
+  unknown_script: ask
+  dependency_change: ask
+  audit_failure: deny
