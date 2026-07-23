@@ -10,7 +10,6 @@
 package reviewer
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -65,87 +64,6 @@ type workspaceExecInput struct {
 	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
 	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
 	raw           map[string]json.RawMessage
-}
-
-// approvalIdentity returns the run-local grant identity for one target call.
-//
-// Ordinary tools are authorized by tool name alone, so their identity is empty
-// and grantKey.ToolName is the complete identity. workspace_exec is different:
-// a simple configured command uses the configured command name, while a shell
-// expression that combines operations uses its complete canonical arguments.
-func approvalIdentity(toolName string, arguments []byte) (string, error) {
-	// regular tool call has no identity needed, just recognized by tool name
-	if toolName != workspaceExecToolName {
-		return "", nil
-	}
-	input, err := decodeWorkspaceExecInput(arguments)
-	if err != nil {
-		return "", fmt.Errorf("decode workspace_exec approval arguments: %w", err)
-	}
-
-	governed, matched := governedCommandNames.match(input.Command)
-	// complex shell commands use full command as identity
-	if !matched || hasComplexShellStructure(input.Command) {
-		identity, err := canonicalJSON(arguments)
-		return string(identity), err
-	}
-	return governed, nil
-}
-
-// requiresApproval is the only risk-classification entry point used by the
-// framework policy. Framework metadata governs ordinary tools; workspace_exec
-// additionally checks its command against this example's configured commands.
-func requiresApproval(
-	req *tool.PermissionRequest,
-	arguments []byte,
-) (bool, error) {
-	if req.ToolName != workspaceExecToolName {
-		return req.Metadata.Destructive, nil
-	}
-
-	if req.Metadata.Destructive {
-		return true, nil
-	}
-	input, err := decodeWorkspaceExecInput(arguments)
-	if err != nil {
-		return false, fmt.Errorf("decode workspace_exec approval arguments: %w", err)
-	}
-	_, matched := governedCommandNames.match(input.Command)
-	return matched, nil
-}
-
-// canonicalJSON makes complex workspace_exec grants independent of JSON object
-// key order without weakening any argument value.
-func canonicalJSON(value []byte) ([]byte, error) {
-	decoder := json.NewDecoder(bytes.NewReader(value))
-	decoder.UseNumber()
-	var decoded any
-	if err := decoder.Decode(&decoded); err != nil {
-		return nil, err
-	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF {
-		if err == nil {
-			return nil, errors.New("JSON value contains trailing data")
-		}
-		return nil, err
-	}
-	return json.Marshal(decoded)
-}
-
-// decodeWorkspaceExecInput retains fields that this example does not interpret.
-// workspace_exec owns its public JSON schema; governance may change command or
-// env, but it must not silently erase stdin, yield controls, or future fields
-// while returning ModifiedArguments to the framework.
-func decodeWorkspaceExecInput(arguments []byte) (workspaceExecInput, error) {
-	var input workspaceExecInput
-	if err := json.Unmarshal(arguments, &input); err != nil {
-		return workspaceExecInput{}, err
-	}
-	if err := json.Unmarshal(arguments, &input.raw); err != nil {
-		return workspaceExecInput{}, err
-	}
-	return input, nil
 }
 
 // modifiedArguments encodes callback changes while preserving unknown fields
@@ -246,6 +164,87 @@ func (in workspaceExecInput) envKeysJSON() string {
 	sort.Strings(keys)
 	encoded, _ := json.Marshal(keys)
 	return string(encoded)
+}
+
+// approvalIdentity returns the run-local grant identity for one target call.
+//
+// Ordinary tools are authorized by tool name alone, so their identity is empty
+// and grantKey.ToolName is the complete identity. workspace_exec is different:
+// a simple configured command uses the configured command name, while a shell
+// expression that combines operations uses its complete canonical arguments.
+func approvalIdentity(toolName string, arguments []byte) (string, error) {
+	// regular tool call has no identity needed, just recognized by tool name
+	if toolName != workspaceExecToolName {
+		return "", nil
+	}
+	input, err := decodeWorkspaceExecInput(arguments)
+	if err != nil {
+		return "", fmt.Errorf("decode workspace_exec approval arguments: %w", err)
+	}
+
+	governed, matched := governedCommandNames.match(input.Command)
+	// complex shell commands use full command as identity
+	if !matched || hasComplexShellStructure(input.Command) {
+		identity, err := canonicalJSON(arguments)
+		return string(identity), err
+	}
+	return governed, nil
+}
+
+// requiresApproval is the only risk-classification entry point used by the
+// framework policy. Framework metadata governs ordinary tools; workspace_exec
+// additionally checks its command against this example's configured commands.
+func requiresApproval(
+	req *tool.PermissionRequest,
+	arguments []byte,
+) (bool, error) {
+	if req.ToolName != workspaceExecToolName {
+		return req.Metadata.Destructive, nil
+	}
+
+	if req.Metadata.Destructive {
+		return true, nil
+	}
+	input, err := decodeWorkspaceExecInput(arguments)
+	if err != nil {
+		return false, fmt.Errorf("decode workspace_exec approval arguments: %w", err)
+	}
+	_, matched := governedCommandNames.match(input.Command)
+	return matched, nil
+}
+
+// canonicalJSON makes complex workspace_exec grants independent of JSON object
+// key order without weakening any argument value.
+func canonicalJSON(value []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return nil, errors.New("JSON value contains trailing data")
+		}
+		return nil, err
+	}
+	return json.Marshal(decoded)
+}
+
+// decodeWorkspaceExecInput retains fields that this example does not interpret.
+// workspace_exec owns its public JSON schema; governance may change command or
+// env, but it must not silently erase stdin, yield controls, or future fields
+// while returning ModifiedArguments to the framework.
+func decodeWorkspaceExecInput(arguments []byte) (workspaceExecInput, error) {
+	var input workspaceExecInput
+	if err := json.Unmarshal(arguments, &input); err != nil {
+		return workspaceExecInput{}, err
+	}
+	if err := json.Unmarshal(arguments, &input.raw); err != nil {
+		return workspaceExecInput{}, err
+	}
+	return input, nil
 }
 
 // executionStart is the workspace_exec state shared by permission handling and
@@ -438,113 +437,6 @@ func (t *reviewRunState) recordException(kind string) {
 	t.mu.Lock()
 	t.exceptions[kind]++
 	t.mu.Unlock()
-}
-
-// Approver owns the terminal side of permission requests for one reviewer run.
-// The mutex prevents overlapping prompts. terminalErr permanently disables
-// further reads after cancellation so a late response cannot approve a later
-// request. skip is the fake-model path through the same permission pipeline.
-type Approver struct {
-	mu          sync.Mutex
-	reader      *bufio.Reader
-	writer      io.Writer
-	skip        bool
-	terminalErr error
-}
-
-type approvalResponse struct {
-	answer string
-	err    error
-}
-
-var errApprovalInputUnavailable = errors.New(
-	"interactive approval input is unavailable after a canceled decision",
-)
-
-// newApprover creates the concrete terminal approver shared by real and fake
-// runs. Fake mode sets skip; it does not replace the permission pipeline.
-func newApprover(config ApprovalConfig, skip bool) *Approver {
-	var reader *bufio.Reader
-	if config.Input != nil {
-		reader = bufio.NewReader(config.Input)
-	}
-	return &Approver{
-		reader: reader,
-		writer: config.Output,
-		skip:   skip,
-	}
-}
-
-// readResponse binds one terminal read to one approval decision. A generic
-// io.Reader cannot be canceled, so the private buffered channel lets a late
-// response finish without blocking or becoming input for another decision.
-func (a *Approver) readResponse() <-chan approvalResponse {
-	responses := make(chan approvalResponse, 1)
-	go func() {
-		answer, err := a.reader.ReadString('\n')
-		responses <- approvalResponse{answer: answer, err: err}
-	}()
-	return responses
-}
-
-// decide performs one serialized user decision. skip is the fake-model path;
-// missing terminal I/O returns Ask instead of silently approving. Cancellation
-// permanently closes this Approver because a generic Reader cannot retract a
-// late response safely for reuse by another decision.
-func (a *Approver) decide(
-	ctx context.Context,
-	toolName string,
-	command string,
-	reason string,
-) (tool.PermissionDecision, error) {
-	if err := ctx.Err(); err != nil {
-		return tool.PermissionDecision{}, err
-	}
-	if a != nil && a.skip {
-		return tool.AllowPermission(), nil
-	}
-	if a == nil || a.reader == nil || a.writer == nil {
-		return tool.PermissionDecision{}, fmt.Errorf("interactive approval is not available")
-	}
-
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if err := ctx.Err(); err != nil {
-		return tool.PermissionDecision{}, err
-	}
-	if a.terminalErr != nil {
-		return tool.PermissionDecision{}, a.terminalErr
-	}
-	for {
-		if _, err := fmt.Fprintf(a.writer,
-			"\nThe review agent requests permission to use a governed tool.\nTarget tool: %s\nTarget arguments: %s\nReason: %s\nApprove? [Y/n] ",
-			toolName,
-			command,
-			reason,
-		); err != nil {
-			return tool.PermissionDecision{}, fmt.Errorf("write approval prompt: %w", err)
-		}
-		responses := a.readResponse()
-		var response approvalResponse
-		select {
-		case <-ctx.Done():
-			a.terminalErr = errApprovalInputUnavailable
-			return tool.PermissionDecision{}, ctx.Err()
-		case response = <-responses:
-		}
-		if response.err != nil && len(response.answer) == 0 {
-			if response.err == io.EOF {
-				return tool.AskPermission("interactive approval input ended before a decision"), nil
-			}
-			return tool.PermissionDecision{}, fmt.Errorf("read approval response: %w", response.err)
-		}
-		switch strings.ToLower(strings.TrimSpace(response.answer)) {
-		case "", "y", "yes":
-			return tool.AllowPermission(), nil
-		case "n", "no":
-			return tool.DenyPermission("user denied the requested tool execution"), nil
-		}
-	}
 }
 
 // newReviewPermissionPolicy connects the framework permission lifecycle to

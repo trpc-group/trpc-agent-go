@@ -294,6 +294,7 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 		wantStatus             string
 		wantTargetDecision     tool.PermissionAction
 		wantRecordedPermission bool
+		wantToolError          bool
 	}{
 		{
 			name: "fake model skip grants", command: standardReviewChecksCommand("module-a"),
@@ -311,9 +312,13 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 			wantTargetDecision: tool.PermissionActionAsk, wantRecordedPermission: true,
 		},
 		{
-			name: "interactive input unavailable", command: standardReviewChecksCommand("module-a"),
-			wantStatus:         permissionStatusApprovalNeeded,
-			wantTargetDecision: tool.PermissionActionAsk, wantRecordedPermission: true,
+			// Without terminal I/O the entrypoint itself is misconfigured:
+			// returning AskPermission would only send the model back into the
+			// same broken pipeline, so request_tool_permission must surface
+			// the error instead of a status.
+			name: "interactive input unavailable",
+			command:     standardReviewChecksCommand("module-a"),
+			wantToolError: true,
 		},
 	}
 
@@ -365,6 +370,12 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 			}
 			permissionCtx := context.WithValue(ctx, tool.ContextKeyToolCallID{}, "permission-call")
 			result, err := permissionTool.Call(permissionCtx, requestArguments)
+			if tt.wantToolError {
+				if err == nil {
+					t.Fatalf("expected request_tool_permission to return an error without terminal I/O, got status=%q", result.(requestToolPermissionOutput).Status)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
