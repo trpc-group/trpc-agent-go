@@ -816,6 +816,9 @@ func TestPathPolicyResolutionAndAccess(t *testing.T) {
 }
 
 func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
+	if got := effectiveOutputLimit(0, 0); got != defaultOutputMaxBytes {
+		t.Fatalf("default output limit = %d, want %d", got, defaultOutputMaxBytes)
+	}
 	if got := effectiveOutputLimit(1024, 128); got != 128 {
 		t.Fatalf("request output limit = %d, want 128", got)
 	}

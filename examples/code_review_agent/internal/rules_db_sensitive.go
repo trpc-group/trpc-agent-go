@@ -282,7 +282,7 @@ func extractPackageName(file DiffFile) string {
 				return matches[1]
 			}
 		}
- 	}
+	}
 	return ""
 }
 

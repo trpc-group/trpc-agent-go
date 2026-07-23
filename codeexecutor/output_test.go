@@ -32,3 +32,29 @@ func TestBoundedOutputTailPreservesFraming(t *testing.T) {
 		t.Fatalf("bounded head/tail did not preserve framing: retained=%d value=%q", output.RetainedBytes(), output.String())
 	}
 }
+
+func TestBoundedOutputNormalizesTailLimits(t *testing.T) {
+	negativeTail := NewBoundedOutputWithTail(4, -1)
+	_, _ = negativeTail.Write([]byte("abcdef"))
+	if got := negativeTail.String(); got != "abcd\n... [output truncated at 4 bytes]" {
+		t.Fatalf("negative tail was not disabled: %q", got)
+	}
+
+	oversizedTail := NewBoundedOutputWithTail(4, 8)
+	_, _ = oversizedTail.Write([]byte("abcdef"))
+	if got := oversizedTail.String(); got != "\n... [output truncated at 4 bytes]cdef" {
+		t.Fatalf("oversized tail was not clamped: %q", got)
+	}
+}
+
+func TestBoundedOutputTailKeepsLatestBytesAcrossWrites(t *testing.T) {
+	output := NewBoundedOutputWithTail(6, 4)
+	_, _ = output.Write([]byte("abcd"))
+	_, _ = output.Write([]byte("efg"))
+	if output.RetainedBytes() != 6 {
+		t.Fatalf("retained bytes = %d, want 6", output.RetainedBytes())
+	}
+	if got := output.String(); got != "ab\n... [output truncated at 6 bytes]defg" {
+		t.Fatalf("tail did not retain the latest bytes: %q", got)
+	}
+}
