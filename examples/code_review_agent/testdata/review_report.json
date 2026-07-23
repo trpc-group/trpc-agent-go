@@ -1,0 +1,170 @@
+{
+  "task_id": "review-sample-secret-leak",
+  "status": "completed",
+  "conclusion": "findings",
+  "started_at": "2026-07-22T00:00:00Z",
+  "finished_at": "2026-07-22T00:00:00.004Z",
+  "duration_ms": 4,
+  "input": {
+    "kind": "fixture",
+    "source": "secret_leak",
+    "diff_bytes": 192,
+    "diff_sha256": "45c28f3dbb83644041f9d5e7f039123ef45525bc85c4701bea82a8f75f05dce6",
+    "files": [
+      {
+        "path": "config.go",
+        "old_path": "config.go",
+        "new_path": "config.go",
+        "package_name": "config",
+        "hunks": [
+          {
+            "header": "@@ -1,3 +1,5 @@",
+            "old_start": 1,
+            "old_count": 3,
+            "new_start": 1,
+            "new_count": 5,
+            "added_lines": [
+              2,
+              3
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "runtime": {
+    "runtime": "fake",
+    "dry_run": true,
+    "rule_only": false,
+    "enable_staticcheck": false,
+    "output_dir": "output",
+    "db_path": "output/reviews.db"
+  },
+  "parse": {
+    "changed_files": 1,
+    "hunks": 1,
+    "candidate_lines": 1,
+    "warnings": 0
+  },
+  "rules": {
+    "rule_matches": 1,
+    "rule_warnings": 0,
+    "findings": 1,
+    "warnings": 0,
+    "needs_human_review": false,
+    "suppressed_matches": 0,
+    "finding_rule_ids": [
+      "secret.hardcoded"
+    ],
+    "warning_rule_ids": [],
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "governance": {
+    "skill_name": "code-review",
+    "skill_digest": "sample-skill-digest",
+    "commands_planned": 3,
+    "commands_allowed": 3,
+    "commands_blocked": 0,
+    "permission_blocks": 0,
+    "filter_decisions": [
+      {
+        "command": "checkGoVersion",
+        "decision": "allow"
+      },
+      {
+        "command": "checkGoTest",
+        "decision": "allow"
+      },
+      {
+        "command": "checkGoVet",
+        "decision": "allow"
+      }
+    ],
+    "permission_decisions": [
+      {
+        "command": "checkGoVersion",
+        "decision": "allow"
+      },
+      {
+        "command": "checkGoTest",
+        "decision": "allow"
+      },
+      {
+        "command": "checkGoVet",
+        "decision": "allow"
+      }
+    ],
+    "sandbox_runs": [
+      {
+        "runtime": "fake",
+        "command": "checkGoVersion",
+        "exit_code": 0,
+        "stdout": "go version fake",
+        "timed_out": false,
+        "duration_ms": 1
+      },
+      {
+        "runtime": "fake",
+        "command": "checkGoTest",
+        "exit_code": 0,
+        "stdout": "ok",
+        "timed_out": false,
+        "duration_ms": 1
+      },
+      {
+        "runtime": "fake",
+        "command": "checkGoVet",
+        "exit_code": 0,
+        "stdout": "ok",
+        "timed_out": false,
+        "duration_ms": 1
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "config.go",
+      "line": 3,
+      "title": "Hardcoded secret-like value",
+      "evidence": "const <redacted:github-token>",
+      "recommendation": "Move secrets to a managed secret store or environment-provided configuration.",
+      "confidence": 0.9,
+      "source": "diff",
+      "rule_id": "secret.hardcoded"
+    }
+  ],
+  "warnings": [],
+  "metrics": {
+    "total_duration_ms": 4,
+    "sandbox_duration_ms": 3,
+    "tool_calls": 3,
+    "permission_blocks": 0,
+    "findings": 1,
+    "warnings": 0,
+    "severity_counts": {
+      "high": 1
+    },
+    "suppressed_matches": 0,
+    "redactions": 1
+  },
+  "artifacts": [
+    {
+      "kind": "review_report_json",
+      "path": "output/review-sample-secret-leak/review_report.json"
+    },
+    {
+      "kind": "review_report_markdown",
+      "path": "output/review-sample-secret-leak/review_report.md",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "bytes": 1250
+    }
+  ],
+  "report_paths": {
+    "json": "output/review-sample-secret-leak/review_report.json",
+    "markdown": "output/review-sample-secret-leak/review_report.md"
+  }
+}
