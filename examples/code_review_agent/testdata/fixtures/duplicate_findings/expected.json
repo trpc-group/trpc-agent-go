@@ -1,0 +1,8 @@
+{
+  "expect_rules": [
+    "CR-CON-001"
+  ],
+  "exact_rule_counts": {
+    "CR-CON-001": 1
+  }
+}

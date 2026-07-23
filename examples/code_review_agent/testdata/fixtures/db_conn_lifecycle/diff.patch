@@ -1,0 +1,20 @@
+diff --git a/pkg/store/store.go b/pkg/store/store.go
+index 1111111..2222222 100644
+--- a/pkg/store/store.go
++++ b/pkg/store/store.go
+@@ -1,5 +1,14 @@
+ package store
+ 
++import "database/sql"
++
+ // Open opens a database.
+-func Open() error { return nil }
++func Open() (*sql.DB, error) {
++	db, err := sql.Open("sqlite3", "file:test.db")
++	if err != nil {
++		return nil, err
++	}
++	tx, _ := db.Begin()
++	_ = tx
++	return db, nil
++}
