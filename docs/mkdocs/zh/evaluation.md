@@ -855,6 +855,7 @@ type EvalMetric struct {
 	EvaluatorName string               // EvaluatorName 是评估器实现名，可选
 	Threshold     float64              // Threshold 是阈值
 	Criterion     *criterion.Criterion // Criterion 是评估准则
+	Extension     any                  // Extension 是调用方自定义元数据
 }
 
 // Criterion 表示评估准则集合
@@ -865,7 +866,7 @@ type Criterion struct {
 }
 ```
 
-`metricName` 默认用于从 Registry 选择评估器实现，常见内置评估器如下：
+`metricName` 用于从 Registry 选择评估器实现，并作为结果中的指标标识。常见内置评估器如下：
 
 - `tool_trajectory_avg_score`：工具轨迹一致性评估器，需要配置预期输出。
 - `final_response_avg_score`：最终响应评估器，不需要 LLM，需要配置预期输出。
@@ -879,6 +880,8 @@ type Criterion struct {
 - `llm_rubric_knowledge_recall`：LLM rubric 知识召回评估器，需要评估集提供会话输入并配置 LLMJudge 和评估细则 rubrics。
 
 `metricName` 需要在同一份指标文件中保持唯一，因为它同时作为结果中的指标标识。`threshold` 用于定义阈值，评估器会输出 `score` 并据此判断通过或失败。不同评估器对 `score` 的定义略有差异，但常见做法是对每轮 Invocation 计算分数，再对多轮结果做聚合得到整体分数。指标文件的数组顺序也会影响评估执行顺序与结果展示顺序。
+
+`extension` 用于携带调用方自定义的评估指标元数据，例如平台侧的权重、分组或展示配置。框架只负责随 `EvalMetric` 读取、存储和传递该字段，不解释其中的业务语义，也不承诺对其内容做深拷贝；自定义评估器、平台逻辑或自定义聚合逻辑可以按需读取。
 
 下面给出一个工具轨迹指标文件示例。
 
@@ -2863,6 +2866,39 @@ agentEvaluator, err := evaluation.New(
 	evaluation.WithRegistry(reg),
 )
 ```
+
+#### 自定义评估器
+
+当内置评估器不能覆盖业务规则时，可以实现 `evaluator.Evaluator` 并注册到 Registry。指标文件通过 `metricName` 选择评估器实现，并把它作为结果中的指标标识。如果评估器需要额外配置，可以放在 `extension` 中，由自定义评估器自行读取。
+
+指标配置示例：
+
+```json
+{
+  "metricName": "support_response_policy",
+  "threshold": 1,
+  "extension": {
+    "requiredPhrase": "support"
+  }
+}
+```
+
+代码接入示例：
+
+```go
+reg := registry.New()
+if err := reg.Register("support_response_policy", responsePolicyEvaluator{}); err != nil {
+	log.Fatalf("register evaluator: %v", err)
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithRegistry(reg),
+)
+```
+
+完整可运行示例参见 [examples/evaluation/metricextension](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/metricextension)。
 
 ### 评估结果 EvalResult
 
