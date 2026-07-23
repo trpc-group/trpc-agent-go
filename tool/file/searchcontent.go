@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -78,8 +79,8 @@ func (f *fileToolSet) searchContent(
 		FileMatches:    []*fileMatch{},
 	}
 	if req == nil {
-		err := fmt.Errorf("request cannot be nil")
-		rsp.Message = fmt.Sprintf("Error: %v", err)
+		err := errors.New("request cannot be nil")
+		rsp.Message = "Error: " + err.Error()
 		return rsp, err
 	}
 	rsp.Path = req.Path
@@ -167,7 +168,7 @@ func (f *fileToolSet) searchContentByPath(
 	re *regexp.Regexp,
 ) (string, []*fileMatch, error) {
 	if req == nil || re == nil {
-		return "", nil, fmt.Errorf("request cannot be nil")
+		return "", nil, errors.New("request cannot be nil")
 	}
 	pathRef, err := fileref.Parse(req.Path)
 	if err != nil {
@@ -491,10 +492,10 @@ func (f *fileToolSet) searchContentTool() tool.CallableTool {
 // validatePattern validates the file and content patterns.
 func validatePattern(filePattern string, contentPattern string) error {
 	if filePattern == "" {
-		return fmt.Errorf("file pattern cannot be empty")
+		return errors.New("file pattern cannot be empty")
 	}
 	if contentPattern == "" {
-		return fmt.Errorf("content pattern cannot be empty")
+		return errors.New("content pattern cannot be empty")
 	}
 	return nil
 }
