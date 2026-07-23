@@ -37,6 +37,7 @@ CLAUDE.md
 pnpm-lock.yaml
 .gocache
 !.github/scripts/run-go-tests.sh
+!examples/code_review_agent/skills/code-review/scripts/run_go_test.sh
 .DS_Store
 .env
 .gomodcache

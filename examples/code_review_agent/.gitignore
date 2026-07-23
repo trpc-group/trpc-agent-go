@@ -1,0 +1,10 @@
+# Runtime demo outputs (keep README so the directory is self-explanatory).
+/out/*
+!/out/README.md
+**/*.db
+
+# Local junk
+.DS_Store
+.env
+*.swp
+*~
