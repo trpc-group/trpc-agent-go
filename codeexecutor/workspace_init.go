@@ -37,7 +37,9 @@ const (
 // succeeds and before that workspace is returned to callers. Use it for
 // deterministic setup (stage inputs, install dependencies). Hooks are scoped to
 // workspace creation: they do not watch files on disk or re-run later solely
-// because workspace contents changed.
+// because workspace contents changed. Hooks must be replay-safe: an
+// instance-aware backend can replace its physical environment during creation,
+// causing the complete provisioning sequence to run again on the new instance.
 //
 // Multiple hooks run in declaration order; failure labels use hook index
 // (0, 1, ...). Use [NewWorkspaceInitHook] for declarative staging and commands with
@@ -265,11 +267,10 @@ type workspaceInstanceInitManager struct {
 	provider WorkspaceInstanceProvider
 }
 
-func (m *workspaceInstanceInitManager) WorkspaceInstanceID(
+func (m *workspaceInstanceInitManager) InstanceID(
 	ctx context.Context,
-	ws Workspace,
 ) (WorkspaceInstanceID, error) {
-	return m.provider.WorkspaceInstanceID(ctx, ws)
+	return m.provider.InstanceID(ctx)
 }
 
 func (m *workspaceInitManager) CreateWorkspace(
@@ -292,6 +293,12 @@ func (m *workspaceInitManager) CreateWorkspace(
 	for i, h := range m.hooks {
 		if err := h(ctx, env); err != nil {
 			hookErr := fmt.Errorf("workspace init hook %d: %w", i, err)
+			if errors.Is(err, ErrWorkspaceStale) {
+				// A deterministic path may already belong to the replacement
+				// instance. Cleaning up through a stale handle could delete
+				// newly provisioned data.
+				return Workspace{}, hookErr
+			}
 			// Best-effort cleanup without inheriting deadline/cancel from ctx,
 			// which may already be expired when the hook failed for timeout.
 			cleanCtx, cancel := context.WithTimeout(

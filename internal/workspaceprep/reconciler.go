@@ -11,6 +11,7 @@ package workspaceprep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -21,6 +22,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
+)
+
+// ErrReconcileRetryUnsafe marks a stale reconciliation result that happened
+// after at least one command completed successfully. The error still wraps
+// [codeexecutor.ErrWorkspaceStale], but callers must not replay reconciliation
+// automatically because an arbitrary command could execute twice.
+var ErrReconcileRetryUnsafe = errors.New(
+	"workspaceprep: reconciliation is unsafe to retry",
 )
 
 // defaultReconciler is the process-local, single-node implementation
@@ -82,6 +91,7 @@ func (r *defaultReconciler) Reconcile(
 
 	var warnings []string
 	changed := false
+	commandApplied := false
 	var changedKeys []string
 	for _, req := range reqs {
 		applied, warn, err := r.runOne(ctx, rctx, req)
@@ -89,6 +99,9 @@ func (r *defaultReconciler) Reconcile(
 			warnings = append(warnings, warn)
 		}
 		if err != nil {
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				return warnings, markRetryUnsafe(err, commandApplied)
+			}
 			if !req.Required() {
 				warnings = append(warnings, fmt.Sprintf(
 					"optional requirement %q failed: %v",
@@ -100,6 +113,12 @@ func (r *defaultReconciler) Reconcile(
 				if saveErr := r.saveReconcileMetadata(
 					ctx, eng, ws, baseMD, md, changedKeys,
 				); saveErr != nil {
+					if errors.Is(saveErr, codeexecutor.ErrWorkspaceStale) {
+						return warnings, markRetryUnsafe(
+							saveErr,
+							commandApplied,
+						)
+					}
 					return warnings, fmt.Errorf(
 						"workspaceprep: save metadata after "+
 							"partial apply: %w",
@@ -115,18 +134,31 @@ func (r *defaultReconciler) Reconcile(
 		if applied {
 			changed = true
 			changedKeys = append(changedKeys, req.Key())
+			if req.Kind() == KindCommand {
+				commandApplied = true
+			}
 		}
 	}
 	if changed {
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				return warnings, markRetryUnsafe(err, commandApplied)
+			}
 			warnings = append(warnings, fmt.Sprintf(
 				"save metadata: %v", err,
 			))
 		}
 	}
 	return warnings, nil
+}
+
+func markRetryUnsafe(err error, unsafe bool) error {
+	if !unsafe {
+		return err
+	}
+	return errors.Join(err, ErrReconcileRetryUnsafe)
 }
 
 func (r *defaultReconciler) saveReconcileMetadata(

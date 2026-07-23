@@ -19,17 +19,23 @@ var errWorkspaceInstanceIDEmpty = errors.New(
 	"codeexecutor: WorkspaceInstanceProvider returned an empty instance ID",
 )
 
+var errWorkspaceRegistryTokenExhausted = errors.New(
+	"codeexecutor: workspace registry entry token exhausted",
+)
+
 // WorkspaceRegistry keeps a process-level mapping of logical IDs to
 // created workspaces for reuse within a session.
 type WorkspaceRegistry struct {
-	mu       sync.Mutex
-	byID     map[string]workspaceRegistryEntry
-	inflight map[string]*workspaceCreateCall
+	mu        sync.Mutex
+	byID      map[string]workspaceRegistryEntry
+	inflight  map[string]*workspaceCreateCall
+	nextToken uint64
 }
 
 type workspaceRegistryEntry struct {
-	ws         Workspace
-	instanceID WorkspaceInstanceID
+	ws                Workspace
+	backendInstanceID WorkspaceInstanceID
+	entryToken        uint64
 }
 
 type workspaceCreateCall struct {
@@ -59,24 +65,24 @@ func NewWorkspaceRegistry() *WorkspaceRegistry {
 func (r *WorkspaceRegistry) Acquire(
 	ctx context.Context, m WorkspaceManager, id string,
 ) (Workspace, error) {
-	ws, _, err := r.AcquireWithInstanceID(ctx, m, id)
-	return ws, err
+	handle, err := r.AcquireHandle(ctx, m, id)
+	return handle.Workspace, err
 }
 
-// AcquireWithInstanceID is the instance-aware form of Acquire. It returns the
-// instance ID stored atomically with the workspace entry. Legacy managers
-// return an empty instance ID.
-func (r *WorkspaceRegistry) AcquireWithInstanceID(
+// AcquireHandle is the cache-entry-aware form of Acquire. The returned handle
+// carries a registry-owned token that remains non-zero even for legacy
+// managers, allowing stale work to invalidate only the exact entry it used.
+func (r *WorkspaceRegistry) AcquireHandle(
 	ctx context.Context,
 	m WorkspaceManager,
 	id string,
-) (Workspace, WorkspaceInstanceID, error) {
+) (WorkspaceHandle, error) {
 	provider, _ := m.(WorkspaceInstanceProvider)
 	entry, err := r.acquire(ctx, m, provider, id)
 	if err != nil {
-		return Workspace{}, "", err
+		return WorkspaceHandle{}, err
 	}
-	return entry.ws, entry.instanceID, nil
+	return r.handle(id, entry), nil
 }
 
 func (r *WorkspaceRegistry) acquire(
@@ -110,7 +116,7 @@ func (r *WorkspaceRegistry) acquire(
 		}
 		r.mu.Unlock()
 
-		currentID, err := provider.WorkspaceInstanceID(ctx, entry.ws)
+		currentID, err := provider.InstanceID(ctx)
 		if err != nil {
 			return workspaceRegistryEntry{}, err
 		}
@@ -128,7 +134,7 @@ func (r *WorkspaceRegistry) acquire(
 			r.mu.Unlock()
 			continue
 		}
-		if currentID == entry.instanceID {
+		if currentID == entry.backendInstanceID {
 			r.mu.Unlock()
 			return entry, nil
 		}
@@ -157,22 +163,52 @@ func (r *WorkspaceRegistry) createWorkspace(
 	id string,
 	call *workspaceCreateCall,
 ) {
-	ws, err := m.CreateWorkspace(ctx, id, WorkspacePolicy{})
-	entry := workspaceRegistryEntry{ws: ws}
-	if err == nil && provider != nil {
-		entry.instanceID, err = provider.WorkspaceInstanceID(ctx, ws)
-		if err == nil && entry.instanceID == "" {
+	var before WorkspaceInstanceID
+	var err error
+	if provider != nil {
+		before, err = provider.InstanceID(ctx)
+		if err == nil && before == "" {
 			err = errWorkspaceInstanceIDEmpty
+		}
+	}
+	var ws Workspace
+	if err == nil {
+		ws, err = m.CreateWorkspace(ctx, id, WorkspacePolicy{})
+	}
+	entry := workspaceRegistryEntry{
+		ws:                ws,
+		backendInstanceID: before,
+	}
+	if err == nil && provider != nil {
+		after, probeErr := provider.InstanceID(ctx)
+		switch {
+		case probeErr != nil:
+			err = probeErr
+		case after == "":
+			err = errWorkspaceInstanceIDEmpty
+		case after != before:
+			err = errors.Join(
+				ErrWorkspaceStale,
+				errors.New(
+					"codeexecutor: workspace instance changed during creation",
+				),
+			)
 		}
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err == nil {
-		if r.byID == nil {
-			r.byID = map[string]workspaceRegistryEntry{}
+		if r.nextToken == ^uint64(0) {
+			err = errWorkspaceRegistryTokenExhausted
+		} else {
+			if r.byID == nil {
+				r.byID = map[string]workspaceRegistryEntry{}
+			}
+			r.nextToken++
+			entry.entryToken = r.nextToken
+			r.byID[id] = entry
 		}
-		r.byID[id] = entry
 	}
 	call.entry = entry
 	call.err = err
@@ -195,27 +231,37 @@ func waitWorkspaceCreate(
 	}
 }
 
-// InvalidateIf removes id only when both its cached workspace handle and
-// instance ID still match. It never calls [WorkspaceManager.Cleanup], because a
-// deterministic workspace path may already belong to a newer physical
-// instance by the time stale work is reported.
+// Invalidate removes only the exact cache entry represented by handle. It never
+// calls [WorkspaceManager.Cleanup], because a deterministic workspace path may
+// already belong to a newer physical instance by the time stale work is
+// reported.
 //
-// The conditional comparison prevents a late stale report from evicting a
-// workspace that another caller has already refreshed.
-func (r *WorkspaceRegistry) InvalidateIf(
-	id string,
-	ws Workspace,
-	instanceID WorkspaceInstanceID,
-) bool {
-	if r == nil {
+// The registry-owned token prevents a late stale report from evicting a
+// workspace that another caller has already refreshed, including for legacy
+// managers whose backend instance ID is empty.
+func (r *WorkspaceRegistry) Invalidate(handle WorkspaceHandle) bool {
+	if r == nil || handle.registry != r || handle.entryToken == 0 {
 		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	entry, ok := r.byID[id]
-	if !ok || entry.ws != ws || entry.instanceID != instanceID {
+	entry, ok := r.byID[handle.registryID]
+	if !ok || entry.entryToken != handle.entryToken {
 		return false
 	}
-	delete(r.byID, id)
+	delete(r.byID, handle.registryID)
 	return true
+}
+
+func (r *WorkspaceRegistry) handle(
+	id string,
+	entry workspaceRegistryEntry,
+) WorkspaceHandle {
+	return WorkspaceHandle{
+		Workspace:  entry.ws,
+		InstanceID: entry.backendInstanceID,
+		registry:   r,
+		registryID: id,
+		entryToken: entry.entryToken,
+	}
 }

@@ -252,10 +252,7 @@ func TestWorkspaceInitEngine_ForwardsWorkspaceInstanceProvider(t *testing.T) {
 	manager := wrapped.Manager()
 	provider, ok := manager.(WorkspaceInstanceProvider)
 	require.True(t, ok)
-	got, err := provider.WorkspaceInstanceID(
-		context.Background(),
-		Workspace{ID: "ws", Path: "/tmp/ws"},
-	)
+	got, err := provider.InstanceID(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, WorkspaceInstanceID("instance-1"), got)
 }
@@ -292,6 +289,39 @@ func TestWorkspaceInitEngine_InstanceChangeRerunsHooks(t *testing.T) {
 	mu.Unlock()
 }
 
+func TestWorkspaceInitEngine_RotationDuringHooksRequiresStableReplay(
+	t *testing.T,
+) {
+	innerManager := &rotatingWM{instanceID: "instance-1"}
+	inner := NewEngine(innerManager, &recordingFS{}, &recordingRunner{})
+	hookCalls := 0
+	wrapped := newWorkspaceInitEngine(
+		inner,
+		[]WorkspaceInitHook{func(context.Context, WorkspaceInitEnv) error {
+			hookCalls++
+			if hookCalls == 1 {
+				innerManager.setInstanceID("instance-2")
+			}
+			return nil
+		}},
+	)
+	reg := NewWorkspaceRegistry()
+
+	_, err := reg.Acquire(
+		context.Background(), wrapped.Manager(), "init-fence",
+	)
+	require.ErrorIs(t, err, ErrWorkspaceStale)
+	require.NotContains(t, reg.byID, "init-fence")
+
+	handle, err := reg.AcquireHandle(
+		context.Background(), wrapped.Manager(), "init-fence",
+	)
+	require.NoError(t, err)
+	require.Equal(t, WorkspaceInstanceID("instance-2"),
+		handle.InstanceID)
+	require.Equal(t, 2, hookCalls)
+}
+
 func TestWorkspaceInitManager_CreateWorkspaceInnerError(t *testing.T) {
 	boom := errors.New("boom")
 	inner := NewEngine(&fakeWM{err: boom}, &recordingFS{}, &recordingRunner{})
@@ -316,6 +346,38 @@ func TestWorkspaceInitManager_CleanupFailureIsReported(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "workspace init hook 0")
 	require.Contains(t, err.Error(), "cleanup failed")
+}
+
+func TestWorkspaceInitManager_StaleHookSkipsCleanup(t *testing.T) {
+	inner := &cleanupRecordingWM{}
+	mgr := &workspaceInitManager{
+		inner: inner,
+		eng:   NewEngine(inner, &recordingFS{}, &recordingRunner{}),
+		hooks: []WorkspaceInitHook{
+			func(context.Context, WorkspaceInitEnv) error {
+				return fmt.Errorf("backend rotated: %w", ErrWorkspaceStale)
+			},
+		},
+	}
+
+	_, err := mgr.CreateWorkspace(context.Background(), "x", WorkspacePolicy{})
+	require.ErrorIs(t, err, ErrWorkspaceStale)
+	require.Zero(t, inner.cleanupCalls)
+}
+
+type cleanupRecordingWM struct {
+	cleanupCalls int
+}
+
+func (m *cleanupRecordingWM) CreateWorkspace(
+	_ context.Context, id string, _ WorkspacePolicy,
+) (Workspace, error) {
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *cleanupRecordingWM) Cleanup(context.Context, Workspace) error {
+	m.cleanupCalls++
+	return nil
 }
 
 type cleanupFailWM struct {

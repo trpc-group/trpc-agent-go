@@ -65,22 +65,17 @@ func (r *Resolver) CreateWorkspace(
 	eng codeexecutor.Engine,
 	name string,
 ) (codeexecutor.Workspace, error) {
-	ws, _, err := r.CreateWorkspaceWithInstanceID(ctx, eng, name)
-	return ws, err
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
 }
 
-// CreateWorkspaceWithInstanceID acquires the invocation-scoped workspace and
-// returns the instance ID cached atomically with it. Legacy managers return an
-// empty instance ID.
-func (r *Resolver) CreateWorkspaceWithInstanceID(
+// CreateWorkspaceHandle acquires the invocation-scoped workspace together with
+// the registry token required for ABA-safe conditional invalidation.
+func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	name string,
-) (
-	codeexecutor.Workspace,
-	codeexecutor.WorkspaceInstanceID,
-	error,
-) {
+) (codeexecutor.WorkspaceHandle, error) {
 	reg := r.reg
 	if reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()
@@ -90,26 +85,18 @@ func (r *Resolver) CreateWorkspaceWithInstanceID(
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
-	return reg.AcquireWithInstanceID(ctx, eng.Manager(), sid)
+	return reg.AcquireHandle(ctx, eng.Manager(), sid)
 }
 
-// InvalidateWorkspaceIf conditionally removes the workspace selected by the
-// same invocation-key rules as CreateWorkspace. A late stale report cannot
-// evict a refreshed entry because the registry compares both ws and instanceID.
-func (r *Resolver) InvalidateWorkspaceIf(
-	ctx context.Context,
-	name string,
-	ws codeexecutor.Workspace,
-	instanceID codeexecutor.WorkspaceInstanceID,
+// InvalidateWorkspaceHandle conditionally removes the exact registry entry
+// represented by handle.
+func (r *Resolver) InvalidateWorkspaceHandle(
+	handle codeexecutor.WorkspaceHandle,
 ) bool {
 	if r == nil || r.reg == nil {
 		return false
 	}
-	return r.reg.InvalidateIf(
-		workspaceKey(ctx, name),
-		ws,
-		instanceID,
-	)
+	return r.reg.Invalidate(handle)
 }
 
 func workspaceKey(ctx context.Context, fallback string) string {

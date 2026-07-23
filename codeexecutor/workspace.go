@@ -83,11 +83,30 @@ var ErrWorkspaceStale = errors.New("codeexecutor: workspace is stale")
 // metadata version.
 type WorkspaceInstanceID string
 
+// WorkspaceHandle binds a logical [Workspace] to the backend instance that
+// created it and to one exact [WorkspaceRegistry] cache entry.
+//
+// InstanceID is empty for legacy managers that do not implement
+// [WorkspaceInstanceProvider]. The registry-owned identity is intentionally
+// private: callers can copy a handle and pass it back to
+// [WorkspaceRegistry.Invalidate], but cannot forge or reuse its cache token.
+type WorkspaceHandle struct {
+	Workspace  Workspace
+	InstanceID WorkspaceInstanceID
+
+	registry   *WorkspaceRegistry
+	registryID string
+	entryToken uint64
+}
+
 // WorkspaceInstanceProvider is an optional [WorkspaceManager] capability for
 // backends whose physical execution environment can be replaced while logical
 // workspace IDs remain stable.
 //
-// WorkspaceInstanceID must return the current opaque, non-empty instance ID.
+// InstanceID must return the current opaque, non-empty instance ID. The ID must
+// change on every physical environment replacement; an ID must never be reused
+// within a process, even if a platform-level identifier is reused.
+//
 // The lookup may make the backend ready (for example, by lazily reconnecting),
 // but must not modify workspace contents. Implementations must follow the
 // stability and change rules documented on [WorkspaceInstanceID].
@@ -96,10 +115,7 @@ type WorkspaceInstanceID string
 // wrapped manager implements it. A wrapper whose manager does not implement it
 // must not synthesize an empty ID or otherwise advertise the capability.
 type WorkspaceInstanceProvider interface {
-	WorkspaceInstanceID(
-		ctx context.Context,
-		ws Workspace,
-	) (WorkspaceInstanceID, error)
+	InstanceID(ctx context.Context) (WorkspaceInstanceID, error)
 }
 
 // WorkspacePolicy configures workspace behavior.

@@ -142,13 +142,13 @@ type execOutput struct {
 }
 
 type execRequest struct {
-	background          bool
-	tty                 bool
-	yield               *int
-	eng                 codeexecutor.Engine
-	ws                  codeexecutor.Workspace
-	workspaceInstanceID codeexecutor.WorkspaceInstanceID
-	spec                codeexecutor.RunProgramSpec
+	background      bool
+	tty             bool
+	yield           *int
+	eng             codeexecutor.Engine
+	ws              codeexecutor.Workspace
+	workspaceHandle codeexecutor.WorkspaceHandle
+	spec            codeexecutor.RunProgramSpec
 }
 
 type killOutput struct {
@@ -645,27 +645,27 @@ func (t *ExecTool) callWithWorkspaceRetry(
 		return out, err
 	}
 	if acquired {
-		t.resolver.InvalidateWorkspaceIf(
-			ctx,
-			"workspace",
-			req.ws,
-			req.workspaceInstanceID,
-		)
+		t.resolver.InvalidateWorkspaceHandle(req.workspaceHandle)
+	}
+	if errors.Is(err, workspaceprep.ErrReconcileRetryUnsafe) {
+		return out, err
 	}
 	retry := base
-	out, _, err = t.executeWorkspaceAttempt(ctx, &retry)
+	out, acquired, err = t.executeWorkspaceAttempt(ctx, &retry)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+		t.resolver.InvalidateWorkspaceHandle(retry.workspaceHandle)
+	}
 	return out, err
 }
 
 // executeWorkspaceAttempt keeps Acquire, reconciliation, and process start in
-// one retry unit. ErrWorkspaceStale is contractually restricted to failures
-// before a user command starts (or to idempotent reconciliation), so the caller
-// can safely retry this unit once without replaying an uncertain command.
+// one retry unit. Stale always invalidates the exact acquired handle, while the
+// caller separately checks reconciliation's retry-safety marker before replay.
 func (t *ExecTool) executeWorkspaceAttempt(
 	ctx context.Context,
 	req *execRequest,
 ) (execOutput, bool, error) {
-	ws, workspaceInstanceID, err := t.resolver.CreateWorkspaceWithInstanceID(
+	handle, err := t.resolver.CreateWorkspaceHandle(
 		ctx,
 		req.eng,
 		"workspace",
@@ -673,8 +673,8 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	if err != nil {
 		return execOutput{}, false, err
 	}
-	req.ws = ws
-	req.workspaceInstanceID = workspaceInstanceID
+	req.workspaceHandle = handle
+	req.ws = handle.Workspace
 	if err := t.reconcileWorkspace(ctx, req.eng, req.ws); err != nil {
 		return execOutput{}, true, err
 	}
@@ -975,7 +975,7 @@ func (t *ExecTool) reconcileWorkspace(
 	ws codeexecutor.Workspace,
 ) error {
 	if t == nil || len(t.providers) == 0 {
-		_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
+		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
 		for _, warning := range warnings {
 			log.WarnfContext(
 				ctx,
@@ -983,7 +983,7 @@ func (t *ExecTool) reconcileWorkspace(
 				warning,
 			)
 		}
-		return nil
+		return err
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	var all []workspaceprep.Requirement

@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
+	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
@@ -938,9 +939,8 @@ func (*staleRetryManager) Cleanup(
 	return nil
 }
 
-func (m *staleRetryManager) WorkspaceInstanceID(
+func (m *staleRetryManager) InstanceID(
 	context.Context,
-	codeexecutor.Workspace,
 ) (codeexecutor.WorkspaceInstanceID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -961,13 +961,93 @@ func (m *staleRetryManager) createCount() int {
 	return m.createRuns
 }
 
+type legacyABAManager struct {
+	mu      sync.Mutex
+	creates int
+}
+
+func (m *legacyABAManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.creates++
+	return codeexecutor.Workspace{
+		ID:   id,
+		Path: "/tmp/" + id,
+	}, nil
+}
+
+func (*legacyABAManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *legacyABAManager) createCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.creates
+}
+
+type legacyABARunner struct {
+	mu sync.Mutex
+
+	calls       int
+	starts      int
+	lateEntered chan struct{}
+	releaseLate chan struct{}
+}
+
+func (r *legacyABARunner) RunProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	r.mu.Lock()
+	r.calls++
+	call := r.calls
+	r.mu.Unlock()
+
+	switch call {
+	case 1:
+		close(r.lateEntered)
+		<-r.releaseLate
+		return codeexecutor.RunResult{}, fmt.Errorf(
+			"late stale result: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	case 2:
+		return codeexecutor.RunResult{}, fmt.Errorf(
+			"refreshing stale result: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	default:
+		r.mu.Lock()
+		r.starts++
+		r.mu.Unlock()
+		return codeexecutor.RunResult{Stdout: "ok", ExitCode: 0}, nil
+	}
+}
+
+func (r *legacyABARunner) counts() (calls int, starts int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.calls, r.starts
+}
+
 type staleRetryRunner struct {
 	mu sync.Mutex
 
-	manager      *staleRetryManager
-	userErrors   []error
-	userAttempts int
-	userStarts   int
+	manager         *staleRetryManager
+	userErrors      []error
+	metadataErrors  []error
+	userAttempts    int
+	userStarts      int
+	bootstrapStarts int
 }
 
 func (r *staleRetryRunner) RunProgram(
@@ -975,9 +1055,21 @@ func (r *staleRetryRunner) RunProgram(
 	_ codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	// Reconciliation uses bash to commit metadata. Only sh is the user
-	// workspace_exec command in these tests.
 	if spec.Cmd != "sh" {
+		r.mu.Lock()
+		if spec.Cmd == "bash" && len(r.metadataErrors) > 0 {
+			err := r.metadataErrors[0]
+			r.metadataErrors = r.metadataErrors[1:]
+			r.mu.Unlock()
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				r.manager.rotate()
+			}
+			return codeexecutor.RunResult{}, err
+		}
+		if spec.Cmd != "bash" {
+			r.bootstrapStarts++
+		}
+		r.mu.Unlock()
 		return codeexecutor.RunResult{ExitCode: 0}, nil
 	}
 	r.mu.Lock()
@@ -1007,6 +1099,12 @@ func (r *staleRetryRunner) counts() (attempts int, starts int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.userAttempts, r.userStarts
+}
+
+func (r *staleRetryRunner) bootstrapCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bootstrapStarts
 }
 
 type staleRetryFS struct {
@@ -1249,6 +1347,96 @@ func TestExecTool_WorkspaceStaleDuringReconcileRetriesBeforeCommand(
 	attempts, starts := runner.counts()
 	require.Equal(t, 1, attempts)
 	require.Equal(t, 1, starts)
+}
+
+func TestExecTool_UnsafeReconcileStaleInvalidatesWithoutReplay(
+	t *testing.T,
+) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{
+		manager: manager,
+		metadataErrors: []error{
+			fmt.Errorf(
+				"metadata commit after command: %w",
+				codeexecutor.ErrWorkspaceStale,
+			),
+		},
+	}
+	exec := newStaleRetryExec(manager, &nonInteractiveFS{}, runner)
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{{
+				Cmd: "setup-with-side-effect",
+			}},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "must-not-start"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, workspaceprep.ErrReconcileRetryUnsafe)
+	require.Equal(t, 1, manager.createCount(),
+		"unsafe reconciliation must not reacquire and replay")
+	require.Equal(t, 1, runner.bootstrapCount())
+	attempts, starts := runner.counts()
+	require.Zero(t, attempts)
+	require.Zero(t, starts)
+}
+
+func TestExecTool_LegacyLateStaleDoesNotEvictRefreshedHandle(
+	t *testing.T,
+) {
+	manager := &legacyABAManager{}
+	runner := &legacyABARunner{
+		lateEntered: make(chan struct{}),
+		releaseLate: make(chan struct{}),
+	}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			runner,
+		),
+	}
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+
+	type callResult struct {
+		value any
+		err   error
+	}
+	lateResult := make(chan callResult, 1)
+	go func() {
+		value, err := tl.Call(context.Background(), args)
+		lateResult <- callResult{value: value, err: err}
+	}()
+	select {
+	case <-runner.lateEntered:
+	case <-time.After(time.Second):
+		t.Fatal("late attempt did not reach the runner")
+	}
+
+	refreshed, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", refreshed.(execOutput).Output)
+
+	close(runner.releaseLate)
+	var late callResult
+	select {
+	case late = <-lateResult:
+	case <-time.After(time.Second):
+		t.Fatal("late attempt did not finish")
+	}
+	require.NoError(t, late.err)
+	require.Equal(t, "ok", late.value.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"late invalidation must not evict the replacement entry")
+	calls, starts := runner.counts()
+	require.Equal(t, 4, calls)
+	require.Equal(t, 2, starts)
 }
 
 type nonInteractiveExec struct{}

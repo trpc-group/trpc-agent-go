@@ -654,7 +654,10 @@ func (t *RunTool) prepareWorkspaceForRun(
 	if err != nil {
 		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
 	}
-	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
+	staged, stageWarn, err := t.stageUserFileInputs(ctx, eng, ws)
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
+	}
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
@@ -750,7 +753,7 @@ func (t *RunTool) stageUserFileInputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) ([]stagedInput, []string) {
+) ([]stagedInput, []string, error) {
 	return workspaceinput.StageConversationFiles(ctx, eng, ws)
 }
 

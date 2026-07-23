@@ -257,14 +257,13 @@ func (*resolverInstanceManager) Cleanup(
 	return nil
 }
 
-func (m *resolverInstanceManager) WorkspaceInstanceID(
+func (m *resolverInstanceManager) InstanceID(
 	context.Context,
-	codeexecutor.Workspace,
 ) (codeexecutor.WorkspaceInstanceID, error) {
 	return m.instanceID, nil
 }
 
-func TestResolver_InvalidateWorkspaceIf_UsesInvocationKey(t *testing.T) {
+func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
 	mgr := &resolverInstanceManager{instanceID: "instance-1"}
 	eng := codeexecutor.NewEngine(
 		mgr,
@@ -280,21 +279,11 @@ func TestResolver_InvalidateWorkspaceIf_UsesInvocationKey(t *testing.T) {
 	}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	ws, err := r.CreateWorkspace(ctx, eng, "fallback")
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, "fallback")
 	require.NoError(t, err)
 	require.Equal(t, 1, mgr.creates)
-	require.False(t, r.InvalidateWorkspaceIf(
-		ctx,
-		"fallback",
-		ws,
-		"wrong-instance",
-	))
-	require.True(t, r.InvalidateWorkspaceIf(
-		ctx,
-		"fallback",
-		ws,
-		"instance-1",
-	))
+	require.False(t, NewResolver(nil, nil).InvalidateWorkspaceHandle(handle))
+	require.True(t, r.InvalidateWorkspaceHandle(handle))
 
 	_, err = r.CreateWorkspace(ctx, eng, "fallback")
 	require.NoError(t, err)
