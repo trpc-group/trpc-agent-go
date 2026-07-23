@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "fixtures": {
+    "clean": {
+      "description": "clean Go change used to exercise the CLI and parser path",
+      "diff": "diff --git a/hello.go b/hello.go\nindex 1111111..2222222 100644\n--- a/hello.go\n+++ b/hello.go\n@@ -1,3 +1,4 @@\n package hello\n+\n+func message() string { return \"hello\" }\n",
+      "expected": {
+        "finding_rule_ids": [],
+        "warning_rule_ids": []
+      },
+      "fake_sandbox": {
+        "go_version": {
+          "exit_code": 0,
+          "stdout": "go version go1.24"
+        },
+        "test": {
+          "exit_code": 0
+        },
+        "vet": {
+          "exit_code": 0
+        }
+      }
+    },
+    "command_injection": {
+      "description": "exec.Command with sh -c and interpolated user input",
+      "diff": "diff --git a/runner.go b/runner.go\nindex 1111111..2222222 100644\n--- a/runner.go\n+++ b/runner.go\n@@ -1,3 +1,7 @@\n package runner\n+\n+func run(pattern string) error {\n+\treturn exec.Command(\"sh\", \"-c\", \"grep \"+pattern).Run()\n+}\n",
+      "expected": {
+        "finding_rule_ids": ["security.shell_command_injection"],
+        "warning_rule_ids": []
+      }
+    },
+    "secret_leak": {
+      "description": "hardcoded token-like secret in a new line",
+      "diff": "diff --git a/config.go b/config.go\nindex 1111111..2222222 100644\n--- a/config.go\n+++ b/config.go\n@@ -1,3 +1,5 @@\n package config\n+\n+const serviceToken = \"ghp_TEST_ONLY_NOT_A_REAL_TOKEN_123456\"\n",
+      "expected": {
+        "finding_rule_ids": ["secret.hardcoded"],
+        "warning_rule_ids": []
+      }
+    },
+    "insecure_tls": {
+      "description": "TLS verification is disabled",
+      "diff": "diff --git a/client.go b/client.go\nindex 1111111..2222222 100644\n--- a/client.go\n+++ b/client.go\n@@ -1,3 +1,7 @@\n package client\n+\n+func makeTransport() *http.Transport {\n+\treturn &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}\n+}\n",
+      "expected": {
+        "finding_rule_ids": ["security.insecure_tls"],
+        "warning_rule_ids": []
+      }
+    },
+    "goroutine_context_leak": {
+      "description": "goroutine without cancellation context",
+      "diff": "diff --git a/worker.go b/worker.go\nindex 1111111..2222222 100644\n--- a/worker.go\n+++ b/worker.go\n@@ -1,3 +1,9 @@\n package worker\n+\n+func startWorker() {\n+\tgo func() {\n+\t\tpoll()\n+\t}()\n+}\n",
+      "expected": {
+        "finding_rule_ids": ["concurrency.goroutine_context_leak"],
+        "warning_rule_ids": []
+      }
+    },
+    "resource_leak": {
+      "description": "file, HTTP body, and SQL rows leaks plus a cross-hunk safe close boundary",
+      "diff": "diff --git a/leaky_resources.go b/leaky_resources.go\nindex 1111111..2222222 100644\n--- a/leaky_resources.go\n+++ b/leaky_resources.go\n@@ -1,3 +1,24 @@\n package review\n+\n+func leakResources(ctx context.Context, db *sql.DB, url string, name string) error {\n+\tf, err := os.Open(name)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tdata, err := io.ReadAll(f)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\t_ = data\n+\tresp, err := http.Get(url)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tbody, err := io.ReadAll(resp.Body)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\t_ = body\n+\trows, err := db.QueryContext(ctx, \"select id from users\")\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tfor rows.Next() {}\n+\treturn nil\n+}\ndiff --git a/cross_hunk_resource.go b/cross_hunk_resource.go\nindex 3333333..4444444 100644\n--- a/cross_hunk_resource.go\n+++ b/cross_hunk_resource.go\n@@ -5,6 +5,8 @@ func safeOpen(name string) error {\n+\tf, err := os.Open(name)\n+\tif err != nil { return err }\n \treturn nil\n }\n@@ -20,3 +22,4 @@ func safeOpen(name string) error {\n+\tdefer f.Close()\n }\n",
+      "expected": {
+        "finding_rule_ids": ["resource.unclosed_file", "resource.unclosed_http_body", "resource.unclosed_sql_rows"],
+        "warning_rule_ids": []
+      }
+    },
+    "ignored_error": {
+      "description": "clear ignored error return values",
+      "diff": "diff --git a/cleanup.go b/cleanup.go\nindex 1111111..2222222 100644\n--- a/cleanup.go\n+++ b/cleanup.go\n@@ -1,3 +1,8 @@\n package cleanup\n+\n+func cleanup(resp *http.Response, w io.Writer) {\n+\t_ = resp.Body.Close()\n+\t_, _ = fmt.Fprintf(w, \"ok\")\n+}\n",
+      "expected": {
+        "finding_rule_ids": ["error.ignored_return"],
+        "warning_rule_ids": []
+      }
+    },
+    "database_lifecycle": {
+      "description": "database handle and transaction are opened without lifecycle closure",
+      "diff": "diff --git a/store.go b/store.go\nindex 1111111..2222222 100644\n--- a/store.go\n+++ b/store.go\n@@ -1,3 +1,12 @@\n package store\n+\n+func save(ctx context.Context, dsn string) error {\n+\tdb, err := sql.Open(\"mysql\", dsn)\n+\tif err != nil { return err }\n+\ttx, err := db.BeginTx(ctx, nil)\n+\tif err != nil { return err }\n+\t_, err = tx.ExecContext(ctx, \"update users set active = 1\")\n+\treturn err\n+}\n",
+      "expected": {
+        "finding_rule_ids": ["database.sql_open_lifecycle", "database.tx_lifecycle"],
+        "warning_rule_ids": []
+      }
+    },
+    "missing_tests": {
+      "description": "exported function changed without a matching test diff",
+      "diff": "diff --git a/api.go b/api.go\nindex 1111111..2222222 100644\n--- a/api.go\n+++ b/api.go\n@@ -1,3 +1,5 @@\n package api\n+\n+func ExportedFeature(input string) string { return input }\n",
+      "expected": {
+        "finding_rule_ids": [],
+        "warning_rule_ids": ["tests.missing_tests"]
+      }
+    },
+    "rename_and_binary": {
+      "description": "rename, deleted file, and git binary patch parser coverage",
+      "diff": "diff --git a/old_name.go b/new_name.go\nsimilarity index 88%\nrename from old_name.go\nrename to new_name.go\n--- a/old_name.go\n+++ b/new_name.go\n@@ -1 +1 @@\n-package oldname\n+package newname\ndiff --git a/logo.png b/logo.png\nnew file mode 100644\nindex 0000000..1111111\nGIT binary patch\nliteral 0\ndiff --git a/deleted.go b/deleted.go\ndeleted file mode 100644\nindex 1111111..0000000\n--- a/deleted.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-package deleted\n",
+      "expected": {
+        "finding_rule_ids": [],
+        "warning_rule_ids": []
+      }
+    },
+    "negative_controls": {
+      "description": "similar but safe changes that should not produce high-confidence findings",
+      "diff": "diff --git a/safe.go b/safe.go\nindex 1111111..2222222 100644\n--- a/safe.go\n+++ b/safe.go\n@@ -1,3 +1,15 @@\n package safe\n+\n+func safeReview(ctx context.Context, pattern string, name string) error {\n+\tcmd := exec.Command(\"grep\", pattern, \"file.txt\")\n+\t_ = cmd\n+\tf, err := os.Open(name)\n+\tif err != nil {\n+\t\treturn err\n+\t}\n+\tdefer f.Close()\n+\tgo func(ctx context.Context) {\n+\t\t<-ctx.Done()\n+\t}(ctx)\n+\t_ = fmt.Sprintf(\"%s\", pattern)\n+\treturn nil\n+}\ndiff --git a/safe_test.go b/safe_test.go\nindex 1111111..2222222 100644\n--- a/safe_test.go\n+++ b/safe_test.go\n@@ -1,3 +1,4 @@\n package safe\n+\n+func TestSafeReview(t *testing.T) {}\n",
+      "expected": {
+        "finding_rule_ids": [],
+        "warning_rule_ids": []
+      }
+    },
+    "duplicate_finding": {
+      "description": "two security rule matches on the same file, line, and category should dedupe",
+      "diff": "diff --git a/duplicate.go b/duplicate.go\nindex 1111111..2222222 100644\n--- a/duplicate.go\n+++ b/duplicate.go\n@@ -1,3 +1,5 @@\n package duplicate\n+\n+func run(pattern string) error { const serviceToken = \"ghp_TEST_ONLY_NOT_A_REAL_TOKEN_123456\"; return exec.Command(\"sh\", \"-c\", \"grep \"+pattern).Run() }\n",
+      "expected": {
+        "finding_rule_ids": ["secret.hardcoded"],
+        "warning_rule_ids": []
+      }
+    },
+    "sandbox_failure": {
+      "description": "sandbox preflight failure should produce warnings without aborting the review",
+      "diff": "diff --git a/hello.go b/hello.go\nindex 1111111..2222222 100644\n--- a/hello.go\n+++ b/hello.go\n@@ -1,3 +1,4 @@\n package hello\n+\n+func message() string { return \"hello\" }\n",
+      "expected": {
+        "finding_rule_ids": [],
+        "warning_rule_ids": ["sandbox.run_failed", "sandbox.run_skipped"]
+      }
+    }
+  }
+}
