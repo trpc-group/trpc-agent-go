@@ -57,6 +57,15 @@ func requestSystemPromptMessage(prompt string) *model.Message {
 	return &msg
 }
 
+func requestSessionContextPromptMessage(prompt string) *model.Message {
+	prompt = strings.TrimSpace(prompt)
+	if prompt == "" {
+		return nil
+	}
+	msg := model.NewUserMessage(prompt)
+	return &msg
+}
+
 func requestLateContextPromptMessage(prompt string) *model.Message {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
