@@ -286,9 +286,9 @@ func TestFileTool_SearchFile_NilRequest(t *testing.T) {
 
 	rsp, err := fileToolSet.searchFile(context.Background(), nil)
 
-	assert.Error(t, err)
+	assert.EqualError(t, err, "request cannot be nil")
 	assert.NotNil(t, rsp)
-	assert.Contains(t, rsp.Message, "request cannot be nil")
+	assert.Equal(t, "Error: request cannot be nil", rsp.Message)
 }
 
 func TestFileTool_SearchFile_WorkspaceRef(t *testing.T) {
