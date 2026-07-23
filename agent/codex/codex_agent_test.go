@@ -38,6 +38,28 @@ type scriptedRunner struct {
 	stream func(command, commandOutputHandler) commandResult
 }
 
+func withCommandRunner(runner commandRunner) Option {
+	return func(o *options) {
+		o.commandRunner = runner
+	}
+}
+
+func parseTranscriptEvents(stdout []byte, invocationID, author string) (*transcriptResult, error) {
+	records, err := parseTranscriptRecords(stdout)
+	if err != nil {
+		return nil, err
+	}
+	stream := newTranscriptStream(invocationID, author)
+	for _, rec := range records {
+		stream.HandleRecord(rec)
+	}
+	return stream.Result(), nil
+}
+
+func errorEventFromRecord(invocationID, author string, rec codexEvent, terminal bool) *event.Event {
+	return errorEventFromResponseError(invocationID, author, responseErrorFromRecord(rec), terminal)
+}
+
 // Run implements commandRunner.
 func (r *scriptedRunner) Run(ctx context.Context, cmd command, onStdoutLine commandOutputHandler) commandResult {
 	r.mu.Lock()

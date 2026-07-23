@@ -257,16 +257,6 @@ func evaluateTimeThreshold(interval time.Duration) checkEvaluator {
 	}
 }
 
-// checkTokenThresholdFromMessage checks if the token count of the given message exceeds the threshold.
-func checkTokenThresholdFromMessage(
-	ctx context.Context,
-	tokenCount int,
-	message model.Message,
-) bool {
-	tokens, ok := countTokenThresholdMessage(ctx, message)
-	return ok && tokens > tokenCount
-}
-
 func countTokenThresholdMessage(
 	ctx context.Context,
 	message model.Message,

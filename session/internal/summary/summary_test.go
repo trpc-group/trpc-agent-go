@@ -401,9 +401,14 @@ func TestSummarizeSession_UsesPreviousBoundaryCutoff(t *testing.T) {
 func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 	prev := time.Date(2023, 1, 2, 9, 0, 0, 0, time.UTC)
 	latest := time.Date(2023, 1, 2, 10, 0, 0, 0, time.UTC)
+	selectUpdatedAt := func(tmp *session.Session, latestTs time.Time, hasDelta bool) time.Time {
+		prevBoundary := session.NewSummaryBoundary("", prev)
+		latestBoundary := session.NewSummaryBoundary("", latestTs)
+		return selectSummaryBoundary(tmp, "", prevBoundary, latestBoundary, hasDelta).CutoffTime()
+	}
 
 	t.Run("no delta keeps prev", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, latest, false)
+		got := selectUpdatedAt(nil, latest, false)
 		assert.True(t, got.Equal(prev.UTC()))
 	})
 
@@ -411,17 +416,17 @@ func TestSelectUpdatedAt_Fallbacks(t *testing.T) {
 		tmp := &session.Session{State: session.StateMap{
 			session.SummaryLastIncludedTimestampStateKey: []byte("bad-ts"),
 		}}
-		got := selectUpdatedAt(tmp, prev, latest, true)
+		got := selectUpdatedAt(tmp, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
 	})
 
 	t.Run("nil session with delta falls back to latest", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, latest, true)
+		got := selectUpdatedAt(nil, latest, true)
 		assert.True(t, got.Equal(latest.UTC()))
 	})
 
 	t.Run("zero latestTs with delta keeps prev", func(t *testing.T) {
-		got := selectUpdatedAt(nil, prev, time.Time{}, true)
+		got := selectUpdatedAt(nil, time.Time{}, true)
 		assert.True(t, got.Equal(prev.UTC()))
 	})
 }

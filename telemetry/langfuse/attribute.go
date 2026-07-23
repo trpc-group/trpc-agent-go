@@ -55,9 +55,6 @@ const (
 	environment = "langfuse.environment"
 	release     = "langfuse.release"
 	version     = "langfuse.version"
-
-	// Internal
-	asRoot = "langfuse.internal.as_root"
 )
 
 // usageDetails collects token usage metrics for Langfuse's usage_details JSON field.

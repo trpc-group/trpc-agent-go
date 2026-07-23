@@ -23,10 +23,6 @@ import (
 )
 
 const (
-	// SQLite table names and SQL statements.
-	sqliteTableCheckpoints = "checkpoints"
-	sqliteTableWrites      = "checkpoint_writes"
-
 	sqliteCreateCheckpoints = "CREATE TABLE IF NOT EXISTS checkpoints (" +
 		"lineage_id TEXT NOT NULL, " +
 		"checkpoint_ns TEXT NOT NULL, " +
@@ -61,9 +57,6 @@ const (
 
 	sqliteSelectByID = "SELECT checkpoint_json, metadata_json, parent_checkpoint_id, checkpoint_ns, checkpoint_id " +
 		"FROM checkpoints WHERE lineage_id = ? AND checkpoint_ns = ? AND checkpoint_id = ? LIMIT 1"
-
-	sqliteSelectIDsAsc = "SELECT checkpoint_id, ts FROM checkpoints " +
-		"WHERE lineage_id = ? AND checkpoint_ns = ? ORDER BY ts ASC"
 
 	sqliteInsertWrite = "INSERT OR REPLACE INTO checkpoint_writes (" +
 		"lineage_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, value_json, task_path, seq) " +
