@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -284,6 +285,47 @@ func TestRunner_EnqueueSummaryJob_CacheSafeForkIncludesToolResult(t *testing.T) 
 	require.Equal(t, `{"answer":"ok"}`, svc.capturedParent.Messages[3].Content)
 }
 
+func TestRunner_PerToolCallResultEventsFailedIntermediatePersistenceUsesStandaloneSummary(
+	t *testing.T,
+) {
+	parent := &model.Request{Messages: []model.Message{
+		model.NewSystemMessage("stable system"),
+		model.NewUserMessage("run both tools"),
+	}}
+	capture := &cacheSafeForkCapturingSessionService{
+		mockSessionService: &mockSessionService{},
+		done:               make(chan struct{}),
+	}
+	svc := &failEventAppendSessionService{
+		Service:     capture,
+		failEventID: "evt-fast-result",
+	}
+	r := NewRunner(
+		"test-app",
+		&cacheSafeForkPerToolCallResultEventsMockAgent{
+			name:   "fork-agent",
+			parent: parent,
+		},
+		WithSessionService(svc),
+	)
+
+	events, err := RunWithMessages(
+		context.Background(),
+		r,
+		"user1",
+		"sess1",
+		[]model.Message{{Role: model.RoleUser, Content: "hello"}},
+		agent.WithToolResultEventPerToolCallEnabled(true),
+	)
+	require.NoError(t, err)
+	for range events {
+	}
+
+	require.Len(t, capture.enqueueSummaryJobCalls, 1)
+	require.False(t, capture.capturedOK)
+	require.Nil(t, capture.capturedParent)
+}
+
 func TestRunner_SummaryAwareSessionRestoreHint(t *testing.T) {
 	t.Run("passes event filter key", func(t *testing.T) {
 		svc := &mockSessionService{}
@@ -371,6 +413,23 @@ func (c *contextCapturingSessionService) EnqueueSummaryJob(ctx context.Context, 
 
 	// Call parent to record the call
 	return c.mockSessionService.EnqueueSummaryJob(ctx, sess, filterKey, force)
+}
+
+type failEventAppendSessionService struct {
+	session.Service
+	failEventID string
+}
+
+func (s *failEventAppendSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	evt *event.Event,
+	opts ...session.Option,
+) error {
+	if evt != nil && evt.ID == s.failEventID {
+		return assert.AnError
+	}
+	return s.Service.AppendEvent(ctx, sess, evt, opts...)
 }
 
 // nonQualifyingMockAgent generates non-qualifying events (partial responses).
@@ -527,6 +586,83 @@ func (m *cacheSafeForkMockAgent) Run(
 type cacheSafeForkToolResultMockAgent struct {
 	name   string
 	parent *model.Request
+}
+
+type cacheSafeForkPerToolCallResultEventsMockAgent struct {
+	name   string
+	parent *model.Request
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Info() agent.Info {
+	return agent.Info{Name: m.name}
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) SubAgents() []agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) FindSubAgent(string) agent.Agent {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Tools() []tool.Tool {
+	return nil
+}
+
+func (m *cacheSafeForkPerToolCallResultEventsMockAgent) Run(
+	ctx context.Context,
+	invocation *agent.Invocation,
+) (<-chan *event.Event, error) {
+	summaryfork.Attach(invocation, m.parent)
+
+	ch := make(chan *event.Event, 3)
+	ch <- &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.Message{
+				Role: model.RoleAssistant,
+				ToolCalls: []model.ToolCall{
+					{ID: "call-slow"},
+					{ID: "call-fast"},
+				},
+			},
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       m.name,
+		ID:           "evt-tool-call",
+		Timestamp:    time.Now(),
+	}
+	fastResult := &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				"call-fast",
+				"fast",
+				"fast result",
+			),
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       "fast",
+		ID:           "evt-fast-result",
+		Timestamp:    time.Now(),
+	}
+	toolresultround.Mark(fastResult, true)
+	ch <- fastResult
+	slowResult := &event.Event{
+		Response: &model.Response{Done: true, Choices: []model.Choice{{
+			Message: model.NewToolMessage(
+				"call-slow",
+				"slow",
+				"slow result",
+			),
+		}}},
+		InvocationID: invocation.InvocationID,
+		Author:       "slow",
+		ID:           "evt-slow-result",
+		Timestamp:    time.Now(),
+	}
+	toolresultround.Mark(slowResult, false)
+	ch <- slowResult
+	close(ch)
+	return ch, nil
 }
 
 func (m *cacheSafeForkToolResultMockAgent) Info() agent.Info {

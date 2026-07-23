@@ -19,9 +19,12 @@ import (
 // AfterToolMessagesArgs contains the model-facing context available after a
 // tool call has been executed and converted into tool result messages.
 //
-// The Messages slice is a point-in-time view of the next conversation state:
-// request messages, the assistant tool-call message, then current tool result
-// messages. Callbacks should treat it as read-only and return
+// The Messages slice is a point-in-time hook view: request messages, the
+// assistant tool-call message, then current tool result messages. It is not
+// necessarily a complete provider-valid next conversation state. In
+// per-tool-call result event mode, ToolCalls still contains the full round
+// while Messages and ToolResultMessages contain only the current terminal
+// result. Callbacks should treat the view as read-only and return
 // AfterToolMessagesResult to replace the current tool result messages.
 type AfterToolMessagesArgs struct {
 	// Invocation is the active invocation.
@@ -48,7 +51,10 @@ type AfterToolMessagesResult struct {
 }
 
 // AfterToolMessagesCallback is called after tool results are converted into
-// model messages and before the tool result event is emitted.
+// model messages and before the tool result event is emitted. When
+// agent.WithToolResultEventPerToolCallEnabled splits an eligible round, it is
+// called once for each terminal tool-result event rather than once for the
+// merged round.
 type AfterToolMessagesCallback func(
 	ctx context.Context,
 	args *AfterToolMessagesArgs,

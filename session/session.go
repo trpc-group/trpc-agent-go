@@ -471,15 +471,14 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 		log.Info("session or event is nil")
 		return
 	}
+	sess.EventMu.Lock()
 	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
-		sess.EventMu.Lock()
 		sess.Events = append(sess.Events, *event)
 		// Apply filtering options.
 		sess.ApplyEventFiltering(opts...)
-		sess.EventMu.Unlock()
 	}
-
 	sess.UpdatedAt = time.Now()
+	sess.EventMu.Unlock()
 	sess.ApplyEventStateDelta(event)
 }
 

@@ -548,6 +548,44 @@ If you want the implementation-level mapping, this happens after one
 
 Runnable example: `examples/steer/`
 
+#### Emit Tool Results Per Tool Call
+
+The whole-round barrier above controls when the next model request may start;
+it does not require event consumers to wait for one aggregated result event.
+For clients that need per-tool completion updates, enable this option for the
+run:
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithToolResultEventPerToolCallEnabled(true),
+)
+```
+
+When enabled for an eligible multi-tool-call round:
+
+- Each completed call emits one terminal `tool.response` event, and no
+  additional aggregated result event is emitted.
+- Parallel result events are emitted in completion order and persisted as
+  separate session events.
+- The next model request still waits for all calls, with model-facing tool
+  results kept in the original tool-call order.
+
+`StateDelta` and `SkipSummarization` remain round-level effects. Intermediate
+result events omit them; the final completed result carries the finalized
+values, or the terminal error event does if the round stops early.
+Already-persisted results from an interrupted round remain in the Session for
+audit but are omitted from later model requests.
+
+The option is disabled by default. Single-tool-call rounds and partial
+streaming events keep their existing behavior. If any call in a round is
+caller-executed (including an external tool or a call excluded by
+`WithToolExecutionFilter`) or long-running, the option does not split that
+round; its existing execution and event lifecycle is preserved.
+
 #### Per-Request App Name Override (multi-tenant isolation)
 
 By default, Runner uses the `appName` supplied at construction for session keys

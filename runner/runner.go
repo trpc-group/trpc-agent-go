@@ -40,6 +40,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -1438,6 +1439,8 @@ func (r *runner) processSingleAgentEvent(
 		log.Errorf("agentEvent is nil")
 		return nil
 	}
+	hasToolResultRoundMarker, toolResultRoundIncomplete :=
+		prepareToolResultRoundEvent(loop.invocation, agentEvent)
 	dynamicWorkflowChild := isDynamicWorkflowChildEvent(agentEvent)
 	routeEvent := sessionroute.SnapshotEventIdentity(agentEvent)
 	persistSession, routedEvent := sessionroute.RouteEvent(
@@ -1456,6 +1459,11 @@ func (r *runner) processSingleAgentEvent(
 	if agentEvent == nil {
 		return nil
 	}
+	restoreToolResultRoundMarker(
+		agentEvent,
+		hasToolResultRoundMarker,
+		toolResultRoundIncomplete,
+	)
 	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := shouldExcludeRootCompletion(
 		routedEvent,
@@ -1552,6 +1560,33 @@ func (r *runner) processSingleAgentEvent(
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
+}
+
+func prepareToolResultRoundEvent(
+	invocation *agent.Invocation,
+	evt *event.Event,
+) (hasMarker bool, incomplete bool) {
+	hasMarker = toolresultround.HasMarker(evt)
+	incomplete = toolresultround.IsIncomplete(evt)
+	if incomplete {
+		// Invalidate before plugins or persistence can drop the event.
+		// Summarization falls back to the session until the next model request.
+		summaryfork.Invalidate(invocation)
+	}
+	return hasMarker, incomplete
+}
+
+func restoreToolResultRoundMarker(
+	evt *event.Event,
+	hasMarker bool,
+	incomplete bool,
+) {
+	if !hasMarker {
+		return
+	}
+	// Round metadata is a persistence invariant. Plugins may replace the
+	// payload, but must not remove the framework marker.
+	toolresultround.Mark(evt, incomplete)
 }
 
 func isDynamicWorkflowChildEvent(evt *event.Event) bool {
@@ -2511,6 +2546,7 @@ func (r *runner) handleEventPersistence(
 ) bool {
 	// Ensure error events have content so they are valid for persistence.
 	agentEvent = errorEventWithContent(agentEvent)
+	toolResultRoundIncomplete := toolresultround.IsIncomplete(agentEvent)
 
 	// Append event to session if it's complete (not partial).
 	if !r.shouldPersistEvent(agentEvent) {
@@ -2567,6 +2603,9 @@ func (r *runner) handleEventPersistence(
 	// Skip if the event explicitly opts out of summarization.
 	if agentEvent.Actions != nil &&
 		agentEvent.Actions.SkipSummarization {
+		return true
+	}
+	if toolResultRoundIncomplete {
 		return true
 	}
 

@@ -25,10 +25,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonrepair"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonutils"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
+	"trpc.group/trpc-go/trpc-agent-go/internal/state/toolresultround"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
@@ -125,6 +127,25 @@ type toolResult struct {
 	toolArgs   []byte
 }
 
+type toolRoundFinalization struct {
+	stateDelta        map[string][]byte
+	skipSummarization bool
+	hasResults        bool
+}
+
+type toolResultRoundError struct {
+	cause        error
+	finalization toolRoundFinalization
+}
+
+func (e *toolResultRoundError) Error() string {
+	return e.cause.Error()
+}
+
+func (e *toolResultRoundError) Unwrap() error {
+	return e.cause
+}
+
 // Default message used when transferring to a sub-agent without an explicit message.
 // Users can override or disable it via SetDefaultTransferMessage.
 var defaultTransferMessage = "Task delegated from coordinator"
@@ -160,6 +181,10 @@ type toolNameSuggestionOptions struct {
 }
 
 // PostToolResultHook observes and may mutate a completed tool result event.
+// In per-tool-call result event mode it runs on a state-finalization copy after
+// the whole tool-call round completes. StateDelta and control actions are
+// folded into the final emitted result; response mutations cannot rewrite
+// results that have already been emitted.
 type PostToolResultHook func(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -377,6 +402,21 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	if req != nil {
 		tools = req.Tools
 	}
+	if p.shouldEmitToolResultEventPerToolCall(
+		ctx,
+		invocation,
+		llmResponse,
+		tools,
+	) {
+		return p.handleFunctionCallsAndSendPerCallResultEventsWithRequest(
+			ctx,
+			invocation,
+			req,
+			llmResponse,
+			tools,
+			eventChan,
+		)
+	}
 	functionResponseEvent, err := p.handleFunctionCallsWithRequest(
 		ctx,
 		invocation,
@@ -404,7 +444,23 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	if functionResponseEvent == nil {
 		return nil, nil
 	}
+	return emitFunctionResponseEventAndWait(
+		ctx,
+		invocation,
+		eventChan,
+		functionResponseEvent,
+	)
+}
 
+func emitFunctionResponseEventAndWait(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	functionResponseEvent *event.Event,
+) (*event.Event, error) {
+	if functionResponseEvent == nil {
+		return nil, nil
+	}
 	functionResponseEvent.RequiresCompletion = true
 	emitErr := agent.EmitEvent(
 		ctx,
@@ -437,7 +493,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 	completionID :=
 		agent.GetAppendEventNoticeKey(functionResponseEvent.ID)
 	timeout := funcRespWaitTimeout(ctx)
-	err = invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
+	err := invocation.AddNoticeChannelAndWait(ctx, completionID, timeout)
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) {
 		return nil, err
@@ -450,6 +506,118 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendEventWithReque
 		)
 	}
 	return functionResponseEvent, nil
+}
+
+func (p *FunctionCallResponseProcessor) shouldEmitToolResultEventPerToolCall(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmResponse *model.Response,
+	tools map[string]tool.Tool,
+) bool {
+	if invocation == nil ||
+		!invocation.RunOptions.ToolResultEventPerToolCallEnabled ||
+		llmResponse == nil || len(llmResponse.Choices) == 0 {
+		return false
+	}
+	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	if len(toolCalls) <= 1 {
+		return false
+	}
+	for _, toolCall := range toolCalls {
+		tl, ok := tools[toolCall.Function.Name]
+		if !ok {
+			tl = findCompatibleTool(
+				toolCall.Function.Name,
+				tools,
+				invocation,
+			)
+			if tl == nil {
+				// Unknown tools produce an ordinary terminal error result.
+				continue
+			}
+		}
+		if !invocation.RunOptions.ShouldExecuteTool(ctx, tl) {
+			// Deferred/external tools keep their existing lifecycle.
+			return false
+		}
+		if runner, ok := itool.ResolveDeclaration(tl).(function.LongRunner); ok && runner.LongRunning() {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultEventsWithRequest(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	llmResponse *model.Response,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	if p.attachmentBudget > 0 {
+		ctx = tool.WithToolResultAttachmentBudget(
+			ctx,
+			p.attachmentBudget,
+		)
+	}
+	toolCalls := llmResponse.Choices[0].Message.ToolCalls
+	execute := p.executeToolCallsSequentiallyAndEmitPerCallResultEvents
+	if p.enableParallelTools {
+		execute = p.executeToolCallsInParallelAndEmitPerCallResultEvents
+	}
+	lastEvent, err := execute(
+		ctx,
+		invocation,
+		req,
+		llmResponse,
+		toolCalls,
+		tools,
+		eventChan,
+	)
+	if err == nil {
+		return lastEvent, nil
+	}
+	log.ErrorfContext(
+		ctx,
+		"Per-tool-call result event handling failed for agent %s: %v",
+		invocation.AgentName,
+		err,
+	)
+	errorEvent := event.NewErrorEvent(
+		invocation.InvocationID,
+		invocation.AgentName,
+		model.ErrorTypeFlowError,
+		err.Error(),
+	)
+	var roundErr *toolResultRoundError
+	if errors.As(err, &roundErr) {
+		errorEvent.StateDelta = cloneEventStateDelta(
+			roundErr.finalization.stateDelta,
+		)
+		if roundErr.finalization.skipSummarization {
+			markSkipSummarization(errorEvent)
+		}
+		// The failed round cannot become a valid model-facing transcript.
+		// Persist its completed state, but do not schedule a summary from
+		// the incomplete cache-safe request fork.
+		toolresultround.Mark(errorEvent, true)
+	}
+	emitErr := agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
+	if emitErr != nil && len(errorEvent.StateDelta) > 0 {
+		if persistErr := persistFunctionResponseAfterDeadline(
+			ctx,
+			invocation,
+			errorEvent,
+		); persistErr != nil {
+			log.WarnfContext(
+				ctx,
+				"Persist failed tool-round state failed: %v",
+				persistErr,
+			)
+		}
+	}
+	return nil, err
 }
 
 func persistFunctionResponseAfterDeadline(
@@ -645,6 +813,393 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsWithRequest(
 		return nil, err
 	}
 	return mergedEvent, nil
+}
+
+func (p *FunctionCallResponseProcessor) executeToolCallsSequentiallyAndEmitPerCallResultEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	llmResponse *model.Response,
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	stateResults := make([]toolResult, len(toolCalls))
+	var (
+		lastEvent    *event.Event
+		finalization toolRoundFinalization
+	)
+	for i, toolCall := range toolCalls {
+		result, err := p.executeSingleToolCallSequentialResult(
+			ctx,
+			invocation,
+			llmResponse,
+			tools,
+			eventChan,
+			i,
+			toolCall,
+		)
+		if err != nil {
+			return lastEvent, p.finalizeToolRoundError(
+				ctx,
+				invocation,
+				stateResults,
+				finalization,
+				err,
+			)
+		}
+		if result.event == nil {
+			err = fmt.Errorf(
+				"per-tool-call result missing terminal event for tool %q",
+				toolCall.Function.Name,
+			)
+			return lastEvent, p.finalizeToolRoundError(
+				ctx,
+				invocation,
+				stateResults,
+				finalization,
+				err,
+			)
+		}
+		stateResults[i] = cloneToolResultForStateFinalization(result)
+		// The state working copy retains the tool's proposed delta. Canonical
+		// per-tool-call result events apply the deterministic, call-ordered
+		// batch delta only on the final result.
+		result.event.StateDelta = nil
+		clearSkipSummarization(result.event)
+		if i == len(toolCalls)-1 {
+			finalization = p.applyToolRoundStateToFinalResult(
+				ctx,
+				invocation,
+				stateResults,
+				result.event,
+			)
+		}
+		lastEvent, err = p.applyAfterToolMessagesAndEmit(
+			ctx,
+			invocation,
+			req,
+			llmResponse,
+			eventChan,
+			result.event,
+			i < len(toolCalls)-1,
+		)
+		if err != nil {
+			return lastEvent, p.finalizeToolRoundError(
+				ctx,
+				invocation,
+				stateResults,
+				finalization,
+				err,
+			)
+		}
+	}
+	return lastEvent, nil
+}
+
+func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCallResultEvents(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	llmResponse *model.Response,
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+) (*event.Event, error) {
+	batchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	resultChan, wait := p.startParallelToolCalls(
+		batchCtx,
+		invocation,
+		llmResponse,
+		toolCalls,
+		tools,
+		eventChan,
+		true,
+	)
+
+	stateResults := make([]toolResult, len(toolCalls))
+	received := 0
+	var (
+		lastEvent     *event.Event
+		processingErr error
+		toolErr       error
+		finalization  toolRoundFinalization
+	)
+	for result := range resultChan {
+		received++
+		if result.err != nil && toolErr == nil {
+			toolErr = result.err
+		}
+		if toolErr != nil {
+			continue
+		}
+		if processingErr != nil {
+			if result.event != nil {
+				stateResults[result.index] =
+					cloneToolResultForStateFinalization(result)
+			}
+			continue
+		}
+		if result.event == nil {
+			processingErr = fmt.Errorf(
+				"per-tool-call result missing terminal event at index %d",
+				result.index,
+			)
+			cancel()
+			continue
+		}
+		stateResults[result.index] = cloneToolResultForStateFinalization(result)
+		result.event.StateDelta = nil
+		clearSkipSummarization(result.event)
+		if received == len(toolCalls) {
+			finalization = p.applyToolRoundStateToFinalResult(
+				ctx,
+				invocation,
+				stateResults,
+				result.event,
+			)
+		}
+		var err error
+		lastEvent, err = p.applyAfterToolMessagesAndEmit(
+			ctx,
+			invocation,
+			req,
+			llmResponse,
+			eventChan,
+			result.event,
+			received < len(toolCalls),
+		)
+		if err != nil {
+			processingErr = err
+			cancel()
+		}
+	}
+	if err := firstNonNilErr(processingErr, wait()); err != nil {
+		return lastEvent, p.finalizeToolRoundError(
+			ctx,
+			invocation,
+			stateResults,
+			finalization,
+			err,
+		)
+	}
+	if received != len(toolCalls) {
+		err := fmt.Errorf(
+			"per-tool-call result count %d does not match tool call count %d",
+			received,
+			len(toolCalls),
+		)
+		return lastEvent, p.finalizeToolRoundError(
+			ctx,
+			invocation,
+			stateResults,
+			finalization,
+			err,
+		)
+	}
+	return lastEvent, nil
+}
+
+func cloneToolResultForStateFinalization(result toolResult) toolResult {
+	cloned := result
+	cloned.event = result.event.Clone()
+	if result.event != nil && cloned.event != nil {
+		// Event.Clone creates a new identity for a new outbound event. This
+		// copy is only a state-finalization view of the same canonical result,
+		// so hooks must observe the original identity and routing metadata.
+		cloned.event.ID = result.event.ID
+		cloned.event.Version = result.event.Version
+		cloned.event.FilterKey = result.event.FilterKey
+		if result.event.ParentMetadata != nil {
+			parentMetadata := *result.event.ParentMetadata
+			cloned.event.ParentMetadata = &parentMetadata
+		}
+		deepCloneToolResultResponseMessages(cloned.event.Response)
+	}
+	return cloned
+}
+
+func deepCloneToolResultResponseMessages(response *model.Response) {
+	if response == nil {
+		return
+	}
+	for i := range response.Choices {
+		choice := &response.Choices[i]
+		choice.Message = cloneToolResultMessage(choice.Message)
+		choice.Delta = cloneToolResultMessage(choice.Delta)
+		if choice.FinishReason != nil {
+			finishReason := *choice.FinishReason
+			choice.FinishReason = &finishReason
+		}
+	}
+}
+
+func cloneToolResultMessage(message model.Message) model.Message {
+	cloned := message
+	cloned.ContentParts = cloneToolResultContentParts(message.ContentParts)
+	cloned.ToolCalls = cloneToolResultToolCalls(message.ToolCalls)
+	return cloned
+}
+
+func cloneToolResultContentParts(
+	parts []model.ContentPart,
+) []model.ContentPart {
+	if parts == nil {
+		return nil
+	}
+	cloned := make([]model.ContentPart, len(parts))
+	for i, part := range parts {
+		cloned[i] = part
+		if part.Text != nil {
+			text := *part.Text
+			cloned[i].Text = &text
+		}
+		if part.Image != nil {
+			image := *part.Image
+			image.Data = append([]byte(nil), part.Image.Data...)
+			cloned[i].Image = &image
+		}
+		if part.Audio != nil {
+			audio := *part.Audio
+			audio.Data = append([]byte(nil), part.Audio.Data...)
+			cloned[i].Audio = &audio
+		}
+		if part.File != nil {
+			file := *part.File
+			file.Data = append([]byte(nil), part.File.Data...)
+			cloned[i].File = &file
+		}
+		if part.ContentRef != nil {
+			contentRef := *part.ContentRef
+			cloned[i].ContentRef = &contentRef
+		}
+	}
+	return cloned
+}
+
+func cloneToolResultToolCalls(toolCalls []model.ToolCall) []model.ToolCall {
+	if toolCalls == nil {
+		return nil
+	}
+	cloned := make([]model.ToolCall, len(toolCalls))
+	for i, toolCall := range toolCalls {
+		cloned[i] = toolCall
+		cloned[i].Function.Arguments = append(
+			[]byte(nil),
+			toolCall.Function.Arguments...,
+		)
+		if toolCall.Index != nil {
+			index := *toolCall.Index
+			cloned[i].Index = &index
+		}
+		cloned[i].ExtraFields = jsonmap.Clone(toolCall.ExtraFields)
+	}
+	return cloned
+}
+
+func (p *FunctionCallResponseProcessor) applyToolRoundStateToFinalResult(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	stateResults []toolResult,
+	lastEvent *event.Event,
+) toolRoundFinalization {
+	if lastEvent == nil {
+		return toolRoundFinalization{}
+	}
+	finalization := p.finalizeToolRoundState(
+		ctx,
+		invocation,
+		stateResults,
+	)
+	if len(finalization.stateDelta) > 0 {
+		lastEvent.StateDelta = cloneEventStateDelta(
+			finalization.stateDelta,
+		)
+	}
+	// Post-result hooks run on the call-ordered state views and may clear a
+	// tool's original preference. Copy the finalized batch decision exactly so
+	// behavior cannot depend on which parallel tool happened to finish last.
+	clearSkipSummarization(lastEvent)
+	if finalization.skipSummarization {
+		markSkipSummarization(lastEvent)
+	}
+	return finalization
+}
+
+func (p *FunctionCallResponseProcessor) finalizeToolRoundState(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	stateResults []toolResult,
+) toolRoundFinalization {
+	stateEvents := p.attachStateDeltaToToolResults(
+		ctx,
+		invocation,
+		stateResults,
+	)
+	return toolRoundFinalization{
+		stateDelta: cloneEventStateDelta(
+			collectStateDelta(stateEvents),
+		),
+		skipSummarization: shouldSkipSummarization(stateEvents),
+		hasResults:        len(stateEvents) > 0,
+	}
+}
+
+func (p *FunctionCallResponseProcessor) finalizeToolRoundError(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	stateResults []toolResult,
+	finalization toolRoundFinalization,
+	cause error,
+) error {
+	if cause == nil {
+		return nil
+	}
+	if !finalization.hasResults {
+		finalization = p.finalizeToolRoundState(
+			ctx,
+			invocation,
+			stateResults,
+		)
+	}
+	if !finalization.hasResults {
+		return cause
+	}
+	return &toolResultRoundError{
+		cause:        cause,
+		finalization: finalization,
+	}
+}
+
+func (p *FunctionCallResponseProcessor) applyAfterToolMessagesAndEmit(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	req *model.Request,
+	llmResponse *model.Response,
+	eventChan chan<- *event.Event,
+	toolResultEvent *event.Event,
+	toolResultRoundIncomplete bool,
+) (*event.Event, error) {
+	if err := p.applyAfterToolMessagesHooks(
+		ctx,
+		invocation,
+		req,
+		llmResponse,
+		toolResultEvent,
+	); err != nil {
+		return nil, err
+	}
+	toolresultround.Mark(
+		toolResultEvent,
+		toolResultRoundIncomplete,
+	)
+	return emitFunctionResponseEventAndWait(
+		ctx,
+		invocation,
+		eventChan,
+		toolResultEvent,
+	)
 }
 
 type afterToolMessagesManager interface {
@@ -1079,36 +1634,15 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 ) (*event.Event, error) {
-	resultChan := make(chan toolResult, len(toolCalls))
-
-	g, gctx := errgroup.WithContext(ctx)
-	for i, tc := range toolCalls {
-		i, tc := i, tc
-		g.Go(func() error {
-			runCtx := agent.CloneContext(gctx)
-			runInv := invocation
-			if invocation != nil {
-				runInv = newParallelInvocationView(invocation)
-				if runCtx == nil {
-					runCtx = context.Background()
-				}
-				runCtx = agent.NewInvocationContext(runCtx, runInv)
-			}
-			return p.runParallelToolCall(
-				runCtx, runInv, llmResponse, tools, eventChan, resultChan, i, tc,
-			)
-		})
-	}
-
-	// Wait for all siblings to finish in a separate goroutine so the
-	// collector can drain results as they arrive. Closing resultChan is
-	// what signals "no more results" to collectParallelToolResults.
-	// errgroup.Wait is safe to call multiple times — it returns the same
-	// stored error — so racing with the post-collect Wait below is OK.
-	go func() {
-		_ = g.Wait()
-		close(resultChan)
-	}()
+	resultChan, wait := p.startParallelToolCalls(
+		ctx,
+		invocation,
+		llmResponse,
+		toolCalls,
+		tools,
+		eventChan,
+		false,
+	)
 
 	// Drain results in arrival order, preserving slot index. Use the
 	// parent ctx (not gctx) here: gctx is cancelled automatically when
@@ -1123,7 +1657,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 	// Read the first critical sibling error from the group; prefer it over
 	// the collector's view because it carries the causal failure (the
 	// collector typically just sees ctx.Done()).
-	err := firstNonNilErr(g.Wait(), drainErr)
+	err := firstNonNilErr(wait(), drainErr)
 
 	toolCallResponsesEvents := p.attachStateDeltaToToolResults(
 		ctx,
@@ -1143,6 +1677,60 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallel(
 		toolCallResponsesEvents,
 	)
 	return mergedEvent, err
+}
+
+// startParallelToolCalls dispatches one worker per call and closes the result
+// channel after every worker exits. Callers drain the channel before waiting
+// for the group error.
+func (p *FunctionCallResponseProcessor) startParallelToolCalls(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	llmResponse *model.Response,
+	toolCalls []model.ToolCall,
+	tools map[string]tool.Tool,
+	eventChan chan<- *event.Event,
+	perToolCallResultEvents bool,
+) (<-chan toolResult, func() error) {
+	resultChan := make(chan toolResult, len(toolCalls))
+	g, gctx := errgroup.WithContext(ctx)
+	parallelInvocation := invocation
+	if perToolCallResultEvents && invocation != nil {
+		// Snapshot the shared session before workers start. Per-worker clones
+		// then read this immutable baseline instead of racing with result
+		// events persisted by faster siblings.
+		parallelInvocation = newParallelInvocationView(invocation)
+	}
+	for i, toolCall := range toolCalls {
+		i, toolCall := i, toolCall
+		g.Go(func() error {
+			runCtx := agent.CloneContext(gctx)
+			runInv := parallelInvocation
+			if parallelInvocation != nil {
+				runInv = newParallelInvocationView(parallelInvocation)
+				if runCtx == nil {
+					runCtx = context.Background()
+				}
+				runCtx = agent.NewInvocationContext(runCtx, runInv)
+			}
+			return p.runParallelToolCall(
+				runCtx,
+				runInv,
+				llmResponse,
+				tools,
+				eventChan,
+				resultChan,
+				perToolCallResultEvents,
+				i,
+				toolCall,
+			)
+		})
+	}
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- g.Wait()
+		close(resultChan)
+	}()
+	return resultChan, func() error { return <-waitDone }
 }
 
 // firstNonNilErr returns the first non-nil error from its arguments, in
@@ -1172,6 +1760,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	tools map[string]tool.Tool,
 	eventChan chan<- *event.Event,
 	resultChan chan<- toolResult,
+	preserveResultOnCancellation bool,
 	index int,
 	tc model.ToolCall,
 ) (rerr error) {
@@ -1180,6 +1769,13 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		ctx = context.Background()
 	}
 	ctx = context.WithValue(ctx, executingToolArgsContextKey{}, &toolArgs)
+	sendResult := func(result toolResult) {
+		sendCtx := ctx
+		if preserveResultOnCancellation {
+			sendCtx = context.WithoutCancel(sendCtx)
+		}
+		p.sendToolResult(sendCtx, resultChan, result)
+	}
 	// Recover from panics to avoid breaking sibling goroutines. Panics are
 	// surfaced as a tool error in the merged response (no sibling cancel).
 	defer func() {
@@ -1204,7 +1800,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			if tc.Function.Name == transfer.TransferToolName {
 				errorEvent.Tag = event.TransferTag
 			}
-			p.sendToolResult(ctx, resultChan, toolResult{
+			sendResult(toolResult{
 				index:    index,
 				event:    errorEvent,
 				toolArgs: toolArgs,
@@ -1261,7 +1857,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		if !shouldIgnoreError {
 			returnErr = err
 		}
-		p.sendToolResult(ctx, resultChan, toolResult{
+		sendResult(toolResult{
 			index:    index,
 			event:    errorEvent,
 			err:      returnErr,
@@ -1285,7 +1881,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
-		p.sendToolResult(ctx, resultChan, toolResult{
+		sendResult(toolResult{
 			index:    index,
 			toolArgs: modifiedArgs,
 		})
@@ -1335,14 +1931,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		Error:            err,
 	}, time.Since(startTime))
 	// Send result back to aggregator.
-	p.sendToolResult(
-		ctx, resultChan, toolResult{
-			index:      index,
-			event:      toolCallResponseEvent,
-			stateDelta: stateDelta,
-			toolArgs:   modifiedArgs,
-		},
-	)
+	sendResult(toolResult{
+		index:      index,
+		event:      toolCallResponseEvent,
+		stateDelta: stateDelta,
+		toolArgs:   modifiedArgs,
+	})
 	return nil
 }
 
@@ -3469,6 +4063,16 @@ func markSkipSummarization(ev *event.Event) {
 		ev.Actions = &event.EventActions{}
 	}
 	ev.Actions.SkipSummarization = true
+}
+
+func clearSkipSummarization(ev *event.Event) {
+	if ev == nil || ev.Actions == nil {
+		return
+	}
+	ev.Actions.SkipSummarization = false
+	if *ev.Actions == (event.EventActions{}) {
+		ev.Actions = nil
+	}
 }
 
 func toolPrefersSkipSummarization(tl tool.Tool) bool {
