@@ -1,0 +1,18 @@
+diff --git a/pkg/io/load.go b/pkg/io/load.go
+index 1111111..2222222 100644
+--- a/pkg/io/load.go
++++ b/pkg/io/load.go
+@@ -1,5 +1,11 @@
+ package io
+
++import "os"
++
+-func Load(p string) error { return nil }
++func Load(p string) error {
++	f, err := os.Open(p)
++	if err != nil {
++		return err
++	}
++	_ = f
++	return nil
++}

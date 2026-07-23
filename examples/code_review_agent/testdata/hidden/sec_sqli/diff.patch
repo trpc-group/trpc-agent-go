@@ -1,0 +1,11 @@
+diff --git a/pkg/api/query.go b/pkg/api/query.go
+index 1111111..2222222 100644
+--- a/pkg/api/query.go
++++ b/pkg/api/query.go
+@@ -1,5 +1,8 @@
+ package api
+ 
+-func Q(id string) string { return id }
++func Q(id string) string {
++	return "SELECT name FROM t WHERE id='" + id + "'"
++}

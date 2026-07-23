@@ -1,0 +1,6 @@
+{
+  "expect_rules": [
+    "CR-RES-001"
+  ],
+  "min_findings": 1
+}

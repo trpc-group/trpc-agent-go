@@ -1,0 +1,11 @@
+diff --git a/pkg/cfg/cfg.go b/pkg/cfg/cfg.go
+index 1111111..2222222 100644
+--- a/pkg/cfg/cfg.go
++++ b/pkg/cfg/cfg.go
+@@ -1,4 +1,7 @@
+ package cfg
+
+-func Key() string { return "" }
++func Key() string {
++	return "sk-abcdefghijklmnopqrstuvwxyz012345"
++}
