@@ -161,6 +161,12 @@ func (c *comparator) addDiff(
 	if path == "" {
 		path = "/"
 	}
+	explanation := "semantic values differ"
+	if !leftExists {
+		explanation = "baseline path is missing"
+	} else if !rightExists {
+		explanation = "actual path is missing"
+	}
 	diff := Diff{
 		Case:        c.caseName,
 		BackendA:    c.baseline.Backend,
@@ -169,7 +175,7 @@ func (c *comparator) addDiff(
 		Path:        path,
 		Baseline:    left,
 		Actual:      right,
-		Explanation: "semantic values differ",
+		Explanation: explanation,
 	}
 	c.addLocator(&diff)
 	for _, rule := range c.allowed {

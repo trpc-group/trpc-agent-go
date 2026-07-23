@@ -1062,6 +1062,31 @@ func TestRunnerDetectsIgnoredSummaryUpdate(t *testing.T) {
 	t.Fatalf("ignored summary update lacks a summary locator: %+v", report.Cases[0].Diffs)
 }
 
+func TestSummaryTextFaultProducesTextDiff(t *testing.T) {
+	replayCase := summaryUpdateCase()
+	baseline, err := Replay(context.Background(), replayCase, InMemoryBackend())
+	if err != nil {
+		t.Fatalf("Replay() error = %v", err)
+	}
+	faulted, err := InjectFault(baseline, FaultSummaryText)
+	if err != nil {
+		t.Fatalf("InjectFault() error = %v", err)
+	}
+	diffs, err := Compare(replayCase.Name, baseline, faulted, nil)
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	for _, diff := range diffs {
+		if diff.Path == "/summaries//text" &&
+			!diff.Allowed &&
+			diff.SummaryFilterKey != nil &&
+			*diff.SummaryFilterKey == "" {
+			return
+		}
+	}
+	t.Fatalf("summary text fault lacks a blocking text diff: %+v", diffs)
+}
+
 func TestRunnerDetectsMemorySearchOrderDrift(t *testing.T) {
 	baseline := InMemoryBackend()
 	baseline.Name = "baseline"

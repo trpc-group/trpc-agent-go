@@ -741,6 +741,23 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 		if len(diffs) != 1 || diffs[0].Allowed {
 			t.Fatalf("Compare() diffs = %+v, want a blocking presence difference", diffs)
 		}
+		if diffs[0].Explanation != "actual path is missing" {
+			t.Fatalf("Compare() explanation = %q, want missing actual path", diffs[0].Explanation)
+		}
+	})
+	t.Run("missing baseline is distinguishable from null", func(t *testing.T) {
+		baseline := minimalSnapshot("baseline", `{}`)
+		actual := minimalSnapshot("actual", `{}`)
+		baseline.Case = "presence"
+		actual.Case = "presence"
+		actual.Session["optional"] = nil
+		diffs, err := Compare("presence", baseline, actual, nil)
+		if err != nil {
+			t.Fatalf("Compare() error = %v", err)
+		}
+		if len(diffs) != 1 || diffs[0].Explanation != "baseline path is missing" {
+			t.Fatalf("Compare() diffs = %+v, want a missing baseline explanation", diffs)
+		}
 	})
 	t.Run("diff session locator fallback", func(t *testing.T) {
 		baseline := minimalSnapshot("baseline", `{}`)
