@@ -166,7 +166,7 @@ func scanProcessBridge(policy Policy, language, code string) []Finding {
 	if !containsProcessBridge(language, code) {
 		return nil
 	}
-	payload := strings.Join(quotedLiterals(code), " ")
+	payload := strings.Join(processBridgeLiterals(language, code), " ")
 	nested := scanExecution(policy, Request{Backend: BackendCodeExec, Command: payload})
 	decision := DecisionNeedsHumanReview
 	risk := RiskHigh
@@ -180,6 +180,20 @@ func scanProcessBridge(policy Policy, language, code string) []Finding {
 		"replace dynamic process execution with a narrowly scoped tool",
 	)}
 	return append(findings, nested...)
+}
+
+func processBridgeLiterals(language, code string) []string {
+	literals := quotedLiterals(code)
+	if language != "go" && language != "golang" {
+		return literals
+	}
+	filtered := literals[:0]
+	for _, literal := range literals {
+		if literal != "os/exec" {
+			filtered = append(filtered, literal)
+		}
+	}
+	return filtered
 }
 
 func containsProcessBridge(language, code string) bool {

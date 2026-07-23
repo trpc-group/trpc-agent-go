@@ -581,6 +581,17 @@ func TestGuardScansAliasedLanguageProcessBridges(t *testing.T) {
 	}
 }
 
+func TestGuardReviewsSafeGoProcessBridgeWithoutScanningImportPath(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "go",
+			Code:     "import \"os/exec\"\nfunc main() { exec.Command(\"echo\", \"hello\").Run() }",
+		}},
+	})
+	require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, "code.process_bridge", report.RuleID)
+}
+
 func TestGuardAllowsImportWithoutProcessInvocation(t *testing.T) {
 	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
 		CodeBlocks: []codeexecutor.CodeBlock{{
