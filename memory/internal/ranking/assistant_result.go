@@ -6,15 +6,14 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package pgvector
+package ranking
 
 import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantresult"
 )
-
-const assistantResultPrefix = "assistant result:"
 
 var assistantResultDirectRecallPhrases = []string{
 	"assistant's",
@@ -70,10 +69,7 @@ func rankResultsByAssistantResultIntent(
 				continue
 			}
 			seen[entry.ID] = struct{}{}
-			isAssistantResult := strings.HasPrefix(
-				strings.ToLower(strings.TrimSpace(entry.Memory.Memory)),
-				assistantResultPrefix,
-			)
+			isAssistantResult := assistantresult.Is(entry.Memory.Memory)
 			if isAssistantResult == wantAssistantResult {
 				preferred = append(preferred, entry)
 			} else {

@@ -11,9 +11,9 @@ package extractor
 import (
 	"strings"
 	"unicode"
-)
 
-const assistantResultMemoryPrefix = "Assistant result: "
+	"trpc.group/trpc-go/trpc-agent-go/memory/internal/assistantresult"
+)
 
 func qualifyAssistantResultOperations(operations []*Operation) {
 	for _, operation := range operations {
@@ -24,34 +24,8 @@ func qualifyAssistantResultOperations(operations []*Operation) {
 		if memoryText == "" {
 			continue
 		}
-		operation.Memory = assistantResultMemoryPrefix +
-			stripAssistantResultPrefixes(memoryText)
+		operation.Memory = assistantresult.Normalize(memoryText)
 	}
-}
-
-func stripAssistantResultPrefixes(memoryText string) string {
-	marker := strings.ToLower(strings.TrimSpace(assistantResultMemoryPrefix))
-	parts := make([]string, 0, 2)
-	for {
-		index := strings.Index(strings.ToLower(memoryText), marker)
-		if index < 0 {
-			parts = append(parts, strings.TrimSpace(memoryText))
-			break
-		}
-		parts = append(parts, strings.TrimSpace(memoryText[:index]))
-		memoryText = memoryText[index+len(marker):]
-	}
-	return strings.Join(removeEmptyStrings(parts), " ")
-}
-
-func removeEmptyStrings(values []string) []string {
-	result := values[:0]
-	for _, value := range values {
-		if value != "" {
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func routeAssistantResultOperations(

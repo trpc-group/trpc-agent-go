@@ -2505,63 +2505,6 @@ func TestExecuteVectorSearch_OrderByEventTimeUsesSimilarityFirst(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-func TestMergeHybridResults(t *testing.T) {
-	entry := func(id string) *memory.Entry {
-		return &memory.Entry{
-			ID:     id,
-			Memory: &memory.Memory{Memory: id},
-		}
-	}
-
-	results := mergeHybridResults(
-		[]*memory.Entry{entry("mem-1"), entry("mem-2")},
-		[]*memory.Entry{entry("mem-2"), entry("mem-3")},
-		nil,
-		nil,
-		0,
-		2,
-	)
-
-	require.Len(t, results, 2)
-	assert.Equal(t, "mem-2", results[0].ID)
-	assert.Greater(t, results[0].Score, results[1].Score)
-}
-
-func TestMergeHybridResultsUsesFocusedRanking(t *testing.T) {
-	first := &memory.Entry{ID: "first", Memory: &memory.Memory{Memory: "first"}}
-	focused := &memory.Entry{ID: "focused", Memory: &memory.Memory{Memory: "focused"}}
-
-	results := mergeHybridResults(
-		[]*memory.Entry{first, focused},
-		nil,
-		[]*memory.Entry{focused},
-		nil,
-		defaultRRFK,
-		2,
-	)
-
-	require.Len(t, results, 2)
-	assert.Equal(t, "focused", results[0].ID)
-}
-
-func TestMergeSearchResults(t *testing.T) {
-	primary := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "episode one", Kind: memory.KindEpisode}},
-	}
-	fallback := []*memory.Entry{
-		{ID: "mem-1", Memory: &memory.Memory{Memory: "duplicate", Kind: memory.KindEpisode}},
-		{ID: "mem-2", Memory: &memory.Memory{Memory: "episode two", Kind: memory.KindEpisode}},
-		{ID: "mem-3", Memory: &memory.Memory{Memory: "fact", Kind: memory.KindFact}},
-	}
-
-	results := mergeSearchResults(primary, fallback, memory.KindEpisode, 3)
-
-	require.Len(t, results, 3)
-	assert.Equal(t, "mem-1", results[0].ID)
-	assert.Equal(t, "mem-2", results[1].ID)
-	assert.Equal(t, "mem-3", results[2].ID)
-}
-
 func TestDeduplicateResults(t *testing.T) {
 	results := imemory.DeduplicateResultsPreservingConflicts([]*memory.Entry{
 		{ID: "mem-1", Score: 0.95, Memory: &memory.Memory{Memory: "Alice hiking in Kyoto"}},

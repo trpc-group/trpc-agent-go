@@ -6,7 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package pgvector
+package ranking
 
 import (
 	"testing"
@@ -90,12 +90,8 @@ func TestAssistantResultIntentContributesToHybridRanking(t *testing.T) {
 		ID: "user", Memory: &memory.Memory{Memory: "Taxi cost is $60."},
 	}
 	vector := []*memory.Entry{assistant, user}
-	provenance := rankResultsByAssistantResultIntent(
-		"How much will I save?", vector,
-	)
-
-	actual := mergeHybridResults(
-		vector, nil, nil, provenance, defaultRRFK, 2,
+	actual := MergeHybrid(
+		"How much will I save?", vector, nil, 0, 2,
 	)
 
 	require.Len(t, actual, 2)
