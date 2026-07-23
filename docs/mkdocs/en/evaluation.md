@@ -2981,7 +2981,7 @@ type RubricScore struct {
 
 Overall results write each metric output into `overallEvalMetricResults`. Per-turn details are written into `evalMetricResultPerInvocation` and retain both `actualInvocation` and `expectedInvocation` traces for troubleshooting. `EvalCaseResult.score` is the evaluation case-level aggregated score, and `finalEvalStatus` is the evaluation case-level final status. Both are computed by the Service case result aggregator.
 
-`details.value` in metric details is typed score detail. It does not replace `score` and does not participate in the framework's default threshold checks. The default pass logic is still determined by the evaluator's numeric `score` and `threshold`. If `details.value` is present, `kind` selects the corresponding field to read; an omitted `details.value` means the evaluator did not provide typed detail. Numeric zero and boolean false are valid values. Platforms that need to distinguish numeric scores, boolean conclusions, or categorical labels can read `details.value.kind` and the corresponding field:
+`details.value` in metric details is typed score detail. It does not replace `score` and does not participate in the framework's default threshold checks. The default pass logic is still determined by the evaluator's numeric `score` and `threshold`. If `details.value` is present, `kind` selects the corresponding field to read; an omitted `details.value` means the evaluator did not provide typed detail. Numeric zero and boolean false are valid values. Typed values are intended for per-turn metric details; overall metric details keep aggregated numeric results and do not aggregate typed values by default. Platforms that need to distinguish numeric scores, boolean conclusions, or categorical labels can read `details.value.kind` and the corresponding field:
 
 - `kind: "numeric"` uses the `numeric` field, for example `{"kind": "numeric", "numeric": 0.9}`.
 - `kind: "boolean"` uses the `boolean` field, for example `{"kind": "boolean", "boolean": true}`.
@@ -3010,12 +3010,33 @@ Below is an example result file snippet.
           "evalStatus": "passed",
           "threshold": 1,
           "details": {
-            "score": 1,
-            "value": {
-              "kind": "numeric",
-              "numeric": 1
-            }
+            "score": 1
           }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "turn-1"
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-1"
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            }
+          ]
         }
       ]
     }
