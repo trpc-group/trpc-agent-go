@@ -1,0 +1,6 @@
+{
+  "pass_threshold": 0.75,
+  "response_weight": 0.5,
+  "tool_weight": 0.3,
+  "format_weight": 0.2
+}
