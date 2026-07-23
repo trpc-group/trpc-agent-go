@@ -1,0 +1,33 @@
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "exact"
+        }
+      }
+    }
+  },
+  {
+    "metricName": "tool_trajectory_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "toolTrajectory": {
+        "orderSensitive": false,
+        "defaultStrategy": {
+          "name": {
+            "matchStrategy": "exact"
+          },
+          "arguments": {
+            "matchStrategy": "exact"
+          },
+          "result": {
+            "matchStrategy": "exact"
+          }
+        }
+      }
+    }
+  }
+]

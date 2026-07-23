@@ -1,0 +1,66 @@
+{
+  "evalSetId": "validation",
+  "name": "validation",
+  "evalCases": [
+    {
+      "evalId": "val_01_gold_vs_silver",
+      "conversation": [
+        {
+          "invocationId": "val_01_gold_vs_silver-1",
+          "userContent": {
+            "role": "user",
+            "content": "金队 vs 银队，比分 88-80，胜者 金队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "金队以88-80战胜银队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    },
+    {
+      "evalId": "val_02_fire_vs_ice",
+      "conversation": [
+        {
+          "invocationId": "val_02_fire_vs_ice-1",
+          "userContent": {
+            "role": "user",
+            "content": "火队 vs 冰队，比分 5-4，胜者 火队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "火队以5-4战胜冰队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    },
+    {
+      "evalId": "val_03_mountain_vs_sea",
+      "conversation": [
+        {
+          "invocationId": "val_03_mountain_vs_sea-1",
+          "userContent": {
+            "role": "user",
+            "content": "山队 vs 海队，比分 112-108，胜者 山队"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "山队以112-108战胜海队。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "eval-optimization-app",
+        "userId": "eval-optimization-demo-user"
+      }
+    }
+  ]
+}
