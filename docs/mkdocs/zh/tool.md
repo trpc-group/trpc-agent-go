@@ -477,102 +477,50 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
-## Result Codec 结果编码
+## 工具结果格式化
 
-默认情况下，TAG 会把工具结果序列化为 JSON，用来构造模型可见的 tool result 消息。
-Result Codec 让你**按工具**选择这个格式——JSON、XML、纯文本或自定义模板——而无需
-编写回调或自己构造 `model.Message`。
-
-Codec 的唯一职责是把最终工具结果转成模型可见字符串。TAG 仍负责构造协议正确的 tool
-result 消息（role、tool name、tool call ID 配对），并保持 event、session、resume 语义
-不变。
-
-### 内置 codec
-
-`tool/resultcodec` 包提供四种 codec：
-
-| Codec | 模型可见输出 |
-|-------|--------------|
-| `resultcodec.JSON()` | JSON，与默认 tool result 兼容（不做 HTML 转义） |
-| `resultcodec.XML()` | 由 JSON 逻辑树推导出的 XML，字段与值保持一致 |
-| `resultcodec.Text()` | 直接输出文本类型结果（string、字节、`TextMarshaler`）；其他类型返回错误 |
-| `resultcodec.Custom[T](fn)` | 类型化 encoder 的输出，并规范为有效 UTF-8 |
-
-`JSON`、`XML` 和 `Text` codec 实例无状态，可安全并发复用。所有 codec 的成功输出均为
-有效 UTF-8，`Custom` 会在必要时规范 encoder 输出；`Custom` encoder 的确定性和并发
-安全性由调用方负责。
-
-### 按工具配置 codec
-
-构造 function tool 时使用 `function.WithResultCodec`：
+Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某个工具需要 XML-like
+observation 等业务专属文本时，可以使用 `function.WithResultFormatter`，无需自行构造
+`model.Message` 或维护 tool call ID。
 
 ```go
 import (
+    "context"
+
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
-    "trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
 
 bashTool := function.NewFunctionTool(
     runBash,
     function.WithName("bash"),
-    function.WithDescription("run a bash command"),
-    function.WithResultCodec(resultcodec.XML()),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
 )
 ```
 
-不配置 `WithResultCodec` 时，工具继续使用默认 JSON 行为：
+Formatter 接收 `AfterTool` callback 处理后的最终正常结果，仅改变
+`DefaultToolMessage.Content`。role、tool name、tool call ID 配对、消息顺序、event 和
+session 持久化仍由 TAG 维护。
 
-```go
-bashTool := function.NewFunctionTool(
-    runBash,
-    function.WithName("bash"),
-    function.WithDescription("run a bash command"),
-)
-```
+- 未配置 formatter 时，现有默认 JSON 输出保持不变。
+- formatter 返回错误或发生 panic 时，本次结果明确失败；TAG 不回退 JSON，也不会重新
+  执行已经完成的工具。
+- permission result 不经过 formatter；streamable tool 只格式化最终结果，中间事件不变。
+- 现有 state delta provider 继续接收结果的兼容 JSON，不读取 formatter 或 callback
+  覆盖后的模型文本。若必要的 JSON projection 失败，本次结果失败，不能静默丢状态。
+- `ToolResultMessages` 仍在默认消息生成后执行并可以覆盖它；多消息、多模态内容或完全
+  接管消息协议的场景继续使用该 callback。
 
-需要业务专属模板时，使用类型化 `Custom` encoder，它接收具体结果类型，业务无需自行
-断言 `any`：
-
-```go
-codec := resultcodec.Custom(func(ctx context.Context, r BashResult) (string, error) {
-    return formatBashObservation(r), nil
-})
-
-bashTool := function.NewFunctionTool(
-    runBash,
-    function.WithName("bash"),
-    function.WithResultCodec(codec),
-)
-```
-
-### 为已有工具绑定 codec
-
-对于无法修改构造过程的工具（例如由 `ToolSet` 生成的工具），使用 `resultcodec.Wrap`
-包装：
-
-```go
-wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
-```
-
-`Wrap` 绑定结果编码，并通过显式 `TransparentUnwrap` 契约委托框架支持的 capability。
-各 capability resolver 保留自身的优先级和失败规则；`Wrap` 不为多个独立 wrapper 建立
-框架级统一优先级。
-
-### 行为与兼容性
-
-- 未配置 codec 的工具，其模型可见 JSON 输出逐字节不变。
-- codec 只影响所绑定的工具，不影响其他工具。
-- 编码失败会报明确错误；框架不会回退 JSON，也不会重新执行工具。
-- 对 streamable 工具，只编码最终结果；中间流式事件保持不变。
-- 对有状态工具（会发布 session/artifact state delta），state delta 仍基于结果的
-  JSON 形式计算，与 codec 无关。若结果无法序列化为 JSON，本次调用会直接失败，
-  而不是静默成功却丢弃状态更新。
-- 权限结果（denied / approval-required）属于框架控制协议，不会经过 codec。
-- Result Codec 处理“一个正常工具结果 → 一个 tool 消息”。返回多条消息、追加其他
-  role、多模态内容或完全接管协议等场景，继续使用 `ToolResultMessages`；两者同时配置
-  时，codec 生成默认 tool 消息，callback 保持现有 override 语义。
-
-可运行示例见 `examples/resultcodec`。
+Formatting 是面向模型的展示钩子，不是传输编码器或可逆序列化协议。TAG 不提供内置 XML
+或 Text formatter；escaping、截断和输出有效性由业务 formatter 负责。Formatter 可能被
+并发调用，若持有可变状态，需要由业务自行保证并发安全。
 
 ## 内置工具类型
 

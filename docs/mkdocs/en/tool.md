@@ -495,110 +495,55 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
-## Result Codec
+## Result formatting
 
-By default, TAG serializes a tool's result to JSON to build the model-visible
-tool result message. A Result Codec lets you choose that format per tool - JSON,
-XML, plain text, or a custom template - without writing callbacks or building
-`model.Message` yourself.
-
-A codec only turns the final tool result into model-visible text. The framework
-still builds the protocol-correct tool result message (role, tool name, and
-tool-call-ID pairing) and keeps event, session, and resume semantics unchanged.
-
-### Built-in codecs
-
-The `tool/resultcodec` package provides four codecs:
-
-| Codec | Model-visible output |
-|-------|----------------------|
-| `resultcodec.JSON()` | JSON, compatible with the default tool result (no HTML escaping) |
-| `resultcodec.XML()` | XML derived from the JSON logical tree, with the same fields and values |
-| `resultcodec.Text()` | Text-typed results verbatim (string, bytes, `TextMarshaler`); other types return an error |
-| `resultcodec.Custom[T](fn)` | Typed encoder output, normalized to valid UTF-8 |
-
-The `JSON`, `XML`, and `Text` codec instances are stateless and safe for
-concurrent reuse. Successful output from every codec is valid UTF-8; `Custom`
-normalizes the encoder output when necessary. A `Custom` encoder's determinism
-and concurrency safety are the caller's responsibility.
-
-### Configure a codec per tool
-
-Use `function.WithResultCodec` when constructing a function tool:
+Function tools use JSON for model-visible tool result messages by default. Use
+`function.WithResultFormatter` when a tool needs business-specific text such as
+an XML-like observation, without constructing `model.Message` or managing the
+tool call ID yourself.
 
 ```go
 import (
+    "context"
+
     "trpc.group/trpc-go/trpc-agent-go/tool/function"
-    "trpc.group/trpc-go/trpc-agent-go/tool/resultcodec"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
 
 bashTool := function.NewFunctionTool(
     runBash,
     function.WithName("bash"),
-    function.WithDescription("run a bash command"),
-    function.WithResultCodec(resultcodec.XML()),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
 )
 ```
 
-Without `WithResultCodec`, the tool keeps the default JSON behavior:
+The formatter receives the final normal result after `AfterTool` callbacks. It
+changes only `DefaultToolMessage.Content`; TAG still provides the tool role,
+name, call-ID pairing, ordering, events, and session persistence.
 
-```go
-bashTool := function.NewFunctionTool(
-    runBash,
-    function.WithName("bash"),
-    function.WithDescription("run a bash command"),
-)
-```
+- Without a formatter, existing JSON output remains unchanged.
+- A formatting error or panic is reported as an error. TAG does not fall back
+  to JSON or run the completed tool again.
+- Permission results bypass the formatter. For streamable tools, only the final
+  result is formatted; intermediate events are unchanged.
+- Existing state-delta providers continue to receive the result's compatibility
+  JSON, not formatted or callback-overridden model text. A required JSON
+  projection failure fails the response instead of silently dropping state.
+- `ToolResultMessages` still runs after the default message is prepared and may
+  override it. Continue using that callback for multiple messages, multimodal
+  content, or complete control of the message protocol.
 
-For a business-specific template, use a typed `Custom` encoder. It receives the
-concrete result type, so you never assert `any`:
-
-```go
-codec := resultcodec.Custom(func(ctx context.Context, r BashResult) (string, error) {
-    return formatBashObservation(r), nil
-})
-
-bashTool := function.NewFunctionTool(
-    runBash,
-    function.WithName("bash"),
-    function.WithResultCodec(codec),
-)
-```
-
-### Bind a codec to an existing tool
-
-For a tool whose construction you cannot modify (for example a tool produced by
-a `ToolSet`), wrap it with `resultcodec.Wrap`:
-
-```go
-wrapped := resultcodec.Wrap(existingTool, resultcodec.XML())
-```
-
-`Wrap` binds result encoding and delegates supported capabilities through the
-explicit `TransparentUnwrap` contract. Each capability resolver retains its own
-precedence and failure rules; `Wrap` does not establish a framework-wide
-precedence order for independently nested wrappers.
-
-### Behavior and compatibility
-
-- Tools without a codec keep byte-identical JSON output.
-- A codec only affects the tool it is bound to; other tools are unaffected.
-- Encoding failures are reported as clear errors; the framework does not fall
-  back to JSON or re-run the tool.
-- For a streamable tool, only the final result is encoded; intermediate stream
-  events are unchanged.
-- For a stateful tool (one that emits a session/artifact state delta), the state
-  delta is still computed from the JSON form of the result, independent of the
-  codec. If the result cannot be serialized to JSON, the call fails instead of
-  silently succeeding while dropping the state update.
-- Permission results (denied / approval-required) are framework control protocol
-  and are never passed through the codec.
-- Result Codec covers "one normal tool result -> one tool message". For multiple
-  messages, extra roles, multimodal content, or full protocol takeover, keep
-  using `ToolResultMessages`. When both are configured, the codec produces the
-  default tool message and the callback's existing override semantics apply.
-
-A runnable example lives under `examples/resultcodec`.
+Formatting is a model-presentation hook, not a transport encoder or reversible
+serialization format. TAG does not provide built-in XML or text formatters; the
+business formatter owns escaping, truncation, and output validity. A formatter
+may be called concurrently and must synchronize any mutable state it owns.
 
 ## Built-in Tools
 
