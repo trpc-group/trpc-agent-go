@@ -1,0 +1,668 @@
+{
+  "duration_ms": 0,
+  "cases": 10,
+  "detected_injected": 10,
+  "differences": [
+    {
+      "case": "single-turn",
+      "backend": "sqlite-services",
+      "session_id": "s1",
+      "locator": "event[seq=2]",
+      "field_path": "/events/1/content",
+      "baseline": "hi",
+      "compared": "wrong",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "single-turn",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s1",
+      "locator": "event[seq=2]",
+      "field_path": "/events/1/content",
+      "baseline": "hi",
+      "compared": "wrong",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "multi-turn",
+      "backend": "sqlite-services",
+      "session_id": "s2",
+      "locator": "event[seq=3]",
+      "field_path": "/events/2/seq",
+      "baseline": 3,
+      "compared": 2,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "multi-turn",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s2",
+      "locator": "event[seq=3]",
+      "field_path": "/events/2/seq",
+      "baseline": 3,
+      "compared": 2,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "tool-call",
+      "backend": "sqlite-services",
+      "session_id": "s3",
+      "locator": "event[seq=2]",
+      "field_path": "/events/1/args/city",
+      "baseline": "SZ",
+      "compared": "BJ",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "tool-call",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s3",
+      "locator": "event[seq=2]",
+      "field_path": "/events/1/args/city",
+      "baseline": "SZ",
+      "compared": "BJ",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "state-updates",
+      "backend": "sqlite-services",
+      "session_id": "s4",
+      "locator": "session",
+      "field_path": "/state/count",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "state-updates",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s4",
+      "locator": "session",
+      "field_path": "/state/count",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "memory",
+      "backend": "inmemory-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/id",
+      "baseline": "m1",
+      "compared": "45b448ee4f1af21d74c9d83951e27787af6e9373b1a09adb548ee1fc1bac47bc",
+      "allowed_diff": true,
+      "explanation": "memory services generate backend-specific IDs"
+    },
+    {
+      "case": "memory",
+      "backend": "inmemory-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/metadata/kind",
+      "baseline": "preference",
+      "compared": null,
+      "allowed_diff": true,
+      "explanation": "memory services do not persist this metadata field"
+    },
+    {
+      "case": "memory",
+      "backend": "inmemory-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/similarity",
+      "baseline": 0.912,
+      "compared": null,
+      "allowed_diff": true,
+      "explanation": "similarity is query-derived rather than persisted"
+    },
+    {
+      "case": "memory",
+      "backend": "sqlite-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/content",
+      "baseline": "likes tea",
+      "compared": "likes coffee",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "memory",
+      "backend": "sqlite-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/id",
+      "baseline": "m1",
+      "compared": "45b448ee4f1af21d74c9d83951e27787af6e9373b1a09adb548ee1fc1bac47bc",
+      "allowed_diff": true,
+      "explanation": "memory services generate backend-specific IDs"
+    },
+    {
+      "case": "memory",
+      "backend": "sqlite-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/metadata/kind",
+      "baseline": "preference",
+      "compared": null,
+      "allowed_diff": true,
+      "explanation": "memory services do not persist this metadata field"
+    },
+    {
+      "case": "memory",
+      "backend": "sqlite-services",
+      "session_id": "s5",
+      "locator": "memory[id=m1]",
+      "field_path": "/memories/0/similarity",
+      "baseline": 0.912,
+      "compared": null,
+      "allowed_diff": true,
+      "explanation": "similarity is query-derived rather than persisted"
+    },
+    {
+      "case": "memory",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s5",
+      "locator": "memory[id=45b448ee4f1af21d74c9d83951e27787af6e9373b1a09adb548ee1fc1bac47bc]",
+      "field_path": "/memories/0/content",
+      "baseline": "likes tea",
+      "compared": "likes coffee",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "summary-update",
+      "backend": "inmemory-services",
+      "session_id": "s6",
+      "locator": "summary[id=sum1,filter_key=all]",
+      "field_path": "/summaries/0/id",
+      "baseline": "sum1",
+      "compared": "summary:all",
+      "allowed_diff": true,
+      "explanation": "summary IDs are derived from the filter key"
+    },
+    {
+      "case": "summary-update",
+      "backend": "inmemory-services",
+      "session_id": "s6",
+      "locator": "summary[id=sum1,filter_key=all]",
+      "field_path": "/summaries/0/version",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": true,
+      "explanation": "summary boundary versions are assigned by the session service"
+    },
+    {
+      "case": "summary-update",
+      "backend": "sqlite-services",
+      "session_id": "s6",
+      "locator": "summary[id=sum1,filter_key=all]",
+      "field_path": "/summaries/0/id",
+      "baseline": "sum1",
+      "compared": "summary:all",
+      "allowed_diff": true,
+      "explanation": "summary IDs are derived from the filter key"
+    },
+    {
+      "case": "summary-update",
+      "backend": "sqlite-services",
+      "session_id": "s6",
+      "locator": "summary[id=sum1,filter_key=all]",
+      "field_path": "/summaries/0/text",
+      "baseline": "latest summary",
+      "compared": "old summary",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "summary-update",
+      "backend": "sqlite-services",
+      "session_id": "s6",
+      "locator": "summary[id=sum1,filter_key=all]",
+      "field_path": "/summaries/0/version",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": true,
+      "explanation": "summary boundary versions are assigned by the session service"
+    },
+    {
+      "case": "summary-update",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s6",
+      "locator": "summary[id=summary:all,filter_key=all]",
+      "field_path": "/summaries/0/text",
+      "baseline": "latest summary",
+      "compared": "old summary",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "summary-truncation",
+      "backend": "inmemory-services",
+      "session_id": "s7",
+      "locator": "summary[id=sum2,filter_key=conversation]",
+      "field_path": "/summaries/0/id",
+      "baseline": "sum2",
+      "compared": "summary:conversation",
+      "allowed_diff": true,
+      "explanation": "summary IDs are derived from the filter key"
+    },
+    {
+      "case": "summary-truncation",
+      "backend": "sqlite-services",
+      "session_id": "s7",
+      "locator": "summary",
+      "field_path": "/summaries",
+      "baseline": [
+        {
+          "boundary": {
+            "filter_key": "conversation",
+            "last_event_seq": 11,
+            "version": 1
+          },
+          "filter_key": "conversation",
+          "id": "sum2",
+          "session_id": "s7",
+          "text": "events 1-9",
+          "version": 1
+        }
+      ],
+      "compared": null,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "summary-truncation",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s7",
+      "locator": "summary",
+      "field_path": "/summaries",
+      "baseline": [
+        {
+          "boundary": {
+            "filter_key": "conversation",
+            "last_event_seq": 11,
+            "version": 1
+          },
+          "filter_key": "conversation",
+          "id": "summary:conversation",
+          "session_id": "s7",
+          "text": "events 1-9",
+          "version": 1
+        }
+      ],
+      "compared": null,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "track-events",
+      "backend": "inmemory-services",
+      "session_id": "s8",
+      "locator": "track",
+      "field_path": "/state/tracks",
+      "baseline": null,
+      "compared": [
+        "tool/weather"
+      ],
+      "allowed_diff": true,
+      "explanation": "track service maintains its track index in session state"
+    },
+    {
+      "case": "track-events",
+      "backend": "sqlite-services",
+      "session_id": "s8",
+      "locator": "track",
+      "field_path": "/state/tracks",
+      "baseline": null,
+      "compared": [
+        "tool/weather"
+      ],
+      "allowed_diff": true,
+      "explanation": "track service maintains its track index in session state"
+    },
+    {
+      "case": "track-events",
+      "backend": "sqlite-services",
+      "session_id": "s8",
+      "locator": "track[name=tool/weather]",
+      "field_path": "/tracks/0/error",
+      "baseline": null,
+      "compared": "timeout",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "track-events",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s8",
+      "locator": "track[name=tool/weather]",
+      "field_path": "/tracks/0/error",
+      "baseline": null,
+      "compared": "timeout",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/author",
+      "baseline": "agent-a",
+      "compared": "agent-b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/branch",
+      "baseline": "tool-a",
+      "compared": "tool-b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/content",
+      "baseline": "a",
+      "compared": "b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/author",
+      "baseline": "agent-b",
+      "compared": "agent-a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/branch",
+      "baseline": "tool-b",
+      "compared": "tool-a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/content",
+      "baseline": "b",
+      "compared": "a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/seq",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/author",
+      "baseline": "agent-a",
+      "compared": "agent-b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/branch",
+      "baseline": "tool-a",
+      "compared": "tool-b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/content",
+      "baseline": "a",
+      "compared": "b",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/author",
+      "baseline": "agent-b",
+      "compared": "agent-a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/branch",
+      "baseline": "tool-b",
+      "compared": "tool-a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/content",
+      "baseline": "b",
+      "compared": "a",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "concurrent-order",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s9",
+      "locator": "event[seq=2]",
+      "field_path": "/events/2/seq",
+      "baseline": 2,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services",
+      "session_id": "s10",
+      "locator": "memory[id=m10]",
+      "field_path": "/memories/0/id",
+      "baseline": "m10",
+      "compared": "4d77bdba8dd7374c193330ac23d70ba818921dee589ec6fda0e59dbc9fab8c11",
+      "allowed_diff": true,
+      "explanation": "memory services generate backend-specific IDs"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services",
+      "session_id": "s10",
+      "locator": "memory[id=m10]",
+      "field_path": "/memories/0/scope",
+      "baseline": "session",
+      "compared": "user",
+      "allowed_diff": true,
+      "explanation": "memory services persist user-scoped memories"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/author",
+      "baseline": null,
+      "compared": "user",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/content",
+      "baseline": null,
+      "compared": "once",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/id",
+      "baseline": null,
+      "compared": "stable",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/role",
+      "baseline": null,
+      "compared": "user",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/seq",
+      "baseline": null,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "memory[id=m10]",
+      "field_path": "/memories/0/id",
+      "baseline": "m10",
+      "compared": "4d77bdba8dd7374c193330ac23d70ba818921dee589ec6fda0e59dbc9fab8c11",
+      "allowed_diff": true,
+      "explanation": "memory services generate backend-specific IDs"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "sqlite-services",
+      "session_id": "s10",
+      "locator": "memory[id=m10]",
+      "field_path": "/memories/0/scope",
+      "baseline": "session",
+      "compared": "user",
+      "allowed_diff": true,
+      "explanation": "memory services persist user-scoped memories"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/author",
+      "baseline": null,
+      "compared": "user",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/content",
+      "baseline": null,
+      "compared": "once",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/id",
+      "baseline": null,
+      "compared": "stable",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/role",
+      "baseline": null,
+      "compared": "user",
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    },
+    {
+      "case": "retry-recovery",
+      "backend": "inmemory-services-vs-sqlite-services",
+      "session_id": "s10",
+      "locator": "event[seq=1]",
+      "field_path": "/events/1/seq",
+      "baseline": null,
+      "compared": 1,
+      "allowed_diff": false,
+      "explanation": "normalized values differ"
+    }
+  ],
+  "backends": [
+    "inmemory-services",
+    "sqlite-services"
+  ]
+}
