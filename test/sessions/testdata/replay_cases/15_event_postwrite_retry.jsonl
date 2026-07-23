@@ -1,0 +1,6 @@
+{"action":"metadata","version":1,"id":"15_event_postwrite_retry","description":"ambiguous post-write event failure is recovered by read-before-retry without duplicate IDs"}
+{"action":"create_session","session_id":"session-15"}
+{"action":"append_event","session_id":"session-15","failure":{"fail_after":true,"retry":true},"event":{"id":"event-01","role":"user","content":"这条消息只能保存一次","timestamp":"2026-01-15T10:00:00Z"}}
+{"action":"append_event","session_id":"session-15","event":{"id":"event-02","role":"assistant","content":"已确认唯一写入","timestamp":"2026-01-15T10:00:01Z"}}
+{"action":"assert_session","session_id":"session-15","expected":{"event_ids":["event-01","event-02"],"unique_event_ids":true,"summary_count":0}}
+{"action":"checkpoint","checkpoint":"event-retry-recovered"}

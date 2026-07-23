@@ -1,0 +1,8 @@
+{"action":"metadata","version":1,"id":"17_summary_filter_key","description":"summary filter-key scope, metadata, and session ownership"}
+{"action":"create_session","session_id":"session-filter-summary"}
+{"action":"append_event","session_id":"session-filter-summary","event":{"id":"event-filter-01","role":"user","content":"run the weather tool","filter_key":"agent/tool","timestamp":"2026-01-01T00:00:01Z"}}
+{"action":"append_event","session_id":"session-filter-summary","event":{"id":"event-filter-02","role":"assistant","content":"weather tool started","filter_key":"agent/tool","timestamp":"2026-01-01T00:00:02Z"}}
+{"action":"append_event","session_id":"session-filter-summary","event":{"id":"event-other-01","role":"user","content":"unrelated sibling message","filter_key":"agent/other","timestamp":"2026-01-01T00:00:03Z"}}
+{"action":"append_event","session_id":"session-filter-summary","event":{"id":"event-filter-03","role":"assistant","content":"weather tool completed","filter_key":"agent/tool","timestamp":"2026-01-01T00:00:04Z"}}
+{"action":"create_summary","session_id":"session-filter-summary","summary":{"filter_key":"agent/tool","force":true}}
+{"action":"assert_session","session_id":"session-filter-summary","expected":{"event_ids":["event-filter-01","event-filter-02","event-other-01","event-filter-03"],"unique_event_ids":true,"summary_count":1,"summary":{"filter_key":"agent/tool","version":1,"revision":1,"updated_at_non_zero":true,"last_event_id":"event-filter-03","contains":["run the weather tool","weather tool completed"],"excludes":["unrelated sibling message"]}}}

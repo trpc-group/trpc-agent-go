@@ -1,0 +1,10 @@
+{"action":"metadata","version":1,"id":"16_state_summary_failure","description":"state-delta and summary writes recover from before/after failures without dirty state or stale summary"}
+{"action":"create_session","session_id":"session-16","state":{"attempt":0,"recovery_status":"new"}}
+{"action":"append_event","session_id":"session-16","failure":{"fail_before":true,"retry":true},"event":{"id":"event-01","role":"user","content":"开始恢复任务","timestamp":"2026-01-16T10:00:00Z","state_delta":{"attempt":1,"recovery_status":"processing"}}}
+{"action":"append_event","session_id":"session-16","event":{"id":"event-02","role":"assistant","content":"第一次写入已完成","timestamp":"2026-01-16T10:00:01Z"}}
+{"action":"create_summary","session_id":"session-16","failure":{"fail_after":true,"retry":true},"summary":{}}
+{"action":"append_event","session_id":"session-16","event":{"id":"event-03","role":"user","content":"继续执行恢复检查","timestamp":"2026-01-16T10:00:02Z","state_delta":{"attempt":2,"recovery_status":"retrying"}}}
+{"action":"append_event","session_id":"session-16","event":{"id":"event-04","role":"assistant","content":"恢复完成","timestamp":"2026-01-16T10:00:03Z","state_delta":{"recovery_status":"complete"}}}
+{"action":"create_summary","session_id":"session-16","failure":{"fail_before":true,"retry":true},"summary":{}}
+{"action":"assert_session","session_id":"session-16","expected":{"event_ids":["event-01","event-02","event-03","event-04"],"unique_event_ids":true,"state":{"attempt":2,"recovery_status":"complete"},"summary_count":1,"summary":{"version":1,"revision":2,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-04","contains":["恢复完成"],"tail_event_ids":[]}}}
+{"action":"checkpoint","checkpoint":"state-summary-recovered"}

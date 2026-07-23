@@ -1,0 +1,7 @@
+{"action":"metadata","version":1,"id":"12_summary_wrong_session","description":"two sessions used for summary ownership mutation detection"}
+{"action":"create_session","session_id":"session-12-a"}
+{"action":"append_event","session_id":"session-12-a","event":{"id":"event-a-01","role":"user","content":"会话 A","timestamp":"2026-01-12T10:00:00Z"}}
+{"action":"create_summary","session_id":"session-12-a","summary":{}}
+{"action":"create_session","session_id":"session-12-b"}
+{"action":"append_event","session_id":"session-12-b","event":{"id":"event-b-01","role":"user","content":"会话 B","timestamp":"2026-01-12T10:01:00Z"}}
+{"action":"create_summary","session_id":"session-12-b","summary":{}}

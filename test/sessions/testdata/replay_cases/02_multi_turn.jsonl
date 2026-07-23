@@ -1,0 +1,6 @@
+{"action":"metadata","version":1,"id":"02_multi_turn","description":"ordered multi-turn conversation"}
+{"action":"create_session","session_id":"session-02"}
+{"action":"append_event","session_id":"session-02","event":{"id":"event-01","role":"user","content":"我喜欢咖啡","timestamp":"2026-01-02T10:00:00Z"}}
+{"action":"append_event","session_id":"session-02","event":{"id":"event-02","role":"assistant","content":"我记住了","timestamp":"2026-01-02T10:00:01Z"}}
+{"action":"append_event","session_id":"session-02","event":{"id":"event-03","role":"user","content":"我喜欢什么？","timestamp":"2026-01-02T10:00:02Z"}}
+{"action":"append_event","session_id":"session-02","event":{"id":"event-04","role":"assistant","content":"你喜欢咖啡","timestamp":"2026-01-02T10:00:03Z"}}

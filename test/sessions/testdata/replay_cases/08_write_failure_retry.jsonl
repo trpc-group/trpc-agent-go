@@ -1,0 +1,4 @@
+{"action":"metadata","version":1,"id":"08_write_failure_retry","description":"failure before write followed by retry"}
+{"action":"create_session","session_id":"session-08"}
+{"action":"append_event","session_id":"session-08","failure":{"fail_before":true,"retry":true},"event":{"id":"event-01","role":"user","content":"重试写入","timestamp":"2026-01-08T10:00:00Z"}}
+{"action":"append_event","session_id":"session-08","event":{"id":"event-02","role":"assistant","content":"写入成功","timestamp":"2026-01-08T10:00:01Z"}}

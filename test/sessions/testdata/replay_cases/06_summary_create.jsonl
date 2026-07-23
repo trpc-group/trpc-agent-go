@@ -1,0 +1,6 @@
+{"action":"metadata","version":1,"id":"06_summary_create","description":"first full-session summary"}
+{"action":"create_session","session_id":"session-06"}
+{"action":"append_event","session_id":"session-06","event":{"id":"event-01","role":"user","content":"总结这段对话","timestamp":"2026-01-06T10:00:00Z"}}
+{"action":"append_event","session_id":"session-06","event":{"id":"event-02","role":"assistant","content":"好的","timestamp":"2026-01-06T10:00:01Z"}}
+{"action":"create_summary","session_id":"session-06","summary":{}}
+{"action":"assert_session","session_id":"session-06","expected":{"summary_count":1,"summary":{"version":1,"revision":1,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-02","tail_event_ids":[]}}}

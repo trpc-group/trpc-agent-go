@@ -1,0 +1,11 @@
+{"action":"metadata","version":1,"id":"14_summary_context_rebuild","description":"summary boundary plus later event tail can reconstruct conversation context"}
+{"action":"create_session","session_id":"session-14"}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-01","role":"user","content":"我要查询订单","timestamp":"2026-01-14T10:00:00Z"}}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-02","role":"assistant","content":"请提供订单号","timestamp":"2026-01-14T10:00:01Z"}}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-03","role":"user","content":"订单号是 A100","timestamp":"2026-01-14T10:00:02Z"}}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-04","role":"assistant","content":"已记录订单号 A100","timestamp":"2026-01-14T10:00:03Z"}}
+{"action":"create_summary","session_id":"session-14","summary":{}}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-05","role":"user","content":"请继续查询物流状态","timestamp":"2026-01-14T10:00:04Z"}}
+{"action":"append_event","session_id":"session-14","event":{"id":"event-06","role":"assistant","content":"物流状态是运输中","timestamp":"2026-01-14T10:00:05Z"}}
+{"action":"assert_session","session_id":"session-14","expected":{"event_ids":["event-01","event-02","event-03","event-04","event-05","event-06"],"unique_event_ids":true,"summary_count":1,"summary":{"version":1,"revision":1,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-04","contains":["订单号是 A100","已记录订单号 A100"],"tail_event_ids":["event-05","event-06"]},"context":{"messages":[{"role":"system","contains":["订单号是 A100","已记录订单号 A100"]},{"role":"user","content":"请继续查询物流状态"},{"role":"assistant","content":"物流状态是运输中"}]}}}
+{"action":"checkpoint","checkpoint":"summary-plus-tail"}

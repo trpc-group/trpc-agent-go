@@ -1,0 +1,5 @@
+{"action":"metadata","version":1,"id":"01_single_turn","description":"single user and assistant turn"}
+{"action":"create_session","session_id":"session-01","state":{"locale":"zh-CN"}}
+{"action":"append_event","session_id":"session-01","event":{"id":"event-01-user","role":"user","content":"你好","timestamp":"2026-01-01T10:00:00Z"}}
+{"action":"append_event","session_id":"session-01","event":{"id":"event-02-assistant","role":"assistant","content":"你好，有什么可以帮助你？","timestamp":"2026-01-01T10:00:01Z"}}
+{"action":"checkpoint","checkpoint":"final-turn"}

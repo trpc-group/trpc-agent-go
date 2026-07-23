@@ -1,0 +1,7 @@
+{"action":"metadata","version":1,"id":"05_memory_crud","description":"memory add and identity-rotating update"}
+{"action":"create_session","session_id":"session-05"}
+{"action":"add_memory","memory":{"ref":"preference","content":"用户喜欢咖啡","topics":["preference"],"kind":"fact"}}
+{"action":"update_memory","memory":{"ref":"preference","content":"用户喜欢无糖咖啡","topics":["coffee","preference"],"kind":"fact"}}
+{"action":"add_memory","memory":{"ref":"temporary","content":"需要删除的临时记忆","topics":["temporary"],"kind":"fact"}}
+{"action":"delete_memory","memory":{"ref":"temporary"}}
+{"action":"checkpoint","checkpoint":"memory-updated"}
