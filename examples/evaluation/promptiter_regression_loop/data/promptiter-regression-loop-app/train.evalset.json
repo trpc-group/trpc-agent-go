@@ -1,0 +1,135 @@
+{
+  "evalSetId": "train",
+  "name": "train",
+  "evalCases": [
+    {
+      "evalId": "train_tool_argument",
+      "userInput": "Check order A100 status.",
+      "expectedResponse": "Order A100 is shipped.",
+      "expectedTools": [
+        {
+          "name": "lookup_order",
+          "arguments": { "order_id": "A100" },
+          "result": { "status": "shipped" }
+        }
+      ],
+      "expectedFailureCategory": "tool_argument_error",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.25,
+          "passed": false,
+          "finalResponse": "I cannot find the order.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": { "order_id": "100" },
+              "result": { "status": "not_found" }
+            }
+          ],
+          "failureReasons": ["tool argument query is wrong for order id"]
+        },
+        "candidate_success": {
+          "score": 0.95,
+          "passed": true,
+          "finalResponse": "Order A100 is shipped.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": { "order_id": "A100" },
+              "result": { "status": "shipped" }
+            }
+          ]
+        },
+        "candidate_ineffective": {
+          "score": 0.3,
+          "passed": false,
+          "finalResponse": "I cannot find the order.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": { "order_id": "100" },
+              "result": { "status": "not_found" }
+            }
+          ],
+          "failureReasons": ["tool argument query is wrong for order id"]
+        },
+        "candidate_overfit": {
+          "score": 1,
+          "passed": true,
+          "finalResponse": "Order A100 is shipped.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_order",
+              "arguments": { "order_id": "A100" },
+              "result": { "status": "shipped" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "evalId": "train_format",
+      "userInput": "Return a JSON receipt for refund R55.",
+      "expectedResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}",
+      "expectedFailureCategory": "format_error",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.4,
+          "passed": false,
+          "finalResponse": "Refund R55 is approved.",
+          "structuredOutputStatus": "format error: expected JSON object",
+          "failureReasons": ["structured output json schema violation"]
+        },
+        "candidate_success": {
+          "score": 0.9,
+          "passed": true,
+          "finalResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}"
+        },
+        "candidate_ineffective": {
+          "score": 0.45,
+          "passed": false,
+          "finalResponse": "Refund R55 is approved.",
+          "structuredOutputStatus": "format error: expected JSON object",
+          "failureReasons": ["structured output json schema violation"]
+        },
+        "candidate_overfit": {
+          "score": 0.95,
+          "passed": true,
+          "finalResponse": "{\"refund_id\":\"R55\",\"status\":\"approved\"}"
+        }
+      }
+    },
+    {
+      "evalId": "train_knowledge_recall",
+      "userInput": "What is the SLA for premium support?",
+      "expectedResponse": "Premium support SLA is 2 hours.",
+      "expectedFailureCategory": "knowledge_recall_insufficient",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.55,
+          "passed": false,
+          "finalResponse": "Premium support is usually same day.",
+          "rubricReason": "knowledge recall missing context for premium SLA",
+          "failureReasons": ["knowledge recall missing context"]
+        },
+        "candidate_success": {
+          "score": 0.85,
+          "passed": true,
+          "finalResponse": "Premium support SLA is 2 hours."
+        },
+        "candidate_ineffective": {
+          "score": 0.55,
+          "passed": false,
+          "finalResponse": "Premium support is usually same day.",
+          "rubricReason": "knowledge recall missing context for premium SLA",
+          "failureReasons": ["knowledge recall missing context"]
+        },
+        "candidate_overfit": {
+          "score": 0.98,
+          "passed": true,
+          "finalResponse": "Premium support SLA is 2 hours."
+        }
+      }
+    }
+  ]
+}

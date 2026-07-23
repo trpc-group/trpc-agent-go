@@ -1,0 +1,11 @@
+[
+  {
+    "metricName": "deterministic_quality",
+    "threshold": 0.75,
+    "criterion": {
+      "fake": {
+        "description": "Deterministic score supplied by fake runner for regression-loop auditing."
+      }
+    }
+  }
+]

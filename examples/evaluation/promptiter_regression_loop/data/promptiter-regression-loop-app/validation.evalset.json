@@ -1,0 +1,126 @@
+{
+  "evalSetId": "validation",
+  "name": "validation",
+  "evalCases": [
+    {
+      "evalId": "val_tool_selection",
+      "userInput": "Tell me the shipment ETA for tracking T900.",
+      "expectedResponse": "Tracking T900 arrives tomorrow.",
+      "expectedTools": [
+        {
+          "name": "lookup_tracking",
+          "arguments": { "tracking_id": "T900" },
+          "result": { "eta": "tomorrow" }
+        }
+      ],
+      "expectedFailureCategory": "tool_selection_error",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.5,
+          "passed": false,
+          "finalResponse": "I do not have live tracking access.",
+          "toolTrajectory": [],
+          "failureReasons": ["missing tool call caused tool selection failure"]
+        },
+        "candidate_success": {
+          "score": 0.92,
+          "passed": true,
+          "finalResponse": "Tracking T900 arrives tomorrow.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_tracking",
+              "arguments": { "tracking_id": "T900" },
+              "result": { "eta": "tomorrow" }
+            }
+          ]
+        },
+        "candidate_ineffective": {
+          "score": 0.52,
+          "passed": false,
+          "finalResponse": "I do not have live tracking access.",
+          "toolTrajectory": [],
+          "failureReasons": ["missing tool call caused tool selection failure"]
+        },
+        "candidate_overfit": {
+          "score": 0.9,
+          "passed": true,
+          "finalResponse": "Tracking T900 arrives tomorrow.",
+          "toolTrajectory": [
+            {
+              "name": "lookup_tracking",
+              "arguments": { "tracking_id": "T900" },
+              "result": { "eta": "tomorrow" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "evalId": "val_route_skill",
+      "userInput": "Route this password reset request to account support.",
+      "expectedResponse": "Routed to account support.",
+      "expectedFailureCategory": "routing_error",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.65,
+          "passed": false,
+          "finalResponse": "Routed to billing support.",
+          "traceSummary": "route selected wrong agent: billing_support",
+          "failureReasons": ["route selected wrong agent"]
+        },
+        "candidate_success": {
+          "score": 0.82,
+          "passed": true,
+          "finalResponse": "Routed to account support.",
+          "traceSummary": "route selected account_support"
+        },
+        "candidate_ineffective": {
+          "score": 0.65,
+          "passed": false,
+          "finalResponse": "Routed to billing support.",
+          "traceSummary": "route selected wrong agent: billing_support",
+          "failureReasons": ["route selected wrong agent"]
+        },
+        "candidate_overfit": {
+          "score": 0.7,
+          "passed": false,
+          "finalResponse": "Routed to account support after manual review.",
+          "traceSummary": "route selected wrong node for review flow",
+          "failureReasons": ["route selected wrong node"]
+        }
+      }
+    },
+    {
+      "evalId": "val_json_receipt",
+      "critical": true,
+      "userInput": "Return JSON receipt for payment P77.",
+      "expectedResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}",
+      "expectedFailureCategory": "format_error",
+      "fakeOutcomes": {
+        "baseline": {
+          "score": 0.8,
+          "passed": true,
+          "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}"
+        },
+        "candidate_success": {
+          "score": 0.85,
+          "passed": true,
+          "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}"
+        },
+        "candidate_ineffective": {
+          "score": 0.8,
+          "passed": true,
+          "finalResponse": "{\"payment_id\":\"P77\",\"status\":\"captured\"}"
+        },
+        "candidate_overfit": {
+          "score": 0,
+          "passed": false,
+          "hardFail": true,
+          "finalResponse": "Payment P77 captured.",
+          "structuredOutputStatus": "format error: expected JSON object",
+          "failureReasons": ["structured output json schema violation"]
+        }
+      }
+    }
+  ]
+}
