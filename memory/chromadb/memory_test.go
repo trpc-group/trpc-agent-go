@@ -10,7 +10,9 @@ package chromadb
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -40,7 +42,7 @@ func newTestChromaService(
 	return service, fake
 }
 
-func TestService_AddMemoryIsIdempotentAndReplacesTopics(t *testing.T) {
+func TestServiceAddMemoryIsIdempotentAndReplacesTopics(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -70,7 +72,7 @@ func TestService_AddMemoryIsIdempotentAndReplacesTopics(t *testing.T) {
 	assert.Equal(t, eventTime, *entries[0].Memory.EventTime)
 }
 
-func TestService_AddMemoryEnforcesCapacity(t *testing.T) {
+func TestServiceAddMemoryEnforcesCapacity(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -89,7 +91,7 @@ func TestService_AddMemoryEnforcesCapacity(t *testing.T) {
 	assert.Len(t, entries, 1)
 }
 
-func TestService_AddMemoryCapacityIsSerialized(t *testing.T) {
+func TestServiceAddMemoryCapacityIsSerialized(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -121,7 +123,7 @@ func TestService_AddMemoryCapacityIsSerialized(t *testing.T) {
 	assert.Equal(t, 1, failed)
 }
 
-func TestService_AddMemoryRejectsForeignIDCollision(t *testing.T) {
+func TestServiceAddMemoryRejectsForeignIDCollision(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	now := time.Now().UTC()
 	target := newAddRecord(
@@ -144,7 +146,27 @@ func TestService_AddMemoryRejectsForeignIDCollision(t *testing.T) {
 	assert.Contains(t, err.Error(), "different app or user")
 }
 
-func TestService_UpdateMemoryRotatesID(t *testing.T) {
+func TestServiceAddMemoryReturnsEmbeddingFailure(t *testing.T) {
+	embeddingErr := errors.New("embedding unavailable")
+	service, fake := newTestChromaService(t, &testEmbedder{
+		dimension: 3,
+		err:       embeddingErr,
+	})
+
+	err := service.AddMemory(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"fact",
+		nil,
+	)
+
+	require.ErrorIs(t, err, embeddingErr)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	assert.Empty(t, fake.records)
+}
+
+func TestServiceUpdateMemoryRotatesID(t *testing.T) {
 	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "app", UserID: "user"}
@@ -173,7 +195,33 @@ func TestService_UpdateMemoryRotatesID(t *testing.T) {
 	assert.Equal(t, []string{"new"}, entries[0].Memory.Topics)
 }
 
-func TestService_UpdateMemoryMissingPreservesErrorContract(t *testing.T) {
+func TestServiceUpdateMemoryReturnsEmbeddingFailureBeforeWrite(t *testing.T) {
+	embedder := &testEmbedder{dimension: 3}
+	service, fake := newTestChromaService(t, embedder)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "old content", nil))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	oldID := entries[0].ID
+	embeddingErr := errors.New("embedding unavailable")
+	embedder.err = embeddingErr
+
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: "app", UserID: "user", MemoryID: oldID},
+		"new content",
+		nil,
+	)
+
+	require.ErrorIs(t, err, embeddingErr)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.Len(t, fake.records, 1)
+	assert.Contains(t, fake.records, oldID)
+}
+
+func TestServiceUpdateMemoryMissingPreservesErrorContract(t *testing.T) {
 	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
 
 	err := service.UpdateMemory(
@@ -186,7 +234,59 @@ func TestService_UpdateMemoryMissingPreservesErrorContract(t *testing.T) {
 	require.EqualError(t, err, "memory with id missing not found")
 }
 
-func TestService_UpdateMemoryRollsForwardAfterPartialFailure(t *testing.T) {
+func TestServiceUpdateMemoryPreservesOldRecordWhenTargetAddFails(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "old content", nil))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	oldID := entries[0].ID
+	fake.status["add"] = http.StatusBadRequest
+
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: "app", UserID: "user", MemoryID: oldID},
+		"new content",
+		nil,
+	)
+
+	require.Error(t, err)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	require.Len(t, fake.records, 1)
+	assert.Contains(t, fake.records, oldID)
+}
+
+func TestServiceUpdateMemoryRecoversLostTargetAddResponse(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "old content", nil))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	oldID := entries[0].ID
+	fake.addAfterWrite = http.StatusServiceUnavailable
+	fake.addFailuresLeft = 1
+	result := &memory.UpdateResult{}
+
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: "app", UserID: "user", MemoryID: oldID},
+		"new content",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+
+	require.NoError(t, err)
+	assert.NotEqual(t, oldID, result.MemoryID)
+	entries, err = service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, result.MemoryID, entries[0].ID)
+}
+
+func TestServiceUpdateMemoryRollsForwardAfterPartialFailure(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "app", UserID: "user"}
@@ -217,7 +317,25 @@ func TestService_UpdateMemoryRollsForwardAfterPartialFailure(t *testing.T) {
 	assert.Equal(t, result.MemoryID, entries[0].ID)
 }
 
-func TestService_SoftDeleteCanReviveRecord(t *testing.T) {
+func TestServiceDeleteMemoryRejectsInvalidDeleteCount(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "fact", nil))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	invalidCount := 2
+	fake.deleteCount = &invalidCount
+
+	err = service.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: entries[0].ID,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "2 deletions")
+}
+
+func TestServiceSoftDeleteCanReviveRecord(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -243,7 +361,7 @@ func TestService_SoftDeleteCanReviveRecord(t *testing.T) {
 	assert.Equal(t, []string{"revived"}, entries[0].Memory.Topics)
 }
 
-func TestService_SoftDeleteReviveRespectsCapacity(t *testing.T) {
+func TestServiceSoftDeleteReviveRespectsCapacity(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -266,7 +384,36 @@ func TestService_SoftDeleteReviveRespectsCapacity(t *testing.T) {
 	assert.Contains(t, err.Error(), "memory limit exceeded")
 }
 
-func TestService_ClearMemoriesProcessesAllBatches(t *testing.T) {
+func TestServiceUpdateMemoryDoesNotReviveSoftDeletedRecord(t *testing.T) {
+	service, _ := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithSoftDelete(true),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "old content", nil))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	oldID := entries[0].ID
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: oldID,
+	}))
+
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: oldID},
+		"new content",
+		nil,
+	)
+
+	require.EqualError(t, err, "memory with id "+oldID+" not found")
+	entries, err = service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	assert.Empty(t, entries)
+}
+
+func TestServiceClearMemoriesProcessesAllBatches(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	scope := recordScope{appName: "app", userID: "user"}
 	now := time.Now().UTC()
@@ -285,7 +432,7 @@ func TestService_ClearMemoriesProcessesAllBatches(t *testing.T) {
 	assert.Empty(t, fake.records)
 }
 
-func TestService_ClearMemoriesSoftDeletesAllBatches(t *testing.T) {
+func TestServiceClearMemoriesSoftDeletesAllBatches(t *testing.T) {
 	service, fake := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -315,7 +462,57 @@ func TestService_ClearMemoriesSoftDeletesAllBatches(t *testing.T) {
 	assert.Len(t, fake.records, defaultReadPageSize+5)
 }
 
-func TestService_ReadMemoriesSortsAcrossPages(t *testing.T) {
+func TestServiceClearMemoriesUsesFixedCutoff(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	old := newAddRecord(scope, "old memory", nil, nil, time.Now().UTC().Add(-time.Minute))
+	putFakeRecord(fake, old)
+	var once sync.Once
+	fake.requestHook = func(operation string) {
+		if operation != "get" {
+			return
+		}
+		once.Do(func() {
+			newRecord := newAddRecord(
+				scope, "new memory", nil, nil, time.Now().UTC().Add(time.Minute),
+			)
+			putFakeRecord(fake, newRecord)
+		})
+	}
+
+	err := service.ClearMemories(
+		context.Background(),
+		memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+	)
+
+	require.NoError(t, err)
+	entries, err := service.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+		0,
+	)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, "new memory", entries[0].Memory.Memory)
+}
+
+func TestServiceClearMemoriesRejectsDeleteCountMismatch(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	putFakeRecord(fake, newAddRecord(scope, "memory", nil, nil, time.Now().UTC()))
+	zero := 0
+	fake.deleteCount = &zero
+
+	err := service.ClearMemories(
+		context.Background(),
+		memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "made no progress")
+}
+
+func TestServiceReadMemoriesSortsAcrossPages(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	scope := recordScope{appName: "app", userID: "user"}
 	start := time.Now().UTC().Add(-time.Hour)
@@ -343,6 +540,46 @@ func TestService_ReadMemoriesSortsAcrossPages(t *testing.T) {
 	require.Len(t, entries, 2)
 	assert.Equal(t, want[0], entries[0].ID)
 	assert.Equal(t, want[1], entries[1].ID)
+}
+
+func TestDecodeGetResponseRejectsMalformedColumns(t *testing.T) {
+	document := "memory"
+	documents := []*string{&document}
+	tests := []struct {
+		name     string
+		response *getRecordsResponse
+		match    string
+	}{
+		{name: "nil", response: nil, match: "nil response"},
+		{
+			name: "missing columns",
+			response: &getRecordsResponse{
+				IDs: responseField[[]string]{
+					value: []string{"id"}, present: true,
+				},
+			},
+			match: "did not include",
+		},
+		{
+			name: "column mismatch",
+			response: &getRecordsResponse{
+				IDs: responseField[[]string]{
+					value: []string{"id"}, present: true,
+				},
+				Documents: &documents,
+				Metadatas: &[]map[string]any{},
+			},
+			match: "column length mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := decodeGetResponse(tt.response)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.match)
+		})
+	}
 }
 
 func putFakeRecord(fake *fakeChroma, record *storedRecord) {

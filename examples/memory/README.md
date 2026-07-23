@@ -354,6 +354,11 @@ export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory chromadb
 ```
 
+The ChromaDB backend is a REST client-server adapter: run Chroma separately or
+connect to a remote/Cloud endpoint. Remote credentials require HTTPS. Embeddings
+come from the configured tRPC-Agent-Go embedder; after changing its model, use a
+new collection or re-embed every existing record.
+
 ### Custom Models
 
 ```bash

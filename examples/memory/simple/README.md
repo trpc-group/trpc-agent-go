@@ -229,6 +229,10 @@ export CHROMA_EMBEDDER_MODEL=text-embedding-3-small
 go run main.go -memory chromadb
 ```
 
+ChromaDB runs as a separate server. `CHROMA_BASE_URL` may target localhost,
+a remote deployment, or Chroma Cloud; remote credentials require HTTPS.
+Changing the embedding model requires a new collection or a full re-embedding.
+
 ## Chat Interface
 
 The interface is simple and intuitive:

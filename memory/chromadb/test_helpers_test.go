@@ -14,22 +14,13 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sort"
 	"strings"
 	"sync"
-	"testing"
-	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"trpc.group/trpc-go/trpc-agent-go/event"
-	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	"trpc.group/trpc-go/trpc-agent-go/model"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type blockingExtractor struct {
@@ -60,427 +51,40 @@ func (e *blockingExtractor) SetModel(_ model.Model) {}
 
 func (e *blockingExtractor) Metadata() map[string]any { return nil }
 
-func TestValidateCollectionMetric(t *testing.T) {
-	cosine := &vectorIndexConfig{Space: "cosine"}
-	l2 := &vectorIndexConfig{Space: "l2"}
-	tests := []struct {
-		name          string
-		configuration collectionConfiguration
-		wantError     string
-	}{
-		{name: "HNSW cosine", configuration: collectionConfiguration{HNSW: cosine}},
-		{name: "SPANN cosine", configuration: collectionConfiguration{SPANN: cosine}},
-		{
-			name:          "multiple indexes",
-			configuration: collectionConfiguration{HNSW: cosine, SPANN: cosine},
-			wantError:     "multiple active",
-		},
-		{name: "no index", configuration: collectionConfiguration{}, wantError: "no active"},
-		{name: "L2", configuration: collectionConfiguration{HNSW: l2}, wantError: "must be cosine"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateCollectionMetric(tt.configuration)
-			if tt.wantError == "" {
-				assert.NoError(t, err)
-				return
-			}
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantError)
-		})
-	}
+type idleTrackingTransport struct {
+	base       http.RoundTripper
+	mu         sync.Mutex
+	closeCalls int
 }
 
-func TestNewService_ValidatesCollectionDimensionAndMarker(t *testing.T) {
-	tests := []struct {
-		name      string
-		configure func(*fakeChroma)
-		wantError string
-	}{
-		{
-			name: "dimension mismatch",
-			configure: func(fake *fakeChroma) {
-				dimension := 4
-				fake.dimension = &dimension
-			},
-			wantError: "dimension mismatch",
-		},
-		{
-			name: "backend marker conflict",
-			configure: func(fake *fakeChroma) {
-				fake.metadata["trpc_backend"] = "another-backend"
-			},
-			wantError: "different backend",
-		},
-		{
-			name: "schema marker conflict",
-			configure: func(fake *fakeChroma) {
-				fake.metadata[metadataSchemaVersionKey] = 2
-			},
-			wantError: "unsupported",
-		},
-		{
-			name:      "unmarked collection is allowed",
-			configure: func(_ *fakeChroma) {},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fake := newFakeChroma()
-			defer fake.close()
-			tt.configure(fake)
-
-			service, err := NewService(
-				WithBaseURL(fake.server.URL),
-				WithEmbedder(&testEmbedder{dimension: 3}),
-			)
-			if tt.wantError == "" {
-				require.NoError(t, err)
-				require.NoError(t, service.Close())
-				return
-			}
-			assert.Nil(t, service)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantError)
-		})
-	}
+func (t *idleTrackingTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return t.base.RoundTrip(request)
 }
 
-func TestNewService_AutoCreatesMarkedCosineCollection(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-	fake.collectionExists = false
-
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	assert.True(t, fake.collectionExists)
-	assert.Equal(t, "cosine", fake.metric)
-	assert.Equal(t, collectionBackend, fake.metadata["trpc_backend"])
-	version, err := int64Value(fake.metadata[metadataSchemaVersionKey])
-	require.NoError(t, err)
-	assert.Equal(t, schemaVersion, version)
+func (t *idleTrackingTransport) CloseIdleConnections() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closeCalls++
 }
 
-func TestNewService_MissingCollectionFailsWhenAutoCreateDisabled(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-	fake.collectionExists = false
-
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-		WithAutoCreateCollection(false),
-	)
-
-	assert.Nil(t, service)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "status 404")
-}
-
-func TestService_CloseWaitsForInflightRequest(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-	)
-	require.NoError(t, err)
-
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	var once sync.Once
-	fake.requestHook = func(operation string) {
-		if operation == "get" {
-			once.Do(func() { close(entered) })
-			<-release
-		}
-	}
-	readDone := make(chan error, 1)
-	go func() {
-		_, readErr := service.ReadMemories(
-			context.Background(),
-			memory.UserKey{AppName: "app", UserID: "user"},
-			0,
-		)
-		readDone <- readErr
-	}()
-	<-entered
-
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- service.Close() }()
-	select {
-	case <-closeDone:
-		t.Fatal("Close returned before the in-flight request completed")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(release)
-	require.NoError(t, <-readDone)
-	require.NoError(t, <-closeDone)
-
-	_, err = service.ReadMemories(
-		context.Background(),
-		memory.UserKey{AppName: "app", UserID: "user"},
-		0,
-	)
-	assert.ErrorIs(t, err, errServiceClosed)
-	assert.NoError(t, service.Close())
-}
-
-func TestService_CloseDrainsWorkerBeforeClosingHTTPClient(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-	extractor := &blockingExtractor{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-		WithExtractor(extractor),
-		WithAsyncMemoryNum(1),
-	)
-	require.NoError(t, err)
-	sess := session.NewSession("app", "user", "session")
-	sess.Events = append(sess.Events, event.Event{
-		Timestamp: time.Now(),
-		Response: &model.Response{Choices: []model.Choice{{
-			Message: model.NewUserMessage("remember this"),
-		}}},
-	})
-	require.NoError(t, service.EnqueueAutoMemoryJob(context.Background(), sess))
-	<-extractor.entered
-
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- service.Close() }()
-	select {
-	case <-closeDone:
-		t.Fatal("Close returned before the worker drained")
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(extractor.release)
-	require.NoError(t, <-closeDone)
-
-	fake.mu.Lock()
-	defer fake.mu.Unlock()
-	assert.Len(t, fake.records, 1)
-}
-
-func TestService_ToolsReturnsCopy(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	first := service.Tools()
-	require.NotEmpty(t, first)
-	first[0] = nil
-	second := service.Tools()
-
-	assert.NotNil(t, second[0])
-}
-
-func TestOptions_Defaults(t *testing.T) {
-	opts := defaultOptions.clone()
-
-	assert.Equal(t, defaultCollectionName, opts.collectionName)
-	assert.True(t, opts.autoCreateCollection)
-	assert.Equal(t, 10, opts.maxResults)
-	assert.InDelta(t, 0.30, opts.similarityThreshold, 0.0001)
-	assert.Equal(t, 1000, opts.memoryLimit)
-	assert.Equal(t, 1000, opts.hybridCandidateLimit)
-	assert.Equal(t, 10*time.Second, opts.timeout)
-}
-
-func TestOptions_HTTPHeadersAreCopied(t *testing.T) {
-	headers := map[string]string{"X-Custom": "before"}
-	opts := defaultOptions.clone()
-	WithHTTPHeaders(headers)(&opts)
-
-	headers["X-Custom"] = "after"
-	headers["X-Added"] = "value"
-
-	assert.Equal(t, "before", opts.headers["X-Custom"])
-	assert.NotContains(t, opts.headers, "X-Added")
-}
-
-func TestNewService_RejectsInvalidOptions(t *testing.T) {
-	embedder := &testEmbedder{dimension: 3}
-	tests := []struct {
-		name    string
-		options []ServiceOpt
-		match   string
-	}{
-		{name: "base URL missing", options: []ServiceOpt{WithEmbedder(embedder)}, match: "base URL"},
-		{name: "embedder missing", options: []ServiceOpt{WithBaseURL("http://localhost")}, match: "embedder"},
-		{
-			name: "invalid scheme",
-			options: []ServiceOpt{
-				WithBaseURL("ftp://localhost"), WithEmbedder(embedder),
-			},
-			match: "scheme",
-		},
-		{
-			name: "authentication conflict",
-			options: []ServiceOpt{
-				WithBaseURL("http://localhost"), WithEmbedder(embedder),
-				WithAPIKey("key"), WithBearerToken("token"),
-			},
-			match: "mutually exclusive",
-		},
-		{
-			name: "custom auth needs scope",
-			options: []ServiceOpt{
-				WithBaseURL("http://localhost"), WithEmbedder(embedder),
-				WithHTTPHeaders(map[string]string{"Authorization": "custom"}),
-			},
-			match: "tenant and database",
-		},
-		{
-			name: "threshold",
-			options: []ServiceOpt{
-				WithBaseURL("http://localhost"), WithEmbedder(embedder),
-				WithSimilarityThreshold(1.01),
-			},
-			match: "similarity threshold",
-		},
-		{
-			name: "threshold NaN",
-			options: []ServiceOpt{
-				WithBaseURL("http://localhost"), WithEmbedder(embedder),
-				WithSimilarityThreshold(math.NaN()),
-			},
-			match: "similarity threshold",
-		},
-		{
-			name: "dimension mismatch",
-			options: []ServiceOpt{
-				WithBaseURL("http://localhost"), WithEmbedder(embedder),
-				WithIndexDimension(4),
-			},
-			match: "embedding dimension mismatch",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			service, err := NewService(tt.options...)
-			assert.Nil(t, service)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.match)
-		})
-	}
-}
-
-func TestNewService_InfersAPIKeyScopeFromIdentity(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithAPIKey("key"),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	assert.Equal(t, "tenant-a", service.collection.tenant)
-	assert.Equal(t, "database-a", service.collection.database)
-}
-
-func TestNewService_CustomAuthUsesExplicitScope(t *testing.T) {
-	fake := newFakeChroma()
-	defer fake.close()
-
-	service, err := NewService(
-		WithBaseURL(fake.server.URL),
-		WithHTTPHeaders(map[string]string{"Authorization": "Custom secret"}),
-		WithTenant("tenant-custom"),
-		WithDatabase("database-custom"),
-		WithEmbedder(&testEmbedder{dimension: 3}),
-	)
-	require.NoError(t, err)
-	defer service.Close()
-
-	assert.Equal(t, "tenant-custom", service.collection.tenant)
-	assert.Equal(t, "database-custom", service.collection.database)
-}
-
-func ExampleNewService() {
-	embedder := openaiembedder.New(
-		openaiembedder.WithModel("text-embedding-3-small"),
-	)
-	service, err := NewService(
-		WithBaseURL("http://localhost:8000"),
-		WithCollectionName("memories"),
-		WithEmbedder(embedder),
-	)
-	if err != nil {
-		return
-	}
-	defer service.Close()
-}
-
-func TestIntegration_ChromaDB159(t *testing.T) {
-	baseURL := os.Getenv("CHROMADB_INTEGRATION_URL")
-	if baseURL == "" {
-		t.Skip("CHROMADB_INTEGRATION_URL is not set")
-	}
-	options := []ServiceOpt{
-		WithBaseURL(baseURL),
-		WithCollectionName("trpc_agent_go_memory_integration"),
-		WithEmbedder(&testEmbedder{
-			dimension: 3,
-			values: map[string][]float64{
-				"integration memory": {1, 0, 0},
-				"integration query":  {1, 0, 0},
-			},
-		}),
-		WithMemoryLimit(0),
-	}
-	if tenant := os.Getenv("CHROMADB_INTEGRATION_TENANT"); tenant != "" {
-		options = append(options, WithTenant(tenant))
-	}
-	if database := os.Getenv("CHROMADB_INTEGRATION_DATABASE"); database != "" {
-		options = append(options, WithDatabase(database))
-	}
-	service, err := NewService(options...)
-	require.NoError(t, err)
-	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "integration", UserID: "chromadb-1.5.9"}
-	require.NoError(t, service.ClearMemories(ctx, userKey))
-	t.Cleanup(func() {
-		_ = service.ClearMemories(context.Background(), userKey)
-		_ = service.Close()
-	})
-
-	require.NoError(t, service.AddMemory(ctx, userKey, "integration memory", []string{"test"}))
-	results, err := service.SearchMemories(ctx, userKey, "integration query")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "integration memory", results[0].Memory.Memory)
-	assert.InDelta(t, 1, results[0].Score, 0.0001)
+func (t *idleTrackingTransport) closes() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.closeCalls
 }
 
 type testEmbedder struct {
 	dimension int
 	values    map[string][]float64
 	err       error
+	mu        sync.Mutex
+	calls     int
 }
 
 func (e *testEmbedder) GetEmbedding(_ context.Context, text string) ([]float64, error) {
+	e.mu.Lock()
+	e.calls++
+	e.mu.Unlock()
 	if e.err != nil {
 		return nil, e.err
 	}
@@ -506,6 +110,12 @@ func (e *testEmbedder) GetDimensions() int {
 	return e.dimension
 }
 
+func (e *testEmbedder) callCount() int {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.calls
+}
+
 type fakeRecord struct {
 	document  *string
 	embedding []float32
@@ -517,20 +127,27 @@ type fakeChroma struct {
 	server           *httptest.Server
 	records          map[string]*fakeRecord
 	collectionExists bool
+	collectionID     string
 	collectionName   string
 	dimension        *int
+	omitDimension    bool
 	metric           string
 	index            string
 	metadata         map[string]any
+	schema           *collectionSchema
 	maxBatch         int
 	requestHook      func(string)
 	status           map[string]int
+	addAfterWrite    int
+	addFailuresLeft  int
+	deleteCount      *int
 }
 
 func newFakeChroma() *fakeChroma {
 	fake := &fakeChroma{
 		records:          make(map[string]*fakeRecord),
 		collectionExists: true,
+		collectionID:     "00000000-0000-0000-0000-000000000001",
 		collectionName:   defaultCollectionName,
 		metric:           "cosine",
 		index:            "hnsw",
@@ -614,15 +231,19 @@ func (f *fakeChroma) writeCollection(writer http.ResponseWriter) {
 	defer f.mu.Unlock()
 	configuration := map[string]any{"hnsw": nil, "spann": nil}
 	configuration[f.index] = map[string]any{"space": f.metric}
-	writeTestJSON(writer, http.StatusOK, map[string]any{
-		"id":                 "collection-id",
+	response := map[string]any{
+		"id":                 f.collectionID,
 		"name":               f.collectionName,
 		"configuration_json": configuration,
 		"metadata":           cloneAnyMap(f.metadata),
-		"dimension":          f.dimension,
 		"tenant":             defaultTenant,
 		"database":           defaultDatabase,
-	})
+		"schema":             f.schema,
+	}
+	if !f.omitDimension {
+		response["dimension"] = f.dimension
+	}
+	writeTestJSON(writer, http.StatusOK, response)
 }
 
 func (f *fakeChroma) handleGetCollection(writer http.ResponseWriter) {
@@ -676,6 +297,13 @@ func (f *fakeChroma) handleAdd(writer http.ResponseWriter, request *http.Request
 			dimension := len(payload.Embeddings[i])
 			f.dimension = &dimension
 		}
+	}
+	if f.addFailuresLeft > 0 {
+		f.addFailuresLeft--
+		writeTestJSON(writer, f.addAfterWrite, map[string]any{
+			"error": "response_lost", "message": "simulated response loss",
+		})
+		return
 	}
 	writeTestJSON(writer, http.StatusCreated, map[string]any{})
 }
@@ -774,7 +402,11 @@ func (f *fakeChroma) handleDelete(writer http.ResponseWriter, request *http.Requ
 	for _, id := range ids {
 		delete(f.records, id)
 	}
-	writeTestJSON(writer, http.StatusOK, map[string]any{"deleted": len(ids)})
+	deleted := len(ids)
+	if f.deleteCount != nil {
+		deleted = *f.deleteCount
+	}
+	writeTestJSON(writer, http.StatusOK, map[string]any{"deleted": deleted})
 }
 
 func (f *fakeChroma) filteredIDs(ids []string, where map[string]any) []string {
@@ -952,7 +584,7 @@ func paginateIDs(ids []string, offset, limit *int) []string {
 		start = *offset
 	}
 	if start >= len(ids) {
-		return nil
+		return []string{}
 	}
 	end := len(ids)
 	if limit != nil && start+*limit < end {
@@ -963,9 +595,11 @@ func paginateIDs(ids []string, offset, limit *int) []string {
 
 func dereferenceStrings(values *[]string) []string {
 	if values == nil {
-		return nil
+		return []string{}
 	}
-	return append([]string(nil), (*values)...)
+	result := make([]string, len(*values))
+	copy(result, *values)
+	return result
 }
 
 func containsString(values []string, target string) bool {

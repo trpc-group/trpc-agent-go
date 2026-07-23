@@ -18,9 +18,10 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
-var queryIncludes = []string{"documents", "metadatas", "distances"}
-
 // SearchMemories searches memories for a user using cosine similarity.
+//
+// Hybrid search applies the configured local keyword candidate cap. Pagination used
+// to build those candidates is best-effort during cross-instance concurrent writes.
 func (svc *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -51,13 +52,14 @@ func (svc *Service) SearchMemories(
 	if err != nil {
 		return nil, err
 	}
-	results = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results, limit)
+	results = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results)
 	if searchOpts.HybridSearch {
 		results = svc.applyHybridSearch(ctx, scope, searchOpts, results, limit)
 	}
 	return finalizeSearchResults(results, searchOpts, limit), nil
 }
 
+// searchDense runs cosine retrieval and applies the configured similarity threshold.
 func (svc *Service) searchDense(
 	ctx context.Context,
 	scope recordScope,
@@ -69,7 +71,7 @@ func (svc *Service) searchDense(
 		Where:           searchWhere(scope, opts),
 		QueryEmbeddings: [][]float32{embedding},
 		NResults:        limit,
-		Include:         append([]string(nil), queryIncludes...),
+		Include:         []string{"documents", "metadatas", "distances"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("search memories: %w", err)
@@ -84,18 +86,19 @@ func (svc *Service) searchDense(
 	)), nil
 }
 
+// applyKindFallback retries without a kind constraint while reusing the query vector.
 func (svc *Service) applyKindFallback(
 	ctx context.Context,
 	scope recordScope,
 	embedding []float32,
 	opts memory.SearchOptions,
 	results []*memory.Entry,
-	limit int,
 ) []*memory.Entry {
 	if opts.Kind == "" || !opts.KindFallback ||
 		len(results) >= imemory.MinKindFallbackResults {
 		return results
 	}
+	limit := resolveSearchLimit(svc.opts.maxResults, opts.MaxResults)
 	fallbackOpts := opts
 	fallbackOpts.Kind = ""
 	fallbackOpts.KindFallback = false
@@ -106,6 +109,7 @@ func (svc *Service) applyKindFallback(
 	return imemory.MergeSearchResults(results, fallback, opts.Kind, limit)
 }
 
+// applyHybridSearch fuses dense and bounded local keyword ranks with shared RRF logic.
 func (svc *Service) applyHybridSearch(
 	ctx context.Context,
 	scope recordScope,
@@ -143,12 +147,14 @@ func (svc *Service) applyHybridSearch(
 	return imemory.MergeHybridResults(dense, keyword, opts.HybridRRFK, limit)
 }
 
+// decodeQueryResponse unwraps Chroma's single-query batch and checks every column.
 func decodeQueryResponse(response *queryRecordsResponse) ([]*memory.Entry, error) {
 	if response == nil {
 		return nil, fmt.Errorf("query records returned a nil response")
 	}
-	if len(response.IDs) != 1 {
-		return nil, fmt.Errorf("query records returned %d result batches, expected 1", len(response.IDs))
+	ids := response.IDs.value
+	if len(ids) != 1 {
+		return nil, fmt.Errorf("query records returned %d result batches, expected 1", len(ids))
 	}
 	if response.Documents == nil || response.Metadatas == nil || response.Distances == nil {
 		return nil, fmt.Errorf("query records did not include documents, metadatas, and distances")
@@ -165,9 +171,10 @@ func decodeQueryResponse(response *queryRecordsResponse) ([]*memory.Entry, error
 	if err != nil {
 		return nil, err
 	}
-	return decodeQueryBatch(response.IDs[0], documents, metadatas, distances)
+	return decodeQueryBatch(ids[0], documents, metadatas, distances)
 }
 
+// onlyQueryBatch requires exactly one result batch for the single-vector API.
 func onlyQueryBatch[T any](name string, batches [][]T) ([]T, error) {
 	if len(batches) != 1 {
 		return nil, fmt.Errorf("query records returned %d %s batches, expected 1", len(batches), name)
@@ -175,6 +182,7 @@ func onlyQueryBatch[T any](name string, batches [][]T) ([]T, error) {
 	return batches[0], nil
 }
 
+// decodeQueryBatch converts one columnar query batch into scored memory entries.
 func decodeQueryBatch(
 	ids []string,
 	documents []*string,
@@ -209,6 +217,7 @@ func decodeQueryBatch(
 	return results, nil
 }
 
+// filterSimilarity keeps dense results meeting the inclusive score threshold.
 func filterSimilarity(entries []*memory.Entry, threshold float64) []*memory.Entry {
 	if threshold <= 0 {
 		return entries
@@ -222,6 +231,7 @@ func filterSimilarity(entries []*memory.Entry, threshold float64) []*memory.Entr
 	return filtered
 }
 
+// finalizeSearchResults deduplicates, sorts, and limits the merged retrieval output.
 func finalizeSearchResults(
 	results []*memory.Entry,
 	opts memory.SearchOptions,
@@ -243,6 +253,7 @@ func finalizeSearchResults(
 	return results
 }
 
+// resolveSearchLimit applies a positive per-request override to the service default.
 func resolveSearchLimit(defaultLimit, override int) int {
 	if override > 0 {
 		return override
@@ -250,6 +261,7 @@ func resolveSearchLimit(defaultLimit, override int) int {
 	return defaultLimit
 }
 
+// resolveSimilarityThreshold applies a positive per-request threshold override.
 func resolveSimilarityThreshold(defaultThreshold, override float64) float64 {
 	if override > 0 {
 		return override
@@ -257,6 +269,7 @@ func resolveSimilarityThreshold(defaultThreshold, override float64) float64 {
 	return defaultThreshold
 }
 
+// clampScore bounds cosine similarity to the framework's zero-to-one score range.
 func clampScore(score float64) float64 {
 	switch {
 	case score < 0:

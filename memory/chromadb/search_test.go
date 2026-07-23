@@ -19,7 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-func TestService_SearchMemoriesUsesCosineScoreAndThreshold(t *testing.T) {
+func TestServiceSearchMemoriesUsesCosineScoreAndThreshold(t *testing.T) {
 	embedder := &testEmbedder{
 		dimension: 2,
 		values: map[string][]float64{
@@ -57,7 +57,7 @@ func TestService_SearchMemoriesUsesCosineScoreAndThreshold(t *testing.T) {
 	assert.Equal(t, "alpha", results[0].Memory.Memory)
 }
 
-func TestService_SearchMemoriesKindFallback(t *testing.T) {
+func TestServiceSearchMemoriesKindFallback(t *testing.T) {
 	embedder := &testEmbedder{
 		dimension: 2,
 		values: map[string][]float64{
@@ -95,9 +95,10 @@ func TestService_SearchMemoriesKindFallback(t *testing.T) {
 	require.Len(t, results, 3)
 	assert.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
 	assert.Equal(t, "episode", results[0].Memory.Memory)
+	assert.Equal(t, 4, embedder.callCount())
 }
 
-func TestService_SearchMemoriesTimeFilterIncludesFacts(t *testing.T) {
+func TestServiceSearchMemoriesTimeFilterIncludesFacts(t *testing.T) {
 	embedder := &testEmbedder{dimension: 2}
 	service, _ := newTestChromaService(t, embedder)
 	ctx := context.Background()
@@ -128,7 +129,7 @@ func TestService_SearchMemoriesTimeFilterIncludesFacts(t *testing.T) {
 	assert.NotContains(t, contents, "early event")
 }
 
-func TestService_SearchMemoriesHybridAddsExactKeywordMatch(t *testing.T) {
+func TestServiceSearchMemoriesHybridAddsExactKeywordMatch(t *testing.T) {
 	embedder := &testEmbedder{
 		dimension: 2,
 		values: map[string][]float64{
@@ -159,7 +160,7 @@ func TestService_SearchMemoriesHybridAddsExactKeywordMatch(t *testing.T) {
 	}
 }
 
-func TestService_SearchMemoriesDeduplicatesContent(t *testing.T) {
+func TestServiceSearchMemoriesDeduplicatesContent(t *testing.T) {
 	embedder := &testEmbedder{dimension: 2}
 	service, _ := newTestChromaService(t, embedder)
 	ctx := context.Background()
@@ -177,6 +178,79 @@ func TestService_SearchMemoriesDeduplicatesContent(t *testing.T) {
 	assert.Len(t, results, 1)
 }
 
+func TestServiceSearchMemoriesHybridCandidateLimitIsIndependent(t *testing.T) {
+	embedder := &testEmbedder{
+		dimension: 2,
+		values: map[string][]float64{
+			"code ZX-42 first":  {-1, 0},
+			"code ZX-42 second": {-1, 0},
+			"ZX-42":             {1, 0},
+		},
+	}
+	service, _ := newTestChromaService(
+		t,
+		embedder,
+		WithMemoryLimit(10),
+		WithHybridCandidateLimit(1),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "code ZX-42 first", nil))
+	require.NoError(t, service.AddMemory(ctx, userKey, "code ZX-42 second", nil))
+
+	results, err := service.SearchMemories(
+		ctx,
+		userKey,
+		"ZX-42",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query: "ZX-42", HybridSearch: true, MaxResults: 10,
+		}),
+	)
+
+	require.NoError(t, err)
+	assert.Len(t, results, 1)
+}
+
+func TestServiceSearchMemoriesReturnsDenseWhenKeywordReadFails(t *testing.T) {
+	embedder := &testEmbedder{dimension: 2}
+	service, fake := newTestChromaService(t, embedder)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "dense result", nil))
+	fake.status["get"] = 500
+
+	results, err := service.SearchMemories(
+		ctx,
+		userKey,
+		"dense",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query: "dense", HybridSearch: true,
+		}),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, "dense result", results[0].Memory.Memory)
+}
+
+func TestServiceSearchMemoriesReturnsDenseError(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 2})
+	fake.status["query"] = 400
+
+	results, err := service.SearchMemories(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"query",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query: "query", HybridSearch: true,
+		}),
+	)
+
+	assert.Nil(t, results)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "status 400")
+}
+
 func TestDecodeQueryResponseRejectsMalformedColumns(t *testing.T) {
 	document := "memory"
 	distance := float32(0.2)
@@ -192,7 +266,10 @@ func TestDecodeQueryResponseRejectsMalformedColumns(t *testing.T) {
 		{
 			name: "missing batches",
 			response: &queryRecordsResponse{
-				IDs: [][]string{{"id"}}, Documents: &documents,
+				IDs: responseField[[][]string]{
+					value: [][]string{{"id"}}, present: true,
+				},
+				Documents: &documents,
 				Metadatas: &metadatas, Distances: &distances,
 			},
 			match: "column length mismatch",
@@ -200,7 +277,10 @@ func TestDecodeQueryResponseRejectsMalformedColumns(t *testing.T) {
 		{
 			name: "missing distance",
 			response: &queryRecordsResponse{
-				IDs: [][]string{{"id"}}, Documents: &documents,
+				IDs: responseField[[][]string]{
+					value: [][]string{{"id"}}, present: true,
+				},
+				Documents: &documents,
 				Metadatas: &[][]map[string]any{{validTestMetadata()}},
 				Distances: &[][]*float32{{nil}},
 			},

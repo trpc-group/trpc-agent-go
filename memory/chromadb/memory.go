@@ -19,9 +19,10 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
-var recordIncludes = []string{"documents", "metadatas"}
-
 // ReadMemories reads memories for a user in reverse update order.
+//
+// ChromaDB limit/offset pagination does not provide a snapshot token, so a scan is
+// best-effort when another Service instance writes the same user concurrently.
 func (svc *Service) ReadMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -40,7 +41,7 @@ func (svc *Service) ReadMemories(
 		return nil, fmt.Errorf("read memories: %w", err)
 	}
 	sort.Slice(records, func(i, j int) bool {
-		return lessRecentRecord(records[i], records[j])
+		return moreRecentRecord(records[i], records[j])
 	})
 	if limit > 0 && len(records) > limit {
 		records = records[:limit]
@@ -52,6 +53,7 @@ func (svc *Service) ReadMemories(
 	return entries, nil
 }
 
+// fetchRecordByID reads an ID without scope filtering so ownership collisions remain visible.
 func (svc *Service) fetchRecordByID(
 	ctx context.Context,
 	id string,
@@ -60,7 +62,7 @@ func (svc *Service) fetchRecordByID(
 	response, err := svc.client.getRecords(ctx, svc.collection, getRecordsRequest{
 		IDs:     []string{id},
 		Where:   where,
-		Include: stringSlicePointer(recordIncludes),
+		Include: stringSlicePointer([]string{"documents", "metadatas"}),
 	})
 	if err != nil {
 		return nil, err
@@ -78,6 +80,7 @@ func (svc *Service) fetchRecordByID(
 	return records[0], nil
 }
 
+// listRecords pages through a filter, deduplicates IDs, and applies global ordering.
 func (svc *Service) listRecords(
 	ctx context.Context,
 	where map[string]any,
@@ -92,12 +95,12 @@ func (svc *Service) listRecords(
 			Where:   where,
 			Limit:   intPointer(pageSize),
 			Offset:  intPointer(offset),
-			Include: stringSlicePointer(recordIncludes),
+			Include: stringSlicePointer([]string{"documents", "metadatas"}),
 		})
 		if err != nil {
 			return nil, err
 		}
-		if len(response.IDs) == 0 {
+		if len(response.IDs.value) == 0 {
 			return records, nil
 		}
 		page, err := decodeGetResponse(response)
@@ -114,10 +117,11 @@ func (svc *Service) listRecords(
 				return records[:limit], nil
 			}
 		}
-		offset += len(response.IDs)
+		offset += len(response.IDs.value)
 	}
 }
 
+// countActiveAtLeast stops counting once the capacity decision can be made.
 func (svc *Service) countActiveAtLeast(
 	ctx context.Context,
 	scope recordScope,
@@ -139,15 +143,16 @@ func (svc *Service) countActiveAtLeast(
 		if err != nil {
 			return 0, err
 		}
-		if len(response.IDs) == 0 {
+		if len(response.IDs.value) == 0 {
 			return count, nil
 		}
-		count += len(response.IDs)
-		offset += len(response.IDs)
+		count += len(response.IDs.value)
+		offset += len(response.IDs.value)
 	}
 	return count, nil
 }
 
+// decodeGetResponse converts validated columnar Get output into owned records.
 func decodeGetResponse(response *getRecordsResponse) ([]*storedRecord, error) {
 	if response == nil {
 		return nil, fmt.Errorf("get records returned a nil response")
@@ -157,16 +162,17 @@ func decodeGetResponse(response *getRecordsResponse) ([]*storedRecord, error) {
 	}
 	documents := *response.Documents
 	metadatas := *response.Metadatas
-	if len(documents) != len(response.IDs) || len(metadatas) != len(response.IDs) {
+	ids := response.IDs.value
+	if len(documents) != len(ids) || len(metadatas) != len(ids) {
 		return nil, fmt.Errorf(
 			"get records column length mismatch: ids=%d documents=%d metadatas=%d",
-			len(response.IDs),
+			len(ids),
 			len(documents),
 			len(metadatas),
 		)
 	}
-	records := make([]*storedRecord, len(response.IDs))
-	for i, id := range response.IDs {
+	records := make([]*storedRecord, len(ids))
+	for i, id := range ids {
 		record, err := decodeStoredRecord(id, documents[i], metadatas[i])
 		if err != nil {
 			return nil, err
@@ -176,7 +182,8 @@ func decodeGetResponse(response *getRecordsResponse) ([]*storedRecord, error) {
 	return records, nil
 }
 
-func lessRecentRecord(left, right *storedRecord) bool {
+// moreRecentRecord orders records by update time, creation time, and stable ID.
+func moreRecentRecord(left, right *storedRecord) bool {
 	if !left.entry.UpdatedAt.Equal(right.entry.UpdatedAt) {
 		return left.entry.UpdatedAt.After(right.entry.UpdatedAt)
 	}
@@ -186,6 +193,7 @@ func lessRecentRecord(left, right *storedRecord) bool {
 	return left.entry.ID < right.entry.ID
 }
 
+// nextPageSize caps a requested page at the adapter's read-page limit.
 func nextPageSize(current, limit int) int {
 	if limit <= 0 {
 		return defaultReadPageSize
@@ -197,11 +205,13 @@ func nextPageSize(current, limit int) int {
 	return defaultReadPageSize
 }
 
+// intPointer returns a pointer used to distinguish an explicit REST integer field.
 func intPointer(value int) *int {
 	copy := value
 	return &copy
 }
 
+// stringSlicePointer copies an include list before attaching it to a request.
 func stringSlicePointer(value []string) *[]string {
 	copy := append([]string(nil), value...)
 	return &copy
@@ -212,7 +222,10 @@ const (
 	fnvPrime64  = uint64(1099511628211)
 )
 
-// AddMemory adds or refreshes a canonical memory record.
+// AddMemory adds a memory or refreshes an existing record with the same canonical ID.
+//
+// Capacity checking and persistence are serialized for the app and user within this
+// Service instance.
 func (svc *Service) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -247,6 +260,7 @@ func (svc *Service) AddMemory(
 	return svc.storeAddRecord(ctx, scope, record)
 }
 
+// storeAddRecord handles create, replace, and tombstone revival under the scope lock.
 func (svc *Service) storeAddRecord(
 	ctx context.Context,
 	scope recordScope,
@@ -268,6 +282,7 @@ func (svc *Service) storeAddRecord(
 	return svc.verifyAddedRecord(ctx, scope, record)
 }
 
+// refreshExistingRecord replaces an active deterministic-ID record after ownership checks.
 func (svc *Service) refreshExistingRecord(
 	ctx context.Context,
 	scope recordScope,
@@ -291,6 +306,7 @@ func (svc *Service) refreshExistingRecord(
 	return svc.updateAndVerify(ctx, scope, record)
 }
 
+// verifyAddedRecord confirms that Chroma persisted the exact intended Add state.
 func (svc *Service) verifyAddedRecord(
 	ctx context.Context,
 	scope recordScope,
@@ -316,6 +332,7 @@ func (svc *Service) verifyAddedRecord(
 	return svc.updateAndVerify(ctx, scope, expected)
 }
 
+// ensureCapacity enforces the per-scope active-memory limit on a best-effort basis.
 func (svc *Service) ensureCapacity(ctx context.Context, scope recordScope) error {
 	if svc.opts.memoryLimit <= 0 {
 		return nil
@@ -336,6 +353,9 @@ func (svc *Service) ensureCapacity(ctx context.Context, scope recordScope) error
 }
 
 // UpdateMemory updates an existing memory and reports its effective canonical ID.
+//
+// A content change may rotate the deterministic memory ID. The rotation is recoverable
+// after a retry, but it is not a transaction across multiple Service instances.
 func (svc *Service) UpdateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -371,6 +391,7 @@ func (svc *Service) UpdateMemory(
 	return svc.applyUpdate(ctx, command, embedding, token, opts)
 }
 
+// applyUpdate resumes a prior rotation or updates the currently owned source record.
 func (svc *Service) applyUpdate(
 	ctx context.Context,
 	command updateCommand,
@@ -411,6 +432,7 @@ func (svc *Service) applyUpdate(
 	return svc.rotateRecord(ctx, scope, command.key.MemoryID, old, opts)
 }
 
+// resolveCompletedUpdate locates an idempotent rotation target when the old ID is absent.
 func (svc *Service) resolveCompletedUpdate(
 	ctx context.Context,
 	scope recordScope,
@@ -432,6 +454,7 @@ func (svc *Service) resolveCompletedUpdate(
 	return nil
 }
 
+// rotateRecord commits the new ID before retiring the old ID for roll-forward safety.
 func (svc *Service) rotateRecord(
 	ctx context.Context,
 	scope recordScope,
@@ -465,6 +488,7 @@ func (svc *Service) rotateRecord(
 	return nil
 }
 
+// validateUpdateTarget prevents an ID rotation from overwriting unrelated content.
 func validateUpdateTarget(
 	actual *storedRecord,
 	expected *storedRecord,
@@ -479,6 +503,7 @@ func validateUpdateTarget(
 	return nil
 }
 
+// verifyRotationTarget confirms the new record and its update token after Add.
 func (svc *Service) verifyRotationTarget(
 	ctx context.Context,
 	scope recordScope,
@@ -494,6 +519,7 @@ func (svc *Service) verifyRotationTarget(
 	return nil
 }
 
+// updateAndVerify applies an in-place update and rejects silent updates of missing IDs.
 func (svc *Service) updateAndVerify(
 	ctx context.Context,
 	scope recordScope,
@@ -512,6 +538,7 @@ func (svc *Service) updateAndVerify(
 	return nil
 }
 
+// addRequest encodes one stored record as a create-only REST batch.
 func addRequest(record *storedRecord) addRecordsRequest {
 	document := record.entry.Memory.Memory
 	return addRecordsRequest{
@@ -522,6 +549,7 @@ func addRequest(record *storedRecord) addRecordsRequest {
 	}
 }
 
+// updateRequest encodes one stored record with explicit optional-field clearing.
 func updateRequest(record *storedRecord) updateRecordsRequest {
 	document := record.entry.Memory.Memory
 	return updateRecordsRequest{
@@ -532,7 +560,10 @@ func updateRequest(record *storedRecord) updateRecordsRequest {
 	}
 }
 
-// DeleteMemory deletes a memory for a user.
+// DeleteMemory idempotently deletes a memory for a user.
+//
+// With soft delete enabled, the record is retained as an inactive tombstone and
+// read back to verify it is no longer active.
 func (svc *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	if err := svc.beginOperation(); err != nil {
 		return err
@@ -548,6 +579,7 @@ func (svc *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) erro
 	return svc.retireRecord(ctx, scope, memoryKey.MemoryID)
 }
 
+// retireRecord tombstones or hard-deletes one owned record and verifies inactivity.
 func (svc *Service) retireRecord(ctx context.Context, scope recordScope, id string) error {
 	record, err := svc.fetchRecordByID(ctx, id, activeScopeWhere(scope))
 	if err != nil {
@@ -584,7 +616,10 @@ func (svc *Service) retireRecord(ctx context.Context, scope recordScope, id stri
 	return nil
 }
 
-// ClearMemories clears all active memories for a user.
+// ClearMemories clears memories that were active when the operation began.
+//
+// Memories created after the operation's cutoff are not removed. ChromaDB does not
+// provide a snapshot transaction, so cross-instance clock skew remains best-effort.
 func (svc *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	if err := svc.beginOperation(); err != nil {
 		return err
@@ -597,31 +632,52 @@ func (svc *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) e
 	lock := svc.writeLock(scope)
 	lock.Lock()
 	defer lock.Unlock()
+	cutoff := time.Now().UTC().UnixNano()
 	if svc.opts.softDelete {
-		return svc.clearSoftDeleted(ctx, scope)
+		return svc.softDeleteAll(ctx, scope, cutoff)
 	}
-	return svc.clearHardDeleted(ctx, scope)
+	return svc.hardDeleteAll(ctx, scope, cutoff)
 }
 
-func (svc *Service) clearHardDeleted(ctx context.Context, scope recordScope) error {
+// hardDeleteAll repeatedly removes the cutoff-bounded page zero until it is empty.
+func (svc *Service) hardDeleteAll(ctx context.Context, scope recordScope, cutoff int64) error {
+	where := clearScopeWhere(scope, cutoff)
+	batchSize := svc.clearBatchSize()
 	for {
-		response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
-			Where: ownedScopeWhere(scope),
-			Limit: intPointer(svc.maxBatchSize),
-		})
+		ids, err := svc.loadActiveIDs(ctx, where, batchSize)
 		if err != nil {
-			return fmt.Errorf("clear memories: %w", err)
+			return fmt.Errorf("load memories to clear: %w", err)
 		}
-		if response.Deleted == 0 {
+		if len(ids) == 0 {
 			return nil
 		}
+		response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
+			IDs:   ids,
+			Where: where,
+		})
+		if err != nil {
+			return fmt.Errorf("hard delete memories: %w", err)
+		}
+		if response.Deleted.value != len(ids) {
+			return fmt.Errorf(
+				"hard delete memories made no progress: targeted %d, deleted %d",
+				len(ids),
+				response.Deleted.value,
+			)
+		}
+		if err := svc.verifyInactiveIDs(ctx, scope, ids); err != nil {
+			return fmt.Errorf("verify hard deleted memories: %w", err)
+		}
 	}
 }
 
-func (svc *Service) clearSoftDeleted(ctx context.Context, scope recordScope) error {
+// softDeleteAll repeatedly tombstones the cutoff-bounded page zero until it is empty.
+func (svc *Service) softDeleteAll(ctx context.Context, scope recordScope, cutoff int64) error {
+	where := clearScopeWhere(scope, cutoff)
+	batchSize := svc.clearBatchSize()
 	deletedAtNS := time.Now().UTC().UnixNano()
 	for {
-		ids, err := svc.loadActiveIDs(ctx, scope, svc.maxBatchSize)
+		ids, err := svc.loadActiveIDs(ctx, where, batchSize)
 		if err != nil {
 			return fmt.Errorf("load memories to clear: %w", err)
 		}
@@ -636,17 +692,21 @@ func (svc *Service) clearSoftDeleted(ctx context.Context, scope recordScope) err
 		if err := svc.client.updateRecords(ctx, svc.collection, request); err != nil {
 			return fmt.Errorf("soft delete memories: %w", err)
 		}
+		if err := svc.verifyInactiveIDs(ctx, scope, ids); err != nil {
+			return fmt.Errorf("verify soft deleted memories: %w", err)
+		}
 	}
 }
 
+// loadActiveIDs reads one explicit ID batch from the cutoff-bounded active scope.
 func (svc *Service) loadActiveIDs(
 	ctx context.Context,
-	scope recordScope,
+	where map[string]any,
 	limit int,
 ) ([]string, error) {
 	include := []string{}
 	response, err := svc.client.getRecords(ctx, svc.collection, getRecordsRequest{
-		Where:   activeScopeWhere(scope),
+		Where:   where,
 		Limit:   intPointer(limit),
 		Offset:  intPointer(0),
 		Include: &include,
@@ -654,9 +714,39 @@ func (svc *Service) loadActiveIDs(
 	if err != nil {
 		return nil, err
 	}
-	return append([]string(nil), response.IDs...), nil
+	return append([]string(nil), response.IDs.value...), nil
 }
 
+// verifyInactiveIDs confirms that no requested record remains active in the scope.
+func (svc *Service) verifyInactiveIDs(
+	ctx context.Context,
+	scope recordScope,
+	ids []string,
+) error {
+	include := []string{}
+	response, err := svc.client.getRecords(ctx, svc.collection, getRecordsRequest{
+		IDs:     ids,
+		Where:   activeScopeWhere(scope),
+		Include: &include,
+	})
+	if err != nil {
+		return err
+	}
+	if len(response.IDs.value) > 0 {
+		return fmt.Errorf("%d memories remained active", len(response.IDs.value))
+	}
+	return nil
+}
+
+// clearBatchSize respects both Chroma's advertised write limit and local page size.
+func (svc *Service) clearBatchSize() int {
+	if svc.maxBatchSize < defaultReadPageSize {
+		return svc.maxBatchSize
+	}
+	return defaultReadPageSize
+}
+
+// validateRecordOwner prevents operations on foreign or incompatible records.
 func validateRecordOwner(record *storedRecord, scope recordScope) error {
 	if record.entry.AppName != scope.appName || record.entry.UserID != scope.userID {
 		return fmt.Errorf(
@@ -667,16 +757,19 @@ func validateRecordOwner(record *storedRecord, scope recordScope) error {
 	return nil
 }
 
+// memoryNotFoundError preserves the shared memory service not-found error text.
 func memoryNotFoundError(id string) error {
 	return fmt.Errorf("memory with id %s not found", id)
 }
 
+// setUpdateResult reports a rotated memory ID through the framework update options.
 func setUpdateResult(opts []memory.UpdateOption, id string) {
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = id
 	}
 }
 
+// writeLock maps one app/user scope to a stable in-process lock stripe.
 func (svc *Service) writeLock(scope recordScope) *sync.Mutex {
 	hash := fnvOffset64
 	for _, value := range []string{scope.appName, "\x00", scope.userID} {

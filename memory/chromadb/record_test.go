@@ -20,7 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
-func TestRecord_RoundTripPreservesMetadata(t *testing.T) {
+func TestRecordRoundTripPreservesMetadata(t *testing.T) {
 	eventTime := time.Unix(0, 1730500123456789012).UTC()
 	createdAt := time.Unix(0, 1730400123456789012).UTC()
 	record := newAddRecord(
@@ -52,7 +52,7 @@ func TestRecord_RoundTripPreservesMetadata(t *testing.T) {
 	assert.Equal(t, eventTime, *decoded.entry.Memory.EventTime)
 }
 
-func TestRecordCodec_UpdateClearsOptionalMetadataWithNull(t *testing.T) {
+func TestRecordCodecUpdateClearsOptionalMetadataWithNull(t *testing.T) {
 	now := time.Now().UTC()
 	record := newAddRecord(
 		recordScope{appName: "app", userID: "user"},
@@ -78,7 +78,7 @@ func TestRecordCodec_UpdateClearsOptionalMetadataWithNull(t *testing.T) {
 	}
 }
 
-func TestRecordCodec_RejectsMissingRequiredMetadata(t *testing.T) {
+func TestRecordCodecRejectsMissingRequiredMetadata(t *testing.T) {
 	document := "memory"
 	metadata := map[string]any{
 		metadataSchemaVersionKey: schemaVersion,
@@ -92,7 +92,7 @@ func TestRecordCodec_RejectsMissingRequiredMetadata(t *testing.T) {
 	assert.Contains(t, err.Error(), metadataKindKey)
 }
 
-func TestRecordCodec_RejectsInconsistentEventTime(t *testing.T) {
+func TestRecordCodecRejectsInconsistentEventTime(t *testing.T) {
 	now := time.Now().UTC().UnixNano()
 	document := "memory"
 	metadata := map[string]any{
@@ -113,7 +113,7 @@ func TestRecordCodec_RejectsInconsistentEventTime(t *testing.T) {
 	assert.Contains(t, err.Error(), "has_event_time is false")
 }
 
-func TestRecordCodec_RejectsCorruptOptionalMetadata(t *testing.T) {
+func TestRecordCodecRejectsCorruptOptionalMetadata(t *testing.T) {
 	document := "memory"
 	metadata := validTestMetadata()
 	metadata[metadataLocationKey] = []string{"not", "a", "string"}
@@ -124,7 +124,7 @@ func TestRecordCodec_RejectsCorruptOptionalMetadata(t *testing.T) {
 	assert.Contains(t, err.Error(), metadataLocationKey)
 }
 
-func TestUpdateToken_NormalizesExplicitMetadata(t *testing.T) {
+func TestUpdateTokenNormalizesExplicitMetadata(t *testing.T) {
 	base := updateCommand{
 		key:     memory.Key{AppName: "app", UserID: "user", MemoryID: "old"},
 		content: "memory",
@@ -150,7 +150,7 @@ func TestUpdateToken_NormalizesExplicitMetadata(t *testing.T) {
 	assert.Equal(t, left, right)
 }
 
-func TestInt64Value_RejectsLossyFloat(t *testing.T) {
+func TestInt64ValueRejectsLossyFloat(t *testing.T) {
 	_, err := int64Value(1.5)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exact integer")

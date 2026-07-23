@@ -26,6 +26,38 @@ jobs:
             **/go.sum
       - name: Build
         run: go build -v ./...
+  chromadb-integration:
+    name: chromadb 1.5.9 integration
+    runs-on: ubuntu-latest
+    services:
+      chromadb:
+        image: chromadb/chroma:1.5.9
+        ports:
+          - 8000:8000
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "${{ env.ROOT_GO_VERSION }}"
+          cache-dependency-path: |
+            go.mod
+            go.sum
+      - name: Wait for ChromaDB
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..60}; do
+            if curl --fail --silent http://localhost:8000/api/v2/pre-flight-checks >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ChromaDB did not become ready" >&2
+          exit 1
+      - name: Run ChromaDB integration test
+        env:
+          CHROMADB_INTEGRATION_URL: http://localhost:8000
+        run: go test ./memory/chromadb -run '^TestIntegrationChromaDB159$' -count=1
   discover-go-modules:
     name: discover go modules
     runs-on: ubuntu-latest

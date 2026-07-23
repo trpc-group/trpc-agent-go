@@ -70,6 +70,7 @@ type tokenMetadata struct {
 	Location     string      `json:"location,omitempty"`
 }
 
+// newAddRecord normalizes an Add request into the persisted Chroma representation.
 func newAddRecord(
 	scope recordScope,
 	content string,
@@ -97,6 +98,7 @@ func newAddRecord(
 	}
 }
 
+// decodeStoredRecord reconstructs a framework memory while enforcing owned metadata.
 func decodeStoredRecord(id string, document *string, metadata map[string]any) (*storedRecord, error) {
 	if document == nil {
 		return nil, fmt.Errorf("memory %s has no document", id)
@@ -157,6 +159,7 @@ type decodedMetadata struct {
 	replacesID   string
 }
 
+// decodeRecordMetadata validates required fields and decodes optional memory attributes.
 func decodeRecordMetadata(metadata map[string]any) (*decodedMetadata, error) {
 	appName, err := requiredString(metadata, metadataAppNameKey)
 	if err != nil {
@@ -214,6 +217,7 @@ func decodeRecordMetadata(metadata map[string]any) (*decodedMetadata, error) {
 	}, nil
 }
 
+// decodeEventTime interprets the explicit presence flag and nanosecond timestamp.
 func decodeEventTime(metadata map[string]any) (*time.Time, error) {
 	hasEventTime, err := requiredBool(metadata, metadataHasEventTimeKey)
 	if err != nil {
@@ -237,6 +241,7 @@ func decodeEventTime(metadata map[string]any) (*time.Time, error) {
 	return &eventTime, nil
 }
 
+// decodeTimestamps reads required creation, update, and deletion timestamps exactly.
 func decodeTimestamps(metadata map[string]any) (time.Time, time.Time, int64, error) {
 	createdAtNS, err := requiredInt64(metadata, metadataCreatedAtKey)
 	if err != nil {
@@ -253,6 +258,7 @@ func decodeTimestamps(metadata map[string]any) (time.Time, time.Time, int64, err
 	return time.Unix(0, createdAtNS).UTC(), time.Unix(0, updatedAtNS).UTC(), deletedAtNS, nil
 }
 
+// addMetadata encodes a new record while omitting absent optional fields.
 func addMetadata(record *storedRecord) map[string]any {
 	metadata := requiredMetadata(record)
 	mem := record.entry.Memory
@@ -277,9 +283,12 @@ func addMetadata(record *storedRecord) map[string]any {
 	return metadata
 }
 
+// updateMetadata encodes absent optional fields as null so Chroma removes old values.
 func updateMetadata(record *storedRecord) map[string]any {
 	metadata := requiredMetadata(record)
 	mem := record.entry.Memory
+	// Chroma distinguishes omitted metadata from an explicit null update. Null removes
+	// an existing optional key, while omission would preserve its previous value.
 	setOptionalMetadata(metadata, metadataTopicsKey, slices.Clone(mem.Topics), len(mem.Topics) > 0)
 	if mem.EventTime == nil {
 		metadata[metadataEventTimeKey] = nil
@@ -298,6 +307,7 @@ func updateMetadata(record *storedRecord) map[string]any {
 	return metadata
 }
 
+// requiredMetadata encodes fields that define adapter ownership and record lifecycle.
 func requiredMetadata(record *storedRecord) map[string]any {
 	entry := record.entry
 	mem := entry.Memory
@@ -313,6 +323,7 @@ func requiredMetadata(record *storedRecord) map[string]any {
 	}
 }
 
+// setOptionalMetadata includes only values explicitly present on an Add operation.
 func setOptionalMetadata(metadata map[string]any, key string, value any, present bool) {
 	if present {
 		metadata[key] = value
@@ -321,6 +332,7 @@ func setOptionalMetadata(metadata map[string]any, key string, value any, present
 	metadata[key] = nil
 }
 
+// requiredKind parses and validates the stored memory kind.
 func requiredKind(metadata map[string]any) (memory.Kind, error) {
 	value, err := requiredString(metadata, metadataKindKey)
 	if err != nil {
@@ -333,6 +345,7 @@ func requiredKind(metadata map[string]any) (memory.Kind, error) {
 	return kind, nil
 }
 
+// requiredString reads a non-empty required string metadata field.
 func requiredString(metadata map[string]any, key string) (string, error) {
 	value, ok := metadata[key]
 	if !ok {
@@ -345,6 +358,7 @@ func requiredString(metadata map[string]any, key string) (string, error) {
 	return result, nil
 }
 
+// optionalString reads an optional string while rejecting an incompatible type.
 func optionalString(metadata map[string]any, key string) (string, error) {
 	value, exists := metadata[key]
 	if !exists || value == nil {
@@ -357,6 +371,7 @@ func optionalString(metadata map[string]any, key string) (string, error) {
 	return result, nil
 }
 
+// requiredBool reads a required boolean metadata field.
 func requiredBool(metadata map[string]any, key string) (bool, error) {
 	value, ok := metadata[key]
 	if !ok {
@@ -369,6 +384,7 @@ func requiredBool(metadata map[string]any, key string) (bool, error) {
 	return result, nil
 }
 
+// requiredInt64 reads a required integer without accepting precision loss.
 func requiredInt64(metadata map[string]any, key string) (int64, error) {
 	value, ok := metadata[key]
 	if !ok {
@@ -381,6 +397,7 @@ func requiredInt64(metadata map[string]any, key string) (int64, error) {
 	return result, nil
 }
 
+// int64Value converts supported JSON integer forms while rejecting fractions and overflow.
 func int64Value(value any) (int64, error) {
 	switch number := value.(type) {
 	case json.Number:
@@ -408,6 +425,7 @@ func int64Value(value any) (int64, error) {
 	}
 }
 
+// optionalStringSlice accepts Chroma native string arrays for multi-value metadata.
 func optionalStringSlice(metadata map[string]any, key string) ([]string, error) {
 	value, ok := metadata[key]
 	if !ok || value == nil {
@@ -431,6 +449,7 @@ func optionalStringSlice(metadata map[string]any, key string) ([]string, error) 
 	}
 }
 
+// updateToken hashes the normalized update intent for idempotent ID rotation.
 func updateToken(command updateCommand) (string, error) {
 	type tokenPayload struct {
 		AppName  string         `json:"app_name"`
@@ -463,6 +482,7 @@ func updateToken(command updateCommand) (string, error) {
 	return hex.EncodeToString(digest[:]), nil
 }
 
+// normalizedTokenMetadata isolates explicit metadata fields that affect update identity.
 func normalizedTokenMetadata(metadata *memory.Metadata) *tokenMetadata {
 	normalized := &memory.Memory{Kind: metadata.Kind}
 	imemory.ApplyMetadataPatch(normalized, metadata)
@@ -473,6 +493,7 @@ func normalizedTokenMetadata(metadata *memory.Metadata) *tokenMetadata {
 	}
 }
 
+// sameRecordIdentity compares fields used to detect deterministic ID collisions.
 func sameRecordIdentity(left, right *storedRecord) bool {
 	if left == nil || right == nil || left.entry == nil || right.entry == nil {
 		return false
@@ -486,6 +507,7 @@ func sameRecordIdentity(left, right *storedRecord) bool {
 	return sameMemoryIdentity(leftEntry.Memory, rightEntry.Memory)
 }
 
+// sameSemanticRecord compares user-visible content while ignoring lifecycle bookkeeping.
 func sameSemanticRecord(left, right *storedRecord) bool {
 	if !sameRecordIdentity(left, right) {
 		return false
@@ -496,6 +518,7 @@ func sameSemanticRecord(left, right *storedRecord) bool {
 		left.replacesID == right.replacesID
 }
 
+// samePersistedRecord compares semantic content together with creation time.
 func samePersistedRecord(left, right *storedRecord) bool {
 	if !sameSemanticRecord(left, right) {
 		return false
@@ -504,6 +527,7 @@ func samePersistedRecord(left, right *storedRecord) bool {
 		left.entry.UpdatedAt.Equal(right.entry.UpdatedAt)
 }
 
+// sameMemoryIdentity compares all framework-level memory identity fields.
 func sameMemoryIdentity(left, right *memory.Memory) bool {
 	if left == nil || right == nil {
 		return false
@@ -515,6 +539,7 @@ func sameMemoryIdentity(left, right *memory.Memory) bool {
 	return equalTimePointers(left.EventTime, right.EventTime)
 }
 
+// equalTimePointers compares optional timestamps by presence and instant.
 func equalTimePointers(left, right *time.Time) bool {
 	if left == nil || right == nil {
 		return left == nil && right == nil
@@ -522,11 +547,13 @@ func equalTimePointers(left, right *time.Time) bool {
 	return left.Equal(*right)
 }
 
+// timePointer returns an independent pointer for an optional timestamp.
 func timePointer(value time.Time) *time.Time {
 	copy := value
 	return &copy
 }
 
+// activeScopeWhere selects active adapter-owned records for one app and user.
 func activeScopeWhere(scope recordScope) map[string]any {
 	return andWhere(
 		eqWhere(metadataSchemaVersionKey, schemaVersion),
@@ -536,6 +563,15 @@ func activeScopeWhere(scope recordScope) map[string]any {
 	)
 }
 
+// clearScopeWhere freezes Clear membership at records created no later than cutoff.
+func clearScopeWhere(scope recordScope, cutoff int64) map[string]any {
+	return andWhere(
+		activeScopeWhere(scope),
+		comparisonWhere(metadataCreatedAtKey, "$lte", cutoff),
+	)
+}
+
+// ownedScopeWhere selects adapter-owned records regardless of deletion state.
 func ownedScopeWhere(scope recordScope) map[string]any {
 	return andWhere(
 		eqWhere(metadataSchemaVersionKey, schemaVersion),
@@ -544,6 +580,7 @@ func ownedScopeWhere(scope recordScope) map[string]any {
 	)
 }
 
+// tokenWhere locates a rotated record created by a particular update intent.
 func tokenWhere(scope recordScope, token string) map[string]any {
 	return andWhere(
 		activeScopeWhere(scope),
@@ -551,6 +588,7 @@ func tokenWhere(scope recordScope, token string) map[string]any {
 	)
 }
 
+// searchWhere combines ownership, kind, and event-time filters for retrieval.
 func searchWhere(scope recordScope, opts memory.SearchOptions) map[string]any {
 	clauses := []map[string]any{activeScopeWhere(scope)}
 	if opts.Kind != "" {
@@ -562,6 +600,7 @@ func searchWhere(scope recordScope, opts memory.SearchOptions) map[string]any {
 	return andWhere(clauses...)
 }
 
+// eventTimeWhere keeps timeless records and bounds timestamped records inclusively.
 func eventTimeWhere(opts memory.SearchOptions) map[string]any {
 	bounds := make([]map[string]any, 0, 2)
 	if opts.TimeAfter != nil {
@@ -587,10 +626,12 @@ func eventTimeWhere(opts memory.SearchOptions) map[string]any {
 	)
 }
 
+// eqWhere builds one metadata equality predicate in Chroma's where syntax.
 func eqWhere(key string, value any) map[string]any {
 	return comparisonWhere(key, "$eq", value)
 }
 
+// comparisonWhere builds one metadata comparison predicate.
 func comparisonWhere(key, operator string, value any) map[string]any {
 	return map[string]any{
 		key: map[string]any{
@@ -599,14 +640,17 @@ func comparisonWhere(key, operator string, value any) map[string]any {
 	}
 }
 
+// andWhere joins non-empty predicates with logical conjunction.
 func andWhere(clauses ...map[string]any) map[string]any {
 	return logicalWhere("$and", clauses)
 }
 
+// orWhere joins non-empty predicates with logical disjunction.
 func orWhere(clauses ...map[string]any) map[string]any {
 	return logicalWhere("$or", clauses)
 }
 
+// logicalWhere removes empty clauses and emits the minimal equivalent expression.
 func logicalWhere(operator string, clauses []map[string]any) map[string]any {
 	filtered := make([]map[string]any, 0, len(clauses))
 	for _, clause := range clauses {
