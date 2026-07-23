@@ -512,7 +512,7 @@ metricManager.Add(ctx, appName, evalSetID, evalMetric)
 - **评估指标 Metric** 用于定义评估指标配置，包含 `metricName`、`criterion`、`threshold`。`metricName` 用来选择评估器实现，`criterion` 用来描述评估准则，`threshold` 用来定义阈值。
 - **评估器 Evaluator** 读取实际轨迹与预期轨迹，按 `criterion` 计算 `score`，再与 `threshold` 对比得到通过或失败。
 - **评估器注册中心 Registry** 维护 `metricName` 与 Evaluator 的映射关系，内置评估器和自定义评估器都通过它接入。
-- **评估服务 Service** 负责执行用例、采集轨迹、调用评估器打分，返回评估结果。
+- **评估服务 Service** 负责执行用例、采集轨迹、调用评估器打分，并通过用例结果聚合器生成评估用例级别的分数与状态。
 - **AgentEvaluator** 通过 `evaluation.New` 创建并注入 Runner、Managers、Registry 等依赖，对用户接入层提供 `Evaluate` 方法。
 
 一次评估运行通常包含以下步骤。
@@ -2929,6 +2929,8 @@ type EvalSetResult struct {
 type EvalCaseResult struct {
 	EvalSetID                     string                           // EvalSetID 是评估集标识
 	EvalID                        string                           // EvalID 是用例标识
+	RunID                         int                              // RunID 是运行序号
+	Score                         float64                          // Score 是用例级聚合分数
 	FinalEvalStatus               status.EvalStatus                // FinalEvalStatus 是最终状态
 	ErrorMessage                  string                           // ErrorMessage 是错误信息
 	OverallEvalMetricResults      []*EvalMetricResult              // OverallEvalMetricResults 是整体指标结果列表
@@ -2969,7 +2971,7 @@ type RubricScore struct {
 }
 ```
 
-整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。
+整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。`EvalCaseResult.score` 表示评估用例级别的聚合分数，`finalEvalStatus` 表示评估用例级别的最终状态；它们由 Service 的用例结果聚合器计算。
 
 对于 `llm_judge_template`，结果中的 `criterion.llmJudge.template.prompt` 需要区分两层语义：
 
@@ -2985,6 +2987,7 @@ type RubricScore struct {
   "evalCaseResults": [
     {
       "evalId": "calc_add",
+      "score": 1,
       "finalEvalStatus": "passed",
       "overallEvalMetricResults": [
         {
@@ -3186,6 +3189,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 // Service 是评估服务接口
@@ -3235,6 +3239,27 @@ type EvalSetRunResult struct {
 	EvalSetID       string                       // EvalSetID 是评估集标识
 	EvalCaseResults []*evalresult.EvalCaseResult // EvalCaseResults 是评估用例结果
 }
+
+// EvalCaseResultAggregator 聚合单个评估用例下的多条指标结果
+type EvalCaseResultAggregator interface {
+	Aggregate(ctx context.Context, input *EvalCaseResultAggregationInput) (*EvalCaseResultAggregationResult, error)
+}
+
+// EvalCaseResultAggregationInput 是聚合单个评估用例结果所需的上下文
+type EvalCaseResultAggregationInput struct {
+	AppName         string                         // AppName 是应用名
+	EvalSetID       string                         // EvalSetID 是评估集标识
+	EvalCase        *evalset.EvalCase              // EvalCase 是当前评估用例配置
+	InferenceResult *InferenceResult               // InferenceResult 是当前评估用例的推理结果
+	EvalMetrics     []*metric.EvalMetric           // EvalMetrics 是实际执行的评估指标列表
+	MetricResults   []*evalresult.EvalMetricResult // MetricResults 是对应指标的整体结果
+}
+
+// EvalCaseResultAggregationResult 是聚合后的评估用例结果
+type EvalCaseResultAggregationResult struct {
+	Score  float64           // Score 是用例级分数
+	Status status.EvalStatus // Status 是用例级状态
+}
 ```
 
 框架提供了 Service 的本地实现，依赖 Runner 执行推理，EvalSetManager 读取 EvalSet，Registry 定位评估器实现。
@@ -3257,7 +3282,98 @@ Local 实现会通过 Registry 按 `MetricName` 获取 Evaluator，并调用 `Ev
 
 当 `evalMode` 为 `trace` 时，推理阶段跳过 Runner；若配置了 `actualConversation`，则实际轨迹 actuals 来自 `actualConversation`，而 `conversation` 继续表示预期轨迹。若未配置 `actualConversation`，则 `conversation` 会被视为实际轨迹，评估阶段再基于该轨迹构造仅保留 `userContent` 的占位 expecteds；开启 `expectedRunnerEnabled` 时，评估阶段则直接复用推理阶段已经生成好的 `ExpectedInferences`。
 
-评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
+所有指标评估完成后，Local 实现会把当前用例、实际推理结果、实际执行的指标列表和对应指标结果交给 `EvalCaseResultAggregator`，由它计算 `EvalCaseResult.score` 与 `EvalCaseResult.finalEvalStatus`。评估完成后会生成 `EvalSetRunResult` 并返回给 AgentEvaluator。
+
+#### 评估用例结果聚合
+
+一个评估用例可以包含多个指标。各 Evaluator 先产出指标级 `score`、`threshold` 与 `evalStatus`，再由 `EvalCaseResultAggregator` 汇总为用例级 `score` 和 `finalEvalStatus`。默认聚合器沿用框架原有的全指标通过语义，任一指标失败则用例失败，没有失败且至少一个指标通过则用例通过，没有可用指标结果则用例未评估。默认分数是二值的，用例通过时为 1，失败或未评估时为 0。
+
+`EvalCaseResultAggregator` 接口定义如下。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
+
+type EvalCaseResultAggregator interface {
+	// Aggregate 聚合单个评估用例的指标结果
+	Aggregate(ctx context.Context, input *EvalCaseResultAggregationInput) (*EvalCaseResultAggregationResult, error)
+}
+
+type EvalCaseResultAggregationInput struct {
+	AppName         string                         // AppName 是应用名
+	EvalSetID       string                         // EvalSetID 是评估集标识
+	EvalCase        *evalset.EvalCase              // EvalCase 是当前评估用例配置
+	InferenceResult *InferenceResult               // InferenceResult 是当前评估用例的推理结果
+	EvalMetrics     []*metric.EvalMetric           // EvalMetrics 是实际执行的评估指标列表
+	MetricResults   []*evalresult.EvalMetricResult // MetricResults 是对应指标的整体结果
+}
+
+type EvalCaseResultAggregationResult struct {
+	Score  float64           // Score 是用例级分数
+	Status status.EvalStatus // Status 是用例级状态
+}
+```
+
+下面示例按 `EvalMetric.Extension.weight` 计算加权分。完整示例参见 [examples/evaluation/caseaggregation](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/evaluation/caseaggregation)。
+
+```go
+import (
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/service"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+)
+
+type weightedAggregator struct {
+	Threshold float64
+}
+
+func (a weightedAggregator) Aggregate(ctx context.Context, input *service.EvalCaseResultAggregationInput) (*service.EvalCaseResultAggregationResult, error) {
+	var totalScore float64
+	var totalWeight float64
+	for i, evalMetric := range input.EvalMetrics {
+		weight := weightFromExtension(evalMetric.Extension)
+		totalScore += input.MetricResults[i].Score * weight
+		totalWeight += weight
+	}
+	if totalWeight == 0 {
+		return &service.EvalCaseResultAggregationResult{Status: status.EvalStatusNotEvaluated}, nil
+	}
+	score := totalScore / totalWeight
+	resultStatus := status.EvalStatusFailed
+	if score >= a.Threshold {
+		resultStatus = status.EvalStatusPassed
+	}
+	return &service.EvalCaseResultAggregationResult{Score: score, Status: resultStatus}, nil
+}
+
+func weightFromExtension(extension any) float64 {
+	values, ok := extension.(map[string]any)
+	if !ok {
+		return 1
+	}
+	weight, ok := values["weight"].(float64)
+	if !ok || weight <= 0 {
+		return 1
+	}
+	return weight
+}
+
+agentEvaluator, err := evaluation.New(
+	appName,
+	runner,
+	evaluation.WithEvalCaseResultAggregator(weightedAggregator{
+		Threshold: 0.8,
+	}),
+)
+```
+
+如果自定义聚合器返回错误，Local 实现会将当前用例标记为 `failed`，并把错误信息写入 `errorMessage`。
+
+读取结果时需要区分用例级结果和指标级结果。自定义聚合器只决定用例级 `score` 与 `finalEvalStatus`。单条指标自己的 `score`、`threshold` 与 `evalStatus` 仍由对应 Evaluator 计算，并保留在 `overallEvalMetricResults` 中。结果汇总的整体状态会跟随用例级 `finalEvalStatus`，`metricSummaries` 继续保留每个指标自己的状态用于展示和诊断。因此，自定义聚合策略可以让某个指标失败但用例整体通过。
 
 ### AgentEvaluator
 
@@ -3297,11 +3413,11 @@ type EvaluationCaseResult struct {
 
 默认情况下，`evaluation.New` 会创建 AgentEvaluator 并使用 InMemory 的 EvalSetManager、MetricManager、EvalResultManager 与默认 Registry，同时创建本地 Service。若希望从本地文件读取 EvalSet 与指标配置，并将结果写入文件，需要显式注入 Local Manager。
 
-AgentEvaluator 支持通过 `WithNumRuns` 对同一评估集运行多次。聚合时会按用例维度汇总多次运行的结果，对同名指标取平均分并与阈值对比得到聚合状态，聚合结果写入 `MetricResults`，每次运行的原始结果保留在 `EvalCaseResults`。
+AgentEvaluator 支持通过 `WithNumRuns` 对同一评估集运行多次。聚合时会按用例维度汇总多次运行的结果，`OverallStatus` 按每次运行的 `EvalCaseResult.finalEvalStatus` 汇总；对同名指标取平均分并与阈值对比得到指标级聚合状态，写入 `MetricResults` 用于展示和诊断。每次运行的原始结果保留在 `EvalCaseResults`。
 
 ### NumRuns 重复运行次数
 
-由于 Agent 的运行过程可能存在不确定性，`evaluation.WithNumRuns` 提供了重复运行机制，用于降低单次运行带来的偶然性。默认运行次数为 1 次，指定 `evaluation.WithNumRuns(n)` 后，同一个评估集会在同一次 Evaluate 中完成 n 次推理与评估，并在汇总时以用例为粒度聚合多次运行的分数，默认按同名指标的平均分得到聚合结果。
+由于 Agent 的运行过程可能存在不确定性，`evaluation.WithNumRuns` 提供了重复运行机制，用于降低单次运行带来的偶然性。默认运行次数为 1 次，指定 `evaluation.WithNumRuns(n)` 后，同一个评估集会在同一次 Evaluate 中完成 n 次推理与评估，并在汇总时以用例为粒度汇总多次运行的 `finalEvalStatus`，同时按同名指标的平均分生成指标级聚合结果。
 
 重复运行次数不会线性增加评估结果文件的数量。一次 Evaluate 只会写入一份评估结果文件，对应一个 EvalSetResult；当 `NumRuns` 大于 1 时，文件内部会包含多次运行的明细结果，同一用例在不同运行中的结果会分别出现在 `EvalCaseResults` 中，并通过 `runId` 区分。
 

@@ -1362,11 +1362,11 @@ func TestAgentEvaluatorEvaluateSuccess(t *testing.T) {
 	assert.Equal(t, evalSetID, evaluationResult.EvalSetID)
 	assert.Equal(t, appName, evaluationResult.AppName)
 	assert.Len(t, evaluationResult.EvalCases, 1)
-	assert.Equal(t, status.EvalStatusPassed, evaluationResult.OverallStatus)
+	assert.Equal(t, status.EvalStatusFailed, evaluationResult.OverallStatus)
 
 	caseResult := evaluationResult.EvalCases[0]
 	assert.Equal(t, caseID, caseResult.EvalCaseID)
-	assert.Equal(t, status.EvalStatusPassed, caseResult.OverallStatus)
+	assert.Equal(t, status.EvalStatusFailed, caseResult.OverallStatus)
 	assert.Len(t, caseResult.MetricResults, 1)
 	assert.InDelta(t, 1.0, caseResult.MetricResults[0].Score, 0.001)
 	assert.Len(t, caseResult.EvalCaseResults, 2)
@@ -2061,10 +2061,31 @@ func TestAggregateCaseRunsSuccess(t *testing.T) {
 	result, err := aggregateCaseRuns(caseID, runs)
 	assert.NoError(t, err)
 	assert.Equal(t, caseID, result.EvalCaseID)
-	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
 	assert.Len(t, result.MetricResults, 1)
 	assert.InDelta(t, 1.0, result.MetricResults[0].Score, 0.001)
 	assert.Len(t, result.EvalCaseResults, 2)
+}
+
+func TestAggregateCaseRunsUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {
+	runs := []*evalresult.EvalCaseResult{
+		{
+			EvalSetID:       "set",
+			EvalID:          "case",
+			RunID:           1,
+			Score:           0.8,
+			FinalEvalStatus: status.EvalStatusPassed,
+			OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+				makeEvalMetricResult("important", 1, status.EvalStatusPassed, 1),
+				makeEvalMetricResult("minor", 0, status.EvalStatusFailed, 1),
+			},
+		},
+	}
+
+	result, err := aggregateCaseRuns("case", runs)
+	assert.NoError(t, err)
+	assert.Equal(t, status.EvalStatusPassed, result.OverallStatus)
+	assert.Len(t, result.MetricResults, 2)
 }
 
 func TestAggregateCaseRunsUnknownStatus(t *testing.T) {
@@ -2072,9 +2093,8 @@ func TestAggregateCaseRunsUnknownStatus(t *testing.T) {
 		makeEvalCaseResult("set", "case", "metric", 0.5, 1, status.EvalStatusUnknown),
 	}
 	result, err := aggregateCaseRuns("case", runs)
-	assert.NoError(t, err)
-	assert.Equal(t, status.EvalStatusFailed, result.OverallStatus)
-	assert.Len(t, result.MetricResults, 1)
+	assert.Error(t, err)
+	assert.Nil(t, result)
 }
 
 func TestAggregateCaseRunsNotEvaluated(t *testing.T) {

@@ -1,0 +1,38 @@
+[
+  {
+    "metricName": "answer_is_substantive",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "skip",
+          "length": {
+            "min": 40
+          }
+        }
+      }
+    },
+    "extension": {
+      "weight": 0.8
+    }
+  },
+  {
+    "metricName": "max_six_chars",
+    "evaluatorName": "final_response_avg_score",
+    "threshold": 1,
+    "criterion": {
+      "finalResponse": {
+        "text": {
+          "matchStrategy": "skip",
+          "length": {
+            "max": 6
+          }
+        }
+      }
+    },
+    "extension": {
+      "weight": 0.2
+    }
+  }
+]
