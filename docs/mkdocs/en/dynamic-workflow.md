@@ -344,10 +344,27 @@ standalone script: the temporary workflow gets code-level flexibility, while
 Agent execution, tool boundaries, event streaming, and Session persistence
 remain controlled by the Go framework.
 
-`dynamicworkflow.LocalRunner` starts a local Python process. It is not a
-security sandbox. In production, provide your own `dynamicworkflow.Runtime`,
-such as a container, microVM, or remote sandbox, and enforce filesystem,
-network, process, dependency, and resource limits there.
+`dynamicworkflow.LocalRunner` starts a local Python process through the shared
+local Python runtime. It is not a security sandbox. It applies
+defense-in-depth checks for local use, including
+restricted Python syntax, restricted builtins, source-size limits, captured
+output limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+full-execution timeout configured with
+`dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})`.
+The default timeout is intentionally unset; LocalRunner inherits the caller's
+context so long Agent workflows are not cut off unexpectedly.
+
+Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, rejects generated source larger than 64 KiB unless configured
+otherwise, and enforces the documented restricted Python subset. These are
+intentional behavior changes rather than a security sandbox boundary.
+
+In production, provide your own `dynamicworkflow.Runtime`, such as a container,
+microVM, or remote sandbox, and enforce filesystem, network, process,
+dependency, and resource limits there.
 
 Generated workflow code should call host tools rather than direct HTTP APIs.
 Authentication, authorization, retries, idempotency, audit, rate limiting, and
@@ -366,7 +383,7 @@ Agent by default. Both are Python orchestration paths, and exposing both makes
 the model's choice harder.
 
 See the runnable
-[Dynamic Workflow Agent example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow).
+[basic Dynamic Workflow Agent example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic).
 
 ## Roadmap note: file-backed workflows
 
