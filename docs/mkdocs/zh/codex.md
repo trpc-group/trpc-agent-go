@@ -2,7 +2,7 @@
 
 ## 概述
 
-tRPC-Agent-Go 提供了 `Codex` 的 `Agent` 实现，通过执行本地 Codex CLI 的 `codex exec --json` 获取 JSONL 事件流，并映射为框架事件。
+tRPC-Agent-Go 提供了 `Codex` 的 `Agent` 实现，通过执行本地 Codex CLI 的 `codex exec --json` 获取 JSONL 事件流，并实时映射为框架事件。
 
 该实现的主要用途包括：
 
@@ -77,7 +77,7 @@ ag, err := codex.New(
 
 ## 事件映射
 
-该 Agent 只发出工具事件与最终响应事件，不发出中间 reasoning 事件。
+该 Agent 会随着 Codex JSONL 到达实时发出 assistant、工具与错误事件，并在 Codex turn 完成后发出最终完成响应。Codex 的 `agent_message` 是完整消息 item，不是 token delta，但该 Agent 会把它暴露为 partial `chat.completion.chunk` segment，确保 session 持久化只保存最终 assistant response。最终完成响应使用最后一个 assistant message 的内容，并携带最终 usage 与 thread state；不发出中间 reasoning 事件。
 
 | Codex JSONL 输出 | 框架事件 |
 | --- | --- |
@@ -85,7 +85,8 @@ ag, err := codex.New(
 | `item.type == "command_execution"` | tool-call 与 tool-result response 事件 |
 | `item.type == "mcp_tool_call"` | tool-call 与 tool-result response 事件 |
 | `web_search`、`file_change`、`image_view`、`image_generation` 等内置工具 item | tool-call 与 tool-result response 事件 |
-| `item.type == "agent_message"` | final response 内容 |
+| `type == "turn.failed"` 或 `type == "error"` | 不携带 `Response.Error` 的非终止 error observation chunk；命令结束后再发出一个终止 error |
+| `item.type == "agent_message"` | partial assistant chunk 事件；最后一个 `agent_message` item 同时作为 final response 内容 |
 | `type == "turn.completed"` | final response usage |
 
 MCP 工具调用会尽量归一化为与 Claude Code 兼容的工具名：`mcp__<server>__<tool>`。
@@ -99,7 +100,7 @@ Codex 会自行创建 thread id。该 Agent 会把这个 id 存入 session state
 1. 首轮：把 prompt 写入 `codex exec --json` 的 stdin
 2. 后续轮次：把 prompt 写入 `codex exec resume --json <thread-id>` 的 stdin
 
-如果 resume 失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 与新建执行都失败，本次调用会返回 run error。
+如果 resume 在发出任何 transcript 事件前失败，该 Agent 会重新发起一次新的 `codex exec`；如果新执行返回了 thread id，则更新已保存的 thread id。如果 resume 已经发出过框架事件，或 stdout 解析失败，则不会再启动新的执行，以避免重复暴露进度或重复执行工具副作用，而是直接返回本次失败。如果 resume 与新建执行都失败，本次调用会返回 run error。
 
 如需保持上下文，请在 `runner` 中持续使用相同的 app name、user ID、session ID。
 
@@ -128,4 +129,4 @@ ag, err := codex.New(
 | `WithExtraArgs(args...)` | 在可选 resume session id 前追加 `codex exec` flags。 |
 | `WithEnv(env...)` | 追加 CLI 环境变量。格式为 `KEY=VALUE`。 |
 | `WithWorkDir(dir)` | 设置 CLI 进程工作目录。 |
-| `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、解析前调用。 |
+| `WithRawOutputHook(hook)` | 观测 raw stdout/stderr。回调会在 CLI 结束后、流式事件发出后调用；如果返回错误，会追加错误事件并跳过最终 assistant response。 |

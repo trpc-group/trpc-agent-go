@@ -268,15 +268,9 @@ func (t *spawnTool) Call(
 	if err != nil {
 		return nil, err
 	}
-	delivery, err := outbound.ResolveTarget(
-		ctx,
-		outbound.DeliveryTarget{},
-	)
+	delivery, err := resolveSpawnDeliveryTarget(ctx, mode)
 	if err != nil {
-		return nil, fmt.Errorf(
-			"subagent: resolve delivery target: %w",
-			err,
-		)
+		return nil, err
 	}
 
 	run, err := t.svc.Spawn(ctx, SpawnRequest{
@@ -443,6 +437,27 @@ func (t *waitTool) Call(
 		defer cancel()
 	}
 	return t.svc.WaitForUser(waitCtx, userID, in.ID)
+}
+
+func resolveSpawnDeliveryTarget(
+	ctx context.Context,
+	mode string,
+) (outbound.DeliveryTarget, error) {
+	delivery, err := outbound.ResolveTarget(
+		ctx,
+		outbound.DeliveryTarget{},
+	)
+	if err == nil {
+		return delivery, nil
+	}
+	if mode != spawnModeAsync &&
+		errors.Is(err, outbound.ErrTargetUnavailable) {
+		return outbound.DeliveryTarget{}, nil
+	}
+	return outbound.DeliveryTarget{}, fmt.Errorf(
+		"subagent: resolve delivery target: %w",
+		err,
+	)
 }
 
 func normalizeSpawnMode(mode string) (string, error) {

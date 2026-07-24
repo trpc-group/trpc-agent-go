@@ -147,6 +147,97 @@ func marshalTelemetryChoices(choices []model.Choice) ([]byte, error) {
 	return json.Marshal(out)
 }
 
+// ChatTraceState keeps per-chat-span trace state for repeated streaming chunks.
+//
+// Request attributes are normally committed once per chat span while the
+// installed span attribute policy pointer remains unchanged. Invocation and
+// response attributes remain chunk-scoped because they are cheap and may be
+// completed as streaming processing advances.
+//
+// ChatTraceState is not goroutine-safe and must not be shared across chat spans.
+type ChatTraceState struct {
+	requestCommitted bool
+	cachedPolicy     *SpanAttributePolicy
+}
+
+// traceChunkAttributes contains per-response chunk trace inputs.
+type traceChunkAttributes struct {
+	Invocation       *agent.Invocation
+	Response         *model.Response
+	EventID          string
+	TimeToFirstToken time.Duration
+}
+
+// commitRequest writes base chat and request attributes for a chat span.
+//
+// Request payload attributes are committed once while the global span attribute
+// policy pointer remains unchanged. If the policy pointer changes, request
+// attributes are rebuilt and written again under the new policy. Base chat
+// attributes may be rewritten on those refreshes. When req is nil, only base
+// attributes are written and request commit state is not latched.
+func (s *ChatTraceState) commitRequest(span trace.Span, req *model.Request, taskType string) {
+	if !span.IsRecording() {
+		return
+	}
+
+	policy := spanAttributePolicy.Load()
+	if s != nil && s.requestCommitted && s.cachedPolicy == policy {
+		return
+	}
+
+	attrs := baseChatAttributes()
+	if taskType != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, taskType))
+	}
+	if req != nil {
+		attrs = append(attrs, buildRequestAttributes(req)...)
+	}
+
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
+
+	if s != nil && req != nil {
+		s.requestCommitted = true
+		s.cachedPolicy = policy
+	}
+}
+
+// traceChunk writes invocation, chunk metadata, and response attributes.
+func (s *ChatTraceState) traceChunk(span trace.Span, attributes *traceChunkAttributes) {
+	if !span.IsRecording() || attributes == nil {
+		return
+	}
+
+	attrs := buildInvocationAttributes(attributes.Invocation)
+	if attributes.EventID != "" {
+		attrs = append(attrs, attribute.String(semconvtrace.KeyEventID, attributes.EventID))
+	}
+	if attributes.TimeToFirstToken > 0 {
+		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
+	}
+	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
+
+	if attributes.Response != nil && attributes.Response.Error != nil {
+		span.SetStatus(codes.Error, attributes.Response.Error.Message)
+	}
+}
+
+// TraceChat is the single entry point for stateful streaming chat traces.
+func (s *ChatTraceState) TraceChat(span trace.Span, attributes *TraceChatAttributes) {
+	traceChatWithState(span, attributes, s)
+}
+
+func baseChatAttributes() []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
+		attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
+	}
+}
+
 // TraceWorkflow traces the workflow.
 func TraceWorkflow(span trace.Span, workflow *Workflow) {
 	if !span.IsRecording() {
@@ -457,44 +548,25 @@ func NewSummarizeTaskType(name string) string {
 
 // TraceChat traces the invocation of an LLM call.
 func TraceChat(span trace.Span, attributes *TraceChatAttributes) {
+	traceChatWithState(span, attributes, nil)
+}
+
+func traceChatWithState(span trace.Span, attributes *TraceChatAttributes, state *ChatTraceState) {
 	if !span.IsRecording() {
 		return
 	}
-	attrs := []attribute.KeyValue{
-		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
-		attribute.String(semconvtrace.KeyGenAIOperationName, OperationChat),
-	}
 	if attributes == nil {
-		span.SetAttributes(attrs...)
+		span.SetAttributes(baseChatAttributes()...)
 		return
 	}
 
-	if attributes.EventID != "" {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyEventID, attributes.EventID))
-	}
-	if attributes.TimeToFirstToken > 0 {
-		attrs = append(attrs, attribute.Float64(semconvtrace.KeyTRPCAgentGoClientTimeToFirstToken, attributes.TimeToFirstToken.Seconds()))
-	}
-	if attributes.TaskType != "" {
-		attrs = append(attrs, attribute.String(semconvtrace.KeyGenAITaskType, attributes.TaskType))
-	}
-
-	// Add invocation attributes
-	attrs = append(attrs, buildInvocationAttributes(attributes.Invocation)...)
-
-	// Add request attributes
-	attrs = append(attrs, buildRequestAttributes(attributes.Request)...)
-
-	// Add response attributes
-	attrs = append(attrs, buildResponseAttributes(attributes.Response, semconvtrace.ValueDefaultErrorType)...)
-
-	// Set all attributes at once
-	span.SetAttributes(attrs...)
-
-	// Handle response error status
-	if attributes.Response != nil && attributes.Response.Error != nil {
-		span.SetStatus(codes.Error, attributes.Response.Error.Message)
-	}
+	state.commitRequest(span, attributes.Request, attributes.TaskType)
+	state.traceChunk(span, &traceChunkAttributes{
+		Invocation:       attributes.Invocation,
+		Response:         attributes.Response,
+		EventID:          attributes.EventID,
+		TimeToFirstToken: attributes.TimeToFirstToken,
+	})
 }
 
 // buildInvocationAttributes extracts attributes from the invocation.

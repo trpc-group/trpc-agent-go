@@ -333,7 +333,6 @@ func TestAgentNode_RunOptions_MergeRuntimeStateStandalone(t *testing.T) {
 			"node_runtime":    "node",
 			StateKeyUserInput: "node-input",
 		})},
-		nil,
 	)
 	require.NotNil(t, inv)
 	require.Equal(t, "node", inv.RunOptions.RuntimeState["node_runtime"])
@@ -827,7 +826,6 @@ func TestAgentNode_Stage2_SubInvocation_InheritsPluginsFromParent(t *testing.T) 
 
 	childInv := buildAgentInvocationWithStateScopeAndInputKey(
 		ctx, state, State{}, sub, "agentNode", "", "",
-		nil,
 		nil,
 		nil,
 	)

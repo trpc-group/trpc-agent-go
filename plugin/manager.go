@@ -50,6 +50,17 @@ type EventHook func(
 	e *event.Event,
 ) (*event.Event, error)
 
+// AfterRunArgs contains context available after one Runner.Run finishes.
+type AfterRunArgs struct {
+	// Invocation is the root invocation associated with the run.
+	Invocation *agent.Invocation
+	// CompletionEvent is a snapshot of the finalized Runner completion event.
+	CompletionEvent *event.Event
+}
+
+// AfterRunHook is invoked after Runner builds the finalized completion event.
+type AfterRunHook func(ctx context.Context, args *AfterRunArgs) error
+
 // Registry exposes hook registration points for a single plugin.
 type Registry struct {
 	name string
@@ -187,6 +198,17 @@ func (r *Registry) OnEvent(hook EventHook) {
 	})
 }
 
+// AfterRun registers a hook that observes a completed Runner.Run.
+func (r *Registry) AfterRun(hook AfterRunHook) {
+	if r == nil || r.mgr == nil || hook == nil {
+		return
+	}
+	r.mgr.afterRunHooks = append(r.mgr.afterRunHooks, namedAfterRunHook{
+		name: r.name,
+		hook: hook,
+	})
+}
+
 // Manager composes multiple plugins into callback sets.
 //
 // Manager implements agent.PluginManager.
@@ -196,12 +218,18 @@ type Manager struct {
 	modelCallbacks         *model.Callbacks
 	toolCallbacks          *tool.Callbacks
 	eventHooks             []namedEventHook
+	afterRunHooks          []namedAfterRunHook
 	afterToolMessagesHooks []namedAfterToolMessagesHook
 }
 
 type namedEventHook struct {
 	name string
 	hook EventHook
+}
+
+type namedAfterRunHook struct {
+	name string
+	hook AfterRunHook
 }
 
 type namedAfterToolMessagesHook struct {
@@ -310,6 +338,20 @@ func (m *Manager) OnEvent(
 		}
 	}
 	return curr, nil
+}
+
+// AfterRun runs registered after-run hooks in plugin order.
+func (m *Manager) AfterRun(ctx context.Context, args *AfterRunArgs) error {
+	if m == nil || args == nil {
+		return nil
+	}
+	var errs []error
+	for _, h := range m.afterRunHooks {
+		if err := h.hook(ctx, args); err != nil {
+			errs = append(errs, fmt.Errorf("plugin %q: %w", h.name, err))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // AfterToolMessages runs registered after-tool-messages hooks in plugin order.

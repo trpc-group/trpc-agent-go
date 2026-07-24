@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
+	"trpc.group/trpc-go/trpc-agent-go/internal/tracecapture"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -159,7 +160,15 @@ func TestLLMAgent_AfterCb(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
 
 	llm := &LLMAgent{agentCallbacks: cb}
-	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{}, false)
+	wrapped := llm.wrapEventChannelWithTelemetry(
+		context.Background(),
+		inv,
+		orig,
+		noop.Span{},
+		&itelemetry.InvokeAgentTracker{},
+		false,
+		tracecapture.StepLease{},
+	)
 
 	var objs []string
 	for e := range wrapped {
@@ -183,7 +192,15 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	inv := &agent.Invocation{InvocationID: "id2", AgentName: "agent2"}
 
 	llm := &LLMAgent{}
-	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, &itelemetry.InvokeAgentTracker{}, false)
+	wrapped := llm.wrapEventChannelWithTelemetry(
+		context.Background(),
+		inv,
+		orig,
+		noop.Span{},
+		&itelemetry.InvokeAgentTracker{},
+		false,
+		tracecapture.StepLease{},
+	)
 
 	// Expect exactly one event propagated from original channel and no extras.
 	count := 0
@@ -193,6 +210,35 @@ func TestLLMAgent_AfterCbNoResp(t *testing.T) {
 	if count != 1 {
 		t.Fatalf("expected 1 event, got %d", count)
 	}
+}
+
+func TestLLMAgent_WrappedTelemetryAllowsEventWithoutResponse(t *testing.T) {
+	orig := make(chan *event.Event, 1)
+	orig <- &event.Event{
+		ID:         "state-only",
+		StateDelta: map[string][]byte{"state": []byte(`"updated"`)},
+	}
+	close(orig)
+
+	inv := &agent.Invocation{InvocationID: "id", AgentName: "agent"}
+	llm := &LLMAgent{}
+	wrapped := llm.wrapEventChannelWithTelemetry(
+		context.Background(),
+		inv,
+		orig,
+		noop.Span{},
+		&itelemetry.InvokeAgentTracker{},
+		false,
+		tracecapture.StepLease{},
+	)
+
+	evt, ok := <-wrapped
+	require.True(t, ok)
+	require.NotNil(t, evt)
+	require.Nil(t, evt.Response)
+	require.Equal(t, []byte(`"updated"`), evt.StateDelta["state"])
+	_, ok = <-wrapped
+	require.False(t, ok)
 }
 
 func TestLLMAgent_AfterCbErrorRecordsTelemetryErrorType(t *testing.T) {
@@ -236,7 +282,15 @@ func TestLLMAgent_AfterCbErrorRecordsTelemetryErrorType(t *testing.T) {
 	llm := &LLMAgent{agentCallbacks: cb}
 	var trackerErr error
 	tracker := itelemetry.NewInvokeAgentTracker(context.Background(), inv, false, &trackerErr)
-	wrapped := llm.wrapEventChannelWithTelemetry(context.Background(), inv, orig, noop.Span{}, tracker, false)
+	wrapped := llm.wrapEventChannelWithTelemetry(
+		context.Background(),
+		inv,
+		orig,
+		noop.Span{},
+		tracker,
+		false,
+		tracecapture.StepLease{},
+	)
 
 	var events []*event.Event
 	for e := range wrapped {

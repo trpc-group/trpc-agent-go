@@ -27,12 +27,15 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/provider"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
+
+func float64Ptr(v float64) *float64 { return &v }
 
 type fakeLLMEvaluator struct {
 	constructMessagesCalled   int
@@ -64,8 +67,15 @@ func (f *fakeLLMEvaluator) ConstructMessages(_ context.Context, actuals, expecte
 func (f *fakeLLMEvaluator) ScoreBasedOnResponse(_ context.Context, _ *model.Response,
 	_ *metric.EvalMetric) (*evaluator.ScoreResult, error) {
 	f.scoreBasedOnResponseCalls++
-	score := 0.9
-	return &evaluator.ScoreResult{Score: score, RubricScores: nil}, nil
+	scoreValue := 0.9
+	return &evaluator.ScoreResult{
+		Score: scoreValue,
+		Value: &score.Value{
+			Kind:    score.KindNumeric,
+			Numeric: float64Ptr(scoreValue),
+		},
+		RubricScores: nil,
+	}, nil
 }
 
 func (f *fakeLLMEvaluator) AggregateSamples(_ context.Context, samples []*evaluator.PerInvocationResult,
@@ -292,6 +302,11 @@ func TestLLMBaseEvaluator_EvaluateSuccess(t *testing.T) {
 	require.Len(t, stub.receivedSamples, 1)
 	assert.Equal(t, actual, stub.receivedSamples[0].ActualInvocation)
 	assert.Equal(t, expected, stub.receivedSamples[0].ExpectedInvocation)
+	require.NotNil(t, stub.receivedSamples[0].Details)
+	require.NotNil(t, stub.receivedSamples[0].Details.Value)
+	assert.Equal(t, score.KindNumeric, stub.receivedSamples[0].Details.Value.Kind)
+	require.NotNil(t, stub.receivedSamples[0].Details.Value.Numeric)
+	assert.Equal(t, 0.9, *stub.receivedSamples[0].Details.Value.Numeric)
 	require.Len(t, stub.receivedInvocations, 1)
 	assert.Equal(t, stub.receivedSamples[0].Score, stub.receivedInvocations[0].Score)
 }

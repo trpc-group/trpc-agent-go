@@ -62,9 +62,9 @@ type ToolSet struct {
 }
 
 // NewMCPToolSet creates a new MCP tool set with the given configuration.
-// Use WithName option to set a custom name for the toolset to avoid name conflicts
-// for tools with the same name under different tool sets when using multiple MCP toolsets.
-// Example: NewMCPToolSet(config, WithName("your-mcp-toolset"))
+// The default ToolSet name is "mcp". When attached to an LLMAgent, tools are
+// exposed to the model as {name}_{remoteToolName}; pass WithName with a unique
+// value per MCP server to avoid prefix collisions across multiple ToolSets.
 func NewMCPToolSet(config ConnectionConfig, opts ...ToolSetOption) *ToolSet {
 	// Apply default configuration.
 	cfg := toolSetConfig{

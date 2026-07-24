@@ -17,6 +17,20 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/structure"
 )
 
+// NormalizeNodeKind maps a node type to the public static structure taxonomy.
+func NormalizeNodeKind(kind string) structure.NodeKind {
+	switch structure.NodeKind(kind) {
+	case structure.NodeKindLLM:
+		return structure.NodeKindLLM
+	case structure.NodeKindTool:
+		return structure.NodeKindTool
+	case structure.NodeKindAgent:
+		return structure.NodeKindAgent
+	default:
+		return structure.NodeKindFunction
+	}
+}
+
 // PathAllocator allocates stable child paths under one parent node.
 type PathAllocator struct {
 	parentNodeID string

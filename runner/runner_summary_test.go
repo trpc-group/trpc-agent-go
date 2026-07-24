@@ -20,6 +20,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/summaryrestore"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
@@ -169,6 +170,7 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 	userID := "test-user"
 	sessionID := "test-session"
 
+	requestStartedLowerBound := time.Now().Add(-time.Second)
 	// Run the runner with qualifying event
 	_, err := RunWithMessages(ctx, runner, userID, sessionID, []model.Message{
 		{Role: model.RoleUser, Content: "Hello"},
@@ -185,6 +187,10 @@ func TestRunner_EnqueueSummaryJob_ContextValuePreserved(t *testing.T) {
 
 	// Verify the context value was preserved and passed to EnqueueSummaryJob
 	assert.Equal(t, "trace-12345", contextCapturingService.capturedTraceID, "Context value should be preserved and passed to EnqueueSummaryJob")
+	require.True(t, contextCapturingService.capturedRequestStartOK)
+	assert.NotEmpty(t, contextCapturingService.capturedRequestStart.RequestID)
+	assert.True(t, contextCapturingService.capturedRequestStart.StartedAt.After(requestStartedLowerBound))
+	assert.False(t, contextCapturingService.capturedRequestStart.StartedAt.After(time.Now()))
 }
 
 func TestRunner_EnqueueSummaryJob_AttachesCacheSafeForkRequest(t *testing.T) {
@@ -350,13 +356,17 @@ func (c *cacheSafeForkCapturingSessionService) EnqueueSummaryJob(
 // contextCapturingSessionService captures the context passed to EnqueueSummaryJob.
 type contextCapturingSessionService struct {
 	*mockSessionService
-	capturedTraceID any
-	done            chan struct{}
+	capturedTraceID        any
+	capturedRequestStart   summarytrigger.RequestStart
+	capturedRequestStartOK bool
+	done                   chan struct{}
 }
 
 func (c *contextCapturingSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
 	// Capture the trace ID from context
 	c.capturedTraceID = ctx.Value(traceIDKey)
+	c.capturedRequestStart, c.capturedRequestStartOK =
+		summarytrigger.RequestStartFromContext(ctx)
 	close(c.done)
 
 	// Call parent to record the call
