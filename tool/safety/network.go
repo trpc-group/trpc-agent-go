@@ -166,6 +166,13 @@ func positionalTokens(args []string, valueOptions map[string]struct{}) []string 
 }
 
 func webClientDestinations(base string, args []string) ([]string, bool) {
+	valueOptions, flagOptions, shortFlags := webClientOptionMetadata(base)
+	return parseWebClientDestinations(args, valueOptions, flagOptions, shortFlags)
+}
+
+func webClientOptionMetadata(
+	base string,
+) (map[string]struct{}, map[string]struct{}, string) {
 	valueOptions := map[string]struct{}{
 		"--cacert": {}, "--capath": {}, "--cert": {}, "--config": {},
 		"--connect-timeout": {}, "--connect-to": {}, "--cookie": {}, "--cookie-jar": {},
@@ -219,60 +226,106 @@ func webClientDestinations(base string, args []string) ([]string, bool) {
 	} else if base != "curl" {
 		shortFlags += wgetShortFlags
 	}
+	return valueOptions, flagOptions, shortFlags
+}
+
+func parseWebClientDestinations(
+	args []string,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+	shortFlags string,
+) ([]string, bool) {
 	var destinations []string
 	unresolved := false
 	options := true
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if options && arg == "--" {
+		if !options {
+			destinations = append(destinations, arg)
+			continue
+		}
+		if arg == "--" {
 			options = false
 			continue
 		}
-		if options && (arg == "--url" || arg == "-url") && i+1 < len(args) {
-			destinations = append(destinations, args[i+1])
-			i++
+		if destination, next, ok := webClientURLArgument(args, i); ok {
+			destinations = append(destinations, destination)
+			i = next
 			continue
 		}
-		if options && strings.HasPrefix(arg, "--url=") {
-			destinations = append(destinations, strings.TrimPrefix(arg, "--url="))
+		if !strings.HasPrefix(arg, "-") || arg == "-" {
+			destinations = append(destinations, arg)
 			continue
 		}
-		if options && strings.HasPrefix(arg, "-") && arg != "-" {
-			name := strings.SplitN(arg, "=", 2)[0]
-			if strings.HasPrefix(arg, "--") {
-				if _, consumes := valueOptions[name]; consumes {
-					if !strings.Contains(arg, "=") && i+1 < len(args) {
-						i++
-					}
-					continue
-				}
-				if _, flag := flagOptions[arg]; flag {
-					continue
-				}
-				unresolved = true
-				if !strings.Contains(arg, "=") && i+1 < len(args) &&
-					!strings.HasPrefix(args[i+1], "-") {
-					i++
-				}
-				continue
-			}
-			consumesNext, recognized := parseShortOptions(arg, valueOptions, shortFlags)
-			if recognized {
-				if consumesNext && i+1 < len(args) {
-					i++
-				}
-				continue
-			}
+		next, recognized := consumeWebClientOption(
+			args, i, valueOptions, flagOptions, shortFlags,
+		)
+		if !recognized {
 			unresolved = true
-			if !strings.Contains(arg, "=") && i+1 < len(args) &&
-				!strings.HasPrefix(args[i+1], "-") {
-				i++
-			}
-			continue
 		}
-		destinations = append(destinations, arg)
+		i = next
 	}
 	return destinations, unresolved
+}
+
+func webClientURLArgument(args []string, index int) (string, int, bool) {
+	arg := args[index]
+	if (arg == "--url" || arg == "-url") && index+1 < len(args) {
+		return args[index+1], index + 1, true
+	}
+	if strings.HasPrefix(arg, "--url=") {
+		return strings.TrimPrefix(arg, "--url="), index, true
+	}
+	return "", index, false
+}
+
+func consumeWebClientOption(
+	args []string,
+	index int,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+	shortFlags string,
+) (int, bool) {
+	arg := args[index]
+	if strings.HasPrefix(arg, "--") {
+		return consumeWebClientLongOption(args, index, valueOptions, flagOptions)
+	}
+	consumesNext, recognized := parseShortOptions(arg, valueOptions, shortFlags)
+	if recognized && consumesNext && index+1 < len(args) {
+		return index + 1, true
+	}
+	if recognized {
+		return index, true
+	}
+	return consumeUnknownWebClientOption(args, index), false
+}
+
+func consumeWebClientLongOption(
+	args []string,
+	index int,
+	valueOptions map[string]struct{},
+	flagOptions map[string]struct{},
+) (int, bool) {
+	arg := args[index]
+	name := strings.SplitN(arg, "=", 2)[0]
+	if _, consumes := valueOptions[name]; consumes {
+		if !strings.Contains(arg, "=") && index+1 < len(args) {
+			return index + 1, true
+		}
+		return index, true
+	}
+	if _, flag := flagOptions[arg]; flag {
+		return index, true
+	}
+	return consumeUnknownWebClientOption(args, index), false
+}
+
+func consumeUnknownWebClientOption(args []string, index int) int {
+	if !strings.Contains(args[index], "=") && index+1 < len(args) &&
+		!strings.HasPrefix(args[index+1], "-") {
+		return index + 1
+	}
+	return index
 }
 
 func parseShortOptions(
@@ -645,45 +698,77 @@ func destinationOverrideFinding(argv []string) (Finding, bool) {
 	for i := 1; i < len(argv); i++ {
 		rawArg := argv[i]
 		arg := strings.ToLower(rawArg)
-		if sshClient && (arg == "-j" || strings.HasPrefix(arg, "-j") ||
-			arg == "-oproxycommand" || strings.HasPrefix(arg, "-oproxycommand=") ||
-			arg == "-oproxyjump" || strings.HasPrefix(arg, "-oproxyjump=") ||
-			arg == "-ohostname" || strings.HasPrefix(arg, "-ohostname=") ||
-			(arg == "-o" && i+1 < len(argv) && sshDestinationOverrideOption(argv[i+1]))) {
-			return newFinding(
-				DecisionDeny, RiskHigh, "network.destination_override",
-				"SSH option can replace or relay the network destination",
-				"remove ProxyCommand or ProxyJump and connect directly to an allowlisted host",
-			), true
+		if sshClient && sshDestinationOverrideArgument(argv, i, arg) {
+			return sshDestinationOverrideFinding(), true
 		}
-		name := strings.SplitN(arg, "=", 2)[0]
-		switch name {
-		case "--resolve", "--connect-to", "--proxy", "--preproxy",
-			"--proxy-command", "--proxycommand":
-			return newFinding(
-				DecisionDeny, RiskHigh, "network.destination_override",
-				"network option can replace the effective destination",
-				"remove destination-changing options and use an allowlisted URL directly",
-			), true
+		if genericDestinationOverrideArgument(arg) {
+			return genericDestinationOverrideFinding(), true
 		}
 		if base == "curl" && curlProxyOption(rawArg) {
-			return newFinding(
-				DecisionDeny, RiskHigh, "network.destination_override",
-				"network option can replace the effective destination",
-				"remove destination-changing options and use an allowlisted URL directly",
-			), true
+			return genericDestinationOverrideFinding(), true
 		}
-		rawName := strings.SplitN(rawArg, "=", 2)[0]
-		if (base == "nc" || base == "netcat") &&
-			(name == "-x" || strings.HasPrefix(arg, "-x") || rawName == "-X") {
-			return newFinding(
-				DecisionDeny, RiskHigh, "network.destination_override",
-				"netcat proxy options replace the effective destination",
-				"remove proxy options and connect directly to an allowlisted host",
-			), true
+		if netcatDestinationOverrideArgument(base, rawArg, arg) {
+			return netcatDestinationOverrideFinding(), true
 		}
 	}
 	return Finding{}, false
+}
+
+func sshDestinationOverrideArgument(argv []string, index int, arg string) bool {
+	if arg == "-j" || strings.HasPrefix(arg, "-j") {
+		return true
+	}
+	if arg == "-oproxycommand" || strings.HasPrefix(arg, "-oproxycommand=") ||
+		arg == "-oproxyjump" || strings.HasPrefix(arg, "-oproxyjump=") ||
+		arg == "-ohostname" || strings.HasPrefix(arg, "-ohostname=") {
+		return true
+	}
+	return arg == "-o" && index+1 < len(argv) &&
+		sshDestinationOverrideOption(argv[index+1])
+}
+
+func genericDestinationOverrideArgument(arg string) bool {
+	name := strings.SplitN(arg, "=", 2)[0]
+	switch name {
+	case "--resolve", "--connect-to", "--proxy", "--preproxy",
+		"--proxy-command", "--proxycommand":
+		return true
+	default:
+		return false
+	}
+}
+
+func netcatDestinationOverrideArgument(base, rawArg, arg string) bool {
+	if base != "nc" && base != "netcat" {
+		return false
+	}
+	name := strings.SplitN(arg, "=", 2)[0]
+	rawName := strings.SplitN(rawArg, "=", 2)[0]
+	return name == "-x" || strings.HasPrefix(arg, "-x") || rawName == "-X"
+}
+
+func sshDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"SSH option can replace or relay the network destination",
+		"remove ProxyCommand or ProxyJump and connect directly to an allowlisted host",
+	)
+}
+
+func genericDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"network option can replace the effective destination",
+		"remove destination-changing options and use an allowlisted URL directly",
+	)
+}
+
+func netcatDestinationOverrideFinding() Finding {
+	return newFinding(
+		DecisionDeny, RiskHigh, "network.destination_override",
+		"netcat proxy options replace the effective destination",
+		"remove proxy options and connect directly to an allowlisted host",
+	)
 }
 
 func curlProxyOption(arg string) bool {

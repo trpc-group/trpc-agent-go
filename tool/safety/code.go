@@ -619,60 +619,93 @@ func findCallArguments(code, name string) [][]string {
 }
 
 func codePositionExecutable(code string, position int) bool {
-	var quote byte
-	escaped := false
-	lineComment := false
-	blockComment := false
+	var state codePositionState
 	for i := 0; i < position; i++ {
-		current := code[i]
-		if lineComment {
-			if current == '\n' {
-				lineComment = false
-			}
-			continue
-		}
-		if blockComment {
-			if current == '*' && i+1 < position && code[i+1] == '/' {
-				blockComment = false
-				i++
-			}
-			continue
-		}
-		if quote != 0 {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if current == '\\' {
-				escaped = true
-				continue
-			}
-			if current == quote {
-				quote = 0
-			}
-			continue
-		}
-		if current == '/' && i+1 < position {
-			switch code[i+1] {
-			case '/':
-				lineComment = true
-				i++
-				continue
-			case '*':
-				blockComment = true
-				i++
-				continue
-			}
-		}
-		if current == '#' {
-			lineComment = true
-			continue
-		}
-		if current == '\'' || current == '"' || current == '`' {
-			quote = current
+		if state.consume(code, i, position) {
+			i++
 		}
 	}
-	return quote == 0 && !lineComment && !blockComment
+	return state.executable()
+}
+
+type codePositionState struct {
+	quote        byte
+	escaped      bool
+	lineComment  bool
+	blockComment bool
+}
+
+func (s *codePositionState) consume(code string, index, limit int) bool {
+	current := code[index]
+	if s.lineComment {
+		s.consumeLineComment(current)
+		return false
+	}
+	if s.blockComment {
+		return s.consumeBlockComment(code, index, limit)
+	}
+	if s.quote != 0 {
+		s.consumeQuote(current)
+		return false
+	}
+	return s.consumeCode(code, index, limit)
+}
+
+func (s *codePositionState) consumeLineComment(current byte) {
+	if current == '\n' {
+		s.lineComment = false
+	}
+}
+
+func (s *codePositionState) consumeBlockComment(
+	code string,
+	index, limit int,
+) bool {
+	if code[index] == '*' && index+1 < limit && code[index+1] == '/' {
+		s.blockComment = false
+		return true
+	}
+	return false
+}
+
+func (s *codePositionState) consumeQuote(current byte) {
+	if s.escaped {
+		s.escaped = false
+		return
+	}
+	if current == '\\' {
+		s.escaped = true
+		return
+	}
+	if current == s.quote {
+		s.quote = 0
+	}
+}
+
+func (s *codePositionState) consumeCode(code string, index, limit int) bool {
+	current := code[index]
+	if current == '/' && index+1 < limit {
+		if code[index+1] == '/' {
+			s.lineComment = true
+			return true
+		}
+		if code[index+1] == '*' {
+			s.blockComment = true
+			return true
+		}
+	}
+	if current == '#' {
+		s.lineComment = true
+		return false
+	}
+	if current == '\'' || current == '"' || current == '`' {
+		s.quote = current
+	}
+	return false
+}
+
+func (s codePositionState) executable() bool {
+	return s.quote == 0 && !s.lineComment && !s.blockComment
 }
 
 func isCodeIdentifierByte(value byte) bool {

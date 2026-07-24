@@ -488,50 +488,16 @@ func closedValueMatchesSchemaAt(schema *tool.Schema, value any, depth int) bool 
 	}
 	switch schema.Type {
 	case "object":
-		object, ok := value.(map[string]any)
-		if !ok {
-			return false
-		}
-		for _, required := range schema.Required {
-			if _, exists := object[required]; !exists {
-				return false
-			}
-		}
-		for name, item := range object {
-			property, exists := schema.Properties[name]
-			if !exists || !closedValueMatchesSchemaAt(property, item, depth+1) {
-				return false
-			}
-		}
-		return true
+		return closedObjectMatchesSchema(schema, value, depth)
 	case "array":
-		items, ok := value.([]any)
-		if !ok {
-			return false
-		}
-		for _, item := range items {
-			if !closedValueMatchesSchemaAt(schema.Items, item, depth+1) {
-				return false
-			}
-		}
-		return true
+		return closedArrayMatchesSchema(schema, value, depth)
 	case "string":
 		_, ok := value.(string)
 		return ok
 	case "number":
-		number, ok := value.(json.Number)
-		if !ok {
-			return false
-		}
-		_, err := strconv.ParseFloat(string(number), 64)
-		return err == nil
+		return closedNumberMatchesSchema(value)
 	case "integer":
-		number, ok := value.(json.Number)
-		if !ok {
-			return false
-		}
-		_, err := number.Int64()
-		return err == nil
+		return closedIntegerMatchesSchema(value)
 	case "boolean":
 		_, ok := value.(bool)
 		return ok
@@ -540,6 +506,60 @@ func closedValueMatchesSchemaAt(schema *tool.Schema, value any, depth int) bool 
 	default:
 		return false
 	}
+}
+
+func closedObjectMatchesSchema(schema *tool.Schema, value any, depth int) bool {
+	object, ok := value.(map[string]any)
+	if !ok || !closedObjectHasRequiredFields(schema, object) {
+		return false
+	}
+	for name, item := range object {
+		property, exists := schema.Properties[name]
+		if !exists || !closedValueMatchesSchemaAt(property, item, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func closedObjectHasRequiredFields(schema *tool.Schema, object map[string]any) bool {
+	for _, required := range schema.Required {
+		if _, exists := object[required]; !exists {
+			return false
+		}
+	}
+	return true
+}
+
+func closedArrayMatchesSchema(schema *tool.Schema, value any, depth int) bool {
+	items, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		if !closedValueMatchesSchemaAt(schema.Items, item, depth+1) {
+			return false
+		}
+	}
+	return true
+}
+
+func closedNumberMatchesSchema(value any) bool {
+	number, ok := value.(json.Number)
+	if !ok {
+		return false
+	}
+	_, err := strconv.ParseFloat(string(number), 64)
+	return err == nil
+}
+
+func closedIntegerMatchesSchema(value any) bool {
+	number, ok := value.(json.Number)
+	if !ok {
+		return false
+	}
+	_, err := number.Int64()
+	return err == nil
 }
 
 func schemaHasExecutionProperty(schema *tool.Schema) bool {

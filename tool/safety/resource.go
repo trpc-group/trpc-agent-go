@@ -223,33 +223,49 @@ func parallelism(argv []string) int {
 	goTest := isGoTestCommand(argv)
 	for i, arg := range argv[1:] {
 		lower := strings.ToLower(arg)
-		shortParallel := strings.HasPrefix(lower, "-p") && (base == "xargs" || goTest)
-		shortJobs := strings.HasPrefix(lower, "-j") && (base == "make" || base == "ninja")
-		if (shortParallel || shortJobs) && len(lower) > 2 {
-			valueText := strings.TrimPrefix(lower[2:], "=")
-			if value, err := strconv.Atoi(valueText); err == nil {
-				return value
-			}
-		}
-		if strings.HasPrefix(lower, "--jobs=") || strings.HasPrefix(lower, "--parallel=") {
-			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
+		if value, ok := attachedParallelism(base, goTest, lower); ok {
 			return value
 		}
-		if goTest && strings.HasPrefix(lower, "-parallel=") {
-			value, _ := strconv.Atoi(strings.SplitN(lower, "=", 2)[1])
+		if value, ok := longParallelism(goTest, lower); ok {
 			return value
 		}
-		if (lower == "-p" && (base == "xargs" || goTest)) ||
-			(lower == "-j" && (base == "make" || base == "ninja")) ||
-			lower == "--jobs" || lower == "--parallel" ||
-			(lower == "-parallel" && goTest) {
-			if i+2 < len(argv) {
-				value, _ := strconv.Atoi(argv[i+2])
-				return value
-			}
+		if separateParallelismOption(base, goTest, lower) && i+2 < len(argv) {
+			value, _ := strconv.Atoi(argv[i+2])
+			return value
 		}
 	}
 	return 0
+}
+
+func attachedParallelism(base string, goTest bool, arg string) (int, bool) {
+	parallel := strings.HasPrefix(arg, "-p") && (base == "xargs" || goTest)
+	jobs := strings.HasPrefix(arg, "-j") && (base == "make" || base == "ninja")
+	if (!parallel && !jobs) || len(arg) <= 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(strings.TrimPrefix(arg[2:], "="))
+	return value, err == nil
+}
+
+func longParallelism(goTest bool, arg string) (int, bool) {
+	long := strings.HasPrefix(arg, "--jobs=") || strings.HasPrefix(arg, "--parallel=")
+	goParallel := goTest && strings.HasPrefix(arg, "-parallel=")
+	if !long && !goParallel {
+		return 0, false
+	}
+	value, _ := strconv.Atoi(strings.SplitN(arg, "=", 2)[1])
+	return value, true
+}
+
+func separateParallelismOption(base string, goTest bool, arg string) bool {
+	if arg == "-p" && (base == "xargs" || goTest) {
+		return true
+	}
+	if arg == "-j" && (base == "make" || base == "ninja") {
+		return true
+	}
+	return arg == "--jobs" || arg == "--parallel" ||
+		(arg == "-parallel" && goTest)
 }
 
 func isGoTestCommand(argv []string) bool {
