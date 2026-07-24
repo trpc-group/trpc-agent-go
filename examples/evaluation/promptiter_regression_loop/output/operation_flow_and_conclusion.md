@@ -21,10 +21,10 @@ go run ./promptiter_regression_loop `
 
 Result files:
 
-- `optimization_report.json`
-- `optimization_report.md`
-- `deterministic_optimization_report.json`
-- `deterministic_optimization_report.md`
+- `promptiter_regression_loop/output/optimization_report.json`
+- `promptiter_regression_loop/output/optimization_report.md`
+- `promptiter_regression_loop/output/deterministic_optimization_report.json`
+- `promptiter_regression_loop/output/deterministic_optimization_report.md`
 
 Conclusion data:
 
@@ -48,7 +48,7 @@ Gate reasons:
 
 Interpretation:
 
-The deterministic path is the default path and requires no API key. It reproduces the intended regression loop: the candidate improves training score and validation score, fixes `val_json_refund`, but regresses `val_critical_direct_status` by wrapping a direct answer in JSON. The outer gate correctly rejects the candidate because score gain alone is not enough when a critical case regresses.
+The deterministic path is the default path and requires no API key. It consumes the same metric contract for `evaluatorName` and `criterion.finalResponse.compareName` as the real evaluation configuration. It reproduces the intended regression loop: the candidate improves training score and validation score, fixes `val_json_refund`, but regresses `val_critical_direct_status` by wrapping a direct answer in JSON. The outer gate correctly rejects the candidate because score gain alone is not enough when a critical case regresses.
 
 ## Real LLM Flow
 
@@ -66,10 +66,10 @@ go run ./promptiter_regression_loop `
 
 Result files:
 
-- `optimization_report.json`
-- `optimization_report.md`
-- `real_llm_optimization_report.json`
-- `real_llm_optimization_report.md`
+- `promptiter_regression_loop/output/optimization_report.json`
+- `promptiter_regression_loop/output/optimization_report.md`
+- `promptiter_regression_loop/output/real_llm_optimization_report.json`
+- `promptiter_regression_loop/output/real_llm_optimization_report.md`
 
 Conclusion data from the latest successful real LLM run:
 
@@ -109,6 +109,8 @@ Because real LLM outputs are stochastic, earlier successful runs may differ in e
 
 - The mock path is runnable and demonstrates the target regression-gate behavior.
 - The sample config defaults to deterministic mode, so the core flow is runnable without a real API key.
+- Delta/gate handling now rejects candidate validation case-set mismatches instead of silently ignoring missing or unexpected cases.
+- Reports keep baseline and candidate failure attribution separate for audit.
 - The code now keeps DeepSeek model/base URL defaults explicit while keeping secrets out of source control.
 - The real path now evaluates PromptIter rounds through the same outer regression gate selection logic instead of blindly selecting round 1.
 - The latest real DeepSeek run completed end to end, but the candidate was rejected because validation score gain was `0.0000`, below the configured `0.0500` threshold.

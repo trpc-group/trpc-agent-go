@@ -21,10 +21,10 @@ go run ./promptiter_regression_loop `
 
 结果文件：
 
-- `optimization_report.json`
-- `optimization_report.md`
-- `deterministic_optimization_report.json`
-- `deterministic_optimization_report.md`
+- `promptiter_regression_loop/output/optimization_report.json`
+- `promptiter_regression_loop/output/optimization_report.md`
+- `promptiter_regression_loop/output/deterministic_optimization_report.json`
+- `promptiter_regression_loop/output/deterministic_optimization_report.md`
 
 结论数据：
 
@@ -48,7 +48,7 @@ Gate 原因：
 
 解释：
 
-deterministic 链路是默认运行路径，不需要 API Key。它复现了预期的回归检测闭环：候选 prompt 提升了训练集分数和验证集总分，修复了 `val_json_refund`，但把 `val_critical_direct_status` 的直接回答错误包装成 JSON，导致关键 case 退化。因此即使分数提升，外层 gate 仍会正确拒绝。
+deterministic 链路是默认运行路径，不需要 API Key。它会消费与真实评测配置相同的 `evaluatorName` 和 `criterion.finalResponse.compareName` 契约。它复现了预期的回归检测闭环：候选 prompt 提升了训练集分数和验证集总分，修复了 `val_json_refund`，但把 `val_critical_direct_status` 的直接回答错误包装成 JSON，导致关键 case 退化。因此即使分数提升，外层 gate 仍会正确拒绝。
 
 ## Real LLM 流程
 
@@ -66,10 +66,10 @@ go run ./promptiter_regression_loop `
 
 结果文件：
 
-- `optimization_report.json`
-- `optimization_report.md`
-- `real_llm_optimization_report.json`
-- `real_llm_optimization_report.md`
+- `promptiter_regression_loop/output/optimization_report.json`
+- `promptiter_regression_loop/output/optimization_report.md`
+- `promptiter_regression_loop/output/real_llm_optimization_report.json`
+- `promptiter_regression_loop/output/real_llm_optimization_report.md`
 
 最新一次真实 LLM 成功运行的结论数据：
 
@@ -109,6 +109,8 @@ Gate 原因：
 
 - mock 链路可运行，并能稳定展示目标 regression gate 行为。
 - 示例配置默认使用 deterministic 模式，因此没有真实 API Key 也能跑通核心流程。
+- delta/gate 现在会拒绝候选验证 case 集合不一致，而不是静默忽略缺失或额外 case。
+- 报告会分开保存 baseline 与 candidate 的失败归因，便于审计。
 - 代码显式保留 DeepSeek model/base URL 默认值，同时避免把密钥写入源码。
 - real LLM 路径会逐轮复评 PromptIter 候选，并使用外层 regression gate 选择最终候选，而不是固定选择第 1 轮。
 - 最新真实 DeepSeek 链路已端到端跑通，但候选因验证集提升 `0.0000` 低于阈值 `0.0500` 被拒绝。

@@ -9,7 +9,7 @@
 
 报告中的 `mode` 和 `data_source` 字段会明确说明本次报告来自真实 LLM 还是 deterministic fake path。
 
-`data/promptiter.json` 默认使用 `deterministic`，因此没有 API Key 时直接运行 `go run ./promptiter_regression_loop -config ./promptiter_regression_loop/data/promptiter.json` 也能跑通核心闭环。真实 LLM 模式需要显式传入 `-mode real_llm` 并配置 API Key。
+`data/promptiter.json` 默认使用 `deterministic`，因此没有 API Key 时在 `examples/evaluation` 目录下直接运行 `go run ./promptiter_regression_loop -config ./promptiter_regression_loop/data/promptiter.json` 也能跑通核心闭环。真实 LLM 模式需要显式传入 `-mode real_llm` 并配置 API Key。
 
 ## 工作流程
 
@@ -24,7 +24,7 @@ flowchart TD
     F --> H["评测 candidate train 与 validation"]
     G --> H
     H --> I["计算逐 case delta 与失败归因"]
-    I --> J["Regression Gate 检查验证集增益、hard fail、critical regression、成本预算"]
+    I --> J["Regression Gate 检查验证集增益、hard fail、critical regression、case 集合一致性、成本预算"]
     J -->|ACCEPT| K["选择候选 prompt"]
     J -->|REJECT| L["保留 baseline prompt"]
     K --> M["输出 optimization_report.json / .md"]
@@ -101,7 +101,7 @@ go run ./promptiter_regression_loop \
 
 ### 评测、归因与 gate
 
-- `evaluator.go`：deterministic 本地 evaluator。模拟 final response、tool trajectory、JSON format/rubric 评分，并生成 trace/tool trajectory 摘要。
+- `evaluator.go`：deterministic 本地 evaluator。模拟 final response、tool trajectory、JSON format/rubric 评分，并生成 trace/tool trajectory 摘要；对 `final_response_avg_score` 会消费 `evaluatorName` 和 `criterion.finalResponse.compareName`，通过示例 metric registry 解析命名 compare，避免 metric 配置与本地评分逻辑漂移。
 - `attribution.go`：失败归因。根据 metric name、reason、trace/tool signal 分类为 final response mismatch、tool call error、tool argument error、route error、format error、knowledge recall gap 等。
 - `delta.go`：逐 case 回归对比。识别 `fixed`、`regressed`、`stayed_pass`、`stayed_fail`、`missing_candidate`、`unexpected_candidate`，并统计新增通过、新增失败、分数提升、分数下降、critical regression 和验证 case 集合不一致。
 - `gate.go`：接受策略。检查验证集分数提升阈值、新增 hard fail、critical case 退化、验证 case 集合一致性、调用次数和成本预算。
@@ -114,7 +114,7 @@ go run ./promptiter_regression_loop \
 
 ### 测试
 
-- `gate_test.go`：覆盖 gate 决策、逐 case delta、失败归因和 Markdown 报告生成。
+- `gate_test.go`：覆盖 gate 决策、逐 case delta、缺失验证 case、metric registry compare 解析、失败归因和 Markdown 报告生成。
 - `pipeline_test.go`：覆盖 deterministic 端到端流程，验证训练集提升但验证集 critical case 退化时会被拒绝。
 
 ### 数据文件
@@ -122,7 +122,7 @@ go run ./promptiter_regression_loop \
 - `data/promptiter.json`：pipeline 配置。包含 mode、prompt 路径、train/validation evalset、metrics、真实 LLM 模型、fake engine 信息、gate 策略和 deterministic candidate。
 - `data/train.evalset.json`：训练评测集，包含 3 条 case，用于发现 baseline prompt 的失败。
 - `data/validation.evalset.json`：验证评测集，包含 3 条 case，其中 `val_critical_direct_status` 是关键 case，用于检测过拟合退化。
-- `data/metrics.json`：评测指标。真实 LLM 模式使用内置 `final_response_avg_score`、`tool_trajectory_avg_score` 和 `llm_rubric_critic`；其中 `structured_output_guard` 通过 `compareName` 接入示例注册的 JSON 精确比较函数。deterministic 模式按相同 metric name 做本地模拟评分。
+- `data/metrics.json`：评测指标。真实 LLM 模式使用内置 `final_response_avg_score`、`tool_trajectory_avg_score` 和 `llm_rubric_critic`；其中 `structured_output_guard` 通过 `evaluatorName: final_response_avg_score` 和 `criterion.finalResponse.compareName` 接入示例注册的 JSON 精确比较函数。deterministic 模式也会读取这些字段并通过本地 metric registry 解析 compare，保证 mock 链路和真实评测配置共享同一评分契约。
 - `data/prompts/baseline_prompt.md`：baseline prompt 源文件。
 - `output/optimization_report.json` / `output/optimization_report.md`：固定验收报告。
 - `output/*_optimization_report.json`：示例输出 JSON 报告副本，文件名前缀区分运行模式。
