@@ -62,7 +62,7 @@ func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
 				IsPartial: true,
 				Choices: []model.Choice{{
 					Delta: model.Message{
-						Content:          "hel",
+						Content:          "hell",
 						ReasoningContent: "think",
 					},
 				}},
@@ -115,9 +115,9 @@ func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
 	}
 	require.Len(t, updates, 6)
 	assert.Equal(t, "think", updates[0].AgentThoughtChunk.Content.Text.Text)
-	assert.Equal(t, "hel", updates[1].AgentMessageChunk.Content.Text.Text)
+	assert.Equal(t, "hell", updates[1].AgentMessageChunk.Content.Text.Text)
 	assert.Equal(t, "ing", updates[2].AgentThoughtChunk.Content.Text.Text)
-	assert.Equal(t, "lo", updates[3].AgentMessageChunk.Content.Text.Text)
+	assert.Equal(t, "o", updates[3].AgentMessageChunk.Content.Text.Text)
 	require.NotNil(t, updates[4].ToolCall)
 	assert.Equal(t, acpsdk.ToolCallId("call-1"), updates[4].ToolCall.ToolCallId)
 	require.NotNil(t, updates[5].ToolCallUpdate)
