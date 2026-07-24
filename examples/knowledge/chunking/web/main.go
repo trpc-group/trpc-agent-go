@@ -14,8 +14,10 @@ import (
 	_ "embed"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +26,18 @@ import (
 	chunkingdemo "trpc.group/trpc-go/trpc-agent-go/examples/knowledge/chunking"
 )
 
-const maxRequestSize = 16 << 20
+const (
+	maxRequestSize        = 3 << 20
+	maxContentSize        = 1 << 20
+	maxResponseChunkBytes = 8 << 20
+	maxNameRunes          = 255
+	minChunkSize          = 32
+	minCoreSize           = 16
+	maxChunkCount         = 5000
+	maxConcurrentRequests = 2
+)
+
+var chunkRequestSlots = make(chan struct{}, maxConcurrentRequests)
 
 //go:embed index.html
 var indexHTML []byte
@@ -92,7 +105,7 @@ type chunkView struct {
 }
 
 func main() {
-	address := flag.String("addr", "0.0.0.0:8080", "HTTP listen address")
+	address := flag.String("addr", "127.0.0.1:8080", "HTTP listen address")
 	flag.Parse()
 
 	mux := http.NewServeMux()
@@ -104,6 +117,9 @@ func main() {
 		Addr:              *address,
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 	log.Printf("Chunking viewer: http://%s", *address)
 	log.Fatal(server.ListenAndServe())
@@ -150,6 +166,20 @@ func serveChunks(w http.ResponseWriter, r *http.Request) {
 	if request.Strategy == "json" {
 		request.Overlap = 0
 	}
+	if err := validateRequest(request); err != nil {
+		writeError(w, err.Error())
+		return
+	}
+
+	select {
+	case chunkRequestSlots <- struct{}{}:
+		defer func() { <-chunkRequestSlots }()
+	default:
+		w.Header().Set("Retry-After", "1")
+		writeErrorStatus(w, http.StatusTooManyRequests,
+			"the viewer is busy; retry shortly")
+		return
+	}
 
 	results, err := chunkingdemo.Run(
 		request.Strategy,
@@ -166,7 +196,103 @@ func serveChunks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, "select exactly one chunking strategy")
 		return
 	}
+	if len(results[0].Chunks) > maxChunkCount {
+		writeError(w, fmt.Sprintf(
+			"chunk count %d exceeds the viewer limit of %d",
+			len(results[0].Chunks),
+			maxChunkCount,
+		))
+		return
+	}
+	totalChunkBytes := 0
+	for _, chunk := range results[0].Chunks {
+		totalChunkBytes += len(chunk.Content)
+	}
+	if totalChunkBytes > maxResponseChunkBytes {
+		writeError(w, fmt.Sprintf(
+			"chunk content exceeds the viewer output limit of %d bytes",
+			maxResponseChunkBytes,
+		))
+		return
+	}
 	writeJSON(w, http.StatusOK, buildResponse(request, results[0]))
+}
+
+func validateRequest(request chunkRequest) error {
+	switch request.Strategy {
+	case "", "reader", "fixed", "recursive", "markdown", "json":
+	default:
+		return fmt.Errorf("unsupported viewer strategy %q", request.Strategy)
+	}
+	if len(request.Content) > maxContentSize {
+		return fmt.Errorf(
+			"document exceeds the viewer limit of %d bytes",
+			maxContentSize,
+		)
+	}
+	if utf8.RuneCountInString(request.Name) > maxNameRunes {
+		return fmt.Errorf(
+			"document name exceeds the viewer limit of %d runes",
+			maxNameRunes,
+		)
+	}
+	if request.ChunkSize > 0 && request.ChunkSize < minChunkSize {
+		return fmt.Errorf(
+			"chunk size must be 0 or at least %d in the viewer",
+			minChunkSize,
+		)
+	}
+
+	jsonStrategy := request.Strategy == "json" ||
+		request.Strategy == "reader" &&
+			strings.EqualFold(filepath.Ext(request.Name), ".json")
+	effectiveChunkSize := request.ChunkSize
+	if effectiveChunkSize == 0 {
+		effectiveChunkSize = 1024
+		if jsonStrategy {
+			effectiveChunkSize = 2000
+		}
+	}
+	coreSize := effectiveChunkSize
+	if !jsonStrategy {
+		coreSize -= request.Overlap
+		if coreSize < minCoreSize {
+			return fmt.Errorf(
+				"chunk size minus overlap must be at least %d in the viewer",
+				minCoreSize,
+			)
+		}
+	}
+
+	units := utf8.RuneCountInString(request.Content)
+	if jsonStrategy {
+		units = len(request.Content)
+	}
+	estimatedPayload := max(1, coreSize/2)
+	estimatedChunks := (units + estimatedPayload - 1) / estimatedPayload
+	if request.Strategy == "markdown" ||
+		request.Strategy == "reader" &&
+			(strings.EqualFold(filepath.Ext(request.Name), ".md") ||
+				strings.EqualFold(filepath.Ext(request.Name), ".markdown")) {
+		estimatedChunks = max(
+			estimatedChunks,
+			strings.Count(request.Content, "\n")+1,
+		)
+	}
+	if jsonStrategy {
+		estimatedChunks = max(
+			estimatedChunks,
+			strings.Count(request.Content, ",")+1,
+		)
+	}
+	if estimatedChunks > maxChunkCount {
+		return fmt.Errorf(
+			"request may produce about %d chunks, exceeding the viewer limit of %d",
+			estimatedChunks,
+			maxChunkCount,
+		)
+	}
+	return nil
 }
 
 func buildResponse(request chunkRequest, result chunkingdemo.Result) chunkResponse {
@@ -418,7 +544,11 @@ func equalRunes(left []rune, right []rune) bool {
 }
 
 func writeError(w http.ResponseWriter, message string) {
-	writeJSON(w, http.StatusBadRequest, map[string]string{"error": message})
+	writeErrorStatus(w, http.StatusBadRequest, message)
+}
+
+func writeErrorStatus(w http.ResponseWriter, status int, message string) {
+	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

@@ -11,6 +11,7 @@ package chunking
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -18,6 +19,22 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
+
+func TestOrderedJSONKeysMixedNumericAndLexical(t *testing.T) {
+	data := map[string]any{
+		"1a": nil,
+		"10": nil,
+		"2":  nil,
+		"02": nil,
+	}
+	want := []string{"02", "2", "10", "1a"}
+
+	for i := 0; i < 1000; i++ {
+		if got := orderedJSONKeys(data); !slices.Equal(got, want) {
+			t.Fatalf("orderedJSONKeys() = %v, want %v", got, want)
+		}
+	}
+}
 
 func TestJSONChunking(t *testing.T) {
 	// Test case 1: Simple JSON object.

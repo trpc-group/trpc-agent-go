@@ -199,8 +199,8 @@ func (r *Reader) csvToText(csvContent string) (string, error) {
 		for i, field := range record {
 			field = strings.ReplaceAll(field, "\r\n", "\n")
 			field = strings.ReplaceAll(field, "\r", "\n")
-			field = strings.Join(strings.Fields(field), " ")
-			fields[i] = field
+			field = strings.ReplaceAll(field, "\n", " ")
+			fields[i] = strings.TrimSpace(field)
 		}
 		processedLines = append(processedLines, strings.Join(fields, " | "))
 	}

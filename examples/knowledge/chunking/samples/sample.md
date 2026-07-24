@@ -39,7 +39,7 @@ Emoji are also part of the input: 🤖 represents an agent, 🔍 represents retr
 
 ## Configuration Example
 
-The following code block is deliberately longer than a typical segment. It shows how the Markdown strategy handles a fenced block that cannot fit in one chunk:
+The following self-contained program is deliberately longer than a typical segment. It can be copied into a Go file inside this module and run with `go run`; here it also shows how the Markdown strategy handles a fenced block that cannot fit in one chunk:
 
 ```go
 package main
@@ -98,9 +98,20 @@ func compare(doc *document.Document, size int, overlap int) error {
     }
     return nil
 }
+
+func main() {
+    doc := &document.Document{
+        ID:      "chunking-example",
+        Name:    "sample.md",
+        Content: "First sentence. Second sentence. 第三句包含中文标点？！",
+    }
+    if err := compare(doc, 32, 8); err != nil {
+        panic(err)
+    }
+}
 ```
 
-After configuring the strategies, compare each chunk's content, size, metadata, and shared boundary with its predecessor. This process requires neither a model nor a vector database.
+The program prints each strategy's chunk count plus every chunk's rune size, byte size, and ID. This process requires neither a model nor a vector database.
 
 ## Long Paragraph
 

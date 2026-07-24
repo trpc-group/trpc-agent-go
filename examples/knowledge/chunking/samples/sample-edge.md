@@ -1,6 +1,6 @@
 # Markdown Edge Cases
 
-This sample is a collection of Markdown fragments rather than a natural article. Start with the Reader default, then try chunk sizes of 500, 240, and 120 with a small overlap on the latter two.
+This sample is a collection of Markdown fragments rather than a natural article. Start with the Reader default, then try chunk sizes of 500, 240, and 120 with an overlap of 20 Unicode runes on the latter two.
 
 ## Heading-Only Section
 

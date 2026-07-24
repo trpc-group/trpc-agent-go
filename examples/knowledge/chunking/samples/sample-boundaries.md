@@ -1,10 +1,10 @@
-# Chunking Boundary Regression
+# Chunking Boundary Cases
 
-This sample collects the text-boundary cases reported in issue #2200. In the
-web viewer, select **RecursiveChunking**, set the chunk size to `120`, and use
-an overlap of `20` for a readable boundary preview. Then raise the overlap to
-`100` as a stress case: every final chunk should still remain within 120
-Unicode runes even though only a small part of each chunk is new content.
+This sample collects representative text-boundary cases. In the web viewer,
+select **RecursiveChunking**, set the chunk size to `120`, and use an overlap of
+`20` for a readable boundary preview. Then raise the overlap to `100` as a
+stress case: every final chunk should still remain within 120 Unicode runes
+even though only a small part of each chunk is new content.
 
 ## Budget and Overlap
 

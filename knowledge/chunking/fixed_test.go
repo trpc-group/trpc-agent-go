@@ -296,6 +296,59 @@ func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {
 	})
 }
 
+func TestFixedSizeChunking_PreserveLinesOverlapKeepsRecordBoundary(t *testing.T) {
+	const (
+		chunkSize = 60
+		overlap   = 20
+	)
+	firstRecord := strings.Repeat("a", 50)
+	secondRecord := "2 | " + strings.Repeat("b", 50)
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithOverlap(overlap),
+		WithPreserveLines(),
+	)
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "record-boundary",
+		Content: firstRecord + "\n" + secondRecord,
+	})
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 3)
+	require.Contains(t, chunks[1].Content,
+		strings.Repeat("a", overlap-1)+"\n2 | ")
+	require.NotContains(t, chunks[1].Content,
+		strings.Repeat("a", overlap)+"2 | ")
+	for i, chunk := range chunks {
+		require.LessOrEqual(t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final budget",
+			i,
+		)
+	}
+}
+
+func TestFixedSizeChunking_PreserveLinesOverlapDoesNotSplitOneRecord(t *testing.T) {
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(60),
+		WithOverlap(20),
+		WithPreserveLines(),
+	)
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "record-continuation",
+		Content: strings.Repeat("a", 100),
+	})
+
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for _, chunk := range chunks {
+		require.NotContains(t, chunk.Content, "\n")
+	}
+}
+
 func TestFixedSizeChunking_BalancesOversizedLine(t *testing.T) {
 	const chunkSize = 80
 	content := strings.Repeat("x", 88)

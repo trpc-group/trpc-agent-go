@@ -211,6 +211,14 @@ registry.
 
 > `overlap` only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. It is a maximum: the strategy may move the overlap start to a natural boundary or reduce it so the final chunk remains within `chunkSize`. A large overlap leaves less room for new content and produces more chunks. JSONChunking does not support overlap.
 
+The implicit text-strategy overlap changed from `128` to `0`. This affects
+knowledge bases created without an explicit overlap: chunk boundaries and
+embedding inputs will change. To keep an overlapping window, configure the
+desired value explicitly with `WithChunkOverlap` or the strategy-specific
+overlap option, then re-ingest the affected documents. Because overlap now
+counts inside `chunkSize`, even an explicit value of `128` may not reproduce
+the old over-budget chunks byte for byte.
+
 The text strategies validate their configuration when `Chunk` is called:
 `chunkSize` must be greater than zero, and `overlap` must be in
 `[0, chunkSize)`. Invalid values return `ErrInvalidChunkSize`,

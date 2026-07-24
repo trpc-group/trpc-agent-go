@@ -250,6 +250,12 @@ Reader，让它注册到 Reader registry。
 
 > `overlap` 仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效。它表示上限：策略可以把 overlap 起点移动到自然边界，也可以缩小实际 overlap，以保证最终分块不超过 `chunkSize`。较大的 overlap 会压缩新正文的空间，因此产生更多 chunk。JSONChunking 不支持 overlap。
 
+文本策略的隐式 overlap 默认值从 `128` 改为 `0`。没有显式配置 overlap
+的已有知识库会受到影响，其 chunk 边界和 embedding 输入都会变化。如果仍需
+重叠窗口，请通过 `WithChunkOverlap` 或对应策略的 overlap option 显式配置
+所需值，然后重新导入受影响的文档。由于 overlap 现在计入 `chunkSize`，
+即使显式配置为 `128`，也不一定能逐字节复现旧的超预算 chunk。
+
 文本分块策略会在调用 `Chunk` 时校验配置：`chunkSize` 必须大于 0，
 `overlap` 必须位于 `[0, chunkSize)`。无效配置会返回
 `ErrInvalidChunkSize`、`ErrInvalidOverlap` 或 `ErrOverlapTooLarge`，而不是

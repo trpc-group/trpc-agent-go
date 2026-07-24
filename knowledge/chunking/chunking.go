@@ -112,6 +112,24 @@ func joinWithOverlap(
 	maxSize int,
 	separator string,
 ) (string, int) {
+	return joinWithOverlapSeparator(
+		previous,
+		current,
+		maxOverlap,
+		maxSize,
+		separator,
+		false,
+	)
+}
+
+func joinWithOverlapSeparator(
+	previous string,
+	current string,
+	maxOverlap int,
+	maxSize int,
+	separator string,
+	preserveSeparator bool,
+) (string, int) {
 	currentSize := encoding.RuneCount(current)
 	separatorSize := encoding.RuneCount(separator)
 	availableWithoutSeparator := maxSize - currentSize
@@ -120,6 +138,9 @@ func joinWithOverlap(
 	}
 	availableOverlap := availableWithoutSeparator - separatorSize
 	if availableOverlap <= 0 {
+		if preserveSeparator {
+			return current, 0
+		}
 		separator = ""
 		availableOverlap = availableWithoutSeparator
 	}
@@ -132,7 +153,7 @@ func joinWithOverlap(
 		return current, 0
 	}
 	overlapContent, naturalBoundary := naturalTextSuffix(previous, overlapSize)
-	if !naturalBoundary && separator != "" {
+	if !naturalBoundary && separator != "" && !preserveSeparator {
 		// For an unbroken token, preserve the exact source text rather than
 		// inserting a separator in the middle of the token.
 		separator = ""
@@ -150,6 +171,51 @@ func joinWithOverlap(
 	return overlapContent + separator + current, actualOverlap
 }
 
+func sourceChunkSeparators(
+	content string,
+	chunks []string,
+	fallback string,
+) []string {
+	separators := make([]string, len(chunks))
+	searchFrom := 0
+	previousEnd := 0
+	for i, chunk := range chunks {
+		position := strings.Index(content[searchFrom:], chunk)
+		if position < 0 {
+			if i > 0 {
+				separators[i] = fallback
+			}
+			continue
+		}
+		start := searchFrom + position
+		if i > 0 {
+			separators[i] = sourceGapSeparator(
+				content[previousEnd:start],
+				fallback,
+			)
+		}
+		previousEnd = start + len(chunk)
+		searchFrom = previousEnd
+	}
+	return separators
+}
+
+func sourceGapSeparator(gap string, fallback string) string {
+	if gap == "" {
+		return ""
+	}
+	if strings.TrimSpace(gap) != "" {
+		return fallback
+	}
+	if strings.Contains(gap, "\n\n") {
+		return "\n\n"
+	}
+	if strings.ContainsRune(gap, '\n') {
+		return "\n"
+	}
+	return " "
+}
+
 // splitTextAtNaturalBoundary splits one prefix from content without exceeding
 // maxSize. It prefers line, sentence, punctuation, and whitespace boundaries,
 // falling back to an exact rune boundary only when the text has no suitable
@@ -165,64 +231,6 @@ func splitTextAtNaturalBoundary(content string, maxSize int) (string, string) {
 	prefix := strings.TrimSpace(string(contentRunes[:splitPosition]))
 	remaining := strings.TrimSpace(string(contentRunes[splitPosition:]))
 	return prefix, remaining
-}
-
-// splitTextAtLineBoundary packs complete lines whenever they fit the budget.
-// A single oversized line is refined with the normal text boundaries and tail
-// balancing, but it is never allowed to consume the beginning of the next
-// complete line merely to fill the current chunk.
-func splitTextAtLineBoundary(content string, maxSize int) (string, string) {
-	content = strings.TrimSpace(content)
-	contentRunes := []rune(content)
-	if maxSize <= 0 || len(contentRunes) <= maxSize {
-		return content, ""
-	}
-
-	firstLineEnd := -1
-	lastLineEndWithinBudget := -1
-	for i, current := range contentRunes {
-		if current != '\n' {
-			continue
-		}
-		lineEnd := i + 1
-		if firstLineEnd < 0 {
-			firstLineEnd = lineEnd
-		}
-		if lineEnd <= maxSize {
-			lastLineEndWithinBudget = lineEnd
-			continue
-		}
-		break
-	}
-	if lastLineEndWithinBudget > 0 {
-		return strings.TrimSpace(
-				string(contentRunes[:lastLineEndWithinBudget]),
-			), strings.TrimSpace(
-				string(contentRunes[lastLineEndWithinBudget:]),
-			)
-	}
-	if firstLineEnd > maxSize {
-		firstLine := strings.TrimSpace(string(contentRunes[:firstLineEnd-1]))
-		prefix, lineRemaining := splitTextWithBalancedTail(
-			firstLine,
-			maxSize,
-			splitTextAtNaturalBoundary,
-		)
-		trailingLines := strings.TrimSpace(string(contentRunes[firstLineEnd:]))
-		switch {
-		case lineRemaining == "":
-			return prefix, trailingLines
-		case trailingLines == "":
-			return prefix, lineRemaining
-		default:
-			return prefix, lineRemaining + "\n" + trailingLines
-		}
-	}
-	return splitTextWithBalancedTail(
-		content,
-		maxSize,
-		splitTextAtNaturalBoundary,
-	)
 }
 
 // splitTextWithBalancedTail avoids leaving a very small final piece when one

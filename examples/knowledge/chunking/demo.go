@@ -12,6 +12,7 @@ package chunkingdemo
 
 import (
 	_ "embed"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -36,8 +37,8 @@ var sampleMarkdown string
 //go:embed samples/sample-edge.md
 var sampleEdgeMarkdown string
 
-//go:embed samples/sample-issue-2200.md
-var sampleIssue2200Markdown string
+//go:embed samples/sample-boundaries.md
+var sampleBoundariesMarkdown string
 
 //go:embed samples/sample-catalog.md
 var sampleCatalogMarkdown string
@@ -76,11 +77,11 @@ var sampleDocuments = []SampleDocument{
 		Content:     sampleEdgeMarkdown,
 	},
 	{
-		ID:          "issue-2200-regression",
-		Name:        "sample-issue-2200.md",
-		Label:       "Issue #2200 regression",
+		ID:          "markdown-boundaries",
+		Name:        "sample-boundaries.md",
+		Label:       "Text boundary cases",
 		Description: "Strict overlap budgets, English and CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback.",
-		Content:     sampleIssue2200Markdown,
+		Content:     sampleBoundariesMarkdown,
 	},
 	{
 		ID:          "markdown-value-catalog",
@@ -209,9 +210,11 @@ func Run(
 	}
 
 	if strategyName == "all" {
-		// JSONChunking requires JSON input, so the default text comparison
-		// includes only strategies that accept the bundled Markdown sample.
-		strategies = strategies[:3]
+		// JSONChunking requires JSON input. Include it when the selected input
+		// is valid JSON; otherwise compare only the text strategies.
+		if !json.Valid([]byte(content)) {
+			strategies = strategies[:3]
+		}
 	} else {
 		selected := strategies[:0]
 		for _, candidate := range strategies {
@@ -239,10 +242,14 @@ func Run(
 		if err != nil {
 			return nil, fmt.Errorf("%s chunking: %w", candidate.name, err)
 		}
+		resultOverlap := overlap
+		if candidate.name == "json" {
+			resultOverlap = 0
+		}
 		results = append(results, Result{
 			Name:      candidate.name,
 			ChunkSize: effectiveChunkSize,
-			Overlap:   overlap,
+			Overlap:   resultOverlap,
 			SizeUnit:  sizeUnit(candidate.name),
 			Chunks:    chunks,
 		})

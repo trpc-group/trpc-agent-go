@@ -99,7 +99,7 @@ func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document,
 
 	// Apply overlap if specified.
 	if r.overlap > 0 {
-		chunks = r.applyOverlap(chunks)
+		chunks = r.applyOverlap(content, chunks)
 	}
 	return chunks, nil
 }
@@ -251,10 +251,18 @@ func (r *RecursiveChunking) mergeFragments(
 }
 
 // applyOverlap applies overlap between consecutive chunks.
-func (r *RecursiveChunking) applyOverlap(chunks []*document.Document) []*document.Document {
+func (r *RecursiveChunking) applyOverlap(
+	content string,
+	chunks []*document.Document,
+) []*document.Document {
 	if len(chunks) <= 1 {
 		return chunks
 	}
+	rawContents := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		rawContents[i] = chunk.Content
+	}
+	separators := sourceChunkSeparators(content, rawContents, " ")
 	overlappedChunks := []*document.Document{chunks[0]}
 	for i := 1; i < len(chunks); i++ {
 		// Create new metadata for overlapped chunk.
@@ -268,7 +276,7 @@ func (r *RecursiveChunking) applyOverlap(chunks []*document.Document) []*documen
 			chunks[i].Content,
 			r.overlap,
 			r.chunkSize,
-			" ",
+			separators[i],
 		)
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] =

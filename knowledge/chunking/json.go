@@ -220,7 +220,12 @@ func orderedJSONKeys(data map[string]any) []string {
 	sort.Slice(keys, func(i, k int) bool {
 		left, leftErr := strconv.Atoi(keys[i])
 		right, rightErr := strconv.Atoi(keys[k])
-		if leftErr == nil && rightErr == nil {
+		leftNumeric := leftErr == nil
+		rightNumeric := rightErr == nil
+		if leftNumeric != rightNumeric {
+			return leftNumeric
+		}
+		if leftNumeric {
 			if left != right {
 				return left < right
 			}

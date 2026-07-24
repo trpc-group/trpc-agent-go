@@ -735,7 +735,10 @@ Content after consecutive empty level1 headings should still be retained.`,
 
 			var combined strings.Builder
 			for _, section := range sections {
-				require.NotEmpty(t, strings.TrimSpace(section.Content))
+				require.True(t,
+					section.Header != "" ||
+						strings.TrimSpace(section.Content) != "",
+				)
 				combined.WriteString(section.Header)
 				combined.WriteString("\n")
 				combined.WriteString(section.Content)
@@ -1991,5 +1994,67 @@ This section contains extensive technical documentation that will be split into 
 			sampleIDs[i] = chunks[i].ID
 		}
 		t.Logf("Sample chunk IDs: %v", sampleIDs)
+	}
+}
+
+func TestMarkdownChunking_PreservesTrailingHeaderOnlySection(t *testing.T) {
+	content := "# Kept\n\n" +
+		strings.Repeat("This body makes the document exceed the chunk budget. ", 4) +
+		"\n\n# Empty"
+	chunker := NewMarkdownChunking(WithMarkdownChunkSize(80))
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "header-only",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, chunks)
+	var found bool
+	for _, chunk := range chunks {
+		if chunk.Content != "# Empty" {
+			continue
+		}
+		found = true
+		require.Equal(t, "Empty",
+			chunk.Metadata[source.MetaMarkdownHeaderPath])
+	}
+	require.True(t, found, "trailing header-only section was dropped")
+}
+
+func TestMarkdownChunking_ReservesBudgetForExplicitOverlap(t *testing.T) {
+	const (
+		chunkSize = 100
+		overlap   = 20
+	)
+	chunker := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+	)
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "overlap-budget",
+		Content: strings.Repeat("x", 300),
+	})
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(chunks), 4)
+	for i, chunk := range chunks {
+		require.LessOrEqual(t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final budget",
+			i,
+		)
+		if i == 0 {
+			continue
+		}
+		require.True(t,
+			strings.HasPrefix(chunk.Content, strings.Repeat("x", overlap)),
+			"chunk %d lost the configured overlap",
+			i,
+		)
+		require.Contains(t, chunk.Metadata,
+			source.MetaOverlappedContentSize)
 	}
 }

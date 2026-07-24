@@ -41,6 +41,12 @@ func (d *docIDGenerator) Next() int {
 	return id
 }
 
+func (d *docIDGenerator) Peek() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.nextID
+}
+
 // MarkdownChunking implements a chunking strategy optimized for markdown documents.
 type MarkdownChunking struct {
 	chunkSize int
@@ -105,7 +111,7 @@ func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, 
 
 	// Apply overlap if specified.
 	if m.overlap > 0 {
-		chunks = m.applyOverlap(chunks)
+		chunks = m.applyOverlap(content, chunks)
 	}
 
 	return chunks, nil
@@ -140,9 +146,10 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	var chunks []*document.Document
 
 	contentSize := encoding.RuneCount(content)
+	chunkSize := m.nextChunkSize(idGen)
 
 	// Base case: content fits in one chunk
-	if contentSize <= m.chunkSize {
+	if contentSize <= chunkSize {
 		chunk := m.createMarkdownChunkWithPath(originalDoc, content, idGen.Next(), headerPath)
 		return []*document.Document{chunk}
 	}
@@ -153,20 +160,26 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 		if len(sections) > 0 {
 			// Successfully split by this header level
 			for _, section := range sections {
-				// Skip empty sections
-				if strings.TrimSpace(section.Content) == "" {
+				// Skip only a genuinely empty preamble. A header without
+				// body text is still source content and must be preserved.
+				if section.Header == "" &&
+					strings.TrimSpace(section.Content) == "" {
 					continue
 				}
 
 				// Combine header and content for the full section text
 				var fullContent string
-				if section.Header != "" {
+				if section.Header != "" &&
+					strings.TrimSpace(section.Content) != "" {
 					fullContent = section.Header + "\n\n" + section.Content
+				} else if section.Header != "" {
+					fullContent = section.Header
 				} else {
 					fullContent = section.Content
 				}
 
 				sectionSize := encoding.RuneCount(fullContent)
+				chunkSize = m.nextChunkSize(idGen)
 
 				// Build new header path
 				var newPath []string
@@ -177,7 +190,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 					newPath = append(newPath, section.Path...)
 				}
 
-				if sectionSize <= m.chunkSize {
+				if sectionSize <= chunkSize {
 					// Section fits in one chunk
 					chunk := m.createMarkdownChunkWithPath(originalDoc, fullContent, idGen.Next(), newPath)
 					chunks = append(chunks, chunk)
@@ -212,13 +225,14 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	// final pair instead of leaving a tiny hard-split tail.
 	remainingText := content
 	for remainingText != "" {
+		chunkSize = m.nextChunkSize(idGen)
 		chunkText, rest := splitTextWithBalancedTail(
 			remainingText,
-			m.chunkSize,
+			chunkSize,
 			splitMarkdownText,
 		)
 		if strings.TrimSpace(chunkText) == "" {
-			textChunks := encoding.SafeSplitBySize(remainingText, m.chunkSize)
+			textChunks := encoding.SafeSplitBySize(remainingText, chunkSize)
 			chunkText = textChunks[0]
 			rest = remainingText[len(chunkText):]
 		}
@@ -283,7 +297,8 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				// Extract content from last header position to current heading start
 				sectionContent := string(source[lastHeaderPos:headingLineStart])
 				lastHeader.Content = sectionContent
-				if strings.TrimSpace(lastHeader.Content) != "" {
+				if lastHeader.Header != "" ||
+					strings.TrimSpace(lastHeader.Content) != "" {
 					sections = append(sections, *lastHeader)
 				}
 			} else if lastHeaderPos == 0 {
@@ -332,7 +347,8 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 	if lastHeader != nil {
 		sectionContent := string(source[lastHeaderPos:])
 		lastHeader.Content = sectionContent
-		if strings.TrimSpace(lastHeader.Content) != "" {
+		if lastHeader.Header != "" ||
+			strings.TrimSpace(lastHeader.Content) != "" {
 			sections = append(sections, *lastHeader)
 		}
 	}
@@ -710,6 +726,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	for _, paragraph := range paragraphs {
 		remainingText := strings.TrimSpace(paragraph)
 		for remainingText != "" {
+			chunkSize := m.nextChunkSize(idGen)
 			currentSize := encoding.RuneCount(currentChunk.String())
 			remainingSize := encoding.RuneCount(remainingText)
 			separatorSize := 0
@@ -717,7 +734,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 				separatorSize = 2
 			}
 
-			if currentSize+separatorSize+remainingSize <= m.chunkSize {
+			if currentSize+separatorSize+remainingSize <= chunkSize {
 				if separatorSize > 0 {
 					currentChunk.WriteString("\n\n")
 				}
@@ -726,7 +743,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 			}
 
 			if currentSize > 0 {
-				availableSize := m.chunkSize - currentSize - separatorSize
+				availableSize := chunkSize - currentSize - separatorSize
 				if isMarkdownHeading(currentChunk.String()) && availableSize > 0 {
 					var prefix string
 					prefix, remainingText = splitMarkdownTextWithBalancedTail(
@@ -745,7 +762,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 			var prefix string
 			prefix, remainingText = splitMarkdownTextWithBalancedTail(
 				remainingText,
-				m.chunkSize,
+				chunkSize,
 			)
 			currentChunk.WriteString(prefix)
 			if remainingText != "" {
@@ -755,6 +772,13 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	}
 	flush()
 	return chunks
+}
+
+func (m *MarkdownChunking) nextChunkSize(idGen *docIDGenerator) int {
+	if m.overlap > 0 && idGen.Peek() > 1 {
+		return m.chunkSize - m.overlap
+	}
+	return m.chunkSize
 }
 
 func splitMarkdownText(content string, chunkSize int) (string, string) {
@@ -837,11 +861,19 @@ func (m *MarkdownChunking) createMarkdownChunkWithPath(
 }
 
 // applyOverlap applies overlap between consecutive chunks.
-func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document.Document {
+func (m *MarkdownChunking) applyOverlap(
+	content string,
+	chunks []*document.Document,
+) []*document.Document {
 	if len(chunks) <= 1 {
 		return chunks
 	}
 
+	rawContents := make([]string, len(chunks))
+	for i, chunk := range chunks {
+		rawContents[i] = chunk.Content
+	}
+	separators := sourceChunkSeparators(content, rawContents, "\n\n")
 	overlappedChunks := []*document.Document{chunks[0]}
 
 	for i := 1; i < len(chunks); i++ {
@@ -856,7 +888,7 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 			chunks[i].Content,
 			m.overlap,
 			m.chunkSize,
-			"\n\n",
+			separators[i],
 		)
 		if actualOverlap > 0 {
 			metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)

@@ -534,7 +534,7 @@
   </main>
 
   <script>
-    const maxFileSize = 4 * 1024 * 1024;
+    const maxFileSize = 1024 * 1024;
     const svgNamespace = "http://www.w3.org/2000/svg";
     const workspace = document.querySelector("#workspace");
     const sourcePanel = document.querySelector("#source-panel");
@@ -611,7 +611,7 @@
           : "";
         parameterNote.textContent = isJSON
           ? "Advanced override: JSONChunking uses serialized bytes, JSON-path connectors, and no overlap; size 0 uses 2000."
-          : "Advanced override: size 0 uses 1024 runes; overlap is a maximum and may be reduced." +
+          : "Advanced override: size 0 uses 1024 runes; explicit sizes must be at least 32, and size minus overlap at least 16." +
             fixedCSVNote;
       }
     }
@@ -710,7 +710,7 @@
     async function uploadDocument(file) {
       if (!file) return;
       if (file.size > maxFileSize) {
-        throw new Error("Document exceeds the 4 MiB viewer limit.");
+        throw new Error("Document exceeds the 1 MiB viewer limit.");
       }
       currentName = file.name;
       contentInput.value = await file.text();

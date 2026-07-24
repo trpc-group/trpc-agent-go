@@ -12,7 +12,7 @@ chunking/
 ├── samples/
 │   ├── sample-catalog.md
 │   ├── sample-edge.md
-│   ├── sample-issue-2200.md
+│   ├── sample-boundaries.md
 │   ├── sample.csv
 │   ├── sample.json
 │   ├── sample.md
@@ -30,7 +30,7 @@ The bundled samples cover the default Readers and several boundary cases:
 |--------|-------------------|
 | [`sample.md`](./samples/sample.md) | Markdown headings, a table, mixed-language boundaries, a long fenced Go block, emoji, and a long token |
 | [`sample-edge.md`](./samples/sample-edge.md) | Sparse heading levels, nested blocks, a wide table, an oversized code block, combining characters, and fallback boundaries |
-| [`sample-issue-2200.md`](./samples/sample-issue-2200.md) | Issue #2200 regression cases: strict overlap budgets, CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback |
+| [`sample-boundaries.md`](./samples/sample-boundaries.md) | Strict overlap budgets, CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback |
 | [`sample-catalog.md`](./samples/sample-catalog.md) | A realistic reference-document shape with grouped rows, several short tables, and a long table cell |
 | [`sample.txt`](./samples/sample.txt) | Plain-text paragraphs, punctuation, whitespace, logs, CJK text, emoji, and an unbroken token |
 | [`sample.csv`](./samples/sample.csv) | Multilingual records, empty fields, long values, URLs, and CSVReader normalization |
@@ -59,10 +59,14 @@ Explicit strategy selection is an advanced override:
 
 ```bash
 go run ./chunking/text -strategy recursive -chunk-size 180 -overlap 24
-go run ./chunking/text -strategy recursive -input ./chunking/samples/sample-issue-2200.md -chunk-size 120 -overlap 100
+go run ./chunking/text -strategy recursive -input ./chunking/samples/sample-boundaries.md -chunk-size 120 -overlap 100
+go run ./chunking/text -strategy all -input ./chunking/samples/sample.json -chunk-size 512
 go run ./chunking/text -strategy markdown -input ./exampledata/file/llm.md
 go run ./chunking/text -strategy json -input ./path/to/data.json -chunk-size 512
 ```
+
+`-strategy all` compares the three text strategies and also includes
+JSONChunking when the selected input is valid JSON.
 
 The text command prints one compact line per selected chunk. By default it
 shows chunks from both the beginning and end of each strategy result. Use
@@ -110,6 +114,10 @@ the text view so the repeated boundary remains exact and visible.
 
 The viewer uses a small Go HTTP server and plain HTML, CSS, and JavaScript. It
 has no frontend framework or build step, and listens on localhost by default.
+Use `-addr` to opt into another listen address. To keep the local demo bounded,
+the server accepts documents up to 1 MiB, explicit chunk sizes of at least 32,
+at least 16 units of new-content budget after overlap, at most 5000 output
+chunks, and two concurrent chunking requests.
 
 ## What the Reader selects
 

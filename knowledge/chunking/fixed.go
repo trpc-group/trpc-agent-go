@@ -10,6 +10,8 @@
 package chunking
 
 import (
+	"strings"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -86,33 +88,51 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 	if f.overlap > 0 {
 		coreSize = f.chunkSize - f.overlap
 	}
-	split := splitTextAtNaturalBoundary
-	balanceTail := true
+	var textChunks []fixedTextChunk
 	if f.preserveLines {
-		split = splitTextAtLineBoundary
-		balanceTail = false
+		textChunks = splitFixedLines(content, f.chunkSize, coreSize)
+	} else {
+		splitChunks := splitFixedText(
+			content,
+			f.chunkSize,
+			coreSize,
+			splitTextAtNaturalBoundary,
+			true,
+		)
+		textChunks = make([]fixedTextChunk, 0, len(splitChunks))
+		for _, chunk := range splitChunks {
+			textChunks = append(textChunks, fixedTextChunk{content: chunk})
+		}
 	}
-	textChunks := splitFixedText(
-		content,
-		f.chunkSize,
-		coreSize,
-		split,
-		balanceTail,
-	)
 	chunks := make([]*document.Document, 0, len(textChunks))
-	for i, chunkText := range textChunks {
-		finalContent := chunkText
+	rawContents := make([]string, len(textChunks))
+	for i, textChunk := range textChunks {
+		rawContents[i] = textChunk.content
+	}
+	separators := sourceChunkSeparators(content, rawContents, " ")
+	for i, textChunk := range textChunks {
+		finalContent := textChunk.content
 		actualOverlap := 0
 		if i > 0 {
-			finalContent, actualOverlap = joinWithOverlap(
+			separator := separators[i]
+			preserveSeparator := false
+			if f.preserveLines {
+				separator = ""
+				if textChunk.startsNewLine {
+					separator = "\n"
+					preserveSeparator = true
+				}
+			}
+			finalContent, actualOverlap = joinWithOverlapSeparator(
 				chunks[i-1].Content,
-				chunkText,
+				textChunk.content,
 				f.overlap,
 				f.chunkSize,
-				" ",
+				separator,
+				preserveSeparator,
 			)
 		}
-		chunk := createChunk(doc, chunkText, i+1)
+		chunk := createChunk(doc, textChunk.content, i+1)
 		chunk.Content = finalContent
 		if actualOverlap > 0 {
 			chunk.Metadata[source.MetaOverlappedContentSize] =
@@ -121,6 +141,77 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
+}
+
+type fixedTextChunk struct {
+	content       string
+	startsNewLine bool
+}
+
+func splitFixedLines(
+	content string,
+	firstChunkSize int,
+	nextChunkSize int,
+) []fixedTextChunk {
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
+	}
+	var chunks []fixedTextChunk
+	var current string
+	hasCurrent := false
+
+	chunkSize := func() int {
+		if len(chunks) == 0 {
+			return firstChunkSize
+		}
+		return nextChunkSize
+	}
+	flush := func() {
+		if !hasCurrent || strings.TrimSpace(current) == "" {
+			current = ""
+			hasCurrent = false
+			return
+		}
+		chunks = append(chunks, fixedTextChunk{
+			content:       current,
+			startsNewLine: true,
+		})
+		current = ""
+		hasCurrent = false
+	}
+
+	for _, line := range strings.Split(content, "\n") {
+		if hasCurrent {
+			candidate := current + "\n" + line
+			if encoding.RuneCount(candidate) <= chunkSize() {
+				current = candidate
+				continue
+			}
+			flush()
+		}
+
+		if encoding.RuneCount(line) <= chunkSize() {
+			current = line
+			hasCurrent = true
+			continue
+		}
+
+		pieces := splitFixedText(
+			line,
+			chunkSize(),
+			nextChunkSize,
+			splitTextAtNaturalBoundary,
+			true,
+		)
+		for i, piece := range pieces {
+			chunks = append(chunks, fixedTextChunk{
+				content:       piece,
+				startsNewLine: i == 0,
+			})
+		}
+	}
+	flush()
+	return chunks
 }
 
 func splitFixedText(

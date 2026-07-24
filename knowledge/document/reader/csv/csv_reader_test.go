@@ -173,6 +173,22 @@ func TestCSVReader_ParsesQuotedFieldsAndEmbeddedNewlines(t *testing.T) {
 	)
 }
 
+func TestCSVReader_PreservesFieldInternalWhitespace(t *testing.T) {
+	rdr := New(reader.WithChunk(false)).(*Reader)
+
+	docs, err := rdr.ReadFromReader(
+		"whitespace",
+		strings.NewReader("company,team\n\" ACME  Corp\tR&D \",agents\n"),
+	)
+
+	require.NoError(t, err)
+	require.Len(t, docs, 1)
+	require.Equal(t,
+		"company | team\nACME  Corp\tR&D | agents",
+		docs[0].Content,
+	)
+}
+
 func TestCSVReader_InvalidCSV(t *testing.T) {
 	rdr := New(reader.WithChunk(false))
 
@@ -338,6 +354,33 @@ func TestCSVReader_DefaultChunkingPreservesRecords(t *testing.T) {
 		docs[0].Content,
 		docs[1].Content,
 	})
+}
+
+func TestCSVReader_OverlapPreservesRecordSeparator(t *testing.T) {
+	const (
+		chunkSize = 60
+		overlap   = 20
+	)
+	rdr := New(
+		reader.WithChunk(true),
+		reader.WithChunkSize(chunkSize),
+		reader.WithChunkOverlap(overlap),
+	)
+	secondRecord := "2" + strings.Repeat("b", 20)
+	csvData := "value\n" + strings.Repeat("a", 50) + "\n" +
+		secondRecord + "\n"
+
+	docs, err := rdr.ReadFromReader(
+		"record-boundary",
+		strings.NewReader(csvData),
+	)
+
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(docs), 2)
+	require.Contains(t, docs[1].Content,
+		strings.Repeat("a", overlap-1)+"\n"+secondRecord)
+	require.NotContains(t, docs[1].Content,
+		strings.Repeat("a", overlap)+"2")
 }
 
 // TestCSVReader_ExtractFileNameFromURL tests URL filename extraction.
