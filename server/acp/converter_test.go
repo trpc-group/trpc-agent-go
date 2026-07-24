@@ -45,10 +45,42 @@ func TestPromptToMessage(t *testing.T) {
 }
 
 func TestPromptToMessageRejectsUnadvertisedContent(t *testing.T) {
-	_, err := promptToMessage([]acpsdk.ContentBlock{
-		acpsdk.ImageBlock("aGVsbG8=", "image/png"),
-	})
-	assert.ErrorContains(t, err, "image content is not supported")
+	tests := []struct {
+		name  string
+		block acpsdk.ContentBlock
+		err   string
+	}{
+		{
+			name:  "image",
+			block: acpsdk.ImageBlock("aGVsbG8=", "image/png"),
+			err:   "image content is not supported",
+		},
+		{
+			name:  "audio",
+			block: acpsdk.AudioBlock("aGVsbG8=", "audio/wav"),
+			err:   "audio content is not supported",
+		},
+		{
+			name: "embedded resource",
+			block: acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+				TextResourceContents: &acpsdk.TextResourceContents{
+					Uri:  "file:///workspace/README.md",
+					Text: "contents",
+				},
+			}),
+			err: "embedded resource content is not supported",
+		},
+		{
+			name: "empty",
+			err:  "empty content block",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := promptToMessage([]acpsdk.ContentBlock{test.block})
+			assert.ErrorContains(t, err, test.err)
+		})
+	}
 }
 
 func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
@@ -162,5 +194,66 @@ func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
 		require.NoError(t, err)
 		require.Len(t, updates, 1)
 		assert.Equal(t, text, updates[0].AgentMessageChunk.Content.Text.Text)
+	}
+}
+
+func TestTurnStateHandlesErrorsAndEmptyEvents(t *testing.T) {
+	state := newTurnState(false)
+	for _, evt := range []*event.Event{nil, {}} {
+		updates, err := state.translate(evt)
+		require.NoError(t, err)
+		assert.Empty(t, updates)
+	}
+
+	wantErr := &model.ResponseError{Message: "model failed"}
+	_, err := state.translate(&event.Event{
+		Response: &model.Response{
+			Done:  true,
+			Error: wantErr,
+		},
+	})
+	assert.ErrorIs(t, err, wantErr)
+}
+
+func TestTurnStateUpdatesToolCalls(t *testing.T) {
+	state := newTurnState(false)
+	toolCall := model.ToolCall{
+		ID: "call-1",
+		Function: model.FunctionDefinitionParam{
+			Arguments: []byte(`{"query":"ACP"}`),
+		},
+	}
+
+	updates := state.translateToolCalls([]model.ToolCall{{}, toolCall})
+	require.Len(t, updates, 1)
+	assert.Equal(t, "Tool call", updates[0].ToolCall.Title)
+
+	assert.Empty(t, state.translateToolCalls([]model.ToolCall{toolCall}))
+	toolCall.Function.Name = "search"
+	toolCall.Function.Arguments = []byte("incomplete JSON")
+	updates = state.translateToolCalls([]model.ToolCall{toolCall})
+	require.Len(t, updates, 1)
+	require.NotNil(t, updates[0].ToolCallUpdate)
+	assert.Equal(t, "search", *updates[0].ToolCallUpdate.Title)
+}
+
+func TestTurnStateMapsFinishReasons(t *testing.T) {
+	tests := []struct {
+		reason string
+		want   acpsdk.StopReason
+	}{
+		{reason: "content_filter", want: acpsdk.StopReasonRefusal},
+		{reason: "refusal", want: acpsdk.StopReasonRefusal},
+		{reason: "cancelled", want: acpsdk.StopReasonCancelled},
+		{reason: "canceled", want: acpsdk.StopReasonCancelled},
+		{reason: "stop", want: acpsdk.StopReasonEndTurn},
+	}
+	for _, test := range tests {
+		t.Run(test.reason, func(t *testing.T) {
+			state := newTurnState(false)
+			state.applyFinishReason(nil)
+			state.applyFinishReason(&test.reason)
+			assert.Equal(t, test.want, state.response(nil).StopReason)
+		})
 	}
 }
