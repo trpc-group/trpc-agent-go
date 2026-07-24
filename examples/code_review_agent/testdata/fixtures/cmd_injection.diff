@@ -1,0 +1,12 @@
+diff --git a/shell_exec.go b/shell_exec.go
+new file mode 100644
+--- /dev/null
++++ b/shell_exec.go
+@@ -0,0 +1,7 @@
++package example
++
++import (
++	"os/exec"
++)
++
++var _ = exec.Command("sh", "-c", userInput)

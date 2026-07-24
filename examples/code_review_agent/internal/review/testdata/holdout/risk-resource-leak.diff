@@ -1,0 +1,11 @@
+diff --git a/file.go b/file.go
+new file mode 100644
+--- /dev/null
++++ b/file.go
+@@ -0,0 +1,4 @@
++package main
++
++func readFile(p string) {
++	f, _ := os.Open(p)
++	_ = f
++}

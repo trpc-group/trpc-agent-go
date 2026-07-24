@@ -1,0 +1,17 @@
+diff --git a/svc.go b/svc.go
+new file mode 100644
+--- /dev/null
++++ b/svc.go
+@@ -0,0 +1,13 @@
++package example
++
++import (
++	"context"
++)
++
++func process(ctx context.Context) error {
++	// BUG: ignores the received ctx and uses context.TODO() instead.
++	inner := context.TODO()
++	_ = inner
++	return nil
++}

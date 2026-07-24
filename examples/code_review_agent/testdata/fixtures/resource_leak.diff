@@ -1,0 +1,9 @@
+diff --git a/fileutil.go b/fileutil.go
+new file mode 100644
+--- /dev/null
++++ b/fileutil.go
+@@ -0,0 +1,4 @@
++package example
++
++import "os"
++func readData() { f, _ := os.Open("data.txt") }

@@ -1,0 +1,11 @@
+diff --git a/tx.go b/tx.go
+new file mode 100644
+--- /dev/null
++++ b/tx.go
+@@ -0,0 +1,4 @@
++package store
++
++func tx(db *sql.DB) {
++	t, _ := db.Begin()
++	_ = t
++}

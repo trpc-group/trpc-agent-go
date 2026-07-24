@@ -1,0 +1,13 @@
+diff --git a/safe.go b/safe.go
+new file mode 100644
+--- /dev/null
++++ b/safe.go
+@@ -0,0 +1,5 @@
++package safe
++
++import "os"
++
++func safe(p string) {
++	f, _ := os.Open(p)
++	defer f.Close()
++}

@@ -1,0 +1,23 @@
+diff --git a/http_client.go b/http_client.go
+new file mode 100644
+--- /dev/null
++++ b/http_client.go
+@@ -0,0 +1,18 @@
++package example
++
++import (
++	"net/http"
++	"io"
++)
++
++func fetchURL(url string) (string, error) {
++	resp, err := http.Get(url)
++	if err != nil {
++		return "", err
++	}
++	body, rerr := io.ReadAll(resp.Body)
++	if rerr != nil {
++		return "", rerr
++	}
++	return string(body), nil
++}
