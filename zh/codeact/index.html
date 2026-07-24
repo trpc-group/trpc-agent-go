@@ -3003,7 +3003,18 @@
 </span></code></pre></div></td></tr></table></div>
 <p><code>Gateway</code> 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。<code>Runtime</code> 是传输/执行边界：内置 <code>LocalRunner</code> 用 Python stdio guest 实现；远端 sandbox、microVM、容器服务或平台原生 callback 后端应直接实现 <code>codeact.Runtime</code>，并把 sandbox 产生的 <code>ToolCall</code> 路由给传入的 <code>ToolCallHandler</code>。</p>
 <h2 id="_2">安全边界</h2>
-<p><code>LocalRunner</code> 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。生产应用应基于已有远端 sandbox、microVM 或容器服务实现 <code>codeact.Runtime</code>，并由应用侧配置隔离、资源和依赖策略。</p>
+<p><code>LocalRunner</code> 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。它使用共享的
+local Python runtime，为本地生成代码执行提供 defense-in-depth 防护，包括限制源码大小、
+使用最小进程环境、默认使用空的临时工作目录、将 bootstrap 脚本放在私有目录、尽力终止
+guest 进程（Unix-like 系统下会清理进程组），以及通过
+<code>codeact.NewLocalRunner(codeact.LocalRunnerConfig{Timeout: ...})</code> 配置的可选全流程 timeout。</p>
+<p>CodeAct 会保留通用 Python 语法和 builtins，包括 import 与异常处理。它与 Dynamic
+Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程启动和生命周期
+加固，而不是相同的语言策略。</p>
+<p>相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
+目录，并会拒绝超过 64 KiB 的生成源码，除非调用方显式调整限制。这些是有意的行为
+变化，但不会构成安全 sandbox 边界。</p>
+<p>生产应用应基于已有远端 sandbox、microVM 或容器服务实现 <code>codeact.Runtime</code>，并由应用侧配置隔离、资源和依赖策略。</p>
 <h2 id="http-api">为什么不让生成代码直接调用 HTTP API？</h2>
 <p>工具代码编排把动态控制流和系统能力访问分开：生成代码适合循环、分支和数据转换，业务 API 访问仍应是宿主侧工具。这样认证、授权、重试与幂等策略、API 版本适配、审计和限流仍由应用代码掌控，而不是落在模型生成的代码中。</p>
 <p>确实需要 HTTP 能力时，应把具体业务操作做成宿主 adapter tool；如果需要一组较宽但明确受限的 HTTP 能力，可暴露受约束的 <code>http_request</code> 类工具，由宿主控制允许的域名和方法、凭证以及响应大小限制。不能把 <code>LocalRunner</code> 的通用 Python 环境当作安全控制；生产 runtime 必须自行落实网络和进程策略。</p>
@@ -3102,7 +3113,7 @@ tools 自动推导。应优先放业务工具、数据工具和宿主侧 adapter
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月26日 01:55:26 UTC">2026-06-26 01:55:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 08:08:46 UTC">2026-07-24 08:08:46</span>
   </span>
 
     

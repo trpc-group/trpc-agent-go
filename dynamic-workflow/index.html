@@ -3471,10 +3471,25 @@ until the run finishes, or cancel the run context when stopping early.</p>
 standalone script: the temporary workflow gets code-level flexibility, while
 Agent execution, tool boundaries, event streaming, and Session persistence
 remain controlled by the Go framework.</p>
-<p><code>dynamicworkflow.LocalRunner</code> starts a local Python process. It is not a
-security sandbox. In production, provide your own <code>dynamicworkflow.Runtime</code>,
-such as a container, microVM, or remote sandbox, and enforce filesystem,
-network, process, dependency, and resource limits there.</p>
+<p><code>dynamicworkflow.LocalRunner</code> starts a local Python process through the shared
+local Python runtime. It is not a security sandbox. It applies
+defense-in-depth checks for local use, including
+restricted Python syntax, restricted builtins, source-size limits, captured
+output limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+full-execution timeout configured with
+<code>dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})</code>.
+The default timeout is intentionally unset; LocalRunner inherits the caller's
+context so long Agent workflows are not cut off unexpectedly.</p>
+<p>Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, rejects generated source larger than 64 KiB unless configured
+otherwise, and enforces the documented restricted Python subset. These are
+intentional behavior changes rather than a security sandbox boundary.</p>
+<p>In production, provide your own <code>dynamicworkflow.Runtime</code>, such as a container,
+microVM, or remote sandbox, and enforce filesystem, network, process,
+dependency, and resource limits there.</p>
 <p>Generated workflow code should call host tools rather than direct HTTP APIs.
 Authentication, authorization, retries, idempotency, audit, rate limiting, and
 API-version policy should remain controlled by business tools on the Go side.</p>
@@ -3505,7 +3520,7 @@ API-version policy should remain controlled by business tools on the Go side.</p
 Agent by default. Both are Python orchestration paths, and exposing both makes
 the model's choice harder.</p>
 <p>See the runnable
-<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow">Dynamic Workflow Agent example</a>.</p>
+<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic">basic Dynamic Workflow Agent example</a>.</p>
 <h2 id="roadmap-note-file-backed-workflows">Roadmap note: file-backed workflows</h2>
 <p>A future source-selection extension may let <code>run_workflow</code> choose either inline
 code or a workspace-relative script with optional JSON arguments. It should use
@@ -3533,7 +3548,7 @@ execution-state persistence, resume, checkpoint, and distribution concerns.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 13, 2026 02:41:18 UTC">2026-07-13 02:41:18</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 24, 2026 08:08:46 UTC">2026-07-24 08:08:46</span>
   </span>
 
     

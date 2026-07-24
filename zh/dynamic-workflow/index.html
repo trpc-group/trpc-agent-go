@@ -3436,8 +3436,18 @@ Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的
 <p>这也是 Dynamic Workflow 和“让模型写一个普通脚本自己跑完”的关键区别：临时
 workflow 具备代码的灵活性，但 Agent 执行、工具边界、事件流和 Session 持久化仍由
 Go 框架掌控。</p>
-<p><code>dynamicworkflow.LocalRunner</code> 会启动本地 Python 进程。它不是安全 sandbox。
-生产环境应提供自己的 <code>dynamicworkflow.Runtime</code>，例如容器、microVM 或远端 sandbox，
+<p><code>dynamicworkflow.LocalRunner</code> 会通过共享的 local Python runtime 启动本地 Python
+进程。它不是安全 sandbox。它会为本地使用提供 defense-in-depth 防护，包括限制 Python 语法、限制 builtins、
+限制源码大小、限制捕获输出、使用最小进程环境、默认使用空的临时工作目录、将 bootstrap
+脚本放在私有目录、尽力终止 guest 进程（Unix-like 系统下会清理进程组），以及通过
+<code>dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})</code>
+配置的可选全流程 timeout。
+默认 timeout 会刻意保持未设置，LocalRunner 只继承调用方 context，避免意外截断
+耗时较长的 Agent workflow。</p>
+<p>相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
+目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
+Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。</p>
+<p>生产环境应提供自己的 <code>dynamicworkflow.Runtime</code>，例如容器、microVM 或远端 sandbox，
 并在里面落实文件系统、网络、进程、依赖和资源限制。</p>
 <p>生成的 workflow 代码应该调用宿主工具，而不是直接调用 HTTP API。认证、授权、
 重试、幂等、审计、限流和 API 版本适配仍应由业务工具在 Go 侧掌控。</p>
@@ -3466,7 +3476,7 @@ Go 框架掌控。</p>
 </table>
 <p>默认不要向同一个根 Agent 同时暴露 <code>execute_tool_code</code> 和 <code>run_workflow</code>。
 两者都是代码编排路径，同时暴露会增加模型选择难度。</p>
-<p>完整可运行代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow">Dynamic Workflow Agent 示例</a>。</p>
+<p>完整可运行代码见 <a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/basic">Dynamic Workflow 基础示例</a>。</p>
 <h2 id="workflow">后续计划：文件化 workflow</h2>
 <p>后续的 source 选择扩展可以允许 <code>run_workflow</code> 在 inline code 与 workspace 相对路径的
 脚本之间二选一，并接受可选 JSON 参数。它应复用配置的 workspace 抽象，并与脚本创作、
@@ -3493,7 +3503,7 @@ Go 框架掌控。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月13日 02:41:18 UTC">2026-07-13 02:41:18</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 08:08:46 UTC">2026-07-24 08:08:46</span>
   </span>
 
     

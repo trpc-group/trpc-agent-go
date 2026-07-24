@@ -3040,7 +3040,26 @@
 <p>The Go gateway is the trust boundary: it rejects unknown tools, validates input JSON against the tool declaration, calls the tool, then validates/serializes its result before returning it to guest code. Guest code never gets Go references or host credentials.</p>
 <p><code>Runtime</code> is the transport boundary. The built-in <code>LocalRunner</code> implements it with a Python stdio guest. Remote or sandbox-native backends should implement <code>Runtime</code> directly and route sandbox-originated <code>ToolCall</code> values to the provided <code>ToolCallHandler</code>.</p>
 <h2 id="security">Security</h2>
-<p><code>LocalRunner</code> starts a local Python process and is only for development or an already isolated container/VM. It is <strong>not</strong> a security sandbox. Applications should implement <code>codeact.Runtime</code> for their existing remote sandbox, microVM, or container service, with the isolation, resource, and dependency policies appropriate to their environment.</p>
+<p><code>LocalRunner</code> starts a local Python process and is only for development or an
+already isolated container/VM. It is <strong>not</strong> a security sandbox. It uses the
+shared local Python runtime, which applies defense-in-depth checks such as
+source-size limits, a minimal process environment, an empty temporary working
+directory by default, a private bootstrap script, best-effort guest process
+termination with process-group cleanup on Unix-like systems, and an optional
+full-execution timeout configured with
+<code>codeact.NewLocalRunner(codeact.LocalRunnerConfig{Timeout: ...})</code>.</p>
+<p>CodeAct preserves general Python syntax and builtins, including imports and
+exception handling. Unlike Dynamic Workflow, it does not apply an AST or
+builtin allowlist. The shared runtime covers process startup and lifecycle
+hardening, not a shared language policy.</p>
+<p>Compared with the earlier LocalRunner behavior, the hardened runner no longer
+inherits the host environment, uses an empty temporary working directory by
+default, and rejects generated source larger than 64 KiB unless configured
+otherwise. These are intentional behavior changes rather than a security
+sandbox boundary.</p>
+<p>Applications should implement <code>codeact.Runtime</code> for their existing remote
+sandbox, microVM, or container service, with the isolation, resource, and
+dependency policies appropriate to their environment.</p>
 <h2 id="why-not-call-raw-http-apis-from-generated-code">Why not call raw HTTP APIs from generated code?</h2>
 <p>Tool code orchestration separates dynamic control flow from access to system
 capabilities. Generated code is useful for loops, branching, and transformation;
@@ -3184,7 +3203,7 @@ tool; tool code orchestration never guesses domain mappings.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 26, 2026 01:55:26 UTC">2026-06-26 01:55:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 24, 2026 08:08:46 UTC">2026-07-24 08:08:46</span>
   </span>
 
     
