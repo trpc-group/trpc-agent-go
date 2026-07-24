@@ -121,6 +121,54 @@ print(json.dumps({
 	require.NoDirExists(t, scriptDir)
 }
 
+func TestStartScriptSupportsRelativeTempDir(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	tempDir, err := os.MkdirTemp(".", "relative-temp-*")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(tempDir) })
+	require.False(t, filepath.IsAbs(tempDir))
+	t.Setenv("TMPDIR", tempDir)
+	if filepath.IsAbs(os.TempDir()) {
+		t.Skip("platform does not use TMPDIR")
+	}
+
+	proc, err := StartScript(
+		context.Background(),
+		Config{},
+		"print('ok')",
+		"guest.py",
+		[]byte("import os; print(os.path.realpath(__file__))\n"),
+		nil,
+		nil,
+		io.Discard,
+	)
+	require.NoError(t, err)
+	waited := false
+	defer func() {
+		if !waited {
+			_ = proc.Kill()
+			_ = proc.Wait()
+		}
+	}()
+
+	out, err := io.ReadAll(proc.Stdout())
+	require.NoError(t, err)
+	scriptPath := strings.TrimSpace(string(out))
+	require.True(t, filepath.IsAbs(scriptPath))
+	workDir, err := filepath.Abs(proc.Dir)
+	require.NoError(t, err)
+	scriptDir := filepath.Dir(scriptPath)
+	require.DirExists(t, workDir)
+	require.DirExists(t, scriptDir)
+
+	require.NoError(t, proc.Wait())
+	waited = true
+	require.NoDirExists(t, workDir)
+	require.NoDirExists(t, scriptDir)
+}
+
 func TestStartScriptUsesConfiguredWorkDirWithoutCleaningIt(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")

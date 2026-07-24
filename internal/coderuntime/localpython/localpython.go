@@ -101,7 +101,12 @@ func StartScript(
 		return nil, fmt.Errorf("localpython: create script dir: %w", err)
 	}
 	cleanupScriptDir := func() { _ = os.RemoveAll(scriptDir) }
-	scriptPath := filepath.Join(scriptDir, filepath.Base(scriptName))
+	scriptPath, err := filepath.Abs(filepath.Join(scriptDir, filepath.Base(scriptName)))
+	if err != nil {
+		cleanupScriptDir()
+		cleanupWorkDir()
+		return nil, fmt.Errorf("localpython: resolve script path: %w", err)
+	}
 	if err := os.WriteFile(scriptPath, script, 0o600); err != nil {
 		cleanupScriptDir()
 		cleanupWorkDir()
