@@ -1,0 +1,9 @@
+diff --git a/danger.go b/danger.go
+--- a/danger.go
++++ b/danger.go
+@@ -1,0 +1,5 @@
++package main
++import "os/exec"
++func runDangerous() {
++    exec.Command("sudo", "rm", "-rf", "/")
++}

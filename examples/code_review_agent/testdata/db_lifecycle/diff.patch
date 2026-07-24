@@ -1,0 +1,13 @@
+diff --git a/db.go b/db.go
+--- a/db.go
++++ b/db.go
+@@ -1,0 +1,9 @@
++package main
++import "database/sql"
++import _ "github.com/mattn/go-sqlite3"
++func connect() *sql.DB {
++    db, err := sql.Open("sqlite3", "test.db")
++    if err != nil { panic(err) }
++    // 缺少 db.Ping() 检查连接
++    return db
++}
