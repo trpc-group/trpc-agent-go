@@ -12,6 +12,7 @@ package codeexecutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -169,7 +170,59 @@ type Capabilities struct {
 	// NewEngineWithCapabilities (issue #1845); other backends keep
 	// the zero value and fail closed.
 	SupportsCleanEnv bool
+	// SupportsDeclarativeIO reports whether this engine implements the
+	// declarative I/O surface of WorkspaceFS — StageInputs and
+	// CollectOutputs. Nil means "unknown / not audited": the FS is
+	// left untouched so external backends that already implement the
+	// methods keep working after upgrading. false means the backend
+	// has audited and declared it does NOT support declarative I/O;
+	// NewEngineWithCapabilities then wraps the FS in a gatingFS that
+	// returns ErrDeclarativeIONotSupported so callers can detect the
+	// missing capability via errors.Is and fall back to
+	// PutFiles/Collect. true means the backend implements the full
+	// surface and no wrapper is installed.
+	//
+	// Use SupportsDeclarativeIOTrue() / SupportsDeclarativeIOFalse (or
+	// BoolPtr) rather than a bare bool so the zero value of
+	// Capabilities preserves historical unknown behaviour for
+	// external NewEngineWithCapabilities callers.
+	SupportsDeclarativeIO *bool
 }
+
+// BoolPtr returns a pointer to a fresh copy of b. Convenience for
+// capability fields. Each call allocates so callers do not share storage.
+func BoolPtr(b bool) *bool {
+	v := b
+	return &v
+}
+
+// SupportsDeclarativeIOTrue returns an audited true value for
+// Capabilities.SupportsDeclarativeIO.
+//
+// INV-CAP: this is a function that allocates a fresh *bool on each call
+// so mutating the returned pointer (or Describe()'s copy) cannot change
+// other engines or later constructions.
+func SupportsDeclarativeIOTrue() *bool { return BoolPtr(true) }
+
+// SupportsDeclarativeIOFalse returns an audited false value for
+// Capabilities.SupportsDeclarativeIO.
+//
+// INV-CAP: this is a function that allocates a fresh *bool on each call
+// so mutating the returned pointer (or Describe()'s copy) cannot change
+// other engines or later constructions.
+func SupportsDeclarativeIOFalse() *bool { return BoolPtr(false) }
+
+// ErrDeclarativeIONotSupported is returned by the gatingFS wrapper
+// when a caller invokes StageInputs or CollectOutputs on an engine
+// that has explicitly advertised SupportsDeclarativeIO=false.
+// Backend-neutral callers should check
+// errors.Is(err, ErrDeclarativeIONotSupported) and fall back to
+// PutFiles/Collect (only for globs-only OutputSpec; richer fields
+// cannot be silently emulated).
+var ErrDeclarativeIONotSupported = errors.New(
+	"codeexecutor: declarative I/O (StageInputs/CollectOutputs) " +
+		"not supported by this engine",
+)
 
 // Engine is a backend that provides workspace and execution services.
 type Engine interface {
@@ -196,7 +249,39 @@ type stdEngine struct {
 func (e *stdEngine) Manager() WorkspaceManager { return e.m }
 func (e *stdEngine) FS() WorkspaceFS           { return e.f }
 func (e *stdEngine) Runner() ProgramRunner     { return e.r }
-func (e *stdEngine) Describe() Capabilities    { return e.c }
+func (e *stdEngine) Describe() Capabilities {
+	c := e.c
+	if c.SupportsDeclarativeIO != nil {
+		v := *c.SupportsDeclarativeIO
+		c.SupportsDeclarativeIO = &v
+	}
+	return c
+}
+
+// gatingFS wraps a WorkspaceFS and rejects StageInputs/CollectOutputs
+// with ErrDeclarativeIONotSupported. It is installed by
+// NewEngineWithCapabilities only when SupportsDeclarativeIO is
+// explicitly false, so callers receive a public, errors.Is-checkable
+// error instead of a backend-private stub sentinel.
+type gatingFS struct {
+	inner WorkspaceFS
+}
+
+func (g *gatingFS) PutFiles(ctx context.Context, ws Workspace, files []PutFile) error {
+	return g.inner.PutFiles(ctx, ws, files)
+}
+func (g *gatingFS) StageDirectory(ctx context.Context, ws Workspace, src, to string, opt StageOptions) error {
+	return g.inner.StageDirectory(ctx, ws, src, to, opt)
+}
+func (g *gatingFS) Collect(ctx context.Context, ws Workspace, patterns []string) ([]File, error) {
+	return g.inner.Collect(ctx, ws, patterns)
+}
+func (g *gatingFS) StageInputs(ctx context.Context, ws Workspace, specs []InputSpec) error {
+	return ErrDeclarativeIONotSupported
+}
+func (g *gatingFS) CollectOutputs(ctx context.Context, ws Workspace, spec OutputSpec) (OutputManifest, error) {
+	return OutputManifest{}, ErrDeclarativeIONotSupported
+}
 
 // NewEngine constructs a simple Engine from its components, with
 // zero-valued Capabilities. Existing callers keep their historical
@@ -219,12 +304,27 @@ func NewEngine(
 // not yet been audited continue to use NewEngine and inherit the
 // zero value, which fails closed in any tool that gates on a
 // capability.
+//
+// SupportsDeclarativeIO is tri-state:
+//   - nil (zero): unknown — FS is left untouched so external backends
+//     that fully implement StageInputs/CollectOutputs keep working
+//     even if they only pass SupportsCleanEnv
+//   - false: explicitly unsupported — wrap FS in gatingFS
+//   - true: fully supported — no wrapper
 func NewEngineWithCapabilities(
 	m WorkspaceManager,
 	f WorkspaceFS,
 	r ProgramRunner,
 	c Capabilities,
 ) Engine {
+	// Defensive copy: never retain caller-owned *bool that could be mutated.
+	if c.SupportsDeclarativeIO != nil {
+		v := *c.SupportsDeclarativeIO
+		c.SupportsDeclarativeIO = &v
+	}
+	if c.SupportsDeclarativeIO != nil && !*c.SupportsDeclarativeIO {
+		f = &gatingFS{inner: f}
+	}
 	return &stdEngine{m: m, f: f, r: r, c: c}
 }
 

@@ -483,6 +483,18 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
+	// INV-PRE / INV-CLEAN: fail closed before prepareWorkspaceForRun so
+	// create/stage/PutFiles do not run when the engine cannot honor the
+	// requested output contract or command policy CleanEnv.
+	eng := t.ensureEngine()
+	if err := preflightDeclarativeOutputs(eng, in); err != nil {
+		return nil, err
+	}
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return nil, err
+		}
+	}
 	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
 		prepareWorkspaceForRun(
 			ctx,
@@ -658,8 +670,12 @@ func (t *RunTool) prepareWorkspaceForRun(
 	ctxIO := withArtifactContext(ctx)
 	if len(in.Inputs) > 0 {
 		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
+			// StageInputs cannot fall back to PutFiles without losing
+			// scheme/pin/link semantics. Propagate (including
+			// ErrDeclarativeIONotSupported for engines that advertise
+			// SupportsDeclarativeIO=false) so skill_run fails closed.
 			return nil, codeexecutor.Workspace{}, "", nil, nil,
-				nil, err
+				nil, fmt.Errorf("stage inputs: %w", err)
 		}
 	}
 	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
@@ -1137,6 +1153,13 @@ func (t *RunTool) buildRunProgramSpec(
 	timeout := time.Duration(in.Timeout) * time.Second
 	if in.Timeout <= 0 {
 		timeout = defaultSkillRunTimeout
+	}
+	// INV-CLEAN: fail closed before prepareEditorEnv/PutFiles when policy
+	// mode is active on a runtime that cannot honor CleanEnv.
+	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
+		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return codeexecutor.RunProgramSpec{}, err
+		}
 	}
 	env := cloneStringMap(in.Env)
 	t.maybeInjectSkillEnv(ctx, in.Skill, env)
@@ -1785,6 +1808,75 @@ func withArtifactContext(ctx context.Context) context.Context {
 	return ctxIO
 }
 
+// preflightDeclarativeOutputs fails closed before runProgram when the
+// engine has audited SupportsDeclarativeIO=false and the request needs
+// CollectOutputs features that cannot be emulated by Collect(globs).
+// Globs-only OutputSpec and legacy output_files remain allowed.
+func preflightDeclarativeOutputs(
+	eng codeexecutor.Engine, in runInput,
+) error {
+	if eng == nil {
+		return nil
+	}
+	cap := eng.Describe().SupportsDeclarativeIO
+	if cap == nil || *cap {
+		// nil = unknown/unaudited (leave path alone); true = full support.
+		return nil
+	}
+	// Inputs require StageInputs; cannot be emulated without declarative I/O.
+	if len(in.Inputs) > 0 {
+		return codeexecutor.ErrDeclarativeIONotSupported
+	}
+	if in.Outputs == nil || len(in.OutputFiles) > 0 {
+		return nil
+	}
+	if outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+		return nil
+	}
+	return codeexecutor.ErrDeclarativeIONotSupported
+}
+
+// checkSkillRunnerSupportsPolicy fails closed when skill_run is configured
+// with allowed/denied command lists but the engine cannot honor CleanEnv.
+// Mirrors tool/workspaceexec.checkRunnerSupportsPolicy.
+func checkSkillRunnerSupportsPolicy(eng codeexecutor.Engine) error {
+	if eng == nil {
+		return nil
+	}
+	if eng.Describe().SupportsCleanEnv {
+		return nil
+	}
+	return errors.New(
+		"skill_run: command allow/deny policy requires a runtime that " +
+			"supports RunProgramSpec.CleanEnv, but the configured runtime " +
+			"does not advertise it. Either run on a CleanEnv-capable " +
+			"backend (e.g. codeexecutor/local) or drop the policy lists",
+	)
+}
+
+// outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be
+// safely honoured by Collect(globs) alone when CollectOutputs is not
+// supported. Only the zero-valued extras (no Save, no NameTemplate, no
+// limits, no Inline) are allowed; any richer field would be silently
+// dropped by a globs-only fallback.
+func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
+	if spec.Save {
+		return false
+	}
+	if strings.TrimSpace(spec.NameTemplate) != "" {
+		return false
+	}
+	if spec.MaxFiles != 0 || spec.MaxFileBytes != 0 || spec.MaxTotalBytes != 0 {
+		return false
+	}
+	// Inline relies on CollectOutputs producing a manifest; without it
+	// skill would return empty OutputFiles while claiming Inline success.
+	if spec.Inline {
+		return false
+	}
+	return true
+}
+
 // prepareOutputs collects files either through OutputSpec or legacy
 // output_files patterns. It returns collected files and optional
 // manifest.
@@ -1799,8 +1891,26 @@ func (t *RunTool) prepareOutputs(
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
 		if err != nil &&
-			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
+			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) &&
+			!errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
 			return nil, nil, nil, err
+		}
+		if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
+			// Engine doesn't support declarative output collection.
+			// Globs-only OutputSpec can fall back to Collect without
+			// changing the public contract. Any richer field (Save,
+			// NameTemplate, MaxFiles/MaxFileBytes/MaxTotalBytes,
+			// Inline via manifest) cannot be silently emulated —
+			// returning the unsupported error is preferable to a
+			// successful run that drops requested artifacts.
+			if !outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
+				return nil, nil, nil, err
+			}
+			fs, ferr := t.collectFiles(ctx, eng, ws, in.Outputs.Globs)
+			if ferr != nil {
+				return nil, nil, nil, ferr
+			}
+			return fs, nil, nil, nil
 		}
 		manifest = &m
 		if in.Outputs.Inline {

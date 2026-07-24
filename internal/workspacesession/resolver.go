@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -81,14 +82,22 @@ func (r *Resolver) CreateWorkspace(
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
+//
+// The encoding is injective over (AppName, UserID, ID): every field is
+// length-prefixed so empty parts and embedded "/" cannot collide
+// (e.g. App="a/b",User="c",ID="d" vs App="a",User="b/c",ID="d").
+// This matches opensandbox.encodeSessionWorkspaceKey so registry keys and
+// OpenSandbox PerSession keys agree when a full session is present.
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
 	}
-	if inv.Session.AppName != "" && inv.Session.UserID != "" && inv.Session.ID != "" {
-		return inv.Session.AppName + "/" + inv.Session.UserID + "/" + inv.Session.ID
-	}
-	return inv.Session.ID
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	// Always three length-prefixed fields (including empties).
+	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
+		len(app), app, len(user), user, len(id), id)
 }
 
 // withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:

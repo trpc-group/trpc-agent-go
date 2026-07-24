@@ -398,6 +398,9 @@ func (e *CodeExecutor) Engine() codeexecutor.Engine {
 	rt := e.ensureWS()
 	return codeexecutor.NewEngineWithCapabilities(
 		rt, rt, rt,
-		codeexecutor.Capabilities{SupportsCleanEnv: true},
+		codeexecutor.Capabilities{
+			SupportsCleanEnv:      true,
+			SupportsDeclarativeIO: codeexecutor.SupportsDeclarativeIOTrue(),
+		},
 	)
 }

@@ -100,3 +100,33 @@ func waitWorkspaceCreate(ctx context.Context, call *workspaceCreateCall) (Worksp
 		return call.ws, nil
 	}
 }
+
+// Get returns a previously acquired workspace without creating one.
+// ok is false when id is unknown.
+func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ws, ok := r.byID[id]
+	return ws, ok
+}
+
+// Release removes id from the registry and optionally cleans up the
+// underlying workspace when m is non-nil. If the id is unknown, Release
+// is a no-op and returns nil.
+func (r *WorkspaceRegistry) Release(
+	ctx context.Context, m WorkspaceManager, id string,
+) error {
+	r.mu.Lock()
+	ws, ok := r.byID[id]
+	if ok {
+		delete(r.byID, id)
+	}
+	r.mu.Unlock()
+	if !ok {
+		return nil
+	}
+	if m == nil {
+		return nil
+	}
+	return m.Cleanup(ctx, ws)
+}

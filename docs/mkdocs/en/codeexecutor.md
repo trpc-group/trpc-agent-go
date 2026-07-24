@@ -119,12 +119,19 @@ Common backends:
   Runs inside a container. Better isolation and closer to production.
 - `jupyter.New()`
   Best for notebook or kernel-style execution, especially Python analysis.
+- `opensandbox.New(...)`
+  Remote self-hosted OpenSandbox. Good when you want isolation without
+  managing local Docker yourself. See
+  `examples/codeexecution/opensandbox`.
+- `e2b.New(...)`
+  Managed cloud sandbox (when the e2b backend is enabled in your tree).
 
 Typical recommendations:
 
 - local development: `local`
-- isolated or production-like execution: `container`
+- isolated or production-like execution: `container` or `opensandbox`
 - notebook workflows: `jupyter`
+- managed cloud isolation: `e2b`
 
 ## Workspace Layout
 
@@ -931,9 +938,12 @@ caller-supplied env (including `PATH`) are preserved as before.
 
     Today `codeexecutor/local`, `codeexecutor/container`, and
     `codeexecutor/e2b` advertise `SupportsCleanEnv: true`, so policy
-    mode is supported on those backends. Other backends keep the
-    zero-valued capabilities and are refused at the gate until they
-    are audited and opt in via `NewEngineWithCapabilities`.
+    mode is supported on those backends. `codeexecutor/opensandbox`
+    explicitly advertises `SupportsCleanEnv: false` (execd still merges
+    the outer shell environment) and is refused at the policy gate
+    rather than silently degrading. Other backends keep the zero-valued
+    capabilities and are refused until they are audited and opt in via
+    `NewEngineWithCapabilities`.
 
 ### Scope
 
