@@ -840,7 +840,7 @@ server, err := agui.New(
 }
 ```
 
-恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源；如果需要恢复请求级 `forwardedProps`，可以读取 `rawEvent.runs[runId].forwardedProps`。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
+恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源和时间戳，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源和时间戳；如果需要恢复请求级 `forwardedProps`，可以读取 `rawEvent.runs[runId].forwardedProps`。索引中的 `timestamp` 优先复用历史实时事件顶层的 `timestamp`；只有旧数据缺少事件 `timestamp` 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
 
 ## 外部工具
 
