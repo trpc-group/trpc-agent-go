@@ -30,6 +30,9 @@ func WriteReports(
 	if store == nil || result == nil || result.RunID == "" {
 		return nil, errors.New("store and completed run result are required")
 	}
+	if result.Status == regression.RunStatusRunning {
+		return nil, errors.New("cannot publish reports for a running audit result")
+	}
 	if err := validateRunDirectoryName(result.RunID); err != nil {
 		return nil, err
 	}

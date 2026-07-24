@@ -31,6 +31,10 @@ var inlineSecretPattern = regexp.MustCompile(
 	`(?i)\b(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|secret|password|cookie)\b\s*[:=]\s*[^,;\r\n]+`,
 )
 
+var quotedJSONSecretPattern = regexp.MustCompile(
+	`(?i)"(api[_-]?key|authorization|access[_-]?token|refresh[_-]?token|token|secret|password|cookie)"\s*:\s*(?:"(?:\\.|[^"\\\r\n])*"|[^,}\]\r\n]+)`,
+)
+
 var bearerTokenPattern = regexp.MustCompile(`(?i)\bbearer\s+[-A-Za-z0-9._~+/]+=*`)
 
 func sanitizeProfile(source *promptiter.Profile, policy AuditPolicy) *promptiter.Profile {
@@ -194,6 +198,7 @@ func sanitizeContent(policy AuditPolicy, value string) string {
 	if value == "" {
 		return ""
 	}
+	value = quotedJSONSecretPattern.ReplaceAllString(value, `"$1":"`+redactedValue+`"`)
 	value = inlineSecretPattern.ReplaceAllString(value, "$1="+redactedValue)
 	value = bearerTokenPattern.ReplaceAllString(value, "Bearer "+redactedValue)
 	limit := policy.MaxContentBytes

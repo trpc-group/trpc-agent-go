@@ -119,6 +119,10 @@ func TestWriteReportsRejectsInvalidOrIncompleteInputs(t *testing.T) {
 	require.Error(t, err)
 	_, err = WriteReports(context.Background(), store, &regression.RunResult{RunID: "run"})
 	require.ErrorContains(t, err, "spec is nil")
+	running := artifactResult("running")
+	running.Status = regression.RunStatusRunning
+	_, err = WriteReports(context.Background(), store, running)
+	require.ErrorContains(t, err, "running audit result")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

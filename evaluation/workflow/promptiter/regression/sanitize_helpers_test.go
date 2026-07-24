@@ -57,6 +57,14 @@ func TestSanitizeMetadataAndStructuredContent(t *testing.T) {
 	assert.NotContains(t, sanitizeStructuredContent(AuditPolicy{MaxContentBytes: 64}, "api_key=secret-value"), "secret-value")
 }
 
+func TestSanitizeContentRedactsQuotedJSONSecrets(t *testing.T) {
+	value := `{"api_key":"json-secret","label":"safe"}`
+	sanitized := sanitizeContent(AuditPolicy{MaxContentBytes: 64}, value)
+	assert.NotContains(t, sanitized, "json-secret")
+	assert.Contains(t, sanitized, `"api_key":"`+redactedValue+`"`)
+	assert.Contains(t, sanitized, `"label":"safe"`)
+}
+
 func TestHasExecutionErrorChecksEveryObservation(t *testing.T) {
 	assert.False(t, hasExecutionError(&CaseResult{Runs: []Observation{{}}}))
 	assert.True(t, hasExecutionError(&CaseResult{Runs: []Observation{{Tools: []ToolObservation{{Error: "tool failed"}}}}}))

@@ -268,6 +268,8 @@ func validateRunRequest(request *engine.RunRequest) error {
 		return errors.New("target surface ids must not be empty")
 	case slices.Contains(request.TargetSurfaceIDs, ""):
 		return errors.New("target surface ids must not contain empty values")
+	case request.EvaluationOptions.NumRuns < 0:
+		return errors.New("evaluation num runs must be non-negative")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:

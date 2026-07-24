@@ -175,6 +175,10 @@ The example contains four training cases and five validation cases. The
 validation-only privacy case is marked critical in `promptiter.json`, keeping
 business release policy out of the generic EvalSet schema.
 
+`gate.maxScoreStdDev` is optional. Omit it or set it to `0` to disable the
+validation-score stability gate. A positive value is the maximum allowed
+standard deviation and requires `numRuns` to be at least `2`.
+
 ## Outputs
 
 Each run writes the following immutable artifacts below `<output>/<run-id>/`:

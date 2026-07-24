@@ -36,6 +36,10 @@ func TestRunSpecValidation(t *testing.T) {
 		{name: "missing target", mutate: func(spec *RunSpec) { spec.TargetSurfaceID = "" }},
 		{name: "missing fingerprint", mutate: func(spec *RunSpec) { spec.InputFingerprint = "" }},
 		{name: "zero runs", mutate: func(spec *RunSpec) { spec.Runtime.NumRuns = 0 }},
+		{name: "stability gate with one run", mutate: func(spec *RunSpec) {
+			spec.Runtime.NumRuns = 1
+			spec.Gate.MaxScoreStdDev = .1
+		}},
 		{name: "zero metric weight", mutate: func(spec *RunSpec) {
 			spec.MetricPolicies["quality"] = MetricPolicy{}
 		}},
@@ -89,6 +93,14 @@ func TestNilRunSpecIsInvalid(t *testing.T) {
 	var spec *RunSpec
 	if err := spec.Validate(); err == nil {
 		t.Fatal("nil spec was accepted")
+	}
+}
+
+func TestRunSpecAllowsSingleRunWhenStabilityGateIsDisabled(t *testing.T) {
+	spec := validSpec()
+	spec.Runtime.NumRuns = 1
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("single run without stability gate: %v", err)
 	}
 }
 

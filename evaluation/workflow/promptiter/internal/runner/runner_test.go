@@ -83,6 +83,21 @@ func TestCaptureOutputSummarizesCompleteAndMissingUsage(t *testing.T) {
 	assert.False(t, output.Usage.Complete)
 }
 
+func TestCaptureOutputCountsUsageFromCompletedToolCallWithoutDone(t *testing.T) {
+	events := make(chan *event.Event, 1)
+	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{
+		ID: "tool-call", Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		Choices: []model.Choice{{Message: model.Message{ToolCalls: []model.ToolCall{{ID: "tool-1"}}}}},
+	})
+	close(events)
+
+	output, err := CaptureOutput(events)
+	assert.NoError(t, err)
+	assert.Equal(t, 1, output.Usage.Calls)
+	assert.Equal(t, int64(5), output.Usage.TotalTokens)
+	assert.True(t, output.Usage.Complete)
+}
+
 func TestCaptureOutputMarksPrematureStreamIncomplete(t *testing.T) {
 	events := make(chan *event.Event, 1)
 	events <- event.NewResponseEvent("invocation-id", "runner", &model.Response{

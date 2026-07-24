@@ -1422,6 +1422,15 @@ func TestValidateRunRequest(t *testing.T) {
 		TargetSurfaceIDs: []string{""},
 	}), "target surface ids must not contain empty values")
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
+		Train:            testEvalSetInputs("train"),
+		Validation:       testEvalSetInputs("validation"),
+		MaxRounds:        1,
+		TargetSurfaceIDs: []string{"candidate#instruction"},
+		EvaluationOptions: promptiterengine.EvaluationOptions{
+			NumRuns: -1,
+		},
+	}), "evaluation num runs must be non-negative")
+	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),
 		MaxRounds:  1,

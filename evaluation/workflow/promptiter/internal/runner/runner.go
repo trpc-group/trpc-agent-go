@@ -86,7 +86,9 @@ func captureCallUsage(
 		state = &callUsage{}
 		calls[key] = state
 	}
-	state.done = state.done || response.Done
+	// Usage on a non-partial response represents a completed model call even
+	// when a tool-calling provider leaves Done false to continue the runner flow.
+	state.done = state.done || response.Done || (response.Usage != nil && !response.IsPartial)
 	if response.Usage != nil {
 		usage := *response.Usage
 		state.usage = &usage

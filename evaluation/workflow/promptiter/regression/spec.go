@@ -55,6 +55,9 @@ func (s *RunSpec) Validate() error {
 	if s.Runtime.NumRuns <= 0 {
 		return errors.New("num runs must be greater than zero")
 	}
+	if s.Gate.MaxScoreStdDev > 0 && s.Runtime.NumRuns < 2 {
+		return errors.New("score stability gate requires at least two runs")
+	}
 	if !finite(s.Gate.MinValidationGain) || !finite(s.Gate.MaxCaseRegression) ||
 		!finite(s.Gate.MaxGeneralizationGap) || !finite(s.Gate.MaxScoreStdDev) ||
 		s.Gate.MinValidationGain < 0 || s.Gate.MaxCaseRegression < 0 ||

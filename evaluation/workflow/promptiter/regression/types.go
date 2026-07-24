@@ -75,8 +75,11 @@ type GatePolicy struct {
 	RejectAnyNewFail     bool    `json:"rejectAnyNewFail"`
 	// RequirePromptIterAcceptance makes PromptIter's round acceptance a
 	// mandatory release rule instead of advisory evidence.
-	RequirePromptIterAcceptance bool    `json:"requirePromptIterAcceptance,omitempty"`
-	MaxScoreStdDev              float64 `json:"maxScoreStdDev,omitempty"`
+	RequirePromptIterAcceptance bool `json:"requirePromptIterAcceptance,omitempty"`
+	// MaxScoreStdDev is the optional maximum validation-score standard deviation.
+	// Zero disables the stability gate. A positive value requires Runtime.NumRuns
+	// to be at least two so the standard deviation has sufficient evidence.
+	MaxScoreStdDev float64 `json:"maxScoreStdDev,omitempty"`
 }
 
 // BudgetPolicy limits aggregate model calls, tokens, cost, and wall time.
