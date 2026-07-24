@@ -294,6 +294,64 @@ func TestWorkspaceRuntime_PutFilesAndRun(t *testing.T) {
 	require.Contains(t, rr.Stdout, "run-out")
 }
 
+func TestWorkspaceRuntime_RunProgram_MaxOutputBytesBoundsDockerStream(t *testing.T) {
+	const limit = 64
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/start"):
+			hj, _ := w.(http.Hijacker)
+			conn, buf, _ := hj.Hijack()
+			writeHijackStream(
+				t,
+				conn,
+				buf,
+				strings.Repeat("o", 1024),
+				strings.Repeat("e", 1024),
+			)
+		case r.Method == http.MethodGet &&
+			strings.Contains(r.URL.Path,
+				"/exec/"+testExec1+"/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+
+	rt := &workspaceRuntime{
+		ce: &CodeExecutor{
+			client:    cli,
+			container: &tcontainer.Summary{ID: testCID},
+		},
+		cfg: runtimeConfig{
+			runHostBase:      t.TempDir(),
+			runContainerBase: testRunBase,
+		},
+	}
+	res, err := rt.RunProgram(
+		context.Background(),
+		codeexecutor.Workspace{ID: "w-output", Path: path.Join(testRunBase, "w-output")},
+		codeexecutor.RunProgramSpec{
+			Cmd:            "bash",
+			Args:           []string{"-lc", "yes"},
+			MaxOutputBytes: limit,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), limit)
+}
+
 func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	// Capture the ExecCreate request to inspect constructed shell.
 	var capturedCmd []string

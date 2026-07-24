@@ -27,6 +27,16 @@ type ReviewStore interface {
 	Close() error
 	Init(ctx context.Context) error
 	SchemaVersion(ctx context.Context) (int, error)
+	// CreateTask persists the task before preprocessing starts.
+	CreateTask(ctx context.Context, task ReviewTask) error
+	// MarkTaskFailed transitions a pending task to failed and records the
+	// redacted preprocessing error class in audit metrics.
+	MarkTaskFailed(ctx context.Context, task ReviewTask, errorClass string) error
+	// SaveFailedTask persists a minimal audit record for a task that failed
+	// during preprocessing (before a full report was produced).  The error
+	// class is a short, redacted slug (e.g. "parse_diff", "load_skill") that
+	// identifies the failure category without leaking raw error text.
+	SaveFailedTask(ctx context.Context, task ReviewTask, errorClass string) error
 	SaveReport(ctx context.Context, report ReviewReport, pd ParsedDiff, jsonPath, mdPath string) error
 	LoadTaskReport(ctx context.Context, taskID string) (ReviewReport, error)
 }
@@ -228,6 +238,93 @@ func (s *Store) SchemaVersion(ctx context.Context) (int, error) {
 	return version, err
 }
 
+// CreateTask persists the task before any fallible preprocessing step.
+func (s *Store) CreateTask(ctx context.Context, task ReviewTask) error {
+	status := task.Status
+	if status == "" {
+		status = StatusPending
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO review_tasks(id, status, input_mode, started_at, ended_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		task.ID, string(status), task.InputMode,
+		task.StartedAt.Format(time.RFC3339Nano),
+		nullableTime(task.EndedAt),
+	)
+	return err
+}
+
+// MarkTaskFailed transitions an existing pending task to failed and records
+// the failure classification in the audit metrics table.
+func (s *Store) MarkTaskFailed(ctx context.Context, task ReviewTask, errorClass string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var startedAtText string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT started_at FROM review_tasks WHERE id = ? AND status = ?`,
+		task.ID, string(StatusPending),
+	).Scan(&startedAtText); err != nil {
+		return err
+	}
+	startedAt, err := time.Parse(time.RFC3339Nano, startedAtText)
+	if err != nil {
+		return fmt.Errorf("parse task start time: %w", err)
+	}
+	ended := task.EndedAt
+	if ended.IsZero() {
+		ended = time.Now()
+	}
+	result, err := tx.ExecContext(ctx,
+		`UPDATE review_tasks SET status = ?, input_mode = ?, ended_at = ?
+		 WHERE id = ? AND status = ?`,
+		string(StatusFailed), task.InputMode, ended.Format(time.RFC3339Nano),
+		task.ID, string(StatusPending),
+	)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("task %q is not pending", task.ID)
+	}
+
+	metrics := AuditMetrics{
+		TotalDurationMS: ended.Sub(startedAt).Milliseconds(),
+		SeverityCounts:  map[string]int{},
+		ErrorTypeCounts: map[string]int{errorClass: 1},
+	}
+	metricsJSON, _ := json.Marshal(metrics)
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO audit_metrics(task_id, metrics_json, created_at)
+		 VALUES (?, ?, ?)`,
+		task.ID, string(metricsJSON), time.Now().Format(time.RFC3339Nano),
+	); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// SaveFailedTask persists a minimal audit record for a preprocessing failure.
+// It writes the review_tasks row with StatusFailed and an audit_metrics row
+// whose error_type_counts contains a single entry keyed by errorClass.
+func (s *Store) SaveFailedTask(ctx context.Context, task ReviewTask, errorClass string) error {
+	if err := s.CreateTask(ctx, ReviewTask{
+		ID:        task.ID,
+		Status:    StatusPending,
+		StartedAt: task.StartedAt,
+		InputMode: task.InputMode,
+	}); err != nil {
+		return err
+	}
+	task.Status = StatusFailed
+	return s.MarkTaskFailed(ctx, task, errorClass)
+}
+
 func (s *Store) SaveReport(ctx context.Context, report ReviewReport, pd ParsedDiff, jsonPath, mdPath string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -236,10 +333,15 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, pd ParsedDi
 	defer tx.Rollback()
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO review_tasks(id, status, input_mode, started_at, ended_at)
-		 VALUES (?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+			status = excluded.status,
+			input_mode = excluded.input_mode,
+			started_at = excluded.started_at,
+			ended_at = excluded.ended_at`,
 		report.Task.ID, report.Task.Status, report.Task.InputMode,
 		report.Task.StartedAt.Format(time.RFC3339Nano),
-		report.Task.EndedAt.Format(time.RFC3339Nano),
+		nullableTime(report.Task.EndedAt),
 	); err != nil {
 		return err
 	}
@@ -319,6 +421,13 @@ func (s *Store) SaveReport(ctx context.Context, report ReviewReport, pd ParsedDi
 		return err
 	}
 	return tx.Commit()
+}
+
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t.Format(time.RFC3339Nano)
 }
 
 func insertFindings(ctx context.Context, tx *sql.Tx, taskID, bucket string, findings []Finding) error {

@@ -475,6 +475,7 @@ func (r *workspaceRuntime) RunProgram(
 		t,
 		spec.Stdin,
 		execEnv,
+		spec.MaxOutputBytes,
 	)
 	res := codeexecutor.RunResult{
 		Stdout:   out,
@@ -1156,7 +1157,7 @@ func (r *workspaceRuntime) execCmd(
 	argv []string,
 	timeout time.Duration,
 ) (string, string, int, bool, error) {
-	return r.execCmdWithStdin(ctx, argv, timeout, "", nil)
+	return r.execCmdWithStdin(ctx, argv, timeout, "", nil, 0)
 }
 
 // execCmdWithStdin runs argv in the container. execEnv, when
@@ -1171,6 +1172,7 @@ func (r *workspaceRuntime) execCmdWithStdin(
 	timeout time.Duration,
 	stdin string,
 	execEnv []string,
+	maxOutputBytes int,
 ) (string, string, int, bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -1207,8 +1209,10 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
+	outputLimiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
+	stdout := outputLimiter.NewWriter()
+	stderr := outputLimiter.NewWriter()
+	_, err = stdcopy.StdCopy(stdout, stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
 			err = writeErr

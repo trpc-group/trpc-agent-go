@@ -23,6 +23,7 @@ const (
 type ReviewStatus string
 
 const (
+	StatusPending   ReviewStatus = "pending"
 	StatusCompleted ReviewStatus = "completed"
 	StatusFailed    ReviewStatus = "failed"
 )

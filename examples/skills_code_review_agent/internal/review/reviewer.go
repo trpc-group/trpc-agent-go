@@ -39,11 +39,38 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	if cfg.OutputLimitBytes <= 0 {
 		cfg.OutputLimitBytes = 64 * 1024
 	}
+	taskID := newID("review")
+	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
+		return ReviewReport{}, "", "", err
+	}
+	store, err := OpenStore(ctx, cfg.DBPath)
+	if err != nil {
+		return ReviewReport{}, "", "", err
+	}
+	defer store.Close()
+	task := ReviewTask{
+		ID:        taskID,
+		Status:    StatusPending,
+		StartedAt: start,
+		InputMode: configuredInputMode(cfg),
+	}
+	if err := store.CreateTask(ctx, task); err != nil {
+		return ReviewReport{}, "", "", wrapStoreErr("create review task", err)
+	}
+	persistFailure := func(errorClass string, origErr error) (ReviewReport, string, string, error) {
+		task.Status = StatusFailed
+		task.EndedAt = time.Now()
+		if saveErr := wrapStoreErr("mark failed task", store.MarkTaskFailed(ctx, task, errorClass)); saveErr != nil {
+			return ReviewReport{}, "", "", errors.Join(origErr, saveErr)
+		}
+		return ReviewReport{}, "", "", origErr
+	}
+
 	var cleanupSmokeRepo func() error
 	if cfg.ContainerSmoke {
 		repoPath, cleanup, err := prepareContainerSmokeRepo(ctx)
 		if err != nil {
-			return ReviewReport{}, "", "", err
+			return persistFailure("prepare_smoke_repo", err)
 		}
 		cfg.RepoPath = repoPath
 		cfg.Executor = "container"
@@ -51,26 +78,23 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 		cleanupSmokeRepo = cleanup
 		defer cleanupSmokeRepo()
 	}
+
 	if err := loadCodeReviewSkill(); err != nil {
-		return ReviewReport{}, "", "", err
+		return persistFailure("load_skill", err)
 	}
 	diff, inputMode, err := loadInputDiff(ctx, cfg)
 	if err != nil {
-		return ReviewReport{}, "", "", err
+		return persistFailure("load_input", err)
 	}
+	task.InputMode = inputMode
 	pd, err := ParseUnifiedDiff(diff)
 	if err != nil {
-		return ReviewReport{}, "", "", err
+		return persistFailure("parse_diff", err)
 	}
 	if cfg.RepoPath != "" {
 		enrichPackageInfoFromRepo(&pd, cfg.RepoPath)
 	}
-	task := ReviewTask{
-		ID:        newID("review"),
-		Status:    StatusCompleted,
-		StartedAt: start,
-		InputMode: inputMode,
-	}
+	task.Status = StatusCompleted
 	findings, warnings, needsHuman := AnalyzeDiff(pd)
 	if cfg.FakeModel || cfg.LLMReview {
 		llmFindings, err := RunLLMReview(ctx, LLMReviewConfig{
@@ -149,18 +173,10 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	}
 	report.Metrics = buildMetrics(report, time.Since(start))
 
-	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
-		return ReviewReport{}, "", "", err
-	}
 	jsonPath, mdPath, err := finalizeReportArtifacts(cfg.OutputDir, &report, sandboxResult.Artifacts)
 	if err != nil {
 		return ReviewReport{}, "", "", err
 	}
-	store, err := OpenStore(ctx, cfg.DBPath)
-	if err != nil {
-		return ReviewReport{}, "", "", err
-	}
-	defer store.Close()
 	if err := wrapStoreErr("save review", store.SaveReport(ctx, report, pd, jsonPath, mdPath)); err != nil {
 		return ReviewReport{}, "", "", err
 	}
@@ -185,6 +201,23 @@ func enrichPackageInfoFromRepo(pd *ParsedDiff, repoPath string) {
 		}
 	}
 	attachPackageInfoFromFiles(pd)
+}
+
+func configuredInputMode(cfg ReviewConfig) string {
+	switch {
+	case cfg.ContainerSmoke:
+		return "container-smoke"
+	case cfg.DiffFile != "":
+		return "diff-file"
+	case cfg.FileList != "":
+		return "file-list"
+	case cfg.Fixture != "":
+		return "fixture:" + cfg.Fixture
+	case cfg.RepoPath != "":
+		return "repo-path"
+	default:
+		return ""
+	}
 }
 
 func loadCodeReviewSkill() error {
@@ -417,6 +450,21 @@ func writeNewFileDiff(b *strings.Builder, file string, lines []string, noNewline
 	}
 }
 
+// incompleteAnalysisReasons are sandbox skip reasons that indicate core
+// checks could not run, making the overall analysis incomplete.
+var incompleteAnalysisReasons = map[string]bool{
+	"dependency_unavailable":   true,
+	"snapshot_budget_exceeded": true,
+	"e2b_egress_not_enforced":  true,
+}
+
+// coreCheckCommands are the sandbox commands whose absence represents
+// incomplete code-quality analysis (as opposed to optional tools like
+// staticcheck).
+var coreCheckCommands = map[string]bool{
+	"go": true,
+}
+
 func sandboxReviewItems(runs []SandboxRun, pd ParsedDiff, parsed []Finding) []Finding {
 	var out []Finding
 	parsedByCommand := map[string]bool{}
@@ -429,7 +477,28 @@ func sandboxReviewItems(runs []SandboxRun, pd ParsedDiff, parsed []Finding) []Fi
 		out = append(out, f)
 	}
 	for _, run := range runs {
-		if run.Status == "success" || run.Status == "skipped" {
+		if run.Status == "success" {
+			continue
+		}
+		if run.Status == "skipped" {
+			// Distinguish unavailable core checks from optional tool skips.
+			// When go test or go vet cannot run due to a dependency or
+			// infrastructure constraint, the review is structurally incomplete
+			// and callers must be told.
+			if coreCheckCommands[run.Command] && incompleteAnalysisReasons[run.ErrorType] {
+				out = append(out, Finding{
+					Severity:       SeverityMedium,
+					Category:       "incomplete_analysis",
+					File:           "",
+					Line:           0,
+					Title:          "Core sandbox check unavailable",
+					Evidence:       strings.TrimSpace(run.Command + " " + strings.Join(run.Args, " ") + ": " + run.ErrorType + " " + run.Stderr),
+					Recommendation: "Address the dependency or infrastructure constraint so repository checks can run, or perform a manual review of the untested changes.",
+					Confidence:     0.9,
+					Source:         "sandbox",
+					RuleID:         "sandbox/core-check-unavailable",
+				})
+			}
 			continue
 		}
 		if parsedByCommand[sandboxRunKey(run)] {

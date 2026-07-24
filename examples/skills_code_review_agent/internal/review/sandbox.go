@@ -416,13 +416,16 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 	runCtx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
 	res, err := r.engine.Runner().RunProgram(runCtx, ws, codeexecutor.RunProgramSpec{
-		Cmd:      cmd,
-		Args:     args,
-		Cwd:      cwd,
-		Timeout:  r.timeout,
-		CleanEnv: true,
-		Env:      goReviewEnvForExecutor(r.executorName),
+		Cmd:            cmd,
+		Args:           args,
+		Cwd:            cwd,
+		Timeout:        r.timeout,
+		CleanEnv:       true,
+		Env:            goReviewEnvForExecutor(r.executorName),
+		MaxOutputBytes: r.outputLimitBytes,
 	})
+	// limitText is applied after RunProgram to enforce the cap on any
+	// executor that does not yet honour MaxOutputBytes at the source.
 	out, outTrunc := limitText(redactSecrets(res.Stdout), r.outputLimitBytes)
 	stderr, errTrunc := limitText(redactSecrets(res.Stderr), r.outputLimitBytes)
 	status := "success"

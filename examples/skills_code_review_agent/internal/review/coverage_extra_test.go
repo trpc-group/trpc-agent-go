@@ -70,7 +70,11 @@ func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Works
 		return codeexecutor.RunResult{ExitCode: 0, Stdout: "ok"}, nil
 	case "go":
 		if len(spec.Args) > 0 && spec.Args[0] == "test" {
-			return codeexecutor.RunResult{ExitCode: 1, Stderr: "work/repo/pkg/a.go:3: test failed"}, nil
+			stdout := "work/repo/pkg/a.go:3: test failed"
+			if spec.MaxOutputBytes > 0 && len(stdout) > spec.MaxOutputBytes {
+				stdout = stdout[:spec.MaxOutputBytes]
+			}
+			return codeexecutor.RunResult{ExitCode: 1, Stderr: stdout}, nil
 		}
 		return codeexecutor.RunResult{ExitCode: 0}, nil
 	case "staticcheck":
@@ -548,6 +552,17 @@ func TestWorkspaceSandboxRunnerMarksExternalModulesUnavailableOffline(t *testing
 	}
 	if unavailable != 3 {
 		t.Fatalf("expected three dependency unavailable runs, got %+v", result.Runs)
+	}
+	items := sandboxReviewItems(result.Runs, ParsedDiff{}, result.Findings)
+	var incomplete int
+	for _, item := range items {
+		if item.RuleID == "sandbox/core-check-unavailable" &&
+			item.Category == "incomplete_analysis" {
+			incomplete++
+		}
+	}
+	if incomplete != 2 {
+		t.Fatalf("expected go test/go vet incomplete-analysis findings, got %+v", items)
 	}
 }
 
@@ -1329,5 +1344,291 @@ func TestRunAllFixturesRejectsExternalOutputRoot(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(sentinelDir, "sentinel.txt")); statErr != nil {
 		t.Fatalf("sentinel should not be deleted: %v", statErr)
+	}
+}
+
+// -- Fix #1: MaxOutputBytes propagated to RunProgramSpec -------------------
+
+func TestRunProgramPassesMaxOutputBytesToSpec(t *testing.T) {
+	// Verify that runProgram forwards outputLimitBytes as MaxOutputBytes so
+	// executors that support streaming can enforce the cap at the source rather
+	// than after the full output is already in memory.
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "mock",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 8,
+		outputDir:        t.TempDir(),
+	}
+	runner.runProgram(testContext(t), codeexecutor.Workspace{ID: "ws"}, "task", "go", []string{"test", "./..."}, ".")
+	if len(engine.runSpecs) == 0 {
+		t.Fatal("expected at least one RunProgram call")
+	}
+	spec := engine.runSpecs[len(engine.runSpecs)-1]
+	if spec.MaxOutputBytes != 8 {
+		t.Fatalf("MaxOutputBytes = %d, want 8", spec.MaxOutputBytes)
+	}
+}
+
+func TestRunProgramBoundsRetainedBytesAtOutputLimit(t *testing.T) {
+	// When a mock executor honours MaxOutputBytes, the retained output must
+	// not exceed the configured cap.  limitText acts as a safety net for
+	// executors that do not yet honour MaxOutputBytes at the source; when the
+	// executor already bounded the output, limitText does not truncate a second
+	// time, so OutputTruncated is not necessarily set in that path.
+	const limit = 16
+	engine := &largeOutputEngine{outputBytes: limit * 10}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "mock",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: limit,
+		outputDir:        t.TempDir(),
+	}
+	run := runner.runProgram(testContext(t), codeexecutor.Workspace{ID: "ws"}, "task", "go", []string{"test", "./..."}, ".")
+	// Primary invariant: retained bytes must not exceed the cap regardless of
+	// whether the executor or limitText applied the bound.
+	retained := len(run.Stdout) + len(run.Stderr)
+	maxAllowed := limit + len("\n...[truncated]")
+	if retained > maxAllowed {
+		t.Fatalf("retained output too large: stdout=%d stderr=%d total=%d limit=%d",
+			len(run.Stdout), len(run.Stderr), retained, limit)
+	}
+}
+
+// largeOutputEngine returns output of exactly outputBytes characters.
+type largeOutputEngine struct {
+	outputBytes int
+}
+
+func (e *largeOutputEngine) Manager() codeexecutor.WorkspaceManager { return e }
+func (e *largeOutputEngine) FS() codeexecutor.WorkspaceFS           { return e }
+func (e *largeOutputEngine) Runner() codeexecutor.ProgramRunner     { return e }
+func (e *largeOutputEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{Isolation: "large-output-mock"}
+}
+func (e *largeOutputEngine) CreateWorkspace(_ context.Context, _ string, _ codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: "ws"}, nil
+}
+func (e *largeOutputEngine) Cleanup(_ context.Context, _ codeexecutor.Workspace) error { return nil }
+func (e *largeOutputEngine) PutFiles(_ context.Context, _ codeexecutor.Workspace, _ []codeexecutor.PutFile) error {
+	return nil
+}
+func (e *largeOutputEngine) StageDirectory(_ context.Context, _ codeexecutor.Workspace, _, _ string, _ codeexecutor.StageOptions) error {
+	return nil
+}
+func (e *largeOutputEngine) Collect(_ context.Context, _ codeexecutor.Workspace, _ []string) ([]codeexecutor.File, error) {
+	return nil, nil
+}
+func (e *largeOutputEngine) StageInputs(_ context.Context, _ codeexecutor.Workspace, _ []codeexecutor.InputSpec) error {
+	return nil
+}
+func (e *largeOutputEngine) CollectOutputs(_ context.Context, _ codeexecutor.Workspace, _ codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+func (e *largeOutputEngine) RunProgram(_ context.Context, _ codeexecutor.Workspace, spec codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
+	stdout := strings.Repeat("x", e.outputBytes)
+	// Honour MaxOutputBytes if set, simulating a streaming executor.
+	if spec.MaxOutputBytes > 0 && len(stdout) > spec.MaxOutputBytes {
+		stdout = stdout[:spec.MaxOutputBytes]
+	}
+	return codeexecutor.RunResult{ExitCode: 1, Stdout: stdout}, nil
+}
+
+// -- Fix #2: skipped core checks surfaced as incomplete-analysis -----------
+
+func TestSandboxReviewItemsSurfacesSkippedCoreChecks(t *testing.T) {
+	// Runs for go test and go vet that are skipped due to infrastructure
+	// constraints must produce a needs_human_review incomplete_analysis finding
+	// so the caller cannot conclude "no issues found" for an unreviewed module.
+	for _, reason := range []string{"dependency_unavailable", "snapshot_budget_exceeded", "e2b_egress_not_enforced"} {
+		t.Run(reason, func(t *testing.T) {
+			runs := []SandboxRun{
+				{Command: "go", Args: []string{"test", "./..."}, Status: "skipped", ErrorType: reason, Stderr: "repo checks unavailable"},
+				{Command: "go", Args: []string{"vet", "./..."}, Status: "skipped", ErrorType: reason, Stderr: "repo checks unavailable"},
+				{Command: "staticcheck", Args: []string{"./..."}, Status: "skipped", ErrorType: "tool_unavailable"},
+			}
+			items := sandboxReviewItems(runs, ParsedDiff{}, nil)
+			// staticcheck with tool_unavailable must NOT produce a finding.
+			for _, f := range items {
+				if strings.Contains(f.Evidence, "staticcheck") && f.RuleID == "sandbox/core-check-unavailable" {
+					t.Fatalf("staticcheck tool_unavailable must not produce incomplete-analysis finding: %+v", f)
+				}
+			}
+			var coreItems []Finding
+			for _, f := range items {
+				if f.RuleID == "sandbox/core-check-unavailable" {
+					coreItems = append(coreItems, f)
+				}
+			}
+			if len(coreItems) != 2 {
+				t.Fatalf("reason=%s: want 2 incomplete-analysis findings (go test + go vet), got %d: %+v", reason, len(coreItems), items)
+			}
+			for _, f := range coreItems {
+				if f.Category != "incomplete_analysis" {
+					t.Fatalf("expected category=incomplete_analysis, got %q", f.Category)
+				}
+				if !strings.Contains(f.Evidence, reason) {
+					t.Fatalf("expected evidence to contain reason %q, got %q", reason, f.Evidence)
+				}
+			}
+		})
+	}
+}
+
+func TestSandboxReviewItemsDoesNotSurfaceOptionalToolSkip(t *testing.T) {
+	// A staticcheck skip with tool_unavailable is an optional tool; it must
+	// not produce an incomplete-analysis finding.
+	runs := []SandboxRun{
+		{Command: "staticcheck", Args: []string{"./..."}, Status: "skipped", ErrorType: "tool_unavailable"},
+	}
+	items := sandboxReviewItems(runs, ParsedDiff{}, nil)
+	for _, f := range items {
+		if f.RuleID == "sandbox/core-check-unavailable" {
+			t.Fatalf("staticcheck skip must not produce core-unavailable finding: %+v", f)
+		}
+	}
+}
+
+// -- Fix #3: preprocessing failures persist a StatusFailed audit record ----
+
+func TestRunReviewPersistsFailedTaskOnMalformedDiff(t *testing.T) {
+	// Before the fix, any preprocessing error (skill load, input read, diff
+	// parse) returned without leaving a DB record; a failed attempt was
+	// indistinguishable from no attempt.  The task must now be persisted as
+	// pending before preprocessing and transition to failed on error.
+	out := t.TempDir()
+	dbPath := filepath.Join(out, "reviews.sqlite")
+	diffPath := filepath.Join(out, "bad.diff")
+	if err := os.WriteFile(diffPath, []byte("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ malformed @@\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Install a trigger before the run so the test observes the state
+	// transition itself, rather than only the final row.
+	seed, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore := seed.(*Store)
+	if _, err := seedStore.db.ExecContext(testContext(t), `
+		CREATE TABLE task_status_transitions (
+			task_id TEXT NOT NULL,
+			old_status TEXT NOT NULL,
+			new_status TEXT NOT NULL
+		);
+		CREATE TRIGGER task_status_transition_audit
+		AFTER UPDATE OF status ON review_tasks
+		BEGIN
+			INSERT INTO task_status_transitions(task_id, old_status, new_status)
+			VALUES (OLD.id, OLD.status, NEW.status);
+		END;
+	`); err != nil {
+		_ = seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trigger a parse_diff failure with an invalid hunk header.
+	_, _, _, runErr := RunReview(testContext(t), ReviewConfig{
+		DiffFile:  diffPath,
+		OutputDir: out,
+		DBPath:    dbPath,
+	})
+	if runErr == nil {
+		t.Fatal("expected error for malformed diff file")
+	}
+
+	// The failed attempt must be visible in the DB.
+	store, openErr := OpenStore(testContext(t), dbPath)
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	defer store.Close()
+
+	rows, queryErr := store.(*Store).db.QueryContext(testContext(t),
+		`SELECT id, status FROM review_tasks WHERE status = ?`, string(StatusFailed))
+	if queryErr != nil {
+		t.Fatal(queryErr)
+	}
+	defer rows.Close()
+	var count int
+	for rows.Next() {
+		count++
+		var id, status string
+		if scanErr := rows.Scan(&id, &status); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+	}
+	if rows.Err() != nil {
+		t.Fatal(rows.Err())
+	}
+	if count == 0 {
+		t.Fatal("expected at least one failed review_tasks row after preprocessing failure")
+	}
+
+	auditStore, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auditStore.Close()
+	var oldStatus, newStatus string
+	if err := auditStore.(*Store).db.QueryRowContext(testContext(t),
+		`SELECT old_status, new_status FROM task_status_transitions LIMIT 1`,
+	).Scan(&oldStatus, &newStatus); err != nil {
+		t.Fatalf("expected pending-to-failed transition: %v", err)
+	}
+	if oldStatus != string(StatusPending) || newStatus != string(StatusFailed) {
+		t.Fatalf("status transition = %q -> %q, want %q -> %q",
+			oldStatus, newStatus, StatusPending, StatusFailed)
+	}
+
+	var metricsJSON string
+	if err := store.(*Store).db.QueryRowContext(testContext(t),
+		`SELECT metrics_json FROM audit_metrics WHERE task_id IN (
+			SELECT id FROM review_tasks WHERE status = ?
+		) LIMIT 1`, string(StatusFailed),
+	).Scan(&metricsJSON); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(metricsJSON, "parse_diff") {
+		t.Fatalf("expected parse_diff audit classification, got %s", metricsJSON)
+	}
+}
+
+func TestSaveFailedTaskPersistsMinimalRecord(t *testing.T) {
+	store, err := OpenStore(testContext(t), filepath.Join(t.TempDir(), "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	task := ReviewTask{
+		ID:        "review-failed-test",
+		Status:    StatusFailed,
+		StartedAt: time.Now().Add(-time.Second),
+		EndedAt:   time.Now(),
+	}
+	if err := store.SaveFailedTask(testContext(t), task, "parse_diff"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify it's in the DB.
+	var status string
+	if err := store.(*Store).db.QueryRowContext(testContext(t),
+		`SELECT status FROM review_tasks WHERE id = ?`, task.ID,
+	).Scan(&status); err != nil {
+		t.Fatalf("failed to load saved task: %v", err)
+	}
+	if status != string(StatusFailed) {
+		t.Fatalf("status = %q, want %q", status, StatusFailed)
+	}
+
+	// Verify duplicate saves fail (no orphaned records from retries).
+	if err := store.SaveFailedTask(testContext(t), task, "parse_diff"); err == nil {
+		t.Fatal("expected duplicate SaveFailedTask to fail")
 	}
 }
