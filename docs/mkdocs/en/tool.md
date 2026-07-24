@@ -2595,12 +2595,12 @@ limits their combined active calls. When `MaxConcurrency` is non-positive,
 there is no overall limit: positive group limits still apply, and tools
 outside those groups have no limit from this configuration.
 
-Limits follow execution ownership. A parent Agent limits only the tools it
-executes directly. If a tool named `subagent` runs a child Agent, the outer
-`subagent` call remains subject to the parent's limit while it is running, but
-`search`, `fetch`, and other tools executed inside the child are not additional
-parent tool calls. Configure those limits on every child Agent that provides
-these tools:
+Limits follow execution ownership. An owning Agent or Tools node limits only
+the tools it executes directly. If a tool named `subagent` runs a child Agent,
+the outer `subagent` call remains subject to the owner's limit while it is
+running, but `search`, `fetch`, and other tools executed inside the child are
+not additional calls for the owner. Configure those limits on every child
+Agent that provides these tools:
 
 ```go
 child := llmagent.New(

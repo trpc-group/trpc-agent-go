@@ -2356,10 +2356,11 @@ stateGraph.AddToolsNode(
 共享活跃调用上限。当 `MaxConcurrency` 为非正数时，不设置整体上限：正数的
 分组上限仍然生效，分组外的工具不受该配置的并发限制。
 
-并发限制跟随工具的执行方。父 Agent 只限制自己直接执行的工具。如果名为
-`subagent` 的工具运行了一个子 Agent，外层 `subagent` 在运行期间仍然占用父
-Agent 的额度，但子 Agent 内部执行的 `search`、`fetch` 等工具不会额外占用
-父 Agent 的工具额度。需要在每个提供这些工具的子 Agent 上分别配置：
+并发限制跟随工具的执行方。所属 Agent 或 Tools 节点只限制自己直接执行的工具。
+如果名为 `subagent` 的工具运行了一个子 Agent，外层 `subagent` 在运行期间
+仍然占用所属 Agent 或节点的额度，但子 Agent 内部执行的 `search`、`fetch`
+等工具不会额外占用所属 Agent 或节点的工具额度。需要在每个提供这些工具的子
+Agent 上分别配置：
 
 ```go
 child := llmagent.New(
