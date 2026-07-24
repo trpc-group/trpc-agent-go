@@ -1075,6 +1075,28 @@ func TestJSONRedactedRedactsSensitiveFieldsRecursively(t *testing.T) {
 	assert.NotContains(t, got, "client-secret-value")
 }
 
+func TestJSONRedactedRedactsSensitiveValuesInsideStrings(t *testing.T) {
+	payload := []any{
+		`Authorization: Bearer plain-secret`,
+		`query=invoice-A-2 token=plain-token`,
+		`password: "plain-password"`,
+		`api_key='plain-api-key'`,
+		`visible=invoice-A-2`,
+	}
+
+	got := jsonRedacted(payload)
+
+	assert.Contains(t, got, "Authorization: [REDACTED]")
+	assert.Contains(t, got, "query=invoice-A-2 token=[REDACTED]")
+	assert.Contains(t, got, "password: [REDACTED]")
+	assert.Contains(t, got, "api_key=[REDACTED]")
+	assert.Contains(t, got, "visible=invoice-A-2")
+	assert.NotContains(t, got, "plain-secret")
+	assert.NotContains(t, got, "plain-token")
+	assert.NotContains(t, got, "plain-password")
+	assert.NotContains(t, got, "plain-api-key")
+}
+
 func structuredEvalResult(evalSetID string, cases []promptiterengine.CaseResult) *promptiterengine.EvaluationResult {
 	for i := range cases {
 		cases[i].EvalSetID = evalSetID

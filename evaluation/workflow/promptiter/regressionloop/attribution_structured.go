@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -585,9 +586,23 @@ func redactJSONFields(value any) any {
 			out = append(out, redactJSONFields(child))
 		}
 		return out
+	case string:
+		return redactSensitiveString(typed)
 	default:
 		return value
 	}
+}
+
+var (
+	sensitiveStringFieldPattern = regexp.MustCompile(
+		`(?i)\b(authorization|access[_ -]?token|api[_ -]?key|client[_ -]?secret|cookie|credentials?|password|passwd|private[_ -]?key|pwd|refresh[_ -]?token|secret|session[_ -]?id|session[_ -]?token|set[_ -]?cookie|token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+(?:\s+[^\s,;&]+)?)`,
+	)
+	bearerCredentialPattern = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+`)
+)
+
+func redactSensitiveString(value string) string {
+	value = sensitiveStringFieldPattern.ReplaceAllString(value, `${1}${2}[REDACTED]`)
+	return bearerCredentialPattern.ReplaceAllString(value, `$1 [REDACTED]`)
 }
 
 func isSensitiveFieldKey(key string) bool {
