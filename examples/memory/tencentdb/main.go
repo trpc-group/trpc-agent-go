@@ -64,7 +64,12 @@ var (
 	gatewayAPIKey = flag.String(
 		"gateway-api-key",
 		os.Getenv("TDAI_GATEWAY_API_KEY"),
-		"Gateway API key sent as Authorization: Bearer when the gateway sets TDAI_GATEWAY_API_KEY",
+		"Gateway API key sent as Authorization: Bearer; context offload v2 requires a non-empty value",
+	)
+	offloadServiceID = flag.String(
+		"offload-service-id",
+		os.Getenv("TDAI_SERVICE_ID"),
+		"TencentDB Agent Memory service ID; non-empty enables context offload v2",
 	)
 	waitBeforeRecall = flag.Duration(
 		"turn-wait",
@@ -92,15 +97,27 @@ func main() {
 	// Recall and the long-term memory_search tool are opt-in because the gateway
 	// does not enforce per-user/session scoping on those paths; enable them here
 	// for the demo, which runs a single trusted local sidecar.
-	memSvc, err := memorytencentdb.NewService(
+	memoryOptions := []memorytencentdb.Option{
 		memorytencentdb.WithGatewayURL(*gatewayURL),
 		memorytencentdb.WithTimeout(*gatewayTimeout),
 		memorytencentdb.WithIngestQueueSize(8),
-		memorytencentdb.WithIngestJobTimeout(30*time.Second),
+		memorytencentdb.WithIngestJobTimeout(30 * time.Second),
 		memorytencentdb.WithAPIKey(*gatewayAPIKey),
 		memorytencentdb.WithRecallEnabled(true),
 		memorytencentdb.WithMemorySearchTool(true),
-	)
+	}
+	if strings.TrimSpace(*offloadServiceID) != "" {
+		memoryOptions = append(
+			memoryOptions,
+			memorytencentdb.WithContextOffload(
+				memorytencentdb.ContextOffloadConfig{
+					Enabled:   true,
+					ServiceID: *offloadServiceID,
+				},
+			),
+		)
+	}
+	memSvc, err := memorytencentdb.NewService(memoryOptions...)
 	if err != nil {
 		log.Fatalf("create TencentDB Agent Memory service: %v", err)
 	}
@@ -125,12 +142,18 @@ func main() {
 		chatAgent,
 		runner.WithSessionService(sessionSvc),
 		runner.WithSessionIngestor(memSvc),
-		runner.WithPlugins(memSvc.Plugin()),
+		runner.WithPlugins(
+			memSvc.Plugin(),
+			memSvc.ContextOffloadPlugin(),
+		),
 	)
 	defer r.Close()
 
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Gateway: %s (status=%s version=%s)\n", *gatewayURL, health.Status, health.Version)
+	if strings.TrimSpace(*offloadServiceID) != "" {
+		fmt.Printf("Context offload: enabled (service=%s)\n", *offloadServiceID)
+	}
 	fmt.Printf("App: %s\nUser: %s\nSession: %s\n", *appName, *userID, sid)
 	fmt.Println(strings.Repeat("=", 60))
 

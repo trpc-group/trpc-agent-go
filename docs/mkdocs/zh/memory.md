@@ -1953,10 +1953,10 @@ memSvc, err := memorytencentdb.NewService(
     // 跨 session/user 的读取属于 opt-in，仅在 gateway 可信/隔离时开启。
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
-    // 可选短期工具结果卸载；需要 gateway 支持 /offload/v1/hooks/*
-    // 和 /offload/v1/tools/*。
+    // 可选短期上下文卸载，通过 gateway v2 API 完成。
     // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-    //     Enabled: true,
+    //     Enabled:   true,
+    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     // }),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
 )
@@ -1990,27 +1990,27 @@ defer r.Close()
 - 通过 `llmagent.WithTools(memSvc.Tools())` 注册 TencentDB 原生检索工具。
 - 通过 `runner.WithSessionIngestor(memSvc)` 把带时间戳的 session transcript 发送给 `/capture`。
 - 通过 `runner.WithPlugins(memSvc.Plugin())` 在模型调用前启用自动 `/recall`。
-- 只有在设置 `WithContextOffload(memorytencentdb.ContextOffloadConfig{Enabled: true})`
-  且需要短期工具结果卸载时，才额外注册
-  `runner.WithPlugins(memSvc.ContextOffloadPlugin())`。启用后，配套
-  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
-  `tdai_search_offload_index` 工具会通过 `memSvc.Tools()` 暴露。
+- 只有在配置 `WithContextOffload(...)`（包括 `Enabled: true` 和
+  `ServiceID`）且需要短期工具结果卸载时，才额外注册
+  `runner.WithPlugins(memSvc.ContextOffloadPlugin())`。启用后，配套的
+  `tdai_read_offload_ref` 工具会通过 `memSvc.Tools()` 暴露。
 - 不要对该集成使用 `runner.WithMemoryService(...)`。
 
 ### 启用 Context Offload
 
-context offload 是独立、显式开启的短期大工具结果卸载路径。只有在
-TencentDB Agent Memory gateway 已经提供下方 notes 中列出的 offload routes
-时才应启用它。Go adapter 不提供本地存储、摘要模型，也不再暴露
-local/backend/collect 模式。
+context offload 是独立、显式开启的 TencentDB Agent Memory v2 能力。它会将
+工具结果交给 gateway 异步处理，在上下文占用达到阈值时请求 gateway 压缩
+model context，并提供一个工具用于有界恢复已归档的原始结果。
 
 最小接入方式：
 
 ```go
 memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithGatewayURL(gatewayURL),
+    memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
     memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
-        Enabled: true,
+        Enabled:   true,
+        ServiceID: os.Getenv("TDAI_SERVICE_ID"),
     }),
 )
 if err != nil {
@@ -2032,28 +2032,34 @@ r := runner.NewRunner(
 )
 ```
 
-如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或 key，
-可以在 `ContextOffloadConfig` 中单独设置 `GatewayURL` 和 `APIKey`：
+v2 API 要求同时提供 `Authorization: Bearer <key>` 和
+`X-TDAI-Service-Id`。上游 standalone gateway 约定使用 `local` 和 `default`；
+托管服务应使用对应 memory 实例分配的凭据。
+
+如果 offload 流量需要使用与普通 capture/search/recall 不同的 gateway 或
+API key，可以在 `ContextOffloadConfig` 中覆盖：
 
 ```go
 memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
     Enabled:    true,
-    GatewayURL: "http://127.0.0.1:8420",
-    APIKey:     os.Getenv("TDAI_OFFLOAD_GATEWAY_API_KEY"),
+    GatewayURL: offloadGatewayURL,
+    APIKey:     os.Getenv("TDAI_OFFLOAD_API_KEY"),
+    ServiceID:  os.Getenv("TDAI_SERVICE_ID"),
 })
 ```
 
 运行时行为：
 
-- `ContextOffloadPlugin()` 会在工具执行后调用 gateway。gateway 可以把较大的
-  tool result message 替换成紧凑引用或摘要。
-- 下一次模型调用前，plugin 会询问 gateway 是否需要用已卸载上下文改写当前请求。
-- 启用 context offload 后，`memSvc.Tools()` 会暴露
-  `tdai_read_offload_ref`、`tdai_read_offload_node` 和
-  `tdai_search_offload_index`，模型可以通过这些工具继续下钻 gateway 托管的
-  offload 数据。
-- 不要在 Go adapter 中配置本地目录、本地模型或 L0-L3 策略；这些职责属于
-  TencentDB Agent Memory。
+- 工具执行后，`ContextOffloadPlugin()` 将真实的 tool call/result pair 发送到
+  `POST /v2/offload/ingest`，不会立即改写本轮 tool result message。
+- 每次模型调用前，plugin 会发送 prompt-only ingest 触发 L1.5 任务判断、估算
+  message tokens，并在达到 `CompactionRatio` 后调用
+  `POST /v2/offload/compact`。失败时保留原始 model context。
+- `memSvc.Tools()` 只额外暴露 `tdai_read_offload_ref`，底层调用
+  `POST /v2/offload/read-ref`，支持全文、关键词附近或行范围读取，并受
+  `max_tokens` 限制。
+- adapter 将集成面严格限制在完成该生命周期所需的三个路由。存储、摘要、
+  任务图和 offload 策略仍由 gateway 负责。
 
 ### 交互式示例
 
@@ -2100,9 +2106,12 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 
 | 字段 | 作用 | 默认值 |
 | ---- | ---- | ------ |
-| `Enabled` | 是否启用 context offload plugin 和配套工具。 | `false` |
-| `GatewayURL` | context offload hook/tool 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
-| `APIKey` | context offload hook/tool 调用的可选 API key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
+| `Enabled` | 是否启用 context offload plugin 和 result-reference 工具。 | `false` |
+| `GatewayURL` | v2 offload 调用的可选 gateway URL 覆盖。为空时复用 `WithGatewayURL`。 | 无 |
+| `APIKey` | v2 offload 调用的可选 Bearer key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
+| `ServiceID` | 通过 `X-TDAI-Service-Id` 发送的 memory service ID；启用时必填。 | 无 |
+| `CompactionRatio` | 触发 `/v2/offload/compact` 的上下文窗口占用率，取值 `(0, 2]`。 | `0.5` |
+| `TokenCounter` | 用于生成 compact token 元数据的可选 `model.TokenCounter`。 | 简单估算器 |
 
 ### 注意事项
 
@@ -2110,16 +2119,14 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - 当 gateway 设置了 `TDAI_GATEWAY_API_KEY` 时，请用 `WithAPIKey(...)` 让请求携带 `Authorization: Bearer <key>`，否则除 `/health` 外的路由都会返回 401（health 仍可通过）。
 - `tdai_memory_search` 检索已提取的长期记忆；提取是异步的，新捕获的信息可能需要短暂等待后才可检索。
 - `tdai_conversation_search` 检索对话历史，默认使用当前 gateway `session_key`。
-- context offload 是显式开启、由 gateway 承载的能力。它不调用 `/capture` 或
-  `/recall`；单独开启 recall 不会改写工具结果消息，也不会生成 Mermaid 任务图。
-- Go adapter 调用 gateway hook endpoints：
-  `/offload/v1/hooks/after-tool-messages` 和
-  `/offload/v1/hooks/before-model`。它不会创建 `.tdai-offload`、本地 refs、
-  JSONL 索引、Mermaid 文件或本地 state。
-- offload 工具调用 gateway drill-down endpoints：
-  `/offload/v1/tools/read-ref`、`/offload/v1/tools/read-node` 和
-  `/offload/v1/tools/search-index`。scope 校验、存储 ACL、返回字节限制和持久化
-  都由 gateway 负责。
+- context offload 是显式开启、由 gateway 承载的能力，只调用
+  `/v2/offload/ingest`、`/v2/offload/compact` 和
+  `/v2/offload/read-ref`，不调用 `/capture` 或 `/recall`。
+- gateway 可能将归档后的工具结果替换为“原始工具结果已存档，如需查看完整内容
+  请调用 Offload V2 result_ref 恢复接口”这类提示。请注册
+  `memSvc.Tools()`，让模型能够通过 `tdai_read_offload_ref` 完成恢复。
+- adapter 不会创建本地 refs、JSONL 索引、Mermaid 文件或本地 offload state。
+  scope 校验、存储 ACL、token 限制和持久化都由 gateway 负责。
 - 使用完成后请调用 `Close()`，确保后台 capture worker 干净退出。
 
 ## 参考链接
@@ -2129,6 +2136,6 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 - [自动提取模式示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/auto)
 - [mem0 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/mem0)
 - [TencentDB Agent Memory 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/memory/tencentdb)
-- [TencentDB Agent Memory SDK](https://github.com/Tencent/TencentDB-Agent-Memory)
+- [TencentDB Agent Memory SDK](https://github.com/TencentCloud/TencentDB-Agent-Memory)
 - [生态建设文档](https://github.com/trpc-group/trpc-agent-go/blob/main/docs/mkdocs/zh/ecosystem.md)
 - [API 文档](https://pkg.go.dev/trpc.group/trpc-go/trpc-agent-go/memory)

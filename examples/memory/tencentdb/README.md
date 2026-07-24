@@ -18,6 +18,10 @@ The integration works in three parts:
 3. **Read-only tools** — The agent can explicitly search memory through
    `tdai_memory_search` (opt-in via `WithMemorySearchTool(true)`) and
    conversation history through `tdai_conversation_search`.
+4. **Context offload v2 (optional)** — Tool results are sent to
+   `/v2/offload/ingest`; model context is compacted through
+   `/v2/offload/compact`; and the agent can recover archived details with
+   `tdai_read_offload_ref`, backed by `/v2/offload/read-ref`.
 
 > **Multi-tenant note:** automatic recall and `tdai_memory_search` read from the
 > gateway's shared long-term store, which does not currently enforce
@@ -97,6 +101,7 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
 | `TDAI_GATEWAY_API_KEY`           | No       | Gateway API key (sent as `Authorization: Bearer`) when the gateway requires auth | |
+| `TDAI_SERVICE_ID`                | No       | Service ID sent as `X-TDAI-Service-Id`; setting it enables context offload v2 | |
 
 ## Command Line Arguments
 
@@ -109,6 +114,7 @@ example at another gateway URL with `-gateway`.
 | `-gateway`           | TencentDB Agent Memory gateway URL               | env or `http://127.0.0.1:8420` |
 | `-gateway-timeout`   | Timeout for gateway calls, including session flush | `60s`                   |
 | `-gateway-api-key`   | Gateway API key sent as `Authorization: Bearer`  | env `TDAI_GATEWAY_API_KEY`  |
+| `-offload-service-id` | Service ID for context offload v2; non-empty enables the feature | env `TDAI_SERVICE_ID` |
 | `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
 | `-end-session`       | Call `/session/end` before exit                  | `false`                    |
 
@@ -145,6 +151,20 @@ go run . -model gpt-4o-mini
 go run . -gateway http://127.0.0.1:8420
 ```
 
+### Context Offload V2
+
+The v2 routes require both a non-empty Bearer key and service ID. For a
+standalone gateway, the upstream convention is `local` and `default`:
+
+```bash
+go run . \
+  -gateway-api-key local \
+  -offload-service-id default
+```
+
+For a managed service, use the API key and service ID assigned to that memory
+instance. The example never needs direct COS credentials.
+
 ### Expected Output
 
 ```text
@@ -178,6 +198,8 @@ The core wiring in Go looks like this:
 
 ```go
 import (
+    "os"
+
     memorytencentdb "trpc.group/trpc-go/trpc-agent-go/memory/tencentdb"
     "trpc.group/trpc-go/trpc-agent-go/runner"
 )
@@ -191,6 +213,10 @@ memSvc, err := memorytencentdb.NewService(
     memorytencentdb.WithRecallEnabled(true),
     memorytencentdb.WithMemorySearchTool(true),
     // memorytencentdb.WithAPIKey(os.Getenv("TDAI_GATEWAY_API_KEY")),
+    // memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
+    //     Enabled:   true,
+    //     ServiceID: os.Getenv("TDAI_SERVICE_ID"),
+    // }),
 )
 if err != nil {
     log.Fatalf("create memory service: %v", err)
@@ -210,7 +236,10 @@ r := runner.NewRunner(
     agent,
     runner.WithSessionService(sessionSvc),
     runner.WithSessionIngestor(memSvc),
-    runner.WithPlugins(memSvc.Plugin()),
+    runner.WithPlugins(
+        memSvc.Plugin(),
+        memSvc.ContextOffloadPlugin(),
+    ),
 )
 defer r.Close()
 ```
@@ -224,6 +253,9 @@ Key points:
 - `runner.WithPlugins(memSvc.Plugin())` performs automatic recall before model
   calls and injects returned context into the request, but only when
   `WithRecallEnabled(true)` is set.
+- `runner.WithPlugins(memSvc.ContextOffloadPlugin())` activates only when
+  `ContextOffloadConfig.Enabled` is true. The companion
+  `tdai_read_offload_ref` tool is then included in `memSvc.Tools()`.
 - The adapter forwards app/user/session identifiers, but hard multi-tenant
   isolation depends on the gateway and SDK honoring those fields end-to-end, so
   cross-session/user reads (recall and memory search) are opt-in.
@@ -244,6 +276,7 @@ Key points:
 | `WithConversationSearchTool(bool)` | Expose `tdai_conversation_search`               | `true`                  |
 | `WithStandardAliases(bool)`    | Also expose standard `memory_search` alias (needs memory search enabled) | `false` |
 | `WithToolPrefix(prefix)`       | Change native tool prefix                           | `tdai`                  |
+| `WithContextOffload(config)`   | Configure the opt-in context offload v2 integration | disabled                |
 
 ## See Also
 
