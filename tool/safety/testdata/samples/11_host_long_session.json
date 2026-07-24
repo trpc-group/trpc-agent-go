@@ -1,0 +1,7 @@
+{
+  "name": "host background and PTY session",
+  "tool": "exec_command",
+  "args": {"command": "sleep 5", "background": true, "tty": true},
+  "expect": {"decision": "deny", "rule": "R-HOST-001"},
+  "class": "high_risk"
+}

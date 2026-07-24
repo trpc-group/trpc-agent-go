@@ -1,0 +1,7 @@
+{
+  "name": "dependency install",
+  "tool": "workspace_exec",
+  "args": {"command": "pip install requests"},
+  "expect": {"decision": "needs_human_review", "rule": "R-DEP-001"},
+  "class": "high_risk"
+}

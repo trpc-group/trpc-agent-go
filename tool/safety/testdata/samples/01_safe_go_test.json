@@ -1,0 +1,7 @@
+{
+  "name": "safe go test",
+  "tool": "workspace_exec",
+  "args": {"command": "go test ./..."},
+  "expect": {"decision": "allow"},
+  "class": "safe"
+}

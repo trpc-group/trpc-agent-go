@@ -1,0 +1,80 @@
+# Tool Execution Safety Guard — trimmed policy for THIS demo only.
+#
+# This is intentionally a small subset, kept short so the example reads easily.
+# It is NOT the reference: the canonical, fully annotated policy (every field,
+# with rationale) is tool/safety/testdata/tool_safety_policy.yaml, which the
+# package tests keep honest. When in doubt, copy from there — do not treat this
+# file as the source of truth. main_test.go pins the demo decisions so an
+# over-aggressive trim here fails the build.
+#
+# Editing this file changes allow/deny lists, forbidden paths, the network
+# whitelist and limits without any code change.
+version: 1
+
+unparsable_action: deny
+default_action: allow
+
+backends:
+  workspace_exec: [workspace_exec]
+  host: [exec_command]
+  code: [execute_code]
+
+commands:
+  allowed: [go, git, ls, cat, echo, grep, sed, awk, jq, python3,
+            curl, wget, pip, pip3, sleep, yes]
+  denied: [dd, mkfs, shutdown, reboot, chmod, chown]
+  # Opt-in: route any multi-segment pipeline / command chain to human review.
+  review_pipelines: false
+
+denied_subcommands:
+  - {cmd: go, args_prefix: [install]}
+  - {cmd: npm, args_prefix: [install]}
+  - {cmd: pip, args_prefix: [install]}
+  - {cmd: pip3, args_prefix: [install]}
+  - {cmd: apt, args_prefix: [install]}
+  - {cmd: apt-get, args_prefix: [install]}
+
+forbidden_paths:
+  - "~/.ssh"
+  - "**/.env"
+  - "/etc/shadow"
+  - "**/id_rsa"
+  - "**/credentials"
+
+network:
+  download_commands: [curl, wget, nc, ssh, scp, ftp]
+  allowed_domains: [github.com, "*.googleapis.com", pypi.org, registry.npmjs.org,
+                    proxy.golang.org, sum.golang.org, files.pythonhosted.org]
+  on_non_whitelisted: deny
+  # Fail curl closed unless -q/--disable is its first option (the implicit
+  # ~/.curlrc can inject url/proxy/resolve the guard cannot see). Off by default
+  # so a plain whitelisted "curl https://host" still allows; the explicit
+  # -K/--config file is always failed closed regardless of this flag.
+  curl_require_disabled_config: false
+
+resources:
+  max_timeout_sec: 300
+  max_output_bytes: 1048576
+  max_sleep_sec: 60
+  deny_background_on_host: true
+  deny_pty_on_host: true
+
+env:
+  allowed_keys: [PATH, HOME, LANG, GOFLAGS, GOPROXY]
+
+secrets:
+  patterns:
+    - "AKIA[0-9A-Z]{16}"
+    - "ghp_[0-9A-Za-z]{36}"
+    - "sk-[A-Za-z0-9_-]{12,}"
+    - "xox[baprs]-[A-Za-z0-9-]{10,}"
+    # The bounded full PEM block first so redaction removes the whole key,
+    # then the bare header so a truncated key is still caught.
+    - "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+    - "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    - "(?i)bearer\\s+[a-z0-9._~+/=-]+"
+    # Name-based heuristic: a secret-named key=value assignment is flagged and
+    # redacted whatever the value looks like.
+    - '(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["'']?[^\s"'']+'
+
+rule_overrides: {}

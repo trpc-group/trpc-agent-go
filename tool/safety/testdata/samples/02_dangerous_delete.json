@@ -1,0 +1,8 @@
+{
+  "name": "dangerous delete root",
+  "tool": "workspace_exec",
+  "args": {"command": "rm -rf /"},
+  "expect": {"decision": "deny", "rule": "R-DEL-001"},
+  "class": "high_risk",
+  "must_detect": true
+}

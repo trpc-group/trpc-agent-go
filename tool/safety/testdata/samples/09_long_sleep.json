@@ -1,0 +1,7 @@
+{
+  "name": "long running sleep",
+  "tool": "workspace_exec",
+  "args": {"command": "sleep 600"},
+  "expect": {"decision": "needs_human_review", "rule": "R-RES-001"},
+  "class": "high_risk"
+}

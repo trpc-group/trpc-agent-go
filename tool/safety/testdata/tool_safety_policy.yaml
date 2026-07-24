@@ -1,0 +1,99 @@
+# Tool Execution Safety Guard — example policy.
+# Editing this file changes the allow/deny lists, forbidden paths, network
+# whitelist and limits without any code change.
+version: 1
+
+# How to treat a command that internal/shellsafe cannot safely parse, and the
+# fallback when no rule fires. unparsable defaults to deny (fail closed).
+unparsable_action: deny
+default_action: allow
+
+# Tool name -> backend identifier. Defaults already cover the real tool names;
+# override here if a host/code tool was renamed via WithName.
+backends:
+  workspace_exec: [workspace_exec]
+  host: [exec_command]
+  code: [execute_code]
+
+# The guard cannot see which executor backs workspace_exec, and
+# codeexecutor/local runs commands directly on the host. The host-risk rule
+# (R-HOST-001: background/PTY denial, sudo/nohup) therefore also applies to
+# the workspace backend unless this is explicitly set to true. Only declare
+# isolation when the workspace tool genuinely runs in a sandbox
+# (container/e2b).
+workspace_isolated: false
+
+# Allowed binaries. Note download tools (curl/wget) and installers (pip) are
+# allowed here so the network/dependency rules can govern *what* they do; their
+# destinations and subcommands are still policed below.
+commands:
+  allowed: [go, git, ls, cat, echo, grep, sed, awk, jq, python3,
+            curl, wget, pip, pip3, sleep, yes]
+  denied: [dd, mkfs, shutdown, reboot, chmod, chown]
+  # Opt-in: route any multi-segment pipeline / command chain to human review.
+  # Off so legitimate pipes (cat a | grep b) stay allowed.
+  review_pipelines: false
+
+denied_subcommands:
+  - {cmd: go, args_prefix: [install]}
+  - {cmd: npm, args_prefix: [install]}
+  - {cmd: pip, args_prefix: [install]}
+  - {cmd: pip3, args_prefix: [install]}
+  - {cmd: apt, args_prefix: [install]}
+  - {cmd: apt-get, args_prefix: [install]}
+
+forbidden_paths:
+  - "~/.ssh"
+  - "**/.env"
+  - "/etc/shadow"
+  - "**/id_rsa"
+  - "**/credentials"
+
+network:
+  download_commands: [curl, wget, nc, ssh, scp, ftp]
+  allowed_domains: [github.com, "*.googleapis.com", pypi.org, registry.npmjs.org,
+                    proxy.golang.org, sum.golang.org, files.pythonhosted.org]
+  on_non_whitelisted: deny
+  # Fail curl closed unless -q/--disable is its first option (the implicit
+  # ~/.curlrc can inject url/proxy/resolve the guard cannot see). Off by default
+  # so a plain whitelisted "curl https://host" still allows; the explicit
+  # -K/--config file is always failed closed regardless of this flag, as are
+  # the non-curl opaque egress options (wget -e/--execute/--config,
+  # ssh/scp -o/-F, scp/sftp -S).
+  curl_require_disabled_config: false
+
+resources:
+  max_timeout_sec: 300
+  max_output_bytes: 1048576
+  max_sleep_sec: 60
+  deny_background_on_host: true
+  deny_pty_on_host: true
+
+env:
+  allowed_keys: [PATH, HOME, LANG, GOFLAGS, GOPROXY]
+
+secrets:
+  patterns:
+    - "AKIA[0-9A-Z]{16}"
+    - "ghp_[0-9A-Za-z]{36}"
+    - "sk-[A-Za-z0-9_-]{12,}"
+    - "xox[baprs]-[A-Za-z0-9-]{10,}"
+    # The bounded full PEM block first (header, base64 body, END marker) so
+    # redaction removes the whole key, then the bare header so a truncated key
+    # is still caught; the order matters for redaction.
+    - "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----"
+    - "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    # Full RFC 6750 token68 charset (incl. +, /, ~, =) so no bearer-token
+    # suffix survives redaction.
+    - "(?i)bearer\\s+[a-z0-9._~+/=-]+"
+    # Name-based heuristic: a secret-named key=value assignment is flagged and
+    # redacted whatever the value looks like.
+    - '(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["'']?[^\s"'']+'
+
+# Per-rule overrides let you relax or tighten a single rule without code
+# changes, e.g. route dependency installs to human review instead of blocking.
+# Example (left empty so the shipped policy matches the documented sample
+# matrix; uncomment to demonstrate):
+#   rule_overrides:
+#     R-DEP-001: {action: needs_human_review}
+rule_overrides: {}

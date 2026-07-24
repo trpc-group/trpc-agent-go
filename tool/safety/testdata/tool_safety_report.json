@@ -1,0 +1,31 @@
+{
+  "tool_name": "workspace_exec",
+  "backend": "workspace_exec",
+  "command": "rm -rf /",
+  "decision": "deny",
+  "risk_level": "critical",
+  "blocked": true,
+  "rule_ids": [
+    "R-CMD-001",
+    "R-DEL-001"
+  ],
+  "findings": [
+    {
+      "rule_id": "R-CMD-001",
+      "category": "command_policy",
+      "risk_level": "high",
+      "evidence": "command \"rm\" is not in allowed_commands",
+      "recommendation": "Command is not in commands.allowed; add it to the allow list if it is expected, or keep it blocked."
+    },
+    {
+      "rule_id": "R-DEL-001",
+      "category": "dangerous_command",
+      "risk_level": "critical",
+      "evidence": "rm -rf /",
+      "recommendation": "Avoid destructive commands; scope deletions to the workspace and never target system paths."
+    }
+  ],
+  "redacted": false,
+  "duration_us": 250,
+  "timestamp": "2026-06-30T00:00:00Z"
+}

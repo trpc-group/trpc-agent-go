@@ -1,0 +1,7 @@
+{
+  "name": "legit pipe",
+  "tool": "workspace_exec",
+  "args": {"command": "cat a.txt | grep pattern"},
+  "expect": {"decision": "allow"},
+  "class": "safe"
+}
