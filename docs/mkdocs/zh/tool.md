@@ -2313,14 +2313,43 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools(tools),
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // 启用并行执行
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        MaxConcurrency: 6, // 可选的整体并发上限
+        Groups: []tool.ConcurrencyGroup{
+            {
+                ToolNames: []string{"subagent"},
+                Limit:     3,
+            },
+            {
+                // search 和 fetch 共享下游容量
+                ToolNames: []string{"search", "fetch"},
+                Limit:     2,
+            },
+        },
+    }),
 )
 ```
 
 Graph 工作流下也可以在工具节点开启并行：
 
 ```go
-stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true),
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        MaxConcurrency: 6,
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"subagent"}, Limit: 3},
+            {ToolNames: []string{"search", "fetch"}, Limit: 2},
+        },
+    }),
+)
 ```
+
+并发限制仅作用于当前进程，并由同一个 Agent 或 Tools 节点实例的并发调用共享。
+同一组内的多个工具名共享一个活跃调用上限；非正数限制会被忽略，未加入任何组的
+工具只受整体上限约束。只有显式开启工具并行执行后，该配置才会生效。
 
 **并行执行效果：**
 

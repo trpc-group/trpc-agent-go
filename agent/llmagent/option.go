@@ -317,6 +317,9 @@ type Options struct {
 	ToolResultAttachmentBudget int
 	// ToolCallRetryPolicy configures retry behavior for callable tool calls.
 	ToolCallRetryPolicy *tool.RetryPolicy
+	// ToolConcurrencyConfig limits active tool calls when parallel execution is enabled.
+	// Limits are shared by concurrent invocations of this agent instance.
+	ToolConcurrencyConfig tool.ConcurrencyConfig
 	// Knowledge is the knowledge base for the agent.
 	// If provided, the knowledge search tool will be automatically added.
 	Knowledge knowledge.Knowledge
@@ -1542,6 +1545,34 @@ func WithEnableParallelTools(enable bool) Option {
 	return func(opts *Options) {
 		opts.EnableParallelTools = enable
 	}
+}
+
+// WithToolConcurrencyConfig configures overall and per-group limits for
+// parallel tool execution. The limits are shared by concurrent invocations of
+// the agent instance and only take effect with WithEnableParallelTools(true).
+func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
+	snapshot := cloneToolConcurrencyConfig(config)
+	return func(opts *Options) {
+		opts.ToolConcurrencyConfig = cloneToolConcurrencyConfig(snapshot)
+	}
+}
+
+func cloneToolConcurrencyConfig(
+	config tool.ConcurrencyConfig,
+) tool.ConcurrencyConfig {
+	cloned := config
+	if config.Groups == nil {
+		return cloned
+	}
+	cloned.Groups = make([]tool.ConcurrencyGroup, len(config.Groups))
+	for i, group := range config.Groups {
+		cloned.Groups[i] = group
+		cloned.Groups[i].ToolNames = append(
+			[]string(nil),
+			group.ToolNames...,
+		)
+	}
+	return cloned
 }
 
 // WithDefaultTransferMessage configures the default message used when the model

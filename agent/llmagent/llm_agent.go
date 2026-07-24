@@ -232,6 +232,7 @@ func New(name string, opts ...Option) *LLMAgent {
 
 	toolCallProcessorOptions := []processor.FunctionCallResponseProcessorOption{
 		processor.WithToolCallRetryPolicy(options.ToolCallRetryPolicy),
+		processor.WithToolConcurrencyConfig(options.ToolConcurrencyConfig),
 	}
 	if options.ToolResultAttachmentBudget > 0 {
 		toolCallProcessorOptions = append(
