@@ -56,11 +56,15 @@ func NewSelectDocsTool(repo skill.Repository) *SelectDocsTool {
 func (t *SelectDocsTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: selectDocsToolName,
-		Description: "Select docs for a skill. " +
-			"Prefer selecting only needed docs; " +
-			"avoid include_all_docs unless needed. " +
-			"Use mode=add to append, " +
-			"replace to overwrite, or clear to remove.",
+		Description: "Update the current selected-doc set for a loaded skill. " +
+			"Select all docs already known to be needed in one call. " +
+			"Use mode=add to preserve the current selection and append docs. " +
+			"Use mode=replace to set the complete selection. Omitting mode " +
+			"defaults to replace; if a non-enum value reaches the runtime, " +
+			"it also falls back to replace for backward compatibility. " +
+			"In either case, docs absent from the call are removed. " +
+			"Use mode=clear to remove the selection. " +
+			"Avoid include_all_docs unless needed.",
 		InputSchema: &tool.Schema{
 			Type:        "object",
 			Description: "Select docs input",
@@ -70,23 +74,33 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 					t.repo, "Skill name",
 				),
 				"docs": {
-					Type:        "array",
-					Description: "Doc names to select (prefer few)",
-					Items:       &tool.Schema{Type: "string"},
+					Type: "array",
+					Description: "Docs for this update. With replace " +
+						"(including the default), pass every doc that must " +
+						"remain selected; with add, pass only new docs.",
+					Items: &tool.Schema{Type: "string"},
 				},
 				"include_all_docs": {
-					Type:        "boolean",
-					Description: "Include all docs if true (use sparingly)",
+					Type: "boolean",
+					Description: "Select all docs if true (use sparingly). " +
+						"Once active, use clear before narrowing to a list.",
 				},
 				"mode": {
-					Type:        "string",
-					Description: "add | replace | clear",
+					Type: "string",
+					Description: "How to update the current selection: add " +
+						"preserves selected docs, replace sets the complete " +
+						"list, and clear empties it. Omit mode to use replace. " +
+						"The schema permits only these three values; if a " +
+						"non-enum value reaches the runtime, it falls back " +
+						"to replace for backward compatibility.",
+					Enum:    []any{modeAdd, modeReplace, modeClear},
+					Default: modeReplace,
 				},
 			},
 		},
 		OutputSchema: &tool.Schema{
 			Type:        "object",
-			Description: "Final selection info",
+			Description: "Complete active doc selection after the update",
 			Properties: map[string]*tool.Schema{
 				"skill": {Type: "string"},
 				"selected_docs": {
@@ -94,7 +108,11 @@ func (t *SelectDocsTool) Declaration() *tool.Declaration {
 					Items: &tool.Schema{Type: "string"},
 				},
 				"include_all_docs": {Type: "boolean"},
-				"mode":             {Type: "string"},
+				"mode": {
+					Type:        "string",
+					Description: "Normalized mode applied by the tool",
+					Enum:        []any{modeAdd, modeReplace, modeClear},
+				},
 			},
 		},
 	}
