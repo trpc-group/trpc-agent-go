@@ -11,65 +11,38 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 	"reflect"
+	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-type stateDeltaProvider interface {
-	StateDelta(string, []byte, []byte) map[string][]byte
+const (
+	ruleOutputUninspectable = "TOOL_OUTPUT_UNINSPECTABLE"
+	ruleOutputLimit         = "RESOURCE_OUTPUT_LIMIT_EXCEEDED"
+	ruleOutputSecret        = "SECRET_IN_TOOL_OUTPUT"
+	ruleExecutionTimeout    = "RESOURCE_TIMEOUT_EXCEEDED"
+	rulePostcheckFailed     = "SAFETY_POSTCHECK_FAILED"
+)
+
+// BlockedResult is a redacted, successful transport result. It deliberately
+// does not implement error or any result-error marker, so retry runners treat a
+// post-execution safety block as terminal.
+type BlockedResult struct {
+	Decision       Decision  `json:"decision"`
+	RiskLevel      RiskLevel `json:"risk_level"`
+	RuleID         string    `json:"rule_id"`
+	Recommendation string    `json:"recommendation"`
+	ToolName       string    `json:"tool_name"`
+	Backend        Backend   `json:"backend"`
+	Blocked        bool      `json:"blocked"`
+	Redacted       bool      `json:"redacted"`
 }
 
-type stateDeltaErrorProvider interface {
-	StateDeltaWithError(
-		context.Context,
-		string,
-		[]byte,
-		[]byte,
-	) (map[string][]byte, error)
-}
-
-type invocationStateDeltaProvider interface {
-	StateDeltaForInvocation(
-		*agent.Invocation,
-		string,
-		[]byte,
-		[]byte,
-	) map[string][]byte
-}
-
-type invocationStateDeltaErrorProvider interface {
-	StateDeltaForInvocationWithError(
-		context.Context,
-		*agent.Invocation,
-		string,
-		[]byte,
-		[]byte,
-	) (map[string][]byte, error)
-}
-
-// ExecutionError reports a blocked precheck or withheld tool output.
-type ExecutionError struct {
-	Phase     string
-	Decision  Decision
-	RiskLevel RiskLevel
-	RuleID    string
-	message   string
-}
-
-// Error implements error without including raw tool input or output.
-func (err *ExecutionError) Error() string {
-	if err == nil {
-		return "tool safety: execution blocked"
-	}
-	return err.message
-}
-
-type executionWrapper struct {
+type outputGuard struct {
 	guard    *Guard
 	inner    tool.Tool
 	semantic tool.Tool
@@ -77,90 +50,97 @@ type executionWrapper struct {
 	callable tool.CallableTool
 }
 
-// WrapExecution wraps one explicitly bound execution tool.
-func WrapExecution(
+type outputViolation struct {
+	ruleID         string
+	riskLevel      RiskLevel
+	decision       Decision
+	evidence       string
+	recommendation string
+	redacted       bool
+}
+
+// WrapOutputGuard inspects non-streaming tool output after execution. Use it
+// together with NewPermissionPolicy for complete pre- and post-execution
+// protection.
+func WrapOutputGuard(
 	guard *Guard,
 	inner tool.Tool,
 	binding Binding,
 ) (tool.Tool, error) {
-	if err := validateExecutionWrapper(guard, inner, binding); err != nil {
-		return nil, err
-	}
-	base := &executionWrapper{
-		guard:    guard,
-		inner:    inner,
-		semantic: itool.ResolveSemantic(inner),
-		binding:  binding,
-	}
-	wrapped, err := base.wrapCallCapabilities()
+	wrapper, err := newOutputGuard(guard, inner, binding)
 	if err != nil {
 		return nil, err
 	}
-	return wrapStateCapability(wrapped, base.semantic), nil
+	return wrapper, nil
 }
 
-func validateExecutionWrapper(
+func newOutputGuard(
 	guard *Guard,
 	inner tool.Tool,
 	binding Binding,
-) error {
+) (*outputGuard, error) {
+	if err := validateOutputGuard(guard, inner, binding); err != nil {
+		return nil, err
+	}
+	semantic := itool.ResolveSemantic(inner)
+	if _, ok := semantic.(tool.StreamableTool); ok {
+		return nil, errors.New("tool safety: streaming tools are unsupported")
+	}
+	if hasStateDeltaCapability(semantic) {
+		return nil, errors.New("tool safety: state-delta tools are unsupported")
+	}
+	callable, ok := inner.(tool.CallableTool)
+	if !ok {
+		return nil, errors.New("tool safety: wrapped tool must be callable")
+	}
+	return &outputGuard{
+		guard: guard, inner: inner, semantic: semantic,
+		binding: binding, callable: callable,
+	}, nil
+}
+
+func hasStateDeltaCapability(tl tool.Tool) bool {
+	typeOfTool := reflect.TypeOf(tl)
+	for _, method := range []string{"StateDelta", "StateDeltaForInvocation"} {
+		if _, ok := typeOfTool.MethodByName(method); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func validateOutputGuard(guard *Guard, inner tool.Tool, binding Binding) error {
 	if err := validateExecutionGuard(guard); err != nil {
 		return err
 	}
-	if isNilTool(inner) {
-		return errors.New("tool safety: wrapped tool requires a declaration")
-	}
-	declaration := inner.Declaration()
-	if declaration == nil {
+	if isNilTool(inner) || inner.Declaration() == nil {
 		return errors.New("tool safety: wrapped tool requires a declaration")
 	}
 	if err := validateBinding(binding); err != nil {
 		return err
 	}
-	if declaration.Name != binding.ToolName {
+	if inner.Declaration().Name != binding.ToolName {
 		return errors.New("tool safety: binding name must match wrapped tool")
 	}
 	return nil
 }
 
 func isNilTool(tl tool.Tool) bool {
-	if tl == nil {
-		return true
-	}
-	value := reflect.ValueOf(tl)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
+	return isNilInterface(tl)
 }
 
-func (wrapper *executionWrapper) wrapCallCapabilities() (tool.Tool, error) {
-	_, hasCallable := wrapper.semantic.(tool.CallableTool)
-	if !hasCallable {
-		return nil, errors.New(
-			"tool safety: wrapped tool must support non-streaming calls",
-		)
-	}
-	callable, ok := wrapper.inner.(tool.CallableTool)
-	if !ok {
-		return nil, errors.New("tool safety: wrapped call capability is unavailable")
-	}
-	wrapper.callable = callable
-	return &callableExecutionWrapper{executionWrapper: wrapper}, nil
-}
-
-func (wrapper *executionWrapper) Declaration() *tool.Declaration {
+// Declaration delegates to the model-visible wrapped tool.
+func (wrapper *outputGuard) Declaration() *tool.Declaration {
 	return wrapper.inner.Declaration()
 }
 
-func (wrapper *executionWrapper) ToolMetadata() tool.ToolMetadata {
+// ToolMetadata delegates to the semantic wrapped tool.
+func (wrapper *outputGuard) ToolMetadata() tool.ToolMetadata {
 	return tool.MetadataOf(wrapper.semantic)
 }
 
-func (wrapper *executionWrapper) CheckPermission(
+// CheckPermission preserves the semantic tool's own permission checks.
+func (wrapper *outputGuard) CheckPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
@@ -171,169 +151,197 @@ func (wrapper *executionWrapper) CheckPermission(
 	return checker.CheckPermission(ctx, req)
 }
 
-func (wrapper *executionWrapper) StreamInner() bool {
-	preference, ok := wrapper.semantic.(interface{ StreamInner() bool })
-	return !ok || preference.StreamInner()
-}
-
-func (wrapper *executionWrapper) InnerTextMode() tool.InnerTextMode {
-	preference, ok := wrapper.semantic.(interface {
-		InnerTextMode() tool.InnerTextMode
-	})
-	if !ok {
-		return tool.InnerTextModeInclude
-	}
-	return tool.NormalizeInnerTextMode(preference.InnerTextMode())
-}
-
 // LongRunning delegates the semantic tool's long-running preference.
-func (wrapper *executionWrapper) LongRunning() bool {
+func (wrapper *outputGuard) LongRunning() bool {
 	runner, ok := wrapper.semantic.(interface{ LongRunning() bool })
 	return ok && runner.LongRunning()
 }
 
-type callableExecutionWrapper struct{ *executionWrapper }
-
-func (wrapper *callableExecutionWrapper) Call(
+// Call delegates once, then withholds unsafe output without returning an error.
+func (wrapper *outputGuard) Call(
 	ctx context.Context,
 	arguments []byte,
-) (any, error) {
-	return wrapper.call(ctx, arguments)
-}
-
-type invocationCallableWrapper struct {
-	*callableExecutionWrapper
-	provider any
-}
-
-func (wrapper *invocationCallableWrapper) StateDeltaForInvocation(
-	invocation *agent.Invocation,
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta, err := wrapper.StateDeltaForInvocationWithError(
-		context.Background(), invocation, toolCallID, arguments, result,
-	)
-	if err != nil {
-		return nil
+) (result any, err error) {
+	parentCtx := normalizeContext(ctx)
+	started := time.Now()
+	defer wrapper.recoverPostcheck(parentCtx, started, &result, &err)
+	runCtx, cancel := context.WithTimeout(parentCtx, wrapper.guard.policy.maxTimeout)
+	defer cancel()
+	result, err = wrapper.callable.Call(runCtx, arguments)
+	violation, blocked := wrapper.callViolation(runCtx, parentCtx, result, err)
+	if blocked {
+		return wrapper.blockedResult(parentCtx, started, violation), nil
 	}
-	return delta
+	return result, err
 }
 
-func (wrapper *invocationCallableWrapper) StateDeltaForInvocationWithError(
+func (wrapper *outputGuard) recoverPostcheck(
 	ctx context.Context,
-	invocation *agent.Invocation,
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) (map[string][]byte, error) {
-	var delta map[string][]byte
-	if provider, ok := wrapper.provider.(invocationStateDeltaErrorProvider); ok {
-		var err error
-		delta, err = provider.StateDeltaForInvocationWithError(
-			ctx, invocation, toolCallID, arguments, result,
-		)
-		if err != nil {
-			return nil, err
+	started time.Time,
+	result *any,
+	err *error,
+) {
+	if recover() == nil {
+		return
+	}
+	violation := outputViolation{
+		ruleID: rulePostcheckFailed, riskLevel: RiskLevelHigh,
+		decision:       DecisionDeny,
+		evidence:       "output safety inspection stopped after an internal failure",
+		recommendation: "review the output guard and configured auditor",
+		redacted:       true,
+	}
+	*result = wrapper.blockedResult(ctx, started, violation)
+	*err = nil
+}
+
+func (wrapper *outputGuard) callViolation(
+	runCtx context.Context,
+	parentCtx context.Context,
+	result any,
+	callErr error,
+) (outputViolation, bool) {
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) && parentCtx.Err() == nil {
+		return timeoutViolation(), true
+	}
+	if result != nil {
+		if violation, blocked := wrapper.resultViolation(result); blocked {
+			return violation, true
 		}
-	} else if provider, ok := wrapper.provider.(invocationStateDeltaProvider); ok {
-		delta = provider.StateDeltaForInvocation(
-			invocation, toolCallID, arguments, result,
-		)
-	} else {
-		return nil, nil
 	}
-	return wrapper.inspectStateDelta(ctx, delta)
+	if callErr != nil {
+		return wrapper.errorViolation(callErr)
+	}
+	return outputViolation{}, false
 }
 
-type stateCallableWrapper struct {
-	*callableExecutionWrapper
-	provider any
+func (wrapper *outputGuard) errorViolation(callErr error) (outputViolation, bool) {
+	message := callErr.Error()
+	if int64(len(message)) > wrapper.guard.policy.maxOutputBytes {
+		violation := outputLimitViolation()
+		violation.evidence = "tool error exceeds the configured byte limit"
+		return violation, true
+	}
+	if hasSensitiveText(message) {
+		return secretErrorViolation(), true
+	}
+	return outputViolation{}, false
 }
 
-func (wrapper *stateCallableWrapper) StateDelta(
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) map[string][]byte {
-	delta, err := wrapper.StateDeltaWithError(
-		context.Background(), toolCallID, arguments, result,
-	)
+func (wrapper *outputGuard) resultViolation(result any) (outputViolation, bool) {
+	serialized, err := json.Marshal(result)
 	if err != nil {
-		return nil
+		return uninspectableViolation(), true
 	}
-	return delta
+	if int64(len(serialized)) > wrapper.guard.policy.maxOutputBytes {
+		return outputLimitViolation(), true
+	}
+	if hasSensitiveText(string(serialized)) {
+		return secretOutputViolation(), true
+	}
+	return outputViolation{}, false
 }
 
-func (wrapper *stateCallableWrapper) StateDeltaWithError(
+func (wrapper *outputGuard) blockedResult(
 	ctx context.Context,
-	toolCallID string,
-	arguments []byte,
-	result []byte,
-) (map[string][]byte, error) {
-	var delta map[string][]byte
-	if provider, ok := wrapper.provider.(stateDeltaErrorProvider); ok {
-		var err error
-		delta, err = provider.StateDeltaWithError(
-			ctx, toolCallID, arguments, result,
-		)
-		if err != nil {
-			return nil, err
+	started time.Time,
+	violation outputViolation,
+) BlockedResult {
+	report := wrapper.violationReport(started, violation)
+	report, auditErr := wrapper.finalizePostcheckSafely(ctx, report)
+	if auditErr != nil {
+		report = auditFailureReport(report, true)
+	}
+	return blockedResultFromReport(report)
+}
+
+func (wrapper *outputGuard) finalizePostcheckSafely(
+	ctx context.Context,
+	report Report,
+) (finalized Report, err error) {
+	defer func() {
+		if recover() != nil {
+			finalized = auditFailureReport(report, true)
+			err = errors.New("tool safety: auditor panicked")
 		}
-	} else if provider, ok := wrapper.provider.(stateDeltaProvider); ok {
-		delta = provider.StateDelta(toolCallID, arguments, result)
-	} else {
-		return nil, nil
-	}
-	return wrapper.inspectStateDelta(ctx, delta)
+	}()
+	return wrapper.guard.finalizeReport(ctx, report, auditPhasePostcheck)
 }
 
-func wrapStateCapability(wrapped tool.Tool, semantic tool.Tool) tool.Tool {
-	if _, ok := semantic.(invocationStateDeltaErrorProvider); ok {
-		return wrapInvocationState(wrapped, semantic)
+func (wrapper *outputGuard) violationReport(
+	started time.Time,
+	violation outputViolation,
+) Report {
+	finding := newFinding(
+		violation.ruleID, violation.riskLevel, violation.decision,
+		violation.evidence, violation.recommendation,
+	)
+	return Report{
+		Decision: finding.Decision, RiskLevel: finding.RiskLevel,
+		RuleID: finding.RuleID, Evidence: finding.Evidence,
+		Recommendation: finding.Recommendation,
+		ToolName:       wrapper.binding.ToolName, Backend: wrapper.binding.Backend,
+		Blocked:  true,
+		Redacted: violation.redacted, DurationMS: time.Since(started).Milliseconds(),
+		PolicyVersion: wrapper.guard.policy.versionString(), Findings: []Finding{finding},
 	}
-	if _, ok := semantic.(stateDeltaErrorProvider); ok {
-		return wrapLegacyState(wrapped, semantic)
-	}
-	if _, ok := semantic.(invocationStateDeltaProvider); ok {
-		return wrapInvocationState(wrapped, semantic)
-	}
-	if _, ok := semantic.(stateDeltaProvider); ok {
-		return wrapLegacyState(wrapped, semantic)
-	}
-	return wrapped
 }
 
-func wrapInvocationState(
-	wrapped tool.Tool,
-	provider any,
-) tool.Tool {
-	concrete, ok := wrapped.(*callableExecutionWrapper)
-	if !ok {
-		return wrapped
+func blockedResultFromReport(report Report) BlockedResult {
+	return BlockedResult{
+		Decision: report.Decision, RiskLevel: report.RiskLevel,
+		RuleID: report.RuleID, Recommendation: report.Recommendation,
+		ToolName: report.ToolName, Backend: report.Backend,
+		Blocked: true, Redacted: report.Redacted,
 	}
-	return &invocationCallableWrapper{concrete, provider}
 }
 
-func wrapLegacyState(wrapped tool.Tool, provider any) tool.Tool {
-	concrete, ok := wrapped.(*callableExecutionWrapper)
-	if !ok {
-		return wrapped
+func normalizeContext(ctx context.Context) context.Context {
+	if ctx == nil {
+		return context.Background()
 	}
-	return &stateCallableWrapper{concrete, provider}
+	return ctx
 }
 
-func newExecutionError(report Report, phase string) *ExecutionError {
-	return &ExecutionError{
-		Phase:     phase,
-		Decision:  report.Decision,
-		RiskLevel: report.RiskLevel,
-		RuleID:    report.RuleID,
-		message: fmt.Sprintf(
-			"tool safety %s: %s",
-			phase,
-			reportReason(report),
-		),
+func timeoutViolation() outputViolation {
+	return outputViolation{
+		ruleID: ruleExecutionTimeout, riskLevel: RiskLevelHigh,
+		decision: DecisionDeny, evidence: "tool exceeded the configured runtime limit",
+		recommendation: "reduce work or increase the bounded policy timeout",
 	}
+}
+
+func uninspectableViolation() outputViolation {
+	return outputViolation{
+		ruleID: ruleOutputUninspectable, riskLevel: RiskLevelHigh,
+		decision:       DecisionNeedsHumanReview,
+		evidence:       "tool output could not be serialized for safety checks",
+		recommendation: "return a JSON-serializable result and review the tool",
+	}
+}
+
+func outputLimitViolation() outputViolation {
+	return outputViolation{
+		ruleID: ruleOutputLimit, riskLevel: RiskLevelHigh,
+		decision:       DecisionDeny,
+		evidence:       "tool output exceeds the configured byte limit",
+		recommendation: "reduce output size or use a bounded result format",
+	}
+}
+
+func secretOutputViolation() outputViolation {
+	return outputViolation{
+		ruleID: ruleOutputSecret, riskLevel: RiskLevelHigh,
+		decision:       DecisionDeny,
+		evidence:       "sensitive material detected in tool output",
+		recommendation: "remove secrets and return only redacted output",
+		redacted:       true,
+	}
+}
+
+func secretErrorViolation() outputViolation {
+	violation := secretOutputViolation()
+	violation.evidence = "sensitive material detected in tool error"
+	violation.recommendation = "remove secrets from tool errors and logs"
+	return violation
 }

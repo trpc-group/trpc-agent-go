@@ -11,7 +11,12 @@ package safety
 
 import "regexp"
 
-const redactedValue = "[REDACTED]"
+const (
+	redactedValue               = "[REDACTED]"
+	credentialAssignmentPattern = 0
+	bearerCredentialPattern     = 1
+	queryParameterSecretPattern = 5
+)
 
 var redactionPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)["']?(\s*[:=]\s*)(?:"(?:(?s:\\(?:.|$))|[^"\\])*(?:"|$)|'(?:(?s:\\(?:.|$))|[^'\\])*(?:'|$)|[^\s"',;&}]+)`),
@@ -28,9 +33,9 @@ func redactText(value string) (string, bool) {
 	for index, pattern := range redactionPatterns {
 		var replacement string
 		switch index {
-		case 0:
+		case credentialAssignmentPattern:
 			replacement = `${1}${2}` + redactedValue
-		case 1, 5:
+		case bearerCredentialPattern, queryParameterSecretPattern:
 			replacement = `${1}` + redactedValue
 		default:
 			replacement = redactedValue

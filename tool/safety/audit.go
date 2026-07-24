@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
 	"sync"
 	"time"
 )
@@ -23,6 +22,7 @@ import (
 const (
 	auditPhasePrecheck  = "precheck"
 	auditPhasePostcheck = "postcheck"
+	auditFileMode       = os.FileMode(0o600)
 )
 
 // AuditEvent is the low-cardinality record emitted for one safety decision.
@@ -31,7 +31,6 @@ type AuditEvent struct {
 	Phase      string    `json:"phase"`
 	ToolName   string    `json:"tool_name"`
 	Backend    Backend   `json:"backend"`
-	Provider   Provider  `json:"provider,omitempty"`
 	Decision   Decision  `json:"decision"`
 	RiskLevel  RiskLevel `json:"risk_level"`
 	RuleID     string    `json:"rule_id"`
@@ -57,17 +56,7 @@ func WithAuditor(auditor Auditor) Option {
 }
 
 func isNilAuditor(auditor Auditor) bool {
-	if auditor == nil {
-		return true
-	}
-	value := reflect.ValueOf(auditor)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Pointer, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
+	return isNilInterface(auditor)
 }
 
 // JSONLAuditor appends one complete JSON object per line.
@@ -83,13 +72,19 @@ func NewJSONLAuditor(path string) (*JSONLAuditor, error) {
 	if path == "" {
 		return nil, errors.New("tool safety: audit path is empty")
 	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, auditFileMode)
 	if err != nil {
 		return nil, fmt.Errorf("tool safety: open audit file: %w", err)
 	}
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return nil, fmt.Errorf("tool safety: secure audit file: %w", err)
+	if err := file.Chmod(auditFileMode); err != nil {
+		secureErr := fmt.Errorf("tool safety: secure audit file: %w", err)
+		if closeErr := file.Close(); closeErr != nil {
+			return nil, errors.Join(
+				secureErr,
+				fmt.Errorf("tool safety: close insecure audit file: %w", closeErr),
+			)
+		}
+		return nil, secureErr
 	}
 	return &JSONLAuditor{
 		file:    file,
@@ -136,7 +131,6 @@ func auditEventFromReport(report Report, phase string) AuditEvent {
 		Phase:      phase,
 		ToolName:   report.ToolName,
 		Backend:    report.Backend,
-		Provider:   report.Provider,
 		Decision:   report.Decision,
 		RiskLevel:  report.RiskLevel,
 		RuleID:     report.RuleID,

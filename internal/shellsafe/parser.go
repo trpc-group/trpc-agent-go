@@ -63,10 +63,9 @@ type Pipeline struct {
 // commandParser is the package-private seam between the public,
 // dependency-free API of shellsafe and the underlying bash parser
 // implementation. It takes a normalised, non-empty command string
-// and an explicit segment limit, then returns either a flat slice of
-// "plain" pipeline segments (each segment is its argv) or a
-// structured rejection error describing the first disallowed
-// construct.
+// and returns either a flat slice of "plain" pipeline segments
+// (each segment is its argv) or a structured rejection error
+// describing the first disallowed construct.
 //
 // The default implementation lives in parser_simple.go and is a
 // hand-rolled lexer. Replacing the parser - whether by adopting a
@@ -87,17 +86,13 @@ func Parse(command string) (*Pipeline, error) {
 	return parse(command, maxSegments)
 }
 
-// ParseWithMaxSegments validates command like Parse, using the given
-// pipeline segment limit. The limit must be between 1 and 512.
-func ParseWithMaxSegments(
-	command string,
-	segmentLimit int,
-) (*Pipeline, error) {
+// ParseWithMaxSegments validates command with an explicit bounded segment
+// limit. It is intended for callers that scan generated command batches.
+func ParseWithMaxSegments(command string, segmentLimit int) (*Pipeline, error) {
 	if segmentLimit < 1 || segmentLimit > maxConfigurableSegments {
 		return nil, fmt.Errorf(
 			"max segments must be between 1 and %d: got %d",
-			maxConfigurableSegments,
-			segmentLimit,
+			maxConfigurableSegments, segmentLimit,
 		)
 	}
 	return parse(command, segmentLimit)

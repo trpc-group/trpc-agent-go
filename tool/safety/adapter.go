@@ -14,30 +14,24 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
-	"reflect"
+	"path"
 	"strings"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	defaultWorkspaceTimeout  = 5 * time.Minute
-	defaultHostYield         = 10 * time.Second
-	defaultHostTimeout       = 1800 * time.Second
-	defaultSessionWriteYield = 200 * time.Millisecond
+	defaultWorkspaceTimeout = 5 * time.Minute
+	defaultHostTimeout      = 1800 * time.Second
 )
 
 // AdaptRequest is the execution request passed to an InputAdapter.
 type AdaptRequest struct {
-	ToolName   string
-	ToolCallID string
-	Arguments  []byte
-	Metadata   tool.ToolMetadata
+	ToolName  string
+	Arguments []byte
+	Metadata  tool.ToolMetadata
 }
 
 // InputAdapter normalizes one execution tool's JSON arguments for scanning.
@@ -51,7 +45,6 @@ type Binding struct {
 	ToolName string
 	Kind     ExecutionKind
 	Backend  Backend
-	Provider Provider
 	Adapter  InputAdapter
 }
 
@@ -79,15 +72,11 @@ func BindWorkspaceSession(toolName string) Binding {
 // match the value passed to hostexec.WithBaseDir; use "." when that option was
 // not set.
 func BindHostExec(toolName, baseDir string) Binding {
-	resolved, err := resolveHostBaseDir(baseDir)
 	return Binding{
 		ToolName: toolName,
 		Kind:     ExecutionKindHostExec,
 		Backend:  BackendHostExec,
-		Adapter: hostExecAdapter{
-			baseDir:        resolved,
-			baseDirInvalid: err != nil,
-		},
+		Adapter:  hostExecAdapter{baseDir: resolveHostBaseDir(baseDir)},
 	}
 }
 
@@ -107,17 +96,6 @@ func BindCodeExec(toolName string, backend Backend) Binding {
 		ToolName: toolName,
 		Kind:     ExecutionKindCodeExec,
 		Backend:  backend,
-		Adapter:  codeExecAdapter{},
-	}
-}
-
-// BindRemoteCodeExec binds a codeexec tool to a remote sandbox provider.
-func BindRemoteCodeExec(toolName string, provider Provider) Binding {
-	return Binding{
-		ToolName: toolName,
-		Kind:     ExecutionKindCodeExec,
-		Backend:  BackendRemoteSandbox,
-		Provider: provider,
 		Adapter:  codeExecAdapter{},
 	}
 }
@@ -159,14 +137,6 @@ func validateBinding(binding Binding) error {
 	if isNilAdapter(binding.Adapter) {
 		return errors.New("tool safety: binding adapter is required")
 	}
-	if validator, ok := binding.Adapter.(bindingAdapterValidator); ok {
-		if err := validator.validateBinding(); err != nil {
-			return err
-		}
-	}
-	if !validBackendProvider(binding.Backend, binding.Provider) {
-		return errors.New("tool safety: binding provider is invalid")
-	}
 	switch binding.Kind {
 	case ExecutionKindWorkspaceExec, ExecutionKindWorkspaceSession:
 		if binding.Backend != BackendWorkspaceExec {
@@ -178,14 +148,13 @@ func validateBinding(binding Binding) error {
 		}
 	case ExecutionKindCodeExec:
 		switch binding.Backend {
-		case BackendCodeExec, BackendLocal, BackendContainer:
-		case BackendRemoteSandbox:
+		case BackendCodeExec, BackendLocal, BackendContainer, BackendRemoteSandbox:
 		default:
 			return errors.New("tool safety: invalid code binding backend")
 		}
 	case ExecutionKindCustom:
 		switch binding.Backend {
-		case BackendMCP, BackendSkill, BackendCustom:
+		case BackendCustom:
 		default:
 			return errors.New("tool safety: invalid custom binding backend")
 		}
@@ -195,45 +164,8 @@ func validateBinding(binding Binding) error {
 	return nil
 }
 
-func validBackendProvider(backend Backend, provider Provider) bool {
-	if backend == BackendRemoteSandbox {
-		return validProvider(provider)
-	}
-	return provider == ""
-}
-
-func validProvider(provider Provider) bool {
-	value := string(provider)
-	if value == "" || len(value) > 64 {
-		return false
-	}
-	separator := false
-	for index, char := range value {
-		if char >= 'a' && char <= 'z' || char >= '0' && char <= '9' {
-			separator = false
-			continue
-		}
-		if separator || index == 0 || index == len(value)-1 ||
-			(char != '.' && char != '_' && char != '-') {
-			return false
-		}
-		separator = true
-	}
-	return true
-}
-
 func isNilAdapter(adapter InputAdapter) bool {
-	if adapter == nil {
-		return true
-	}
-	value := reflect.ValueOf(adapter)
-	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
-		reflect.Ptr, reflect.Slice:
-		return value.IsNil()
-	default:
-		return false
-	}
+	return isNilInterface(adapter)
 }
 
 type workspaceExecAdapter struct{}
@@ -241,24 +173,12 @@ type workspaceExecAdapter struct{}
 type workspaceSessionAdapter struct{}
 
 type hostExecAdapter struct {
-	baseDir        string
-	baseDirInvalid bool
+	baseDir string
 }
 
 type hostSessionAdapter struct{}
 
 type codeExecAdapter struct{}
-
-type bindingAdapterValidator interface {
-	validateBinding() error
-}
-
-func (adapter hostExecAdapter) validateBinding() error {
-	if adapter.baseDirInvalid {
-		return errors.New("tool safety: invalid host base directory")
-	}
-	return nil
-}
 
 type workspaceExecInput struct {
 	Command       string            `json:"command"`
@@ -306,10 +226,8 @@ func (workspaceExecAdapter) Adapt(
 	yieldValue := firstIntPtr(input.YieldTimeMS, input.YieldMs)
 	interactive := input.Background || pty ||
 		(yieldValue != nil && *yieldValue != 0)
-	yield := workspaceExecYield(input.Background, interactive, yieldValue)
 	return ScanInput{
 		ToolName:     req.ToolName,
-		ToolCallID:   req.ToolCallID,
 		Kind:         binding.Kind,
 		Operation:    OperationExecute,
 		Command:      input.Command,
@@ -318,9 +236,7 @@ func (workspaceExecAdapter) Adapt(
 		Env:          cloneStringMap(input.Env),
 		Metadata:     req.Metadata,
 		Backend:      binding.Backend,
-		Provider:     binding.Provider,
 		Timeout:      timeout,
-		Yield:        yield,
 		PTY:          pty,
 		Background:   input.Background,
 		Interactive:  interactive,
@@ -345,7 +261,7 @@ func (workspaceSessionAdapter) Adapt(
 	if err := checkAdaptRequest(ctx, req, binding, ExecutionKindWorkspaceSession); err != nil {
 		return ScanInput{}, err
 	}
-	return adaptSession(req, binding, defaultSessionWriteYield)
+	return adaptSession(req, binding)
 }
 
 type hostExecInput struct {
@@ -376,14 +292,8 @@ func (adapter hostExecAdapter) Adapt(
 	if strings.TrimSpace(input.Command) == "" {
 		return ScanInput{}, errors.New("tool safety: command is required")
 	}
-	workdir, err := resolveHostWorkdir(input.Workdir, adapter.baseDir)
-	if err != nil {
-		return ScanInput{}, errors.New("tool safety: invalid host workdir")
-	}
-	yield := defaultHostYield
-	if raw := firstIntPtr(input.YieldTimeMS, input.YieldMs); raw != nil && *raw >= 0 {
-		yield = saturatingDuration(*raw, time.Millisecond)
-	}
+	workdir := resolveHostWorkdir(input.Workdir, adapter.baseDir)
+	yield := firstIntPtr(input.YieldTimeMS, input.YieldMs)
 	timeout := defaultHostTimeout
 	if raw := firstIntPtr(input.TimeoutSec, input.TimeoutSecOld); raw != nil && *raw > 0 {
 		timeout = saturatingDuration(*raw, time.Second)
@@ -391,7 +301,6 @@ func (adapter hostExecAdapter) Adapt(
 	pty := firstBoolValue(input.TTY, input.PTY)
 	return ScanInput{
 		ToolName:    req.ToolName,
-		ToolCallID:  req.ToolCallID,
 		Kind:        binding.Kind,
 		Operation:   OperationExecute,
 		Command:     input.Command,
@@ -399,12 +308,10 @@ func (adapter hostExecAdapter) Adapt(
 		Env:         cloneStringMap(input.Env),
 		Metadata:    req.Metadata,
 		Backend:     binding.Backend,
-		Provider:    binding.Provider,
 		Timeout:     timeout,
-		Yield:       yield,
 		PTY:         pty,
 		Background:  input.Background,
-		Interactive: input.Background || pty || yield != 0,
+		Interactive: input.Background || pty || yield == nil || *yield != 0,
 	}, nil
 }
 
@@ -416,13 +323,12 @@ func (hostSessionAdapter) Adapt(
 	if err := checkAdaptRequest(ctx, req, binding, ExecutionKindHostSession); err != nil {
 		return ScanInput{}, err
 	}
-	return adaptSession(req, binding, defaultSessionWriteYield)
+	return adaptSession(req, binding)
 }
 
 func adaptSession(
 	req AdaptRequest,
 	binding Binding,
-	defaultYield time.Duration,
 ) (ScanInput, error) {
 	var input sessionInput
 	if err := decodeArguments(req.Arguments, &input); err != nil {
@@ -437,13 +343,8 @@ func adaptSession(
 	if input.Chars == "" && !submit {
 		operation = OperationSessionPoll
 	}
-	yield := defaultYield
-	if raw := firstIntPtr(input.YieldTimeMS, input.YieldMs); raw != nil && *raw >= 0 {
-		yield = saturatingDuration(*raw, time.Millisecond)
-	}
 	return ScanInput{
 		ToolName:     req.ToolName,
-		ToolCallID:   req.ToolCallID,
 		SessionID:    sessionID,
 		Kind:         binding.Kind,
 		Operation:    operation,
@@ -451,8 +352,6 @@ func adaptSession(
 		Submit:       submit,
 		Metadata:     req.Metadata,
 		Backend:      binding.Backend,
-		Provider:     binding.Provider,
-		Yield:        yield,
 		Interactive:  true,
 	}, nil
 }
@@ -479,15 +378,12 @@ func (codeExecAdapter) Adapt(
 		return ScanInput{}, err
 	}
 	return ScanInput{
-		ToolName:    req.ToolName,
-		ToolCallID:  req.ToolCallID,
-		ExecutionID: envelope.ExecutionID,
-		Kind:        binding.Kind,
-		Operation:   OperationCodeExecute,
-		CodeBlocks:  cloneCodeBlocks(blocks),
-		Metadata:    req.Metadata,
-		Backend:     binding.Backend,
-		Provider:    binding.Provider,
+		ToolName:   req.ToolName,
+		Kind:       binding.Kind,
+		Operation:  OperationCodeExecute,
+		CodeBlocks: cloneCodeBlocks(blocks),
+		Metadata:   req.Metadata,
+		Backend:    binding.Backend,
 	}, nil
 }
 
@@ -585,28 +481,159 @@ func cloneCodeBlocks(input []CodeBlockInput) []CodeBlockInput {
 	return append([]CodeBlockInput(nil), input...)
 }
 
-func workspaceExecYield(
-	background bool,
-	interactive bool,
-	raw *int,
-) time.Duration {
-	if !interactive {
-		return 0
+func bindTrustedInput(
+	input ScanInput,
+	req AdaptRequest,
+	binding Binding,
+) ScanInput {
+	input = cloneScanInput(input)
+	input.ToolName = req.ToolName
+	input.Kind = binding.Kind
+	input.Backend = binding.Backend
+	input.Metadata = req.Metadata
+	return input
+}
+
+func validateScanInputShape(input ScanInput) error {
+	if strings.TrimSpace(input.ToolName) == "" {
+		return errors.New("tool safety: scan input tool name is required")
 	}
-	if background {
-		if raw != nil && *raw > 0 {
-			return saturatingDuration(*raw, time.Millisecond)
+	if !validKindBackend(input.Kind, input.Backend) {
+		return errors.New("tool safety: scan input execution boundary is invalid")
+	}
+	if !validOperationForKind(input.Kind, input.Operation) {
+		return errors.New("tool safety: scan input operation is invalid")
+	}
+	if !validOperationPayload(input) {
+		return errors.New("tool safety: scan input payload is invalid")
+	}
+	return nil
+}
+
+func validKindBackend(kind ExecutionKind, backend Backend) bool {
+	switch kind {
+	case ExecutionKindWorkspaceExec, ExecutionKindWorkspaceSession:
+		return backend == BackendWorkspaceExec
+	case ExecutionKindHostExec, ExecutionKindHostSession:
+		return backend == BackendHostExec
+	case ExecutionKindCodeExec:
+		return validCodeBackend(backend)
+	case ExecutionKindCustom:
+		return backend == BackendCustom
+	default:
+		return false
+	}
+}
+
+func validCodeBackend(backend Backend) bool {
+	switch backend {
+	case BackendCodeExec, BackendLocal, BackendContainer, BackendRemoteSandbox:
+		return true
+	default:
+		return false
+	}
+}
+
+func validOperationForKind(kind ExecutionKind, operation Operation) bool {
+	switch kind {
+	case ExecutionKindWorkspaceExec, ExecutionKindHostExec:
+		return operation == OperationExecute
+	case ExecutionKindWorkspaceSession, ExecutionKindHostSession:
+		return operation == OperationSessionInput || operation == OperationSessionPoll
+	case ExecutionKindCodeExec:
+		return operation == OperationCodeExecute
+	case ExecutionKindCustom:
+		return knownOperation(operation)
+	default:
+		return false
+	}
+}
+
+func knownOperation(operation Operation) bool {
+	switch operation {
+	case OperationExecute, OperationSessionInput, OperationSessionPoll,
+		OperationCodeExecute:
+		return true
+	default:
+		return false
+	}
+}
+
+func validOperationPayload(input ScanInput) bool {
+	switch input.Operation {
+	case OperationExecute:
+		return validExecutePayload(input) && noSessionOrCodePayload(input)
+	case OperationSessionInput:
+		return validSessionInputPayload(input)
+	case OperationSessionPoll:
+		return validSessionPollPayload(input)
+	case OperationCodeExecute:
+		return validCodePayload(input.CodeBlocks) && noShellOrSessionPayload(input)
+	default:
+		return false
+	}
+}
+
+func noSessionOrCodePayload(input ScanInput) bool {
+	return strings.TrimSpace(input.SessionID) == "" &&
+		strings.TrimSpace(input.SessionInput) == "" && !input.Submit &&
+		len(input.CodeBlocks) == 0
+}
+
+func validSessionInputPayload(input ScanInput) bool {
+	return strings.TrimSpace(input.SessionID) != "" &&
+		(strings.TrimSpace(input.SessionInput) != "" || input.Submit) &&
+		noExecutablePayload(input)
+}
+
+func validSessionPollPayload(input ScanInput) bool {
+	return strings.TrimSpace(input.SessionID) != "" &&
+		strings.TrimSpace(input.SessionInput) == "" && !input.Submit &&
+		noExecutablePayload(input)
+}
+
+func noExecutablePayload(input ScanInput) bool {
+	return strings.TrimSpace(input.Command) == "" && len(input.Args) == 0 &&
+		strings.TrimSpace(input.Script) == "" && strings.TrimSpace(input.Language) == "" &&
+		len(input.CodeBlocks) == 0 && strings.TrimSpace(input.InitialStdin) == ""
+}
+
+func noShellOrSessionPayload(input ScanInput) bool {
+	return strings.TrimSpace(input.SessionID) == "" &&
+		strings.TrimSpace(input.Command) == "" && len(input.Args) == 0 &&
+		strings.TrimSpace(input.Script) == "" && strings.TrimSpace(input.Language) == "" &&
+		strings.TrimSpace(input.InitialStdin) == "" &&
+		strings.TrimSpace(input.SessionInput) == "" && !input.Submit
+}
+
+func validExecutePayload(input ScanInput) bool {
+	forms := 0
+	if strings.TrimSpace(input.Command) != "" {
+		forms++
+	}
+	if len(input.Args) > 0 {
+		forms++
+	}
+	if strings.TrimSpace(input.Script) != "" {
+		forms++
+	}
+	if input.Kind != ExecutionKindCustom {
+		return forms == 1 && strings.TrimSpace(input.Command) != ""
+	}
+	return forms == 1
+}
+
+func validCodePayload(blocks []CodeBlockInput) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if strings.TrimSpace(block.Language) == "" ||
+			strings.TrimSpace(block.Code) == "" {
+			return false
 		}
-		return 0
 	}
-	value := 0
-	if raw != nil {
-		value = *raw
-	}
-	if value <= 0 {
-		value = programsession.DefaultExecYieldMS
-	}
-	return saturatingDuration(value, time.Millisecond)
+	return true
 }
 
 func saturatingDuration(value int, unit time.Duration) time.Duration {
@@ -654,39 +681,23 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveHostBaseDir(raw string) (string, error) {
-	baseDir, err := resolveHostWorkdir(raw, "")
-	if err != nil {
-		return "", err
-	}
-	if baseDir == "" {
-		return "", nil
-	}
-	return filepath.Abs(baseDir)
+func resolveHostBaseDir(raw string) string {
+	return resolveHostWorkdir(raw, "")
 }
 
-func resolveHostWorkdir(raw, baseDir string) (string, error) {
-	value := strings.TrimSpace(raw)
+func resolveHostWorkdir(raw, baseDir string) string {
+	value := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
 	if value == "" {
-		return baseDir, nil
+		return baseDir
 	}
-	if value == "~" {
-		return os.UserHomeDir()
+	if value == "~" || strings.HasPrefix(value, "~/") || lexicalPathAbsolute(value) {
+		return path.Clean(value)
 	}
-	if strings.HasPrefix(value, "~/") {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		value = filepath.Join(home, strings.TrimPrefix(value, "~/"))
+	baseDir = strings.ReplaceAll(strings.TrimSpace(baseDir), "\\", "/")
+	if baseDir == "" {
+		return path.Clean(value)
 	}
-	if baseDir != "" && !filepath.IsAbs(value) {
-		return filepath.Join(baseDir, value), nil
-	}
-	if filepath.IsAbs(value) {
-		return value, nil
-	}
-	return filepath.Abs(value)
+	return path.Clean(path.Join(baseDir, value))
 }
 
 var (

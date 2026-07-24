@@ -11,10 +11,25 @@
 package safety
 
 import (
+	"reflect"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+func isNilInterface(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map,
+		reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}
 
 // Decision is the normalized result of a safety scan.
 type Decision string
@@ -36,8 +51,6 @@ type RiskLevel string
 const (
 	// RiskLevelNone is used by reports with no findings.
 	RiskLevelNone RiskLevel = "none"
-	// RiskLevelLow is informational and does not block by itself.
-	RiskLevelLow RiskLevel = "low"
 	// RiskLevelMedium normally requires confirmation.
 	RiskLevelMedium RiskLevel = "medium"
 	// RiskLevelHigh describes dangerous behavior.
@@ -50,8 +63,6 @@ const (
 type Backend string
 
 const (
-	// BackendUnknown is used when no backend can be identified safely.
-	BackendUnknown Backend = "unknown"
 	// BackendWorkspaceExec is the workspaceexec backend.
 	BackendWorkspaceExec Backend = "workspaceexec"
 	// BackendHostExec is the hostexec backend.
@@ -64,20 +75,8 @@ const (
 	BackendContainer Backend = "container"
 	// BackendRemoteSandbox is a remotely hosted sandbox backend.
 	BackendRemoteSandbox Backend = "remote_sandbox"
-	// BackendMCP is an explicitly adapted MCP execution tool.
-	BackendMCP Backend = "mcp"
-	// BackendSkill is an explicitly adapted Skill execution tool.
-	BackendSkill Backend = "skill"
 	// BackendCustom is an explicitly adapted custom execution tool.
 	BackendCustom Backend = "custom"
-)
-
-// Provider identifies the implementation behind a provider-neutral backend.
-type Provider string
-
-const (
-	// ProviderE2B identifies the E2B remote sandbox provider.
-	ProviderE2B Provider = "e2b"
 )
 
 // ExecutionKind identifies the argument schema used by an execution tool.
@@ -120,31 +119,26 @@ type CodeBlockInput struct {
 
 // ScanInput is the normalized in-memory request inspected by Guard.
 type ScanInput struct {
-	ToolName      string
-	ToolCallID    string
-	SessionID     string
-	ExecutionID   string
-	Kind          ExecutionKind
-	Operation     Operation
-	Command       string
-	Args          []string
-	Script        string
-	Language      string
-	CodeBlocks    []CodeBlockInput
-	InitialStdin  string
-	SessionInput  string
-	Submit        bool
-	WorkingDir    string
-	Env           map[string]string
-	Metadata      tool.ToolMetadata
-	Backend       Backend
-	Provider      Provider
-	Timeout       time.Duration
-	Yield         time.Duration
-	MaxOutputSize int64
-	PTY           bool
-	Background    bool
-	Interactive   bool
+	ToolName     string
+	SessionID    string
+	Kind         ExecutionKind
+	Operation    Operation
+	Command      string
+	Args         []string
+	Script       string
+	Language     string
+	CodeBlocks   []CodeBlockInput
+	InitialStdin string
+	SessionInput string
+	Submit       bool
+	WorkingDir   string
+	Env          map[string]string
+	Metadata     tool.ToolMetadata
+	Backend      Backend
+	Timeout      time.Duration
+	PTY          bool
+	Background   bool
+	Interactive  bool
 }
 
 // Finding is one rule match. A report can contain multiple findings.
@@ -166,7 +160,6 @@ type Report struct {
 	ToolName       string    `json:"tool_name"`
 	Command        string    `json:"command"`
 	Backend        Backend   `json:"backend"`
-	Provider       Provider  `json:"provider,omitempty"`
 	Blocked        bool      `json:"blocked"`
 	Redacted       bool      `json:"redacted"`
 	DurationMS     int64     `json:"duration_ms"`

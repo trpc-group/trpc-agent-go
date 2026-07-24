@@ -56,7 +56,7 @@
       "decision": "deny",
       "risk_level": "high",
       "rule_id": "PATH_SSH_CREDENTIAL",
-      "evidence": "SSH credential path detected: source=command",
+      "evidence": "SSH credential path detected: source=command.segment0.argv1",
       "recommendation": "remove credential access or use a scoped secret provider",
       "tool_name": "workspace_exec",
       "command": "cat ~/.ssh/id_rsa",
@@ -70,14 +70,14 @@
           "rule_id": "PATH_SSH_CREDENTIAL",
           "risk_level": "high",
           "decision": "deny",
-          "evidence": "SSH credential path detected: source=command",
+          "evidence": "SSH credential path detected: source=command.segment0.argv1",
           "recommendation": "remove credential access or use a scoped secret provider"
         },
         {
           "rule_id": "PATH_FORBIDDEN",
           "risk_level": "high",
           "decision": "deny",
-          "evidence": "denied path matched: source=command",
+          "evidence": "denied path matched: source=command.segment0.argv1",
           "recommendation": "keep access inside an explicitly permitted workspace path"
         }
       ]
@@ -125,7 +125,7 @@
       "evidence": "0 findings; parsed_segments=1; backend=workspaceexec",
       "recommendation": "execute with configured backend isolation and limits",
       "tool_name": "workspace_exec",
-      "command": "curl https://api.github.com/repos/x/y",
+      "command": "curl -q --noproxy '*' https://api.github.com/repos/x/y",
       "backend": "workspaceexec",
       "blocked": false,
       "redacted": false,
@@ -139,7 +139,7 @@
     "report": {
       "decision": "deny",
       "risk_level": "high",
-      "rule_id": "CMD_SHELL_WRAPPER",
+      "rule_id": "CMD_PROCESS_WRAPPER",
       "evidence": "command policy match: source=command; segment_index=0; executable=bash",
       "recommendation": "replace the wrapper with a directly auditable command",
       "tool_name": "workspace_exec",
@@ -151,7 +151,7 @@
       "policy_version": "1",
       "findings": [
         {
-          "rule_id": "CMD_SHELL_WRAPPER",
+          "rule_id": "CMD_PROCESS_WRAPPER",
           "risk_level": "high",
           "decision": "deny",
           "evidence": "command policy match: source=command; segment_index=0; executable=bash",

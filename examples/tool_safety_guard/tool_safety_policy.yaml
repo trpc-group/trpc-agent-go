@@ -27,11 +27,3 @@ limits:
 
 environment:
   allowed: [LANG, LC_ALL, TMPDIR]
-
-actions:
-  parse_error: needs_human_review
-  unknown_language: needs_human_review
-  pipeline: ask
-  dependency_install: ask
-  host_pty: ask
-  host_background: deny

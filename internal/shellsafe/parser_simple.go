@@ -41,16 +41,12 @@ import (
 // failure deep in the policy layer.
 const maxCommandLen = 16 * 1024
 
-// maxSegments is the pipeline segment cap used by Parse and
-// CheckCommand. Any reasonable command stays well below this; the cap
-// exists so a malicious / confused model that emits 10000 pipes does
-// not turn the policy check into an unbounded loop in callers that
-// iterate over segments.
+// maxSegments caps the number of pipeline segments. Any reasonable
+// command stays well below this; the cap exists so a malicious /
+// confused model that emits 10000 pipes does not turn the policy
+// check into an unbounded loop in callers that iterate over segments.
 const maxSegments = 32
 
-// maxConfigurableSegments is the largest limit accepted by
-// ParseWithMaxSegments. It keeps the configurable entry point bounded
-// while allowing callers to inspect larger generated commands.
 const maxConfigurableSegments = 512
 
 // tokKind enumerates the (very small) set of lexical token kinds
@@ -105,10 +101,7 @@ var shellKeywords = map[string]string{
 // parseCommandSimple is the default implementation of commandParser.
 // It runs the v1 hand-rolled lexer over src and produces the flat
 // list of pipeline segments expected by the Policy layer.
-func parseCommandSimple(
-	src string,
-	segmentLimit int,
-) ([][]string, error) {
+func parseCommandSimple(src string, segmentLimit int) ([][]string, error) {
 	if len(src) > maxCommandLen {
 		return nil, fmt.Errorf(
 			"command too long (max %d bytes)", maxCommandLen)
@@ -255,8 +248,10 @@ func rejectByteError(src string, i int, st *lexState) error {
 		return dollarError(src, i)
 	case '`':
 		return errors.New("command substitution backtick is not allowed")
-	case '<', '>':
-		return redirectionByteError(src, i, c)
+	case '<':
+		return redirectionError(src, i, '<')
+	case '>':
+		return redirectionError(src, i, '>')
 	case '(':
 		if st.attachedWord {
 			return errors.New("function declaration is not allowed")
@@ -274,26 +269,28 @@ func rejectByteError(src string, i int, st *lexState) error {
 			"glob character '%c' is not allowed (quote it if literal)",
 			c)
 	case '!':
-		if st.atSegmentStart {
-			return errors.New("negation operator '!' is not allowed")
-		}
-		return errors.New("history expansion '!' is not allowed")
+		return bangError(st.atSegmentStart)
 	case '#':
 		return errors.New("comment character '#' is not allowed")
 	}
 	return fmt.Errorf("control character %#02x is not allowed", c)
 }
 
-func redirectionByteError(src string, i int, operator byte) error {
+func redirectionError(src string, i int, operator byte) error {
 	if i+1 < len(src) && src[i+1] == '(' {
-		return fmt.Errorf(
-			"process substitution '%c(...)' is not allowed", operator,
-		)
+		return fmt.Errorf("process substitution '%c(...)' is not allowed", operator)
 	}
 	if operator == '<' {
 		return errors.New("input redirection '<' is not allowed")
 	}
 	return errors.New("output redirection '>' is not allowed")
+}
+
+func bangError(atSegmentStart bool) error {
+	if atSegmentStart {
+		return errors.New("negation operator '!' is not allowed")
+	}
+	return errors.New("history expansion '!' is not allowed")
 }
 
 // dollarError returns the specific expansion kind a '$' byte was
@@ -514,10 +511,7 @@ func lexBackslash(src string, i int, sb *strings.Builder) (int, error) {
 // buildSegments turns the flat token stream into the segment slice
 // the Policy layer expects, rejecting empty segments and leading
 // variable assignments along the way.
-func buildSegments(
-	tokens []token,
-	segmentLimit int,
-) ([][]string, error) {
+func buildSegments(tokens []token, segmentLimit int) ([][]string, error) {
 	var segments [][]string
 	var cur []string
 	for _, t := range tokens {

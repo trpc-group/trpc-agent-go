@@ -25,9 +25,33 @@ import (
 )
 
 const (
-	guardMaxSegments = 512
 	maxEvidenceBytes = 256
 	maxCommandBytes  = 256
+	ellipsisBytes    = len("...")
+	maxSafeLabelSize = 64
+	guardMaxSegments = 512
+
+	validationFindingCapacity = 2
+	shellCandidateCapacity    = 3
+	dangerFindingCapacity     = 3
+	rawRMSubmatchCount        = 3
+
+	decisionRankUnknown = 0
+	decisionRankAllow   = 1
+	decisionRankAsk     = 2
+	decisionRankReview  = 3
+	decisionRankDeny    = 4
+
+	riskRankUnknown  = 0
+	riskRankNone     = 1
+	riskRankMedium   = 3
+	riskRankHigh     = 4
+	riskRankCritical = 5
+
+	findingPriorityCritical = 0
+	findingPriorityDefault  = 1
+	findingPriorityShell    = 2
+	findingPriorityCommand  = 3
 )
 
 // Option configures a Guard. The option surface is intentionally small in the
@@ -35,14 +59,12 @@ const (
 type Option func(*guardOptions) error
 
 type guardOptions struct {
-	rules   []rule
 	auditor Auditor
 }
 
 // Guard scans immutable snapshots of normalized execution requests.
 type Guard struct {
 	policy  Policy
-	rules   []rule
 	auditor Auditor
 }
 
@@ -51,7 +73,7 @@ func NewGuard(policy Policy, opts ...Option) (*Guard, error) {
 	if err := validateCompiledPolicy(policy); err != nil {
 		return nil, err
 	}
-	options := guardOptions{rules: builtInRules()}
+	options := guardOptions{}
 	for _, option := range opts {
 		if option == nil {
 			return nil, errors.New("tool safety: nil guard option")
@@ -60,12 +82,8 @@ func NewGuard(policy Policy, opts ...Option) (*Guard, error) {
 			return nil, fmt.Errorf("tool safety: apply guard option: %w", err)
 		}
 	}
-	if len(options.rules) == 0 {
-		return nil, errors.New("tool safety: guard requires rules")
-	}
 	return &Guard{
 		policy:  policy.clone(),
-		rules:   append([]rule(nil), options.rules...),
 		auditor: options.auditor,
 	}, nil
 }
@@ -88,28 +106,7 @@ func validateCompiledPolicy(policy Policy) error {
 		policy.maxSleep <= 0 || policy.maxConcurrency <= 0 {
 		return errors.New("tool safety: invalid policy limits")
 	}
-	for _, decision := range []Decision{
-		policy.parseErrorAction,
-		policy.unknownLanguageAction,
-		policy.pipelineAction,
-		policy.dependencyInstallAction,
-		policy.hostPTYAction,
-		policy.hostBackgroundAction,
-	} {
-		if !validNonAllowAction(decision) {
-			return errors.New("tool safety: invalid policy action")
-		}
-	}
 	return nil
-}
-
-func validNonAllowAction(decision Decision) bool {
-	switch decision {
-	case DecisionDeny, DecisionAsk, DecisionNeedsHumanReview:
-		return true
-	default:
-		return false
-	}
 }
 
 // Scan evaluates all applicable in-memory rules. Rule failures are encoded in
@@ -156,12 +153,14 @@ func (guard *Guard) scan(
 	if ctx.Err() != nil {
 		findings = append(findings, scanFailureFinding(ctx.Err()))
 	} else {
-		for _, scannerRule := range guard.rules {
-			findings = append(
-				findings,
-				evaluateRule(ctx, scannerRule, input, guard.policy)...,
-			)
-		}
+		findings = append(findings, commandRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings, pathRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings, networkRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings, hostRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings,
+			dependencyEnvironmentRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings, resourceRule{}.Evaluate(ctx, input, guard.policy)...)
+		findings = append(findings, secretRule{}.Evaluate(ctx, input, guard.policy)...)
 		if ctx.Err() != nil {
 			findings = append(findings, scanFailureFinding(ctx.Err()))
 		}
@@ -179,14 +178,14 @@ func (guard *Guard) scan(
 }
 
 func inputValidationFindings(input ScanInput) []Finding {
-	findings := make([]Finding, 0, 2)
-	if !validBackendProvider(input.Backend, input.Provider) {
+	findings := make([]Finding, 0, validationFindingCapacity)
+	if err := validateScanInputShape(input); err != nil {
 		findings = append(findings, newFinding(
-			"SAFETY_PROVIDER_INVALID",
+			"SAFETY_INPUT_INVALID",
 			RiskLevelHigh,
 			DecisionDeny,
-			"execution provider does not match its backend",
-			"set a valid provider only for a remote sandbox backend",
+			"scan input shape is invalid",
+			"provide a complete request with a known operation and backend",
 		))
 	}
 	if strings.TrimSpace(input.Command) != "" && len(input.Args) > 0 {
@@ -206,50 +205,6 @@ func cloneScanInput(input ScanInput) ScanInput {
 	input.CodeBlocks = cloneCodeBlocks(input.CodeBlocks)
 	input.Env = cloneStringMap(input.Env)
 	return input
-}
-
-type rule interface {
-	ID() string
-	Evaluate(context.Context, ScanInput, Policy) []Finding
-}
-
-func builtInRules() []rule {
-	return []rule{
-		commandRule{},
-		pathRule{},
-		networkRule{},
-		hostRule{},
-		dependencyEnvironmentRule{},
-		resourceRule{},
-		secretRule{},
-	}
-}
-
-func evaluateRule(
-	ctx context.Context,
-	scannerRule rule,
-	input ScanInput,
-	policy Policy,
-) (findings []Finding) {
-	if scannerRule == nil {
-		return []Finding{rulePanicFinding("unknown")}
-	}
-	defer func() {
-		if recover() != nil {
-			findings = []Finding{rulePanicFinding(scannerRule.ID())}
-		}
-	}()
-	return scannerRule.Evaluate(ctx, input, policy)
-}
-
-func rulePanicFinding(ruleID string) Finding {
-	return newFinding(
-		"SAFETY_RULE_PANIC",
-		RiskLevelHigh,
-		DecisionDeny,
-		"safety rule failed: rule="+safeLabel(ruleID),
-		"deny execution and inspect the safety rule",
-	)
 }
 
 func scanFailureFinding(_ error) Finding {
@@ -311,7 +266,6 @@ func buildReport(policy Policy, input ScanInput, outcome scanOutcome) Report {
 		ToolName:      bounded(input.ToolName, maxEvidenceBytes),
 		Command:       command,
 		Backend:       input.Backend,
-		Provider:      reportProvider(input),
 		Redacted:      redacted,
 		DurationMS:    outcome.duration.Milliseconds(),
 		PolicyVersion: policy.versionString(),
@@ -340,13 +294,6 @@ func buildReport(policy Policy, input ScanInput, outcome scanOutcome) Report {
 	return report
 }
 
-func reportProvider(input ScanInput) Provider {
-	if validBackendProvider(input.Backend, input.Provider) {
-		return input.Provider
-	}
-	return ""
-}
-
 func findingLess(left, right Finding) bool {
 	if rank := decisionRank(left.Decision) - decisionRank(right.Decision); rank != 0 {
 		return rank > 0
@@ -363,32 +310,30 @@ func findingLess(left, right Finding) bool {
 func decisionRank(decision Decision) int {
 	switch decision {
 	case DecisionDeny:
-		return 4
+		return decisionRankDeny
 	case DecisionNeedsHumanReview:
-		return 3
+		return decisionRankReview
 	case DecisionAsk:
-		return 2
+		return decisionRankAsk
 	case DecisionAllow:
-		return 1
+		return decisionRankAllow
 	default:
-		return 0
+		return decisionRankUnknown
 	}
 }
 
 func riskRank(level RiskLevel) int {
 	switch level {
 	case RiskLevelCritical:
-		return 5
+		return riskRankCritical
 	case RiskLevelHigh:
-		return 4
+		return riskRankHigh
 	case RiskLevelMedium:
-		return 3
-	case RiskLevelLow:
-		return 2
+		return riskRankMedium
 	case RiskLevelNone:
-		return 1
+		return riskRankNone
 	default:
-		return 0
+		return riskRankUnknown
 	}
 }
 
@@ -398,15 +343,15 @@ func findingPriority(ruleID string) int {
 		"PATH_ENV_FILE", "PATH_CREDENTIAL_FILE",
 		"NETWORK_DOMAIN_DENIED", "NETWORK_IP_LITERAL",
 		"CMD_PRIVILEGE_ESCALATION", "HOST_PRIVILEGE_ESCALATION":
-		return 0
+		return findingPriorityCritical
 	case "HOST_PTY_SESSION":
-		return 1
+		return findingPriorityDefault
 	case "SHELL_PARSE_FAILED", "SHELL_COMPOUND_COMMAND":
-		return 2
+		return findingPriorityShell
 	case "CMD_DENIED", "CMD_NOT_ALLOWED":
-		return 3
+		return findingPriorityCommand
 	default:
-		return 1
+		return findingPriorityDefault
 	}
 }
 
@@ -456,10 +401,10 @@ func bounded(value string, max int) string {
 	if max <= 0 || len(value) <= max {
 		return value
 	}
-	if max <= 3 {
+	if max <= ellipsisBytes {
 		return value[:max]
 	}
-	return value[:max-3] + "..."
+	return value[:max-ellipsisBytes] + "..."
 }
 
 func safeLabel(value string) string {
@@ -475,7 +420,7 @@ func safeLabel(value string) string {
 			strings.ContainsRune("._/-", char) {
 			builder.WriteRune(char)
 		}
-		if builder.Len() >= 64 {
+		if builder.Len() >= maxSafeLabelSize {
 			break
 		}
 	}
@@ -491,8 +436,6 @@ func redactInputText(value string) (string, bool) {
 
 type commandRule struct{}
 
-func (commandRule) ID() string { return "command" }
-
 func (commandRule) Evaluate(
 	ctx context.Context,
 	input ScanInput,
@@ -502,6 +445,12 @@ func (commandRule) Evaluate(
 		return nil
 	}
 	findings := make([]Finding, 0)
+	if len(input.Args) > 0 {
+		findings = append(
+			findings,
+			evaluateParsedCommand(input.Args, 0, "args", policy)...,
+		)
+	}
 	for _, candidate := range shellCandidates(input) {
 		if ctx.Err() != nil {
 			break
@@ -511,8 +460,7 @@ func (commandRule) Evaluate(
 			evaluateShellCommand(candidate.text, candidate.label, policy)...,
 		)
 		if _, err := shellsafe.ParseWithMaxSegments(
-			candidate.text,
-			guardMaxSegments,
+			candidate.text, guardMaxSegments,
 		); err != nil {
 			findings = append(
 				findings,
@@ -521,6 +469,9 @@ func (commandRule) Evaluate(
 		}
 	}
 	for _, text := range nonShellExecutableText(input) {
+		if text.label == "args" {
+			continue
+		}
 		findings = append(findings, rawCommandFindings(text.text, text.label)...)
 	}
 	findings = append(findings, unknownLanguageFindings(input, policy)...)
@@ -533,11 +484,9 @@ type labeledText struct {
 }
 
 func shellCandidates(input ScanInput) []labeledText {
-	result := make([]labeledText, 0, len(input.CodeBlocks)+3)
+	result := make([]labeledText, 0, len(input.CodeBlocks)+shellCandidateCapacity)
 	if strings.TrimSpace(input.Command) != "" {
 		result = append(result, labeledText{"command", input.Command})
-	} else if len(input.Args) > 0 {
-		result = append(result, labeledText{"args", strings.Join(input.Args, " ")})
 	}
 	if isShellLanguage(input.Language) && strings.TrimSpace(input.Script) != "" {
 		result = append(result, labeledText{"script", input.Script})
@@ -567,6 +516,9 @@ func allExecutableText(input ScanInput) []labeledText {
 
 func nonShellExecutableText(input ScanInput) []labeledText {
 	result := make([]labeledText, 0, len(input.CodeBlocks)+1)
+	if len(input.Args) > 0 {
+		result = append(result, labeledText{"args", strings.Join(input.Args, " ")})
+	}
 	if strings.TrimSpace(input.Script) != "" && !isShellLanguage(input.Language) {
 		result = append(result, labeledText{"script", input.Script})
 	}
@@ -610,11 +562,11 @@ func knownCodeLanguage(language string) bool {
 	}
 }
 
-func unknownLanguageFinding(source string, policy Policy) Finding {
+func unknownLanguageFinding(source string, _ Policy) Finding {
 	return newFinding(
 		"CODE_UNKNOWN_LANGUAGE",
 		RiskLevelHigh,
-		policy.unknownLanguageAction,
+		DecisionNeedsHumanReview,
 		"unknown code language: source="+safeLabel(source),
 		"review the code manually or use a supported language",
 	)
@@ -639,7 +591,7 @@ func evaluateShellCommand(text, label string, policy Policy) []Finding {
 		return []Finding{newFinding(
 			"SHELL_PARSE_FAILED",
 			RiskLevelHigh,
-			policy.parseErrorAction,
+			DecisionNeedsHumanReview,
 			"shell input could not be parsed safely: source="+safeLabel(label),
 			"rewrite as literal arguments without shell expansion",
 		)}
@@ -649,7 +601,7 @@ func evaluateShellCommand(text, label string, policy Policy) []Finding {
 		findings = append(findings, newFinding(
 			"SHELL_COMPOUND_COMMAND",
 			RiskLevelMedium,
-			policy.pipelineAction,
+			DecisionAsk,
 			fmt.Sprintf(
 				"compound shell input: source=%s; parsed_segments=%d",
 				safeLabel(label),
@@ -662,16 +614,20 @@ func evaluateShellCommand(text, label string, policy Policy) []Finding {
 		if len(argv) == 0 {
 			continue
 		}
-		findings = append(
-			findings,
-			commandPolicyFindings(argv, index, label, policy)...,
-		)
-		findings = append(
-			findings,
-			parsedSpecialCommandFindings(argv, index, label)...,
-		)
+		findings = append(findings,
+			evaluateParsedCommand(argv, index, label, policy)...)
 	}
 	return findings
+}
+
+func evaluateParsedCommand(
+	argv []string,
+	index int,
+	label string,
+	policy Policy,
+) []Finding {
+	findings := commandPolicyFindings(argv, index, label, policy)
+	return append(findings, parsedSpecialCommandFindings(argv, index, label)...)
 }
 
 func parsedSpecialCommandFindings(
@@ -685,7 +641,7 @@ func parsedSpecialCommandFindings(
 		safeLabel(label),
 		index,
 	)
-	findings := make([]Finding, 0, 3)
+	findings := make([]Finding, 0, dangerFindingCapacity)
 	if parsedDangerousDelete(base, argv[1:]) {
 		findings = append(findings, newFinding(
 			"CMD_DANGEROUS_DELETE",
@@ -810,9 +766,9 @@ func commandPolicyFindings(
 			"use an explicitly allowed non-dangerous command",
 		)}
 	}
-	if isShellWrapper(base) {
+	if isImplicitlyDeniedCommand(argv) {
 		return []Finding{newFinding(
-			"CMD_SHELL_WRAPPER", RiskLevelHigh, DecisionDeny, evidence,
+			"CMD_PROCESS_WRAPPER", RiskLevelHigh, DecisionDeny, evidence,
 			"replace the wrapper with a directly auditable command",
 		)}
 	}
@@ -825,6 +781,15 @@ func commandPolicyFindings(
 		)}
 	}
 	return nil
+}
+
+func isImplicitlyDeniedCommand(argv []string) bool {
+	if len(argv) == 0 {
+		return false
+	}
+	probe := shellsafe.PolicyFromLists([]string{argv[0]}, nil)
+	err := probe.Check(&shellsafe.Pipeline{Commands: [][]string{argv}})
+	return err != nil
 }
 
 func commandDenied(denied []string, command string) bool {
@@ -862,16 +827,6 @@ func commandBase(command string) string {
 	return path.Base(filepath.ToSlash(command))
 }
 
-var shellWrappers = stringSet(
-	"sh", "bash", "zsh", "dash", "ksh", "fish", "eval",
-	"cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe",
-)
-
-func isShellWrapper(command string) bool {
-	_, ok := shellWrappers[commandBase(strings.ToLower(command))]
-	return ok
-}
-
 var (
 	rawRMDeletePattern     = regexp.MustCompile(`(?i)(^|[\s"'=:;|&])rm\s+([^\n;|&]+)`)
 	dangerousDeletePattern = regexp.MustCompile(`(?i)(^|[\s"'=:;|&])(remove-item\s+[^\n;|&]*-(?:recurse|r)[^\n;|&]*(?:/|\\|\*|\.\.)|rmdir\s+/s\b|del\s+/[sq]\b)`)
@@ -880,7 +835,7 @@ var (
 )
 
 func rawCommandFindings(text, label string) []Finding {
-	findings := make([]Finding, 0, 3)
+	findings := make([]Finding, 0, dangerFindingCapacity)
 	if rawDangerousDelete(text) {
 		findings = append(findings, newFinding(
 			"CMD_DANGEROUS_DELETE",
@@ -915,7 +870,7 @@ func rawDangerousDelete(text string) bool {
 		return true
 	}
 	for _, match := range rawRMDeletePattern.FindAllStringSubmatch(text, -1) {
-		if len(match) != 3 {
+		if len(match) != rawRMSubmatchCount {
 			continue
 		}
 		hasRecursive := false

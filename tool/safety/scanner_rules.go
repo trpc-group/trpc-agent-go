@@ -12,9 +12,10 @@ package safety
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"net"
-	"net/url"
+	"path"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -24,9 +25,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
-type pathRule struct{}
+const hoursPerDay = 24
 
-func (pathRule) ID() string { return "path" }
+type pathRule struct{}
 
 func (pathRule) Evaluate(
 	_ context.Context,
@@ -73,7 +74,19 @@ func (pathRule) Evaluate(
 }
 
 func pathTexts(input ScanInput) []labeledText {
-	result := allExecutableText(input)
+	result := make([]labeledText, 0)
+	if len(input.Args) > 0 {
+		result = append(result, argvPathTexts(input.Args, "args", input.WorkingDir)...)
+	}
+	for _, candidate := range shellCandidates(input) {
+		result = append(result,
+			parsedPathTexts(candidate.text, candidate.label, input.WorkingDir)...)
+	}
+	for _, candidate := range nonShellExecutableText(input) {
+		if candidate.label != "args" {
+			result = append(result, candidate)
+		}
+	}
 	if strings.TrimSpace(input.WorkingDir) != "" {
 		result = append(result, labeledText{"working_dir", input.WorkingDir})
 	}
@@ -87,6 +100,84 @@ func pathTexts(input ScanInput) []labeledText {
 		}
 	}
 	return result
+}
+
+func parsedPathTexts(text, label, workingDir string) []labeledText {
+	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
+	if err != nil {
+		return []labeledText{{label, text}}
+	}
+	result := make([]labeledText, 0)
+	for segmentIndex, argv := range pipeline.Commands {
+		segmentLabel := fmt.Sprintf("%s.segment[%d]", label, segmentIndex)
+		result = append(result, argvPathTexts(argv, segmentLabel, workingDir)...)
+	}
+	return result
+}
+
+func argvPathTexts(argv []string, label, workingDir string) []labeledText {
+	result := make([]labeledText, 0, len(argv))
+	for index, argument := range argv {
+		argumentLabel := fmt.Sprintf("%s.argv[%d]", label, index)
+		result = appendPathValue(result, argumentLabel, argument, workingDir)
+		if value, ok := optionPathValue(argument); ok {
+			result = appendPathValue(result, argumentLabel+".value", value, workingDir)
+		}
+	}
+	return result
+}
+
+func appendPathValue(
+	result []labeledText,
+	label string,
+	value string,
+	workingDir string,
+) []labeledText {
+	result = append(result, labeledText{label, value})
+	resolved, ok := lexicalPathValue(value, workingDir)
+	if ok && resolved != value {
+		result = append(result, labeledText{label + ".resolved", resolved})
+	}
+	return result
+}
+
+func optionPathValue(argument string) (string, bool) {
+	if !strings.HasPrefix(argument, "-") {
+		return "", false
+	}
+	index := strings.IndexByte(argument, '=')
+	if index <= 0 || index+1 >= len(argument) {
+		return "", false
+	}
+	return argument[index+1:], true
+}
+
+func lexicalPathValue(value, workingDir string) (string, bool) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if normalized == "" || !looksLikePath(normalized) {
+		return "", false
+	}
+	if strings.HasPrefix(normalized, "~/") || lexicalPathAbsolute(normalized) {
+		return path.Clean(normalized), true
+	}
+	base := strings.ReplaceAll(strings.TrimSpace(workingDir), "\\", "/")
+	if base == "" {
+		return path.Clean(normalized), true
+	}
+	return path.Clean(path.Join(base, normalized)), true
+}
+
+func looksLikePath(value string) bool {
+	return strings.ContainsAny(value, "/\\") || strings.HasPrefix(value, ".") ||
+		containsEnvFile(strings.ToLower(value)) ||
+		containsCredentialFile(strings.ToLower(value))
+}
+
+func lexicalPathAbsolute(value string) bool {
+	if strings.HasPrefix(value, "/") {
+		return true
+	}
+	return len(value) >= 3 && value[1] == ':' && value[2] == '/'
 }
 
 func normalizePathText(value string) string {
@@ -129,8 +220,6 @@ func pathFinding(ruleID, source, evidence string) Finding {
 
 type networkRule struct{}
 
-func (networkRule) ID() string { return "network" }
-
 var urlPattern = regexp.MustCompile(`(?i)https?://[^\s'"<>]+`)
 
 func (networkRule) Evaluate(
@@ -142,9 +231,28 @@ func (networkRule) Evaluate(
 		return nil
 	}
 	findings := make([]Finding, 0)
+	argsHandled := false
+	customOpenWorld := input.Metadata.OpenWorld && input.Backend == BackendCustom
+	if len(input.Args) > 0 {
+		var argsFindings []Finding
+		argsFindings, argsHandled = inspectNetworkArgv(
+			input.Args, "args", policy, customOpenWorld,
+		)
+		findings = append(findings, argsFindings...)
+	}
 	for _, candidate := range allExecutableText(input) {
+		if argsHandled && candidate.label == "args" {
+			continue
+		}
+		parsedFindings, handled := inspectNetworkText(
+			candidate.text, candidate.label, policy, customOpenWorld,
+		)
+		if handled {
+			findings = append(findings, parsedFindings...)
+			continue
+		}
 		urls := urlPattern.FindAllString(candidate.text, -1)
-		customClient := isCustomNetworkClient(candidate.text, policy, len(urls) > 0)
+		customClient := customNetworkTextEvidence(candidate.text, len(urls) > 0)
 		if !networkExecutionEvidence(candidate.text) && !customClient {
 			continue
 		}
@@ -157,11 +265,7 @@ func (networkRule) Evaluate(
 				"remove destination remapping and use an allowlisted hostname",
 			))
 		}
-		literalFindings, classified := inspectLiteralNetworkTargets(
-			candidate.text, candidate.label, policy,
-		)
-		findings = append(findings, literalFindings...)
-		if len(urls) == 0 && !classified {
+		if len(urls) == 0 {
 			findings = append(findings, newFinding(
 				"NETWORK_TARGET_UNPARSABLE",
 				RiskLevelHigh,
@@ -173,7 +277,7 @@ func (networkRule) Evaluate(
 		for _, rawURL := range urls {
 			findings = append(
 				findings,
-				evaluateURL(rawURL, candidate.label, policy)...,
+				evaluateLiteralOrURLTarget(rawURL, candidate.label, policy)...,
 			)
 		}
 		if customClient {
@@ -196,13 +300,22 @@ func networkEnvironmentFindings(env map[string]string, policy Policy) []Finding 
 		if !networkEnvironmentKey(upper) {
 			continue
 		}
+		if upper == "PROXY" || strings.HasSuffix(upper, "_PROXY") {
+			findings = append(findings, newFinding(
+				ruleNetworkDestinationMap, RiskLevelHigh, DecisionDeny,
+				"network proxy environment may remap the destination: source="+
+					safeLabel("env."+key),
+				"remove proxy variables and enforce routing in the network sandbox",
+			))
+		}
 		urls := urlPattern.FindAllString(value, -1)
 		for _, rawURL := range urls {
-			findings = append(findings, evaluateURL(rawURL, "env."+key, policy)...)
+			findings = append(findings,
+				evaluateLiteralOrURLTarget(rawURL, "env."+key, policy)...)
 		}
 		if len(urls) == 0 && strings.TrimSpace(value) != "" {
 			findings = append(findings,
-				evaluateLiteralNetworkTarget(value, "env."+key, policy)...)
+				evaluateLiteralOrURLTarget(value, "env."+key, policy)...)
 		}
 	}
 	return findings
@@ -217,7 +330,7 @@ func networkEnvironmentKey(key string) bool {
 }
 
 func networkExecutionEvidence(text string) bool {
-	if hasParsedNetworkCommand(text) || hasNetworkCommandToken(text) {
+	if hasNetworkCommandToken(text) {
 		return true
 	}
 	lower := strings.ToLower(text)
@@ -238,26 +351,8 @@ func networkExecutionEvidence(text string) bool {
 	return false
 }
 
-func isCustomNetworkClient(text string, policy Policy, hasURL bool) bool {
-	if !hasURL {
-		return false
-	}
-	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
-	if err != nil {
-		return false
-	}
-	for _, argv := range pipeline.Commands {
-		if len(argv) == 0 || isPassiveURLCommand(argv[0]) ||
-			isNetworkCommandName(networkCommandBase(argv[0])) ||
-			networkCommandBase(argv[0]) == "git" {
-			continue
-		}
-		if commandAllowed(policy.allowedCommands, argv[0]) &&
-			urlPattern.MatchString(strings.Join(argv[1:], " ")) {
-			return true
-		}
-	}
-	return false
+func customNetworkTextEvidence(text string, hasURL bool) bool {
+	return hasURL && strings.Contains(strings.ToLower(text), "custom-fetch")
 }
 
 func isPassiveURLCommand(command string) bool {
@@ -267,29 +362,6 @@ func isPassiveURLCommand(command string) bool {
 	default:
 		return false
 	}
-}
-
-func evaluateURL(rawURL, source string, policy Policy) []Finding {
-	if strings.ContainsAny(rawURL, "${}`") || strings.Contains(rawURL, "$(") {
-		return []Finding{newFinding(
-			"NETWORK_DYNAMIC_TARGET",
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			"dynamic network target detected: source="+safeLabel(source),
-			"replace the target with a literal allowlisted hostname",
-		)}
-	}
-	parsed, err := url.Parse(rawURL)
-	if err != nil || parsed.Hostname() == "" {
-		return []Finding{newFinding(
-			"NETWORK_URL_UNPARSABLE",
-			RiskLevelHigh,
-			DecisionNeedsHumanReview,
-			"network URL could not be classified: source="+safeLabel(source),
-			"use a literal HTTP(S) URL with an allowlisted hostname",
-		)}
-	}
-	return evaluateNetworkHost(parsed.Hostname(), source, policy)
 }
 
 func evaluateNetworkHost(host, source string, policy Policy) []Finding {
@@ -335,8 +407,6 @@ func domainAllowed(allowed []string, host string) bool {
 
 type hostRule struct{}
 
-func (hostRule) ID() string { return "host" }
-
 func (hostRule) Evaluate(
 	_ context.Context,
 	input ScanInput,
@@ -359,7 +429,7 @@ func (hostRule) Evaluate(
 		findings = append(findings, newFinding(
 			"HOST_PTY_SESSION",
 			RiskLevelMedium,
-			policy.hostPTYAction,
+			DecisionAsk,
 			"PTY execution requested",
 			"use non-interactive execution when possible",
 		))
@@ -378,35 +448,15 @@ func (hostRule) Evaluate(
 		findings = append(findings, newFinding(
 			"HOST_BACKGROUND_PROCESS",
 			RiskLevelHigh,
-			policy.hostBackgroundAction,
+			DecisionDeny,
 			"background process requested",
 			"run synchronously with a timeout or use a sandbox supervisor",
 		))
-		findings = append(findings, newFinding(
-			"HOST_PROCESS_RESIDUAL_RISK",
-			RiskLevelHigh,
-			DecisionDeny,
-			"process may remain after the tool call",
-			"use an execution backend that owns the process lifecycle",
-		))
-	}
-	for _, text := range allExecutableText(input) {
-		if privilegePattern.MatchString(text.text) {
-			findings = append(findings, newFinding(
-				"HOST_PRIVILEGE_ESCALATION",
-				RiskLevelHigh,
-				DecisionDeny,
-				"host privilege escalation detected: source="+safeLabel(text.label),
-				"remove privilege escalation and use backend isolation",
-			))
-		}
 	}
 	return findings
 }
 
 type dependencyEnvironmentRule struct{}
-
-func (dependencyEnvironmentRule) ID() string { return "dependency_environment" }
 
 var (
 	goInstallPattern  = regexp.MustCompile(`\bgo\s+install\b`)
@@ -431,19 +481,19 @@ func (dependencyEnvironmentRule) Evaluate(
 	}
 	findings := make([]Finding, 0)
 	for _, text := range allExecutableText(input) {
-		findings = append(findings, dependencyTextFindings(text, policy)...)
+		findings = append(findings, dependencyTextFindings(text)...)
 	}
 	return append(findings, environmentFindings(input.Env, policy)...)
 }
 
-func dependencyTextFindings(text labeledText, policy Policy) []Finding {
+func dependencyTextFindings(text labeledText) []Finding {
 	lower := strings.ToLower(text.text)
 	source := safeLabel(text.label)
 	switch {
 	case goInstallPattern.MatchString(lower):
-		return []Finding{dependencyFinding("DEPENDENCY_GO_INSTALL", source, policy)}
+		return []Finding{dependencyFinding("DEPENDENCY_GO_INSTALL", source)}
 	case npmInstallPattern.MatchString(lower):
-		decision := policy.dependencyInstallAction
+		decision := DecisionAsk
 		if strings.Contains(lower, " -g") || strings.Contains(lower, "--global") {
 			decision = DecisionDeny
 		}
@@ -451,7 +501,7 @@ func dependencyTextFindings(text labeledText, policy Policy) []Finding {
 			"DEPENDENCY_NPM_INSTALL", source, decision,
 		)}
 	case pipInstallPattern.MatchString(lower):
-		return []Finding{dependencyFinding("DEPENDENCY_PIP_INSTALL", source, policy)}
+		return []Finding{dependencyFinding("DEPENDENCY_PIP_INSTALL", source)}
 	case systemInstallPattern.MatchString(lower):
 		return []Finding{dependencyFindingWithDecision(
 			"DEPENDENCY_SYSTEM_INSTALL", source, DecisionDeny,
@@ -491,11 +541,11 @@ func environmentFindings(env map[string]string, policy Policy) []Finding {
 	return findings
 }
 
-func dependencyFinding(ruleID, source string, policy Policy) Finding {
+func dependencyFinding(ruleID, source string) Finding {
 	return dependencyFindingWithDecision(
 		ruleID,
 		source,
-		policy.dependencyInstallAction,
+		DecisionAsk,
 	)
 }
 
@@ -534,8 +584,6 @@ func sensitiveEnvKey(key string) bool {
 }
 
 type resourceRule struct{}
-
-func (resourceRule) ID() string { return "resource" }
 
 var (
 	yesPattern          = regexp.MustCompile(`(^|[\s;|&])yes(?:\s|$)`)
@@ -621,7 +669,17 @@ func resourceTextFindings(text labeledText, policy Policy) []Finding {
 		))
 	}
 	for _, match := range highParallelPattern.FindAllStringSubmatch(lower, -1) {
-		value, _ := strconv.Atoi(match[1])
+		value, err := strconv.Atoi(match[1])
+		if err != nil {
+			findings = append(findings, newFinding(
+				"RESOURCE_CONCURRENCY_UNPARSABLE",
+				RiskLevelHigh,
+				DecisionDeny,
+				"requested concurrency could not be bounded: source="+source,
+				"use a literal concurrency within the configured maximum",
+			))
+			break
+		}
 		if value > policy.maxConcurrency {
 			findings = append(findings, newFinding(
 				"RESOURCE_HIGH_CONCURRENCY",
@@ -704,7 +762,7 @@ func sleepDuration(value string) (time.Duration, error) {
 	case "h":
 		multiplier = time.Hour
 	case "d":
-		multiplier = 24 * time.Hour
+		multiplier = hoursPerDay * time.Hour
 	}
 	nanoseconds := seconds * float64(multiplier)
 	if nanoseconds >= float64(math.MaxInt64) {
@@ -714,8 +772,6 @@ func sleepDuration(value string) (time.Duration, error) {
 }
 
 type secretRule struct{}
-
-func (secretRule) ID() string { return "secret" }
 
 func (secretRule) Evaluate(
 	_ context.Context,
@@ -731,17 +787,6 @@ func (secretRule) Evaluate(
 			findings,
 			secretFindings(candidate.text, candidate.label)...,
 		)
-	}
-	for key, value := range input.Env {
-		if containsSecret(value) {
-			findings = append(findings, newFinding(
-				secretRuleID(value),
-				RiskLevelHigh,
-				DecisionDeny,
-				"secret material detected: source=env."+safeLabel(key),
-				"remove the secret and use a scoped secret provider",
-			))
-		}
 	}
 	return findings
 }
@@ -783,8 +828,7 @@ func parsedSegmentCount(input ScanInput) int {
 	count := 0
 	for _, candidate := range shellCandidates(input) {
 		pipeline, err := shellsafe.ParseWithMaxSegments(
-			candidate.text,
-			guardMaxSegments,
+			candidate.text, guardMaxSegments,
 		)
 		if err == nil {
 			count += len(pipeline.Commands)

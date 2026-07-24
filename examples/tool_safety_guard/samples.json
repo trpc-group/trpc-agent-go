@@ -58,7 +58,7 @@
     "tool_name": "workspace_exec",
     "kind": "workspace_exec",
     "operation": "execute",
-    "command": "curl https://api.github.com/repos/x/y",
+    "command": "curl -q --noproxy '*' https://api.github.com/repos/x/y",
     "backend": "workspaceexec",
     "working_dir": ".",
     "timeout": "30s",
@@ -67,7 +67,7 @@
   {
     "name": "shell wrapper",
     "expected_decision": "deny",
-    "required_rule_id": "CMD_SHELL_WRAPPER",
+    "required_rule_id": "CMD_PROCESS_WRAPPER",
     "tool_name": "workspace_exec",
     "kind": "workspace_exec",
     "operation": "execute",
