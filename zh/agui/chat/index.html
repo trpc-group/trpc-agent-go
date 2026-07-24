@@ -4716,7 +4716,7 @@
 <li><code>triggerName</code>：人类可读的触发名称。<code>tool_call</code> 时是 AgentTool 的名字，<code>transfer</code> 时为 <code>transfer_to_agent</code>。</li>
 </ul>
 <p>之所以需要 <code>parentMetadata</code>，是因为 <code>parentInvocationId</code> 只标识父级执行，并不能区分父级内部的具体哪一次 tool call。当模型在一轮里对同一个子 Agent 发起多个并行 AgentTool 调用时，所有派生出的 invocation 共享相同的 <code>parentInvocationId</code>；只有 <code>parentMetadata.triggerId</code> 才能区分每个子 invocation 对应的是哪一次 <code>TOOL_CALL_START</code>。当父级不是通过工具调用触发本次执行时（例如顶层 run），<code>parentMetadata</code> 字段缺省。</p>
-<p>消息快照路由返回的 <code>MESSAGES_SNAPSHOT</code> 事件也可以携带来源信息。此时 <code>rawEvent</code> 不是单条事件的来源信息，而是按消息和工具调用建立的来源索引：</p>
+<p>消息快照路由返回的 <code>MESSAGES_SNAPSHOT</code> 事件也可以携带来源信息。此时 <code>rawEvent</code> 不是单条事件的来源信息，而是按消息、工具调用和运行建立的来源索引：</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-30-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-30-3"> 3</a></span>
@@ -4744,7 +4744,16 @@
 <span class="normal"><a href="#__codelineno-30-25">25</a></span>
 <span class="normal"><a href="#__codelineno-30-26">26</a></span>
 <span class="normal"><a href="#__codelineno-30-27">27</a></span>
-<span class="normal"><a href="#__codelineno-30-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-30-28">28</a></span>
+<span class="normal"><a href="#__codelineno-30-29">29</a></span>
+<span class="normal"><a href="#__codelineno-30-30">30</a></span>
+<span class="normal"><a href="#__codelineno-30-31">31</a></span>
+<span class="normal"><a href="#__codelineno-30-32">32</a></span>
+<span class="normal"><a href="#__codelineno-30-33">33</a></span>
+<span class="normal"><a href="#__codelineno-30-34">34</a></span>
+<span class="normal"><a href="#__codelineno-30-35">35</a></span>
+<span class="normal"><a href="#__codelineno-30-36">36</a></span>
+<span class="normal"><a href="#__codelineno-30-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="p">{</span>
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MESSAGES_SNAPSHOT&quot;</span><span class="p">,</span>
 </span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="w">  </span><span class="nt">&quot;rawEvent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="w">    </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -4769,11 +4778,20 @@
 </span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="w">        </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;root.member-a&quot;</span><span class="p">,</span>
 </span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a><span class="w">        </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1781258401000</span>
 </span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="p">}</span>
+</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">    </span><span class="nt">&quot;runs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="w">      </span><span class="nt">&quot;run-1&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="w">        </span><span class="nt">&quot;author&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span><span class="p">,</span>
+</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">        </span><span class="nt">&quot;forwardedProps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">          </span><span class="nt">&quot;file_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/demo.png&quot;</span>
+</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">        </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1781258400000</span>
+</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>恢复历史消息时，可以通过 <code>rawEvent.messages[messageId]</code> 获取消息来源，也可以通过 <code>rawEvent.toolCalls[toolCallId]</code> 获取工具调用来源。索引中的来源信息与实时事件里的 <code>rawEvent</code> 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。</p>
+<p>恢复历史消息时，可以通过 <code>rawEvent.messages[messageId]</code> 获取消息来源和时间戳，也可以通过 <code>rawEvent.toolCalls[toolCallId]</code> 获取工具调用来源和时间戳；如果需要恢复请求级 <code>forwardedProps</code>，可以读取 <code>rawEvent.runs[runId].forwardedProps</code>。索引中的 <code>timestamp</code> 优先复用历史实时事件顶层的 <code>timestamp</code>；只有旧数据缺少事件 <code>timestamp</code> 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 <code>rawEvent</code> 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。</p>
 <h2 id="_13">外部工具</h2>
 <p>外部工具用于工具调用由调用方执行的场景。AG-UI 服务端不直接运行这些工具，但仍负责让 Agent 生成工具调用、把调用信息发送给调用方、接收工具结果，并把结果交给 Agent 继续运行。</p>
 <p>通用链路如下：</p>
@@ -5790,7 +5808,7 @@ resolver 只需要返回业务额外需要的 run options。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月23日 02:20:16 UTC">2026-07-23 02:20:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 01:40:10 UTC">2026-07-24 01:40:10</span>
   </span>
 
     

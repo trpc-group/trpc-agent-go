@@ -4716,7 +4716,7 @@
 <li><code>triggerName</code>: a human-readable trigger name. For <code>tool_call</code> it is the AgentTool name; for <code>transfer</code> it is <code>transfer_to_agent</code>.</li>
 </ul>
 <p><code>parentMetadata</code> is necessary because <code>parentInvocationId</code> only identifies the parent execution, not the specific tool call inside it. When a model issues parallel AgentTool calls to the same sub-agent in one turn, all spawned invocations share the same <code>parentInvocationId</code>; only <code>parentMetadata.triggerId</code> can disambiguate which <code>TOOL_CALL_START</code> each child invocation belongs to. When the parent did not invoke this child via a tool call (e.g., a top-level run), <code>parentMetadata</code> is absent.</p>
-<p>The <code>MESSAGES_SNAPSHOT</code> event returned by the message snapshot route can also carry source information. In this case, <code>rawEvent</code> is not source information for one event, but a source index built by message and tool call:</p>
+<p>The <code>MESSAGES_SNAPSHOT</code> event returned by the message snapshot route can also carry source information. In this case, <code>rawEvent</code> is not source information for one event, but a source index built by message, tool call, and run:</p>
 <div class="language-json highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-30-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-30-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-30-3"> 3</a></span>
@@ -4744,7 +4744,16 @@
 <span class="normal"><a href="#__codelineno-30-25">25</a></span>
 <span class="normal"><a href="#__codelineno-30-26">26</a></span>
 <span class="normal"><a href="#__codelineno-30-27">27</a></span>
-<span class="normal"><a href="#__codelineno-30-28">28</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="p">{</span>
+<span class="normal"><a href="#__codelineno-30-28">28</a></span>
+<span class="normal"><a href="#__codelineno-30-29">29</a></span>
+<span class="normal"><a href="#__codelineno-30-30">30</a></span>
+<span class="normal"><a href="#__codelineno-30-31">31</a></span>
+<span class="normal"><a href="#__codelineno-30-32">32</a></span>
+<span class="normal"><a href="#__codelineno-30-33">33</a></span>
+<span class="normal"><a href="#__codelineno-30-34">34</a></span>
+<span class="normal"><a href="#__codelineno-30-35">35</a></span>
+<span class="normal"><a href="#__codelineno-30-36">36</a></span>
+<span class="normal"><a href="#__codelineno-30-37">37</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-30-1"><a id="__codelineno-30-1" name="__codelineno-30-1"></a><span class="p">{</span>
 </span><span id="__span-30-2"><a id="__codelineno-30-2" name="__codelineno-30-2"></a><span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;MESSAGES_SNAPSHOT&quot;</span><span class="p">,</span>
 </span><span id="__span-30-3"><a id="__codelineno-30-3" name="__codelineno-30-3"></a><span class="w">  </span><span class="nt">&quot;rawEvent&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
 </span><span id="__span-30-4"><a id="__codelineno-30-4" name="__codelineno-30-4"></a><span class="w">    </span><span class="nt">&quot;messages&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
@@ -4769,11 +4778,20 @@
 </span><span id="__span-30-23"><a id="__codelineno-30-23" name="__codelineno-30-23"></a><span class="w">        </span><span class="nt">&quot;branch&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;root.member-a&quot;</span><span class="p">,</span>
 </span><span id="__span-30-24"><a id="__codelineno-30-24" name="__codelineno-30-24"></a><span class="w">        </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1781258401000</span>
 </span><span id="__span-30-25"><a id="__codelineno-30-25" name="__codelineno-30-25"></a><span class="w">      </span><span class="p">}</span>
-</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="w">    </span><span class="p">}</span>
-</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">  </span><span class="p">}</span>
-</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="p">}</span>
+</span><span id="__span-30-26"><a id="__codelineno-30-26" name="__codelineno-30-26"></a><span class="w">    </span><span class="p">},</span>
+</span><span id="__span-30-27"><a id="__codelineno-30-27" name="__codelineno-30-27"></a><span class="w">    </span><span class="nt">&quot;runs&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-28"><a id="__codelineno-30-28" name="__codelineno-30-28"></a><span class="w">      </span><span class="nt">&quot;run-1&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-29"><a id="__codelineno-30-29" name="__codelineno-30-29"></a><span class="w">        </span><span class="nt">&quot;author&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;demo-user&quot;</span><span class="p">,</span>
+</span><span id="__span-30-30"><a id="__codelineno-30-30" name="__codelineno-30-30"></a><span class="w">        </span><span class="nt">&quot;forwardedProps&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-30-31"><a id="__codelineno-30-31" name="__codelineno-30-31"></a><span class="w">          </span><span class="nt">&quot;file_url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://example.com/demo.png&quot;</span>
+</span><span id="__span-30-32"><a id="__codelineno-30-32" name="__codelineno-30-32"></a><span class="w">        </span><span class="p">},</span>
+</span><span id="__span-30-33"><a id="__codelineno-30-33" name="__codelineno-30-33"></a><span class="w">        </span><span class="nt">&quot;timestamp&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1781258400000</span>
+</span><span id="__span-30-34"><a id="__codelineno-30-34" name="__codelineno-30-34"></a><span class="w">      </span><span class="p">}</span>
+</span><span id="__span-30-35"><a id="__codelineno-30-35" name="__codelineno-30-35"></a><span class="w">    </span><span class="p">}</span>
+</span><span id="__span-30-36"><a id="__codelineno-30-36" name="__codelineno-30-36"></a><span class="w">  </span><span class="p">}</span>
+</span><span id="__span-30-37"><a id="__codelineno-30-37" name="__codelineno-30-37"></a><span class="p">}</span>
 </span></code></pre></div></td></tr></table></div>
-<p>When restoring historical messages, use <code>rawEvent.messages[messageId]</code> to get the message source and timestamp, or <code>rawEvent.toolCalls[toolCallId]</code> to get the tool call source and timestamp. The indexed <code>timestamp</code> first reuses the top-level <code>timestamp</code> from the historical real-time event; only old data without an event <code>timestamp</code> falls back to the persisted track event time. Source information in the index uses the same fields as <code>rawEvent</code> in real-time events, so the frontend can reuse those field semantics to restore grouping state.</p>
+<p>When restoring historical messages, use <code>rawEvent.messages[messageId]</code> to get the message source and timestamp, or <code>rawEvent.toolCalls[toolCallId]</code> to get the tool call source and timestamp. To restore request-level <code>forwardedProps</code>, read <code>rawEvent.runs[runId].forwardedProps</code>. The indexed <code>timestamp</code> first reuses the top-level <code>timestamp</code> from the historical real-time event; only old data without an event <code>timestamp</code> falls back to the persisted track event time. Source information in the index uses the same fields as <code>rawEvent</code> in real-time events, so the frontend can reuse those field semantics to restore grouping state.</p>
 <h2 id="external-tools">External Tools</h2>
 <p>External tools are used when tool calls are executed by the caller. The AG-UI server does not directly run these tools, but it still lets the agent generate tool calls, sends call information to the caller, receives tool results, and passes those results back to the agent to continue running.</p>
 <p>The general flow is:</p>
@@ -5793,7 +5811,7 @@ custom resolver only needs to return additional run options.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 23, 2026 02:20:16 UTC">2026-07-23 02:20:16</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 24, 2026 01:40:10 UTC">2026-07-24 01:40:10</span>
   </span>
 
     
