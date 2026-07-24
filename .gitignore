@@ -9,6 +9,7 @@ node_modules/
 .next/
 *.out
 *.log
+*.test
 coverage.out
 coverage.html
 cover.html
