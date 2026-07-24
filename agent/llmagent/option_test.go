@@ -23,6 +23,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	toolskill "trpc.group/trpc-go/trpc-agent-go/tool/skill"
+	toolworkspaceexec "trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 type stubSkillStager struct{}
@@ -350,6 +351,13 @@ func TestWithWorkspaceExecSurfaceEnabled(t *testing.T) {
 	)
 	require.NotNil(t, b.option.workspaceExecSurfaceEnabled)
 	require.False(t, *b.option.workspaceExecSurfaceEnabled)
+}
+
+func TestWithWorkspaceExecOutputLimits(t *testing.T) {
+	limits := toolworkspaceexec.OutputLimits{MaxOutputBytes: 1234}
+	opts := &Options{}
+	WithWorkspaceExecOutputLimits(limits)(opts)
+	require.Equal(t, limits, opts.workspaceExecOutputLimits)
 }
 
 func TestWithSkillsCapabilityGuidance(t *testing.T) {
