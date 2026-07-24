@@ -59,6 +59,10 @@ func Run(opts Options) error {
 		return err
 	}
 	opts = withInferredInput(opts)
+	opts.RepoPath, err = canonicalRepoPath(opts.RepoPath)
+	if err != nil {
+		return err
+	}
 	req := cragent.Request{
 		DiffFile:       opts.DiffFile,
 		FileList:       opts.FileList,
@@ -133,4 +137,16 @@ func withInferredInput(opts Options) Options {
 		opts.RepoPath = "."
 	}
 	return opts
+}
+
+func canonicalRepoPath(repoPath string) (string, error) {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return "", nil
+	}
+	absPath, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository path %q: %w", repoPath, err)
+	}
+	return filepath.Clean(absPath), nil
 }

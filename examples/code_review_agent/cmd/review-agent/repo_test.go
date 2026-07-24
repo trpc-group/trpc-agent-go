@@ -92,6 +92,35 @@ func TestRunInfersCurrentDirectoryRepoPathWhenInputIsOmitted(t *testing.T) {
 	}
 }
 
+func TestCanonicalRepoPathMakesInferredAndRelativePathsAbsolute(t *testing.T) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	inferred := withInferredInput(Options{})
+	got, err := canonicalRepoPath(inferred.RepoPath)
+	if err != nil {
+		t.Fatalf("canonical inferred repo path: %v", err)
+	}
+	if got != workingDir {
+		t.Fatalf("canonical inferred repo path = %q, want %q", got, workingDir)
+	}
+
+	relativeRepo := filepath.Join("testdata", "fixtures")
+	got, err = canonicalRepoPath(relativeRepo)
+	if err != nil {
+		t.Fatalf("canonical relative repo path: %v", err)
+	}
+	want, err := filepath.Abs(relativeRepo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != filepath.Clean(want) {
+		t.Fatalf("canonical relative repo path = %q, want %q", got, filepath.Clean(want))
+	}
+}
+
 func TestRunUsesGeneratedRepoFixtureWithBaseAndHeadRefs(t *testing.T) {
 	repo := createRiskyGitRepoFixture(t)
 
