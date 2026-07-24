@@ -32,6 +32,7 @@ import (
 	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	aguitrack "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -2331,12 +2332,10 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	r := &runner{tracker: tracker}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
 	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
-
-	err := r.recordUserMessage(context.Background(), key, msg)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, nil))
 	require.NoError(t, err)
 	assert.Empty(t, msg.ID)
 	assert.Empty(t, msg.Name)
-
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	require.Len(t, tracker.events, 1)
@@ -2351,6 +2350,137 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	content, ok := userMessage.ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hi", content)
+}
+
+func TestRecordUserMessageTracksForwardedPropsSourceMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	forwardedProps := map[string]any{
+		"file_url": "https://example.com/demo.png",
+		"attachments": []any{
+			map[string]any{"id": "file-1", "mimeType": "image/png"},
+		},
+	}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	got, ok := custom.GetBaseEvent().RawEvent.(runForwardedPropsSourceMetadata)
+	require.True(t, ok)
+	assert.Equal(t, "run", got.RunID)
+	metadata, ok := source.FromRawEvent(got)
+	require.True(t, ok)
+	assert.Equal(t, "demo-user", metadata.Author)
+	assert.Equal(t, forwardedProps, metadata.ForwardedProps)
+	payload, err := custom.ToJSON()
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	rawEvent, ok := decoded["rawEvent"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "run", rawEvent["runId"])
+}
+
+func TestRecordUserMessageSkipsForwardedPropsMetadataByDefault(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"file_url": "https://example.com/demo.png"},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsInvalidForwardedPropsMetadata(t *testing.T) {
+	originalErrorfContext := log.ErrorfContext
+	errorCalls := 0
+	var gotFormat string
+	log.ErrorfContext = func(_ context.Context, format string, _ ...any) {
+		errorCalls++
+		gotFormat = format
+	}
+	t.Cleanup(func() {
+		log.ErrorfContext = originalErrorfContext
+	})
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"bad": func() {}},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+	assert.Equal(t, 1, errorCalls)
+	assert.Contains(t, gotFormat, "marshal forwardedProps source metadata")
+}
+
+func TestRecordUserMessageSkipsNilForwardedPropsMetadata(t *testing.T) {
+	var forwardedProps map[string]any
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsMissingForwardedPropsMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
 }
 
 func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
@@ -2526,12 +2656,31 @@ func TestResolveAppNameReturnsResolverError(t *testing.T) {
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
 	r := &runner{}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
-
-	err := r.recordUserMessage(context.Background(), key, nil)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, nil, nil))
 	assert.ErrorContains(t, err, "user message is nil")
-
-	err = r.recordUserMessage(context.Background(), key, &types.Message{Role: types.RoleTool, Content: "hi"})
+	err = r.recordUserMessage(context.Background(), recordUserMessageInput(
+		key,
+		&types.Message{Role: types.RoleTool, Content: "hi"},
+		nil,
+	))
 	assert.ErrorContains(t, err, "user message role must be user")
+}
+
+func recordUserMessageInput(
+	key session.Key,
+	message *types.Message,
+	runAgentInput *adapter.RunAgentInput,
+) *runInput {
+	if runAgentInput == nil {
+		runAgentInput = &adapter.RunAgentInput{}
+	}
+	return &runInput{
+		key:           key,
+		threadID:      runAgentInput.ThreadID,
+		runID:         runAgentInput.RunID,
+		runAgentInput: runAgentInput,
+		messages:      &runAgentMessages{userMessage: message},
+	}
 }
 
 func TestRunUserMessageRecordedInTrackAsCustomEventWithStringContent(t *testing.T) {
