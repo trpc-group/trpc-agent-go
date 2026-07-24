@@ -46,6 +46,9 @@ const (
 	OpGetSession OpType = "GetSession"
 	// OpAppendTrackEvent appends a track event.
 	OpAppendTrackEvent OpType = "AppendTrackEvent"
+	// OpConcurrentAppendEvents appends multiple events concurrently using
+	// goroutines to test cross-backend ordering consistency under contention.
+	OpConcurrentAppendEvents OpType = "ConcurrentAppendEvents"
 	// OpGetSessionSummaryText retrieves summary text.
 	OpGetSessionSummaryText OpType = "GetSessionSummaryText"
 	// OpReadMemories reads memories.
@@ -133,6 +136,11 @@ type DiffEntry struct {
 // EventData carries the data needed for an AppendEvent operation.
 type EventData struct {
 	Event *event.Event `json:"event"`
+}
+
+// ConcurrentEventData carries a batch of events for concurrent AppendEvent.
+type ConcurrentEventData struct {
+	Events []*event.Event `json:"events"`
 }
 
 // StateData carries the data needed for an UpdateSessionState operation.

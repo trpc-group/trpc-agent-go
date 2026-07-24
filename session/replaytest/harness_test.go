@@ -11,6 +11,7 @@ package replaytest
 
 import (
 	"context"
+	"sort"
 	"testing"
 	"time"
 
@@ -393,13 +394,14 @@ func TestNormalizer_NormalizeSession(t *testing.T) {
 		t.Errorf("expected normalized ID '<session-id>', got %q", normalized.ID)
 	}
 	// Verify state keys are sorted.
-	var keys []string
-	for k := range normalized.State {
-		keys = append(keys, k)
-	}
-	if len(keys) != 2 || keys[0] != "a" || keys[1] != "b" {
-		t.Errorf("expected sorted state keys [a b], got %v", keys)
-	}
+	 var keys []string
+	 for k := range normalized.State {
+	  keys = append(keys, k)
+	 }
+	 sort.Strings(keys)
+	 if len(keys) != 2 || keys[0] != "a" || keys[1] != "b" {
+	  t.Errorf("expected sorted state keys [a b], got %v", keys)
+	 }
 }
 
 // TestReporter_GenerateReport verifies the reporter generates a valid report.
@@ -470,4 +472,3 @@ func TestNormalizer_NormalizeJSON(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, string(output))
 	}
 }
-

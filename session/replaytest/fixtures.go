@@ -125,9 +125,9 @@ func Case4_StateUpdate() ReplayCase {
 				Data: StateData{State: session.StateMap{"score": []byte("100"), "level": []byte("5")}}},
 			{Type: OpUpdateSessionState, Key: key,
 				Data: StateData{State: session.StateMap{"score": []byte("200")}}},
-			// Delete one key.
-			{Type: OpUpdateSessionState, Key: key,
-				Data: StateData{State: session.StateMap{"level": nil}}},
+			// Delete one key using OpDeleteSessionState.
+			{Type: OpDeleteSessionState, Key: key,
+				Data: session.StateMap{"level": nil}},
 			{Type: OpGetSession, Key: key}, // Refresh to get the updated state.
 		},
 		Want: WantResult{
@@ -289,22 +289,21 @@ func Case8_TrackEvents() ReplayCase {
 func Case9_ConcurrentWrites() ReplayCase {
 	key := session.Key{AppName: "fixture", UserID: "user1", SessionID: "case9"}
 
-	// Sequential emulation of concurrent writes (5 events appended in order).
+	// Concurrent writes using goroutines to test cross-backend ordering consistency.
 	events := make([]*event.Event, 5)
 	for i := 0; i < 5; i++ {
 		events[i] = NewEvent(fmtInv("con_inv_%d", i), "user", "user",
 			fmt.Sprintf("Concurrent message %d.", i+1))
 	}
 
-	ops := []ReplayOp{{Type: OpCreateSession, Key: key}}
-	for _, e := range events {
-		ops = append(ops, ReplayOp{Type: OpAppendEvent, Key: key, Data: EventData{Event: e}})
-	}
-	ops = append(ops, ReplayOp{Type: OpGetSession, Key: key})
-
 	return ReplayCase{
 		Name: "case9_concurrent_writes",
-		Ops:  ops,
+		Ops: []ReplayOp{
+			{Type: OpCreateSession, Key: key},
+			{Type: OpConcurrentAppendEvents, Key: key,
+				Data: ConcurrentEventData{Events: events}},
+			{Type: OpGetSession, Key: key},
+		},
 		Want: WantResult{
 			ExpectedDiffKeys: []string{"events"},
 			ExpectedDiffCount: 1,

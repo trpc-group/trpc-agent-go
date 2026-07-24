@@ -94,7 +94,9 @@ func TrapShiftTimestamp() TrapInjector {
 			}
 		},
 		ExpectKeys: []string{"events[0].timestamp"},
-		ExpectCount: -1, // dynamic: depends on event count
+		// ExpectCount is dynamic (depends on event count); set to 0 as it is
+		// not validated by the detection tests.
+		ExpectCount: 0,
 	}
 }
 

@@ -50,6 +50,14 @@ func (m *MockModel) GenerateConversation(turns int) []event.Event {
 			tcEvent := m.GenerateToolCall()
 			events = append(events, tcEvent)
 
+			// Guard: verify the tool call event has the expected structure.
+			if len(tcEvent.Response.Choices) == 0 || len(tcEvent.Response.Choices[0].Message.ToolCalls) == 0 {
+				// Fall back to a plain assistant response.
+				assistantMsg := m.randomAssistantMessage(i)
+				events = append(events, *m.newEvent("assistant", assistantMsg, "", nil, nil))
+				continue
+			}
+
 			// Tool response.
 			trEvent := m.newEvent("tool", "Tool executed successfully.",
 				tcEvent.Response.Choices[0].Message.ToolCalls[0].ID,

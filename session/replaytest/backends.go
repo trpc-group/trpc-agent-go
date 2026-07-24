@@ -357,7 +357,10 @@ func executeOps(ctx context.Context, sessSvc session.Service, memSvc memory.Serv
 func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Service, op ReplayOp, result *BackendResult) error {
 	switch op.Type {
 	case OpCreateSession:
-		stateMap, _ := op.Data.(session.StateMap)
+		stateMap, ok := op.Data.(session.StateMap)
+		if !ok && op.Data != nil {
+			return fmt.Errorf("CreateSession: invalid data type %T", op.Data)
+		}
 		sess, err := sessSvc.CreateSession(ctx, op.Key, stateMap)
 		if err != nil {
 			return fmt.Errorf("CreateSession: %w", err)
@@ -467,9 +470,17 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		if result.Session == nil {
 			return fmt.Errorf("GetSessionSummaryText: no session created yet")
 		}
-		text, ok := sessSvc.GetSessionSummaryText(ctx, result.Session)
+		var summaryOpts []session.SummaryOption
+		filterKey := ""
+		if sd, ok := op.Data.(SummaryData); ok {
+			filterKey = sd.FilterKey
+			if sd.FilterKey != "" {
+				summaryOpts = append(summaryOpts, session.WithSummaryFilterKey(sd.FilterKey))
+			}
+		}
+		text, ok := sessSvc.GetSessionSummaryText(ctx, result.Session, summaryOpts...)
 		if ok {
-			result.SummaryTexts[""] = text
+			result.SummaryTexts[filterKey] = text
 		}
 
 	case OpAppendTrackEvent:
@@ -484,6 +495,33 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		if ts, ok := sessSvc.(session.TrackService); ok {
 			if err := ts.AppendTrackEvent(ctx, result.Session, td.Event); err != nil {
 				return fmt.Errorf("AppendTrackEvent: %w", err)
+			}
+		}
+
+	case OpConcurrentAppendEvents:
+		if result.Session == nil {
+			return fmt.Errorf("ConcurrentAppendEvents: no session created yet")
+		}
+		cd, ok := op.Data.(ConcurrentEventData)
+		if !ok {
+			return fmt.Errorf("ConcurrentAppendEvents: invalid data type %T", op.Data)
+		}
+		var wg sync.WaitGroup
+		errCh := make(chan error, len(cd.Events))
+		for _, e := range cd.Events {
+			wg.Add(1)
+			go func(ev *event.Event) {
+				defer wg.Done()
+				if err := sessSvc.AppendEvent(ctx, result.Session, ev); err != nil {
+					errCh <- fmt.Errorf("concurrent AppendEvent: %w", err)
+				}
+			}(e)
+		}
+		wg.Wait()
+		close(errCh)
+		for err := range errCh {
+			if err != nil {
+				return err
 			}
 		}
 

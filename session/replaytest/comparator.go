@@ -448,6 +448,13 @@ func (c *Comparator) compareMemories(caseName string, a, b *BackendResult) []Dif
 		})
 	}
 
+	// Sort both sides by canonical content key (text + kind) so that the
+	// position-by-position comparison is order-independent. This matches the
+	// "set equality" semantics required for SearchMemories results whose
+	// backend return order may differ.
+	sortMemoriesByContent(memA)
+	sortMemoriesByContent(memB)
+
 	minLen := len(memA)
 	if len(memB) < minLen {
 		minLen = len(memB)
@@ -482,6 +489,30 @@ func (c *Comparator) compareMemories(caseName string, a, b *BackendResult) []Dif
 	}
 
 	return diffs
+}
+
+// sortMemoriesByContent sorts a slice of memory entries by their content text
+// and kind to provide a canonical ordering for order-independent comparison.
+func sortMemoriesByContent(entries []*memory.Entry) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i] == nil || entries[j] == nil {
+			return entries[i] == nil
+		}
+		textI, textJ := "", ""
+		kindI, kindJ := "", ""
+		if entries[i].Memory != nil {
+			textI = entries[i].Memory.Memory
+			kindI = string(entries[i].Memory.Kind)
+		}
+		if entries[j].Memory != nil {
+			textJ = entries[j].Memory.Memory
+			kindJ = string(entries[j].Memory.Kind)
+		}
+		if textI != textJ {
+			return textI < textJ
+		}
+		return kindI < kindJ
+	})
 }
 
 func memoryID(a, b *memory.Entry) string {
