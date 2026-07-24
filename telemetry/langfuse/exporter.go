@@ -75,17 +75,39 @@ func transform(ss []*tracepb.ResourceSpans) []*tracepb.ResourceSpans {
 				continue
 			}
 
+			filtered := scopeSpans.Spans[:0]
 			for _, span := range scopeSpans.Spans {
 				if span == nil {
+					filtered = append(filtered, span)
+					continue
+				}
+				if spanOperationName(span) == itelemetry.OperationInvokeSkill {
 					continue
 				}
 
 				transformSpan(span)
+				filtered = append(filtered, span)
 			}
+			scopeSpans.Spans = filtered
 		}
 	}
 
 	return ss
+}
+
+func spanOperationName(span *tracepb.Span) string {
+	if span == nil {
+		return ""
+	}
+	for _, attr := range span.Attributes {
+		if attr.Key != semconvtrace.KeyGenAIOperationName {
+			continue
+		}
+		if attr.Value != nil && attr.Value.GetStringValue() != "" {
+			return attr.Value.GetStringValue()
+		}
+	}
+	return ""
 }
 
 // transformSpan applies langfuse-specific transformations to a span
@@ -95,15 +117,7 @@ func transformSpan(span *tracepb.Span) {
 	}
 
 	// Find the operation name
-	var operationName string
-	for _, attr := range span.Attributes {
-		if attr.Key == semconvtrace.KeyGenAIOperationName {
-			if attr.Value != nil && attr.Value.GetStringValue() != "" {
-				operationName = attr.Value.GetStringValue()
-				break
-			}
-		}
-	}
+	operationName := spanOperationName(span)
 
 	switch operationName {
 	case itelemetry.OperationInvokeAgent:

@@ -68,6 +68,16 @@ go run .
 
 消息 payload 的兼容策略以及推荐使用的 OTel `role + parts` 字段，见 [多模态遥测消息](telemetry-multimodal.md)。
 
+#### Skill 可观测
+
+当 `skill_load` 激活 skill 时，tRPC-Agent-Go 会在已有的 `execute_tool skill_load` span 下创建 Galileo 兼容的 `invoke_skill {skill.name}` INTERNAL 子 span。`invoke_skill` 表示 skill activation/materialization：确认被选中的 skill，并把 `SKILL.md` 内容物化进 Agent 上下文。它不覆盖后续的 `chat`、`workspace_exec`、`skill_run`、`skill_exec` 或其他 tool 执行。
+
+同一次激活也会在 `trpc_agent_go.internal.invoke_skill` meter 上记录 `gen_ai.request_cnt` 和 `gen_ai.client.operation.duration`。Metric attributes 只包含低基数字段，例如 `gen_ai.operation.name`、`gen_ai.skill.name`、`gen_ai.skill.id`、`gen_ai.user.id`、`gen_ai.agent.id`、可选的 `gen_ai.agent.name`、可选的 `gen_ai.skill.version`，以及失败时的 `error.type`。路径、content hash、doc 列表、tool call id 和提示词内容不会进入 metric attributes。
+
+Langfuse exporter 默认会 drop `invoke_skill` spans，因此已有 Langfuse observation 类型、树结构和 token 统计保持不变。Galileo 和通用 OTel exporter 仍可消费该 span 和 metrics。
+
+出于隐私考虑，`gen_ai.invoke_skill_request` / `gen_ai.invoke_skill_response` span attributes 默认使用安全的路径和内容摘要：紧凑路径表示、SHA-256 hash、字节数以及截断后的内容预览。Galileo exporter 可在导出侧把这些 attributes 转换为平台事件展示。导出敏感 skill repository 时，可通过 span attribute policy 进一步 drop、omit 或 truncate 这些 attributes。
+
 ##### 接入代码说明
 Langfuse 支持通过 `/api/public/otel` (OTLP) 接口接收 Trace 数据，仅支持 HTTP/protobuf，不支持 gRPC。
 上述代码通过设置 `OTEL_EXPORTER_OTLP_HEADERS` 和 `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` 来接入 langfuse。
