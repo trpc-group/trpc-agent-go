@@ -481,6 +481,13 @@ func TestTrackerFlushAndCloseMissingState(t *testing.T) {
 	require.NoError(t, tracker.Close(ctx, key))
 }
 
+func TestTrackerCloseInvalidKey(t *testing.T) {
+	tracker, err := New(inmemory.NewSessionService())
+	require.NoError(t, err)
+	err = tracker.Close(context.Background(), session.Key{})
+	require.ErrorContains(t, err, "session key")
+}
+
 type serviceWithoutTrack struct{}
 
 func (serviceWithoutTrack) CreateSession(ctx context.Context, key session.Key, state session.StateMap, opts ...session.Option) (*session.Session, error) {

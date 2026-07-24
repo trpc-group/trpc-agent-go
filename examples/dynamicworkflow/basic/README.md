@@ -71,7 +71,7 @@ export OPENAI_BASE_URL="https://your-endpoint/v1"
 
 ```bash
 cd examples
-go run ./dynamicworkflow -model gpt-5
+go run ./dynamicworkflow/basic -model gpt-5
 ```
 
 With no `-prompt`, the example starts an interactive chat loop and keeps one
@@ -85,12 +85,13 @@ Commands:
 For a single-turn run, pass `-prompt`:
 
 ```bash
-go run ./dynamicworkflow -model gpt-5 \
+go run ./dynamicworkflow/basic -model gpt-5 \
   -prompt 'Build a temporary team: propose a collaboration plan for a remote team, have a reviewer check it against the team collaboration guideline using lookup_policy, and revise the plan with the feedback.'
 ```
 
-The example prints the model-generated workflow source by default. Disable it
-with `-show-workflow-code=false`.
+Pass `-show-workflow-code=true` to print the model-generated workflow source
+separately before execution. Tool-event output also includes the `run_workflow`
+arguments.
 
 The event printer also shows child Agent tool calls. A typical run includes
 lines like:
