@@ -24,7 +24,8 @@ import (
 const defaultPath = "/v1/realtime"
 
 // Proxy forwards OpenAI Realtime events between clients and an upstream
-// Realtime WebSocket endpoint.
+// Realtime WebSocket endpoint. It does not authenticate downstream clients;
+// applications are responsible for access control around Handler.
 type Proxy struct {
 	path      string
 	config    modelrealtime.Config
@@ -97,6 +98,10 @@ func cloneConfig(config modelrealtime.Config) modelrealtime.Config {
 }
 
 // Handler returns the proxy's HTTP handler.
+//
+// The handler performs no downstream authentication or authorization and
+// relays accepted connections with the configured upstream credentials.
+// Callers must add access-control middleware before exposing it publicly.
 func (p *Proxy) Handler() http.Handler {
 	return p.handler
 }

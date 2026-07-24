@@ -41,7 +41,8 @@ func ParseEvent(data []byte) (Event, error) {
 	return Event{eventType: envelope.Type, raw: raw}, nil
 }
 
-// NewEvent creates an event with the supplied type and fields.
+// NewEvent creates an event with the supplied type and fields. A "type" entry
+// in fields is ignored; eventType always determines the event type.
 func NewEvent(eventType string, fields map[string]any) (Event, error) {
 	if eventType == "" {
 		return Event{}, errors.New("realtime: event type is required")

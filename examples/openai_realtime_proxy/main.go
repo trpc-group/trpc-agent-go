@@ -12,6 +12,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -22,7 +23,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("addr", ":8080", "listen address")
+	addr := flag.String("addr", "127.0.0.1:8080", "loopback listen address")
 	modelName := flag.String("model", "gpt-realtime", "OpenAI Realtime model")
 	flag.Parse()
 
@@ -44,14 +45,34 @@ func main() {
 		log.Fatalf("create OpenAI Realtime proxy: %v", err)
 	}
 
-	log.Infof(
-		"OpenAI Realtime proxy listening on ws://localhost%s%s",
-		*addr,
-		proxy.Path(),
-	)
+	if !isLoopbackListenAddress(*addr) {
+		log.Fatal(
+			"this example only accepts a loopback -addr; wrap proxy.Handler() " +
+				"with authentication and serve it with TLS for remote access",
+		)
+	}
+	listener, err := net.Listen("tcp", *addr)
+	if err != nil {
+		log.Fatalf("listen on %s: %v", *addr, err)
+	}
+	defer listener.Close()
+
+	log.Infof("OpenAI Realtime proxy listening on ws://%s%s", listener.Addr(), proxy.Path())
 	// This example server intentionally uses the standard HTTP server.
 	//nolint:gosec
-	if err := http.ListenAndServe(*addr, proxy.Handler()); err != nil {
+	if err := http.Serve(listener, proxy.Handler()); err != nil {
 		log.Fatalf("server error: %v", err)
 	}
+}
+
+func isLoopbackListenAddress(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }

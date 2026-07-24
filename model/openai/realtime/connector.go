@@ -28,10 +28,19 @@ const (
 
 // Config configures an OpenAI Realtime WebSocket connection.
 type Config struct {
-	URL             string
-	Origin          string
-	APIKey          string
-	Header          http.Header
+	// URL is the upstream Realtime WebSocket endpoint. It must use ws or wss.
+	URL string
+	// Origin is sent in the WebSocket handshake. It defaults to
+	// http://localhost when empty.
+	Origin string
+	// APIKey is sent as a Bearer token unless Header already contains an
+	// Authorization value.
+	APIKey string
+	// Header contains additional handshake headers. Connect clones it before
+	// adding defaults and never mutates the caller's map.
+	Header http.Header
+	// MaxPayloadBytes limits received frame payloads. Values less than one use
+	// the 16 MiB default.
 	MaxPayloadBytes int
 }
 
@@ -47,7 +56,9 @@ type Conn interface {
 	Close() error
 }
 
-// WebSocketConnector is the default Connector implementation.
+// WebSocketConnector is the default Connector implementation. The underlying
+// x/net WebSocket transport automatically replies to incoming ping frames with
+// pong frames.
 type WebSocketConnector struct{}
 
 // NewConnector creates the default OpenAI Realtime connector.

@@ -14,17 +14,19 @@ From the repository root:
 ```bash
 export OPENAI_API_KEY="..."
 cd examples/openai_realtime_proxy
-go run . -model gpt-realtime -addr :8080
+go run . -model gpt-realtime -addr 127.0.0.1:8080
 ```
 
-The local endpoint is `ws://localhost:8080/v1/realtime`.
+The loopback-only endpoint is `ws://127.0.0.1:8080/v1/realtime`. The example
+rejects non-loopback listen addresses because it does not authenticate
+downstream clients.
 
 ## Send a text-only session
 
 Connect with a WebSocket client such as `websocat`:
 
 ```bash
-websocat ws://localhost:8080/v1/realtime
+websocat ws://127.0.0.1:8080/v1/realtime
 ```
 
 Then send these events one line at a time:
@@ -36,5 +38,6 @@ Then send these events one line at a time:
 ```
 
 The proxy preserves complete JSON events, including event types that were added
-after the installed framework version. Production deployments should add client
-authentication, origin validation, TLS, and request limits around the handler.
+after the installed framework version. For remote deployment, import the proxy
+package and wrap `Proxy.Handler()` with client authentication, authorization,
+origin validation, TLS, and request limits before serving it.
