@@ -1,0 +1,109 @@
+{
+  "evalSetId": "issue-2003-validation",
+  "name": "Issue 2003 held-out validation set",
+  "evalCases": [
+    {
+      "evalId": "validation-knowledge-recall",
+      "conversation": [
+        {
+          "invocationId": "validation-knowledge-recall-1",
+          "userContent": {
+            "role": "user",
+            "content": "Policy states unopened products may be returned within 7 days. How long is my return window?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Unopened products may be returned within 7 days."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "validation-fact-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "return-window",
+          "type": "expected_fact",
+          "content": {
+            "text": "7 days"
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "validation-wrong-arguments",
+      "conversation": [
+        {
+          "invocationId": "validation-wrong-arguments-1",
+          "userContent": {
+            "role": "user",
+            "content": "Check order B-81. Select the internal operation and exact arguments needed."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The requested order lookup is complete."
+          },
+          "tools": [
+            {
+              "id": "expected-validation-lookup",
+              "name": "lookup_order",
+              "arguments": {
+                "orderId": "B-81"
+              },
+              "result": {
+                "orderId": "B-81",
+                "status": "shipped"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "validation-arguments-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "exact-order-arguments",
+          "type": "tool_trajectory",
+          "content": {
+            "text": "Use lookup_order with the exact orderId B-81."
+          }
+        }
+      ]
+    },
+    {
+      "evalId": "validation-wrong-route",
+      "conversation": [
+        {
+          "invocationId": "validation-wrong-route-1",
+          "userContent": {
+            "role": "user",
+            "content": "My delivered item is damaged. Route this request to the correct team and answer briefly."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The support team will help with the damaged item."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "validation-route-user"
+      },
+      "rubrics": [
+        {
+          "metricName": "quality",
+          "id": "damaged-item-route",
+          "type": "expected_route",
+          "content": {
+            "text": "support"
+          }
+        }
+      ]
+    }
+  ]
+}

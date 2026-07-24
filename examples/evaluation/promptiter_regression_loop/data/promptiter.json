@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0",
+  "seed": 2003,
+  "policy": {
+    "maxOuterRounds": 2,
+    "searchMinScoreGain": 0.05,
+    "internalValidationStrategy": "train_all",
+    "targetSurfaceIds": [
+      "support-agent#instruction"
+    ]
+  }
+}
