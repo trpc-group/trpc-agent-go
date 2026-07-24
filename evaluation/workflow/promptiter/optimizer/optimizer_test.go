@@ -209,6 +209,7 @@ func TestOptimizeUsesRunnerStructuredOutput(t *testing.T) {
 			},
 			Reason: "tighten the system instruction",
 		},
+		Usage: promptiter.Usage{Calls: 1},
 	}, rsp)
 }
 

@@ -1,0 +1,137 @@
+[
+  {
+    "id": "answer-contract-mismatch",
+    "expected": "final_response_mismatch",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "answer-contract-mismatch",
+      "passed": false,
+      "metrics": [{"name": "business_quality_v2", "score": 0, "threshold": 1, "passed": false, "reason": "The answer differs from the reference answer: 14 days instead of 30 days."}],
+      "runs": [{"runId": 0, "finalResponse": "Returns are allowed for 14 days."}]
+    }
+  },
+  {
+    "id": "wrong-capability-chosen",
+    "expected": "tool_selection_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "wrong-capability-chosen",
+      "passed": false,
+      "metrics": [{"name": "workflow_completion", "score": 0, "threshold": 1, "passed": false, "reason": "Expected lookup_order but the model selected the wrong tool search_catalog."}],
+      "runs": [{"runId": 0, "tools": [{"name": "search_catalog", "arguments": "{\"query\":\"A-19\"}", "result": "[]"}]}]
+    }
+  },
+  {
+    "id": "required-identifier-omitted",
+    "expected": "tool_argument_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "required-identifier-omitted",
+      "passed": false,
+      "metrics": [{"name": "checkout_judge", "score": 0, "threshold": 1, "passed": false, "rubrics": [{"id": "call-correctness", "score": 0, "reason": "The tool parameter order_id is missing; the selected lookup_order tool is correct."}]}],
+      "runs": [{"runId": 0, "tools": [{"name": "lookup_order", "arguments": "{\"query\":\"A-19\"}", "result": "not found"}]}]
+    }
+  },
+  {
+    "id": "successful-result-ignored",
+    "expected": "tool_result_handling_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "successful-result-ignored",
+      "passed": false,
+      "metrics": [{"name": "resolution_score", "score": 0, "threshold": 1, "passed": false, "reason": "The successful tool result was ignored and the final response claims the order is unknown."}],
+      "runs": [{"runId": 0, "finalResponse": "I cannot find that order.", "tools": [{"name": "lookup_order", "arguments": "{\"order_id\":\"A-19\"}", "result": "{\"status\":\"shipped\"}"}]}]
+    }
+  },
+  {
+    "id": "mixed-language-routing",
+    "expected": "route_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "mixed-language-routing",
+      "passed": false,
+      "metrics": [{"name": "handoff_quality", "score": 0, "threshold": 1, "passed": false, "reason": "应转交退款专员, but the router kept this request in general support."}],
+      "runs": [{"runId": 0, "route": "general-support"}]
+    }
+  },
+  {
+    "id": "structured-envelope-invalid",
+    "expected": "format_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "structured-envelope-invalid",
+      "passed": false,
+      "metrics": [{"name": "consumer_compatibility", "score": 0, "threshold": 1, "passed": false, "reason": "The response violates the required JSON schema and cannot be parsed."}],
+      "runs": [{"runId": 0, "finalResponse": "status=ok"}]
+    }
+  },
+  {
+    "id": "grounding-source-missing",
+    "expected": "knowledge_recall_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "grounding-source-missing",
+      "passed": false,
+      "metrics": [{"name": "answer_support", "score": 0, "threshold": 1, "passed": false, "rubrics": [{"id": "citation-check", "score": 0, "reason": "关键政策没有事实依据; missing source grounding for the refund window."}]}]
+    }
+  },
+  {
+    "id": "safety-wins-multiple-signals",
+    "expected": "safety_policy_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "safety-wins-multiple-signals",
+      "passed": false,
+      "metrics": [
+        {"name": "payload_shape", "score": 0, "threshold": 1, "passed": false, "reason": "Invalid JSON format."},
+        {"name": "trust_review", "score": 0, "threshold": 1, "passed": false, "reason": "Privacy violation: the response disclosed a private phone number."}
+      ],
+      "runs": [{"runId": 0, "finalResponse": "Call the customer at 555-0100"}]
+    }
+  },
+  {
+    "id": "model-runtime-failure",
+    "expected": "inference_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "model-runtime-failure",
+      "passed": false,
+      "metrics": [],
+      "runs": [{"runId": 0, "error": "model decoder unavailable"}]
+    }
+  },
+  {
+    "id": "tool-backend-failure",
+    "expected": "tool_result_handling_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "tool-backend-failure",
+      "passed": false,
+      "metrics": [],
+      "runs": [{"runId": 0, "tools": [{"name": "lookup_order", "arguments": "{\"order_id\":\"A-19\"}", "error": "backend unavailable"}]}]
+    }
+  },
+  {
+    "id": "selection-and-argument-conflict",
+    "expected": "tool_selection_error",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "selection-and-argument-conflict",
+      "passed": false,
+      "metrics": [
+        {"name": "judge_alpha", "score": 0, "threshold": 1, "passed": false, "reason": "The wrong tool was selected."},
+        {"name": "judge_beta", "score": 0, "threshold": 1, "passed": false, "reason": "A required tool argument is also missing."}
+      ]
+    }
+  },
+  {
+    "id": "insufficient-conflicting-evidence",
+    "expected": "unknown",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "insufficient-conflicting-evidence",
+      "passed": false,
+      "metrics": [{"name": "opaque_external_judge", "score": 0, "threshold": 1, "passed": false, "reason": "External contract failed; detailed evidence was not returned."}]
+    }
+  }
+]

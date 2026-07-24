@@ -1,0 +1,16 @@
+[
+  {"id":"exact-quality-threshold","expected":"accepted","validationGain":0.10,"minValidationGain":0.10},
+  {"id":"below-threshold-no-hidden-epsilon","expected":"rejected","validationGain":0.099999999,"minValidationGain":0.10},
+  {"id":"validation-gain-with-critical-regression","expected":"rejected","validationGain":0.30,"minValidationGain":0.10,"criticalRegressions":1},
+  {"id":"validation-gain-with-hard-failure","expected":"rejected","validationGain":0.30,"minValidationGain":0.10,"newHardFailures":1},
+  {"id":"training-jump-validation-stagnates","expected":"rejected","validationGain":0.05,"minValidationGain":0.0,"trainAvailable":true,"trainGain":0.80,"maxGeneralizationGap":0.20},
+  {"id":"validation-decreases","expected":"rejected","validationGain":-0.01,"minValidationGain":0.0},
+  {"id":"regression-at-exact-limit","expected":"accepted","validationGain":0.10,"minValidationGain":0.10,"worstRegression":0.05,"maxCaseRegression":0.05},
+  {"id":"regression-over-limit","expected":"rejected","validationGain":0.20,"minValidationGain":0.10,"worstRegression":0.050000001,"maxCaseRegression":0.05},
+  {"id":"unknown-cost-with-limit","expected":"inconclusive","validationGain":0.10,"minValidationGain":0.10,"maxCost":1.0,"costKnown":false},
+  {"id":"cost-at-exact-limit","expected":"accepted","validationGain":0.10,"minValidationGain":0.10,"maxCost":1.0,"costKnown":true,"cost":1.0},
+  {"id":"promptiter-rejection-is-advisory","expected":"accepted","validationGain":0.10,"minValidationGain":0.10,"promptIterAccepted":false},
+  {"id":"promptiter-rejection-required","expected":"rejected","validationGain":0.10,"minValidationGain":0.10,"promptIterAccepted":false,"requirePromptIterAcceptance":true},
+  {"id":"missing-training-evidence-for-gap","expected":"inconclusive","validationGain":0.10,"minValidationGain":0.10,"maxGeneralizationGap":0.20},
+  {"id":"incomplete-validation-evidence","expected":"inconclusive","validationGain":0.10,"minValidationGain":0.10,"validationIncomplete":true}
+]

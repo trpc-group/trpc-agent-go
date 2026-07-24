@@ -11,6 +11,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"math"
 	"reflect"
 	"runtime"
 	"sync"
@@ -489,7 +490,8 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 		WithAgent(testTargetAgent()),
 	)
 	assert.NoError(t, err)
-	result, err := engineInstance.Run(context.Background(), &RunRequest{
+	targetScore := 2.0
+	request := &RunRequest{
 		Train:          testEvalSetInputs("train"),
 		Validation:     testEvalSetInputs("validation"),
 		InitialProfile: runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
@@ -498,11 +500,16 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 		},
 		StopPolicy: StopPolicy{
 			MaxRoundsWithoutAcceptance: 1,
+			TargetScore:                &targetScore,
 		},
 		MaxRounds:        5,
 		TargetSurfaceIDs: []string{testSurfaceID},
-	})
+	}
+	result, err := engineInstance.Run(context.Background(), request)
 	assert.NoError(t, err)
+	require.NotNil(t, result.InitialProfile)
+	assert.Empty(t, result.InitialProfile.Overrides,
+		"audit profile must match the normalized baseline that was actually evaluated")
 	assert.Equal(t, []string{
 		"base prompt",
 		"base prompt",
@@ -515,9 +522,22 @@ func TestRunAcceptsFirstRoundAndStopsAfterRejectedNextRound(t *testing.T) {
 	assert.True(t, result.Rounds[0].Acceptance.Accepted)
 	assert.False(t, result.Rounds[1].Acceptance.Accepted)
 	assert.Equal(t, "max rounds without acceptance reached", result.Rounds[1].Stop.Reason)
+	assert.Nil(t, result.Rounds[1].CandidateTrain)
 	assert.Len(t, backward.requests, 2)
 	assert.Equal(t, "base prompt", *backward.requests[0].Surfaces[0].Value.Text)
 	assert.Equal(t, "accepted prompt", *backward.requests[1].Surfaces[0].Value.Text)
+	request.TargetSurfaceIDs[0] = "mutated#surface"
+	targetScore = 0
+	assert.Equal(t, 1, result.Configuration.EvaluationOptions.NumRuns)
+	assert.Equal(t, 5, result.Configuration.MaxRounds)
+	assert.Equal(t, 0.1, result.Configuration.AcceptancePolicy.MinScoreGain)
+	assert.Equal(t, 1, result.Configuration.StopPolicy.MaxRoundsWithoutAcceptance)
+	require.NotNil(t, result.Configuration.StopPolicy.TargetScore)
+	assert.Equal(t, 2.0, *result.Configuration.StopPolicy.TargetScore)
+	assert.Equal(t, []string{testSurfaceID}, result.Configuration.TargetSurfaceIDs,
+		"retained configuration must not alias the caller's request")
+	assert.False(t, result.Configuration.RetainAuditEvidence)
+	assert.False(t, result.Configuration.EvaluateFinalCandidateTrain)
 }
 
 func TestRunAllowsToolSurfaceInTraceWhenTargetingInstruction(t *testing.T) {
@@ -699,6 +719,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		fn: func(ctx context.Context, request *backwarder.Request) (*backwarder.Result, error) {
 			_ = ctx
 			return &backwarder.Result{
+				Usage: promptiter.Usage{Calls: 1, PromptTokens: 10, CompletionTokens: 2, TotalTokens: 12, Complete: true},
 				Gradients: []promptiter.SurfaceGradient{
 					{
 						EvalSetID:  request.EvalSetID,
@@ -716,6 +737,7 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		fn: func(ctx context.Context, request *aggregator.Request) (*aggregator.Result, error) {
 			_ = ctx
 			return &aggregator.Result{
+				Usage: promptiter.Usage{Calls: 2, PromptTokens: 20, CompletionTokens: 4, TotalTokens: 24, Complete: true},
 				Gradient: &promptiter.AggregatedSurfaceGradient{
 					SurfaceID: request.SurfaceID,
 					NodeID:    request.NodeID,
@@ -728,7 +750,9 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	optimizerInstance := &fakeOptimizer{
 		fn: func(ctx context.Context, request *optimizer.Request) (*optimizer.Result, error) {
 			_ = ctx
+			time.Sleep(time.Millisecond)
 			return &optimizer.Result{
+				Usage: promptiter.Usage{Calls: 3, PromptTokens: 30, CompletionTokens: 6, TotalTokens: 36, Complete: true},
 				Patch: &promptiter.SurfacePatch{
 					SurfaceID: request.Surface.SurfaceID,
 					Value: astructure.SurfaceValue{
@@ -760,8 +784,9 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 		StopPolicy: StopPolicy{
 			MaxRoundsWithoutAcceptance: 1,
 		},
-		MaxRounds:        1,
-		TargetSurfaceIDs: []string{testSurfaceID},
+		EvaluateFinalCandidateTrain: true,
+		MaxRounds:                   1,
+		TargetSurfaceIDs:            []string{testSurfaceID},
 	}, WithObserver(func(ctx context.Context, event *Event) error {
 		_ = ctx
 		if assert.NotNil(t, event) {
@@ -771,7 +796,11 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	}))
 	assert.NoError(t, err)
 	assert.NotNil(t, result)
-	require.Len(t, observedEvents, 10)
+	require.Len(t, result.Rounds, 1)
+	assert.Equal(t, 6, result.Rounds[0].Usage.Calls)
+	assert.Equal(t, int64(72), result.Rounds[0].Usage.TotalTokens)
+	assert.Positive(t, result.Rounds[0].Duration)
+	require.Len(t, observedEvents, 11)
 	assert.Equal(t, EventKindBaselineValidation, observedEvents[0].Kind)
 	assert.Zero(t, observedEvents[0].Round)
 	assert.IsType(t, &EvaluationResult{}, observedEvents[0].Payload)
@@ -799,9 +828,12 @@ func TestRunObserverReceivesRuntimeEvents(t *testing.T) {
 	assert.Equal(t, EventKindRoundValidation, observedEvents[8].Kind)
 	assert.Equal(t, 1, observedEvents[8].Round)
 	assert.IsType(t, &EvaluationResult{}, observedEvents[8].Payload)
-	assert.Equal(t, EventKindRoundCompleted, observedEvents[9].Kind)
+	assert.Equal(t, EventKindRoundCandidateTrainEvaluation, observedEvents[9].Kind)
 	assert.Equal(t, 1, observedEvents[9].Round)
-	assert.IsType(t, &RoundCompleted{}, observedEvents[9].Payload)
+	assert.IsType(t, &EvaluationResult{}, observedEvents[9].Payload)
+	assert.Equal(t, EventKindRoundCompleted, observedEvents[10].Kind)
+	assert.Equal(t, 1, observedEvents[10].Round)
+	assert.IsType(t, &RoundCompleted{}, observedEvents[10].Payload)
 }
 
 func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
@@ -845,13 +877,17 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{"validation_case_1"},
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		assert.Equal(t, [][]string{{"train_case_1", "train_case_2"}}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{
+			{"train_case_1", "train_case_2"},
+			{"train_case_1", "train_case_2"},
+		}, evalService.evalCaseIDs["train"])
 		assert.Equal(t, [][]string{{"validation_case_1"}, {"validation_case_1"}}, evalService.evalCaseIDs["validation"])
 	})
 	t.Run("omits nil case filters", func(t *testing.T) {
@@ -868,14 +904,15 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalSetID: "validation",
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		assert.Equal(t, [][]string{noFilter}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["train"])
 		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["validation"])
 	})
 	t.Run("omits empty case filters", func(t *testing.T) {
@@ -894,14 +931,15 @@ func TestRunPassesEvalCaseIDsToTrainAndValidationInputs(t *testing.T) {
 					EvalCaseIDs: []string{},
 				},
 			},
-			InitialProfile:   runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
-			MaxRounds:        1,
-			TargetSurfaceIDs: []string{testSurfaceID},
+			InitialProfile:              runtimeProfileFromSnapshot(t, testStructureSnapshot(t)),
+			EvaluateFinalCandidateTrain: true,
+			MaxRounds:                   1,
+			TargetSurfaceIDs:            []string{testSurfaceID},
 		})
 		var noFilter []string
 		require.NoError(t, err)
 		require.NotNil(t, result)
-		assert.Equal(t, [][]string{noFilter}, evalService.evalCaseIDs["train"])
+		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["train"])
 		assert.Equal(t, [][]string{noFilter, noFilter}, evalService.evalCaseIDs["validation"])
 	})
 }
@@ -968,12 +1006,13 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 		AcceptancePolicy: AcceptancePolicy{
 			MinScoreGain: 0.1,
 		},
-		MaxRounds:        1,
-		TargetSurfaceIDs: []string{testSurfaceID},
+		EvaluateFinalCandidateTrain: true,
+		MaxRounds:                   1,
+		TargetSurfaceIDs:            []string{testSurfaceID},
 	})
 	assert.NoError(t, err)
 	assert.Len(t, result.Rounds, 1)
-	assert.Len(t, evalService.runOptions, 3)
+	assert.Len(t, evalService.runOptions, 4)
 	assert.Empty(t, evalService.runOptions[0].Instruction)
 	assert.Empty(t, evalService.runOptions[1].Instruction)
 	patch, ok := surfacepatch.PatchForNode(evalService.runOptions[0].CustomAgentConfigs, "node_1")
@@ -985,9 +1024,15 @@ func TestRunCompilesProfileIntoEvaluationRunOptions(t *testing.T) {
 	instruction, ok := patch.Instruction()
 	assert.True(t, ok)
 	assert.Equal(t, "accepted prompt", instruction)
+	patch, ok = surfacepatch.PatchForNode(evalService.runOptions[3].CustomAgentConfigs, "node_1")
+	assert.True(t, ok)
+	instruction, ok = patch.Instruction()
+	assert.True(t, ok)
+	assert.Equal(t, "accepted prompt", instruction)
 	assert.True(t, evalService.runOptions[0].ExecutionTraceEnabled)
 	assert.True(t, evalService.runOptions[1].ExecutionTraceEnabled)
 	assert.True(t, evalService.runOptions[2].ExecutionTraceEnabled)
+	assert.True(t, evalService.runOptions[3].ExecutionTraceEnabled)
 	assert.Equal(t, "accepted prompt", profileText(result.Rounds[0].OutputProfile))
 	assert.Equal(t, "accepted prompt", profileText(result.AcceptedProfile))
 }
@@ -1896,9 +1941,15 @@ func TestOptimizeValidatesDependenciesAndResponses(t *testing.T) {
 	})
 }
 
-func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T) {
+func TestAdaptEvaluationCaseResultUsesAggregateMetricsAcrossRepeatedRuns(t *testing.T) {
 	evalCase := &evaluation.EvaluationCaseResult{
 		EvalCaseID: "case_1",
+		MetricResults: []*evalresult.EvalMetricResult{{
+			MetricName: "quality",
+			Score:      0.5,
+			Threshold:  0.6,
+			EvalStatus: status.EvalStatusFailed,
+		}},
 		EvalCaseResults: []*evalresult.EvalCaseResult{
 			{
 				RunID: 1,
@@ -1906,6 +1957,7 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 					{
 						MetricName: "quality",
 						Score:      0.9,
+						Threshold:  0.6,
 						EvalStatus: status.EvalStatusPassed,
 					},
 				},
@@ -1916,7 +1968,11 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 					{
 						MetricName: "quality",
 						Score:      0.1,
-						EvalStatus: status.EvalStatusPassed,
+						Threshold:  0.6,
+						EvalStatus: status.EvalStatusFailed,
+						Details: &evalresult.EvalMetricResultDetails{
+							Reason: "second run failed the quality contract",
+						},
 					},
 				},
 			},
@@ -1984,9 +2040,50 @@ func TestAdaptEvaluationCaseResultUsesFirstRunWhenMultipleRunsExist(t *testing.T
 	assert.NoError(t, err)
 	assert.Equal(t, "validation", result.EvalSetID)
 	assert.Equal(t, "case_1", result.EvalCaseID)
-	assert.Equal(t, "session_first", result.SessionID)
+	assert.Equal(t, "session_second", result.SessionID)
+	require.NotNil(t, result.Trace)
+	require.Len(t, result.Trace.Steps, 1)
+	require.NotNil(t, result.Trace.Steps[0].Output)
+	assert.Equal(t, "second output", result.Trace.Steps[0].Output.Text)
 	assert.Len(t, result.Metrics, 1)
-	assert.Equal(t, 0.9, result.Metrics[0].Score)
+	assert.Equal(t, 0.5, result.Metrics[0].Score)
+	assert.Equal(t, status.EvalStatusFailed, result.Metrics[0].Status)
+	assert.Equal(t, "second run failed the quality contract", result.Metrics[0].Reason)
+	assert.Nil(t, result.RunDetails)
+	assert.Nil(t, result.RunResults)
+	require.NotNil(t, result.MetricTraces["quality"])
+	assert.Equal(t, "second output", result.MetricTraces["quality"].Steps[0].Output.Text)
+
+	audited, err := adaptEvaluationCaseResultWithAuditEvidence(structure, "validation", evalCase, true)
+	require.NoError(t, err)
+	assert.Len(t, audited.RunDetails, 2)
+	assert.Len(t, audited.RunResults, 2)
+	evalCase.RunDetails[0].Inference.SessionID = "mutated"
+	evalCase.EvalCaseResults[0].OverallEvalMetricResults[0].Score = 0
+	assert.Equal(t, "session_first", audited.RunDetails[0].Inference.SessionID)
+	assert.Equal(t, .9, audited.RunResults[0].OverallEvalMetricResults[0].Score)
+}
+
+func TestLossUsesTraceForTheRunThatFailedEachMetric(t *testing.T) {
+	result, err := (&engine{}).loss(&EvaluationResult{EvalSets: []EvalSetResult{{
+		EvalSetID: "train",
+		Cases: []CaseResult{{
+			EvalSetID: "train", EvalCaseID: "case_1",
+			Metrics: []MetricResult{
+				{MetricName: "quality", Status: status.EvalStatusFailed, Reason: "quality failed"},
+				{MetricName: "safety", Status: status.EvalStatusFailed, Reason: "safety failed"},
+			},
+			MetricTraces: map[string]*atrace.Trace{
+				"quality": {Steps: []atrace.Step{{StepID: "quality-step"}}},
+				"safety":  {Steps: []atrace.Step{{StepID: "safety-step"}}},
+			},
+		}},
+	}}})
+	require.NoError(t, err)
+	require.Len(t, result, 1)
+	require.Len(t, result[0].TerminalLosses, 2)
+	assert.Equal(t, "quality-step", result[0].TerminalLosses[0].StepID)
+	assert.Equal(t, "safety-step", result[0].TerminalLosses[1].StepID)
 }
 
 func TestRunRejectsEmptyValidationEvalSets(t *testing.T) {
@@ -2182,8 +2279,12 @@ func TestRunRejectsNegativeStageOptions(t *testing.T) {
 		}
 	}
 	request := baseRequest()
-	request.BackwardOptions = BackwardOptions{CaseParallelism: -1}
+	request.EvaluationOptions = EvaluationOptions{EvalCaseParallelism: -1}
 	_, runErr := engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "evaluation case parallelism must be non-negative")
+	request = baseRequest()
+	request.BackwardOptions = BackwardOptions{CaseParallelism: -1}
+	_, runErr = engineInstance.Run(context.Background(), request)
 	assert.EqualError(t, runErr, "backward case parallelism must be non-negative")
 	request = baseRequest()
 	request.AggregationOptions = AggregationOptions{SurfaceParallelism: -1}
@@ -2193,6 +2294,19 @@ func TestRunRejectsNegativeStageOptions(t *testing.T) {
 	request.OptimizerOptions = OptimizerOptions{SurfaceParallelism: -1}
 	_, runErr = engineInstance.Run(context.Background(), request)
 	assert.EqualError(t, runErr, "optimizer surface parallelism must be non-negative")
+	request = baseRequest()
+	request.AcceptancePolicy = AcceptancePolicy{MinScoreGain: math.NaN()}
+	_, runErr = engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "acceptance minimum score gain must be finite")
+	request = baseRequest()
+	request.StopPolicy = StopPolicy{MaxRoundsWithoutAcceptance: -1}
+	_, runErr = engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "max rounds without acceptance must be non-negative")
+	request = baseRequest()
+	invalidTarget := math.Inf(1)
+	request.StopPolicy = StopPolicy{TargetScore: &invalidTarget}
+	_, runErr = engineInstance.Run(context.Background(), request)
+	assert.EqualError(t, runErr, "stop target score must be finite")
 }
 
 func TestRunRejectsInvalidInitialProfile(t *testing.T) {
@@ -2324,6 +2438,9 @@ func TestAdaptMetricResults(t *testing.T) {
 			Score:      0.7,
 			Status:     status.EvalStatusPassed,
 			Reason:     "accepted",
+			Details: &evalresult.EvalMetricResultDetails{
+				Reason: "  accepted  ",
+			},
 		},
 	}, metrics)
 	metrics, err = adaptMetricResults([]*evalresult.EvalMetricResult{
@@ -2438,34 +2555,55 @@ func TestAdaptEvaluationCaseResultValidationErrors(t *testing.T) {
 	})
 	assert.Nil(t, result)
 	assert.EqualError(t, err, `evaluation case "case_1" has no run results`)
-	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
-		EvalCaseID:      "case_1",
-		EvalCaseResults: []*evalresult.EvalCaseResult{nil},
-	})
-	assert.Nil(t, result)
-	assert.EqualError(t, err, `evaluation case "case_1" run result is nil`)
-	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
-		EvalCaseID:      "case_1",
-		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
-	})
-	assert.Nil(t, result)
-	assert.EqualError(t, err, `evaluation case "case_1" has no run details`)
-	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
-		EvalCaseID:      "case_1",
-		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
-		RunDetails:      []*evaluation.EvaluationCaseRunDetails{nil},
-	})
-	assert.Nil(t, result)
-	assert.EqualError(t, err, `evaluation case "case_1" run detail is nil`)
-	result, err = adaptEvaluationCaseResult(structure, "validation", &evaluation.EvaluationCaseResult{
-		EvalCaseID:      "case_1",
-		EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
-		RunDetails: []*evaluation.EvaluationCaseRunDetails{
-			{RunID: 2},
+	malformedEvidence := []struct {
+		name     string
+		value    *evaluation.EvaluationCaseResult
+		contains string
+	}{
+		{
+			name: "nil repeated-run result",
+			value: &evaluation.EvaluationCaseResult{
+				EvalCaseID:      "case_1",
+				EvalCaseResults: []*evalresult.EvalCaseResult{nil},
+			},
+			contains: "run",
 		},
-	})
-	assert.Nil(t, result)
-	assert.EqualError(t, err, `evaluation case "case_1" run detail id 2 does not match run result id 1`)
+		{
+			name: "missing run details",
+			value: &evaluation.EvaluationCaseResult{
+				EvalCaseID:      "case_1",
+				EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
+			},
+			contains: "run details",
+		},
+		{
+			name: "nil run detail",
+			value: &evaluation.EvaluationCaseResult{
+				EvalCaseID:      "case_1",
+				EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
+				RunDetails:      []*evaluation.EvaluationCaseRunDetails{nil},
+			},
+			contains: "run detail",
+		},
+		{
+			name: "unmatched run ids",
+			value: &evaluation.EvaluationCaseResult{
+				EvalCaseID:      "case_1",
+				EvalCaseResults: []*evalresult.EvalCaseResult{{RunID: 1}},
+				RunDetails:      []*evaluation.EvaluationCaseRunDetails{{RunID: 2}},
+			},
+			contains: "no matching run detail",
+		},
+	}
+	for _, test := range malformedEvidence {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := adaptEvaluationCaseResult(structure, "validation", test.value)
+			assert.Nil(t, result)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "case_1")
+			assert.Contains(t, err.Error(), test.contains)
+		})
+	}
 }
 
 func TestAdaptEvaluationSetResultValidationErrors(t *testing.T) {
@@ -3381,6 +3519,16 @@ func TestLossStopAndEventHelpers(t *testing.T) {
 	require.NotNil(t, decision)
 	assert.True(t, decision.ShouldStop)
 	assert.Equal(t, "target score reached", decision.Reason)
+	decision = (&engine{}).stop(4, 4, StopPolicy{
+		MaxRoundsWithoutAcceptance: 1,
+		TargetScore: func() *float64 {
+			value := 0.8
+			return &value
+		}(),
+	}, 1, 0.8)
+	require.NotNil(t, decision)
+	assert.True(t, decision.ShouldStop)
+	assert.Equal(t, "max rounds reached", decision.Reason)
 	decision = (&engine{}).stop(1, 4, StopPolicy{}, 0, 0.1)
 	require.NotNil(t, decision)
 	assert.False(t, decision.ShouldStop)
@@ -3676,6 +3824,23 @@ func TestRunRejectsEmptyTargetSurfaceIDs(t *testing.T) {
 	})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "target surface ids must not be empty")
+}
+
+func TestEvaluationUsageRemainsIncompleteWithoutTraceAggregate(t *testing.T) {
+	partial := summarizeTraceUsage(&atrace.Trace{Steps: []atrace.Step{{
+		Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+	}}})
+	assert.Equal(t, 1, partial.Calls)
+	assert.Equal(t, int64(5), partial.TotalTokens)
+	assert.False(t, partial.Complete)
+
+	complete := summarizeTraceUsage(&atrace.Trace{
+		Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5},
+		Steps: []atrace.Step{{Usage: &model.Usage{PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5}}},
+	})
+	assert.Equal(t, 1, complete.Calls)
+	assert.Equal(t, int64(5), complete.TotalTokens)
+	assert.True(t, complete.Complete)
 }
 
 func TestRunRejectsUnknownTargetSurfaceID(t *testing.T) {

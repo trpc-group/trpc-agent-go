@@ -41,12 +41,16 @@ type CaseBackwardResult struct {
 	EvalCaseID string
 	// StepGradients stores gradients per step in topological order.
 	StepGradients []promptiter.StepGradient
+	// Usage contains model-call telemetry across this case's backward steps.
+	Usage promptiter.Usage
 }
 
 // BackwardResult stores aggregated backward outputs for every case in this round.
 type BackwardResult struct {
 	// Cases stores per-case backward outputs for downstream aggregation.
 	Cases []CaseBackwardResult
+	// Usage contains model-call telemetry across all backward cases.
+	Usage promptiter.Usage
 }
 
 func (e *engine) backward(
@@ -66,6 +70,7 @@ func (e *engine) backward(
 	caseResults := make([]*CaseBackwardResult, len(losses))
 	result := &BackwardResult{
 		Cases: make([]CaseBackwardResult, 0, len(losses)),
+		Usage: promptiter.Usage{Complete: true},
 	}
 	parallelism := 0
 	if options.CaseParallelismEnabled {
@@ -99,6 +104,7 @@ func (e *engine) backward(
 			continue
 		}
 		result.Cases = append(result.Cases, *caseResult)
+		result.Usage = promptiter.MergeUsage(result.Usage, caseResult.Usage)
 	}
 	sort.SliceStable(result.Cases, func(i, j int) bool {
 		if result.Cases[i].EvalSetID != result.Cases[j].EvalSetID {
@@ -173,6 +179,7 @@ func (e *engine) backwardCase(
 		EvalSetID:     caseLoss.EvalSetID,
 		EvalCaseID:    caseLoss.EvalCaseID,
 		StepGradients: make([]promptiter.StepGradient, 0),
+		Usage:         promptiter.Usage{Complete: true},
 	}
 	for stepIndexInTrace := len(evalCase.Trace.Steps) - 1; stepIndexInTrace >= 0; stepIndexInTrace-- {
 		step := evalCase.Trace.Steps[stepIndexInTrace]
@@ -198,6 +205,7 @@ func (e *engine) backwardCase(
 				err,
 			)
 		}
+		caseResult.Usage = promptiter.MergeUsage(caseResult.Usage, response.Usage)
 		if len(response.Gradients) > 0 {
 			caseResult.StepGradients = append(caseResult.StepGradients, promptiter.StepGradient{
 				StepID:    step.StepID,

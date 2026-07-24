@@ -26,3 +26,23 @@ type SurfaceOverride struct {
 	// Value provides the candidate replacement content for the surface.
 	Value astructure.SurfaceValue
 }
+
+// CloneProfile returns an owned copy suitable for run and audit snapshots. It
+// follows structure.CloneSurfaceValue's bounded handling of non-standard
+// programmatic schema values.
+func CloneProfile(source *Profile) *Profile {
+	if source == nil {
+		return nil
+	}
+	result := &Profile{
+		StructureID: source.StructureID,
+		Overrides:   make([]SurfaceOverride, len(source.Overrides)),
+	}
+	for index, override := range source.Overrides {
+		result.Overrides[index] = SurfaceOverride{
+			SurfaceID: override.SurfaceID,
+			Value:     astructure.CloneSurfaceValue(override.Value),
+		}
+	}
+	return result
+}

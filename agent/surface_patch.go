@@ -62,6 +62,19 @@ func (p *SurfacePatch) SetSuppressSubAgentTransfer() {
 	p.patch.SetSuppressSubAgentTransfer()
 }
 
+// InvocationInstructionOverride returns the instruction surface override
+// configured for one node on the current invocation.
+func InvocationInstructionOverride(inv *Invocation, nodeID string) (string, bool) {
+	if inv == nil || nodeID == "" {
+		return "", false
+	}
+	patch, ok := surfacepatch.PatchForNode(inv.RunOptions.CustomAgentConfigs, nodeID)
+	if !ok {
+		return "", false
+	}
+	return patch.Instruction()
+}
+
 // WithSurfacePatchForNode applies one node's runtime surface overrides to this run.
 func WithSurfacePatchForNode(nodeID string, patch SurfacePatch) RunOption {
 	return func(opts *RunOptions) {

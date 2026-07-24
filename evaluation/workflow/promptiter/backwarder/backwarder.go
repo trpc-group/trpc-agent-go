@@ -85,6 +85,8 @@ type Result struct {
 	Gradients []promptiter.SurfaceGradient
 	// Upstream carries gradients that still need to propagate to predecessors.
 	Upstream []Propagation
+	// Usage contains model-call telemetry for this backward request.
+	Usage promptiter.Usage `json:"-"`
 }
 
 // Propagation groups packets to be sent to one predecessor step.
@@ -155,6 +157,7 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 		return &Result{
 			Gradients: []promptiter.SurfaceGradient{},
 			Upstream:  []Propagation{},
+			Usage:     promptiter.Usage{Complete: true},
 		}, nil
 	}
 	message, err := b.messageBuilder(ctx, normalizedRequest)
@@ -199,6 +202,7 @@ func (b *backwarder) Backward(ctx context.Context, request *Request) (*Result, e
 	if err != nil {
 		return nil, fmt.Errorf("sanitize backward result: %w", err)
 	}
+	result.Usage = output.Usage
 	return result, nil
 }
 

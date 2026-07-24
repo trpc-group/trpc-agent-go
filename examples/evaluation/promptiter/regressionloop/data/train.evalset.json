@@ -1,0 +1,58 @@
+{
+  "evalSetId": "support-train",
+  "name": "support-train",
+  "evalCases": [
+    {
+      "evalId": "train-refund-window",
+      "conversation": [
+        {
+          "invocationId": "train-refund-window-1",
+          "userContent": {"role": "user", "content": "What is the refund window for an unopened item?"},
+          "finalResponse": {"role": "assistant", "content": "Unopened items can be returned within 30 days."}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "train-user"}
+    },
+    {
+      "evalId": "train-order-tool",
+      "conversation": [
+        {
+          "invocationId": "train-order-tool-1",
+          "userContent": {"role": "user", "content": "Check order A100."},
+          "finalResponse": {"role": "assistant", "content": "Order A100 is shipped."},
+          "tools": [
+            {
+              "id": "expected-order-A100",
+              "name": "get_order",
+              "arguments": {"order_id": "A100"},
+              "result": {"status": "shipped"}
+            }
+          ]
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "train-user"}
+    },
+    {
+      "evalId": "train-json",
+      "conversation": [
+        {
+          "invocationId": "train-json-1",
+          "userContent": {"role": "user", "content": "Return refund status eligible as JSON."},
+          "finalResponse": {"role": "assistant", "content": "{\"status\":\"eligible\"}"}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "train-user"}
+    },
+    {
+      "evalId": "train-route",
+      "conversation": [
+        {
+          "invocationId": "train-route-1",
+          "userContent": {"role": "user", "content": "Escalate this refund dispute."},
+          "finalResponse": {"role": "assistant", "content": "Routing this refund dispute to refund-specialist."}
+        }
+      ],
+      "sessionInput": {"appName": "promptiter-regression-support", "userId": "train-user"}
+    }
+  ]
+}

@@ -13,8 +13,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -60,6 +62,14 @@ type RunRequest struct {
 	AcceptancePolicy AcceptancePolicy
 	// StopPolicy controls termination conditions between rounds.
 	StopPolicy StopPolicy
+	// RetainAuditEvidence retains repeated evaluation observations in the final
+	// RunResult. It is disabled by default because those observations can contain
+	// complete prompts, responses, and tool payloads.
+	RetainAuditEvidence bool
+	// EvaluateFinalCandidateTrain evaluates the terminal round's output profile
+	// on the training sets. It is disabled by default to avoid an extra model
+	// call and event for ordinary PromptIter runs.
+	EvaluateFinalCandidateTrain bool
 	// MaxRounds is the hard cap for outer optimization iterations.
 	MaxRounds int
 	// TargetSurfaceIDs limits this run to optimizing only the listed surfaces.
@@ -108,10 +118,18 @@ const (
 type RunResult struct {
 	// AppName identifies the PromptIter target app that owns this run.
 	AppName string
+	// InitialProfile is the normalized profile actually used for baseline
+	// evaluation and round-one training. Audit consumers must use this effective
+	// profile rather than the caller's pre-normalization request.
+	InitialProfile *promptiter.Profile
 	// ID uniquely identifies this run when the caller uses manager-backed execution.
 	ID string
 	// Status stores the lifecycle state of the run.
 	Status RunStatus
+	// Configuration is the effective, normalized execution policy used by this
+	// run. It is retained so audit consumers do not have to trust a separate
+	// caller-supplied description of PromptIter execution.
+	Configuration RunConfiguration
 	// CurrentRound stores the latest round started by the run.
 	CurrentRound int
 	// BaselineValidation stores the accepted baseline validation result before optimization rounds.
@@ -120,14 +138,38 @@ type RunResult struct {
 	AcceptedProfile *promptiter.Profile
 	// Rounds stores intermediate results of every optimization round.
 	Rounds []RoundResult
+	// Usage contains model-call telemetry across evaluation, backward,
+	// aggregation, and optimization stages.
+	Usage promptiter.Usage
 	// ErrorMessage stores the terminal run error when the run failed or was canceled.
 	ErrorMessage string
+}
+
+// RunConfiguration stores the effective PromptIter execution policy retained
+// with a completed run for reproducibility and audit validation.
+type RunConfiguration struct {
+	EvaluationOptions           EvaluationOptions
+	BackwardOptions             BackwardOptions
+	AggregationOptions          AggregationOptions
+	OptimizerOptions            OptimizerOptions
+	AcceptancePolicy            AcceptancePolicy
+	StopPolicy                  StopPolicy
+	RetainAuditEvidence         bool
+	EvaluateFinalCandidateTrain bool
+	MaxRounds                   int
+	TargetSurfaceIDs            []string
 }
 
 // RoundResult captures all observable state for one optimization round.
 type RoundResult struct {
 	// Round is the one-based index of this optimization cycle.
 	Round int
+	// Duration is the Engine-measured time spent executing this round, including
+	// optional terminal candidate-train evaluation.
+	Duration time.Duration
+	// Usage contains telemetry for this round's train, backward, aggregation,
+	// optimization, validation, and optional terminal candidate-train stages.
+	Usage promptiter.Usage
 	// InputProfile is the profile evaluated at the start of this round.
 	InputProfile *promptiter.Profile
 	// Train is the train-set result used for gradient generation.
@@ -144,6 +186,10 @@ type RoundResult struct {
 	OutputProfile *promptiter.Profile
 	// Validation is the validation result used for acceptance.
 	Validation *EvaluationResult
+	// CandidateTrain is the train-set result for OutputProfile when this round
+	// terminates the run. It gives audit consumers direct train evidence for the
+	// final candidate without requiring a later optimization round.
+	CandidateTrain *EvaluationResult
 	// Acceptance is the acceptance output for this round.
 	Acceptance *AcceptanceDecision
 	// Stop indicates whether the round triggered an early stop condition.
@@ -229,7 +275,8 @@ func (e *engine) run(
 	if err != nil {
 		return nil, fmt.Errorf("normalize initial profile: %w", err)
 	}
-	evaluationOptions := request.EvaluationOptions
+	configuration := effectiveRunConfiguration(request)
+	evaluationOptions := configuration.EvaluationOptions
 	acceptedProfile := initialProfile
 	acceptedValidationScore := 0.0
 	baselineValidation, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
@@ -238,6 +285,7 @@ func (e *engine) run(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, fmt.Errorf("evaluate accepted baseline profile: %w", err)
@@ -251,6 +299,8 @@ func (e *engine) run(
 	}
 	result := &RunResult{
 		Status:             RunStatusRunning,
+		Configuration:      configuration,
+		InitialProfile:     promptiter.CloneProfile(initialProfile),
 		CurrentRound:       0,
 		BaselineValidation: baselineValidation,
 		AcceptedProfile:    acceptedProfile,
@@ -259,6 +309,7 @@ func (e *engine) run(
 	roundsWithoutAcceptance := 0
 	for roundNumber := 1; roundNumber <= request.MaxRounds; roundNumber++ {
 		result.CurrentRound = roundNumber
+		roundStarted := time.Now()
 		roundResult, effectiveScore, err := e.executeRound(
 			ctx,
 			request,
@@ -287,6 +338,35 @@ func (e *engine) run(
 			roundsWithoutAcceptance,
 			effectiveScore,
 		)
+		if roundResult.Stop.ShouldStop && request.EvaluateFinalCandidateTrain {
+			candidateTrain, err := e.evaluate(ctx, structure, e.newEvaluationRequest(
+				request.Train,
+				roundResult.OutputProfile,
+				request.Teacher,
+				request.Judge,
+				evaluationOptions,
+				request.RetainAuditEvidence,
+			))
+			if err != nil {
+				return nil, fmt.Errorf(
+					"evaluate final candidate train round %d: %w",
+					roundNumber,
+					err,
+				)
+			}
+			roundResult.CandidateTrain = candidateTrain
+			if err := appendRunEvent(
+				ctx,
+				observer,
+				EventKindRoundCandidateTrainEvaluation,
+				roundNumber,
+				candidateTrain,
+			); err != nil {
+				return nil, err
+			}
+		}
+		roundResult.Usage = summarizeRoundUsage(roundResult)
+		roundResult.Duration = time.Since(roundStarted)
 		accepted := roundResult.Acceptance != nil && roundResult.Acceptance.Accepted
 		acceptanceReason := ""
 		scoreDelta := 0.0
@@ -316,7 +396,48 @@ func (e *engine) run(
 		}
 	}
 	result.Status = RunStatusSucceeded
+	result.Usage = summarizeRunUsage(result)
 	return result, nil
+}
+
+func summarizeRunUsage(result *RunResult) promptiter.Usage {
+	if result == nil {
+		return promptiter.Usage{}
+	}
+	values := make([]promptiter.Usage, 0, 1+len(result.Rounds))
+	if result.BaselineValidation != nil {
+		values = append(values, result.BaselineValidation.Usage)
+	}
+	for index := range result.Rounds {
+		values = append(values, result.Rounds[index].Usage)
+	}
+	return promptiter.MergeUsage(values...)
+}
+
+func summarizeRoundUsage(round *RoundResult) promptiter.Usage {
+	if round == nil {
+		return promptiter.Usage{}
+	}
+	values := make([]promptiter.Usage, 0, 6)
+	if round.Train != nil {
+		values = append(values, round.Train.Usage)
+	}
+	if round.Backward != nil {
+		values = append(values, round.Backward.Usage)
+	}
+	if round.Aggregation != nil {
+		values = append(values, round.Aggregation.Usage)
+	}
+	if round.Patches != nil {
+		values = append(values, round.Patches.Usage)
+	}
+	if round.Validation != nil {
+		values = append(values, round.Validation.Usage)
+	}
+	if round.CandidateTrain != nil {
+		values = append(values, round.CandidateTrain.Usage)
+	}
+	return promptiter.MergeUsage(values...)
 }
 
 func (e *engine) validateRunRequest(request *RunRequest) error {
@@ -334,6 +455,17 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("max rounds must be greater than 0")
 	case len(request.TargetSurfaceIDs) == 0:
 		return errors.New("target surface ids must not be empty")
+	case request.EvaluationOptions.NumRuns < 0:
+		return errors.New("evaluation num runs must be non-negative")
+	case request.EvaluationOptions.EvalCaseParallelism < 0:
+		return errors.New("evaluation case parallelism must be non-negative")
+	case math.IsNaN(request.AcceptancePolicy.MinScoreGain) || math.IsInf(request.AcceptancePolicy.MinScoreGain, 0):
+		return errors.New("acceptance minimum score gain must be finite")
+	case request.StopPolicy.MaxRoundsWithoutAcceptance < 0:
+		return errors.New("max rounds without acceptance must be non-negative")
+	case request.StopPolicy.TargetScore != nil &&
+		(math.IsNaN(*request.StopPolicy.TargetScore) || math.IsInf(*request.StopPolicy.TargetScore, 0)):
+		return errors.New("stop target score must be finite")
 	case request.BackwardOptions.CaseParallelism < 0:
 		return errors.New("backward case parallelism must be non-negative")
 	case request.AggregationOptions.SurfaceParallelism < 0:
@@ -344,6 +476,30 @@ func (e *engine) validateRunRequest(request *RunRequest) error {
 		return errors.New("agent evaluator is nil")
 	default:
 		return nil
+	}
+}
+
+func effectiveRunConfiguration(request *RunRequest) RunConfiguration {
+	evaluationOptions := request.EvaluationOptions
+	if evaluationOptions.NumRuns <= 0 {
+		evaluationOptions.NumRuns = 1
+	}
+	stopPolicy := request.StopPolicy
+	if request.StopPolicy.TargetScore != nil {
+		targetScore := *request.StopPolicy.TargetScore
+		stopPolicy.TargetScore = &targetScore
+	}
+	return RunConfiguration{
+		EvaluationOptions:           evaluationOptions,
+		BackwardOptions:             request.BackwardOptions,
+		AggregationOptions:          request.AggregationOptions,
+		OptimizerOptions:            request.OptimizerOptions,
+		AcceptancePolicy:            request.AcceptancePolicy,
+		StopPolicy:                  stopPolicy,
+		RetainAuditEvidence:         request.RetainAuditEvidence,
+		EvaluateFinalCandidateTrain: request.EvaluateFinalCandidateTrain,
+		MaxRounds:                   request.MaxRounds,
+		TargetSurfaceIDs:            append([]string(nil), request.TargetSurfaceIDs...),
 	}
 }
 
@@ -397,6 +553,7 @@ func (e *engine) executeRound(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, 0, fmt.Errorf("evaluate train round %d: %w", roundNumber, err)
@@ -476,6 +633,7 @@ func (e *engine) executeRound(
 		request.Teacher,
 		request.Judge,
 		evaluationOptions,
+		request.RetainAuditEvidence,
 	))
 	if err != nil {
 		return nil, 0, fmt.Errorf("evaluate validation round %d: %w", roundNumber, err)
@@ -504,13 +662,15 @@ func (e *engine) newEvaluationRequest(
 	teacher runner.Runner,
 	judge runner.Runner,
 	options EvaluationOptions,
+	retainAuditEvidence bool,
 ) *EvaluationRequest {
 	return &EvaluationRequest{
-		EvalSets: inputs,
-		Profile:  profile,
-		Teacher:  teacher,
-		Judge:    judge,
-		Options:  options,
+		EvalSets:            inputs,
+		Profile:             profile,
+		Teacher:             teacher,
+		Judge:               judge,
+		Options:             options,
+		RetainAuditEvidence: retainAuditEvidence,
 	}
 }
 

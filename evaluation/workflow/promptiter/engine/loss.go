@@ -34,9 +34,6 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 	losses := make([]promptiter.CaseLoss, 0)
 	for _, evalSet := range result.EvalSets {
 		for _, evalCase := range evalSet.Cases {
-			if evalCase.Trace != nil && evalCase.Trace.Status == atrace.TraceStatusIncomplete {
-				continue
-			}
 			caseLoss := promptiter.CaseLoss{
 				EvalSetID:      evalCase.EvalSetID,
 				EvalCaseID:     evalCase.EvalCaseID,
@@ -46,6 +43,13 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 				if metric.Status != status.EvalStatusFailed {
 					continue
 				}
+				trace := evalCase.Trace
+				if metricTrace := evalCase.MetricTraces[metric.MetricName]; metricTrace != nil {
+					trace = metricTrace
+				}
+				if trace != nil && trace.Status == atrace.TraceStatusIncomplete {
+					continue
+				}
 				if strings.TrimSpace(metric.Reason) == "" {
 					return nil, fmt.Errorf(
 						"metric %q for eval case %q is missing loss reason",
@@ -53,7 +57,7 @@ func (e *engine) loss(result *EvaluationResult) ([]promptiter.CaseLoss, error) {
 						evalCase.EvalCaseID,
 					)
 				}
-				terminalStepIDs, err := traceTerminalStepIDs(evalCase.Trace)
+				terminalStepIDs, err := traceTerminalStepIDs(trace)
 				if err != nil {
 					return nil, fmt.Errorf(
 						"resolve terminal step for eval case %q: %w",
