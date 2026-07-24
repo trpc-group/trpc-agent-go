@@ -232,7 +232,7 @@ sources := []source.Source{
 | 参数 | 默认值 | 说明 |
 |-----|-------|------|
 | ChunkSize | 1024 | 每个分块的最大字符数 |
-| Overlap | 128 | 相邻分块之间的重叠字符数 |
+| Overlap | 0 | 相邻分块之间的重叠字符数 |
 
 > 默认的分块策略都受 `chunkSize` 参数影响。`overlap` 参数仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效，JSONChunking 不支持 overlap。
 

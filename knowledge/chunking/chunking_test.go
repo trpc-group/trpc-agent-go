@@ -175,7 +175,7 @@ func TestCreateChunk(t *testing.T) {
 // TestDefaultConstants tests the default constants
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1024, defaultChunkSize)
-	assert.Equal(t, 128, defaultOverlap)
+	assert.Equal(t, 0, defaultOverlap)
 }
 
 // TestErrors tests error constants

@@ -192,7 +192,7 @@ Each file type has an associated chunking strategy:
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | ChunkSize | 1024 | Maximum characters per chunk |
-| Overlap | 128 | Overlapping characters between adjacent chunks |
+| Overlap | 0 | Overlapping characters between adjacent chunks |
 
 > Default chunking strategies are affected by `chunkSize` parameter. The `overlap` parameter only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. JSONChunking does not support overlap.
 
