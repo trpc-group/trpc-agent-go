@@ -29,7 +29,7 @@ const (
 )
 
 var (
-	secretLineRE     = regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|pwd|secret|credential)\s*:?=`)
+	secretLineRE     = regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|pwd|secret|credential)[A-Za-z0-9_-]*\s*:?=`)
 	resourceAssignRE = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)?\s*:?=\s*(?:os\.(?:Open|OpenFile|Create)|http\.(?:Get|Post)|sql\.Open|[A-Za-z0-9_.]+\.(?:Query|QueryContext))\(`)
 	txAssignRE       = regexp.MustCompile(`^\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*[A-Za-z_][A-Za-z0-9_]*\s*:?=\s*[A-Za-z0-9_.]+\.(?:Begin|BeginTx)\(`)
 	sqlBuildRE       = regexp.MustCompile(`(?i)(?:fmt\.Sprintf\s*\(\s*["'][^"']*(?:select|insert|update|delete)|(?:select|insert|update|delete)[^\n]*(?:\+|fmt\.Sprintf))`)

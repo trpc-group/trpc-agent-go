@@ -37,6 +37,7 @@ From the `examples` module:
 go run ./code_review_agent \
   --fixture security_secret \
   --mode rule-only \
+  --sandbox mock --dry-run \
   --out-dir /tmp/code-review-agent \
   --db /tmp/code-review-agent/review.db
 ```
@@ -135,6 +136,8 @@ outside the repository are skipped and recorded in the input summary. Explicit
 Input is capped at 200 explicit/untracked files, 1 MiB per synthesized file,
 and 10 MiB for the combined diff. Diff files and Git subprocess output are
 bounded while they are read, so the limit also protects memory use.
+The persisted input summary includes SHA-256, byte count, and changed-file
+count, identifying the reviewed input without storing the unredacted diff.
 
 Review an explicit file list:
 
@@ -163,11 +166,28 @@ sandbox. `mock` is available only for explicit
 dry-run/testing paths. Use `--sandbox local-dev` only for local development; it
 is intentionally not the default production-like path.
 
+`managed` OS isolation is implemented on Linux and macOS. On Windows, a
+non-dry-run managed review fails fast; select `--sandbox container` or
+`--sandbox e2b`. The agent never silently falls back to host execution.
+
+| Runtime | Isolation | Prerequisite |
+| --- | --- | --- |
+| `managed` | Restricted OS sandbox and network | Linux with bubblewrap or macOS |
+| `container` | No network, read-only root, dropped capabilities | Docker daemon |
+| `e2b` | Remote workspace | `E2B_API_KEY` |
+| `local-dev` | None; development only | Local Go toolchain |
+| `mock` | No command execution | None |
+
 Every external command is gated by a governance policy that implements the
 framework `tool.PermissionPolicy` interface; non-allow-listed commands are
 denied or routed to human review, and every decision is persisted. Pass
 `--staticcheck` to additionally run `staticcheck ./...` when the binary is
 available in the sandbox.
+
+A custom `--skills-root` is untrusted by default. Its scripts receive a
+`needs_human_review` decision unless the operator passes
+`--allow-custom-skills`. Approved custom Skills are hashed as a bounded,
+symlink-free tree and the SHA-256 is persisted in the permission audit trail.
 
 ## Outputs
 
@@ -189,14 +209,23 @@ Reports are written through temporary files, synced, and renamed into place.
 The complete final audit snapshot is committed to SQLite in one transaction;
 findings, sandbox runs, governance and filter decisions, artifact records, and
 report metadata cannot be partially committed. The embedded SQLite driver is
-pure Go and works when `CGO_ENABLED=0`. Schema version 1 enables foreign keys
-and indexes task-owned audit rows.
+pure Go and works when `CGO_ENABLED=0`. Schema version 2 preserves confidence
+buckets, sandbox failure kinds, and the final conclusion, with an idempotent
+upgrade from version 1. Task queries return findings, warnings, human-review
+items, runs, governance decisions, artifacts, metrics, paths, and conclusion.
+Monitoring semantics are explicit: `tool_call_count` excludes blocked and
+skipped records, `permission_deny_count` counts hard denies, and
+`permission_intercept_count` counts every deny or human-review decision.
 
 ## Fixtures
 
 The fixtures cover clean diffs, secret leakage, goroutine/context leakage,
 resource lifecycle issues, transaction lifecycle issues, missing tests,
 duplicate findings, sandbox failure input, and redaction.
+
+`testdata/expected` contains compact deterministic golden assertions. The
+complete uncurated JSON report, Markdown report, and checksum manifest are in
+[`sample_output`](sample_output).
 
 Regenerate the curated expected outputs after an intentional behavior change:
 
@@ -206,6 +235,34 @@ go run ./code_review_agent --fixture all --mode rule-only \
   --db /tmp/code-review-agent-fixtures/review.db
 go run ./code_review_agent/testdata/gen_expected.go \
   /tmp/code-review-agent-fixtures ./code_review_agent/testdata/expected
+```
+
+## Acceptance and sandbox integration tests
+
+The deterministic evaluation corpus contains 40 high-risk and 40 benign
+variants. It enforces recall >= 80% and high-confidence false-positive rate <=
+15%:
+
+```bash
+go test ./code_review_agent/rules -run TestRuleEvaluationCorpus -count=1 -v
+```
+
+Production sandbox tests are opt-in so normal unit tests need no external
+service. Enable the runtime available on a dedicated test host:
+
+```bash
+TRPC_CR_TEST_MANAGED=1 go test ./code_review_agent/sandboxrunner -run ManagedSandboxIntegration -v
+TRPC_CR_TEST_CONTAINER=1 go test ./code_review_agent/{sandboxrunner,skillrunner} -run Container -v
+E2B_API_KEY=... TRPC_CR_TEST_E2B=1 go test ./code_review_agent/{sandboxrunner,skillrunner} -run E2B -v
+```
+
+The container test may pull `golang:1.24`; E2B creates a temporary remote
+sandbox. Both paths verify real Skill scripts and `go test`/`go vet`.
+On PowerShell, the same checks are automated by:
+
+```powershell
+.\code_review_agent\scripts\run-sandbox-integration.ps1 -Runtime container
+.\code_review_agent\scripts\run-sandbox-integration.ps1 -Runtime e2b
 ```
 
 ## Design

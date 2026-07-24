@@ -176,3 +176,44 @@ func TestScriptRunStatusClassification(t *testing.T) {
 		t.Fatalf("timeout should win over exit code: %+v", timedOut)
 	}
 }
+
+func TestGoEnvE2BDoesNotLeakHostPaths(t *testing.T) {
+	if got := goEnv("e2b"); len(got) != 0 {
+		t.Fatalf("e2b env leaked host values: %#v", got)
+	}
+}
+
+func TestCustomSkillRequiresExplicitApproval(t *testing.T) {
+	result := RunScripts(context.Background(), Config{
+		TaskID: "custom", SkillsRoot: t.TempDir(), CustomSkills: true,
+		SandboxKind: "mock", DiffText: testDiff,
+	})
+	if result.Err != nil {
+		t.Fatalf("blocked custom skill should be an audited result: %v", result.Err)
+	}
+	if len(result.Decisions) != 1 ||
+		result.Decisions[0].Decision != permission.DecisionNeedsHumanReview {
+		t.Fatalf("custom skill decision: %+v", result.Decisions)
+	}
+	if len(result.Runs) != 1 || result.Runs[0].Status != "blocked" {
+		t.Fatalf("custom skill was not blocked: %+v", result.Runs)
+	}
+}
+
+func TestApprovedCustomSkillRecordsDigest(t *testing.T) {
+	result := RunScripts(context.Background(), Config{
+		TaskID: "custom-approved", SkillsRoot: skillsRoot, CustomSkills: true,
+		AllowCustomSkills: true, SandboxKind: "mock", DiffText: testDiff,
+	})
+	if result.Err != nil {
+		t.Fatal(result.Err)
+	}
+	if !result.SkillLoaded || len(result.Decisions) != 4 {
+		t.Fatalf("approved custom skill audit: %+v", result)
+	}
+	decision := result.Decisions[0]
+	if decision.Decision != permission.DecisionAllow ||
+		!strings.Contains(decision.Reason, "sha256=") {
+		t.Fatalf("custom skill digest decision: %+v", decision)
+	}
+}

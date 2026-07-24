@@ -1,36 +1,7 @@
 # 方案设计说明
 
-本示例基于 tRPC-Agent-Go 的 Skills、沙箱与数据库存储能力构建自动代码评审
-Agent，评审主链路保持确定性，无需模型凭证即可对样本 diff 产出稳定报告。
+本示例把 code-review Skill、沙箱、治理和 SQLite 串成可回放的 Go 代码评审流水线。CLI 有界读取 diff、文件、Git 工作区或 fixture，解析 hunk、行号和 package；规则覆盖密钥、动态 SQL、并发/context、资源、错误、事务及测试。fake model 无需密钥即可验证 Agent 链路，真实模型只接收脱敏内容，失败自动降级。
 
-`code-review` Skill（SKILL.md + 规则文档 + 脚本）描述评审流程与规则目录，
-Go CLI 负责编排：解析 unified diff、文件列表或 `git diff` 工作区输入，
-提取变更文件、hunk 与行号后执行规则检测，并将结果落库与出报告。规则命中
-按置信度分桶：高置信度进入 findings，中间区间进入 needs_human_review，
-低置信度进入 warnings；同文件、同行、同规则、同类别的重复结果按最高
-severity/confidence 去重，每条结果都会记录可审计的 filter decision。
+外部命令先经 PermissionPolicy；默认 managed，另支持断网容器和 E2B，local 仅开发使用。命令有超时、输出上限、洁净环境和失败分类；自定义 Skill 默认转人工，授权后记录摘要。结果按文件、行、规则和类别去重，并按置信度分桶。
 
-模型辅助评审通过 `agent/llmagent` + `runner` 驱动，`fake-model` 模式使用
-离线确定性模型覆盖完整链路，`llm` 模式对接 OpenAI 兼容模型；仅发送脱敏后
-的 diff，模型结果经严格 JSON 契约解析后并入统一去重降噪流水线，失败时
-降级为纯规则结果并记录异常。
-
-沙箱执行默认使用 `codeexecutor/sandbox`（managed OS 沙箱），同时支持
-`container`（Docker）与 `e2b` 云沙箱；Skill 脚本经框架 `skill_load` /
-`skill_run` 工具在同样的沙箱选择上运行，`local-dev` 仅作为开发降级。
-所有外部命令执行前都经过实现了框架 `tool.PermissionPolicy` 接口的命令
-治理策略：白名单仅限 Go 静态检查与评审 Skill 脚本，高危网络、提权、
-破坏性命令被拒绝或转人工审查，全部决策落库审计。
-
-存储层定义了精简的 `store.Store` 接口，默认由纯 Go SQLite 驱动实现带版本的
-最小 schema
-（任务、findings、沙箱执行、权限决策、过滤决策、报告、产物），可替换为
-其他 SQL 后端。任务所属记录带外键与索引，最终审计快照在同一事务中写入；
-JSON、Markdown 与 SHA-256 产物清单通过临时文件、sync、rename 发布。
-脱敏在报告与持久化前统一执行，防止密钥、令牌等敏感信息
-泄漏。监控指标覆盖总耗时、沙箱耗时、工具调用次数、权限拦截数、severity
-分布与异常分布，支持通过 OTLP 上报用于审计与回放。
-
-输入在解析前即受预算约束：仓库模式合并未暂存、已暂存与有界的未跟踪文件；
-显式文件模式拒绝越界路径、符号链接、非普通文件、二进制和超大文件；diff
-文件及 Git 子进程输出在读取时限制为 10 MiB，避免先无界分配后再检查。
+schema v2 原子保存任务、输入摘要、三个 finding 分桶、沙箱运行、权限/过滤决策、产物、指标和最终结论，并可从 v1 幂等升级。统一 sanitizer 在报告和落库前遍历所有外部字符串；JSON、Markdown 与校验清单原子发布。指标记录总耗时、沙箱/模型耗时、真实工具调用、拦截、严重级别和异常分布，支持 OTLP 审计。

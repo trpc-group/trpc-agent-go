@@ -1,5 +1,5 @@
 {
-  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "summary": "2 high-confidence findings and 1 human-review items detected.",
   "findings": [
     {
       "severity": "critical",
@@ -8,6 +8,18 @@
       "line": 3,
       "title": "Potential hard-coded secret",
       "evidence": "var githubToken = [REDACTED_SECRET]",
+      "recommendation": "Move secrets to a secret manager or environment variable and rotate the exposed credential.",
+      "confidence": 0.96,
+      "source": "rule-only",
+      "rule_id": "SEC001"
+    },
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "redact/redact.go",
+      "line": 4,
+      "title": "Potential hard-coded secret",
+      "evidence": "var tencentcloudSecretKey = [REDACTED_SECRET]",
       "recommendation": "Move secrets to a secret manager or environment variable and rotate the exposed credential.",
       "confidence": 0.96,
       "source": "rule-only",

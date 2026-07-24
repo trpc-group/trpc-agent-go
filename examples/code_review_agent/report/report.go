@@ -20,7 +20,7 @@ import (
 	"sort"
 	"strings"
 
-	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sanitize"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
@@ -36,8 +36,8 @@ func Write(outDir string, r review.ReviewReport) ([]review.Artifact, error) {
 	jsonPath := filepath.Join(outDir, "review_report.json")
 	mdPath := filepath.Join(outDir, "review_report.md")
 	manifestPath := filepath.Join(outDir, "artifact_manifest.json")
-	safeReport := redactReport(r)
-	md := []byte(redaction.RedactText(markdown(safeReport)))
+	safeReport := sanitize.Report(r)
+	md := []byte(markdown(safeReport))
 	if len(md) > maxArtifactBytes {
 		return nil, fmt.Errorf("markdown report is %d bytes, exceeds artifact limit of %d bytes", len(md), maxArtifactBytes)
 	}
@@ -168,8 +168,23 @@ func markdown(r review.ReviewReport) string {
 	fmt.Fprintf(&b, "\n## Metrics\n\n")
 	fmt.Fprintf(&b, "- total duration: %dms\n", r.Metrics.TotalDurationMS)
 	fmt.Fprintf(&b, "- sandbox duration: %dms\n", r.Metrics.SandboxDurationMS)
+	fmt.Fprintf(&b, "- model duration: %dms\n", r.Metrics.ModelDurationMS)
 	fmt.Fprintf(&b, "- tool calls: %d\n", r.Metrics.ToolCallCount)
+	fmt.Fprintf(&b, "- model calls: %d\n", r.Metrics.ModelCallCount)
 	fmt.Fprintf(&b, "- permission denies: %d\n", r.Metrics.PermissionDenyCount)
+	fmt.Fprintf(&b, "- permission intercepts: %d\n", r.Metrics.PermissionInterceptCount)
+	fmt.Fprintf(&b, "- blocked commands: %d\n", r.Metrics.BlockedCommandCount)
+	fmt.Fprintf(&b, "- skipped commands: %d\n", r.Metrics.SkippedCommandCount)
+	fmt.Fprintf(&b, "- warnings: %d\n", r.Metrics.WarningCount)
+	fmt.Fprintf(&b, "- needs human review: %d\n", r.Metrics.NeedsHumanReviewCount)
+	exceptionKeys := make([]string, 0, len(r.Metrics.ExceptionCounts))
+	for key := range r.Metrics.ExceptionCounts {
+		exceptionKeys = append(exceptionKeys, key)
+	}
+	sort.Strings(exceptionKeys)
+	for _, key := range exceptionKeys {
+		fmt.Fprintf(&b, "- exception %s: %d\n", key, r.Metrics.ExceptionCounts[key])
+	}
 	return b.String()
 }
 
@@ -189,67 +204,6 @@ func writeFindings(b *strings.Builder, title string, findings []review.Finding) 
 		fmt.Fprintf(b, "- Evidence: `%s`\n", f.Evidence)
 		fmt.Fprintf(b, "- Recommendation: %s\n\n", f.Recommendation)
 	}
-}
-
-// redactReport applies secret redaction to every report field.
-func redactReport(r review.ReviewReport) review.ReviewReport {
-	out := r
-	out.Task.InputSummary = redaction.RedactText(out.Task.InputSummary)
-	out.Task.Error = redaction.RedactText(out.Task.Error)
-	out.Summary = redaction.RedactText(out.Summary)
-	out.Files = make([]review.ChangedFile, len(r.Files))
-	copy(out.Files, r.Files)
-	for i := range out.Files {
-		out.Files[i].Hunks = make([]review.Hunk, len(r.Files[i].Hunks))
-		copy(out.Files[i].Hunks, r.Files[i].Hunks)
-		for j := range out.Files[i].Hunks {
-			out.Files[i].Hunks[j].Lines = make([]review.DiffLine, len(r.Files[i].Hunks[j].Lines))
-			copy(out.Files[i].Hunks[j].Lines, r.Files[i].Hunks[j].Lines)
-			for k := range out.Files[i].Hunks[j].Lines {
-				out.Files[i].Hunks[j].Lines[k].Content = redaction.RedactText(out.Files[i].Hunks[j].Lines[k].Content)
-			}
-		}
-	}
-	out.Findings = redactFindings(r.Findings)
-	out.Warnings = redactFindings(r.Warnings)
-	out.NeedsHumanReview = redactFindings(r.NeedsHumanReview)
-	out.SandboxRuns = make([]review.SandboxRun, len(r.SandboxRuns))
-	copy(out.SandboxRuns, r.SandboxRuns)
-	for i := range out.SandboxRuns {
-		out.SandboxRuns[i].Command = redaction.RedactText(out.SandboxRuns[i].Command)
-		out.SandboxRuns[i].StdoutExcerpt = redaction.RedactText(out.SandboxRuns[i].StdoutExcerpt)
-		out.SandboxRuns[i].StderrExcerpt = redaction.RedactText(out.SandboxRuns[i].StderrExcerpt)
-		out.SandboxRuns[i].Error = redaction.RedactText(out.SandboxRuns[i].Error)
-	}
-	out.PermissionDecisions = make([]review.PermissionDecision, len(r.PermissionDecisions))
-	copy(out.PermissionDecisions, r.PermissionDecisions)
-	for i := range out.PermissionDecisions {
-		out.PermissionDecisions[i].Command = redaction.RedactText(out.PermissionDecisions[i].Command)
-		out.PermissionDecisions[i].Reason = redaction.RedactText(out.PermissionDecisions[i].Reason)
-	}
-	out.FilterDecisions = make([]review.FilterDecision, len(r.FilterDecisions))
-	copy(out.FilterDecisions, r.FilterDecisions)
-	for i := range out.FilterDecisions {
-		out.FilterDecisions[i].Reason = redaction.RedactText(out.FilterDecisions[i].Reason)
-	}
-	out.Artifacts = make([]review.Artifact, len(r.Artifacts))
-	copy(out.Artifacts, r.Artifacts)
-	for i := range out.Artifacts {
-		out.Artifacts[i].Path = redaction.RedactText(out.Artifacts[i].Path)
-	}
-	return out
-}
-
-// redactFindings returns a copy of findings with redacted text fields.
-func redactFindings(in []review.Finding) []review.Finding {
-	out := make([]review.Finding, len(in))
-	copy(out, in)
-	for i := range out {
-		out[i].Title = redaction.RedactText(out[i].Title)
-		out[i].Evidence = redaction.RedactText(out[i].Evidence)
-		out[i].Recommendation = redaction.RedactText(out[i].Recommendation)
-	}
-	return out
 }
 
 // artifact describes a produced file with its checksum and size.

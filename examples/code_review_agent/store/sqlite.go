@@ -22,7 +22,7 @@ import (
 	_ "github.com/ncruces/go-sqlite3/driver"
 	_ "github.com/ncruces/go-sqlite3/embed"
 
-	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sanitize"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
@@ -62,23 +62,29 @@ func (s *SQLiteStore) Close() error {
 
 // CreateTask inserts a new task.
 func (s *SQLiteStore) CreateTask(ctx context.Context, task review.ReviewTask) error {
+	safeTask := sanitize.Task(task)
+	if safeTask.ID != task.ID {
+		return errors.New("task id contains sensitive data")
+	}
+	task = safeTask
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO review_tasks(id, status, input_type, input_summary, repo_path, started_at, error)
 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		task.ID, task.Status, task.InputType, redaction.RedactText(task.InputSummary),
-		redaction.RedactText(task.RepoPath), task.StartedAt.Format(time.RFC3339Nano), redaction.RedactText(task.Error))
+		task.ID, task.Status, task.InputType, task.InputSummary,
+		task.RepoPath, task.StartedAt.Format(time.RFC3339Nano), task.Error)
 	return err
 }
 
 // FinishTask marks a task as completed or failed.
 func (s *SQLiteStore) FinishTask(ctx context.Context, task review.ReviewTask) error {
+	task = sanitize.Task(task)
 	finished := ""
 	if task.FinishedAt != nil {
 		finished = task.FinishedAt.Format(time.RFC3339Nano)
 	}
 	_, err := s.db.ExecContext(ctx, `
 UPDATE review_tasks SET status = ?, finished_at = ?, error = ? WHERE id = ?`,
-		task.Status, finished, redaction.RedactText(task.Error), task.ID)
+		task.Status, finished, task.Error, task.ID)
 	return err
 }
 
@@ -105,39 +111,43 @@ func (s *SQLiteStore) SaveReview(
 	jsonPath string,
 	markdownPath string,
 ) error {
+	report = sanitize.Report(report)
+	artifacts = sanitize.Artifacts(artifacts)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
-		allFindings := make([]review.Finding, 0,
-			len(report.Findings)+len(report.Warnings)+len(report.NeedsHumanReview))
-		allFindings = append(allFindings, report.Findings...)
-		allFindings = append(allFindings, report.Warnings...)
-		allFindings = append(allFindings, report.NeedsHumanReview...)
-		for _, f := range allFindings {
-			if _, err := tx.ExecContext(ctx, `
-INSERT INTO review_findings(task_id, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				taskID, f.Severity, f.Category, f.File, f.Line,
-				redaction.RedactText(f.Title), redaction.RedactText(f.Evidence),
-				redaction.RedactText(f.Recommendation), f.Confidence, f.Source,
-				f.RuleID); err != nil {
-				return err
+		buckets := []struct {
+			name     string
+			findings []review.Finding
+		}{
+			{name: review.FindingBucketFinding, findings: report.Findings},
+			{name: review.FindingBucketWarning, findings: report.Warnings},
+			{name: review.FindingBucketNeedsHumanReview, findings: report.NeedsHumanReview},
+		}
+		for _, bucket := range buckets {
+			for _, f := range bucket.findings {
+				if _, err := tx.ExecContext(ctx, `
+INSERT INTO review_findings(task_id, bucket, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					taskID, bucket.name, f.Severity, f.Category, f.File, f.Line,
+					f.Title, f.Evidence, f.Recommendation, f.Confidence, f.Source,
+					f.RuleID); err != nil {
+					return err
+				}
 			}
 		}
 		for _, run := range report.SandboxRuns {
 			if _, err := tx.ExecContext(ctx, `
-INSERT INTO sandbox_runs(task_id, command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, taskID,
-				redaction.RedactText(run.Command), run.Status, run.ExitCode,
-				run.DurationMS, redaction.RedactText(run.StdoutExcerpt),
-				redaction.RedactText(run.StderrExcerpt),
-				redaction.RedactText(run.Error)); err != nil {
+INSERT INTO sandbox_runs(task_id, command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error, failure_kind)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID,
+				run.Command, run.Status, run.ExitCode, run.DurationMS,
+				run.StdoutExcerpt, run.StderrExcerpt, run.Error,
+				run.FailureKind); err != nil {
 				return err
 			}
 		}
 		for _, d := range report.PermissionDecisions {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO permission_decisions(task_id, command, decision, reason, created_at)
-VALUES (?, ?, ?, ?, ?)`, taskID, redaction.RedactText(d.Command),
-				d.Decision, redaction.RedactText(d.Reason),
+VALUES (?, ?, ?, ?, ?)`, taskID, d.Command, d.Decision, d.Reason,
 				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return err
 			}
@@ -147,7 +157,7 @@ VALUES (?, ?, ?, ?, ?)`, taskID, redaction.RedactText(d.Command),
 INSERT INTO filter_decisions(task_id, rule_id, file, line, source, confidence, stage, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, d.RuleID, d.File,
 				d.Line, d.Source, d.Confidence, d.Stage, d.Decision,
-				redaction.RedactText(d.Reason),
+				d.Reason,
 				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return err
 			}
@@ -155,7 +165,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, d.RuleID, d.File,
 		for _, a := range artifacts {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO artifacts(task_id, kind, path, sha256, size_bytes)
-VALUES (?, ?, ?, ?, ?)`, taskID, a.Kind, redaction.RedactText(a.Path),
+VALUES (?, ?, ?, ?, ?)`, taskID, a.Kind, a.Path,
 				a.SHA256, a.SizeBytes); err != nil {
 				return err
 			}
@@ -165,23 +175,23 @@ VALUES (?, ?, ?, ?, ?)`, taskID, a.Kind, redaction.RedactText(a.Path),
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO review_reports(task_id, json_path, markdown_path, summary_json)
-VALUES (?, ?, ?, ?)`, taskID, redaction.RedactText(jsonPath),
-			redaction.RedactText(markdownPath),
-			redaction.RedactText(string(summary)))
+INSERT INTO review_reports(task_id, json_path, markdown_path, summary_json, conclusion)
+VALUES (?, ?, ?, ?, ?)`, taskID, sanitizePath(jsonPath),
+			sanitizePath(markdownPath), string(summary), report.Summary)
 		return err
 	})
 }
 
 // SaveFindings stores findings for a task.
 func (s *SQLiteStore) SaveFindings(ctx context.Context, taskID string, findings []review.Finding) error {
+	findings = sanitize.Findings(findings)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		for _, f := range findings {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO review_findings(task_id, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				taskID, f.Severity, f.Category, f.File, f.Line, redaction.RedactText(f.Title),
-				redaction.RedactText(f.Evidence), redaction.RedactText(f.Recommendation),
+				taskID, f.Severity, f.Category, f.File, f.Line, f.Title,
+				f.Evidence, f.Recommendation,
 				f.Confidence, f.Source, f.RuleID); err != nil {
 				return err
 			}
@@ -192,14 +202,14 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 // SaveSandboxRuns stores sandbox runs.
 func (s *SQLiteStore) SaveSandboxRuns(ctx context.Context, taskID string, runs []review.SandboxRun) error {
+	runs = sanitize.Runs(runs)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		for _, run := range runs {
 			if _, err := tx.ExecContext(ctx, `
-INSERT INTO sandbox_runs(task_id, command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-				taskID, redaction.RedactText(run.Command), run.Status, run.ExitCode, run.DurationMS,
-				redaction.RedactText(run.StdoutExcerpt), redaction.RedactText(run.StderrExcerpt),
-				redaction.RedactText(run.Error)); err != nil {
+INSERT INTO sandbox_runs(task_id, command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error, failure_kind)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				taskID, run.Command, run.Status, run.ExitCode, run.DurationMS,
+				run.StdoutExcerpt, run.StderrExcerpt, run.Error, run.FailureKind); err != nil {
 				return err
 			}
 		}
@@ -209,12 +219,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 
 // SavePermissionDecisions stores command governance decisions.
 func (s *SQLiteStore) SavePermissionDecisions(ctx context.Context, taskID string, decisions []review.PermissionDecision) error {
+	decisions = sanitize.PermissionDecisions(decisions)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		for _, d := range decisions {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO permission_decisions(task_id, command, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?)`,
-				taskID, redaction.RedactText(d.Command), d.Decision, redaction.RedactText(d.Reason),
+				taskID, d.Command, d.Decision, d.Reason,
 				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return err
 			}
@@ -225,13 +236,14 @@ VALUES (?, ?, ?, ?, ?)`,
 
 // SaveFilterDecisions stores noise-control filter decisions.
 func (s *SQLiteStore) SaveFilterDecisions(ctx context.Context, taskID string, decisions []review.FilterDecision) error {
+	decisions = sanitize.FilterDecisions(decisions)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		for _, d := range decisions {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO filter_decisions(task_id, rule_id, file, line, source, confidence, stage, decision, reason, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				taskID, d.RuleID, d.File, d.Line, d.Source, d.Confidence,
-				d.Stage, d.Decision, redaction.RedactText(d.Reason),
+				d.Stage, d.Decision, d.Reason,
 				d.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return err
 			}
@@ -242,12 +254,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 // SaveArtifacts stores artifacts.
 func (s *SQLiteStore) SaveArtifacts(ctx context.Context, taskID string, artifacts []review.Artifact) error {
+	artifacts = sanitize.Artifacts(artifacts)
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		for _, a := range artifacts {
 			if _, err := tx.ExecContext(ctx, `
 INSERT INTO artifacts(task_id, kind, path, sha256, size_bytes)
 VALUES (?, ?, ?, ?, ?)`,
-				taskID, a.Kind, redaction.RedactText(a.Path), a.SHA256, a.SizeBytes); err != nil {
+				taskID, a.Kind, a.Path, a.SHA256, a.SizeBytes); err != nil {
 				return err
 			}
 		}
@@ -257,15 +270,20 @@ VALUES (?, ?, ?, ?, ?)`,
 
 // SaveReport stores the final report metadata and summary.
 func (s *SQLiteStore) SaveReport(ctx context.Context, taskID string, report review.ReviewReport, jsonPath, markdownPath string) error {
+	report = sanitize.Report(report)
 	summary, err := json.Marshal(report.Metrics)
 	if err != nil {
 		return err
 	}
 	_, err = s.db.ExecContext(ctx, `
-INSERT INTO review_reports(task_id, json_path, markdown_path, summary_json)
-VALUES (?, ?, ?, ?)`,
-		taskID, redaction.RedactText(jsonPath), redaction.RedactText(markdownPath), redaction.RedactText(string(summary)))
+INSERT INTO review_reports(task_id, json_path, markdown_path, summary_json, conclusion)
+VALUES (?, ?, ?, ?, ?)`,
+		taskID, sanitizePath(jsonPath), sanitizePath(markdownPath), string(summary), report.Summary)
 	return err
+}
+
+func sanitizePath(path string) string {
+	return sanitize.Artifacts([]review.Artifact{{Path: path}})[0].Path
 }
 
 // CountFindings returns the number of stored findings for tests and demos.
@@ -298,11 +316,13 @@ FROM review_tasks WHERE id = ?`, taskID).Scan(
 			snap.Task.FinishedAt = &t
 		}
 	}
-	findings, err := s.getFindings(ctx, taskID)
+	findings, warnings, humanReview, err := s.getFindings(ctx, taskID)
 	if err != nil {
 		return snap, err
 	}
 	snap.Findings = findings
+	snap.Warnings = warnings
+	snap.NeedsHumanReview = humanReview
 	runs, err := s.getSandboxRuns(ctx, taskID)
 	if err != nil {
 		return snap, err
@@ -324,13 +344,19 @@ FROM review_tasks WHERE id = ?`, taskID).Scan(
 	}
 	snap.Artifacts = artifacts
 	if err := s.db.QueryRowContext(ctx, `
-SELECT json_path, markdown_path, summary_json FROM review_reports WHERE task_id = ?`,
+SELECT json_path, markdown_path, summary_json, conclusion FROM review_reports WHERE task_id = ?`,
 		taskID).Scan(&snap.Report.JSONPath, &snap.Report.MarkdownPath,
-		&snap.Report.SummaryJSON); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		&snap.Report.SummaryJSON, &snap.Report.Conclusion); err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return snap, err
 	}
 	if snap.Findings == nil {
 		snap.Findings = []review.Finding{}
+	}
+	if snap.Warnings == nil {
+		snap.Warnings = []review.Finding{}
+	}
+	if snap.NeedsHumanReview == nil {
+		snap.NeedsHumanReview = []review.Finding{}
 	}
 	if snap.SandboxRuns == nil {
 		snap.SandboxRuns = []review.SandboxRun{}
@@ -377,6 +403,7 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 			confidence REAL NOT NULL,
 			source TEXT NOT NULL,
 			rule_id TEXT NOT NULL,
+			bucket TEXT NOT NULL DEFAULT 'finding',
 			FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS sandbox_runs (
@@ -389,6 +416,7 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 			stdout_excerpt TEXT,
 			stderr_excerpt TEXT,
 			error TEXT,
+			failure_kind TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS permission_decisions (
@@ -419,6 +447,7 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 			json_path TEXT NOT NULL,
 			markdown_path TEXT NOT NULL,
 			summary_json TEXT NOT NULL,
+			conclusion TEXT NOT NULL DEFAULT '',
 			FOREIGN KEY(task_id) REFERENCES review_tasks(id) ON DELETE CASCADE
 		);`,
 		`CREATE TABLE IF NOT EXISTS artifacts (
@@ -442,35 +471,96 @@ func (s *SQLiteStore) init(ctx context.Context) error {
 			return fmt.Errorf("init sqlite: %w", err)
 		}
 	}
-	return nil
+	return s.migrateV2(ctx)
+}
+
+// migrateV2 preserves confidence buckets, failure types, and conclusions in
+// databases created by the original example schema.
+func (s *SQLiteStore) migrateV2(ctx context.Context) error {
+	columns := []struct {
+		table string
+		name  string
+		ddl   string
+	}{
+		{table: "review_findings", name: "bucket", ddl: "TEXT NOT NULL DEFAULT 'finding'"},
+		{table: "sandbox_runs", name: "failure_kind", ddl: "TEXT NOT NULL DEFAULT ''"},
+		{table: "review_reports", name: "conclusion", ddl: "TEXT NOT NULL DEFAULT ''"},
+	}
+	for _, column := range columns {
+		exists, err := s.columnExists(ctx, column.table, column.name)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		query := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", column.table, column.name, column.ddl)
+		if _, err := s.db.ExecContext(ctx, query); err != nil {
+			return fmt.Errorf("migrate sqlite v2: %w", err)
+		}
+	}
+	_, err := s.db.ExecContext(ctx,
+		`INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP)`)
+	return err
+}
+
+func (s *SQLiteStore) columnExists(ctx context.Context, table, column string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, primaryKey int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &primaryKey); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // getFindings loads all persisted findings of a task.
-func (s *SQLiteStore) getFindings(ctx context.Context, taskID string) ([]review.Finding, error) {
+func (s *SQLiteStore) getFindings(ctx context.Context, taskID string) (
+	[]review.Finding, []review.Finding, []review.Finding, error,
+) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id
+SELECT bucket, severity, category, file, line, title, evidence, recommendation, confidence, source, rule_id
 FROM review_findings WHERE task_id = ? ORDER BY file, line, rule_id`, taskID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	defer rows.Close()
-	var out []review.Finding
+	var findings, warnings, humanReview []review.Finding
 	for rows.Next() {
 		var f review.Finding
-		if err := rows.Scan(&f.Severity, &f.Category, &f.File, &f.Line,
+		var bucket string
+		if err := rows.Scan(&bucket, &f.Severity, &f.Category, &f.File, &f.Line,
 			&f.Title, &f.Evidence, &f.Recommendation, &f.Confidence,
 			&f.Source, &f.RuleID); err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
-		out = append(out, f)
+		switch bucket {
+		case review.FindingBucketWarning:
+			warnings = append(warnings, f)
+		case review.FindingBucketNeedsHumanReview:
+			humanReview = append(humanReview, f)
+		default:
+			findings = append(findings, f)
+		}
 	}
-	return out, rows.Err()
+	return findings, warnings, humanReview, rows.Err()
 }
 
 // getSandboxRuns loads all persisted sandbox runs of a task.
 func (s *SQLiteStore) getSandboxRuns(ctx context.Context, taskID string) ([]review.SandboxRun, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error
+SELECT command, status, exit_code, duration_ms, stdout_excerpt, stderr_excerpt, error, failure_kind
 FROM sandbox_runs WHERE task_id = ? ORDER BY id`, taskID)
 	if err != nil {
 		return nil, err
@@ -481,7 +571,7 @@ FROM sandbox_runs WHERE task_id = ? ORDER BY id`, taskID)
 		var run review.SandboxRun
 		if err := rows.Scan(&run.Command, &run.Status, &run.ExitCode,
 			&run.DurationMS, &run.StdoutExcerpt, &run.StderrExcerpt,
-			&run.Error); err != nil {
+			&run.Error, &run.FailureKind); err != nil {
 			return nil, err
 		}
 		out = append(out, run)

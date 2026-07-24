@@ -37,8 +37,10 @@ governance rules implement the framework `tool.PermissionPolicy` interface;
 allow-listed commands are limited to Go static checks and scripts under the
 review skill, while high-risk shell, network, privilege, and destructive
 commands are denied or marked for human review.
+Custom Skill roots require explicit operator approval and are audited with a
+bounded, symlink-free content digest before their scripts can run.
 
-SQLite stores the minimum versioned audit schema: task, finding, sandbox run,
+SQLite schema version 2 stores the minimum audit data: task, finding, sandbox run,
 permission decision, filter decision, artifact, and report metadata. Task-owned
 rows use foreign keys and indexes. The pure-Go driver keeps the example usable
 without CGO. The `store.Store` interface is
@@ -50,7 +52,9 @@ are deduplicated by file, line, category, and rule id, keeping the highest
 severity and confidence. Low-confidence results go to human-review buckets
 instead of high-confidence findings. Redaction is applied before reporting and
 persistence to prevent API keys, tokens, passwords, and long secret-like values
-from leaking into artifacts or database rows. Metrics capture duration,
+from leaking into artifacts or database rows. Confidence buckets, failure kinds,
+and final conclusions survive task queries, and version-1 databases upgrade in
+place. Metrics capture duration,
 sandbox time, tool calls, permission denies, severity distribution, and
 exception counts for monitoring and replay.
 

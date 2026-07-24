@@ -13,11 +13,14 @@ package skillrunner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -44,14 +47,16 @@ const (
 
 // Config controls skill script execution.
 type Config struct {
-	TaskID      string
-	SkillsRoot  string
-	SkillName   string
-	RepoPath    string
-	SandboxKind string
-	DryRun      bool
-	Timeout     time.Duration
-	DiffText    string
+	TaskID            string
+	SkillsRoot        string
+	SkillName         string
+	RepoPath          string
+	SandboxKind       string
+	DryRun            bool
+	CustomSkills      bool
+	AllowCustomSkills bool
+	Timeout           time.Duration
+	DiffText          string
 }
 
 // Result is the audit trail from skill script execution.
@@ -108,11 +113,23 @@ func RunScripts(ctx context.Context, cfg Config) Result {
 		return Result{Err: fmt.Errorf("skills root: %w", err)}
 	}
 	cfg.SkillsRoot = absRoot
+	out := Result{}
+	if cfg.CustomSkills {
+		decision := customSkillDecision(cfg)
+		out.Decisions = append(out.Decisions, decision)
+		if decision.Decision != permission.DecisionAllow {
+			out.Runs = append(out.Runs, review.SandboxRun{
+				Command: "load custom skill",
+				Status:  "blocked",
+				Error:   decision.Reason,
+			})
+			return out
+		}
+	}
 	repo, err := skill.NewFSRepository(cfg.SkillsRoot)
 	if err != nil {
 		return Result{Err: fmt.Errorf("skill repository: %w", err)}
 	}
-	out := Result{}
 	loadMsg, err := loadSkill(ctx, repo, cfg.SkillName)
 	if err != nil {
 		out.Err = fmt.Errorf("skill load: %w", err)
@@ -145,6 +162,85 @@ func RunScripts(ctx context.Context, cfg Config) Result {
 		}
 	}
 	return out
+}
+
+const (
+	maxSkillFileBytes = 1 << 20
+	maxSkillBytes     = 10 << 20
+)
+
+func customSkillDecision(cfg Config) review.PermissionDecision {
+	decision := review.PermissionDecision{
+		Command:   "load custom skill root " + cfg.SkillsRoot,
+		CreatedAt: time.Now().UTC(),
+	}
+	if !cfg.AllowCustomSkills {
+		decision.Decision = permission.DecisionNeedsHumanReview
+		decision.Reason = "custom skills require explicit --allow-custom-skills approval"
+		return decision
+	}
+	digest, err := skillDigest(cfg.SkillsRoot, cfg.SkillName)
+	if err != nil {
+		decision.Decision = permission.DecisionDeny
+		decision.Reason = "custom skill integrity check failed: " + err.Error()
+		return decision
+	}
+	decision.Decision = permission.DecisionAllow
+	decision.Reason = "custom skill explicitly approved with sha256=" + digest
+	return decision
+}
+
+func skillDigest(root, name string) (string, error) {
+	skillRoot := filepath.Join(root, name)
+	var files []string
+	err := filepath.WalkDir(skillRoot, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("custom skill contains symlink %s", path)
+		}
+		if entry.Type().IsRegular() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	sort.Strings(files)
+	h := sha256.New()
+	total := int64(0)
+	for _, path := range files {
+		info, err := os.Stat(path)
+		if err != nil {
+			return "", err
+		}
+		if info.Size() > maxSkillFileBytes || total+info.Size() > maxSkillBytes {
+			return "", fmt.Errorf("custom skill exceeds integrity scan limits")
+		}
+		rel, err := filepath.Rel(skillRoot, path)
+		if err != nil {
+			return "", err
+		}
+		rel = filepath.ToSlash(rel)
+		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(rel), rel, info.Size())
+		// #nosec G304 -- files are bounded regular files beneath the selected skill root.
+		f, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		_, copyErr := io.Copy(h, io.LimitReader(f, maxSkillFileBytes+1))
+		closeErr := f.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
+		if closeErr != nil {
+			return "", closeErr
+		}
+		total += info.Size()
+	}
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // loadSkill uses the framework skill_load tool to validate and load the skill.
@@ -307,6 +403,10 @@ func goEnv(sandboxKind string) map[string]string {
 			"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		}
 	}
+	// E2B owns a remote Linux toolchain. Host GOROOT paths are invalid there.
+	if sandboxKind == "e2b" {
+		return nil
+	}
 	env := map[string]string{}
 	if sandboxKind == "local-dev" {
 		env["GOCACHE"] = filepath.Join(os.TempDir(), "code-review-gocache")
@@ -367,9 +467,11 @@ func scriptRun(command string, start time.Time, rr runResult) review.SandboxRun 
 	if rr.ExitCode != 0 {
 		run.Status = "failed"
 		run.Error = fmt.Sprintf("script exited with code %d", rr.ExitCode)
+		run.FailureKind = review.FailureKindCommandExit
 	}
 	if rr.TimedOut {
 		run.Status = "timeout"
+		run.FailureKind = review.FailureKindTimeout
 	}
 	return run
 }
@@ -386,10 +488,11 @@ func skippedRun(command, reason string) review.SandboxRun {
 // failedRun records a script invocation that could not complete.
 func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	return review.SandboxRun{
-		Command:    command,
-		Status:     "failed",
-		DurationMS: time.Since(start).Milliseconds(),
-		Error:      redaction.RedactText(err.Error()),
+		Command:     command,
+		Status:      "failed",
+		DurationMS:  time.Since(start).Milliseconds(),
+		Error:       redaction.RedactText(err.Error()),
+		FailureKind: review.FailureKindExecutor,
 	}
 }
 

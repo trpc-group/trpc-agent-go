@@ -1,0 +1,264 @@
+{
+  "task": {
+    "id": "cr-de50da8e-0a97-49d5-b106-b35c5e05a52e",
+    "status": "completed",
+    "input_type": "fixture",
+    "input_summary": "code_review_agent\\testdata\\fixtures\\security_secret.diff; sha256=0197ba58b85209a5c21ba77dac63a63268a2299f8a1d44cf9647abc56d43cbbc; bytes=259; files=1",
+    "started_at": "2026-07-22T13:01:47.6395219Z",
+    "finished_at": "2026-07-22T13:01:48.233401Z"
+  },
+  "files": [
+    {
+      "old_path": "security/secret.go",
+      "new_path": "security/secret.go",
+      "language": "go",
+      "package_name": "security",
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 3,
+          "new_start": 1,
+          "new_count": 6,
+          "lines": [
+            {
+              "kind": "context",
+              "old_line": 1,
+              "new_line": 1,
+              "content": "package security"
+            },
+            {
+              "kind": "context",
+              "old_line": 2,
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "added",
+              "new_line": 3,
+              "content": "const apiKey = [REDACTED_SECRET]"
+            },
+            {
+              "kind": "added",
+              "new_line": 4,
+              "content": "var password = [REDACTED_SECRET]"
+            },
+            {
+              "kind": "added",
+              "new_line": 5,
+              "content": ""
+            },
+            {
+              "kind": "context",
+              "old_line": 3,
+              "new_line": 6,
+              "content": "func Existing() {}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "security/secret.go",
+      "line": 3,
+      "title": "Potential hard-coded secret",
+      "evidence": "const apiKey = [REDACTED_SECRET]",
+      "recommendation": "Move secrets to a secret manager or environment variable and rotate the exposed credential.",
+      "confidence": 0.96,
+      "source": "rule-only",
+      "rule_id": "SEC001"
+    },
+    {
+      "severity": "critical",
+      "category": "security",
+      "file": "security/secret.go",
+      "line": 4,
+      "title": "Potential hard-coded secret",
+      "evidence": "var password = [REDACTED_SECRET]",
+      "recommendation": "Move secrets to a secret manager or environment variable and rotate the exposed credential.",
+      "confidence": 0.96,
+      "source": "rule-only",
+      "rule_id": "SEC001"
+    }
+  ],
+  "warnings": [],
+  "needs_human_review": [
+    {
+      "severity": "low",
+      "category": "model_review",
+      "file": "security/secret.go",
+      "line": 3,
+      "title": "Fake model flagged the first added line for demonstration",
+      "evidence": "const apiKey = [REDACTED_SECRET]",
+      "recommendation": "Replace fake-model mode with llm mode for real model commentary.",
+      "confidence": 0.55,
+      "source": "fake-model",
+      "rule_id": "FAKE001"
+    },
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "security/secret.go",
+      "line": 3,
+      "title": "Changed Go code without nearby test changes",
+      "evidence": "No _test.go file is present in the same diff.",
+      "recommendation": "Add or update tests that cover the changed behavior.",
+      "confidence": 0.58,
+      "source": "rule-only",
+      "rule_id": "TEST001"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash skills/code-review/scripts/diff_summary.sh -",
+      "status": "skipped",
+      "duration_ms": 0,
+      "error": "dry-run/mock mode did not execute skill scripts"
+    },
+    {
+      "command": "bash skills/code-review/scripts/secret_scan.sh -",
+      "status": "skipped",
+      "duration_ms": 0,
+      "error": "dry-run/mock mode did not execute skill scripts"
+    },
+    {
+      "command": "bash skills/code-review/scripts/go_static_checks.sh work/repo",
+      "status": "skipped",
+      "duration_ms": 0,
+      "error": "no --repo-path provided; static checks need a repository"
+    }
+  ],
+  "permission_decisions": [
+    {
+      "command": "bash skills/code-review/scripts/diff_summary.sh -",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-22T13:01:48.233401Z"
+    },
+    {
+      "command": "bash skills/code-review/scripts/secret_scan.sh -",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-22T13:01:48.233401Z"
+    },
+    {
+      "command": "bash skills/code-review/scripts/go_static_checks.sh work/repo",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-22T13:01:48.233401Z"
+    }
+  ],
+  "filter_decisions": [
+    {
+      "rule_id": "SEC001",
+      "file": "security/secret.go",
+      "line": 3,
+      "source": "rule-only",
+      "confidence": 0.96,
+      "stage": "confidence",
+      "decision": "keep",
+      "reason": "confidence 0.96 \u003e= 0.75 keeps the finding",
+      "created_at": "2026-07-22T13:01:48.2301782Z"
+    },
+    {
+      "rule_id": "TEST001",
+      "file": "security/secret.go",
+      "line": 3,
+      "source": "rule-only",
+      "confidence": 0.58,
+      "stage": "confidence",
+      "decision": "needs_human_review",
+      "reason": "confidence 0.58 in [0.45, 0.75) routes to human review",
+      "created_at": "2026-07-22T13:01:48.2301782Z"
+    },
+    {
+      "rule_id": "SEC001",
+      "file": "security/secret.go",
+      "line": 4,
+      "source": "rule-only",
+      "confidence": 0.96,
+      "stage": "confidence",
+      "decision": "keep",
+      "reason": "confidence 0.96 \u003e= 0.75 keeps the finding",
+      "created_at": "2026-07-22T13:01:48.2301782Z"
+    },
+    {
+      "rule_id": "FAKE001",
+      "file": "security/secret.go",
+      "line": 3,
+      "source": "fake-model",
+      "confidence": 0.55,
+      "stage": "confidence",
+      "decision": "needs_human_review",
+      "reason": "confidence 0.55 in [0.45, 0.75) routes to human review",
+      "created_at": "2026-07-22T13:01:48.2318225Z"
+    },
+    {
+      "rule_id": "SEC001",
+      "file": "security/secret.go",
+      "line": 3,
+      "source": "rule-only",
+      "confidence": 0.96,
+      "stage": "confidence",
+      "decision": "keep",
+      "reason": "confidence 0.96 \u003e= 0.75 keeps the finding",
+      "created_at": "2026-07-22T13:01:48.2318225Z"
+    },
+    {
+      "rule_id": "TEST001",
+      "file": "security/secret.go",
+      "line": 3,
+      "source": "rule-only",
+      "confidence": 0.58,
+      "stage": "confidence",
+      "decision": "needs_human_review",
+      "reason": "confidence 0.58 in [0.45, 0.75) routes to human review",
+      "created_at": "2026-07-22T13:01:48.2318225Z"
+    },
+    {
+      "rule_id": "SEC001",
+      "file": "security/secret.go",
+      "line": 4,
+      "source": "rule-only",
+      "confidence": 0.96,
+      "stage": "confidence",
+      "decision": "keep",
+      "reason": "confidence 0.96 \u003e= 0.75 keeps the finding",
+      "created_at": "2026-07-22T13:01:48.2318225Z"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 593,
+    "sandbox_duration_ms": 0,
+    "model_duration_ms": 1,
+    "tool_call_count": 0,
+    "model_call_count": 1,
+    "permission_deny_count": 0,
+    "permission_intercept_count": 0,
+    "blocked_command_count": 0,
+    "skipped_command_count": 3,
+    "finding_count": 2,
+    "warning_count": 0,
+    "needs_human_review_count": 2,
+    "severity_counts": {
+      "critical": 2
+    },
+    "exception_counts": {},
+    "filter_decision_counts": {
+      "keep": 4,
+      "needs_human_review": 3
+    }
+  },
+  "artifacts": [
+    {
+      "kind": "markdown_report",
+      "path": "code_review_agent\\sample_output\\review_report.md",
+      "sha256": "78033019afb12c469b8597767a4db4f2bf50b1ebda0840610ce24a62f705b755",
+      "size_bytes": 3446
+    }
+  ],
+  "summary": "2 high-confidence findings and 2 human-review items detected. Model review: Deterministic fake-model review completed."
+}

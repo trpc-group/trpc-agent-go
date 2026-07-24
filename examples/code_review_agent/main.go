@@ -13,6 +13,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,6 +33,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/diffparser"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sanitize"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
 	reportwriter "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/report"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
@@ -64,6 +66,7 @@ type config struct {
 	skillsRoot        string
 	telemetryEndpoint string
 	dryRun            bool
+	allowCustomSkills bool
 	staticcheck       bool
 	timeout           time.Duration
 }
@@ -96,6 +99,7 @@ func parseFlags() config {
 	flag.StringVar(&cfg.skillsRoot, "skills-root", "", "skills root directory; defaults to the bundled skills folder")
 	flag.StringVar(&cfg.telemetryEndpoint, "telemetry-endpoint", "", "OTLP gRPC endpoint for trace export; empty keeps the no-op tracer")
 	flag.BoolVar(&cfg.dryRun, "dry-run", false, "skip external command execution")
+	flag.BoolVar(&cfg.allowCustomSkills, "allow-custom-skills", false, "explicitly trust and audit a custom --skills-root")
 	flag.BoolVar(&cfg.staticcheck, "staticcheck", false, "also run staticcheck ./... in the sandbox when available")
 	flag.Parse()
 	cfg.timeout = *timeout
@@ -234,6 +238,9 @@ func runOne(ctx context.Context, cfg config) (err error) {
 	if len(files) > maxInputFiles {
 		return fmt.Errorf("input diff contains %d files; maximum is %d", len(files), maxInputFiles)
 	}
+	digest := sha256.Sum256(diffData)
+	inputSummary = fmt.Sprintf("%s; sha256=%x; bytes=%d; files=%d",
+		inputSummary, digest, len(diffData), len(files))
 	task := review.ReviewTask{
 		ID:           "cr-" + uuid.NewString(),
 		Status:       review.StatusRunning,
@@ -247,7 +254,7 @@ func runOne(ctx context.Context, cfg config) (err error) {
 	}
 
 	ruleResult := rules.Scan(files)
-	redactedFiles := redactFiles(files)
+	redactedFiles := sanitize.Files(files)
 	modelOut, modelErr := runModelReview(ctx, cfg, task.ID, redactedFiles)
 	ruleResult = rules.Merge(ruleResult, modelOut.Findings)
 	sandboxResult := sandboxrunner.RunChecks(ctx, sandboxrunner.Config{
@@ -296,6 +303,9 @@ func runOne(ctx context.Context, cfg config) (err error) {
 		attribute.Int("code_review.filter_decision_count", len(report.FilterDecisions)),
 		attribute.Int("code_review.sandbox_run_count", len(allRuns)),
 		attribute.Int("code_review.permission_deny_count", report.Metrics.PermissionDenyCount),
+		attribute.Int("code_review.permission_intercept_count", report.Metrics.PermissionInterceptCount),
+		attribute.Int("code_review.blocked_command_count", report.Metrics.BlockedCommandCount),
+		attribute.Int("code_review.skipped_command_count", report.Metrics.SkippedCommandCount),
 	)
 	for decision, count := range report.Metrics.FilterDecisionCounts {
 		span.SetAttributes(attribute.Int("code_review.filter."+decision, count))
@@ -430,13 +440,15 @@ func firstExistingPath(candidates ...string) string {
 // its scripts in the sandbox. Errors degrade to audit records only.
 func runSkillScripts(ctx context.Context, cfg config, taskID string, diffText string) skillrunner.Result {
 	result := skillrunner.RunScripts(ctx, skillrunner.Config{
-		TaskID:      taskID,
-		SkillsRoot:  resolveSkillsRoot(cfg.skillsRoot),
-		RepoPath:    cfg.repoPath,
-		SandboxKind: cfg.sandboxKind,
-		DryRun:      cfg.dryRun,
-		Timeout:     cfg.timeout,
-		DiffText:    diffText,
+		TaskID:            taskID,
+		SkillsRoot:        resolveSkillsRoot(cfg.skillsRoot),
+		RepoPath:          cfg.repoPath,
+		SandboxKind:       cfg.sandboxKind,
+		DryRun:            cfg.dryRun,
+		CustomSkills:      cfg.skillsRoot != "",
+		AllowCustomSkills: cfg.allowCustomSkills,
+		Timeout:           cfg.timeout,
+		DiffText:          diffText,
 	})
 	if result.Err != nil {
 		fmt.Fprintf(os.Stderr, "skill scripts degraded: %v\n", result.Err)
@@ -474,6 +486,9 @@ func diffForFiles(repoPath, filesValue string) ([]byte, string, error) {
 }
 
 func validateConfig(cfg config) error {
+	if cfg.taskID != "" {
+		return nil
+	}
 	if err := validateMode(cfg.mode); err != nil {
 		return err
 	}
@@ -484,8 +499,9 @@ func validateConfig(cfg config) error {
 	if !allowedSandboxes[cfg.sandboxKind] {
 		return fmt.Errorf("unsupported --sandbox %q", cfg.sandboxKind)
 	}
-	if cfg.taskID != "" {
-		return nil
+	if runtime.GOOS == "windows" && !cfg.dryRun &&
+		(cfg.sandboxKind == "managed" || cfg.sandboxKind == "sandbox") {
+		return errors.New("managed sandbox is unavailable on Windows; use --sandbox container or --sandbox e2b")
 	}
 	sources := 0
 	if cfg.fixture != "" {
@@ -773,13 +789,34 @@ func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary 
 	for _, run := range r.SandboxRuns {
 		sandboxMS += run.DurationMS
 		if run.Status == "failed" || run.Status == "timeout" {
-			exceptions[run.Status]++
+			kind := run.FailureKind
+			if kind == "" {
+				kind = run.Status
+			}
+			exceptions[kind]++
 		}
 	}
 	denies := 0
+	intercepts := 0
 	for _, d := range r.PermissionDecisions {
-		if d.Decision != "allow" {
+		if d.Decision == "deny" {
 			denies++
+		}
+		if d.Decision != "allow" {
+			intercepts++
+		}
+	}
+	toolCalls := 0
+	blocked := 0
+	skipped := 0
+	for _, run := range r.SandboxRuns {
+		switch run.Status {
+		case "blocked":
+			blocked++
+		case "skipped":
+			skipped++
+		default:
+			toolCalls++
 		}
 	}
 	filterCounts := map[string]int{}
@@ -787,33 +824,18 @@ func buildMetrics(start time.Time, r review.ReviewReport) review.MetricsSummary 
 		filterCounts[d.Decision]++
 	}
 	return review.MetricsSummary{
-		TotalDurationMS:       time.Since(start).Milliseconds(),
-		SandboxDurationMS:     sandboxMS,
-		ToolCallCount:         len(r.SandboxRuns),
-		PermissionDenyCount:   denies,
-		FindingCount:          len(r.Findings),
-		WarningCount:          len(r.Warnings),
-		NeedsHumanReviewCount: len(r.NeedsHumanReview),
-		SeverityCounts:        severity,
-		ExceptionCounts:       exceptions,
-		FilterDecisionCounts:  filterCounts,
+		TotalDurationMS:          time.Since(start).Milliseconds(),
+		SandboxDurationMS:        sandboxMS,
+		ToolCallCount:            toolCalls,
+		PermissionDenyCount:      denies,
+		PermissionInterceptCount: intercepts,
+		BlockedCommandCount:      blocked,
+		SkippedCommandCount:      skipped,
+		FindingCount:             len(r.Findings),
+		WarningCount:             len(r.Warnings),
+		NeedsHumanReviewCount:    len(r.NeedsHumanReview),
+		SeverityCounts:           severity,
+		ExceptionCounts:          exceptions,
+		FilterDecisionCounts:     filterCounts,
 	}
-}
-
-// redactFiles redacts changed-file contents before persistence.
-func redactFiles(files []review.ChangedFile) []review.ChangedFile {
-	out := make([]review.ChangedFile, len(files))
-	copy(out, files)
-	for i := range out {
-		out[i].Hunks = make([]review.Hunk, len(files[i].Hunks))
-		copy(out[i].Hunks, files[i].Hunks)
-		for j := range out[i].Hunks {
-			out[i].Hunks[j].Lines = make([]review.DiffLine, len(files[i].Hunks[j].Lines))
-			copy(out[i].Hunks[j].Lines, files[i].Hunks[j].Lines)
-			for k := range out[i].Hunks[j].Lines {
-				out[i].Hunks[j].Lines[k].Content = redaction.RedactText(out[i].Hunks[j].Lines[k].Content)
-			}
-		}
-	}
-	return out
 }

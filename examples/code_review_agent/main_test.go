@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -363,7 +364,11 @@ func TestSandboxFailureFixtureDegradesGracefully(t *testing.T) {
 	if failed == 0 {
 		t.Fatalf("expected failed sandbox runs: %+v", report.SandboxRuns)
 	}
-	if report.Metrics.ExceptionCounts["failed"] != failed {
+	counted := 0
+	for _, count := range report.Metrics.ExceptionCounts {
+		counted += count
+	}
+	if counted != failed {
 		t.Fatalf("failed runs not counted as exceptions: failed=%d counts=%+v",
 			failed, report.Metrics.ExceptionCounts)
 	}
@@ -396,6 +401,27 @@ func TestValidateConfigRejectsConflictingInputsAndSandbox(t *testing.T) {
 	filesWithRoot.repoPath = "."
 	if err := validateConfig(filesWithRoot); err != nil {
 		t.Fatalf("--files with --repo-path should be valid: %v", err)
+	}
+}
+
+func TestValidateConfigRejectsManagedExecutionOnWindows(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific managed sandbox preflight")
+	}
+	cfg := config{fixture: "clean", mode: "rule-only", sandboxKind: "managed"}
+	if err := validateConfig(cfg); err == nil || !strings.Contains(err.Error(), "unavailable on Windows") {
+		t.Fatalf("managed execution was not rejected: %v", err)
+	}
+	cfg.dryRun = true
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("managed dry-run should remain portable: %v", err)
+	}
+}
+
+func TestValidateConfigTaskQueryIgnoresRuntimeSettings(t *testing.T) {
+	cfg := config{taskID: "task-1", mode: "invalid", sandboxKind: "invalid"}
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("task query should not validate unused execution settings: %v", err)
 	}
 }
 
@@ -491,6 +517,26 @@ func TestExpectedOutputsStayInSync(t *testing.T) {
 		assertSameFindings(t, name, "needs_human_review",
 			actual.NeedsHumanReview, want.NeedsHumanReview)
 	}
+}
+
+func TestCommittedSampleOutputIsComplete(t *testing.T) {
+	path := filepath.Join("sample_output", "review_report.json")
+	report := readReport(t, path)
+	if report.Task.ID == "" || len(report.Files) == 0 || len(report.Findings) == 0 ||
+		len(report.SandboxRuns) == 0 || len(report.PermissionDecisions) == 0 ||
+		len(report.FilterDecisions) == 0 || len(report.Artifacts) == 0 {
+		t.Fatalf("sample report is incomplete: %+v", report)
+	}
+	if report.Metrics.FindingCount == 0 || report.Summary == "" {
+		t.Fatalf("sample report lacks metrics or conclusion: %+v", report)
+	}
+	for _, name := range []string{"review_report.json", "review_report.md", "artifact_manifest.json"} {
+		if _, err := os.Stat(filepath.Join("sample_output", name)); err != nil {
+			t.Fatalf("sample artifact %s: %v", name, err)
+		}
+	}
+	assertNoFixtureSecrets(t, path)
+	assertNoFixtureSecrets(t, filepath.Join("sample_output", "review_report.md"))
 }
 
 // assertSameFindings compares actual and curated findings for one bucket.
@@ -617,6 +663,31 @@ func TestTelemetrySpanRecordsReviewMetrics(t *testing.T) {
 	}
 	if _, ok := attrs["code_review.mode"]; !ok {
 		t.Fatal("span missing code_review.mode attribute")
+	}
+}
+
+func TestBuildMetricsCountsOnlyExecutedToolCalls(t *testing.T) {
+	report := review.ReviewReport{
+		SandboxRuns: []review.SandboxRun{
+			{Status: "completed", DurationMS: 2},
+			{Status: "failed", DurationMS: 3, FailureKind: review.FailureKindCommandExit},
+			{Status: "blocked"},
+			{Status: "skipped"},
+		},
+		PermissionDecisions: []review.PermissionDecision{
+			{Decision: "allow"}, {Decision: "deny"}, {Decision: "needs_human_review"},
+		},
+	}
+	metrics := buildMetrics(time.Now(), report)
+	if metrics.ToolCallCount != 2 || metrics.BlockedCommandCount != 1 ||
+		metrics.SkippedCommandCount != 1 {
+		t.Fatalf("command counts: %+v", metrics)
+	}
+	if metrics.PermissionDenyCount != 1 || metrics.PermissionInterceptCount != 2 {
+		t.Fatalf("permission counts: %+v", metrics)
+	}
+	if metrics.ExceptionCounts[review.FailureKindCommandExit] != 1 {
+		t.Fatalf("exception counts: %+v", metrics.ExceptionCounts)
 	}
 }
 

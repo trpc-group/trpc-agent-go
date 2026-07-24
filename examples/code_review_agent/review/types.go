@@ -92,6 +92,16 @@ type Finding struct {
 	RuleID         string  `json:"rule_id"`
 }
 
+// Finding persistence buckets preserve confidence routing across storage.
+const (
+	// FindingBucketFinding identifies a high-confidence finding.
+	FindingBucketFinding = "finding"
+	// FindingBucketWarning identifies a low-confidence warning.
+	FindingBucketWarning = "warning"
+	// FindingBucketNeedsHumanReview identifies a finding requiring review.
+	FindingBucketNeedsHumanReview = "needs_human_review"
+)
+
 // Filter decision stages and outcomes for the noise-control pipeline.
 const (
 	// FilterStageDedup identifies duplicate suppression.
@@ -140,7 +150,18 @@ type SandboxRun struct {
 	StdoutExcerpt string `json:"stdout_excerpt,omitempty"`
 	StderrExcerpt string `json:"stderr_excerpt,omitempty"`
 	Error         string `json:"error,omitempty"`
+	FailureKind   string `json:"failure_kind,omitempty"`
 }
+
+// Sandbox failure kinds provide stable monitoring dimensions.
+const (
+	// FailureKindTimeout identifies a command deadline.
+	FailureKindTimeout = "timeout"
+	// FailureKindCommandExit identifies a non-zero command exit.
+	FailureKindCommandExit = "command_exit"
+	// FailureKindExecutor identifies workspace, staging, or executor errors.
+	FailureKindExecutor = "executor_error"
+)
 
 // Artifact records files produced by the review.
 type Artifact struct {
@@ -155,12 +176,15 @@ type ReportRecord struct {
 	JSONPath     string `json:"json_path"`
 	MarkdownPath string `json:"markdown_path"`
 	SummaryJSON  string `json:"summary_json"`
+	Conclusion   string `json:"conclusion"`
 }
 
 // TaskSnapshot is a database query result for one review task.
 type TaskSnapshot struct {
 	Task                ReviewTask           `json:"task"`
 	Findings            []Finding            `json:"findings"`
+	Warnings            []Finding            `json:"warnings"`
+	NeedsHumanReview    []Finding            `json:"needs_human_review"`
 	SandboxRuns         []SandboxRun         `json:"sandbox_runs"`
 	PermissionDecisions []PermissionDecision `json:"permission_decisions"`
 	FilterDecisions     []FilterDecision     `json:"filter_decisions"`
@@ -170,18 +194,21 @@ type TaskSnapshot struct {
 
 // MetricsSummary is the audit and monitoring summary for one review.
 type MetricsSummary struct {
-	TotalDurationMS       int64          `json:"total_duration_ms"`
-	SandboxDurationMS     int64          `json:"sandbox_duration_ms"`
-	ModelDurationMS       int64          `json:"model_duration_ms"`
-	ToolCallCount         int            `json:"tool_call_count"`
-	ModelCallCount        int            `json:"model_call_count"`
-	PermissionDenyCount   int            `json:"permission_deny_count"`
-	FindingCount          int            `json:"finding_count"`
-	WarningCount          int            `json:"warning_count"`
-	NeedsHumanReviewCount int            `json:"needs_human_review_count"`
-	SeverityCounts        map[string]int `json:"severity_counts"`
-	ExceptionCounts       map[string]int `json:"exception_counts"`
-	FilterDecisionCounts  map[string]int `json:"filter_decision_counts"`
+	TotalDurationMS          int64          `json:"total_duration_ms"`
+	SandboxDurationMS        int64          `json:"sandbox_duration_ms"`
+	ModelDurationMS          int64          `json:"model_duration_ms"`
+	ToolCallCount            int            `json:"tool_call_count"`
+	ModelCallCount           int            `json:"model_call_count"`
+	PermissionDenyCount      int            `json:"permission_deny_count"`
+	PermissionInterceptCount int            `json:"permission_intercept_count"`
+	BlockedCommandCount      int            `json:"blocked_command_count"`
+	SkippedCommandCount      int            `json:"skipped_command_count"`
+	FindingCount             int            `json:"finding_count"`
+	WarningCount             int            `json:"warning_count"`
+	NeedsHumanReviewCount    int            `json:"needs_human_review_count"`
+	SeverityCounts           map[string]int `json:"severity_counts"`
+	ExceptionCounts          map[string]int `json:"exception_counts"`
+	FilterDecisionCounts     map[string]int `json:"filter_decision_counts"`
 }
 
 // ReviewReport is the final serializable report.

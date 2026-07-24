@@ -230,15 +230,18 @@ func engineRun(command string, start time.Time, res codeexecutor.RunResult, err 
 	if res.ExitCode != 0 {
 		run.Status = "failed"
 		run.Error = fmt.Sprintf("command exited with code %d", res.ExitCode)
+		run.FailureKind = review.FailureKindCommandExit
 	}
 	if err != nil {
 		run.Status = "failed"
 		run.Error = redaction.RedactText(err.Error())
+		run.FailureKind = review.FailureKindExecutor
 	}
 	// Timeout wins last so a deadline is never masked by the generic
 	// engine error that usually accompanies it.
 	if res.TimedOut {
 		run.Status = "timeout"
+		run.FailureKind = review.FailureKindTimeout
 	}
 	return run
 }
@@ -277,11 +280,13 @@ func runFromOutput(command string, start time.Time, output []byte, exitCode int,
 	if ctxErr != nil {
 		run.Status = "timeout"
 		run.Error = ctxErr.Error()
+		run.FailureKind = review.FailureKindTimeout
 		return run
 	}
 	if err != nil {
 		run.Status = "failed"
 		run.Error = redaction.RedactText(err.Error())
+		run.FailureKind = review.FailureKindCommandExit
 	}
 	return run
 }
@@ -289,10 +294,11 @@ func runFromOutput(command string, start time.Time, output []byte, exitCode int,
 // failedRun records a command that could not be executed.
 func failedRun(command string, start time.Time, err error) review.SandboxRun {
 	return review.SandboxRun{
-		Command:    command,
-		Status:     "failed",
-		DurationMS: time.Since(start).Milliseconds(),
-		Error:      redaction.RedactText(err.Error()),
+		Command:     command,
+		Status:      "failed",
+		DurationMS:  time.Since(start).Milliseconds(),
+		Error:       redaction.RedactText(err.Error()),
+		FailureKind: review.FailureKindExecutor,
 	}
 }
 
