@@ -241,7 +241,7 @@ func TestCloneSurfaceValue_ClonesModelHeaders(t *testing.T) {
 			Headers:  map[string]string{"X-Test": "1"},
 		},
 	}
-	cloned := cloneSurfaceValue(value)
+	cloned := CloneSurfaceValue(value)
 	require.NotNil(t, cloned.Model)
 	require.NotSame(t, value.Model, cloned.Model)
 	require.Equal(t, map[string]string{"X-Test": "1"}, cloned.Model.Headers)
@@ -256,7 +256,7 @@ func TestCloneSurfaceValue_ClonesEmptyModelHeaders(t *testing.T) {
 			Headers: map[string]string{},
 		},
 	}
-	cloned := cloneSurfaceValue(value)
+	cloned := CloneSurfaceValue(value)
 	require.NotNil(t, cloned.Model)
 	require.NotNil(t, cloned.Model.Headers)
 	cloned.Model.Headers["X-Test"] = "1"

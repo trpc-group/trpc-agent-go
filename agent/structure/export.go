@@ -179,13 +179,14 @@ func cloneSnapshot(raw *Snapshot) *Snapshot {
 			SurfaceID: surface.SurfaceID,
 			NodeID:    surface.NodeID,
 			Type:      surface.Type,
-			Value:     cloneSurfaceValue(surface.Value),
+			Value:     CloneSurfaceValue(surface.Value),
 		})
 	}
 	return snapshot
 }
 
-func cloneSurfaceValue(value SurfaceValue) SurfaceValue {
+// CloneSurfaceValue returns a deep copy that callers may mutate independently.
+func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	cloned := SurfaceValue{
 		FewShot: cloneFewShot(value.FewShot),
 		Tools:   cloneToolRefs(value.Tools),
@@ -297,7 +298,7 @@ func cloneFewShot(value []FewShotExample) []FewShotExample {
 }
 
 func normalizeSurfaceValue(value SurfaceValue) SurfaceValue {
-	value = cloneSurfaceValue(value)
+	value = CloneSurfaceValue(value)
 	if len(value.Tools) > 0 {
 		sort.Slice(value.Tools, func(i, j int) bool {
 			return value.Tools[i].ID < value.Tools[j].ID

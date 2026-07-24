@@ -1,0 +1,36 @@
+{
+  "evalSetId": "regression-validation",
+  "name": "Prompt regression validation fixtures",
+  "evalCases": [
+    {
+      "evalId": "validation-case-1",
+      "conversation": [{
+        "invocationId": "validation-case-1-invocation",
+        "userContent": {"role": "user", "content": "short ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "validation-case-2",
+      "conversation": [{
+        "invocationId": "validation-case-2-invocation",
+        "userContent": {"role": "user", "content": "formal ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    },
+    {
+      "evalId": "validation-case-3",
+      "conversation": [{
+        "invocationId": "validation-case-3-invocation",
+        "userContent": {"role": "user", "content": "edge ping request"},
+        "finalResponse": {"role": "assistant", "content": "pong"},
+        "tools": [{"id": "echo-call", "name": "echo_ping", "arguments": {"value": "ping"}, "result": {"value": "pong"}}]
+      }],
+      "sessionInput": {"appName": "promptiter-regression-loop", "userId": "fixture-user"}
+    }
+  ]
+}
