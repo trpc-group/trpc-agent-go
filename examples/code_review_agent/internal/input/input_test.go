@@ -245,6 +245,19 @@ func TestReadRepoPathIncludesStagedUnstagedAndUntrackedChanges(t *testing.T) {
 	}
 }
 
+func TestReadRepoPathRejectsPartialGitRefs(t *testing.T) {
+	repo := t.TempDir()
+	for _, req := range []Request{
+		{RepoPath: repo, BaseRef: "base"},
+		{RepoPath: repo, HeadRef: "head"},
+	} {
+		_, _, err := Read(Config{}, req)
+		if err == nil || !strings.Contains(err.Error(), "base ref and head ref must be supplied together") {
+			t.Fatalf("Read(%+v) error = %v, want partial ref rejection", req, err)
+		}
+	}
+}
+
 func TestReadRepoPathRejectsOversizedUntrackedTotal(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")

@@ -59,6 +59,9 @@ type Request struct {
 // Read 读取或生成 unified diff 输入。
 func Read(cfg Config, req Request) ([]byte, string, error) {
 	maxBytes := normalizeMaxInputBytes(cfg.MaxInputBytes)
+	if err := validateRefPair(req.BaseRef, req.HeadRef); err != nil {
+		return nil, "", err
+	}
 	if req.DiffFile != "" {
 		b, err := readFileWithLimit(req.DiffFile, maxBytes, "diff file")
 		return b, req.DiffFile, err
@@ -75,6 +78,15 @@ func Read(cfg Config, req Request) ([]byte, string, error) {
 		return b, req.RepoPath, err
 	}
 	return nil, "", errors.New("diff file, file list, repo path, or fixture is required")
+}
+
+func validateRefPair(baseRef string, headRef string) error {
+	hasBaseRef := strings.TrimSpace(baseRef) != ""
+	hasHeadRef := strings.TrimSpace(headRef) != ""
+	if hasBaseRef != hasHeadRef {
+		return errors.New("base ref and head ref must be supplied together")
+	}
+	return nil
 }
 
 func readFixtureInput(root string, name string, maxBytes int64) ([]byte, string, error) {
