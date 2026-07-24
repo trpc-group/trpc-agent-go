@@ -357,28 +357,35 @@ func TestInputErrorAndBoundaryBranches(t *testing.T) {
 
 func TestLoadUsesImmutableRepositorySnapshot(t *testing.T) {
 	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/review\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, digest, cleanup, err := snapshotRepository(root, Limits{MaxFileBytes: 1 << 20, MaxFiles: 10})
-	if err != nil {
-		t.Fatal(err)
+	summary := mustLoad(t, Config{RepoPath: root, Limits: testLimits()})
+	if summary.RepoRoot == root {
+		t.Fatal("Load returned the mutable source repository")
 	}
-	defer assertSnapshotCleanup(t, snapshot, cleanup)
+	if summary.RepositoryDigest == "" {
+		t.Fatal("Load returned an empty repository digest")
+	}
+	if summary.Cleanup == nil {
+		t.Fatal("Load returned no snapshot cleanup")
+	}
+	defer assertSnapshotCleanup(t, summary.RepoRoot, summary.Cleanup)
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package changed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	got, err := os.ReadFile(filepath.Join(snapshot, "main.go"))
+	got, err := os.ReadFile(filepath.Join(summary.RepoRoot, "main.go"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "package main\n" || digest == "" {
-		t.Fatalf("snapshot content=%q digest=%q", got, digest)
+	if string(got) != "package main\n" {
+		t.Fatalf("snapshot content = %q", got)
 	}
-	if err := os.WriteFile(filepath.Join(snapshot, "main.go"), []byte("package mutated\n"), 0o600); err == nil {
+	if err := os.WriteFile(filepath.Join(summary.RepoRoot, "main.go"), []byte("package mutated\n"), 0o600); err == nil {
 		t.Fatal("snapshot file remained writable")
 	}
 }
@@ -411,6 +418,16 @@ func TestSnapshotAndDigestExcludeOnlyGitMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package review\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, "a.go"), []byte("package review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prefixedDirectory := filepath.Join(root, "a")
+	if err := os.Mkdir(prefixedDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(prefixedDirectory, "b.go"), []byte("package review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	metadata := filepath.Join(root, ".git-hooks")
 	if err := os.Mkdir(metadata, 0o755); err != nil {
 		t.Fatal(err)
@@ -429,6 +446,13 @@ func TestSnapshotAndDigestExcludeOnlyGitMetadata(t *testing.T) {
 	defer assertSnapshotCleanup(t, snapshot, cleanup)
 	if sourceDigest != snapshotDigest {
 		t.Fatalf("source digest %q != snapshot digest %q", sourceDigest, snapshotDigest)
+	}
+	digestFromSnapshot, err := DigestRepository(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshotDigest != digestFromSnapshot {
+		t.Fatalf("returned digest %q != digest from snapshot %q", snapshotDigest, digestFromSnapshot)
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, ".git-hooks", "hook")); err != nil {
 		t.Fatalf("snapshot tracked .git-* directory: %v", err)

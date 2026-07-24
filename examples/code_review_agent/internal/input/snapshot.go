@@ -42,7 +42,6 @@ func snapshotRepository(source string, limits Limits) (string, string, func() er
 		return "", "", nil, err
 	}
 	cleanup := func() error { return removeSnapshot(root) }
-	hasher := sha256.New()
 	var files int
 	var total int64
 	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
@@ -98,8 +97,6 @@ func snapshotRepository(source string, limits Limits) (string, string, func() er
 				_, createErr = out.Write(data)
 			}
 			if createErr == nil {
-				_, _ = fmt.Fprintf(hasher, "%s\x00%d\x00", rel, len(data))
-				_, _ = hasher.Write(data)
 				total += int64(len(data))
 				files++
 			}
@@ -116,7 +113,11 @@ func snapshotRepository(source string, limits Limits) (string, string, func() er
 	if err := setSnapshotReadOnly(root); err != nil {
 		return "", "", nil, errors.Join(err, cleanup())
 	}
-	return root, hex.EncodeToString(hasher.Sum(nil)), cleanup, nil
+	digest, err := digestTree(root, limits.MaxFileBytes)
+	if err != nil {
+		return "", "", nil, errors.Join(err, cleanup())
+	}
+	return root, digest, cleanup, nil
 }
 
 func digestTree(root string, maxFileBytes int64) (string, error) {

@@ -205,8 +205,9 @@ func WithAutoInputs(enable bool) Option {
 
 // ExecuteCode implements the CodeExecutor interface
 func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
-	if c.container == nil {
-		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("container not initialized")
+	containerID, err := c.executionContainerID()
+	if err != nil {
+		return codeexecutor.CodeExecutionResult{}, err
 	}
 
 	var allOutput strings.Builder
@@ -242,7 +243,7 @@ func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 		}
 
 		// Create exec instance
-		execResp, err := c.client.ContainerExecCreate(ctx, c.container.ID, execConfig)
+		execResp, err := c.client.ContainerExecCreate(ctx, containerID, execConfig)
 		if err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create exec: %w", err)
 		}
@@ -486,13 +487,17 @@ func (c *CodeExecutor) buildDockerImage(ctx context.Context) error {
 
 // verifyPythonInstallation verifies that python3 is installed in the container
 func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
+	containerID, err := c.executionContainerID()
+	if err != nil {
+		return err
+	}
 	execConfig := container.ExecOptions{
 		Cmd:          []string{"which", "python3"},
 		AttachStdout: true,
 		AttachStderr: true,
 	}
 
-	execResp, err := c.client.ContainerExecCreate(ctx, c.container.ID, execConfig)
+	execResp, err := c.client.ContainerExecCreate(ctx, containerID, execConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create exec for python verification: %w", err)
 	}
@@ -514,6 +519,19 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *CodeExecutor) executionContainerID() (string, error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	id := c.containerID
+	if id == "" && c.container != nil {
+		id = c.container.ID
+	}
+	if id == "" {
+		return "", fmt.Errorf("container not initialized")
+	}
+	return id, nil
 }
 
 // initContainer initializes the Docker container
@@ -641,12 +659,12 @@ func (c *CodeExecutor) cleanupWithContext(ctx context.Context) error {
 	}
 	var errs []error
 	if err := c.client.ContainerStop(ctx, id, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
-		log.DebugfContext(ctx, "Failed to stop container: %v", err)
+		log.WarnfContext(ctx, "Failed to stop container: %v", err)
 		errs = append(errs, fmt.Errorf("stop container: %w", err))
 	}
 	removeErr := c.client.ContainerRemove(ctx, id, container.RemoveOptions{})
 	if removeErr != nil && !errdefs.IsNotFound(removeErr) {
-		log.DebugfContext(ctx, "Failed to remove container: %v", removeErr)
+		log.WarnfContext(ctx, "Failed to remove container: %v", removeErr)
 		errs = append(errs, fmt.Errorf("remove container: %w", removeErr))
 	}
 	// Keep the resource identity until removal has succeeded.  This is
