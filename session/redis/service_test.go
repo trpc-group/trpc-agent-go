@@ -1097,6 +1097,28 @@ func TestService_WithDisableScriptCache(t *testing.T) {
 	sessions, err := service.ListSessions(ctx, session.UserKey{AppName: "app", UserID: "u1"})
 	require.NoError(t, err)
 	assert.Len(t, sessions, 1)
+	assert.Equal(t, []string{"eval", "eval", "eval"}, recorder.snapshot())
+}
+
+func TestService_WithDisableScriptCache_ZSetSummary(t *testing.T) {
+	redisURL, cleanup := setupTestRedis(t)
+	defer cleanup()
+
+	service, err := NewService(
+		WithRedisClientURL(redisURL),
+		WithDisableScriptCache(true),
+	)
+	require.NoError(t, err)
+	defer service.Close()
+
+	recorder := &scriptCommandRecorder{}
+	service.redisClient.AddHook(recorder)
+
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	sum := &session.Summary{Summary: "summary", UpdatedAt: time.Now().UTC()}
+	require.NoError(t, service.zsetClient.CreateSummary(ctx, key, "all", sum, 0))
+	assert.Equal(t, []string{"eval"}, recorder.snapshot())
 }
 
 func TestService_UsesScriptCacheByDefault(t *testing.T) {
