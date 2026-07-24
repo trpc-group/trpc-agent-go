@@ -238,25 +238,47 @@ func splitTextWithBalancedTail(
 	}
 	balancedPrefix, balancedRemaining := split(content, balancedLimit)
 	minimumNaturalSize := max(1, maxSize*2/5)
-	if encoding.RuneCount(balancedPrefix) < minimumNaturalSize ||
-		encoding.RuneCount(balancedRemaining) < minimumNaturalSize {
-		contentRunes := []rune(strings.TrimSpace(content))
-		for position := min(balancedLimit, len(contentRunes)-1); position >= minimumSize; position-- {
-			hardPrefix := strings.TrimSpace(
-				string(contentRunes[:position]),
-			)
-			hardRemaining := strings.TrimSpace(
-				string(contentRunes[position:]),
-			)
-			if encoding.RuneCount(hardPrefix) < minimumSize ||
-				encoding.RuneCount(hardRemaining) < minimumSize {
-				continue
-			}
-			return hardPrefix, hardRemaining
-		}
-		return prefix, remaining
+	contentRunes := []rune(strings.TrimSpace(content))
+	balancedPrefixSize := encoding.RuneCount(balancedPrefix)
+	balancedRemainingSize := encoding.RuneCount(balancedRemaining)
+	balancedStart := len(contentRunes) - balancedRemainingSize
+	if balancedPrefixSize >= minimumNaturalSize &&
+		balancedRemainingSize >= minimumNaturalSize &&
+		isNaturalTextStart(contentRunes, balancedStart) {
+		return balancedPrefix, balancedRemaining
 	}
-	return balancedPrefix, balancedRemaining
+
+	// The balanced target can fall just before a nearby natural boundary, for
+	// example before the closing delimiter of a Markdown table row. Prefer the
+	// next boundary that still fits instead of hard-splitting the row.
+	maxPosition := min(maxSize, len(contentRunes)-1)
+	for position := max(balancedLimit+1, 1); position <= maxPosition; position++ {
+		if !isNaturalTextStart(contentRunes, position) {
+			continue
+		}
+		naturalPrefix := strings.TrimSpace(string(contentRunes[:position]))
+		naturalRemaining := strings.TrimSpace(string(contentRunes[position:]))
+		if encoding.RuneCount(naturalPrefix) < minimumNaturalSize ||
+			encoding.RuneCount(naturalRemaining) < minimumNaturalSize {
+			continue
+		}
+		return naturalPrefix, naturalRemaining
+	}
+
+	for position := min(balancedLimit, len(contentRunes)-1); position >= minimumSize; position-- {
+		hardPrefix := strings.TrimSpace(
+			string(contentRunes[:position]),
+		)
+		hardRemaining := strings.TrimSpace(
+			string(contentRunes[position:]),
+		)
+		if encoding.RuneCount(hardPrefix) < minimumSize ||
+			encoding.RuneCount(hardRemaining) < minimumSize {
+			continue
+		}
+		return hardPrefix, hardRemaining
+	}
+	return prefix, remaining
 }
 
 func preferredTextBoundary(content []rune, maxSize int) int {

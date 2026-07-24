@@ -730,7 +730,7 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 				availableSize := m.chunkSize - currentSize - separatorSize
 				if isMarkdownHeading(currentChunk.String()) && availableSize > 0 {
 					var prefix string
-					prefix, remainingText = splitMarkdownText(
+					prefix, remainingText = splitMarkdownTextWithBalancedTail(
 						remainingText,
 						availableSize,
 					)

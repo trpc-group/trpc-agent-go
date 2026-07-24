@@ -335,6 +335,53 @@ func TestSplitMarkdownTextWithBalancedTail(t *testing.T) {
 	require.GreaterOrEqual(t, utf8.RuneCountInString(remaining), 120)
 }
 
+func TestSplitMarkdownTextWithBalancedTailPrefersNearbyLineBoundary(t *testing.T) {
+	content := strings.Repeat("a", 128) + "|\n" + strings.Repeat("b", 118)
+
+	prefix, remaining := splitMarkdownTextWithBalancedTail(content, 240)
+
+	require.Equal(t, strings.Repeat("a", 128)+"|", prefix)
+	require.Equal(t, strings.Repeat("b", 118), remaining)
+}
+
+func TestMarkdownChunkingBalancesLongBlockAfterHeading(t *testing.T) {
+	tableLines := []string{
+		"| key | value |",
+		"| --- | --- |",
+	}
+	for i := 0; i < 5; i++ {
+		tableLines = append(
+			tableLines,
+			"| item-"+strconv.Itoa(i)+" | "+strings.Repeat("value", 6)+" |",
+		)
+	}
+	doc := &document.Document{
+		ID:      "catalog",
+		Content: "## Catalog\n\n" + strings.Join(tableLines, "\n"),
+	}
+
+	const chunkSize = 240
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(doc)
+
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	for _, chunk := range chunks {
+		require.GreaterOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize*2/5,
+		)
+		for _, line := range strings.Split(chunk.Content, "\n") {
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "|") {
+				require.True(t, strings.HasSuffix(line, "|"), line)
+			}
+		}
+	}
+}
+
 func TestSplitMarkdownParagraphsKeepsFencedCodeTogether(t *testing.T) {
 	content := "before\n\n```go\nfirst()\n\nsecond()\n```\n\nafter"
 
