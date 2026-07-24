@@ -23,7 +23,9 @@ type Limiter struct {
 	groups map[string]*semaphore.Weighted
 }
 
-// ValidateConcurrencyConfig validates concurrency group membership.
+// ValidateConcurrencyConfig validates concurrency group membership. It ignores
+// empty tool names and groups with non-positive limits, and returns an error
+// when a tool belongs to more than one positive-limit group.
 func ValidateConcurrencyConfig(config tool.ConcurrencyConfig) error {
 	seen := make(map[string]struct{})
 	for _, group := range config.Groups {
