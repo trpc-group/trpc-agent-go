@@ -20,6 +20,11 @@ Most examples accept:
 
 ## Examples
 
+### chunking/
+
+Offline comparison of FixedSizeChunking, RecursiveChunking, and
+MarkdownChunking boundaries using a bundled Markdown document.
+
 ### basic/
 Basic example with file source and in-memory vector store.
 
