@@ -12,6 +12,7 @@ import (
 	"context"
 
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // SpanStartFilter decides whether a span should be recorded when it is
@@ -25,14 +26,18 @@ type SpanStartFilter func(sdktrace.SamplingParameters) bool
 // events, and duration.
 type SpanExportFilter func(sdktrace.ReadOnlySpan) bool
 
-// WithSpanStartFilter filters spans when they are created.
+// WithSpanStartFilter filters spans when they are created. A nil filter
+// disables start filtering. When specified more than once, the last option
+// wins.
 func WithSpanStartFilter(filter SpanStartFilter) Option {
 	return func(opts *options) {
 		opts.spanStartFilter = filter
 	}
 }
 
-// WithSpanExportFilter filters completed spans immediately before export.
+// WithSpanExportFilter filters completed spans immediately before export. A
+// nil filter disables export filtering. When specified more than once, the
+// last option wins.
 func WithSpanExportFilter(filter SpanExportFilter) Option {
 	return func(opts *options) {
 		opts.spanExportFilter = filter
@@ -46,7 +51,11 @@ type filteringSampler struct {
 
 func (s filteringSampler) ShouldSample(params sdktrace.SamplingParameters) sdktrace.SamplingResult {
 	if s.filter != nil && !s.filter(params) {
-		return sdktrace.SamplingResult{Decision: sdktrace.Drop}
+		parent := oteltrace.SpanContextFromContext(params.ParentContext)
+		return sdktrace.SamplingResult{
+			Decision:   sdktrace.Drop,
+			Tracestate: parent.TraceState(),
+		}
 	}
 	return s.next.ShouldSample(params)
 }

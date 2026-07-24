@@ -12,9 +12,12 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/sdk/instrumentation"
+	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 func TestWithSpanFilters(t *testing.T) {
@@ -50,6 +53,32 @@ func TestFilteringSampler(t *testing.T) {
 		Name: "chat",
 	}).Decision; got != sdktrace.RecordAndSample {
 		t.Fatalf("chat decision = %v, want RecordAndSample", got)
+	}
+}
+
+func TestFilteringSampler_PreservesParentTraceState(t *testing.T) {
+	traceState, err := oteltrace.ParseTraceState("vendor=value")
+	if err != nil {
+		t.Fatalf("ParseTraceState() error = %v", err)
+	}
+	parent := oteltrace.NewSpanContext(oteltrace.SpanContextConfig{
+		TraceID:    oteltrace.TraceID{1},
+		SpanID:     oteltrace.SpanID{1},
+		TraceState: traceState,
+	})
+	sampler := filteringSampler{
+		filter: func(sdktrace.SamplingParameters) bool { return false },
+		next:   sdktrace.AlwaysSample(),
+	}
+
+	result := sampler.ShouldSample(sdktrace.SamplingParameters{
+		ParentContext: oteltrace.ContextWithSpanContext(
+			context.Background(),
+			parent,
+		),
+	})
+	if got := result.Tracestate.String(); got != "vendor=value" {
+		t.Fatalf("Tracestate = %q, want vendor=value", got)
 	}
 }
 
@@ -102,6 +131,71 @@ func TestNewFilteringSpanExporter_NilFilter(t *testing.T) {
 	if got := newFilteringSpanExporter(next, nil); got != next {
 		t.Fatal("nil filter should return the original exporter")
 	}
+}
+
+func TestSetupTracerProvider_WiresFilters(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	restoreProvider := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(restoreProvider) })
+	shutdown := setupTracerProvider(resource.Empty(), exporter, &options{
+		spanStartFilter: func(params sdktrace.SamplingParameters) bool {
+			return params.Name != "start-drop"
+		},
+		spanExportFilter: func(span sdktrace.ReadOnlySpan) bool {
+			return span.Name() != "export-drop"
+		},
+	})
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+	tracer := otel.Tracer("test")
+	for _, name := range []string{"keep", "start-drop", "export-drop"} {
+		_, span := tracer.Start(context.Background(), name)
+		span.End()
+	}
+	provider, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider)
+	if !ok {
+		t.Fatalf("TracerProvider type = %T, want *sdktrace.TracerProvider", otel.GetTracerProvider())
+	}
+	if err := provider.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("ForceFlush() error = %v", err)
+	}
+
+	got := exporter.GetSpans()
+	if len(got) != 1 || got[0].Name != "keep" {
+		t.Fatalf("exported spans = %v, want only keep", spanNames(got))
+	}
+}
+
+func TestSetupTracerProvider_DefaultExportsAll(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	restoreProvider := otel.GetTracerProvider()
+	t.Cleanup(func() { otel.SetTracerProvider(restoreProvider) })
+	shutdown := setupTracerProvider(resource.Empty(), exporter, &options{})
+	t.Cleanup(func() { _ = shutdown(context.Background()) })
+	tracer := otel.Tracer("test")
+	for _, name := range []string{"first", "second"} {
+		_, span := tracer.Start(context.Background(), name)
+		span.End()
+	}
+	provider, ok := otel.GetTracerProvider().(*sdktrace.TracerProvider)
+	if !ok {
+		t.Fatalf("TracerProvider type = %T, want *sdktrace.TracerProvider", otel.GetTracerProvider())
+	}
+	if err := provider.ForceFlush(context.Background()); err != nil {
+		t.Fatalf("ForceFlush() error = %v", err)
+	}
+
+	got := exporter.GetSpans()
+	if len(got) != 2 {
+		t.Fatalf("exported spans = %v, want first and second", spanNames(got))
+	}
+}
+
+func spanNames(spans tracetest.SpanStubs) []string {
+	names := make([]string, 0, len(spans))
+	for _, span := range spans {
+		names = append(names, span.Name)
+	}
+	return names
 }
 
 func spanSnapshot(name string) sdktrace.ReadOnlySpan {
