@@ -1,5 +1,7 @@
 # 文档源配置
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 > **示例代码**: [examples/knowledge/sources](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources)
 
 源模块提供了多种文档源类型，每种类型都支持丰富的配置选项。
@@ -205,8 +207,6 @@ sources := []source.Source{
 ```
 
 ## 分块策略 (Chunking Strategy)
-
-![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
 
 > **示例代码**: [交互式 Chunking Viewer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/chunking) | [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
 
