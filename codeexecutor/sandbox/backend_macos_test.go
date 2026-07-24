@@ -13,6 +13,7 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -58,7 +59,7 @@ func TestMacOSSeatbeltProfileGeneration(t *testing.T) {
 		WithNoAccessPaths("work/secret").
 		WithNoAccessGlobs("work/*.env").
 		WithNetworkPolicy(NetworkPolicy{Mode: NetworkEnabled})
-	policy, err := rt.macosSeatbeltProfile(profile, ws)
+	policy, err := rt.macosSeatbeltProfile(profile, ws, sandboxDenialRun{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +116,69 @@ func TestMacOSPlatformTempMetadataPolicyOnly(t *testing.T) {
 	}
 }
 
+func TestMacOSSandboxDenialParser(t *testing.T) {
+	tag := "TRPC_RUN_0123456789abcdef_END_a1b2c3d4e5f67890_SBX"
+	line := []byte(`{"timestamp":"2026-07-02 19:36:51.891785+0800","eventMessage":"Sandbox: sh(1503) deny(1) file-read-data /private/tmp/foo\n` + tag + `"}`)
+	denial, tagged, ok := parseMacOSSandboxDenialLogLine(line, tag)
+	if !ok || !tagged {
+		t.Fatalf("parse tagged denial ok=%v tagged=%v denial=%#v", ok, tagged, denial)
+	}
+	if denial.Operation != "file-read-data" || denial.Target != "/private/tmp/foo" {
+		t.Fatalf("denial = %#v, want file-read-data /private/tmp/foo", denial)
+	}
+
+	untaggedLine := []byte(`{"timestamp":"2026-07-02 19:36:51.891785+0800","eventMessage":"Sandbox: sh(1503) deny(1) mach-lookup com.apple.trustd.agent"}`)
+	untagged, tagged, ok := parseMacOSSandboxDenialLogLine(untaggedLine, tag)
+	if !ok || tagged {
+		t.Fatalf("parse untagged ok=%v tagged=%v denial=%#v", ok, tagged, untagged)
+	}
+	if untagged.Operation != "mach-lookup" || untagged.Target != "com.apple.trustd.agent" {
+		t.Fatalf("untagged = %#v, want mach-lookup com.apple.trustd.agent", untagged)
+	}
+}
+
+func TestMacOSDenialDiagnosticsProfileMessages(t *testing.T) {
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostic-profile", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag := "TRPC_RUN_0123456789abcdef_END_a1b2c3d4e5f67890_SBX"
+	policy, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env"),
+		ws,
+		sandboxDenialRun{
+			enabled:              true,
+			runTag:               tag,
+			defaultDenyTaggable:  true,
+			explicitDenyTaggable: true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDefault := `(deny default (with message "` + tag + `"))`
+	if !strings.Contains(policy, wantDefault) {
+		t.Fatalf("diagnostic policy missing tagged default deny %q:\n%s", wantDefault, policy)
+	}
+	wantGlob := `(with message "` + tag + `")`
+	if count := strings.Count(policy, wantGlob); count < 3 {
+		t.Fatalf("diagnostic policy has %d tagged deny messages, want at least default + glob rules:\n%s", count, policy)
+	}
+
+	withoutDefault, err := rt.macosSeatbeltProfile(
+		WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env"),
+		ws,
+		sandboxDenialRun{enabled: true, runTag: tag, explicitDenyTaggable: true},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withoutDefault, wantDefault) {
+		t.Fatalf("diagnostic policy tagged default deny without support:\n%s", withoutDefault)
+	}
+}
+
 func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
 	ws, err := rt.CreateWorkspace(context.Background(), "macos/network-policy", codeexecutor.WorkspacePolicy{})
@@ -122,7 +186,7 @@ func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	restricted, err := rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws)
+	restricted, err := rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws, sandboxDenialRun{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,6 +198,7 @@ func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 	weaker, err := rt.macosSeatbeltProfile(
 		WorkspaceWriteProfile().WithMacOSWeakerNetworkIsolation(),
 		ws,
+		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +214,7 @@ func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 	unixSockets, err := rt.macosSeatbeltProfile(
 		WorkspaceWriteProfile().WithMacOSUnixSocketPaths(socketPath),
 		ws,
+		sandboxDenialRun{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +232,7 @@ func TestMacOSNetworkExtensionPolicies(t *testing.T) {
 	_, err = rt.macosSeatbeltProfile(
 		WorkspaceWriteProfile().WithMacOSUnixSocketPaths("relative.sock"),
 		ws,
+		sandboxDenialRun{},
 	)
 	if !isKind(err, ErrPolicyViolation) {
 		t.Fatalf("relative Unix socket path error = %v, want ErrPolicyViolation", err)
@@ -214,7 +281,7 @@ func TestMacOSRuleTargetRejectsAbsoluteWorkspaceSymlinkGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := WorkspaceWriteProfile().WithWritePaths(link)
-	_, err = rt.macosSeatbeltProfile(profile, ws)
+	_, err = rt.macosSeatbeltProfile(profile, ws, sandboxDenialRun{})
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("symlink grant profile error = %v, want ErrPathDenied", err)
 	}
@@ -242,7 +309,7 @@ func TestMacOSRuleTargetRejectsSpecialWorkspaceSymlink(t *testing.T) {
 	if err := os.Symlink(outside, work); err != nil {
 		t.Fatal(err)
 	}
-	_, err = rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws)
+	_, err = rt.macosSeatbeltProfile(WorkspaceWriteProfile(), ws, sandboxDenialRun{})
 	if !isKind(err, ErrPathDenied) {
 		t.Fatalf("special workspace symlink profile error = %v, want ErrPathDenied", err)
 	}
@@ -336,6 +403,341 @@ func TestMacOSSandboxExecNoAccessGlobIntegration(t *testing.T) {
 	}
 	if res.ExitCode == 0 {
 		t.Fatalf("glob no-access read unexpectedly succeeded: %#v", res)
+	}
+}
+
+func TestMain(m *testing.M) {
+	resetDiagnosticsCapsCacheForTest()
+	os.Exit(m.Run())
+}
+
+func TestMacOSSandboxDenialSuffixFormat(t *testing.T) {
+	session := newMacOSSessionSuffix()
+	if !strings.HasPrefix(session, "_END_") || !strings.HasSuffix(session, "_SBX") {
+		t.Fatalf("session suffix = %q, want _END_<hex>_SBX", session)
+	}
+	probe := newMacOSProbeSuffix()
+	if !strings.HasPrefix(probe, "_END_") || !strings.HasSuffix(probe, "_PROBE_SBX") {
+		t.Fatalf("probe suffix = %q, want _END_<hex>_PROBE_SBX", probe)
+	}
+	if strings.HasSuffix(probe, session) {
+		t.Fatalf("probe suffix %q must not end with production suffix %q", probe, session)
+	}
+	tag := newMacOSSandboxDenialRunTag(session)
+	if !strings.HasPrefix(tag, "TRPC_RUN_") || !strings.HasSuffix(tag, session) {
+		t.Fatalf("run tag = %q, want TRPC_RUN_<hex>%s", tag, session)
+	}
+}
+
+func TestProbeMatchedRequiresExpectedTarget(t *testing.T) {
+	tag := "TRPC_RUN_PROBE_D_0123456789abcdef_END_abc_PROBE_SBX"
+	target := "/private/tmp/.trpc_sbx_probe/default_target"
+	events := []macosSandboxDenialEvent{{
+		denial: Denial{
+			Operation: "file-read-data",
+			Target:    "/usr/lib/dyld",
+			Raw:       "Sandbox: cat deny file-read-data /usr/lib/dyld\n" + tag,
+		},
+	}}
+	if probeMatched(events, probeExpectation{
+		Tag:       tag,
+		Operation: "file-read-data",
+		Target:    target,
+	}) {
+		t.Fatal("probeMatched accepted dyld startup denial with matching tag")
+	}
+	events = append(events, macosSandboxDenialEvent{
+		denial: Denial{
+			Operation: "file-read-data",
+			Target:    target,
+			Raw:       "Sandbox: cat deny file-read-data " + target + "\n" + tag,
+		},
+	})
+	if !probeMatched(events, probeExpectation{
+		Tag:       tag,
+		Operation: "file-read*",
+		Target:    target,
+	}) {
+		t.Fatal("probeMatched rejected intentional probe denial")
+	}
+}
+
+func TestProbeMatchedRequiresExactTag(t *testing.T) {
+	tag := "TRPC_RUN_PROBE_D_0123456789abcdef_END_abc_PROBE_SBX"
+	target := "/private/tmp/.trpc_sbx_probe/default_target"
+	events := []macosSandboxDenialEvent{{
+		denial: Denial{
+			Operation: "file-read-data",
+			Target:    target,
+			Raw:       "Sandbox: cat deny file-read-data " + target + "\n" + tag + "_EXTRA",
+		},
+	}}
+	if probeMatched(events, probeExpectation{
+		Tag:       tag,
+		Operation: "file-read*",
+		Target:    target,
+	}) {
+		t.Fatal("probeMatched accepted a tag that only matched as a prefix")
+	}
+}
+
+func TestProbeMatchedAcceptsReadOperationFamily(t *testing.T) {
+	tag := "TRPC_RUN_PROBE_D_0123456789abcdef_END_abc_PROBE_SBX"
+	target := "/private/tmp/.trpc_sbx_probe/default_target"
+	for _, operation := range []string{
+		"file-read-data",
+		"file-read-metadata",
+		"file-test-existence",
+		"file-map-executable",
+	} {
+		events := []macosSandboxDenialEvent{{
+			denial: Denial{
+				Operation: operation,
+				Target:    target,
+				Raw:       "Sandbox: cat deny " + operation + " " + target + "\n" + tag,
+			},
+		}}
+		if !probeMatched(events, probeExpectation{
+			Tag:       tag,
+			Operation: "file-read*",
+			Target:    target,
+		}) {
+			t.Fatalf("probeMatched rejected operation %q", operation)
+		}
+	}
+}
+
+func TestMacOSDiagnosticsProbePolicyUsesProductionLikeExplicitDeny(t *testing.T) {
+	policy := macosDiagnosticsProbePolicy(
+		"TRPC_RUN_PROBE_D_0123456789abcdef_END_abc_PROBE_SBX",
+		"TRPC_RUN_PROBE_E_0123456789abcdef_END_abc_PROBE_SBX",
+		"/private/tmp/.trpc_sbx_probe/explicit_target",
+	)
+	if !strings.Contains(policy, `(deny file-read* file-map-executable file-test-existence (regex #"`) {
+		t.Fatalf("probe policy does not use production-like explicit read deny:\n%s", policy)
+	}
+	if strings.Contains(policy, `(deny file-read-data (literal`) {
+		t.Fatalf("probe policy still uses literal file-read-data explicit deny:\n%s", policy)
+	}
+}
+
+func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
+	runTag := "TRPC_RUN_current_END_0123456789abcdef_SBX"
+	ring := &macosDenialRing{
+		events: []macosSandboxDenialEvent{{
+			denial: Denial{
+				Operation: "file-read-data",
+				Target:    "/private/tmp/old",
+				Raw:       "Sandbox: cat deny(1) file-read-data /private/tmp/old\nTRPC_RUN_old_END_0123456789abcdef_SBX",
+			},
+			tagged: true,
+		}},
+	}
+	rt := NewRuntime()
+	rt.macosDenialDiagnostics().prodMonitor = &macosLogStreamMonitor{ring: ring}
+	go func() {
+		time.Sleep(120 * time.Millisecond)
+		ring.mu.Lock()
+		defer ring.mu.Unlock()
+		ring.events = append(ring.events, macosSandboxDenialEvent{
+			denial: Denial{
+				Operation: "file-read-data",
+				Target:    "/private/tmp/current",
+				Raw:       "Sandbox: cat deny(1) file-read-data /private/tmp/current\n" + runTag,
+			},
+			tagged: true,
+		})
+	}()
+	denials := rt.collectSandboxDenials(runTag, "/bin/cat", 2*time.Second)
+	if len(denials) != 1 || denials[0].Target != "/private/tmp/current" {
+		t.Fatalf("denials=%#v, want current run denial after stale ring event", denials)
+	}
+}
+
+func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostics-degraded", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.ensureDenialMonitor(); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = nil
+	d.caps = DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: false,
+		StrongCorrelation:    false,
+	}
+	d.mu.Unlock()
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo ok"},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "ok" {
+		t.Fatalf("run result = %#v, want successful echo ok", res)
+	}
+	if diagnostics.Denials != nil {
+		t.Fatalf("diagnostics = %#v, want nil denials when monitor unavailable", diagnostics)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatalf("sandboxDenialCollectingReady = true, want false after simulated monitor loss")
+	}
+}
+
+func TestRunProgramWithDiagnosticsProbeFailureDisablesCollection(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostics-probe-failure", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.monitorOnce.Do(func() {
+		d.monitorErr = errors.New("simulated probe failure")
+	})
+
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo ok"},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "ok" {
+		t.Fatalf("run result = %#v, want successful echo ok", res)
+	}
+	if diagnostics.Denials != nil {
+		t.Fatalf("diagnostics = %#v, want nil denials when probe fails", diagnostics)
+	}
+}
+
+func TestDiagnosticsCapabilityProbe(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	if err := rt.ensureDenialMonitor(); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	caps := rt.DiagnosticsCapability()
+	t.Logf("caps=%+v", caps)
+	if !caps.ProbeCompleted {
+		t.Skip("diagnostics capability probe did not complete on this host")
+	}
+	if !caps.EventStreamAvailable {
+		t.Skip("log stream unavailable on this host")
+	}
+	if !caps.DefaultDenyTaggable || !caps.ExplicitDenyTaggable {
+		t.Fatalf("expected both default and explicit deny tagging on this host, caps=%+v", caps)
+	}
+}
+
+func TestMacOSSandboxExecCollectsExplicitDenyDiagnostics(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile().WithNoAccessGlobs("work/*.env")),
+	)
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/glob-denial-diagnostics", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws.Path, "work", "app.env"), []byte("TOKEN=secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "/bin/sh",
+		Args: []string{"-c", "cat app.env"},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Fatalf("glob no-access read unexpectedly succeeded: %#v", res)
+	}
+	if len(diagnostics.Denials) == 0 {
+		t.Fatalf("sandbox denials empty, result=%#v", res)
+	}
+	if !strings.Contains(diagnostics.Denials[0].Operation, "file-read") {
+		t.Fatalf("sandbox denial = %#v, want file-read operation", diagnostics.Denials[0])
+	}
+	if strings.Contains(res.Stderr, "[sandbox diagnostics]") {
+		t.Fatalf("stderr contains framework sandbox diagnostics: %q", res.Stderr)
+	}
+}
+
+func TestMacOSSandboxExecCollectsDefaultDenyDiagnosticsWhenSupported(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	_ = rt.ensureDenialMonitor()
+	caps := rt.DiagnosticsCapability()
+	if !caps.DefaultDenyTaggable {
+		t.Skip("default-deny messages are not supported on this host")
+	}
+	hostTemp := filepath.Join(os.TempDir(), "trpc-agent-sandbox-default-deny-diagnostics")
+	if err := os.WriteFile(hostTemp, []byte("host-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(hostTemp) })
+	ws, err := rt.CreateWorkspace(context.Background(), "macos/default-deny-diagnostics", codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "/bin/cat",
+		Args: []string{hostTemp},
+	})
+	diagnostics := <-diagnosticsCh
+	if err != nil {
+		t.Fatalf("run error: %v", err)
+	}
+	if res.ExitCode == 0 {
+		t.Fatalf("host temp read unexpectedly succeeded: %#v", res)
+	}
+	if len(diagnostics.Denials) == 0 {
+		t.Fatalf("default deny diagnostics empty, result=%#v", res)
+	}
+	if strings.Contains(res.Stderr, "[sandbox diagnostics]") {
+		t.Fatalf("stderr contains framework sandbox diagnostics: %q", res.Stderr)
 	}
 }
 

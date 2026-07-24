@@ -39,6 +39,7 @@ type Runtime struct {
 	manifest         Manifest
 	outputMaxBytes   int
 	defaultTimeout   time.Duration
+	denials          any
 
 	mu       sync.Mutex
 	runLocks map[string]*sync.Mutex
@@ -79,6 +80,7 @@ func NewRuntime(opts ...Option) *Runtime {
 		r.defaultTimeout = defaultRunTimeout
 	}
 	r.applyManifestPolicy()
+	r.initDenialDiagnosticsState()
 	return r
 }
 

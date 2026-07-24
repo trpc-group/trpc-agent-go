@@ -50,8 +50,10 @@ func (r *Runtime) osSandboxCommand(
 	cwd string,
 	env []string,
 	spec codeexecutor.RunProgramSpec,
+	diagnostics sandboxDenialRun,
 ) (*exec.Cmd, string, commandCleanup, error) {
 	_ = ctx
+	_ = diagnostics
 	bwrap, mountProc, err := r.linuxPreflight()
 	if err != nil {
 		return nil, string(BackendLinuxBubblewrap), nil, err

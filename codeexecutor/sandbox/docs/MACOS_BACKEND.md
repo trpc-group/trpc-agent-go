@@ -111,6 +111,27 @@ shared Unix process-group cleanup used by the package. This is useful for
 terminating descendant processes, but it is not equivalent to a Linux PID
 namespace.
 
+## Denial Diagnostics
+
+macOS can expose Seatbelt deny events through the unified log. When sandbox
+denial diagnostics are requested through `WithDiagnostics`, the runtime lazily
+probes host capability, starts a persistent `/usr/bin/log stream --style ndjson`
+monitor scoped to a runtime `sessionSuffix`, and returns strongly correlated
+events in `Diagnostics.Denials`.
+
+Sandbox denial diagnostics are exposed only as structured runtime data. The
+runtime does not append diagnostics to child-process stderr; callers that need
+human-readable output should format `Diagnostics.Denials` in their CLI, UI, or
+agent layer.
+
+`Runtime.DiagnosticsCapability()` reports whether log streaming and deny-message
+tagging were detected at runtime. Capabilities are cached per macOS version for
+the process lifetime. The production unified-log monitor is also tied to the
+`Runtime`/process lifetime and has no explicit shutdown API today.
+
+See [`SANDBOX_DENIAL_DIAGNOSTICS.md`](SANDBOX_DENIAL_DIAGNOSTICS.md) for the
+data flow, filtering model, and limitations.
+
 ## Capability Matrix
 
 | Capability | Linux `linux-bubblewrap` | macOS `macos-sandbox-exec` |
@@ -124,6 +145,7 @@ namespace.
 | Mach services | Not applicable | Backend-specific allow-list |
 | Unix socket path policy | Not exposed by this backend | Supported for exact absolute macOS socket paths |
 | Dynamic glob deny | Static mount masks | Dynamic Seatbelt regex hard deny |
+| Runtime denial diagnostics | Not exposed by this backend | Supported through macOS unified log diagnostics |
 | Protected metadata | Read-only masks | Write allow exclusions |
 | Resource quotas | Not implemented | Not implemented |
 | PTY / ports / snapshot | Not implemented | Not implemented |
