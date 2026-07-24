@@ -27,6 +27,7 @@ func TestFindingKeyDedupesSameFileLineRule(t *testing.T) {
 func TestRedactSecretsMasksCommonTokenShapes(t *testing.T) {
 	input := strings.Join([]string{
 		`apiKey=sk-1234567890abcdef`,
+		`apiKey := "llm-live-short-declaration"`,
 		`llmkey="llm-live-1234567890abcdef"`,
 		`openaiKey="sk-proj-1234567890abcdef"`,
 		`Authorization: Bearer abc.def.ghi`,
@@ -42,6 +43,7 @@ func TestRedactSecretsMasksCommonTokenShapes(t *testing.T) {
 	got := RedactSecrets(input)
 	for _, raw := range []string{
 		"sk-1234567890abcdef",
+		"llm-live-short-declaration",
 		"llm-live-1234567890abcdef",
 		"sk-proj-1234567890abcdef",
 		"abc.def.ghi",

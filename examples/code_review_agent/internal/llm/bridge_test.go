@@ -122,6 +122,35 @@ func TestRunReviewNeverSendsMultilinePEMToProvider(t *testing.T) {
 	}
 }
 
+func TestRunReviewAndFindingSanitizationRedactShortDeclarationSecrets(t *testing.T) {
+	const secret = "llm-live-short-declaration"
+	diff := []byte("diff --git a/config.go b/config.go\n" +
+		"+++ b/config.go\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+apiKey := \"" + secret + "\"\n")
+	called := false
+	provider := ProviderFunc(func(_ context.Context, input Input) (Output, error) {
+		called = true
+		if strings.Contains(input.DiffSummary, secret) {
+			t.Fatalf("provider input leaked short-declaration secret: %s", input.DiffSummary)
+		}
+		if !strings.Contains(input.DiffSummary, "apiKey=[REDACTED]") {
+			t.Fatalf("provider input missing short-declaration redaction marker: %s", input.DiffSummary)
+		}
+		return Output{}, nil
+	})
+
+	_, _ = RunReview(context.Background(), "task-1", provider, Audit{}, review.Result{}, diff, review.InputMetadata{})
+	if !called {
+		t.Fatal("expected model provider to receive a review request")
+	}
+
+	finding := SanitizeFinding(review.Finding{Evidence: "apiKey := \"" + secret + "\""})
+	if strings.Contains(finding.Evidence, secret) {
+		t.Fatalf("report evidence leaked short-declaration secret: %s", finding.Evidence)
+	}
+}
+
 func hasRuleID(findings []review.Finding, ruleID string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID {
