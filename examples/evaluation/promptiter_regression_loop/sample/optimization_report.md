@@ -1,0 +1,173 @@
+# Phase 4 v2 PromptIter Regression Loop
+
+Mode: `fake`
+
+## Audit Configuration
+
+- Deterministic seed: `0`
+- Sample report: `true`
+- Baseline prompt: `./config/baseline_prompt.txt`
+- Baseline prompt SHA-256: `75357d685f238b6afd7738be9786fdafde641eb6ca9a3be7471939715a68a4de`
+- Configured validation metrics: `tool_trajectory_avg_score`, `final_response_avg_score`
+- PromptIter config: `./config/promptiter.json`
+- PromptIter config SHA-256: `72c920d7cf8470c845a3dcca50b7bc4dea8ace772366ba59f71adedcb7bb714d`
+- Model: `phase4v2-fake-model` (deterministic=`true`, temperature=`0.0`, max tokens=`1024`, stream=`false`)
+- PromptIter: max rounds=`2`, min score gain=`0.1000`, target score=`1.0000`, max rounds without acceptance=`0`
+- Final gate: rejectOnNewHardFail=`true`, rejectOnCriticalRegression=`true`, maxDurationMs=`180000`, maxModelCalls=`100`
+- Critical case scope: `validation_status_tr789`
+
+Single round: `false`
+
+Target surface: `candidate#tool.lookup_record`
+
+Baseline validation overall score: `0.2500`
+
+Candidate validation overall score: `0.7500`
+
+Candidate train overall score: `1.0000`
+
+
+### PromptIter Accepted Profile
+
+- `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+
+PromptIter acceptance determines whether a candidate becomes the working profile inside the optimization loop; it is not release approval. Release approval is determined exclusively by the final gate.
+
+Final release gate decision: `reject`
+
+Validation gain: `0.5000`
+
+Final release outcome: rejected by the final gate because critical validation regression cases were detected: `validation_status_tr789`.
+
+## Validation Delta
+
+- New pass: `3`
+- New fail: `1`
+- Improved: `0`
+- Regressed: `0`
+- Unchanged pass: `0`
+- Unchanged fail: `0`
+
+## Round 1
+
+- Accepted by PromptIter: `true`
+- Score delta: `0.2500`
+- PromptIter acceptance reason: candidate score gain satisfies acceptance policy
+- Patch `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight delay information."
+
+### Round Output Profile
+
+- `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight delay information."
+
+## Round 2
+
+- Accepted by PromptIter: `true`
+- Score delta: `0.2500`
+- PromptIter acceptance reason: candidate score gain satisfies acceptance policy
+- Patch `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+
+### Round Output Profile
+
+- `candidate#tool.lookup_record`: tool `lookup_record` description = "Use lookup_record to query flight status, delay, departure, and gate information. Always use this tool for flight records, even if user asks not to."
+
+
+## Final Gate
+
+- validation gain 0.5000 satisfies minimum 0.0500
+- new hard fail cases: [validation_status_tr789]
+- critical regression cases: [validation_status_tr789]
+- latency budget check skipped for sample report
+- model calls 29 is within maximum 100
+- cost check skipped (fake mode)
+
+## Failure Attribution
+
+### Baseline train
+
+- Tool not called: `2`
+- Wrong tool name: `0`
+- Tool arguments mismatch: `0`
+- Route error: `0`
+- Format error: `0`
+- Knowledge insufficient: `0`
+- Final response mismatch: `0`
+- Metric failure: `0`
+
+- `train_delay_tr123`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
+- `train_gate_tr654`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
+
+### Baseline validation
+
+- Tool not called: `3`
+- Wrong tool name: `0`
+- Tool arguments mismatch: `0`
+- Route error: `0`
+- Format error: `0`
+- Knowledge insufficient: `0`
+- Final response mismatch: `0`
+- Metric failure: `0`
+
+- `validation_delay_tr456`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
+- `validation_gate_tr654`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR654 is boarding. Scheduled departure 16:05. Gate D18. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
+- `validation_departure_tr123`: `tool_not_called`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source I need a matching flight lookup tool before answering that record request. and target TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12. do not match
+  - Terminal step: `s1`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`
+
+### Candidate validation
+
+- Tool not called: `0`
+- Wrong tool name: `0`
+- Tool arguments mismatch: `0`
+- Route error: `1`
+- Format error: `0`
+- Knowledge insufficient: `0`
+- Final response mismatch: `0`
+- Metric failure: `0`
+
+- `validation_status_tr789`: `route_error`
+  - Failed metrics:
+    - `tool_trajectory_avg_score` (score=0.00, status=failed): tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)
+    - `final_response_avg_score` (score=0.00, status=failed): final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match
+  - Evidence:
+    - tool_trajectory_avg_score failed: tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)
+    - final_response_avg_score failed: final response mismatch: text mismatch: source TR789 is cancelled. Scheduled departure 18:00. Gate unavailable. and target TR789 is cancelled. do not match
+  - Terminal step: `s2`
+  - Applied surfaces: `candidate#instruction`, `candidate#model`, `candidate#tool.lookup_record`

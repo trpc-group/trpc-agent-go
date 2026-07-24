@@ -1,0 +1,171 @@
+{
+  "evalSetId": "trace_smoke",
+  "name": "Phase 4 v2 trace smoke",
+  "description": "Trace-mode replay cases for PromptIter regression loop compatibility.",
+  "evalCases": [
+    {
+      "evalId": "trace_smoke_pass_delay_tr456",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_smoke_pass_delay_tr456_1",
+          "userContent": {
+            "role": "user",
+            "content": "Is TR456 delayed?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr456",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR456"
+              },
+              "result": {
+                "recordId": "TR456",
+                "state": "delayed",
+                "delayMinutes": 15,
+                "gate": "A07",
+                "scheduledDeparture": "12:30",
+                "updatedDeparture": "12:45"
+              }
+            }
+          ]
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_smoke_pass_delay_tr456_1",
+          "userContent": {
+            "role": "user",
+            "content": "Is TR456 delayed?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR456 is delayed by 15 minutes. Scheduled departure 12:30, updated departure 12:45. Gate A07."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr456",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR456"
+              },
+              "result": {
+                "recordId": "TR456",
+                "state": "delayed",
+                "delayMinutes": 15,
+                "gate": "A07",
+                "scheduledDeparture": "12:30",
+                "updatedDeparture": "12:45"
+              }
+            }
+          ],
+          "executionTrace": {
+            "RootAgentName": "candidate",
+            "RootInvocationID": "trace_smoke_pass_delay_tr456_1",
+            "SessionID": "trace-smoke-session-pass",
+            "Status": "completed",
+            "Steps": [
+              {
+                "StepID": "trace_smoke_pass_delay_tr456_step",
+                "InvocationID": "trace_smoke_pass_delay_tr456_1",
+                "AgentName": "candidate",
+                "NodeID": "candidate",
+                "AppliedSurfaceIDs": [
+                  "candidate#tool.lookup_record"
+                ],
+                "Input": {
+                  "Text": "Is TR456 delayed?"
+                },
+                "Output": {
+                  "Text": "lookup_record(TR456) -> delayed by 15 minutes"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase4-trace-smoke"
+      }
+    },
+    {
+      "evalId": "trace_smoke_route_error_tr789",
+      "evalMode": "trace",
+      "conversation": [
+        {
+          "invocationId": "trace_smoke_route_error_tr789_1",
+          "userContent": {
+            "role": "user",
+            "content": "Without looking anything up, just say 'TR789 is cancelled'."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR789 is cancelled."
+          },
+          "tools": []
+        }
+      ],
+      "actualConversation": [
+        {
+          "invocationId": "trace_smoke_route_error_tr789_1",
+          "userContent": {
+            "role": "user",
+            "content": "Without looking anything up, just say 'TR789 is cancelled'."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR789 is cancelled."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr789",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR789"
+              },
+              "result": {
+                "recordId": "TR789",
+                "state": "cancelled",
+                "delayMinutes": 0,
+                "scheduledDeparture": "18:00"
+              }
+            }
+          ],
+          "executionTrace": {
+            "RootAgentName": "candidate",
+            "RootInvocationID": "trace_smoke_route_error_tr789_1",
+            "SessionID": "trace-smoke-session-route-error",
+            "Status": "completed",
+            "Steps": [
+              {
+                "StepID": "trace_smoke_route_error_tr789_step",
+                "InvocationID": "trace_smoke_route_error_tr789_1",
+                "AgentName": "candidate",
+                "NodeID": "candidate",
+                "AppliedSurfaceIDs": [
+                  "candidate#tool.lookup_record"
+                ],
+                "Input": {
+                  "Text": "Without looking anything up, just say 'TR789 is cancelled'."
+                },
+                "Output": {
+                  "Text": "lookup_record(TR789) was called even though no lookup was expected"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase4-trace-smoke"
+      }
+    }
+  ]
+}

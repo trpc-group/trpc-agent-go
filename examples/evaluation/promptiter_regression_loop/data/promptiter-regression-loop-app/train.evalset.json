@@ -1,0 +1,102 @@
+{
+  "evalSetId": "train",
+  "name": "Phase 4 v2 train",
+  "description": "Deterministic train cases for two PromptIter rounds.",
+  "evalCases": [
+    {
+      "evalId": "train_delay_tr123",
+      "conversation": [
+        {
+          "invocationId": "train_delay_tr123_1",
+          "userContent": {
+            "role": "user",
+            "content": "How delayed is TR123?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR123 is delayed by 35 minutes. Scheduled departure 10:10, updated departure 10:45. Gate B12."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr123",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR123"
+              },
+              "result": {
+                "recordId": "TR123",
+                "state": "delayed",
+                "delayMinutes": 35,
+                "gate": "B12",
+                "scheduledDeparture": "10:10",
+                "updatedDeparture": "10:45"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-train"
+      }
+    },
+    {
+      "evalId": "train_gate_tr654",
+      "conversation": [
+        {
+          "invocationId": "train_gate_tr654_1",
+          "userContent": {
+            "role": "user",
+            "content": "Which gate is TR654 using?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "TR654 is boarding. Scheduled departure 16:05. Gate D18."
+          },
+          "tools": [
+            {
+              "id": "call_lookup_tr654",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "TR654"
+              },
+              "result": {
+                "recordId": "TR654",
+                "state": "boarding",
+                "delayMinutes": 0,
+                "gate": "D18",
+                "scheduledDeparture": "16:05",
+                "updatedDeparture": "16:05"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-train"
+      }
+    },
+    {
+      "evalId": "train_direct_ready",
+      "conversation": [
+        {
+          "invocationId": "train_direct_ready_1",
+          "userContent": {
+            "role": "user",
+            "content": "Without looking anything up and without a record ID, just say ready."
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "ready"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop-app",
+        "userId": "phase3-train"
+      }
+    }
+  ]
+}

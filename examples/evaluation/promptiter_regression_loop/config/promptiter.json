@@ -1,0 +1,22 @@
+{
+  "targetSurfaceIDs": [
+    "candidate#tool.lookup_record"
+  ],
+  "maxRounds": 2,
+  "acceptancePolicy": {
+    "minScoreGain": 0.1
+  },
+  "stopPolicy": {
+    "targetScore": 1.0
+  },
+  "finalGate": {
+    "minValidationGain": 0.05,
+    "maxDurationMs": 180000,
+    "maxModelCalls": 100,
+    "criticalCaseIDs": [
+      "validation_status_tr789"
+    ],
+    "rejectOnNewHardFail": true,
+    "rejectOnCriticalRegression": true
+  }
+}
