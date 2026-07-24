@@ -13,7 +13,9 @@ package chunking
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -28,7 +30,7 @@ type JSONChunking struct {
 // JSONOption represents a functional option for configuring JSONChunking.
 type JSONOption func(*JSONChunking)
 
-// WithJSONChunkSize sets the maximum size of each chunk in characters.
+// WithJSONChunkSize sets the maximum serialized size of each chunk in bytes.
 func WithJSONChunkSize(size int) JSONOption {
 	const minChunkSize = 50
 	const margin = 200
@@ -38,7 +40,7 @@ func WithJSONChunkSize(size int) JSONOption {
 	}
 }
 
-// WithJSONMinChunkSize sets the minimum size of each chunk in characters.
+// WithJSONMinChunkSize sets the minimum serialized size of each chunk in bytes.
 func WithJSONMinChunkSize(size int) JSONOption {
 	return func(j *JSONChunking) {
 		j.minChunkSize = size
@@ -73,7 +75,10 @@ func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, erro
 	}
 
 	// Split JSON into chunks.
-	chunks := j.splitJSON(dataMap, false)
+	chunks, err := j.splitJSON(dataMap, false)
+	if err != nil {
+		return nil, err
+	}
 
 	// Convert chunks to documents.
 	var documents []*document.Document
@@ -92,7 +97,10 @@ func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, erro
 }
 
 // splitJSON recursively splits JSON data into chunks while preserving hierarchy.
-func (j *JSONChunking) splitJSON(data map[string]any, convertLists bool) []map[string]any {
+func (j *JSONChunking) splitJSON(
+	data map[string]any,
+	convertLists bool,
+) ([]map[string]any, error) {
 	// Preprocess data if convertLists is true.
 	if convertLists {
 		processed := j.listToDictPreprocessing(data)
@@ -102,14 +110,17 @@ func (j *JSONChunking) splitJSON(data map[string]any, convertLists bool) []map[s
 	}
 
 	// Split the JSON data.
-	chunks := j.jsonSplit(data, nil, []map[string]any{{}})
+	chunks, err := j.jsonSplit(data, nil, []map[string]any{{}})
+	if err != nil {
+		return nil, err
+	}
 
 	// Remove empty chunks.
 	if len(chunks) > 0 && len(chunks[len(chunks)-1]) == 0 {
 		chunks = chunks[:len(chunks)-1]
 	}
 
-	return chunks
+	return chunks, nil
 }
 
 // jsonSplit recursively splits JSON into maximum size dictionaries while preserving structure.
@@ -117,40 +128,228 @@ func (j *JSONChunking) jsonSplit(
 	data map[string]any,
 	currentPath []string,
 	chunks []map[string]any,
-) []map[string]any {
+) ([]map[string]any, error) {
 	if currentPath == nil {
 		currentPath = []string{}
 	}
 
-	for key, value := range data {
-		newPath := append(currentPath, key)
-		chunkSize := j.jsonSize(chunks[len(chunks)-1])
-		size := j.jsonSize(map[string]any{key: value})
-		remaining := j.maxChunkSize - chunkSize
-
-		if size < remaining {
-			// Add item to current chunk.
-			j.setNestedDict(chunks[len(chunks)-1], newPath, value)
-		} else {
-			if chunkSize >= j.minChunkSize {
-				// Chunk is big enough, start a new chunk.
-				chunks = append(chunks, map[string]any{})
+	for _, key := range orderedJSONKeys(data) {
+		value := data[key]
+		newPath := append(append([]string{}, currentPath...), key)
+		if candidate, ok := j.withValueIfFits(
+			chunks[len(chunks)-1],
+			newPath,
+			value,
+		); ok {
+			chunks[len(chunks)-1] = candidate
+			continue
+		}
+		if len(chunks[len(chunks)-1]) > 0 &&
+			j.jsonSize(chunks[len(chunks)-1]) >= j.minChunkSize {
+			chunks = append(chunks, map[string]any{})
+			if candidate, ok := j.withValueIfFits(
+				chunks[len(chunks)-1],
+				newPath,
+				value,
+			); ok {
+				chunks[len(chunks)-1] = candidate
+				continue
 			}
+		}
 
-			// Recursively process nested structures.
-			if nestedMap, ok := value.(map[string]any); ok {
-				chunks = j.jsonSplit(nestedMap, newPath, chunks)
-			} else if nestedSlice, ok := value.([]any); ok {
-				// Handle arrays by converting to map if needed.
-				chunks = j.jsonSplit(j.arrayToMap(nestedSlice), newPath, chunks)
+		switch nested := value.(type) {
+		case map[string]any:
+			if len(nested) == 0 {
+				var err error
+				chunks, err = j.addAtomicValue(chunks, newPath, value)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+			var err error
+			chunks, err = j.jsonSplit(nested, newPath, chunks)
+			if err != nil {
+				return nil, err
+			}
+		case []any:
+			if len(nested) == 0 {
+				var err error
+				chunks, err = j.addAtomicValue(chunks, newPath, value)
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+			var err error
+			chunks, err = j.jsonSplit(
+				j.arrayToMap(nested),
+				newPath,
+				chunks,
+			)
+			if err != nil {
+				return nil, err
+			}
+		case string:
+			var err error
+			if nested == "" {
+				chunks, err = j.addAtomicValue(chunks, newPath, nested)
 			} else {
-				// Handle single item.
-				j.setNestedDict(chunks[len(chunks)-1], newPath, value)
+				chunks, err = j.addStringValue(chunks, newPath, nested)
+			}
+			if err != nil {
+				return nil, err
+			}
+		default:
+			var err error
+			chunks, err = j.addAtomicValue(chunks, newPath, value)
+			if err != nil {
+				return nil, err
 			}
 		}
 	}
 
-	return chunks
+	return chunks, nil
+}
+
+func orderedJSONKeys(data map[string]any) []string {
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, k int) bool {
+		left, leftErr := strconv.Atoi(keys[i])
+		right, rightErr := strconv.Atoi(keys[k])
+		if leftErr == nil && rightErr == nil {
+			if left != right {
+				return left < right
+			}
+		}
+		return keys[i] < keys[k]
+	})
+	return keys
+}
+
+func (j *JSONChunking) addStringValue(
+	chunks []map[string]any,
+	path []string,
+	value string,
+) ([]map[string]any, error) {
+	remaining := []rune(value)
+	for len(remaining) > 0 {
+		current := chunks[len(chunks)-1]
+		prefixSize := j.largestStringPrefix(current, path, remaining)
+		if prefixSize == 0 && len(current) > 0 {
+			chunks = append(chunks, map[string]any{})
+			continue
+		}
+		if prefixSize == 0 {
+			candidate := cloneJSONMap(current)
+			j.setNestedDict(candidate, path, string(remaining[:1]))
+			return nil, fmt.Errorf(
+				"json value at %q requires at least %d bytes, exceeds chunk size %d",
+				strings.Join(path, "."),
+				j.jsonSize(candidate),
+				j.maxChunkSize,
+			)
+		}
+
+		candidate, _ := j.withValueIfFits(
+			current,
+			path,
+			string(remaining[:prefixSize]),
+		)
+		chunks[len(chunks)-1] = candidate
+		remaining = remaining[prefixSize:]
+		if len(remaining) > 0 {
+			chunks = append(chunks, map[string]any{})
+		}
+	}
+	return chunks, nil
+}
+
+func (j *JSONChunking) largestStringPrefix(
+	current map[string]any,
+	path []string,
+	value []rune,
+) int {
+	left := 1
+	right := len(value)
+	best := 0
+	for left <= right {
+		middle := left + (right-left)/2
+		if _, ok := j.withValueIfFits(
+			current,
+			path,
+			string(value[:middle]),
+		); ok {
+			best = middle
+			left = middle + 1
+		} else {
+			right = middle - 1
+		}
+	}
+	return best
+}
+
+func (j *JSONChunking) addAtomicValue(
+	chunks []map[string]any,
+	path []string,
+	value any,
+) ([]map[string]any, error) {
+	if len(chunks[len(chunks)-1]) > 0 {
+		chunks = append(chunks, map[string]any{})
+	}
+	candidate, ok := j.withValueIfFits(
+		chunks[len(chunks)-1],
+		path,
+		value,
+	)
+	if !ok {
+		candidate = cloneJSONMap(chunks[len(chunks)-1])
+		j.setNestedDict(candidate, path, value)
+		return nil, fmt.Errorf(
+			"json value at %q requires %d bytes, exceeds chunk size %d",
+			strings.Join(path, "."),
+			j.jsonSize(candidate),
+			j.maxChunkSize,
+		)
+	}
+	chunks[len(chunks)-1] = candidate
+	return chunks, nil
+}
+
+func (j *JSONChunking) withValueIfFits(
+	current map[string]any,
+	path []string,
+	value any,
+) (map[string]any, bool) {
+	candidate := cloneJSONMap(current)
+	j.setNestedDict(candidate, path, value)
+	return candidate, j.jsonSize(candidate) <= j.maxChunkSize
+}
+
+func cloneJSONMap(data map[string]any) map[string]any {
+	result := make(map[string]any, len(data))
+	for key, value := range data {
+		result[key] = cloneJSONValue(value)
+	}
+	return result
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneJSONMap(typed)
+	case []any:
+		result := make([]any, len(typed))
+		for i, item := range typed {
+			result[i] = cloneJSONValue(item)
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 // jsonSize calculates the size of the serialized JSON object.
@@ -218,7 +417,10 @@ func (j *JSONChunking) arrayToMap(arr []any) map[string]any {
 
 // SplitJSON splits JSON data into chunks and returns them as strings.
 func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]string, error) {
-	chunks := j.splitJSON(data, convertLists)
+	chunks, err := j.splitJSON(data, convertLists)
+	if err != nil {
+		return nil, err
+	}
 
 	var result []string
 	for _, chunk := range chunks {

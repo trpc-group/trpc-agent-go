@@ -51,14 +51,14 @@ type MarkdownChunking struct {
 // MarkdownOption represents a functional option for configuring MarkdownChunking.
 type MarkdownOption func(*MarkdownChunking)
 
-// WithMarkdownChunkSize sets the maximum size of each chunk in characters.
+// WithMarkdownChunkSize sets the maximum size of each chunk in Unicode runes.
 func WithMarkdownChunkSize(size int) MarkdownOption {
 	return func(mc *MarkdownChunking) {
 		mc.chunkSize = size
 	}
 }
 
-// WithMarkdownOverlap sets the number of characters to overlap between chunks.
+// WithMarkdownOverlap sets the maximum number of Unicode runes to overlap between chunks.
 func WithMarkdownOverlap(overlap int) MarkdownOption {
 	return func(mc *MarkdownChunking) {
 		mc.overlap = overlap
@@ -127,7 +127,7 @@ func (m *MarkdownChunking) splitRecursively(
 	originalDoc *document.Document,
 ) []*document.Document {
 	idGen := &docIDGenerator{nextID: 1}
-	return m.splitRecursivelyWithPath(content, originalDoc, nil, idGen)
+	return m.splitRecursivelyWithPath(content, originalDoc, nil, idGen, 1)
 }
 
 // splitRecursivelyWithPath splits content recursively while maintaining header path.
@@ -136,6 +136,7 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 	originalDoc *document.Document,
 	headerPath []string,
 	idGen *docIDGenerator,
+	startHeaderLevel int,
 ) []*document.Document {
 	var chunks []*document.Document
 
@@ -147,10 +148,10 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 		return []*document.Document{chunk}
 	}
 
-	// Try splitting by headers from level 1 to 6
-	for level := 1; level <= 6; level++ {
+	// Try splitting by headers from the next unprocessed level to level 6.
+	for level := startHeaderLevel; level <= 6; level++ {
 		sections := m.splitByHeader(content, level)
-		if len(sections) > 1 {
+		if len(sections) > 0 {
 			// Successfully split by this header level
 			for _, section := range sections {
 				// Skip empty sections
@@ -183,7 +184,13 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 					chunks = append(chunks, chunk)
 				} else {
 					// Section is too large, split recursively
-					subChunks := m.splitRecursivelyWithPath(fullContent, originalDoc, newPath, idGen)
+					subChunks := m.splitRecursivelyWithPath(
+						fullContent,
+						originalDoc,
+						newPath,
+						idGen,
+						level+1,
+					)
 					chunks = append(chunks, subChunks...)
 				}
 			}
@@ -191,8 +198,10 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 		}
 	}
 
-	// No headers found or only one section, try splitting by paragraphs
-	paragraphs := strings.Split(content, "\n\n")
+	// No headers found or only one section, try splitting by Markdown blocks.
+	// Keep fenced code intact here so blank lines inside the fence do not
+	// create unrelated, undersized chunks.
+	paragraphs := splitMarkdownParagraphs(content)
 	if len(paragraphs) > 1 {
 		chunks = m.mergeSmallParagraphsWithPath(paragraphs, originalDoc, headerPath, idGen)
 		if len(chunks) > 0 {
@@ -200,14 +209,23 @@ func (m *MarkdownChunking) splitRecursivelyWithPath(
 		}
 	}
 
-	// Still too large, split by fixed size (terminal case - prevents infinite recursion)
-	textChunks := encoding.SafeSplitBySize(content, m.chunkSize)
-	for _, chunkText := range textChunks {
+	// Still too large, split at the best available text boundary. Balance the
+	// final pair instead of leaving a tiny hard-split tail.
+	remainingText := content
+	for remainingText != "" {
+		chunkText, rest := splitTextWithBalancedTail(
+			remainingText,
+			m.chunkSize,
+			splitMarkdownText,
+		)
 		if strings.TrimSpace(chunkText) == "" {
-			continue
+			textChunks := encoding.SafeSplitBySize(remainingText, m.chunkSize)
+			chunkText = textChunks[0]
+			rest = remainingText[len(chunkText):]
 		}
 		chunk := m.createMarkdownChunkWithPath(originalDoc, chunkText, idGen.Next(), headerPath)
 		chunks = append(chunks, chunk)
+		remainingText = rest
 	}
 
 	return chunks
@@ -284,9 +302,6 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 				}
 			}
 
-			// Start tracking new section
-			headerPrefix := strings.Repeat("#", level) + " "
-
 			// Calculate position after the header line (after the newline)
 			var contentStartPos int
 			if heading.Lines().Len() > 0 {
@@ -303,7 +318,7 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 			}
 
 			lastHeader = &headerSection{
-				Header:  headerPrefix + headerText,
+				Header:  markdownHeaderContent(source, headingLineStart, level, headerText),
 				Level:   level,
 				Path:    []string{headerText},
 				Content: "", // Will be filled when we find the next header or reach the end
@@ -326,6 +341,24 @@ func (m *MarkdownChunking) splitByHeader(content string, level int) []headerSect
 	// We return empty slice to let caller try next level or other splitting strategies.
 
 	return sections
+}
+
+func markdownHeaderContent(
+	source []byte,
+	lineStart int,
+	level int,
+	headerText string,
+) string {
+	fallback := strings.Repeat("#", level) + " " + headerText
+	lineEnd := len(source)
+	if offset := bytes.IndexByte(source[lineStart:], '\n'); offset >= 0 {
+		lineEnd = lineStart + offset
+	}
+	rawHeader := source[lineStart:lineEnd]
+	if !isATXHeadingLineAtLevel(rawHeader, level) {
+		return fallback
+	}
+	return string(bytes.TrimSuffix(rawHeader, []byte{'\r'}))
 }
 
 // findNodeStartPos tries to determine the start position of a heading node
@@ -573,6 +606,65 @@ func findLineContentStartPos(source []byte, lineStart int) int {
 	return pos
 }
 
+func splitMarkdownParagraphs(content string) []string {
+	lines := strings.SplitAfter(content, "\n")
+	paragraphs := make([]string, 0, len(lines))
+	var current strings.Builder
+	var fenceMarker byte
+	fenceLength := 0
+
+	flush := func() {
+		paragraph := strings.TrimSpace(current.String())
+		if paragraph != "" {
+			paragraphs = append(paragraphs, paragraph)
+		}
+		current.Reset()
+	}
+
+	for _, line := range lines {
+		marker, markerLength, rest, ok := markdownFence(line)
+		if fenceMarker == 0 && ok {
+			fenceMarker = marker
+			fenceLength = markerLength
+		} else if fenceMarker != 0 &&
+			ok &&
+			marker == fenceMarker &&
+			markerLength >= fenceLength &&
+			strings.TrimSpace(rest) == "" {
+			fenceMarker = 0
+			fenceLength = 0
+		}
+
+		if fenceMarker == 0 && strings.TrimSpace(line) == "" {
+			flush()
+			continue
+		}
+		current.WriteString(line)
+	}
+	flush()
+	return paragraphs
+}
+
+func markdownFence(line string) (byte, int, string, bool) {
+	line = strings.TrimSuffix(line, "\n")
+	trimmed := strings.TrimLeft(line, " ")
+	if len(line)-len(trimmed) > 3 || len(trimmed) < 3 {
+		return 0, 0, "", false
+	}
+	marker := trimmed[0]
+	if marker != '`' && marker != '~' {
+		return 0, 0, "", false
+	}
+	length := 1
+	for length < len(trimmed) && trimmed[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	return marker, length, trimmed[length:], true
+}
+
 // extractText extracts text content from an AST node.
 func (m *MarkdownChunking) extractText(node ast.Node, source []byte) string {
 	var buf bytes.Buffer
@@ -602,53 +694,96 @@ func (m *MarkdownChunking) mergeSmallParagraphsWithPath(
 	var chunks []*document.Document
 	var currentChunk strings.Builder
 
-	for _, para := range paragraphs {
-		para = strings.TrimSpace(para)
-		if para == "" {
-			continue
+	flush := func() {
+		if currentChunk.Len() == 0 {
+			return
 		}
-
-		paraSize := encoding.RuneCount(para)
-		currentSize := encoding.RuneCount(currentChunk.String())
-
-		// If adding this paragraph exceeds chunk size, save current chunk
-		if currentSize > 0 && currentSize+paraSize+2 > m.chunkSize {
-			chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
-			chunks = append(chunks, chunk)
-			currentChunk.Reset()
-		}
-
-		// If paragraph itself is too large, split it
-		if paraSize > m.chunkSize {
-			// Save current chunk if not empty
-			if currentChunk.Len() > 0 {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
-				chunks = append(chunks, chunk)
-				currentChunk.Reset()
-			}
-
-			// Split large paragraph by fixed size
-			paraChunks := encoding.SafeSplitBySize(para, m.chunkSize)
-			for _, pc := range paraChunks {
-				chunk := m.createMarkdownChunkWithPath(originalDoc, pc, idGen.Next(), headerPath)
-				chunks = append(chunks, chunk)
-			}
-		} else {
-			// Add paragraph to current chunk
-			if currentChunk.Len() > 0 {
-				currentChunk.WriteString("\n\n")
-			}
-			currentChunk.WriteString(para)
-		}
-	}
-
-	// Add last chunk if not empty
-	if currentChunk.Len() > 0 {
-		chunk := m.createMarkdownChunkWithPath(originalDoc, currentChunk.String(), idGen.Next(), headerPath)
+		chunk := m.createMarkdownChunkWithPath(
+			originalDoc,
+			currentChunk.String(),
+			idGen.Next(),
+			headerPath,
+		)
 		chunks = append(chunks, chunk)
+		currentChunk.Reset()
 	}
 
+	for _, paragraph := range paragraphs {
+		remainingText := strings.TrimSpace(paragraph)
+		for remainingText != "" {
+			currentSize := encoding.RuneCount(currentChunk.String())
+			remainingSize := encoding.RuneCount(remainingText)
+			separatorSize := 0
+			if currentSize > 0 {
+				separatorSize = 2
+			}
+
+			if currentSize+separatorSize+remainingSize <= m.chunkSize {
+				if separatorSize > 0 {
+					currentChunk.WriteString("\n\n")
+				}
+				currentChunk.WriteString(remainingText)
+				break
+			}
+
+			if currentSize > 0 {
+				availableSize := m.chunkSize - currentSize - separatorSize
+				if isMarkdownHeading(currentChunk.String()) && availableSize > 0 {
+					var prefix string
+					prefix, remainingText = splitMarkdownText(
+						remainingText,
+						availableSize,
+					)
+					if prefix != "" {
+						currentChunk.WriteString("\n\n")
+						currentChunk.WriteString(prefix)
+					}
+				}
+				flush()
+				continue
+			}
+
+			var prefix string
+			prefix, remainingText = splitMarkdownTextWithBalancedTail(
+				remainingText,
+				m.chunkSize,
+			)
+			currentChunk.WriteString(prefix)
+			if remainingText != "" {
+				flush()
+			}
+		}
+	}
+	flush()
 	return chunks
+}
+
+func splitMarkdownText(content string, chunkSize int) (string, string) {
+	return splitTextAtNaturalBoundary(content, chunkSize)
+}
+
+func splitMarkdownTextWithBalancedTail(
+	content string,
+	chunkSize int,
+) (string, string) {
+	return splitTextWithBalancedTail(
+		content,
+		chunkSize,
+		splitMarkdownText,
+	)
+}
+
+func isMarkdownHeading(content string) bool {
+	if strings.ContainsRune(content, '\n') {
+		return false
+	}
+	line := []byte(content)
+	for level := 1; level <= 6; level++ {
+		if isATXHeadingLineAtLevel(line, level) {
+			return true
+		}
+	}
+	return false
 }
 
 // createMarkdownChunk creates a chunk with markdown-specific metadata.
@@ -711,26 +846,22 @@ func (m *MarkdownChunking) applyOverlap(chunks []*document.Document) []*document
 	overlappedChunks := []*document.Document{chunks[0]}
 
 	for i := 1; i < len(chunks); i++ {
-		prevText := chunks[i-1].Content
-		if encoding.RuneCount(prevText) > m.overlap {
-			prevText = encoding.SafeOverlap(prevText, m.overlap)
-		}
-
 		// Create new metadata for overlapped chunk.
 		metadata := make(map[string]any)
 		for k, v := range chunks[i].Metadata {
 			metadata[k] = v
 		}
 
-		// Combine with overlap markers to clearly indicate overlapped content
-		var overlappedContent string
-		if prevText != "" {
-			overlappedContent = prevText + "\n\n" + chunks[i].Content
-		} else {
-			overlappedContent = chunks[i].Content
+		overlappedContent, actualOverlap := joinWithOverlap(
+			overlappedChunks[len(overlappedChunks)-1].Content,
+			chunks[i].Content,
+			m.overlap,
+			m.chunkSize,
+			"\n\n",
+		)
+		if actualOverlap > 0 {
+			metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 		}
-
-		metadata[source.MetaOverlappedContentSize] = encoding.RuneCount(overlappedContent)
 
 		overlappedChunk := &document.Document{
 			ID:        chunks[i].ID,

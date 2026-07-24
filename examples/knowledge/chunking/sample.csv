@@ -1,0 +1,13 @@
+id,language,category,status,owner,score,description,reference
+1,zh-CN,reader,ready,知识库团队,98,MarkdownReader 根据文件扩展名选择 MarkdownChunking,https://example.com/docs/markdown
+2,en-US,reader,ready,knowledge-team,95,TextReader sends plain text to FixedSizeChunking,https://example.com/docs/text
+3,ja-JP,unicode,pending,検索チーム,87,日本語の文字と句読点を含むレコード,https://example.com/docs/unicode
+4,ko-KR,unicode,ready,검색팀,91,한글 데이터와 emoji 🤖 를 함께 저장,https://example.com/docs/unicode
+5,zh-CN,overlap,ready,检索团队,93,Overlap 只在显式配置时生效并且最终 chunk 仍需保持在预算内,https://example.com/docs/overlap
+6,en-US,boundary,ready,search-team,96,Natural boundaries include lines sentences punctuation and whitespace,https://example.com/docs/boundaries
+7,en-US,empty-field,draft,,0,This row intentionally leaves the owner field empty,https://example.com/docs/csv
+8,zh-CN,long-field,ready,平台团队,89,这一列故意包含较长文本用于观察 CSVReader 把逗号分隔字段转换成竖线分隔文本之后 FixedSizeChunking 如何在多行记录之间寻找边界以及较小 chunk size 是否会继续拆分单条记录,https://example.com/docs/csv-long-field
+9,en-US,long-token,ready,platform-team,90,TRPCAgentGoCSVBoundaryWithoutSpaces0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz,https://example.com/docs/token
+10,mixed,emoji,ready,agent-team,92,Agent 🤖 retrieves 🔍 evidence and returns ✅ a result,https://example.com/docs/emoji
+11,en-US,quoted,ready,docs-team,88,"a quoted field, with an embedded comma",https://example.com/docs/quoted
+12,zh-CN,tail,ready,文档团队,94,最后一行用于确认尾部内容不会丢失,https://example.com/docs/tail

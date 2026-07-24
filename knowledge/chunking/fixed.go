@@ -12,28 +12,38 @@ package chunking
 import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/internal/encoding"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 type FixedSizeChunking struct {
-	chunkSize int
-	overlap   int
+	chunkSize     int
+	overlap       int
+	preserveLines bool
 }
 
 // Option represents a functional option for configuring FixedSizeChunking.
 type Option func(*FixedSizeChunking)
 
-// WithChunkSize sets the maximum size of each chunk in characters.
+// WithChunkSize sets the maximum size of each chunk in Unicode runes.
 func WithChunkSize(size int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.chunkSize = size
 	}
 }
 
-// WithOverlap sets the number of characters to overlap between chunks.
+// WithOverlap sets the maximum number of Unicode runes to overlap between chunks.
 func WithOverlap(overlap int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.overlap = overlap
+	}
+}
+
+// WithPreserveLines keeps complete lines together whenever one line fits the
+// chunk budget. Oversized lines still use natural text and rune boundaries.
+func WithPreserveLines() Option {
+	return func(fsc *FixedSizeChunking) {
+		fsc.preserveLines = true
 	}
 }
 
@@ -73,51 +83,85 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 		return []*document.Document{chunk}, nil
 	}
 
-	// Use UTF-8 safe splitting to ensure proper character boundaries.
-	textChunks := encoding.SafeSplitBySize(content, f.chunkSize)
-
-	var chunks []*document.Document
-	for i, chunkText := range textChunks {
-		chunk := createChunk(doc, chunkText, i+1)
-		chunks = append(chunks, chunk)
-	}
-
-	// Apply overlap if specified.
+	coreSize := f.chunkSize
 	if f.overlap > 0 {
-		chunks = f.applyOverlap(chunks)
+		coreSize = f.chunkSize - f.overlap
+	}
+	split := splitTextAtNaturalBoundary
+	balanceTail := true
+	if f.preserveLines {
+		split = splitTextAtLineBoundary
+		balanceTail = false
+	}
+	textChunks := splitFixedText(
+		content,
+		f.chunkSize,
+		coreSize,
+		split,
+		balanceTail,
+	)
+	chunks := make([]*document.Document, 0, len(textChunks))
+	for i, chunkText := range textChunks {
+		finalContent := chunkText
+		actualOverlap := 0
+		if i > 0 {
+			finalContent, actualOverlap = joinWithOverlap(
+				chunks[i-1].Content,
+				chunkText,
+				f.overlap,
+				f.chunkSize,
+				" ",
+			)
+		}
+		chunk := createChunk(doc, chunkText, i+1)
+		chunk.Content = finalContent
+		if actualOverlap > 0 {
+			chunk.Metadata[source.MetaOverlappedContentSize] =
+				encoding.RuneCount(finalContent)
+		}
+		chunks = append(chunks, chunk)
 	}
 	return chunks, nil
 }
 
-// applyOverlap applies overlap between consecutive chunks while maintaining UTF-8 safety.
-func (f *FixedSizeChunking) applyOverlap(chunks []*document.Document) []*document.Document {
-	if len(chunks) <= 1 {
-		return chunks
+func splitFixedText(
+	content string,
+	firstChunkSize int,
+	nextChunkSize int,
+	split func(string, int) (string, string),
+	balanceTail bool,
+) []string {
+	if firstChunkSize <= 0 {
+		return []string{content}
+	}
+	if nextChunkSize <= 0 {
+		nextChunkSize = firstChunkSize
 	}
 
-	overlappedChunks := []*document.Document{chunks[0]}
-	for i := 1; i < len(chunks); i++ {
-		prevText := chunks[i-1].Content
-
-		// Get overlap text safely.
-		overlapText := encoding.SafeOverlap(prevText, f.overlap)
-
-		// Create new metadata for overlapped chunk.
-		metadata := make(map[string]any)
-		for k, v := range chunks[i].Metadata {
-			metadata[k] = v
+	var chunks []string
+	remaining := content
+	for remaining != "" {
+		chunkSize := nextChunkSize
+		if len(chunks) == 0 {
+			chunkSize = firstChunkSize
 		}
-
-		overlappedContent := overlapText + chunks[i].Content
-		overlappedChunk := &document.Document{
-			ID:        chunks[i].ID,
-			Name:      chunks[i].Name,
-			Content:   overlappedContent,
-			Metadata:  metadata,
-			CreatedAt: chunks[i].CreatedAt,
-			UpdatedAt: chunks[i].UpdatedAt,
+		chunk, rest := split(remaining, chunkSize)
+		if balanceTail {
+			chunk, rest = splitTextWithBalancedTail(
+				remaining,
+				chunkSize,
+				split,
+			)
 		}
-		overlappedChunks = append(overlappedChunks, overlappedChunk)
+		if chunk == "" {
+			// The natural-boundary helper trims whitespace. Keep a hard-split
+			// fallback to guarantee progress for whitespace-only input.
+			hardChunks := encoding.SafeSplitBySize(remaining, chunkSize)
+			chunk = hardChunks[0]
+			rest = remaining[len(chunk):]
+		}
+		chunks = append(chunks, chunk)
+		remaining = rest
 	}
-	return overlappedChunks
+	return chunks
 }

@@ -11,6 +11,7 @@ package chunking
 
 import (
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -172,10 +173,114 @@ func TestCreateChunk(t *testing.T) {
 	}
 }
 
+func TestJoinWithOverlap(t *testing.T) {
+	tests := []struct {
+		name            string
+		previous        string
+		current         string
+		maxOverlap      int
+		maxSize         int
+		separator       string
+		wantContent     string
+		wantOverlapSize int
+	}{
+		{
+			name:            "full overlap",
+			previous:        "abcdef",
+			current:         "ghij",
+			maxOverlap:      3,
+			maxSize:         7,
+			wantContent:     "defghij",
+			wantOverlapSize: 3,
+		},
+		{
+			name:            "overlap capped by budget",
+			previous:        "abcdef",
+			current:         "ghij",
+			maxOverlap:      5,
+			maxSize:         6,
+			wantContent:     "efghij",
+			wantOverlapSize: 2,
+		},
+		{
+			name:            "separator included in budget",
+			previous:        "ab c",
+			current:         "wxyz",
+			maxOverlap:      3,
+			maxSize:         7,
+			separator:       "\n\n",
+			wantContent:     "c\n\nwxyz",
+			wantOverlapSize: 1,
+		},
+		{
+			name:        "no remaining budget",
+			previous:    "abcdef",
+			current:     "ghij",
+			maxOverlap:  3,
+			maxSize:     4,
+			wantContent: "ghij",
+		},
+		{
+			name:            "unicode runes",
+			previous:        "甲乙丙丁",
+			current:         "戊己",
+			maxOverlap:      2,
+			maxSize:         4,
+			wantContent:     "丙丁戊己",
+			wantOverlapSize: 2,
+		},
+		{
+			name:            "prefer complete word",
+			previous:        "alpha beta gamma",
+			current:         "next",
+			maxOverlap:      8,
+			maxSize:         20,
+			separator:       " ",
+			wantContent:     "gamma next",
+			wantOverlapSize: 5,
+		},
+		{
+			name:            "prefer Chinese sentence boundary",
+			previous:        "第一句。第二句很完整",
+			current:         "后文",
+			maxOverlap:      7,
+			maxSize:         9,
+			separator:       " ",
+			wantContent:     "第二句很完整 后文",
+			wantOverlapSize: 6,
+		},
+		{
+			name:            "unbroken token does not add separator",
+			previous:        "abcdef",
+			current:         "ghij",
+			maxOverlap:      3,
+			maxSize:         7,
+			separator:       " ",
+			wantContent:     "defghij",
+			wantOverlapSize: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, overlapSize := joinWithOverlap(
+				tt.previous,
+				tt.current,
+				tt.maxOverlap,
+				tt.maxSize,
+				tt.separator,
+			)
+			assert.Equal(t, tt.wantContent, content)
+			assert.Equal(t, tt.wantOverlapSize, overlapSize)
+			assert.LessOrEqual(t, utf8.RuneCountInString(content), tt.maxSize)
+		})
+	}
+}
+
 // TestDefaultConstants tests the default constants
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1024, defaultChunkSize)
-	assert.Equal(t, 128, defaultOverlap)
+	assert.Equal(t, 0, defaultOverlap)
 }
 
 // TestErrors tests error constants
@@ -217,4 +322,17 @@ func TestErrors(t *testing.T) {
 			assert.Equal(t, tt.msg, tt.err.Error())
 		})
 	}
+}
+
+func boundaryOverlap(previous, current string, limit int) int {
+	previousRunes := []rune(previous)
+	currentRunes := []rune(current)
+	limit = min(limit, min(len(previousRunes), len(currentRunes)))
+	for size := limit; size > 0; size-- {
+		if string(previousRunes[len(previousRunes)-size:]) ==
+			string(currentRunes[:size]) {
+			return size
+		}
+	}
+	return 0
 }

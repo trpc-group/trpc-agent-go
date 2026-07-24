@@ -1,0 +1,107 @@
+{
+  "document": {
+    "id": "knowledge-chunking-json-sample",
+    "title": "JSON Chunking 边角用例",
+    "enabled": true,
+    "version": 3,
+    "nullable": null,
+    "empty_object": {},
+    "empty_array": [],
+    "labels": [
+      "knowledge",
+      "chunking",
+      "中文",
+      "emoji-🤖",
+      "unicode-café"
+    ]
+  },
+  "configuration": {
+    "default_chunk_size_bytes": 2000,
+    "overlap_supported": false,
+    "reader": {
+      "name": "JSONReader",
+      "strategy": "JSONChunking",
+      "pretty_prints_input": true
+    },
+    "limits": {
+      "small": 240,
+      "medium": 512,
+      "default": 2000
+    }
+  },
+  "sections": [
+    {
+      "id": "overview",
+      "title": "Overview",
+      "content": "JSONChunking preserves object and array hierarchy while keeping serialized output inside a byte budget. This property is intentionally long enough to compete with sibling properties for space in the same chunk.",
+      "metadata": {
+        "language": "en-US",
+        "priority": 1,
+        "tags": ["reader", "strategy", "hierarchy"]
+      }
+    },
+    {
+      "id": "multilingual",
+      "title": "混合字符",
+      "content": "这一段同时包含中文、English words、日本語、한글、العربية、emoji 🤖🔍✅ 和组合字符 café，用于观察 JSON serialized bytes 与 Unicode runes 的差异。",
+      "metadata": {
+        "language": "mixed",
+        "priority": 2,
+        "tags": ["unicode", "utf-8", "bytes"]
+      }
+    },
+    {
+      "id": "nested",
+      "title": "Nested values",
+      "content": "Deeply nested values exercise the recursive object traversal used by JSONChunking.",
+      "children": [
+        {
+          "id": "nested-a",
+          "name": "first child",
+          "facts": {
+            "reader": "JSONReader",
+            "strategy": "JSONChunking",
+            "unit": "serialized bytes"
+          }
+        },
+        {
+          "id": "nested-b",
+          "name": "second child",
+          "facts": {
+            "arrays_keep_order": true,
+            "objects_keep_keys": true,
+            "overlap": "unsupported"
+          }
+        },
+        {
+          "id": "nested-c",
+          "name": "third child",
+          "facts": {
+            "empty_string": "",
+            "zero": 0,
+            "false": false
+          }
+        }
+      ]
+    },
+    {
+      "id": "long-property",
+      "title": "A property larger than a tiny budget",
+      "content": "This deliberately long property contains several sentences. A tiny byte budget may not be able to preserve it together with its surrounding object. The strategy must choose a deterministic representation and must never emit invalid JSON. Repeated observations should produce the same ordering and the same chunk boundaries for the same input. 中文内容会占用多个 UTF-8 bytes，因此相同的可见字符数量不代表相同的 serialized byte size。The tail of this property is retained so the viewer can show whether any content disappears during recursive splitting.",
+      "metadata": {
+        "language": "mixed",
+        "priority": 3,
+        "token": "TRPCAgentGoJSONBoundaryWithoutSpaces0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+      }
+    }
+  ],
+  "records": [
+    {"id": 1, "status": "ready", "score": 0.98, "message": "first compact record"},
+    {"id": 2, "status": "ready", "score": 0.95, "message": "second compact record"},
+    {"id": 3, "status": "pending", "score": 0.87, "message": "third compact record"},
+    {"id": 4, "status": "ready", "score": 0.93, "message": "第四条记录包含中文"},
+    {"id": 5, "status": "ready", "score": 0.91, "message": "fifth record contains emoji ✅"},
+    {"id": 6, "status": "draft", "score": 0, "message": ""},
+    {"id": 7, "status": "ready", "score": 0.89, "message": "the final record checks array tail preservation"}
+  ]
+}

@@ -11,7 +11,9 @@ package chunking
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
@@ -380,6 +382,96 @@ func TestJSONChunkingDeepNesting(t *testing.T) {
 		// Verify chunk metadata
 		if chunk.Metadata[source.MetaChunkType] != "json" {
 			t.Errorf("Chunk %d missing chunk_type metadata", i)
+		}
+	}
+}
+
+func TestJSONChunkingSplitsLongStringWithinByteBudget(t *testing.T) {
+	value := strings.Repeat("中文abc", 30)
+	content, err := json.Marshal(map[string]any{
+		"payload": map[string]any{
+			"text": value,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(100),
+	).Chunk(&document.Document{
+		ID:      "long-string",
+		Content: string(content),
+	})
+	if err != nil {
+		t.Fatalf("Chunk() error = %v", err)
+	}
+	if len(chunks) < 2 {
+		t.Fatalf("len(chunks) = %d, want multiple chunks", len(chunks))
+	}
+
+	var reconstructed strings.Builder
+	for i, chunk := range chunks {
+		if len(chunk.Content) > 100 {
+			t.Errorf("chunk %d size = %d bytes, want <= 100", i, len(chunk.Content))
+		}
+		if !utf8.ValidString(chunk.Content) {
+			t.Errorf("chunk %d is not valid UTF-8", i)
+		}
+
+		var data map[string]any
+		if err := json.Unmarshal([]byte(chunk.Content), &data); err != nil {
+			t.Fatalf("unmarshal chunk %d: %v", i, err)
+		}
+		payload, ok := data["payload"].(map[string]any)
+		if !ok {
+			t.Fatalf("chunk %d payload type = %T", i, data["payload"])
+		}
+		fragment, ok := payload["text"].(string)
+		if !ok {
+			t.Fatalf("chunk %d text type = %T", i, payload["text"])
+		}
+		reconstructed.WriteString(fragment)
+	}
+	if reconstructed.String() != value {
+		t.Errorf("reconstructed value does not match original")
+	}
+}
+
+func TestJSONChunkingOrderIsDeterministic(t *testing.T) {
+	doc := &document.Document{
+		ID: "deterministic",
+		Content: `{
+			"zeta": "last value with enough text to require splitting",
+			"alpha": "first value with enough text to require splitting",
+			"middle": {
+				"item10": "ten",
+				"item2": "two"
+			}
+		}`,
+	}
+	chunker := NewJSONChunking(WithJSONChunkSize(60))
+
+	var baseline string
+	for run := 0; run < 20; run++ {
+		chunks, err := chunker.Chunk(doc)
+		if err != nil {
+			t.Fatalf("Chunk() run %d error = %v", run, err)
+		}
+		contents := make([]string, 0, len(chunks))
+		for _, chunk := range chunks {
+			contents = append(contents, chunk.Content)
+		}
+		current := strings.Join(contents, "\x00")
+		if run == 0 {
+			baseline = current
+			if !strings.Contains(chunks[0].Content, `"alpha"`) {
+				t.Fatalf("first chunk = %s, want alpha key first", chunks[0].Content)
+			}
+			continue
+		}
+		if current != baseline {
+			t.Fatalf("Chunk() run %d produced a different order", run)
 		}
 	}
 }

@@ -17,7 +17,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
@@ -120,6 +122,36 @@ func TestRecursiveChunking_Overlap(t *testing.T) {
 	}
 }
 
+func TestRecursiveChunking_LargeOverlapWithinChunkSize(t *testing.T) {
+	const (
+		chunkSize = 120
+		overlap   = 100
+	)
+	doc := &document.Document{
+		Content: strings.Repeat("a", chunkSize-1) +
+			" " +
+			strings.Repeat("b", chunkSize-1),
+	}
+	rc := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveOverlap(overlap),
+		WithRecursiveSeparators([]string{" ", ""}),
+	)
+
+	chunks, err := rc.Chunk(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 2)
+	for i, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final size budget",
+			i,
+		)
+	}
+}
+
 // TestRecursiveChunking_NoSeparators exercises the branch where the
 // highest-priority separator is the empty string, triggering a character
 // level split.
@@ -137,15 +169,36 @@ func TestRecursiveChunking_NoSeparators(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Expect 15 one-character chunks because we split by character.
-	if got, want := len(chunks), 15; got != want {
+	// Rune fallback fragments are merged back into full-size chunks.
+	if got, want := len(chunks), 3; got != want {
 		t.Fatalf("expected %d chunks, got %d", want, got)
 	}
 
-	// The first chunk must be exactly 1 character.
-	if got := len(chunks[0].Content); got != 1 {
-		t.Fatalf("expected first chunk size 1, got %d", got)
+	// The first chunk must use the configured budget.
+	if got := len(chunks[0].Content); got != 5 {
+		t.Fatalf("expected first chunk size 5, got %d", got)
 	}
+}
+
+func TestRecursiveChunking_BalancesUnbrokenTail(t *testing.T) {
+	const chunkSize = 50
+	content := strings.Repeat("x", chunkSize*2+1)
+	rc := NewRecursiveChunking(
+		WithRecursiveChunkSize(chunkSize),
+		WithRecursiveOverlap(0),
+		WithRecursiveSeparators([]string{""}),
+	)
+
+	chunks, err := rc.Chunk(&document.Document{Content: content})
+
+	require.NoError(t, err)
+	require.Equal(t, []int{50, 26, 25}, []int{
+		utf8.RuneCountInString(chunks[0].Content),
+		utf8.RuneCountInString(chunks[1].Content),
+		utf8.RuneCountInString(chunks[2].Content),
+	})
+	require.Equal(t, content,
+		chunks[0].Content+chunks[1].Content+chunks[2].Content)
 }
 
 // TestRecursiveChunking_ForceSplit ensures the fallback branch that forcibly
@@ -200,21 +253,36 @@ func TestRecursiveChunking_CustomSep(t *testing.T) {
 		t.Fatalf("expected more than 2 chunks, got %d", len(chunks))
 	}
 
-	// Each chunk <= 25 and overlap 3.
+	// Each chunk <= 25 and overlap is at most 3. A natural word boundary may
+	// shorten it instead of cutting through a word.
 	for i, c := range chunks {
 		if len(c.Content) > 25 {
 			t.Fatalf("chunk %d exceeds size limit: %d > 25", i, len(c.Content))
 		}
 		if i > 0 {
 			prev := chunks[i-1].Content
-			if len(prev) >= 3 && len(c.Content) >= 3 {
-				overlap := prev[len(prev)-3:]
-				if overlap != c.Content[:3] {
-					t.Fatalf("overlap mismatch at chunk %d", i)
-				}
+			actualOverlap := boundaryOverlap(prev, c.Content, 3)
+			if actualOverlap <= 0 || actualOverlap > 3 {
+				t.Fatalf("invalid overlap %d at chunk %d", actualOverlap, i)
 			}
 		}
 	}
+}
+
+func TestRecursiveChunking_MergesSmallSeparatorFragments(t *testing.T) {
+	doc := &document.Document{
+		Content: "alpha beta gamma delta epsilon zeta eta theta",
+	}
+	rc := NewRecursiveChunking(
+		WithRecursiveChunkSize(24),
+		WithRecursiveSeparators([]string{" ", ""}),
+	)
+
+	chunks, err := rc.Chunk(doc)
+	require.NoError(t, err)
+	require.Len(t, chunks, 2)
+	require.Equal(t, "alpha beta gamma delta", chunks[0].Content)
+	require.Equal(t, "epsilon zeta eta theta", chunks[1].Content)
 }
 
 // BenchmarkRecursiveChunking provides a quick performance smoke-test to avoid

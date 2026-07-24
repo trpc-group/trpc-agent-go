@@ -12,9 +12,11 @@ package chunking
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
 func TestFixedSizeChunking_Errors(t *testing.T) {
@@ -92,16 +94,260 @@ func TestFixedSizeChunking_SplitOverlap(t *testing.T) {
 	chunks, err := fsc.Chunk(doc)
 	require.NoError(t, err)
 	require.Greater(t, len(chunks), 1, "expected multiple chunks due to small chunk size")
+	contents := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		contents = append(contents, chunk.Content)
+	}
+	require.Equal(t, []string{"abcdefgh", "ghijabcd", "cdefghij", "ijabcdef", "efghij"}, contents)
 
-	// Verify the first chunk does not exceed chunkSize.
-	require.LessOrEqual(t, len(chunks[0].Content), chunkSize)
+	for i, chunk := range chunks {
+		chunkRunes := utf8.RuneCountInString(chunk.Content)
+		require.LessOrEqual(t, chunkRunes, chunkSize, "chunk %d exceeds chunk size", i)
+		if overlappedSize, ok := chunk.Metadata[source.MetaOverlappedContentSize]; ok {
+			require.Equal(t, chunkRunes, overlappedSize)
+		} else {
+			require.Equal(t, chunkRunes, chunk.Metadata[source.MetaChunkSize])
+		}
+		if i == 0 {
+			continue
+		}
 
-	// Ensure overlap between consecutive chunks.
-	for i := 1; i < len(chunks); i++ {
+		// Ensure overlap between consecutive chunks.
 		prev := chunks[i-1].Content
-		curr := chunks[i].Content
-		suffix := prev[len(prev)-overlap:]
-		prefix := curr[:overlap]
+		curr := chunk.Content
+		suffix := string([]rune(prev)[utf8.RuneCountInString(prev)-overlap:])
+		prefix := string([]rune(curr)[:overlap])
 		require.Equal(t, suffix, prefix, "chunks do not overlap as expected")
+	}
+
+	reconstructed := []rune(chunks[0].Content)
+	for _, chunk := range chunks[1:] {
+		reconstructed = append(reconstructed, []rune(chunk.Content)[overlap:]...)
+	}
+	require.Equal(t, content, string(reconstructed))
+}
+
+func TestFixedSizeChunking_UnicodeOverlapWithinChunkSize(t *testing.T) {
+	const (
+		chunkSize = 4
+		overlap   = 1
+	)
+	doc := &document.Document{ID: "unicode", Content: "甲乙丙丁戊己庚辛"}
+	fsc := NewFixedSizeChunking(WithChunkSize(chunkSize), WithOverlap(overlap))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"甲乙丙丁", "丁戊己庚", "庚辛"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+	for i, chunk := range chunks {
+		require.True(t, utf8.ValidString(chunk.Content))
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize, "chunk %d exceeds chunk size", i)
+	}
+}
+
+func TestFixedSizeChunking_LargeOverlapWithinChunkSize(t *testing.T) {
+	const (
+		chunkSize = 120
+		overlap   = 100
+	)
+	doc := &document.Document{
+		Content: strings.Repeat(
+			"Natural overlap should preserve complete words and the final budget. ",
+			12,
+		),
+	}
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithOverlap(overlap),
+	)
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 2)
+	for i, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds the final size budget",
+			i,
+		)
+	}
+}
+
+func TestFixedSizeChunking_WithoutOverlapUnchanged(t *testing.T) {
+	doc := &document.Document{ID: "no-overlap", Content: "abcdefghij"}
+	fsc := NewFixedSizeChunking(WithChunkSize(4), WithOverlap(0))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"abcd", "efgh", "ij"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+}
+
+func TestFixedSizeChunking_DefaultWithoutOverlapBalancesTail(t *testing.T) {
+	content := strings.Repeat("a", defaultChunkSize) + "b"
+	doc := &document.Document{ID: "default-no-overlap", Content: content}
+	fsc := NewFixedSizeChunking()
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Zero(t, fsc.overlap)
+	require.Equal(t, []string{
+		strings.Repeat("a", defaultChunkSize/2+1),
+		strings.Repeat("a", defaultChunkSize/2-1) + "b",
+	}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+}
+
+func TestFixedSizeChunking_CustomSizeWithoutOverlap(t *testing.T) {
+	doc := &document.Document{ID: "custom-size", Content: "abcdefghijklmnopqrstuvwxyz"}
+	fsc := NewFixedSizeChunking(WithChunkSize(10))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Zero(t, fsc.overlap)
+	require.Equal(t, []string{"abcdefghij", "klmnopqrst", "uvwxyz"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+}
+
+func TestFixedSizeChunking_PrefersNearbyWordBoundary(t *testing.T) {
+	doc := &document.Document{
+		ID:      "natural-boundary",
+		Content: "alpha beta gamma delta",
+	}
+	fsc := NewFixedSizeChunking(WithChunkSize(12))
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, []string{"alpha beta", "gamma delta"}, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+	})
+}
+
+func TestFixedSizeChunking_PrefersSentenceBoundary(t *testing.T) {
+	content := "First sentence should remain complete here. " +
+		"Second sentence continues with enough words to exceed the budget."
+	fsc := NewFixedSizeChunking(WithChunkSize(60))
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "sentence-boundary",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, "First sentence should remain complete here.",
+		chunks[0].Content)
+	contents := make([]string, 0, len(chunks))
+	for _, chunk := range chunks {
+		contents = append(contents, chunk.Content)
+	}
+	require.Equal(t, content, strings.Join(contents, " "))
+}
+
+func TestFixedSizeChunking_PreservesCompleteLines(t *testing.T) {
+	const chunkSize = 120
+	lines := []string{
+		strings.Repeat("a", 75),
+		strings.Repeat("b", 119),
+		strings.Repeat("c", 50),
+	}
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	)
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "complete-lines",
+		Content: strings.Join(lines, "\n"),
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, lines, []string{
+		chunks[0].Content,
+		chunks[1].Content,
+		chunks[2].Content,
+	})
+}
+
+func TestFixedSizeChunking_BalancesOversizedLine(t *testing.T) {
+	const chunkSize = 80
+	content := strings.Repeat("x", 88)
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithPreserveLines(),
+	)
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "oversized-line",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, []int{48, 40}, []int{
+		utf8.RuneCountInString(chunks[0].Content),
+		utf8.RuneCountInString(chunks[1].Content),
+	})
+	require.Equal(t, content, chunks[0].Content+chunks[1].Content)
+}
+
+func TestFixedSizeChunking_BalancesUnbrokenTail(t *testing.T) {
+	const chunkSize = 120
+	content := strings.Repeat("a", chunkSize*2+1)
+	fsc := NewFixedSizeChunking(WithChunkSize(chunkSize))
+
+	chunks, err := fsc.Chunk(&document.Document{
+		ID:      "balanced-tail",
+		Content: content,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int{120, 61, 60}, []int{
+		utf8.RuneCountInString(chunks[0].Content),
+		utf8.RuneCountInString(chunks[1].Content),
+		utf8.RuneCountInString(chunks[2].Content),
+	})
+	require.Equal(t, content,
+		chunks[0].Content+chunks[1].Content+chunks[2].Content)
+}
+
+func TestFixedSizeChunking_OverlapStartsAtWordBoundary(t *testing.T) {
+	doc := &document.Document{
+		ID:      "natural-overlap",
+		Content: "alpha beta gamma delta epsilon zeta",
+	}
+	const (
+		chunkSize = 18
+		overlap   = 8
+	)
+	fsc := NewFixedSizeChunking(
+		WithChunkSize(chunkSize),
+		WithOverlap(overlap),
+	)
+
+	chunks, err := fsc.Chunk(doc)
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for i, chunk := range chunks {
+		require.LessOrEqual(t, utf8.RuneCountInString(chunk.Content), chunkSize)
+		if i == 0 {
+			continue
+		}
+		actualOverlap := boundaryOverlap(chunks[i-1].Content, chunk.Content, overlap)
+		require.Positive(t, actualOverlap)
+		contentRunes := []rune(chunk.Content)
+		require.True(t, actualOverlap == len(contentRunes) ||
+			contentRunes[actualOverlap] == ' ')
 	}
 }
