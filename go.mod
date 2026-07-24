@@ -6,6 +6,7 @@ require (
 	connectrpc.com/connect v1.18.1
 	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/bufbuild/protocompile v0.14.1
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creack/pty v1.1.24
 	github.com/go-ego/gse v1.0.0
 	github.com/gomutex/godocx v0.1.5
