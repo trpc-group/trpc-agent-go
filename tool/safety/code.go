@@ -795,10 +795,9 @@ func splitCallArguments(contents string) []string {
 
 func scanCodeDestination(policy Policy, expression string) ([]Finding, bool) {
 	var findings []Finding
-	resolved := false
+	recognized := false
 	if explicitURLPattern.MatchString(expression) {
 		findings = append(findings, scanNetworkText(policy, expression)...)
-		resolved = true
 	}
 	for _, literal := range quotedLiterals(expression) {
 		if isFileURL(literal) {
@@ -807,25 +806,63 @@ func scanCodeDestination(policy Policy, expression string) ([]Finding, bool) {
 					findings = append(findings, finding)
 				}
 			}
-			resolved = true
+			recognized = true
 			continue
 		}
 		if _, ok := explicitHost(literal); ok {
-			resolved = true
+			recognized = true
 			continue
 		}
 		if host, ok := knownDestinationHost(literal); ok {
-			resolved = true
+			recognized = true
 			if finding, denied := networkDestinationFinding(policy, host); denied {
 				findings = append(findings, finding)
 			}
 			continue
 		}
 		if isPathLike(literal) {
-			resolved = true
+			recognized = true
 		}
 	}
-	return findings, resolved
+	return findings, recognized && staticCodeDestination(expression)
+}
+
+func staticCodeDestination(expression string) bool {
+	var quote byte
+	escaped := false
+	for i := 0; i < len(expression); i++ {
+		current := expression[i]
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if quote == '`' && current == '$' && i+1 < len(expression) && expression[i+1] == '{' {
+				return false
+			}
+			if current == quote {
+				quote = 0
+			}
+			continue
+		}
+		if current == '\'' || current == '"' || current == '`' {
+			quote = current
+			continue
+		}
+		if !staticDestinationSyntax(current) {
+			return false
+		}
+	}
+	return quote == 0
+}
+
+func staticDestinationSyntax(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\n' || value == '\r' ||
+		(value >= '0' && value <= '9') || strings.ContainsRune("()[]{},:", rune(value))
 }
 
 func dynamicNetworkFinding() Finding {

@@ -436,6 +436,16 @@ func TestGuardScopesCodeDestinationsToNetworkCalls(t *testing.T) {
 	}}})
 	require.Equal(t, safety.DecisionNeedsHumanReview, dynamic.Decision)
 	require.Equal(t, "network.dynamic_destination", dynamic.RuleID)
+
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "python", Code: `requests.get("https://api.github.com" + suffix)`},
+		{Language: "go", Code: `http.Get("https://api.github.com" + suffix)`},
+		{Language: "javascript", Code: `fetch("https://api.github.com" + suffix)`},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, block.Language)
+		require.Equal(t, "network.dynamic_destination", report.RuleID, block.Language)
+	}
 }
 
 func TestGuardRecognizesImportedNetworkAliases(t *testing.T) {

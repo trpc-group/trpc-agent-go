@@ -32,6 +32,7 @@ const (
 type decodedPermissionRequest struct {
 	Request
 	needsHumanReview bool
+	stdin            string
 }
 
 // requestFromPermissionRequest translates framework tool arguments into the
@@ -60,7 +61,7 @@ func requestFromPermissionRequest(
 
 	switch name {
 	case "workspace_exec":
-		return wrapDecodedPermissionRequest(decodeWorkspaceExecution(base, req.Arguments))
+		return decodeWorkspaceExecution(base, req.Arguments)
 	case "exec_command":
 		return wrapDecodedPermissionRequest(decodeHostExecution(base, req.Arguments))
 	case "write_stdin":
@@ -121,6 +122,7 @@ type workspaceExecutionArguments struct {
 	Command       string            `json:"command"`
 	Cwd           string            `json:"cwd,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
+	Stdin         string            `json:"stdin,omitempty"`
 	Background    bool              `json:"background,omitempty"`
 	Timeout       int               `json:"timeout,omitempty"`
 	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
@@ -129,13 +131,18 @@ type workspaceExecutionArguments struct {
 	PTY           *bool             `json:"pty,omitempty"`
 }
 
-func decodeWorkspaceExecution(base Request, raw []byte) (Request, bool, error) {
+func decodeWorkspaceExecution(
+	base Request,
+	raw []byte,
+) (decodedPermissionRequest, bool, error) {
 	var in workspaceExecutionArguments
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return Request{}, false, fmt.Errorf("decode workspace execution arguments: %w", err)
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode workspace execution arguments: %w", err)
 	}
 	if strings.TrimSpace(in.Command) == "" {
-		return Request{}, false, errors.New("decode workspace execution arguments: command is required")
+		return decodedPermissionRequest{}, false,
+			errors.New("decode workspace execution arguments: command is required")
 	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
@@ -151,7 +158,7 @@ func decodeWorkspaceExecution(base Request, raw []byte) (Request, bool, error) {
 	base.TimeoutSeconds = timeout
 	base.Background = in.Background
 	base.TTY = firstBoolValue(in.TTY, in.PTY)
-	return base, true, nil
+	return decodedPermissionRequest{Request: base, stdin: in.Stdin}, true, nil
 }
 
 type hostExecutionArguments struct {
@@ -381,6 +388,9 @@ func scanDecodedPermissionRequest(
 	req decodedPermissionRequest,
 ) Report {
 	report := guard.Scan(req.Request)
+	for _, finding := range scanSensitiveContent(req.stdin) {
+		report = appendDecodedFinding(report, finding)
+	}
 	if !req.needsHumanReview {
 		return report
 	}
@@ -391,6 +401,10 @@ func scanDecodedPermissionRequest(
 		"interactive session input can compose with prior process state",
 		"review the complete session state before sending additional input",
 	)
+	return appendDecodedFinding(report, finding)
+}
+
+func appendDecodedFinding(report Report, finding Finding) Report {
 	report.Findings = append(report.Findings, finding)
 	if findingRank(finding) <= decisionRank(report.Decision)*10+riskRank(report.RiskLevel) {
 		return report
@@ -400,7 +414,7 @@ func scanDecodedPermissionRequest(
 	report.RuleID = finding.RuleID
 	report.Evidence = append([]string(nil), finding.Evidence...)
 	report.Recommendation = finding.Recommendation
-	report.Blocked = false
+	report.Blocked = finding.Decision == DecisionDeny
 	report.SafeSummary = "request requires safety policy action"
 	return report
 }

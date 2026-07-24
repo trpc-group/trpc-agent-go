@@ -102,6 +102,48 @@ func TestDecodeWorkspaceExec(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestDecodeWorkspaceExecScansSensitiveStdin(t *testing.T) {
+	const secret = "ghp_abcdefghijklmnopqrstuvwxyz123456"
+	execTool := workspaceexec.NewExecTool(nil)
+
+	decoded, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: execTool,
+		Arguments: mustJSON(t, map[string]any{
+			"command": "cat",
+			"stdin":   secret,
+		}),
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	report := scanDecodedPermissionRequest(mustGuard(t), decoded)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, "sensitive.secret", report.RuleID)
+	serialized, err := json.Marshal(report)
+	require.NoError(t, err)
+	require.NotContains(t, string(serialized), secret)
+}
+
+func TestDecodeWorkspaceExecBlocksPrivateKeyStdin(t *testing.T) {
+	const privateKey = "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"
+	execTool := workspaceexec.NewExecTool(nil)
+
+	decoded, ok, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: execTool,
+		Arguments: mustJSON(t, map[string]any{
+			"command": "cat",
+			"stdin":   privateKey,
+		}),
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+
+	report := scanDecodedPermissionRequest(mustGuard(t), decoded)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "sensitive.private_key", report.RuleID)
+	require.True(t, report.Blocked)
+}
+
 func TestDecodeHostExec(t *testing.T) {
 	set, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
 	require.NoError(t, err)
