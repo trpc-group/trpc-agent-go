@@ -43,6 +43,9 @@ const (
 	TaskRunning TaskStatus = "running"
 	// TaskCompleted indicates that a review finished and was persisted.
 	TaskCompleted TaskStatus = "completed"
+	// TaskFailed indicates that review input or execution failed after audit
+	// persistence was initialized.
+	TaskFailed TaskStatus = "failed"
 
 	// SeverityCritical identifies a merge-blocking security or correctness risk.
 	SeverityCritical Severity = "critical"
@@ -232,20 +235,27 @@ type Artifact struct {
 	Path      string `json:"path"`
 	MIMEType  string `json:"mime_type"`
 	SizeBytes int64  `json:"size_bytes"`
+	// Provenance identifies whether an artifact was produced by a validated
+	// sandbox script or synthesized by an explicitly documented fallback.
+	Provenance string `json:"provenance,omitempty"`
+	content    string
 }
 
 // Metrics contains monitoring and audit counters for a review.
 type Metrics struct {
-	TotalDurationMS      int64          `json:"total_duration_ms"`
-	SandboxDurationMS    int64          `json:"sandbox_duration_ms"`
-	ToolCallCount        int            `json:"tool_call_count"`
-	PermissionDenyCount  int            `json:"permission_deny_count"`
-	PermissionAskCount   int            `json:"permission_ask_count"`
-	FindingCount         int            `json:"finding_count"`
-	WarningCount         int            `json:"warning_count"`
-	NeedsHumanCount      int            `json:"needs_human_review_count"`
-	SeverityDistribution map[string]int `json:"severity_distribution"`
-	ErrorDistribution    map[string]int `json:"error_distribution"`
+	// PreparationDurationMS measures completed work before the final report
+	// directory is atomically published. Publication is intentionally excluded
+	// because the report itself contains this metric.
+	PreparationDurationMS int64          `json:"preparation_duration_ms"`
+	SandboxDurationMS     int64          `json:"sandbox_duration_ms"`
+	ToolCallCount         int            `json:"tool_call_count"`
+	PermissionDenyCount   int            `json:"permission_deny_count"`
+	PermissionAskCount    int            `json:"permission_ask_count"`
+	FindingCount          int            `json:"finding_count"`
+	WarningCount          int            `json:"warning_count"`
+	NeedsHumanCount       int            `json:"needs_human_review_count"`
+	SeverityDistribution  map[string]int `json:"severity_distribution"`
+	ErrorDistribution     map[string]int `json:"error_distribution"`
 }
 
 // Report contains the complete structured result of a review task.

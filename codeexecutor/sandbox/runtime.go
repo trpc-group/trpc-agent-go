@@ -58,7 +58,7 @@ func NewRuntime(opts ...Option) *Runtime {
 		profile:        WorkspaceWriteProfile(),
 		sessionPolicy:  defaultSessionPolicy(),
 		envPolicy:      normalizeShellEnvironmentPolicy(ShellEnvironmentPolicy{}),
-		outputMaxBytes: defaultOutputMaxBytes,
+		outputMaxBytes: DefaultOutputMaxBytes,
 		defaultTimeout: defaultRunTimeout,
 		runLocks:       map[string]*sync.Mutex{},
 	}
@@ -73,7 +73,7 @@ func NewRuntime(opts ...Option) *Runtime {
 	}
 	r.envPolicy = normalizeShellEnvironmentPolicy(r.envPolicy)
 	if r.outputMaxBytes <= 0 {
-		r.outputMaxBytes = defaultOutputMaxBytes
+		r.outputMaxBytes = DefaultOutputMaxBytes
 	}
 	if r.defaultTimeout <= 0 {
 		r.defaultTimeout = defaultRunTimeout

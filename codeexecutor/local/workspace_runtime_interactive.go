@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 const (
@@ -69,8 +70,8 @@ type interactiveSession struct {
 	pollCursor int
 	maxLines   int
 	closeOnce  sync.Once
-	stdout     limitedBuffer
-	stderr     limitedBuffer
+	stdout     outputlimit.Buffer
+	stderr     outputlimit.Buffer
 }
 
 func newInteractiveSession(
@@ -325,7 +326,7 @@ func (s *interactiveSession) appendOutput(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	retained := text
+	var retained string
 	switch stream {
 	case "stderr":
 		before := s.stderr.Len()
@@ -398,8 +399,8 @@ func (r *Runtime) StartProgram(
 		formatInteractiveCommand(spec.Cmd, spec.Args),
 		defaultInteractiveMaxLines,
 	)
-	sess.stdout = newLimitedBuffer(spec.MaxOutputBytes)
-	sess.stderr = newLimitedBuffer(spec.MaxOutputBytes)
+	sess.stdout = outputlimit.NewBuffer(spec.MaxOutputBytes)
+	sess.stderr = outputlimit.NewBuffer(spec.MaxOutputBytes)
 	sess.cmd = cmd
 	sess.cancel = cancel
 	startedAt := time.Now()

@@ -48,22 +48,50 @@ func TestAcceptanceRuleQualityCorpus(t *testing.T) {
 		t.Fatalf("high-risk recall %.1f%% is below 80%%", recall*100)
 	}
 
-	safeSecretLines := []string{
+	safeLines := []string{
 		`token := os.Getenv("TOKEN")`, `const tokenHeader = "X-Token"`,
 		`const apiKeyEnv = "API_KEY"`, `type Config struct { Token string }`,
 		`json:"token"`, `header.Set("Authorization", value)`,
 		`password := promptUser()`, `secret := vault.Lookup(name)`,
 		`apiKey := strings.TrimSpace(input)`, `const contentType = "application/json"`,
+		`ctx, cancel := context.WithCancel(parent); defer cancel()`,
+		`file, err := os.Open(name); defer file.Close()`,
+		`tx, err := db.Begin(); defer tx.Rollback()`,
+		`exec.Command("git", "status", "--short")`,
+		`go func() { select { case <-ctx.Done(): return } }()`,
+	}
+	highRiskRules := map[string]bool{
+		"go/security/hardcoded-secret": true, "go/security/dynamic-shell": true,
+		"go/database/sql-concatenation": true, "go/context/cancel-leak": true,
+		"go/concurrency/unbounded-goroutine": true, "go/resource/close": true,
+		"go/database/transaction-rollback": true, "go/error/ignored": true,
 	}
 	falsePositives := 0
-	for _, line := range safeSecretLines {
-		if looksSecret(line) {
+	for _, line := range safeLines {
+		raw := fmt.Sprintf("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1,2 @@\n package a\n+%s\n", line)
+		input, err := ParseUnifiedDiff(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		findings, warnings, human := analyze(input)
+		if containsHighRiskRule(highRiskRules, findings, warnings, human) {
 			falsePositives++
 		}
 	}
-	if rate := float64(falsePositives) / float64(len(safeSecretLines)); rate > .15 {
+	if rate := float64(falsePositives) / float64(len(safeLines)); rate > .15 {
 		t.Fatalf("false-positive rate %.1f%% exceeds 15%%", rate*100)
 	}
+}
+
+func containsHighRiskRule(rules map[string]bool, buckets ...[]Finding) bool {
+	for _, bucket := range buckets {
+		for _, finding := range bucket {
+			if rules[finding.RuleID] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestAcceptanceRedactionCorpus(t *testing.T) {
@@ -82,11 +110,16 @@ func TestAcceptanceRedactionCorpus(t *testing.T) {
 	}
 	redacted := 0
 	for _, secret := range secrets {
-		if output := redact(secret); strings.Contains(output, "[REDACTED]") && output != secret {
+		output := redact(secret)
+		if strings.Contains(output, "[REDACTED]") && !strings.Contains(output, secret) {
 			redacted++
+			continue
+		}
+		if !strings.Contains(output, "[REDACTED]") || strings.Contains(output, secret) {
+			t.Fatalf("secret was not fully redacted: input=%q output=%q", secret, output)
 		}
 	}
-	if recall := float64(redacted) / float64(len(secrets)); recall < .95 {
-		t.Fatalf("redaction recall %.1f%% is below 95%%", recall*100)
+	if rate := float64(redacted) / float64(len(secrets)); rate < .95 {
+		t.Fatalf("redaction rate %.1f%% is below 95%%", rate*100)
 	}
 }

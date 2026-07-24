@@ -31,6 +31,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 const (
@@ -359,8 +360,8 @@ func (r *Runtime) RunProgram(
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
 
-	stdout := newLimitedBuffer(spec.MaxOutputBytes)
-	stderr := newLimitedBuffer(spec.MaxOutputBytes)
+	stdout := outputlimit.NewBuffer(spec.MaxOutputBytes)
+	stderr := outputlimit.NewBuffer(spec.MaxOutputBytes)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 

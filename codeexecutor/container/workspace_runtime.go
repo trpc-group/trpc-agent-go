@@ -32,6 +32,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 const (
@@ -1213,8 +1214,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}()
 	}
 
-	stdout := newLimitedBuffer(maxOutputBytes)
-	stderr := newLimitedBuffer(maxOutputBytes)
+	stdout := outputlimit.NewBuffer(maxOutputBytes)
+	stderr := outputlimit.NewBuffer(maxOutputBytes)
 	_, err = stdcopy.StdCopy(&stdout, &stderr, hj.Reader)
 	if stdin != "" {
 		if writeErr := <-writeDone; err == nil && writeErr != nil {
@@ -1222,7 +1223,8 @@ func (r *workspaceRuntime) execCmdWithStdin(
 		}
 	}
 	if err != nil {
-		return "", "", 0, false, stdout.Truncated(), stderr.Truncated(), err
+		return stdout.String(), stderr.String(), 0, false,
+			stdout.Truncated(), stderr.Truncated(), err
 	}
 	insp, err := r.ce.client.ContainerExecInspect(tctx, ex.ID)
 	if err != nil {

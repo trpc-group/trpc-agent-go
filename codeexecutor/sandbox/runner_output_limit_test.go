@@ -36,7 +36,7 @@ func TestRunProgramHonorsSpecOutputLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Stdout != "abcd\n[truncated]\n" || result.Stderr != "uvwx\n[truncated]\n" ||
+	if result.Stdout != "abcd" || result.Stderr != "uvwx" ||
 		!result.StdoutTruncated || !result.StderrTruncated {
 		t.Fatalf("unexpected bounded result: %+v", result)
 	}

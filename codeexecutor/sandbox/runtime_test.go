@@ -421,7 +421,7 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 			r.defaultTimeout = 0
 		},
 	)
-	if rt.outputMaxBytes != defaultOutputMaxBytes || rt.defaultTimeout != defaultRunTimeout {
+	if rt.outputMaxBytes != DefaultOutputMaxBytes || rt.defaultTimeout != defaultRunTimeout {
 		t.Fatalf("defaults output=%d timeout=%s", rt.outputMaxBytes, rt.defaultTimeout)
 	}
 	defaultProfile := NewRuntime(WithPermissionProfile(PermissionProfile{}))
@@ -832,7 +832,7 @@ func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 	if n, err := buf.Write([]byte("abcdef")); err != nil || n != 6 {
 		t.Fatalf("limited buffer write n=%d err=%v", n, err)
 	}
-	if got := buf.String(); got != "abc\n[truncated]\n" {
+	if got := buf.String(); got != "abc" {
 		t.Fatalf("limited buffer string = %q", got)
 	}
 	full := newLimitedBuffer(3)
@@ -842,7 +842,7 @@ func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 	if _, err := full.Write([]byte("d")); err != nil {
 		t.Fatal(err)
 	}
-	if got := full.String(); got != "abc\n[truncated]\n" {
+	if got := full.String(); got != "abc" {
 		t.Fatalf("full limited buffer string = %q", got)
 	}
 	if !buf.Truncated() || (*limitedBuffer)(nil).Truncated() {
@@ -852,7 +852,7 @@ func TestSandboxErrorsAndLimitedBuffer(t *testing.T) {
 	if _, err := disabled.Write([]byte("x")); err != nil {
 		t.Fatal(err)
 	}
-	if got := disabled.String(); got != "\n[truncated]\n" {
+	if got := disabled.String(); got != "" {
 		t.Fatalf("zero-size buffer string = %q", got)
 	}
 	if (*limitedBuffer)(nil).String() != "" {

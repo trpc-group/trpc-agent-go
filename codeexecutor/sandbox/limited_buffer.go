@@ -44,11 +44,7 @@ func (b *limitedBuffer) String() string {
 	if b == nil {
 		return ""
 	}
-	out := string(b.buf)
-	if b.truncated {
-		out += "\n[truncated]\n"
-	}
-	return out
+	return string(b.buf)
 }
 
 func (b *limitedBuffer) Truncated() bool {

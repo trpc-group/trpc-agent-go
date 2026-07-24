@@ -77,7 +77,7 @@ func TestFileListRejectsTraversal(t *testing.T) {
 }
 
 func TestLoadInputRequiresOnePrimaryMode(t *testing.T) {
-	_, _, err := loadInput(context.Background(), Config{DiffFile: "a", Fixture: "b"}, t.TempDir())
+	_, _, _, err := loadInput(context.Background(), Config{DiffFile: "a", Fixture: "b"}, t.TempDir())
 	if err == nil || !strings.Contains(err.Error(), "exactly one") {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -118,6 +118,18 @@ func TestParseUnifiedDiffTracksBinaryPathWithSpaces(t *testing.T) {
 	}
 	if len(got.Files) != 1 || got.Files[0] != "assets/new logo.bin" {
 		t.Fatalf("binary path with spaces was lost: %#v", got.Files)
+	}
+}
+
+func TestParseUnifiedDiffPreservesBinaryHeaderPathContainingAnd(t *testing.T) {
+	raw := "diff --git a/assets/old.bin b/assets/new and latest.bin\n" +
+		"Binary files a/assets/old.bin and b/assets/new and latest.bin differ\n"
+	got, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 1 || got.Files[0] != "assets/new and latest.bin" {
+		t.Fatalf("binary files = %#v", got.Files)
 	}
 }
 
@@ -184,7 +196,7 @@ func TestLoadInputTrimsModeValues(t *testing.T) {
 	if err := os.WriteFile(diff, []byte("diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n+package a\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, mode, err := loadInput(context.Background(), Config{DiffFile: "  " + diff + "  "}, dir); err != nil || mode != "diff_file" {
+	if _, mode, _, err := loadInput(context.Background(), Config{DiffFile: "  " + diff + "  "}, dir); err != nil || mode != "diff_file" {
 		t.Fatalf("trimmed diff path failed: mode=%q err=%v", mode, err)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/codeexecutor/internal/outputlimit"
 )
 
 func TestInteractiveSession_PollLogAndTrim(t *testing.T) {
@@ -127,8 +128,8 @@ func TestRuntime_StartProgramInteractivePipes(t *testing.T) {
 
 func TestRuntime_StartProgramInteractiveBoundsRetainedOutput(t *testing.T) {
 	sess := newInteractiveSession("bounded", "test", 20)
-	sess.stdout = newLimitedBuffer(4)
-	sess.stderr = newLimitedBuffer(4)
+	sess.stdout = outputlimit.NewBuffer(4)
+	sess.stderr = outputlimit.NewBuffer(4)
 	sess.appendOutput("123456", "stdout")
 	sess.appendOutput("abcdef", "stderr")
 	result := sess.RunResult()

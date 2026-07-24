@@ -653,15 +653,16 @@ func (r *workspaceRuntime) RunProgram(
 	)
 	script := buildRunWrapper(inner)
 
+	outputLimit := spec.MaxOutputBytes
 	start := time.Now()
 	stdoutRaw, stderrRaw, _, err := r.runBashStreamingLimited(
-		ctx, script, timeout, spec.MaxOutputBytes,
+		ctx, script, timeout, outputLimit,
 	)
 	dur := time.Since(start)
 
 	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
-	stdout, stdoutCut := limitOutput(stdout, spec.MaxOutputBytes)
-	stderr, stderrCut := limitOutput(stderr, spec.MaxOutputBytes)
+	stdout, stdoutCut := limitOutput(stdout, outputLimit)
+	stderr, stderrCut := limitOutput(stderr, outputLimit)
 
 	timedOut := false
 	if err != nil {

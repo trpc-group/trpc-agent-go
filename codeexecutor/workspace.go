@@ -95,8 +95,11 @@ type RunProgramSpec struct {
 	Timeout  time.Duration
 	Limits   ResourceLimits
 	// MaxOutputBytes requests an upper bound on bytes retained separately for
-	// stdout and stderr. A non-positive value uses the runtime default. A
-	// runtime may enforce a lower policy limit.
+	// stdout and stderr. A non-positive value preserves the historical
+	// unbounded behavior. A runtime may enforce a lower policy limit.
+	// Truncation is reported by
+	// RunResult's truncation fields; runtimes do not append marker text beyond
+	// the effective limit.
 	MaxOutputBytes int
 }
 

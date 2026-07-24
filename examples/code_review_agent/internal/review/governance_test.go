@@ -27,6 +27,8 @@ func TestPermissionPolicyAllowDenyAsk(t *testing.T) {
 		{"go", []string{"test", "./...", "-exec", "malicious"}, "deny"},
 		{"go", []string{"run", "./cmd"}, "deny"},
 		{"bash", []string{"skills/code-review/scripts/diff_stats.sh", "work/change.diff", "out/diff_stats.json"}, "allow"},
+		{"git", []string{"-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "HEAD", "--"}, "allow"},
+		{"git", []string{"status", "--short"}, "deny"},
 		{"bash", []string{"skills/code-review/scripts/diff_stats.sh", "work/change.diff", "out/x;rm"}, "deny"},
 		{"curl", []string{"https://example.com"}, "ask"},
 	}

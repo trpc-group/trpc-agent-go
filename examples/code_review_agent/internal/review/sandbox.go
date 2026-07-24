@@ -168,11 +168,6 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 	for _, item := range checks {
 		decisions = append(decisions, decide(ctx, item.command, item.args))
 	}
-	stats, err := s.writeDiffStats(taskID, input.Summary)
-	if err != nil {
-		return nil, decisions, nil, fmt.Errorf("write diff statistics: %w", err)
-	}
-	artifacts = []Artifact{stats}
 	if s.initErr != nil {
 		return []SandboxRun{setupFailure(s.executor, "initialize_executor", s.initErr, s.outputLimit)}, decisions, artifacts, nil
 	}
@@ -189,7 +184,14 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 			}
 			runs = append(runs, SandboxRun{Command: item.command, Args: item.args, Executor: s.executor, Status: status, ErrorType: errorType})
 		}
-		return runs, decisions, artifacts, nil
+		if !shouldPublishStats(runs) {
+			return runs, decisions, nil, nil
+		}
+		stats, err := diffStatsArtifact(deterministicDiffStats(input.Summary), "synthetic_dry_run")
+		if err != nil {
+			return nil, decisions, nil, fmt.Errorf("prepare deterministic diff statistics: %w", err)
+		}
+		return runs, decisions, []Artifact{stats}, nil
 	}
 	ws, err := s.engine.Manager().CreateWorkspace(ctx, taskID, codeexecutor.WorkspacePolicy{Isolated: true})
 	if err != nil {
@@ -233,24 +235,50 @@ func (s *sandbox) run(ctx context.Context, taskID, repoPath string, input Parsed
 		}
 		runs = append(runs, s.execute(ctx, ws, item.command, item.args, item.cwd))
 	}
-	if len(runs) > 0 && runs[0].Status == RunSuccess && !(runtime.GOOS == "windows" && s.executor == ExecutorLocalDev) {
-		if err := s.validateDiffStats(ctx, ws, input.Summary); err != nil {
-			runs = append(runs, setupFailure(s.executor, "validate_diff_stats", err, s.outputLimit))
+	if len(runs) > 0 && runs[0].Status == RunSuccess {
+		var data string
+		if runtime.GOOS == "windows" && s.executor == ExecutorLocalDev {
+			data = deterministicDiffStats(input.Summary)
+			artifactProvenance := "synthetic_windows_local_fallback"
+			if stats, artifactErr := diffStatsArtifact(data, artifactProvenance); artifactErr != nil {
+				runs = append(runs, setupFailure(s.executor, "prepare_diff_stats", artifactErr, s.outputLimit))
+			} else {
+				artifacts = append(artifacts, stats)
+			}
+		} else {
+			data, err = s.collectDiffStats(ctx, ws, input.Summary)
+			if err != nil {
+				runs = append(runs, setupFailure(s.executor, "validate_diff_stats", err, s.outputLimit))
+			} else if stats, artifactErr := diffStatsArtifact(data, "validated_sandbox_script"); artifactErr != nil {
+				runs = append(runs, setupFailure(s.executor, "prepare_diff_stats", artifactErr, s.outputLimit))
+			} else {
+				artifacts = append(artifacts, stats)
+			}
 		}
 	}
 	return runs, decisions, artifacts, nil
 }
 
+func shouldPublishStats(runs []SandboxRun) bool {
+	return len(runs) > 0 && (runs[0].Status == RunSuccess ||
+		runs[0].Status == RunSkipped && runs[0].ErrorType == ErrorDryRun)
+}
+
 func (s *sandbox) validateDiffStats(ctx context.Context, ws codeexecutor.Workspace, want DiffSummary) error {
+	_, err := s.collectDiffStats(ctx, ws, want)
+	return err
+}
+
+func (s *sandbox) collectDiffStats(ctx context.Context, ws codeexecutor.Workspace, want DiffSummary) (string, error) {
 	files, err := s.engine.FS().Collect(ctx, ws, []string{"out/diff_stats.json"})
 	if err != nil {
-		return fmt.Errorf("collect audited diff statistics: %w", err)
+		return "", fmt.Errorf("collect audited diff statistics: %w", err)
 	}
 	if len(files) != 1 {
-		return fmt.Errorf("audited diff statistics produced %d artifacts, want 1", len(files))
+		return "", fmt.Errorf("audited diff statistics produced %d artifacts, want 1", len(files))
 	}
 	if files[0].Truncated || len(files[0].Content) > maxArtifactBytes {
-		return errors.New("audited diff statistics exceed artifact limit")
+		return "", errors.New("audited diff statistics exceed artifact limit")
 	}
 	var got struct {
 		FilesChanged int `json:"files_changed"`
@@ -260,15 +288,15 @@ func (s *sandbox) validateDiffStats(ctx context.Context, ws codeexecutor.Workspa
 	decoder := json.NewDecoder(strings.NewReader(files[0].Content))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&got); err != nil {
-		return fmt.Errorf("decode audited diff statistics: %w", err)
+		return "", fmt.Errorf("decode audited diff statistics: %w", err)
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
-		return errors.New("audited diff statistics contain trailing data")
+		return "", errors.New("audited diff statistics contain trailing data")
 	}
 	if got.FilesChanged != want.FilesChanged || got.AddedLines != want.AddedLines || got.DeletedLines != want.DeletedLines {
-		return fmt.Errorf("audited diff statistics mismatch: got files=%d added=%d deleted=%d, want files=%d added=%d deleted=%d", got.FilesChanged, got.AddedLines, got.DeletedLines, want.FilesChanged, want.AddedLines, want.DeletedLines)
+		return "", fmt.Errorf("audited diff statistics mismatch: got files=%d added=%d deleted=%d, want files=%d added=%d deleted=%d", got.FilesChanged, got.AddedLines, got.DeletedLines, want.FilesChanged, want.AddedLines, want.DeletedLines)
 	}
-	return nil
+	return files[0].Content, nil
 }
 
 func (s *sandbox) execute(ctx context.Context, ws codeexecutor.Workspace, command string, args []string, cwd string) SandboxRun {
@@ -416,46 +444,18 @@ func copyBoundedFile(source, target string, original fs.FileInfo) error {
 	return out.Sync()
 }
 
-func (s *sandbox) writeDiffStats(taskID string, summary DiffSummary) (Artifact, error) {
-	dir := filepath.Join(s.outputDir, taskID)
-	if err := os.MkdirAll(s.outputDir, 0o700); err != nil {
-		return Artifact{}, err
-	}
-	if err := os.Mkdir(dir, 0o700); err != nil {
-		return Artifact{}, err
-	}
-	file := filepath.Join(dir, "diff_stats.json")
-	data, err := json.MarshalIndent(map[string]int{"files_changed": summary.FilesChanged, "added_lines": summary.AddedLines, "deleted_lines": summary.DeletedLines}, "", "  ")
-	if err != nil {
-		return Artifact{}, err
-	}
-	data = append(data, '\n')
+func deterministicDiffStats(summary DiffSummary) string {
+	data, _ := json.MarshalIndent(map[string]int{"files_changed": summary.FilesChanged, "added_lines": summary.AddedLines, "deleted_lines": summary.DeletedLines}, "", "  ")
+	return string(append(data, '\n'))
+}
+
+// diffStatsArtifact retains exact validated script output until stageReport
+// atomically publishes it with the report directory.
+func diffStatsArtifact(data, provenance string) (Artifact, error) {
 	if len(data) > maxArtifactBytes {
 		return Artifact{}, errors.New("diff statistics exceed artifact limit")
 	}
-	if err := writeNewFile(file, data); err != nil {
-		return Artifact{}, err
-	}
-	return Artifact{Name: "diff_stats.json", Path: filepath.ToSlash(file), MIMEType: "application/json", SizeBytes: int64(len(data))}, nil
-}
-
-func writeNewFile(target string, data []byte) (err error) {
-	file, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if closeErr := file.Close(); err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			_ = os.Remove(target)
-		}
-	}()
-	if _, err = file.Write(data); err != nil {
-		return err
-	}
-	return file.Sync()
+	return Artifact{Name: "diff_stats.json", Path: "diff_stats.json", MIMEType: "application/json", SizeBytes: int64(len(data)), Provenance: provenance, content: data}, nil
 }
 
 func setupFailure(executor Executor, operation string, err error, outputLimit int) SandboxRun {

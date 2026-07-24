@@ -101,14 +101,42 @@ CREATE TABLE IF NOT EXISTS sandbox_runs (task_id TEXT NOT NULL REFERENCES review
 CREATE TABLE IF NOT EXISTS permission_decisions (task_id TEXT NOT NULL REFERENCES review_tasks(id), ordinal INTEGER NOT NULL, command TEXT NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(task_id, ordinal));
 CREATE TABLE IF NOT EXISTS filter_decisions (task_id TEXT NOT NULL REFERENCES review_tasks(id), ordinal INTEGER NOT NULL, fingerprint TEXT NOT NULL, action TEXT NOT NULL, reason TEXT NOT NULL, target_bucket TEXT NOT NULL, PRIMARY KEY(task_id, ordinal));
 CREATE TABLE IF NOT EXISTS findings (task_id TEXT NOT NULL REFERENCES review_tasks(id), bucket TEXT NOT NULL, fingerprint TEXT NOT NULL, severity TEXT NOT NULL, category TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(task_id, bucket, fingerprint));
-CREATE TABLE IF NOT EXISTS artifacts (task_id TEXT NOT NULL REFERENCES review_tasks(id), name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(task_id, name));
+CREATE TABLE IF NOT EXISTS artifacts (task_id TEXT NOT NULL REFERENCES review_tasks(id), name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, provenance TEXT NOT NULL DEFAULT '', PRIMARY KEY(task_id, name));
 CREATE TABLE IF NOT EXISTS review_metrics (task_id TEXT PRIMARY KEY REFERENCES review_tasks(id), payload_json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS review_reports (task_id TEXT PRIMARY KEY REFERENCES review_tasks(id), conclusion TEXT NOT NULL, payload_json TEXT NOT NULL);
 `)
+	if err != nil {
+		return err
+	}
+	return s.ensureArtifactProvenanceColumn()
+}
+
+func (s *sqliteStore) ensureArtifactProvenanceColumn() error {
+	rows, err := s.db.Query(`PRAGMA table_info(artifacts)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, fieldType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "provenance" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`ALTER TABLE artifacts ADD COLUMN provenance TEXT NOT NULL DEFAULT ''`)
 	return err
 }
 
 func (s *sqliteStore) Save(ctx context.Context, report Report) error {
+	report = redactReport(report)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -151,7 +179,7 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 		}
 	}
 	for _, artifact := range report.Artifacts {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes) VALUES(?,?,?,?,?)`, report.Task.ID, artifact.Name, artifact.Path, artifact.MIMEType, artifact.SizeBytes); err != nil {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes,provenance) VALUES(?,?,?,?,?,?)`, report.Task.ID, artifact.Name, artifact.Path, artifact.MIMEType, artifact.SizeBytes, artifact.Provenance); err != nil {
 			return err
 		}
 	}
@@ -173,6 +201,7 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 }
 
 func (s *sqliteStore) Finalize(ctx context.Context, report Report) error {
+	report = redactReport(report)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -189,7 +218,7 @@ func (s *sqliteStore) Finalize(ctx context.Context, report Report) error {
 		return err
 	}
 	for _, artifact := range report.Artifacts {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes) VALUES(?,?,?,?,?)`, report.Task.ID, artifact.Name, artifact.Path, artifact.MIMEType, artifact.SizeBytes); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes,provenance) VALUES(?,?,?,?,?,?)`, report.Task.ID, artifact.Name, artifact.Path, artifact.MIMEType, artifact.SizeBytes, artifact.Provenance); err != nil {
 			return err
 		}
 	}
@@ -323,7 +352,7 @@ func decodeJSONRows[T any](rows *sql.Rows, entity string) ([]T, error) {
 }
 
 func (s *sqliteStore) LoadArtifacts(ctx context.Context, taskID string) ([]Artifact, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name,path,mime_type,size_bytes FROM artifacts WHERE task_id=? ORDER BY name`, taskID)
+	rows, err := s.db.QueryContext(ctx, `SELECT name,path,mime_type,size_bytes,provenance FROM artifacts WHERE task_id=? ORDER BY name`, taskID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +360,7 @@ func (s *sqliteStore) LoadArtifacts(ctx context.Context, taskID string) ([]Artif
 	var values []Artifact
 	for rows.Next() {
 		var value Artifact
-		if err := rows.Scan(&value.Name, &value.Path, &value.MIMEType, &value.SizeBytes); err != nil {
+		if err := rows.Scan(&value.Name, &value.Path, &value.MIMEType, &value.SizeBytes, &value.Provenance); err != nil {
 			return nil, err
 		}
 		values = append(values, value)

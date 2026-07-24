@@ -52,9 +52,27 @@ func (commandPolicy) CheckToolPermission(_ context.Context, req *tool.Permission
 			return tool.AllowPermission(), nil
 		}
 		return tool.DenyPermission("bash may only execute the audited diff_stats script"), nil
+	case "git":
+		if matchesArgs(payload.Args, []string{"-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "HEAD", "--"}) ||
+			matchesArgs(payload.Args, []string{"-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"}) {
+			return tool.AllowPermission(), nil
+		}
+		return tool.DenyPermission("only fixed read-only git input commands are approved"), nil
 	default:
 		return tool.AskPermission("command is outside the review allowlist"), nil
 	}
+}
+
+func matchesArgs(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func decide(ctx context.Context, command string, args []string) PermissionDecision {

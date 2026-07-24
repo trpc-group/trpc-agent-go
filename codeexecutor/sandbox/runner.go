@@ -48,7 +48,10 @@ func (r *Runtime) RunProgram(
 		defer cleanup()
 	}
 	outputLimit := r.outputMaxBytes
-	if spec.MaxOutputBytes > 0 && (outputLimit <= 0 || spec.MaxOutputBytes < outputLimit) {
+	if outputLimit <= 0 {
+		outputLimit = DefaultOutputMaxBytes
+	}
+	if spec.MaxOutputBytes > 0 && spec.MaxOutputBytes < outputLimit {
 		outputLimit = spec.MaxOutputBytes
 	}
 	stdout := newLimitedBuffer(outputLimit)

@@ -39,6 +39,90 @@ func redact(value string) string {
 	return value
 }
 
+// redactReport returns a copy with every persisted string field redacted.
+// Keeping this boundary centralized prevents new report fields from bypassing
+// redaction when reports are written to disk or a store.
+func redactReport(report Report) Report {
+	report.SandboxRuns = append([]SandboxRun(nil), report.SandboxRuns...)
+	report.PermissionDecisions = append([]PermissionDecision(nil), report.PermissionDecisions...)
+	report.FilterDecisions = append([]FilterDecision(nil), report.FilterDecisions...)
+	report.Artifacts = append([]Artifact(nil), report.Artifacts...)
+	// Task IDs are validated at the API boundary and are persistence keys, so
+	// redacting them would break report, artifact, and database correlation.
+	report.Task.Status = TaskStatus(redact(string(report.Task.Status)))
+	report.Task.InputMode = redact(report.Task.InputMode)
+	report.Input.Digest = redact(report.Input.Digest)
+	report.Findings = redactFindings(report.Findings)
+	report.Warnings = redactFindings(report.Warnings)
+	report.NeedsHumanReview = redactFindings(report.NeedsHumanReview)
+	for index := range report.SandboxRuns {
+		run := &report.SandboxRuns[index]
+		run.Command = redact(run.Command)
+		run.Args = redactStrings(run.Args)
+		run.Executor = Executor(redact(string(run.Executor)))
+		run.Status = RunStatus(redact(string(run.Status)))
+		run.Stdout = redact(run.Stdout)
+		run.Stderr = redact(run.Stderr)
+		run.ErrorType = ErrorType(redact(string(run.ErrorType)))
+	}
+	for index := range report.PermissionDecisions {
+		decision := &report.PermissionDecisions[index]
+		decision.Command = redact(decision.Command)
+		decision.Action = PermissionAction(redact(string(decision.Action)))
+		decision.Reason = redact(decision.Reason)
+	}
+	for index := range report.FilterDecisions {
+		decision := &report.FilterDecisions[index]
+		decision.Fingerprint = redact(decision.Fingerprint)
+		decision.Action = FilterAction(redact(string(decision.Action)))
+		decision.Reason = redact(decision.Reason)
+		decision.TargetBucket = redact(decision.TargetBucket)
+	}
+	// Artifact names and paths are generated from fixed relative names. Keeping
+	// them unchanged preserves the audit links between the report and files.
+	report.Metrics.SeverityDistribution = redactMetricKeys(report.Metrics.SeverityDistribution)
+	report.Metrics.ErrorDistribution = redactMetricKeys(report.Metrics.ErrorDistribution)
+	report.Conclusion = redact(report.Conclusion)
+	report.Mode = ExecutionMode(redact(string(report.Mode)))
+	return report
+}
+
+func redactFindings(values []Finding) []Finding {
+	copyValues := append([]Finding(nil), values...)
+	for index := range copyValues {
+		finding := &copyValues[index]
+		finding.Severity = Severity(redact(string(finding.Severity)))
+		finding.Category = redact(finding.Category)
+		finding.File = redact(finding.File)
+		finding.Title = redact(finding.Title)
+		finding.Evidence = redact(finding.Evidence)
+		finding.Recommendation = redact(finding.Recommendation)
+		finding.Source = redact(finding.Source)
+		finding.RuleID = redact(finding.RuleID)
+		finding.Fingerprint = redact(finding.Fingerprint)
+	}
+	return copyValues
+}
+
+func redactStrings(values []string) []string {
+	copyValues := append([]string(nil), values...)
+	for index := range copyValues {
+		copyValues[index] = redact(copyValues[index])
+	}
+	return copyValues
+}
+
+func redactMetricKeys(values map[string]int) map[string]int {
+	if values == nil {
+		return nil
+	}
+	copyValues := make(map[string]int, len(values))
+	for key, value := range values {
+		copyValues[redact(key)] += value
+	}
+	return copyValues
+}
+
 func truncate(value string, limit int) (string, bool) {
 	value = redact(value)
 	if limit <= 0 || len(value) <= limit {
@@ -48,7 +132,7 @@ func truncate(value string, limit int) (string, bool) {
 	for cut > 0 && !utf8.RuneStart(value[cut]) {
 		cut--
 	}
-	return value[:cut] + "\n...[truncated]", true
+	return value[:cut], true
 }
 
 func looksSecret(value string) bool {

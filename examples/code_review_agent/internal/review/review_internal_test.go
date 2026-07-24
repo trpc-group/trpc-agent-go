@@ -34,9 +34,12 @@ func TestGitWorkingDiffIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	writeFile(t, filepath.Join(repo, "tracked.go"), "package review\n\nconst tracked = 2\n")
 	writeFile(t, filepath.Join(repo, "untracked.go"), "package review\n\nconst untracked = 3\n")
 
-	raw, err := gitWorkingDiff(context.Background(), repo)
+	raw, decisions, err := gitWorkingDiff(context.Background(), repo)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(decisions) != 2 || decisions[0].Action != PermissionAllow || decisions[1].Action != PermissionAllow {
+		t.Fatalf("git input operations were not audited: %+v", decisions)
 	}
 	parsed, err := ParseUnifiedDiff(raw)
 	if err != nil {
@@ -62,6 +65,21 @@ func TestFileListBuildsBoundedSyntheticDiff(t *testing.T) {
 	}
 	if parsed.Summary.FilesChanged != 1 || parsed.Lines[0].Package != "nested" {
 		t.Fatalf("unexpected synthetic diff: %+v", parsed)
+	}
+}
+
+func TestEnrichPackagesFromRepoUsesPackageOutsideHunk(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "service.go"), "package service\n\nfunc Add(a, b int) int { return a + b }\n")
+	parsed, err := ParseUnifiedDiff("diff --git a/service.go b/service.go\n--- a/service.go\n+++ b/service.go\n@@ -3 +3 @@\n-func Add(a, b int) int { return a - b }\n+func Add(a, b int) int { return a + b }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := enrichPackagesFromRepo(&parsed, repo); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Lines[0].Package != "service" || parsed.Hunks[0].Package != "service" {
+		t.Fatalf("package outside hunk was not resolved: %+v", parsed)
 	}
 }
 
@@ -231,8 +249,8 @@ func TestSandboxSetupFailuresRemainAuditable(t *testing.T) {
 			if len(runs) != 1 || runs[0].Command != test.op || runs[0].ErrorType != "setup_error" {
 				t.Fatalf("unexpected setup failure: %+v", runs)
 			}
-			if len(decisions) == 0 || len(artifacts) != 1 {
-				t.Fatalf("audit evidence missing: decisions=%+v artifacts=%+v", decisions, artifacts)
+			if len(decisions) == 0 || len(artifacts) != 0 {
+				t.Fatalf("failed setup must not publish a sandbox artifact: decisions=%+v artifacts=%+v", decisions, artifacts)
 			}
 		})
 	}
@@ -242,8 +260,12 @@ func TestDiffStatsWriteFailureIsPropagated(t *testing.T) {
 	outputFile := filepath.Join(t.TempDir(), "output-file")
 	writeFile(t, outputFile, "not a directory")
 	runner := &sandbox{executor: ExecutorFake, outputDir: outputFile}
-	if _, _, _, err := runner.run(context.Background(), "task", "", ParsedInput{}); err == nil {
-		t.Fatal("diff statistics write failure was ignored")
+	_, _, artifacts, err := runner.run(context.Background(), "task", "", ParsedInput{})
+	if err != nil || len(artifacts) != 1 {
+		t.Fatalf("diff statistics were not deferred for atomic report staging: artifacts=%+v err=%v", artifacts, err)
+	}
+	if _, err := os.Stat(filepath.Join(outputFile, "task", "diff_stats.json")); !os.IsNotExist(err) {
+		t.Fatalf("sandbox wrote an artifact before report staging: %v", err)
 	}
 }
 
@@ -281,16 +303,16 @@ func TestReviewEnvironmentAndErrorClassification(t *testing.T) {
 
 func TestLoadInputModesAndConfigurationDefaults(t *testing.T) {
 	base, _ := exampleDir()
-	if _, _, err := loadInput(context.Background(), Config{}, base); err == nil {
+	if _, _, _, err := loadInput(context.Background(), Config{}, base); err == nil {
 		t.Fatal("missing input mode was accepted")
 	}
-	fixture, mode, err := loadInput(context.Background(), Config{Fixture: "clean"}, base)
+	fixture, mode, _, err := loadInput(context.Background(), Config{Fixture: "clean"}, base)
 	if err != nil || mode != "fixture:clean" || fixture.Summary.FilesChanged != 2 {
 		t.Fatalf("unexpected fixture input: %+v %q %v", fixture, mode, err)
 	}
 	diffFile := filepath.Join(t.TempDir(), "change.diff")
 	writeFile(t, diffFile, "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1,2 @@\n package a\n+const value = 1\n")
-	if _, mode, err = loadInput(context.Background(), Config{DiffFile: diffFile}, base); err != nil || mode != "diff_file" {
+	if _, mode, _, err = loadInput(context.Background(), Config{DiffFile: diffFile}, base); err != nil || mode != "diff_file" {
 		t.Fatalf("unexpected diff-file input: %q %v", mode, err)
 	}
 	cfg := Config{}

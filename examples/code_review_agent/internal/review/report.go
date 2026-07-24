@@ -49,25 +49,43 @@ func publish(report Report, outputDir string) (Report, ReportPaths, error) {
 
 func stageReport(report Report, outputDir string) (Report, ReportPaths, stagedReport, error) {
 	taskDir := filepath.Join(outputDir, report.Task.ID)
-	if err := os.MkdirAll(taskDir, 0o700); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return Report{}, ReportPaths{}, stagedReport{}, err
 	}
-	finalDir := filepath.Join(taskDir, "report")
-	tempDir, err := os.MkdirTemp(taskDir, ".report-stage-*")
+	if _, err := os.Stat(taskDir); err == nil {
+		return Report{}, ReportPaths{}, stagedReport{}, fmt.Errorf("report directory already exists: %s", taskDir)
+	} else if !os.IsNotExist(err) {
+		return Report{}, ReportPaths{}, stagedReport{}, err
+	}
+	tempDir, err := os.MkdirTemp(outputDir, ".task-stage-*")
 	if err != nil {
 		return Report{}, ReportPaths{}, stagedReport{}, err
 	}
-	staged := stagedReport{tempDir: tempDir, finalDir: finalDir}
+	staged := stagedReport{tempDir: tempDir, finalDir: taskDir}
 	fail := func(err error) (Report, ReportPaths, stagedReport, error) {
 		staged.cleanup()
 		return Report{}, ReportPaths{}, stagedReport{}, err
 	}
-	jsonPath := filepath.Join(finalDir, "review_report.json")
-	markdownPath := filepath.Join(finalDir, "review_report.md")
+	jsonPath := filepath.Join(taskDir, "report", "review_report.json")
+	markdownPath := filepath.Join(taskDir, "report", "review_report.md")
 	report.Artifacts = append(report.Artifacts,
-		Artifact{Name: "review_report.json", Path: filepath.ToSlash(jsonPath), MIMEType: "application/json"},
-		Artifact{Name: "review_report.md", Path: filepath.ToSlash(markdownPath), MIMEType: "text/markdown"},
+		Artifact{Name: "review_report.json", Path: "report/review_report.json", MIMEType: "application/json"},
+		Artifact{Name: "review_report.md", Path: "report/review_report.md", MIMEType: "text/markdown"},
 	)
+	for _, artifact := range report.Artifacts {
+		if artifact.Name != "diff_stats.json" || artifact.content == "" {
+			continue
+		}
+		if len(artifact.content) > maxArtifactBytes {
+			return fail(errors.New("diff statistics exceed artifact limit"))
+		}
+		if err := atomicWrite(filepath.Join(tempDir, "diff_stats.json"), []byte(artifact.content)); err != nil {
+			return fail(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(tempDir, "report"), 0o700); err != nil {
+		return fail(err)
+	}
 	for attempts := 0; attempts < 8; attempts++ {
 		jsonData, err := json.MarshalIndent(report, "", "  ")
 		if err != nil {
@@ -80,10 +98,10 @@ func stageReport(report Report, outputDir string) (Report, ReportPaths, stagedRe
 		}
 		jsonIndex, markdownIndex := len(report.Artifacts)-2, len(report.Artifacts)-1
 		if report.Artifacts[jsonIndex].SizeBytes == int64(len(jsonData)) && report.Artifacts[markdownIndex].SizeBytes == int64(len(markdown)) {
-			if err := atomicWrite(filepath.Join(tempDir, "review_report.json"), jsonData); err != nil {
+			if err := atomicWrite(filepath.Join(tempDir, "report", "review_report.json"), jsonData); err != nil {
 				return fail(err)
 			}
-			if err := atomicWrite(filepath.Join(tempDir, "review_report.md"), markdown); err != nil {
+			if err := atomicWrite(filepath.Join(tempDir, "report", "review_report.md"), markdown); err != nil {
 				return fail(err)
 			}
 			return report, ReportPaths{JSON: jsonPath, Markdown: markdownPath}, staged, nil
@@ -146,7 +164,7 @@ func renderMarkdown(report Report) []byte {
 		fmt.Fprintf(&b, "- %s %s: %s; exit=%d; timeout=%t; duration=%dms; error=%s\n", markdownText(run.Command), markdownText(stringsJoin(run.Args)), markdownText(string(run.Status)), run.ExitCode, run.TimedOut, run.DurationMS, markdownText(string(run.ErrorType)))
 	}
 	b.WriteString("\n## Monitoring\n\n")
-	fmt.Fprintf(&b, "- Total duration: %dms\n- Sandbox duration: %dms\n- Tool calls: %d\n- Permission denies: %d\n- Permission asks: %d\n", report.Metrics.TotalDurationMS, report.Metrics.SandboxDurationMS, report.Metrics.ToolCallCount, report.Metrics.PermissionDenyCount, report.Metrics.PermissionAskCount)
+	fmt.Fprintf(&b, "- Preparation duration: %dms\n- Sandbox duration: %dms\n- Tool calls: %d\n- Permission denies: %d\n- Permission asks: %d\n", report.Metrics.PreparationDurationMS, report.Metrics.SandboxDurationMS, report.Metrics.ToolCallCount, report.Metrics.PermissionDenyCount, report.Metrics.PermissionAskCount)
 	keys := make([]string, 0, len(report.Metrics.SeverityDistribution))
 	for key := range report.Metrics.SeverityDistribution {
 		keys = append(keys, key)

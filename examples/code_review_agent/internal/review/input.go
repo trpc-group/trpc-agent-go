@@ -15,6 +15,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
@@ -32,7 +34,7 @@ var (
 	goPackageStatement = regexp.MustCompile(`(?m)^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
 )
 
-func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, string, error) {
+func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, string, []PermissionDecision, error) {
 	cfg.DiffFile = strings.TrimSpace(cfg.DiffFile)
 	cfg.RepoPath = strings.TrimSpace(cfg.RepoPath)
 	cfg.FileList = strings.TrimSpace(cfg.FileList)
@@ -48,9 +50,10 @@ func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, st
 		}
 	}
 	if modes != 1 {
-		return ParsedInput{}, "", errors.New("choose exactly one of --diff-file, --repo-path, --file-list, or --fixture")
+		return ParsedInput{}, "", nil, errors.New("choose exactly one of --diff-file, --repo-path, --file-list, or --fixture")
 	}
 	var raw, mode string
+	var decisions []PermissionDecision
 	var err error
 	switch {
 	case cfg.DiffFile != "":
@@ -59,7 +62,7 @@ func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, st
 	case cfg.Fixture != "":
 		name := filepath.Base(cfg.Fixture)
 		if name != cfg.Fixture || strings.Contains(name, "..") {
-			return ParsedInput{}, "", errors.New("fixture name must not contain a path")
+			return ParsedInput{}, "", nil, errors.New("fixture name must not contain a path")
 		}
 		raw, err = readBounded(filepath.Join(baseDir, "fixtures", name+".diff"))
 		mode = "fixture:" + name
@@ -67,14 +70,22 @@ func loadInput(ctx context.Context, cfg Config, baseDir string) (ParsedInput, st
 		raw, err = diffFromFileList(cfg.RepoPath, cfg.FileList)
 		mode = "file_list"
 	default:
-		raw, err = gitWorkingDiff(ctx, cfg.RepoPath)
+		raw, decisions, err = gitWorkingDiff(ctx, cfg.RepoPath)
 		mode = "repo_path"
 	}
 	if err != nil {
-		return ParsedInput{}, "", err
+		return ParsedInput{}, mode, decisions, err
 	}
 	parsed, err := ParseUnifiedDiff(raw)
-	return parsed, mode, err
+	if err != nil {
+		return ParsedInput{}, mode, decisions, err
+	}
+	if cfg.RepoPath != "" {
+		if err := enrichPackagesFromRepo(&parsed, cfg.RepoPath); err != nil {
+			return ParsedInput{}, mode, decisions, err
+		}
+	}
+	return parsed, mode, decisions, nil
 }
 
 func readBounded(path string) (string, error) {
@@ -117,32 +128,85 @@ func commandOutputBounded(cmd *exec.Cmd, label string) (string, error) {
 	return output, nil
 }
 
-func gitWorkingDiff(ctx context.Context, repo string) (string, error) {
+func gitWorkingDiff(ctx context.Context, repo string) (string, []PermissionDecision, error) {
 	abs, err := filepath.Abs(repo)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
-	cmd := exec.CommandContext(ctx, "git", "-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "HEAD", "--")
+	diffArgs := []string{"-c", "core.quotepath=false", "diff", "--no-ext-diff", "--unified=3", "HEAD", "--"}
+	listArgs := []string{"-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"}
+	decisions := []PermissionDecision{decide(ctx, "git", diffArgs), decide(ctx, "git", listArgs)}
+	for _, decision := range decisions {
+		if decision.Action != PermissionAllow {
+			return "", decisions, fmt.Errorf("host git input operation is not allowed: %s", decision.Reason)
+		}
+	}
+	cmd := exec.CommandContext(ctx, "git", diffArgs...)
 	cmd.Dir = abs
 	out, err := commandOutputBounded(cmd, "git diff")
 	if err != nil {
-		return "", fmt.Errorf("read git diff: %w", err)
+		return "", decisions, fmt.Errorf("read git diff: %w", err)
 	}
-	untracked := exec.CommandContext(ctx, "git", "-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard")
+	untracked := exec.CommandContext(ctx, "git", listArgs...)
 	untracked.Dir = abs
 	listed, err := commandOutputBounded(untracked, "untracked file list")
 	if err != nil {
-		return "", fmt.Errorf("list untracked files: %w", err)
+		return "", decisions, fmt.Errorf("list untracked files: %w", err)
 	}
 	paths := nonEmptyLines(listed)
 	extra, err := synthesizeFiles(abs, paths)
 	if err != nil {
-		return "", err
+		return "", decisions, err
 	}
 	if len(out)+len(extra) > maxInputBytes {
-		return "", fmt.Errorf("git input exceeds %d bytes", maxInputBytes)
+		return "", decisions, fmt.Errorf("git input exceeds %d bytes", maxInputBytes)
 	}
-	return out + extra, nil
+	return out + extra, decisions, nil
+}
+
+// enrichPackagesFromRepo reads only changed Go files beneath repo to associate
+// each hunk with the package declaration that may be outside its diff context.
+func enrichPackagesFromRepo(parsed *ParsedInput, repo string) error {
+	root, err := filepath.Abs(repo)
+	if err != nil {
+		return err
+	}
+	packages := make(map[string]string)
+	for _, file := range parsed.Files {
+		if !strings.HasSuffix(file, ".go") {
+			continue
+		}
+		candidate := filepath.Join(root, filepath.FromSlash(file))
+		resolved, err := filepath.EvalSymlinks(candidate)
+		if os.IsNotExist(err) {
+			continue // Deleted files have no current package declaration.
+		}
+		if err != nil {
+			return fmt.Errorf("resolve changed Go file %q: %w", file, err)
+		}
+		if !withinRoot(root, resolved) {
+			return fmt.Errorf("changed Go file escapes repository: %q", file)
+		}
+		parsedFile, err := parser.ParseFile(token.NewFileSet(), resolved, nil, parser.PackageClauseOnly)
+		if err != nil {
+			return fmt.Errorf("parse package for %q: %w", file, err)
+		}
+		packages[file] = parsedFile.Name.Name
+	}
+	for i := range parsed.Hunks {
+		if name := packages[parsed.Hunks[i].File]; name != "" {
+			parsed.Hunks[i].Package = name
+			for j := range parsed.Hunks[i].Lines {
+				parsed.Hunks[i].Lines[j].Package = name
+			}
+		}
+	}
+	for i := range parsed.Lines {
+		if name := packages[parsed.Lines[i].File]; name != "" {
+			parsed.Lines[i].Package = name
+		}
+	}
+	return nil
 }
 
 func diffFromFileList(repo, listPath string) (string, error) {
@@ -253,7 +317,11 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 				parsed.Statuses[currentFile] = fileModified
 			}
 		case strings.HasPrefix(line, "Binary files "):
-			if marker := strings.LastIndex(line, " and "); marker >= 0 {
+			if headerFile == "" {
+				marker := strings.LastIndex(line, " and ")
+				if marker < 0 {
+					break
+				}
 				if target := cleanDiffPath(strings.TrimSuffix(line[marker+5:], " differ")); target != "" {
 					headerFile = target
 				}

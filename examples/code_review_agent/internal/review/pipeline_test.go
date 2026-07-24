@@ -10,6 +10,7 @@ package review
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -35,6 +36,9 @@ func TestDryRunCompletesReportsAndPersistence(t *testing.T) {
 	}
 	if report.Mode != "deterministic-rule-only+fake-model" {
 		t.Fatalf("unexpected mode: %s", report.Mode)
+	}
+	if !hasArtifactProvenance(report.Artifacts, "diff_stats.json", "synthetic_dry_run") {
+		t.Fatalf("dry-run statistics provenance is missing: %+v", report.Artifacts)
 	}
 	for _, path := range []string{paths.JSON, paths.Markdown, dbPath} {
 		if _, err := os.Stat(path); err != nil {
@@ -81,6 +85,9 @@ func TestDryRunCompletesReportsAndPersistence(t *testing.T) {
 	if err != nil || len(artifacts) != len(report.Artifacts) {
 		t.Fatalf("artifacts are not queryable: %+v, %v", artifacts, err)
 	}
+	if !hasArtifactProvenance(artifacts, "diff_stats.json", "synthetic_dry_run") {
+		t.Fatalf("normalized artifacts lost provenance: %+v", artifacts)
+	}
 	for _, path := range []string{paths.JSON, paths.Markdown, dbPath} {
 		data, err := os.ReadFile(path)
 		if err != nil {
@@ -98,6 +105,98 @@ func TestDryRunCompletesReportsAndPersistence(t *testing.T) {
 	}
 }
 
+func TestInputFailureIsPersistedForAudit(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	_, _, err := Run(context.Background(), Config{
+		TaskID: "input-failure", DiffFile: filepath.Join(dir, "missing.diff"), DryRun: true,
+		OutputDir: dir, DatabasePath: dbPath,
+	})
+	if err == nil || !strings.Contains(err.Error(), "input-failure") {
+		t.Fatalf("input failure did not return its task identity: %v", err)
+	}
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	report, err := store.Load(context.Background(), "input-failure")
+	if err != nil || report.Task.Status != TaskFailed || report.Task.InputMode != "diff_file" || len(report.SandboxRuns) != 1 {
+		t.Fatalf("input failure was not persisted: report=%+v err=%v", report, err)
+	}
+}
+
+func TestSandboxConfigurationFailureIsPersistedForAudit(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		executor Executor
+	}{
+		{name: "unknown executor", executor: "unknown"},
+		{name: "local without opt in", executor: ExecutorLocal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			dbPath := filepath.Join(dir, "reviews.sqlite")
+			taskID := strings.ReplaceAll(test.name, " ", "-")
+			_, _, err := Run(context.Background(), Config{TaskID: taskID, Fixture: "clean", Executor: test.executor, OutputDir: dir, DatabasePath: dbPath})
+			if err == nil || !strings.Contains(err.Error(), taskID) {
+				t.Fatalf("configuration failure did not return task identity: %v", err)
+			}
+			store, err := openStore(dbPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			report, err := store.Load(context.Background(), taskID)
+			if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) != 1 || report.SandboxRuns[0].Command != "initialize_sandbox" {
+				t.Fatalf("sandbox configuration failure was not persisted: report=%+v err=%v", report, err)
+			}
+		})
+	}
+}
+
+func TestReportRedactionCoversFileNamesBeforePersistence(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	const secret = "sk-abcdefghijklmnopqrstuvwxyz"
+	rawReport := Report{
+		Task: Task{ID: "redacted-file", Status: TaskCompleted},
+		Findings: []Finding{{
+			File: "internal/api_key=" + secret + ".go", Evidence: "reviewed " + secret,
+		}},
+		Metrics: Metrics{SeverityDistribution: map[string]int{}},
+	}
+	report := redactReport(rawReport)
+	if strings.Contains(report.Findings[0].File, secret) {
+		t.Fatalf("plaintext secret remained in file name: %q", report.Findings[0].File)
+	}
+	report, paths, err := publish(report, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Save(context.Background(), rawReport); err != nil {
+		t.Fatal(err)
+	}
+	jsonData, err := os.ReadFile(paths.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dbData, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{string(jsonData), string(dbData)} {
+		if strings.Contains(value, secret) {
+			t.Fatal("plaintext filename secret crossed a persistence boundary")
+		}
+	}
+}
+
 func TestSandboxFailureDoesNotAbortReview(t *testing.T) {
 	dir := t.TempDir()
 	report, _, err := Run(context.Background(), Config{Fixture: "sandbox_failure", OutputDir: dir, DatabasePath: filepath.Join(dir, "reviews.sqlite"), Executor: "fake-fail", Timeout: time.Second})
@@ -106,6 +205,11 @@ func TestSandboxFailureDoesNotAbortReview(t *testing.T) {
 	}
 	if report.Task.Status != "completed" || !hasCategory(report.NeedsHumanReview, "sandbox") {
 		t.Fatalf("failure was not retained: %+v", report)
+	}
+	for _, artifact := range report.Artifacts {
+		if artifact.Name == "diff_stats.json" {
+			t.Fatal("failed fake sandbox published an unaudited statistics artifact")
+		}
 	}
 }
 
@@ -178,7 +282,7 @@ func TestPublishCommitsReportPairOnlyOnce(t *testing.T) {
 	}
 }
 
-func TestRunRollsBackStoreWhenReportCommitFails(t *testing.T) {
+func TestRunPersistsFailureWhenReportStagingFails(t *testing.T) {
 	dir := t.TempDir()
 	taskID := "commit-collision"
 	if err := os.MkdirAll(filepath.Join(dir, taskID, "report"), 0o700); err != nil {
@@ -186,15 +290,76 @@ func TestRunRollsBackStoreWhenReportCommitFails(t *testing.T) {
 	}
 	dbPath := filepath.Join(dir, "reviews.sqlite")
 	if _, _, err := Run(context.Background(), Config{TaskID: taskID, Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: dbPath}); err == nil {
-		t.Fatal("report commit collision was ignored")
+		t.Fatal("report staging collision was ignored")
 	}
 	store, err := openStore(dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.Load(context.Background(), taskID); err == nil {
-		t.Fatal("failed publication left a completed report in storage")
+	report, err := store.Load(context.Background(), taskID)
+	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "stage_report" {
+		t.Fatalf("failed publication was not retained for audit: report=%+v err=%v", report, err)
+	}
+}
+
+func TestRunPersistsFailureWhenFinalizationFails(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	factory := func(_ context.Context, cfg Config) (Store, error) {
+		store, err := openStore(cfg.DatabasePath)
+		if err != nil {
+			return nil, err
+		}
+		return &failOnceFinalizeStore{Store: store, err: errors.New("injected finalization failure")}, nil
+	}
+	_, _, err := Run(context.Background(), Config{
+		TaskID: "finalization-failure", Fixture: "clean", DryRun: true,
+		OutputDir: dir, DatabasePath: dbPath, StoreFactory: factory,
+	})
+	if err == nil || !strings.Contains(err.Error(), "finalize_report") {
+		t.Fatalf("finalization failure was not returned: %v", err)
+	}
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	report, err := store.Load(context.Background(), "finalization-failure")
+	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "finalize_report" {
+		t.Fatalf("finalization failure was not retained for audit: report=%+v err=%v", report, err)
+	}
+}
+
+func TestArtifactProvenanceMigrationFromLegacySchema(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.sqlite")
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE artifacts (task_id TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(task_id, name)); INSERT INTO artifacts(task_id,name,path,mime_type,size_bytes) VALUES('legacy','old.json','old.json','application/json',3);`)
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy, err := store.LoadArtifacts(context.Background(), "legacy")
+	if err != nil || len(legacy) != 1 || legacy[0].Provenance != "" {
+		t.Fatalf("legacy artifact migration failed: artifacts=%+v err=%v", legacy, err)
+	}
+	report := Report{Task: Task{ID: "new", Status: TaskCompleted}, Artifacts: []Artifact{{Name: "new.json", Path: "new.json", MIMEType: "application/json", SizeBytes: 3, Provenance: "validated_sandbox_script"}}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	artifacts, err := store.LoadArtifacts(context.Background(), "new")
+	if err != nil || !hasArtifactProvenance(artifacts, "new.json", "validated_sandbox_script") {
+		t.Fatalf("migrated schema did not retain new provenance: artifacts=%+v err=%v", artifacts, err)
 	}
 }
 
@@ -233,7 +398,7 @@ func TestDuplicateTaskDoesNotOverwriteArtifacts(t *testing.T) {
 
 func TestArtifactPathsUseForwardSlashes(t *testing.T) {
 	outputDir := t.TempDir()
-	stats, err := (&sandbox{outputDir: outputDir}).writeDiffStats("portable-paths", DiffSummary{})
+	stats, err := diffStatsArtifact(deterministicDiffStats(DiffSummary{}), "synthetic_dry_run")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -260,8 +425,8 @@ func TestExecutorInitializationFailureIsReported(t *testing.T) {
 	if len(runs) != 1 || runs[0].Status != "failed" || runs[0].ErrorType != "setup_error" {
 		t.Fatalf("unexpected runs: %+v", runs)
 	}
-	if len(decisions) != 1 || len(artifacts) != 1 {
-		t.Fatalf("audit evidence missing: decisions=%+v artifacts=%+v", decisions, artifacts)
+	if len(decisions) != 1 || len(artifacts) != 0 {
+		t.Fatalf("failed setup must not publish a synthetic sandbox artifact: decisions=%+v artifacts=%+v", decisions, artifacts)
 	}
 }
 
@@ -337,8 +502,8 @@ func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Metrics.TotalDurationMS < delay.Milliseconds() {
-		t.Fatalf("total duration %dms excluded persistence delay", report.Metrics.TotalDurationMS)
+	if report.Metrics.PreparationDurationMS < delay.Milliseconds() {
+		t.Fatalf("preparation duration %dms excluded persistence delay", report.Metrics.PreparationDurationMS)
 	}
 }
 
@@ -352,8 +517,22 @@ func (s delayedStore) Save(ctx context.Context, report Report) error {
 	return s.Store.Save(ctx, report)
 }
 
+type failOnceFinalizeStore struct {
+	Store
+	err    error
+	failed bool
+}
+
+func (s *failOnceFinalizeStore) Finalize(ctx context.Context, report Report) error {
+	if !s.failed {
+		s.failed = true
+		return s.err
+	}
+	return s.Store.Finalize(ctx, report)
+}
+
 func TestTaskIDValidation(t *testing.T) {
-	for _, value := range []string{"../escape", "has space", strings.Repeat("a", 81)} {
+	for _, value := range []string{"../escape", "has space", strings.Repeat("a", 81), "sk-abcdefghijklmnopqrstuvwxyz"} {
 		cfg := Config{TaskID: value}
 		if err := normalizeConfig(&cfg); err == nil {
 			t.Fatalf("task id %q was accepted", value)
@@ -364,6 +543,15 @@ func TestTaskIDValidation(t *testing.T) {
 func hasCategory(values []Finding, category string) bool {
 	for _, value := range values {
 		if value.Category == category {
+			return true
+		}
+	}
+	return false
+}
+
+func hasArtifactProvenance(artifacts []Artifact, name, provenance string) bool {
+	for _, artifact := range artifacts {
+		if artifact.Name == name && artifact.Provenance == provenance {
 			return true
 		}
 	}

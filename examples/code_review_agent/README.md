@@ -44,14 +44,19 @@ go run . --fixture resource --dry-run
 Before execution, the repository is copied into a bounded snapshot containing only Go sources and module/workspace files. Hidden directories, `.git`, vendor trees, node modules, symlinks, environment files, private keys, and unrelated artifacts never enter the workspace. Commands receive a clean environment with a small allowlist, a deadline, and bounded stdout/stderr. Artifacts are allowlisted by the application and limited to 1 MiB.
 
 The Skill rule table controls which deterministic rules are enabled. Its
-audited statistics script runs in the sandbox, and the agent collects and
-cross-checks the generated JSON against the parsed diff before accepting the
-run. The Permission policy allows only:
+audited statistics script runs in the sandbox, and the agent validates then
+publishes that exact generated JSON after cross-checking it against the parsed
+diff. The report records artifact provenance: `validated_sandbox_script` for
+that path, `synthetic_dry_run` for deterministic dry-runs, and
+`synthetic_windows_local_fallback` for the explicitly opt-in Windows local
+fallback. Repository input uses two fixed, read-only Git operations that are also
+recorded as Permission decisions. The Permission policy allows only:
 
 - `go test ./...`
 - `go vet ./...`
 - `staticcheck ./...`
 - the audited `skills/code-review/scripts/diff_stats.sh` invocation
+- fixed `git diff --no-ext-diff ...` and `git ls-files --others ...` input reads
 
 Unknown commands become `ask`; malformed or injected approved commands become `deny`. Neither disposition executes.
 
@@ -59,7 +64,7 @@ Unknown commands become `ask`; malformed or injected approved commands become `d
 
 Every finding contains `severity`, `category`, `file`, `line`, `title`, `evidence`, `recommendation`, `confidence`, `source`, `rule_id`, and a stable fingerprint. The engine covers security, command/SQL injection, goroutine/context lifetime, resource closure, transaction rollback, ignored/swallowed errors, and missing tests. Observations are deduplicated by file, line, and category. Lower-confidence test coverage observations are kept under `needs_human_review`.
 
-SQLite contains separate tables for tasks, input summaries, sandbox runs, permission decisions, findings, artifacts, monitoring metrics, and final reports. Writes use one transaction and the pipeline verifies that the report can be queried by task ID before returning success. Raw diffs are not stored. Credential-like values are redacted before findings, logs, reports, or database payloads are created.
+SQLite contains separate tables for tasks, input summaries, sandbox runs, permission decisions, findings, artifacts, monitoring metrics, and final reports. Writes use one transaction and the pipeline verifies that the report can be queried by task ID before returning success. Input failures are also persisted with `failed` status and a `load_input` audit run. Raw diffs are not stored. Credential-like values are redacted before findings, logs, reports, or database payloads are created.
 
 ## Fixture matrix
 
@@ -94,6 +99,10 @@ The example adds bounded stdout/stderr retention to workspace program runs and
 context-aware initialization for container and E2B executors. These shared
 executor changes let the review pipeline enforce its output and startup
 deadlines consistently. `MaxOutputBytes` is also honored by local interactive
-sessions; non-positive values retain the runtime default behavior.
+sessions; non-positive values preserve the historical unbounded behavior.
+The separate `codeexecutor/sandbox` runtime is policy-enforcing: it retains at
+most `sandbox.DefaultOutputMaxBytes` (1 MiB) per stream unless
+`sandbox.WithOutputMaxBytes` supplies another positive limit; a positive
+`RunProgramSpec.MaxOutputBytes` can only make that limit stricter.
 
 See [DESIGN.md](DESIGN.md) for the 300–500 Chinese-character design summary and `sample_output/` for checked-in report examples.

@@ -526,6 +526,9 @@ func (c *CodeExecutor) initContainer(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
+	// Record the ID before any subsequent operation so the constructor's
+	// cleanup path can remove a container created during a failed startup.
+	c.container = &container.Summary{ID: resp.ID}
 
 	// Start container
 	if err := c.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -606,7 +609,8 @@ func (c *CodeExecutor) cleanup() {
 		return
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Stop container
 	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {

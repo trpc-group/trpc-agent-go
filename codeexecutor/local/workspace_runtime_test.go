@@ -72,6 +72,7 @@ func TestRuntime_RunProgramOutputLimit(t *testing.T) {
 	rt := local.NewRuntime("")
 	ws, err := rt.CreateWorkspace(context.Background(), "rt-output-limit", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
+	defer rt.Cleanup(context.Background(), ws)
 	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd: os.Args[0], Args: []string{"-test.run=TestRuntime_RunProgramOutputLimitHelper"},
 		Env: map[string]string{"TRPC_OUTPUT_LIMIT_HELPER": "1"}, MaxOutputBytes: 4,

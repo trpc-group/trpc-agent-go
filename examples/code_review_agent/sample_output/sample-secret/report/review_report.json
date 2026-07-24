@@ -103,7 +103,7 @@
     }
   ],
   "metrics": {
-    "total_duration_ms": 6,
+    "preparation_duration_ms": 6,
     "sandbox_duration_ms": 0,
     "tool_call_count": 1,
     "permission_deny_count": 0,

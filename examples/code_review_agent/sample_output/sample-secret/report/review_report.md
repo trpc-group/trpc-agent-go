@@ -44,7 +44,7 @@ None.
 
 ## Monitoring
 
-- Total duration: 6ms
+- Preparation duration: 6ms
 - Sandbox duration: 0ms
 - Tool calls: 1
 - Permission denies: 0

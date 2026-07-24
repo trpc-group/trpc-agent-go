@@ -38,27 +38,27 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if err != nil {
 		return Report{}, ReportPaths{}, err
 	}
-	input, mode, err := loadInput(ctx, cfg, baseDir)
-	if err != nil {
-		return Report{}, ReportPaths{}, err
-	}
 	taskID := cfg.TaskID
 	if taskID == "" {
 		taskID = newTaskID()
 	}
-	task := Task{ID: taskID, Status: TaskRunning, InputMode: mode, StartedAt: started}
-	findings, warnings, needsHuman, filterAudit := analyzeWithRuleIDs(input, reviewSkill.RuleIDs)
 	store, err := cfg.StoreFactory(ctx, cfg)
 	if err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("open review store: %w", err)
 	}
 	defer store.Close()
+	input, mode, inputDecisions, err := loadInput(ctx, cfg, baseDir)
+	if err != nil {
+		return persistFailure(ctx, store, cfg, Task{ID: taskID, Status: TaskRunning, InputMode: firstNonEmpty(mode, "input_error"), StartedAt: started}, DiffSummary{}, inputDecisions, "load_input", err)
+	}
+	task := Task{ID: taskID, Status: TaskRunning, InputMode: mode, StartedAt: started}
+	findings, warnings, needsHuman, filterAudit := analyzeWithRuleIDs(input, reviewSkill.RuleIDs)
 	sandboxRunner, err := newSandbox(ctx, cfg, baseDir)
 	if err != nil {
-		return Report{}, ReportPaths{}, fmt.Errorf("initialize sandbox: %w", err)
+		return persistFailure(ctx, store, cfg, task, input.Summary, inputDecisions, "initialize_sandbox", err)
 	}
 	defer sandboxRunner.Close()
-	runs, decisions, sandboxArtifacts, err := sandboxRunner.run(ctx, task.ID, cfg.RepoPath, input)
+	runs, sandboxDecisions, sandboxArtifacts, err := sandboxRunner.run(ctx, task.ID, cfg.RepoPath, input)
 	if err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("run sandbox checks: %w", err)
 	}
@@ -74,51 +74,76 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	needsHuman = dedupe(needsHuman)
 	report := Report{
 		Task: task, Input: input.Summary, Findings: findings, Warnings: warnings,
-		NeedsHumanReview: needsHuman, SandboxRuns: runs, PermissionDecisions: decisions,
+		NeedsHumanReview: needsHuman, SandboxRuns: runs, PermissionDecisions: append(inputDecisions, sandboxDecisions...),
 		Artifacts: sandboxArtifacts, Mode: executionMode(cfg), FilterDecisions: filterAudit,
 	}
 	report.Conclusion = conclusion(report)
+	report = redactReport(report)
 	if err := store.Save(ctx, report); err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("store review: %w", err)
 	}
-	rollbackStore := true
-	defer func() {
-		if rollbackStore {
-			_ = store.Delete(context.WithoutCancel(ctx), task.ID)
+	failStoredReview := func(operation string, cause error) (Report, ReportPaths, error) {
+		if failureErr := markStoredFailure(ctx, store, cfg, report, operation, cause); failureErr != nil {
+			return Report{}, ReportPaths{}, fmt.Errorf("%s: %w; persist failure record: %v", operation, cause, failureErr)
 		}
-	}()
-	stored, err := store.Load(ctx, task.ID)
-	if err != nil {
-		return Report{}, ReportPaths{}, fmt.Errorf("load stored review: %w", err)
+		return Report{}, ReportPaths{}, fmt.Errorf("%s for task %s: %w", operation, report.Task.ID, cause)
 	}
-	if stored.Task.ID != task.ID {
-		return Report{}, ReportPaths{}, errors.New("stored review task ID mismatch")
+	stored, err := store.Load(ctx, report.Task.ID)
+	if err != nil {
+		return failStoredReview("verify_initial_store", err)
+	}
+	if stored.Task.ID != report.Task.ID {
+		return failStoredReview("verify_initial_store", errors.New("stored review task ID mismatch"))
 	}
 	report.Task.Status, report.Task.EndedAt = TaskCompleted, time.Now()
 	report.Metrics = collectMetrics(started, report)
-	report, paths, staged, err := stageReport(report, cfg.OutputDir)
+	stagedReport, paths, staged, err := stageReport(report, cfg.OutputDir)
 	if err != nil {
-		return Report{}, ReportPaths{}, err
+		return failStoredReview("stage_report", err)
 	}
+	report = stagedReport
 	defer staged.cleanup()
 	if err := store.Finalize(ctx, report); err != nil {
-		return Report{}, ReportPaths{}, fmt.Errorf("finalize stored review: %w", err)
+		return failStoredReview("finalize_report", err)
 	}
-	stored, err = store.Load(ctx, task.ID)
+	stored, err = store.Load(ctx, report.Task.ID)
 	if err != nil {
-		return Report{}, ReportPaths{}, fmt.Errorf("load finalized review: %w", err)
+		return failStoredReview("verify_final_store", err)
 	}
-	if stored.Task.Status != TaskCompleted || stored.Metrics.TotalDurationMS != report.Metrics.TotalDurationMS {
-		return Report{}, ReportPaths{}, errors.New("finalized review verification mismatch")
+	if stored.Task.Status != TaskCompleted || stored.Metrics.PreparationDurationMS != report.Metrics.PreparationDurationMS {
+		return failStoredReview("verify_final_store", errors.New("finalized review verification mismatch"))
 	}
 	if err := staged.commit(); err != nil {
-		if rollbackErr := store.Delete(context.WithoutCancel(ctx), task.ID); rollbackErr != nil {
-			return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w; rollback stored review: %v", err, rollbackErr)
-		}
-		return Report{}, ReportPaths{}, fmt.Errorf("publish stored report: %w", err)
+		return failStoredReview("publish_report", err)
 	}
-	rollbackStore = false
 	return report, paths, nil
+}
+
+func markStoredFailure(ctx context.Context, store Store, cfg Config, report Report, operation string, cause error) error {
+	report.Task.Status, report.Task.EndedAt = TaskFailed, time.Now()
+	report.Artifacts = nil
+	report.SandboxRuns = append(report.SandboxRuns, setupFailure(cfg.Executor, operation, cause, cfg.OutputLimit))
+	report.Conclusion = "Review failed after persistence; inspect the audit record before retrying."
+	report.Metrics = collectMetrics(report.Task.StartedAt, report)
+	return store.Finalize(ctx, redactReport(report))
+}
+
+func persistFailure(ctx context.Context, store Store, cfg Config, task Task, input DiffSummary, decisions []PermissionDecision, operation string, cause error) (Report, ReportPaths, error) {
+	task.Status, task.EndedAt = TaskFailed, time.Now()
+	report := Report{
+		Task: task, Input: input, PermissionDecisions: decisions, Mode: executionMode(cfg),
+		SandboxRuns: []SandboxRun{setupFailure(cfg.Executor, operation, cause, cfg.OutputLimit)},
+		Conclusion:  "Review setup failed; inspect the persisted failure record before retrying.",
+	}
+	report.Metrics = collectMetrics(task.StartedAt, report)
+	report = redactReport(report)
+	if err := store.Save(ctx, report); err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("persist %s failure: %w", operation, err)
+	}
+	if err := store.Finalize(ctx, report); err != nil {
+		return Report{}, ReportPaths{}, fmt.Errorf("finalize %s failure: %w", operation, err)
+	}
+	return Report{}, ReportPaths{}, fmt.Errorf("%s for task %s: %w", operation, task.ID, cause)
 }
 
 func normalizeConfig(cfg *Config) error {
@@ -130,6 +155,9 @@ func normalizeConfig(cfg *Config) error {
 		}
 		if len(cfg.TaskID) > 80 {
 			return errors.New("task id must not exceed 80 characters")
+		}
+		if looksSecret(cfg.TaskID) {
+			return errors.New("task id must not contain credential-like material")
 		}
 	}
 	if cfg.Timeout <= 0 {
@@ -227,7 +255,7 @@ func sandboxReviewItems(runs []SandboxRun) []Finding {
 }
 
 func collectMetrics(started time.Time, report Report) Metrics {
-	metrics := Metrics{TotalDurationMS: time.Since(started).Milliseconds(), ToolCallCount: len(report.SandboxRuns), FindingCount: len(report.Findings), WarningCount: len(report.Warnings), NeedsHumanCount: len(report.NeedsHumanReview), SeverityDistribution: map[string]int{}, ErrorDistribution: map[string]int{}}
+	metrics := Metrics{PreparationDurationMS: time.Since(started).Milliseconds(), ToolCallCount: len(report.SandboxRuns), FindingCount: len(report.Findings), WarningCount: len(report.Warnings), NeedsHumanCount: len(report.NeedsHumanReview), SeverityDistribution: map[string]int{}, ErrorDistribution: map[string]int{}}
 	for _, run := range report.SandboxRuns {
 		metrics.SandboxDurationMS += run.DurationMS
 		if run.ErrorType != "" && run.ErrorType != ErrorDryRun {
