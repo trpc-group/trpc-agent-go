@@ -117,15 +117,24 @@ func TestLimiterAcquireCancellationReleasesGroup(t *testing.T) {
 	releaseGlobal, err := limiter.Acquire(context.Background(), "other")
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Millisecond,
+	)
+	defer cancel()
 	_, err = limiter.Acquire(ctx, "search")
 	require.Error(t, err)
-	require.True(t, errors.Is(err, context.Canceled))
+	require.True(t, errors.Is(err, context.DeadlineExceeded))
 	releaseGlobal()
 
 	releaseSearch, err := limiter.Acquire(context.Background(), "search")
 	require.NoError(t, err)
+	canceledCtx, cancelImmediately := context.WithCancel(
+		context.Background(),
+	)
+	cancelImmediately()
+	_, err = limiter.Acquire(canceledCtx, "search")
+	require.ErrorIs(t, err, context.Canceled)
 	releaseSearch()
 }
 
@@ -148,12 +157,14 @@ func TestValidateConcurrencyConfigRejectsDuplicateToolName(t *testing.T) {
 }
 
 func TestValidateConcurrencyConfigIgnoresDisabledGroups(t *testing.T) {
-	require.NoError(t, ValidateConcurrencyConfig(tool.ConcurrencyConfig{
+	config := tool.ConcurrencyConfig{
 		Groups: []tool.ConcurrencyGroup{
 			{ToolNames: []string{"search"}, Limit: 0},
-			{ToolNames: []string{"search", "search"}, Limit: 1},
+			{ToolNames: []string{"", "search", "search"}, Limit: 1},
 		},
-	}))
+	}
+	require.NoError(t, ValidateConcurrencyConfig(config))
+	require.NotNil(t, NewLimiter(config))
 }
 
 func TestNewLimiterIgnoresNonPositiveLimits(t *testing.T) {
@@ -164,4 +175,16 @@ func TestNewLimiterIgnoresNonPositiveLimits(t *testing.T) {
 			Limit:     0,
 		}},
 	}))
+}
+
+func TestLimiterNilReceiverAndContext(t *testing.T) {
+	var limiter *Limiter
+	release, err := limiter.Acquire(nil, "search")
+	require.NoError(t, err)
+	release()
+
+	limiter = NewLimiter(tool.ConcurrencyConfig{MaxConcurrency: 1})
+	release, err = limiter.Acquire(nil, "search")
+	require.NoError(t, err)
+	release()
 }
