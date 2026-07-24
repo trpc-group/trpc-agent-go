@@ -1,0 +1,607 @@
+﻿=== RUN   TestCorpus
+    corpus_test.go:396: 
+        === Safety Corpus Report ===
+        {
+          "total_cases": 62,
+          "high_risk_cases": 49,
+          "safe_cases": 10,
+          "functional_cases": 3,
+          "detected": 49,
+          "false_positives": 0,
+          "detection_rate": 1,
+          "false_positive_rate": 0,
+          "category_stats": {
+            "ask_human_review": {
+              "Total": 3,
+              "Detected": 3,
+              "Rate": 1
+            },
+            "dangerous_delete": {
+              "Total": 8,
+              "Detected": 8,
+              "Rate": 1
+            },
+            "dependency_install": {
+              "Total": 5,
+              "Detected": 5,
+              "Rate": 1
+            },
+            "hostexec_long_session": {
+              "Total": 6,
+              "Detected": 6,
+              "Rate": 1
+            },
+            "huge_output": {
+              "Total": 3,
+              "Detected": 3,
+              "Rate": 1
+            },
+            "long_running": {
+              "Total": 3,
+              "Detected": 3,
+              "Rate": 1
+            },
+            "non_whitelist_network": {
+              "Total": 5,
+              "Detected": 5,
+              "Rate": 1
+            },
+            "output_redaction": {
+              "Total": 3,
+              "Detected": 3,
+              "Rate": 1
+            },
+            "pipe": {
+              "Total": 3,
+              "Detected": 3,
+              "Rate": 1
+            },
+            "read_secrets": {
+              "Total": 8,
+              "Detected": 8,
+              "Rate": 1
+            },
+            "safe_go_test": {
+              "Total": 4,
+              "Detected": 4,
+              "Rate": 1
+            },
+            "shell_wrapper": {
+              "Total": 7,
+              "Detected": 7,
+              "Rate": 1
+            },
+            "whitelist_network": {
+              "Total": 4,
+              "Detected": 4,
+              "Rate": 1
+            }
+          },
+          "results": [
+            {
+              "id": "safe-gotest-01",
+              "category": "safe_go_test",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "safe-gotest-02",
+              "category": "safe_go_test",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "safe-gotest-03",
+              "category": "safe_go_test",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "safe-gotest-04",
+              "category": "safe_go_test",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "dd-01",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-02",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-03",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-04",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-05",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-06",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-07",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "dd-08",
+              "category": "dangerous_delete",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-01",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-02",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-03",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-04",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-05",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-06",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-07",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "rs-08",
+              "category": "read_secrets",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "nwn-01",
+              "category": "non_whitelist_network",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "nwn-02",
+              "category": "non_whitelist_network",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "nwn-03",
+              "category": "non_whitelist_network",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "nwn-04",
+              "category": "non_whitelist_network",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "nwn-05",
+              "category": "non_whitelist_network",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "wn-01",
+              "category": "whitelist_network",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "wn-02",
+              "category": "whitelist_network",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "wn-03",
+              "category": "whitelist_network",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "wn-04",
+              "category": "whitelist_network",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "sw-01",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-02",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-03",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-04",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-05",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-06",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "sw-07",
+              "category": "shell_wrapper",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "pipe-01",
+              "category": "pipe",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "pipe-02",
+              "category": "pipe",
+              "risk": "safe",
+              "expected": "allow",
+              "actual": "allow",
+              "pass": true
+            },
+            {
+              "id": "pipe-03",
+              "category": "pipe",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "di-01",
+              "category": "dependency_install",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "di-02",
+              "category": "dependency_install",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "di-03",
+              "category": "dependency_install",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "di-04",
+              "category": "dependency_install",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "di-05",
+              "category": "dependency_install",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "lr-01",
+              "category": "long_running",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "lr-02",
+              "category": "long_running",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "lr-03",
+              "category": "long_running",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "ho-01",
+              "category": "huge_output",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "ho-02",
+              "category": "huge_output",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "ho-03",
+              "category": "huge_output",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-01",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-02",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-03",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-04",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-05",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "he-06",
+              "category": "hostexec_long_session",
+              "risk": "high",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "ahr-01",
+              "category": "ask_human_review",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "ahr-02",
+              "category": "ask_human_review",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "ahr-03",
+              "category": "ask_human_review",
+              "risk": "high",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "or-01",
+              "category": "output_redaction",
+              "risk": "functional",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            },
+            {
+              "id": "or-02",
+              "category": "output_redaction",
+              "risk": "functional",
+              "expected": "ask",
+              "actual": "ask",
+              "pass": true
+            },
+            {
+              "id": "or-03",
+              "category": "output_redaction",
+              "risk": "functional",
+              "expected": "deny",
+              "actual": "deny",
+              "pass": true
+            }
+          ]
+        }
+    corpus_test.go:432: 
+        === Per-Category Statistics ===
+          output_redaction              3/3 (100%)  OK
+          safe_go_test                  4/4 (100%)  OK
+          dangerous_delete              8/8 (100%)  OK
+          non_whitelist_network         5/5 (100%)  OK
+          whitelist_network             4/4 (100%)  OK
+          pipe                          3/3 (100%)  OK
+          long_running                  3/3 (100%)  OK
+          huge_output                   3/3 (100%)  OK
+          dependency_install            5/5 (100%)  OK
+          read_secrets                  8/8 (100%)  OK
+          shell_wrapper                 7/7 (100%)  OK
+          hostexec_long_session         6/6 (100%)  OK
+          ask_human_review              3/3 (100%)  OK
+        
+          High-risk detection rate: 100.0% (target >= 90%)
+          Safe false-positive rate: 0.0% (target <= 10%)
+        
+        === Slowest 5 Cases ===
+          dd-06                 765.1µs  dangerous_delete
+          sw-03                 540.5µs  shell_wrapper
+          ahr-01                524.6µs  ask_human_review
+          safe-gotest-04        0s  safe_go_test
+          dd-01                 0s  dangerous_delete
+        
+--- PASS: TestCorpus (0.01s)
+PASS
+ok  	trpc.group/trpc-go/trpc-agent-go/tool/safety	2.315s

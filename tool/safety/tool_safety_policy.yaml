@@ -1,0 +1,109 @@
+# tool_safety_policy.yaml
+# Sample Safety Guard policy.
+#
+# This file demonstrates all available policy fields with sensible
+# default values. Deployments should copy it, adjust the lists to
+# match their threat model, and load it via [safety.LoadPolicy].
+#
+# All fields are optional; a missing field is treated as the zero
+# value for its type (empty list, 0, etc.).
+
+# Commands that are explicitly allowed. When this list is non-empty,
+# any command whose argv[0] (or basename) is not listed here is
+# denied. Leave empty to allow all commands that are not explicitly
+# denied.
+allowed_commands:
+  - echo
+  - ls
+  - cat
+  - grep
+  - find
+  - wc
+  - head
+  - tail
+  - sort
+  - uniq
+  - cut
+  - tr
+  - sed
+  - awk
+  - diff
+  - git
+  - python
+  - python3
+  - node
+  - go
+
+# Commands that are always denied, regardless of the allow list.
+# These take the highest precedence.
+denied_commands:
+  - curl
+  - wget
+  - nc
+  - ncat
+  - netcat
+  - ssh
+  - scp
+  - rsync
+  - ftp
+  - telnet
+  - rm
+  - rmdir
+  - shred
+  - mkfs
+  - dd
+  - chmod
+  - chown
+  - chgrp
+  - mount
+  - umount
+
+# File system path patterns that tools must not access. Patterns use
+# Go regexp syntax and are matched against the absolute path.
+forbidden_paths:
+  - '/etc/shadow'
+  - '/etc/passwd'
+  - '/etc/sudoers'
+  - '/root/\.ssh/.*'
+  - '/home/[^/]+/\.ssh/.*'
+  - '\.env$'
+  - '\.aws/credentials$'
+  - '\.kube/config$'
+  - '/proc/sys/.*'
+  - '/sys/class/.*'
+
+# Network destinations that are allowed. When this list is non-empty,
+# any network access to a destination not listed here is denied.
+# Entries can be "host", "host:port", or CIDR notation.
+network_whitelist:
+  - localhost
+  - 127.0.0.0/8
+  - 10.0.0.0/8
+  - 172.16.0.0/12
+  - 192.168.0.0/16
+
+# Decision for a detected network client without a verified allowlisted
+# destination. Use "ask" to require human review; the default is "deny".
+network_failure_decision: deny
+
+# Maximum wall-clock time (milliseconds) a tool call may take.
+# 0 means no enforcement. Default: 30000 (30 seconds).
+max_timeout_ms: 30000
+
+# Maximum output size (bytes) a tool may produce on stdout/stderr.
+# 0 means no enforcement. Default: 1048576 (1 MiB).
+max_output_bytes: 1048576
+
+# Environment variables that tools are allowed to access. When this
+# list is non-empty, access to any variable not listed here is denied.
+env_whitelist:
+  - PATH
+  - HOME
+  - USER
+  - LANG
+  - LC_ALL
+  - TERM
+  - GOPATH
+  - GOROOT
+  - GOCACHE
+  - GOMODCACHE

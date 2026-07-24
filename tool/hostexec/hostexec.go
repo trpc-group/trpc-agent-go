@@ -170,6 +170,11 @@ type execCommandTool struct {
 	baseDir string
 }
 
+// ExecutionToolKind marks exec_command as a program-execution tool.
+func (*execCommandTool) ExecutionToolKind() tool.ExecutionToolKind {
+	return tool.ExecutionToolKindHostShell
+}
+
 func (t *execCommandTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolExecCommand,
@@ -267,8 +272,11 @@ type execInput struct {
 	Background    bool              `json:"background,omitempty"`
 	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
 	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
-	TTY           *bool             `json:"tty,omitempty"`
-	PTY           *bool             `json:"pty,omitempty"`
+	// TimeoutMS is accepted for precision policy adapters; callers should use
+	// timeout_sec for the public tool contract.
+	TimeoutMS *int  `json:"timeout_ms,omitempty"`
+	TTY       *bool `json:"tty,omitempty"`
+	PTY       *bool `json:"pty,omitempty"`
 }
 
 func (t *execCommandTool) Call(
@@ -302,6 +310,7 @@ func (t *execCommandTool) Call(
 		Background: in.Background,
 		YieldMs:    yield,
 		TimeoutS:   timeout,
+		TimeoutMS:  in.TimeoutMS,
 	})
 	if err != nil {
 		return nil, err

@@ -83,6 +83,11 @@ type ExecTool struct {
 	clock    func() time.Time
 }
 
+// ExecutionToolKind marks workspace_exec as a program-execution tool.
+func (*ExecTool) ExecutionToolKind() tool.ExecutionToolKind {
+	return tool.ExecutionToolKindWorkspaceShell
+}
+
 // WriteStdinTool sends additional stdin to a running workspace_exec session.
 type WriteStdinTool struct {
 	exec *ExecTool
@@ -103,18 +108,21 @@ type execSession struct {
 }
 
 type execInput struct {
-	Command       string            `json:"command"`
-	Cwd           string            `json:"cwd,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	Stdin         string            `json:"stdin,omitempty"`
-	YieldTimeMS   *int              `json:"yield_time_ms,omitempty"`
-	YieldMs       *int              `json:"yieldMs,omitempty"`
-	Background    bool              `json:"background,omitempty"`
-	Timeout       int               `json:"timeout,omitempty"`
-	TimeoutSec    *int              `json:"timeout_sec,omitempty"`
-	TimeoutSecOld *int              `json:"timeoutSec,omitempty"`
-	TTY           *bool             `json:"tty,omitempty"`
-	PTY           *bool             `json:"pty,omitempty"`
+	Command     string            `json:"command"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Stdin       string            `json:"stdin,omitempty"`
+	YieldTimeMS *int              `json:"yield_time_ms,omitempty"`
+	YieldMs     *int              `json:"yieldMs,omitempty"`
+	Background  bool              `json:"background,omitempty"`
+	Timeout     int               `json:"timeout,omitempty"`
+	// TimeoutMS is an internal precision timeout used by safety adapters.
+	// timeout_sec remains the public compatibility field.
+	TimeoutMS     *int  `json:"timeout_ms,omitempty"`
+	TimeoutSec    *int  `json:"timeout_sec,omitempty"`
+	TimeoutSecOld *int  `json:"timeoutSec,omitempty"`
+	TTY           *bool `json:"tty,omitempty"`
+	PTY           *bool `json:"pty,omitempty"`
 }
 
 type writeInput struct {
@@ -627,6 +635,7 @@ func (t *ExecTool) prepareExec(
 	if timeout <= 0 {
 		timeout = in.Timeout
 	}
+	timeoutMS := firstIntValue(in.TimeoutMS)
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -640,7 +649,7 @@ func (t *ExecTool) prepareExec(
 			CleanEnv: policyActive,
 			Cwd:      cwd,
 			Stdin:    in.Stdin,
-			Timeout:  execTimeout(timeout),
+			Timeout:  execTimeout(timeout, timeoutMS),
 		},
 	}, nil
 }
@@ -1117,7 +1126,10 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 	return out
 }
 
-func execTimeout(raw int) time.Duration {
+func execTimeout(raw int, rawMS ...int) time.Duration {
+	if len(rawMS) > 0 && rawMS[0] > 0 {
+		return time.Duration(rawMS[0]) * time.Millisecond
+	}
 	if raw <= 0 {
 		return defaultWorkspaceExecTimeout
 	}

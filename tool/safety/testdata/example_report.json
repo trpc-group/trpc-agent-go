@@ -1,0 +1,59 @@
+[
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "echo hello",
+    "decision": "allow",
+    "risk_level": "none",
+    "intercepted": false,
+    "duration_ms": 0,
+    "redacted": false
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "go get example.com/module",
+    "decision": "ask",
+    "risk_level": "medium",
+    "evidences": [
+      {
+        "rule_id": "dependency-change",
+        "risk_level": "medium",
+        "matched_snippet": "dependency installation or update",
+        "reason": "dependency change",
+        "recommendation": "Review the package, version, and lockfile change before proceeding."
+      }
+    ],
+    "recommendation": "Review the package, version, and lockfile change before proceeding.",
+    "intercepted": true,
+    "duration_ms": 0,
+    "redacted": false
+  },
+  {
+    "tool_name": "workspace_exec",
+    "backend": "workspaceexec",
+    "command": "rm -rf /",
+    "decision": "deny",
+    "risk_level": "critical",
+    "evidences": [
+      {
+        "rule_id": "command-policy-denied",
+        "risk_level": "critical",
+        "matched_snippet": "configured command policy rejected a parsed segment",
+        "reason": "command policy denied",
+        "recommendation": "Use a command and path permitted by the configured allow/deny policy."
+      },
+      {
+        "rule_id": "dangerous-delete",
+        "risk_level": "critical",
+        "matched_snippet": "destructive deletion command",
+        "reason": "dangerous delete",
+        "recommendation": "Do not delete files recursively; use a narrowly scoped, reviewed operation."
+      }
+    ],
+    "recommendation": "Use a command and path permitted by the configured allow/deny policy.",
+    "intercepted": true,
+    "duration_ms": 0,
+    "redacted": false
+  }
+]
