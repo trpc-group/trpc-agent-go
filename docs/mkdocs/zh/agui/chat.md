@@ -798,7 +798,7 @@ server, err := agui.New(
 
 之所以需要 `parentMetadata`，是因为 `parentInvocationId` 只标识父级执行，并不能区分父级内部的具体哪一次 tool call。当模型在一轮里对同一个子 Agent 发起多个并行 AgentTool 调用时，所有派生出的 invocation 共享相同的 `parentInvocationId`；只有 `parentMetadata.triggerId` 才能区分每个子 invocation 对应的是哪一次 `TOOL_CALL_START`。当父级不是通过工具调用触发本次执行时（例如顶层 run），`parentMetadata` 字段缺省。
 
-消息快照路由返回的 `MESSAGES_SNAPSHOT` 事件也可以携带来源信息。此时 `rawEvent` 不是单条事件的来源信息，而是按消息和工具调用建立的来源索引：
+消息快照路由返回的 `MESSAGES_SNAPSHOT` 事件也可以携带来源信息。此时 `rawEvent` 不是单条事件的来源信息，而是按消息、工具调用和运行建立的来源索引：
 
 ```json
 {
@@ -826,12 +826,21 @@ server, err := agui.New(
         "branch": "root.member-a",
         "timestamp": 1781258401000
       }
+    },
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png"
+        },
+        "timestamp": 1781258400000
+      }
     }
   }
 }
 ```
 
-恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
+恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源和时间戳，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源和时间戳；如果需要恢复请求级 `forwardedProps`，可以读取 `rawEvent.runs[runId].forwardedProps`。索引中的 `timestamp` 优先复用历史实时事件顶层的 `timestamp`；只有旧数据缺少事件 `timestamp` 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
 
 ## 外部工具
 

@@ -139,6 +139,135 @@ evoSvc := evolution.NewService(reviewerModel,
 )
 ```
 
+## 离线反思式优化
+
+异步 Reviewer 解决的是“从一次已完成 session 中提炼一个候选”。对于已经有可重复
+benchmark 的 skill，`evolution/optimization` 提供独立的纯 Go 搜索闭环，机制参考
+GEPA，但不依赖 DSPy、Python 或 companion process。
+
+`optimization.Optimizer` 是与具体算法无关的执行契约。内置 `NewGEPA` 实现只拥有
+GEPA 的反思和 Pareto 搜索；dataset 隔离、预算、实验记录、holdout 验证和可选 revision
+提交仍由统一生命周期负责。应用在装配阶段选择具体实现，而不是传入运行时算法字符串。
+
+优化器会：
+
+1. 先在 validation split 上评估 baseline skill；
+2. 按实例级 Pareto 选择 parent，在 feedback minibatch 上执行，并把当前 skill、case
+   input/expected、score、output、evaluator feedback 和 trace 逐字段限长并进行凭据模式
+   脱敏后交给 reflection model；
+3. 每次只修改一个 `SkillSpec` component，且 child 只有在同一 minibatch、同一 seed
+   下严格优于 parent 才进入候选池；
+4. 维护逐 case validation winner，并按 Pareto coverage 采样后续 parent；
+5. 搜索结束后才在不可见的 holdout split 上配对比较 baseline/final candidate；
+6. 可选地把通过 holdout 的候选接回现有 revision store。外部候选提交时先停在
+   `pending_approval`，不会直接修改 live skill；默认会一直等待审批。但如果 service
+   启用了 `WithApprovalTimeout`，现有 auto-expiration sweeper 之后可能在没有人工审批的
+   情况下把过期 revision promote 并发布。
+
+应用需要提供与任务相关的 evaluator 和用于反思的 `model.Model`。reflection model
+使用框架现有 provider adapter 配置，可以与任务模型相同，也可以是独立 reviewer
+模型；evaluator 是唯一需要新增的领域适配：
+
+```go
+type benchmarkEvaluator struct {
+    // runner/sandbox/test harness 依赖
+}
+
+func (e *benchmarkEvaluator) Evaluate(
+    ctx context.Context,
+    candidate *evolution.SkillSpec,
+    cases []optimization.Case,
+    seed int64,
+) ([]optimization.Evaluation, error) {
+    // 在隔离仓库中加载 candidate，执行每个 case，并为每个 case 返回
+    // 一个 [0,1] 归一化分数及可操作的 feedback/trace。
+    return evaluations, nil
+}
+```
+
+revision submission 是独立于异步 session learning 的可选能力。默认 service 实现了
+`evolution.RevisionSubmitter`，但自定义 `evolution.Service` 可以不实现。应用应当在
+装配阶段只解析一次该能力，这样配置错误会在开始优化前暴露：
+
+提交过程会把已配置的 skill repository 作为写入边界：update 必须指向已存在的 skill；
+配置 `WithManagedSkillsDir` 时，该 skill 还必须位于 managed 目录内；create 不得与
+repository 中的已有 skill 重名。这里应传入 agent 实际使用的同一个 repository，确保
+检查能够同时看到 bundled、用户自建和 evolution-managed skill。
+
+```go
+revisionSubmitter, ok := evoSvc.(evolution.RevisionSubmitter)
+if !ok {
+    return fmt.Errorf("evolution service does not support revision submission")
+}
+
+optimizer, err := optimization.NewGEPA(
+    reflectionModel,
+    evaluator,
+    optimization.WithMaxIterations(10),
+    optimization.WithReflectionBatchSize(3),
+    optimization.WithRandomSeed(7),
+    optimization.WithStoreDir("./evolution/experiments"),
+    optimization.WithRevisionSubmitter(revisionSubmitter),
+)
+if err != nil {
+    return err
+}
+
+result, err := optimizer.Optimize(ctx, optimization.Request{
+    Seed:             baselineSpec,
+    ParentRevisionID: activeRevisionID,
+    Submit:           true,
+    Dataset: optimization.Dataset{
+        ID:         "managed-skill-regression",
+        Version:    "v1",
+        Feedback:   feedbackCases,
+        Validation: validationCases,
+        Holdout:    holdoutCases,
+    },
+})
+if err != nil {
+    // search 可能已经选出 candidate，此后 holdout 或可选交付步骤仍可能失败；
+    // 保留非 nil result，便于诊断或重试。
+    if result != nil {
+        fmt.Printf("optimization %s completed but delivery failed: %v\n",
+            result.ExperimentID, err)
+    }
+    return err
+}
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
+    result.Spec.Name,
+    result.CandidateValidation.Score,
+    result.CandidateHoldout.Score,
+    result.PromotionEligible,
+    result.PromotionReason,
+)
+```
+
+optimizer 只借用 submitter；`evoSvc` 的生命周期仍由应用管理并显式关闭。search 选出
+candidate 后，如果 holdout、最终记录或提交失败，`Optimize` 会同时返回非 nil 的部分
+result 和 error；各字段表示失败前已完成的阶段，提交错误也会写入 `SubmissionReason`。
+
+`WithStoreDir` 是可选的节点本地实验 recorder，与 revision 使用的 `CandidateStore`
+不是同一个概念。每次 run 独占一个 UUID 目录；在支持权限位的文件系统上，文件权限为
+`0600`、目录权限为 `0700`。持久化的每个 evaluator output、feedback、trace 字段最多
+保留 16 KiB。dataset 只在 `experiment.json` 保存一次；各 evaluation record 通过 case
+ID 引用它，不会在每轮重复写入 input 和 expected。它不负责分布式任务协调，也不是远端
+持久存储。多个节点可以使用同一个兼容
+POSIX 的共享根目录，因为不同实验不会共用目录，但同一个实验只能由一个节点写入。如果
+Pod 磁盘是临时或不共享的，应用需要在实验完成后把目录上传到自己的持久存储。revision
+的 `CandidateStore` 和 `ActivePointer` 可以替换，但接口没有定义跨后端事务；多节点部署
+必须把 revision 变更交给单一 owner，或在 service 外部完成串行化。
+
+三个 split 的 case ID 不能重复，score 必须是 `[0,1]` 内的有限数值。提交 revision
+即使 `Submit=false`，结果也会填充 `PromotionEligible` 和 `PromotionReason`，调用方
+无需重复实现 holdout 阈值与 critical case 策略。提交 revision 时每个 split 至少需要
+10 个 case。holdout 必须对搜索不可见。optimizer 会先把每个待发送给模型的文本字段
+截取为 UTF-8 安全且有界的首尾片段，再执行与在线 Reviewer 相同的常见凭据模式脱敏。
+该顺序可以限制脱敏过程的内存消耗，但仍无法识别租户特有的敏感数据；应用仍必须在返回前清洗 seed skill、case
+input/expected、evaluator output、feedback 和 trace。文件实验记录还会包含 dataset
+metadata 及上述已清洗字段。candidate agent 应在无生产凭据、无副作用工具的隔离环境中
+执行。
+
 ## 触发条件
 
 Evolution 在 runner 完成每个任务后自动判断是否 review。内置 `DefaultReviewPolicy` 在以下任一条件满足时触发：
@@ -214,7 +343,7 @@ evolution.WithSafetyGate(evolution.NewDefaultSafetyGate())
 基于 session outcome 的效果评估：
 
 - session 结果为 `fail` 或 `agent_error` → revision 被拒绝（不从失败中学错误流程）
-- session score < 80 → revision 进入 `pending_eval`（可配置阈值）
+- 归一化 session score < 0.8 → revision 进入 `pending_eval`（可配置阈值）
 
 ```go
 evolution.WithEffectivenessGate(evolution.NewOutcomeBasedEffectivenessGate())
@@ -228,7 +357,7 @@ evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
     Session: sess,
     Outcome: &evolution.Outcome{
         Status: evolution.OutcomeSuccess, // success / fail / partial / agent_error
-        Score:  floatPtr(95.0),           // 0-100
+        Score:  floatPtr(0.95),           // 归一化到 0-1
         Notes:  "all assertions passed",
     },
 })

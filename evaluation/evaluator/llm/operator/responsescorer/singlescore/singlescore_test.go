@@ -26,6 +26,10 @@ func TestScoreBasedOnResponseParsesStructuredJSON(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, 0.75, result.Score)
 	assert.Equal(t, "Looks good.", result.Reason)
+	require.NotNil(t, result.Value)
+	assert.Equal(t, "numeric", string(result.Value.Kind))
+	require.NotNil(t, result.Value.Numeric)
+	assert.Equal(t, 0.75, *result.Value.Numeric)
 }
 
 func TestScoreBasedOnResponseRejectsOutOfRangeScore(t *testing.T) {

@@ -798,7 +798,7 @@ The top-level `timestamp` on a real-time AG-UI event is the protocol event times
 
 `parentMetadata` is necessary because `parentInvocationId` only identifies the parent execution, not the specific tool call inside it. When a model issues parallel AgentTool calls to the same sub-agent in one turn, all spawned invocations share the same `parentInvocationId`; only `parentMetadata.triggerId` can disambiguate which `TOOL_CALL_START` each child invocation belongs to. When the parent did not invoke this child via a tool call (e.g., a top-level run), `parentMetadata` is absent.
 
-The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also carry source information. In this case, `rawEvent` is not source information for one event, but a source index built by message and tool call:
+The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also carry source information. In this case, `rawEvent` is not source information for one event, but a source index built by message, tool call, and run:
 
 ```json
 {
@@ -826,12 +826,21 @@ The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also ca
         "branch": "root.member-a",
         "timestamp": 1781258401000
       }
+    },
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png"
+        },
+        "timestamp": 1781258400000
+      }
     }
   }
 }
 ```
 
-When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source and timestamp. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
+When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source and timestamp. To restore request-level `forwardedProps`, read `rawEvent.runs[runId].forwardedProps`. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
 
 ## External Tools
 
