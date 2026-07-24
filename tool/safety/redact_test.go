@@ -44,6 +44,21 @@ func TestRedactString_RedactsURLUserinfo(t *testing.T) {
 	require.Contains(t, out, "https://allowed.example/path")
 }
 
+func TestRedactString_RedactsGenericURLUserinfo(t *testing.T) {
+	input := `postgres://alice:s3cr3t@db.example/app redis://bob:redis-secret@cache.example mongodb://carol:mongo-secret@db.example/app`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "alice")
+	require.NotContains(t, out, "s3cr3t")
+	require.NotContains(t, out, "bob")
+	require.NotContains(t, out, "redis-secret")
+	require.NotContains(t, out, "carol")
+	require.NotContains(t, out, "mongo-secret")
+	require.Contains(t, out, "postgres://db.example/app")
+	require.Contains(t, out, "redis://cache.example")
+	require.Contains(t, out, "mongodb://db.example/app")
+}
+
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {
 	out, redacted := redactString("plain output")
 	require.False(t, redacted)

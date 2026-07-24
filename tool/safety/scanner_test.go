@@ -362,6 +362,74 @@ func TestDefaultScanner_DeniesProcessControlEnvWithoutAllowlist(t *testing.T) {
 	require.True(t, report.Blocked)
 }
 
+func TestDefaultScanner_DoesNotApplyCommandAllowlistToStdinData(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		AllowedCommands: []string{"cat"},
+	})
+	report, err := scanner.Scan(context.Background(), ScanRequest{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspace,
+		Command:  "cat",
+		Stdin:    "hello",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, report.Decision)
+	require.Equal(t, "evaluation.none", report.RuleID)
+}
+
+func TestDefaultScanner_DetectsCodeResourceAbuse(t *testing.T) {
+	seconds, ok := codeSleepSeconds("go", "time.Sleep(1 * time.Hour)")
+	require.True(t, ok)
+	require.Equal(t, 3600, seconds)
+	cases := []struct {
+		name     string
+		language string
+		code     string
+		decision Decision
+	}{
+		{name: "python infinite loop", language: "python", code: "while True:\n    pass", decision: DecisionDeny},
+		{name: "go infinite loop", language: "go", code: "for {}", decision: DecisionDeny},
+		{name: "javascript infinite loop", language: "javascript", code: "while (true) {}", decision: DecisionDeny},
+		{name: "python long sleep", language: "python", code: "import time\ntime.sleep(3600)", decision: DecisionDeny},
+		{name: "go long sleep", language: "go", code: "time.Sleep(1 * time.Hour)", decision: DecisionDeny},
+		{name: "javascript long sleep", language: "javascript", code: "setTimeout(resolve, 3600000)", decision: DecisionDeny},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+				ToolName: "execute_code",
+				Backend:  BackendCodeExec,
+				Language: tc.language,
+				Code:     tc.code,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, "resource.long_running", report.RuleID)
+			require.True(t, report.Blocked)
+		})
+	}
+}
+
+func TestDefaultScanner_DetectsDependencyInstallVariants(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{})
+	for _, command := range []string{
+		"python -m pip install package",
+		"python -m pip --quiet install package",
+		"npm --silent install package",
+		"npm --prefix /tmp install package",
+		"pip --no-cache-dir install package",
+	} {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  command,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAsk, report.Decision, command)
+		require.Equal(t, "dependency.install", report.RuleID, command)
+	}
+}
+
 func TestDefaultScanner_EdgeCoverageCases(t *testing.T) {
 	t.Run("nil scanner uses defaults", func(t *testing.T) {
 		var scanner *DefaultScanner
@@ -630,7 +698,7 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			[]byte(`{"chars":"cu"}`),
 			[]byte(`{"chars":"rl https://evil.example\n","append_newline":true}`),
 		} {
-			reqs, err := RequestsFromToolCall("write_stdin", "call-1", "", args, nil)
+			reqs, err := requestsFromToolCall("write_stdin", "call-1", "", args, nil)
 			require.NoError(t, err)
 			require.Len(t, reqs, 1)
 
@@ -665,7 +733,7 @@ func TestDefaultScanner_NetworkAndCodeEdges(t *testing.T) {
 			},
 		}
 		for _, tc := range cases {
-			reqs, err := RequestsFromToolCall(tc.toolName, "call-1", "", tc.args, nil)
+			reqs, err := requestsFromToolCall(tc.toolName, "call-1", "", tc.args, nil)
 			require.NoError(t, err)
 			require.Len(t, reqs, 1)
 
@@ -947,6 +1015,9 @@ func TestDefaultScanner_HelperEdges(t *testing.T) {
 	require.False(t, ok)
 	_, ok = parseSleepSeconds("bad")
 	require.False(t, ok)
+	require.True(t, isDependencyInstall("python", []string{"python", "-m", "pip", "install", "pkg"}))
+	require.True(t, isDependencyInstall("npm", []string{"npm", "--silent", "install", "pkg"}))
+	require.False(t, isDependencyInstall("npm", []string{"npm", "config", "get", "install"}))
 
 	require.True(t, sensitivePathMatch("foo/.ssh/id_ed25519", "~/.ssh"))
 	require.True(t, sensitivePathMatch("/etc/./passwd", "/etc/passwd"))

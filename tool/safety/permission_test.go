@@ -145,6 +145,52 @@ func TestPermissionPolicy_ExplicitAuditFailureModeOverridesScannerPolicy(t *test
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 }
 
+func TestPermissionPolicy_InvalidAuditFailureModeKeepsInheritedStrict(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{
+		AuditFailureMode: AuditFailureModeStrict,
+	})
+	policy := NewPermissionPolicy(
+		scanner,
+		WithAuditWriter(failingAuditWriter{err: errors.New("disk full")}),
+		WithAuditFailureMode(AuditFailureMode("strict ")),
+	)
+	_, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.ErrorContains(t, err, "disk full")
+}
+
+func TestPermissionPolicy_NormalizesCustomReportBlocked(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{
+				ToolName:       "custom",
+				Backend:        BackendUnknown,
+				Decision:       DecisionDeny,
+				RiskLevel:      RiskHigh,
+				RuleID:         "custom.deny",
+				Recommendation: "do not execute",
+				Blocked:        false,
+			}, nil
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "custom",
+		Arguments: []byte(`{"value":"ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.True(t, observed.Blocked)
+	require.Contains(t, audit.String(), `"blocked":true`)
+}
+
 func TestPermissionPolicy_CodeExecInvalidArgumentsAsk(t *testing.T) {
 	var observed Report
 	policy := NewPermissionPolicy(

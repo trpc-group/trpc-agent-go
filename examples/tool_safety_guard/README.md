@@ -10,6 +10,9 @@ The example demonstrates:
 - producing `tool_safety_audit.jsonl`
 - preserving the distinction between scanner decisions and framework permission actions
 
+The ordinary `env_allowlist` is not an override for process-control variables
+such as `PATH`; those variables remain denied even when listed in a policy.
+
 ## Run
 
 ```bash

@@ -85,7 +85,7 @@ func WithReportObserver(fn func(context.Context, Report)) PermissionPolicyOption
 // WithAuditFailureMode sets the audit failure mode.
 func WithAuditFailureMode(mode AuditFailureMode) PermissionPolicyOption {
 	return func(p *permissionPolicy) {
-		if mode != "" {
+		if mode == AuditFailureModeBestEffort || mode == AuditFailureModeStrict {
 			p.auditMode = mode
 		}
 	}
@@ -104,7 +104,7 @@ func (p *permissionPolicy) CheckToolPermission(
 	if p.resolver != nil {
 		backend = p.resolver(req)
 	}
-	scanReqs, err := RequestsFromToolCall(
+	scanReqs, err := requestsFromToolCall(
 		req.ToolName,
 		req.ToolCallID,
 		backend,
@@ -172,6 +172,7 @@ func (p *permissionPolicy) finish(
 	ctx context.Context,
 	report Report,
 ) (tool.PermissionDecision, error) {
+	report.Blocked = report.Decision != DecisionAllow
 	auditErr := p.writeAudit(ctx, report)
 	if auditErr != nil {
 		report.AuditError = auditErr.Error()
@@ -278,7 +279,7 @@ func defaultBackendResolver(req *tool.PermissionRequest) Backend {
 	if req == nil {
 		return BackendUnknown
 	}
-	return InferBackend(req.ToolName)
+	return inferBackend(normalizeToolName(req.ToolName))
 }
 
 func permissionAction(decision Decision) string {

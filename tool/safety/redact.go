@@ -44,7 +44,7 @@ func redactString(s string) (string, bool) {
 	return out, redacted
 }
 
-var credentialURLPattern = regexp.MustCompile(`(?i)\b(?:https?|ftp)://[^\s"'<>]+`)
+var credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
 
 func redactURLCredentials(s string) (string, bool) {
 	matches := credentialURLPattern.FindAllStringIndex(s, -1)

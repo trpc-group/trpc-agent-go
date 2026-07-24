@@ -14,22 +14,33 @@ import (
 	"strings"
 )
 
-// RequestsFromToolCall parses a PermissionRequest-like tool call payload into
+const (
+	workspaceExecDefaultTimeoutSec = 300
+	hostExecDefaultTimeoutSec      = 1800
+	skillDefaultTimeoutSec         = 300
+)
+
+// requestsFromToolCall parses a PermissionRequest-like tool call payload into
 // one or more scan requests. execute_code can produce one request per code block.
-func RequestsFromToolCall(
+func requestsFromToolCall(
 	toolName, toolCallID string,
 	backend Backend,
 	args []byte,
 	metadata map[string]any,
 ) ([]ScanRequest, error) {
+	canonicalToolName := normalizeToolName(toolName)
 	if backend == "" {
-		backend = InferBackend(toolName)
+		backend = inferBackend(canonicalToolName)
 	}
-	switch toolName {
+	switch canonicalToolName {
 	case "workspace_exec":
-		return parseExecArgs(toolName, toolCallID, backend, args, "cwd", metadata)
-	case "exec_command", "skill_run", "skill_exec":
-		return parseExecArgs(toolName, toolCallID, backend, args, "workdir", metadata)
+		return parseExecArgs(toolName, "workspace_exec", toolCallID, backend, args, "cwd", metadata)
+	case "exec_command":
+		return parseExecArgs(toolName, "exec_command", toolCallID, backend, args, "workdir", metadata)
+	case "skill_run":
+		return parseExecArgs(toolName, "skill_run", toolCallID, backend, args, "cwd", metadata)
+	case "skill_exec":
+		return parseExecArgs(toolName, "skill_exec", toolCallID, backend, args, "cwd", metadata)
 	case "workspace_write_stdin", "write_stdin", "skill_write_stdin":
 		return parseWriteStdinArgs(toolName, toolCallID, backend, args, metadata)
 	case "workspace_kill_session", "kill_session":
@@ -53,8 +64,20 @@ func RequestsFromToolCall(
 	}
 }
 
-// InferBackend maps well-known tool names to safety backends.
-func InferBackend(toolName string) Backend {
+func normalizeToolName(toolName string) string {
+	const hostexecPrefix = "hostexec_"
+	if !strings.HasPrefix(toolName, hostexecPrefix) {
+		return toolName
+	}
+	switch strings.TrimPrefix(toolName, hostexecPrefix) {
+	case "exec_command", "write_stdin", "kill_session":
+		return strings.TrimPrefix(toolName, hostexecPrefix)
+	default:
+		return toolName
+	}
+}
+
+func inferBackend(toolName string) Backend {
 	switch toolName {
 	case "workspace_exec", "workspace_write_stdin", "workspace_kill_session":
 		return BackendWorkspace
@@ -69,7 +92,7 @@ func InferBackend(toolName string) Backend {
 }
 
 func parseExecArgs(
-	toolName, toolCallID string,
+	toolName, toolKind, toolCallID string,
 	backend Backend,
 	args []byte,
 	cwdField string,
@@ -86,11 +109,11 @@ func parseExecArgs(
 	if strings.TrimSpace(command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	timeout, err := timeoutField(toolName, raw)
+	timeout, err := timeoutField(toolKind, raw)
 	if err != nil {
 		return nil, err
 	}
-	cwd, err := stringAnyField(raw, cwdField, "cwd", "workdir")
+	cwd, err := stringField(raw, cwdField)
 	if err != nil {
 		return nil, err
 	}
@@ -248,16 +271,6 @@ func stringField(raw map[string]json.RawMessage, key string) (string, error) {
 	return out, nil
 }
 
-func stringAnyField(raw map[string]json.RawMessage, keys ...string) (string, error) {
-	for _, key := range keys {
-		if _, ok := raw[key]; !ok {
-			continue
-		}
-		return stringField(raw, key)
-	}
-	return "", nil
-}
-
 func stringMapField(raw map[string]json.RawMessage, key string) (map[string]string, error) {
 	var out map[string]string
 	if b, ok := raw[key]; ok {
@@ -284,24 +297,41 @@ func intField(raw map[string]json.RawMessage, keys ...string) (int, error) {
 }
 
 func timeoutField(toolName string, raw map[string]json.RawMessage) (int, error) {
+	var timeout int
+	var err error
 	switch toolName {
 	case "workspace_exec":
 		// workspace_exec first selects timeout_sec/timeoutSec, then falls
 		// back to timeout when the selected value is non-positive.
-		timeout, err := intField(raw, "timeout_sec", "timeoutSec")
+		timeout, err = intField(raw, "timeout_sec", "timeoutSec")
 		if err != nil {
 			return 0, err
 		}
 		if timeout <= 0 {
-			return intField(raw, "timeout")
+			timeout, err = intField(raw, "timeout")
 		}
-		return timeout, nil
 	case "exec_command":
 		// exec_command does not expose the workspace_exec timeout alias.
-		return intField(raw, "timeout_sec", "timeoutSec")
+		timeout, err = intField(raw, "timeout_sec", "timeoutSec")
 	case "skill_run", "skill_exec":
 		// Skill tools use timeout directly and ignore timeout_sec aliases.
-		return intField(raw, "timeout")
+		timeout, err = intField(raw, "timeout")
+	default:
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if timeout > 0 {
+		return timeout, nil
+	}
+	switch toolName {
+	case "workspace_exec":
+		return workspaceExecDefaultTimeoutSec, nil
+	case "exec_command":
+		return hostExecDefaultTimeoutSec, nil
+	case "skill_run", "skill_exec":
+		return skillDefaultTimeoutSec, nil
 	default:
 		return 0, nil
 	}

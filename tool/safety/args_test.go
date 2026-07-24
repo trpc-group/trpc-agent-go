@@ -9,10 +9,13 @@
 package safety
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 )
 
 func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
@@ -58,6 +61,7 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			toolName: "skill_exec",
 			args: []byte(`{
 				"command":"npm install left-pad",
+				"workdir":"/ignored",
 				"cwd":".",
 				"env":{"PATH":"/usr/bin"},
 				"timeout":5,
@@ -73,13 +77,23 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			},
 		},
 		{
+			name:     "exec_command_uses_workdir_only",
+			toolName: "exec_command",
+			args:     []byte(`{"command":"echo ok","workdir":"/host","cwd":"/ignored"}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, "/host", reqs[0].Cwd)
+			},
+		},
+		{
 			name:     "skill_run",
 			toolName: "skill_run",
-			args:     []byte(`{"command":"curl https://evil.example","workdir":"."}`),
+			args:     []byte(`{"command":"curl https://evil.example","workdir":"/ignored","cwd":"."}`),
 			assert: func(t *testing.T, reqs []ScanRequest) {
 				require.Len(t, reqs, 1)
 				require.Equal(t, BackendHost, reqs[0].Backend)
 				require.Equal(t, "curl https://evil.example", reqs[0].Command)
+				require.Equal(t, ".", reqs[0].Cwd)
 			},
 		},
 		{
@@ -97,7 +111,7 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			args:     []byte(`{"command":"sleep 1","timeout_sec":0,"timeout":3600}`),
 			assert: func(t *testing.T, reqs []ScanRequest) {
 				require.Len(t, reqs, 1)
-				require.Zero(t, reqs[0].TimeoutSec)
+				require.Equal(t, 1800, reqs[0].TimeoutSec)
 			},
 		},
 		{
@@ -107,6 +121,24 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 			assert: func(t *testing.T, reqs []ScanRequest) {
 				require.Len(t, reqs, 1)
 				require.Equal(t, 5, reqs[0].TimeoutSec)
+			},
+		},
+		{
+			name:     "workspace_timeout_defaults",
+			toolName: "workspace_exec",
+			args:     []byte(`{"command":"echo ok"}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, 300, reqs[0].TimeoutSec)
+			},
+		},
+		{
+			name:     "skill_timeout_defaults",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"echo ok"}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.Equal(t, 300, reqs[0].TimeoutSec)
 			},
 		},
 		{
@@ -186,7 +218,7 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			reqs, err := RequestsFromToolCall(tc.toolName, "call-1", "", tc.args, map[string]any{"source": "test"})
+			reqs, err := requestsFromToolCall(tc.toolName, "call-1", "", tc.args, map[string]any{"source": "test"})
 			require.NoError(t, err)
 			require.Equal(t, "call-1", reqs[0].ToolCallID)
 			require.Equal(t, "test", reqs[0].Metadata["source"])
@@ -215,24 +247,57 @@ func TestRequestsFromToolCall_RejectsMalformedFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := RequestsFromToolCall(tc.toolName, "", "", tc.args, nil)
+			_, err := requestsFromToolCall(tc.toolName, "", "", tc.args, nil)
 			require.ErrorContains(t, err, tc.err)
 		})
 	}
 }
 
 func TestInferBackend_AllKnownTools(t *testing.T) {
-	require.Equal(t, BackendWorkspace, InferBackend("workspace_exec"))
-	require.Equal(t, BackendWorkspace, InferBackend("workspace_write_stdin"))
-	require.Equal(t, BackendWorkspace, InferBackend("workspace_kill_session"))
-	require.Equal(t, BackendHost, InferBackend("exec_command"))
-	require.Equal(t, BackendHost, InferBackend("write_stdin"))
-	require.Equal(t, BackendHost, InferBackend("kill_session"))
-	require.Equal(t, BackendHost, InferBackend("skill_run"))
-	require.Equal(t, BackendHost, InferBackend("skill_exec"))
-	require.Equal(t, BackendHost, InferBackend("skill_write_stdin"))
-	require.Equal(t, BackendCodeExec, InferBackend("execute_code"))
-	require.Equal(t, BackendUnknown, InferBackend("custom"))
+	require.Equal(t, BackendWorkspace, inferBackend("workspace_exec"))
+	require.Equal(t, BackendWorkspace, inferBackend("workspace_write_stdin"))
+	require.Equal(t, BackendWorkspace, inferBackend("workspace_kill_session"))
+	require.Equal(t, BackendHost, inferBackend("exec_command"))
+	require.Equal(t, BackendHost, inferBackend("write_stdin"))
+	require.Equal(t, BackendHost, inferBackend("kill_session"))
+	require.Equal(t, BackendHost, inferBackend("skill_run"))
+	require.Equal(t, BackendHost, inferBackend("skill_exec"))
+	require.Equal(t, BackendHost, inferBackend("skill_write_stdin"))
+	require.Equal(t, BackendCodeExec, inferBackend("execute_code"))
+	require.Equal(t, BackendUnknown, inferBackend("custom"))
+	require.Equal(t, "exec_command", normalizeToolName("hostexec_exec_command"))
+	require.Equal(t, "hostexec_custom", normalizeToolName("hostexec_custom"))
+}
+
+func TestRequestsFromToolCall_RecognizesNamedHostexecTools(t *testing.T) {
+	toolSet, err := hostexec.NewToolSet()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, toolSet.Close()) })
+	namedToolSet := internaltool.NewNamedToolSet(toolSet)
+
+	var execName string
+	for _, candidate := range namedToolSet.Tools(context.Background()) {
+		if candidate.Declaration().Name == "hostexec_exec_command" {
+			execName = candidate.Declaration().Name
+			break
+		}
+	}
+	require.Equal(t, "hostexec_exec_command", execName)
+
+	reqs, err := requestsFromToolCall(
+		execName,
+		"call-1",
+		"",
+		[]byte(`{"command":"echo ok","background":true,"tty":true}`),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+	require.Equal(t, "hostexec_exec_command", reqs[0].ToolName)
+	require.Equal(t, BackendHost, reqs[0].Backend)
+	require.Equal(t, 1800, reqs[0].TimeoutSec)
+	require.True(t, reqs[0].Background)
+	require.True(t, reqs[0].TTY)
 }
 
 func TestUnmarshalCodeBlocks_RejectsStringifiedInvalidJSON(t *testing.T) {

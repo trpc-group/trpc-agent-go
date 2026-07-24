@@ -28,7 +28,8 @@ max_output_bytes: 1048576
 max_command_bytes: 16384
 max_script_bytes: 1048576
 env_allowlist:
-  - PATH
+  # PATH and other process-control variables are denied independently and
+  # cannot be re-enabled through this ordinary environment allowlist.
   - HOME
   - GOPATH
   - GOCACHE

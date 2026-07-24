@@ -274,16 +274,7 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 		findings = append(findings, s.scanArgv(req, argv)...)
 	}
 	if req.Stdin != "" {
-		stdinReq := req
-		stdinReq.Command = req.Stdin
-		stdinReq.Stdin = ""
-		stdinFindings := s.scanCommand(stdinReq)
-		textReq := req
-		textReq.Command = ""
-		stdinFindings = append(
-			stdinFindings,
-			s.scanTextForUnknownRisk(textReq, req.Stdin)...,
-		)
+		stdinFindings := s.scanStdin(req)
 		for i := range stdinFindings {
 			if req.Backend == BackendHost && stdinFindings[i].Decision == DecisionAsk {
 				stdinFindings[i].Decision = DecisionDeny
@@ -292,6 +283,24 @@ func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
 		findings = append(findings, stdinFindings...)
 	}
 	return findings
+}
+
+func (s *DefaultScanner) scanStdin(req ScanRequest) []Finding {
+	pipe, err := shellsafe.Parse(req.Stdin)
+	if err == nil {
+		var findings []Finding
+		for _, argv := range pipe.Commands {
+			// Stdin is data for the outer command. Do not apply the outer
+			// command allowlist to each data line, but retain argv-level
+			// security checks for commands that are explicitly submitted.
+			findings = append(findings, s.scanArgv(req, argv)...)
+		}
+		return findings
+	}
+	textReq := req
+	textReq.Command = ""
+	textReq.Stdin = ""
+	return s.scanTextForUnknownRisk(textReq, req.Stdin)
 }
 
 func (s *DefaultScanner) scanArgvRequest(req ScanRequest) []Finding {
@@ -570,6 +579,7 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 		}
 	case "python":
 		findings = append(findings, s.scanTextForUnknownRisk(req, req.Code)...)
+		findings = append(findings, s.scanCodeResourceAbuse(lang, req.Code)...)
 		if strings.Contains(req.Code, "subprocess") ||
 			strings.Contains(req.Code, "os.system") {
 			findings = append(findings, Finding{
@@ -582,6 +592,7 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 		}
 	case "go", "javascript", "typescript", "node":
 		findings = append(findings, s.scanTextForUnknownRisk(req, req.Code)...)
+		findings = append(findings, s.scanCodeResourceAbuse(lang, req.Code)...)
 	default:
 		findings = append(findings, Finding{
 			RuleID:         "codeexec.unsupported_language",
@@ -592,6 +603,110 @@ func (s *DefaultScanner) scanCode(req ScanRequest) []Finding {
 		})
 	}
 	return findings
+}
+
+var (
+	pythonInfiniteLoopPattern = regexp.MustCompile(`(?mi)\bwhile\s+(?:true|1)\s*:`)
+	goInfiniteLoopPattern     = regexp.MustCompile(`(?mi)\bfor\s*\{`)
+	jsInfiniteLoopPattern     = regexp.MustCompile(`(?mi)\bwhile\s*\(\s*(?:true|1)\s*\)|\bfor\s*\(\s*;\s*;\s*\)`)
+	codeSleepPattern          = regexp.MustCompile(`(?i)(?:time\.)?sleep\s*\(\s*([0-9]+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|d)?\s*\)`)
+	goSleepPattern            = regexp.MustCompile(`(?i)time\.sleep\s*\(\s*([0-9]+)\s*\*\s*time\.(second|minute|hour|day)s?\s*\)`)
+	jsSleepPattern            = regexp.MustCompile(`(?i)settimeout\s*\([^,]+,\s*([0-9]+)\s*\)`)
+)
+
+func (s *DefaultScanner) scanCodeResourceAbuse(lang, code string) []Finding {
+	if hasObviousInfiniteLoop(lang, code) {
+		return []Finding{{
+			RuleID:         "resource.long_running",
+			RiskLevel:      RiskCritical,
+			Decision:       DecisionDeny,
+			Evidence:       fmt.Sprintf("%s code contains an obvious infinite loop", lang),
+			Recommendation: "bound code execution with a terminating condition or timeout",
+		}}
+	}
+	seconds, ok := codeSleepSeconds(lang, code)
+	if !ok || s.policy.MaxTimeoutSec <= 0 || seconds <= s.policy.MaxTimeoutSec {
+		return nil
+	}
+	decision := DecisionAsk
+	risk := RiskHigh
+	if seconds > s.policy.MaxTimeoutSec*10 {
+		decision = DecisionDeny
+		risk = RiskCritical
+	}
+	return []Finding{{
+		RuleID:         "resource.long_running",
+		RiskLevel:      risk,
+		Decision:       decision,
+		Evidence:       fmt.Sprintf("%s code sleeps for %d seconds", lang, seconds),
+		Recommendation: "use bounded execution time or require approval",
+	}}
+}
+
+func hasObviousInfiniteLoop(lang, code string) bool {
+	switch lang {
+	case "python":
+		return pythonInfiniteLoopPattern.MatchString(code)
+	case "go":
+		return goInfiniteLoopPattern.MatchString(code)
+	case "javascript", "typescript", "node":
+		return jsInfiniteLoopPattern.MatchString(code)
+	default:
+		return false
+	}
+}
+
+func codeSleepSeconds(lang, code string) (int, bool) {
+	if lang == "go" {
+		if match := goSleepPattern.FindStringSubmatch(code); len(match) == 3 {
+			value, err := strconv.Atoi(match[1])
+			if err != nil {
+				return 0, false
+			}
+			multipliers := map[string]int{
+				"second": 1,
+				"minute": 60,
+				"hour":   60 * 60,
+				"day":    24 * 60 * 60,
+			}
+			return value * multipliers[strings.ToLower(match[2])], true
+		}
+	}
+	if lang == "javascript" || lang == "typescript" || lang == "node" {
+		if match := jsSleepPattern.FindStringSubmatch(code); len(match) == 2 {
+			value, err := strconv.Atoi(match[1])
+			if err != nil {
+				return 0, false
+			}
+			return value / 1000, true
+		}
+	}
+	if match := codeSleepPattern.FindStringSubmatch(code); len(match) == 3 {
+		value, err := strconv.Atoi(match[1])
+		if err != nil {
+			return 0, false
+		}
+		multipliers := map[string]int{
+			"":        1,
+			"second":  1,
+			"seconds": 1,
+			"sec":     1,
+			"secs":    1,
+			"minute":  60,
+			"minutes": 60,
+			"min":     60,
+			"mins":    60,
+			"hour":    60 * 60,
+			"hours":   60 * 60,
+			"hr":      60 * 60,
+			"hrs":     60 * 60,
+			"day":     24 * 60 * 60,
+			"days":    24 * 60 * 60,
+			"d":       24 * 60 * 60,
+		}
+		return value * multipliers[strings.ToLower(match[2])], true
+	}
+	return 0, false
 }
 
 func (s *DefaultScanner) scanUnknownArguments(req ScanRequest) []Finding {
@@ -1525,15 +1640,61 @@ func isCommandTextSeparator(r rune) bool {
 }
 
 func isDependencyInstall(cmd string, argv []string) bool {
-	if len(argv) < 2 {
+	switch cmd {
+	case "python", "python3", "py":
+		for i := 1; i+1 < len(argv); i++ {
+			if strings.ToLower(argv[i]) != "-m" {
+				continue
+			}
+			module := strings.ToLower(argv[i+1])
+			if module != "pip" && module != "pip3" {
+				return false
+			}
+			return hasDependencyAction(argv[i+2:], "install", "add")
+		}
+		return false
+	case "npm", "pnpm", "yarn", "pip", "pip3", "pipx", "apt", "apt-get", "brew":
+		return hasDependencyAction(argv[1:], "install", "add")
+	case "go":
+		return hasDependencyAction(argv[1:], "install", "get")
+	default:
 		return false
 	}
-	sub := strings.ToLower(argv[1])
-	switch cmd {
-	case "npm", "pnpm", "yarn", "pip", "pip3", "apt", "apt-get", "brew":
-		return sub == "install" || sub == "add"
-	case "go":
-		return sub == "install" || sub == "get"
+}
+
+func hasDependencyAction(args []string, actions ...string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := strings.ToLower(strings.TrimSpace(args[i]))
+		if arg == "--" {
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			if dependencyOptionTakesValue(arg) && !strings.Contains(arg, "=") {
+				i++
+			}
+			continue
+		}
+		for _, action := range actions {
+			if arg == action {
+				return true
+			}
+		}
+		return false
+	}
+	return false
+}
+
+func dependencyOptionTakesValue(option string) bool {
+	if strings.Contains(option, "=") {
+		return false
+	}
+	switch option {
+	case "-c", "-e", "-f", "-g", "-i", "-o", "-p", "-r", "-t", "-w",
+		"--cache", "--cache-dir", "--config-settings", "--constraint", "--cwd",
+		"--directory", "--extra-index-url", "--file", "--filter", "--index-url",
+		"--log-file", "--loglevel", "--prefix", "--python", "--registry", "--root",
+		"--target", "--userconfig", "--workspace", "--workspace-root":
+		return true
 	default:
 		return false
 	}
