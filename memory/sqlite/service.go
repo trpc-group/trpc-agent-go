@@ -300,31 +300,42 @@ func (s *Service) updateInPlace(
 ) error {
 	const updateSQL = `UPDATE %s
 SET memory_id = ?, memory_data = ?, updated_at = ?
-WHERE app_name = ? AND user_id = ? AND memory_id = ?`
+WHERE app_name = ? AND user_id = ? AND memory_id = ?
+AND deleted_at IS NULL`
 	query := fmt.Sprintf(updateSQL, s.tableName)
 	args := []any{
 		newID, updated, now.UTC().UnixNano(),
 		memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID,
 	}
-	if s.opts.softDelete {
-		query += " AND deleted_at IS NULL"
-	}
-
 	res, err := s.db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("update memory entry: %w", err)
 	}
-	affected, err := res.RowsAffected()
+	return requireAffectedMemoryRow(
+		res,
+		"update memory entry",
+		memoryKey.MemoryID,
+	)
+}
+
+func requireAffectedMemoryRow(
+	result sql.Result,
+	operation string,
+	memoryID string,
+) error {
+	affected, err := result.RowsAffected()
 	if err != nil {
-		return fmt.Errorf("update memory entry rows affected: %w", err)
+		return fmt.Errorf("%s rows affected: %w", operation, err)
 	}
 	if affected == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		return fmt.Errorf("memory with id %s not found", memoryID)
 	}
 	return nil
 }
 
 // rotateMemory replaces a memory entry with a new ID in a transaction.
+//
+//nolint:gosec // All interpolated table names are validated by WithTableName.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -393,12 +404,12 @@ func (s *Service) rotateMemory(
 		if err != nil {
 			return fmt.Errorf("revive rotated memory target: %w", err)
 		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("revive rotated memory target rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("memory with id %s not found", newID)
+		if err := requireAffectedMemoryRow(
+			res,
+			"revive rotated memory target",
+			newID,
+		); err != nil {
+			return err
 		}
 	default:
 		deleteTargetQuery := fmt.Sprintf(
@@ -416,12 +427,12 @@ func (s *Service) rotateMemory(
 		if err != nil {
 			return fmt.Errorf("delete rotated memory target: %w", err)
 		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("delete rotated memory target rows affected: %w", err)
-		}
-		if affected == 0 {
-			return fmt.Errorf("memory with id %s not found", newID)
+		if err := requireAffectedMemoryRow(
+			res,
+			"delete rotated memory target",
+			newID,
+		); err != nil {
+			return err
 		}
 		insertTarget = true
 	}
@@ -466,7 +477,8 @@ memory_id, app_name, user_id, memory_data, created_at, updated_at, deleted_at
 		}
 	} else {
 		removeQuery = fmt.Sprintf(
-			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ? "+
+				"AND deleted_at IS NULL",
 			s.tableName,
 		)
 		removeArgs = []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
@@ -475,12 +487,12 @@ memory_id, app_name, user_id, memory_data, created_at, updated_at, deleted_at
 	if err != nil {
 		return fmt.Errorf("remove rotated memory source: %w", err)
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("remove rotated memory source rows affected: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	if err := requireAffectedMemoryRow(
+		res,
+		"remove rotated memory source",
+		memoryKey.MemoryID,
+	); err != nil {
+		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit rotated memory transaction: %w", err)
@@ -493,17 +505,14 @@ func (s *Service) getEntry(
 	memoryKey memory.Key,
 ) (*memory.Entry, error) {
 	const selectSQL = `SELECT memory_data FROM %s
-WHERE app_name = ? AND user_id = ? AND memory_id = ?`
+WHERE app_name = ? AND user_id = ? AND memory_id = ?
+AND deleted_at IS NULL`
 	query := fmt.Sprintf(selectSQL, s.tableName)
 	args := []any{
 		memoryKey.AppName,
 		memoryKey.UserID,
 		memoryKey.MemoryID,
 	}
-	if s.opts.softDelete {
-		query += " AND deleted_at IS NULL"
-	}
-
 	var memoryData []byte
 	err := s.db.QueryRowContext(ctx, query, args...).Scan(&memoryData)
 	if errors.Is(err, sql.ErrNoRows) {

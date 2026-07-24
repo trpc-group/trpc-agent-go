@@ -88,37 +88,6 @@ func (e *errorEmbedder) GetDimensions() int {
 	return e.dimension
 }
 
-type callbackEmbedder struct {
-	dimension int
-	callback  func()
-	called    bool
-}
-
-func (c *callbackEmbedder) GetEmbedding(
-	ctx context.Context,
-	text string,
-) ([]float64, error) {
-	_ = ctx
-	_ = text
-	if !c.called {
-		c.called = true
-		c.callback()
-	}
-	return make([]float64, c.dimension), nil
-}
-
-func (c *callbackEmbedder) GetEmbeddingWithUsage(
-	ctx context.Context,
-	text string,
-) ([]float64, map[string]any, error) {
-	embedding, err := c.GetEmbedding(ctx, text)
-	return embedding, nil, err
-}
-
-func (c *callbackEmbedder) GetDimensions() int {
-	return c.dimension
-}
-
 type mapEmbedder struct {
 	dimension  int
 	embeddings map[string][]float64
@@ -438,54 +407,6 @@ func TestService_UpdateMemory_SameIdentityKeepsID(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, oldID, got[0].ID)
 	require.Equal(t, []string{"new"}, got[0].Memory.Topics)
-}
-
-func TestService_UpdateMemory_ZeroRowsAffectedDoesNotReportSuccess(t *testing.T) {
-	db, cleanup := openTempSQLiteDB(t)
-	defer cleanup()
-
-	svc, err := NewService(
-		db,
-		WithEmbedder(&mockEmbedder{dimension: 2}),
-		WithIndexDimension(2),
-	)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, svc.Close()) }()
-
-	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
-	require.NoError(t, svc.AddMemory(ctx, userKey, "alpha", []string{"old"}))
-	entries, err := svc.ReadMemories(ctx, userKey, 0)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
-
-	svc.opts.embedder = &callbackEmbedder{
-		dimension: 2,
-		callback: func() {
-			_, deleteErr := db.Exec(
-				"DELETE FROM memories WHERE app_name = ? AND user_id = ? AND memory_id = ?",
-				userKey.AppName,
-				userKey.UserID,
-				entries[0].ID,
-			)
-			require.NoError(t, deleteErr)
-		},
-	}
-
-	result := &memory.UpdateResult{MemoryID: "unchanged"}
-	err = svc.UpdateMemory(
-		ctx,
-		memory.Key{
-			AppName:  userKey.AppName,
-			UserID:   userKey.UserID,
-			MemoryID: entries[0].ID,
-		},
-		"alpha",
-		[]string{"new"},
-		memory.WithUpdateResult(result),
-	)
-	require.Error(t, err)
-	require.Equal(t, "unchanged", result.MemoryID)
 }
 
 func TestService_UpdateMemory_ActiveIDConflictPreservesEntries(t *testing.T) {

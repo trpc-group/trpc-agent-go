@@ -340,12 +340,10 @@ func (s *Service) UpdateMemory(
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
 			"memory_kind, event_time, participants, location, "+
-			"created_at, updated_at FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
+			"created_at, updated_at FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3 "+
+			"AND deleted_at IS NULL",
 		s.tableName,
 	)
-	if s.opts.softDelete {
-		selectQuery += " AND deleted_at IS NULL"
-	}
 	var entry *memory.Entry
 	if err := s.db.Query(ctx, func(rows *sql.Rows) error {
 		if !rows.Next() {
@@ -383,17 +381,40 @@ func (s *Service) UpdateMemory(
 		now,
 	)
 	ef := resolveMetadata(entry.Memory)
+
+	updateQuery := fmt.Sprintf(
+		"UPDATE %s SET memory_id = $1, memory_content = $2, topics = $3, embedding = $4, "+
+			"memory_kind = $5, event_time = $6, participants = $7, location = $8, updated_at = $9 "+
+			"WHERE memory_id = $10 AND app_name = $11 AND user_id = $12 AND deleted_at IS NULL",
+		s.tableName,
+	)
 	if newID == memoryKey.MemoryID {
-		err = s.updateInPlace(
+		res, err := s.db.ExecContext(
 			ctx,
-			memoryKey,
+			updateQuery,
 			newID,
 			memoryStr,
-			topics,
+			pq.Array(topics),
 			vector,
-			ef,
+			ef.kind,
+			ef.eventTime,
+			pq.Array(ef.participants),
+			ef.location,
 			now,
+			memoryKey.MemoryID,
+			memoryKey.AppName,
+			memoryKey.UserID,
 		)
+		if err != nil {
+			return fmt.Errorf("update memory entry failed: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("update memory entry rows affected failed: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
 	} else {
 		err = s.rotateMemory(
 			ctx,
@@ -410,9 +431,6 @@ func (s *Service) UpdateMemory(
 			return fmt.Errorf("rotate memory entry failed: %w", err)
 		}
 	}
-	if err != nil {
-		return err
-	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID
 	}
@@ -420,56 +438,9 @@ func (s *Service) UpdateMemory(
 	return nil
 }
 
-// updateInPlace updates a memory entry without changing its ID.
-func (s *Service) updateInPlace(
-	ctx context.Context,
-	memoryKey memory.Key,
-	newID string,
-	memoryStr string,
-	topics []string,
-	vector pgvector.Vector,
-	ef metadataSQLFields,
-	now time.Time,
-) error {
-	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_id = $1, memory_content = $2, topics = $3, embedding = $4, "+
-			"memory_kind = $5, event_time = $6, participants = $7, location = $8, updated_at = $9 "+
-			"WHERE memory_id = $10 AND app_name = $11 AND user_id = $12",
-		s.tableName,
-	)
-	if s.opts.softDelete {
-		updateQuery += " AND deleted_at IS NULL"
-	}
-	res, err := s.db.ExecContext(
-		ctx,
-		updateQuery,
-		newID,
-		memoryStr,
-		pq.Array(topics),
-		vector,
-		ef.kind,
-		ef.eventTime,
-		pq.Array(ef.participants),
-		ef.location,
-		now,
-		memoryKey.MemoryID,
-		memoryKey.AppName,
-		memoryKey.UserID,
-	)
-	if err != nil {
-		return fmt.Errorf("update memory entry failed: %w", err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update memory entry rows affected failed: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-	}
-	return nil
-}
-
 // rotateMemory replaces a memory entry with a new ID in a transaction.
+//
+//nolint:gosec // All interpolated table names are validated by WithTableName.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -611,7 +582,8 @@ func (s *Service) rotateMemory(
 			}
 		} else {
 			removeQuery = fmt.Sprintf(
-				"DELETE FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3",
+				"DELETE FROM %s WHERE memory_id = $1 AND app_name = $2 AND user_id = $3 "+
+					"AND deleted_at IS NULL",
 				s.tableName,
 			)
 			removeArgs = []any{

@@ -368,9 +368,7 @@ participants, location, created_at, updated_at
 FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	selectQuery := fmt.Sprintf(selectSQL, s.tableName)
 	selectArgs := []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
-	if s.opts.softDelete {
-		selectQuery += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
-	}
+	selectQuery += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
 	rows, err := s.db.QueryContext(ctx, selectQuery, selectArgs...)
 	if err != nil {
 		return fmt.Errorf("load memory: %w", err)
@@ -427,51 +425,6 @@ FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?`
 	if err != nil {
 		return fmt.Errorf("marshal participants: %w", err)
 	}
-	if newID == memoryKey.MemoryID {
-		err = s.updateInPlace(
-			ctx,
-			memoryKey,
-			memoryStr,
-			entry,
-			blob,
-			topicsJSON,
-			participantsJSON,
-			updatedAtNs,
-		)
-	} else {
-		err = s.rotateMemory(
-			ctx,
-			memoryKey,
-			newID,
-			memoryStr,
-			entry,
-			blob,
-			topicsJSON,
-			participantsJSON,
-			updatedAtNs,
-		)
-	}
-	if err != nil {
-		return err
-	}
-	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = newID
-	}
-
-	return nil
-}
-
-// updateInPlace updates a memory entry without changing its ID.
-func (s *Service) updateInPlace(
-	ctx context.Context,
-	memoryKey memory.Key,
-	memoryStr string,
-	entry *memory.Entry,
-	blob []byte,
-	topicsJSON []byte,
-	participantsJSON string,
-	updatedAtNs int64,
-) error {
 	query := fmt.Sprintf(
 		`UPDATE %s SET
 embedding = `+sqlVectorFromBlob+`,
@@ -493,24 +446,45 @@ WHERE app_name = ? AND user_id = ? AND memory_id = ?`,
 		memoryKey.UserID,
 		memoryKey.MemoryID,
 	}
-	if s.opts.softDelete {
-		query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
+	query += fmt.Sprintf(" AND deleted_at = %d", notDeletedAtNs)
+	if newID == memoryKey.MemoryID {
+		res, err := s.db.ExecContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("update memory: %w", err)
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("update memory rows affected: %w", err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+		}
+	} else {
+		err = s.rotateMemory(
+			ctx,
+			memoryKey,
+			newID,
+			memoryStr,
+			entry,
+			blob,
+			topicsJSON,
+			participantsJSON,
+			updatedAtNs,
+		)
+		if err != nil {
+			return err
+		}
 	}
-	res, err := s.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return fmt.Errorf("update memory: %w", err)
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = newID
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("update memory rows affected: %w", err)
-	}
-	if affected == 0 {
-		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
-	}
+
 	return nil
 }
 
 // rotateMemory replaces a memory entry with a new ID in a transaction.
+//
+//nolint:gosec // All interpolated table names are validated by WithTableName.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -657,8 +631,10 @@ participants, location
 		)
 	} else {
 		removeQuery = fmt.Sprintf(
-			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+			"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ? "+
+				"AND deleted_at = %d",
 			s.tableName,
+			notDeletedAtNs,
 		)
 	}
 	removeArgs := []any{

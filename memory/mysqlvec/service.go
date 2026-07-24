@@ -265,12 +265,10 @@ func (s *Service) UpdateMemory(
 	selectQuery := fmt.Sprintf(
 		"SELECT memory_id, app_name, user_id, memory_content, topics, "+
 			"memory_kind, event_time, participants, location, "+
-			"created_at, updated_at FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+			"created_at, updated_at FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ? "+
+			"AND deleted_at IS NULL",
 		s.tableName,
 	)
-	if s.opts.softDelete {
-		selectQuery += " AND deleted_at IS NULL"
-	}
 
 	var entry *memory.Entry
 	var found bool
@@ -357,12 +355,9 @@ func (s *Service) updateInPlace(
 	updateQuery := fmt.Sprintf(
 		"UPDATE %s SET memory_content = ?, topics = ?, embedding = "+embeddingExpr+", "+
 			"memory_kind = ?, event_time = ?, participants = ?, location = ?, updated_at = ? "+
-			"WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+			"WHERE memory_id = ? AND app_name = ? AND user_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
-	if s.opts.softDelete {
-		updateQuery += " AND deleted_at IS NULL"
-	}
 	res, err := s.db.Exec(ctx, updateQuery,
 		memoryStr, string(topicsJSON), embeddingArg,
 		ef.kind, ef.eventTime, ef.participants, ef.location, now,
@@ -382,6 +377,8 @@ func (s *Service) updateInPlace(
 }
 
 // rotateMemory replaces a memory entry with a new ID in a transaction.
+//
+//nolint:gosec // All interpolated table names are validated by WithTableName.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -393,7 +390,7 @@ func (s *Service) rotateMemory(
 	createdAt time.Time,
 	now time.Time,
 ) error {
-	return s.db.Transaction(ctx, func(tx *sql.Tx) error { // nolint:gosec // table name is validated
+	return s.db.Transaction(ctx, func(tx *sql.Tx) error {
 		var targetActive bool
 		checkQuery := fmt.Sprintf(
 			"SELECT deleted_at IS NULL FROM %s "+
@@ -519,7 +516,8 @@ func (s *Service) rotateMemory(
 			args = []any{now, memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}
 		} else {
 			query = fmt.Sprintf(
-				"DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ?",
+				"DELETE FROM %s WHERE memory_id = ? AND app_name = ? AND user_id = ? "+
+					"AND deleted_at IS NULL",
 				s.tableName,
 			)
 			args = []any{memoryKey.MemoryID, memoryKey.AppName, memoryKey.UserID}

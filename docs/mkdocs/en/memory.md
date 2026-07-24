@@ -922,6 +922,13 @@ redisService, err := memoryredis.NewService(
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
 
+**Redis ACL requirement**: `UpdateMemory` uses a server-side Lua script to
+atomically validate and rotate memory IDs. ACL users must be allowed to run
+`EVALSHA` and `EVAL` (`EVAL` is required when the script is not yet cached), in
+addition to the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
+the configured memory-key pattern. Do not remove `EVAL` after warm-up because
+the Redis script cache can be cleared by a restart or `SCRIPT FLUSH`.
+
 **Key prefix example**:
 
 ```go

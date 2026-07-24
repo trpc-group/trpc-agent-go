@@ -191,12 +191,10 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key,
 	ep := memory.ResolveUpdateOptions(opts)
 
 	selectQuery := fmt.Sprintf(
-		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"SELECT memory_data FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ? "+
+			"AND deleted_at IS NULL",
 		s.tableName,
 	)
-	if s.opts.softDelete {
-		selectQuery += " AND deleted_at IS NULL"
-	}
 	var memoryData []byte
 	err := s.db.QueryRow(ctx, []any{&memoryData}, selectQuery, memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID)
 	if err != nil {
@@ -254,12 +252,10 @@ func (s *Service) updateInPlace(
 	now time.Time,
 ) error {
 	updateQuery := fmt.Sprintf(
-		"UPDATE %s SET memory_id = ?, memory_data = ?, updated_at = ? WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+		"UPDATE %s SET memory_id = ?, memory_data = ?, updated_at = ? "+
+			"WHERE app_name = ? AND user_id = ? AND memory_id = ? AND deleted_at IS NULL",
 		s.tableName,
 	)
-	if s.opts.softDelete {
-		updateQuery += " AND deleted_at IS NULL"
-	}
 	res, err := s.db.Exec(
 		ctx,
 		updateQuery,
@@ -284,6 +280,8 @@ func (s *Service) updateInPlace(
 }
 
 // rotateMemory replaces a memory entry with a new ID in a transaction.
+//
+//nolint:gosec // All interpolated table names are validated by WithTableName.
 func (s *Service) rotateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -420,7 +418,8 @@ func (s *Service) rotateMemory(
 			}
 		} else {
 			removeQuery = fmt.Sprintf(
-				"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ?",
+				"DELETE FROM %s WHERE app_name = ? AND user_id = ? AND memory_id = ? "+
+					"AND deleted_at IS NULL",
 				s.tableName,
 			)
 			removeArgs = []any{memoryKey.AppName, memoryKey.UserID, memoryKey.MemoryID}
