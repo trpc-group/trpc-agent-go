@@ -301,6 +301,11 @@
       overflow: hidden;
       transition: border-color .12s, box-shadow .12s;
     }
+    .chunk.locatable { cursor: pointer; }
+    .chunk.locatable:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
     .chunk.over { border-color: #fca5a5; }
     .chunk.active {
       border-left-color: var(--accent);
@@ -513,6 +518,7 @@
             <div class="legend">
               <span class="legend-item"><span class="legend-line"></span>source mapping</span>
               <span class="legend-item"><span class="legend-overlap"></span>overlap</span>
+              <span class="legend-item">click a chunk to locate its source</span>
             </div>
           </div>
           <button id="metadata-toggle" class="secondary metadata-toggle" type="button" disabled>
@@ -820,6 +826,12 @@
       ));
       card.addEventListener("mouseenter", () => setActiveChunks([chunk.index]));
       card.addEventListener("mouseleave", clearActiveChunks);
+      card.addEventListener("click", () => scrollToChunkSource(chunk.index));
+      card.addEventListener("keydown", event => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        scrollToChunkSource(chunk.index);
+      });
       return card;
     }
 
@@ -1411,6 +1423,10 @@
           `[data-chunk-index="${chunk.index}"]`
         );
         if (!anchor || !card) continue;
+        card.classList.add("locatable");
+        card.tabIndex = 0;
+        card.setAttribute("role", "button");
+        card.title = "Jump to this chunk in the source";
         const path = document.createElementNS(svgNamespace, "path");
         path.classList.add("connector");
         path.dataset.chunkIndex = String(chunk.index);
@@ -1470,6 +1486,25 @@
           `M ${x1} ${y1} C ${middle} ${y1}, ${middle} ${y2}, ${x2} ${y2}`
         );
       }
+    }
+
+    function scrollToChunkSource(index) {
+      const connection = connections.find(candidate => candidate.index === index);
+      if (!connection) return;
+
+      showMapping();
+      const viewport = sourceMap.getBoundingClientRect();
+      const anchor = connection.anchor.getBoundingClientRect();
+      const targetOffset = Math.min(viewport.height * 0.25, 96);
+
+      scrollSyncing = true;
+      sourceMap.scrollTop += anchor.top - viewport.top - targetOffset;
+      setActiveChunks([index]);
+      scheduleConnections();
+      requestAnimationFrame(() => {
+        scrollSyncing = false;
+        scheduleConnections();
+      });
     }
 
     function setActiveChunks(indexes) {

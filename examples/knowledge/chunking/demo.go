@@ -30,22 +30,22 @@ const (
 	defaultJSONChunkSize = 2000
 )
 
-//go:embed sample.md
+//go:embed samples/sample.md
 var sampleMarkdown string
 
-//go:embed sample-edge.md
+//go:embed samples/sample-edge.md
 var sampleEdgeMarkdown string
 
-//go:embed sample-catalog.md
+//go:embed samples/sample-catalog.md
 var sampleCatalogMarkdown string
 
-//go:embed sample.txt
+//go:embed samples/sample.txt
 var sampleText string
 
-//go:embed sample.csv
+//go:embed samples/sample.csv
 var sampleCSV string
 
-//go:embed sample.json
+//go:embed samples/sample.json
 var sampleJSON string
 
 // SampleDocument describes one document bundled with the example.
