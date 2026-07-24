@@ -378,38 +378,52 @@ func offloadPromptContext(
 	)
 	recent := make([]offloadRecentMessage, 0, maxOffloadRecentMessages)
 	for _, message := range messages {
-		if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
-			continue
+		recentMessage, ok := newOffloadRecentMessage(
+			message,
+			normalizedPrompt,
+		)
+		if ok {
+			recent = append(recent, recentMessage)
 		}
-		if message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 {
-			continue
-		}
-		content := strings.TrimSpace(messageText(message))
-		if content == "" || strings.Contains(strings.ToLower(content), "heartbeat") {
-			continue
-		}
-		if message.Role == model.RoleUser && utf8.RuneCountInString(content) <= 5 {
-			continue
-		}
-		if message.Role == model.RoleAssistant && utf8.RuneCountInString(content) <= 10 {
-			continue
-		}
-		normalized := strings.ToLower(truncateRunes(content, 200))
-		if normalizedPrompt != "" &&
-			(normalized == normalizedPrompt ||
-				strings.HasPrefix(normalized, normalizedPrompt) ||
-				strings.HasPrefix(normalizedPrompt, normalized)) {
-			continue
-		}
-		recent = append(recent, offloadRecentMessage{
-			Role:    message.Role,
-			Content: truncateRunes(content, maxOffloadRecentRunes),
-		})
 	}
 	if len(recent) > maxOffloadRecentMessages {
 		recent = recent[len(recent)-maxOffloadRecentMessages:]
 	}
 	return prompt, recent
+}
+
+func newOffloadRecentMessage(
+	message model.Message,
+	normalizedPrompt string,
+) (offloadRecentMessage, bool) {
+	if message.Role != model.RoleUser && message.Role != model.RoleAssistant {
+		return offloadRecentMessage{}, false
+	}
+	if message.Role == model.RoleAssistant && len(message.ToolCalls) > 0 {
+		return offloadRecentMessage{}, false
+	}
+	content := strings.TrimSpace(messageText(message))
+	if content == "" || strings.Contains(strings.ToLower(content), "heartbeat") {
+		return offloadRecentMessage{}, false
+	}
+	if message.Role == model.RoleUser && utf8.RuneCountInString(content) <= 5 {
+		return offloadRecentMessage{}, false
+	}
+	if message.Role == model.RoleAssistant &&
+		utf8.RuneCountInString(content) <= 10 {
+		return offloadRecentMessage{}, false
+	}
+	normalized := strings.ToLower(truncateRunes(content, 200))
+	if normalizedPrompt != "" &&
+		(normalized == normalizedPrompt ||
+			strings.HasPrefix(normalized, normalizedPrompt) ||
+			strings.HasPrefix(normalizedPrompt, normalized)) {
+		return offloadRecentMessage{}, false
+	}
+	return offloadRecentMessage{
+		Role:    message.Role,
+		Content: truncateRunes(content, maxOffloadRecentRunes),
+	}, true
 }
 
 func isInternalOffloadPrompt(prompt string) bool {
