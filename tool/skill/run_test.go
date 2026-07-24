@@ -4131,11 +4131,12 @@ func (m *stubDownloadModel) DownloadFile(
 
 func TestRunTool_stageUserFileInputs_NoInvocation(t *testing.T) {
 	rt := &RunTool{}
-	staged, warnings := rt.stageUserFileInputs(
+	staged, warnings, err := rt.stageUserFileInputs(
 		context.Background(),
 		nil,
 		codeexecutor.Workspace{},
 	)
+	require.NoError(t, err)
 	require.Nil(t, staged)
 	require.Nil(t, warnings)
 }
@@ -4146,11 +4147,12 @@ func TestRunTool_stageUserFileInputs_NoFiles(t *testing.T) {
 		agent.WithInvocationMessage(model.NewUserMessage("hi")),
 	)
 	ctx := agent.NewInvocationContext(context.Background(), inv)
-	staged, warnings := rt.stageUserFileInputs(
+	staged, warnings, err := rt.stageUserFileInputs(
 		ctx,
 		nil,
 		codeexecutor.Workspace{},
 	)
+	require.NoError(t, err)
 	require.Nil(t, staged)
 	require.Nil(t, warnings)
 }
@@ -4166,13 +4168,42 @@ func TestRunTool_stageUserFileInputs_MetadataError_Warn(t *testing.T) {
 	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	_, warnings := rt.stageUserFileInputs(
+	_, warnings, err := rt.stageUserFileInputs(
 		ctx,
 		nil,
 		codeexecutor.Workspace{},
 	)
+	require.NoError(t, err)
 	require.Len(t, warnings, 1)
 	require.Contains(t, warnings[0], "load metadata")
+}
+
+func TestRunTool_stageUserFileInputs_StalePropagates(t *testing.T) {
+	rt := &RunTool{}
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHi),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	stale := fmt.Errorf(
+		"metadata from old workspace: %w",
+		codeexecutor.ErrWorkspaceStale,
+	)
+
+	_, warnings, err := rt.stageUserFileInputs(
+		ctx,
+		codeexecutor.NewEngine(
+			nil,
+			&stubFS{collectErr: stale},
+			nil,
+		),
+		codeexecutor.Workspace{},
+	)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.Empty(t, warnings)
 }
 
 func TestSanitizeUserFileName(t *testing.T) {

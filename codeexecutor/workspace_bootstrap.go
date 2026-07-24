@@ -25,9 +25,10 @@ import "time"
 // wire it into their workspace_exec tool.
 //
 // Files are staged first (in declaration order); Commands then run
-// (also in declaration order). Both are idempotent: the reconciler
-// fingerprints each entry and skips work whose fingerprint plus
-// on-disk sentinel are still satisfied.
+// (also in declaration order). The reconciler fingerprints each entry and
+// skips work whose fingerprint plus on-disk sentinel are still satisfied. This
+// provides eventual convergence, not exactly-once execution: callers remain
+// responsible for making initialization commands replay-safe.
 type WorkspaceBootstrapSpec struct {
 	// Files are static inputs that must exist before commands run.
 	// Each entry maps a workspace-relative Target to either inline
@@ -65,6 +66,11 @@ type WorkspaceFile struct {
 // execute during workspace preparation. The command runs through the
 // engine's runner, with the same isolation guarantees as user
 // commands.
+//
+// A fingerprint or marker records a known successful result; it cannot make an
+// arbitrary command exactly-once. If a backend cannot prove that a failed
+// command never started, it must not report [ErrWorkspaceStale], because the
+// framework will not automatically replay an uncertain command result.
 //
 // Self-healing notes:
 //

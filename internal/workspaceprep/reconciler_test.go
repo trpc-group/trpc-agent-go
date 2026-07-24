@@ -11,6 +11,7 @@ package workspaceprep
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -558,6 +559,153 @@ func TestReconciler_OptionalRequirementFailureIsWarning(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, warnings)
 	require.Contains(t, warnings[0], "optional requirement")
+}
+
+func TestReconciler_StaleRetryDisposition(t *testing.T) {
+	stale := fmt.Errorf("rotated: %w", codeexecutor.ErrWorkspaceStale)
+
+	t.Run("metadata load stale is retry safe", func(t *testing.T) {
+		eng := &fakeEngine{fs: &fakeFS{collectErr: stale}}
+		req := &orderReq{
+			key:   "never-applied",
+			kind:  KindFile,
+			phase: PhaseFile,
+		}
+
+		_, err := NewReconciler().Reconcile(
+			context.Background(),
+			eng,
+			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
+			[]Requirement{req},
+		)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.False(t, errors.Is(err, ErrReconcileRetryUnsafe))
+	})
+
+	t.Run("command not started is retry safe", func(t *testing.T) {
+		eng, ws := newTestEngine(t)
+		req := &orderReq{
+			key:      "stale-command",
+			kind:     KindCommand,
+			phase:    PhaseCommand,
+			applyErr: stale,
+		}
+
+		warnings, err := NewReconciler().Reconcile(
+			context.Background(), eng, ws, []Requirement{req},
+		)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.False(t, errors.Is(err, ErrReconcileRetryUnsafe))
+		require.Empty(t, warnings)
+	})
+
+	t.Run("stale after successful command is retry unsafe", func(t *testing.T) {
+		eng, ws := newTestEngine(t)
+		var laterCalls int
+		success := &orderReq{
+			key:   "successful-command",
+			kind:  KindCommand,
+			phase: PhaseCommand,
+			apply: func() {},
+		}
+		later := &orderReq{
+			key:      "later-stale",
+			kind:     KindCommand,
+			phase:    PhaseCommand,
+			apply:    func() { laterCalls++ },
+			applyErr: stale,
+		}
+
+		_, err := NewReconciler().Reconcile(
+			context.Background(), eng, ws,
+			[]Requirement{success, later},
+		)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.ErrorIs(t, err, ErrReconcileRetryUnsafe)
+		require.Equal(t, 1, laterCalls)
+	})
+
+	t.Run("optional stale remains a control-flow error", func(t *testing.T) {
+		eng, ws := newTestEngine(t)
+		var nextCalls int
+		optional := &orderReq{
+			key:      "optional-stale",
+			kind:     KindFile,
+			phase:    PhaseFile,
+			optional: true,
+			applyErr: stale,
+		}
+		next := &orderReq{
+			key:   "must-not-run",
+			kind:  KindCommand,
+			phase: PhaseCommand,
+			apply: func() { nextCalls++ },
+		}
+
+		warnings, err := NewReconciler().Reconcile(
+			context.Background(), eng, ws,
+			[]Requirement{optional, next},
+		)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.False(t, errors.Is(err, ErrReconcileRetryUnsafe))
+		require.Empty(t, warnings)
+		require.Zero(t, nextCalls)
+	})
+
+	t.Run("metadata commit stale after command is retry unsafe",
+		func(t *testing.T) {
+			fs := &fakeFS{}
+			eng := &fakeEngine{
+				fs: fs,
+				runner: &fakeRunner{
+					err: stale,
+				},
+			}
+			req := &orderReq{
+				key:   "successful-command",
+				kind:  KindCommand,
+				phase: PhaseCommand,
+				apply: func() {},
+			}
+
+			_, err := NewReconciler().Reconcile(
+				context.Background(),
+				eng,
+				codeexecutor.Workspace{
+					ID:   "ws",
+					Path: t.TempDir(),
+				},
+				[]Requirement{req},
+			)
+			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			require.ErrorIs(t, err, ErrReconcileRetryUnsafe)
+		},
+	)
+
+	t.Run("marker stale after command is retry unsafe", func(t *testing.T) {
+		req, err := NewCommandRequirement(CommandSpec{
+			Cmd:        "setup",
+			MarkerPath: "work/.setup-complete",
+		})
+		require.NoError(t, err)
+		eng := &fakeEngine{
+			fs: &fakeFS{
+				putErr: stale,
+			},
+			runner: &fakeRunner{
+				res: codeexecutor.RunResult{ExitCode: 0},
+			},
+		}
+
+		_, err = NewReconciler().Reconcile(
+			context.Background(),
+			eng,
+			codeexecutor.Workspace{ID: "ws", Path: t.TempDir()},
+			[]Requirement{req},
+		)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.ErrorIs(t, err, ErrReconcileRetryUnsafe)
+	})
 }
 
 // orderReq is a minimal Requirement implementation used by tests to
