@@ -3533,13 +3533,13 @@ func mockDBInitWithPrefix(mock sqlmock.Sqlmock, tablePrefix string) {
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 		// 2. verifyColumns query
-		colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE"})
+		colRows := sqlmock.NewRows([]string{"COLUMN_NAME", "DATA_TYPE", "IS_NULLABLE", "DATETIME_PRECISION"})
 		for _, col := range schema.columns {
 			isNullable := "NO"
 			if col.nullable {
 				isNullable = "YES"
 			}
-			colRows.AddRow(col.name, col.dataType, isNullable)
+			colRows.AddRow(col.name, col.dataType, isNullable, datetimePrecisionForType(col.dataType))
 		}
 		mock.ExpectQuery("SELECT COLUMN_NAME").
 			WithArgs(fullTableName).

@@ -37,6 +37,7 @@ const (
 func TestMetadataIsZero(t *testing.T) {
 	assert.True(t, Metadata{}.IsZero())
 	assert.False(t, testMetadata("evt-1").IsZero())
+	assert.False(t, Metadata{ForwardedProps: map[string]any{}}.IsZero())
 }
 
 func TestSnapshotMetadataIsZero(t *testing.T) {
@@ -44,6 +45,11 @@ func TestSnapshotMetadataIsZero(t *testing.T) {
 	assert.False(t, SnapshotMetadata{
 		Messages: map[string]Metadata{
 			testMessageID: testMetadata("evt-1"),
+		},
+	}.IsZero())
+	assert.False(t, SnapshotMetadata{
+		Runs: map[string]Metadata{
+			"run-1": {ForwardedProps: map[string]any{}},
 		},
 	}.IsZero())
 }
@@ -157,6 +163,7 @@ func TestFromRawEventRejectsUnsupportedValues(t *testing.T) {
 
 func TestFromRawEventSupportsMapPayload(t *testing.T) {
 	timestamp := int64(1781258400000)
+	forwardedProps := map[string]any{"file_url": "https://example.com/demo.png"}
 	metadata, ok := FromRawEvent(map[string]any{
 		"eventId":            "evt-1",
 		"author":             "member-a",
@@ -164,6 +171,7 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 		"parentInvocationId": "parent-1",
 		"branch":             "root.member-a",
 		"timestamp":          float64(timestamp),
+		"forwardedProps":     forwardedProps,
 	})
 	require.True(t, ok)
 	assert.Equal(t, Metadata{
@@ -173,6 +181,7 @@ func TestFromRawEventSupportsMapPayload(t *testing.T) {
 		ParentInvocationID: "parent-1",
 		Branch:             "root.member-a",
 		Timestamp:          &timestamp,
+		ForwardedProps:     forwardedProps,
 	}, metadata)
 }
 
@@ -557,10 +566,27 @@ func TestRecordSnapshotMetadataSkipsChunkEventsWithoutMessageID(
 func TestRecordMetadataSkipsEmptyIDs(t *testing.T) {
 	messages := map[string]Metadata{}
 	toolCalls := map[string]Metadata{}
+	runs := map[string]Metadata{}
 	recordMessageMetadata(messages, "", testMetadata("evt-1"))
 	recordToolCallMetadata(toolCalls, "", testMetadata("evt-1"))
+	recordRunMetadata(runs, "", Metadata{ForwardedProps: map[string]any{}})
+	recordRunMetadata(runs, "run-1", Metadata{})
 	assert.Empty(t, messages)
 	assert.Empty(t, toolCalls)
+	assert.Empty(t, runs)
+}
+
+func TestRunIDFromRawEvent(t *testing.T) {
+	assert.Empty(t, runIDFromRawEvent(nil))
+	assert.Equal(t, "run-1", runIDFromRawEvent(map[string]any{"runId": "run-1"}))
+	assert.Empty(t, runIDFromRawEvent(map[string]any{"runId": 123}))
+	assert.Equal(t, "run-2", runIDFromRawEvent(struct {
+		RunID string `json:"runId,omitempty"`
+	}{RunID: "run-2"}))
+	assert.Empty(t, runIDFromRawEvent(struct {
+		RunID int `json:"runId,omitempty"`
+	}{RunID: 123}))
+	assert.Empty(t, runIDFromRawEvent(func() {}))
 }
 
 func TestBuildSnapshotMetadataIndexesMessagesAndToolCalls(t *testing.T) {
@@ -761,6 +787,62 @@ func TestBuildSnapshotMetadataIndexesCustomUserMessageID(t *testing.T) {
 	assert.Equal(t, timestampTime.UnixMilli(), *got.Timestamp)
 }
 
+func TestBuildSnapshotMetadataIndexesForwardedPropsByRunID(t *testing.T) {
+	timestampTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	forwardedProps := map[string]any{"file_url": "https://example.com/demo.png"}
+	userMessage := aguitypes.Message{
+		ID:      "user-1",
+		Role:    aguitypes.RoleUser,
+		Content: "hello",
+	}
+	userEvent := aguievents.NewCustomEvent(
+		multimodal.CustomEventNameUserMessage,
+		aguievents.WithValue(userMessage),
+	)
+	withTimestamp(userEvent, timestampTime)
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEventAt(t, withRawEvent(userEvent, map[string]any{
+			"runId":          "run-1",
+			"author":         "demo-user",
+			"forwardedProps": forwardedProps,
+		}), timestampTime.Add(time.Hour)),
+	})
+	require.Contains(t, metadata.Runs, "run-1")
+	gotRun := metadata.Runs["run-1"]
+	require.NotNil(t, gotRun.Timestamp)
+	assert.Equal(t, timestampTime.UnixMilli(), *gotRun.Timestamp)
+	assert.Equal(t, "demo-user", gotRun.Author)
+	assert.Equal(t, forwardedProps, gotRun.ForwardedProps)
+	require.Contains(t, metadata.Messages, "user-1")
+	gotMessage := metadata.Messages["user-1"]
+	assert.Nil(t, gotMessage.ForwardedProps)
+}
+
+func TestBuildSnapshotMetadataIndexesRunOnlyForwardedProps(t *testing.T) {
+	forwardedProps := map[string]any{"file_url": "https://example.com/demo.png"}
+	userMessage := aguitypes.Message{
+		ID:      "user-1",
+		Role:    aguitypes.RoleUser,
+		Content: "hello",
+	}
+	userEvent := aguievents.NewCustomEvent(
+		multimodal.CustomEventNameUserMessage,
+		aguievents.WithValue(userMessage),
+	)
+	userEvent.GetBaseEvent().TimestampMs = nil
+	metadata := BuildSnapshotMetadata([]session.TrackEvent{
+		newTrackEvent(t, withRawEvent(userEvent, map[string]any{
+			"runId":          "run-1",
+			"forwardedProps": forwardedProps,
+		})),
+	})
+	assert.Equal(t, SnapshotMetadata{
+		Runs: map[string]Metadata{
+			"run-1": {ForwardedProps: forwardedProps},
+		},
+	}, metadata)
+}
+
 func TestCustomUserMessageIDRejectsInvalidPayloads(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -831,8 +913,8 @@ func withTimestamp(event aguievents.Event, timestamp time.Time) aguievents.Event
 
 func withRawEvent(
 	event aguievents.Event,
-	metadata Metadata,
+	raw any,
 ) aguievents.Event {
-	event.GetBaseEvent().RawEvent = metadata
+	event.GetBaseEvent().RawEvent = raw
 	return event
 }

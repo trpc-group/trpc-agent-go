@@ -627,7 +627,7 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			inputTokens:   100,
 			outputTokens:  50,
 			cachedTokens:  30,
-			expectedUsage: map[string]int64{"input": 100, "output": 50, "input_cached": 30},
+			expectedUsage: map[string]int64{"input": 70, "output": 50, "input_cached": 30},
 		},
 		{
 			name:            "with Anthropic cache_read tokens",
@@ -650,7 +650,21 @@ func TestTransformCallLLM_UsageDetails(t *testing.T) {
 			cachedTokens:        50,
 			cacheReadTokens:     70,
 			cacheCreationTokens: 20,
-			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cached": 50, "input_cache_read": 70, "input_cache_creation": 20},
+			expectedUsage:       map[string]int64{"input": 300, "output": 100, "input_cache_read": 70, "input_cache_creation": 20},
+		},
+		{
+			name:          "cached tokens equal input",
+			inputTokens:   30,
+			outputTokens:  10,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"output": 10, "input_cached": 30},
+		},
+		{
+			name:          "cached tokens exceed input",
+			inputTokens:   20,
+			outputTokens:  10,
+			cachedTokens:  30,
+			expectedUsage: map[string]int64{"output": 10, "input_cached": 30},
 		},
 		{
 			name:          "zero tokens omitted",

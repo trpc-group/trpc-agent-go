@@ -35,15 +35,27 @@ var ModelContextWindows = map[string]int{
 	"o3":         200000, // https://developers.openai.com/api/docs/models/o3
 	"o4-mini":    200000, // https://developers.openai.com/api/docs/models/o4-mini
 
+	// 1,047,576 follows OpenAI Agents SDK compaction metadata:
+	// https://github.com/openai/openai-agents-python/blob/main/src/agents/sandbox/capabilities/compaction.py
+
+	// OpenAI GPT-5.6
+	"gpt-5.6":       1047576, // Alias for GPT-5.6 Sol — https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-sol":   1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-terra": 1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-terra
+	"gpt-5.6-luna":  1047576, // https://developers.openai.com/api/docs/models/gpt-5.6-luna
+
 	// OpenAI GPT-5.5
-	"gpt-5.5":     1050000, // https://developers.openai.com/api/docs/models/gpt-5.5
-	"gpt-5.5-pro": 1050000, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
+	"gpt-5.5":     1047576, // https://developers.openai.com/api/docs/models/gpt-5.5
+	"gpt-5.5-pro": 1047576, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
 
 	// OpenAI GPT-5.4
-	"gpt-5.4":      1050000, // https://developers.openai.com/api/docs/models/gpt-5.4
-	"gpt-5.4-pro":  1050000, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
+	"gpt-5.4":      1047576, // https://developers.openai.com/api/docs/models/gpt-5.4
+	"gpt-5.4-pro":  1047576, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
 	"gpt-5.4-mini": 400000,  // https://developers.openai.com/api/docs/models/gpt-5.4-mini
 	"gpt-5.4-nano": 400000,  // https://developers.openai.com/api/docs/models/gpt-5.4-nano
+
+	// OpenAI GPT-5.3
+	"gpt-5.3-codex": 400000, // https://developers.openai.com/api/docs/models/gpt-5.3-codex
 
 	// OpenAI GPT-5.2
 	"gpt-5.2":             400000, // https://developers.openai.com/api/docs/models/gpt-5.2
@@ -103,11 +115,17 @@ var ModelContextWindows = map[string]int{
 	"davinci":          2049,
 
 	// Anthropic Claude.
-	// Provider page: https://docs.anthropic.com/en/docs/about-claude/models/overview
-	// Beta context-window header (1M tier on Sonnet 4 / 4.5):
-	//   https://docs.anthropic.com/en/docs/build-with-claude/context-windows
-	// Default windows shown below; 1M on Sonnet 4 / 4.5 requires the
-	// `context-1m-2025-08-07` beta header.
+	// Provider page: https://platform.claude.com/docs/en/about-claude/models/overview
+	// Context windows: https://platform.claude.com/docs/en/build-with-claude/context-windows
+
+	// Anthropic Claude 5
+	"claude-fable-5":  1000000,
+	"claude-mythos-5": 1000000,
+	"claude-sonnet-5": 1000000,
+
+	// Anthropic Claude 4.8
+	"claude-4.8-opus": 1000000,
+	"claude-opus-4-8": 1000000,
 
 	// Anthropic Claude 4.7
 	"claude-4.7-opus": 1000000,
@@ -495,21 +513,25 @@ var ModelContextWindows = map[string]int{
 	// Moonshot Kimi.
 	// Provider page: https://platform.kimi.com/docs/models
 	// Per-family pricing pages:
+	//   - https://platform.kimi.com/docs/pricing/chat-k27-code  (Kimi K2.7 Code)
 	//   - https://platform.kimi.com/docs/pricing/chat-k26  (Kimi K2.6)
 	//   - https://platform.kimi.com/docs/pricing/chat-k25  (Kimi K2.5)
-	//   - https://platform.kimi.com/docs/pricing/chat-k2   (Kimi K2 family; deprecating 2026-05-25)
 	//   - https://platform.kimi.com/docs/pricing/chat-v1   (Moonshot V1)
 	// "256K" on these pages is documented as 256,000 tokens on the pricing
 	// pages and as 262,144 tokens on a few quickstart pages — we use 256,000
 	// for consistency with the pricing/billing page across the family.
 
-	// Kimi K2.6 (current flagship)
+	// Kimi K2.7 Code (current coding flagship)
+	"kimi-k2.7-code":           256000,
+	"kimi-k2.7-code-highspeed": 256000,
+
+	// Kimi K2.6 (current general-purpose flagship)
 	"kimi-k2.6": 256000,
 
 	// Kimi K2.5
 	"kimi-k2.5": 256000,
 
-	// Kimi K2 (scheduled for deprecation 2026-05-25; migrate to k2.6)
+	// Kimi K2 (discontinued 2026-05-25; retained for historical resolution)
 	"kimi-k2-0905-preview":   256000,
 	"kimi-k2-turbo-preview":  256000,
 	"kimi-k2-thinking":       256000,
@@ -526,6 +548,7 @@ var ModelContextWindows = map[string]int{
 	"moonshot-v1-128k-vision-preview": 131072,
 
 	// MiniMax — https://platform.minimax.io/docs/guides/text-generation
+	"minimax-m3":             1000000,
 	"minimax-m2.7":           204800,
 	"minimax-m2.7-highspeed": 204800,
 	"minimax-m2.5":           204800,
@@ -626,6 +649,12 @@ var ModelMaxOutputTokens = map[string]int{
 	"o3":         100000, // https://developers.openai.com/api/docs/models/o3
 	"o4-mini":    100000, // https://developers.openai.com/api/docs/models/o4-mini
 
+	// OpenAI GPT-5.6
+	"gpt-5.6":       128000, // Alias for GPT-5.6 Sol — https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-sol":   128000, // https://developers.openai.com/api/docs/models/gpt-5.6-sol
+	"gpt-5.6-terra": 128000, // https://developers.openai.com/api/docs/models/gpt-5.6-terra
+	"gpt-5.6-luna":  128000, // https://developers.openai.com/api/docs/models/gpt-5.6-luna
+
 	// OpenAI GPT-5.5
 	"gpt-5.5":     128000, // https://developers.openai.com/api/docs/models/gpt-5.5
 	"gpt-5.5-pro": 128000, // https://developers.openai.com/api/docs/models/gpt-5.5-pro
@@ -635,6 +664,9 @@ var ModelMaxOutputTokens = map[string]int{
 	"gpt-5.4-pro":  128000, // https://developers.openai.com/api/docs/models/gpt-5.4-pro
 	"gpt-5.4-mini": 128000, // https://developers.openai.com/api/docs/models/gpt-5.4-mini
 	"gpt-5.4-nano": 128000, // https://developers.openai.com/api/docs/models/gpt-5.4-nano
+
+	// OpenAI GPT-5.3
+	"gpt-5.3-codex": 128000, // https://developers.openai.com/api/docs/models/gpt-5.3-codex
 
 	// OpenAI GPT-5.2
 	"gpt-5.2":             128000, // https://developers.openai.com/api/docs/models/gpt-5.2
@@ -672,8 +704,8 @@ var ModelMaxOutputTokens = map[string]int{
 	"gpt-4-turbo": 4096, // https://developers.openai.com/api/docs/models/gpt-4-turbo
 
 	// Anthropic Claude.
-	// Provider page: https://docs.anthropic.com/en/docs/about-claude/models/overview
-	// Migration guide: https://docs.anthropic.com/en/docs/about-claude/models/migration-guide
+	// Provider page: https://platform.claude.com/docs/en/about-claude/models/overview
+	// Migration guide: https://platform.claude.com/docs/en/about-claude/models/migration-guide
 	// The values below are synchronous Messages API limits. Some Batch API
 	// requests can opt into larger beta output caps.
 

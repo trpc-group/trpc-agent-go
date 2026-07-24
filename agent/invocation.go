@@ -65,10 +65,6 @@ const (
 	// session after the function-call processor clones the invocation
 	// session for state-delta isolation.
 	liveSessionStateKey = "__live_session__"
-	// forwardEventStateKey is the invocation state key used by internal
-	// eventstream attachment (see internal/state/eventstream).
-	forwardEventStateKey = "__forward_event__"
-
 	// streamHubStateKey is the invocation state key used by the graph to
 	// share ephemeral streams across node invocations within the same run.
 	streamHubStateKey = "__graph_stream_hub__"
@@ -195,6 +191,10 @@ type Invocation struct {
 	entryPredecessorStepIDs []string
 	// traceNodeID stores the mounted static root node id for this invocation.
 	traceNodeID string
+	// executionTraceStepBinding is the internal ownership bridge for the
+	// structural trace step represented by this invocation. Derived invocations
+	// bind their own structural visit explicitly.
+	executionTraceStepBinding *tracecapture.StepBinding
 
 	// state stores invocation-scoped state data (lazy initialized).
 	// Can be used by callbacks, middleware, or any invocation-scoped logic.
@@ -1028,6 +1028,15 @@ func WithToolCallArgumentsJSONRepairEnabled(enabled bool) RunOption {
 	}
 }
 
+// WithToolCallTextRepairEnabled enables best-effort repair for model responses
+// that emit tool calls as visible text instead of structured tool_calls.
+func WithToolCallTextRepairEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		e := enabled
+		opts.ToolCallTextRepairEnabled = &e
+	}
+}
+
 // WithA2ARequestOptions sets the A2A request options for the RunOptions.
 // These options will be passed to A2A agent's SendMessage and StreamMessage calls.
 // This allows passing dynamic HTTP headers or other request-specific options for each run.
@@ -1404,6 +1413,11 @@ type RunOptions struct {
 	// When nil, JSON repair is disabled by default.
 	ToolCallArgumentsJSONRepairEnabled *bool
 
+	// ToolCallTextRepairEnabled enables best-effort repair for model responses
+	// that emit tool calls as visible text instead of structured tool_calls.
+	// When nil, text repair is disabled by default.
+	ToolCallTextRepairEnabled *bool
+
 	// runControlConfig stores internal event and buffering controls.
 	runControlConfig runControlConfig
 }
@@ -1711,7 +1725,6 @@ func isCloneStateKey(key string) bool {
 		barrierStateKey,
 		appenderStateKey,
 		liveSessionStateKey,
-		forwardEventStateKey,
 		streamHubStateKey,
 		surfaceRootNodeIDStateKey,
 		teamMemberTraceRootStateKey:

@@ -885,7 +885,7 @@ func TestProcessRequest_SessionSummary_MergesIntoSystemMessage(t *testing.T) {
 	require.Equal(t, "current request", req3.Messages[3].Content)
 }
 
-func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_ResumesLatestCoveredToolRound(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -975,6 +975,7 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	}
 	p := NewContentRequestProcessor(
 		WithAddSessionSummary(true),
+		WithEnableContextCompaction(true),
 		WithContextCompactionToolResultMaxTokens(10),
 	)
 	p.ProcessRequest(context.Background(), inv, req, nil)
@@ -993,17 +994,23 @@ func TestProcessRequest_SessionSummary_CompactsSameTurnToolHistory(t *testing.T)
 	require.Equal(t, "Starting with step 1.", req.Messages[2].Content)
 	require.Len(t, req.Messages[2].ToolCalls, 1)
 	require.Equal(t, "call_1", req.Messages[2].ToolCalls[0].ID)
+	require.JSONEq(t, `{"step":1}`, string(
+		req.Messages[2].ToolCalls[0].Function.Arguments,
+	))
 	require.Equal(t, model.RoleTool, req.Messages[3].Role)
 	require.Equal(t, "call_1", req.Messages[3].ToolID)
 	require.Equal(t, "step_worker", req.Messages[3].ToolName)
 	require.Contains(t, req.Messages[3].Content, compactedToolResultPlaceholder)
-	require.Contains(t, req.Messages[3].Content, "event_id: tool-result-1")
-	require.Contains(t, req.Messages[3].Content, "tool_call_id: call_1")
-	require.Contains(t, req.Messages[3].Content, "tool_name: step_worker")
 	require.NotContains(t, req.Messages[3].Content, "large-result;")
+	require.Equal(
+		t,
+		`{"step":1}`,
+		string(sess.Events[1].Choices[0].Message.ToolCalls[0].Function.Arguments),
+		"resume-tail compaction must not mutate session history",
+	)
 }
 
-func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *testing.T) {
+func TestProcessRequest_SessionSummary_PreservesSmallLatestToolRound(t *testing.T) {
 	baseTime := time.Date(2025, 1, 1, 12, 0, 0, 0, time.UTC)
 	userMsg := model.NewUserMessage("run the task")
 	toolCallMsg := model.Message{
@@ -1029,6 +1036,11 @@ func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *test
 			"test-agent": {
 				Summary:   "step 1 completed successfully",
 				UpdatedAt: baseTime.Add(2 * time.Second),
+				Boundary: session.NewSummaryBoundaryWithEventID(
+					"test-agent",
+					baseTime.Add(2*time.Second),
+					"evt-tool-result",
+				),
 			},
 		},
 		Events: []event.Event{
@@ -1087,10 +1099,13 @@ func TestProcessRequest_SessionSummary_PreservesSmallSameTurnToolHistory(t *test
 	p := NewContentRequestProcessor(WithAddSessionSummary(true))
 	p.ProcessRequest(context.Background(), inv, req, nil)
 
-	_, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
+	raw, ok := inv.GetState(contentHasCompactedToolResultsStateKey)
 	require.False(t, ok)
+	require.Nil(t, raw)
 
 	require.Len(t, req.Messages, 4)
+	require.True(t, model.MessagesEqual(userMsg, req.Messages[1]))
+	require.Equal(t, toolCallMsg.ToolCalls, req.Messages[2].ToolCalls)
 	require.Equal(t, model.RoleTool, req.Messages[3].Role)
 	require.Equal(t, "call_1", req.Messages[3].ToolID)
 	require.Equal(t, "step_worker", req.Messages[3].ToolName)
@@ -1197,7 +1212,10 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 	})
 
 	t.Run("detects compacted tool result", func(t *testing.T) {
-		p := NewContentRequestProcessor(WithContextCompactionToolResultMaxTokens(1))
+		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
+			WithContextCompactionToolResultMaxTokens(1),
+		)
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("inv1"),
 			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),
@@ -1249,6 +1267,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 		}
 		p := NewContentRequestProcessor(
 			WithBranchFilterMode(BranchFilterModeExact),
+			WithEnableContextCompaction(true),
 			WithContextCompactionKeepToolNames("session_load"),
 			WithContextCompactionToolResultMaxTokens(1),
 		)
@@ -1284,6 +1303,7 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 
 	t.Run("ignores kept tool result", func(t *testing.T) {
 		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
 			WithContextCompactionKeepToolNames("session_load"),
 		)
 		inv := agent.NewInvocation(
@@ -1331,7 +1351,10 @@ func TestContentRequestProcessor_HasCompactedCurrentInvocationToolResults(t *tes
 	})
 
 	t.Run("detects compacted tool result in later choice", func(t *testing.T) {
-		p := NewContentRequestProcessor(WithContextCompactionToolResultMaxTokens(1))
+		p := NewContentRequestProcessor(
+			WithEnableContextCompaction(true),
+			WithContextCompactionToolResultMaxTokens(1),
+		)
 		inv := agent.NewInvocation(
 			agent.WithInvocationID("inv1"),
 			agent.WithInvocationRunOptions(agent.RunOptions{RequestID: "req1"}),

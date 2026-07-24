@@ -766,6 +766,115 @@ func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIFallbackHasNoResults(
 	require.Contains(t, result.Summary, "instead of immediately retrying")
 }
 
+func TestDDGTool_SERPFallbackReportsUnavailableWhenAPITransportFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	calls := make(map[string]int)
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Host]++
+				switch r.URL.Host {
+				case "html.duckduckgo.com", "lite.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				case "api.duckduckgo.com":
+					return nil, errors.New(
+						"server gave HTTP response to HTTPS client",
+					)
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "example search topic"},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "html and lite")
+	require.Contains(t, result.Summary, "HTTPS transport incompatibility")
+	require.Contains(t, result.Summary, "instead of immediately retrying")
+	require.Equal(t, 1, calls["html.duckduckgo.com"])
+	require.Equal(t, 1, calls["lite.duckduckgo.com"])
+	require.Equal(t, 1, calls["api.duckduckgo.com"])
+}
+
+func TestDDGTool_SERPFallbackReportsUnavailableWhenAPIStatusRetryable(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	calls := make(map[string]int)
+	ddgTool := &ddgTool{
+		httpClient: &http.Client{Transport: roundTripFunc(
+			func(r *http.Request) (*http.Response, error) {
+				calls[r.URL.Host]++
+				switch r.URL.Host {
+				case "html.duckduckgo.com":
+					return nil, errors.New(
+						"server gave HTTP response to HTTPS client",
+					)
+				case "lite.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body: io.NopCloser(strings.NewReader(`
+<html><body>
+  <div class="anomaly-modal__title">
+    Unfortunately, bots use DuckDuckGo too.
+  </div>
+</body></html>`)),
+						Header: make(http.Header),
+					}, nil
+				case "api.duckduckgo.com":
+					return &http.Response{
+						StatusCode: http.StatusAccepted,
+						Body:       io.NopCloser(strings.NewReader("")),
+						Header:     make(http.Header),
+					}, nil
+				default:
+					t.Fatalf("unexpected host %s", r.URL.Host)
+					return nil, nil
+				}
+			},
+		)},
+		baseURL:   defaultHTMLBaseURL,
+		backend:   backendHTML,
+		userAgent: defaultSERPUserAgent,
+	}
+
+	result, err := ddgTool.search(
+		context.Background(),
+		searchRequest{Query: "example search topic"},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Results)
+	require.Contains(t, result.Summary, "html and lite")
+	require.Contains(t, result.Summary, "retryable unavailable status")
+	require.Contains(t, result.Summary, "instead of immediately retrying")
+	require.GreaterOrEqual(t, calls["html.duckduckgo.com"], 1)
+	require.LessOrEqual(t, calls["html.duckduckgo.com"], 2)
+	require.Equal(t, 1, calls["lite.duckduckgo.com"])
+	require.Equal(t, 1, calls["api.duckduckgo.com"])
+}
+
 func TestDDGTool_SERPFallbackReturnsAPIFailure(t *testing.T) {
 	t.Parallel()
 
@@ -1239,6 +1348,179 @@ func TestNewTool(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDuckDuckGoTool_FiltersBlockedResultURLPatterns(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`
+<html><body>
+  <a class="result__a" href="https://x.io/t">Trace mirror</a>
+  <a class="result__snippet">Benchmark trace mirror.</a>
+  <a class="result__a" href="/l/?uddg=https%3A%2F%2Fexample.com%2Fsource">Source page</a>
+  <a class="result__snippet">Primary source.</a>
+</body></html>`))
+		},
+	))
+	defer server.Close()
+
+	callable := NewTool(
+		WithBackend(backendHTML),
+		WithBaseURL(server.URL),
+		WithHTTPClient(server.Client()),
+		WithBlockedResultURLPatterns("x.io/t"),
+	)
+	raw, err := callable.Call(
+		context.Background(),
+		[]byte(`{"query":"example benchmark"}`),
+	)
+	require.NoError(t, err)
+
+	data, err := json.Marshal(raw)
+	require.NoError(t, err)
+	require.Contains(t, string(data), "filtered 1 result")
+	require.Contains(t, string(data), "https://example.com/source")
+	require.NotContains(t, string(data), "x.io/t")
+}
+
+func TestDuckDuckGoTool_FilterSearchResponse(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		tool     *ddgTool
+		response searchResponse
+		want     searchResponse
+	}{
+		{
+			name: "no patterns",
+			tool: &ddgTool{},
+			response: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Trace", URL: "https://mirror.example/trace"},
+				},
+				Summary: "Found 1 result",
+			},
+			want: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Trace", URL: "https://mirror.example/trace"},
+				},
+				Summary: "Found 1 result",
+			},
+		},
+		{
+			name: "no results",
+			tool: &ddgTool{
+				blockedResultURLPatterns: &resultURLPatterns{
+					values: []string{"mirror.example"},
+				},
+			},
+			response: searchResponse{
+				Query:   "example",
+				Summary: "Found 0 results",
+			},
+			want: searchResponse{
+				Query:   "example",
+				Summary: "Found 0 results",
+			},
+		},
+		{
+			name: "no matches",
+			tool: &ddgTool{
+				blockedResultURLPatterns: &resultURLPatterns{
+					values: []string{"mirror.example"},
+				},
+			},
+			response: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Source", URL: "https://source.example/doc"},
+				},
+				Summary: "Found 1 result",
+			},
+			want: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Source", URL: "https://source.example/doc"},
+				},
+				Summary: "Found 1 result",
+			},
+		},
+		{
+			name: "empty summary",
+			tool: &ddgTool{
+				blockedResultURLPatterns: &resultURLPatterns{
+					values: []string{"mirror.example"},
+				},
+			},
+			response: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Trace", URL: "https://mirror.example/trace"},
+					{Title: "Source", URL: "https://source.example/doc"},
+				},
+			},
+			want: searchResponse{
+				Query: "example",
+				Results: []resultItem{
+					{Title: "Source", URL: "https://source.example/doc"},
+				},
+				Summary: "filtered 1 result(s) matching configured blocked " +
+					"URL patterns; returned 1 unblocked result(s)",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := tc.tool.filterSearchResponse(tc.response)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestDuckDuckGoTool_BlockedResultURLPatternHelpers(t *testing.T) {
+	t.Parallel()
+
+	patterns := normalizeResultURLPatterns([]string{
+		"  EXAMPLE.com/Trace ",
+		"",
+		"\t",
+	})
+	require.Equal(t, []string{"example.com/trace"}, patterns)
+
+	require.True(t, resultURLMatchesPattern(
+		" HTTPS://EXAMPLE.COM/TRACE/1 ",
+		patterns,
+	))
+	require.False(t, resultURLMatchesPattern("", patterns))
+	require.False(t, resultURLMatchesPattern(
+		"https://source.example/doc",
+		[]string{"", "mirror.example"},
+	))
+	require.Nil(t, resultURLPatternValues(nil))
+}
+
+func TestDuckDuckGoTool_WithBlockedResultURLPatterns(t *testing.T) {
+	t.Parallel()
+
+	var cfg config
+	WithBlockedResultURLPatterns("", " \t ")(&cfg)
+	require.Nil(t, cfg.blockedResultURLPatterns)
+
+	WithBlockedResultURLPatterns(" Mirror.Example ", "TRACE")(&cfg)
+	WithBlockedResultURLPatterns(" extra ")(&cfg)
+	require.Equal(
+		t,
+		[]string{"mirror.example", "trace", "extra"},
+		cfg.blockedResultURLPatterns.values,
+	)
 }
 
 func TestNewTool_WithBackendUsesSERPBackend(t *testing.T) {

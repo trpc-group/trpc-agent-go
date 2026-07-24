@@ -122,7 +122,7 @@ func TestManager_CallbackSetsNilWhenEmpty(t *testing.T) {
 	out, err := m.OnEvent(context.Background(), &agent.Invocation{}, e)
 	require.NoError(t, err)
 	require.Same(t, e, out)
-
+	require.NoError(t, m.AfterRun(context.Background(), &plugin.AfterRunArgs{}))
 	require.NoError(t, m.Close(context.Background()))
 	require.NoError(t, m.Close(nil))
 }
@@ -140,7 +140,7 @@ func TestManager_NilReceiver_IsSafe(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Nil(t, out)
-
+	require.NoError(t, m.AfterRun(context.Background(), nil))
 	require.NoError(t, m.Close(nil))
 }
 
@@ -697,6 +697,64 @@ func TestManager_OnEvent_ReplacementPropagates(t *testing.T) {
 	require.Equal(t, []string{tagUpdated}, seen)
 }
 
+func TestManager_AfterRun_Order(t *testing.T) {
+	var calls []string
+	p1 := &testPlugin{
+		name: "p1",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				calls = append(calls, "p1")
+				return nil
+			})
+		},
+	}
+	p2 := &testPlugin{
+		name: "p2",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				calls = append(calls, "p2")
+				return nil
+			})
+		},
+	}
+	m := plugin.MustNewManager(p1, p2)
+	err := m.AfterRun(context.Background(), &plugin.AfterRunArgs{
+		Invocation:      &agent.Invocation{},
+		CompletionEvent: event.New("inv", "runner"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"p1", "p2"}, calls)
+}
+
+func TestManager_AfterRun_ErrorWrapsName(t *testing.T) {
+	wantErr := errors.New("boom")
+	called := false
+	p := &testPlugin{
+		name: "p",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				return wantErr
+			})
+		},
+	}
+	p2 := &testPlugin{
+		name: "p2",
+		reg: func(r *plugin.Registry) {
+			r.AfterRun(func(ctx context.Context, args *plugin.AfterRunArgs) error {
+				called = true
+				return nil
+			})
+		},
+	}
+	m := plugin.MustNewManager(p, p2)
+	err := m.AfterRun(context.Background(), &plugin.AfterRunArgs{})
+	require.Error(t, err)
+	require.ErrorIs(t, err, wantErr)
+	require.Contains(t, err.Error(), "plugin")
+	require.Contains(t, err.Error(), "p")
+	require.True(t, called)
+}
+
 func TestManager_AgentCallbacks_WrapErrorWithName(t *testing.T) {
 	wantErr := errors.New("boom")
 	p := &testPlugin{
@@ -1077,6 +1135,7 @@ func TestRegistry_NilReceiver_IsSafe(t *testing.T) {
 	r.BeforeTool(nil)
 	r.AfterTool(nil)
 	r.OnEvent(nil)
+	r.AfterRun(nil)
 }
 
 func TestNewNamedLogging_EmptyName_UsesDefault(t *testing.T) {

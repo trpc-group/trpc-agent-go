@@ -55,6 +55,23 @@ func TestWithCandidatesAppendsInPriorityOrder(t *testing.T) {
 	assert.Same(t, backup, impl.candidates[1])
 }
 
+func TestInputTokenBudgetUsesSmallestCandidateBudget(t *testing.T) {
+	llm, err := New(WithCandidates(
+		openai.New("primary", openai.WithMaxInputTokens(500)),
+		openai.New("backup", openai.WithMaxInputTokens(300)),
+	))
+	require.NoError(t, err)
+	budgeter, ok := llm.(interface {
+		InputTokenBudget(context.Context, *model.Request) int
+	})
+	require.True(t, ok)
+	assert.Equal(
+		t,
+		300,
+		budgeter.InputTokenBudget(context.Background(), &model.Request{}),
+	)
+}
+
 func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 	maxTokens := 128
 	toolImpl := &stubTool{name: "lookup"}

@@ -30,8 +30,8 @@ and capability boundaries.
 The `general_agent` base agent also has one ordinary child-agent tool,
 `lookup_policy`. It is not exposed to the root agent and is not exposed as a
 Python `call_tool`; it is available only when a workflow-created child Agent
-uses its own tool surface. This makes the example show that child Agent tool
-call events are forwarded through the same Runner event stream.
+uses its own tool surface. This lets the example show child Agent tool calls in
+the same event stream as the parent run.
 Workflow code should narrow this tool explicitly, for example
 `tools=["lookup_policy"]`, only for a child role that reviews, approves, or
 rejects something against a team collaboration guideline. Ordinary summaries,
@@ -75,7 +75,7 @@ go run ./dynamicworkflow -model gpt-5
 ```
 
 With no `-prompt`, the example starts an interactive chat loop and keeps one
-Runner session open until you type `/new` or `/exit`.
+conversation session open until you type `/new` or `/exit`.
 
 Commands:
 
@@ -92,16 +92,15 @@ go run ./dynamicworkflow -model gpt-5 \
 The example prints the model-generated workflow source by default. Disable it
 with `-show-workflow-code=false`.
 
-The event printer also monitors Runner events for child Agent tool calls. A
-typical run includes lines like:
+The event printer also shows child Agent tool calls. A typical run includes
+lines like:
 
 ```text
 [general_agent via dynamic_workflow] tool call: lookup_policy (id: call_...) args: {"topic":"remote_collaboration"}
 [general_agent via dynamic_workflow] tool result: lookup_policy (id: call_...) {"topic":"remote_collaboration","guidelines":[...]}
 ```
 
-Those lines come from the child Agent's own event stream and are forwarded
-through the active Runner loop, the same path used for normal streaming output.
+Those lines come from child Agent events in the same stream as the parent run.
 For a child role that must demonstrate tool use, prefer returning text from
 that child instead of also requesting `structured_output`; some providers tend
 to satisfy a strict structured response directly instead of calling a tool.
@@ -288,12 +287,11 @@ results = await pipeline(files, analyze, verify)
 
 ## Runtime and session behavior
 
-The workflow is foreground and one-shot. Child roles run from clones of the
-parent Invocation rather than recursively calling `Runner.Run`. `parallel`
-branches run concurrently (up to the framework's per-workflow limit) with
-distinct child instances by default. Their output events are persisted by the
-configured Session Service and forwarded through the same caller-visible event
-stream as the root run.
+The workflow is foreground and one-shot. Each child role has an isolated
+conversation context. `parallel` branches run concurrently (up to the
+framework's per-workflow limit) with distinct child instances by default.
+Child Agent output and tool-call progress remain visible through the same event
+stream and are persisted by the configured Session Service.
 
 `LocalRunner` starts a local Python process and is not a security sandbox. In
 production, provide a `dynamicworkflow.Runtime` backed by a container, microVM,
