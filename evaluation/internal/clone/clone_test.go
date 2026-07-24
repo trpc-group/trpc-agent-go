@@ -101,8 +101,14 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 		Criterion: &criterion.Criterion{
 			LLMJudge: &criterionllm.LLMCriterion{
 				Template: &criterionllm.JudgeTemplateOptions{
-					Prompt:             "Question: {{question}}",
-					ResponseScorerName: "single_score",
+					Prompt:               "Question: {{question}}",
+					ResponseScorerName:   "single_score",
+					StructuredOutputName: "single_score_schema",
+					ResponseScorerOptions: &criterionllm.ResponseScorerOptions{
+						Categories: []*criterionllm.CategoryScore{
+							{Label: "correct", Score: 1},
+						},
+					},
 					VariableBindings: []*criterionllm.TemplateVariableBinding{
 						{
 							TemplateVariable: "question",
@@ -126,14 +132,25 @@ func TestCloneEvalMetric_DeepCopiesJudgeTemplate(t *testing.T) {
 	require.NotNil(t, dst.Criterion)
 	require.NotNil(t, dst.Criterion.LLMJudge)
 	require.NotNil(t, dst.Criterion.LLMJudge.Template)
+	require.NotNil(t, dst.Criterion.LLMJudge.Template.ResponseScorerOptions)
+	require.Len(t, dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories, 1)
+	assert.Equal(t, "single_score_schema", dst.Criterion.LLMJudge.Template.StructuredOutputName)
+	assert.Equal(t, "correct", dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
+	assert.Equal(t, 1.0, dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score)
 	dst.Criterion.LLMJudge.Template.Prompt = "changed"
 	assert.Equal(t, "Question: {{question}}", src.Criterion.LLMJudge.Template.Prompt)
+	dst.Criterion.LLMJudge.Template.StructuredOutputName = "changed"
+	assert.Equal(t, "single_score_schema", src.Criterion.LLMJudge.Template.StructuredOutputName)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable = "changed"
 	assert.Equal(t, "question", src.Criterion.LLMJudge.Template.VariableBindings[0].TemplateVariable)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope = criterionllm.TemplateVariableScopeExpected
 	assert.Equal(t, criterionllm.TemplateVariableScopeActual, src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Scope)
 	dst.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID = "changed"
 	assert.Equal(t, "ignored", src.Criterion.LLMJudge.Template.VariableBindings[0].Source.Selector.NodeID)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label = "changed"
+	assert.Equal(t, "correct", src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Label)
+	dst.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score = 0
+	assert.Equal(t, 1.0, src.Criterion.LLMJudge.Template.ResponseScorerOptions.Categories[0].Score)
 }
 
 func TestCloneTemplateVariableHelpersHandleNil(t *testing.T) {
