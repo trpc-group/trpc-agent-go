@@ -29,4 +29,7 @@ func TestRunPipelineRejectsOverfitCandidate(t *testing.T) {
 	require.NotEmpty(t, report.Rounds)
 	require.NotEmpty(t, report.Rounds[0].Losses)
 	require.NotNil(t, report.Rounds[0].Patches)
+	require.NotEmpty(t, report.FailureAttribution.Baseline.Train)
+	require.NotEmpty(t, report.FailureAttribution.Candidate.Validation)
+	require.NotEmpty(t, report.Rounds[0].CandidateFailureAttribution.Validation)
 }

@@ -43,5 +43,8 @@ func main() {
 	if err := writeReports(outputDir(input), report); err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("wrote %s and %s", reportPrefix(report)+"optimization_report.json", reportPrefix(report)+"optimization_report.md")
+	log.Printf("wrote optimization_report.json, optimization_report.md, and %s/%s mode-specific copies",
+		reportPrefix(report)+"optimization_report.json",
+		reportPrefix(report)+"optimization_report.md",
+	)
 }

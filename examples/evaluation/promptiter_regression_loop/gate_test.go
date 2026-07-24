@@ -10,6 +10,9 @@
 package main
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -75,6 +78,36 @@ func TestComputeDeltaClassifiesFixedAndRegressed(t *testing.T) {
 	require.Equal(t, TransitionRegressed, delta.Cases[1].Transition)
 }
 
+func TestComputeDeltaTreatsMissingCandidateCaseAsHardFail(t *testing.T) {
+	baseline := EvaluationRun{
+		OverallScore: 1,
+		Cases: []CaseResult{
+			testCase("critical_missing", true, 1, status.EvalStatusPassed),
+			testCase("present", false, 1, status.EvalStatusPassed),
+		},
+	}
+	candidate := EvaluationRun{
+		OverallScore: 1,
+		Cases: []CaseResult{
+			testCase("present", false, 1, status.EvalStatusPassed),
+		},
+	}
+
+	delta := ComputeDelta(baseline, candidate)
+	require.Equal(t, 1, delta.NewlyFailed)
+	require.Equal(t, 1, delta.MissingCandidateCases)
+	require.Equal(t, 1, delta.CriticalRegressed)
+	require.Equal(t, TransitionMissingCandidate, delta.Cases[0].Transition)
+	require.Equal(t, FailureMissingEvaluationCase, delta.Cases[0].FailureReasons[0].Category)
+
+	decision := DecideGate(GateConfig{
+		MaxNewHardFails:          0,
+		RejectCriticalRegression: true,
+	}, delta, CostSummary{})
+	require.False(t, decision.Accepted)
+	require.Contains(t, strings.Join(decision.Reasons, "\n"), "candidate omitted 1 validation case")
+}
+
 func TestAttributeFailuresFromMetricReason(t *testing.T) {
 	failures := AttributeFailures([]MetricResult{
 		{
@@ -94,11 +127,28 @@ func TestAttributeFailuresFromMetricReason(t *testing.T) {
 }
 
 func TestStructuredOutputGuardUsesFrameworkFinalResponseCompare(t *testing.T) {
+	input, err := loadInput(filepath.Join("data", "promptiter.json"))
+	require.NoError(t, err)
+	var configured MetricInput
+	for _, metric := range input.Metrics {
+		if metric.MetricName == structuredOutputGuardMetric {
+			configured = metric
+			break
+		}
+	}
+	require.Equal(t, "final_response_avg_score", configured.EvaluatorName)
+	require.NotNil(t, configured.Criterion)
+	require.NotNil(t, configured.Criterion.FinalResponse)
+	require.Equal(t, "expected_json_exact_when_requested", configured.Criterion.FinalResponse.CompareName)
+
 	registry, err := newRegressionMetricRegistry()
 	require.NoError(t, err)
-	require.NotNil(t, registry)
+	evalMetric := evalMetricFromInput(configured)
+	require.NoError(t, registry.Resolve(evalMetric))
+	require.NotNil(t, evalMetric.Criterion.FinalResponse.Compare)
 
-	ok, err := expectedJSONExactWhenRequested(
+	ok, err := evalMetric.Criterion.FinalResponse.Match(
+		context.Background(),
 		evalsetInvocation(`{"status":"approved","amount":35}`),
 		evalsetInvocation(`{"refund_id":"r-204","status":"approved","amount_usd":35}`),
 	)
@@ -106,7 +156,8 @@ func TestStructuredOutputGuardUsesFrameworkFinalResponseCompare(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "key amount")
 
-	ok, err = expectedJSONExactWhenRequested(
+	ok, err = evalMetric.Criterion.FinalResponse.Match(
+		context.Background(),
 		evalsetInvocation("TR900 is boarding at gate K12."),
 		evalsetInvocation("TR900 is boarding at gate K12."),
 	)
@@ -168,6 +219,30 @@ func TestRenderMarkdownReportIncludesDecisionAndDelta(t *testing.T) {
 	require.Contains(t, markdown, "Decision: **REJECT**")
 	require.Contains(t, markdown, "`case-1`")
 	require.Contains(t, markdown, "validation regressed")
+}
+
+func TestWriteReportsCreatesStableAndPrefixedArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	report := &OptimizationReport{
+		RunID:      "run-1",
+		AppName:    "app",
+		Mode:       "deterministic",
+		DataSource: "fake",
+		FakeEngine: FakeEngineConfig{Name: "fake", Model: "fake-model"},
+		Candidate:  CandidateSummary{ID: "candidate-1"},
+		Gate:       GateDecision{Accepted: true},
+	}
+
+	require.NoError(t, writeReports(dir, report))
+	for _, name := range []string{
+		"optimization_report.json",
+		"optimization_report.md",
+		"deterministic_optimization_report.json",
+		"deterministic_optimization_report.md",
+	} {
+		_, err := os.Stat(filepath.Join(dir, name))
+		require.NoError(t, err, name)
+	}
 }
 
 func TestCandidateSelectionPrefersAcceptedOverHigherRejectedScore(t *testing.T) {

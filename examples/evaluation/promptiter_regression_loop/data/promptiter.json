@@ -1,6 +1,6 @@
 {
   "app_name": "promptiter-regression-loop-app",
-  "mode": "real_llm",
+  "mode": "deterministic",
   "seed": 20260717,
   "prompt_source": "prompts/baseline_prompt.md",
   "train_evalset": "train.evalset.json",

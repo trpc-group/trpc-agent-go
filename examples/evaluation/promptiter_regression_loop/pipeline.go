@@ -45,7 +45,9 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 		BaselineTrain:      baselineTrain,
 		BaselineValidation: baselineValidation,
 		Cost:               addCost(baselineTrain.Cost, baselineValidation.Cost),
-		FailureAttribution: summarizeFailures(baselineTrain, baselineValidation),
+		FailureAttribution: FailureSummary{
+			Baseline: summarizeFailureSplit(baselineTrain, baselineValidation),
+		},
 	}
 	candidates := input.Config.Candidates
 	if input.Config.MaxRounds < len(candidates) {
@@ -69,15 +71,16 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 		delta := ComputeDelta(baselineValidation, validationResult)
 		gate := DecideGate(input.Config.Gate, delta, report.Cost)
 		round := RoundAudit{
-			Round:         idx + 1,
-			CandidateID:   candidate.ID,
-			Losses:        buildLosses(trainResult),
-			Patches:       patches,
-			OutputProfile: profile,
-			Delta:         delta,
-			Gate:          gate,
-			Cost:          roundCost,
-			LatencyMs:     time.Since(roundStart).Milliseconds(),
+			Round:                       idx + 1,
+			CandidateID:                 candidate.ID,
+			Losses:                      buildLosses(trainResult),
+			Patches:                     patches,
+			OutputProfile:               profile,
+			CandidateFailureAttribution: summarizeFailureSplit(trainResult, validationResult),
+			Delta:                       delta,
+			Gate:                        gate,
+			Cost:                        roundCost,
+			LatencyMs:                   time.Since(roundStart).Milliseconds(),
 		}
 		report.Rounds = append(report.Rounds, round)
 		summary := CandidateSummary{
@@ -97,10 +100,12 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 	report.Candidate = selection.summary
 	report.Delta = selection.delta
 	report.Gate = selection.gate
-	report.FailureAttribution = FailureSummary{
-		Train:      countFailures(report.Candidate.TrainEvaluation),
-		Validation: countFailures(report.Candidate.ValidationEvaluation),
-	}
+	report.FailureAttribution = summarizeFailures(
+		baselineTrain,
+		baselineValidation,
+		report.Candidate.TrainEvaluation,
+		report.Candidate.ValidationEvaluation,
+	)
 	finishedAt := time.Now()
 	report.Latency = LatencySummary{
 		StartedAt:  startedAt,

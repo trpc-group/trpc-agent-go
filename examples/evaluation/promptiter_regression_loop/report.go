@@ -30,12 +30,21 @@ func writeReports(outputDir string, report *OptimizationReport) error {
 	if err != nil {
 		return fmt.Errorf("marshal json report: %w", err)
 	}
-	prefix := reportPrefix(report)
-	if err := os.WriteFile(filepath.Join(outputDir, prefix+"optimization_report.json"), append(payload, '\n'), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(outputDir, "optimization_report.json"), append(payload, '\n'), 0o600); err != nil {
 		return fmt.Errorf("write json report: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(outputDir, prefix+"optimization_report.md"), []byte(RenderMarkdownReport(report)), 0o600); err != nil {
+	markdown := []byte(RenderMarkdownReport(report))
+	if err := os.WriteFile(filepath.Join(outputDir, "optimization_report.md"), markdown, 0o600); err != nil {
 		return fmt.Errorf("write markdown report: %w", err)
+	}
+	prefix := reportPrefix(report)
+	if prefix != "" {
+		if err := os.WriteFile(filepath.Join(outputDir, prefix+"optimization_report.json"), append(payload, '\n'), 0o600); err != nil {
+			return fmt.Errorf("write prefixed json report: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(outputDir, prefix+"optimization_report.md"), markdown, 0o600); err != nil {
+			return fmt.Errorf("write prefixed markdown report: %w", err)
+		}
 	}
 	return nil
 }
@@ -117,8 +126,8 @@ func RenderMarkdownReport(report *OptimizationReport) string {
 	fmt.Fprintf(&b, "\n")
 
 	fmt.Fprintf(&b, "## Failure Attribution\n\n")
-	writeFailureMap(&b, "Train", report.FailureAttribution.Train)
-	writeFailureMap(&b, "Validation", report.FailureAttribution.Validation)
+	writeFailureSplit(&b, "Baseline", report.FailureAttribution.Baseline)
+	writeFailureSplit(&b, "Candidate", report.FailureAttribution.Candidate)
 	fmt.Fprintf(&b, "\n")
 
 	fmt.Fprintf(&b, "## Audit Summary\n\n")
@@ -154,8 +163,14 @@ func markdownCell(value string, limit int) string {
 	return value
 }
 
-func writeFailureMap(b *bytes.Buffer, title string, counts map[string]int) {
+func writeFailureSplit(b *bytes.Buffer, title string, split FailureSplit) {
 	fmt.Fprintf(b, "### %s\n\n", title)
+	writeFailureCounts(b, "Train", split.Train)
+	writeFailureCounts(b, "Validation", split.Validation)
+}
+
+func writeFailureCounts(b *bytes.Buffer, title string, counts map[string]int) {
+	fmt.Fprintf(b, "#### %s\n\n", title)
 	if len(counts) == 0 {
 		fmt.Fprintf(b, "- none\n\n")
 		return

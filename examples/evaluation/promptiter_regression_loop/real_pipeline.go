@@ -122,15 +122,16 @@ func RunRealLLMPipeline(ctx context.Context, input *LoadedInput) (*OptimizationR
 		delta := ComputeDelta(baselineValidation, candidateValidation)
 		gate := DecideGate(input.Config.Gate, delta, totalCost)
 		roundAudits = append(roundAudits, RoundAudit{
-			Round:         roundResult.Round,
-			CandidateID:   candidateID,
-			Losses:        roundResult.Losses,
-			Patches:       roundResult.Patches,
-			OutputProfile: roundResult.OutputProfile,
-			Delta:         delta,
-			Gate:          gate,
-			Cost:          roundCost,
-			LatencyMs:     time.Since(roundStart).Milliseconds(),
+			Round:                       roundResult.Round,
+			CandidateID:                 candidateID,
+			Losses:                      roundResult.Losses,
+			Patches:                     roundResult.Patches,
+			OutputProfile:               roundResult.OutputProfile,
+			CandidateFailureAttribution: summarizeFailureSplit(candidateTrain, candidateValidation),
+			Delta:                       delta,
+			Gate:                        gate,
+			Cost:                        roundCost,
+			LatencyMs:                   time.Since(roundStart).Milliseconds(),
 		})
 		summary := CandidateSummary{
 			ID:                   candidateID,
@@ -162,8 +163,13 @@ func RunRealLLMPipeline(ctx context.Context, input *LoadedInput) (*OptimizationR
 		Candidate:          selection.summary,
 		Delta:              selection.delta,
 		Gate:               selection.gate,
-		FailureAttribution: summarizeFailures(selection.summary.TrainEvaluation, selection.summary.ValidationEvaluation),
-		Cost:               totalCost,
+		FailureAttribution: summarizeFailures(
+			baselineTrain,
+			baselineValidation,
+			selection.summary.TrainEvaluation,
+			selection.summary.ValidationEvaluation,
+		),
+		Cost: totalCost,
 		Latency: LatencySummary{
 			StartedAt:  startedAt,
 			FinishedAt: finishedAt,

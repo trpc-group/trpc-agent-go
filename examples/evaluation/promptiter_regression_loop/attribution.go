@@ -31,6 +31,10 @@ const (
 	FailureKnowledgeRecallGap = "knowledge_recall_gap"
 	// FailureUnknown is used when no more specific failure category matches.
 	FailureUnknown = "unknown"
+	// FailureMissingEvaluationCase indicates the candidate evaluator omitted a baseline case.
+	FailureMissingEvaluationCase = "missing_evaluation_case"
+	// FailureUnexpectedEvaluationCase indicates the candidate evaluator returned an unknown case.
+	FailureUnexpectedEvaluationCase = "unexpected_evaluation_case"
 )
 
 // AttributeFailures maps metric failures and trace signals to explainable categories.
@@ -94,10 +98,19 @@ func dedupeFailures(failures []FailureAttribution) []FailureAttribution {
 	return deduped
 }
 
-func summarizeFailures(train, validation EvaluationRun) FailureSummary {
-	return FailureSummary{
+func summarizeFailureSplit(train, validation EvaluationRun) FailureSplit {
+	return FailureSplit{
 		Train:      countFailures(train),
 		Validation: countFailures(validation),
+	}
+}
+
+func summarizeFailures(
+	baselineTrain, baselineValidation, candidateTrain, candidateValidation EvaluationRun,
+) FailureSummary {
+	return FailureSummary{
+		Baseline:  summarizeFailureSplit(baselineTrain, baselineValidation),
+		Candidate: summarizeFailureSplit(candidateTrain, candidateValidation),
 	}
 }
 

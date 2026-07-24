@@ -12,6 +12,7 @@ package main
 import (
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	promptiter "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
@@ -124,8 +125,10 @@ type ToolCall struct {
 
 // MetricInput is the subset of metric.EvalMetric needed by the example.
 type MetricInput struct {
-	MetricName string  `json:"metricName,omitempty"`
-	Threshold  float64 `json:"threshold,omitempty"`
+	MetricName    string               `json:"metricName,omitempty"`
+	EvaluatorName string               `json:"evaluatorName,omitempty"`
+	Threshold     float64              `json:"threshold,omitempty"`
+	Criterion     *criterion.Criterion `json:"criterion,omitempty"`
 }
 
 // EvaluationRun captures one train or validation evaluation pass.
@@ -181,15 +184,17 @@ type FailureAttribution struct {
 
 // DeltaSummary compares candidate validation results against baseline.
 type DeltaSummary struct {
-	BaselineScore     float64     `json:"baseline_score"`
-	CandidateScore    float64     `json:"candidate_score"`
-	ScoreDelta        float64     `json:"score_delta"`
-	NewlyPassed       int         `json:"newly_passed"`
-	NewlyFailed       int         `json:"newly_failed"`
-	Improved          int         `json:"improved"`
-	Regressed         int         `json:"regressed"`
-	CriticalRegressed int         `json:"critical_regressed"`
-	Cases             []CaseDelta `json:"cases"`
+	BaselineScore         float64     `json:"baseline_score"`
+	CandidateScore        float64     `json:"candidate_score"`
+	ScoreDelta            float64     `json:"score_delta"`
+	NewlyPassed           int         `json:"newly_passed"`
+	NewlyFailed           int         `json:"newly_failed"`
+	Improved              int         `json:"improved"`
+	Regressed             int         `json:"regressed"`
+	CriticalRegressed     int         `json:"critical_regressed"`
+	MissingCandidateCases int         `json:"missing_candidate_cases"`
+	ExtraCandidateCases   int         `json:"extra_candidate_cases"`
+	Cases                 []CaseDelta `json:"cases"`
 }
 
 // CaseDelta captures per-case candidate movement.
@@ -226,10 +231,16 @@ type LatencySummary struct {
 	DurationMs int64     `json:"duration_ms"`
 }
 
-// FailureSummary aggregates failure attribution categories.
-type FailureSummary struct {
+// FailureSplit aggregates failure attribution categories for one evaluated prompt.
+type FailureSplit struct {
 	Train      map[string]int `json:"train"`
 	Validation map[string]int `json:"validation"`
+}
+
+// FailureSummary aggregates baseline and candidate failure attribution categories.
+type FailureSummary struct {
+	Baseline  FailureSplit `json:"baseline"`
+	Candidate FailureSplit `json:"candidate"`
 }
 
 // CandidateSummary records the selected candidate prompt and validation result.
@@ -243,15 +254,16 @@ type CandidateSummary struct {
 
 // RoundAudit stores PromptIter-style round artifacts.
 type RoundAudit struct {
-	Round         int                   `json:"round"`
-	CandidateID   string                `json:"candidate_id"`
-	Losses        []promptiter.CaseLoss `json:"losses"`
-	Patches       *promptiter.PatchSet  `json:"patches"`
-	OutputProfile *promptiter.Profile   `json:"output_profile"`
-	Delta         DeltaSummary          `json:"delta"`
-	Gate          GateDecision          `json:"gate"`
-	Cost          CostSummary           `json:"cost"`
-	LatencyMs     int64                 `json:"latency_ms"`
+	Round                       int                   `json:"round"`
+	CandidateID                 string                `json:"candidate_id"`
+	Losses                      []promptiter.CaseLoss `json:"losses"`
+	Patches                     *promptiter.PatchSet  `json:"patches"`
+	OutputProfile               *promptiter.Profile   `json:"output_profile"`
+	CandidateFailureAttribution FailureSplit          `json:"candidate_failure_attribution"`
+	Delta                       DeltaSummary          `json:"delta"`
+	Gate                        GateDecision          `json:"gate"`
+	Cost                        CostSummary           `json:"cost"`
+	LatencyMs                   int64                 `json:"latency_ms"`
 }
 
 // OptimizationReport is written as optimization_report.json.

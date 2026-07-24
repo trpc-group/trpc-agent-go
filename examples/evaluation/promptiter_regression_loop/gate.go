@@ -30,6 +30,20 @@ func DecideGate(cfg GateConfig, delta DeltaSummary, cost CostSummary) GateDecisi
 			cfg.MaxNewHardFails,
 		))
 	}
+	if delta.MissingCandidateCases > 0 {
+		decision.Accepted = false
+		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
+			"candidate omitted %d validation case(s)",
+			delta.MissingCandidateCases,
+		))
+	}
+	if delta.ExtraCandidateCases > 0 {
+		decision.Accepted = false
+		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
+			"candidate returned %d unexpected validation case(s)",
+			delta.ExtraCandidateCases,
+		))
+	}
 	if cfg.RejectCriticalRegression && delta.CriticalRegressed > 0 {
 		decision.Accepted = false
 		decision.Reasons = append(decision.Reasons, fmt.Sprintf(

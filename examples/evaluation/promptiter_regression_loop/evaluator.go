@@ -17,16 +17,22 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type localEvaluator struct {
-	metrics []MetricInput
-	engine  FakeEngineConfig
+	metrics  []MetricInput
+	engine   FakeEngineConfig
+	registry metricregistry.Registry
 }
 
 func newLocalEvaluator(metrics []MetricInput, engine FakeEngineConfig) *localEvaluator {
-	return &localEvaluator{metrics: metrics, engine: engine}
+	registry, _ := newRegressionMetricRegistry()
+	return &localEvaluator{metrics: metrics, engine: engine, registry: registry}
 }
 
 func (e *localEvaluator) Evaluate(ctx context.Context, name string, set EvalSetInput, prompt string) (EvaluationRun, error) {
@@ -72,7 +78,7 @@ func (e *localEvaluator) evaluateCase(evalSetID string, evalCase EvalCase, promp
 	metricResults := make([]MetricResult, 0, len(e.metrics))
 	total := 0.0
 	for _, metric := range e.metrics {
-		result := scoreMetric(metric, evalCase, expected, actual)
+		result := scoreMetricWithRegistry(e.registry, metric, evalCase, expected, actual)
 		metricResults = append(metricResults, result)
 		total += result.Score
 	}
@@ -109,14 +115,26 @@ func (e *localEvaluator) evaluateCase(evalSetID string, evalCase EvalCase, promp
 }
 
 func scoreMetric(metric MetricInput, evalCase EvalCase, expected, actual Invocation) MetricResult {
-	threshold := metric.Threshold
+	registry, _ := newRegressionMetricRegistry()
+	return scoreMetricWithRegistry(registry, metric, evalCase, expected, actual)
+}
+
+func scoreMetricWithRegistry(
+	registry metricregistry.Registry,
+	metricInput MetricInput,
+	evalCase EvalCase,
+	expected, actual Invocation,
+) MetricResult {
+	threshold := metricInput.Threshold
 	if threshold == 0 {
 		threshold = 1
 	}
 	score := 1.0
 	reason := ""
-	switch metric.MetricName {
-	case structuredOutputGuardMetric, "final_response_avg_score":
+	switch metricEvaluator(metricInput) {
+	case "final_response_avg_score":
+		score, reason = scoreFinalResponseMetric(registry, metricInput, expected, actual)
+	case structuredOutputGuardMetric:
 		score, reason = scoreStructuredOutputGuard(expected, actual)
 	case "final_response_exact", "llm_rubric_critic":
 		if !sameText(messageText(expected.FinalResponse), messageText(actual.FinalResponse)) {
@@ -143,12 +161,84 @@ func scoreMetric(metric MetricInput, evalCase EvalCase, expected, actual Invocat
 		statusValue = status.EvalStatusFailed
 	}
 	return MetricResult{
-		MetricName: metric.MetricName,
+		MetricName: metricInput.MetricName,
 		Score:      score,
 		Threshold:  threshold,
 		Status:     statusValue,
 		Reason:     reason,
 	}
+}
+
+func metricEvaluator(metricInput MetricInput) string {
+	if metricInput.EvaluatorName != "" {
+		return metricInput.EvaluatorName
+	}
+	return metricInput.MetricName
+}
+
+func scoreFinalResponseMetric(
+	registry metricregistry.Registry,
+	metricInput MetricInput,
+	expected, actual Invocation,
+) (float64, string) {
+	evalMetric := evalMetricFromInput(metricInput)
+	if registry != nil {
+		if err := registry.Resolve(evalMetric); err != nil {
+			return 0, fmt.Sprintf("metric configuration error: %v", err)
+		}
+	}
+	if evalMetric.Criterion != nil && evalMetric.Criterion.FinalResponse != nil {
+		ok, err := evalMetric.Criterion.FinalResponse.Match(
+			context.Background(),
+			toEvalSetInvocation(actual),
+			toEvalSetInvocation(expected),
+		)
+		if err != nil {
+			return 0, fmt.Sprintf("format error: %v", err)
+		}
+		if !ok {
+			return 0, "format error: final response criterion did not match"
+		}
+		return 1, ""
+	}
+	return scoreStructuredOutputGuard(expected, actual)
+}
+
+func evalMetricFromInput(metricInput MetricInput) *metric.EvalMetric {
+	return &metric.EvalMetric{
+		MetricName:    metricInput.MetricName,
+		EvaluatorName: metricInput.EvaluatorName,
+		Threshold:     metricInput.Threshold,
+		Criterion:     metricInput.Criterion,
+	}
+}
+
+func toEvalSetInvocation(invocation Invocation) *evalset.Invocation {
+	result := &evalset.Invocation{
+		InvocationID: invocation.InvocationID,
+		Tools:        make([]*evalset.Tool, 0, len(invocation.Tools)),
+	}
+	if invocation.UserContent != nil {
+		result.UserContent = &model.Message{
+			Role:    model.Role(invocation.UserContent.Role),
+			Content: invocation.UserContent.Content,
+		}
+	}
+	if invocation.FinalResponse != nil {
+		result.FinalResponse = &model.Message{
+			Role:    model.Role(invocation.FinalResponse.Role),
+			Content: invocation.FinalResponse.Content,
+		}
+	}
+	for _, tool := range invocation.Tools {
+		result.Tools = append(result.Tools, &evalset.Tool{
+			ID:        tool.ID,
+			Name:      tool.Name,
+			Arguments: tool.Arguments,
+			Result:    tool.Result,
+		})
+	}
+	return result
 }
 
 func scoreToolTrajectory(expected, actual []ToolCall) (float64, string) {
