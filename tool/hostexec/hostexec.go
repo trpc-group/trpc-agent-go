@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -48,6 +49,7 @@ type config struct {
 	maxLines int
 	jobTTL   time.Duration
 	baseEnv  map[string]string
+	safety   *safety.Scanner
 }
 
 // Option configures the hostexec tool set.
@@ -95,6 +97,14 @@ func WithBaseEnv(env map[string]string) Option {
 	}
 }
 
+// WithSafetyScanner configures a pre-execution safety scanner for host
+// command execution. Blocked decisions stop before the host shell starts.
+func WithSafetyScanner(scanner *safety.Scanner) Option {
+	return func(c *config) {
+		c.safety = scanner
+	}
+}
+
 func defaultConfig() config {
 	return config{
 		baseDir: defaultBaseDir,
@@ -136,8 +146,8 @@ func NewToolSet(opts ...Option) (tool.ToolSet, error) {
 		set.name = defaultToolSetName
 	}
 	set.tools = []tool.Tool{
-		&execCommandTool{mgr: mgr, baseDir: baseDir},
-		&writeStdinTool{mgr: mgr},
+		&execCommandTool{mgr: mgr, baseDir: baseDir, safety: cfg.safety},
+		&writeStdinTool{mgr: mgr, safety: cfg.safety},
 		&killSessionTool{mgr: mgr},
 	}
 	return set, nil
@@ -168,6 +178,7 @@ func (s *toolSet) Name() string {
 type execCommandTool struct {
 	mgr     *manager
 	baseDir string
+	safety  *safety.Scanner
 }
 
 func (t *execCommandTool) Declaration() *tool.Declaration {
@@ -286,13 +297,19 @@ func (t *execCommandTool) Call(
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
 	}
-
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
 		return nil, err
 	}
+	if err := t.checkSafety(ctx, in, workdir); err != nil {
+		return nil, err
+	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	var sanitizer *safety.OutputSanitizer
+	if t.safety != nil {
+		sanitizer = t.safety.NewOutputSanitizer()
+	}
 
 	res, err := t.mgr.exec(ctx, execParams{
 		Command:    in.Command,
@@ -302,15 +319,53 @@ func (t *execCommandTool) Call(
 		Background: in.Background,
 		YieldMs:    yield,
 		TimeoutS:   timeout,
+		Sanitizer:  sanitizer,
 	})
 	if err != nil {
 		return nil, err
 	}
+	if t.safety != nil {
+		res.Output = sanitizer.Sanitize(res.Output)
+	}
 	return mapExecResult(res), nil
 }
 
+func (t *execCommandTool) checkSafety(
+	ctx context.Context,
+	in execInput,
+	workdir string,
+) error {
+	if t.safety == nil {
+		return nil
+	}
+	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	timeoutSeconds := 0
+	if timeout != nil {
+		timeoutSeconds = *timeout
+	}
+	timeoutMS := timeoutDuration(timeoutSeconds).Milliseconds()
+	report, err := t.safety.Scan(ctx, safety.ExecutionRequest{
+		ToolName:   toolExecCommand,
+		Backend:    safety.BackendHostExec,
+		Command:    in.Command,
+		Cwd:        workdir,
+		Env:        in.Env,
+		TimeoutMS:  timeoutMS,
+		TTY:        firstBool(in.TTY, in.PTY),
+		Background: in.Background,
+	})
+	if err != nil {
+		return err
+	}
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
+}
+
 type writeStdinTool struct {
-	mgr *manager
+	mgr    *manager
+	safety *safety.Scanner
 }
 
 func (t *writeStdinTool) Declaration() *tool.Declaration {
@@ -416,6 +471,18 @@ func (t *writeStdinTool) Call(
 	poll, err := t.mgr.poll(sessionID, nil)
 	if err != nil {
 		return nil, err
+	}
+	if t.safety != nil {
+		sess, getErr := t.mgr.get(sessionID)
+		if getErr == nil {
+			poll.Output = sess.sanitizeOutput(
+				poll.Output,
+				t.safety,
+				poll.Status == programStatusExited,
+			)
+		} else {
+			poll.Output = t.safety.SanitizeOutput(poll.Output)
+		}
 	}
 	return mapPollResult(sessionID, poll), nil
 }

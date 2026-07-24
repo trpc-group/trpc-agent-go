@@ -1,0 +1,6 @@
+{
+  "id": "pipeline",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "cat logs.txt | grep token"
+}

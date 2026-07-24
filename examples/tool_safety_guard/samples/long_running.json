@@ -1,0 +1,7 @@
+{
+  "id": "long_running",
+  "tool_name": "workspace_exec",
+  "backend": "workspaceexec",
+  "command": "sleep 999",
+  "timeout_ms": 900000
+}

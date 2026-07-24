@@ -34,6 +34,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/safety"
 )
 
 const (
@@ -77,6 +78,8 @@ type ExecTool struct {
 	allowedCmds []string
 	deniedCmds  []string
 
+	safetyScanner *safety.Scanner
+
 	mu       sync.Mutex
 	sessions map[string]*execSession
 	ttl      time.Duration
@@ -97,6 +100,7 @@ type execSession struct {
 	mu sync.Mutex
 
 	proc        codeexecutor.ProgramSession
+	sanitizer   *safety.OutputSanitizer
 	exitedAt    time.Time
 	finalized   bool
 	finalizedAt time.Time
@@ -148,6 +152,7 @@ type execRequest struct {
 	eng        codeexecutor.Engine
 	ws         codeexecutor.Workspace
 	spec       codeexecutor.RunProgramSpec
+	sanitizer  *safety.OutputSanitizer
 }
 
 type killOutput struct {
@@ -251,6 +256,15 @@ func WithAllowedCommands(cmds ...string) func(*ExecTool) {
 func WithDeniedCommands(cmds ...string) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithSafetyScanner configures a pre-execution safety scanner for
+// workspace_exec. When the scanner returns deny or ask, the command
+// is rejected before any workspace process is started.
+func WithSafetyScanner(scanner *safety.Scanner) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.safetyScanner = scanner
 	}
 }
 
@@ -580,10 +594,16 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
+	var out execOutput
 	if t.sessional {
-		return t.callSessional(ctx, req)
+		out, err = t.callSessional(ctx, req)
+	} else {
+		out, err = t.callNonSessional(ctx, req)
 	}
-	return t.callNonSessional(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	return t.sanitizeOutputWith(out, req.sanitizer), nil
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -601,11 +621,14 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
-	if err := t.checkCommandPolicy(in.Command); err != nil {
-		return execRequest{}, err
-	}
 	cwd, err := normalizeCWD(in.Cwd)
 	if err != nil {
+		return execRequest{}, err
+	}
+	if err := t.checkSafety(ctx, in, cwd); err != nil {
+		return execRequest{}, err
+	}
+	if err := t.checkCommandPolicy(in.Command); err != nil {
 		return execRequest{}, err
 	}
 	eng, err := t.liveEngine()
@@ -642,7 +665,45 @@ func (t *ExecTool) prepareExec(
 			Stdin:    in.Stdin,
 			Timeout:  execTimeout(timeout),
 		},
+		sanitizer: t.newOutputSanitizer(),
 	}, nil
+}
+
+func (t *ExecTool) newOutputSanitizer() *safety.OutputSanitizer {
+	if t == nil || t.safetyScanner == nil {
+		return nil
+	}
+	return t.safetyScanner.NewOutputSanitizer()
+}
+
+func (t *ExecTool) checkSafety(ctx context.Context, in execInput, cwd string) error {
+	if t.safetyScanner == nil {
+		return nil
+	}
+	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
+	if timeout <= 0 {
+		timeout = in.Timeout
+	}
+	yield := firstIntPtr(in.YieldTimeMS, in.YieldMs)
+	mayLeaveSession := t.sessional && yield != nil && *yield > 0
+	report, err := t.safetyScanner.Scan(ctx, safety.ExecutionRequest{
+		ToolName:   "workspace_exec",
+		Backend:    safety.BackendWorkspaceExec,
+		Command:    in.Command,
+		Stdin:      in.Stdin,
+		Cwd:        cwd,
+		Env:        in.Env,
+		TimeoutMS:  execTimeout(timeout).Milliseconds(),
+		TTY:        firstBoolValue(in.TTY, in.PTY),
+		Background: in.Background || mayLeaveSession,
+	})
+	if err != nil {
+		return err
+	}
+	if report.Blocked {
+		return safety.NewBlockedError(report)
+	}
+	return nil
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -821,7 +882,7 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{proc: proc})
+	t.putSession(proc.ID(), &execSession{proc: proc, sanitizer: req.sanitizer})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
 	if poll.Status == codeexecutor.ProgramStatusExited {
@@ -884,7 +945,25 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			out.SessionID = sessionID
 		}
 	}
-	return out, nil
+	return t.exec.sanitizeOutputWith(out, sess.sanitizer), nil
+}
+
+func (t *ExecTool) sanitizeOutput(out execOutput) execOutput {
+	return t.sanitizeOutputWith(out, nil)
+}
+
+func (t *ExecTool) sanitizeOutputWith(
+	out execOutput,
+	sanitizer *safety.OutputSanitizer,
+) execOutput {
+	if t != nil && t.safetyScanner != nil {
+		if sanitizer != nil {
+			out.Output = sanitizer.Sanitize(out.Output)
+		} else {
+			out.Output = t.safetyScanner.SanitizeOutput(out.Output)
+		}
+	}
+	return out
 }
 
 // Call terminates a running workspace_exec session.
