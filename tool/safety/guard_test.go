@@ -1,0 +1,758 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package safety
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+)
+
+func newTestGuard(t *testing.T, opts ...Option) *Guard {
+	t.Helper()
+	defaultOpts := []Option{
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(new(bytes.Buffer)),
+		WithTelemetry(true),
+	}
+	g, err := NewGuard(append(defaultOpts, opts...)...)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = g.Close() })
+	return g
+}
+
+func TestGuard_CheckToolPermissionDeniesBeforeCall(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"rm -rf /","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "command.dangerous_delete")
+}
+
+func TestGuard_CheckToolPermissionAllowsSafeCommand(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./...","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestGuard_CheckToolPermissionAsksForDependency(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"npm install package","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "dependency.package_install")
+}
+
+func TestGuard_CheckToolPermissionDeniesMalformedArgs(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":42}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "input.decode_failure")
+}
+
+func TestGuard_CheckToolPermissionDecodesCodeBlocks(t *testing.T) {
+	guard := newTestGuard(t)
+	codeBlock := `{"code_blocks":[{"language":"python","code":"while True:\n    print('x')"}]}`
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: []byte(codeBlock),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	// The code block triggers both resource.unbounded_loop and
+	// resource.output_bomb; either rule is acceptable as the primary
+	// finding since both detect the unbounded shape.
+	require.True(t,
+		strings.Contains(decision.Reason, "resource.unbounded_loop") ||
+			strings.Contains(decision.Reason, "resource.output_bomb") ||
+			strings.Contains(decision.Reason, "code.output_bomb"),
+		"reason=%s", decision.Reason)
+}
+
+func TestGuard_CheckToolPermissionDecodesHostExec(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"sudo id","pty":true}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "host.privilege")
+}
+
+func TestGuard_CheckToolPermissionCustomProfile(t *testing.T) {
+	guard := newTestGuard(t, WithToolProfile(ToolProfile{
+		Name:         "custom_runner",
+		Backend:      BackendMCP,
+		CommandField: "command",
+	}))
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "custom_runner",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "command.dangerous_delete")
+}
+
+func TestGuard_CheckToolPermissionUnknownCommandShapedToolAsks(t *testing.T) {
+	guard := newTestGuard(t)
+	// Unknown tool with a command-shaped argument should be scanned
+	// conservatively. rm -rf / triggers critical findings, so deny is
+	// the expected outcome; the test verifies the decoder did not skip
+	// the tool silently.
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "unknown_remote_runner",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestGuard_FinalizeCallRedactsResultWithSecret(t *testing.T) {
+	guard := newTestGuard(t)
+
+	// Simulate a tool result containing an API key.
+	args := &tool.AfterToolArgs{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+		Result: map[string]any{
+			"output": "API_KEY=sk_live_1234567890abcdef1234",
+		},
+	}
+	out, err := guard.finalizeCall(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.CustomResult)
+	// The original token must not appear in the redacted result.
+	raw, _ := json.Marshal(out.CustomResult)
+	require.False(t, bytes.Contains(raw, []byte("sk_live_1234567890abcdef1234")),
+		"raw result still contains the secret: %s", string(raw))
+	require.True(t, bytes.Contains(raw, []byte("[REDACTED:")), "expected a redaction marker")
+}
+
+func TestGuard_FinalizeCallTruncatesLargeOutput(t *testing.T) {
+	guard := newTestGuard(t)
+	large := strings.Repeat("x", 4<<20) // 4 MiB
+	args := &tool.AfterToolArgs{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+		Result:    large,
+	}
+	out, err := guard.finalizeCall(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	require.NotNil(t, out.CustomResult)
+	s, ok := out.CustomResult.(string)
+	require.True(t, ok)
+	require.Less(t, len(s), len(large))
+	require.True(t, strings.Contains(s, "[truncated:tool_safety]"))
+}
+
+func TestGuard_FinalizeCallPassesThroughSafeResult(t *testing.T) {
+	guard := newTestGuard(t)
+	args := &tool.AfterToolArgs{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+		Result:    "ok\n",
+	}
+	out, err := guard.finalizeCall(context.Background(), args)
+	require.NoError(t, err)
+	require.Nil(t, out)
+}
+
+func TestGuard_RedactString(t *testing.T) {
+	guard := newTestGuard(t)
+	out, changed := guard.RedactString("API_KEY=sk_live_1234567890abcdef1234")
+	require.True(t, changed)
+	require.NotContains(t, out, "sk_live_1234567890abcdef1234")
+	require.Contains(t, out, "[REDACTED:")
+}
+
+func TestGuard_RedactValue_NestedMap(t *testing.T) {
+	guard := newTestGuard(t)
+	value := map[string]any{
+		"outer": map[string]any{
+			"inner": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+		},
+		"list": []any{"safe", "xoxb-1234567890-abcdef"},
+	}
+	out, changed, err := guard.RedactValue(value)
+	require.NoError(t, err)
+	require.True(t, changed)
+	raw, _ := json.Marshal(out)
+	require.False(t, bytes.Contains(raw, []byte("eyJhbGciOiJIUzI1NiJ9")))
+	require.False(t, bytes.Contains(raw, []byte("xoxb-1234567890-abcdef")))
+	require.True(t, bytes.Contains(raw, []byte("[REDACTED:")))
+}
+
+func TestGuard_LimitResult(t *testing.T) {
+	guard := newTestGuard(t)
+	large := strings.Repeat("x", 4<<20)
+	out, truncated, size := guard.LimitResult(large)
+	require.True(t, truncated)
+	require.Less(t, size, int64(len(large)))
+	s, ok := out.(string)
+	require.True(t, ok)
+	require.True(t, strings.HasSuffix(s, "[truncated:tool_safety]"))
+}
+
+func TestGuard_ScanBatchUsesOnePolicy(t *testing.T) {
+	guard := newTestGuard(t)
+	inputs := []ScanInput{
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "go test ./..."},
+		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "rm -rf /"},
+	}
+	batch, err := guard.ScanBatch(context.Background(), inputs)
+	require.NoError(t, err)
+	require.Equal(t, 2, batch.Summary.Total)
+	require.Equal(t, 1, batch.Summary.Allowed)
+	require.Equal(t, 1, batch.Summary.Denied)
+}
+
+func TestGuard_PolicyReloadWithoutCodeChange(t *testing.T) {
+	// Modify a YAML in a temp file and verify a new Guard picks up the
+	// change without source edits.
+	tmp := t.TempDir() + "/policy.yaml"
+	policyYAML := `
+version: 1
+allowed_commands: [go, git, ls, cat, echo, pwd, grep, find, curl, nc]
+network:
+  allowed_domains: ["github.com", "evil.example"]
+  deny_all: false
+  commands: [curl, wget, nc]
+max_timeout: 10m
+max_output_size: 65536
+max_sleep_seconds: 60
+rules:
+  dangerous_commands: {enabled: true, action: deny}
+  network: {enabled: true, action: deny}
+  shell_bypass: {enabled: true, action: deny}
+  hostexec: {enabled: true, action: deny}
+  dependencies: {enabled: true, action: ask}
+  resource_abuse: {enabled: true, action: deny}
+  secret_leak: {enabled: true, action: deny}
+decision_threshold:
+  critical: deny
+  high: deny
+  medium: ask
+  low: allow
+audit:
+  path: ""
+  required: false
+  redact_secrets: true
+`
+	require.NoError(t, writeFile(tmp, []byte(policyYAML)))
+	g, err := NewGuard(WithPolicyFile(tmp))
+	require.NoError(t, err)
+	defer g.Close()
+	// evil.example is now allowlisted, so curl should be allowed.
+	decision, err := g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"curl https://evil.example/x"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action,
+		"policy file change should allow evil.example; reason=%s", decision.Reason)
+}
+
+func TestGuard_CloseReleasesAudit(t *testing.T) {
+	tmp := t.TempDir() + "/audit.jsonl"
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditPath(tmp),
+	)
+	require.NoError(t, err)
+	_, _ = g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	require.NoError(t, g.Close())
+	require.NoError(t, g.Close()) // idempotent
+}
+
+func TestGuard_RequiredAuditFailureDenies(t *testing.T) {
+	// Use a writer that always fails.
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(&failingWriter{}),
+		WithRequiredAudit(true),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+	decision, err := g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./...","timeout":10}`),
+	})
+	require.NoError(t, err)
+	// Required-audit failure should deny even an otherwise-allow command.
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit.write_failure")
+}
+
+// failingWriter is an io.Writer that always returns an error.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, errFailingWriter }
+
+var errFailingWriter = &failingWriterError{}
+
+type failingWriterError struct{}
+
+func (failingWriterError) Error() string { return "audit writer always fails" }
+
+// writeFile writes data to path. Avoids os.Create to keep the test file
+// self-contained.
+func writeFile(path string, data []byte) error {
+	return saveFile(path, data)
+}
+
+// TestGuard_DenyDecisionDoesNotStashScanEvent verifies that deny and ask
+// decisions do not leave scan events in the side table; only allowed
+// calls reach the after-tool callback that pops them.
+func TestGuard_DenyDecisionDoesNotStashScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-deny",
+		Arguments:  []byte(`{"command":"rm -rf /"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Empty(t, guard.popScanEvent("call-deny").ScanID)
+}
+
+// TestGuard_AskDecisionDoesNotStashScanEvent verifies the ask path also
+// leaves no side-table entry behind.
+func TestGuard_AskDecisionDoesNotStashScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-ask",
+		Arguments:  []byte(`{"command":"npm install package","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Empty(t, guard.popScanEvent("call-ask").ScanID)
+}
+
+// TestGuard_AllowDecisionStashesScanEvent verifies the allow path still
+// stashes the preflight event for post-execute correlation.
+func TestGuard_AllowDecisionStashesScanEvent(t *testing.T) {
+	guard := newTestGuard(t)
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-allow",
+		Arguments:  []byte(`{"command":"go test ./...","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.NotEmpty(t, guard.popScanEvent("call-allow").ScanID)
+}
+
+// TestGuard_PostExecuteEventPopulatesSessionHash verifies that
+// post-execute audit events carry the hashed session id on both the
+// stashed-event path and the fallback path.
+func TestGuard_PostExecuteEventPopulatesSessionHash(t *testing.T) {
+	guard := newTestGuard(t)
+	args := &tool.AfterToolArgs{
+		ToolName:  "write_stdin",
+		Arguments: []byte(`{"session_id":"sess-123","chars":"ls"}`),
+	}
+	// Fallback path: no stashed preflight event.
+	ev := guard.postExecuteEvent(args, false, false)
+	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
+
+	// Stashed path: a preflight event without a hash still gets the
+	// current session digest.
+	guard.stashScanEvent("call-1", scanEvent{ScanID: "scan-1"})
+	args.ToolCallID = "call-1"
+	ev = guard.postExecuteEvent(args, true, false)
+	require.Equal(t, "scan-1", ev.ScanID)
+	require.Equal(t, hashSessionID("sess-123"), ev.SessionHash)
+	require.True(t, ev.Redacted)
+}
+
+// decodeAuditEvents parses the JSONL audit records in buf.
+func decodeAuditEvents(t *testing.T, buf *bytes.Buffer) []AuditEvent {
+	t.Helper()
+	var events []AuditEvent
+	for _, line := range strings.Split(strings.TrimSpace(buf.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var ev AuditEvent
+		require.NoError(t, json.Unmarshal([]byte(line), &ev))
+		events = append(events, ev)
+	}
+	return events
+}
+
+// TestGuard_InjectedWriterHonorsPolicyRequiredAudit verifies that an
+// injected audit writer is wrapped after the final policy is resolved:
+// a policy with audit.required=true makes a failing injected writer deny
+// execution even when WithRequiredAudit is not used.
+func TestGuard_InjectedWriterHonorsPolicyRequiredAudit(t *testing.T) {
+	policy := DefaultPolicy()
+	require.True(t, policy.Audit.Required)
+
+	g, err := NewGuard(
+		WithPolicy(policy),
+		WithAuditWriter(&failingWriter{}),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	decision, err := g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"ls","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit.write_failure")
+}
+
+// TestGuard_InjectedWriterOptionalAuditAllows is the control case: with
+// audit.required=false the same failing injected writer does not block
+// execution.
+func TestGuard_InjectedWriterOptionalAuditAllows(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Audit.Required = false
+
+	g, err := NewGuard(
+		WithPolicy(policy),
+		WithAuditWriter(&failingWriter{}),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	decision, err := g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"ls","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+// TestGuard_ConcurrencyDenialAuditedAsDeny verifies that when the
+// concurrency gate denies a call, the persistent audit record carries
+// the final deny decision instead of the earlier allow.
+func TestGuard_ConcurrencyDenialAuditedAsDeny(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy ConcurrencyPolicy
+	}{
+		{"global cap", ConcurrencyPolicy{MaxActiveCalls: 1}},
+		{"per-tool cap", ConcurrencyPolicy{PerToolLimits: map[string]int{"workspace_exec": 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			auditBuf := new(bytes.Buffer)
+			guard := newTestGuard(t,
+				WithAuditWriter(auditBuf),
+				WithConcurrencyPolicy(tc.policy),
+			)
+			allowArgs := []byte(`{"command":"ls","timeout":10}`)
+
+			decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+				ToolName:   "workspace_exec",
+				ToolCallID: "call-1",
+				Arguments:  allowArgs,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+			// The second in-flight call exceeds the cap and is denied.
+			decision, err = guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+				ToolName:   "workspace_exec",
+				ToolCallID: "call-2",
+				Arguments:  allowArgs,
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "resource.concurrency_exceeded")
+
+			events := decodeAuditEvents(t, auditBuf)
+			require.Len(t, events, 2)
+
+			require.Equal(t, AuditPhasePreflight, events[0].Phase)
+			require.Equal(t, DecisionAllow, events[0].Decision)
+
+			denial := events[1]
+			require.Equal(t, AuditPhasePreflight, denial.Phase)
+			require.Equal(t, DecisionDeny, denial.Decision,
+				"the concurrency denial must not be audited as allow")
+			require.True(t, denial.Intercepted)
+			require.Contains(t, denial.RuleIDs, "resource.concurrency_exceeded")
+			require.NotEqual(t, events[0].ScanID, denial.ScanID)
+		})
+	}
+}
+
+// TestGuard_CheckToolPermissionOmittedTimeoutUsesBackendDefault verifies
+// that when a call omits a timeout, the scanner evaluates the effective
+// backend default timeout: a profile default above max_timeout is no
+// longer capped into an allow, so the call is denied with
+// resource.timeout_exceeded until an explicit bounded timeout is given.
+func TestGuard_CheckToolPermissionOmittedTimeoutUsesBackendDefault(t *testing.T) {
+	guard := newTestGuard(t)
+
+	omitted := []struct {
+		toolName string
+		args     string
+		ruleID   string
+	}{
+		{"workspace_exec", `{"command":"ls"}`, "resource.timeout_exceeded"},
+		{"exec_command", `{"command":"ls"}`, "resource.timeout_exceeded"},
+		{"execute_code", `{"code_blocks":[{"language":"python","code":"print(1)"}]}`, "resource.timeout_unknown"},
+	}
+	for _, tc := range omitted {
+		t.Run(tc.toolName, func(t *testing.T) {
+			decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+				ToolName:  tc.toolName,
+				Arguments: []byte(tc.args),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action,
+				"omitted timeout with a backend default above max_timeout must not be allowed as-is")
+			require.Contains(t, decision.Reason, tc.ruleID)
+		})
+	}
+
+	// An explicit bounded timeout is still allowed.
+	bounded := []struct {
+		toolName string
+		args     string
+	}{
+		{"workspace_exec", `{"command":"ls","timeout":10}`},
+		{"exec_command", `{"command":"ls","timeout_sec":10}`},
+	}
+	for _, tc := range bounded {
+		t.Run(tc.toolName+"_bounded", func(t *testing.T) {
+			decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+				ToolName:  tc.toolName,
+				Arguments: []byte(tc.args),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionAllow, decision.Action)
+		})
+	}
+}
+
+// TestGuard_EmptyToolCallIDCannotBypassConcurrency verifies that an
+// uncorrelatable call is denied when active-call limits are configured.
+func TestGuard_EmptyToolCallIDCannotBypassConcurrency(t *testing.T) {
+	guard := newTestGuard(t, WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 1}))
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"ls","timeout":10}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason,
+		"resource.concurrency_id_required")
+	require.Equal(t, int64(0), guard.concurrency.activeCount())
+}
+
+func TestGuard_DuplicateActiveToolCallIDIsDenied(t *testing.T) {
+	guard := newTestGuard(t,
+		WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 2}),
+	)
+	request := &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "duplicate-id",
+		Arguments:  []byte(`{"command":"ls","timeout":10}`),
+	}
+	decision, err := guard.checkToolCall(
+		context.Background(), request,
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	decision, err = guard.checkToolCall(
+		context.Background(), request,
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason,
+		"input.duplicate_tool_call_id")
+
+	_, err = guard.finalizeCall(
+		context.Background(),
+		&tool.AfterToolArgs{
+			ToolName:   request.ToolName,
+			ToolCallID: request.ToolCallID,
+			Arguments:  request.Arguments,
+			Result:     "ok",
+		},
+	)
+	require.NoError(t, err)
+	decision, err = guard.checkToolCall(
+		context.Background(), request,
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestGuard_CloseReleasesPendingConcurrency(t *testing.T) {
+	guard := newTestGuard(t,
+		WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 1}),
+	)
+	decision, err := guard.checkToolCall(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:   "workspace_exec",
+			ToolCallID: "pending-call",
+			Arguments:  []byte(`{"command":"ls","timeout":10}`),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.Equal(t, int64(1), guard.concurrency.activeCount())
+	require.NoError(t, guard.Close())
+	require.Equal(t, int64(0), guard.concurrency.activeCount())
+}
+
+// TestGuard_StashReleaseSupersedesExistingRelease verifies that a second
+// stash under the same tool call id invokes the previous release instead
+// of silently dropping it.
+func TestGuard_StashReleaseSupersedesExistingRelease(t *testing.T) {
+	guard := newTestGuard(t)
+	ran := 0
+	guard.stashRelease("call-1", func() { ran++ })
+	guard.stashRelease("call-1", func() { ran++ })
+	require.Equal(t, 1, ran, "the superseded release must run, not leak")
+	release := guard.popRelease("call-1")
+	require.NotNil(t, release)
+	release()
+	require.Equal(t, 2, ran)
+	require.Nil(t, guard.popRelease("call-1"))
+}
+
+// TestGuard_UnknownToolMalformedRequiredAuditDenies verifies that the
+// decode-error ask path honors a required audit writer: when the
+// preflight event cannot be written, the ask decision is downgraded to a
+// deny so no unaudited execution can be approved.
+func TestGuard_UnknownToolMalformedRequiredAuditDenies(t *testing.T) {
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(&failingWriter{}),
+		WithRequiredAudit(true),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	decision, err := g.checkToolCall(context.Background(), &tool.PermissionRequest{
+		ToolName:  "totally_unknown_tool",
+		Arguments: []byte(`{broken`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "audit.write_failure")
+}
+
+// TestGuard_PostExecuteAuditFailureStillReturns verifies that a failing
+// required audit writer on the post-execute path cannot break the
+// completion handler: the error is logged and completion returns
+// normally.
+func TestGuard_PostExecuteAuditFailureStillReturns(t *testing.T) {
+	g, err := NewGuard(
+		WithPolicyFile("testdata/tool_safety_policy.yaml"),
+		WithAuditWriter(&failingWriter{}),
+		WithRequiredAudit(true),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	require.NotPanics(t, func() {
+		out, runErr := g.finalizeCall(context.Background(), &tool.AfterToolArgs{
+			ToolName:   "workspace_exec",
+			ToolCallID: "call-audit-fail",
+			Arguments:  []byte(`{"command":"ls","timeout":10}`),
+			Result:     "ok",
+		})
+		require.NoError(t, runErr)
+		require.Nil(t, out)
+	})
+}
+
+// TestGuard_FailedToolCallDoesNotTrackSession verifies that a failed
+// exec/kill call carrying a session id does not mutate the session
+// lifecycle state.
+func TestGuard_FailedToolCallDoesNotTrackSession(t *testing.T) {
+	guard := newTestGuard(t)
+
+	// A failed exec_command must not register the session.
+	_, err := guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"ls"}`),
+		Error:     errors.New("exec failed"),
+		Result:    map[string]any{"session_id": "sess-failed"},
+	})
+	require.NoError(t, err)
+	require.False(t, guard.sessions.isKnown("sess-failed"))
+
+	// A failed kill_session must not mark the session killed.
+	_, err = guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
+		ToolName:  "kill_session",
+		Arguments: []byte(`{"session_id":"sess-x"}`),
+		Error:     errors.New("kill failed"),
+		Result:    map[string]any{"session_id": "sess-x"},
+	})
+	require.NoError(t, err)
+	require.False(t, guard.sessions.isKilled("sess-x"))
+}
+
+// TestGuard_RequiredAuditWithoutWriterFailsConstruction verifies that a
+// policy requiring audit with no writable destination fails NewGuard
+// instead of silently producing no audit trail.
+func TestGuard_RequiredAuditWithoutWriterFailsConstruction(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Audit.Path = ""
+	require.True(t, policy.Audit.Required)
+
+	_, err := NewGuard(WithPolicy(policy))
+	require.ErrorContains(t, err, "audit is required")
+
+	// WithRequiredAudit(true) triggers the same failure even when the
+	// policy itself does not require audit.
+	policy.Audit.Required = false
+	_, err = NewGuard(WithPolicy(policy), WithRequiredAudit(true))
+	require.ErrorContains(t, err, "audit is required")
+
+	// An injected writer satisfies the requirement.
+	g, err := NewGuard(
+		WithPolicy(policy),
+		WithRequiredAudit(true),
+		WithAuditWriter(new(bytes.Buffer)),
+	)
+	require.NoError(t, err)
+	require.NoError(t, g.Close())
+}

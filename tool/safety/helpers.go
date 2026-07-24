@@ -1,0 +1,295 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package safety
+
+import (
+	"math"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+)
+
+// isWrapperName returns true when name matches a shellsafe implicit-deny
+// wrapper (sh, bash, eval, env, sudo, xargs, ...). The shellsafe layer
+// remains the authoritative gate; this helper exists so the shell-bypass
+// rule can attach a stable finding id to those names.
+func isWrapperName(name string) bool {
+	base := basenameLower(name)
+	switch base {
+	case "sh", "bash", "zsh", "ash", "dash", "ksh", "mksh", "fish",
+		"pwsh", "powershell", "cmd",
+		"busybox", "toybox",
+		"eval", "exec", "command", "source", ".", "builtin",
+		"xargs", "env", "nohup", "timeout",
+		"sudo", "su", "doas",
+		"setsid", "unshare", "chroot", "runuser",
+		"time", "nice", "ionice", "taskset",
+		"stdbuf", "strace", "ltrace",
+		"script", "flock",
+		"trap", "alias", "unalias", "enable", "hash",
+		"export", "unset", "readonly",
+		"local", "declare", "typeset",
+		"set", "shopt",
+		"cd", "pushd", "popd",
+		"printf", "read", "getopts", "let", "mapfile", "readarray":
+		return true
+	}
+	return false
+}
+
+// basenameLower returns the lowercased basename of name.
+func basenameLower(name string) string {
+	if name == "" {
+		return ""
+	}
+	clean := filepath.ToSlash(name)
+	base := path.Base(clean)
+	return strings.ToLower(base)
+}
+
+func longOptionMatches(arg, full string) bool {
+	name, _, _ := strings.Cut(arg, "=")
+	if name == full {
+		return true
+	}
+	return len(name) >= len(full)-1 &&
+		strings.HasPrefix(full, name)
+}
+
+func matchesAnyLongOption(arg string, options ...string) bool {
+	for _, option := range options {
+		if longOptionMatches(arg, option) {
+			return true
+		}
+	}
+	return false
+}
+
+// isNetworkCommand returns true for known network commands and any name
+// ending in a configured network command name. The configured list is
+// applied at the rule level; this helper only covers the built-in set.
+func isNetworkCommand(exec string) bool {
+	switch basenameLower(exec) {
+	case "curl", "wget", "nc", "netcat", "ncat", "ssh", "scp", "sftp",
+		"ftp", "git", "aria2c", "aria2", "telnet", "socat":
+		return true
+	}
+	return false
+}
+
+// isSleepCommand returns true when argv is a sleep invocation.
+func isSleepCommand(exec string, argv []string) bool {
+	if basenameLower(exec) != "sleep" {
+		return false
+	}
+	return len(argv) >= 2
+}
+
+// sleepSeconds parses and sums GNU/POSIX sleep operands. It supports
+// decimal values and s/m/h/d suffixes. Invalid or overflowing operands
+// fail closed as an effectively unbounded duration.
+func sleepSeconds(argv []string) int64 {
+	if len(argv) < 2 {
+		return -1
+	}
+	var total float64
+	for _, operand := range argv[1:] {
+		seconds, ok := parseSleepOperand(operand)
+		if !ok || seconds >= float64(1<<62-1)-total {
+			return 1<<62 - 1
+		}
+		total += seconds
+	}
+	return int64(math.Ceil(total))
+}
+
+func parseSleepOperand(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	switch strings.ToLower(value) {
+	case "infinity", "inf", "forever":
+		return float64(1 << 62), true
+	}
+	multiplier := float64(1)
+	last := value[len(value)-1]
+	switch last {
+	case 's', 'S':
+		value = value[:len(value)-1]
+	case 'm', 'M':
+		value = value[:len(value)-1]
+		multiplier = 60
+	case 'h', 'H':
+		value = value[:len(value)-1]
+		multiplier = 60 * 60
+	case 'd', 'D':
+		value = value[:len(value)-1]
+		multiplier = 24 * 60 * 60
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil || number < 0 || math.IsInf(number, 0) ||
+		math.IsNaN(number) {
+		return 0, false
+	}
+	return number * multiplier, true
+}
+
+// isInstallCommand returns true for known package install commands.
+func isInstallCommand(exec string, argv []string) bool {
+	base := basenameLower(exec)
+	return isGoDependencyCommand(base, argv) ||
+		isJavaScriptInstallCommand(base, argv) ||
+		isPythonInstallCommand(base, argv) ||
+		isSystemInstallCommand(base, argv)
+}
+
+func isGoDependencyCommand(base string, argv []string) bool {
+	if base != "go" {
+		return false
+	}
+	if base == "go" && len(argv) > 2 && argv[1] == "run" {
+		for _, arg := range argv[2:] {
+			if !strings.HasPrefix(arg, "-") && strings.Contains(arg, "@") {
+				return true
+			}
+		}
+	}
+	return hasToken(argv, "install", "get", "mod")
+}
+
+func isJavaScriptInstallCommand(base string, argv []string) bool {
+	if base != "npm" && base != "pnpm" && base != "yarn" {
+		return false
+	}
+	return hasToken(argv, "install", "i", "add", "ci", "install-save")
+}
+
+func isPythonInstallCommand(base string, argv []string) bool {
+	if base == "pip" || base == "pip3" || base == "uv" || base == "poetry" {
+		return hasToken(argv, "install")
+	}
+	if base == "python" || base == "python3" {
+		return hasFlagSubcommand(argv, "-m", "pip") &&
+			hasToken(argv, "install")
+	}
+	return false
+}
+
+func isSystemInstallCommand(base string, argv []string) bool {
+	switch base {
+	case "apt", "apt-get", "yum", "dnf", "zypper", "brew", "cargo",
+		"pacman", "pkg", "choco", "scoop", "winget", "go":
+		return hasToken(argv, "install")
+	}
+	return false
+}
+
+// isOutputBomb returns true for unbounded output generators.
+func isOutputBomb(exec string, argv []string) bool {
+	base := basenameLower(exec)
+	switch base {
+	case "yes":
+		return true
+	case "seq":
+		// seq with a single argument (end) is bounded; seq with two
+		// arguments (start end) is bounded; seq with no arguments is
+		// invalid. Only flag bare seq with no end argument.
+		// Actually, seq always has an end — the last numeric argument.
+		// The risk is when the end is very large, but that's a
+		// resource concern, not an output bomb. So we do NOT flag seq.
+		return false
+	case "dd":
+		// dd without count= is potentially unbounded.
+		if !hasFlagPrefix(argv, "count=") {
+			return true
+		}
+	case "tail":
+		if hasFlag(argv, "-f", "--follow") {
+			return true
+		}
+	case "tcpdump", "tshark":
+		return true
+	}
+	return false
+}
+
+// hasToken returns true when any of names appears in argv.
+func hasToken(argv []string, names ...string) bool {
+	for _, a := range argv {
+		for _, n := range names {
+			if a == n {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasFlag returns true when any of flags appears in argv.
+func hasFlag(argv []string, flags ...string) bool {
+	return hasToken(argv, flags...)
+}
+
+// hasFlagPrefix returns true when any argv token starts with prefix.
+func hasFlagPrefix(argv []string, prefix string) bool {
+	for _, a := range argv {
+		if strings.HasPrefix(a, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// hasFlagSubcommand returns true when flag (e.g. -m) is followed by
+// subcommand (e.g. pip) anywhere in argv.
+func hasFlagSubcommand(argv []string, flag, subcommand string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == subcommand {
+			return true
+		}
+	}
+	return false
+}
+
+// parseDecimalInt parses a non-negative decimal integer into out. It
+// returns the number of bytes consumed and an error when the input
+// contains non-digit bytes, is empty, or overflows int64 (the error
+// wraps strconv.ErrRange). Overflow is reported rather than silently
+// wrapping so an oversized literal cannot bypass the max-sleep guard.
+func parseDecimalInt(s string, out *int64) (int, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, errEmptyNumber
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < '0' || c > '9' {
+			return i, errNonDigit{c: c}
+		}
+	}
+	n, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return len(s), err
+	}
+	*out = n
+	return len(s), nil
+}
+
+type errNonDigit struct{ c byte }
+
+// Error returns the non-digit parse failure message.
+func (e errNonDigit) Error() string { return "non-digit byte in number" }
+
+var errEmptyNumber = &parseError{msg: "empty number"}
+
+type parseError struct{ msg string }
+
+// Error returns the parse failure message.
+func (e *parseError) Error() string { return e.msg }
