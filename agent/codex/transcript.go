@@ -178,19 +178,6 @@ func (s *transcriptStream) HandleRecord(rec codexEvent) []*event.Event {
 	return nil
 }
 
-// parseTranscriptEvents parses Codex CLI JSONL events into framework events.
-func parseTranscriptEvents(stdout []byte, invocationID, author string) (*transcriptResult, error) {
-	records, err := parseTranscriptRecords(stdout)
-	if err != nil {
-		return nil, err
-	}
-	stream := newTranscriptStream(invocationID, author)
-	for _, rec := range records {
-		stream.HandleRecord(rec)
-	}
-	return stream.Result(), nil
-}
-
 // parseTranscriptRecords decodes Codex JSONL output.
 func parseTranscriptRecords(stdout []byte) ([]codexEvent, error) {
 	trimmed := bytes.TrimSpace(stdout)
@@ -270,11 +257,6 @@ func completedEventsFromItem(invocationID, author string, item *codexItem, toolN
 	events = append(events, newToolCallEvent(invocationID, author, toolID, toolName, toolArguments(item), false))
 	events = append(events, newToolResultEvent(invocationID, author, toolID, toolName, toolResult(item)))
 	return events
-}
-
-// errorEventFromRecord creates a framework error event from a Codex failure record.
-func errorEventFromRecord(invocationID, author string, rec codexEvent, terminal bool) *event.Event {
-	return errorEventFromResponseError(invocationID, author, responseErrorFromRecord(rec), terminal)
 }
 
 // errorEventFromResponseError creates a framework error event from parsed error details.

@@ -216,66 +216,6 @@ func TestPlanner_ProcessPlanResp_Delta(t *testing.T) {
 	}
 }
 
-func TestPlanner_SplitByLastPattern(t *testing.T) {
-	p := New()
-
-	tests := []struct {
-		name      string
-		text      string
-		separator string
-		before    string
-		after     string
-	}{
-		{
-			name:      "normal split",
-			text:      "Hello SPLIT World",
-			separator: "SPLIT",
-			before:    "Hello ",
-			after:     " World",
-		},
-		{
-			name:      "no separator",
-			text:      "Hello World",
-			separator: "SPLIT",
-			before:    "Hello World",
-			after:     "",
-		},
-		{
-			name:      "multiple separators",
-			text:      "A SPLIT B SPLIT C",
-			separator: "SPLIT",
-			before:    "A SPLIT B ",
-			after:     " C",
-		},
-		{
-			name:      "empty text",
-			text:      "",
-			separator: "SPLIT",
-			before:    "",
-			after:     "",
-		},
-		{
-			name:      "separator at end",
-			text:      "Hello SPLIT",
-			separator: "SPLIT",
-			before:    "Hello ",
-			after:     "",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			before, after := p.splitByLastPattern(tt.text, tt.separator)
-			if before != tt.before {
-				t.Errorf("splitByLastPattern() before = %q, want %q", before, tt.before)
-			}
-			if after != tt.after {
-				t.Errorf("splitByLastPattern() after = %q, want %q", after, tt.after)
-			}
-		})
-	}
-}
-
 func TestPlanner_BuildPlannerInstruction(t *testing.T) {
 	p := New()
 
@@ -698,61 +638,5 @@ func TestPlanner_HasFinalAnswerTag(t *testing.T) {
 		if result != tt.expected {
 			t.Errorf("hasFinalAnswerTag(%q) = %v, want %v", tt.content, result, tt.expected)
 		}
-	}
-}
-
-func TestPlanner_HasValidToolCalls(t *testing.T) {
-	p := New()
-
-	tests := []struct {
-		name     string
-		response *model.Response
-		expected bool
-	}{
-		{
-			name:     "nil response",
-			response: nil,
-			expected: false,
-		},
-		{
-			name: "empty choices",
-			response: &model.Response{
-				Choices: []model.Choice{},
-			},
-			expected: false,
-		},
-		{
-			name: "no tool calls",
-			response: &model.Response{
-				Choices: []model.Choice{
-					{Message: model.Message{Content: "hello"}},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "with tool calls",
-			response: &model.Response{
-				Choices: []model.Choice{
-					{
-						Message: model.Message{
-							ToolCalls: []model.ToolCall{
-								{Function: model.FunctionDefinitionParam{Name: "test"}},
-							},
-						},
-					},
-				},
-			},
-			expected: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := p.hasValidToolCalls(tt.response)
-			if result != tt.expected {
-				t.Errorf("hasValidToolCalls() = %v, want %v", result, tt.expected)
-			}
-		})
 	}
 }
