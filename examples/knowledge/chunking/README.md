@@ -82,7 +82,7 @@ go run ./chunking/web
 
 Then open [http://127.0.0.1:8080](http://127.0.0.1:8080).
 
-![Knowledge Chunking Viewer](../../../.resource/images/examples/chunk-viewer.png)
+![Knowledge Chunking Viewer](../../../docs/mkdocs/assets/img/knowledge/chunk-viewer.png)
 
 The page opens with the Markdown overview and uses **Reader default
 (recommended)**. Use the built-in sample selector to switch between Markdown,

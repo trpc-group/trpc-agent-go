@@ -206,6 +206,8 @@ sources := []source.Source{
 
 ## 分块策略 (Chunking Strategy)
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 > **示例代码**: [交互式 Chunking Viewer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/chunking) | [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
 
 分块（Chunking）是将长文档拆分为较小片段的过程，这对于向量检索至关重要。框架提供了多种内置分块策略，同时支持自定义分块策略。

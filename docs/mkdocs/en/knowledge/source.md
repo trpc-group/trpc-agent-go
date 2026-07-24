@@ -166,6 +166,8 @@ if err := kb.Load(ctx); err != nil {
 
 ## Chunking Strategy
 
+![Knowledge Chunking Viewer](../../assets/img/knowledge/chunk-viewer.png)
+
 > **Example Code**: [interactive chunking viewer](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/chunking) | [fixed-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/fixed-chunking) | [recursive-chunking](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/knowledge/sources/recursive-chunking)
 
 Chunking is the process of splitting long documents into smaller fragments, which is crucial for vector retrieval. The framework provides multiple built-in chunking strategies and supports custom strategies.
