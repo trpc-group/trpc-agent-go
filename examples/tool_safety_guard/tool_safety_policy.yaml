@@ -1,0 +1,40 @@
+allowed_commands: []
+denied_commands:
+  - rm
+  - rmdir
+  - del
+  - erase
+  - format
+  - sudo
+  - su
+  - doas
+  - nc
+  - netcat
+  - ssh
+  - scp
+denied_paths:
+  - ~/.ssh
+  - .ssh/id_rsa
+  - .ssh/id_ed25519
+  - .env
+  - .env.local
+  - /etc/passwd
+  - /etc/shadow
+network_allowlist:
+  - proxy.golang.org
+  - .golang.org
+max_timeout_sec: 300
+max_output_bytes: 1048576
+max_command_bytes: 16384
+max_script_bytes: 1048576
+env_allowlist:
+  # PATH and other process-control variables are denied independently and
+  # cannot be re-enabled through this ordinary environment allowlist.
+  - HOME
+  - GOPATH
+  - GOCACHE
+dependency_install_action: ask
+unparsable_shell_action: ask
+host_unparsable_shell_action: deny
+secret_action: deny
+audit_failure_mode: best_effort
