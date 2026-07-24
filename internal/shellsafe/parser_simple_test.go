@@ -251,6 +251,58 @@ func TestSimple_DosCaps(t *testing.T) {
 	})
 }
 
+func TestParseWithMaxSegments_PreservesDefaultAndAllowsBoundedOverride(
+	t *testing.T,
+) {
+	if pipe, err := Parse(commandWithSegments(maxSegments)); err != nil {
+		t.Fatalf("default limit should accept %d segments: %v", maxSegments, err)
+	} else if got := len(pipe.Commands); got != maxSegments {
+		t.Fatalf("default parsed segments: got %d want %d", got, maxSegments)
+	}
+	if _, err := Parse(commandWithSegments(maxSegments + 1)); err == nil ||
+		!strings.Contains(err.Error(), "max 32") {
+		t.Fatalf("default limit should reject 33 segments, got: %v", err)
+	}
+
+	pipe, err := ParseWithMaxSegments(commandWithSegments(500), 512)
+	if err != nil {
+		t.Fatalf("custom limit should accept 500 segments: %v", err)
+	}
+	if got := len(pipe.Commands); got != 500 {
+		t.Fatalf("custom parsed segments: got %d want 500", got)
+	}
+	if _, err := ParseWithMaxSegments(
+		commandWithSegments(513), 512,
+	); err == nil || !strings.Contains(err.Error(), "max 512") {
+		t.Fatalf("custom limit should reject 513 segments, got: %v", err)
+	}
+	if _, err := ParseWithMaxSegments(
+		commandWithSegments(2), 1,
+	); err == nil || !strings.Contains(err.Error(), "max 1") {
+		t.Fatalf("custom limit should be enforced, got: %v", err)
+	}
+}
+
+func TestParseWithMaxSegments_RejectsInvalidLimit(t *testing.T) {
+	for _, limit := range []int{-1, 0, maxConfigurableSegments + 1} {
+		_, err := ParseWithMaxSegments("echo ok", limit)
+		if err == nil || !strings.Contains(err.Error(), "between 1 and 512") {
+			t.Fatalf("limit %d: expected invalid limit error, got: %v", limit, err)
+		}
+	}
+}
+
+func commandWithSegments(count int) string {
+	var builder strings.Builder
+	for i := 0; i < count; i++ {
+		if i > 0 {
+			builder.WriteString(" | ")
+		}
+		builder.WriteString("cmd")
+	}
+	return builder.String()
+}
+
 // TestSimple_LeadingAssignmentDetector pins down the heuristic that
 // decides whether argv[0] should be rejected as "FOO=bar". A pure
 // command name that happens to contain '=' later (like "a=b" passed
