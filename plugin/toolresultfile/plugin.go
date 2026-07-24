@@ -68,8 +68,15 @@ func (p *toolResultFilePlugin) afterToolMessages(
 	replacements := append([]model.Message(nil), args.ToolResultMessages...)
 	changed := false
 	for i := range replacements {
-		content := replacements[i].Content
-		if len(content) < p.thresholdBytes {
+		payload, mimeType, err := artifactPayload(replacements[i])
+		if err != nil {
+			return nil, fmt.Errorf(
+				"encode tool result %q: %w",
+				replacements[i].ToolID,
+				err,
+			)
+		}
+		if len(payload) < p.thresholdBytes {
 			continue
 		}
 
@@ -79,8 +86,8 @@ func (p *toolResultFilePlugin) afterToolMessages(
 			info,
 			filename,
 			&artifact.Artifact{
-				Data:     []byte(content),
-				MimeType: contentMimeType(content),
+				Data:     payload,
+				MimeType: mimeType,
 				Name:     filename,
 			},
 		)
@@ -96,9 +103,10 @@ func (p *toolResultFilePlugin) afterToolMessages(
 		replacements[i].Content = fmt.Sprintf(
 			"[Tool result externalized: %d bytes saved at %s. "+
 				"Use read_file with this artifact reference to inspect it.]",
-			len(content),
+			len(payload),
 			ref,
 		)
+		replacements[i].ContentParts = nil
 		changed = true
 	}
 	if !changed {
@@ -107,6 +115,23 @@ func (p *toolResultFilePlugin) afterToolMessages(
 	return &plugin.AfterToolMessagesResult{
 		ToolResultMessages: replacements,
 	}, nil
+}
+
+func artifactPayload(message model.Message) ([]byte, string, error) {
+	if len(message.ContentParts) == 0 {
+		return []byte(message.Content), contentMimeType(message.Content), nil
+	}
+	payload, err := json.Marshal(struct {
+		Content      string              `json:"content,omitempty"`
+		ContentParts []model.ContentPart `json:"content_parts"`
+	}{
+		Content:      message.Content,
+		ContentParts: message.ContentParts,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return payload, jsonMimeType, nil
 }
 
 func artifactTarget(

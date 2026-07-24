@@ -10,6 +10,8 @@ package toolresultfile
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -101,6 +103,89 @@ func TestPluginPreservesResultsBelowThreshold(t *testing.T) {
 	require.Nil(t, result)
 }
 
+func TestPluginExternalizesResultAtThreshold(t *testing.T) {
+	artifacts := artifactmem.NewService()
+	manager, err := plugin.NewManager(New(WithThresholdBytes(5)))
+	require.NoError(t, err)
+	msg := model.NewToolMessage("call", "lookup", "12345")
+
+	result, err := manager.AfterToolMessages(
+		context.Background(),
+		&plugin.AfterToolMessagesArgs{
+			Invocation:         testInvocation(artifacts),
+			ToolResultMessages: []model.Message{msg},
+			ToolResultEvent:    toolResultEvent(msg),
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, result.ToolResultMessages[0].Content, "artifact://")
+}
+
+func TestPluginSaveFailurePreservesOriginalResult(t *testing.T) {
+	artifacts := failingArtifactService{
+		Service: artifactmem.NewService(),
+		err:     errors.New("storage unavailable"),
+	}
+	manager, err := plugin.NewManager(New(WithThresholdBytes(1)))
+	require.NoError(t, err)
+	msg := model.NewToolMessage("call", "lookup", "original")
+	ev := toolResultEvent(msg)
+	args := &plugin.AfterToolMessagesArgs{
+		Invocation:         testInvocation(artifacts),
+		ToolResultMessages: []model.Message{msg},
+		ToolResultEvent:    ev,
+	}
+
+	result, err := manager.AfterToolMessages(context.Background(), args)
+	require.ErrorContains(t, err, "storage unavailable")
+	require.Nil(t, result)
+	require.Equal(t, msg, args.ToolResultMessages[0])
+	require.Equal(t, msg, ev.Response.Choices[0].Message)
+}
+
+func TestPluginExternalizesMultipartResultWithoutLeavingPartsInline(t *testing.T) {
+	ctx := context.Background()
+	artifacts := artifactmem.NewService()
+	inv := testInvocation(artifacts)
+	manager, err := plugin.NewManager(New(WithThresholdBytes(1)))
+	require.NoError(t, err)
+	msg := model.NewToolMessage("call", "lookup", "summary")
+	msg.AddFileData("result.txt", []byte("large result"), textMimeType)
+	ev := toolResultEvent(msg)
+
+	result, err := manager.AfterToolMessages(
+		ctx,
+		&plugin.AfterToolMessagesArgs{
+			Invocation:         inv,
+			ToolResultMessages: []model.Message{msg},
+			ToolResultEvent:    ev,
+		},
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.ToolResultMessages[0].ContentParts)
+	require.Empty(t, ev.Response.Choices[0].Message.ContentParts)
+
+	saved, err := artifacts.LoadArtifact(
+		ctx,
+		artifact.SessionInfo{
+			AppName:   inv.Session.AppName,
+			UserID:    inv.Session.UserID,
+			SessionID: inv.Session.ID,
+		},
+		artifactName(inv, msg.ToolID),
+		nil,
+	)
+	require.NoError(t, err)
+	require.Equal(t, jsonMimeType, saved.MimeType)
+	var envelope struct {
+		ContentParts []model.ContentPart `json:"content_parts"`
+	}
+	require.NoError(t, json.Unmarshal(saved.Data, &envelope))
+	require.Len(t, envelope.ContentParts, 1)
+	require.Equal(t, []byte("large result"), envelope.ContentParts[0].File.Data)
+}
+
 func TestPluginVersionsRepeatedToolResults(t *testing.T) {
 	ctx := context.Background()
 	artifacts := artifactmem.NewService()
@@ -157,6 +242,20 @@ func testInvocation(service artifact.Service) *agent.Invocation {
 			ID:      "session",
 		},
 	}
+}
+
+type failingArtifactService struct {
+	artifact.Service
+	err error
+}
+
+func (s failingArtifactService) SaveArtifact(
+	context.Context,
+	artifact.SessionInfo,
+	string,
+	*artifact.Artifact,
+) (int, error) {
+	return 0, s.err
 }
 
 func toolResultEvent(messages ...model.Message) *event.Event {

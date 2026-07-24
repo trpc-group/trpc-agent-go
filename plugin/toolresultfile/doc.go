@@ -12,5 +12,6 @@
 // The replacement message contains a pinned artifact:// reference. Agents that
 // have the file tool can inspect the result incrementally with read_file,
 // keeping the original payload out of subsequent model requests and session
-// events.
+// events. Multipart results are stored as a JSON envelope containing content
+// and content_parts.
 package toolresultfile
