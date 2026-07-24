@@ -262,6 +262,49 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 （后台：提取器分析对话并自动创建记忆，用户无感知）
 ```
 
+### 可选的 Assistant Episode 提取
+
+Auto extraction 默认使用标准 fact 和 episode 工具。如果应用还需要在后续对话中
+召回 assistant 曾经提供的可复用信息，可以在构造 extractor 时显式开启 assistant
+episode 提取：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithAssistantEpisodeExtraction(),
+)
+memoryService := memoryinmemory.NewMemoryService(
+    memoryinmemory.WithExtractor(memExtractor),
+)
+```
+
+该 option 会增加一个仅供后台 extraction model 使用的
+`memory_assistant_episode` 工具，不会把它暴露给应用的 Agent。提取器仍按原样
+保留 conversation message 及其 role。标准 fact/episode 工具保持可用，因此一次
+提取请求仍可以在生成 assistant episode 的同时生成普通用户事实或事件。
+
+Assistant 输出会被记录为“带归属的对话历史”，而不是已经验证的事实或用户偏好。
+框架将每个通过校验的调用固定转换为普通 `KindEpisode` add 操作，将 participants
+设置为 `User` 和 `Assistant`；如果 extraction context 带有 reference date，则将其
+作为 event time。例如：
+
+```json
+{
+  "memory": "Assistant-provided conversation episode: 当用户询问适合紧凑厨房的产品时，assistant 推荐了 Alpha 和 Beta。",
+  "kind": "episode",
+  "participants": ["User", "Assistant"]
+}
+```
+
+模型只能提供 episode 正文和可选的检索 topics，不能通过该工具覆盖 memory kind、
+participants、event time 或 location。如果 extraction 输入中没有非空 assistant
+response、正文为空或正文超过 4,096 bytes，调用会被拒绝。
+
+该功能与存储后端无关，不会新增 memory kind、字段、数据库列、数据表或迁移，也
+不会增加额外的模型调用。该 option 在 extractor 生命周期内不可修改。需要关闭时，
+应重新构造一个未传入该 option 的 extractor。此前已经保存的 assistant episode
+仍是普通 episodic memory，会继续参与正常检索。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |
