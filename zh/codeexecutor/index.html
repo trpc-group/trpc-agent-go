@@ -1096,6 +1096,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#workspace_exec-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      限制 workspace_exec 的 Session 内联输出
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workspace_exec" class="md-nav__link">
     <span class="md-ellipsis">
       限制 workspace_exec 可执行的命令
@@ -3447,6 +3456,15 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#workspace_exec-session" class="md-nav__link">
+    <span class="md-ellipsis">
+      限制 workspace_exec 的 Session 内联输出
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#workspace_exec" class="md-nav__link">
     <span class="md-ellipsis">
       限制 workspace_exec 可执行的命令
@@ -4451,6 +4469,54 @@ callback 里偷做。<code>Workspace</code> 的设计点是「读出 agent 跑�
   flush 想做 best-effort 的话自己 log 后吞掉。</li>
 </ul>
 <p>完整可运行示例：<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/workspace_io">examples/workspace_io</a>。</p>
+<h2 id="workspace_exec-session">限制 <code>workspace_exec</code> 的 Session 内联输出</h2>
+<p><code>workspace_exec</code> 默认保持兼容行为，完整返回本次调用观察到的终端文本。若要
+避免超大 stdout/stderr 作为 tool result 写入 Session，可在 Agent 级别配置
+内联字节上限：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
+<span class="normal"><a href="#__codelineno-13-2">2</a></span>
+<span class="normal"><a href="#__codelineno-13-3">3</a></span>
+<span class="normal"><a href="#__codelineno-13-4">4</a></span>
+<span class="normal"><a href="#__codelineno-13-5">5</a></span>
+<span class="normal"><a href="#__codelineno-13-6">6</a></span>
+<span class="normal"><a href="#__codelineno-13-7">7</a></span>
+<span class="normal"><a href="#__codelineno-13-8">8</a></span>
+<span class="normal"><a href="#__codelineno-13-9">9</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="kn">import</span><span class="w"> </span><span class="nx">workspaceexec</span><span class="w"> </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec&quot;</span>
+</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a>
+</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">executor</span><span class="p">),</span>
+</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecOutputLimits</span><span class="p">(</span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">OutputLimits</span><span class="p">{</span>
+</span><span id="__span-13-7"><a id="__codelineno-13-7" name="__codelineno-13-7"></a><span class="w">        </span><span class="nx">MaxOutputBytes</span><span class="p">:</span><span class="w"> </span><span class="mi">64</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-13-8"><a id="__codelineno-13-8" name="__codelineno-13-8"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-13-9"><a id="__codelineno-13-9" name="__codelineno-13-9"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>也可以直接配置工具：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
+<span class="normal"><a href="#__codelineno-14-2">2</a></span>
+<span class="normal"><a href="#__codelineno-14-3">3</a></span>
+<span class="normal"><a href="#__codelineno-14-4">4</a></span>
+<span class="normal"><a href="#__codelineno-14-5">5</a></span>
+<span class="normal"><a href="#__codelineno-14-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">tool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">NewExecTool</span><span class="p">(</span>
+</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">executor</span><span class="p">,</span>
+</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithOutputLimits</span><span class="p">(</span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">OutputLimits</span><span class="p">{</span>
+</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">        </span><span class="nx">MaxOutputBytes</span><span class="p">:</span><span class="w"> </span><span class="mi">64</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="mi">1024</span><span class="p">,</span>
+</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="w">    </span><span class="p">}),</span>
+</span><span id="__span-14-6"><a id="__codelineno-14-6" name="__codelineno-14-6"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>该限制同时作用于一次性 <code>workspace_exec</code> 以及交互式
+<code>workspace_exec</code> / <code>workspace_write_stdin</code> 的每次返回。超限时保留内容首尾，
+并返回 <code>truncated: true</code> 与截断前的 <code>total_bytes</code>。截断发生在 tool-result
+event 创建之前，因此 Session 持久化的也是窗口化结果；这与只在入模前改写
+请求投影的 Context Compaction 不同。</p>
+<p>若配置的上限小到无法容纳截断标记，结果会退化为 UTF-8 安全的前缀截断。
+启用限制时，会先丢弃非法 UTF-8 序列，再应用字节预算；<code>total_bytes</code> 仍表示
+原始输出的字节数。交互式返回中的 <code>offset</code> / <code>next_offset</code> 始终表示底层 poll
+已消费的范围；当 <code>truncated: true</code> 时，<code>output</code> 只是该范围的有界视图，被省略
+的内容不会在后续 poll 中重新返回。</p>
+<p><code>MaxOutputBytes &lt;= 0</code> 表示关闭限制，也是默认行为。该选项限制的是工具返回和
+Session 体积；底层 executor 在命令运行期间是否限制 stdout/stderr 捕获仍由
+具体 backend 决定。</p>
 <h2 id="workspace_exec">限制 <code>workspace_exec</code> 可执行的命令</h2>
 <p><code>workspace_exec</code> 会执行模型发过来的任意 shell 命令。当沙箱允许出网时，
 这会变成一个 prompt-injection / SSRF 入口：用户 prompt 诱导模型跑
@@ -4459,29 +4525,29 @@ callback 里偷做。<code>Workspace</code> 的设计点是「读出 agent 跑�
 一个列表非空，命令在执行前会被解析，不通过就直接拒掉。</p>
 <h3 id="_9">怎么配</h3>
 <p>在 Agent 级别：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-13-1">1</a></span>
-<span class="normal"><a href="#__codelineno-13-2">2</a></span>
-<span class="normal"><a href="#__codelineno-13-3">3</a></span>
-<span class="normal"><a href="#__codelineno-13-4">4</a></span>
-<span class="normal"><a href="#__codelineno-13-5">5</a></span>
-<span class="normal"><a href="#__codelineno-13-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-13-2"><a id="__codelineno-13-2" name="__codelineno-13-2"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
-</span><span id="__span-13-3"><a id="__codelineno-13-3" name="__codelineno-13-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">executor</span><span class="p">),</span>
-</span><span id="__span-13-4"><a id="__codelineno-13-4" name="__codelineno-13-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
-</span><span id="__span-13-5"><a id="__codelineno-13-5" name="__codelineno-13-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
-</span><span id="__span-13-6"><a id="__codelineno-13-6" name="__codelineno-13-6"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
+<span class="normal"><a href="#__codelineno-15-2">2</a></span>
+<span class="normal"><a href="#__codelineno-15-3">3</a></span>
+<span class="normal"><a href="#__codelineno-15-4">4</a></span>
+<span class="normal"><a href="#__codelineno-15-5">5</a></span>
+<span class="normal"><a href="#__codelineno-15-6">6</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a><span class="nx">agent</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a><span class="w">    </span><span class="s">&quot;my-agent&quot;</span><span class="p">,</span>
+</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithCodeExecutor</span><span class="p">(</span><span class="nx">executor</span><span class="p">),</span>
+</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
+</span><span id="__span-15-5"><a id="__codelineno-15-5" name="__codelineno-15-5"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithWorkspaceExecDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
+</span><span id="__span-15-6"><a id="__codelineno-15-6" name="__codelineno-15-6"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>也可以直接在 <code>ExecTool</code> 上配（第一个参数是 <code>codeexecutor.CodeExecutor</code>，
 例如 <code>localexec.New()</code>）：</p>
-<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-14-1">1</a></span>
-<span class="normal"><a href="#__codelineno-14-2">2</a></span>
-<span class="normal"><a href="#__codelineno-14-3">3</a></span>
-<span class="normal"><a href="#__codelineno-14-4">4</a></span>
-<span class="normal"><a href="#__codelineno-14-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1"></a><span class="nx">tool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">NewExecTool</span><span class="p">(</span>
-</span><span id="__span-14-2"><a id="__codelineno-14-2" name="__codelineno-14-2"></a><span class="w">    </span><span class="nx">executor</span><span class="p">,</span>
-</span><span id="__span-14-3"><a id="__codelineno-14-3" name="__codelineno-14-3"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
-</span><span id="__span-14-4"><a id="__codelineno-14-4" name="__codelineno-14-4"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
-</span><span id="__span-14-5"><a id="__codelineno-14-5" name="__codelineno-14-5"></a><span class="p">)</span>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span>
+<span class="normal"><a href="#__codelineno-16-2">2</a></span>
+<span class="normal"><a href="#__codelineno-16-3">3</a></span>
+<span class="normal"><a href="#__codelineno-16-4">4</a></span>
+<span class="normal"><a href="#__codelineno-16-5">5</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a><span class="nx">tool</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">NewExecTool</span><span class="p">(</span>
+</span><span id="__span-16-2"><a id="__codelineno-16-2" name="__codelineno-16-2"></a><span class="w">    </span><span class="nx">executor</span><span class="p">,</span>
+</span><span id="__span-16-3"><a id="__codelineno-16-3" name="__codelineno-16-3"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithAllowedCommands</span><span class="p">(</span><span class="s">&quot;ls&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cat&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;rg&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;git&quot;</span><span class="p">),</span>
+</span><span id="__span-16-4"><a id="__codelineno-16-4" name="__codelineno-16-4"></a><span class="w">    </span><span class="nx">workspaceexec</span><span class="p">.</span><span class="nx">WithDeniedCommands</span><span class="p">(</span><span class="s">&quot;curl&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;wget&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;nc&quot;</span><span class="p">),</span>
+</span><span id="__span-16-5"><a id="__codelineno-16-5" name="__codelineno-16-5"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>或通过环境变量做部署期配置（用逗号或空白分隔）：</p>
 <ul>
@@ -4491,13 +4557,13 @@ callback 里偷做。<code>Workspace</code> 的设计点是「读出 agent 跑�
 <p>显式 Option 优先级高于环境变量。两个都不设就关闭策略，行为与历史完全一致。</p>
 <h3 id="_10">还能怎么写</h3>
 <p>由白名单命令通过安全的顺序操作符串起来的管道是允许的：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-15-1">1</a></span>
-<span class="normal"><a href="#__codelineno-15-2">2</a></span>
-<span class="normal"><a href="#__codelineno-15-3">3</a></span>
-<span class="normal"><a href="#__codelineno-15-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1"></a>ls | rg foo
-</span><span id="__span-15-2"><a id="__codelineno-15-2" name="__codelineno-15-2"></a>git status &amp;&amp; git diff
-</span><span id="__span-15-3"><a id="__codelineno-15-3" name="__codelineno-15-3"></a>test -f x.txt || echo missing
-</span><span id="__span-15-4"><a id="__codelineno-15-4" name="__codelineno-15-4"></a>mkdir -p out; cp a.txt out/
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
+<span class="normal"><a href="#__codelineno-17-2">2</a></span>
+<span class="normal"><a href="#__codelineno-17-3">3</a></span>
+<span class="normal"><a href="#__codelineno-17-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-17-1"><a id="__codelineno-17-1" name="__codelineno-17-1"></a>ls | rg foo
+</span><span id="__span-17-2"><a id="__codelineno-17-2" name="__codelineno-17-2"></a>git status &amp;&amp; git diff
+</span><span id="__span-17-3"><a id="__codelineno-17-3" name="__codelineno-17-3"></a>test -f x.txt || echo missing
+</span><span id="__span-17-4"><a id="__codelineno-17-4" name="__codelineno-17-4"></a>mkdir -p out; cp a.txt out/
 </span></code></pre></div></td></tr></table></div>
 <p>参数里允许单引号串、双引号串和 <code>\X</code> 转义字面量。<code>{}</code> 作为字面量是允许的，
 所以 <code>find -exec {} \;</code> 这种写法能正常解析。注意：<code>xargs</code> 本身在下文那一
@@ -4585,7 +4651,7 @@ callback 里偷做。<code>Workspace</code> 的设计点是「读出 agent 跑�
 <code>curl.exe</code>。</p>
 <h3 id="_13">优先级</h3>
 <p>同一个名字同时出现在两个列表里时，<strong>deny 赢</strong>：</p>
-<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-16-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-16-1"><a id="__codelineno-16-1" name="__codelineno-16-1"></a>explicit Deny  &gt;  implicit deny  &gt;  explicit Allow  &gt;  implicit allow
+<div class="language-text highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-18-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-18-1"><a id="__codelineno-18-1" name="__codelineno-18-1"></a>explicit Deny  &gt;  implicit deny  &gt;  explicit Allow  &gt;  implicit allow
 </span></code></pre></div></td></tr></table></div>
 <p>也就是说 <code>WithWorkspaceExecAllowedCommands("git") + WithWorkspaceExecDeniedCommands("git")</code>
 仍然会拒掉 <code>git</code>。把 <code>sh</code> 写进 allow 列表也救不回来，它仍然在 implicit
@@ -4731,7 +4797,7 @@ deny，攻击者只要能找到任何不在 deny 集合里的二进制——包�
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月26日 01:55:26 UTC">2026-06-26 01:55:26</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 07:41:44 UTC">2026-07-24 07:41:44</span>
   </span>
 
     
