@@ -106,17 +106,6 @@ func (s *Sandbox) setCachedSandboxDomain(d string) {
 	s.Unlock()
 }
 
-// sandboxHostDomain returns the domain to use when constructing direct URLs
-// to this sandbox's exposed ports. It prefers the domain returned by the E2B
-// API (which is where the sandbox actually runs — important for self-hosted
-// deployments), falling back to the client-configured domain.
-func (s *Sandbox) sandboxHostDomain() string {
-	if d := s.cachedSandboxDomain(); d != "" {
-		return d
-	}
-	return s.connection.Domain
-}
-
 func (s *Sandbox) hostID(sandboxDomain string) string {
 	if sandboxDomain == "" && s.clientID != "" {
 		return s.id + "-" + s.clientID

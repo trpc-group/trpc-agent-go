@@ -54,6 +54,9 @@ func (t *translator) messageToolCallEvents(parentMessageID string, choice model.
 				t.discardDeltaToolCall(state)
 			}
 		}
+		if toolCall.ID != "" && t.hasSeenToolCallID(toolCall.ID) {
+			continue
+		}
 		t.recordToolCallID(toolCall.ID)
 		// Tool Call Start Event.
 		startOpt := []aguievents.ToolCallStartOption{aguievents.WithParentMessageID(parentMessageID)}
