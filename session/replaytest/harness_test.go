@@ -150,7 +150,7 @@ func TestTrapDetection_SwapEventOrder(t *testing.T) {
 				Data: EventData{Event: NewEvent("inv2", "assistant", "assistant", "Hi there!")}},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events[0].content", "events[1].content"},
+			ExpectedDiffKeys:  []string{"events[0].content", "events[1].content"},
 			ExpectedDiffCount: 2,
 		},
 	})
@@ -394,14 +394,14 @@ func TestNormalizer_NormalizeSession(t *testing.T) {
 		t.Errorf("expected normalized ID '<session-id>', got %q", normalized.ID)
 	}
 	// Verify state keys are sorted.
-	 var keys []string
-	 for k := range normalized.State {
-	  keys = append(keys, k)
-	 }
-	 sort.Strings(keys)
-	 if len(keys) != 2 || keys[0] != "a" || keys[1] != "b" {
-	  t.Errorf("expected sorted state keys [a b], got %v", keys)
-	 }
+	var keys []string
+	for k := range normalized.State {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	if len(keys) != 2 || keys[0] != "a" || keys[1] != "b" {
+		t.Errorf("expected sorted state keys [a b], got %v", keys)
+	}
 }
 
 // TestReporter_GenerateReport verifies the reporter generates a valid report.

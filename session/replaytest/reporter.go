@@ -66,9 +66,9 @@ func NewReporter() *Reporter {
 // GenerateReport creates a DiffReport from a collection of case diffs.
 func (r *Reporter) GenerateReport(caseResults map[string][]DiffEntry) *DiffReport {
 	report := &DiffReport{
-		GeneratedAt:  time.Now().UTC(),
-		TotalCases:   len(caseResults),
-		CaseResults:  make(map[string]*CaseDiffSummary, len(caseResults)),
+		GeneratedAt: time.Now().UTC(),
+		TotalCases:  len(caseResults),
+		CaseResults: make(map[string]*CaseDiffSummary, len(caseResults)),
 	}
 
 	// Sort case names for deterministic output.

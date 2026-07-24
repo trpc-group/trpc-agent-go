@@ -40,7 +40,7 @@ func TrapSwapEventOrder() TrapInjector {
 			}
 			result.Session.Events[0], result.Session.Events[1] = result.Session.Events[1], result.Session.Events[0]
 		},
-		ExpectKeys: []string{"events[0].content", "events[1].content"},
+		ExpectKeys:  []string{"events[0].content", "events[1].content"},
 		ExpectCount: 2,
 	}
 }
@@ -56,7 +56,7 @@ func TrapAlterMemoryContent() TrapInjector {
 			}
 			result.Memories[0].Memory.Memory = result.Memories[0].Memory.Memory + "_tampered"
 		},
-		ExpectKeys: []string{"memories[0].memory.memory"},
+		ExpectKeys:  []string{"memories[0].memory.memory"},
 		ExpectCount: 1,
 	}
 }
@@ -75,7 +75,7 @@ func TrapRemoveSummary() TrapInjector {
 				break
 			}
 		},
-		ExpectKeys: []string{"session.summaries"},
+		ExpectKeys:  []string{"session.summaries"},
 		ExpectCount: 1,
 	}
 }
@@ -114,7 +114,7 @@ func TrapAlterStateValue() TrapInjector {
 				break
 			}
 		},
-		ExpectKeys: []string{"session.state"},
+		ExpectKeys:  []string{"session.state"},
 		ExpectCount: 1,
 	}
 }
@@ -131,7 +131,7 @@ func TrapDuplicateEvent() TrapInjector {
 			dup := result.Session.Events[0]
 			result.Session.Events = append(result.Session.Events, dup)
 		},
-		ExpectKeys: []string{"events"},
+		ExpectKeys:  []string{"events"},
 		ExpectCount: 1,
 	}
 }
@@ -152,7 +152,7 @@ func TrapAlterFilterKey() TrapInjector {
 				break
 			}
 		},
-		ExpectKeys: []string{"session.summaries"},
+		ExpectKeys:  []string{"session.summaries"},
 		ExpectCount: 1,
 	}
 }

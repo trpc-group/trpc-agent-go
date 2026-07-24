@@ -150,9 +150,9 @@ func TestMockModel_GenerateToolCall_ArgsTypes(t *testing.T) {
 func TestMockModel_GenerateToolCallWithArgs(t *testing.T) {
 	m := NewMockModel(42)
 	args := map[string]any{
-		"city":   "Tokyo",
-		"units":  "metric",
-		"days":   5,
+		"city":  "Tokyo",
+		"units": "metric",
+		"days":  5,
 	}
 	tc := m.GenerateToolCallWithArgs("get_forecast", args)
 

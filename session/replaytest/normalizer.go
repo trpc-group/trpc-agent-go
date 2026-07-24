@@ -88,7 +88,7 @@ func (n *Normalizer) normalizeEvent(e event.Event) event.Event {
 	e.InvocationID = n.NormalizeID(e.InvocationID, "invocation")
 	e.ParentInvocationID = n.NormalizeID(e.ParentInvocationID, "parent-invocation")
 	// Normalize model.Response embedded fields.
-	e.Created = 0 // Unix timestamp, auto-generated
+	e.Created = 0                       // Unix timestamp, auto-generated
 	e.ID = n.NormalizeID(e.ID, "event") // Response.ID is same as Event.ID
 	// Normalize Extensions map keys.
 	if e.Extensions != nil {

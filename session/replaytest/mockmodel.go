@@ -30,7 +30,7 @@ type MockModel struct {
 func NewMockModel(seed int64) *MockModel {
 	return &MockModel{
 		Seed: seed,
-		rng:  rand.New(rand.NewSource(seed)),
+		rng:  rand.New(rand.NewSource(seed)), //nolint:gosec // deterministic output for reproducible tests
 	}
 }
 
@@ -230,19 +230,19 @@ func (m *MockModel) randomString(length int) string {
 // string, int, float, array, object, and nested parameter types.
 func (m *MockModel) generateRandomArgs() map[string]any {
 	return map[string]any{
-		"query":      m.randomString(10),
-		"limit":      m.rng.Intn(100),
-		"threshold":  m.rng.Float64() * 100,
-		"tags":       []string{m.randomString(5), m.randomString(5), m.randomString(5)},
+		"query":     m.randomString(10),
+		"limit":     m.rng.Intn(100),
+		"threshold": m.rng.Float64() * 100,
+		"tags":      []string{m.randomString(5), m.randomString(5), m.randomString(5)},
 		"filters": map[string]any{
-			"category":  m.randomString(6),
-			"enabled":   m.rng.Intn(2) == 1,
-			"priority":  m.rng.Intn(5) + 1,
+			"category": m.randomString(6),
+			"enabled":  m.rng.Intn(2) == 1,
+			"priority": m.rng.Intn(5) + 1,
 		},
 		"metadata": map[string]any{
-			"source":    m.randomString(8),
-			"version":   fmt.Sprintf("v%d.%d", m.rng.Intn(10), m.rng.Intn(10)),
-			"scores":    []float64{m.rng.Float64(), m.rng.Float64(), m.rng.Float64()},
+			"source":  m.randomString(8),
+			"version": fmt.Sprintf("v%d.%d", m.rng.Intn(10), m.rng.Intn(10)),
+			"scores":  []float64{m.rng.Float64(), m.rng.Float64(), m.rng.Float64()},
 			"nested": map[string]any{
 				"key":   m.randomString(4),
 				"value": m.rng.Intn(1000),
@@ -253,7 +253,7 @@ func (m *MockModel) generateRandomArgs() map[string]any {
 
 // Reset resets the random generator to the initial seed for reproducibility.
 func (m *MockModel) Reset() {
-	m.rng = rand.New(rand.NewSource(m.Seed))
+	m.rng = rand.New(rand.NewSource(m.Seed)) //nolint:gosec // deterministic output for reproducible tests
 }
 
 // GenerateStateMap generates a random state map for testing.

@@ -49,11 +49,11 @@ func TestReplayCase_AllOpTypes(t *testing.T) {
 	}
 
 	seen := make(map[OpType]bool)
-	for _, ot := range allTypes {
-		if seen[ot] {
-			t.Errorf("duplicate OpType: %s", ot)
+	for _, typ := range allTypes {
+		if seen[typ] {
+			t.Errorf("duplicate OpType: %s", typ)
 		}
-		seen[ot] = true
+		seen[typ] = true
 	}
 
 	// Verify the count matches our defined ops
@@ -64,7 +64,7 @@ func TestReplayCase_AllOpTypes(t *testing.T) {
 
 func TestBackendResult_Fields(t *testing.T) {
 	r := &BackendResult{
-		BackendName: "test",
+		BackendName:  "test",
 		SummaryTexts: map[string]string{"": "summary"},
 	}
 	if r.BackendName != "test" {

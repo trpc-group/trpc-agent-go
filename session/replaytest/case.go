@@ -150,9 +150,9 @@ type StateData struct {
 
 // MemoryData carries the data needed for AddMemory / UpdateMemory operations.
 type MemoryData struct {
-	UserKey  memory.UserKey  `json:"userKey"`
-	Memory   string          `json:"memory"`
-	Topics   []string        `json:"topics,omitempty"`
+	UserKey  memory.UserKey   `json:"userKey"`
+	Memory   string           `json:"memory"`
+	Topics   []string         `json:"topics,omitempty"`
 	Metadata *memory.Metadata `json:"metadata,omitempty"`
 }
 
