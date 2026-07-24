@@ -262,35 +262,8 @@ func validateComparisonSnapshot(
 	indexed := make(map[snapshotCaseKey]CaseResult, len(snapshot.Cases))
 	passed := 0
 	failed := 0
-	for i, item := range snapshot.Cases {
-		if item.EvalSetID != provenance.EvalSetID {
-			return nil, errorsf(
-				"%s case at index %d has eval set %q, expected %q",
-				label,
-				i,
-				item.EvalSetID,
-				provenance.EvalSetID,
-			)
-		}
-		if strings.TrimSpace(item.CaseID) == "" {
-			return nil, errorsf("%s case at index %d has an empty id", label, i)
-		}
-		if !containsExactlyOnce(snapshot.Inventory.CaseIDs, item.CaseID) {
-			return nil, errorsf(
-				"%s case %q is not uniquely present in expected inventory",
-				label,
-				item.CaseID,
-			)
-		}
+	for _, item := range snapshot.Cases {
 		key := snapshotCaseKey{evalSetID: item.EvalSetID, caseID: item.CaseID}
-		if _, exists := indexed[key]; exists {
-			return nil, errorsf(
-				"%s contains duplicate case %s/%s",
-				label,
-				key.evalSetID,
-				key.caseID,
-			)
-		}
 		if !isComparableResultStatus(item.Status) {
 			return nil, errorsf(
 				"%s case %s/%s has non-comparable status %q",

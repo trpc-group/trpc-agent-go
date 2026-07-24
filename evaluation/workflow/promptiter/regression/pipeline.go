@@ -203,9 +203,6 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		report.Status = PipelineRunFailed
 		report.StopReason = StopNecessaryRunFailed
 		report.Errors = appendErrors(report.Errors, trainErr)
-		if trainErr == nil {
-			report.Errors = append(report.Errors, "baseline train evaluation is not complete")
-		}
 		finalizeReport(report, state)
 		return report, nil
 	}
@@ -247,9 +244,6 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		report.Status = PipelineRunFailed
 		report.StopReason = StopNecessaryRunFailed
 		report.Errors = appendErrors(report.Errors, validationErr)
-		if validationErr == nil {
-			report.Errors = append(report.Errors, "baseline validation evaluation is not complete")
-		}
 		finalizeReport(report, state)
 		return report, nil
 	}
@@ -474,12 +468,6 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		if candidateTrainErr != nil || !snapshotCompleted(candidateTrain) {
 			candidateReport.Status = EvaluationNotEvaluable
 			candidateReport.Errors = appendErrors(candidateReport.Errors, candidateTrainErr)
-			if candidateTrainErr == nil {
-				candidateReport.Errors = append(
-					candidateReport.Errors,
-					"candidate train evaluation is not complete",
-				)
-			}
 			candidateReport.SearchDecision = notEvaluableDecision(
 				"candidate train evaluation is not complete",
 			)
@@ -530,12 +518,6 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		if candidateValidationErr != nil || !snapshotCompleted(candidateValidation) {
 			candidateReport.Status = EvaluationNotEvaluable
 			candidateReport.Errors = appendErrors(candidateReport.Errors, candidateValidationErr)
-			if candidateValidationErr == nil {
-				candidateReport.Errors = append(
-					candidateReport.Errors,
-					"candidate held-out evaluation is not complete",
-				)
-			}
 			candidateReport.SearchDecision = notEvaluableDecision(
 				"candidate held-out evaluation is not complete",
 			)

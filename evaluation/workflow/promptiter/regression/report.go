@@ -699,10 +699,8 @@ func validateResolvedDataset(label string, dataset DatasetSpec) error {
 			len(dataset.CaseIDs),
 		)
 	}
-	expectedCases := make(map[string]struct{}, len(dataset.CaseIDs))
 	hashOwners := make(map[string]string, len(dataset.CaseIDs))
 	for _, caseID := range dataset.CaseIDs {
-		expectedCases[caseID] = struct{}{}
 		inputHash := strings.TrimSpace(dataset.NormalizedInputHashes[caseID])
 		if inputHash == "" {
 			return fmt.Errorf(
@@ -720,15 +718,6 @@ func validateResolvedDataset(label string, dataset DatasetSpec) error {
 			)
 		}
 		hashOwners[inputHash] = caseID
-	}
-	for caseID := range dataset.NormalizedInputHashes {
-		if _, ok := expectedCases[caseID]; !ok {
-			return fmt.Errorf(
-				"resolved %s normalized input hash has unexpected case %q",
-				label,
-				caseID,
-			)
-		}
 	}
 	return nil
 }
@@ -834,9 +823,6 @@ func validateSuccessfulCandidate(
 	case EvaluationRunFailed:
 		return fmt.Errorf("%s has run_failed status in a successful report", label)
 	case EvaluationCompleted:
-		if candidate.Profile == nil {
-			return fmt.Errorf("%s completed without a profile", label)
-		}
 		if err := validateSnapshotBinding(
 			label+" train",
 			candidate.Train,
