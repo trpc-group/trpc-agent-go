@@ -797,6 +797,71 @@ func TestExecuteCodeConcurrentCleanup(t *testing.T) {
 	}
 }
 
+func TestExecuteCodeExpiredContextDuringBlockedCleanup(t *testing.T) {
+	stopStarted := make(chan struct{})
+	releaseStop := make(chan struct{})
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop"):
+			close(stopStarted)
+			<-releaseStop
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
+			http.Error(w, "container closing", http.StatusConflict)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{
+		client:      cli,
+		containerID: "cid",
+		container:   &tcontainer.Summary{ID: "cid"},
+	}
+	cleanupErr := make(chan error, 1)
+	go func() {
+		cleanupErr <- exec.cleanupWithContext(context.Background())
+	}()
+	select {
+	case <-stopStarted:
+	case <-time.After(time.Second):
+		close(releaseStop)
+		t.Fatal("cleanup did not reach ContainerStop")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	<-ctx.Done()
+	execErr := make(chan error, 1)
+	go func() {
+		_, err := exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{
+			CodeBlocks: []codeexecutor.CodeBlock{{Code: "echo hi", Language: "bash"}},
+		})
+		execErr <- err
+	}()
+	var err error
+	select {
+	case err = <-execErr:
+	case <-time.After(time.Second):
+		close(releaseStop)
+		<-cleanupErr
+		t.Fatal("ExecuteCode remained blocked behind cleanup")
+	}
+
+	exec.lifecycleMu.Lock()
+	exec.containerID = "next-cid"
+	exec.container = &tcontainer.Summary{ID: "next-cid"}
+	exec.lifecycleMu.Unlock()
+	close(releaseStop)
+	require.NoError(t, <-cleanupErr)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Equal(t, "next-cid", exec.containerID)
+	require.Equal(t, "next-cid", exec.container.ID)
+}
+
 func TestExecuteCode_AttachError(t *testing.T) {
 	const execID = "exec-1"
 	var execStartCalled bool

@@ -646,23 +646,21 @@ func (c *CodeExecutor) cleanupWithContext(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	c.lifecycleMu.Lock()
-	defer c.lifecycleMu.Unlock()
-	if c.client == nil {
-		return nil
-	}
+	dockerClient := c.client
 	id := c.containerID
 	if id == "" && c.container != nil {
 		id = c.container.ID
 	}
-	if id == "" {
+	c.lifecycleMu.Unlock()
+	if dockerClient == nil || id == "" {
 		return nil
 	}
 	var errs []error
-	if err := c.client.ContainerStop(ctx, id, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
+	if err := dockerClient.ContainerStop(ctx, id, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
 		log.WarnfContext(ctx, "Failed to stop container: %v", err)
 		errs = append(errs, fmt.Errorf("stop container: %w", err))
 	}
-	removeErr := c.client.ContainerRemove(ctx, id, container.RemoveOptions{})
+	removeErr := dockerClient.ContainerRemove(ctx, id, container.RemoveOptions{})
 	if removeErr != nil && !errdefs.IsNotFound(removeErr) {
 		log.WarnfContext(ctx, "Failed to remove container: %v", removeErr)
 		errs = append(errs, fmt.Errorf("remove container: %w", removeErr))
@@ -671,8 +669,16 @@ func (c *CodeExecutor) cleanupWithContext(ctx context.Context) error {
 	// important for transient Docker failures: callers can retry cleanup
 	// without losing the container ID.
 	if removeErr == nil || errdefs.IsNotFound(removeErr) {
-		c.containerID = ""
-		c.container = nil
+		c.lifecycleMu.Lock()
+		if c.client == dockerClient {
+			if c.containerID == id {
+				c.containerID = ""
+			}
+			if c.container != nil && c.container.ID == id {
+				c.container = nil
+			}
+		}
+		c.lifecycleMu.Unlock()
 		log.DebugfContext(ctx, "Container %s stopped and removed", id)
 	}
 	return errors.Join(errs...)
