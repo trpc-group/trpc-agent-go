@@ -4,4 +4,5 @@
 {"action":"update_memory","memory":{"ref":"preference","content":"用户喜欢无糖咖啡","topics":["coffee","preference"],"kind":"fact"}}
 {"action":"add_memory","memory":{"ref":"temporary","content":"需要删除的临时记忆","topics":["temporary"],"kind":"fact"}}
 {"action":"delete_memory","memory":{"ref":"temporary"}}
+{"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"preference","content":"用户喜欢无糖咖啡","topics":["coffee","preference"],"kind":"fact"}],"excludes":[{"content":"需要删除的临时记忆"}]}}
 {"action":"checkpoint","checkpoint":"memory-updated"}

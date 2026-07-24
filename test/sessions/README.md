@@ -8,22 +8,22 @@
 
 ## 目录
 
-- [目标与验证范围](#目标与验证范围)
-- [系统架构](#系统架构)
-- [完整数据流程](#完整数据流程)
-- [核心数据模型](#核心数据模型)
-- [代码结构](#代码结构)
-- [Replay Case 格式](#replay-case-格式)
-- [运行说明](#运行说明)
-- [后端选择与环境变量](#后端选择与环境变量)
-- [轻量模式](#轻量模式)
-- [Redis 集成模式](#redis-集成模式)
-- [PostgresMySQLClickHouse 集成模式](#postgresmysqlclickhouse-集成模式)
-- [新增后端接入说明](#新增后端接入说明)
-- [归一化与差异比较](#归一化与差异比较)
-- [故障注入与 Mutation 检测](#故障注入与-mutation-检测)
-- [报告说明](#报告说明)
-- [已知限制](#已知限制)
+- [目标与验证范围](#scope)
+- [系统架构](#architecture)
+- [完整数据流程](#data-flow)
+- [核心数据模型](#data-model)
+- [代码结构](#code-structure)
+- [Replay Case 格式](#replay-case-format)
+- [运行说明](#running)
+- [后端选择与环境变量](#backend-selection)
+- [轻量模式](#lightweight-mode)
+- [Redis 集成模式](#redis-integration)
+- [新增后端接入说明](#backend-integration)
+- [归一化与差异比较](#normalization)
+- [故障注入与 Mutation 检测](#failure-injection)
+- [报告说明](#reporting)
+
+<a id="scope"></a>
 
 ## 目标与验证范围
 
@@ -39,6 +39,8 @@ Replay harness 主要回答以下问题：
 8. 比较器能否识别重复 Event、脏 State、Summary 丢失或覆盖等人为故障。
 
 该框架验证的是**存储与回放一致性**，不是 LLM 回答质量。测试使用确定性 Summarizer，避免模型生成随机性干扰后端比较。
+
+<a id="architecture"></a>
 
 ## 系统架构
 
@@ -82,6 +84,8 @@ flowchart TD
 | Normalize 层 | 消除已知的非业务表示差异 |
 | Compare 层 | 递归生成字段级差异并应用 `allowed_diff` |
 | Report 层 | 汇总运行、比较和 Mutation 检测结果，原子写出 JSON |
+
+<a id="data-flow"></a>
 
 ## 完整数据流程
 
@@ -199,6 +203,8 @@ $.memories[1].participants[0]
 
 报告先写入临时文件，再通过 rename 原子发布，避免产生不完整 JSON。
 
+<a id="data-model"></a>
+
 ## 核心数据模型
 
 ### Session
@@ -291,6 +297,8 @@ Tracks[trackName] -> ordered TrackEvent list
 
 当前快照包含 Track 名称、事件下标、Payload 和 Timestamp。工具耗时、子任务状态、Invocation 关联和错误信息可作为结构化 JSON 放入 Payload。
 
+<a id="code-structure"></a>
+
 ## 代码结构
 
 | 文件 | 主要职责 |
@@ -302,6 +310,8 @@ Tracks[trackName] -> ordered TrackEvent list
 | `report.go` | Case/全局状态计算、统计指标、JSON 报告原子写入 |
 | `testdata/replay_cases/*.jsonl` | 后端无关的 replay fixture |
 | `*_test.go` | 调用 `RunReplayConsistency` 的测试入口 |
+
+<a id="replay-case-format"></a>
 
 ## Replay Case 格式
 
@@ -350,6 +360,8 @@ Tracks[trackName] -> ordered TrackEvent list
 - Allowed diff 仍会出现在报告中，但不会导致比较失败；
 - `reason` 必须说明为什么该差异是合理的。
 
+<a id="running"></a>
+
 ## 运行说明
 
 ### 前置条件
@@ -362,7 +374,10 @@ Tracks[trackName] -> ordered TrackEvent list
 ### 运行全部 replay consistency 测试
 
 ```bash
-go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && go test ./sessions/... \
+  -run '^TestReplayConsistency$' \
+  -count=1 \
+  -v
 ```
 
 `-count=1` 用于关闭 Go test result cache，确保每次都真正执行后端读写。
@@ -373,8 +388,12 @@ go test ./... -run '^TestReplayConsistency$' -count=1 -v
 
 ```bash
 mkdir -p ./artifacts
-REPLAY_REPORT_PATH=./artifacts/session_memory_summary_track_diff_report.json \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_REPORT_PATH=../artifacts/session_memory_summary_track_diff_report.json \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 ### 保留 SQLite 临时文件
@@ -383,23 +402,37 @@ REPLAY_REPORT_PATH=./artifacts/session_memory_summary_track_diff_report.json \
 
 ```bash
 mkdir -p /tmp/trpc-replay-sqlite
-REPLAY_SQLITE_DIR=/tmp/trpc-replay-sqlite \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_SQLITE_DIR=/tmp/trpc-replay-sqlite \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 ### 只运行指定后端
 
 ```bash
-REPLAY_BACKENDS=inmemory \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_BACKENDS=inmemory \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 ```bash
-REPLAY_BACKENDS=inmemory,sqlite \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_BACKENDS=inmemory,sqlite \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 `REPLAY_BACKENDS` 是逗号分隔的 allowlist，名称不区分大小写，重复项会被去重。未知名称会直接返回错误。
+
+<a id="backend-selection"></a>
 
 ## 后端选择与环境变量
 
@@ -426,6 +459,8 @@ REPLAY_BACKENDS=sqlite,inmemory,redis ...
 
 此时 SQLite 是 reference，其他后端与 SQLite 比较。通常建议将 `inmemory` 放在第一位。
 
+<a id="lightweight-mode"></a>
+
 ## 轻量模式
 
 轻量模式不依赖真实 Redis、Postgres、MySQL 或 ClickHouse 服务，适合本地开发和普通 CI。
@@ -433,9 +468,14 @@ REPLAY_BACKENDS=sqlite,inmemory,redis ...
 ### 推荐模式：InMemory + SQLite
 
 ```bash
-REPLAY_BACKENDS=inmemory,sqlite \
-REPLAY_REPORT_PATH=./artifacts/replay-lightweight.json \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+mkdir -p ./artifacts
+cd test && \
+  REPLAY_BACKENDS=inmemory,sqlite \
+  REPLAY_REPORT_PATH=../artifacts/replay-lightweight.json \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 该模式覆盖：
@@ -447,10 +487,15 @@ REPLAY_REPORT_PATH=./artifacts/replay-lightweight.json \
 ### 完整轻量矩阵：InMemory + SQLite + miniredis
 
 ```bash
+mkdir -p ./artifacts
 unset REPLAY_REDIS_URL
-REPLAY_BACKENDS=inmemory,sqlite,redis \
-REPLAY_REPORT_PATH=./artifacts/replay-lightweight-full.json \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_BACKENDS=inmemory,sqlite,redis \
+  REPLAY_REPORT_PATH=../artifacts/replay-lightweight-full.json \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 Redis Factory 在 `REPLAY_REDIS_URL` 为空时自动启动 `miniredis`。这仍属于轻量模式，不会连接外部 Redis。
@@ -458,8 +503,12 @@ Redis Factory 在 `REPLAY_REDIS_URL` 为空时自动启动 `miniredis`。这仍�
 ### 通过 Skip 变量运行
 
 ```bash
-REPLAY_SKIP_REDIS=true \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_SKIP_REDIS=true \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 Skip 变量在 `REPLAY_BACKENDS` allowlist 之后应用。不要把所有选中的后端都跳过，否则 Runner 会报：
@@ -467,6 +516,8 @@ Skip 变量在 `REPLAY_BACKENDS` allowlist 之后应用。不要把所有选中�
 ```text
 replay backend selection is empty
 ```
+
+<a id="redis-integration"></a>
 
 ## Redis 集成模式
 
@@ -486,18 +537,27 @@ docker run --rm -d \
 ### 2. 设置连接地址并运行
 
 ```bash
-REPLAY_BACKENDS=inmemory,sqlite,redis \
-REPLAY_REDIS_URL=redis://127.0.0.1:6379/0 \
-REPLAY_REPORT_PATH=./artifacts/replay-redis-integration.json \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+mkdir -p ./artifacts
+cd test && \
+  REPLAY_BACKENDS=inmemory,sqlite,redis \
+  REPLAY_REDIS_URL=redis://127.0.0.1:6379/0 \
+  REPLAY_REPORT_PATH=../artifacts/replay-redis-integration.json \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 带认证的示例：
 
 ```bash
-REPLAY_REDIS_URL='redis://:password@127.0.0.1:6379/0' \
-REPLAY_BACKENDS=inmemory,redis \
-  go test ./... -run '^TestReplayConsistency$' -count=1 -v
+cd test && \
+  REPLAY_REDIS_URL='redis://:password@127.0.0.1:6379/0' \
+  REPLAY_BACKENDS=inmemory,redis \
+  go test ./sessions/... \
+    -run '^TestReplayConsistency$' \
+    -count=1 \
+    -v
 ```
 
 每个 case 使用独立 key prefix：
@@ -508,6 +568,8 @@ replay:<case-id>
 
 集成环境应使用独立测试实例或专用 DB，避免与业务数据混用。
 
+
+<a id="backend-integration"></a>
 
 ## 新增后端接入说明
 
@@ -663,6 +725,8 @@ type BackendCapabilities struct {
 - 清理与 case 隔离；
 - 真实集成测试。
 
+<a id="normalization"></a>
+
 ## 归一化与差异比较
 
 ### 当前归一化策略
@@ -726,6 +790,8 @@ Postgres、MySQL 和 ClickHouse 接入后，常见的合理差异可能包括：
 4. 优先使用明确的 NormalizeOption；
 5. 无法统一表示时使用带原因的 `allowed_diff`。
 
+<a id="failure-injection"></a>
+
 ## 故障注入与 Mutation 检测
 
 Replay action 支持：
@@ -748,6 +814,8 @@ Replay action 支持：
 - 通用 Event/Memory/Summary 字段篡改。
 
 Mutation 检测不是业务 case 本身，而是对比较器有效性的自检。任何 Mutation 未被发现，整个报告都会标记为失败。
+
+<a id="reporting"></a>
 
 ## 报告说明
 

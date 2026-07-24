@@ -2,3 +2,4 @@
 {"action":"create_session","session_id":"session-09"}
 {"action":"add_memory","failure":{"fail_after":true,"retry":true},"memory":{"ref":"retry-memory","content":"需要幂等保存的事实","topics":["retry"],"kind":"fact"}}
 {"action":"checkpoint","checkpoint":"after-retry"}
+{"action":"assert_memory","expected_memory":{"count":1,"contains":[{"ref":"retry-memory","content":"需要幂等保存的事实"}]}}

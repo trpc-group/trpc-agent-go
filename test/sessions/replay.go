@@ -54,6 +54,7 @@ const (
 	ActionCreateSummary  ActionType = "create_summary"
 	ActionEnqueueSummary ActionType = "enqueue_summary"
 	ActionAssertSession  ActionType = "assert_session"
+	ActionAssertMemory   ActionType = "assert_memory"
 	ActionCheckpoint     ActionType = "checkpoint"
 	replaySchemaVersion             = 1
 )
@@ -69,20 +70,21 @@ type ReplayCase struct {
 
 // ReplayAction is one JSONL record.
 type ReplayAction struct {
-	Action      ActionType                 `json:"action"`
-	Version     int                        `json:"version,omitempty"`
-	ID          string                     `json:"id,omitempty"`
-	Description string                     `json:"description,omitempty"`
-	SessionID   string                     `json:"session_id,omitempty"`
-	State       map[string]json.RawMessage `json:"state,omitempty"`
-	Event       *EventInput                `json:"event,omitempty"`
-	Track       *TrackInput                `json:"track,omitempty"`
-	Memory      *MemoryInput               `json:"memory,omitempty"`
-	Summary     *SummaryInput              `json:"summary,omitempty"`
-	Expected    *SessionExpectation        `json:"expected,omitempty"`
-	Failure     *FailureInput              `json:"failure,omitempty"`
-	AllowedDiff *AllowedDiffRule           `json:"allowed_diff,omitempty"`
-	Checkpoint  string                     `json:"checkpoint,omitempty"`
+	Action         ActionType                 `json:"action"`
+	Version        int                        `json:"version,omitempty"`
+	ID             string                     `json:"id,omitempty"`
+	Description    string                     `json:"description,omitempty"`
+	SessionID      string                     `json:"session_id,omitempty"`
+	State          map[string]json.RawMessage `json:"state,omitempty"`
+	Event          *EventInput                `json:"event,omitempty"`
+	Track          *TrackInput                `json:"track,omitempty"`
+	Memory         *MemoryInput               `json:"memory,omitempty"`
+	Summary        *SummaryInput              `json:"summary,omitempty"`
+	Expected       *SessionExpectation        `json:"expected,omitempty"`
+	ExpectedMemory *MemoryExpectation         `json:"expected_memory,omitempty"`
+	Failure        *FailureInput              `json:"failure,omitempty"`
+	AllowedDiff    *AllowedDiffRule           `json:"allowed_diff,omitempty"`
+	Checkpoint     string                     `json:"checkpoint,omitempty"`
 }
 
 // TrackInput describes one observable tool or subtask trajectory event.
@@ -123,6 +125,34 @@ type MemoryInput struct {
 	EventTime    string      `json:"event_time,omitempty"`
 	Participants []string    `json:"participants,omitempty"`
 	Location     string      `json:"location,omitempty"`
+}
+
+type MemoryExpectation struct {
+	Count    *int                    `json:"count,omitempty"`
+	Contains []MemoryItemExpectation `json:"contains,omitempty"`
+	Excludes []MemoryItemExpectation `json:"excludes,omitempty"`
+}
+
+// MemoryItemExpectation matches one memory by the fields explicitly provided.
+// Ref is a fixture-local stable reference and is resolved to the backend ID.
+type MemoryItemExpectation struct {
+	Ref          string      `json:"ref,omitempty"`
+	Content      string      `json:"content,omitempty"`
+	Topics       []string    `json:"topics,omitempty"`
+	Kind         memory.Kind `json:"kind,omitempty"`
+	EventTime    string      `json:"event_time,omitempty"`
+	Participants []string    `json:"participants,omitempty"`
+	Location     string      `json:"location,omitempty"`
+}
+
+func (e MemoryItemExpectation) empty() bool {
+	return e.Ref == "" &&
+		e.Content == "" &&
+		len(e.Topics) == 0 &&
+		e.Kind == "" &&
+		e.EventTime == "" &&
+		len(e.Participants) == 0 &&
+		e.Location == ""
 }
 
 // SummaryInput selects the summary scope.
@@ -331,6 +361,54 @@ func (a ReplayAction) Validate() error {
 					return fmt.Errorf(
 						"assert_session context message %d has invalid role %q",
 						i, message.Role,
+					)
+				}
+			}
+		}
+	case ActionAssertMemory:
+		if a.ExpectedMemory == nil {
+			return errors.New("assert_memory requires expected_memory")
+		}
+		if a.ExpectedMemory.Count == nil &&
+			len(a.ExpectedMemory.Contains) == 0 &&
+			len(a.ExpectedMemory.Excludes) == 0 {
+			return errors.New(
+				"assert_memory requires count, contains, or excludes",
+			)
+		}
+		if a.ExpectedMemory.Count != nil && *a.ExpectedMemory.Count < 0 {
+			return errors.New("assert_memory count must not be negative")
+		}
+		for i, item := range a.ExpectedMemory.Contains {
+			if item.empty() {
+				return fmt.Errorf(
+					"assert_memory contains item %d must specify at least one field",
+					i,
+				)
+			}
+			if item.EventTime != "" {
+				if _, err := time.Parse(time.RFC3339Nano, item.EventTime); err != nil {
+					return fmt.Errorf(
+						"assert_memory contains item %d event_time: %w",
+						i,
+						err,
+					)
+				}
+			}
+		}
+		for i, item := range a.ExpectedMemory.Excludes {
+			if item.empty() {
+				return fmt.Errorf(
+					"assert_memory excludes item %d must specify at least one field",
+					i,
+				)
+			}
+			if item.EventTime != "" {
+				if _, err := time.Parse(time.RFC3339Nano, item.EventTime); err != nil {
+					return fmt.Errorf(
+						"assert_memory excludes item %d event_time: %w",
+						i,
+						err,
 					)
 				}
 			}
@@ -695,6 +773,13 @@ func executeReplayAction(ctx context.Context, backend Backend, state *replayStat
 				return err
 			}
 			return assertReplaySession(ctx, backend, sess, action.Expected)
+		case ActionAssertMemory:
+			return assertReplayMemory(
+				ctx,
+				backend,
+				state,
+				action.ExpectedMemory,
+			)
 		case ActionCheckpoint:
 			snapshot, err := CollectSnapshot(ctx, backend, state, action.Checkpoint)
 			if err == nil {
@@ -824,6 +909,183 @@ func awaitReplaySummary(
 		case <-ticker.C:
 		}
 	}
+}
+
+func assertReplayMemory(
+	ctx context.Context,
+	backend Backend,
+	state *replayState,
+	expected *MemoryExpectation,
+) error {
+	if expected == nil {
+		return errors.New("memory expectation is nil")
+	}
+
+	userKey := memory.UserKey{
+		AppName: state.appName,
+		UserID:  state.userID,
+	}
+	entries, err := backend.MemoryService().ReadMemories(ctx, userKey, 0)
+	if err != nil {
+		return fmt.Errorf("read memories for assertion: %w", err)
+	}
+
+	actual := make([]MemorySnapshot, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+
+		item := MemorySnapshot{
+			ID:      entry.ID,
+			Content: entry.Memory.Memory,
+			Topics: append(
+				[]string(nil),
+				entry.Memory.Topics...,
+			),
+			Kind: entry.Memory.Kind,
+			Participants: append(
+				[]string(nil),
+				entry.Memory.Participants...,
+			),
+			Location: entry.Memory.Location,
+		}
+		if entry.Memory.EventTime != nil {
+			eventTime := entry.Memory.EventTime.UTC()
+			item.EventTime = &eventTime
+		}
+		actual = append(actual, item)
+	}
+
+	if expected.Count != nil && len(actual) != *expected.Count {
+		return fmt.Errorf(
+			"memory count: got %d, want %d",
+			len(actual),
+			*expected.Count,
+		)
+	}
+
+	for i, want := range expected.Contains {
+		found, err := containsMatchingMemory(actual, state, want)
+		if err != nil {
+			return fmt.Errorf(
+				"assert_memory contains item %d: %w",
+				i,
+				err,
+			)
+		}
+		if !found {
+			return fmt.Errorf(
+				"expected memory item %d was not found: %+v",
+				i,
+				want,
+			)
+		}
+	}
+
+	for i, unwanted := range expected.Excludes {
+		found, err := containsMatchingMemory(actual, state, unwanted)
+		if err != nil {
+			return fmt.Errorf(
+				"assert_memory excludes item %d: %w",
+				i,
+				err,
+			)
+		}
+		if found {
+			return fmt.Errorf(
+				"excluded memory item %d is still present: %+v",
+				i,
+				unwanted,
+			)
+		}
+	}
+
+	return nil
+}
+
+func containsMatchingMemory(
+	actual []MemorySnapshot,
+	state *replayState,
+	expected MemoryItemExpectation,
+) (bool, error) {
+	var expectedID string
+	if expected.Ref != "" {
+		var ok bool
+		expectedID, ok = state.memoryIDs[expected.Ref]
+		if !ok {
+			return false, fmt.Errorf(
+				"unknown memory ref %q",
+				expected.Ref,
+			)
+		}
+	}
+
+	var expectedEventTime *time.Time
+	if expected.EventTime != "" {
+		parsed, err := time.Parse(
+			time.RFC3339Nano,
+			expected.EventTime,
+		)
+		if err != nil {
+			return false, fmt.Errorf(
+				"parse memory event_time: %w",
+				err,
+			)
+		}
+		parsed = parsed.UTC()
+		expectedEventTime = &parsed
+	}
+
+	for _, item := range actual {
+		if expectedID != "" && item.ID != expectedID {
+			continue
+		}
+		if expected.Content != "" && item.Content != expected.Content {
+			continue
+		}
+		if len(expected.Topics) > 0 &&
+			!equalUnorderedStrings(item.Topics, expected.Topics) {
+			continue
+		}
+		if expected.Kind != "" && item.Kind != expected.Kind {
+			continue
+		}
+		if expectedEventTime != nil {
+			if item.EventTime == nil ||
+				!item.EventTime.Equal(*expectedEventTime) {
+				continue
+			}
+		}
+		if len(expected.Participants) > 0 &&
+			!equalUnorderedStrings(
+				item.Participants,
+				expected.Participants,
+			) {
+			continue
+		}
+		if expected.Location != "" &&
+			item.Location != expected.Location {
+			continue
+		}
+
+		return true, nil
+	}
+
+	return false, nil
+}
+
+func equalUnorderedStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+
+	leftCopy := append([]string(nil), left...)
+	rightCopy := append([]string(nil), right...)
+	sort.Strings(leftCopy)
+	sort.Strings(rightCopy)
+
+	return equalStrings(leftCopy, rightCopy)
 }
 
 func assertReplaySession(

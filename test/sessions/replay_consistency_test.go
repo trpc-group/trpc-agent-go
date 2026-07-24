@@ -73,11 +73,13 @@ func TestReplayConsistency(t *testing.T) {
 		"16_state_summary_failure": MutationStateDirty,
 		"18_track_observability":   MutationTrackPayload,
 	}
+	seenSummaryMutations := make(map[string]bool, len(wantSummaryMutations))
 	for _, tc := range result.Report.Cases {
 		want, ok := wantSummaryMutations[tc.CaseID]
 		if !ok {
 			continue
 		}
+		seenSummaryMutations[tc.CaseID] = true
 		require.Len(t, tc.Mutations, 1)
 		require.Equal(t, want, tc.Mutations[0].Name)
 		require.True(t, tc.Mutations[0].Detected)
@@ -91,6 +93,14 @@ func TestReplayConsistency(t *testing.T) {
 				require.NotEmpty(t, diff.SummaryID)
 			}
 		}
+	}
+	for caseID := range wantSummaryMutations {
+		require.Truef(
+			t,
+			seenSummaryMutations[caseID],
+			"required mutation case %q was not loaded or executed",
+			caseID,
+		)
 	}
 }
 
@@ -287,4 +297,35 @@ func TestExecuteWithFailureFailBeforeRetry(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)
+}
+
+func TestReplayActionValidateAssertMemoryRequiresExpectation(t *testing.T) {
+	action := ReplayAction{
+		Action: ActionAssertMemory,
+	}
+
+	err := action.Validate()
+
+	require.EqualError(
+		t,
+		err,
+		"assert_memory requires expected_memory",
+	)
+}
+
+func TestReplayActionValidateAssertMemoryRejectsEmptyItem(t *testing.T) {
+	action := ReplayAction{
+		Action: ActionAssertMemory,
+		ExpectedMemory: &MemoryExpectation{
+			Contains: []MemoryItemExpectation{{}},
+		},
+	}
+
+	err := action.Validate()
+
+	require.EqualError(
+		t,
+		err,
+		"assert_memory contains item 0 must specify at least one field",
+	)
 }
