@@ -109,6 +109,8 @@ type options struct {
 	headers             map[string]string // Headers to send with the request
 	resourceAttributes  *[]attribute.KeyValue
 	spanAttributePolicy *SpanAttributePolicy
+	spanStartFilter     SpanStartFilter
+	spanExportFilter    SpanExportFilter
 }
 
 // WithEndpoint sets the traces endpoint(host and port) the Exporter will connect to.
@@ -289,7 +291,7 @@ func initGRPCTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 		return nil, fmt.Errorf("failed to create trace exporter: %w", err)
 	}
 
-	return setupTracerProvider(res, traceExporter), nil
+	return setupTracerProvider(res, traceExporter, opts), nil
 }
 
 // Initializes an OTLP HTTP exporter, and configures the corresponding trace provider.
@@ -317,17 +319,29 @@ func initHTTPTracerProvider(ctx context.Context, res *resource.Resource, opts *o
 		return nil, fmt.Errorf("failed to create HTTP trace exporter: %w", err)
 	}
 
-	return setupTracerProvider(res, traceExporter), nil
+	return setupTracerProvider(res, traceExporter, opts), nil
 }
 
 // setupTracerProvider sets up the tracer provider with the given resource and exporter.
-func setupTracerProvider(res *resource.Resource, traceExporter sdktrace.SpanExporter) func(context.Context) error {
+func setupTracerProvider(
+	res *resource.Resource,
+	traceExporter sdktrace.SpanExporter,
+	opts *options,
+) func(context.Context) error {
 	// Register the trace exporter with a TracerProvider, using a batch
 	// span processor to aggregate spans before export.
 
+	traceExporter = newFilteringSpanExporter(traceExporter, opts.spanExportFilter)
 	bsp := sdktrace.NewBatchSpanProcessor(traceExporter)
+	var sampler sdktrace.Sampler = sdktrace.AlwaysSample()
+	if opts.spanStartFilter != nil {
+		sampler = filteringSampler{
+			filter: opts.spanStartFilter,
+			next:   sampler,
+		}
+	}
 	tracerProvider := sdktrace.NewTracerProvider(
-		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSampler(sampler),
 		sdktrace.WithResource(res),
 		sdktrace.WithSpanProcessor(bsp),
 	)
