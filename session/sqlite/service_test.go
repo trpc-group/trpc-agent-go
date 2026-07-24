@@ -664,9 +664,17 @@ func TestSessionSQLite_ListSessions_EmptyEvents(t *testing.T) {
 	for _, sess := range list {
 		if sess.ID == key2.SessionID {
 			require.Len(t, sess.Events, 0)
-			require.Nil(t, sess.Summaries)
+			require.NotNil(t, sess.Summaries)
+			require.Len(t, sess.Summaries, 0)
+			sess.Summaries[session.SummaryFilterKeyAllContents] = &session.Summary{Summary: "writable"}
 		}
 	}
+
+	got, err := svc.GetSession(ctx, key2)
+	require.NoError(t, err)
+	require.NotNil(t, got.Summaries)
+	require.Len(t, got.Summaries, 0)
+	got.Summaries[session.SummaryFilterKeyAllContents] = &session.Summary{Summary: "writable"}
 }
 
 func TestSessionSQLite_CreateSession_GenerateID_NilState(t *testing.T) {

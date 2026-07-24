@@ -87,17 +87,15 @@ AND deleted_at IS NULL`
 	events := eventsList[0]
 
 	summaries := make(map[string]*session.Summary)
-	if len(events) > 0 {
-		sums, err := s.getSummariesList(
-			ctx,
-			[]session.Key{key},
-			[]time.Time{sessState.CreatedAt},
-		)
-		if err != nil {
-			return nil, err
-		}
-		summaries = sums[0]
+	sums, err := s.getSummariesList(
+		ctx,
+		[]session.Key{key},
+		[]time.Time{sessState.CreatedAt},
+	)
+	if err != nil {
+		return nil, err
 	}
+	summaries = normalizeSessionSummaries(sums[0])
 
 	sess := session.NewSession(
 		key.AppName,
@@ -266,10 +264,7 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 
 	out := make([]*session.Session, 0, len(sessStates))
 	for i, st := range sessStates {
-		var sums map[string]*session.Summary
-		if len(eventsList[i]) > 0 {
-			sums = summariesList[i]
-		}
+		sums := normalizeSessionSummaries(summariesList[i])
 		sess := session.NewSession(
 			key.AppName,
 			key.UserID,
@@ -296,6 +291,13 @@ ORDER BY updated_at DESC, session_id DESC`, s.tableSessionStates)
 	}
 
 	return out, nil
+}
+
+func normalizeSessionSummaries(summaries map[string]*session.Summary) map[string]*session.Summary {
+	if summaries != nil {
+		return summaries
+	}
+	return make(map[string]*session.Summary)
 }
 
 func (s *Service) addEvent(

@@ -138,12 +138,12 @@ func (s *Service) getPersistedSummary(
 	if !rows.Next() {
 		return nil, nil
 	}
-	var summaryBytes []byte
-	if err := rows.Scan(&summaryBytes); err != nil {
+	var summaryStr string
+	if err := rows.Scan(&summaryStr); err != nil {
 		return nil, err
 	}
 	var sum session.Summary
-	if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+	if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
 		return nil, err
 	}
 	return &sum, nil
@@ -268,12 +268,12 @@ func (s *Service) GetSessionSummaryText(
 	defer rows.Close()
 
 	if rows.Next() {
-		var summaryBytes []byte
-		if err := rows.Scan(&summaryBytes); err != nil {
+		var summaryStr string
+		if err := rows.Scan(&summaryStr); err != nil {
 			return "", false
 		}
 		var sum session.Summary
-		if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+		if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
 			return "", false
 		}
 		summaryText = sum.Summary
@@ -295,12 +295,12 @@ func (s *Service) GetSessionSummaryText(
 		defer rows2.Close()
 
 		if rows2.Next() {
-			var summaryBytes []byte
-			if err := rows2.Scan(&summaryBytes); err != nil {
+			var summaryStr string
+			if err := rows2.Scan(&summaryStr); err != nil {
 				return "", false
 			}
 			var sum session.Summary
-			if err := json.Unmarshal(summaryBytes, &sum); err != nil {
+			if err := json.Unmarshal([]byte(summaryStr), &sum); err != nil {
 				return "", false
 			}
 			summaryText = sum.Summary

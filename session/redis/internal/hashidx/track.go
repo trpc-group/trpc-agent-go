@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -37,34 +38,110 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
 	}
 
-	// Encode tracksState as base64 to match Go's json.Marshal behavior for []byte.
-	// In sessionMeta JSON, state values (map[string][]byte) are base64-encoded strings.
-	tracksVal := ""
-	if len(tracksState) > 0 {
-		tracksVal = base64.StdEncoding.EncodeToString(tracksState)
-	}
-
 	track := trackEvent.Track
 	keys := []string{
 		c.keys.TrackDataKey(key, track),
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
 	}
-	args := []any{
-		string(eventJSON),
-		trackEvent.Timestamp.UnixNano(),
-		ttlSeconds,
-		tracksVal,
+	retryDelay := 5 * time.Millisecond
+	var watchErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		watchErr = c.client.Watch(ctx, func(tx *redis.Tx) error {
+			mergedTracksState, err := c.mergedTracksState(ctx, tx, key, track, tracksState)
+			if err != nil {
+				return fmt.Errorf("append track event: merge tracks state: %w", err)
+			}
+			tracksVal := ""
+			if len(mergedTracksState) > 0 {
+				tracksVal = base64.StdEncoding.EncodeToString(mergedTracksState)
+			}
+			var appendCmd *redis.Cmd
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				appendCmd = luaAppendTrackEvent.Eval(
+					ctx,
+					pipe,
+					keys,
+					string(eventJSON),
+					trackEvent.Timestamp.UnixNano(),
+					ttlSeconds,
+					tracksVal,
+				)
+				return nil
+			})
+			if err != nil {
+				if err == redis.TxFailedErr {
+					return err
+				}
+				return fmt.Errorf("append track event: %w", err)
+			}
+			result, err := appendCmd.Int64()
+			if err != nil {
+				return fmt.Errorf("append track event result: %w", err)
+			}
+			if result == 0 {
+				return fmt.Errorf("session not found")
+			}
+			return nil
+		}, keys[2])
+		if watchErr == nil {
+			return nil
+		}
+		if watchErr == redis.TxFailedErr {
+			timer := time.NewTimer(retryDelay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return ctx.Err()
+			case <-timer.C:
+			}
+			if retryDelay < 100*time.Millisecond {
+				retryDelay *= 2
+			}
+			continue
+		}
+		return fmt.Errorf("append track event: %w", watchErr)
 	}
+}
 
-	result, err := luaAppendTrackEvent.Run(ctx, c.client, keys, args...).Int64()
+func (c *Client) mergedTracksState(
+	ctx context.Context,
+	tx *redis.Tx,
+	key session.Key,
+	track session.Track,
+	fallback []byte,
+) ([]byte, error) {
+	metaJSON, err := tx.Get(ctx, c.keys.SessionMetaKey(key)).Bytes()
 	if err != nil {
-		return fmt.Errorf("append track event: %w", err)
+		if err == redis.Nil {
+			return nil, fmt.Errorf("session not found")
+		}
+		return nil, fmt.Errorf("get session meta: %w", err)
 	}
-	if result == 0 {
-		return fmt.Errorf("session not found")
+	var meta sessionMeta
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshal session meta: %w", err)
 	}
-	return nil
+	tracks, err := session.TracksFromState(meta.State)
+	if err != nil {
+		return nil, err
+	}
+	if len(tracks) == 0 && len(fallback) > 0 {
+		var fallbackTracks []session.Track
+		if err := json.Unmarshal(fallback, &fallbackTracks); err != nil {
+			return nil, fmt.Errorf("decode fallback tracks: %w", err)
+		}
+		tracks = fallbackTracks
+	}
+	if !slices.Contains(tracks, track) {
+		tracks = append(tracks, track)
+	}
+	return json.Marshal(tracks)
 }
 
 // GetTrackEvents retrieves track events for a session using Hash+ZSet structure.
