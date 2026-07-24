@@ -61,9 +61,12 @@ go run ./dynamicworkflow/research -model gpt-5 -base-dir .. \
 go run ./dynamicworkflow/research -model gpt-5 -base-dir .. \
   -prompt 'Inspect this repository for its Go version, research the relevant Go release notes, ask a local experimenter to verify one claim, and synthesize the evidence.'
 
-workspace=$(mktemp -d)
-go run ./dynamicworkflow/research -model gpt-5 -base-dir "$workspace" \
-  -prompt 'Build a temporary software team to implement a small local in-memory cache in Go. Have an architect define the design, then use a bounded loop of at most three iterations: implement or revise the cache, run focused tests with the race detector, and have an independent reviewer return structured approval and issues. Exit early when approved; otherwise pass the issues into the next iteration. Finish with the iteration count, files, test evidence, and remaining limitations. Do not use web search.'
+(
+  workspace=$(mktemp -d)
+  trap 'rm -rf "$workspace"' EXIT
+  go run ./dynamicworkflow/research -model gpt-5 -base-dir "$workspace" \
+    -prompt 'Build a temporary software team to implement a small local in-memory cache in Go. Have an architect define the design, then use a bounded loop of at most three iterations: implement or revise the cache, run focused tests with the race detector, and have an independent reviewer return structured approval and issues. Exit early when approved; otherwise pass the issues into the next iteration. Finish with the iteration count, files, test evidence, and remaining limitations. Do not use web search.'
+)
 ```
 
 A typical generated workflow can use different tool scopes for each role:
