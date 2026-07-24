@@ -738,10 +738,12 @@ is different from Context Compaction, which only rewrites the request
 projection before a model call.
 
 If the configured limit is too small to fit the truncation marker, the result
-falls back to a UTF-8-safe prefix. For interactive results, `offset` and
-`next_offset` always describe the range consumed by the underlying poll. When
-`truncated` is true, `output` is only a bounded view of that range and omitted
-content is not returned by a later poll.
+falls back to a UTF-8-safe prefix. When the limit is enabled, invalid UTF-8
+sequences are discarded before the byte budget is applied; `total_bytes`
+continues to report the original raw output size. For interactive results,
+`offset` and `next_offset` always describe the range consumed by the underlying
+poll. When `truncated` is true, `output` is only a bounded view of that range
+and omitted content is not returned by a later poll.
 
 `MaxOutputBytes <= 0` disables the limit and is the default. This option bounds
 the tool result and session payload; whether stdout/stderr capture is bounded

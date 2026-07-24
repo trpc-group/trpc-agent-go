@@ -217,9 +217,10 @@ func WithWorkspaceRegistry(
 // WithOutputLimits sets the inline terminal-output limit for workspace_exec
 // and workspace_write_stdin. Oversized output is normally windowed with its
 // head and tail preserved. If the limit cannot fit the truncation marker, the
-// output falls back to a UTF-8-safe prefix. The returned result includes
-// truncated=true and the original total_bytes value. The limit is disabled by
-// default.
+// output falls back to a UTF-8-safe prefix. Invalid UTF-8 sequences are
+// discarded before the byte budget is applied. The returned result includes
+// truncated=true and the original total_bytes value when output is changed.
+// The limit is disabled by default.
 func WithOutputLimits(limits OutputLimits) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.outputLimit = limits.MaxOutputBytes
@@ -1128,8 +1129,8 @@ func execOutputSchema(desc string) *tool.Schema {
 			"session_id":  {Type: "string", Description: "Interactive session id when still running."},
 			"offset":      {Type: "integer", Description: "Start cursor of the underlying output consumed for this call."},
 			"next_offset": {Type: "integer", Description: "Next cursor after the underlying output consumed for this call, including content omitted when truncated is true."},
-			"truncated":   {Type: "boolean", Description: "True when output was shortened to the configured inline limit before the tool result was persisted."},
-			"total_bytes": {Type: "integer", Description: "Original output size in bytes when truncated is true."},
+			"truncated":   {Type: "boolean", Description: "True when output was shortened to the configured inline limit or invalid UTF-8 was discarded before the tool result was persisted."},
+			"total_bytes": {Type: "integer", Description: "Original raw output size in bytes when truncated is true."},
 		},
 	}
 }
@@ -1149,11 +1150,15 @@ func pollOutput(sessionID string, poll codeexecutor.ProgramPoll) execOutput {
 }
 
 func (t *ExecTool) limitOutput(out execOutput) execOutput {
-	if t == nil || t.outputLimit <= 0 || len(out.Output) <= t.outputLimit {
+	if t == nil || t.outputLimit <= 0 {
+		return out
+	}
+	validOutput := strings.ToValidUTF8(out.Output, "")
+	if validOutput == out.Output && len(validOutput) <= t.outputLimit {
 		return out
 	}
 	out.TotalBytes = len(out.Output)
-	out.Output = windowOutput(out.Output, t.outputLimit)
+	out.Output = windowOutput(validOutput, t.outputLimit)
 	out.Truncated = true
 	return out
 }

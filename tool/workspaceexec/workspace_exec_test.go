@@ -109,6 +109,29 @@ func TestExecTool_OutputLimitsApplyBeforeReturn(t *testing.T) {
 	require.True(t, strings.HasSuffix(out.Output, "!TAIL"))
 }
 
+func TestExecTool_OutputLimitsSanitizeInvalidUTF8BeforeReturn(t *testing.T) {
+	const maxBytes = 4
+	exec := localexec.New()
+	tl := NewExecTool(exec, WithOutputLimits(OutputLimits{
+		MaxOutputBytes: maxBytes,
+	}))
+
+	args, err := json.Marshal(execInput{
+		Command: "printf '\\377abc'",
+		Timeout: timeoutSecSmall,
+	})
+	require.NoError(t, err)
+
+	res, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	out := res.(execOutput)
+	require.True(t, out.Truncated)
+	require.Equal(t, maxBytes, out.TotalBytes)
+	require.Equal(t, "abc", out.Output)
+	require.True(t, utf8.ValidString(out.Output))
+	require.LessOrEqual(t, len(out.Output), maxBytes)
+}
+
 func TestExecTool_OutputLimitsDisabledByDefault(t *testing.T) {
 	original := strings.Repeat("x", 128)
 	out := (&ExecTool{}).limitOutput(execOutput{Output: original})
@@ -500,7 +523,9 @@ func TestWriteStdinTool_OutputLimitsApplyToPolls(t *testing.T) {
 		sessionID = "limited-poll"
 		maxBytes  = 40
 	)
-	original := "HEAD!" + strings.Repeat("x", 80) + "!TAIL"
+	original := string([]byte{0xff}) +
+		"HEAD!" + strings.Repeat("x", 80) + "!TAIL" +
+		string([]byte{0xfe})
 	exitCode := 0
 	execTool := &ExecTool{
 		outputLimit: maxBytes,
@@ -529,6 +554,9 @@ func TestWriteStdinTool_OutputLimitsApplyToPolls(t *testing.T) {
 	require.Equal(t, len(original), out.TotalBytes)
 	require.LessOrEqual(t, len(out.Output), maxBytes)
 	require.Contains(t, out.Output, outputTruncatedMarker)
+	require.True(t, utf8.ValidString(out.Output))
+	require.True(t, strings.HasPrefix(out.Output, "HEAD!"))
+	require.True(t, strings.HasSuffix(out.Output, "!TAIL"))
 	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
 	require.Equal(t, 12, out.Offset)
 	require.Equal(t, 34, out.NextOffset)
