@@ -210,6 +210,109 @@ func TestServerValidation(t *testing.T) {
 	require.NoError(t, err)
 	_, err = server.Connect(nil, nil)
 	assert.ErrorContains(t, err, "input is required")
+	_, err = server.Connect(&net.TCPConn{}, nil)
+	assert.ErrorContains(t, err, "output is required")
+
+	tests := []struct {
+		name   string
+		option Option
+		err    string
+	}{
+		{name: "user ID", option: WithUserID(""), err: "user ID is required"},
+		{
+			name:   "implementation name",
+			option: WithImplementation("", "1.0.0"),
+			err:    "implementation name is required",
+		},
+		{
+			name:   "implementation version",
+			option: WithImplementation("agent", ""),
+			err:    "implementation version is required",
+		},
+		{
+			name:   "session ID generator",
+			option: WithSessionIDGenerator(nil),
+			err:    "session ID generator is required",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := New(&testRunner{}, test.option)
+			assert.ErrorContains(t, err, test.err)
+		})
+	}
+}
+
+func TestProtocolAgentSessionValidation(t *testing.T) {
+	sessionIDs := []string{"", "session-1", "session-1"}
+	server, err := New(
+		&testRunner{},
+		WithRunOptions(agent.WithRuntimeState(map[string]any{"static": true})),
+		WithReasoningContentEnabled(true),
+		WithSessionIDGenerator(func() string {
+			sessionID := sessionIDs[0]
+			sessionIDs = sessionIDs[1:]
+			return sessionID
+		}),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	ctx := context.Background()
+
+	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "relative"})
+	assert.ErrorContains(t, err, "absolute path")
+	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{
+		Cwd:        "/workspace",
+		McpServers: []acpsdk.McpServer{{}},
+	})
+	assert.ErrorContains(t, err, "dynamic MCP servers")
+	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{
+		Cwd:                   "/workspace",
+		AdditionalDirectories: []string{"/other"},
+	})
+	assert.ErrorContains(t, err, "additional directories")
+	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/workspace"})
+	assert.ErrorContains(t, err, "empty session ID")
+
+	response, err := protocolAgent.NewSession(
+		ctx,
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, acpsdk.SessionId("session-1"), response.SessionId)
+	_, err = protocolAgent.NewSession(ctx, acpsdk.NewSessionRequest{Cwd: "/workspace"})
+	assert.ErrorContains(t, err, "duplicate session ID")
+
+	_, err = protocolAgent.CloseSession(ctx, acpsdk.CloseSessionRequest{
+		SessionId: "unknown",
+	})
+	assert.ErrorContains(t, err, "unknown session")
+	require.NoError(t, protocolAgent.Cancel(ctx, acpsdk.CancelNotification{
+		SessionId: "unknown",
+	}))
+}
+
+func TestProtocolAgentUnsupportedMethods(t *testing.T) {
+	server, err := New(&testRunner{})
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	ctx := context.Background()
+
+	_, err = protocolAgent.Authenticate(ctx, acpsdk.AuthenticateRequest{})
+	assert.ErrorContains(t, err, "Method not found")
+	_, err = protocolAgent.Logout(ctx, acpsdk.LogoutRequest{})
+	assert.ErrorContains(t, err, "Method not found")
+	_, err = protocolAgent.ListSessions(ctx, acpsdk.ListSessionsRequest{})
+	assert.ErrorContains(t, err, "Method not found")
+	_, err = protocolAgent.ResumeSession(ctx, acpsdk.ResumeSessionRequest{})
+	assert.ErrorContains(t, err, "Method not found")
+	_, err = protocolAgent.SetSessionConfigOption(
+		ctx,
+		acpsdk.SetSessionConfigOptionRequest{},
+	)
+	assert.ErrorContains(t, err, "Method not found")
+	_, err = protocolAgent.SetSessionMode(ctx, acpsdk.SetSessionModeRequest{})
+	assert.ErrorContains(t, err, "Method not found")
 }
 
 type runnerCall struct {
