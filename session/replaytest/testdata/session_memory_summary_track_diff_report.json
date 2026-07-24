@@ -1,0 +1,44 @@
+{
+  "generated_at": "2100-01-01T00:00:00Z",
+  "mode": "lightweight",
+  "reference": "inmemory",
+  "backends": ["inmemory", "sqlite"],
+  "total_cases": 1,
+  "passed_cases": 0,
+  "failed_cases": 1,
+  "skipped_cases": 0,
+  "results": [
+    {
+      "case": "single_turn_text",
+      "status": "failed",
+      "diffs": [
+        {
+          "case": "single_turn_text",
+          "backend_a": "inmemory",
+          "backend_b": "sqlite",
+          "session_id": "session-single_turn_text",
+          "event_index": 1,
+          "path": "events[1].response.choices[0].message.content",
+          "baseline": "hello back",
+          "actual": "bye",
+          "allowed_diff": false,
+          "explanation": "event content mismatch"
+        }
+      ]
+    }
+  ],
+  "diffs": [
+    {
+      "case": "single_turn_text",
+      "backend_a": "inmemory",
+      "backend_b": "sqlite",
+      "session_id": "session-single_turn_text",
+      "event_index": 1,
+      "path": "events[1].response.choices[0].message.content",
+      "baseline": "hello back",
+      "actual": "bye",
+      "allowed_diff": false,
+      "explanation": "event content mismatch"
+    }
+  ]
+}
