@@ -193,7 +193,11 @@ func (c *Comparator) compareEventLists(caseName string, a, b *BackendResult, eve
 
 	for i := 0; i < minLen; i++ {
 		prefix := fmt.Sprintf("events[%d]", i)
-		diffs = append(diffs, c.compareEvent(caseName, a, b, prefix, eventsA[i], eventsB[i])...)
+		eventDiffs := c.compareEvent(caseName, a, b, prefix, eventsA[i], eventsB[i])
+		for j := range eventDiffs {
+			eventDiffs[j].EventIndex = i
+		}
+		diffs = append(diffs, eventDiffs...)
 	}
 
 	return diffs

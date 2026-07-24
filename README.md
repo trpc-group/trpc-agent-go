@@ -285,7 +285,7 @@ AG-UI client while the agent plans, calls tools, and updates the interface.
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.24 or later
 - LLM provider API key (OpenAI, DeepSeek, etc.)
 - 5 minutes to build your first intelligent agent
 

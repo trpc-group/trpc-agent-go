@@ -272,7 +272,7 @@ _ = result.OverallStatus
 
 ### 前置条件
 
-- Go 1.21 或更高版本
+- Go 1.24 或更高版本
 - LLM 提供商 API 密钥（OpenAI、DeepSeek 等）
 - 5 分钟构建您的第一个智能 agent
 

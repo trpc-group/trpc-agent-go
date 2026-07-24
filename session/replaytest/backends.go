@@ -49,6 +49,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
@@ -88,43 +89,30 @@ const (
 )
 
 // BackendCapabilities returns the set of capabilities for a given backend name.
-// This is used by the Comparator to determine which differences are "allowed".
+// It looks up the registered backend factories to find the matching capabilities.
 func BackendCapabilities(name string) map[BackendCapability]bool {
-	caps := map[BackendCapability]bool{
+	mu.RLock()
+	defer mu.RUnlock()
+	for _, b := range backends {
+		if b.Name == name {
+			if b.Capabilities != nil {
+				result := make(map[BackendCapability]bool, len(b.Capabilities))
+				for k, v := range b.Capabilities {
+					result[k] = v
+				}
+				return result
+			}
+			break
+		}
+	}
+	// Return a zero-value cap map for unknown backends.
+	return map[BackendCapability]bool{
 		CapEventPaging:      false,
 		CapTrack:            false,
 		CapSummaryFilterKey: false,
 		CapMemorySearch:     false,
 		CapTTL:              false,
 	}
-	switch name {
-	case "InMemory":
-		caps[CapTrack] = true
-		caps[CapSummaryFilterKey] = true
-		caps[CapMemorySearch] = true
-	case "SQLite":
-		caps[CapTrack] = true
-		caps[CapSummaryFilterKey] = true
-		caps[CapMemorySearch] = true
-	case "Redis":
-		caps[CapTrack] = true
-		caps[CapSummaryFilterKey] = true
-		caps[CapMemorySearch] = true
-		caps[CapTTL] = true
-	case "Postgres":
-		caps[CapEventPaging] = true
-		caps[CapTrack] = true
-		caps[CapSummaryFilterKey] = true
-		caps[CapMemorySearch] = true
-	case "MySQL":
-		caps[CapEventPaging] = true
-		caps[CapTrack] = true
-		caps[CapSummaryFilterKey] = true
-		caps[CapMemorySearch] = true
-	case "ClickHouse":
-		// ClickHouse only supports session, no memory search.
-	}
-	return caps
 }
 
 type BackendFactory struct {
@@ -132,14 +120,16 @@ type BackendFactory struct {
 	Name string `json:"name"`
 	// Enabled indicates whether the backend is enabled.
 	Enabled bool `json:"enabled"`
+	// Capabilities describes which features this backend supports.
+	Capabilities map[BackendCapability]bool `json:"capabilities,omitempty"`
 	// New creates a new backend instance returning session and memory services.
 	New func() (session.Service, memory.Service, error)
 }
 
 var (
-	mu            sync.RWMutex
-	backends      []BackendFactory
-	envVarPrefix  = "REPLAYTEST_"
+	mu           sync.RWMutex
+	backends     []BackendFactory
+	envVarPrefix = "REPLAYTEST_"
 )
 
 // RegisterBackend registers a backend factory.
@@ -216,6 +206,11 @@ func init() {
 	RegisterBackend(BackendFactory{
 		Name:    "InMemory",
 		Enabled: envEnabled("INMEMORY", true),
+		Capabilities: map[BackendCapability]bool{
+			CapTrack:            true,
+			CapSummaryFilterKey: true,
+			CapMemorySearch:     true,
+		},
 		New: func() (session.Service, memory.Service, error) {
 			sessSvc := inmemorysession.NewSessionService()
 			memSvc := inmemorymemory.NewMemoryService()
@@ -224,117 +219,150 @@ func init() {
 	})
 
 	// SQLite backend — always enabled by default.
-	  RegisterBackend(BackendFactory{
-	   Name:    "SQLite",
-	   Enabled: envEnabled("SQLITE", true),
-	   New: func() (session.Service, memory.Service, error) {
-	    db, err := sql.Open("sqlite3", ":memory:?_journal_mode=WAL&_busy_timeout=5000")
-	    if err != nil {
-	     return nil, nil, fmt.Errorf("open sqlite: %w", err)
-	    }
-	    sessSvc, err := ssqlite.NewService(db)
-	    if err != nil {
-	     db.Close()
-	     return nil, nil, fmt.Errorf("create sqlite session service: %w", err)
-	    }
-	    memSvc, err := msqlite.NewService(db)
-	    if err != nil {
-	     sessSvc.Close()
-	     db.Close()
-	     return nil, nil, fmt.Errorf("create sqlite memory service: %w", err)
-	    }
-	    return sessSvc, memSvc, nil
-	   },
-	  })
+	RegisterBackend(BackendFactory{
+		Name:    "SQLite",
+		Enabled: envEnabled("SQLITE", true),
+		Capabilities: map[BackendCapability]bool{
+			CapTrack:            true,
+			CapSummaryFilterKey: true,
+			CapMemorySearch:     true,
+		},
+		New: func() (session.Service, memory.Service, error) {
+			db, err := sql.Open("sqlite3", "file::memory:?cache=shared&_busy_timeout=5000")
+			if err != nil {
+				return nil, nil, fmt.Errorf("open sqlite: %w", err)
+			}
+			// Limit to a single connection so the shared in-memory database
+			// is reliably accessible to both session and memory services.
+			db.SetMaxOpenConns(1)
+			sessSvc, err := ssqlite.NewService(db)
+			if err != nil {
+				db.Close()
+				return nil, nil, fmt.Errorf("create sqlite session service: %w", err)
+			}
+			memSvc, err := msqlite.NewService(db)
+			if err != nil {
+				sessSvc.Close()
+				db.Close()
+				return nil, nil, fmt.Errorf("create sqlite memory service: %w", err)
+			}
+			return sessSvc, memSvc, nil
+		},
+	})
 
-	  // Redis backend — disabled by default. Enable with REPLAYTEST_REDIS_ENABLED=true
-	  // and set REPLAYTEST_REDIS_URL=redis://localhost:6379/0
-	  RegisterBackend(BackendFactory{
-	   Name:    "Redis",
-	   Enabled: envEnabled("REDIS", false),
-	   New: func() (session.Service, memory.Service, error) {
-	    redisURL := os.Getenv("REPLAYTEST_REDIS_URL")
-	    if redisURL == "" {
-	     return nil, nil, fmt.Errorf("REPLAYTEST_REDIS_URL not set")
-	    }
-	    sessSvc, err := sredis.NewService(sredis.WithRedisClientURL(redisURL))
-	    if err != nil {
-	     return nil, nil, fmt.Errorf("create redis session service: %w", err)
-	    }
-	    memSvc, err := mredis.NewService(mredis.WithRedisClientURL(redisURL))
-	    if err != nil {
-	     sessSvc.Close()
-	     return nil, nil, fmt.Errorf("create redis memory service: %w", err)
-	    }
-	    return sessSvc, memSvc, nil
-	   },
-	  })
+	// Redis backend — disabled by default. Enable with REPLAYTEST_REDIS_ENABLED=true
+	// and set REPLAYTEST_REDIS_URL=redis://localhost:6379/0
+	RegisterBackend(BackendFactory{
+		Name:    "Redis",
+		Enabled: envEnabled("REDIS", false),
+		Capabilities: map[BackendCapability]bool{
+			CapTrack:            true,
+			CapSummaryFilterKey: true,
+			CapMemorySearch:     true,
+			CapTTL:              true,
+		},
+		New: func() (session.Service, memory.Service, error) {
+			redisURL := os.Getenv("REPLAYTEST_REDIS_URL")
+			if redisURL == "" {
+				return nil, nil, fmt.Errorf("REPLAYTEST_REDIS_URL not set")
+			}
+			sessSvc, err := sredis.NewService(sredis.WithRedisClientURL(redisURL))
+			if err != nil {
+				return nil, nil, fmt.Errorf("create redis session service: %w", err)
+			}
+			memSvc, err := mredis.NewService(mredis.WithRedisClientURL(redisURL))
+			if err != nil {
+				sessSvc.Close()
+				return nil, nil, fmt.Errorf("create redis memory service: %w", err)
+			}
+			return sessSvc, memSvc, nil
+		},
+	})
 
-	  // Postgres backend — disabled by default. Enable with REPLAYTEST_POSTGRES_ENABLED=true
-	  // and set REPLAYTEST_POSTGRES_DSN=postgres://user:password@localhost:5432/dbname?sslmode=disable
-	  RegisterBackend(BackendFactory{
-	   Name:    "Postgres",
-	   Enabled: envEnabled("POSTGRES", false),
-	   New: func() (session.Service, memory.Service, error) {
-	    dsn := os.Getenv("REPLAYTEST_POSTGRES_DSN")
-	    if dsn == "" {
-	     return nil, nil, fmt.Errorf("REPLAYTEST_POSTGRES_DSN not set")
-	    }
-	    sessSvc, err := spostgres.NewService(spostgres.WithPostgresClientDSN(dsn))
-	    if err != nil {
-	     return nil, nil, fmt.Errorf("create postgres session service: %w", err)
-	    }
-	    memSvc, err := mpostgres.NewService(mpostgres.WithPostgresClientDSN(dsn))
-	    if err != nil {
-	     sessSvc.Close()
-	     return nil, nil, fmt.Errorf("create postgres memory service: %w", err)
-	    }
-	    return sessSvc, memSvc, nil
-	   },
-	  })
+	// Postgres backend — disabled by default. Enable with REPLAYTEST_POSTGRES_ENABLED=true
+	// and set REPLAYTEST_POSTGRES_DSN=postgres://user:password@localhost:5432/dbname?sslmode=disable
+	RegisterBackend(BackendFactory{
+		Name:    "Postgres",
+		Enabled: envEnabled("POSTGRES", false),
+		Capabilities: map[BackendCapability]bool{
+			CapEventPaging:      true,
+			CapTrack:            true,
+			CapSummaryFilterKey: true,
+			CapMemorySearch:     true,
+		},
+		New: func() (session.Service, memory.Service, error) {
+			dsn := os.Getenv("REPLAYTEST_POSTGRES_DSN")
+			if dsn == "" {
+				return nil, nil, fmt.Errorf("REPLAYTEST_POSTGRES_DSN not set")
+			}
+			sessSvc, err := spostgres.NewService(spostgres.WithPostgresClientDSN(dsn))
+			if err != nil {
+				return nil, nil, fmt.Errorf("create postgres session service: %w", err)
+			}
+			memSvc, err := mpostgres.NewService(mpostgres.WithPostgresClientDSN(dsn))
+			if err != nil {
+				sessSvc.Close()
+				return nil, nil, fmt.Errorf("create postgres memory service: %w", err)
+			}
+			return sessSvc, memSvc, nil
+		},
+	})
 
-	  // MySQL backend — disabled by default. Enable with REPLAYTEST_MYSQL_ENABLED=true
-	  // and set REPLAYTEST_MYSQL_DSN=user:password@tcp(localhost:3306)/sessions?parseTime=true&charset=utf8mb4
-	  RegisterBackend(BackendFactory{
-	   Name:    "MySQL",
-	   Enabled: envEnabled("MYSQL", false),
-	   New: func() (session.Service, memory.Service, error) {
-	    dsn := os.Getenv("REPLAYTEST_MYSQL_DSN")
-	    if dsn == "" {
-	     return nil, nil, fmt.Errorf("REPLAYTEST_MYSQL_DSN not set")
-	    }
-	    sessSvc, err := smysql.NewService(smysql.WithMySQLClientDSN(dsn))
-	    if err != nil {
-	     return nil, nil, fmt.Errorf("create mysql session service: %w", err)
-	    }
-	    memSvc, err := mmysql.NewService(mmysql.WithMySQLClientDSN(dsn))
-	    if err != nil {
-	     sessSvc.Close()
-	     return nil, nil, fmt.Errorf("create mysql memory service: %w", err)
-	    }
-	    return sessSvc, memSvc, nil
-	   },
-	  })
+	// MySQL backend — disabled by default. Enable with REPLAYTEST_MYSQL_ENABLED=true
+	// and set REPLAYTEST_MYSQL_DSN=user:password@tcp(localhost:3306)/sessions?parseTime=true&charset=utf8mb4
+	RegisterBackend(BackendFactory{
+		Name:    "MySQL",
+		Enabled: envEnabled("MYSQL", false),
+		Capabilities: map[BackendCapability]bool{
+			CapEventPaging:      true,
+			CapTrack:            true,
+			CapSummaryFilterKey: true,
+			CapMemorySearch:     true,
+		},
+		New: func() (session.Service, memory.Service, error) {
+			dsn := os.Getenv("REPLAYTEST_MYSQL_DSN")
+			if dsn == "" {
+				return nil, nil, fmt.Errorf("REPLAYTEST_MYSQL_DSN not set")
+			}
+			sessSvc, err := smysql.NewService(smysql.WithMySQLClientDSN(dsn))
+			if err != nil {
+				return nil, nil, fmt.Errorf("create mysql session service: %w", err)
+			}
+			memSvc, err := mmysql.NewService(mmysql.WithMySQLClientDSN(dsn))
+			if err != nil {
+				sessSvc.Close()
+				return nil, nil, fmt.Errorf("create mysql memory service: %w", err)
+			}
+			return sessSvc, memSvc, nil
+		},
+	})
 
-	  // ClickHouse backend — disabled by default. Enable with REPLAYTEST_CLICKHOUSE_ENABLED=true
-	    // and set REPLAYTEST_CLICKHOUSE_DSN=clickhouse://user:password@localhost:9000/sessions?dial_timeout=10s
-	    // Note: ClickHouse only supports session service, not memory.
-	    RegisterBackend(BackendFactory{
-	     Name:    "ClickHouse",
-	     Enabled: envEnabled("CLICKHOUSE", false),
-	     New: func() (session.Service, memory.Service, error) {
-	      dsn := os.Getenv("REPLAYTEST_CLICKHOUSE_DSN")
-	      if dsn == "" {
-	       return nil, nil, fmt.Errorf("REPLAYTEST_CLICKHOUSE_DSN not set")
-	      }
-	      sessSvc, err := sclickhouse.NewService(sclickhouse.WithClickHouseDSN(dsn))
-	      if err != nil {
-	       return nil, nil, fmt.Errorf("create clickhouse session service: %w", err)
-	      }
-	      // ClickHouse has no dedicated memory service; return nil for memory.
-	      return sessSvc, nil, nil
-	     },
-	    })
+	// ClickHouse backend — disabled by default. Enable with REPLAYTEST_CLICKHOUSE_ENABLED=true
+	// and set REPLAYTEST_CLICKHOUSE_DSN=clickhouse://user:password@localhost:9000/sessions?dial_timeout=10s
+	// Note: ClickHouse only supports session service, not memory.
+	RegisterBackend(BackendFactory{
+		Name:    "ClickHouse",
+		Enabled: envEnabled("CLICKHOUSE", false),
+		Capabilities: map[BackendCapability]bool{
+			CapEventPaging:      false,
+			CapTrack:            false,
+			CapSummaryFilterKey: false,
+			CapMemorySearch:     false,
+			CapTTL:              false,
+		},
+		New: func() (session.Service, memory.Service, error) {
+			dsn := os.Getenv("REPLAYTEST_CLICKHOUSE_DSN")
+			if dsn == "" {
+				return nil, nil, fmt.Errorf("REPLAYTEST_CLICKHOUSE_DSN not set")
+			}
+			sessSvc, err := sclickhouse.NewService(sclickhouse.WithClickHouseDSN(dsn))
+			if err != nil {
+				return nil, nil, fmt.Errorf("create clickhouse session service: %w", err)
+			}
+			// ClickHouse has no dedicated memory service; return nil for memory.
+			return sessSvc, nil, nil
+		},
+	})
 }
 
 // executeOps executes a sequence of replay operations on a given backend.
@@ -389,9 +417,14 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpDeleteSessionState:
-		// Only the first key is deleted for simplicity.
+		// Delete only the first key (sorted for determinism).
 		if stateMap, ok := op.Data.(session.StateMap); ok {
-			for key := range stateMap {
+			keys := make([]string, 0, len(stateMap))
+			for k := range stateMap {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
 				if err := sessSvc.UpdateSessionState(ctx, op.Key, session.StateMap{key: nil}); err != nil {
 					return fmt.Errorf("DeleteSessionState: %w", err)
 				}
@@ -400,6 +433,9 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpAddMemory:
+		if memSvc == nil {
+			return nil
+		}
 		md, ok := op.Data.(MemoryData)
 		if !ok {
 			return fmt.Errorf("AddMemory: invalid data type %T", op.Data)
@@ -413,6 +449,9 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpUpdateMemory:
+		if memSvc == nil {
+			return nil
+		}
 		md, ok := op.Data.(MemoryData)
 		if !ok {
 			return fmt.Errorf("UpdateMemory: invalid data type %T", op.Data)
@@ -427,6 +466,9 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpDeleteMemory:
+		if memSvc == nil {
+			return nil
+		}
 		mk, ok := op.Data.(memory.Key)
 		if !ok {
 			return fmt.Errorf("DeleteMemory: invalid data type %T", op.Data)
@@ -436,6 +478,9 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpClearMemories:
+		if memSvc == nil {
+			return nil
+		}
 		uk, ok := op.Data.(memory.UserKey)
 		if !ok {
 			return fmt.Errorf("ClearMemories: invalid data type %T", op.Data)
@@ -488,6 +533,9 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		}
 
 	case OpReadMemories:
+		if memSvc == nil {
+			return nil
+		}
 		uk, ok := op.Data.(memory.UserKey)
 		if !ok {
 			return fmt.Errorf("ReadMemories: invalid data type %T", op.Data)
@@ -499,18 +547,17 @@ func executeOp(ctx context.Context, sessSvc session.Service, memSvc memory.Servi
 		result.Memories = entries
 
 	case OpSearchMemories:
-		type searchData struct {
-			UserKey memory.UserKey
-			Query   string
+		if memSvc == nil {
+			return nil
 		}
-		sd, ok := op.Data.(searchData)
+		sd, ok := op.Data.(SearchMemoryData)
 		if !ok {
 			// Fallback: try UserKey with empty query.
 			uk, ok := op.Data.(memory.UserKey)
 			if !ok {
 				return fmt.Errorf("SearchMemories: invalid data type %T", op.Data)
 			}
-			sd = searchData{UserKey: uk}
+			sd = SearchMemoryData{UserKey: uk}
 		}
 		entries, err := memSvc.SearchMemories(ctx, sd.UserKey, sd.Query)
 		if err != nil {
@@ -573,9 +620,9 @@ func NewToolResponseEvent(invocationID, author, toolCallID, toolName, content st
 			Choices: []model.Choice{
 				{
 					Message: model.Message{
-						Role:    model.RoleTool,
-						Content: content,
-						ToolID:  toolCallID,
+						Role:     model.RoleTool,
+						Content:  content,
+						ToolID:   toolCallID,
 						ToolName: toolName,
 					},
 				},

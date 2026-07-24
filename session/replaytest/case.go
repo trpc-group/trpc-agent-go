@@ -55,12 +55,30 @@ const (
 )
 
 // ReplayOp defines a single atomic operation within a replay case.
+//
+// The Data field's expected type depends on Type:
+//
+//	OpCreateSession        session.StateMap (optional initial state)
+//	OpAppendEvent          EventData
+//	OpUpdateSessionState   StateData
+//	OpDeleteSessionState   session.StateMap (single key with nil value)
+//	OpAddMemory            MemoryData
+//	OpUpdateMemory         MemoryData
+//	OpDeleteMemory         memory.Key
+//	OpClearMemories        memory.UserKey
+//	OpCreateSessionSummary  SummaryData
+//	OpGetSession           — (Data unused)
+//	OpAppendTrackEvent     TrackEventData
+//	OpGetSessionSummaryText — (Data unused)
+//	OpReadMemories         memory.UserKey
+//	OpSearchMemories       SearchMemoryData (or memory.UserKey as fallback)
 type ReplayOp struct {
 	// Type is the operation type.
 	Type OpType `json:"type"`
 	// Key is the target session key.
 	Key session.Key `json:"key"`
 	// Data carries operation-specific data (event, state, memory, summary, etc.).
+	// See the type-level doc for the expected payload per OpType.
 	Data any `json:"data,omitempty"`
 }
 
@@ -142,9 +160,9 @@ type StateData struct {
 
 // MemoryData carries the data needed for AddMemory / UpdateMemory operations.
 type MemoryData struct {
-	UserKey  memory.UserKey  `json:"userKey"`
-	Memory   string          `json:"memory"`
-	Topics   []string        `json:"topics,omitempty"`
+	UserKey  memory.UserKey   `json:"userKey"`
+	Memory   string           `json:"memory"`
+	Topics   []string         `json:"topics,omitempty"`
 	Metadata *memory.Metadata `json:"metadata,omitempty"`
 }
 
@@ -152,6 +170,12 @@ type MemoryData struct {
 type SummaryData struct {
 	FilterKey string `json:"filterKey"`
 	Force     bool   `json:"force"`
+}
+
+// SearchMemoryData carries the data needed for SearchMemories operations.
+type SearchMemoryData struct {
+	UserKey memory.UserKey `json:"userKey"`
+	Query   string         `json:"query"`
 }
 
 // TrackEventData carries the data needed for AppendTrackEvent operations.

@@ -134,7 +134,7 @@ func TestComparator_StateMismatch(t *testing.T) {
 func TestComparator_TrackMismatch(t *testing.T) {
 	c := NewComparator()
 	a := &BackendResult{
-		BackendName: "A",
+		BackendName: "InMemory",
 		Session: &session.Session{
 			Tracks: map[session.Track]*session.TrackEvents{
 				"tool_exec": {Track: "tool_exec", Events: []session.TrackEvent{
@@ -144,7 +144,7 @@ func TestComparator_TrackMismatch(t *testing.T) {
 		},
 	}
 	b := &BackendResult{
-		BackendName: "B",
+		BackendName: "SQLite",
 		Session: &session.Session{
 			Tracks: map[session.Track]*session.TrackEvents{
 				"tool_exec": {Track: "tool_exec", Events: []session.TrackEvent{

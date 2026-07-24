@@ -1,17 +1,17 @@
 {
   "generatedAt": "2026-07-23T09:00:00Z",
-  "summary": "Replay Consistency Test Report\nGenerated: 2026-07-23T09:00:00Z\nTotal cases: 10\nTotal diffs: 3 (allowed: 0, unallowed: 3)\n\n⚠️  3 unallowed difference(s) detected!\n  - case1_single_turn: 2 unallowed diff(s)\n  - case5_memory: 1 unallowed diff(s)",
+  "summary": "Replay Consistency Test Report\nGenerated: 2026-07-23T09:00:00Z\nTotal cases: 10\nTotal diffs: 2 (allowed: 0, unallowed: 2)\n\n⚠️  2 unallowed difference(s) detected!\n  - case1_single_turn: 1 unallowed diff(s)\n  - case5_memory: 1 unallowed diff(s)",
   "totalCases": 10,
-  "totalDiffs": 3,
+  "totalDiffs": 2,
   "allowedDiffs": 0,
-  "unallowedDiffs": 3,
+  "unallowedDiffs": 2,
   "caseResults": {
     "case1_single_turn": {
       "caseName": "case1_single_turn",
       "backendPairs": ["InMemory <-> SQLite"],
-      "diffCount": 2,
+      "diffCount": 1,
       "allowedDiffCount": 0,
-      "unallowedDiffCount": 2
+      "unallowedDiffCount": 1
     },
     "case5_memory": {
       "caseName": "case5_memory",
@@ -34,21 +34,6 @@
       "memoryID": "",
       "baseline": "Hello, what's the weather today?",
       "actual": "Hello, what's the weather?",
-      "allowedDiff": false,
-      "diffReason": "string value differs"
-    },
-    {
-      "caseName": "case1_single_turn",
-      "backendA": "InMemory",
-      "backendB": "SQLite",
-      "fieldPath": "events[1].content",
-      "sessionID": "<session-id>",
-      "eventIndex": 1,
-      "summaryKey": "",
-      "trackName": "",
-      "memoryID": "",
-      "baseline": "The weather is sunny with a high of 25°C.",
-      "actual": "The weather is sunny with a high of 25°C.",
       "allowedDiff": false,
       "diffReason": "string value differs"
     },

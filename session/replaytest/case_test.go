@@ -64,7 +64,7 @@ func TestReplayCase_AllOpTypes(t *testing.T) {
 
 func TestBackendResult_Fields(t *testing.T) {
 	r := &BackendResult{
-		BackendName: "test",
+		BackendName:  "test",
 		SummaryTexts: map[string]string{"": "summary"},
 	}
 	if r.BackendName != "test" {

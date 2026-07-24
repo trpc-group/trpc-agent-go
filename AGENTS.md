@@ -11,7 +11,7 @@ The root module path is:
 trpc.group/trpc-go/trpc-agent-go
 ```
 
-The root module requires Go 1.21. Some independent modules, including modules
+The root module requires Go 1.24. Some independent modules, including modules
 under `test/`, require newer Go toolchains.
 
 ## Engineering principles

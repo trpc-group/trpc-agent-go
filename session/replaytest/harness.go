@@ -23,7 +23,7 @@ import (
 // Harness orchestrates the execution of replay cases across multiple backends
 // and generates cross-backend difference reports.
 type Harness struct {
-	cases     []ReplayCase
+	cases      []ReplayCase
 	comparator *Comparator
 	reporter   *Reporter
 	normalizer *Normalizer
@@ -255,11 +255,11 @@ func cloneResult(r *BackendResult) *BackendResult {
 			}
 			if e.Memory != nil {
 				mem := &memory.Memory{
-					Memory:       e.Memory.Memory,
-					LastUpdated:  e.Memory.LastUpdated,
-					Kind:         e.Memory.Kind,
-					EventTime:    e.Memory.EventTime,
-					Location:     e.Memory.Location,
+					Memory:      e.Memory.Memory,
+					LastUpdated: e.Memory.LastUpdated,
+					Kind:        e.Memory.Kind,
+					EventTime:   e.Memory.EventTime,
+					Location:    e.Memory.Location,
 				}
 				if e.Memory.Topics != nil {
 					mem.Topics = make([]string, len(e.Memory.Topics))

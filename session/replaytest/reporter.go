@@ -66,9 +66,9 @@ func NewReporter() *Reporter {
 // GenerateReport creates a DiffReport from a collection of case diffs.
 func (r *Reporter) GenerateReport(caseResults map[string][]DiffEntry) *DiffReport {
 	report := &DiffReport{
-		GeneratedAt:  time.Now().UTC(),
-		TotalCases:   len(caseResults),
-		CaseResults:  make(map[string]*CaseDiffSummary, len(caseResults)),
+		GeneratedAt: time.Now().UTC(),
+		TotalCases:  len(caseResults),
+		CaseResults: make(map[string]*CaseDiffSummary, len(caseResults)),
 	}
 
 	// Sort case names for deterministic output.
@@ -130,7 +130,7 @@ func (r *Reporter) GenerateReport(caseResults map[string][]DiffEntry) *DiffRepor
 func (r *Reporter) buildSummary(report *DiffReport) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("Replay Consistency Test Report\n"))
+	b.WriteString("Replay Consistency Test Report\n")
 	b.WriteString(fmt.Sprintf("Generated: %s\n", report.GeneratedAt.Format(time.RFC3339)))
 	b.WriteString(fmt.Sprintf("Total cases: %d\n", report.TotalCases))
 	b.WriteString(fmt.Sprintf("Total diffs: %d (allowed: %d, unallowed: %d)\n",

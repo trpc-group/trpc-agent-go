@@ -49,7 +49,7 @@ func Case1_SingleTurn() ReplayCase {
 			{Type: OpGetSession, Key: key},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events[0].content", "events[1].content"},
+			ExpectedDiffKeys:  []string{"events[0].content", "events[1].content"},
 			ExpectedDiffCount: 2,
 		},
 	}
@@ -78,7 +78,7 @@ func Case2_MultiTurn() ReplayCase {
 		Name: "case2_multi_turn",
 		Ops:  ops,
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events[0].content", "events[1].content"},
+			ExpectedDiffKeys:  []string{"events[0].content", "events[1].content"},
 			ExpectedDiffCount: 2,
 		},
 	}
@@ -107,7 +107,7 @@ func Case3_ToolCall() ReplayCase {
 			{Type: OpGetSession, Key: key},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events[1].toolCalls[0].function.arguments"},
+			ExpectedDiffKeys:  []string{"events[1].toolCalls[0].function.arguments"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -131,7 +131,7 @@ func Case4_StateUpdate() ReplayCase {
 			{Type: OpGetSession, Key: key}, // Refresh to get the updated state.
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"session.state"},
+			ExpectedDiffKeys:  []string{"session.state"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -167,7 +167,7 @@ func Case5_Memory() ReplayCase {
 			{Type: OpSearchMemories, Key: key, Data: uk},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"memories[0].memory.memory"},
+			ExpectedDiffKeys:  []string{"memories[0].memory.memory"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -197,7 +197,7 @@ func Case6_Summary() ReplayCase {
 			{Type: OpGetSession, Key: key},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"session.summaries"},
+			ExpectedDiffKeys:  []string{"session.summaries"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -239,7 +239,7 @@ func Case7_SummaryTruncation() ReplayCase {
 		Name: "case7_summary_truncation",
 		Ops:  ops,
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"session.summaries"},
+			ExpectedDiffKeys:  []string{"session.summaries"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -277,7 +277,7 @@ func Case8_TrackEvents() ReplayCase {
 			{Type: OpGetSession, Key: key},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"tracks"},
+			ExpectedDiffKeys:  []string{"tracks"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -306,7 +306,7 @@ func Case9_ConcurrentWrites() ReplayCase {
 		Name: "case9_concurrent_writes",
 		Ops:  ops,
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events"},
+			ExpectedDiffKeys:  []string{"events"},
 			ExpectedDiffCount: 1,
 		},
 	}
@@ -344,7 +344,7 @@ func Case10_Idempotency() ReplayCase {
 			{Type: OpReadMemories, Key: key, Data: uk},
 		},
 		Want: WantResult{
-			ExpectedDiffKeys: []string{"events", "memories"},
+			ExpectedDiffKeys:  []string{"events", "memories"},
 			ExpectedDiffCount: 2,
 		},
 	}

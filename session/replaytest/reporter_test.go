@@ -102,8 +102,8 @@ func TestReporter_ToText(t *testing.T) {
 	if len(text) == 0 {
 		t.Error("text output is empty")
 	}
-	if text != report.Summary+"\n\n--- Detailed Differences ---\n\n"+"=== Case: c1 ===\n"+"   [1] f1\n       A <-> B\n       Baseline: x\n       Actual:   y\n       Reason: differs\n\n" {
-		t.Logf("Got text:\n%s", text)
+	if text != report.Summary+"\n\n--- Detailed Differences ---\n\n"+"=== Case: c1 ===\n"+"  ⚠ [1] f1\n       A <-> B\n       Baseline: x\n       Actual:   y\n       Reason: differs\n\n" {
+		t.Errorf("unexpected text report:\n%s", text)
 	}
 }
 
