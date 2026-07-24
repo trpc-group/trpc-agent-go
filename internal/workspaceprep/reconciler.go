@@ -91,17 +91,28 @@ func (r *defaultReconciler) Reconcile(
 
 	var warnings []string
 	changed := false
-	commandApplied := false
+	commandMayHaveStarted := false
 	var changedKeys []string
 	for _, req := range reqs {
-		applied, warn, err := r.runOne(ctx, rctx, req)
+		applied, applyAttempted, warn, err := r.runOne(ctx, rctx, req)
 		if warn != "" {
 			warnings = append(warnings, warn)
 		}
 		if err != nil {
 			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				return warnings, markRetryUnsafe(err, commandApplied)
+				return warnings, markRetryUnsafe(
+					err,
+					commandMayHaveStarted,
+				)
 			}
+		}
+		if applyAttempted && req.Kind() == KindCommand {
+			// A non-stale command result does not prove that the command
+			// avoided side effects. This includes optional timeouts,
+			// non-zero exits, and failures after successful execution.
+			commandMayHaveStarted = true
+		}
+		if err != nil {
 			if !req.Required() {
 				warnings = append(warnings, fmt.Sprintf(
 					"optional requirement %q failed: %v",
@@ -116,7 +127,7 @@ func (r *defaultReconciler) Reconcile(
 					if errors.Is(saveErr, codeexecutor.ErrWorkspaceStale) {
 						return warnings, markRetryUnsafe(
 							saveErr,
-							commandApplied,
+							commandMayHaveStarted,
 						)
 					}
 					return warnings, fmt.Errorf(
@@ -134,9 +145,6 @@ func (r *defaultReconciler) Reconcile(
 		if applied {
 			changed = true
 			changedKeys = append(changedKeys, req.Key())
-			if req.Kind() == KindCommand {
-				commandApplied = true
-			}
 		}
 	}
 	if changed {
@@ -144,7 +152,10 @@ func (r *defaultReconciler) Reconcile(
 			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
 			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				return warnings, markRetryUnsafe(err, commandApplied)
+				return warnings, markRetryUnsafe(
+					err,
+					commandMayHaveStarted,
+				)
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"save metadata: %v", err,
@@ -269,31 +280,31 @@ func cloneReconcileMetadata(
 	return out
 }
 
-// runOne applies a single requirement. It returns whether work was
-// done (so the caller knows to persist metadata), a non-empty warning
-// string that callers should surface, and an error on hard failure.
+// runOne applies a single requirement. It returns whether work was done (so the
+// caller knows to persist metadata), whether Apply was attempted, a non-empty
+// warning string that callers should surface, and an error on hard failure.
 func (r *defaultReconciler) runOne(
 	ctx context.Context,
 	rctx ApplyContext,
 	req Requirement,
-) (bool, string, error) {
+) (bool, bool, string, error) {
 	key := req.Key()
 	expected, err := req.Fingerprint(ctx, rctx)
 	if err != nil {
-		return false, "", fmt.Errorf("fingerprint: %w", err)
+		return false, false, "", fmt.Errorf("fingerprint: %w", err)
 	}
 	prev, hasPrev := rctx.Metadata.Prepared[key]
 	if hasPrev && prev.Fingerprint == expected {
 		ok, err := req.SentinelExists(ctx, rctx)
 		if err != nil {
-			return false, "", fmt.Errorf("sentinel: %w", err)
+			return false, false, "", fmt.Errorf("sentinel: %w", err)
 		}
 		if ok {
-			return false, "", nil
+			return false, false, "", nil
 		}
 	}
 	if err := req.Apply(ctx, rctx); err != nil {
-		return false, "", err
+		return false, true, "", err
 	}
 	rctx.Metadata.Prepared[key] = codeexecutor.PreparedRecord{
 		Key:         key,
@@ -302,7 +313,7 @@ func (r *defaultReconciler) runOne(
 		Target:      req.Target(),
 		PreparedAt:  time.Now(),
 	}
-	return true, "", nil
+	return true, true, "", nil
 }
 
 // sortRequirements orders requirements by Phase and, within a phase,

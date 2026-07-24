@@ -625,6 +625,34 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 		require.Equal(t, 1, laterCalls)
 	})
 
+	t.Run("stale after failed optional command is retry unsafe",
+		func(t *testing.T) {
+			eng, ws := newTestEngine(t)
+			optionalFailure := &orderReq{
+				key:      "optional-command",
+				kind:     KindCommand,
+				phase:    PhaseCommand,
+				optional: true,
+				applyErr: errors.New("timeout after submission"),
+			}
+			laterStale := &orderReq{
+				key:      "later-stale",
+				kind:     KindCommand,
+				phase:    PhaseCommand,
+				applyErr: stale,
+			}
+
+			warnings, err := NewReconciler().Reconcile(
+				context.Background(), eng, ws,
+				[]Requirement{optionalFailure, laterStale},
+			)
+			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			require.ErrorIs(t, err, ErrReconcileRetryUnsafe)
+			require.Len(t, warnings, 1)
+			require.Contains(t, warnings[0], "optional requirement")
+		},
+	)
+
 	t.Run("optional stale remains a control-flow error", func(t *testing.T) {
 		eng, ws := newTestEngine(t)
 		var nextCalls int

@@ -1250,6 +1250,7 @@ type staleRetryRunner struct {
 
 	manager         *staleRetryManager
 	userErrors      []error
+	bootstrapErrors []error
 	metadataErrors  []error
 	userAttempts    int
 	userStarts      int
@@ -1272,10 +1273,21 @@ func (r *staleRetryRunner) RunProgram(
 			}
 			return codeexecutor.RunResult{}, err
 		}
+		var err error
 		if spec.Cmd != "bash" {
 			r.bootstrapStarts++
+			if len(r.bootstrapErrors) > 0 {
+				err = r.bootstrapErrors[0]
+				r.bootstrapErrors = r.bootstrapErrors[1:]
+			}
 		}
 		r.mu.Unlock()
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			r.manager.rotate()
+		}
+		if err != nil {
+			return codeexecutor.RunResult{}, err
+		}
 		return codeexecutor.RunResult{ExitCode: 0}, nil
 	}
 	r.mu.Lock()
@@ -1586,6 +1598,47 @@ func TestExecTool_UnsafeReconcileStaleInvalidatesWithoutReplay(
 	require.Equal(t, 1, manager.createCount(),
 		"unsafe reconciliation must not reacquire and replay")
 	require.Equal(t, 1, runner.bootstrapCount())
+	attempts, starts := runner.counts()
+	require.Zero(t, attempts)
+	require.Zero(t, starts)
+}
+
+func TestExecTool_FailedOptionalCommandPreventsLaterStaleReplay(
+	t *testing.T,
+) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{
+		manager: manager,
+		bootstrapErrors: []error{
+			errors.New("timeout after optional command submission"),
+			fmt.Errorf(
+				"later command did not start: %w",
+				codeexecutor.ErrWorkspaceStale,
+			),
+		},
+	}
+	exec := newStaleRetryExec(manager, &nonInteractiveFS{}, runner)
+	tl := NewExecTool(
+		exec,
+		WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Commands: []codeexecutor.WorkspaceCommand{
+				{
+					Cmd:      "optional-side-effect",
+					Optional: true,
+				},
+				{Cmd: "later-stale"},
+			},
+		}),
+	)
+	args, err := json.Marshal(execInput{Command: "must-not-start"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, workspaceprep.ErrReconcileRetryUnsafe)
+	require.Equal(t, 1, manager.createCount(),
+		"an uncertain optional command must prevent reconciliation replay")
+	require.Equal(t, 2, runner.bootstrapCount())
 	attempts, starts := runner.counts()
 	require.Zero(t, attempts)
 	require.Zero(t, starts)
