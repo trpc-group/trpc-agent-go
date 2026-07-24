@@ -329,6 +329,22 @@ func TestSampleReviewReports(t *testing.T) {
 			t.Fatalf("sample markdown leaked %q", leaked)
 		}
 	}
+
+	var markdownArtifact reportArtifact
+	for _, artifact := range report.Artifacts {
+		if artifact.Kind == artifactKindMarkdownReport {
+			markdownArtifact = artifact
+			break
+		}
+	}
+	if markdownArtifact.Kind == "" {
+		t.Fatal("sample report missing markdown artifact")
+	}
+	normalizedMarkdownBytes := bytes.ReplaceAll(markdownBytes, []byte("\r\n"), []byte("\n"))
+	if markdownArtifact.Bytes != int64(len(normalizedMarkdownBytes)) {
+		t.Fatalf("sample markdown artifact bytes = %d, want %d",
+			markdownArtifact.Bytes, len(normalizedMarkdownBytes))
+	}
 }
 
 func TestSQLiteReviewStoreSaveLoadAndSchema(t *testing.T) {
@@ -694,11 +710,11 @@ func TestLocalPreflightMissingToolsDoesNotAbortReview(t *testing.T) {
 }
 
 func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
-	repoRoot := t.TempDir()
+	sandboxRepoRoot := t.TempDir()
 	input := reviewInput{
 		kind:            inputKindRepoPath,
 		repoRoot:        t.TempDir(),
-		sandboxRepoRoot: repoRoot,
+		sandboxRepoRoot: sandboxRepoRoot,
 	}
 	spec := newCommandSpec(
 		commandCheckGoTest,

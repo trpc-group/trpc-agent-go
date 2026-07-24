@@ -128,7 +128,7 @@
       "kind": "review_report_markdown",
       "path": "output/review-sample-secret-leak/review_report.md",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "bytes": 954
+      "bytes": 917
     }
   ],
   "report_paths": {
