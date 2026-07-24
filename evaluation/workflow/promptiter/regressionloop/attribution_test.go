@@ -721,23 +721,43 @@ func TestAttributeFailuresUsesStructuredToolDiff(t *testing.T) {
 				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "failed"},
 			},
 		},
+		{
+			EvalCaseID: "bad_order",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "shipping_quote", Arguments: map[string]any{"invoice_id": "A-1"}},
+					{Name: "billing_lookup", Arguments: map[string]any{"invoice_id": "A-1"}},
+				},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{
+					{Name: "billing_lookup", Arguments: map[string]any{"invoice_id": "A-1"}},
+					{Name: "shipping_quote", Arguments: map[string]any{"invoice_id": "A-1"}},
+				},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "failed"},
+			},
+		},
 	})
 	attrs := AttributeFailuresWithMetricDefinitions(result, nil, []MetricDefinition{
 		{MetricName: "business_flow", Criterion: map[string]json.RawMessage{"toolTrajectory": json.RawMessage(`{}`)}},
 		{MetricName: "tool_trajectory", Criterion: map[string]json.RawMessage{"toolTrajectory": json.RawMessage(`{}`)}},
 	})
-	require.Len(t, attrs, 3)
+	require.Len(t, attrs, 4)
 	byCase := map[string]CaseAttribution{}
 	for _, attr := range attrs {
 		byCase[attr.EvalCaseID] = attr
 		assert.Equal(t, "structured_diff", attr.Method)
-		if attr.EvalCaseID != "unexpected_tool" {
+		if attr.EvalCaseID == "wrong_tool" || attr.EvalCaseID == "bad_args" {
 			assert.Contains(t, attr.Evidence, "expected_tools=billing_lookup")
 		}
 	}
 	assert.Equal(t, FailureToolCallError, byCase["wrong_tool"].Category)
 	assert.Equal(t, FailureToolCallError, byCase["unexpected_tool"].Category)
 	assert.Equal(t, FailureToolArgumentError, byCase["bad_args"].Category)
+	assert.Equal(t, FailureToolCallError, byCase["bad_order"].Category)
+	assert.Contains(t, strings.Join(byCase["bad_order"].Evidence, " "), "tool_order_diff[0]: actual=shipping_quote expected=billing_lookup")
 }
 
 func TestAttributeFailuresMatchesRepeatedToolCallsIndividually(t *testing.T) {
@@ -918,6 +938,141 @@ func TestTrimForEvidenceTruncatesByRunes(t *testing.T) {
 	assert.True(t, utf8.ValidString(got))
 	assert.Len(t, []rune(got), 180)
 	assert.True(t, strings.HasSuffix(got, "..."))
+}
+
+func TestAttributeFailuresIncludesToolArgDiffEvidenceWhenNamesMatch(t *testing.T) {
+	// When tool names are identical but arguments differ, structured evidence
+	// must include a bounded diff so audit and loss hints contain actionable
+	// information beyond just repeating the shared tool name.
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "arg_diff",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "billing_lookup", Arguments: map[string]any{
+					"invoice_id": "A-2",
+					"token":      "actual-secret-token",
+				}}},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "billing_lookup", Arguments: map[string]any{
+					"invoice_id": "A-1",
+					"token":      "expected-secret-token",
+				}}},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "argument mismatch"},
+			},
+		},
+		{
+			EvalCaseID: "result_diff",
+			ActualInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "fetch", Arguments: map[string]any{"id": "X"}, Result: map[string]any{"status": "error"}}},
+			},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "fetch", Arguments: map[string]any{"id": "X"}, Result: map[string]any{"status": "ok"}}},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "result mismatch"},
+			},
+		},
+	})
+	attrs := AttributeFailuresWithMetricDefinitions(result, nil, []MetricDefinition{
+		{MetricName: "tool_trajectory", Criterion: map[string]json.RawMessage{"toolTrajectory": json.RawMessage(`{}`)}},
+	})
+	require.Len(t, attrs, 2)
+	byCase := map[string]CaseAttribution{}
+	for _, attr := range attrs {
+		byCase[attr.EvalCaseID] = attr
+	}
+
+	argDiff := byCase["arg_diff"]
+	assert.Equal(t, FailureToolArgumentError, argDiff.Category)
+	argEvidence := strings.Join(argDiff.Evidence, " ")
+	assert.Contains(t, argEvidence, "tool_arg_diff[billing_lookup]")
+	assert.Contains(t, argEvidence, "A-2") // actual value present in evidence
+	assert.Contains(t, argEvidence, "A-1") // expected value present in evidence
+	assert.Contains(t, argEvidence, `"[REDACTED]"`)
+	assert.NotContains(t, argEvidence, "actual-secret-token")
+	assert.NotContains(t, argEvidence, "expected-secret-token")
+
+	resultDiff := byCase["result_diff"]
+	assert.Equal(t, FailureToolArgumentError, resultDiff.Category)
+	resultEvidence := strings.Join(resultDiff.Evidence, " ")
+	assert.Contains(t, resultEvidence, "tool_result_diff[fetch]")
+	assert.Contains(t, resultEvidence, "error")
+	assert.Contains(t, resultEvidence, "ok")
+}
+
+func TestAttributeFailuresIncludesTraceToolDiffEvidence(t *testing.T) {
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "trace_arg_diff",
+			Trace: &atrace.Trace{Steps: []atrace.Step{
+				{Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"actual"}}]}`}},
+			}},
+			ExpectedInvocation: &evalset.Invocation{
+				Tools: []*evalset.Tool{{Name: "lookup", Arguments: map[string]any{"id": "expected"}}},
+			},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "tool_trajectory", Status: status.EvalStatusFailed, Reason: "argument mismatch"},
+			},
+		},
+	})
+
+	attrs := AttributeFailures(result)
+	require.Len(t, attrs, 1)
+	assert.Equal(t, FailureToolArgumentError, attrs[0].Category)
+	evidence := strings.Join(attrs[0].Evidence, " ")
+	assert.Contains(t, evidence, "actual_tools=lookup")
+	assert.Contains(t, evidence, "tool_arg_diff[lookup]")
+	assert.Contains(t, evidence, "actual")
+	assert.Contains(t, evidence, "expected")
+}
+
+func TestClassifyToolDiffRejectsMismatchedCallCounts(t *testing.T) {
+	actual := []structuredToolCall{{Name: "lookup"}}
+	expected := []structuredToolCall{
+		{Name: "lookup"},
+		{Name: ""},
+	}
+
+	category, ok := classifyToolDiff(actual, expected)
+	assert.True(t, ok)
+	assert.Equal(t, FailureToolCallError, category)
+}
+
+func TestJSONRedactedRedactsSensitiveFieldsRecursively(t *testing.T) {
+	payload := map[string]any{
+		"query": "invoice A-2",
+		"token": "secret-token",
+		"nested": map[string]any{
+			"Password": "pass-123",
+			"api_key":  "raw-key",
+			"email":    "visible@example.com",
+		},
+		"items": []any{
+			map[string]any{
+				"authorization": "Bearer abc",
+				"name":          "visible item",
+			},
+			map[string]any{
+				"client-secret": "client-secret-value",
+				"id":            "kept",
+			},
+		},
+	}
+
+	got := jsonRedacted(payload)
+	assert.Contains(t, got, `"[REDACTED]"`)
+	assert.Contains(t, got, `"query":"invoice A-2"`)
+	assert.Contains(t, got, `"email":"visible@example.com"`)
+	assert.Contains(t, got, `"name":"visible item"`)
+	assert.Contains(t, got, `"id":"kept"`)
+	assert.NotContains(t, got, "secret-token")
+	assert.NotContains(t, got, "pass-123")
+	assert.NotContains(t, got, "raw-key")
+	assert.NotContains(t, got, "Bearer abc")
+	assert.NotContains(t, got, "client-secret-value")
 }
 
 func structuredEvalResult(evalSetID string, cases []promptiterengine.CaseResult) *promptiterengine.EvaluationResult {

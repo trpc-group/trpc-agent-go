@@ -710,6 +710,63 @@ func TestPipelineRerunsFinalToolCandidateValidation(t *testing.T) {
 	assert.Equal(t, 1, result.Report.Delta.Summary.NewlyPassed)
 }
 
+func TestPipelineRejectsFinalCandidateEvaluatorNilResult(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	candidatePrompt := "candidate prompt"
+	iterator := &capturingPromptIterator{
+		result: &promptiterengine.RunResult{
+			Status: promptiterengine.RunStatusSucceeded,
+			Rounds: []promptiterengine.RoundResult{
+				{
+					Round: 1,
+					OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+						{
+							SurfaceID: "agent#instruction",
+							Value:     astructure.SurfaceValue{Text: &candidatePrompt},
+						},
+					}},
+					Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+				},
+			},
+		},
+	}
+	// PhaseCandidateValidation is intentionally absent from the results map so
+	// scriptedEvaluator returns (nil, nil) for that phase, reproducing the
+	// condition where a well-behaved evaluator contract is violated.
+	evaluator := &scriptedEvaluator{
+		results: map[Phase]*promptiterengine.EvaluationResult{
+			PhaseBaselineTrain: evalResult("train", []caseSpec{
+				{id: "train_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+			PhaseBaselineValidation: evalResult("validation", []caseSpec{
+				{id: "validation_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+		},
+	}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+	_, err := Pipeline{
+		Evaluator:      evaluator,
+		PromptIterator: iterator,
+		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "nil result without error")
+}
+
 func TestPipelineRejectsMissingCollaboratorsAndMetricsPath(t *testing.T) {
 	cfg := Config{
 		AppName:             "app",

@@ -145,15 +145,31 @@ func structuredFailureCategories(
 	return dedupeCategoriesExcluding(FailureUnknown, categories...)
 }
 
-func structuredEvidence(actualInvocation, expectedInvocation *evalset.Invocation) []string {
+func structuredEvidence(
+	trace *atrace.Trace,
+	actualInvocation, expectedInvocation *evalset.Invocation,
+) []string {
 	var evidence []string
 	actualTools := toolCallsFromInvocation(actualInvocation)
+	if len(actualTools) == 0 {
+		actualTools = toolCallsFromTrace(trace)
+	}
 	expectedTools := toolCallsFromInvocation(expectedInvocation)
 	if len(actualTools) > 0 {
 		evidence = append(evidence, "actual_tools="+strings.Join(toolNames(actualTools), ","))
 	}
 	if len(expectedTools) > 0 {
 		evidence = append(evidence, "expected_tools="+strings.Join(toolNames(expectedTools), ","))
+	}
+	// When names match but args or results differ, tool-name evidence alone gives
+	// no hint of what changed.  Append a bounded, redacted per-tool diff so the
+	// audit and loss hints contain actionable information.
+	if len(actualTools) > 0 && len(expectedTools) > 0 {
+		actualNames := toolNameCounts(actualTools)
+		expectedNames := toolNameCounts(expectedTools)
+		if reflect.DeepEqual(actualNames, expectedNames) {
+			evidence = append(evidence, toolDiffEvidence(actualTools, expectedTools)...)
+		}
 	}
 	if text := finalResponseText(actualInvocation); text != "" {
 		evidence = append(evidence, "actual_final_response="+trimForEvidence(text))
@@ -215,6 +231,9 @@ func classifyToolDiff(actualTools, expectedTools []structuredToolCall) (FailureC
 	actualNames := toolNameCounts(actualTools)
 	expectedNames := toolNameCounts(expectedTools)
 	if !reflect.DeepEqual(actualNames, expectedNames) {
+		return FailureToolCallError, true
+	}
+	if len(actualTools) != len(expectedTools) {
 		return FailureToolCallError, true
 	}
 	for i, expected := range expectedTools {
@@ -484,6 +503,131 @@ func normalizeComparableText(text string) string {
 	text = strings.ToLower(strings.TrimSpace(text))
 	text = strings.Join(strings.Fields(text), " ")
 	return strings.Trim(text, " \t\r\n\"'`.,;:!?")
+}
+
+// toolDiffEvidence returns bounded, redacted diff evidence for the structured
+// mismatch used by classifyToolDiff when the tool-name multisets are identical.
+func toolDiffEvidence(actualTools, expectedTools []structuredToolCall) []string {
+	var evidence []string
+	limit := min(len(actualTools), len(expectedTools))
+	const maxDiffs = 8
+	for i := 0; i < limit; i++ {
+		if len(evidence) >= maxDiffs {
+			evidence = append(evidence, "tool_diff_truncated=true")
+			break
+		}
+		actual := actualTools[i]
+		expected := expectedTools[i]
+		if actual.Name != expected.Name {
+			return []string{fmt.Sprintf(
+				"tool_order_diff[%d]: actual=%s expected=%s",
+				i,
+				trimForEvidence(actual.Name),
+				trimForEvidence(expected.Name),
+			)}
+		}
+		if !jsonValuesEqual(actual.Arguments, expected.Arguments) {
+			evidence = append(evidence, fmt.Sprintf(
+				"tool_arg_diff[%s]: actual=%s expected=%s",
+				actual.Name,
+				trimForEvidence(jsonRedacted(actual.Arguments)),
+				trimForEvidence(jsonRedacted(expected.Arguments)),
+			))
+		}
+		if expected.Result != nil && !jsonValuesEqual(actual.Result, expected.Result) {
+			evidence = append(evidence, fmt.Sprintf(
+				"tool_result_diff[%s]: actual=%s expected=%s",
+				actual.Name,
+				trimForEvidence(jsonRedacted(actual.Result)),
+				trimForEvidence(jsonRedacted(expected.Result)),
+			))
+		}
+	}
+	return evidence
+}
+
+// jsonRedacted returns a compact JSON representation with sensitive fields
+// redacted before evidence truncation.
+func jsonRedacted(value any) string {
+	if value == nil {
+		return "<nil>"
+	}
+	b, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Sprintf("%v", value)
+	}
+	var decoded any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		return string(b)
+	}
+	redacted, err := json.Marshal(redactJSONFields(decoded))
+	if err != nil {
+		return string(b)
+	}
+	return string(redacted)
+}
+
+func redactJSONFields(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, child := range typed {
+			if isSensitiveFieldKey(key) {
+				out[key] = "[REDACTED]"
+				continue
+			}
+			out[key] = redactJSONFields(child)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(typed))
+		for _, child := range typed {
+			out = append(out, redactJSONFields(child))
+		}
+		return out
+	default:
+		return value
+	}
+}
+
+func isSensitiveFieldKey(key string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(key))
+	normalized = strings.NewReplacer("_", "", "-", "", ".", "", " ", "").Replace(normalized)
+	switch normalized {
+	case "authorization",
+		"accesstoken",
+		"apikey",
+		"clientsecret",
+		"cookie",
+		"credential",
+		"credentials",
+		"password",
+		"passwd",
+		"privatekey",
+		"pwd",
+		"refreshtoken",
+		"secret",
+		"sessionid",
+		"sessiontoken",
+		"setcookie",
+		"token":
+		return true
+	}
+	for _, marker := range []string{
+		"apikey",
+		"authorization",
+		"cookie",
+		"credential",
+		"password",
+		"privatekey",
+		"secret",
+		"token",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameStringSet(left, right []string) bool {

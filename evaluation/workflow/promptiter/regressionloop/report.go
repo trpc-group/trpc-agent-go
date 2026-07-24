@@ -218,7 +218,10 @@ func hasNonTextProfileValue(value astructure.SurfaceValue) bool {
 	return len(value.Skills) > 0 || len(value.Tools) > 0 || len(value.FewShot) > 0 || value.Model != nil
 }
 
-// WriteReports writes JSON and Markdown reports.
+// WriteReports writes JSON and Markdown reports atomically: both outputs are
+// staged to temporary files in their respective directories before either
+// destination is replaced, so a failure during staging leaves the previous
+// artifacts intact.
 func WriteReports(report OptimizationReport, jsonPath, markdownPath string) error {
 	jsonResolved, err := normalizedReportPath(jsonPath)
 	if err != nil {
@@ -241,13 +244,36 @@ func WriteReports(report OptimizationReport, jsonPath, markdownPath string) erro
 	if err != nil {
 		return fmt.Errorf("marshal optimization report: %w", err)
 	}
-	if err := os.WriteFile(jsonPath, append(jsonBytes, '\n'), 0o644); err != nil {
+	// Stage JSON to a temp file in the same directory so the rename is atomic
+	// on the same filesystem.
+	jsonTmp, err := os.CreateTemp(filepath.Dir(jsonPath), ".report_*.json.tmp")
+	if err != nil {
 		return fmt.Errorf("write JSON report: %w", err)
 	}
-	if err := os.WriteFile(markdownPath, []byte(RenderMarkdown(report)), 0o644); err != nil {
+	jsonTmpName := jsonTmp.Name()
+	defer func() { _ = os.Remove(jsonTmpName) }()
+	if _, err := jsonTmp.Write(append(jsonBytes, '\n')); err != nil {
+		_ = jsonTmp.Close()
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	if err := jsonTmp.Close(); err != nil {
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	// Stage Markdown to a temp file in its own directory.
+	mdTmp, err := os.CreateTemp(filepath.Dir(markdownPath), ".report_*.md.tmp")
+	if err != nil {
 		return fmt.Errorf("write markdown report: %w", err)
 	}
-	return nil
+	mdTmpName := mdTmp.Name()
+	defer func() { _ = os.Remove(mdTmpName) }()
+	if _, err := mdTmp.WriteString(RenderMarkdown(report)); err != nil {
+		_ = mdTmp.Close()
+		return fmt.Errorf("write markdown report: %w", err)
+	}
+	if err := mdTmp.Close(); err != nil {
+		return fmt.Errorf("write markdown report: %w", err)
+	}
+	return commitStagedReports(jsonTmpName, jsonPath, mdTmpName, markdownPath)
 }
 
 func normalizedReportPath(path string) (string, error) {
@@ -260,6 +286,74 @@ func normalizedReportPath(path string) (string, error) {
 		clean = strings.ToLower(clean)
 	}
 	return clean, nil
+}
+
+type reportBackup struct {
+	path   string
+	exists bool
+}
+
+func commitStagedReports(jsonTmpName, jsonPath, mdTmpName, markdownPath string) error {
+	jsonBackup, err := backupReport(jsonPath, ".report_*.json.bak")
+	if err != nil {
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	mdBackup, err := backupReport(markdownPath, ".report_*.md.bak")
+	if err != nil {
+		restoreReportBackup(jsonPath, jsonBackup)
+		return fmt.Errorf("write markdown report: %w", err)
+	}
+	if err := os.Rename(jsonTmpName, jsonPath); err != nil {
+		restoreReportBackup(jsonPath, jsonBackup)
+		restoreReportBackup(markdownPath, mdBackup)
+		return fmt.Errorf("write JSON report: %w", err)
+	}
+	if err := os.Rename(mdTmpName, markdownPath); err != nil {
+		_ = os.Remove(jsonPath)
+		restoreReportBackup(jsonPath, jsonBackup)
+		restoreReportBackup(markdownPath, mdBackup)
+		return fmt.Errorf("write markdown report: %w", err)
+	}
+	_ = os.Remove(jsonBackup.path)
+	_ = os.Remove(mdBackup.path)
+	return nil
+}
+
+func backupReport(path, pattern string) (reportBackup, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return reportBackup{}, nil
+		}
+		return reportBackup{}, err
+	}
+	if info.IsDir() {
+		return reportBackup{}, nil
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), pattern)
+	if err != nil {
+		return reportBackup{}, err
+	}
+	backupPath := tmp.Name()
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(backupPath)
+		return reportBackup{}, err
+	}
+	if err := os.Remove(backupPath); err != nil {
+		return reportBackup{}, err
+	}
+	if err := os.Rename(path, backupPath); err != nil {
+		return reportBackup{}, err
+	}
+	return reportBackup{path: backupPath, exists: true}, nil
+}
+
+func restoreReportBackup(path string, backup reportBackup) {
+	if !backup.exists {
+		return
+	}
+	_ = os.Remove(path)
+	_ = os.Rename(backup.path, path)
 }
 
 // RenderMarkdown renders a human-readable report.
@@ -316,13 +410,13 @@ func RenderMarkdown(report OptimizationReport) string {
 	fmt.Fprintf(&b, "| --- | --- | --- | ---: | ---: | ---: | --- |\n")
 	for _, item := range report.Delta.Cases {
 		fmt.Fprintf(&b, "| %s | %s | %s | %.3f | %.3f | %+.3f | %s |\n",
-			item.EvalSetID,
-			item.EvalCaseID,
-			item.MetricName,
+			markdownCell(item.EvalSetID),
+			markdownCell(item.EvalCaseID),
+			markdownCell(item.MetricName),
 			item.BaselineScore,
 			item.CandidateScore,
 			item.ScoreDelta,
-			item.Kind,
+			markdownCell(string(item.Kind)),
 		)
 	}
 	fmt.Fprintf(&b, "\n")

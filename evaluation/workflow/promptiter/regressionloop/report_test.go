@@ -131,6 +131,101 @@ func TestWriteReportsReturnsFilesystemErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "write markdown report")
 }
 
+func TestRenderMarkdownEscapesCaseDeltaIdentifiers(t *testing.T) {
+	// eval-set, case, and metric IDs are externally supplied; pipes and newlines
+	// must be escaped so they cannot forge table rows or headings.
+	baseline := evalResult("validation", []caseSpec{
+		{id: "case", metric: "metric", score: 0, status: status.EvalStatusFailed},
+	})
+	candidate := evalResult("validation", []caseSpec{
+		{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+	})
+	// Inject a pipe and a newline into the IDs via a delta computed from a
+	// hand-crafted DeltaReport so we can control the raw strings.
+	report := OptimizationReport{
+		Metadata:     RunMetadata{AppName: "app"},
+		GateDecision: GateDecision{Accepted: true},
+		Delta: DeltaReport{
+			Cases: []CaseDelta{
+				{
+					EvalSetID:      "eval|set",
+					EvalCaseID:     "case\nnewline",
+					MetricName:     "metric|name",
+					BaselineScore:  0,
+					CandidateScore: 1,
+					ScoreDelta:     1,
+					Kind:           DeltaNewlyPassed,
+				},
+			},
+		},
+	}
+	_ = baseline
+	_ = candidate
+	md := RenderMarkdown(report)
+	// Pipes in identifiers must be escaped.
+	assert.Contains(t, md, `eval\|set`)
+	assert.Contains(t, md, `metric\|name`)
+	// Raw unescaped pipes in the identifier positions must not appear.
+	assert.NotContains(t, md, "| eval|set |")
+	assert.NotContains(t, md, "| metric|name |")
+}
+
+func TestWriteReportsPreservesJSONWhenMarkdownStagingFails(t *testing.T) {
+	// Regression guard: when staging the markdown temp file fails, the original
+	// JSON report must not be touched.  Trigger a markdown staging failure by
+	// pointing the markdown path inside a directory whose parent does not exist
+	// AND cannot be created (a file sits where the parent would be).
+	dir := t.TempDir()
+	report := OptimizationReport{Metadata: RunMetadata{AppName: "existing"}}
+	jsonPath := filepath.Join(dir, "report.json")
+	mdPath := filepath.Join(dir, "report.md")
+
+	// Write initial reports.
+	require.NoError(t, WriteReports(report, jsonPath, mdPath))
+	originalJSON, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+
+	// Create a regular file that occupies the would-be markdown parent dir,
+	// so MkdirAll fails for markdown before any staging starts.
+	blocker := filepath.Join(dir, "md-parent")
+	require.NoError(t, os.WriteFile(blocker, []byte("blocker"), 0o644))
+	unreachableMD := filepath.Join(blocker, "sub", "report.md")
+
+	newReport := OptimizationReport{Metadata: RunMetadata{AppName: "replacement"}}
+	err = WriteReports(newReport, jsonPath, unreachableMD)
+	assert.ErrorContains(t, err, "create markdown report dir")
+
+	// JSON must be unchanged - markdown dir failure must not touch the JSON file.
+	afterJSON, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalJSON), string(afterJSON),
+		"existing JSON report must be preserved when markdown staging fails")
+}
+
+func TestWriteReportsRollsBackJSONWhenMarkdownCommitFails(t *testing.T) {
+	dir := t.TempDir()
+	report := OptimizationReport{Metadata: RunMetadata{AppName: "existing"}}
+	jsonPath := filepath.Join(dir, "report.json")
+	mdPath := filepath.Join(dir, "report.md")
+	require.NoError(t, WriteReports(report, jsonPath, mdPath))
+	originalJSON, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+
+	markdownDir := filepath.Join(dir, "markdown-dir")
+	require.NoError(t, os.Mkdir(markdownDir, 0o755))
+	newReport := OptimizationReport{Metadata: RunMetadata{AppName: "replacement"}}
+	err = WriteReports(newReport, jsonPath, markdownDir)
+	assert.ErrorContains(t, err, "write markdown report")
+
+	afterJSON, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalJSON), string(afterJSON),
+		"existing JSON report must be restored when markdown commit fails")
+	info, err := os.Stat(markdownDir)
+	require.NoError(t, err)
+	assert.True(t, info.IsDir())
+}
+
 func TestWriteReportsRejectsCollidingOutputPaths(t *testing.T) {
 	dir := t.TempDir()
 	report := OptimizationReport{Metadata: RunMetadata{AppName: "app"}}

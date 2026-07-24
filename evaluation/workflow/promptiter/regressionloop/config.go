@@ -123,6 +123,11 @@ func (c Config) Validate() error {
 			errs = append(errs, errors.New("gate hard fail metric name is empty"))
 		}
 	}
+	for _, caseID := range c.Gate.CriticalCaseIDs {
+		if strings.TrimSpace(caseID) == "" {
+			errs = append(errs, errors.New("gate critical case id is empty"))
+		}
+	}
 	return errors.Join(errs...)
 }
 

@@ -137,7 +137,11 @@ func AttributeFailuresWithOptions(
 					metricSignals,
 				)
 				evidence := buildEvidence(metric, evalCase.Trace)
-				evidence = append(evidence, structuredEvidence(actualInvocation, expectedInvocation)...)
+				evidence = append(evidence, structuredEvidence(
+					evalCase.Trace,
+					actualInvocation,
+					expectedInvocation,
+				)...)
 				secondaryCategories := secondaryFailureCategories(
 					category,
 					metric.MetricName,

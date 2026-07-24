@@ -205,6 +205,9 @@ func (p Pipeline) evaluateFinalCandidate(
 	if err != nil {
 		return nil, false, fmt.Errorf("evaluate candidate validation: %w", err)
 	}
+	if result == nil {
+		return nil, false, errors.New("candidate evaluator returned nil result without error")
+	}
 	return result, true, nil
 }
 

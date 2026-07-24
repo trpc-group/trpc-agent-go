@@ -194,6 +194,30 @@ func TestGateConfigOmitsUnsetMaxLatency(t *testing.T) {
 	assert.Contains(t, string(data), `"maxLatency":"1s"`)
 }
 
+func TestConfigValidateRejectsEmptyCriticalCaseIDs(t *testing.T) {
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        "prompt.txt",
+		MetricsPath:         "metrics.json",
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          "report.json",
+		OutputMarkdown:      "report.md",
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{CriticalCaseIDs: []string{"case-a", " "}},
+	}
+	assert.ErrorContains(t, cfg.Validate(), "gate critical case id is empty")
+
+	// Whitespace-only ID also rejected.
+	cfg.Gate.CriticalCaseIDs = []string{"\t"}
+	assert.ErrorContains(t, cfg.Validate(), "gate critical case id is empty")
+
+	// Non-empty IDs pass.
+	cfg.Gate.CriticalCaseIDs = []string{"case-a", "case-b"}
+	require.NoError(t, cfg.Validate())
+}
+
 func TestConfigValidateRejectsNegativeBudgets(t *testing.T) {
 	negLatency := Duration{Duration: -time.Second}
 	cfg := Config{
