@@ -72,7 +72,7 @@ type Session struct {
 	// Summaries holds filter-aware summaries. The key is the event filter key.
 	SummariesMu sync.RWMutex        `json:"-"`                   // SummariesMu is the read-write mutex for Summaries.
 	Summaries   map[string]*Summary `json:"summaries,omitempty"` // Summaries is the filter-aware summaries.
-	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time.
+	UpdatedAt   time.Time           `json:"updatedAt"`           // UpdatedAt is the last update time, protected by EventMu after initialization.
 	CreatedAt   time.Time           `json:"createdAt"`           // CreatedAt is the creation time.
 
 	// Hash is the pre-computed slot hash value for asynchronous task dispatching.
@@ -403,7 +403,6 @@ func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
 	}
 	sess.stateMu.Unlock()
 	sess.TracksMu.Lock()
-	defer sess.TracksMu.Unlock()
 	if sess.Tracks == nil {
 		sess.Tracks = make(map[Track]*TrackEvents)
 	}
@@ -413,7 +412,11 @@ func (sess *Session) AppendTrackEvent(event *TrackEvent, opts ...Option) error {
 		sess.Tracks[event.Track] = trackEvents
 	}
 	trackEvents.Events = append(trackEvents.Events, *event)
+	sess.TracksMu.Unlock()
+
+	sess.EventMu.Lock()
 	sess.UpdatedAt = time.Now()
+	sess.EventMu.Unlock()
 	return nil
 }
 
@@ -471,15 +474,15 @@ func (sess *Session) UpdateUserSession(event *event.Event, opts ...Option) {
 		log.Info("session or event is nil")
 		return
 	}
-	if event.Response != nil && !event.IsPartial && event.IsValidContent() {
-		sess.EventMu.Lock()
+	shouldAppend := event.Response != nil && !event.IsPartial && event.IsValidContent()
+	sess.EventMu.Lock()
+	if shouldAppend {
 		sess.Events = append(sess.Events, *event)
 		// Apply filtering options.
 		sess.ApplyEventFiltering(opts...)
-		sess.EventMu.Unlock()
 	}
-
 	sess.UpdatedAt = time.Now()
+	sess.EventMu.Unlock()
 	sess.ApplyEventStateDelta(event)
 }
 

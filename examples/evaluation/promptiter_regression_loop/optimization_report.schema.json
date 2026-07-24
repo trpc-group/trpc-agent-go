@@ -1,0 +1,317 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trpc.group/trpc-agent-go/schemas/promptiter-regression-report-v1alpha1.json",
+  "title": "PromptIter Regression Loop Report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "pipeline",
+    "inputManifest",
+    "runtime",
+    "baseline",
+    "rounds",
+    "finalDecision",
+    "accounting",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": {"const": "trpc-agent-go.promptiter-regression.report/v1alpha1"},
+    "pipeline": {"$ref": "#/$defs/pipeline"},
+    "inputManifest": {"$ref": "#/$defs/inputManifest"},
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "baseline": {"$ref": "#/$defs/baseline"},
+    "rounds": {"type": "array", "items": {"$ref": "#/$defs/round"}},
+    "finalDecision": {"$ref": "#/$defs/gateDecision"},
+    "accounting": {"$ref": "#/$defs/accounting"},
+    "artifacts": {"$ref": "#/$defs/artifacts"}
+  },
+  "$defs": {
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["runId", "status", "startedAt", "endedAt", "durationMs", "mode", "scenario", "seed"],
+      "properties": {
+        "runId": {"type": "string", "minLength": 1},
+        "status": {"type": "string", "enum": ["running", "succeeded", "failed"]},
+        "startedAt": {"type": "string", "format": "date-time"},
+        "endedAt": {"type": "string", "format": "date-time"},
+        "durationMs": {"type": "integer", "minimum": 0},
+        "mode": {"type": "string", "minLength": 1},
+        "scenario": {"type": "string", "minLength": 1},
+        "seed": {"type": "integer"}
+      }
+    },
+    "inputManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trainDatasetHash", "validationDatasetHash", "metricsHash", "baselineProfileHash", "datasetOverlap"],
+      "properties": {
+        "trainDatasetHash": {"$ref": "#/$defs/hash"},
+        "validationDatasetHash": {"$ref": "#/$defs/hash"},
+        "metricsHash": {"$ref": "#/$defs/hash"},
+        "baselineProfileHash": {"$ref": "#/$defs/hash"},
+        "datasetOverlap": {"type": "array", "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateModel", "workerModel", "apiKeyRequired", "secretValuesPersisted"],
+      "properties": {
+        "candidateModel": {"type": "string", "minLength": 1},
+        "workerModel": {"type": "string", "minLength": 1},
+        "apiKeyRequired": {"type": "boolean"},
+        "secretValuesPersisted": {"type": "boolean"}
+      }
+    },
+    "baseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["train", "validation", "attributions", "attributionSummary"],
+      "properties": {
+        "train": {"$ref": "#/$defs/snapshot"},
+        "validation": {"$ref": "#/$defs/snapshot"},
+        "attributions": {"type": "array", "items": {"$ref": "#/$defs/attribution"}},
+        "attributionSummary": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "round", "parentProfileHash", "candidateProfileHash", "candidatePrompt", "promptiterDecision",
+        "candidateTrain", "candidateValidation", "trainDelta", "validationDelta", "gateDecision"
+      ],
+      "properties": {
+        "round": {"type": "integer", "minimum": 1},
+        "parentProfileHash": {"$ref": "#/$defs/hash"},
+        "candidateProfileHash": {"$ref": "#/$defs/hash"},
+        "candidatePrompt": {"type": "string", "minLength": 1},
+        "promptiterDecision": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["accepted", "scoreDelta", "reason"],
+          "properties": {
+            "accepted": {"type": "boolean"},
+            "scoreDelta": {"type": "number"},
+            "reason": {"type": "string"}
+          }
+        },
+        "candidateTrain": {"$ref": "#/$defs/snapshot"},
+        "candidateValidation": {"$ref": "#/$defs/snapshot"},
+        "trainDelta": {"$ref": "#/$defs/comparison"},
+        "validationDelta": {"$ref": "#/$defs/comparison"},
+        "gateDecision": {"$ref": "#/$defs/gateDecision"}
+      }
+    },
+    "snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["identity", "overallScore", "cases"],
+      "properties": {
+        "identity": {"$ref": "#/$defs/identity"},
+        "overallScore": {"type": "number"},
+        "cases": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/caseEvidence"}}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evaluationRunId", "split", "evalSetId", "datasetHash", "metricsHash", "profileHash", "seed"],
+      "properties": {
+        "evaluationRunId": {"type": "string", "minLength": 1},
+        "split": {"type": "string", "enum": ["train", "validation"]},
+        "evalSetId": {"type": "string", "minLength": 1},
+        "datasetHash": {"$ref": "#/$defs/hash"},
+        "metricsHash": {"$ref": "#/$defs/hash"},
+        "profileHash": {"$ref": "#/$defs/hash"},
+        "seed": {"type": "integer"}
+      }
+    },
+    "caseEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "runId", "status", "metrics", "trace"],
+      "properties": {
+        "caseId": {"type": "string", "minLength": 1},
+        "runId": {"type": "integer", "minimum": 0},
+        "status": {"type": "string", "minLength": 1},
+        "errorMessage": {"type": "string"},
+        "finalResponse": {"type": "string"},
+        "metrics": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/metricEvidence"}},
+        "invocations": {"type": "array", "items": {"$ref": "#/$defs/invocation"}},
+        "trace": {"$ref": "#/$defs/trace"}
+      }
+    },
+    "metricEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["metricName", "score", "threshold", "status"],
+      "properties": {
+        "metricName": {"type": "string", "minLength": 1},
+        "score": {"type": "number"},
+        "threshold": {"type": "number"},
+        "status": {"type": "string", "enum": ["passed", "failed", "not_evaluated"]},
+        "reason": {"type": "string"}
+      }
+    },
+    "invocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "finalResponse": {"type": "string"},
+        "expectedFinalResponse": {"type": "string"},
+        "actualTools": {"type": "array", "items": {"$ref": "#/$defs/toolEvidence"}},
+        "expectedTools": {"type": "array", "items": {"$ref": "#/$defs/toolEvidence"}}
+      }
+    },
+    "toolEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "argumentsHash": {"$ref": "#/$defs/hash"},
+        "resultHash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stepCount"],
+      "properties": {
+        "status": {"type": "string"},
+        "stepCount": {"type": "integer", "minimum": 0},
+        "steps": {"type": "array", "items": {"$ref": "#/$defs/traceStep"}}
+      }
+    },
+    "traceStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stepId", "nodeId", "nodeType"],
+      "properties": {
+        "stepId": {"type": "string"},
+        "nodeId": {"type": "string"},
+        "nodeType": {"type": "string"},
+        "branch": {"type": "string"},
+        "error": {"type": "string"},
+        "inputHash": {"$ref": "#/$defs/hash"},
+        "outputHash": {"$ref": "#/$defs/hash"}
+      }
+    },
+    "attribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "metricName", "primaryCategory", "reason", "ruleId", "confidence", "evidenceRefs", "snapshotIdentity"],
+      "properties": {
+        "caseId": {"type": "string", "minLength": 1},
+        "metricName": {"type": "string", "minLength": 1},
+        "primaryCategory": {"type": "string", "minLength": 1},
+        "reason": {"type": "string", "minLength": 1},
+        "ruleId": {"type": "string", "minLength": 1},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "evidenceRefs": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "snapshotIdentity": {"$ref": "#/$defs/identity"}
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["baselineScore", "candidateScore", "overallDelta", "metrics"],
+      "properties": {
+        "baselineScore": {"type": "number"},
+        "candidateScore": {"type": "number"},
+        "overallDelta": {"type": "number"},
+        "metrics": {"type": "array", "items": {"$ref": "#/$defs/metricDelta"}}
+      }
+    },
+    "metricDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["caseId", "metricName", "baselineScore", "candidateScore", "scoreDelta", "transition"],
+      "properties": {
+        "caseId": {"type": "string", "minLength": 1},
+        "metricName": {"type": "string", "minLength": 1},
+        "baselineScore": {"type": ["number", "null"]},
+        "candidateScore": {"type": ["number", "null"]},
+        "baselineStatus": {"type": "string"},
+        "candidateStatus": {"type": "string"},
+        "scoreDelta": {"type": ["number", "null"]},
+        "transition": {
+          "type": "string",
+          "enum": ["newly_passed", "newly_failed", "improved", "regressed", "unchanged", "missing_in_candidate", "unexpected_in_candidate"]
+        }
+      }
+    },
+    "gateDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accepted", "deployable", "reasonCodes", "summary", "checks"],
+      "properties": {
+        "accepted": {"type": "boolean"},
+        "deployable": {"type": "boolean"},
+        "reasonCodes": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "summary": {"type": "string", "minLength": 1},
+        "checks": {"type": "array", "items": {"$ref": "#/$defs/gateCheck"}}
+      }
+    },
+    "gateCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "passed"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "passed": {"type": "boolean"},
+        "observed": true,
+        "threshold": true
+      }
+    },
+    "accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["modelCalls", "promptTokens", "completionTokens", "totalTokens", "wallLatencyMs", "cost", "costStatus", "byCall"],
+      "properties": {
+        "modelCalls": {"type": "integer", "minimum": 0},
+        "promptTokens": {"type": "integer", "minimum": 0},
+        "completionTokens": {"type": "integer", "minimum": 0},
+        "totalTokens": {"type": "integer", "minimum": 0},
+        "wallLatencyMs": {"type": "integer", "minimum": 0},
+        "cost": {"type": ["number", "null"], "minimum": 0},
+        "costStatus": {"type": "string", "minLength": 1},
+        "byCall": {"type": "array", "items": {"$ref": "#/$defs/modelCall"}}
+      }
+    },
+    "modelCall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stage", "model", "promptTokens", "completionTokens", "totalTokens", "latencyMs"],
+      "properties": {
+        "stage": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "promptTokens": {"type": "integer", "minimum": 0},
+        "completionTokens": {"type": "integer", "minimum": 0},
+        "totalTokens": {"type": "integer", "minimum": 0},
+        "latencyMs": {"type": "integer", "minimum": 0}
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["jsonReport", "markdownReport", "candidatePrompt", "roundCandidatePrompts", "acceptedPrompt"],
+      "properties": {
+        "jsonReport": {"type": "string", "minLength": 1},
+        "markdownReport": {"type": "string", "minLength": 1},
+        "candidatePrompt": {"type": "string", "minLength": 1},
+        "roundCandidatePrompts": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "acceptedPrompt": {"type": ["string", "null"]}
+      }
+    },
+    "hash": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

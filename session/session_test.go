@@ -1794,6 +1794,96 @@ func TestUpdateUserSession(t *testing.T) {
 	}
 }
 
+func TestUpdateUserSessionConcurrentCloneUpdatedAt(t *testing.T) {
+	const iterations = 1000
+	initialUpdatedAt := time.Unix(1, 0)
+	sess := NewSession("app", "user", "session", WithSessionUpdatedAt(initialUpdatedAt))
+	evt := createTestEvent(model.RoleUser, "message", time.Now(), nil)
+	start := make(chan struct{})
+	firstUpdate := make(chan struct{})
+	var lastClone *Session
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			sess.UpdateUserSession(evt, WithEventNum(10))
+			if i == 0 {
+				close(firstUpdate)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		<-firstUpdate
+		for i := 0; i < iterations; i++ {
+			lastClone = sess.Clone()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+
+	require.NotNil(t, lastClone)
+	require.NotEmpty(t, lastClone.Events)
+	assert.True(t, lastClone.UpdatedAt.After(initialUpdatedAt))
+	cloned := sess.Clone()
+	require.Len(t, cloned.Events, 10)
+	assert.True(t, cloned.UpdatedAt.After(initialUpdatedAt))
+}
+
+func TestAppendTrackEventConcurrentCloneUpdatedAt(t *testing.T) {
+	const iterations = 1000
+	initialUpdatedAt := time.Unix(1, 0)
+	sess := NewSession("app", "user", "session", WithSessionUpdatedAt(initialUpdatedAt))
+	trackEvent := &TrackEvent{Track: "audit", Payload: json.RawMessage(`"entry"`)}
+	start := make(chan struct{})
+	firstAppend := make(chan struct{})
+	var appendErr error
+	var lastClone *Session
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < iterations; i++ {
+			err := sess.AppendTrackEvent(trackEvent)
+			if i == 0 {
+				close(firstAppend)
+			}
+			if err != nil {
+				appendErr = err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		<-firstAppend
+		for i := 0; i < iterations; i++ {
+			lastClone = sess.Clone()
+		}
+	}()
+
+	close(start)
+	wg.Wait()
+
+	require.NoError(t, appendErr)
+	require.NotNil(t, lastClone)
+	require.Contains(t, lastClone.Tracks, Track("audit"))
+	require.NotEmpty(t, lastClone.Tracks["audit"].Events)
+	assert.True(t, lastClone.UpdatedAt.After(initialUpdatedAt))
+	cloned := sess.Clone()
+	require.Contains(t, cloned.Tracks, Track("audit"))
+	require.Len(t, cloned.Tracks["audit"].Events, iterations)
+	assert.True(t, cloned.UpdatedAt.After(initialUpdatedAt))
+}
+
 func TestApplyOptions(t *testing.T) {
 	now := time.Now()
 
