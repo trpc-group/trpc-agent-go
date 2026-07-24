@@ -1,0 +1,13 @@
+diff --git a/internal/auth/query.go b/internal/auth/query.go
+--- a/internal/auth/query.go
++++ b/internal/auth/query.go
+@@ -8,6 +8,10 @@ import (
+ 
++const apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
++
+ func FindUser(db *sql.DB, userID string) (*User, error) {
+-	query := "SELECT id, name FROM users WHERE id = ?"
++	query := "SELECT id, name FROM users WHERE id = " + userID
+ 	rows, err := db.Query(query)
+ 	if err != nil {
+ 		return nil, err

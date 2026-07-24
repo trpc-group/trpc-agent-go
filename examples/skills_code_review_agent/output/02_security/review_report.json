@@ -1,0 +1,63 @@
+{
+  "task_id": "ba67ed43-1037-413f-94bb-34218d877c06",
+  "status": "completed",
+  "input_summary": "changed files: internal/auth/query.go",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "sensitive_data",
+      "file": "internal/auth/query.go",
+      "line": 9,
+      "title": "Sensitive credential or secret detected",
+      "evidence": "const apiKey = \"\u003credacted\u003e\"",
+      "recommendation": "Load secrets from environment or a secret manager; never hardcode credentials.",
+      "confidence": 0.95,
+      "source": "rule",
+      "rule_id": "SENS-001"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/auth/query.go",
+      "line": 12,
+      "title": "Potential SQL injection via string concatenation",
+      "evidence": "\tquery := \"SELECT id, name FROM users WHERE id = \" + userID",
+      "recommendation": "Use parameterized queries or prepared statements instead of concatenating SQL strings.",
+      "confidence": 0.9,
+      "source": "rule",
+      "rule_id": "SEC-001"
+    }
+  ],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (13 diff lines)"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 17,
+    "sandbox_duration_ms": 12,
+    "finding_count": 2,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {
+      "critical": 1,
+      "high": 1
+    }
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}

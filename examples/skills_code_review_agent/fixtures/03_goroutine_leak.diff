@@ -1,0 +1,15 @@
+diff --git a/internal/worker/poller.go b/internal/worker/poller.go
+--- a/internal/worker/poller.go
++++ b/internal/worker/poller.go
+@@ -15,6 +15,11 @@ type Poller struct {
+ }
+ 
+ func (p *Poller) Start() {
++	go func() {
++		for {
++			p.tick()
++		}
++	}()
+ }
+ 
+ func (p *Poller) tick() {

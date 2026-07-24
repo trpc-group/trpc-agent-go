@@ -1,0 +1,15 @@
+diff --git a/internal/store/order.go b/internal/store/order.go
+--- a/internal/store/order.go
++++ b/internal/store/order.go
+@@ -18,6 +18,12 @@ type OrderStore struct {
+ }
+ 
+ func (s *OrderStore) CreateOrder(ctx context.Context, order Order) error {
++	tx, err := s.db.Begin()
++	if err != nil {
++		return err
++	}
++	_, err = tx.ExecContext(ctx, "INSERT INTO orders(id) VALUES (?)", order.ID)
++	return err
+ }
+ 

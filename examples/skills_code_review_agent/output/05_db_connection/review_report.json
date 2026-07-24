@@ -1,0 +1,50 @@
+{
+  "task_id": "89a3a84c-bdbe-42fc-8009-2094c8102703",
+  "status": "completed",
+  "input_summary": "changed files: internal/store/order.go",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "resource",
+      "file": "internal/store/order.go",
+      "line": 21,
+      "title": "Database transaction without commit or rollback",
+      "evidence": "\ttx, err := s.db.Begin()",
+      "recommendation": "Always commit or rollback transactions in a defer/finally block.",
+      "confidence": 0.85,
+      "source": "rule",
+      "rule_id": "DB-001"
+    }
+  ],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (14 diff lines)"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 18,
+    "sandbox_duration_ms": 12,
+    "finding_count": 1,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {
+      "high": 1
+    }
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}

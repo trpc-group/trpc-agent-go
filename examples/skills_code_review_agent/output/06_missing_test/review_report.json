@@ -1,0 +1,50 @@
+{
+  "task_id": "84142ebd-7727-4cdd-a459-8fd84eddfa60",
+  "status": "completed",
+  "input_summary": "changed files: internal/billing/calculator.go",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "internal/billing/calculator.go",
+      "line": 3,
+      "title": "Exported function added without corresponding test changes",
+      "evidence": "func CalculateTotal(amount int, tax int) int {",
+      "recommendation": "Add unit tests covering the new exported function behavior.",
+      "confidence": 0.7,
+      "source": "rule",
+      "rule_id": "TEST-001"
+    }
+  ],
+  "warnings": [],
+  "permission_decisions": [
+    {
+      "tool_name": "skill_run",
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "action": "allow"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "bash scripts/run_checks.sh work/inputs/changes.diff",
+      "runtime": "local",
+      "status": "completed",
+      "exit_code": 0,
+      "duration_ms": 0,
+      "stdout": "sandbox checks passed (13 diff lines)"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 19,
+    "sandbox_duration_ms": 11,
+    "finding_count": 1,
+    "warning_count": 0,
+    "tool_call_count": 1,
+    "permission_deny_count": 0,
+    "severity_counts": {
+      "low": 1
+    }
+  },
+  "dry_run": true,
+  "sandbox_runtime": "local"
+}

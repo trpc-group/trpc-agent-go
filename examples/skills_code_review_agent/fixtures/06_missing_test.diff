@@ -1,0 +1,13 @@
+diff --git a/internal/billing/calculator.go b/internal/billing/calculator.go
+--- a/internal/billing/calculator.go
++++ b/internal/billing/calculator.go
+@@ -1,5 +1,9 @@
+ package billing
+ 
++func CalculateTotal(amount int, tax int) int {
++	return amount + tax
++}
++
+ func round(value float64) float64 {
+ 	return value
+ }

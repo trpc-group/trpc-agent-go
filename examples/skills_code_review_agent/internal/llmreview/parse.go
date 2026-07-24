@@ -1,0 +1,102 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package llmreview
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/diff"
+	"trpc.group/trpc-go/trpc-agent-go/examples/skills_code_review_agent/internal/findings"
+)
+
+var validSeverities = map[string]struct{}{
+	"critical": {},
+	"high":     {},
+	"medium":   {},
+	"low":      {},
+}
+
+// ParseFindings extracts structured findings from an LLM response and
+// keeps only those anchored to added lines in the reviewed diff.
+func ParseFindings(content string, reviewed *diff.Diff) ([]findings.Finding, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, nil
+	}
+	content = stripCodeFence(content)
+
+	start := strings.Index(content, "[")
+	end := strings.LastIndex(content, "]")
+	if start < 0 || end <= start {
+		return nil, nil
+	}
+
+	var items []findings.Finding
+	if err := json.Unmarshal([]byte(content[start:end+1]), &items); err != nil {
+		return nil, fmt.Errorf("decode llm findings: %w", err)
+	}
+	out := make([]findings.Finding, 0, len(items))
+	for i := range items {
+		if normalized, ok := normalizeFinding(items[i], reviewed); ok {
+			out = append(out, normalized)
+		}
+	}
+	return out, nil
+}
+
+func normalizeFinding(f findings.Finding, reviewed *diff.Diff) (findings.Finding, bool) {
+	if strings.TrimSpace(f.Title) == "" {
+		return f, false
+	}
+	file := strings.TrimSpace(f.File)
+	if file == "" {
+		return f, false
+	}
+	clean, err := diff.SanitizeRepoRelativePath(file)
+	if err != nil {
+		return f, false
+	}
+	f.File = clean
+	if f.Line <= 0 {
+		return f, false
+	}
+	if reviewed == nil || !reviewed.HasAddedLine(f.File, f.Line) {
+		return f, false
+	}
+	if _, ok := validSeverities[f.Severity]; !ok {
+		f.Severity = "low"
+	}
+	if f.Confidence < 0 {
+		f.Confidence = 0
+	}
+	if f.Confidence > 1 {
+		f.Confidence = 1
+	}
+	// Force provenance; models must not masquerade as deterministic rules.
+	f.Source = "llm"
+	return f, true
+}
+
+func stripCodeFence(content string) string {
+	if !strings.HasPrefix(content, "```") {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) < 3 {
+		return content
+	}
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if !strings.HasPrefix(last, "```") {
+		return content
+	}
+	return strings.TrimSpace(strings.Join(lines[1:len(lines)-1], "\n"))
+}
