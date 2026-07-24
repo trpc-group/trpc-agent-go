@@ -43,14 +43,23 @@ type Backend struct {
 	Capabilities map[string]CapabilityStatus
 }
 
+// SummaryOwnerProvider optionally exposes the persisted owner session for each
+// summary filter key. SQL-style adapters can implement this to detect summaries
+// attached from the wrong session.
+type SummaryOwnerProvider interface {
+	SummaryOwnerIDs(ctx context.Context, key session.Key) (map[string]string, error)
+}
+
 // ReplayCase is a deterministic backend-neutral replay script.
 type ReplayCase struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	// SnapshotEventNum asks Normalize to read only the most recent N events.
 	// This is useful for summary plus event-window replay cases.
-	SnapshotEventNum int         `json:"snapshot_event_num,omitempty"`
-	Operations       []Operation `json:"operations"`
+	SnapshotEventNum int `json:"snapshot_event_num,omitempty"`
+	// MemorySearchQueries asks Normalize to capture search result ordering.
+	MemorySearchQueries []string    `json:"memory_search_queries,omitempty"`
+	Operations          []Operation `json:"operations"`
 }
 
 // OperationKind identifies one replay operation.
@@ -67,6 +76,7 @@ const (
 	OperationAppendTrack        OperationKind = "append_track"
 	OperationConcurrent         OperationKind = "concurrent"
 	OperationRetry              OperationKind = "retry"
+	OperationExpectError        OperationKind = "expect_error"
 )
 
 // Operation is one replay step. Nested operations are executed in stable order
@@ -81,8 +91,9 @@ type Operation struct {
 	Memory  *MemoryOperation  `json:"memory,omitempty"`
 	Summary *SummaryOperation `json:"summary,omitempty"`
 
-	Operations []Operation `json:"operations,omitempty"`
-	RetryCount int         `json:"retry_count,omitempty"`
+	Operations  []Operation `json:"operations,omitempty"`
+	RetryCount  int         `json:"retry_count,omitempty"`
+	DelayMillis int         `json:"delay_millis,omitempty"`
 }
 
 // MemoryOperation describes one memory mutation.
@@ -108,16 +119,17 @@ type RunConfig struct {
 
 // Snapshot is the normalized backend output for one case.
 type Snapshot struct {
-	CaseName     string                       `json:"case"`
-	Backend      string                       `json:"backend"`
-	SessionID    string                       `json:"session_id"`
-	Events       []NormalizedEvent            `json:"events,omitempty"`
-	State        map[string]NormalizedValue   `json:"state,omitempty"`
-	Memories     []NormalizedMemory           `json:"memories,omitempty"`
-	Summaries    map[string]NormalizedSummary `json:"summaries,omitempty"`
-	Tracks       map[string][]NormalizedTrack `json:"tracks,omitempty"`
-	Capabilities map[string]CapabilityStatus  `json:"capabilities,omitempty"`
-	Unsupported  []UnsupportedCapability      `json:"unsupported,omitempty"`
+	CaseName       string                        `json:"case"`
+	Backend        string                        `json:"backend"`
+	SessionID      string                        `json:"session_id"`
+	Events         []NormalizedEvent             `json:"events,omitempty"`
+	State          map[string]NormalizedValue    `json:"state,omitempty"`
+	Memories       []NormalizedMemory            `json:"memories,omitempty"`
+	MemorySearches map[string][]NormalizedMemory `json:"memory_searches,omitempty"`
+	Summaries      map[string]NormalizedSummary  `json:"summaries,omitempty"`
+	Tracks         map[string][]NormalizedTrack  `json:"tracks,omitempty"`
+	Capabilities   map[string]CapabilityStatus   `json:"capabilities,omitempty"`
+	Unsupported    []UnsupportedCapability       `json:"unsupported,omitempty"`
 }
 
 // UnsupportedCapability is included in snapshots and reports for skipped
@@ -195,6 +207,7 @@ type NormalizedSummaryBoundary struct {
 type NormalizedTrack struct {
 	Index      int             `json:"index"`
 	TrackName  string          `json:"track_name"`
+	Timestamp  string          `json:"timestamp,omitempty"`
 	EventType  string          `json:"event_type,omitempty"`
 	Invocation string          `json:"invocation,omitempty"`
 	Error      string          `json:"error,omitempty"`

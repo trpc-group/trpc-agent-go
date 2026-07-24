@@ -2,8 +2,15 @@
   "generated_by": "trpc-agent-go/session/replaytest",
   "cases": [
     "single_turn_dialog",
+    "multi_turn_order",
+    "tool_call_round_trip",
+    "state_overwrite_tombstone",
+    "memory_write_read_search",
     "summary_filter_key_update",
-    "track_observability"
+    "summary_with_event_window",
+    "track_observability",
+    "out_of_order_interleaving",
+    "retry_recovery_idempotence"
   ],
   "diffs": [
     {
@@ -24,35 +31,35 @@
       "candidate_backend": "sqlite",
       "session_id": "session-summary_filter_key_update",
       "summary_filter_key": "agent/main",
-      "path": "/summaries/agent~1main/filter_key",
-      "baseline": "agent/main",
-      "candidate": "agent/wrong",
+      "path": "/summaries/agent~1main/session_id",
+      "baseline": "session-summary_filter_key_update",
+      "candidate": "other-session",
       "allowed_diff": false,
-      "explanation": "summary filter-key must be preserved exactly"
+      "explanation": "summary persisted under the wrong owner session"
     },
     {
       "case": "memory_write_read_search",
       "baseline_backend": "inmemory",
       "candidate_backend": "sqlite",
       "session_id": "session-memory_write_read_search",
-      "memory_id": "memory#preference",
-      "path": "/memories/0/content",
+      "memory_id": "memory#3f2a91b8c0de",
+      "path": "/memory_searches/User/0/content",
       "baseline": "User prefers concise answers.",
-      "candidate": "User prefers verbose answers.",
+      "candidate": "User debugged a payment webhook timeout with Lee.",
       "allowed_diff": false,
-      "explanation": "memory content differs after replay"
+      "explanation": "memory search result order changed"
     },
     {
       "case": "track_observability",
       "baseline_backend": "inmemory",
       "candidate_backend": "sqlite",
       "session_id": "session-track_observability",
-      "track_name": "subtask/research",
-      "path": "/tracks/subtask~1research/0/error",
-      "baseline": "timeout",
-      "candidate": "canceled",
+      "track_name": "tool/weather",
+      "path": "/tracks/tool~1weather/0/timestamp",
+      "baseline": "2026-07-24T10:00:01Z",
+      "candidate": "2026-07-24T10:00:00Z",
       "allowed_diff": false,
-      "explanation": "track error payload differs"
+      "explanation": "track time sequence must be preserved"
     },
     {
       "case": "single_turn_dialog",

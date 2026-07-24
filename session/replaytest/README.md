@@ -2,7 +2,7 @@
 
 `session/replaytest` provides a backend-neutral replay harness for session,
 memory, summary, and track consistency checks. The default lightweight test
-compares InMemory with a JSON round-trip persistent simulator without modifying
+compares InMemory with a JSON file-backed local persistent simulator without modifying
 existing repository go.mod files. The standalone `tests/replay_consistency`
 module compares InMemory with SQLite when CGO is available.
 
@@ -20,9 +20,10 @@ The default lightweight mode uses:
 - `replaytest.JSONSessionService` and `replaytest.JSONMemoryService`
 - a deterministic test summarizer, so no API key is required
 
-The standalone SQLite module uses `session/sqlite` and `memory/sqlite`; run it
-with `-tags replay_sqlite`. It requires `CGO_ENABLED=1` and a working C compiler
-because it depends on `github.com/mattn/go-sqlite3`.
+The standalone module also has a default JSON local-persistence test. Its SQLite
+test uses `session/sqlite` and `memory/sqlite`; run it with `-tags replay_sqlite`.
+It requires `CGO_ENABLED=1` and a working C compiler because it depends on
+`github.com/mattn/go-sqlite3`.
 
 ## Optional Integration Mode
 
@@ -41,4 +42,4 @@ are visible without failing lightweight compatibility checks.
 
 ## Design
 
-该 harness 用一组标准化 replay operation 驱动不同后端，再读取为统一 Snapshot 比较。归一化时忽略自动生成 event/response ID、后端私有 metadata 和 map/JSON 字段顺序；state、extension、track payload 先按 JSON 解析后重组，浮点 score/duration 保留固定精度。Summary 按 filter-key 分组，严格比较文本、session 归属、boundary version、cutoff 和 last event；last event 会映射为 event#N，避免后端 ID 差异误报。Track 按 track name 分组，比较 event type、关联 invocation、错误和耗时 payload。allowed_diff 只用于声明式能力缺失或容差内浮点指标；summary 丢失、filter-key 错误、覆盖错误和 session 归属错误始终是 blocking diff。后端接入通过公开 session.Service、session.TrackService 和 memory.Service 完成，轻量模式默认 InMemory+SQLite，Redis/Postgres/MySQL/ClickHouse 可用环境变量注册。
+该 harness 用标准 replay operation 驱动多个后端，再读取为统一 Snapshot。归一化会稳定 JSON/map 顺序，隐藏自动 event/response ID 和后端私有 metadata，把 memory id 映射为逻辑 ID；score 与 duration 只允许容差差异。Summary 按 filter-key 比较文本、版本、boundary、更新时间与持久化 session 归属，丢失、错 key、错 owner 或覆盖成旧内容均为 blocking diff。Track 按 track name 保留时间序列、event type、invocation、error 与耗时。后端只需实现 session.Service、可选 session.TrackService 和 memory.Service；轻量模式为 InMemory+JSON，本地/外部集成由环境变量启用。

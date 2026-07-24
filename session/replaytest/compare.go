@@ -23,9 +23,11 @@ func CompareSnapshots(baseline Snapshot, candidate Snapshot) []Diff {
 		baseline:  baseline,
 		candidate: candidate,
 	}
+	cmp.compare("/session_id", baseline.SessionID, candidate.SessionID)
 	cmp.compare("/events", baseline.Events, candidate.Events)
 	cmp.compare("/state", baseline.State, candidate.State)
 	cmp.compare("/memories", baseline.Memories, candidate.Memories)
+	cmp.compare("/memory_searches", baseline.MemorySearches, candidate.MemorySearches)
 	cmp.compare("/summaries", baseline.Summaries, candidate.Summaries)
 	cmp.compare("/tracks", baseline.Tracks, candidate.Tracks)
 	cmp.compareUnsupported()
@@ -57,7 +59,8 @@ func (c *snapshotComparator) compare(path string, a any, b any) {
 		c.compareStruct(path, av, bv)
 	case reflect.Pointer:
 		if av.IsNil() || bv.IsNil() {
-			c.addDiff(path, a, b, false, "")
+			allowed, explanation := allowedScalarDiff(path, a, b)
+			c.addDiff(path, a, b, allowed, explanation)
 			return
 		}
 		c.compare(path, av.Elem().Interface(), bv.Elem().Interface())
@@ -146,6 +149,10 @@ func (c *snapshotComparator) compareStruct(path string, av reflect.Value, bv ref
 }
 
 func (c *snapshotComparator) compareUnsupported() {
+	if c.baseline.Backend == c.candidate.Backend &&
+		reflect.DeepEqual(c.baseline.Unsupported, c.candidate.Unsupported) {
+		return
+	}
 	for _, item := range c.baseline.Unsupported {
 		c.addUnsupported(item, c.baseline.Backend)
 	}
@@ -209,13 +216,31 @@ func (c *snapshotComparator) attachLocator(diff *Diff) {
 				diff.MemoryID = c.candidate.Memories[idx].ID
 			}
 		}
+	case "memory_searches":
+		if len(parts) < 3 {
+			return
+		}
+		query := unescapePath(parts[1])
+		idx, err := strconv.Atoi(parts[2])
+		if err != nil {
+			return
+		}
+		switch {
+		case idx < len(c.baseline.MemorySearches[query]):
+			diff.MemoryID = c.baseline.MemorySearches[query][idx].ID
+		case idx < len(c.candidate.MemorySearches[query]):
+			diff.MemoryID = c.candidate.MemorySearches[query][idx].ID
+		}
 	case "tracks":
 		diff.TrackName = unescapePath(parts[1])
 	}
 }
 
 func allowedScalarDiff(path string, a any, b any) (bool, string) {
-	if strings.Contains(path, "/score") || strings.Contains(path, "/duration_ms") ||
+	if strings.Contains(path, "/score") {
+		return true, "memory similarity scores are backend-specific"
+	}
+	if strings.Contains(path, "/duration_ms") ||
 		strings.Contains(path, "/durationMs") || strings.Contains(path, "/elapsed_ms") {
 		af, aok := asFloat(a)
 		bf, bok := asFloat(b)

@@ -145,8 +145,9 @@ func stateUpdateCase() ReplayCase {
 func memoryCase() ReplayCase {
 	eventTime := baseTime.Add(-24 * time.Hour)
 	return ReplayCase{
-		Name:        "memory_write_read_search",
-		Description: "fact and episodic memory writes with metadata",
+		Name:                "memory_write_read_search",
+		Description:         "fact and episodic memory writes with metadata and search ordering",
+		MemorySearchQueries: []string{"concise answers", "payment webhook timeout", "User"},
 		Operations: []Operation{
 			createSession(nil),
 			addMemory("User prefers concise answers.", []string{"preference"}, &memory.Metadata{Kind: memory.KindFact}),
@@ -236,9 +237,23 @@ func outOfOrderCase() ReplayCase {
 		Operations: []Operation{
 			createSession(nil),
 			appendEvent(messageEvent("evt-interleave-user", 0, "inv-root", "user", model.NewUserMessage("run tools A and B"))),
-			appendEvent(branchEvent("evt-interleave-3", 3, "inv-a", "assistant", model.NewAssistantMessage("tool A started"), "tools/a")),
-			appendEvent(branchEvent("evt-interleave-1", 1, "inv-b", "assistant", model.NewAssistantMessage("tool B started"), "tools/b")),
-			appendEvent(branchEvent("evt-interleave-2", 2, "inv-a", "assistant", model.NewAssistantMessage("tool A finished"), "tools/a")),
+			{
+				Kind: OperationConcurrent,
+				Operations: []Operation{
+					delayedAppendEvent(
+						branchEvent("evt-interleave-3", 3, "inv-a", "assistant", model.NewAssistantMessage("tool A started"), "tools/a"),
+						5,
+					),
+					delayedAppendEvent(
+						branchEvent("evt-interleave-1", 1, "inv-b", "assistant", model.NewAssistantMessage("tool B started"), "tools/b"),
+						15,
+					),
+					delayedAppendEvent(
+						branchEvent("evt-interleave-2", 2, "inv-a", "assistant", model.NewAssistantMessage("tool A finished"), "tools/a"),
+						25,
+					),
+				},
+			},
 			updateState(map[string][]byte{"interleaving": []byte(`{"mode":"append-order"}`)}),
 		},
 	}
@@ -246,11 +261,21 @@ func outOfOrderCase() ReplayCase {
 
 func retryRecoveryCase() ReplayCase {
 	return ReplayCase{
-		Name:        "retry_recovery_idempotence",
-		Description: "duplicate add-memory retry and repeated summary update do not create duplicate logical state",
+		Name:                "retry_recovery_idempotence",
+		Description:         "failed writes, duplicate add-memory retry, and repeated summary update recover cleanly",
+		MemorySearchQueries: []string{"retry-safe writes"},
 		Operations: []Operation{
 			createSession(nil),
 			appendEvent(messageEvent("evt-retry-user", 1, "inv-retry", "user", model.NewUserMessage("remember this preference"))),
+			{
+				Kind: OperationExpectError,
+				Operations: []Operation{
+					updateState(map[string][]byte{
+						session.StateAppPrefix + "dirty": []byte("should-not-persist"),
+					}),
+					appendEvent(nil),
+				},
+			},
 			{
 				Kind:       OperationRetry,
 				RetryCount: 2,
@@ -284,6 +309,12 @@ func updateState(state map[string][]byte) Operation {
 
 func appendEvent(evt *event.Event) Operation {
 	return Operation{Kind: OperationAppendEvent, Event: evt}
+}
+
+func delayedAppendEvent(evt *event.Event, delayMillis int) Operation {
+	op := appendEvent(evt)
+	op.DelayMillis = delayMillis
+	return op
 }
 
 func addMemory(content string, topics []string, metadata *memory.Metadata) Operation {

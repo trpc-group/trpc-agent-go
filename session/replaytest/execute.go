@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -21,6 +22,7 @@ type replayRuntime struct {
 	backend Backend
 	cfg     RunConfig
 	sess    *session.Session
+	mu      sync.Mutex
 }
 
 func executeCase(ctx context.Context, backend Backend, cfg RunConfig, tc ReplayCase) (Snapshot, error) {
@@ -36,7 +38,7 @@ func executeCase(ctx context.Context, backend Backend, cfg RunConfig, tc ReplayC
 			return Snapshot{}, fmt.Errorf("case %s op %d %s: %w", tc.Name, i, tc.Operations[i].Kind, err)
 		}
 	}
-	return Normalize(ctx, backend, cfg, tc.Name, tc.SnapshotEventNum)
+	return Normalize(ctx, backend, cfg, tc)
 }
 
 func (rt *replayRuntime) apply(ctx context.Context, op Operation) error {
@@ -46,6 +48,9 @@ func (rt *replayRuntime) apply(ctx context.Context, op Operation) error {
 	case OperationAppendEvent:
 		if err := rt.ensureSession(ctx); err != nil {
 			return err
+		}
+		if op.Event == nil {
+			return fmt.Errorf("event operation is nil")
 		}
 		return rt.backend.Session.AppendEvent(ctx, rt.sess, op.Event)
 	case OperationUpdateSessionState:
@@ -137,6 +142,13 @@ func (rt *replayRuntime) apply(ctx context.Context, op Operation) error {
 			}
 		}
 		return nil
+	case OperationExpectError:
+		for i := range op.Operations {
+			if err := rt.apply(ctx, op.Operations[i]); err == nil {
+				return fmt.Errorf("expected operation %d to fail", i)
+			}
+		}
+		return rt.refreshSession(ctx)
 	default:
 		return fmt.Errorf("unsupported operation kind %q", op.Kind)
 	}
@@ -156,7 +168,13 @@ func (rt *replayRuntime) applyConcurrent(ctx context.Context, ops []Operation) e
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := rt.apply(ctx, op); err != nil {
+			if op.DelayMillis > 0 {
+				time.Sleep(time.Duration(op.DelayMillis) * time.Millisecond)
+			}
+			rt.mu.Lock()
+			err := rt.apply(ctx, op)
+			rt.mu.Unlock()
+			if err != nil {
 				errCh <- err
 			}
 		}()

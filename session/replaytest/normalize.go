@@ -11,6 +11,7 @@ package replaytest
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -28,13 +29,12 @@ func Normalize(
 	ctx context.Context,
 	backend Backend,
 	cfg RunConfig,
-	caseName string,
-	eventNum int,
+	tc ReplayCase,
 ) (Snapshot, error) {
 	key := session.Key{AppName: cfg.AppName, UserID: cfg.UserID, SessionID: cfg.SessionID}
 	var opts []session.Option
-	if eventNum > 0 {
-		opts = append(opts, session.WithEventNum(eventNum))
+	if tc.SnapshotEventNum > 0 {
+		opts = append(opts, session.WithEventNum(tc.SnapshotEventNum))
 	}
 	sess, err := backend.Session.GetSession(ctx, key, opts...)
 	if err != nil {
@@ -46,12 +46,12 @@ func Normalize(
 
 	idMap := eventIDMap(sess.Events)
 	snap := Snapshot{
-		CaseName:     caseName,
+		CaseName:     tc.Name,
 		Backend:      backend.Name,
-		SessionID:    cfg.SessionID,
+		SessionID:    sess.ID,
 		Events:       normalizeEvents(sess.Events),
 		State:        normalizeState(sess.SnapshotState()),
-		Summaries:    normalizeSummaries(cfg.SessionID, sess.Summaries, idMap),
+		Summaries:    normalizeSummaries(sess.ID, sess.Summaries, idMap, summaryOwners(ctx, backend, key)),
 		Tracks:       normalizeTracks(sess.Tracks),
 		Capabilities: cloneCapabilities(backend.Capabilities),
 		Unsupported:  unsupportedCapabilities(backend),
@@ -67,6 +67,11 @@ func Normalize(
 			return Snapshot{}, err
 		}
 		snap.Memories = normalizeMemories(memories)
+		searches, err := normalizeMemorySearches(ctx, backend.Memory, cfg, tc.MemorySearchQueries)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		snap.MemorySearches = searches
 	}
 	return snap, nil
 }
@@ -215,13 +220,17 @@ func roundFloat(f float64) float64 {
 }
 
 func normalizeMemories(entries []*memory.Entry) []NormalizedMemory {
+	return normalizeMemoryEntries(entries, true)
+}
+
+func normalizeMemoryEntries(entries []*memory.Entry, sortEntries bool) []NormalizedMemory {
 	out := make([]NormalizedMemory, 0, len(entries))
 	for _, entry := range entries {
 		if entry == nil || entry.Memory == nil {
 			continue
 		}
 		mem := NormalizedMemory{
-			ID:       entry.ID,
+			ID:       normalizeMemoryID(entry),
 			Content:  entry.Memory.Memory,
 			Topics:   sortedStrings(entry.Memory.Topics),
 			Metadata: normalizeMemoryMetadata(entry.Memory),
@@ -233,13 +242,56 @@ func normalizeMemories(entries []*memory.Entry) []NormalizedMemory {
 		}
 		out = append(out, mem)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Content == out[j].Content {
-			return out[i].ID < out[j].ID
-		}
-		return out[i].Content < out[j].Content
-	})
+	if sortEntries {
+		sort.SliceStable(out, func(i, j int) bool {
+			if out[i].Content == out[j].Content {
+				return out[i].ID < out[j].ID
+			}
+			return out[i].Content < out[j].Content
+		})
+	}
 	return out
+}
+
+func normalizeMemoryID(entry *memory.Entry) string {
+	if entry == nil || entry.Memory == nil {
+		return ""
+	}
+	canonical := struct {
+		Scope    string                     `json:"scope"`
+		Content  string                     `json:"content"`
+		Topics   []string                   `json:"topics,omitempty"`
+		Metadata map[string]NormalizedValue `json:"metadata,omitempty"`
+	}{
+		Scope:    entry.AppName + "/" + entry.UserID,
+		Content:  entry.Memory.Memory,
+		Topics:   sortedStrings(entry.Memory.Topics),
+		Metadata: normalizeMemoryMetadata(entry.Memory),
+	}
+	raw, _ := json.Marshal(canonical)
+	sum := sha256.Sum256(raw)
+	return fmt.Sprintf("memory#%x", sum[:6])
+}
+
+func normalizeMemorySearches(
+	ctx context.Context,
+	svc memory.Service,
+	cfg RunConfig,
+	queries []string,
+) (map[string][]NormalizedMemory, error) {
+	if len(queries) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]NormalizedMemory, len(queries))
+	userKey := memory.UserKey{AppName: cfg.AppName, UserID: cfg.UserID}
+	for _, query := range queries {
+		entries, err := svc.SearchMemories(ctx, userKey, query)
+		if err != nil {
+			return nil, err
+		}
+		out[query] = normalizeMemoryEntries(entries, false)
+	}
+	return out, nil
 }
 
 func normalizeMemoryMetadata(mem *memory.Memory) map[string]NormalizedValue {
@@ -266,6 +318,7 @@ func normalizeSummaries(
 	sessionID string,
 	summaries map[string]*session.Summary,
 	idMap map[string]string,
+	ownerIDs map[string]string,
 ) map[string]NormalizedSummary {
 	if len(summaries) == 0 {
 		return nil
@@ -275,10 +328,16 @@ func normalizeSummaries(
 		if sum == nil {
 			continue
 		}
+		ownerID := sessionID
+		if ownerIDs != nil {
+			if owner, ok := ownerIDs[filterKey]; ok {
+				ownerID = owner
+			}
+		}
 		normalized := NormalizedSummary{
 			FilterKey: filterKey,
 			Text:      sum.Summary,
-			SessionID: sessionID,
+			SessionID: ownerID,
 			UpdatedAt: normalizeTime(sum.UpdatedAt),
 		}
 		if sum.Boundary != nil {
@@ -299,6 +358,18 @@ func normalizeSummaries(
 	return out
 }
 
+func summaryOwners(ctx context.Context, backend Backend, key session.Key) map[string]string {
+	provider, ok := backend.Session.(SummaryOwnerProvider)
+	if !ok {
+		return nil
+	}
+	owners, err := provider.SummaryOwnerIDs(ctx, key)
+	if err != nil {
+		return nil
+	}
+	return owners
+}
+
 func normalizeTracks(tracks map[session.Track]*session.TrackEvents) map[string][]NormalizedTrack {
 	if len(tracks) == 0 {
 		return nil
@@ -314,6 +385,7 @@ func normalizeTracks(tracks map[session.Track]*session.TrackEvents) map[string][
 			events = append(events, NormalizedTrack{
 				Index:      i,
 				TrackName:  string(track),
+				Timestamp:  normalizeTime(evt.Timestamp),
 				EventType:  payloadString(payload, "event_type"),
 				Invocation: payloadString(payload, "invocation"),
 				Error:      payloadString(payload, "error"),
