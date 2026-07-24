@@ -1,0 +1,12 @@
+diff --git a/service/rows.go b/service/rows.go
+--- a/service/rows.go
++++ b/service/rows.go
+@@ -1,2 +1,10 @@
+ package service
+
++func Query(ctx context.Context, db DB) error {
++	rows, err := db.QueryContext(ctx, "select id from t")
++	if err != nil { return err }
++	for rows.Next() {}
++	return nil
++}

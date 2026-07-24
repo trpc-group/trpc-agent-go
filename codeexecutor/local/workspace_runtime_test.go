@@ -1546,6 +1546,44 @@ func TestRuntime_ExecuteInline_NoBlocks(t *testing.T) {
 	require.Equal(t, "", res.Stderr)
 }
 
+func TestRuntime_RunProgram_MaxOutputBytesBoundsOutput(t *testing.T) {
+	const limit = 64
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(
+		ctx, "rt-max-output", codeexecutor.WorkspacePolicy{},
+	)
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: exe,
+		Args: []string{
+			"-test.run=TestHelperLargeOutputProcess",
+			"--",
+		},
+		Env: map[string]string{
+			"GO_WANT_HELPER_PROCESS": "1",
+		},
+		Timeout:        5 * time.Second,
+		MaxOutputBytes: limit,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 0, res.ExitCode)
+	require.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), limit)
+}
+
+func TestHelperLargeOutputProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_PROCESS") != "1" {
+		return
+	}
+	fmt.Fprint(os.Stdout, strings.Repeat("o", 1024))
+	fmt.Fprint(os.Stderr, strings.Repeat("e", 1024))
+	os.Exit(0)
+}
+
 func TestRuntime_Collect_ReadLimitedLargeFile(t *testing.T) {
 	// Create a file larger than the per-file read limit to ensure
 	// Collect truncates to the internal cap.

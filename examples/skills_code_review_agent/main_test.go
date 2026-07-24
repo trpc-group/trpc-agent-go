@@ -1,0 +1,86 @@
+//
+// Tencent is pleased to support the open source community by making
+// trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestRunCLIReportsSummary(t *testing.T) {
+	outDir := t.TempDir()
+	var out bytes.Buffer
+	err := run([]string{
+		"--fixture", "security_issue",
+		"--dry-run",
+		"--executor", "fake",
+		"--output-dir", outDir,
+		"--db", filepath.Join(outDir, "reviews.sqlite"),
+	}, &out)
+	if err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+	text := out.String()
+	for _, want := range []string{
+		"task_id=review-",
+		"json_report=" + outDir + string(filepath.Separator) + "review-",
+		string(filepath.Separator) + "review_report.json",
+		"markdown_report=" + outDir + string(filepath.Separator) + "review-",
+		string(filepath.Separator) + "review_report.md",
+		"findings=1 warnings=0 needs_human_review=1",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("output missing %q:\n%s", want, text)
+		}
+	}
+	for _, name := range []string{"review_report.json", "review_report.md"} {
+		if _, err := os.Stat(filepath.Join(outDir, name)); err != nil {
+			t.Fatalf("expected latest alias %s: %v", name, err)
+		}
+	}
+}
+
+func TestRunCLIRejectsBadFlag(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"--does-not-exist"}, &out); err == nil {
+		t.Fatal("expected bad flag error")
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no output on flag error, got %q", out.String())
+	}
+}
+
+func TestRunCLIPropagatesCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	outDir := t.TempDir()
+	var out bytes.Buffer
+	err := runWithContext(ctx, []string{
+		"--fixture", "security_issue",
+		"--dry-run",
+		"--executor", "fake",
+		"--output-dir", outDir,
+		"--db", filepath.Join(outDir, "reviews.sqlite"),
+	}, &out)
+	if err == nil {
+		t.Fatal("expected canceled context error")
+	}
+	if !errors.Is(err, context.Canceled) && !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("expected context canceled error, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no success output on canceled context, got %q", out.String())
+	}
+}

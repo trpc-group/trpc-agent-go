@@ -47,6 +47,9 @@ type RunCodeOpts struct {
 	Timeout time.Duration
 	// RequestTimeout is the HTTP-level request timeout.
 	RequestTimeout time.Duration
+	// DiscardLogs prevents stdout/stderr chunks from being retained in the
+	// returned Execution.Logs. Streaming callbacks still receive every chunk.
+	DiscardLogs bool
 }
 
 // CreateCodeContextOpts holds options for Sandbox.CreateCodeContext.
@@ -173,7 +176,9 @@ func parseOutputLine(execution *Execution, line string, opts *RunCodeOpts) error
 		}
 	case "stdout":
 		text := getString(msg, "text")
-		execution.Logs.Stdout = append(execution.Logs.Stdout, text)
+		if !opts.DiscardLogs {
+			execution.Logs.Stdout = append(execution.Logs.Stdout, text)
+		}
 		if opts.OnStdout != nil {
 			opts.OnStdout(OutputMessage{
 				Line:      text,
@@ -183,7 +188,9 @@ func parseOutputLine(execution *Execution, line string, opts *RunCodeOpts) error
 		}
 	case "stderr":
 		text := getString(msg, "text")
-		execution.Logs.Stderr = append(execution.Logs.Stderr, text)
+		if !opts.DiscardLogs {
+			execution.Logs.Stderr = append(execution.Logs.Stderr, text)
+		}
 		if opts.OnStderr != nil {
 			opts.OnStderr(OutputMessage{
 				Line:      text,

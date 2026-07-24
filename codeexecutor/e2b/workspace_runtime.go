@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -42,6 +43,8 @@ var (
 	_ codeexecutor.WorkspaceManager = (*workspaceRuntime)(nil)
 	_ codeexecutor.ProgramRunner    = (*workspaceRuntime)(nil)
 )
+
+var workspaceSequence uint64
 
 const (
 	// Base directory inside the E2B sandbox where per-execution workspaces
@@ -124,7 +127,8 @@ func (r *workspaceRuntime) CreateWorkspace(
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
 	} else {
 		suf := time.Now().UnixNano()
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+		seq := atomic.AddUint64(&workspaceSequence, 1)
+		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d_%d", safe, suf, seq))
 	}
 
 	var sb strings.Builder
@@ -654,10 +658,10 @@ func (r *workspaceRuntime) RunProgram(
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
+	stdout, stderr, exit, err := r.runProgramStreaming(
+		ctx, script, timeout, spec.MaxOutputBytes,
+	)
 	dur := time.Since(start)
-
-	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
 
 	timedOut := false
 	if err != nil {
@@ -742,6 +746,156 @@ func extractBetween(s, begin, end string) string {
 	out := rest[:e]
 	out = strings.TrimRight(out, "\n")
 	return out
+}
+
+func (r *workspaceRuntime) runProgramStreaming(
+	ctx context.Context,
+	script string,
+	timeout time.Duration,
+	maxOutputBytes int,
+) (string, string, int, error) {
+	if r.ce == nil || r.ce.sbx == nil {
+		return "", "", 0, errors.New("e2b: sandbox not initialized")
+	}
+	collector := newRunFrameCollector(maxOutputBytes)
+	opts := &ci.RunCodeOpts{
+		Language:    ci.LanguageBash,
+		Timeout:     timeout,
+		DiscardLogs: true,
+		OnStdout:    func(m ci.OutputMessage) { collector.feedStdout(m.Line) },
+		OnStderr:    func(m ci.OutputMessage) { collector.feedStderr(m.Line) },
+	}
+	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
+	if err != nil {
+		return collector.stdout(), collector.stderr(), -1, err
+	}
+	if exec.Error != nil {
+		return collector.stdout(), collector.stderr(), -1, fmt.Errorf(
+			"bash error: %s: %s", exec.Error.Name, exec.Error.Value,
+		)
+	}
+	return collector.stdout(), collector.stderr(), collector.exitCode(), nil
+}
+
+type runFrameCollector struct {
+	stdoutW *codeexecutor.LimitedOutputWriter
+	stderrW *codeexecutor.LimitedOutputWriter
+
+	stdoutState frameState
+	stderrState frameState
+	exit        int
+}
+
+type frameState int
+
+const (
+	frameBefore frameState = iota
+	frameInside
+	frameAfter
+)
+
+func newRunFrameCollector(maxOutputBytes int) *runFrameCollector {
+	limiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
+	return &runFrameCollector{
+		stdoutW: limiter.NewWriter(),
+		stderrW: limiter.NewWriter(),
+	}
+}
+
+func (c *runFrameCollector) feedStdout(chunk string) {
+	c.feedLines(chunk, func(line string) {
+		switch c.stdoutState {
+		case frameBefore:
+			if idx := strings.Index(line, sentinelStdoutBegin); idx >= 0 {
+				c.stdoutState = frameInside
+				tail := strings.TrimPrefix(
+					line[idx+len(sentinelStdoutBegin):], "\n",
+				)
+				if tail != "" {
+					c.feedStdout(tail)
+				}
+			}
+		case frameInside:
+			if idx := strings.Index(line, sentinelStdoutEnd); idx >= 0 {
+				if idx > 0 {
+					_, _ = c.stdoutW.Write([]byte(line[:idx]))
+				}
+				c.stdoutState = frameAfter
+				tail := line[idx+len(sentinelStdoutEnd):]
+				if tail != "" {
+					c.feedStdout(tail)
+				}
+				return
+			}
+			_, _ = c.stdoutW.Write([]byte(line))
+		case frameAfter:
+			if idx := strings.LastIndex(line, sentinelExitPrefix); idx >= 0 {
+				rest := line[idx+len(sentinelExitPrefix):]
+				if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+					rest = rest[:nl]
+				}
+				rest = strings.TrimSpace(rest)
+				if v, err := strconv.Atoi(rest); err == nil {
+					c.exit = v
+				}
+			}
+		}
+	})
+}
+
+func (c *runFrameCollector) feedStderr(chunk string) {
+	c.feedLines(chunk, func(line string) {
+		switch c.stderrState {
+		case frameBefore:
+			if idx := strings.Index(line, sentinelStderrBegin); idx >= 0 {
+				c.stderrState = frameInside
+				tail := strings.TrimPrefix(
+					line[idx+len(sentinelStderrBegin):], "\n",
+				)
+				if tail != "" {
+					c.feedStderr(tail)
+				}
+			}
+		case frameInside:
+			if idx := strings.Index(line, sentinelStderrEnd); idx >= 0 {
+				if idx > 0 {
+					_, _ = c.stderrW.Write([]byte(line[:idx]))
+				}
+				c.stderrState = frameAfter
+				tail := line[idx+len(sentinelStderrEnd):]
+				if tail != "" {
+					c.feedStderr(tail)
+				}
+				return
+			}
+			_, _ = c.stderrW.Write([]byte(line))
+		}
+	})
+}
+
+func (c *runFrameCollector) feedLines(chunk string, feed func(string)) {
+	for chunk != "" {
+		line := chunk
+		if idx := strings.IndexByte(chunk, '\n'); idx >= 0 {
+			line = chunk[:idx+1]
+			chunk = chunk[idx+1:]
+		} else {
+			chunk = ""
+		}
+		feed(line)
+	}
+}
+
+func (c *runFrameCollector) stdout() string {
+	return strings.TrimRight(c.stdoutW.String(), "\n")
+}
+
+func (c *runFrameCollector) stderr() string {
+	return strings.TrimRight(c.stderrW.String(), "\n")
+}
+
+func (c *runFrameCollector) exitCode() int {
+	return c.exit
 }
 
 // ExecuteInline writes each code block into the sandbox workspace and runs
@@ -830,23 +984,26 @@ func (r *workspaceRuntime) runBashStreaming(
 	if r.ce == nil || r.ce.sbx == nil {
 		return "", "", 0, errors.New("e2b: sandbox not initialized")
 	}
-	var stdoutB, stderrB strings.Builder
+	limiter := codeexecutor.NewOutputLimiter(maxReadSizeBytes)
+	stdout := limiter.NewWriter()
+	stderr := limiter.NewWriter()
 	opts := &ci.RunCodeOpts{
-		Language: ci.LanguageBash,
-		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
-		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
+		Language:    ci.LanguageBash,
+		Timeout:     timeout,
+		DiscardLogs: true,
+		OnStdout:    func(m ci.OutputMessage) { _, _ = stdout.Write([]byte(m.Line)) },
+		OnStderr:    func(m ci.OutputMessage) { _, _ = stderr.Write([]byte(m.Line)) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {
-		return stdoutB.String(), stderrB.String(), -1, err
+		return stdout.String(), stderr.String(), -1, err
 	}
 	if exec.Error != nil {
-		return stdoutB.String(), stderrB.String(), -1, fmt.Errorf(
+		return stdout.String(), stderr.String(), -1, fmt.Errorf(
 			"bash error: %s: %s", exec.Error.Name, exec.Error.Value,
 		)
 	}
-	return stdoutB.String(), stderrB.String(), 0, nil
+	return stdout.String(), stderr.String(), 0, nil
 }
 
 func isTimeoutErr(err error) bool {

@@ -1,0 +1,11 @@
+fixture	findings	warnings	needs_human_review	sandbox_runs	permission_decisions	permission_needs_human_review	status
+no_issue	0	0	0	2	1	0	completed
+security_issue	1	0	1	2	1	0	completed
+goroutine_context_leak	1	0	1	2	1	0	completed
+resource_not_closed	1	0	2	2	1	0	completed
+db_lifecycle	1	0	2	2	1	0	completed
+missing_test	0	0	1	2	1	0	completed
+duplicate_finding	2	0	1	2	1	0	completed
+sandbox_failure	1	0	1	1	1	0	completed
+sensitive_redaction	2	0	1	2	1	0	completed
+advanced_risks	6	0	4	2	1	0	completed

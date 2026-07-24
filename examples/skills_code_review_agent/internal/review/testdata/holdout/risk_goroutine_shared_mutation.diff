@@ -1,0 +1,11 @@
+diff --git a/service/cache.go b/service/cache.go
+--- a/service/cache.go
++++ b/service/cache.go
+@@ -1,2 +1,9 @@
+ package service
+
++func Cache(m map[string]string, k string, v string) {
++	go func() {
++		m[k] = v
++	}()
++}

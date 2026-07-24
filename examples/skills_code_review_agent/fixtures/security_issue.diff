@@ -1,0 +1,11 @@
+diff --git a/service/config.go b/service/config.go
+index 1111111..2222222 100644
+--- a/service/config.go
++++ b/service/config.go
+@@ -2,5 +2,7 @@ package service
+
+ type Config struct {
+     Name string
+ }
++
++const apiKey = "sk-1234567890abcdefghijklmnop"

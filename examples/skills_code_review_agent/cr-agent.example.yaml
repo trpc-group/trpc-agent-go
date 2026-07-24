@@ -1,0 +1,26 @@
+# Example config for cmd/review-agent.
+input:
+  fixture: security_issue
+
+output:
+  dir: output/config-demo
+  sqlite: output/config-demo/reviews.sqlite
+
+sandbox:
+  executor: fake
+  # Use container for production-like runs.
+  # executor: container
+  container_base_image: docker.m.daocloud.io/library/golang:1.23-bookworm
+  install_staticcheck: true
+  allow_local_fallback: false
+  timeout: 30s
+  output_limit_bytes: 65536
+
+model:
+  # Supported providers: fake, openai, openai-compatible, http, deepseek.
+  # The default example stays rule-only so it runs without an API key.
+  rule_only: true
+  provider: fake
+  name: gpt-4o-mini
+  # For OpenAI-compatible providers:
+  # base_url: https://api.example.com/v1

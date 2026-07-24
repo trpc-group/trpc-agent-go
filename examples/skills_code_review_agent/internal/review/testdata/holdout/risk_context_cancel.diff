@@ -1,0 +1,11 @@
+diff --git a/service/context.go b/service/context.go
+--- a/service/context.go
++++ b/service/context.go
+@@ -1,2 +1,8 @@
+ package service
+
++func Fetch(ctx context.Context) error {
++	ctx, _ = context.WithTimeout(ctx, time.Second)
++	_ = ctx
++	return nil
++}

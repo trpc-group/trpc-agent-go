@@ -1,0 +1,43 @@
+diff --git a/service/advanced.go b/service/advanced.go
+--- a/service/advanced.go
++++ b/service/advanced.go
+@@ -1,3 +1,39 @@
+ package service
+
++func Fetch(client *http.Client, req *http.Request) error {
++    resp, err := client.Do(req)
++    if err != nil {
++        return err
++    }
++    _ = resp.StatusCode
++    return nil
++}
++
++func Rows(ctx context.Context, db DB) error {
++    rows, err := db.QueryContext(ctx, "SELECT id FROM users")
++    if err != nil {
++        return err
++    }
++    for rows.Next() {
++    }
++    return nil
++}
++
++func Search(ctx context.Context, db DB, table string) {
++    query := "SELECT id FROM " + table
++    db.QueryContext(ctx, query)
++}
++
++func Cache(cache map[string]string, id string, value string) {
++    go func() {
++        cache[id] = value
++    }()
++}
++
++func Background() {
++    _ = context.Background()
++}
++
++func Token() string {
++    return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.sflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
++}

@@ -1,0 +1,17 @@
+diff --git a/service/mutex.go b/service/mutex.go
+--- a/service/mutex.go
++++ b/service/mutex.go
+@@ -1,2 +1,7 @@
+ package service
+
++func Locked(mu sync.Mutex) {
++	mu.Lock()
++	defer mu.Unlock()
++}
+diff --git a/service/mutex_test.go b/service/mutex_test.go
+--- a/service/mutex_test.go
++++ b/service/mutex_test.go
+@@ -1,2 +1,5 @@
+ package service
+
++func TestLocked(t *testing.T) {}

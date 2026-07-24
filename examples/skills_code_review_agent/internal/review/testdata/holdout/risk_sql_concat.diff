@@ -1,0 +1,10 @@
+diff --git a/service/search.go b/service/search.go
+--- a/service/search.go
++++ b/service/search.go
+@@ -1,2 +1,7 @@
+ package service
+
++func Search(ctx context.Context, db DB, table string) {
++	query := "select id from " + table
++	db.QueryContext(ctx, query)
++}
