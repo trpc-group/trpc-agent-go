@@ -19,8 +19,6 @@ import (
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
-	operatorregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/registry"
-	llmtemplate "trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/template"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/registry"
 	metricregistry "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/registry"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/usersimulation"
@@ -43,7 +41,6 @@ type Options struct {
 	EvalCaseParallelism               int                              // EvalCaseParallelism controls concurrent eval case processing.
 	EvalCaseParallelInferenceEnabled  bool                             // EvalCaseParallelInferenceEnabled toggles parallel inference across eval cases.
 	EvalCaseParallelEvaluationEnabled bool                             // EvalCaseParallelEvaluationEnabled toggles parallel evaluation across eval cases.
-	llmOperatorRegistry               operatorregistry.Registry
 }
 
 // Option defines a function type for configuring the evaluation service.
@@ -67,7 +64,6 @@ func NewOptions(opt ...Option) *Options {
 	for _, o := range opt {
 		o(opts)
 	}
-	configureLLMOperatorRegistry(opts.Registry, opts.llmOperatorRegistry)
 	return opts
 }
 
@@ -92,24 +88,7 @@ func WithEvalResultManager(m evalresult.Manager) Option {
 func WithRegistry(r registry.Registry) Option {
 	return func(o *Options) {
 		o.Registry = r
-		configureLLMOperatorRegistry(o.Registry, o.llmOperatorRegistry)
 	}
-}
-
-// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
-func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
-	return func(o *Options) {
-		o.llmOperatorRegistry = r
-		configureLLMOperatorRegistry(o.Registry, o.llmOperatorRegistry)
-	}
-}
-
-func configureLLMOperatorRegistry(r registry.Registry, opRegistry operatorregistry.Registry) {
-	if r == nil || opRegistry == nil {
-		return
-	}
-	templateEvaluator := llmtemplate.New(llmtemplate.WithOperatorRegistry(opRegistry))
-	_ = r.Register(llmtemplate.EvaluatorName, templateEvaluator)
 }
 
 // WithMetricRegistry sets the metric runtime registry.

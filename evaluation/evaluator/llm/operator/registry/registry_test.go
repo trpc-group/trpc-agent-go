@@ -25,18 +25,60 @@ import (
 
 func TestRegistryResolveReturnsBuiltins(t *testing.T) {
 	registry := New()
-	operators, err := registry.Resolve(buildTemplateMetric(ResponseScorerSingleScoreName, "", ""))
-	require.NoError(t, err)
-	assert.NotNil(t, operators.ResponseScorer)
-	assert.NotNil(t, operators.SamplesAggregator)
-	assert.NotNil(t, operators.InvocationsAggregator)
-	operators, err = registry.Resolve(buildTemplateMetric(ResponseScorerBooleanName, "", ""))
-	require.NoError(t, err)
-	require.NotNil(t, operators.StructuredOutputProvider)
-	output, err := operators.StructuredOutputProvider.StructuredOutput(context.Background(), nil, nil, nil)
-	require.NoError(t, err)
-	require.NotNil(t, output)
-	assert.Equal(t, "boolean_result", output.JSONSchema.Name)
+	tests := []struct {
+		name       string
+		scorerName string
+		schemaName string
+		configure  func(*metric.EvalMetric)
+	}{
+		{
+			name:       "single score",
+			scorerName: ResponseScorerSingleScoreName,
+			schemaName: "single_score_result",
+		},
+		{
+			name:       "rubric scores",
+			scorerName: ResponseScorerRubricScoresName,
+			schemaName: "rubric_scores_result",
+		},
+		{
+			name:       "boolean",
+			scorerName: ResponseScorerBooleanName,
+			schemaName: "boolean_result",
+		},
+		{
+			name:       "categorical",
+			scorerName: ResponseScorerCategoricalName,
+			schemaName: "categorical_result",
+			configure: func(evalMetric *metric.EvalMetric) {
+				evalMetric.Criterion.LLMJudge.Template.ResponseScorerOptions = &criterionllm.ResponseScorerOptions{
+					Categories: []*criterionllm.CategoryScore{
+						{Label: "correct", Score: 1},
+						{Label: "incorrect", Score: 0},
+					},
+				}
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			evalMetric := buildTemplateMetric(tc.scorerName, "", "")
+			if tc.configure != nil {
+				tc.configure(evalMetric)
+			}
+			operators, err := registry.Resolve(evalMetric)
+			require.NoError(t, err)
+			assert.NotNil(t, operators.ResponseScorer)
+			assert.NotNil(t, operators.SamplesAggregator)
+			assert.NotNil(t, operators.InvocationsAggregator)
+			require.NotNil(t, operators.StructuredOutputProvider)
+			output, err := operators.StructuredOutputProvider.StructuredOutput(context.Background(), nil, nil, evalMetric)
+			require.NoError(t, err)
+			require.NotNil(t, output)
+			require.NotNil(t, output.JSONSchema)
+			assert.Equal(t, tc.schemaName, output.JSONSchema.Name)
+		})
+	}
 }
 
 func TestRegistryResolveUsesCustomResponseScorer(t *testing.T) {

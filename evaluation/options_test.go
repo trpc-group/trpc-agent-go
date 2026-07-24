@@ -195,6 +195,26 @@ func TestWithLLMOperatorRegistryComposesWithCustomRegistry(t *testing.T) {
 	}
 }
 
+func TestMergeCallOptionsRejectsLLMOperatorRegistry(t *testing.T) {
+	baseRegistry := registry.New()
+	operatorRegistry := operatorregistry.New()
+	err := operatorRegistry.RegisterResponseScorer("evaluation_score", evaluationTemplateScorer{})
+	assert.NoError(t, err)
+	a := &agentEvaluator{
+		evalSetManager:    evalsetinmemory.New(),
+		evalResultManager: evalresultinmemory.New(),
+		metricManager:     metricinmemory.New(),
+		registry:          baseRegistry,
+		metricRegistry:    metricregistry.New(),
+		evalService:       stubService{},
+		numRuns:           defaultNumRuns,
+	}
+	opts, err := a.mergeCallOptions(WithLLMOperatorRegistry(operatorRegistry))
+	assert.ErrorContains(t, err, "llm operator registry can only be set when creating evaluator")
+	assert.Nil(t, opts)
+	assertEvaluationTemplateScorerUnsupported(t, baseRegistry, "evaluation_score")
+}
+
 func assertEvaluationTemplateScorer(t *testing.T, r registry.Registry, responseScorerName string, wantScore float64) {
 	t.Helper()
 	templateEval, err := r.Get(llmtemplate.EvaluatorName)
@@ -207,6 +227,20 @@ func assertEvaluationTemplateScorer(t *testing.T, r registry.Registry, responseS
 		evaluationTemplateMetric(responseScorerName))
 	assert.NoError(t, err)
 	assert.Equal(t, wantScore, result.Score)
+}
+
+func assertEvaluationTemplateScorerUnsupported(t *testing.T, r registry.Registry, responseScorerName string) {
+	t.Helper()
+	templateEval, err := r.Get(llmtemplate.EvaluatorName)
+	assert.NoError(t, err)
+	scorer, ok := templateEval.(interface {
+		ScoreBasedOnResponse(context.Context, *model.Response, *metric.EvalMetric) (*evaluator.ScoreResult, error)
+	})
+	assert.True(t, ok)
+	result, err := scorer.ScoreBasedOnResponse(context.Background(), &model.Response{},
+		evaluationTemplateMetric(responseScorerName))
+	assert.ErrorContains(t, err, "unsupported response scorer")
+	assert.Nil(t, result)
 }
 
 func TestWithMetricRegistry(t *testing.T) {

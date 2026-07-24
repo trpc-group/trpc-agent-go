@@ -2514,7 +2514,7 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 - `boolean`：裁判返回 `passed` 与 `reason`
 - `categorical`：裁判返回 `category` 与 `reason`；需要通过 `responseScorerOptions.categories` 将标签映射为数值分数
 
-平台可以注册自定义模板 operator，并通过 evaluation options 注入。自定义结构化输出器是可选的；当需要用平台自己的 JSON schema 约束裁判模型输出时再注册。注册进去的 operator 是共享实例，可能会被并发调用。
+平台可以注册自定义模板 operator，并在创建 evaluator 时注入。自定义结构化输出器是可选的；当需要用平台自己的 JSON schema 约束裁判模型输出时再注册。
 
 ```go
 opRegistry := operatorregistry.New()

@@ -57,15 +57,21 @@ type Registry interface {
 	// RegisterInvocationsAggregator registers a named invocations aggregator.
 	RegisterInvocationsAggregator(name string, aggregator invocationsaggregator.InvocationsAggregator) error
 	// Resolve resolves runtime operators for template evaluation.
+	// It returns an error when the template metric is invalid or a named operator is not registered.
 	Resolve(evalMetric *metric.EvalMetric) (*ResolvedOperators, error)
 }
 
 // ResolvedOperators contains operators resolved from a template metric for framework use.
 type ResolvedOperators struct {
-	ResponseScorer           responsescorer.ResponseScorer
+	// ResponseScorer is always non-nil when Resolve succeeds.
+	ResponseScorer responsescorer.ResponseScorer
+	// StructuredOutputProvider is nil when the selected scorer has no default structured output and no explicit
+	// structured output name is configured.
 	StructuredOutputProvider messagesconstructor.StructuredOutputProvider
-	SamplesAggregator        samplesaggregator.SamplesAggregator
-	InvocationsAggregator    invocationsaggregator.InvocationsAggregator
+	// SamplesAggregator is always non-nil when Resolve succeeds and defaults to majority_vote when omitted.
+	SamplesAggregator samplesaggregator.SamplesAggregator
+	// InvocationsAggregator is always non-nil when Resolve succeeds and defaults to average when omitted.
+	InvocationsAggregator invocationsaggregator.InvocationsAggregator
 }
 
 type registry struct {
@@ -145,6 +151,7 @@ func (r *registry) RegisterInvocationsAggregator(name string, aggregator invocat
 }
 
 // Resolve resolves runtime operators for template evaluation.
+// It returns an error when the template metric is invalid or a named operator is not registered.
 func (r *registry) Resolve(evalMetric *metric.EvalMetric) (*ResolvedOperators, error) {
 	templateOptions, err := judgeTemplateOptions(evalMetric)
 	if err != nil {

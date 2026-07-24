@@ -105,15 +105,14 @@ func WithMetricManager(m metric.Manager) Option {
 func WithRegistry(r registry.Registry) Option {
 	return func(o *options) {
 		o.registry = r
-		configureLLMOperatorRegistry(o.registry, o.llmOperatorRegistry)
 	}
 }
 
-// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator.
+// WithLLMOperatorRegistry sets the operator registry used by the default template LLM evaluator
+// when creating an AgentEvaluator.
 func WithLLMOperatorRegistry(r operatorregistry.Registry) Option {
 	return func(o *options) {
 		o.llmOperatorRegistry = r
-		configureLLMOperatorRegistry(o.registry, o.llmOperatorRegistry)
 	}
 }
 

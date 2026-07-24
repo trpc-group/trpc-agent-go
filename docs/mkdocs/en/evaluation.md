@@ -2517,7 +2517,7 @@ The template evaluator currently provides four built-in response parsing modes:
 - `boolean`: the judge returns `passed` and `reason`
 - `categorical`: the judge returns `category` and `reason`; configure `responseScorerOptions.categories` to map labels to numeric scores
 
-Platforms can register custom template operators and inject them through evaluation options. A custom structured output provider is optional; register it when the judge model should be constrained to a platform-owned JSON schema. The registered operator instances are shared and may be called concurrently.
+Platforms can register custom template operators and inject them when creating the evaluator. A custom structured output provider is optional; register it when the judge model should be constrained to a platform-owned JSON schema.
 
 ```go
 opRegistry := operatorregistry.New()

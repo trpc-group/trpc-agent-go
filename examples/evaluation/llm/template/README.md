@@ -53,7 +53,7 @@ The metrics use:
 - `template.responseScorerName: "single_score"` for one metric
 - `template.responseScorerName: "rubric_scores"` for the other metric
 
-Other template metrics can use the built-in `boolean` and `categorical` scorers, or platform-registered response scorers and structured output providers through `evaluation.WithLLMOperatorRegistry`.
+Other template metrics can use the built-in `boolean` and `categorical` scorers, or response scorers and structured output providers registered through `evaluation.WithLLMOperatorRegistry` when creating the evaluator.
 
 ## Output
 
