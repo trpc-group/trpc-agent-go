@@ -269,8 +269,26 @@ func TestRunReplayConsistencyWritesActionFailureReport(t *testing.T) {
 	require.Len(t, result.Report.Cases, 1)
 	require.Len(t, result.Report.Cases[0].Runs, 1)
 	require.Contains(t, result.Report.Cases[0].Runs[0].Error, "injected failure before write")
+
 	require.Len(t, result.Report.Cases[0].Runs[0].ActionResults, 2)
-	require.False(t, result.Report.Cases[0].Runs[0].ActionResults[1].Success)
+
+	run := result.Report.Cases[0].Runs[0]
+	createSessionAction := run.ActionResults[0]
+	require.Equal(t, 0, createSessionAction.Index)
+	require.Equal(t, ActionCreateSession, createSessionAction.Action)
+	require.True(t, createSessionAction.Success)
+	require.Empty(t, createSessionAction.Error)
+
+	// The injected pre-write failure must belong to append_event.
+	injectedAction := run.ActionResults[1]
+	require.Equal(t, 1, injectedAction.Index)
+	require.Equal(t, ActionAppendEvent, injectedAction.Action)
+	require.False(t, injectedAction.Success)
+	require.Contains(
+		t,
+		injectedAction.Error,
+		"injected failure before write",
+	)
 
 	raw, readErr := os.ReadFile(reportPath)
 	require.NoError(t, readErr)
