@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -74,9 +75,33 @@ func TestAuditWriter_FilePermissions(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, w.Append(AuditEvent{ScanID: "x", ToolName: "t"}))
 	require.NoError(t, w.Close())
+	if runtime.GOOS == "windows" {
+		return
+	}
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestAuditWriter_RejectsSymlinkPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges")
+	}
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target")
+	require.NoError(t, os.WriteFile(target, []byte("safe"), 0o600))
+	link := filepath.Join(dir, "audit.jsonl")
+	require.NoError(t, os.Symlink(target, link))
+	_, err := NewAuditWriter(link, true, true)
+	require.Error(t, err)
+	require.Equal(t, "safe", string(requireFile(t, target)))
+}
+
+func requireFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
 }
 
 func TestAuditWriter_RequiredFailureSurfacesError(t *testing.T) {
@@ -153,4 +178,47 @@ func TestAuditWriter_AppendAfterClose(t *testing.T) {
 	require.NoError(t, w2.Close())
 	require.NoError(t, w2.Append(AuditEvent{}))
 	require.Empty(t, buf.String())
+}
+
+func TestAuditWriter_StructuredRedactionKeepsValidJSON(t *testing.T) {
+	buf := new(bytes.Buffer)
+	w := NewAuditWriterFrom(buf, true, true)
+	require.NoError(t, w.Append(AuditEvent{
+		ToolName: "password: hunter2xyz",
+		RuleIDs:  []string{"AKIAIOSFODNN7EXAMPLE"},
+	}))
+	line := strings.TrimSpace(buf.String())
+	var event AuditEvent
+	require.NoError(t, json.Unmarshal([]byte(line), &event))
+	require.True(t, event.Redacted)
+	require.NotContains(t, line, "hunter2xyz")
+	require.NotContains(t, line, "AKIAIOSFODNN7EXAMPLE")
+}
+
+func TestAuditWriter_NilInjectedWriterFailsWithoutPanic(t *testing.T) {
+	required := NewAuditWriterFrom(nil, true, true)
+	require.Error(t, required.Append(AuditEvent{}))
+	require.Error(t, required.Close())
+
+	optional := NewAuditWriterFrom(nil, false, true)
+	require.NoError(t, optional.Append(AuditEvent{}))
+	require.NoError(t, optional.Close())
+}
+
+type syncingBuffer struct {
+	bytes.Buffer
+	syncs int
+	err   error
+}
+
+func (b *syncingBuffer) Sync() error {
+	b.syncs++
+	return b.err
+}
+
+func TestAuditWriter_RequiredAppendSyncs(t *testing.T) {
+	buf := &syncingBuffer{}
+	w := NewAuditWriterFrom(buf, true, true)
+	require.NoError(t, w.Append(AuditEvent{ToolName: "tool"}))
+	require.Equal(t, 1, buf.syncs)
 }

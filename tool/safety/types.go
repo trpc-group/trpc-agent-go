@@ -27,6 +27,9 @@ const (
 	DecisionDeny Decision = "deny"
 	// DecisionAsk pauses execution pending human review.
 	DecisionAsk Decision = "ask"
+	// DecisionInherit delegates the finding decision to the configured
+	// risk-level threshold.
+	DecisionInherit Decision = "inherit"
 	// DecisionNeedsHumanReview is the alias accepted in policy files.
 	DecisionNeedsHumanReview Decision = "needs_human_review"
 )
@@ -69,8 +72,8 @@ type CodeBlock struct {
 }
 
 // ScanInput is the data the scanner inspects. Callers may populate it
-// directly or via Guard.CheckToolPermission, which decodes the
-// tool.PermissionRequest arguments through a registered ToolProfile.
+// directly or through WrapTool, which decodes tool arguments through a
+// registered ToolProfile.
 //
 // Command is always a truncated/redacted summary in the resulting report;
 // the original is never persisted.
@@ -111,7 +114,7 @@ type ScanInput struct {
 }
 
 // ToolMetadata mirrors the tool's published metadata. It is populated
-// by Guard.CheckToolPermission from tool.PermissionRequest.Metadata.
+// by the callable wrapper from tool.PermissionRequest.Metadata.
 type ToolMetadata struct {
 	// ReadOnly reports that the tool does not intentionally mutate
 	// external state.

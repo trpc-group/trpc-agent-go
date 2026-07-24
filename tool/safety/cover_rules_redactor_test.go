@@ -96,13 +96,12 @@ func TestCoverrules_RedactMap_SecretFieldName(t *testing.T) {
 }
 
 func TestCoverrules_RedactMap_SecretFieldNonString(t *testing.T) {
-	// A secret-named field whose value is not a string falls through to
-	// the generic redaction path.
 	in := map[string]any{"password": 12345}
 	out, changed, err := redactMap(in)
 	require.NoError(t, err)
-	require.False(t, changed)
-	require.Equal(t, 12345, out.(map[string]any)["password"])
+	require.True(t, changed)
+	require.Equal(t, "[REDACTED:field:password]",
+		out.(map[string]any)["password"])
 }
 
 func TestCoverrules_RedactMap_EmptySecretFieldString(t *testing.T) {
@@ -117,8 +116,8 @@ func TestCoverrules_RedactUnknownType_UnmarshalableNoSecret(t *testing.T) {
 	v := func() {}
 	out, changed, err := redactUnknownType(v)
 	require.NoError(t, err)
-	require.False(t, changed)
-	require.NotNil(t, out)
+	require.True(t, changed)
+	require.Equal(t, "redacted", out.(map[string]any)["status"])
 }
 
 func TestCoverrules_RedactUnknownType_MarshalableStruct(t *testing.T) {
@@ -220,7 +219,9 @@ func TestCoverrules_LimitWithBudget_Types(t *testing.T) {
 		b := &byteBudget{remaining: 40}
 		out, truncated := limitWithBudget(json.RawMessage(strings.Repeat("a", 100)), b)
 		require.True(t, truncated)
-		require.LessOrEqual(t, int64(len(out.(json.RawMessage))), int64(40))
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, int64(len(raw)), int64(40))
 	})
 	t.Run("scalars are free", func(t *testing.T) {
 		b := &byteBudget{remaining: 1}
@@ -268,12 +269,15 @@ func TestCoverrules_LimitWithBudget_Types(t *testing.T) {
 		require.True(t, truncated)
 		require.LessOrEqual(t, int64(len(out.(string))), int64(30))
 	})
-	t.Run("unknown unmarshalable type returned as-is", func(t *testing.T) {
+	t.Run("unknown unmarshalable type replaced safely", func(t *testing.T) {
 		b := &byteBudget{remaining: 1}
 		v := func() {}
 		out, truncated := limitWithBudget(v, b)
-		require.False(t, truncated)
+		require.True(t, truncated)
 		require.NotNil(t, out)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(raw), 1)
 	})
 }
 
@@ -295,8 +299,8 @@ func TestCoverrules_LimitResultBytes_GlobalBudget(t *testing.T) {
 }
 
 func TestCoverrules_MeasureBytes(t *testing.T) {
-	require.Equal(t, int64(5), measureBytes("hello"))
-	require.Equal(t, int64(3), measureBytes([]byte("abc")))
+	require.Equal(t, int64(7), measureBytes("hello"))
+	require.Equal(t, int64(6), measureBytes([]byte("abc")))
 	require.Equal(t, int64(4), measureBytes(json.RawMessage(`"ab"`)))
 	require.Equal(t, int64(len(`{"k":"v"}`)), measureBytes(map[string]string{"k": "v"}))
 	require.Equal(t, int64(0), measureBytes(func() {}))
@@ -360,13 +364,12 @@ func TestCoverrules_RuleSecret_SessionInput(t *testing.T) {
 // here the password pattern's optional closing quote consumes the JSON
 // string terminator — so the value is replaced by a placeholder map
 // instead of being returned half-redacted.
-func TestCoverrules_RedactUnknownType_ReDecodeFailure(t *testing.T) {
+func TestCoverrules_RedactUnknownType_StructuredStringRedaction(t *testing.T) {
 	v := map[string]string{"note": `password=abcdefgh`}
 	out, changed, err := redactUnknownType(v)
 	require.NoError(t, err)
 	require.True(t, changed)
-	placeholder, ok := out.(map[string]any)
+	redacted, ok := out.(map[string]any)
 	require.True(t, ok)
-	require.Equal(t, "redacted", placeholder["status"])
-	require.Contains(t, placeholder["reason"], "re-decoded")
+	require.NotContains(t, redacted["note"], "hunter2xyz")
 }

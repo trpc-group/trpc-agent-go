@@ -10,7 +10,9 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"mime"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -33,6 +35,7 @@ func redactArtifact(in *artifact.Artifact) (*artifact.Artifact, bool, error) {
 	}
 	changed := false
 	clone := *in
+	clone.Data = append([]byte(nil), in.Data...)
 
 	// Redact Name and URL regardless of MIME type.
 	if nameRedacted, c := redactString(clone.Name); c {
@@ -45,16 +48,28 @@ func redactArtifact(in *artifact.Artifact) (*artifact.Artifact, bool, error) {
 	}
 
 	if isTextMIME(clone.MimeType) {
-		out, c := redactString(string(clone.Data))
-		if c {
-			clone.Data = []byte(out)
-			changed = true
+		if isJSONMIME(clone.MimeType) {
+			out, c, err := redactJSONArtifact(clone.Data)
+			if err != nil {
+				return nil, false, err
+			}
+			if c {
+				clone.Data = out
+				changed = true
+			}
+		} else {
+			out, c := redactString(string(clone.Data))
+			if c {
+				clone.Data = []byte(out)
+				changed = true
+			}
 		}
 		if !changed {
-			return in, false, nil
+			return &clone, false, nil
 		}
 		return &clone, true, nil
 	}
+
 	// Binary: check Data for secrets. Also check Name/URL which were
 	// already redacted above.
 	if hasSecret(string(clone.Data)) {
@@ -62,15 +77,44 @@ func redactArtifact(in *artifact.Artifact) (*artifact.Artifact, bool, error) {
 			"binary artifact contains a secret in its data; refusing to persist or return it")
 	}
 	if !changed {
-		return in, false, nil
+		return &clone, false, nil
 	}
 	return &clone, true, nil
+}
+
+func isJSONMIME(mime string) bool {
+	low := normalizedMediaType(mime)
+	return low == "application/json" || low == "application/x-json" ||
+		strings.HasSuffix(low, "+json")
+}
+
+func redactJSONArtifact(data []byte) ([]byte, bool, error) {
+	decoded, err := decodeJSONValue(data)
+	if err != nil {
+		return nil, false, errors.New(
+			"json artifact could not be decoded safely",
+		)
+	}
+	safe, changed, err := redactValue(decoded)
+	if err != nil {
+		return nil, false, err
+	}
+	if !changed {
+		return data, false, nil
+	}
+	raw, err := json.Marshal(safe)
+	if err != nil {
+		return nil, false, errors.New(
+			"redacted json artifact could not be encoded safely",
+		)
+	}
+	return raw, true, nil
 }
 
 // isTextMIME returns true for MIME types whose contents can be safely
 // redacted as UTF-8 text.
 func isTextMIME(mime string) bool {
-	low := strings.ToLower(strings.TrimSpace(mime))
+	low := normalizedMediaType(mime)
 	if low == "" {
 		return false
 	}
@@ -88,6 +132,14 @@ func isTextMIME(mime string) bool {
 		return true
 	}
 	return false
+}
+
+func normalizedMediaType(value string) string {
+	mediaType, _, err := mime.ParseMediaType(value)
+	if err != nil {
+		mediaType = strings.TrimSpace(strings.SplitN(value, ";", 2)[0])
+	}
+	return strings.ToLower(mediaType)
 }
 
 // artifactServiceWrapper wraps an artifact.Service so SaveArtifact and
@@ -150,7 +202,18 @@ func (w *artifactServiceWrapper) ListArtifactKeys(
 	ctx context.Context,
 	info artifact.SessionInfo,
 ) ([]string, error) {
-	return w.inner.ListArtifactKeys(ctx, info)
+	keys, err := w.inner.ListArtifactKeys(ctx, info)
+	if err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if hasSecret(key) {
+			return nil, errors.New(
+				"artifact key contains a secret; refusing to list artifacts",
+			)
+		}
+	}
+	return keys, nil
 }
 
 // DeleteArtifact implements artifact.Service.

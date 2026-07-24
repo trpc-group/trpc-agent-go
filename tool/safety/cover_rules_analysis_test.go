@@ -230,6 +230,7 @@ func TestCoverrules_OpForCommand_Table(t *testing.T) {
 	for exec, want := range cases {
 		require.Equal(t, want, opForCommand(exec), exec)
 	}
+	require.Equal(t, "write", opForCommand("/bin/cp"))
 }
 
 func TestCoverrules_HashCommand_Empty(t *testing.T) {

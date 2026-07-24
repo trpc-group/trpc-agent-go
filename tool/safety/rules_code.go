@@ -38,7 +38,7 @@ var codePatterns = []codePattern{
 	// Network egress from code.
 	{
 		id:      "code.network_call",
-		pattern: regexp.MustCompile(`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|http\.Get|http\.Post|net/http\.Get|fetch\s*\(|axios\.(?:get|post|put|delete)|curl_init|file_get_contents\s*\(\s*['"]http)`),
+		pattern: regexp.MustCompile(`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|socket\.(?:create_connection|socket)\s*\(|http\.Get|http\.Post|net/http\.Get|net\.Dial(?:Timeout)?\s*\(|fetch\s*\(|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection)\s*\(|new\s+(?:Socket|TCPSocket)\s*\(|curl_init|file_get_contents\s*\(\s*['"]http)`),
 	},
 	// Package installation from code.
 	{
@@ -48,12 +48,12 @@ var codePatterns = []codePattern{
 	// File path access for credential/dotenv paths.
 	{
 		id:      "code.credential_path",
-		pattern: regexp.MustCompile(`(?m)(?:~/\.ssh|/\.ssh|~/\.aws|/\.aws|~/\.kube|/\.kube|/\.env|\.aws/credentials|\.kube/config|\.netrc|\.git-credentials|\.npmrc|\.pypirc|id_rsa|id_ed25519|authorized_keys|serviceaccount/token|/proc/self/environ|/proc/[0-9]+/environ|/run/secrets|/var/run/secrets)`),
+		pattern: regexp.MustCompile(`(?m)(?:~/\.ssh|/\.ssh|~/\.aws|/\.aws|~/\.kube|/\.kube|~/\.config/gcloud|/\.config/gcloud|/\.env|\.aws/credentials|\.kube/config|\.netrc|\.git-credentials|\.npmrc|\.pypirc|id_rsa|id_ed25519|authorized_keys|serviceaccount/token|/proc/self/environ|/proc/[0-9]+/environ|/run/secrets|/var/run/secrets)`),
 	},
 	// Dangerous delete from code.
 	{
 		id:      "code.dangerous_delete",
-		pattern: regexp.MustCompile(`(?m)(?:rm\s+-rf?\s*['"]?/|shutil\.rmtree|os\.remove|os\.unlink|os\.rmdir|Path\.unlink|fs\.rmSync\s*\(\s*['"]?/|File\(.*\)\.deleteRecursively|removeAll\s*\(\s*['"]?/)`),
+		pattern: regexp.MustCompile(`(?m)(?:rm\s+-rf?\s*['"]?/|shutil\.rmtree|os\.(?:remove|unlink|rmdir)|os\.RemoveAll|Path\.unlink|fs\.rmSync\s*\(\s*['"]?/|File\(.*\)\.deleteRecursively|removeAll\s*\(\s*['"]?/)`),
 	},
 	// Unbounded output from code: only flag when the loop body calls
 	// print/printf/println WITHOUT any bound or break condition in the
@@ -74,6 +74,15 @@ var embeddedShellRegex = regexp.MustCompile(`(?:os\.system|subprocess\.(?:call|r
 // network rule can apply the allowlist to the actual host.
 var urlLiteralRegex = regexp.MustCompile(`(?:https?|ftp|ssh|scp|sftp|git)://[a-zA-Z0-9\-._:/~%@?&=+]+`)
 
+var (
+	pythonImportAliasRegex = regexp.MustCompile(
+		`(?m)(?:^|;)\s*import\s+(os|socket|subprocess|requests|urllib\.request)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
+	)
+	pythonFromImportRegex = regexp.MustCompile(
+		`(?m)(?:^|;)\s*from\s+(os|socket|subprocess|urllib\.request)\s+import\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
+	)
+)
+
 // codeMatchRecord tracks which code patterns fired so codeRuleFindings
 // can produce stable findings without re-scanning.
 type codeMatchRecord struct {
@@ -81,6 +90,7 @@ type codeMatchRecord struct {
 	shellExec       bool
 	shellWrapper    bool
 	networkCall     bool
+	networkDynamic  bool
 	networkURLs     []string
 	packageInstall  bool
 	credentialPath  bool
@@ -135,71 +145,259 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 		}
 	}
 
-	// Extract literal URL arguments from code so the network rule can
-	// apply the allowlist to the actual host, not a generic malformed
-	// target.
 	rec := &codeMatchRecord{language: lang}
 	for _, p := range codePatterns {
 		if !p.pattern.MatchString(code) {
 			continue
 		}
-		switch p.id {
-		case "code.shell_exec":
-			rec.shellExec = true
-			a.WrapperNames = append(a.WrapperNames, p.id)
-		case "code.shell_wrapper":
-			rec.shellWrapper = true
-			a.WrapperNames = append(a.WrapperNames, p.id)
-		case "code.network_call":
-			rec.networkCall = true
-			// Extract literal URLs from the code so the network rule
-			// can apply the allowlist to the actual host.
-			for _, urlMatch := range urlLiteralRegex.FindAllString(code, -1) {
-				if t := extractNetworkTarget(urlMatch); t.Raw != "" {
-					a.NetworkTargets = append(a.NetworkTargets, t)
-				}
-				rec.networkURLs = append(rec.networkURLs, urlMatch)
+		applyCodePattern(a, code, lang, rec, p.id)
+	}
+	if isPythonLanguage(lang) {
+		scanPythonAliases(a, code, rec)
+	}
+	if rec.networkCall {
+		rec.networkDynamic = rec.networkDynamic ||
+			hasDynamicNetworkCall(code)
+		for _, urlMatch := range urlLiteralRegex.FindAllString(code, -1) {
+			if t := extractNetworkTarget(urlMatch); t.Raw != "" {
+				a.NetworkTargets = append(a.NetworkTargets, t)
 			}
-			// If no literal URL was found, mark as malformed so the
-			// network rule can deny/ask.
-			if len(rec.networkURLs) == 0 {
-				a.NetworkTargets = append(a.NetworkTargets, networkTarget{
-					Raw:       "code:" + lang,
-					Host:      "",
-					Malformed: true,
-				})
-			}
-		case "code.package_install":
-			rec.packageInstall = true
-			a.InstallPackages = true
-		case "code.credential_path":
-			rec.credentialPath = true
-			// Add a real path op so rulePath can match it against
-			// credential/system path patterns.
-			a.PathOps = append(a.PathOps, pathOp{
-				Token:      extractCredentialPathFromCode(code),
-				Op:         "read",
-				Executable: "code:" + lang,
+			rec.networkURLs = append(rec.networkURLs, urlMatch)
+		}
+		if len(rec.networkURLs) == 0 {
+			a.NetworkTargets = append(a.NetworkTargets, networkTarget{
+				Raw:       "code:" + lang,
+				Malformed: true,
 			})
-		case "code.dangerous_delete":
-			rec.dangerousDelete = true
-			// Add the concrete target as a path op so rulePath can match
-			// it against system paths. When no target is extractable
-			// (a variable or an unquoted expression), skip the path op
-			// rather than fabricating a root target.
-			if target, ok := extractDeleteTargetFromCode(code); ok {
-				a.PathOps = append(a.PathOps, pathOp{
-					Token:      target,
-					Op:         "delete",
-					Executable: "code:" + lang,
-				})
-			}
-		case "code.output_bomb":
-			rec.outputBomb = true
-			a.HasOutputBomb = true
 		}
 	}
 	a.codeMatches = append(a.codeMatches, rec)
+}
+
+var dynamicNetworkCallRegex = regexp.MustCompile(
+	`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|socket\.create_connection|http\.(?:Get|Post)|net\.Dial(?:Timeout)?|fetch|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection))\s*\(\s*[A-Za-z_]`,
+)
+
+func hasDynamicNetworkCall(code string) bool {
+	return dynamicNetworkCallRegex.MatchString(code)
+}
+
+func applyCodePattern(
+	a *analysis,
+	code string,
+	lang string,
+	rec *codeMatchRecord,
+	patternID string,
+) {
+	switch patternID {
+	case "code.shell_exec":
+		rec.shellExec = true
+		a.WrapperNames = append(a.WrapperNames, patternID)
+	case "code.shell_wrapper":
+		rec.shellWrapper = true
+		a.WrapperNames = append(a.WrapperNames, patternID)
+	case "code.network_call":
+		rec.networkCall = true
+	case "code.package_install":
+		rec.packageInstall = true
+		a.InstallPackages = true
+	case "code.credential_path":
+		rec.credentialPath = true
+		a.PathOps = append(a.PathOps, pathOp{
+			Token:      extractCredentialPathFromCode(code),
+			Op:         "read",
+			Executable: "code:" + lang,
+		})
+	case "code.dangerous_delete":
+		rec.dangerousDelete = true
+		if target, ok := extractDeleteTargetFromCode(code); ok {
+			a.PathOps = append(a.PathOps, pathOp{
+				Token:      target,
+				Op:         "delete",
+				Executable: "code:" + lang,
+			})
+		}
+	case "code.output_bomb":
+		rec.outputBomb = true
+		a.HasOutputBomb = true
+	}
+}
+
+func isPythonLanguage(lang string) bool {
+	switch lang {
+	case "python", "python3", "py":
+		return true
+	}
+	return false
+}
+
+func scanPythonAliases(
+	a *analysis,
+	code string,
+	rec *codeMatchRecord,
+) {
+	scanPythonModuleAliases(a, code, rec)
+	scanPythonFromImports(a, code, rec)
+}
+
+func scanPythonModuleAliases(
+	a *analysis,
+	code string,
+	rec *codeMatchRecord,
+) {
+	for _, match := range pythonImportAliasRegex.FindAllStringSubmatch(code, -1) {
+		module, alias := match[1], match[2]
+		switch module {
+		case "os":
+			if aliasMethodCalled(code, alias, "system", "popen") {
+				rec.shellExec = true
+				extractAliasedShellCommands(a, code, alias)
+			}
+		case "subprocess":
+			if aliasMethodCalled(code, alias,
+				"call", "run", "Popen", "check_call", "check_output") {
+				rec.shellExec = true
+				extractAliasedShellCommands(a, code, alias)
+			}
+		case "requests":
+			if aliasMethodCalled(code, alias,
+				"get", "post", "put", "delete", "head", "patch") {
+				rec.networkCall = true
+				rec.networkDynamic = rec.networkDynamic ||
+					aliasMethodHasDynamicArgument(
+						code, alias,
+						"get", "post", "put", "delete",
+						"head", "patch",
+					)
+			}
+		case "urllib.request":
+			if aliasMethodCalled(code, alias, "urlopen") {
+				rec.networkCall = true
+				rec.networkDynamic = rec.networkDynamic ||
+					aliasMethodHasDynamicArgument(
+						code, alias, "urlopen",
+					)
+			}
+		case "socket":
+			if aliasMethodCalled(code, alias,
+				"create_connection", "socket") {
+				rec.networkCall = true
+				rec.networkDynamic = true
+			}
+		}
+	}
+}
+
+func scanPythonFromImports(
+	a *analysis,
+	code string,
+	rec *codeMatchRecord,
+) {
+	for _, match := range pythonFromImportRegex.FindAllStringSubmatch(code, -1) {
+		module, imported, alias := match[1], match[2], match[3]
+		if alias == "" {
+			alias = imported
+		}
+		if !standaloneCall(code, alias) {
+			continue
+		}
+		switch module {
+		case "os":
+			if imported == "system" || imported == "popen" {
+				rec.shellExec = true
+				extractStandaloneShellCommands(a, code, alias)
+			}
+		case "subprocess":
+			switch imported {
+			case "call", "run", "Popen", "check_call", "check_output":
+				rec.shellExec = true
+				extractStandaloneShellCommands(a, code, alias)
+			}
+		case "urllib.request":
+			if imported == "urlopen" {
+				rec.networkCall = true
+				rec.networkDynamic = rec.networkDynamic ||
+					standaloneCallHasDynamicArgument(
+						code, alias,
+					)
+			}
+		case "socket":
+			if imported == "create_connection" || imported == "socket" {
+				rec.networkCall = true
+				rec.networkDynamic = true
+			}
+		}
+	}
+}
+
+func aliasMethodCalled(code, alias string, methods ...string) bool {
+	for _, method := range methods {
+		pattern := `\b` + regexp.QuoteMeta(alias) + `\.` +
+			regexp.QuoteMeta(method) + `\s*\(`
+		if regexp.MustCompile(pattern).MatchString(code) {
+			return true
+		}
+	}
+	return false
+}
+
+func aliasMethodHasDynamicArgument(
+	code string,
+	alias string,
+	methods ...string,
+) bool {
+	for _, method := range methods {
+		pattern := `\b` + regexp.QuoteMeta(alias) + `\.` +
+			regexp.QuoteMeta(method) +
+			`\s*\(\s*[A-Za-z_]`
+		if regexp.MustCompile(pattern).MatchString(code) {
+			return true
+		}
+	}
+	return false
+}
+
+func standaloneCall(code, name string) bool {
+	pattern := `\b` + regexp.QuoteMeta(name) + `\s*\(`
+	return regexp.MustCompile(pattern).MatchString(code)
+}
+
+func standaloneCallHasDynamicArgument(
+	code string,
+	name string,
+) bool {
+	pattern := `\b` + regexp.QuoteMeta(name) +
+		`\s*\(\s*[A-Za-z_]`
+	return regexp.MustCompile(pattern).MatchString(code)
+}
+
+func extractAliasedShellCommands(a *analysis, code, alias string) {
+	pattern := `\b` + regexp.QuoteMeta(alias) +
+		`\.(?:system|popen|call|run|Popen|check_call|check_output)\s*\(\s*['"]([^'"]+)['"]`
+	extractShellCommandMatches(a, code, regexp.MustCompile(pattern))
+}
+
+func extractStandaloneShellCommands(a *analysis, code, name string) {
+	pattern := `\b` + regexp.QuoteMeta(name) +
+		`\s*\(\s*['"]([^'"]+)['"]`
+	extractShellCommandMatches(a, code, regexp.MustCompile(pattern))
+}
+
+func extractShellCommandMatches(
+	a *analysis,
+	code string,
+	pattern *regexp.Regexp,
+) {
+	for _, match := range pattern.FindAllStringSubmatch(code, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		inner := analyzeShellWithCommands(
+			match[1],
+			a.ConfiguredNetworkCommands,
+		)
+		mergeAnalysis(a, &inner)
+	}
 }
 
 // isShellLanguage returns true for bash/sh/zsh/dash/etc. code blocks
@@ -274,7 +472,7 @@ func allURLsAllowlisted(urls []string, allow []string) bool {
 func codeRuleFindings(a *analysis, p Policy) []Finding {
 	var out []Finding
 	for _, rec := range a.codeMatches {
-		if rec.shellExec {
+		if rec.shellExec && p.Rules.ShellBypass.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.shell_exec",
 				RiskLevel:      RiskHigh,
@@ -283,7 +481,7 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				Recommendation: "Refuse shell execution from code; use a library API or an auditable workspace script",
 			})
 		}
-		if rec.shellWrapper {
+		if rec.shellWrapper && p.Rules.ShellBypass.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.shell_wrapper",
 				RiskLevel:      RiskHigh,
@@ -292,10 +490,11 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				Recommendation: "Refuse shell wrappers from code; call the underlying command directly",
 			})
 		}
-		if rec.networkCall {
+		if rec.networkCall && p.Rules.Network.Enabled {
 			// If literal URLs were extracted and all are allowlisted,
 			// do not emit a finding. Otherwise emit a finding.
-			if !allURLsAllowlisted(rec.networkURLs, p.Network.AllowedDomains) {
+			if rec.networkDynamic ||
+				!allURLsAllowlisted(rec.networkURLs, p.Network.AllowedDomains) {
 				out = append(out, Finding{
 					RuleID:         "code.network_call",
 					RiskLevel:      RiskMedium,
@@ -305,7 +504,7 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				})
 			}
 		}
-		if rec.packageInstall {
+		if rec.packageInstall && p.Rules.Dependencies.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.package_install",
 				RiskLevel:      RiskHigh,
@@ -314,7 +513,7 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				Recommendation: "Approve the dependency change explicitly; pin versions and verify provenance",
 			})
 		}
-		if rec.credentialPath {
+		if rec.credentialPath && p.Rules.SecretLeak.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.credential_path",
 				RiskLevel:      RiskCritical,
@@ -323,7 +522,7 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				Recommendation: "Never read credentials, SSH keys, or runtime secrets from code; use a secret manager",
 			})
 		}
-		if rec.dangerousDelete {
+		if rec.dangerousDelete && p.Rules.DangerousCommands.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.dangerous_delete",
 				RiskLevel:      RiskCritical,
@@ -332,7 +531,7 @@ func codeRuleFindings(a *analysis, p Policy) []Finding {
 				Recommendation: "Refuse destructive deletes from code; scope operations to the workspace",
 			})
 		}
-		if rec.outputBomb {
+		if rec.outputBomb && p.Rules.ResourceAbuse.Enabled {
 			out = append(out, Finding{
 				RuleID:         "code.output_bomb",
 				RiskLevel:      RiskHigh,

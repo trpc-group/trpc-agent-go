@@ -159,8 +159,8 @@ func ruleCwd(in ScanInput, p Policy) []Finding {
 // ruleUnknownTool handles the fail-closed semantics for tools that do
 // not have a registered profile. The plan's fixed decision 5 says:
 //
-//   - Known execution tools with invalid arguments are denied (handled
-//     by the decode error path in CheckToolPermission).
+//   - Known execution tools with invalid arguments are denied by the
+//     wrapper preflight decode path.
 //   - Unknown MCP-like tools with command-shaped arguments require ask
 //     unless an explicit ToolProfile is registered.
 //   - Tools with no recognized command surface (e.g. an MCP search tool

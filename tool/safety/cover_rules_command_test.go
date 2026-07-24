@@ -11,7 +11,6 @@ package safety
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -277,12 +276,19 @@ func TestCoverrules_IsRootOrSystemPath(t *testing.T) {
 	} {
 		require.True(t, isRootOrSystemPath(p), p)
 	}
-	for _, p := range []string{"/tmp", "/etc/hosts", "/home/user", "relative/path"} {
+	for _, p := range []string{"/etc/hosts", "/usr/local/bin/tool", "/var/spool/cron"} {
+		require.True(t, isRootOrSystemPath(p), p)
+	}
+	for _, p := range []string{
+		`C:\Windows\System32\drivers\etc\hosts`,
+		`C:\ProgramData\evil`,
+	} {
+		require.True(t, isRootOrSystemPath(p), p)
+	}
+	for _, p := range []string{"/tmp", "/home/user", "relative/path"} {
 		require.False(t, isRootOrSystemPath(p), p)
 	}
-	// The empty string normalizes the same way as "/" after TrimRight
-	// and is therefore treated as the root path.
-	require.True(t, isRootOrSystemPath(""))
+	require.False(t, isRootOrSystemPath(""))
 }
 
 func TestCoverrules_IsShellsafeImplicitDeny(t *testing.T) {
@@ -452,9 +458,7 @@ func TestCoverrules_NormalizePath(t *testing.T) {
 	require.Equal(t, "", normalizePath(""))
 	require.Equal(t, "~", normalizePath("~"))
 	require.Equal(t, "~/x", normalizePath("~/x"))
-	// Backslash conversion is delegated to filepath.ToSlash, which is
-	// platform-dependent; assert the contract rather than a literal.
-	require.Equal(t, filepath.ToSlash(`a\b`), normalizePath(`a\b`))
+	require.Equal(t, "a/b", normalizePath(`a\b`))
 	require.Equal(t, "/etc", normalizePath("/etc"))
 }
 
@@ -495,7 +499,10 @@ func TestCoverrules_IsAbsoluteHomeCredentialPath(t *testing.T) {
 	require.False(t, isAbsoluteHomeCredentialPath("/home/u/.bashrc"))
 	require.True(t, isAbsoluteHomeCredentialPath("/users/u/.aws/credentials"))
 	require.True(t, isAbsoluteHomeCredentialPath("/users/u/.ssh/id_rsa"))
-	require.False(t, isAbsoluteHomeCredentialPath("/users/u/.kube/config"))
+	require.True(t, isAbsoluteHomeCredentialPath("/users/u/.kube/config"))
+	require.True(t, isAbsoluteHomeCredentialPath("/home/u/.docker/config.json"))
+	require.True(t, isAbsoluteHomeCredentialPath("/home/u/.netrc"))
+	require.True(t, isAbsoluteHomeCredentialPath(`C:\Users\u\.npmrc`))
 	require.False(t, isAbsoluteHomeCredentialPath("/opt/.aws/credentials"))
 }
 

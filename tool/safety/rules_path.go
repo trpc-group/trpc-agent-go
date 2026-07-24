@@ -91,26 +91,33 @@ func evaluatePathOpWithCwd(
 	add func(Finding),
 ) {
 	normalized := normalizePath(op.Token)
+	canonicalHome := canonicalTildeHomePath(normalized)
 	joined := normalized
 	if cwd != "" && isRelativePath(normalized) {
 		joined = filepath.Clean(filepath.Join(cwd, normalized))
 	}
 
 	if dangerousEnabled {
-		addDangerousPathFindings(op, normalized, joined, p, add)
+		addDangerousPathFindings(
+			op, normalized, canonicalHome, joined, p, add,
+		)
 	}
 	if secretEnabled {
-		addSecretPathFindings(op, normalized, joined, p, add)
+		addSecretPathFindings(
+			op, normalized, canonicalHome, joined, p, add,
+		)
 	}
 }
 
 // addDangerousPathFindings checks system_write and denied paths.
 func addDangerousPathFindings(
-	op pathOp, normalized, joined string, p Policy,
+	op pathOp, normalized, canonicalHome, joined string, p Policy,
 	add func(Finding),
 ) {
 	if (op.Op == "delete" || op.Op == "write") &&
-		(isRootOrSystemPath(normalized) || isRootOrSystemPath(joined)) {
+		(isRootOrSystemPath(normalized) ||
+			isRootOrSystemPath(canonicalHome) ||
+			isRootOrSystemPath(joined)) {
 		add(Finding{
 			RuleID:         "path.system_write",
 			RiskLevel:      RiskCritical,
@@ -119,7 +126,9 @@ func addDangerousPathFindings(
 			Recommendation: "Refuse writes or deletes to system paths; scope operations to the workspace",
 		})
 	}
-	if matchesDeniedPath(normalized, p) || matchesDeniedPath(joined, p) {
+	if matchesDeniedPath(normalized, p) ||
+		matchesDeniedPath(canonicalHome, p) ||
+		matchesDeniedPath(joined, p) {
 		add(Finding{
 			RuleID:         "path.denied",
 			RiskLevel:      RiskHigh,
@@ -132,10 +141,11 @@ func addDangerousPathFindings(
 
 // addSecretPathFindings checks ssh, credential, and dotenv paths.
 func addSecretPathFindings(
-	op pathOp, normalized, joined string, p Policy,
+	op pathOp, normalized, canonicalHome, joined string, p Policy,
 	add func(Finding),
 ) {
-	if isSSHPath(normalized) || isSSHPath(joined) || isSSHRelativePath(normalized) {
+	if isSSHPath(normalized) || isSSHPath(canonicalHome) ||
+		isSSHPath(joined) || isSSHRelativePath(normalized) {
 		add(Finding{
 			RuleID:         "path.ssh_private_key",
 			RiskLevel:      RiskCritical,
@@ -144,7 +154,10 @@ func addSecretPathFindings(
 			Recommendation: "Never read or transmit SSH private keys; require an explicit operator-approved workflow",
 		})
 	}
-	if isCredentialPath(normalized) || isCredentialPath(joined) || isCredentialRelativePath(normalized) {
+	if isCredentialPath(normalized) ||
+		isCredentialPath(canonicalHome) ||
+		isCredentialPath(joined) ||
+		isCredentialRelativePath(normalized) {
 		add(Finding{
 			RuleID:         "path.credential_file",
 			RiskLevel:      RiskCritical,
@@ -190,6 +203,8 @@ func isCredentialRelativePath(p string) bool {
 		return true
 	case strings.HasPrefix(low, ".kube/") && strings.Contains(low, "config"):
 		return true
+	case strings.HasPrefix(low, ".config/gcloud/"):
+		return true
 	case low == ".netrc":
 		return true
 	case low == ".git-credentials":
@@ -219,6 +234,7 @@ func evaluateRawSourcePaths(src string, p Policy, add func(Finding)) {
 	}
 	if strings.Contains(low, ".aws/credentials") ||
 		strings.Contains(low, ".kube/config") ||
+		strings.Contains(low, ".config/gcloud/") ||
 		strings.Contains(low, ".netrc") ||
 		strings.Contains(low, ".git-credentials") {
 		add(Finding{
@@ -246,13 +262,20 @@ func normalizePath(p string) string {
 	if p == "" {
 		return p
 	}
-	if p == "~" {
-		return "~"
+	return path.Clean(strings.ReplaceAll(
+		filepath.ToSlash(p), `\`, `/`,
+	))
+}
+
+func canonicalTildeHomePath(p string) string {
+	if !strings.HasPrefix(p, "~") {
+		return p
 	}
-	if strings.HasPrefix(p, "~/") {
-		return "~" + p[1:]
+	slash := strings.IndexByte(p, '/')
+	if slash < 1 {
+		return p
 	}
-	return filepath.ToSlash(p)
+	return "~" + p[slash:]
 }
 
 // redactedPath returns a redacted representation of p for use in
@@ -316,6 +339,8 @@ func isTildeCredentialPath(low string) bool {
 		return strings.Contains(low, "config")
 	case low == "~/.docker/config.json":
 		return true
+	case strings.HasPrefix(low, "~/.config/gcloud/"):
+		return true
 	case low == "~/.netrc":
 		return true
 	case strings.HasSuffix(low, "/.git-credentials"):
@@ -330,16 +355,25 @@ func isTildeCredentialPath(low string) bool {
 
 // isAbsoluteHomeCredentialPath checks /home/<user>/.aws/credentials, etc.
 func isAbsoluteHomeCredentialPath(low string) bool {
-	if strings.HasPrefix(low, "/home/") {
-		return strings.Contains(low, "/.aws/credentials") ||
-			strings.Contains(low, "/.ssh/") ||
-			strings.Contains(low, "/.kube/config")
+	low = strings.ToLower(normalizePath(low))
+	if len(low) >= 3 && low[1] == ':' && low[2] == '/' {
+		low = low[2:]
 	}
-	if strings.HasPrefix(low, "/users/") {
-		return strings.Contains(low, "/.aws/credentials") ||
-			strings.Contains(low, "/.ssh/")
+	if !strings.HasPrefix(low, "/home/") &&
+		!strings.HasPrefix(low, "/users/") &&
+		!strings.HasPrefix(low, "/root/") &&
+		!strings.HasPrefix(low, "/var/root/") {
+		return false
 	}
-	return false
+	return strings.Contains(low, "/.aws/credentials") ||
+		strings.Contains(low, "/.ssh/") ||
+		strings.Contains(low, "/.kube/config") ||
+		strings.HasSuffix(low, "/.docker/config.json") ||
+		strings.Contains(low, "/.config/gcloud/") ||
+		strings.HasSuffix(low, "/.netrc") ||
+		strings.HasSuffix(low, "/.git-credentials") ||
+		strings.HasSuffix(low, "/.npmrc") ||
+		strings.HasSuffix(low, "/.pypirc")
 }
 
 // isRuntimeSecretPath checks /run/secrets/*, /var/run/secrets/*, /proc/*/environ.

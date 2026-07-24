@@ -80,10 +80,12 @@ func TestCovercore_DecodeUnknownTool(t *testing.T) {
 	require.Equal(t, BackendUnknown, in.Backend)
 	require.Equal(t, "ls", in.Command)
 
-	// A non-string command field is not a command surface.
-	in, err = decodeRequest("mystery_tool", []byte(`{"command":42}`), reg)
-	require.NoError(t, err)
-	require.Empty(t, in.Command)
+	// A present but unsupported command shape requires review.
+	_, err = decodeRequest("mystery_tool", []byte(`{"command":42}`), reg)
+	require.ErrorContains(t, err, "must be a string")
+
+	_, err = decodeRequest("mystery_tool", []byte(`{"command":""}`), reg)
+	require.ErrorContains(t, err, "must not be empty")
 }
 
 // TestCovercore_DecodeSessionFields covers the session-tool argument
@@ -144,6 +146,30 @@ func TestCovercore_DecodeOptionalFields(t *testing.T) {
 		[]byte(`{"command":"ls","background":"yes"}`), reg)
 	require.NoError(t, err)
 	require.False(t, in.Background)
+}
+
+func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
+	reg := newProfileRegistry()
+	workspace, ok := reg.lookup("workspace_exec")
+	require.True(t, ok)
+	require.Equal(t,
+		[]string{"timeout_sec", "timeoutSec", "timeout"},
+		workspace.TimeoutFields,
+	)
+	host, ok := reg.lookup("exec_command")
+	require.True(t, ok)
+	require.Equal(t, 30*time.Minute, host.DefaultTimeout)
+	code, ok := reg.lookup("execute_code")
+	require.True(t, ok)
+	require.Zero(t, code.DefaultTimeout)
+
+	in, err := decodeRequest(
+		"workspace_exec",
+		[]byte(`{"command":"ls","timeout":10,"timeout_sec":3600}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, in.Timeout)
 }
 
 // TestCovercore_PeekCommand covers the direct peekCommand paths.

@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"sync/atomic"
 )
 
 // ConcurrencyPolicy configures per-guard and per-tool concurrency limits.
@@ -38,11 +37,11 @@ type ConcurrencyPolicy struct {
 //
 // The limiter is acquired AFTER the scan completes and the decision is
 // allow. Deny/ask/error paths never acquire a slot, so they never leak.
-// The release function is stashed on the guard and invoked from the
-// after-tool callback; the guard's Close discards any orphaned slots.
+// The release function is stashed on the guard and invoked from wrapper
+// completion; the guard's Close releases any orphaned slots.
 type concurrencyLimiter struct {
 	policy ConcurrencyPolicy
-	active int64 // atomic; global count
+	active int
 
 	mu      sync.Mutex
 	perTool map[string]int
@@ -50,6 +49,11 @@ type concurrencyLimiter struct {
 
 // newConcurrencyLimiter returns a concurrencyLimiter enforcing p.
 func newConcurrencyLimiter(p ConcurrencyPolicy) *concurrencyLimiter {
+	perToolLimits := make(map[string]int, len(p.PerToolLimits))
+	for name, limit := range p.PerToolLimits {
+		perToolLimits[name] = limit
+	}
+	p.PerToolLimits = perToolLimits
 	return &concurrencyLimiter{
 		policy:  p,
 		perTool: make(map[string]int),
@@ -59,10 +63,6 @@ func newConcurrencyLimiter(p ConcurrencyPolicy) *concurrencyLimiter {
 // acquire reserves one slot for toolName. It returns a release function
 // the caller must invoke when the tool call completes. When the global
 // or per-tool cap is exceeded, acquire returns a non-nil error.
-//
-// The global counter uses an atomic CAS loop so the check-and-increment
-// is atomic: two concurrent callers cannot both observe count < max and
-// both increment.
 func (c *concurrencyLimiter) acquire(ctx context.Context, toolName string) (func(), error) {
 	if c == nil {
 		return func() {}, nil
@@ -71,51 +71,45 @@ func (c *concurrencyLimiter) acquire(ctx context.Context, toolName string) (func
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	// Global CAS loop.
-	if c.policy.MaxActiveCalls > 0 {
-		for {
-			cur := atomic.LoadInt64(&c.active)
-			if cur >= int64(c.policy.MaxActiveCalls) {
-				return nil, fmt.Errorf("concurrency limit exceeded: %d active calls (max %d)",
-					cur, c.policy.MaxActiveCalls)
-			}
-			if atomic.CompareAndSwapInt64(&c.active, cur, cur+1) {
-				break
-			}
-			// CAS failed; another goroutine won. Retry.
-		}
-	}
-	// Per-tool check under mutex.
-	if max, ok := c.policy.PerToolLimits[toolName]; ok && max > 0 {
-		c.mu.Lock()
-		if c.perTool[toolName] >= max {
-			c.mu.Unlock()
-			// Roll back the global increment only when one was made.
-			if c.policy.MaxActiveCalls > 0 {
-				atomic.AddInt64(&c.active, -1)
-			}
-			return nil, fmt.Errorf("concurrency limit exceeded for tool %q: %d active (max %d)",
-				toolName, c.perTool[toolName], max)
-		}
-		c.perTool[toolName]++
+	c.mu.Lock()
+	globalTracked := c.policy.MaxActiveCalls > 0
+	if c.policy.MaxActiveCalls > 0 &&
+		c.active >= c.policy.MaxActiveCalls {
+		active := c.active
 		c.mu.Unlock()
+		return nil, fmt.Errorf(
+			"concurrency limit exceeded: %d active calls (max %d)",
+			active, c.policy.MaxActiveCalls,
+		)
 	}
+	max, perToolTracked := c.policy.PerToolLimits[toolName]
+	perToolTracked = perToolTracked && max > 0
+	if perToolTracked {
+		active := c.perTool[toolName]
+		if active >= max {
+			c.mu.Unlock()
+			return nil, fmt.Errorf("concurrency limit exceeded for tool %q: %d active (max %d)",
+				toolName, active, max)
+		}
+	}
+	if globalTracked {
+		c.active++
+	}
+	if perToolTracked {
+		c.perTool[toolName]++
+	}
+	c.mu.Unlock()
 	once := sync.Once{}
 	release := func() {
 		once.Do(func() {
-			// Decrement the global counter only when acquire
-			// incremented it (MaxActiveCalls > 0); otherwise the
-			// counter would drift negative over time.
-			if c.policy.MaxActiveCalls > 0 {
-				atomic.AddInt64(&c.active, -1)
+			c.mu.Lock()
+			if globalTracked && c.active > 0 {
+				c.active--
 			}
-			if max, ok := c.policy.PerToolLimits[toolName]; ok && max > 0 {
-				c.mu.Lock()
-				if c.perTool[toolName] > 0 {
-					c.perTool[toolName]--
-				}
-				c.mu.Unlock()
+			if perToolTracked && c.perTool[toolName] > 0 {
+				c.perTool[toolName]--
 			}
+			c.mu.Unlock()
 		})
 	}
 	return release, nil
@@ -127,5 +121,22 @@ func (c *concurrencyLimiter) activeCount() int64 {
 	if c == nil {
 		return 0
 	}
-	return atomic.LoadInt64(&c.active)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return int64(c.active)
+}
+
+func (c *concurrencyLimiter) enabled() bool {
+	if c == nil {
+		return false
+	}
+	if c.policy.MaxActiveCalls > 0 {
+		return true
+	}
+	for _, limit := range c.policy.PerToolLimits {
+		if limit > 0 {
+			return true
+		}
+	}
+	return false
 }

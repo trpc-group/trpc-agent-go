@@ -266,6 +266,7 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, in.CodeBlocks, 1)
 	require.Equal(t, "python", in.CodeBlocks[0].Language)
+	in.Timeout = time.Second
 	report, err := NewScanner(p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionAllow, report.Decision)
@@ -275,6 +276,7 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 	in, err = decodeRequest("execute_code", []byte(
 		`{"code_blocks":"[{\"language\":\"python\",\"code\":\"import os; os.system('rm -rf /')\"}]"}`), reg)
 	require.NoError(t, err)
+	in.Timeout = time.Second
 	report, err = NewScanner(p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
@@ -283,6 +285,7 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 	in, err = decodeRequest("execute_code", []byte(
 		`{"code_blocks":"{\"language\":\"bash\",\"code\":\"rm -rf /\"}"}`), reg)
 	require.NoError(t, err)
+	in.Timeout = time.Second
 	report, err = NewScanner(p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
@@ -310,4 +313,10 @@ func TestScanner_ScanBatchCancelledContext(t *testing.T) {
 		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "pwd"},
 	})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestScanner_NilScanBatchReturnsError(t *testing.T) {
+	var scanner *Scanner
+	_, err := scanner.ScanBatch(context.Background(), nil)
+	require.ErrorContains(t, err, "scanner is nil")
 }

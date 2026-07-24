@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -145,6 +146,140 @@ func TestRedactValue_TypedResultNoSecretUnchanged(t *testing.T) {
 	require.Equal(t, in, out)
 }
 
+func TestRedactValue_StructuredJSONSecrets(t *testing.T) {
+	t.Run("raw message secret field", func(t *testing.T) {
+		in := json.RawMessage(`{"password":"hunter2xyz","note":"ok"}`)
+		out, changed, err := redactValue(in)
+		require.NoError(t, err)
+		require.True(t, changed)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "hunter2xyz")
+	})
+	t.Run("non-string secret field", func(t *testing.T) {
+		out, changed, err := redactValue(
+			map[string]any{"password": 123456},
+		)
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.Equal(t, "[REDACTED:field:password]",
+			out.(map[string]any)["password"])
+	})
+	t.Run("secret-bearing map key", func(t *testing.T) {
+		out, changed, err := redactValue(
+			map[string]any{"AKIAIOSFODNN7EXAMPLE": "value"},
+		)
+		require.NoError(t, err)
+		require.True(t, changed)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "AKIAIOSFODNN7EXAMPLE")
+	})
+	t.Run("secret field marker does not reuse raw key", func(t *testing.T) {
+		key := "password_AKIAIOSFODNN7EXAMPLE"
+		out, changed, err := redactValue(map[string]any{key: "value"})
+		require.NoError(t, err)
+		require.True(t, changed)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), key)
+		require.NotContains(t, string(raw), "AKIAIOSFODNN7EXAMPLE")
+	})
+	t.Run("redacted key collisions preserve every field", func(t *testing.T) {
+		secretKey := "AKIAIOSFODNN7EXAMPLE"
+		redactedKey, changed := redactString(secretKey)
+		require.True(t, changed)
+		out, changed, err := redactValue(map[string]any{
+			secretKey:          "secret-key",
+			redactedKey:        "literal-marker",
+			redactedKey + "#1": "literal-suffix",
+		})
+		require.NoError(t, err)
+		require.True(t, changed)
+		require.Len(t, out.(map[string]any), 3)
+	})
+	t.Run("duplicate keys cannot hide a secret", func(t *testing.T) {
+		in := json.RawMessage(
+			`{"note":"AKIAIOSFODNN7EXAMPLE","note":"safe"}`,
+		)
+		out, changed, err := redactValue(in)
+		require.NoError(t, err)
+		require.True(t, changed)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw), "AKIAIOSFODNN7EXAMPLE")
+	})
+}
+
+func TestRedactValue_PreservesLargeJSONInteger(t *testing.T) {
+	in := json.RawMessage(
+		`{"password":"hunter2xyz","value":9007199254740993}`,
+	)
+	out, changed, err := redactValue(in)
+	require.NoError(t, err)
+	require.True(t, changed)
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.Contains(t, string(raw), "9007199254740993")
+	require.NotContains(t, string(raw), "hunter2xyz")
+}
+
+func TestRedactValue_UnmarshalableResultFailsClosed(t *testing.T) {
+	type result struct {
+		Password string
+		Ch       chan int
+	}
+	out, changed, err := redactValue(result{
+		Password: "hunter2xyz",
+		Ch:       make(chan int),
+	})
+	require.NoError(t, err)
+	require.True(t, changed)
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2xyz")
+	require.Contains(t, string(raw), "could not be serialized safely")
+}
+
+func TestRedactValue_NamedAndNestedByteSlices(t *testing.T) {
+	type secretBytes []byte
+	type result struct {
+		Data secretBytes `json:"data"`
+	}
+	secret := secretBytes(
+		"API_KEY=sk_live_1234567890abcdef1234",
+	)
+	for _, value := range []any{
+		secret,
+		result{Data: secret},
+		[]any{result{Data: secret}},
+	} {
+		out, changed, err := redactValue(value)
+		require.NoError(t, err)
+		require.True(t, changed)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.NotContains(t, string(raw),
+			"sk_live_1234567890abcdef1234")
+		require.NotContains(t, string(raw),
+			base64.StdEncoding.EncodeToString(secret))
+	}
+}
+
+func TestRedactValue_CyclicResultFailsClosed(t *testing.T) {
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+	_, _, err := redactValue(cyclic)
+	require.ErrorContains(t, err, "nesting exceeds")
+
+	out, truncated, size := limitResultBytes(cyclic, 16)
+	require.True(t, truncated)
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(raw), 16)
+	require.Equal(t, int64(len(raw)), size)
+}
+
 func TestLimitString_TruncatesAndPreservesUTF8(t *testing.T) {
 	in := "héllo " + strings.Repeat("x", 100)
 	// Use a maxBytes large enough for the truncation marker (25 bytes)
@@ -213,6 +348,25 @@ func TestLimitResultBytes_MarshaledFormWithinBudget(t *testing.T) {
 		raw, err := json.Marshal(out)
 		require.NoError(t, err)
 		require.LessOrEqual(t, int64(len(raw)), max)
+	})
+	t.Run("one byte budget remains valid JSON", func(t *testing.T) {
+		out, truncated, size := limitResultBytes(
+			map[string]any{"output": strings.Repeat("x", 100)},
+			1,
+		)
+		require.True(t, truncated)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(raw), 1)
+		require.Equal(t, int64(len(raw)), size)
+	})
+	t.Run("unmarshalable result is bounded", func(t *testing.T) {
+		out, truncated, size := limitResultBytes(func() {}, 16)
+		require.True(t, truncated)
+		raw, err := json.Marshal(out)
+		require.NoError(t, err)
+		require.LessOrEqual(t, len(raw), 16)
+		require.Equal(t, int64(len(raw)), size)
 	})
 }
 

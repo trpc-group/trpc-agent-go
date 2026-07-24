@@ -26,6 +26,18 @@ func TestDefaultPolicy_IsValidAndConservative(t *testing.T) {
 	require.True(t, p.Rules.SecretLeak.Enabled)
 }
 
+func TestPolicyRuleActionCanInheritThreshold(t *testing.T) {
+	p := DefaultPolicy()
+	p.Rules.Network.Action = DecisionInherit
+	p.DecisionThreshold.High = DecisionAsk
+	require.NoError(t, p.Validate())
+	require.Equal(t, DecisionAsk,
+		ruleDecision(p.Rules.Network.Action, RiskHigh, p))
+
+	p.DecisionThreshold.High = DecisionInherit
+	require.ErrorContains(t, p.Validate(), "cannot be inherit")
+}
+
 func TestLoadPolicy_NormalizesDefaultsAndReviewAlias(t *testing.T) {
 	policy, err := LoadPolicyFromBytes([]byte(`
 version: 1
@@ -51,6 +63,16 @@ bogus_field: 7
 	require.Contains(t, err.Error(), "bogus_field")
 }
 
+func TestLoadPolicy_RejectsMultipleDocuments(t *testing.T) {
+	_, err := LoadPolicyFromBytes([]byte(`
+version: 1
+---
+network:
+  deny_all: true
+`))
+	require.ErrorContains(t, err, "multiple YAML documents")
+}
+
 func TestLoadPolicy_RejectsInvalidDomain(t *testing.T) {
 	_, err := LoadPolicyFromBytes([]byte(`
 version: 1
@@ -59,6 +81,28 @@ network:
 `))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "domain")
+}
+
+func TestPolicyValidate_RejectsPublicSuffixWildcard(t *testing.T) {
+	for _, tt := range []struct {
+		domain string
+		err    string
+	}{
+		{domain: "*.com", err: "public suffix"},
+		{domain: "*.co.uk", err: "public suffix"},
+		{domain: "*.github.io", err: "public suffix"},
+		{domain: "*.com.", err: "trailing dot"},
+	} {
+		t.Run(tt.domain, func(t *testing.T) {
+			p := DefaultPolicy()
+			p.Network.AllowedDomains = []string{tt.domain}
+			require.ErrorContains(t, p.Validate(), tt.err)
+		})
+	}
+
+	p := DefaultPolicy()
+	p.Network.AllowedDomains = []string{"*.example.com"}
+	require.NoError(t, p.Validate())
 }
 
 func TestLoadPolicy_RejectsCriticalAllow(t *testing.T) {

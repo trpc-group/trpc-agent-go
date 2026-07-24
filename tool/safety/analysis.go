@@ -133,10 +133,13 @@ func analyzeShellWithCommands(src string, configured []string) analysis {
 		if isWrapperName(exec) {
 			a.WrapperNames = append(a.WrapperNames, exec)
 		}
-		for _, tok := range argv[1:] {
+		for i := 1; i < len(argv); i++ {
+			tok := argv[i]
 			a.AllTokens = append(a.AllTokens, tok)
-			classifyToken(&a, argv, tok)
+			classifyToken(&a, argv, i)
 		}
+		classifySSHOptionTargets(&a, argv)
+		classifyImplicitGitRemote(&a, argv)
 		if isSleepCommand(exec, argv) {
 			if secs := sleepSeconds(argv); secs >= 0 && secs > a.SleepSeconds {
 				a.SleepSeconds = secs
@@ -205,10 +208,13 @@ func buildAnalysis(in ScanInput, p Policy) analysis {
 		if isWrapperName(exec) {
 			a.WrapperNames = append(a.WrapperNames, exec)
 		}
-		for _, tok := range argv[1:] {
+		for i := 1; i < len(argv); i++ {
+			tok := argv[i]
 			a.AllTokens = append(a.AllTokens, tok)
-			classifyToken(&a, argv, tok)
+			classifyToken(&a, argv, i)
 		}
+		classifySSHOptionTargets(&a, argv)
+		classifyImplicitGitRemote(&a, argv)
 		if isSleepCommand(exec, argv) {
 			if secs := sleepSeconds(argv); secs >= 0 && secs > a.SleepSeconds {
 				a.SleepSeconds = secs
@@ -278,11 +284,16 @@ func mergeAnalysis(a, shell *analysis) {
 // hashAnalysisInput returns a SHA-256 hex digest of the command plus
 // code blocks, so code-only scripts get a non-empty hash.
 func hashAnalysisInput(in ScanInput) string {
-	if in.Command == "" && len(in.CodeBlocks) == 0 {
+	if in.Command == "" && len(in.CodeBlocks) == 0 &&
+		len(in.Args) == 0 {
 		return ""
 	}
 	h := sha256.New()
 	h.Write([]byte(in.Command))
+	for _, arg := range in.Args {
+		h.Write([]byte{0})
+		h.Write([]byte(arg))
+	}
 	for _, b := range in.CodeBlocks {
 		h.Write([]byte(b.Language))
 		h.Write([]byte{0})
@@ -300,6 +311,13 @@ func summarizeAnalysisInput(in ScanInput) string {
 	var parts []string
 	if strings.TrimSpace(in.Command) != "" {
 		parts = append(parts, summarizeCommand(in.Command))
+	}
+	for i, arg := range in.Args {
+		if i >= 3 {
+			parts = append(parts, "...")
+			break
+		}
+		parts = append(parts, summarizeCommand(arg))
 	}
 	for i, b := range in.CodeBlocks {
 		if i >= 2 {
@@ -350,8 +368,13 @@ func classifyParseError(a *analysis, err error) {
 // after a network-fetching subcommand (clone, fetch, push, pull) are
 // treated as network targets. Bare subcommand arguments like "git status"
 // or "git diff" must not be treated as network targets.
-func classifyToken(a *analysis, argv []string, tok string) {
+func classifyToken(a *analysis, argv []string, index int) {
+	tok := argv[index]
 	exec := argv[0]
+	classifyGitOptionTargets(a, argv, index)
+	classifyGoOptionTargets(a, argv, index)
+	classifyEmbeddedOptionTargets(a, argv, index)
+	classifyCommandOptionPaths(a, argv, index)
 	// Strip a leading key= prefix (dd of=/etc/passwd, tar -f out.tar
 	// style values) so the value is classified as a path when it looks
 	// like one. Flag tokens (--output=/x) keep their own handling.
@@ -362,6 +385,10 @@ func classifyToken(a *analysis, argv []string, tok string) {
 	if isPathLike(target) {
 		op := opForCommand(exec)
 		a.PathOps = append(a.PathOps, pathOp{Token: target, Op: op, Executable: exec})
+	}
+	if isNetworkCommandForPolicy(exec, a.ConfiguredNetworkCommands) &&
+		isNetworkOptionValueForCommand(argv, index) {
+		return
 	}
 	if looksLikeURL(tok) {
 		if t := extractNetworkTarget(tok); t.Raw != "" {
@@ -379,14 +406,933 @@ func classifyToken(a *analysis, argv []string, tok string) {
 	// targets from bare host/path arguments.
 	if isNetworkCommandForPolicy(exec, a.ConfiguredNetworkCommands) && isNetworkSubcommand(argv) && !strings.HasPrefix(tok, "-") {
 		if t := extractNetworkTarget(tok); t.Raw != "" && t.Host != "" {
-			// Only add targets that have a real host (with a dot or
-			// an IP). Skip ambiguous bare names that would produce
-			// false positives.
-			if strings.Contains(t.Host, ".") || net.ParseIP(t.Host) != nil {
+			if shouldClassifyBareNetworkTarget(argv, index, t) {
 				a.NetworkTargets = append(a.NetworkTargets, t)
 			}
 		}
 	}
+}
+
+func classifyGitOptionTargets(
+	a *analysis,
+	argv []string,
+	index int,
+) {
+	if len(argv) == 0 || basenameLower(argv[0]) != "git" {
+		return
+	}
+	if value, ok := gitOptionValue(
+		argv, index, "--bundle-uri", "",
+	); ok {
+		if target := extractNetworkTarget(value); target.Raw != "" {
+			a.NetworkTargets = append(a.NetworkTargets, target)
+		}
+	}
+	if gitSubcommand(argv) == "archive" {
+		if value, ok := gitOptionValue(
+			argv, index, "--remote", "",
+		); ok {
+			if target := extractNetworkTarget(value); target.Raw != "" {
+				a.NetworkTargets = append(a.NetworkTargets, target)
+			}
+		}
+	}
+	for _, option := range []struct {
+		long  string
+		short string
+		op    string
+	}{
+		{long: "--work-tree", op: gitWorkingTreeOperation(argv)},
+		{long: "--git-dir", op: "read"},
+		{long: "--separate-git-dir", op: "write"},
+		{short: "-C", op: gitWorkingTreeOperation(argv)},
+	} {
+		value, ok := gitOptionValue(
+			argv, index, option.long, option.short,
+		)
+		if !ok || !isPathLike(value) {
+			continue
+		}
+		a.PathOps = append(a.PathOps, pathOp{
+			Token:      value,
+			Op:         option.op,
+			Executable: argv[0],
+		})
+	}
+	classifyGitWriteTargets(a, argv, index)
+}
+
+func classifyGitWriteTargets(
+	a *analysis,
+	argv []string,
+	index int,
+) {
+	if value, ok := gitWriteOptionValue(argv, index); ok {
+		appendGitWritePath(a, argv[0], value)
+	}
+	if value, ok := gitPositionalWriteValue(argv, index); ok {
+		appendGitWritePath(a, argv[0], value)
+	}
+}
+
+func gitWriteOptionValue(argv []string, index int) (string, bool) {
+	switch gitSubcommand(argv) {
+	case "archive":
+		return gitOptionValue(argv, index, "--output", "-o")
+	case "format-patch":
+		return gitOptionValue(
+			argv, index, "--output-directory", "-o",
+		)
+	}
+	return "", false
+}
+
+func gitPositionalWriteValue(
+	argv []string,
+	index int,
+) (string, bool) {
+	positionals := gitPositionalArguments(argv)
+	switch gitSubcommand(argv) {
+	case "init":
+		if len(positionals) > 0 && index == positionals[0] {
+			return argv[index], true
+		}
+	case "clone":
+		if len(positionals) > 1 && index == positionals[1] {
+			return argv[index], true
+		}
+	case "bundle":
+		if len(positionals) > 1 &&
+			argv[positionals[0]] == "create" &&
+			index == positionals[1] {
+			return argv[index], true
+		}
+	case "worktree":
+		if len(positionals) > 1 &&
+			argv[positionals[0]] == "add" &&
+			index == positionals[1] {
+			return argv[index], true
+		}
+	}
+	return "", false
+}
+
+func appendGitWritePath(a *analysis, executable, value string) {
+	if value == "" || value == "-" {
+		return
+	}
+	a.PathOps = append(a.PathOps, pathOp{
+		Token:      value,
+		Op:         "write",
+		Executable: executable,
+	})
+}
+
+func gitPositionalArguments(argv []string) []int {
+	subcommand := gitSubcommandIndex(argv)
+	if subcommand < 0 {
+		return nil
+	}
+	var positionals []int
+	for i := subcommand + 1; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			for j := i + 1; j < len(argv); j++ {
+				positionals = append(positionals, j)
+			}
+			break
+		}
+		if strings.HasPrefix(arg, "-") {
+			if (gitNetworkOptionTakesNextValue(arg) ||
+				gitWriteOptionTakesNextValue(arg)) &&
+				i+1 < len(argv) {
+				i++
+			}
+			continue
+		}
+		positionals = append(positionals, i)
+	}
+	return positionals
+}
+
+func gitWriteOptionTakesNextValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "--initial-branch", "--object-format", "--output",
+		"--output-directory", "--ref-format", "--template":
+		return true
+	}
+	return false
+}
+
+func classifyGoOptionTargets(
+	a *analysis,
+	argv []string,
+	index int,
+) {
+	if len(argv) == 0 || basenameLower(argv[0]) != "go" {
+		return
+	}
+	for _, option := range []string{
+		"-o", "-blockprofile", "-coverprofile", "-cpuprofile",
+		"-memprofile", "-mutexprofile", "-outputdir", "-trace",
+	} {
+		value, ok := goOptionValue(argv, index, option)
+		if !ok || value == "" || value == "-" {
+			continue
+		}
+		if cwd := goCommandDirectory(argv); cwd != "" &&
+			isRelativePath(value) {
+			value = normalizePath(cwd) + "/" + value
+		}
+		a.PathOps = append(a.PathOps, pathOp{
+			Token:      value,
+			Op:         "write",
+			Executable: argv[0],
+		})
+	}
+}
+
+func goOptionValue(
+	argv []string,
+	index int,
+	option string,
+) (string, bool) {
+	token := argv[index]
+	if index > 0 && argv[index-1] == option {
+		return token, true
+	}
+	if strings.HasPrefix(token, option+"=") {
+		value := strings.TrimPrefix(token, option+"=")
+		return value, value != ""
+	}
+	return "", false
+}
+
+func goCommandDirectory(argv []string) string {
+	for i := 1; i < len(argv); i++ {
+		switch {
+		case argv[i] == "-C" && i+1 < len(argv):
+			return argv[i+1]
+		case strings.HasPrefix(argv[i], "-C="):
+			return strings.TrimPrefix(argv[i], "-C=")
+		case strings.HasPrefix(argv[i], "-C") && len(argv[i]) > 2:
+			return argv[i][2:]
+		case !strings.HasPrefix(argv[i], "-"):
+			return ""
+		}
+	}
+	return ""
+}
+
+func classifyCommandOptionPaths(
+	a *analysis,
+	argv []string,
+	index int,
+) {
+	if len(argv) == 0 {
+		return
+	}
+	switch basenameLower(argv[0]) {
+	case "grep", "rg":
+		value, ok := commandOptionValue(
+			argv, index, "--file", 'f', "ABCDdefm",
+		)
+		if ok && isPathLike(value) {
+			a.PathOps = append(a.PathOps, pathOp{
+				Token:      value,
+				Op:         "read",
+				Executable: argv[0],
+			})
+		}
+	}
+}
+
+func commandOptionValue(
+	argv []string,
+	index int,
+	long string,
+	short byte,
+	optionsWithValue string,
+) (string, bool) {
+	token := argv[index]
+	if index > 0 {
+		previous := argv[index-1]
+		if longOptionMatches(previous, long) {
+			return token, true
+		}
+		if option, _, takesNext, ok := shortOptionValue(
+			previous, short, optionsWithValue,
+		); ok && option == short && takesNext {
+			return token, true
+		}
+	}
+	if name, value, ok := strings.Cut(token, "="); ok &&
+		longOptionMatches(name, long) {
+		return value, value != ""
+	}
+	option, value, takesNext, ok := shortOptionValue(
+		token, short, optionsWithValue,
+	)
+	if !ok || option != short || takesNext {
+		return "", false
+	}
+	return value, value != ""
+}
+
+func shortOptionValue(
+	token string,
+	target byte,
+	optionsWithValue string,
+) (option byte, value string, takesNext bool, ok bool) {
+	if len(token) < 2 || token[0] != '-' ||
+		strings.HasPrefix(token, "--") {
+		return 0, "", false, false
+	}
+	for i := 1; i < len(token); i++ {
+		option = token[i]
+		if option == target {
+			if i == len(token)-1 {
+				return option, "", true, true
+			}
+			return option, token[i+1:], false, true
+		}
+		if strings.ContainsRune(optionsWithValue, rune(option)) {
+			return 0, "", false, false
+		}
+	}
+	return 0, "", false, false
+}
+
+func gitOptionValue(
+	argv []string,
+	index int,
+	long string,
+	short string,
+) (string, bool) {
+	token := argv[index]
+	if index > 0 {
+		previous := argv[index-1]
+		if short != "" && previous == short {
+			return token, true
+		}
+		if long != "" && (previous == long ||
+			gitLongOptionAbbreviation(previous, long)) {
+			return token, true
+		}
+	}
+	if long != "" {
+		if name, value, ok := strings.Cut(token, "="); ok &&
+			(name == long || gitLongOptionAbbreviation(name, long)) {
+			return value, value != ""
+		}
+	}
+	if short != "" && strings.HasPrefix(token, short) &&
+		len(token) > len(short) {
+		return token[len(short):], true
+	}
+	return "", false
+}
+
+func gitWorkingTreeOperation(argv []string) string {
+	switch gitSubcommand(argv) {
+	case "clean":
+		return "delete"
+	case "am", "apply", "checkout", "cherry-pick", "clone",
+		"merge", "rebase", "reset", "restore", "revert", "switch":
+		return "write"
+	}
+	return "execute"
+}
+
+func classifyEmbeddedOptionTargets(
+	a *analysis,
+	argv []string,
+	index int,
+) {
+	exec := argv[0]
+	if basenameLower(exec) != "curl" {
+		return
+	}
+	token := argv[index]
+	if strings.HasPrefix(token, "--url=") {
+		value := strings.TrimPrefix(token, "--url=")
+		if target := extractNetworkTarget(value); target.Raw != "" {
+			a.NetworkTargets = append(a.NetworkTargets, target)
+		}
+	}
+	if value, ok := curlFileOperand(argv, index); ok && isPathLike(value) {
+		a.PathOps = append(a.PathOps, pathOp{
+			Token:      value,
+			Op:         "read",
+			Executable: exec,
+		})
+	}
+	if value, ok := curlWriteOperand(argv, index); ok &&
+		isPathLike(value) {
+		a.PathOps = append(a.PathOps, pathOp{
+			Token:      value,
+			Op:         "write",
+			Executable: exec,
+		})
+	}
+	if value, ok := curlWriteOutValue(argv, index); ok {
+		for _, match := range curlWriteOutPathRegex.FindAllStringSubmatch(
+			value, -1,
+		) {
+			if len(match) < 2 {
+				continue
+			}
+			target := strings.TrimPrefix(match[1], ">>")
+			if !isPathLike(target) {
+				continue
+			}
+			a.PathOps = append(a.PathOps, pathOp{
+				Token:      target,
+				Op:         "write",
+				Executable: exec,
+			})
+		}
+	}
+}
+
+func curlFileOperand(argv []string, index int) (string, bool) {
+	token := argv[index]
+	if index > 0 {
+		if value, ok := curlFileOptionValue(
+			argv[index-1], token,
+		); ok {
+			return value, true
+		}
+		if option, _, takesNext, ok := curlShortFileOption(
+			argv[index-1],
+		); ok && takesNext {
+			return curlShortFileValue(option, token)
+		}
+	}
+	if name, value, ok := strings.Cut(token, "="); ok {
+		return curlFileOptionValue(name, value)
+	}
+	return curlShortFileOperand(token)
+}
+
+func curlFileOptionValue(option, value string) (string, bool) {
+	switch option {
+	case "-d":
+		return trimAtFile(value)
+	case "-F":
+		return curlFormFile(value)
+	case "-T":
+		return value, value != "-"
+	case "-H":
+		return trimAtFile(value)
+	}
+	if matchesAnyLongOption(
+		option, "--data", "--data-ascii", "--data-binary",
+		"--data-raw", "--expand-data", "--json",
+	) {
+		return trimAtFile(value)
+	}
+	if matchesAnyLongOption(
+		option, "--data-urlencode", "--url-query",
+	) {
+		return curlDataURLEncodeFile(value)
+	}
+	if matchesAnyLongOption(
+		option, "--variable", "--expand-variable",
+	) {
+		return curlNamedAtFile(value)
+	}
+	if longOptionMatches(option, "--form") {
+		return curlFormFile(value)
+	}
+	if longOptionMatches(option, "--upload-file") {
+		return value, value != "-"
+	}
+	if matchesAnyLongOption(
+		option, "--header", "--proxy-header",
+	) {
+		return trimAtFile(value)
+	}
+	return "", false
+}
+
+func curlShortFileOperand(token string) (string, bool) {
+	option, value, takesNext, ok := curlShortFileOption(token)
+	if !ok || takesNext {
+		return "", false
+	}
+	return curlShortFileValue(option, value)
+}
+
+func curlShortFileOption(
+	token string,
+) (option byte, value string, takesNext bool, ok bool) {
+	return curlShortPathOption(token, "dFTH")
+}
+
+func curlShortPathOption(
+	token string,
+	pathOptions string,
+) (option byte, value string, takesNext bool, ok bool) {
+	if len(token) < 2 || token[0] != '-' ||
+		strings.HasPrefix(token, "--") {
+		return 0, "", false, false
+	}
+	for i := 1; i < len(token); i++ {
+		option = token[i]
+		if strings.ContainsRune(pathOptions, rune(option)) {
+			if i == len(token)-1 {
+				return option, "", true, true
+			}
+			return option, token[i+1:], false, true
+		}
+		if strings.ContainsRune(
+			curlShortOptionsWithValue, rune(option),
+		) {
+			return 0, "", false, false
+		}
+	}
+	return 0, "", false, false
+}
+
+func curlShortFileValue(option byte, value string) (string, bool) {
+	switch option {
+	case 'd', 'H':
+		return trimAtFile(value)
+	case 'F':
+		return curlFormFile(value)
+	case 'T':
+		return value, value != "-"
+	}
+	return "", false
+}
+
+func curlWriteOperand(argv []string, index int) (string, bool) {
+	token := argv[index]
+	if index > 0 {
+		if value, ok := curlWriteOptionValue(
+			argv[index-1], token,
+		); ok {
+			return value, true
+		}
+		if _, _, takesNext, ok := curlShortPathOption(
+			argv[index-1], "cDo",
+		); ok && takesNext {
+			return token, token != "-"
+		}
+	}
+	if name, value, ok := strings.Cut(token, "="); ok {
+		return curlWriteOptionValue(name, value)
+	}
+	_, value, takesNext, ok := curlShortPathOption(token, "cDo")
+	if !ok || takesNext {
+		return "", false
+	}
+	return value, value != "-"
+}
+
+func curlWriteOptionValue(option, value string) (string, bool) {
+	switch option {
+	case "-c", "-D", "-o":
+		return value, value != "-"
+	}
+	if matchesAnyLongOption(
+		option, "--cookie-jar", "--dump-header", "--output",
+		"--output-dir", "--trace", "--trace-ascii",
+		"--etag-save", "--libcurl", "--stderr",
+	) {
+		return value, value != "-"
+	}
+	return "", false
+}
+
+var curlWriteOutPathRegex = regexp.MustCompile(
+	`%output\{((?:>>)?[^}\r\n]+)\}`,
+)
+
+func curlWriteOutValue(argv []string, index int) (string, bool) {
+	token := argv[index]
+	if index > 0 {
+		if argv[index-1] == "-w" ||
+			longOptionMatches(argv[index-1], "--write-out") {
+			return token, true
+		}
+		if option, _, takesNext, ok := curlShortPathOption(
+			argv[index-1], "w",
+		); ok && option == 'w' && takesNext {
+			return token, true
+		}
+	}
+	if name, value, ok := strings.Cut(token, "="); ok &&
+		longOptionMatches(name, "--write-out") {
+		return value, true
+	}
+	option, value, takesNext, ok := curlShortPathOption(token, "w")
+	if !ok || option != 'w' || takesNext {
+		return "", false
+	}
+	return value, true
+}
+
+func trimAtFile(value string) (string, bool) {
+	if !strings.HasPrefix(value, "@") || len(value) == 1 {
+		return "", false
+	}
+	return strings.TrimPrefix(value, "@"), true
+}
+
+func curlDataURLEncodeFile(value string) (string, bool) {
+	at := strings.LastIndexByte(value, '@')
+	if at < 0 || at+1 >= len(value) {
+		return "", false
+	}
+	return value[at+1:], true
+}
+
+func curlNamedAtFile(value string) (string, bool) {
+	at := strings.LastIndexByte(value, '@')
+	if at <= 0 || at+1 >= len(value) {
+		return "", false
+	}
+	return value[at+1:], true
+}
+
+func curlFormFile(value string) (string, bool) {
+	eq := strings.IndexByte(value, '=')
+	if eq < 0 || eq+2 >= len(value) {
+		return "", false
+	}
+	file := value[eq+1:]
+	if file[0] != '@' && file[0] != '<' {
+		return "", false
+	}
+	file = file[1:]
+	if semicolon := strings.IndexByte(file, ';'); semicolon >= 0 {
+		file = file[:semicolon]
+	}
+	return file, file != ""
+}
+
+func shouldClassifyBareNetworkTarget(
+	argv []string,
+	index int,
+	target networkTarget,
+) bool {
+	base := basenameLower(argv[0])
+	switch base {
+	case "git":
+		if index != firstGitRemoteArgument(argv) {
+			return false
+		}
+		if gitSubcommand(argv) != "clone" {
+			return true
+		}
+		token := argv[index]
+		return strings.ContainsAny(token, "@:") ||
+			strings.HasPrefix(token, "[") ||
+			strings.Contains(target.Host, ".") ||
+			net.ParseIP(target.Host) != nil
+	case "scp", "sftp":
+		token := argv[index]
+		return strings.ContainsAny(token, ":@") ||
+			strings.HasPrefix(token, "[")
+	case "ssh":
+		return index == firstNetworkArgument(argv, sshOptionsWithValue)
+	case "curl":
+		return !isNetworkOptionValue(
+			argv, index, curlOptionsWithValue,
+			curlShortOptionsWithValue,
+		)
+	case "wget":
+		return !isNetworkOptionValue(
+			argv, index, wgetOptionsWithValue, "",
+		)
+	case "aria2", "aria2c":
+		return !isNetworkOptionValue(
+			argv, index, ariaOptionsWithValue, "",
+		)
+	}
+
+	return target.Malformed || strings.Contains(target.Host, ".") ||
+		net.ParseIP(target.Host) != nil
+}
+
+func classifyImplicitGitRemote(a *analysis, argv []string) {
+	if len(argv) == 0 || basenameLower(argv[0]) != "git" {
+		return
+	}
+	switch gitSubcommand(argv) {
+	case "fetch", "pull", "push":
+	default:
+		return
+	}
+	if firstGitRemoteArgument(argv) >= 0 {
+		return
+	}
+	a.NetworkTargets = append(a.NetworkTargets, networkTarget{
+		Raw:       "git:configured-remote",
+		Malformed: true,
+	})
+}
+
+func firstGitRemoteArgument(argv []string) int {
+	index := gitSubcommandIndex(argv)
+	if index < 0 {
+		return -1
+	}
+	for i := index + 1; i < len(argv); i++ {
+		arg := argv[i]
+		if arg == "--" {
+			if i+1 < len(argv) {
+				return i + 1
+			}
+			return -1
+		}
+		if strings.HasPrefix(arg, "-") {
+			if gitNetworkOptionTakesNextValue(arg) && i+1 < len(argv) {
+				i++
+			}
+			continue
+		}
+		return i
+	}
+	return -1
+}
+
+func gitNetworkOptionTakesNextValue(arg string) bool {
+	if strings.Contains(arg, "=") {
+		return false
+	}
+	switch arg {
+	case "-b", "--branch", "-c", "--config", "-j", "--jobs",
+		"-o", "--origin", "-s", "--strategy", "-u",
+		"--upload-pack", "--bundle-uri", "--deepen", "--depth",
+		"--exec", "--filter", "--negotiation-tip",
+		"--push-option", "--receive-pack", "--reference",
+		"--reference-if-able", "--refmap", "--repo",
+		"--revision", "--server-option", "--shallow-exclude",
+		"--shallow-since", "--sort", "--strategy-option",
+		"--separate-git-dir", "-X":
+		return true
+	}
+	return false
+}
+
+func firstNetworkArgument(
+	argv []string,
+	optionsWithValue map[string]bool,
+) int {
+	for i := 1; i < len(argv); i++ {
+		if isNetworkOptionValue(argv, i, optionsWithValue,
+			sshShortOptionsWithValue) {
+			continue
+		}
+		if !strings.HasPrefix(argv[i], "-") {
+			return i
+		}
+	}
+	return -1
+}
+
+func isNetworkOptionValue(
+	argv []string,
+	index int,
+	optionsWithValue map[string]bool,
+	shortOptionsWithValue string,
+) bool {
+	if index <= 0 {
+		return false
+	}
+	if optionsWithValue[argv[index-1]] {
+		return true
+	}
+	return bundledOptionTakesNextValue(
+		argv[index-1], shortOptionsWithValue,
+	)
+}
+
+func isNetworkOptionValueForCommand(argv []string, index int) bool {
+	switch basenameLower(argv[0]) {
+	case "ssh":
+		return isNetworkOptionValue(
+			argv, index, sshOptionsWithValue,
+			sshShortOptionsWithValue,
+		)
+	case "curl":
+		return isNetworkOptionValue(
+			argv, index, curlOptionsWithValue,
+			curlShortOptionsWithValue,
+		)
+	case "wget":
+		return isNetworkOptionValue(
+			argv, index, wgetOptionsWithValue, "",
+		)
+	case "aria2", "aria2c":
+		return isNetworkOptionValue(
+			argv, index, ariaOptionsWithValue, "",
+		)
+	}
+	return false
+}
+
+func bundledOptionTakesNextValue(
+	option string,
+	valueOptions string,
+) bool {
+	if len(option) < 2 || option[0] != '-' ||
+		strings.HasPrefix(option, "--") {
+		return false
+	}
+	bundle := option[1:]
+	for i := 0; i < len(bundle); i++ {
+		if strings.ContainsRune(valueOptions, rune(bundle[i])) {
+			return i == len(bundle)-1
+		}
+	}
+	return false
+}
+
+func classifySSHOptionTargets(a *analysis, argv []string) {
+	if len(argv) == 0 {
+		return
+	}
+	switch basenameLower(argv[0]) {
+	case "ssh", "scp", "sftp":
+	default:
+		return
+	}
+	for _, value := range sshOptionValues(argv, 'J') {
+		appendSSHHosts(a, value)
+	}
+	for _, setting := range sshOptionValues(argv, 'o') {
+		classifySSHSettingTarget(a, setting)
+	}
+}
+
+func sshOptionValues(argv []string, option byte) []string {
+	var values []string
+	for i := 1; i < len(argv); i++ {
+		value, takesNext, ok := bundledShortOptionValue(
+			argv[i], option,
+		)
+		if !ok {
+			continue
+		}
+		if takesNext {
+			if i+1 >= len(argv) {
+				continue
+			}
+			i++
+			value = argv[i]
+		}
+		values = append(values, value)
+	}
+	return values
+}
+
+func bundledShortOptionValue(
+	arg string,
+	option byte,
+) (value string, takesNext bool, ok bool) {
+	if len(arg) < 2 || arg[0] != '-' ||
+		strings.HasPrefix(arg, "--") {
+		return "", false, false
+	}
+	bundle := arg[1:]
+	index := strings.IndexByte(bundle, option)
+	if index < 0 {
+		return "", false, false
+	}
+	if index == len(bundle)-1 {
+		return "", true, true
+	}
+	return bundle[index+1:], false, true
+}
+
+func parseSSHSetting(setting string) (string, string, bool) {
+	if name, value, ok := strings.Cut(setting, "="); ok {
+		return strings.TrimSpace(name), strings.TrimSpace(value), true
+	}
+	fields := strings.Fields(setting)
+	if len(fields) < 2 {
+		return "", "", false
+	}
+	return fields[0], strings.Join(fields[1:], " "), true
+}
+
+func classifySSHSettingTarget(a *analysis, setting string) {
+	name, target, ok := parseSSHSetting(setting)
+	if !ok {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "hostname":
+		appendSSHHosts(a, target)
+	case "proxyjump":
+		appendSSHHosts(a, target)
+	}
+}
+
+func appendSSHHosts(a *analysis, value string) {
+	for _, host := range strings.Split(value, ",") {
+		host = strings.TrimSpace(host)
+		if host == "" || strings.EqualFold(host, "none") {
+			continue
+		}
+		target := extractNetworkTarget(host)
+		if target.Raw != "" {
+			a.NetworkTargets = append(a.NetworkTargets, target)
+		}
+	}
+}
+
+const (
+	sshShortOptionsWithValue  = "BbcDEeFIiJLlmOoPpQRSWw"
+	curlShortOptionsWithValue = "AbcdeFHoTuXxDwmECPQrtYyz"
+	wgetShortOptionsWithValue = "aABDeiIlOoPQRtTUwWXYZ"
+)
+
+var sshOptionsWithValue = map[string]bool{
+	"-B": true, "-b": true, "-c": true, "-D": true, "-E": true, "-e": true,
+	"-F": true, "-I": true, "-i": true, "-J": true, "-L": true,
+	"-l": true, "-m": true, "-O": true, "-o": true, "-p": true,
+	"-P": true, "-Q": true, "-R": true, "-S": true, "-W": true,
+	"-w": true,
+}
+
+var curlOptionsWithValue = map[string]bool{
+	"-A": true, "--user-agent": true, "-b": true, "--cookie": true,
+	"-c": true, "--cookie-jar": true, "-d": true, "--data": true,
+	"--data-raw": true, "--data-binary": true, "-e": true,
+	"--referer": true, "-F": true, "--form": true, "-H": true,
+	"--header": true, "-o": true, "--output": true, "-u": true,
+	"--user": true, "-x": true, "--proxy": true,
+	"--connect-to": true, "--resolve": true, "--unix-socket": true,
+	"--abstract-unix-socket": true, "-X": true, "--request": true,
+	"--cacert": true, "--cert": true, "--key": true, "-D": true,
+	"--dump-header": true, "--output-dir": true, "-T": true,
+	"--upload-file": true, "-w": true, "--write-out": true,
+	"--form-string": true, "--json": true, "--max-time": true,
+	"--connect-timeout": true, "--retry": true, "--retry-delay": true,
+	"--retry-max-time": true, "--request-target": true,
+	"--url-query": true, "--variable": true, "--expand-data": true,
+	"--expand-variable": true,
+}
+
+var wgetOptionsWithValue = map[string]bool{
+	"-O": true, "--output-document": true, "-o": true,
+	"--output-file": true, "-P": true, "--directory-prefix": true,
+	"--header": true, "--user-agent": true, "--post-data": true,
+	"--post-file": true, "--user": true, "--password": true,
+	"-e": true, "--execute": true,
+}
+
+var ariaOptionsWithValue = map[string]bool{
+	"-d": true, "--dir": true, "-o": true, "--out": true,
+	"--header": true, "--user-agent": true,
 }
 
 // isGitSubcommandName returns true for known git subcommand names that
@@ -404,7 +1350,8 @@ func isGitSubcommandName(tok string) bool {
 		"name-rev", "rev-list", "show-ref", "update-ref", "symbolic-ref",
 		"for-each-ref", "pack-refs", "count-objects", "unpack-objects",
 		"verify-pack", "strip", "stripping", "submodule", "worktree",
-		"sparse-checkout", "multi-pack-index", "maintenance":
+		"sparse-checkout", "multi-pack-index", "maintenance",
+		"help", "version":
 		return true
 	}
 	return false
@@ -435,16 +1382,9 @@ func isNetworkSubcommand(argv []string) bool {
 		return false
 	}
 	if basenameLower(argv[0]) == "git" {
-		// The first non-flag argument after git is the subcommand.
-		for _, arg := range argv[1:] {
-			if strings.HasPrefix(arg, "-") {
-				continue
-			}
-			switch arg {
-			case "clone", "fetch", "push", "pull", "ls-remote":
-				return true
-			}
-			return false
+		switch gitSubcommand(argv) {
+		case "clone", "fetch", "push", "pull", "ls-remote":
+			return true
 		}
 		return false
 	}
@@ -465,6 +1405,13 @@ func isPathLike(tok string) bool {
 	if strings.HasPrefix(tok, "/") {
 		return true
 	}
+	if strings.HasPrefix(tok, `\`) {
+		return true
+	}
+	if len(tok) >= 3 && tok[1] == ':' &&
+		(tok[2] == '/' || tok[2] == '\\') {
+		return true
+	}
 	if strings.HasPrefix(tok, "./") || strings.HasPrefix(tok, "../") {
 		return true
 	}
@@ -472,7 +1419,7 @@ func isPathLike(tok string) bool {
 	if strings.HasPrefix(tok, ".") && len(tok) > 1 && tok[1] != '.' && tok[1] != '/' {
 		return true
 	}
-	if strings.ContainsAny(tok, "/") {
+	if strings.ContainsAny(tok, `/\`) {
 		return true
 	}
 	return false
@@ -482,7 +1429,7 @@ func isPathLike(tok string) bool {
 // consumed by exec. `find` is normally a read operation, but `find -delete`
 // and `find -exec rm` are destructive and are classified as delete.
 func opForCommand(exec string) string {
-	switch exec {
+	switch basenameLower(exec) {
 	case "rm", "rmdir", "unlink":
 		return "delete"
 	case "mv", "cp", "tee", "install", "dd", "truncate", "shred":
@@ -573,7 +1520,9 @@ func extractNetworkTarget(tok string) networkTarget {
 	if i := strings.LastIndex(host, "@"); i >= 0 {
 		host = host[i+1:]
 	}
-	if strings.HasPrefix(host, "[") {
+	if ip := net.ParseIP(host); ip != nil {
+		host = ip.String()
+	} else if strings.HasPrefix(host, "[") {
 		if end := strings.IndexByte(host, ']'); end > 0 {
 			suffix := host[end+1:]
 			if suffix != "" && suffix[0] != ':' && suffix[0] != '/' {

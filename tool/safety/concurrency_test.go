@@ -68,3 +68,17 @@ func TestConcurrencyLimiter_AcquireCancelledContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, int64(0), c.activeCount())
 }
+
+func TestConcurrencyLimiter_OwnsPolicyMap(t *testing.T) {
+	limits := map[string]int{"tool": 1}
+	c := newConcurrencyLimiter(ConcurrencyPolicy{
+		PerToolLimits: limits,
+	})
+	limits["tool"] = 100
+
+	release, err := c.acquire(context.Background(), "tool")
+	require.NoError(t, err)
+	defer release()
+	_, err = c.acquire(context.Background(), "tool")
+	require.Error(t, err)
+}

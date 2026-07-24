@@ -41,7 +41,7 @@ var secretPatterns = []secretPattern{
 	},
 	{
 		id:      "aws_secret_access_key",
-		pattern: regexp.MustCompile(`aws_secret_access_key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?`),
+		pattern: regexp.MustCompile(`(?i)aws_secret_access_key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}['"]?`),
 	},
 	{
 		id:      "github_pat",
@@ -264,10 +264,17 @@ func ruleSecret(in ScanInput, p Policy) []Finding {
 			add("secret.input_or_code", summarizeMatches(matches), RiskCritical)
 		}
 	}
+	for _, arg := range in.Args {
+		if matches := findSecrets(arg); len(matches) > 0 {
+			add("secret.input_or_code",
+				summarizeMatches(matches), RiskCritical)
+		}
+	}
 
-	// Environment values.
-	for _, v := range in.Env {
-		if matches := findSecrets(v); len(matches) > 0 {
+	// Environment names and values.
+	for name, value := range in.Env {
+		assignment := name + "=" + value
+		if matches := findSecrets(assignment); len(matches) > 0 {
 			add("secret.env_value", summarizeMatches(matches), RiskCritical)
 		}
 	}

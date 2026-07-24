@@ -67,7 +67,15 @@ func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Findi
 
 	// write_stdin to an unknown session with non-empty input.
 	if sess != nil && in.SessionID != "" && in.SessionInput != "" {
-		if !sess.isKnown(in.SessionID) {
+		if sess.isKilled(in.SessionID) {
+			out = append(out, Finding{
+				RuleID:         "host.residual_session",
+				RiskLevel:      RiskMedium,
+				Decision:       ruleDecision(p.Rules.HostExec.Action, RiskMedium, p),
+				Evidence:       "write_stdin to an already-finalized session",
+				Recommendation: "Create a new session instead of interacting with a killed session id",
+			})
+		} else if !sess.isKnown(in.SessionID) {
 			out = append(out, Finding{
 				RuleID:         "host.unknown_session",
 				RiskLevel:      RiskMedium,

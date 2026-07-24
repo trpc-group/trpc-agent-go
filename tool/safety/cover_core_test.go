@@ -126,12 +126,14 @@ func TestCovercore_BasenameLower(t *testing.T) {
 // TestCovercore_SleepSeconds covers the parsing branches of sleepSeconds.
 func TestCovercore_SleepSeconds(t *testing.T) {
 	require.Equal(t, int64(-1), sleepSeconds([]string{"sleep"}))
-	require.Equal(t, int64(-1), sleepSeconds([]string{"sleep", "  "}))
+	require.Equal(t, int64(1<<62-1), sleepSeconds([]string{"sleep", "  "}))
 	require.Equal(t, int64(5), sleepSeconds([]string{"sleep", "5"}))
-	require.Equal(t, int64(0), sleepSeconds([]string{"sleep", "0.5"}))
-	require.Equal(t, int64(12), sleepSeconds([]string{"sleep", "12.9"}))
-	require.Equal(t, int64(-1), sleepSeconds([]string{"sleep", "abc"}))
-	require.Equal(t, int64(-1), sleepSeconds([]string{"sleep", ".5"}))
+	require.Equal(t, int64(1), sleepSeconds([]string{"sleep", "0.5"}))
+	require.Equal(t, int64(13), sleepSeconds([]string{"sleep", "12.9"}))
+	require.Equal(t, int64(1<<62-1), sleepSeconds([]string{"sleep", "abc"}))
+	require.Equal(t, int64(1), sleepSeconds([]string{"sleep", ".5"}))
+	require.Equal(t, int64(360), sleepSeconds([]string{"sleep", "6m"}))
+	require.Equal(t, int64(3601), sleepSeconds([]string{"sleep", "1", "3600"}))
 
 	// Unbounded sleep targets map to a very large sentinel.
 	for _, s := range []string{"infinity", "INF", "forever"} {

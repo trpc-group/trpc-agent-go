@@ -19,8 +19,9 @@
 //     converts this to tool.PermissionActionAsk so hosts with an approval UI
 //     can intervene before execution.
 //
-// The guard also redacts detected secrets from tool results, writes JSONL
-// audit events, and exposes OpenTelemetry span attributes for the existing
+// WrapTool applies the guard to a tool.CallableTool and owns the complete
+// preflight, execution, result-redaction, audit, and cleanup lifecycle.
+// The guard also exposes OpenTelemetry span attributes for the existing
 // execute-tool span.
 //
 // # Fail-closed behavior

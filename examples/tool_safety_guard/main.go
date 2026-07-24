@@ -7,9 +7,9 @@
 //
 
 // Package main demonstrates the Tool Execution Safety Guard with a mock
-// corpus. It loads the policy, scans every sample, exercises
-// CheckToolPermission with a fake request, attaches callbacks to a local
-// tool.Callbacks, and writes the batch report and audit files.
+// corpus. It loads the policy, scans every sample, executes a mock
+// callable tool through WrapTool, and writes the batch report and audit
+// files.
 //
 // The example never calls an external model, shell, package manager,
 // network endpoint, or API-key-dependent service.
@@ -61,7 +61,7 @@ func run() error {
 	defer guard.Close()
 
 	// Scan the corpus.
-	corpus := buildCorpus()
+	corpus := buildExampleCorpus()
 	inputs := make([]safety.ScanInput, 0, len(corpus))
 	for _, c := range corpus {
 		inputs = append(inputs, c.input)
@@ -71,48 +71,44 @@ func run() error {
 		return fmt.Errorf("scan batch: %w", err)
 	}
 
-	// Exercise CheckToolPermission with several representative requests
-	// so the audit contains preflight events for allow, deny, and ask
-	// decisions. The allow/ask cases pass an explicit bounded timeout:
-	// an omitted timeout is denied under the shipped policy.
-	permissionCases := []struct {
-		name      string
-		toolName  string
-		arguments string
-	}{
-		{"dangerous delete", "workspace_exec", `{"command":"rm -rf /"}`},
-		{"credential read", "workspace_exec", `{"command":"cat ~/.ssh/id_rsa"}`},
-		{"whitelisted request", "workspace_exec", `{"command":"curl https://github.com/org/repo","timeout":10}`},
-		{"dependency install", "workspace_exec", `{"command":"npm install package","timeout":10}`},
-		{"safe go test", "workspace_exec", `{"command":"go test ./...","timeout":10}`},
-	}
-	for _, pc := range permissionCases {
-		decision, err := guard.CheckToolPermission(ctx, &tool.PermissionRequest{
-			ToolName:  pc.toolName,
-			Arguments: []byte(pc.arguments),
-		})
-		if err != nil {
-			return fmt.Errorf("check permission %q: %w", pc.name, err)
-		}
-		fmt.Printf("CheckToolPermission(%q) -> %s\n", pc.name, decision.Action)
+	wrapped, err := safety.WrapTool(&demoTool{}, guard)
+	if err != nil {
+		return fmt.Errorf("wrap tool: %w", err)
 	}
 
-	// Attach callbacks to a local tool.Callbacks and exercise the
-	// after-tool redaction path with a secret-bearing result.
-	cbs := guard.Callbacks()
-	afterOut, err := cbs.RunAfterTool(ctx, &tool.AfterToolArgs{
-		ToolName:  "workspace_exec",
-		Arguments: []byte(`{"command":"go test ./..."}`),
-		Result: map[string]any{
-			"output": "API_KEY=sk_live_1234567890abcdef1234",
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("after tool: %w", err)
+	// Exercise the package-owned wrapper with representative requests
+	// so the audit contains preflight and completion events.
+	permissionCases := []struct {
+		name      string
+		arguments string
+	}{
+		{"dangerous delete", `{"command":"rm -rf /"}`},
+		{"credential read", `{"command":"cat ~/.ssh/id_rsa"}`},
+		{"whitelisted request", `{"command":"curl https://github.com/org/repo","timeout":10}`},
+		{"dependency install", `{"command":"npm install package","timeout":10}`},
+		{"safe go test", `{"command":"go test ./...","timeout":10}`},
 	}
-	if afterOut != nil && afterOut.CustomResult != nil {
-		raw, _ := json.Marshal(afterOut.CustomResult)
-		fmt.Printf("AfterTool redacted result: %s\n", string(raw))
+	var redactedResult any
+	for _, pc := range permissionCases {
+		result, err := wrapped.Call(ctx, []byte(pc.arguments))
+		if err != nil {
+			return fmt.Errorf("wrapped call %q: %w", pc.name, err)
+		}
+		action := tool.PermissionActionAllow
+		if permission, ok := result.(tool.PermissionResult); ok {
+			if permission.Status == tool.PermissionResultStatusDenied {
+				action = tool.PermissionActionDeny
+			} else {
+				action = tool.PermissionActionAsk
+			}
+		} else if pc.name == "safe go test" {
+			redactedResult = result
+		}
+		fmt.Printf("WrapTool(%q) -> %s\n", pc.name, action)
+	}
+	if redactedResult != nil {
+		raw, _ := json.Marshal(redactedResult)
+		fmt.Printf("Wrapped redacted result: %s\n", string(raw))
 	}
 
 	// Write the batch report.
@@ -142,9 +138,27 @@ type corpusEntry struct {
 	input safety.ScanInput
 }
 
-// buildCorpus returns the sample tool-call inputs scanned by the
-// example.
-func buildCorpus() []corpusEntry {
+type demoTool struct{}
+
+func (*demoTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: "workspace_exec"}
+}
+
+func (*demoTool) Call(
+	_ context.Context,
+	arguments []byte,
+) (any, error) {
+	if bytes.Contains(arguments, []byte("go test")) {
+		return map[string]any{
+			"output": "API_KEY=sk_live_1234567890abcdef1234",
+		}, nil
+	}
+	return map[string]any{"output": "ok"}, nil
+}
+
+// buildExampleCorpus returns the focused sample inputs shown by this
+// example. The package quality gate uses a larger testdata corpus.
+func buildExampleCorpus() []corpusEntry {
 	return []corpusEntry{
 		{name: "safe go test", input: safety.ScanInput{ToolName: "workspace_exec", Backend: safety.BackendWorkspaceExec, Command: "go test ./..."}},
 		{name: "safe git status", input: safety.ScanInput{ToolName: "workspace_exec", Backend: safety.BackendWorkspaceExec, Command: "git status"}},

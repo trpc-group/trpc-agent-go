@@ -2528,15 +2528,6 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := callbacks.RunAfterTool(ctx, args)
-	if afterResult != nil && afterResult.Context != nil {
-		ctx = afterResult.Context
-	}
-	skipSummarization := afterResult != nil &&
-		afterResult.SkipSummarization
-	override := afterResult != nil && afterResult.CustomResult != nil
-	if override {
-		toolResult = afterResult.CustomResult
-	}
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -2544,11 +2535,16 @@ func (p *FunctionCallResponseProcessor) runAfterToolPluginCallbacks(
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, toolResult, override, skipSummarization,
+		return ctx, toolResult, false, false,
 			fmt.Errorf("tool callback error: %w", err)
 	}
-	if override {
-		return ctx, toolResult, true, skipSummarization, nil
+	if afterResult != nil && afterResult.Context != nil {
+		ctx = afterResult.Context
+	}
+	skipSummarization := afterResult != nil &&
+		afterResult.SkipSummarization
+	if afterResult != nil && afterResult.CustomResult != nil {
+		return ctx, afterResult.CustomResult, true, skipSummarization, nil
 	}
 	return ctx, toolResult, false, skipSummarization, nil
 }
@@ -2574,14 +2570,6 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 		Meta:        extractMetaFromResult(toolResult),
 	}
 	afterResult, err := p.toolCallbacks.RunAfterTool(ctx, args)
-	if afterResult != nil && afterResult.Context != nil {
-		ctx = afterResult.Context
-	}
-	skipSummarization := afterResult != nil &&
-		afterResult.SkipSummarization
-	if afterResult != nil && afterResult.CustomResult != nil {
-		toolResult = afterResult.CustomResult
-	}
 	if err != nil {
 		log.ErrorfContext(
 			ctx,
@@ -2589,8 +2577,17 @@ func (p *FunctionCallResponseProcessor) runAfterToolCallbacks(
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, toolResult, skipSummarization,
+		return ctx, toolResult, false,
 			fmt.Errorf("tool callback error: %w", err)
+	}
+
+	if afterResult != nil && afterResult.Context != nil {
+		ctx = afterResult.Context
+	}
+	skipSummarization := afterResult != nil &&
+		afterResult.SkipSummarization
+	if afterResult != nil && afterResult.CustomResult != nil {
+		toolResult = afterResult.CustomResult
 	}
 	return ctx, toolResult, skipSummarization, nil
 }

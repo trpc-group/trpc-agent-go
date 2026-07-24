@@ -9,7 +9,7 @@
 package safety
 
 import (
-	"errors"
+	"math"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -54,6 +54,24 @@ func basenameLower(name string) string {
 	return strings.ToLower(base)
 }
 
+func longOptionMatches(arg, full string) bool {
+	name, _, _ := strings.Cut(arg, "=")
+	if name == full {
+		return true
+	}
+	return len(name) >= len(full)-1 &&
+		strings.HasPrefix(full, name)
+}
+
+func matchesAnyLongOption(arg string, options ...string) bool {
+	for _, option := range options {
+		if longOptionMatches(arg, option) {
+			return true
+		}
+	}
+	return false
+}
+
 // isNetworkCommand returns true for known network commands and any name
 // ending in a configured network command name. The configured list is
 // applied at the rule level; this helper only covers the built-in set.
@@ -74,75 +92,102 @@ func isSleepCommand(exec string, argv []string) bool {
 	return len(argv) >= 2
 }
 
-// sleepSeconds parses the first numeric argument to sleep. Returns -1 when
-// no number could be parsed. Handles bare decimal integers and floating
-// point values. Non-numeric arguments like "infinity" return -1; the
-// resource rule separately checks for "infinity" and treats it as
-// unbounded.
+// sleepSeconds parses and sums GNU/POSIX sleep operands. It supports
+// decimal values and s/m/h/d suffixes. Invalid or overflowing operands
+// fail closed as an effectively unbounded duration.
 func sleepSeconds(argv []string) int64 {
 	if len(argv) < 2 {
 		return -1
 	}
-	s := strings.TrimSpace(argv[1])
-	if s == "" {
-		return -1
-	}
-	// Check for infinity/non-numeric sleep targets that indicate
-	// unbounded sleep.
-	switch strings.ToLower(s) {
-	case "infinity", "inf", "forever":
-		// Return a very large value so the resource rule flags it.
-		return 1<<62 - 1
-	}
-	var n int64
-	if _, err := parseDecimalInt(s, &n); err != nil {
-		if errors.Is(err, strconv.ErrRange) {
-			// An overflowing literal is an effectively unbounded
-			// sleep; flag it like "infinity" instead of letting the
-			// wrapped value bypass the max-sleep guard.
+	var total float64
+	for _, operand := range argv[1:] {
+		seconds, ok := parseSleepOperand(operand)
+		if !ok || seconds >= float64(1<<62-1)-total {
 			return 1<<62 - 1
 		}
-		// Try floating point: parse the integer part.
-		dot := strings.IndexByte(s, '.')
-		if dot > 0 {
-			if _, err := parseDecimalInt(s[:dot], &n); err == nil {
-				return n
-			}
-		}
-		return -1
+		total += seconds
 	}
-	return n
+	return int64(math.Ceil(total))
+}
+
+func parseSleepOperand(value string) (float64, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, false
+	}
+	switch strings.ToLower(value) {
+	case "infinity", "inf", "forever":
+		return float64(1 << 62), true
+	}
+	multiplier := float64(1)
+	last := value[len(value)-1]
+	switch last {
+	case 's', 'S':
+		value = value[:len(value)-1]
+	case 'm', 'M':
+		value = value[:len(value)-1]
+		multiplier = 60
+	case 'h', 'H':
+		value = value[:len(value)-1]
+		multiplier = 60 * 60
+	case 'd', 'D':
+		value = value[:len(value)-1]
+		multiplier = 24 * 60 * 60
+	}
+	number, err := strconv.ParseFloat(value, 64)
+	if err != nil || number < 0 || math.IsInf(number, 0) ||
+		math.IsNaN(number) {
+		return 0, false
+	}
+	return number * multiplier, true
 }
 
 // isInstallCommand returns true for known package install commands.
 func isInstallCommand(exec string, argv []string) bool {
 	base := basenameLower(exec)
-	// go install, go get, go mod download (dependency changes).
-	if base == "go" && hasToken(argv, "install", "get", "mod") {
-		return true
+	return isGoDependencyCommand(base, argv) ||
+		isJavaScriptInstallCommand(base, argv) ||
+		isPythonInstallCommand(base, argv) ||
+		isSystemInstallCommand(base, argv)
+}
+
+func isGoDependencyCommand(base string, argv []string) bool {
+	if base != "go" {
+		return false
 	}
-	// npm/pnpm/yarn install, add, i, ci.
-	if base == "npm" || base == "pnpm" || base == "yarn" {
-		if hasToken(argv, "install", "i", "add", "ci", "install-save") {
-			return true
+	if base == "go" && len(argv) > 2 && argv[1] == "run" {
+		for _, arg := range argv[2:] {
+			if !strings.HasPrefix(arg, "-") && strings.Contains(arg, "@") {
+				return true
+			}
 		}
 	}
+	return hasToken(argv, "install", "get", "mod")
+}
+
+func isJavaScriptInstallCommand(base string, argv []string) bool {
+	if base != "npm" && base != "pnpm" && base != "yarn" {
+		return false
+	}
+	return hasToken(argv, "install", "i", "add", "ci", "install-save")
+}
+
+func isPythonInstallCommand(base string, argv []string) bool {
 	if base == "pip" || base == "pip3" || base == "uv" || base == "poetry" {
-		if hasToken(argv, "install") {
-			return true
-		}
+		return hasToken(argv, "install")
 	}
 	if base == "python" || base == "python3" {
-		if hasFlagSubcommand(argv, "-m", "pip") && hasToken(argv, "install") {
-			return true
-		}
+		return hasFlagSubcommand(argv, "-m", "pip") &&
+			hasToken(argv, "install")
 	}
+	return false
+}
+
+func isSystemInstallCommand(base string, argv []string) bool {
 	switch base {
 	case "apt", "apt-get", "yum", "dnf", "zypper", "brew", "cargo",
 		"pacman", "pkg", "choco", "scoop", "winget", "go":
-		if hasToken(argv, "install") {
-			return true
-		}
+		return hasToken(argv, "install")
 	}
 	return false
 }

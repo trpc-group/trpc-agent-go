@@ -11,6 +11,7 @@ package safety
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -68,6 +69,22 @@ func TestCovercore_GuardOptions(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, g.redaction)
 	require.NoError(t, g.Close())
+
+	_, err = NewGuard(
+		WithPolicy(covercoreNoAuditPolicy()),
+		WithConcurrencyPolicy(
+			ConcurrencyPolicy{MaxActiveCalls: -1},
+		),
+	)
+	require.ErrorContains(t, err, "must be non-negative")
+
+	_, err = NewGuard(
+		WithPolicy(covercoreNoAuditPolicy()),
+		WithConcurrencyPolicy(ConcurrencyPolicy{
+			PerToolLimits: map[string]int{"tool": -1},
+		}),
+	)
+	require.ErrorContains(t, err, "must be non-negative")
 }
 
 // TestCovercore_GuardPolicyAccessor verifies Policy returns the loaded
@@ -79,6 +96,42 @@ func TestCovercore_GuardPolicyAccessor(t *testing.T) {
 	p := g.Policy()
 	require.Equal(t, 1, p.Version)
 	require.Equal(t, 30*time.Second, p.MaxTimeout)
+	p.AllowedCommands[0] = "rm"
+	p.Network.AllowedDomains[0] = "evil.example"
+	fresh := g.Policy()
+	require.NotEqual(t, "rm", fresh.AllowedCommands[0])
+	require.NotEqual(t, "evil.example",
+		fresh.Network.AllowedDomains[0])
+}
+
+func TestCovercore_ToolProfileRegistrationOwnsSlices(t *testing.T) {
+	workingDirs := []string{"cwd"}
+	timeouts := []string{"timeout"}
+	profile := ToolProfile{
+		Name:             "custom_exec",
+		Backend:          BackendWorkspaceExec,
+		CommandField:     "command",
+		WorkingDirFields: workingDirs,
+		TimeoutFields:    timeouts,
+	}
+	g, err := NewGuard(
+		WithPolicy(covercoreNoAuditPolicy()),
+		WithToolProfile(profile),
+	)
+	require.NoError(t, err)
+	defer g.Close()
+
+	workingDirs[0] = "mutated"
+	timeouts[0] = "mutated"
+	got, ok := g.profiles.lookup("custom_exec")
+	require.True(t, ok)
+	require.Equal(t, []string{"cwd"}, got.WorkingDirFields)
+	require.Equal(t, []string{"timeout"}, got.TimeoutFields)
+
+	got.WorkingDirFields[0] = "caller-mutated"
+	fresh, ok := g.profiles.lookup("custom_exec")
+	require.True(t, ok)
+	require.Equal(t, []string{"cwd"}, fresh.WorkingDirFields)
 }
 
 // TestCovercore_GuardNilReceivers covers the nil-guard branches.
@@ -90,7 +143,7 @@ func TestCovercore_GuardNilReceivers(t *testing.T) {
 	_, err = g.ScanBatch(context.Background(), []ScanInput{{ToolName: "t"}})
 	require.ErrorContains(t, err, "guard is nil")
 
-	decision, err := g.CheckToolPermission(context.Background(),
+	decision, err := g.checkToolCall(context.Background(),
 		&tool.PermissionRequest{ToolName: "t"})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
@@ -102,7 +155,7 @@ func TestCovercore_GuardNilReceivers(t *testing.T) {
 // TestCovercore_CheckToolPermissionNilRequest covers the nil request deny.
 func TestCovercore_CheckToolPermissionNilRequest(t *testing.T) {
 	guard := newTestGuard(t)
-	decision, err := guard.CheckToolPermission(context.Background(), nil)
+	decision, err := guard.checkToolCall(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "permission request is nil")
@@ -112,10 +165,19 @@ func TestCovercore_CheckToolPermissionNilRequest(t *testing.T) {
 // path for an unknown tool with malformed arguments.
 func TestCovercore_CheckToolPermissionUnknownToolMalformed(t *testing.T) {
 	guard := newTestGuard(t)
-	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
 		ToolName:  "totally_unknown_tool",
 		Arguments: []byte(`{broken`),
 	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "input.unknown_malformed")
+
+	decision, err = guard.checkToolCall(context.Background(),
+		&tool.PermissionRequest{
+			ToolName:  "totally_unknown_tool",
+			Arguments: []byte(`{"command":["sh","-c","id"]}`),
+		})
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAsk, decision.Action)
 	require.Contains(t, decision.Reason, "input.unknown_malformed")
@@ -126,7 +188,7 @@ func TestCovercore_CheckToolPermissionUnknownToolMalformed(t *testing.T) {
 // becomes the output-size hint.
 func TestCovercore_CheckToolPermissionMetadataMapping(t *testing.T) {
 	guard := newTestGuard(t)
-	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"ls","timeout":10}`),
 		Metadata: tool.ToolMetadata{
@@ -144,7 +206,7 @@ func TestCovercore_CheckToolPermissionConcurrencyExceeded(t *testing.T) {
 	guard := newTestGuard(t, WithConcurrencyPolicy(ConcurrencyPolicy{MaxActiveCalls: 1}))
 	allowArgs := []byte(`{"command":"ls","timeout":10}`)
 
-	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
 		ToolName:   "workspace_exec",
 		ToolCallID: "call-1",
 		Arguments:  allowArgs,
@@ -153,7 +215,7 @@ func TestCovercore_CheckToolPermissionConcurrencyExceeded(t *testing.T) {
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 
 	// The second in-flight call exceeds the global cap and is denied.
-	decision, err = guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err = guard.checkToolCall(context.Background(), &tool.PermissionRequest{
 		ToolName:   "workspace_exec",
 		ToolCallID: "call-2",
 		Arguments:  allowArgs,
@@ -162,9 +224,8 @@ func TestCovercore_CheckToolPermissionConcurrencyExceeded(t *testing.T) {
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.Contains(t, decision.Reason, "resource.concurrency_exceeded")
 
-	// Running the after-tool callback for call-1 frees the slot.
-	cbs := guard.Callbacks()
-	_, err = cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+	// Completing call-1 frees the slot.
+	_, err = guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
 		ToolName:   "workspace_exec",
 		ToolCallID: "call-1",
 		Arguments:  allowArgs,
@@ -172,7 +233,7 @@ func TestCovercore_CheckToolPermissionConcurrencyExceeded(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	decision, err = guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+	decision, err = guard.checkToolCall(context.Background(), &tool.PermissionRequest{
 		ToolName:   "workspace_exec",
 		ToolCallID: "call-3",
 		Arguments:  allowArgs,
@@ -187,11 +248,11 @@ func TestCovercore_ApplyProfileDefaults(t *testing.T) {
 	guard := newTestGuard(t)
 
 	// Backend and timeout filled from the named profile; the profile
-	// default (5m) is applied uncapped so the scanner evaluates the
+	// default (30m) is applied uncapped so the scanner evaluates the
 	// effective backend timeout against max_timeout.
 	in := guard.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "exec_command"})
 	require.Equal(t, BackendHostExec, in.Backend)
-	require.Equal(t, 5*time.Minute, in.Timeout)
+	require.Equal(t, 30*time.Minute, in.Timeout)
 
 	// An explicit backend and timeout are preserved.
 	in = guard.applyProfileDefaults(ScanInput{
@@ -253,35 +314,18 @@ func TestCovercore_StashPopSideTables(t *testing.T) {
 	require.NotNil(t, guard.popRelease("after-close-rel"))
 }
 
-// TestCovercore_AttachCallbacks covers merging into existing callbacks and
-// the nil-callbacks guard.
-func TestCovercore_AttachCallbacks(t *testing.T) {
-	guard := newTestGuard(t)
-	require.NotPanics(t, func() { guard.AttachCallbacks(nil) })
-
-	cbs := tool.NewCallbacks()
-	guard.AttachCallbacks(cbs)
-	require.NotEmpty(t, cbs.AfterToolFinalizers)
-
-	// The nil-args invocation of the registered finalizer is a no-op.
-	out, err := cbs.AfterToolFinalizers[0](context.Background(), nil)
-	require.NoError(t, err)
-	require.Nil(t, out)
-}
-
 // TestCovercore_AfterToolErrorWithSecret covers error redaction and the
 // post_execute audit event for a failed call.
 func TestCovercore_AfterToolErrorWithSecret(t *testing.T) {
 	auditBuf := new(bytes.Buffer)
 	guard := newTestGuard(t, WithAuditWriter(auditBuf))
-	cbs := guard.Callbacks()
 
 	args := &tool.AfterToolArgs{
 		ToolName:  "workspace_exec",
 		Arguments: []byte(`{"command":"ls"}`),
 		Error:     errors.New("dial failed: API_KEY=sk_live_1234567890abcdef1234"),
 	}
-	out, err := cbs.RunAfterTool(context.Background(), args)
+	out, err := guard.finalizeCall(context.Background(), args)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 
@@ -302,7 +346,6 @@ func TestCovercore_AfterToolErrorWithSecret(t *testing.T) {
 func TestCovercore_AfterToolErrorWithoutSecret(t *testing.T) {
 	auditBuf := new(bytes.Buffer)
 	guard := newTestGuard(t, WithAuditWriter(auditBuf))
-	cbs := guard.Callbacks()
 
 	args := &tool.AfterToolArgs{
 		ToolName:  "workspace_exec",
@@ -310,13 +353,9 @@ func TestCovercore_AfterToolErrorWithoutSecret(t *testing.T) {
 		Error:     errors.New("plain failure"),
 		Result:    "partial",
 	}
-	out, err := cbs.RunAfterTool(context.Background(), args)
+	out, err := guard.finalizeCall(context.Background(), args)
 	require.NoError(t, err)
-	// The guard callback made no change, so the result passes through
-	// untouched. Assert unconditionally: a nil override or a mutated
-	// result must fail this test.
-	require.NotNil(t, out)
-	require.Equal(t, "partial", out.CustomResult)
+	require.Nil(t, out)
 	require.Contains(t, auditBuf.String(), `"execution":"error"`)
 }
 
@@ -353,6 +392,16 @@ func TestCovercore_RedactMetaIfNeeded(t *testing.T) {
 	args = &tool.AfterToolArgs{Meta: map[string]any{"clean": "value"}}
 	require.False(t, guard.redactMetaIfNeeded(args))
 
+	cyclic := map[string]any{
+		"token": "xoxb-1234567890-abcdef",
+	}
+	cyclic["self"] = cyclic
+	args = &tool.AfterToolArgs{Meta: cyclic}
+	require.True(t, guard.redactMetaIfNeeded(args))
+	raw, err := json.Marshal(args.Meta)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "xoxb-1234567890-abcdef")
+
 	// Redaction disabled is a no-op.
 	g2, err := NewGuard(WithPolicy(covercoreNoAuditPolicy()), WithRedaction(false))
 	require.NoError(t, err)
@@ -362,12 +411,11 @@ func TestCovercore_RedactMetaIfNeeded(t *testing.T) {
 }
 
 // TestCovercore_TrackSessionLifecycle covers session registration and kill
-// tracking through the after-tool callback.
+// tracking through the completion handler.
 func TestCovercore_TrackSessionLifecycle(t *testing.T) {
 	guard := newTestGuard(t)
-	cbs := guard.Callbacks()
 
-	_, err := cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+	_, err := guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
 		ToolName:  "exec_command",
 		Arguments: []byte(`{"command":"ls"}`),
 		Result:    map[string]any{"session_id": "sess-42"},
@@ -376,7 +424,7 @@ func TestCovercore_TrackSessionLifecycle(t *testing.T) {
 	require.True(t, guard.sessions.isKnown("sess-42"))
 	require.False(t, guard.sessions.isKilled("sess-42"))
 
-	_, err = cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+	_, err = guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
 		ToolName:  "kill_session",
 		Arguments: []byte(`{"session_id":"sess-42"}`),
 		Result:    map[string]any{"session_id": "sess-42"},
@@ -385,7 +433,7 @@ func TestCovercore_TrackSessionLifecycle(t *testing.T) {
 	require.True(t, guard.sessions.isKilled("sess-42"))
 
 	// An unrelated tool name with a session id changes nothing.
-	_, err = cbs.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+	_, err = guard.finalizeCall(context.Background(), &tool.AfterToolArgs{
 		ToolName:  "read_file",
 		Arguments: []byte(`{}`),
 		Result:    map[string]any{"session_id": "sess-99"},
@@ -394,7 +442,7 @@ func TestCovercore_TrackSessionLifecycle(t *testing.T) {
 	require.False(t, guard.sessions.isKnown("sess-99"))
 
 	// A nil result has no session to track.
-	guard.trackSessionLifecycle("exec_command", nil)
+	guard.trackSessionLifecycle("exec_command", nil, nil)
 	require.False(t, guard.sessions.isKnown(""))
 }
 
@@ -443,7 +491,9 @@ func TestCovercore_RedactAndLimitTrackedNoRedaction(t *testing.T) {
 	require.NoError(t, err)
 	defer g.Close()
 
-	safe, changed, truncated, size := g.redactAndLimitTracked(strings.Repeat("y", 512))
+	safe, redacted, changed, truncated, size :=
+		g.redactAndLimitTracked(strings.Repeat("y", 512))
+	require.False(t, redacted)
 	require.True(t, truncated)
 	require.True(t, changed)
 	require.LessOrEqual(t, size, int64(64))
@@ -509,9 +559,11 @@ func TestCovercore_GuardCloseKeepsInjectedWriter(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NoError(t, g.Close())
-	// The injected writer survives Close and still accepts events.
-	require.NotNil(t, g.audit)
-	require.NoError(t, g.audit.Append(AuditEvent{ScanID: "post-close"}))
+	// The guard drops its wrapper, but the caller-owned writer remains
+	// open and usable.
+	require.Nil(t, g.audit)
+	_, err = buf.WriteString("post-close")
+	require.NoError(t, err)
 	require.Contains(t, buf.String(), "post-close")
 }
 
@@ -714,7 +766,10 @@ func TestCovercore_GuardScanDirect(t *testing.T) {
 func TestCovercore_NilGuardTrackSession(t *testing.T) {
 	var g *Guard
 	require.NotPanics(t, func() {
-		g.trackSessionLifecycle("exec_command", map[string]any{"session_id": "s"})
+		g.trackSessionLifecycle(
+			"exec_command", nil,
+			map[string]any{"session_id": "s"},
+		)
 	})
 }
 

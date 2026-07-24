@@ -30,6 +30,16 @@ func ruleResource(in ScanInput, a *analysis, p Policy) []Finding {
 	var out []Finding
 
 	// Timeout.
+	if in.ToolProfile != "" && in.Backend == BackendCodeExec &&
+		in.Timeout <= 0 {
+		out = append(out, Finding{
+			RuleID:         "resource.timeout_unknown",
+			RiskLevel:      RiskHigh,
+			Decision:       ruleDecision(p.Rules.ResourceAbuse.Action, RiskHigh, p),
+			Evidence:       "code executor timeout capability is unknown",
+			Recommendation: "Register a ToolProfile with the executor's enforced timeout",
+		})
+	}
 	if p.MaxTimeout > 0 && in.Timeout > p.MaxTimeout {
 		out = append(out, Finding{
 			RuleID:         "resource.timeout_exceeded",

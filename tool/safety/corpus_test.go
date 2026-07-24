@@ -44,9 +44,8 @@ type jsonScanInputV2 struct {
 	TimeoutSeconds int               `json:"timeout_seconds"`
 }
 
-// loadCorpusFixture loads the shared corpus JSON. Both quality_test.go
-// and the example program can use this fixture so there is one source
-// of truth for the sample set.
+// loadCorpusFixture loads the exhaustive quality-gate corpus JSON used
+// by package tests.
 func loadCorpusFixture(t *testing.T) corpusFixture {
 	t.Helper()
 	data, err := os.ReadFile("testdata/tool_safety_corpus.json")
@@ -104,6 +103,13 @@ func TestCorpusFixture_QualityGateFromFixture(t *testing.T) {
 	for _, tc := range fixture.Cases {
 		report, err := scanner.Scan(context.Background(), tc.toScanInput())
 		require.NoError(t, err, "case %s", tc.Name)
+		require.Equal(t, tc.Expected, report.Decision,
+			"case %s (rules=%v)", tc.Name,
+			ruleIDsFromFindings(report.Findings))
+		if tc.Category == "safe" {
+			require.Equal(t, DecisionAllow, tc.Expected,
+				"safe case %s must expect allow", tc.Name)
+		}
 
 		isHighRisk := tc.Expected == DecisionDeny
 		if isHighRisk {

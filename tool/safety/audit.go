@@ -14,9 +14,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
+	"slices"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/log"
 )
 
 // AuditPhase labels whether an audit event was emitted before or after
@@ -24,11 +26,11 @@ import (
 type AuditPhase string
 
 const (
-	// AuditPhasePreflight is emitted from CheckToolPermission before
-	// the tool runs.
+	// AuditPhasePreflight is emitted by wrapper preflight before the
+	// underlying tool runs.
 	AuditPhasePreflight AuditPhase = "preflight"
-	// AuditPhasePostExecute is emitted from the after-tool callback
-	// after the tool returns.
+	// AuditPhasePostExecute is emitted by wrapper completion after the
+	// underlying tool returns.
 	AuditPhasePostExecute AuditPhase = "post_execute"
 )
 
@@ -80,29 +82,36 @@ type AuditWriter struct {
 	mu       sync.Mutex
 	w        io.Writer
 	closer   io.Closer
+	syncer   interface{ Sync() error }
 	bw       *bufio.Writer
 	required bool
 	redact   bool
 	closed   bool
+	initErr  error
 }
 
-// NewAuditWriter opens path with append/create/write-only and 0600
-// permissions. The file is buffered and flushed on every Append. When
-// the file already exists with wider permissions, it is tightened to
-// 0600 so audit data is not world-readable.
+// NewAuditWriter opens path with append/create/write-only and owner-only
+// access. The file is buffered and flushed on every Append. Existing
+// files are tightened to 0600 on POSIX systems or a protected,
+// current-user-only DACL on Windows.
 func NewAuditWriter(path string, required, redactSecrets bool) (*AuditWriter, error) {
 	if path == "" {
 		return nil, errors.New("audit path is empty")
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	f, err := openAuditFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("open audit path %q: %w", path, err)
 	}
-	// Best-effort tighten permissions on pre-existing files.
-	_ = os.Chmod(path, 0o600)
+	if err := setAuditFilePermissions(f); err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf(
+			"set audit path %q permissions: %w", path, err,
+		)
+	}
 	return &AuditWriter{
 		w:        f,
 		closer:   f,
+		syncer:   f,
 		bw:       bufio.NewWriter(f),
 		required: required,
 		redact:   redactSecrets,
@@ -111,14 +120,26 @@ func NewAuditWriter(path string, required, redactSecrets bool) (*AuditWriter, er
 
 // NewAuditWriterFrom wraps an existing io.Writer. The writer does not
 // own the underlying resource; Close flushes the buffer but does not
-// close the writer.
+// close the writer. A nil writer produces an initialization error on
+// Append/Close when required and a no-op writer when best-effort.
 func NewAuditWriterFrom(w io.Writer, required, redactSecrets bool) *AuditWriter {
-	return &AuditWriter{
+	if w == nil {
+		return &AuditWriter{
+			required: required,
+			redact:   redactSecrets,
+			initErr:  errors.New("audit writer is nil"),
+		}
+	}
+	audit := &AuditWriter{
 		w:        w,
 		bw:       bufio.NewWriter(w),
 		required: required,
 		redact:   redactSecrets,
 	}
+	if syncer, ok := w.(interface{ Sync() error }); ok {
+		audit.syncer = syncer
+	}
+	return audit
 }
 
 // Append writes one JSONL record. The write is flushed before return.
@@ -132,10 +153,20 @@ func (w *AuditWriter) Append(event AuditEvent) error {
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.initErr != nil {
+		if w.required {
+			return w.initErr
+		}
+		warnBestEffortAudit("initialize", w.initErr)
+		return nil
+	}
 	if w.closed {
 		if w.required {
 			return errors.New("audit writer is closed")
 		}
+		warnBestEffortAudit(
+			"append", errors.New("audit writer is closed"),
+		)
 		return nil
 	}
 	if event.SchemaVersion == "" {
@@ -144,41 +175,74 @@ func (w *AuditWriter) Append(event AuditEvent) error {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now().UTC()
 	}
+	if w.redact {
+		event = redactAuditEvent(event)
+	}
 	line, err := json.Marshal(event)
 	if err != nil {
 		if w.required {
 			return fmt.Errorf("encode audit event: %w", err)
 		}
+		warnBestEffortAudit("encode", err)
 		return nil
-	}
-	// Boundary redaction: scan the serialized JSON for secrets and
-	// replace them before writing. The redact flag defaults to true
-	// via NewAuditWriter/NewAuditWriterFrom; callers that explicitly
-	// pass false opt out.
-	if w.redact {
-		if redacted, changed := redactString(string(line)); changed {
-			line = []byte(redacted)
-		}
 	}
 	if _, err := w.bw.Write(line); err != nil {
 		if w.required {
 			return fmt.Errorf("write audit event: %w", err)
 		}
+		warnBestEffortAudit("write", err)
 		return nil
 	}
 	if err := w.bw.WriteByte('\n'); err != nil {
 		if w.required {
 			return fmt.Errorf("write audit newline: %w", err)
 		}
+		warnBestEffortAudit("write newline", err)
 		return nil
 	}
 	if err := w.bw.Flush(); err != nil {
 		if w.required {
 			return fmt.Errorf("flush audit event: %w", err)
 		}
+		warnBestEffortAudit("flush", err)
 		return nil
 	}
+	if w.required && w.syncer != nil {
+		if err := w.syncer.Sync(); err != nil {
+			return fmt.Errorf("sync audit event: %w", err)
+		}
+	}
 	return nil
+}
+
+// redactAuditEvent redacts string-bearing fields before JSON marshaling
+// so redaction cannot consume JSON delimiters and corrupt the JSONL
+// record.
+func redactAuditEvent(event AuditEvent) AuditEvent {
+	changed := false
+	redact := func(value string) string {
+		out, c := redactString(value)
+		changed = changed || c
+		return out
+	}
+	event.SchemaVersion = redact(event.SchemaVersion)
+	event.Phase = AuditPhase(redact(string(event.Phase)))
+	event.ScanID = redact(event.ScanID)
+	event.ToolName = redact(event.ToolName)
+	event.Backend = Backend(redact(string(event.Backend)))
+	event.Decision = Decision(redact(string(event.Decision)))
+	event.RiskLevel = RiskLevel(redact(string(event.RiskLevel)))
+	event.Execution = redact(event.Execution)
+	event.CommandHash = redact(event.CommandHash)
+	event.SessionHash = redact(event.SessionHash)
+	event.RuleIDs = slices.Clone(event.RuleIDs)
+	for i, ruleID := range event.RuleIDs {
+		event.RuleIDs[i] = redact(ruleID)
+	}
+	if changed {
+		event.Redacted = true
+	}
+	return event
 }
 
 // Close flushes the buffer and, when the writer owns the file, closes it.
@@ -192,6 +256,13 @@ func (w *AuditWriter) Close() error {
 		return nil
 	}
 	w.closed = true
+	if w.initErr != nil {
+		if w.required {
+			return w.initErr
+		}
+		warnBestEffortAudit("close", w.initErr)
+		return nil
+	}
 	var flushErr error
 	if w.bw != nil {
 		flushErr = w.bw.Flush()
@@ -200,20 +271,38 @@ func (w *AuditWriter) Close() error {
 	// matching the Append contract: a best-effort writer never fails
 	// Close.
 	if !w.required {
+		if flushErr != nil {
+			warnBestEffortAudit("close flush", flushErr)
+		}
 		if w.closer != nil {
-			_ = w.closer.Close()
+			if err := w.closer.Close(); err != nil {
+				warnBestEffortAudit("close", err)
+			}
 		}
 		return nil
 	}
+
+	var syncErr error
+	if w.syncer != nil {
+		syncErr = w.syncer.Sync()
+	}
 	if w.closer != nil {
 		if err := w.closer.Close(); err != nil {
-			if flushErr != nil {
-				return fmt.Errorf("%v; close: %w", flushErr, err)
-			}
-			return err
+			return errors.Join(flushErr, syncErr, err)
 		}
 	}
-	return flushErr
+	return errors.Join(flushErr, syncErr)
+}
+
+func warnBestEffortAudit(operation string, err error) {
+	if err == nil {
+		return
+	}
+	log.Warnf(
+		"tool_safety: best-effort audit %s failed: %s",
+		operation,
+		redactedSnippet(err.Error(), 160),
+	)
 }
 
 // appendPreflight constructs and appends a preflight audit event.

@@ -206,6 +206,9 @@ func (s *Scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 // report. It reuses one scanner and one policy; it does not reload YAML
 // for every sample.
 func (s *Scanner) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchReport, error) {
+	if s == nil {
+		return BatchReport{}, errors.New("scanner is nil")
+	}
 	batch := BatchReport{
 		SchemaVersion: "1",
 		GeneratedAt:   s.clock(),

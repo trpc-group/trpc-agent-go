@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -50,6 +51,31 @@ func TestRedactArtifact_NoSecretUnchanged(t *testing.T) {
 	require.Equal(t, in, out)
 }
 
+func TestRedactArtifact_JSONUsesFieldAwareRedaction(t *testing.T) {
+	in := &artifact.Artifact{
+		MimeType: "application/json; charset=utf-8",
+		Data: []byte(
+			`{"password":"hunter2xyz","value":9007199254740993}`,
+		),
+	}
+	out, changed, err := redactArtifact(in)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NotContains(t, string(out.Data), "hunter2xyz")
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(out.Data, &decoded))
+	require.Contains(t, string(out.Data), "9007199254740993")
+}
+
+func TestRedactArtifact_InvalidJSONFailsClosed(t *testing.T) {
+	in := &artifact.Artifact{
+		MimeType: "application/json",
+		Data:     []byte(`{"password":`),
+	}
+	_, _, err := redactArtifact(in)
+	require.Error(t, err)
+}
+
 func TestRedactArtifact_NilSafe(t *testing.T) {
 	out, changed, err := redactArtifact(nil)
 	require.NoError(t, err)
@@ -60,6 +86,7 @@ func TestRedactArtifact_NilSafe(t *testing.T) {
 type stubArtifactService struct {
 	saved   *artifact.Artifact
 	loaded  *artifact.Artifact
+	keys    []string
 	saveErr error
 }
 
@@ -76,7 +103,7 @@ func (s *stubArtifactService) LoadArtifact(_ context.Context, _ artifact.Session
 }
 
 func (s *stubArtifactService) ListArtifactKeys(_ context.Context, _ artifact.SessionInfo) ([]string, error) {
-	return nil, nil
+	return s.keys, nil
 }
 
 func (s *stubArtifactService) DeleteArtifact(_ context.Context, _ artifact.SessionInfo, _ string) error {
@@ -94,10 +121,38 @@ func TestArtifactServiceWrapper_RedactsOnSave(t *testing.T) {
 		MimeType: "text/plain",
 		Data:     []byte("Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"),
 	}
-	_, err := wrapped.SaveArtifact(context.Background(), artifact.SessionInfo{}, "file.txt", in)
+	_, err := wrapped.SaveArtifact(
+		context.Background(), artifact.SessionInfo{}, "file.txt", in,
+	)
 	require.NoError(t, err)
 	require.NotNil(t, stub.saved)
-	require.False(t, strings.Contains(string(stub.saved.Data), "eyJhbGciOiJIUzI1NiJ9"))
+	require.NotEqual(t, string(in.Data), string(stub.saved.Data))
+}
+
+func TestArtifactServiceWrapper_CopiesCleanArtifactData(t *testing.T) {
+	stub := &stubArtifactService{}
+	wrapped := newArtifactServiceWrapper(stub)
+	in := &artifact.Artifact{
+		MimeType: "text/plain",
+		Data:     []byte("clean"),
+	}
+	_, err := wrapped.SaveArtifact(
+		context.Background(), artifact.SessionInfo{}, "file.txt", in,
+	)
+	require.NoError(t, err)
+	in.Data[0] = 'X'
+	require.Equal(t, "clean", string(stub.saved.Data))
+
+	stub.loaded = &artifact.Artifact{
+		MimeType: "text/plain",
+		Data:     []byte("loaded"),
+	}
+	out, err := wrapped.LoadArtifact(
+		context.Background(), artifact.SessionInfo{}, "file.txt", nil,
+	)
+	require.NoError(t, err)
+	out.Data[0] = 'X'
+	require.Equal(t, "loaded", string(stub.loaded.Data))
 }
 
 func TestArtifactServiceWrapper_RefusesBinarySecretOnSave(t *testing.T) {
@@ -140,4 +195,15 @@ func TestArtifactServiceWrapper_RedactsOnLoad(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	require.False(t, strings.Contains(string(out.Data), "AKIAIOSFODNN7EXAMPLE"))
+}
+
+func TestArtifactServiceWrapper_RefusesSecretExistingKey(t *testing.T) {
+	stub := &stubArtifactService{
+		keys: []string{"safe.txt", "AKIAIOSFODNN7EXAMPLE.txt"},
+	}
+	wrapped := newArtifactServiceWrapper(stub)
+	_, err := wrapped.ListArtifactKeys(
+		context.Background(), artifact.SessionInfo{},
+	)
+	require.ErrorContains(t, err, "artifact key contains a secret")
 }

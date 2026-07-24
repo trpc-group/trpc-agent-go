@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"slices"
 	"time"
 )
 
@@ -75,7 +76,7 @@ func DefaultToolProfiles() []ToolProfile {
 			NetworkRestricted:   false,
 			CommandField:        "command",
 			WorkingDirFields:    []string{"cwd"},
-			TimeoutFields:       []string{"timeout", "timeout_sec", "timeoutSec"},
+			TimeoutFields:       []string{"timeout_sec", "timeoutSec", "timeout"},
 			EnvironmentField:    "env",
 			BackgroundFields:    []string{"background"},
 			PTYFields:           []string{"tty", "pty"},
@@ -83,7 +84,7 @@ func DefaultToolProfiles() []ToolProfile {
 		{
 			Name:                "exec_command",
 			Backend:             BackendHostExec,
-			DefaultTimeout:      5 * time.Minute,
+			DefaultTimeout:      30 * time.Minute,
 			Isolated:            false,
 			EnvironmentIsolated: false,
 			NetworkRestricted:   false,
@@ -97,7 +98,7 @@ func DefaultToolProfiles() []ToolProfile {
 		{
 			Name:                "execute_code",
 			Backend:             BackendCodeExec,
-			DefaultTimeout:      5 * time.Minute,
+			DefaultTimeout:      0,
 			Isolated:            true,
 			EnvironmentIsolated: true,
 			NetworkRestricted:   false,
@@ -134,6 +135,16 @@ func DefaultToolProfiles() []ToolProfile {
 // profileRegistry is a map keyed by profile Name.
 type profileRegistry map[string]ToolProfile
 
+// cloneToolProfile returns a copy of p whose slice fields do not share
+// backing arrays with the caller.
+func cloneToolProfile(p ToolProfile) ToolProfile {
+	p.WorkingDirFields = slices.Clone(p.WorkingDirFields)
+	p.TimeoutFields = slices.Clone(p.TimeoutFields)
+	p.BackgroundFields = slices.Clone(p.BackgroundFields)
+	p.PTYFields = slices.Clone(p.PTYFields)
+	return p
+}
+
 // newProfileRegistry builds the default registry.
 func newProfileRegistry() profileRegistry {
 	reg := profileRegistry{}
@@ -146,7 +157,7 @@ func newProfileRegistry() profileRegistry {
 // lookup returns the profile for name and whether one exists.
 func (r profileRegistry) lookup(name string) (ToolProfile, bool) {
 	p, ok := r[name]
-	return p, ok
+	return cloneToolProfile(p), ok
 }
 
 // register adds or replaces a profile.
@@ -154,5 +165,5 @@ func (r profileRegistry) register(p ToolProfile) {
 	if p.Name == "" {
 		return
 	}
-	r[p.Name] = p
+	r[p.Name] = cloneToolProfile(p)
 }

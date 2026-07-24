@@ -182,10 +182,6 @@ type Callbacks struct {
 	BeforeTool []BeforeToolCallbackStructured
 	// AfterTool is a list of callbacks called after the tool is executed.
 	AfterTool []AfterToolCallbackStructured
-	// AfterToolFinalizers is a list of callbacks that always run after the
-	// AfterTool chain, even when the chain stops early on a CustomResult
-	// or an error. Finalizers observe and may replace the final result.
-	AfterToolFinalizers []AfterToolCallbackStructured
 	// ToolResultMessages is an optional callback that can convert a tool
 	// execution result into one or more messages to be sent back to the model.
 	// When set, it is invoked after the tool and AfterTool callbacks have run.
@@ -231,12 +227,11 @@ func (c *Callbacks) Clone() *Callbacks {
 		return nil
 	}
 	out := &Callbacks{
-		BeforeTool:          append([]BeforeToolCallbackStructured(nil), c.BeforeTool...),
-		AfterTool:           append([]AfterToolCallbackStructured(nil), c.AfterTool...),
-		AfterToolFinalizers: append([]AfterToolCallbackStructured(nil), c.AfterToolFinalizers...),
-		ToolResultMessages:  c.ToolResultMessages,
-		continueOnError:     c.continueOnError,
-		continueOnResponse:  c.continueOnResponse,
+		BeforeTool:         append([]BeforeToolCallbackStructured(nil), c.BeforeTool...),
+		AfterTool:          append([]AfterToolCallbackStructured(nil), c.AfterTool...),
+		ToolResultMessages: c.ToolResultMessages,
+		continueOnError:    c.continueOnError,
+		continueOnResponse: c.continueOnResponse,
 	}
 	return out
 }
@@ -333,27 +328,6 @@ func (c *Callbacks) RegisterAfterTool(cb any) *Callbacks {
 	return c
 }
 
-// RegisterAfterToolFinalizer registers an after-tool finalizer.
-//
-// Finalizers run once per tool execution after the AfterTool chain,
-// regardless of whether the chain completed, stopped early on a
-// CustomResult, or failed with an error. Before each finalizer runs,
-// args.Result is set to the current effective result — including a
-// CustomResult that short-circuited the regular chain — and a non-nil
-// CustomResult returned by a finalizer replaces the final result.
-//
-// Finalizers are intended for safety-critical post-processing (secret
-// redaction, output capping, audit, resource release) that must not be
-// bypassed by an earlier callback's CustomResult or error.
-//
-// Finalizers do not suppress callback errors. RunAfterTool returns the
-// effective finalizer result alongside the first callback error so the
-// framework can preserve the safe result while still surfacing the failure.
-func (c *Callbacks) RegisterAfterToolFinalizer(cb AfterToolCallbackStructured) *Callbacks {
-	c.AfterToolFinalizers = append(c.AfterToolFinalizers, cb)
-	return c
-}
-
 // handleCallbackError processes callback error and returns whether to continue.
 func (c *Callbacks) handleCallbackError(err error, firstErr *error) (shouldStop bool) {
 	if err == nil {
@@ -416,8 +390,6 @@ func (c *Callbacks) finalizeBeforeToolResult(
 	return lastResult, nil
 }
 
-// recoverToolCallbackPanic recovers from a panicking tool callback,
-// logs the panic with its stack, and stores a wrapped error in errp.
 func recoverToolCallbackPanic(
 	ctx context.Context,
 	stage string,
@@ -443,8 +415,6 @@ func recoverToolCallbackPanic(
 	*errp = fmt.Errorf(callbackPanicErrFmt, stage, recovered)
 }
 
-// runBeforeToolCallback invokes one before-tool callback, converting
-// a panic into an error via recoverToolCallbackPanic.
 func (c *Callbacks) runBeforeToolCallback(
 	ctx context.Context,
 	cb BeforeToolCallbackStructured,
@@ -556,8 +526,6 @@ func (c *Callbacks) finalizeAfterToolResult(
 	return lastResult, nil
 }
 
-// runAfterToolCallback invokes one after-tool callback, converting a
-// panic into an error via recoverToolCallbackPanic.
 func (c *Callbacks) runAfterToolCallback(
 	ctx context.Context,
 	cb AfterToolCallbackStructured,
@@ -601,24 +569,10 @@ func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
 	}
 }
 
-// RunAfterTool runs all after tool callbacks in order, followed by the
-// after-tool finalizers.
+// RunAfterTool runs all after tool callbacks in order.
 // This method uses the new structured callback interface.
 // If a callback returns a non-nil Context in the result, it will be used for subsequent callbacks.
-// Finalizers registered via RegisterAfterToolFinalizer always run, even
-// when the regular chain stops early on a CustomResult or an error.
-// A callback error is returned together with the effective finalizer result;
-// finalizers do not clear errors.
 func (c *Callbacks) RunAfterTool(
-	ctx context.Context,
-	args *AfterToolArgs,
-) (*AfterToolResult, error) {
-	result, err := c.runAfterToolChain(ctx, args)
-	return c.runAfterToolFinalizers(ctx, args, result, err)
-}
-
-// runAfterToolChain runs the regular after tool callbacks in order.
-func (c *Callbacks) runAfterToolChain(
 	ctx context.Context,
 	args *AfterToolArgs,
 ) (*AfterToolResult, error) {
@@ -641,55 +595,4 @@ func (c *Callbacks) runAfterToolChain(
 	}
 
 	return c.finalizeAfterToolResult(lastResult, firstErr, args)
-}
-
-// runAfterToolFinalizers runs the after-tool finalizers over the result
-// of the regular chain. Finalizers always run, even when the chain
-// stopped early or returned an error, so safety-critical post-processing
-// cannot be bypassed. A finalizer observes the current effective result
-// via args.Result and may replace it by returning a non-nil CustomResult.
-// When no finalizers are registered, result and runErr pass through
-// unchanged.
-func (c *Callbacks) runAfterToolFinalizers(
-	ctx context.Context,
-	args *AfterToolArgs,
-	result *AfterToolResult,
-	runErr error,
-) (*AfterToolResult, error) {
-	if len(c.AfterToolFinalizers) == 0 {
-		return result, runErr
-	}
-	// Start from the context the regular chain produced (if a callback
-	// set one) so finalizers do not observe a stale pre-chain context.
-	if result != nil && result.Context != nil {
-		ctx = result.Context
-	}
-	for _, cb := range c.AfterToolFinalizers {
-		// Expose the current effective result so the finalizer
-		// observes the value the framework would return, including a
-		// CustomResult that short-circuited the regular chain.
-		if args != nil && result != nil && result.CustomResult != nil {
-			args.Result = result.CustomResult
-		}
-		finalResult, err := c.runAfterToolCallback(ctx, cb, args)
-		if err != nil && runErr == nil {
-			runErr = err
-		}
-		if finalResult == nil {
-			continue
-		}
-		if result == nil {
-			result = &AfterToolResult{}
-		}
-		if finalResult.Context != nil {
-			ctx = finalResult.Context
-			result.Context = finalResult.Context
-		}
-		if finalResult.CustomResult != nil {
-			result.CustomResult = finalResult.CustomResult
-		}
-		result.SkipSummarization = result.SkipSummarization ||
-			finalResult.SkipSummarization
-	}
-	return result, runErr
 }

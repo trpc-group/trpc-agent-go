@@ -34,8 +34,11 @@ func TestCorpusPerformance_500UnderOneSecond(t *testing.T) {
 		})
 	}
 	start := time.Now()
-	_, err := s.ScanBatch(context.Background(), inputs)
+	batch, err := s.ScanBatch(context.Background(), inputs)
 	elapsed := time.Since(start)
 	require.NoError(t, err)
+	require.Len(t, batch.Reports, 500)
+	require.Equal(t, 500, batch.Summary.Total)
+	require.Equal(t, 500, batch.Summary.Allowed)
 	require.Less(t, elapsed, time.Second, "500-command batch took %v", elapsed)
 }

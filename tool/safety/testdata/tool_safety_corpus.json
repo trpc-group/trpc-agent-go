@@ -208,7 +208,7 @@
     },
     {
       "name": "env non-whitelisted name",
-      "category": "safe",
+      "category": "environment",
       "expected": "deny",
       "input": {"tool_name": "workspace_exec", "backend": "workspace_exec", "command": "go test ./...", "env": {"LD_PRELOAD": "/tmp/evil.so"}}
     },
@@ -262,7 +262,7 @@
     },
     {
       "name": "env PATH override",
-      "category": "safe",
+      "category": "environment",
       "expected": "deny",
       "input": {"tool_name": "exec_command", "backend": "hostexec", "command": "go test ./...", "env": {"PATH": "/tmp/attacker-bin"}}
     },

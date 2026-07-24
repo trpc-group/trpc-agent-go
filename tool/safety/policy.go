@@ -11,12 +11,14 @@ package safety
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
+	"golang.org/x/net/publicsuffix"
 	"gopkg.in/yaml.v3"
 )
 
@@ -208,6 +210,17 @@ func LoadPolicyFromBytes(data []byte) (Policy, error) {
 	if err := dec.Decode(&policy); err != nil {
 		return Policy{}, fmt.Errorf("decode policy: %w", err)
 	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return Policy{}, errors.New(
+				"decode policy: multiple YAML documents are not allowed",
+			)
+		}
+		return Policy{}, fmt.Errorf(
+			"decode trailing policy document: %w", err,
+		)
+	}
 	if err := normalizePolicyDecisions(&policy); err != nil {
 		return Policy{}, err
 	}
@@ -262,22 +275,23 @@ func (p Policy) Validate() error {
 		return errors.New("max_sleep_seconds must be non-negative")
 	}
 	for _, d := range []struct {
-		name string
-		v    Decision
+		name    string
+		v       Decision
+		inherit bool
 	}{
-		{"decision_threshold.critical", p.DecisionThreshold.Critical},
-		{"decision_threshold.high", p.DecisionThreshold.High},
-		{"decision_threshold.medium", p.DecisionThreshold.Medium},
-		{"decision_threshold.low", p.DecisionThreshold.Low},
-		{"rules.dangerous_commands.action", p.Rules.DangerousCommands.Action},
-		{"rules.network.action", p.Rules.Network.Action},
-		{"rules.shell_bypass.action", p.Rules.ShellBypass.Action},
-		{"rules.hostexec.action", p.Rules.HostExec.Action},
-		{"rules.dependencies.action", p.Rules.Dependencies.Action},
-		{"rules.resource_abuse.action", p.Rules.ResourceAbuse.Action},
-		{"rules.secret_leak.action", p.Rules.SecretLeak.Action},
+		{"decision_threshold.critical", p.DecisionThreshold.Critical, false},
+		{"decision_threshold.high", p.DecisionThreshold.High, false},
+		{"decision_threshold.medium", p.DecisionThreshold.Medium, false},
+		{"decision_threshold.low", p.DecisionThreshold.Low, false},
+		{"rules.dangerous_commands.action", p.Rules.DangerousCommands.Action, true},
+		{"rules.network.action", p.Rules.Network.Action, true},
+		{"rules.shell_bypass.action", p.Rules.ShellBypass.Action, true},
+		{"rules.hostexec.action", p.Rules.HostExec.Action, true},
+		{"rules.dependencies.action", p.Rules.Dependencies.Action, true},
+		{"rules.resource_abuse.action", p.Rules.ResourceAbuse.Action, true},
+		{"rules.secret_leak.action", p.Rules.SecretLeak.Action, true},
 	} {
-		if err := validateDecision(d.name, d.v); err != nil {
+		if err := validateDecision(d.name, d.v, d.inherit); err != nil {
 			return err
 		}
 	}
@@ -312,10 +326,19 @@ func (p Policy) Validate() error {
 
 // validateDecision rejects empty, unknown, and input-only decisions
 // for the policy field named name.
-func validateDecision(name string, d Decision) error {
+func validateDecision(
+	name string,
+	d Decision,
+	allowInherit bool,
+) error {
 	switch d {
 	case DecisionAllow, DecisionDeny, DecisionAsk:
 		return nil
+	case DecisionInherit:
+		if allowInherit {
+			return nil
+		}
+		return fmt.Errorf("%s cannot be inherit", name)
 	case DecisionNeedsHumanReview:
 		return fmt.Errorf("%s: %q is reserved for input only; use %q", name, d, DecisionAsk)
 	case "":
@@ -342,8 +365,19 @@ func validateDomain(dom string) error {
 		if rest == "" || strings.Contains(rest, "*") {
 			return fmt.Errorf("domain %q has invalid wildcard placement", dom)
 		}
+		if strings.HasSuffix(rest, ".") {
+			return fmt.Errorf("domain %q must not have a trailing dot", dom)
+		}
+		suffix, _ := publicsuffix.PublicSuffix(strings.ToLower(rest))
+		if suffix == strings.ToLower(strings.TrimSuffix(rest, ".")) {
+			return fmt.Errorf(
+				"domain %q wildcard cannot target a public suffix", dom,
+			)
+		}
 	} else if strings.Contains(dom, "*") {
 		return fmt.Errorf("domain %q must use *.example.com form for wildcards", dom)
+	} else if strings.HasSuffix(dom, ".") {
+		return fmt.Errorf("domain %q must not have a trailing dot", dom)
 	}
 	return nil
 }
@@ -355,7 +389,7 @@ func normalizeDecision(d Decision) (Decision, error) {
 	switch d {
 	case DecisionNeedsHumanReview:
 		return DecisionAsk, nil
-	case DecisionAllow, DecisionDeny, DecisionAsk:
+	case DecisionAllow, DecisionDeny, DecisionAsk, DecisionInherit:
 		return d, nil
 	case "":
 		return "", errors.New("empty decision")

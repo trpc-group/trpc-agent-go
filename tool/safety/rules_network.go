@@ -84,8 +84,8 @@ func ruleNetwork(a *analysis, p Policy) []Finding {
 	return out
 }
 
-// networkFlagFindings detects curl -K/--config/--resolve and redirect-
-// following flags that bypass URL-level allowlists.
+// networkFlagFindings detects transport and redirect flags that bypass
+// URL-level allowlists.
 func networkFlagFindings(a *analysis, p Policy) []Finding {
 	if a == nil || a.Pipeline == nil {
 		return nil
@@ -95,52 +95,242 @@ func networkFlagFindings(a *analysis, p Policy) []Finding {
 		if len(argv) == 0 {
 			continue
 		}
-		base := basenameLower(argv[0])
-		if base != "curl" && base != "wget" && base != "aria2c" {
+		out = append(out, networkCommandFlagFindings(argv, p)...)
+	}
+	return out
+}
+
+func networkCommandFlagFindings(
+	argv []string,
+	p Policy,
+) []Finding {
+	base := basenameLower(argv[0])
+	switch base {
+	case "ssh", "scp", "sftp":
+		return sshDangerousOptionFindings(base, argv, p)
+	}
+	if base != "curl" && base != "wget" &&
+		base != "aria2" && base != "aria2c" {
+		return nil
+	}
+	var out []Finding
+	for _, flag := range argv[1:] {
+		if isTransportOverrideFlag(base, flag) {
+			out = append(out, Finding{
+				RuleID:         "network.dangerous_flag",
+				RiskLevel:      RiskHigh,
+				Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+				Evidence:       "network transport override bypasses URL allowlist",
+				Recommendation: "Refuse the request; require explicit URL targets on the allowlist",
+			})
 			continue
 		}
-		for _, flag := range argv[1:] {
-			switch {
-			case flag == "-K", flag == "--config",
-				strings.HasPrefix(flag, "--config="),
-				flag == "--resolve",
-				strings.HasPrefix(flag, "--resolve="),
-				isBundledShortFlag(flag, 'K'):
-				out = append(out, Finding{
-					RuleID:         "network.dangerous_flag",
-					RiskLevel:      RiskHigh,
-					Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
-					Evidence:       "curl/wget config or resolve flag bypasses URL allowlist",
-					Recommendation: "Refuse the request; require explicit URL targets on the allowlist",
-				})
-			case flag == "-L", flag == "--location",
-				flag == "--location-trusted",
-				strings.HasPrefix(flag, "--max-redirs"),
-				isBundledShortFlag(flag, 'L'):
-				out = append(out, Finding{
-					RuleID:         "network.dangerous_flag",
-					RiskLevel:      RiskMedium,
-					Decision:       ruleDecision(p.Rules.Network.Action, RiskMedium, p),
-					Evidence:       "redirect-following flag may traverse non-allowlisted hosts",
-					Recommendation: "Disable redirect-following or pin the final host in the allowlist",
-				})
-			}
+		if isRedirectFlag(base, flag) {
+			out = append(out, Finding{
+				RuleID:         "network.dangerous_flag",
+				RiskLevel:      RiskMedium,
+				Decision:       ruleDecision(p.Rules.Network.Action, RiskMedium, p),
+				Evidence:       "redirect-following flag may traverse non-allowlisted hosts",
+				Recommendation: "Disable redirect-following or pin the final host in the allowlist",
+			})
 		}
 	}
 	return out
 }
 
-// isBundledShortFlag returns true when tok is a bundled single-dash
-// short-option token (e.g. -sL or -Kcfg) that contains the given option
-// letter. curl/wget/aria2c short options are single characters, so a
-// bundle like -sL necessarily enables -L even though the token does not
-// equal "-L". Long "--" options and key=value tokens are not bundles.
-func isBundledShortFlag(tok string, c byte) bool {
+func isTransportOverrideFlag(base, flag string) bool {
+	if isCommonTransportOverrideFlag(flag) {
+		return true
+	}
+	switch base {
+	case "curl":
+		return isCurlTransportOverrideFlag(flag)
+	case "wget":
+		return isWgetTransportOverrideFlag(flag)
+	case "aria2", "aria2c":
+		return isAriaTransportOverrideFlag(flag)
+	}
+	return false
+}
+
+func isCommonTransportOverrideFlag(flag string) bool {
+	return flag == "-K" || matchesAnyLongOption(
+		flag, "--config", "--resolve", "--connect-to",
+		"--unix-socket", "--abstract-unix-socket",
+	)
+}
+
+func isCurlTransportOverrideFlag(flag string) bool {
+	return isCurlProxyOverrideFlag(flag) ||
+		isCurlResolverOverrideFlag(flag) ||
+		isCurlStateOverrideFlag(flag)
+}
+
+func isCurlProxyOverrideFlag(flag string) bool {
+	return flag == "-x" ||
+		curlShortOptionPresent(flag, 'x') ||
+		curlShortOptionPresent(flag, 'K') ||
+		matchesAnyLongOption(
+			flag, "--proxy", "--preproxy", "--socks4",
+			"--socks4a", "--socks5", "--socks5-hostname",
+		)
+}
+
+func isCurlResolverOverrideFlag(flag string) bool {
+	return matchesAnyLongOption(
+		flag, "--doh-url", "--dns-servers", "--dns-interface",
+		"--dns-ipv4-addr", "--dns-ipv6-addr",
+	)
+}
+
+func isCurlStateOverrideFlag(flag string) bool {
+	return matchesAnyLongOption(flag, "--alt-svc", "--hsts")
+}
+
+func isWgetTransportOverrideFlag(flag string) bool {
+	return flag == "-e" || flag == "-i" || flag == "-H" ||
+		shortOptionPresent(flag, 'e', wgetShortOptionsWithValue) ||
+		shortOptionPresent(flag, 'i', wgetShortOptionsWithValue) ||
+		shortOptionPresent(flag, 'H', wgetShortOptionsWithValue) ||
+		matchesAnyLongOption(
+			flag, "--execute", "--input-file", "--config",
+			"--span-hosts", "--use-askpass",
+		)
+}
+
+func isAriaTransportOverrideFlag(flag string) bool {
+	return flag == "-i" || strings.HasPrefix(flag, "-i") ||
+		flag == "--input-file" ||
+		strings.HasPrefix(flag, "--input-file=") ||
+		flag == "--conf-path" ||
+		strings.HasPrefix(flag, "--conf-path=") ||
+		flag == "--all-proxy" ||
+		strings.HasPrefix(flag, "--all-proxy=") ||
+		flag == "--http-proxy" ||
+		strings.HasPrefix(flag, "--http-proxy=") ||
+		flag == "--https-proxy" ||
+		strings.HasPrefix(flag, "--https-proxy=") ||
+		flag == "--ftp-proxy" ||
+		strings.HasPrefix(flag, "--ftp-proxy=") ||
+		flag == "--host-resolve" ||
+		strings.HasPrefix(flag, "--host-resolve=")
+}
+
+func isRedirectFlag(base, flag string) bool {
+	return flag == "-L" || flag == "--location" ||
+		flag == "--location-trusted" ||
+		strings.HasPrefix(flag, "--max-redirs") ||
+		base == "curl" && curlShortOptionPresent(flag, 'L')
+}
+
+func sshDangerousOptionFindings(
+	base string,
+	argv []string,
+	p Policy,
+) []Finding {
+	var out []Finding
+	if base == "ssh" {
+		for _, option := range []byte{'W', 'L', 'R', 'D'} {
+			for _, value := range sshOptionValues(argv, option) {
+				if value == "" {
+					continue
+				}
+				out = append(out, Finding{
+					RuleID:         "network.dangerous_flag",
+					RiskLevel:      RiskHigh,
+					Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+					Evidence:       "ssh forwarding can reach non-allowlisted destinations",
+					Recommendation: "Refuse SSH forwarding options or validate every forwarded destination",
+				})
+			}
+		}
+	}
+	if base == "scp" || base == "sftp" {
+		for _, value := range sshOptionValues(argv, 'S') {
+			if value == "" {
+				continue
+			}
+			out = append(out, Finding{
+				RuleID:         "network.dangerous_flag",
+				RiskLevel:      RiskHigh,
+				Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+				Evidence:       "SSH client program override executes a local command",
+				Recommendation: "Refuse SSH program overrides; use the standard client",
+			})
+		}
+	}
+	if base == "sftp" {
+		for _, value := range sshOptionValues(argv, 'D') {
+			if value == "" {
+				continue
+			}
+			out = append(out, Finding{
+				RuleID:         "network.dangerous_flag",
+				RiskLevel:      RiskHigh,
+				Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+				Evidence:       "SFTP server command override executes a local command",
+				Recommendation: "Refuse SFTP server command overrides",
+			})
+		}
+	}
+	for _, configPath := range sshOptionValues(argv, 'F') {
+		if configPath == "" || strings.EqualFold(configPath, "none") {
+			continue
+		}
+		out = append(out, Finding{
+			RuleID:         "network.dangerous_flag",
+			RiskLevel:      RiskHigh,
+			Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+			Evidence:       "ssh configuration file can override destination or execute commands",
+			Recommendation: "Refuse external SSH config files; use explicit allowlisted options",
+		})
+	}
+	for _, setting := range sshOptionValues(argv, 'o') {
+		name, value, ok := parseSSHSetting(setting)
+		if !ok || strings.EqualFold(strings.TrimSpace(value), "none") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(name)) {
+		case "proxycommand", "localcommand", "knownhostscommand",
+			"include", "localforward", "remoteforward",
+			"dynamicforward", "stdioforward":
+			out = append(out, Finding{
+				RuleID:         "network.dangerous_flag",
+				RiskLevel:      RiskHigh,
+				Decision:       ruleDecision(p.Rules.Network.Action, RiskHigh, p),
+				Evidence:       "ssh option executes a local command",
+				Recommendation: "Refuse SSH command hooks; use a direct allowlisted destination",
+			})
+		}
+	}
+	return out
+}
+
+// curlShortOptionPresent parses a curl short-option bundle until an
+// option that consumes the remaining token. This avoids mistaking
+// letters inside an attached value (for example -Axyz) for options.
+func curlShortOptionPresent(tok string, target byte) bool {
+	return shortOptionPresent(tok, target, curlShortOptionsWithValue)
+}
+
+func shortOptionPresent(
+	tok string,
+	target byte,
+	optionsWithValue string,
+) bool {
 	if len(tok) <= 2 || tok[0] != '-' || tok[1] == '-' {
 		return false
 	}
-	if strings.ContainsRune(tok, '=') {
-		return false
+	for i := 1; i < len(tok); i++ {
+		option := tok[i]
+		if option == target {
+			return true
+		}
+		if strings.ContainsRune(
+			optionsWithValue, rune(option),
+		) {
+			return false
+		}
 	}
-	return strings.IndexByte(tok[1:], c) >= 0
+	return false
 }

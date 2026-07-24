@@ -73,12 +73,24 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 		// allow the call.
 		return in, fmt.Errorf("unknown tool: malformed arguments: %w", err)
 	}
-	peaked, _ := peekCommand(arguments)
-	if peaked == "" {
+	command, present := raw["command"]
+	if !present {
 		// No command field: this is a non-execution MCP tool. Return
 		// the input unchanged so the guard allows it through (the MCP
 		// server's behavior is outside the local process boundary).
 		return in, nil
+	}
+	peaked, ok := command.(string)
+	if !ok {
+		return in, fmt.Errorf(
+			"unknown tool: field %q must be a string, got %T",
+			"command", command,
+		)
+	}
+	if strings.TrimSpace(peaked) == "" {
+		return in, errors.New(
+			"unknown tool: field \"command\" must not be empty",
+		)
 	}
 	in.Backend = BackendUnknown
 	in.Command = peaked

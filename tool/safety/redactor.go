@@ -9,9 +9,15 @@
 package safety
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -22,10 +28,22 @@ import (
 // types that contain a secret. The boolean reports whether any change
 // was made.
 //
-// For an unknown type that has no secret in its string representation,
-// the original value is returned unchanged so callers do not lose type
-// fidelity.
+// Serializable unknown types that contain no secret are returned
+// unchanged so callers do not lose type fidelity. Unserializable values
+// are replaced because their contents cannot be verified safely.
 func redactValue(value any) (any, bool, error) {
+	return redactValueDepth(value, 0)
+}
+
+const maxRedactionDepth = 64
+
+func redactValueDepth(value any, depth int) (any, bool, error) {
+	if depth > maxRedactionDepth {
+		return nil, false, fmt.Errorf(
+			"tool result nesting exceeds %d levels",
+			maxRedactionDepth,
+		)
+	}
 	switch v := value.(type) {
 	case nil:
 		return nil, false, nil
@@ -38,18 +56,33 @@ func redactValue(value any) (any, bool, error) {
 		return redactRawMessage(v)
 	case bool, int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
-		float32, float64:
+		float32, float64, json.Number:
 		return v, false, nil
 	case []any:
-		return redactSlice(v)
+		return redactSliceDepth(v, depth+1)
 	case map[string]any:
-		return redactMap(v)
+		return redactMapDepth(v, depth+1)
 	}
-	return redactUnknownType(value)
+	return redactUnknownTypeDepth(value, depth+1)
 }
 
 // redactBytes redacts a []byte.
 func redactBytes(v []byte) (any, bool, error) {
+	if json.Valid(v) {
+		safe, changed, err := redactRawMessage(json.RawMessage(v))
+		if err != nil || !changed {
+			return v, changed, err
+		}
+		raw, ok := safe.(json.RawMessage)
+		if !ok {
+			encoded, err := json.Marshal(safe)
+			if err != nil {
+				return nil, false, err
+			}
+			return encoded, true, nil
+		}
+		return []byte(raw), true, nil
+	}
 	s := string(v)
 	out, changed := redactString(s)
 	if !changed {
@@ -60,19 +93,69 @@ func redactBytes(v []byte) (any, bool, error) {
 
 // redactRawMessage redacts a json.RawMessage.
 func redactRawMessage(v json.RawMessage) (any, bool, error) {
-	out, changed := redactString(string(v))
+	raw := v
+	redacted, rawChanged := redactString(string(v))
+	if rawChanged {
+		if !json.Valid([]byte(redacted)) {
+			return nil, false, errors.New(
+				"redacted raw JSON result is invalid",
+			)
+		}
+		raw = json.RawMessage(redacted)
+	}
+	decoded, err := decodeJSONValue(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode raw JSON result: %w", err)
+	}
+	safe, changed, err := redactValue(decoded)
+	if err != nil {
+		return nil, false, err
+	}
+	if !changed && rawChanged {
+		return raw, true, nil
+	}
+	if !changed && rawJSONHasSecretField(raw) {
+		return json.RawMessage(`"[REDACTED]"`), true, nil
+	}
 	if !changed {
 		return v, false, nil
 	}
-	return json.RawMessage(out), true, nil
+	encoded, err := json.Marshal(safe)
+	if err != nil {
+		return nil, false, fmt.Errorf(
+			"encode redacted raw JSON result: %w", err,
+		)
+	}
+	return json.RawMessage(encoded), true, nil
+}
+
+var rawJSONKeyRegex = regexp.MustCompile(
+	`"((?:\\.|[^"\\])*)"\s*:`,
+)
+
+func rawJSONHasSecretField(raw json.RawMessage) bool {
+	for _, match := range rawJSONKeyRegex.FindAllSubmatch(raw, -1) {
+		if len(match) < 2 {
+			continue
+		}
+		key, err := strconv.Unquote(`"` + string(match[1]) + `"`)
+		if err == nil && isSecretFieldName(key) {
+			return true
+		}
+	}
+	return false
 }
 
 // redactSlice redacts a []any recursively.
 func redactSlice(v []any) (any, bool, error) {
+	return redactSliceDepth(v, 0)
+}
+
+func redactSliceDepth(v []any, depth int) (any, bool, error) {
 	changed := false
 	out := make([]any, len(v))
 	for i, item := range v {
-		safe, c, err := redactValue(item)
+		safe, c, err := redactValueDepth(item, depth)
 		if err != nil {
 			return nil, false, err
 		}
@@ -86,76 +169,163 @@ func redactSlice(v []any) (any, bool, error) {
 
 // redactMap redacts a map[string]any with field-aware key checking.
 // When a key name indicates a secret-bearing field (password, token,
-// api_key, etc.) and the value is a non-empty string, the value is
-// replaced with a redaction marker regardless of whether it matches a
-// secret regex. This catches values like "correct-horse-battery-staple"
-// that are clearly secrets by context but do not match any pattern.
+// api_key, etc.) and the value is non-empty, the value is replaced with
+// a redaction marker regardless of its concrete type or whether it
+// matches a secret regex.
 func redactMap(v map[string]any) (any, bool, error) {
+	return redactMapDepth(v, 0)
+}
+
+func redactMapDepth(v map[string]any, depth int) (any, bool, error) {
 	changed := false
 	out := make(map[string]any, len(v))
-	for k, item := range v {
-		if isSecretFieldName(k) {
-			if s, ok := item.(string); ok && s != "" {
-				out[k] = "[REDACTED:field:" + k + ":len=" + itoa(len(s)) + "]"
-				changed = true
-				continue
-			}
+	keys := make([]string, 0, len(v))
+	for k := range v {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		item := v[k]
+		safeKey, keyChanged := redactString(k)
+		if keyChanged {
+			changed = true
 		}
-		safe, c, err := redactValue(item)
+		baseKey := safeKey
+		for suffix := 1; ; suffix++ {
+			if _, exists := out[safeKey]; !exists {
+				break
+			}
+			safeKey = baseKey + "#" + itoa(suffix)
+			changed = true
+		}
+		if isSecretFieldName(k) && !isEmptySecretValue(item) {
+			out[safeKey] = secretFieldMarker(safeKey, item)
+			changed = true
+			continue
+		}
+		safe, c, err := redactValueDepth(item, depth)
 		if err != nil {
 			return nil, false, err
 		}
 		if c {
 			changed = true
 		}
-		out[k] = safe
+		out[safeKey] = safe
 	}
 	return out, changed, nil
+}
+
+func isEmptySecretValue(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return true
+	case string:
+		return v == ""
+	case []byte:
+		return len(v) == 0
+	case json.RawMessage:
+		return len(v) == 0 || string(v) == "null"
+	case []any:
+		return len(v) == 0
+	case map[string]any:
+		return len(v) == 0
+	}
+	return false
+}
+
+func secretFieldMarker(name string, value any) string {
+	if s, ok := value.(string); ok {
+		return "[REDACTED:field:" + name + ":len=" + itoa(len(s)) + "]"
+	}
+	return "[REDACTED:field:" + name + "]"
 }
 
 // redactUnknownType handles types that are not JSON-compatible by
 // marshaling to JSON, decoding the marshaled form into a generic JSON
 // tree, and running the recursive field-aware redactor over that tree.
-// Decoding first ensures secret-named fields on concrete structs and
-// typed maps (for example a "password" struct field whose value matches
-// no secret regex) are redacted exactly like map[string]any fields. The
-// marshaled form is also scanned directly so secrets in positions the
-// tree walk does not visit, such as map keys, are still redacted.
+// Decoding first ensures secret-named fields and secret-bearing keys on
+// concrete structs and typed maps are redacted exactly like
+// map[string]any values.
 func redactUnknownType(value any) (any, bool, error) {
-	raw, err := json.Marshal(value)
-	if err != nil {
-		s := fmt.Sprintf("%v", value)
-		if hasSecret(s) {
-			return map[string]any{
-				"status":  "redacted",
-				"reason":  "tool result type could not be serialized after secret detection",
-				"pattern": "unknown",
-			}, true, nil
-		}
-		return value, false, nil
-	}
-	redacted, rawChanged := redactString(string(raw))
-	var decoded any
-	if err := json.Unmarshal([]byte(redacted), &decoded); err != nil {
-		if !rawChanged {
-			return value, false, nil
-		}
+	return redactUnknownTypeDepth(value, 0)
+}
+
+func redactUnknownTypeDepth(
+	value any,
+	depth int,
+) (any, bool, error) {
+	if containsSecretByteSlice(reflect.ValueOf(value), depth) {
 		return map[string]any{
-			"status":  "redacted",
-			"reason":  "tool result contained a secret and could not be re-decoded",
-			"pattern": "unknown",
+			"status": "redacted",
+			"reason": "tool result contained secret bytes",
 		}, true, nil
 	}
-	tree, treeChanged, err := redactValue(decoded)
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return map[string]any{
+			"status": "redacted",
+			"reason": "tool result type could not be serialized safely",
+		}, true, nil
+	}
+
+	decoded, err := decodeJSONValue(raw)
+	if err != nil {
+		return nil, false, fmt.Errorf("decode serialized tool result: %w", err)
+	}
+	tree, treeChanged, err := redactValueDepth(decoded, depth)
 	if err != nil {
 		return nil, false, err
 	}
-	if !rawChanged && !treeChanged {
+	if !treeChanged {
 		// No secret anywhere: return the original value unchanged so
 		// callers do not lose type fidelity.
 		return value, false, nil
 	}
 	return tree, true, nil
+}
+
+func containsSecretByteSlice(
+	value reflect.Value,
+	depth int,
+) bool {
+	if !value.IsValid() || depth > maxRedactionDepth {
+		return false
+	}
+	switch value.Kind() {
+	case reflect.Interface, reflect.Pointer:
+		if value.IsNil() {
+			return false
+		}
+		return containsSecretByteSlice(value.Elem(), depth+1)
+	case reflect.Slice, reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			data := make([]byte, value.Len())
+			for i := range data {
+				data[i] = byte(value.Index(i).Uint())
+			}
+			return hasSecret(string(data))
+		}
+		for i := 0; i < value.Len(); i++ {
+			if containsSecretByteSlice(value.Index(i), depth+1) {
+				return true
+			}
+		}
+	case reflect.Map:
+		iter := value.MapRange()
+		for iter.Next() {
+			if containsSecretByteSlice(iter.Key(), depth+1) ||
+				containsSecretByteSlice(iter.Value(), depth+1) {
+				return true
+			}
+		}
+	case reflect.Struct:
+		for i := 0; i < value.NumField(); i++ {
+			if containsSecretByteSlice(value.Field(i), depth+1) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // limitString truncates s to at most maxBytes after redaction, appending a
@@ -205,17 +375,27 @@ func limitString(s string, maxBytes int64) (string, bool) {
 // It returns the truncated value, whether any truncation happened, and
 // the serialized byte size of the (redacted, truncated) result.
 func limitResultBytes(value any, maxBytes int64) (any, bool, int64) {
+	rawValue, marshalErr := json.Marshal(value)
 	if maxBytes <= 0 {
-		// Unlimited: return unchanged.
-		return value, false, measureBytes(value)
+		if marshalErr != nil {
+			fallback, size := serializedFallback(1 << 20)
+			return fallback, true, size
+		}
+		return value, false, int64(len(rawValue))
+	}
+	if marshalErr != nil {
+		fallback, size := serializedFallback(maxBytes)
+		return fallback, true, size
+	}
+	if marshalErr == nil && int64(len(rawValue)) <= maxBytes {
+		return value, false, int64(len(rawValue))
 	}
 	budget := &byteBudget{remaining: maxBytes}
 	out, truncated := limitWithBudget(value, budget)
 	raw, err := json.Marshal(out)
 	if err != nil {
-		// Unmarshalable values cannot be size-verified; report the
-		// budget accounting as-is.
-		return out, truncated, budget.used
+		fallback, size := serializedFallback(maxBytes)
+		return fallback, true, size
 	}
 	if int64(len(raw)) <= maxBytes {
 		return out, truncated, int64(len(raw))
@@ -234,8 +414,22 @@ func limitResultBytes(value any, maxBytes int64) (any, bool, int64) {
 		}
 		strBudget -= int64(len(enc)) - maxBytes
 	}
-	// Pathological budget smaller than any JSON string encoding.
-	return "", true, int64(len(`""`))
+	fallback, size := serializedFallback(maxBytes)
+	return fallback, true, size
+}
+
+// serializedFallback returns a non-nil JSON value whose encoded size is
+// at most maxBytes.
+func serializedFallback(maxBytes int64) (any, int64) {
+	marker := "[truncated:tool_safety]"
+	if raw, err := json.Marshal(marker); err == nil &&
+		int64(len(raw)) <= maxBytes {
+		return marker, int64(len(raw))
+	}
+	if maxBytes >= 2 {
+		return map[string]any{}, 2
+	}
+	return 0, 1
 }
 
 // byteBudget tracks the remaining byte budget across all leaves of a
@@ -259,11 +453,17 @@ func limitWithBudget(value any, b *byteBudget) (any, bool) {
 		out, truncated := limitStringWithBudget(string(v), b)
 		return []byte(out), truncated
 	case json.RawMessage:
-		out, truncated := limitStringWithBudget(string(v), b)
-		return json.RawMessage(out), truncated
+		decoded, err := decodeJSONValue(v)
+		if err != nil {
+			fallback, size := serializedFallback(maxInt64(1, b.remaining))
+			b.used += size
+			b.remaining = maxInt64(0, b.remaining-size)
+			return fallback, true
+		}
+		return limitWithBudget(decoded, b)
 	case bool, int, int8, int16, int32, int64,
 		uint, uint8, uint16, uint32, uint64,
-		float32, float64:
+		float32, float64, json.Number:
 		// Scalars are tiny; count them as 0 against the budget to
 		// avoid penalizing numeric metadata. The serialized size of
 		// a number is accounted for when the parent object is
@@ -313,7 +513,10 @@ func limitWithBudget(value any, b *byteBudget) (any, bool) {
 	// Unknown types: marshal to JSON, truncate the JSON string.
 	raw, err := json.Marshal(value)
 	if err != nil {
-		return value, false
+		fallback, size := serializedFallback(maxInt64(1, b.remaining))
+		b.used += size
+		b.remaining = maxInt64(0, b.remaining-size)
+		return fallback, true
 	}
 	if int64(len(raw)) <= b.remaining {
 		b.used += int64(len(raw))
@@ -341,19 +544,35 @@ func limitStringWithBudget(s string, b *byteBudget) (string, bool) {
 // measureBytes returns the serialized byte size of value without
 // truncating. Used when maxBytes is 0 (unlimited).
 func measureBytes(value any) int64 {
-	switch v := value.(type) {
-	case string:
-		return int64(len(v))
-	case []byte:
-		return int64(len(v))
-	case json.RawMessage:
-		return int64(len(v))
-	}
 	raw, err := json.Marshal(value)
 	if err != nil {
 		return 0
 	}
 	return int64(len(raw))
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func decodeJSONValue(data []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return nil, fmt.Errorf("multiple JSON values")
+		}
+		return nil, err
+	}
+	return value, nil
 }
 
 // isSecretFieldName returns true when the field name (case-insensitive)

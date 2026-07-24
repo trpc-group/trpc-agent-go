@@ -10,9 +10,11 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -116,29 +118,34 @@ func WithRequiredAudit(enabled bool) Option {
 
 // WithConcurrencyPolicy configures the global and per-tool active-call
 // caps. When MaxActiveCalls or PerToolLimits is exceeded,
-// CheckToolPermission returns a deny decision with a
+// the wrapped call returns a deny decision with a
 // "resource.concurrency_exceeded" reason.
 func WithConcurrencyPolicy(p ConcurrencyPolicy) Option {
 	return func(o *guardOptions) error {
+		if p.MaxActiveCalls < 0 {
+			return errors.New("max active calls must be non-negative")
+		}
+		for name, limit := range p.PerToolLimits {
+			if limit < 0 {
+				return fmt.Errorf(
+					"per-tool concurrency limit for %q must be non-negative",
+					name,
+				)
+			}
+		}
 		o.concurrency = p
 		return nil
 	}
 }
 
-// Guard is the public Tool Execution Safety Guard. It implements
-// tool.PermissionPolicy and provides post-tool redaction/audit callbacks.
-//
-// Construct one with NewGuard and register it as the runner's
-// ToolPermissionPolicy. AttachCallbacks wires the after-tool callback
-// into a tool.Callbacks so post-execution redaction and audit happen
-// automatically.
+// Guard is the public Tool Execution Safety Guard. Use WrapTool for
+// package-owned preflight, execution, redaction, audit, and cleanup.
 //
 // The guard maintains a short-lived side table that correlates the
-// preflight CheckToolPermission call with the post-execution after-tool
-// callback by tool call id, so the post_execute audit event can reuse
+// wrapper preflight with post-execution completion by tool call id, so
+// the post_execute audit event can reuse
 // the preflight scan id, decision, risk level, and rule ids. Entries are
-// stashed only for allowed calls — deny/ask decisions never reach the
-// after-tool callback — and are evicted when the after-tool callback
+// stashed only for allowed calls and evicted when wrapper completion
 // runs or when the guard is closed.
 type Guard struct {
 	scanner    *Scanner
@@ -150,13 +157,19 @@ type Guard struct {
 	closeAudit bool
 
 	// concurrencyLimiter caps the number of concurrent in-flight tool
-	// calls the guard has permitted. Acquired in CheckToolPermission,
-	// released in the after-tool callback.
+	// calls the guard has permitted. Acquired during wrapper preflight
+	// and released during wrapper completion.
 	concurrency *concurrencyLimiter
 
-	mu         sync.Mutex
-	scanEvents map[string]scanEvent // keyed by tool call id
-	releases   map[string]func()    // keyed by tool call id
+	mu          sync.Mutex
+	cond        *sync.Cond
+	inFlight    int
+	closing     bool
+	closed      bool
+	closeErr    error
+	scanEvents  map[string]scanEvent // keyed by tool call id
+	releases    map[string]func()    // keyed by tool call id
+	activeCalls map[string]struct{}  // model tool call ids currently in flight
 }
 
 // NewGuard constructs a Guard from the given options. If no policy is
@@ -193,7 +206,9 @@ func NewGuard(opts ...Option) (*Guard, error) {
 		concurrency: newConcurrencyLimiter(o.concurrency),
 		scanEvents:  make(map[string]scanEvent),
 		releases:    make(map[string]func()),
+		activeCalls: make(map[string]struct{}),
 	}
+	g.cond = sync.NewCond(&g.mu)
 	// Inject the guard's session tracker into the scanner so
 	// ruleHost can evaluate unknown_session and residual_session
 	// findings against the real session lifecycle state.
@@ -239,12 +254,35 @@ func NewGuard(opts ...Option) (*Guard, error) {
 // Policy returns the loaded policy. Callers must not mutate it; construct
 // a new Guard to apply a changed policy.
 func (g *Guard) Policy() Policy {
-	return g.scanner.policy
+	if g == nil || g.scanner == nil {
+		return Policy{}
+	}
+	return clonePolicy(g.scanner.policy)
 }
 
-// Scan runs the scanner against in directly, bypassing the
-// PermissionPolicy adapter. It is the entry point for batch scanning and
-// the example program.
+func (g *Guard) beginWrappedCall() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing || g.closed {
+		return errors.New("safety guard is closed")
+	}
+	g.inFlight++
+	return nil
+}
+
+func (g *Guard) endWrappedCall() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.inFlight > 0 {
+		g.inFlight--
+	}
+	if g.inFlight == 0 && g.cond != nil {
+		g.cond.Broadcast()
+	}
+}
+
+// Scan runs the scanner against in directly. It is the entry point for
+// standalone and batch analysis that does not execute a tool.
 func (g *Guard) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	if g == nil {
 		return ScanReport{}, errors.New("guard is nil")
@@ -260,15 +298,15 @@ func (g *Guard) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchReport,
 	return g.scanner.ScanBatch(ctx, inputs)
 }
 
-// CheckToolPermission implements tool.PermissionPolicy. It decodes the
-// request arguments via the registered profile, scans the resulting
-// ScanInput, writes a preflight audit event, projects OTel attributes,
-// and returns the framework decision.
+// checkToolCall decodes the request arguments via the registered
+// profile, scans the resulting ScanInput, writes a preflight audit
+// event, acquires lifecycle state, and returns the safety decision. The
+// callable wrapper must invoke finalizeCall for every allowed decision.
 //
 // The Reason field of a deny/ask decision mentions the decision, primary
 // rule id, and recommendation without exposing the original command or
 // any secret value.
-func (g *Guard) CheckToolPermission(
+func (g *Guard) checkToolCall(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
@@ -280,18 +318,7 @@ func (g *Guard) CheckToolPermission(
 	}
 	in, decodeErr := decodeRequest(req.ToolName, req.Arguments, g.profiles)
 	if decodeErr != nil {
-		report := g.decodeFailureReport(req, decodeErr)
-		// A required audit failure downgrades even an ask decision to a
-		// deny: a host-approved execution without an audit record would
-		// leave no trail.
-		g.auditPreflightOrDeny(&report)
-		if g.telemetry {
-			telemetryProject(ctx, safetyAttributes(report))
-		}
-		if report.Decision == DecisionDeny {
-			return tool.DenyPermission(formatReason(report)), nil
-		}
-		return tool.AskPermission(formatReason(report)), nil
+		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
 	}
 
 	// Apply metadata defaults from the registered profile when the
@@ -312,37 +339,33 @@ func (g *Guard) CheckToolPermission(
 		in.OutputSizeHint = int64(req.Metadata.MaxResultSize)
 	}
 
-	report, err := g.scanner.Scan(ctx, in)
-	if err != nil {
-		// Scanner error: fail closed.
-		report = ScanReport{
-			SchemaVersion: "1",
-			ScanID:        newScanID(),
-			Timestamp:     g.scanner.clock(),
-			ToolName:      req.ToolName,
-			Backend:       in.Backend,
-			Decision:      DecisionDeny,
-			RiskLevel:     RiskHigh,
-			Findings: []Finding{{
-				RuleID:         "scanner.error",
-				RiskLevel:      RiskHigh,
-				Decision:       DecisionDeny,
-				Evidence:       redactedSnippet(err.Error(), 80),
-				Recommendation: "Refuse the call; the safety scanner reported an internal error",
-			}},
-			Intercepted: true,
-		}
-	}
-	report.Backend = coalesceBackend(report.Backend, in.Backend)
+	report := g.scanPermission(ctx, req, in)
 
 	// Concurrency gate first, preflight audit second, so the persisted
 	// record carries the final decision. A denied call never executes, so
 	// a slot acquired by the gate is released here instead of in the
-	// after-tool callback.
+	// completion handler.
 	release := g.gateConcurrency(ctx, req, &report)
+	release, reserved := g.reserveAllowedCall(req, &report, release)
+	transferred := false
+	defer func() {
+		if transferred {
+			return
+		}
+		if release != nil {
+			release()
+		}
+		if reserved {
+			g.releaseToolCallID(req.ToolCallID)
+		}
+	}()
 	if denied := g.auditPreflightOrDeny(&report); denied && release != nil {
 		release()
 		release = nil
+	}
+	if report.Decision != DecisionAllow && reserved {
+		g.releaseToolCallID(req.ToolCallID)
+		reserved = false
 	}
 
 	if g.telemetry {
@@ -351,23 +374,97 @@ func (g *Guard) CheckToolPermission(
 
 	if report.Decision == DecisionAllow {
 		g.stashRelease(req.ToolCallID, release)
-		// Stash the scan event keyed by tool call id so the after-tool
-		// callback can reuse the scan id, decision, risk level, and rule
-		// ids for the post_execute audit event. Only the allow path
-		// stashes: deny/ask decisions never reach the after-tool
-		// callback, so their entries would linger until Close.
+		// Stash the scan event so wrapper completion can reuse the scan
+		// id, decision, risk level, and rule ids.
 		g.stashScanEvent(req.ToolCallID, fromReport(report))
+		transferred = true
 	}
 
+	return permissionDecisionForReport(report), nil
+}
+
+func (g *Guard) permissionForDecodeFailure(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+	decodeErr error,
+) tool.PermissionDecision {
+	report := g.decodeFailureReport(req, decodeErr)
+	g.auditPreflightOrDeny(&report)
+	if g.telemetry {
+		telemetryProject(ctx, safetyAttributes(report))
+	}
+	return permissionDecisionForReport(report)
+}
+
+func (g *Guard) scanPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+	in ScanInput,
+) ScanReport {
+	report, err := g.scanner.Scan(ctx, in)
+	if err == nil {
+		report.Backend = coalesceBackend(report.Backend, in.Backend)
+		return report
+	}
+	return ScanReport{
+		SchemaVersion: "1",
+		ScanID:        newScanID(),
+		Timestamp:     g.scanner.clock(),
+		ToolName:      req.ToolName,
+		Backend:       in.Backend,
+		Decision:      DecisionDeny,
+		RiskLevel:     RiskHigh,
+		Findings: []Finding{{
+			RuleID:         "scanner.error",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       redactedSnippet(err.Error(), 80),
+			Recommendation: "Refuse the call; the safety scanner reported an internal error",
+		}},
+		Intercepted: true,
+	}
+}
+
+func (g *Guard) reserveAllowedCall(
+	req *tool.PermissionRequest,
+	report *ScanReport,
+	release func(),
+) (func(), bool) {
+	if report.Decision != DecisionAllow || req.ToolCallID == "" {
+		return release, false
+	}
+	if g.reserveToolCallID(req.ToolCallID) {
+		return release, true
+	}
+	if release != nil {
+		release()
+		release = nil
+	}
+	report.Decision = DecisionDeny
+	report.Intercepted = true
+	report.RiskLevel = RiskHigh
+	report.Findings = append(report.Findings, Finding{
+		RuleID:         "input.duplicate_tool_call_id",
+		RiskLevel:      RiskHigh,
+		Decision:       DecisionDeny,
+		Evidence:       "tool call id is already active",
+		Recommendation: "Generate a unique tool call id for every concurrent execution",
+	})
+	sortFindings(report.Findings)
+	return release, false
+}
+
+func permissionDecisionForReport(
+	report ScanReport,
+) tool.PermissionDecision {
 	switch report.Decision {
 	case DecisionAllow:
-		return tool.AllowPermission(), nil
+		return tool.AllowPermission()
 	case DecisionAsk:
-		return tool.AskPermission(formatReason(report)), nil
-	case DecisionDeny:
-		return tool.DenyPermission(formatReason(report)), nil
+		return tool.AskPermission(formatReason(report))
+	default:
+		return tool.DenyPermission(formatReason(report))
 	}
-	return tool.DenyPermission(formatReason(report)), nil
 }
 
 // decodeFailureReport builds the fail-closed report for undecodable
@@ -404,22 +501,34 @@ func (g *Guard) decodeFailureReport(req *tool.PermissionRequest, decodeErr error
 }
 
 // gateConcurrency acquires a concurrency slot for an allow decision and
-// returns the release function the caller must stash for the after-tool
-// callback. Deny/ask/error decisions never acquire a slot, so they never
+// returns the release function the caller must stash for wrapper
+// completion. Deny/ask/error decisions never acquire a slot, so they never
 // leak. When the cap is exceeded the report is downgraded to a deny with
 // a resource.concurrency_exceeded finding and no slot is held.
 //
 // A request without a tool call id cannot be correlated with the
-// after-tool callback that would release the slot, so the slot is
-// released inline as soon as the permission check completes: the slot
-// only spans the permission check itself. Concurrency accounting and
-// audit correlation both require a tool call id.
+// completion hook that releases the slot, so it is denied whenever a
+// concurrency limit is configured.
 func (g *Guard) gateConcurrency(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 	report *ScanReport,
 ) (release func()) {
 	if report.Decision != DecisionAllow {
+		return nil
+	}
+	if req.ToolCallID == "" && g.concurrency.enabled() {
+		report.Decision = DecisionDeny
+		report.Intercepted = true
+		report.RiskLevel = RiskHigh
+		report.Findings = append(report.Findings, Finding{
+			RuleID:         "resource.concurrency_id_required",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "concurrency limits require a non-empty tool call id",
+			Recommendation: "Generate a unique tool call id before executing the tool",
+		})
+		sortFindings(report.Findings)
 		return nil
 	}
 	release, err := g.concurrency.acquire(ctx, req.ToolName)
@@ -435,10 +544,6 @@ func (g *Guard) gateConcurrency(
 			Recommendation: "Reduce concurrent tool calls or raise the concurrency policy cap",
 		})
 		sortFindings(report.Findings)
-		return nil
-	}
-	if req.ToolCallID == "" {
-		release()
 		return nil
 	}
 	return release
@@ -511,7 +616,7 @@ func (g *Guard) maybeAuditPreflight(report ScanReport) error {
 }
 
 // stashScanEvent records the preflight scan event keyed by tool call id
-// so the after-tool callback can correlate the two phases. The event is
+// so wrapper completion can correlate the two phases. The event is
 // evicted by popScanEvent or by Close.
 func (g *Guard) stashScanEvent(toolCallID string, ev scanEvent) {
 	if g == nil || toolCallID == "" {
@@ -541,7 +646,7 @@ func (g *Guard) popScanEvent(toolCallID string) scanEvent {
 }
 
 // stashRelease records the concurrency-limiter release function for
-// toolCallID so the after-tool callback can free the slot. When an entry
+// toolCallID so wrapper completion can free the slot. When an entry
 // for toolCallID already exists it is superseded: the previous release
 // is invoked before the new one is stored, so a re-stash never leaks the
 // earlier slot.
@@ -559,6 +664,46 @@ func (g *Guard) stashRelease(toolCallID string, release func()) {
 		prev()
 	}
 	g.releases[toolCallID] = release
+}
+
+// reserveToolCallID reserves id for one active execution. It returns
+// false when another execution is already using the same model-issued
+// id, because correlation and concurrency state would otherwise be
+// ambiguous.
+func (g *Guard) reserveToolCallID(id string) bool {
+	if g == nil || id == "" {
+		return true
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.activeCalls == nil {
+		g.activeCalls = make(map[string]struct{})
+	}
+	if _, exists := g.activeCalls[id]; exists {
+		return false
+	}
+	g.activeCalls[id] = struct{}{}
+	return true
+}
+
+// releaseToolCallID releases an active execution id.
+func (g *Guard) releaseToolCallID(id string) {
+	if g == nil || id == "" {
+		return
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delete(g.activeCalls, id)
+}
+
+// finishCall releases concurrency and correlation state for one
+// completed tool call.
+func (g *Guard) finishCall(id string) {
+	if r := g.popRelease(id); r != nil {
+		r()
+	}
+	g.popScanEvent(id)
+	g.releaseToolCallID(id)
 }
 
 // popRelease returns and removes the release function for toolCallID.
@@ -588,109 +733,78 @@ func (g *Guard) maybeAuditPostExecute(
 	return g.audit.appendPostExecute(ev, outputBytes, truncated, execution)
 }
 
-// Callbacks returns a *tool.Callbacks whose after-tool finalizer redacts
-// secrets, applies max_output_size, and emits the post_execute audit
-// event. The finalizer is registered into the returned callbacks so
-// callers can merge it with their own callbacks.
-//
-// The returned callbacks are independent of any callbacks the caller
-// already has; use AttachCallbacks to merge into an existing callbacks
-// value.
-func (g *Guard) Callbacks() *tool.Callbacks {
-	cbs := tool.NewCallbacks()
-	g.attachAfterTool(cbs)
-	return cbs
-}
-
-// AttachCallbacks merges the guard's after-tool finalizer into cbs. The
-// guard's callback is registered as a finalizer so it runs over the
-// final callback result even when an earlier after-tool callback stops
-// the chain by returning a CustomResult or an error; an earlier callback
-// can therefore neither reintroduce a secret after redaction nor bypass
-// redaction, the output cap, post-execute audit, or the concurrency
-// release.
-func (g *Guard) AttachCallbacks(cbs *tool.Callbacks) {
-	if cbs == nil {
-		return
-	}
-	g.attachAfterTool(cbs)
-}
-
-// attachAfterTool registers the guard's after-tool finalizer on cbs. The
-// finalizer redacts secrets in args.Result, args.Error, and args.Meta,
-// applies the global max_output_size budget, and emits the post_execute
-// audit event with the real redacted/truncated state.
-//
-// The callback handles three surfaces:
+// finalizeCall handles three completion surfaces:
 //   - args.Result: walked via redactValue, then size-limited.
 //   - args.Error: its string form is redacted and, when it contains a
 //     secret, replaced with a safe structured CustomResult so the model
-//     never sees the raw error text. The framework has already logged
-//     the original error to the warning log before this callback runs;
-//     callers that cannot tolerate that log path should suppress
-//     warn-level tool-execution logs or install a redacting logger.
+//     never sees the raw error text.
 //   - args.Meta: each value is redacted; MCP _meta fields frequently
 //     carry bearer tokens or request ids that must not leak.
-func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
-	cbs.RegisterAfterToolFinalizer(func(
-		ctx context.Context,
-		args *tool.AfterToolArgs,
-	) (*tool.AfterToolResult, error) {
-		if g == nil || args == nil {
-			return nil, nil
-		}
-		// Always release the concurrency slot and pop the preflight
-		// scan event, even when redaction is disabled, so the limiter
-		// does not leak slots and the side table does not grow without
-		// bound.
-		defer func() {
-			if r := g.popRelease(args.ToolCallID); r != nil {
-				r()
-			}
-		}()
+//
+// finalizeCall performs result redaction, output limiting, post-execute
+// audit, session tracking, and concurrency release.
+func (g *Guard) finalizeCall(
+	ctx context.Context,
+	args *tool.AfterToolArgs,
+) (*tool.AfterToolResult, error) {
+	if g == nil || args == nil {
+		return nil, nil
+	}
+	// Always release the concurrency slot and pop the preflight
+	// scan event, even when redaction is disabled, so the limiter
+	// does not leak slots and the side table does not grow without
+	// bound.
+	defer g.finishCall(args.ToolCallID)
+	originalResult := args.Result
 
-		// Step 1: Handle error redaction FIRST, before computing
-		// safeResult. When the error contains a secret, replace
-		// args.Result with a structured safe error message so the
-		// model never sees the raw error text.
-		errorRedacted := g.redactErrorIfNeeded(args)
+	// Step 1: Handle error redaction FIRST, before computing
+	// safeResult. When the error contains a secret, replace
+	// args.Result with a structured safe error message so the
+	// model never sees the raw error text.
+	errorRedacted := g.redactErrorIfNeeded(args)
 
-		// Step 2: Redact and limit the result (which may have been
-		// replaced in step 1).
-		safeResult, resultChanged, resultTruncated, resultSize := g.redactAndLimitTracked(args.Result)
+	// Step 2: Redact and limit the result (which may have been
+	// replaced in step 1).
+	safeResult, resultRedacted, resultChanged,
+		resultTruncated, resultSize :=
+		g.redactAndLimitTracked(args.Result)
 
 		// Step 3: Redact Meta in place.
-		metaRedacted := g.redactMetaIfNeeded(args)
+	metaRedacted := g.redactMetaIfNeeded(args)
 
-		// Track host/workspace session lifecycle only for successful
-		// calls: a failed exec/kill call carrying a session id must not
-		// register or clear session state.
-		if args.Error == nil {
-			g.trackSessionLifecycle(args.ToolName, safeResult)
-		}
+	// Track host/workspace session lifecycle only for successful
+	// calls: a failed exec/kill call carrying a session id must not
+	// register or clear session state.
+	if args.Error == nil {
+		g.trackSessionLifecycle(
+			args.ToolName, args.Arguments, originalResult,
+		)
+	}
 
-		execution := "ok"
-		if args.Error != nil {
-			execution = "error"
-		}
-		redacted := resultChanged || errorRedacted || metaRedacted
-		truncated := resultTruncated
+	execution := "ok"
+	if args.Error != nil {
+		execution = "error"
+	}
+	redacted := resultRedacted || errorRedacted || metaRedacted
+	truncated := resultTruncated
 
-		// Build the post_execute audit event. Execution already
-		// happened, so an audit failure cannot deny anything; with a
-		// required writer it is surfaced as a warning instead.
-		ev := g.postExecuteEvent(args, redacted, truncated)
-		if err := g.maybeAuditPostExecute(ev, resultSize, truncated, execution); err != nil {
-			log.WarnfContext(ctx,
-				"tool_safety: post-execute audit append failed for tool %q: %v",
-				args.ToolName, err)
-		}
+	// Build the post_execute audit event. Execution already
+	// happened, so an audit failure cannot deny anything; with a
+	// required writer it is surfaced as a warning instead.
+	ev := g.postExecuteEvent(args, redacted, truncated)
+	if err := g.maybeAuditPostExecute(
+		ev, resultSize, truncated, execution,
+	); err != nil {
+		log.WarnfContext(ctx,
+			"tool_safety: post-execute audit append failed for tool %q: %v",
+			args.ToolName, err)
+	}
 
-		if !resultChanged && !errorRedacted && !metaRedacted && !resultTruncated {
-			return nil, nil
-		}
-		return &tool.AfterToolResult{CustomResult: safeResult}, nil
-	})
+	if !resultChanged && !errorRedacted && !metaRedacted &&
+		!resultTruncated {
+		return nil, nil
+	}
+	return &tool.AfterToolResult{CustomResult: safeResult}, nil
 }
 
 // trackSessionLifecycle registers or clears session state based on the
@@ -699,20 +813,54 @@ func (g *Guard) attachAfterTool(cbs *tool.Callbacks) {
 // workspace_kill_session completes, the session is marked killed. The
 // caller invokes this only for successful calls; a failed call must not
 // mutate lifecycle state.
-func (g *Guard) trackSessionLifecycle(toolName string, result any) {
+func (g *Guard) trackSessionLifecycle(
+	toolName string,
+	arguments []byte,
+	result any,
+) {
 	if g == nil || g.sessions == nil {
 		return
 	}
-	sessionID := extractSessionID(result)
-	if sessionID == "" {
-		return
-	}
 	switch toolName {
+	case "write_stdin", "workspace_write_stdin":
+		if !isTerminalSessionStatus(extractResultStatus(result)) {
+			return
+		}
+		if in, err := decodeRequest(
+			toolName, arguments, g.profiles,
+		); err == nil {
+			g.sessions.kill(in.SessionID)
+		}
 	case "exec_command", "workspace_exec":
-		g.sessions.register(sessionID)
+		g.sessions.register(extractSessionID(result))
 	case "kill_session", "workspace_kill_session":
-		g.sessions.kill(sessionID)
+		g.sessions.kill(extractSessionID(result))
 	}
+}
+
+func extractResultStatus(result any) string {
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	decoded, err := decodeJSONValue(raw)
+	if err != nil {
+		return ""
+	}
+	value, ok := decoded.(map[string]any)
+	if !ok {
+		return ""
+	}
+	status, _ := value["status"].(string)
+	return status
+}
+
+func isTerminalSessionStatus(status string) bool {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "exited", "killed", "completed", "closed", "done":
+		return true
+	}
+	return false
 }
 
 // extractSessionID returns the session_id field from a structured tool
@@ -730,38 +878,64 @@ func extractSessionID(result any) string {
 			return s
 		}
 	}
+	raw, err := json.Marshal(result)
+	if err != nil {
+		return ""
+	}
+	decoded, err := decodeJSONValue(raw)
+	if err != nil {
+		return ""
+	}
+	if value, ok := decoded.(map[string]any); ok {
+		if sessionID, ok := value["session_id"].(string); ok {
+			return sessionID
+		}
+		if sessionID, ok := value["sessionId"].(string); ok {
+			return sessionID
+		}
+	}
 	return ""
 }
 
 // redactAndLimitTracked is redactAndLimit with explicit changed/truncated
 // tracking so the audit event records the real redaction state. When
 // truncation happens without redaction, changed is also set true so the
-// callback returns the truncated value instead of the original.
-func (g *Guard) redactAndLimitTracked(value any) (safe any, changed bool, truncated bool, size int64) {
+// completion returns the truncated value instead of the original.
+func (g *Guard) redactAndLimitTracked(
+	value any,
+) (
+	safe any,
+	redacted bool,
+	changed bool,
+	truncated bool,
+	size int64,
+) {
 	if !g.redaction {
 		out, trunc, sz := limitResultBytes(value, g.scanner.policy.MaxOutputSize)
-		return out, trunc, trunc, sz
+		return out, false, trunc, trunc, sz
 	}
-	redacted, c, err := redactValue(value)
+	redactedValue, c, err := redactValue(value)
 	if err != nil {
 		safeMarker := map[string]any{
 			"status": "redacted",
 			"reason": "tool result contained a secret and could not be safely returned",
 		}
 		out, trunc, sz := limitResultBytes(safeMarker, g.scanner.policy.MaxOutputSize)
-		return out, true, trunc, sz
+		return out, true, true, trunc, sz
 	}
-	out, trunc, sz := limitResultBytes(redacted, g.scanner.policy.MaxOutputSize)
+	out, trunc, sz := limitResultBytes(
+		redactedValue, g.scanner.policy.MaxOutputSize,
+	)
 	// changed is true when redaction changed the value OR when
-	// truncation changed the value, so the callback returns the safe
+	// truncation changed the value, so completion returns the safe
 	// (truncated) value instead of the original.
 	changed = c || trunc
-	return out, changed, trunc, sz
+	return out, c, changed, trunc, sz
 }
 
 // redactErrorIfNeeded returns true when args.Error contained a secret.
 // In that case args.Result is replaced with a safe structured error so
-// the callback returns the redacted message as a CustomResult and the
+// completion returns the redacted message as a CustomResult and the
 // model never sees the raw error text.
 func (g *Guard) redactErrorIfNeeded(args *tool.AfterToolArgs) bool {
 	if args.Error == nil || !g.redaction {
@@ -787,24 +961,45 @@ func (g *Guard) redactMetaIfNeeded(args *tool.AfterToolArgs) bool {
 	if !g.redaction || len(args.Meta) == 0 {
 		return false
 	}
-	changed := false
-	for k, v := range args.Meta {
-		safe, c, err := redactValue(v)
-		if err != nil || !c {
-			continue
-		}
-		args.Meta[k] = safe
-		changed = true
+	safe, changed, err := redactValue(args.Meta)
+	if err != nil {
+		replaceMetadata(args.Meta, map[string]any{
+			"status": "redacted",
+			"reason": "tool metadata could not be redacted safely",
+		})
+		return true
+	}
+	safeMeta, ok := safe.(map[string]any)
+	if !ok {
+		replaceMetadata(args.Meta, map[string]any{
+			"status": "redacted",
+			"reason": "tool metadata had an unsupported shape",
+		})
+		return true
+	}
+	if changed {
+		replaceMetadata(args.Meta, safeMeta)
 	}
 	return changed
 }
 
+func replaceMetadata(
+	target map[string]any,
+	safe map[string]any,
+) {
+	for key := range target {
+		delete(target, key)
+	}
+	for key, value := range safe {
+		target[key] = value
+	}
+}
+
 // postExecuteEvent builds a post_execute scanEvent that reuses the
 // preflight scan event when available. The guard stashes the preflight
-// event in a side table keyed by tool call id so the after callback can
-// correlate the two phases. When no preflight event is found (e.g. the
-// guard was attached to a callbacks pipeline that did not go through
-// CheckToolPermission), a minimal standalone event is produced.
+// event in a side table keyed by tool call id so completion can
+// correlate the two phases. When no preflight event is found, a minimal
+// standalone event is produced.
 func (g *Guard) postExecuteEvent(args *tool.AfterToolArgs, redacted, truncated bool) scanEvent {
 	sessionHash := g.postExecuteSessionHash(args)
 	if pre := g.popScanEvent(args.ToolCallID); pre.ScanID != "" {
@@ -904,18 +1099,52 @@ func (g *Guard) Close() error {
 		return nil
 	}
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	if g.closed {
+		err := g.closeErr
+		g.mu.Unlock()
+		return err
+	}
+	if g.closing {
+		for !g.closed {
+			g.cond.Wait()
+		}
+		err := g.closeErr
+		g.mu.Unlock()
+		return err
+	}
+	g.closing = true
+	for g.inFlight > 0 {
+		g.cond.Wait()
+	}
+	releases := make([]func(), 0, len(g.releases))
+	for _, release := range g.releases {
+		if release != nil {
+			releases = append(releases, release)
+		}
+	}
 	g.scanEvents = nil
 	g.releases = nil
+	g.activeCalls = nil
+	audit := g.audit
+	closeAudit := g.closeAudit
+	g.audit = nil
+	g.mu.Unlock()
+	for _, release := range releases {
+		release()
+	}
 	if g.sessions != nil {
 		g.sessions.reset()
 	}
-	if g.audit != nil && g.closeAudit {
-		err := g.audit.Close()
-		g.audit = nil
-		return err
+	var closeErr error
+	if audit != nil && closeAudit {
+		closeErr = audit.Close()
 	}
-	return nil
+	g.mu.Lock()
+	g.closeErr = closeErr
+	g.closed = true
+	g.cond.Broadcast()
+	g.mu.Unlock()
+	return closeErr
 }
 
 // formatReason builds the Reason string for a deny/ask decision. It
