@@ -204,27 +204,61 @@ type AllowedDiffRule struct {
 
 // Run executes a replay case against one backend and returns a normalized snapshot.
 func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
+	if err := validateBackend(backend); err != nil {
+		return Result{}, err
+	}
+	key := replayKey(tc.Name)
+	if err := createSessionAndState(ctx, backend, key, tc); err != nil {
+		return Result{}, err
+	}
+	if err := appendEvents(ctx, backend, key, tc); err != nil {
+		return Result{}, err
+	}
+	if err := appendTracks(ctx, backend, key, tc); err != nil {
+		return Result{}, err
+	}
+	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
+	if err := applyMemoryOperations(ctx, backend, userKey, tc); err != nil {
+		return Result{}, err
+	}
+	if err := assertMemoryQueries(ctx, backend, userKey, tc); err != nil {
+		return Result{}, err
+	}
+	if err := createSummaries(ctx, backend, key, tc); err != nil {
+		return Result{}, err
+	}
+	return buildResult(ctx, backend, key, userKey, tc.Name)
+}
+
+func validateBackend(backend Backend) error {
 	if backend.SessionService == nil {
-		return Result{}, fmt.Errorf("replay backend %q has nil session service", backend.Name)
+		return fmt.Errorf("replay backend %q has nil session service", backend.Name)
 	}
 	if backend.MemoryService == nil {
-		return Result{}, fmt.Errorf("replay backend %q has nil memory service", backend.Name)
+		return fmt.Errorf("replay backend %q has nil memory service", backend.Name)
 	}
-	key := session.Key{
-		AppName:   "replay-matrix-" + tc.Name,
-		UserID:    "user-" + tc.Name,
-		SessionID: "session-" + tc.Name,
+	return nil
+}
+
+func replayKey(caseName string) session.Key {
+	return session.Key{
+		AppName:   "replay-matrix-" + caseName,
+		UserID:    "user-" + caseName,
+		SessionID: "session-" + caseName,
 	}
+}
+
+func createSessionAndState(ctx context.Context, backend Backend, key session.Key, tc Case) error {
 	sess, err := backend.SessionService.CreateSession(ctx, key, cloneStateMap(tc.InitialState))
 	if err != nil {
-		return Result{}, fmt.Errorf("create session for case %q: %w", tc.Name, err)
+		return fmt.Errorf("create session for case %q: %w", tc.Name, err)
 	}
 	if sess == nil {
-		return Result{}, fmt.Errorf("create session for case %q returned nil", tc.Name)
+		return fmt.Errorf("create session for case %q returned nil", tc.Name)
 	}
 	if len(tc.AppState) > 0 {
 		if err := backend.SessionService.UpdateAppState(ctx, key.AppName, cloneStateMap(tc.AppState)); err != nil {
-			return Result{}, fmt.Errorf("update app state for case %q: %w", tc.Name, err)
+			return fmt.Errorf("update app state for case %q: %w", tc.Name, err)
 		}
 	}
 	if len(tc.UserState) > 0 {
@@ -232,86 +266,109 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 			AppName: key.AppName,
 			UserID:  key.UserID,
 		}, cloneStateMap(tc.UserState)); err != nil {
-			return Result{}, fmt.Errorf("update user state for case %q: %w", tc.Name, err)
+			return fmt.Errorf("update user state for case %q: %w", tc.Name, err)
 		}
 	}
 	if len(tc.SessionState) > 0 {
 		if err := backend.SessionService.UpdateSessionState(ctx, key, cloneStateMap(tc.SessionState)); err != nil {
-			return Result{}, fmt.Errorf("update session state for case %q: %w", tc.Name, err)
+			return fmt.Errorf("update session state for case %q: %w", tc.Name, err)
 		}
 	}
+	return nil
+}
+
+func appendEvents(ctx context.Context, backend Backend, key session.Key, tc Case) error {
 	for i, evt := range tc.Events {
 		got, err := backend.SessionService.GetSession(ctx, key)
 		if err != nil {
-			return Result{}, fmt.Errorf("get session before event %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("get session before event %d for case %q: %w", i, tc.Name, err)
 		}
 		if got == nil {
-			return Result{}, fmt.Errorf("get session before event %d for case %q returned nil", i, tc.Name)
+			return fmt.Errorf("get session before event %d for case %q returned nil", i, tc.Name)
 		}
 		if evt == nil {
-			return Result{}, fmt.Errorf("event %d for case %q is nil", i, tc.Name)
+			return fmt.Errorf("event %d for case %q is nil", i, tc.Name)
 		}
 		if err := backend.SessionService.AppendEvent(ctx, got, evt.Clone()); err != nil {
-			return Result{}, fmt.Errorf("append event %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("append event %d for case %q: %w", i, tc.Name, err)
 		}
 	}
+	return nil
+}
+
+func appendTracks(ctx context.Context, backend Backend, key session.Key, tc Case) error {
 	for i, spec := range tc.Tracks {
 		if backend.TrackService == nil {
-			return Result{}, fmt.Errorf("track %d for case %q requires track service", i, tc.Name)
+			return fmt.Errorf("track %d for case %q requires track service", i, tc.Name)
 		}
 		if strings.TrimSpace(spec.Name) == "" {
-			return Result{}, fmt.Errorf("track %d for case %q has empty name", i, tc.Name)
+			return fmt.Errorf("track %d for case %q has empty name", i, tc.Name)
 		}
 		got, err := backend.SessionService.GetSession(ctx, key)
 		if err != nil {
-			return Result{}, fmt.Errorf("get session before track %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("get session before track %d for case %q: %w", i, tc.Name, err)
 		}
 		payload, err := json.Marshal(spec.Payload)
 		if err != nil {
-			return Result{}, fmt.Errorf("marshal track %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("marshal track %d for case %q: %w", i, tc.Name, err)
 		}
 		if err := backend.TrackService.AppendTrackEvent(ctx, got, &session.TrackEvent{
 			Track:     session.Track(spec.Name),
 			Payload:   payload,
 			Timestamp: spec.Timestamp,
 		}); err != nil {
-			return Result{}, fmt.Errorf("append track %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("append track %d for case %q: %w", i, tc.Name, err)
 		}
 	}
+	return nil
+}
+
+func applyMemoryOperations(ctx context.Context, backend Backend, userKey memory.UserKey, tc Case) error {
 	aliases := make(map[string]string)
-	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
 	for i, op := range tc.Memories {
 		if err := applyMemoryOp(ctx, backend.MemoryService, userKey, aliases, op); err != nil {
-			return Result{}, fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
 		}
 	}
 	if err := applyMemoriesConcurrently(ctx, backend.MemoryService, userKey, tc.ConcurrentMemories); err != nil {
-		return Result{}, fmt.Errorf("concurrent memory operations for case %q: %w", tc.Name, err)
+		return fmt.Errorf("concurrent memory operations for case %q: %w", tc.Name, err)
 	}
+	return nil
+}
+
+func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.UserKey, tc Case) error {
 	for i, query := range tc.Queries {
 		results, err := backend.MemoryService.SearchMemories(ctx, userKey, query.Query)
 		if err != nil {
-			return Result{}, fmt.Errorf("memory query %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("memory query %d for case %q: %w", i, tc.Name, err)
 		}
 		if len(results) < query.MinResults {
-			return Result{}, fmt.Errorf("memory query %d for case %q returned %d results, want at least %d", i, tc.Name, len(results), query.MinResults)
+			return fmt.Errorf("memory query %d for case %q returned %d results, want at least %d", i, tc.Name, len(results), query.MinResults)
 		}
 	}
+	return nil
+}
+
+func createSummaries(ctx context.Context, backend Backend, key session.Key, tc Case) error {
 	for i, spec := range tc.Summaries {
 		if err := createSummary(ctx, backend, key, spec); err != nil {
-			return Result{}, fmt.Errorf("summary step %d for case %q: %w", i, tc.Name, err)
+			return fmt.Errorf("summary step %d for case %q: %w", i, tc.Name, err)
 		}
 	}
+	return nil
+}
+
+func buildResult(ctx context.Context, backend Backend, key session.Key, userKey memory.UserKey, caseName string) (Result, error) {
 	got, err := backend.SessionService.GetSession(ctx, key)
 	if err != nil {
-		return Result{}, fmt.Errorf("get final session for case %q: %w", tc.Name, err)
+		return Result{}, fmt.Errorf("get final session for case %q: %w", caseName, err)
 	}
 	if got == nil {
-		return Result{}, fmt.Errorf("get final session for case %q returned nil", tc.Name)
+		return Result{}, fmt.Errorf("get final session for case %q returned nil", caseName)
 	}
 	memories, err := backend.MemoryService.ReadMemories(ctx, userKey, 0)
 	if err != nil {
-		return Result{}, fmt.Errorf("read final memories for case %q: %w", tc.Name, err)
+		return Result{}, fmt.Errorf("read final memories for case %q: %w", caseName, err)
 	}
 	return Result{Backend: backend.Name, Key: key, Snapshot: BuildSnapshot(got, memories)}, nil
 }
