@@ -47,9 +47,9 @@ func (c *Client) UpdateSessionState(ctx context.Context, key session.Key, state 
 		return fmt.Errorf("marshal session state nil keys: %w", err)
 	}
 
-	result, err := luaUpdateSessionState.Run(
+	result, err := c.runScript(
 		ctx,
-		c.client,
+		luaUpdateSessionState,
 		[]string{c.keys.SessionMetaKey(key)},
 		string(statePatchJSON),
 		string(nilKeysJSON),

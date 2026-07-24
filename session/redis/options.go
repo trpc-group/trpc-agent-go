@@ -94,6 +94,8 @@ type ServiceOpts struct {
 	compatMode             CompatMode
 	enableTracing          bool
 	enableUserSessionIndex bool
+	// disableScriptCache runs Lua scripts via EVAL instead of EVALSHA-first.
+	disableScriptCache bool
 }
 
 // ServiceOpt is the option for the redis session service.
@@ -315,5 +317,19 @@ func WithEnableTracing(enable bool) ServiceOpt {
 func WithEnableUserSessionIndex(enable bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.enableUserSessionIndex = enable
+	}
+}
+
+// WithDisableScriptCache runs all Lua scripts via EVAL instead of the default
+// EVALSHA-first execution. Enable it for proxy/cluster Redis backends whose
+// server-side script cache is not reliably maintained — e.g. a Tendis cluster
+// fronted by twemproxy, whose own guidance is to use EVAL rather than EVALSHA.
+// It removes the repeated NOSCRIPT round-trips (and the resulting error-code
+// noise in tracing/monitoring) at the cost of sending the full script body on
+// every call. Leave it off (default) for standalone Redis or master-slave
+// Tendis where EVALSHA script caching works normally.
+func WithDisableScriptCache(disable bool) ServiceOpt {
+	return func(opts *ServiceOpts) {
+		opts.disableScriptCache = disable
 	}
 }
