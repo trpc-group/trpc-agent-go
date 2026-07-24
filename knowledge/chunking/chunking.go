@@ -29,7 +29,7 @@ type Strategy interface {
 
 var (
 	defaultChunkSize = 1024
-	defaultOverlap   = 128
+	defaultOverlap   = 0
 )
 
 // cleanText normalizes whitespace in text content while ensuring UTF-8 safety.
