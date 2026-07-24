@@ -25,6 +25,13 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	modelName := flag.String("model", "gpt-4o-mini", "OpenAI model name")
 	flag.Parse()
 
@@ -42,14 +49,13 @@ func main() {
 		acpserver.WithImplementation("trpc-agent-go-example", "1.0.0"),
 	)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if err := server.Serve(ctx, os.Stdin, os.Stdout); err != nil &&
 		!errors.Is(err, context.Canceled) {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }

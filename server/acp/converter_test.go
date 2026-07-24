@@ -128,3 +128,39 @@ func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
 	require.NotNil(t, response.Usage)
 	assert.Equal(t, 8, response.Usage.TotalTokens)
 }
+
+func TestTurnStateAccumulatesUsageAcrossModelCalls(t *testing.T) {
+	state := newTurnState(false)
+	for _, usage := range []*model.Usage{
+		{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5},
+		{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5},
+	} {
+		_, err := state.translate(&event.Event{
+			Response: &model.Response{Usage: usage},
+		})
+		require.NoError(t, err)
+	}
+
+	response := state.response(nil)
+	require.NotNil(t, response.Usage)
+	assert.Equal(t, 6, response.Usage.InputTokens)
+	assert.Equal(t, 4, response.Usage.OutputTokens)
+	assert.Equal(t, 10, response.Usage.TotalTokens)
+}
+
+func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
+	state := newTurnState(false)
+	for _, text := range []string{"first", "second"} {
+		updates, err := state.translate(&event.Event{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{Content: text},
+				}},
+			},
+		})
+		require.NoError(t, err)
+		require.Len(t, updates, 1)
+		assert.Equal(t, text, updates[0].AgentMessageChunk.Content.Text.Text)
+	}
+}

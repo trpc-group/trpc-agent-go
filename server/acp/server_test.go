@@ -131,13 +131,16 @@ func TestServerPromptOverACP(t *testing.T) {
 func TestServerCancellation(t *testing.T) {
 	started := make(chan struct{})
 	cancelObserved := make(chan struct{})
+	producerFinished := make(chan struct{})
 	fakeRunner := &testRunner{
 		run: func(ctx context.Context) <-chan *event.Event {
 			events := make(chan *event.Event)
 			close(started)
 			go func() {
+				defer close(producerFinished)
 				<-ctx.Done()
 				close(cancelObserved)
+				events <- &event.Event{}
 				close(events)
 			}()
 			return events
@@ -191,6 +194,11 @@ func TestServerCancellation(t *testing.T) {
 		assert.Equal(t, acpsdk.StopReasonCancelled, got.response.StopReason)
 	case <-ctx.Done():
 		t.Fatal("prompt did not return")
+	}
+	select {
+	case <-producerFinished:
+	case <-ctx.Done():
+		t.Fatal("runner event producer was not drained")
 	}
 }
 

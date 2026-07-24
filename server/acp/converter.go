@@ -84,11 +84,12 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 		return nil, evt.Response.Error
 	}
 	if evt.Response.Usage != nil {
-		s.usage = &acpsdk.Usage{
-			InputTokens:  evt.Response.Usage.PromptTokens,
-			OutputTokens: evt.Response.Usage.CompletionTokens,
-			TotalTokens:  evt.Response.Usage.TotalTokens,
+		if s.usage == nil {
+			s.usage = &acpsdk.Usage{}
 		}
+		s.usage.InputTokens += evt.Response.Usage.PromptTokens
+		s.usage.OutputTokens += evt.Response.Usage.CompletionTokens
+		s.usage.TotalTokens += evt.Response.Usage.TotalTokens
 	}
 
 	var updates []acpsdk.SessionUpdate
@@ -121,6 +122,10 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 			updates = append(updates, update)
 		}
 		s.applyFinishReason(choice.FinishReason)
+		if evt.Response.ID == "" && !evt.Response.IsPartial {
+			delete(s.textByResponse, key)
+			delete(s.reasoningByResponse, key)
+		}
 	}
 	return updates, nil
 }

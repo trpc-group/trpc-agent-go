@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -323,6 +324,7 @@ func (a *protocolAgent) Prompt(
 	for {
 		select {
 		case <-runCtx.Done():
+			go drainEvents(events)
 			return canceledPromptResponse(request.MessageId), nil
 		case event, ok := <-events:
 			if !ok {
@@ -333,6 +335,7 @@ func (a *protocolAgent) Prompt(
 			}
 			updates, err := turn.translate(event)
 			if err != nil {
+				go drainEvents(events)
 				return acpsdk.PromptResponse{}, err
 			}
 			for _, update := range updates {
@@ -341,12 +344,22 @@ func (a *protocolAgent) Prompt(
 					Update:    update,
 				}); err != nil {
 					if runCtx.Err() != nil {
+						go drainEvents(events)
 						return canceledPromptResponse(request.MessageId), nil
 					}
+					go drainEvents(events)
 					return acpsdk.PromptResponse{}, err
 				}
 			}
 		}
+	}
+}
+
+func drainEvents(events <-chan *event.Event) {
+	if events == nil {
+		return
+	}
+	for range events {
 	}
 }
 
