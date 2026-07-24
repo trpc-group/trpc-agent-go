@@ -21,7 +21,11 @@ import (
 	internalredact "trpc.group/trpc-go/trpc-agent-go/internal/redact"
 )
 
-const resultAuditStage = "post_execute"
+const (
+	resultAuditStage = "post_execute"
+
+	minimumProcessedResultJSON = `{"value":null,"redacted":false,"truncated":true}`
+)
 
 // ProcessedResult is a JSON-safe, secret-minimized copy of a tool result and
 // its execution error. ExecutionError carries the tool error as data; a Go
@@ -52,9 +56,11 @@ type ResultProcessor struct {
 
 // NewResultProcessor returns an explicit final-result processor using a copy
 // of guard's maximum output limit. Guard must be non-nil and its configured
-// limit must be positive. The default audit mode is AuditBestEffort. A nil sink
-// disables post-execution audit writes, including in AuditRequired mode. Nil
-// options are ignored. The caller retains ownership of guard and sink.
+// limit must be positive and large enough to serialize the stable minimal safe
+// result returned on truncation failure. The default audit mode is
+// AuditBestEffort. A nil sink disables post-execution audit writes, including
+// in AuditRequired mode. Nil options are ignored. The caller retains ownership
+// of guard and sink.
 func NewResultProcessor(
 	guard *Guard,
 	sink AuditSink,
@@ -75,6 +81,12 @@ func NewResultProcessor(
 	}
 	if processor.maxOutputBytes <= 0 {
 		return nil, errors.New("tool safety result processor output limit must be positive")
+	}
+	if processor.maxOutputBytes < int64(len(minimumProcessedResultJSON)) {
+		return nil, fmt.Errorf(
+			"tool safety result processor output limit must be at least %d bytes",
+			len(minimumProcessedResultJSON),
+		)
 	}
 	if !validAuditFailureMode(processor.auditFailureMode) {
 		return nil, errors.New("tool safety result processor audit failure mode is invalid")
@@ -223,16 +235,46 @@ func redactJSONChild(child any, alreadyChanged bool) (any, bool) {
 }
 
 func isSensitiveResultName(name string) bool {
-	if internalredact.IsSensitiveName(name) {
+	words := normalizedResultNameWords(name)
+	if internalredact.IsSensitiveName(strings.Join(words, "_")) {
 		return true
 	}
-	var normalized strings.Builder
-	for _, char := range name {
-		if unicode.IsLetter(char) || unicode.IsDigit(char) {
-			normalized.WriteRune(unicode.ToLower(char))
+	for _, word := range words {
+		if word == "credential" || word == "credentials" {
+			return true
 		}
 	}
-	return strings.Contains(normalized.String(), "credential")
+	return false
+}
+
+func normalizedResultNameWords(name string) []string {
+	runes := []rune(name)
+	words := make([]string, 0, 4)
+	var word strings.Builder
+	flush := func() {
+		if word.Len() == 0 {
+			return
+		}
+		words = append(words, strings.ToLower(word.String()))
+		word.Reset()
+	}
+	for index, char := range runes {
+		if !unicode.IsLetter(char) && !unicode.IsDigit(char) {
+			flush()
+			continue
+		}
+		if index > 0 && unicode.IsUpper(char) && word.Len() > 0 {
+			previous := runes[index-1]
+			nextIsLower := index+1 < len(runes) && unicode.IsLower(runes[index+1])
+			if unicode.IsLower(previous) || unicode.IsDigit(previous) ||
+				(unicode.IsUpper(previous) && nextIsLower) {
+				flush()
+			}
+		}
+		word.WriteRune(char)
+	}
+	flush()
+	return words
 }
 
 func processExecutionError(executionErr error) (string, bool) {

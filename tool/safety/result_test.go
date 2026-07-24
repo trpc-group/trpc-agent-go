@@ -92,6 +92,75 @@ func TestResultProcessorRedactsCaseTagVariantsAndEmbeddedSecrets(t *testing.T) {
 	}
 }
 
+func TestResultProcessorRedactsNormalizedSensitiveFieldNames(t *testing.T) {
+	type tagged struct {
+		PrivateSpace string `json:"private key"`
+		PrivateDot   string `json:"private.key"`
+		APIKeySpace  string `json:"api key"`
+		APIKeyDot    string `json:"api.key"`
+		AccessDash   string `json:"access-key"`
+		APIKeySnake  string `json:"API_KEY"`
+		MixedCase    string `json:"clientSecret"`
+	}
+	input := map[string]any{
+		"struct": tagged{
+			PrivateSpace: "raw-private-space",
+			PrivateDot:   "raw-private-dot",
+			APIKeySpace:  "raw-api-space",
+			APIKeyDot:    "raw-api-dot",
+			AccessDash:   "raw-access-dash",
+			APIKeySnake:  "raw-api-snake",
+			MixedCase:    "raw-client-secret",
+		},
+		"map": map[string]string{
+			"Private_Key": "raw-map-private",
+			"access key":  "raw-map-access",
+			"api.key":     "raw-map-api",
+		},
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	for _, raw := range []string{
+		"raw-private-space", "raw-private-dot", "raw-api-space",
+		"raw-api-dot", "raw-access-dash", "raw-api-snake",
+		"raw-client-secret", "raw-map-private", "raw-map-access",
+		"raw-map-api",
+	} {
+		require.NotContains(t, string(encoded), raw)
+	}
+}
+
+func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
+	input := map[string]string{
+		"tokenizer":         "parser",
+		"monkeytokenbucket": "safe-value",
+		"secretary":         "visible",
+		"passwordless":      "enabled",
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.False(t, processed.Redacted)
+	require.Equal(t, map[string]any{
+		"tokenizer":         "parser",
+		"monkeytokenbucket": "safe-value",
+		"secretary":         "visible",
+		"passwordless":      "enabled",
+	}, processed.Value)
+}
+
 func TestResultProcessorRedactsCodeExecutorFiles(t *testing.T) {
 	input := codeexecutor.CodeExecutionResult{
 		Output: "token=" + resultSecret,
@@ -231,6 +300,37 @@ func TestResultProcessorReplacementBudgetBoundary(t *testing.T) {
 	tinyJSON, marshalErr := json.Marshal(tiny)
 	require.NoError(t, marshalErr)
 	require.NotContains(t, string(tinyJSON), "do-not-leak-raw-result")
+}
+
+func TestResultProcessorRejectsLimitsBelowStableMinimum(t *testing.T) {
+	minimalJSON, err := json.Marshal(minimalProcessedResult())
+	require.NoError(t, err)
+	require.Equal(t, minimumProcessedResultJSON, string(minimalJSON))
+	minimum := int64(len(minimumProcessedResultJSON))
+	require.Equal(t, int64(48), minimum)
+
+	for _, limit := range []int64{1, minimum - 1} {
+		guard := mustResultGuard(t, limit)
+		processor, constructorErr := NewResultProcessor(guard, nil)
+		require.Nil(t, processor)
+		require.EqualError(t, constructorErr,
+			"tool safety result processor output limit must be at least 48 bytes")
+	}
+
+	guard := mustResultGuard(t, minimum)
+	processor, err := NewResultProcessor(guard, nil)
+	require.NoError(t, err)
+	processed, processErr := processor.Process(
+		context.Background(), validResultPreflight(),
+		strings.Repeat("never-return-this-raw-value", 100), nil,
+	)
+	require.EqualError(t, processErr,
+		"tool safety result processor output limit is too small")
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	require.Equal(t, minimumProcessedResultJSON, string(encoded))
+	require.LessOrEqual(t, int64(len(encoded)), minimum)
+	require.NotContains(t, string(encoded), "never-return-this-raw-value")
 }
 
 func TestResultProcessorFailsSafelyForNonJSONValues(t *testing.T) {
