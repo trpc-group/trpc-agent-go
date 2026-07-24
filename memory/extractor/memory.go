@@ -37,6 +37,7 @@ func referenceDate(ctx context.Context) time.Time {
 const (
 	metadataKeyModelName      = "model_name"
 	metadataKeyModelAvailable = "model_available"
+	metadataKeyUpdatePolicy   = "update_policy"
 )
 
 // memoryExtractor implements the MemoryExtractor interface.
@@ -45,11 +46,15 @@ type memoryExtractor struct {
 	prompt   string
 	checkers []Checker
 
+	updatePolicy UpdatePolicy
+
 	enabledTools map[string]struct{}
 
 	// modelCallbacks configures before/after model callbacks for extraction.
 	modelCallbacks *model.Callbacks
 }
+
+var _ MemoryExtractor = (*memoryExtractor)(nil)
 
 // Option is a function that configures a MemoryExtractor.
 type Option func(*memoryExtractor)
@@ -98,8 +103,9 @@ func WithCheckersAny(checks ...Checker) Option {
 // NewExtractor creates a new memory extractor.
 func NewExtractor(m model.Model, opts ...Option) MemoryExtractor {
 	e := &memoryExtractor{
-		model:  m,
-		prompt: defaultPrompt,
+		model:        m,
+		prompt:       defaultPrompt,
+		updatePolicy: UpdatePolicyCompatible,
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -121,13 +127,9 @@ func (e *memoryExtractor) Extract(
 	}
 
 	// Build request with tool declarations.
-	tools := backgroundTools
-	if len(e.enabledTools) > 0 {
-		tools = filterTools(backgroundTools, e.enabledTools)
-	}
 	req := &model.Request{
 		Messages: e.buildMessages(ctx, messages, existing),
-		Tools:    tools,
+		Tools:    e.extractionTools(),
 	}
 
 	// Call model.
@@ -229,10 +231,14 @@ func (e *memoryExtractor) Metadata() map[string]any {
 		modelName = e.model.Info().Name
 		modelAvailable = true
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		metadataKeyModelName:      modelName,
 		metadataKeyModelAvailable: modelAvailable,
 	}
+	if policy := e.UpdatePolicy(); policy != UpdatePolicyCompatible {
+		metadata[metadataKeyUpdatePolicy] = policy
+	}
+	return metadata
 }
 
 // extractionUserSuffix is appended as a trailing user message
@@ -297,6 +303,9 @@ func (e *memoryExtractor) buildSystemPrompt(
 		renderedPrompt = e.prompt
 	}
 	sb.WriteString(renderedPrompt)
+	if policyBlock := e.updatePolicyPromptBlock(); policyBlock != "" {
+		sb.WriteString(policyBlock)
+	}
 
 	// Append available actions.
 	sb.WriteString("\n<available_actions>\n")
@@ -346,6 +355,7 @@ var toolActionOrder = []string{
 // memory tools the model is allowed to call.
 func (e *memoryExtractor) availableActionsBlock() string {
 	var sb strings.Builder
+	policyTools := e.updatePolicyEnabledTools()
 	for _, name := range toolActionOrder {
 		// Skip tools that are disabled.
 		if e.enabledTools != nil {
@@ -353,10 +363,16 @@ func (e *memoryExtractor) availableActionsBlock() string {
 				continue
 			}
 		}
+		if policyTools != nil {
+			if _, ok := policyTools[name]; !ok {
+				continue
+			}
+		}
 		desc, ok := toolActionDescriptions[name]
 		if !ok {
 			continue
 		}
+		desc = e.updatePolicyToolDescription(name, desc)
 		fmt.Fprintf(&sb, "- %s: %s\n", name, desc)
 	}
 	if sb.Len() == 0 {
@@ -366,13 +382,20 @@ func (e *memoryExtractor) availableActionsBlock() string {
 }
 
 // parseToolCall parses a tool call and returns a memory operation.
-func (e *memoryExtractor) parseToolCall(ctx context.Context, call model.ToolCall) *Operation {
+func (e *memoryExtractor) parseToolCall(
+	ctx context.Context,
+	call model.ToolCall,
+) *Operation {
 	var args map[string]any
 	if err := json.Unmarshal(call.Function.Arguments, &args); err != nil {
 		log.WarnfContext(ctx, "extractor: failed to parse tool args: %v", err)
 		return nil
 	}
-	return parseToolCallArgs(call.Function.Name, args)
+	op := parseToolCallArgs(call.Function.Name, args)
+	if op == nil {
+		log.WarnfContext(ctx, "extractor: invalid %s arguments", call.Function.Name)
+	}
+	return op
 }
 
 func (e *memoryExtractor) runBeforeModelCallbacks(

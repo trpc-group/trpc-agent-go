@@ -262,6 +262,48 @@ Agent：你好张三！很高兴认识腾讯的朋友。今天有什么可以帮
 （后台：提取器分析对话并自动创建记忆，用户无感知）
 ```
 
+### 可选的自动更新策略
+
+内置提取器只有在显式配置策略时才启用新行为。未配置 option 的现有应用
+继续使用历史逻辑，不需要迁移：
+
+```go
+// 保持原有行为。
+memExtractor := extractor.NewExtractor(extractorModel)
+```
+
+需要尽量保留长期历史时，可以显式开启 update policy：
+
+```go
+memExtractor := extractor.NewExtractor(
+    extractorModel,
+    extractor.WithUpdatePolicy(extractor.UpdatePolicyStrict),
+)
+```
+
+Update policy 只约束后台 Auto extraction 产生的操作。Agent 或应用显式调用
+`memory_update` 时，工具语义保持不变。
+
+| Update policy | Auto extraction 行为 |
+| --- | --- |
+| `UpdatePolicyCompatible` | 使用现有的相似度 reconcile 逻辑；这是默认值。 |
+| `UpdatePolicyStrict` | 完全重复时不写入；只更新无冲突的增量信息；变化内容单独追加；只有用户明确请求时才允许自动 delete/clear。 |
+| `UpdatePolicyAddOnly` | 最终只产生非重复 add：update 转为 add，delete/clear 被过滤。 |
+
+Strict reconcile 只比较已经提供给 extractor 的 existing entries。检索分数只能用于
+候选排序，不能单独决定 update 或丢弃。事件身份、有意义的旧 token、数值、
+日期、否定关系、参与者和地点必须兼容；topics 只有在 update 已通过检查后才合并。
+例如，同一次且同一日期的访问补充具体时刻可以更新；更换雇主或另一个日期的访问
+会追加为新条目。矛盾信息不能授权破坏性操作：delete 必须来自用户明确的遗忘请求，
+clear 必须来自用户明确的“遗忘全部存储信息”请求。
+
+该 update policy 不会修改 `memory.Service`、`MemoryExtractor`、持久化 JSON、memory ID
+或数据库 schema，也不会重写存量记忆。使用非 Compatible update policy 时，Auto
+extraction 的持久化错误会返回给调用方，并且不会推进 session watermark，因此重试
+仍会处理同一批事件；Compatible 模式继续保持原有的 best-effort 持久化行为。
+
+回退时删除该 option，或将其设置为 `UpdatePolicyCompatible` 即可，不需要数据迁移。
+
 ### 两种模式配置对比
 
 | 步骤         | 工具驱动模式（Agentic）             | 自动提取模式（Auto）                   |
