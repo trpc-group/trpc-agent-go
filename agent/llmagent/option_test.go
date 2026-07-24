@@ -508,6 +508,8 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 
 	WithMaxLLMCalls(3)(opts)
 	WithMaxToolIterations(4)(opts)
+	WithLLMCallLimitFinalization("")(opts)
+	WithToolIterationLimitFinalization("finish with available results")(opts)
 
 	if opts.MaxLLMCalls != 3 {
 		t.Fatalf("expected MaxLLMCalls=3, got %d", opts.MaxLLMCalls)
@@ -515,6 +517,14 @@ func TestWithMaxLimits_OnOptions(t *testing.T) {
 	if opts.MaxToolIterations != 4 {
 		t.Fatalf("expected MaxToolIterations=4, got %d", opts.MaxToolIterations)
 	}
+	require.NotNil(t, opts.llmCallLimitFinalizationInstruction)
+	require.Empty(t, *opts.llmCallLimitFinalizationInstruction)
+	require.NotNil(t, opts.toolIterationLimitFinalizationInstruction)
+	require.Equal(
+		t,
+		"finish with available results",
+		*opts.toolIterationLimitFinalizationInstruction,
+	)
 }
 
 func TestWithToolCallRetryPolicy_OnOptions(t *testing.T) {

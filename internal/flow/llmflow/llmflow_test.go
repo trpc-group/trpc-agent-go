@@ -29,7 +29,9 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/steer"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/summaryfork"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
@@ -3121,6 +3123,182 @@ func TestFlow_CallLLM_MaxLLMCallsExceeded(t *testing.T) {
 	_, _, _, err = f.callLLM(context.Background(), inv, testLLMRequest(), inv.Model)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max LLM calls (1) exceeded")
+}
+
+func TestFlow_CallLLM_FinalizesOnLastAllowedCall(t *testing.T) {
+	callbacks := model.NewCallbacks().RegisterBeforeModel(
+		func(
+			ctx context.Context,
+			args *model.BeforeModelArgs,
+		) (*model.BeforeModelResult, error) {
+			_ = ctx
+			args.Request.Tools = map[string]tool.Tool{
+				"lookup": &mockLongRunnerTool{name: "lookup"},
+			}
+			args.Request.ExtraFields["tool_choice"] = "required"
+			args.Request.ExtraFields["keep"] = "value"
+			return nil, nil
+		},
+	)
+	f := New(nil, nil, Options{ModelCallbacks: callbacks})
+	modelStub := &mockModel{
+		responses: []*model.Response{{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		}},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
+	inv.MaxLLMCalls = 1
+	instruction := "finish with the available context"
+	calllimit.Configure(inv, &instruction, nil)
+	req := &model.Request{
+		Messages: []model.Message{
+			model.NewSystemMessage("base instruction"),
+			model.NewUserMessage("question"),
+		},
+		ExtraFields: map[string]any{},
+	}
+
+	gotCtx, seq, modelCalled, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		inv.Model,
+	)
+
+	require.NoError(t, err)
+	require.True(t, modelCalled)
+	require.NotNil(t, seq)
+	require.True(t, imodelrequest.ToolsDisabled(gotCtx))
+	require.Nil(t, req.Tools)
+	require.NotContains(t, req.ExtraFields, "tool_choice")
+	require.Equal(t, "value", req.ExtraFields["keep"])
+	require.Contains(t, req.Messages[0].Content, instruction)
+	require.True(t, calllimit.Active(inv))
+}
+
+func TestPrepareCallLimitFinalizationRequest_PreservesSystemContentParts(
+	t *testing.T,
+) {
+	partText := "existing content part"
+	req := &model.Request{
+		Messages: []model.Message{
+			{
+				Role:    model.RoleSystem,
+				Content: "existing content",
+				ContentParts: []model.ContentPart{{
+					Type: model.ContentTypeText,
+					Text: &partText,
+				}},
+			},
+			model.NewUserMessage("question"),
+		},
+	}
+
+	prepareCallLimitFinalizationRequest(req, "finalize now")
+
+	require.Len(t, req.Messages, 3)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Equal(t, "finalize now", req.Messages[0].Content)
+	require.Empty(t, req.Messages[0].ContentParts)
+	require.Equal(t, "existing content", req.Messages[1].Content)
+	require.Len(t, req.Messages[1].ContentParts, 1)
+	require.Equal(t, partText, *req.Messages[1].ContentParts[0].Text)
+}
+
+func TestRunOneStep_LLMCallLimitFinalizationEndsInvocation(t *testing.T) {
+	modelStub := &mockModel{
+		responses: []*model.Response{{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		}},
+	}
+	f := newRunFlow(nil)
+	inv := runInvocationWithUserMessage(modelStub)
+	inv.MaxLLMCalls = 1
+	instruction := ""
+	calllimit.Configure(inv, &instruction, nil)
+
+	lastEvent, err := f.runOneStep(
+		context.Background(),
+		inv,
+		make(chan *event.Event, 8),
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, lastEvent)
+	require.True(t, inv.EndInvocation)
+	require.False(t, calllimit.Active(inv))
+	req := modelStub.LastRequest()
+	require.NotNil(t, req)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, calllimit.DefaultInstruction)
+}
+
+func TestFlow_CallLLM_LLMFinalizationPrecedesPendingToolFinalization(t *testing.T) {
+	f := New(nil, nil, Options{})
+	modelStub := &mockModel{
+		responses: []*model.Response{{
+			Done: true,
+			Choices: []model.Choice{{
+				Message: model.NewAssistantMessage("final"),
+			}},
+		}},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
+	inv.MaxLLMCalls = 1
+	llmInstruction := "finish for the LLM limit"
+	toolInstruction := "finish for the tool limit"
+	calllimit.Configure(inv, &llmInstruction, &toolInstruction)
+	require.True(t, calllimit.RecordToolIteration(inv, 1))
+	calllimit.ScheduleToolFinalization(inv)
+	req := testLLMRequest()
+
+	_, _, _, err := f.callLLM(
+		context.Background(),
+		inv,
+		req,
+		inv.Model,
+	)
+
+	require.NoError(t, err)
+	require.Equal(t, model.RoleSystem, req.Messages[0].Role)
+	require.Contains(t, req.Messages[0].Content, llmInstruction)
+	require.NotContains(t, req.Messages[0].Content, toolInstruction)
+}
+
+func TestFlow_CallLLM_ToolFinalizationDoesNotExceedLLMBudget(t *testing.T) {
+	f := New(nil, nil, Options{})
+	modelStub := &mockModel{
+		responses: []*model.Response{{Done: true}},
+	}
+	inv := agent.NewInvocation(agent.WithInvocationModel(modelStub))
+	inv.MaxLLMCalls = 1
+	toolInstruction := "finish for the tool limit"
+	calllimit.Configure(inv, nil, &toolInstruction)
+
+	_, _, _, err := f.callLLM(
+		context.Background(),
+		inv,
+		testLLMRequest(),
+		inv.Model,
+	)
+	require.NoError(t, err)
+	require.True(t, calllimit.RecordToolIteration(inv, 1))
+	calllimit.ScheduleToolFinalization(inv)
+
+	_, _, _, err = f.callLLM(
+		context.Background(),
+		inv,
+		testLLMRequest(),
+		inv.Model,
+	)
+	require.ErrorContains(t, err, "max LLM calls (1) exceeded")
+	require.False(t, calllimit.Active(inv))
 }
 
 func TestProcessStreamingResponses_ContextCancelledAfterPostprocess(t *testing.T) {

@@ -446,6 +446,8 @@ agent := llmagent.New(
 |--------|------|
 | `llmagent.WithMaxLLMCalls(n)` | 限制每次调用的 LLM 调用次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
 | `llmagent.WithMaxToolIterations(n)` | 限制每次调用的工具迭代次数上限。当 `n > 0` 时生效，`n <= 0` 时不限制（默认）。 |
+| `llmagent.WithLLMCallLimitFinalization(instruction)` | 将 `WithMaxLLMCalls` 允许的最后一次调用用于不带工具的最终回复。 |
+| `llmagent.WithToolIterationLimitFinalization(instruction)` | 在 `WithMaxToolIterations` 允许的最后一轮工具调用之后请求一次不带工具的最终回复，前提是 LLM 调用预算仍允许下一次调用。 |
 
 **使用示例：**
 
@@ -458,13 +460,23 @@ agent := llmagent.New(
   llmagent.WithMaxLLMCalls(10),
   // 限制最多进行 5 轮工具调用迭代。
   llmagent.WithMaxToolIterations(5),
+  // 选择在两类上限处生成不带工具的收尾回复。
+  // 空字符串表示使用框架默认 instruction。
+  llmagent.WithLLMCallLimitFinalization(""),
+  llmagent.WithToolIterationLimitFinalization(""),
 )
 ```
 
 **行为说明：**
 
-- **`WithMaxLLMCalls`**：当 LLM 调用次数超过限制时，会返回 `StopError`，终止当前调用。
-- **`WithMaxToolIterations`**：当工具迭代次数超过限制时，会发送 `flow_error` 响应事件并结束调用，不会返回 `StopError`。
+- 未配置 finalization option 时，现有行为保持不变：
+  - **`WithMaxLLMCalls`**：调用次数超过限制时返回 `StopError`。
+  - **`WithMaxToolIterations`**：工具迭代次数超过限制时发送 `flow_error` 响应事件。
+- 两个 finalization option 相互独立，且都需要显式选择。传入 `""` 时使用框架默认的收尾 instruction；传入非空字符串时使用调用方提供的 instruction。
+- LLM 上限收尾会占用 `MaxLLMCalls` 内的最后一次调用；工具迭代上限收尾会在最后一轮允许的工具调用后使用下一次 LLM 调用。
+- `MaxLLMCalls` 始终是严格的外层硬预算，收尾调用也计入其中。因此组合使用工具上限收尾和 `WithMaxLLMCalls` 时，需要预留一次 LLM 调用。
+- 收尾期间，框架会从模型请求中移除工具及强制工具选择字段。如果模型仍然返回工具调用，框架会拒绝该调用且不会执行工具。
+- 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
 

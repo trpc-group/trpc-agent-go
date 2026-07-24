@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	iagent "trpc.group/trpc-go/trpc-agent-go/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow"
+	"trpc.group/trpc-go/trpc-agent-go/internal/flow/calllimit"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/llmflow"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/processor"
 	toolsessionrecall "trpc.group/trpc-go/trpc-agent-go/internal/session/tool/recall"
@@ -1724,6 +1725,11 @@ func (a *LLMAgent) setupInvocation(invocation *agent.Invocation) {
 	// treat them as "no limit", preserving existing behavior.
 	invocation.MaxLLMCalls = a.option.MaxLLMCalls
 	invocation.MaxToolIterations = a.option.MaxToolIterations
+	calllimit.Configure(
+		invocation,
+		a.option.llmCallLimitFinalizationInstruction,
+		a.option.toolIterationLimitFinalizationInstruction,
+	)
 }
 
 // withWorkspace installs a workspaceio.Workspace into ctx so that

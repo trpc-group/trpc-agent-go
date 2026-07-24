@@ -492,6 +492,8 @@ To prevent Agents from entering infinite loops or consuming excessive resources,
 |---------------|-------------|
 | `llmagent.WithMaxLLMCalls(n)` | Limits the maximum number of LLM calls per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
 | `llmagent.WithMaxToolIterations(n)` | Limits the maximum number of tool-call iterations per invocation. Takes effect when `n > 0`; no limit when `n <= 0` (default). |
+| `llmagent.WithLLMCallLimitFinalization(instruction)` | Uses the last call allowed by `WithMaxLLMCalls` for a tool-free final response. |
+| `llmagent.WithToolIterationLimitFinalization(instruction)` | Requests a tool-free final response after the last iteration allowed by `WithMaxToolIterations`, if the LLM-call budget permits another call. |
 
 **Usage Example:**
 
@@ -504,13 +506,23 @@ agent := llmagent.New(
   llmagent.WithMaxLLMCalls(10),
   // Limit to at most 5 tool-call iterations.
   llmagent.WithMaxToolIterations(5),
+  // Opt in to graceful, tool-free final responses at both limits.
+  // An empty string selects the framework's default instruction.
+  llmagent.WithLLMCallLimitFinalization(""),
+  llmagent.WithToolIterationLimitFinalization(""),
 )
 ```
 
 **Behavior:**
 
-- **`WithMaxLLMCalls`**: When LLM call count exceeds the limit, a `StopError` is returned and the current invocation terminates.
-- **`WithMaxToolIterations`**: When tool iteration count exceeds the limit, a `flow_error` response event is emitted and the invocation ends. It does not return a `StopError`.
+- Without a finalization option, the existing behavior is unchanged:
+  - **`WithMaxLLMCalls`** returns a `StopError` when the count exceeds the limit.
+  - **`WithMaxToolIterations`** emits a `flow_error` response event when the count exceeds the limit.
+- Each finalization option is independent and opt-in. Pass `""` to use the framework's default finalization instruction, or pass a non-empty string to provide a custom instruction.
+- LLM-limit finalization uses the final call inside `MaxLLMCalls`. Tool-limit finalization uses the next LLM call after the final allowed tool iteration.
+- `MaxLLMCalls` remains a strict outer budget. Finalization calls count toward it, so reserve an LLM call when combining tool-limit finalization with `WithMaxLLMCalls`.
+- During finalization, tools and forced tool-choice fields are removed from the model request. If a tool call is still produced, the framework rejects it without executing the tool.
+- If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.
 

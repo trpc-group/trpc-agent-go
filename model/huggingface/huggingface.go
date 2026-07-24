@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
@@ -312,7 +313,7 @@ func (m *Model) handleStreamingRequest(
 // makeRequest makes a non-streaming HTTP request to the HuggingFace API.
 func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*ChatCompletionResponse, error) {
 	// Marshal request to JSON.
-	requestBody, err := m.marshalRequest(hfRequest)
+	requestBody, err := m.marshalRequestForContext(ctx, hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -362,7 +363,7 @@ func (m *Model) makeRequest(ctx context.Context, hfRequest *ChatCompletionReques
 // makeStreamingRequest makes a streaming HTTP request to the HuggingFace API.
 func (m *Model) makeStreamingRequest(ctx context.Context, hfRequest *ChatCompletionRequest) (*http.Response, error) {
 	// Marshal request to JSON.
-	requestBody, err := m.marshalRequest(hfRequest)
+	requestBody, err := m.marshalRequestForContext(ctx, hfRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal request: %w", err)
 	}
@@ -411,8 +412,32 @@ func (m *Model) setHeaders(req *http.Request) {
 
 // marshalRequest marshals the request to JSON, including extra fields.
 func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error) {
+	return m.marshalRequestWithToolControl(hfRequest, false)
+}
+
+func (m *Model) marshalRequestForContext(
+	ctx context.Context,
+	hfRequest *ChatCompletionRequest,
+) ([]byte, error) {
+	return m.marshalRequestWithToolControl(
+		hfRequest,
+		imodelrequest.ToolsDisabled(ctx),
+	)
+}
+
+func (m *Model) marshalRequestWithToolControl(
+	hfRequest *ChatCompletionRequest,
+	disableToolFields bool,
+) ([]byte, error) {
+	request := hfRequest
+	if disableToolFields && hfRequest != nil {
+		filtered := *hfRequest
+		filtered.Tools = nil
+		filtered.ToolChoice = nil
+		request = &filtered
+	}
 	// Marshal the base request.
-	baseJSON, err := json.Marshal(hfRequest)
+	baseJSON, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}
@@ -429,12 +454,18 @@ func (m *Model) marshalRequest(hfRequest *ChatCompletionRequest) ([]byte, error)
 	}
 
 	// Merge model-level extra fields.
-	for k, v := range m.extraFields {
+	for k, v := range imodelrequest.FilterToolControlFields(
+		m.extraFields,
+		disableToolFields,
+	) {
 		requestMap[k] = v
 	}
 
 	// Merge request-level extra fields (takes precedence).
-	for k, v := range hfRequest.ExtraFields {
+	for k, v := range imodelrequest.FilterToolControlFields(
+		hfRequest.ExtraFields,
+		disableToolFields,
+	) {
 		requestMap[k] = v
 	}
 
