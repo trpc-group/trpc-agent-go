@@ -30,9 +30,12 @@ type localEvaluator struct {
 	registry metricregistry.Registry
 }
 
-func newLocalEvaluator(metrics []MetricInput, engine FakeEngineConfig) *localEvaluator {
-	registry, _ := newRegressionMetricRegistry()
-	return &localEvaluator{metrics: metrics, engine: engine, registry: registry}
+func newLocalEvaluator(metrics []MetricInput, engine FakeEngineConfig) (*localEvaluator, error) {
+	registry, err := newRegressionMetricRegistry()
+	if err != nil {
+		return nil, err
+	}
+	return &localEvaluator{metrics: metrics, engine: engine, registry: registry}, nil
 }
 
 func (e *localEvaluator) Evaluate(ctx context.Context, name string, set EvalSetInput, prompt string) (EvaluationRun, error) {
@@ -115,7 +118,16 @@ func (e *localEvaluator) evaluateCase(evalSetID string, evalCase EvalCase, promp
 }
 
 func scoreMetric(metric MetricInput, evalCase EvalCase, expected, actual Invocation) MetricResult {
-	registry, _ := newRegressionMetricRegistry()
+	registry, err := newRegressionMetricRegistry()
+	if err != nil {
+		return MetricResult{
+			MetricName: metric.MetricName,
+			Score:      0,
+			Threshold:  metric.Threshold,
+			Status:     status.EvalStatusFailed,
+			Reason:     fmt.Sprintf("metric registry error: %v", err),
+		}
+	}
 	return scoreMetricWithRegistry(registry, metric, evalCase, expected, actual)
 }
 

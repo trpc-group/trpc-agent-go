@@ -14,6 +14,7 @@ The API key is intentionally not written into repository files.
 Command:
 
 ```powershell
+cd examples/evaluation
 go run ./promptiter_regression_loop `
   -config ./promptiter_regression_loop/data/promptiter.json
 ```
@@ -54,6 +55,7 @@ The deterministic path is the default path and requires no API key. It reproduce
 Command:
 
 ```powershell
+cd examples/evaluation
 $env:DEEPSEEK_API_KEY="<set locally>"
 $env:LLM_BASE_URL="https://api.deepseek.com"
 $env:LLM_MODEL="deepseek-chat"

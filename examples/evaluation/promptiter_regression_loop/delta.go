@@ -47,7 +47,9 @@ func ComputeDelta(baseline, candidate EvaluationRun) DeltaSummary {
 		candidateCase, ok := candidateByID[baselineCase.CaseID]
 		if !ok {
 			caseDelta := missingCandidateDelta(baselineCase)
-			delta.NewlyFailed++
+			if baselineCase.Status == status.EvalStatusPassed {
+				delta.NewlyFailed++
+			}
 			delta.MissingCandidateCases++
 			if caseDelta.ScoreDelta < 0 {
 				delta.Regressed++

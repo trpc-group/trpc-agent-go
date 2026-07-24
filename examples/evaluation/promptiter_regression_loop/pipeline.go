@@ -23,7 +23,10 @@ func RunPipeline(ctx context.Context, input *LoadedInput) (*OptimizationReport, 
 		return nil, fmt.Errorf("input is nil")
 	}
 	startedAt := time.Now()
-	evaluator := newLocalEvaluator(input.Metrics, input.Config.FakeEngine)
+	evaluator, err := newLocalEvaluator(input.Metrics, input.Config.FakeEngine)
+	if err != nil {
+		return nil, fmt.Errorf("create local evaluator: %w", err)
+	}
 	baselineTrain, err := evaluator.Evaluate(ctx, "baseline_train", input.TrainEvalSet, input.BaselinePrompt)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline train: %w", err)

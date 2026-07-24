@@ -108,6 +108,22 @@ func TestComputeDeltaTreatsMissingCandidateCaseAsHardFail(t *testing.T) {
 	require.Contains(t, strings.Join(decision.Reasons, "\n"), "candidate omitted 1 validation case")
 }
 
+func TestComputeDeltaDoesNotMarkAlreadyFailedMissingCaseAsNewFailure(t *testing.T) {
+	baseline := EvaluationRun{
+		OverallScore: 0,
+		Cases: []CaseResult{
+			testCase("already_failed_missing", false, 0, status.EvalStatusFailed),
+		},
+	}
+	candidate := EvaluationRun{}
+
+	delta := ComputeDelta(baseline, candidate)
+	require.Equal(t, 0, delta.NewlyFailed)
+	require.Equal(t, 1, delta.MissingCandidateCases)
+	require.Equal(t, 0, delta.CriticalRegressed)
+	require.Equal(t, TransitionMissingCandidate, delta.Cases[0].Transition)
+}
+
 func TestAttributeFailuresFromMetricReason(t *testing.T) {
 	failures := AttributeFailures([]MetricResult{
 		{
