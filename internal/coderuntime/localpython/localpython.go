@@ -95,16 +95,12 @@ func StartScript(
 	if err != nil {
 		return nil, err
 	}
-	scriptDir := workDir
-	cleanupScriptDir := func() {}
-	if strings.TrimSpace(cfg.WorkDir) != "" {
-		scriptDir, err = os.MkdirTemp("", "trpc-local-python-script-*")
-		if err != nil {
-			cleanupWorkDir()
-			return nil, fmt.Errorf("localpython: create script dir: %w", err)
-		}
-		cleanupScriptDir = func() { _ = os.RemoveAll(scriptDir) }
+	scriptDir, err := os.MkdirTemp("", "trpc-local-python-script-*")
+	if err != nil {
+		cleanupWorkDir()
+		return nil, fmt.Errorf("localpython: create script dir: %w", err)
 	}
+	cleanupScriptDir := func() { _ = os.RemoveAll(scriptDir) }
 	scriptPath := filepath.Join(scriptDir, filepath.Base(scriptName))
 	if err := os.WriteFile(scriptPath, script, 0o600); err != nil {
 		cleanupScriptDir()

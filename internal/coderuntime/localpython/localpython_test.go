@@ -69,7 +69,7 @@ func TestValidateCodeSize(t *testing.T) {
 	require.ErrorContains(t, ValidateCodeSize("return 1", 4), "code exceeds 4 bytes")
 }
 
-func TestStartScriptRunsInTemporaryWorkDirAndCleansIt(t *testing.T) {
+func TestStartScriptUsesEmptyTemporaryWorkDirOutsideModulePath(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 unavailable")
 	}
@@ -78,7 +78,20 @@ func TestStartScriptRunsInTemporaryWorkDirAndCleansIt(t *testing.T) {
 		Config{},
 		"print('ok')",
 		"guest.py",
-		[]byte("import json, os; print(json.dumps({'cwd': os.getcwd()}))\n"),
+		[]byte(`
+import json
+import os
+import sys
+
+cwd = os.path.realpath(os.getcwd())
+paths = [os.path.realpath(path or cwd) for path in sys.path]
+print(json.dumps({
+    "cwd": cwd,
+    "entries": os.listdir(cwd),
+    "cwd_in_sys_path": cwd in paths,
+    "script": os.path.realpath(__file__),
+}))
+`),
 		nil,
 		nil,
 		io.Discard,
@@ -90,12 +103,22 @@ func TestStartScriptRunsInTemporaryWorkDirAndCleansIt(t *testing.T) {
 	require.NoError(t, err)
 
 	var got struct {
-		CWD string `json:"cwd"`
+		CWD          string   `json:"cwd"`
+		Entries      []string `json:"entries"`
+		CWDInSysPath bool     `json:"cwd_in_sys_path"`
+		Script       string   `json:"script"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(string(out))), &got))
 	requireSamePath(t, dir, got.CWD)
+	require.Empty(t, got.Entries)
+	require.False(t, got.CWDInSysPath)
+	require.NoFileExists(t, filepath.Join(dir, "guest.py"))
+	scriptDir := filepath.Dir(got.Script)
+	require.NotEqual(t, got.CWD, scriptDir)
+	require.FileExists(t, got.Script)
 	require.NoError(t, proc.Wait())
 	require.NoDirExists(t, dir)
+	require.NoDirExists(t, scriptDir)
 }
 
 func TestStartScriptUsesConfiguredWorkDirWithoutCleaningIt(t *testing.T) {
