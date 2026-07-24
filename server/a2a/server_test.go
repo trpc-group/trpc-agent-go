@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -96,6 +97,16 @@ func (m *mockAgent) FindSubAgent(name string) agent.Agent {
 type mockTool struct {
 	name        string
 	description string
+}
+
+type requestHeaderMiddlewareFunc func(*http.Request)
+
+func (f requestHeaderMiddlewareFunc) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.Clone(r.Context())
+		f(r)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (m *mockTool) Declaration() *tool.Declaration {
@@ -2067,6 +2078,164 @@ func TestA2AHTTPAnonymousContextDoesNotRebindPrincipal(t *testing.T) {
 	assert.NotEqual(t, runs[0].userID, runs[2].userID)
 	assert.NotEqual(t, "A2A_USER_"+sharedContextID, runs[0].userID)
 	assert.NotEqual(t, "A2A_USER_"+sharedContextID, runs[2].userID)
+}
+
+func TestA2AHTTPIdentityNormalizationRunsBeforeAnonymousCookie(t *testing.T) {
+	t.Run("header stripping receives a stable anonymous cookie", func(t *testing.T) {
+		var (
+			mu   sync.Mutex
+			runs []string
+		)
+		mockRunner := &mockRunner{
+			runFunc: func(
+				_ context.Context,
+				userID string,
+				_ string,
+				_ model.Message,
+				_ ...agent.RunOption,
+			) (<-chan *event.Event, error) {
+				mu.Lock()
+				runs = append(runs, userID)
+				mu.Unlock()
+				ch := make(chan *event.Event, 1)
+				ch <- event.NewResponseEvent("response", "agent", &model.Response{
+					Done: true,
+					Choices: []model.Choice{{Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "ok",
+					}}},
+				})
+				close(ch)
+				return ch, nil
+			},
+		}
+		srv, err := New(
+			WithRunner(mockRunner),
+			WithAgentCard(a2a.AgentCard{
+				Name: "identity-normalization",
+				URL:  "http://placeholder.local",
+			}),
+			WithExtraA2AOptions(a2a.WithMiddleWare(requestHeaderMiddlewareFunc(func(r *http.Request) {
+				r.Header.Del(serverUserIDHeader)
+			}))),
+		)
+		require.NoError(t, err)
+		httpSrv := httptest.NewServer(srv.Handler())
+		defer httpSrv.Close()
+
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		a2aClient, err := a2aclient.NewA2AClient(
+			httpSrv.URL,
+			a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
+		)
+		require.NoError(t, err)
+		send := func() {
+			_, sendErr := a2aClient.SendMessage(
+				context.Background(),
+				protocol.SendMessageParams{Message: protocol.NewMessage(
+					protocol.MessageRoleUser,
+					[]protocol.Part{protocol.NewTextPart("hello")},
+				)},
+				a2aclient.WithRequestHeader(serverUserIDHeader, "untrusted-user"),
+			)
+			require.NoError(t, sendErr)
+		}
+		send()
+		send()
+
+		mu.Lock()
+		require.Len(t, runs, 2)
+		require.True(t, isAnonymousUserID(runs[0]))
+		require.Equal(t, runs[0], runs[1])
+		mu.Unlock()
+		require.NotEmpty(t, jar.Cookies(mustParseTestURL(t, httpSrv.URL)))
+	})
+
+	t.Run("header injection prevents an anonymous cookie", func(t *testing.T) {
+		previousPropagator := otel.GetTextMapPropagator()
+		otel.SetTextMapPropagator(propagation.TraceContext{})
+		t.Cleanup(func() { otel.SetTextMapPropagator(previousPropagator) })
+
+		var (
+			mu                  sync.Mutex
+			runs                []string
+			observedSpanContext trace.SpanContext
+		)
+		mockRunner := &mockRunner{
+			runFunc: func(
+				_ context.Context,
+				userID string,
+				_ string,
+				_ model.Message,
+				_ ...agent.RunOption,
+			) (<-chan *event.Event, error) {
+				mu.Lock()
+				runs = append(runs, userID)
+				mu.Unlock()
+				ch := make(chan *event.Event, 1)
+				ch <- event.NewResponseEvent("response", "agent", &model.Response{
+					Done: true,
+					Choices: []model.Choice{{Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: "ok",
+					}}},
+				})
+				close(ch)
+				return ch, nil
+			},
+		}
+		srv, err := New(
+			WithRunner(mockRunner),
+			WithAgentCard(a2a.AgentCard{
+				Name: "identity-normalization",
+				URL:  "http://placeholder.local",
+			}),
+			WithExtraA2AOptions(a2a.WithMiddleWare(requestHeaderMiddlewareFunc(func(r *http.Request) {
+				observedSpanContext = trace.SpanContextFromContext(r.Context())
+				r.Header.Set(serverUserIDHeader, "normalized-user")
+			}))),
+		)
+		require.NoError(t, err)
+		httpSrv := httptest.NewServer(srv.Handler())
+		defer httpSrv.Close()
+
+		jar, err := cookiejar.New(nil)
+		require.NoError(t, err)
+		a2aClient, err := a2aclient.NewA2AClient(
+			httpSrv.URL,
+			a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
+		)
+		require.NoError(t, err)
+		_, err = a2aClient.SendMessage(
+			context.Background(),
+			protocol.SendMessageParams{Message: protocol.NewMessage(
+				protocol.MessageRoleUser,
+				[]protocol.Part{protocol.NewTextPart("hello")},
+			)},
+			a2aclient.WithRequestHeader(
+				"traceparent",
+				"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+			),
+		)
+		require.NoError(t, err)
+
+		mu.Lock()
+		require.Equal(t, []string{"normalized-user"}, runs)
+		mu.Unlock()
+		require.True(t, observedSpanContext.IsRemote())
+		require.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", observedSpanContext.TraceID().String())
+		for _, cookie := range jar.Cookies(mustParseTestURL(t, httpSrv.URL)) {
+			require.NotEqual(t, anonymousUserIDCookie, cookie.Name)
+		}
+	})
+}
+
+func mustParseTestURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	return parsed
 }
 
 func TestBuildA2AServer_EdgeCases(t *testing.T) {

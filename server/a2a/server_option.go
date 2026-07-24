@@ -363,6 +363,9 @@ func WithUserIDHeader(header string) Option {
 // WithExtraA2AOptions passes extra options to the underlying A2A server.
 // For example, it can be combined with a2a.WithAgentCardHandler and
 // NewAgentCardHandler(...) to serve a dynamically updated AgentCard.
+// Custom middleware options run after trace-context extraction and before the
+// built-in anonymous identity middleware, allowing them to normalize the user
+// ID header while retaining the propagated trace context.
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)

@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1709,6 +1710,11 @@ func TestAnonymousCookieRequestHandlerBoundaries(t *testing.T) {
 func TestA2AAgent_CustomHTTPReqHandlerComposesWithAnonymousCookies(t *testing.T) {
 	const markerHeader = "X-Test-HTTP-Handler"
 
+	t.Cleanup(func() { agent.SetGoroutineContextCloner(nil) })
+	agent.SetGoroutineContextCloner(func(ctx context.Context) context.Context {
+		return anonymousCookieStateDroppingContext{Context: ctx}
+	})
+
 	var (
 		mu                   sync.Mutex
 		receivedCookies      []string
@@ -1807,23 +1813,24 @@ func TestA2AAgent_CustomHTTPReqHandlerComposesWithAnonymousCookies(t *testing.T)
 	)
 	require.NoError(t, err)
 
-	send := func(sess *session.Session) {
-		invocationClient, clientErr := a.clientForInvocation(&agent.Invocation{Session: sess})
-		require.NoError(t, clientErr)
-		_, clientErr = invocationClient.client.SendMessage(
-			context.Background(),
-			protocol.SendMessageParams{Message: protocol.NewMessage(
-				protocol.MessageRoleUser,
-				[]protocol.Part{protocol.NewTextPart("hello")},
-			)},
-		)
-		require.NoError(t, clientErr)
+	send := func(invocationID string, sess *session.Session) {
+		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
+			InvocationID: invocationID,
+			Session:      sess,
+			Message:      model.NewUserMessage("hello"),
+		})
+		require.NoError(t, runErr)
+		for evt := range eventChan {
+			if evt != nil && evt.Response != nil && evt.Response.Error != nil {
+				require.NoError(t, evt.Response.Error)
+			}
+		}
 	}
 
 	anonymousSession := &session.Session{AppName: "app", ID: "session-a"}
-	send(anonymousSession)
-	send(anonymousSession)
-	send(&session.Session{AppName: "app", UserID: "user-1", ID: "session-b"})
+	send("anonymous-1", anonymousSession)
+	send("anonymous-2", anonymousSession)
+	send("explicit-user", &session.Session{AppName: "app", UserID: "user-1", ID: "session-b"})
 
 	select {
 	case handlerErr := <-handlerErrs:
@@ -1841,6 +1848,17 @@ func TestA2AAgent_CustomHTTPReqHandlerComposesWithAnonymousCookies(t *testing.T)
 	cookie, ok := anonymousSession.GetState(anonymousCookieStateKey(srv.URL))
 	require.True(t, ok)
 	require.Equal(t, anonymousTestCookieValue(1), string(cookie))
+}
+
+type anonymousCookieStateDroppingContext struct {
+	context.Context
+}
+
+func (c anonymousCookieStateDroppingContext) Value(key any) any {
+	if _, ok := key.(anonymousCookieContextKey); ok {
+		return nil
+	}
+	return c.Context.Value(key)
 }
 
 func TestAnonymousCookieRequestHandlerCapturesCustomResponseCookie(t *testing.T) {
@@ -1884,6 +1902,54 @@ func TestAnonymousCookieRequestHandlerCapturesCustomResponseCookie(t *testing.T)
 	cookie, ok := state.load()
 	require.True(t, ok)
 	require.Equal(t, wantCookie, cookie)
+}
+
+func TestAnonymousCookieRequestHandlerPersistsResponseCookieOnce(t *testing.T) {
+	const wantCookie = anonymousUserIDPrefix + "00000000000000000000000000000001"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.SetCookie(w, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: wantCookie,
+			Path:  "/",
+		})
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+
+	persistentSession := &session.Session{
+		AppName: "app",
+		UserID:  "user-1",
+		ID:      "session-a",
+	}
+	sessionService := &countingAnonymousCookieSessionService{}
+	state := newAnonymousCookieState(
+		persistentSession,
+		persistentSession,
+		sessionService,
+		anonymousCookieStateKey(srv.URL),
+	)
+	handler := &anonymousCookieHTTPReqHandler{
+		next: httpReqHandlerFunc(func(
+			_ context.Context,
+			httpClient *http.Client,
+			req *http.Request,
+		) (*http.Response, error) {
+			return httpClient.Do(req)
+		}),
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(srv.URL),
+	}
+
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+		require.NoError(t, err)
+		resp, err := handler.Handle(context.Background(), srv.Client(), req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+	}
+
+	require.Equal(t, 1, sessionService.updateCallCount())
 }
 
 func TestAnonymousCookieRequestHandlerPropagatesPersistenceFailure(t *testing.T) {
@@ -1991,6 +2057,64 @@ func TestNew_A2AClientExtraOptionAppliedOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, a)
 	require.Equal(t, 1, optionCalls)
+
+	first, err := a.clientForInvocation(&agent.Invocation{
+		Session: &session.Session{AppName: "app", ID: "session-a"},
+	})
+	require.NoError(t, err)
+	second, err := a.clientForInvocation(&agent.Invocation{
+		Session: &session.Session{AppName: "app", ID: "session-b"},
+	})
+	require.NoError(t, err)
+	require.Same(t, a.a2aClient, first.client)
+	require.Same(t, first.client, second.client)
+	require.Equal(t, 1, optionCalls)
+}
+
+func TestA2AAgent_AnonymousInvocationsDoNotReplayClientOptions(t *testing.T) {
+	sharedClient := &http.Client{}
+	var optionCalls atomic.Int32
+	a, err := New(
+		WithAgentCard(&server.AgentCard{Name: "test", URL: "http://example.com"}),
+		WithA2AClientExtraOptions(
+			client.WithHTTPClient(sharedClient),
+			client.WithTimeout(time.Second),
+			client.Option(func(*client.A2AClient) {
+				optionCalls.Add(1)
+			}),
+		),
+	)
+	require.NoError(t, err)
+
+	errs := make(chan error, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			invocationClient, invocationErr := a.clientForInvocation(&agent.Invocation{
+				Session: &session.Session{
+					AppName: "app",
+					ID:      fmt.Sprintf("session-%d", index),
+				},
+			})
+			if invocationErr != nil {
+				errs <- invocationErr
+				return
+			}
+			if invocationClient.client != a.a2aClient {
+				errs <- fmt.Errorf("anonymous invocation did not reuse the configured client")
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for invocationErr := range errs {
+		require.NoError(t, invocationErr)
+	}
+
+	require.Equal(t, int32(1), optionCalls.Load())
+	require.Equal(t, time.Second, sharedClient.Timeout)
 }
 
 func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
@@ -2009,11 +2133,12 @@ func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
 	require.True(t, rootScope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/anything"}))
 }
 
-func TestA2AAgent_AnonymousClientWithoutSessionIsEphemeral(
+func TestA2AAgent_AnonymousInvocationsReuseConfiguredClient(
 	t *testing.T,
 ) {
 	a := &A2AAgent{
 		a2aClientURL: "http://example.com",
+		a2aClient:    &client.A2AClient{},
 	}
 
 	first, err := a.clientForInvocation(&agent.Invocation{})
@@ -2021,15 +2146,19 @@ func TestA2AAgent_AnonymousClientWithoutSessionIsEphemeral(
 	second, err := a.clientForInvocation(&agent.Invocation{})
 	require.NoError(t, err)
 
-	require.NotSame(t, first.client, second.client)
+	require.NotNil(t, first.client)
+	require.Same(t, first.client, second.client)
 }
 
-func TestA2AAgent_AnonymousClientComposesCustomHTTPReqHandler(t *testing.T) {
+func TestA2AAgent_AnonymousInvocationsReuseConfiguredClientWithCustomHTTPReqHandler(t *testing.T) {
+	configuredClient, err := client.NewA2AClient(
+		"http://example.com",
+		client.WithHTTPReqHandler(&staticStreamHandler{}),
+	)
+	require.NoError(t, err)
 	a := &A2AAgent{
 		a2aClientURL: "http://example.com",
-		extraA2AOptions: []client.Option{
-			client.WithHTTPReqHandler(&staticStreamHandler{}),
-		},
+		a2aClient:    configuredClient,
 	}
 
 	invocationClient, err := a.clientForInvocation(&agent.Invocation{
@@ -2041,6 +2170,7 @@ func TestA2AAgent_AnonymousClientComposesCustomHTTPReqHandler(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, invocationClient)
+	require.Same(t, a.a2aClient, invocationClient.client)
 }
 
 func TestA2AAgent_CustomHTTPClientJarDoesNotCollapseAnonymousSessions(t *testing.T) {
@@ -4994,6 +5124,29 @@ type staticStreamHandler struct {
 type failingAnonymousCookieSessionService struct {
 	session.Service
 	err error
+}
+
+type countingAnonymousCookieSessionService struct {
+	session.Service
+	mu          sync.Mutex
+	updateCalls int
+}
+
+func (s *countingAnonymousCookieSessionService) UpdateSessionState(
+	context.Context,
+	session.Key,
+	session.StateMap,
+) error {
+	s.mu.Lock()
+	s.updateCalls++
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *countingAnonymousCookieSessionService) updateCallCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.updateCalls
 }
 
 func (s *failingAnonymousCookieSessionService) UpdateSessionState(

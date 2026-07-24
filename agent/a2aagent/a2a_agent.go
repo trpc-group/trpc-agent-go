@@ -141,7 +141,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 	agentURL = ia2a.NormalizeURL(agentURL)
 
 	// Create A2A client first
-	a2aClient, err := agent.newConfiguredA2AClient(agentURL, nil)
+	a2aClient, err := agent.newConfiguredA2AClient(agentURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
 	}
@@ -172,7 +172,7 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		// Rebuild a2a client if URL changed
 		if agentCard.URL != agentURL {
-			a2aClient, err := agent.newConfiguredA2AClient(agentCard.URL, nil)
+			a2aClient, err := agent.newConfiguredA2AClient(agentCard.URL)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentCard.URL, err)
 			}
@@ -198,12 +198,8 @@ func (r *A2AAgent) clientForInvocation(
 		anonymousSessionServiceFromInvocation(invocation),
 		anonymousCookieStateKey(r.a2aClientURL),
 	)
-	a2aClient, err := r.newAnonymousClient(anonymousCookie)
-	if err != nil {
-		return nil, err
-	}
 	return &invocationA2AClient{
-		client:          a2aClient,
+		client:          r.a2aClient,
 		anonymousCookie: anonymousCookie,
 	}, nil
 }
@@ -249,40 +245,21 @@ func hasPersistentSessionKey(sess *session.Session) bool {
 		strings.TrimSpace(sess.ID) != ""
 }
 
-func (r *A2AAgent) newAnonymousClient(
-	anonymousCookie *anonymousCookieState,
-) (*client.A2AClient, error) {
-	a2aClient, err := r.newConfiguredA2AClient(r.a2aClientURL, anonymousCookie)
-	if err != nil {
-		return nil, fmt.Errorf(
-			"failed to create session-scoped A2A client for %s: %w",
-			r.a2aClientURL,
-			err,
-		)
-	}
-	return a2aClient, nil
-}
-
 func (r *A2AAgent) newConfiguredA2AClient(
 	agentURL string,
-	anonymousCookie *anonymousCookieState,
 ) (*client.A2AClient, error) {
-	// Register internal middleware before caller options. The upstream client
-	// applies middleware in registration order, with the first middleware as
-	// the outermost wrapper.
+	// Register the stateless anonymous-cookie middleware once on the base client.
+	// The invocation-specific cookie state is carried by the request context.
 	opts := make([]client.Option, 0, len(r.extraA2AOptions)+1)
-	if anonymousCookie != nil {
-		opts = append(opts, client.WithMiddleware(a2aHTTPReqMiddleware(
-			func(next client.HTTPReqHandler) client.HTTPReqHandler {
-				return &anonymousCookieHTTPReqHandler{
-					next:                  next,
-					cookie:                anonymousCookie,
-					scope:                 anonymousCookieURLScopeFromAgentURL(agentURL),
-					acquireInitialization: r.acquireAnonymousCookieInitialization,
-				}
-			},
-		)))
-	}
+	opts = append(opts, client.WithMiddleware(a2aHTTPReqMiddleware(
+		func(next client.HTTPReqHandler) client.HTTPReqHandler {
+			return &anonymousCookieHTTPReqHandler{
+				next:                  next,
+				scope:                 anonymousCookieURLScopeFromAgentURL(agentURL),
+				acquireInitialization: r.acquireAnonymousCookieInitialization,
+			}
+		},
+	)))
 	opts = append(opts, r.extraA2AOptions...)
 	return client.NewA2AClient(agentURL, opts...)
 }
@@ -358,6 +335,26 @@ type anonymousCookieState struct {
 	persistSession *session.Session
 	sessionService session.Service
 	key            string
+}
+
+type anonymousCookieContextKey struct{}
+
+func withAnonymousCookieState(
+	ctx context.Context,
+	cookie *anonymousCookieState,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, anonymousCookieContextKey{}, cookie)
+}
+
+func anonymousCookieStateFromContext(ctx context.Context) *anonymousCookieState {
+	if ctx == nil {
+		return nil
+	}
+	cookie, _ := ctx.Value(anonymousCookieContextKey{}).(*anonymousCookieState)
+	return cookie
 }
 
 func newAnonymousCookieState(
@@ -462,6 +459,18 @@ func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) 
 	if !isAnonymousUserIDCookieValue(cookieValue) {
 		return nil
 	}
+	if persistedValue, ok := loadAnonymousCookieFromSession(s.persistSession, s.key); ok && persistedValue == cookieValue {
+		if s.session != nil {
+			s.session.SetState(s.key, []byte(cookieValue))
+		}
+		return nil
+	}
+	if !hasPersistentSessionKey(s.persistSession) || s.sessionService == nil {
+		currentValue, ok := loadAnonymousCookieFromSession(s.session, s.key)
+		if ok && currentValue == cookieValue {
+			return nil
+		}
+	}
 	if err := s.persist(ctx, cookieValue); err != nil {
 		return err
 	}
@@ -515,15 +524,19 @@ func canonicalAnonymousCookieStateScope(agentURL string) string {
 }
 
 type anonymousCookieHTTPReqHandler struct {
-	next                  client.HTTPReqHandler
+	next client.HTTPReqHandler
+	// cookie is only used by directly constructed handlers in package tests.
+	// The client middleware created by newConfiguredA2AClient reads state from
+	// the request context so the shared handler remains stateless.
 	cookie                *anonymousCookieState
 	scope                 anonymousCookieURLScope
 	acquireInitialization func(context.Context, *anonymousCookieState) (func(), error)
 }
 
 type anonymousCookieCaptureResult struct {
-	mu  sync.Mutex
-	err error
+	mu       sync.Mutex
+	err      error
+	captured map[string]struct{}
 }
 
 func (r *anonymousCookieCaptureResult) record(err error) {
@@ -546,6 +559,33 @@ func (r *anonymousCookieCaptureResult) error() error {
 	return r.err
 }
 
+func (r *anonymousCookieCaptureResult) capture(
+	ctx context.Context,
+	cookie *anonymousCookieState,
+	cookieValue string,
+) {
+	if cookie == nil {
+		return
+	}
+	cookieValue = strings.TrimSpace(cookieValue)
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return
+	}
+	if r != nil {
+		r.mu.Lock()
+		if r.captured == nil {
+			r.captured = make(map[string]struct{})
+		}
+		if _, ok := r.captured[cookieValue]; ok {
+			r.mu.Unlock()
+			return
+		}
+		r.captured[cookieValue] = struct{}{}
+		r.mu.Unlock()
+	}
+	r.record(cookie.capture(ctx, cookieValue))
+}
+
 func (h *anonymousCookieHTTPReqHandler) Handle(
 	ctx context.Context,
 	httpClient *http.Client,
@@ -557,16 +597,23 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	if req == nil {
 		return nil, errors.New("a2a anonymous cookie handler: request is nil")
 	}
-	if httpClient == nil {
-		return nil, errors.New("a2a anonymous cookie handler: HTTP client is nil")
-	}
 	if h.next == nil {
 		return nil, errors.New("a2a anonymous cookie handler: next handler is nil")
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	release, err := h.acquireInitializationIfNeeded(ctx, req.URL)
+	cookie := h.cookie
+	if cookie == nil {
+		cookie = anonymousCookieStateFromContext(ctx)
+	}
+	if cookie == nil {
+		return h.next.Handle(ctx, httpClient, req)
+	}
+	if httpClient == nil {
+		return nil, errors.New("a2a anonymous cookie handler: HTTP client is nil")
+	}
+	release, err := h.acquireInitializationIfNeeded(ctx, req.URL, cookie)
 	if err != nil {
 		return nil, err
 	}
@@ -580,20 +627,20 @@ func (h *anonymousCookieHTTPReqHandler) Handle(
 	requestClient.Jar = &anonymousCookieJar{
 		ctx:    ctx,
 		base:   httpClient.Jar,
-		cookie: h.cookie,
+		cookie: cookie,
 		scope:  h.scope,
 		result: captureResult,
 	}
 	requestClient.Transport = &anonymousCookieRoundTripper{
 		base:   httpClient.Transport,
-		cookie: h.cookie,
+		cookie: cookie,
 		scope:  h.scope,
 		result: captureResult,
 	}
 	request := req.Clone(ctx)
-	setAnonymousCookieHeader(request, h.cookie, h.scope)
+	setAnonymousCookieHeader(request, cookie, h.scope)
 	resp, err := h.next.Handle(ctx, &requestClient, request)
-	h.captureResponseCookie(ctx, request, resp, captureResult)
+	h.captureResponseCookie(ctx, request, resp, cookie, captureResult)
 	if captureErr := captureResult.error(); captureErr != nil {
 		if resp != nil && resp.Body != nil {
 			_ = resp.Body.Close()
@@ -610,9 +657,10 @@ func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
 	ctx context.Context,
 	req *http.Request,
 	resp *http.Response,
+	cookie *anonymousCookieState,
 	result *anonymousCookieCaptureResult,
 ) {
-	if h == nil || h.cookie == nil || resp == nil || !h.scope.matches(req.URL) {
+	if h == nil || cookie == nil || resp == nil || req == nil || !h.scope.matches(req.URL) {
 		return
 	}
 	responseURL := req.URL
@@ -622,9 +670,9 @@ func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
 	if !h.scope.matches(responseURL) {
 		return
 	}
-	for _, cookie := range resp.Cookies() {
-		if cookie != nil && cookie.Name == anonymousUserIDCookieName {
-			result.record(h.cookie.capture(ctx, cookie.Value))
+	for _, responseCookie := range resp.Cookies() {
+		if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
+			result.capture(ctx, cookie, responseCookie.Value)
 		}
 	}
 }
@@ -648,9 +696,9 @@ func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	setAnonymousCookieHeader(request, t.cookie, t.scope)
 	resp, err := base.RoundTrip(request)
 	if resp != nil && t.cookie != nil && t.scope.matches(request.URL) {
-		for _, cookie := range resp.Cookies() {
-			if cookie != nil && cookie.Name == anonymousUserIDCookieName {
-				t.result.record(t.cookie.capture(request.Context(), cookie.Value))
+		for _, responseCookie := range resp.Cookies() {
+			if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
+				t.result.capture(request.Context(), t.cookie, responseCookie.Value)
 			}
 		}
 	}
@@ -717,32 +765,33 @@ func (*httpClientDoHandler) Handle(
 func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
 	ctx context.Context,
 	u *url.URL,
+	cookie *anonymousCookieState,
 ) (func(), error) {
 	if h == nil ||
-		h.cookie == nil ||
+		cookie == nil ||
 		h.acquireInitialization == nil ||
 		!h.scope.matches(u) {
 		return nil, nil
 	}
-	if _, ok := h.cookie.load(); ok {
+	if _, ok := cookie.load(); ok {
 		return nil, nil
 	}
-	release, err := h.acquireInitialization(ctx, h.cookie)
+	release, err := h.acquireInitialization(ctx, cookie)
 	if err != nil {
 		return nil, err
 	}
 	if release == nil {
 		return nil, nil
 	}
-	if _, ok := h.cookie.load(); ok {
+	if _, ok := cookie.load(); ok {
 		release()
 		return nil, nil
 	}
-	if err := h.cookie.reload(ctx); err != nil {
+	if err := cookie.reload(ctx); err != nil {
 		release()
 		return nil, err
 	}
-	if _, ok := h.cookie.load(); ok {
+	if _, ok := cookie.load(); ok {
 		release()
 		return nil, nil
 	}
@@ -768,7 +817,7 @@ func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		}
 		if cookie.Name == anonymousUserIDCookieName {
 			if j.cookie != nil && j.scope.matches(u) {
-				j.result.record(j.cookie.capture(j.ctx, cookie.Value))
+				j.result.capture(j.ctx, j.cookie, cookie.Value)
 			}
 			continue
 		}
@@ -1117,7 +1166,7 @@ func (r *A2AAgent) runStreamingWithClient(
 		return nil, fmt.Errorf("event converter not set")
 	}
 	eventChan := make(chan *event.Event, r.streamingBufSize)
-	runCtx := agent.CloneContext(ctx)
+	runCtx := withAnonymousCookieState(agent.CloneContext(ctx), anonymousCookie)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 		r.executeStreaming(ctx, invocation, eventChan, a2aClient, anonymousCookie)
@@ -1428,7 +1477,7 @@ func (r *A2AAgent) runNonStreamingWithClient(
 	anonymousCookie *anonymousCookieState,
 ) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
-	runCtx := agent.CloneContext(ctx)
+	runCtx := withAnonymousCookieState(agent.CloneContext(ctx), anonymousCookie)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 
