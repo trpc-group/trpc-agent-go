@@ -1,0 +1,436 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package replaytest
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"sort"
+	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/memory"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+// Normalize reads a backend and returns its canonical replay snapshot.
+func Normalize(
+	ctx context.Context,
+	backend Backend,
+	cfg RunConfig,
+	caseName string,
+	eventNum int,
+) (Snapshot, error) {
+	key := session.Key{AppName: cfg.AppName, UserID: cfg.UserID, SessionID: cfg.SessionID}
+	var opts []session.Option
+	if eventNum > 0 {
+		opts = append(opts, session.WithEventNum(eventNum))
+	}
+	sess, err := backend.Session.GetSession(ctx, key, opts...)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if sess == nil {
+		return Snapshot{}, fmt.Errorf("session %s not found", cfg.SessionID)
+	}
+
+	idMap := eventIDMap(sess.Events)
+	snap := Snapshot{
+		CaseName:     caseName,
+		Backend:      backend.Name,
+		SessionID:    cfg.SessionID,
+		Events:       normalizeEvents(sess.Events),
+		State:        normalizeState(sess.SnapshotState()),
+		Summaries:    normalizeSummaries(cfg.SessionID, sess.Summaries, idMap),
+		Tracks:       normalizeTracks(sess.Tracks),
+		Capabilities: cloneCapabilities(backend.Capabilities),
+		Unsupported:  unsupportedCapabilities(backend),
+	}
+
+	if backend.Memory != nil {
+		memories, err := backend.Memory.ReadMemories(
+			ctx,
+			memory.UserKey{AppName: cfg.AppName, UserID: cfg.UserID},
+			0,
+		)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		snap.Memories = normalizeMemories(memories)
+	}
+	return snap, nil
+}
+
+func eventIDMap(events []event.Event) map[string]string {
+	out := make(map[string]string, len(events))
+	for i, evt := range events {
+		if evt.ID != "" {
+			out[evt.ID] = fmt.Sprintf("event#%d", i)
+		}
+	}
+	return out
+}
+
+func normalizeEvents(events []event.Event) []NormalizedEvent {
+	out := make([]NormalizedEvent, 0, len(events))
+	for i, evt := range events {
+		normalized := NormalizedEvent{
+			Index:      i,
+			Author:     evt.Author,
+			Branch:     evt.Branch,
+			Tag:        normalizeTag(evt.Tag),
+			FilterKey:  evt.FilterKey,
+			StateDelta: normalizeState(evt.StateDelta),
+			Extensions: normalizeRawMap(evt.Extensions),
+		}
+		msg, ok := eventMessage(evt)
+		if ok {
+			normalized.Role = string(msg.Role)
+			normalized.Content = msg.Content
+			normalized.ToolCalls = normalizeToolCalls(msg.ToolCalls)
+			if msg.ToolID != "" || msg.ToolName != "" {
+				normalized.ToolResponse = &NormalizedToolResponse{
+					ToolID:   msg.ToolID,
+					ToolName: msg.ToolName,
+					Content:  msg.Content,
+				}
+			}
+		}
+		out = append(out, normalized)
+	}
+	return out
+}
+
+func eventMessage(evt event.Event) (model.Message, bool) {
+	if evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return model.Message{}, false
+	}
+	choice := evt.Response.Choices[0]
+	if choice.Message.Role != "" || choice.Message.Content != "" ||
+		len(choice.Message.ToolCalls) > 0 || choice.Message.ToolID != "" {
+		return choice.Message, true
+	}
+	return choice.Delta, true
+}
+
+func normalizeToolCalls(toolCalls []model.ToolCall) []NormalizedToolCall {
+	out := make([]NormalizedToolCall, 0, len(toolCalls))
+	for _, tc := range toolCalls {
+		out = append(out, NormalizedToolCall{
+			ID:        tc.ID,
+			Type:      tc.Type,
+			Name:      tc.Function.Name,
+			Arguments: normalizeBytes(tc.Function.Arguments),
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ID == out[j].ID {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
+}
+
+func normalizeState(state session.StateMap) map[string]NormalizedValue {
+	if len(state) == 0 {
+		return nil
+	}
+	out := make(map[string]NormalizedValue, len(state))
+	for k, v := range state {
+		out[k] = normalizeBytes(v)
+	}
+	return out
+}
+
+func normalizeRawMap(raw map[string]json.RawMessage) map[string]NormalizedValue {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[string]NormalizedValue, len(raw))
+	for k, v := range raw {
+		out[k] = normalizeBytes(v)
+	}
+	return out
+}
+
+func normalizeBytes(raw []byte) NormalizedValue {
+	if raw == nil {
+		return NormalizedValue{Value: nil}
+	}
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return NormalizedValue{Value: ""}
+	}
+	var v any
+	dec := json.NewDecoder(bytes.NewReader(trimmed))
+	dec.UseNumber()
+	if err := dec.Decode(&v); err == nil {
+		return NormalizedValue{Value: normalizeAny(v)}
+	}
+	return NormalizedValue{Value: string(raw)}
+}
+
+func normalizeAny(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, v := range x {
+			out[k] = normalizeAny(v)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, v := range x {
+			out[i] = normalizeAny(v)
+		}
+		return out
+	case json.Number:
+		if i, err := x.Int64(); err == nil {
+			return i
+		}
+		if f, err := x.Float64(); err == nil {
+			return roundFloat(f)
+		}
+		return x.String()
+	case float64:
+		return roundFloat(x)
+	default:
+		return x
+	}
+}
+
+func roundFloat(f float64) float64 {
+	return math.Round(f*1_000_000) / 1_000_000
+}
+
+func normalizeMemories(entries []*memory.Entry) []NormalizedMemory {
+	out := make([]NormalizedMemory, 0, len(entries))
+	for _, entry := range entries {
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+		mem := NormalizedMemory{
+			ID:       entry.ID,
+			Content:  entry.Memory.Memory,
+			Topics:   sortedStrings(entry.Memory.Topics),
+			Metadata: normalizeMemoryMetadata(entry.Memory),
+			Scope:    entry.AppName + "/" + entry.UserID,
+		}
+		if entry.Score != 0 {
+			score := roundFloat(entry.Score)
+			mem.Score = &score
+		}
+		out = append(out, mem)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Content == out[j].Content {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Content < out[j].Content
+	})
+	return out
+}
+
+func normalizeMemoryMetadata(mem *memory.Memory) map[string]NormalizedValue {
+	out := map[string]NormalizedValue{}
+	if mem.Kind != "" {
+		out["kind"] = NormalizedValue{Value: string(mem.Kind)}
+	}
+	if mem.EventTime != nil {
+		out["event_time"] = NormalizedValue{Value: normalizeTime(*mem.EventTime)}
+	}
+	if len(mem.Participants) > 0 {
+		out["participants"] = NormalizedValue{Value: sortedStrings(mem.Participants)}
+	}
+	if mem.Location != "" {
+		out["location"] = NormalizedValue{Value: mem.Location}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeSummaries(
+	sessionID string,
+	summaries map[string]*session.Summary,
+	idMap map[string]string,
+) map[string]NormalizedSummary {
+	if len(summaries) == 0 {
+		return nil
+	}
+	out := make(map[string]NormalizedSummary, len(summaries))
+	for filterKey, sum := range summaries {
+		if sum == nil {
+			continue
+		}
+		normalized := NormalizedSummary{
+			FilterKey: filterKey,
+			Text:      sum.Summary,
+			SessionID: sessionID,
+			UpdatedAt: normalizeTime(sum.UpdatedAt),
+		}
+		if sum.Boundary != nil {
+			lastEventID := sum.Boundary.LastEventID
+			if mapped, ok := idMap[lastEventID]; ok {
+				lastEventID = mapped
+			}
+			normalized.Version = sum.Boundary.Version
+			normalized.Boundary = &NormalizedSummaryBoundary{
+				Version:     sum.Boundary.Version,
+				FilterKey:   sum.Boundary.FilterKey,
+				CutoffAt:    normalizeTime(sum.Boundary.CutoffAt),
+				LastEventID: lastEventID,
+			}
+		}
+		out[filterKey] = normalized
+	}
+	return out
+}
+
+func normalizeTracks(tracks map[session.Track]*session.TrackEvents) map[string][]NormalizedTrack {
+	if len(tracks) == 0 {
+		return nil
+	}
+	out := make(map[string][]NormalizedTrack, len(tracks))
+	for track, history := range tracks {
+		if history == nil {
+			continue
+		}
+		events := make([]NormalizedTrack, 0, len(history.Events))
+		for i, evt := range history.Events {
+			payload := normalizeBytes(evt.Payload)
+			events = append(events, NormalizedTrack{
+				Index:      i,
+				TrackName:  string(track),
+				EventType:  payloadString(payload, "event_type"),
+				Invocation: payloadString(payload, "invocation"),
+				Error:      payloadString(payload, "error"),
+				DurationMs: payloadFloat(payload, "duration_ms", "durationMs", "elapsed_ms"),
+				Payload:    payload,
+			})
+		}
+		out[string(track)] = events
+	}
+	return out
+}
+
+func payloadString(v NormalizedValue, key string) string {
+	m, ok := v.Value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := m[key].(string)
+	return value
+}
+
+func payloadFloat(v NormalizedValue, keys ...string) *float64 {
+	m, ok := v.Value.(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range keys {
+		switch x := m[key].(type) {
+		case float64:
+			y := roundFloat(x)
+			return &y
+		case int64:
+			y := float64(x)
+			return &y
+		case int:
+			y := float64(x)
+			return &y
+		}
+	}
+	return nil
+}
+
+func normalizeTag(tag string) string {
+	if tag == "" {
+		return ""
+	}
+	parts := bytes.Split([]byte(tag), []byte(event.TagDelimiter))
+	tags := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if trimmed := string(bytes.TrimSpace(part)); trimmed != "" {
+			tags = append(tags, trimmed)
+		}
+	}
+	sort.Strings(tags)
+	out, _ := json.Marshal(tags)
+	return string(out)
+}
+
+func normalizeTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func sortedStrings(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
+}
+
+func cloneCapabilities(in map[string]CapabilityStatus) map[string]CapabilityStatus {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]CapabilityStatus, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func unsupportedCapabilities(backend Backend) []UnsupportedCapability {
+	caps := cloneCapabilities(backend.Capabilities)
+	if caps == nil {
+		caps = make(map[string]CapabilityStatus)
+	}
+	if backend.Memory == nil {
+		caps[CapabilityMemory] = CapabilityStatus{
+			Supported:   false,
+			AllowedDiff: true,
+			Explanation: "memory service is not configured",
+		}
+	}
+	if _, ok := backend.Session.(session.TrackService); !ok {
+		caps[CapabilityTrack] = CapabilityStatus{
+			Supported:   false,
+			AllowedDiff: true,
+			Explanation: "session service does not implement session.TrackService",
+		}
+	}
+	out := []UnsupportedCapability{}
+	for name, status := range caps {
+		if status.Supported {
+			continue
+		}
+		out = append(out, UnsupportedCapability{
+			Capability:  name,
+			AllowedDiff: status.AllowedDiff,
+			Explanation: status.Explanation,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		return out[i].Capability < out[j].Capability
+	})
+	return out
+}

@@ -1,0 +1,69 @@
+{
+  "generated_by": "trpc-agent-go/session/replaytest",
+  "cases": [
+    "single_turn_dialog",
+    "summary_filter_key_update",
+    "track_observability"
+  ],
+  "diffs": [
+    {
+      "case": "single_turn_dialog",
+      "baseline_backend": "inmemory",
+      "candidate_backend": "sqlite",
+      "session_id": "session-single_turn_dialog",
+      "event_index": 1,
+      "path": "/events/1/content",
+      "baseline": "hi there",
+      "candidate": "hello again",
+      "allowed_diff": false,
+      "explanation": "assistant event content changed"
+    },
+    {
+      "case": "summary_filter_key_update",
+      "baseline_backend": "inmemory",
+      "candidate_backend": "sqlite",
+      "session_id": "session-summary_filter_key_update",
+      "summary_filter_key": "agent/main",
+      "path": "/summaries/agent~1main/filter_key",
+      "baseline": "agent/main",
+      "candidate": "agent/wrong",
+      "allowed_diff": false,
+      "explanation": "summary filter-key must be preserved exactly"
+    },
+    {
+      "case": "memory_write_read_search",
+      "baseline_backend": "inmemory",
+      "candidate_backend": "sqlite",
+      "session_id": "session-memory_write_read_search",
+      "memory_id": "memory#preference",
+      "path": "/memories/0/content",
+      "baseline": "User prefers concise answers.",
+      "candidate": "User prefers verbose answers.",
+      "allowed_diff": false,
+      "explanation": "memory content differs after replay"
+    },
+    {
+      "case": "track_observability",
+      "baseline_backend": "inmemory",
+      "candidate_backend": "sqlite",
+      "session_id": "session-track_observability",
+      "track_name": "subtask/research",
+      "path": "/tracks/subtask~1research/0/error",
+      "baseline": "timeout",
+      "candidate": "canceled",
+      "allowed_diff": false,
+      "explanation": "track error payload differs"
+    },
+    {
+      "case": "single_turn_dialog",
+      "baseline_backend": "inmemory",
+      "candidate_backend": "redis",
+      "session_id": "session-single_turn_dialog",
+      "path": "/capabilities/event_paging",
+      "candidate": "redis",
+      "allowed_diff": true,
+      "explanation": "backend does not support offset event paging",
+      "unsupported": true
+    }
+  ]
+}
