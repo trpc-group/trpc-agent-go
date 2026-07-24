@@ -69,7 +69,7 @@ var (
 	offloadServiceID = flag.String(
 		"offload-service-id",
 		os.Getenv("TDAI_SERVICE_ID"),
-		"TencentDB Agent Memory service ID; non-empty enables context offload v2",
+		"TencentDB Agent Memory service ID; enables context offload v2 when a gateway API key is also configured",
 	)
 	waitBeforeRecall = flag.Duration(
 		"turn-wait",
@@ -93,6 +93,10 @@ func main() {
 	if sid == "" {
 		sid = fmt.Sprintf("tencentdb-%d", time.Now().Unix())
 	}
+	offloadEnabled := strings.TrimSpace(*offloadServiceID) != ""
+	if offloadEnabled && strings.TrimSpace(*gatewayAPIKey) == "" {
+		log.Fatal("-gateway-api-key is required when -offload-service-id enables context offload v2")
+	}
 
 	// Recall and the long-term memory_search tool are opt-in because the gateway
 	// does not enforce per-user/session scoping on those paths; enable them here
@@ -106,7 +110,7 @@ func main() {
 		memorytencentdb.WithRecallEnabled(true),
 		memorytencentdb.WithMemorySearchTool(true),
 	}
-	if strings.TrimSpace(*offloadServiceID) != "" {
+	if offloadEnabled {
 		memoryOptions = append(
 			memoryOptions,
 			memorytencentdb.WithContextOffload(
@@ -151,7 +155,7 @@ func main() {
 
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Gateway: %s (status=%s version=%s)\n", *gatewayURL, health.Status, health.Version)
-	if strings.TrimSpace(*offloadServiceID) != "" {
+	if offloadEnabled {
 		fmt.Printf("Context offload: enabled (service=%s)\n", *offloadServiceID)
 	}
 	fmt.Printf("App: %s\nUser: %s\nSession: %s\n", *appName, *userID, sid)

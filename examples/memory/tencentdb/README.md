@@ -100,8 +100,8 @@ example at another gateway URL with `-gateway`.
 | `OPENAI_API_KEY`                 | Yes      | API key for the chat model          |                          |
 | `OPENAI_BASE_URL`                | No       | Base URL for the model API endpoint | `https://api.openai.com/v1` |
 | `TENCENTDB_AGENT_MEMORY_GATEWAY` | No       | TencentDB Agent Memory gateway URL  | `http://127.0.0.1:8420`  |
-| `TDAI_GATEWAY_API_KEY`           | No       | Gateway API key (sent as `Authorization: Bearer`) when the gateway requires auth | |
-| `TDAI_SERVICE_ID`                | No       | Service ID sent as `X-TDAI-Service-Id`; setting it enables context offload v2 | |
+| `TDAI_GATEWAY_API_KEY`           | For offload | Gateway API key sent as `Authorization: Bearer`; required by context offload v2 | |
+| `TDAI_SERVICE_ID`                | For offload | Service ID sent as `X-TDAI-Service-Id`; setting it together with the gateway API key enables context offload v2 | |
 
 ## Command Line Arguments
 
@@ -114,7 +114,7 @@ example at another gateway URL with `-gateway`.
 | `-gateway`           | TencentDB Agent Memory gateway URL               | env or `http://127.0.0.1:8420` |
 | `-gateway-timeout`   | Timeout for gateway calls, including session flush | `60s`                   |
 | `-gateway-api-key`   | Gateway API key sent as `Authorization: Bearer`  | env `TDAI_GATEWAY_API_KEY`  |
-| `-offload-service-id` | Service ID for context offload v2; non-empty enables the feature | env `TDAI_SERVICE_ID` |
+| `-offload-service-id` | Service ID for context offload v2; requires `-gateway-api-key` | env `TDAI_SERVICE_ID` |
 | `-turn-wait`         | Delay after each turn for gateway capture/extraction | `0s`                   |
 | `-end-session`       | Call `/session/end` before exit                  | `false`                    |
 
