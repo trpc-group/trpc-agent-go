@@ -1,0 +1,12 @@
+diff --git a/worker.go b/worker.go
+--- a/worker.go
++++ b/worker.go
+@@ -1 +1,8 @@
+ package worker
++func start(ctx context.Context) {
++	child, cancel := context.WithCancel(ctx)
++	_ = child
++	go func() {
++		runForever()
++	}()
++}

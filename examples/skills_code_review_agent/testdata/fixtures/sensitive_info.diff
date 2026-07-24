@@ -1,0 +1,8 @@
+diff --git a/config.go b/config.go
+--- a/config.go
++++ b/config.go
+@@ -1 +1,4 @@
+ package config
++const apiKey = "sk-live-1234567890abcdef"
++const password = "fixture-password-value"
++const databaseURL = "postgres://admin:fixture-secret@db.local/app"

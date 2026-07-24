@@ -1,0 +1,8 @@
+diff --git a/query.go b/query.go
+--- a/query.go
++++ b/query.go
+@@ -1 +1,4 @@
+ package query
++func unsafe(input string) {
++	exec.Command("sh", "-c", fmt.Sprintf("SELECT * FROM users WHERE id = %s", input)).Run()
++}

@@ -1,0 +1,10 @@
+diff --git a/internal/query/query.go b/internal/query/query.go
+--- a/internal/query/query.go
++++ b/internal/query/query.go
+@@ -1 +1,6 @@
+ package query
++func lookup(userInput string) {
++	exec.Command("sh", "-c", userInput).Run()
++	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", userInput)
++	db.Query(query)
++}

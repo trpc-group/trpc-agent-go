@@ -1,0 +1,8 @@
+diff --git a/build.go b/build.go
+--- a/build.go
++++ b/build.go
+@@ -1 +1,5 @@
+ package build
++func Version() string {
++	return "development"
++}
