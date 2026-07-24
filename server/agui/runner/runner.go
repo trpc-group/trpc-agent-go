@@ -30,6 +30,7 @@ import (
 	trunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -181,6 +182,11 @@ type runAgentMessages struct {
 	inputID      string
 	userMessage  *types.Message
 	toolMessages []toolResultInputMessage
+}
+
+type runForwardedPropsSourceMetadata struct {
+	source.Metadata
+	RunID string `json:"runId,omitempty"`
 }
 
 type toolResultInputMessage struct {
@@ -489,7 +495,7 @@ func (r *runner) run(ctx context.Context, cancel context.CancelCauseFunc, key se
 			}
 		}()
 		if input.messages.inputMessage.Role == model.RoleUser {
-			if err := r.recordUserMessage(ctx, input.key, input.messages.userMessage); err != nil {
+			if err := r.recordUserMessage(ctx, input); err != nil {
 				log.WarnfContext(
 					ctx,
 					"agui run: threadID: %s, runID: %s, record input "+
@@ -1193,10 +1199,11 @@ func (r *runner) shouldTrackEvent(event aguievents.Event) bool {
 	return !aguitool.IsStreamingToolResultActivityEvent(event)
 }
 
-func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message *types.Message) error {
-	if message == nil {
+func (r *runner) recordUserMessage(ctx context.Context, input *runInput) error {
+	if input == nil || input.messages == nil || input.messages.userMessage == nil {
 		return errors.New("user message is nil")
 	}
+	message := input.messages.userMessage
 	if message.Role != types.RoleUser {
 		return fmt.Errorf("user message role must be user: %s", message.Role)
 	}
@@ -1205,13 +1212,53 @@ func (r *runner) recordUserMessage(ctx context.Context, key session.Key, message
 		userMessage.ID = uuid.NewString()
 	}
 	if userMessage.Name == "" {
-		userMessage.Name = key.UserID
+		userMessage.Name = input.key.UserID
 	}
 	evt := aguievents.NewCustomEvent(multimodal.CustomEventNameUserMessage, aguievents.WithValue(userMessage))
-	if err := r.recordTrackEvent(ctx, key, evt); err != nil {
+	if metadata, ok := r.forwardedPropsSourceMetadata(ctx, input); ok {
+		evt.GetBaseEvent().RawEvent = metadata
+	}
+	if err := r.recordTrackEvent(ctx, input.key, evt); err != nil {
 		return fmt.Errorf("record track event: %w", err)
 	}
 	return nil
+}
+
+func (r *runner) forwardedPropsSourceMetadata(ctx context.Context, input *runInput) (any, bool) {
+	if !r.eventSourceMetadataEnabled ||
+		input.runAgentInput == nil ||
+		input.runAgentInput.ForwardedProps == nil {
+		return nil, false
+	}
+	forwardedProps, ok := normalizeForwardedPropsSourceMetadata(ctx, input)
+	if !ok || forwardedProps == nil {
+		return nil, false
+	}
+	return runForwardedPropsSourceMetadata{
+		Metadata: source.Metadata{
+			Author:         input.key.UserID,
+			ForwardedProps: forwardedProps,
+		},
+		RunID: input.runID,
+	}, true
+}
+
+func normalizeForwardedPropsSourceMetadata(ctx context.Context, input *runInput) (any, bool) {
+	data, err := json.Marshal(input.runAgentInput.ForwardedProps)
+	if err != nil {
+		log.ErrorfContext(
+			ctx,
+			"agui run: threadID: %s, runID: %s, marshal forwardedProps source metadata: %v",
+			input.threadID,
+			input.runID,
+			err,
+		)
+		return nil, false
+	}
+	if string(data) == "null" {
+		return nil, true
+	}
+	return input.runAgentInput.ForwardedProps, true
 }
 
 func (r *runner) newExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelCauseFunc) {

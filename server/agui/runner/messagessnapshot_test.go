@@ -382,6 +382,65 @@ func TestMessagesSnapshotAttachesSourceMetadataIndex(t *testing.T) {
 	assertSnapshotMetadataTimestamp(t, got.ToolCalls["tool-call-1"], baseTime.Add(time.Second))
 }
 
+func TestMessagesSnapshotAttachesForwardedPropsRunMetadata(t *testing.T) {
+	baseTime := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	forwardedProps := map[string]any{
+		"file_url": "https://example.com/demo.png",
+		"attachments": []any{
+			map[string]any{"id": "file-1", "mimeType": "image/png"},
+		},
+	}
+	userEvent := withSnapshotRawEvent(
+		withSnapshotTimestamp(aguievents.NewCustomEvent(
+			multimodal.CustomEventNameUserMessage,
+			aguievents.WithValue(types.Message{
+				ID:      "user-1",
+				Role:    types.RoleUser,
+				Content: "hi",
+			}),
+		), baseTime),
+		map[string]any{
+			"runId":          "real-run",
+			"author":         "demo-user",
+			"forwardedProps": forwardedProps,
+		},
+	)
+	svc := &testSessionService{
+		trackEvents: []session.TrackEvent{
+			newTrackEventAt(t, userEvent, baseTime.Add(time.Hour)),
+		},
+	}
+	tracker, err := track.New(svc)
+	require.NoError(t, err)
+	r := &runner{
+		runner:                     noopBaseRunner{},
+		userIDResolver:             NewOptions().UserIDResolver,
+		runAgentInputHook:          NewOptions().RunAgentInputHook,
+		appName:                    "demo",
+		tracker:                    tracker,
+		eventSourceMetadataEnabled: true,
+	}
+	stream, err := r.MessagesSnapshot(
+		context.Background(),
+		&adapter.RunAgentInput{ThreadID: "thread", RunID: "run"},
+	)
+	require.NoError(t, err)
+	collected := collectAGUIEvents(t, stream)
+	require.Len(t, collected, 3)
+	snapshot, ok := collected[1].(*aguievents.MessagesSnapshotEvent)
+	require.True(t, ok)
+	require.Len(t, snapshot.Messages, 1)
+	gotRawEvent, ok := snapshot.GetBaseEvent().RawEvent.(source.SnapshotMetadata)
+	require.True(t, ok)
+	require.Contains(t, gotRawEvent.Runs, "real-run")
+	gotRun := gotRawEvent.Runs["real-run"]
+	assert.Equal(t, "demo-user", gotRun.Author)
+	assert.Equal(t, forwardedProps, gotRun.ForwardedProps)
+	assertSnapshotMetadataTimestamp(t, gotRun, baseTime)
+	require.Contains(t, gotRawEvent.Messages, "user-1")
+	assert.Nil(t, gotRawEvent.Messages["user-1"].ForwardedProps)
+}
+
 func TestMessagesSnapshotUsesResolvedAppName(t *testing.T) {
 	svc := &testSessionService{
 		trackEvents: []session.TrackEvent{
@@ -1524,9 +1583,9 @@ func collectAGUIEvents(t *testing.T, ch <-chan aguievents.Event) []aguievents.Ev
 
 func withSnapshotRawEvent(
 	event aguievents.Event,
-	metadata source.Metadata,
+	raw any,
 ) aguievents.Event {
-	event.GetBaseEvent().RawEvent = metadata
+	event.GetBaseEvent().RawEvent = raw
 	return event
 }
 

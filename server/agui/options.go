@@ -221,8 +221,10 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
-// WithEventSourceMetadataEnabled controls whether translated AG-UI events
-// include source metadata from the original trpc-agent-go event in rawEvent.
+// WithEventSourceMetadataEnabled controls whether AG-UI events include source
+// metadata in rawEvent. Translated events include metadata from the original
+// trpc-agent-go event, and message snapshots include request forwardedProps
+// under rawEvent.runs when the request provides it.
 func WithEventSourceMetadataEnabled(enabled bool) Option {
 	return func(o *options) {
 		o.aguiRunnerOptions = append(
