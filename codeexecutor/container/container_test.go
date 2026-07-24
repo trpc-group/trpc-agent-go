@@ -334,6 +334,63 @@ func TestNew_Success(t *testing.T) {
 	assert.NoError(t, exec.Close())
 }
 
+func TestNewWithContextCancelsBlockedCreate(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/_ping":
+			w.Header().Set("API-Version", api.DefaultVersion)
+			_, _ = w.Write([]byte("OK"))
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	server := httptest.NewServer(http.HandlerFunc(handler))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	_, err = NewWithContext(ctx, WithHost("tcp://"+parsed.Host),
+		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}))
+	require.Error(t, err)
+	require.Less(t, time.Since(started), time.Second)
+}
+
+func TestCloseWithContextHonorsDeadline(t *testing.T) {
+	handler := func(_ http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop") {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+			return
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{
+		client:      cli,
+		container:   &tcontainer.Summary{ID: "cid"},
+		containerID: "cid",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	require.Error(t, exec.CloseWithContext(ctx))
+	require.Less(t, time.Since(started), time.Second)
+	require.Equal(t, "cid", exec.containerID)
+	require.False(t, exec.closed)
+}
+
 func TestWithHostConfigOption(t *testing.T) {
 	optionCfg := tcontainer.HostConfig{AutoRemove: false, NetworkMode: "bridge"}
 	exec := &CodeExecutor{}
@@ -1446,6 +1503,102 @@ func TestCleanup_StopRemoveError(t *testing.T) {
 	}
 
 	exec.cleanup()
+}
+
+func TestClose_RetriesCleanupAfterRemoveFailure(t *testing.T) {
+	var removeCount int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/retry-id/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/retry-id"):
+			removeCount++
+			if removeCount == 1 {
+				http.Error(w, "transient remove failure", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:      cli,
+		containerID: "retry-id",
+		container:   &tcontainer.Summary{ID: "retry-id"},
+	}
+
+	err := exec.Close()
+	assert.Error(t, err)
+	assert.Equal(t, "retry-id", exec.containerID)
+	assert.NotNil(t, exec.container)
+	assert.False(t, exec.closed)
+
+	assert.NoError(t, exec.Close())
+	assert.Equal(t, 2, removeCount)
+	assert.Empty(t, exec.containerID)
+	assert.Nil(t, exec.container)
+	assert.True(t, exec.closed)
+}
+
+func TestClose_ClosesClientWhenStopFailsAfterRemove(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop"):
+			http.Error(w, "stop failed", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "cid"}, containerID: "cid"}
+	err := exec.CloseWithContext(context.Background())
+	require.ErrorContains(t, err, "stop container")
+	require.True(t, exec.closed)
+	require.Empty(t, exec.containerID)
+}
+
+func TestClose_TreatsNotFoundAsAlreadyCleaned(t *testing.T) {
+	var stopCount, removeCount int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/gone-id/stop"):
+			stopCount++
+			http.Error(w, "No such container", http.StatusNotFound)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/gone-id"):
+			removeCount++
+			http.Error(w, "No such container", http.StatusNotFound)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+
+	exec := &CodeExecutor{
+		client:      cli,
+		containerID: "gone-id",
+		container:   &tcontainer.Summary{ID: "gone-id"},
+	}
+
+	assert.NoError(t, exec.Close())
+	assert.Equal(t, 1, stopCount)
+	assert.Equal(t, 1, removeCount)
+	assert.Empty(t, exec.containerID)
+	assert.Nil(t, exec.container)
+	assert.True(t, exec.closed)
+	// A second close is idempotent and does not issue more Docker requests.
+	assert.NoError(t, exec.Close())
+	assert.Equal(t, 1, stopCount)
+	assert.Equal(t, 1, removeCount)
 }
 
 func TestInitContainerWithoutClient(t *testing.T) {

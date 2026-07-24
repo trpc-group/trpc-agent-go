@@ -150,7 +150,7 @@ func (s *runState) runChecks(ctx context.Context) error {
 	}
 	recorder := &decisionRecorder{store: s.reviewer.Store, taskID: s.taskID, tracker: s.tracker}
 	authorizer := governance.Authorizer{Policy: tool.PermissionPolicyFunc(governance.DefaultPolicy), Recorder: recorder}
-	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
+	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, RepositoryDigest: s.summary.RepositoryDigest, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
 	if err != nil {
 		return fmt.Errorf("create sandbox checker: %w", err)
 	}
@@ -224,16 +224,16 @@ func checkTimeout(total time.Duration) time.Duration {
 // DefaultCheckerFactory selects only validated CLI runtime capabilities.
 func DefaultCheckerFactory(authorizer governance.Authorizer, config CheckerConfig) (Checker, error) {
 	if config.DryRun || config.Runtime == "fake" {
-		return sandbox.Fake{Authorizer: authorizer, SkillRoot: config.SkillPath}, nil
+		return sandbox.Fake{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
 	}
 	if config.Runtime == "container" {
-		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath}, nil
+		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
 	}
 	if config.Runtime == "local" {
 		if !config.AllowLocal {
 			return nil, errors.New("local runtime requires explicit development fallback approval")
 		}
-		return sandbox.Local{Authorizer: authorizer, SkillRoot: config.SkillPath}, nil
+		return sandbox.Local{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
 	}
 	return nil, fmt.Errorf("runtime %q is not implemented", config.Runtime)
 }
@@ -447,8 +447,8 @@ type Checker interface {
 
 // CheckerConfig contains validated checker construction options.
 type CheckerConfig struct {
-	Runtime, SkillPath, BuildContext string
-	DryRun, AllowLocal               bool
+	Runtime, SkillPath, BuildContext, RepositoryDigest string
+	DryRun, AllowLocal                                 bool
 }
 
 // CheckerFactory constructs one governed sandbox checker.
@@ -497,15 +497,30 @@ func (r *Reviewer) Run(ctx context.Context, config input.Config) (Result, error)
 	tracker := Start(started)
 	state := &runState{reviewer: r, config: config, taskID: taskID, started: started, tracker: tracker}
 	if err := state.prepare(ctx); err != nil {
-		return Result{TaskID: taskID}, state.fail(ctx, err)
+		return Result{TaskID: taskID}, state.fail(ctx, errors.Join(err, state.cleanupSnapshot()))
 	}
 	state.findings = analysis.Findings(analysis.AnalyzeConfigured(state.summary.Files, state.summary.Sources, analysisRules(state.skill.Rules)))
 	state.summary.RawDiff = nil
 	state.summary.Sources = nil
 	if err := state.runChecks(ctx); err != nil {
+		return Result{TaskID: taskID}, state.fail(ctx, errors.Join(err, state.cleanupSnapshot()))
+	}
+	if err := state.cleanupSnapshot(); err != nil {
 		return Result{TaskID: taskID}, state.fail(ctx, err)
 	}
 	return state.complete(ctx)
+}
+
+func (s *runState) cleanupSnapshot() error {
+	if s.summary.Cleanup == nil {
+		return nil
+	}
+	cleanup := s.summary.Cleanup
+	s.summary.Cleanup = nil
+	if err := cleanup(); err != nil {
+		return fmt.Errorf("cleanup repository snapshot: %w", err)
+	}
+	return nil
 }
 func analysisRules(rules []Rule) []analysis.RuleConfig {
 	result := make([]analysis.RuleConfig, 0, len(rules))

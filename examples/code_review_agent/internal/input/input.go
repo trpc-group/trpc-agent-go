@@ -354,9 +354,12 @@ func gitEnvironment() []string {
 
 // Summary contains ephemeral raw input and persistable metadata.
 type Summary struct {
-	Kind     string
-	Digest   string
-	RepoRoot string
+	Kind             string
+	Digest           string
+	RepoRoot         string
+	RepositoryDigest string
+	// Cleanup releases the immutable repository snapshot, when present.
+	Cleanup  func() error
 	Files    []diffparse.ChangedFile
 	Packages []string
 	Sources  map[string][]byte
@@ -382,6 +385,25 @@ func (s Summary) Metadata() PersistableMetadata {
 
 // Load resolves the selected input and enforces aggregate limits.
 func Load(ctx context.Context, config Config) (Summary, error) {
+	var sourceRoot, sourceDigest string
+	if config.RepoPath != "" {
+		var err error
+		sourceRoot, err = secureRepoRoot(config.RepoPath)
+		if err != nil {
+			return Summary{}, err
+		}
+		sourceDigest, err = digestTree(sourceRoot, config.Limits.MaxFileBytes)
+		if err != nil {
+			return Summary{}, fmt.Errorf("digest repository before diff: %w", err)
+		}
+	} else if config.Fixture != "" {
+		sourceRoot = filepath.Join("fixtures", config.Fixture, "repo")
+		var err error
+		sourceDigest, err = digestTree(sourceRoot, config.Limits.MaxFileBytes)
+		if err != nil {
+			return Summary{}, fmt.Errorf("digest fixture before diff: %w", err)
+		}
+	}
 	kind, repoRoot, raw, err := loadRaw(ctx, config)
 	if err != nil {
 		return Summary{}, err
@@ -389,21 +411,45 @@ func Load(ctx context.Context, config Config) (Summary, error) {
 	if int64(len(raw)) > config.Limits.MaxDiffBytes {
 		return Summary{}, fmt.Errorf("diff exceeds %d bytes", config.Limits.MaxDiffBytes)
 	}
+	var cleanup func() error
+	var snapshotDigest string
+	if repoRoot != "" {
+		originalRoot := repoRoot
+		snapshot, digest, snapshotCleanup, snapshotErr := snapshotRepository(originalRoot, config.Limits)
+		if snapshotErr != nil {
+			return Summary{}, fmt.Errorf("snapshot repository: %w", snapshotErr)
+		}
+		if sourceDigest != "" {
+			afterDigest, digestErr := digestTree(originalRoot, config.Limits.MaxFileBytes)
+			if digestErr != nil || afterDigest != sourceDigest || afterDigest != digest {
+				return Summary{}, errors.Join(errors.New("repository changed while loading review input"), digestErr, snapshotCleanup())
+			}
+		}
+		repoRoot, cleanup = snapshot, snapshotCleanup
+		snapshotDigest = digest
+	}
 	files, err := diffparse.Parse(raw)
 	if err != nil {
-		return Summary{}, err
+		return Summary{}, cleanupLoadSnapshot(cleanup, err)
 	}
 	hunks, added := diffparse.Stats(files)
 	if len(files) > config.Limits.MaxFiles || hunks > config.Limits.MaxHunks || added > config.Limits.MaxAdded {
-		return Summary{}, errors.New("input exceeds file, hunk, or added-line limit")
+		return Summary{}, cleanupLoadSnapshot(cleanup, errors.New("input exceeds file, hunk, or added-line limit"))
 	}
 	sources, err := loadChangedSources(repoRoot, files, config.Limits)
 	if err != nil {
-		return Summary{}, err
+		return Summary{}, cleanupLoadSnapshot(cleanup, err)
 	}
 	digest := sha256.Sum256(raw)
 	packages := ResolvePackages(repoRoot, files)
-	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, Files: files, Packages: packages, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
+	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, RepositoryDigest: snapshotDigest, Cleanup: cleanup, Files: files, Packages: packages, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
+}
+
+func cleanupLoadSnapshot(cleanup func() error, cause error) error {
+	if cleanup == nil {
+		return cause
+	}
+	return errors.Join(cause, cleanup())
 }
 func loadChangedSources(root string, files []diffparse.ChangedFile, limits Limits) (map[string][]byte, error) {
 	if root == "" {

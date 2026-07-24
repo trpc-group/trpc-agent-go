@@ -13,17 +13,20 @@ package container
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/google/uuid"
 	archive "github.com/moby/go-archive"
@@ -38,6 +41,7 @@ const (
 	// Use root as default working dir to avoid Docker trying to
 	// mkdir a custom path (e.g., /workspace) on read-only roots.
 	defaultContainerWorkingDir = "/"
+	containerCleanupTimeout    = 30 * time.Second
 )
 
 // CodeExecutor executes code using a Docker container
@@ -49,13 +53,26 @@ type CodeExecutor struct {
 	hostConfig      container.HostConfig // Host configuration for the container
 	containerConfig container.Config     // Configuration for the container
 	containerName   string               // Name of the Docker container which is created. If empty, will autogenerate a name.
+	containerID     string               // ID of the container, including during initialization.
 	ws              *workspaceRuntime    // workspace runtime
 	// autoInputs controls mapping of inputs-host into workspace.
-	autoInputs bool
+	autoInputs  bool
+	lifecycleMu sync.Mutex
+	closeMu     sync.Mutex
+	closed      bool
 }
 
 // New creates a new CodeExecutor instance
 func New(opts ...Option) (*CodeExecutor, error) {
+	return NewWithContext(context.Background(), opts...)
+}
+
+// NewWithContext creates a new CodeExecutor instance using ctx for all Docker
+// initialization operations.
+func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	c := &CodeExecutor{
 		hostConfig: container.HostConfig{
 			AutoRemove:  true,   // Automatically remove container after it stops
@@ -104,7 +121,15 @@ func New(opts ...Option) (*CodeExecutor, error) {
 	}
 
 	// Initialize container
-	if err := c.initContainer(); err != nil {
+	if err := c.initContainerWithContext(ctx); err != nil {
+		// Initialization may have created a container before failing. Best effort
+		// cleanup ensures canceled/failed initialization does not leak resources.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+		_ = c.cleanupWithContext(cleanupCtx)
+		cancel()
+		if c.client != nil {
+			_ = c.client.Close()
+		}
 		return nil, fmt.Errorf("failed to initialize container: %w", err)
 	}
 
@@ -493,8 +518,10 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 
 // initContainer initializes the Docker container
 func (c *CodeExecutor) initContainer() error {
-	ctx := context.Background()
+	return c.initContainerWithContext(context.Background())
+}
 
+func (c *CodeExecutor) initContainerWithContext(ctx context.Context) error {
 	if c.client == nil {
 		return fmt.Errorf("docker client is not initialized")
 	}
@@ -516,6 +543,7 @@ func (c *CodeExecutor) initContainer() error {
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
+	c.containerID = resp.ID
 
 	// Start container
 	if err := c.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -592,32 +620,83 @@ func (c *CodeExecutor) waitForContainerReady(ctx context.Context, timeout time.D
 
 // cleanup stops and removes the container
 func (c *CodeExecutor) cleanup() {
-	if c.container == nil || c.client == nil {
-		return
+	_ = c.cleanupWithContext(context.Background())
+}
+
+func (c *CodeExecutor) cleanupWithContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-
-	ctx := context.Background()
-
-	// Stop container
-	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.client == nil {
+		return nil
+	}
+	id := c.containerID
+	if id == "" && c.container != nil {
+		id = c.container.ID
+	}
+	if id == "" {
+		return nil
+	}
+	var errs []error
+	if err := c.client.ContainerStop(ctx, id, container.StopOptions{}); err != nil && !errdefs.IsNotFound(err) {
 		log.DebugfContext(ctx, "Failed to stop container: %v", err)
+		errs = append(errs, fmt.Errorf("stop container: %w", err))
 	}
-
-	// Remove container
-	if err := c.client.ContainerRemove(ctx, c.container.ID, container.RemoveOptions{}); err != nil {
-		log.DebugfContext(ctx, "Failed to remove container: %v", err)
+	removeErr := c.client.ContainerRemove(ctx, id, container.RemoveOptions{})
+	if removeErr != nil && !errdefs.IsNotFound(removeErr) {
+		log.DebugfContext(ctx, "Failed to remove container: %v", removeErr)
+		errs = append(errs, fmt.Errorf("remove container: %w", removeErr))
 	}
-
-	log.DebugfContext(ctx, "Container %s stopped and removed", c.container.ID)
+	// Keep the resource identity until removal has succeeded.  This is
+	// important for transient Docker failures: callers can retry cleanup
+	// without losing the container ID.
+	if removeErr == nil || errdefs.IsNotFound(removeErr) {
+		c.containerID = ""
+		c.container = nil
+		log.DebugfContext(ctx, "Container %s stopped and removed", id)
+	}
+	return errors.Join(errs...)
 }
 
 // Close manually cleans up resources
 func (c *CodeExecutor) Close() error {
-	c.cleanup()
-	if c.client != nil {
-		return c.client.Close()
+	return c.CloseWithContext(context.Background())
+}
+
+// CloseWithContext manually cleans up resources using ctx for Docker cleanup.
+// It is safe to call multiple times.
+func (c *CodeExecutor) CloseWithContext(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return nil
+	// Serialize close attempts so a failed cleanup can be retried safely.
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	c.lifecycleMu.Lock()
+	if c.closed {
+		c.lifecycleMu.Unlock()
+		return nil
+	}
+	c.lifecycleMu.Unlock()
+	cleanupErr := c.cleanupWithContext(ctx)
+	c.lifecycleMu.Lock()
+	cleanupComplete := c.containerID == "" && c.container == nil
+	c.lifecycleMu.Unlock()
+	if cleanupErr != nil && !cleanupComplete {
+		return cleanupErr
+	}
+	var clientErr error
+	if c.client != nil {
+		clientErr = c.client.Close()
+	}
+	if clientErr == nil {
+		c.lifecycleMu.Lock()
+		c.closed = true
+		c.lifecycleMu.Unlock()
+	}
+	return errors.Join(cleanupErr, clientErr)
 }
 
 const defaultContainerNamePrefix = "trpc.go.agent-code-exec-"

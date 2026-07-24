@@ -138,6 +138,17 @@ func TestAuthorizerPersistsAskWithoutExecuting(t *testing.T) {
 	}
 }
 
+func TestRepositoryDigestBindsDecision(t *testing.T) {
+	first := validSpec(t)
+	second := first
+	second.RepositoryDigest = strings.Repeat("2", 64)
+	left := decision(first, decisionEvidence{stage: "permission", risk: "low", action: "allow"})
+	right := decision(second, decisionEvidence{stage: "permission", risk: "low", action: "allow"})
+	if left.ArgsDigest == right.ArgsDigest {
+		t.Fatal("repository digest change did not change authorization digest")
+	}
+}
+
 func TestDefaultPolicyRejectsMalformedAndUnknown(t *testing.T) {
 	for _, request := range []*tool.PermissionRequest{
 		nil,
@@ -171,6 +182,12 @@ func TestAuthorizerAllowsDeclaredLocalFallback(t *testing.T) {
 	if len(recorder.decisions) != 2 || recorder.decisions[0].Risk != "high" {
 		t.Fatalf("decisions = %#v", recorder.decisions)
 	}
+	spec.RepositoryDigest = "invalid"
+	if err := (Authorizer{Policy: tool.PermissionPolicyFunc(DefaultPolicy), Recorder: &memoryRecorder{}}).
+		Authorize(context.Background(), spec); err == nil {
+		t.Fatal("Authorize(local invalid repository digest) error = nil")
+	}
+	spec.RepositoryDigest = strings.Repeat("1", 64)
 	spec.Env["GOPROXY"] = "https://proxy.example"
 	if err := (Authorizer{Policy: tool.PermissionPolicyFunc(DefaultPolicy), Recorder: &memoryRecorder{}}).
 		Authorize(context.Background(), spec); err == nil {
@@ -189,7 +206,7 @@ func validSpec(t *testing.T) CheckSpec {
 	if err := os.WriteFile(runner, []byte("runner"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json", DependencyDigest: strings.Repeat("0", 64),
+	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json", RepositoryDigest: strings.Repeat("1", 64), DependencyDigest: strings.Repeat("0", 64),
 		RepoSource: root, Argv: []string{"go", "test", "-mod=readonly", "./..."}, Env: map[string]string{
 			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 			"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp",

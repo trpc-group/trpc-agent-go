@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	containerexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/container"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/governance"
+	reviewinput "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/input"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 )
 
@@ -82,11 +83,16 @@ type runnerResult struct {
 type Container struct {
 	Authorizer                           governance.Authorizer
 	BuildContext, SkillRoot, ModuleCache string
+	RepositoryDigest                     string
 	factory                              func(string) (containerExecutor, error)
 }
 type containerExecutor interface {
 	Engine() codeexecutor.Engine
 	Close() error
+}
+type contextAwareContainerExecutor interface {
+	containerExecutor
+	CloseWithContext(context.Context) error
 }
 type checkRequest struct {
 	checkID, artifact, workspaceID, repoPath string
@@ -116,7 +122,14 @@ func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout 
 	artifact := resultFilePrefix + token + ".json"
 	workspaceID := workspaceIDPrefix + token
 	runnerSource := filepath.Join(c.SkillRoot, filepath.FromSlash(runnerRelativePath))
-	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, DependencyDigest: proxy.Digest, DependencyModules: proxy.Modules, DependencyBytes: proxy.Bytes, DependencyEntries: proxy.Entries, DependencyExpandedBytes: proxy.ExpandedBytes}
+	repositoryDigest := c.RepositoryDigest
+	if repositoryDigest == "" {
+		repositoryDigest, err = reviewinput.DigestRepository(repoPath)
+		if err != nil {
+			return result, err
+		}
+	}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, DependencyDigest: proxy.Digest, DependencyModules: proxy.Modules, DependencyBytes: proxy.Bytes, DependencyEntries: proxy.Entries, DependencyExpandedBytes: proxy.ExpandedBytes}
 	executor, err := c.createExecutor(ctx, repoPath, workspaceID, proxy.Path)
 	if err != nil {
 		return result, err
@@ -124,7 +137,9 @@ func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout 
 	request := checkRequest{checkID: checkID, artifact: artifact, workspaceID: workspaceID, repoPath: repoPath, timeout: timeout, spec: spec}
 	result, runErr := executeContainer(ctx, executor, request, c.Authorizer)
 	result.ContainerName = workspaceID
-	closeErr := executor.Close()
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
+	defer cancel()
+	closeErr := closeContainerExecutor(cleanupCtx, executor)
 	if closeErr != nil {
 		result.Status = "failed"
 		result.Error = redact.String(closeErr.Error())
@@ -265,11 +280,18 @@ func (c Container) newExecutor(ctx context.Context, repoPath, containerName, pro
 	if err != nil {
 		return nil, fmt.Errorf("resolve staging source: %w", err)
 	}
-	executor, err := containerexec.New(containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: []string{repoPath + ":" + stagingSourcePath + ":ro", proxyPath + ":" + moduleProxyTarget + ":ro"}, CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
+	executor, err := containerexec.NewWithContext(ctx, containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: []string{repoPath + ":" + stagingSourcePath + ":ro", proxyPath + ":" + moduleProxyTarget + ":ro"}, CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
 	if err != nil {
 		return nil, err
 	}
 	return executor, nil
+}
+
+func closeContainerExecutor(ctx context.Context, executor containerExecutor) error {
+	if contextExecutor, ok := executor.(contextAwareContainerExecutor); ok {
+		return contextExecutor.CloseWithContext(ctx)
+	}
+	return executor.Close()
 }
 func (c Container) createExecutor(ctx context.Context, repoPath, containerName, proxyPath string) (containerExecutor, error) {
 	if c.factory != nil {
@@ -296,12 +318,13 @@ func randomToken() (string, error) {
 
 // Fake executes no project code while preserving governance and audit flow.
 type Fake struct {
-	Authorizer governance.Authorizer
-	SkillRoot  string
+	Authorizer       governance.Authorizer
+	SkillRoot        string
+	RepositoryDigest string
 }
 
 // Check authorizes and binds a deterministic fake result.
-func (f Fake) Check(ctx context.Context, checkID, _ string, timeout time.Duration) (result Run, resultErr error) {
+func (f Fake) Check(ctx context.Context, checkID, repoPath string, timeout time.Duration) (result Run, resultErr error) {
 	started := time.Now()
 	result = failedRun(checkID)
 	result.Runtime = "fake"
@@ -310,7 +333,14 @@ func (f Fake) Check(ctx context.Context, checkID, _ string, timeout time.Duratio
 		return result, err
 	}
 	artifact := resultFilePrefix + token + ".json"
-	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0"), DependencyDigest: emptyProxyDigest()}
+	repositoryDigest := f.RepositoryDigest
+	if repositoryDigest == "" && repoPath != "" {
+		repositoryDigest, err = reviewinput.DigestRepository(repoPath)
+		if err != nil {
+			return result, err
+		}
+	}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0"), DependencyDigest: emptyProxyDigest()}
 	if err := f.Authorizer.Authorize(ctx, spec); err != nil {
 		return result, err
 	}
@@ -332,9 +362,10 @@ const (
 // Local is an explicitly enabled development fallback. It declares host write
 // and network capability to governance; it is not a production sandbox.
 type Local struct {
-	Authorizer governance.Authorizer
-	SkillRoot  string
-	WorkRoot   string
+	Authorizer       governance.Authorizer
+	SkillRoot        string
+	WorkRoot         string
+	RepositoryDigest string
 }
 
 // Check runs on the host and is only an explicitly approved development fallback.
@@ -361,7 +392,16 @@ func (l Local) Check(ctx context.Context, checkID, repoPath string, timeout time
 	if err != nil {
 		return result, err
 	}
-	spec := governance.CheckSpec{ID: checkID, Runtime: "local", Network: true, HostWrite: true, RunnerPath: filepath.Join(l.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: l.SkillRoot, Cwd: "repo", Artifact: resultFilePrefix + token + ".json", RepoSource: repoPath, Argv: fixedArgv(checkID), Timeout: timeout, Env: localEnvironment(workRoot, repoPath)}
+	repositoryDigest := l.RepositoryDigest
+	currentDigest, err := reviewinput.DigestRepository(repoPath)
+	if err != nil {
+		return result, err
+	}
+	if repositoryDigest != "" && currentDigest != repositoryDigest {
+		return result, errors.New("local repository differs from authorized snapshot")
+	}
+	repositoryDigest = currentDigest
+	spec := governance.CheckSpec{ID: checkID, Runtime: "local", Network: true, HostWrite: true, RunnerPath: filepath.Join(l.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: l.SkillRoot, Cwd: "repo", Artifact: resultFilePrefix + token + ".json", RepoSource: repoPath, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, Env: localEnvironment(workRoot, repoPath)}
 	if err := l.Authorizer.Authorize(ctx, spec); err != nil {
 		return result, err
 	}

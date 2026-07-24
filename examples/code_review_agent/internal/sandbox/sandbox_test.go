@@ -32,6 +32,7 @@ import (
 	"golang.org/x/mod/sumdb/dirhash"
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/governance"
+	reviewinput "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/input"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -293,6 +294,26 @@ func TestLocalCheckRunsFixedOfflineCommand(t *testing.T) {
 	}
 	if recorder.values[0].Risk != "high" {
 		t.Fatalf("risk = %q", recorder.values[0].Risk)
+	}
+}
+
+func TestLocalCheckRejectsChangedSnapshot(t *testing.T) {
+	repo := t.TempDir()
+	path := filepath.Join(repo, "main.go")
+	if err := os.WriteFile(path, []byte("package review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := reviewinput.DigestRepository(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runner := Local{RepositoryDigest: digest, WorkRoot: t.TempDir()}
+	if _, err := runner.Check(context.Background(), "go-test", repo, time.Second); err == nil ||
+		!strings.Contains(err.Error(), "differs from authorized snapshot") {
+		t.Fatalf("Local.Check() error = %v", err)
 	}
 }
 

@@ -116,6 +116,48 @@ func TestSandboxFailuresCompleteWithWarningsAndAreClassified(t *testing.T) {
 	}
 }
 
+func TestReviewerChecksImmutableSnapshotAfterSourceMutation(t *testing.T) {
+	root := enterExampleRoot(t)
+	source := t.TempDir()
+	mainPath := filepath.Join(source, "main.go")
+	original := "package review\n\nfunc Value() int { return 1 }\n"
+	if err := os.WriteFile(mainPath, []byte(original), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module example.com/review\n\ngo 1.21\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	filesFile := filepath.Join(t.TempDir(), "files.txt")
+	if err := os.WriteFile(filesFile, []byte("main.go\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config, err := input.ParseConfig([]string{"--repo-path", source, "--files-file", filesFile,
+		"--runtime", "fake", "--skills-root", "skills", "--output-dir", t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checker := &mutationSnapshotChecker{sourcePath: mainPath, want: original}
+	factory := func(authorizer governance.Authorizer, checkerConfig CheckerConfig) (Checker, error) {
+		checker.authorizer, checker.skillRoot = authorizer, checkerConfig.SkillPath
+		checker.configDigest = checkerConfig.RepositoryDigest
+		return checker, nil
+	}
+	result, err := testReviewer(openAppStore(t), root, t.TempDir(), factory).Run(context.Background(), config)
+	if err != nil {
+		t.Fatalf("Reviewer.Run() error = %v", err)
+	}
+	if result.Review.Task.Status != storemodel.StatusCompleted || len(result.Review.Runs) != 2 ||
+		len(result.Review.Decisions) != 4 || checker.snapshotDigest == "" {
+		t.Fatalf("review=%#v digest=%q", result.Review, checker.snapshotDigest)
+	}
+	for _, decision := range result.Review.Decisions {
+		if decision.ArgsDigest == "" {
+			t.Fatalf("decision is not bound to snapshot: %#v", decision)
+		}
+	}
+	removeWritten(t, result)
+}
+
 func TestReviewerFinalizeFailureCompensatesAndFailsTask(t *testing.T) {
 	root := enterExampleRoot(t)
 	database := openAppStore(t)
@@ -177,6 +219,20 @@ func TestDefaultCheckerFactoryRejectsImplicitLocal(t *testing.T) {
 	}
 }
 
+func TestRunStateCleanupSnapshotReturnsErrorOnce(t *testing.T) {
+	calls := 0
+	state := &runState{summary: input.Summary{Cleanup: func() error {
+		calls++
+		return errors.New("injected cleanup failure")
+	}}}
+	if err := state.cleanupSnapshot(); err == nil || !strings.Contains(err.Error(), "cleanup repository snapshot") {
+		t.Fatalf("cleanupSnapshot() error = %v", err)
+	}
+	if err := state.cleanupSnapshot(); err != nil || calls != 1 {
+		t.Fatalf("second cleanup error=%v calls=%d", err, calls)
+	}
+}
+
 type failingChecker struct{}
 
 func (failingChecker) Check(_ context.Context, checkID, _ string, _ time.Duration) (sandbox.Run, error) {
@@ -206,6 +262,60 @@ func (c cancelingChecker) Check(_ context.Context, checkID, _ string, _ time.Dur
 	c.cancel()
 	return sandbox.Run{CheckID: checkID, Runtime: "fake", Status: "failed", ExitCode: -1},
 		context.Canceled
+}
+
+type mutationSnapshotChecker struct {
+	sourcePath     string
+	want           string
+	snapshotDigest string
+	configDigest   string
+	skillRoot      string
+	authorizer     governance.Authorizer
+}
+
+func (c *mutationSnapshotChecker) Check(ctx context.Context, checkID, repoPath string, timeout time.Duration) (sandbox.Run, error) {
+	digest, err := input.DigestRepository(repoPath)
+	if err != nil {
+		return sandbox.Run{}, err
+	}
+	if digest != c.configDigest {
+		return sandbox.Run{}, errors.New("checker config repository digest mismatch")
+	}
+	argv := []string{"go", "test", "-mod=readonly", "./..."}
+	if checkID == "go-vet" {
+		argv = []string{"go", "vet", "-mod=readonly", "./..."}
+	}
+	workspace := "/tmp/run/ws_cr-0123456789abcdef_0"
+	spec := governance.CheckSpec{
+		ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(c.skillRoot, "scripts", "checkrunner", "main.go"),
+		SkillRoot: c.skillRoot, Cwd: "repo", Artifact: "result-0123456789abcdef.json",
+		RepositoryDigest: digest, DependencyDigest: strings.Repeat("0", 64), Argv: argv, Timeout: timeout,
+		Env: map[string]string{
+			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
+			"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache",
+			"TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy",
+			"GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
+			"CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work",
+		},
+	}
+	if err := c.authorizer.Authorize(ctx, spec); err != nil {
+		return sandbox.Run{}, err
+	}
+	if err := os.WriteFile(c.sourcePath, []byte("package review\n\nfunc Value() int { return 2 }\n"), 0o644); err != nil {
+		return sandbox.Run{}, err
+	}
+	data, err := os.ReadFile(filepath.Join(repoPath, "main.go"))
+	if err != nil {
+		return sandbox.Run{}, err
+	}
+	if string(data) != c.want {
+		return sandbox.Run{}, errors.New("staged repository changed after source mutation")
+	}
+	c.snapshotDigest, err = input.DigestRepository(repoPath)
+	if err != nil {
+		return sandbox.Run{}, err
+	}
+	return sandbox.Run{CheckID: checkID, Runtime: "fake", Status: "completed", ExitCode: 0}, nil
 }
 
 type finalizeFailStore struct{ storemodel.Store }

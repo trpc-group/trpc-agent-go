@@ -354,3 +354,108 @@ func TestInputErrorAndBoundaryBranches(t *testing.T) {
 	_, err = Load(context.Background(), Config{DiffFile: patchPath, Limits: limits})
 	requireError(t, "input file-count limit", err)
 }
+
+func TestLoadUsesImmutableRepositorySnapshot(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, digest, cleanup, err := snapshotRepository(root, Limits{MaxFileBytes: 1 << 20, MaxFiles: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assertSnapshotCleanup(t, snapshot, cleanup)
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package changed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(snapshot, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "package main\n" || digest == "" {
+		t.Fatalf("snapshot content=%q digest=%q", got, digest)
+	}
+	if err := os.WriteFile(filepath.Join(snapshot, "main.go"), []byte("package mutated\n"), 0o600); err == nil {
+		t.Fatal("snapshot file remained writable")
+	}
+}
+
+func TestSnapshotAllowsInternalFileSymlink(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target.go")
+	if err := os.WriteFile(target, []byte("package linked\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("target.go", filepath.Join(root, "linked.go")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	snapshot, _, cleanup, err := snapshotRepository(root, Limits{MaxFileBytes: 1 << 20, MaxFiles: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assertSnapshotCleanup(t, snapshot, cleanup)
+	data, err := os.ReadFile(filepath.Join(snapshot, "linked.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "package linked\n" {
+		t.Fatalf("linked snapshot content = %q", data)
+	}
+}
+
+func TestSnapshotAndDigestExcludeOnlyGitMetadata(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte("package review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	metadata := filepath.Join(root, ".git-hooks")
+	if err := os.Mkdir(metadata, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadata, "hook"), []byte("ignored"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceDigest, err := DigestRepository(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, snapshotDigest, cleanup, err := snapshotRepository(root, Limits{MaxFileBytes: 1 << 20, MaxFiles: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assertSnapshotCleanup(t, snapshot, cleanup)
+	if sourceDigest != snapshotDigest {
+		t.Fatalf("source digest %q != snapshot digest %q", sourceDigest, snapshotDigest)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, ".git-hooks", "hook")); err != nil {
+		t.Fatalf("snapshot tracked .git-* directory: %v", err)
+	}
+}
+
+func TestSnapshotFileLimitIsIndependentFromDiffLimit(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("package review\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, _, cleanup, err := snapshotRepository(root, Limits{MaxFileBytes: 1 << 20, MaxFiles: 1})
+	if err != nil {
+		t.Fatalf("snapshotRepository() error = %v", err)
+	}
+	defer assertSnapshotCleanup(t, snapshot, cleanup)
+}
+
+func assertSnapshotCleanup(t *testing.T, snapshot string, cleanup func() error) {
+	t.Helper()
+	if err := cleanup(); err != nil {
+		t.Errorf("snapshot cleanup error = %v", err)
+		return
+	}
+	if _, err := os.Stat(snapshot); !os.IsNotExist(err) {
+		t.Errorf("snapshot remains after cleanup: %v", err)
+	}
+}

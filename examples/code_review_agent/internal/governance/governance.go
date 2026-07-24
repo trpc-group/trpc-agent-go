@@ -49,7 +49,7 @@ var localEnvKeys = []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOTMPDIR",
 // CheckSpec is the complete immutable input to safety and permission checks.
 type CheckSpec struct {
 	ID, Runtime, RunnerPath, SkillRoot, Cwd, Artifact string
-	RepoSource, DependencyDigest                      string
+	RepoSource, RepositoryDigest, DependencyDigest    string
 	Argv                                              []string
 	Env                                               map[string]string
 	Timeout                                           time.Duration
@@ -91,6 +91,7 @@ func (a Authorizer) Authorize(ctx context.Context, spec CheckSpec) error {
 		return a.recordDenied(ctx, spec, decisionEvidence{"permission", risk, "deny", "nil permission policy"})
 	}
 	arguments, err := json.Marshal(map[string]any{"check_id": spec.ID, "runtime": spec.Runtime, "argv": spec.Argv,
+		"repository_digest": spec.RepositoryDigest,
 		"dependency_digest": spec.DependencyDigest, "dependency_modules": spec.DependencyModules, "dependency_bytes": spec.DependencyBytes,
 		"dependency_entries": spec.DependencyEntries, "dependency_expanded_bytes": spec.DependencyExpandedBytes})
 	if err != nil {
@@ -186,6 +187,9 @@ func validateCheckBounds(spec CheckSpec) (string, error) {
 
 func validateRuntimeEnvironment(spec CheckSpec) error {
 	if spec.Runtime == "local" {
+		if spec.RepositoryDigest != "" && !dependencyDigestPattern.MatchString(spec.RepositoryDigest) {
+			return errors.New("repository snapshot digest is outside trusted bounds")
+		}
 		return validateLocalEnvironment(spec.Env, spec.RepoSource)
 	}
 	if !dependencyDigestPattern.MatchString(spec.DependencyDigest) || spec.DependencyModules < 0 ||
@@ -193,6 +197,12 @@ func validateRuntimeEnvironment(spec CheckSpec) error {
 		spec.DependencyEntries < 0 || spec.DependencyEntries > 100_000 ||
 		spec.DependencyExpandedBytes < 0 || spec.DependencyExpandedBytes > 256<<20 {
 		return errors.New("dependency snapshot metadata is outside trusted bounds")
+	}
+	if spec.Runtime == "container" && !dependencyDigestPattern.MatchString(spec.RepositoryDigest) {
+		return errors.New("repository snapshot digest is outside trusted bounds")
+	}
+	if spec.RepositoryDigest != "" && !dependencyDigestPattern.MatchString(spec.RepositoryDigest) {
+		return errors.New("repository snapshot digest is outside trusted bounds")
 	}
 	return validateEnvironment(spec.Env)
 }
@@ -283,7 +293,7 @@ func decision(spec CheckSpec, evidence decisionEvidence) Decision {
 
 func digestFields(spec CheckSpec) []string {
 	fields := []string{spec.ID, spec.Runtime, spec.RunnerPath, spec.SkillRoot, spec.Cwd, spec.Artifact,
-		spec.RepoSource, spec.DependencyDigest, fmt.Sprint(spec.DependencyModules), fmt.Sprint(spec.DependencyBytes),
+		spec.RepoSource, spec.RepositoryDigest, spec.DependencyDigest, fmt.Sprint(spec.DependencyModules), fmt.Sprint(spec.DependencyBytes),
 		fmt.Sprint(spec.DependencyEntries), fmt.Sprint(spec.DependencyExpandedBytes), spec.Timeout.String(),
 		fmt.Sprint(spec.Network), fmt.Sprint(spec.Privileged), fmt.Sprint(spec.HostWrite)}
 	fields = append(fields, spec.Argv...)

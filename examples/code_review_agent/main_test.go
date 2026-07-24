@@ -99,11 +99,28 @@ func TestRunPublicFixturesFakeReports(t *testing.T) {
 	for _, scenario := range manifest.Scenarios {
 		t.Run(scenario.ID, func(t *testing.T) {
 			outputDir := t.TempDir()
+			databasePath := filepath.Join(t.TempDir(), "review.db")
 			args := []string{"--diff-file", filepath.Join(root, "fixtures", "diffs", scenario.Fixture+".diff"),
-				"--runtime", "fake", "--rule-only",
-				"--skills-root", filepath.Join(root, "skills"),
-				"--db", filepath.Join(t.TempDir(), "review.db"), "--output-dir", outputDir}
-			if err := run(context.Background(), args); err != nil {
+				"--runtime", "fake", "--rule-only", "--skills-root", filepath.Join(root, "skills"),
+				"--db", databasePath, "--output-dir", outputDir}
+			var cliOutput bytes.Buffer
+			if scenario.Fixture == "sandbox_failure" {
+				args = []string{"--fixture", "sandbox_failure", "--runtime", "local", "--allow-local", "--fake-model",
+					"--skills-root", filepath.Join(root, "skills"), "--db", databasePath,
+					"--output-dir", outputDir}
+				if err := runWithOutput(context.Background(), args, &cliOutput); err != nil {
+					t.Fatalf("run(%q) error = %v", scenario.Fixture, err)
+				}
+				review := loadCLIReview(t, databasePath, cliOutput.Bytes())
+				if review.Task.Status != storemodel.StatusCompletedWithWarnings || len(review.Runs) != 2 {
+					t.Fatalf("sandbox failure review = %#v", review)
+				}
+				for _, run := range review.Runs {
+					if run.Status != "failed" || run.ErrorType != "sandbox_failed" || run.Error == "" {
+						t.Fatalf("sandbox failure run = %#v", run)
+					}
+				}
+			} else if err := run(context.Background(), args); err != nil {
 				t.Fatalf("run(%q) error = %v", scenario.Fixture, err)
 			}
 			for _, name := range []string{"review_report.json", "review_report.md"} {
