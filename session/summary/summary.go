@@ -30,6 +30,8 @@ type SessionSummarizer interface {
 	// SetPrompt updates the summarizer's prompt dynamically.
 	// The prompt must include the placeholder {conversation_text}, which will
 	// be replaced with the extracted conversation when generating the summary.
+	// It may include {previous_summary} to position the previous rolling summary
+	// separately from newly uncovered conversation text.
 	// If maxSummaryWords > 0, either the prompt or the configured system prompt
 	// must include {max_summary_words}. If an empty prompt is provided, it will
 	// be ignored and the current prompt will remain unchanged.

@@ -12,10 +12,14 @@ package arxivsearch
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
+	"unicode/utf8"
 
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader/pdf"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -34,32 +38,45 @@ var (
 	maxResults = 5
 )
 
+const (
+	defaultArticleContentRunes = 20000
+	maxArticleContentRunes     = 200000
+	errEmptySearch             = "query, id list, submitted_date_from, or submitted_date_to is required"
+)
+
 // content define an article content download from pdf
 type content struct {
-	Page int    `json:"page"`
-	Text string `json:"text"`
+	Page      int    `json:"page"`
+	Text      string `json:"text"`
+	Truncated bool   `json:"truncated,omitempty"`
 }
 
 // article define an article
 type article struct {
-	Title           string    `json:"title"`
-	ID              string    `json:"id"`
-	EntryID         string    `json:"entry_id"`
-	Authors         []string  `json:"authors"`
-	PrimaryCategory string    `json:"primary_category"`
-	Categories      []string  `json:"categories"`
-	Published       string    `json:"published"`
-	PdfURL          string    `json:"pdf_url"`
-	Links           []string  `json:"links"`
-	Summary         string    `json:"summary"`
-	Comment         string    `json:"comment"`
-	Content         []content `json:"content"`
+	Title                string    `json:"title"`
+	ID                   string    `json:"id"`
+	EntryID              string    `json:"entry_id"`
+	Authors              []string  `json:"authors"`
+	PrimaryCategory      string    `json:"primary_category"`
+	Categories           []string  `json:"categories"`
+	Published            string    `json:"published"`
+	PdfURL               string    `json:"pdf_url"`
+	Links                []string  `json:"links"`
+	Summary              string    `json:"summary"`
+	Comment              string    `json:"comment"`
+	Content              []content `json:"content"`
+	ContentRunes         int       `json:"content_runes,omitempty"`
+	ReturnedContentRunes int       `json:"returned_content_runes,omitempty"`
+	ContentTruncated     bool      `json:"content_truncated,omitempty"`
 }
 
 // searchRequest define an arxiv search request
 type searchRequest struct {
 	Search          arxiv.Search `json:"search" jsonschema:"description=Search query"`
 	ReadArxivPapers bool         `json:"read_arxiv_papers" jsonschema:"description=Whether to read the content from PDF"`
+	// MaxContentRunes limits PDF text returned per article.
+	// It defaults to 20000 and is capped at 200000.
+	MaxContentRunes int `json:"max_content_runes,omitempty" jsonschema:"description=Maximum PDF text runes returned per article when read_arxiv_papers is true. Non-positive values use the 20000 default; values above 200000 are capped. Set read_arxiv_papers to false to omit PDF content."`
 }
 
 // Option define an option for arxiv tool
@@ -165,15 +182,19 @@ func NewToolSet(opts ...Option) (*ToolSet, error) {
 			"the fields of physics, mathematics, computer science, quantitative biology, quantitative finance, statistics, "+
 			"electrical engineering and systems science, and economics. "+
 			"Returns a list of articles, containing title, authors, primary category, categories, published date, PDF URL, "+
-			"links, summary, comment, and content (if read_arxiv_papers is true)."),
+			"links, summary, comment, and capped PDF content with truncation metadata (if read_arxiv_papers is true). "+
+			"Use max_content_runes to adjust the per-article PDF content cap."),
 	))
 	t.tools = tools
 	return t, nil
 }
 
-func (t *ToolSet) search(ctx context.Context, req searchRequest) ([]article, error) {
-	if len(req.Search.Query) == 0 && len(req.Search.IDList) == 0 {
-		return nil, fmt.Errorf("query or id list is empty")
+func (t *ToolSet) search(
+	ctx context.Context,
+	req searchRequest,
+) ([]article, error) {
+	if isEmptySearch(req.Search) {
+		return nil, errors.New(errEmptySearch)
 	}
 	if req.Search.MaxResults == nil {
 		req.Search.MaxResults = &maxResults
@@ -184,6 +205,7 @@ func (t *ToolSet) search(ctx context.Context, req searchRequest) ([]article, err
 	}
 	articles := make([]article, 0, len(results))
 	var pdfReader reader.Reader
+	maxContentRunes := normalizedMaxContentRunes(req.MaxContentRunes)
 	if req.ReadArxivPapers {
 		pdfReader = pdf.New()
 	}
@@ -213,14 +235,89 @@ func (t *ToolSet) search(ctx context.Context, req searchRequest) ([]article, err
 			if err != nil {
 				return nil, fmt.Errorf("failed to read PDF from URL: %w", err)
 			}
-			for pageNum, doc := range documents {
-				arti.Content = append(arti.Content, content{
-					Page: pageNum + 1,
-					Text: doc.Content,
-				})
-			}
+			appendArticleContent(&arti, documents, maxContentRunes)
 		}
 		articles = append(articles, arti)
 	}
 	return articles, nil
+}
+
+func isEmptySearch(search arxiv.Search) bool {
+	return strings.TrimSpace(search.Query) == "" &&
+		!hasNonEmptyString(search.IDList) &&
+		strings.TrimSpace(search.SubmittedDateFrom) == "" &&
+		strings.TrimSpace(search.SubmittedDateTo) == ""
+}
+
+func hasNonEmptyString(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizedMaxContentRunes(maxRunes int) int {
+	if maxRunes <= 0 {
+		return defaultArticleContentRunes
+	}
+	if maxRunes > maxArticleContentRunes {
+		return maxArticleContentRunes
+	}
+	return maxRunes
+}
+
+func appendArticleContent(
+	arti *article,
+	documents []*document.Document,
+	maxRunes int,
+) {
+	if arti == nil {
+		return
+	}
+	remaining := maxRunes
+	for pageNum, doc := range documents {
+		if doc == nil {
+			continue
+		}
+		text := doc.Content
+		contentRunes := utf8.RuneCountInString(text)
+		arti.ContentRunes += contentRunes
+		page := content{
+			Page: pageNum + 1,
+			Text: text,
+		}
+		if remaining <= 0 {
+			if contentRunes > 0 {
+				arti.ContentTruncated = true
+			}
+			continue
+		}
+		if contentRunes > remaining {
+			page.Text = truncateRunes(text, remaining)
+			page.Truncated = true
+			arti.ContentTruncated = true
+		}
+		returnedRunes := utf8.RuneCountInString(page.Text)
+		arti.ReturnedContentRunes += returnedRunes
+		remaining -= returnedRunes
+		arti.Content = append(arti.Content, page)
+	}
+}
+
+func truncateRunes(text string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(text) <= maxRunes {
+		return text
+	}
+	for idx := range text {
+		if maxRunes == 0 {
+			return text[:idx]
+		}
+		maxRunes--
+	}
+	return text
 }

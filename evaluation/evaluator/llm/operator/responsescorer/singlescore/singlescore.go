@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer/internal/responsejson"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -51,6 +52,7 @@ func (s *singleScoreResponseScorer) ScoreBasedOnResponse(ctx context.Context, re
 	}
 	return &evaluator.ScoreResult{
 		Score:  *payload.Score,
+		Value:  &score.Value{Kind: score.KindNumeric, Numeric: payload.Score},
 		Reason: *payload.Reason,
 	}, nil
 }

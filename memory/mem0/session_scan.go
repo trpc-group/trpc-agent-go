@@ -10,12 +10,24 @@
 package mem0
 
 import (
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+const ingestSessionLockCount = 64
+
+type ingestSessionLocks struct {
+	locks [ingestSessionLockCount]sync.Mutex
+}
+
+func (l *ingestSessionLocks) lockFor(sess *session.Session) *sync.Mutex {
+	key := sess.AppName + "\x00" + sess.UserID + "\x00" + sess.ID
+	return &l.locks[session.HashString(key)%len(l.locks)]
+}
 
 func readLastExtractAt(sess *session.Session) time.Time {
 	if sess == nil {
@@ -74,4 +86,13 @@ func scanDeltaSince(sess *session.Session, since time.Time) (time.Time, []model.
 		}
 	}
 	return latestTs, messages
+}
+
+func hasIngestibleMessages(messages []model.Message) bool {
+	for _, msg := range messages {
+		if messageText(msg) != "" {
+			return true
+		}
+	}
+	return false
 }

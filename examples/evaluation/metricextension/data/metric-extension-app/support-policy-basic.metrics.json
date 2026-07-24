@@ -1,0 +1,9 @@
+[
+  {
+    "metricName": "support_response_policy",
+    "threshold": 1,
+    "extension": {
+      "requiredPhrase": "support"
+    }
+  }
+]

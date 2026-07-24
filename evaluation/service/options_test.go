@@ -52,12 +52,19 @@ func (stubConversation) Close() error {
 	return nil
 }
 
+type stubEvalCaseResultAggregator struct{}
+
+func (stubEvalCaseResultAggregator) Aggregate(context.Context, *EvalCaseResultAggregationInput) (*EvalCaseResultAggregationResult, error) {
+	return &EvalCaseResultAggregationResult{}, nil
+}
+
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := NewOptions()
 	assert.NotNil(t, opts.EvalSetManager)
 	assert.NotNil(t, opts.EvalResultManager)
 	assert.NotNil(t, opts.Registry)
 	assert.NotNil(t, opts.MetricRegistry)
+	assert.NotNil(t, opts.EvalCaseResultAggregator)
 	assert.NotNil(t, opts.SessionIDSupplier)
 	assert.Nil(t, opts.ExpectedRunner)
 	assert.Nil(t, opts.UserSimulator)
@@ -91,6 +98,12 @@ func TestWithMetricRegistry(t *testing.T) {
 	custom := metricregistry.New()
 	opts := NewOptions(WithMetricRegistry(custom))
 	assert.Equal(t, custom, opts.MetricRegistry)
+}
+
+func TestWithEvalCaseResultAggregator(t *testing.T) {
+	custom := stubEvalCaseResultAggregator{}
+	opts := NewOptions(WithEvalCaseResultAggregator(custom))
+	assert.Equal(t, custom, opts.EvalCaseResultAggregator)
 }
 
 func TestWithSessionIDSupplier(t *testing.T) {

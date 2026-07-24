@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -27,11 +28,19 @@ func TestScoreBasedOnResponse(t *testing.T) {
 is_the_agent_response_valid: VALID`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1.0, score.Score)
+	require.NotNil(t, score.Value)
+	assert.Equal(t, scorepkg.KindNumeric, score.Value.Kind)
+	require.NotNil(t, score.Value.Numeric)
+	assert.Equal(t, 1.0, *score.Value.Numeric)
 
 	score, err = scorer.ScoreBasedOnResponse(ctx, makeResponse(`reasoning: bad
 is_the_agent_response_valid: invalid`), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0.0, score.Score)
+	require.NotNil(t, score.Value)
+	assert.Equal(t, scorepkg.KindNumeric, score.Value.Kind)
+	require.NotNil(t, score.Value.Numeric)
+	assert.Equal(t, 0.0, *score.Value.Numeric)
 
 	_, err = scorer.ScoreBasedOnResponse(ctx, &model.Response{}, nil)
 	require.Error(t, err)

@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -52,6 +53,10 @@ func TestScoreBasedOnResponseUsesLogprobs(t *testing.T) {
 	}, nil)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.75, result.Score, 1e-9)
+	require.NotNil(t, result.Value)
+	assert.Equal(t, score.KindNumeric, result.Value.Kind)
+	require.NotNil(t, result.Value.Numeric)
+	assert.InDelta(t, result.Score, *result.Value.Numeric, 1e-9)
 	assert.Contains(t, result.Reason, "score_A")
 }
 

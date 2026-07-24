@@ -26,6 +26,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
+	gopkg.in/yaml.v3 v3.0.1
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5
 	trpc.group/trpc-go/trpc-agent-go v0.8.0
 	trpc.group/trpc-go/trpc-agent-go/codeexecutor/container v1.1.2-0.20260108033914-7a20241f1ad5
@@ -110,6 +111,7 @@ require (
 	github.com/wk8/go-ordered-map/v2 v2.1.8 // indirect
 	github.com/woodsbury/decimal128 v1.3.0 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
+	github.com/yuin/goldmark v1.7.13 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.63.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.38.0 // indirect
@@ -132,7 +134,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/anthropic v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/gemini v1.1.2-0.20260108033914-7a20241f1ad5 // indirect
 	trpc.group/trpc-go/trpc-agent-go/model/ollama v1.1.2-0.20260108033914-7a20241f1ad5 // indirect

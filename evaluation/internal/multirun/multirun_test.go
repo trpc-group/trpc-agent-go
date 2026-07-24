@@ -201,7 +201,7 @@ func TestSummarizeMultiRunCaseRunErrorTurnsNotEvaluatedIntoFailed(t *testing.T) 
 				EvalSetID:       "set",
 				EvalID:          "A",
 				RunID:           1,
-				FinalEvalStatus: status.EvalStatusFailed,
+				FinalEvalStatus: status.EvalStatusNotEvaluated,
 				ErrorMessage:    "boom",
 			},
 		},
@@ -215,6 +215,7 @@ func TestSummarizeMultiRunCaseRunErrorTurnsNotEvaluatedIntoFailed(t *testing.T) 
 		return
 	}
 
+	assert.Equal(t, status.EvalStatusFailed, result.Summary.OverallStatus)
 	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
 	if len(result.Summary.EvalCaseSummaries) == 0 {
 		return
@@ -229,6 +230,157 @@ func TestSummarizeMultiRunCaseRunErrorTurnsNotEvaluatedIntoFailed(t *testing.T) 
 	assert.Equal(t, "A", caseSummary.EvalID)
 	assert.Equal(t, status.EvalStatusFailed, caseSummary.OverallStatus)
 	assert.Nil(t, caseSummary.MetricSummaries)
+}
+
+func TestSummarizeMultiRunMultipleRunsFailedWhenRunErrorHasNoMetrics(t *testing.T) {
+	result := &evalresult.EvalSetResult{
+		EvalSetID: "set",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           1,
+				FinalEvalStatus: status.EvalStatusNotEvaluated,
+				ErrorMessage:    "boom",
+			},
+		},
+	}
+
+	err := SummarizeMultiRun(result, 2)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, result.Summary)
+	if result.Summary == nil {
+		return
+	}
+
+	assert.Equal(t, status.EvalStatusFailed, result.Summary.OverallStatus)
+	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
+	if len(result.Summary.EvalCaseSummaries) == 0 {
+		return
+	}
+
+	caseSummary := result.Summary.EvalCaseSummaries[0]
+	assert.Equal(t, status.EvalStatusFailed, caseSummary.OverallStatus)
+	assert.Nil(t, caseSummary.MetricSummaries)
+}
+
+func TestSummarizeMultiRunUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {
+	result := &evalresult.EvalSetResult{
+		EvalSetID: "set",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           1,
+				Score:           0.8,
+				FinalEvalStatus: status.EvalStatusPassed,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "important", Score: 1, EvalStatus: status.EvalStatusPassed, Threshold: 1},
+					{MetricName: "minor", Score: 0, EvalStatus: status.EvalStatusFailed, Threshold: 1},
+				},
+			},
+		},
+	}
+
+	err := SummarizeMultiRun(result, 1)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, result.Summary)
+	if result.Summary == nil {
+		return
+	}
+
+	assert.Equal(t, status.EvalStatusPassed, result.Summary.OverallStatus)
+	assert.NotNil(t, result.Summary.RunStatusCounts)
+	if result.Summary.RunStatusCounts != nil {
+		assert.Equal(t, 1, result.Summary.RunStatusCounts.Passed)
+	}
+	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
+	if len(result.Summary.EvalCaseSummaries) == 0 {
+		return
+	}
+
+	caseSummary := result.Summary.EvalCaseSummaries[0]
+	assert.Equal(t, status.EvalStatusPassed, caseSummary.OverallStatus)
+	assert.NotNil(t, caseSummary.RunStatusCounts)
+	if caseSummary.RunStatusCounts != nil {
+		assert.Equal(t, 1, caseSummary.RunStatusCounts.Passed)
+	}
+	assert.Len(t, caseSummary.MetricSummaries, 2)
+}
+
+func TestSummarizeCaseSummaryStatusRejectsInvalidMetricSummaryStatus(t *testing.T) {
+	overallStatus, err := summarizeCaseSummaryStatus(
+		[]*evalresult.EvalMetricSummary{{EvalStatus: status.EvalStatusUnknown}},
+		[]status.EvalStatus{status.EvalStatusPassed, status.EvalStatusPassed},
+		false,
+		2,
+	)
+	assert.Error(t, err)
+	assert.Equal(t, status.EvalStatusFailed, overallStatus)
+}
+
+func TestSummarizeMultiRunUsesMetricSummaryStatusAcrossMultipleRuns(t *testing.T) {
+	result := &evalresult.EvalSetResult{
+		EvalSetID: "set",
+		EvalCaseResults: []*evalresult.EvalCaseResult{
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           1,
+				FinalEvalStatus: status.EvalStatusFailed,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "m", Score: 0.5, EvalStatus: status.EvalStatusFailed, Threshold: 1},
+				},
+			},
+			{
+				EvalSetID:       "set",
+				EvalID:          "A",
+				RunID:           2,
+				FinalEvalStatus: status.EvalStatusPassed,
+				OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "m", Score: 1.5, EvalStatus: status.EvalStatusPassed, Threshold: 1},
+				},
+			},
+		},
+	}
+
+	err := SummarizeMultiRun(result, 2)
+	assert.NoError(t, err)
+
+	assert.NotNil(t, result.Summary)
+	if result.Summary == nil {
+		return
+	}
+
+	assert.Equal(t, status.EvalStatusPassed, result.Summary.OverallStatus)
+	assert.NotNil(t, result.Summary.RunStatusCounts)
+	if result.Summary.RunStatusCounts != nil {
+		assert.Equal(t, 1, result.Summary.RunStatusCounts.Passed)
+		assert.Equal(t, 1, result.Summary.RunStatusCounts.Failed)
+	}
+	assert.Len(t, result.Summary.EvalCaseSummaries, 1)
+	if len(result.Summary.EvalCaseSummaries) == 0 {
+		return
+	}
+
+	caseSummary := result.Summary.EvalCaseSummaries[0]
+	assert.Equal(t, status.EvalStatusPassed, caseSummary.OverallStatus)
+	assert.NotNil(t, caseSummary.RunStatusCounts)
+	if caseSummary.RunStatusCounts != nil {
+		assert.Equal(t, 1, caseSummary.RunStatusCounts.Passed)
+		assert.Equal(t, 1, caseSummary.RunStatusCounts.Failed)
+	}
+	assert.Len(t, caseSummary.MetricSummaries, 1)
+	if len(caseSummary.MetricSummaries) == 0 {
+		return
+	}
+
+	metricSummary := caseSummary.MetricSummaries[0]
+	assert.Equal(t, "m", metricSummary.MetricName)
+	assert.Equal(t, 1.0, metricSummary.AverageScore)
+	assert.Equal(t, status.EvalStatusPassed, metricSummary.EvalStatus)
 }
 
 func TestSummarizeMultiRunMetricRunSummariesAreSortedByName(t *testing.T) {
@@ -457,11 +609,11 @@ func TestBuildEvalCaseSummariesSkipsNilCaseResults(t *testing.T) {
 
 	summaries, overall, err := buildEvalCaseSummaries(runCaseResults, []int{1})
 	assert.NoError(t, err)
-	assert.Equal(t, status.EvalStatusNotEvaluated, overall)
+	assert.Equal(t, status.EvalStatusPassed, overall)
 	assert.Len(t, summaries, 1)
 	if len(summaries) == 1 && summaries[0] != nil {
 		assert.Equal(t, "A", summaries[0].EvalID)
-		assert.Equal(t, status.EvalStatusNotEvaluated, summaries[0].OverallStatus)
+		assert.Equal(t, status.EvalStatusPassed, summaries[0].OverallStatus)
 		assert.Len(t, summaries[0].RunSummaries, 1)
 	}
 }
@@ -484,14 +636,6 @@ func TestBuildEvalCaseSummariesReturnsErrorOnUnexpectedMetricStatus(t *testing.T
 	_, _, err := buildEvalCaseSummaries(runCaseResults, []int{1})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected eval status")
-}
-
-func TestSummarizeOverallFromMetricSummariesErrorsOnUnknownStatusAndSkipsNil(t *testing.T) {
-	_, err := summarizeOverallFromMetricSummaries([]*evalresult.EvalMetricSummary{
-		nil,
-		{MetricName: "m", EvalStatus: status.EvalStatusUnknown},
-	}, false)
-	assert.Error(t, err)
 }
 
 func TestAddEvalStatusNilCountsReturnsError(t *testing.T) {

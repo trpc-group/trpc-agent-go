@@ -16,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/internal/summarytrigger"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
@@ -400,6 +401,25 @@ func TestOptions(t *testing.T) {
 		for i := range sess.Events {
 			sess.Events[i] = optionTestMessageEvent("event", time.Now())
 		}
+		assert.True(t, s.ShouldSummarize(sess))
+	})
+
+	t.Run("WithChecksAny uses request gap observation", func(t *testing.T) {
+		s := NewSummarizer(
+			&testModel{},
+			WithChecksAny(
+				CheckEventThreshold(100),
+				CheckTimeThreshold(20*time.Second),
+			),
+		)
+		sess := &session.Session{Events: []event.Event{
+			optionTestMessageEvent("event", time.Now()),
+		}}
+		summarytrigger.SetObservation(sess, summarytrigger.RequestGapObservation{
+			Elapsed:   30 * time.Second,
+			Available: true,
+		})
+
 		assert.True(t, s.ShouldSummarize(sess))
 	})
 

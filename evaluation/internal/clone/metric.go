@@ -10,6 +10,8 @@
 package clone
 
 import (
+	"encoding/json"
+
 	criterionjson "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/json"
 	criterionlength "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/length"
 	criterionllm "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion/llm"
@@ -29,6 +31,7 @@ func CloneEvalMetric(src *metric.EvalMetric) (*metric.EvalMetric, error) {
 		return nil, errNilInput("eval metric")
 	}
 	copied := *src
+	// Extension is intentionally assigned as-is because callers own its clone semantics.
 	clonedCriterion, err := cloneCriterion(src.Criterion)
 	if err != nil {
 		return nil, err
@@ -147,6 +150,7 @@ func cloneJSONCriterion(src *criterionjson.JSONCriterion) (*criterionjson.JSONCr
 		copied.OnlyTree = onlyTree.(map[string]any)
 	}
 	copied.NumberTolerance = cloneFloat64Ptr(src.NumberTolerance)
+	copied.Schema = append(json.RawMessage(nil), src.Schema...)
 	return &copied, nil
 }
 

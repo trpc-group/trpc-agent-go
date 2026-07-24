@@ -7,9 +7,8 @@
 //
 //
 
-// Package main demonstrates driving an Agent using a caller-provided
-// []model.Message conversation history, without the caller needing to manually
-// seed the server-side session.
+// Package main demonstrates driving an Agent with caller-owned conversation
+// history and a no-op Session Service.
 package main
 
 import (
@@ -22,10 +21,10 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
-	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
+	sessionnoop "trpc.group/trpc-go/trpc-agent-go/session/noop"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
@@ -35,10 +34,9 @@ var (
 	streaming = flag.Bool("streaming", true, "Enable streaming mode for responses")
 )
 
-// defaultSeedHistory returns a pre-constructed multi-turn conversation between
-// user and assistant. We only pass this full history on the first turn of a
-// session (and after reset). After that, we just send the latest user input.
-func defaultSeedHistory() []model.Message {
+// defaultHistory returns a pre-constructed conversation that the application
+// owns and passes to Runner on every request.
+func defaultHistory() []model.Message {
 	return []model.Message{
 		model.NewSystemMessage("You are a helpful math assistant."),
 		model.NewUserMessage("Hi, can you help with calculations?"),
@@ -49,7 +47,7 @@ func defaultSeedHistory() []model.Message {
 func main() {
 	flag.Parse()
 
-	fmt.Printf("🚀 RunWithMessages Demo (auto-seed & reuse session)\n")
+	fmt.Printf("🚀 RunWithMessages + Noop Demo (caller-owned history)\n")
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Println(strings.Repeat("=", 50))
@@ -72,16 +70,18 @@ func main() {
 		llmagent.WithTools(tools),
 	)
 
-	r := runner.NewRunner("runwithmessages-demo", agent)
+	r := runner.NewRunner(
+		"runwithmessages-demo",
+		agent,
+		runner.WithSessionService(sessionnoop.NewService()),
+	)
 
 	// Ensure runner resources are cleaned up (trpc-agent-go >= v0.5.0)
 	defer r.Close()
 
-	// Maintain local conversation history. Only on the first user turn we pass
-	// the full multi-turn history; on subsequent turns we pass only the latest
-	// user message (Runner writes to Session; ContentProcessor reads Session).
-	history := defaultSeedHistory()
-	seeded := false
+	// Maintain the complete conversation history in the application. Because the
+	// Session Service is Noop, every request passes this full slice again.
+	history := defaultHistory()
 
 	userID := "user"
 	sessionID := fmt.Sprintf("runwithmessages-%d", time.Now().Unix())
@@ -103,9 +103,8 @@ func main() {
 			fmt.Println("👋 Goodbye!")
 			return
 		case "/reset":
-			// Reset local history and rotate a new session for clarity.
-			history = defaultSeedHistory()
-			seeded = false
+			// Reset caller-owned history and rotate the transient session ID.
+			history = defaultHistory()
 			prev := sessionID
 			sessionID = fmt.Sprintf("runwithmessages-%d", time.Now().Unix())
 			fmt.Printf("🆕 History cleared. New session: %s (was %s)\n", sessionID, prev)
@@ -113,29 +112,22 @@ func main() {
 		}
 
 		userMsg := model.NewUserMessage(input)
-		// First turn for this session: pass full seed history + latest user input.
-		// Later turns: only pass the latest user input.
-		var ch <-chan *event.Event
-		var err error
-		if !seeded {
-			seedHistory := append(append([]model.Message{}, history...), userMsg)
-			history = append(history, userMsg)
-			ch, err = runner.RunWithMessages(context.Background(), r, userID, sessionID, seedHistory)
-			if err == nil {
-				seeded = true
-			}
-		} else {
-			history = append(history, userMsg)
-			ch, err = r.Run(context.Background(), userID, sessionID, userMsg)
-		}
+		history = append(history, userMsg)
+		ch, err := runner.RunWithMessages(
+			context.Background(),
+			r,
+			userID,
+			sessionID,
+			history,
+		)
 		if err != nil {
+			history = history[:len(history)-1]
 			fmt.Printf("❌ failed to run: %v\n", err)
 			continue
 		}
 
 		// Stream/collect assistant output.
 		fmt.Print("🤖 Assistant: ")
-		var full string
 		for e := range ch {
 			if e.Error != nil {
 				fmt.Printf("\n❌ Error: %s\n", e.Error.Message)
@@ -143,32 +135,37 @@ func main() {
 			}
 			// Stream tokens (delta) or print whole message in non-streaming.
 			if len(e.Choices) > 0 {
-				// Print tool call intents and tool results when present to
-				// demonstrate tool-call path clearly.
-				if len(e.Choices[0].Message.ToolCalls) > 0 {
-					for _, tc := range e.Choices[0].Message.ToolCalls {
-						fmt.Printf("\n🔧 Tool call → %s", tc.Function.Name)
-						if len(tc.Function.Arguments) > 0 {
-							fmt.Printf(" args=%s", string(tc.Function.Arguments))
+				for _, choice := range e.Choices {
+					// Print tool call intents and tool results when present to
+					// demonstrate tool-call path clearly.
+					if len(choice.Message.ToolCalls) > 0 {
+						for _, tc := range choice.Message.ToolCalls {
+							fmt.Printf("\n🔧 Tool call → %s", tc.Function.Name)
+							if len(tc.Function.Arguments) > 0 {
+								fmt.Printf(" args=%s", string(tc.Function.Arguments))
+							}
+							fmt.Println()
 						}
-						fmt.Println()
 					}
-				}
-				if e.Choices[0].Message.ToolID != "" {
-					// Tool result in streaming delta or message
-					if s := e.Choices[0].Message.Content; strings.TrimSpace(s) != "" {
-						fmt.Printf("\n📦 Tool result (%s): %s\n", e.Choices[0].Message.ToolID, s)
-					} else {
-						fmt.Printf("\n📦 Tool result (%s)\n", e.Choices[0].Message.ToolID)
+					if choice.Message.ToolID != "" {
+						if s := choice.Message.Content; strings.TrimSpace(s) != "" {
+							fmt.Printf("\n📦 Tool result (%s): %s\n", choice.Message.ToolID, s)
+						} else {
+							fmt.Printf("\n📦 Tool result (%s)\n", choice.Message.ToolID)
+						}
+					}
+					// Mirror every complete response message into caller-owned
+					// history. A merged tool event can contain multiple choices.
+					if !e.IsPartial && (model.HasPayload(choice.Message) ||
+						len(choice.Message.ToolCalls) > 0 || choice.Message.ToolID != "") {
+						history = append(history, choice.Message)
 					}
 				}
 				if *streaming {
 					s := e.Choices[0].Delta.Content
-					full += s
 					fmt.Print(s)
 				} else {
 					s := e.Choices[0].Message.Content
-					full = s
 					fmt.Print(s)
 				}
 			}
@@ -176,11 +173,6 @@ func main() {
 				fmt.Println()
 				break
 			}
-		}
-
-		// Append the assistant reply to local history for the next turn.
-		if strings.TrimSpace(full) != "" {
-			history = append(history, model.NewAssistantMessage(full))
 		}
 	}
 }
