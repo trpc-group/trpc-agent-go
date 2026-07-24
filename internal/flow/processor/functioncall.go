@@ -31,6 +31,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/sessionroute"
 	itelemetry "trpc.group/trpc-go/trpc-agent-go/internal/telemetry"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolretry"
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
@@ -146,6 +147,7 @@ type FunctionCallResponseProcessor struct {
 	enableParallelTools       bool
 	toolCallbacks             *tool.Callbacks
 	toolRetryPolicy           *tool.RetryPolicy
+	toolConcurrency           *toolcall.Limiter
 	postToolResultHooks       []PostToolResultHook
 	attachmentBudget          int
 	toolNameSuggestionOptions toolNameSuggestionOptions
@@ -174,6 +176,15 @@ func WithToolCallRetryPolicy(policy *tool.RetryPolicy) FunctionCallResponseProce
 			return
 		}
 		p.toolRetryPolicy = policy
+	}
+}
+
+// WithToolConcurrencyConfig configures limits for parallel tool execution.
+func WithToolConcurrencyConfig(
+	config tool.ConcurrencyConfig,
+) FunctionCallResponseProcessorOption {
+	return func(p *FunctionCallResponseProcessor) {
+		p.toolConcurrency = toolcall.NewLimiter(config)
 	}
 }
 
@@ -233,6 +244,9 @@ func NewFunctionCallResponseProcessor(
 		if opt != nil {
 			opt(processor)
 		}
+	}
+	if !enableParallelTools {
+		processor.toolConcurrency = nil
 	}
 	return processor
 }
@@ -1935,6 +1949,17 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	if err != nil || tl == nil {
 		return ctx, nil, toolCall.Function.Arguments, shouldIgnoreError,
 			false, err
+	}
+	if p.toolConcurrency != nil {
+		release, err := p.toolConcurrency.Acquire(
+			ctx,
+			toolCall.Function.Name,
+		)
+		if err != nil {
+			return ctx, nil, toolCall.Function.Arguments, false, false,
+				fmt.Errorf("wait for tool concurrency: %w", err)
+		}
+		defer release()
 	}
 
 	log.DebugfContext(

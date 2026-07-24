@@ -1546,8 +1546,19 @@ stateGraph.AddToolsNode(
     "tools",
     tools,
     graph.WithEnableParallelTools(true), // optional; default is serial
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        MaxConcurrency: 2,
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"search"}, Limit: 1},
+        },
+    }),
 )
 ```
+
+The limits are shared across concurrent invocations of this Tools-node
+instance. Multiple names in one group consume the same capacity pool.
+Each tool name may appear in only one positive-limit group; duplicate
+membership causes `WithToolConcurrencyConfig` to panic.
 
 Configure tool call retry for a ToolsNode:
 

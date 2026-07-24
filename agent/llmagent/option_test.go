@@ -896,3 +896,37 @@ func TestWithEnablePostToolPrompt(t *testing.T) {
 	require.NotNil(t, opts.postToolPromptEnabled)
 	require.True(t, *opts.postToolPromptEnabled)
 }
+
+func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
+	config := tool.ConcurrencyConfig{
+		MaxConcurrency: 4,
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{"search", "fetch"},
+			Limit:     1,
+		}},
+	}
+	option := WithToolConcurrencyConfig(config)
+	config.Groups[0].ToolNames[0] = "changed"
+
+	opts := &Options{}
+	option(opts)
+
+	require.Equal(t, 4, opts.ToolConcurrencyConfig.MaxConcurrency)
+	require.Equal(
+		t,
+		[]string{"search", "fetch"},
+		opts.ToolConcurrencyConfig.Groups[0].ToolNames,
+	)
+	require.Equal(t, 1, opts.ToolConcurrencyConfig.Groups[0].Limit)
+}
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
+}

@@ -2550,14 +2550,47 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithTools(tools),
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // Enable parallel execution.
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        MaxConcurrency: 6, // Optional overall limit.
+        Groups: []tool.ConcurrencyGroup{
+            {
+                ToolNames: []string{"subagent"},
+                Limit:     3,
+            },
+            {
+                // search and fetch share downstream capacity.
+                ToolNames: []string{"search", "fetch"},
+                Limit:     2,
+            },
+        },
+    }),
 )
 ```
 
 Graph workflows can also enable parallelism for a Tools node:
 
 ```go
-stateGraph.AddToolsNode("tools", tools, graph.WithEnableParallelTools(true))
+stateGraph.AddToolsNode(
+    "tools",
+    tools,
+    graph.WithEnableParallelTools(true),
+    graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        MaxConcurrency: 6,
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"subagent"}, Limit: 3},
+            {ToolNames: []string{"search", "fetch"}, Limit: 2},
+        },
+    }),
+)
 ```
+
+Concurrency limits are process-local and are shared across concurrent
+invocations of the same agent or Tools-node instance. A group containing
+multiple tool names limits their combined active calls. Non-positive limits
+are ignored, and tools outside a group are constrained only by the overall
+limit. The configuration has no effect unless parallel tool execution is
+enabled. Each tool name may appear in only one positive-limit group; duplicate
+membership causes `WithToolConcurrencyConfig` to panic.
 
 **Parallel execution effect:**
 

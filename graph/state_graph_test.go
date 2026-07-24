@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"reflect"
 	"strings"
@@ -136,6 +137,40 @@ func TestWithToolSets_CopiesSlice(t *testing.T) {
 	if node.toolSets[0] == originalToolSets[0] {
 		t.Fatalf("expected node toolsets slice to be copied")
 	}
+}
+
+func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
+	config := tool.ConcurrencyConfig{
+		MaxConcurrency: 4,
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{"search", "fetch"},
+			Limit:     1,
+		}},
+	}
+	option := WithToolConcurrencyConfig(config)
+	config.Groups[0].ToolNames[0] = "changed"
+
+	node := &Node{}
+	option(node)
+
+	require.Equal(t, 4, node.toolConcurrencyConfig.MaxConcurrency)
+	require.Equal(
+		t,
+		[]string{"search", "fetch"},
+		node.toolConcurrencyConfig.Groups[0].ToolNames,
+	)
+	require.Equal(t, 1, node.toolConcurrencyConfig.Groups[0].Limit)
+}
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
 }
 
 func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
@@ -420,6 +455,74 @@ func TestProcessToolCalls_SerialVsParallel(t *testing.T) {
 			t.Fatalf("order not preserved: %s then %s", msgs[0].ToolName, msgs[1].ToolName)
 		}
 	})
+}
+
+func TestToolsNodeToolConcurrencySharedAcrossInvocations(t *testing.T) {
+	started := make(chan string, 4)
+	release := make(chan struct{})
+	tools := map[string]tool.Tool{
+		"subagent": &blockingTool{
+			name:       "subagent",
+			startedCh:  started,
+			proceedCh:  release,
+			result:     map[string]string{"status": "done"},
+			respectCtx: true,
+		},
+	}
+	nodeFunc := NewToolsNodeFunc(
+		tools,
+		WithEnableParallelTools(true),
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{{
+				ToolNames: []string{"subagent"},
+				Limit:     2,
+			}},
+		}),
+	)
+
+	results := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		i := i
+		go func() {
+			_, err := nodeFunc(context.Background(), State{
+				StateKeyMessages: []model.Message{{
+					Role: model.RoleAssistant,
+					ToolCalls: []model.ToolCall{{
+						ID: fmt.Sprintf("call-%d", i),
+						Function: model.FunctionDefinitionParam{
+							Name:      "subagent",
+							Arguments: []byte(`{}`),
+						},
+					}},
+				}},
+			})
+			results <- err
+		}()
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case name := <-started:
+			require.Equal(t, "subagent", name)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("more tool calls started than the configured group limit")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	for i := 0; i < 4; i++ {
+		select {
+		case err := <-results:
+			require.NoError(t, err)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for limited tool call to finish")
+		}
+	}
 }
 
 func TestProcessAgentEventStream_UnmarshalErrorLogged(t *testing.T) {
