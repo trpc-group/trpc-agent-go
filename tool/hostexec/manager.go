@@ -23,8 +23,11 @@ import (
 )
 
 const (
+	// DefaultTimeoutSeconds is used when timeout_sec is omitted or non-positive.
+	DefaultTimeoutSeconds = 1_800
+
 	defaultYieldMS    = 10_000
-	defaultTimeoutS   = 1_800
+	defaultTimeoutS   = DefaultTimeoutSeconds
 	defaultLogTail    = 40
 	defaultMaxLines   = 20_000
 	defaultJobTTL     = 30 * time.Minute
