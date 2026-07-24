@@ -44,6 +44,14 @@ type Service interface {
 	//   The artifact or nil if not found.
 	LoadArtifact(ctx context.Context, sessionInfo SessionInfo, filename string, version *int) (*Artifact, error)
 
+	// Head returns metadata for an artifact without loading its full content.
+	//
+	// If req.Version is nil, the latest version is used.
+	//
+	// Returns:
+	//   A HeadResponse or nil if the artifact (or the requested version) is not found.
+	Head(ctx context.Context, req *HeadRequest, opts ...HeadOption) (*HeadResponse, error)
+
 	// ListArtifactKeys lists all the artifact filenames within a session.
 	//
 	// Args:
