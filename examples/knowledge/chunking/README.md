@@ -17,7 +17,7 @@ chunking/
 │   ├── sample.json
 │   ├── sample.md
 │   └── sample.txt
-├── text/
+├── cmd/
 │   └── main.go
 └── web/
     ├── index.html
@@ -36,41 +36,31 @@ The bundled samples cover the default Readers and several boundary cases:
 | [`sample.csv`](./samples/sample.csv) | Multilingual records, empty fields, long values, URLs, and CSVReader normalization |
 | [`sample.json`](./samples/sample.json) | Nested objects and arrays, empty values, multilingual strings, and properties that compete for a byte budget |
 
-## Text output
+## Text usage example
 
 From `examples/knowledge`:
 
 ```bash
-go run ./chunking/text
+go run ./chunking/cmd
 ```
 
-The default command reads the bundled `sample.md` through `MarkdownReader` and
-prints the resulting `MarkdownReader -> MARKDOWN` selection. A chunk size of
-zero uses the selected strategy's default: 1024 runes for Fixed, Recursive, and
-Markdown, or 2000 serialized bytes for JSON.
+The example keeps the API calls in `main.go` so they can be copied directly. It
+uses `file.Source`, which is the normal application entry point:
 
-Tune the Reader's default strategy:
+1. **Source default (recommended):** set `file.WithChunkSize` and
+   `file.WithChunkOverlap`. `FileSource` selects a Reader from the file
+   extension, and the Reader selects its format-aware strategy.
+2. **Custom strategy:** construct `RecursiveChunking` and pass it through
+   `file.WithCustomChunkingStrategy`.
+
+Both paths use a 240-rune chunk budget and a 24-rune overlap. Change the
+constants at the top of `cmd/main.go` to try other budgets. The output shows
+the Source configuration path, chunk content, and the chunk metadata used by
+the knowledge pipeline. Pass another sample or local document with:
 
 ```bash
-go run ./chunking/text -chunk-size 240 -overlap 24
+go run ./chunking/cmd -input ./chunking/samples/sample-edge.md
 ```
-
-Explicit strategy selection is an advanced override:
-
-```bash
-go run ./chunking/text -strategy recursive -chunk-size 180 -overlap 24
-go run ./chunking/text -strategy recursive -input ./chunking/samples/sample-boundaries.md -chunk-size 120 -overlap 100
-go run ./chunking/text -strategy all -input ./chunking/samples/sample.json -chunk-size 512
-go run ./chunking/text -strategy markdown -input ./exampledata/file/llm.md
-go run ./chunking/text -strategy json -input ./path/to/data.json -chunk-size 512
-```
-
-`-strategy all` compares the three text strategies and also includes
-JSONChunking when the selected input is valid JSON.
-
-The text command prints one compact line per selected chunk. By default it
-shows chunks from both the beginning and end of each strategy result. Use
-`-max-chunks 0` to show every chunk.
 
 ## Web viewer
 
