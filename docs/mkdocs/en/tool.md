@@ -2589,7 +2589,8 @@ invocations of the same agent or Tools-node instance. A group containing
 multiple tool names limits their combined active calls. Non-positive limits
 are ignored, and tools outside a group are constrained only by the overall
 limit. The configuration has no effect unless parallel tool execution is
-enabled.
+enabled. Each tool name may appear in only one positive-limit group; duplicate
+membership causes `WithToolConcurrencyConfig` to panic.
 
 **Parallel execution effect:**
 

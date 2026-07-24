@@ -10,6 +10,7 @@ package toolcall
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"golang.org/x/sync/semaphore"
@@ -22,9 +23,41 @@ type Limiter struct {
 	groups map[string]*semaphore.Weighted
 }
 
+// ValidateConcurrencyConfig validates concurrency group membership.
+func ValidateConcurrencyConfig(config tool.ConcurrencyConfig) error {
+	seen := make(map[string]struct{})
+	for _, group := range config.Groups {
+		if group.Limit <= 0 {
+			continue
+		}
+		groupNames := make(map[string]struct{})
+		for _, name := range group.ToolNames {
+			if name == "" {
+				continue
+			}
+			if _, exists := groupNames[name]; exists {
+				continue
+			}
+			groupNames[name] = struct{}{}
+			if _, exists := seen[name]; exists {
+				return fmt.Errorf(
+					"tool %q appears in multiple concurrency groups",
+					name,
+				)
+			}
+			seen[name] = struct{}{}
+		}
+	}
+	return nil
+}
+
 // NewLimiter builds a limiter from config. It returns nil when config contains
-// no positive limits.
+// no positive limits. It panics if a tool belongs to more than one
+// positive-limit group.
 func NewLimiter(config tool.ConcurrencyConfig) *Limiter {
+	if err := ValidateConcurrencyConfig(config); err != nil {
+		panic(err)
+	}
 	var global *semaphore.Weighted
 	if config.MaxConcurrency > 0 {
 		global = semaphore.NewWeighted(int64(config.MaxConcurrency))
@@ -37,9 +70,6 @@ func NewLimiter(config tool.ConcurrencyConfig) *Limiter {
 		groupLimiter := semaphore.NewWeighted(int64(group.Limit))
 		for _, name := range group.ToolNames {
 			if name == "" {
-				continue
-			}
-			if _, exists := groups[name]; exists {
 				continue
 			}
 			groups[name] = groupLimiter

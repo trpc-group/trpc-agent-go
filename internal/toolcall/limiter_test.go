@@ -129,20 +129,31 @@ func TestLimiterAcquireCancellationReleasesGroup(t *testing.T) {
 	releaseSearch()
 }
 
-func TestLimiterFirstGroupWinsForDuplicateToolName(t *testing.T) {
-	limiter := NewLimiter(tool.ConcurrencyConfig{
+func TestValidateConcurrencyConfigRejectsDuplicateToolName(t *testing.T) {
+	config := tool.ConcurrencyConfig{
 		Groups: []tool.ConcurrencyGroup{
 			{ToolNames: []string{"search"}, Limit: 1},
 			{ToolNames: []string{"search", "fetch"}, Limit: 2},
 		},
+	}
+	err := ValidateConcurrencyConfig(config)
+	require.EqualError(
+		t,
+		err,
+		`tool "search" appears in multiple concurrency groups`,
+	)
+	require.Panics(t, func() {
+		NewLimiter(config)
 	})
+}
 
-	releaseSearch, err := limiter.Acquire(context.Background(), "search")
-	require.NoError(t, err)
-	releaseFetch, err := limiter.Acquire(context.Background(), "fetch")
-	require.NoError(t, err)
-	releaseFetch()
-	releaseSearch()
+func TestValidateConcurrencyConfigIgnoresDisabledGroups(t *testing.T) {
+	require.NoError(t, ValidateConcurrencyConfig(tool.ConcurrencyConfig{
+		Groups: []tool.ConcurrencyGroup{
+			{ToolNames: []string{"search"}, Limit: 0},
+			{ToolNames: []string{"search", "search"}, Limit: 1},
+		},
+	}))
 }
 
 func TestNewLimiterIgnoresNonPositiveLimits(t *testing.T) {

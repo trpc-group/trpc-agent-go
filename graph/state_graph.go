@@ -183,7 +183,11 @@ func WithEnableParallelTools(enable bool) Option {
 // WithToolConcurrencyConfig configures overall and per-group limits for
 // parallel tool execution. The limits are shared by concurrent invocations of
 // the Tools node and only take effect with WithEnableParallelTools(true).
+// It panics if a tool name appears in more than one positive-limit group.
 func WithToolConcurrencyConfig(config tool.ConcurrencyConfig) Option {
+	if err := toolcall.ValidateConcurrencyConfig(config); err != nil {
+		panic(err)
+	}
 	snapshot := cloneToolConcurrencyConfig(config)
 	return func(node *Node) {
 		node.toolConcurrencyConfig = cloneToolConcurrencyConfig(snapshot)

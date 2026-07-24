@@ -919,3 +919,14 @@ func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
 	)
 	require.Equal(t, 1, opts.ToolConcurrencyConfig.Groups[0].Limit)
 }
+
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
+}

@@ -1610,17 +1610,17 @@ stateGraph.AddToolsNode(
     tools,
     graph.WithEnableParallelTools(true), // 可选；默认串行
     graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
-        MaxConcurrency: 6,
+        MaxConcurrency: 2,
         Groups: []tool.ConcurrencyGroup{
-            {ToolNames: []string{"subagent"}, Limit: 3},
-            {ToolNames: []string{"search", "fetch"}, Limit: 2},
+            {ToolNames: []string{"search"}, Limit: 1},
         },
     }),
 )
 ```
 
 并发上限由同一个 Tools 节点实例的并发调用共享。同一组中的多个工具名共同
-消耗该组的容量。
+消耗该组的容量。每个工具名只能出现在一个正数上限的组中；重复配置会导致
+`WithToolConcurrencyConfig` panic。
 
 为 ToolsNode 配置 Tool 调用重试：
 

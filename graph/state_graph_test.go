@@ -162,6 +162,17 @@ func TestWithToolConcurrencyConfigCopiesGroups(t *testing.T) {
 	require.Equal(t, 1, node.toolConcurrencyConfig.Groups[0].Limit)
 }
 
+func TestWithToolConcurrencyConfigRejectsDuplicateGroups(t *testing.T) {
+	require.Panics(t, func() {
+		WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+			Groups: []tool.ConcurrencyGroup{
+				{ToolNames: []string{"search"}, Limit: 1},
+				{ToolNames: []string{"search"}, Limit: 2},
+			},
+		})
+	})
+}
+
 func TestMergeToolsWithToolSets_EmitsConflictWarning(t *testing.T) {
 	base := map[string]tool.Tool{
 		"simple_echo": &echoTool{name: "simple_echo"},

@@ -14,9 +14,9 @@ package tool
 // Tools node. A non-positive value leaves overall concurrency unlimited.
 //
 // Groups apply additional shared limits to the named tools. Tool names that do
-// not appear in a group are constrained only by MaxConcurrency. Each effective
-// tool name should appear in at most one group. If a name appears in multiple
-// positive-limit groups, the first group takes precedence.
+// not appear in a group are constrained only by MaxConcurrency. A tool name
+// must appear in at most one positive-limit group. LLMAgent and Graph options
+// reject configurations with duplicate group membership.
 //
 // ConcurrencyConfig only affects execution when parallel tools are enabled.
 // Its zero value preserves unrestricted parallel execution.
