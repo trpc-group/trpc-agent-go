@@ -1,0 +1,11 @@
+--- a/repo.go
++++ b/repo.go
+@@ -5,8 +5,11 @@ package main
+
+ func loadUser(id string) (*User, error) {
++	u, err := db.Get(id)
++	if err != nil {
++		return nil, err
++	}
+ 	return u, nil
+ }

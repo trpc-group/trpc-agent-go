@@ -1,0 +1,29 @@
+--- a/pkg/parser/json.go
++++ b/pkg/parser/json.go
+@@ -1,5 +1,25 @@
+ package parser
+
++import (
++	"encoding/json"
++	"fmt"
++)
++
+ type JSONParser struct{}
+
++func (p *JSONParser) Parse(data []byte) (map[string]interface{}, error) {
++	var result map[string]interface{}
++	if err := json.Unmarshal(data, &result); err != nil {
++		return nil, fmt.Errorf("json parse: %w", err)
++	}
++	return result, nil
++}
++
++func (p *JSONParser) MustParse(data []byte) map[string]interface{} {
++	result, err := p.Parse(data)
++	if err != nil {
++		panic(err)
++	}
++	return result
++}
++
+ func New() *JSONParser { return &JSONParser{} }

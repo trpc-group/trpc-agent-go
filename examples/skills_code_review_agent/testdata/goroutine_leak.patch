@@ -1,0 +1,9 @@
+--- a/server.go
++++ b/server.go
+@@ -10,6 +10,11 @@ package main
+
+ func handleRequest(req Request) {
++	go func() {
++		process(req)
++	}()
+ }

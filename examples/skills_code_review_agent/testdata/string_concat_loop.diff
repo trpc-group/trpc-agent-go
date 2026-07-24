@@ -1,0 +1,11 @@
+--- a/builder.go
++++ b/builder.go
+@@ -5,8 +5,10 @@ package main
+
+ func buildQuery(parts []string) string {
+ 	result := ""
++	for _, p := range parts {
++		result += p
++	}
+ 	return result
+ }

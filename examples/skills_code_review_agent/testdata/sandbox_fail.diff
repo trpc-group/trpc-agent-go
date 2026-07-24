@@ -1,0 +1,13 @@
+--- a/worker.go
++++ b/worker.go
+@@ -1,5 +1,10 @@ package main
+
++var dbPass = "hardcoded-secret-value"
++
+ func startWorkers() {
++	go func() {
++		for {
++			doWork()
++		}
++	}()
+ }

@@ -1,0 +1,13 @@
+--- a/reader.go
++++ b/reader.go
+@@ -5,10 +5,14 @@ package main
+
+ func readAll(paths []string) {
++	for _, p := range paths {
++		f, err := os.Open(p)
++		if err != nil {
++			continue
++		}
++		defer f.Close()
++	}
+ }
