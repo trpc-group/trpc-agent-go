@@ -21,6 +21,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
 	openaiembedder "trpc.group/trpc-go/trpc-agent-go/knowledge/embedder/openai"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
+	memorychromadb "trpc.group/trpc-go/trpc-agent-go/memory/chromadb"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
 	memoryinmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memorymysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
@@ -48,6 +49,7 @@ const (
 	MemoryPGVector  MemoryType = "pgvector"
 	MemoryMySQL     MemoryType = "mysql"
 	MemoryMySQLVec  MemoryType = "mysqlvec"
+	MemoryChromaDB  MemoryType = "chromadb"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
@@ -96,7 +98,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //
 // Parameters:
 //   - memoryType: one of inmemory, sqlite, sqlitevec, redis, postgres,
-//     pgvector, mysql, mysqlvec
+//     pgvector, mysql, mysqlvec, chromadb
 //   - cfg: memory service configuration
 //   - SoftDelete: enable soft delete for SQL backends
 //   - Extractor: memory extractor for auto mode (nil = manual mode)
@@ -113,6 +115,7 @@ func DefaultRunnerConfig() RunnerConfig {
 //	pgvector:   PGVECTOR_HOST, PGVECTOR_PORT, PGVECTOR_USER, PGVECTOR_PASSWORD, PGVECTOR_DATABASE, PGVECTOR_EMBEDDER_MODEL
 //	mysql:      MYSQL_HOST, MYSQL_PORT, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE
 //	mysqlvec:   MYSQLVEC_HOST, MYSQLVEC_PORT, MYSQLVEC_USER, MYSQLVEC_PASSWORD, MYSQLVEC_DATABASE, MYSQLVEC_EMBEDDER_MODEL
+//	chromadb:   CHROMA_BASE_URL, CHROMA_API_KEY, CHROMA_BEARER_TOKEN, CHROMA_TENANT, CHROMA_DATABASE, CHROMA_COLLECTION, CHROMA_EMBEDDER_MODEL
 func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (memory.Service, error) {
 	switch memoryType {
 	case MemorySQLite:
@@ -129,6 +132,8 @@ func NewMemoryServiceByType(memoryType MemoryType, cfg MemoryServiceConfig) (mem
 		return newMySQLMemoryService(cfg)
 	case MemoryMySQLVec:
 		return newMySQLVecMemoryService(cfg)
+	case MemoryChromaDB:
+		return newChromaDBMemoryService(cfg)
 	case MemoryInMemory:
 		fallthrough
 	default:
@@ -393,6 +398,63 @@ func newPGVectorMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
 	return memorypgvector.NewService(opts...)
 }
 
+// newChromaDBMemoryService creates a ChromaDB memory service.
+// It supports both self-hosted ChromaDB and Chroma Cloud authentication.
+func newChromaDBMemoryService(cfg MemoryServiceConfig) (memory.Service, error) {
+	embedderModel := GetEnvOrDefault(
+		"CHROMA_EMBEDDER_MODEL",
+		"text-embedding-3-small",
+	)
+	opts := []memorychromadb.ServiceOpt{
+		memorychromadb.WithBaseURL(GetEnvOrDefault(
+			"CHROMA_BASE_URL",
+			"http://localhost:8000",
+		)),
+		memorychromadb.WithCollectionName(GetEnvOrDefault(
+			"CHROMA_COLLECTION",
+			"memories",
+		)),
+		memorychromadb.WithEmbedder(newOpenAIEmbedder(embedderModel)),
+		memorychromadb.WithSoftDelete(cfg.SoftDelete),
+	}
+	if value := os.Getenv("CHROMA_API_KEY"); value != "" {
+		opts = append(opts, memorychromadb.WithAPIKey(value))
+	}
+	if value := os.Getenv("CHROMA_BEARER_TOKEN"); value != "" {
+		opts = append(opts, memorychromadb.WithBearerToken(value))
+	}
+	if value := os.Getenv("CHROMA_TENANT"); value != "" {
+		opts = append(opts, memorychromadb.WithTenant(value))
+	}
+	if value := os.Getenv("CHROMA_DATABASE"); value != "" {
+		opts = append(opts, memorychromadb.WithDatabase(value))
+	}
+	opts = append(opts, chromaAutoMemoryOptions(cfg)...)
+	return memorychromadb.NewService(opts...)
+}
+
+func chromaAutoMemoryOptions(cfg MemoryServiceConfig) []memorychromadb.ServiceOpt {
+	if cfg.Extractor == nil {
+		return nil
+	}
+	opts := []memorychromadb.ServiceOpt{
+		memorychromadb.WithExtractor(cfg.Extractor),
+		memorychromadb.WithDisableAutoMemoryOnExternalContext(
+			cfg.DisableAutoMemoryOnExternalContext,
+		),
+	}
+	if cfg.AsyncMemoryNum > 0 {
+		opts = append(opts, memorychromadb.WithAsyncMemoryNum(cfg.AsyncMemoryNum))
+	}
+	if cfg.MemoryQueueSize > 0 {
+		opts = append(opts, memorychromadb.WithMemoryQueueSize(cfg.MemoryQueueSize))
+	}
+	if cfg.MemoryJobTimeout > 0 {
+		opts = append(opts, memorychromadb.WithMemoryJobTimeout(cfg.MemoryJobTimeout))
+	}
+	return opts
+}
+
 // newMySQLMemoryService creates a MySQL memory service.
 // Supports both manual mode (cfg.Extractor == nil) and auto mode (cfg.Extractor != nil).
 // Environment variables:
@@ -566,6 +628,16 @@ func PrintMemoryInfo(memoryType MemoryType, softDelete bool) {
 			"text-embedding-3-small",
 		)
 		fmt.Printf("pgvector: %s:%s/%s\n", host, port, database)
+		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
+		fmt.Printf("Soft delete: %t\n", softDelete)
+	case MemoryChromaDB:
+		baseURL := GetEnvOrDefault("CHROMA_BASE_URL", "http://localhost:8000")
+		collection := GetEnvOrDefault("CHROMA_COLLECTION", "memories")
+		embedderModel := GetEnvOrDefault(
+			"CHROMA_EMBEDDER_MODEL",
+			"text-embedding-3-small",
+		)
+		fmt.Printf("ChromaDB: %s/%s\n", baseURL, collection)
 		fmt.Printf("Embedder model: %s\n", getEmbeddingModel(embedderModel))
 		fmt.Printf("Soft delete: %t\n", softDelete)
 	case MemoryMySQL:

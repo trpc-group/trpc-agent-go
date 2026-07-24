@@ -1591,6 +1591,63 @@ func TestAutoMemoryWorker_WritesLastExtractAt_OnSuccess(t *testing.T) {
 	assert.True(t, ts.Equal(t2.UTC()))
 }
 
+func TestAutoMemoryWorker_PersistenceFailureDoesNotAdvanceWatermark(t *testing.T) {
+	tests := []struct {
+		name      string
+		operation *extractor.Operation
+		setError  func(*mockOperator)
+	}{
+		{
+			name:      "add",
+			operation: &extractor.Operation{Type: extractor.OperationAdd, Memory: "new fact"},
+			setError: func(operator *mockOperator) {
+				operator.addErr = errors.New("add failed")
+			},
+		},
+		{
+			name: "update",
+			operation: &extractor.Operation{
+				Type: extractor.OperationUpdate, MemoryID: "memory-1", Memory: "changed fact",
+			},
+			setError: func(operator *mockOperator) {
+				operator.updateErr = errors.New("update failed")
+			},
+		},
+		{
+			name:      "delete",
+			operation: &extractor.Operation{Type: extractor.OperationDelete, MemoryID: "memory-1"},
+			setError: func(operator *mockOperator) {
+				operator.deleteErr = errors.New("delete failed")
+			},
+		},
+		{
+			name:      "clear",
+			operation: &extractor.Operation{Type: extractor.OperationClear},
+			setError: func(operator *mockOperator) {
+				operator.clearErr = errors.New("clear failed")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			operator := newMockOperator()
+			tt.setError(operator)
+			worker := NewAutoMemoryWorker(AutoMemoryConfig{
+				Extractor: &mockExtractor{ops: []*extractor.Operation{tt.operation}},
+			}, operator)
+			sess := newTestSession("test-app", "user-1")
+			appendSessionMessage(sess, time.Now(), model.NewUserMessage("remember this"))
+
+			err := worker.EnqueueJob(context.Background(), sess)
+
+			require.Error(t, err)
+			_, ok := sess.GetState(memory.SessionStateKeyAutoMemoryLastExtractAt)
+			assert.False(t, ok)
+		})
+	}
+}
+
 // configurableExtractor is a mock extractor implementing
 // EnabledToolsConfigurer for testing.
 type configurableExtractor struct {
