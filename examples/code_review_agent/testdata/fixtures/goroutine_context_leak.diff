@@ -1,0 +1,15 @@
+diff --git a/worker/worker.go b/worker/worker.go
+--- a/worker/worker.go
++++ b/worker/worker.go
+@@ -1,5 +1,10 @@
+ package worker
+ 
+ import "context"
+ 
++func Start(ctx context.Context) {
++	go func() {
++		for {
++			doWork()
++		}
++	}()
++}

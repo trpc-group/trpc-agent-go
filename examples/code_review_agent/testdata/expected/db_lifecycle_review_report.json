@@ -1,0 +1,27 @@
+{
+  "summary": "1 high-confidence findings and 1 human-review items detected.",
+  "findings": [
+    {
+      "severity": "high",
+      "category": "database",
+      "file": "db/tx.go",
+      "line": 6,
+      "title": "Transaction lifecycle is incomplete",
+      "evidence": "tx, err := db.Begin()",
+      "recommendation": "Ensure every transaction has rollback on failure and commit on success.",
+      "confidence": 0.84,
+      "source": "rule-only",
+      "rule_id": "DB001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "db/tx.go",
+      "line": 5,
+      "title": "Changed Go code without nearby test changes",
+      "rule_id": "TEST001"
+    }
+  ]
+}

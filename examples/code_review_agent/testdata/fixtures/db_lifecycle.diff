@@ -1,0 +1,16 @@
+diff --git a/db/tx.go b/db/tx.go
+--- a/db/tx.go
++++ b/db/tx.go
+@@ -1,5 +1,12 @@
+ package db
+ 
+ import "database/sql"
+ 
++func Save(db *sql.DB) error {
++	tx, err := db.Begin()
++	if err != nil {
++		return err
++	}
++	_, err = tx.Exec("insert into t(v) values(1)")
++	return err
++}

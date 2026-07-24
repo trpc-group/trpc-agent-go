@@ -1,0 +1,22 @@
+diff --git a/clean/clean.go b/clean/clean.go
+--- a/clean/clean.go
++++ b/clean/clean.go
+@@ -1,3 +1,7 @@
+ package clean
+ 
++func Add(a, b int) int {
++	return a + b
++}
++
+ func Existing() {}
+diff --git a/clean/clean_test.go b/clean/clean_test.go
+--- a/clean/clean_test.go
++++ b/clean/clean_test.go
+@@ -1,3 +1,8 @@
+ package clean
+ 
++func TestAdd(t *testing.T) {
++	if Add(1, 2) != 3 {
++		t.Fatal("bad add")
++	}
++}
