@@ -388,6 +388,9 @@ func (t *writeStdinTool) Call(
 		return nil, errors.New(errSessionIDRequired)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := t.mgr.write(
 		sessionID,
 		in.Chars,
@@ -406,7 +409,6 @@ func (t *writeStdinTool) Call(
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-timer.C:
 		}
 	}

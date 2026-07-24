@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -26,6 +25,11 @@ var ErrAlreadyDecided = errors.New("revision already decided")
 // ErrNoArchivedRevision is returned when Rollback is called on a skill
 // that has no archived revision to fall back to.
 var ErrNoArchivedRevision = errors.New("no archived revision available for rollback")
+
+// ErrStaleRevisionParent is returned when an update's ParentID no longer
+// matches the configured active pointer. Submission does not persist the stale
+// candidate; approval marks an already-persisted candidate as rejected.
+var ErrStaleRevisionParent = errors.New("stale revision parent")
 
 // ApprovalDecision is the external reviewer's decision on a pending revision.
 type ApprovalDecision struct {
@@ -49,64 +53,6 @@ type ApprovalService struct {
 	store     CandidateStore
 	pointer   ActivePointer
 	publisher Publisher
-}
-
-var approvalDecisionLocks decisionLockRegistry
-
-type decisionLockRegistry struct {
-	mu    sync.Mutex
-	locks map[string]*decisionLock
-}
-
-type decisionLock struct {
-	mu   sync.Mutex
-	refs int
-}
-
-type candidateStoreSkillLocker interface {
-	lockSkill(ctx context.Context, skillID string) (func(), error)
-}
-
-func (r *decisionLockRegistry) lock(skillID string) func() {
-	r.mu.Lock()
-	if r.locks == nil {
-		r.locks = make(map[string]*decisionLock)
-	}
-	l := r.locks[skillID]
-	if l == nil {
-		l = &decisionLock{}
-		r.locks[skillID] = l
-	}
-	l.refs++
-	r.mu.Unlock()
-
-	l.mu.Lock()
-	return func() {
-		l.mu.Unlock()
-		r.mu.Lock()
-		l.refs--
-		if l.refs == 0 {
-			delete(r.locks, skillID)
-		}
-		r.mu.Unlock()
-	}
-}
-
-func (s *ApprovalService) lockSkill(ctx context.Context, skillID string) (func(), error) {
-	localUnlock := approvalDecisionLocks.lock(skillID)
-	locker, ok := s.store.(candidateStoreSkillLocker)
-	if !ok || locker == nil {
-		return localUnlock, nil
-	}
-	storeUnlock, err := locker.lockSkill(ctx, skillID)
-	if err != nil {
-		localUnlock()
-		return nil, err
-	}
-	return func() {
-		storeUnlock()
-		localUnlock()
-	}, nil
 }
 
 // NewApprovalService creates an ApprovalService backed by the given stores.
@@ -153,13 +99,17 @@ func (s *ApprovalService) ListPending(ctx context.Context, opts ListPendingOpts)
 // Decide approves or rejects a pending_approval revision.
 // Approved revisions are promoted to active via the publisher.
 // Rejected revisions have their status set to rejected.
+// When an active pointer is configured, an approved update is refused if its
+// ParentID no longer matches the active revision. An empty ParentID means the
+// update was evaluated with no active revision. Stale revisions are rejected,
+// and the current active revision is unchanged.
 // Returns ErrAlreadyDecided if the revision is no longer pending.
 func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision) error {
 	if s.store == nil {
 		return fmt.Errorf("no candidate store configured")
 	}
 
-	unlock, err := s.lockSkill(ctx, decision.SkillID)
+	unlock, err := lockRevisionMutation(ctx, s.store, decision.SkillID)
 	if err != nil {
 		return fmt.Errorf("lock skill %q: %w", decision.SkillID, err)
 	}
@@ -172,10 +122,17 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	if rev.Status != RevisionPendingApproval {
 		return ErrAlreadyDecided
 	}
-
 	decidedAt := decision.DecidedAt
 	if decidedAt.IsZero() {
 		decidedAt = time.Now().UTC()
+	}
+	if decision.Approved {
+		if err := validateCurrentParent(ctx, s.pointer, rev); err != nil {
+			if errors.Is(err, ErrStaleRevisionParent) {
+				return s.rejectStaleRevision(ctx, rev, decision, decidedAt, err)
+			}
+			return fmt.Errorf("approve revision: %w", err)
+		}
 	}
 	rev.HumanReport = mergeHumanDecision(rev.HumanReport, decision, decidedAt)
 
@@ -207,6 +164,35 @@ func (s *ApprovalService) Decide(ctx context.Context, decision ApprovalDecision)
 	})
 
 	return nil
+}
+
+func (s *ApprovalService) rejectStaleRevision(
+	ctx context.Context,
+	rev *Revision,
+	decision ApprovalDecision,
+	decidedAt time.Time,
+	cause error,
+) error {
+	rejection := decision
+	rejection.Approved = false
+	rev.HumanReport = mergeHumanDecision(rev.HumanReport, rejection, decidedAt)
+	rev.HumanReport.Reasons = append(rev.HumanReport.Reasons, cause.Error())
+	rev.Status = RevisionRejected
+	staleErr := fmt.Errorf("approve revision: %w", cause)
+	if err := s.store.WriteRevision(ctx, rev); err != nil {
+		return errors.Join(staleErr, fmt.Errorf("write stale revision rejection: %w", err))
+	}
+	_ = s.store.AppendAudit(ctx, AuditEvent{
+		At:         decidedAt,
+		Action:     AuditActionReject,
+		SkillID:    decision.SkillID,
+		RevisionID: decision.RevisionID,
+		Status:     string(rev.Status),
+		Reason:     cause.Error(),
+		Actor:      decision.Reviewer,
+		Comment:    decision.Comment,
+	})
+	return staleErr
 }
 
 func (s *ApprovalService) approveRevision(ctx context.Context, rev *Revision) error {
@@ -317,7 +303,7 @@ func (s *ApprovalService) Rollback(ctx context.Context, skillID string, opts Rol
 		return nil, fmt.Errorf("rollback: empty skill id")
 	}
 
-	unlock, err := s.lockSkill(ctx, skillID)
+	unlock, err := lockRevisionMutation(ctx, s.store, skillID)
 	if err != nil {
 		return nil, fmt.Errorf("lock skill %q: %w", skillID, err)
 	}
@@ -483,6 +469,7 @@ func cloneRevision(rev *Revision) *Revision {
 		report.Reasons = append([]string(nil), rev.HumanReport.Reasons...)
 		cp.HumanReport = &report
 	}
+	cp.Evidence = cloneRevisionEvidence(rev.Evidence)
 	return &cp
 }
 

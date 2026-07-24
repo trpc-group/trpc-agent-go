@@ -91,6 +91,10 @@ func TestRunPostsRequestAndConvertsResponseEvents(t *testing.T) {
 	runOpts := []agent.RunOption{
 		agent.WithRequestID("req-1"),
 		agent.WithExecutionTraceEnabled(true),
+		agent.MergeRuntimeState(map[string]any{
+			"ignore": true,
+			"source": "promptiter",
+		}),
 	}
 	events, err := runner.Run(
 		context.Background(),
@@ -107,6 +111,8 @@ func TestRunPostsRequestAndConvertsResponseEvents(t *testing.T) {
 	assert.Equal(t, model.NewUserMessage("match_001"), got.Input)
 	assert.Equal(t, "req-1", got.RunOptions.RequestID)
 	assert.True(t, got.RunOptions.ExecutionTraceEnabled)
+	assert.Equal(t, true, got.RunOptions.RuntimeState["ignore"])
+	assert.Equal(t, "promptiter", got.RunOptions.RuntimeState["source"])
 	assert.True(t, gotEvents[0].IsToolCallResponse())
 	assert.True(t, gotEvents[1].IsToolResultResponse())
 	assert.Equal(t, model.ObjectTypeChatCompletion, gotEvents[2].Object)
@@ -511,9 +517,12 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 		RootInvocationID: "inv-1",
 		SessionID:        "session-1",
 		Status:           atrace.TraceStatusCompleted,
+		Input:            &atrace.Snapshot{Text: "input"},
+		Output:           &atrace.Snapshot{Text: "patched reply"},
 		Steps: []atrace.Step{{
 			StepID:            "step-1",
 			NodeID:            "writer",
+			NodeType:          "llm",
 			AppliedSurfaceIDs: []string{"writer#instruction"},
 		}},
 	}
@@ -554,6 +563,10 @@ func TestRunInteroperatesWithServerTRPCAgent(t *testing.T) {
 	assert.True(t, gotEvents[1].IsRunnerCompletion())
 	require.NotNil(t, gotEvents[1].ExecutionTrace)
 	assert.Equal(t, "inv-1", gotEvents[1].ExecutionTrace.RootInvocationID)
+	assert.Equal(t, &atrace.Snapshot{Text: "input"}, gotEvents[1].ExecutionTrace.Input)
+	assert.Equal(t, &atrace.Snapshot{Text: "patched reply"}, gotEvents[1].ExecutionTrace.Output)
+	require.Len(t, gotEvents[1].ExecutionTrace.Steps, 1)
+	assert.Equal(t, "llm", gotEvents[1].ExecutionTrace.Steps[0].NodeType)
 	require.Len(t, serverRunner.runOptions, 1)
 	assert.True(t, serverRunner.runOptions[0].ExecutionTraceEnabled)
 	assert.NotEmpty(t, serverRunner.runOptions[0].RequestID)

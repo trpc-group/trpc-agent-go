@@ -1789,7 +1789,7 @@ model := anthropic.New("claude-sonnet-4-0",
 
 #### 7. Variant Optimization: Adapting to Platform-Specific Behaviors
 
-The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, especially for file upload, deletion, and processing logic.
+The Variant mechanism is an important optimization in the Model module, used to handle platform-specific behavioral differences across OpenAI-compatible providers. By specifying different Variants, the framework can automatically adapt to API differences between platforms, including file handling and thinking-toggle serialization.
 
 ##### 7.1. Supported Variant Types
 
@@ -1824,6 +1824,31 @@ The framework currently supports the following Variants:
 - API Key environment variable name：`DASHSCOPE_API_KEY`
 - Other behaviors are consistent with standard OpenAI
 
+**5. VariantGLM**
+
+- GLM OpenAI-compatible API adaptation
+- Serializes the thinking toggle using GLM's `thinking` object format
+- Falls back to exposing `reasoning_content` as visible content when some GLM gateways return an empty `content` field without tool calls
+
+**6. VariantKimi**
+
+- Kimi Open Platform adaptation
+- Default BaseURL: `https://api.moonshot.ai/v1`
+- API Key environment variable name: `MOONSHOT_API_KEY`
+- Automatically inferred for the official `api.moonshot.ai` and `api.moonshot.cn` hosts
+- Serializes the thinking toggle as `{"thinking": {"type": "enabled"}}`
+- Uses `file-extract` as the default file upload purpose
+
+**7. VariantMiniMax**
+
+- MiniMax OpenAI-compatible API adaptation
+- Default BaseURL: `https://api.minimax.io/v1`
+- API Key environment variable name: `MINIMAX_API_KEY`
+- Automatically inferred for the official `api.minimax.io` and `api.minimaxi.com` hosts
+- Serializes the thinking toggle as `{"thinking": {"type": "adaptive"}}` when enabled and `{"thinking": {"type": "disabled"}}` when disabled
+- Keeps MiniMax's native `<think>...</think>` content unchanged so interleaved thinking can be replayed across tool calls
+- Uses MiniMax's `/v1/files/upload` and `/v1/files/delete` endpoints, with `video_understanding` as the default purpose
+
 ##### 7.2. Usage
 
 **Usage Example**：
@@ -1843,6 +1868,16 @@ model := openai.New("deepseek-v4-flash",
     openai.WithBaseURL("https://api.deepseek.com/v1"),
     openai.WithAPIKey("your-api-key"),
     openai.WithVariant(openai.VariantDeepSeek), // Specify the DeepSeek variant
+)
+
+// Use the Kimi Open Platform
+model = openai.New("kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi), // Reads MOONSHOT_API_KEY automatically
+)
+
+// Use the MiniMax OpenAI-compatible API
+model = openai.New("MiniMax-M3",
+    openai.WithVariant(openai.VariantMiniMax), // Reads MINIMAX_API_KEY automatically
 )
 ```
 
@@ -1875,6 +1910,12 @@ For certain Variants, the framework supports reading configuration from environm
 # DeepSeek
 export DEEPSEEK_API_KEY="your-api-key"
 # No need to call WithAPIKey explicitly; the framework reads it automatically
+
+# Kimi
+export MOONSHOT_API_KEY="your-api-key"
+
+# MiniMax
+export MINIMAX_API_KEY="your-api-key"
 ```
 
 ```go
@@ -1885,6 +1926,77 @@ model := openai.New("deepseek-v4-flash",
     openai.WithVariant(openai.VariantDeepSeek), // Automatically reads DEEPSEEK_API_KEY
 )
 ```
+
+##### 7.4. Thinking Toggles and Variants
+
+`Variant` and `GenerationConfig.ThinkingEnabled` have different responsibilities:
+
+- `WithVariant(...)` selects the provider protocol and determines which field and JSON shape represent the thinking toggle.
+- `ThinkingEnabled` explicitly enables or disables thinking.
+
+Setting only a `Variant` **does not emit a thinking toggle**. When `ThinkingEnabled == nil`, the framework omits the toggle and lets the provider apply its default. Even if a provider currently enables thinking by default, callers that require deterministic behavior should set `ThinkingEnabled` explicitly.
+
+The OpenAI-compatible variants serialize `ThinkingEnabled=true` as follows:
+
+| Variant | Request field for `ThinkingEnabled=true` |
+| --- | --- |
+| `VariantOpenAI` | `"thinking_enabled": true` |
+| `VariantDeepSeek` | `"thinking": {"type": "enabled"}` |
+| `VariantHunyuan` | `"thinking": {"type": "enabled"}` |
+| `VariantGLM` | `"thinking": {"type": "enabled"}` |
+| `VariantQwen` | `"enable_thinking": true` |
+| `VariantKimi` | `"thinking": {"type": "enabled"}` |
+| `VariantMiniMax` | `"thinking": {"type": "adaptive"}` |
+
+For example, to deterministically enable thinking through the official DeepSeek API:
+
+```go
+thinking := true
+
+llm := openai.New("deepseek-v4-flash",
+    openai.WithBaseURL("https://api.deepseek.com"),
+    openai.WithAPIKey("your-api-key"),
+    openai.WithVariant(openai.VariantDeepSeek),
+)
+
+request := &model.Request{
+    Messages: []model.Message{
+        model.NewUserMessage("Analyze this problem."),
+    },
+    GenerationConfig: model.GenerationConfig{
+        Stream:          true,
+        ThinkingEnabled: &thinking,
+    },
+}
+```
+
+`ThinkingEnabled` applies only to models that expose an explicit thinking toggle; use `ReasoningEffort` instead when a model exposes only a reasoning budget. For external services that implement one of the thinking-toggle formats above, explicitly setting the matching `Variant` and `ThinkingEnabled` is usually sufficient. If a gateway uses a different field or requires additional parameters, use `openai.WithExtraFields(...)` to add or override provider-specific fields.
+
+For Kimi models that require thinking to remain enabled, leave
+`ThinkingEnabled` unset. To preserve reasoning across Kimi K2.6 conversation
+turns, pass the complete provider extension explicitly:
+
+```go
+llm := openai.New(
+    "kimi-k2.6",
+    openai.WithVariant(openai.VariantKimi),
+    openai.WithExtraFields(map[string]any{
+        "thinking": map[string]string{
+            "type": "enabled",
+            "keep": "all",
+        },
+    }),
+)
+```
+
+For MiniMax-M3, `ThinkingEnabled=false` sends `thinking.type=disabled`.
+MiniMax M2.x models accept that value but continue thinking. The adapter leaves
+`reasoning_split` unset intentionally: in MiniMax's native OpenAI format,
+reasoning remains inside the assistant `content` as `<think>...</think>`, and
+the framework preserves that content unchanged in tool-call history. Do not
+strip the tags from assistant history before returning tool results. See the
+[MiniMax OpenAI SDK documentation](https://platform.minimax.io/docs/api-reference/text-openai-api)
+for the provider's multi-turn requirements.
 
 #### 8. Streaming Tool Call Deltas: ShowToolCallDelta
 

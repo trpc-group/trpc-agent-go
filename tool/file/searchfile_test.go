@@ -281,6 +281,16 @@ func TestFileTool_SearchFile(t *testing.T) {
 	}
 }
 
+func TestFileTool_SearchFile_NilRequest(t *testing.T) {
+	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
+
+	rsp, err := fileToolSet.searchFile(context.Background(), nil)
+
+	assert.EqualError(t, err, "request cannot be nil")
+	assert.NotNil(t, rsp)
+	assert.Equal(t, "Error: request cannot be nil", rsp.Message)
+}
+
 func TestFileTool_SearchFile_WorkspaceRef(t *testing.T) {
 	fileToolSet := &fileToolSet{baseDir: t.TempDir()}
 

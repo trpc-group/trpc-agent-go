@@ -9,11 +9,15 @@
 package mem0
 
 import (
+	"context"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func apply(opts ...ServiceOpt) serviceOpts {
@@ -49,6 +53,43 @@ func TestWithSelfHostedOSS(t *testing.T) {
 func TestWithSelfHostedOSSIncludeUnscopedMemories(t *testing.T) {
 	assert.False(t, apply().includeUnscopedSelfHostedOSSMemories)
 	assert.True(t, apply(WithSelfHostedOSSIncludeUnscopedMemories()).includeUnscopedSelfHostedOSSMemories)
+}
+
+func TestSelfHostedIngestOptions(t *testing.T) {
+	t.Run("prompt", func(t *testing.T) {
+		opts := apply(
+			WithSelfHostedIngestPrompt("extract deadlines"),
+			WithSelfHostedIngestPrompt("   "),
+		)
+		assert.Equal(t, "extract deadlines", opts.ingest.prompt)
+	})
+
+	t.Run("expiration date resolver", func(t *testing.T) {
+		resolver := func(context.Context, *session.Session) (time.Time, error) {
+			return time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), nil
+		}
+		opts := apply(
+			WithSelfHostedIngestExpirationDateResolver(nil),
+			WithSelfHostedIngestExpirationDateResolver(resolver),
+		)
+		require.NotNil(t, opts.ingest.expirationDateResolver)
+		got, err := opts.ingest.expirationDateResolver.resolve(
+			context.Background(),
+			&session.Session{},
+		)
+		require.NoError(t, err)
+		assert.Equal(t, time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), got)
+	})
+
+	t.Run("inference", func(t *testing.T) {
+		assert.True(t, apply().ingest.infer)
+		assert.False(t, apply(WithIngestInference(false)).ingest.infer)
+	})
+
+	t.Run("procedural memory", func(t *testing.T) {
+		opts := apply(WithSelfHostedProceduralMemory())
+		assert.Equal(t, memoryTypeProcedural, opts.ingest.memoryType)
+	})
 }
 
 func TestWithOrgProject(t *testing.T) {

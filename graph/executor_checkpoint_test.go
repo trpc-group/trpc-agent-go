@@ -2797,6 +2797,8 @@ func TestExecutor_NodeHelpers(t *testing.T) {
 	exec := &Executor{graph: g}
 	require.Equal(t, NodeTypeTool, exec.getNodeType("n1"))
 	require.Equal(t, "Name1", exec.getNodeName("n1"))
+	node.Type = ""
+	require.Equal(t, NodeTypeFunction, exec.getNodeType("n1"))
 	// Node missing -> fallbacks
 	require.Equal(t, NodeTypeFunction, exec.getNodeType("missing"))
 	require.Equal(t, "missing", exec.getNodeName("missing"))
@@ -2882,7 +2884,7 @@ func TestExecutor_NewNodeExecutionContext_PreservesBusinessCurrentTraceStepID(t 
 		Input:  State{"current_trace_step_id": "business"},
 	}
 	disabledInv := &agent.Invocation{InvocationID: "inv-disabled", AgentName: "graph"}
-	nodeCtx := exec.initializeNodeContext(context.Background(), disabledInv, ec, task, 1, false)
+	nodeCtx := exec.initializeNodeContext(context.Background(), disabledInv, ec, task, 1)
 	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
 	_, ok := nodeCtx.stateCopy[currentTraceStepIDStateKey]
 	require.False(t, ok)
@@ -2891,7 +2893,7 @@ func TestExecutor_NewNodeExecutionContext_PreservesBusinessCurrentTraceStepID(t 
 		AgentName:    "graph",
 		RunOptions:   agent.RunOptions{ExecutionTraceEnabled: true},
 	}
-	nodeCtx = exec.initializeNodeContext(context.Background(), enabledInv, ec, task, 1, false)
+	nodeCtx = exec.initializeNodeContext(context.Background(), enabledInv, ec, task, 1)
 	require.Equal(t, "business", nodeCtx.stateCopy["current_trace_step_id"])
 	require.Equal(t, nodeCtx.traceStepID, nodeCtx.stateCopy[currentTraceStepIDStateKey])
 }
