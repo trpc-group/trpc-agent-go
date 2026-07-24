@@ -1,0 +1,8 @@
+diff --git a/service/service.go b/service/service.go
+--- a/service/service.go
++++ b/service/service.go
+@@ -1 +1,5 @@
+ package service
++func Enabled(value bool) bool {
++	return value
++}

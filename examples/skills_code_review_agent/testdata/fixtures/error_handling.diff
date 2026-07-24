@@ -1,0 +1,10 @@
+diff --git a/client.go b/client.go
+--- a/client.go
++++ b/client.go
+@@ -1 +1,6 @@
+ package client
++func load() error {
++	value, err := fetch()
++	if err != nil { return nil }
++	return use(value)
++}

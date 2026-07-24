@@ -1,0 +1,110 @@
+{
+  "task_id": "review-1784866294951236597-c7f80d64e7f8",
+  "status": "completed",
+  "conclusion": "changes_requested",
+  "mode": "dry-run",
+  "runtime": "fake",
+  "skill": "code-review",
+  "started_at": "2026-07-24T04:11:34.951236597Z",
+  "completed_at": "2026-07-24T04:11:34.951608852Z",
+  "input": {
+    "kind": "fixture",
+    "sha256": "c7f80d64e7f84b2e5d480bee3905e79fe9ebdd932f781238532bf786e1f79a93",
+    "bytes": 325,
+    "changed_files": [
+      "internal/query/query.go"
+    ],
+    "go_packages": [
+      "query"
+    ],
+    "redacted_preview": "diff --git a/internal/query/query.go b/internal/query/query.go\n--- a/internal/query/query.go\n+++ b/internal/query/query.go\n@@ -1 +1,6 @@\n package query\n+func lookup(userInput string) {\n+\texec.Command(\"sh\", \"-c\", userInput).Run()\n+\tquery := fmt.Sprintf(\"SELECT * FROM users WHERE name = '%s'\", userInput)\n+\tdb.Query(query)\n+}\n"
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/query/query.go",
+      "line": 3,
+      "title": "Shell command can execute untrusted input",
+      "evidence": "exec.Command(\"sh\", \"-c\", userInput).Run()",
+      "recommendation": "Avoid a shell and pass validated arguments directly to exec.CommandContext.",
+      "confidence": 0.94,
+      "source": "rule",
+      "rule_id": "SEC002"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "file": "internal/query/query.go",
+      "line": 4,
+      "title": "SQL statement is built by string interpolation",
+      "evidence": "query := fmt.Sprintf(\"SELECT * FROM users WHERE name = '%s'\", userInput)",
+      "recommendation": "Use a parameterized query and pass values separately.",
+      "confidence": 0.93,
+      "source": "rule",
+      "rule_id": "SEC003"
+    }
+  ],
+  "warnings": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "internal/query/query.go",
+      "line": 2,
+      "title": "Changed Go code has no matching test change",
+      "evidence": "No _test.go file changed in the same package.",
+      "recommendation": "Add or update focused tests for the changed behavior.",
+      "confidence": 0.62,
+      "source": "rule",
+      "rule_id": "TST001"
+    }
+  ],
+  "needs_human_review": [
+    {
+      "severity": "low",
+      "category": "testing",
+      "file": "internal/query/query.go",
+      "line": 2,
+      "title": "Changed Go code has no matching test change",
+      "evidence": "No _test.go file changed in the same package.",
+      "recommendation": "Add or update focused tests for the changed behavior.",
+      "confidence": 0.62,
+      "source": "rule",
+      "rule_id": "TST001"
+    }
+  ],
+  "permission_decisions": [
+    {
+      "tool": "workspace_exec",
+      "command": "\"bash\" \"skills/code-review/scripts/check_diff.sh\" \"work/input.diff\"",
+      "action": "allow",
+      "risk": "low",
+      "created_at": "2026-07-24T04:11:34.951604362Z"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "\"bash\" \"skills/code-review/scripts/check_diff.sh\" \"work/input.diff\"",
+      "status": "passed",
+      "exit_code": 0,
+      "duration_ms": 1,
+      "timed_out": false
+    }
+  ],
+  "artifacts": null,
+  "metrics": {
+    "total_duration_ms": 0,
+    "sandbox_duration_ms": 0,
+    "tool_calls": 1,
+    "permission_blocked": 0,
+    "finding_count": 2,
+    "warning_count": 1,
+    "severity": {
+      "critical": 0,
+      "high": 2,
+      "low": 1,
+      "medium": 0
+    },
+    "errors": {}
+  }
+}
