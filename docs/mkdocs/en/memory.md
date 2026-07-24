@@ -473,9 +473,40 @@ memoryService := memoryinmemory.NewMemoryService(
   episodic metadata. Topics are intentionally excluded, so changing tags does
   not create a new memory. Adding the same content and identity metadata for the
   same user is idempotent and overwrites the existing entry (not append).
-  UpdatedAt is refreshed.
+  UpdatedAt is refreshed. If that canonical ID belongs to a soft-deleted row,
+  `AddMemory` reactivates it.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
+
+### Update Semantics and ID Rotation
+
+`UpdateMemory` first applies the requested content, topics, and episodic
+metadata, then recalculates the canonical memory ID. Topics are not part of the
+ID, so a topics-only update stays on the same ID.
+
+The operation follows this state machine:
+
+| State after applying the update | Result |
+| ------------------------------- | ------ |
+| Source is missing or soft-deleted | Return a not-found error without changing `UpdateResult` |
+| Canonical ID is unchanged | Update the active source in place |
+| New ID does not exist | Create the target and retire the source |
+| New ID is soft-deleted | Reactivate the target; hard-delete mode replaces the stale tombstone |
+| New ID is already active | Return a conflict error without modifying either record |
+
+For backends with soft deletion enabled, a successful ID rotation preserves
+the old source as a tombstone. With hard deletion, the old source is removed.
+SQL backends perform target preparation and source retirement atomically.
+
+Timestamp behavior is also stable across SQL backends:
+
+- A newly inserted target inherits the source `CreatedAt`.
+- A reactivated target preserves its own `CreatedAt`.
+- A hard-delete replacement of a stale target inherits the source `CreatedAt`.
+- Every successful update refreshes `UpdatedAt`.
+
+On success, `UpdateResult.MemoryID` receives the effective canonical ID. On
+error, the caller-provided result remains unchanged.
 
 ### Custom Tool Implementation
 
@@ -1374,7 +1405,7 @@ mysqlService, err := memorymysql.NewService(
 | --------- | ----------------- | ---------------------------------------- |
 | Delete    | Immediate removal | Set `deleted_at` field                   |
 | Query     | Not visible       | Auto-filtered (WHERE deleted_at IS NULL) |
-| Recovery  | Cannot recover    | Can manually clear `deleted_at`          |
+| Recovery  | Cannot recover    | Re-add or rotate an update to the same ID |
 | Storage   | Saves space       | Occupies space                           |
 
 **Migration trap**:

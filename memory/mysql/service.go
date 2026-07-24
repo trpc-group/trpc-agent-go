@@ -170,7 +170,8 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey,
 
 	insertQuery := fmt.Sprintf(
 		"INSERT INTO `%s` (app_name, user_id, memory_id, memory_data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) "+
-			"ON DUPLICATE KEY UPDATE memory_data = VALUES(memory_data), updated_at = VALUES(updated_at)",
+			"ON DUPLICATE KEY UPDATE memory_data = VALUES(memory_data), "+
+			"updated_at = VALUES(updated_at), deleted_at = NULL",
 		s.tableName,
 	)
 	_, err = s.db.Exec(ctx, insertQuery, userKey.AppName, userKey.UserID, entry.ID, memoryData, now, now)

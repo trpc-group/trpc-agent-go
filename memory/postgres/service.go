@@ -228,7 +228,8 @@ func (s *Service) AddMemory(ctx context.Context, userKey memory.UserKey, memoryS
 			"VALUES ($1, $2, $3, $4, $5, $6) "+
 			"ON CONFLICT (memory_id) DO UPDATE SET "+
 			"memory_data = EXCLUDED.memory_data, "+
-			"updated_at = EXCLUDED.updated_at",
+			"updated_at = EXCLUDED.updated_at, "+
+			"deleted_at = NULL",
 		s.tableName,
 	)
 	_, err = s.db.ExecContext(ctx, insertQuery, entry.ID,

@@ -177,15 +177,17 @@ type Service interface {
 	Reader
 
 	// AddMemory adds or updates a memory for a user (idempotent).
+	// Backends that support soft deletion reactivate a matching tombstone.
 	// Options may include WithMetadata for episodic metadata.
 	AddMemory(ctx context.Context, userKey UserKey, memory string,
 		topics []string, opts ...AddOption) error
 
 	// UpdateMemory updates an existing active memory for a user.
 	// A soft-deleted source is treated as not found. Options may include
-	// WithUpdateMetadata for episodic metadata. If the updated canonical ID
-	// conflicts with another active memory, UpdateMemory returns an error
-	// without modifying either memory.
+	// WithUpdateMetadata for episodic metadata. When the canonical ID changes,
+	// a missing or soft-deleted target becomes active. If the target is already
+	// active, UpdateMemory returns an error without modifying either memory.
+	// In soft-delete mode, a successful rotation retains the source tombstone.
 	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
 		topics []string, opts ...UpdateOption) error
 
