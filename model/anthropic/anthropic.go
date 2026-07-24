@@ -76,6 +76,12 @@ type Model struct {
 	cacheTools        bool
 	cacheMessages     bool
 	showToolCallDelta bool
+
+	// Stream retry configuration. See WithStreamRetry for semantics.
+	streamMaxRetries       int
+	streamRetryEnabled     bool
+	streamRetryBaseBackoff time.Duration
+	streamRetryMaxBackoff  time.Duration
 }
 
 // New creates a new Anthropic model adapter.
@@ -126,6 +132,10 @@ func New(name string, opts ...Option) *Model {
 		cacheTools:                 o.cacheTools,
 		cacheMessages:              o.cacheMessages,
 		showToolCallDelta:          o.showToolCallDelta,
+		streamMaxRetries:           o.streamMaxRetries,
+		streamRetryEnabled:         o.streamRetryEnabled,
+		streamRetryBaseBackoff:     o.streamRetryBaseBackoff,
+		streamRetryMaxBackoff:      o.streamRetryMaxBackoff,
 	}
 }
 
@@ -580,33 +590,142 @@ func (m *Model) handleNonStreamingResponse(
 	}
 }
 
-// handleStreamingResponse sends a streaming request to the Anthropic API and emits partial deltas
-// followed by a final response.
+// handleStreamingResponse sends a streaming request to the Anthropic API and
+// emits partial deltas followed by a final response.
+//
+// Transport-level interruptions that occur BEFORE the first chunk is emitted
+// to responseChan are retried up to m.streamMaxRetries times using
+// exponential backoff. This is load-bearing for long-running workflows
+// because go-retryablehttp at the transport layer cannot retry mid-stream
+// connection resets (the HTTP response has already returned 200 OK by the
+// time the stream dies).
+//
+// Once any partial content has been delivered downstream we intentionally do
+// NOT retry; the caller is responsible for restarting the request from a
+// known state to avoid duplicate or interleaved chunks.
 func (m *Model) handleStreamingResponse(
 	ctx context.Context,
 	chatRequest anthropic.MessageNewParams,
 	responseChan chan<- *model.Response,
 ) {
-	// Issue streaming request.
-	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
+	maxRetries := m.effectiveStreamMaxRetries()
+
+	attempt := 0
+	for {
+		finalResponse, callbackAcc, streamErr, sawCallerOutput := m.runStreamingAttempt(ctx, chatRequest, responseChan)
+		if streamErr == nil {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, nil)
+			if finalResponse != nil {
+				select {
+				case responseChan <- finalResponse:
+				case <-ctx.Done():
+				}
+			}
+			return
+		}
+		// Don't retry context cancellation — the run is being torn down.
+		if errors.Is(streamErr, context.Canceled) ||
+			errors.Is(streamErr, context.DeadlineExceeded) {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		// Don't retry after any caller-visible output: partial responses on
+		// responseChan or raw chunk callbacks via WithChatChunkCallback.
+		// Retrying would leak chunks from the failed attempt or restart the
+		// stream from scratch after the caller already observed events.
+		if sawCallerOutput {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		// Only retry transport-level errors that look transient when stream
+		// retry is enabled. Zero-option models surface the original error.
+		if !isStreamRetryableError(streamErr) || maxRetries == 0 {
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, streamErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
+			return
+		}
+		if attempt >= maxRetries {
+			terminalErr := fmt.Errorf("anthropic stream failed after %d attempts: %w", attempt+1, streamErr)
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, terminalErr)
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, terminalErr)
+			return
+		}
+		attempt++
+		backoff := m.streamRetryBackoff(attempt)
+		log.WarnfContext(ctx,
+			"anthropic streaming request interrupted before first chunk (attempt %d/%d): %v; retrying after %s",
+			attempt, maxRetries+1, streamErr, backoff,
+		)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			m.runChatStreamCompleteCallback(ctx, &chatRequest, nil, ctx.Err())
+			m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, ctx.Err())
+			return
+		}
+	}
+}
+
+// effectiveStreamMaxRetries resolves the retry budget for handleStreamingResponse.
+// Stream retries are disabled unless WithStreamRetry was used. When enabled,
+// zero uses defaultStreamMaxRetries and negative disables retries.
+func (m *Model) effectiveStreamMaxRetries() int {
+	if !m.streamRetryEnabled {
+		return 0
+	}
+	if m.streamMaxRetries < 0 {
+		return 0
+	}
+	if m.streamMaxRetries == 0 {
+		return defaultStreamMaxRetries
+	}
+	return m.streamMaxRetries
+}
+
+// streamingRequestOptions returns per-request options for streaming calls.
+// When outer stream retry is enabled, SDK-level retries are disabled so the
+// documented WithStreamRetry budget is not multiplied by the client default.
+func (m *Model) streamingRequestOptions() []option.RequestOption {
+	if !m.streamRetryEnabled {
+		return m.anthropicRequestOptions
+	}
+	opts := make([]option.RequestOption, 0, len(m.anthropicRequestOptions)+1)
+	opts = append(opts, m.anthropicRequestOptions...)
+	opts = append(opts, option.WithMaxRetries(0))
+	return opts
+}
+
+// runStreamingAttempt performs a single streaming attempt and returns:
+//   - finalResponse: the terminal response when streaming completed cleanly
+//     (caller is responsible for delivering it to responseChan).
+//   - streamErr: a non-nil error if the stream failed at any point.
+//   - sawCallerOutput: true if this attempt delivered caller-visible output
+//     (a partial/final response on responseChan, or a WithChatChunkCallback
+//     invocation). When true the caller MUST NOT retry because downstream
+//     consumers have already observed stream state from this attempt.
+func (m *Model) runStreamingAttempt(
+	ctx context.Context,
+	chatRequest anthropic.MessageNewParams,
+	responseChan chan<- *model.Response,
+) (finalResponse *model.Response, callbackAcc *anthropic.Message, streamErr error, sawCallerOutput bool) {
+	streamOpts := m.streamingRequestOptions()
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, streamOpts...)
 	defer stream.Close()
-	// Accumulator to build final response.
 	acc := newStreamingMessageAccumulator()
-	var (
-		finalResponse *model.Response
-		streamErr     error
-	)
 
 loop:
 	for stream.Next() {
 		chunk := stream.Current()
-		// Accumulate into accumulator.
 		if err := acc.Accumulate(chunk); err != nil {
 			streamErr = err
 			break
 		}
-		m.runChatChunkCallback(ctx, &chatRequest, &chunk)
-		// Build partial response.
+		if m.chatChunkCallback != nil {
+			m.runChatChunkCallback(ctx, &chatRequest, &chunk)
+			sawCallerOutput = true
+		}
 		response, err := buildStreamingPartialResponse(acc.Message(), chunk, m.showToolCallDelta)
 		if err != nil {
 			streamErr = err
@@ -615,9 +734,9 @@ loop:
 		if response == nil {
 			continue
 		}
-		// Emit partial response.
 		select {
 		case responseChan <- response:
+			sawCallerOutput = true
 		case <-ctx.Done():
 			streamErr = ctx.Err()
 			break loop
@@ -633,21 +752,118 @@ loop:
 			finalResponse = buildStreamingFinalResponse(acc.Message())
 		}
 	}
-	var callbackAcc *anthropic.Message
 	if streamErr == nil {
 		finalAcc := acc.Message()
 		callbackAcc = &finalAcc
 	}
-	m.runChatStreamCompleteCallback(ctx, &chatRequest, callbackAcc, streamErr)
-	// Propagate stream error.
-	if streamErr != nil {
-		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeStreamError, streamErr)
-		return
+	return finalResponse, callbackAcc, streamErr, sawCallerOutput
+}
+
+// streamRetryBackoff returns the sleep duration before retry attempt n
+// (1-indexed). It doubles for each attempt, capped at streamRetryMaxBackoff.
+func (m *Model) streamRetryBackoff(attempt int) time.Duration {
+	base := m.streamRetryBaseBackoff
+	if base <= 0 {
+		base = defaultStreamRetryBaseBackoff
 	}
-	select {
-	case responseChan <- finalResponse:
-	case <-ctx.Done():
+	maxWait := m.streamRetryMaxBackoff
+	if maxWait <= 0 {
+		maxWait = defaultStreamRetryMaxBackoff
 	}
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= maxWait {
+			return maxWait
+		}
+	}
+	if d > maxWait {
+		return maxWait
+	}
+	return d
+}
+
+// streamRetryableErrorPatterns are substrings found in transport-level errors
+// that indicate a transient interruption worth retrying. We intentionally
+// match on substrings (rather than typed errors) because the Anthropic SDK
+// wraps low-level network errors in fmt.Errorf strings; using errors.As on
+// those would miss the cases that matter.
+var streamRetryableErrorPatterns = []string{
+	"connection reset",
+	"connection refused",
+	"broken pipe",
+	"i/o timeout",
+	"tls handshake timeout",
+	"unexpected eof",
+	"http2: server",
+	"http2: stream",
+	"network is unreachable",
+	"server misbehaving",
+	"no such host",
+	"overloaded",
+}
+
+// streamRetryableHTTPStatusCodes are HTTP status codes worth retrying when they
+// appear as isolated tokens in error text (not substrings of longer numbers).
+var streamRetryableHTTPStatusCodes = []string{
+	"502",
+	"503",
+	"504",
+	"529", // anthropic-specific "overloaded" status code
+}
+
+// isStreamRetryableHTTPStatusCode reports whether an HTTP status is transient.
+func isStreamRetryableHTTPStatusCode(status int) bool {
+	switch status {
+	case 502, 503, 504, 529:
+		return true
+	default:
+		return false
+	}
+}
+
+// isStreamRetryableError returns true when the given streaming-attempt error
+// looks like a transient transport/server condition that should be retried.
+func isStreamRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *anthropic.Error
+	if errors.As(err, &apiErr) && apiErr.StatusCode != 0 {
+		return isStreamRetryableHTTPStatusCode(apiErr.StatusCode)
+	}
+	msg := strings.ToLower(err.Error())
+	for _, p := range streamRetryableErrorPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	for _, code := range streamRetryableHTTPStatusCodes {
+		if containsHTTPStatusContext(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// containsHTTPStatusContext reports whether code appears in msg with explicit
+// HTTP-status phrasing (not bare port/path numbers in URLs).
+func containsHTTPStatusContext(msg, code string) bool {
+	if code == "" {
+		return false
+	}
+	markers := []string{
+		"status " + code,
+		"http status " + code,
+		"http " + code + " ",
+		": " + code + " ",
+	}
+	for _, marker := range markers {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 type streamingMessageAccumulator struct {
