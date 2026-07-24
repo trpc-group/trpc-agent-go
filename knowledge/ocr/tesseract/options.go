@@ -17,10 +17,14 @@ type options struct {
 }
 
 // Option configures the Tesseract OCR Extractor.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 type Option func(*options)
 
 // WithLanguage sets the OCR language(s).
 // Use "+" to combine multiple languages, e.g., "eng+chi_sim" for English and Simplified Chinese.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 func WithLanguage(lang string) Option {
 	return func(c *options) {
 		c.language = lang
@@ -29,6 +33,8 @@ func WithLanguage(lang string) Option {
 
 // WithConfidenceThreshold sets the minimum confidence threshold (0-100).
 // Results below this threshold will be rejected.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 func WithConfidenceThreshold(threshold float64) Option {
 	return func(c *options) {
 		c.confidenceThreshold = threshold
@@ -46,6 +52,8 @@ func WithConfidenceThreshold(threshold float64) Option {
 //	11 = Sparse text. Find as much text as possible in no particular order
 //
 // Invalid modes (< 0 or > 13) will be ignored and default mode (3) will be used.
+//
+// Deprecated: use OCR options on the selected content extractor instead.
 func WithPageSegMode(mode int) Option {
 	return func(c *options) {
 		if mode < 0 || mode > 13 {

@@ -180,9 +180,9 @@ knowledge/
 │   ├── query.go         # QueryEnhancer 接口定义
 │   ├── passthrough.go   # 默认透传增强器
 │   └── llm.go           # LLM 查询改写增强器
-└── ocr/                  # OCR 文字识别
-    ├── ocr.go           # Extractor 接口定义
-    └── tesseract/       # Tesseract OCR 实现（独立 go.mod）
+└── ocr/                  # 旧 OCR 文字识别接口（Deprecated）
+    ├── ocr.go           # 旧 OCR Extractor 接口定义
+    └── tesseract/       # Tesseract OCR 实现（独立 go.mod，Deprecated）
 ```
 
 ## 与 Agent 集成
@@ -426,7 +426,7 @@ err := kb.Load(ctx,
 - [Query Enhancer](query-enhancer.md) - 多轮对话查询改写与增强
 - [文档源](source.md) - 文件、目录、URL 等知识来源配置
 - [Extractor 内容提取](extractor.md) - 复杂文档和网页转 Markdown / 文本
-- [OCR 图片文字识别](ocr.md) - 配置 Tesseract OCR 提取文本
+- [OCR 图片文字识别](ocr.md) - 旧 OCR 接口的兼容说明
 - [过滤器](filter.md) - 基础过滤器和智能过滤器
 - [知识库管理](management.md) - 动态源管理和状态监控
 - [常见问题](troubleshooting.md) - 常见问题说明
