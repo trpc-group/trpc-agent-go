@@ -970,6 +970,16 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolResultEventPerToolCallEnabled controls whether eligible multi-tool
+// rounds emit one terminal result event per call instead of one aggregated
+// event. Results are emitted as calls complete, while the next model call
+// still waits for the whole round. It is disabled by default.
+func WithToolResultEventPerToolCallEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolResultEventPerToolCallEnabled = enabled
+	}
+}
+
 // WithToolPermissionPolicy sets a per-run policy that is checked after
 // before-tool callbacks finalize arguments and immediately before the
 // framework executes a tool call.
@@ -1397,6 +1407,10 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
+	// ToolResultEventPerToolCallEnabled emits one terminal result event per call
+	// for eligible multi-tool rounds. The default is false.
+	ToolResultEventPerToolCallEnabled bool
 
 	// ToolPermissionPolicy checks whether a tool call may run after the model
 	// has requested it, after argument repair, and after before-tool callbacks

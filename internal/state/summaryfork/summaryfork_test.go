@@ -204,6 +204,32 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 	require.Equal(t, "result", got.Messages[3].Content)
 }
 
+func TestInvalidateClearsSnapshotUntilNextAttach(t *testing.T) {
+	inv := agent.NewInvocation()
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("question")},
+	}
+	Attach(inv, req)
+	_, ok := Request(inv)
+	require.True(t, ok)
+
+	Invalidate(inv)
+	_, ok = Request(inv)
+	require.False(t, ok)
+
+	AppendResponse(inv, &model.Response{Choices: []model.Choice{{
+		Message: model.NewAssistantMessage("ignored"),
+	}}})
+	_, ok = Request(inv)
+	require.False(t, ok)
+
+	Attach(inv, req)
+	got, ok := Request(inv)
+	require.True(t, ok)
+	require.Len(t, got.Messages, 1)
+	require.Equal(t, "question", got.Messages[0].Content)
+}
+
 func TestAppendResponseNoopsWithoutPayload(t *testing.T) {
 	AppendResponse(nil, &model.Response{Choices: []model.Choice{{
 		Message: model.NewAssistantMessage("ignored"),

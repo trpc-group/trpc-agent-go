@@ -27,13 +27,22 @@ func Attach(inv *agent.Invocation, req *model.Request) {
 	inv.SetState(stateKey, cloneRequest(req))
 }
 
-// Request returns a snapshot of the parent model request, if one exists.
+// Request returns a cache-safe parent request snapshot when one exists.
 func Request(inv *agent.Invocation) (*model.Request, bool) {
 	req, ok := agent.GetStateValue[*model.Request](inv, stateKey)
 	if !ok || req == nil {
 		return nil, false
 	}
 	return cloneRequest(req), true
+}
+
+// Invalidate removes the current cache-safe request snapshot. Summarization
+// falls back to its standalone session input until a later Attach.
+func Invalidate(inv *agent.Invocation) {
+	if inv == nil {
+		return
+	}
+	inv.DeleteState(stateKey)
 }
 
 // AppendResponse appends persisted response messages to the stored request
@@ -47,7 +56,6 @@ func AppendResponse(inv *agent.Invocation, rsp *model.Response) {
 	if len(messages) == 0 {
 		return
 	}
-
 	next := cloneRequest(req)
 	next.Messages = append(next.Messages, cloneMessages(messages)...)
 	inv.SetState(stateKey, next)

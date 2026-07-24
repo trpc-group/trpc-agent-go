@@ -527,6 +527,37 @@ tool(result B)
 
 可运行示例：`examples/steer/`
 
+#### 按 Tool Call 输出工具结果事件
+
+上文的整轮屏障只约束下一次模型请求何时开始，并不要求事件消费者必须等待一个
+聚合结果事件。需要逐个获知工具完成情况时，可以为本次 run 开启以下选项：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithToolResultEventPerToolCallEnabled(true),
+)
+```
+
+对于符合条件的多 tool-call 轮次，启用后：
+
+- 每个调用完成时各发送一个终态 `tool.response` 事件，不再额外发送聚合结果事件。
+- 并行结果事件按完成顺序发送，并作为独立事件分别持久化到 Session。
+- 下一次模型请求仍会等待所有调用完成，传给模型的工具结果仍按原始 tool-call
+  顺序排列。
+
+`StateDelta` 和 `SkipSummarization` 仍然是整轮语义。中间结果事件不携带它们；
+整轮完成时由最后一个结果事件携带最终值，若整轮提前终止，则由终态 error 事件携带。
+中断前已持久化的结果仍保留在 Session 中用于审计，但后续模型请求会跳过这个不完整轮次。
+
+该选项默认关闭。单 tool-call 轮次和 partial streaming 事件保持原有行为。如果同轮
+任一调用由调用方执行（包括 external tool，或被 `WithToolExecutionFilter` 排除的
+调用），或者属于 long-running tool，则该轮不会拆分，继续保留原有执行和事件
+生命周期。
+
 #### 按请求覆盖 AppName（多租户隔离）
 
 默认情况下，Runner 使用构造时传入的 `appName` 作为 session key 和事件过滤 key。
