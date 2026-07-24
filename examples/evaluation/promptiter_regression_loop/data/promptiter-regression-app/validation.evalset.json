@@ -1,0 +1,74 @@
+{
+  "evalSetId": "validation",
+  "name": "validation",
+  "evalCases": [
+    {
+      "evalId": "val_01_generalize_tool_and_format",
+      "conversation": [
+        {
+          "invocationId": "val_01_generalize_tool_and_format-1",
+          "userContent": {
+            "role": "user",
+            "content": "订单 ORD-1004 现在什么状态？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1004 当前状态为运输中，订单金额 449.00 元，预计送达时间 2026-07-09。"
+          },
+          "tools": [
+            {
+              "name": "query_order",
+              "arguments": {
+                "order_id": "ORD-1004"
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    },
+    {
+      "evalId": "val_02_protected_format",
+      "conversation": [
+        {
+          "invocationId": "val_02_protected_format-1",
+          "userContent": {
+            "role": "user",
+            "content": "订单 ORD-1005 我已经申请取消了，退款什么时候到？"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单 ORD-1005 已取消，退款 199.00 元将在 3 个工作日内原路退回。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    },
+    {
+      "evalId": "val_03_stable_pass",
+      "conversation": [
+        {
+          "invocationId": "val_03_stable_pass-1",
+          "userContent": {
+            "role": "user",
+            "content": "帮我看下订单 ORD-1006"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "订单查询结果：订单 ORD-1006 当前状态为已发货，订单金额 88.00 元，预计送达时间 2026-07-11。"
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "regression-demo-user"
+      }
+    }
+  ]
+}
