@@ -117,6 +117,21 @@ func TestExecTool_OutputLimitsDisabledByDefault(t *testing.T) {
 	require.Zero(t, out.TotalBytes)
 }
 
+func TestExecTool_OutputLimitsLeaveBoundedOutputUnchanged(t *testing.T) {
+	original := execOutput{
+		Status: codeexecutor.ProgramStatusExited,
+		Output: "short",
+	}
+	out := (&ExecTool{outputLimit: len(original.Output)}).limitOutput(original)
+	require.Equal(t, original, out)
+}
+
+func TestExecTool_OutputLimitsAllowNilReceiver(t *testing.T) {
+	original := execOutput{Output: strings.Repeat("x", 128)}
+	var execTool *ExecTool
+	require.Equal(t, original, execTool.limitOutput(original))
+}
+
 func TestExecTool_OutputLimitsPreserveUTF8(t *testing.T) {
 	limit := len(outputTruncatedMarker) + 6
 	original := "你" + strings.Repeat("x", 80) + "好"
@@ -155,6 +170,25 @@ func TestExecTool_OutputLimitsTinyBudgetUsesUTF8Prefix(t *testing.T) {
 			require.NotContains(t, out.Output, outputTruncatedMarker)
 		})
 	}
+}
+
+func TestWindowOutputLeavesBoundedOutputUnchanged(t *testing.T) {
+	require.Equal(t, "output", windowOutput("output", 0))
+	require.Equal(t, "output", windowOutput("output", len("output")))
+}
+
+func TestUTF8WindowHelpersBoundaryCases(t *testing.T) {
+	t.Run("empty budget", func(t *testing.T) {
+		require.Empty(t, utf8Prefix("你", 0))
+		require.Empty(t, utf8Suffix("你", 0))
+	})
+	t.Run("input fits budget", func(t *testing.T) {
+		require.Equal(t, "你", utf8Prefix("你", len("你")))
+		require.Equal(t, "你", utf8Suffix("你", len("你")))
+	})
+	t.Run("suffix starts inside multibyte rune", func(t *testing.T) {
+		require.Equal(t, "好", utf8Suffix("a你好", 4))
+	})
 }
 
 func TestExecTool_AutoStagesInvocationMessageFiles(t *testing.T) {
