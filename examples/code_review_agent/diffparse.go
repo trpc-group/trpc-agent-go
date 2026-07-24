@@ -59,11 +59,12 @@ type diffLine struct {
 }
 
 type candidateLine struct {
-	File      string
-	Line      int
-	Text      string
-	FileIndex int
-	HunkIndex int
+	File          string
+	Line          int
+	Text          string
+	FileIndex     int
+	HunkIndex     int
+	HunkLineIndex int
 }
 
 type parseWarning struct {
@@ -422,16 +423,17 @@ func (p parsedDiff) candidateLines() []candidateLine {
 		}
 		filePath := file.reviewPath()
 		for hunkIndex, hunk := range file.Hunks {
-			for _, line := range hunk.Lines {
+			for lineIndex, line := range hunk.Lines {
 				if line.Kind != diffLineAdded || strings.TrimSpace(line.Text) == "" {
 					continue
 				}
 				candidates = append(candidates, candidateLine{
-					File:      filePath,
-					Line:      line.NewLine,
-					Text:      line.Text,
-					FileIndex: fileIndex,
-					HunkIndex: hunkIndex,
+					File:          filePath,
+					Line:          line.NewLine,
+					Text:          line.Text,
+					FileIndex:     fileIndex,
+					HunkIndex:     hunkIndex,
+					HunkLineIndex: lineIndex,
 				})
 			}
 		}

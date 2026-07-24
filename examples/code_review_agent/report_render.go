@@ -468,8 +468,8 @@ func renderMarkdownReport(report reviewReport) string {
 	fmt.Fprintf(&b, "\n")
 
 	fmt.Fprintf(&b, "## Reports\n\n")
-	fmt.Fprintf(&b, "- JSON: `%s`\n", report.ReportPaths.JSON)
-	fmt.Fprintf(&b, "- Markdown: `%s`\n", report.ReportPaths.Markdown)
+	fmt.Fprintf(&b, "- JSON: %s\n", markdownEscape(report.ReportPaths.JSON))
+	fmt.Fprintf(&b, "- Markdown: %s\n", markdownEscape(report.ReportPaths.Markdown))
 	return b.String()
 }
 
@@ -481,9 +481,12 @@ func writeFindingSection(b *strings.Builder, title string, findings []reviewFind
 	}
 	for _, finding := range findings {
 		fmt.Fprintf(b, "- `%s` %s:%d %s\n",
-			finding.Severity, finding.File, finding.Line, finding.Title)
+			finding.Severity,
+			markdownEscape(finding.File),
+			finding.Line,
+			markdownEscape(finding.Title))
 		if finding.Recommendation != "" {
-			fmt.Fprintf(b, "  Recommendation: %s\n", finding.Recommendation)
+			fmt.Fprintf(b, "  Recommendation: %s\n", markdownEscape(finding.Recommendation))
 		}
 	}
 	fmt.Fprintf(b, "\n")
@@ -500,9 +503,37 @@ func writeDecisionLines(b *strings.Builder, title string, decisions []governance
 			fmt.Fprintf(b, "- `%s`: `%s`\n", decision.Command, decision.Decision)
 			continue
 		}
-		fmt.Fprintf(b, "- `%s`: `%s` - %s\n", decision.Command, decision.Decision, decision.Reason)
+		fmt.Fprintf(b, "- `%s`: `%s` - %s\n",
+			decision.Command,
+			decision.Decision,
+			markdownEscape(decision.Reason))
 	}
 	fmt.Fprintf(b, "\n")
+}
+
+func markdownEscape(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		case '\\', '`', '*', '_', '{', '}', '[', ']', '(', ')',
+			'#', '+', '-', '.', '!', '|', '>':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, `\x%02x`, r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 func sortedStringKeys(values map[string]int) []string {

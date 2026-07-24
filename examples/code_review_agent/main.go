@@ -82,10 +82,11 @@ func (s *repeatedStrings) Set(value string) error {
 }
 
 type reviewInput struct {
-	kind     string
-	source   string
-	diff     []byte
-	repoRoot string
+	kind            string
+	source          string
+	diff            []byte
+	repoRoot        string
+	sandboxRepoRoot string
 }
 
 type reviewSummary struct {

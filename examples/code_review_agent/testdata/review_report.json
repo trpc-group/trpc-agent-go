@@ -64,35 +64,19 @@
   "governance": {
     "skill_name": "code-review",
     "skill_digest": "sample-skill-digest",
-    "commands_planned": 3,
-    "commands_allowed": 3,
+    "commands_planned": 1,
+    "commands_allowed": 1,
     "commands_blocked": 0,
     "permission_blocks": 0,
     "filter_decisions": [
       {
         "command": "checkGoVersion",
         "decision": "allow"
-      },
-      {
-        "command": "checkGoTest",
-        "decision": "allow"
-      },
-      {
-        "command": "checkGoVet",
-        "decision": "allow"
       }
     ],
     "permission_decisions": [
       {
         "command": "checkGoVersion",
-        "decision": "allow"
-      },
-      {
-        "command": "checkGoTest",
-        "decision": "allow"
-      },
-      {
-        "command": "checkGoVet",
         "decision": "allow"
       }
     ],
@@ -102,22 +86,6 @@
         "command": "checkGoVersion",
         "exit_code": 0,
         "stdout": "go version fake",
-        "timed_out": false,
-        "duration_ms": 1
-      },
-      {
-        "runtime": "fake",
-        "command": "checkGoTest",
-        "exit_code": 0,
-        "stdout": "ok",
-        "timed_out": false,
-        "duration_ms": 1
-      },
-      {
-        "runtime": "fake",
-        "command": "checkGoVet",
-        "exit_code": 0,
-        "stdout": "ok",
         "timed_out": false,
         "duration_ms": 1
       }
@@ -140,8 +108,8 @@
   "warnings": [],
   "metrics": {
     "total_duration_ms": 4,
-    "sandbox_duration_ms": 3,
-    "tool_calls": 3,
+    "sandbox_duration_ms": 1,
+    "tool_calls": 1,
     "permission_blocks": 0,
     "findings": 1,
     "warnings": 0,
@@ -160,7 +128,7 @@
       "kind": "review_report_markdown",
       "path": "output/review-sample-secret-leak/review_report.md",
       "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
-      "bytes": 1250
+      "bytes": 954
     }
   ],
   "report_paths": {

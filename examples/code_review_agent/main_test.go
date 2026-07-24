@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -248,6 +249,42 @@ func TestReportFilesAndSummaryBoundary(t *testing.T) {
 	}
 }
 
+func TestMarkdownReportEscapesDiffControlledFields(t *testing.T) {
+	report := sampleReviewReport("task-markdown")
+	report.Findings = []reviewFinding{{
+		Severity:       "high",
+		File:           "bad\n## forged [`link`](https://example.test).go",
+		Line:           7,
+		Title:          "Title with `code` and [link](https://example.test)",
+		Recommendation: "Use literal [text](https://example.test)\nnext line",
+	}}
+	report.Governance.FilterDecisions = []governanceDecision{{
+		Command:  string(commandCheckGoTest),
+		Decision: governanceDecisionAllow,
+		Reason:   "ok\n## forged",
+	}}
+	report.ReportPaths = reportPaths{
+		JSON:     "out/[json](x).json",
+		Markdown: "out/`md`.md",
+	}
+	markdown := renderMarkdownReport(report)
+	for _, forbidden := range []string{
+		"\n## forged",
+		"[`link`](https://example.test)",
+		"[link](https://example.test)",
+		"[text](https://example.test)",
+		"`md`",
+	} {
+		if strings.Contains(markdown, forbidden) {
+			t.Fatalf("markdown contains unescaped %q:\n%s", forbidden, markdown)
+		}
+	}
+	if strings.Count(markdown, "- `high`") != 1 ||
+		!strings.Contains(markdown, `bad\n\#\# forged`) {
+		t.Fatalf("markdown did not preserve one inert finding line:\n%s", markdown)
+	}
+}
+
 func TestSampleReviewReports(t *testing.T) {
 	jsonBytes, err := os.ReadFile(filepath.Join("testdata", "review_report.json"))
 	if err != nil {
@@ -267,8 +304,8 @@ func TestSampleReviewReports(t *testing.T) {
 		report.Input.Source != "secret_leak" ||
 		report.Runtime.Runtime != runtimeFake ||
 		len(report.Findings) != 1 ||
-		len(report.Governance.SandboxRuns) != 3 ||
-		report.Metrics.ToolCalls != 3 {
+		len(report.Governance.SandboxRuns) != 1 ||
+		report.Metrics.ToolCalls != 1 {
 		t.Fatalf("sample report = %+v", report)
 	}
 
@@ -626,8 +663,7 @@ func TestE2BMissingAPIKeyDoesNotAbortReview(t *testing.T) {
 			t.Fatalf("sandbox run = %+v, want skipped e2b run", run)
 		}
 	}
-	if !containsString(got.WarningRuleIDs, ruleSandboxPreflightFailed) ||
-		!containsString(got.WarningRuleIDs, ruleSandboxRunSkipped) {
+	if !containsString(got.WarningRuleIDs, ruleSandboxPreflightFailed) {
 		t.Fatalf("warning rule ids = %#v", got.WarningRuleIDs)
 	}
 }
@@ -660,8 +696,9 @@ func TestLocalPreflightMissingToolsDoesNotAbortReview(t *testing.T) {
 func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 	repoRoot := t.TempDir()
 	input := reviewInput{
-		kind:     inputKindRepoPath,
-		repoRoot: repoRoot,
+		kind:            inputKindRepoPath,
+		repoRoot:        t.TempDir(),
+		sandboxRepoRoot: repoRoot,
 	}
 	spec := newCommandSpec(
 		commandCheckGoTest,
@@ -697,8 +734,9 @@ func TestSkillRunBridgeArgumentsUseGovernedSpec(t *testing.T) {
 
 func TestPlanCommandsStagesRepoOnlyOnce(t *testing.T) {
 	input := reviewInput{
-		kind:     inputKindRepoPath,
-		repoRoot: t.TempDir(),
+		kind:            inputKindRepoPath,
+		repoRoot:        t.TempDir(),
+		sandboxRepoRoot: t.TempDir(),
 	}
 	commands := planCommands(
 		config{enableStaticcheck: true},
@@ -718,18 +756,42 @@ func TestPlanCommandsStagesRepoOnlyOnce(t *testing.T) {
 		if command.Kind != wantKinds[i] {
 			t.Fatalf("command %d kind = %q, want %q", i, command.Kind, wantKinds[i])
 		}
+		if i == 0 {
+			if len(command.Inputs) != 0 || len(command.Env) != 0 {
+				t.Fatalf("go version command = %+v, want no repo inputs/env", command)
+			}
+			continue
+		}
 		if command.Env["REVIEW_REPO_DIR"] != reviewRepoDirFromSkill {
 			t.Fatalf("command %d REVIEW_REPO_DIR = %q", i, command.Env["REVIEW_REPO_DIR"])
 		}
-		if i == 0 {
+		if i == 1 {
 			if len(command.Inputs) != 1 || command.Inputs[0].To != reviewRepoInputTarget {
-				t.Fatalf("first command inputs = %+v", command.Inputs)
+				t.Fatalf("go test inputs = %+v", command.Inputs)
 			}
 			continue
 		}
 		if len(command.Inputs) != 0 {
 			t.Fatalf("command %d inputs = %+v, want none", i, command.Inputs)
 		}
+	}
+}
+
+func TestDiffFileAndFixtureDoNotPlanRepositoryChecks(t *testing.T) {
+	for _, inputKind := range []string{inputKindDiffFile, inputKindFixture} {
+		t.Run(inputKind, func(t *testing.T) {
+			commands := planCommands(
+				config{enableStaticcheck: true},
+				reviewInput{kind: inputKind},
+				parseUnifiedDiff([]byte(minimalDiff())),
+			)
+			if len(commands) != 1 || commands[0].Kind != commandCheckGoVersion {
+				t.Fatalf("commands = %+v, want only go version", commands)
+			}
+			if len(commands[0].Inputs) != 0 || len(commands[0].Env) != 0 {
+				t.Fatalf("go version command = %+v, want no repo inputs/env", commands[0])
+			}
+		})
 	}
 }
 
@@ -781,10 +843,21 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 	t.Cleanup(func() {
 		_ = os.Chmod(objectDir, 0o755)
 	})
+	mustRunGit(t, repoRoot, "init")
+	mustRunGit(t, repoRoot, "add", "go.mod", "review.go")
+	snapshot, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, maxSandboxSnapshotBytes)
+	if err != nil {
+		t.Fatalf("prepare snapshot: %v", err)
+	}
+	defer os.RemoveAll(snapshot.Root)
 
 	commands := planCommands(
 		config{},
-		reviewInput{kind: inputKindRepoPath, repoRoot: repoRoot},
+		reviewInput{
+			kind:            inputKindRepoPath,
+			repoRoot:        repoRoot,
+			sandboxRepoRoot: snapshot.Root,
+		},
 		parseUnifiedDiff([]byte(minimalDiff())),
 	)
 	for _, command := range commands {
@@ -792,6 +865,95 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 		if run.Error != "" || run.ExitCode != 0 || run.TimedOut {
 			t.Fatalf("sandbox run %q = %+v", command.Kind, run)
 		}
+	}
+}
+
+func TestLocalRunnerCloseRemovesWorkRoot(t *testing.T) {
+	if err := preflightLocalRuntime(); err != nil {
+		t.Skipf("local runtime unavailable: %v", err)
+	}
+	meta, err := loadCodeReviewSkill("")
+	if err != nil {
+		t.Fatalf("load skill: %v", err)
+	}
+	runner, err := newLocalSandboxRunner(meta)
+	if err != nil {
+		t.Fatalf("new local runner: %v", err)
+	}
+	skillRunner, ok := runner.(*skillRunSandboxRunner)
+	if !ok || skillRunner.workRoot == "" {
+		t.Fatalf("runner = %#v, want skill runner with work root", runner)
+	}
+	if _, err := os.Stat(skillRunner.workRoot); err != nil {
+		t.Fatalf("work root before close: %v", err)
+	}
+	if err := skillRunner.Close(); err != nil {
+		t.Fatalf("close local runner: %v", err)
+	}
+	if _, err := os.Stat(skillRunner.workRoot); !os.IsNotExist(err) {
+		t.Fatalf("work root after close err = %v, want not exist", err)
+	}
+}
+
+func TestRepositorySnapshotCopiesOnlyTrackedRegularFiles(t *testing.T) {
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/snapshot\n\ngo 1.21\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "pkg", "review.go"), "package pkg\n")
+	mustWriteFile(t, filepath.Join(repoRoot, ".gitignore"), "*.secret\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "ignored.secret"), "password = \"supersecret123\"\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "untracked.go"), "package untracked\n")
+	mustRunGit(t, repoRoot, "add", "go.mod", "pkg/review.go", ".gitignore")
+
+	snapshot, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, maxSandboxSnapshotBytes)
+	if err != nil {
+		t.Fatalf("prepare snapshot: %v", err)
+	}
+	defer os.RemoveAll(snapshot.Root)
+
+	for _, rel := range []string{"go.mod", "pkg/review.go", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(snapshot.Root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("tracked file %s missing from snapshot: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{".git", "ignored.secret", "untracked.go"} {
+		if _, err := os.Stat(filepath.Join(snapshot.Root, filepath.FromSlash(rel))); !os.IsNotExist(err) {
+			t.Fatalf("unexpected snapshot path %s err = %v", rel, err)
+		}
+	}
+	if snapshot.Files != 3 || snapshot.Bytes == 0 {
+		t.Fatalf("snapshot metadata = %+v", snapshot)
+	}
+}
+
+func TestSnapshotUnavailableSkipsRepositoryChecks(t *testing.T) {
+	runner := &recordingSandboxRunner{}
+	gov, err := runGovernance(context.Background(), config{}, reviewInput{
+		kind:     inputKindRepoPath,
+		repoRoot: t.TempDir(),
+	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
+		sandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatalf("runGovernance: %v", err)
+	}
+	if gov.CommandsPlanned != 1 || len(runner.calls) != 1 ||
+		runner.calls[0].Kind != commandCheckGoVersion {
+		t.Fatalf("governance = %+v runner calls = %+v, want only go version", gov, runner.calls)
+	}
+	if len(gov.Warnings) != 1 || gov.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable {
+		t.Fatalf("warnings = %+v, want snapshot unavailable", gov.Warnings)
+	}
+}
+
+func TestRepositorySnapshotLimitSkipsRepositoryChecks(t *testing.T) {
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/large\n\ngo 1.21\n")
+	mustRunGit(t, repoRoot, "add", "go.mod")
+	if _, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, 1); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("prepare snapshot err = %v, want size limit", err)
 	}
 }
 
@@ -822,7 +984,7 @@ func TestGovernanceSummaryFromDryRun(t *testing.T) {
 	}
 	var got reviewSummary
 	mustUnmarshalSummary(t, stdout, &got)
-	if got.CommandsPlanned != 3 || got.CommandsAllowed != 3 ||
+	if got.CommandsPlanned != 1 || got.CommandsAllowed != 1 ||
 		got.CommandsBlocked != 0 || got.PermissionBlocks != 0 {
 		t.Fatalf("governance counts = planned:%d allowed:%d blocked:%d permission:%d",
 			got.CommandsPlanned, got.CommandsAllowed, got.CommandsBlocked, got.PermissionBlocks)
@@ -832,8 +994,8 @@ func TestGovernanceSummaryFromDryRun(t *testing.T) {
 		t.Fatalf("skill metadata = %q/%q, want code-review digest",
 			report.Governance.SkillName, report.Governance.SkillDigest)
 	}
-	if len(report.Governance.FilterDecisions) != 3 || len(report.Governance.PermissionDecisions) != 3 ||
-		len(report.Governance.SandboxRuns) != 3 {
+	if len(report.Governance.FilterDecisions) != 1 || len(report.Governance.PermissionDecisions) != 1 ||
+		len(report.Governance.SandboxRuns) != 1 {
 		t.Fatalf("governance slices = filter:%d permission:%d runs:%d",
 			len(report.Governance.FilterDecisions), len(report.Governance.PermissionDecisions),
 			len(report.Governance.SandboxRuns))
@@ -846,22 +1008,17 @@ func TestGovernanceSummaryFromDryRun(t *testing.T) {
 }
 
 func TestGovernanceStaticcheckIsOptIn(t *testing.T) {
-	code, stdout, stderr := runForTest(t, []string{
-		"--fixture", "clean",
-		"--dry-run",
-		"--enable-staticcheck",
-	}, nil, nil)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
-	}
-	var got reviewSummary
-	mustUnmarshalSummary(t, stdout, &got)
-	report := readReportFromSummary(t, got)
-	if got.CommandsPlanned != 4 || got.CommandsAllowed != 4 || len(report.Governance.SandboxRuns) != 4 {
-		t.Fatalf("staticcheck governance summary = %+v", got)
-	}
-	if report.Governance.SandboxRuns[3].Command != string(commandCheckStaticcheck) {
-		t.Fatalf("last sandbox command = %+v, want staticcheck", report.Governance.SandboxRuns[3])
+	commands := planCommands(
+		config{enableStaticcheck: true},
+		reviewInput{
+			kind:            inputKindRepoPath,
+			repoRoot:        t.TempDir(),
+			sandboxRepoRoot: t.TempDir(),
+		},
+		parseUnifiedDiff([]byte(minimalDiff())),
+	)
+	if len(commands) != 4 || commands[3].Kind != commandCheckStaticcheck {
+		t.Fatalf("commands = %+v, want staticcheck as fourth command", commands)
 	}
 }
 
@@ -1074,7 +1231,9 @@ func TestGovernanceBlockedPreflightSkipsLaterCommands(t *testing.T) {
 	permissionCalls := 0
 	runner := &recordingSandboxRunner{}
 	gov, err := runGovernance(context.Background(), config{}, reviewInput{
-		kind: inputKindFixture,
+		kind:            inputKindRepoPath,
+		repoRoot:        t.TempDir(),
+		sandboxRepoRoot: t.TempDir(),
 	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
 		permissionPolicy: tool.PermissionPolicyFunc(func(
 			context.Context,
@@ -1101,6 +1260,38 @@ func TestGovernanceBlockedPreflightSkipsLaterCommands(t *testing.T) {
 		if !run.Skipped || !strings.Contains(run.Error, "preflight denied") {
 			t.Fatalf("sandbox run = %+v, want preflight skip", run)
 		}
+	}
+}
+
+func TestGovernanceSkipsRepoCommandsWhenStagingCommandBlocked(t *testing.T) {
+	permissionCalls := 0
+	runner := &recordingSandboxRunner{}
+	gov, err := runGovernance(context.Background(), config{}, reviewInput{
+		kind:            inputKindRepoPath,
+		repoRoot:        t.TempDir(),
+		sandboxRepoRoot: t.TempDir(),
+	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
+		permissionPolicy: tool.PermissionPolicyFunc(func(
+			context.Context,
+			*tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			permissionCalls++
+			if permissionCalls == 2 {
+				return tool.DenyPermission("staging denied"), nil
+			}
+			return tool.AllowPermission(), nil
+		}),
+		sandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatalf("runGovernance: %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
+		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
+	}
+	if len(gov.SandboxRuns) != 2 || !gov.SandboxRuns[1].Skipped ||
+		gov.SandboxRuns[1].Command != string(commandCheckGoVet) {
+		t.Fatalf("sandbox runs = %+v, want vet skipped after staging block", gov.SandboxRuns)
 	}
 }
 
@@ -1374,7 +1565,11 @@ func TestRulesFromFixtures(t *testing.T) {
 		{fixture: "secret_leak", wantFindings: []string{ruleSecretHardcoded}},
 		{fixture: "insecure_tls", wantFindings: []string{ruleInsecureTLS}},
 		{fixture: "goroutine_context_leak", wantFindings: []string{ruleGoroutineContextLeak}},
-		{fixture: "resource_leak", wantFindings: []string{ruleUnclosedFile, ruleUnclosedHTTPBody, ruleUnclosedSQLRows}},
+		{
+			fixture:      "resource_leak",
+			wantFindings: []string{ruleUnclosedFile, ruleUnclosedHTTPBody, ruleUnclosedSQLRows},
+			wantWarnings: []string{ruleUnclosedFile},
+		},
 		{fixture: "ignored_error", wantFindings: []string{ruleIgnoredReturn}},
 		{fixture: "database_lifecycle", wantFindings: []string{ruleDatabaseOpenLifecycle, ruleDatabaseTxLifecycle}},
 		{fixture: "missing_tests", wantWarnings: []string{ruleMissingTests}},
@@ -1708,6 +1903,99 @@ func TestLifecycleConfidenceRouting(t *testing.T) {
 	}
 }
 
+func TestResourceCleanupIsScopedToFunction(t *testing.T) {
+	repoRoot := t.TempDir()
+	source := strings.Join([]string{
+		"package scoped",
+		"",
+		"import \"os\"",
+		"",
+		"func closesOther(name string) error {",
+		"\tf, err := os.Open(name)",
+		"\tif err != nil { return err }",
+		"\tdefer f.Close()",
+		"\treturn nil",
+		"}",
+		"",
+		"func leaksHere(name string) error {",
+		"\tf, err := os.Open(name)",
+		"\tif err != nil { return err }",
+		"\t_ = f",
+		"\treturn nil",
+		"}",
+	}, "\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "scoped.go"), source)
+	diff := strings.Join([]string{
+		"diff --git a/scoped.go b/scoped.go",
+		"--- a/scoped.go",
+		"+++ b/scoped.go",
+		"@@ -12,3 +12,6 @@ func leaksHere(name string) error {",
+		"+\tf, err := os.Open(name)",
+		"+\tif err != nil { return err }",
+		"+\t_ = f",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), repoRoot))
+	if len(finalized.Findings) != 1 || finalized.Findings[0].RuleID != ruleUnclosedFile {
+		t.Fatalf("finalized = %+v, want scoped unclosed file finding", finalized)
+	}
+}
+
+func TestResourceCleanupSameFunctionSuppressesFinding(t *testing.T) {
+	repoRoot := t.TempDir()
+	source := strings.Join([]string{
+		"package scoped",
+		"",
+		"import \"os\"",
+		"",
+		"func safe(name string) error {",
+		"\tf, err := os.Open(name)",
+		"\tif err != nil { return err }",
+		"\tdefer f.Close()",
+		"\treturn nil",
+		"}",
+	}, "\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "safe.go"), source)
+	diff := strings.Join([]string{
+		"diff --git a/safe.go b/safe.go",
+		"--- a/safe.go",
+		"+++ b/safe.go",
+		"@@ -6,3 +6,6 @@ func safe(name string) error {",
+		"+\tf, err := os.Open(name)",
+		"+\tif err != nil { return err }",
+		"+\tdefer f.Close()",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), repoRoot))
+	if len(finalized.Findings) != 0 || len(finalized.Warnings) != 0 {
+		t.Fatalf("finalized = %+v, want no resource finding", finalized)
+	}
+}
+
+func TestDiffOnlyResourceCleanupUsesHunkFunctionWindow(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/window.go b/window.go",
+		"--- a/window.go",
+		"+++ b/window.go",
+		"@@ -1,3 +1,14 @@",
+		" package window",
+		"+func closesOther(name string) error {",
+		"+\tf, err := os.Open(name)",
+		"+\tif err != nil { return err }",
+		"+\tdefer f.Close()",
+		"+\treturn nil",
+		"+}",
+		"+func leaksHere(name string) error {",
+		"+\tf, err := os.Open(name)",
+		"+\tif err != nil { return err }",
+		"+\t_ = f",
+		"+\treturn nil",
+		"+}",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), ""))
+	if len(finalized.Findings) != 1 || finalized.Findings[0].RuleID != ruleUnclosedFile {
+		t.Fatalf("finalized = %+v, want diff-only function-window finding", finalized)
+	}
+}
+
 func TestRedactTextCoversCommonSecrets(t *testing.T) {
 	samples := []struct {
 		name     string
@@ -1805,9 +2093,9 @@ func TestCLIFinalSummaryFromFixtures(t *testing.T) {
 		},
 		{
 			fixture:              "sandbox_failure",
-			wantWarnings:         3,
+			wantWarnings:         1,
 			wantNeedsHumanReview: true,
-			wantWarningRuleIDs:   []string{ruleSandboxRunFailed, ruleSandboxRunSkipped},
+			wantWarningRuleIDs:   []string{ruleSandboxRunFailed},
 		},
 	}
 
@@ -2076,6 +2364,28 @@ func minimalDiff() string {
 		"+func message() string { return \"hello\" }",
 		"",
 	}, "\n")
+}
+
+func mustWriteFile(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mustRunGit(t *testing.T, repoRoot string, args ...string) {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git unavailable: %v", err)
+	}
+	cmd := exec.Command("git", append([]string{"-C", repoRoot}, args...)...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
 }
 
 func splitRuleIDs(matches []ruleMatch) (map[string]int, map[string]int) {

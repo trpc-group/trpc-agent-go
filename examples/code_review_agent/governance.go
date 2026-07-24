@@ -38,11 +38,12 @@ const (
 	governanceDecisionAsk   = "ask"
 	governanceDecisionError = "error"
 
-	ruleGovernanceCommandBlocked = "governance.command_blocked"
-	ruleGovernancePermission     = "governance.permission_error"
-	ruleSandboxPreflightFailed   = "sandbox.preflight_failed"
-	ruleSandboxRunFailed         = "sandbox.run_failed"
-	ruleSandboxRunSkipped        = "sandbox.run_skipped"
+	ruleGovernanceCommandBlocked   = "governance.command_blocked"
+	ruleGovernancePermission       = "governance.permission_error"
+	ruleSandboxPreflightFailed     = "sandbox.preflight_failed"
+	ruleSandboxSnapshotUnavailable = "sandbox.snapshot_unavailable"
+	ruleSandboxRunFailed           = "sandbox.run_failed"
+	ruleSandboxRunSkipped          = "sandbox.run_skipped"
 
 	toolNameSkillRun       = "skill_run"
 	reviewRepoInputTarget  = "work/repo/"
@@ -160,7 +161,30 @@ func runGovernance(
 		SkillDigest: meta.Digest,
 	}
 
-	specs := planCommands(cfg, input, parsed)
+	plannedInput := input
+	if shouldRunRepositoryChecks(input, parsed) && strings.TrimSpace(plannedInput.sandboxRepoRoot) == "" {
+		snapshotCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
+		snapshot, snapshotErr := prepareSandboxRepoSnapshot(
+			snapshotCtx,
+			input.repoRoot,
+			maxSandboxSnapshotBytes,
+		)
+		cancel()
+		if snapshotErr != nil {
+			result.addGovernanceWarning(
+				"sandbox",
+				commandSpec{Kind: commandCheckGoTest},
+				ruleSandboxSnapshotUnavailable,
+				"Repository snapshot is unavailable",
+				snapshotErr.Error(),
+			)
+		} else {
+			plannedInput.sandboxRepoRoot = snapshot.Root
+			defer os.RemoveAll(snapshot.Root)
+		}
+	}
+
+	specs := planCommands(cfg, plannedInput, parsed)
 	result.CommandsPlanned = len(specs)
 
 	policy := hooks.permissionPolicy
@@ -171,6 +195,8 @@ func runGovernance(
 	ownsRunner := false
 	var preflightFailed bool
 	var preflightReason string
+	var repoStageFailed bool
+	var repoStageReason string
 	if runner == nil {
 		var createErr error
 		runner, createErr = newConfiguredSandboxRunner(ctx, cfg, meta)
@@ -203,6 +229,10 @@ func runGovernance(
 				preflightFailed = true
 				preflightReason = filterDecision.Reason
 			}
+			if stagesRepository(spec) {
+				repoStageFailed = true
+				repoStageReason = filterDecision.Reason
+			}
 			continue
 		}
 
@@ -221,12 +251,22 @@ func runGovernance(
 				preflightFailed = true
 				preflightReason = permissionDecision.Reason
 			}
+			if stagesRepository(spec) {
+				repoStageFailed = true
+				repoStageReason = permissionDecision.Reason
+			}
 			continue
 		}
 
 		result.CommandsAllowed++
 		if runner == nil || preflightFailed && spec.Kind != commandCheckGoVersion {
 			run := skippedSandboxRun(cfg.effectiveRuntime, spec, preflightReason)
+			result.addSandboxRun(run)
+			result.addSandboxWarning(spec, run)
+			continue
+		}
+		if repoStageFailed && requiresStagedRepository(spec) && !stagesRepository(spec) {
+			run := skippedSandboxRun(cfg.effectiveRuntime, spec, repoStageReason)
 			result.addSandboxRun(run)
 			result.addSandboxWarning(spec, run)
 			continue
@@ -240,6 +280,10 @@ func runGovernance(
 		if spec.Kind == commandCheckGoVersion && sandboxRunFailed(run) {
 			preflightFailed = true
 			preflightReason = sandboxRunFailureReason(run)
+		}
+		if stagesRepository(spec) && strings.TrimSpace(run.Error) != "" {
+			repoStageFailed = true
+			repoStageReason = sandboxRunFailureReason(run)
 		}
 	}
 	if ownsRunner {
@@ -376,19 +420,22 @@ func digestCodeReviewSkill(skillDir string) (string, error) {
 }
 
 func planCommands(cfg config, input reviewInput, parsed parsedDiff) []commandSpec {
+	commands := []commandSpec{
+		newCommandSpec(commandCheckGoVersion, nil, nil),
+	}
+	if !shouldRunRepositoryChecks(input, parsed) ||
+		strings.TrimSpace(input.sandboxRepoRoot) == "" {
+		return commands
+	}
+
 	inputs := commandInputs(input)
 	env := commandEnv(input)
-	commands := []commandSpec{
-		newCommandSpec(commandCheckGoVersion, inputs, env),
-	}
-	if hasReviewableGoChange(parsed) {
-		commands = append(commands,
-			newCommandSpec(commandCheckGoTest, nil, env),
-			newCommandSpec(commandCheckGoVet, nil, env),
-		)
-		if cfg.enableStaticcheck {
-			commands = append(commands, newCommandSpec(commandCheckStaticcheck, nil, env))
-		}
+	commands = append(commands,
+		newCommandSpec(commandCheckGoTest, inputs, env),
+		newCommandSpec(commandCheckGoVet, nil, env),
+	)
+	if cfg.enableStaticcheck {
+		commands = append(commands, newCommandSpec(commandCheckStaticcheck, nil, env))
 	}
 	return commands
 }
@@ -421,12 +468,12 @@ func newCommandSpec(kind commandKind, inputs []inputMapping, env map[string]stri
 }
 
 func commandInputs(input reviewInput) []inputMapping {
-	if input.kind != inputKindRepoPath || strings.TrimSpace(input.repoRoot) == "" {
+	if input.kind != inputKindRepoPath || strings.TrimSpace(input.sandboxRepoRoot) == "" {
 		return nil
 	}
-	repoRoot, err := filepath.Abs(input.repoRoot)
+	repoRoot, err := filepath.Abs(input.sandboxRepoRoot)
 	if err != nil {
-		repoRoot = input.repoRoot
+		repoRoot = input.sandboxRepoRoot
 	}
 	return []inputMapping{{
 		From: "host://" + filepath.ToSlash(repoRoot),
@@ -436,10 +483,24 @@ func commandInputs(input reviewInput) []inputMapping {
 }
 
 func commandEnv(input reviewInput) map[string]string {
-	if input.kind != inputKindRepoPath || strings.TrimSpace(input.repoRoot) == "" {
+	if input.kind != inputKindRepoPath || strings.TrimSpace(input.sandboxRepoRoot) == "" {
 		return nil
 	}
 	return map[string]string{"REVIEW_REPO_DIR": reviewRepoDirFromSkill}
+}
+
+func shouldRunRepositoryChecks(input reviewInput, parsed parsedDiff) bool {
+	return input.kind == inputKindRepoPath &&
+		strings.TrimSpace(input.repoRoot) != "" &&
+		hasReviewableGoChange(parsed)
+}
+
+func stagesRepository(spec commandSpec) bool {
+	return len(spec.Inputs) > 0
+}
+
+func requiresStagedRepository(spec commandSpec) bool {
+	return strings.TrimSpace(spec.Env["REVIEW_REPO_DIR"]) != ""
 }
 
 func hasReviewableGoChange(parsed parsedDiff) bool {

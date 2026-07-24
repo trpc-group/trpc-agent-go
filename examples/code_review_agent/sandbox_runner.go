@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ type skillRunSandboxRunner struct {
 	skillName   string
 	runTool     *toolskill.RunTool
 	close       func() error
+	workRoot    string
 }
 
 type skillRunCallOutput struct {
@@ -96,12 +98,26 @@ func newLocalSandboxRunner(meta codeReviewSkill) (sandboxRunner, error) {
 	if err := preflightLocalRuntime(); err != nil {
 		return nil, err
 	}
+	workRoot, err := os.MkdirTemp("", "code-review-local-work-*")
+	if err != nil {
+		return nil, fmt.Errorf("create local work root: %w", err)
+	}
 	executor := localexec.New(
+		localexec.WithWorkDir(workRoot),
 		localexec.WithTimeout(
-			time.Duration(defaultCommandTimeoutSeconds) * time.Second,
+			time.Duration(defaultCommandTimeoutSeconds)*time.Second,
 		),
 	)
-	return newSkillRunSandboxRunner(runtimeLocal, meta, executor)
+	runner, err := newSkillRunSandboxRunner(runtimeLocal, meta, executor)
+	if err != nil {
+		_ = os.RemoveAll(workRoot)
+		return nil, err
+	}
+	runner.workRoot = workRoot
+	runner.close = func() error {
+		return os.RemoveAll(workRoot)
+	}
+	return runner, nil
 }
 
 func newSkillRunSandboxRunner(

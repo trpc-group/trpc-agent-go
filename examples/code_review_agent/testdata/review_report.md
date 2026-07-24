@@ -11,7 +11,7 @@
 
 - Findings: 1
 - Warnings: 0
-- Commands: planned 3, allowed 3, blocked 0
+- Commands: planned 1, allowed 1, blocked 0
 - Permission blocks: 0
 
 ## Findings
@@ -25,29 +25,25 @@ None.
 
 ## Governance
 
-Filter decisions:
-- `checkGoVersion`: `allow`
-- `checkGoTest`: `allow`
-- `checkGoVet`: `allow`
+### Filter decisions
 
-Permission decisions:
 - `checkGoVersion`: `allow`
-- `checkGoTest`: `allow`
-- `checkGoVet`: `allow`
+
+### Permission decisions
+
+- `checkGoVersion`: `allow`
 
 ## Sandbox
 
 - `checkGoVersion`: ok, exit 0, 1 ms
-- `checkGoTest`: ok, exit 0, 1 ms
-- `checkGoVet`: ok, exit 0, 1 ms
 
 ## Metrics
 
-- Sandbox duration: 3 ms
+- Sandbox duration: 1 ms
 - Redactions: 1
 - Suppressed matches: 0
 
 ## Reports
 
-- JSON: `output/review-sample-secret-leak/review_report.json`
-- Markdown: `output/review-sample-secret-leak/review_report.md`
+- JSON: output/review\-sample\-secret\-leak/review\_report\.json
+- Markdown: output/review\-sample\-secret\-leak/review\_report\.md

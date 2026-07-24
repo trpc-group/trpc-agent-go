@@ -127,9 +127,8 @@ func concurrencyRuleMatches(candidate candidateLine, file changedFile, hunk diff
 func resourceRuleMatches(candidate candidateLine, file changedFile, repoRoot string, line string) []ruleMatch {
 	var matches []ruleMatch
 	if variable := firstCapture(fileOpenPattern, line); variable != "" {
-		if confidence, ok := resourceLeakConfidence(file, repoRoot, variable, []string{"Close"}, func(line string) bool {
-			return strings.Contains(line, variable+".Close(")
-		}); ok {
+		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
+		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
 			matches = append(matches, newRuleMatch(candidate, ruleUnclosedFile, "medium", "resource",
 				"Opened file is not closed",
 				"Close the file with defer after checking the open error.",
@@ -137,9 +136,8 @@ func resourceRuleMatches(candidate candidateLine, file changedFile, repoRoot str
 		}
 	}
 	if variable := firstCapture(httpGetPattern, line); variable != "" {
-		if confidence, ok := resourceLeakConfidence(file, repoRoot, variable, []string{"Close"}, func(line string) bool {
-			return strings.Contains(line, variable+".Body.Close(")
-		}); ok {
+		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}, body: true}
+		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
 			matches = append(matches, newRuleMatch(candidate, ruleUnclosedHTTPBody, "medium", "resource",
 				"HTTP response body is not closed",
 				"Close response bodies with defer resp.Body.Close() after checking errors.",
@@ -147,9 +145,8 @@ func resourceRuleMatches(candidate candidateLine, file changedFile, repoRoot str
 		}
 	}
 	if variable := firstCapture(sqlRowsPattern, line); variable != "" {
-		if confidence, ok := resourceLeakConfidence(file, repoRoot, variable, []string{"Close"}, func(line string) bool {
-			return strings.Contains(line, variable+".Close(")
-		}); ok {
+		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
+		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
 			matches = append(matches, newRuleMatch(candidate, ruleUnclosedSQLRows, "medium", "resource",
 				"SQL rows are not closed",
 				"Close rows with defer rows.Close() and check rows.Err().",
@@ -172,10 +169,8 @@ func errorRuleMatches(candidate candidateLine, line string) []ruleMatch {
 func databaseRuleMatches(candidate candidateLine, file changedFile, repoRoot string, line string) []ruleMatch {
 	var matches []ruleMatch
 	if variable := firstCapture(sqlTxPattern, line); variable != "" {
-		if confidence, ok := resourceLeakConfidence(file, repoRoot, variable, []string{"Commit", "Rollback"}, func(line string) bool {
-			return strings.Contains(line, variable+".Commit(") ||
-				strings.Contains(line, variable+".Rollback(")
-		}); ok {
+		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Commit": true, "Rollback": true}}
+		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
 			matches = append(matches, newRuleMatch(candidate, ruleDatabaseTxLifecycle, "high", "database",
 				"Database transaction is opened without commit or rollback",
 				"Ensure every transaction path commits or rolls back.",
@@ -183,9 +178,8 @@ func databaseRuleMatches(candidate candidateLine, file changedFile, repoRoot str
 		}
 	}
 	if variable := firstCapture(sqlOpenPattern, line); variable != "" {
-		if confidence, ok := resourceLeakConfidence(file, repoRoot, variable, []string{"Close"}, func(line string) bool {
-			return strings.Contains(line, variable+".Close(")
-		}); ok {
+		matcher := cleanupMatcher{variable: variable, methods: map[string]bool{"Close": true}}
+		if confidence, ok := resourceLeakConfidence(file, candidate, repoRoot, matcher); ok {
 			matches = append(matches, newRuleMatch(candidate, ruleDatabaseOpenLifecycle, "medium", "database",
 				"Database handle is opened without a close path",
 				"Close database handles owned by this function or document shared ownership.",
@@ -370,17 +364,23 @@ func firstCapture(pattern *regexp.Regexp, line string) string {
 	return matches[1]
 }
 
+type cleanupMatcher struct {
+	variable string
+	methods  map[string]bool
+	body     bool
+}
+
 func resourceLeakConfidence(
 	file changedFile,
+	candidate candidateLine,
 	repoRoot string,
-	variable string,
-	closeMethods []string,
-	closesResource func(string) bool,
+	matcher cleanupMatcher,
 ) (float64, bool) {
-	if fileContainsLine(file, closesResource) {
+	if repoRoot != "" &&
+		repoFunctionContainsCleanup(repoRoot, file.reviewPath(), candidate, matcher) {
 		return 0, false
 	}
-	if repoRoot != "" && repoFileContainsSelector(repoRoot, file.reviewPath(), variable, closeMethods) {
+	if repoRoot == "" && hunkFunctionWindowContainsCleanup(file, candidate, matcher) {
 		return 0, false
 	}
 	if len(file.Hunks) > 1 {
@@ -389,12 +389,18 @@ func resourceLeakConfidence(
 	return confidenceLifecycle, true
 }
 
-func repoFileContainsSelector(repoRoot string, filePath string, variable string, methods []string) bool {
-	if filePath == "" || variable == "" || len(methods) == 0 {
+func repoFunctionContainsCleanup(
+	repoRoot string,
+	filePath string,
+	candidate candidateLine,
+	matcher cleanupMatcher,
+) bool {
+	if filePath == "" || matcher.variable == "" || len(matcher.methods) == 0 {
 		return false
 	}
+	fset := token.NewFileSet()
 	parsedFile, err := parser.ParseFile(
-		token.NewFileSet(),
+		fset,
 		filepath.Join(repoRoot, filepath.FromSlash(filePath)),
 		nil,
 		0,
@@ -402,50 +408,201 @@ func repoFileContainsSelector(repoRoot string, filePath string, variable string,
 	if err != nil {
 		return false
 	}
-	methodSet := map[string]bool{}
-	for _, method := range methods {
-		methodSet[method] = true
+	fn := enclosingFunctionForLine(fset, parsedFile, candidate.Line)
+	if fn == nil || fn.Body == nil {
+		return false
 	}
 	found := false
-	ast.Inspect(parsedFile, func(node ast.Node) bool {
+	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		if found {
 			return false
 		}
 		call, ok := node.(*ast.CallExpr)
-		if !ok {
+		if !ok || !matcher.callMatches(call.Fun) {
 			return true
 		}
-		found = selectorCallMatches(call.Fun, variable, methodSet)
-		return !found
+		cleanupLine := fset.Position(call.Pos()).Line
+		if cleanupLine <= candidate.Line ||
+			variableRedeclaredBetween(fn.Body, fset, matcher.variable, candidate.Line, cleanupLine) {
+			return true
+		}
+		found = true
+		return false
 	})
 	return found
 }
 
-func selectorCallMatches(expr ast.Expr, variable string, methods map[string]bool) bool {
-	selector, ok := expr.(*ast.SelectorExpr)
-	if !ok || !methods[selector.Sel.Name] {
-		return false
+func enclosingFunctionForLine(
+	fset *token.FileSet,
+	file *ast.File,
+	line int,
+) *ast.FuncDecl {
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		start := fset.Position(fn.Pos()).Line
+		end := fset.Position(fn.End()).Line
+		if start <= line && line <= end {
+			return fn
+		}
 	}
-	if ident, ok := selector.X.(*ast.Ident); ok {
-		return ident.Name == variable
-	}
-	inner, ok := selector.X.(*ast.SelectorExpr)
-	if !ok {
-		return false
-	}
-	ident, ok := inner.X.(*ast.Ident)
-	return ok && ident.Name == variable
+	return nil
 }
 
-func fileContainsLine(file changedFile, predicate func(string) bool) bool {
-	for _, hunk := range file.Hunks {
-		for _, line := range hunk.Lines {
-			if line.Kind != diffLineAdded && line.Kind != diffLineContext {
-				continue
+func variableRedeclaredBetween(
+	body *ast.BlockStmt,
+	fset *token.FileSet,
+	variable string,
+	startLine int,
+	endLine int,
+) bool {
+	redeclared := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if redeclared || node == nil {
+			return false
+		}
+		line := fset.Position(node.Pos()).Line
+		if line <= startLine || line >= endLine {
+			return true
+		}
+		switch stmt := node.(type) {
+		case *ast.AssignStmt:
+			if stmt.Tok == token.DEFINE && identListContains(stmt.Lhs, variable) {
+				redeclared = true
 			}
-			if predicate(strings.TrimSpace(line.Text)) {
+		case *ast.ValueSpec:
+			for _, name := range stmt.Names {
+				if name.Name == variable {
+					redeclared = true
+					break
+				}
+			}
+		case *ast.RangeStmt:
+			if stmt.Tok == token.DEFINE &&
+				(exprIdentName(stmt.Key) == variable || exprIdentName(stmt.Value) == variable) {
+				redeclared = true
+			}
+		}
+		return !redeclared
+	})
+	return redeclared
+}
+
+func identListContains(values []ast.Expr, want string) bool {
+	for _, value := range values {
+		if exprIdentName(value) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func exprIdentName(expr ast.Expr) string {
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return ""
+	}
+	return ident.Name
+}
+
+func (m cleanupMatcher) callMatches(expr ast.Expr) bool {
+	selector, ok := expr.(*ast.SelectorExpr)
+	if !ok || !m.methods[selector.Sel.Name] {
+		return false
+	}
+	if m.body {
+		inner, ok := selector.X.(*ast.SelectorExpr)
+		if !ok || inner.Sel.Name != "Body" {
+			return false
+		}
+		ident, ok := inner.X.(*ast.Ident)
+		return ok && ident.Name == m.variable
+	}
+	ident, ok := selector.X.(*ast.Ident)
+	return ok && ident.Name == m.variable
+}
+
+func hunkFunctionWindowContainsCleanup(
+	file changedFile,
+	candidate candidateLine,
+	matcher cleanupMatcher,
+) bool {
+	if candidate.HunkIndex < 0 || candidate.HunkIndex >= len(file.Hunks) {
+		return false
+	}
+	hunk := file.Hunks[candidate.HunkIndex]
+	if candidate.HunkLineIndex < 0 || candidate.HunkLineIndex >= len(hunk.Lines) {
+		return false
+	}
+	start := -1
+	for i := candidate.HunkLineIndex; i >= 0; i-- {
+		if isFunctionStartLine(hunk.Lines[i]) {
+			start = i
+			break
+		}
+	}
+	if start < 0 {
+		return false
+	}
+	end := len(hunk.Lines)
+	for i := candidate.HunkLineIndex + 1; i < len(hunk.Lines); i++ {
+		if isFunctionStartLine(hunk.Lines[i]) {
+			end = i
+			break
+		}
+	}
+	for i := candidate.HunkLineIndex + 1; i < end; i++ {
+		line := hunk.Lines[i]
+		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
+			continue
+		}
+		trimmed := strings.TrimSpace(line.Text)
+		if variableDeclaredInLine(trimmed, matcher.variable) {
+			return false
+		}
+		if matcher.lineMatches(trimmed) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFunctionStartLine(line diffLine) bool {
+	if line.Kind != diffLineAdded && line.Kind != diffLineContext {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(line.Text), "func ")
+}
+
+func variableDeclaredInLine(line string, variable string) bool {
+	if strings.HasPrefix(line, "var "+variable+" ") ||
+		strings.HasPrefix(line, "var "+variable+"=") {
+		return true
+	}
+	if !strings.Contains(line, ":=") {
+		return false
+	}
+	left := strings.SplitN(line, ":=", 2)[0]
+	for _, part := range strings.Split(left, ",") {
+		if strings.TrimSpace(part) == variable {
+			return true
+		}
+	}
+	return false
+}
+
+func (m cleanupMatcher) lineMatches(line string) bool {
+	for method := range m.methods {
+		if m.body {
+			if strings.Contains(line, m.variable+".Body."+method+"(") {
 				return true
 			}
+			continue
+		}
+		if strings.Contains(line, m.variable+"."+method+"(") {
+			return true
 		}
 	}
 	return false
