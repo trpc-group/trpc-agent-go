@@ -34,5 +34,5 @@ func TestResourceUsageDeltaRejectsInvalidUnavailableMonetaryBaseline(t *testing.
 
 	delta := resourceUsageDelta(before, after)
 
-	require.False(t, delta.MonetaryCost.Available)
+	require.Equal(t, Amount{}, delta.MonetaryCost)
 }
