@@ -50,6 +50,7 @@ type A2AAgent struct {
 	description          string
 	agentCard            *server.AgentCard      // Agent card and resolution state
 	agentURL             string                 // URL of the remote A2A agent
+	inputSchema          map[string]any         // Optional local AgentTool input declaration
 	eventConverter       A2AEventConverter      // Custom A2A event converters
 	dataPartMappers      []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
 	a2aMessageConverter  InvocationA2AConverter // Custom A2A message converters for requests
@@ -789,6 +790,7 @@ func (r *A2AAgent) Info() agent.Info {
 	return agent.Info{
 		Name:        r.name,
 		Description: r.description,
+		InputSchema: r.inputSchema,
 	}
 }
 

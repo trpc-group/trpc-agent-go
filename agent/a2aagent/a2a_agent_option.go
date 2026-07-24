@@ -215,6 +215,24 @@ func WithDescription(description string) Option {
 	}
 }
 
+// WithInputSchema sets the local tool input schema exposed by A2AAgent.Info
+// when this remote-agent proxy is wrapped by agenttool.NewTool.
+//
+// A2A AgentCard does not currently carry JSON schemas, so A2AAgent cannot
+// discover a structured input schema from the remote service. Without this
+// option, AgentTool falls back to its default input schema:
+//
+//	{"request": "string"}
+//
+// This option only shapes the parent model's local AgentTool declaration. It
+// does not change the A2A protocol payload format and does not validate the
+// remote service input.
+func WithInputSchema(schema map[string]any) Option {
+	return func(a *A2AAgent) {
+		a.inputSchema = schema
+	}
+}
+
 // WithAgentCardURL set the agent card URL
 func WithAgentCardURL(url string) Option {
 	return func(a *A2AAgent) {
