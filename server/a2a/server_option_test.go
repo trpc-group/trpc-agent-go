@@ -11,10 +11,13 @@ package a2a
 
 import (
 	"context"
+	"errors"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 	a2a "trpc.group/trpc-go/trpc-a2a-go/server"
@@ -158,7 +161,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 		{
 			name: "request with empty user ID header",
@@ -168,7 +171,7 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 	}
 
@@ -201,9 +204,8 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, expectedUserID)
 				}
 			} else {
-				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
-				if user.ID != "" {
-					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
+				if !isAnonymousUserID(user.ID) {
+					t.Errorf("Authenticate() userID should be anonymous when not provided, got: %v", user.ID)
 				}
 			}
 		})
@@ -690,7 +692,7 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 				return req
 			}(),
 			expectError: false,
-			checkUserID: false, // Will be empty, generated from context ID in ProcessMessage
+			checkUserID: false,
 		},
 		{
 			name:     "default header still works",
@@ -732,12 +734,284 @@ func TestDefaultAuthProvider_CustomUserIDHeader(t *testing.T) {
 					t.Errorf("Authenticate() userID = %v, want %v", user.ID, tt.expectedID)
 				}
 			} else {
-				// Should be empty when no user ID provided - will be generated from context ID in ProcessMessage
-				if user.ID != "" {
-					t.Errorf("Authenticate() userID should be empty when not provided, got: %v", user.ID)
+				if !isAnonymousUserID(user.ID) {
+					t.Errorf("Authenticate() userID should be anonymous when not provided, got: %v", user.ID)
 				}
 			}
 		})
+	}
+}
+
+func TestDefaultAuthProvider_AnonymousUserCookie(t *testing.T) {
+	userID, err := newAnonymousUserID()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		header     string
+		cookie     string
+		validate   func(t *testing.T, userID string)
+		expectedID string
+	}{
+		{
+			name:   "valid anonymous cookie",
+			cookie: userID,
+			validate: func(t *testing.T, got string) {
+				assert.Equal(t, userID, got)
+			},
+		},
+		{
+			name:   "malformed anonymous cookie is not accepted",
+			cookie: "A2A_ANONYMOUS_not-hex",
+			validate: func(t *testing.T, got string) {
+				assert.True(t, isAnonymousUserID(got))
+				assert.NotEqual(t, "A2A_ANONYMOUS_not-hex", got)
+			},
+		},
+		{
+			name:       "trusted header takes precedence over anonymous cookie",
+			header:     "trusted-user",
+			cookie:     userID,
+			expectedID: "trusted-user",
+		},
+		{
+			name:       "trusted header takes precedence over malformed cookie",
+			header:     "trusted-user",
+			cookie:     "A2A_ANONYMOUS_not-hex",
+			expectedID: "trusted-user",
+		},
+	}
+
+	provider := &defaultAuthProvider{userIDHeader: serverUserIDHeader}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := http.NewRequest("GET", "/test", nil)
+			if tt.header != "" {
+				req.Header.Set(serverUserIDHeader, tt.header)
+			}
+			if tt.cookie != "" {
+				req.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: tt.cookie})
+			}
+
+			user, err := provider.Authenticate(req)
+			assert.NoError(t, err)
+			if tt.expectedID != "" {
+				assert.Equal(t, tt.expectedID, user.ID)
+				return
+			}
+			tt.validate(t, user.ID)
+		})
+	}
+}
+
+func TestDefaultAuthProvider_AnonymousUserGenerationError(t *testing.T) {
+	origRandRead := anonymousRandRead
+	defer func() { anonymousRandRead = origRandRead }()
+	anonymousRandRead = func(_ []byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+
+	req, _ := http.NewRequest("GET", "/test", nil)
+	user, err := (&defaultAuthProvider{userIDHeader: serverUserIDHeader}).Authenticate(req)
+	assert.Error(t, err)
+	assert.Nil(t, user)
+}
+
+func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
+	tests := []struct {
+		name         string
+		target       string
+		secureCookie bool
+		wantSecure   bool
+	}{
+		{
+			name:       "secure for TLS request",
+			target:     "https://example.com/test",
+			wantSecure: true,
+		},
+		{
+			name:       "not secure for non TLS request",
+			target:     "http://example.com/test",
+			wantSecure: false,
+		},
+		{
+			name:         "secure for proxy terminated HTTPS endpoint",
+			target:       "http://example.com/test",
+			secureCookie: true,
+			wantSecure:   true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			middleware := anonymousUserCookieMiddleware{
+				userIDHeader: serverUserIDHeader,
+				secureCookie: tt.secureCookie,
+			}
+			handler := middleware.Wrap(
+				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					cookie, err := r.Cookie(anonymousUserIDCookie)
+					assert.NoError(t, err)
+					assert.True(t, isAnonymousUserID(cookie.Value))
+				}),
+			)
+			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
+			rr := httptest.NewRecorder()
+
+			handler.ServeHTTP(rr, req)
+
+			var anonymousCookie *http.Cookie
+			for _, cookie := range rr.Result().Cookies() {
+				if cookie.Name == anonymousUserIDCookie {
+					anonymousCookie = cookie
+					break
+				}
+			}
+			if assert.NotNil(t, anonymousCookie) {
+				assert.True(t, anonymousCookie.HttpOnly)
+				assert.Equal(t, tt.wantSecure, anonymousCookie.Secure)
+				assert.Equal(t, http.SameSiteLaxMode, anonymousCookie.SameSite)
+			}
+		})
+	}
+}
+
+func TestAnonymousCookieSecureForAgentURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		agentURL string
+		want     bool
+	}{
+		{
+			name:     "https public URL",
+			agentURL: "https://example.com/a2a",
+			want:     true,
+		},
+		{
+			name:     "http public URL",
+			agentURL: "http://example.com/a2a",
+			want:     false,
+		},
+		{
+			name:     "host without scheme",
+			agentURL: "example.com/a2a",
+			want:     false,
+		},
+		{
+			name:     "invalid URL",
+			agentURL: "%",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, anonymousCookieSecureForAgentURL(tt.agentURL))
+		})
+	}
+}
+
+func TestAnonymousUserCookieMiddleware_GenerationError(t *testing.T) {
+	origRandRead := anonymousRandRead
+	defer func() { anonymousRandRead = origRandRead }()
+	anonymousRandRead = func(_ []byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+
+	calledNext := false
+	handler := (anonymousUserCookieMiddleware{userIDHeader: serverUserIDHeader}).Wrap(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calledNext = true
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rr.Code)
+	assert.False(t, calledNext)
+}
+
+func TestIsAnonymousUserID(t *testing.T) {
+	validID, err := newAnonymousUserID()
+	require.NoError(t, err)
+
+	tests := []struct {
+		name string
+		id   string
+		want bool
+	}{
+		{
+			name: "valid",
+			id:   validID,
+			want: true,
+		},
+		{
+			name: "missing prefix",
+			id:   "user",
+			want: false,
+		},
+		{
+			name: "invalid hex",
+			id:   anonymousUserIDPrefix + "not-hex",
+			want: false,
+		},
+		{
+			name: "wrong byte length",
+			id:   anonymousUserIDPrefix + "0123456789abcdef",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isAnonymousUserID(tt.id))
+		})
+	}
+}
+
+func TestNewAnonymousUserID_Error(t *testing.T) {
+	origRandRead := anonymousRandRead
+	defer func() { anonymousRandRead = origRandRead }()
+	anonymousRandRead = func(_ []byte) (int, error) {
+		return 0, errors.New("entropy unavailable")
+	}
+
+	userID, err := newAnonymousUserID()
+	assert.Error(t, err)
+	assert.Empty(t, userID)
+}
+
+func TestAnonymousUserIDFromRequest_IgnoresOtherCookies(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req.AddCookie(&http.Cookie{Name: "other", Value: "value"})
+
+	userID, err := anonymousUserIDFromRequest(req)
+	assert.NoError(t, err)
+	assert.True(t, isAnonymousUserID(userID))
+}
+
+func TestAnonymousUserCookieMiddleware_HeaderBypassesCookie(t *testing.T) {
+	calledNext := false
+	handler := (anonymousUserCookieMiddleware{userIDHeader: serverUserIDHeader}).Wrap(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calledNext = true
+			_, err := r.Cookie(anonymousUserIDCookie)
+			assert.Error(t, err)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req.Header.Set(serverUserIDHeader, "trusted-user")
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	assert.True(t, calledNext)
+	for _, cookie := range rr.Result().Cookies() {
+		if cookie.Name == anonymousUserIDCookie {
+			t.Fatalf("anonymous cookie should not be set when trusted header is present")
+		}
 	}
 }
 

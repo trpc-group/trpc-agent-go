@@ -11,9 +11,12 @@ package a2a
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-a2a-go/auth"
@@ -29,6 +32,11 @@ import (
 
 // serverUserIDHeader is the default header that a2a server get UserID of invocation.
 var serverUserIDHeader = "X-User-ID"
+
+const anonymousUserIDPrefix = "A2A_ANONYMOUS_"
+const anonymousUserIDCookie = "trpc_agent_a2a_anon"
+
+var anonymousRandRead = rand.Read
 
 // UserIDFromContext returns the user ID from the context.
 func UserIDFromContext(ctx context.Context) (string, bool) {
@@ -114,22 +122,92 @@ type defaultAuthProvider struct {
 	userIDHeader string
 }
 
+type anonymousUserCookieMiddleware struct {
+	userIDHeader string
+	secureCookie bool
+}
+
+func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.TrimSpace(r.Header.Get(m.userIDHeader)) == "" {
+			userID, err := anonymousUserIDFromRequest(r)
+			if err != nil {
+				http.Error(w, "failed to create anonymous user", http.StatusInternalServerError)
+				return
+			}
+			http.SetCookie(w, &http.Cookie{
+				Name:     anonymousUserIDCookie,
+				Value:    userID,
+				Path:     "/",
+				HttpOnly: true,
+				SameSite: http.SameSiteLaxMode,
+				Secure:   m.secureCookie || r.TLS != nil,
+			})
+			r = r.Clone(r.Context())
+			r.AddCookie(&http.Cookie{Name: anonymousUserIDCookie, Value: userID})
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
 	}
-	userID := r.Header.Get(d.userIDHeader)
+	userID := strings.TrimSpace(r.Header.Get(d.userIDHeader))
 	if userID == "" {
+		var err error
+		userID, err = anonymousUserIDFromRequest(r)
+		if err != nil {
+			return nil, err
+		}
 		log.DebugfContext(
 			r.Context(),
-			"UserID(Header %s) not set, will be generated from "+
-				"context ID. You can use WithUserIDHeader in "+
+			"UserID(Header %s) not set, using anonymous request principal. "+
+				"You can use WithUserIDHeader in "+
 				"A2AAgent and A2AServer to specify the header "+
 				"that transfers user info.",
 			d.userIDHeader,
 		)
 	}
 	return &auth.User{ID: userID}, nil
+}
+
+func anonymousUserIDFromRequest(r *http.Request) (string, error) {
+	for _, cookie := range r.Cookies() {
+		if cookie.Name != anonymousUserIDCookie {
+			continue
+		}
+		if userID := strings.TrimSpace(cookie.Value); isAnonymousUserID(userID) {
+			return userID, nil
+		}
+	}
+	return newAnonymousUserID()
+}
+
+func newAnonymousUserID() (string, error) {
+	var raw [16]byte
+	if _, err := anonymousRandRead(raw[:]); err != nil {
+		return "", fmt.Errorf("generate anonymous user ID: %w", err)
+	}
+	return anonymousUserIDPrefix + hex.EncodeToString(raw[:]), nil
+}
+
+func isAnonymousUserID(userID string) bool {
+	if !strings.HasPrefix(userID, anonymousUserIDPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(userID, anonymousUserIDPrefix)
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && len(decoded) == 16
+}
+
+func anonymousCookieSecureForAgentURL(agentURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(agentURL))
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, "https")
 }
 
 type options struct {
@@ -285,6 +363,9 @@ func WithUserIDHeader(header string) Option {
 // WithExtraA2AOptions passes extra options to the underlying A2A server.
 // For example, it can be combined with a2a.WithAgentCardHandler and
 // NewAgentCardHandler(...) to serve a dynamically updated AgentCard.
+// Custom middleware options run after trace-context extraction and before the
+// built-in anonymous identity middleware, allowing them to normalize the user
+// ID header while retaining the propagated trace context.
 func WithExtraA2AOptions(opts ...a2a.Option) Option {
 	return func(options *options) {
 		options.extraOptions = append(options.extraOptions, opts...)

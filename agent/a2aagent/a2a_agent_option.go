@@ -259,6 +259,12 @@ func WithCustomA2AConverter(converter InvocationA2AConverter) Option {
 }
 
 // WithA2AClientExtraOptions adds extra options to the A2A client.
+//
+// For anonymous invocations, A2AAgent places its anonymous-cookie middleware
+// outside the handler selected by these options. Custom HTTP clients,
+// transports, timeouts, non-anonymous cookies, and caller handlers are
+// therefore retained. These options are applied once while the shared base
+// client is constructed and are not replayed per invocation.
 func WithA2AClientExtraOptions(opts ...client.Option) Option {
 	return func(a *A2AAgent) {
 		a.extraA2AOptions = append(a.extraA2AOptions, opts...)

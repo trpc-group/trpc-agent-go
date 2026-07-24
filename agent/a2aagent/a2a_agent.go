@@ -12,9 +12,15 @@ package a2aagent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
+	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -33,14 +39,19 @@ import (
 	itrace "trpc.group/trpc-go/trpc-agent-go/internal/trace"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	semconvtrace "trpc.group/trpc-go/trpc-agent-go/telemetry/semconv/trace"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
-	defaultStreamingChannelSize    = 1024
-	defaultNonStreamingChannelSize = 10
-	defaultUserIDHeader            = "X-User-ID"
+	defaultStreamingChannelSize         = 1024
+	defaultNonStreamingChannelSize      = 10
+	defaultUserIDHeader                 = "X-User-ID"
+	anonymousUserIDCookieName           = "trpc_agent_a2a_anon"
+	anonymousUserIDPrefix               = "A2A_ANONYMOUS_"
+	anonymousUserIDCookieStateKeyPrefix = "trpc.agent.a2a.anonymous_user_id_cookie."
+	anonymousUserIDCookieEncodedBytes   = 16
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
@@ -61,7 +72,33 @@ type A2AAgent struct {
 	userIDHeader         string                 // HTTP header name to send UserID to A2A server
 	enableStreaming      *bool                  // Explicitly set streaming mode; nil means use agent card capability
 
-	a2aClient *client.A2AClient
+	a2aClient    *client.A2AClient
+	a2aClientURL string
+
+	// anonymousCookieInitLocks serializes first anonymous-cookie acquisition
+	// only within this A2AAgent instance. It does not coordinate separate
+	// A2AAgent instances or processes that share the same SessionService; those
+	// callers may still race during first-cookie initialization until
+	// persistence-backed lease/CAS coordination is added.
+	anonymousCookieInitMu       sync.Mutex
+	anonymousCookieInitLocks    map[anonymousCookieInitScope]*anonymousCookieInitLock
+	anonymousCookieInitWaitHook func(anonymousCookieInitScope)
+}
+
+type invocationA2AClient struct {
+	client          *client.A2AClient
+	anonymousCookie *anonymousCookieState
+}
+
+type anonymousCookieInitScope struct {
+	persistentSession session.Key
+	transientSession  *session.Session
+	cookieStateKey    string
+}
+
+type anonymousCookieInitLock struct {
+	gate chan struct{}
+	refs int
 }
 
 // New creates a new A2AAgent.
@@ -104,11 +141,12 @@ func New(opts ...Option) (*A2AAgent, error) {
 	agentURL = ia2a.NormalizeURL(agentURL)
 
 	// Create A2A client first
-	a2aClient, err := client.NewA2AClient(agentURL, agent.extraA2AOptions...)
+	a2aClient, err := agent.newConfiguredA2AClient(agentURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentURL, err)
 	}
 	agent.a2aClient = a2aClient
+	agent.a2aClientURL = agentURL
 
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
@@ -134,11 +172,12 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 		// Rebuild a2a client if URL changed
 		if agentCard.URL != agentURL {
-			a2aClient, err := client.NewA2AClient(agentCard.URL, agent.extraA2AOptions...)
+			a2aClient, err := agent.newConfiguredA2AClient(agentCard.URL)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create A2A client for %s: %w", agentCard.URL, err)
 			}
 			agent.a2aClient = a2aClient
+			agent.a2aClientURL = agentCard.URL
 		}
 
 		agent.agentCard = agentCard
@@ -147,22 +186,750 @@ func New(opts ...Option) (*A2AAgent, error) {
 	return agent, nil
 }
 
+func (r *A2AAgent) clientForInvocation(
+	invocation *agent.Invocation,
+) (*invocationA2AClient, error) {
+	if !needsAnonymousClient(invocation) || r.a2aClientURL == "" {
+		return &invocationA2AClient{client: r.a2aClient}, nil
+	}
+	anonymousCookie := newAnonymousCookieState(
+		anonymousSessionFromInvocation(invocation),
+		anonymousPersistentSessionFromInvocation(invocation),
+		anonymousSessionServiceFromInvocation(invocation),
+		anonymousCookieStateKey(r.a2aClientURL),
+	)
+	return &invocationA2AClient{
+		client:          r.a2aClient,
+		anonymousCookie: anonymousCookie,
+	}, nil
+}
+
+func needsAnonymousClient(invocation *agent.Invocation) bool {
+	return invocation == nil ||
+		invocation.Session == nil ||
+		strings.TrimSpace(invocation.Session.UserID) == ""
+}
+
+func anonymousSessionFromInvocation(invocation *agent.Invocation) *session.Session {
+	if invocation == nil ||
+		invocation.Session == nil {
+		return nil
+	}
+	return invocation.Session
+}
+
+func anonymousSessionServiceFromInvocation(
+	invocation *agent.Invocation,
+) session.Service {
+	if invocation == nil {
+		return nil
+	}
+	return invocation.SessionService
+}
+
+func anonymousPersistentSessionFromInvocation(
+	invocation *agent.Invocation,
+) *session.Session {
+	for current := invocation; current != nil; current = current.GetParentInvocation() {
+		if hasPersistentSessionKey(current.Session) {
+			return current.Session
+		}
+	}
+	return nil
+}
+
+func hasPersistentSessionKey(sess *session.Session) bool {
+	return sess != nil &&
+		strings.TrimSpace(sess.AppName) != "" &&
+		strings.TrimSpace(sess.UserID) != "" &&
+		strings.TrimSpace(sess.ID) != ""
+}
+
+func (r *A2AAgent) newConfiguredA2AClient(
+	agentURL string,
+) (*client.A2AClient, error) {
+	// Register the stateless anonymous-cookie middleware once on the base client.
+	// The invocation-specific cookie state is carried by the request context.
+	opts := make([]client.Option, 0, len(r.extraA2AOptions)+1)
+	opts = append(opts, client.WithMiddleware(a2aHTTPReqMiddleware(
+		func(next client.HTTPReqHandler) client.HTTPReqHandler {
+			return &anonymousCookieHTTPReqHandler{
+				next:                  next,
+				scope:                 anonymousCookieURLScopeFromAgentURL(agentURL),
+				acquireInitialization: r.acquireAnonymousCookieInitialization,
+			}
+		},
+	)))
+	opts = append(opts, r.extraA2AOptions...)
+	return client.NewA2AClient(agentURL, opts...)
+}
+
+type a2aHTTPReqMiddleware func(next client.HTTPReqHandler) client.HTTPReqHandler
+
+func (m a2aHTTPReqMiddleware) Wrap(next client.HTTPReqHandler) client.HTTPReqHandler {
+	return m(next)
+}
+
+func (r *A2AAgent) acquireAnonymousCookieInitialization(
+	ctx context.Context,
+	cookie *anonymousCookieState,
+) (func(), error) {
+	if r == nil {
+		return nil, nil
+	}
+	scope, ok := cookie.initializationScope()
+	if !ok {
+		return nil, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	r.anonymousCookieInitMu.Lock()
+	if r.anonymousCookieInitLocks == nil {
+		r.anonymousCookieInitLocks = make(map[anonymousCookieInitScope]*anonymousCookieInitLock)
+	}
+	entry := r.anonymousCookieInitLocks[scope]
+	if entry == nil {
+		entry = &anonymousCookieInitLock{gate: make(chan struct{}, 1)}
+		r.anonymousCookieInitLocks[scope] = entry
+	}
+	entry.refs++
+	r.anonymousCookieInitMu.Unlock()
+
+	releaseRef := func() {
+		r.anonymousCookieInitMu.Lock()
+		entry.refs--
+		if entry.refs == 0 && r.anonymousCookieInitLocks[scope] == entry {
+			delete(r.anonymousCookieInitLocks, scope)
+		}
+		r.anonymousCookieInitMu.Unlock()
+	}
+	select {
+	case entry.gate <- struct{}{}:
+	case <-ctx.Done():
+		releaseRef()
+		return nil, ctx.Err()
+	default:
+		if r.anonymousCookieInitWaitHook != nil {
+			r.anonymousCookieInitWaitHook(scope)
+		}
+		select {
+		case entry.gate <- struct{}{}:
+		case <-ctx.Done():
+			releaseRef()
+			return nil, ctx.Err()
+		}
+	}
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			<-entry.gate
+			releaseRef()
+		})
+	}, nil
+}
+
+type anonymousCookieState struct {
+	session        *session.Session
+	persistSession *session.Session
+	sessionService session.Service
+	key            string
+}
+
+type anonymousCookieContextKey struct{}
+
+func withAnonymousCookieState(
+	ctx context.Context,
+	cookie *anonymousCookieState,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, anonymousCookieContextKey{}, cookie)
+}
+
+func anonymousCookieStateFromContext(ctx context.Context) *anonymousCookieState {
+	if ctx == nil {
+		return nil
+	}
+	cookie, _ := ctx.Value(anonymousCookieContextKey{}).(*anonymousCookieState)
+	return cookie
+}
+
+func newAnonymousCookieState(
+	sess *session.Session,
+	persistSession *session.Session,
+	sessionService session.Service,
+	key string,
+) *anonymousCookieState {
+	return &anonymousCookieState{
+		session:        sess,
+		persistSession: persistSession,
+		sessionService: sessionService,
+		key:            key,
+	}
+}
+
+func (s *anonymousCookieState) persistentSessionKey() (session.Key, bool) {
+	if s == nil || !hasPersistentSessionKey(s.persistSession) {
+		return session.Key{}, false
+	}
+	return session.Key{
+		AppName:   s.persistSession.AppName,
+		UserID:    s.persistSession.UserID,
+		SessionID: s.persistSession.ID,
+	}, true
+}
+
+func (s *anonymousCookieState) initializationScope() (anonymousCookieInitScope, bool) {
+	if s == nil || s.key == "" {
+		return anonymousCookieInitScope{}, false
+	}
+	if persistentSessionKey, ok := s.persistentSessionKey(); ok {
+		return anonymousCookieInitScope{
+			persistentSession: persistentSessionKey,
+			cookieStateKey:    s.key,
+		}, true
+	}
+	if s.session == nil {
+		return anonymousCookieInitScope{}, false
+	}
+	return anonymousCookieInitScope{
+		transientSession: s.session,
+		cookieStateKey:   s.key,
+	}, true
+}
+
+func (s *anonymousCookieState) load() (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	return loadAnonymousCookieFromSession(s.session, s.key)
+}
+
+func loadAnonymousCookieFromSession(sess *session.Session, key string) (string, bool) {
+	if sess == nil || key == "" {
+		return "", false
+	}
+	raw, ok := sess.GetState(key)
+	if !ok {
+		return "", false
+	}
+	cookieValue := strings.TrimSpace(string(raw))
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return "", false
+	}
+	return cookieValue, true
+}
+
+func (s *anonymousCookieState) reload(ctx context.Context) error {
+	if s == nil || s.sessionService == nil {
+		return nil
+	}
+	persistentSessionKey, ok := s.persistentSessionKey()
+	if !ok {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	persistedSession, err := s.sessionService.GetSession(ctx, persistentSessionKey)
+	if err != nil {
+		return fmt.Errorf("reload anonymous A2A cookie state: %w", err)
+	}
+	cookieValue, ok := loadAnonymousCookieFromSession(persistedSession, s.key)
+	if !ok {
+		return nil
+	}
+	if s.session != nil {
+		s.session.SetState(s.key, []byte(cookieValue))
+	}
+	if s.persistSession != nil {
+		s.persistSession.SetState(s.key, []byte(cookieValue))
+	}
+	return nil
+}
+
+func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) error {
+	if s == nil || s.key == "" {
+		return nil
+	}
+	cookieValue = strings.TrimSpace(cookieValue)
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return nil
+	}
+	if persistedValue, ok := loadAnonymousCookieFromSession(s.persistSession, s.key); ok && persistedValue == cookieValue {
+		if s.session != nil {
+			s.session.SetState(s.key, []byte(cookieValue))
+		}
+		return nil
+	}
+	if !hasPersistentSessionKey(s.persistSession) || s.sessionService == nil {
+		currentValue, ok := loadAnonymousCookieFromSession(s.session, s.key)
+		if ok && currentValue == cookieValue {
+			return nil
+		}
+	}
+	if err := s.persist(ctx, cookieValue); err != nil {
+		return err
+	}
+	if s.session != nil {
+		s.session.SetState(s.key, []byte(cookieValue))
+	}
+	return nil
+}
+
+func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) error {
+	if s == nil ||
+		s.sessionService == nil ||
+		!hasPersistentSessionKey(s.persistSession) {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state := session.StateMap{s.key: []byte(cookieValue)}
+	key := session.Key{
+		AppName:   s.persistSession.AppName,
+		UserID:    s.persistSession.UserID,
+		SessionID: s.persistSession.ID,
+	}
+	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
+		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
+	}
+	s.persistSession.SetState(s.key, []byte(cookieValue))
+	return nil
+}
+
+func anonymousCookieStateKey(agentURL string) string {
+	scope := canonicalAnonymousCookieStateScope(agentURL)
+	sum := sha256.Sum256([]byte(scope))
+	return anonymousUserIDCookieStateKeyPrefix + hex.EncodeToString(sum[:])
+}
+
+func canonicalAnonymousCookieStateScope(agentURL string) string {
+	normalized := ia2a.NormalizeURL(strings.TrimSpace(agentURL))
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return strings.TrimRight(normalized, "/")
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = canonicalAnonymousCookieURLPath(parsed)
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+type anonymousCookieHTTPReqHandler struct {
+	next client.HTTPReqHandler
+	// cookie is only used by directly constructed handlers in package tests.
+	// The client middleware created by newConfiguredA2AClient reads state from
+	// the request context so the shared handler remains stateless.
+	cookie                *anonymousCookieState
+	scope                 anonymousCookieURLScope
+	acquireInitialization func(context.Context, *anonymousCookieState) (func(), error)
+}
+
+type anonymousCookieCaptureResult struct {
+	mu       sync.Mutex
+	err      error
+	captured map[string]struct{}
+}
+
+func (r *anonymousCookieCaptureResult) record(err error) {
+	if r == nil || err == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.err == nil {
+		r.err = err
+	}
+}
+
+func (r *anonymousCookieCaptureResult) error() error {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.err
+}
+
+func (r *anonymousCookieCaptureResult) capture(
+	ctx context.Context,
+	cookie *anonymousCookieState,
+	cookieValue string,
+) {
+	if cookie == nil {
+		return
+	}
+	cookieValue = strings.TrimSpace(cookieValue)
+	if !isAnonymousUserIDCookieValue(cookieValue) {
+		return
+	}
+	if r != nil {
+		r.mu.Lock()
+		if r.captured == nil {
+			r.captured = make(map[string]struct{})
+		}
+		if _, ok := r.captured[cookieValue]; ok {
+			r.mu.Unlock()
+			return
+		}
+		r.captured[cookieValue] = struct{}{}
+		r.mu.Unlock()
+	}
+	r.record(cookie.capture(ctx, cookieValue))
+}
+
+func (h *anonymousCookieHTTPReqHandler) Handle(
+	ctx context.Context,
+	httpClient *http.Client,
+	req *http.Request,
+) (*http.Response, error) {
+	if h == nil {
+		return nil, errors.New("a2a anonymous cookie handler: handler is nil")
+	}
+	if req == nil {
+		return nil, errors.New("a2a anonymous cookie handler: request is nil")
+	}
+	if h.next == nil {
+		return nil, errors.New("a2a anonymous cookie handler: next handler is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	cookie := h.cookie
+	if cookie == nil {
+		cookie = anonymousCookieStateFromContext(ctx)
+	}
+	if cookie == nil {
+		return h.next.Handle(ctx, httpClient, req)
+	}
+	if httpClient == nil {
+		return nil, errors.New("a2a anonymous cookie handler: HTTP client is nil")
+	}
+	release, err := h.acquireInitializationIfNeeded(ctx, req.URL, cookie)
+	if err != nil {
+		return nil, err
+	}
+	if release != nil {
+		defer release()
+	}
+	captureResult := &anonymousCookieCaptureResult{}
+	// Session state owns anonymous identity; a shared user-supplied Jar must
+	// not replay another local session's remote principal.
+	requestClient := *httpClient
+	requestClient.Jar = &anonymousCookieJar{
+		ctx:    ctx,
+		base:   httpClient.Jar,
+		cookie: cookie,
+		scope:  h.scope,
+		result: captureResult,
+	}
+	requestClient.Transport = &anonymousCookieRoundTripper{
+		base:   httpClient.Transport,
+		cookie: cookie,
+		scope:  h.scope,
+		result: captureResult,
+	}
+	request := req.Clone(ctx)
+	setAnonymousCookieHeader(request, cookie, h.scope)
+	resp, err := h.next.Handle(ctx, &requestClient, request)
+	h.captureResponseCookie(ctx, request, resp, cookie, captureResult)
+	if captureErr := captureResult.error(); captureErr != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		if err != nil {
+			return nil, errors.Join(err, captureErr)
+		}
+		return nil, captureErr
+	}
+	return resp, err
+}
+
+func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
+	ctx context.Context,
+	req *http.Request,
+	resp *http.Response,
+	cookie *anonymousCookieState,
+	result *anonymousCookieCaptureResult,
+) {
+	if h == nil || cookie == nil || resp == nil || req == nil || !h.scope.matches(req.URL) {
+		return
+	}
+	responseURL := req.URL
+	if resp.Request != nil && resp.Request.URL != nil {
+		responseURL = resp.Request.URL
+	}
+	if !h.scope.matches(responseURL) {
+		return
+	}
+	for _, responseCookie := range resp.Cookies() {
+		if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
+			result.capture(ctx, cookie, responseCookie.Value)
+		}
+	}
+}
+
+type anonymousCookieRoundTripper struct {
+	base   http.RoundTripper
+	cookie *anonymousCookieState
+	scope  anonymousCookieURLScope
+	result *anonymousCookieCaptureResult
+}
+
+func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("a2a anonymous cookie transport: request is nil")
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	request := req.Clone(req.Context())
+	setAnonymousCookieHeader(request, t.cookie, t.scope)
+	resp, err := base.RoundTrip(request)
+	if resp != nil && t.cookie != nil && t.scope.matches(request.URL) {
+		for _, responseCookie := range resp.Cookies() {
+			if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
+				t.result.capture(request.Context(), t.cookie, responseCookie.Value)
+			}
+		}
+	}
+	return resp, err
+}
+
+func setAnonymousCookieHeader(
+	req *http.Request,
+	cookie *anonymousCookieState,
+	scope anonymousCookieURLScope,
+) {
+	if req == nil {
+		return
+	}
+	if req.Header == nil {
+		req.Header = make(http.Header)
+	}
+	stripAnonymousCookieHeader(req)
+	if cookie == nil || !scope.matches(req.URL) {
+		return
+	}
+	if cookieValue, ok := cookie.load(); ok {
+		req.AddCookie(&http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: cookieValue,
+		})
+	}
+}
+
+func stripAnonymousCookieHeader(req *http.Request) {
+	if req == nil {
+		return
+	}
+	cookies := req.Cookies()
+	req.Header.Del("Cookie")
+	for _, cookie := range cookies {
+		if cookie == nil || cookie.Name == anonymousUserIDCookieName {
+			continue
+		}
+		req.AddCookie(cookie)
+	}
+}
+
+type httpClientDoHandler struct{}
+
+func (*httpClientDoHandler) Handle(
+	_ context.Context,
+	httpClient *http.Client,
+	req *http.Request,
+) (*http.Response, error) {
+	if httpClient == nil {
+		return nil, errors.New("a2a HTTP request handler: HTTP client is nil")
+	}
+	resp, err := httpClient.Do(req)
+	if err == nil {
+		return resp, nil
+	}
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	return nil, err
+}
+
+func (h *anonymousCookieHTTPReqHandler) acquireInitializationIfNeeded(
+	ctx context.Context,
+	u *url.URL,
+	cookie *anonymousCookieState,
+) (func(), error) {
+	if h == nil ||
+		cookie == nil ||
+		h.acquireInitialization == nil ||
+		!h.scope.matches(u) {
+		return nil, nil
+	}
+	if _, ok := cookie.load(); ok {
+		return nil, nil
+	}
+	release, err := h.acquireInitialization(ctx, cookie)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return nil, nil
+	}
+	if _, ok := cookie.load(); ok {
+		release()
+		return nil, nil
+	}
+	if err := cookie.reload(ctx); err != nil {
+		release()
+		return nil, err
+	}
+	if _, ok := cookie.load(); ok {
+		release()
+		return nil, nil
+	}
+	return release, nil
+}
+
+type anonymousCookieJar struct {
+	ctx    context.Context
+	base   http.CookieJar
+	cookie *anonymousCookieState
+	scope  anonymousCookieURLScope
+	result *anonymousCookieCaptureResult
+}
+
+func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
+	if len(cookies) == 0 {
+		return
+	}
+	forwarded := make([]*http.Cookie, 0, len(cookies))
+	for _, cookie := range cookies {
+		if cookie == nil {
+			continue
+		}
+		if cookie.Name == anonymousUserIDCookieName {
+			if j.cookie != nil && j.scope.matches(u) {
+				j.result.capture(j.ctx, j.cookie, cookie.Value)
+			}
+			continue
+		}
+		forwarded = append(forwarded, cookie)
+	}
+	if j.base == nil || len(forwarded) == 0 {
+		return
+	}
+	j.base.SetCookies(u, forwarded)
+}
+
+func (j *anonymousCookieJar) Cookies(u *url.URL) []*http.Cookie {
+	var cookies []*http.Cookie
+	if j.base != nil {
+		for _, cookie := range j.base.Cookies(u) {
+			if cookie == nil || cookie.Name == anonymousUserIDCookieName {
+				continue
+			}
+			cookies = append(cookies, cookie)
+		}
+	}
+	if j.cookie != nil {
+		if cookieValue, ok := j.cookie.load(); ok && j.scope.matches(u) {
+			cookies = append(cookies, &http.Cookie{
+				Name:  anonymousUserIDCookieName,
+				Value: cookieValue,
+			})
+		}
+	}
+	return cookies
+}
+
+type anonymousCookieURLScope struct {
+	scheme string
+	host   string
+	path   string
+}
+
+func anonymousCookieURLScopeFromAgentURL(agentURL string) anonymousCookieURLScope {
+	scope := canonicalAnonymousCookieStateScope(agentURL)
+	parsed, err := url.Parse(scope)
+	if err != nil {
+		return anonymousCookieURLScope{}
+	}
+	return anonymousCookieURLScope{
+		scheme: parsed.Scheme,
+		host:   parsed.Host,
+		path:   parsed.Path,
+	}
+}
+
+func (s anonymousCookieURLScope) matches(u *url.URL) bool {
+	if u == nil || s.scheme == "" || s.host == "" {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, s.scheme) ||
+		!strings.EqualFold(u.Host, s.host) {
+		return false
+	}
+	basePath := s.path
+	if basePath == "" {
+		return true
+	}
+	reqPath := canonicalAnonymousCookieURLPath(u)
+	return reqPath == basePath || strings.HasPrefix(reqPath, basePath+"/")
+}
+
+func canonicalAnonymousCookieURLPath(u *url.URL) string {
+	if u == nil {
+		return ""
+	}
+	urlPath := u.EscapedPath()
+	if urlPath == "" {
+		urlPath = u.Path
+	}
+	if unescaped, err := url.PathUnescape(urlPath); err == nil {
+		urlPath = unescaped
+	}
+	cleaned := path.Clean("/" + strings.TrimPrefix(urlPath, "/"))
+	if cleaned == "/" {
+		return ""
+	}
+	return strings.TrimRight(cleaned, "/")
+}
+
+func isAnonymousUserIDCookieValue(value string) bool {
+	if !strings.HasPrefix(value, anonymousUserIDPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(value, anonymousUserIDPrefix)
+	decoded, err := hex.DecodeString(encoded)
+	return err == nil && len(decoded) == anonymousUserIDCookieEncodedBytes
+}
+
 // sendErrorEvent sends an error event to the event channel.
 func (r *A2AAgent) sendErrorEvent(
 	ctx context.Context,
 	eventChan chan<- *event.Event,
 	invocation *agent.Invocation,
 	err error,
+	_ ...*anonymousCookieState,
 ) *model.ResponseError {
 	respErr := model.ResponseErrorFromError(err, model.ErrorTypeRunError)
-	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+	evt := event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
 			Object: model.ObjectTypeError,
 			Error:  respErr,
 		}),
-	))
+	)
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 	return respErr
 }
 
@@ -207,16 +974,26 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		)
 	}
 	tracker := itelemetry.NewInvokeAgentTracker(ctx, invocation, useStreaming, &err)
-	if r.a2aClient == nil {
+	// Validate A2A request options early
+	if err := r.validateA2ARequestOptions(invocation); err != nil {
 		if startedSpan {
-			span.SetStatus(codes.Error, "A2A client is nil")
+			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
 			span.End()
 		}
-		return nil, fmt.Errorf("A2A client is nil")
+		return nil, err
 	}
-	// Validate A2A request options early
-	if err := r.validateA2ARequestOptions(invocation); err != nil {
+	invocationClient, err := r.clientForInvocation(invocation)
+	if err != nil {
+		if startedSpan {
+			span.SetStatus(codes.Error, err.Error())
+			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
+			span.End()
+		}
+		return nil, err
+	}
+	if invocationClient == nil || invocationClient.client == nil {
+		err = errors.New("A2A client is nil")
 		if startedSpan {
 			span.SetStatus(codes.Error, err.Error())
 			span.SetAttributes(attribute.String(semconvtrace.KeyErrorType, itelemetry.ToErrorType(err, model.ErrorTypeRunError)))
@@ -228,9 +1005,19 @@ func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-cha
 		eventChan <-chan *event.Event
 	)
 	if useStreaming {
-		eventChan, err = r.runStreaming(ctx, invocation)
+		eventChan, err = r.runStreamingWithClient(
+			ctx,
+			invocation,
+			invocationClient.client,
+			invocationClient.anonymousCookie,
+		)
 	} else {
-		eventChan, err = r.runNonStreaming(ctx, invocation)
+		eventChan, err = r.runNonStreamingWithClient(
+			ctx,
+			invocation,
+			invocationClient.client,
+			invocationClient.anonymousCookie,
+		)
 	}
 	if err != nil {
 		if startedSpan {
@@ -366,20 +1153,35 @@ func matchStateKeys(pattern string, src map[string]any, dst map[string]any) {
 
 // runStreaming handles streaming A2A communication
 func (r *A2AAgent) runStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return r.runStreamingWithClient(ctx, invocation, r.a2aClient, nil)
+}
+
+func (r *A2AAgent) runStreamingWithClient(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
+) (<-chan *event.Event, error) {
 	if r.eventConverter == nil {
 		return nil, fmt.Errorf("event converter not set")
 	}
 	eventChan := make(chan *event.Event, r.streamingBufSize)
-	runCtx := agent.CloneContext(ctx)
+	runCtx := withAnonymousCookieState(agent.CloneContext(ctx), anonymousCookie)
 	go func(ctx context.Context) {
 		defer close(eventChan)
-		r.executeStreaming(ctx, invocation, eventChan)
+		r.executeStreaming(ctx, invocation, eventChan, a2aClient, anonymousCookie)
 	}(runCtx)
 	return eventChan, nil
 }
 
 // executeStreaming executes the streaming A2A communication workflow.
-func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invocation, eventChan chan<- *event.Event) {
+func (r *A2AAgent) executeStreaming(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	eventChan chan<- *event.Event,
+	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
+) {
 	a2aMessage, err := r.buildA2AMessage(invocation, true)
 	if err != nil {
 		r.sendErrorEvent(
@@ -387,6 +1189,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 			eventChan,
 			invocation,
 			fmt.Errorf("failed to construct A2A message: %w", err),
+			anonymousCookie,
 		)
 		return
 	}
@@ -394,7 +1197,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 	requestOpts := r.buildRequestOptions(ctx, invocation)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
-	streamChan, err := r.a2aClient.StreamMessage(
+	streamChan, err := a2aClient.StreamMessage(
 		streamCtx,
 		protocol.SendMessageParams{Message: *a2aMessage},
 		requestOpts...,
@@ -409,6 +1212,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 				r.agentCard.URL,
 				err,
 			),
+			anonymousCookie,
 		)
 		return
 	}
@@ -418,6 +1222,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 		invocation,
 		eventChan,
 		streamChan,
+		anonymousCookie,
 	)
 	if streamResult.terminalError != nil {
 		return
@@ -428,6 +1233,7 @@ func (r *A2AAgent) executeStreaming(ctx context.Context, invocation *agent.Invoc
 		eventChan,
 		streamResult.responseID,
 		streamResult.aggregatedContent,
+		anonymousCookie,
 	)
 }
 
@@ -468,6 +1274,7 @@ func (r *A2AAgent) processStreamingEvents(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	streamChan <-chan protocol.StreamingMessageEvent,
+	anonymousCookie *anonymousCookieState,
 ) streamingEventResult {
 	var result streamingEventResult
 	var contentBuilder strings.Builder
@@ -485,6 +1292,7 @@ func (r *A2AAgent) processStreamingEvents(
 				eventChan,
 				invocation,
 				fmt.Errorf("custom event converter failed: %w", err),
+				anonymousCookie,
 			)
 			result.aggregatedContent = contentBuilder.String()
 			return result
@@ -506,6 +1314,7 @@ func (r *A2AAgent) processStreamingEvents(
 					currentResponseID,
 					evt.Timestamp,
 					&contentBuilder,
+					anonymousCookie,
 				)
 			}
 			var terminalError *model.ResponseError
@@ -516,6 +1325,7 @@ func (r *A2AAgent) processStreamingEvents(
 				evt,
 				result.responseID,
 				&contentBuilder,
+				anonymousCookie,
 			)
 			if terminalError != nil {
 				result.aggregatedContent = contentBuilder.String()
@@ -546,6 +1356,7 @@ func (r *A2AAgent) flushBufferedContent(
 	responseID string,
 	anchorTimestamp time.Time,
 	contentBuilder *strings.Builder,
+	anonymousCookie *anonymousCookieState,
 ) {
 	if contentBuilder == nil || contentBuilder.Len() == 0 {
 		return
@@ -590,6 +1401,7 @@ func (r *A2AAgent) aggregateEventContent(
 	evt *event.Event,
 	responseID string,
 	contentBuilder *strings.Builder,
+	anonymousCookie *anonymousCookieState,
 ) (string, *model.ResponseError) {
 	if evt.Response == nil || evt.Response.Error != nil {
 		return responseID, nil
@@ -610,6 +1422,7 @@ func (r *A2AAgent) aggregateEventContent(
 				eventChan,
 				invocation,
 				fmt.Errorf("streaming resp handler failed: %w", err),
+				anonymousCookie,
 			)
 			return responseID, respErr
 		}
@@ -629,8 +1442,9 @@ func (r *A2AAgent) emitFinalEvent(
 	eventChan chan<- *event.Event,
 	responseID string,
 	aggregatedContent string,
+	anonymousCookie *anonymousCookieState,
 ) {
-	agent.EmitEvent(ctx, invocation, eventChan, event.New(
+	evt := event.New(
 		invocation.InvocationID,
 		r.name,
 		event.WithResponse(&model.Response{
@@ -647,13 +1461,23 @@ func (r *A2AAgent) emitFinalEvent(
 				},
 			}},
 		}),
-	))
+	)
+	agent.EmitEvent(ctx, invocation, eventChan, evt)
 }
 
 // runNonStreaming handles non-streaming A2A communication
 func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
+	return r.runNonStreamingWithClient(ctx, invocation, r.a2aClient, nil)
+}
+
+func (r *A2AAgent) runNonStreamingWithClient(
+	ctx context.Context,
+	invocation *agent.Invocation,
+	a2aClient *client.A2AClient,
+	anonymousCookie *anonymousCookieState,
+) (<-chan *event.Event, error) {
 	eventChan := make(chan *event.Event, defaultNonStreamingChannelSize)
-	runCtx := agent.CloneContext(ctx)
+	runCtx := withAnonymousCookieState(agent.CloneContext(ctx), anonymousCookie)
 	go func(ctx context.Context) {
 		defer close(eventChan)
 
@@ -665,6 +1489,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 				eventChan,
 				invocation,
 				fmt.Errorf("failed to construct A2A message: %w", err),
+				anonymousCookie,
 			)
 			return
 		}
@@ -673,7 +1498,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 			Message: *a2aMessage,
 		}
 		requestOpts := r.buildRequestOptions(ctx, invocation)
-		result, err := r.a2aClient.SendMessage(ctx, params, requestOpts...)
+		result, err := a2aClient.SendMessage(ctx, params, requestOpts...)
 		if err != nil {
 			r.sendErrorEvent(
 				ctx,
@@ -684,6 +1509,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 					r.agentCard.URL,
 					err,
 				),
+				anonymousCookie,
 			)
 			return
 		}
@@ -697,6 +1523,7 @@ func (r *A2AAgent) runNonStreaming(ctx context.Context, invocation *agent.Invoca
 				eventChan,
 				invocation,
 				fmt.Errorf("custom event converter failed: %w", err),
+				anonymousCookie,
 			)
 			return
 		}

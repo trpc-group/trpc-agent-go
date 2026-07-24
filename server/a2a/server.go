@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -209,12 +210,23 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 	// it will be extracted and used as the base path for routing incoming requests.
 	basePath := extractBasePath(ia2a.NormalizeURL(agentCard.URL))
 
+	// Extract trace context before caller middleware runs, then apply the
+	// built-in identity middleware so caller middleware can normalize the user
+	// ID header before anonymous-cookie creation and authentication.
 	opts := []a2a.Option{
-		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 		a2a.WithBasePath(basePath),
 		a2a.WithMiddleWare(&traceContextMiddleware{}),
 	}
 	opts = append(opts, options.extraOptions...)
+	opts = append(opts,
+		a2a.WithMiddleWare(anonymousUserCookieMiddleware{
+			userIDHeader: userIDHeader,
+			secureCookie: anonymousCookieSecureForAgentURL(
+				agentCard.URL,
+			),
+		}),
+		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
+	)
 	a2aServer, err := a2a.NewA2AServer(agentCard, taskManager, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create a2a server: %w", err)
@@ -539,16 +551,16 @@ func (m *messageProcessor) ProcessMessage(
 
 	ctxID := *message.ContextID
 
-	// Get user ID from auth context, or generate from context ID if not available
-	// This follows ADK pattern: use auth user if available, otherwise use A2A_USER_{context_id}
-	userID := user.ID
+	// Get user ID from auth context. The default auth provider creates an
+	// anonymous request-bound principal when no trusted user header is supplied.
+	userID := strings.TrimSpace(user.ID)
 	if userID == "" {
-		userID = fmt.Sprintf("A2A_USER_%s", ctxID)
-		log.DebugfContext(
-			ctx,
-			"UserID not set in auth context, using generated ID from context: %s",
-			userID,
-		)
+		anonymousUserID, err := newAnonymousUserID()
+		if err != nil {
+			return nil, err
+		}
+		userID = anonymousUserID
+		log.DebugfContext(ctx, "UserID not set in auth context, using anonymous principal")
 	}
 
 	// Convert A2A message to agent message
