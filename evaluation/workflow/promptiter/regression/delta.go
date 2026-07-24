@@ -139,6 +139,7 @@ func validateDeltaPolicy(policy GatePolicy) error {
 	return nil
 }
 
+//nolint:gocyclo // Inventory and provenance invariants stay linear for precise failures.
 func validateComparisonSnapshot(
 	label string,
 	snapshot *EvaluationSnapshot,

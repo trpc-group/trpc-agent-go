@@ -562,6 +562,25 @@ func TestRenderSuccessfulReportRejectsIncompleteOrForgedAuditBindings(t *testing
 	}
 }
 
+func TestRenderRejectsInvalidResourcesForFailedReport(t *testing.T) {
+	report := testReport(t)
+	report.Status = PipelineRunFailed
+	report.StopReason = StopNecessaryRunFailed
+	entry := ResourceEntry{
+		Stage: "failed",
+		Usage: ResourceUsage{
+			ModelCalls: Count{Available: true, Value: -1},
+		},
+	}
+	report.Resources = ResourceLedger{
+		Entries:    []ResourceEntry{entry},
+		Cumulative: entry.Usage,
+	}
+
+	_, err := RenderJSON(report)
+	require.ErrorContains(t, err, "model calls must be non-negative")
+}
+
 func TestRenderAllowsCompletedEvaluationWithNotEvaluableGateAndNoPointerUpdates(t *testing.T) {
 	report := testReport(t)
 	candidate := &report.Candidates[0]

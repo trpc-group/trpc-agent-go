@@ -219,6 +219,7 @@ func newEvaluationSnapshot(request SnapshotRequest, profileHash string) *Evaluat
 	}
 }
 
+//nolint:gocyclo // Request completeness checks intentionally report the exact invalid field.
 func validateSnapshotRequest(request SnapshotRequest, profileHash string) error {
 	switch {
 	case strings.TrimSpace(request.EvaluationRunID) == "":

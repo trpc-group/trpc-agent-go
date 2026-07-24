@@ -26,6 +26,7 @@ const (
 // FailureCategory is a stable, machine-readable failure attribution.
 type FailureCategory string
 
+// FailureCategory values classify supported and abstained attribution outcomes.
 const (
 	FailureResponseMismatch  FailureCategory = "response_mismatch"
 	FailureWrongTool         FailureCategory = "wrong_tool"
@@ -40,6 +41,7 @@ const (
 // FailureSeverity describes the release impact of one failed metric.
 type FailureSeverity string
 
+// FailureSeverity values order attribution impact from highest to lowest.
 const (
 	FailureSeverityP0 FailureSeverity = "P0"
 	FailureSeverityP1 FailureSeverity = "P1"
@@ -50,6 +52,7 @@ const (
 // EvidenceSufficiency states whether attribution evidence supports a conclusion.
 type EvidenceSufficiency string
 
+// EvidenceSufficiency values describe how strongly evidence supports attribution.
 const (
 	EvidenceSufficient   EvidenceSufficiency = "sufficient"
 	EvidencePartial      EvidenceSufficiency = "partial"
@@ -90,6 +93,7 @@ type AttributionInput struct {
 // ScoreDirection defines whether a larger or smaller metric score is better.
 type ScoreDirection string
 
+// ScoreDirection values define the supported metric comparison directions.
 const (
 	ScoreHigherIsBetter ScoreDirection = "higher_is_better"
 	ScoreLowerIsBetter  ScoreDirection = "lower_is_better"
@@ -161,6 +165,7 @@ type CaseResult struct {
 // EvaluationStatus separates completed quality results from runtime failures.
 type EvaluationStatus string
 
+// EvaluationStatus values distinguish completed evaluations from operational failures.
 const (
 	EvaluationCompleted    EvaluationStatus = "completed"
 	EvaluationNotEvaluable EvaluationStatus = "not_evaluable"
@@ -204,6 +209,7 @@ type EvaluationSnapshot struct {
 // ChangeKind is the primary mutually-exclusive case delta classification.
 type ChangeKind string
 
+// ChangeKind values classify the primary before/after case transition.
 const (
 	ChangeNewlyPassing ChangeKind = "newly_passing"
 	ChangeNewlyFailing ChangeKind = "newly_failing"
@@ -303,6 +309,7 @@ type ResourceLedger struct {
 // DecisionStatus is the outcome of a search or release decision.
 type DecisionStatus string
 
+// DecisionStatus values separate quality acceptance from non-evaluable outcomes.
 const (
 	DecisionAccepted     DecisionStatus = "accepted"
 	DecisionRejected     DecisionStatus = "rejected"
@@ -319,6 +326,7 @@ type Decision struct {
 // PipelineStatus is the terminal status of the whole regression run.
 type PipelineStatus string
 
+// PipelineStatus values describe the terminal operational pipeline outcome.
 const (
 	PipelineSucceeded     PipelineStatus = "succeeded"
 	PipelineRunFailed     PipelineStatus = "run_failed"
@@ -328,6 +336,7 @@ const (
 // StopReason is a stable outer-loop termination reason.
 type StopReason string
 
+// StopReason values record every supported outer-loop termination cause.
 const (
 	StopMaxRounds             StopReason = "max_rounds"
 	StopBudgetExhausted       StopReason = "budget_exhausted"
@@ -340,6 +349,7 @@ const (
 // ProfileRole identifies one profile's lifecycle role.
 type ProfileRole string
 
+// ProfileRole values identify immutable, search, release, and candidate profiles.
 const (
 	ProfileInitial   ProfileRole = "initial"
 	ProfileSearch    ProfileRole = "search"

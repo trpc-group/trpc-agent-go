@@ -126,6 +126,7 @@ func run(ctx context.Context, dataDir, outputDir string) (*regression.Report, er
 		annotatedRunner.Close()
 		return nil, fmt.Errorf("create native evaluator: %w", err)
 	}
+	defer annotatedRunner.Close()
 	defer agentEvaluator.Close()
 
 	structure, err := astructure.Export(ctx, candidateAgent)

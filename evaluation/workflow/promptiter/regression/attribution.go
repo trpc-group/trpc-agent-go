@@ -202,6 +202,7 @@ func finishAttribution(result FailureAttribution) FailureAttribution {
 	return result
 }
 
+//nolint:gocyclo // Keep fail-closed evidence invariants linear and auditable.
 func validateAttributionInput(
 	input AttributionInput,
 ) (
@@ -667,6 +668,7 @@ func equalJSONLike(actual, expected any, tolerance float64) (bool, error) {
 	return equalNormalizedValue(actual, expected, tolerance), nil
 }
 
+//nolint:gocyclo // Recursive JSON-like type normalization is clearer as one type switch.
 func normalizeJSONLike(value any) (any, error) {
 	switch typed := value.(type) {
 	case nil:
@@ -736,6 +738,7 @@ func normalizeJSONLike(value any) (any, error) {
 	}
 }
 
+//nolint:gocyclo // Recursive reflected-shape restoration must cover each supported Go kind.
 func restoreFloatingValues(source reflect.Value, normalized any) any {
 	for source.IsValid() &&
 		(source.Kind() == reflect.Interface || source.Kind() == reflect.Pointer) {

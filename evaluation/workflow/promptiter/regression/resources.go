@@ -136,7 +136,16 @@ func subtractCount(before, after Count) Count {
 }
 
 func subtractAmount(before, after Amount) Amount {
-	if !before.Available || !after.Available || after.Value < before.Value {
+	if !after.Available {
+		return Amount{}
+	}
+	if !before.Available {
+		if before.Value != 0 || before.Unit != "" {
+			return Amount{}
+		}
+		return after
+	}
+	if after.Value < before.Value {
 		return Amount{}
 	}
 	if before.Unit != "" && after.Unit != "" && before.Unit != after.Unit {

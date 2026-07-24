@@ -232,6 +232,7 @@ func sanitizedReport(report *Report) (*Report, error) {
 	return &sanitized, nil
 }
 
+//nolint:gocyclo // Top-level report validation preserves distinct failure semantics.
 func validateReport(report *Report) error {
 	if report == nil {
 		return errors.New("report is nil")
@@ -325,6 +326,9 @@ func validateReport(report *Report) error {
 			}
 		}
 	}
+	if err := validateReportResourceLedgers(report); err != nil {
+		return err
+	}
 	if report.Status == PipelineSucceeded {
 		if err := validateSuccessfulReport(report); err != nil {
 			return err
@@ -346,6 +350,7 @@ type reportValidationState struct {
 	releaseValidation *EvaluationSnapshot
 }
 
+//nolint:gocyclo // Successful-report invariants are explicit audit-contract checks.
 func validateSuccessfulReport(report *Report) error {
 	binding, err := validateSuccessfulReportConfig(report)
 	if err != nil {
@@ -467,12 +472,10 @@ func validateSuccessfulReport(report *Report) error {
 			"final decision is accepted without a released candidate profile",
 		)
 	}
-	if err := validateReportResourceLedgers(report); err != nil {
-		return err
-	}
 	return nil
 }
 
+//nolint:gocyclo // Resolved configuration is checked field-by-field against provenance.
 func validateSuccessfulReportConfig(
 	report *Report,
 ) (reportProvenanceBinding, error) {
@@ -730,6 +733,7 @@ func validateResolvedDataset(label string, dataset DatasetSpec) error {
 	return nil
 }
 
+//nolint:gocyclo // Candidate lineage, deltas, decisions, and transition checks are independent.
 func validateSuccessfulCandidate(
 	report *Report,
 	candidate *CandidateReport,
@@ -2218,29 +2222,22 @@ func sanitizeJSONValue(path string, value any, evidenceLimit, depth int) any {
 		}
 		return sanitized
 	case string:
-		redacted := redactCredentialText(typed)
 		if identityJSONKey(key) {
-			return redacted
+			return redactCredentialText(typed)
 		}
-		return redactAndBoundText(redacted, persistedTextLimit(path))
+		return redactAndBoundText(typed, persistedTextLimit(path))
 	default:
 		return value
 	}
 }
 
 func evidenceCollectionPath(path string) bool {
-	hasToolCalls := false
 	for _, segment := range strings.Split(strings.ToLower(path), ".") {
 		switch segment {
 		case "tooltrajectory", "expectedtools":
-			hasToolCalls = true
 			return true
 		case "trace", "evidence", "rubricscores":
 			return true
-		case "arguments", "result":
-			if hasToolCalls {
-				return true
-			}
 		}
 	}
 	return false

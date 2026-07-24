@@ -191,6 +191,7 @@ func validateReleaseInputs(
 	return reasons
 }
 
+//nolint:gocyclo // Fail-closed delta validation enumerates independent safety invariants.
 func validateDeltaSummary(
 	delta DeltaSummary,
 	policy GatePolicy,

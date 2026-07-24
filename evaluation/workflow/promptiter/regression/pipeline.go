@@ -145,6 +145,8 @@ func New(
 // Run executes the auditable Evaluation + PromptIter + held-out release loop.
 // Operational failures are retained in the returned report; error is reserved
 // for invalid inputs that prevent a report identity from being established.
+//
+//nolint:gocyclo // Keep the outer state-machine transitions visible in execution order.
 func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) {
 	if config == nil {
 		return nil, errors.New("run config is nil")
@@ -846,6 +848,7 @@ func ApplyStateTransition(
 	return transition, nil
 }
 
+//nolint:gocyclo // Fail-closed configuration checks enumerate independent invariants.
 func validateRunConfig(config *RunConfig) error {
 	if config == nil {
 		return errors.New("run config is nil")
@@ -1333,6 +1336,7 @@ func (p *Pipeline) evaluateSnapshot(
 	return snapshot, err
 }
 
+//nolint:gocyclo // Snapshot completeness and binding checks stay linear for auditability.
 func validateSnapshotResponse(
 	request SnapshotRequest,
 	snapshot *EvaluationSnapshot,
@@ -1685,6 +1689,7 @@ func (p *Pipeline) appendEntry(
 	appendResourceEntry(&candidate.Resources, entry, nil)
 }
 
+//nolint:gocyclo // Native result lineage checks intentionally identify the exact mismatch.
 func validatePromptIterResult(
 	result *promptiterengine.RunResult,
 	request *promptiterengine.RunRequest,

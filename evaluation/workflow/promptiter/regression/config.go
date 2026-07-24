@@ -73,6 +73,8 @@ func LoadRegressionConfig(path string) (*RegressionConfig, error) {
 
 // LoadRunConfig resolves strict custom configuration and native Evaluation
 // resources into one provenance-bound pipeline input.
+//
+//nolint:gocyclo // Ordered loading and provenance checks intentionally fail at the exact input.
 func LoadRunConfig(ctx context.Context, appName string, files InputFiles) (*RunConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

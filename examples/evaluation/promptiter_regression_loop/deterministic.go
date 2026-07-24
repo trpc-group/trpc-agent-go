@@ -6,6 +6,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package main provides the deterministic, no-key PromptIter regression-loop example.
 package main
 
 import (
