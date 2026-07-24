@@ -1,0 +1,33 @@
+{
+  "appName": "eval-optimization-regression-app",
+  "promptSource": "baseline_prompt.txt",
+  "metricsPath": "metrics.json",
+  "trainEvalSetId": "train",
+  "validationEvalSetId": "validation",
+  "scenario": "overfit",
+  "seed": 20260710,
+  "targetSurfaceIds": ["support_agent#instruction"],
+  "gate": {
+    "minValidationScoreGain": 0.05,
+    "allowNewHardFail": false,
+    "hardFailMetricNames": ["final_response", "tool_trajectory", "router_decision", "json_format"],
+    "criticalCaseIds": ["val_overfit_refund_policy"],
+    "maxModelCalls": 10,
+    "requireEngineAccepted": true
+  },
+  "promptiter": {
+    "maxRounds": 1,
+    "minScoreGain": 0.01,
+    "maxRoundsWithoutAcceptance": 1,
+    "evalCaseParallelism": 1
+  },
+  "attribution": {
+    "metricCategoryHints": {
+      "router_decision": "route_error"
+    }
+  },
+  "fakeConfig": {
+    "runner": "deterministic-fake-engine",
+    "scenario": "train improves but validation adds a hard fail"
+  }
+}

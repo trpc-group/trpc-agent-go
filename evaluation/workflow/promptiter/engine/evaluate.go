@@ -19,6 +19,7 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
@@ -59,6 +60,10 @@ type MetricResult struct {
 	Status status.EvalStatus
 	// Reason stores optional explanation when score quality is degraded.
 	Reason string
+	// ActualInvocation stores metric-level actual invocation evidence when available.
+	ActualInvocation *evalset.Invocation
+	// ExpectedInvocation stores metric-level expected invocation evidence when available.
+	ExpectedInvocation *evalset.Invocation
 }
 
 // CaseResult stores output and scoring details of one evaluated case.
@@ -71,6 +76,10 @@ type CaseResult struct {
 	SessionID string
 	// Trace records the node-level execution path used to produce the output.
 	Trace *atrace.Trace
+	// ActualInvocation stores the actual invocation used by metric evaluators.
+	ActualInvocation *evalset.Invocation
+	// ExpectedInvocation stores the expected invocation used by metric evaluators.
+	ExpectedInvocation *evalset.Invocation
 	// Metrics stores all metric outputs for this case.
 	Metrics []MetricResult
 }
@@ -307,7 +316,10 @@ func adaptEvaluationCaseResult(
 			err,
 		)
 	}
-	metrics, err := adaptMetricResults(runResult.OverallEvalMetricResults)
+	metrics, err := adaptMetricResults(
+		runResult.OverallEvalMetricResults,
+		runResult.EvalMetricResultPerInvocation,
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"adapt metric results for eval case %q: %w",
@@ -315,13 +327,31 @@ func adaptEvaluationCaseResult(
 			err,
 		)
 	}
+	actualInvocation, expectedInvocation := firstInvocationPair(runResult)
 	return &CaseResult{
-		EvalSetID:  evalSetID,
-		EvalCaseID: evalCase.EvalCaseID,
-		SessionID:  sessionID,
-		Trace:      trace,
-		Metrics:    metrics,
+		EvalSetID:          evalSetID,
+		EvalCaseID:         evalCase.EvalCaseID,
+		SessionID:          sessionID,
+		Trace:              trace,
+		ActualInvocation:   actualInvocation,
+		ExpectedInvocation: expectedInvocation,
+		Metrics:            metrics,
 	}, nil
+}
+
+func firstInvocationPair(result *evalresult.EvalCaseResult) (*evalset.Invocation, *evalset.Invocation) {
+	if result == nil {
+		return nil, nil
+	}
+	for _, perInvocation := range result.EvalMetricResultPerInvocation {
+		if perInvocation == nil {
+			continue
+		}
+		if perInvocation.ActualInvocation != nil || perInvocation.ExpectedInvocation != nil {
+			return perInvocation.ActualInvocation, perInvocation.ExpectedInvocation
+		}
+	}
+	return nil, nil
 }
 
 func extractInferenceTraceDetails(
@@ -379,16 +409,22 @@ func validateTrace(structure *profilecompiler.Structure, trace *atrace.Trace) er
 	return nil
 }
 
-func adaptMetricResults(results []*evalresult.EvalMetricResult) ([]MetricResult, error) {
+func adaptMetricResults(
+	results []*evalresult.EvalMetricResult,
+	perInvocation []*evalresult.EvalMetricResultPerInvocation,
+) ([]MetricResult, error) {
 	metrics := make([]MetricResult, 0, len(results))
 	for _, result := range results {
 		if result == nil {
 			continue
 		}
+		actualInvocation, expectedInvocation := invocationPairForMetric(result, perInvocation)
 		metric := MetricResult{
-			MetricName: result.MetricName,
-			Score:      result.Score,
-			Status:     result.EvalStatus,
+			MetricName:         result.MetricName,
+			Score:              result.Score,
+			Status:             result.EvalStatus,
+			ActualInvocation:   actualInvocation,
+			ExpectedInvocation: expectedInvocation,
 		}
 		if result.Details != nil {
 			metric.Reason = strings.TrimSpace(result.Details.Reason)
@@ -399,4 +435,63 @@ func adaptMetricResults(results []*evalresult.EvalMetricResult) ([]MetricResult,
 		metrics = append(metrics, metric)
 	}
 	return metrics, nil
+}
+
+func invocationPairForMetric(
+	result *evalresult.EvalMetricResult,
+	perInvocation []*evalresult.EvalMetricResultPerInvocation,
+) (*evalset.Invocation, *evalset.Invocation) {
+	if result == nil {
+		return nil, nil
+	}
+	var firstActual *evalset.Invocation
+	var firstExpected *evalset.Invocation
+	var statusActual *evalset.Invocation
+	var statusExpected *evalset.Invocation
+	for _, perInvocationResult := range perInvocation {
+		if perInvocationResult == nil {
+			continue
+		}
+		for _, metric := range perInvocationResult.EvalMetricResults {
+			if metric == nil || metric.MetricName != result.MetricName {
+				continue
+			}
+			if firstActual == nil && firstExpected == nil {
+				firstActual = perInvocationResult.ActualInvocation
+				firstExpected = perInvocationResult.ExpectedInvocation
+			}
+			if metricMatchesAggregate(result, metric) {
+				return perInvocationResult.ActualInvocation, perInvocationResult.ExpectedInvocation
+			}
+			if statusActual == nil && statusExpected == nil && metric.EvalStatus == result.EvalStatus {
+				statusActual = perInvocationResult.ActualInvocation
+				statusExpected = perInvocationResult.ExpectedInvocation
+			}
+		}
+	}
+	if statusActual != nil || statusExpected != nil {
+		return statusActual, statusExpected
+	}
+	return firstActual, firstExpected
+}
+
+func metricMatchesAggregate(aggregate, candidate *evalresult.EvalMetricResult) bool {
+	if aggregate == nil || candidate == nil || candidate.EvalStatus != aggregate.EvalStatus {
+		return false
+	}
+	aggregateReason := metricReason(aggregate)
+	if aggregateReason != "" {
+		return aggregateReason == metricReason(candidate)
+	}
+	if metricReason(candidate) != "" {
+		return false
+	}
+	return candidate.Score == aggregate.Score
+}
+
+func metricReason(metric *evalresult.EvalMetricResult) string {
+	if metric == nil || metric.Details == nil {
+		return ""
+	}
+	return strings.TrimSpace(metric.Details.Reason)
 }

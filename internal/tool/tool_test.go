@@ -39,10 +39,20 @@ func (f *fakeTool) StreamableCall(_ context.Context, _ []byte) (*tool.StreamRead
 }
 
 // simpleTool implements only tool.Tool (not callable/streamable) for negative paths.
-type simpleTool struct{ name, desc string }
+type simpleTool struct {
+	name         string
+	desc         string
+	inputSchema  *tool.Schema
+	outputSchema *tool.Schema
+}
 
 func (s *simpleTool) Declaration() *tool.Declaration {
-	return &tool.Declaration{Name: s.name, Description: s.desc}
+	return &tool.Declaration{
+		Name:         s.name,
+		Description:  s.desc,
+		InputSchema:  s.inputSchema,
+		OutputSchema: s.outputSchema,
+	}
 }
 
 // skipperTool implements tool.Tool and exposes SkipSummarization preference
@@ -307,8 +317,13 @@ func TestResolveDeclarationAndSemantic(t *testing.T) {
 }
 
 func TestApplyDeclarationsOverlaysMatchingTools(t *testing.T) {
+	inputSchema := &tool.Schema{
+		Type:       "object",
+		Properties: map[string]*tool.Schema{"query": {Type: "string", Description: "old query"}},
+	}
+	outputSchema := &tool.Schema{Type: "string", Description: "old output"}
 	base := []tool.Tool{
-		&simpleTool{name: "plain", desc: "plain description"},
+		&simpleTool{name: "plain", desc: "plain description", inputSchema: inputSchema, outputSchema: outputSchema},
 		nilDeclarationTool{},
 		nil,
 	}
@@ -320,6 +335,8 @@ func TestApplyDeclarationsOverlaysMatchingTools(t *testing.T) {
 	got := ApplyDeclarations(base, declarations)
 	require.Len(t, got, 3)
 	require.Equal(t, "patched description", got[0].Declaration().Description)
+	require.Same(t, inputSchema, got[0].Declaration().InputSchema)
+	require.Same(t, outputSchema, got[0].Declaration().OutputSchema)
 	require.Same(t, base[0], ResolveDeclaration(got[0]))
 	require.Same(t, base[0], ResolveSemantic(got[0]))
 	require.Equal(t, base[1], got[1])

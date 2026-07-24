@@ -541,6 +541,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		score     float64
 		threshold float64
 		criterion *criterion.Criterion
+		details   *evalresult.EvalMetricResultDetails
 	}
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
@@ -565,6 +566,9 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			aggregatedMetrics[metric.MetricName].count++
 			aggregatedMetrics[metric.MetricName].score += metric.Score
 			aggregatedMetrics[metric.MetricName].criterion = metric.Criterion
+			if aggregatedMetrics[metric.MetricName].details == nil {
+				aggregatedMetrics[metric.MetricName].details = metricDetailsForAggregate(metric, run)
+			}
 		}
 	}
 	// Aggregate metrics results by metric name.
@@ -581,6 +585,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			EvalStatus: evalStatus,
 			Threshold:  aggregatedMetric.threshold,
 			Criterion:  aggregatedMetric.criterion,
+			Details:    aggregatedMetric.details,
 		})
 	}
 	overallStatus, err := summarizeAggregateCaseRunsStatus(runStatuses, metricResults, hasRunError)
@@ -593,6 +598,32 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		EvalCaseResults: runs,
 		MetricResults:   metricResults,
 	}, nil
+}
+
+func metricDetailsForAggregate(metric *evalresult.EvalMetricResult, run *evalresult.EvalCaseResult) *evalresult.EvalMetricResultDetails {
+	if metric != nil && metric.Details != nil && metric.Details.Reason != "" {
+		return metric.Details
+	}
+	if run == nil || metric == nil {
+		return nil
+	}
+	for _, perInvocation := range run.EvalMetricResultPerInvocation {
+		if perInvocation == nil {
+			continue
+		}
+		for _, perMetric := range perInvocation.EvalMetricResults {
+			if perMetric == nil || perMetric.MetricName != metric.MetricName {
+				continue
+			}
+			if perMetric.Details != nil && perMetric.Details.Reason != "" {
+				return perMetric.Details
+			}
+		}
+	}
+	if metric.Details != nil {
+		return metric.Details
+	}
+	return nil
 }
 
 func summarizeAggregateCaseRunsStatus(runStatuses []status.EvalStatus, metricResults []*evalresult.EvalMetricResult, hasRunError bool) (status.EvalStatus, error) {

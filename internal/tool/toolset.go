@@ -108,9 +108,29 @@ func ApplyDeclarations(base []tool.Tool, declarations []tool.Declaration) []tool
 		if !ok {
 			continue
 		}
-		out[i] = wrapDeclarationTool(candidate, declaration)
+		out[i] = wrapDeclarationTool(candidate, mergeDeclaration(candidate.Declaration(), declaration))
 	}
 	return out
+}
+
+func mergeDeclaration(base *tool.Declaration, override tool.Declaration) tool.Declaration {
+	if base == nil {
+		return override
+	}
+	merged := *base
+	if override.Name != "" {
+		merged.Name = override.Name
+	}
+	if override.Description != "" {
+		merged.Description = override.Description
+	}
+	if override.InputSchema != nil {
+		merged.InputSchema = override.InputSchema
+	}
+	if override.OutputSchema != nil {
+		merged.OutputSchema = override.OutputSchema
+	}
+	return merged
 }
 
 // ResolveDeclaration unwraps framework declaration overlays.
