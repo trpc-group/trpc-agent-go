@@ -2,8 +2,7 @@
 
 ## Runtime Defaults
 
-- GOPATH: `D:\tools\gopath`
-- GOCACHE: `D:\environment\github\tencent\trpc\trpc-agent-go\.gocache`
+- GOPATH/GOCACHE: use Go defaults, or set local values outside the repository when needed.
 - Default LLM base URL: `https://api.deepseek.com`
 - Default LLM model: `deepseek-chat`
 - API key source: environment only (`LLM_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPSEEK_API_KEY1`, or `OPENAI_API_KEY`)
@@ -15,15 +14,14 @@ The API key is intentionally not written into repository files.
 Command:
 
 ```powershell
-$env:GOPATH="D:\tools\gopath"
-$env:GOCACHE="D:\environment\github\tencent\trpc\trpc-agent-go\.gocache"
 go run ./promptiter_regression_loop `
-  -config ./promptiter_regression_loop/data/promptiter.json `
-  -mode deterministic
+  -config ./promptiter_regression_loop/data/promptiter.json
 ```
 
 Result files:
 
+- `optimization_report.json`
+- `optimization_report.md`
 - `deterministic_optimization_report.json`
 - `deterministic_optimization_report.md`
 
@@ -49,15 +47,13 @@ Gate reasons:
 
 Interpretation:
 
-The deterministic path reproduces the intended regression loop. The candidate improves training score and validation score, fixes `val_json_refund`, but regresses `val_critical_direct_status` by wrapping a direct answer in JSON. The outer gate correctly rejects the candidate because score gain alone is not enough when a critical case regresses.
+The deterministic path is the default path and requires no API key. It reproduces the intended regression loop: the candidate improves training score and validation score, fixes `val_json_refund`, but regresses `val_critical_direct_status` by wrapping a direct answer in JSON. The outer gate correctly rejects the candidate because score gain alone is not enough when a critical case regresses.
 
 ## Real LLM Flow
 
 Command:
 
 ```powershell
-$env:GOPATH="D:\tools\gopath"
-$env:GOCACHE="D:\environment\github\tencent\trpc\trpc-agent-go\.gocache"
 $env:DEEPSEEK_API_KEY="<set locally>"
 $env:LLM_BASE_URL="https://api.deepseek.com"
 $env:LLM_MODEL="deepseek-chat"
@@ -68,6 +64,8 @@ go run ./promptiter_regression_loop `
 
 Result files:
 
+- `optimization_report.json`
+- `optimization_report.md`
 - `real_llm_optimization_report.json`
 - `real_llm_optimization_report.md`
 
@@ -108,6 +106,7 @@ Because real LLM outputs are stochastic, earlier successful runs may differ in e
 ## Engineering Conclusion
 
 - The mock path is runnable and demonstrates the target regression-gate behavior.
+- The sample config defaults to deterministic mode, so the core flow is runnable without a real API key.
 - The code now keeps DeepSeek model/base URL defaults explicit while keeping secrets out of source control.
 - The real path now evaluates PromptIter rounds through the same outer regression gate selection logic instead of blindly selecting round 1.
 - The latest real DeepSeek run completed end to end, but the candidate was rejected because validation score gain was `0.0000`, below the configured `0.0500` threshold.

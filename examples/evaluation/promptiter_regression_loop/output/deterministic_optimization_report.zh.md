@@ -38,11 +38,26 @@
 
 ## 失败归因
 
-### Train
+### Baseline
+
+#### Train
+
+- `final_response_mismatch`：1
+- `format_error`：2
+- `knowledge_recall_gap`：1
+- `tool_argument_error`：1
+
+#### Validation
+
+- `format_error`：2
+
+### Candidate
+
+#### Train
 
 - `knowledge_recall_gap`：1
 
-### Validation
+#### Validation
 
 - `final_response_mismatch`：1
 

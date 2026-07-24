@@ -993,7 +993,9 @@
         "candidate_status": "passed",
         "transition": "stayed_pass"
       }
-    ]
+    ],
+    "missing_candidate_cases": 0,
+    "extra_candidate_cases": 0
   },
   "gate": {
     "accepted": false,
@@ -1002,13 +1004,25 @@
     ]
   },
   "failure_attribution": {
-    "train": {
-      "format_error": 1,
-      "unknown": 2
+    "baseline": {
+      "train": {
+        "format_error": 1,
+        "unknown": 1
+      },
+      "validation": {
+        "unknown": 1,
+        "format_error": 1
+      }
     },
-    "validation": {
-      "format_error": 1,
-      "unknown": 1
+    "candidate": {
+      "train": {
+        "format_error": 1,
+        "unknown": 2
+      },
+      "validation": {
+        "format_error": 1,
+        "unknown": 1
+      }
     }
   },
   "cost": {
@@ -1134,7 +1148,9 @@
             "candidate_status": "passed",
             "transition": "stayed_pass"
           }
-        ]
+        ],
+        "missing_candidate_cases": 0,
+        "extra_candidate_cases": 0
       },
       "gate": {
         "accepted": false,
@@ -1146,9 +1162,19 @@
         "prompt_tokens": 62,
         "completion_tokens": 81,
         "total_calls": 6,
-        "estimated_usd": 0.0000715
+        "estimated_usd": 7.15e-05
       },
-      "latency_ms": 14838
+      "latency_ms": 14838,
+      "candidate_failure_attribution": {
+        "train": {
+          "format_error": 1,
+          "unknown": 2
+        },
+        "validation": {
+          "format_error": 1,
+          "unknown": 1
+        }
+      }
     }
   ]
 }

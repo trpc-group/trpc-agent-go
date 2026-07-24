@@ -37,12 +37,26 @@
 
 ## 失败归因
 
-### Train
+### Baseline
+
+#### Train
+
+- `format_error`：1
+- `unknown`：1
+
+#### Validation
+
+- `format_error`：1
+- `unknown`：1
+
+### Candidate
+
+#### Train
 
 - `format_error`：1
 - `unknown`：2
 
-### Validation
+#### Validation
 
 - `format_error`：1
 - `unknown`：1
