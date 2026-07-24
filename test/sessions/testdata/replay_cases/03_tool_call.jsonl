@@ -1,0 +1,6 @@
+{"action":"metadata","version":1,"id":"03_tool_call","description":"function call and tool response"}
+{"action":"create_session","session_id":"session-03"}
+{"action":"append_event","session_id":"session-03","event":{"id":"event-01","role":"user","content":"北京天气如何？","timestamp":"2026-01-03T10:00:00Z"}}
+{"action":"append_event","session_id":"session-03","event":{"id":"event-02","role":"assistant","timestamp":"2026-01-03T10:00:01Z","tool_calls":[{"id":"call-weather-01","name":"get_weather","arguments":{"city":"北京"}}]}}
+{"action":"append_event","session_id":"session-03","event":{"id":"event-03","role":"tool","content":"晴，25°C","tool_id":"call-weather-01","tool_name":"get_weather","timestamp":"2026-01-03T10:00:02Z"}}
+{"action":"append_event","session_id":"session-03","event":{"id":"event-04","role":"assistant","content":"北京今天晴，25°C","timestamp":"2026-01-03T10:00:03Z"}}

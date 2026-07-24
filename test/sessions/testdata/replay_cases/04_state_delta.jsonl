@@ -1,0 +1,5 @@
+{"action":"metadata","version":1,"id":"04_state_delta","description":"initial state, event deltas, and direct state update"}
+{"action":"create_session","session_id":"session-04","state":{"count":0,"theme":"light"}}
+{"action":"append_event","session_id":"session-04","event":{"id":"event-01","role":"user","content":"切换深色模式","timestamp":"2026-01-04T10:00:00Z","state_delta":{"theme":"dark","count":1}}}
+{"action":"update_state","session_id":"session-04","state":{"count":2,"source":"direct"}}
+{"action":"append_event","session_id":"session-04","event":{"id":"event-02","role":"assistant","content":"已切换","timestamp":"2026-01-04T10:00:01Z","state_delta":{"confirmed":true}}}

@@ -1,0 +1,4 @@
+{"action":"metadata","version":1,"id":"09_postwrite_retry","description":"idempotent memory retry after an ambiguous write result"}
+{"action":"create_session","session_id":"session-09"}
+{"action":"add_memory","failure":{"fail_after":true,"retry":true},"memory":{"ref":"retry-memory","content":"需要幂等保存的事实","topics":["retry"],"kind":"fact"}}
+{"action":"checkpoint","checkpoint":"after-retry"}

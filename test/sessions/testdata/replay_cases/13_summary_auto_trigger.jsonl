@@ -1,0 +1,13 @@
+{"action":"metadata","version":1,"id":"13_summary_auto_trigger","description":"long conversation enqueues a non-forced summary and waits for persistence"}
+{"action":"create_session","session_id":"session-13"}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-01","role":"user","content":"我要规划一周的开发任务","timestamp":"2026-01-13T10:00:00Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-02","role":"assistant","content":"先确认目标和验收标准","timestamp":"2026-01-13T10:00:01Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-03","role":"user","content":"第一天阅读项目代码","timestamp":"2026-01-13T10:00:02Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-04","role":"assistant","content":"第二天完成 fixture 设计","timestamp":"2026-01-13T10:00:03Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-05","role":"user","content":"第三天实现 replay runner","timestamp":"2026-01-13T10:00:04Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-06","role":"assistant","content":"第四天接入多个后端","timestamp":"2026-01-13T10:00:05Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-07","role":"user","content":"第五天处理差异报告","timestamp":"2026-01-13T10:00:06Z"}}
+{"action":"append_event","session_id":"session-13","event":{"id":"event-08","role":"assistant","content":"最后运行完整回归测试","timestamp":"2026-01-13T10:00:07Z"}}
+{"action":"enqueue_summary","session_id":"session-13","summary":{"force":false,"await":true,"timeout_ms":2000}}
+{"action":"assert_session","session_id":"session-13","expected":{"event_ids":["event-01","event-02","event-03","event-04","event-05","event-06","event-07","event-08"],"unique_event_ids":true,"summary_count":1,"summary":{"version":1,"revision":1,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-08","contains":["我要规划一周的开发任务","最后运行完整回归测试"],"tail_event_ids":[]}}}
+{"action":"checkpoint","checkpoint":"auto-summary-ready"}

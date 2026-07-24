@@ -1,0 +1,10 @@
+{"action":"metadata","version":1,"id":"07_summary_incremental","description":"summary update after new events"}
+{"action":"create_session","session_id":"session-07"}
+{"action":"append_event","session_id":"session-07","event":{"id":"event-01","role":"user","content":"第一轮","timestamp":"2026-01-07T10:00:00Z"}}
+{"action":"append_event","session_id":"session-07","event":{"id":"event-02","role":"assistant","content":"第一轮回复","timestamp":"2026-01-07T10:00:01Z"}}
+{"action":"create_summary","session_id":"session-07","summary":{}}
+{"action":"assert_session","session_id":"session-07","expected":{"summary_count":1,"summary":{"version":1,"revision":1,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-02","tail_event_ids":[]}}}
+{"action":"append_event","session_id":"session-07","event":{"id":"event-03","role":"user","content":"第二轮","timestamp":"2026-01-07T10:00:02Z"}}
+{"action":"append_event","session_id":"session-07","event":{"id":"event-04","role":"assistant","content":"第二轮回复","timestamp":"2026-01-07T10:00:03Z"}}
+{"action":"create_summary","session_id":"session-07","summary":{}}
+{"action":"assert_session","session_id":"session-07","expected":{"summary_count":1,"summary":{"version":1,"revision":2,"updated_at_non_zero":true,"updated_at_equals_cutoff":true,"last_event_id":"event-04","tail_event_ids":[]}}}

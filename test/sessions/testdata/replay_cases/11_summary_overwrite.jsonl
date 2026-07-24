@@ -1,0 +1,6 @@
+{"action":"metadata","version":1,"id":"11_summary_overwrite","description":"summary fixture used for stale overwrite mutation detection"}
+{"action":"create_session","session_id":"session-11"}
+{"action":"append_event","session_id":"session-11","event":{"id":"event-01","role":"user","content":"摘要版本一","timestamp":"2026-01-11T10:00:00Z"}}
+{"action":"create_summary","session_id":"session-11","summary":{}}
+{"action":"append_event","session_id":"session-11","event":{"id":"event-02","role":"assistant","content":"摘要版本二","timestamp":"2026-01-11T10:00:01Z"}}
+{"action":"create_summary","session_id":"session-11","summary":{}}
