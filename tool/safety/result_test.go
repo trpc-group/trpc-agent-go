@@ -151,6 +151,8 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"mypublickey":       "public-key-material",
 		"credentialed":      "feature-enabled",
 		"credentialing":     "workflow-name",
+		"uncredentialed":    "state-disabled",
+		"noncredentialed":   "state-not-configured",
 	}
 	processor := mustResultProcessor(t, 4096, nil)
 
@@ -172,6 +174,8 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"mypublickey":       "public-key-material",
 		"credentialed":      "feature-enabled",
 		"credentialing":     "workflow-name",
+		"uncredentialed":    "state-disabled",
+		"noncredentialed":   "state-not-configured",
 	}, processed.Value)
 }
 
@@ -205,12 +209,16 @@ func TestResultProcessorPreservesCompactSensitiveNameRecognition(t *testing.T) {
 
 func TestResultProcessorRedactsCompactCredentialNames(t *testing.T) {
 	input := map[string]string{
-		"awscredentials":          "opaque-credential-1",
-		"clientcredentialsdata":   "opaque-credential-2",
-		"credentialsfile":         "opaque-credential-3",
-		"awscredential":           "opaque-credential-4",
-		"clientcredential":        "opaque-credential-5",
-		"googlecredentialsconfig": "opaque-credential-6",
+		"awscredentials":          "opaque-credential-01",
+		"clientcredentialsdata":   "opaque-credential-02",
+		"credentialsfile":         "opaque-credential-03",
+		"awscredential":           "opaque-credential-04",
+		"clientcredential":        "opaque-credential-05",
+		"googlecredentialsconfig": "opaque-credential-06",
+		"credentialfile":          "opaque-credential-07",
+		"credentialdata":          "opaque-credential-08",
+		"awscredentialfile":       "opaque-credential-09",
+		"oauthcredentialconfig":   "opaque-credential-10",
 	}
 	processor := mustResultProcessor(t, 4096, nil)
 
@@ -223,7 +231,7 @@ func TestResultProcessorRedactsCompactCredentialNames(t *testing.T) {
 	encoded, marshalErr := json.Marshal(processed)
 	require.NoError(t, marshalErr)
 	for index := 1; index <= len(input); index++ {
-		require.NotContains(t, string(encoded), fmt.Sprintf("opaque-credential-%d", index))
+		require.NotContains(t, string(encoded), fmt.Sprintf("opaque-credential-%02d", index))
 	}
 }
 

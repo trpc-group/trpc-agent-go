@@ -243,8 +243,7 @@ func isSensitiveResultName(name string) bool {
 		if internalredact.IsSensitiveName(word) {
 			return true
 		}
-		if strings.Contains(word, "credentials") ||
-			strings.HasSuffix(word, "credential") {
+		if isSensitiveCompactCredential(word) {
 			return true
 		}
 		switch word {
@@ -262,6 +261,22 @@ func isSensitiveResultName(name string) bool {
 		}
 	}
 	return false
+}
+
+func isSensitiveCompactCredential(word string) bool {
+	if strings.Contains(word, "credentials") {
+		return true
+	}
+	if !strings.Contains(word, "credential") {
+		return false
+	}
+	switch word {
+	case "credentialed", "credentialing", "uncredentialed",
+		"uncredentialing", "noncredentialed", "noncredentialing":
+		return false
+	default:
+		return true
+	}
 }
 
 func normalizedResultNameWords(name string) []string {
