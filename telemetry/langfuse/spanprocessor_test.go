@@ -51,7 +51,7 @@ func (e *recordingExporter) snapshot() []sdktrace.ReadOnlySpan {
 
 func TestNewSpanProcessor(t *testing.T) {
 	exp := &dummyExporter{}
-	sp := newSpanProcessor(exp)
+	sp := newSpanProcessor(exp, nil)
 	if sp == nil {
 		t.Fatalf("newSpanProcessor returned nil")
 	}
@@ -68,7 +68,7 @@ func TestNewSpanProcessor_CopiesBaggageToSpanAttributes(t *testing.T) {
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	sp := newSpanProcessor(exp)
+	sp := newSpanProcessor(exp, nil)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()
@@ -96,7 +96,7 @@ func TestNewSpanProcessor_DefaultFilter_IgnoresNonLangfuseKeys(t *testing.T) {
 	ctx = baggage.ContextWithBaggage(ctx, b)
 
 	exp := &recordingExporter{}
-	sp := newSpanProcessor(exp)
+	sp := newSpanProcessor(exp, nil)
 
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(sp))
 	defer func() { _ = tp.Shutdown(context.Background()) }()

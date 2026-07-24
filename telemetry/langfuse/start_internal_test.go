@@ -27,7 +27,7 @@ func TestStart_Internal_WithNoopProvider(t *testing.T) {
 
 	atrace.TracerProvider = noop.NewTracerProvider()
 
-	clean, err := start(ctx, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
+	clean, err := start(ctx, &config{}, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
 	if err != nil {
 		t.Fatalf("start() error = %v", err)
 	}
@@ -42,7 +42,7 @@ func TestStart_Internal_WithExistingSDKProvider(t *testing.T) {
 	// Use a real sdk tracer provider to hit the branch that registers processor
 	atrace.TracerProvider = sdktrace.NewTracerProvider()
 
-	clean, err := start(ctx, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
+	clean, err := start(ctx, &config{}, otlptracehttp.WithEndpoint("localhost:4318"), otlptracehttp.WithInsecure())
 	if err != nil {
 		t.Fatalf("start() error = %v", err)
 	}
