@@ -1,7 +1,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 
@@ -13,6 +13,11 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
+
+// activeCommandPolicySentinel keeps shellsafe's unconditional built-in deny
+// set active when callers intentionally configure no explicit command lists.
+// NUL cannot occur in a valid shell word accepted by shellsafe.Parse.
+const activeCommandPolicySentinel = "\x00"
 
 func scanCommand(policy Policy, req Request) ([][]string, []Finding) {
 	var segments [][]string
@@ -43,8 +48,11 @@ func scanCommand(policy Policy, req Request) ([][]string, []Finding) {
 		))
 	}
 
+	deniedCommands := append(
+		[]string{activeCommandPolicySentinel}, policy.DeniedCommands...,
+	)
 	commandPolicy := shellsafe.PolicyFromLists(
-		policy.AllowedCommands, policy.DeniedCommands,
+		policy.AllowedCommands, deniedCommands,
 	)
 	if err := commandPolicy.Check(&shellsafe.Pipeline{Commands: segments}); err != nil {
 		ruleID := "dangerous.command"

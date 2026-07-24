@@ -1,7 +1,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 
@@ -76,6 +76,22 @@ func TestGuardScansArgvAndCommandPolicy(t *testing.T) {
 	report = guard.Scan(safety.Request{Command: "go test ./..."})
 	require.Equal(t, safety.DecisionAllow, report.Decision)
 	require.Equal(t, "safety.no_findings", report.RuleID)
+}
+
+func TestGuardAlwaysRejectsShellWrappers(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.AllowedCommands = nil
+	policy.DeniedCommands = nil
+	guard := mustGuard(t, policy)
+
+	for _, command := range []string{
+		"sh -c 'echo unsafe'",
+		"eval 'echo unsafe'",
+	} {
+		report := guard.Scan(safety.Request{Command: command})
+		require.Equal(t, safety.DecisionDeny, report.Decision, command)
+		require.Equal(t, "shell.parse_error", report.RuleID, command)
+	}
 }
 
 func TestGuardReportsCompleteAllowResult(t *testing.T) {

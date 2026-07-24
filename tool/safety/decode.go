@@ -24,6 +24,7 @@ import (
 const (
 	workspaceExecutionDefaultTimeoutSeconds = 300
 	skillExecutionDefaultTimeoutSeconds     = 300
+	maxClosedSchemaDepth                    = 100
 )
 
 type decodedPermissionRequest struct {
@@ -361,10 +362,23 @@ func closedWorldNonExecution(
 }
 
 func schemaIsClosed(schema *tool.Schema) bool {
+	return schemaIsClosedAt(schema, make(map[*tool.Schema]bool), 0)
+}
+
+func schemaIsClosedAt(
+	schema *tool.Schema,
+	active map[*tool.Schema]bool,
+	depth int,
+) bool {
+	if depth >= maxClosedSchemaDepth || active[schema] {
+		return false
+	}
 	if schema == nil || schema.Ref != "" || schema.Pattern != "" ||
 		len(schema.Enum) > 0 || schema.Default != nil || len(schema.Defs) > 0 {
 		return false
 	}
+	active[schema] = true
+	defer delete(active, schema)
 	switch schema.Type {
 	case "object":
 		allowsAdditional, explicitlyConfigured := schema.AdditionalProperties.(bool)
@@ -372,13 +386,13 @@ func schemaIsClosed(schema *tool.Schema) bool {
 			return false
 		}
 		for _, property := range schema.Properties {
-			if !schemaIsClosed(property) {
+			if !schemaIsClosedAt(property, active, depth+1) {
 				return false
 			}
 		}
 		return true
 	case "array":
-		return schemaIsClosed(schema.Items)
+		return schemaIsClosedAt(schema.Items, active, depth+1)
 	case "string", "number", "integer", "boolean", "null":
 		return true
 	default:
@@ -388,6 +402,13 @@ func schemaIsClosed(schema *tool.Schema) bool {
 
 func closedValueMatchesSchema(schema *tool.Schema, value any) bool {
 	if !schemaIsClosed(schema) {
+		return false
+	}
+	return closedValueMatchesSchemaAt(schema, value, 0)
+}
+
+func closedValueMatchesSchemaAt(schema *tool.Schema, value any, depth int) bool {
+	if schema == nil || depth >= maxClosedSchemaDepth {
 		return false
 	}
 	switch schema.Type {
@@ -403,7 +424,7 @@ func closedValueMatchesSchema(schema *tool.Schema, value any) bool {
 		}
 		for name, item := range object {
 			property, exists := schema.Properties[name]
-			if !exists || !closedValueMatchesSchema(property, item) {
+			if !exists || !closedValueMatchesSchemaAt(property, item, depth+1) {
 				return false
 			}
 		}
@@ -414,7 +435,7 @@ func closedValueMatchesSchema(schema *tool.Schema, value any) bool {
 			return false
 		}
 		for _, item := range items {
-			if !closedValueMatchesSchema(schema.Items, item) {
+			if !closedValueMatchesSchemaAt(schema.Items, item, depth+1) {
 				return false
 			}
 		}
@@ -447,21 +468,41 @@ func closedValueMatchesSchema(schema *tool.Schema, value any) bool {
 }
 
 func schemaHasExecutionProperty(schema *tool.Schema) bool {
+	hasExecution, safe := schemaHasExecutionPropertyAt(
+		schema,
+		make(map[*tool.Schema]bool),
+		0,
+	)
+	return hasExecution || !safe
+}
+
+func schemaHasExecutionPropertyAt(
+	schema *tool.Schema,
+	active map[*tool.Schema]bool,
+	depth int,
+) (bool, bool) {
 	if schema == nil {
-		return false
+		return false, true
 	}
+	if depth >= maxClosedSchemaDepth || active[schema] {
+		return false, false
+	}
+	active[schema] = true
+	defer delete(active, schema)
 	for name, property := range schema.Properties {
 		switch strings.ToLower(name) {
 		case "command", "commands", "cmd", "script", "scripts", "shell",
 			"args", "argv", "code", "code_blocks", "url", "uri", "endpoint",
 			"destination", "cwd", "workdir", "working_directory", "env", "environment":
-			return true
+			return true, true
 		}
-		if schemaHasExecutionProperty(property) {
-			return true
+		if hasExecution, safe := schemaHasExecutionPropertyAt(
+			property, active, depth+1,
+		); hasExecution || !safe {
+			return hasExecution, safe
 		}
 	}
-	return schemaHasExecutionProperty(schema.Items)
+	return schemaHasExecutionPropertyAt(schema.Items, active, depth+1)
 }
 
 func firstIntValue(values ...*int) int {

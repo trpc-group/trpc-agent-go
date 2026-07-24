@@ -435,6 +435,50 @@ func TestDecodeNilAndClosedWorldRequests(t *testing.T) {
 	require.Equal(t, BackendUnknown, req.Backend)
 }
 
+func TestDecodeAdversarialClosedWorldSchemasFailSafe(t *testing.T) {
+	t.Run("cycle", func(t *testing.T) {
+		cyclic := &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+		}
+		cyclic.Properties = map[string]*tool.Schema{"child": cyclic}
+
+		requireClosedSchemaScans(t, "cyclic_reader", cyclic)
+	})
+
+	t.Run("excessive depth", func(t *testing.T) {
+		root := &tool.Schema{
+			Type:                 "object",
+			AdditionalProperties: false,
+		}
+		current := root
+		for i := 0; i < 101; i++ {
+			child := &tool.Schema{
+				Type:                 "object",
+				AdditionalProperties: false,
+			}
+			current.Properties = map[string]*tool.Schema{"child": child}
+			current = child
+		}
+
+		requireClosedSchemaScans(t, "deep_reader", root)
+	})
+}
+
+func requireClosedSchemaScans(t *testing.T, name string, schema *tool.Schema) {
+	t.Helper()
+	_, scan, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: &decodeDeclarationTool{declaration: &tool.Declaration{
+			Name:        name,
+			InputSchema: schema,
+		}},
+		Arguments: []byte(`{}`),
+		Metadata:  tool.ToolMetadata{ReadOnly: true},
+	})
+	require.NoError(t, err)
+	require.True(t, scan, "adversarial schema must not bypass safety scanning")
+}
+
 func closedCalculatorTool() tool.Tool {
 	return &decodeDeclarationTool{declaration: &tool.Declaration{
 		Name: "calculator",
