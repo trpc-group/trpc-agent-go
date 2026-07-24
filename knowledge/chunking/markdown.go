@@ -76,15 +76,14 @@ func NewMarkdownChunking(opts ...MarkdownOption) *MarkdownChunking {
 	for _, opt := range opts {
 		opt(mc)
 	}
-	// Validate parameters.
-	if mc.overlap >= mc.chunkSize {
-		mc.overlap = min(defaultOverlap, mc.chunkSize-1)
-	}
 	return mc
 }
 
 // Chunk splits the document using markdown-aware chunking.
 func (m *MarkdownChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
+	if err := validateChunkConfig(m.chunkSize, m.overlap); err != nil {
+		return nil, err
+	}
 	if doc == nil {
 		return nil, ErrNilDocument
 	}

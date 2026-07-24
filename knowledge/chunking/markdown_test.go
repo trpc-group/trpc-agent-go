@@ -1325,27 +1325,42 @@ func TestMarkdownChunking_MixedParagraphSizes(t *testing.T) {
 	require.True(t, foundLarge, "Large paragraph content should be in chunks")
 }
 
-// TestMarkdownChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
-func TestMarkdownChunking_OverlapValidation(t *testing.T) {
+func TestMarkdownChunking_ConfigValidation(t *testing.T) {
 	tests := []struct {
 		name      string
 		chunkSize int
 		overlap   int
+		wantErr   error
 	}{
 		{
-			name:      "overlap greater than chunkSize",
+			name:      "zero chunk size",
+			chunkSize: 0,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative chunk size",
+			chunkSize: -1,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative overlap",
+			chunkSize: 10,
+			overlap:   -1,
+			wantErr:   ErrInvalidOverlap,
+		},
+		{
+			name:      "overlap greater than chunk size",
 			chunkSize: 10,
 			overlap:   15,
+			wantErr:   ErrOverlapTooLarge,
 		},
 		{
-			name:      "overlap equal to chunkSize",
+			name:      "overlap equal to chunk size",
 			chunkSize: 20,
 			overlap:   20,
-		},
-		{
-			name:      "very large overlap",
-			chunkSize: 5,
-			overlap:   100,
+			wantErr:   ErrOverlapTooLarge,
 		},
 	}
 
@@ -1356,11 +1371,10 @@ func TestMarkdownChunking_OverlapValidation(t *testing.T) {
 				WithMarkdownOverlap(tt.overlap),
 			)
 
-			// Should still work despite invalid overlap
 			doc := &document.Document{ID: "test", Content: "# Header\n\nTest content for validation"}
 			chunks, err := mc.Chunk(doc)
-			require.NoError(t, err)
-			require.NotEmpty(t, chunks)
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Nil(t, chunks)
 		})
 	}
 }

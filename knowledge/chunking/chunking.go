@@ -33,6 +33,19 @@ var (
 	defaultOverlap   = 0
 )
 
+func validateChunkConfig(chunkSize, overlap int) error {
+	switch {
+	case chunkSize <= 0:
+		return ErrInvalidChunkSize
+	case overlap < 0:
+		return ErrInvalidOverlap
+	case overlap >= chunkSize:
+		return ErrOverlapTooLarge
+	default:
+		return nil
+	}
+}
+
 // cleanText normalizes whitespace in text content while ensuring UTF-8 safety.
 // It automatically detects encoding and converts to UTF-8 if necessary.
 func cleanText(content string) string {
@@ -266,6 +279,7 @@ func splitTextWithBalancedTail(
 	}
 
 	for position := min(balancedLimit, len(contentRunes)-1); position >= minimumSize; position-- {
+		position = safeTextSplitPosition(contentRunes, position)
 		hardPrefix := strings.TrimSpace(
 			string(contentRunes[:position]),
 		)
@@ -312,10 +326,14 @@ func preferredTextBoundary(content []rune, maxSize int) int {
 			return boundary
 		}
 	}
-	return min(maxSize, len(content))
+	return safeTextSplitPosition(content, min(maxSize, len(content)))
 }
 
 func isSentenceBoundary(content []rune, position int) bool {
+	if position+1 < len(content) &&
+		isSentencePunctuation(content[position+1]) {
+		return false
+	}
 	switch content[position] {
 	case '。', '！', '？':
 		return true
@@ -325,6 +343,26 @@ func isSentenceBoundary(content []rune, position int) bool {
 	default:
 		return false
 	}
+}
+
+func isSentencePunctuation(r rune) bool {
+	return strings.ContainsRune(".!?。！？", r)
+}
+
+func safeTextSplitPosition(content []rune, position int) int {
+	if position <= 0 || position >= len(content) {
+		return position
+	}
+	originalPosition := position
+	for position > 0 &&
+		isSentencePunctuation(content[position-1]) &&
+		isSentencePunctuation(content[position]) {
+		position--
+	}
+	if position == 0 {
+		return originalPosition
+	}
+	return position
 }
 
 // naturalTextSuffix returns at most maxSize trailing runes. When the exact

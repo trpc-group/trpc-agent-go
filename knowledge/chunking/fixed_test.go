@@ -33,27 +33,42 @@ func TestFixedSizeChunking_Errors(t *testing.T) {
 	require.ErrorIs(t, err, ErrEmptyDocument)
 }
 
-// TestFixedSizeChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
-func TestFixedSizeChunking_OverlapValidation(t *testing.T) {
+func TestFixedSizeChunking_ConfigValidation(t *testing.T) {
 	tests := []struct {
 		name      string
 		chunkSize int
 		overlap   int
+		wantErr   error
 	}{
 		{
-			name:      "overlap greater than chunkSize",
+			name:      "zero chunk size",
+			chunkSize: 0,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative chunk size",
+			chunkSize: -1,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative overlap",
 			chunkSize: 10,
-			overlap:   15, // overlap > chunkSize, should be adjusted
+			overlap:   -1,
+			wantErr:   ErrInvalidOverlap,
 		},
 		{
-			name:      "overlap equal to chunkSize",
+			name:      "overlap greater than chunk size",
+			chunkSize: 10,
+			overlap:   15,
+			wantErr:   ErrOverlapTooLarge,
+		},
+		{
+			name:      "overlap equal to chunk size",
 			chunkSize: 20,
-			overlap:   20, // overlap == chunkSize, should be adjusted
-		},
-		{
-			name:      "very large overlap",
-			chunkSize: 5,
-			overlap:   100, // much larger overlap
+			overlap:   20,
+			wantErr:   ErrOverlapTooLarge,
 		},
 	}
 
@@ -64,11 +79,10 @@ func TestFixedSizeChunking_OverlapValidation(t *testing.T) {
 				WithOverlap(tt.overlap),
 			)
 
-			// The chunker should still work despite invalid overlap
 			doc := &document.Document{ID: "test", Content: "This is a test content for chunking validation"}
 			chunks, err := fsc.Chunk(doc)
-			require.NoError(t, err)
-			require.NotEmpty(t, chunks, "should produce at least one chunk")
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Nil(t, chunks)
 		})
 	}
 }

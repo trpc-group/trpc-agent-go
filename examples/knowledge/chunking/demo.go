@@ -36,6 +36,9 @@ var sampleMarkdown string
 //go:embed samples/sample-edge.md
 var sampleEdgeMarkdown string
 
+//go:embed samples/sample-issue-2200.md
+var sampleIssue2200Markdown string
+
 //go:embed samples/sample-catalog.md
 var sampleCatalogMarkdown string
 
@@ -71,6 +74,13 @@ var sampleDocuments = []SampleDocument{
 		Label:       "Markdown edge cases",
 		Description: "Sparse headings, nested blocks, a wide table, a code block larger than a small chunk budget, and Unicode edge cases.",
 		Content:     sampleEdgeMarkdown,
+	},
+	{
+		ID:          "issue-2200-regression",
+		Name:        "sample-issue-2200.md",
+		Label:       "Issue #2200 regression",
+		Description: "Strict overlap budgets, English and CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback.",
+		Content:     sampleIssue2200Markdown,
 	},
 	{
 		ID:          "markdown-value-catalog",

@@ -57,15 +57,14 @@ func NewFixedSizeChunking(opts ...Option) *FixedSizeChunking {
 	for _, opt := range opts {
 		opt(fsc)
 	}
-	// Validate parameters.
-	if fsc.overlap >= fsc.chunkSize {
-		fsc.overlap = min(defaultOverlap, fsc.chunkSize-1)
-	}
 	return fsc
 }
 
 // Chunk splits the document into fixed-size chunks with optional overlap.
 func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
+	if err := validateChunkConfig(f.chunkSize, f.overlap); err != nil {
+		return nil, err
+	}
 	if doc == nil {
 		return nil, ErrNilDocument
 	}

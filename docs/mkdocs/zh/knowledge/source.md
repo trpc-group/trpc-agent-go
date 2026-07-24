@@ -250,6 +250,11 @@ Reader，让它注册到 Reader registry。
 
 > `overlap` 仅对 FixedSizeChunking、RecursiveChunking、MarkdownChunking 生效。它表示上限：策略可以把 overlap 起点移动到自然边界，也可以缩小实际 overlap，以保证最终分块不超过 `chunkSize`。较大的 overlap 会压缩新正文的空间，因此产生更多 chunk。JSONChunking 不支持 overlap。
 
+文本分块策略会在调用 `Chunk` 时校验配置：`chunkSize` 必须大于 0，
+`overlap` 必须位于 `[0, chunkSize)`。无效配置会返回
+`ErrInvalidChunkSize`、`ErrInvalidOverlap` 或 `ErrOverlapTooLarge`，而不是
+静默调整参数。
+
 JSONChunking 会按确定顺序遍历对象字段，并按数值顺序遍历数组索引。当
 字符串值连同 JSON path 无法放入一个分块时，策略会在 UTF-8 安全边界上
 继续拆分。如果不可拆分的值连同路径仍然无法放入 byte 预算，chunking 会

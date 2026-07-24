@@ -69,15 +69,14 @@ func NewRecursiveChunking(opts ...RecursiveOption) *RecursiveChunking {
 	for _, opt := range opts {
 		opt(rc)
 	}
-	// Validate parameters.
-	if rc.overlap >= rc.chunkSize {
-		rc.overlap = min(defaultOverlap, rc.chunkSize-1)
-	}
 	return rc
 }
 
 // Chunk splits the document using true recursive logic with separator hierarchy.
 func (r *RecursiveChunking) Chunk(doc *document.Document) ([]*document.Document, error) {
+	if err := validateChunkConfig(r.chunkSize, r.overlap); err != nil {
+		return nil, err
+	}
 	if doc == nil {
 		return nil, ErrNilDocument
 	}
@@ -132,6 +131,26 @@ func (r *RecursiveChunking) recursiveSplit(
 	// Keep separators attached while recursively refining oversized pieces.
 	// This lets the merge step rebuild readable paragraphs and sentences.
 	splits := strings.SplitAfter(text, separator)
+	separatorRunes := []rune(separator)
+	if len(separatorRunes) == 1 &&
+		isSentencePunctuation(separatorRunes[0]) {
+		lastNonEmpty := -1
+		for i := range splits {
+			splitRunes := []rune(splits[i])
+			clusterEnd := 0
+			for clusterEnd < len(splitRunes) &&
+				isSentencePunctuation(splitRunes[clusterEnd]) {
+				clusterEnd++
+			}
+			if lastNonEmpty >= 0 && clusterEnd > 0 {
+				splits[lastNonEmpty] += string(splitRunes[:clusterEnd])
+				splits[i] = string(splitRunes[clusterEnd:])
+			}
+			if splits[i] != "" {
+				lastNonEmpty = i
+			}
+		}
+	}
 	var fragments []string
 	for _, split := range splits {
 		if split == "" {
@@ -214,6 +233,10 @@ func (r *RecursiveChunking) mergeFragments(
 						rebalanced = true
 					}
 				}
+			}
+			if safeTake := safeTextSplitPosition(remaining, take); safeTake != take {
+				take = safeTake
+				rebalanced = true
 			}
 			current.WriteString(string(remaining[:take]))
 			currentSize += take

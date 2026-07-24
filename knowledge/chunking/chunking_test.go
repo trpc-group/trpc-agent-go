@@ -277,6 +277,56 @@ func TestJoinWithOverlap(t *testing.T) {
 	}
 }
 
+func TestSplitTextAtNaturalBoundaryPreservesSentenceAtoms(t *testing.T) {
+	tests := []struct {
+		name          string
+		content       string
+		maxSize       int
+		wantPrefix    string
+		wantRemaining string
+	}{
+		{
+			name:          "decimal",
+			content:       "prefix 12.6 suffix",
+			maxSize:       10,
+			wantPrefix:    "prefix",
+			wantRemaining: "12.6 suffix",
+		},
+		{
+			name:          "dotted section",
+			content:       "prefix 2.8.12 suffix",
+			maxSize:       11,
+			wantPrefix:    "prefix",
+			wantRemaining: "2.8.12 suffix",
+		},
+		{
+			name:          "semantic version",
+			content:       "prefix v1.2.3 suffix",
+			maxSize:       11,
+			wantPrefix:    "prefix",
+			wantRemaining: "v1.2.3 suffix",
+		},
+		{
+			name:          "CJK punctuation cluster",
+			content:       "12345678？！ tail",
+			maxSize:       9,
+			wantPrefix:    "12345678",
+			wantRemaining: "？！ tail",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			prefix, remaining := splitTextAtNaturalBoundary(
+				tt.content,
+				tt.maxSize,
+			)
+			require.Equal(t, tt.wantPrefix, prefix)
+			require.Equal(t, tt.wantRemaining, remaining)
+		})
+	}
+}
+
 // TestDefaultConstants tests the default constants
 func TestDefaultConstants(t *testing.T) {
 	assert.Equal(t, 1024, defaultChunkSize)

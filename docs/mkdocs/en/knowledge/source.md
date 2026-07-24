@@ -211,6 +211,12 @@ registry.
 
 > `overlap` only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. It is a maximum: the strategy may move the overlap start to a natural boundary or reduce it so the final chunk remains within `chunkSize`. A large overlap leaves less room for new content and produces more chunks. JSONChunking does not support overlap.
 
+The text strategies validate their configuration when `Chunk` is called:
+`chunkSize` must be greater than zero, and `overlap` must be in
+`[0, chunkSize)`. Invalid values return `ErrInvalidChunkSize`,
+`ErrInvalidOverlap`, or `ErrOverlapTooLarge` instead of being adjusted
+silently.
+
 JSONChunking traverses object keys deterministically and array indices in
 numeric order. When a string value cannot fit together with its JSON path, it
 is split at UTF-8-safe boundaries. If an indivisible value plus its path cannot

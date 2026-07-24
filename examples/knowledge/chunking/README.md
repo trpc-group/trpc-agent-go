@@ -12,6 +12,7 @@ chunking/
 ├── samples/
 │   ├── sample-catalog.md
 │   ├── sample-edge.md
+│   ├── sample-issue-2200.md
 │   ├── sample.csv
 │   ├── sample.json
 │   ├── sample.md
@@ -29,6 +30,7 @@ The bundled samples cover the default Readers and several boundary cases:
 |--------|-------------------|
 | [`sample.md`](./samples/sample.md) | Markdown headings, a table, mixed-language boundaries, a long fenced Go block, emoji, and a long token |
 | [`sample-edge.md`](./samples/sample-edge.md) | Sparse heading levels, nested blocks, a wide table, an oversized code block, combining characters, and fallback boundaries |
+| [`sample-issue-2200.md`](./samples/sample-issue-2200.md) | Issue #2200 regression cases: strict overlap budgets, CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback |
 | [`sample-catalog.md`](./samples/sample-catalog.md) | A realistic reference-document shape with grouped rows, several short tables, and a long table cell |
 | [`sample.txt`](./samples/sample.txt) | Plain-text paragraphs, punctuation, whitespace, logs, CJK text, emoji, and an unbroken token |
 | [`sample.csv`](./samples/sample.csv) | Multilingual records, empty fields, long values, URLs, and CSVReader normalization |
@@ -57,6 +59,7 @@ Explicit strategy selection is an advanced override:
 
 ```bash
 go run ./chunking/text -strategy recursive -chunk-size 180 -overlap 24
+go run ./chunking/text -strategy recursive -input ./chunking/samples/sample-issue-2200.md -chunk-size 120 -overlap 100
 go run ./chunking/text -strategy markdown -input ./exampledata/file/llm.md
 go run ./chunking/text -strategy json -input ./path/to/data.json -chunk-size 512
 ```

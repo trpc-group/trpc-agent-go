@@ -285,6 +285,66 @@ func TestRecursiveChunking_MergesSmallSeparatorFragments(t *testing.T) {
 	require.Equal(t, "epsilon zeta eta theta", chunks[1].Content)
 }
 
+func TestRecursiveChunking_PreservesSentenceAtoms(t *testing.T) {
+	tests := []struct {
+		name      string
+		content   string
+		chunkSize int
+		atom      string
+	}{
+		{
+			name:      "decimal",
+			content:   "prefix 12.6 suffix text",
+			chunkSize: 10,
+			atom:      "12.6",
+		},
+		{
+			name:      "dotted section",
+			content:   "prefix 2.8.12 suffix text",
+			chunkSize: 11,
+			atom:      "2.8.12",
+		},
+		{
+			name:      "semantic version",
+			content:   "prefix v1.2.3 suffix text",
+			chunkSize: 11,
+			atom:      "v1.2.3",
+		},
+		{
+			name:      "CJK punctuation cluster",
+			content:   "12345678？！ tail",
+			chunkSize: 9,
+			atom:      "？！",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks, err := NewRecursiveChunking(
+				WithRecursiveChunkSize(tt.chunkSize),
+			).Chunk(&document.Document{Content: tt.content})
+
+			require.NoError(t, err)
+			require.Greater(t, len(chunks), 1)
+			require.Condition(t, func() bool {
+				for _, chunk := range chunks {
+					if strings.Contains(chunk.Content, tt.atom) {
+						return true
+					}
+				}
+				return false
+			}, "expected %q to remain in one chunk", tt.atom)
+			for _, chunk := range chunks {
+				require.LessOrEqual(
+					t,
+					utf8.RuneCountInString(chunk.Content),
+					tt.chunkSize,
+				)
+			}
+		})
+	}
+}
+
 // BenchmarkRecursiveChunking provides a quick performance smoke-test to avoid
 // accidental O(N²) behaviour regressions. It is intentionally lightweight so
 // as not to bloat CI runtime.
@@ -307,27 +367,42 @@ func BenchmarkRecursiveChunking(b *testing.B) {
 	}
 }
 
-// TestRecursiveChunking_OverlapValidation tests overlap >= chunkSize boundary condition.
-func TestRecursiveChunking_OverlapValidation(t *testing.T) {
+func TestRecursiveChunking_ConfigValidation(t *testing.T) {
 	tests := []struct {
 		name      string
 		chunkSize int
 		overlap   int
+		wantErr   error
 	}{
 		{
-			name:      "overlap greater than chunkSize",
+			name:      "zero chunk size",
+			chunkSize: 0,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative chunk size",
+			chunkSize: -1,
+			overlap:   0,
+			wantErr:   ErrInvalidChunkSize,
+		},
+		{
+			name:      "negative overlap",
+			chunkSize: 10,
+			overlap:   -1,
+			wantErr:   ErrInvalidOverlap,
+		},
+		{
+			name:      "overlap greater than chunk size",
 			chunkSize: 10,
 			overlap:   15,
+			wantErr:   ErrOverlapTooLarge,
 		},
 		{
-			name:      "overlap equal to chunkSize",
+			name:      "overlap equal to chunk size",
 			chunkSize: 20,
 			overlap:   20,
-		},
-		{
-			name:      "very large overlap",
-			chunkSize: 5,
-			overlap:   100,
+			wantErr:   ErrOverlapTooLarge,
 		},
 	}
 
@@ -338,15 +413,10 @@ func TestRecursiveChunking_OverlapValidation(t *testing.T) {
 				WithRecursiveOverlap(tt.overlap),
 			)
 
-			// Should still work despite invalid overlap
 			doc := &document.Document{ID: "test", Content: "Test content for recursive chunking validation with some text"}
 			chunks, err := rc.Chunk(doc)
-			if err != nil {
-				t.Fatalf("chunking failed: %v", err)
-			}
-			if len(chunks) == 0 {
-				t.Fatal("expected at least one chunk")
-			}
+			require.ErrorIs(t, err, tt.wantErr)
+			require.Nil(t, chunks)
 		})
 	}
 }
