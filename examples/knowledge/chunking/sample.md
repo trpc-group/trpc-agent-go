@@ -1,43 +1,45 @@
-# Chunking 能力演示
+# Chunking Capability Demo
 
-这份文档专门用来观察不同分块策略的边界。它同时包含 Markdown 标题、中英文标点、列表、代码块、emoji 和较长的连续文本，因此可以直观看到固定长度切分与结构化切分的差异。
+This document is designed to expose the boundaries selected by different chunking strategies. It combines Markdown headings, mixed punctuation, lists, code blocks, emoji, and long continuous text so fixed-size and structure-aware behavior can be compared directly.
 
-## 为什么需要 Chunking
+## Why Chunking Matters
 
-知识库通常不能把整篇文档直接交给 Embedding 模型。Chunking 会把文档转换成更小的检索单元；分块太大会混合多个主题，分块太小则容易丢失上下文。Overlap 可以把前一个分块的结尾带入下一个分块，但它也会增加索引体积。
+A knowledge base usually cannot send an entire document to an embedding model as one retrieval unit. Chunking creates smaller units: very large chunks mix topics, while very small chunks can lose context. Overlap can carry the end of one chunk into the next, but it also increases index size.
 
 The same trade-off appears in English documents. Large chunks preserve context but may reduce retrieval precision. Small chunks are focused, but a sentence or an argument can be split across two boundaries.
 
-### 一个简单的判断标准
+### Practical Evaluation Criteria
 
-- 每个 chunk 不应超过配置的大小预算。
-- 中文字符必须保持有效的 UTF-8 编码。
-- RecursiveChunking 应优先使用段落和句子边界。
-- MarkdownChunking 应尽量保留标题与所属正文的关系。
-- 只有显式配置 overlap 时，相邻 chunk 才需要携带重复内容。
+- Every chunk should stay within the configured size budget.
+- Unicode content must remain valid UTF-8.
+- RecursiveChunking should prefer paragraph and sentence boundaries.
+- MarkdownChunking should preserve the relationship between headings and their content.
+- Adjacent chunks should repeat content only when overlap is configured explicitly.
 
-### Reader 与默认策略
+### Readers and Default Strategies
 
-| 文档类型 | Reader | 默认策略 | 大小单位 | 观察重点 |
+| Document type | Reader | Default strategy | Size unit | Focus |
 |---|---|---|---|---|
-| Markdown | MarkdownReader | MarkdownChunking | Unicode runes | 标题路径、段落与代码块 |
-| Text | TextReader | FixedSizeChunking | Unicode runes | 自然边界与 overlap |
-| CSV | CSVReader | FixedSizeChunking | Unicode runes | Reader 归一化后的文本 |
-| JSON | JSONReader | JSONChunking | serialized bytes | 对象与数组层级 |
+| Markdown | MarkdownReader | MarkdownChunking | Unicode runes | Header paths, paragraphs, and code blocks |
+| Text | TextReader | FixedSizeChunking | Unicode runes | Natural boundaries and overlap |
+| CSV | CSVReader | FixedSizeChunking | Unicode runes | Text normalized by the Reader |
+| JSON | JSONReader | JSONChunking | serialized bytes | Object and array hierarchy |
 
-表格本身也是一个 Markdown block。把 chunk size 调到 240 或更小，可以观察表头、分隔行和数据行是整体保留，还是需要在更细的边界上继续拆分。
+The table is a Markdown block in its own right. Set the chunk size to 240 or less to see whether the header, separator, and data rows remain together or require finer splitting.
 
-## 混合字符与自然边界
+## Mixed Characters and Natural Boundaries
+
+The following paragraph intentionally uses Chinese punctuation:
 
 第一段使用中文标点。模型收到问题以后，会先分析意图；然后检索知识库；最后组合答案！如果检索结果不足，它是否应该继续调用工具？这取决于 Agent 的执行策略。
 
 The next paragraph uses English punctuation. An agent receives a request, selects a tool, observes the result, and then decides whether another step is required. Sentence-aware splitting should prefer these punctuation boundaries instead of cutting through arbitrary words.
 
-Emoji 也属于输入内容的一部分：🤖 表示 Agent，🔍 表示检索，✅ 表示完成。按 byte 长度切分可能破坏多字节字符，而按 Unicode rune 切分可以保持字符串有效。
+Emoji are also part of the input: 🤖 represents an agent, 🔍 represents retrieval, and ✅ represents completion. A raw byte split can corrupt a multibyte character, while rune-aware splitting keeps the string valid.
 
-## 配置示例
+## Configuration Example
 
-下面的代码块刻意写得比普通片段更长，用于观察 Markdown 策略如何处理放不进单个 chunk 的 fenced code block：
+The following code block is deliberately longer than a typical segment. It shows how the Markdown strategy handles a fenced block that cannot fit in one chunk:
 
 ```go
 package main
@@ -98,16 +100,16 @@ func compare(doc *document.Document, size int, overlap int) error {
 }
 ```
 
-配置完成后，可以比较每个 chunk 的正文、字符数、metadata 和相邻重叠。这个过程不需要模型，也不需要连接向量数据库。
+After configuring the strategies, compare each chunk's content, size, metadata, and shared boundary with its predecessor. This process requires neither a model nor a vector database.
 
-## 较长段落
+## Long Paragraph
 
-在真实知识库中，一个段落可能连续解释多个相关概念。例如，文档先说明数据如何进入 Reader，再说明 Reader 如何产生 Document，随后由 Chunking Strategy 生成多个 chunk，最后由 Embedder 和 Vector Store 完成索引。RecursiveChunking 需要先尝试较高优先级的分隔符，并使用下一级分隔符继续细分仍然过大的片段。这个递归细分过程既要保留原始顺序，也要避免在 Unicode 文本中破坏多字节字符。
+In a real knowledge base, one paragraph can explain several related concepts in sequence. A document may describe how data enters a Reader, how the Reader produces a Document, how a Chunking Strategy creates multiple chunks, and how an Embedder and Vector Store complete indexing. RecursiveChunking should try higher-priority separators first and use lower-priority separators to refine pieces that remain oversized. This recursive process must preserve source order and avoid corrupting multibyte Unicode content.
 
-为了测试没有空格的连续内容，下面保留一段较长标识符：
+The following long identifier tests content without whitespace:
 
 `TRPCAgentGoChunkingBoundaryWithoutSpaces0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz`
 
-## 结论
+## Conclusion
 
-好的分块结果不是单纯追求 chunk 数量最少，而是在大小预算、语义完整性、检索精度和索引成本之间取得平衡。这个样例可以反复调整 chunk size 与 overlap，观察三种策略的实际输出。
+Good chunking does not simply minimize the number of chunks. It balances the size budget, semantic completeness, retrieval precision, and index cost. Adjust the chunk size and overlap repeatedly to compare the strategies' actual output.

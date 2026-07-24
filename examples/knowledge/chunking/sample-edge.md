@@ -1,50 +1,50 @@
-# Markdown 边角用例
+# Markdown Edge Cases
 
-这个样例不是一篇自然文章，而是一组用来放大边界行为的 Markdown 片段。建议先用 Reader default，再依次尝试 500、240、120 的 chunk size，并为后两组配置少量 overlap。
+This sample is a collection of Markdown fragments rather than a natural article. Start with the Reader default, then try chunk sizes of 500, 240, and 120 with a small overlap on the latter two.
 
-## 只有标题的章节
+## Heading-Only Section
 
-## 跳级标题与路径
+## Skipped Heading Levels and Paths
 
-#### 直接出现的四级标题
+#### A Level-Four Heading Appears Directly
 
-这一段位于四级标题下面，用来确认 metadata 中的 header path 如何处理跳过的层级。它既包含中文，也 contains a short English clause, so punctuation and whitespace boundaries can be compared in the same block.
+This paragraph sits below a level-four heading and shows how header-path metadata handles skipped levels. It contains several clauses so punctuation and whitespace boundaries can be compared in the same block.
 
-### 返回三级标题
+### Returning to Level Three
 
-标题层级返回以后，后续 chunk 的路径不应继续携带已经离开的四级标题。
+After the heading level moves back, subsequent chunks should no longer carry the level-four heading that has been left behind.
 
-## 宽表格
+## Wide Table
 
 | case | input | expected observation | note |
 |---|---|---|---|
-| CJK | 中文没有单词空格，但有逗号、分号；句号。 | 优先在中文标点附近切分 | 每个汉字通常计为一个 rune |
-| emoji | 👨‍👩‍👧‍👦 family, 🇨🇳 flag, 👍🏽 tone | 字符串保持有效 UTF-8 | 一个视觉字形可能包含多个 runes |
-| combining | café and café look similar | 两种写法的 rune 数可能不同 | 后者由 `e` 和 combining mark 组成 |
-| long cell | This cell deliberately contains a much longer explanation so that a small chunk budget cannot keep the complete table row together and the Markdown strategy must find a finer boundary without cutting through arbitrary words. | 继续按句子或空白细分 | 表格语法仍保留在原文中 |
-| empty |  | 空单元格不会让 Reader 崩溃 | 连续竖线是有效输入 |
+| CJK | 中文没有单词空格，但有逗号、分号；句号。 | Prefer nearby CJK punctuation | Each Han character normally counts as one rune |
+| emoji | 👨‍👩‍👧‍👦 family, 🇨🇳 flag, 👍🏽 tone | Keep the string valid UTF-8 | One visible glyph may contain several runes |
+| combining | café and café look similar | The two forms may have different rune counts | The latter uses `e` followed by a combining mark |
+| long cell | This cell deliberately contains a much longer explanation so that a small chunk budget cannot keep the complete table row together and the Markdown strategy must find a finer boundary without cutting through arbitrary words. | Refine by sentence or whitespace | The original source still contains valid table syntax |
+| empty |  | Do not fail on an empty cell | Adjacent pipes are valid input |
 
-## 嵌套结构
+## Nested Structures
 
-> 引用块第一层说明检索结果。
+> The first blockquote level summarizes a retrieval result.
 >
-> > 第二层引用包含更具体的证据；它后面还有一个列表。
+> > The second level contains more specific evidence and is followed by a list.
 > >
-> > - 第一项包含 `inline code`。
-> > - 第二项包含 [一个链接](https://example.com/knowledge/chunking?mode=edge)。
+> > - The first item contains `inline code`.
+> > - The second item contains [a link](https://example.com/knowledge/chunking?mode=edge).
 
-1. 有序列表第一项
-   - 子项 A 包含中文标点：先读取，再切分，最后写入 metadata。
-   - 子项 B contains English punctuation. It should still prefer a sentence boundary.
-2. 有序列表第二项
-   1. 更深一层
-   2. 同一层的下一项
+1. First ordered-list item
+   - Child A describes three steps: read the source, split the content, and write metadata.
+   - Child B contains English punctuation. It should still prefer a sentence boundary.
+2. Second ordered-list item
+   1. One level deeper
+   2. The next item at the same level
 
 ---
 
-## 超长代码块
+## Oversized Code Block
 
-下面的代码块故意超过较小的 chunk budget。代码里的空行、注释、字符串和类似 Markdown 标题的内容都应该被当作 fenced block 内容，而不是新的文档标题。
+The following code block deliberately exceeds a small chunk budget. Blank lines, comments, strings, and text resembling Markdown headings must remain fenced-block content rather than becoming document headings.
 
 ```go
 package pipeline
@@ -130,16 +130,16 @@ func Explain() string {
 }
 ```
 
-代码块之后的正文用于确认 fence 已正确闭合。MarkdownChunking 应恢复普通块解析，并继续携带 `Markdown 边角用例 -> 超长代码块` 这条标题路径。
+This paragraph confirms that the fence closed correctly. MarkdownChunking should resume ordinary block parsing and retain the `Markdown Edge Cases -> Oversized Code Block` header path.
 
-## 连续内容
+## Continuous Content
 
-普通长句：当一个段落超过预算时，策略应该依次尝试换行、句子标点、一般标点和空白边界；只有确实找不到自然边界时，才回退到精确的 rune 位置，从而保证最终结果不超过配置的 chunk size。
+Ordinary long sentence: when a paragraph exceeds the budget, the strategy should try line, sentence, punctuation, and whitespace boundaries in order; it should fall back to an exact rune position only when no natural boundary exists, ensuring that final output remains within the configured chunk size.
 
-连续 token：
+Unbroken token with an intentional CJK suffix:
 
 `TRPCAgentGoMarkdownChunkingEdgeCaseWithoutAnyNaturalBoundary0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz再追加一段没有空格也没有标点的中文内容用于触发最终回退`
 
-## 末尾
+## End of Document
 
-文档最后没有额外章节。这个短段落用于观察尾块是否被遗漏，以及 overlap 是否只重复已存在的内容。
+There is no additional section after this one. This short paragraph checks whether tail content is retained and whether overlap repeats only content that already exists.

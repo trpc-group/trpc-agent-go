@@ -2,7 +2,7 @@ Plain Text Chunking Boundary Sample
 
 This file has no Markdown structure. TextReader selects FixedSizeChunking, so the viewer can focus on how the size budget, nearby natural boundaries, and overlap affect plain text.
 
-第一段使用中文。Reader 读取完整文本以后，Chunking Strategy 会寻找适合的切分位置；如果 chunk size 比段落短，逗号、分号、问号和句号都可以成为候选边界。这里还故意加入一个很短的句子。然后继续一段更长的解释，观察短句是否会被单独留下。
+CJK punctuation test: 第一段使用中文。Reader 读取完整文本以后，Chunking Strategy 会寻找适合的切分位置；如果 chunk size 比段落短，逗号、分号、问号和句号都可以成为候选边界。这里还故意加入一个很短的句子。然后继续一段更长的解释，观察短句是否会被单独留下。
 
 The next paragraph contains several English sentences. A good boundary should avoid slicing through an ordinary word when punctuation or whitespace is nearby. A smaller chunk size creates more chunks. A larger overlap repeats more context, but the final chunk must still stay inside the configured budget.
 
@@ -17,6 +17,7 @@ Unicode cases: 中文字符，かな文字，한글, العربية, café, cafe
 A long logical record can resemble a log message even when it is plain text:
 2026-07-24T14:30:00+08:00 level=INFO component=knowledge.chunking request_id=req_0123456789abcdef action=split status=complete message="the document was divided at a natural boundary and every emitted chunk remained within budget"
 
+Unbroken CJK fallback test:
 中文无空格长句测试开始这里连续写入多个概念包括读取文档选择策略递归寻找分隔符合并较小片段生成重叠内容写入元数据并检查最终大小预算中文无空格长句测试结束
 
 The final fallback case is an unbroken token:
