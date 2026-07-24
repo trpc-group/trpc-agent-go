@@ -4652,7 +4652,9 @@ service to modify the state deltas written by <code>skill_load</code>.</p>
 - Prefer progressive disclosure: load only the body first, then list and
   select only the docs you need. Avoid <code>include_all_docs</code> unless you
   truly need every doc (or the user explicitly asks).
-- Safe to call multiple times to add or replace docs.
+- When multiple docs are already known to be needed, select them together.
+  On later calls, use <code>mode=add</code> to preserve the current selection or
+  <code>mode=replace</code> only when supplying the complete replacement selection.
 - The tools write session state, but <strong>how long the loaded content stays
   in the prompt</strong> depends on <code>SkillLoadMode</code>:
   - <code>turn</code> (default): loaded bodies/docs stay for the current
@@ -4840,8 +4842,22 @@ the body/docs):</p>
 - <code>skill</code> (required)
 - <code>docs</code> (optional array)
 - <code>include_all_docs</code> (optional bool)
-- <code>mode</code> (optional string): <code>add</code> | <code>replace</code> | <code>clear</code></p>
+- <code>mode</code> (optional string): <code>add</code> | <code>replace</code> | <code>clear</code>; defaults to
+  <code>replace</code>. The schema permits only these three values. If a non-enum
+  value nevertheless reaches the runtime, it is normalized to <code>replace</code>
+  for backward compatibility.</p>
 <p>Behavior:
+- This tool updates the current active doc-selection set; it is not an
+  append-only file read.
+- <code>add</code> preserves the current selection and adds <code>docs</code> (deduplicated).
+- <code>replace</code> sets <code>docs</code> as the complete selection, removing previously
+  selected docs that are absent from this call.
+- <code>clear</code> empties the selection.
+- When several docs are already known to be needed, pass all of them in one
+  <code>replace</code> call. If another doc is discovered later, use <code>add</code> rather than
+  alternating singleton <code>replace</code> calls.
+- Once <code>include_all_docs=true</code> is active, use <code>clear</code> before narrowing the
+  selection to an explicit list.
 - Updates doc selection state for the current agent:
   - <code>temp:skill:docs_by_agent:&lt;agent&gt;/&lt;name&gt;</code> = <code>*</code> for include all
   - <code>temp:skill:docs_by_agent:&lt;agent&gt;/&lt;name&gt;</code> = JSON array for explicit list
@@ -5345,7 +5361,7 @@ is recorded.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="June 4, 2026 07:44:07 UTC">2026-06-04 07:44:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 24, 2026 02:46:19 UTC">2026-07-24 02:46:19</span>
   </span>
 
     

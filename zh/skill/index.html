@@ -4631,7 +4631,8 @@ option：</p>
 - 建议采用“渐进式披露”：默认只传 <code>skill</code> 加载正文；需要文档时先
   <code>skill_list_docs</code> 再 <code>skill_select_docs</code>，只选必要文档；除非确
   实需要全部（或用户明确要求），避免 <code>include_all_docs=true</code>。
-- 可多次调用以新增或替换文档。
+- 已知需要多份文档时应在一次调用中一起选择。后续调用若要保留当前
+  选择，请使用 <code>mode=add</code>；仅在传入完整替换集合时使用 <code>mode=replace</code>。
 - 工具会写入 session state，但<strong>正文/文档在提示词里驻留多久</strong>取决
   于 <code>SkillLoadMode</code>：
   - <code>turn</code>（默认）：在当前一次 <code>Runner.Run</code>（处理一条用户消息）
@@ -4811,8 +4812,17 @@ option：</p>
 - <code>skill</code>（必填）
 - <code>docs</code>（可选数组）
 - <code>include_all_docs</code>（可选布尔）
-- <code>mode</code>（可选字符串）：<code>add</code> | <code>replace</code> | <code>clear</code></p>
+- <code>mode</code>（可选字符串）：<code>add</code> | <code>replace</code> | <code>clear</code>；默认
+  <code>replace</code>。schema 只允许这三个值；如果非枚举值仍到达运行时，
+  则出于向后兼容将其归一化为 <code>replace</code>。</p>
 <p>行为：
+- 此工具更新的是当前激活的文档选择集合，并非只增不减的文件读取。
+- <code>add</code> 保留当前选择，并追加 <code>docs</code>（自动去重）。
+- <code>replace</code> 将 <code>docs</code> 设为完整选择；此前已选但本次未传入的文档会被移除。
+- <code>clear</code> 清空选择。
+- 已知需要多份文档时，应在一次 <code>replace</code> 调用中全部传入；后续发现
+  新文档时应使用 <code>add</code>，不要用多个单文档 <code>replace</code> 调用来回切换。
+- <code>include_all_docs=true</code> 生效后，如需收窄为显式列表，应先调用 <code>clear</code>。
 - 更新当前 agent 的 doc 选择 state key：
   - <code>temp:skill:docs_by_agent:&lt;agent&gt;/&lt;name&gt;</code>：<code>*</code> 表示全选；数组表示显式列表
   - 同时刷新 <code>temp:skill:loaded_order_by_agent:&lt;agent&gt;</code>，因此
@@ -5299,7 +5309,7 @@ surface，例如使用 <code>llmagent.WithWorkspaceExecSurfaceEnabled(false)</co
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年6月4日 07:44:07 UTC">2026-06-04 07:44:07</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 02:46:19 UTC">2026-07-24 02:46:19</span>
   </span>
 
     
