@@ -1,0 +1,87 @@
+{
+  "name": "tracks",
+  "description": "Track 事件：跨工具执行耗时、子任务状态、异常记录等 track 数据，验证跨后端保存和读取一致性",
+  "app_name": "replay-matrix",
+  "user_id": "user-tracks",
+  "session_id": "session-tracks",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user", "role": "user",
+        "content": "开始执行数据库迁移任务",
+        "branch": "task-db-migration", "filter_key": "task-db-migration"
+      }
+    },
+    {
+      "type": "append_event",
+      "event": {
+        "author": "agent", "role": "assistant",
+        "content": "收到，开始执行迁移",
+        "branch": "task-db-migration", "filter_key": "task-db-migration"
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "execution_timeline",
+        "payload": {
+          "phase": "schema_backup",
+          "status": "running",
+          "started_at": "2026-07-18T10:00:00Z",
+          "estimated_seconds": 30
+        }
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "execution_timeline",
+        "payload": {
+          "phase": "schema_backup",
+          "status": "completed",
+          "duration_ms": 25400,
+          "rows_affected": 150000
+        }
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "subtask_status",
+        "payload": {
+          "subtask": "index_rebuild",
+          "status": "pending",
+          "assigned_worker": "worker-3"
+        }
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "subtask_status",
+        "payload": {
+          "subtask": "index_rebuild",
+          "status": "completed",
+          "duration_ms": 12000
+        }
+      }
+    },
+    {
+      "type": "append_track",
+      "track": {
+        "name": "errors",
+        "payload": {
+          "severity": "warning",
+          "message": "connection pool near capacity",
+          "timestamp": "2026-07-18T10:00:30Z"
+        }
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 2
+  }
+}

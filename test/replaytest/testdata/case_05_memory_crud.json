@@ -1,0 +1,74 @@
+{
+  "name": "memory_crud",
+  "description": "Memory 写入和读取：Add → Update → Delete，通过 aliases 引用，验证 memory ID、content、metadata 跨后端一致",
+  "app_name": "replay-matrix",
+  "user_id": "user-memory-crud",
+  "session_id": "session-memory-crud",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "add_memory",
+      "memory": {
+        "op": "add",
+        "result_alias": "m1",
+        "content": "用户偏好中文回答，喜欢简洁风格",
+        "topics": ["preference", "language"],
+        "metadata": {
+          "kind": "fact",
+          "event_time": "2026-07-18T10:00:00Z",
+          "location": "chat-settings"
+        }
+      }
+    },
+    {
+      "type": "add_memory",
+      "memory": {
+        "op": "add",
+        "result_alias": "m2",
+        "content": "上次讨论了 trpc-agent-go 的 session 模块",
+        "topics": ["context", "development"],
+        "metadata": {
+          "kind": "episode",
+          "event_time": "2026-07-18T09:30:00Z",
+          "participants": ["user", "agent"],
+          "location": "code-review"
+        }
+      }
+    },
+    {
+      "type": "add_memory",
+      "memory": {
+        "op": "add",
+        "result_alias": "m3",
+        "content": "临时记录：待删除",
+        "topics": ["temp"]
+      }
+    },
+    {
+      "type": "update_memory",
+      "memory": {
+        "op": "update",
+        "ref": "m1",
+        "result_alias": "m1",
+        "content": "用户偏好中文回答，喜欢详细解释风格",
+        "topics": ["preference", "language", "updated"],
+        "metadata": {
+          "kind": "fact",
+          "event_time": "2026-07-18T11:00:00Z"
+        }
+      }
+    },
+    {
+      "type": "delete_memory",
+      "memory": {
+        "op": "delete",
+        "ref": "m3"
+      }
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "memories_count": 2,
+    "no_duplicate_memories": true
+  }
+}

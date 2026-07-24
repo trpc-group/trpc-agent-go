@@ -1,0 +1,127 @@
+{
+  "name": "concurrent",
+  "description": "真正并发写入：barrier 同步 8 个 goroutine 后同时释放，混合 AppendEvent 与 AddMemory，验证后端无事件/记忆丢失，按内容排序后比较一致性",
+  "app_name": "replay-matrix",
+  "user_id": "user-concurrent",
+  "session_id": "session-concurrent",
+  "steps": [
+    {"type": "create_session"},
+    {
+      "type": "append_event",
+      "event": {
+        "author": "user",
+        "role": "user",
+        "content": "请同时搜索知识库、分析代码、获取数据、查询天气，并记住我的偏好",
+        "branch": "root",
+        "filter_key": "root"
+      }
+    },
+    {
+      "type": "concurrent_events",
+      "concurrent": [
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_search",
+            "role": "tool",
+            "content": "search result: found 42 documents",
+            "tool_id": "search_1",
+            "tool_name": "search_knowledge_base",
+            "branch": "research",
+            "filter_key": "research",
+            "tag": "concurrent-worker-1"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_code",
+            "role": "tool",
+            "content": "code analysis: 3 potential bugs detected",
+            "tool_id": "analyze_1",
+            "tool_name": "analyze_code",
+            "branch": "code-review",
+            "filter_key": "code-review",
+            "tag": "concurrent-worker-2"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_data",
+            "role": "tool",
+            "content": "fetched 15000 rows from analytics database",
+            "tool_id": "fetch_1",
+            "tool_name": "fetch_data",
+            "branch": "analytics",
+            "filter_key": "analytics",
+            "tag": "concurrent-worker-3"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_weather",
+            "role": "tool",
+            "content": "current weather: 22°C, humidity 65%",
+            "tool_id": "weather_1",
+            "tool_name": "get_weather",
+            "branch": "info",
+            "filter_key": "info",
+            "tag": "concurrent-worker-4"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "assistant",
+            "role": "assistant",
+            "content": "Based on the search results and code analysis, I recommend focusing on the critical bugs first. The weather is pleasant today.",
+            "branch": "summary",
+            "filter_key": "summary",
+            "tag": "concurrent-worker-5"
+          }
+        },
+        {
+          "type": "append_event",
+          "event": {
+            "author": "tool_image",
+            "role": "tool",
+            "content": "generated chart image: temperature_trend.png",
+            "tool_id": "chart_1",
+            "tool_name": "generate_chart",
+            "branch": "visualization",
+            "filter_key": "visualization",
+            "tag": "concurrent-worker-6"
+          }
+        },
+        {
+          "type": "add_memory",
+          "memory": {
+            "op": "add",
+            "content": "User prefers dark theme with Chinese language",
+            "topics": ["preferences", "ui"],
+            "result_alias": "m1"
+          }
+        },
+        {
+          "type": "add_memory",
+          "memory": {
+            "op": "add",
+            "content": "User is working on code review for trpc-agent-go project",
+            "topics": ["project", "context"],
+            "result_alias": "m2"
+          }
+        }
+      ]
+    },
+    {"type": "get_session"}
+  ],
+  "verify": {
+    "events_count": 7,
+    "memories_count": 2,
+    "no_duplicate_events": true,
+    "no_duplicate_memories": true,
+    "events_order_independent": true
+  }
+}
