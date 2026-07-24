@@ -19,7 +19,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/yuin/goldmark v1.4.13 // indirect
-	go.uber.org/multierr v1.11.0 // indirect
+	go.uber.org/multierr v1.10.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/image v0.32.0 // indirect
