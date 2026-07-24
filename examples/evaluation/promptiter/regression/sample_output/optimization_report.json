@@ -1,0 +1,1892 @@
+{
+  "schemaVersion": "1.0",
+  "runId": "fake-2aeef6b62d700ac4",
+  "inputs": {
+    "trainEvalSet": "data/train.evalset.json",
+    "validationEvalSet": "data/validation.evalset.json",
+    "metrics": "data/metrics.json",
+    "promptSource": "data/baseline_prompt.txt",
+    "config": "data/promptiter.json"
+  },
+  "configuration": {
+    "targetSurfaceId": "candidate#instruction",
+    "maxRounds": 2,
+    "gate": {
+      "minValidationScoreGain": 0.05,
+      "allowNewHardFails": false,
+      "criticalCaseIds": [
+        "validation_direct_critical"
+      ],
+      "maxCriticalScoreDrop": 0,
+      "maxEstimatedCostUsd": 0.01,
+      "maxToolCalls": 2
+    }
+  },
+  "runtime": {
+    "seed": 20260724,
+    "engine": "evaluation-service+promptiter-deterministic",
+    "model": {
+      "name": "deterministic-promptiter-v1",
+      "promptCostPerMillionTokens": 0.2,
+      "outputCostPerMillionTokens": 0.8,
+      "latencyMillis": 4
+    },
+    "startedAt": "2026-07-24T03:12:56.522584067Z",
+    "durationMillis": 1
+  },
+  "baseline": {
+    "prompt": "Answer each request concisely using only the provided task payload.",
+    "train": {
+      "evalSetId": "regression-train",
+      "score": 0.166666667,
+      "passedCases": 0,
+      "failedCases": 3,
+      "cases": [
+        {
+          "caseId": "train_knowledge_retention",
+          "score": 0,
+          "passed": false,
+          "finalResponse": "I do not have enough context.",
+          "expectedResponse": "Document retention is 30 days.",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-train-knowledge",
+              "name": "knowledge_search",
+              "arguments": {
+                "query": "document retention"
+              },
+              "result": {
+                "answer": "Document retention is 30 days."
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source I do not have enough context. and target Document retention is 30 days. do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "knowledge_recall_insufficient",
+              "evidence": "knowledge_search was missing or did not provide the expected grounded answer"
+            },
+            {
+              "category": "route_error",
+              "evidence": "expected tool \"knowledge_search\" was not called"
+            },
+            {
+              "category": "tool_call_error",
+              "evidence": "tool trajectory is missing an expected call"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-313ac9a2ef7b1585-step",
+                "nodeId": "direct_fallback",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 73,
+            "completionTokens": 8,
+            "totalTokens": 81,
+            "estimatedCostUsd": 0.000021
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "train_lookup_weather",
+          "score": 0,
+          "passed": false,
+          "finalResponse": "I cannot perform lookups.",
+          "expectedResponse": "Shenzhen weather is sunny.",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-train-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "weather:shenzhen"
+              },
+              "result": {
+                "condition": "sunny",
+                "location": "Shenzhen"
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source I cannot perform lookups. and target Shenzhen weather is sunny. do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "route_error",
+              "evidence": "expected tool \"lookup_record\" was not called"
+            },
+            {
+              "category": "tool_call_error",
+              "evidence": "tool trajectory is missing an expected call"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-badd8ad5fe2721a1-step",
+                "nodeId": "direct_fallback",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 70,
+            "completionTokens": 7,
+            "totalTokens": 77,
+            "estimatedCostUsd": 0.0000196
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "train_structured_order",
+          "score": 0.5,
+          "passed": false,
+          "finalResponse": "value=map[status:ok total:42]",
+          "expectedResponse": "{\"status\":\"ok\",\"total\":42}",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source value=map[status:ok total:42] and target {\"status\":\"ok\",\"total\":42} do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "format_error",
+              "evidence": "expected valid JSON but the final response was not valid JSON"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-0a775e53e0088b55-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 49,
+            "completionTokens": 8,
+            "totalTokens": 57,
+            "estimatedCostUsd": 0.0000162
+          },
+          "latencyMillis": 4
+        }
+      ],
+      "cost": {
+        "modelCalls": 3,
+        "toolCalls": 0,
+        "promptTokens": 192,
+        "completionTokens": 23,
+        "totalTokens": 215,
+        "estimatedCostUsd": 0.0000568
+      },
+      "latencyMillis": 12
+    },
+    "validation": {
+      "evalSetId": "regression-validation",
+      "score": 0.5,
+      "passedCases": 1,
+      "failedCases": 2,
+      "cases": [
+        {
+          "caseId": "validation_direct_critical",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "2 + 2 = 4.",
+          "expectedResponse": "2 + 2 = 4.",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-523c80166187f1d3-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 33,
+            "completionTokens": 3,
+            "totalTokens": 36,
+            "estimatedCostUsd": 0.000009
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "validation_lookup_exchange_rate",
+          "score": 0,
+          "passed": false,
+          "finalResponse": "I cannot perform lookups.",
+          "expectedResponse": "The USD/CNY rate is 7.20.",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-validation-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "rate:USD:CNY"
+              },
+              "result": {
+                "pair": "USD/CNY",
+                "rate": 7.2
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source I cannot perform lookups. and target The USD/CNY rate is 7.20. do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "route_error",
+              "evidence": "expected tool \"lookup_record\" was not called"
+            },
+            {
+              "category": "tool_call_error",
+              "evidence": "tool trajectory is missing an expected call"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-724cba9cb600ba05-step",
+                "nodeId": "direct_fallback",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 64,
+            "completionTokens": 7,
+            "totalTokens": 71,
+            "estimatedCostUsd": 0.0000184
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "validation_structured_profile",
+          "score": 0.5,
+          "passed": false,
+          "finalResponse": "value=map[active:true tier:gold]",
+          "expectedResponse": "{\"active\":true,\"tier\":\"gold\"}",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source value=map[active:true tier:gold] and target {\"active\":true,\"tier\":\"gold\"} do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "format_error",
+              "evidence": "expected valid JSON but the final response was not valid JSON"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-92e88c3ff4f82fd4-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 51,
+            "completionTokens": 8,
+            "totalTokens": 59,
+            "estimatedCostUsd": 0.0000166
+          },
+          "latencyMillis": 4
+        }
+      ],
+      "cost": {
+        "modelCalls": 3,
+        "toolCalls": 0,
+        "promptTokens": 148,
+        "completionTokens": 18,
+        "totalTokens": 166,
+        "estimatedCostUsd": 0.000044
+      },
+      "latencyMillis": 12
+    }
+  },
+  "candidate": {
+    "round": 1,
+    "candidateId": "balanced-routing-and-format",
+    "prompt": "Answer each request concisely using only the provided task payload.\n\nUse lookup tools only for lookup tasks. Emit strict JSON for structured tasks. Preserve direct answers without tools.\n[use_lookup_for_lookup_tasks]\n[emit_json_for_structured_tasks]",
+    "train": {
+      "evalSetId": "regression-train",
+      "score": 0.666666667,
+      "passedCases": 2,
+      "failedCases": 1,
+      "cases": [
+        {
+          "caseId": "train_knowledge_retention",
+          "score": 0,
+          "passed": false,
+          "finalResponse": "I do not have enough context.",
+          "expectedResponse": "Document retention is 30 days.",
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-train-knowledge",
+              "name": "knowledge_search",
+              "arguments": {
+                "query": "document retention"
+              },
+              "result": {
+                "answer": "Document retention is 30 days."
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "final response mismatch: text mismatch: source I do not have enough context. and target Document retention is 30 days. do not match"
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 0,
+              "threshold": 1,
+              "passed": false,
+              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+            }
+          ],
+          "failureAttributions": [
+            {
+              "category": "knowledge_recall_insufficient",
+              "evidence": "knowledge_search was missing or did not provide the expected grounded answer"
+            },
+            {
+              "category": "route_error",
+              "evidence": "expected tool \"knowledge_search\" was not called"
+            },
+            {
+              "category": "tool_call_error",
+              "evidence": "tool trajectory is missing an expected call"
+            },
+            {
+              "category": "final_response_mismatch",
+              "evidence": "actual final response does not match the expected response"
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-6f1790be95b460c2-step",
+                "nodeId": "direct_fallback",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 119,
+            "completionTokens": 8,
+            "totalTokens": 127,
+            "estimatedCostUsd": 0.0000302
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "train_lookup_weather",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "Shenzhen weather is sunny.",
+          "expectedResponse": "Shenzhen weather is sunny.",
+          "toolTrajectory": [
+            {
+              "id": "fake-243b349c538f82ef-tool-1",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "weather:shenzhen"
+              },
+              "result": {
+                "condition": "sunny",
+                "location": "Shenzhen"
+              }
+            }
+          ],
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-train-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "weather:shenzhen"
+              },
+              "result": {
+                "condition": "sunny",
+                "location": "Shenzhen"
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-243b349c538f82ef-step",
+                "nodeId": "lookup",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "promptTokens": 116,
+            "completionTokens": 7,
+            "totalTokens": 123,
+            "estimatedCostUsd": 0.0000288
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "train_structured_order",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "{\"status\":\"ok\",\"total\":42}",
+          "expectedResponse": "{\"status\":\"ok\",\"total\":42}",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-5da42605c23694d1-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 95,
+            "completionTokens": 7,
+            "totalTokens": 102,
+            "estimatedCostUsd": 0.0000246
+          },
+          "latencyMillis": 4
+        }
+      ],
+      "cost": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "promptTokens": 330,
+        "completionTokens": 22,
+        "totalTokens": 352,
+        "estimatedCostUsd": 0.0000836
+      },
+      "latencyMillis": 12
+    },
+    "validation": {
+      "evalSetId": "regression-validation",
+      "score": 1,
+      "passedCases": 3,
+      "failedCases": 0,
+      "cases": [
+        {
+          "caseId": "validation_direct_critical",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "2 + 2 = 4.",
+          "expectedResponse": "2 + 2 = 4.",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-35a51e7369c4ca30-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 79,
+            "completionTokens": 3,
+            "totalTokens": 82,
+            "estimatedCostUsd": 0.0000182
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "validation_lookup_exchange_rate",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "The USD/CNY rate is 7.20.",
+          "expectedResponse": "The USD/CNY rate is 7.20.",
+          "toolTrajectory": [
+            {
+              "id": "fake-12aa3333f2c96f78-tool-1",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "rate:USD:CNY"
+              },
+              "result": {
+                "pair": "USD/CNY",
+                "rate": 7.2
+              }
+            }
+          ],
+          "expectedToolTrajectory": [
+            {
+              "id": "expected-validation-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "rate:USD:CNY"
+              },
+              "result": {
+                "pair": "USD/CNY",
+                "rate": 7.2
+              }
+            }
+          ],
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-12aa3333f2c96f78-step",
+                "nodeId": "lookup",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 1,
+            "promptTokens": 110,
+            "completionTokens": 7,
+            "totalTokens": 117,
+            "estimatedCostUsd": 0.0000276
+          },
+          "latencyMillis": 4
+        },
+        {
+          "caseId": "validation_structured_profile",
+          "score": 1,
+          "passed": true,
+          "finalResponse": "{\"active\":true,\"tier\":\"gold\"}",
+          "expectedResponse": "{\"active\":true,\"tier\":\"gold\"}",
+          "metrics": [
+            {
+              "name": "final_response_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            },
+            {
+              "name": "tool_trajectory_avg_score",
+              "score": 1,
+              "threshold": 1,
+              "passed": true
+            }
+          ],
+          "trace": {
+            "status": "completed",
+            "steps": [
+              {
+                "stepId": "fake-df98521b8f02afdb-step",
+                "nodeId": "direct",
+                "nodeType": "llm",
+                "appliedSurfaceIds": [
+                  "candidate#instruction"
+                ]
+              }
+            ]
+          },
+          "cost": {
+            "modelCalls": 1,
+            "toolCalls": 0,
+            "promptTokens": 97,
+            "completionTokens": 8,
+            "totalTokens": 105,
+            "estimatedCostUsd": 0.0000258
+          },
+          "latencyMillis": 4
+        }
+      ],
+      "cost": {
+        "modelCalls": 3,
+        "toolCalls": 1,
+        "promptTokens": 286,
+        "completionTokens": 18,
+        "totalTokens": 304,
+        "estimatedCostUsd": 0.0000716
+      },
+      "latencyMillis": 12
+    }
+  },
+  "delta": {
+    "scoreDelta": 0.5,
+    "newlyPassed": 2,
+    "newlyFailed": 0,
+    "improved": 0,
+    "regressed": 0,
+    "unchanged": 1,
+    "cases": [
+      {
+        "caseId": "validation_direct_critical",
+        "baselineScore": 1,
+        "candidateScore": 1,
+        "scoreDelta": 0,
+        "baselinePassed": true,
+        "candidatePassed": true,
+        "class": "unchanged"
+      },
+      {
+        "caseId": "validation_lookup_exchange_rate",
+        "baselineScore": 0,
+        "candidateScore": 1,
+        "scoreDelta": 1,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "class": "newly_passed"
+      },
+      {
+        "caseId": "validation_structured_profile",
+        "baselineScore": 0.5,
+        "candidateScore": 1,
+        "scoreDelta": 0.5,
+        "baselinePassed": false,
+        "candidatePassed": true,
+        "class": "newly_passed"
+      }
+    ]
+  },
+  "gateDecision": {
+    "accepted": true,
+    "reasons": [
+      "all acceptance checks passed"
+    ],
+    "checks": [
+      {
+        "name": "minimum_validation_gain",
+        "passed": true,
+        "detail": "validation score gain 0.5000 must be at least 0.0500"
+      },
+      {
+        "name": "no_new_hard_fails",
+        "passed": true,
+        "detail": "candidate introduced 0 new hard fail(s); allowNewHardFails=false"
+      },
+      {
+        "name": "critical_cases",
+        "passed": true,
+        "detail": "1 critical case(s) stayed within the 0.0000 score-drop limit"
+      },
+      {
+        "name": "cost_budget",
+        "passed": true,
+        "detail": "candidate cost budget: estimated $0.000072, limit $0.010000"
+      },
+      {
+        "name": "tool_call_budget",
+        "passed": true,
+        "detail": "candidate tool-call budget: used 1, limit 2"
+      }
+    ]
+  },
+  "failureAttribution": {
+    "baseline": {
+      "format_error": 2,
+      "knowledge_recall_insufficient": 1,
+      "route_error": 2
+    },
+    "candidate": {
+      "knowledge_recall_insufficient": 1
+    }
+  },
+  "costLatency": {
+    "baseline": {
+      "modelCalls": 6,
+      "toolCalls": 0,
+      "promptTokens": 340,
+      "completionTokens": 41,
+      "totalTokens": 381,
+      "estimatedCostUsd": 0.0001008
+    },
+    "candidates": {
+      "modelCalls": 12,
+      "toolCalls": 8,
+      "promptTokens": 1370,
+      "completionTokens": 80,
+      "totalTokens": 1450,
+      "estimatedCostUsd": 0.000338
+    },
+    "total": {
+      "modelCalls": 18,
+      "toolCalls": 8,
+      "promptTokens": 1710,
+      "completionTokens": 121,
+      "totalTokens": 1831,
+      "estimatedCostUsd": 0.0004388
+    },
+    "totalLatencyMillis": 72
+  },
+  "rounds": [
+    {
+      "round": 1,
+      "candidateId": "balanced-routing-and-format",
+      "prompt": "Answer each request concisely using only the provided task payload.\n\nUse lookup tools only for lookup tasks. Emit strict JSON for structured tasks. Preserve direct answers without tools.\n[use_lookup_for_lookup_tasks]\n[emit_json_for_structured_tasks]",
+      "patchReason": "Training failures show missing lookup calls and invalid structured output.",
+      "train": {
+        "evalSetId": "regression-train",
+        "score": 0.666666667,
+        "passedCases": 2,
+        "failedCases": 1,
+        "cases": [
+          {
+            "caseId": "train_knowledge_retention",
+            "score": 0,
+            "passed": false,
+            "finalResponse": "I do not have enough context.",
+            "expectedResponse": "Document retention is 30 days.",
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-train-knowledge",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "document retention"
+                },
+                "result": {
+                  "answer": "Document retention is 30 days."
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "reason": "final response mismatch: text mismatch: source I do not have enough context. and target Document retention is 30 days. do not match"
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+              }
+            ],
+            "failureAttributions": [
+              {
+                "category": "knowledge_recall_insufficient",
+                "evidence": "knowledge_search was missing or did not provide the expected grounded answer"
+              },
+              {
+                "category": "route_error",
+                "evidence": "expected tool \"knowledge_search\" was not called"
+              },
+              {
+                "category": "tool_call_error",
+                "evidence": "tool trajectory is missing an expected call"
+              },
+              {
+                "category": "final_response_mismatch",
+                "evidence": "actual final response does not match the expected response"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-6f1790be95b460c2-step",
+                  "nodeId": "direct_fallback",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 0,
+              "promptTokens": 119,
+              "completionTokens": 8,
+              "totalTokens": 127,
+              "estimatedCostUsd": 0.0000302
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "train_lookup_weather",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "Shenzhen weather is sunny.",
+            "expectedResponse": "Shenzhen weather is sunny.",
+            "toolTrajectory": [
+              {
+                "id": "fake-243b349c538f82ef-tool-1",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "weather:shenzhen"
+                },
+                "result": {
+                  "condition": "sunny",
+                  "location": "Shenzhen"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-train-lookup",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "weather:shenzhen"
+                },
+                "result": {
+                  "condition": "sunny",
+                  "location": "Shenzhen"
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-243b349c538f82ef-step",
+                  "nodeId": "lookup",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 116,
+              "completionTokens": 7,
+              "totalTokens": 123,
+              "estimatedCostUsd": 0.0000288
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "train_structured_order",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "{\"status\":\"ok\",\"total\":42}",
+            "expectedResponse": "{\"status\":\"ok\",\"total\":42}",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-5da42605c23694d1-step",
+                  "nodeId": "direct",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 0,
+              "promptTokens": 95,
+              "completionTokens": 7,
+              "totalTokens": 102,
+              "estimatedCostUsd": 0.0000246
+            },
+            "latencyMillis": 4
+          }
+        ],
+        "cost": {
+          "modelCalls": 3,
+          "toolCalls": 1,
+          "promptTokens": 330,
+          "completionTokens": 22,
+          "totalTokens": 352,
+          "estimatedCostUsd": 0.0000836
+        },
+        "latencyMillis": 12
+      },
+      "validation": {
+        "evalSetId": "regression-validation",
+        "score": 1,
+        "passedCases": 3,
+        "failedCases": 0,
+        "cases": [
+          {
+            "caseId": "validation_direct_critical",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "2 + 2 = 4.",
+            "expectedResponse": "2 + 2 = 4.",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-35a51e7369c4ca30-step",
+                  "nodeId": "direct",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 0,
+              "promptTokens": 79,
+              "completionTokens": 3,
+              "totalTokens": 82,
+              "estimatedCostUsd": 0.0000182
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "validation_lookup_exchange_rate",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "The USD/CNY rate is 7.20.",
+            "expectedResponse": "The USD/CNY rate is 7.20.",
+            "toolTrajectory": [
+              {
+                "id": "fake-12aa3333f2c96f78-tool-1",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "rate:USD:CNY"
+                },
+                "result": {
+                  "pair": "USD/CNY",
+                  "rate": 7.2
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-validation-lookup",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "rate:USD:CNY"
+                },
+                "result": {
+                  "pair": "USD/CNY",
+                  "rate": 7.2
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-12aa3333f2c96f78-step",
+                  "nodeId": "lookup",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 110,
+              "completionTokens": 7,
+              "totalTokens": 117,
+              "estimatedCostUsd": 0.0000276
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "validation_structured_profile",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "{\"active\":true,\"tier\":\"gold\"}",
+            "expectedResponse": "{\"active\":true,\"tier\":\"gold\"}",
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-df98521b8f02afdb-step",
+                  "nodeId": "direct",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 0,
+              "promptTokens": 97,
+              "completionTokens": 8,
+              "totalTokens": 105,
+              "estimatedCostUsd": 0.0000258
+            },
+            "latencyMillis": 4
+          }
+        ],
+        "cost": {
+          "modelCalls": 3,
+          "toolCalls": 1,
+          "promptTokens": 286,
+          "completionTokens": 18,
+          "totalTokens": 304,
+          "estimatedCostUsd": 0.0000716
+        },
+        "latencyMillis": 12
+      },
+      "delta": {
+        "scoreDelta": 0.5,
+        "newlyPassed": 2,
+        "newlyFailed": 0,
+        "improved": 0,
+        "regressed": 0,
+        "unchanged": 1,
+        "cases": [
+          {
+            "caseId": "validation_direct_critical",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "class": "unchanged"
+          },
+          {
+            "caseId": "validation_lookup_exchange_rate",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "class": "newly_passed"
+          },
+          {
+            "caseId": "validation_structured_profile",
+            "baselineScore": 0.5,
+            "candidateScore": 1,
+            "scoreDelta": 0.5,
+            "baselinePassed": false,
+            "candidatePassed": true,
+            "class": "newly_passed"
+          }
+        ]
+      },
+      "decision": {
+        "accepted": true,
+        "reasons": [
+          "all acceptance checks passed"
+        ],
+        "checks": [
+          {
+            "name": "minimum_validation_gain",
+            "passed": true,
+            "detail": "validation score gain 0.5000 must be at least 0.0500"
+          },
+          {
+            "name": "no_new_hard_fails",
+            "passed": true,
+            "detail": "candidate introduced 0 new hard fail(s); allowNewHardFails=false"
+          },
+          {
+            "name": "critical_cases",
+            "passed": true,
+            "detail": "1 critical case(s) stayed within the 0.0000 score-drop limit"
+          },
+          {
+            "name": "cost_budget",
+            "passed": true,
+            "detail": "candidate cost budget: estimated $0.000072, limit $0.010000"
+          },
+          {
+            "name": "tool_call_budget",
+            "passed": true,
+            "detail": "candidate tool-call budget: used 1, limit 2"
+          }
+        ]
+      },
+      "durationMillis": 0
+    },
+    {
+      "round": 2,
+      "candidateId": "knowledge-overfit",
+      "prompt": "Answer each request concisely using only the provided task payload.\n\nUse lookup tools only for lookup tasks. Emit strict JSON for structured tasks. Preserve direct answers without tools.\n[use_lookup_for_lookup_tasks]\n[emit_json_for_structured_tasks]\n\nSearch knowledge before every non-lookup task.\n[search_knowledge_for_all_non_lookup_tasks]",
+      "patchReason": "The remaining training failure lacks retrieved knowledge, but this broad rule may overfit.",
+      "train": {
+        "evalSetId": "regression-train",
+        "score": 0.833333333,
+        "passedCases": 2,
+        "failedCases": 1,
+        "cases": [
+          {
+            "caseId": "train_knowledge_retention",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "Document retention is 30 days.",
+            "expectedResponse": "Document retention is 30 days.",
+            "toolTrajectory": [
+              {
+                "id": "fake-d6b69a8732817edf-tool-1",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "document retention"
+                },
+                "result": {
+                  "answer": "Document retention is 30 days."
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-train-knowledge",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "document retention"
+                },
+                "result": {
+                  "answer": "Document retention is 30 days."
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-d6b69a8732817edf-step",
+                  "nodeId": "knowledge",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 142,
+              "completionTokens": 8,
+              "totalTokens": 150,
+              "estimatedCostUsd": 0.0000348
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "train_lookup_weather",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "Shenzhen weather is sunny.",
+            "expectedResponse": "Shenzhen weather is sunny.",
+            "toolTrajectory": [
+              {
+                "id": "fake-20d96b170ff41c39-tool-1",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "weather:shenzhen"
+                },
+                "result": {
+                  "condition": "sunny",
+                  "location": "Shenzhen"
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-train-lookup",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "weather:shenzhen"
+                },
+                "result": {
+                  "condition": "sunny",
+                  "location": "Shenzhen"
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-20d96b170ff41c39-step",
+                  "nodeId": "lookup",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 139,
+              "completionTokens": 7,
+              "totalTokens": 146,
+              "estimatedCostUsd": 0.0000334
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "train_structured_order",
+            "score": 0.5,
+            "passed": false,
+            "finalResponse": "{\"status\":\"ok\",\"total\":42}",
+            "expectedResponse": "{\"status\":\"ok\",\"total\":42}",
+            "toolTrajectory": [
+              {
+                "id": "fake-f14c1774f1629223-tool-1",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "order summary"
+                },
+                "result": {
+                  "answer": "{\"status\":\"ok\",\"total\":42}"
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+              }
+            ],
+            "failureAttributions": [
+              {
+                "category": "route_error",
+                "evidence": "unexpected tool \"knowledge_search\" was called"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-f14c1774f1629223-step",
+                  "nodeId": "knowledge_overfit",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 118,
+              "completionTokens": 7,
+              "totalTokens": 125,
+              "estimatedCostUsd": 0.0000292
+            },
+            "latencyMillis": 4
+          }
+        ],
+        "cost": {
+          "modelCalls": 3,
+          "toolCalls": 3,
+          "promptTokens": 399,
+          "completionTokens": 22,
+          "totalTokens": 421,
+          "estimatedCostUsd": 0.0000974
+        },
+        "latencyMillis": 12
+      },
+      "validation": {
+        "evalSetId": "regression-validation",
+        "score": 0.666666667,
+        "passedCases": 1,
+        "failedCases": 2,
+        "cases": [
+          {
+            "caseId": "validation_direct_critical",
+            "score": 0.5,
+            "passed": false,
+            "finalResponse": "2 + 2 = 4.",
+            "expectedResponse": "2 + 2 = 4.",
+            "toolTrajectory": [
+              {
+                "id": "fake-1431391683582bef-tool-1",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "two plus two"
+                },
+                "result": {
+                  "answer": "2 + 2 = 4."
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+              }
+            ],
+            "failureAttributions": [
+              {
+                "category": "route_error",
+                "evidence": "unexpected tool \"knowledge_search\" was called"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-1431391683582bef-step",
+                  "nodeId": "knowledge_overfit",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 102,
+              "completionTokens": 3,
+              "totalTokens": 105,
+              "estimatedCostUsd": 0.0000228
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "validation_lookup_exchange_rate",
+            "score": 1,
+            "passed": true,
+            "finalResponse": "The USD/CNY rate is 7.20.",
+            "expectedResponse": "The USD/CNY rate is 7.20.",
+            "toolTrajectory": [
+              {
+                "id": "fake-d9b7abbf80b5e447-tool-1",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "rate:USD:CNY"
+                },
+                "result": {
+                  "pair": "USD/CNY",
+                  "rate": 7.2
+                }
+              }
+            ],
+            "expectedToolTrajectory": [
+              {
+                "id": "expected-validation-lookup",
+                "name": "lookup_record",
+                "arguments": {
+                  "query": "rate:USD:CNY"
+                },
+                "result": {
+                  "pair": "USD/CNY",
+                  "rate": 7.2
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-d9b7abbf80b5e447-step",
+                  "nodeId": "lookup",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 133,
+              "completionTokens": 7,
+              "totalTokens": 140,
+              "estimatedCostUsd": 0.0000322
+            },
+            "latencyMillis": 4
+          },
+          {
+            "caseId": "validation_structured_profile",
+            "score": 0.5,
+            "passed": false,
+            "finalResponse": "{\"active\":true,\"tier\":\"gold\"}",
+            "expectedResponse": "{\"active\":true,\"tier\":\"gold\"}",
+            "toolTrajectory": [
+              {
+                "id": "fake-3d7cbba64d93cbf4-tool-1",
+                "name": "knowledge_search",
+                "arguments": {
+                  "query": "profile summary"
+                },
+                "result": {
+                  "answer": "{\"active\":true,\"tier\":\"gold\"}"
+                }
+              }
+            ],
+            "metrics": [
+              {
+                "name": "final_response_avg_score",
+                "score": 1,
+                "threshold": 1,
+                "passed": true
+              },
+              {
+                "name": "tool_trajectory_avg_score",
+                "score": 0,
+                "threshold": 1,
+                "passed": false,
+                "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(1) != expected(0)"
+              }
+            ],
+            "failureAttributions": [
+              {
+                "category": "route_error",
+                "evidence": "unexpected tool \"knowledge_search\" was called"
+              }
+            ],
+            "trace": {
+              "status": "completed",
+              "steps": [
+                {
+                  "stepId": "fake-3d7cbba64d93cbf4-step",
+                  "nodeId": "knowledge_overfit",
+                  "nodeType": "llm",
+                  "appliedSurfaceIds": [
+                    "candidate#instruction"
+                  ]
+                }
+              ]
+            },
+            "cost": {
+              "modelCalls": 1,
+              "toolCalls": 1,
+              "promptTokens": 120,
+              "completionTokens": 8,
+              "totalTokens": 128,
+              "estimatedCostUsd": 0.0000304
+            },
+            "latencyMillis": 4
+          }
+        ],
+        "cost": {
+          "modelCalls": 3,
+          "toolCalls": 3,
+          "promptTokens": 355,
+          "completionTokens": 18,
+          "totalTokens": 373,
+          "estimatedCostUsd": 0.0000854
+        },
+        "latencyMillis": 12
+      },
+      "delta": {
+        "scoreDelta": -0.333333333,
+        "newlyPassed": 0,
+        "newlyFailed": 2,
+        "improved": 0,
+        "regressed": 0,
+        "unchanged": 1,
+        "cases": [
+          {
+            "caseId": "validation_direct_critical",
+            "baselineScore": 1,
+            "candidateScore": 0.5,
+            "scoreDelta": -0.5,
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "class": "newly_failed"
+          },
+          {
+            "caseId": "validation_lookup_exchange_rate",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0,
+            "baselinePassed": true,
+            "candidatePassed": true,
+            "class": "unchanged"
+          },
+          {
+            "caseId": "validation_structured_profile",
+            "baselineScore": 1,
+            "candidateScore": 0.5,
+            "scoreDelta": -0.5,
+            "baselinePassed": true,
+            "candidatePassed": false,
+            "class": "newly_failed"
+          }
+        ]
+      },
+      "decision": {
+        "accepted": false,
+        "reasons": [
+          "validation score gain -0.3333 must be at least 0.0500",
+          "candidate introduced 2 new hard fail(s); allowNewHardFails=false",
+          "critical case \"validation_direct_critical\" score dropped by 0.5000, limit 0.0000",
+          "candidate tool-call budget: used 3, limit 2"
+        ],
+        "checks": [
+          {
+            "name": "minimum_validation_gain",
+            "passed": false,
+            "detail": "validation score gain -0.3333 must be at least 0.0500"
+          },
+          {
+            "name": "no_new_hard_fails",
+            "passed": false,
+            "detail": "candidate introduced 2 new hard fail(s); allowNewHardFails=false"
+          },
+          {
+            "name": "critical_cases",
+            "passed": false,
+            "detail": "critical case \"validation_direct_critical\" score dropped by 0.5000, limit 0.0000"
+          },
+          {
+            "name": "cost_budget",
+            "passed": true,
+            "detail": "candidate cost budget: estimated $0.000085, limit $0.010000"
+          },
+          {
+            "name": "tool_call_budget",
+            "passed": false,
+            "detail": "candidate tool-call budget: used 3, limit 2"
+          }
+        ]
+      },
+      "durationMillis": 0
+    }
+  ]
+}
