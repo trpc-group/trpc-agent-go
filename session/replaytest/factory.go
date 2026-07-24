@@ -1,0 +1,513 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package replaytest
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/alicebob/miniredis/v2"
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/redis/go-redis/v9"
+	"trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
+	mmysql "trpc.group/trpc-go/trpc-agent-go/memory/mysql"
+	mpostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+	mredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
+	msqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
+	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/session"
+	sclickhouse "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
+	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
+	smysql "trpc.group/trpc-go/trpc-agent-go/session/mysql"
+	spostgres "trpc.group/trpc-go/trpc-agent-go/session/postgres"
+	sredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
+	ssqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
+	ssummary "trpc.group/trpc-go/trpc-agent-go/session/summary"
+)
+
+func closeWithWarning(t *testing.T, name string, closeFn func() error) {
+	t.Helper()
+	if closeErr := closeFn(); closeErr != nil {
+		t.Logf("warning: closing %s: %v", name, closeErr)
+	}
+}
+
+// fakeSummarizer implements summary.SessionSummarizer for deterministic testing.
+type fakeSummarizer struct{}
+
+func (f *fakeSummarizer) ShouldSummarize(*session.Session) bool { return true }
+
+func (f *fakeSummarizer) Summarize(_ context.Context, sess *session.Session) (string, error) {
+	if sess == nil {
+		return "", nil
+	}
+	return fmt.Sprintf("summary-of-%d-events", len(sess.Events)), nil
+}
+
+func (f *fakeSummarizer) SetPrompt(string)         {}
+func (f *fakeSummarizer) SetModel(model.Model)     {}
+func (f *fakeSummarizer) Metadata() map[string]any { return nil }
+
+var _ ssummary.SessionSummarizer = (*fakeSummarizer)(nil)
+
+// defaultSessKey returns the default session key for replay test backends.
+func defaultSessKey() session.Key {
+	return session.Key{AppName: "replay-test", UserID: "user", SessionID: "session"}
+}
+
+// defaultWarmUp is the standard warm-up function for external backends.
+// It creates, reads, and deletes a session to verify basic connectivity.
+func defaultWarmUp(ctx context.Context, b Backend) error {
+	key := b.SessKey()
+	sess, err := b.Sess.CreateSession(ctx, key, nil)
+	if err != nil {
+		return fmt.Errorf("warmup create: %w", err)
+	}
+	if _, err := b.Sess.GetSession(ctx, key); err != nil {
+		return fmt.Errorf("warmup get: %w", err)
+	}
+	if err := b.Sess.DeleteSession(ctx, key); err != nil {
+		return fmt.Errorf("warmup delete: %w", err)
+	}
+	_ = sess
+	return nil
+}
+
+// inMemoryFactory creates an InMemory session backend.
+type inMemoryFactory struct{}
+
+func (inMemoryFactory) Kind() string               { return "inmemory" }
+func (inMemoryFactory) Capabilities() Capabilities { return AllCapabilities() }
+func (inMemoryFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	svc := sessinmemory.NewSessionService(
+		sessinmemory.WithSummarizer(&fakeSummarizer{}),
+	)
+	t.Cleanup(func() {
+		closeWithWarning(t, "inmemory session service", svc.Close)
+	})
+	memSvc := inmemory.NewMemoryService()
+	t.Cleanup(func() {
+		closeWithWarning(t, "inmemory memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "inmemory",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+	}
+}
+
+// sqliteFactory creates an in-memory SQLite session backend.
+type sqliteFactory struct{}
+
+func (sqliteFactory) Kind() string               { return "sqlite" }
+func (sqliteFactory) Capabilities() Capabilities { return AllCapabilities() }
+func (sqliteFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	db, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() {
+		closeWithWarning(t, "sqlite db", db.Close)
+	})
+	svc, err := ssqlite.NewService(db,
+		ssqlite.WithSummarizer(&fakeSummarizer{}),
+	)
+	if err != nil {
+		t.Fatalf("create sqlite service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "sqlite service", svc.Close)
+	})
+	memDB, err := sql.Open("sqlite3", ":memory:")
+	if err != nil {
+		t.Fatalf("open sqlite memory db: %v", err)
+	}
+	memDB.SetMaxOpenConns(1)
+	memSvc, err := msqlite.NewService(memDB)
+	if err != nil {
+		closeWithWarning(t, "sqlite memory db", memDB.Close)
+		t.Fatalf("create sqlite memory service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "sqlite memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "sqlite",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+	}
+}
+
+// miniredisFactory creates a Redis session backend backed by an in-process miniredis server.
+// Always available — no external Redis instance needed.
+type miniredisFactory struct{}
+
+func (miniredisFactory) Kind() string               { return "miniredis" }
+func (miniredisFactory) Capabilities() Capabilities { return AllCapabilities() }
+func (miniredisFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("start miniredis: %v", err)
+	}
+	t.Cleanup(func() { mr.Close() })
+
+	svc, err := sredis.NewService(
+		sredis.WithRedisClientURL("redis://"+mr.Addr()),
+		sredis.WithSummarizer(&fakeSummarizer{}),
+	)
+	if err != nil {
+		t.Fatalf("create redis session service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "miniredis session service", svc.Close)
+	})
+	memSvc, err := mredis.NewService(
+		mredis.WithRedisClientURL("redis://" + mr.Addr()),
+	)
+	if err != nil {
+		t.Fatalf("create miniredis memory service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "miniredis memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "miniredis",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+		Probe: func(ctx context.Context) error {
+			client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+			defer client.Close()
+			return client.Ping(ctx).Err()
+		},
+	}
+}
+
+// redisFactory creates a Redis session backend gated by TRPC_AGENT_REPLAY_REDIS_URL.
+type redisFactory struct{}
+
+func (redisFactory) Kind() string               { return "redis" }
+func (redisFactory) Capabilities() Capabilities { return AllCapabilities() }
+func (redisFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	url := os.Getenv("TRPC_AGENT_REPLAY_REDIS_URL")
+	if url == "" {
+		t.Skip("TRPC_AGENT_REPLAY_REDIS_URL not set, skipping Redis backend")
+	}
+	svc, err := sredis.NewService(
+		sredis.WithRedisClientURL(url),
+		sredis.WithSummarizer(&fakeSummarizer{}),
+	)
+	if err != nil {
+		t.Fatalf("create redis session service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "redis session service", svc.Close)
+	})
+	memSvc, err := mredis.NewService(
+		mredis.WithRedisClientURL(url),
+	)
+	if err != nil {
+		t.Fatalf("create redis memory service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "redis memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "redis",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+		Probe: func(ctx context.Context) error {
+			opts, err := redis.ParseURL(url)
+			if err != nil {
+				return fmt.Errorf("parse redis URL: %w", err)
+			}
+			client := redis.NewClient(opts)
+			defer client.Close()
+			return client.Ping(ctx).Err()
+		},
+		WarmUp: defaultWarmUp,
+	}
+}
+
+// postgresFactory creates a Postgres session backend gated by TRPC_AGENT_REPLAY_POSTGRES_DSN.
+type postgresFactory struct{}
+
+func (postgresFactory) Kind() string { return "postgres" }
+func (postgresFactory) Capabilities() Capabilities {
+	return Capabilities{
+		CapEvents:              {Supported: true},
+		CapState:               {Supported: true},
+		CapMemory:              {Supported: true},
+		CapSummary:             {Supported: true},
+		CapTrack:               {Supported: true},
+		CapEventStateDeltaNull: {Supported: true},
+	}
+}
+func (postgresFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	dsn := os.Getenv("TRPC_AGENT_REPLAY_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("TRPC_AGENT_REPLAY_POSTGRES_DSN not set, skipping Postgres backend")
+	}
+	pgOpts := []spostgres.ServiceOpt{
+		spostgres.WithPostgresClientDSN(dsn),
+		spostgres.WithSummarizer(&fakeSummarizer{}),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		pgOpts = append(pgOpts, spostgres.WithSkipDBInit(true))
+	}
+	svc, err := spostgres.NewService(pgOpts...)
+	if err != nil {
+		t.Fatalf("create postgres session service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "postgres session service", svc.Close)
+	})
+	memOpts := []mpostgres.ServiceOpt{
+		mpostgres.WithPostgresClientDSN(dsn),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		memOpts = append(memOpts, mpostgres.WithSkipDBInit(true))
+	}
+	memSvc, err := mpostgres.NewService(memOpts...)
+	if err != nil {
+		t.Fatalf("create postgres memory service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "postgres memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "postgres",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+		Probe: func(ctx context.Context) error {
+			db, err := sql.Open("pgx", dsn)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return db.PingContext(pingCtx)
+		},
+		WarmUp: defaultWarmUp,
+	}
+}
+
+// mysqlFactory creates a MySQL session backend gated by TRPC_AGENT_REPLAY_MYSQL_DSN.
+type mysqlFactory struct{}
+
+func (mysqlFactory) Kind() string { return "mysql" }
+func (mysqlFactory) Capabilities() Capabilities {
+	return Capabilities{
+		CapEvents:              {Supported: true},
+		CapState:               {Supported: true},
+		CapMemory:              {Supported: true},
+		CapSummary:             {Supported: true},
+		CapTrack:               {Supported: true},
+		CapEventStateDeltaNull: {Supported: true},
+	}
+}
+func (mysqlFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	dsn := os.Getenv("TRPC_AGENT_REPLAY_MYSQL_DSN")
+	if dsn == "" {
+		t.Skip("TRPC_AGENT_REPLAY_MYSQL_DSN not set, skipping MySQL backend")
+	}
+	myOpts := []smysql.ServiceOpt{
+		smysql.WithMySQLClientDSN(dsn),
+		smysql.WithSummarizer(&fakeSummarizer{}),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		myOpts = append(myOpts, smysql.WithSkipDBInit(true))
+	}
+	svc, err := smysql.NewService(myOpts...)
+	if err != nil {
+		t.Fatalf("create mysql session service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "mysql session service", svc.Close)
+	})
+	memOpts := []mmysql.ServiceOpt{
+		mmysql.WithMySQLClientDSN(dsn),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		memOpts = append(memOpts, mmysql.WithSkipDBInit(true))
+	}
+	memSvc, err := mmysql.NewService(memOpts...)
+	if err != nil {
+		t.Fatalf("create mysql memory service: %v", err)
+	}
+	t.Cleanup(func() {
+		closeWithWarning(t, "mysql memory service", memSvc.Close)
+	})
+	return &Backend{
+		Name:    "mysql",
+		Sess:    svc,
+		Track:   svc,
+		Mem:     memSvc,
+		Caps:    AllCapabilities(),
+		SessKey: defaultSessKey,
+		Probe: func(ctx context.Context) error {
+			db, err := sql.Open("mysql", dsn)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return db.PingContext(pingCtx)
+		},
+		WarmUp: defaultWarmUp,
+	}
+}
+
+// clickhouseFactory creates a ClickHouse session backend gated by TRPC_AGENT_REPLAY_CLICKHOUSE_DSN.
+// ClickHouse does NOT implement session.TrackService, so CapTrack is unsupported.
+type clickhouseFactory struct{}
+
+func (clickhouseFactory) Kind() string { return "clickhouse" }
+func (clickhouseFactory) Capabilities() Capabilities {
+	return Capabilities{
+		CapEvents:              {Supported: true},
+		CapState:               {Supported: true},
+		CapMemory:              {Supported: false, Reason: "ClickHouse replay backend does not have a matching memory.Service implementation"},
+		CapSummary:             {Supported: true},
+		CapTrack:               {Supported: false, Reason: "ClickHouse does not implement TrackService"},
+		CapEventStateDeltaNull: {Supported: true},
+	}
+}
+func (clickhouseFactory) Create(_ context.Context, t *testing.T) *Backend {
+	t.Helper()
+	dsn := os.Getenv("TRPC_AGENT_REPLAY_CLICKHOUSE_DSN")
+	if dsn == "" {
+		t.Skip("TRPC_AGENT_REPLAY_CLICKHOUSE_DSN not set, skipping ClickHouse backend")
+	}
+	chOpts := []sclickhouse.ServiceOpt{
+		sclickhouse.WithClickHouseDSN(dsn),
+		sclickhouse.WithSummarizer(&fakeSummarizer{}),
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_SKIP_DB_INIT") != "" {
+		chOpts = append(chOpts, sclickhouse.WithSkipDBInit(true))
+	}
+	svc, err := sclickhouse.NewService(chOpts...)
+	if err != nil {
+		t.Fatalf("create clickhouse session service: %v", err)
+	}
+	t.Cleanup(func() {
+		if closeErr := svc.Close(); closeErr != nil {
+			t.Logf("warning: closing clickhouse session service: %v", closeErr)
+		}
+	})
+	return &Backend{
+		Name:    "clickhouse",
+		Sess:    svc,
+		Track:   nil,
+		Mem:     nil,
+		Caps:    clickhouseFactory{}.Capabilities(),
+		SessKey: defaultSessKey,
+		Probe: func(ctx context.Context) error {
+			db, err := sql.Open("clickhouse", dsn)
+			if err != nil {
+				return err
+			}
+			defer db.Close()
+			pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return db.PingContext(pingCtx)
+		},
+		WarmUp: defaultWarmUp,
+	}
+}
+
+// ResolveBackends returns the list of backend factories to test.
+// Always includes InMemory and SQLite. Adds miniredis, and external
+// backends if their environment variables are set.
+func ResolveBackends(t *testing.T) []BackendFactory {
+	t.Helper()
+	factories := []BackendFactory{
+		inMemoryFactory{},
+		sqliteFactory{},
+		miniredisFactory{},
+	}
+	// Add external backends gated by environment variables.
+	if os.Getenv("TRPC_AGENT_REPLAY_REDIS_URL") != "" {
+		factories = append(factories, redisFactory{})
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_POSTGRES_DSN") != "" {
+		factories = append(factories, postgresFactory{})
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_MYSQL_DSN") != "" {
+		factories = append(factories, mysqlFactory{})
+	}
+	if os.Getenv("TRPC_AGENT_REPLAY_CLICKHOUSE_DSN") != "" {
+		factories = append(factories, clickhouseFactory{})
+	}
+	fmt.Fprintf(os.Stderr, "replaytest: backends=%v\n", backendNames(factories))
+	return factories
+}
+
+// ResolvePair returns the primary (always InMemory) and target backend factories.
+func ResolvePair(t *testing.T) (primary, target BackendFactory) {
+	t.Helper()
+	primary = inMemoryFactory{}
+	backend := os.Getenv("REPLAY_BACKEND")
+	switch strings.ToLower(backend) {
+	case "", "sqlite":
+		target = sqliteFactory{}
+	case "inmemory":
+		target = inMemoryFactory{}
+	case "miniredis":
+		target = miniredisFactory{}
+	case "redis":
+		target = redisFactory{}
+	case "postgres":
+		target = postgresFactory{}
+	case "mysql":
+		target = mysqlFactory{}
+	case "clickhouse":
+		target = clickhouseFactory{}
+	default:
+		t.Skipf("unsupported REPLAY_BACKEND=%q; supported: inmemory, sqlite, miniredis, redis, postgres, mysql, clickhouse", backend)
+	}
+	fmt.Fprintf(os.Stderr, "replaytest: primary=%s target=%s\n", primary.Kind(), target.Kind())
+	return primary, target
+}
+
+func backendNames(factories []BackendFactory) []string {
+	names := make([]string, len(factories))
+	for i, f := range factories {
+		names[i] = f.Kind()
+	}
+	return names
+}
