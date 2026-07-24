@@ -1,0 +1,82 @@
+{
+  "evalSetId": "regression-validation",
+  "name": "regression-validation",
+  "description": "Held-out cases for prompt regression gating.",
+  "evalCases": [
+    {
+      "evalId": "validation_lookup_exchange_rate",
+      "conversation": [
+        {
+          "invocationId": "validation_lookup_exchange_rate-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"lookup\",\"query\":\"rate:USD:CNY\",\"answer\":\"The USD/CNY rate is 7.20.\",\"tool\":{\"name\":\"lookup_record\",\"arguments\":{\"query\":\"rate:USD:CNY\"},\"result\":{\"pair\":\"USD/CNY\",\"rate\":7.2}}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The USD/CNY rate is 7.20."
+          },
+          "tools": [
+            {
+              "id": "expected-validation-lookup",
+              "name": "lookup_record",
+              "arguments": {
+                "query": "rate:USD:CNY"
+              },
+              "result": {
+                "pair": "USD/CNY",
+                "rate": 7.2
+              }
+            }
+          ]
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    },
+    {
+      "evalId": "validation_structured_profile",
+      "conversation": [
+        {
+          "invocationId": "validation_structured_profile-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"structured\",\"query\":\"profile summary\",\"answer\":\"{\\\"active\\\":true,\\\"tier\\\":\\\"gold\\\"}\",\"output\":{\"active\":true,\"tier\":\"gold\"}}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "{\"active\":true,\"tier\":\"gold\"}"
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    },
+    {
+      "evalId": "validation_direct_critical",
+      "conversation": [
+        {
+          "invocationId": "validation_direct_critical-1",
+          "userContent": {
+            "role": "user",
+            "content": "{\"intent\":\"direct\",\"query\":\"two plus two\",\"answer\":\"2 + 2 = 4.\"}"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "2 + 2 = 4."
+          },
+          "tools": []
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-loop",
+        "userId": "evaluation-user"
+      }
+    }
+  ]
+}
