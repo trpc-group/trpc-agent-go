@@ -236,11 +236,18 @@ func redactJSONChild(child any, alreadyChanged bool) (any, bool) {
 
 func isSensitiveResultName(name string) bool {
 	words := normalizedResultNameWords(name)
-	if internalredact.IsSensitiveName(strings.Join(words, "_")) {
-		return true
-	}
-	for _, word := range words {
-		if word == "credential" || word == "credentials" {
+	for index, word := range words {
+		switch word {
+		case "token", "secret", "password", "passwd", "credential",
+			"credentials", "authorization", "apikey", "accesskey",
+			"privatekey", "clientsecret":
+			return true
+		}
+		if index+1 >= len(words) || words[index+1] != "key" {
+			continue
+		}
+		switch word {
+		case "api", "access", "private":
 			return true
 		}
 	}

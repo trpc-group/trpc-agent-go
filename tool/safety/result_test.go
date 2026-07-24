@@ -144,6 +144,7 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"monkeytokenbucket": "safe-value",
 		"secretary":         "visible",
 		"passwordless":      "enabled",
+		"publicKey":         "public-material",
 	}
 	processor := mustResultProcessor(t, 4096, nil)
 
@@ -158,7 +159,54 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"monkeytokenbucket": "safe-value",
 		"secretary":         "visible",
 		"passwordless":      "enabled",
+		"publicKey":         "public-material",
 	}, processed.Value)
+}
+
+func TestResultProcessorRedactsSensitiveWordTokensWithSuffixes(t *testing.T) {
+	type suffixed struct {
+		PasswordHash  string `json:"passwordHash"`
+		PasswordSpace string `json:"password hash"`
+		TokenSnake    string `json:"token_value"`
+		TokenSpace    string `json:"token value"`
+		APIKeyValue   string `json:"api key value"`
+		PrivateKeyPEM string `json:"privateKeyPEM"`
+		MixedCase     string `json:"Client.SECRET-data"`
+	}
+	input := map[string]any{
+		"struct": suffixed{
+			PasswordHash:  "raw-password-hash",
+			PasswordSpace: "raw-password-space",
+			TokenSnake:    "raw-token-snake",
+			TokenSpace:    "raw-token-space",
+			APIKeyValue:   "raw-api-key-value",
+			PrivateKeyPEM: "raw-private-key-pem",
+			MixedCase:     "raw-client-secret-data",
+		},
+		"map": map[string]string{
+			"ACCESS-key-data":    "raw-access-key-data",
+			"credentials_file":   "raw-credentials-file",
+			"client secret hash": "raw-client-secret-hash",
+		},
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	for _, raw := range []string{
+		"raw-password-hash", "raw-password-space", "raw-token-snake",
+		"raw-token-space", "raw-api-key-value", "raw-private-key-pem",
+		"raw-client-secret-data", "raw-access-key-data",
+		"raw-credentials-file", "raw-client-secret-hash",
+	} {
+		require.NotContains(t, string(encoded), raw)
+	}
 }
 
 func TestResultProcessorRedactsCodeExecutorFiles(t *testing.T) {
