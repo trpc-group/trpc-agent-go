@@ -2551,16 +2551,20 @@ agent := llmagent.New("ai-assistant",
     llmagent.WithToolSets(toolSets),
     llmagent.WithEnableParallelTools(true), // Enable parallel execution.
     llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
-        MaxConcurrency: 6, // Optional overall limit.
         Groups: []tool.ConcurrencyGroup{
             {
                 ToolNames: []string{"subagent"},
                 Limit:     3,
             },
             {
-                // search and fetch share downstream capacity.
-                ToolNames: []string{"search", "fetch"},
-                Limit:     2,
+                // search calls are serial.
+                ToolNames: []string{"search"},
+                Limit:     1,
+            },
+            {
+                // fetch calls are serial.
+                ToolNames: []string{"fetch"},
+                Limit:     1,
             },
         },
     }),
@@ -2575,22 +2579,55 @@ stateGraph.AddToolsNode(
     tools,
     graph.WithEnableParallelTools(true),
     graph.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
-        MaxConcurrency: 6,
         Groups: []tool.ConcurrencyGroup{
             {ToolNames: []string{"subagent"}, Limit: 3},
-            {ToolNames: []string{"search", "fetch"}, Limit: 2},
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
         },
     }),
 )
 ```
 
-Concurrency limits are process-local and are shared across concurrent
-invocations of the same agent or Tools-node instance. A group containing
-multiple tool names limits their combined active calls. Non-positive limits
-are ignored, and tools outside a group are constrained only by the overall
-limit. The configuration has no effect unless parallel tool execution is
-enabled. Each tool name may appear in only one positive-limit group; duplicate
-membership causes `WithToolConcurrencyConfig` to panic.
+`MaxConcurrency` and group limits are cumulative. Every direct tool call
+counts toward a positive overall limit, while a call in a group must also
+acquire capacity from that group. A group containing multiple tool names
+limits their combined active calls. When `MaxConcurrency` is non-positive,
+there is no overall limit: positive group limits still apply, and tools
+outside those groups have no limit from this configuration.
+
+Limits follow execution ownership. A parent Agent limits only the tools it
+executes directly. If a tool named `subagent` runs a child Agent, the outer
+`subagent` call remains subject to the parent's limit while it is running, but
+`search`, `fetch`, and other tools executed inside the child are not additional
+parent tool calls. Configure those limits on every child Agent that provides
+these tools:
+
+```go
+child := llmagent.New(
+    "worker",
+    llmagent.WithModel(model),
+    llmagent.WithTools([]tool.Tool{searchTool, fetchTool}),
+    llmagent.WithEnableParallelTools(true),
+    llmagent.WithToolConcurrencyConfig(tool.ConcurrencyConfig{
+        Groups: []tool.ConcurrencyGroup{
+            {ToolNames: []string{"search"}, Limit: 1},
+            {ToolNames: []string{"fetch"}, Limit: 1},
+        },
+    }),
+)
+```
+
+The separate groups make `search` and `fetch` individually serial while still
+allowing one of each to run at the same time. Each separately constructed
+child Agent instance has its own limits, so three concurrent child instances
+can run up to three `search` calls and three `fetch` calls in total.
+Concurrent invocations that reuse one child instance share that instance's
+limits. All limits are process-local.
+
+The configuration has no effect unless parallel tool execution is enabled.
+Non-positive group limits are ignored. Each tool name may appear in only one
+positive-limit group; duplicate membership causes
+`WithToolConcurrencyConfig` to panic.
 
 **Parallel execution effect:**
 

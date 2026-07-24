@@ -18,6 +18,11 @@ package tool
 // must appear in at most one positive-limit group. LLMAgent and Graph options
 // reject configurations with duplicate group membership.
 //
+// Limits apply only to calls executed directly by the owning agent or Tools
+// node. If a tool runs a child agent, that child agent's tool calls use the
+// child's concurrency configuration instead. Concurrent invocations that
+// reuse the same child agent instance share its limits.
+//
 // ConcurrencyConfig only affects execution when parallel tools are enabled.
 // Its zero value preserves unrestricted parallel execution.
 type ConcurrencyConfig struct {
