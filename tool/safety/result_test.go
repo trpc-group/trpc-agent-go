@@ -145,6 +145,10 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"secretary":         "visible",
 		"passwordless":      "enabled",
 		"publicKey":         "public-material",
+		"authtokenizer":     "auth-parser",
+		"oauthsecretary":    "oauth-contact",
+		"dbpasswordless":    "database-mode",
+		"mypublickey":       "public-key-material",
 	}
 	processor := mustResultProcessor(t, 4096, nil)
 
@@ -160,7 +164,39 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"secretary":         "visible",
 		"passwordless":      "enabled",
 		"publicKey":         "public-material",
+		"authtokenizer":     "auth-parser",
+		"oauthsecretary":    "oauth-contact",
+		"dbpasswordless":    "database-mode",
+		"mypublickey":       "public-key-material",
 	}, processed.Value)
+}
+
+func TestResultProcessorPreservesCompactSensitiveNameRecognition(t *testing.T) {
+	input := map[string]string{
+		"authtoken":         "opaque-compact-1",
+		"oauthtoken":        "opaque-compact-2",
+		"oauthsecret":       "opaque-compact-3",
+		"dbpassword":        "opaque-compact-4",
+		"userpasswd":        "opaque-compact-5",
+		"myapikey":          "opaque-compact-6",
+		"myprivatekey":      "opaque-compact-7",
+		"githubtoken":       "opaque-compact-8",
+		"serviceaccesskey":  "opaque-compact-9",
+		"signingprivatekey": "opaque-compact-10",
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	for index := 1; index <= len(input); index++ {
+		require.NotContains(t, string(encoded), fmt.Sprintf("opaque-compact-%d", index))
+	}
 }
 
 func TestResultProcessorRedactsSensitiveWordTokensWithSuffixes(t *testing.T) {
