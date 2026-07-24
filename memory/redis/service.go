@@ -30,9 +30,35 @@ import (
 const (
 	// defaultConnectionTimeout is the default timeout for Redis connection test.
 	defaultConnectionTimeout = 5 * time.Second
+
+	updateMemoryResultNotFound = 0
+	updateMemoryResultSuccess  = 1
+	updateMemoryResultConflict = 2
 )
 
 var _ memory.Service = (*Service)(nil)
+
+// luaUpdateMemory atomically updates a memory hash field and, when its
+// canonical ID changes, rejects an existing target before rotating the field.
+var luaUpdateMemory = redis.NewScript(`
+local key = KEYS[1]
+local sourceID = ARGV[1]
+local targetID = ARGV[2]
+local entryJSON = ARGV[3]
+
+if redis.call('HEXISTS', key, sourceID) == 0 then
+    return 0
+end
+if sourceID ~= targetID and redis.call('HEXISTS', key, targetID) == 1 then
+    return 2
+end
+
+redis.call('HSET', key, targetID, entryJSON)
+if sourceID ~= targetID then
+    redis.call('HDEL', key, sourceID)
+end
+return 1
+`)
 
 // Service is the redis memory service.
 // Storage structure:
@@ -199,31 +225,31 @@ func (s *Service) UpdateMemory(ctx context.Context, memoryKey memory.Key, memory
 		ep,
 		now,
 	)
-	if newID != memoryKey.MemoryID {
-		exists, err := s.redisClient.HExists(ctx, key, newID).Result()
-		if err != nil {
-			return fmt.Errorf("check rotated memory id failed: %w", err)
-		}
-		if exists {
-			return fmt.Errorf("memory with id %s already exists", newID)
-		}
-	}
 
 	updated, err := json.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("marshal updated memory entry failed: %w", err)
 	}
-	if newID == memoryKey.MemoryID {
-		if err := s.redisClient.HSet(ctx, key, newID, updated).Err(); err != nil {
-			return fmt.Errorf("update memory entry failed: %w", err)
-		}
-	} else {
-		pipe := s.redisClient.TxPipeline()
-		pipe.HSet(ctx, key, newID, updated)
-		pipe.HDel(ctx, key, memoryKey.MemoryID)
-		if _, err := pipe.Exec(ctx); err != nil {
-			return fmt.Errorf("update memory entry failed: %w", err)
-		}
+	scriptResult, err := luaUpdateMemory.Run(
+		ctx,
+		s.redisClient,
+		[]string{key},
+		memoryKey.MemoryID,
+		newID,
+		string(updated),
+	).Int()
+	if err != nil {
+		return fmt.Errorf("update memory entry failed: %w", err)
+	}
+	switch scriptResult {
+	case updateMemoryResultNotFound:
+		return fmt.Errorf("memory with id %s not found", memoryKey.MemoryID)
+	case updateMemoryResultSuccess:
+		// Continue and publish the effective ID below.
+	case updateMemoryResultConflict:
+		return fmt.Errorf("memory with id %s already exists", newID)
+	default:
+		return fmt.Errorf("update memory entry returned unexpected result %d", scriptResult)
 	}
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = newID

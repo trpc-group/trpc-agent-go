@@ -207,8 +207,13 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 
 	now := time.Now()
 	ep := memory.ResolveUpdateOptions(opts)
+	candidate := *memoryEntry
+	if memoryEntry.Memory != nil {
+		candidateMemory := *memoryEntry.Memory
+		candidate.Memory = &candidateMemory
+	}
 	newID := imemory.ApplyMemoryUpdate(
-		memoryEntry,
+		&candidate,
 		memoryKey.AppName,
 		memoryKey.UserID,
 		memoryStr,
@@ -220,6 +225,17 @@ func (s *MemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, 
 		if _, conflict := userMemories[newID]; conflict {
 			return fmt.Errorf("memory with id %s already exists", newID)
 		}
+	}
+	imemory.ApplyMemoryUpdate(
+		memoryEntry,
+		memoryKey.AppName,
+		memoryKey.UserID,
+		memoryStr,
+		topics,
+		ep,
+		now,
+	)
+	if newID != memoryKey.MemoryID {
 		delete(userMemories, memoryKey.MemoryID)
 	}
 	userMemories[newID] = memoryEntry
