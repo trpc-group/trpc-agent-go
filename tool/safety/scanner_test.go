@@ -366,15 +366,32 @@ func TestDefaultScanner_DoesNotApplyCommandAllowlistToStdinData(t *testing.T) {
 	scanner := MustDefaultScanner(Policy{
 		AllowedCommands: []string{"cat"},
 	})
-	report, err := scanner.Scan(context.Background(), ScanRequest{
-		ToolName: "workspace_exec",
-		Backend:  BackendWorkspace,
-		Command:  "cat",
-		Stdin:    "hello",
+
+	t.Run("benign stdin remains allowed", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "cat",
+			Stdin:    "hello",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+		require.Equal(t, "evaluation.none", report.RuleID)
+		require.False(t, report.Blocked)
 	})
-	require.NoError(t, err)
-	require.Equal(t, DecisionAllow, report.Decision)
-	require.Equal(t, "evaluation.none", report.RuleID)
+
+	t.Run("dangerous stdin is still scanned", func(t *testing.T) {
+		report, err := scanner.Scan(context.Background(), ScanRequest{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspace,
+			Command:  "cat",
+			Stdin:    "rm -rf /",
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "command.dangerous_delete", report.RuleID)
+		require.True(t, report.Blocked)
+	})
 }
 
 func TestDefaultScanner_DetectsCodeResourceAbuse(t *testing.T) {
