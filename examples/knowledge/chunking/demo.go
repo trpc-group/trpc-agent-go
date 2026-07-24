@@ -7,7 +7,7 @@
 //
 
 // Package chunkingdemo shares the sample and strategy execution used by the
-// text and web chunking examples.
+// command-line and web chunking examples.
 package chunkingdemo
 
 import (
