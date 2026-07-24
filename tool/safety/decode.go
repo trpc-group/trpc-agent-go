@@ -24,7 +24,9 @@ import (
 const (
 	workspaceExecutionDefaultTimeoutSeconds = 300
 	skillExecutionDefaultTimeoutSeconds     = 300
-	maxClosedSchemaDepth                    = 100
+	// sessionWriteDefaultYieldMilliseconds mirrors hostexec and workspaceexec.
+	sessionWriteDefaultYieldMilliseconds = 200
+	maxClosedSchemaDepth                 = 100
 )
 
 type decodedPermissionRequest struct {
@@ -61,6 +63,10 @@ func requestFromPermissionRequest(
 		return wrapDecodedPermissionRequest(decodeWorkspaceExecution(base, req.Arguments))
 	case "exec_command":
 		return wrapDecodedPermissionRequest(decodeHostExecution(base, req.Arguments))
+	case "write_stdin":
+		return decodeSessionWrite(base, req.Arguments, BackendHostExec)
+	case "workspace_write_stdin":
+		return decodeSessionWrite(base, req.Arguments, BackendWorkspaceExec)
 	case "skill_run":
 		return wrapDecodedPermissionRequest(decodeSkillExecution(base, req.Arguments, false))
 	case "skill_exec":
@@ -299,6 +305,75 @@ func decodeSkillWrite(
 		Request:          base,
 		needsHumanReview: true,
 	}, true, nil
+}
+
+type sessionWriteArguments struct {
+	SessionID     string          `json:"session_id,omitempty"`
+	SessionIDOld  string          `json:"sessionId,omitempty"`
+	Chars         string          `json:"chars,omitempty"`
+	YieldOwner    json.RawMessage `json:"yield_time_ms,omitempty"`
+	YieldAlias    json.RawMessage `json:"yieldMs,omitempty"`
+	AppendNewline *bool           `json:"append_newline,omitempty"`
+	Submit        *bool           `json:"submit,omitempty"`
+}
+
+func decodeSessionWrite(
+	base Request,
+	raw []byte,
+	backend Backend,
+) (decodedPermissionRequest, bool, error) {
+	var in sessionWriteArguments
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode session write arguments: %w", err)
+	}
+	if strings.TrimSpace(in.SessionID) == "" &&
+		strings.TrimSpace(in.SessionIDOld) == "" {
+		return decodedPermissionRequest{}, false,
+			errors.New("decode session write arguments: session_id is required")
+	}
+	base.Backend = backend
+	timeoutSeconds, err := sessionWriteTimeoutSeconds(
+		in.YieldOwner,
+		in.YieldAlias,
+	)
+	if err != nil {
+		return decodedPermissionRequest{}, false,
+			fmt.Errorf("decode session write duration: %w", err)
+	}
+	base.TimeoutSeconds = timeoutSeconds
+	return decodedPermissionRequest{
+		Request: base,
+		needsHumanReview: in.Chars != "" || firstBoolValue(
+			in.AppendNewline,
+			in.Submit,
+		),
+	}, true, nil
+}
+
+func sessionWriteTimeoutSeconds(values ...json.RawMessage) (int, error) {
+	yieldMilliseconds := sessionWriteDefaultYieldMilliseconds
+	selected := false
+	for _, raw := range values {
+		if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+			continue
+		}
+		var value int
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return 0, err
+		}
+		if !selected {
+			yieldMilliseconds = value
+			selected = true
+		}
+	}
+	if yieldMilliseconds < 0 {
+		yieldMilliseconds = sessionWriteDefaultYieldMilliseconds
+	}
+	if yieldMilliseconds <= 0 {
+		return 0, nil
+	}
+	return (yieldMilliseconds-1)/1000 + 1, nil
 }
 
 func scanDecodedPermissionRequest(

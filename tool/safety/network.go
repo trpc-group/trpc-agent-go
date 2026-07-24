@@ -169,14 +169,18 @@ func webClientDestinations(base string, args []string) ([]string, bool) {
 	valueOptions := map[string]struct{}{
 		"--cacert": {}, "--capath": {}, "--cert": {}, "--config": {},
 		"--connect-timeout": {}, "--connect-to": {}, "--cookie": {}, "--cookie-jar": {},
-		"--data": {}, "--data-binary": {}, "--data-raw": {}, "--directory-prefix": {},
-		"--execute": {}, "--form": {}, "--header": {}, "--interface": {}, "--json": {}, "--key": {},
+		"--data": {}, "--data-ascii": {}, "--data-binary": {}, "--data-raw": {},
+		"--data-urlencode":   {},
+		"--directory-prefix": {}, "--execute": {}, "--expand-variable": {},
+		"--form": {}, "--form-string": {},
+		"--header": {}, "--interface": {}, "--json": {}, "--key": {},
 		"--limit-rate": {}, "--max-filesize": {}, "--max-redirs": {}, "--max-time": {},
 		"--method": {}, "--output": {}, "--post-data": {}, "--post-file": {},
-		"--output-document": {}, "--preproxy": {}, "--proxy": {},
+		"--output-document": {}, "--preproxy": {}, "--proxy": {}, "--proxy-header": {},
 		"--read-timeout": {}, "--referer": {}, "--request": {}, "--resolve": {},
 		"--retry": {}, "--retry-delay": {}, "--speed-limit": {}, "--speed-time": {},
-		"--timeout": {}, "--tries": {}, "--upload-file": {}, "--user": {},
+		"--timeout": {}, "--tries": {}, "--upload-file": {}, "--url-query": {},
+		"--user": {}, "--variable": {},
 		"--user-agent": {}, "--wait": {}, "--waitretry": {},
 	}
 	curlValues := []string{

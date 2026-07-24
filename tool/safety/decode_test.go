@@ -168,6 +168,160 @@ func TestDecodeHostExec(t *testing.T) {
 	}
 }
 
+func TestDecodeCanonicalSessionWrites(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	hostWrite := findTool(t, hostSet.Tools(context.Background()), "write_stdin")
+	workspaceWrite := workspaceexec.NewWriteStdinTool(
+		workspaceexec.NewExecTool(nil),
+	)
+
+	for _, tc := range []struct {
+		name    string
+		tool    tool.Tool
+		args    string
+		backend Backend
+		review  bool
+	}{
+		{"host poll", hostWrite, `{"session_id":"host-session"}`, BackendHostExec, false},
+		{"host chars", hostWrite, `{"session_id":"host-session","chars":"session-fragment"}`, BackendHostExec, true},
+		{"host append newline", hostWrite, `{"session_id":"host-session","append_newline":true}`, BackendHostExec, true},
+		{"host submit alias", hostWrite, `{"sessionId":"host-session","submit":true}`, BackendHostExec, true},
+		{"workspace poll", workspaceWrite, `{"session_id":"workspace-session","chars":"","submit":false}`, BackendWorkspaceExec, false},
+		{"workspace chars", workspaceWrite, `{"session_id":"workspace-session","chars":"session-fragment"}`, BackendWorkspaceExec, true},
+		{"workspace append newline", workspaceWrite, `{"session_id":"workspace-session","append_newline":true}`, BackendWorkspaceExec, true},
+		{"workspace submit alias", workspaceWrite, `{"sessionId":"workspace-session","submit":true}`, BackendWorkspaceExec, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decoded, scan, decodeErr := requestFromPermissionRequest(&tool.PermissionRequest{
+				Tool: tc.tool, Arguments: []byte(tc.args),
+			})
+			require.NoError(t, decodeErr)
+			require.True(t, scan)
+			require.Equal(t, tc.backend, decoded.Backend)
+			require.Equal(t, tc.review, decoded.needsHumanReview)
+			require.Empty(t, decoded.Command, "session input is not a shell command")
+			require.Empty(t, decoded.RawArguments, "session input must not be retained")
+		})
+	}
+
+	namedSet := internaltool.NewNamedToolSet(&decodeToolSet{
+		name: "pref", tools: []tool.Tool{hostWrite, workspaceWrite},
+	})
+	for _, named := range namedSet.Tools(context.Background()) {
+		decoded, scan, decodeErr := requestFromPermissionRequest(&tool.PermissionRequest{
+			Tool: named, ToolName: named.Declaration().Name,
+			Arguments: []byte(`{"session_id":"session","chars":"continue"}`),
+		})
+		require.NoError(t, decodeErr)
+		require.True(t, scan)
+		require.True(t, decoded.needsHumanReview, named.Declaration().Name)
+	}
+}
+
+func TestDecodeSessionWriteDurationAndBooleanPrecedence(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	hostWrite := findTool(t, hostSet.Tools(context.Background()), "write_stdin")
+	workspaceWrite := workspaceexec.NewWriteStdinTool(
+		workspaceexec.NewExecTool(nil),
+	)
+	const (
+		ownerYieldField  = "yield" + "_time_ms"
+		mixedYieldField  = "yield" + "-time_ms"
+		dashedYieldField = "yield" + "-time-ms"
+	)
+
+	for _, owner := range []struct {
+		name    string
+		tool    tool.Tool
+		backend Backend
+	}{
+		{"host", hostWrite, BackendHostExec},
+		{"workspace", workspaceWrite, BackendWorkspaceExec},
+	} {
+		for _, tc := range []struct {
+			name        string
+			args        string
+			wantSeconds int
+			wantReview  bool
+		}{
+			{"default poll", `{"session_id":"session"}`, 1, false},
+			{"owner spelling rounds up", sessionDurationArguments(ownerYieldField, "1001"), 2, false},
+			{"unsupported mixed spelling is ignored", sessionDurationArguments(mixedYieldField, "1001"), 1, false},
+			{"unsupported dashed spelling is ignored", sessionDurationArguments(dashedYieldField, "1001"), 1, false},
+			{"duration alias", `{"session_id":"session","yieldMs":2001}`, 3, false},
+			{"owner zero wins alias", sessionDurationAndAliasArguments(ownerYieldField, "0", "600001"), 0, false},
+			{"null owner selects alias", sessionDurationAndAliasArguments(ownerYieldField, "null", "600001"), 601, false},
+			{"null alias does not replace owner", sessionDurationAndAliasArguments(ownerYieldField, "0", "null"), 0, false},
+			{"unsupported mixed cannot hide alias", sessionDurationAndAliasArguments(mixedYieldField, "0", "600001"), 601, false},
+			{"unsupported dashed cannot hide alias", sessionDurationAndAliasArguments(dashedYieldField, "0", "600001"), 601, false},
+			{"owner negative uses default", sessionDurationAndAliasArguments(ownerYieldField, "-1", "600001"), 1, false},
+			{"owner long wins zero alias", sessionDurationAndAliasArguments(ownerYieldField, "600001", "0"), 601, false},
+			{"primary false wins", `{"session_id":"session","append_newline":false,"submit":true}`, 1, false},
+			{"primary true wins", `{"session_id":"session","append_newline":true,"submit":false}`, 1, true},
+			{"submit alias", `{"session_id":"session","submit":true}`, 1, true},
+		} {
+			t.Run(owner.name+" "+tc.name, func(t *testing.T) {
+				decoded, scan, decodeErr := requestFromPermissionRequest(
+					&tool.PermissionRequest{Tool: owner.tool, Arguments: []byte(tc.args)},
+				)
+				require.NoError(t, decodeErr)
+				require.True(t, scan)
+				require.Equal(t, owner.backend, decoded.Backend)
+				require.Equal(t, tc.wantSeconds, decoded.TimeoutSeconds)
+				require.Equal(t, tc.wantReview, decoded.needsHumanReview)
+			})
+		}
+	}
+
+	_, scan, err := requestFromPermissionRequest(&tool.PermissionRequest{
+		Tool: hostWrite,
+		Arguments: []byte(sessionDurationArguments(
+			ownerYieldField,
+			"9223372036854775808",
+		)),
+	})
+	require.Error(t, err)
+	require.False(t, scan)
+
+	for _, tc := range []struct {
+		name  string
+		alias string
+	}{
+		{"overflow", "9223372036854775808"},
+		{"string", `"1000"`},
+		{"float", "1.5"},
+		{"object", `{}`},
+	} {
+		t.Run("unselected alias "+tc.name, func(t *testing.T) {
+			_, invalidScan, invalidErr := requestFromPermissionRequest(
+				&tool.PermissionRequest{
+					Tool: hostWrite,
+					Arguments: []byte(sessionDurationAndAliasArguments(
+						ownerYieldField,
+						"0",
+						tc.alias,
+					)),
+				},
+			)
+			require.Error(t, invalidErr)
+			require.False(t, invalidScan)
+		})
+	}
+}
+
+func sessionDurationArguments(field, value string) string {
+	return `{"session_id":"session","` + field + `":` + value + `}`
+}
+
+func sessionDurationAndAliasArguments(field, value, alias string) string {
+	return `{"session_id":"session","` + field + `":` + value +
+		`,"yieldMs":` + alias + `}`
+}
+
 func TestDecodeCodeExec(t *testing.T) {
 	execTool := codeexec.NewTool(nil)
 	wantMany := []codeexecutor.CodeBlock{

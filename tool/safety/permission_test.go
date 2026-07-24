@@ -23,6 +23,8 @@ import (
 
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 var _ tool.PermissionPolicy = (*PermissionPolicy)(nil)
@@ -111,6 +113,128 @@ func TestPermissionPolicySkillWriteStdinSemantics(t *testing.T) {
 			require.NotContains(t, string(encoded), "token-secret")
 		})
 	}
+}
+
+func TestPermissionPolicyCanonicalSessionWritesRequireReview(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	hostWrite := findTool(t, hostSet.Tools(context.Background()), "write_stdin")
+	workspaceWrite := workspaceexec.NewWriteStdinTool(
+		workspaceexec.NewExecTool(nil),
+	)
+
+	for _, tc := range []struct {
+		name    string
+		tool    tool.Tool
+		backend Backend
+	}{
+		{"host", hostWrite, BackendHostExec},
+		{"workspace", workspaceWrite, BackendWorkspaceExec},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const fragment = "interactive-fragment-must-not-leak"
+			sink := &recordingAuditSink{}
+			policy := NewPermissionPolicy(
+				mustPermissionGuard(t, DefaultPolicy()),
+				WithAuditSink(sink),
+			)
+			decision, checkErr := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					Tool: tc.tool, ToolName: tc.tool.Declaration().Name,
+					Arguments: []byte(`{"session_id":"session","chars":"` + fragment + `"}`),
+				},
+			)
+			require.NoError(t, checkErr)
+			require.Equal(t, tool.PermissionActionAsk, decision.Action)
+			require.Contains(t, decision.Reason, "session.interactive_input")
+
+			events := sink.snapshot()
+			require.Len(t, events, 1)
+			require.Equal(t, tc.backend, events[0].Backend)
+			require.Equal(t, "session.interactive_input", events[0].RuleID)
+			encoded, encodeErr := json.Marshal(events[0])
+			require.NoError(t, encodeErr)
+			require.NotContains(t, string(encoded), fragment)
+		})
+	}
+}
+
+func TestPermissionPolicyCanonicalSessionPollDuration(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	hostWrite := findTool(t, hostSet.Tools(context.Background()), "write_stdin")
+	workspaceWrite := workspaceexec.NewWriteStdinTool(
+		workspaceexec.NewExecTool(nil),
+	)
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	const (
+		ownerYieldField  = "yield" + "_time_ms"
+		mixedYieldField  = "yield" + "-time_ms"
+		dashedYieldField = "yield" + "-time-ms"
+	)
+
+	for _, owner := range []struct {
+		name string
+		tool tool.Tool
+	}{
+		{"host", hostWrite},
+		{"workspace", workspaceWrite},
+	} {
+		for _, tc := range []struct {
+			name       string
+			args       string
+			wantAction tool.PermissionAction
+			wantErr    bool
+			wantReason string
+		}{
+			{"normal default poll", `{"session_id":"session"}`, tool.PermissionActionAllow, false, ""},
+			{"long owner spelling", sessionDurationArguments(ownerYieldField, "300001"), tool.PermissionActionDeny, false, "resource.timeout"},
+			{"unsupported mixed spelling is ignored", sessionDurationArguments(mixedYieldField, "300001"), tool.PermissionActionAllow, false, ""},
+			{"unsupported dashed spelling is ignored", sessionDurationArguments(dashedYieldField, "300001"), tool.PermissionActionAllow, false, ""},
+			{"long alias poll", `{"session_id":"session","yieldMs":300001}`, tool.PermissionActionDeny, false, "resource.timeout"},
+			{"owner zero wins alias", sessionDurationAndAliasArguments(ownerYieldField, "0", "300001"), tool.PermissionActionAllow, false, ""},
+			{"null owner selects alias", sessionDurationAndAliasArguments(ownerYieldField, "null", "300001"), tool.PermissionActionDeny, false, "resource.timeout"},
+			{"null alias does not replace owner", sessionDurationAndAliasArguments(ownerYieldField, "0", "null"), tool.PermissionActionAllow, false, ""},
+			{"unsupported mixed cannot hide alias", sessionDurationAndAliasArguments(mixedYieldField, "0", "300001"), tool.PermissionActionDeny, false, "resource.timeout"},
+			{"unsupported dashed cannot hide alias", sessionDurationAndAliasArguments(dashedYieldField, "0", "300001"), tool.PermissionActionDeny, false, "resource.timeout"},
+			{"owner negative uses default", sessionDurationAndAliasArguments(ownerYieldField, "-1", "300001"), tool.PermissionActionAllow, false, ""},
+			{"owner long wins zero alias", sessionDurationAndAliasArguments(ownerYieldField, "300001", "0"), tool.PermissionActionDeny, false, "resource.timeout"},
+			{"unselected alias overflow fails closed", sessionDurationAndAliasArguments(ownerYieldField, "0", "9223372036854775808"), tool.PermissionActionDeny, true, "safety.decode_error"},
+			{"unselected alias string fails closed", sessionDurationAndAliasArguments(ownerYieldField, "0", `"1000"`), tool.PermissionActionDeny, true, "safety.decode_error"},
+			{"unselected alias float fails closed", sessionDurationAndAliasArguments(ownerYieldField, "0", "1.5"), tool.PermissionActionDeny, true, "safety.decode_error"},
+			{"unselected alias object fails closed", sessionDurationAndAliasArguments(ownerYieldField, "0", `{}`), tool.PermissionActionDeny, true, "safety.decode_error"},
+			{"selected overflow fails closed", sessionDurationArguments(ownerYieldField, "9223372036854775808"), tool.PermissionActionDeny, true, "safety.decode_error"},
+		} {
+			t.Run(owner.name+" "+tc.name, func(t *testing.T) {
+				decision, checkErr := policy.CheckToolPermission(
+					context.Background(),
+					&tool.PermissionRequest{Tool: owner.tool, Arguments: []byte(tc.args)},
+				)
+				if tc.wantErr {
+					require.Error(t, checkErr)
+				} else {
+					require.NoError(t, checkErr)
+				}
+				require.Equal(t, tc.wantAction, decision.Action)
+				if tc.wantReason != "" {
+					require.Contains(t, decision.Reason, tc.wantReason)
+				}
+			})
+		}
+	}
+
+	namedSet := internaltool.NewNamedToolSet(&permissionToolSet{tool: hostWrite})
+	named := namedSet.Tools(context.Background())[0]
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		Tool: named, ToolName: named.Declaration().Name,
+		Arguments: []byte(sessionDurationArguments(ownerYieldField, "300001")),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "resource.timeout")
 }
 
 func TestPermissionPolicyUsesNamedToolCanonicalDeclaration(t *testing.T) {
