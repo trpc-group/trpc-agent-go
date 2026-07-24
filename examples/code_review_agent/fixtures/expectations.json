@@ -1,0 +1,25 @@
+{
+  "scenarios": [
+    {"id":"clean","fixture":"clean"},
+    {"id":"security","fixture":"security"},
+    {"id":"goroutine_context","fixture":"goroutine_context"},
+    {"id":"resource_lifecycle","fixture":"resource_lifecycle"},
+    {"id":"database_lifecycle","fixture":"database_lifecycle"},
+    {"id":"missing_tests","fixture":"missing_tests"},
+    {"id":"duplicate_finding","fixture":"duplicate_finding"},
+    {"id":"sandbox_failure","fixture":"sandbox_failure"},
+    {"id":"secret_redaction","fixture":"secret_redaction"}
+  ],
+  "units": [
+    {"fixture":"clean","file":"clean.go","line_min":1,"line_max":3,"category":"security","positive":false,"high_risk":true},
+    {"fixture":"security","file":"security.go","line_min":6,"line_max":6,"category":"security","positive":true,"high_risk":true},
+    {"fixture":"goroutine_context","file":"worker.go","line_min":6,"line_max":6,"category":"context_leak","positive":true,"high_risk":true},
+    {"fixture":"goroutine_context","file":"worker.go","line_min":7,"line_max":7,"category":"goroutine_leak","positive":true,"high_risk":true},
+    {"fixture":"resource_lifecycle","file":"resource.go","line_min":6,"line_max":6,"category":"resource_lifecycle","positive":true,"high_risk":true},
+    {"fixture":"database_lifecycle","file":"database.go","line_min":6,"line_max":6,"category":"database_lifecycle","positive":true,"high_risk":true},
+    {"fixture":"missing_tests","file":"behavior.go","line_min":1,"line_max":3,"category":"missing_tests","positive":true,"high_risk":false},
+    {"fixture":"duplicate_finding","file":"duplicate.go","line_min":6,"line_max":6,"category":"security","positive":true,"high_risk":true},
+    {"fixture":"clean","file":"clean_test.go","line_min":1,"line_max":9,"category":"security","positive":false,"high_risk":true},
+    {"fixture":"secret_redaction","file":"config.go","line_min":3,"line_max":3,"category":"sensitive_information","positive":true,"high_risk":true}
+  ]
+}

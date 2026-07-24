@@ -1,0 +1,10 @@
+[
+  {"id":"GO-SECRET-001","category":"sensitive_information","severity":"critical","confidence":0.95,"modes":["ast","patch"],"implementation":"secret","enabled":true},
+  {"id":"GO-SEC-001","category":"security","severity":"high","confidence":0.90,"modes":["ast","patch"],"implementation":"security","enabled":true},
+  {"id":"GO-CTX-001","category":"context_leak","severity":"high","confidence":0.86,"modes":["ast","patch"],"implementation":"context","enabled":true},
+  {"id":"GO-GOR-001","category":"goroutine_leak","severity":"medium","confidence":0.70,"modes":["ast","patch"],"implementation":"goroutine","enabled":true},
+  {"id":"GO-RES-001","category":"resource_lifecycle","severity":"high","confidence":0.86,"modes":["ast","patch"],"implementation":"resource","enabled":true},
+  {"id":"GO-ERR-001","category":"error_handling","severity":"medium","confidence":0.82,"modes":["ast","patch"],"implementation":"error","enabled":true},
+  {"id":"GO-DB-001","category":"database_lifecycle","severity":"high","confidence":0.86,"modes":["ast","patch"],"implementation":"database","enabled":true},
+  {"id":"GO-TEST-001","category":"missing_tests","severity":"medium","confidence":0.75,"modes":["ast","patch"],"implementation":"tests","enabled":true}
+]

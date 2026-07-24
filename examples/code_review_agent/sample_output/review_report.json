@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0.0",
+  "task": {
+    "id": "review-a57a6dec5548602b",
+    "status": "completed",
+    "input_kind": "diff",
+    "input_digest": "eca93c1af2be9d3a2b80688efadfd7ea4379f0ce05a13887c666f3df4de090b5",
+    "started_at": "2026-07-22T13:07:36.468502475Z",
+    "finished_at": "2026-07-22T13:07:36.654526146Z",
+    "conclusion": "changes_requested"
+  },
+  "input_summary": {
+    "file_count": 2,
+    "hunk_count": 2,
+    "added_lines": 4,
+    "packages": []
+  },
+  "conclusion": "changes_requested",
+  "findings_summary": {
+    "findings": 1,
+    "warnings": 0,
+    "needs_human_review": 0
+  },
+  "findings": [
+    {
+      "bucket": "findings",
+      "severity": "critical",
+      "category": "sensitive_information",
+      "file": "config.go",
+      "line": 3,
+      "title": "Hard-coded secret",
+      "evidence": "var [REDACTED:named_secret:2ca46602]",
+      "recommendation": "Load credential from an approved secret provider and rotate exposed value.",
+      "confidence": 0.95,
+      "source": "deterministic_patch",
+      "rule_id": "GO-SECRET-001"
+    }
+  ],
+  "warnings": [],
+  "needs_human_review": [],
+  "severity_counts": {
+    "critical": 1
+  },
+  "governance": {
+    "blocked": 0,
+    "decisions": []
+  },
+  "sandbox_runs": [],
+  "metrics": {
+    "total_duration_ms": 186,
+    "sandbox_duration_ms": 0,
+    "tool_calls": 0,
+    "permission_blocks": 0,
+    "finding_count": 1,
+    "severity_counts": {
+      "critical": 1
+    },
+    "error_type_counts": {}
+  },
+  "artifacts": []
+}

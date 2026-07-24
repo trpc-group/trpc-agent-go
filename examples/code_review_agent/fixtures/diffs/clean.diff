@@ -1,0 +1,22 @@
+diff --git a/clean.go b/clean.go
+new file mode 100644
+--- /dev/null
++++ b/clean.go
+@@ -0,0 +1,3 @@
++package fixture
++
++func Add(left, right int) int { return left + right }
+diff --git a/clean_test.go b/clean_test.go
+new file mode 100644
+--- /dev/null
++++ b/clean_test.go
+@@ -0,0 +1,9 @@
++package fixture
++
++import "testing"
++
++func TestAdd(t *testing.T) {
++	if Add(1, 2) != 3 {
++		t.Fatal("bad sum")
++	}
++}
