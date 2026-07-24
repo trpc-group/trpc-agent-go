@@ -37,6 +37,11 @@ type rotationRaceHook struct {
 	inject func()
 }
 
+type updateMemoryScriptHook struct {
+	result int64
+	err    error
+}
+
 func (h *rotationRaceHook) DialHook(next goredis.DialHook) goredis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		return next(ctx, network, addr)
@@ -66,6 +71,37 @@ func (h *rotationRaceHook) ProcessPipelineHook(next goredis.ProcessPipelineHook)
 		h.once.Do(h.inject)
 		return next(ctx, cmds)
 	}
+}
+
+func (h *updateMemoryScriptHook) DialHook(next goredis.DialHook) goredis.DialHook {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return next(ctx, network, addr)
+	}
+}
+
+func (h *updateMemoryScriptHook) ProcessHook(next goredis.ProcessHook) goredis.ProcessHook {
+	return func(ctx context.Context, cmd goredis.Cmder) error {
+		switch cmd.Name() {
+		case "eval", "evalsha":
+			if h.err != nil {
+				return h.err
+			}
+			result, ok := cmd.(*goredis.Cmd)
+			if !ok {
+				return fmt.Errorf("unexpected script command type %T", cmd)
+			}
+			result.SetVal(h.result)
+			return nil
+		default:
+			return next(ctx, cmd)
+		}
+	}
+}
+
+func (h *updateMemoryScriptHook) ProcessPipelineHook(
+	next goredis.ProcessPipelineHook,
+) goredis.ProcessPipelineHook {
+	return next
 }
 
 func TestBuildUserMemKey(t *testing.T) {
@@ -581,6 +617,102 @@ func TestService_UpdateMemory_ConcurrentTargetCreationDoesNotOverwriteTarget(t *
 	require.Contains(t, entriesByID, targetID)
 	require.Equal(t, "source", entriesByID[sourceID].Memory.Memory)
 	require.Equal(t, "target", entriesByID[targetID].Memory.Memory)
+}
+
+func TestService_UpdateMemory_ScriptFailureLeavesResultUntouched(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "source", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	svc.redisClient.AddHook(&updateMemoryScriptHook{
+		err: fmt.Errorf("script failed"),
+	})
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: entries[0].ID,
+		},
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.ErrorContains(t, err, "update memory entry failed")
+	require.Equal(t, "unchanged", result.MemoryID)
+}
+
+func TestService_UpdateMemory_SourceRemovedBeforeScript(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+
+	svc, err := NewService(WithRedisClientURL("redis://" + mr.Addr()))
+	require.NoError(t, err)
+	defer func() { require.NoError(t, svc.Close()) }()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "source", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	sourceID := entries[0].ID
+
+	svc.redisClient.AddHook(&rotationRaceHook{
+		inject: func() {
+			mr.HDel(buildUserMemKey(userKey), sourceID)
+		},
+	})
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: sourceID,
+		},
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.ErrorContains(t, err, "not found")
+	require.Equal(t, "unchanged", result.MemoryID)
+}
+
+func TestService_UpdateMemory_UnexpectedScriptResult(t *testing.T) {
+	svc, cleanup := newTestService(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "test-app", UserID: "u1"}
+	require.NoError(t, svc.AddMemory(ctx, userKey, "source", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 10)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	svc.redisClient.AddHook(&updateMemoryScriptHook{result: 99})
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err = svc.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: entries[0].ID,
+		},
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.ErrorContains(t, err, "unexpected result 99")
+	require.Equal(t, "unchanged", result.MemoryID)
 }
 
 func TestService_DeleteMemory(t *testing.T) {

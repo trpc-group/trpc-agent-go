@@ -43,6 +43,61 @@ func openTempSQLiteDB(t *testing.T) (*sql.DB, func()) {
 	return db, cleanup
 }
 
+func setupUpdateMemoryRotation(
+	t *testing.T,
+	softDelete bool,
+	deletedTarget bool,
+) (*sql.DB, *Service, memory.Key, string) {
+	t.Helper()
+
+	db, cleanup := openTempSQLiteDB(t)
+	t.Cleanup(cleanup)
+
+	var opts []ServiceOpt
+	if softDelete {
+		opts = append(opts, WithSoftDelete(true))
+	}
+	svc, err := NewService(db, opts...)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = svc.Close()
+	})
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "u1"}
+	var targetID string
+	if deletedTarget {
+		require.NoError(t, svc.AddMemory(ctx, userKey, "target", nil))
+		entries, err := svc.ReadMemories(ctx, userKey, 0)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		targetID = entries[0].ID
+		_, err = db.Exec(
+			"UPDATE memories SET deleted_at = 1 WHERE memory_id = ?",
+			targetID,
+		)
+		require.NoError(t, err)
+	}
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "source", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	var sourceID string
+	for _, entry := range entries {
+		if entry.Memory.Memory == "source" {
+			sourceID = entry.ID
+			break
+		}
+	}
+	require.NotEmpty(t, sourceID)
+
+	return db, svc, memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: sourceID,
+	}, targetID
+}
+
 func TestNewService_NilDB(t *testing.T) {
 	svc, err := NewService(nil)
 	require.Error(t, err)
@@ -492,6 +547,197 @@ func TestService_UpdateMemory_HardDeleteReplacesSoftDeletedTarget(t *testing.T) 
 	require.Len(t, entries, 1)
 	require.Equal(t, targetID, entries[0].ID)
 	require.True(t, entries[0].CreatedAt.Equal(sourceCreatedAt))
+}
+
+func TestService_UpdateMemory_RotationErrorsRollback(t *testing.T) {
+	tests := []struct {
+		name          string
+		softDelete    bool
+		deletedTarget bool
+		arrange       func(*testing.T, *sql.DB, memory.Key, string)
+		want          string
+	}{
+		{
+			name:          "target query",
+			softDelete:    true,
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, targetID string) {
+				_, err := db.Exec(
+					"UPDATE memories SET deleted_at = 'invalid' WHERE memory_id = ?",
+					targetID,
+				)
+				require.NoError(t, err)
+			},
+			want: "check rotated memory target",
+		},
+		{
+			name:          "target data",
+			softDelete:    true,
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, targetID string) {
+				_, err := db.Exec(
+					"UPDATE memories SET memory_data = 'invalid' WHERE memory_id = ?",
+					targetID,
+				)
+				require.NoError(t, err)
+			},
+			want: "unmarshal rotated memory target",
+		},
+		{
+			name:          "revive target exec",
+			softDelete:    true,
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER fail_memory_update
+BEFORE UPDATE ON memories
+BEGIN
+	SELECT RAISE(ABORT, 'update failed');
+END`)
+				require.NoError(t, err)
+			},
+			want: "revive rotated memory target",
+		},
+		{
+			name:          "revive target zero rows",
+			softDelete:    true,
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER ignore_memory_update
+BEFORE UPDATE ON memories
+BEGIN
+	SELECT RAISE(IGNORE);
+END`)
+				require.NoError(t, err)
+			},
+			want: "not found",
+		},
+		{
+			name:          "delete target exec",
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER fail_memory_delete
+BEFORE DELETE ON memories
+BEGIN
+	SELECT RAISE(ABORT, 'delete failed');
+END`)
+				require.NoError(t, err)
+			},
+			want: "delete rotated memory target",
+		},
+		{
+			name:          "delete target zero rows",
+			deletedTarget: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER ignore_memory_delete
+BEFORE DELETE ON memories
+BEGIN
+	SELECT RAISE(IGNORE);
+END`)
+				require.NoError(t, err)
+			},
+			want: "not found",
+		},
+		{
+			name: "insert target",
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER fail_memory_insert
+BEFORE INSERT ON memories
+BEGIN
+	SELECT RAISE(ABORT, 'insert failed');
+END`)
+				require.NoError(t, err)
+			},
+			want: "insert rotated memory target",
+		},
+		{
+			name:       "remove source exec",
+			softDelete: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER fail_memory_update
+BEFORE UPDATE ON memories
+BEGIN
+	SELECT RAISE(ABORT, 'update failed');
+END`)
+				require.NoError(t, err)
+			},
+			want: "remove rotated memory source",
+		},
+		{
+			name:       "remove source zero rows",
+			softDelete: true,
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				_, err := db.Exec(`
+CREATE TRIGGER ignore_memory_update
+BEFORE UPDATE ON memories
+BEGIN
+	SELECT RAISE(IGNORE);
+END`)
+				require.NoError(t, err)
+			},
+			want: "not found",
+		},
+		{
+			name: "commit",
+			arrange: func(t *testing.T, db *sql.DB, _ memory.Key, _ string) {
+				db.SetMaxOpenConns(1)
+				_, err := db.Exec("PRAGMA foreign_keys = ON")
+				require.NoError(t, err)
+				_, err = db.Exec("CREATE TABLE rotation_parent (id INTEGER PRIMARY KEY)")
+				require.NoError(t, err)
+				_, err = db.Exec(`
+CREATE TABLE rotation_child (
+	parent_id INTEGER,
+	FOREIGN KEY (parent_id) REFERENCES rotation_parent(id)
+		DEFERRABLE INITIALLY DEFERRED
+)`)
+				require.NoError(t, err)
+				_, err = db.Exec(`
+CREATE TRIGGER fail_rotation_commit
+AFTER INSERT ON memories
+BEGIN
+	INSERT INTO rotation_child (parent_id) VALUES (1);
+END`)
+				require.NoError(t, err)
+			},
+			want: "commit rotated memory transaction",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, svc, key, targetID := setupUpdateMemoryRotation(
+				t,
+				tt.softDelete,
+				tt.deletedTarget,
+			)
+			tt.arrange(t, db, key, targetID)
+
+			result := &memory.UpdateResult{MemoryID: "unchanged"}
+			err := svc.UpdateMemory(
+				context.Background(),
+				key,
+				"target",
+				nil,
+				memory.WithUpdateResult(result),
+			)
+			require.ErrorContains(t, err, tt.want)
+			require.Equal(t, "unchanged", result.MemoryID)
+
+			var sourceRows int
+			err = db.QueryRow(
+				"SELECT COUNT(*) FROM memories WHERE memory_id = ? AND deleted_at IS NULL",
+				key.MemoryID,
+			).Scan(&sourceRows)
+			require.NoError(t, err)
+			require.Equal(t, 1, sourceRows)
+		})
+	}
 }
 
 func TestService_ClearMemories_HardDelete(t *testing.T) {

@@ -118,6 +118,54 @@ func (m updateTimeMatcher) Match(value driver.Value) bool {
 	return ok && got.Equal(m.want)
 }
 
+func setupUpdateMemoryRotationMock(
+	t *testing.T,
+	softDelete bool,
+) (*Service, sqlmock.Sqlmock, memory.Key, string) {
+	t.Helper()
+
+	db, mock := setupMockDB(t)
+	svc := setupMockService(
+		t,
+		db,
+		mock,
+		WithSkipDBInit(true),
+		WithSoftDelete(softDelete),
+		WithMemoryLimit(0),
+	)
+	t.Cleanup(func() {
+		require.NoError(t, mock.ExpectationsWereMet())
+		_ = svc.Close()
+	})
+
+	key := memory.Key{
+		AppName:  "test-app",
+		UserID:   "u1",
+		MemoryID: "source-id",
+	}
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{
+			Memory: "target",
+			Kind:   memory.KindFact,
+		},
+		key.AppName,
+		key.UserID,
+	)
+	expectUpdateLoad(
+		mock,
+		key,
+		softDelete,
+		"source",
+		nil,
+		string(memory.KindFact),
+		nil,
+		nil,
+		nil,
+	)
+	mock.ExpectBegin()
+	return svc, mock, key, targetID
+}
+
 // Options tests.
 
 func TestServiceOpts_Defaults(t *testing.T) {
@@ -1193,6 +1241,171 @@ func TestService_UpdateMemory_HardDeleteReplacesSoftDeletedTarget(t *testing.T) 
 	require.NoError(t, err)
 	assert.Equal(t, targetID, result.MemoryID)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestService_UpdateMemory_RotatedTargetErrors(t *testing.T) {
+	tests := []struct {
+		name       string
+		softDelete bool
+		expect     func(sqlmock.Sqlmock, memory.Key, string)
+		want       string
+	}{
+		{
+			name:       "target query",
+			softDelete: true,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnError(fmt.Errorf("target query failed"))
+			},
+			want: "check rotated memory target failed",
+		},
+		{
+			name:       "revive target",
+			softDelete: true,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("UPDATE.*deleted_at = NULL").
+					WillReturnError(fmt.Errorf("revive failed"))
+			},
+			want: "revive rotated memory target failed",
+		},
+		{
+			name:       "revive rows affected",
+			softDelete: true,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("UPDATE.*deleted_at = NULL").
+					WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected failed")))
+			},
+			want: "revive rotated memory target rows affected failed",
+		},
+		{
+			name:       "revive zero rows",
+			softDelete: true,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("UPDATE.*deleted_at = NULL").
+					WillReturnResult(sqlmock.NewResult(0, 0))
+			},
+			want: "not found",
+		},
+		{
+			name:       "delete target",
+			softDelete: false,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("DELETE FROM").
+					WillReturnError(fmt.Errorf("delete failed"))
+			},
+			want: "delete rotated memory target failed",
+		},
+		{
+			name:       "delete target rows affected",
+			softDelete: false,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("DELETE FROM").
+					WillReturnResult(sqlmock.NewErrorResult(fmt.Errorf("rows affected failed")))
+			},
+			want: "delete rotated memory target rows affected failed",
+		},
+		{
+			name:       "delete target zero rows",
+			softDelete: false,
+			expect: func(mock sqlmock.Sqlmock, key memory.Key, targetID string) {
+				mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+					WithArgs(targetID, key.AppName, key.UserID).
+					WillReturnRows(sqlmock.NewRows([]string{"active"}).AddRow(false))
+				mock.ExpectExec("DELETE FROM").
+					WillReturnResult(sqlmock.NewResult(0, 0))
+			},
+			want: "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, mock, key, targetID := setupUpdateMemoryRotationMock(t, tt.softDelete)
+			tt.expect(mock, key, targetID)
+			mock.ExpectRollback()
+
+			result := &memory.UpdateResult{MemoryID: "unchanged"}
+			err := svc.UpdateMemory(
+				context.Background(),
+				key,
+				"target",
+				nil,
+				memory.WithUpdateResult(result),
+			)
+			require.ErrorContains(t, err, tt.want)
+			assert.Equal(t, "unchanged", result.MemoryID)
+		})
+	}
+}
+
+func TestService_UpdateMemory_RotatedSourceErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		result driver.Result
+		err    error
+		want   string
+	}{
+		{
+			name: "remove source",
+			err:  fmt.Errorf("remove failed"),
+			want: "remove rotated memory source failed",
+		},
+		{
+			name:   "remove source rows affected",
+			result: sqlmock.NewErrorResult(fmt.Errorf("rows affected failed")),
+			want:   "remove rotated memory source rows affected failed",
+		},
+		{
+			name:   "remove source zero rows",
+			result: sqlmock.NewResult(0, 0),
+			want:   "not found",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, mock, key, targetID := setupUpdateMemoryRotationMock(t, true)
+			mock.ExpectQuery("SELECT deleted_at IS NULL FROM.*FOR UPDATE").
+				WithArgs(targetID, key.AppName, key.UserID).
+				WillReturnError(sql.ErrNoRows)
+			mock.ExpectExec("INSERT INTO").
+				WillReturnResult(sqlmock.NewResult(1, 1))
+			remove := mock.ExpectExec("UPDATE.*SET deleted_at")
+			if tt.err != nil {
+				remove.WillReturnError(tt.err)
+			} else {
+				remove.WillReturnResult(tt.result)
+			}
+			mock.ExpectRollback()
+
+			result := &memory.UpdateResult{MemoryID: "unchanged"}
+			err := svc.UpdateMemory(
+				context.Background(),
+				key,
+				"target",
+				nil,
+				memory.WithUpdateResult(result),
+			)
+			require.ErrorContains(t, err, tt.want)
+			assert.Equal(t, "unchanged", result.MemoryID)
+		})
+	}
 }
 
 func TestService_UpdateMemory_WithoutMetadataDoesNotOverwriteMetadataColumns(t *testing.T) {
