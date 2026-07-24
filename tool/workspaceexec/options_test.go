@@ -200,3 +200,27 @@ func TestKillSessionTool_Declaration(t *testing.T) {
 		decl.OutputSchema.Required,
 	)
 }
+
+func TestWithWorkspaceAcquirer_SetsRegistry(t *testing.T) {
+	reg := codeexecutor.NewWorkspaceRegistry()
+	tl := &ExecTool{}
+	WithWorkspaceAcquirer(reg)(tl)
+	require.Same(t, reg, tl.reg)
+}
+
+func TestWithWorkspaceRegistry_TypedNilStaysNil(t *testing.T) {
+	var reg *codeexecutor.WorkspaceRegistry
+	tl := &ExecTool{}
+	WithWorkspaceRegistry(reg)(tl)
+	// A typed-nil *WorkspaceRegistry must collapse to a true nil interface so
+	// the tool falls back to its default registry (== nil, not require.Nil,
+	// which would also accept a typed-nil wrapper).
+	require.True(t, tl.reg == nil)
+}
+
+func TestWithWorkspaceAcquirer_TypedNilStaysNil(t *testing.T) {
+	var reg *codeexecutor.WorkspaceRegistry
+	tl := &ExecTool{}
+	WithWorkspaceAcquirer(reg)(tl)
+	require.True(t, tl.reg == nil)
+}

@@ -78,8 +78,8 @@ type LLMAgent struct {
 	userToolNames           map[string]bool // Names of tools explicitly registered
 	// via WithTools and WithToolSets.
 	codeExecutor         codeexecutor.CodeExecutor
-	workspaceRegistry    *codeexecutor.WorkspaceRegistry
-	workspaceRegistries  map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry
+	workspaceRegistry    codeexecutor.WorkspaceAcquirer
+	workspaceRegistries  map[workspaceRegistryKey]codeexecutor.WorkspaceAcquirer
 	planner              planner.Planner
 	subAgents            []agent.Agent // Sub-agents that can be delegated to
 	agentCallbacks       *agent.Callbacks
@@ -788,8 +788,8 @@ func initializeModels(options *Options) (model.Model, map[string]model.Model) {
 // should be stored on the agent for future reuse.
 func registerTools(
 	options *Options,
-	existingReg *codeexecutor.WorkspaceRegistry,
-) ([]tool.Tool, map[string]bool, *codeexecutor.WorkspaceRegistry) {
+	existingReg codeexecutor.WorkspaceAcquirer,
+) ([]tool.Tool, map[string]bool, codeexecutor.WorkspaceAcquirer) {
 	// Step 1: collect user-registered tools (WithTools + WithToolSets)
 	// and knowledge search tools.
 	userToolNames := collectUserToolNames(options.Tools)
@@ -814,6 +814,9 @@ func registerTools(
 	//      no skill_run needed.
 	var runTool *toolskill.RunTool
 	workspaceRegistry := existingReg
+	if workspaceRegistry == nil {
+		workspaceRegistry = options.workspaceAcquirer
+	}
 	if options.skillsRepository != nil {
 		if options.codeExecutor != nil && workspaceRegistry == nil {
 			workspaceRegistry = buildWorkspaceRegistry()
@@ -943,7 +946,7 @@ func appendSkillToolsWithRepo(
 	allTools []tool.Tool,
 	options *Options,
 	repo skill.Repository,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 	runTool *toolskill.RunTool,
 ) []tool.Tool {
 	var exec codeexecutor.CodeExecutor
@@ -965,7 +968,7 @@ func appendSkillToolsWithRepoAndFlags(
 	allTools []tool.Tool,
 	options *Options,
 	repo skill.Repository,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 	runTool *toolskill.RunTool,
 	exec codeexecutor.CodeExecutor,
 	skillFlags skillprofile.Flags,
@@ -1083,7 +1086,7 @@ func mustResolveSkillToolFlagsWithExecutor(
 func appendWorkspaceExecTool(
 	allTools []tool.Tool,
 	options *Options,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 	inv *agent.Invocation,
 ) []tool.Tool {
 	var exec codeexecutor.CodeExecutor
@@ -1119,7 +1122,7 @@ func appendWorkspaceExecToolWithExecutor(
 	exec codeexecutor.CodeExecutor,
 	enabled bool,
 	sessional bool,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 	inv *agent.Invocation,
 	options *Options,
 	loadedSkillsRepo skill.Repository,
@@ -1128,7 +1131,7 @@ func appendWorkspaceExecToolWithExecutor(
 		return allTools
 	}
 	toolOpts := []func(*toolworkspaceexec.ExecTool){
-		toolworkspaceexec.WithWorkspaceRegistry(reg),
+		toolworkspaceexec.WithWorkspaceAcquirer(reg),
 	}
 	toolOpts = append(
 		toolOpts,
@@ -1199,7 +1202,7 @@ func appendOnDemandSessionTools(
 	return allTools
 }
 
-func buildWorkspaceRegistry() *codeexecutor.WorkspaceRegistry {
+func buildWorkspaceRegistry() codeexecutor.WorkspaceAcquirer {
 	return codeexecutor.NewWorkspaceRegistry()
 }
 
@@ -1221,8 +1224,8 @@ func workspaceRegistryKeyForExecutor(
 
 func workspaceRegistryMap(
 	exec codeexecutor.CodeExecutor,
-	reg *codeexecutor.WorkspaceRegistry,
-) map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry {
+	reg codeexecutor.WorkspaceAcquirer,
+) map[workspaceRegistryKey]codeexecutor.WorkspaceAcquirer {
 	if reg == nil {
 		return nil
 	}
@@ -1230,14 +1233,14 @@ func workspaceRegistryMap(
 	if !ok {
 		return nil
 	}
-	return map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry{
+	return map[workspaceRegistryKey]codeexecutor.WorkspaceAcquirer{
 		key: reg,
 	}
 }
 
 func (a *LLMAgent) ensureWorkspaceRegistryForExecutor(
 	exec codeexecutor.CodeExecutor,
-) (*codeexecutor.WorkspaceRegistry, bool) {
+) (codeexecutor.WorkspaceAcquirer, bool) {
 	key, ok := workspaceRegistryKeyForExecutor(exec)
 	if !ok {
 		return nil, false
@@ -1249,9 +1252,9 @@ func (a *LLMAgent) ensureWorkspaceRegistryForExecutor(
 
 func (a *LLMAgent) workspaceRegistryForKeyLocked(
 	key workspaceRegistryKey,
-) *codeexecutor.WorkspaceRegistry {
+) codeexecutor.WorkspaceAcquirer {
 	if a.workspaceRegistries == nil {
-		a.workspaceRegistries = make(map[workspaceRegistryKey]*codeexecutor.WorkspaceRegistry)
+		a.workspaceRegistries = make(map[workspaceRegistryKey]codeexecutor.WorkspaceAcquirer)
 		if a.workspaceRegistry != nil {
 			if defaultKey, ok := workspaceRegistryKeyForExecutor(a.codeExecutor); ok {
 				a.workspaceRegistries[defaultKey] = a.workspaceRegistry
@@ -1272,9 +1275,12 @@ func (a *LLMAgent) workspaceRegistryForKeyLocked(
 func (a *LLMAgent) workspaceRegistryForInvocation(
 	inv *agent.Invocation,
 	exec codeexecutor.CodeExecutor,
-) *codeexecutor.WorkspaceRegistry {
+) codeexecutor.WorkspaceAcquirer {
 	if inv == nil || inv.Session == nil || inv.Session.ID == "" {
 		return buildWorkspaceRegistry()
+	}
+	if a.option.workspaceAcquirer != nil {
+		return a.option.workspaceAcquirer
 	}
 	if reg, ok := a.ensureWorkspaceRegistryForExecutor(exec); ok {
 		return reg
@@ -1319,7 +1325,7 @@ func workspacePrepOptions(
 
 func buildSkillRunTool(
 	options *Options,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 ) *toolskill.RunTool {
 	return buildSkillRunToolWithRepo(
 		options,
@@ -1332,7 +1338,7 @@ func buildSkillRunTool(
 func buildSkillRunToolWithRepo(
 	options *Options,
 	repo skill.Repository,
-	reg *codeexecutor.WorkspaceRegistry,
+	reg codeexecutor.WorkspaceAcquirer,
 	exec codeexecutor.CodeExecutor,
 ) *toolskill.RunTool {
 	if exec == nil && options != nil {
@@ -1381,7 +1387,7 @@ func buildSkillRunToolWithRepo(
 		)
 	}
 	if reg != nil {
-		runOpts = append(runOpts, toolskill.WithWorkspaceRegistry(reg))
+		runOpts = append(runOpts, toolskill.WithWorkspaceAcquirer(reg))
 	}
 
 	return toolskill.NewRunTool(
@@ -1757,7 +1763,7 @@ func (a *LLMAgent) withWorkspace(
 		return ctx
 	}
 	reg := a.workspaceRegistryForInvocation(inv, exec)
-	ws := workspaceio.New(exec, reg)
+	ws := workspaceio.NewWithAcquirer(exec, reg)
 	return workspaceio.WithWorkspace(ctx, ws)
 }
 
