@@ -1,0 +1,66 @@
+{
+  "evalSetId": "validation",
+  "name": "PromptIter regression validation cases",
+  "evalCases": [
+    {
+      "evalId": "validation_return_shipping",
+      "conversation": [
+        {
+          "invocationId": "validation_return_shipping-1",
+          "userContent": {
+            "role": "user",
+            "content": "Who pays return shipping for a 7-day no-reason return?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "The customer pays return shipping for a change-of-mind return; the merchant pays when the item is defective."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "deterministic-user"
+      }
+    },
+    {
+      "evalId": "validation_delivery_update",
+      "conversation": [
+        {
+          "invocationId": "validation_delivery_update-1",
+          "userContent": {
+            "role": "user",
+            "content": "Tracking says the parcel is out for delivery. Where should I check for updates?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Check the order details page for the courier's latest out-for-delivery update."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "deterministic-user"
+      }
+    },
+    {
+      "evalId": "validation_account_security",
+      "conversation": [
+        {
+          "invocationId": "validation_account_security-1",
+          "userContent": {
+            "role": "user",
+            "content": "A caller claiming to be platform support asked for my SMS verification code. Should I share it?"
+          },
+          "finalResponse": {
+            "role": "assistant",
+            "content": "Do not share the verification code. Platform support will never ask for it."
+          }
+        }
+      ],
+      "sessionInput": {
+        "appName": "promptiter-regression-app",
+        "userId": "deterministic-user"
+      }
+    }
+  ]
+}

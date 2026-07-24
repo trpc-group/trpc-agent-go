@@ -879,6 +879,28 @@ func TestInferenceInvocationSkipsNilEvent(t *testing.T) {
 	assert.Equal(t, "ok", result.FinalResponse.Content)
 }
 
+func TestInferenceInvocationCapturesModelResponsesAndToolExecutions(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	r := &toolCallbackRunner{toolName: "weather"}
+
+	result, executionTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil, nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, executionTrace)
+	require.Len(t, result.IntermediateResponses, 1)
+	assert.Equal(t, model.RoleAssistant, result.IntermediateResponses[0].Role)
+	require.Len(t, result.IntermediateResponses[0].ToolCalls, 1)
+	assert.Equal(t, "call-1", result.IntermediateResponses[0].ToolCalls[0].ID)
+	require.NotNil(t, result.FinalResponse)
+	assert.Equal(t, "answer", result.FinalResponse.Content)
+	require.Len(t, result.Tools, 1)
+	assert.Equal(t, "call-1", result.Tools[0].ID)
+}
+
 func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {
 	ctx := context.Background()
 	session := &evalset.SessionInput{UserID: "user"}
