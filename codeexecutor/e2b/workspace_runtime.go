@@ -654,10 +654,14 @@ func (r *workspaceRuntime) RunProgram(
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
-	stdoutRaw, stderrRaw, _, err := r.runBashStreaming(ctx, script, timeout)
+	stdoutRaw, stderrRaw, _, err := r.runBashStreamingLimited(
+		ctx, script, timeout, spec.MaxOutputBytes,
+	)
 	dur := time.Since(start)
 
 	stdout, stderr, exit := parseFramedOutput(stdoutRaw, stderrRaw)
+	stdout, stdoutCut := limitOutput(stdout, spec.MaxOutputBytes)
+	stderr, stderrCut := limitOutput(stderr, spec.MaxOutputBytes)
 
 	timedOut := false
 	if err != nil {
@@ -668,11 +672,13 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exit,
-		Duration: dur,
-		TimedOut: timedOut,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		ExitCode:        exit,
+		Duration:        dur,
+		TimedOut:        timedOut,
+		StdoutTruncated: stdoutCut,
+		StderrTruncated: stderrCut,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -827,15 +833,23 @@ func (r *workspaceRuntime) runBash(
 func (r *workspaceRuntime) runBashStreaming(
 	ctx context.Context, script string, timeout time.Duration,
 ) (string, string, int, error) {
+	return r.runBashStreamingLimited(ctx, script, timeout, 0)
+}
+
+func (r *workspaceRuntime) runBashStreamingLimited(
+	ctx context.Context, script string, timeout time.Duration, maxOutputBytes int,
+) (string, string, int, error) {
 	if r.ce == nil || r.ce.sbx == nil {
 		return "", "", 0, errors.New("e2b: sandbox not initialized")
 	}
-	var stdoutB, stderrB strings.Builder
+	stdoutB := newFramedCapture(maxOutputBytes)
+	stderrB := newFramedCapture(maxOutputBytes)
 	opts := &ci.RunCodeOpts{
-		Language: ci.LanguageBash,
-		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
-		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
+		Language:    ci.LanguageBash,
+		Timeout:     timeout,
+		DiscardLogs: true,
+		OnStdout:    func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
+		OnStderr:    func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {

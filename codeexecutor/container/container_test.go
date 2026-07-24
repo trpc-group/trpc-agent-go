@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -181,6 +182,25 @@ func TestGenerateContainerName(t *testing.T) {
 func TestNew_WithMissingImageAndDockerfile(t *testing.T) {
 	_, err := New(WithContainerConfig(tcontainer.Config{}))
 	assert.Error(t, err)
+}
+
+func TestNewWithContextRejectsNilAndHonorsCancellation(t *testing.T) {
+	if _, err := NewWithContext(nil); err == nil {
+		t.Fatal("nil context was accepted")
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	parsed, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = NewWithContext(ctx,
+		WithHost(fmt.Sprintf("tcp://%s", parsed.Host)),
+		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}),
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("NewWithContext() error = %v, want context cancellation", err)
+	}
 }
 
 func TestNew_WithDockerFilePathSetsAbsolute(t *testing.T) {
@@ -1056,7 +1076,7 @@ func TestInitContainer_CreateError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, createCalled)
 }
@@ -1092,7 +1112,7 @@ func TestInitContainer_StartError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, startCalled)
 }
@@ -1136,7 +1156,7 @@ func TestInitContainer_WaitError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, inspectCalls)
 }
@@ -1179,7 +1199,7 @@ func TestInitContainer_InspectError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 }
@@ -1223,7 +1243,7 @@ func TestInitContainer_NotRunning(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 }
@@ -1270,7 +1290,7 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 	assert.True(t, execCreateCalled)
@@ -1328,7 +1348,7 @@ func TestInitContainer_Success(t *testing.T) {
 		containerName: "test",
 	}
 
-	assert.NoError(t, exec.initContainer())
+	assert.NoError(t, exec.initContainer(context.Background()))
 	assert.NotNil(t, exec.container)
 	assert.Equal(t, "cid", exec.container.ID)
 }
@@ -1359,7 +1379,7 @@ func TestInitContainer_EnsureImageError(t *testing.T) {
 		containerName: "test",
 	}
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, listCalled)
 }
@@ -1393,7 +1413,7 @@ func TestInitContainer_BuildError(t *testing.T) {
 	// Ensure Dockerfile exists to avoid context error.
 	assert.NoError(t, os.WriteFile(filepath.Join(exec.dockerFilePath, "Dockerfile"), []byte("FROM scratch\n"), 0o644))
 
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, buildCalled)
 }
@@ -1450,7 +1470,7 @@ func TestCleanup_StopRemoveError(t *testing.T) {
 
 func TestInitContainerWithoutClient(t *testing.T) {
 	exec := &CodeExecutor{}
-	err := exec.initContainer()
+	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 }
 

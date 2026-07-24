@@ -1,0 +1,6 @@
+diff --git a/service/run.go b/service/run.go
+--- a/service/run.go
++++ b/service/run.go
+@@ -1,2 +1,3 @@
+ package service
++func Run() error { return doWork() }

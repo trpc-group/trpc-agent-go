@@ -177,8 +177,13 @@ func New(opts ...Option) (*CodeExecutor, error) {
 	return NewWithContext(context.Background(), opts...)
 }
 
-// NewWithContext is like New but accepts a context used for sandbox setup.
+// NewWithContext is like New but uses ctx only for sandbox setup. Cancelling
+// ctx after this function returns does not close the executor. A nil ctx
+// returns an error.
 func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
 	c := &CodeExecutor{
 		template:         ci.DefaultTemplate,
 		sandboxTimeout:   ci.DefaultSandboxTimeout * time.Second,

@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -13,7 +12,6 @@ package local
 // Workspace runtime provides workspace-based execution on local host.
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -361,7 +359,8 @@ func (r *Runtime) RunProgram(
 		cmd.Stdin = strings.NewReader(spec.Stdin)
 	}
 
-	var stdout, stderr bytes.Buffer
+	stdout := newLimitedBuffer(spec.MaxOutputBytes)
+	stderr := newLimitedBuffer(spec.MaxOutputBytes)
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -383,11 +382,13 @@ func (r *Runtime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: dur,
-		TimedOut: errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		ExitCode:        exitCode,
+		Duration:        dur,
+		TimedOut:        errors.Is(tctx.Err(), context.DeadlineExceeded),
+		StdoutTruncated: stdout.Truncated(),
+		StderrTruncated: stderr.Truncated(),
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),

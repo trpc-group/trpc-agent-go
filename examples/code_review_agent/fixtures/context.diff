@@ -1,0 +1,7 @@
+diff --git a/service/service.go b/service/service.go
+--- a/service/service.go
++++ b/service/service.go
+@@ -1,2 +1,4 @@
+ package service
++ctx, cancel := context.WithTimeout(parent, time.Second)
++_ = ctx

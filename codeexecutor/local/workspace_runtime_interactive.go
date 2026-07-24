@@ -1,6 +1,5 @@
 //
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2025 Tencent.  All rights reserved.
 //
@@ -70,8 +69,8 @@ type interactiveSession struct {
 	pollCursor int
 	maxLines   int
 	closeOnce  sync.Once
-	stdout     strings.Builder
-	stderr     strings.Builder
+	stdout     limitedBuffer
+	stderr     limitedBuffer
 }
 
 func newInteractiveSession(
@@ -266,11 +265,13 @@ func (s *interactiveSession) RunResult() codeexecutor.RunResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return codeexecutor.RunResult{
-		Stdout:   s.stdout.String(),
-		Stderr:   s.stderr.String(),
-		ExitCode: s.exitCode,
-		Duration: s.duration,
-		TimedOut: s.timedOut,
+		Stdout:          s.stdout.String(),
+		Stderr:          s.stderr.String(),
+		ExitCode:        s.exitCode,
+		Duration:        s.duration,
+		TimedOut:        s.timedOut,
+		StdoutTruncated: s.stdout.Truncated(),
+		StderrTruncated: s.stderr.Truncated(),
 	}
 }
 
@@ -324,14 +325,19 @@ func (s *interactiveSession) appendOutput(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	retained := text
 	switch stream {
 	case "stderr":
-		s.stderr.WriteString(text)
+		before := s.stderr.Len()
+		_, _ = s.stderr.Write([]byte(text))
+		retained = text[:s.stderr.Len()-before]
 	default:
-		s.stdout.WriteString(text)
+		before := s.stdout.Len()
+		_, _ = s.stdout.Write([]byte(text))
+		retained = text[:s.stdout.Len()-before]
 	}
 
-	text = s.partial + text
+	text = s.partial + retained
 	parts := strings.Split(text, "\n")
 	if len(parts) == 0 {
 		return
@@ -392,6 +398,8 @@ func (r *Runtime) StartProgram(
 		formatInteractiveCommand(spec.Cmd, spec.Args),
 		defaultInteractiveMaxLines,
 	)
+	sess.stdout = newLimitedBuffer(spec.MaxOutputBytes)
+	sess.stderr = newLimitedBuffer(spec.MaxOutputBytes)
 	sess.cmd = cmd
 	sess.cancel = cancel
 	startedAt := time.Now()

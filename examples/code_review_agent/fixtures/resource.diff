@@ -1,0 +1,8 @@
+diff --git a/files/read.go b/files/read.go
+--- a/files/read.go
++++ b/files/read.go
+@@ -1,2 +1,5 @@
+ package files
++f, err := os.Open(name)
++if err != nil { return err }
++return consume(f)

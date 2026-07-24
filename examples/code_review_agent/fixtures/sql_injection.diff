@@ -1,0 +1,6 @@
+diff --git a/store/find.go b/store/find.go
+--- a/store/find.go
++++ b/store/find.go
+@@ -1,2 +1,3 @@
+ package store
++rows, err := db.Query("SELECT * FROM users WHERE name='" + name + "'")
