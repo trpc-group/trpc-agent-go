@@ -1,0 +1,40 @@
+{
+  "cases": [
+    {
+      "id": "both-sides-missing-expected-case",
+      "inventoryCaseIds": ["case-a", "case-b"],
+      "beforeCaseIds": ["case-a"],
+      "afterCaseIds": ["case-a"],
+      "beforeStatus": "completed",
+      "afterStatus": "completed",
+      "wantError": "case-b"
+    },
+    {
+      "id": "candidate-missing-expected-case",
+      "inventoryCaseIds": ["case-a", "case-b"],
+      "beforeCaseIds": ["case-a", "case-b"],
+      "afterCaseIds": ["case-a"],
+      "beforeStatus": "completed",
+      "afterStatus": "completed",
+      "wantError": "case-b"
+    },
+    {
+      "id": "before-provider-not-evaluable",
+      "inventoryCaseIds": ["case-a"],
+      "beforeCaseIds": ["case-a"],
+      "afterCaseIds": ["case-a"],
+      "beforeStatus": "not_evaluable",
+      "afterStatus": "completed",
+      "wantError": "not_evaluable"
+    },
+    {
+      "id": "candidate-provider-run-failed",
+      "inventoryCaseIds": ["case-a"],
+      "beforeCaseIds": ["case-a"],
+      "afterCaseIds": ["case-a"],
+      "beforeStatus": "completed",
+      "afterStatus": "run_failed",
+      "wantError": "run_failed"
+    }
+  ]
+}

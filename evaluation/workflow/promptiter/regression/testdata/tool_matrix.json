@@ -1,0 +1,119 @@
+{
+  "cases": [
+    {"id": "none-none", "expected": [], "actual": [], "mismatch": false},
+    {
+      "id": "none-search",
+      "expected": [],
+      "actual": [{"sequence": 1, "name": "Search"}],
+      "mismatch": true
+    },
+    {
+      "id": "none-release",
+      "expected": [],
+      "actual": [{"sequence": 1, "name": "Release"}],
+      "mismatch": true
+    },
+    {
+      "id": "none-search-release",
+      "expected": [],
+      "actual": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "mismatch": true
+    },
+    {
+      "id": "search-none",
+      "expected": [{"sequence": 1, "name": "Search"}],
+      "actual": [],
+      "mismatch": true
+    },
+    {
+      "id": "search-search",
+      "expected": [{"sequence": 1, "name": "Search"}],
+      "actual": [{"sequence": 1, "name": "Search"}],
+      "mismatch": false
+    },
+    {
+      "id": "search-release",
+      "expected": [{"sequence": 1, "name": "Search"}],
+      "actual": [{"sequence": 1, "name": "Release"}],
+      "mismatch": true
+    },
+    {
+      "id": "search-search-release",
+      "expected": [{"sequence": 1, "name": "Search"}],
+      "actual": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "mismatch": true
+    },
+    {
+      "id": "release-none",
+      "expected": [{"sequence": 1, "name": "Release"}],
+      "actual": [],
+      "mismatch": true
+    },
+    {
+      "id": "release-search",
+      "expected": [{"sequence": 1, "name": "Release"}],
+      "actual": [{"sequence": 1, "name": "Search"}],
+      "mismatch": true
+    },
+    {
+      "id": "release-release",
+      "expected": [{"sequence": 1, "name": "Release"}],
+      "actual": [{"sequence": 1, "name": "Release"}],
+      "mismatch": false
+    },
+    {
+      "id": "release-search-release",
+      "expected": [{"sequence": 1, "name": "Release"}],
+      "actual": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "mismatch": true
+    },
+    {
+      "id": "search-release-none",
+      "expected": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "actual": [],
+      "mismatch": true
+    },
+    {
+      "id": "search-release-search",
+      "expected": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "actual": [{"sequence": 1, "name": "Search"}],
+      "mismatch": true
+    },
+    {
+      "id": "search-release-release",
+      "expected": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "actual": [{"sequence": 1, "name": "Release"}],
+      "mismatch": true
+    },
+    {
+      "id": "search-release-search-release",
+      "expected": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "actual": [
+        {"sequence": 1, "name": "Search"},
+        {"sequence": 2, "name": "Release"}
+      ],
+      "mismatch": false
+    }
+  ]
+}
