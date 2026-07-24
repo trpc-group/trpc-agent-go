@@ -1,0 +1,13 @@
+diff --git a/payment.go b/payment.go
+--- a/payment.go
++++ b/payment.go
+@@ -9,6 +9,9 @@ func settle(tx Tx, charge Charge) error {
+ 	if charge.Amount <= 0 {
+ 		return ErrInvalidAmount
+ 	}
++	// CR_AGENT_FAKE_MODEL_HIGH CR_AGENT_FAKE_MODEL_TRANSACTION_SEMANTIC: semantic failure is marked successful before transaction completion.
++	if charge.RequiresReview {
++		charge.Status = "settled"
++	}
+ 	return tx.Commit()
+ }

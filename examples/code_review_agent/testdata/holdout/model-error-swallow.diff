@@ -1,0 +1,13 @@
+diff --git a/sync.go b/sync.go
+--- a/sync.go
++++ b/sync.go
+@@ -7,6 +7,9 @@ func syncProfile(profile Profile) Result {
+ 	if err := remote.Push(profile); err != nil {
+ 		return Result{Status: "retry"}
+ 	}
++	// CR_AGENT_FAKE_MODEL_HIGH CR_AGENT_FAKE_MODEL_ERROR_SWALLOW: failed audit write is swallowed while returning success.
++	if err := audit.Write(profile.ID); err != nil {
++		return Result{Status: "ok"}
++	}
+ 	return Result{Status: "ok"}
+ }

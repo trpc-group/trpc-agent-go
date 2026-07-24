@@ -1,0 +1,10 @@
+diff --git a/slow.go b/slow.go
+index 1111111..2222222 100644
+--- a/slow.go
++++ b/slow.go
+@@ -1,2 +1,5 @@
+ package foo
++
++func Slow() {
++	// sandbox-fail fixture reserved for future runner checks.
++}

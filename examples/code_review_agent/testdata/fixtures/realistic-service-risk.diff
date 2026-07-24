@@ -1,0 +1,56 @@
+diff --git a/service.go b/service.go
+index 1111111..2222222 100644
+--- a/service.go
++++ b/service.go
+@@ -1,3 +1,40 @@
+ package service
+ 
++import (
++	"context"
++	"database/sql"
++	"net/http"
++	"os"
++	"time"
++)
++
++const adminToken = "sk-live-realistic1234567890abcdef"
++
+ func Existing() string { return "ok" }
++
++func ImportHandler(w http.ResponseWriter, r *http.Request) {
++	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
++	_ = cancel
++	file, err := os.Open("payload.json")
++	if err != nil {
++		panic(err)
++	}
++	_ = file
++	db, err := sql.Open("sqlite", "file:risky.db")
++	if err != nil {
++		panic(err)
++	}
++	_ = db
++	go func() {
++		time.Sleep(time.Second)
++		_ = ctx
++	}()
++	var summary string
++	for _, item := range []string{"import", "accepted"} {
++		summary += item
++	}
++	_ = summary
++	// TODO(ops): add focused tests before shipping this import path.
++	w.WriteHeader(http.StatusAccepted)
++	_ = adminToken
++}
+diff --git a/docs/import.md b/docs/import.md
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/docs/import.md
+@@ -0,0 +1,5 @@
++# Import Endpoint
++
++This public fixture intentionally keeps the surrounding project small while
++covering a multi-file pull request shape. The Go file carries the risky code;
++this document change should not produce review findings.
