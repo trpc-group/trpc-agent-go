@@ -495,6 +495,59 @@ bare context, downstream tool code will no longer see that ID.
 So if you replace the context inside callbacks, make sure you preserve the
 existing context values you still need.
 
+## Result Formatting
+
+Function Tools use JSON for model-visible tool result messages by default. Use
+`function.WithResultFormatter` when a tool needs custom text, such as an XML
+observation, without constructing `model.Message` or managing the tool call ID.
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
+)
+```
+
+The formatter receives the final normal result after `AfterTool` callbacks. It
+changes only `DefaultToolMessage.Content`; tRPC-Agent-Go still manages the tool
+message role, name, tool call ID, ordering, events, and session persistence.
+
+- Without a formatter, existing JSON output remains unchanged.
+- A formatting error or panic is reported as an error. tRPC-Agent-Go does not
+  fall back to JSON or run the completed tool again.
+- Permission results and state-only final stream results bypass the formatter.
+  For other streamable results, only the final result is formatted;
+  intermediate events are unchanged.
+- Tools that provide state deltas receive the JSON representation of the final
+  tool result. Formatted content and `ToolResultMessages` overrides are not used
+  as state-delta input. If the JSON cannot be produced, the response fails
+  instead of silently dropping state.
+- `ToolResultMessages` still runs after the default message is prepared and may
+  override it. Continue using that callback for multiple messages, multimodal
+  content, or complete control of the message protocol.
+
+The application is responsible for format-specific escaping, truncation, and
+output validation. A formatter may be called concurrently and must synchronize
+any mutable state it owns.
+
+For a runnable end-to-end example, see
+[examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat).
+
 ## Built-in Tools
 
 ### Tool Call Retry

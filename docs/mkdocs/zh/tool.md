@@ -477,6 +477,54 @@ toolCallID, ok := agent.GetRuntimeStateValueFromContext[string](
 因此，如果你会在回调里替换 context，记得把已有的 context value
 一并透传。
 
+## 工具结果格式化
+
+Function Tool 默认使用 JSON 构造模型可见的工具结果消息。当某个工具需要 XML 形式的
+observation 等自定义文本时，可以使用 `function.WithResultFormatter`，无需自行构造
+`model.Message` 或维护 tool call ID。
+
+```go
+import (
+    "context"
+
+    "trpc.group/trpc-go/trpc-agent-go/tool/function"
+    "trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
+)
+
+bashTool := function.NewFunctionTool(
+    runBash,
+    function.WithName("bash"),
+    function.WithResultFormatter(
+        resultformat.FormatterFunc[BashResult](func(
+            _ context.Context,
+            result BashResult,
+        ) (string, error) {
+            return formatBashObservation(result), nil
+        }),
+    ),
+)
+```
+
+Formatter 接收 `AfterTool` callback 处理后的最终正常结果，仅改变
+`DefaultToolMessage.Content`。消息 role、tool name、tool call ID 配对、顺序、event 和
+session 持久化仍由 tRPC-Agent-Go 维护。
+
+- 未配置 formatter 时，现有默认 JSON 输出保持不变。
+- formatter 返回错误或发生 panic 时，本次结果明确失败；tRPC-Agent-Go 不回退 JSON，
+  也不会重新执行已经完成的工具。
+- `tool.PermissionResult` 和仅携带状态的流式最终结果不经过 formatter；其他
+  `StreamableTool` 只格式化最终结果，中间事件不变。
+- 提供 state delta 的工具接收最终工具结果的 JSON 表示，不使用 formatter 输出或
+  `ToolResultMessages` 覆盖后的文本。若无法生成 JSON，本次结果失败，不能静默丢状态。
+- `ToolResultMessages` 仍在默认消息生成后执行并可以覆盖它；多消息、多模态内容或完全
+  接管消息协议的场景继续使用该 callback。
+
+应用负责 formatter 输出中特定格式所需的转义、截断和有效性校验。Formatter 可能被
+并发调用，若持有可变状态，需要由应用自行保证并发安全。
+
+完整可运行示例见
+[examples/resultformat](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/resultformat)。
+
 ## 内置工具类型
 
 ### Tool 调用重试
