@@ -106,15 +106,15 @@
   },
   {
     "name": "host long session",
-    "description": "A host PTY session with process-lifetime and cleanup risk.",
+    "description": "A host PTY/background request whose omitted timeout inherits the backend's long default.",
     "request": {
       "tool_name": "host_exec",
       "backend": "hostexec",
       "command": "go test ./tool/safety",
-      "timeout_seconds": 30,
+      "background": true,
       "tty": true
     },
-    "expected_decision": "needs_human_review"
+    "expected_decision": "deny"
   },
   {
     "name": "explicit human review",

@@ -157,5 +157,7 @@ attributes：
 Guard 用于提前拒绝明显危险请求并让决策可观测；沙箱和运行环境负责约束仍然
 获准执行的行为。
 
-可运行的[纯扫描示例](../../../examples/tool_safety_guard/README.md)提供 12 个场景
+可运行的[纯扫描示例][tool-safety-example]提供 12 个场景
 以及确定性的报告与审计 fixture。
+
+[tool-safety-example]: https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tool_safety_guard

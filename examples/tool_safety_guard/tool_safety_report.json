@@ -288,21 +288,39 @@
   {
     "schema_version": 1,
     "scan_id": "scan-11",
-    "decision": "needs_human_review",
+    "decision": "deny",
     "risk_level": "high",
-    "rule_id": "host.tty",
+    "rule_id": "resource.timeout",
     "evidence": [
-      "host execution requested a persistent PTY session"
+      "requested timeout exceeds max_timeout_seconds"
     ],
-    "recommendation": "review session lifetime, cleanup, and host access before execution",
+    "recommendation": "reduce the timeout to the configured maximum",
     "tool_name": "host_exec",
     "command": "go test ./tool/safety",
     "backend": "hostexec",
-    "blocked": false,
+    "blocked": true,
     "redacted": false,
     "duration_ms": 0,
     "safe_summary": "request requires safety policy action",
     "findings": [
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "resource.timeout",
+        "evidence": [
+          "requested timeout exceeds max_timeout_seconds"
+        ],
+        "recommendation": "reduce the timeout to the configured maximum"
+      },
+      {
+        "decision": "deny",
+        "risk_level": "high",
+        "rule_id": "host.background",
+        "evidence": [
+          "host execution requested a background process"
+        ],
+        "recommendation": "run the process in the foreground with bounded lifetime and cleanup"
+      },
       {
         "decision": "needs_human_review",
         "risk_level": "high",

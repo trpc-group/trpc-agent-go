@@ -16,13 +16,15 @@ go run ./tool_safety_guard \
 
 The four paths select the YAML or JSON policy, JSON samples, report output and
 audit output. Sample decoding rejects unknown fields, invalid decisions,
-invalid backends and requests without executable input. Output targets are
-opened through same-directory temporary files with mode `0600`; existing
-symlink targets and directly symlinked parent directories are rejected (with
-the conventional macOS `/tmp` to `/private/tmp` link recognized explicitly).
-Renaming cannot eliminate every filesystem time-of-check/time-of-use race, so
-production deployments should also use a trusted output directory with
-appropriate ownership and mount controls.
+invalid backends and requests without recursively scannable executable input.
+Output identities are canonicalized before writing so aliases cannot select
+the same report/audit file. Outputs use same-directory temporary files with
+mode `0600`; existing symlink targets and every existing symlink ancestor are
+rejected, with only the conventional macOS `/tmp` to `/private/tmp` link
+recognized explicitly. Path inspection and rename cannot eliminate every
+filesystem time-of-check/time-of-use race, so production deployments should
+also use a trusted output directory with appropriate ownership and mount
+controls.
 
 The policy demonstrates that command lists, denied paths, network domains,
 environment names, timeout/output limits and review commands are all changed
@@ -76,19 +78,62 @@ For a direct execution wrapper that retains its preflight report, invoke normal
 execution and normal callbacks first, then process the final result:
 
 ```go
-preflight := guard.Scan(request)
-// Enforce preflight.Decision before executing.
-rawResult, executionErr := executeWithNormalCallbacks(ctx, request)
-
-processor, err := safety.NewResultProcessor(
-    guard,
-    safety.NewJSONLAuditSink(auditFile),
-    safety.WithResultAuditFailureMode(safety.AuditRequired),
-)
-if err != nil {
-    return err
+func newResultProcessor(
+    guard *safety.Guard,
+    sink safety.AuditSink,
+) (*safety.ResultProcessor, error) {
+    return safety.NewResultProcessor(
+        guard,
+        sink,
+        safety.WithResultAuditFailureMode(safety.AuditRequired),
+    )
 }
-processed, err := processor.Process(ctx, preflight, rawResult, executionErr)
+
+func executeGuarded(
+    ctx context.Context,
+    guard *safety.Guard,
+    processor *safety.ResultProcessor,
+    request safety.Request,
+    authorize func(context.Context, safety.Report) (bool, error),
+    execute func(context.Context) (any, error),
+) (safety.ProcessedResult, error) {
+    if guard == nil || processor == nil || execute == nil {
+        return safety.ProcessedResult{},
+            errors.New("tool execution wrapper is not configured")
+    }
+    preflight := guard.Scan(request)
+    switch preflight.Decision {
+    case safety.DecisionAllow:
+        // Continue to execution below.
+    case safety.DecisionDeny:
+        return safety.ProcessedResult{}, fmt.Errorf(
+            "tool execution denied by safety policy: %s", preflight.RuleID,
+        )
+    case safety.DecisionAsk, safety.DecisionNeedsHumanReview:
+        if authorize == nil {
+            return safety.ProcessedResult{},
+                errors.New("tool execution requires an authorizer")
+        }
+        approved, err := authorize(ctx, preflight)
+        if err != nil {
+            return safety.ProcessedResult{}, fmt.Errorf(
+                "authorize tool execution: %w", err,
+            )
+        }
+        if !approved {
+            return safety.ProcessedResult{},
+                errors.New("tool execution was not authorized")
+        }
+    default:
+        return safety.ProcessedResult{},
+            errors.New("tool safety returned an unsupported decision")
+    }
+
+    // execute owns normal execution and all normal callbacks. It is reached
+    // only for allow or after explicit approval of a review decision.
+    rawResult, executionErr := execute(ctx)
+    return processor.Process(ctx, preflight, rawResult, executionErr)
+}
 ```
 
 The processor recursively redacts sensitive values, applies the configured cap

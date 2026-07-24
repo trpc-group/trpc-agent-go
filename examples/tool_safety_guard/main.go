@@ -1,9 +1,11 @@
-// Tencent is pleased to support the open source community by making
-// trpc-agent-go available.
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+//
 
 // The tool_safety_guard command scans execution requests without executing
 // them and writes a structured report and a secret-minimizing audit stream.
@@ -20,6 +22,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -47,7 +50,15 @@ func main() {
 }
 
 func generate(policyPath, samplesPath, reportPath, auditPath string) error {
-	if filepath.Clean(reportPath) == filepath.Clean(auditPath) {
+	canonicalReport, err := canonicalOutputPath(reportPath)
+	if err != nil {
+		return fmt.Errorf("validate safety report output: %w", err)
+	}
+	canonicalAudit, err := canonicalOutputPath(auditPath)
+	if err != nil {
+		return fmt.Errorf("validate safety audit output: %w", err)
+	}
+	if sameOutputTarget(canonicalReport, canonicalAudit) {
 		return errors.New("report and audit output paths must differ")
 	}
 	policy, err := safety.LoadPolicy(policyPath)
@@ -66,7 +77,7 @@ func generate(policyPath, samplesPath, reportPath, auditPath string) error {
 	if err != nil {
 		return err
 	}
-	if err := writeSecureOutput(reportPath, func(writer io.Writer) error {
+	if err := writeSecureOutput(canonicalReport, func(writer io.Writer) error {
 		encoder := json.NewEncoder(writer)
 		encoder.SetIndent("", "  ")
 		if err := encoder.Encode(reports); err != nil {
@@ -76,7 +87,7 @@ func generate(policyPath, samplesPath, reportPath, auditPath string) error {
 	}); err != nil {
 		return fmt.Errorf("write safety report: %w", err)
 	}
-	if err := writeSecureOutput(auditPath, func(writer io.Writer) error {
+	if err := writeSecureOutput(canonicalAudit, func(writer io.Writer) error {
 		if _, err := io.Copy(writer, &audit); err != nil {
 			return fmt.Errorf("encode safety audit: %w", err)
 		}
@@ -132,12 +143,131 @@ func validateSample(current sample) error {
 	if strings.TrimSpace(current.Request.ToolName) == "" {
 		return errors.New("tool name is empty")
 	}
-	if strings.TrimSpace(current.Request.Command) == "" &&
-		len(current.Request.Args) == 0 && len(current.Request.CodeBlocks) == 0 &&
-		len(bytes.TrimSpace(current.Request.RawArguments)) == 0 {
+	commandUsable := strings.TrimSpace(current.Request.Command) != ""
+	argsUsable := len(current.Request.Args) > 0
+	if argsUsable && strings.TrimSpace(current.Request.Args[0]) == "" {
+		return errors.New("args executable is empty")
+	}
+	if current.Request.CodeBlocks != nil && len(current.Request.CodeBlocks) == 0 {
+		return errors.New("code blocks are empty")
+	}
+	codeUsable := len(current.Request.CodeBlocks) > 0
+	for _, block := range current.Request.CodeBlocks {
+		if strings.TrimSpace(block.Code) == "" {
+			return errors.New("code block is empty")
+		}
+		if strings.TrimSpace(block.Language) == "" {
+			return errors.New("code block language is empty")
+		}
+	}
+	rawPresent := len(bytes.TrimSpace(current.Request.RawArguments)) > 0
+	rawUsable := false
+	if rawPresent {
+		rawUsable = rawArgumentsHaveScannableInput(current.Request.RawArguments)
+		if !rawUsable {
+			return errors.New("raw arguments have no scannable execution input")
+		}
+	}
+	if !commandUsable && !argsUsable && !codeUsable && !rawUsable {
 		return errors.New("request has no executable input")
 	}
 	return nil
+}
+
+func rawArgumentsHaveScannableInput(raw json.RawMessage) bool {
+	return decodeRawForValidation(raw, "", 0)
+}
+
+func decodeRawForValidation(raw []byte, parentKey string, depth int) bool {
+	if depth > 32 {
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return false
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return false
+	}
+	return rawValueHasScannableInput(value, parentKey, depth)
+}
+
+func rawValueHasScannableInput(value any, parentKey string, depth int) bool {
+	if depth > 32 {
+		return false
+	}
+	switch current := value.(type) {
+	case map[string]any:
+		if rawCodeBlockUsable(current) {
+			return true
+		}
+		for key, child := range current {
+			if rawValueHasScannableInput(child, key, depth+1) {
+				return true
+			}
+		}
+	case []any:
+		if rawArgsKey(parentKey) {
+			return len(current) > 0 && rawNonblankString(current[0])
+		}
+		for _, child := range current {
+			if rawValueHasScannableInput(child, parentKey, depth+1) {
+				return true
+			}
+		}
+	case string:
+		trimmed := strings.TrimSpace(current)
+		if trimmed == "" {
+			return false
+		}
+		if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[") {
+			return decodeRawForValidation([]byte(trimmed), parentKey, depth+1)
+		}
+		return parentKey == "" || rawCommandKey(parentKey) ||
+			rawNetworkKey(parentKey)
+	}
+	return false
+}
+
+func rawCodeBlockUsable(value map[string]any) bool {
+	code, codeOK := value["code"].(string)
+	language, languageOK := value["language"].(string)
+	if !languageOK {
+		language, languageOK = value["lang"].(string)
+	}
+	return codeOK && languageOK && strings.TrimSpace(code) != "" &&
+		strings.TrimSpace(language) != ""
+}
+
+func rawNonblankString(value any) bool {
+	text, ok := value.(string)
+	return ok && strings.TrimSpace(text) != ""
+}
+
+func rawArgsKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	return key == "args" || key == "argv"
+}
+
+func rawCommandKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "command", "commands", "cmd", "script", "scripts", "shell":
+		return true
+	default:
+		return rawArgsKey(key)
+	}
+}
+
+func rawNetworkKey(key string) bool {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "url", "uri", "endpoint", "destination":
+		return true
+	default:
+		return false
+	}
 }
 
 func scanSamples(
@@ -228,6 +358,40 @@ func writeSecureOutput(path string, encode func(io.Writer) error) error {
 	return nil
 }
 
+func canonicalOutputPath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("output path is empty")
+	}
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return "", errors.New("resolve output path")
+	}
+	if err := rejectSymlinks(absolute); err != nil {
+		return "", err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		return "", fmt.Errorf("resolve output parent: %w", err)
+	}
+	return filepath.Join(parent, filepath.Base(absolute)), nil
+}
+
+func sameOutputTarget(first, second string) bool {
+	if first == second {
+		return true
+	}
+	firstParent, firstParentErr := os.Stat(filepath.Dir(first))
+	secondParent, secondParentErr := os.Stat(filepath.Dir(second))
+	if firstParentErr == nil && secondParentErr == nil &&
+		os.SameFile(firstParent, secondParent) &&
+		strings.EqualFold(filepath.Base(first), filepath.Base(second)) {
+		return true
+	}
+	firstInfo, firstErr := os.Stat(first)
+	secondInfo, secondErr := os.Stat(second)
+	return firstErr == nil && secondErr == nil && os.SameFile(firstInfo, secondInfo)
+}
+
 func writeBufferedAndClose(
 	writer io.WriteCloser,
 	encode func(io.Writer) error,
@@ -243,16 +407,28 @@ func writeBufferedAndClose(
 }
 
 func rejectSymlinks(path string) error {
-	for _, current := range []string{filepath.Dir(path), path} {
+	absolute, err := filepath.Abs(filepath.Clean(path))
+	if err != nil {
+		return errors.New("resolve output path")
+	}
+	volume := filepath.VolumeName(absolute)
+	root := volume + string(os.PathSeparator)
+	current := root
+	parts := strings.Split(strings.TrimPrefix(absolute, root), string(os.PathSeparator))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		current = filepath.Join(current, part)
 		info, err := os.Lstat(current)
 		if errors.Is(err, os.ErrNotExist) {
-			continue
+			break
 		}
 		if err != nil {
 			return fmt.Errorf("inspect output path: %w", err)
 		}
 		if info.Mode()&os.ModeSymlink != 0 {
-			if current == filepath.Dir(path) && trustedSystemTempLink(current) {
+			if trustedSystemTempLink(current) {
 				continue
 			}
 			return errors.New("output path contains a symbolic link")
@@ -262,7 +438,7 @@ func rejectSymlinks(path string) error {
 }
 
 func trustedSystemTempLink(path string) bool {
-	if filepath.Clean(path) != "/tmp" {
+	if runtime.GOOS != "darwin" || filepath.Clean(path) != "/tmp" {
 		return false
 	}
 	resolved, err := filepath.EvalSymlinks(path)

@@ -188,5 +188,7 @@ Use the guard to reject obvious unsafe requests early and make decisions
 observable. Use the sandbox and operating environment to contain everything
 that still executes.
 
-The runnable [scan-only example](../../../examples/tool_safety_guard/README.md)
+The runnable [scan-only example][tool-safety-example]
 includes twelve scenarios plus deterministic report and audit fixtures.
+
+[tool-safety-example]: https://github.com/trpc-group/trpc-agent-go/tree/main/examples/tool_safety_guard
