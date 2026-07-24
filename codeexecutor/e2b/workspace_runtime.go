@@ -759,10 +759,11 @@ func (r *workspaceRuntime) runProgramStreaming(
 	}
 	collector := newRunFrameCollector(maxOutputBytes)
 	opts := &ci.RunCodeOpts{
-		Language: ci.LanguageBash,
-		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { collector.feedStdout(m.Line) },
-		OnStderr: func(m ci.OutputMessage) { collector.feedStderr(m.Line) },
+		Language:    ci.LanguageBash,
+		Timeout:     timeout,
+		DiscardLogs: true,
+		OnStdout:    func(m ci.OutputMessage) { collector.feedStdout(m.Line) },
+		OnStderr:    func(m ci.OutputMessage) { collector.feedStderr(m.Line) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {
@@ -983,23 +984,26 @@ func (r *workspaceRuntime) runBashStreaming(
 	if r.ce == nil || r.ce.sbx == nil {
 		return "", "", 0, errors.New("e2b: sandbox not initialized")
 	}
-	var stdoutB, stderrB strings.Builder
+	limiter := codeexecutor.NewOutputLimiter(maxReadSizeBytes)
+	stdout := limiter.NewWriter()
+	stderr := limiter.NewWriter()
 	opts := &ci.RunCodeOpts{
-		Language: ci.LanguageBash,
-		Timeout:  timeout,
-		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
-		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
+		Language:    ci.LanguageBash,
+		Timeout:     timeout,
+		DiscardLogs: true,
+		OnStdout:    func(m ci.OutputMessage) { _, _ = stdout.Write([]byte(m.Line)) },
+		OnStderr:    func(m ci.OutputMessage) { _, _ = stderr.Write([]byte(m.Line)) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
 	if err != nil {
-		return stdoutB.String(), stderrB.String(), -1, err
+		return stdout.String(), stderr.String(), -1, err
 	}
 	if exec.Error != nil {
-		return stdoutB.String(), stderrB.String(), -1, fmt.Errorf(
+		return stdout.String(), stderr.String(), -1, fmt.Errorf(
 			"bash error: %s: %s", exec.Error.Name, exec.Error.Value,
 		)
 	}
-	return stdoutB.String(), stderrB.String(), 0, nil
+	return stdout.String(), stderr.String(), 0, nil
 }
 
 func isTimeoutErr(err error) bool {

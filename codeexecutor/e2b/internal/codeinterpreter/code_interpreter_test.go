@@ -152,6 +152,30 @@ func TestParseOutput_Error(t *testing.T) {
 	}
 }
 
+func TestParseOutput_DiscardLogsKeepsCallbacks(t *testing.T) {
+	execution := NewExecution()
+	var stdout, stderr int
+	opts := &RunCodeOpts{
+		DiscardLogs: true,
+		OnStdout:    func(OutputMessage) { stdout++ },
+		OnStderr:    func(OutputMessage) { stderr++ },
+	}
+	if err := parseOutputLine(execution,
+		`{"type":"stdout","text":"out\n"}`, opts); err != nil {
+		t.Fatal(err)
+	}
+	if err := parseOutputLine(execution,
+		`{"type":"stderr","text":"err\n"}`, opts); err != nil {
+		t.Fatal(err)
+	}
+	if stdout != 1 || stderr != 1 {
+		t.Fatalf("callbacks = stdout:%d stderr:%d, want 1 each", stdout, stderr)
+	}
+	if len(execution.Logs.Stdout) != 0 || len(execution.Logs.Stderr) != 0 {
+		t.Fatalf("logs retained despite DiscardLogs: %+v", execution.Logs)
+	}
+}
+
 func TestResult_Formats(t *testing.T) {
 	raw := map[string]any{
 		"type":           "result",
