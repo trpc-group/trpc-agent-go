@@ -243,6 +243,10 @@ func isSensitiveResultName(name string) bool {
 		if internalredact.IsSensitiveName(word) {
 			return true
 		}
+		if strings.Contains(word, "credentials") ||
+			strings.HasSuffix(word, "credential") {
+			return true
+		}
 		switch word {
 		case "token", "secret", "password", "passwd", "credential",
 			"credentials", "authorization", "apikey", "accesskey",

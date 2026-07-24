@@ -149,6 +149,8 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"oauthsecretary":    "oauth-contact",
 		"dbpasswordless":    "database-mode",
 		"mypublickey":       "public-key-material",
+		"credentialed":      "feature-enabled",
+		"credentialing":     "workflow-name",
 	}
 	processor := mustResultProcessor(t, 4096, nil)
 
@@ -168,6 +170,8 @@ func TestResultProcessorDoesNotOverclassifySensitiveSubstrings(t *testing.T) {
 		"oauthsecretary":    "oauth-contact",
 		"dbpasswordless":    "database-mode",
 		"mypublickey":       "public-key-material",
+		"credentialed":      "feature-enabled",
+		"credentialing":     "workflow-name",
 	}, processed.Value)
 }
 
@@ -196,6 +200,30 @@ func TestResultProcessorPreservesCompactSensitiveNameRecognition(t *testing.T) {
 	require.NoError(t, marshalErr)
 	for index := 1; index <= len(input); index++ {
 		require.NotContains(t, string(encoded), fmt.Sprintf("opaque-compact-%d", index))
+	}
+}
+
+func TestResultProcessorRedactsCompactCredentialNames(t *testing.T) {
+	input := map[string]string{
+		"awscredentials":          "opaque-credential-1",
+		"clientcredentialsdata":   "opaque-credential-2",
+		"credentialsfile":         "opaque-credential-3",
+		"awscredential":           "opaque-credential-4",
+		"clientcredential":        "opaque-credential-5",
+		"googlecredentialsconfig": "opaque-credential-6",
+	}
+	processor := mustResultProcessor(t, 4096, nil)
+
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), input, nil,
+	)
+
+	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	encoded, marshalErr := json.Marshal(processed)
+	require.NoError(t, marshalErr)
+	for index := 1; index <= len(input); index++ {
+		require.NotContains(t, string(encoded), fmt.Sprintf("opaque-credential-%d", index))
 	}
 }
 
