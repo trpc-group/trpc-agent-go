@@ -2045,10 +2045,13 @@ memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
 At runtime:
 
 - After tool execution, `ContextOffloadPlugin()` sends real tool call/result
-  pairs to `POST /v2/offload/ingest`. This does not rewrite the current tool
+  pairs to `POST /v2/offload/ingest`, together with the latest user prompt and
+  bounded recent conversation context. This does not rewrite the current tool
   result message.
-- Before each model call, the plugin sends a prompt-only ingest for L1.5 task
-  judgment, estimates message tokens, and calls
+- Before each model call, the plugin sends an ingest with no tool pairs for
+  L1.5 task judgment. That request still includes the latest user prompt and
+  bounded recent conversation context. The plugin then estimates message
+  tokens and calls
   `POST /v2/offload/compact` after `CompactionRatio` is reached. Failures are
   best effort: the original model context is retained.
 - `memSvc.Tools()` exposes only `tdai_read_offload_ref`, backed by
@@ -2057,6 +2060,22 @@ At runtime:
 - The adapter deliberately limits its integration to the three routes needed
   by this lifecycle. Storage, summaries, task maps, and offload policy remain
   gateway responsibilities.
+
+Both ingest paths can send up to 10 recent user or assistant messages after
+filtering, truncated to 400 Unicode code points each. The latest user prompt is
+sent separately and truncated to 500 code points. Tool messages, assistant
+tool-call messages, the duplicated current prompt, and recognized internal
+control messages are omitted from `recent_messages`.
+
+The compaction trigger is evaluated locally. The context window is resolved in
+this order: `agent.WithModelContextWindow(...)` for the current run, the
+model's `Info().ContextWindow` (which providers can expose through options such
+as `WithContextWindow(...)`), a value registered for the model name through
+`model.RegisterModelContextWindow(...)`, and finally 128,000 tokens.
+`TokenCounter` supplies the per-message counts used for both the local
+`CompactionRatio` decision and compact request metadata. If it is nil, or if a
+custom counter fails or returns a negative value, the plugin uses the simple
+token estimator for that model call.
 
 ### Interactive Example
 
@@ -2112,7 +2131,7 @@ modes and does not write local offload state.
 | `APIKey` | Optional Bearer key override for v2 offload calls. Empty reuses `WithAPIKey`. | none |
 | `ServiceID` | Memory service ID sent as `X-TDAI-Service-Id`; required when enabled. | none |
 | `CompactionRatio` | Context-window utilization that triggers `/v2/offload/compact`; must be in `(0, 2]`. | `0.5` |
-| `TokenCounter` | Optional `model.TokenCounter` for compact request metadata. | simple estimator |
+| `TokenCounter` | Optional `model.TokenCounter` used for the local `CompactionRatio` trigger and compact request metadata; failures fall back to the simple estimator. | simple estimator |
 
 ### Notes
 

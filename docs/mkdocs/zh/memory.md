@@ -2051,15 +2051,32 @@ memorytencentdb.WithContextOffload(memorytencentdb.ContextOffloadConfig{
 运行时行为：
 
 - 工具执行后，`ContextOffloadPlugin()` 将真实的 tool call/result pair 发送到
-  `POST /v2/offload/ingest`，不会立即改写本轮 tool result message。
-- 每次模型调用前，plugin 会发送 prompt-only ingest 触发 L1.5 任务判断、估算
-  message tokens，并在达到 `CompactionRatio` 后调用
+  `POST /v2/offload/ingest`，同时携带最新 user prompt 和有界的近期对话上下文；
+  不会立即改写本轮 tool result message。
+- 每次模型调用前，plugin 会发送一个不含 tool pair 的 ingest 触发 L1.5
+  任务判断；该请求仍会携带最新 user prompt 和有界的近期对话上下文。之后
+  plugin 会估算 message tokens，并在达到 `CompactionRatio` 后调用
   `POST /v2/offload/compact`。失败时保留原始 model context。
 - `memSvc.Tools()` 只额外暴露 `tdai_read_offload_ref`，底层调用
   `POST /v2/offload/read-ref`，支持全文、关键词附近或行范围读取，并受
   `max_tokens` 限制。
 - adapter 将集成面严格限制在完成该生命周期所需的三个路由。存储、摘要、
   任务图和 offload 策略仍由 gateway 负责。
+
+两种 ingest 最多都会发送过滤后的 10 条近期 user 或 assistant message，每条
+截断为 400 个 Unicode code point。最新 user prompt 会单独发送并截断为
+500 个 code point。tool message、带 tool call 的 assistant message、与当前
+prompt 重复的 message，以及可识别的内部控制消息不会进入
+`recent_messages`。
+
+compact 是否触发由 adapter 在本地判断。context window 按以下顺序解析：
+当前 run 的 `agent.WithModelContextWindow(...)`、model 的
+`Info().ContextWindow`（provider 通常可通过 `WithContextWindow(...)` 等
+option 设置）、通过 `model.RegisterModelContextWindow(...)` 为 model name
+注册的值，最后兜底为 128,000 tokens。`TokenCounter` 的逐 message 计数既用于
+本地 `CompactionRatio` 判断，也作为 compact request metadata；未配置时使用
+简单 token 估算器，自定义 counter 报错或返回负数时，本轮 model call 也会回退
+到简单估算器。
 
 ### 交互式示例
 
@@ -2111,7 +2128,7 @@ You: 我的项目代号、部署窗口和回答偏好是什么？
 | `APIKey` | v2 offload 调用的可选 Bearer key 覆盖。为空时复用 `WithAPIKey`。 | 无 |
 | `ServiceID` | 通过 `X-TDAI-Service-Id` 发送的 memory service ID；启用时必填。 | 无 |
 | `CompactionRatio` | 触发 `/v2/offload/compact` 的上下文窗口占用率，取值 `(0, 2]`。 | `0.5` |
-| `TokenCounter` | 用于生成 compact token 元数据的可选 `model.TokenCounter`。 | 简单估算器 |
+| `TokenCounter` | 同时用于本地 `CompactionRatio` 触发判断和 compact request metadata 的可选 `model.TokenCounter`；失败时回退到简单估算器。 | 简单估算器 |
 
 ### 注意事项
 

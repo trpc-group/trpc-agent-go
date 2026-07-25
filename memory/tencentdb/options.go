@@ -60,8 +60,11 @@ type ContextOffloadConfig struct {
 	// non-zero values must be in (0, 2].
 	CompactionRatio float64
 
-	// TokenCounter estimates the token metadata required by the gateway
-	// compaction API. Nil uses model.NewSimpleTokenCounter.
+	// TokenCounter estimates per-message tokens for the local CompactionRatio
+	// trigger and for gateway request metadata. Nil uses
+	// model.NewSimpleTokenCounter. If counting fails or returns a negative
+	// value, the plugin retries token counting with the simple counter for that
+	// model call.
 	TokenCounter model.TokenCounter
 }
 

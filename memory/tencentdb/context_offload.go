@@ -35,6 +35,8 @@ const (
 	maxOffloadRecentRunes     = 400
 	maxOffloadRecentMessages  = 10
 	maxOffloadPromptSessions  = 1024
+	heartbeatPromptPrefix     = "Read HEARTBEAT.md if it exists"
+	heartbeatReply            = "HEARTBEAT_OK"
 )
 
 // ContextOffloadPlugin returns a runner plugin that delegates short-term
@@ -403,7 +405,7 @@ func newOffloadRecentMessage(
 		return offloadRecentMessage{}, false
 	}
 	content := strings.TrimSpace(messageText(message))
-	if content == "" || strings.Contains(strings.ToLower(content), "heartbeat") {
+	if content == "" || isInternalHeartbeatMessage(content) {
 		return offloadRecentMessage{}, false
 	}
 	if message.Role == model.RoleUser && utf8.RuneCountInString(content) <= 5 {
@@ -427,9 +429,16 @@ func newOffloadRecentMessage(
 }
 
 func isInternalOffloadPrompt(prompt string) bool {
+	prompt = strings.TrimSpace(prompt)
 	return strings.HasPrefix(prompt, "Pre-compaction") ||
 		strings.HasPrefix(prompt, "[Inter-session message]") ||
-		strings.Contains(strings.ToLower(prompt), "heartbeat")
+		isInternalHeartbeatMessage(prompt)
+}
+
+func isInternalHeartbeatMessage(message string) bool {
+	message = strings.TrimSpace(message)
+	return strings.HasPrefix(message, heartbeatPromptPrefix) ||
+		message == heartbeatReply
 }
 
 func truncateRunes(value string, limit int) string {

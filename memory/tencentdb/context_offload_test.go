@@ -235,13 +235,73 @@ func TestContextOffloadPlugin_SkipsBelowThresholdAndDeduplicatesPrompt(t *testin
 	assert.Equal(t, 1, ingestCount)
 	assert.Zero(t, compactCount)
 
-	req.Messages = []model.Message{model.NewUserMessage("HEARTBEAT check")}
+	req.Messages = []model.Message{model.NewUserMessage(
+		"debug the heartbeat timeout",
+	)}
 	_, err = mgr.ModelCallbacks().RunBeforeModel(
 		ctx,
 		&model.BeforeModelArgs{Request: req},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, ingestCount, "internal prompts must not trigger L1.5")
+	assert.Equal(t, 2, ingestCount, "user heartbeat requests must trigger L1.5")
+
+	req.Messages = []model.Message{model.NewUserMessage(
+		"Read HEARTBEAT.md if it exists (workspace context).",
+	)}
+	_, err = mgr.ModelCallbacks().RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: req},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, 2, ingestCount, "internal prompts must not trigger L1.5")
+}
+
+func TestContextOffloadPlugin_PreservesUserHeartbeatRequests(t *testing.T) {
+	var ingests []offloadIngestRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, pathOffloadIngest, r.URL.Path)
+		var req offloadIngestRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		ingests = append(ingests, req)
+		writeOffloadResponse(t, w, map[string]any{"accepted": true})
+	}))
+	defer server.Close()
+
+	svc := newOffloadTestService(t, server.URL, ContextOffloadConfig{
+		Enabled:         true,
+		ServiceID:       testOffloadServiceID,
+		CompactionRatio: 2,
+		TokenCounter:    fixedOffloadTokenCounter{tokens: 1},
+	})
+	defer svc.Close()
+	mgr, err := pluginpkg.NewManager(svc.ContextOffloadPlugin())
+	require.NoError(t, err)
+	inv := &agent.Invocation{
+		Session: &session.Session{ID: "sess", AppName: "app", UserID: "user"},
+		RunOptions: agent.RunOptions{
+			ModelContextWindow: 1000,
+		},
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv).Context
+	req := &model.Request{Messages: []model.Message{
+		model.NewUserMessage("debug the heartbeat timeout"),
+		model.NewAssistantMessage("the heartbeat logs show repeated timeouts"),
+		model.NewUserMessage("what should I check next?"),
+	}}
+
+	_, err = mgr.ModelCallbacks().RunBeforeModel(
+		ctx,
+		&model.BeforeModelArgs{Request: req},
+	)
+	require.NoError(t, err)
+
+	require.Len(t, ingests, 1)
+	assert.Equal(t, "what should I check next?", ingests[0].Prompt)
+	require.Len(t, ingests[0].RecentMessages, 2)
+	assert.Equal(t, "debug the heartbeat timeout",
+		ingests[0].RecentMessages[0].Content)
+	assert.Equal(t, "the heartbeat logs show repeated timeouts",
+		ingests[0].RecentMessages[1].Content)
 }
 
 func TestContextOffloadPlugin_CompactionFailuresLeaveContextUnchanged(t *testing.T) {
@@ -632,6 +692,11 @@ func TestContextOffloadHelpers(t *testing.T) {
 	assert.Equal(t, "abc", truncateRunes("abcdef", 3))
 	assert.Equal(t, "abcdef", truncateRunes("abcdef", 0))
 	assert.True(t, isInternalOffloadPrompt("[Inter-session message] ping"))
+	assert.True(t, isInternalOffloadPrompt(
+		"Read HEARTBEAT.md if it exists (workspace context).",
+	))
+	assert.True(t, isInternalOffloadPrompt("HEARTBEAT_OK"))
+	assert.False(t, isInternalOffloadPrompt("debug the heartbeat timeout"))
 	assert.False(t, isInternalOffloadPrompt("normal prompt"))
 }
 
