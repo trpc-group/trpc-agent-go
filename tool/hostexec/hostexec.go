@@ -170,6 +170,23 @@ type execCommandTool struct {
 	baseDir string
 }
 
+// ResolveExecPermissionContext resolves arguments exactly as Call does so a
+// permission policy scans the directory and timeout the process will use.
+func (t *execCommandTool) ResolveExecPermissionContext(
+	args []byte,
+) (tool.ExecPermissionContext, error) {
+	var in execInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return tool.ExecPermissionContext{}, fmt.Errorf("invalid args: %w", err)
+	}
+	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
+	if err != nil {
+		return tool.ExecPermissionContext{}, err
+	}
+	timeout := resolveExecTimeoutSeconds(in)
+	return tool.ExecPermissionContext{Cwd: workdir, TimeoutSeconds: timeout}, nil
+}
+
 func (t *execCommandTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolExecCommand,
@@ -292,7 +309,7 @@ func (t *execCommandTool) Call(
 		return nil, err
 	}
 	yield := firstInt(in.YieldTimeMS, in.YieldMs)
-	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
+	timeout := resolveExecTimeoutSeconds(in)
 
 	res, err := t.mgr.exec(ctx, execParams{
 		Command:    in.Command,
@@ -301,12 +318,19 @@ func (t *execCommandTool) Call(
 		Pty:        firstBool(in.TTY, in.PTY),
 		Background: in.Background,
 		YieldMs:    yield,
-		TimeoutS:   timeout,
+		TimeoutS:   &timeout,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return mapExecResult(res), nil
+}
+
+func resolveExecTimeoutSeconds(in execInput) int {
+	if value := firstInt(in.TimeoutSec, in.TimeoutSecOld); value != nil && *value > 0 {
+		return *value
+	}
+	return DefaultTimeoutSeconds
 }
 
 type writeStdinTool struct {
@@ -639,5 +663,6 @@ func cloneEnvMap(env map[string]string) map[string]string {
 
 var _ tool.ToolSet = (*toolSet)(nil)
 var _ tool.CallableTool = (*execCommandTool)(nil)
+var _ tool.ExecPermissionContextResolver = (*execCommandTool)(nil)
 var _ tool.CallableTool = (*writeStdinTool)(nil)
 var _ tool.CallableTool = (*killSessionTool)(nil)

@@ -184,9 +184,15 @@ func RequestFromPermissionRequest(
 	}
 	switch toolName {
 	case "workspace_exec":
-		return parseExecLikeArgs(base, req.Arguments, BackendWorkspaceExec, "cwd")
+		return parseExecLikeArgs(
+			base, req.Arguments, BackendWorkspaceExec, "cwd", req.Tool,
+		)
 	case "exec_command":
-		return parseExecLikeArgs(base, req.Arguments, BackendHostExec, "workdir")
+		return parseExecLikeArgs(
+			base, req.Arguments, BackendHostExec, "workdir", req.Tool,
+		)
+	case "write_stdin", "workspace_write_stdin":
+		return parseWriteStdinArgs(base, req.Arguments, toolName)
 	case "execute_code":
 		return parseCodeExecArgs(base, req.Arguments)
 	default:
@@ -212,22 +218,34 @@ func parseExecLikeArgs(
 	args []byte,
 	backend string,
 	cwdField string,
+	execTool tool.Tool,
 ) (Request, bool, error) {
 	var in execLikeArgs
 	if err := json.Unmarshal(args, &in); err != nil {
 		return Request{}, false, fmt.Errorf("tool safety guard: invalid args: %w", err)
 	}
-	timeout := in.Timeout
-	if timeout <= 0 {
-		if in.TimeoutSec != nil {
-			timeout = *in.TimeoutSec
-		} else if in.TimeoutSecOld != nil {
-			timeout = *in.TimeoutSecOld
-		}
+	timeout := 0
+	if in.TimeoutSec != nil {
+		timeout = *in.TimeoutSec
+	} else if in.TimeoutSecOld != nil {
+		timeout = *in.TimeoutSecOld
+	}
+	if backend == BackendWorkspaceExec && timeout <= 0 {
+		timeout = in.Timeout
 	}
 	cwd := in.Cwd
 	if cwdField == "workdir" {
 		cwd = in.Workdir
+	}
+	if resolver, ok := execTool.(tool.ExecPermissionContextResolver); ok {
+		resolved, err := resolver.ResolveExecPermissionContext(args)
+		if err != nil {
+			return Request{}, false, fmt.Errorf(
+				"tool safety guard: resolve exec context: %w", err,
+			)
+		}
+		cwd = resolved.Cwd
+		timeout = resolved.TimeoutSeconds
 	}
 	base.Command = in.Command
 	base.Cwd = cwd
@@ -236,6 +254,34 @@ func parseExecLikeArgs(
 	base.TimeoutSeconds = timeout
 	base.Background = in.Background
 	base.TTY = boolValue(in.TTY) || boolValue(in.PTY)
+	return base, true, nil
+}
+
+type writeStdinArgs struct {
+	Chars         string `json:"chars"`
+	AppendNewline *bool  `json:"append_newline"`
+	Submit        *bool  `json:"submit"`
+}
+
+func parseWriteStdinArgs(
+	base Request,
+	args []byte,
+	toolName string,
+) (Request, bool, error) {
+	var in writeStdinArgs
+	if err := json.Unmarshal(args, &in); err != nil {
+		return Request{}, false, fmt.Errorf("tool safety guard: invalid args: %w", err)
+	}
+	if in.Chars == "" && !boolValue(in.AppendNewline) && !boolValue(in.Submit) {
+		return Request{}, false, nil
+	}
+	base.Command = in.Chars
+	base.InteractiveWrite = true
+	if toolName == "workspace_write_stdin" {
+		base.Backend = BackendWorkspaceExec
+	} else {
+		base.Backend = BackendHostExec
+	}
 	return base, true, nil
 }
 

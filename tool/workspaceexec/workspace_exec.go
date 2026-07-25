@@ -41,6 +41,9 @@ const (
 	defaultWorkspaceExecTimeout = 5 * time.Minute
 	defaultWorkspaceWriteYield  = 200
 	outputTruncatedMarker       = "\n...[output truncated]...\n"
+	// DefaultTimeoutSeconds is the effective workspace_exec timeout when all
+	// supported timeout arguments are omitted or non-positive.
+	DefaultTimeoutSeconds = int(defaultWorkspaceExecTimeout / time.Second)
 )
 
 // Environment variables that mirror the option names; useful for
@@ -84,6 +87,23 @@ type ExecTool struct {
 	sessions map[string]*execSession
 	ttl      time.Duration
 	clock    func() time.Time
+}
+
+// ResolveExecPermissionContext resolves arguments exactly as prepareExec does
+// without creating a workspace or starting a process.
+func (t *ExecTool) ResolveExecPermissionContext(
+	args []byte,
+) (tool.ExecPermissionContext, error) {
+	var in execInput
+	if err := json.Unmarshal(args, &in); err != nil {
+		return tool.ExecPermissionContext{}, fmt.Errorf("invalid args: %w", err)
+	}
+	cwd, err := normalizeCWD(in.Cwd)
+	if err != nil {
+		return tool.ExecPermissionContext{}, err
+	}
+	timeout := resolveExecTimeoutSeconds(in)
+	return tool.ExecPermissionContext{Cwd: cwd, TimeoutSeconds: timeout}, nil
 }
 
 // WriteStdinTool sends additional stdin to a running workspace_exec session.
@@ -643,10 +663,7 @@ func (t *ExecTool) prepareExec(
 	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
 		return execRequest{}, err
 	}
-	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
-	if timeout <= 0 {
-		timeout = in.Timeout
-	}
+	timeout := resolveExecTimeoutSeconds(in)
 	return execRequest{
 		background: in.Background,
 		tty:        firstBoolValue(in.TTY, in.PTY),
@@ -713,6 +730,17 @@ func (t *ExecTool) executeWorkspaceAttempt(
 	}
 	out, err := t.callNonSessional(ctx, *req)
 	return out, true, err
+}
+
+func resolveExecTimeoutSeconds(in execInput) int {
+	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
+	if timeout <= 0 {
+		timeout = in.Timeout
+	}
+	if timeout <= 0 {
+		return DefaultTimeoutSeconds
+	}
+	return timeout
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -1357,6 +1385,7 @@ func isAllowedWorkspacePath(rel string) bool {
 
 var _ tool.Tool = (*ExecTool)(nil)
 var _ tool.CallableTool = (*ExecTool)(nil)
+var _ tool.ExecPermissionContextResolver = (*ExecTool)(nil)
 var _ tool.Tool = (*WriteStdinTool)(nil)
 var _ tool.CallableTool = (*WriteStdinTool)(nil)
 var _ tool.Tool = (*KillSessionTool)(nil)

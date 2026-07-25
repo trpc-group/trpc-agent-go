@@ -30,6 +30,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 const (
@@ -95,6 +96,7 @@ func DefaultPolicy() Policy {
 		DeniedPaths: []string{
 			"/", "/bin", "/boot", "/dev", "/etc", "/lib", "/lib64",
 			"/proc", "/root", "/sbin", "/sys", "/usr", "/var",
+			"c:/windows", "c:/program files", "c:/programdata",
 			"~/.ssh", ".ssh", ".env", ".npmrc", ".pypirc",
 			"id_rsa", "id_ed25519", "credentials", "credential",
 			"secrets", "secret",
@@ -250,10 +252,11 @@ type Request struct {
 	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
 	// MaxOutputBytes is a caller-declared execution cap. A scan validates the
 	// value but does not truncate executor output itself.
-	MaxOutputBytes int64       `json:"max_output_bytes,omitempty"`
-	Background     bool        `json:"background,omitempty"`
-	TTY            bool        `json:"tty,omitempty"`
-	CodeBlocks     []CodeBlock `json:"code_blocks,omitempty"`
+	MaxOutputBytes   int64       `json:"max_output_bytes,omitempty"`
+	Background       bool        `json:"background,omitempty"`
+	TTY              bool        `json:"tty,omitempty"`
+	InteractiveWrite bool        `json:"interactive_write,omitempty"`
+	CodeBlocks       []CodeBlock `json:"code_blocks,omitempty"`
 }
 
 // Finding is one matched safety rule.
@@ -375,6 +378,8 @@ func (s scanner) scan(req Request) Report {
 		for _, block := range req.CodeBlocks {
 			findings = append(findings, s.scanCodeBlock(req, block)...)
 		}
+	} else if req.InteractiveWrite {
+		findings = append(findings, s.scanSecretText(cmd, "interactive input")...)
 	} else {
 		findings = append(findings, s.scanShell(req, cmd)...)
 	}
@@ -393,6 +398,15 @@ func (s scanner) scan(req Request) Report {
 
 func (s scanner) scanRequestEnvelope(req Request) []Finding {
 	var findings []Finding
+	if req.InteractiveWrite {
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview,
+			RiskHigh,
+			"interactive.stdin_write",
+			[]string{"interactive session input can execute deferred commands"},
+			"Review non-empty interactive input before writing it to a running session.",
+		))
+	}
 	if s.pathDenied(req.Cwd) {
 		findings = append(findings, newFinding(
 			DecisionDeny,
@@ -424,7 +438,7 @@ func (s scanner) scanRequestEnvelope(req Request) []Finding {
 		))
 	}
 	timeoutSeconds := effectiveTimeoutSeconds(req)
-	if timeoutSeconds > s.policy.MaxTimeoutSeconds {
+	if !req.InteractiveWrite && timeoutSeconds > s.policy.MaxTimeoutSeconds {
 		findings = append(findings, newFinding(
 			DecisionDeny,
 			RiskHigh,
@@ -450,6 +464,9 @@ func (s scanner) scanRequestEnvelope(req Request) []Finding {
 func effectiveTimeoutSeconds(req Request) int {
 	if req.Backend == BackendHostExec && req.TimeoutSeconds <= 0 {
 		return hostexec.DefaultTimeoutSeconds
+	}
+	if req.Backend == BackendWorkspaceExec && req.TimeoutSeconds <= 0 {
+		return workspaceexec.DefaultTimeoutSeconds
 	}
 	return req.TimeoutSeconds
 }
@@ -589,6 +606,15 @@ func (s scanner) scanRawCommand(req Request, command string) []Finding {
 	var findings []Finding
 	lower := strings.ToLower(command)
 	findings = append(findings, s.scanSecretText(command, "command")...)
+	if req.Backend == BackendHostExec && hasWindowsCmdSyntax(command) {
+		findings = append(findings, newFinding(
+			DecisionDeny,
+			RiskHigh,
+			"shell.windows_cmd_syntax",
+			[]string{"host command contains cmd.exe expansion or caret syntax"},
+			"Pass literal argv without cmd.exe variable expansion or caret escaping.",
+		))
+	}
 	if hasShellBypass(lower) {
 		findings = append(findings, newFinding(
 			DecisionDeny,
@@ -624,6 +650,10 @@ func (s scanner) scanRawCommand(req Request, command string) []Finding {
 	return findings
 }
 
+func hasWindowsCmdSyntax(command string) bool {
+	return windowsCmdExpansionRE.MatchString(command) || strings.Contains(command, "^")
+}
+
 func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 	var findings []Finding
 	for _, argv := range pipe.Commands {
@@ -641,9 +671,28 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 			))
 		}
 		chain := commandChain(argv)
-		for _, effective := range chain {
+		for i, effective := range chain {
 			effectiveName := commandName(effective[0])
 			findings = append(findings, s.scanDeniedCommand(effectiveName)...)
+			if i == len(chain)-1 && shellsafe.IsImplicitlyDenied(effectiveName) {
+				findings = append(findings, newFinding(
+					DecisionDeny,
+					RiskHigh,
+					"shell.intrinsic_unsafe_command",
+					[]string{fmt.Sprintf(
+						"command %q is an unsafe shell builtin or re-executing command", effective[0])},
+					"Use a directly inspectable command or an audited workspace script.",
+				))
+			}
+			if isEnvironmentDumpCommand(effectiveName, effective) {
+				findings = append(findings, newFinding(
+					DecisionNeedsHumanReview,
+					RiskHigh,
+					"sensitive.inherited_environment",
+					[]string{fmt.Sprintf("command %q can print inherited environment variables", effective[0])},
+					"Use an executor with a proven clean environment or review the output manually.",
+				))
+			}
 			if len(s.policy.AllowedCommands) > 0 &&
 				!s.commandAllowed(effective[0]) {
 				findings = append(findings, newFinding(
@@ -657,8 +706,7 @@ func (s scanner) scanParsedCommands(pipe *shellsafe.Pipeline) []Finding {
 			}
 			findings = append(findings,
 				s.scanDangerousCommand(effectiveName, effective)...)
-			findings = append(findings,
-				s.scanReviewCommand(strings.Join(effective, " "))...)
+			findings = append(findings, s.scanReviewCommand(effective)...)
 		}
 		last := chain[len(chain)-1]
 		if isUnresolvedReexecWrapper(commandName(last[0])) {
@@ -769,11 +817,18 @@ func isSystemPath(path string) bool {
 	})
 }
 
-func (s scanner) scanReviewCommand(command string) []Finding {
-	lower := strings.ToLower(strings.TrimSpace(command))
+func (s scanner) scanReviewCommand(argv []string) []Finding {
+	if len(argv) == 0 {
+		return nil
+	}
+	raw := strings.ToLower(strings.TrimSpace(strings.Join(argv, " ")))
+	normalized := commandName(argv[0])
+	if len(argv) > 1 {
+		normalized += " " + strings.ToLower(strings.Join(argv[1:], " "))
+	}
 	for _, review := range s.policy.ReviewCommands {
 		r := strings.ToLower(strings.TrimSpace(review))
-		if r != "" && strings.HasPrefix(lower, r) {
+		if r != "" && (strings.HasPrefix(raw, r) || strings.HasPrefix(normalized, r)) {
 			return []Finding{newFinding(
 				DecisionNeedsHumanReview,
 				RiskMedium,
@@ -1105,6 +1160,17 @@ func containsNetworkCommand(argv []string) bool {
 	return false
 }
 
+func isEnvironmentDumpCommand(name string, argv []string) bool {
+	switch name {
+	case "env":
+		return len(unwrapEnvCommand(argv)) == 0
+	case "printenv", "set":
+		return true
+	default:
+		return false
+	}
+}
+
 func commandChain(argv []string) [][]string {
 	var commands [][]string
 	for len(argv) > 0 {
@@ -1144,13 +1210,33 @@ func unwrapEnvCommand(argv []string) []string {
 	}
 	for i := 1; i < len(argv); {
 		arg := argv[i]
-		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" {
+		if arg == "--" {
+			if i+1 < len(argv) {
+				return argv[i+1:]
+			}
+			return nil
+		}
+		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" ||
+			arg == "-a" || arg == "--argv0" {
 			i += 2
 			continue
 		}
-		if strings.HasPrefix(arg, "-") || strings.Contains(arg, "=") {
+		if strings.HasPrefix(arg, "--unset=") || strings.HasPrefix(arg, "--chdir=") ||
+			strings.HasPrefix(arg, "--argv0=") ||
+			(strings.HasPrefix(arg, "-u") && len(arg) > 2) ||
+			(strings.HasPrefix(arg, "-C") && len(arg) > 2) ||
+			(strings.HasPrefix(arg, "-a") && len(arg) > 2) {
 			i++
 			continue
+		}
+		if arg == "-i" || arg == "--ignore-environment" || arg == "-0" ||
+			arg == "--null" || arg == "-v" || arg == "--debug" ||
+			strings.Contains(arg, "=") {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-") {
+			return nil
 		}
 		return argv[i:]
 	}
@@ -1548,8 +1634,7 @@ func normalizeShellScript(script string) string {
 	inDouble := false
 	for i := 0; i < len(script); i++ {
 		char := script[i]
-		if end, ok := shellLineContinuationEnd(script, i); ok {
-			normalized.WriteByte(' ')
+		if end, ok := shellLineContinuationEnd(script, i); ok && !inSingle {
 			i = end
 			continue
 		}
@@ -1742,14 +1827,18 @@ var (
 		`(?i)(sk-[A-Za-z0-9_-]{12,}|ghp_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)`)
 	secretNameValueRE = regexp.MustCompile(
 		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)=([^ \t\n\r;&|]+)`)
+	secretSplitValueRE = regexp.MustCompile(
+		`(?i)(--?(?:api[_-]?key|token|password|passwd|secret|private[_-]?key|credential))([ \t]+)([^ \t\n\r;&|]+)`)
 	codeStringLiteralRE = regexp.MustCompile(
 		`(?s)(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
 	codeNetworkCallRE = regexp.MustCompile(
-		`(?i)\b(?:socket\.(?:create_connection|getaddrinfo)|[a-z_][a-z0-9_]*\.connect|http\.client\.(?:http|https)connection)\s*\(\s*\(?\s*["']([^"']+)["']`)
+		`(?i)\b(?:socket\.(?:create_connection|getaddrinfo)|socket\.socket\s*\(\s*\)\s*\.connect|[a-z_][a-z0-9_]*\.connect|http\.client\.(?:http|https)connection)\s*\(\s*\(?\s*["']([^"']+)["']`)
+	windowsCmdExpansionRE = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
 )
 
 func looksSensitive(text string) bool {
 	return secretValueRE.MatchString(text) ||
+		secretSplitValueRE.MatchString(text) ||
 		(secretNameRE.MatchString(text) && strings.Contains(text, "="))
 }
 
@@ -1763,6 +1852,7 @@ func (r *redactor) redact(s string) string {
 	orig := s
 	s = secretValueRE.ReplaceAllString(s, "[REDACTED_SECRET]")
 	s = secretNameValueRE.ReplaceAllString(s, "$1=[REDACTED_SECRET]")
+	s = secretSplitValueRE.ReplaceAllString(s, "$1$2[REDACTED_SECRET]")
 	if s != orig {
 		r.changed = true
 	}

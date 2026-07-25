@@ -95,6 +95,19 @@ type PermissionRequest struct {
 	Metadata ToolMetadata
 }
 
+// ExecPermissionContext is the executor-resolved context that a permission
+// policy must inspect before allowing an exec-like tool call.
+type ExecPermissionContext struct {
+	Cwd            string
+	TimeoutSeconds int
+}
+
+// ExecPermissionContextResolver exposes the same cwd and timeout resolution
+// used by an exec-like tool without starting the command.
+type ExecPermissionContextResolver interface {
+	ResolveExecPermissionContext(args []byte) (ExecPermissionContext, error)
+}
+
 // PermissionChecker is implemented by tools that need to enforce their own
 // non-negotiable permission rule before execution.
 type PermissionChecker interface {

@@ -97,6 +97,25 @@ func Parse(command string) (*Pipeline, error) {
 	return &Pipeline{Commands: cmds}, nil
 }
 
+// IsImplicitlyDenied reports whether command is a shell wrapper,
+// re-executing command, or stateful builtin that an active shellsafe policy
+// always rejects.
+func IsImplicitlyDenied(command string) bool {
+	base := basenameForGOOS(strings.TrimSpace(command), runtime.GOOS)
+	_, ok := implicitDeny[normalizeName(base, runtime.GOOS)]
+	return ok
+}
+
+// withParser swaps the active parser for the duration of the
+// returned cleanup function and returns the previous parser. It is
+// intended for tests that exercise the Pipeline / Policy layer
+// without exercising the underlying parser implementation.
+func withParser(p commandParser) (restore func()) {
+	prev := parseCommand
+	parseCommand = p
+	return func() { parseCommand = prev }
+}
+
 // implicitDeny is the set of executable names that are always
 // denied whenever a policy is active. Membership cannot be
 // overridden by the user's Allow list: these are command runners,

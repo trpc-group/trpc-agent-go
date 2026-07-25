@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
 func TestScanRequiredSamples(t *testing.T) {
@@ -883,6 +885,130 @@ func TestPermissionPolicyResolvesHostExecDefaultTimeout(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyMatchesExecutorTimeoutSemantics(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := hostSet.(interface{ Close() error }); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	hostTool := hostSet.Tools(context.Background())[0]
+	workspaceTool := &workspaceexec.ExecTool{}
+	tests := []struct {
+		name     string
+		toolName string
+		execTool tool.Tool
+		args     string
+		want     int
+	}{
+		{
+			name: "workspace timeout_sec wins", toolName: "workspace_exec", execTool: workspaceTool,
+			args: `{"command":"go test ./...","timeout":300,"timeout_sec":1000}`,
+			want: 1000,
+		},
+		{
+			name: "workspace legacy timeoutSec wins", toolName: "workspace_exec", execTool: workspaceTool,
+			args: `{"command":"go test ./...","timeout":300,"timeoutSec":900}`,
+			want: 900,
+		},
+		{
+			name: "host ignores timeout", toolName: "exec_command", execTool: hostTool,
+			args: `{"command":"go test ./...","timeout":300,"timeout_sec":1000}`,
+			want: 1000,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+				Tool: tt.execTool, ToolName: tt.toolName, Arguments: []byte(tt.args),
+			})
+			if err != nil || !ok {
+				t.Fatalf("parse request: ok=%v err=%v", ok, err)
+			}
+			if req.TimeoutSeconds != tt.want {
+				t.Fatalf("timeout = %d, want %d", req.TimeoutSeconds, tt.want)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyResolvesWorkspaceExecDefaultTimeout(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.MaxTimeoutSeconds = 30
+	guard := NewPermissionPolicy(policy)
+	for _, args := range []string{
+		`{"command":"go test ./..."}`,
+		`{"command":"go test ./...","timeout_sec":0}`,
+		`{"command":"go test ./...","timeout_sec":-1}`,
+	} {
+		decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName: "workspace_exec", Arguments: []byte(args),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Action != tool.PermissionActionDeny ||
+			!strings.Contains(decision.Reason, "timeout 300s") {
+			t.Fatalf("workspace default timeout should be denied: %+v", decision)
+		}
+	}
+}
+
+func TestPermissionPolicyScansResolvedHostExecWorkdir(t *testing.T) {
+	set, err := hostexec.NewToolSet(hostexec.WithBaseDir("/etc"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := set.(interface{ Close() error }); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	execTool := set.Tools(context.Background())[0]
+	guard := NewPermissionPolicy(DefaultPolicy())
+	for _, args := range []string{
+		`{"command":"cat passwd","timeout_sec":300}`,
+		`{"command":"cat file","workdir":"ssl","timeout_sec":300}`,
+	} {
+		decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			Tool: execTool, ToolName: "exec_command", Arguments: []byte(args),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Action != tool.PermissionActionDeny ||
+			!strings.Contains(decision.Reason, "sensitive.cwd_access") {
+			t.Fatalf("resolved host workdir should be denied: %+v", decision)
+		}
+	}
+}
+
+func TestPermissionPolicyReviewsInteractiveWrites(t *testing.T) {
+	guard := NewPermissionPolicy(DefaultPolicy())
+	tests := []struct {
+		name     string
+		toolName string
+		args     string
+		want     tool.PermissionAction
+	}{
+		{name: "host poll", toolName: "write_stdin", args: `{"session_id":"s"}`, want: tool.PermissionActionAllow},
+		{name: "host write", toolName: "write_stdin", args: `{"session_id":"s","chars":"open('/etc/passwd')"}`, want: tool.PermissionActionAsk},
+		{name: "workspace submit", toolName: "workspace_write_stdin", args: `{"session_id":"s","submit":true}`, want: tool.PermissionActionAsk},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName: tt.toolName, Arguments: []byte(tt.args),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tt.want {
+				t.Fatalf("action = %q, want %q: %+v", decision.Action, tt.want, decision)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicyChecksNonShellCodePathsAndNetwork(t *testing.T) {
 	tests := []struct {
 		name string
@@ -897,6 +1023,11 @@ func TestPermissionPolicyChecksNonShellCodePathsAndNetwork(t *testing.T) {
 		{
 			name: "non-allowlisted Python socket",
 			code: `socket.create_connection(('evil.example', 443))`,
+			rule: "network.non_whitelisted_domain",
+		},
+		{
+			name: "non-allowlisted chained Python socket",
+			code: `socket.socket().connect(('evil.example', 443))`,
 			rule: "network.non_whitelisted_domain",
 		},
 	}
@@ -1312,6 +1443,28 @@ func TestScanRedactsSecrets(t *testing.T) {
 	}
 }
 
+func TestScanRedactsSplitSecretArguments(t *testing.T) {
+	for _, command := range []string{
+		"client --api-key hunter2",
+		"client --token opaque-value",
+	} {
+		report := Scan(Request{
+			ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+			Command: command,
+		}, DefaultPolicy())
+		if report.Decision != DecisionDeny || !report.Redacted {
+			t.Fatalf("split secret should be denied and redacted: %+v", report)
+		}
+		raw, err := json.Marshal(report)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(raw, []byte("hunter2")) || bytes.Contains(raw, []byte("opaque-value")) {
+			t.Fatalf("serialized report leaked secret: %s", raw)
+		}
+	}
+}
+
 func TestScanMetadataEnvAndTelemetry(t *testing.T) {
 	report := Scan(Request{
 		ToolName: "workspace_exec",
@@ -1490,6 +1643,108 @@ func TestScanAdditionalRuleBranches(t *testing.T) {
 	}
 }
 
+func TestScanClosesNewCommandAndPathBypasses(t *testing.T) {
+	tests := []struct {
+		name   string
+		req    Request
+		ruleID string
+	}{
+		{
+			name: "windows cmd expansion",
+			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
+				Command: `%COMSPEC% /c shutdown /s /t 0`, TimeoutSeconds: 300},
+			ruleID: "shell.windows_cmd_syntax",
+		},
+		{
+			name: "deferred trap builtin",
+			req: Request{ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: `trap 'sudo id' EXIT`, TimeoutSeconds: 300},
+			ruleID: "shell.intrinsic_unsafe_command",
+		},
+		{
+			name: "windows cwd",
+			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
+				Command: "dir", Cwd: `C:\Windows`, TimeoutSeconds: 300},
+			ruleID: "sensitive.cwd_access",
+		},
+		{
+			name: "windows file read",
+			req: Request{ToolName: "exec_command", Backend: BackendHostExec,
+				Command: `type 'C:\Windows\System32\drivers\etc\hosts'`, TimeoutSeconds: 300},
+			ruleID: "sensitive.path_access",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			report := Scan(tt.req, DefaultPolicy())
+			if report.Decision == DecisionAllow || !reportHasRule(report, tt.ruleID) {
+				t.Fatalf("expected %s: %+v", tt.ruleID, report)
+			}
+		})
+	}
+}
+
+func TestScanEnvironmentDumpCommandsNeverAllow(t *testing.T) {
+	for _, command := range []string{"env", "printenv", "set"} {
+		report := Scan(Request{
+			ToolName: "exec_command", Backend: BackendHostExec,
+			Command: command, TimeoutSeconds: 300,
+		}, DefaultPolicy())
+		if report.Decision == DecisionAllow ||
+			!reportHasRule(report, "sensitive.inherited_environment") {
+			t.Fatalf("environment dump %q should not be allowed: %+v", command, report)
+		}
+	}
+}
+
+func TestScanEnvArgv0CannotHideEffectiveCommand(t *testing.T) {
+	tests := []struct {
+		command string
+		ruleID  string
+	}{
+		{command: "env -a marker sudo id", ruleID: "policy.denied_command"},
+		{command: "env --argv0 marker curl evil.example", ruleID: "network.non_whitelisted_domain"},
+		{command: "env -a marker curl evil.example", ruleID: "network.non_whitelisted_domain"},
+		{command: "env --unknown marker sudo id", ruleID: "shell.intrinsic_unsafe_command"},
+	}
+	for _, tt := range tests {
+		report := Scan(Request{
+			ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+			Command: tt.command, TimeoutSeconds: 300,
+		}, DefaultPolicy())
+		if report.Decision == DecisionAllow || !reportHasRule(report, tt.ruleID) {
+			t.Fatalf("env command bypassed %s: %+v", tt.ruleID, report)
+		}
+	}
+}
+
+func TestScanDetectsCommandAcrossLineContinuation(t *testing.T) {
+	report := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "bash", Code: "cu\\\nrl evil.example"}},
+	}, DefaultPolicy())
+	if report.Decision != DecisionDeny ||
+		!reportHasRule(report, "network.non_whitelisted_domain") {
+		t.Fatalf("continued curl should be denied: %+v", report)
+	}
+}
+
+func TestScanReviewCommandsNormalizesExecutable(t *testing.T) {
+	for _, command := range []string{
+		"/usr/bin/npm install left-pad",
+		"env npm install left-pad",
+	} {
+		report := Scan(Request{
+			ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+			Command: command, TimeoutSeconds: 300,
+		}, DefaultPolicy())
+		if report.Decision != DecisionNeedsHumanReview ||
+			!reportHasRule(report, "dependency.environment_change") {
+			t.Fatalf("installer should require review: %+v", report)
+		}
+	}
+}
+
 func TestScanCodeExecAppliesRequestEnvelope(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1606,12 +1861,12 @@ func TestScanHighConcurrencyNeedsReview(t *testing.T) {
 
 func TestCommandNameStripsExecutableSuffixCaseInsensitively(t *testing.T) {
 	tests := map[string]string{
-		"DD.EXE":          "dd",
-		"Curl.ExE":        "curl",
-		"SCRIPT.CMD":      "script",
-		"Tool.BaT":        "tool",
-		"utility.CoM":     "utility",
-		`C:\\Bin\\DD.EXE`: "dd",
+		"DD.EXE":        "dd",
+		"Curl.ExE":      "curl",
+		"SCRIPT.CMD":    "script",
+		"Tool.BaT":      "tool",
+		"utility.CoM":   "utility",
+		`C:\Bin\DD.EXE`: "dd",
 	}
 	for input, want := range tests {
 		if got := commandName(input); got != want {
@@ -1901,12 +2156,12 @@ func TestNormalizeShellScriptVariants(t *testing.T) {
 		{
 			name:   "escaped LF",
 			script: "echo one\\\ntwo",
-			want:   "echo one two",
+			want:   "echo onetwo",
 		},
 		{
 			name:   "escaped CRLF",
 			script: "echo one\\\r\ntwo",
-			want:   "echo one two",
+			want:   "echo onetwo",
 		},
 		{
 			name:   "newline in single quotes",
