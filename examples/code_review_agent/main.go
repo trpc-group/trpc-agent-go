@@ -96,7 +96,7 @@ func parseFlags(args []string) (*cliFlags, error) {
 	fs.StringVar(&f.executor, "executor", "container", "sandbox executor backend: container|e2b|local")
 	fs.BoolVar(&f.unsafeLocal, "unsafe-local", false, "allow the unsafe local executor (fail-closed by default)")
 	fs.BoolVar(&f.unsafeAllowE2BNetwork, "unsafe-allow-e2b-network", false, "allow the e2b backend despite it having network access (fail-closed by default)")
-	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs and plan the review without executing sandboxed tools")
+	fs.BoolVar(&f.dryRun, "dry-run", false, "parse inputs, run rules, and plan the review without executing any sandboxed tools")
 	fs.StringVar(&f.model, "model", "deepseek-v4-flash", "LLM model identifier: 'fake' uses a deterministic API-key-free fake model suitable for CI; the default runs rule-based review only")
 	// PR metadata (borrowed from competitor PR #2090): embedded in the
 	// report header so CI-generated reports carry reviewer context.
@@ -473,8 +473,11 @@ func resolveSkillsDir() string {
 }
 
 // runSandboxChecks initialises the sandbox, plans the static-check commands,
-// applies the permission policy to each, and executes the allowed ones. In
-// dry-run mode it keeps `go vet` and `staticcheck` but skips `go test`.
+// applies the permission policy to each, and executes the allowed ones.
+//
+// dry-run mode never executes sandboxed tools: it records a StatusSkipped
+// plan-only result. file-list mode also skips full-repo sandbox execution so
+// `go vet`/`staticcheck`/`go test ./...` cannot escape the listed files.
 //
 // When skillDir is non-empty, the skill's shell scripts (run_go_vet.sh,
 // run_staticcheck.sh, run_go_unit.sh) are staged read-only into the workspace
@@ -486,16 +489,44 @@ func resolveSkillsDir() string {
 // workspace never outlives the sandbox checks. Sandbox construction failures
 // are fail-closed in normal mode and best-effort skipped in dry-run mode.
 //
-// When opts.repoPath is empty (diff-only / fixture / file-list mode) the
-// static checks are skipped entirely: go vet, staticcheck and go test all
-// require a staged Go repository, and running them against an empty
-// workspace only produces noise (failed runs that force the conclusion to
-// needs_human_review without surfacing any real issue). A single skipped
-// record is returned so the report is transparent about why sandbox checks
-// did not run.
+// When opts.repoPath is empty (diff-only / fixture mode) the static checks are
+// skipped entirely: go vet, staticcheck and go test all require a staged Go
+// repository, and running them against an empty workspace only produces noise
+// (failed runs that force the conclusion to needs_human_review without
+// surfacing any real issue). A single skipped record is returned so the report
+// is transparent about why sandbox checks did not run.
 func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, policy *permission.Policy, metrics *telemetry.Metrics, skillDir string) ([]sandboxRunRecord, []store.PermissionDecision, error) {
+	// dry-run: never start a sandbox or run analyzers. The planned command list
+	// is recorded for transparency so callers can still inspect what a full
+	// repo review would execute.
+	if opts.dryRun {
+		log.Printf("sandbox checks skipped: dry-run mode (no sandboxed tools executed)")
+		return []sandboxRunRecord{{
+			command: "sandbox-plan",
+			result: sandbox.RunResult{
+				Status:   sandbox.StatusSkipped,
+				ExitCode: 0,
+				Stdout:   []byte(formatSandboxPlan(opts)),
+			},
+		}}, nil, nil
+	}
+	// file-list mode anchors on --repo-path but only the listed files are in
+	// scope for deterministic rules. Full-repo go vet/staticcheck/go test ./...
+	// would analyze packages outside the list. Skip sandbox execution so the
+	// CLI contract stays file-list scoped.
+	if opts.fileList != "" {
+		log.Printf("sandbox checks skipped: file-list mode scopes review to listed files only")
+		return []sandboxRunRecord{{
+			command: "sandbox-file-list-scope",
+			result: sandbox.RunResult{
+				Status:   sandbox.StatusSkipped,
+				ExitCode: 0,
+				Stdout:   []byte("file-list mode: sandbox full-repo checks skipped; rules cover listed files only\n"),
+			},
+		}}, nil, nil
+	}
 	if opts.repoPath == "" {
-		log.Printf("sandbox checks skipped: no repo staged (diff-only/fixture/file-list mode)")
+		log.Printf("sandbox checks skipped: no repo staged (diff-only/fixture mode)")
 		return []sandboxRunRecord{{
 			command: "go-vet+staticcheck+go-test",
 			result:  sandbox.RunResult{Status: sandbox.StatusSkipped, ExitCode: 0, Stdout: nil, Stderr: nil},
@@ -647,12 +678,14 @@ func executeSandboxCommands(
 	return records, perms, nil
 }
 
-// planSandboxCommands returns the sandbox commands to run. When useSkillScripts
-// is true, the skill's POSIX shell scripts (already staged into the workspace
-// at sandbox.SkillStageDir) are used instead of bare `go vet`/`staticcheck`/
-// `go test`, so the example exercises the Skill + sandbox integration.
-// `go vet` and `staticcheck` scripts always run; the `go test` script is
-// skipped in dry-run mode to keep the run under two minutes.
+// planSandboxCommands returns the sandbox commands that would run for a
+// full-repo review. dry-run and file-list modes never execute these commands
+// (see runSandboxChecks); the planner still returns the full-repo plan so
+// logs/tests can show what a non-dry repo review would invoke.
+//
+// When useSkillScripts is true, the skill's POSIX shell scripts (already
+// staged into the workspace at sandbox.SkillStageDir) are used instead of
+// bare `go vet`/`staticcheck`/`go test`.
 //
 // Skill scripts run with Cwd="" (workspace root) because the repo is staged
 // read-only — the scripts use $WORKSPACE_DIR/repo to cd into the repo and
@@ -665,23 +698,34 @@ func planSandboxCommands(opts *pipelineOpts, useSkillScripts bool) []sandbox.Run
 	}
 	if useSkillScripts {
 		scriptRel := sandbox.SkillStageDir + "/scripts"
-		specs := []sandbox.RunSpec{
+		return []sandbox.RunSpec{
 			{Cmd: "sh", Args: []string{scriptRel + "/run_go_vet.sh"}, Cwd: ""},
 			{Cmd: "sh", Args: []string{scriptRel + "/run_staticcheck.sh"}, Cwd: ""},
+			{Cmd: "sh", Args: []string{scriptRel + "/run_go_unit.sh"}, Cwd: ""},
 		}
-		if !opts.dryRun {
-			specs = append(specs, sandbox.RunSpec{Cmd: "sh", Args: []string{scriptRel + "/run_go_unit.sh"}, Cwd: ""})
-		}
-		return specs
 	}
-	specs := []sandbox.RunSpec{
+	return []sandbox.RunSpec{
 		{Cmd: "go", Args: []string{"vet", "./..."}, Cwd: repoCwd},
 		{Cmd: "staticcheck", Args: []string{"./..."}, Cwd: repoCwd},
+		{Cmd: "go", Args: []string{"test", "-count=1", "./..."}, Cwd: repoCwd},
 	}
-	if !opts.dryRun {
-		specs = append(specs, sandbox.RunSpec{Cmd: "go", Args: []string{"test", "-count=1", "./..."}, Cwd: repoCwd})
+}
+
+// formatSandboxPlan renders the planned sandbox commands for dry-run reports.
+func formatSandboxPlan(opts *pipelineOpts) string {
+	specs := planSandboxCommands(opts, false)
+	var b strings.Builder
+	b.WriteString("planned sandbox commands (not executed in dry-run):\n")
+	for _, s := range specs {
+		b.WriteString("- ")
+		b.WriteString(s.Cmd)
+		if len(s.Args) > 0 {
+			b.WriteString(" ")
+			b.WriteString(strings.Join(s.Args, " "))
+		}
+		b.WriteString("\n")
 	}
-	return specs
+	return b.String()
 }
 
 // backendFromFlag maps the --executor flag value to a sandbox.Backend. Unknown

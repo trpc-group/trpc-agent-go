@@ -22,7 +22,7 @@ Verify a CGO-free build (the example uses the pure-Go `modernc.org/sqlite` drive
 CGO_ENABLED=0 go build ./...
 ```
 
-Dry-run the skeleton against a clean fixture (parses inputs and plans the review without executing sandboxed tools):
+Dry-run against a clean fixture (parses inputs, runs rules, and plans the review without executing any sandboxed tools):
 
 ```sh
 go run . --dry-run --diff-file ./testdata/fixtures/clean.diff --out-dir ./out --db-path ./review.db
@@ -34,13 +34,13 @@ go run . --dry-run --diff-file ./testdata/fixtures/clean.diff --out-dir ./out --
 | --- | --- | --- | --- |
 | `--diff-file` | string | `""` | Path to a unified diff file to review. |
 | `--repo-path` | string | `""` | Path to the repository under review. |
-| `--file-list` | string | `""` | Path to a newline-separated list of repo-relative files to review. Requires `--repo-path`. |
+| `--file-list` | string | `""` | Path to a newline-separated list of repo-relative files to review. Requires `--repo-path`. Limits both deterministic rules and sandbox checks to the listed files (full-repo `./...` sandbox is skipped). |
 | `--fixture-dir` | string | `""` | Path to a fixture directory used for dry-run inputs. |
 | `--out-dir` | string | `./out` | Directory where review artifacts are written. |
 | `--db-path` | string | `./review.db` | Path to the SQLite database used for persistence. |
 | `--executor` | string | `container` | Sandbox executor backend: `container`, `e2b` or `local`. |
 | `--unsafe-local` | bool | `false` | Allow the unsafe local executor (fail-closed by default). |
-| `--dry-run` | bool | `false` | Parse inputs and plan the review without executing sandboxed tools. |
+| `--dry-run` | bool | `false` | Parse inputs, run rules, and plan the review without executing any sandboxed tools. |
 | `--model` | string | `deepseek-v4-flash` | LLM model identifier used by the review skill. |
 
 ## Architecture

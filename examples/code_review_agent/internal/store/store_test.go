@@ -16,6 +16,8 @@ import (
 	"database/sql"
 	"errors"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
 )
 
@@ -540,5 +542,44 @@ func TestSchemaVersionEmptyOnFreshDB(t *testing.T) {
 	}
 	if v != CurrentSchemaVersion {
 		t.Errorf("SchemaVersion after Migrate = %q, want %q", v, CurrentSchemaVersion)
+	}
+}
+
+// TestNewTaskID_ConcurrentUniqueness generates many IDs in parallel for the
+// same repo path and asserts no collisions. The 64-bit nonce must keep
+// same-second concurrent runs unique.
+func TestNewTaskID_ConcurrentUniqueness(t *testing.T) {
+	const n = 512
+	ids := make([]string, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			ids[i] = NewTaskID("/repo/concurrent")
+		}(i)
+	}
+	wg.Wait()
+	seen := make(map[string]struct{}, n)
+	for _, id := range ids {
+		if id == "" {
+			t.Fatal("empty task id")
+		}
+		if !startsWith(id, "cr-") {
+			t.Fatalf("id %q missing cr- prefix", id)
+		}
+		// cr-<ts>-<8 hash>-<16 nonce>
+		parts := strings.Split(id, "-")
+		if len(parts) < 4 {
+			t.Fatalf("id %q has unexpected shape", id)
+		}
+		nonce := parts[len(parts)-1]
+		if len(nonce) != 16 {
+			t.Fatalf("nonce len = %d, want 16 in %q", len(nonce), id)
+		}
+		if _, ok := seen[id]; ok {
+			t.Fatalf("duplicate task id %q among %d concurrent generations", id, n)
+		}
+		seen[id] = struct{}{}
 	}
 }

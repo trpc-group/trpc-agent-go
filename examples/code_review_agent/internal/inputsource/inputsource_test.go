@@ -378,3 +378,41 @@ func TestPathUnder_IntermediateSymlinkRejected(t *testing.T) {
 		t.Fatal("expected pathUnder to reject intermediate symlink escape")
 	}
 }
+
+// TestLoad_RepoPath_UnresolvedBaseFailsClosed verifies that a feature branch
+// checkout with a real HEAD but no resolvable default-branch refs fails closed
+// instead of reviewing an empty committed diff and potentially reporting pass.
+func TestLoad_RepoPath_UnresolvedBaseFailsClosed(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git not found on PATH: %v", err)
+	}
+	repo := t.TempDir()
+	if err := exec.Command("git", "init", repo).Run(); err != nil {
+		t.Fatalf("git init: %v", err)
+	}
+	_ = exec.Command("git", "-C", repo, "config", "user.email", "test@example.com").Run()
+	_ = exec.Command("git", "-C", repo, "config", "user.name", "test").Run()
+	// Use a non-default branch name so main/master candidates miss.
+	_ = exec.Command("git", "-C", repo, "checkout", "-b", "feature/review-only").Run()
+	tracked := filepath.Join(repo, "main.go")
+	if err := os.WriteFile(tracked, []byte("package main\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatalf("write main.go: %v", err)
+	}
+	if err := exec.Command("git", "-C", repo, "add", "main.go").Run(); err != nil {
+		t.Fatalf("git add: %v", err)
+	}
+	if err := exec.Command("git", "-C", repo, "commit", "-m", "init", "--author=test <test@example.com>").Run(); err != nil {
+		t.Fatalf("git commit: %v", err)
+	}
+	// Ensure no origin/HEAD and no main/master refs exist.
+	_ = exec.Command("git", "-C", repo, "branch", "-D", "main").Run()
+	_ = exec.Command("git", "-C", repo, "branch", "-D", "master").Run()
+
+	_, err := Load(context.Background(), SourceRepoPath, repo)
+	if err == nil {
+		t.Fatal("expected fail-closed error for unresolved default branch, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot resolve default branch") {
+		t.Fatalf("error = %v, want cannot resolve default branch", err)
+	}
+}

@@ -322,8 +322,13 @@ func loadRepoPath(ctx context.Context, repo string) (*Input, error) {
 // ref name (e.g. "origin/main") that merge-base and diff can resolve directly,
 // even when no local branch exists (common in CI checkouts). For repos without
 // remotes it falls back to verifying "main"/"master" as local or remote refs.
-// For repos with an unborn HEAD (no commits), it returns "" so the caller
-// treats the repo as having no committed diff.
+//
+// For repos with an unborn HEAD (no commits yet), it returns "" so the caller
+// treats the repo as having no committed diff and relies on the working-tree
+// path. When HEAD exists but no default-branch candidate can be resolved
+// (shallow/single-branch CI checkouts are the common case), it fails closed
+// instead of silently returning an empty committed diff that would review
+// nothing and can report pass.
 func gitDefaultBranch(ctx context.Context, repo string) (string, error) {
 	out, err := gitOutput(ctx, repo, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
 	if err == nil {
@@ -341,16 +346,27 @@ func gitDefaultBranch(ctx context.Context, repo string) (string, error) {
 			return candidate, nil
 		}
 	}
-	// Unborn HEAD or no branches: return empty so gitCommittedDiff returns "".
-	return "", nil
+	// Distinguish unborn HEAD (no commits) from a real checkout whose base
+	// refs are simply unavailable. Only the former may produce an empty
+	// committed diff; the latter must fail closed so CI cannot silently pass.
+	if _, herr := gitOutput(ctx, repo, "rev-parse", "--verify", "HEAD"); herr != nil {
+		return "", nil
+	}
+	return "", fmt.Errorf(
+		"inputsource: cannot resolve default branch for committed diff " +
+			"(tried origin/HEAD, main, master, origin/main, origin/master); " +
+			"fetch the base branch or provide a diff/file-list input instead")
 }
 
 // gitCommittedDiff returns the diff of HEAD against its merge-base with
-// the given base branch. If baseBranch is empty (unborn HEAD, no commits)
-// or the merge-base fails (unrelated histories), it returns an empty string
-// so the caller only sees the working-tree diff — never a duplicate of it.
+// the given base branch. baseBranch is empty only for an unborn HEAD (no
+// commits); gitDefaultBranch fails closed when HEAD exists but no base can
+// be resolved. If the merge-base fails (unrelated histories), it returns an
+// empty string so the caller only sees the working-tree diff — never a
+// duplicate of it.
 func gitCommittedDiff(ctx context.Context, repo, baseBranch string) (string, error) {
 	if baseBranch == "" {
+		// Unborn HEAD only; unresolved bases are rejected by gitDefaultBranch.
 		return "", nil
 	}
 	base, err := gitOutput(ctx, repo, "merge-base", "HEAD", baseBranch)

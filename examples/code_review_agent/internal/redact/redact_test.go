@@ -36,6 +36,7 @@ func TestText(t *testing.T) {
 		{"secret", `SECRET=verylongsecretvalue123`, 1, "[REDACTED:secret]", "verylongsecretvalue123"},
 		{"github_pat", "ghp_" + strings.Repeat("a", 36), 1, "[REDACTED:github_pat]", "ghp_" + strings.Repeat("a", 36)},
 		{"url_userinfo", `GOPROXY=https://user:token@corp-proxy.example/go`, 1, "[REDACTED:url_userinfo]", "user:token@"},
+		{"standalone_sk", `const credential = "sk-abc123def456ghi789jkl012mno345"`, 1, "[REDACTED:sk_token]", "sk-abc123def456ghi789jkl012mno345"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

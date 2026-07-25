@@ -504,3 +504,39 @@ func keysOf(m map[string]any) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestNoPlaintextStandaloneSkToken covers the SC-001 / redact gap where a
+// neutral identifier still carries a standalone sk- token in Evidence.
+func TestNoPlaintextStandaloneSkToken(t *testing.T) {
+	const secret = "sk-abc123def456ghi789jkl012mno345"
+	rev := &review.Report{
+		TaskID: "task-sk",
+		Findings: []review.Finding{
+			{
+				TaskID: "task-sk", Severity: "high", File: "c.go", Line: 1,
+				Title:          "Sensitive information in added line",
+				Evidence:       `const credential = "` + secret + `"`,
+				Recommendation: "remove credential",
+				Confidence:     0.8, RuleID: "SC-001",
+			},
+		},
+	}
+	rd := Build("task-sk", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
+	dir := t.TempDir()
+	jsonPath, mdPath, err := rd.WriteAll(dir)
+	if err != nil {
+		t.Fatalf("WriteAll: %v", err)
+	}
+	for _, path := range []string{jsonPath, mdPath} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if strings.Contains(string(data), secret) {
+			t.Fatalf("%s still contains plaintext sk token", path)
+		}
+	}
+	if strings.Contains(rd.Review.Findings[0].Evidence, secret) {
+		t.Fatal("in-memory finding evidence still contains plaintext sk token")
+	}
+}

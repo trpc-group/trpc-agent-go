@@ -566,14 +566,15 @@ LIMIT ?;`, limit)
 }
 
 // NewTaskID returns a run-unique task id of the form
-// "cr-<UTC timestamp>-<repoPath short hash>-<4 hex nonce>". The timestamp is
+// "cr-<UTC timestamp>-<repoPath short hash>-<16 hex nonce>". The timestamp is
 // formatted as "20060102-150405" (UTC), the short hash is the first n hex
-// characters of a stable FNV-1a hash of repoPath, and the nonce is 4 random hex
-// characters drawn from crypto/rand. The nonce guarantees uniqueness across
-// multiple runs that share the same day and repository.
+// characters of a stable FNV-1a hash of repoPath, and the nonce is 16 random
+// hex characters (64 bits from crypto/rand). The 64-bit nonce keeps
+// same-second, same-repo concurrent runs collision-resistant without relying
+// on clock resolution alone.
 func NewTaskID(repoPath string) string {
 	ts := time.Now().UTC().Format("20060102-150405")
-	return fmt.Sprintf("cr-%s-%s-%s", ts, shortHash(repoPath, 8), nonce(4))
+	return fmt.Sprintf("cr-%s-%s-%s", ts, shortHash(repoPath, 8), nonce(16))
 }
 
 // shortHash returns the first n hex characters of the FNV-1a hash of s. It is

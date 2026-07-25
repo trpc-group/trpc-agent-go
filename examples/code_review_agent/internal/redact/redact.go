@@ -40,6 +40,10 @@ var patterns = []redactPattern{
 	{regexp.MustCompile(`\beyJ[A-Za-z0-9_\-]{8,}\.eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b`), "[REDACTED:jwt]"},
 	{regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`), "[REDACTED:aws_access_key]"},
 	{regexp.MustCompile(`\bxox[baprs]-[A-Za-z0-9\-]{10,}`), "[REDACTED:slack_token]"},
+	// Standalone credential shapes shared with SC-001 detection so a finding
+	// Evidence line like `const credential = "sk-..."` is scrubbed even when
+	// the identifier has no secret/key/token keyword.
+	{regexp.MustCompile(`\bsk-[A-Za-z0-9]{20,}\b`), "[REDACTED:sk_token]"},
 	{regexp.MustCompile(`(?i)(secret|token|key|auth)\s*[=:]\s*["']?[A-Za-z0-9_\-]{8,}["']?`), "[REDACTED:secret]"},
 	{regexp.MustCompile(`\bghp_[A-Za-z0-9]{36}\b`), "[REDACTED:github_pat]"},
 }

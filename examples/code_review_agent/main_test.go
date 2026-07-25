@@ -24,7 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/permission"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/telemetry"
 )
 
 // allRuleIDs is the complete set of rule IDs implemented by the rules engine
@@ -261,5 +263,69 @@ func TestHandleSandboxInitFailure_RedactsStderr(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "[REDACTED:") {
 		t.Fatalf("init failure stderr missing redaction marker: %q", stderr)
+	}
+}
+
+func TestRunSandboxChecks_DryRunSkipsExecution(t *testing.T) {
+	opts := &pipelineOpts{cliFlags: cliFlags{dryRun: true, repoPath: t.TempDir(), executor: "local", unsafeLocal: true}}
+	records, perms, err := runSandboxChecks(context.Background(), opts, "task-dry", permission.NewPolicy(nil), telemetry.New(), "")
+	if err != nil {
+		t.Fatalf("runSandboxChecks dry-run: %v", err)
+	}
+	if len(perms) != 0 {
+		t.Fatalf("perms = %d, want 0", len(perms))
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].result.Status != sandbox.StatusSkipped {
+		t.Fatalf("status = %q, want %q", records[0].result.Status, sandbox.StatusSkipped)
+	}
+	if !strings.Contains(string(records[0].result.Stdout), "planned sandbox commands") {
+		t.Fatalf("stdout missing plan: %q", records[0].result.Stdout)
+	}
+	if strings.Contains(string(records[0].result.Stdout), "not executed") == false {
+		// plan text always includes the dry-run marker
+		t.Fatalf("stdout missing dry-run marker: %q", records[0].result.Stdout)
+	}
+}
+
+func TestRunSandboxChecks_FileListSkipsFullRepoSandbox(t *testing.T) {
+	opts := &pipelineOpts{cliFlags: cliFlags{
+		repoPath:    t.TempDir(),
+		fileList:    filepath.Join(t.TempDir(), "files.txt"),
+		executor:    "local",
+		unsafeLocal: true,
+	}}
+	records, _, err := runSandboxChecks(context.Background(), opts, "task-fl", permission.NewPolicy(nil), telemetry.New(), "")
+	if err != nil {
+		t.Fatalf("runSandboxChecks file-list: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].result.Status != sandbox.StatusSkipped {
+		t.Fatalf("status = %q, want skipped", records[0].result.Status)
+	}
+	if !strings.Contains(string(records[0].result.Stdout), "file-list mode") {
+		t.Fatalf("stdout missing file-list note: %q", records[0].result.Stdout)
+	}
+}
+
+func TestPlanSandboxCommands_IncludesUnitTests(t *testing.T) {
+	opts := &pipelineOpts{cliFlags: cliFlags{repoPath: "/repo", dryRun: true}}
+	specs := planSandboxCommands(opts, false)
+	hasTest := false
+	for _, s := range specs {
+		if s.Cmd == "go" {
+			for _, a := range s.Args {
+				if a == "test" {
+					hasTest = true
+				}
+			}
+		}
+	}
+	if !hasTest {
+		t.Fatal("plan should still list go test even in dry-run; execution is gated elsewhere")
 	}
 }
