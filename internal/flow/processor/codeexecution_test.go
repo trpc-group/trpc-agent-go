@@ -76,37 +76,66 @@ func TestCodeExecutionResponseProcessor_EmitsCodeAndResultEvents(t *testing.T) {
 func TestCodeExecutionResponseProcessor_SkipsCallLimitFinalization(
 	t *testing.T,
 ) {
-	ctx := context.Background()
-	proc := iprocessor.NewCodeExecutionResponseProcessor()
-	exec := &stubExec{}
 	instruction := "return the final answer without executing code"
-	inv := &agent.Invocation{
-		Agent:       &testAgent{exec: exec},
-		Session:     &session.Session{ID: "test-session"},
-		AgentName:   "test-agent",
-		MaxLLMCalls: 1,
-	}
-	calllimit.Configure(inv, &instruction, nil)
-	require.True(t, calllimit.RecordLLMCall(inv, inv.MaxLLMCalls))
-	_, active := calllimit.ActivateForLLM(inv, true)
-	require.True(t, active)
-	content := "```bash\necho hello\n```"
-	rsp := &model.Response{
-		Done: true,
-		Choices: []model.Choice{{
-			Message: model.Message{
-				Role:    model.RoleAssistant,
-				Content: content,
+	tests := []struct {
+		name     string
+		activate func(*testing.T, *agent.Invocation)
+	}{
+		{
+			name: "llm call limit",
+			activate: func(t *testing.T, inv *agent.Invocation) {
+				inv.MaxLLMCalls = 1
+				calllimit.Configure(inv, &instruction, nil)
+				require.True(t,
+					calllimit.RecordLLMCall(inv, inv.MaxLLMCalls))
+				_, active := calllimit.ActivateForLLM(inv, true)
+				require.True(t, active)
 			},
-		}},
+		},
+		{
+			name: "tool iteration limit",
+			activate: func(t *testing.T, inv *agent.Invocation) {
+				inv.MaxToolIterations = 1
+				calllimit.Configure(inv, nil, &instruction)
+				require.True(t, calllimit.RecordToolIteration(
+					inv, inv.MaxToolIterations))
+				calllimit.ScheduleToolFinalization(inv)
+				_, active := calllimit.ActivateForLLM(inv, false)
+				require.True(t, active)
+			},
+		},
 	}
-	ch := make(chan *event.Event, 4)
 
-	proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			proc := iprocessor.NewCodeExecutionResponseProcessor()
+			exec := &stubExec{}
+			inv := &agent.Invocation{
+				Agent:     &testAgent{exec: exec},
+				Session:   &session.Session{ID: "test-session"},
+				AgentName: "test-agent",
+			}
+			tt.activate(t, inv)
+			content := "```bash\necho hello\n```"
+			rsp := &model.Response{
+				Done: true,
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Role:    model.RoleAssistant,
+						Content: content,
+					},
+				}},
+			}
+			ch := make(chan *event.Event, 4)
 
-	require.Zero(t, exec.calls)
-	require.Len(t, ch, 0)
-	require.Equal(t, content, rsp.Choices[0].Message.Content)
+			proc.ProcessResponse(ctx, inv, &model.Request{}, rsp, ch)
+
+			require.Zero(t, exec.calls)
+			require.Len(t, ch, 0)
+			require.Equal(t, content, rsp.Choices[0].Message.Content)
+		})
+	}
 }
 
 func TestCodeExecutionResponseProcessor_SkipsNonExecutableBlocks(
