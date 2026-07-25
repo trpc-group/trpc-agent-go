@@ -1,6 +1,6 @@
 # PromptIter Regression-Loop Optimization Report
 
-- Generated at: 2026-07-25T10:02:50Z
+- Generated at: 2026-07-25T11:26:05Z
 - App: `promptiter-regression-loop-app`
 - Model source: `fake`
 - Target surface: `candidate#instruction`
@@ -14,8 +14,8 @@
 
 ## Cost & latency
 
-- Total wall-clock: 146 ms
-- Baseline eval: 27 ms · candidate eval: 29 ms
+- Total wall-clock: 123 ms
+- Baseline eval: 23 ms · candidate eval: 19 ms
 - Candidate model calls: 33
 - Note: fake mode: no monetary token cost; candidate model calls and latency are the cost proxy
 
@@ -23,13 +23,13 @@
 
 **Baseline instruction:**
 
-```
+```text
 You classify a customer support message. Reply with the category.
 ```
 
 **Candidate instruction:**
 
-```
+```text
 STRICT OUTPUT: read the support message and reply with exactly one line 'category: <billing|account|shipping>' and nothing else.
 ```
 
@@ -85,6 +85,26 @@ Failure attribution: response_mismatch=1
 | 1 | 0.000 | 0.667 | true | +0.333 | false | continue optimization |
 | 2 | 0.667 | 0.667 | false | +0.000 | false | continue optimization |
 | 3 | 0.667 | 0.667 | false | +0.000 | true | max rounds reached |
+
+## Per-round candidate prompt
+
+**Round 1** (accepted=true):
+
+```text
+STRICT OUTPUT: read the support message and reply with exactly one line 'category: <billing|account|shipping>' and nothing else.
+```
+
+**Round 2** (accepted=false):
+
+```text
+STRICT OUTPUT: read the support message and reply with exactly one line 'category: <billing|account|shipping>' and nothing else.
+```
+
+**Round 3** (accepted=false):
+
+```text
+STRICT OUTPUT: read the support message and reply with exactly one line 'category: <billing|account|shipping>' and nothing else.
+```
 
 ## Run configuration
 

@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 // Command promptiter_regression_loop runs an Evaluation + Optimization regression loop on top of
 // the PromptIter engine and Evaluation service: it evaluates a baseline prompt, optimizes it,
@@ -126,7 +127,7 @@ func run(ctx context.Context, cfg runConfig) error {
 
 	// P3: evaluate the baseline prompt on train + validation and attribute its failures before
 	// optimization runs. This snapshot also feeds the per-case delta gate below.
-	baseline, err := evaluateSnapshot(ctx, runtime.agentEvaluator)
+	baseline, err := evaluateSnapshot(ctx, runtime.agentEvaluator, cfg)
 	if err != nil {
 		return err
 	}

@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -49,6 +50,20 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 		}
 		if src != "" {
 			t.Errorf("sourceFile = %q, want empty (default used)", src)
+		}
+	})
+
+	t.Run("default when file exists but is blank", func(t *testing.T) {
+		blankFile := filepath.Join(dir, "blank-prompt.txt")
+		if err := os.WriteFile(blankFile, []byte("   \n\t\n"), 0o644); err != nil {
+			t.Fatalf("write blank prompt file: %v", err)
+		}
+		got, src := resolveBaselineInstruction("", blankFile)
+		if got != defaultCandidateInstruction {
+			t.Errorf("instruction = %q, want default (blank file falls back)", got)
+		}
+		if src != "" {
+			t.Errorf("sourceFile = %q, want empty (blank file not used as source)", src)
 		}
 	})
 }

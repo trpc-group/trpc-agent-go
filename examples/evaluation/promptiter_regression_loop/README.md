@@ -3,7 +3,7 @@
 This example builds an **evaluation + optimization regression loop** on top of the PromptIter engine
 and the Evaluation service. It runs the full closed loop end to end:
 
-```
+```text
 baseline eval  →  failure attribution  →  PromptIter optimization  →
 candidate eval (held-out)  →  multi-criterion acceptance gate  →  audit report (JSON + Markdown)
 ```
@@ -62,7 +62,7 @@ The deterministic fake behavior is scripted in `./fixtures/regression-loop.fake.
 | `-gate-min-validation-gain` | Minimum validation mean gain the **acceptance gate** requires (`validation_improves`) | `0.01` |
 | `-key-cases` | Comma-separated validation case IDs that must not regress pass→fail (`key_cases_protected`) | `val_resolved_freeform_KEY` |
 | `-max-candidate-model-calls` | Budget: max candidate model invocations the gate allows (`within_budget`); `0` disables it | `0` |
-| `-baseline-prompt-file` | File holding the baseline instruction; used when `-candidate-instruction` is empty | `./data/…/baseline-prompt.txt` |
+| `-baseline-prompt-file` | File holding the baseline instruction; used when `-candidate-instruction` is empty | `./data/promptiter-regression-loop-app/baseline-prompt.txt` |
 | `-candidate-instruction` | Baseline instruction; overrides `-baseline-prompt-file` when set | *(empty → file)* |
 | `-debug-io` | Log candidate, judge, and worker agent IO | `false` |
 

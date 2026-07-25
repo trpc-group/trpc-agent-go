@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -13,7 +14,6 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
-
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/fakemodel"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/pipeline"
 )
@@ -26,13 +26,27 @@ type evalSnapshot struct {
 	validation *evaluation.EvaluationResult
 }
 
-// evaluateSnapshot evaluates both the train and validation sets with per-run details enabled.
-func evaluateSnapshot(ctx context.Context, ev evaluation.AgentEvaluator) (*evalSnapshot, error) {
-	train, err := ev.Evaluate(ctx, trainEvalSetID, evaluation.WithRunDetailsEnabled(true))
+// snapshotEvalOptions builds the evaluation options shared by every snapshot Evaluate call: run
+// details (needed for attribution/gating) plus the configured eval-case parallelism, so large sets
+// honor the -parallel-* / -eval-case-parallelism flags instead of running serially.
+func snapshotEvalOptions(cfg runConfig) []evaluation.Option {
+	return []evaluation.Option{
+		evaluation.WithRunDetailsEnabled(true),
+		evaluation.WithEvalCaseParallelism(cfg.EvalCaseParallelism),
+		evaluation.WithEvalCaseParallelInferenceEnabled(cfg.ParallelInferenceEnabled),
+		evaluation.WithEvalCaseParallelEvaluationEnabled(cfg.ParallelEvaluationEnabled),
+	}
+}
+
+// evaluateSnapshot evaluates both the train and validation sets with run details enabled and the
+// configured eval-case parallelism.
+func evaluateSnapshot(ctx context.Context, ev evaluation.AgentEvaluator, cfg runConfig) (*evalSnapshot, error) {
+	opts := snapshotEvalOptions(cfg)
+	train, err := ev.Evaluate(ctx, trainEvalSetID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate train set: %w", err)
 	}
-	validation, err := ev.Evaluate(ctx, validationEvalSetID, evaluation.WithRunDetailsEnabled(true))
+	validation, err := ev.Evaluate(ctx, validationEvalSetID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate validation set: %w", err)
 	}
@@ -40,14 +54,15 @@ func evaluateSnapshot(ctx context.Context, ev evaluation.AgentEvaluator) (*evalS
 }
 
 // evaluateCandidate builds a fresh evaluator bound to the optimizer's accepted instruction and
-// evaluates it on the train + validation sets. The returned closer releases the evaluator's
-// runners; callers must invoke it.
+// evaluates it on the train + validation sets. Its raw eval-result artifacts are written under a
+// separate "candidate" phase directory so they never overwrite the baseline's. The returned closer
+// releases the evaluator's runners; callers must invoke it.
 func evaluateCandidate(ctx context.Context, cfg runConfig, fixture *fakemodel.Fixture, instruction string) (*evalSnapshot, func(), error) {
-	built, err := buildCandidateEvaluator(cfg, instruction, fixture)
+	built, err := buildCandidateEvaluator(cfg, instruction, fixture, "candidate")
 	if err != nil {
 		return nil, nil, fmt.Errorf("build candidate evaluator: %w", err)
 	}
-	snapshot, err := evaluateSnapshot(ctx, built.evaluator)
+	snapshot, err := evaluateSnapshot(ctx, built.evaluator, cfg)
 	if err != nil {
 		built.close()
 		return nil, nil, err

@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package pipeline
 
@@ -106,6 +107,21 @@ func meanScore(result *evaluation.EvaluationResult) float64 {
 	return sum / float64(len(attrs))
 }
 
+// meansFromDeltas computes the baseline and candidate mean scores over the matched delta set, so
+// the aggregate shares the exact case set (and dropped-case handling) of the per-case deltas.
+func meansFromDeltas(deltas []CaseDelta) (baseMean, candMean float64) {
+	if len(deltas) == 0 {
+		return 0, 0
+	}
+	var baseSum, candSum float64
+	for _, d := range deltas {
+		baseSum += d.BaselineScore
+		candSum += d.CandidateScore
+	}
+	n := float64(len(deltas))
+	return baseSum / n, candSum / n
+}
+
 // GatePolicy configures the multi-criterion acceptance gate. Each field maps to one criterion the
 // issue enumerates: validation improvement, no new hard fail, key cases protected, and a budget.
 type GatePolicy struct {
@@ -164,8 +180,10 @@ type GateDecision struct {
 // previously-passing case is rejected even though its mean went up.
 func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evaluation.EvaluationResult, obs GateObservations) GateDecision {
 	deltas := DiffResults(baselineValidation, candidateValidation)
-	baseMean := meanScore(baselineValidation)
-	candMean := meanScore(candidateValidation)
+	// Derive the means from the same matched case set as deltas so the aggregate always agrees with
+	// the per-case numbers: a case dropped from the candidate is counted as 0 here (as DiffResults
+	// scores it), rather than silently excluded from the denominator.
+	baseMean, candMean := meansFromDeltas(deltas)
 	gain := candMean - baseMean
 
 	keyCases := make(map[string]bool, len(policy.KeyCaseIDs))

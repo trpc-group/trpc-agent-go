@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package pipeline
 
@@ -145,6 +146,31 @@ func TestApplyGateRejectsNonKeyRegressionViaNoHardFail(t *testing.T) {
 	}
 	if containsSubstring(d.Reasons, "overfitting") {
 		t.Errorf("non-key regression must not use the overfitting reason branch, got %v", d.Reasons)
+	}
+}
+
+func TestApplyGateMeansIncludeDroppedCase(t *testing.T) {
+	// A previously-passing case is dropped from the candidate. DiffResults scores it 0/failed, and
+	// the gate's means must reflect that (candidate mean 0.5, gain -0.5) rather than silently
+	// excluding it from the denominator (which would show gain 0). The aggregate must agree with
+	// ValidationDeltas.
+	baseline := makeResult("val",
+		makeCase("a", true, 1.0, critFinalResponseText(), ""),
+		makeCase("b", true, 1.0, critFinalResponseText(), ""),
+	)
+	candidate := makeResult("val",
+		makeCase("a", true, 1.0, critFinalResponseText(), ""),
+		// "b" dropped.
+	)
+	d := ApplyGate(GatePolicy{MinValidationGain: 0.01}, baseline, candidate, GateObservations{})
+	if d.CandidateValidationMean != 0.5 {
+		t.Errorf("CandidateValidationMean = %v, want 0.5 (dropped case counted as 0)", d.CandidateValidationMean)
+	}
+	if d.ValidationGain != -0.5 {
+		t.Errorf("ValidationGain = %v, want -0.5", d.ValidationGain)
+	}
+	if d.Accepted {
+		t.Errorf("expected reject: dropped case is a regression")
 	}
 }
 

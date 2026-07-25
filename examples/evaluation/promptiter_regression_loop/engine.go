@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -30,11 +31,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/fakemodel"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/model/openai"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
-
-	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/fakemodel"
 )
 
 const (
@@ -132,7 +132,7 @@ func buildPromptIterRuntime(ctx context.Context, cfg runConfig, fixture *fakemod
 	}
 	surfaceID := targetSurfaceID()
 
-	built, err := buildCandidateEvaluator(cfg, cfg.CandidateInstruction, fixture)
+	built, err := buildCandidateEvaluator(cfg, cfg.CandidateInstruction, fixture, "baseline")
 	if err != nil {
 		return nil, err
 	}
@@ -176,8 +176,10 @@ type builtEvaluator struct {
 
 // buildCandidateEvaluator constructs an AgentEvaluator whose candidate agent uses the supplied
 // instruction. It is reused twice: once for the baseline/engine agent (baseline instruction) and
-// once to evaluate the optimizer's accepted instruction on the held-out sets for the gate.
-func buildCandidateEvaluator(cfg runConfig, instruction string, fixture *fakemodel.Fixture) (*builtEvaluator, error) {
+// once to evaluate the optimizer's accepted instruction on the held-out sets for the gate. The
+// phase ("baseline" or "candidate") separates each run's raw eval-result artifacts into its own
+// output subdirectory so the candidate run never overwrites the baseline's persisted results.
+func buildCandidateEvaluator(cfg runConfig, instruction string, fixture *fakemodel.Fixture, phase string) (*builtEvaluator, error) {
 	candidateModel, err := buildCandidateModel(cfg, fixture)
 	if err != nil {
 		return nil, fmt.Errorf("build candidate model: %w", err)
@@ -204,7 +206,7 @@ func buildCandidateEvaluator(cfg runConfig, instruction string, fixture *fakemod
 		metric.WithBaseDir(cfg.DataDir),
 		metric.WithLocator(&sharedMetricLocator{metricFileID: sharedMetricFileID}),
 	)
-	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
+	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(filepath.Join(cfg.OutputDir, phase)))
 	agentEvaluator, err := evaluation.New(
 		appName,
 		candidateLoggedRunner,

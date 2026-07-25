@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package pipeline
 
@@ -38,7 +39,7 @@ func sampleReport() Report {
 		CandidateTrain:       candidateTrain,
 		CandidateValidation:  candidateVal,
 		Gate:                 gate,
-		Rounds:               []RoundSummary{{Round: 1, TrainScore: 0, ValidationScore: 0.5, Accepted: true, ScoreDelta: 0.5}},
+		Rounds:               []RoundSummary{{Round: 1, Instruction: "STRICT ``` output", TrainScore: 0, ValidationScore: 0.5, Accepted: true, ScoreDelta: 0.5}},
 	})
 }
 
@@ -103,9 +104,28 @@ func TestReportMarkdownContainsKeySections(t *testing.T) {
 		"Candidate model calls",
 		"## Run configuration",
 		"Determinism:",
+		"## Per-round candidate prompt",
+		"STRICT ``` output", // each round's instruction is rendered in the Markdown audit
 	} {
 		if !strings.Contains(md, want) {
 			t.Errorf("markdown missing %q", want)
 		}
+	}
+}
+
+func TestFencedBlockEscapesBackticks(t *testing.T) {
+	// Content containing a triple-backtick run must be wrapped in a longer fence so it cannot close
+	// the block early and forge subsequent Markdown.
+	block := fencedBlock("line1\n```\nnot-a-real-fence", "text")
+	if !strings.HasPrefix(block, "````text\n") {
+		t.Errorf("expected a >=4-backtick fence, got:\n%s", block)
+	}
+	if !strings.HasSuffix(block, "\n````") {
+		t.Errorf("expected closing >=4-backtick fence, got:\n%s", block)
+	}
+	// Plain content uses the standard 3-backtick fence.
+	plain := fencedBlock("hello", "text")
+	if !strings.HasPrefix(plain, "```text\n") || !strings.HasSuffix(plain, "\n```") {
+		t.Errorf("plain content should use a 3-backtick fence, got:\n%s", plain)
 	}
 }

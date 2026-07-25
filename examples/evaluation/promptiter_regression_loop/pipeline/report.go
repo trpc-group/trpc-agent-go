@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package pipeline
 
@@ -228,8 +229,8 @@ func (r Report) Markdown() string {
 	b.WriteString("\n")
 
 	fmt.Fprintf(&b, "## Prompts\n\n")
-	fmt.Fprintf(&b, "**Baseline instruction:**\n\n```\n%s\n```\n\n", r.BaselineInstruction)
-	fmt.Fprintf(&b, "**Candidate instruction:**\n\n```\n%s\n```\n\n", r.CandidateInstruction)
+	fmt.Fprintf(&b, "**Baseline instruction:**\n\n%s\n\n", fencedBlock(r.BaselineInstruction, "text"))
+	fmt.Fprintf(&b, "**Candidate instruction:**\n\n%s\n\n", fencedBlock(r.CandidateInstruction, "text"))
 
 	fmt.Fprintf(&b, "## Gate criteria (validation)\n\n")
 	fmt.Fprintf(&b, "| Criterion | Passed | Detail |\n|---|---|---|\n")
@@ -251,6 +252,11 @@ func (r Report) Markdown() string {
 			rd.Round, rd.TrainScore, rd.ValidationScore, rd.Accepted, rd.ScoreDelta, rd.Stopped, rd.StopReason)
 	}
 	b.WriteString("\n")
+
+	fmt.Fprintf(&b, "## Per-round candidate prompt\n\n")
+	for _, rd := range r.Rounds {
+		fmt.Fprintf(&b, "**Round %d** (accepted=%t):\n\n%s\n\n", rd.Round, rd.Accepted, fencedBlock(rd.Instruction, "text"))
+	}
 
 	fmt.Fprintf(&b, "## Run configuration\n\n")
 	fmt.Fprintf(&b, "- Model source: `%s`", r.Config.ModelSource)
@@ -314,4 +320,27 @@ func checkMark(passed bool) string {
 		return "✅"
 	}
 	return "❌"
+}
+
+// fencedBlock renders content as a fenced code block labeled lang. It picks a backtick fence longer
+// than the longest backtick run in content (per CommonMark), so model-derived content containing
+// ``` cannot close the block early and forge subsequent Markdown.
+func fencedBlock(content, lang string) string {
+	longest, run := 0, 0
+	for _, r := range content {
+		if r == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+			continue
+		}
+		run = 0
+	}
+	n := longest + 1
+	if n < 3 {
+		n = 3
+	}
+	fence := strings.Repeat("`", n)
+	return fmt.Sprintf("%s%s\n%s\n%s", fence, lang, content, fence)
 }

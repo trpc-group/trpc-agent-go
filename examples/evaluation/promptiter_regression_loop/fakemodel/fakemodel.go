@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 // Package fakemodel provides a deterministic, no-network way to drive the PromptIter
 // regression-loop example so it runs with no API key and produces reproducible scores.
@@ -25,6 +26,7 @@
 package fakemodel
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -74,14 +76,18 @@ type Transition struct {
 	Reason string `json:"reason"`
 }
 
-// LoadFixture reads and validates a fixture JSON file.
+// LoadFixture reads and validates a fixture JSON file. Unknown fields are rejected so a misspelled
+// key (e.g. "inputContain" instead of "inputContains") surfaces as an error instead of being
+// silently ignored and producing a fixture that behaves unexpectedly.
 func LoadFixture(path string) (*Fixture, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read fixture %s: %w", path, err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
 	var fixture Fixture
-	if err := json.Unmarshal(raw, &fixture); err != nil {
+	if err := dec.Decode(&fixture); err != nil {
 		return nil, fmt.Errorf("parse fixture %s: %w", path, err)
 	}
 	return &fixture, nil

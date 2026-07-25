@@ -5,11 +5,14 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package fakemodel
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,6 +25,24 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
+
+func TestLoadFixtureRejectsUnknownField(t *testing.T) {
+	dir := t.TempDir()
+
+	valid := filepath.Join(dir, "valid.json")
+	require.NoError(t, os.WriteFile(valid, []byte(`{"candidate":{"default":"x"}}`), 0o644))
+	if _, err := LoadFixture(valid); err != nil {
+		t.Fatalf("valid fixture should load, got %v", err)
+	}
+
+	// A misspelled key ("inputContain" instead of "inputContains") must error rather than being
+	// silently dropped into a fixture that behaves unexpectedly.
+	bad := filepath.Join(dir, "bad.json")
+	require.NoError(t, os.WriteFile(bad, []byte(`{"candidate":{"answers":[{"inputContain":"x","answer":"y"}]}}`), 0o644))
+	if _, err := LoadFixture(bad); err == nil {
+		t.Fatalf("expected error for unknown field, got nil")
+	}
+}
 
 func generate(t *testing.T, m *ScriptedModel, instruction, input string) string {
 	t.Helper()

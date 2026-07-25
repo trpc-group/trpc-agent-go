@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-25T10:02:50Z",
+  "generatedAt": "2026-07-25T11:26:05Z",
   "app": "promptiter-regression-loop-app",
   "modelSource": "fake",
   "targetSurfaceId": "candidate#instruction",
@@ -28,9 +28,9 @@
     "note": "scripted fake model + deterministic collaborators; no RNG"
   },
   "costLatency": {
-    "totalWallClockMs": 146,
-    "baselineEvalMs": 27,
-    "candidateEvalMs": 29,
+    "totalWallClockMs": 123,
+    "baselineEvalMs": 23,
+    "candidateEvalMs": 19,
     "candidateModelCalls": 33,
     "note": "fake mode: no monetary token cost; candidate model calls and latency are the cost proxy"
   },
@@ -38,7 +38,7 @@
     "evalSetId": "regression-loop-train",
     "overallStatus": "failed",
     "meanScore": 0,
-    "executionTimeMs": 15,
+    "executionTimeMs": 14,
     "cases": [
       {
         "evalCaseId": "train_refund_billing",
@@ -70,7 +70,7 @@
     "evalSetId": "regression-loop-validation",
     "overallStatus": "failed",
     "meanScore": 0.3333333333333333,
-    "executionTimeMs": 12,
+    "executionTimeMs": 9,
     "cases": [
       {
         "evalCaseId": "val_refund_billing",
@@ -101,7 +101,7 @@
     "evalSetId": "regression-loop-train",
     "overallStatus": "failed",
     "meanScore": 0.6666666666666666,
-    "executionTimeMs": 15,
+    "executionTimeMs": 10,
     "cases": [
       {
         "evalCaseId": "train_refund_billing",
@@ -131,7 +131,7 @@
     "evalSetId": "regression-loop-validation",
     "overallStatus": "failed",
     "meanScore": 0.6666666666666666,
-    "executionTimeMs": 13,
+    "executionTimeMs": 9,
     "cases": [
       {
         "evalCaseId": "val_refund_billing",

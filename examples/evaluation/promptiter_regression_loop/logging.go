@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -86,7 +87,17 @@ func (r *loggingRunner) Run(
 			if evt != nil {
 				output.observe(evt)
 			}
-			forwarded <- evt
+			select {
+			case forwarded <- evt:
+			case <-ctx.Done():
+				// The reader abandoned us (cancellation or early break). Drain the producer in
+				// the background so it never blocks on an unbuffered send, then stop forwarding.
+				go func() {
+					for range events {
+					}
+				}()
+				return
+			}
 		}
 		r.logger.Printf("[%s #%d] events observed: %d", r.name, runID, output.eventCount)
 		if output.finalContent != "" {
