@@ -721,6 +721,9 @@ func (m *Model) GenerateContentIter(
 		reporter := modeltelemetry.StartChat(ctx, m, request, m.chatTelemetry)
 		defer reporter.End()
 		m.runChatRequestCallback(ctx, chatRequest)
+		if imodelrequest.ToolsDisabled(ctx) {
+			disableChatRequestTools(chatRequest)
+		}
 		m.runChatRequestJSONCallback(ctx, chatRequest)
 		emit := func(resp *model.Response) bool {
 			if ctx.Err() != nil {

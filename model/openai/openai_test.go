@@ -650,6 +650,61 @@ func TestModel_GenerateContentIter_Streaming(t *testing.T) {
 	require.True(t, sawHello)
 }
 
+func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"iter-tools-disabled",
+			"object":"chat.completion",
+			"created":123,
+			"model":"gpt-3.5-turbo",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"gpt-3.5-turbo",
+		WithBaseURL(server.URL),
+		WithAPIKey("test-key"),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *openaigo.ChatCompletionNewParams,
+		) {
+			request.Tools = []openaigo.ChatCompletionToolParam{{}}
+			request.ToolChoice =
+				openaigo.ChatCompletionToolChoiceOptionUnionParam{
+					OfAuto: openaigo.String("required"),
+				}
+			request.ParallelToolCalls = openaigo.Bool(true)
+			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
+				Name: "callback_function",
+			}}
+		}),
+	)
+	req := &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	}
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	seq, err := m.GenerateContentIter(ctx, req)
+	require.NoError(t, err)
+	seq(func(*model.Response) bool {
+		return true
+	})
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "functions")
+}
+
 func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
 	for _, tt := range []struct {
 		name string
