@@ -84,7 +84,9 @@ func main() {
 	var toolCalls int
 
 	if !*flagDryRun {
-		sandboxDuration, toolCalls = runSandbox(taskID, db, diffs)
+		var vetFindings []rules.Finding
+		sandboxDuration, toolCalls, vetFindings = runSandbox(taskID, db, diffs)
+		findings = append(findings, vetFindings...)
 	}
 
 	totalMs := time.Since(start).Milliseconds()
@@ -133,6 +135,9 @@ func main() {
 		log.Printf("finish task: %v", err)
 	}
 
+	if err := os.MkdirAll(*flagOut, 0o755); err != nil {
+		log.Fatalf("create out dir: %v", err)
+	}
 	jsonPath := filepath.Join(*flagOut, "review_report.json")
 	mdPath := filepath.Join(*flagOut, "review_report.md")
 	if err := os.WriteFile(jsonPath, []byte(jsonBody), 0o644); err != nil {
@@ -166,10 +171,10 @@ func loadDiff() (string, error) {
 
 // runSandbox runs go vet on changed packages and records sandbox runs.
 // Container runtime is preferred; local is the fallback per issue requirements.
-func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (durationMs int64, toolCalls int) {
+func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (durationMs int64, toolCalls int, findings []rules.Finding) {
 	pkgs := changedGoPackages(diffs)
 	if len(pkgs) == 0 {
-		return 0, 0
+		return 0, 0, nil
 	}
 
 	start := time.Now()
@@ -177,15 +182,18 @@ func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (duratio
 	if repoPath == "" {
 		// Without an explicit repo path we cannot vet the right module.
 		log.Printf("skipping sandbox: --repo-path required for go vet")
-		return 0, 0
+		return 0, 0, nil
 	}
 
 	for _, pkg := range pkgs {
 		toolCalls++
 		t0 := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		cmd := exec.CommandContext(ctx, "go", "vet", "./"+pkg+"/...")
-		cmd.Dir = repoPath
+		// go vet does not cross module boundaries, so run it from the module that
+		// owns the changed package rather than always from the repo root.
+		modRoot, target := moduleRootAndTarget(repoPath, pkg)
+		cmd := exec.CommandContext(ctx, "go", "vet", target)
+		cmd.Dir = modRoot
 		out, runErr := cmd.CombinedOutput()
 		cancel()
 		ms := time.Since(t0).Milliseconds()
@@ -202,15 +210,54 @@ func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (duratio
 		if err := db.InsertSandboxRun(storage.SandboxRun{
 			ID:         runID,
 			TaskID:     taskID,
-			Command:    "go vet ./" + pkg + "/...",
+			Command:    "go vet " + target,
 			ExitCode:   exitCode,
 			Output:     truncate(string(out), 4096),
 			DurationMs: ms,
 		}); err != nil {
 			log.Printf("insert sandbox run: %v", err)
 		}
+
+		// A non-zero vet exit must fail the review, not sit silently in the DB.
+		if exitCode > 0 {
+			findings = append(findings, rules.Finding{
+				Severity:       rules.SeverityHigh,
+				Category:       rules.CatVet,
+				File:           pkg,
+				Title:          "go vet reported issues",
+				Evidence:       truncate(strings.TrimSpace(string(out)), 500),
+				Recommendation: "Resolve the go vet diagnostics before merging.",
+				Confidence:     "high",
+				Source:         "vet",
+				RuleID:         "VET-001",
+			})
+		}
 	}
-	return time.Since(start).Milliseconds(), toolCalls
+	return time.Since(start).Milliseconds(), toolCalls, findings
+}
+
+// moduleRootAndTarget returns the module root that owns pkg (the nearest ancestor
+// of repo/pkg containing a go.mod, bounded by repo) and the vet target relative
+// to that root, so nested-module packages are vetted from their own module.
+func moduleRootAndTarget(repo, pkg string) (dir, target string) {
+	abs := filepath.Join(repo, pkg)
+	root := repo
+	for d := abs; ; {
+		if _, err := os.Stat(filepath.Join(d, "go.mod")); err == nil {
+			root = d
+			break
+		}
+		parent := filepath.Dir(d)
+		if parent == d || len(parent) < len(repo) {
+			break
+		}
+		d = parent
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == "." {
+		return root, "./..."
+	}
+	return root, "./" + filepath.ToSlash(rel) + "/..."
 }
 
 func changedGoPackages(diffs []parser.FileDiff) []string {

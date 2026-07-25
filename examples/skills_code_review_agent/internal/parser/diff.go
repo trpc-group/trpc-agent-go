@@ -59,11 +59,11 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 				if cur != nil {
 					files = append(files, *cur)
 				}
-				oldPath := strings.TrimPrefix(line, "--- ")
+				oldPath := unquoteGitPath(strings.TrimPrefix(line, "--- "))
 				oldPath = strings.TrimPrefix(oldPath, "a/")
 				cur = &FileDiff{OldPath: oldPath}
 			case strings.HasPrefix(line, "+++ ") && cur != nil && curHunk == nil:
-				newPath := strings.TrimPrefix(line, "+++ ")
+				newPath := unquoteGitPath(strings.TrimPrefix(line, "+++ "))
 				newPath = strings.TrimPrefix(newPath, "b/")
 				cur.NewPath = newPath
 			case strings.HasPrefix(line, "@@ ") && cur != nil:
@@ -90,6 +90,19 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 		files = append(files, *cur)
 	}
 	return files, nil
+}
+
+// unquoteGitPath decodes a Git C-quoted header path. Git wraps paths containing
+// non-ASCII or control bytes in double quotes with octal/C escapes, which
+// strconv.Unquote understands; other paths are returned unchanged.
+func unquoteGitPath(p string) string {
+	if len(p) < 2 || p[0] != '"' {
+		return p
+	}
+	if unq, err := strconv.Unquote(p); err == nil {
+		return unq
+	}
+	return p
 }
 
 // parseHunkStart extracts the new-file start line from "@@ -a,b +c,d @@" headers.

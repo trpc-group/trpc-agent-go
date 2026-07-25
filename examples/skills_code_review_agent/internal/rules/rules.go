@@ -36,6 +36,7 @@ const (
 	CatMutexMisuse   = "mutex_misuse"
 	CatPerformance   = "performance"
 	CatDeferInLoop   = "defer_in_loop"
+	CatVet           = "vet"
 )
 
 // Finding is a single review finding on an added line.
@@ -106,7 +107,10 @@ func Run(diffs []parser.FileDiff) []Finding {
 }
 
 var reGoRoutine = regexp.MustCompile(`\bgo\s+func\s*\(`)
-var reWg = regexp.MustCompile(`\bwg\.(Add|Wait|Done)\b|\b<-done\b|\bch\s*<-|\bcancel\(\)`)
+
+// A bare channel send is not synchronisation: an unbuffered send with no
+// receiver is itself a leak, so it must not suppress the goroutine-leak rule.
+var reWg = regexp.MustCompile(`\bwg\.(Add|Wait|Done)\b|\b<-done\b|\bcancel\(\)`)
 
 func goroutineLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
@@ -178,7 +182,9 @@ func contextLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedu
 }
 
 var reResourceOpen = regexp.MustCompile(`\bos\.Open\b|\bos\.Create\b|\bhttp\.Get\b|\bnet\.Dial\b|\bos\.OpenFile\b|\bsql\.Open\b`)
-var reDefer = regexp.MustCompile(`\bdefer\b`)
+
+// Only a deferred Close mitigates the leak; an unrelated defer must not suppress it.
+var reDeferClose = regexp.MustCompile(`\bdefer\b[^\n]*\.Close\(\)`)
 
 func resourceLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
@@ -190,7 +196,7 @@ func resourceLeakRule(file string, hunk parser.Hunk, startLine int, seen map[ded
 		if len(window) > 6 {
 			window = window[:6]
 		}
-		if reDefer.MatchString(strings.Join(window, "\n")) {
+		if reDeferClose.MatchString(strings.Join(window, "\n")) {
 			continue
 		}
 		emit(out, seen, Finding{
@@ -359,7 +365,9 @@ var reFuncCtxParam = regexp.MustCompile(`\bfunc\b[^{]*\bctx\s+context\.Context\b
 func contextBackgroundMisuseRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
 	joined := strings.Join(added, "\n")
-	if !reCtxBackground.MatchString(joined) || !reFuncCtxParam.MatchString(joined) {
+	// The enclosing signature is usually an unchanged context line, so match it
+	// against the whole hunk while still flagging only added Background() calls.
+	if !reCtxBackground.MatchString(joined) || !reFuncCtxParam.MatchString(strings.Join(hunk.Lines, "\n")) {
 		return
 	}
 	for i, l := range added {

@@ -26,7 +26,8 @@ type DB struct {
 
 // Open creates or opens a SQLite database at path and initialises the schema.
 func Open(path string) (*DB, error) {
-	conn, err := sql.Open("sqlite", path+"?_journal_mode=WAL")
+	// modernc's driver applies PRAGMAs through _pragma, not _journal_mode.
+	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}

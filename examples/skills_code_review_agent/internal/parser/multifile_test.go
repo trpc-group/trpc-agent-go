@@ -48,3 +48,23 @@ index 123..456 100644
 		t.Error("bar.go has no hunks - multi-file parsing broken")
 	}
 }
+
+func TestParseGitQuotedPath(t *testing.T) {
+	// Git C-quotes paths with non-ASCII bytes; \303\251 is UTF-8 "é".
+	diff := "diff --git \"a/\\303\\251.go\" \"b/\\303\\251.go\"\n" +
+		"--- \"a/\\303\\251.go\"\n" +
+		"+++ \"b/\\303\\251.go\"\n" +
+		"@@ -1,1 +1,1 @@\n" +
+		"-old\n" +
+		"+new\n"
+	files, err := parser.Parse(strings.NewReader(diff))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("want 1 file, got %d", len(files))
+	}
+	if files[0].NewPath != "é.go" {
+		t.Errorf("quoted path not decoded: got %q, want %q", files[0].NewPath, "é.go")
+	}
+}
