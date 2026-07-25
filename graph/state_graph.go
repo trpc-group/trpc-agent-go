@@ -5491,6 +5491,19 @@ type toolCallsConfig struct {
 	Concurrency *toolcall.Limiter
 }
 
+type parallelToolCallCancelCause struct {
+	owner *int
+	err   error
+}
+
+func (c *parallelToolCallCancelCause) Error() string {
+	return c.err.Error()
+}
+
+func (c *parallelToolCallCancelCause) Unwrap() error {
+	return c.err
+}
+
 // processToolCalls executes all tool calls and returns the resulting messages.
 func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Message, error) {
 	// Use callbacks from config if provided; otherwise extract from state.
@@ -5549,8 +5562,9 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 		err error
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	cancelOwner := new(int)
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	out := make([]model.Message, len(config.ToolCalls))
 	pendingCalls := make([]pendingCall, 0, len(config.ToolCalls))
@@ -5589,7 +5603,10 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			})
 			// On error, cancel siblings but still report result so collector can exit cleanly.
 			if err != nil {
-				cancel()
+				cancel(&parallelToolCallCancelCause{
+					owner: cancelOwner,
+					err:   err,
+				})
 				results <- result{idx: i, err: err}
 				return
 			}
@@ -5616,7 +5633,15 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 			completedThisRun[completedKey] = r.msg
 		}
 	}
-	if err := selectToolCallError(errsByIndex); err != nil {
+	cancelCause, _ := context.Cause(ctx).(*parallelToolCallCancelCause)
+	var causalError error
+	if cancelCause != nil && cancelCause.owner == cancelOwner {
+		causalError = cancelCause.err
+	}
+	if err := selectToolCallError(
+		errsByIndex,
+		causalError,
+	); err != nil {
 		if IsInterruptError(err) {
 			recordCompletedToolMessages(config.State, config.NodeID, completedThisRun)
 			setAgentToolInterruptStateFromError(config.State, err)
@@ -5629,7 +5654,7 @@ func processToolCalls(ctx context.Context, config toolCallsConfig) ([]model.Mess
 	return out, nil
 }
 
-func selectToolCallError(errs []error) error {
+func selectToolCallError(errs []error, causalError error) error {
 	var agentToolInterrupt error
 	var interrupt error
 	var first error
@@ -5656,6 +5681,11 @@ func selectToolCallError(errs []error) error {
 	}
 	if interrupt != nil {
 		return interrupt
+	}
+	// Context-only errors from sibling cancellation must not replace the tool
+	// failure that caused that cancellation.
+	if causalError != nil {
+		return causalError
 	}
 	return first
 }

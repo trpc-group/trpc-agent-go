@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	ichannel "trpc.group/trpc-go/trpc-agent-go/graph/internal/channel"
 	"trpc.group/trpc-go/trpc-agent-go/internal/agenttoolgraph"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolcall"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
@@ -1434,6 +1435,44 @@ func TestProcessToolCalls_ParallelCancelOnFirstError(t *testing.T) {
 	}
 }
 
+func TestProcessToolCalls_ParallelLimiterWaiterPreservesCausalError(
+	t *testing.T,
+) {
+	const blockedToolName = "blocked"
+	limiter := toolcall.NewLimiter(tool.ConcurrencyConfig{
+		Groups: []tool.ConcurrencyGroup{{
+			ToolNames: []string{blockedToolName},
+			Limit:     1,
+		}},
+	})
+	release, err := limiter.Acquire(context.Background(), blockedToolName)
+	require.NoError(t, err)
+	defer release()
+
+	causalErr := errors.New("causal tool failure")
+	tools := map[string]tool.Tool{
+		blockedToolName: &blockingTool{
+			name:   blockedToolName,
+			result: "unexpected",
+		},
+		"fail": &blockingTool{
+			name:      "fail",
+			returnErr: causalErr,
+		},
+	}
+	_, err = processToolCalls(context.Background(), toolCallsConfig{
+		ToolCalls:      makeToolCalls(blockedToolName, "fail"),
+		Tools:          tools,
+		InvocationID:   "inv",
+		Span:           oteltrace.SpanFromContext(context.Background()),
+		State:          State{},
+		EnableParallel: true,
+		Concurrency:    limiter,
+	})
+	require.ErrorIs(t, err, causalErr)
+	require.NotErrorIs(t, err, context.Canceled)
+}
+
 func TestProcessToolCalls_ParallelPrefersAgentToolGraphInterrupt(t *testing.T) {
 	const nodeID = "tools"
 	metadata := testAgentToolInterruptMetadata()
@@ -1498,11 +1537,14 @@ func TestProcessToolCalls_OrdinaryErrorClearsCompletedToolMessages(t *testing.T)
 
 func TestSelectToolCallError_PrefersAgentToolGraphInterrupt(t *testing.T) {
 	agentInterrupt := testAgentToolInterruptError(t, testAgentToolInterruptMetadata())
-	err := selectToolCallError([]error{
-		context.Canceled,
-		agentInterrupt,
-		assertAnError{},
-	})
+	err := selectToolCallError(
+		[]error{
+			context.Canceled,
+			agentInterrupt,
+			assertAnError{},
+		},
+		nil,
+	)
 	require.ErrorIs(t, err, agentInterrupt)
 }
 
@@ -1511,10 +1553,13 @@ func TestSelectToolCallError_RejectsMultipleAgentToolGraphInterrupts(t *testing.
 	secondMetadata := firstMetadata
 	secondMetadata.ToolCallID = "call_other"
 	secondMetadata.ToolCallKey = "2:interrupt:call_other"
-	err := selectToolCallError([]error{
-		testAgentToolInterruptError(t, firstMetadata),
-		testAgentToolInterruptError(t, secondMetadata),
-	})
+	err := selectToolCallError(
+		[]error{
+			testAgentToolInterruptError(t, firstMetadata),
+			testAgentToolInterruptError(t, secondMetadata),
+		},
+		nil,
+	)
 	require.ErrorContains(t, err, "multiple agent tool graph interrupts")
 }
 
