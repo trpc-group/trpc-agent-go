@@ -46,7 +46,7 @@ func RenderReports(report ReviewReport) ([]byte, []byte, error) {
 	fmt.Fprintln(&markdown)
 	fmt.Fprintf(
 		&markdown,
-		"%d high-confidence findings and %d warnings across %d changed files.\n\n",
+		"Findings: %d high-confidence; warnings: %d; changed files: %d.\n\n",
 		len(report.Findings), len(report.Warnings), len(report.Input.ChangedFiles),
 	)
 	fmt.Fprintln(&markdown, "## Severity Statistics")

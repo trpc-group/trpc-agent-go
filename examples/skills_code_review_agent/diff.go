@@ -48,6 +48,8 @@ func ParseUnifiedDiff(data []byte) (ParsedDiff, error) {
 	var current *ChangedFile
 	var hunk *Hunk
 	oldLine, newLine := 0, 0
+	oldRemaining, newRemaining := 0, 0
+	sawOldMarker := false
 	lineCount := 0
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 64*1024), maxDiffBytes)
@@ -67,15 +69,62 @@ func ParseUnifiedDiff(data []byte) (ParsedDiff, error) {
 				return ParsedDiff{}, err
 			}
 			hunk = nil
+			sawOldMarker = false
+		case hunk != nil:
+			if strings.HasPrefix(line, `\ No newline at end of file`) {
+				continue
+			}
+			if line == "" {
+				return ParsedDiff{}, errors.New("malformed hunk line without prefix")
+			}
+			entry := DiffLine{Kind: line[0], Text: line[1:]}
+			switch entry.Kind {
+			case ' ':
+				entry.OldLine, entry.NewLine = oldLine, newLine
+				oldLine++
+				newLine++
+				oldRemaining--
+				newRemaining--
+			case '-':
+				entry.OldLine = oldLine
+				oldLine++
+				oldRemaining--
+			case '+':
+				entry.NewLine = newLine
+				newLine++
+				newRemaining--
+			default:
+				return ParsedDiff{}, fmt.Errorf(
+					"unsupported hunk line prefix %q", entry.Kind,
+				)
+			}
+			if oldRemaining < 0 || newRemaining < 0 {
+				return ParsedDiff{}, errors.New("hunk contains more lines than declared")
+			}
+			hunk.Lines = append(hunk.Lines, entry)
+			if current.Package == "" && entry.Kind != '-' {
+				if match := packagePattern.FindStringSubmatch(entry.Text); len(match) == 2 {
+					current.Package = match[1]
+				}
+			}
+			if oldRemaining == 0 && newRemaining == 0 {
+				hunk = nil
+			}
 		case strings.HasPrefix(line, "--- "):
-			if current == nil {
-				current = &ChangedFile{}
-				result.Files = append(result.Files, *current)
-				current = &result.Files[len(result.Files)-1]
+			if current == nil || sawOldMarker {
+				var err error
+				current, err = appendEmptyDiffFile(&result)
+				if err != nil {
+					return ParsedDiff{}, err
+				}
 			}
 			current.OldPath = normalizePatchPath(diffMarkerPath(line[4:]))
+			if err := validateDiffPath(current.OldPath); err != nil {
+				return ParsedDiff{}, err
+			}
+			sawOldMarker = true
 		case strings.HasPrefix(line, "+++ "):
-			if current == nil {
+			if current == nil || !sawOldMarker {
 				return ParsedDiff{}, errors.New("new path appears before file header")
 			}
 			current.Path = normalizePatchPath(diffMarkerPath(line[4:]))
@@ -93,40 +142,14 @@ func ParseUnifiedDiff(data []byte) (ParsedDiff, error) {
 			current.Hunks = append(current.Hunks, parsed)
 			hunk = &current.Hunks[len(current.Hunks)-1]
 			oldLine, newLine = hunk.OldStart, hunk.NewStart
+			oldRemaining, newRemaining = hunk.OldCount, hunk.NewCount
 			if current.Package == "" {
 				if match := packagePattern.FindStringSubmatch(hunk.Header); len(match) == 2 {
 					current.Package = match[1]
 				}
 			}
-		case hunk != nil:
-			if strings.HasPrefix(line, `\ No newline at end of file`) {
-				continue
-			}
-			if line == "" {
-				return ParsedDiff{}, errors.New("malformed hunk line without prefix")
-			}
-			entry := DiffLine{Kind: line[0], Text: line[1:]}
-			switch entry.Kind {
-			case ' ':
-				entry.OldLine, entry.NewLine = oldLine, newLine
-				oldLine++
-				newLine++
-			case '-':
-				entry.OldLine = oldLine
-				oldLine++
-			case '+':
-				entry.NewLine = newLine
-				newLine++
-			default:
-				return ParsedDiff{}, fmt.Errorf(
-					"unsupported hunk line prefix %q", entry.Kind,
-				)
-			}
-			hunk.Lines = append(hunk.Lines, entry)
-			if current.Package == "" && entry.Kind != '-' {
-				if match := packagePattern.FindStringSubmatch(entry.Text); len(match) == 2 {
-					current.Package = match[1]
-				}
+			if oldRemaining == 0 && newRemaining == 0 {
+				hunk = nil
 			}
 		}
 	}
@@ -140,6 +163,9 @@ func ParseUnifiedDiff(data []byte) (ParsedDiff, error) {
 		if result.Files[i].Path == "" {
 			result.Files[i].Path = result.Files[i].OldPath
 		}
+		if err := validateDiffPath(result.Files[i].OldPath); err != nil {
+			return ParsedDiff{}, err
+		}
 		if err := validateDiffPath(result.Files[i].Path); err != nil {
 			return ParsedDiff{}, err
 		}
@@ -148,22 +174,34 @@ func ParseUnifiedDiff(data []byte) (ParsedDiff, error) {
 }
 
 func appendDiffFile(result *ParsedDiff, header string) (*ChangedFile, error) {
-	if len(result.Files) >= maxDiffFiles {
-		return nil, fmt.Errorf("diff exceeds %d-file input limit", maxDiffFiles)
-	}
 	fields := strings.Fields(header)
 	if len(fields) < 4 {
 		return nil, fmt.Errorf("malformed diff header %q", header)
 	}
 	oldPath := normalizePatchPath(fields[2])
 	newPath := normalizePatchPath(fields[3])
+	if err := validateDiffPath(oldPath); err != nil {
+		return nil, err
+	}
 	if err := validateDiffPath(newPath); err != nil {
 		return nil, err
 	}
-	result.Files = append(result.Files, ChangedFile{
+	current, err := appendEmptyDiffFile(result)
+	if err != nil {
+		return nil, err
+	}
+	*current = ChangedFile{
 		OldPath: oldPath,
 		Path:    newPath,
-	})
+	}
+	return current, nil
+}
+
+func appendEmptyDiffFile(result *ParsedDiff) (*ChangedFile, error) {
+	if len(result.Files) >= maxDiffFiles {
+		return nil, fmt.Errorf("diff exceeds %d-file input limit", maxDiffFiles)
+	}
+	result.Files = append(result.Files, ChangedFile{})
 	return &result.Files[len(result.Files)-1], nil
 }
 

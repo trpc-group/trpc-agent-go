@@ -77,3 +77,63 @@ func TestFindingsFromSandbox(t *testing.T) {
 	require.Equal(t, 42, findings[0].Line)
 	require.Equal(t, "go_vet", findings[0].Source)
 }
+
+func TestBuildMetricsIncludesGovernanceHumanReview(t *testing.T) {
+	warning := Finding{
+		Severity: severityLow, Category: "testing", RuleID: "TST001",
+	}
+	governance := Finding{
+		Severity: severityLow, Category: "governance", RuleID: "GOV001",
+	}
+	report := ReviewReport{
+		Findings:         []Finding{{Severity: severityHigh}},
+		Warnings:         []Finding{warning},
+		NeedsHumanReview: []Finding{warning, governance},
+		Decisions: []PermissionDecision{
+			{Action: "allow"},
+			{Action: "ask"},
+			{Action: "deny"},
+		},
+	}
+
+	metrics := buildMetrics(report, 0, 0)
+
+	require.Equal(t, 1, metrics.Severity[severityHigh])
+	require.Equal(t, 2, metrics.Severity[severityLow])
+	require.Equal(t, 2, metrics.PermissionBlocked)
+}
+
+func TestReviewerPersistsAuditWhenArtifactWriteFails(t *testing.T) {
+	tempDir := t.TempDir()
+	store, err := NewSQLiteStore(filepath.Join(tempDir, "reviews.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	reviewer, err := NewReviewer(store, &FakeSandbox{}, "skills")
+	require.NoError(t, err)
+
+	outputPath := filepath.Join(tempDir, "not-a-directory")
+	require.NoError(t, os.WriteFile(outputPath, []byte("block"), 0o600))
+	const patch = `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -1 +1,2 @@
+ package main
++func changed() {}
+`
+	report, err := reviewer.Review(
+		context.Background(),
+		ReviewRequest{
+			Diff: []byte(patch), InputKind: "test", Runtime: "fake",
+			OutputDir: outputPath,
+		},
+	)
+	require.Error(t, err)
+	require.NotEmpty(t, report.TaskID)
+	require.Equal(t, "completed_with_errors", report.Status)
+	require.Equal(t, 1, report.Metrics.Errors["artifact_write"])
+
+	stored, getErr := store.GetReview(context.Background(), report.TaskID)
+	require.NoError(t, getErr)
+	require.Equal(t, report.TaskID, stored.TaskID)
+	require.Equal(t, 1, stored.Metrics.Errors["artifact_write"])
+}

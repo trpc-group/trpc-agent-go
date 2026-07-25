@@ -9,7 +9,7 @@
 
 ## Findings Summary
 
-2 high-confidence findings and 1 warnings across 1 changed files.
+Findings: 2 high-confidence; warnings: 1; changed files: 1.
 
 ## Severity Statistics
 

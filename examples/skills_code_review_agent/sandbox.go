@@ -24,6 +24,7 @@ import (
 
 const (
 	commandTimeout = 45 * time.Second
+	cleanupTimeout = 5 * time.Second
 	maxRunOutput   = 64 << 10
 	maxWorkspace   = 128 << 20
 )
@@ -105,7 +106,7 @@ func (s *WorkspaceSandbox) RunChecks(
 	if err != nil {
 		return SandboxResult{}, fmt.Errorf("create sandbox workspace: %w", err)
 	}
-	defer func() { _ = s.engine.Manager().Cleanup(context.Background(), workspace) }()
+	defer cleanupWorkspace(s.engine.Manager(), workspace, cleanupTimeout)
 
 	if err := s.engine.FS().PutFiles(
 		ctx, workspace,
@@ -348,4 +349,14 @@ func cloneEnv(input map[string]string) map[string]string {
 		result[key] = value
 	}
 	return result
+}
+
+func cleanupWorkspace(
+	manager codeexecutor.WorkspaceManager,
+	workspace codeexecutor.Workspace,
+	timeout time.Duration,
+) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_ = manager.Cleanup(ctx, workspace)
 }

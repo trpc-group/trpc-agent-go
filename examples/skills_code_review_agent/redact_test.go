@@ -67,7 +67,7 @@ func TestRedactionCoverage(t *testing.T) {
 			redacted++
 		}
 	}
-	require.GreaterOrEqual(t, float64(redacted)/float64(len(secrets)), 0.95)
+	require.Equal(t, len(secrets), redacted)
 }
 
 func secretValue(input string) string {

@@ -76,3 +76,33 @@ func TestSQLiteStoreRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NotContains(t, string(raw), "sk-live-secret")
 }
+
+func TestSQLiteStoreGetReportRejectsUninitializedStore(t *testing.T) {
+	var store *SQLiteStore
+	_, _, err := store.GetReport(context.Background(), "review-1")
+	require.ErrorContains(t, err, "not initialized")
+}
+
+func TestSanitizeReportDoesNotMutateCaller(t *testing.T) {
+	const secret = "sk-live-1234567890abcdef"
+	report := ReviewReport{
+		Findings: []Finding{{
+			Evidence: `apiKey = "` + secret + `"`,
+		}},
+		Decisions: []PermissionDecision{{
+			Command: `tool --token=` + secret,
+		}},
+		SandboxRuns: []SandboxRun{{
+			Output: `password=` + secret,
+		}},
+	}
+
+	sanitized := sanitizeReport(report)
+
+	require.Contains(t, report.Findings[0].Evidence, secret)
+	require.Contains(t, report.Decisions[0].Command, secret)
+	require.Contains(t, report.SandboxRuns[0].Output, secret)
+	require.NotContains(t, sanitized.Findings[0].Evidence, secret)
+	require.NotContains(t, sanitized.Decisions[0].Command, secret)
+	require.NotContains(t, sanitized.SandboxRuns[0].Output, secret)
+}

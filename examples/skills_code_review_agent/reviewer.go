@@ -132,24 +132,45 @@ func (r *Reviewer) Review(
 		Decisions:        sandboxResult.Decisions,
 		SandboxRuns:      sandboxResult.Runs,
 	}
+	report = sanitizeReport(report)
 	report.Metrics = buildMetrics(
 		report, time.Since(started), sandboxDuration,
 	)
 	jsonReport, markdownReport, err := RenderReports(report)
 	if err != nil {
-		return ReviewReport{}, err
+		markReviewFailure(&report, "report_render", started)
+		persistErr := r.store.SaveReview(ctx, report, nil, nil)
+		return report, errors.Join(
+			fmt.Errorf("render review reports: %w", err),
+			persistErr,
+		)
 	}
 	artifacts, err := WriteReportFiles(
 		request.OutputDir, jsonReport, markdownReport,
 	)
 	if err != nil {
-		return ReviewReport{}, err
+		markReviewFailure(&report, "artifact_write", started)
+		failureJSON, failureMarkdown, renderErr := RenderReports(report)
+		if renderErr != nil {
+			return report, errors.Join(
+				fmt.Errorf("write review artifacts: %w", err),
+				fmt.Errorf("render failed review: %w", renderErr),
+			)
+		}
+		persistErr := r.store.SaveReview(
+			ctx, report, failureJSON, failureMarkdown,
+		)
+		return report, errors.Join(
+			fmt.Errorf("write review artifacts: %w", err),
+			persistErr,
+		)
 	}
 	report.Artifacts = artifacts
 	if err := r.store.SaveReview(
 		ctx, report, jsonReport, markdownReport,
 	); err != nil {
-		return ReviewReport{}, err
+		markReviewFailure(&report, "persistence", started)
+		return report, fmt.Errorf("persist review: %w", err)
 	}
 	return report, nil
 }
@@ -317,7 +338,7 @@ func buildMetrics(
 		Errors: make(map[string]int),
 	}
 	for _, finding := range append(
-		append([]Finding(nil), report.Findings...), report.Warnings...,
+		append([]Finding(nil), report.Findings...), report.NeedsHumanReview...,
 	) {
 		metrics.Severity[finding.Severity]++
 	}
@@ -332,6 +353,23 @@ func buildMetrics(
 		}
 	}
 	return metrics
+}
+
+func markReviewFailure(
+	report *ReviewReport,
+	errorType string,
+	started time.Time,
+) {
+	report.Status = "completed_with_errors"
+	if report.Conclusion == "approved" {
+		report.Conclusion = "needs_human_review"
+	}
+	report.CompletedAt = time.Now().UTC()
+	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
+	if report.Metrics.Errors == nil {
+		report.Metrics.Errors = make(map[string]int)
+	}
+	report.Metrics.Errors[errorType]++
 }
 
 func newTaskID(started time.Time, diff []byte) string {

@@ -20,8 +20,8 @@ It does not require a model API key.
 
 ## Quick Start
 
-The SQLite driver requires CGO at runtime. Docker is required for the default
-production path.
+The default SQLite backend requires a CGO-enabled binary; building it needs a
+C toolchain. Docker is required for the default production path.
 
 ```bash
 cd examples/skills_code_review_agent

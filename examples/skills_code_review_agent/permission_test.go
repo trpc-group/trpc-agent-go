@@ -53,6 +53,28 @@ func TestCommandPermissionPolicy(t *testing.T) {
 			},
 			action: tool.PermissionActionDeny,
 		},
+		{
+			name: "allow bundled review script",
+			command: checkCommand{
+				Name: "bash",
+				Args: []string{reviewScriptPath, "work/input.diff"},
+			},
+			action: tool.PermissionActionAllow,
+		},
+		{
+			name: "deny arbitrary bash script",
+			command: checkCommand{
+				Name: "bash", Args: []string{"untrusted.sh"},
+			},
+			action: tool.PermissionActionDeny,
+		},
+		{
+			name: "allow staticcheck",
+			command: checkCommand{
+				Name: "staticcheck", Args: []string{"./..."},
+			},
+			action: tool.PermissionActionAllow,
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

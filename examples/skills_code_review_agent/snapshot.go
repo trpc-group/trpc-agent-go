@@ -30,6 +30,18 @@ var excludedSnapshotDirs = map[string]bool{
 	"node_modules": true, ".cache": true,
 }
 
+var excludedSnapshotNames = map[string]bool{
+	".git-credentials": true,
+	".netrc":           true,
+	".npmrc":           true,
+	".pypirc":          true,
+	"authorized_keys":  true,
+	"id_dsa":           true,
+	"id_ecdsa":         true,
+	"id_ed25519":       true,
+	"id_rsa":           true,
+}
+
 func createRepoSnapshot(repoPath string) (string, func(), error) {
 	root, err := filepath.Abs(repoPath)
 	if err != nil {
@@ -101,6 +113,9 @@ func createRepoSnapshot(repoPath string) (string, func(), error) {
 
 func excludedSnapshotFile(name string) bool {
 	lower := strings.ToLower(name)
+	if excludedSnapshotNames[lower] {
+		return true
+	}
 	if lower == ".env" || strings.HasPrefix(lower, ".env.") {
 		return true
 	}

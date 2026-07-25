@@ -549,6 +549,9 @@ func (s *SQLiteStore) GetReport(
 	ctx context.Context,
 	taskID string,
 ) ([]byte, []byte, error) {
+	if s == nil || s.db == nil {
+		return nil, nil, errors.New("sqlite store is not initialized")
+	}
 	var jsonContent, markdownContent string
 	err := s.db.QueryRowContext(
 		ctx,
@@ -564,19 +567,27 @@ func (s *SQLiteStore) GetReport(
 
 func sanitizeReport(report ReviewReport) ReviewReport {
 	report.Input.RedactedPreview = Redact(report.Input.RedactedPreview)
-	for i := range report.Findings {
-		report.Findings[i] = sanitizeFinding(report.Findings[i])
+	report.Input.ChangedFiles = append(
+		[]string(nil), report.Input.ChangedFiles...,
+	)
+	for i := range report.Input.ChangedFiles {
+		report.Input.ChangedFiles[i] = Redact(report.Input.ChangedFiles[i])
 	}
-	for i := range report.Warnings {
-		report.Warnings[i] = sanitizeFinding(report.Warnings[i])
+	report.Input.GoPackages = append(
+		[]string(nil), report.Input.GoPackages...,
+	)
+	for i := range report.Input.GoPackages {
+		report.Input.GoPackages[i] = Redact(report.Input.GoPackages[i])
 	}
-	for i := range report.NeedsHumanReview {
-		report.NeedsHumanReview[i] = sanitizeFinding(report.NeedsHumanReview[i])
-	}
+	report.Findings = sanitizeFindings(report.Findings)
+	report.Warnings = sanitizeFindings(report.Warnings)
+	report.NeedsHumanReview = sanitizeFindings(report.NeedsHumanReview)
+	report.Decisions = append([]PermissionDecision(nil), report.Decisions...)
 	for i := range report.Decisions {
 		report.Decisions[i].Command = Redact(report.Decisions[i].Command)
 		report.Decisions[i].Reason = Redact(report.Decisions[i].Reason)
 	}
+	report.SandboxRuns = append([]SandboxRun(nil), report.SandboxRuns...)
 	for i := range report.SandboxRuns {
 		report.SandboxRuns[i].Command = Redact(report.SandboxRuns[i].Command)
 		report.SandboxRuns[i].Output = Redact(report.SandboxRuns[i].Output)
@@ -584,10 +595,23 @@ func sanitizeReport(report ReviewReport) ReviewReport {
 			report.SandboxRuns[i].ErrorMessage,
 		)
 	}
+	report.Artifacts = append([]ArtifactRecord(nil), report.Artifacts...)
+	for i := range report.Artifacts {
+		report.Artifacts[i].Path = Redact(report.Artifacts[i].Path)
+	}
 	return report
 }
 
+func sanitizeFindings(findings []Finding) []Finding {
+	sanitized := append([]Finding(nil), findings...)
+	for i := range sanitized {
+		sanitized[i] = sanitizeFinding(sanitized[i])
+	}
+	return sanitized
+}
+
 func sanitizeFinding(finding Finding) Finding {
+	finding.File = Redact(finding.File)
 	finding.Title = Redact(finding.Title)
 	finding.Evidence = Redact(finding.Evidence)
 	finding.Recommendation = Redact(finding.Recommendation)
