@@ -172,6 +172,20 @@ func TestSelectDocsTool_DeclarationSchema(t *testing.T) {
 	require.Contains(t, inProps, "docs")
 	require.Contains(t, inProps, "include_all_docs")
 	require.Contains(t, inProps, "mode")
+	require.Equal(
+		t,
+		[]any{modeAdd, modeReplace, modeClear},
+		inProps["mode"].Enum,
+	)
+	require.Equal(t, modeReplace, inProps["mode"].Default)
+	require.Contains(t, d.Description, "current selected-doc set")
+	require.Contains(t, d.Description, "defaults to replace")
+	require.Contains(t, inProps["docs"].Description, "every doc")
+	require.Contains(
+		t,
+		inProps["mode"].Description,
+		"non-enum value reaches the runtime",
+	)
 }
 
 func TestSelectDocsTool_ParseErrors(t *testing.T) {
@@ -200,14 +214,24 @@ func TestSelectDocsTool_ModeNormalization(t *testing.T) {
 	require.NoError(t, err)
 	sd := NewSelectDocsTool(repo)
 
-	// default/invalid -> replace
+	// omitted -> replace
 	out, err := sd.Call(context.Background(), []byte(
-		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"],`+
-			`"mode":"invalid"}`,
+		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"]}`,
 	))
 	require.NoError(t, err)
 	b, _ := json.Marshal(out)
 	var m map[string]any
+	require.NoError(t, json.Unmarshal(b, &m))
+	require.Equal(t, "replace", m["mode"])
+
+	// invalid -> replace
+	out, err = sd.Call(context.Background(), []byte(
+		`{"skill":"`+demoSkill+`","docs":["`+usageDoc+`"],`+
+			`"mode":"invalid"}`,
+	))
+	require.NoError(t, err)
+	b, _ = json.Marshal(out)
+	m = map[string]any{}
 	require.NoError(t, json.Unmarshal(b, &m))
 	require.Equal(t, "replace", m["mode"])
 

@@ -412,6 +412,37 @@ func TestModelCallBudgetModel_FinalizesOnLastAllowedCall(t *testing.T) {
 		got.Messages[1].Content,
 		"<tool_call>",
 	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"visible assistant message content",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"not only in internal reasoning",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"Do not ask to continue or promise future execution",
+	)
+	require.NotContains(t, got.Messages[1].Content, "Do not describe plans")
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"answer now with the best supported final value",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"FINAL ANSWER:",
+	)
+	require.Contains(
+		t,
+		got.Messages[1].Content,
+		"avoid extra explanation",
+	)
 	require.Nil(t, req.Tools)
 	require.Len(t, req.Messages, 2)
 	require.Equal(t, map[string]any{

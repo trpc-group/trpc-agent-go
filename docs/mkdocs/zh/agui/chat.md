@@ -242,6 +242,8 @@ server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithUserIDRe
 
 `AppNameResolver` 返回非空字符串时，会使用该值作为本次请求的 `AppName`；返回空字符串时，会回退到 `agui.WithAppName(name)`。实时对话、消息快照和取消路由会复用同一套解析逻辑，因此同一会话的相关请求需要解析出一致的 `AppName`。
 
+解析得到的 `AppName` 是 AG-UI 请求的规范会话边界。实时对话运行时，AG-UI 会把该值作为 `agent.WithAppName` 传给底层 Runner，使底层 Runner 的 session key 与 AG-UI track、消息快照和取消路由保持一致。
+
 开启消息快照功能时，需要配置 `agui.WithAppName(name)` 作为默认值。
 
 ```go
@@ -274,6 +276,8 @@ server, _ := agui.New(
 ## 自定义 `RunOptionResolver`
 
 `RunOptionResolver` 用于为本次 Agent 运行补充 [`agent.RunOption`](https://github.com/trpc-group/trpc-agent-go/blob/main/agent/invocation.go)。它会在每次请求处理时执行，返回的选项只作用于当前这次运行。AG-UI runner 会在自定义 resolver 返回后，继续把请求里的 `input.Tools` 映射为调用方执行的工具。
+
+不要通过 `RunOptionResolver` 返回 `agent.WithAppName` 配置 AG-UI 会话归属。AG-UI 的 `AppName` 应由 `agui.WithAppName` 或 `agui.WithAppNameResolver` 提供；当解析出的 `AppName` 非空时，它会覆盖 `RunOptionResolver` 中设置的 `agent.WithAppName`。
 
 ```go
 import (
@@ -334,6 +338,71 @@ stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[stri
 
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
 ```
+
+## Run Hook
+
+`RunHook` 适合在实时对话运行过程中，由服务端后台逻辑按自己的节奏主动向前端推送 AG-UI 事件。它处理的是服务端主动补充 UI 状态的场景，而不是把 Agent 已经产生的内部事件翻译成 AG-UI 事件；后者应使用后续的自定义 Translator 或事件翻译回调。
+
+AG-UI 会在 `RUN_STARTED` 发送后创建本次运行的 `Run`，把它绑定到执行 `ctx`，再启动 `RunHook` 并调用底层 Runner。Hook 中可以直接使用参数里的 `run`；Agent、Tool 或其他沿 `ctx` 执行的业务代码，可以通过 `aguirunner.RunFromContext(ctx)` 取出同一个 `Run`。通过 `run.Emit(ctx, event)` 发送的事件会写入本次请求的 SSE 流；如果配置了 `SessionService`，这些事件也会写入 AG-UI 历史，可通过 [消息快照路由](history.md) 恢复。它们不会写入普通会话事件，因此不会成为后续模型上下文。
+
+下面示例演示一个后台报告任务每 100ms 推送一次生成进度。完整示例可参考 [examples/agui/server/runhook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runhook)；如果需要在 GraphAgent 节点中主动上报进度，可参考 [examples/agui/server/graph_progress](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph_progress)。
+
+```go
+import (
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+const reportEventName = "background.report.status"
+
+func pushBackgroundReportStatus(ctx context.Context, run *aguirunner.Run) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for step := 1; step <= 5; step++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		err := run.Emit(ctx, aguievents.NewCustomEvent(
+			reportEventName,
+			aguievents.WithValue(map[string]any{
+				"progress": step * 20,
+			}),
+		))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+coreRunner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(coreRunner, agui.WithRunHook(pushBackgroundReportStatus))
+```
+
+在 Agent 或 Tool 内部主动推送时，不需要自己把 `Run` 放入 state。只要代码拿到的是本次运行传入的 `ctx`，就可以从 `ctx` 中读取。
+
+```go
+func emitReportStatus(ctx context.Context, progress int) error {
+	run, ok := aguirunner.RunFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return run.Emit(ctx, aguievents.NewCustomEvent(
+		reportEventName,
+		aguievents.WithValue(map[string]any{
+			"progress": progress,
+		}),
+	))
+}
+```
+
+如果后台任务需要读取本次请求里的业务字段，可以通过 `run.Input()` 获取 `RunAgentInput`，例如读取 `forwardedProps` 中的业务参数。Hook 中应把请求体当作只读数据使用，不要在运行开始后继续改写它。
+
+`run.Emit` 用于发送服务端主动产生的 UI 事件，不应发送 `RUN_STARTED`、`RUN_FINISHED`、`RUN_ERROR` 或 `MESSAGES_SNAPSHOT` 这类框架事件。如果 Agent 先于 Hook 完成，框架会等 Hook 返回后再发送最终运行终态，避免 Hook 推送的 UI 事件落在终态之后。Hook 应响应 `ctx.Done()`；运行被取消或超时时，应尽快返回。如果 Hook 返回错误，本次 AG-UI 运行会返回 `RUN_ERROR`。
 
 ## 自定义 Translator
 
@@ -729,7 +798,7 @@ server, err := agui.New(
 
 之所以需要 `parentMetadata`，是因为 `parentInvocationId` 只标识父级执行，并不能区分父级内部的具体哪一次 tool call。当模型在一轮里对同一个子 Agent 发起多个并行 AgentTool 调用时，所有派生出的 invocation 共享相同的 `parentInvocationId`；只有 `parentMetadata.triggerId` 才能区分每个子 invocation 对应的是哪一次 `TOOL_CALL_START`。当父级不是通过工具调用触发本次执行时（例如顶层 run），`parentMetadata` 字段缺省。
 
-消息快照路由返回的 `MESSAGES_SNAPSHOT` 事件也可以携带来源信息。此时 `rawEvent` 不是单条事件的来源信息，而是按消息和工具调用建立的来源索引：
+消息快照路由返回的 `MESSAGES_SNAPSHOT` 事件也可以携带来源信息。此时 `rawEvent` 不是单条事件的来源信息，而是按消息、工具调用和运行建立的来源索引：
 
 ```json
 {
@@ -757,12 +826,21 @@ server, err := agui.New(
         "branch": "root.member-a",
         "timestamp": 1781258401000
       }
+    },
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png"
+        },
+        "timestamp": 1781258400000
+      }
     }
   }
 }
 ```
 
-恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
+恢复历史消息时，可以通过 `rawEvent.messages[messageId]` 获取消息来源和时间戳，也可以通过 `rawEvent.toolCalls[toolCallId]` 获取工具调用来源和时间戳；如果需要恢复请求级 `forwardedProps`，可以读取 `rawEvent.runs[runId].forwardedProps`。索引中的 `timestamp` 优先复用历史实时事件顶层的 `timestamp`；只有旧数据缺少事件 `timestamp` 时，才回退使用持久化 track event 的时间。索引中的来源信息与实时事件里的 `rawEvent` 使用同一组字段，前端可以沿用这些字段含义恢复分组状态。
 
 ## 外部工具
 
