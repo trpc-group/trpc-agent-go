@@ -889,3 +889,248 @@ func TestFirstMessage_NilResponse(t *testing.T) {
 		t.Errorf("expected empty message, got %+v", msg)
 	}
 }
+
+// --- compareSessionSummaries ---
+
+func TestComparator_CompareSessionSummaries_CountMismatch(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{BackendName: "A"}
+	b := &BackendResult{BackendName: "B"}
+	smA := map[string]*session.Summary{"": {Summary: "full"}}
+	smB := map[string]*session.Summary{"": {Summary: "full"}, "branch-a": {Summary: "branch summary"}}
+	// compareSessionSummaries is called indirectly via compareSessions → compareSummaryMaps.
+	diffs := c.compareSessionSummaries("c", a, b, smA, smB)
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "session.summaries" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff at session.summaries for count mismatch")
+	}
+}
+
+func TestComparator_CompareSessionSummaries_KeyOneSide(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{BackendName: "A"}
+	b := &BackendResult{BackendName: "B"}
+	smA := map[string]*session.Summary{"branch-a": {Summary: "A summary"}}
+	smB := map[string]*session.Summary{"branch-b": {Summary: "B summary"}}
+	diffs := c.compareSessionSummaries("c", a, b, smA, smB)
+	found := false
+	for _, d := range diffs {
+		if d.SummaryKey == "branch-a" || d.SummaryKey == "branch-b" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff for summary filter-key exists in one side only")
+	}
+}
+
+func TestComparator_CompareSessionSummaries_NilOneSide(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{BackendName: "A"}
+	b := &BackendResult{BackendName: "B"}
+	smA := map[string]*session.Summary{"k": nil}
+	smB := map[string]*session.Summary{"k": {Summary: "text"}}
+	diffs := c.compareSessionSummaries("c", a, b, smA, smB)
+	found := false
+	for _, d := range diffs {
+		if d.SummaryKey == "k" && d.DiffReason == "summary is nil on one side" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff for summary is nil on one side")
+	}
+}
+
+func TestComparator_CompareSessionSummaries_SummaryTextDiff(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{BackendName: "A"}
+	b := &BackendResult{BackendName: "B"}
+	smA := map[string]*session.Summary{"k": {Summary: "text A"}}
+	smB := map[string]*session.Summary{"k": {Summary: "text B"}}
+	diffs := c.compareSessionSummaries("c", a, b, smA, smB)
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "session.summaries[k].summary" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff at session.summaries[k].summary")
+	}
+}
+
+func TestComparator_CompareSessionSummaries_BoundaryDiff(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{BackendName: "A"}
+	b := &BackendResult{BackendName: "B"}
+	smA := map[string]*session.Summary{"k": {Summary: "text", Boundary: &session.SummaryBoundary{Version: 1}}}
+	smB := map[string]*session.Summary{"k": {Summary: "text", Boundary: &session.SummaryBoundary{Version: 2}}}
+	diffs := c.compareSessionSummaries("c", a, b, smA, smB)
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "session.summaries[k].boundary.version" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff at session.summaries[k].boundary.version")
+	}
+}
+
+// --- markAllowedDiffs ---
+
+func TestMarkAllowedDiffs_TrackCapability(t *testing.T) {
+	c := NewComparator()
+	diffs := []DiffEntry{
+		{FieldPath: "tracks.exec.events[0]", BackendA: "A", BackendB: "B"},
+	}
+	// Both A and B support Track (InMemory), so track diffs should NOT be allowed.
+	marked := c.markAllowedDiffs(diffs, "InMemory", "InMemory")
+	for _, d := range marked {
+		if d.AllowedDiff {
+			t.Error("expected track diff to NOT be allowed when both backends support Track")
+		}
+	}
+}
+
+func TestMarkAllowedDiffs_TrackCapabilityOneSide(t *testing.T) {
+	c := NewComparator()
+	diffs := []DiffEntry{
+		{FieldPath: "tracks.exec.events[0]", BackendA: "A", BackendB: "B"},
+	}
+	// ClickHouse does NOT support Track, InMemory does → should be allowed.
+	marked := c.markAllowedDiffs(diffs, "InMemory", "ClickHouse")
+	found := false
+	for _, d := range marked {
+		if d.AllowedDiff && d.FieldPath == "tracks.exec.events[0]" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected track diff to be allowed when one side lacks Track capability")
+	}
+}
+
+func TestMarkAllowedDiffs_MemorySearchCapabilityOneSide(t *testing.T) {
+	c := NewComparator()
+	diffs := []DiffEntry{
+		{FieldPath: "memories[0].score"},
+	}
+	// ClickHouse does NOT support memory search → memory diffs should be allowed.
+	marked := c.markAllowedDiffs(diffs, "InMemory", "ClickHouse")
+	found := false
+	for _, d := range marked {
+		if d.AllowedDiff && d.FieldPath == "memories[0].score" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected memory diff to be allowed when one side lacks MemorySearch capability")
+	}
+}
+
+func TestMarkAllowedDiffs_SummaryFilterKeyCapabilityOneSide(t *testing.T) {
+	c := NewComparator()
+	diffs := []DiffEntry{
+		{FieldPath: "session.summaries[k]", SummaryKey: "branch-a"},
+	}
+	// ClickHouse does NOT support SummaryFilterKey → summary filter-key diffs should be allowed.
+	marked := c.markAllowedDiffs(diffs, "InMemory", "ClickHouse")
+	found := false
+	for _, d := range marked {
+		if d.AllowedDiff && d.SummaryKey == "branch-a" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected summary filter-key diff to be allowed when one side lacks capability")
+	}
+}
+
+func TestMarkAllowedDiffs_EventPagingCapabilityOneSide(t *testing.T) {
+	c := NewComparator()
+	diffs := []DiffEntry{
+		{FieldPath: "events[5].content", EventIndex: 5},
+	}
+	// Postgres supports paging, InMemory does not → event index diffs should be allowed.
+	marked := c.markAllowedDiffs(diffs, "Postgres", "InMemory")
+	found := false
+	for _, d := range marked {
+		if d.AllowedDiff && d.EventIndex == 5 {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected event paging diff to be allowed when one side lacks paging capability")
+	}
+}
+
+// --- Compare with nil session one side (via Compare) ---
+
+func TestComparator_Compare_NilSessionOneSide(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{
+		BackendName: "A",
+		Session:     &session.Session{AppName: "test", UserID: "u1"},
+	}
+	b := &BackendResult{
+		BackendName: "B",
+	}
+	// B has nil Session → compareSessions should detect it.
+	diffs := c.Compare("c", a, b)
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "session" && d.DiffReason == "session is nil on one side" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff for nil session on one side via Compare")
+	}
+}
+
+// --- Compare with memories only in one backend ---
+
+func TestComparator_Compare_MemoryCountMismatchViaCompare(t *testing.T) {
+	c := NewComparator()
+	a := &BackendResult{
+		BackendName: "A",
+		Memories: []*memory.Entry{
+			{Memory: &memory.Memory{Memory: "mem1", Kind: "fact"}},
+		},
+	}
+	b := &BackendResult{
+		BackendName: "B",
+		Memories: []*memory.Entry{
+			{Memory: &memory.Memory{Memory: "mem1", Kind: "fact"}},
+			{Memory: &memory.Memory{Memory: "mem2", Kind: "episode"}},
+		},
+	}
+	diffs := c.Compare("c", a, b)
+	found := false
+	for _, d := range diffs {
+		if d.FieldPath == "memories" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected diff at memories for count mismatch via Compare")
+	}
+}

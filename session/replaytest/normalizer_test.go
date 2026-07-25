@@ -10,9 +10,11 @@
 package replaytest
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
@@ -148,5 +150,114 @@ func TestNormalizer_PrivateMetaDropped(t *testing.T) {
 	// ServiceMeta should not be present.
 	if normalized.ServiceMeta != nil {
 		t.Error("expected ServiceMeta to be dropped")
+	}
+}
+
+func TestNormalizer_EventWithExtensions(t *testing.T) {
+	n := NewNormalizer()
+	// Create a valid event with event.New, then add extensions.
+	ev := event.New("", "user")
+	ev.Extensions = map[string]json.RawMessage{
+		"z_key": json.RawMessage(`"z"`),
+		"a_key": json.RawMessage(`"a"`),
+	}
+	sess := &session.Session{
+		ID:     "session-1",
+		Events: []event.Event{*ev},
+	}
+	normalized := n.NormalizeSession(sess)
+	if normalized == nil {
+		t.Fatal("expected non-nil normalized session")
+	}
+	if len(normalized.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(normalized.Events))
+	}
+	e := normalized.Events[0]
+	if len(e.Extensions) != 2 {
+		t.Fatalf("expected 2 extensions, got %d", len(e.Extensions))
+	}
+	// Verify keys are sorted.
+	var keys []string
+	for k := range e.Extensions {
+		keys = append(keys, k)
+	}
+	if len(keys) != 2 || keys[0] != "a_key" || keys[1] != "z_key" {
+		t.Errorf("expected sorted extension keys [a_key z_key], got %v", keys)
+	}
+}
+
+func TestNormalizer_EventWithStateDelta(t *testing.T) {
+	n := NewNormalizer()
+	ev := event.New("", "user")
+	ev.StateDelta = session.StateMap{
+		"b": []byte("2"),
+		"a": []byte("1"),
+	}
+	sess := &session.Session{
+		ID:     "session-1",
+		Events: []event.Event{*ev},
+	}
+	normalized := n.NormalizeSession(sess)
+	if normalized == nil {
+		t.Fatal("expected non-nil normalized session")
+	}
+	if len(normalized.Events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(normalized.Events))
+	}
+	e := normalized.Events[0]
+	if e.StateDelta == nil {
+		t.Fatal("expected non-nil StateDelta")
+	}
+	// StateDelta is a map — verify values exist, not iteration order
+	// (Go map iteration is non-deterministic).
+	if string(e.StateDelta["a"]) != "1" {
+		t.Errorf("expected StateDelta['a']='1', got %q", string(e.StateDelta["a"]))
+	}
+	if string(e.StateDelta["b"]) != "2" {
+		t.Errorf("expected StateDelta['b']='2', got %q", string(e.StateDelta["b"]))
+	}
+	if len(e.StateDelta) != 2 {
+		t.Errorf("expected 2 StateDelta keys, got %d", len(e.StateDelta))
+	}
+}
+
+func TestNormalizer_SummariesWithBoundary(t *testing.T) {
+	n := NewNormalizer()
+	now := time.Now().UTC()
+	sess := &session.Session{
+		ID: "session-1",
+		Summaries: map[string]*session.Summary{
+			"": {
+				Summary:   "full summary",
+				Topics:    []string{"topic1"},
+				UpdatedAt: now,
+				Boundary: &session.SummaryBoundary{
+					Version:     1,
+					FilterKey:   "",
+					CutoffAt:    now.Add(-time.Hour),
+					LastEventID: "evt-5",
+				},
+			},
+		},
+	}
+	normalized := n.NormalizeSession(sess)
+	if normalized == nil {
+		t.Fatal("expected non-nil normalized session")
+	}
+	if len(normalized.Summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(normalized.Summaries))
+	}
+	s := normalized.Summaries[""]
+	if s == nil {
+		t.Fatal("expected non-nil summary")
+	}
+	if s.Boundary == nil {
+		t.Fatal("expected non-nil summary boundary")
+	}
+	if s.Boundary.Version != 1 {
+		t.Errorf("expected version 1, got %d", s.Boundary.Version)
+	}
+	if s.Boundary.LastEventID != "<event-id>" {
+		t.Errorf("expected normalized lastEventID '<event-id>', got %q", s.Boundary.LastEventID)
 	}
 }

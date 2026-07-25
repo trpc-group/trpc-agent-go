@@ -10,8 +10,11 @@
 package replaytest
 
 import (
+	"context"
 	"os"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 func TestBackendRegistration_DefaultBackends(t *testing.T) {
@@ -213,5 +216,156 @@ func TestBackendCapabilities_UnknownBackend(t *testing.T) {
 	}
 	if caps[CapTTL] {
 		t.Error("expected CapTTL false for unknown backend")
+	}
+}
+
+// TestExecuteOp_ErrorPaths verifies that executeOp returns errors for invalid inputs.
+func TestExecuteOp_ErrorPaths(t *testing.T) {
+	backends := GetBackends()
+	var inmem BackendFactory
+	for _, b := range backends {
+		if b.Name == "InMemory" {
+			inmem = b
+			break
+		}
+	}
+	if !inmem.Enabled {
+		t.Skip("InMemory backend not enabled")
+	}
+
+	ctx := context.Background()
+	key := session.Key{AppName: "test", UserID: "u1", SessionID: "sess-error"}
+
+	// Tests that do NOT require an existing session.
+	directTests := []struct {
+		name string
+		op   ReplayOp
+	}{
+		{
+			name: "CreateSession_invalid_data_type",
+			op:   ReplayOp{Type: OpCreateSession, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "AppendEvent_no_session",
+			op:   ReplayOp{Type: OpAppendEvent, Key: key, Data: EventData{Event: NewEvent("inv1", "user", "user", "hi")}},
+		},
+		{
+			name: "UpdateSessionState_no_session",
+			op:   ReplayOp{Type: OpUpdateSessionState, Key: key, Data: StateData{State: session.StateMap{"k": []byte("v")}}},
+		},
+		{
+			name: "AddMemory_invalid_data_type",
+			op:   ReplayOp{Type: OpAddMemory, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "UpdateMemory_invalid_data_type",
+			op:   ReplayOp{Type: OpUpdateMemory, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "DeleteMemory_invalid_data_type",
+			op:   ReplayOp{Type: OpDeleteMemory, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "ClearMemories_invalid_data_type",
+			op:   ReplayOp{Type: OpClearMemories, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "CreateSessionSummary_no_session",
+			op:   ReplayOp{Type: OpCreateSessionSummary, Key: key, Data: SummaryData{}},
+		},
+		{
+			name: "GetSessionSummaryText_no_session",
+			op:   ReplayOp{Type: OpGetSessionSummaryText, Key: key, Data: SummaryData{}},
+		},
+		{
+			name: "AppendTrackEvent_no_session",
+			op:   ReplayOp{Type: OpAppendTrackEvent, Key: key, Data: TrackEventData{Event: &session.TrackEvent{Track: "t1"}}},
+		},
+		{
+			name: "ConcurrentAppendEvents_no_session",
+			op:   ReplayOp{Type: OpConcurrentAppendEvents, Key: key, Data: ConcurrentEventData{}},
+		},
+		{
+			name: "ReadMemories_invalid_data_type",
+			op:   ReplayOp{Type: OpReadMemories, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "SearchMemories_invalid_data_type",
+			op:   ReplayOp{Type: OpSearchMemories, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "Unknown_op_type",
+			op:   ReplayOp{Type: "NonExistentOp", Key: key},
+		},
+	}
+
+	for _, tt := range directTests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessSvc, memSvc, err := inmem.New()
+			if err != nil {
+				t.Fatalf("create services: %v", err)
+			}
+			defer sessSvc.Close()
+			defer memSvc.Close()
+
+			result := &BackendResult{}
+			err = executeOp(ctx, sessSvc, memSvc, tt.op, result)
+			if err == nil {
+				t.Error("expected error but got nil")
+			}
+		})
+	}
+
+	// Tests that require an existing session first, then pass invalid data type.
+	// These cover the "invalid data type" check AFTER the nil session check.
+	withSessionTests := []struct {
+		name string
+		op   ReplayOp
+	}{
+		{
+			name: "AppendEvent_invalid_data_type",
+			op:   ReplayOp{Type: OpAppendEvent, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "UpdateSessionState_invalid_data_type",
+			op:   ReplayOp{Type: OpUpdateSessionState, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "CreateSessionSummary_invalid_data_type",
+			op:   ReplayOp{Type: OpCreateSessionSummary, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "AppendTrackEvent_invalid_data_type",
+			op:   ReplayOp{Type: OpAppendTrackEvent, Key: key, Data: "wrong_type"},
+		},
+		{
+			name: "ConcurrentAppendEvents_invalid_data_type",
+			op:   ReplayOp{Type: OpConcurrentAppendEvents, Key: key, Data: "wrong_type"},
+		},
+	}
+
+	for _, tt := range withSessionTests {
+		t.Run(tt.name, func(t *testing.T) {
+			sessSvc, memSvc, err := inmem.New()
+			if err != nil {
+				t.Fatalf("create services: %v", err)
+			}
+			defer sessSvc.Close()
+			defer memSvc.Close()
+
+			// Create a session first so the nil-session check passes.
+			result := &BackendResult{}
+			sess, err := sessSvc.CreateSession(ctx, key, nil)
+			if err != nil {
+				t.Fatalf("create session: %v", err)
+			}
+			result.Session = sess
+
+			// Now execute the op with invalid data type.
+			err = executeOp(ctx, sessSvc, memSvc, tt.op, result)
+			if err == nil {
+				t.Error("expected error but got nil")
+			}
+		})
 	}
 }
