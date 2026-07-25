@@ -312,6 +312,128 @@ func TestHarnessRun_WithMockModel(t *testing.T) {
 	}
 }
 
+// TestHarnessRun_RunAllTrap verifies RunAllTrap runs all cases × all traps without error.
+func TestHarnessRun_RunAllTrap(t *testing.T) {
+	ctx := context.Background()
+	h := NewHarness()
+
+	key := session.Key{AppName: "test", UserID: "user1", SessionID: "sess1"}
+
+	h.AddCases([]ReplayCase{
+		{
+			Name: "trap_all_events",
+			Ops: []ReplayOp{
+				{Type: OpCreateSession, Key: key},
+				{Type: OpAppendEvent, Key: key,
+					Data: EventData{Event: NewEvent("inv1", "user", "user", "Hello")}},
+				{Type: OpAppendEvent, Key: key,
+					Data: EventData{Event: NewEvent("inv2", "assistant", "assistant", "Hi")}},
+				{Type: OpUpdateSessionState, Key: key,
+					Data: StateData{State: session.StateMap{"k": []byte("v")}}},
+			},
+		},
+		{
+			Name: "trap_all_memory",
+			Ops: []ReplayOp{
+				{Type: OpAddMemory, Key: key,
+					Data: MemoryData{
+						UserKey: memory.UserKey{AppName: "test", UserID: "user1"},
+						Memory:  "User likes coffee.",
+						Topics:  []string{"preference"},
+					}},
+				{Type: OpReadMemories, Key: key,
+					Data: memory.UserKey{AppName: "test", UserID: "user1"}},
+			},
+		},
+	})
+
+	// Only use traps that are compatible with the data above.
+	traps := []TrapInjector{
+		TrapSwapEventOrder(),
+		TrapAlterMemoryContent(),
+		TrapAlterStateValue(),
+		TrapDuplicateEvent(),
+	}
+
+	report, err := h.RunAllTrap(ctx, traps)
+	if err != nil {
+		t.Fatalf("RunAllTrap failed: %v", err)
+	}
+	if report == nil {
+		t.Fatal("expected non-nil report")
+	}
+	// Each case runs each trap independently — any detection is sufficient
+	// to verify the method works end-to-end.
+	if report.TotalCases == 0 {
+		t.Error("expected at least 1 case result")
+	}
+
+	// Verify JSON output.
+	jsonData, err := h.reporter.ToJSON(report)
+	if err != nil {
+		t.Fatalf("ToJSON failed: %v", err)
+	}
+	if len(jsonData) == 0 {
+		t.Error("JSON report is empty")
+	}
+}
+
+// TestCloneResult_EdgeCases verifies cloneResult handles nil/null edge cases.
+func TestCloneResult_EdgeCases(t *testing.T) {
+	// Nil result.
+	if got := cloneResult(nil); got != nil {
+		t.Error("expected nil for nil input")
+	}
+
+	// Result with nil Session.
+	r := &BackendResult{BackendName: "test"}
+	cloned := cloneResult(r)
+	if cloned.BackendName != "test" {
+		t.Errorf("expected BackendName 'test', got %q", cloned.BackendName)
+	}
+	if cloned.Session != nil {
+		t.Error("expected nil Session")
+	}
+
+	// Result with nil Memories.
+	r = &BackendResult{
+		BackendName: "test",
+		Memories:    nil,
+	}
+	cloned = cloneResult(r)
+	if cloned.Memories != nil {
+		t.Error("expected nil Memories when source is nil")
+	}
+
+	// Result with nil SummaryTexts / Tracks.
+	r = &BackendResult{
+		BackendName:  "test",
+		SummaryTexts: nil,
+		Tracks:       nil,
+	}
+	cloned = cloneResult(r)
+	if cloned.SummaryTexts == nil {
+		t.Error("expected non-nil SummaryTexts map")
+	}
+	if cloned.Tracks == nil {
+		t.Error("expected non-nil Tracks map")
+	}
+
+	// Result with Memory that has nil Memory field.
+	r = &BackendResult{
+		Memories: []*memory.Entry{
+			{Memory: nil},
+		},
+	}
+	cloned = cloneResult(r)
+	if len(cloned.Memories) != 1 {
+		t.Fatalf("expected 1 memory entry, got %d", len(cloned.Memories))
+	}
+	if cloned.Memories[0].Memory != nil {
+		t.Error("expected nil Memory field")
+	}
+}
+
 // TestHarnessRun_WithToolCallEvents verifies the harness handles tool call events.
 func TestHarnessRun_WithToolCallEvents(t *testing.T) {
 	ctx := context.Background()

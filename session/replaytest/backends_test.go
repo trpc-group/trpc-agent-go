@@ -157,3 +157,61 @@ func TestBackendFactory_Fields(t *testing.T) {
 		t.Error("expected Enabled to be true")
 	}
 }
+
+func TestBackendCapabilities_KnownBackends(t *testing.T) {
+	tests := []struct {
+		name        string
+		wantPaging  bool
+		wantTrack   bool
+		wantFilter  bool
+		wantSearch  bool
+		wantTTL     bool
+	}{
+		{"InMemory", false, true, true, true, false},
+		{"SQLite", false, true, true, true, false},
+		{"Redis", false, true, true, true, true},
+		{"Postgres", true, true, true, true, false},
+		{"MySQL", true, true, true, true, false},
+		{"ClickHouse", false, false, false, false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			caps := BackendCapabilities(tt.name)
+			if caps[CapEventPaging] != tt.wantPaging {
+				t.Errorf("CapEventPaging: got %v, want %v", caps[CapEventPaging], tt.wantPaging)
+			}
+			if caps[CapTrack] != tt.wantTrack {
+				t.Errorf("CapTrack: got %v, want %v", caps[CapTrack], tt.wantTrack)
+			}
+			if caps[CapSummaryFilterKey] != tt.wantFilter {
+				t.Errorf("CapSummaryFilterKey: got %v, want %v", caps[CapSummaryFilterKey], tt.wantFilter)
+			}
+			if caps[CapMemorySearch] != tt.wantSearch {
+				t.Errorf("CapMemorySearch: got %v, want %v", caps[CapMemorySearch], tt.wantSearch)
+			}
+			if caps[CapTTL] != tt.wantTTL {
+				t.Errorf("CapTTL: got %v, want %v", caps[CapTTL], tt.wantTTL)
+			}
+		})
+	}
+}
+
+func TestBackendCapabilities_UnknownBackend(t *testing.T) {
+	caps := BackendCapabilities("Unknown")
+	if caps[CapEventPaging] {
+		t.Error("expected CapEventPaging false for unknown backend")
+	}
+	if caps[CapTrack] {
+		t.Error("expected CapTrack false for unknown backend")
+	}
+	if caps[CapSummaryFilterKey] {
+		t.Error("expected CapSummaryFilterKey false for unknown backend")
+	}
+	if caps[CapMemorySearch] {
+		t.Error("expected CapMemorySearch false for unknown backend")
+	}
+	if caps[CapTTL] {
+		t.Error("expected CapTTL false for unknown backend")
+	}
+}
