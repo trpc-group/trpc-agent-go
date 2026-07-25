@@ -217,6 +217,9 @@ func TestCoverrules_GitUsesExternalSubcommand(t *testing.T) {
 			"--path=README.md", "README.md",
 		},
 		{"git", "check-ignore", "README.md"},
+		{"git", "merge-base", "HEAD", "origin/main"},
+		{"git", "read-tree", "HEAD"},
+		{"git", "var", "GIT_EDITOR"},
 	} {
 		require.False(t, gitUsesExternalSubcommand(argv), "%v", argv)
 	}
@@ -368,6 +371,26 @@ func TestCoverrules_GitUsesExternalSubcommand(t *testing.T) {
 		require.NoError(t, err)
 		require.Contains(t, ruleIDSet(report.Findings), "command.not_allowed")
 	}
+
+	policy.Rules.DangerousCommands.Action = DecisionAsk
+	scanner = newTestScanner(t, policy)
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "git pwn",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionAsk, report.Decision)
+
+	policy.Rules.DangerousCommands.Enabled = false
+	scanner = newTestScanner(t, policy)
+	report, err = scanner.Scan(context.Background(), ScanInput{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "git pwn",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, ruleIDSet(report.Findings), "command.not_allowed")
 }
 
 // TestCoverrules_FindExecShellWrapperScan is the end-to-end regression:
@@ -712,9 +735,25 @@ func TestCoverrules_MatchesDeniedPath(t *testing.T) {
 		`c:\users\alice\CERTS\client.PEM`,
 		p,
 	))
+	p.DeniedPaths = []string{"//Server/Share/Secrets"}
+	p.DeniedPathGlobs = []string{"//Server/Share/**/*.pem"}
+	require.True(t, matchesDeniedPath(
+		`\\server\share\secrets\nested\x`,
+		p,
+	))
+	require.True(t, matchesDeniedPath(
+		`\\SERVER\SHARE\certs\client.PEM`,
+		p,
+	))
 	require.False(t, matchesDeniedPath(
 		`C:\Users\Alice\Secrets-old\x`,
 		p,
+	))
+
+	require.Equal(t, "/etc", normalizePath("//etc"))
+	require.True(t, matchesDeniedPath(
+		"//etc/shadow",
+		DefaultPolicy(),
 	))
 }
 
@@ -901,16 +940,20 @@ func TestCoverrules_RuleHost_SessionTracking(t *testing.T) {
 
 	// write_stdin to an unknown session.
 	in := ScanInput{SessionID: "s1", SessionInput: "ls\n"}
-	ids := ruleIDSet(ruleHost(in, a, p, sess))
+	ids := ruleIDSet(ruleSessionInputBoundary(in, sess))
 	require.Contains(t, ids, "host.unknown_session")
 
 	// After registration the session is known.
 	sess.register("s1")
-	require.Empty(t, ruleHost(in, a, p, sess))
+	require.Empty(t, ruleSessionInputBoundary(in, sess))
 
 	// kill_session on an already-killed session is residual.
 	sess.kill("s1")
-	kill := ScanInput{ToolName: "workspace_kill_session", SessionID: "s1"}
+	kill := ScanInput{
+		ToolName:          "workspace_kill_session",
+		SessionID:         "s1",
+		sessionTerminates: true,
+	}
 	ids = ruleIDSet(ruleHost(kill, a, p, sess))
 	require.Contains(t, ids, "host.residual_session")
 

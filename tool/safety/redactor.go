@@ -146,11 +146,6 @@ func rawJSONHasSecretField(raw json.RawMessage) bool {
 	return false
 }
 
-// redactSlice redacts a []any recursively.
-func redactSlice(v []any) (any, bool, error) {
-	return redactSliceDepth(v, 0)
-}
-
 func redactSliceDepth(v []any, depth int) (any, bool, error) {
 	changed := false
 	out := make([]any, len(v))

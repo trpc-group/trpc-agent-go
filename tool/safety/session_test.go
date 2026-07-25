@@ -41,12 +41,23 @@ func TestSessionTracker_KilledSessionCannotBeReused(t *testing.T) {
 	require.False(t, sessions.isKnown("sess-1"))
 	require.True(t, sessions.isKilled("sess-1"))
 
-	findings := ruleHost(ScanInput{
+	findings := ruleSessionInputBoundary(ScanInput{
 		ToolName:     "write_stdin",
 		SessionID:    "sess-1",
 		SessionInput: "echo hello",
-	}, &analysis{}, DefaultPolicy(), sessions)
+	}, sessions)
 	require.Contains(t, ruleIDSet(findings), "host.residual_session")
+}
+
+func TestSessionTracker_QuarantineDoesNotResurrectKilledSession(
+	t *testing.T,
+) {
+	sessions := newSessionTracker()
+	sessions.register("sess-1")
+	sessions.kill("sess-1")
+	sessions.quarantine("sess-1")
+	require.False(t, sessions.isKnown("sess-1"))
+	require.True(t, sessions.isKilled("sess-1"))
 }
 
 func TestSessionTracker_BoundsKilledTombstones(t *testing.T) {
@@ -138,6 +149,7 @@ func TestSessionTracker_PreservesWhitespaceChunks(t *testing.T) {
 
 func TestScanner_ScansTrackedSessionInput(t *testing.T) {
 	policy := testPolicy(t)
+	policy.Rules.HostExec.Action = DecisionAsk
 	scanner := newTestScanner(t, policy)
 	scanner.sessions = newSessionTracker()
 
@@ -209,6 +221,7 @@ func TestScanner_ScansTrackedSessionInput(t *testing.T) {
 
 func TestScanner_ScansInitialWorkspaceStdin(t *testing.T) {
 	policy := testPolicy(t)
+	policy.Rules.HostExec.Action = DecisionAsk
 	policy.AllowedCommands = append(policy.AllowedCommands, "python")
 	report, err := newTestScanner(t, policy).Scan(
 		context.Background(),
@@ -273,6 +286,33 @@ func TestScanner_ScansCumulativeSessionInput(t *testing.T) {
 	require.Contains(t, ruleIDSet(report.Findings), "command.dangerous_delete")
 }
 
+func TestScanner_ShellSessionAllowsConsecutiveSubmittedCommands(
+	t *testing.T,
+) {
+	scanner := newTestScanner(t, testPolicy(t))
+	scanner.sessions = newSessionTracker()
+	scanner.sessions.registerWithInfo("shell", sessionInfo{
+		Backend:   BackendHostExec,
+		InputMode: sessionInputShell,
+	})
+
+	for _, command := range []string{"ls", "pwd"} {
+		report, err := scanner.Scan(context.Background(), ScanInput{
+			ToolName:      "write_stdin",
+			Backend:       BackendHostExec,
+			SessionID:     "shell",
+			SessionInput:  command,
+			sessionSubmit: true,
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision)
+		scanner.sessions.commitInput("shell", command, true)
+		info, ok := scanner.sessions.lookup("shell")
+		require.True(t, ok)
+		require.Empty(t, info.Pending)
+	}
+}
+
 func TestScanner_DeniesOversizedCumulativeSessionInput(t *testing.T) {
 	scanner := newTestScanner(t, testPolicy(t))
 	scanner.sessions = newSessionTracker()
@@ -289,6 +329,84 @@ func TestScanner_DeniesOversizedCumulativeSessionInput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
 	require.Contains(t, ruleIDSet(report.Findings), "host.session_input_too_large")
+	for _, finding := range report.Findings {
+		if finding.RuleID == "host.session_input_too_large" {
+			require.Contains(t, finding.Recommendation, "Restart the session")
+			return
+		}
+	}
+	t.Fatal("missing host.session_input_too_large finding")
+}
+
+func TestScanner_ShellSessionUsesShellsafeInputLimit(t *testing.T) {
+	policy := testPolicy(t)
+	policy.Rules.HostExec.Enabled = false
+	policy.Rules.HostExec.Action = DecisionAllow
+	scanner := newTestScanner(t, policy)
+	scanner.sessions = newSessionTracker()
+	scanner.sessions.registerWithInfo("shell", sessionInfo{
+		Backend:   BackendHostExec,
+		InputMode: sessionInputShell,
+	})
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName:     "write_stdin",
+		Backend:      BackendHostExec,
+		SessionID:    "shell",
+		SessionInput: strings.Repeat("x", maxShellSessionInputBuffer+1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, map[string]bool{
+		"host.session_input_too_large": true,
+	}, ruleIDSet(report.Findings))
+}
+
+func TestRuleSessionInputBoundaryIgnoresHostPolicy(t *testing.T) {
+	policy := testPolicy(t)
+	policy.Rules.HostExec.Enabled = false
+	policy.Rules.HostExec.Action = DecisionAllow
+	findings := ruleSessionInputBoundary(
+		ScanInput{
+			Command:      "perl",
+			SessionInput: "print 1",
+		},
+		nil,
+	)
+	require.Len(t, findings, 1)
+	require.Equal(t, DecisionAsk, findings[0].Decision)
+
+	scanner := newTestScanner(t, policy)
+	scanner.sessions = newSessionTracker()
+	report, err := scanner.Scan(
+		context.Background(),
+		ScanInput{
+			ToolName:     "write_stdin",
+			Backend:      BackendHostExec,
+			SessionID:    "missing",
+			SessionInput: "rm -rf /",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAsk, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "host.unknown_session")
+}
+
+func TestScanner_SessionInputReportHasSummaryAndHash(t *testing.T) {
+	scanner := newTestScanner(t, testPolicy(t))
+	scanner.sessions = newSessionTracker()
+	scanner.sessions.registerWithInfo("shell", sessionInfo{
+		Backend:   BackendHostExec,
+		InputMode: sessionInputShell,
+	})
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName:     "write_stdin",
+		Backend:      BackendHostExec,
+		SessionID:    "shell",
+		SessionInput: "echo hello",
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, report.CommandHash)
+	require.Contains(t, report.Command, "stdin:echo hello")
 }
 
 func TestScanner_PreservesMultilineCodeSessionContext(t *testing.T) {

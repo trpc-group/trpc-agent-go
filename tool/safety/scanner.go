@@ -139,12 +139,14 @@ func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	findings = append(findings, ruleCommand(&analysis, s.policy)...)
 	findings = append(findings, rulePath(&analysis, s.policy, in.Cwd)...)
 	findings = append(findings, ruleNetwork(&analysis, s.policy)...)
+	findings = append(findings, ruleSessionInputBoundary(in, s.sessions)...)
 	findings = append(findings, ruleHost(in, &analysis, s.policy, s.sessions)...)
 	findings = append(findings, ruleDependency(&analysis, s.policy)...)
 	findings = append(findings, ruleResource(in, &analysis, s.policy)...)
 	findings = append(findings, ruleSecret(in, s.policy)...)
 	findings = append(findings, ruleEnvName(in, s.policy)...)
 	findings = append(findings, ruleCwd(in, s.policy)...)
+	findings = append(findings, ruleCodeInput(in)...)
 	findings = append(findings, codeRuleFindings(&analysis, s.policy)...)
 	findings = append(findings, ruleMetadata(in, s.policy)...)
 	findings = append(findings, ruleCapability(in, s.policy, s.profiles)...)
@@ -188,8 +190,16 @@ func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	return report, nil
 }
 
+// applyProfileDefaults fills in backend and default timeout from the
+// registered profile when the input did not carry them. The profile
+// timeout is deliberately not capped at Policy.MaxTimeout: the scanner
+// evaluates the backend's real effective default and emits
+// resource.timeout_exceeded when it is too large.
 func (s *scanner) applyProfileDefaults(in ScanInput) ScanInput {
+	profileApplied := false
 	if profile, ok := s.profiles.lookup(in.ToolProfile); ok {
+		applySessionProfile(&in, profile)
+		profileApplied = true
 		if in.Backend == "" || in.Backend == BackendUnknown {
 			in.Backend = profile.Backend
 		}
@@ -199,36 +209,26 @@ func (s *scanner) applyProfileDefaults(in ScanInput) ScanInput {
 	}
 	if in.Backend == "" || in.Backend == BackendUnknown {
 		if profile, ok := s.profiles.lookup(in.ToolName); ok {
+			applySessionProfile(&in, profile)
 			in.Backend = profile.Backend
 			in.ToolProfile = profile.Name
 			if in.Timeout <= 0 {
 				in.Timeout = profile.DefaultTimeout
 			}
 		}
-	}
-	if in.Backend == BackendCodeExec {
-		in.CodeBlocks = defaultCodeBlockLanguages(in.CodeBlocks)
+	} else if !profileApplied {
+		profile, ok := s.profiles.lookup(in.ToolName)
+		if !ok {
+			return in
+		}
+		applySessionProfile(&in, profile)
 	}
 	return in
 }
 
-func defaultCodeBlockLanguages(blocks []CodeBlock) []CodeBlock {
-	for _, block := range blocks {
-		if strings.TrimSpace(block.Language) == "" {
-			cloned := append([]CodeBlock(nil), blocks...)
-			for i := range cloned {
-				if strings.TrimSpace(cloned[i].Language) == "" {
-					cloned[i].Language = "python"
-				}
-			}
-			return cloned
-		}
-	}
-	return blocks
-}
-
 func (s *scanner) sessionInputAnalysis(in ScanInput) *analysis {
-	if strings.TrimSpace(in.SessionInput) == "" {
+	if in.sessionInputOverflow ||
+		strings.TrimSpace(in.SessionInput) == "" {
 		return nil
 	}
 	var info sessionInfo
@@ -275,7 +275,8 @@ func (s *scanner) applySessionInputBuffer(in ScanInput) ScanInput {
 		return in
 	}
 	if in.SessionID == "" {
-		if len(in.SessionInput) > maxSessionInputBuffer {
+		limit := sessionInputBufferLimit(classifySessionInfo(in))
+		if len(in.SessionInput) > limit {
 			in.sessionInputOverflow = true
 		}
 		return in
@@ -325,8 +326,9 @@ func classifySessionInfo(in ScanInput) sessionInfo {
 	if info.InputMode == sessionInputShell ||
 		info.InputMode == sessionInputCode {
 		info.Pending = in.SessionInput
-		if len(info.Pending) > maxSessionInputBuffer {
-			info.Pending = info.Pending[len(info.Pending)-maxSessionInputBuffer:]
+		limit := sessionInputBufferLimit(info)
+		if len(info.Pending) > limit {
+			info.Pending = info.Pending[len(info.Pending)-limit:]
 		}
 	}
 	return info

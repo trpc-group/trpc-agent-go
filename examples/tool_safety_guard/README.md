@@ -95,8 +95,26 @@ canonical workspaceexec, hostexec, and codeexec call surfaces. A
 streamable-only tool needs a stream-aware wrapper so partial chunks are
 redacted before consumers observe them.
 
-Use `Guard.Scan` or `Guard.ScanBatch` for standalone analysis that does
-not execute a tool.
+The returned wrapper also implements `tool.PermissionChecker`. Frameworks
+may call that precheck before `Call`; the wrapper only reuses the inner
+tool's allow result when the tool call id and arguments are unchanged, and
+always repeats the safety scan immediately before execution.
+
+For streamable-only tools such as `skill_exec` and
+`skill_write_stdin`, use the guard as the run's `tool.PermissionPolicy`.
+The default profiles decode their command and session fields before
+execution. A permission policy provides preflight scanning and audit;
+post-execution result redaction, completion audit, and session lifecycle
+tracking still require a stream-aware wrapper. Therefore the policy path
+scans `skill_exec`/`skill_run` initial stdin, but treats every
+`skill_write_stdin` session as untracked and requires human review; it
+does not claim cumulative cross-write scanning for skill sessions.
+
+Use `Guard.Scan` or `Guard.ScanBatch` for analysis that does not execute a
+tool. These methods apply registered profile defaults for missing backend
+and timeout fields. If the same guard has tracked a live session, they also
+include its pending stdin context. Standalone callers should include a
+submitted newline in `ScanInput.SessionInput` when it changes parsing.
 
 ### Wiring the guard's command lists into workspaceexec
 
@@ -128,7 +146,14 @@ or kernel boundary. Each backend has different isolation guarantees:
 - **`hostexec`**: invokes the host shell, normally inherits the host
   environment, and supports PTY/background sessions. The guard cannot
   retroactively undo host access. Use it only when the host user is the
-  operator.
+  operator. Pending session stdin is scanned cumulatively so commands split
+  across writes cannot bypass checks. Shell input is bounded at 16 KiB to
+  match `shellsafe`; code and data input are bounded at 64 KiB. Once the
+  applicable bound is exceeded, the call is denied regardless of the
+  `hostexec` rule action; restart the session to establish a clean scan
+  boundary. Input for an unknown, finalized, backend-mismatched, or
+  unclassifiable session always requires review because its execution
+  semantics cannot be inspected safely.
 - **`codeexec` / `codeexecutor`**: code blocks are decoded and scanned
   before execution. Local, container, E2B, and sandbox backends have
   different guarantees. `ToolProfile` must describe enforced capabilities.
@@ -168,6 +193,11 @@ required layer.
 
 - A changed YAML/JSON file takes effect when a new `Guard` is constructed.
 - Invalid policy fails at `NewGuard` time with a descriptive error.
+- `rules.dangerous_commands` also controls nested Git escape checks such as
+  editor hooks, external subcommands, unsafe path handling, and configured
+  remotes that cannot be verified statically. Set its action to `ask` for
+  approval workflows or disable the family only when another execution
+  boundary enforces equivalent restrictions.
 - A required preflight-audit failure (`audit.required: true`) denies
   execution. A post-execute audit failure happens after the tool has
   already run, so it is logged as a warning and cannot retroactively

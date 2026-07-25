@@ -15,12 +15,14 @@ import (
 	"errors"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -44,6 +46,50 @@ type wrapperTestTool struct {
 	stream          bool
 	pollutes        bool
 	structured      bool
+}
+
+type blockingAuditWriter struct {
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (w *blockingAuditWriter) Write(p []byte) (int, error) {
+	w.once.Do(func() { close(w.started) })
+	<-w.release
+	return len(p), nil
+}
+
+type blockingPostAuditWriter struct {
+	mu      sync.Mutex
+	writes  int
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+type originalToolWrapper struct {
+	inner tool.Tool
+}
+
+func (w *originalToolWrapper) Declaration() *tool.Declaration {
+	return w.inner.Declaration()
+}
+
+func (w *originalToolWrapper) Original() tool.Tool {
+	return w.inner
+}
+
+func (w *blockingPostAuditWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.writes++
+	writeNumber := w.writes
+	w.mu.Unlock()
+	if writeNumber == 2 {
+		w.once.Do(func() { close(w.started) })
+		<-w.release
+	}
+	return len(p), nil
 }
 
 func (t *wrapperTestTool) Declaration() *tool.Declaration {
@@ -505,7 +551,7 @@ func TestWrapTool_PreservesToolCapabilities(t *testing.T) {
 }
 
 func TestWrapTool_FrameworkPermissionPrecheck(t *testing.T) {
-	guard, _ := newWrapperTestGuard(t)
+	guard, audit := newWrapperTestGuard(t)
 	inner := &wrapperTestTool{
 		decision: tool.AllowPermission(),
 		result:   "ok",
@@ -527,6 +573,20 @@ func TestWrapTool_FrameworkPermissionPrecheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionAllow, decision.Action)
 	require.Equal(t, 1, inner.permissionCalls)
+	require.Empty(t, audit.String())
+
+	policyReq := *req
+	policyReq.Tool = internaltool.ApplyDeclarations(
+		[]tool.Tool{&originalToolWrapper{inner: wrapped}},
+		[]tool.Declaration{*wrapped.Declaration()},
+	)[0]
+	decision, err = guard.CheckToolPermission(
+		context.Background(),
+		&policyReq,
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.Empty(t, audit.String())
 
 	ctx := context.WithValue(
 		context.Background(),
@@ -538,6 +598,10 @@ func TestWrapTool_FrameworkPermissionPrecheck(t *testing.T) {
 	require.Equal(t, "ok", result)
 	require.True(t, inner.called)
 	require.Equal(t, 1, inner.permissionCalls)
+	require.Len(t,
+		strings.Split(strings.TrimSpace(audit.String()), "\n"),
+		2,
+	)
 }
 
 func TestWrapTool_FrameworkPermissionPrecheckDeniesSafetyResult(t *testing.T) {
@@ -565,6 +629,70 @@ func TestWrapTool_FrameworkPermissionPrecheckDeniesSafetyResult(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
 	require.False(t, inner.called)
+}
+
+func TestWrapTool_FrameworkPermissionPrecheckParticipatesInClose(
+	t *testing.T,
+) {
+	policy := testPolicy(t)
+	policy.Audit.Path = ""
+	policy.Audit.Required = false
+	audit := &blockingAuditWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	guard, err := NewGuard(
+		WithPolicy(policy),
+		WithAuditWriter(audit),
+	)
+	require.NoError(t, err)
+	defer guard.Close()
+
+	inner := &wrapperTestTool{decision: tool.AllowPermission()}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	checkDone := make(chan tool.PermissionDecision, 1)
+	checkErr := make(chan error, 1)
+	go func() {
+		decision, checkError := wrapped.(tool.PermissionChecker).CheckPermission(
+			context.Background(),
+			&tool.PermissionRequest{
+				Tool:        wrapped,
+				ToolName:    "workspace_exec",
+				ToolCallID:  "call-close-precheck",
+				Declaration: wrapped.Declaration(),
+				Arguments: []byte(
+					`{"command":"rm -rf /","timeout":10}`,
+				),
+				Metadata: tool.MetadataOf(wrapped),
+			},
+		)
+		checkDone <- decision
+		checkErr <- checkError
+	}()
+	<-audit.started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- guard.Close() }()
+	for {
+		guard.mu.Lock()
+		closing := guard.closing
+		guard.mu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before permission precheck finished: %v", err)
+	default:
+	}
+
+	close(audit.release)
+	require.NoError(t, <-checkErr)
+	require.Equal(t, tool.PermissionActionDeny, (<-checkDone).Action)
+	require.NoError(t, <-closeDone)
 }
 
 func TestWrapTool_FrameworkPermissionPrecheckRedactsInnerReason(t *testing.T) {
@@ -698,6 +826,58 @@ func TestWrapTool_PanicReleasesLifecycleState(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "ok", result)
+}
+
+func TestWrapTool_PanicCompletionParticipatesInClose(t *testing.T) {
+	policy := testPolicy(t)
+	policy.Audit.Path = ""
+	policy.Audit.Required = false
+	audit := &blockingPostAuditWriter{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	guard, err := NewGuard(
+		WithPolicy(policy),
+		WithAuditWriter(audit),
+	)
+	require.NoError(t, err)
+	defer guard.Close()
+
+	wrapped, err := WrapTool(
+		&wrapperTestTool{panicValue: "secret panic"},
+		guard,
+	)
+	require.NoError(t, err)
+	callDone := make(chan error, 1)
+	go func() {
+		_, callErr := wrapped.Call(
+			context.Background(),
+			[]byte(`{"command":"ls","timeout":10}`),
+		)
+		callDone <- callErr
+	}()
+	<-audit.started
+
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- guard.Close() }()
+	for {
+		guard.mu.Lock()
+		closing := guard.closing
+		guard.mu.Unlock()
+		if closing {
+			break
+		}
+		runtime.Gosched()
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatalf("Close returned before panic completion finished: %v", err)
+	default:
+	}
+
+	close(audit.release)
+	require.ErrorContains(t, <-callDone, "wrapped tool panicked")
+	require.NoError(t, <-closeDone)
 }
 
 func TestWrapTool_UnownedPanicDoesNotReleaseDuplicateCall(t *testing.T) {

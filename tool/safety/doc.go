@@ -24,6 +24,12 @@
 // The guard also exposes OpenTelemetry span attributes for the existing
 // execute-tool span.
 //
+// Guard implements tool.PermissionPolicy for streamable-only tools that
+// cannot use WrapTool. The policy path performs preflight scanning and
+// audit only; it cannot redact streamed output, observe completion, or
+// track session lifecycle. Session follow-up calls that cannot be
+// correlated therefore require human review.
+//
 // # Fail-closed behavior
 //
 // Unknown execution shapes fail closed. A known tool (workspace_exec,

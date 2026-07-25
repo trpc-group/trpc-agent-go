@@ -112,7 +112,8 @@ func run() error {
 	}
 
 	// Write the batch report.
-	reportData, err := json.MarshalIndent(batch, "", "  ")
+	stableBatch := stableBatchReport(batch)
+	reportData, err := json.MarshalIndent(stableBatch, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal report: %w", err)
 	}
@@ -121,7 +122,11 @@ func run() error {
 	}
 
 	// Write the audit JSONL (the in-memory buffer).
-	if err := os.WriteFile("tool_safety_guard/tool_safety_audit.jsonl", auditBuf.Bytes(), 0o600); err != nil {
+	auditData, err := stableAuditEvents(auditBuf.Bytes())
+	if err != nil {
+		return fmt.Errorf("normalize audit: %w", err)
+	}
+	if err := os.WriteFile("tool_safety_guard/tool_safety_audit.jsonl", auditData, 0o600); err != nil {
 		return fmt.Errorf("write audit: %w", err)
 	}
 
@@ -131,6 +136,56 @@ func run() error {
 		batch.Summary.Asked, time.Since(batch.GeneratedAt).Round(time.Millisecond))
 	fmt.Println("Wrote tool_safety_report.json and tool_safety_audit.jsonl")
 	return nil
+}
+
+var exampleOutputTime = time.Date(
+	2025, time.January, 1, 0, 0, 0, 0, time.UTC,
+)
+
+func stableBatchReport(batch safety.BatchReport) safety.BatchReport {
+	stable := batch
+	stable.GeneratedAt = exampleOutputTime
+	stable.Reports = append([]safety.ScanReport(nil), batch.Reports...)
+	for i := range stable.Reports {
+		stable.Reports[i].ScanID = fmt.Sprintf("example-scan-%02d", i+1)
+		stable.Reports[i].Timestamp = exampleOutputTime.Add(
+			time.Duration(i) * time.Millisecond,
+		)
+		stable.Reports[i].DurationMs = 0
+	}
+	return stable
+}
+
+func stableAuditEvents(data []byte) ([]byte, error) {
+	lines := bytes.Split(bytes.TrimSpace(data), []byte{'\n'})
+	if len(lines) == 1 && len(lines[0]) == 0 {
+		return nil, nil
+	}
+	ids := make(map[string]string)
+	var out bytes.Buffer
+	for i, line := range lines {
+		var event safety.AuditEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, fmt.Errorf("decode event %d: %w", i, err)
+		}
+		stableID, ok := ids[event.ScanID]
+		if !ok {
+			stableID = fmt.Sprintf("example-audit-%02d", len(ids)+1)
+			ids[event.ScanID] = stableID
+		}
+		event.ScanID = stableID
+		event.Timestamp = exampleOutputTime.Add(
+			time.Duration(i) * time.Millisecond,
+		)
+		event.DurationMs = 0
+		encoded, err := json.Marshal(event)
+		if err != nil {
+			return nil, fmt.Errorf("encode event %d: %w", i, err)
+		}
+		out.Write(encoded)
+		out.WriteByte('\n')
+	}
+	return out.Bytes(), nil
 }
 
 type corpusEntry struct {

@@ -283,11 +283,11 @@ func mergeAnalysis(a, shell *analysis) {
 	a.codeMatches = append(a.codeMatches, shell.codeMatches...)
 }
 
-// hashAnalysisInput returns a SHA-256 hex digest of the command plus
-// code blocks, so code-only scripts get a non-empty hash.
+// hashAnalysisInput returns a SHA-256 hex digest of the command, explicit
+// arguments, code blocks, and session input.
 func hashAnalysisInput(in ScanInput) string {
 	if in.Command == "" && len(in.CodeBlocks) == 0 &&
-		len(in.Args) == 0 {
+		len(in.Args) == 0 && in.SessionInput == "" {
 		return ""
 	}
 	h := sha256.New()
@@ -302,13 +302,17 @@ func hashAnalysisInput(in ScanInput) string {
 		h.Write([]byte(b.Code))
 		h.Write([]byte{0})
 	}
+	if in.SessionInput != "" {
+		h.Write([]byte("stdin"))
+		h.Write([]byte{0})
+		h.Write([]byte(in.SessionInput))
+	}
 	sum := h.Sum(nil)
 	return hex.EncodeToString(sum)
 }
 
 // summarizeAnalysisInput returns a truncated, redacted representation of
-// the command plus a short code-block hint, so code-only scripts get a
-// non-empty summary in the report.
+// the command, arguments, code blocks, and session input.
 func summarizeAnalysisInput(in ScanInput) string {
 	var parts []string
 	if strings.TrimSpace(in.Command) != "" {
@@ -331,6 +335,12 @@ func summarizeAnalysisInput(in ScanInput) string {
 			hint = truncateRuneSafe(hint, 57) + "..."
 		}
 		parts = append(parts, b.Language+":"+hint)
+	}
+	if strings.TrimSpace(in.SessionInput) != "" {
+		parts = append(
+			parts,
+			"stdin:"+summarizeCommand(in.SessionInput),
+		)
 	}
 	s := strings.Join(parts, " ")
 	redacted, _ := redactString(s)

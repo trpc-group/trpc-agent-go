@@ -9,7 +9,9 @@
 package safety
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -17,13 +19,12 @@ import (
 // ScanInput. Profiles are declarative so the guard does not depend on
 // unexported workspaceexec, hostexec, or codeexec types.
 //
-// Default profiles cover the canonical tool names: workspace_exec,
-// exec_command, execute_code, write_stdin, kill_session,
-// workspace_write_stdin, workspace_kill_session. Custom tools (including
-// MCP tools that expose a command-shaped schema) must register a profile
-// via WithToolProfile before the guard can decode them; otherwise the
-// guard returns DecisionAsk for command-shaped unknown tools and
-// DecisionAllow for tools with no recognized command surface.
+// Default profiles cover the canonical workspaceexec, hostexec, codeexec,
+// and interactive skill tool names. Custom tools (including MCP tools that
+// expose a command-shaped or session-shaped schema) must register a profile
+// via WithToolProfile before the guard can decode them; otherwise the guard
+// returns DecisionAsk for command-shaped unknown tools and DecisionAllow for
+// tools with no recognized execution surface.
 type ToolProfile struct {
 	// Name is the profile key, usually the tool name.
 	Name string
@@ -51,6 +52,49 @@ type ToolProfile struct {
 	BackgroundFields []string
 	// PTYFields lists candidate JSON keys for the PTY flag.
 	PTYFields []string
+	// SessionIDFields lists candidate JSON keys holding a session id.
+	SessionIDFields []string
+	// SessionInputField is the JSON key holding initial or follow-up stdin.
+	SessionInputField string
+	// SessionSubmitFields lists candidate JSON keys that append a newline.
+	SessionSubmitFields []string
+	// CreatesSession reports that a successful result may create a session.
+	CreatesSession bool
+	// TerminatesSession reports that a successful call terminates a session.
+	TerminatesSession bool
+}
+
+func (p ToolProfile) validate() error {
+	if strings.TrimSpace(p.Name) == "" {
+		return errors.New("tool profile name is empty")
+	}
+	if p.CreatesSession && p.TerminatesSession {
+		return errors.New(
+			"tool profile cannot create and terminate sessions",
+		)
+	}
+	if p.TerminatesSession && len(p.SessionIDFields) == 0 {
+		return errors.New(
+			"terminating tool profile requires session id fields",
+		)
+	}
+	if len(p.SessionSubmitFields) > 0 &&
+		strings.TrimSpace(p.SessionInputField) == "" {
+		return errors.New(
+			"session submit fields require a session input field",
+		)
+	}
+	for _, field := range append(
+		slices.Clone(p.SessionIDFields),
+		p.SessionSubmitFields...,
+	) {
+		if strings.TrimSpace(field) == "" {
+			return errors.New(
+				"tool profile session field name is empty",
+			)
+		}
+	}
+	return nil
 }
 
 // DefaultToolProfiles returns the profiles used when no custom profile is
@@ -80,6 +124,8 @@ func DefaultToolProfiles() []ToolProfile {
 			EnvironmentField:    "env",
 			BackgroundFields:    []string{"background"},
 			PTYFields:           []string{"tty", "pty"},
+			SessionInputField:   "stdin",
+			CreatesSession:      true,
 		},
 		{
 			Name:                "exec_command",
@@ -94,6 +140,7 @@ func DefaultToolProfiles() []ToolProfile {
 			EnvironmentField:    "env",
 			BackgroundFields:    []string{"background"},
 			PTYFields:           []string{"tty", "pty"},
+			CreatesSession:      true,
 		},
 		{
 			Name:                "execute_code",
@@ -105,29 +152,102 @@ func DefaultToolProfiles() []ToolProfile {
 			CodeBlocksField:     "code_blocks",
 		},
 		{
-			Name:             "write_stdin",
-			Backend:          BackendHostExec,
-			DefaultTimeout:   30 * time.Second,
-			CommandField:     "",
-			WorkingDirFields: nil,
-			EnvironmentField: "",
-			BackgroundFields: nil,
-			PTYFields:        nil,
+			Name:              "write_stdin",
+			Backend:           BackendHostExec,
+			DefaultTimeout:    30 * time.Second,
+			CommandField:      "",
+			WorkingDirFields:  nil,
+			EnvironmentField:  "",
+			BackgroundFields:  nil,
+			PTYFields:         nil,
+			SessionIDFields:   []string{"session_id", "sessionId"},
+			SessionInputField: "chars",
+			SessionSubmitFields: []string{
+				"append_newline",
+				"submit",
+			},
 		},
 		{
-			Name:           "kill_session",
-			Backend:        BackendHostExec,
-			DefaultTimeout: 5 * time.Second,
+			Name:              "kill_session",
+			Backend:           BackendHostExec,
+			DefaultTimeout:    5 * time.Second,
+			SessionIDFields:   []string{"session_id", "sessionId"},
+			TerminatesSession: true,
 		},
 		{
-			Name:           "workspace_write_stdin",
-			Backend:        BackendWorkspaceExec,
-			DefaultTimeout: 30 * time.Second,
+			Name:              "workspace_write_stdin",
+			Backend:           BackendWorkspaceExec,
+			DefaultTimeout:    30 * time.Second,
+			SessionIDFields:   []string{"session_id", "sessionId"},
+			SessionInputField: "chars",
+			SessionSubmitFields: []string{
+				"append_newline",
+				"submit",
+			},
 		},
 		{
-			Name:           "workspace_kill_session",
-			Backend:        BackendWorkspaceExec,
-			DefaultTimeout: 5 * time.Second,
+			Name:              "workspace_kill_session",
+			Backend:           BackendWorkspaceExec,
+			DefaultTimeout:    5 * time.Second,
+			SessionIDFields:   []string{"session_id", "sessionId"},
+			TerminatesSession: true,
+		},
+		{
+			Name:                "skill_run",
+			Backend:             BackendWorkspaceExec,
+			DefaultTimeout:      5 * time.Minute,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			CommandField:        "command",
+			WorkingDirFields:    []string{"cwd"},
+			TimeoutFields:       []string{"timeout"},
+			EnvironmentField:    "env",
+			SessionInputField:   "stdin",
+		},
+		{
+			Name:                "skill_exec",
+			Backend:             BackendWorkspaceExec,
+			DefaultTimeout:      5 * time.Minute,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			CommandField:        "command",
+			WorkingDirFields:    []string{"cwd"},
+			TimeoutFields:       []string{"timeout"},
+			EnvironmentField:    "env",
+			PTYFields:           []string{"tty"},
+			SessionInputField:   "stdin",
+		},
+		{
+			Name:                "skill_write_stdin",
+			Backend:             BackendWorkspaceExec,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			SessionIDFields:     []string{"session_id"},
+			SessionInputField:   "chars",
+			SessionSubmitFields: []string{
+				"submit",
+			},
+		},
+		{
+			Name:                "skill_poll_session",
+			Backend:             BackendWorkspaceExec,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			SessionIDFields:     []string{"session_id"},
+		},
+		{
+			Name:                "skill_kill_session",
+			Backend:             BackendWorkspaceExec,
+			DefaultTimeout:      5 * time.Second,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			SessionIDFields:     []string{"session_id"},
+			TerminatesSession:   true,
 		},
 	}
 }
@@ -142,6 +262,8 @@ func cloneToolProfile(p ToolProfile) ToolProfile {
 	p.TimeoutFields = slices.Clone(p.TimeoutFields)
 	p.BackgroundFields = slices.Clone(p.BackgroundFields)
 	p.PTYFields = slices.Clone(p.PTYFields)
+	p.SessionIDFields = slices.Clone(p.SessionIDFields)
+	p.SessionSubmitFields = slices.Clone(p.SessionSubmitFields)
 	return p
 }
 

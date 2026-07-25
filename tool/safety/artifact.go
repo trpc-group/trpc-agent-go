@@ -111,60 +111,156 @@ func redactJSONArtifact(data []byte) ([]byte, bool, error) {
 	return append([]byte(nil), raw...), changed, nil
 }
 
+const maxJSONArtifactNestingDepth = 10000
+
+type jsonArtifactFrame struct {
+	delim        json.Delim
+	expectingKey bool
+	seen         map[string]struct{}
+}
+
+func closeJSONArtifactFrame(
+	stack []jsonArtifactFrame,
+	delim json.Delim,
+) ([]jsonArtifactFrame, error) {
+	if len(stack) == 0 {
+		return stack, errors.New(
+			"json artifact contains an unexpected closing delimiter",
+		)
+	}
+	top := stack[len(stack)-1]
+	if top.delim == '{' && delim != '}' ||
+		top.delim == '[' && delim != ']' {
+		return stack, errors.New(
+			"json artifact has mismatched delimiters",
+		)
+	}
+	if top.delim == '{' && !top.expectingKey {
+		return stack, errors.New(
+			"json artifact object key has no value",
+		)
+	}
+	return stack[:len(stack)-1], nil
+}
+
+func recordJSONArtifactKey(
+	stack []jsonArtifactFrame,
+	token any,
+) (bool, error) {
+	if len(stack) == 0 {
+		return false, nil
+	}
+	top := &stack[len(stack)-1]
+	if top.delim != '{' || !top.expectingKey {
+		return false, nil
+	}
+	key, ok := token.(string)
+	if !ok {
+		return false, errors.New(
+			"json artifact object key is not a string",
+		)
+	}
+	if _, duplicate := top.seen[key]; duplicate {
+		return false, errors.New(
+			"json artifact contains a duplicate object key",
+		)
+	}
+	top.seen[key] = struct{}{}
+	top.expectingKey = false
+	return true, nil
+}
+
+func markJSONArtifactValue(
+	stack []jsonArtifactFrame,
+	rootValues *int,
+) error {
+	if len(stack) == 0 {
+		(*rootValues)++
+		if *rootValues > 1 {
+			return errors.New(
+				"json artifact contains trailing data",
+			)
+		}
+		return nil
+	}
+	if stack[len(stack)-1].delim == '{' {
+		stack[len(stack)-1].expectingKey = true
+	}
+	return nil
+}
+
+func openJSONArtifactFrame(
+	stack []jsonArtifactFrame,
+	delim json.Delim,
+) ([]jsonArtifactFrame, error) {
+	if delim != '{' && delim != '[' {
+		return stack, errors.New(
+			"json artifact has an unexpected delimiter",
+		)
+	}
+	if len(stack) >= maxJSONArtifactNestingDepth {
+		return stack, fmt.Errorf(
+			"json artifact nesting exceeds %d levels",
+			maxJSONArtifactNestingDepth,
+		)
+	}
+	frame := jsonArtifactFrame{delim: delim}
+	if delim == '{' {
+		frame.expectingKey = true
+		frame.seen = make(map[string]struct{})
+	}
+	return append(stack, frame), nil
+}
+
 func rejectDuplicateJSONKeys(data []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	var walk func() error
-	walk = func() error {
+	var stack []jsonArtifactFrame
+	rootValues := 0
+	for {
 		token, err := decoder.Token()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf(
+				"json artifact could not be decoded safely: %w",
+				err,
+			)
+		}
+
+		if delim, ok := token.(json.Delim); ok &&
+			(delim == '}' || delim == ']') {
+			stack, err = closeJSONArtifactFrame(stack, delim)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+
+		recorded, err := recordJSONArtifactKey(stack, token)
 		if err != nil {
 			return err
 		}
+		if recorded {
+			continue
+		}
+		if err := markJSONArtifactValue(stack, &rootValues); err != nil {
+			return err
+		}
+
 		delim, ok := token.(json.Delim)
 		if !ok {
-			return nil
+			continue
 		}
-		switch delim {
-		case '{':
-			seen := make(map[string]struct{})
-			for decoder.More() {
-				keyToken, err := decoder.Token()
-				if err != nil {
-					return err
-				}
-				key, ok := keyToken.(string)
-				if !ok {
-					return errors.New("json artifact object key is not a string")
-				}
-				if _, duplicate := seen[key]; duplicate {
-					return fmt.Errorf(
-						"json artifact contains duplicate key %q",
-						key,
-					)
-				}
-				seen[key] = struct{}{}
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			_, err = decoder.Token()
+		stack, err = openJSONArtifactFrame(stack, delim)
+		if err != nil {
 			return err
-		case '[':
-			for decoder.More() {
-				if err := walk(); err != nil {
-					return err
-				}
-			}
-			_, err = decoder.Token()
-			return err
-		default:
-			return errors.New("json artifact has an unexpected delimiter")
 		}
 	}
-	if err := walk(); err != nil {
-		return fmt.Errorf("json artifact could not be decoded safely: %w", err)
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return errors.New("json artifact contains trailing data")
+	if rootValues != 1 || len(stack) != 0 {
+		return errors.New(
+			"json artifact could not be decoded safely: incomplete JSON",
+		)
 	}
 	return nil
 }

@@ -22,8 +22,7 @@ import (
 //   - host.privilege           sudo/su/doas/runuser invocation.
 //   - host.pty_long_session    PTY session without a bounded timeout.
 //   - host.background_session  background host process without cleanup plan.
-//   - host.unknown_session     write_stdin input for an unknown session.
-//   - host.residual_session    session id reused after kill.
+//   - host.residual_session    repeated kill of a finalized session.
 //   - capability.missing_isolation  profile does not declare required
 //     isolation/environment/network boundary.
 func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Finding {
@@ -65,36 +64,86 @@ func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Findi
 		})
 	}
 
-	if in.sessionInputOverflow {
-		out = append(out, Finding{
-			RuleID:         "host.session_input_too_large",
-			RiskLevel:      RiskHigh,
-			Decision:       DecisionDeny,
-			Evidence:       "cumulative session input exceeds the safety scan limit",
-			Recommendation: "Send smaller complete commands or restart the session",
-		})
-	}
-	if finding := unclassifiedInitialSessionInputFinding(in); finding != nil {
-		out = append(out, *finding)
-	}
 	out = append(out, sessionLifecycleFindings(in, p, sess)...)
 	return out
 }
 
-func unclassifiedInitialSessionInputFinding(in ScanInput) *Finding {
-	if in.SessionID != "" ||
-		in.SessionInput == "" && !in.sessionSubmit {
+// ruleSessionInputBoundary blocks session input the guard cannot inspect
+// safely. Structural input bounds and classification are intentionally
+// independent of rules.hostexec: disabling or allowing host findings must
+// not authorize an unscanned payload.
+func ruleSessionInputBoundary(
+	in ScanInput,
+	sess *sessionTracker,
+) []Finding {
+	if in.sessionInputOverflow {
+		return []Finding{{
+			RuleID:         "host.session_input_too_large",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "cumulative session input exceeds the safety scan limit",
+			Recommendation: "Restart the session so subsequent input can be scanned from a clean boundary",
+		}}
+	}
+	if in.SessionInput == "" && !in.sessionSubmit {
 		return nil
 	}
-	if classifySessionInfo(in).InputMode != sessionInputUnknown {
-		return nil
+	if in.SessionID == "" {
+		if classifySessionInfo(in).InputMode != sessionInputUnknown {
+			return nil
+		}
+		return []Finding{{
+			RuleID:         "host.unclassified_session_input",
+			RiskLevel:      RiskMedium,
+			Decision:       DecisionAsk,
+			Evidence:       "initial stdin semantics cannot be classified safely",
+			Recommendation: "Use a recognized shell, interpreter, or data-consumer command, or remove stdin",
+		}}
 	}
-	return &Finding{
-		RuleID:         "host.unclassified_session_input",
+	if sess == nil {
+		return []Finding{unknownSessionInputFinding()}
+	}
+	if sess.isKilled(in.SessionID) {
+		return []Finding{{
+			RuleID:         "host.residual_session",
+			RiskLevel:      RiskMedium,
+			Decision:       DecisionAsk,
+			Evidence:       "write_stdin to an already-finalized session",
+			Recommendation: "Create a new session instead of interacting with a killed session id",
+		}}
+	}
+	info, ok := sess.lookup(in.SessionID)
+	if !ok {
+		return []Finding{unknownSessionInputFinding()}
+	}
+	if sessionBackendMismatch(in, info) {
+		return []Finding{{
+			RuleID:         "host.unclassified_session_input",
+			RiskLevel:      RiskMedium,
+			Decision:       DecisionAsk,
+			Evidence:       "session backend does not match the input tool",
+			Recommendation: "Use the session interaction tool for the backend that created the session",
+		}}
+	}
+	if info.InputMode == sessionInputUnknown {
+		return []Finding{{
+			RuleID:         "host.unclassified_session_input",
+			RiskLevel:      RiskMedium,
+			Decision:       DecisionAsk,
+			Evidence:       "session input semantics cannot be classified safely",
+			Recommendation: "Register or create a session with a recognized shell, interpreter, or data-consumer command",
+		}}
+	}
+	return nil
+}
+
+func unknownSessionInputFinding() Finding {
+	return Finding{
+		RuleID:         "host.unknown_session",
 		RiskLevel:      RiskMedium,
 		Decision:       DecisionAsk,
-		Evidence:       "initial stdin semantics cannot be classified safely",
-		Recommendation: "Use a recognized shell, interpreter, or data-consumer command, or remove stdin",
+		Evidence:       "write_stdin to a session not created in this run",
+		Recommendation: "Issue the session-creating exec_command first, or pre-register the session id with the guard",
 	}
 }
 
@@ -107,43 +156,7 @@ func sessionLifecycleFindings(
 		return nil
 	}
 	var out []Finding
-	if in.SessionInput != "" || in.sessionSubmit {
-		switch info, ok := sess.lookup(in.SessionID); {
-		case sess.isKilled(in.SessionID):
-			out = append(out, Finding{
-				RuleID:         "host.residual_session",
-				RiskLevel:      RiskMedium,
-				Decision:       ruleDecision(p.Rules.HostExec.Action, RiskMedium, p),
-				Evidence:       "write_stdin to an already-finalized session",
-				Recommendation: "Create a new session instead of interacting with a killed session id",
-			})
-		case !ok:
-			out = append(out, Finding{
-				RuleID:         "host.unknown_session",
-				RiskLevel:      RiskMedium,
-				Decision:       ruleDecision(p.Rules.HostExec.Action, RiskMedium, p),
-				Evidence:       "write_stdin to a session not created in this run",
-				Recommendation: "Issue the session-creating exec_command first, or pre-register the session id with the guard",
-			})
-		case sessionBackendMismatch(in, info):
-			out = append(out, Finding{
-				RuleID:         "host.unclassified_session_input",
-				RiskLevel:      RiskMedium,
-				Decision:       DecisionAsk,
-				Evidence:       "session backend does not match the input tool",
-				Recommendation: "Use the session interaction tool for the backend that created the session",
-			})
-		case info.InputMode == sessionInputUnknown:
-			out = append(out, Finding{
-				RuleID:         "host.unclassified_session_input",
-				RiskLevel:      RiskMedium,
-				Decision:       DecisionAsk,
-				Evidence:       "session input semantics cannot be classified safely",
-				Recommendation: "Register or create a session with a recognized shell, interpreter, or data-consumer command",
-			})
-		}
-	}
-	if isKillSessionTool(in.ToolName) && sess.isKilled(in.SessionID) {
+	if in.sessionTerminates && sess.isKilled(in.SessionID) {
 		out = append(out, Finding{
 			RuleID:         "host.residual_session",
 			RiskLevel:      RiskLow,
@@ -160,11 +173,6 @@ func sessionBackendMismatch(in ScanInput, info sessionInfo) bool {
 		info.Backend != BackendUnknown &&
 		in.Backend != "" &&
 		info.Backend != in.Backend
-}
-
-func isKillSessionTool(toolName string) bool {
-	return strings.HasSuffix(toolName, "kill_session") ||
-		strings.HasSuffix(toolName, "workspace_kill_session")
 }
 
 // ruleCapability evaluates RequireIsolation against the tool profile.

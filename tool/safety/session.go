@@ -47,6 +47,17 @@ type sessionInfo struct {
 const maxKilledSessions = 1024
 const maxKnownSessions = 1024
 const maxSessionInputBuffer = 64 * 1024
+const maxShellSessionInputBuffer = 16 * 1024
+
+func sessionInputBufferLimit(info sessionInfo) int {
+	if info.InputMode == sessionInputShell {
+		// Keep this aligned with internal/shellsafe's command length
+		// bound so oversized shell input gets the session-specific
+		// finding instead of a generic parse failure.
+		return maxShellSessionInputBuffer
+	}
+	return maxSessionInputBuffer
+}
 
 // newSessionTracker returns an empty sessionTracker.
 func newSessionTracker() *sessionTracker {
@@ -119,6 +130,27 @@ func (s *sessionTracker) kill(id string) {
 	}
 }
 
+// quarantine preserves a live session for cleanup while forcing future
+// stdin through the unclassified-session approval path.
+func (s *sessionTracker) quarantine(id string) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.killed[id] {
+		return
+	}
+	info, ok := s.known[id]
+	if !ok {
+		return
+	}
+	info.InputMode = sessionInputUnknown
+	info.Language = ""
+	info.Pending = ""
+	s.known[id] = info
+}
+
 // isKnown returns true when id was registered.
 func (s *sessionTracker) isKnown(id string) bool {
 	_, ok := s.lookup(id)
@@ -153,7 +185,8 @@ func (s *sessionTracker) previewInput(
 	if submit {
 		combined += "\n"
 	}
-	return info, combined, true, len(combined) <= maxSessionInputBuffer
+	return info, combined, true,
+		len(combined) <= sessionInputBufferLimit(info)
 }
 
 func (s *sessionTracker) commitInput(
@@ -174,13 +207,15 @@ func (s *sessionTracker) commitInput(
 	if submit {
 		combined += "\n"
 	}
-	if info.InputMode == sessionInputData {
+	if info.InputMode == sessionInputData ||
+		info.InputMode == sessionInputShell {
 		if index := strings.LastIndexByte(combined, '\n'); index >= 0 {
 			combined = combined[index+1:]
 		}
 	}
-	if len(combined) > maxSessionInputBuffer {
-		combined = combined[len(combined)-maxSessionInputBuffer:]
+	limit := sessionInputBufferLimit(info)
+	if len(combined) > limit {
+		combined = combined[len(combined)-limit:]
 	}
 	info.Pending = combined
 	s.known[id] = info

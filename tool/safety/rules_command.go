@@ -79,11 +79,20 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 				}
 			}
 		}
-		if err := nestedCommandPolicyError(a.Pipeline, sp); err != nil {
+		if err := nestedCommandPolicyError(
+			a.Pipeline,
+			sp,
+			p.Rules.DangerousCommands.Enabled,
+		); err != nil {
+			decision := ruleDecision(
+				p.Rules.DangerousCommands.Action,
+				RiskHigh,
+				p,
+			)
 			out = append(out, Finding{
 				RuleID:         "command.not_allowed",
 				RiskLevel:      RiskHigh,
-				Decision:       DecisionDeny,
+				Decision:       decision,
 				Evidence:       redactedSnippet(err.Error(), 80),
 				Recommendation: "Remove nested command execution or allow the nested command explicitly",
 			})
@@ -106,6 +115,7 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 func nestedCommandPolicyError(
 	pipeline *shellsafe.Pipeline,
 	policy shellsafe.Policy,
+	checkGitEscapes bool,
 ) error {
 	for _, argv := range pipeline.Commands {
 		if len(argv) == 0 {
@@ -126,6 +136,10 @@ func nestedCommandPolicyError(
 					Commands: [][]string{payload},
 				}); err != nil {
 					return fmt.Errorf("nested find command is not allowed: %w", err)
+				}
+				if !checkGitEscapes {
+					i += len(payload)
+					continue
 				}
 				if gitExecutesExternalCommand(payload) {
 					return fmt.Errorf(
@@ -149,6 +163,9 @@ func nestedCommandPolicyError(
 				}
 				i += len(payload)
 			}
+		}
+		if !checkGitEscapes {
+			continue
 		}
 		if gitExecutesExternalCommand(argv) {
 			return fmt.Errorf("git external command execution is not allowed")
@@ -195,7 +212,8 @@ func isSupportedGitSubcommand(name string) bool {
 		"count-objects", "unpack-objects", "verify-pack", "notes",
 		"range-diff", "whatchanged", "submodule",
 		"worktree", "sparse-checkout", "multi-pack-index", "maintenance",
-		"version":
+		"merge-base", "read-tree", "write-tree", "mktree", "commit-tree",
+		"verify-commit", "verify-tag", "var", "version":
 		return true
 	}
 	return false

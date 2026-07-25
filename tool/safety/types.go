@@ -102,7 +102,10 @@ type ScanInput struct {
 	PTY bool
 	// SessionID is the opaque hostexec/workspace session id.
 	SessionID string
-	// SessionInput is the chars argument for write_stdin.
+	// SessionInput is stdin content for a session-creating call or the
+	// chars argument for write_stdin. Standalone Scan callers should
+	// include a submitted newline in this value when it affects parsing;
+	// wrapped tools derive append_newline/submit semantics automatically.
 	SessionInput string
 	// ToolProfile is the registered profile name (for custom/MCP tools).
 	ToolProfile string
@@ -114,6 +117,9 @@ type ScanInput struct {
 
 	sessionSubmit        bool
 	sessionInputOverflow bool
+	sessionCreates       bool
+	sessionWrites        bool
+	sessionTerminates    bool
 }
 
 // ToolMetadata mirrors the tool's published metadata. It is populated

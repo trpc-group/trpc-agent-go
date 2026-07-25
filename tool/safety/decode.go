@@ -77,10 +77,27 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 		"command", "cmd", "script", "shell",
 		"code", "code_blocks", "argv",
 	}
+	codeLanguage, codeIsExecution, codeLanguageErr :=
+		unknownCodeLanguage(raw)
 	presentFields := make([]string, 0, len(executionFields))
+	shapeErr := codeLanguageErr
 	for _, key := range executionFields {
-		if _, present := raw[key]; present {
+		value, present := raw[key]
+		if !present || value == nil {
+			continue
+		}
+		if key == "code" && !codeIsExecution {
+			continue
+		}
+		valid, ignored, err := unknownExecutionFieldShape(key, value)
+		if err != nil && shapeErr == nil {
+			shapeErr = err
+		}
+		if valid {
 			presentFields = append(presentFields, key)
+		}
+		if ignored {
+			continue
 		}
 	}
 	if len(presentFields) > 1 {
@@ -89,46 +106,29 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 			strings.Join(presentFields, ", "),
 		)
 	}
-	for _, key := range []string{"command", "cmd", "script", "shell"} {
-		value, present := raw[key]
-		if !present {
-			continue
-		}
-		command, ok := value.(string)
-		if !ok {
-			return in, fmt.Errorf(
-				"unknown tool: field %q must be a string, got %T",
-				key, value,
-			)
-		}
-		if strings.TrimSpace(command) == "" {
-			return in, fmt.Errorf(
-				"unknown tool: field %q must not be empty",
-				key,
-			)
-		}
+	if shapeErr != nil {
+		return in, shapeErr
+	}
+	if len(presentFields) == 0 {
+		// No execution-shaped field: allow ordinary query/read payloads.
+		return in, nil
+	}
+	key := presentFields[0]
+	switch key {
+	case "command", "cmd", "script", "shell":
+		command := raw[key].(string)
 		in.Backend = BackendUnknown
 		in.Command = command
 		return in, nil
-	}
-	if value, present := raw["code"]; present {
-		code, ok := value.(string)
-		if !ok {
-			return in, fmt.Errorf(
-				"unknown tool: field %q must be a string, got %T",
-				"code", value,
-			)
-		}
-		if strings.TrimSpace(code) == "" {
-			return in, errors.New(
-				"unknown tool: field \"code\" must not be empty",
-			)
-		}
+	case "code":
+		code := raw[key].(string)
 		in.Backend = BackendUnknown
-		in.CodeBlocks = []CodeBlock{{Code: code}}
+		in.CodeBlocks = []CodeBlock{{
+			Language: codeLanguage,
+			Code:     code,
+		}}
 		return in, nil
-	}
-	if _, present := raw["code_blocks"]; present {
+	case "code_blocks":
 		blocks, err := decodeCodeBlocks(raw, "code_blocks")
 		if err != nil {
 			return in, fmt.Errorf("unknown tool: %w", err)
@@ -136,9 +136,8 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 		in.Backend = BackendUnknown
 		in.CodeBlocks = blocks
 		return in, nil
-	}
-	if value, present := raw["argv"]; present {
-		args, err := decodeStringSlice(value)
+	case "argv":
+		args, err := decodeStringSlice(raw[key])
 		if err != nil {
 			return in, fmt.Errorf("unknown tool: field %q: %w", "argv", err)
 		}
@@ -146,8 +145,82 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 		in.Args = args
 		return in, nil
 	}
-	// No execution-shaped field: allow ordinary query/read payloads.
-	return in, nil
+	return in, errors.New("unknown tool: unsupported execution field")
+}
+
+func unknownCodeLanguage(
+	raw map[string]any,
+) (language string, execution bool, err error) {
+	code, present := raw["code"]
+	if !present || code == nil {
+		return "", false, nil
+	}
+	languageValue, present := raw["language"]
+	if !present || languageValue == nil {
+		return "", false, nil
+	}
+	language, ok := languageValue.(string)
+	if !ok {
+		return "", false, fmt.Errorf(
+			"unknown tool: field %q must be a string, got %T",
+			"language",
+			languageValue,
+		)
+	}
+	if strings.TrimSpace(language) == "" {
+		return "", false, nil
+	}
+	return language, true, nil
+}
+
+func unknownExecutionFieldShape(
+	key string,
+	value any,
+) (valid bool, ignored bool, err error) {
+	switch key {
+	case "command", "cmd", "script", "shell", "code":
+		text, ok := value.(string)
+		if !ok {
+			if key == "shell" {
+				if _, modifier := value.(bool); modifier {
+					return false, true, nil
+				}
+			}
+			return false, false, fmt.Errorf(
+				"unknown tool: field %q must be a string, got %T",
+				key,
+				value,
+			)
+		}
+		if strings.TrimSpace(text) == "" {
+			return false, false, fmt.Errorf(
+				"unknown tool: field %q must not be empty",
+				key,
+			)
+		}
+		return true, false, nil
+	case "code_blocks":
+		switch value.(type) {
+		case string, []any, map[string]any:
+			return true, false, nil
+		default:
+			return false, false, fmt.Errorf(
+				"unknown tool: field %q must be an array, object, or string, got %T",
+				key,
+				value,
+			)
+		}
+	case "argv":
+		if _, ok := value.([]any); !ok {
+			return false, false, fmt.Errorf(
+				"unknown tool: field %q must be an array of strings, got %T",
+				key,
+				value,
+			)
+		}
+		return true, false, nil
+	}
+	return false, true, nil
 }
 
 func decodeStringSlice(value any) ([]string, error) {
@@ -194,31 +267,31 @@ func decodeRequiredFields(
 	return nil
 }
 
-// decodeSessionFields handles the session-tool argument shapes
-// (write_stdin, kill_session, and their workspace_ prefixed variants).
+// decodeSessionFields handles declarative session-tool argument shapes.
 func decodeSessionFields(in *ScanInput, profile ToolProfile, raw map[string]any) {
-	switch profile.Name {
-	case "workspace_exec":
-		in.SessionInput = firstString(raw, "stdin")
-	case "write_stdin", "workspace_write_stdin":
+	applySessionProfile(in, profile)
+	if len(profile.SessionIDFields) > 0 {
 		in.SessionID = firstNonEmptyString(
 			raw,
-			"session_id",
-			"sessionId",
-		)
-		in.SessionInput = firstString(raw, "chars")
-		if submit, ok := rawBool(raw, "append_newline"); ok {
-			in.sessionSubmit = submit
-		} else if submit, ok := rawBool(raw, "submit"); ok {
-			in.sessionSubmit = submit
-		}
-	case "kill_session", "workspace_kill_session":
-		in.SessionID = firstNonEmptyString(
-			raw,
-			"session_id",
-			"sessionId",
+			profile.SessionIDFields...,
 		)
 	}
+	if profile.SessionInputField != "" {
+		in.SessionInput = firstString(raw, profile.SessionInputField)
+	}
+	for _, field := range profile.SessionSubmitFields {
+		if submit, ok := rawBool(raw, field); ok {
+			in.sessionSubmit = submit
+			break
+		}
+	}
+}
+
+func applySessionProfile(in *ScanInput, profile ToolProfile) {
+	in.sessionCreates = profile.CreatesSession
+	in.sessionWrites = len(profile.SessionIDFields) > 0 &&
+		profile.SessionInputField != ""
+	in.sessionTerminates = profile.TerminatesSession
 }
 
 // decodeOptionalFields handles cwd, env, timeout, background, and PTY
@@ -309,19 +382,6 @@ func setDecodedTimeout(
 	}
 	in.Timeout = time.Duration(seconds) * time.Second
 	return nil
-}
-
-// peekCommand returns the value of a top-level "command" field if present,
-// used for unknown tools that expose a command surface.
-func peekCommand(arguments []byte) (string, error) {
-	var raw map[string]any
-	if err := json.Unmarshal(arguments, &raw); err != nil {
-		return "", err
-	}
-	if cmd, ok := rawString(raw, "command"); ok {
-		return cmd, nil
-	}
-	return "", nil
 }
 
 // requiredString returns the string value at key, or an error if the key is

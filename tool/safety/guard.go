@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -103,6 +104,13 @@ func WithRedaction(enabled bool) Option {
 // default for that name.
 func WithToolProfile(profile ToolProfile) Option {
 	return func(o *guardOptions) error {
+		if err := profile.validate(); err != nil {
+			return fmt.Errorf(
+				"invalid tool profile %q: %w",
+				profile.Name,
+				err,
+			)
+		}
 		o.profiles = append(o.profiles, profile)
 		return nil
 	}
@@ -171,6 +179,8 @@ type Guard struct {
 	releases    map[string]func()    // keyed by tool call id
 	activeCalls map[string]struct{}  // model tool call ids currently in flight
 }
+
+var _ tool.PermissionPolicy = (*Guard)(nil)
 
 // NewGuard constructs a Guard from the given options. If no policy is
 // supplied, DefaultPolicy is used. If a policy file path is supplied, it
@@ -286,7 +296,10 @@ func (g *Guard) endWrappedCall() {
 }
 
 // Scan runs the scanner against in directly. It is the entry point for
-// standalone and batch analysis that does not execute a tool.
+// analysis that does not execute a tool. Registered profile defaults are
+// applied to missing backend and timeout fields. When in references a
+// session tracked by this Guard, pending session input is included in the
+// scan.
 func (g *Guard) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	if g == nil {
 		return ScanReport{}, errors.New("guard is nil")
@@ -294,7 +307,8 @@ func (g *Guard) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	return g.scanner.Scan(ctx, in)
 }
 
-// ScanBatch scans every input using the guard's policy and scanner.
+// ScanBatch scans every input using the guard's policy, profile defaults,
+// and tracked session state. It does not execute tools.
 func (g *Guard) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchReport, error) {
 	if g == nil {
 		return BatchReport{}, errors.New("guard is nil")
@@ -380,18 +394,63 @@ func (g *Guard) previewToolCall(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
+	return g.previewToolCallWithAudit(ctx, req, false)
+}
+
+// CheckToolPermission implements tool.PermissionPolicy for tools that
+// cannot use WrapTool, including streamable-only tools. It performs
+// pre-execution scanning and preflight audit only; WrapTool remains
+// required for post-execution redaction, completion audit, and lifecycle
+// tracking.
+func (g *Guard) CheckToolPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	if req != nil && g.ownsWrappedTool(req.Tool) {
+		return tool.AllowPermission(), nil
+	}
+	return g.previewToolCallWithAudit(ctx, req, true)
+}
+
+func (g *Guard) ownsWrappedTool(t tool.Tool) bool {
+	const maxOriginalDepth = 32
+	t = internaltool.ResolveSemantic(t)
+	for depth := 0; t != nil && depth < maxOriginalDepth; depth++ {
+		if wrapped, ok := t.(*wrappedCallableTool); ok &&
+			wrapped.guard == g {
+			return true
+		}
+		original, ok := t.(interface{ Original() tool.Tool })
+		if !ok {
+			return false
+		}
+		t = original.Original()
+	}
+	return false
+}
+
+func (g *Guard) previewToolCallWithAudit(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+	auditAllowed bool,
+) (tool.PermissionDecision, error) {
 	if g == nil {
 		return tool.DenyPermission("safety guard is nil"), nil
 	}
 	if req == nil {
 		return tool.DenyPermission("permission request is nil"), nil
 	}
+	if err := g.beginWrappedCall(); err != nil {
+		return tool.DenyPermission(err.Error()), nil
+	}
+	defer g.endWrappedCall()
+
 	in, decodeErr := g.scanInputForRequest(req)
 	if decodeErr != nil {
 		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
 	}
 	report := g.scanPermission(ctx, req, in)
-	if report.Decision == DecisionAllow {
+	if report.Decision == DecisionAllow && !auditAllowed {
 		return tool.AllowPermission(), nil
 	}
 	g.auditPreflightOrDeny(&report)
@@ -427,7 +486,7 @@ func (g *Guard) acquireSessionInput(
 	in ScanInput,
 ) (func(), error) {
 	if g == nil || g.sessions == nil || in.SessionID == "" ||
-		!strings.HasSuffix(in.ToolName, "write_stdin") ||
+		!in.sessionWrites ||
 		in.SessionInput == "" && !in.sessionSubmit {
 		return nil, nil
 	}
@@ -645,15 +704,6 @@ func (g *Guard) auditPreflightOrDeny(report *ScanReport) bool {
 	return false
 }
 
-// applyProfileDefaults fills in backend and default timeout from the
-// registered profile when the decoded ScanInput did not carry them. The
-// profile default timeout is applied WITHOUT capping it at the policy's
-// MaxTimeout: when the request omits a timeout, the backend really runs
-// with its own default, so the scanner must evaluate that effective
-// duration. When the backend default exceeds MaxTimeout the
-// resource.timeout_exceeded rule fires and the call cannot be allowed
-// as-is; the caller must supply an explicit bounded timeout (or the
-// operator must raise max_timeout).
 // maybeAuditPreflight appends a preflight audit event when the guard has
 // an audit writer.
 func (g *Guard) maybeAuditPreflight(report ScanReport) error {
@@ -860,12 +910,9 @@ func (g *Guard) finalizeCall(
 	return &tool.AfterToolResult{CustomResult: safeResult}, nil
 }
 
-// trackSessionLifecycle registers or clears session state based on the
-// tool name and the result. When exec_command or workspace_exec returns
-// a session_id, the session is registered. When kill_session or
-// workspace_kill_session completes, the session is marked killed. The
-// caller invokes this only for successful calls; a failed call must not
-// mutate lifecycle state.
+// trackSessionLifecycle registers or clears session state according to the
+// tool's registered profile. The caller invokes this only for successful
+// calls; a failed call must not claim that a live session terminated.
 func (g *Guard) trackSessionLifecycle(
 	toolName string,
 	arguments []byte,
@@ -875,37 +922,33 @@ func (g *Guard) trackSessionLifecycle(
 		return
 	}
 
-	switch toolName {
-	case "write_stdin", "workspace_write_stdin":
-		if in, err := decodeRequest(
-			toolName, arguments, g.profiles,
-		); err == nil {
-			if isTerminalSessionStatus(extractResultStatus(result)) {
-				g.sessions.kill(in.SessionID)
-				return
-			}
-			g.sessions.commitInput(
-				in.SessionID,
-				in.SessionInput,
-				in.sessionSubmit,
-			)
+	in, err := decodeRequest(toolName, arguments, g.profiles)
+	if err != nil {
+		return
+	}
+	switch {
+	case in.sessionWrites:
+		if isTerminalSessionStatus(extractResultStatus(result)) {
+			g.sessions.kill(in.SessionID)
+			return
 		}
-	case "exec_command", "workspace_exec":
+		g.sessions.commitInput(
+			in.SessionID,
+			in.SessionInput,
+			in.sessionSubmit,
+		)
+	case in.sessionCreates:
 		sessionID := extractSessionID(result)
 		if sessionID == "" {
 			return
 		}
-		in, err := decodeRequest(toolName, arguments, g.profiles)
-		if err != nil {
-			g.sessions.registerWithInfo(sessionID, sessionInfo{
-				Backend:   BackendUnknown,
-				InputMode: sessionInputUnknown,
-			})
-			return
-		}
 		g.sessions.registerWithInfo(sessionID, classifySessionInfo(in))
-	case "kill_session", "workspace_kill_session":
-		g.sessions.kill(extractSessionID(result))
+	case in.sessionTerminates:
+		sessionID := in.SessionID
+		if sessionID == "" {
+			sessionID = extractSessionID(result)
+		}
+		g.sessions.kill(sessionID)
 	}
 }
 
@@ -913,15 +956,14 @@ func (g *Guard) failClosedAmbiguousSessionWrite(
 	toolName string,
 	arguments []byte,
 ) {
-	if g == nil || g.sessions == nil ||
-		!strings.HasSuffix(toolName, "write_stdin") {
+	if g == nil || g.sessions == nil {
 		return
 	}
 	in, err := decodeRequest(toolName, arguments, g.profiles)
-	if err != nil || in.SessionID == "" {
+	if err != nil || !in.sessionWrites || in.SessionID == "" {
 		return
 	}
-	g.sessions.kill(in.SessionID)
+	g.sessions.quarantine(in.SessionID)
 }
 
 func extractResultStatus(result any) string {

@@ -462,6 +462,60 @@ func TestCovercore_TrackSessionLifecycle(t *testing.T) {
 	// A nil result has no session to track.
 	guard.trackSessionLifecycle("exec_command", nil, nil)
 	require.False(t, guard.sessions.isKnown(""))
+
+	guard.profiles.register(ToolProfile{
+		Name:              "custom_exec",
+		Backend:           BackendWorkspaceExec,
+		CommandField:      "command",
+		SessionInputField: "stdin",
+		CreatesSession:    true,
+	})
+	guard.profiles.register(ToolProfile{
+		Name:                "custom_write",
+		Backend:             BackendWorkspaceExec,
+		SessionIDFields:     []string{"session_id"},
+		SessionInputField:   "chars",
+		SessionSubmitFields: []string{"submit"},
+	})
+	guard.profiles.register(ToolProfile{
+		Name:              "custom_kill",
+		Backend:           BackendWorkspaceExec,
+		SessionIDFields:   []string{"session_id"},
+		TerminatesSession: true,
+	})
+
+	guard.trackSessionLifecycle(
+		"custom_exec",
+		[]byte(`{"command":"python","stdin":"print(1)"}`),
+		map[string]any{"session_id": "custom-session"},
+	)
+	info, ok := guard.sessions.lookup("custom-session")
+	require.True(t, ok)
+	require.Equal(t, sessionInputCode, info.InputMode)
+
+	guard.trackSessionLifecycle(
+		"custom_write",
+		[]byte(`{"session_id":"custom-session","chars":"print(2)","submit":true}`),
+		map[string]any{"status": "running"},
+	)
+	info, ok = guard.sessions.lookup("custom-session")
+	require.True(t, ok)
+	require.Contains(t, info.Pending, "print(2)")
+
+	guard.trackSessionLifecycle(
+		"custom_kill",
+		[]byte(`{"session_id":"custom-session"}`),
+		map[string]any{"session_id": "custom-session", "status": "killed"},
+	)
+	require.True(t, guard.sessions.isKilled("custom-session"))
+
+	guard.sessions.register("skill-session")
+	guard.trackSessionLifecycle(
+		"skill_kill_session",
+		[]byte(`{"session_id":"skill-session"}`),
+		map[string]any{"session_id": "skill-session", "status": "killed"},
+	)
+	require.True(t, guard.sessions.isKilled("skill-session"))
 }
 
 // TestCovercore_ExtractSessionID covers the result-shape branches.

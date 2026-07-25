@@ -94,6 +94,20 @@ func TestRulePath_SystemWrite(t *testing.T) {
 	require.Contains(t, ruleIDs, "path.system_write")
 }
 
+func TestRulePath_DoubleSlashCannotBypassDeniedPath(t *testing.T) {
+	report, err := newTestScanner(t, testPolicy(t)).Scan(
+		context.Background(),
+		ScanInput{
+			ToolName: "workspace_exec",
+			Backend:  BackendWorkspaceExec,
+			Command:  "cat //etc/shadow",
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "path.denied")
+}
+
 func TestRuleNetwork_NonWhitelistedDomain(t *testing.T) {
 	p := testPolicy(t)
 	a := analyzeShell("curl https://evil.example/x")
@@ -241,10 +255,8 @@ func TestRuleHost_BackgroundSession(t *testing.T) {
 }
 
 func TestRuleHost_UnknownSessionWriteStdin(t *testing.T) {
-	p := testPolicy(t)
-	a := analysis{}
 	in := ScanInput{SessionID: "sid-unknown", SessionInput: "ls"}
-	findings := ruleHost(in, &a, p, newSessionTracker())
+	findings := ruleSessionInputBoundary(in, newSessionTracker())
 	ruleIDs := ruleIDSet(findings)
 	require.Contains(t, ruleIDs, "host.unknown_session")
 }

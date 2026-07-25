@@ -91,9 +91,24 @@ func TestCovercore_DecodeUnknownTool(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "rm -rf /", in.Command)
 
-	in, err = decodeRequest("mystery_tool", []byte(`{"code":"print(1)"}`), reg)
+	in, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"code":"print(1)","language":"python"}`),
+		reg,
+	)
 	require.NoError(t, err)
-	require.Equal(t, []CodeBlock{{Code: "print(1)"}}, in.CodeBlocks)
+	require.Equal(t, []CodeBlock{{
+		Language: "python",
+		Code:     "print(1)",
+	}}, in.CodeBlocks)
+
+	in, err = decodeRequest(
+		"verify_otp",
+		[]byte(`{"code":"123456"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Empty(t, in.CodeBlocks)
 
 	in, err = decodeRequest("mystery_tool", []byte(`{"argv":["rm","-rf","/"]}`), reg)
 	require.NoError(t, err)
@@ -108,6 +123,44 @@ func TestCovercore_DecodeUnknownTool(t *testing.T) {
 		reg,
 	)
 	require.ErrorContains(t, err, "multiple execution fields")
+
+	in, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"command":"ls","shell":true}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ls", in.Command)
+
+	in, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"command":"ls","code":null}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "ls", in.Command)
+
+	in, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"query":"hello","shell":true}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Empty(t, in.Command)
+
+	_, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"command":"echo ok","argv":"rm -rf /"}`),
+		reg,
+	)
+	require.ErrorContains(t, err, "argv")
+
+	_, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"code":"print(1)","language":42}`),
+		reg,
+	)
+	require.ErrorContains(t, err, "language")
 }
 
 // TestCovercore_DecodeSessionFields covers the session-tool argument
@@ -194,6 +247,22 @@ func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
 	code, ok := reg.lookup("execute_code")
 	require.True(t, ok)
 	require.Zero(t, code.DefaultTimeout)
+	skillRun, ok := reg.lookup("skill_run")
+	require.True(t, ok)
+	require.Equal(t, "command", skillRun.CommandField)
+	require.Equal(t, "stdin", skillRun.SessionInputField)
+	skillExec, ok := reg.lookup("skill_exec")
+	require.True(t, ok)
+	require.False(t, skillExec.CreatesSession)
+	require.Equal(t, "stdin", skillExec.SessionInputField)
+	skillWrite, ok := reg.lookup("skill_write_stdin")
+	require.True(t, ok)
+	require.Equal(t, []string{"session_id"}, skillWrite.SessionIDFields)
+	require.Equal(t, "chars", skillWrite.SessionInputField)
+	require.Equal(t, []string{"submit"}, skillWrite.SessionSubmitFields)
+	skillKill, ok := reg.lookup("skill_kill_session")
+	require.True(t, ok)
+	require.True(t, skillKill.TerminatesSession)
 
 	in, err := decodeRequest(
 		"workspace_exec",
@@ -218,6 +287,60 @@ func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 10*time.Second, in.Timeout)
+}
+
+func TestCovercore_DecodeSkillSessionFields(t *testing.T) {
+	reg := newProfileRegistry()
+
+	in, err := decodeRequest(
+		"skill_exec",
+		[]byte(`{
+			"skill":"demo",
+			"command":"python",
+			"stdin":"print(1)",
+			"timeout":10
+		}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "python", in.Command)
+	require.Equal(t, "print(1)", in.SessionInput)
+	require.False(t, in.sessionCreates)
+
+	in, err = decodeRequest(
+		"skill_write_stdin",
+		[]byte(`{"session_id":"skill-1","chars":"print(2)","submit":true}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "skill-1", in.SessionID)
+	require.Equal(t, "print(2)", in.SessionInput)
+	require.True(t, in.sessionSubmit)
+	require.True(t, in.sessionWrites)
+
+	in, err = decodeRequest(
+		"skill_kill_session",
+		[]byte(`{"session_id":"skill-1"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "skill-1", in.SessionID)
+	require.True(t, in.sessionTerminates)
+
+	in, err = decodeRequest(
+		"skill_run",
+		[]byte(`{
+			"skill":"demo",
+			"command":"python",
+			"stdin":"print(3)",
+			"timeout":10
+		}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "python", in.Command)
+	require.Equal(t, "print(3)", in.SessionInput)
+	require.Equal(t, 10*time.Second, in.Timeout)
 
 	in, err = decodeRequest(
 		"workspace_exec",
@@ -226,20 +349,6 @@ func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 2*time.Minute, in.Timeout)
-}
-
-// TestCovercore_PeekCommand covers the direct peekCommand paths.
-func TestCovercore_PeekCommand(t *testing.T) {
-	_, err := peekCommand([]byte(`{broken`))
-	require.Error(t, err)
-
-	cmd, err := peekCommand([]byte(`{"command":"ls -la"}`))
-	require.NoError(t, err)
-	require.Equal(t, "ls -la", cmd)
-
-	cmd, err = peekCommand([]byte(`{"other":1}`))
-	require.NoError(t, err)
-	require.Empty(t, cmd)
 }
 
 // TestCovercore_RequiredString covers missing and mistyped fields.

@@ -279,9 +279,9 @@ func ruleSecret(in ScanInput, p Policy) []Finding {
 		}
 	}
 
-	// Session stdin (write_stdin chars). Scanned for secrets only; the
-	// content is operator input to an already-allowed interactive
-	// session, so the command rules do not apply to it.
+	// Session stdin (write_stdin chars). Secret scanning applies to every
+	// input. Tracked shell/code sessions are also analyzed by their
+	// command or code rules; unclassified sessions are held for review.
 	if matches := findSecrets(in.SessionInput); len(matches) > 0 {
 		add("secret.session_input", summarizeMatches(matches), RiskCritical)
 	}

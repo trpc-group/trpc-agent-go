@@ -81,6 +81,30 @@ func TestRedactArtifact_JSONDuplicateKeysFailClosed(t *testing.T) {
 	}
 }
 
+func TestRedactArtifact_JSONDuplicateKeyErrorDoesNotLeakKey(t *testing.T) {
+	secretKey := "token-sk_live_1234567890abcdef1234"
+	_, _, err := redactArtifact(&artifact.Artifact{
+		MimeType: "application/json",
+		Data: []byte(
+			`{"` + secretKey + `":"first","` +
+				secretKey + `":"second"}`,
+		),
+	})
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), secretKey)
+}
+
+func TestRedactArtifact_JSONNestingIsBounded(t *testing.T) {
+	data := strings.Repeat("[", maxJSONArtifactNestingDepth+1) +
+		"0" +
+		strings.Repeat("]", maxJSONArtifactNestingDepth+1)
+	_, _, err := redactArtifact(&artifact.Artifact{
+		MimeType: "application/json",
+		Data:     []byte(data),
+	})
+	require.ErrorContains(t, err, "nesting exceeds")
+}
+
 func TestRedactArtifact_RejectsSecretMIMEParameters(t *testing.T) {
 	for _, mimeType := range []string{
 		"text/plain; profile=AKIAIOSFODNN7EXAMPLE",

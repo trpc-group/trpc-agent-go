@@ -123,6 +123,60 @@ func TestGuard_CheckToolPermissionCustomProfile(t *testing.T) {
 	require.Contains(t, decision.Reason, "command.dangerous_delete")
 }
 
+func TestGuard_CheckToolPermissionSkillSessionTools(t *testing.T) {
+	policy := testPolicy(t)
+	policy.AllowedCommands = append(policy.AllowedCommands, "python")
+	guard := newTestGuard(t, WithPolicy(policy))
+
+	decision, err := guard.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "skill_exec",
+			Arguments: []byte(
+				`{"skill":"demo","command":"python","stdin":"import os; os.system(\"rm -rf /\")","timeout":10}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "code.dangerous_delete")
+
+	decision, err = guard.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "skill_run",
+			Arguments: []byte(
+				`{"skill":"demo","command":"python","stdin":"import os; os.system(\"rm -rf /\")","timeout":10}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "code.dangerous_delete")
+
+	decision, err = guard.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "skill_write_stdin",
+			Arguments: []byte(
+				`{"session_id":"unknown","chars":"rm -rf /","submit":true}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+
+	decision, err = guard.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:  "skill_kill_session",
+			Arguments: []byte(`{"session_id":"unknown"}`),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
 func TestGuard_CheckToolPermissionUnknownCommandShapedToolAsks(t *testing.T) {
 	guard := newTestGuard(t)
 	// Unknown tool with a command-shaped argument should be scanned
@@ -587,7 +641,7 @@ func TestGuard_CheckToolPermissionWorkspaceLegacyTimeoutFallback(t *testing.T) {
 	require.Contains(t, decision.Reason, "resource.timeout_exceeded")
 }
 
-func TestGuard_FailedSessionWriteFailsClosed(t *testing.T) {
+func TestGuard_FailedSessionWriteQuarantinesSession(t *testing.T) {
 	guard := newTestGuard(t)
 	guard.sessions.registerWithInfo("session", sessionInfo{
 		Backend:   BackendHostExec,
@@ -598,8 +652,61 @@ func TestGuard_FailedSessionWriteFailsClosed(t *testing.T) {
 		"write_stdin",
 		[]byte(`{"session_id":"session","chars":"print(1)"}`),
 	)
-	require.False(t, guard.sessions.isKnown("session"))
-	require.True(t, guard.sessions.isKilled("session"))
+	require.True(t, guard.sessions.isKnown("session"))
+	require.False(t, guard.sessions.isKilled("session"))
+	info, ok := guard.sessions.lookup("session")
+	require.True(t, ok)
+	require.Equal(t, sessionInputUnknown, info.InputMode)
+
+	decision, err := guard.checkToolCall(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:   "write_stdin",
+			ToolCallID: "write-quarantined-session",
+			Arguments: []byte(
+				`{"session_id":"session","chars":"print(2)"}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+
+	decision, err = guard.checkToolCall(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:   "kill_session",
+			ToolCallID: "kill-quarantined-session",
+			Arguments:  []byte(`{"session_id":"session"}`),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+}
+
+func TestWithToolProfileValidatesSessionContract(t *testing.T) {
+	_, err := NewGuard(
+		WithPolicy(testPolicy(t)),
+		WithToolProfile(ToolProfile{}),
+	)
+	require.ErrorContains(t, err, "profile name is empty")
+
+	_, err = NewGuard(
+		WithPolicy(testPolicy(t)),
+		WithToolProfile(ToolProfile{
+			Name:              "broken_kill",
+			TerminatesSession: true,
+		}),
+	)
+	require.ErrorContains(t, err, "requires session id fields")
+
+	_, err = NewGuard(
+		WithPolicy(testPolicy(t)),
+		WithToolProfile(ToolProfile{
+			Name:                "broken_write",
+			SessionSubmitFields: []string{"submit"},
+		}),
+	)
+	require.ErrorContains(t, err, "require a session input field")
 }
 
 // TestGuard_EmptyToolCallIDCannotBypassConcurrency verifies that an

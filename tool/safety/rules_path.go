@@ -415,8 +415,8 @@ func matchesDeniedPath(normalized string, p Policy) bool {
 	for _, e := range p.DeniedPaths {
 		entry := normalizePath(e)
 		targetForMatch, entryForMatch := clean, entry
-		if usesWindowsPathSemantics(clean) ||
-			usesWindowsPathSemantics(entry) {
+		if usesWindowsPathSemantics(normalized) ||
+			usesWindowsPathSemantics(e) {
 			targetForMatch = strings.ToLower(targetForMatch)
 			entryForMatch = strings.ToLower(entryForMatch)
 		}
@@ -430,9 +430,9 @@ func matchesDeniedPath(normalized string, p Policy) bool {
 	}
 	for _, pattern := range p.DeniedPathGlobs {
 		patternForMatch, targetForMatch := pattern, clean
-		if usesWindowsPathSemantics(clean) ||
+		if usesWindowsPathSemantics(normalized) ||
 			usesWindowsPathSemantics(pattern) {
-			patternForMatch = strings.ToLower(patternForMatch)
+			patternForMatch = strings.ToLower(normalizePath(pattern))
 			targetForMatch = strings.ToLower(targetForMatch)
 		}
 		ok, err := doublestar.Match(patternForMatch, targetForMatch)
@@ -451,7 +451,7 @@ func matchesDeniedPath(normalized string, p Policy) bool {
 }
 
 func usesWindowsPathSemantics(p string) bool {
-	p = normalizePath(p)
+	p = strings.ReplaceAll(filepath.ToSlash(p), `\`, `/`)
 	return runtime.GOOS == "windows" ||
 		len(p) >= 2 && p[1] == ':' ||
 		strings.HasPrefix(p, "//")

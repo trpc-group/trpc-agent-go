@@ -98,6 +98,23 @@ type codeMatchRecord struct {
 	outputBomb      bool
 }
 
+func ruleCodeInput(in ScanInput) []Finding {
+	for _, block := range in.CodeBlocks {
+		if strings.TrimSpace(block.Language) != "" &&
+			strings.TrimSpace(block.Code) != "" {
+			continue
+		}
+		return []Finding{{
+			RuleID:         "code.invalid_block",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "code block is missing a language or code body",
+			Recommendation: "Provide a non-empty language and code body before execution",
+		}}
+	}
+	return nil
+}
+
 // scanCodeBlock inspects one code block for dangerous patterns. When a
 // pattern matches, the analysis IR is updated so the corresponding rule
 // can fire with a stable finding id. Embedded shell commands (os.system,

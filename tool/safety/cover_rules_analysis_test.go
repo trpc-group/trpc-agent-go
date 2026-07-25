@@ -91,6 +91,12 @@ func TestCoverrules_HashAnalysisInput_Deterministic(t *testing.T) {
 	require.Len(t, hashAnalysisInput(in), 64)
 }
 
+func TestCoverrules_SessionInputHashAndSummary(t *testing.T) {
+	in := ScanInput{SessionInput: "echo hello"}
+	require.Len(t, hashAnalysisInput(in), 64)
+	require.Contains(t, summarizeAnalysisInput(in), "stdin:echo hello")
+}
+
 func TestCoverrules_SummarizeAnalysisInput_ManyCodeBlocks(t *testing.T) {
 	in := ScanInput{
 		CodeBlocks: []CodeBlock{

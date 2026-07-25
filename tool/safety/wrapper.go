@@ -27,6 +27,11 @@ import (
 // underlying tool, and redacts, limits, audits, and releases resources
 // after execution.
 //
+// The returned tool also implements tool.PermissionChecker. A successful
+// framework precheck is reused by Call only when the tool call id and
+// arguments are unchanged; the safety scan itself is repeated immediately
+// before execution.
+//
 // WrapTool intentionally accepts tool.CallableTool. Streamable-only tools
 // require a stream-aware wrapper so partial chunks can be redacted before
 // they are observed.
@@ -237,7 +242,13 @@ func (w *wrappedCallableTool) Call(
 ) (result any, err error) {
 	var toolCallID string
 	lifecycleOwned := false
+	wrappedCallStarted := false
 	finishing := false
+	defer func() {
+		if wrappedCallStarted {
+			w.guard.endWrappedCall()
+		}
+	}()
 	defer func() {
 		recovered := recover()
 		if recovered == nil {
@@ -298,7 +309,7 @@ func (w *wrappedCallableTool) Call(
 	if err := w.guard.beginWrappedCall(); err != nil {
 		return nil, err
 	}
-	defer w.guard.endWrappedCall()
+	wrappedCallStarted = true
 	decision, err := w.guard.checkToolCall(ctx, req)
 	if err != nil {
 		return nil, w.sanitizeError(
