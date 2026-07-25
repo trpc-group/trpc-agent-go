@@ -1,0 +1,11 @@
+[
+  {
+    "metricName": "final_response_avg_score",
+    "threshold": 1.0,
+    "criterion": {
+      "finalResponse": {
+        "text": { "matchStrategy": "exact" }
+      }
+    }
+  }
+]

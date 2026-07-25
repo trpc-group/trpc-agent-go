@@ -1,0 +1,276 @@
+//
+// Tencent is pleased to support the open source community by making trpc-agent-go available.
+//
+// Copyright (C) 2025 Tencent.  All rights reserved.
+//
+// trpc-agent-go is licensed under the Apache License Version 2.0.
+//
+
+package pipeline
+
+import (
+	"fmt"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+)
+
+// DeltaClass describes how a single eval case moved between the baseline and the candidate.
+type DeltaClass string
+
+const (
+	// DeltaUnchanged means neither pass status nor score changed.
+	DeltaUnchanged DeltaClass = "unchanged"
+	// DeltaNewPass means the case went from failing to passing (an improvement).
+	DeltaNewPass DeltaClass = "new_pass"
+	// DeltaNewFail means the case went from passing to failing (a regression).
+	DeltaNewFail DeltaClass = "new_fail"
+	// DeltaScoreUp means the pass status is unchanged but the score rose.
+	DeltaScoreUp DeltaClass = "score_up"
+	// DeltaScoreDown means the pass status is unchanged but the score fell.
+	DeltaScoreDown DeltaClass = "score_down"
+)
+
+// CaseDelta is the per-case comparison between a baseline and candidate evaluation.
+type CaseDelta struct {
+	EvalCaseID      string     `json:"evalCaseId"`
+	BaselinePassed  bool       `json:"baselinePassed"`
+	CandidatePassed bool       `json:"candidatePassed"`
+	BaselineScore   float64    `json:"baselineScore"`
+	CandidateScore  float64    `json:"candidateScore"`
+	ScoreDelta      float64    `json:"scoreDelta"`
+	Class           DeltaClass `json:"class"`
+}
+
+// DiffResults compares two evaluation results case-by-case, matched by eval case ID. Cases present
+// in the baseline drive the output order; a case missing from the candidate is treated as scoring
+// zero and failing (so a dropped case reads as a regression rather than silently vanishing).
+func DiffResults(baseline, candidate *evaluation.EvaluationResult) []CaseDelta {
+	baseAttr := AttributeResult(baseline)
+	candByID := indexAttributions(AttributeResult(candidate))
+	deltas := make([]CaseDelta, 0, len(baseAttr))
+	for _, base := range baseAttr {
+		cand, ok := candByID[base.EvalCaseID]
+		if !ok {
+			cand = CaseAttribution{EvalCaseID: base.EvalCaseID, Passed: false, Score: 0}
+		}
+		deltas = append(deltas, classifyDelta(base, cand))
+	}
+	return deltas
+}
+
+func indexAttributions(attrs []CaseAttribution) map[string]CaseAttribution {
+	byID := make(map[string]CaseAttribution, len(attrs))
+	for _, a := range attrs {
+		byID[a.EvalCaseID] = a
+	}
+	return byID
+}
+
+// classifyDelta assigns a DeltaClass. Pass-status transitions take priority over score movement,
+// since a pass→fail (or fail→pass) is the decision-relevant event; score up/down applies only when
+// the pass status is unchanged.
+func classifyDelta(base, cand CaseAttribution) CaseDelta {
+	delta := CaseDelta{
+		EvalCaseID:      base.EvalCaseID,
+		BaselinePassed:  base.Passed,
+		CandidatePassed: cand.Passed,
+		BaselineScore:   base.Score,
+		CandidateScore:  cand.Score,
+		ScoreDelta:      cand.Score - base.Score,
+	}
+	switch {
+	case !base.Passed && cand.Passed:
+		delta.Class = DeltaNewPass
+	case base.Passed && !cand.Passed:
+		delta.Class = DeltaNewFail
+	case delta.ScoreDelta > 0:
+		delta.Class = DeltaScoreUp
+	case delta.ScoreDelta < 0:
+		delta.Class = DeltaScoreDown
+	default:
+		delta.Class = DeltaUnchanged
+	}
+	return delta
+}
+
+// meanScore returns the mean case score of an evaluation result, 0 for an empty result.
+func meanScore(result *evaluation.EvaluationResult) float64 {
+	attrs := AttributeResult(result)
+	if len(attrs) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, a := range attrs {
+		sum += a.Score
+	}
+	return sum / float64(len(attrs))
+}
+
+// GatePolicy configures the multi-criterion acceptance gate. Each field maps to one criterion the
+// issue enumerates: validation improvement, no new hard fail, key cases protected, and a budget.
+type GatePolicy struct {
+	// MinValidationGain is the minimum validation mean-score gain (candidate − baseline) required
+	// to accept. A candidate that does not clear this bar is rejected as not-worth-it.
+	MinValidationGain float64
+	// KeyCaseIDs are business-critical validation cases that must not regress pass→fail. This is a
+	// stricter, explicitly-named subset of the no-new-hard-fail criterion.
+	KeyCaseIDs []string
+	// MaxCandidateModelCalls caps the candidate model invocations the run may spend. Zero disables
+	// the budget criterion (it then passes trivially). Non-zero enables cost/call-count budgeting.
+	MaxCandidateModelCalls int
+}
+
+// GateObservations carries the measured run facts the budget criterion needs. They are observed
+// during the run (not derivable from the evaluation results alone) and passed into the gate.
+type GateObservations struct {
+	// CandidateModelCalls is the number of candidate model invocations spent during the run.
+	CandidateModelCalls int
+}
+
+// GateCriterion is one pass/fail check within the gate, retained for the audit report.
+type GateCriterion struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Detail string `json:"detail"`
+}
+
+// GateDecision is the outcome of applying the gate to a candidate on the validation set.
+type GateDecision struct {
+	Accepted bool `json:"accepted"`
+	// Criteria are the individual checks in evaluation order.
+	Criteria []GateCriterion `json:"criteria"`
+	// Reasons summarizes, in human terms, why the candidate was accepted or rejected.
+	Reasons []string `json:"reasons"`
+	// Aggregates surfaced for the report.
+	BaselineValidationMean  float64 `json:"baselineValidationMean"`
+	CandidateValidationMean float64 `json:"candidateValidationMean"`
+	ValidationGain          float64 `json:"validationGain"`
+	// Regressions lists validation case IDs that went pass→fail.
+	Regressions []string `json:"regressions,omitempty"`
+	// KeyRegressions is the subset of Regressions that are configured key cases.
+	KeyRegressions []string `json:"keyRegressions,omitempty"`
+	// ValidationDeltas is the full per-case validation diff (for the report).
+	ValidationDeltas []CaseDelta `json:"validationDeltas"`
+}
+
+// ApplyGate applies the acceptance gate to a candidate's validation result versus the baseline's.
+// A candidate is accepted only when every enabled criterion passes:
+//   - validation_improves:  validation mean gain ≥ MinValidationGain
+//   - no_new_hard_fail:      no validation case regressed pass→fail
+//   - key_cases_protected:   no configured key case regressed pass→fail
+//   - within_budget:         candidate model calls ≤ MaxCandidateModelCalls (skipped when 0)
+//
+// no_new_hard_fail is the overfitting veto: a candidate that raises the aggregate while breaking a
+// previously-passing case is rejected even though its mean went up.
+func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evaluation.EvaluationResult, obs GateObservations) GateDecision {
+	deltas := DiffResults(baselineValidation, candidateValidation)
+	baseMean := meanScore(baselineValidation)
+	candMean := meanScore(candidateValidation)
+	gain := candMean - baseMean
+
+	keyCases := make(map[string]bool, len(policy.KeyCaseIDs))
+	for _, id := range policy.KeyCaseIDs {
+		keyCases[id] = true
+	}
+	var regressions, keyRegressions []string
+	for _, d := range deltas {
+		if d.Class == DeltaNewFail {
+			regressions = append(regressions, d.EvalCaseID)
+			if keyCases[d.EvalCaseID] {
+				keyRegressions = append(keyRegressions, d.EvalCaseID)
+			}
+		}
+	}
+
+	improves := gain >= policy.MinValidationGain
+	noHardFail := len(regressions) == 0
+	keyProtected := len(keyRegressions) == 0
+	withinBudget := policy.MaxCandidateModelCalls == 0 || obs.CandidateModelCalls <= policy.MaxCandidateModelCalls
+
+	decision := GateDecision{
+		Accepted:                improves && noHardFail && keyProtected && withinBudget,
+		BaselineValidationMean:  baseMean,
+		CandidateValidationMean: candMean,
+		ValidationGain:          gain,
+		Regressions:             regressions,
+		KeyRegressions:          keyRegressions,
+		ValidationDeltas:        deltas,
+	}
+	decision.Criteria = []GateCriterion{
+		{
+			Name:   "validation_improves",
+			Passed: improves,
+			Detail: fmt.Sprintf("validation mean %.3f → %.3f (gain %+.3f, required ≥ %.3f)", baseMean, candMean, gain, policy.MinValidationGain),
+		},
+		{
+			Name:   "no_new_hard_fail",
+			Passed: noHardFail,
+			Detail: hardFailDetail(regressions),
+		},
+		{
+			Name:   "key_cases_protected",
+			Passed: keyProtected,
+			Detail: keyProtectedDetail(policy.KeyCaseIDs, keyRegressions),
+		},
+		{
+			Name:   "within_budget",
+			Passed: withinBudget,
+			Detail: budgetDetail(policy.MaxCandidateModelCalls, obs.CandidateModelCalls),
+		},
+	}
+	decision.Reasons = buildReasons(decision)
+	return decision
+}
+
+func hardFailDetail(regressions []string) string {
+	if len(regressions) == 0 {
+		return "no validation case regressed (pass→fail)"
+	}
+	return fmt.Sprintf("%d case(s) regressed pass→fail: %v", len(regressions), regressions)
+}
+
+func keyProtectedDetail(keyCaseIDs, keyRegressions []string) string {
+	if len(keyCaseIDs) == 0 {
+		return "no key cases configured"
+	}
+	if len(keyRegressions) == 0 {
+		return fmt.Sprintf("key case(s) %v all retained pass", keyCaseIDs)
+	}
+	return fmt.Sprintf("KEY case(s) %v regressed pass→fail", keyRegressions)
+}
+
+func budgetDetail(maxCalls, calls int) string {
+	if maxCalls == 0 {
+		return fmt.Sprintf("no budget configured (candidate model calls: %d)", calls)
+	}
+	return fmt.Sprintf("candidate model calls %d (budget ≤ %d)", calls, maxCalls)
+}
+
+// buildReasons renders the human-facing accept/reject rationale from the decision.
+func buildReasons(d GateDecision) []string {
+	if d.Accepted {
+		return []string{fmt.Sprintf("accepted: validation improved %+.3f with no regressions", d.ValidationGain)}
+	}
+	reasons := make([]string, 0, len(d.Criteria))
+	if len(d.KeyRegressions) > 0 {
+		reasons = append(reasons, fmt.Sprintf("rejected: KEY validation case(s) %v regressed pass→fail (overfitting)", d.KeyRegressions))
+	} else if len(d.Regressions) > 0 {
+		reasons = append(reasons, fmt.Sprintf("rejected: validation case(s) %v regressed pass→fail", d.Regressions))
+	}
+	for _, c := range d.Criteria {
+		switch c.Name {
+		case "validation_improves":
+			if !c.Passed {
+				reasons = append(reasons, fmt.Sprintf("rejected: %s", c.Detail))
+			}
+		case "within_budget":
+			if !c.Passed {
+				reasons = append(reasons, fmt.Sprintf("rejected: %s", c.Detail))
+			}
+		}
+	}
+	if len(reasons) == 0 {
+		reasons = append(reasons, "rejected: acceptance criteria not met")
+	}
+	return reasons
+}
