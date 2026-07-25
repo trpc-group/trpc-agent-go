@@ -26,6 +26,9 @@ var (
 
 func main() {
 	flag.Parse()
+	if err := validatePositionalArgs(flag.Args()); err != nil {
+		log.Fatal(err)
+	}
 	if *timeout <= 0 {
 		log.Fatal("timeout must be greater than zero")
 	}
@@ -52,5 +55,15 @@ func main() {
 	fmt.Printf("Reports: %s, %s\n",
 		filepath.Join(*outputDir, reportJSONFile),
 		filepath.Join(*outputDir, reportMDFile),
+	)
+}
+
+func validatePositionalArgs(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf(
+		"unexpected positional argument %q; -write-prompt is a boolean flag",
+		args[0],
 	)
 }
