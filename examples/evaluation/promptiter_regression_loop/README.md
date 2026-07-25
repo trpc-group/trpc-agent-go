@@ -9,18 +9,19 @@ The runner uses a deterministic `model.Model`, a real `llmagent.LLMAgent`, nativ
 The `data` directory contains every required input:
 
 - `train.evalset.json`: three native training cases.
-- `validation.evalset.json`: three disjoint held-out cases.
+- `validation.evalset.json`: five disjoint held-out cases.
 - `metrics.json`: the native metric and deterministic evaluator binding.
 - `baseline_prompt.txt`: the initial instruction surface.
 - `promptiter.json`: seed, target surface, rounds, and search policy.
 - `regression.json`: held-out gates, critical/hard cases, evidence bound, and artifact names.
 
-The six public cases cover response mismatch, wrong tool, wrong arguments, wrong route, invalid structured output, and knowledge-recall failure. Candidate one improves both training and validation and is released. Candidate two improves the search objective but its wrong-tool remediation over-routes a critical held-out case, so the search profile advances while the released profile does not.
+The eight public cases (three training and five validation) cover response mismatch, wrong tool, wrong arguments, wrong route, invalid structured output, knowledge-recall failure, direct answers for user-supplied facts, and private-order refusal. The last two validation-only guards explicitly expect an empty tool trajectory and are both critical hard-failure cases. Candidate one improves both training and validation and is released. Candidate two improves the search objective, but its overly broad wrong-tool remediation calls `lookup_order` for both no-tool guards and over-routes the existing critical route case. The search profile advances while the released profile does not.
 
 ## Semantics
 
 - `initialProfile` is the immutable baseline. `searchProfile` advances only on a PromptIter `SearchAccepted` decision, while `releasedProfile` advances only when the independent held-out release gate accepts the candidate. The final output is always `releasedProfile`.
 - The native PromptIter engine receives only training cases. Its configured `train_all` internal validation also comes from the training domain; held-out validation results, traces, reasons, trajectories, and attributions never become loss hints or optimizer inputs.
+- An explicit source `tools: []` is preserved as `expectNoTools: true` and rendered as an empty expected trajectory, so the audit report distinguishes a no-tool oracle from an unspecified tool expectation.
 - The deterministic seed is `2003`. Candidate generation depends on the current profile, training loss hints, and that seed, so equivalent inputs reproduce the same semantic result without an external API key.
 - Release decisions use the candidate's held-out `vs_released` delta. The sample requires at least `0.05` quality gain, no new hard failure, no critical-case regression, and at most `200` cumulative model calls.
 

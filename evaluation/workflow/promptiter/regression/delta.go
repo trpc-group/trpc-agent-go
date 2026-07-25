@@ -82,6 +82,13 @@ func CalculateDelta(
 				key.caseID,
 			)
 		}
+		if beforeCase.ExpectNoTools != afterCase.ExpectNoTools {
+			return DeltaSummary{}, errorsf(
+				"case %s/%s explicit no-tool expectation changed between snapshots",
+				key.evalSetID,
+				key.caseID,
+			)
+		}
 		caseDelta, err := calculateCaseDelta(
 			beforeCase,
 			afterCase,
@@ -224,6 +231,14 @@ func validateComparisonSnapshot(
 		}
 		if strings.TrimSpace(item.CaseID) == "" {
 			return nil, errorsf("%s case at index %d has an empty id", label, i)
+		}
+		if item.ExpectNoTools && len(item.ExpectedTools) > 0 {
+			return nil, errorsf(
+				"%s case %s/%s has both an explicit no-tool expectation and expected tool calls",
+				label,
+				item.EvalSetID,
+				item.CaseID,
+			)
 		}
 	}
 	for _, expectedCaseID := range snapshot.Inventory.CaseIDs {

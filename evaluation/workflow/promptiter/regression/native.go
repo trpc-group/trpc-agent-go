@@ -548,6 +548,7 @@ func adaptNativeCase(
 		ExpectStructured: expectStructured,
 		ToolTrajectory:   invocationTools(actual),
 		ExpectedTools:    invocationTools(expected),
+		ExpectNoTools:    sourceExpectsNoTools(sourceCase),
 		Route:            route,
 		ExpectedRoute:    expectedRoute,
 		ExpectedFacts:    expectedFacts,
@@ -762,6 +763,23 @@ func invocationTools(invocations []*evalset.Invocation) []ToolCall {
 		}
 	}
 	return tools
+}
+
+func sourceExpectsNoTools(sourceCase *evalset.EvalCase) bool {
+	if sourceCase == nil {
+		return false
+	}
+	hasInvocation := false
+	for _, invocation := range sourceCase.Conversation {
+		if invocation == nil {
+			continue
+		}
+		hasInvocation = true
+		if invocation.Tools == nil || len(invocation.Tools) > 0 {
+			return false
+		}
+	}
+	return hasInvocation
 }
 
 func sourceExpectations(sourceCase *evalset.EvalCase) (bool, string, []string) {

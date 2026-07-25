@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -221,6 +222,10 @@ type orderResult struct {
 func lookupOrder(_ context.Context, arguments orderArguments) (orderResult, error) {
 	if arguments.OrderID == "" {
 		return orderResult{}, errors.New("orderId is empty")
+	}
+	if !strings.HasPrefix(arguments.OrderID, "A-") &&
+		!strings.HasPrefix(arguments.OrderID, "B-") {
+		return orderResult{OrderID: arguments.OrderID, Status: "access_denied"}, nil
 	}
 	return orderResult{OrderID: arguments.OrderID, Status: "shipped"}, nil
 }

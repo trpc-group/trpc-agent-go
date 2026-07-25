@@ -24,6 +24,7 @@ import (
 
 func TestReportJSONAndMarkdownShareCanonicalIdentity(t *testing.T) {
 	report := testReport(t)
+	report.BaselineTrain.Cases[0].ExpectNoTools = true
 	jsonData, err := RenderJSON(report)
 	require.NoError(t, err)
 	var decoded Report
@@ -33,6 +34,7 @@ func TestReportJSONAndMarkdownShareCanonicalIdentity(t *testing.T) {
 	require.Equal(t, report.RunID, decoded.RunID)
 	require.Equal(t, report.StopReason, decoded.StopReason)
 	require.Len(t, decoded.Candidates, len(report.Candidates))
+	require.True(t, decoded.BaselineTrain.Cases[0].ExpectNoTools)
 
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
@@ -46,6 +48,7 @@ func TestReportJSONAndMarkdownShareCanonicalIdentity(t *testing.T) {
 	require.Contains(t, text, report.ReleasedProfile.Prompt)
 	require.Contains(t, text, "| quality | 0.800000 |")
 	require.Contains(t, text, "Observed tools:")
+	require.Contains(t, text, "Expected tool trajectory: `[]` (explicit no-tool requirement)")
 	require.Contains(t, text, "Trace:")
 }
 
@@ -403,6 +406,15 @@ func TestRenderSuccessfulReportRejectsIncompleteOrForgedAuditBindings(t *testing
 				report.Candidates[0].Validation.Provenance.MetricPolicyHash = "forged"
 			},
 			wantError: "metric policy hash",
+		},
+		{
+			name: "conflicting no-tool expectation",
+			mutate: func(report *Report) {
+				result := &report.BaselineTrain.Cases[0]
+				result.ExpectNoTools = true
+				result.ExpectedTools = []ToolCall{{Name: "lookup"}}
+			},
+			wantError: "explicit no-tool expectation",
 		},
 		{
 			name: "candidate search parent binding",

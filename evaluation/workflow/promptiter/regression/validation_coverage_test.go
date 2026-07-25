@@ -549,7 +549,7 @@ func TestDeltaValidatorsRejectEveryMalformedMetricAndBinding(t *testing.T) {
 	require.False(t, sameStringSet([]string{"a"}, []string{"b"}))
 	require.True(t, sameStringSet([]string{"a", "b"}, []string{"b", "a"}))
 
-	for _, field := range []string{"critical", "hard", "threshold"} {
+	for _, field := range []string{"critical", "hard", "expected no tools", "threshold"} {
 		before := validSnapshot()
 		after := validSnapshot()
 		switch field {
@@ -557,6 +557,8 @@ func TestDeltaValidatorsRejectEveryMalformedMetricAndBinding(t *testing.T) {
 			after.Cases[0].Critical = true
 		case "hard":
 			after.Cases[0].HardFailure = true
+		case "expected no tools":
+			after.Cases[0].ExpectNoTools = true
 		case "threshold":
 			after.Cases[0].Metrics[0].Threshold++
 		}
@@ -2111,6 +2113,20 @@ func TestNativeEvidenceAndMetricAdaptersRejectMalformedResults(t *testing.T) {
 	require.True(t, structured)
 	require.Equal(t, "route-a", route)
 	require.Equal(t, []string{"fact-a"}, facts)
+	require.True(t, sourceExpectsNoTools(&evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			Tools: make([]*evalset.Tool, 0),
+		}},
+	}))
+	require.False(t, sourceExpectsNoTools(&evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{}},
+	}))
+	require.False(t, sourceExpectsNoTools(&evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			Tools: []*evalset.Tool{{Name: "lookup"}},
+		}},
+	}))
+	require.False(t, sourceExpectsNoTools(nil))
 	require.Equal(t, "leaf", routeLeaf("router -> branch:leaf"))
 	require.Equal(t, "", routeLeaf(""))
 
@@ -3238,6 +3254,10 @@ func TestSnapshotResponseValidationRejectsAllEvidenceContractViolations(t *testi
 		}},
 		{"case evidence limit", func(request *SnapshotRequest, snapshot *EvaluationSnapshot) {
 			snapshot.Cases[0].Trace = make([]TraceStep, request.EvidenceLimit+1)
+		}},
+		{"conflicting no-tool expectation", func(_ *SnapshotRequest, snapshot *EvaluationSnapshot) {
+			snapshot.Cases[0].ExpectNoTools = true
+			snapshot.Cases[0].ExpectedTools = []ToolCall{{Name: "lookup"}}
 		}},
 		{"unexpected metric", func(_ *SnapshotRequest, snapshot *EvaluationSnapshot) {
 			snapshot.Cases[0].Metrics[0].MetricName = "other"

@@ -155,6 +155,7 @@ type CaseResult struct {
 	ExpectStructured bool           `json:"expectStructured,omitempty"`
 	ToolTrajectory   []ToolCall     `json:"toolTrajectory,omitempty"`
 	ExpectedTools    []ToolCall     `json:"expectedTools,omitempty"`
+	ExpectNoTools    bool           `json:"expectNoTools,omitempty"`
 	Route            string         `json:"route,omitempty"`
 	ExpectedRoute    string         `json:"expectedRoute,omitempty"`
 	ExpectedFacts    []string       `json:"expectedFacts,omitempty"`

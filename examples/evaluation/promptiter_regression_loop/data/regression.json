@@ -14,10 +14,14 @@
     "maxCumulativeModelCalls": 200
   },
   "criticalCaseIds": [
-    "validation-wrong-route"
+    "validation-wrong-route",
+    "validation-direct-no-tool",
+    "validation-private-order"
   ],
   "hardFailureCaseIds": [
-    "validation-wrong-route"
+    "validation-wrong-route",
+    "validation-direct-no-tool",
+    "validation-private-order"
   ],
   "evidenceLimit": 20,
   "output": {

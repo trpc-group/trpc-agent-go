@@ -1808,6 +1808,10 @@ func writeCaseEvidence(out *strings.Builder, result *CaseResult) {
 		fmt.Fprintln(out, "Structured output:")
 		writeBoundedCodeBlock(out, result.StructuredOutput, "json", defaultMarkdownTextLimit)
 	}
+	if result.ExpectNoTools {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Expected tool trajectory: `[]` (explicit no-tool requirement)")
+	}
 	writeToolCalls(out, "Observed tools", result.ToolTrajectory)
 	writeToolCalls(out, "Expected tools", result.ExpectedTools)
 	writeTrace(out, result.Trace)

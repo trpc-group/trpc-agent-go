@@ -1432,6 +1432,12 @@ func validateSnapshotResponse(
 			len(evalCase.Trace) > request.EvidenceLimit {
 			return fmt.Errorf("case %q exceeds evidence limit %d", evalCase.CaseID, request.EvidenceLimit)
 		}
+		if evalCase.ExpectNoTools && len(evalCase.ExpectedTools) > 0 {
+			return fmt.Errorf(
+				"case %q has both an explicit no-tool expectation and expected tool calls",
+				evalCase.CaseID,
+			)
+		}
 		if snapshot.Status == EvaluationCompleted && strings.TrimSpace(evalCase.Error) != "" {
 			return fmt.Errorf(
 				"completed case %q contains operational error %q",
