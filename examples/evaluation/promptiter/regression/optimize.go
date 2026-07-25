@@ -63,10 +63,15 @@ func candidateTargetsCurrentFailures(
 	if len(config.TargetFailures) == 0 {
 		return true
 	}
-	current := summarizeFailures(currentTrain)
+	targets := make(map[failureCategory]struct{}, len(config.TargetFailures))
 	for _, category := range config.TargetFailures {
-		if current[category] > 0 {
-			return true
+		targets[category] = struct{}{}
+	}
+	for _, evalCase := range currentTrain.Cases {
+		for _, attribution := range evalCase.FailureAttributions {
+			if _, ok := targets[attribution.Category]; ok {
+				return true
+			}
 		}
 	}
 	return false
