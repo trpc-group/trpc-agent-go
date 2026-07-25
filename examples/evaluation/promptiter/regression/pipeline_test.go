@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -13,6 +14,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,6 +123,86 @@ func TestRunPipelineKeepsBaselineWhenAllCandidatesAreRejected(t *testing.T) {
 	}
 	if report.Delta.ScoreDelta != 0 {
 		t.Fatalf("all-rejected score delta = %.4f, want 0", report.Delta.ScoreDelta)
+	}
+}
+
+func TestRunPipelineTopLevelGateUsesBaselineForChainedRounds(t *testing.T) {
+	sourceConfigPath, err := filepath.Abs("data/promptiter.json")
+	if err != nil {
+		t.Fatalf("resolve config path: %v", err)
+	}
+	config, err := loadConfig(sourceConfigPath)
+	if err != nil {
+		t.Fatalf("loadConfig returned error: %v", err)
+	}
+	config.MaxRounds = 2
+	config.Candidates = []candidateConfig{
+		{
+			ID:             "lookup-only",
+			Append:         directiveLookup,
+			Reason:         "Fix lookup routing first.",
+			TargetFailures: []failureCategory{failureRoute},
+		},
+		{
+			ID:             "format-only",
+			Append:         directiveJSON,
+			Reason:         "Fix structured output second.",
+			TargetFailures: []failureCategory{failureFormat},
+		},
+	}
+	configData, err := json.Marshal(config)
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	configPath := filepath.Join(t.TempDir(), "promptiter.json")
+	if err := os.WriteFile(configPath, configData, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	report, err := runPipeline(context.Background(), pipelineOptions{
+		ConfigPath: configPath,
+		OutputDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("runPipeline returned error: %v", err)
+	}
+	if len(report.Rounds) != 2 {
+		t.Fatalf("round count = %d, want 2", len(report.Rounds))
+	}
+	for _, round := range report.Rounds {
+		if !round.Decision.Accepted {
+			t.Fatalf("round %d was rejected: %v", round.Round, round.Decision.Reasons)
+		}
+	}
+	if report.Delta.ScoreDelta != 0.5 {
+		t.Fatalf("top-level score delta = %.4f, want 0.5000", report.Delta.ScoreDelta)
+	}
+	for _, check := range report.GateDecision.Checks {
+		if check.Name == "minimum_validation_gain" {
+			if !strings.Contains(check.Detail, "gain 0.5000") {
+				t.Fatalf("top-level gate detail = %q, want baseline gain 0.5000", check.Detail)
+			}
+			return
+		}
+	}
+	t.Fatal("top-level decision has no minimum_validation_gain check")
+}
+
+func TestSummarizeFailuresCountsAllAttributions(t *testing.T) {
+	summary := evaluationSummary{
+		Cases: []caseEvaluation{{
+			FailureAttributions: []failureAttribution{
+				{Category: failureRoute},
+				{Category: failureToolCall},
+			},
+		}},
+	}
+	counts := summarizeFailures(summary)
+	if counts[failureRoute] != 1 {
+		t.Fatalf("route failure count = %d, want 1", counts[failureRoute])
+	}
+	if counts[failureToolCall] != 1 {
+		t.Fatalf("tool-call failure count = %d, want 1", counts[failureToolCall])
 	}
 }
 

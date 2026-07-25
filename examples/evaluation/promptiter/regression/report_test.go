@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -96,11 +97,45 @@ func TestRenderReportRecommendsBaselineWhenRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("renderMarkdown returned error: %v", err)
 	}
-	recommended := markdown[strings.LastIndex(markdown, "## Recommended Prompt"):]
+	recommendedIndex := strings.LastIndex(markdown, "## Recommended Prompt")
+	if recommendedIndex < 0 {
+		t.Fatalf("Markdown report has no recommended prompt section:\n%s", markdown)
+	}
+	recommended := markdown[recommendedIndex:]
 	if !strings.Contains(recommended, "safe baseline") {
 		t.Fatalf("recommended prompt does not contain baseline:\n%s", recommended)
 	}
 	if strings.Contains(recommended, "rejected candidate") {
 		t.Fatalf("recommended prompt contains rejected candidate:\n%s", recommended)
+	}
+}
+
+func TestRenderMarkdownUsesFenceLongerThanPromptBackticks(t *testing.T) {
+	prompt := "Return this example:\n```json\n{\"ok\":true}\n```"
+	report := optimizationReport{
+		SchemaVersion: "1.0",
+		Baseline:      promptEvaluation{Prompt: "baseline"},
+		Candidate:     promptEvaluation{Prompt: prompt},
+		GateDecision:  gateDecision{Accepted: true},
+	}
+	markdown, err := renderMarkdown(report)
+	if err != nil {
+		t.Fatalf("renderMarkdown returned error: %v", err)
+	}
+	expected := "````text\n" + prompt + "\n````\n"
+	if !strings.Contains(markdown, expected) {
+		t.Fatalf("recommended prompt fence is not longer than its content:\n%s", markdown)
+	}
+}
+
+func TestRenderMarkdownRejectsMissingSchemaVersion(t *testing.T) {
+	if _, err := renderMarkdown(optimizationReport{}); err == nil {
+		t.Fatal("renderMarkdown accepted an empty schema version")
+	}
+}
+
+func TestMarkdownCellEscapesTableSyntax(t *testing.T) {
+	if got, want := markdownCell("left|right\nnext"), `left\|right next`; got != want {
+		t.Fatalf("markdownCell = %q, want %q", got, want)
 	}
 }

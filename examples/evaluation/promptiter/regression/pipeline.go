@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -150,6 +151,14 @@ func runPipeline(
 	if err != nil {
 		return optimizationReport{}, fmt.Errorf("compare selected candidate to baseline: %w", err)
 	}
+	if selected.CandidateID != "baseline" {
+		selectedDecision = decideGate(
+			config.Gate,
+			baseline.Validation,
+			selected.Validation,
+			finalDelta,
+		)
+	}
 	baselineCosts := costSummary{}
 	addCost(&baselineCosts, baseline.Train.Cost)
 	addCost(&baselineCosts, baseline.Validation.Cost)
@@ -214,10 +223,9 @@ func summarizeFailures(summaries ...evaluationSummary) map[failureCategory]int {
 	counts := make(map[failureCategory]int)
 	for _, summary := range summaries {
 		for _, evalCase := range summary.Cases {
-			if len(evalCase.FailureAttributions) == 0 {
-				continue
+			for _, attribution := range evalCase.FailureAttributions {
+				counts[attribution.Category]++
 			}
-			counts[evalCase.FailureAttributions[0].Category]++
 		}
 	}
 	return counts

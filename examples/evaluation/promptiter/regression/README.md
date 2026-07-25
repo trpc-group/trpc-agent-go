@@ -39,8 +39,8 @@ go run ./promptiter/regression \
 The run completes locally in seconds and writes:
 
 ```text
-output/optimization_report.json
-output/optimization_report.md
+promptiter/regression/output/optimization_report.json
+promptiter/regression/output/optimization_report.md
 ```
 
 Use `-write-prompt=true` to replace the configured prompt source only when the
@@ -74,9 +74,10 @@ This is the example's explicit overfitting regression.
 - maximum estimated candidate cost; and
 - maximum validation tool calls.
 
-A candidate must pass all checks. Gate decisions compare against the currently
-accepted validation result, while the top-level report compares the final
-selected prompt with the original baseline.
+A candidate must pass all checks. Round gate decisions compare against the
+currently accepted validation result. The top-level gate is recomputed between
+the original baseline and final selected prompt so its reasons match the
+top-level delta and control prompt write-back.
 
 ## Deterministic Task Format
 

@@ -5,6 +5,7 @@
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
+//
 
 package main
 
@@ -155,13 +156,14 @@ func renderMarkdown(report optimizationReport) (string, error) {
 
 	fmt.Fprintln(&builder, "## Recommended Prompt")
 	fmt.Fprintln(&builder)
-	fmt.Fprintln(&builder, "```text")
 	recommendedPrompt := report.Baseline.Prompt
 	if report.GateDecision.Accepted {
 		recommendedPrompt = report.Candidate.Prompt
 	}
+	fence := markdownFence(recommendedPrompt)
+	fmt.Fprintf(&builder, "%stext\n", fence)
 	fmt.Fprintln(&builder, recommendedPrompt)
-	fmt.Fprintln(&builder, "```")
+	fmt.Fprintln(&builder, fence)
 	return builder.String(), nil
 }
 
@@ -193,4 +195,12 @@ func writeAttributionTable(builder *strings.Builder, summary attributionSummary)
 func markdownCell(value string) string {
 	value = strings.ReplaceAll(value, "|", "\\|")
 	return strings.ReplaceAll(value, "\n", " ")
+}
+
+func markdownFence(content string) string {
+	fence := "```"
+	for strings.Contains(content, fence) {
+		fence += "`"
+	}
+	return fence
 }

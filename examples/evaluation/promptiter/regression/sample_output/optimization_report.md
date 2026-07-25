@@ -40,9 +40,11 @@ Newly passed: **2**. Newly failed: **0**. Improved: **0**. Regressed: **0**.
 
 | Category | Baseline | Candidate |
 | --- | ---: | ---: |
+| final_response_mismatch | 5 | 1 |
 | format_error | 2 | 0 |
 | knowledge_recall_insufficient | 1 | 1 |
-| route_error | 2 | 0 |
+| route_error | 3 | 1 |
+| tool_call_error | 3 | 1 |
 
 ## Cost and Latency
 

@@ -31,7 +31,7 @@
       "outputCostPerMillionTokens": 0.8,
       "latencyMillis": 4
     },
-    "startedAt": "2026-07-24T03:12:56.522584067Z",
+    "startedAt": "2026-07-25T12:04:32.412573673Z",
     "durationMillis": 1
   },
   "baseline": {
@@ -894,12 +894,17 @@
   },
   "failureAttribution": {
     "baseline": {
+      "final_response_mismatch": 5,
       "format_error": 2,
       "knowledge_recall_insufficient": 1,
-      "route_error": 2
+      "route_error": 3,
+      "tool_call_error": 3
     },
     "candidate": {
-      "knowledge_recall_insufficient": 1
+      "final_response_mismatch": 1,
+      "knowledge_recall_insufficient": 1,
+      "route_error": 1,
+      "tool_call_error": 1
     }
   },
   "costLatency": {
