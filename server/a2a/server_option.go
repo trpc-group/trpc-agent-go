@@ -125,10 +125,15 @@ type defaultAuthProvider struct {
 type anonymousUserCookieMiddleware struct {
 	userIDHeader string
 	secureCookie bool
+	cookiePath   string
 }
 
 func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if userID, ok := UserIDFromContext(r.Context()); ok && strings.TrimSpace(userID) != "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if strings.TrimSpace(r.Header.Get(m.userIDHeader)) == "" {
 			userID, err := anonymousUserIDFromRequest(r)
 			if err != nil {
@@ -138,7 +143,7 @@ func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 			http.SetCookie(w, &http.Cookie{
 				Name:     anonymousUserIDCookie,
 				Value:    userID,
-				Path:     "/",
+				Path:     anonymousCookiePathForBasePath(m.cookiePath),
 				HttpOnly: true,
 				SameSite: http.SameSiteLaxMode,
 				Secure:   m.secureCookie || r.TLS != nil,
@@ -153,6 +158,10 @@ func (m anonymousUserCookieMiddleware) Wrap(next http.Handler) http.Handler {
 func (d *defaultAuthProvider) Authenticate(r *http.Request) (*auth.User, error) {
 	if r == nil {
 		return nil, errors.New("request is nil")
+	}
+	if user, ok := r.Context().Value(auth.AuthUserKey).(*auth.User); ok &&
+		user != nil && strings.TrimSpace(user.ID) != "" {
+		return user, nil
 	}
 	userID := strings.TrimSpace(r.Header.Get(d.userIDHeader))
 	if userID == "" {
@@ -208,6 +217,17 @@ func anonymousCookieSecureForAgentURL(agentURL string) bool {
 		return false
 	}
 	return strings.EqualFold(parsed.Scheme, "https")
+}
+
+func anonymousCookiePathForBasePath(basePath string) string {
+	basePath = strings.TrimSpace(basePath)
+	if basePath == "" || basePath == "/" {
+		return "/"
+	}
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	return strings.TrimRight(basePath, "/")
 }
 
 type options struct {

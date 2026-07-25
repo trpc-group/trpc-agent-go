@@ -123,13 +123,22 @@ machine-readable fields preferred on the outer metadata, mirrored into
 
 ```go
 import (
+	"context"
+	"net/http"
+	"net/http/cookiejar"
+
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
+	jar, _ := cookiejar.New(nil)
+
 	// Connect to A2A service
-	client, _ := client.NewA2AClient("http://localhost:8080/")
+	a2aClient, _ := client.NewA2AClient(
+		"http://localhost:8080/",
+		client.WithHTTPClient(&http.Client{Jar: jar}),
+	)
 
 	// Send message to Agent
 	message := protocol.NewMessage(
@@ -138,10 +147,16 @@ func main() {
 	)
 
 	// Agent will automatically process and return results
-	response, _ := client.SendMessage(context.Background(),
+	response, _ := a2aClient.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
+
+For anonymous direct protocol clients, configure an HTTP cookie jar as shown
+above. Without a trusted user ID header, the server uses an HTTP-only anonymous
+principal cookie for session continuity; a direct client without a jar receives
+a fresh anonymous principal on each call. Authenticated deployments can instead
+send a trusted user ID header such as `X-User-ID` from gateway-controlled code.
 
 ### Advanced Configuration
 

@@ -212,6 +212,23 @@ func TestDefaultAuthProvider_Authenticate(t *testing.T) {
 	}
 }
 
+func TestDefaultAuthProvider_PreservesAuthenticatedContext(t *testing.T) {
+	provider := &defaultAuthProvider{userIDHeader: serverUserIDHeader}
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set(serverUserIDHeader, "header-user")
+	req = req.WithContext(context.WithValue(
+		req.Context(),
+		auth.AuthUserKey,
+		&auth.User{ID: "custom-auth-user"},
+	))
+
+	user, err := provider.Authenticate(req)
+
+	require.NoError(t, err)
+	require.NotNil(t, user)
+	assert.Equal(t, "custom-auth-user", user.ID)
+}
+
 func TestDefaultErrorHandler(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -869,10 +886,33 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 			}
 			if assert.NotNil(t, anonymousCookie) {
 				assert.True(t, anonymousCookie.HttpOnly)
+				assert.Equal(t, "/", anonymousCookie.Path)
 				assert.Equal(t, tt.wantSecure, anonymousCookie.Secure)
 				assert.Equal(t, http.SameSiteLaxMode, anonymousCookie.SameSite)
 			}
 		})
+	}
+}
+
+func TestAnonymousUserCookieMiddleware_AuthenticatedContextBypassesCookie(t *testing.T) {
+	handler := (anonymousUserCookieMiddleware{userIDHeader: serverUserIDHeader}).Wrap(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, err := r.Cookie(anonymousUserIDCookie)
+			assert.Error(t, err)
+		}),
+	)
+	req := httptest.NewRequest(http.MethodGet, "http://example.com/test", nil)
+	req = req.WithContext(context.WithValue(
+		req.Context(),
+		auth.AuthUserKey,
+		&auth.User{ID: "custom-auth-user"},
+	))
+	rr := httptest.NewRecorder()
+
+	handler.ServeHTTP(rr, req)
+
+	for _, cookie := range rr.Result().Cookies() {
+		require.NotEqual(t, anonymousUserIDCookie, cookie.Name)
 	}
 }
 
@@ -907,6 +947,27 @@ func TestAnonymousCookieSecureForAgentURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, anonymousCookieSecureForAgentURL(tt.agentURL))
+		})
+	}
+}
+
+func TestAnonymousCookiePathForBasePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		basePath string
+		want     string
+	}{
+		{name: "empty path", basePath: "", want: "/"},
+		{name: "root path", basePath: "/", want: "/"},
+		{name: "plain path", basePath: "agents/math", want: "/agents/math"},
+		{name: "prefixed path", basePath: "/agents/math", want: "/agents/math"},
+		{name: "trailing slash", basePath: "/agents/math/", want: "/agents/math"},
+		{name: "surrounding space", basePath: " /agents/math/ ", want: "/agents/math"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, anonymousCookiePathForBasePath(tt.basePath))
 		})
 	}
 }

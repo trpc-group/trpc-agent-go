@@ -109,6 +109,12 @@ func (f requestHeaderMiddlewareFunc) Wrap(next http.Handler) http.Handler {
 	})
 }
 
+type authProviderFunc func(*http.Request) (*auth.User, error)
+
+func (f authProviderFunc) Authenticate(r *http.Request) (*auth.User, error) {
+	return f(r)
+}
+
 func (m *mockTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name:        m.name,
@@ -2229,6 +2235,216 @@ func TestA2AHTTPIdentityNormalizationRunsBeforeAnonymousCookie(t *testing.T) {
 			require.NotEqual(t, anonymousUserIDCookie, cookie.Name)
 		}
 	})
+}
+
+func TestA2AHTTPCustomAuthProviderRemainsFinalIdentityAuthority(t *testing.T) {
+	var (
+		mu     sync.Mutex
+		runs   []string
+		seenID string
+	)
+	mockRunner := &mockRunner{
+		runFunc: func(
+			_ context.Context,
+			userID string,
+			_ string,
+			_ model.Message,
+			_ ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			mu.Lock()
+			runs = append(runs, userID)
+			mu.Unlock()
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("response", "agent", &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				}}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name: "custom-auth-authority",
+			URL:  "http://placeholder.local",
+		}),
+		WithExtraA2AOptions(a2a.WithAuthProvider(authProviderFunc(func(r *http.Request) (*auth.User, error) {
+			seenID = r.Header.Get(serverUserIDHeader)
+			return &auth.User{ID: "custom-auth-user"}, nil
+		}))),
+	)
+	require.NoError(t, err)
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	a2aClient, err := a2aclient.NewA2AClient(httpSrv.URL)
+	require.NoError(t, err)
+	_, err = a2aClient.SendMessage(
+		context.Background(),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("hello")},
+		)},
+		a2aclient.WithRequestHeader(serverUserIDHeader, "spoofed-header-user"),
+	)
+	require.NoError(t, err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, []string{"custom-auth-user"}, runs)
+	assert.Equal(t, "spoofed-header-user", seenID)
+}
+
+func TestA2AHTTPAnonymousCookieIsScopedToBasePath(t *testing.T) {
+	mockRunner := &mockRunner{
+		runFunc: func(
+			_ context.Context,
+			_ string,
+			_ string,
+			_ model.Message,
+			_ ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("response", "agent", &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				}}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name: "path-scoped-anonymous-cookie",
+			URL:  "http://placeholder.local/agents/math",
+		}),
+	)
+	require.NoError(t, err)
+
+	var outsidePathCookie string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/other", func(w http.ResponseWriter, r *http.Request) {
+		if cookie, cookieErr := r.Cookie(anonymousUserIDCookie); cookieErr == nil {
+			outsidePathCookie = cookie.Value
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.Handle("/", srv.Handler())
+	httpSrv := httptest.NewServer(mux)
+	defer httpSrv.Close()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	httpClient := &http.Client{Jar: jar}
+	a2aClient, err := a2aclient.NewA2AClient(
+		httpSrv.URL+"/agents/math",
+		a2aclient.WithHTTPClient(httpClient),
+	)
+	require.NoError(t, err)
+	_, err = a2aClient.SendMessage(
+		context.Background(),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("hello")},
+		)},
+	)
+	require.NoError(t, err)
+
+	agentURL := mustParseTestURL(t, httpSrv.URL+"/agents/math/")
+	var anonymousCookie *http.Cookie
+	for _, cookie := range jar.Cookies(agentURL) {
+		if cookie.Name == anonymousUserIDCookie {
+			anonymousCookie = cookie
+			break
+		}
+	}
+	require.NotNil(t, anonymousCookie)
+	require.True(t, isAnonymousUserID(anonymousCookie.Value))
+
+	resp, err := httpClient.Get(httpSrv.URL + "/other")
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	assert.Empty(t, outsidePathCookie)
+}
+
+func TestA2AHTTPDirectClientCookieJarProvidesAnonymousContinuity(t *testing.T) {
+	var (
+		mu   sync.Mutex
+		runs []string
+	)
+	mockRunner := &mockRunner{
+		runFunc: func(
+			_ context.Context,
+			userID string,
+			_ string,
+			_ model.Message,
+			_ ...agent.RunOption,
+		) (<-chan *event.Event, error) {
+			mu.Lock()
+			runs = append(runs, userID)
+			mu.Unlock()
+			ch := make(chan *event.Event, 1)
+			ch <- event.NewResponseEvent("response", "agent", &model.Response{
+				Done: true,
+				Choices: []model.Choice{{Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "ok",
+				}}},
+			})
+			close(ch)
+			return ch, nil
+		},
+	}
+	srv, err := New(
+		WithRunner(mockRunner),
+		WithAgentCard(a2a.AgentCard{
+			Name: "direct-client-cookie-continuity",
+			URL:  "http://placeholder.local",
+		}),
+	)
+	require.NoError(t, err)
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	a2aClient, err := a2aclient.NewA2AClient(
+		httpSrv.URL,
+		a2aclient.WithHTTPClient(&http.Client{Jar: jar}),
+	)
+	require.NoError(t, err)
+	contextID := "direct-client-context"
+	send := func(messageID string) {
+		msg := protocol.NewMessageWithContext(
+			protocol.MessageRoleUser,
+			[]protocol.Part{protocol.NewTextPart("hello")},
+			nil,
+			&contextID,
+		)
+		msg.MessageID = messageID
+		_, sendErr := a2aClient.SendMessage(
+			context.Background(),
+			protocol.SendMessageParams{Message: msg},
+		)
+		require.NoError(t, sendErr)
+	}
+	send("first")
+	send("second")
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.Len(t, runs, 2)
+	require.True(t, isAnonymousUserID(runs[0]))
+	assert.Equal(t, runs[0], runs[1])
 }
 
 func mustParseTestURL(t *testing.T, rawURL string) *url.URL {

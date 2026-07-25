@@ -224,6 +224,7 @@ func buildA2AServer(options *options) (*a2a.A2AServer, error) {
 			secureCookie: anonymousCookieSecureForAgentURL(
 				agentCard.URL,
 			),
+			cookiePath: basePath,
 		}),
 		a2a.WithAuthProvider(&defaultAuthProvider{userIDHeader: userIDHeader}),
 	)
