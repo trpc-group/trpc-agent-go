@@ -55,15 +55,23 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 					files = append(files, *cur)
 					cur = nil
 				}
-			case strings.HasPrefix(line, "--- ") && curHunk == nil:
+			case strings.HasPrefix(line, "--- ") && (curHunk == nil || nextLineStartsWith(reader, "+++ ")):
+				// New file header. A concatenated diff without `diff --git` reaches
+				// here with a hunk still open, so flush it (and the previous file)
+				// before starting this one. The `+++ ` lookahead distinguishes a
+				// real header from a removed line whose content starts with "--- ".
+				if curHunk != nil {
+					cur.Hunks = append(cur.Hunks, *curHunk)
+					curHunk = nil
+				}
 				if cur != nil {
 					files = append(files, *cur)
 				}
-				oldPath := unquoteGitPath(strings.TrimPrefix(line, "--- "))
+				oldPath := unquoteGitPath(stripDiffTimestamp(strings.TrimPrefix(line, "--- ")))
 				oldPath = strings.TrimPrefix(oldPath, "a/")
 				cur = &FileDiff{OldPath: oldPath}
 			case strings.HasPrefix(line, "+++ ") && cur != nil && curHunk == nil:
-				newPath := unquoteGitPath(strings.TrimPrefix(line, "+++ "))
+				newPath := unquoteGitPath(stripDiffTimestamp(strings.TrimPrefix(line, "+++ ")))
 				newPath = strings.TrimPrefix(newPath, "b/")
 				cur.NewPath = newPath
 			case strings.HasPrefix(line, "@@ ") && cur != nil:
@@ -90,6 +98,23 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 		files = append(files, *cur)
 	}
 	return files, nil
+}
+
+// nextLineStartsWith reports whether the next unread line begins with prefix,
+// without consuming input. Used to pair a "--- " header with its "+++ " partner.
+func nextLineStartsWith(reader *bufio.Reader, prefix string) bool {
+	b, _ := reader.Peek(len(prefix))
+	return string(b) == prefix
+}
+
+// stripDiffTimestamp removes the tab-separated timestamp that traditional
+// `diff -u` appends to a header path (e.g. "foo.go\t2024-01-01 12:00:00 +0000").
+// Git C-quotes any literal tab inside a path, so the first tab is the separator.
+func stripDiffTimestamp(s string) string {
+	if i := strings.IndexByte(s, '\t'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // unquoteGitPath decodes a Git C-quoted header path. Git wraps paths containing

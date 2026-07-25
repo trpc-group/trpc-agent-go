@@ -42,7 +42,7 @@ var (
 	flagDiffFile = flag.String("diff-file", "", "Path to a unified diff file to review")
 	flagRepoPath = flag.String("repo-path", "", "Path to a git repo; runs 'git diff HEAD' to obtain the diff")
 	flagDB       = flag.String("db", "review.db", "Path to the SQLite database file")
-	flagDryRun   = flag.Bool("dry-run", false, "Run without a sandbox executor (rule-only mode)")
+	flagDryRun   = flag.Bool("dry-run", false, "Skip running go vet locally; report static-rule findings only")
 	flagOut      = flag.String("out", ".", "Directory to write review_report.json and review_report.md")
 )
 
@@ -51,6 +51,12 @@ func main() {
 
 	if *flagDiffFile == "" && *flagRepoPath == "" {
 		log.Fatal("provide --diff-file or --repo-path")
+	}
+
+	// Validate the output directory before any database state is written, so an
+	// invalid or unwritable path fails fast instead of after persistence.
+	if err := os.MkdirAll(*flagOut, 0o755); err != nil {
+		log.Fatalf("create out dir: %v", err)
 	}
 
 	start := time.Now()
@@ -85,7 +91,7 @@ func main() {
 
 	if !*flagDryRun {
 		var vetFindings []rules.Finding
-		sandboxDuration, toolCalls, vetFindings = runSandbox(taskID, db, diffs)
+		sandboxDuration, toolCalls, vetFindings = runLocalVet(taskID, db, diffs)
 		findings = append(findings, vetFindings...)
 	}
 
@@ -135,9 +141,6 @@ func main() {
 		log.Printf("finish task: %v", err)
 	}
 
-	if err := os.MkdirAll(*flagOut, 0o755); err != nil {
-		log.Fatalf("create out dir: %v", err)
-	}
 	jsonPath := filepath.Join(*flagOut, "review_report.json")
 	mdPath := filepath.Join(*flagOut, "review_report.md")
 	if err := os.WriteFile(jsonPath, []byte(jsonBody), 0o644); err != nil {
@@ -169,9 +172,10 @@ func loadDiff() (string, error) {
 	return string(out), err
 }
 
-// runSandbox runs go vet on changed packages and records sandbox runs.
-// Container runtime is preferred; local is the fallback per issue requirements.
-func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (durationMs int64, toolCalls int, findings []rules.Finding) {
+// runLocalVet runs `go vet` on each changed package in the local toolchain (no
+// container isolation) with a per-package timeout, and records each run. Enabled
+// unless --dry-run is set.
+func runLocalVet(taskID string, db *storage.DB, diffs []parser.FileDiff) (durationMs int64, toolCalls int, findings []rules.Finding) {
 	pkgs := changedGoPackages(diffs)
 	if len(pkgs) == 0 {
 		return 0, 0, nil
@@ -181,7 +185,7 @@ func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (duratio
 	repoPath := *flagRepoPath
 	if repoPath == "" {
 		// Without an explicit repo path we cannot vet the right module.
-		log.Printf("skipping sandbox: --repo-path required for go vet")
+		log.Printf("skipping go vet: --repo-path required")
 		return 0, 0, nil
 	}
 
@@ -218,22 +222,46 @@ func runSandbox(taskID string, db *storage.DB, diffs []parser.FileDiff) (duratio
 			log.Printf("insert sandbox run: %v", err)
 		}
 
-		// A non-zero vet exit must fail the review, not sit silently in the DB.
-		if exitCode > 0 {
-			findings = append(findings, rules.Finding{
-				Severity:       rules.SeverityHigh,
-				Category:       rules.CatVet,
-				File:           pkg,
-				Title:          "go vet reported issues",
-				Evidence:       truncate(strings.TrimSpace(string(out)), 500),
-				Recommendation: "Resolve the go vet diagnostics before merging.",
-				Confidence:     "high",
-				Source:         "vet",
-				RuleID:         "VET-001",
-			})
+		if f := vetFinding(pkg, exitCode, out); f != nil {
+			findings = append(findings, *f)
 		}
 	}
 	return time.Since(start).Milliseconds(), toolCalls, findings
+}
+
+// vetFinding maps a `go vet` outcome for pkg to a finding, or nil when it passed.
+// A positive exit means vet reported issues; a negative exit means it never
+// completed (startup failure or timeout/signal kill), leaving the package
+// unverified rather than clean. Both must surface, not sit silently in the DB.
+func vetFinding(pkg string, exitCode int, out []byte) *rules.Finding {
+	switch {
+	case exitCode > 0:
+		return &rules.Finding{
+			Severity:       rules.SeverityHigh,
+			Category:       rules.CatVet,
+			File:           pkg,
+			Title:          "go vet reported issues",
+			Evidence:       truncate(strings.TrimSpace(string(out)), 500),
+			Recommendation: "Resolve the go vet diagnostics before merging.",
+			Confidence:     "high",
+			Source:         "vet",
+			RuleID:         "VET-001",
+		}
+	case exitCode < 0:
+		return &rules.Finding{
+			Severity:       rules.SeverityMedium,
+			Category:       rules.CatVet,
+			File:           pkg,
+			Title:          "go vet did not complete",
+			Evidence:       truncate(strings.TrimSpace(string(out)), 500),
+			Recommendation: "Ensure the Go toolchain is available and the package builds within the timeout.",
+			Confidence:     "high",
+			Source:         "vet",
+			RuleID:         "VET-002",
+		}
+	default:
+		return nil
+	}
 }
 
 // moduleRootAndTarget returns the module root that owns pkg (the nearest ancestor

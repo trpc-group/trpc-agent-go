@@ -60,12 +60,14 @@ type dedupeKey struct {
 	ruleID string
 }
 
-// Rule inspects diff hunks and appends any findings.
-type Rule func(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding)
+// rule inspects diff hunks and appends any findings. It is unexported because
+// its signature depends on the unexported dedupeKey, so it cannot be implemented
+// or invoked from outside this package.
+type rule func(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding)
 
-// All returns the full set of static rules.
-func All() []Rule {
-	return []Rule{
+// all returns the full set of static rules.
+func all() []rule {
+	return []rule{
 		goroutineLeakRule,
 		contextLeakRule,
 		resourceLeakRule,
@@ -88,7 +90,7 @@ func All() []Rule {
 func Run(diffs []parser.FileDiff) []Finding {
 	seen := map[dedupeKey]struct{}{}
 	var findings []Finding
-	rules := All()
+	rules := all()
 	for _, fd := range diffs {
 		file := fd.NewPath
 		if file == "" {
@@ -183,20 +185,30 @@ func contextLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedu
 
 var reResourceOpen = regexp.MustCompile(`\bos\.Open\b|\bos\.Create\b|\bhttp\.Get\b|\bnet\.Dial\b|\bos\.OpenFile\b|\bsql\.Open\b`)
 
+// reResourceVar captures the variable a resource is opened into, e.g. `f` in
+// `f, _ := os.Open(...)`, so suppression can require that exact variable's Close.
+var reResourceVar = regexp.MustCompile(`^\s*(\w+)\s*(?:,\s*\w+\s*)*:=`)
+
 // Only a deferred Close mitigates the leak; an unrelated defer must not suppress it.
 var reDeferClose = regexp.MustCompile(`\bdefer\b[^\n]*\.Close\(\)`)
 
 func resourceLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
+	// A valid close may sit on an unchanged context line, so inspect the whole
+	// hunk (added + context, minus removed lines) rather than only added lines.
+	scope := hunkScope(hunk)
 	for i, l := range added {
 		if !reResourceOpen.MatchString(l) {
 			continue
 		}
-		window := added[i:]
-		if len(window) > 6 {
-			window = window[:6]
-		}
-		if reDeferClose.MatchString(strings.Join(window, "\n")) {
+		if m := reResourceVar.FindStringSubmatch(l); m != nil {
+			// Suppress only when this specific resource is deferred-closed; another
+			// resource's Close must not hide this one's leak.
+			closed := regexp.MustCompile(`\bdefer\b[^\n]*\b` + regexp.QuoteMeta(m[1]) + `\.Close\(\)`)
+			if closed.MatchString(scope) {
+				continue
+			}
+		} else if reDeferClose.MatchString(scope) {
 			continue
 		}
 		emit(out, seen, Finding{
@@ -212,6 +224,19 @@ func resourceLeakRule(file string, hunk parser.Hunk, startLine int, seen map[ded
 			RuleID:         "RL-001",
 		})
 	}
+}
+
+// hunkScope joins a hunk's added and unchanged context lines, dropping removed
+// lines, which is where a still-valid deferred close would appear.
+func hunkScope(hunk parser.Hunk) string {
+	lines := make([]string, 0, len(hunk.Lines))
+	for _, l := range hunk.Lines {
+		if strings.HasPrefix(l, "-") {
+			continue
+		}
+		lines = append(lines, l)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // RL-002: HTTP response body not closed after http.Get/Post/Do.
@@ -253,6 +278,11 @@ func errorHandlingRule(file string, hunk parser.Hunk, startLine int, seen map[de
 	added, lineNums := hunk.AddedLinesNumbered()
 	for i, l := range added {
 		if !reErrAssign.MatchString(l) {
+			continue
+		}
+		// Same-line forms like `if err := f(); err != nil { ... }` already handle
+		// the error on the assignment line itself.
+		if reErrCheck.MatchString(l) {
 			continue
 		}
 		after := added[i+1:]

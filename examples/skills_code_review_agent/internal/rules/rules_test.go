@@ -80,3 +80,34 @@ func TestContextMisuseFromContextLine(t *testing.T) {
 		t.Error("CC-001 should fire when the ctx signature is an unchanged context line")
 	}
 }
+
+// RL-001 must bind to the opened resource: another resource's Close must not
+// suppress it, but a close on an unchanged context line must.
+func TestResourceLeakBindsVariable(t *testing.T) {
+	otherResource := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,3 @@\n" +
+		"+\tf, _ := os.Open(\"x\")\n" +
+		"+\tdefer g.Close()\n" +
+		"+\t_ = f\n"
+	if !hasRule(findingsFor(t, otherResource), "RL-001") {
+		t.Error("another resource's Close should not suppress this resource's RL-001")
+	}
+
+	contextClose := "--- a/x.go\n+++ b/x.go\n@@ -1,2 +1,3 @@\n" +
+		"+\tf, _ := os.Open(\"x\")\n" +
+		" \tdefer f.Close()\n" +
+		" \t_ = f\n"
+	if hasRule(findingsFor(t, contextClose), "RL-001") {
+		t.Error("a deferred Close on an unchanged context line should suppress RL-001")
+	}
+}
+
+// EH-001 must not fire when the error is checked on the assignment line itself.
+func TestErrorHandlingSameLineCheck(t *testing.T) {
+	diff := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,3 @@\n" +
+		"+\tif err := doThing(); err != nil {\n" +
+		"+\t\treturn fmt.Errorf(\"do: %w\", err)\n" +
+		"+\t}\n"
+	if hasRule(findingsFor(t, diff), "EH-001") {
+		t.Error("same-line `if err := ...; err != nil` should not trigger EH-001")
+	}
+}

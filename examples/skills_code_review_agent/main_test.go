@@ -309,3 +309,46 @@ func countByRuleID(findings []rules.Finding, ruleID string) int {
 	}
 	return n
 }
+
+// go vet must run from the nearest enclosing module, not the repo root.
+func TestModuleRootAndTargetNestedModule(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module outer\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(repo, "examples", "foo")
+	if err := os.MkdirAll(filepath.Join(nested, "internal", "bar"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "go.mod"), []byte("module foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dir, target := moduleRootAndTarget(repo, filepath.Join("examples", "foo", "internal", "bar"))
+	if dir != nested {
+		t.Errorf("module root = %q, want %q", dir, nested)
+	}
+	if target != "./internal/bar/..." {
+		t.Errorf("target = %q, want ./internal/bar/...", target)
+	}
+
+	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if dir, target := moduleRootAndTarget(repo, "pkg"); dir != repo || target != "./pkg/..." {
+		t.Errorf("repo-level pkg: got (%q, %q), want (%q, ./pkg/...)", dir, target, repo)
+	}
+}
+
+// A failed or killed vet run (exit -1) must surface as a finding, not pass silently.
+func TestVetFindingFailurePaths(t *testing.T) {
+	if f := vetFinding("pkg", 0, nil); f != nil {
+		t.Errorf("clean vet should produce no finding, got %+v", f)
+	}
+	if f := vetFinding("pkg", 1, []byte("vet: issue")); f == nil || f.RuleID != "VET-001" {
+		t.Errorf("nonzero vet exit should produce VET-001, got %+v", f)
+	}
+	if f := vetFinding("pkg", -1, []byte(`exec: "go": not found`)); f == nil || f.RuleID != "VET-002" {
+		t.Errorf("failed/timeout vet (exit -1) should produce VET-002, got %+v", f)
+	}
+}

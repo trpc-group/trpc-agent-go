@@ -14,6 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -27,16 +28,41 @@ type DB struct {
 // Open creates or opens a SQLite database at path and initialises the schema.
 func Open(path string) (*DB, error) {
 	// modernc's driver applies PRAGMAs through _pragma, not _journal_mode.
-	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	conn, err := sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 	db := &DB{conn: conn}
+	if err := db.verifyPragmas(); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if err := db.init(); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+// verifyPragmas confirms the connection applied the PRAGMAs the DSN requested;
+// modernc silently ignores parameters it does not recognise, so the declared
+// WAL mode and foreign-key enforcement must be checked rather than assumed.
+func (db *DB) verifyPragmas() error {
+	var journalMode string
+	if err := db.conn.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		return fmt.Errorf("read journal_mode: %w", err)
+	}
+	if !strings.EqualFold(journalMode, "wal") {
+		return fmt.Errorf("journal_mode not applied: got %q, want wal", journalMode)
+	}
+	var foreignKeys int
+	if err := db.conn.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("read foreign_keys: %w", err)
+	}
+	if foreignKeys != 1 {
+		return fmt.Errorf("foreign_keys not enabled: got %d, want 1", foreignKeys)
+	}
+	return nil
 }
 
 // Close releases the connection.
