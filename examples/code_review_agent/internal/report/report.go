@@ -49,27 +49,31 @@ const (
 // reports carry the context reviewers need without opening the diff.
 // Borrowed from competitor PR #2090.
 type PRMetadata struct {
-	Title  string
-	Author string
-	Branch string
+	Title  string `json:"title,omitempty"`
+	Author string `json:"author,omitempty"`
+	Branch string `json:"branch,omitempty"`
 }
 
 // ReportData is the aggregated, renderable output of a single review task.
+//
+// JSON field names are snake_case so machine consumers (scripts, CI jq
+// queries, the SQLite artifact path) can rely on a stable contract. Go
+// field names remain MixedCaps for idiomatic in-process use.
 type ReportData struct {
-	TaskID              string
-	Conclusion          Conclusion
-	GeneratedAt         string
-	PRMetadata          PRMetadata
-	Review              *review.Report
-	SandboxRuns         []sandbox.RunResult
-	PermissionDecisions []store.PermissionDecision
-	Artifacts           []store.Artifact
-	Metrics             telemetry.Summary
-	SeverityStats       map[string]int // severity -> count
-	TotalFindings       int
-	TotalWarnings       int
-	NeedsHumanReview    int
-	PermissionBlocked   int
+	TaskID              string                     `json:"task_id"`
+	Conclusion          Conclusion                 `json:"conclusion"`
+	GeneratedAt         string                     `json:"generated_at"`
+	PRMetadata          PRMetadata                 `json:"pr_metadata"`
+	Review              *review.Report             `json:"review,omitempty"`
+	SandboxRuns         []sandbox.RunResult        `json:"sandbox_runs,omitempty"`
+	PermissionDecisions []store.PermissionDecision `json:"permission_decisions,omitempty"`
+	Artifacts           []store.Artifact           `json:"artifacts,omitempty"`
+	Metrics             telemetry.Summary          `json:"metrics"`
+	SeverityStats       map[string]int             `json:"severity_stats"`
+	TotalFindings       int                        `json:"total_findings"`
+	TotalWarnings       int                        `json:"total_warnings"`
+	NeedsHumanReview    int                        `json:"needs_human_review"`
+	PermissionBlocked   int                        `json:"permission_blocked"`
 }
 
 // severityOrder defines the display rank of each severity (lower sorts first).

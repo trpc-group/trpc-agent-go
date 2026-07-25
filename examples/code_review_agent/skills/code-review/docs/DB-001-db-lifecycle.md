@@ -51,6 +51,9 @@ func run(dsn string) error {
 - Long-lived application singletons where `db.Close()` is intentionally called
   only during graceful shutdown are flagged; suppress by routing the handle
   through a lifecycle manager and adding a comment.
-- Test helpers that open an in-memory DB and close it in a `t.Cleanup` may be
-  flagged if the cleanup is registered indirectly; prefer an explicit
-  `defer db.Close()` for clarity.
+- Test helpers that open an in-memory DB and return `*sql.DB` to the caller
+  should register cleanup with `t.Cleanup(func() { _ = db.Close() })` on the
+  owning `*testing.T`. Do **not** `defer db.Close()` inside a reusable helper
+  that returns the handle — that closes the DB before the caller finishes
+  using it. Prefer an explicit `t.Cleanup` at the ownership site so the
+  lifecycle stays visible to the rule engine and to readers.

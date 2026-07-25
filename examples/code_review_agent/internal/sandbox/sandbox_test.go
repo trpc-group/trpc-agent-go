@@ -13,6 +13,8 @@ package sandbox
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -221,5 +223,99 @@ func TestBuildSandboxEnv_NoHostLeak(t *testing.T) {
 	}
 	if env["GOPATH"] != filepath.Join(ws.Path, ".gopath") {
 		t.Fatalf("GOPATH = %q, want workspace-local", env["GOPATH"])
+	}
+}
+
+// errRunner returns a RunProgram infrastructure error carrying a secret and a
+// large payload so the Run error path can be regression-tested.
+type errRunner struct {
+	err error
+	res codeexecutor.RunResult
+}
+
+func (r *errRunner) RunProgram(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	spec codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return r.res, r.err
+}
+
+// TestRun_InfrastructureErrorRedactedAndTruncated verifies that the Run path
+// which classifies runner infrastructure errors still redacts secrets and
+// respects MaxStderrBytes before returning/persisting stderr.
+func TestRun_InfrastructureErrorRedactedAndTruncated(t *testing.T) {
+	const max = 64
+	secret := "password=super-secret-value-12345"
+	// Build an error message larger than max that also embeds a secret.
+	msg := secret + " " + strings.Repeat("X", 512)
+	eng := &mockEngine{
+		caps: codeexecutor.Capabilities{SupportsCleanEnv: true},
+		runner: &errRunner{
+			err: errors.New(msg),
+			res: codeexecutor.RunResult{Duration: 12 * time.Millisecond},
+		},
+	}
+	ex := &Executor{
+		eng: eng,
+		cfg: Config{
+			Timeout:        time.Second,
+			MaxStdoutBytes: max,
+			MaxStderrBytes: max,
+		},
+	}
+
+	res, err := ex.Run(
+		context.Background(),
+		codeexecutor.Workspace{ID: "mock", Path: t.TempDir()},
+		RunSpec{Cmd: "go", Args: []string{"test", "./..."}},
+	)
+	if err != nil {
+		t.Fatalf("Run returned unexpected error: %v", err)
+	}
+	if res.Status != StatusFailed {
+		t.Fatalf("status = %q, want %q", res.Status, StatusFailed)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1", res.ExitCode)
+	}
+	if !res.Truncated {
+		t.Fatal("Truncated = false, want true for oversized infrastructure error")
+	}
+	if int64(len(res.Stderr)) > max {
+		t.Fatalf("stderr len = %d, want <= %d", len(res.Stderr), max)
+	}
+	if strings.Contains(string(res.Stderr), "super-secret-value-12345") {
+		t.Fatalf("stderr still contains plaintext secret: %q", res.Stderr)
+	}
+	if !strings.Contains(string(res.Stderr), "[REDACTED:") {
+		t.Fatalf("stderr missing redaction marker: %q", res.Stderr)
+	}
+}
+
+// TestDefaultContainerImageIsGoBookworm guards the default image contract:
+// the container backend must start from a Go bookworm image (not python), and
+// buildEngine must skip the python3 probe so init succeeds without python3.
+func TestDefaultContainerImageIsGoBookworm(t *testing.T) {
+	if !strings.HasPrefix(defaultContainerImage, "golang:") {
+		t.Fatalf("defaultContainerImage = %q, want golang:*", defaultContainerImage)
+	}
+	if !strings.Contains(defaultContainerImage, "bookworm") {
+		t.Fatalf("defaultContainerImage = %q, want *bookworm*", defaultContainerImage)
+	}
+}
+
+// TestBuildEngine_ContainerWiresSkipPythonVerification is a source-level
+// contract check: without WithSkipPythonVerification(true), containerexec.New
+// probes for python3 and the default golang image fails at init. We cannot
+// call containerexec.New here without Docker, so assert the call site exists
+// in this package's source.
+func TestBuildEngine_ContainerWiresSkipPythonVerification(t *testing.T) {
+	src, err := os.ReadFile("sandbox.go")
+	if err != nil {
+		t.Fatalf("read sandbox.go: %v", err)
+	}
+	if !strings.Contains(string(src), "WithSkipPythonVerification(true)") {
+		t.Fatal("buildEngine container path missing WithSkipPythonVerification(true)")
 	}
 }

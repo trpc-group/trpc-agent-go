@@ -11,9 +11,17 @@
 
 Detects contexts created with `context.WithCancel`, `context.WithTimeout` or
 `context.WithDeadline` whose cancel function is not scheduled for execution
-via `defer`. Failing to call cancel leaks the timer and the goroutine
-bookkeeping the context package maintains, eventually exhausting memory in
-long-running services.
+via `defer`.
+
+Failing to call cancel retains context-package bookkeeping for the child
+context tree. The resource cost differs by constructor:
+
+- `context.WithCancel` retains cancellation bookkeeping (no timer).
+- `context.WithTimeout` / `context.WithDeadline` additionally retain timer
+  resources until the deadline fires or cancel is called.
+
+In long-running services, unreclaimed cancel funcs accumulate and can exhaust
+memory. Always `defer cancel()` immediately after creation.
 
 ## Evidence Example
 

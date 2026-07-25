@@ -100,10 +100,13 @@ const (
 	// is empty. It must ship a Go toolchain so `go vet` and `go test` work
 	// out of the box. staticcheck is NOT pre-installed here — reviewers
 	// who need staticcheck should build the project's Dockerfile (which
-	// bakes staticcheck in) and pass --container-base-image. The container
-	// backend defaults to python:3.9-slim, which has no Go toolchain, so
-	// overriding is required for the sandbox to be useful.
-	defaultContainerImage = "golang:1.25-bookworm"
+	// bakes staticcheck in) and pass --container-base-image.
+	//
+	// The stock container CodeExecutor defaults to python:3.9-slim and
+	// probes for python3 at init. This image has no python3, so buildEngine
+	// always pairs it with containerexec.WithSkipPythonVerification(true).
+	// Align the tag with the Dockerfile runtime stage where practical.
+	defaultContainerImage = "golang:1.23-bookworm"
 
 	// repoStageDir is the workspace-relative location the repository is
 	// staged into. Keeping it in a subdirectory avoids colliding with the
@@ -147,7 +150,7 @@ type Config struct {
 	MaxStdoutBytes int64
 	MaxStderrBytes int64
 	// ContainerBaseImage overrides the Docker image used by the container
-	// backend. When empty, defaultContainerImage (golang:1.25-bookworm)
+	// backend. When empty, defaultContainerImage (golang:1.23-bookworm)
 	// is used so `go vet`/`go test` work without a custom build. Pass the
 	// project's code-review-sandbox:latest image (built from the
 	// Dockerfile) to also get staticcheck. Ignored for e2b/local.
@@ -238,6 +241,10 @@ func buildEngine(cfg Config) (codeexecutor.Engine, io.Closer, error) {
 				Cmd:        []string{"tail", "-f", "/dev/null"},
 				Tty:        true,
 			}),
+			// Review commands are go/staticcheck/sh only. Skip the
+			// python3 init probe so the default golang image (and the
+			// project Dockerfile image) can start without python3.
+			containerexec.WithSkipPythonVerification(true),
 		}
 		ce, err := containerexec.New(copts...)
 		if err != nil {
@@ -366,14 +373,22 @@ func (e *Executor) Run(
 	if err != nil {
 		// Infrastructure error (not a normal non-zero exit). Classify
 		// without panicking so the pipeline still records a result.
+		// Redact and cap the error text the same way as normal stderr so
+		// credentials or oversized backend messages are not persisted
+		// verbatim into sandbox_run.stderr.
 		status := StatusFailed
 		if res.TimedOut {
 			status = StatusTimeout
 		}
+		stderrBytes, _ := redact.TextBytes([]byte(err.Error()))
+		stderr, errTrunc := limitedRead(bytes.NewReader(stderrBytes), e.cfg.MaxStderrBytes)
 		return RunResult{
-			Status:   status,
-			ExitCode: -1,
-			Stderr:   []byte(err.Error()),
+			Status:    status,
+			ExitCode:  -1,
+			Duration:  res.Duration,
+			TimedOut:  res.TimedOut,
+			Truncated: errTrunc,
+			Stderr:    stderr,
 		}, nil
 	}
 

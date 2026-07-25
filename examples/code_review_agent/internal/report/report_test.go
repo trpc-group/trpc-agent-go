@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -449,4 +450,57 @@ func TestSeveritySortStability(t *testing.T) {
 		t.Errorf("expected First before Second (stable sort); first=%d second=%d",
 			idxFirst, idxSecond)
 	}
+}
+
+// TestJSONSnakeCaseContract locks the machine-readable JSON field names used
+// by scripts/run_all_fixtures.sh and CI jq queries. Changing these tags is a
+// breaking contract change for external consumers.
+func TestJSONSnakeCaseContract(t *testing.T) {
+	rev := &review.Report{TaskID: "task-snake"}
+	rd := Build("task-snake", rev, nil, nil, nil, telemetry.Summary{}, PRMetadata{})
+	dir := t.TempDir()
+	jsonPath, err := rd.ToJSON(dir)
+	if err != nil {
+		t.Fatalf("ToJSON: %v", err)
+	}
+	raw, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal map: %v", err)
+	}
+	for _, key := range []string{
+		"conclusion",
+		"total_findings",
+		"total_warnings",
+		"needs_human_review",
+		"permission_blocked",
+		"task_id",
+		"generated_at",
+		"severity_stats",
+	} {
+		if _, ok := m[key]; !ok {
+			t.Errorf("JSON missing required key %q; keys=%v", key, keysOf(m))
+		}
+	}
+	// Guard against accidental PascalCase regression of the script fields.
+	for _, bad := range []string{
+		"Conclusion", "TotalFindings", "TotalWarnings",
+		"NeedsHumanReview", "PermissionBlocked",
+	} {
+		if _, ok := m[bad]; ok {
+			t.Errorf("JSON still emits PascalCase key %q", bad)
+		}
+	}
+}
+
+func keysOf(m map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

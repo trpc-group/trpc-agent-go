@@ -552,12 +552,23 @@ func runSandboxChecks(ctx context.Context, opts *pipelineOpts, taskID string, po
 func handleSandboxInitFailure(opts *pipelineOpts, err error) ([]sandboxRunRecord, []store.PermissionDecision, error) {
 	if opts.dryRun {
 		log.Printf("warning: sandbox unavailable in dry-run, skipping: %v", err)
+		// Same contract as sandbox.Run infrastructure errors: redact before
+		// persisting so init failures with credential-bearing details are not
+		// stored verbatim in sandbox_run.stderr / the JSON report.
+		stderr, _ := redact.TextBytes([]byte(err.Error()))
+		const maxInitStderr = 1 << 20 // match sandbox.DefaultMaxStderrBytes
+		truncated := false
+		if len(stderr) > maxInitStderr {
+			stderr = stderr[:maxInitStderr]
+			truncated = true
+		}
 		records := []sandboxRunRecord{{
 			command: "sandbox-init",
 			result: sandbox.RunResult{
-				Status:   sandbox.StatusSkipped,
-				ExitCode: 0,
-				Stderr:   []byte(err.Error()),
+				Status:    sandbox.StatusSkipped,
+				ExitCode:  0,
+				Truncated: truncated,
+				Stderr:    stderr,
 			},
 		}}
 		return records, nil, nil
@@ -604,7 +615,22 @@ func executeSandboxCommands(
 		}
 		result, runErr := sb.Run(ctx, ws, spec)
 		if runErr != nil {
-			result = sandbox.RunResult{Status: sandbox.StatusFailed, ExitCode: -1, Stderr: []byte(runErr.Error())}
+			// sb.Run classifies command failures into RunResult; a non-nil
+			// error is a contract/infrastructure refusal. Redact and cap
+			// before persistence — same INV-REDACT contract as sandbox.Run.
+			stderr, _ := redact.TextBytes([]byte(runErr.Error()))
+			const maxErr = 1 << 20
+			truncated := false
+			if len(stderr) > maxErr {
+				stderr = stderr[:maxErr]
+				truncated = true
+			}
+			result = sandbox.RunResult{
+				Status:    sandbox.StatusFailed,
+				ExitCode:  -1,
+				Truncated: truncated,
+				Stderr:    stderr,
+			}
 		}
 		records = append(records, sandboxRunRecord{command: safeCmd, result: result})
 		metrics.IncToolCalls()

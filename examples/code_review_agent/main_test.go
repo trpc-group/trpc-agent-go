@@ -16,12 +16,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/sandbox"
 )
 
 // allRuleIDs is the complete set of rule IDs implemented by the rules engine
@@ -185,11 +188,11 @@ func readReportJSON(t *testing.T, outDir string) string {
 }
 
 // checkConclusion verifies the expected conclusion string appears as the
-// "Conclusion" JSON value in the report. Anchoring on the key avoids false
+// "conclusion" JSON value in the report. Anchoring on the key avoids false
 // matches from other fields like "status":"failed".
 func checkConclusion(t *testing.T, tt fixtureCase, jsonStr string) {
 	t.Helper()
-	want := fmt.Sprintf(`"Conclusion": "%s"`, tt.expectConclusion)
+	want := fmt.Sprintf(`"conclusion": "%s"`, tt.expectConclusion)
 	if !strings.Contains(jsonStr, want) {
 		t.Errorf("conclusion %q not in report; snippet: %s",
 			tt.expectConclusion, truncate(jsonStr, 500))
@@ -234,4 +237,29 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "..."
+}
+
+func TestHandleSandboxInitFailure_RedactsStderr(t *testing.T) {
+	opts := &pipelineOpts{cliFlags: cliFlags{dryRun: true}}
+	err := errors.New("sandbox: container backend unavailable: password=super-secret-value-12345")
+	records, perms, retErr := handleSandboxInitFailure(opts, err)
+	if retErr != nil {
+		t.Fatalf("dry-run should not fail closed: %v", retErr)
+	}
+	if len(perms) != 0 {
+		t.Fatalf("perms = %d, want 0", len(perms))
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].result.Status != sandbox.StatusSkipped {
+		t.Fatalf("status = %q, want %q", records[0].result.Status, sandbox.StatusSkipped)
+	}
+	stderr := string(records[0].result.Stderr)
+	if strings.Contains(stderr, "super-secret-value-12345") {
+		t.Fatalf("init failure stderr leaked secret: %q", stderr)
+	}
+	if !strings.Contains(stderr, "[REDACTED:") {
+		t.Fatalf("init failure stderr missing redaction marker: %q", stderr)
+	}
 }

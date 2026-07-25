@@ -10,9 +10,15 @@
 ## Description
 
 Flags goroutines launched with `go` that have no observable synchronization
-path (channel send/receive, `sync.WaitGroup.Done`, or context cancellation).
-Orphaned goroutines leak resources and produce data races whose failures are
-hard to reproduce.
+or termination path. Recognized sync signals include channel send/receive,
+`sync.WaitGroup.Done`, and **explicit** context observation via `ctx.Done()`
+or `ctx.Err()` inside the goroutine body (merely accepting a `context.Context`
+parameter is not enough).
+
+Orphaned goroutines can leak resources and outlive their intended scope.
+They do **not** always produce a data race — races require concurrent
+conflicting access without happens-before — but an unbounded lifetime makes
+such failures harder to reproduce when shared state is involved.
 
 ## Evidence Example
 

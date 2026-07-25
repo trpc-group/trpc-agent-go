@@ -354,6 +354,21 @@ func TestWithBindMountOption(t *testing.T) {
 	assert.Equal(t, "/a:/b", exec.hostConfig.Binds[1])
 }
 
+func TestWithSkipPythonVerificationOption(t *testing.T) {
+	exec := &CodeExecutor{}
+	if exec.skipPythonVerification {
+		t.Fatal("skipPythonVerification defaulted to true, want false")
+	}
+	WithSkipPythonVerification(true)(exec)
+	if !exec.skipPythonVerification {
+		t.Fatal("WithSkipPythonVerification(true) did not set flag")
+	}
+	WithSkipPythonVerification(false)(exec)
+	if exec.skipPythonVerification {
+		t.Fatal("WithSkipPythonVerification(false) did not clear flag")
+	}
+}
+
 func TestEnsureWS_CachesRuntime(t *testing.T) {
 	c := &CodeExecutor{}
 	rt1, err := c.ensureWS()
