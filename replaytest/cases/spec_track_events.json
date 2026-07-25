@@ -1,0 +1,28 @@
+{
+  "name": "track_events",
+  "description": "Track events: simulate tool execution timing, subtask status, and error recording as track data",
+  "tags": ["lightweight", "track"],
+  "backends": {
+    "session": ["inmemory", "sqlite"],
+    "memory": ["inmemory", "sqlite"]
+  },
+  "setup": {
+    "app_name": "test-app",
+    "user_id": "user1",
+    "session_id": "sess-track-1",
+    "init_state": {}
+  },
+  "operations": [
+    { "op": "create_session", "backend": "session", "params": {} },
+    { "op": "append_track_event", "backend": "session", "params": { "track": "tool_execution", "payload": { "tool": "search", "duration_ms": 150, "status": "success" } } },
+    { "op": "append_track_event", "backend": "session", "params": { "track": "tool_execution", "payload": { "tool": "fetch", "duration_ms": 300, "status": "success" } } },
+    { "op": "append_track_event", "backend": "session", "params": { "track": "sub_task", "payload": { "task": "validate_input", "status": "completed", "result": "valid" } } },
+    { "op": "append_track_event", "backend": "session", "params": { "track": "error_log", "payload": { "error": "timeout", "retry": 1, "message": "Connection timeout on first attempt" } } }
+  ],
+  "verifies": [
+    { "what": "tracks", "params": {} }
+  ],
+  "allowed_diffs": [
+    { "path": "$.tracks[*].events[*].timestamp", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } }
+  ]
+}

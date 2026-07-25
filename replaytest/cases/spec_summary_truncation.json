@@ -1,0 +1,37 @@
+{
+  "name": "summary_truncation",
+  "description": "Summary and event truncation: simulate long conversation compression, create summaries, then continue appending new events to verify summary existence and correct retention of subsequent events",
+  "tags": ["lightweight", "summary", "truncation"],
+  "backends": {
+    "session": ["inmemory", "sqlite"],
+    "memory": ["inmemory", "sqlite"]
+  },
+  "setup": {
+    "app_name": "test-app",
+    "user_id": "user1",
+    "session_id": "sess-trunc-1",
+    "init_state": {}
+  },
+  "operations": [
+    { "op": "create_session", "backend": "session", "params": {} },
+    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 1 of a long conversation about project X", "branch": "main" } },
+    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response 1: Let's discuss project X requirements.", "branch": "main" } },
+    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 2: We need real-time features", "branch": "main" } },
+    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response 2: Real-time features require WebSocket support.", "branch": "main" } },
+    { "op": "create_summary", "backend": "session", "params": { "filterKey": "main", "force": true } },
+    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 3 - after summary, should still be visible in events", "branch": "main" } },
+    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response 3 - after summary, context should be preserved", "branch": "main" } },
+    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 4 - final message", "branch": "main" } },
+    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response 4 - all done", "branch": "main" } }
+  ],
+  "verifies": [
+    { "what": "summary", "params": {} },
+    { "what": "events", "params": {} },
+    { "what": "state", "params": {} }
+  ],
+  "allowed_diffs": [
+    { "path": "$.events[*].id", "kind": "auto_id", "strategy": "ignore" },
+    { "path": "$.events[*].timestamp", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } },
+    { "path": "$.summaries[*].updated_at", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } }
+  ]
+}

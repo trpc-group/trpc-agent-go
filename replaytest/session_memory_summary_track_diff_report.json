@@ -1,0 +1,270 @@
+{
+  "reports": [
+    {
+      "spec_name": "concurrent_writes",
+      "started_at": "2026-07-24T09:26:42.4420336Z",
+      "completed_at": "2026-07-24T09:26:42.4430641Z",
+      "duration_ms": 1,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "error_recovery",
+      "started_at": "2026-07-24T09:26:42.4435803Z",
+      "completed_at": "2026-07-24T09:26:42.4435803Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "full_cycle",
+      "started_at": "2026-07-24T09:26:42.4435803Z",
+      "completed_at": "2026-07-24T09:26:42.4440965Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "injection_comprehensive",
+      "started_at": "2026-07-24T09:26:42.4445999Z",
+      "completed_at": "2026-07-24T09:26:42.4446206Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "memory_writes",
+      "started_at": "2026-07-24T09:26:42.4446206Z",
+      "completed_at": "2026-07-24T09:26:42.445136Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "multi_turn",
+      "started_at": "2026-07-24T09:26:42.445136Z",
+      "completed_at": "2026-07-24T09:26:42.445136Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "out_of_order",
+      "started_at": "2026-07-24T09:26:42.445136Z",
+      "completed_at": "2026-07-24T09:26:42.4456544Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "single_turn",
+      "started_at": "2026-07-24T09:26:42.4456544Z",
+      "completed_at": "2026-07-24T09:26:42.4456544Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "state_updates",
+      "started_at": "2026-07-24T09:26:42.4456544Z",
+      "completed_at": "2026-07-24T09:26:42.4456544Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "summary_generation",
+      "started_at": "2026-07-24T09:26:42.4456544Z",
+      "completed_at": "2026-07-24T09:26:42.4461753Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "summary_truncation",
+      "started_at": "2026-07-24T09:26:42.4461753Z",
+      "completed_at": "2026-07-24T09:26:42.4461753Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "tool_calls",
+      "started_at": "2026-07-24T09:26:42.4466928Z",
+      "completed_at": "2026-07-24T09:26:42.4466928Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    },
+    {
+      "spec_name": "track_events",
+      "started_at": "2026-07-24T09:26:42.4466928Z",
+      "completed_at": "2026-07-24T09:26:42.44721Z",
+      "duration_ms": 0,
+      "backends_tested": {
+        "session": [
+          "inmemory"
+        ],
+        "memory": [
+          "inmemory"
+        ]
+      },
+      "pass_count": 0,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": null,
+      "summary": "All 0 verifications passed across 1 session + 1 memory backends."
+    }
+  ],
+  "summary": {
+    "total_specs": 13,
+    "total_passed": 13,
+    "total_failed": 0,
+    "total_diffs": 0
+  }
+}

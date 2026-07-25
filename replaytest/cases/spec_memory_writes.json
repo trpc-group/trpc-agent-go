@@ -1,0 +1,31 @@
+{
+  "name": "memory_writes",
+  "description": "Memory writes and reads: simulate user preferences, factual memories, and task experience with metadata",
+  "tags": ["lightweight", "memory"],
+  "backends": {
+    "session": ["inmemory", "sqlite"],
+    "memory": ["inmemory", "sqlite"]
+  },
+  "setup": {
+    "app_name": "test-app",
+    "user_id": "user1",
+    "session_id": "sess-mem-1",
+    "init_state": {}
+  },
+  "operations": [
+    { "op": "create_session", "backend": "session", "params": {} },
+    { "op": "add_memory", "backend": "memory", "params": { "memory": "User prefers dark mode", "topics": ["preference", "ui"] } },
+    { "op": "add_memory", "backend": "memory", "params": { "memory": "User is a software engineer", "topics": ["profile", "job"] } },
+    { "op": "add_memory", "backend": "memory", "params": { "memory": "User visited Tokyo in 2024", "topics": ["travel", "history"] } },
+    { "op": "add_memory_with_metadata", "backend": "memory", "params": { "memory": "User hiked Mt. Fuji with Alice", "topics": ["travel", "activity"], "kind": "episode", "event_time": "2024-05-07T08:00:00Z", "participants": ["Alice"], "location": "Mt. Fuji" } },
+    { "op": "search_memories", "backend": "memory", "params": { "query": "travel" } }
+  ],
+  "verifies": [
+    { "what": "memories", "params": {} },
+    { "what": "memory_search", "params": { "query": "travel" } }
+  ],
+  "allowed_diffs": [
+    { "path": "$.memories[*].created_at", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } },
+    { "path": "$.memories[*].updated_at", "kind": "timestamp_drift", "strategy": "allow_drift", "max_drift": { "duration_ms": 5000 } }
+  ]
+}

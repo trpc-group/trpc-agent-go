@@ -1,0 +1,31 @@
+{
+  "name": "state_updates",
+  "description": "State updates: multiple writes, overwrites, deletions, and clear operations on state keys within the same session (three-level state: app, user, session)",
+  "tags": ["lightweight", "state"],
+  "backends": {
+    "session": ["inmemory", "sqlite"],
+    "memory": ["inmemory", "sqlite"]
+  },
+  "setup": {
+    "app_name": "test-app",
+    "user_id": "user1",
+    "session_id": "sess-state-1",
+    "init_state": {}
+  },
+  "operations": [
+    { "op": "create_session", "backend": "session", "params": { "state": { "session:lang": "en" } } },
+    { "op": "update_app_state", "backend": "session", "params": { "app:version": "1.0", "app:region": "us-east" } },
+    { "op": "update_user_state", "backend": "session", "params": { "pref:theme": "dark", "pref:notify": "true" } },
+    { "op": "update_session_state", "backend": "session", "params": { "temp:step": "init", "temp:counter": "1" } },
+    { "op": "update_app_state", "backend": "session", "params": { "app:version": "2.0" } },
+    { "op": "update_session_state", "backend": "session", "params": { "temp:step": "done", "temp:counter": "2" } },
+    { "op": "delete_app_state_key", "backend": "session", "params": { "key": "app:region" } },
+    { "op": "delete_user_state_key", "backend": "session", "params": { "key": "pref:notify" } },
+    { "op": "update_user_state", "backend": "session", "params": { "pref:theme": "light" } }
+  ],
+  "verifies": [
+    { "what": "state", "params": { "keys": ["app:version", "app:region", "pref:theme", "pref:notify", "temp:step", "temp:counter"] } },
+    { "what": "session_full", "params": {} }
+  ],
+  "allowed_diffs": []
+}
