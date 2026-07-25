@@ -160,12 +160,12 @@ func TestBackendFactory_Fields(t *testing.T) {
 
 func TestBackendCapabilities_KnownBackends(t *testing.T) {
 	tests := []struct {
-		name        string
-		wantPaging  bool
-		wantTrack   bool
-		wantFilter  bool
-		wantSearch  bool
-		wantTTL     bool
+		name       string
+		wantPaging bool
+		wantTrack  bool
+		wantFilter bool
+		wantSearch bool
+		wantTTL    bool
 	}{
 		{"InMemory", false, true, true, true, false},
 		{"SQLite", false, true, true, true, false},
