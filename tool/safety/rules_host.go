@@ -65,9 +65,51 @@ func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Findi
 		})
 	}
 
-	// write_stdin to an unknown session with non-empty input.
-	if sess != nil && in.SessionID != "" && in.SessionInput != "" {
-		if sess.isKilled(in.SessionID) {
+	if in.sessionInputOverflow {
+		out = append(out, Finding{
+			RuleID:         "host.session_input_too_large",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionDeny,
+			Evidence:       "cumulative session input exceeds the safety scan limit",
+			Recommendation: "Send smaller complete commands or restart the session",
+		})
+	}
+	if finding := unclassifiedInitialSessionInputFinding(in); finding != nil {
+		out = append(out, *finding)
+	}
+	out = append(out, sessionLifecycleFindings(in, p, sess)...)
+	return out
+}
+
+func unclassifiedInitialSessionInputFinding(in ScanInput) *Finding {
+	if in.SessionID != "" ||
+		in.SessionInput == "" && !in.sessionSubmit {
+		return nil
+	}
+	if classifySessionInfo(in).InputMode != sessionInputUnknown {
+		return nil
+	}
+	return &Finding{
+		RuleID:         "host.unclassified_session_input",
+		RiskLevel:      RiskMedium,
+		Decision:       DecisionAsk,
+		Evidence:       "initial stdin semantics cannot be classified safely",
+		Recommendation: "Use a recognized shell, interpreter, or data-consumer command, or remove stdin",
+	}
+}
+
+func sessionLifecycleFindings(
+	in ScanInput,
+	p Policy,
+	sess *sessionTracker,
+) []Finding {
+	if sess == nil || in.SessionID == "" {
+		return nil
+	}
+	var out []Finding
+	if in.SessionInput != "" || in.sessionSubmit {
+		switch info, ok := sess.lookup(in.SessionID); {
+		case sess.isKilled(in.SessionID):
 			out = append(out, Finding{
 				RuleID:         "host.residual_session",
 				RiskLevel:      RiskMedium,
@@ -75,7 +117,7 @@ func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Findi
 				Evidence:       "write_stdin to an already-finalized session",
 				Recommendation: "Create a new session instead of interacting with a killed session id",
 			})
-		} else if !sess.isKnown(in.SessionID) {
+		case !ok:
 			out = append(out, Finding{
 				RuleID:         "host.unknown_session",
 				RiskLevel:      RiskMedium,
@@ -83,26 +125,46 @@ func ruleHost(in ScanInput, a *analysis, p Policy, sess *sessionTracker) []Findi
 				Evidence:       "write_stdin to a session not created in this run",
 				Recommendation: "Issue the session-creating exec_command first, or pre-register the session id with the guard",
 			})
+		case sessionBackendMismatch(in, info):
+			out = append(out, Finding{
+				RuleID:         "host.unclassified_session_input",
+				RiskLevel:      RiskMedium,
+				Decision:       DecisionAsk,
+				Evidence:       "session backend does not match the input tool",
+				Recommendation: "Use the session interaction tool for the backend that created the session",
+			})
+		case info.InputMode == sessionInputUnknown:
+			out = append(out, Finding{
+				RuleID:         "host.unclassified_session_input",
+				RiskLevel:      RiskMedium,
+				Decision:       DecisionAsk,
+				Evidence:       "session input semantics cannot be classified safely",
+				Recommendation: "Register or create a session with a recognized shell, interpreter, or data-consumer command",
+			})
 		}
 	}
-
-	// Residual session: kill_session on an already-killed id.
-	if sess != nil && in.SessionID != "" {
-		toolBase := in.ToolName
-		if strings.HasSuffix(toolBase, "kill_session") || strings.HasSuffix(toolBase, "workspace_kill_session") {
-			if sess.isKilled(in.SessionID) {
-				out = append(out, Finding{
-					RuleID:         "host.residual_session",
-					RiskLevel:      RiskLow,
-					Decision:       ruleDecision(p.Rules.HostExec.Action, RiskLow, p),
-					Evidence:       "kill_session on an already-finalized session",
-					Recommendation: "Skip the duplicate kill or refresh the session tracking state",
-				})
-			}
-		}
+	if isKillSessionTool(in.ToolName) && sess.isKilled(in.SessionID) {
+		out = append(out, Finding{
+			RuleID:         "host.residual_session",
+			RiskLevel:      RiskLow,
+			Decision:       ruleDecision(p.Rules.HostExec.Action, RiskLow, p),
+			Evidence:       "kill_session on an already-finalized session",
+			Recommendation: "Skip the duplicate kill or refresh the session tracking state",
+		})
 	}
-
 	return out
+}
+
+func sessionBackendMismatch(in ScanInput, info sessionInfo) bool {
+	return info.Backend != "" &&
+		info.Backend != BackendUnknown &&
+		in.Backend != "" &&
+		info.Backend != in.Backend
+}
+
+func isKillSessionTool(toolName string) bool {
+	return strings.HasSuffix(toolName, "kill_session") ||
+		strings.HasSuffix(toolName, "workspace_kill_session")
 }
 
 // ruleCapability evaluates RequireIsolation against the tool profile.

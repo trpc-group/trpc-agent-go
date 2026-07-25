@@ -9,9 +9,12 @@
 package safety
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"mime"
 	"strings"
 
@@ -45,6 +48,9 @@ func redactArtifact(in *artifact.Artifact) (*artifact.Artifact, bool, error) {
 	if urlRedacted, c := redactString(clone.URL); c {
 		clone.URL = urlRedacted
 		changed = true
+	}
+	if err := validateArtifactMIME(clone.MimeType); err != nil {
+		return nil, false, err
 	}
 
 	if isTextMIME(clone.MimeType) {
@@ -89,26 +95,98 @@ func isJSONMIME(mime string) bool {
 }
 
 func redactJSONArtifact(data []byte) ([]byte, bool, error) {
-	decoded, err := decodeJSONValue(data)
-	if err != nil {
-		return nil, false, errors.New(
-			"json artifact could not be decoded safely",
-		)
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return nil, false, err
 	}
-	safe, changed, err := redactValue(decoded)
+	safe, changed, err := redactRawMessage(json.RawMessage(data))
 	if err != nil {
 		return nil, false, err
 	}
-	if !changed {
-		return data, false, nil
-	}
-	raw, err := json.Marshal(safe)
-	if err != nil {
+	raw, ok := safe.(json.RawMessage)
+	if !ok || !json.Valid(raw) {
 		return nil, false, errors.New(
-			"redacted json artifact could not be encoded safely",
+			"redacted json artifact is not valid JSON",
 		)
 	}
-	return raw, true, nil
+	return append([]byte(nil), raw...), changed, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func() error
+	walk = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return errors.New("json artifact object key is not a string")
+				}
+				if _, duplicate := seen[key]; duplicate {
+					return fmt.Errorf(
+						"json artifact contains duplicate key %q",
+						key,
+					)
+				}
+				seen[key] = struct{}{}
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := walk(); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		default:
+			return errors.New("json artifact has an unexpected delimiter")
+		}
+	}
+	if err := walk(); err != nil {
+		return fmt.Errorf("json artifact could not be decoded safely: %w", err)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return errors.New("json artifact contains trailing data")
+	}
+	return nil
+}
+
+func validateArtifactMIME(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	_, params, err := mime.ParseMediaType(value)
+	if err != nil {
+		return errors.New("artifact MIME type is malformed")
+	}
+	if hasSecret(value) {
+		return errors.New("artifact MIME type contains a secret")
+	}
+	for name, paramValue := range params {
+		if isSecretFieldName(name) || hasSecret(name) ||
+			hasSecret(paramValue) {
+			return errors.New("artifact MIME parameter contains a secret")
+		}
+	}
+	return nil
 }
 
 // isTextMIME returns true for MIME types whose contents can be safely

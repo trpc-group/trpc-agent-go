@@ -23,8 +23,16 @@ func TestAuditWriter_RejectsFIFOWithoutBlocking(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "audit.fifo")
 	require.NoError(t, syscall.Mkfifo(path, 0o600))
 
-	start := time.Now()
-	_, err := NewAuditWriter(path, true, true)
-	require.Error(t, err)
-	require.Less(t, time.Since(start), time.Second)
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := NewAuditWriter(path, true, true)
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		require.Error(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("NewAuditWriter blocked opening a FIFO")
+	}
 }

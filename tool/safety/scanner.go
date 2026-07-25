@@ -34,36 +34,31 @@ func sortFindings(findings []Finding) {
 	})
 }
 
-// Scanner runs the safety rules against one ScanInput and produces a
-// ScanReport. The scanner is safe for concurrent use; the policy is
+// scanner runs the safety rules against one ScanInput and produces a
+// ScanReport. It is safe for concurrent use; the policy is
 // validated and deep-copied at construction and treated as immutable
 // afterwards, so later caller-side mutations cannot change live
-// decisions or race with concurrent scans. When the policy is invalid
-// the construction error is stored and every Scan returns it, so an
-// invalid policy fails closed instead of silently disabling rules.
-type Scanner struct {
-	policy    Policy
-	policyErr error
-	profiles  profileRegistry
-	sessions  *sessionTracker
-	clock     func() time.Time
+// decisions or race with concurrent scans.
+type scanner struct {
+	policy   Policy
+	profiles profileRegistry
+	sessions *sessionTracker
+	clock    func() time.Time
 }
 
-// ScannerOption configures a Scanner.
-type ScannerOption func(*Scanner)
+type scannerOption func(*scanner)
 
-// WithScannerClock replaces the default clock (used by tests).
-func WithScannerClock(clock func() time.Time) ScannerOption {
-	return func(s *Scanner) {
+// withScannerClock replaces the default clock for deterministic tests.
+func withScannerClock(clock func() time.Time) scannerOption {
+	return func(s *scanner) {
 		if clock != nil {
 			s.clock = clock
 		}
 	}
 }
 
-// WithScannerProfile registers an additional tool profile.
-func WithScannerProfile(profile ToolProfile) ScannerOption {
-	return func(s *Scanner) {
+func withScannerProfile(profile ToolProfile) scannerOption {
+	return func(s *scanner) {
 		if s.profiles == nil {
 			s.profiles = newProfileRegistry()
 		}
@@ -75,36 +70,35 @@ func WithScannerProfile(profile ToolProfile) ScannerOption {
 // unknown_session and residual_session findings. The Guard injects its
 // own tracker; standalone scanner callers (e.g. batch scan) leave this
 // nil and the host session rules are skipped.
-func withScannerSessions(sess *sessionTracker) ScannerOption {
-	return func(s *Scanner) {
+func withScannerSessions(sess *sessionTracker) scannerOption {
+	return func(s *scanner) {
 		s.sessions = sess
 	}
 }
 
-// NewScanner returns a Scanner with the given policy and default
-// profiles. The policy's mutable fields are deep-copied so caller-side
-// slice mutations cannot change live decisions. The policy is validated
-// at construction; when invalid, the scanner is still returned but every
-// Scan reports the validation error so the caller fails closed.
-func NewScanner(policy Policy, opts ...ScannerOption) *Scanner {
-	s := &Scanner{
-		policy:    clonePolicy(policy),
-		policyErr: policy.Validate(),
-		profiles:  newProfileRegistry(),
-		clock:     func() time.Time { return time.Now().UTC() },
+// newScanner returns a scanner with the given policy and default profiles.
+// The policy is deep-copied and validated before the scanner is returned;
+// an invalid policy returns an error and no scanner.
+func newScanner(policy Policy, opts ...scannerOption) (*scanner, error) {
+	policy = clonePolicy(policy)
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	s := &scanner{
+		policy:   policy,
+		profiles: newProfileRegistry(),
+		clock:    func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
-	return s
+	return s, nil
 }
 
 // Scan runs every enabled rule against in and returns the aggregated
 // report. A decode error (caller-side) should be converted by the caller
 // into a deny decision; Scan itself returns a non-nil error when the
-// policy failed validation at construction, which the caller must
-// convert into a deny decision. No scan or decode error may silently
-// become allow.
+// scanner is nil. No scan or decode error may silently become allow.
 //
 // The scanner separates three input shapes:
 //   - Shell command: parsed once via shellsafe, analyzed by every rule.
@@ -115,15 +109,12 @@ func NewScanner(policy Policy, opts ...ScannerOption) *Scanner {
 //     block with no command string does NOT trigger shell.parse_failure;
 //     the previous implementation incorrectly denied safe execute_code
 //     calls because shellsafe.Parse("") returns an error.
-func (s *Scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
+func (s *scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	if s == nil {
 		return ScanReport{}, errors.New("scanner is nil")
 	}
-	// An invalid policy fails closed: the caller converts the error into
-	// a deny decision rather than scanning with disabled rules.
-	if s.policyErr != nil {
-		return ScanReport{}, s.policyErr
-	}
+	in = s.applyProfileDefaults(in)
+	in = s.applySessionInputBuffer(in)
 	start := s.clock()
 	report := ScanReport{
 		SchemaVersion: "1",
@@ -133,18 +124,13 @@ func (s *Scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 		Backend:       in.Backend,
 	}
 
-	// Fill the backend from the registered profile when the caller did
-	// not set one (e.g. when ScanInput was built by hand).
-	if report.Backend == "" || report.Backend == BackendUnknown {
-		if profile, ok := s.profiles.lookup(in.ToolProfile); ok {
-			report.Backend = profile.Backend
-		}
-	}
-
 	// Build the analysis IR. When the input has a non-empty command,
 	// parse it via shellsafe. When the input only has code blocks or
 	// explicit argv, do not fabricate a shell parse failure.
 	analysis := buildAnalysis(in, s.policy)
+	if sessionAnalysis := s.sessionInputAnalysis(in); sessionAnalysis != nil {
+		mergeAnalysis(&analysis, sessionAnalysis)
+	}
 	report.Command = analysis.CommandSummary
 	report.CommandHash = analysis.CommandHash
 
@@ -202,10 +188,154 @@ func (s *Scanner) Scan(ctx context.Context, in ScanInput) (ScanReport, error) {
 	return report, nil
 }
 
+func (s *scanner) applyProfileDefaults(in ScanInput) ScanInput {
+	if profile, ok := s.profiles.lookup(in.ToolProfile); ok {
+		if in.Backend == "" || in.Backend == BackendUnknown {
+			in.Backend = profile.Backend
+		}
+		if in.Timeout <= 0 {
+			in.Timeout = profile.DefaultTimeout
+		}
+	}
+	if in.Backend == "" || in.Backend == BackendUnknown {
+		if profile, ok := s.profiles.lookup(in.ToolName); ok {
+			in.Backend = profile.Backend
+			in.ToolProfile = profile.Name
+			if in.Timeout <= 0 {
+				in.Timeout = profile.DefaultTimeout
+			}
+		}
+	}
+	if in.Backend == BackendCodeExec {
+		in.CodeBlocks = defaultCodeBlockLanguages(in.CodeBlocks)
+	}
+	return in
+}
+
+func defaultCodeBlockLanguages(blocks []CodeBlock) []CodeBlock {
+	for _, block := range blocks {
+		if strings.TrimSpace(block.Language) == "" {
+			cloned := append([]CodeBlock(nil), blocks...)
+			for i := range cloned {
+				if strings.TrimSpace(cloned[i].Language) == "" {
+					cloned[i].Language = "python"
+				}
+			}
+			return cloned
+		}
+	}
+	return blocks
+}
+
+func (s *scanner) sessionInputAnalysis(in ScanInput) *analysis {
+	if strings.TrimSpace(in.SessionInput) == "" {
+		return nil
+	}
+	var info sessionInfo
+	if in.SessionID != "" {
+		if s.sessions == nil {
+			return nil
+		}
+		tracked, ok := s.sessions.lookup(in.SessionID)
+		if !ok || tracked.Backend != "" &&
+			tracked.Backend != BackendUnknown &&
+			in.Backend != "" && tracked.Backend != in.Backend {
+			return nil
+		}
+		info = tracked
+	} else if in.Command != "" {
+		info = classifySessionInfo(in)
+	} else {
+		return nil
+	}
+	switch info.InputMode {
+	case sessionInputShell:
+		a := analyzeShellWithCommands(
+			in.SessionInput,
+			s.policy.Network.Commands,
+		)
+		return &a
+	case sessionInputCode:
+		a := buildAnalysis(ScanInput{
+			ToolName: in.ToolName,
+			Backend:  in.Backend,
+			CodeBlocks: []CodeBlock{{
+				Language: info.Language,
+				Code:     in.SessionInput,
+			}},
+		}, s.policy)
+		return &a
+	default:
+		return nil
+	}
+}
+
+func (s *scanner) applySessionInputBuffer(in ScanInput) ScanInput {
+	if in.SessionInput == "" && !in.sessionSubmit {
+		return in
+	}
+	if in.SessionID == "" {
+		if len(in.SessionInput) > maxSessionInputBuffer {
+			in.sessionInputOverflow = true
+		}
+		return in
+	}
+	if s.sessions == nil {
+		return in
+	}
+	_, combined, found, withinLimit := s.sessions.previewInput(
+		in.SessionID,
+		in.SessionInput,
+		in.sessionSubmit,
+	)
+	if !found {
+		return in
+	}
+	if !withinLimit {
+		in.sessionInputOverflow = true
+		return in
+	}
+	in.SessionInput = combined
+	return in
+}
+
+func classifySessionInfo(in ScanInput) sessionInfo {
+	info := sessionInfo{
+		Backend:   in.Backend,
+		InputMode: sessionInputUnknown,
+	}
+	a := analyzeShell(in.Command)
+	if a.Pipeline == nil || len(a.Pipeline.Commands) != 1 ||
+		len(a.Pipeline.Commands[0]) == 0 {
+		return info
+	}
+	switch basenameLower(a.Pipeline.Commands[0][0]) {
+	case "sh", "bash", "zsh", "ash", "dash", "ksh", "mksh",
+		"fish", "pwsh", "powershell", "cmd", "ssh":
+		info.InputMode = sessionInputShell
+	case "python", "python3", "ipython":
+		info.InputMode = sessionInputCode
+		info.Language = "python"
+	case "node", "deno", "bun":
+		info.InputMode = sessionInputCode
+		info.Language = "javascript"
+	case "cat", "tee", "base64":
+		info.InputMode = sessionInputData
+	}
+	if info.InputMode == sessionInputShell ||
+		info.InputMode == sessionInputCode {
+		info.Pending = in.SessionInput
+		if len(info.Pending) > maxSessionInputBuffer {
+			info.Pending = info.Pending[len(info.Pending)-maxSessionInputBuffer:]
+		}
+	}
+	return info
+}
+
 // ScanBatch scans every input with the same policy and returns a batch
 // report. It reuses one scanner and one policy; it does not reload YAML
 // for every sample.
-func (s *Scanner) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchReport, error) {
+func (s *scanner) ScanBatch(ctx context.Context, inputs []ScanInput) (BatchReport, error) {
 	if s == nil {
 		return BatchReport{}, errors.New("scanner is nil")
 	}

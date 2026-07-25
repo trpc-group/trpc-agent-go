@@ -12,6 +12,7 @@ import (
 	"math"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -46,12 +47,28 @@ func isWrapperName(name string) bool {
 
 // basenameLower returns the lowercased basename of name.
 func basenameLower(name string) string {
+	return basenameLowerForGOOS(name, runtime.GOOS)
+}
+
+func basenameLowerForGOOS(name, goos string) string {
 	if name == "" {
 		return ""
 	}
 	clean := filepath.ToSlash(name)
-	base := path.Base(clean)
-	return strings.ToLower(base)
+	if goos == "windows" {
+		clean = strings.ReplaceAll(clean, `\`, "/")
+	}
+	base := strings.ToLower(path.Base(clean))
+	if goos == "windows" {
+		for _, suffix := range []string{
+			".exe", ".cmd", ".bat", ".com", ".ps1",
+		} {
+			if strings.HasSuffix(base, suffix) {
+				return strings.TrimSuffix(base, suffix)
+			}
+		}
+	}
+	return base
 }
 
 func longOptionMatches(arg, full string) bool {
@@ -59,7 +76,7 @@ func longOptionMatches(arg, full string) bool {
 	if name == full {
 		return true
 	}
-	return len(name) >= len(full)-1 &&
+	return len(name) >= len("--xxx") &&
 		strings.HasPrefix(full, name)
 }
 

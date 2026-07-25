@@ -148,7 +148,7 @@ func WithConcurrencyPolicy(p ConcurrencyPolicy) Option {
 // stashed only for allowed calls and evicted when wrapper completion
 // runs or when the guard is closed.
 type Guard struct {
-	scanner    *Scanner
+	scanner    *scanner
 	audit      *AuditWriter
 	telemetry  bool
 	redaction  bool
@@ -197,8 +197,12 @@ func NewGuard(opts ...Option) (*Guard, error) {
 		return nil, err
 	}
 
+	scanner, err := newScanner(o.policy, withScannerSessions(nil))
+	if err != nil {
+		return nil, err
+	}
 	g := &Guard{
-		scanner:     NewScanner(o.policy, withScannerSessions(nil)),
+		scanner:     scanner,
 		telemetry:   o.telemetry,
 		redaction:   o.redaction,
 		profiles:    newProfileRegistry(),
@@ -316,36 +320,25 @@ func (g *Guard) checkToolCall(
 	if req == nil {
 		return tool.DenyPermission("permission request is nil"), nil
 	}
-	in, decodeErr := decodeRequest(req.ToolName, req.Arguments, g.profiles)
+	in, decodeErr := g.scanInputForRequest(req)
 	if decodeErr != nil {
 		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
 	}
 
-	// Apply metadata defaults from the registered profile when the
-	// decoded ScanInput did not carry them.
-	in = g.applyProfileDefaults(in)
-	// Map tool.Metadata into ScanInput so rules can use it.
-	in.Metadata = ToolMetadata{
-		ReadOnly:        req.Metadata.ReadOnly,
-		Destructive:     req.Metadata.Destructive,
-		ConcurrencySafe: req.Metadata.ConcurrencySafe,
-		SearchOrRead:    req.Metadata.SearchOrRead,
-		OpenWorld:       req.Metadata.OpenWorld,
-		MaxResultSize:   req.Metadata.MaxResultSize,
+	sessionRelease, err := g.acquireSessionInput(ctx, in)
+	if err != nil {
+		return tool.PermissionDecision{}, err
 	}
-	// Map tool.Metadata.MaxResultSize into OutputSizeHint so the
-	// resource rule can compare it against max_output_size.
-	if in.OutputSizeHint == 0 && req.Metadata.MaxResultSize > 0 {
-		in.OutputSizeHint = int64(req.Metadata.MaxResultSize)
-	}
-
 	report := g.scanPermission(ctx, req, in)
 
 	// Concurrency gate first, preflight audit second, so the persisted
 	// record carries the final decision. A denied call never executes, so
 	// a slot acquired by the gate is released here instead of in the
 	// completion handler.
-	release := g.gateConcurrency(ctx, req, &report)
+	release := combineReleases(
+		sessionRelease,
+		g.gateConcurrency(ctx, req, &report),
+	)
 	release, reserved := g.reserveAllowedCall(req, &report, release)
 	transferred := false
 	defer func() {
@@ -381,6 +374,84 @@ func (g *Guard) checkToolCall(
 	}
 
 	return permissionDecisionForReport(report), nil
+}
+
+func (g *Guard) previewToolCall(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (tool.PermissionDecision, error) {
+	if g == nil {
+		return tool.DenyPermission("safety guard is nil"), nil
+	}
+	if req == nil {
+		return tool.DenyPermission("permission request is nil"), nil
+	}
+	in, decodeErr := g.scanInputForRequest(req)
+	if decodeErr != nil {
+		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
+	}
+	report := g.scanPermission(ctx, req, in)
+	if report.Decision == DecisionAllow {
+		return tool.AllowPermission(), nil
+	}
+	g.auditPreflightOrDeny(&report)
+	if g.telemetry {
+		telemetryProject(ctx, safetyAttributes(report))
+	}
+	return permissionDecisionForReport(report), nil
+}
+
+func (g *Guard) scanInputForRequest(
+	req *tool.PermissionRequest,
+) (ScanInput, error) {
+	in, err := decodeRequest(req.ToolName, req.Arguments, g.profiles)
+	if err != nil {
+		return ScanInput{}, err
+	}
+	in.Metadata = ToolMetadata{
+		ReadOnly:        req.Metadata.ReadOnly,
+		Destructive:     req.Metadata.Destructive,
+		ConcurrencySafe: req.Metadata.ConcurrencySafe,
+		SearchOrRead:    req.Metadata.SearchOrRead,
+		OpenWorld:       req.Metadata.OpenWorld,
+		MaxResultSize:   req.Metadata.MaxResultSize,
+	}
+	if in.OutputSizeHint == 0 && req.Metadata.MaxResultSize > 0 {
+		in.OutputSizeHint = int64(req.Metadata.MaxResultSize)
+	}
+	return in, nil
+}
+
+func (g *Guard) acquireSessionInput(
+	ctx context.Context,
+	in ScanInput,
+) (func(), error) {
+	if g == nil || g.sessions == nil || in.SessionID == "" ||
+		!strings.HasSuffix(in.ToolName, "write_stdin") ||
+		in.SessionInput == "" && !in.sessionSubmit {
+		return nil, nil
+	}
+	return g.sessions.acquireInput(ctx, in.SessionID)
+}
+
+func combineReleases(releases ...func()) func() {
+	var active []func()
+	for _, release := range releases {
+		if release != nil {
+			active = append(active, release)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			for i := len(active) - 1; i >= 0; i-- {
+				active[i]()
+			}
+		})
+	}
 }
 
 func (g *Guard) permissionForDecodeFailure(
@@ -583,29 +654,6 @@ func (g *Guard) auditPreflightOrDeny(report *ScanReport) bool {
 // resource.timeout_exceeded rule fires and the call cannot be allowed
 // as-is; the caller must supply an explicit bounded timeout (or the
 // operator must raise max_timeout).
-func (g *Guard) applyProfileDefaults(in ScanInput) ScanInput {
-	if profile, ok := g.profiles.lookup(in.ToolProfile); ok {
-		if in.Backend == "" || in.Backend == BackendUnknown {
-			in.Backend = profile.Backend
-		}
-		if in.Timeout <= 0 {
-			in.Timeout = profile.DefaultTimeout
-		}
-	}
-	if in.Backend == "" {
-		// If the tool name matches a default profile but the decoder
-		// did not set ToolProfile, look up by tool name.
-		if profile, ok := g.profiles.lookup(in.ToolName); ok {
-			in.Backend = profile.Backend
-			in.ToolProfile = profile.Name
-			if in.Timeout <= 0 {
-				in.Timeout = profile.DefaultTimeout
-			}
-		}
-	}
-	return in
-}
-
 // maybeAuditPreflight appends a preflight audit event when the guard has
 // an audit writer.
 func (g *Guard) maybeAuditPreflight(report ScanReport) error {
@@ -779,6 +827,11 @@ func (g *Guard) finalizeCall(
 		g.trackSessionLifecycle(
 			args.ToolName, args.Arguments, originalResult,
 		)
+	} else {
+		g.failClosedAmbiguousSessionWrite(
+			args.ToolName,
+			args.Arguments,
+		)
 	}
 
 	execution := "ok"
@@ -821,21 +874,54 @@ func (g *Guard) trackSessionLifecycle(
 	if g == nil || g.sessions == nil {
 		return
 	}
+
 	switch toolName {
 	case "write_stdin", "workspace_write_stdin":
-		if !isTerminalSessionStatus(extractResultStatus(result)) {
-			return
-		}
 		if in, err := decodeRequest(
 			toolName, arguments, g.profiles,
 		); err == nil {
-			g.sessions.kill(in.SessionID)
+			if isTerminalSessionStatus(extractResultStatus(result)) {
+				g.sessions.kill(in.SessionID)
+				return
+			}
+			g.sessions.commitInput(
+				in.SessionID,
+				in.SessionInput,
+				in.sessionSubmit,
+			)
 		}
 	case "exec_command", "workspace_exec":
-		g.sessions.register(extractSessionID(result))
+		sessionID := extractSessionID(result)
+		if sessionID == "" {
+			return
+		}
+		in, err := decodeRequest(toolName, arguments, g.profiles)
+		if err != nil {
+			g.sessions.registerWithInfo(sessionID, sessionInfo{
+				Backend:   BackendUnknown,
+				InputMode: sessionInputUnknown,
+			})
+			return
+		}
+		g.sessions.registerWithInfo(sessionID, classifySessionInfo(in))
 	case "kill_session", "workspace_kill_session":
 		g.sessions.kill(extractSessionID(result))
 	}
+}
+
+func (g *Guard) failClosedAmbiguousSessionWrite(
+	toolName string,
+	arguments []byte,
+) {
+	if g == nil || g.sessions == nil ||
+		!strings.HasSuffix(toolName, "write_stdin") {
+		return
+	}
+	in, err := decodeRequest(toolName, arguments, g.profiles)
+	if err != nil || in.SessionID == "" {
+		return
+	}
+	g.sessions.kill(in.SessionID)
 }
 
 func extractResultStatus(result any) string {

@@ -11,6 +11,7 @@ package safety
 import (
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
@@ -410,31 +411,50 @@ func isDotenvPath(p string) bool {
 // /etc, and ~/.ssh/id_rsa must be denied by a denied_paths entry for
 // ~/.ssh. The previous exact-match-only implementation allowed both.
 func matchesDeniedPath(normalized string, p Policy) bool {
-	clean := filepath.Clean(normalized)
+	clean := normalizePath(normalized)
 	for _, e := range p.DeniedPaths {
-		entry := filepath.Clean(normalizePath(e))
-		if clean == entry {
+		entry := normalizePath(e)
+		targetForMatch, entryForMatch := clean, entry
+		if usesWindowsPathSemantics(clean) ||
+			usesWindowsPathSemantics(entry) {
+			targetForMatch = strings.ToLower(targetForMatch)
+			entryForMatch = strings.ToLower(entryForMatch)
+		}
+		if targetForMatch == entryForMatch {
 			return true
 		}
 		// Descendant check: clean is inside entry.
-		if isDescendant(clean, entry) {
+		if isDescendant(targetForMatch, entryForMatch) {
 			return true
 		}
 	}
 	for _, pattern := range p.DeniedPathGlobs {
-		ok, err := doublestar.Match(pattern, clean)
+		patternForMatch, targetForMatch := pattern, clean
+		if usesWindowsPathSemantics(clean) ||
+			usesWindowsPathSemantics(pattern) {
+			patternForMatch = strings.ToLower(patternForMatch)
+			targetForMatch = strings.ToLower(targetForMatch)
+		}
+		ok, err := doublestar.Match(patternForMatch, targetForMatch)
 		if err == nil && ok {
 			return true
 		}
 		// Also try with a leading **/ for ~-rooted patterns.
-		if strings.HasPrefix(pattern, "~/") {
-			alt := "**" + pattern[1:]
-			if ok, err := doublestar.Match(alt, clean); err == nil && ok {
+		if strings.HasPrefix(patternForMatch, "~/") {
+			alt := "**" + patternForMatch[1:]
+			if ok, err := doublestar.Match(alt, targetForMatch); err == nil && ok {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func usesWindowsPathSemantics(p string) bool {
+	p = normalizePath(p)
+	return runtime.GOOS == "windows" ||
+		len(p) >= 2 && p[1] == ':' ||
+		strings.HasPrefix(p, "//")
 }
 
 // isDescendant returns true when target is inside dir. Both must be

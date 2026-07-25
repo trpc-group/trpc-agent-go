@@ -77,7 +77,7 @@ func (c *corpusCaseV2) toScanInput() ScanInput {
 func TestCorpusFixture_LoadsAndScans(t *testing.T) {
 	fixture := loadCorpusFixture(t)
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	for _, tc := range fixture.Cases {
 		report, err := scanner.Scan(context.Background(), tc.toScanInput())
 		require.NoError(t, err, "case %s", tc.Name)
@@ -93,7 +93,7 @@ func TestCorpusFixture_LoadsAndScans(t *testing.T) {
 func TestCorpusFixture_QualityGateFromFixture(t *testing.T) {
 	fixture := loadCorpusFixture(t)
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 
 	var highRiskTotal, highRiskDetected int
 	var safeTotal, safeFP int

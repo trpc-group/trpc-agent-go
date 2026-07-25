@@ -9,6 +9,8 @@
 package safety
 
 import (
+	"context"
+	"strings"
 	"sync"
 
 	"github.com/google/uuid"
@@ -19,38 +21,67 @@ import (
 // creating exec_command. Only hashes are persisted in audit events.
 type sessionTracker struct {
 	mu          sync.Mutex
-	known       map[string]bool
+	known       map[string]sessionInfo
 	knownOrder  []string
 	killed      map[string]bool
 	killedOrder []string
+	inputGates  map[string]chan struct{}
+}
+
+type sessionInputMode string
+
+const (
+	sessionInputUnknown sessionInputMode = ""
+	sessionInputData    sessionInputMode = "data"
+	sessionInputShell   sessionInputMode = "shell"
+	sessionInputCode    sessionInputMode = "code"
+)
+
+type sessionInfo struct {
+	Backend   Backend
+	InputMode sessionInputMode
+	Language  string
+	Pending   string
 }
 
 const maxKilledSessions = 1024
 const maxKnownSessions = 1024
+const maxSessionInputBuffer = 64 * 1024
 
 // newSessionTracker returns an empty sessionTracker.
 func newSessionTracker() *sessionTracker {
 	return &sessionTracker{
-		known:  make(map[string]bool),
-		killed: make(map[string]bool),
+		known:      make(map[string]sessionInfo),
+		killed:     make(map[string]bool),
+		inputGates: make(map[string]chan struct{}),
 	}
 }
 
 // register marks a session id as known.
 func (s *sessionTracker) register(id string) {
+	s.registerWithInfo(id, sessionInfo{InputMode: sessionInputData})
+}
+
+func (s *sessionTracker) registerWithInfo(id string, info sessionInfo) {
 	if id == "" {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.known[id] {
+	if _, ok := s.known[id]; !ok {
 		s.knownOrder = append(s.knownOrder, id)
 	}
-	s.known[id] = true
+	s.known[id] = info
+	if _, ok := s.inputGates[id]; !ok {
+		gate := make(chan struct{}, 1)
+		gate <- struct{}{}
+		s.inputGates[id] = gate
+	}
 	if len(s.knownOrder) > maxKnownSessions {
 		oldest := s.knownOrder[0]
 		s.knownOrder = s.knownOrder[1:]
 		delete(s.known, oldest)
+		delete(s.inputGates, oldest)
 	}
 	delete(s.killed, id)
 	for i := 0; i < len(s.killedOrder); {
@@ -74,6 +105,7 @@ func (s *sessionTracker) kill(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.known, id)
+	delete(s.inputGates, id)
 	s.removeKnownOrder(id)
 	if s.killed[id] {
 		return
@@ -89,12 +121,96 @@ func (s *sessionTracker) kill(id string) {
 
 // isKnown returns true when id was registered.
 func (s *sessionTracker) isKnown(id string) bool {
+	_, ok := s.lookup(id)
+	return ok
+}
+
+func (s *sessionTracker) lookup(id string) (sessionInfo, bool) {
 	if id == "" {
-		return false
+		return sessionInfo{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.known[id]
+	info, ok := s.known[id]
+	return info, ok
+}
+
+func (s *sessionTracker) previewInput(
+	id string,
+	chars string,
+	submit bool,
+) (sessionInfo, string, bool, bool) {
+	if id == "" {
+		return sessionInfo{}, "", false, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, ok := s.known[id]
+	if !ok {
+		return sessionInfo{}, "", false, false
+	}
+	combined := info.Pending + chars
+	if submit {
+		combined += "\n"
+	}
+	return info, combined, true, len(combined) <= maxSessionInputBuffer
+}
+
+func (s *sessionTracker) commitInput(
+	id string,
+	chars string,
+	submit bool,
+) {
+	if id == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, ok := s.known[id]
+	if !ok {
+		return
+	}
+	combined := info.Pending + chars
+	if submit {
+		combined += "\n"
+	}
+	if info.InputMode == sessionInputData {
+		if index := strings.LastIndexByte(combined, '\n'); index >= 0 {
+			combined = combined[index+1:]
+		}
+	}
+	if len(combined) > maxSessionInputBuffer {
+		combined = combined[len(combined)-maxSessionInputBuffer:]
+	}
+	info.Pending = combined
+	s.known[id] = info
+}
+
+func (s *sessionTracker) acquireInput(
+	ctx context.Context,
+	id string,
+) (func(), error) {
+	if id == "" {
+		return nil, nil
+	}
+	s.mu.Lock()
+	if _, ok := s.known[id]; !ok {
+		s.mu.Unlock()
+		return nil, nil
+	}
+	gate := s.inputGates[id]
+	s.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-gate:
+		var once sync.Once
+		return func() {
+			once.Do(func() {
+				gate <- struct{}{}
+			})
+		}, nil
+	}
 }
 
 // isKilled returns true when id was killed.
@@ -112,10 +228,11 @@ func (s *sessionTracker) isKilled(id string) bool {
 func (s *sessionTracker) reset() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.known = make(map[string]bool)
+	s.known = make(map[string]sessionInfo)
 	s.knownOrder = nil
 	s.killed = make(map[string]bool)
 	s.killedOrder = nil
+	s.inputGates = make(map[string]chan struct{})
 }
 
 func (s *sessionTracker) removeKnownOrder(id string) {

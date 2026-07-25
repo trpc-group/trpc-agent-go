@@ -96,6 +96,21 @@ func networkFlagFindings(a *analysis, p Policy) []Finding {
 			continue
 		}
 		out = append(out, networkCommandFlagFindings(argv, p)...)
+		if basenameLower(argv[0]) == "find" {
+			for i := 0; i+1 < len(argv); i++ {
+				switch argv[i] {
+				case "-exec", "-execdir", "-ok", "-okdir":
+				default:
+					continue
+				}
+				payload := execPayload(argv[i+1:])
+				if len(payload) == 0 {
+					continue
+				}
+				out = append(out, networkCommandFlagFindings(payload, p)...)
+				i += len(payload)
+			}
+		}
 	}
 	return out
 }
@@ -259,7 +274,7 @@ func sshDangerousOptionFindings(
 			})
 		}
 	}
-	if base == "sftp" {
+	if base == "scp" || base == "sftp" {
 		for _, value := range sshOptionValues(argv, 'D') {
 			if value == "" {
 				continue

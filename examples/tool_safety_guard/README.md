@@ -29,7 +29,7 @@ WrapTool("whitelisted request") -> allow
 WrapTool("dependency install") -> ask
 WrapTool("safe go test") -> allow
 Wrapped redacted result: {"output":"API_KEY=[REDACTED:stripe_key:len=28]"}
-Scanned 19 samples: 5 allowed, 12 denied, 2 asked (duration=3ms)
+Scanned 19 samples: 5 allowed, 12 denied, 2 asked (duration=<varies>)
 Wrote tool_safety_report.json and tool_safety_audit.jsonl
 ```
 

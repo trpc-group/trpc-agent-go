@@ -8,7 +8,19 @@
 
 package safety
 
-import "os"
+import (
+	"os"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
+
+func newTestScanner(t testing.TB, policy Policy, opts ...scannerOption) *scanner {
+	t.Helper()
+	scanner, err := newScanner(policy, opts...)
+	require.NoError(t, err)
+	return scanner
+}
 
 // saveFile writes data to path with 0600 permissions. Used only by tests
 // to avoid importing os in every test file.

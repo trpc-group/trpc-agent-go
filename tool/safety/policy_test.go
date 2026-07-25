@@ -169,7 +169,7 @@ audit:
 	require.Equal(t, "tool_safety_audit.jsonl", policy.Audit.Path)
 
 	// The disabled rule family must stop firing end to end.
-	scanner := NewScanner(policy)
+	scanner := newTestScanner(t, policy)
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,

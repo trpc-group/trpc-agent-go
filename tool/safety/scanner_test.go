@@ -18,7 +18,7 @@ import (
 
 func TestScanner_NoFindingsAllows(t *testing.T) {
 	p := testPolicy(t)
-	report, err := NewScanner(p).Scan(context.Background(), ScanInput{
+	report, err := newTestScanner(t, p).Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
 		Command:  "go test ./...",
@@ -37,7 +37,7 @@ func TestScanner_CriticalAlwaysDenies(t *testing.T) {
 	require.Error(t, p.Validate()) // critical cannot be ask
 	// Reload with valid policy and verify critical still denies.
 	p = testPolicy(t)
-	report, err := NewScanner(p).Scan(context.Background(), ScanInput{
+	report, err := newTestScanner(t, p).Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
 		Command:  "rm -rf /",
@@ -51,7 +51,7 @@ func TestScanner_AggregatesRuleOverrideBeforeRiskThreshold(t *testing.T) {
 	policy := testPolicy(t)
 	policy.DecisionThreshold.High = DecisionDeny
 	policy.Rules.Dependencies.Action = DecisionAsk
-	report, err := NewScanner(policy).Scan(context.Background(), ScanInput{
+	report, err := newTestScanner(t, policy).Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
 		Command:  "npm install package",
@@ -62,7 +62,7 @@ func TestScanner_AggregatesRuleOverrideBeforeRiskThreshold(t *testing.T) {
 
 func TestScanner_DeterministicFindingOrder(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 	in := ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "rm -rf /"}
 	var prev []Finding
 	for i := 0; i < 20; i++ {
@@ -78,7 +78,7 @@ func TestScanner_DeterministicFindingOrder(t *testing.T) {
 
 func TestScanner_SortsByRiskDescendingThenRuleID(t *testing.T) {
 	p := testPolicy(t)
-	report, err := NewScanner(p).Scan(context.Background(), ScanInput{
+	report, err := newTestScanner(t, p).Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
 		Command:  "rm -rf /",
@@ -97,7 +97,7 @@ func TestScanner_SortsByRiskDescendingThenRuleID(t *testing.T) {
 
 func TestScanner_BatchReportSummary(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 	inputs := []ScanInput{
 		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "go test ./..."},
 		{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "rm -rf /"},
@@ -113,7 +113,7 @@ func TestScanner_BatchReportSummary(t *testing.T) {
 
 func TestScanner_ReportHasSchemaAndScanID(t *testing.T) {
 	p := testPolicy(t)
-	report, err := NewScanner(p).Scan(context.Background(), ScanInput{
+	report, err := newTestScanner(t, p).Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "go test ./...",
 	})
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestScanner_ReportHasSchemaAndScanID(t *testing.T) {
 
 func TestScanner_RaceSafe(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 	in := ScanInput{ToolName: "workspace_exec", Backend: BackendWorkspaceExec, Command: "rm -rf /"}
 	done := make(chan struct{}, 8)
 	for i := 0; i < 8; i++ {
@@ -147,7 +147,7 @@ func TestScanner_RaceSafe(t *testing.T) {
 
 func TestScan500_PerformanceUnderOneSecond(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 
 	// 500-line code block.
 	bigCode := make([]string, 0, 500)
@@ -186,44 +186,30 @@ func TestScan500_PerformanceUnderOneSecond(t *testing.T) {
 }
 
 // TestScanner_InvalidPolicyFailsClosed proves that constructing a
-// scanner with an invalid policy cannot produce a fail-open scanner:
-// every Scan reports the stored validation error, which callers convert
-// into a deny decision.
+// scanner with an invalid policy cannot produce a fail-open scanner.
 func TestScanner_InvalidPolicyFailsClosed(t *testing.T) {
 	// The zero policy disables every rule family; the scanner must not
 	// silently allow dangerous input with it.
-	s := NewScanner(Policy{})
-	_, err := s.Scan(context.Background(), ScanInput{
-		ToolName: "workspace_exec",
-		Backend:  BackendWorkspaceExec,
-		Command:  "rm -rf /",
-	})
+	s, err := newScanner(Policy{})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "version")
+	require.Nil(t, s)
 
-	// A policy whose lists would allow the command still fails closed
-	// when another field is invalid.
+	// A malformed denied-path glob is rejected before a scanner can be
+	// used, even when the rest of the policy is valid.
 	p := testPolicy(t)
 	p.DeniedPathGlobs = []string{"**/[bad"}
-	s = NewScanner(p)
-	_, err = s.Scan(context.Background(), ScanInput{
-		ToolName: "workspace_exec",
-		Backend:  BackendWorkspaceExec,
-		Command:  "ls",
-	})
+	s, err = newScanner(p)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "denied_path_globs")
-
-	// ScanBatch fails closed on the same construction error.
-	_, err = s.ScanBatch(context.Background(), []ScanInput{{Command: "ls"}})
-	require.Error(t, err)
+	require.Nil(t, s)
 }
 
 // TestScanner_PolicyDeepCopied proves that caller-side mutations of the
 // policy's slice fields after construction cannot change live decisions.
 func TestScanner_PolicyDeepCopied(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 
 	// Mutate the caller's slices in place; the scanner's stored copy
 	// must be unaffected.
@@ -267,7 +253,7 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 	require.Len(t, in.CodeBlocks, 1)
 	require.Equal(t, "python", in.CodeBlocks[0].Language)
 	in.Timeout = time.Second
-	report, err := NewScanner(p).Scan(context.Background(), in)
+	report, err := newTestScanner(t, p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionAllow, report.Decision)
 
@@ -277,7 +263,7 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 		`{"code_blocks":"[{\"language\":\"python\",\"code\":\"import os; os.system('rm -rf /')\"}]"}`), reg)
 	require.NoError(t, err)
 	in.Timeout = time.Second
-	report, err = NewScanner(p).Scan(context.Background(), in)
+	report, err = newTestScanner(t, p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
 
@@ -286,9 +272,64 @@ func TestScanner_DoubleEncodedCodeBlocks(t *testing.T) {
 		`{"code_blocks":"{\"language\":\"bash\",\"code\":\"rm -rf /\"}"}`), reg)
 	require.NoError(t, err)
 	in.Timeout = time.Second
-	report, err = NewScanner(p).Scan(context.Background(), in)
+	report, err = newTestScanner(t, p).Scan(context.Background(), in)
 	require.NoError(t, err)
 	require.Equal(t, DecisionDeny, report.Decision)
+}
+
+func TestScanner_UnknownExecutionShapesFailClosed(t *testing.T) {
+	reg := newProfileRegistry()
+	scanner := newTestScanner(t, testPolicy(t))
+
+	in, err := decodeRequest(
+		"run_script",
+		[]byte(`{"script":"rm -rf /"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	report, err := scanner.Scan(context.Background(), in)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "command.dangerous_delete")
+
+	in, err = decodeRequest(
+		"run_script",
+		[]byte(`{"script":"echo hello"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	report, err = scanner.Scan(context.Background(), in)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAsk, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "unknown.command_shaped_tool")
+
+	in, err = decodeRequest(
+		"search",
+		[]byte(`{"query":"hello"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	report, err = scanner.Scan(context.Background(), in)
+	require.NoError(t, err)
+	require.Equal(t, DecisionAllow, report.Decision)
+}
+
+func TestScanner_EmptyCodeLanguageUsesPythonDefault(t *testing.T) {
+	report, err := newTestScanner(t, testPolicy(t)).Scan(
+		context.Background(),
+		ScanInput{
+			ToolName: "execute_code",
+			Backend:  BackendCodeExec,
+			CodeBlocks: []CodeBlock{{
+				Code: `from requests import request
+request("GET", "https://evil.example")`,
+			}},
+			Timeout: time.Second,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(t, ruleIDSet(report.Findings), "network.non_whitelisted_domain")
 }
 
 func joinLines(lines []string) string {
@@ -305,7 +346,7 @@ func joinLines(lines []string) string {
 // TestScanner_ScanBatchCancelledContext verifies that ScanBatch observes
 // context cancellation instead of scanning the remaining inputs.
 func TestScanner_ScanBatchCancelledContext(t *testing.T) {
-	s := NewScanner(DefaultPolicy())
+	s := newTestScanner(t, DefaultPolicy())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	_, err := s.ScanBatch(ctx, []ScanInput{
@@ -316,7 +357,7 @@ func TestScanner_ScanBatchCancelledContext(t *testing.T) {
 }
 
 func TestScanner_NilScanBatchReturnsError(t *testing.T) {
-	var scanner *Scanner
+	var scanner *scanner
 	_, err := scanner.ScanBatch(context.Background(), nil)
 	require.ErrorContains(t, err, "scanner is nil")
 }

@@ -38,7 +38,7 @@ var codePatterns = []codePattern{
 	// Network egress from code.
 	{
 		id:      "code.network_call",
-		pattern: regexp.MustCompile(`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|socket\.(?:create_connection|socket)\s*\(|http\.Get|http\.Post|net/http\.Get|net\.Dial(?:Timeout)?\s*\(|fetch\s*\(|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection)\s*\(|new\s+(?:Socket|TCPSocket)\s*\(|curl_init|file_get_contents\s*\(\s*['"]http)`),
+		pattern: regexp.MustCompile(`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch|request)|socket\.(?:create_connection|socket)\s*\(|http\.Get|http\.Post|net/http\.Get|net\.Dial(?:Timeout)?\s*\(|fetch\s*\(|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection)\s*\(|new\s+(?:Socket|TCPSocket)\s*\(|curl_init|file_get_contents\s*\(\s*['"]http)`),
 	},
 	// Package installation from code.
 	{
@@ -79,7 +79,7 @@ var (
 		`(?m)(?:^|;)\s*import\s+(os|socket|subprocess|requests|urllib\.request)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
 	)
 	pythonFromImportRegex = regexp.MustCompile(
-		`(?m)(?:^|;)\s*from\s+(os|socket|subprocess|urllib\.request)\s+import\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
+		`(?ms)(?:^|;)\s*from\s+(os|requests|socket|subprocess|urllib\.request)\s+import\s+(\([^)]*\)|[^\n;]+)`,
 	)
 )
 
@@ -175,7 +175,7 @@ func scanCodeBlock(a *analysis, b CodeBlock) {
 }
 
 var dynamicNetworkCallRegex = regexp.MustCompile(
-	`(?m)(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|socket\.create_connection|http\.(?:Get|Post)|net\.Dial(?:Timeout)?|fetch|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection))\s*\(\s*[A-Za-z_]`,
+	`(?m)(?:(?:urllib\.request\.urlopen|urllib2\.urlopen|requests\.(?:get|post|put|delete|head|patch)|socket\.create_connection|http\.(?:Get|Post)|net\.Dial(?:Timeout)?|fetch|axios\.(?:get|post|put|delete)|net\.(?:connect|createConnection))\s*\(\s*[A-Za-z_]|requests\.request\s*\(\s*[^,\n]+,\s*[A-Za-z_]|requests\.request\s*\([^)]*\burl\s*=\s*[A-Za-z_])`,
 )
 
 func hasDynamicNetworkCall(code string) bool {
@@ -261,14 +261,15 @@ func scanPythonModuleAliases(
 			}
 		case "requests":
 			if aliasMethodCalled(code, alias,
-				"get", "post", "put", "delete", "head", "patch") {
+				"get", "post", "put", "delete", "head", "patch", "request") {
 				rec.networkCall = true
 				rec.networkDynamic = rec.networkDynamic ||
 					aliasMethodHasDynamicArgument(
 						code, alias,
 						"get", "post", "put", "delete",
 						"head", "patch",
-					)
+					) ||
+					requestMethodHasDynamicURL(code, alias)
 			}
 		case "urllib.request":
 			if aliasMethodCalled(code, alias, "urlopen") {
@@ -293,41 +294,196 @@ func scanPythonFromImports(
 	code string,
 	rec *codeMatchRecord,
 ) {
-	for _, match := range pythonFromImportRegex.FindAllStringSubmatch(code, -1) {
-		module, imported, alias := match[1], match[2], match[3]
-		if alias == "" {
-			alias = imported
-		}
-		if !standaloneCall(code, alias) {
-			continue
-		}
-		switch module {
-		case "os":
-			if imported == "system" || imported == "popen" {
-				rec.shellExec = true
-				extractStandaloneShellCommands(a, code, alias)
+	importCode := stripPythonLineComments(code)
+	for _, match := range pythonFromImportRegex.FindAllStringSubmatch(importCode, -1) {
+		module := match[1]
+		for _, importedName := range parsePythonImportList(match[2]) {
+			imported, alias := importedName.imported, importedName.alias
+			if !standaloneCall(code, alias) {
+				continue
 			}
-		case "subprocess":
-			switch imported {
-			case "call", "run", "Popen", "check_call", "check_output":
-				rec.shellExec = true
-				extractStandaloneShellCommands(a, code, alias)
-			}
-		case "urllib.request":
-			if imported == "urlopen" {
-				rec.networkCall = true
-				rec.networkDynamic = rec.networkDynamic ||
-					standaloneCallHasDynamicArgument(
-						code, alias,
-					)
-			}
-		case "socket":
-			if imported == "create_connection" || imported == "socket" {
-				rec.networkCall = true
-				rec.networkDynamic = true
+			switch module {
+			case "os":
+				if imported == "system" || imported == "popen" {
+					rec.shellExec = true
+					extractStandaloneShellCommands(a, code, alias)
+				}
+			case "subprocess":
+				switch imported {
+				case "call", "run", "Popen", "check_call", "check_output":
+					rec.shellExec = true
+					extractStandaloneShellCommands(a, code, alias)
+				}
+			case "requests":
+				switch imported {
+				case "get", "post", "put", "delete", "head", "patch":
+					rec.networkCall = true
+					rec.networkDynamic = rec.networkDynamic ||
+						standaloneCallHasDynamicArgument(
+							code, alias,
+						)
+				case "request":
+					rec.networkCall = true
+					rec.networkDynamic = rec.networkDynamic ||
+						standaloneRequestHasDynamicURL(code, alias)
+				}
+			case "urllib.request":
+				if imported == "urlopen" {
+					rec.networkCall = true
+					rec.networkDynamic = rec.networkDynamic ||
+						standaloneCallHasDynamicArgument(
+							code, alias,
+						)
+				}
+			case "socket":
+				if imported == "create_connection" || imported == "socket" {
+					rec.networkCall = true
+					rec.networkDynamic = true
+				}
 			}
 		}
 	}
+}
+
+func stripPythonLineComments(code string) string {
+	var out strings.Builder
+	state := pythonLexState{}
+	for i := 0; i < len(code); i++ {
+		if state.quote != 0 {
+			i = writePythonQuotedChar(&out, code, i, &state)
+			continue
+		}
+		i = writePythonUnquotedChar(&out, code, i, &state)
+	}
+	return out.String()
+}
+
+type pythonLexState struct {
+	quote   byte
+	triple  bool
+	escaped bool
+}
+
+func writePythonQuotedChar(
+	out *strings.Builder,
+	code string,
+	index int,
+	state *pythonLexState,
+) int {
+	ch := code[index]
+	if state.triple && !state.escaped && ch == state.quote &&
+		index+2 < len(code) &&
+		code[index+1] == state.quote &&
+		code[index+2] == state.quote {
+		out.WriteString(code[index : index+3])
+		state.quote = 0
+		state.triple = false
+		return index + 2
+	}
+	out.WriteByte(ch)
+	if state.escaped {
+		state.escaped = false
+		return index
+	}
+	if ch == '\\' {
+		state.escaped = true
+		return index
+	}
+	if !state.triple && ch == state.quote {
+		state.quote = 0
+	}
+	return index
+}
+
+func writePythonUnquotedChar(
+	out *strings.Builder,
+	code string,
+	index int,
+	state *pythonLexState,
+) int {
+	ch := code[index]
+	switch ch {
+	case '\'', '"':
+		state.quote = ch
+		if index+2 < len(code) &&
+			code[index+1] == ch && code[index+2] == ch {
+			state.triple = true
+			out.WriteString(code[index : index+3])
+			return index + 2
+		}
+		out.WriteByte(ch)
+	case '\\':
+		if index+1 < len(code) && code[index+1] == '\n' {
+			out.WriteByte(' ')
+			return index + 1
+		}
+		if index+2 < len(code) &&
+			code[index+1] == '\r' && code[index+2] == '\n' {
+			out.WriteByte(' ')
+			return index + 2
+		}
+		out.WriteByte(ch)
+	case '#':
+		for index+1 < len(code) && code[index+1] != '\n' {
+			index++
+		}
+	default:
+		out.WriteByte(ch)
+	}
+	return index
+}
+
+type pythonImportedName struct {
+	imported string
+	alias    string
+}
+
+func parsePythonImportList(clause string) []pythonImportedName {
+	var withoutComments strings.Builder
+	for _, line := range strings.Split(clause, "\n") {
+		if comment := strings.IndexByte(line, '#'); comment >= 0 {
+			line = line[:comment]
+		}
+		withoutComments.WriteString(line)
+		withoutComments.WriteByte('\n')
+	}
+	clause = withoutComments.String()
+	clause = strings.TrimSpace(clause)
+	clause = strings.TrimPrefix(clause, "(")
+	clause = strings.TrimSuffix(clause, ")")
+	var out []pythonImportedName
+	for _, item := range strings.Split(clause, ",") {
+		fields := strings.Fields(strings.TrimSpace(item))
+		if len(fields) == 0 {
+			continue
+		}
+		name := pythonImportedName{
+			imported: fields[0],
+			alias:    fields[0],
+		}
+		if len(fields) == 3 && fields[1] == "as" {
+			name.alias = fields[2]
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
+func requestMethodHasDynamicURL(code, alias string) bool {
+	prefix := `\b` + regexp.QuoteMeta(alias) + `\.request`
+	return requestCallHasDynamicURL(code, prefix)
+}
+
+func standaloneRequestHasDynamicURL(code, name string) bool {
+	prefix := `\b` + regexp.QuoteMeta(name)
+	return requestCallHasDynamicURL(code, prefix)
+}
+
+func requestCallHasDynamicURL(code, prefix string) bool {
+	positional := prefix + `\s*\(\s*[^,\n]+,\s*[A-Za-z_]`
+	keyword := prefix + `\s*\([^)]*\burl\s*=\s*[A-Za-z_]`
+	return regexp.MustCompile(positional).MatchString(code) ||
+		regexp.MustCompile(keyword).MatchString(code)
 }
 
 func aliasMethodCalled(code, alias string, methods ...string) bool {

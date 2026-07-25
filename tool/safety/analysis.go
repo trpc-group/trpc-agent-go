@@ -278,7 +278,9 @@ func mergeAnalysis(a, shell *analysis) {
 		a.SleepSeconds = shell.SleepSeconds
 	}
 	a.HasOutputBomb = a.HasOutputBomb || shell.HasOutputBomb
+	a.HasUnboundedLoop = a.HasUnboundedLoop || shell.HasUnboundedLoop
 	a.InstallPackages = a.InstallPackages || shell.InstallPackages
+	a.codeMatches = append(a.codeMatches, shell.codeMatches...)
 }
 
 // hashAnalysisInput returns a SHA-256 hex digest of the command plus
@@ -1349,7 +1351,7 @@ func isGitSubcommandName(tok string) bool {
 		"rev-parse", "cat-file", "ls-tree", "ls-files", "grep",
 		"name-rev", "rev-list", "show-ref", "update-ref", "symbolic-ref",
 		"for-each-ref", "pack-refs", "count-objects", "unpack-objects",
-		"verify-pack", "strip", "stripping", "submodule", "worktree",
+		"verify-pack", "submodule", "worktree",
 		"sparse-checkout", "multi-pack-index", "maintenance",
 		"help", "version":
 		return true

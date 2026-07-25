@@ -67,6 +67,45 @@ func TestRedactArtifact_JSONUsesFieldAwareRedaction(t *testing.T) {
 	require.Contains(t, string(out.Data), "9007199254740993")
 }
 
+func TestRedactArtifact_JSONDuplicateKeysFailClosed(t *testing.T) {
+	for _, data := range []string{
+		`{"note":"AKIAIOSFODNN7EXAMPLE","note":"safe"}`,
+		`{"note":"\u0041KIAIOSFODNN7EXAMPLE","note":"safe"}`,
+		`{"outer":{"token":"hunter2","token":"safe"}}`,
+	} {
+		_, _, err := redactArtifact(&artifact.Artifact{
+			MimeType: "application/json",
+			Data:     []byte(data),
+		})
+		require.Error(t, err, data)
+	}
+}
+
+func TestRedactArtifact_RejectsSecretMIMEParameters(t *testing.T) {
+	for _, mimeType := range []string{
+		"text/plain; profile=AKIAIOSFODNN7EXAMPLE",
+		"text/plain; token=hunter2",
+	} {
+		_, _, err := redactArtifact(&artifact.Artifact{
+			MimeType: mimeType,
+			Data:     []byte("clean"),
+		})
+		require.Error(t, err, mimeType)
+	}
+}
+
+func TestRedactArtifact_PreservesCleanParameterizedMIME(t *testing.T) {
+	in := &artifact.Artifact{
+		MimeType: "application/json; charset=utf-8",
+		Data:     []byte(`{"value":"clean"}`),
+	}
+	out, changed, err := redactArtifact(in)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, in.MimeType, out.MimeType)
+	require.Equal(t, in.Data, out.Data)
+}
+
 func TestRedactArtifact_InvalidJSONFailsClosed(t *testing.T) {
 	in := &artifact.Artifact{
 		MimeType: "application/json",
@@ -164,6 +203,22 @@ func TestArtifactServiceWrapper_RefusesBinarySecretOnSave(t *testing.T) {
 	}
 	_, err := wrapped.SaveArtifact(context.Background(), artifact.SessionInfo{}, "file.bin", in)
 	require.Error(t, err)
+}
+
+func TestArtifactServiceWrapper_RefusesSecretMIMEBeforeSave(t *testing.T) {
+	stub := &stubArtifactService{}
+	wrapped := newArtifactServiceWrapper(stub)
+	_, err := wrapped.SaveArtifact(
+		context.Background(),
+		artifact.SessionInfo{},
+		"file.txt",
+		&artifact.Artifact{
+			MimeType: "text/plain; token=hunter2",
+			Data:     []byte("clean"),
+		},
+	)
+	require.Error(t, err)
+	require.Nil(t, stub.saved)
 }
 
 // TestArtifactServiceWrapper_RefusesSecretFilename verifies that a

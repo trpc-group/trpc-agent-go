@@ -111,6 +111,9 @@ type ScanInput struct {
 	// findings so the policy can deny or ask based on tool-declared
 	// capabilities without inspecting the arguments.
 	Metadata ToolMetadata
+
+	sessionSubmit        bool
+	sessionInputOverflow bool
 }
 
 // ToolMetadata mirrors the tool's published metadata. It is populated

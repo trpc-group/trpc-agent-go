@@ -31,6 +31,7 @@ type wrapperTestTool struct {
 	err             error
 	permissionErr   error
 	permissionPanic any
+	permissionCalls int
 	panicValue      any
 	gotToolCallID   string
 	stateDelta      map[string][]byte
@@ -74,6 +75,7 @@ func (t *wrapperTestTool) CheckPermission(
 	_ context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
+	t.permissionCalls++
 	t.gotToolCallID = req.ToolCallID
 	if t.permissionPanic != nil {
 		panic(t.permissionPanic)
@@ -485,6 +487,8 @@ func TestWrapTool_PreservesToolCapabilities(t *testing.T) {
 		wrapped.(interface {
 			TRPCAgentGoStructuredStreamErrorsOptIn() bool
 		}).TRPCAgentGoStructuredStreamErrorsOptIn())
+	_, ok := wrapped.(tool.PermissionChecker)
+	require.True(t, ok)
 	require.Equal(t, inner.stateDelta,
 		wrapped.(interface {
 			StateDelta(string, []byte, []byte) map[string][]byte
@@ -498,6 +502,98 @@ func TestWrapTool_PreservesToolCapabilities(t *testing.T) {
 				[]byte,
 			) map[string][]byte
 		}).StateDeltaForInvocation(nil, "id", nil, nil))
+}
+
+func TestWrapTool_FrameworkPermissionPrecheck(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+		result:   "ok",
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	checker := wrapped.(tool.PermissionChecker)
+
+	args := []byte(`{"command":"ls","timeout":10}`)
+	req := &tool.PermissionRequest{
+		Tool:        wrapped,
+		ToolName:    "workspace_exec",
+		ToolCallID:  "call-precheck",
+		Declaration: wrapped.Declaration(),
+		Arguments:   args,
+		Metadata:    tool.MetadataOf(wrapped),
+	}
+	decision, err := checker.CheckPermission(context.Background(), req)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.Equal(t, 1, inner.permissionCalls)
+
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		req.ToolCallID,
+	)
+	result, err := wrapped.Call(ctx, args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", result)
+	require.True(t, inner.called)
+	require.Equal(t, 1, inner.permissionCalls)
+}
+
+func TestWrapTool_FrameworkPermissionPrecheckDeniesSafetyResult(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.AllowPermission(),
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	checker := wrapped.(tool.PermissionChecker)
+
+	decision, err := checker.CheckPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			Tool:        wrapped,
+			ToolName:    "workspace_exec",
+			ToolCallID:  "call-denied",
+			Declaration: wrapped.Declaration(),
+			Arguments: []byte(
+				`{"command":"rm -rf /","timeout":10}`,
+			),
+			Metadata: tool.MetadataOf(wrapped),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.False(t, inner.called)
+}
+
+func TestWrapTool_FrameworkPermissionPrecheckRedactsInnerReason(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.DenyPermission(
+			"password: hunter2xyz",
+		),
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+
+	decision, err := wrapped.(tool.PermissionChecker).CheckPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			Tool:        wrapped,
+			ToolName:    "workspace_exec",
+			ToolCallID:  "call-inner-denied",
+			Declaration: wrapped.Declaration(),
+			Arguments: []byte(
+				`{"command":"ls","timeout":10}`,
+			),
+			Metadata: tool.MetadataOf(wrapped),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.NotContains(t, decision.Reason, "hunter2xyz")
+	require.Contains(t, decision.Reason, "[REDACTED:")
 }
 
 func TestWrapTool_InnerPermissionCheckerRuns(t *testing.T) {

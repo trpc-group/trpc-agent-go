@@ -10,10 +10,12 @@ package safety
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -163,6 +165,70 @@ func (w *wrappedToolBase) StateDeltaForInvocation(
 type wrappedCallableTool struct {
 	wrappedToolBase
 	callable tool.CallableTool
+
+	precheckMu    sync.Mutex
+	prechecks     map[string][sha256.Size]byte
+	precheckOrder []string
+}
+
+const maxWrapperPrechecks = 1024
+
+// CheckPermission implements tool.PermissionChecker so framework-managed
+// calls surface static safety denials before execution callbacks and state
+// delta handling. Call performs the owning lifecycle check immediately before
+// execution, where concurrency, audit, and session reservations are acquired.
+func (w *wrappedCallableTool) CheckPermission(
+	ctx context.Context,
+	req *tool.PermissionRequest,
+) (
+	decision tool.PermissionDecision,
+	err error,
+) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			decision = tool.PermissionDecision{}
+			err = fmt.Errorf(
+				"wrapped tool permission check panicked (type %T)",
+				recovered,
+			)
+		}
+	}()
+	if req == nil {
+		return tool.DenyPermission("permission request is nil"), nil
+	}
+	innerReq := *req
+	innerReq.Tool = w.tool
+	innerReq.Declaration = w.Declaration()
+	innerReq.Metadata = w.metadata
+	innerChecked := false
+	if checker, ok := w.tool.(tool.PermissionChecker); ok {
+		decision, err = checker.CheckPermission(ctx, &innerReq)
+		if err != nil {
+			return tool.PermissionDecision{}, w.sanitizeError(
+				"wrapped tool permission check failed", err,
+			)
+		}
+		decision, err = tool.NormalizePermissionDecision(decision)
+		if err != nil {
+			return tool.PermissionDecision{}, w.sanitizeError(
+				"invalid permission decision", err,
+			)
+		}
+		if decision.Action != tool.PermissionActionAllow {
+			decision.Reason = redactedSnippet(
+				decision.Reason,
+				permissionReasonMaxLen,
+			)
+			return decision, nil
+		}
+		innerChecked = true
+	}
+	decision, err = w.guard.previewToolCall(ctx, req)
+	if err == nil && decision.Action == tool.PermissionActionAllow &&
+		innerChecked {
+		w.rememberPrecheck(req.ToolCallID, req.Arguments)
+	}
+	return decision, err
 }
 
 func (w *wrappedCallableTool) Call(
@@ -210,13 +276,15 @@ func (w *wrappedCallableTool) Call(
 		Arguments:   jsonArgs,
 		Metadata:    w.metadata,
 	}
-	if checker, ok := w.tool.(tool.PermissionChecker); ok {
+	if checker, ok := w.tool.(tool.PermissionChecker); ok &&
+		!w.consumePrecheck(toolCallID, jsonArgs) {
 		decision, err := checker.CheckPermission(ctx, req)
 		if err != nil {
 			return nil, w.sanitizeError(
 				"wrapped tool permission check failed", err,
 			)
 		}
+
 		decision, err = tool.NormalizePermissionDecision(decision)
 		if err != nil {
 			return nil, w.sanitizeError(
@@ -248,6 +316,55 @@ func (w *wrappedCallableTool) Call(
 	return w.completeCallSafely(
 		ctx, toolCallID, jsonArgs, originalResult, callErr,
 	)
+}
+
+func (w *wrappedCallableTool) rememberPrecheck(
+	toolCallID string,
+	arguments []byte,
+) {
+	if toolCallID == "" {
+		return
+	}
+	w.precheckMu.Lock()
+	defer w.precheckMu.Unlock()
+	if w.prechecks == nil {
+		w.prechecks = make(map[string][sha256.Size]byte)
+	}
+	if _, exists := w.prechecks[toolCallID]; !exists {
+		w.precheckOrder = append(w.precheckOrder, toolCallID)
+	}
+	w.prechecks[toolCallID] = sha256.Sum256(arguments)
+	for len(w.precheckOrder) > maxWrapperPrechecks {
+		oldest := w.precheckOrder[0]
+		w.precheckOrder = w.precheckOrder[1:]
+		delete(w.prechecks, oldest)
+	}
+}
+
+func (w *wrappedCallableTool) consumePrecheck(
+	toolCallID string,
+	arguments []byte,
+) bool {
+	if toolCallID == "" {
+		return false
+	}
+	w.precheckMu.Lock()
+	defer w.precheckMu.Unlock()
+	expected, ok := w.prechecks[toolCallID]
+	if !ok {
+		return false
+	}
+	delete(w.prechecks, toolCallID)
+	for i, id := range w.precheckOrder {
+		if id == toolCallID {
+			w.precheckOrder = append(
+				w.precheckOrder[:i],
+				w.precheckOrder[i+1:]...,
+			)
+			break
+		}
+	}
+	return expected == sha256.Sum256(arguments)
 }
 
 func (w *wrappedCallableTool) completeCallSafely(

@@ -21,7 +21,7 @@ func BenchmarkScan(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	s := NewScanner(p)
+	s := newTestScanner(b, p)
 	in := ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -41,7 +41,7 @@ func BenchmarkScanDangerous(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	s := NewScanner(p)
+	s := newTestScanner(b, p)
 	in := ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -61,7 +61,7 @@ func BenchmarkScanCodeBlock(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	s := NewScanner(p)
+	s := newTestScanner(b, p)
 	lines := make([]string, 0, 500)
 	for i := 0; i < 500; i++ {
 		lines = append(lines, "print('line "+itoa(i)+"')")
@@ -85,7 +85,7 @@ func BenchmarkScanBatch500(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	s := NewScanner(p)
+	s := newTestScanner(b, p)
 	inputs := make([]ScanInput, 0, 500)
 	for i := 0; i < 500; i++ {
 		inputs = append(inputs, ScanInput{

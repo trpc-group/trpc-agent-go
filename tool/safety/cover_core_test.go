@@ -284,14 +284,14 @@ func TestCovercore_TelemetryNilContextAndIntAttributes(t *testing.T) {
 // TestCovercore_ScannerNilReceiverAndOptions covers the nil-scanner error
 // and the scanner option setters.
 func TestCovercore_ScannerNilReceiverAndOptions(t *testing.T) {
-	var s *Scanner
+	var s *scanner
 	_, err := s.Scan(context.Background(), ScanInput{ToolName: "t"})
 	require.Error(t, err)
 
 	fixed := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	s = NewScanner(DefaultPolicy(),
-		WithScannerClock(func() time.Time { return fixed }),
-		WithScannerProfile(ToolProfile{
+	s = newTestScanner(t, DefaultPolicy(),
+		withScannerClock(func() time.Time { return fixed }),
+		withScannerProfile(ToolProfile{
 			Name:    "custom_tool",
 			Backend: BackendMCP,
 		}),
@@ -301,7 +301,7 @@ func TestCovercore_ScannerNilReceiverAndOptions(t *testing.T) {
 	require.Equal(t, fixed, report.Timestamp)
 
 	// A nil clock option leaves the default clock in place.
-	s2 := NewScanner(DefaultPolicy(), WithScannerClock(nil))
+	s2 := newTestScanner(t, DefaultPolicy(), withScannerClock(nil))
 	report2, err := s2.Scan(context.Background(), ScanInput{ToolName: "workspace_exec", Command: "ls"})
 	require.NoError(t, err)
 	require.False(t, report2.Timestamp.IsZero())
@@ -310,7 +310,7 @@ func TestCovercore_ScannerNilReceiverAndOptions(t *testing.T) {
 // TestCovercore_ScanFillsBackendFromProfile covers the backend backfill
 // when the caller populated ToolProfile but not Backend.
 func TestCovercore_ScanFillsBackendFromProfile(t *testing.T) {
-	s := NewScanner(DefaultPolicy())
+	s := newTestScanner(t, DefaultPolicy())
 	report, err := s.Scan(context.Background(), ScanInput{
 		ToolName:    "runner",
 		ToolProfile: "workspace_exec",
@@ -348,7 +348,7 @@ func TestCovercore_AnyRedactedEvidenceMarker(t *testing.T) {
 // TestCovercore_ScanSafeInputAllows verifies a benign command produces an
 // allow report with a non-nil findings list.
 func TestCovercore_ScanSafeInputAllows(t *testing.T) {
-	s := NewScanner(DefaultPolicy())
+	s := newTestScanner(t, DefaultPolicy())
 	report, err := s.Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -360,10 +360,10 @@ func TestCovercore_ScanSafeInputAllows(t *testing.T) {
 }
 
 // TestCovercore_WithScannerProfileNilRegistry covers the lazy registry
-// initialization in WithScannerProfile.
+// initialization in withScannerProfile.
 func TestCovercore_WithScannerProfileNilRegistry(t *testing.T) {
-	var s Scanner
-	WithScannerProfile(ToolProfile{Name: "custom", Backend: BackendMCP})(&s)
+	var s scanner
+	withScannerProfile(ToolProfile{Name: "custom", Backend: BackendMCP})(&s)
 	p, ok := s.profiles.lookup("custom")
 	require.True(t, ok)
 	require.Equal(t, BackendMCP, p.Backend)

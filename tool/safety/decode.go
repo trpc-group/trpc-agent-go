@@ -73,28 +73,100 @@ func decodeUnknownTool(in ScanInput, arguments []byte) (ScanInput, error) {
 		// allow the call.
 		return in, fmt.Errorf("unknown tool: malformed arguments: %w", err)
 	}
-	command, present := raw["command"]
-	if !present {
-		// No command field: this is a non-execution MCP tool. Return
-		// the input unchanged so the guard allows it through (the MCP
-		// server's behavior is outside the local process boundary).
+	executionFields := []string{
+		"command", "cmd", "script", "shell",
+		"code", "code_blocks", "argv",
+	}
+	presentFields := make([]string, 0, len(executionFields))
+	for _, key := range executionFields {
+		if _, present := raw[key]; present {
+			presentFields = append(presentFields, key)
+		}
+	}
+	if len(presentFields) > 1 {
+		return in, fmt.Errorf(
+			"unknown tool: multiple execution fields are ambiguous: %s",
+			strings.Join(presentFields, ", "),
+		)
+	}
+	for _, key := range []string{"command", "cmd", "script", "shell"} {
+		value, present := raw[key]
+		if !present {
+			continue
+		}
+		command, ok := value.(string)
+		if !ok {
+			return in, fmt.Errorf(
+				"unknown tool: field %q must be a string, got %T",
+				key, value,
+			)
+		}
+		if strings.TrimSpace(command) == "" {
+			return in, fmt.Errorf(
+				"unknown tool: field %q must not be empty",
+				key,
+			)
+		}
+		in.Backend = BackendUnknown
+		in.Command = command
 		return in, nil
 	}
-	peaked, ok := command.(string)
-	if !ok {
-		return in, fmt.Errorf(
-			"unknown tool: field %q must be a string, got %T",
-			"command", command,
-		)
+	if value, present := raw["code"]; present {
+		code, ok := value.(string)
+		if !ok {
+			return in, fmt.Errorf(
+				"unknown tool: field %q must be a string, got %T",
+				"code", value,
+			)
+		}
+		if strings.TrimSpace(code) == "" {
+			return in, errors.New(
+				"unknown tool: field \"code\" must not be empty",
+			)
+		}
+		in.Backend = BackendUnknown
+		in.CodeBlocks = []CodeBlock{{Code: code}}
+		return in, nil
 	}
-	if strings.TrimSpace(peaked) == "" {
-		return in, errors.New(
-			"unknown tool: field \"command\" must not be empty",
-		)
+	if _, present := raw["code_blocks"]; present {
+		blocks, err := decodeCodeBlocks(raw, "code_blocks")
+		if err != nil {
+			return in, fmt.Errorf("unknown tool: %w", err)
+		}
+		in.Backend = BackendUnknown
+		in.CodeBlocks = blocks
+		return in, nil
 	}
-	in.Backend = BackendUnknown
-	in.Command = peaked
+	if value, present := raw["argv"]; present {
+		args, err := decodeStringSlice(value)
+		if err != nil {
+			return in, fmt.Errorf("unknown tool: field %q: %w", "argv", err)
+		}
+		in.Backend = BackendUnknown
+		in.Args = args
+		return in, nil
+	}
+	// No execution-shaped field: allow ordinary query/read payloads.
 	return in, nil
+}
+
+func decodeStringSlice(value any) ([]string, error) {
+	raw, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("must be an array of strings, got %T", value)
+	}
+	out := make([]string, 0, len(raw))
+	for i, item := range raw {
+		s, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("item %d must be a string, got %T", i, item)
+		}
+		out = append(out, s)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("must not be empty")
+	}
+	return out, nil
 }
 
 // decodeRequiredFields handles the command and code_blocks fields that
@@ -126,11 +198,26 @@ func decodeRequiredFields(
 // (write_stdin, kill_session, and their workspace_ prefixed variants).
 func decodeSessionFields(in *ScanInput, profile ToolProfile, raw map[string]any) {
 	switch profile.Name {
+	case "workspace_exec":
+		in.SessionInput = firstString(raw, "stdin")
 	case "write_stdin", "workspace_write_stdin":
-		in.SessionID = firstString(raw, "session_id", "sessionId")
+		in.SessionID = firstNonEmptyString(
+			raw,
+			"session_id",
+			"sessionId",
+		)
 		in.SessionInput = firstString(raw, "chars")
+		if submit, ok := rawBool(raw, "append_newline"); ok {
+			in.sessionSubmit = submit
+		} else if submit, ok := rawBool(raw, "submit"); ok {
+			in.sessionSubmit = submit
+		}
 	case "kill_session", "workspace_kill_session":
-		in.SessionID = firstString(raw, "session_id", "sessionId")
+		in.SessionID = firstNonEmptyString(
+			raw,
+			"session_id",
+			"sessionId",
+		)
 	}
 }
 
@@ -157,18 +244,21 @@ func decodeOptionalFields(
 			in.Env = env
 		}
 	}
-	for _, f := range profile.TimeoutFields {
-		if v, ok := rawInt(raw, f); ok {
-			// time.Duration(v) * time.Second must not overflow int64:
-			// a wrapped negative timeout would bypass
-			// resource.timeout_exceeded, so out-of-range values are a
-			// decode error (the scanner denies malformed inputs).
-			if v < 0 || int64(v) > math.MaxInt64/int64(time.Second) {
-				return fmt.Errorf("tool %q: field %q must be between 0 and %d seconds",
-					toolName, f, math.MaxInt64/int64(time.Second))
+	if profile.Name == "workspace_exec" {
+		timeout, field, ok := workspaceTimeoutSeconds(raw)
+		if ok {
+			if err := setDecodedTimeout(in, timeout, toolName, field); err != nil {
+				return err
 			}
-			in.Timeout = time.Duration(v) * time.Second
-			break
+		}
+	} else {
+		for _, f := range profile.TimeoutFields {
+			if v, ok := rawInt(raw, f); ok {
+				if err := setDecodedTimeout(in, v, toolName, f); err != nil {
+					return err
+				}
+				break
+			}
 		}
 	}
 	for _, f := range profile.BackgroundFields {
@@ -183,6 +273,41 @@ func decodeOptionalFields(
 			break
 		}
 	}
+	return nil
+}
+
+func workspaceTimeoutSeconds(raw map[string]any) (int, string, bool) {
+	for _, field := range []string{"timeout_sec", "timeoutSec"} {
+		if value, ok := rawInt(raw, field); ok {
+			if value < 0 {
+				return value, field, true
+			}
+			if value > 0 {
+				return value, field, true
+			}
+			break
+		}
+	}
+	if value, ok := rawInt(raw, "timeout"); ok {
+		return value, "timeout", true
+	}
+	return 0, "", false
+}
+
+func setDecodedTimeout(
+	in *ScanInput,
+	seconds int,
+	toolName string,
+	field string,
+) error {
+	if seconds < 0 ||
+		int64(seconds) > math.MaxInt64/int64(time.Second) {
+		return fmt.Errorf(
+			"tool %q: field %q must be between 0 and %d seconds",
+			toolName, field, math.MaxInt64/int64(time.Second),
+		)
+	}
+	in.Timeout = time.Duration(seconds) * time.Second
 	return nil
 }
 
@@ -219,6 +344,20 @@ func firstString(raw map[string]any, keys ...string) string {
 	for _, k := range keys {
 		if v, ok := rawString(raw, k); ok {
 			return v
+		}
+	}
+	return ""
+}
+
+func firstNonEmptyString(
+	raw map[string]any,
+	keys ...string,
+) string {
+	for _, key := range keys {
+		if value, ok := rawString(raw, key); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
 		}
 	}
 	return ""
@@ -302,54 +441,45 @@ func decodeCodeBlocks(raw map[string]any, key string) ([]CodeBlock, error) {
 	if !ok {
 		return nil, fmt.Errorf("field %q is required", key)
 	}
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("field %q: %w", key, err)
+	}
+
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return nil, fmt.Errorf("field %q: %w", key, err)
+	}
+	if decoded == nil {
+		return nil, nil
+	}
+
 	// The codeexec tool treats a string value as double-encoded JSON and
 	// unwraps it into the declared code blocks. Mirror that here so the
 	// permission check analyzes what will actually execute; labeling the
 	// JSON text as a bash block would scan the wrapper, not the payload.
-	if s, isString := v.(string); isString {
-		if strings.TrimSpace(s) == "" {
-			return nil, fmt.Errorf("field %q is empty", key)
-		}
-		var decoded any
-		if err := json.Unmarshal([]byte(s), &decoded); err != nil {
+	if s, isString := decoded.(string); isString {
+		encoded = []byte(s)
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
 			return nil, fmt.Errorf("field %q: invalid double-encoded JSON: %w", key, err)
 		}
-		v = decoded
 	}
-	switch val := v.(type) {
+	switch decoded.(type) {
 	case []any:
-		blocks := make([]CodeBlock, 0, len(val))
-		for i, item := range val {
-			b, err := decodeOneBlock(item)
-			if err != nil {
-				return nil, fmt.Errorf("field %q[%d]: %w", key, i, err)
-			}
-			blocks = append(blocks, b)
+		var blocks []CodeBlock
+		if err := json.Unmarshal(encoded, &blocks); err != nil {
+			return nil, fmt.Errorf("field %q: %w", key, err)
 		}
 		return blocks, nil
 	case map[string]any:
-		b, err := decodeOneBlock(val)
-		if err != nil {
+		var block CodeBlock
+		if err := json.Unmarshal(encoded, &block); err != nil {
 			return nil, fmt.Errorf("field %q: %w", key, err)
 		}
-		return []CodeBlock{b}, nil
+		return []CodeBlock{block}, nil
 	}
-	return nil, fmt.Errorf("field %q must be an array, an object, or a double-encoded JSON string, got %T", key, v)
-}
-
-// decodeOneBlock decodes a single code block object into a CodeBlock.
-func decodeOneBlock(item any) (CodeBlock, error) {
-	m, ok := item.(map[string]any)
-	if !ok {
-		return CodeBlock{}, fmt.Errorf("must be object, got %T", item)
-	}
-	lang, _ := m["language"].(string)
-	code, _ := m["code"].(string)
-	if lang == "" {
-		return CodeBlock{}, errors.New("language is required")
-	}
-	if code == "" {
-		return CodeBlock{}, errors.New("code is required")
-	}
-	return CodeBlock{Language: lang, Code: code}, nil
+	return nil, fmt.Errorf(
+		"field %q must be an array, an object, or a double-encoded JSON string, got %T",
+		key, decoded,
+	)
 }

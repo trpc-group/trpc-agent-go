@@ -371,5 +371,5 @@ func TestCoverrules_RedactUnknownType_StructuredStringRedaction(t *testing.T) {
 	require.True(t, changed)
 	redacted, ok := out.(map[string]any)
 	require.True(t, ok)
-	require.NotContains(t, redacted["note"], "hunter2xyz")
+	require.NotContains(t, redacted["note"], "abcdefgh")
 }

@@ -96,10 +96,19 @@ func isDangerousEnvOverride(name string) bool {
 		"NODE_PATH", "NODE_OPTIONS", "RUBYLIB", "RUBYOPT",
 		"PERL5LIB", "PERLLIB", "CLASSPATH", "JAVA_TOOL_OPTIONS",
 		"IFS", "BASH_ENV", "ENV", "SHELLOPTS",
-		"GLIBC_TUNABLES", "HISTFILE":
+		"GLIBC_TUNABLES", "HISTFILE",
+		"GIT_SSH_COMMAND", "GIT_SSH", "GIT_PROXY_COMMAND",
+		"GIT_ASKPASS", "SSH_ASKPASS",
+		"GIT_EXTERNAL_DIFF", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+		"GIT_PAGER", "PAGER", "EDITOR", "VISUAL", "GIT_EXEC_PATH",
+		"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM",
+		"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+		"GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER":
 		return true
 	}
-	return false
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "GIT_CONFIG_KEY_") ||
+		strings.HasPrefix(upper, "GIT_CONFIG_VALUE_")
 }
 
 // ruleCwd evaluates the working directory against the policy's denied

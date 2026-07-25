@@ -250,12 +250,12 @@ func TestCovercore_ApplyProfileDefaults(t *testing.T) {
 	// Backend and timeout filled from the named profile; the profile
 	// default (30m) is applied uncapped so the scanner evaluates the
 	// effective backend timeout against max_timeout.
-	in := guard.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "exec_command"})
+	in := guard.scanner.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "exec_command"})
 	require.Equal(t, BackendHostExec, in.Backend)
 	require.Equal(t, 30*time.Minute, in.Timeout)
 
 	// An explicit backend and timeout are preserved.
-	in = guard.applyProfileDefaults(ScanInput{
+	in = guard.scanner.applyProfileDefaults(ScanInput{
 		ToolName: "x", ToolProfile: "exec_command",
 		Backend: BackendMCP, Timeout: 5 * time.Second,
 	})
@@ -263,19 +263,37 @@ func TestCovercore_ApplyProfileDefaults(t *testing.T) {
 	require.Equal(t, 5*time.Second, in.Timeout)
 
 	// Unknown profile: nothing changes.
-	in = guard.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "nope", Backend: BackendMCP})
+	in = guard.scanner.applyProfileDefaults(ScanInput{ToolName: "x", ToolProfile: "nope", Backend: BackendMCP})
 	require.Equal(t, BackendMCP, in.Backend)
 	require.Zero(t, in.Timeout)
 
 	// Empty backend falls back to a tool-name profile lookup.
-	in = guard.applyProfileDefaults(ScanInput{ToolName: "workspace_exec"})
+	in = guard.scanner.applyProfileDefaults(ScanInput{ToolName: "workspace_exec"})
 	require.Equal(t, BackendWorkspaceExec, in.Backend)
 	require.Equal(t, "workspace_exec", in.ToolProfile)
 	require.Equal(t, 5*time.Minute, in.Timeout)
 
 	// Empty backend with no matching profile stays unknown-ish.
-	in = guard.applyProfileDefaults(ScanInput{ToolName: "no_such_tool"})
+	in = guard.scanner.applyProfileDefaults(ScanInput{ToolName: "no_such_tool"})
 	require.Empty(t, in.Backend)
+
+	report, err := guard.Scan(context.Background(), ScanInput{
+		ToolName:    "runner",
+		ToolProfile: "exec_command",
+		Command:     "ls",
+	})
+	require.NoError(t, err)
+	require.Equal(t, BackendHostExec, report.Backend)
+	require.Contains(t, ruleIDSet(report.Findings), "resource.timeout_exceeded")
+
+	report, err = guard.Scan(context.Background(), ScanInput{
+		ToolName:    "runner",
+		ToolProfile: "exec_command",
+		Command:     "ls",
+		Timeout:     5 * time.Second,
+	})
+	require.NoError(t, err)
+	require.NotContains(t, ruleIDSet(report.Findings), "resource.timeout_exceeded")
 }
 
 // TestCovercore_StashPopSideTables covers the scan-event and release side

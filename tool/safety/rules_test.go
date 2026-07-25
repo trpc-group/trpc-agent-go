@@ -311,7 +311,7 @@ func ruleIDSet(findings []Finding) map[string]bool {
 // the scanner so the decision aggregation is exercised.
 func TestRuleCorpus(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 
 	cases := []struct {
 		name        string
@@ -464,7 +464,7 @@ func TestRuleCorpus(t *testing.T) {
 				// Custom-profile case requires isolation to be required.
 				p2 := p
 				p2.RequireIsolation = true
-				s = NewScanner(p2, WithScannerProfile(ToolProfile{
+				s = newTestScanner(t, p2, withScannerProfile(ToolProfile{
 					Name: "custom_mcp_runner", Backend: BackendMCP,
 				}))
 			}
@@ -529,7 +529,7 @@ func TestBuildAnalysis_ConfiguredNetworkCommandBareHost(t *testing.T) {
 // code.network_call finding, while a non-allowlisted URL still does.
 func TestCodeRuleFindings_NetworkCallHonorsAllowlist(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 
 	allowReport, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "execute_code",
@@ -560,7 +560,7 @@ func TestCodeRuleFindings_NetworkCallHonorsAllowlist(t *testing.T) {
 
 func TestScanner_RejectsPersistentGitCommandConfiguration(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	for _, command := range []string{
 		`git config --global alias.pwn "!curl https://evil.example"`,
 		`git config --global credential.helper "!sh -c id"`,
@@ -577,7 +577,91 @@ func TestScanner_RejectsPersistentGitCommandConfiguration(t *testing.T) {
 		`git --exec-pa=./attacker-dir pwn`,
 		`git remote-ext origin "ext::sh -c id"`,
 		`git pwn`,
+		`find . -exec git pwn {} +`,
+		`git grep --open-files-in-pager="sh -c id" pattern`,
+		`find . -exec git grep --open-files-in-pager="sh -c id" pattern {} +`,
+		`git grep --op="sh -c id" pattern`,
+		`find . -exec git grep --op="sh -c id" pattern {} +`,
+		`git grep -O"sh -c id" pattern`,
+		`find . -exec git grep -O"sh -c id" pattern {} +`,
+		`git grep -inO"sh -c id" pattern`,
+		`find . -exec git grep -inO"sh -c id" pattern {} +`,
+		`git bisect run sh -c id`,
+		`find . -exec git bisect run sh -c id {} +`,
+		`git submodule foreach "sh -c id"`,
+		`find . -exec git submodule foreach "sh -c id" {} +`,
+		`git config -ze`,
+		`find . -exec git config -ze {} +`,
+		`git config --e`,
+		`find . -exec git config --e {} +`,
+		`git config --file /tmp/config --edit`,
+		`find . -exec git config --file /tmp/config --edit {} +`,
+		`git config --f /tmp/config --e`,
+		`find . -exec git config --f /tmp/config --e {} +`,
+		`git config --show-scope core.pager "sh -c id"`,
+		`find . -exec git config --show-scope core.pager "sh -c id" {} +`,
+		`git config --show-origin core.sshCommand "sh -c id"`,
+		`find . -exec git config --show-origin core.sshCommand "sh -c id" {} +`,
+		`git config core.pager -l`,
+		`find . -exec git config core.pager -l {} +`,
+		`git config core.pager "sh -c id" --get`,
+		`find . -exec git config core.pager "sh -c id" --get {} +`,
+		`git config --comment get core.sshCommand "sh -c id"`,
+		`find . -exec git config --comment get core.sshCommand "sh -c id" {} +`,
+		`git notes edit HEAD`,
+		`find . -exec git notes edit {} +`,
+		`git notes add HEAD`,
+		`find . -exec git notes add {} +`,
+		`git notes --re refs/notes/review add HEAD`,
+		`find . -exec git notes --re refs/notes/review add {} +`,
+		`git notes --sep newline append HEAD`,
+		`find . -exec git notes --sep newline append {} +`,
+		`git notes append -e HEAD`,
+		`find . -exec git notes append -e {} +`,
+		`git notes add -c HEAD~1 HEAD`,
+		`find . -exec git notes add -c HEAD~1 {} +`,
+		`git apply --unsafe-paths patch.diff`,
+		`find . -exec git apply --unsafe-paths patch.diff {} +`,
+		`git apply --unsafe patch.diff`,
+		`git apply --uns patch.diff`,
+		`git remote update`,
+		`git remote update origin`,
+		`find . -exec git remote update {} +`,
+		`git remote prune origin`,
+		`git remote show origin`,
+		`git remote set-head origin --auto`,
+		`git submodule update --init`,
+		`find . -exec git submodule update --init {} +`,
+		`git fetch`,
+		`find . -exec git fetch {} +`,
+		`git push origin main`,
+		`git ls-remote github.com`,
+		`git rebase -x "sh -c id" HEAD~1`,
+		`find . -exec git rebase -x "sh -c id" HEAD~1 {} +`,
+		`git rebase -qx"sh -c id" HEAD~1`,
+		`find . -exec git rebase -qx"sh -c id" HEAD~1 {} +`,
+		`git rebase -i HEAD~2`,
+		`find . -exec git rebase -i HEAD~2 {} +`,
+		`git commit`,
+		`git commit --edit`,
+		`git commit --fixup=amend:HEAD`,
+		`git commit --fixup reword:HEAD`,
+		`find . -exec git commit {} +`,
+		`git help -w commit`,
+		`git status --help`,
+		`git --help status`,
+		`git hash-object README.md`,
+		`find . -exec git hash-object README.md {} +`,
+		`git difftool HEAD~1`,
+		`find . -exec git difftool HEAD~1 {} +`,
+		`git mergetool`,
+		`find . -exec git mergetool {} +`,
+		`git strip`,
+		`find . -exec git stripping {} +`,
 		`git clone --config 'core.sshCommand=sh -c id' git@github.com:org/repo repo`,
+		`git clone -qc 'core.sshCommand=sh -c id' git@github.com:org/repo repo`,
+		`find . -exec git clone -qc 'core.sshCommand=sh -c id' git@github.com:org/repo repo {} +`,
+		`git clone -qccore.sshCommand=sh git@github.com:org/repo repo`,
 	} {
 		t.Run(command, func(t *testing.T) {
 			report, err := scanner.Scan(context.Background(), ScanInput{
@@ -594,7 +678,7 @@ func TestScanner_RejectsPersistentGitCommandConfiguration(t *testing.T) {
 
 func TestScanner_RejectsNetworkOptionBypasses(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	tests := []struct {
 		name    string
 		command string
@@ -814,7 +898,7 @@ func TestScanner_RejectsNetworkOptionBypasses(t *testing.T) {
 
 func TestScanner_RejectsGCloudCredentials(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -853,7 +937,7 @@ func TestScanner_RejectsGCloudCredentials(t *testing.T) {
 
 func TestScanner_RejectsDirectSocketCode(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	for _, code := range []string{
 		`import socket
 socket.create_connection(("169.254.169.254", 80))`,
@@ -880,7 +964,7 @@ create_connection(("169.254.169.254", 80))`,
 
 func TestScanner_RejectsGoRemoveAll(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "execute_code",
 		Backend:  BackendCodeExec,
@@ -896,7 +980,7 @@ func TestScanner_RejectsGoRemoveAll(t *testing.T) {
 
 func TestScanner_AllowsGitCleanDryRun(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -909,7 +993,7 @@ func TestScanner_AllowsGitCleanDryRun(t *testing.T) {
 
 func TestScanner_AllowsGitLSRemoteRefPattern(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
@@ -927,7 +1011,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	t.Run("system path descendants", func(t *testing.T) {
 		p := testPolicy(t)
 		p.AllowedCommands = append(p.AllowedCommands, "tee")
-		scanner := NewScanner(p)
+		scanner := newTestScanner(t, p)
 		for _, command := range []string{
 			"tee /var/spool/cron/crontabs/root",
 			"tee /usr/local/bin/sudo",
@@ -946,7 +1030,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	})
 
 	t.Run("path traversal credential read", func(t *testing.T) {
-		report, err := NewScanner(testPolicy(t)).Scan(
+		report, err := newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -973,7 +1057,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	})
 
 	t.Run("nested find denied command", func(t *testing.T) {
-		report, err := NewScanner(testPolicy(t)).Scan(
+		report, err := newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -993,7 +1077,11 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 			`git -c "core.sshCommand=sh -c id" clone https://github.com/org/repo`,
 			`git clone --upload-pack="touch pwned" src dst`,
 			`git clone -u "touch pwned" src dst`,
+			`git clone -qu"sh -c id" src dst`,
+			`find . -exec git clone -qu"sh -c id" src dst {} +`,
 			`git clone --upl="touch pwned" src dst`,
+			`git clone --u="touch pwned" src dst`,
+			`find . -exec git clone --u="touch pwned" src dst {} +`,
 			`git push --rece="touch pwned" origin main`,
 			`git archive --exe="touch pwned" HEAD`,
 			`git -c protocol.ext.allow=always clone "ext::touch pwned" dst`,
@@ -1005,7 +1093,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 			`find . -exec git difftool -xtouch HEAD~1 \;`,
 			`find . -exec git clone --upl="touch pwned" src dst \;`,
 		} {
-			report, err := NewScanner(testPolicy(t)).Scan(
+			report, err := newTestScanner(t, testPolicy(t)).Scan(
 				context.Background(),
 				ScanInput{
 					ToolName: "workspace_exec",
@@ -1018,7 +1106,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 			require.Contains(t, ruleIDSet(report.Findings),
 				"command.not_allowed")
 		}
-		report, err := NewScanner(testPolicy(t)).Scan(
+		report, err := newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -1029,7 +1117,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, DecisionAllow, report.Decision)
 
-		report, err = NewScanner(testPolicy(t)).Scan(
+		report, err = newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -1052,7 +1140,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 			`ssh -J internalhost github.com`,
 			`ssh -vJ internalhost github.com`,
 		} {
-			report, err := NewScanner(testPolicy(t)).Scan(
+			report, err := newTestScanner(t, testPolicy(t)).Scan(
 				context.Background(),
 				ScanInput{
 					ToolName: "workspace_exec",
@@ -1117,7 +1205,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	})
 
 	t.Run("remote go run", func(t *testing.T) {
-		report, err := NewScanner(testPolicy(t)).Scan(
+		report, err := newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -1140,7 +1228,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 				"https://github.com/org/repo",
 			"wget -i urls.txt",
 		} {
-			report, err := NewScanner(testPolicy(t)).Scan(
+			report, err := newTestScanner(t, testPolicy(t)).Scan(
 				context.Background(),
 				ScanInput{
 					ToolName: "workspace_exec",
@@ -1174,7 +1262,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 			},
 		}
 		for _, tc := range tests {
-			report, err := NewScanner(testPolicy(t)).Scan(
+			report, err := newTestScanner(t, testPolicy(t)).Scan(
 				context.Background(),
 				ScanInput{
 					ToolName: "workspace_exec",
@@ -1189,7 +1277,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	})
 
 	t.Run("git global option preserves remote target parsing", func(t *testing.T) {
-		report, err := NewScanner(testPolicy(t)).Scan(
+		report, err := newTestScanner(t, testPolicy(t)).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -1205,7 +1293,7 @@ func TestScanner_RejectsAuditedBypassCases(t *testing.T) {
 	t.Run("parse failure remains fail closed", func(t *testing.T) {
 		p := testPolicy(t)
 		p.Rules.ShellBypass.Enabled = false
-		report, err := NewScanner(p).Scan(
+		report, err := newTestScanner(t, p).Scan(
 			context.Background(),
 			ScanInput{
 				ToolName: "workspace_exec",
@@ -1235,6 +1323,78 @@ func TestScanner_DetectsPythonImportAliases(t *testing.T) {
 			name: "urllib network alias",
 			code: "import urllib.request as u; " +
 				`u.urlopen("http://169.254.169.254/latest/meta-data/")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests from import",
+			code: "from requests import get; " +
+				`get("http://169.254.169.254/latest/meta-data/")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name:   "requests from import alias",
+			code:   "from requests import get as fetch; fetch(target)",
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests generic request",
+			code: `from requests import request; ` +
+				`request("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests multi import request",
+			code: `from requests import get, request; ` +
+				`request("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests parenthesized import request",
+			code: "from requests import (\nget,\nrequest as send,\n)\n" +
+				`send("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "urllib import alias with comment",
+			code: `from urllib.request import urlopen as fetch # comment
+fetch("https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests parenthesized import with close paren comment",
+			code: `from requests import (
+get, # ) comment
+request,
+)
+request("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests continued import alias",
+			code: "from requests import request \\\n" +
+				"as send\n" +
+				`send("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests CRLF continued import alias",
+			code: "from requests import request \\\r\n" +
+				"as send\r\n" +
+				`send("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests import after triple quoted string",
+			code: `doc = """# ) comment"""
+from requests import request \
+as send
+send("GET", "https://evil.example")`,
+			ruleID: "code.network_call",
+		},
+		{
+			name: "requests generic dynamic URL",
+			code: `import requests; ` +
+				`requests.request("GET", target)`,
 			ruleID: "code.network_call",
 		},
 	}
@@ -1275,7 +1435,7 @@ func TestScanner_DetectsPythonImportAliases(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			report, err := NewScanner(testPolicy(t)).Scan(
+			report, err := newTestScanner(t, testPolicy(t)).Scan(
 				context.Background(),
 				ScanInput{
 					ToolName: "execute_code",
@@ -1344,7 +1504,7 @@ func TestRulePath_RootCredentialsProtectedBySecretRule(t *testing.T) {
 // and the nil pipeline must keep the raw-source fallbacks engaged.
 func TestScan_ExecuteCodeParseFailureIsSticky(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "execute_code",
@@ -1370,7 +1530,7 @@ func TestScan_ExecuteCodeParseFailureIsSticky(t *testing.T) {
 // must still deny with shell.substitution.
 func TestScan_CommandParseFailureSurvivesBenignCodeBlock(t *testing.T) {
 	p := testPolicy(t)
-	scanner := NewScanner(p)
+	scanner := newTestScanner(t, p)
 
 	report, err := scanner.Scan(context.Background(), ScanInput{
 		ToolName: "execute_code",

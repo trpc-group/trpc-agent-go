@@ -15,6 +15,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -533,6 +534,7 @@ func TestGuard_CheckToolPermissionOmittedTimeoutUsesBackendDefault(t *testing.T)
 		{"exec_command", `{"command":"ls"}`, "resource.timeout_exceeded"},
 		{"execute_code", `{"code_blocks":[{"language":"python","code":"print(1)"}]}`, "resource.timeout_unknown"},
 	}
+
 	for _, tc := range omitted {
 		t.Run(tc.toolName, func(t *testing.T) {
 			decision, err := guard.checkToolCall(context.Background(), &tool.PermissionRequest{
@@ -564,6 +566,40 @@ func TestGuard_CheckToolPermissionOmittedTimeoutUsesBackendDefault(t *testing.T)
 			require.Equal(t, tool.PermissionActionAllow, decision.Action)
 		})
 	}
+}
+
+func TestGuard_CheckToolPermissionWorkspaceLegacyTimeoutFallback(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.MaxTimeout = 10 * time.Minute
+	guard := newTestGuard(t, WithPolicy(policy))
+
+	decision, err := guard.checkToolCall(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName: "workspace_exec",
+			Arguments: []byte(
+				`{"command":"ls","timeout_sec":0,"timeout":3600}`,
+			),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "resource.timeout_exceeded")
+}
+
+func TestGuard_FailedSessionWriteFailsClosed(t *testing.T) {
+	guard := newTestGuard(t)
+	guard.sessions.registerWithInfo("session", sessionInfo{
+		Backend:   BackendHostExec,
+		InputMode: sessionInputCode,
+		Language:  "python",
+	})
+	guard.failClosedAmbiguousSessionWrite(
+		"write_stdin",
+		[]byte(`{"session_id":"session","chars":"print(1)"}`),
+	)
+	require.False(t, guard.sessions.isKnown("session"))
+	require.True(t, guard.sessions.isKilled("session"))
 }
 
 // TestGuard_EmptyToolCallIDCannotBypassConcurrency verifies that an

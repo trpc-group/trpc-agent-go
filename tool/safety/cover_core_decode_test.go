@@ -86,6 +86,28 @@ func TestCovercore_DecodeUnknownTool(t *testing.T) {
 
 	_, err = decodeRequest("mystery_tool", []byte(`{"command":""}`), reg)
 	require.ErrorContains(t, err, "must not be empty")
+
+	in, err = decodeRequest("mystery_tool", []byte(`{"script":"rm -rf /"}`), reg)
+	require.NoError(t, err)
+	require.Equal(t, "rm -rf /", in.Command)
+
+	in, err = decodeRequest("mystery_tool", []byte(`{"code":"print(1)"}`), reg)
+	require.NoError(t, err)
+	require.Equal(t, []CodeBlock{{Code: "print(1)"}}, in.CodeBlocks)
+
+	in, err = decodeRequest("mystery_tool", []byte(`{"argv":["rm","-rf","/"]}`), reg)
+	require.NoError(t, err)
+	require.Equal(t, []string{"rm", "-rf", "/"}, in.Args)
+
+	_, err = decodeRequest("mystery_tool", []byte(`{"argv":["rm",42]}`), reg)
+	require.ErrorContains(t, err, "item 1")
+
+	_, err = decodeRequest(
+		"mystery_tool",
+		[]byte(`{"command":"echo safe","script":"rm -rf /"}`),
+		reg,
+	)
+	require.ErrorContains(t, err, "multiple execution fields")
 }
 
 // TestCovercore_DecodeSessionFields covers the session-tool argument
@@ -104,6 +126,16 @@ func TestCovercore_DecodeSessionFields(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "s2", in.SessionID)
 	require.Equal(t, "pwd", in.SessionInput)
+
+	in, err = decodeRequest("write_stdin",
+		[]byte(`{"session_id":" ","sessionId":" s3 ","chars":"pwd"}`), reg)
+	require.NoError(t, err)
+	require.Equal(t, "s3", in.SessionID)
+
+	in, err = decodeRequest("workspace_exec",
+		[]byte(`{"command":"python","stdin":"print(1)"}`), reg)
+	require.NoError(t, err)
+	require.Equal(t, "print(1)", in.SessionInput)
 
 	in, err = decodeRequest("kill_session", []byte(`{"session_id":"s3"}`), reg)
 	require.NoError(t, err)
@@ -170,6 +202,30 @@ func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, time.Hour, in.Timeout)
+
+	in, err = decodeRequest(
+		"workspace_exec",
+		[]byte(`{"command":"ls","timeout_sec":0,"timeout":3600}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, time.Hour, in.Timeout)
+
+	in, err = decodeRequest(
+		"workspace_exec",
+		[]byte(`{"command":"ls","timeout_sec":0,"timeoutSec":120,"timeout":10}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 10*time.Second, in.Timeout)
+
+	in, err = decodeRequest(
+		"workspace_exec",
+		[]byte(`{"command":"ls","timeoutSec":120,"timeout":10}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2*time.Minute, in.Timeout)
 }
 
 // TestCovercore_PeekCommand covers the direct peekCommand paths.
@@ -266,12 +322,11 @@ func TestCovercore_DecodeCodeBlocks(t *testing.T) {
 	require.Len(t, blocks, 2)
 	require.Equal(t, "python", blocks[0].Language)
 
-	// An array item of the wrong type errors with the index.
+	// An array item of the wrong type is rejected by typed decoding.
 	_, err = decodeCodeBlocks(map[string]any{
 		"code_blocks": []any{"just a string"},
 	}, "code_blocks")
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "[0]")
 
 	// A single object is wrapped into a one-element slice.
 	blocks, err = decodeCodeBlocks(map[string]any{
@@ -281,11 +336,24 @@ func TestCovercore_DecodeCodeBlocks(t *testing.T) {
 	require.Len(t, blocks, 1)
 	require.Equal(t, "go", blocks[0].Language)
 
-	// A single object with a bad shape errors without an index.
-	_, err = decodeCodeBlocks(map[string]any{
+	// Missing fields match codeexec's typed JSON decoding and retain
+	// their zero values.
+	blocks, err = decodeCodeBlocks(map[string]any{
 		"code_blocks": map[string]any{"language": "go"},
 	}, "code_blocks")
+	require.NoError(t, err)
+	require.Equal(t, []CodeBlock{{Language: "go"}}, blocks)
+
+	// Present fields with incompatible types are rejected.
+	_, err = decodeCodeBlocks(map[string]any{
+		"code_blocks": map[string]any{"language": 42, "code": "package main"},
+	}, "code_blocks")
 	require.Error(t, err)
+
+	// An explicit null matches codeexec and decodes to no blocks.
+	blocks, err = decodeCodeBlocks(map[string]any{"code_blocks": nil}, "code_blocks")
+	require.NoError(t, err)
+	require.Nil(t, blocks)
 
 	// A plain non-JSON string is rejected: the codeexec tool treats a
 	// string value as double-encoded JSON, so an unparsable string is a
@@ -340,30 +408,13 @@ func TestCovercore_DecodeCodeBlocksDoubleEncoded(t *testing.T) {
 	_, err = decodeCodeBlocks(map[string]any{"code_blocks": `42`}, "code_blocks")
 	require.Error(t, err)
 
-	// A double-encoded array with a malformed item is rejected.
-	_, err = decodeCodeBlocks(map[string]any{
+	// Missing fields in a double-encoded block retain their zero values,
+	// matching codeexec's typed JSON decoding.
+	blocks, err = decodeCodeBlocks(map[string]any{
 		"code_blocks": `[{"language":"python"}]`,
 	}, "code_blocks")
-	require.Error(t, err)
-}
-
-// TestCovercore_DecodeOneBlock covers the per-block validation errors.
-func TestCovercore_DecodeOneBlock(t *testing.T) {
-	_, err := decodeOneBlock("not a map")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "must be object")
-
-	_, err = decodeOneBlock(map[string]any{"code": "print(1)"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "language is required")
-
-	_, err = decodeOneBlock(map[string]any{"language": "python"})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "code is required")
-
-	b, err := decodeOneBlock(map[string]any{"language": "python", "code": "print(1)"})
 	require.NoError(t, err)
-	require.Equal(t, CodeBlock{Language: "python", Code: "print(1)"}, b)
+	require.Equal(t, []CodeBlock{{Language: "python"}}, blocks)
 }
 
 // TestCovercore_DecodeOptionalFieldsTimeoutBounds is the X7 regression:

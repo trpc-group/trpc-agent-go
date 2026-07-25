@@ -78,15 +78,15 @@ func ruleCommand(a *analysis, p Policy) []Finding {
 					})
 				}
 			}
-			if err := nestedCommandPolicyError(a.Pipeline, sp); err != nil {
-				out = append(out, Finding{
-					RuleID:         "command.not_allowed",
-					RiskLevel:      RiskHigh,
-					Decision:       DecisionDeny,
-					Evidence:       redactedSnippet(err.Error(), 80),
-					Recommendation: "Remove nested command execution or allow the nested command explicitly",
-				})
-			}
+		}
+		if err := nestedCommandPolicyError(a.Pipeline, sp); err != nil {
+			out = append(out, Finding{
+				RuleID:         "command.not_allowed",
+				RiskLevel:      RiskHigh,
+				Decision:       DecisionDeny,
+				Evidence:       redactedSnippet(err.Error(), 80),
+				Recommendation: "Remove nested command execution or allow the nested command explicitly",
+			})
 		}
 	} else if a.ParseError != nil && shellPolicy(p).Active() {
 		out = append(out, Finding{
@@ -127,9 +127,19 @@ func nestedCommandPolicyError(
 				}); err != nil {
 					return fmt.Errorf("nested find command is not allowed: %w", err)
 				}
-				if gitHasShellAlias(payload) {
+				if gitExecutesExternalCommand(payload) {
 					return fmt.Errorf(
-						"nested find git command configures an external command",
+						"nested find git command executes an external command",
+					)
+				}
+				if gitUsesUnsafePaths(payload) {
+					return fmt.Errorf(
+						"nested find git command enables unsafe paths",
+					)
+				}
+				if gitUsesConfiguredRemote(payload) {
+					return fmt.Errorf(
+						"nested find git command uses an unverified configured remote",
 					)
 				}
 				if gitUsesExternalSubcommand(payload) {
@@ -140,8 +150,14 @@ func nestedCommandPolicyError(
 				i += len(payload)
 			}
 		}
-		if gitHasShellAlias(argv) {
-			return fmt.Errorf("git shell alias is not allowed")
+		if gitExecutesExternalCommand(argv) {
+			return fmt.Errorf("git external command execution is not allowed")
+		}
+		if gitUsesUnsafePaths(argv) {
+			return fmt.Errorf("git unsafe paths are not allowed")
+		}
+		if gitUsesConfiguredRemote(argv) {
+			return fmt.Errorf("git configured remote target cannot be verified")
 		}
 		if gitUsesExternalSubcommand(argv) {
 			return fmt.Errorf("external git subcommand is not allowed")
@@ -155,16 +171,275 @@ func gitUsesExternalSubcommand(argv []string) bool {
 		return false
 	}
 	subcommand := gitSubcommand(argv)
-	return subcommand != "" && !isGitSubcommandName(subcommand)
+	return subcommand != "" && !isSupportedGitSubcommand(subcommand)
 }
 
-// gitHasShellAlias reports whether argv configures Git to execute an
-// external command, either for this invocation or persistently.
-func gitHasShellAlias(argv []string) bool {
+// isSupportedGitSubcommand reports whether name is a Git command that
+// the guard can analyze without treating it as an arbitrary git-* helper.
+// Keep this list independent from isGitSubcommandName, whose narrower
+// purpose is filtering command tokens during network-target analysis.
+func isSupportedGitSubcommand(name string) bool {
+	switch name {
+	case "clone", "fetch", "push", "pull", "ls-remote",
+		"status", "diff", "diff-files", "diff-index", "diff-tree",
+		"log", "show", "show-branch", "add", "commit", "checkout",
+		"branch", "merge", "rebase", "stash",
+		"tag", "remote", "config", "init", "restore", "switch", "rm",
+		"mv", "clean", "reset", "revert", "cherry-pick", "bisect",
+		"reflog", "blame", "shortlog", "describe", "format-patch", "am",
+		"apply", "archive", "bundle", "fsck", "gc", "prune",
+		"rev-parse", "cat-file", "hash-object", "ls-tree", "ls-files",
+		"grep", "check-attr", "check-ignore", "check-mailmap",
+		"check-ref-format", "name-rev", "rev-list", "show-ref",
+		"update-ref", "symbolic-ref", "for-each-ref", "pack-refs",
+		"count-objects", "unpack-objects", "verify-pack", "notes",
+		"range-diff", "whatchanged", "submodule",
+		"worktree", "sparse-checkout", "multi-pack-index", "maintenance",
+		"version":
+		return true
+	}
+	return false
+}
+
+func gitRequestsExternalHelp(argv []string) bool {
+	for _, arg := range argv[1:] {
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--help" ||
+			gitLongOptionAbbreviation(name, "--help") {
+			return true
+		}
+	}
+	return false
+}
+
+func gitCommitUsesEditor(args []string) bool {
+	hasMessage := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		name, value, hasValue := strings.Cut(arg, "=")
+		switch name {
+		case "--edit", "--reedit-message":
+			return true
+		case "--fixup":
+			if !hasValue && i+1 < len(args) {
+				value = args[i+1]
+			}
+			if strings.HasPrefix(value, "amend:") ||
+				strings.HasPrefix(value, "reword:") {
+				return true
+			}
+			hasMessage = true
+			if !hasValue {
+				i++
+			}
+			continue
+		case "--message", "--file", "--reuse-message", "--squash":
+			hasMessage = true
+			if !hasValue {
+				i++
+			}
+			continue
+		case "--no-edit", "--dry-run":
+			hasMessage = true
+			continue
+		}
+		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+			continue
+		}
+		for j := 1; j < len(arg); j++ {
+			switch arg[j] {
+			case 'c', 'e':
+				return true
+			case 'C', 'F', 'm':
+				hasMessage = true
+				if j == len(arg)-1 {
+					i++
+				}
+				j = len(arg)
+			}
+		}
+	}
+	return !hasMessage
+}
+
+func gitRebaseUsesEditor(args []string) bool {
+	for _, arg := range args {
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--interactive" || name == "--edit-todo" ||
+			gitLongOptionAbbreviation(name, "--interactive") ||
+			gitLongOptionAbbreviation(name, "--edit-todo") {
+			return true
+		}
+		if len(arg) > 1 && arg[0] == '-' && arg[1] != '-' &&
+			strings.ContainsRune(arg[1:], 'i') {
+			return true
+		}
+	}
+	return false
+}
+
+func gitUsesUnsafePaths(argv []string) bool {
 	if len(argv) == 0 || basenameLower(argv[0]) != "git" {
 		return false
 	}
+	if gitSubcommand(argv) != "apply" {
+		return false
+	}
+	index := gitSubcommandIndex(argv)
+	for _, arg := range argv[index+1:] {
+		if arg == "--" {
+			return false
+		}
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--unsafe-paths" ||
+			len(name) >= len("--uns") &&
+				strings.HasPrefix("--unsafe-paths", name) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitRemoteActionUsesNetwork(args []string) bool {
+	actionIndex := -1
+	for i, arg := range args {
+		if arg == "--" {
+			if i+1 < len(args) {
+				actionIndex = i + 1
+			}
+			break
+		}
+		if !strings.HasPrefix(arg, "-") {
+			actionIndex = i
+			break
+		}
+	}
+	if actionIndex < 0 {
+		return false
+	}
+	switch strings.ToLower(args[actionIndex]) {
+	case "update", "prune":
+		return true
+	case "show":
+		for _, arg := range args[actionIndex+1:] {
+			if arg == "-n" || arg == "--no-query" {
+				return false
+			}
+		}
+		return true
+	case "set-head":
+		for _, arg := range args[actionIndex+1:] {
+			if arg == "-a" || arg == "--auto" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func gitUsesConfiguredRemote(argv []string) bool {
+	if len(argv) == 0 || basenameLower(argv[0]) != "git" {
+		return false
+	}
+	index := gitSubcommandIndex(argv)
+	if index < 0 {
+		return false
+	}
+	args := argv[index+1:]
+	switch gitSubcommand(argv) {
+	case "remote":
+		return gitRemoteActionUsesNetwork(args)
+	case "submodule":
+		for _, arg := range args {
+			if arg == "--" || strings.HasPrefix(arg, "-") {
+				continue
+			}
+			return strings.EqualFold(arg, "update")
+		}
+	case "fetch", "pull", "push", "ls-remote":
+		return !gitHasExplicitRemoteTarget(args)
+	}
+	return false
+}
+
+func gitHasExplicitRemoteTarget(args []string) bool {
+	operand := gitRepositoryOperand(args)
+	if operand == "" {
+		return false
+	}
+	if strings.Contains(operand, "://") {
+		return true
+	}
+	if strings.HasPrefix(operand, "/") ||
+		strings.HasPrefix(operand, "./") ||
+		strings.HasPrefix(operand, "../") ||
+		strings.HasPrefix(operand, "~/") ||
+		strings.HasPrefix(operand, `\`) ||
+		len(operand) >= 3 && operand[1] == ':' &&
+			(operand[2] == '/' || operand[2] == '\\') {
+		return true
+	}
+	colon := strings.IndexByte(operand, ':')
+	return colon > 0
+}
+
+func gitRepositoryOperand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				return args[i+1]
+			}
+			return ""
+		}
+		if strings.HasPrefix(arg, "-") {
+			name, _, hasValue := strings.Cut(arg, "=")
+			if gitRemoteOptionTakesValue(name) && !hasValue {
+				i++
+			}
+			continue
+		}
+		return arg
+	}
+	return ""
+}
+
+func gitRemoteOptionTakesValue(arg string) bool {
+	for _, option := range []string{
+		"--depth", "--deepen", "--shallow-since", "--shallow-exclude",
+		"--negotiation-tip", "--refmap", "--server-option",
+		"--upload-pack", "--jobs", "--filter", "--repo",
+		"--receive-pack", "--exec", "--push-option",
+		"--recurse-submodules", "--cleanup", "--strategy",
+		"--strategy-option", "--sort",
+	} {
+		if arg == option || gitLongOptionAbbreviation(arg, option) {
+			return true
+		}
+	}
+	switch arg {
+	case "-j", "-o", "-s", "-X":
+		return true
+	}
+	return false
+}
+
+// gitExecutesExternalCommand reports whether argv configures or directly
+// requests Git to execute another program.
+func gitExecutesExternalCommand(argv []string) bool {
+	if len(argv) == 0 || basenameLower(argv[0]) != "git" {
+		return false
+	}
+	if gitRequestsExternalHelp(argv) {
+		return true
+	}
 	if gitConfigCommandExecutesCommand(argv) {
+		return true
+	}
+	if gitSubcommandExecutesCommand(argv) {
 		return true
 	}
 	for i := 1; i < len(argv); i++ {
@@ -200,12 +475,208 @@ func gitHasShellAlias(argv []string) bool {
 	return false
 }
 
+func gitSubcommandExecutesCommand(argv []string) bool {
+	index := gitSubcommandIndex(argv)
+	if index < 0 {
+		return false
+	}
+	args := argv[index+1:]
+	switch strings.ToLower(argv[index]) {
+	case "bisect":
+		for i, arg := range args {
+			if strings.EqualFold(arg, "run") {
+				return i+1 < len(args)
+			}
+			if !strings.HasPrefix(arg, "-") {
+				return false
+			}
+		}
+	case "grep":
+		return gitGrepUsesPager(args)
+	case "hash-object":
+		return !gitHasNoFilters(args)
+	case "commit":
+		return gitCommitUsesEditor(args)
+	case "notes":
+		return gitNotesUsesEditor(args)
+	case "rebase":
+		return gitRebaseUsesEditor(args)
+	case "submodule":
+		for i, arg := range args {
+			if strings.EqualFold(arg, "foreach") {
+				return i+1 < len(args)
+			}
+			if !strings.HasPrefix(arg, "-") {
+				return false
+			}
+		}
+	}
+	return false
+}
+
+func gitHasNoFilters(args []string) bool {
+	disabled := false
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--no-filters" ||
+			gitLongOptionAbbreviation(name, "--no-filters") {
+			disabled = true
+			continue
+		}
+		if name == "--filters" ||
+			gitLongOptionAbbreviation(name, "--filters") {
+			disabled = false
+		}
+	}
+	return disabled
+}
+
+func gitNotesUsesEditor(args []string) bool {
+	actionIndex := gitNotesActionIndex(args)
+	if actionIndex < 0 {
+		return false
+	}
+	switch strings.ToLower(args[actionIndex]) {
+	case "edit":
+		return true
+	case "add", "append":
+		return gitNotesMessageNeedsEditor(args[actionIndex+1:])
+	default:
+		return false
+	}
+}
+
+func gitNotesActionIndex(args []string) int {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			if i+1 < len(args) {
+				return i + 1
+			}
+			return -1
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		if name == "--ref" || name == "--separator" ||
+			gitLongOptionAbbreviation(name, "--ref") ||
+			gitLongOptionAbbreviation(name, "--separator") {
+			if !hasValue {
+				i++
+			}
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return i
+		}
+	}
+	return -1
+}
+
+func gitNotesMessageNeedsEditor(args []string) bool {
+	hasMessage := false
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			break
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		if gitNotesEditorLongOption(name) {
+			return true
+		}
+		if gitNotesMessageLongOption(name) {
+			hasMessage = true
+			if !hasValue {
+				i++
+			}
+			continue
+		}
+		message, editor, consumesNext := gitNotesShortOptionMode(arg)
+		if editor {
+			return true
+		}
+		if message {
+			hasMessage = true
+		}
+		if consumesNext {
+			i++
+		}
+	}
+	return !hasMessage
+}
+
+func gitNotesEditorLongOption(name string) bool {
+	return name == "--edit" || name == "--reedit-message" ||
+		gitLongOptionAbbreviation(name, "--edit") ||
+		gitLongOptionAbbreviation(name, "--reedit-message")
+}
+
+func gitNotesMessageLongOption(name string) bool {
+	switch name {
+	case "--message", "--file", "--reuse-message":
+		return true
+	}
+	return false
+}
+
+func gitNotesShortOptionMode(arg string) (
+	message bool,
+	editor bool,
+	consumesNext bool,
+) {
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false, false, false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'c', 'e':
+			return false, true, false
+		case 'C', 'F', 'm':
+			return true, false, i == len(arg)-1
+		}
+	}
+	return false, false, false
+}
+
+func gitGrepUsesPager(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		name, _, _ := strings.Cut(arg, "=")
+		if name == "--open-files-in-pager" ||
+			gitLongOptionAbbreviation(name, "--open-files-in-pager") {
+			return true
+		}
+		if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+			continue
+		}
+		for j := 1; j < len(arg); j++ {
+			switch arg[j] {
+			case 'O':
+				return true
+			case 'A', 'B', 'C', 'e', 'f', 'm':
+				if j == len(arg)-1 {
+					i++
+				}
+				j = len(arg)
+			}
+		}
+	}
+	return false
+}
+
 func gitCloneConfigSetting(
 	argv []string,
 	index *int,
 ) (string, bool) {
 	if gitSubcommand(argv) != "clone" {
 		return "", false
+	}
+	if setting, ok := gitCloneShortConfigSetting(argv, index); ok {
+		return setting, true
 	}
 	arg := argv[*index]
 	if (arg == "--config" ||
@@ -225,27 +696,42 @@ func gitCloneConfigSetting(
 	return "", false
 }
 
+func gitCloneShortConfigSetting(
+	argv []string,
+	index *int,
+) (string, bool) {
+	arg := argv[*index]
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return "", false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'c':
+			if i+1 < len(arg) {
+				return arg[i+1:], true
+			}
+			if *index+1 >= len(argv) {
+				return "", true
+			}
+			*index++
+			return argv[*index], true
+		case 'b', 'j', 'o', 'u':
+			return "", false
+		}
+	}
+	return "", false
+}
+
 func gitConfigCommandExecutesCommand(argv []string) bool {
 	index := gitSubcommandIndex(argv)
 	if index < 0 || !strings.EqualFold(argv[index], "config") {
 		return false
 	}
 	args := argv[index+1:]
-	readOnly := false
-	for _, arg := range args {
-		if gitLongOptionAbbreviation(arg, "--edit") {
-			return true
-		}
-		switch arg {
-		case "--get", "--get-all", "--get-regexp", "--get-urlmatch",
-			"--list", "-l", "--show-origin", "--show-scope",
-			"--get-color", "--get-colorbool":
-			readOnly = true
-		case "--edit", "-e", "edit":
-			return true
-		}
+	if gitConfigEditRequested(args) {
+		return true
 	}
-	if readOnly {
+	if gitConfigReadOnlyOperation(args) {
 		return false
 	}
 	for i, arg := range args {
@@ -258,6 +744,101 @@ func gitConfigCommandExecutesCommand(argv []string) bool {
 			arg == "rename-section") &&
 			i+2 < len(args) &&
 			gitConfigSectionCanExecute(args[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func gitConfigEditRequested(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		if arg == "--edit" || gitLongOptionAbbreviation(arg, "--edit") {
+			return true
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		if gitConfigLongOptionTakesValue(name) {
+			if !hasValue {
+				i++
+			}
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return strings.EqualFold(arg, "edit")
+		}
+		if len(arg) < 2 || arg[1] == '-' {
+			continue
+		}
+		for j := 1; j < len(arg); j++ {
+			switch arg[j] {
+			case 'e':
+				return true
+			case 'f', 't':
+				if j == len(arg)-1 {
+					i++
+				}
+				j = len(arg)
+			}
+		}
+	}
+	return false
+}
+
+func gitConfigReadOnlyOperation(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			return false
+		}
+		if !strings.HasPrefix(arg, "-") {
+			switch strings.ToLower(arg) {
+			case "get", "get-all", "get-regexp", "get-urlmatch",
+				"list", "get-color", "get-colorbool":
+				return true
+			}
+			return false
+		}
+		switch arg {
+		case "--get", "--get-all", "--get-regexp", "--get-urlmatch",
+			"--list", "-l", "--get-color", "--get-colorbool":
+			return true
+		case "-f", "-t":
+			i++
+			continue
+		}
+		name, _, hasValue := strings.Cut(arg, "=")
+		if gitConfigLongOptionTakesValue(name) {
+			if !hasValue {
+				i++
+			}
+			continue
+		}
+		if len(arg) < 2 || arg[1] == '-' {
+			continue
+		}
+		for j := 1; j < len(arg); j++ {
+			switch arg[j] {
+			case 'l':
+				return true
+			case 'f', 't':
+				if j == len(arg)-1 {
+					i++
+				}
+				j = len(arg)
+			}
+		}
+	}
+	return false
+}
+
+func gitConfigLongOptionTakesValue(name string) bool {
+	for _, option := range []string{
+		"--file", "--type", "--blob", "--default", "--comment",
+	} {
+		if name == option || gitLongOptionAbbreviation(name, option) {
 			return true
 		}
 	}
@@ -294,10 +875,10 @@ func gitProgramFlag(argv []string, index int) bool {
 	case "--upload-pack", "--receive-pack", "--exec",
 		"--extcmd":
 		return index+1 < len(argv)
-	case "-u":
-		return gitSubcommand(argv) == "clone" && index+1 < len(argv)
 	case "-x":
-		return gitSubcommand(argv) == "difftool" && index+1 < len(argv)
+		subcommand := gitSubcommand(argv)
+		return (subcommand == "difftool" || subcommand == "rebase") &&
+			index+1 < len(argv)
 	}
 	if gitSubcommand(argv) == "difftool" &&
 		strings.HasPrefix(arg, "-x") && len(arg) > 2 {
@@ -320,8 +901,46 @@ func gitProgramFlag(argv []string, index int) bool {
 			return index+1 < len(argv)
 		}
 	}
-	return gitSubcommand(argv) == "clone" &&
-		strings.HasPrefix(arg, "-u") && len(arg) > 2
+	return gitCloneShortOptionUsesProgram(argv, index) ||
+		gitRebaseShortOptionExecutes(argv, index)
+}
+
+func gitCloneShortOptionUsesProgram(argv []string, index int) bool {
+	if gitSubcommand(argv) != "clone" {
+		return false
+	}
+	arg := argv[index]
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'u':
+			return i+1 < len(arg) || index+1 < len(argv)
+		case 'b', 'c', 'j', 'o':
+			return false
+		}
+	}
+	return false
+}
+
+func gitRebaseShortOptionExecutes(argv []string, index int) bool {
+	if gitSubcommand(argv) != "rebase" {
+		return false
+	}
+	arg := argv[index]
+	if len(arg) < 2 || arg[0] != '-' || arg[1] == '-' {
+		return false
+	}
+	for i := 1; i < len(arg); i++ {
+		switch arg[i] {
+		case 'x':
+			return i+1 < len(arg) || index+1 < len(argv)
+		case 'C', 'S', 'X', 's':
+			return false
+		}
+	}
+	return false
 }
 
 func gitConfigEnvExecutesCommand(argv []string, index *int) bool {
@@ -350,7 +969,7 @@ func gitConfigEnvExecutesCommand(argv []string, index *int) bool {
 
 func gitLongOptionAbbreviation(arg, full string) bool {
 	name, _, _ := strings.Cut(arg, "=")
-	return len(name) >= len("--xxx") &&
+	return len(name) >= len("--x") &&
 		name != full &&
 		strings.HasPrefix(full, name)
 }

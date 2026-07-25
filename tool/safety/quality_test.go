@@ -24,7 +24,7 @@ import (
 // performance budget from the plan.
 func TestCorpusPerformance_500UnderOneSecond(t *testing.T) {
 	p := testPolicy(t)
-	s := NewScanner(p)
+	s := newTestScanner(t, p)
 	inputs := make([]ScanInput, 0, 500)
 	for i := 0; i < 500; i++ {
 		inputs = append(inputs, ScanInput{
