@@ -1216,22 +1216,15 @@ func unwrapEnvCommand(argv []string) []string {
 			}
 			return nil
 		}
-		if arg == "-u" || arg == "--unset" || arg == "-C" || arg == "--chdir" ||
-			arg == "-a" || arg == "--argv0" {
+		if envOptionConsumesNext(arg) {
 			i += 2
 			continue
 		}
-		if strings.HasPrefix(arg, "--unset=") || strings.HasPrefix(arg, "--chdir=") ||
-			strings.HasPrefix(arg, "--argv0=") ||
-			(strings.HasPrefix(arg, "-u") && len(arg) > 2) ||
-			(strings.HasPrefix(arg, "-C") && len(arg) > 2) ||
-			(strings.HasPrefix(arg, "-a") && len(arg) > 2) {
+		if isAttachedEnvValueOption(arg) {
 			i++
 			continue
 		}
-		if arg == "-i" || arg == "--ignore-environment" || arg == "-0" ||
-			arg == "--null" || arg == "-v" || arg == "--debug" ||
-			strings.Contains(arg, "=") {
+		if isEnvFlag(arg) || strings.Contains(arg, "=") {
 			i++
 			continue
 		}
@@ -1241,6 +1234,33 @@ func unwrapEnvCommand(argv []string) []string {
 		return argv[i:]
 	}
 	return nil
+}
+
+func envOptionConsumesNext(arg string) bool {
+	switch arg {
+	case "-u", "--unset", "-C", "--chdir", "-a", "--argv0":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAttachedEnvValueOption(arg string) bool {
+	return strings.HasPrefix(arg, "--unset=") ||
+		strings.HasPrefix(arg, "--chdir=") ||
+		strings.HasPrefix(arg, "--argv0=") ||
+		(strings.HasPrefix(arg, "-u") && len(arg) > 2) ||
+		(strings.HasPrefix(arg, "-C") && len(arg) > 2) ||
+		(strings.HasPrefix(arg, "-a") && len(arg) > 2)
+}
+
+func isEnvFlag(arg string) bool {
+	switch arg {
+	case "-i", "--ignore-environment", "-0", "--null", "-v", "--debug":
+		return true
+	default:
+		return false
+	}
 }
 
 func containsEnvSplitString(argv []string) bool {
