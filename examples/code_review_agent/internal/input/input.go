@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
@@ -86,6 +87,25 @@ func validateRefPair(baseRef string, headRef string) error {
 	if hasBaseRef != hasHeadRef {
 		return errors.New("base ref and head ref must be supplied together")
 	}
+	if hasBaseRef {
+		if err := validateGitRef(baseRef); err != nil {
+			return fmt.Errorf("base ref: %w", err)
+		}
+		if err := validateGitRef(headRef); err != nil {
+			return fmt.Errorf("head ref: %w", err)
+		}
+	}
+	return nil
+}
+
+func validateGitRef(ref string) error {
+	trimmed := strings.TrimSpace(ref)
+	if trimmed == "" {
+		return errors.New("git ref is required")
+	}
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("git ref %q must not start with '-'", trimmed)
+	}
 	return nil
 }
 
@@ -110,10 +130,17 @@ func diffFromRepo(repoPath string, baseRef string, headRef string, maxBytes int6
 	if err != nil {
 		return nil, err
 	}
-	if worktree {
-		if hasExplicitRefs(baseRef, headRef) {
-			return runGitDiff(gitDiffArgs(repoPath, baseRef, headRef), maxBytes)
+	if hasExplicitRefs(baseRef, headRef) {
+		if !worktree {
+			return nil, errors.New("base ref and head ref require a git worktree")
 		}
+		resolvedBaseRef, resolvedHeadRef, err := resolveGitDiffRefs(repoPath, baseRef, headRef)
+		if err != nil {
+			return nil, err
+		}
+		return runGitDiff(gitDiffArgs(repoPath, resolvedBaseRef, resolvedHeadRef), maxBytes)
+	}
+	if worktree {
 		return diffFromGitWorktree(repoPath, maxBytes)
 	}
 	return diffFromDirectory(repoPath, maxBytes)
@@ -234,8 +261,36 @@ func diffUntrackedGitFiles(repoPath string, maxBytes int64) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+func resolveGitDiffRefs(repoPath string, baseRef string, headRef string) (string, string, error) {
+	resolvedBaseRef, err := resolveGitRef(repoPath, baseRef)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve base ref: %w", err)
+	}
+	resolvedHeadRef, err := resolveGitRef(repoPath, headRef)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve head ref: %w", err)
+	}
+	return resolvedBaseRef, resolvedHeadRef, nil
+}
+
+func resolveGitRef(repoPath string, ref string) (string, error) {
+	trimmed := strings.TrimSpace(ref)
+	if err := validateGitRef(trimmed); err != nil {
+		return "", err
+	}
+	out, err := runGitCommandWithOverrides(
+		[]string{"-C", repoPath, "rev-parse", "--verify", "--end-of-options", trimmed + "^{commit}"},
+		1024,
+		fmt.Sprintf("git ref %q", trimmed),
+	)
+	if err != nil {
+		return "", fmt.Errorf("git rev-parse %q: %w", trimmed, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func gitHeadExists(repoPath string) (bool, error) {
-	_, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--verify", "HEAD"}, 1024, "git HEAD check")
+	_, err := runGitCommandWithOverrides([]string{"-C", repoPath, "rev-parse", "--verify", "HEAD"}, 1024, "git HEAD check")
 	if err == nil {
 		return true, nil
 	}
@@ -246,11 +301,11 @@ func gitHeadExists(repoPath string) (bool, error) {
 }
 
 func gitRepoContext(repoPath string, maxBytes int64) (string, string, error) {
-	root, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--show-toplevel"}, maxBytes, "git repo root")
+	root, err := runGitCommandWithOverrides([]string{"-C", repoPath, "rev-parse", "--show-toplevel"}, maxBytes, "git repo root")
 	if err != nil {
 		return "", "", fmt.Errorf("git rev-parse --show-toplevel: %w", err)
 	}
-	prefix, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--show-prefix"}, maxBytes, "git repo prefix")
+	prefix, err := runGitCommandWithOverrides([]string{"-C", repoPath, "rev-parse", "--show-prefix"}, maxBytes, "git repo prefix")
 	if err != nil {
 		return "", "", fmt.Errorf("git rev-parse --show-prefix: %w", err)
 	}
@@ -258,7 +313,7 @@ func gitRepoContext(repoPath string, maxBytes int64) (string, string, error) {
 }
 
 func runGitDiff(args []string, maxBytes int64) ([]byte, error) {
-	out, err := runGitCommand(args, maxBytes, "git diff output")
+	out, err := runGitCommandWithOverrides(args, maxBytes, "git diff output")
 	if err != nil {
 		return nil, fmt.Errorf("git diff: %w", err)
 	}
@@ -266,14 +321,25 @@ func runGitDiff(args []string, maxBytes int64) ([]byte, error) {
 }
 
 func isGitWorktree(repoPath string) (bool, error) {
-	out, err := runGitCommand([]string{"-C", repoPath, "rev-parse", "--is-inside-work-tree"}, 1024, "git worktree check")
+	out, err := runGitCommandWithOverrides([]string{"-C", repoPath, "rev-parse", "--is-inside-work-tree"}, 1024, "git worktree check")
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			return false, err
 		}
-		return false, nil
+		if isNotGitRepositoryError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("git worktree discovery: %w", err)
 	}
 	return strings.TrimSpace(string(out)) == "true", nil
+}
+
+func isNotGitRepositoryError(err error) bool {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) {
+		return false
+	}
+	return strings.Contains(err.Error(), "not a git repository")
 }
 
 func diffFromDirectory(repoPath string, maxBytes int64) ([]byte, error) {
@@ -529,6 +595,41 @@ func runGitCommand(args []string, maxBytes int64, label string) ([]byte, error) 
 		return nil, fmt.Errorf("%w: %s", err, message)
 	}
 	return stdout.Bytes(), nil
+}
+
+type gitCommandFunc func(args []string, maxBytes int64, label string) ([]byte, error)
+
+var gitCommandOverrides sync.Map
+
+func runGitCommandWithOverrides(args []string, maxBytes int64, label string) ([]byte, error) {
+	if override, ok := gitCommandOverride(args); ok {
+		return override(args, maxBytes, label)
+	}
+	return runGitCommand(args, maxBytes, label)
+}
+
+func gitCommandOverride(args []string) (gitCommandFunc, bool) {
+	repoPath, ok := gitCommandRepoPath(args)
+	if !ok {
+		return nil, false
+	}
+	override, ok := gitCommandOverrides.Load(repoPath)
+	if !ok {
+		return nil, false
+	}
+	runner, ok := override.(gitCommandFunc)
+	return runner, ok
+}
+
+func gitCommandRepoPath(args []string) (string, bool) {
+	if len(args) < 2 || args[0] != "-C" {
+		return "", false
+	}
+	repoPath := strings.TrimSpace(args[1])
+	if repoPath == "" {
+		return "", false
+	}
+	return repoPath, true
 }
 
 type limitedBuffer struct {

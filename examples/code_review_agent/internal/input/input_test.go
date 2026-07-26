@@ -258,6 +258,32 @@ func TestReadRepoPathRejectsPartialGitRefs(t *testing.T) {
 	}
 }
 
+func TestReadRepoPathRejectsOptionLikeGitRefWithoutDiffFile(t *testing.T) {
+	repo := t.TempDir()
+
+	_, _, err := Read(Config{}, Request{RepoPath: repo, BaseRef: "-main", HeadRef: "HEAD"})
+	if err == nil || !strings.Contains(err.Error(), "must not start with '-'") {
+		t.Fatalf("Read error = %v, want option-like git ref rejection", err)
+	}
+}
+
+func TestReadRepoPathPropagatesGitDiscoveryErrors(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "service.go"), []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	sentinel := errors.New("git discovery exploded")
+	withGitCommandOverride(t, repo, func(args []string, maxBytes int64, label string) ([]byte, error) {
+		return nil, sentinel
+	})
+
+	_, _, err := Read(Config{}, Request{RepoPath: repo})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("Read error = %v, want injected discovery error", err)
+	}
+}
+
 func TestReadRepoPathRejectsOversizedUntrackedTotal(t *testing.T) {
 	repo := t.TempDir()
 	git(t, repo, "init")
@@ -326,6 +352,14 @@ func git(t *testing.T, dir string, args ...string) {
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, output)
 	}
+}
+
+func withGitCommandOverride(t *testing.T, repoPath string, runner gitCommandFunc) {
+	t.Helper()
+	gitCommandOverrides.Store(repoPath, runner)
+	t.Cleanup(func() {
+		gitCommandOverrides.Delete(repoPath)
+	})
 }
 
 func contains(values []string, want string) bool {
