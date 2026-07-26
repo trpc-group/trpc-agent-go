@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 )
@@ -107,6 +108,10 @@ func runPipeline(parent context.Context, cfg *config) (*optimizationReport, erro
 	if err != nil {
 		return nil, fmt.Errorf("dataset isolation: %w", err)
 	}
+	evaluationManifest, err := loadEvaluationManifest(cfg.Inputs.TrainEvalset, cfg.Inputs.ValidationEvalset, cfg.Inputs.Metrics)
+	if err != nil {
+		return nil, fmt.Errorf("load evaluation manifest: %w", err)
+	}
 	baselineBytes, err := os.ReadFile(cfg.Inputs.BaselinePrompt)
 	if err != nil {
 		return nil, fmt.Errorf("read baseline prompt: %w", err)
@@ -161,7 +166,7 @@ func runPipeline(parent context.Context, cfg *config) (*optimizationReport, erro
 	report := &optimizationReport{
 		SchemaVersion: reportSchemaVersion,
 		Pipeline: pipelineMetadata{
-			RunID:     fmt.Sprintf("run-%d-%s", cfg.Seed, cfg.Scenario),
+			RunID:     "run-" + uuid.NewString(),
 			Status:    "running",
 			StartedAt: startedAt.UTC().Format(time.RFC3339Nano),
 			Mode:      "deterministic_fake",
@@ -252,6 +257,7 @@ func runPipeline(parent context.Context, cfg *config) (*optimizationReport, erro
 			trainDelta,
 			validationDelta,
 			accounting,
+			evaluationManifest,
 		)
 		internalDecision := promptIterDecision{}
 		if promptIterRound.Acceptance != nil {
@@ -336,12 +342,16 @@ func writeReportArtifacts(cfg *config, report *optimizationReport) error {
 		}
 		candidatePrompts = append(candidatePrompts, promptBytes)
 	}
-	jsonData, err := json.MarshalIndent(report, "", "  ")
+	persistedReport, err := sanitizeReportForPersistence(report)
+	if err != nil {
+		return fmt.Errorf("sanitize report: %w", err)
+	}
+	jsonData, err := json.MarshalIndent(persistedReport, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal report: %w", err)
 	}
 	jsonData = redactReport(jsonData)
-	markdown := redactReport([]byte(renderMarkdown(report)))
+	markdown := redactReport([]byte(renderMarkdown(persistedReport)))
 	if containsSecretCanary(jsonData) || containsSecretCanary(markdown) {
 		return errors.New("report contains a secret canary")
 	}
@@ -374,6 +384,60 @@ func writeReportArtifacts(cfg *config, report *optimizationReport) error {
 		return nil
 	}
 	return writeAtomic(acceptedPath, []byte(candidatePrompt+"\n"))
+}
+
+func sanitizeReportForPersistence(report *optimizationReport) (*optimizationReport, error) {
+	if report == nil {
+		return nil, errors.New("report is nil")
+	}
+	data, err := json.Marshal(report)
+	if err != nil {
+		return nil, err
+	}
+	var sanitized optimizationReport
+	if err := json.Unmarshal(data, &sanitized); err != nil {
+		return nil, err
+	}
+	sanitizeSnapshot := func(snapshot *evaluationSnapshot) {
+		if snapshot == nil {
+			return
+		}
+		for caseIndex := range snapshot.Cases {
+			current := &snapshot.Cases[caseIndex]
+			current.ErrorMessage = hashEvidence(current.ErrorMessage)
+			current.FinalResponse = hashEvidence(current.FinalResponse)
+			for metricIndex := range current.Metrics {
+				current.Metrics[metricIndex].Reason = hashEvidence(current.Metrics[metricIndex].Reason)
+			}
+			for invocationIndex := range current.Invocations {
+				invocation := &current.Invocations[invocationIndex]
+				invocation.FinalResponse = hashEvidence(invocation.FinalResponse)
+				invocation.ExpectedFinalResponse = hashEvidence(invocation.ExpectedFinalResponse)
+			}
+			for stepIndex := range current.Trace.Steps {
+				current.Trace.Steps[stepIndex].Error = hashEvidence(current.Trace.Steps[stepIndex].Error)
+			}
+		}
+	}
+	sanitizeSnapshot(sanitized.Baseline.Train)
+	sanitizeSnapshot(sanitized.Baseline.Validation)
+	for index := range sanitized.Baseline.Attributions {
+		sanitized.Baseline.Attributions[index].Reason = hashEvidence(sanitized.Baseline.Attributions[index].Reason)
+	}
+	for index := range sanitized.Rounds {
+		sanitized.Rounds[index].CandidatePrompt = hashEvidence(sanitized.Rounds[index].CandidatePrompt)
+		sanitized.Rounds[index].PromptIterDecision.Reason = hashEvidence(sanitized.Rounds[index].PromptIterDecision.Reason)
+		sanitizeSnapshot(sanitized.Rounds[index].CandidateTrain)
+		sanitizeSnapshot(sanitized.Rounds[index].CandidateValidation)
+	}
+	return &sanitized, nil
+}
+
+func hashEvidence(value string) string {
+	if value == "" {
+		return ""
+	}
+	return hashText(value)
 }
 
 func renderMarkdown(report *optimizationReport) string {

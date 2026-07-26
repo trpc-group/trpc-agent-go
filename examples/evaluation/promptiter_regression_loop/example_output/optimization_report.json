@@ -1,11 +1,11 @@
 {
   "schemaVersion": "trpc-agent-go.promptiter-regression.report/v1alpha1",
   "pipeline": {
-    "runId": "run-2003-improvement",
+    "runId": "run-7f0fb1bb-370c-464d-b091-5c6c4d13d0fd",
     "status": "succeeded",
-    "startedAt": "2026-07-23T11:41:54.387644Z",
-    "endedAt": "2026-07-23T11:41:54.413939Z",
-    "durationMs": 26,
+    "startedAt": "2026-07-26T04:20:02.241423Z",
+    "endedAt": "2026-07-26T04:20:02.268972Z",
+    "durationMs": 27,
     "mode": "deterministic_fake",
     "scenario": "improvement",
     "seed": 2003
@@ -26,7 +26,7 @@
   "baseline": {
     "train": {
       "identity": {
-        "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
+        "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
         "split": "train",
         "evalSetId": "city-service-train",
         "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
@@ -40,28 +40,28 @@
           "caseId": "train-distance-01",
           "runId": 1,
           "status": "failed",
-          "finalResponse": "{\"answer\":\"信息不足\"}",
+          "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
               "score": 0,
               "threshold": 1,
               "status": "failed",
-              "reason": "final response mismatch: text mismatch: source {\"answer\":\"信息不足\"} and target {\"answer\":\"北京到天津约120公里\"} do not match"
+              "reason": "sha256:2b1467625df75557671c025b0c99eb5500c8cdec9809dacd52666ac251826e93"
             },
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 0,
               "threshold": 1,
               "status": "failed",
-              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+              "reason": "sha256:183162bd64c3fb7cf38a93b19e7085c6cdb002d9c07378d63393e7f099993616"
             }
           ],
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"信息不足\"}",
-              "expectedFinalResponse": "{\"answer\":\"北京到天津约120公里\"}",
+              "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
+              "expectedFinalResponse": "sha256:4cbef1134bf077ab1e11b38ae4f68bab7bb1a5f78420a690019e40801eea1806",
               "expectedTools": [
                 {
                   "name": "distance_lookup",
@@ -81,7 +81,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:81dcee28ea4b8065f05e74ebd115c76d8636f0b04413f36c8f927d94de5393ea",
-                "outputHash": "sha256:41923827f0c0ce6928fa12bef370ac020635e14bbe1a44d1b9cfa078be5b4560"
+                "outputHash": "sha256:5f53e57d831806f11afebe6872ff3cb84d9ce08bab3b34026fb52e1d1c7cf0a0"
               }
             ]
           }
@@ -90,14 +90,14 @@
           "caseId": "train-scope-01",
           "runId": 1,
           "status": "failed",
-          "finalResponse": "{\"answer\":\"信息不足\"}",
+          "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
               "score": 0,
               "threshold": 1,
               "status": "failed",
-              "reason": "final response mismatch: text mismatch: source {\"answer\":\"信息不足\"} and target {\"answer\":\"城市信息服务每日09:00-18:00开放\"} do not match"
+              "reason": "sha256:c86443cc3d6aed3194fa6b28219b3230f3a3a409b55d3ec9a776d47239f16bcb"
             },
             {
               "metricName": "tool_trajectory_avg_score",
@@ -109,8 +109,8 @@
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"信息不足\"}",
-              "expectedFinalResponse": "{\"answer\":\"城市信息服务每日09:00-18:00开放\"}"
+              "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
+              "expectedFinalResponse": "sha256:0243444a32ca591508cc5b53ccd610cbb0f87890d8deb2d3734cd54da1da6d03"
             }
           ],
           "trace": {
@@ -123,7 +123,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:8b30b5d4c56f61c4908714c19488b4757ddd9f56d4621f10388e49ef3d30fc0f",
-                "outputHash": "sha256:0ed42d6f6108f14bfaf7f74f45b3331787a12d60d3420ee93574e386ed918f7e"
+                "outputHash": "sha256:e14275008118e409e966d3703619d2b02bcf15210ea6dbbd6789247d7c793162"
               }
             ]
           }
@@ -132,7 +132,7 @@
           "caseId": "train-weather-01",
           "runId": 1,
           "status": "passed",
-          "finalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
+          "finalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
@@ -150,8 +150,8 @@
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
-              "expectedFinalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
+              "finalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
+              "expectedFinalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
               "actualTools": [
                 {
                   "name": "weather_lookup",
@@ -178,7 +178,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:87bfca4fdf44f7d3309e478902e6e1b2e20a8f3ae0dbb179c6f070cace2a2f5c",
-                "outputHash": "sha256:07155af49b75daac646e663e9abf14c67e08fddc5d8c50390d677ccce5a98a8d"
+                "outputHash": "sha256:3237538399fc74078078534c788765434aae0afe269fd19d717da57b1cac6382"
               }
             ]
           }
@@ -187,7 +187,7 @@
     },
     "validation": {
       "identity": {
-        "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_c751d8fd-c1b4-4d0d-a9ca-51060ea7fd12",
+        "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_2a37832c-2d4a-4b12-a88b-c7a4c6eb35a5",
         "split": "validation",
         "evalSetId": "city-service-validation",
         "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
@@ -201,28 +201,28 @@
           "caseId": "validation-distance-01",
           "runId": 1,
           "status": "failed",
-          "finalResponse": "{\"answer\":\"信息不足\"}",
+          "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
               "score": 0,
               "threshold": 1,
               "status": "failed",
-              "reason": "final response mismatch: text mismatch: source {\"answer\":\"信息不足\"} and target {\"answer\":\"苏州到杭州约160公里\"} do not match"
+              "reason": "sha256:500d3dfd1b228384c3ba152956700a201f2616bbdc331b2de0f059c415b06556"
             },
             {
               "metricName": "tool_trajectory_avg_score",
               "score": 0,
               "threshold": 1,
               "status": "failed",
-              "reason": "tool trajectory mismatch: validate tool counts: number of tool calls mismatch: actual(0) != expected(1)"
+              "reason": "sha256:183162bd64c3fb7cf38a93b19e7085c6cdb002d9c07378d63393e7f099993616"
             }
           ],
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"信息不足\"}",
-              "expectedFinalResponse": "{\"answer\":\"苏州到杭州约160公里\"}",
+              "finalResponse": "sha256:ac6e5808430b8e6867dc89b6e11927ca574047eaa8e666ae6b4a0b2830717c5a",
+              "expectedFinalResponse": "sha256:1771052a0664d25f3819ad46396215afe9bf1295108ebf85b6ed507103fb0037",
               "expectedTools": [
                 {
                   "name": "distance_lookup",
@@ -242,7 +242,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:4a499a4cb9e63c3edfeba232eca60052256ee95ff00085d26d692b64843b1540",
-                "outputHash": "sha256:a5a6d22f348ee30bcb3403eda8389b9d2fce0d0a1731513b9761abfcc8b63ccd"
+                "outputHash": "sha256:73dbe313cef0c6608ce15d8e7efaf271bc3c165816e1589630da16a62d1a8003"
               }
             ]
           }
@@ -251,7 +251,7 @@
           "caseId": "validation-scope-01",
           "runId": 1,
           "status": "passed",
-          "finalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}",
+          "finalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
@@ -269,8 +269,8 @@
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}",
-              "expectedFinalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}"
+              "finalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018",
+              "expectedFinalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018"
             }
           ],
           "trace": {
@@ -283,7 +283,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:75f81c61670c1a9a4de2e0dfaa404474309fc69c18723f1fd1aac42258e23dc9",
-                "outputHash": "sha256:283d0e4a4e49b6e7ed807fe6cd5b890ad6d2ca8547a4ac3ccbe00312ab7ae955"
+                "outputHash": "sha256:3f431814372d11a5b33dff857506e375fdaef3babe6d6c6aa7fe8fbc54b8abb3"
               }
             ]
           }
@@ -292,7 +292,7 @@
           "caseId": "validation-weather-01",
           "runId": 1,
           "status": "passed",
-          "finalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
+          "finalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
           "metrics": [
             {
               "metricName": "final_response_avg_score",
@@ -310,8 +310,8 @@
           "invocations": [
             {
               "index": 0,
-              "finalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
-              "expectedFinalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
+              "finalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
+              "expectedFinalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
               "actualTools": [
                 {
                   "name": "weather_lookup",
@@ -338,7 +338,7 @@
                 "nodeType": "llm",
                 "branch": "regression-candidate",
                 "inputHash": "sha256:fc04c28aa7b5cb8b2e6ad8e68454f9a843a0a024c7746198681a50e7a51dac96",
-                "outputHash": "sha256:36741c33b44c1d7ccbfc31b10bea7469e6b74f4b8f9b697543decb1e5eaf8b79"
+                "outputHash": "sha256:50304495079dca52a7939af0a286b4b0f53acc3f903944f89e7d11dacb19fd75"
               }
             ]
           }
@@ -350,14 +350,14 @@
         "caseId": "train-distance-01",
         "metricName": "final_response_avg_score",
         "primaryCategory": "tool_selection_error",
-        "reason": "实际工具序列与期望工具序列不一致",
+        "reason": "sha256:bed11ca42a7ca479dfed32128aa183bdd2c7566b6c747dd80250aaba2ae3b9fb",
         "ruleId": "ATTR-TOOL-SELECT-001",
         "confidence": 1,
         "evidenceRefs": [
           "evidence://train/train-distance-01/run-1/final_response_avg_score"
         ],
         "snapshotIdentity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
           "split": "train",
           "evalSetId": "city-service-train",
           "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
@@ -370,14 +370,14 @@
         "caseId": "train-distance-01",
         "metricName": "tool_trajectory_avg_score",
         "primaryCategory": "tool_selection_error",
-        "reason": "实际工具序列与期望工具序列不一致",
+        "reason": "sha256:bed11ca42a7ca479dfed32128aa183bdd2c7566b6c747dd80250aaba2ae3b9fb",
         "ruleId": "ATTR-TOOL-SELECT-001",
         "confidence": 1,
         "evidenceRefs": [
           "evidence://train/train-distance-01/run-1/tool_trajectory_avg_score"
         ],
         "snapshotIdentity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
           "split": "train",
           "evalSetId": "city-service-train",
           "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
@@ -390,14 +390,14 @@
         "caseId": "train-scope-01",
         "metricName": "final_response_avg_score",
         "primaryCategory": "final_response_mismatch",
-        "reason": "实际最终回复与期望最终回复不一致",
+        "reason": "sha256:79fabf523c71196ed75f97048736bc4f7857a31dfe40c3e34df1d5a94a6074a8",
         "ruleId": "ATTR-RESPONSE-001",
         "confidence": 1,
         "evidenceRefs": [
           "evidence://train/train-scope-01/run-1/final_response_avg_score"
         ],
         "snapshotIdentity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
           "split": "train",
           "evalSetId": "city-service-train",
           "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
@@ -410,14 +410,14 @@
         "caseId": "validation-distance-01",
         "metricName": "final_response_avg_score",
         "primaryCategory": "tool_selection_error",
-        "reason": "实际工具序列与期望工具序列不一致",
+        "reason": "sha256:bed11ca42a7ca479dfed32128aa183bdd2c7566b6c747dd80250aaba2ae3b9fb",
         "ruleId": "ATTR-TOOL-SELECT-001",
         "confidence": 1,
         "evidenceRefs": [
           "evidence://validation/validation-distance-01/run-1/final_response_avg_score"
         ],
         "snapshotIdentity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_c751d8fd-c1b4-4d0d-a9ca-51060ea7fd12",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_2a37832c-2d4a-4b12-a88b-c7a4c6eb35a5",
           "split": "validation",
           "evalSetId": "city-service-validation",
           "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
@@ -430,14 +430,14 @@
         "caseId": "validation-distance-01",
         "metricName": "tool_trajectory_avg_score",
         "primaryCategory": "tool_selection_error",
-        "reason": "实际工具序列与期望工具序列不一致",
+        "reason": "sha256:bed11ca42a7ca479dfed32128aa183bdd2c7566b6c747dd80250aaba2ae3b9fb",
         "ruleId": "ATTR-TOOL-SELECT-001",
         "confidence": 1,
         "evidenceRefs": [
           "evidence://validation/validation-distance-01/run-1/tool_trajectory_avg_score"
         ],
         "snapshotIdentity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_c751d8fd-c1b4-4d0d-a9ca-51060ea7fd12",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_2a37832c-2d4a-4b12-a88b-c7a4c6eb35a5",
           "split": "validation",
           "evalSetId": "city-service-validation",
           "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
@@ -457,15 +457,15 @@
       "round": 1,
       "parentProfileHash": "sha256:65214a0256c123f11dd1abf1864fb5ca4cc8d17edad709b36e2fe053f1f2534b",
       "candidateProfileHash": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
-      "candidatePrompt": "你是城市服务助手。对每个已知城市服务请求输出精确、规范化的 JSON 答案。\n[PROFILE:generalized]",
+      "candidatePrompt": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
       "promptiterDecision": {
         "accepted": true,
         "scoreDelta": 0.33333333333333337,
-        "reason": "candidate score gain satisfies acceptance policy"
+        "reason": "sha256:ba8792c0ac1dbfc996e15f72518314a7f331ccb993acce916c71af349609eb9d"
       },
       "candidateTrain": {
         "identity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_99bc9084-68e6-41c6-9f78-0d1f4a5edd5e",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-train_04b926dc-dc6e-456c-9fef-d767506a9d4e",
           "split": "train",
           "evalSetId": "city-service-train",
           "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
@@ -479,7 +479,7 @@
             "caseId": "train-distance-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"北京到天津约120公里\"}",
+            "finalResponse": "sha256:4cbef1134bf077ab1e11b38ae4f68bab7bb1a5f78420a690019e40801eea1806",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -497,8 +497,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"北京到天津约120公里\"}",
-                "expectedFinalResponse": "{\"answer\":\"北京到天津约120公里\"}",
+                "finalResponse": "sha256:4cbef1134bf077ab1e11b38ae4f68bab7bb1a5f78420a690019e40801eea1806",
+                "expectedFinalResponse": "sha256:4cbef1134bf077ab1e11b38ae4f68bab7bb1a5f78420a690019e40801eea1806",
                 "actualTools": [
                   {
                     "name": "distance_lookup",
@@ -525,7 +525,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:c89bb3e53b1bbee026d385c42485ee5f2fdf228ad8911060700515a803d2a93e",
-                  "outputHash": "sha256:9bb4ae45f509e8579631f333d61a060fd2bee1af29e73eb5e316176fbde5c1c2"
+                  "outputHash": "sha256:1b0e55896114ca80e1f954ba42222f78fb1fbe78227347c6053f0e764e32e25a"
                 }
               ]
             }
@@ -534,7 +534,7 @@
             "caseId": "train-scope-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"城市信息服务每日09:00-18:00开放\"}",
+            "finalResponse": "sha256:0243444a32ca591508cc5b53ccd610cbb0f87890d8deb2d3734cd54da1da6d03",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -552,8 +552,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"城市信息服务每日09:00-18:00开放\"}",
-                "expectedFinalResponse": "{\"answer\":\"城市信息服务每日09:00-18:00开放\"}"
+                "finalResponse": "sha256:0243444a32ca591508cc5b53ccd610cbb0f87890d8deb2d3734cd54da1da6d03",
+                "expectedFinalResponse": "sha256:0243444a32ca591508cc5b53ccd610cbb0f87890d8deb2d3734cd54da1da6d03"
               }
             ],
             "trace": {
@@ -566,7 +566,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:46483e7741feacf1210949eefd784f22a951d00c15bf0fe5f76116d3d7994f2c",
-                  "outputHash": "sha256:8310db1b8c98e98aaee5d9b5f5f277f78a9eaf20b52a1245484e1b574107ee55"
+                  "outputHash": "sha256:2c6ff3be45292767581df4665faca5d660c7000a9488a4037a0df6bb6d8c8d78"
                 }
               ]
             }
@@ -575,7 +575,7 @@
             "caseId": "train-weather-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
+            "finalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -593,8 +593,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
-                "expectedFinalResponse": "{\"answer\":\"上海天气晴，25°C\"}",
+                "finalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
+                "expectedFinalResponse": "sha256:8a36e26c42b9c52b31e19abd657108dd8de0c154881da9dde06c770f8ef6ee82",
                 "actualTools": [
                   {
                     "name": "weather_lookup",
@@ -621,7 +621,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:1fe73984bf2fa4bbbf1c72b8eeef6d8b67c8c849889077f60bceace612b1fd9e",
-                  "outputHash": "sha256:df4cd9d5154bd392d3bab8f1d9d8f066994dee25085c27f2fad46c13ff555f80"
+                  "outputHash": "sha256:70fe60a884b64567affa0e1cd610dabc5fce5776e845326e9fdab6d80ad76fe4"
                 }
               ]
             }
@@ -630,7 +630,7 @@
       },
       "candidateValidation": {
         "identity": {
-          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_f602cbe2-4ee4-4848-ae5d-9279166aaeba",
+          "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_1bfeb04a-53a3-475e-9723-ad9df3f4af2f",
           "split": "validation",
           "evalSetId": "city-service-validation",
           "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
@@ -644,7 +644,7 @@
             "caseId": "validation-distance-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"苏州到杭州约160公里\"}",
+            "finalResponse": "sha256:1771052a0664d25f3819ad46396215afe9bf1295108ebf85b6ed507103fb0037",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -662,8 +662,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"苏州到杭州约160公里\"}",
-                "expectedFinalResponse": "{\"answer\":\"苏州到杭州约160公里\"}",
+                "finalResponse": "sha256:1771052a0664d25f3819ad46396215afe9bf1295108ebf85b6ed507103fb0037",
+                "expectedFinalResponse": "sha256:1771052a0664d25f3819ad46396215afe9bf1295108ebf85b6ed507103fb0037",
                 "actualTools": [
                   {
                     "name": "distance_lookup",
@@ -690,7 +690,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:323e8616e10846786a8dea202f228e4b3d6a4f4fdeafe6b80b28262b6d5e134e",
-                  "outputHash": "sha256:8c76bd8802ee28965c6d164b6de9c14080560ee964548ad2d14e5e523259fec6"
+                  "outputHash": "sha256:f0944578e38c152906f2d968161ebe84ef81c7e21fa3e7ba85e97b3e5e81340d"
                 }
               ]
             }
@@ -699,7 +699,7 @@
             "caseId": "validation-scope-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}",
+            "finalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -717,8 +717,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}",
-                "expectedFinalResponse": "{\"answer\":\"紧急情况请拨打当地应急电话\"}"
+                "finalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018",
+                "expectedFinalResponse": "sha256:382e7d206804ef78a0425e5b8eb2ac96f5db508f83cbf7bef426d07159c41018"
               }
             ],
             "trace": {
@@ -731,7 +731,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:4783299a9da85966bec9bd2689fa82aa0009b899934b5f709f55d3cb17d4bb9b",
-                  "outputHash": "sha256:ead92e77e96143e28422aafa7bb409f99e6d3a1b6cb31a0edab0bc27ed4dbc34"
+                  "outputHash": "sha256:1a63957a1b8efe4610c3770736a7936198c9a153092f4d5f5ec9dd22a4378cdc"
                 }
               ]
             }
@@ -740,7 +740,7 @@
             "caseId": "validation-weather-01",
             "runId": 1,
             "status": "passed",
-            "finalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
+            "finalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
             "metrics": [
               {
                 "metricName": "final_response_avg_score",
@@ -758,8 +758,8 @@
             "invocations": [
               {
                 "index": 0,
-                "finalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
-                "expectedFinalResponse": "{\"answer\":\"广州天气多云，28°C\"}",
+                "finalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
+                "expectedFinalResponse": "sha256:33d603a70e23821d8dd59440063f0b049a53a0e604f859d2a98f0b77883bf32a",
                 "actualTools": [
                   {
                     "name": "weather_lookup",
@@ -786,7 +786,7 @@
                   "nodeType": "llm",
                   "branch": "regression-candidate",
                   "inputHash": "sha256:87a01bb185b853725772219620962896a925cf481dc07faab61f54815f6eb095",
-                  "outputHash": "sha256:eb24cc8dbe31de7a97a6dc415cc22d901cef62089a3dc8268925c3f4ff5808f0"
+                  "outputHash": "sha256:0cfdc63b28a16f041459150eb80594f91f3fc84b02a8fdadd777cc7ccb18e89f"
                 }
               ]
             }
@@ -940,40 +940,40 @@
             "passed": true,
             "observed": [
               {
-                "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
-                "split": "train",
-                "evalSetId": "city-service-train",
                 "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
+                "evalSetId": "city-service-train",
+                "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
                 "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
                 "profileHash": "sha256:65214a0256c123f11dd1abf1864fb5ca4cc8d17edad709b36e2fe053f1f2534b",
-                "seed": 2003
+                "seed": 2003,
+                "split": "train"
               },
               {
-                "evaluationRunId": "promptiter-regression-loop-app_city-service-train_99bc9084-68e6-41c6-9f78-0d1f4a5edd5e",
-                "split": "train",
-                "evalSetId": "city-service-train",
                 "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
+                "evalSetId": "city-service-train",
+                "evaluationRunId": "promptiter-regression-loop-app_city-service-train_04b926dc-dc6e-456c-9fef-d767506a9d4e",
                 "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
                 "profileHash": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
-                "seed": 2003
+                "seed": 2003,
+                "split": "train"
               },
               {
-                "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_c751d8fd-c1b4-4d0d-a9ca-51060ea7fd12",
-                "split": "validation",
-                "evalSetId": "city-service-validation",
                 "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
+                "evalSetId": "city-service-validation",
+                "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_2a37832c-2d4a-4b12-a88b-c7a4c6eb35a5",
                 "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
                 "profileHash": "sha256:65214a0256c123f11dd1abf1864fb5ca4cc8d17edad709b36e2fe053f1f2534b",
-                "seed": 2003
+                "seed": 2003,
+                "split": "validation"
               },
               {
-                "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_f602cbe2-4ee4-4848-ae5d-9279166aaeba",
-                "split": "validation",
-                "evalSetId": "city-service-validation",
                 "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
+                "evalSetId": "city-service-validation",
+                "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_1bfeb04a-53a3-475e-9723-ad9df3f4af2f",
                 "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
                 "profileHash": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
-                "seed": 2003
+                "seed": 2003,
+                "split": "validation"
               }
             ],
             "threshold": "fresh, matching run/dataset/metrics/profile identities"
@@ -1004,6 +1004,18 @@
           },
           {
             "name": "delta_consistency",
+            "passed": true,
+            "observed": true,
+            "threshold": true
+          },
+          {
+            "name": "input_case_metric_manifest",
+            "passed": true,
+            "observed": true,
+            "threshold": true
+          },
+          {
+            "name": "configured_requirements",
             "passed": true,
             "observed": true,
             "threshold": true
@@ -1080,7 +1092,7 @@
           {
             "name": "latency_budget",
             "passed": true,
-            "observed": 26,
+            "observed": 27,
             "threshold": 180000
           }
         ]
@@ -1100,40 +1112,40 @@
         "passed": true,
         "observed": [
           {
-            "evaluationRunId": "promptiter-regression-loop-app_city-service-train_ed9af295-26f8-4812-9a03-acd43f7c0549",
-            "split": "train",
-            "evalSetId": "city-service-train",
             "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
+            "evalSetId": "city-service-train",
+            "evaluationRunId": "promptiter-regression-loop-app_city-service-train_11c15dff-d487-470a-93e4-8b073dac2826",
             "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
             "profileHash": "sha256:65214a0256c123f11dd1abf1864fb5ca4cc8d17edad709b36e2fe053f1f2534b",
-            "seed": 2003
+            "seed": 2003,
+            "split": "train"
           },
           {
-            "evaluationRunId": "promptiter-regression-loop-app_city-service-train_99bc9084-68e6-41c6-9f78-0d1f4a5edd5e",
-            "split": "train",
-            "evalSetId": "city-service-train",
             "datasetHash": "sha256:c295dce82fde66ad2d75868805ac8dac60c4aeab3db2fa2b3e692711580a521c",
+            "evalSetId": "city-service-train",
+            "evaluationRunId": "promptiter-regression-loop-app_city-service-train_04b926dc-dc6e-456c-9fef-d767506a9d4e",
             "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
             "profileHash": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
-            "seed": 2003
+            "seed": 2003,
+            "split": "train"
           },
           {
-            "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_c751d8fd-c1b4-4d0d-a9ca-51060ea7fd12",
-            "split": "validation",
-            "evalSetId": "city-service-validation",
             "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
+            "evalSetId": "city-service-validation",
+            "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_2a37832c-2d4a-4b12-a88b-c7a4c6eb35a5",
             "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
             "profileHash": "sha256:65214a0256c123f11dd1abf1864fb5ca4cc8d17edad709b36e2fe053f1f2534b",
-            "seed": 2003
+            "seed": 2003,
+            "split": "validation"
           },
           {
-            "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_f602cbe2-4ee4-4848-ae5d-9279166aaeba",
-            "split": "validation",
-            "evalSetId": "city-service-validation",
             "datasetHash": "sha256:41938dd2e1f9ac592106dcf8b10653b756ffe78e3fee1b3414d6b0ffe0a1c41a",
+            "evalSetId": "city-service-validation",
+            "evaluationRunId": "promptiter-regression-loop-app_city-service-validation_1bfeb04a-53a3-475e-9723-ad9df3f4af2f",
             "metricsHash": "sha256:50ab9d65c414750fe3ff6c8b28b6cdaf4539060444201b83ab25f064dfdb3a36",
             "profileHash": "sha256:1260ac12fef44c2fc7c2bd00067e2f200d3e27429312a8568ab4d271f942d47a",
-            "seed": 2003
+            "seed": 2003,
+            "split": "validation"
           }
         ],
         "threshold": "fresh, matching run/dataset/metrics/profile identities"
@@ -1164,6 +1176,18 @@
       },
       {
         "name": "delta_consistency",
+        "passed": true,
+        "observed": true,
+        "threshold": true
+      },
+      {
+        "name": "input_case_metric_manifest",
+        "passed": true,
+        "observed": true,
+        "threshold": true
+      },
+      {
+        "name": "configured_requirements",
         "passed": true,
         "observed": true,
         "threshold": true
@@ -1240,7 +1264,7 @@
       {
         "name": "latency_budget",
         "passed": true,
-        "observed": 26,
+        "observed": 27,
         "threshold": 180000
       }
     ]
@@ -1250,7 +1274,7 @@
     "promptTokens": 17484,
     "completionTokens": 906,
     "totalTokens": 18390,
-    "wallLatencyMs": 26,
+    "wallLatencyMs": 27,
     "cost": null,
     "costStatus": "not_configured",
     "byCall": [

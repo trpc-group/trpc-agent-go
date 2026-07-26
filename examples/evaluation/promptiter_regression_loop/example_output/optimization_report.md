@@ -7,7 +7,7 @@
 - Baseline Validation：`0.667`
 - 模型调用：`35`
 - 总 Token：`18390`
-- 耗时：`26ms`
+- 耗时：`27ms`
 - 成本：`null`（`not_configured`）
 - Gate 理由：`ALL_CHECKS_PASSED`
 

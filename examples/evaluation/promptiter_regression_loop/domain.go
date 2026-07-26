@@ -138,6 +138,68 @@ type gateDecision struct {
 	Checks      []gateCheck `json:"checks"`
 }
 
+type evaluationManifest struct {
+	KeysBySplit map[string]map[string]struct{}
+	Metrics     map[string]struct{}
+	Cases       map[string]struct{}
+}
+
+func manifestKey(split, caseID, metricName string) string {
+	return split + "\x00" + caseID + "\x00" + metricName
+}
+
+func loadEvaluationManifest(trainPath, validationPath, metricsPath string) (*evaluationManifest, error) {
+	train, err := loadEvalSet(trainPath)
+	if err != nil {
+		return nil, fmt.Errorf("load train evalset: %w", err)
+	}
+	validation, err := loadEvalSet(validationPath)
+	if err != nil {
+		return nil, fmt.Errorf("load validation evalset: %w", err)
+	}
+	metricsBytes, err := os.ReadFile(metricsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read metrics: %w", err)
+	}
+	var metrics []struct {
+		MetricName string `json:"metricName"`
+	}
+	if err := json.Unmarshal(metricsBytes, &metrics); err != nil {
+		return nil, fmt.Errorf("decode metrics: %w", err)
+	}
+	manifest := &evaluationManifest{
+		KeysBySplit: make(map[string]map[string]struct{}),
+		Metrics:     make(map[string]struct{}),
+		Cases:       make(map[string]struct{}),
+	}
+	for index, metric := range metrics {
+		name := strings.TrimSpace(metric.MetricName)
+		if name == "" {
+			return nil, fmt.Errorf("metrics[%d] has an empty metricName", index)
+		}
+		if _, exists := manifest.Metrics[name]; exists {
+			return nil, fmt.Errorf("duplicate metricName %q", name)
+		}
+		manifest.Metrics[name] = struct{}{}
+	}
+	if len(manifest.Metrics) == 0 {
+		return nil, errors.New("metrics manifest is empty")
+	}
+	for split, evalSet := range map[string]*evalset.EvalSet{"train": train, "validation": validation} {
+		if len(evalSet.EvalCases) == 0 {
+			return nil, fmt.Errorf("%s evalset has no cases", split)
+		}
+		manifest.KeysBySplit[split] = make(map[string]struct{})
+		for _, evalCase := range evalSet.EvalCases {
+			manifest.Cases[evalCase.EvalID] = struct{}{}
+			for metricName := range manifest.Metrics {
+				manifest.KeysBySplit[split][manifestKey(split, evalCase.EvalID, metricName)] = struct{}{}
+			}
+		}
+	}
+	return manifest, nil
+}
+
 func buildSnapshot(
 	result *evaluation.EvaluationResult,
 	split string,
@@ -587,6 +649,7 @@ func evaluateGate(
 	baselineValidation, candidateValidation *evaluationSnapshot,
 	trainDelta, validationDelta *comparison,
 	accounting accountingSummary,
+	manifests ...*evaluationManifest,
 ) gateDecision {
 	decision := gateDecision{Checks: make([]gateCheck, 0, 9)}
 	reasons := make(map[string]struct{})
@@ -616,6 +679,14 @@ func evaluateGate(
 	deltaConsistency := comparisonsMatchSnapshots(baselineTrain, candidateTrain, trainDelta) &&
 		comparisonsMatchSnapshots(baselineValidation, candidateValidation, validationDelta)
 	addCheck("delta_consistency", deltaConsistency, deltaConsistency, true, "DELTA_SNAPSHOT_MISMATCH")
+	var manifest *evaluationManifest
+	if len(manifests) > 0 {
+		manifest = manifests[0]
+	}
+	manifestValid := manifest == nil || snapshotsMatchManifest(manifest, baselineTrain, candidateTrain, baselineValidation, candidateValidation)
+	addCheck("input_case_metric_manifest", manifestValid, manifestValid, true, "INPUT_CASE_METRIC_MISMATCH")
+	configuredRequirementsValid := manifest == nil || configuredRequirementsMatchManifest(cfg, manifest)
+	addCheck("configured_requirements", configuredRequirementsValid, configuredRequirementsValid, true, "CONFIGURED_REQUIREMENT_MISSING")
 
 	complete := true
 	unexpected := false
@@ -700,6 +771,50 @@ func evaluateGate(
 		decision.Summary = "候选被拒绝：" + strings.Join(decision.ReasonCodes, ", ")
 	}
 	return decision
+}
+
+func snapshotsMatchManifest(manifest *evaluationManifest, snapshots ...*evaluationSnapshot) bool {
+	if manifest == nil {
+		return false
+	}
+	for _, snapshot := range snapshots {
+		if snapshot == nil {
+			return false
+		}
+		actual := make(map[string]struct{})
+		for _, evalCase := range snapshot.Cases {
+			for _, metric := range evalCase.Metrics {
+				actual[manifestKey(snapshot.Identity.Split, evalCase.CaseID, metric.MetricName)] = struct{}{}
+			}
+		}
+		expected, ok := manifest.KeysBySplit[snapshot.Identity.Split]
+		if !ok || len(actual) != len(expected) {
+			return false
+		}
+		for key := range expected {
+			if _, ok := actual[key]; !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func configuredRequirementsMatchManifest(cfg gateConfig, manifest *evaluationManifest) bool {
+	if manifest == nil {
+		return false
+	}
+	for _, metricName := range cfg.HardMetrics {
+		if _, ok := manifest.Metrics[metricName]; !ok {
+			return false
+		}
+	}
+	for _, caseID := range cfg.CriticalCases {
+		if _, ok := manifest.Cases[caseID]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func validGateProvenance(
@@ -991,6 +1106,19 @@ func loadEvalSet(path string) (*evalset.EvalSet, error) {
 	var result evalset.EvalSet
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, err
+	}
+	seen := make(map[string]struct{}, len(result.EvalCases))
+	for index, evalCase := range result.EvalCases {
+		if evalCase == nil {
+			return nil, fmt.Errorf("evalCases[%d] is null", index)
+		}
+		if strings.TrimSpace(evalCase.EvalID) == "" {
+			return nil, fmt.Errorf("evalCases[%d] has an empty evalId", index)
+		}
+		if _, exists := seen[evalCase.EvalID]; exists {
+			return nil, fmt.Errorf("duplicate evalId %q", evalCase.EvalID)
+		}
+		seen[evalCase.EvalID] = struct{}{}
 	}
 	return &result, nil
 }

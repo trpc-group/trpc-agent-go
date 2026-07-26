@@ -9,6 +9,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -202,6 +203,79 @@ func TestGateFailsClosedOnForgedEvidence(t *testing.T) {
 	require.Contains(t, decision.ReasonCodes, "INCONSISTENT_SNAPSHOT_SCORE")
 }
 
+func TestGateRejectsManifestMissingFromBothBaselineAndCandidate(t *testing.T) {
+	baselineTrain := testSnapshot("train", 0, map[string]metricEvidence{
+		"train-a": {MetricName: "quality", Score: 0, Status: "failed"},
+	})
+	candidateTrain := testSnapshot("train", 1, map[string]metricEvidence{
+		"train-a": {MetricName: "quality", Score: 1, Status: "passed"},
+	})
+	baselineValidation := testSnapshot("validation", 0, map[string]metricEvidence{
+		"validation-a": {MetricName: "quality", Score: 0, Status: "failed"},
+	})
+	candidateValidation := testSnapshot("validation", 1, map[string]metricEvidence{
+		"validation-a": {MetricName: "quality", Score: 1, Status: "passed"},
+	})
+	for _, snapshot := range []*evaluationSnapshot{candidateTrain, candidateValidation} {
+		snapshot.Identity.ProfileHash = "candidate-profile"
+	}
+	manifest := &evaluationManifest{
+		KeysBySplit: map[string]map[string]struct{}{
+			"train": {
+				manifestKey("train", "train-a", "quality"): {},
+				manifestKey("train", "train-b", "quality"): {},
+			},
+			"validation": {
+				manifestKey("validation", "validation-a", "quality"): {},
+			},
+		},
+		Metrics: map[string]struct{}{"quality": {}},
+		Cases:   map[string]struct{}{"train-a": {}, "train-b": {}, "validation-a": {}},
+	}
+	trainDelta, err := compareSnapshots(baselineTrain, candidateTrain)
+	require.NoError(t, err)
+	validationDelta, err := compareSnapshots(baselineValidation, candidateValidation)
+	require.NoError(t, err)
+	decision := evaluateGate(
+		gateConfig{MinValidationGain: 0.1},
+		budgetConfig{MaxModelCalls: 10, MaxTotalTokens: 100, MaxLatencyMS: 1000},
+		baselineTrain, candidateTrain, baselineValidation, candidateValidation,
+		trainDelta, validationDelta,
+		accountingSummary{ModelCalls: 1, CompletionTokens: 1, TotalTokens: 1, WallLatencyMS: 1},
+		manifest,
+	)
+	require.False(t, decision.Accepted)
+	require.Contains(t, decision.ReasonCodes, "INPUT_CASE_METRIC_MISMATCH")
+}
+
+func TestGateRejectsRequirementsOutsideManifest(t *testing.T) {
+	fixture := newGateReferenceFixture()
+	manifest := &evaluationManifest{
+		KeysBySplit: map[string]map[string]struct{}{
+			"train":      {},
+			"validation": {},
+		},
+		Metrics: map[string]struct{}{"quality": {}},
+		Cases:   map[string]struct{}{"validation-quality": {}},
+	}
+	for _, split := range []string{"train", "validation"} {
+		for _, snapshot := range []*evaluationSnapshot{fixture.baselineTrain, fixture.candidateTrain, fixture.baselineValidation, fixture.candidateValidation} {
+			if snapshot.Identity.Split == split {
+				for _, evalCase := range snapshot.Cases {
+					for _, metric := range evalCase.Metrics {
+						manifest.KeysBySplit[split][manifestKey(split, evalCase.CaseID, metric.MetricName)] = struct{}{}
+					}
+				}
+			}
+		}
+	}
+	fixture.cfg.HardMetrics = []string{"missing-hard-metric"}
+	fixture.cfg.CriticalCases = []string{"missing-critical-case"}
+	decision := fixture.decisionWithManifest(t, manifest)
+	require.False(t, decision.Accepted)
+	require.Contains(t, decision.ReasonCodes, "CONFIGURED_REQUIREMENT_MISSING")
+}
+
 func TestFailureAttributionHonorsRootCausePriorityAndChineseReasons(t *testing.T) {
 	routeWithWrongTool := caseEvidence{
 		CaseID:  "route-and-tool",
@@ -239,6 +313,49 @@ func TestDatasetGuardUsesInputsNotExpectedAnswers(t *testing.T) {
 	require.Contains(t, overlaps, "exact:train-1~validation-1")
 }
 
+func TestLoadEvalSetRejectsNullAndDuplicateCases(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data string
+		want string
+	}{
+		{name: "null train case", data: `{"evalSetId":"train","evalCases":[null]}`, want: "evalCases[0] is null"},
+		{name: "empty id", data: `{"evalSetId":"train","evalCases":[{"evalId":" "}]}`, want: "empty evalId"},
+		{name: "duplicate id", data: `{"evalSetId":"train","evalCases":[{"evalId":"same"},{"evalId":"same"}]}`, want: "duplicate evalId"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "evalset.json")
+			require.NoError(t, os.WriteFile(path, []byte(test.data), 0o600))
+			_, err := loadEvalSet(path)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestDatasetIsolationRejectsNullTrainAndValidationCases(t *testing.T) {
+	valid := `{"evalSetId":"valid","evalCases":[{"evalId":"valid-1"}]}`
+	nullCase := `{"evalSetId":"invalid","evalCases":[null]}`
+	for _, test := range []struct {
+		name         string
+		trainContent string
+		validContent string
+		want         string
+	}{
+		{name: "null train", trainContent: nullCase, validContent: valid, want: "load train evalset"},
+		{name: "null validation", trainContent: valid, validContent: nullCase, want: "load validation evalset"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			trainPath := filepath.Join(dir, "train.json")
+			validationPath := filepath.Join(dir, "validation.json")
+			require.NoError(t, os.WriteFile(trainPath, []byte(test.trainContent), 0o600))
+			require.NoError(t, os.WriteFile(validationPath, []byte(test.validContent), 0o600))
+			_, err := validateDatasetIsolation(trainPath, validationPath, datasetGuardConfig{})
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
 func TestRedactReport(t *testing.T) {
 	input := []byte(`{"x-api-key":"SECRET_CANARY_DO_NOT_PERSIST","note":"Bearer abc.def"}`)
 	redacted := redactReport(input)
@@ -246,6 +363,44 @@ func TestRedactReport(t *testing.T) {
 	require.NotContains(t, string(redacted), "abc.def")
 	require.Contains(t, string(redacted), "[REDACTED]")
 	require.True(t, containsPromptSecret([]byte("api_key=secret-value")))
+}
+
+func TestSanitizeReportForPersistenceHashesNestedEvidence(t *testing.T) {
+	secret := "SECRET_CANARY_DO_NOT_PERSIST"
+	report := &optimizationReport{
+		Baseline: baselineReport{
+			Train: &evaluationSnapshot{Cases: []caseEvidence{{
+				FinalResponse: secret,
+				ErrorMessage:  secret,
+				Metrics:       []metricEvidence{{MetricName: "quality", Reason: secret}},
+				Invocations:   []invocationEvidence{{FinalResponse: secret, ExpectedFinalResponse: secret}},
+				Trace:         traceEvidence{Steps: []traceStepEvidence{{Error: secret}}},
+			}}},
+			Attributions: []attribution{{Reason: secret}},
+		},
+		Rounds: []roundReport{{CandidatePrompt: secret, PromptIterDecision: promptIterDecision{Reason: secret}}},
+	}
+	sanitized, err := sanitizeReportForPersistence(report)
+	require.NoError(t, err)
+	data, err := json.Marshal(sanitized)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), secret)
+	require.Equal(t, hashText(secret), sanitized.Baseline.Train.Cases[0].FinalResponse)
+	require.Equal(t, hashText(secret), sanitized.Rounds[0].CandidatePrompt)
+	require.Equal(t, hashText(secret), sanitized.Rounds[0].PromptIterDecision.Reason)
+}
+
+func (f *gateReferenceFixture) decisionWithManifest(t *testing.T, manifest *evaluationManifest) gateDecision {
+	t.Helper()
+	recalculateSnapshot(f.baselineTrain)
+	recalculateSnapshot(f.candidateTrain)
+	recalculateSnapshot(f.baselineValidation)
+	recalculateSnapshot(f.candidateValidation)
+	trainDelta, err := compareSnapshots(f.baselineTrain, f.candidateTrain)
+	require.NoError(t, err)
+	validationDelta, err := compareSnapshots(f.baselineValidation, f.candidateValidation)
+	require.NoError(t, err)
+	return evaluateGate(f.cfg, f.budget, f.baselineTrain, f.candidateTrain, f.baselineValidation, f.candidateValidation, trainDelta, validationDelta, f.accounting, manifest)
 }
 
 func TestNearDuplicateScoreAndDatasetGuardThreshold(t *testing.T) {
@@ -366,6 +521,7 @@ func TestPipelineSemanticDeterminismAcrossRuns(t *testing.T) {
 		return report
 	}
 	first, second := run(), run()
+	require.NotEqual(t, first.Pipeline.RunID, second.Pipeline.RunID)
 	require.Equal(t, first.FinalDecision.Accepted, second.FinalDecision.Accepted)
 	require.Equal(t, first.FinalDecision.ReasonCodes, second.FinalDecision.ReasonCodes)
 	require.Equal(t, first.Baseline.Train.OverallScore, second.Baseline.Train.OverallScore)

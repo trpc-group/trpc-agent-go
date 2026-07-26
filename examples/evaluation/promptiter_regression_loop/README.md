@@ -39,7 +39,7 @@ env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY -u GOOGLE_API_KEY \
 - `data/promptiter-regression-loop-app/city-service.metrics.json`；
 - `prompts/baseline.txt`。
 
-所有相对路径均相对于配置文件所在目录解析，可以复制默认配置后替换为自己的 Prompt 和评测集。
+所有相对路径均相对于配置文件所在目录解析。默认运行器使用确定性的内置 Fake Model，Fake Model 的答案、工具调用和场景分支与示例 fixture 绑定；因此不能只替换 evalset 就期待 Fake Model 自动理解新数据。接入新 fixture 时，需要同步调整 `deterministic_model.go` 中的 `expectedAnswers`、`correctForProfile` 和 `expectedToolCall`，并更新 metrics/config 中的 Case、Metric 清单。
 
 ## 样例数据
 
@@ -89,4 +89,4 @@ go vet ./...
 - 金额成本在没有价格表时保存为 `null`/`not_configured`，不会伪造为 0；配置金额 Gate 而成本未知时 fail-closed。
 - 示例以可运行参考实现的形式位于 `examples/evaluation/`，不新增公共包 API。
 - Pipeline 只发布 Prompt 产物，不自动改写源码、提交 Git 或创建 PR。
-- 报告默认保存 Trace 的步骤身份与输入/输出 Hash，不落盘原始敏感正文。
+- 报告落盘前会将 final/expected response、错误与 reason、Trace error、失败归因 reason 和候选 Prompt 替换为 evidence hash，不保存原始评测正文；Prompt artifact 仍会执行 secret-like 检查，发现疑似密钥时拒绝写入。
