@@ -11,7 +11,7 @@
     "minValidationGain": 0.05,
     "noNewHardFailures": true,
     "noCriticalRegressions": true,
-    "maxCumulativeModelCalls": 200
+    "modelCallStopThreshold": 200
   },
   "criticalCaseIds": [
     "validation-wrong-route",

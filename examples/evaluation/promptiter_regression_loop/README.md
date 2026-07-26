@@ -23,7 +23,7 @@ The eight public cases (three training and five validation) cover response misma
 - The native PromptIter engine receives only training cases. Its configured `train_all` internal validation also comes from the training domain; held-out validation results, traces, reasons, trajectories, and attributions never become loss hints or optimizer inputs.
 - An explicit source `tools: []` is preserved as `expectNoTools: true` and rendered as an empty expected trajectory, so the audit report distinguishes a no-tool oracle from an unspecified tool expectation.
 - The deterministic seed is `2003`. Candidate generation depends on the current profile, training loss hints, and that seed, so equivalent inputs reproduce the same semantic result without an external API key.
-- Release decisions use the candidate's held-out `vs_released` delta. The sample requires at least `0.05` quality gain, no new hard failure, no critical-case regression, and at most `200` cumulative model calls.
+- Release decisions use the candidate's held-out `vs_released` delta. The sample requires at least `0.05` quality gain, no new hard failure, and no critical-case regression. Its model-call stop threshold is `200`: `0` disables it, checks run after observable stages or PromptIter events, and an already-running opaque stage may overshoot. A complete candidate observed exactly at the threshold remains release-eligible, but no later search stage starts; only a candidate observed above the threshold is rejected by the release gate.
 
 ## Run
 

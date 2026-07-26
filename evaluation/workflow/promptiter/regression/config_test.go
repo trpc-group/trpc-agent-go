@@ -450,7 +450,7 @@ func TestCustomConfigLoadersAreStrict(t *testing.T) {
 				"maxOuterRounds":2,
 				"searchMinScoreGain":0.1,
 				"internalValidationStrategy":"train_all",
-				"targetSurfaceIds":["agent#instruction"]
+				"targetSurfaceId":"agent#instruction"
 			},
 			"unexpected":true
 		}`), 0o600))
@@ -495,12 +495,29 @@ func TestCustomConfigLoadersAreStrict(t *testing.T) {
 		require.ErrorContains(t, err, "minValidationGain")
 	})
 
-	t.Run("multiple target surfaces", func(t *testing.T) {
+	t.Run("empty target surface", func(t *testing.T) {
 		fixture := newConfigFixture(t)
-		fixture.policy()["targetSurfaceIds"] = []string{"agent#instruction", "router#instruction"}
+		fixture.policy()["targetSurfaceId"] = ""
 		fixture.writePromptIter(t)
 		_, err := LoadPromptIterConfig(fixture.files.PromptIterConfig)
-		require.ErrorContains(t, err, "exactly one")
+		require.ErrorContains(t, err, "targetSurfaceId is empty")
+	})
+
+	t.Run("legacy plural target surfaces", func(t *testing.T) {
+		fixture := newConfigFixture(t)
+		delete(fixture.policy(), "targetSurfaceId")
+		fixture.policy()["targetSurfaceIds"] = []string{"agent#instruction"}
+		fixture.writePromptIter(t)
+		_, err := LoadPromptIterConfig(fixture.files.PromptIterConfig)
+		require.ErrorContains(t, err, `unknown field "targetSurfaceIds"`)
+	})
+
+	t.Run("target surface must be singular string", func(t *testing.T) {
+		fixture := newConfigFixture(t)
+		fixture.policy()["targetSurfaceId"] = []string{"agent#instruction"}
+		fixture.writePromptIter(t)
+		_, err := LoadPromptIterConfig(fixture.files.PromptIterConfig)
+		require.ErrorContains(t, err, "cannot unmarshal array")
 	})
 
 	for _, field := range []string{
@@ -510,7 +527,7 @@ func TestCustomConfigLoadersAreStrict(t *testing.T) {
 		"minValidationGain",
 		"noNewHardFailures",
 		"noCriticalRegressions",
-		"maxCumulativeModelCalls",
+		"modelCallStopThreshold",
 	} {
 		t.Run("missing release gate field "+field, func(t *testing.T) {
 			fixture := newConfigFixture(t)
@@ -675,7 +692,7 @@ func newConfigFixture(t *testing.T) *configFixture {
 				"maxOuterRounds":             2,
 				"searchMinScoreGain":         0.05,
 				"internalValidationStrategy": "train_all",
-				"targetSurfaceIds":           []string{"agent#instruction"},
+				"targetSurfaceId":            "agent#instruction",
 			},
 		},
 		regression: map[string]any{
@@ -688,11 +705,11 @@ func newConfigFixture(t *testing.T) *configFixture {
 					"quality": "higher_is_better",
 					"safety":  "higher_is_better",
 				},
-				"epsilon":                 0.000001,
-				"minValidationGain":       0.05,
-				"noNewHardFailures":       true,
-				"noCriticalRegressions":   true,
-				"maxCumulativeModelCalls": 100,
+				"epsilon":                0.000001,
+				"minValidationGain":      0.05,
+				"noNewHardFailures":      true,
+				"noCriticalRegressions":  true,
+				"modelCallStopThreshold": 100,
 			},
 			"criticalCaseIds":    []string{"valid-route"},
 			"hardFailureCaseIds": []string{"valid-args"},

@@ -52,7 +52,7 @@ func TestConfigurationValidatorsRejectEveryInvalidFieldClass(t *testing.T) {
 				SearchMinScoreGain:         0,
 				InternalValidationStrategy: internalValidationTrainCaseIDs,
 				InternalValidationCaseIDs:  []string{"train-a"},
-				TargetSurfaceIDs:           []string{"node#instruction"},
+				TargetSurfaceID:            "node#instruction",
 			},
 		}
 	}
@@ -63,8 +63,7 @@ func TestConfigurationValidatorsRejectEveryInvalidFieldClass(t *testing.T) {
 		{"schema", func(config *PromptIterConfig) { config.SchemaVersion = "2.0" }},
 		{"rounds", func(config *PromptIterConfig) { config.Policy.MaxOuterRounds = 0 }},
 		{"gain", func(config *PromptIterConfig) { config.Policy.SearchMinScoreGain = math.NaN() }},
-		{"target count", func(config *PromptIterConfig) { config.Policy.TargetSurfaceIDs = nil }},
-		{"empty target", func(config *PromptIterConfig) { config.Policy.TargetSurfaceIDs[0] = "" }},
+		{"empty target", func(config *PromptIterConfig) { config.Policy.TargetSurfaceID = "" }},
 		{"missing case ids", func(config *PromptIterConfig) {
 			config.Policy.InternalValidationCaseIDs = nil
 		}},
@@ -93,7 +92,7 @@ func TestConfigurationValidatorsRejectEveryInvalidFieldClass(t *testing.T) {
 		{"directions", func(policy *GatePolicy) { policy.MetricDirections = nil }},
 		{"epsilon", func(policy *GatePolicy) { policy.Epsilon = math.Inf(1) }},
 		{"gain", func(policy *GatePolicy) { policy.MinValidationGain = -1 }},
-		{"budget", func(policy *GatePolicy) { policy.MaxCumulativeModelCalls = -1 }},
+		{"threshold", func(policy *GatePolicy) { policy.ModelCallStopThreshold = -1 }},
 		{"empty metric", func(policy *GatePolicy) {
 			policy.MetricDirections = map[string]ScoreDirection{"": ScoreHigherIsBetter}
 		}},
@@ -699,7 +698,7 @@ func TestReleaseGateValidatorsRejectEveryMalformedDeltaAndResource(t *testing.T)
 			policy.MinValidationGain = math.NaN()
 		},
 		func(policy *GatePolicy, _ *DeltaSummary, _ *ResourceUsage) {
-			policy.MaxCumulativeModelCalls = -1
+			policy.ModelCallStopThreshold = -1
 		},
 		func(_ *GatePolicy, delta *DeltaSummary, _ *ResourceUsage) {
 			delta.Comparison = "vs_initial"
@@ -717,7 +716,7 @@ func TestReleaseGateValidatorsRejectEveryMalformedDeltaAndResource(t *testing.T)
 			delta.Cases = nil
 		},
 		func(policy *GatePolicy, _ *DeltaSummary, usage *ResourceUsage) {
-			policy.MaxCumulativeModelCalls = 1
+			policy.ModelCallStopThreshold = 1
 			usage.ModelCalls = Count{}
 		},
 	} {
@@ -780,12 +779,12 @@ func TestPipelineAndReportUtilityBranches(t *testing.T) {
 	require.NotNil(t, options.resourceObserver)
 
 	structure := pipelineTestStructure()
-	require.Error(t, validateProfileAndTargets(nil, pipelineProfile("prompt"), []string{pipelineTestSurfaceID}))
+	require.Error(t, validateProfileAndTarget(nil, pipelineProfile("prompt"), pipelineTestSurfaceID))
 	wrongProfile := pipelineProfile("prompt")
 	wrongProfile.StructureID = "other"
-	require.Error(t, validateProfileAndTargets(structure, wrongProfile, []string{pipelineTestSurfaceID}))
-	require.Error(t, validateProfileAndTargets(structure, pipelineProfile("prompt"), []string{"missing"}))
-	require.NoError(t, validateProfileAndTargets(structure, pipelineProfile("prompt"), []string{pipelineTestSurfaceID}))
+	require.Error(t, validateProfileAndTarget(structure, wrongProfile, pipelineTestSurfaceID))
+	require.Error(t, validateProfileAndTarget(structure, pipelineProfile("prompt"), "missing"))
+	require.NoError(t, validateProfileAndTarget(structure, pipelineProfile("prompt"), pipelineTestSurfaceID))
 
 	require.Error(t, func() error {
 		_, err := bindProfileToStructure(nil, structure)
@@ -836,12 +835,12 @@ func TestPipelineAndReportUtilityBranches(t *testing.T) {
 	require.Contains(t, out.String(), "unable to render")
 	require.Contains(t, compactJSON(make(chan int)), "unrenderable")
 
-	for _, status := range []PipelineStatus{PipelineSucceeded, PipelineRunFailed, PipelineBudgetStopped} {
+	for _, status := range []PipelineStatus{PipelineSucceeded, PipelineRunFailed, PipelineModelCallThresholdStopped} {
 		require.True(t, validPipelineStatus(status))
 	}
 	require.False(t, validPipelineStatus("other"))
 	for _, reason := range []StopReason{
-		StopMaxRounds, StopBudgetExhausted, StopNoCandidate,
+		StopMaxRounds, StopModelCallThresholdReached, StopNoCandidate,
 		StopNecessaryRunFailed, StopRepeatedFingerprint, StopTrainingFailuresFixed,
 	} {
 		require.True(t, validStopReason(reason))
@@ -1940,7 +1939,9 @@ func TestConfigParsingDatasetAndLocatorHelpers(t *testing.T) {
 		[]string{"quality"},
 	))
 
-	require.Len(t, profileFromPrompt("prompt", []string{"a", "b"}).Overrides, 2)
+	profile := profileFromPrompt("prompt", "a")
+	require.Len(t, profile.Overrides, 1)
+	require.Equal(t, "a", profile.Overrides[0].SurfaceID)
 	input := &inputEvalSetLocator{paths: map[string]string{"b": "B", "a": "A"}}
 	require.Equal(t, "A", input.Build("", "", "a"))
 	require.Contains(t, input.Build("", "", "missing"), "__unknown_eval_set__")
@@ -2488,7 +2489,7 @@ func TestReportComponentValidatorsCoverCandidateAndResourceFailures(t *testing.T
 	require.Error(t, validateResolvedDataset("dataset", duplicateHashes))
 	require.NoError(t, validateResolvedDataset("dataset", validDataset()))
 
-	targets := []string{"surface"}
+	target := "surface"
 	validPatch := PatchRecord{SurfaceID: "surface", Value: "prompt", Reason: "reason"}
 	for _, patches := range [][]PatchRecord{
 		{{Value: "prompt", Reason: "reason"}},
@@ -2497,9 +2498,9 @@ func TestReportComponentValidatorsCoverCandidateAndResourceFailures(t *testing.T
 		{{SurfaceID: "other", Value: "prompt", Reason: "reason"}},
 		{validPatch, validPatch},
 	} {
-		require.Error(t, validateCandidatePatches("candidate", patches, targets))
+		require.Error(t, validateCandidatePatches("candidate", patches, target))
 	}
-	require.NoError(t, validateCandidatePatches("candidate", []PatchRecord{validPatch}, targets))
+	require.NoError(t, validateCandidatePatches("candidate", []PatchRecord{validPatch}, target))
 
 	candidate := testReport(t).Candidates[0]
 	for _, mutate := range []func(*CandidateReport){
@@ -2618,24 +2619,24 @@ func TestReportBindingsRejectEveryProfileSnapshotPatchAndDeltaDrift(t *testing.T
 	})
 
 	t.Run("patch records", func(t *testing.T) {
-		targets := []string{"agent#instruction"}
+		target := "agent#instruction"
 		for _, patches := range [][]PatchRecord{
 			{{SurfaceID: "", Value: "value", Reason: "reason"}},
-			{{SurfaceID: targets[0], Value: "", Reason: "reason"}},
-			{{SurfaceID: targets[0], Value: "value", Reason: ""}},
+			{{SurfaceID: target, Value: "", Reason: "reason"}},
+			{{SurfaceID: target, Value: "value", Reason: ""}},
 			{{SurfaceID: "other", Value: "value", Reason: "reason"}},
 			{
-				{SurfaceID: targets[0], Value: "value", Reason: "reason"},
-				{SurfaceID: targets[0], Value: "value", Reason: "reason"},
+				{SurfaceID: target, Value: "value", Reason: "reason"},
+				{SurfaceID: target, Value: "value", Reason: "reason"},
 			},
 		} {
-			require.Error(t, validateCandidatePatches("candidate", patches, targets))
+			require.Error(t, validateCandidatePatches("candidate", patches, target))
 		}
 		require.NoError(t, validateCandidatePatches("candidate", []PatchRecord{{
-			SurfaceID: targets[0],
+			SurfaceID: target,
 			Value:     "value",
 			Reason:    "reason",
-		}}, targets))
+		}}, target))
 	})
 
 	t.Run("patch binding", func(t *testing.T) {
@@ -3015,22 +3016,22 @@ func TestLossHintsAndPipelineDecisionHelpers(t *testing.T) {
 	require.Contains(t, hints[0].Reason, "evidence:")
 	require.LessOrEqual(t, len([]rune(hints[0].Reason)), 560)
 
-	stopped, _ := budgetStop(GatePolicy{}, ResourceUsage{})
+	stopped, _ := modelCallThresholdStop(GatePolicy{}, ResourceUsage{})
 	require.False(t, stopped)
-	stopped, reason := budgetStop(
-		GatePolicy{MaxCumulativeModelCalls: 2},
+	stopped, reason := modelCallThresholdStop(
+		GatePolicy{ModelCallStopThreshold: 2},
 		ResourceUsage{},
 	)
 	require.True(t, stopped)
 	require.Contains(t, reason, "unavailable")
-	stopped, reason = budgetStop(
-		GatePolicy{MaxCumulativeModelCalls: 2},
+	stopped, reason = modelCallThresholdStop(
+		GatePolicy{ModelCallStopThreshold: 2},
 		ResourceUsage{ModelCalls: Count{Available: true, Value: 2}},
 	)
 	require.True(t, stopped)
 	require.Contains(t, reason, "reached")
-	stopped, _ = budgetStop(
-		GatePolicy{MaxCumulativeModelCalls: 2},
+	stopped, _ = modelCallThresholdStop(
+		GatePolicy{ModelCallStopThreshold: 2},
 		ResourceUsage{ModelCalls: Count{Available: true, Value: 1}},
 	)
 	require.False(t, stopped)
@@ -3357,47 +3358,68 @@ func TestEvaluateSnapshotEnforcesEvaluatorErrorStatusContract(t *testing.T) {
 	config := pipelineRunConfig()
 	hash, err := ProfileFingerprint(config.InitialProfile)
 	require.NoError(t, err)
-	for _, evaluator := range []SnapshotEvaluator{
-		snapshotEvaluatorFunc(func(
-			_ context.Context,
-			request SnapshotRequest,
-		) (*EvaluationSnapshot, error) {
-			snapshot := pipelineSnapshot(request, 0.2, false, false)
-			snapshot.Status = EvaluationNotEvaluable
-			return snapshot, nil
-		}),
-		snapshotEvaluatorFunc(func(
-			_ context.Context,
-			request SnapshotRequest,
-		) (*EvaluationSnapshot, error) {
-			return pipelineSnapshot(request, 0.2, false, false), context.Canceled
-		}),
-		snapshotEvaluatorFunc(func(
-			context.Context,
-			SnapshotRequest,
-		) (*EvaluationSnapshot, error) {
-			return nil, nil
-		}),
-	} {
-		pipeline := &Pipeline{evaluator: evaluator}
-		var ledger ResourceLedger
-		snapshot, err := pipeline.evaluateSnapshot(
-			context.Background(),
-			&config,
-			config.InitialProfile,
-			hash,
-			config.Train,
-			"train",
-			"probe",
-			1,
-			&ledger,
-			nil,
-		)
-		require.Error(t, err)
-		require.Len(t, ledger.Entries, 1)
-		if snapshot != nil {
-			require.Equal(t, EvaluationNotEvaluable, snapshot.Status)
-		}
+	tests := []struct {
+		name         string
+		evaluator    SnapshotEvaluator
+		wantSnapshot bool
+	}{
+		{
+			name: "not evaluable status without error",
+			evaluator: snapshotEvaluatorFunc(func(
+				_ context.Context,
+				request SnapshotRequest,
+			) (*EvaluationSnapshot, error) {
+				snapshot := pipelineSnapshot(request, 0.2, false, false)
+				snapshot.Status = EvaluationNotEvaluable
+				return snapshot, nil
+			}),
+			wantSnapshot: true,
+		},
+		{
+			name: "snapshot with evaluator error",
+			evaluator: snapshotEvaluatorFunc(func(
+				_ context.Context,
+				request SnapshotRequest,
+			) (*EvaluationSnapshot, error) {
+				return pipelineSnapshot(request, 0.2, false, false), context.Canceled
+			}),
+			wantSnapshot: true,
+		},
+		{
+			name: "nil snapshot without error",
+			evaluator: snapshotEvaluatorFunc(func(
+				context.Context,
+				SnapshotRequest,
+			) (*EvaluationSnapshot, error) {
+				return nil, nil
+			}),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			pipeline := &Pipeline{evaluator: test.evaluator}
+			var ledger ResourceLedger
+			snapshot, err := pipeline.evaluateSnapshot(
+				context.Background(),
+				&config,
+				config.InitialProfile,
+				hash,
+				config.Train,
+				"train",
+				"probe",
+				1,
+				&ledger,
+				nil,
+			)
+			require.Error(t, err)
+			require.Len(t, ledger.Entries, 1)
+			if test.wantSnapshot {
+				require.NotNil(t, snapshot)
+				require.Equal(t, EvaluationNotEvaluable, snapshot.Status)
+			} else {
+				require.Nil(t, snapshot)
+			}
+		})
 	}
 }
 
@@ -3699,8 +3721,8 @@ func TestPipelineFailClosedStateMachineBranches(t *testing.T) {
 	}
 }
 
-func TestPipelineBudgetStopsAtEveryOuterLoopBoundary(t *testing.T) {
-	run := func(t *testing.T, budget int64, meter ResourceMeter) *Report {
+func TestPipelineModelCallThresholdStopsAtEveryOuterLoopBoundary(t *testing.T) {
+	run := func(t *testing.T, threshold int64, meter ResourceMeter) *Report {
 		t.Helper()
 		engine := &pipelineStaticEngine{
 			structure: pipelineTestStructure(),
@@ -3713,12 +3735,12 @@ func TestPipelineBudgetStopsAtEveryOuterLoopBoundary(t *testing.T) {
 		pipeline, err := New(engine, &pipelineSnapshotEvaluator{}, options...)
 		require.NoError(t, err)
 		config := pipelineRunConfig()
-		config.Gate.MaxCumulativeModelCalls = budget
+		config.Gate.ModelCallStopThreshold = threshold
 		bindPipelineRunConfig(&config)
 		report, err := pipeline.Run(context.Background(), &config)
 		require.NoError(t, err)
-		require.Equal(t, PipelineBudgetStopped, report.Status)
-		require.Equal(t, StopBudgetExhausted, report.StopReason)
+		require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+		require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 		return report
 	}
 
@@ -3731,7 +3753,7 @@ func TestPipelineBudgetStopsAtEveryOuterLoopBoundary(t *testing.T) {
 	require.Nil(t, report.Candidates[0].Train)
 	require.Contains(t, strings.Join(report.Candidates[0].Errors, " "), "unavailable")
 
-	for _, budget := range []int64{3, 4} {
+	for _, threshold := range []int64{3, 4} {
 		meter := NewUsageMeter()
 		meter.Record(ResourceUsage{
 			ModelCalls:   Count{Available: true},
@@ -3740,9 +3762,9 @@ func TestPipelineBudgetStopsAtEveryOuterLoopBoundary(t *testing.T) {
 			LatencyMS:    Count{Available: true},
 			MonetaryCost: Amount{Available: true, Unit: "USD"},
 		})
-		report = run(t, budget, meter)
+		report = run(t, threshold, meter)
 		require.Len(t, report.Candidates, 1)
-		if budget == 3 {
+		if threshold == 3 {
 			require.NotNil(t, report.Candidates[0].Train)
 			require.Nil(t, report.Candidates[0].Validation)
 		} else {

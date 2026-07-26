@@ -689,18 +689,18 @@ func TestCalculateDeltaFailsClosed(t *testing.T) {
 
 func TestDecideReleaseSafetyGates(t *testing.T) {
 	policy := GatePolicy{
-		PrimaryMetric:           "quality",
-		MetricDirections:        map[string]ScoreDirection{"quality": ScoreHigherIsBetter},
-		MinValidationGain:       0.05,
-		NoNewHardFailures:       true,
-		NoCriticalRegressions:   true,
-		MaxCumulativeModelCalls: 10,
-		Epsilon:                 1e-9,
+		PrimaryMetric:          "quality",
+		MetricDirections:       map[string]ScoreDirection{"quality": ScoreHigherIsBetter},
+		MinValidationGain:      0.05,
+		NoNewHardFailures:      true,
+		NoCriticalRegressions:  true,
+		ModelCallStopThreshold: 10,
+		Epsilon:                1e-9,
 	}
 	calls := ResourceUsage{
 		ModelCalls: Count{Available: true, Value: 10},
 	}
-	t.Run("accept exact gain and budget boundaries", func(t *testing.T) {
+	t.Run("accept exact gain and model-call threshold boundaries", func(t *testing.T) {
 		decision := DecideRelease(policy, decisionDelta(0.05), calls)
 		require.Equal(t, DecisionAccepted, decision.Status)
 	})
@@ -763,13 +763,13 @@ func TestDecideReleaseSafetyGates(t *testing.T) {
 		)
 		require.Equal(t, DecisionNotEvaluable, decision.Status)
 	})
-	t.Run("over budget", func(t *testing.T) {
+	t.Run("over threshold", func(t *testing.T) {
 		over := ResourceUsage{
 			ModelCalls: Count{Available: true, Value: 11},
 		}
 		decision := DecideRelease(policy, decisionDelta(0.2), over)
 		require.Equal(t, DecisionRejected, decision.Status)
-		require.Contains(t, decision.Reasons[0], "budget")
+		require.Contains(t, decision.Reasons[0], "threshold")
 	})
 	t.Run("non finite delta is not evaluable", func(t *testing.T) {
 		delta := decisionDelta(0.2)
@@ -791,13 +791,13 @@ func TestDecideReleaseRejectsForgedCaseDeltas(t *testing.T) {
 		ModelCalls: Count{Available: true, Value: 1},
 	}
 	higherPolicy := GatePolicy{
-		PrimaryMetric:           "quality",
-		MetricDirections:        map[string]ScoreDirection{"quality": ScoreHigherIsBetter},
-		MinValidationGain:       0,
-		NoNewHardFailures:       true,
-		NoCriticalRegressions:   true,
-		MaxCumulativeModelCalls: 10,
-		Epsilon:                 1e-9,
+		PrimaryMetric:          "quality",
+		MetricDirections:       map[string]ScoreDirection{"quality": ScoreHigherIsBetter},
+		MinValidationGain:      0,
+		NoNewHardFailures:      true,
+		NoCriticalRegressions:  true,
+		ModelCallStopThreshold: 10,
+		Epsilon:                1e-9,
 	}
 
 	t.Run("critical forged raw delta and improved kind", func(t *testing.T) {

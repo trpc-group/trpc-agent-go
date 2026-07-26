@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-// DecideRelease applies held-out quality, safety, and cumulative budget gates.
+// DecideRelease applies held-out quality, safety, and model-call threshold gates.
 func DecideRelease(
 	policy GatePolicy,
 	delta DeltaSummary,
@@ -93,14 +93,14 @@ func DecideRelease(
 			)
 		}
 	}
-	if policy.MaxCumulativeModelCalls > 0 &&
-		cumulative.ModelCalls.Value > policy.MaxCumulativeModelCalls {
+	if policy.ModelCallStopThreshold > 0 &&
+		cumulative.ModelCalls.Value > policy.ModelCallStopThreshold {
 		reasons = append(
 			reasons,
 			fmt.Sprintf(
-				"model_call_budget: used %d calls; budget is %d",
+				"model_call_threshold: observed %d calls; threshold is %d",
 				cumulative.ModelCalls.Value,
-				policy.MaxCumulativeModelCalls,
+				policy.ModelCallStopThreshold,
 			),
 		)
 	}
@@ -132,10 +132,10 @@ func validateReleaseInputs(
 			"invalid_policy: minimum validation gain must be finite and non-negative",
 		)
 	}
-	if policy.MaxCumulativeModelCalls < 0 {
+	if policy.ModelCallStopThreshold < 0 {
 		reasons = append(
 			reasons,
-			"invalid_policy: maximum cumulative model calls must be non-negative",
+			"invalid_policy: model-call stop threshold must be non-negative",
 		)
 	}
 	if delta.Comparison != "vs_released" {
@@ -181,7 +181,7 @@ func validateReleaseInputs(
 		}
 	}
 	reasons = append(reasons, validateResourceUsage(cumulative)...)
-	if policy.MaxCumulativeModelCalls > 0 &&
+	if policy.ModelCallStopThreshold > 0 &&
 		!cumulative.ModelCalls.Available {
 		reasons = append(
 			reasons,

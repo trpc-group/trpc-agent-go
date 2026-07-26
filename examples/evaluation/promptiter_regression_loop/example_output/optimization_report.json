@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0",
   "reportId": "issue-2003-deterministic-loop",
-  "runId": "issue-2003-deterministic-loop-e4e981e426bb",
+  "runId": "issue-2003-deterministic-loop-770416856469",
   "generatedAt": "2026-07-24T00:00:00Z",
   "status": "succeeded",
   "stopReason": "max_rounds",
@@ -51,9 +51,7 @@
       "maxOuterRounds": 2,
       "searchMinScoreGain": 0.05,
       "internalValidationStrategy": "train_all",
-      "targetSurfaceIds": [
-        "support-agent#instruction"
-      ]
+      "targetSurfaceId": "support-agent#instruction"
     },
     "gate": {
       "primaryMetric": "quality",
@@ -64,7 +62,7 @@
       "minValidationGain": 0.05,
       "noNewHardFailures": true,
       "noCriticalRegressions": true,
-      "maxCumulativeModelCalls": 200
+      "modelCallStopThreshold": 200
     },
     "output": {
       "json": "optimization_report.json",
@@ -85,8 +83,8 @@
   "inputHashes": {
     "baselinePrompt": "623903a2027c2fd4568c158389503bb5c6cf2c7472a18dcc7deb4d5d1d6c3b96",
     "metrics": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
-    "promptIterConfig": "102fa1bf2fa3740e4d652a295029e4d931b5c2211919d60705c034c2a25fdafc",
-    "regressionConfig": "17976282d5f57d97e55265adde07d0256e58c34525f0cab9cad10a99c3bec621",
+    "promptIterConfig": "ab106c5c9537dc80bb9e4056197eb72c0d6647d7302094cd8fb1a69d2e69f1f3",
+    "regressionConfig": "e8f4bf1d6a6d5db298c679659af8e7f74307dd1ba6982463a0ee70d205473675",
     "trainEvalSet": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
     "validationEvalSet": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052"
   },
@@ -136,7 +134,7 @@
         }
       ]
     },
-    "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_validation"
+    "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_validation"
   },
   "searchProfile": {
     "role": "search",
@@ -160,7 +158,7 @@
         }
       ]
     },
-    "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2"
+    "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2"
   },
   "releasedProfile": {
     "role": "released",
@@ -184,20 +182,20 @@
         }
       ]
     },
-    "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1"
+    "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/1"
   },
   "baselineTrain": {
     "status": "completed",
     "provenance": {
-      "runId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_train",
+      "runId": "issue-2003-deterministic-loop-770416856469/baseline_train",
       "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
       "evalSetId": "issue-2003-train",
       "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
       "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
       "split": "train",
       "seed": 2003,
-      "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-      "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+      "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+      "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
     },
     "expectedInventory": {
       "caseIds": [
@@ -392,7 +390,7 @@
         "severity": "P2",
         "confidence": 0.97,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_train",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_train",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       },
       {
@@ -411,7 +409,7 @@
         "severity": "P2",
         "confidence": 0.9,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_train",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_train",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       },
       {
@@ -438,7 +436,7 @@
         "severity": "P2",
         "confidence": 0.99,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_train",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_train",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       }
     ],
@@ -469,15 +467,15 @@
   "baselineValidation": {
     "status": "completed",
     "provenance": {
-      "runId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_validation",
+      "runId": "issue-2003-deterministic-loop-770416856469/baseline_validation",
       "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533",
       "evalSetId": "issue-2003-validation",
       "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
       "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
       "split": "heldout_validation",
       "seed": 2003,
-      "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-      "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+      "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+      "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
     },
     "expectedInventory": {
       "caseIds": [
@@ -761,7 +759,7 @@
         "severity": "P2",
         "confidence": 0.92,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_validation",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_validation",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       },
       {
@@ -788,7 +786,7 @@
         "severity": "P2",
         "confidence": 0.98,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_validation",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_validation",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       },
       {
@@ -820,7 +818,7 @@
         "severity": "P0",
         "confidence": 0.99,
         "evidenceSufficiency": "sufficient",
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/baseline_validation",
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/baseline_validation",
         "profileHash": "d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533"
       }
     ],
@@ -877,7 +875,7 @@
             }
           ]
         },
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1"
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/1"
       },
       "patches": [
         {
@@ -887,20 +885,20 @@
         }
       ],
       "optimizationReason": "remediate response mismatch or grounded knowledge recall from observed loss evidence; derived from current profile 087e6e42b40e, loss hints 02612c290293, and seed 2003",
-      "promptIterRunId": "issue-2003-deterministic-loop-e4e981e426bb/promptiter/1",
+      "promptIterRunId": "issue-2003-deterministic-loop-770416856469/promptiter/1",
       "promptIterStatus": "succeeded",
       "train": {
         "status": "completed",
         "provenance": {
-          "runId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_train/1",
+          "runId": "issue-2003-deterministic-loop-770416856469/candidate_train/1",
           "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
           "evalSetId": "issue-2003-train",
           "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
           "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
           "split": "train",
           "seed": 2003,
-          "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-          "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+          "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+          "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
         },
         "expectedInventory": {
           "caseIds": [
@@ -1095,7 +1093,7 @@
             "severity": "P2",
             "confidence": 0.97,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_train/1",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_train/1",
             "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba"
           },
           {
@@ -1122,7 +1120,7 @@
             "severity": "P2",
             "confidence": 0.99,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_train/1",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_train/1",
             "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba"
           }
         ],
@@ -1153,15 +1151,15 @@
       "validation": {
         "status": "completed",
         "provenance": {
-          "runId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1",
+          "runId": "issue-2003-deterministic-loop-770416856469/candidate_validation/1",
           "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba",
           "evalSetId": "issue-2003-validation",
           "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
           "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
           "split": "heldout_validation",
           "seed": 2003,
-          "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-          "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+          "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+          "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
         },
         "expectedInventory": {
           "caseIds": [
@@ -1440,7 +1438,7 @@
             "severity": "P2",
             "confidence": 0.98,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/1",
             "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba"
           },
           {
@@ -1472,7 +1470,7 @@
             "severity": "P0",
             "confidence": 0.99,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/1",
             "profileHash": "90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba"
           }
         ],
@@ -2400,7 +2398,7 @@
             }
           ]
         },
-        "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2"
+        "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2"
       },
       "patches": [
         {
@@ -2410,20 +2408,20 @@
         }
       ],
       "optimizationReason": "remediate wrong tool selection or wrong arguments from observed tool-loss evidence; the wrong-tool remediation broadens tool use and operational routing; derived from current profile 8a3e37de0f4e, loss hints 3a902de71c01, and seed 2003",
-      "promptIterRunId": "issue-2003-deterministic-loop-e4e981e426bb/promptiter/2",
+      "promptIterRunId": "issue-2003-deterministic-loop-770416856469/promptiter/2",
       "promptIterStatus": "succeeded",
       "train": {
         "status": "completed",
         "provenance": {
-          "runId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_train/2",
+          "runId": "issue-2003-deterministic-loop-770416856469/candidate_train/2",
           "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
           "evalSetId": "issue-2003-train",
           "evalSetHash": "7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb",
           "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
           "split": "train",
           "seed": 2003,
-          "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-          "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+          "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+          "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
         },
         "expectedInventory": {
           "caseIds": [
@@ -2618,7 +2616,7 @@
             "severity": "P2",
             "confidence": 0.97,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_train/2",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_train/2",
             "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8"
           }
         ],
@@ -2649,15 +2647,15 @@
       "validation": {
         "status": "completed",
         "provenance": {
-          "runId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2",
+          "runId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2",
           "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8",
           "evalSetId": "issue-2003-validation",
           "evalSetHash": "23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052",
           "metricsHash": "0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c",
           "split": "heldout_validation",
           "seed": 2003,
-          "evaluatorConfigHash": "49ed2e4b5a0b909e123616f10fa0ad5aaf5e111f98b9b06ae0f8aa47f1586e35",
-          "metricPolicyHash": "741f016ad6c1d0d3b1b4ae22fbe0831808cf9e7846d113f516b36c212b44141c"
+          "evaluatorConfigHash": "50a60c2d0045ba0e772b6d76acfa9a2c1a0a166b4b48aeac808211481012e59a",
+          "metricPolicyHash": "d149f0b93c4b4929d6cf34239c3367a3bf6e88238c7b7c5e5f2d3ae723e3a800"
         },
         "expectedInventory": {
           "caseIds": [
@@ -2996,7 +2994,7 @@
             "severity": "P0",
             "confidence": 0.99,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2",
             "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8"
           },
           {
@@ -3023,7 +3021,7 @@
             "severity": "P0",
             "confidence": 0.99,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2",
             "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8"
           },
           {
@@ -3055,7 +3053,7 @@
             "severity": "P0",
             "confidence": 0.99,
             "evidenceSufficiency": "sufficient",
-            "evaluationRunId": "issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2",
+            "evaluationRunId": "issue-2003-deterministic-loop-770416856469/candidate_validation/2",
             "profileHash": "8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8"
           }
         ],

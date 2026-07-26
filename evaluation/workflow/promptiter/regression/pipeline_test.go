@@ -134,7 +134,7 @@ func TestPipelineUsesNativeEngineWithoutHeldoutLeakageAndPropagatesEvidenceHints
 	require.NotContains(t, stages, "promptiter")
 }
 
-func TestPipelineStopsNativePromptIterAtObservedBudgetBoundary(t *testing.T) {
+func TestPipelineStopsNativePromptIterAtObservedModelCallThresholdBoundary(t *testing.T) {
 	ctx := context.Background()
 	structure := pipelineTestStructure()
 	meter := NewUsageMeter()
@@ -162,19 +162,19 @@ func TestPipelineStopsNativePromptIterAtObservedBudgetBoundary(t *testing.T) {
 	)
 	require.NoError(t, err)
 	config := pipelineRunConfig()
-	config.Gate.MaxCumulativeModelCalls = 3
+	config.Gate.ModelCallStopThreshold = 3
 	bindPipelineRunConfig(&config)
 
 	report, err := pipeline.Run(ctx, &config)
 	require.NoError(t, err)
-	require.Equal(t, PipelineBudgetStopped, report.Status)
-	require.Equal(t, StopBudgetExhausted, report.StopReason)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 	require.Len(t, report.Candidates, 1)
 	candidate := report.Candidates[0]
 	require.Equal(t, EvaluationNotEvaluable, candidate.Status)
 	require.Equal(t, DecisionNotEvaluable, candidate.SearchDecision.Status)
 	require.Equal(t, DecisionNotEvaluable, candidate.ReleaseDecision.Status)
-	require.Equal(t, "budget_stopped", candidate.PromptIterStatus)
+	require.Equal(t, "model_call_threshold_stopped", candidate.PromptIterStatus)
 	require.False(t, candidate.Transition.SearchUpdated)
 	require.False(t, candidate.Transition.ReleaseUpdated)
 	require.Equal(t, int64(3), report.Resources.Cumulative.ModelCalls.Value)
@@ -183,6 +183,71 @@ func TestPipelineStopsNativePromptIterAtObservedBudgetBoundary(t *testing.T) {
 	inferenceCalls := nativeService.inferenceCalls
 	nativeService.mu.Unlock()
 	require.Equal(t, 1, inferenceCalls, "observer must stop PromptIter before later native stages")
+}
+
+func TestPipelineModelCallThresholdAllowsOpaqueStageOvershoot(t *testing.T) {
+	staticEngine := &pipelineStaticEngine{structure: pipelineTestStructure()}
+	outer := &pipelineSnapshotEvaluator{mutate: func(
+		request SnapshotRequest,
+		snapshot *EvaluationSnapshot,
+	) {
+		if strings.Contains(request.EvaluationRunID, "baseline_train") {
+			snapshot.Resources.ModelCalls.Value = 3
+		}
+	}}
+	pipeline, err := New(staticEngine, outer)
+	require.NoError(t, err)
+	config := pipelineRunConfig()
+	config.Gate.ModelCallStopThreshold = 2
+	bindPipelineRunConfig(&config)
+
+	report, err := pipeline.Run(context.Background(), &config)
+	require.NoError(t, err)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
+	require.Equal(t, int64(3), report.Resources.Cumulative.ModelCalls.Value)
+	require.Greater(
+		t,
+		report.Resources.Cumulative.ModelCalls.Value,
+		config.Gate.ModelCallStopThreshold,
+	)
+	require.NotNil(t, report.BaselineTrain)
+	require.Nil(t, report.BaselineValidation)
+	require.Zero(t, staticEngine.runCalls)
+}
+
+func TestPipelineAcceptsCandidateAtExactModelCallThresholdThenStopsSearch(t *testing.T) {
+	meter := NewUsageMeter()
+	meter.Record(ResourceUsage{
+		ModelCalls:   Count{Available: true},
+		InputTokens:  Count{Available: true},
+		OutputTokens: Count{Available: true},
+		LatencyMS:    Count{Available: true},
+	})
+	staticEngine := &pipelineStaticEngine{
+		structure: pipelineTestStructure(),
+		result:    pipelineCandidateRunResult(),
+	}
+	pipeline, err := New(
+		staticEngine,
+		&pipelineSnapshotEvaluator{},
+		WithResourceMeter(meter),
+	)
+	require.NoError(t, err)
+	config := pipelineRunConfig()
+	config.PromptIter.MaxOuterRounds = 2
+	config.Gate.ModelCallStopThreshold = 4
+	bindPipelineRunConfig(&config)
+
+	report, err := pipeline.Run(context.Background(), &config)
+	require.NoError(t, err)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
+	require.Equal(t, int64(4), report.Resources.Cumulative.ModelCalls.Value)
+	require.Len(t, report.Candidates, 1)
+	require.Equal(t, DecisionAccepted, report.Candidates[0].ReleaseDecision.Status)
+	require.Equal(t, report.Candidates[0].Profile.Hash, report.ReleasedProfile.Hash)
+	require.Equal(t, 1, staticEngine.runCalls)
 }
 
 func TestPipelinePropagatesContextTerminationWithFinalizedReport(t *testing.T) {
@@ -446,9 +511,9 @@ func TestPipelinePreservesNotEvaluableCandidateAndUpdatesNeitherProfile(t *testi
 	require.Len(t, requests, 3, "held-out evaluation must not run after candidate train fails")
 }
 
-func TestPipelineFailsClosedOnUnknownConfiguredBudgetBeforeSearch(t *testing.T) {
+func TestPipelineFailsClosedOnUnknownConfiguredModelCallThresholdBeforeSearch(t *testing.T) {
 	config := pipelineRunConfig()
-	config.Gate.MaxCumulativeModelCalls = 2
+	config.Gate.ModelCallStopThreshold = 2
 	bindPipelineRunConfig(&config)
 	staticEngine := &pipelineStaticEngine{structure: pipelineTestStructure()}
 	outer := &pipelineSnapshotEvaluator{unknownCalls: true}
@@ -456,8 +521,8 @@ func TestPipelineFailsClosedOnUnknownConfiguredBudgetBeforeSearch(t *testing.T) 
 	require.NoError(t, err)
 	report, err := pipeline.Run(context.Background(), &config)
 	require.NoError(t, err)
-	require.Equal(t, PipelineBudgetStopped, report.Status)
-	require.Equal(t, StopBudgetExhausted, report.StopReason)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 	require.Equal(t, DecisionNotEvaluable, report.FinalDecision.Status)
 	require.Contains(t, report.FinalDecision.Reasons[0], "unavailable")
 	require.Zero(t, staticEngine.runCalls)
@@ -773,19 +838,19 @@ func TestPipelineRejectsUnboundSnapshotBeforeSearch(t *testing.T) {
 	require.Contains(t, strings.Join(report.Errors, "\n"), "provenance does not match")
 }
 
-func TestPipelineStopsBetweenBaselineSplitsWhenBudgetIsExhausted(t *testing.T) {
+func TestPipelineStopsBetweenBaselineSplitsWhenModelCallThresholdIsReached(t *testing.T) {
 	staticEngine := &pipelineStaticEngine{structure: pipelineTestStructure()}
 	outer := &pipelineSnapshotEvaluator{}
 	pipeline, err := New(staticEngine, outer)
 	require.NoError(t, err)
 	config := pipelineRunConfig()
-	config.Gate.MaxCumulativeModelCalls = 1
+	config.Gate.ModelCallStopThreshold = 1
 	bindPipelineRunConfig(&config)
 
 	report, err := pipeline.Run(context.Background(), &config)
 	require.NoError(t, err)
-	require.Equal(t, PipelineBudgetStopped, report.Status)
-	require.Equal(t, StopBudgetExhausted, report.StopReason)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 	require.Equal(t, DecisionNotEvaluable, report.FinalDecision.Status)
 	require.NotNil(t, report.BaselineTrain)
 	require.Nil(t, report.BaselineValidation)
@@ -799,21 +864,21 @@ func TestPipelineStopsBetweenBaselineSplitsWhenBudgetIsExhausted(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestPipelineStopsBeforeNextEvaluationWhenBudgetIsExhausted(t *testing.T) {
+func TestPipelineStopsBeforeNextEvaluationWhenModelCallThresholdIsReached(t *testing.T) {
 	tests := []struct {
 		name             string
-		budget           int64
+		threshold        int64
 		wantRequests     int
 		wantTrainPresent bool
 	}{
 		{
 			name:         "after promptiter",
-			budget:       3,
+			threshold:    3,
 			wantRequests: 2,
 		},
 		{
 			name:             "after candidate train",
-			budget:           4,
+			threshold:        4,
 			wantRequests:     3,
 			wantTrainPresent: true,
 		},
@@ -838,12 +903,12 @@ func TestPipelineStopsBeforeNextEvaluationWhenBudgetIsExhausted(t *testing.T) {
 			)
 			require.NoError(t, err)
 			config := pipelineRunConfig()
-			config.Gate.MaxCumulativeModelCalls = test.budget
+			config.Gate.ModelCallStopThreshold = test.threshold
 			bindPipelineRunConfig(&config)
 			report, err := pipeline.Run(context.Background(), &config)
 			require.NoError(t, err)
-			require.Equal(t, PipelineBudgetStopped, report.Status)
-			require.Equal(t, StopBudgetExhausted, report.StopReason)
+			require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+			require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 			_, err = RenderJSON(report)
 			require.NoError(t, err)
 			require.Len(t, report.Candidates, 1)
@@ -970,7 +1035,7 @@ func TestPipelineRejectsForgedPromptIterLineageAndPatches(t *testing.T) {
 	}
 }
 
-func TestPipelineKeepsCompletedCandidateWhenReleaseBudgetIsNotEvaluable(t *testing.T) {
+func TestPipelineKeepsCompletedCandidateWhenReleaseModelCallThresholdIsNotEvaluable(t *testing.T) {
 	meter := NewUsageMeter()
 	staticEngine := &pipelineStaticEngine{
 		structure: pipelineTestStructure(),
@@ -980,12 +1045,12 @@ func TestPipelineKeepsCompletedCandidateWhenReleaseBudgetIsNotEvaluable(t *testi
 	pipeline, err := New(staticEngine, outer, WithResourceMeter(meter))
 	require.NoError(t, err)
 	config := pipelineRunConfig()
-	config.Gate.MaxCumulativeModelCalls = 100
+	config.Gate.ModelCallStopThreshold = 100
 	bindPipelineRunConfig(&config)
 	report, err := pipeline.Run(context.Background(), &config)
 	require.NoError(t, err)
-	require.Equal(t, PipelineBudgetStopped, report.Status)
-	require.Equal(t, StopBudgetExhausted, report.StopReason)
+	require.Equal(t, PipelineModelCallThresholdStopped, report.Status)
+	require.Equal(t, StopModelCallThresholdReached, report.StopReason)
 	_, err = RenderJSON(report)
 	require.NoError(t, err)
 	require.Len(t, report.Candidates, 1)
@@ -1833,7 +1898,7 @@ func pipelineRunConfig() RunConfig {
 			SearchMinScoreGain:         0.1,
 			InternalValidationStrategy: internalValidationTrainCaseIDs,
 			InternalValidationCaseIDs:  []string{"train-a"},
-			TargetSurfaceIDs:           []string{pipelineTestSurfaceID},
+			TargetSurfaceID:            pipelineTestSurfaceID,
 		},
 		Gate: GatePolicy{
 			PrimaryMetric:         "quality",

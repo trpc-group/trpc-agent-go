@@ -5,8 +5,6 @@
     "maxOuterRounds": 2,
     "searchMinScoreGain": 0.05,
     "internalValidationStrategy": "train_all",
-    "targetSurfaceIds": [
-      "support-agent#instruction"
-    ]
+    "targetSurfaceId": "support-agent#instruction"
   }
 }

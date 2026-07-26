@@ -14,6 +14,54 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUsageMeterZeroValueRecordsAndAccumulatesUsage(t *testing.T) {
+	var meter UsageMeter
+	first := ResourceUsage{
+		ModelCalls:   Count{Available: true, Value: 1},
+		InputTokens:  Count{Available: true, Value: 10},
+		OutputTokens: Count{Available: true, Value: 20},
+		LatencyMS:    Count{Available: true, Value: 30},
+		MonetaryCost: Amount{Available: true, Value: 1.25, Unit: "USD"},
+	}
+	second := ResourceUsage{
+		ModelCalls:   Count{Available: true, Value: 2},
+		InputTokens:  Count{Available: true, Value: 11},
+		OutputTokens: Count{Available: true, Value: 21},
+		LatencyMS:    Count{Available: true, Value: 31},
+		MonetaryCost: Amount{Available: true, Value: 0.75, Unit: "USD"},
+	}
+
+	meter.Record(first)
+	require.Equal(t, first, meter.Snapshot())
+
+	meter.Record(second)
+	require.Equal(t, ResourceUsage{
+		ModelCalls:   Count{Available: true, Value: 3},
+		InputTokens:  Count{Available: true, Value: 21},
+		OutputTokens: Count{Available: true, Value: 41},
+		LatencyMS:    Count{Available: true, Value: 61},
+		MonetaryCost: Amount{Available: true, Value: 2, Unit: "USD"},
+	}, meter.Snapshot())
+}
+
+func TestUsageMeterZeroValueDoesNotInventUnavailableIncrement(t *testing.T) {
+	var meter UsageMeter
+
+	meter.Record(ResourceUsage{
+		ModelCalls:   Count{Available: true, Value: 1},
+		InputTokens:  Count{},
+		OutputTokens: Count{Available: true, Value: 2},
+		LatencyMS:    Count{Available: true, Value: 3},
+	})
+
+	require.Equal(t, ResourceUsage{
+		ModelCalls:   Count{Available: true, Value: 1},
+		InputTokens:  Count{},
+		OutputTokens: Count{Available: true, Value: 2},
+		LatencyMS:    Count{Available: true, Value: 3},
+	}, meter.Snapshot())
+}
+
 func TestResourceUsageDeltaPreservesFirstMonetaryCost(t *testing.T) {
 	after := ResourceUsage{
 		MonetaryCost: Amount{Available: true, Value: 1.25, Unit: "USD"},

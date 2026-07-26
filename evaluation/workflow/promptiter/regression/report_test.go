@@ -803,7 +803,7 @@ func testReport(t *testing.T) *Report {
 			MaxOuterRounds:             1,
 			SearchMinScoreGain:         0.1,
 			InternalValidationStrategy: internalValidationTrainAll,
-			TargetSurfaceIDs:           []string{targetSurface},
+			TargetSurfaceID:            targetSurface,
 		},
 		Gate:          gate,
 		Output:        OutputConfig{JSON: "optimization_report.json", Markdown: "optimization_report.md"},

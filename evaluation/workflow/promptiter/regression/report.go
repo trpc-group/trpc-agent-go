@@ -362,7 +362,7 @@ func validateSuccessfulReport(report *Report) error {
 	if _, offset := report.GeneratedAt.Zone(); offset != 0 {
 		return errors.New("generated time must use UTC")
 	}
-	targetSurfaceID := report.ResolvedConfig.PromptIter.TargetSurfaceIDs[0]
+	targetSurfaceID := report.ResolvedConfig.PromptIter.TargetSurfaceID
 	structureID := report.InitialProfile.StructureID
 	for _, item := range []struct {
 		label   string
@@ -805,7 +805,7 @@ func validateSuccessfulCandidate(
 		if err := validateCandidatePatches(
 			label,
 			candidate.Patches,
-			report.ResolvedConfig.PromptIter.TargetSurfaceIDs,
+			report.ResolvedConfig.PromptIter.TargetSurfaceID,
 		); err != nil {
 			return err
 		}
@@ -1049,12 +1049,8 @@ func validateSnapshotBinding(
 func validateCandidatePatches(
 	label string,
 	patches []PatchRecord,
-	targetSurfaceIDs []string,
+	targetSurfaceID string,
 ) error {
-	targets := make(map[string]struct{}, len(targetSurfaceIDs))
-	for _, target := range targetSurfaceIDs {
-		targets[target] = struct{}{}
-	}
 	seen := make(map[string]struct{}, len(patches))
 	for i, patch := range patches {
 		switch {
@@ -1065,7 +1061,7 @@ func validateCandidatePatches(
 		case strings.TrimSpace(patch.Reason) == "":
 			return fmt.Errorf("%s PromptIter patch %d reason is empty", label, i+1)
 		}
-		if _, ok := targets[patch.SurfaceID]; !ok {
+		if patch.SurfaceID != targetSurfaceID {
 			return fmt.Errorf(
 				"%s PromptIter patch %d targets unconfigured surface %q",
 				label,
@@ -1513,7 +1509,7 @@ func validateCompletedSnapshot(label string, snapshot *EvaluationSnapshot) error
 
 func validPipelineStatus(status PipelineStatus) bool {
 	switch status {
-	case PipelineSucceeded, PipelineRunFailed, PipelineBudgetStopped:
+	case PipelineSucceeded, PipelineRunFailed, PipelineModelCallThresholdStopped:
 		return true
 	default:
 		return false
@@ -1522,7 +1518,7 @@ func validPipelineStatus(status PipelineStatus) bool {
 
 func validStopReason(reason StopReason) bool {
 	switch reason {
-	case StopMaxRounds, StopBudgetExhausted, StopNoCandidate, StopNecessaryRunFailed,
+	case StopMaxRounds, StopModelCallThresholdReached, StopNoCandidate, StopNecessaryRunFailed,
 		StopRepeatedFingerprint, StopTrainingFailuresFixed:
 		return true
 	default:

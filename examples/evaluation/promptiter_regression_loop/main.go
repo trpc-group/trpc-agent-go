@@ -61,10 +61,10 @@ func run(ctx context.Context, dataDir, outputDir string) (*regression.Report, er
 	if err != nil {
 		return nil, err
 	}
-	if config.PromptIter.TargetSurfaceIDs[0] != targetSurfaceID {
+	if config.PromptIter.TargetSurfaceID != targetSurfaceID {
 		return nil, fmt.Errorf(
 			"configured target surface %q does not match example surface %q",
-			config.PromptIter.TargetSurfaceIDs[0],
+			config.PromptIter.TargetSurfaceID,
 			targetSurfaceID,
 		)
 	}

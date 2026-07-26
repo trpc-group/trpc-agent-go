@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
-var errPromptIterBudgetExhausted = errors.New("promptiter model-call budget exhausted")
+var errPromptIterModelCallThresholdReached = errors.New("promptiter model-call stop threshold reached")
 
 // PipelineOption configures native PromptIter collaborators and observability.
 type PipelineOption func(*pipelineOptions)
@@ -160,7 +160,7 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 	if err != nil {
 		return nil, fmt.Errorf("describe promptiter structure: %w", err)
 	}
-	if err := validateProfileAndTargets(structure, cfg.InitialProfile, cfg.PromptIter.TargetSurfaceIDs); err != nil {
+	if err := validateProfileAndTarget(structure, cfg.InitialProfile, cfg.PromptIter.TargetSurfaceID); err != nil {
 		return nil, err
 	}
 	cfg.InitialProfile, err = bindProfileToStructure(cfg.InitialProfile, structure)
@@ -170,7 +170,7 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 	initial, err := buildProfileRecord(
 		ProfileInitial,
 		cfg.InitialProfile,
-		cfg.PromptIter.TargetSurfaceIDs[0],
+		cfg.PromptIter.TargetSurfaceID,
 		structure,
 	)
 	if err != nil {
@@ -212,9 +212,9 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		finalizeReport(report, state)
 		return report, trainTerminationErr
 	}
-	if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
-		report.Status = PipelineBudgetStopped
-		report.StopReason = StopBudgetExhausted
+	if stopped, reason := modelCallThresholdStop(cfg.Gate, report.Resources.Cumulative); stopped {
+		report.Status = PipelineModelCallThresholdStopped
+		report.StopReason = StopModelCallThresholdReached
 		report.FinalDecision = Decision{
 			Status:  DecisionNotEvaluable,
 			Reasons: []string{reason},
@@ -260,9 +260,9 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		finalizeReport(report, state)
 		return report, validationTerminationErr
 	}
-	if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
-		report.Status = PipelineBudgetStopped
-		report.StopReason = StopBudgetExhausted
+	if stopped, reason := modelCallThresholdStop(cfg.Gate, report.Resources.Cumulative); stopped {
+		report.Status = PipelineModelCallThresholdStopped
+		report.StopReason = StopModelCallThresholdReached
 		report.FinalDecision = Decision{
 			Status:  DecisionNotEvaluable,
 			Reasons: []string{reason},
@@ -324,7 +324,7 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 				MinScoreGain: cfg.PromptIter.SearchMinScoreGain,
 			},
 			MaxRounds:        1,
-			TargetSurfaceIDs: append([]string(nil), cfg.PromptIter.TargetSurfaceIDs...),
+			TargetSurfaceIDs: []string{cfg.PromptIter.TargetSurfaceID},
 		}
 		runResult, runErr := p.runPromptIter(
 			ctx,
@@ -360,21 +360,21 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 				finalizeReport(report, state)
 				return report, promptIterTerminationErr
 			}
-			if errors.Is(runErr, errPromptIterBudgetExhausted) {
-				candidateReport.PromptIterStatus = "budget_stopped"
+			if errors.Is(runErr, errPromptIterModelCallThresholdReached) {
+				candidateReport.PromptIterStatus = string(PipelineModelCallThresholdStopped)
 				candidateReport.SearchDecision = notEvaluableDecision(runErr.Error())
 				candidateReport.ReleaseDecision = notEvaluableDecision(runErr.Error())
 				candidateReport.Transition = unchangedTransition(
 					searchParent.Hash,
 					releasedParent.Hash,
-					"native PromptIter stopped at the model-call budget",
+					"native PromptIter stopped at the model-call threshold checkpoint",
 				)
 				report.Candidates = append(report.Candidates, candidateReport)
-				report.Status = PipelineBudgetStopped
-				report.StopReason = StopBudgetExhausted
+				report.Status = PipelineModelCallThresholdStopped
+				report.StopReason = StopModelCallThresholdReached
 				report.Errors = append(
 					report.Errors,
-					fmt.Sprintf("round %d promptiter budget: %v", round, runErr),
+					fmt.Sprintf("round %d promptiter model-call threshold: %v", round, runErr),
 				)
 				break
 			}
@@ -436,7 +436,7 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		candidate, err := buildProfileRecord(
 			ProfileCandidate,
 			candidateProfile,
-			cfg.PromptIter.TargetSurfaceIDs[0],
+			cfg.PromptIter.TargetSurfaceID,
 			structure,
 		)
 		if err != nil {
@@ -456,18 +456,18 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		candidateReport.Profile = &candidate
 		candidateReport.Patches = adaptPatches(engineRound.Patches)
 		candidateReport.OptimizationReason = patchReasons(engineRound.Patches)
-		if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
+		if stopped, reason := modelCallThresholdStop(cfg.Gate, report.Resources.Cumulative); stopped {
 			candidateReport.Errors = append(candidateReport.Errors, reason)
 			candidateReport.SearchDecision = notEvaluableDecision(reason)
 			candidateReport.ReleaseDecision = notEvaluableDecision(reason)
 			candidateReport.Transition = unchangedTransition(
 				searchParent.Hash,
 				releasedParent.Hash,
-				"budget stopped candidate before outer evaluation",
+				"model-call threshold stopped candidate before outer evaluation",
 			)
 			report.Candidates = append(report.Candidates, candidateReport)
-			report.Status = PipelineBudgetStopped
-			report.StopReason = StopBudgetExhausted
+			report.Status = PipelineModelCallThresholdStopped
+			report.StopReason = StopModelCallThresholdReached
 			break
 		}
 		if _, repeated := seenProfiles[candidate.Hash]; repeated {
@@ -536,18 +536,18 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 			}
 			break
 		}
-		if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
+		if stopped, reason := modelCallThresholdStop(cfg.Gate, report.Resources.Cumulative); stopped {
 			candidateReport.Errors = append(candidateReport.Errors, reason)
 			candidateReport.SearchDecision = notEvaluableDecision(reason)
 			candidateReport.ReleaseDecision = notEvaluableDecision(reason)
 			candidateReport.Transition = unchangedTransition(
 				searchParent.Hash,
 				releasedParent.Hash,
-				"budget stopped candidate before held-out evaluation",
+				"model-call threshold stopped candidate before held-out evaluation",
 			)
 			report.Candidates = append(report.Candidates, candidateReport)
-			report.Status = PipelineBudgetStopped
-			report.StopReason = StopBudgetExhausted
+			report.Status = PipelineModelCallThresholdStopped
+			report.StopReason = StopModelCallThresholdReached
 			break
 		}
 		candidateValidation, candidateValidationErr := p.evaluateSnapshot(
@@ -696,9 +696,9 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		}
 		candidateReport.Transition = transition
 		report.Candidates = append(report.Candidates, candidateReport)
-		if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
-			report.Status = PipelineBudgetStopped
-			report.StopReason = StopBudgetExhausted
+		if stopped, reason := modelCallThresholdStop(cfg.Gate, report.Resources.Cumulative); stopped {
+			report.Status = PipelineModelCallThresholdStopped
+			report.StopReason = StopModelCallThresholdReached
 			if candidateReport.ReleaseDecision.Status == DecisionNotEvaluable {
 				report.Errors = append(report.Errors, reason)
 			}
@@ -777,11 +777,11 @@ func (p *Pipeline) runPromptIter(
 				return err
 			}
 		}
-		if stopped, reason := budgetStop(
+		if stopped, reason := modelCallThresholdStop(
 			report.ResolvedConfig.Gate,
 			report.Resources.Cumulative,
 		); stopped {
-			return fmt.Errorf("%w: %s", errPromptIterBudgetExhausted, reason)
+			return fmt.Errorf("%w: %s", errPromptIterModelCallThresholdReached, reason)
 		}
 		return nil
 	}
@@ -1136,10 +1136,10 @@ func validateRunConfig(config *RunConfig) error {
 	return nil
 }
 
-func validateProfileAndTargets(
+func validateProfileAndTarget(
 	snapshot *astructure.Snapshot,
 	profile *promptiter.Profile,
-	targetSurfaceIDs []string,
+	targetSurfaceID string,
 ) error {
 	if snapshot == nil {
 		return errors.New("promptiter structure snapshot is nil")
@@ -1155,10 +1155,8 @@ func validateProfileAndTargets(
 	for _, surface := range snapshot.Surfaces {
 		surfaces[surface.SurfaceID] = struct{}{}
 	}
-	for _, target := range targetSurfaceIDs {
-		if _, ok := surfaces[target]; !ok {
-			return fmt.Errorf("target surface id %q is not in structure", target)
-		}
+	if _, ok := surfaces[targetSurfaceID]; !ok {
+		return fmt.Errorf("target surface id %q is not in structure", targetSurfaceID)
 	}
 	return nil
 }
@@ -2147,18 +2145,18 @@ func snapshotFailedCount(snapshot *EvaluationSnapshot) int {
 	return failed
 }
 
-func budgetStop(policy GatePolicy, usage ResourceUsage) (bool, string) {
-	if policy.MaxCumulativeModelCalls <= 0 {
+func modelCallThresholdStop(policy GatePolicy, usage ResourceUsage) (bool, string) {
+	if policy.ModelCallStopThreshold <= 0 {
 		return false, ""
 	}
 	if !usage.ModelCalls.Available {
-		return true, "configured model-call budget cannot be evaluated because call count is unavailable"
+		return true, "configured model-call stop threshold cannot be evaluated because call count is unavailable"
 	}
-	if usage.ModelCalls.Value >= policy.MaxCumulativeModelCalls {
+	if usage.ModelCalls.Value >= policy.ModelCallStopThreshold {
 		return true, fmt.Sprintf(
-			"cumulative model calls %d reached budget %d",
+			"observed cumulative model calls %d reached stop threshold %d; checks occur after observable stages and an in-flight stage may overshoot",
 			usage.ModelCalls.Value,
-			policy.MaxCumulativeModelCalls,
+			policy.ModelCallStopThreshold,
 		)
 	}
 	return false, ""

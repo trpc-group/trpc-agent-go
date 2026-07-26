@@ -329,9 +329,9 @@ type PipelineStatus string
 
 // PipelineStatus values describe the terminal operational pipeline outcome.
 const (
-	PipelineSucceeded     PipelineStatus = "succeeded"
-	PipelineRunFailed     PipelineStatus = "run_failed"
-	PipelineBudgetStopped PipelineStatus = "budget_stopped"
+	PipelineSucceeded                 PipelineStatus = "succeeded"
+	PipelineRunFailed                 PipelineStatus = "run_failed"
+	PipelineModelCallThresholdStopped PipelineStatus = "model_call_threshold_stopped"
 )
 
 // StopReason is a stable outer-loop termination reason.
@@ -339,12 +339,12 @@ type StopReason string
 
 // StopReason values record every supported outer-loop termination cause.
 const (
-	StopMaxRounds             StopReason = "max_rounds"
-	StopBudgetExhausted       StopReason = "budget_exhausted"
-	StopNoCandidate           StopReason = "no_candidate"
-	StopNecessaryRunFailed    StopReason = "necessary_run_failed"
-	StopRepeatedFingerprint   StopReason = "repeated_fingerprint"
-	StopTrainingFailuresFixed StopReason = "training_failures_fixed"
+	StopMaxRounds                 StopReason = "max_rounds"
+	StopModelCallThresholdReached StopReason = "model_call_threshold_reached"
+	StopNoCandidate               StopReason = "no_candidate"
+	StopNecessaryRunFailed        StopReason = "necessary_run_failed"
+	StopRepeatedFingerprint       StopReason = "repeated_fingerprint"
+	StopTrainingFailuresFixed     StopReason = "training_failures_fixed"
 )
 
 // ProfileRole identifies one profile's lifecycle role.
@@ -400,13 +400,16 @@ type StateTransition struct {
 
 // GatePolicy controls the held-out release decision.
 type GatePolicy struct {
-	PrimaryMetric           string                    `json:"primaryMetric"`
-	MetricDirections        map[string]ScoreDirection `json:"metricDirections"`
-	Epsilon                 float64                   `json:"epsilon"`
-	MinValidationGain       float64                   `json:"minValidationGain"`
-	NoNewHardFailures       bool                      `json:"noNewHardFailures"`
-	NoCriticalRegressions   bool                      `json:"noCriticalRegressions"`
-	MaxCumulativeModelCalls int64                     `json:"maxCumulativeModelCalls,omitempty"`
+	PrimaryMetric         string                    `json:"primaryMetric"`
+	MetricDirections      map[string]ScoreDirection `json:"metricDirections"`
+	Epsilon               float64                   `json:"epsilon"`
+	MinValidationGain     float64                   `json:"minValidationGain"`
+	NoNewHardFailures     bool                      `json:"noNewHardFailures"`
+	NoCriticalRegressions bool                      `json:"noCriticalRegressions"`
+	// ModelCallStopThreshold is checked after observable stages or engine
+	// events. Zero disables it; it is not a per-call hard cap, so an
+	// already-running opaque stage may overshoot.
+	ModelCallStopThreshold int64 `json:"modelCallStopThreshold"`
 }
 
 // PromptIterPolicy controls the native engine invocation and outer search loop.
@@ -415,7 +418,7 @@ type PromptIterPolicy struct {
 	SearchMinScoreGain         float64  `json:"searchMinScoreGain"`
 	InternalValidationStrategy string   `json:"internalValidationStrategy"`
 	InternalValidationCaseIDs  []string `json:"internalValidationCaseIds,omitempty"`
-	TargetSurfaceIDs           []string `json:"targetSurfaceIds"`
+	TargetSurfaceID            string   `json:"targetSurfaceId"`
 }
 
 // PromptIterConfig is the strict on-disk PromptIter configuration.

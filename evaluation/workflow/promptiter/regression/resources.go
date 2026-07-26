@@ -47,6 +47,18 @@ func (m *UsageMeter) Record(usage ResourceUsage) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.recorded {
+		if !m.usage.ModelCalls.Available {
+			m.usage.ModelCalls = Count{Available: true}
+		}
+		if !m.usage.InputTokens.Available {
+			m.usage.InputTokens = Count{Available: true}
+		}
+		if !m.usage.OutputTokens.Available {
+			m.usage.OutputTokens = Count{Available: true}
+		}
+		if !m.usage.LatencyMS.Available {
+			m.usage.LatencyMS = Count{Available: true}
+		}
 		m.usage.ModelCalls = addCount(m.usage.ModelCalls, usage.ModelCalls)
 		m.usage.InputTokens = addCount(m.usage.InputTokens, usage.InputTokens)
 		m.usage.OutputTokens = addCount(m.usage.OutputTokens, usage.OutputTokens)

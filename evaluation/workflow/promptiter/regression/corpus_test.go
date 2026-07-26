@@ -50,7 +50,7 @@ type gateCorpusCase struct {
 	After                  float64                   `json:"after"`
 	ReportedGain           float64                   `json:"reportedGain"`
 	MinimumGain            float64                   `json:"minimumGain"`
-	MaxCalls               int64                     `json:"maxCalls"`
+	ModelCallStopThreshold int64                     `json:"modelCallStopThreshold"`
 	CallsAvailable         bool                      `json:"callsAvailable"`
 	Calls                  int64                     `json:"calls"`
 	HardFailure            bool                      `json:"hardFailure"`
@@ -245,13 +245,13 @@ func TestReleaseDecisionCorpusMeetsAccuracyAndExactSafetyRequirements(t *testing
 			policyDirections["quality"] = direction
 		}
 		policy := GatePolicy{
-			PrimaryMetric:           "quality",
-			MetricDirections:        policyDirections,
-			Epsilon:                 1e-9,
-			MinValidationGain:       fixture.MinimumGain,
-			NoNewHardFailures:       true,
-			NoCriticalRegressions:   true,
-			MaxCumulativeModelCalls: fixture.MaxCalls,
+			PrimaryMetric:          "quality",
+			MetricDirections:       policyDirections,
+			Epsilon:                1e-9,
+			MinValidationGain:      fixture.MinimumGain,
+			NoNewHardFailures:      true,
+			NoCriticalRegressions:  true,
+			ModelCallStopThreshold: fixture.ModelCallStopThreshold,
 		}
 		delta := gateCorpusDelta(fixture, direction, comparison)
 		usage := ResourceUsage{

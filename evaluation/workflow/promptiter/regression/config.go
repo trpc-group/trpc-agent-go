@@ -173,7 +173,7 @@ func LoadRunConfig(ctx context.Context, appName string, files InputFiles) (*RunC
 	if baselinePrompt == "" {
 		return nil, errors.New("baseline prompt is empty")
 	}
-	initialProfile := profileFromPrompt(baselinePrompt, promptIterConfig.Policy.TargetSurfaceIDs)
+	initialProfile := profileFromPrompt(baselinePrompt, promptIterConfig.Policy.TargetSurfaceID)
 	gateJSON, err := json.Marshal(regressionConfig.Gate)
 	if err != nil {
 		return nil, fmt.Errorf("marshal metric gate policy: %w", err)
@@ -542,11 +542,8 @@ func validatePromptIterConfig(config PromptIterConfig) error {
 		return errors.New("maxOuterRounds must be greater than zero")
 	case !finiteConfigNumber(policy.SearchMinScoreGain) || policy.SearchMinScoreGain < 0:
 		return errors.New("searchMinScoreGain must be finite and non-negative")
-	case len(policy.TargetSurfaceIDs) != 1:
-		return errors.New("targetSurfaceIds must contain exactly one surface")
-	}
-	if err := validateUniqueNonEmpty("target surface id", policy.TargetSurfaceIDs); err != nil {
-		return err
+	case strings.TrimSpace(policy.TargetSurfaceID) == "":
+		return errors.New("targetSurfaceId is empty")
 	}
 	switch policy.InternalValidationStrategy {
 	case internalValidationTrainCaseIDs:
@@ -599,8 +596,8 @@ func validateGatePolicy(policy GatePolicy) error {
 		return errors.New("gate epsilon must be finite and greater than zero")
 	case !finiteConfigNumber(policy.MinValidationGain) || policy.MinValidationGain < 0:
 		return errors.New("gate minValidationGain must be finite and non-negative")
-	case policy.MaxCumulativeModelCalls < 0:
-		return errors.New("gate maxCumulativeModelCalls must be non-negative")
+	case policy.ModelCallStopThreshold < 0:
+		return errors.New("gate modelCallStopThreshold must be non-negative")
 	}
 	for name, direction := range policy.MetricDirections {
 		if strings.TrimSpace(name) == "" {
@@ -729,7 +726,7 @@ func validatePromptIterRequiredFields(data []byte) error {
 		"maxOuterRounds",
 		"searchMinScoreGain",
 		"internalValidationStrategy",
-		"targetSurfaceIds",
+		"targetSurfaceId",
 	)
 	return err
 }
@@ -757,7 +754,7 @@ func validateRegressionRequiredFields(data []byte) error {
 		"minValidationGain",
 		"noNewHardFailures",
 		"noCriticalRegressions",
-		"maxCumulativeModelCalls",
+		"modelCallStopThreshold",
 	); err != nil {
 		return err
 	}
@@ -1176,16 +1173,12 @@ func validateGateMetrics(policy GatePolicy, metricNames []string) error {
 	return nil
 }
 
-func profileFromPrompt(promptText string, surfaceIDs []string) *promptiter.Profile {
-	overrides := make([]promptiter.SurfaceOverride, 0, len(surfaceIDs))
-	for _, surfaceID := range surfaceIDs {
-		value := promptText
-		overrides = append(overrides, promptiter.SurfaceOverride{
-			SurfaceID: surfaceID,
-			Value:     astructure.SurfaceValue{Text: &value},
-		})
-	}
-	return &promptiter.Profile{Overrides: overrides}
+func profileFromPrompt(promptText, surfaceID string) *promptiter.Profile {
+	value := promptText
+	return &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+		SurfaceID: surfaceID,
+		Value:     astructure.SurfaceValue{Text: &value},
+	}}}
 }
 
 func validateUniqueNonEmpty(role string, values []string) error {

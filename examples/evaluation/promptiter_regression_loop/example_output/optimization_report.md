@@ -2,7 +2,7 @@
 
 - Schema: `1.0`
 - Report: `issue-2003-deterministic-loop`
-- Run: `issue-2003-deterministic-loop-e4e981e426bb`
+- Run: `issue-2003-deterministic-loop-770416856469`
 - Generated: `2026-07-24T00:00:00Z`
 - Pipeline status: `succeeded`
 - Stop reason: `max_rounds`
@@ -19,7 +19,7 @@
 - Hash: `d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533`
 - Structure: `struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb`
 - Target surface: `support-agent#instruction`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/baseline_validation`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/baseline_validation`
 
 ```
 You are a support agent. Answer the user request.
@@ -33,7 +33,7 @@ Never disclose another customer's order information or secrets.
 - Hash: `8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8`
 - Structure: `struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb`
 - Target surface: `support-agent#instruction`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/2`
 
 ```
 You are a support agent. Answer the user request.
@@ -53,7 +53,7 @@ Never disclose another customer's order information or secrets.
 - Hash: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
 - Structure: `struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb`
 - Target surface: `support-agent#instruction`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/1`
 
 ```
 You are a support agent. Answer the user request.
@@ -70,7 +70,7 @@ Never disclose another customer's order information or secrets.
 - Status: `completed`
 - Eval set: `issue-2003-train`
 - Split: `train`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/baseline_train`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/baseline_train`
 - Profile hash: `d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533`
 - Score: `0.133333`; passed: `0`; failed: `3`; latency: `3 ms`
 
@@ -204,7 +204,7 @@ Trace:
 - Status: `completed`
 - Eval set: `issue-2003-validation`
 - Split: `heldout_validation`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/baseline_validation`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/baseline_validation`
 - Profile hash: `d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533`
 - Score: `0.640000`; passed: `2`; failed: `3`; latency: `1 ms`
 
@@ -397,7 +397,7 @@ Trace:
 - Evaluation status: `completed`
 - Search parent: `d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533`
 - Released parent: `d00f77702d290e979e1ddd93007f15b4321432023bdcab5b4076ccff59df6533`
-- PromptIter run: `issue-2003-deterministic-loop-e4e981e426bb/promptiter/1`
+- PromptIter run: `issue-2003-deterministic-loop-770416856469/promptiter/1`
 - PromptIter status: `succeeded`
 - Optimization reason: remediate response mismatch or grounded knowledge recall from observed loss evidence; derived from current profile 087e6e42b40e, loss hints 02612c290293, and seed 2003
 - Search: ACCEPTED
@@ -423,7 +423,7 @@ candidate passed both search and release objectives and advanced both profiles
 - Hash: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
 - Structure: `struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb`
 - Target surface: `support-agent#instruction`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/1`
 
 ```
 You are a support agent. Answer the user request.
@@ -444,7 +444,7 @@ Never disclose another customer's order information or secrets.
 - Status: `completed`
 - Eval set: `issue-2003-train`
 - Split: `train`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_train/1`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_train/1`
 - Profile hash: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
 - Score: `0.400000`; passed: `1`; failed: `2`; latency: `1 ms`
 
@@ -572,7 +572,7 @@ Trace:
 - Status: `completed`
 - Eval set: `issue-2003-validation`
 - Split: `heldout_validation`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/1`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/1`
 - Profile hash: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
 - Score: `0.760000`; passed: `3`; failed: `2`; latency: `1 ms`
 
@@ -822,7 +822,7 @@ Cumulative:
 - Evaluation status: `completed`
 - Search parent: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
 - Released parent: `90a9808bed95e282b65dcfacc1cf0bbf6d33ff00962a106c0875b5ac754048ba`
-- PromptIter run: `issue-2003-deterministic-loop-e4e981e426bb/promptiter/2`
+- PromptIter run: `issue-2003-deterministic-loop-770416856469/promptiter/2`
 - PromptIter status: `succeeded`
 - Optimization reason: remediate wrong tool selection or wrong arguments from observed tool-loss evidence; the wrong-tool remediation broadens tool use and operational routing; derived from current profile 8a3e37de0f4e, loss hints 3a902de71c01, and seed 2003
 - Search: ACCEPTED
@@ -854,7 +854,7 @@ candidate passed the search objective but failed release gates and advanced sear
 - Hash: `8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8`
 - Structure: `struct_6877febdfa9da6b27a3e5349ec48dedbfe8beb7ffe093b53ac43c03b79873edb`
 - Target surface: `support-agent#instruction`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/2`
 
 ```
 You are a support agent. Answer the user request.
@@ -879,7 +879,7 @@ Never disclose another customer's order information or secrets.
 - Status: `completed`
 - Eval set: `issue-2003-train`
 - Split: `train`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_train/2`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_train/2`
 - Profile hash: `8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8`
 - Score: `0.666667`; passed: `2`; failed: `1`; latency: `1 ms`
 
@@ -1000,7 +1000,7 @@ Trace:
 - Status: `completed`
 - Eval set: `issue-2003-validation`
 - Split: `heldout_validation`
-- Evaluation run: `issue-2003-deterministic-loop-e4e981e426bb/candidate_validation/2`
+- Evaluation run: `issue-2003-deterministic-loop-770416856469/candidate_validation/2`
 - Profile hash: `8866ee2d6e002d4a7a7c171b1cd2ccfb88b4df28088c793e955772f82f026cc8`
 - Score: `0.400000`; passed: `2`; failed: `3`; latency: `1 ms`
 
@@ -1323,9 +1323,7 @@ Never disclose another customer's order information or secrets.
     "maxOuterRounds": 2,
     "searchMinScoreGain": 0.05,
     "internalValidationStrategy": "train_all",
-    "targetSurfaceIds": [
-      "support-agent#instruction"
-    ]
+    "targetSurfaceId": "support-agent#instruction"
   },
   "gate": {
     "primaryMetric": "quality",
@@ -1336,7 +1334,7 @@ Never disclose another customer's order information or secrets.
     "minValidationGain": 0.05,
     "noNewHardFailures": true,
     "noCriticalRegressions": true,
-    "maxCumulativeModelCalls": 200
+    "modelCallStopThreshold": 200
   },
   "output": {
     "json": "optimization_report.json",
@@ -1362,8 +1360,8 @@ Never disclose another customer's order information or secrets.
 |---|---|
 | baselinePrompt | `623903a2027c2fd4568c158389503bb5c6cf2c7472a18dcc7deb4d5d1d6c3b96` |
 | metrics | `0b5b33b3e98696fa0d109a9a44bd3c5763119fb3cbb43831ab2078c594d17c4c` |
-| promptIterConfig | `102fa1bf2fa3740e4d652a295029e4d931b5c2211919d60705c034c2a25fdafc` |
-| regressionConfig | `17976282d5f57d97e55265adde07d0256e58c34525f0cab9cad10a99c3bec621` |
+| promptIterConfig | `ab106c5c9537dc80bb9e4056197eb72c0d6647d7302094cd8fb1a69d2e69f1f3` |
+| regressionConfig | `e8f4bf1d6a6d5db298c679659af8e7f74307dd1ba6982463a0ee70d205473675` |
 | trainEvalSet | `7f7fad78dd902bc94af71751fee2997d273b92afc270b60cfb67b2f3fd7a96eb` |
 | validationEvalSet | `23d02c43387fe5654007f01cf6d08ee8d176b8a830d67564b60b79d17fed7052` |
 
