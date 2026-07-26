@@ -465,6 +465,48 @@ func TestRunProgram_MaxOutputBytesBoundsFramedStream(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 7, res.ExitCode)
 	assert.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), limit)
+	assert.True(t, res.OutputTruncated)
+}
+
+func TestRunFrameCollectorPreservesSplitFramingTokens(t *testing.T) {
+	for i := 1; i < len(sentinelStdoutBegin); i++ {
+		c := newRunFrameCollector(0)
+		c.feedStdout(sentinelStdoutBegin[:i])
+		c.feedStdout(sentinelStdoutBegin[i:] + "\nhello\n" + sentinelStdoutEnd + "\n" + sentinelExitPrefix + "9\n")
+		c.finish()
+		assert.Equal(t, "hello", c.stdout(), "stdout begin split at %d", i)
+		assert.Equal(t, 9, c.exitCode(), "stdout begin split at %d", i)
+	}
+	for i := 1; i < len(sentinelStdoutEnd); i++ {
+		c := newRunFrameCollector(0)
+		c.feedStdout(sentinelStdoutBegin + "\nhello\n" + sentinelStdoutEnd[:i])
+		c.feedStdout(sentinelStdoutEnd[i:] + "\n" + sentinelExitPrefix + "9\n")
+		c.finish()
+		assert.Equal(t, "hello", c.stdout(), "stdout end split at %d", i)
+		assert.Equal(t, 9, c.exitCode(), "stdout end split at %d", i)
+	}
+	for i := 1; i < len(sentinelExitPrefix); i++ {
+		c := newRunFrameCollector(0)
+		c.feedStdout(sentinelStdoutBegin + "\nhello\n" + sentinelStdoutEnd + "\n" + sentinelExitPrefix[:i])
+		c.feedStdout(sentinelExitPrefix[i:] + "9\n")
+		c.finish()
+		assert.Equal(t, "hello", c.stdout(), "exit prefix split at %d", i)
+		assert.Equal(t, 9, c.exitCode(), "exit prefix split at %d", i)
+	}
+	for i := 1; i < len(sentinelStderrBegin); i++ {
+		c := newRunFrameCollector(0)
+		c.feedStderr(sentinelStderrBegin[:i])
+		c.feedStderr(sentinelStderrBegin[i:] + "\nwarn\n" + sentinelStderrEnd + "\n")
+		c.finish()
+		assert.Equal(t, "warn", c.stderr(), "stderr begin split at %d", i)
+	}
+	for i := 1; i < len(sentinelStderrEnd); i++ {
+		c := newRunFrameCollector(0)
+		c.feedStderr(sentinelStderrBegin + "\nwarn\n" + sentinelStderrEnd[:i])
+		c.feedStderr(sentinelStderrEnd[i:] + "\n")
+		c.finish()
+		assert.Equal(t, "warn", c.stderr(), "stderr end split at %d", i)
+	}
 }
 
 func TestRunProgram_BashErrorSurfaced(t *testing.T) {

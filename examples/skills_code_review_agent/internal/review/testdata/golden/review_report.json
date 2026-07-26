@@ -42,14 +42,14 @@
       "severity": "low",
       "category": "test_coverage",
       "file": "service/config.go",
-      "line": 1,
+      "line": 6,
       "title": "Production Go change has no accompanying test change",
       "evidence": "No *_test.go file changed in this diff.",
       "recommendation": "Add or update focused tests for changed behavior, especially error and lifecycle paths.",
       "confidence": 0.64,
       "source": "rule",
       "rule_id": "go/test/missing-test-change",
-      "fingerprint": "4a0e6b0c5b14d128f863b61bbcb8b0205b5dfba5e3b27a0cec96bcc29ee35f0a"
+      "fingerprint": "19f8fa9b27f212bd7709a2a6a6886fa78c8dd8c0434cdd2d51cb7bc4bdc7e9d8"
     }
   ],
   "sandbox_runs": [

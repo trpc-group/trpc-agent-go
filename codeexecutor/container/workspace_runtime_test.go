@@ -350,6 +350,7 @@ func TestWorkspaceRuntime_RunProgram_MaxOutputBytesBoundsDockerStream(t *testing
 	require.NoError(t, err)
 	require.Equal(t, 0, res.ExitCode)
 	require.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), limit)
+	require.True(t, res.OutputTruncated)
 }
 
 func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {

@@ -1573,6 +1573,7 @@ func TestRuntime_RunProgram_MaxOutputBytesBoundsOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 0, res.ExitCode)
 	require.LessOrEqual(t, len(res.Stdout)+len(res.Stderr), limit)
+	require.True(t, res.OutputTruncated)
 }
 
 func TestHelperLargeOutputProcess(t *testing.T) {

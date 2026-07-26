@@ -466,7 +466,7 @@ func (r *WorkspaceSandboxRunner) runProgram(ctx context.Context, ws codeexecutor
 		StartedAt:       start,
 		DurationMS:      time.Since(start).Milliseconds(),
 		TimedOut:        res.TimedOut || errors.Is(runCtx.Err(), context.DeadlineExceeded),
-		OutputTruncated: outTrunc || errTrunc,
+		OutputTruncated: res.OutputTruncated || outTrunc || errTrunc,
 	}
 }
 
@@ -767,12 +767,7 @@ func localReplaceTargetWithinSnapshot(moduleDir string, plan sandboxSnapshotPlan
 	if rel == "." {
 		return plan.fileSet["go.mod"]
 	}
-	for file := range plan.fileSet {
-		if file == rel+"/go.mod" || strings.HasPrefix(file, rel+"/") {
-			return true
-		}
-	}
-	return false
+	return plan.fileSet[rel+"/go.mod"]
 }
 
 func prepareSandboxRepoSnapshotForPath(ctx context.Context, repoPath string) (string, string, func() error, error) {
@@ -1086,7 +1081,7 @@ func shouldSkipSandboxStagePath(path string) bool {
 			return true
 		case ".env", ".env.local", ".env.production", ".netrc":
 			return true
-		case "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials":
+		case "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519":
 			return true
 		}
 	}
@@ -1094,8 +1089,7 @@ func shouldSkipSandboxStagePath(path string) bool {
 	case strings.HasSuffix(lower, ".pem"),
 		strings.HasSuffix(lower, ".key"),
 		strings.HasSuffix(lower, ".p12"),
-		strings.HasSuffix(lower, ".pfx"),
-		strings.Contains(lower, "secret"):
+		strings.HasSuffix(lower, ".pfx"):
 		return true
 	default:
 		return false

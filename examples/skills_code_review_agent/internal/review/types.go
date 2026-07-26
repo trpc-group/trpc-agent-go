@@ -78,6 +78,7 @@ type DiffSummary struct {
 type DiffFile struct {
 	OldPath     string `json:"old_path"`
 	NewPath     string `json:"new_path"`
+	Deleted     bool   `json:"deleted,omitempty"`
 	IsGo        bool   `json:"is_go"`
 	IsTest      bool   `json:"is_test"`
 	PackageName string `json:"package_name,omitempty"`

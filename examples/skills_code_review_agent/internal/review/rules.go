@@ -772,7 +772,15 @@ func firstAddedTextAtLine(h DiffHunk, line int) string {
 
 func missingTestFindings(pd ParsedDiff) []Finding {
 	changedGo := map[string]string{}
+	firstAddedLine := map[string]int{}
 	testChangedPackages := map[string]bool{}
+	for _, h := range pd.Hunks {
+		for _, line := range h.Lines {
+			if line.Kind == '+' && line.NewLine > 0 && firstAddedLine[h.File] == 0 {
+				firstAddedLine[h.File] = line.NewLine
+			}
+		}
+	}
 	for _, f := range pd.Files {
 		if !f.IsGo {
 			continue
@@ -792,11 +800,15 @@ func missingTestFindings(pd ParsedDiff) []Finding {
 		if testChangedPackages[pkg] {
 			continue
 		}
+		line := firstAddedLine[file]
+		if line == 0 {
+			continue
+		}
 		out = append(out, Finding{
 			Severity:       SeverityLow,
 			Category:       "test_coverage",
 			File:           file,
-			Line:           1,
+			Line:           line,
 			Title:          "Production Go change has no accompanying test change",
 			Evidence:       "No *_test.go file changed in this diff.",
 			Recommendation: "Add or update focused tests for changed behavior, especially error and lifecycle paths.",

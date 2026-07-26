@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -71,10 +73,12 @@ func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Works
 	case "go":
 		if len(spec.Args) > 0 && spec.Args[0] == "test" {
 			stdout := "work/repo/pkg/a.go:3: test failed"
+			truncated := false
 			if spec.MaxOutputBytes > 0 && len(stdout) > spec.MaxOutputBytes {
 				stdout = stdout[:spec.MaxOutputBytes]
+				truncated = true
 			}
-			return codeexecutor.RunResult{ExitCode: 1, Stderr: stdout}, nil
+			return codeexecutor.RunResult{ExitCode: 1, Stderr: stdout, OutputTruncated: truncated}, nil
 		}
 		return codeexecutor.RunResult{ExitCode: 0}, nil
 	case "staticcheck":
@@ -87,6 +91,64 @@ func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Works
 		return codeexecutor.RunResult{}, errors.New("executable file not found")
 	default:
 		return codeexecutor.RunResult{ExitCode: 127}, errors.New("unknown command")
+	}
+}
+
+type snapshotAwareSecretsEngine struct {
+	stagedRepo string
+	runSpecs   []codeexecutor.RunProgramSpec
+}
+
+func (e *snapshotAwareSecretsEngine) Manager() codeexecutor.WorkspaceManager { return e }
+func (e *snapshotAwareSecretsEngine) FS() codeexecutor.WorkspaceFS           { return e }
+func (e *snapshotAwareSecretsEngine) Runner() codeexecutor.ProgramRunner     { return e }
+func (e *snapshotAwareSecretsEngine) Describe() codeexecutor.Capabilities {
+	return codeexecutor.Capabilities{Isolation: "mock", SupportsCleanEnv: true}
+}
+func (e *snapshotAwareSecretsEngine) CreateWorkspace(context.Context, string, codeexecutor.WorkspacePolicy) (codeexecutor.Workspace, error) {
+	return codeexecutor.Workspace{ID: "ws", Path: "mock"}, nil
+}
+func (e *snapshotAwareSecretsEngine) Cleanup(context.Context, codeexecutor.Workspace) error {
+	return nil
+}
+func (e *snapshotAwareSecretsEngine) PutFiles(context.Context, codeexecutor.Workspace, []codeexecutor.PutFile) error {
+	return nil
+}
+func (e *snapshotAwareSecretsEngine) StageDirectory(_ context.Context, _ codeexecutor.Workspace, src, dst string, _ codeexecutor.StageOptions) error {
+	if strings.Contains(filepath.ToSlash(dst), "work/repo") {
+		e.stagedRepo = src
+	}
+	return nil
+}
+func (e *snapshotAwareSecretsEngine) Collect(context.Context, codeexecutor.Workspace, []string) ([]codeexecutor.File, error) {
+	return []codeexecutor.File{{Name: "out/diff_summary.json", Content: `{"files_changed":1}`, MIMEType: "application/json"}}, nil
+}
+func (e *snapshotAwareSecretsEngine) StageInputs(context.Context, codeexecutor.Workspace, []codeexecutor.InputSpec) error {
+	return nil
+}
+func (e *snapshotAwareSecretsEngine) CollectOutputs(context.Context, codeexecutor.Workspace, codeexecutor.OutputSpec) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+func (e *snapshotAwareSecretsEngine) RunProgram(_ context.Context, _ codeexecutor.Workspace, spec codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
+	e.runSpecs = append(e.runSpecs, spec)
+	switch spec.Cmd {
+	case "bash":
+		return codeexecutor.RunResult{ExitCode: 0, Stdout: "ok"}, nil
+	case "go":
+		if len(spec.Args) > 0 && spec.Args[0] == "test" {
+			testPath := filepath.Join(e.stagedRepo, "internal", "secrets", "store_test.go")
+			if _, err := os.Stat(testPath); err == nil {
+				return codeexecutor.RunResult{
+					ExitCode: 1,
+					Stderr:   "work/repo/internal/secrets/store_test.go:6: package test executed",
+				}, nil
+			}
+		}
+		return codeexecutor.RunResult{ExitCode: 0, Stdout: "ok"}, nil
+	case "staticcheck":
+		return codeexecutor.RunResult{ExitCode: 127, Stderr: "staticcheck not found"}, errors.New("executable file not found")
+	default:
+		return codeexecutor.RunResult{ExitCode: 0}, nil
 	}
 }
 
@@ -645,7 +707,7 @@ replace example.com/externalmod => ../externalmod
 func TestWorkspaceSandboxRunnerRejectsIgnoredLocalReplaceInsideRoot(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
-	writeTestFile(t, filepath.Join(repo, ".gitignore"), "localmod/\n")
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "localmod/go.mod\n")
 	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
 
 go 1.23
@@ -655,7 +717,8 @@ require example.com/localmod v0.0.0
 replace example.com/localmod => ./localmod
 `)
 	writeTestFile(t, filepath.Join(repo, "localmod", "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
-	runGit(t, repo, "add", ".gitignore", "go.mod")
+	writeTestFile(t, filepath.Join(repo, "localmod", "README.md"), "tracked but not a module manifest\n")
+	runGit(t, repo, "add", ".gitignore", "go.mod", "localmod/README.md")
 	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
 	if err != nil {
 		t.Fatal(err)
@@ -685,13 +748,15 @@ func TestRepoSnapshotHelpersEdgeCases(t *testing.T) {
 			t.Fatalf("normalizeSandboxRelPath(%q) = %q, want empty", path, got)
 		}
 	}
-	for _, path := range []string{".git/config", ".env", "id_rsa", "config.pem", "my-secret/file.go"} {
+	for _, path := range []string{".git/config", ".env", "id_rsa", "config.pem"} {
 		if !shouldSkipSandboxStagePath(path) {
 			t.Fatalf("expected %q to be skipped", path)
 		}
 	}
-	if shouldSkipSandboxStagePath("service/main.go") {
-		t.Fatal("did not expect service/main.go to be skipped")
+	for _, path := range []string{"service/main.go", "internal/secrets/store.go", "credentials/client.go"} {
+		if shouldSkipSandboxStagePath(path) {
+			t.Fatalf("did not expect %q to be skipped", path)
+		}
 	}
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "nested"), 0o755); err != nil {
@@ -734,7 +799,68 @@ func TestRepoSnapshotHelpersEdgeCases(t *testing.T) {
 	}
 }
 
+func TestSandboxSnapshotKeepsOrdinarySecretsSourcePackage(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/secrets\n\ngo 1.23\n")
+	writeTestFile(t, filepath.Join(repo, "internal", "secrets", "store.go"), "package secrets\n\nfunc Store() {}\n")
+	runGit(t, repo, "add", ".")
+	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.fileSet["internal/secrets/store.go"] {
+		t.Fatalf("ordinary secrets source package was omitted from snapshot: %+v", plan.files)
+	}
+}
+
+func TestWorkspaceSandboxRunnerDoesNotCleanlyPassWhenSecretsPackageFails(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/secrets\n\ngo 1.23\n")
+	writeTestFile(t, filepath.Join(repo, "internal", "secrets", "store.go"), "package secrets\n\nfunc Store() {}\n")
+	writeTestFile(t, filepath.Join(repo, "internal", "secrets", "store_test.go"), "package secrets\n\nimport \"testing\"\n\nfunc TestStore(t *testing.T) {\n\tt.Fatal(\"must run\")\n}\n")
+	runGit(t, repo, "add", ".")
+
+	engine := &snapshotAwareSecretsEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "mock",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-secrets-package", repo, ParsedDiff{Raw: "diff"})
+	var sawGoTest bool
+	for _, run := range result.Runs {
+		if run.Command == "go" && len(run.Args) > 0 && run.Args[0] == "test" {
+			sawGoTest = true
+			if run.Status == "success" {
+				t.Fatalf("go test produced a clean result after staging ordinary secrets package: %+v", result.Runs)
+			}
+			if !strings.Contains(run.Stderr, "internal/secrets/store_test.go") {
+				t.Fatalf("go test did not execute the ordinary secrets package: %+v", run)
+			}
+		}
+	}
+	if !sawGoTest {
+		t.Fatalf("expected repository go test to run, runs=%+v specs=%+v", result.Runs, engine.runSpecs)
+	}
+}
+
 func TestLLMParsingAndBucketingEdges(t *testing.T) {
+	emptyEvents := make(chan *event.Event)
+	close(emptyEvents)
+	if _, err := collectAssistantText(emptyEvents); err == nil {
+		t.Fatal("expected empty LLM event stream to fail")
+	}
+	errorEvents := make(chan *event.Event, 1)
+	errorEvents <- event.NewErrorEvent("inv", "agent", model.ErrorTypeRunError, "boom")
+	close(errorEvents)
+	if _, err := collectAssistantText(errorEvents); err == nil || !strings.Contains(err.Error(), "boom") {
+		t.Fatalf("expected LLM error event to surface, got %v", err)
+	}
+
 	fenced := "```json\n[]\n```"
 	if got := stripCodeFence(fenced); got != "[]" {
 		t.Fatalf("stripCodeFence = %q", got)
@@ -1374,9 +1500,8 @@ func TestRunProgramPassesMaxOutputBytesToSpec(t *testing.T) {
 func TestRunProgramBoundsRetainedBytesAtOutputLimit(t *testing.T) {
 	// When a mock executor honours MaxOutputBytes, the retained output must
 	// not exceed the configured cap.  limitText acts as a safety net for
-	// executors that do not yet honour MaxOutputBytes at the source; when the
-	// executor already bounded the output, limitText does not truncate a second
-	// time, so OutputTruncated is not necessarily set in that path.
+	// executors that do not yet honour MaxOutputBytes at the source, while
+	// executor-side truncation is still surfaced through OutputTruncated.
 	const limit = 16
 	engine := &largeOutputEngine{outputBytes: limit * 10}
 	runner := &WorkspaceSandboxRunner{
@@ -1394,6 +1519,9 @@ func TestRunProgramBoundsRetainedBytesAtOutputLimit(t *testing.T) {
 	if retained > maxAllowed {
 		t.Fatalf("retained output too large: stdout=%d stderr=%d total=%d limit=%d",
 			len(run.Stdout), len(run.Stderr), retained, limit)
+	}
+	if !run.OutputTruncated {
+		t.Fatalf("expected executor-side truncation to be surfaced: %+v", run)
 	}
 }
 
@@ -1429,11 +1557,13 @@ func (e *largeOutputEngine) CollectOutputs(_ context.Context, _ codeexecutor.Wor
 }
 func (e *largeOutputEngine) RunProgram(_ context.Context, _ codeexecutor.Workspace, spec codeexecutor.RunProgramSpec) (codeexecutor.RunResult, error) {
 	stdout := strings.Repeat("x", e.outputBytes)
+	truncated := false
 	// Honour MaxOutputBytes if set, simulating a streaming executor.
 	if spec.MaxOutputBytes > 0 && len(stdout) > spec.MaxOutputBytes {
 		stdout = stdout[:spec.MaxOutputBytes]
+		truncated = true
 	}
-	return codeexecutor.RunResult{ExitCode: 1, Stdout: stdout}, nil
+	return codeexecutor.RunResult{ExitCode: 1, Stdout: stdout, OutputTruncated: truncated}, nil
 }
 
 // -- Fix #2: skipped core checks surfaced as incomplete-analysis -----------
@@ -1488,6 +1618,44 @@ func TestSandboxReviewItemsDoesNotSurfaceOptionalToolSkip(t *testing.T) {
 		if f.RuleID == "sandbox/core-check-unavailable" {
 			t.Fatalf("staticcheck skip must not produce core-unavailable finding: %+v", f)
 		}
+	}
+}
+
+func TestRunLLMReviewKeepsRunContextWhileDrainingDelayedEvents(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/a.go b/a.go",
+		"--- a/a.go",
+		"+++ b/a.go",
+		"@@ -1,2 +1,3 @@",
+		" package a",
+		"+func Added() {}",
+		"",
+	}, "\n")
+	pd, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orig := newFakeReviewModelForRun
+	newFakeReviewModelForRun = func(anchor fakeReviewAnchor) model.Model {
+		return &fakeReviewModel{anchor: anchor, delay: 30 * time.Millisecond}
+	}
+	defer func() {
+		newFakeReviewModelForRun = orig
+	}()
+
+	findings, err := RunLLMReview(testContext(t), LLMReviewConfig{
+		TaskID:       "delayed-fake",
+		DiffRaw:      diff,
+		ParsedDiff:   pd,
+		InputSummary: pd.Summary,
+		FakeModel:    true,
+		Timeout:      time.Second,
+	})
+	if err != nil {
+		t.Fatalf("delayed fake model should drain before cancellation: %v", err)
+	}
+	if !hasRule(findings, "llm/fake-model/supplemental") {
+		t.Fatalf("expected delayed fake model finding, got %+v", findings)
 	}
 }
 
@@ -1630,5 +1798,259 @@ func TestSaveFailedTaskPersistsMinimalRecord(t *testing.T) {
 	// Verify duplicate saves fail (no orphaned records from retries).
 	if err := store.SaveFailedTask(testContext(t), task, "parse_diff"); err == nil {
 		t.Fatal("expected duplicate SaveFailedTask to fail")
+	}
+}
+
+func TestRunReviewPersistsFailedTaskAfterContextCancellation(t *testing.T) {
+	out := t.TempDir()
+	dbPath := filepath.Join(out, "reviews.sqlite")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, _, runErr := RunReview(ctx, ReviewConfig{
+		Fixture:   "no_issue",
+		OutputDir: out,
+		DBPath:    dbPath,
+		DryRun:    true,
+		Executor:  "fake",
+	})
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("expected context canceled error, got %v", runErr)
+	}
+
+	store, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var pending int
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT COUNT(*) FROM review_tasks WHERE status = ?`,
+		string(StatusPending),
+	).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("context cancellation left %d pending task(s)", pending)
+	}
+
+	var status, metricsJSON string
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT t.status, m.metrics_json
+		 FROM review_tasks t
+		 JOIN audit_metrics m ON m.task_id = t.id
+		 WHERE t.status = ? LIMIT 1`,
+		string(StatusFailed),
+	).Scan(&status, &metricsJSON); err != nil {
+		t.Fatalf("expected failed audit record after cancellation: %v", err)
+	}
+	if status != string(StatusFailed) || !strings.Contains(metricsJSON, "context_canceled") {
+		t.Fatalf("status=%q metrics=%s, want failed context_canceled audit", status, metricsJSON)
+	}
+}
+
+func TestRunReviewPersistsFailedTaskWhenReportSaveFails(t *testing.T) {
+	out := t.TempDir()
+	dbPath := filepath.Join(out, "reviews.sqlite")
+
+	seed, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore := seed.(*Store)
+	if _, err := seedStore.db.ExecContext(testContext(t), `
+		CREATE TRIGGER fail_review_input_insert
+		BEFORE INSERT ON review_inputs
+		BEGIN
+			SELECT RAISE(ABORT, 'injected report save failure');
+		END;
+	`); err != nil {
+		_ = seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, runErr := RunReview(testContext(t), ReviewConfig{
+		Fixture:   "no_issue",
+		OutputDir: out,
+		DBPath:    dbPath,
+		DryRun:    true,
+		Executor:  "fake",
+	})
+	if runErr == nil {
+		t.Fatal("expected report save failure")
+	}
+
+	store, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var pending int
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT COUNT(*) FROM review_tasks WHERE status = ?`,
+		string(StatusPending),
+	).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("report save failure left %d pending task(s)", pending)
+	}
+
+	var status, metricsJSON string
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT t.status, m.metrics_json
+		 FROM review_tasks t
+		 JOIN audit_metrics m ON m.task_id = t.id
+		 WHERE t.status = ? LIMIT 1`,
+		string(StatusFailed),
+	).Scan(&status, &metricsJSON); err != nil {
+		t.Fatalf("expected failed audit record after report save failure: %v", err)
+	}
+	if status != string(StatusFailed) || !strings.Contains(metricsJSON, "save_report") {
+		t.Fatalf("status=%q metrics=%s, want failed save_report audit", status, metricsJSON)
+	}
+}
+
+func TestRunReviewPersistsFailedTaskWhenReportWriteFails(t *testing.T) {
+	out := t.TempDir()
+	dbPath := filepath.Join(out, "reviews.sqlite")
+	if err := os.Mkdir(filepath.Join(out, "review_report.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, _, runErr := RunReview(testContext(t), ReviewConfig{
+		Fixture:   "no_issue",
+		OutputDir: out,
+		DBPath:    dbPath,
+		DryRun:    true,
+		Executor:  "fake",
+	})
+	if runErr == nil {
+		t.Fatal("expected report write failure")
+	}
+
+	store, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var pending int
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT COUNT(*) FROM review_tasks WHERE status = ?`,
+		string(StatusPending),
+	).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("report write failure left %d pending task(s)", pending)
+	}
+
+	var status, metricsJSON string
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT t.status, m.metrics_json
+		 FROM review_tasks t
+		 JOIN audit_metrics m ON m.task_id = t.id
+		 WHERE t.status = ? LIMIT 1`,
+		string(StatusFailed),
+	).Scan(&status, &metricsJSON); err != nil {
+		t.Fatalf("expected failed audit record after report write failure: %v", err)
+	}
+	if status != string(StatusFailed) || !strings.Contains(metricsJSON, "write_report") {
+		t.Fatalf("status=%q metrics=%s, want failed write_report audit", status, metricsJSON)
+	}
+}
+
+func TestRunReviewRefreshesAuditContextAfterLongReview(t *testing.T) {
+	out := t.TempDir()
+	dbPath := filepath.Join(out, "reviews.sqlite")
+	seed, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedStore := seed.(*Store)
+	if _, err := seedStore.db.ExecContext(testContext(t), `
+		CREATE TRIGGER fail_review_input_insert_after_long_review
+		BEFORE INSERT ON review_inputs
+		BEGIN
+			SELECT RAISE(ABORT, 'injected report save failure');
+		END;
+	`); err != nil {
+		_ = seed.Close()
+		t.Fatal(err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	origAuditTimeout := reviewAuditPersistenceTimeout
+	reviewAuditPersistenceTimeout = 500 * time.Millisecond
+	defer func() {
+		reviewAuditPersistenceTimeout = origAuditTimeout
+	}()
+
+	origFakeModel := newFakeReviewModelForRun
+	newFakeReviewModelForRun = func(anchor fakeReviewAnchor) model.Model {
+		return &fakeReviewModel{anchor: anchor, delay: 750 * time.Millisecond}
+	}
+	defer func() {
+		newFakeReviewModelForRun = origFakeModel
+	}()
+
+	_, _, _, runErr := RunReview(testContext(t), ReviewConfig{
+		Fixture:   "no_issue",
+		OutputDir: out,
+		DBPath:    dbPath,
+		DryRun:    true,
+		Executor:  "fake",
+		FakeModel: true,
+		Timeout:   2 * time.Second,
+	})
+	if runErr == nil {
+		t.Fatal("expected injected report save failure")
+	}
+
+	store, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	var pending int
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT COUNT(*) FROM review_tasks WHERE status = ?`,
+		string(StatusPending),
+	).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("long review followed by save failure left %d pending task(s)", pending)
+	}
+
+	var status, metricsJSON string
+	if err := store.(*Store).db.QueryRowContext(
+		testContext(t),
+		`SELECT t.status, m.metrics_json
+		 FROM review_tasks t
+		 JOIN audit_metrics m ON m.task_id = t.id
+		 WHERE t.status = ? LIMIT 1`,
+		string(StatusFailed),
+	).Scan(&status, &metricsJSON); err != nil {
+		t.Fatalf("expected failed audit record after long review: %v", err)
+	}
+	if status != string(StatusFailed) || !strings.Contains(metricsJSON, "save_report") {
+		t.Fatalf("status=%q metrics=%s, want failed save_report audit", status, metricsJSON)
 	}
 }

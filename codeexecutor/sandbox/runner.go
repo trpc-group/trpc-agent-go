@@ -48,8 +48,13 @@ func (r *Runtime) RunProgram(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	stdout := newLimitedBuffer(r.outputMaxBytes)
-	stderr := newLimitedBuffer(r.outputMaxBytes)
+	maxOutputBytes := r.outputMaxBytes
+	if spec.MaxOutputBytes > 0 {
+		maxOutputBytes = spec.MaxOutputBytes
+	}
+	outputLimiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
+	stdout := outputLimiter.NewWriter()
+	stderr := outputLimiter.NewWriter()
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	if spec.Stdin != "" {
@@ -77,11 +82,12 @@ func (r *Runtime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 	result := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: duration,
-		TimedOut: timedOut,
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		ExitCode:        exitCode,
+		Duration:        duration,
+		TimedOut:        timedOut,
+		OutputTruncated: outputLimiter.Truncated(),
 	}
 	if timedOut {
 		return result, &sandboxError{

@@ -12,6 +12,7 @@ package review
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -64,7 +65,7 @@ func RunLLMReview(ctx context.Context, cfg LLMReviewConfig) ([]Finding, error) {
 	var mdl model.Model
 	switch provider {
 	case "fake":
-		mdl = newFakeReviewModel(firstAddedAnchor(cfg.ParsedDiff))
+		mdl = newFakeReviewModelForRun(firstAddedAnchor(cfg.ParsedDiff))
 	default:
 		modelName, opts, err := openAICompatibleModelOptions(provider, cfg.Model, cfg.BaseURL)
 		if err != nil {
@@ -97,11 +98,16 @@ func RunLLMReview(ctx context.Context, cfg LLMReviewConfig) ([]Finding, error) {
 	for i, chunk := range chunks {
 		runCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
 		events, err := r.Run(runCtx, llmReviewUserID, fmt.Sprintf("review-%s-%d", cfg.TaskID, i+1), model.NewUserMessage(buildLLMReviewPrompt(cfg, chunk, i+1, len(chunks), truncated)))
-		cancel()
 		if err != nil {
+			cancel()
 			return nil, fmt.Errorf("run llm review agent: %w", err)
 		}
-		findings, err := parseLLMFindings(collectAssistantText(events))
+		content, err := collectAssistantText(events)
+		cancel()
+		if err != nil {
+			return nil, err
+		}
+		findings, err := parseLLMFindings(content)
 		if err != nil {
 			return nil, err
 		}
@@ -243,10 +249,19 @@ func buildLLMReviewPrompt(cfg LLMReviewConfig, diffChunk string, chunkIndex, chu
 	return b.String()
 }
 
-func collectAssistantText(events <-chan *event.Event) string {
+func collectAssistantText(events <-chan *event.Event) (string, error) {
 	var last string
 	for evt := range events {
-		if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		if evt == nil {
+			continue
+		}
+		if evt.IsError() {
+			if evt.Error != nil && strings.TrimSpace(evt.Error.Message) != "" {
+				return "", fmt.Errorf("llm review agent event error: %s", evt.Error.Message)
+			}
+			return "", errors.New("llm review agent event error")
+		}
+		if evt.Response == nil || len(evt.Response.Choices) == 0 {
 			continue
 		}
 		msg := evt.Response.Choices[0].Message
@@ -254,7 +269,10 @@ func collectAssistantText(events <-chan *event.Event) string {
 			last = msg.Content
 		}
 	}
-	return last
+	if strings.TrimSpace(last) == "" {
+		return "", errors.New("llm review agent returned empty assistant response")
+	}
+	return last, nil
 }
 
 func parseLLMFindings(content string) ([]Finding, error) {
@@ -385,6 +403,7 @@ func bucketSupplementalFindings(items []Finding) (findings, warnings, needsHuman
 type fakeReviewModel struct {
 	step   atomic.Int32
 	anchor fakeReviewAnchor
+	delay  time.Duration
 }
 
 type fakeReviewAnchor struct {
@@ -394,6 +413,10 @@ type fakeReviewAnchor struct {
 
 func newFakeReviewModel(anchor fakeReviewAnchor) *fakeReviewModel {
 	return &fakeReviewModel{anchor: anchor}
+}
+
+var newFakeReviewModelForRun = func(anchor fakeReviewAnchor) model.Model {
+	return newFakeReviewModel(anchor)
 }
 
 func (m *fakeReviewModel) Info() model.Info {
@@ -426,6 +449,15 @@ func (m *fakeReviewModel) GenerateContent(ctx context.Context, _ *model.Request)
 	ch := make(chan *model.Response, 1)
 	go func() {
 		defer close(ch)
+		if m.delay > 0 {
+			timer := time.NewTimer(m.delay)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+			}
+		}
 		select {
 		case <-ctx.Done():
 		case ch <- rsp:

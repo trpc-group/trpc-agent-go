@@ -49,7 +49,7 @@
 
 - Rule: `go/test/missing-test-change`
 - Category: `test_coverage`
-- Location: `service/config.go:1`
+- Location: `service/config.go:6`
 - Confidence: `0.64`
 - Evidence: `No *_test.go file changed in this diff.`
 - Recommendation: Add or update focused tests for changed behavior, especially error and lifecycle paths.

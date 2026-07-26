@@ -26,6 +26,8 @@ import (
 	atrace "trpc.group/trpc-go/trpc-agent-go/telemetry/trace"
 )
 
+var reviewAuditPersistenceTimeout = 5 * time.Second
+
 func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, string, error) {
 	ctx, span := atrace.Tracer.Start(ctx, "examples.code_review_agent.review")
 	defer span.End()
@@ -43,7 +45,12 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	if err := os.MkdirAll(cfg.OutputDir, 0o755); err != nil {
 		return ReviewReport{}, "", "", err
 	}
-	store, err := OpenStore(ctx, cfg.DBPath)
+	var store ReviewStore
+	err := withReviewAuditContext(ctx, func(auditCtx context.Context) error {
+		var openErr error
+		store, openErr = OpenStore(auditCtx, cfg.DBPath)
+		return openErr
+	})
 	if err != nil {
 		return ReviewReport{}, "", "", err
 	}
@@ -54,16 +61,26 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 		StartedAt: start,
 		InputMode: configuredInputMode(cfg),
 	}
-	if err := store.CreateTask(ctx, task); err != nil {
+	if err := withReviewAuditContext(ctx, func(auditCtx context.Context) error {
+		return store.CreateTask(auditCtx, task)
+	}); err != nil {
 		return ReviewReport{}, "", "", wrapStoreErr("create review task", err)
 	}
 	persistFailure := func(errorClass string, origErr error) (ReviewReport, string, string, error) {
 		task.Status = StatusFailed
 		task.EndedAt = time.Now()
-		if saveErr := wrapStoreErr("mark failed task", store.MarkTaskFailed(ctx, task, errorClass)); saveErr != nil {
+		if saveErr := wrapStoreErr(
+			"mark failed task",
+			withReviewAuditContext(ctx, func(auditCtx context.Context) error {
+				return store.MarkTaskFailed(auditCtx, task, errorClass)
+			}),
+		); saveErr != nil {
 			return ReviewReport{}, "", "", errors.Join(origErr, saveErr)
 		}
 		return ReviewReport{}, "", "", origErr
+	}
+	if err := ctx.Err(); err != nil {
+		return persistFailure(contextErrorClass(err), err)
 	}
 
 	var cleanupSmokeRepo func() error
@@ -173,14 +190,35 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 	}
 	report.Metrics = buildMetrics(report, time.Since(start))
 
+	if err := ctx.Err(); err != nil {
+		return persistFailure(contextErrorClass(err), err)
+	}
 	jsonPath, mdPath, err := finalizeReportArtifacts(cfg.OutputDir, &report, sandboxResult.Artifacts)
 	if err != nil {
-		return ReviewReport{}, "", "", err
+		return persistFailure("write_report", err)
 	}
-	if err := wrapStoreErr("save review", store.SaveReport(ctx, report, pd, jsonPath, mdPath)); err != nil {
-		return ReviewReport{}, "", "", err
+	if err := withReviewAuditContext(ctx, func(auditCtx context.Context) error {
+		return store.SaveReport(auditCtx, report, pd, jsonPath, mdPath)
+	}); err != nil {
+		return persistFailure("save_report", wrapStoreErr("save review", err))
 	}
 	return report, jsonPath, mdPath, nil
+}
+
+func withReviewAuditContext(ctx context.Context, persist func(context.Context) error) error {
+	auditCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		reviewAuditPersistenceTimeout,
+	)
+	defer cancel()
+	return persist(auditCtx)
+}
+
+func contextErrorClass(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "context_deadline"
+	}
+	return "context_canceled"
 }
 
 func enrichPackageInfoFromRepo(pd *ParsedDiff, repoPath string) {
@@ -301,13 +339,22 @@ func selectedInputs(cfg ReviewConfig) []string {
 
 func gitDiff(ctx context.Context, repoPath string) (string, error) {
 	var chunks []string
-	out, err := gitOutput(ctx, repoPath, "diff", "--no-ext-diff", "--no-color", "--unified=3")
+	var out []byte
+	var err error
+	if gitHasHEAD(ctx, repoPath) {
+		out, err = gitOutput(ctx, repoPath, "diff", "HEAD", "--no-ext-diff", "--no-color", "--unified=3")
+	} else {
+		out, err = gitOutput(ctx, repoPath, "ls-files", "--cached", "-z")
+		if err == nil && len(out) > 0 {
+			diff, diffErr := worktreeFileDiffs(repoPath, out, true)
+			if diffErr != nil {
+				return "", diffErr
+			}
+			out = []byte(diff)
+		}
+	}
 	if err == nil && len(out) > 0 {
 		chunks = append(chunks, string(out))
-	}
-	cached, cachedErr := gitOutput(ctx, repoPath, "diff", "--cached", "--no-ext-diff", "--no-color", "--unified=3")
-	if cachedErr == nil && len(cached) > 0 {
-		chunks = append(chunks, string(cached))
 	}
 	untracked, untrackedErr := gitOutput(ctx, repoPath, "ls-files", "--others", "--exclude-standard", "-z")
 	if untrackedErr == nil && len(untracked) > 0 {
@@ -325,13 +372,17 @@ func gitDiff(ctx context.Context, repoPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("git diff: %w", err)
 	}
-	if cachedErr != nil {
-		return "", fmt.Errorf("git diff --cached: %w", cachedErr)
-	}
 	if untrackedErr != nil {
 		return "", fmt.Errorf("git ls-files: %w", untrackedErr)
 	}
 	return "", nil
+}
+
+func gitHasHEAD(ctx context.Context, repoPath string) bool {
+	if _, err := gitOutput(ctx, repoPath, "rev-parse", "--verify", "HEAD"); err != nil {
+		return false
+	}
+	return true
 }
 
 func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, error) {
@@ -368,6 +419,10 @@ func fileListSyntheticDiff(path string) (string, error) {
 }
 
 func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
+	return worktreeFileDiffs(repoPath, raw, false)
+}
+
+func worktreeFileDiffs(repoPath string, raw []byte, allowMissing bool) (string, error) {
 	parts := bytes.Split(raw, []byte{0})
 	var files []string
 	for _, part := range parts {
@@ -382,7 +437,10 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 		abs := filepath.Join(repoPath, filepath.FromSlash(file))
 		info, err := os.Lstat(abs)
 		if err != nil {
-			return "", fmt.Errorf("stat untracked file %s: %w", file, err)
+			if allowMissing && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return "", fmt.Errorf("stat worktree file %s: %w", file, err)
 		}
 		if info.IsDir() {
 			continue
@@ -390,14 +448,14 @@ func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
 		if info.Mode()&os.ModeSymlink != 0 {
 			target, err := os.Readlink(abs)
 			if err != nil {
-				return "", fmt.Errorf("read untracked symlink %s: %w", file, err)
+				return "", fmt.Errorf("read worktree symlink %s: %w", file, err)
 			}
 			writeNewFileDiff(&b, file, []string{filepath.ToSlash(target)}, false)
 			continue
 		}
 		data, err := os.ReadFile(abs)
 		if err != nil {
-			return "", fmt.Errorf("read untracked file %s: %w", file, err)
+			return "", fmt.Errorf("read worktree file %s: %w", file, err)
 		}
 		if bytes.Contains(data, []byte{0}) {
 			fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", file, file, file)

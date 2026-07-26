@@ -75,6 +75,31 @@ func TestParseUnifiedDiffDecodesGitQuotedNonASCIIGoPath(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffRetainsDeletedGoFile(t *testing.T) {
+	raw := `diff --git a/pkg/old.go b/pkg/old.go
+deleted file mode 100644
+--- a/pkg/old.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package pkg
+-
+-func Old() {}
+`
+	diff, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if diff.Summary.FilesChanged != 1 || diff.Summary.GoFiles != 1 {
+		t.Fatalf("summary = %+v, want one changed Go file", diff.Summary)
+	}
+	if len(diff.Files) != 1 || !diff.Files[0].Deleted || diff.Files[0].NewPath != "pkg/old.go" {
+		t.Fatalf("deleted file not retained: %+v", diff.Files)
+	}
+	if len(diff.Hunks) != 1 || diff.Hunks[0].File != "pkg/old.go" {
+		t.Fatalf("deleted hunk not associated with old path: %+v", diff.Hunks)
+	}
+}
+
 func TestParseUnifiedDiffDoesNotBleedHunksAcrossFiles(t *testing.T) {
 	raw := `diff --git a/service/a.go b/service/a.go
 --- a/service/a.go
@@ -218,6 +243,11 @@ diff --git a/pkg/b/b_test.go b/pkg/b/b_test.go
 	if !hasFindingForFile(needsHuman, "pkg/a/a.go", "go/test/missing-test-change") {
 		t.Fatalf("expected pkg/a production change to still require test review, got %+v", needsHuman)
 	}
+	for _, f := range needsHuman {
+		if f.File == "pkg/a/a.go" && f.RuleID == "go/test/missing-test-change" && f.Line != 2 {
+			t.Fatalf("missing-test finding line = %d, want added line 2: %+v", f.Line, f)
+		}
+	}
 }
 
 func TestAnalyzeDiffDoesNotReportEnvironmentBackedCredentials(t *testing.T) {
@@ -356,6 +386,50 @@ func TestGitDiffIncludesUntrackedFiles(t *testing.T) {
 	findings, _, _ := AnalyzeDiff(diff)
 	if len(findings) == 0 || findings[0].RuleID != "go/security/secret-literal" {
 		t.Fatalf("expected untracked secret finding, got %+v", findings)
+	}
+}
+
+func TestGitDiffBuildsSingleHeadToWorktreeDiff(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/repo\n\ngo 1.23\n")
+	writeTestFile(t, filepath.Join(repo, "pkg", "a.go"), "package pkg\n\nfunc A() {}\nfunc B() {}\n")
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "init")
+
+	writeTestFile(t, filepath.Join(repo, "pkg", "a.go"), "package pkg\n\nconst token = \"ghp_1234567890abcdefghijklmnopqrstuvwxyz\"\nfunc A() {}\nfunc B() { println(\"staged\") }\n")
+	runGit(t, repo, "add", "pkg/a.go")
+	writeTestFile(t, filepath.Join(repo, "pkg", "a.go"), "package pkg\n\nfunc Inserted() {}\nfunc A() {}\nfunc B() { println(\"final\") }\n")
+
+	raw, err := gitDiff(testContext(t), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "ghp_1234567890abcdefghijklmnopqrstuvwxyz") || strings.Contains(raw, "staged") {
+		t.Fatalf("diff contains stale staged-only content:\n%s", raw)
+	}
+	if !strings.Contains(raw, "Inserted") || !strings.Contains(raw, "final") {
+		t.Fatalf("diff missing final worktree content:\n%s", raw)
+	}
+}
+
+func TestGitDiffUnbornRepoUsesCurrentWorktreeState(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/repo\n\ngo 1.23\n")
+	writeTestFile(t, filepath.Join(repo, "pkg", "a.go"), "package pkg\n\nconst token = \"ghp_1234567890abcdefghijklmnopqrstuvwxyz\"\nfunc A() {}\nfunc B() { println(\"staged\") }\n")
+	runGit(t, repo, "add", ".")
+	writeTestFile(t, filepath.Join(repo, "pkg", "a.go"), "package pkg\n\nfunc Inserted() {}\nfunc A() {}\nfunc B() { println(\"final\") }\n")
+
+	raw, err := gitDiff(testContext(t), repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(raw, "ghp_1234567890abcdefghijklmnopqrstuvwxyz") || strings.Contains(raw, "staged") {
+		t.Fatalf("unborn diff contains stale staged-only content:\n%s", raw)
+	}
+	if !strings.Contains(raw, "Inserted") || !strings.Contains(raw, "final") {
+		t.Fatalf("unborn diff missing final worktree content:\n%s", raw)
 	}
 }
 

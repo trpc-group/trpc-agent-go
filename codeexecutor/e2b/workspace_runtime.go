@@ -658,7 +658,7 @@ func (r *workspaceRuntime) RunProgram(
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
-	stdout, stderr, exit, err := r.runProgramStreaming(
+	stdout, stderr, exit, truncated, err := r.runProgramStreaming(
 		ctx, script, timeout, spec.MaxOutputBytes,
 	)
 	dur := time.Since(start)
@@ -672,11 +672,12 @@ func (r *workspaceRuntime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout,
-		Stderr:   stderr,
-		ExitCode: exit,
-		Duration: dur,
-		TimedOut: timedOut,
+		Stdout:          stdout,
+		Stderr:          stderr,
+		ExitCode:        exit,
+		Duration:        dur,
+		TimedOut:        timedOut,
+		OutputTruncated: truncated,
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
@@ -753,9 +754,9 @@ func (r *workspaceRuntime) runProgramStreaming(
 	script string,
 	timeout time.Duration,
 	maxOutputBytes int,
-) (string, string, int, error) {
+) (string, string, int, bool, error) {
 	if r.ce == nil || r.ce.sbx == nil {
-		return "", "", 0, errors.New("e2b: sandbox not initialized")
+		return "", "", 0, false, errors.New("e2b: sandbox not initialized")
 	}
 	collector := newRunFrameCollector(maxOutputBytes)
 	opts := &ci.RunCodeOpts{
@@ -766,23 +767,27 @@ func (r *workspaceRuntime) runProgramStreaming(
 		OnStderr:    func(m ci.OutputMessage) { collector.feedStderr(m.Line) },
 	}
 	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
+	collector.finish()
 	if err != nil {
-		return collector.stdout(), collector.stderr(), -1, err
+		return collector.stdout(), collector.stderr(), -1, collector.truncated(), err
 	}
 	if exec.Error != nil {
-		return collector.stdout(), collector.stderr(), -1, fmt.Errorf(
+		return collector.stdout(), collector.stderr(), -1, collector.truncated(), fmt.Errorf(
 			"bash error: %s: %s", exec.Error.Name, exec.Error.Value,
 		)
 	}
-	return collector.stdout(), collector.stderr(), collector.exitCode(), nil
+	return collector.stdout(), collector.stderr(), collector.exitCode(), collector.truncated(), nil
 }
 
 type runFrameCollector struct {
+	limiter *codeexecutor.OutputLimiter
 	stdoutW *codeexecutor.LimitedOutputWriter
 	stderrW *codeexecutor.LimitedOutputWriter
 
 	stdoutState frameState
 	stderrState frameState
+	stdoutBuf   string
+	stderrBuf   string
 	exit        int
 }
 
@@ -797,93 +802,124 @@ const (
 func newRunFrameCollector(maxOutputBytes int) *runFrameCollector {
 	limiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
 	return &runFrameCollector{
+		limiter: limiter,
 		stdoutW: limiter.NewWriter(),
 		stderrW: limiter.NewWriter(),
 	}
 }
 
 func (c *runFrameCollector) feedStdout(chunk string) {
-	c.feedLines(chunk, func(line string) {
-		switch c.stdoutState {
-		case frameBefore:
-			if idx := strings.Index(line, sentinelStdoutBegin); idx >= 0 {
-				c.stdoutState = frameInside
-				tail := strings.TrimPrefix(
-					line[idx+len(sentinelStdoutBegin):], "\n",
-				)
-				if tail != "" {
-					c.feedStdout(tail)
-				}
-			}
-		case frameInside:
-			if idx := strings.Index(line, sentinelStdoutEnd); idx >= 0 {
-				if idx > 0 {
-					_, _ = c.stdoutW.Write([]byte(line[:idx]))
-				}
-				c.stdoutState = frameAfter
-				tail := line[idx+len(sentinelStdoutEnd):]
-				if tail != "" {
-					c.feedStdout(tail)
-				}
-				return
-			}
-			_, _ = c.stdoutW.Write([]byte(line))
-		case frameAfter:
-			if idx := strings.LastIndex(line, sentinelExitPrefix); idx >= 0 {
-				rest := line[idx+len(sentinelExitPrefix):]
-				if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-					rest = rest[:nl]
-				}
-				rest = strings.TrimSpace(rest)
-				if v, err := strconv.Atoi(rest); err == nil {
-					c.exit = v
-				}
-			}
-		}
-	})
+	c.stdoutBuf += chunk
+	c.drainStdout(false)
 }
 
 func (c *runFrameCollector) feedStderr(chunk string) {
-	c.feedLines(chunk, func(line string) {
-		switch c.stderrState {
-		case frameBefore:
-			if idx := strings.Index(line, sentinelStderrBegin); idx >= 0 {
-				c.stderrState = frameInside
-				tail := strings.TrimPrefix(
-					line[idx+len(sentinelStderrBegin):], "\n",
-				)
-				if tail != "" {
-					c.feedStderr(tail)
-				}
-			}
-		case frameInside:
-			if idx := strings.Index(line, sentinelStderrEnd); idx >= 0 {
-				if idx > 0 {
-					_, _ = c.stderrW.Write([]byte(line[:idx]))
-				}
-				c.stderrState = frameAfter
-				tail := line[idx+len(sentinelStderrEnd):]
-				if tail != "" {
-					c.feedStderr(tail)
-				}
-				return
-			}
-			_, _ = c.stderrW.Write([]byte(line))
-		}
-	})
+	c.stderrBuf += chunk
+	c.drainStderr(false)
 }
 
-func (c *runFrameCollector) feedLines(chunk string, feed func(string)) {
-	for chunk != "" {
-		line := chunk
-		if idx := strings.IndexByte(chunk, '\n'); idx >= 0 {
-			line = chunk[:idx+1]
-			chunk = chunk[idx+1:]
-		} else {
-			chunk = ""
+func (c *runFrameCollector) drainStdout(final bool) {
+	for c.stdoutBuf != "" {
+		switch c.stdoutState {
+		case frameBefore:
+			if !c.consumeBefore(&c.stdoutBuf, sentinelStdoutBegin, &c.stdoutState, final) {
+				return
+			}
+			c.stdoutBuf = strings.TrimPrefix(c.stdoutBuf, "\n")
+		case frameInside:
+			if !c.consumeInside(&c.stdoutBuf, sentinelStdoutEnd, c.stdoutW, &c.stdoutState, final) {
+				return
+			}
+		case frameAfter:
+			if !c.consumeExit(final) {
+				return
+			}
 		}
-		feed(line)
 	}
+}
+
+func (c *runFrameCollector) drainStderr(final bool) {
+	for c.stderrBuf != "" {
+		switch c.stderrState {
+		case frameBefore:
+			if !c.consumeBefore(&c.stderrBuf, sentinelStderrBegin, &c.stderrState, final) {
+				return
+			}
+			c.stderrBuf = strings.TrimPrefix(c.stderrBuf, "\n")
+		case frameInside:
+			if !c.consumeInside(&c.stderrBuf, sentinelStderrEnd, c.stderrW, &c.stderrState, final) {
+				return
+			}
+		case frameAfter:
+			c.stderrBuf = ""
+		}
+	}
+}
+
+func (c *runFrameCollector) consumeBefore(buf *string, token string, state *frameState, final bool) bool {
+	if idx := strings.Index(*buf, token); idx >= 0 {
+		*buf = (*buf)[idx+len(token):]
+		*state = frameInside
+		return true
+	}
+	*buf = keepTokenSuffix(*buf, token, final)
+	return false
+}
+
+func (c *runFrameCollector) consumeInside(buf *string, token string, w *codeexecutor.LimitedOutputWriter, state *frameState, final bool) bool {
+	if idx := strings.Index(*buf, token); idx >= 0 {
+		if idx > 0 {
+			_, _ = w.Write([]byte((*buf)[:idx]))
+		}
+		*buf = (*buf)[idx+len(token):]
+		*state = frameAfter
+		return true
+	}
+	if final {
+		_, _ = w.Write([]byte(*buf))
+		*buf = ""
+		return false
+	}
+	retain := len(token) - 1
+	if len(*buf) > retain {
+		cut := len(*buf) - retain
+		_, _ = w.Write([]byte((*buf)[:cut]))
+		*buf = (*buf)[cut:]
+	}
+	return false
+}
+
+func (c *runFrameCollector) consumeExit(final bool) bool {
+	if idx := strings.LastIndex(c.stdoutBuf, sentinelExitPrefix); idx >= 0 {
+		rest := c.stdoutBuf[idx+len(sentinelExitPrefix):]
+		nl := strings.IndexByte(rest, '\n')
+		if nl < 0 && !final {
+			c.stdoutBuf = c.stdoutBuf[idx:]
+			return false
+		}
+		if nl >= 0 {
+			rest = rest[:nl]
+		}
+		if v, err := strconv.Atoi(strings.TrimSpace(rest)); err == nil {
+			c.exit = v
+		}
+		c.stdoutBuf = ""
+		return false
+	}
+	c.stdoutBuf = keepTokenSuffix(c.stdoutBuf, sentinelExitPrefix, final)
+	return false
+}
+
+func keepTokenSuffix(s string, token string, final bool) string {
+	if final || len(s) < len(token) {
+		return s
+	}
+	return s[len(s)-len(token)+1:]
+}
+
+func (c *runFrameCollector) finish() {
+	c.drainStdout(true)
+	c.drainStderr(true)
 }
 
 func (c *runFrameCollector) stdout() string {
@@ -896,6 +932,10 @@ func (c *runFrameCollector) stderr() string {
 
 func (c *runFrameCollector) exitCode() int {
 	return c.exit
+}
+
+func (c *runFrameCollector) truncated() bool {
+	return c.limiter.Truncated()
 }
 
 // ExecuteInline writes each code block into the sandbox workspace and runs

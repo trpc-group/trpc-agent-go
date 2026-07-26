@@ -882,8 +882,8 @@ func TestRunProgramOutputCapAndTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Stdout, "[truncated]") {
-		t.Fatalf("expected truncated marker, got %q", res.Stdout)
+	if !res.OutputTruncated || len(res.Stdout)+len(res.Stderr) > 32 {
+		t.Fatalf("expected bounded truncated output, got truncated=%t stdout=%q stderr=%q", res.OutputTruncated, res.Stdout, res.Stderr)
 	}
 	_, err = rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd:     "bash",

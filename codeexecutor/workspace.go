@@ -104,11 +104,12 @@ type RunProgramSpec struct {
 
 // RunResult captures a single program run result.
 type RunResult struct {
-	Stdout   string
-	Stderr   string
-	ExitCode int
-	Duration time.Duration
-	TimedOut bool
+	Stdout          string
+	Stderr          string
+	ExitCode        int
+	Duration        time.Duration
+	TimedOut        bool
+	OutputTruncated bool
 }
 
 // StageOptions controls directory staging behavior.

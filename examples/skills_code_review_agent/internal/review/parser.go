@@ -41,11 +41,17 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 	}
 	flushFile := func() {
 		flushHunk()
-		if currentFile.NewPath != "" && !seenFiles[currentFile.NewPath] {
-			currentFile.IsGo = strings.HasSuffix(currentFile.NewPath, ".go")
-			currentFile.IsTest = strings.HasSuffix(currentFile.NewPath, "_test.go")
+		identity := currentFile.NewPath
+		if identity == "" && currentFile.OldPath != "" {
+			identity = currentFile.OldPath
+			currentFile.NewPath = identity
+			currentFile.Deleted = true
+		}
+		if identity != "" && !seenFiles[identity] {
+			currentFile.IsGo = strings.HasSuffix(identity, ".go")
+			currentFile.IsTest = strings.HasSuffix(identity, "_test.go")
 			pd.Files = append(pd.Files, currentFile)
-			seenFiles[currentFile.NewPath] = true
+			seenFiles[identity] = true
 		}
 	}
 
@@ -72,7 +78,7 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 			oldLine = oldStart
 			newLine = newStart
 			currentHunk = &DiffHunk{
-				File:     currentFile.NewPath,
+				File:     currentDiffFilePath(currentFile),
 				OldStart: oldStart,
 				OldCount: oldCount,
 				NewStart: newStart,
@@ -109,6 +115,7 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 			currentFile.OldPath = cleanDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "--- ")))
 		case strings.HasPrefix(line, "+++ "):
 			currentFile.NewPath = cleanDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
+			currentFile.Deleted = currentFile.NewPath == "" && currentFile.OldPath != ""
 		}
 	}
 	flushFile()
@@ -120,6 +127,13 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 	}
 	attachPackageInfo(&pd)
 	return pd, nil
+}
+
+func currentDiffFilePath(file DiffFile) string {
+	if file.NewPath != "" {
+		return file.NewPath
+	}
+	return file.OldPath
 }
 
 func cleanDiffPath(path string) string {

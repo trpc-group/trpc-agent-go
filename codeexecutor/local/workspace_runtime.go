@@ -384,11 +384,12 @@ func (r *Runtime) RunProgram(
 	}
 
 	res := codeexecutor.RunResult{
-		Stdout:   stdout.String(),
-		Stderr:   stderr.String(),
-		ExitCode: exitCode,
-		Duration: dur,
-		TimedOut: errors.Is(tctx.Err(), context.DeadlineExceeded),
+		Stdout:          stdout.String(),
+		Stderr:          stderr.String(),
+		ExitCode:        exitCode,
+		Duration:        dur,
+		TimedOut:        errors.Is(tctx.Err(), context.DeadlineExceeded),
+		OutputTruncated: outputLimiter.Truncated(),
 	}
 	span.SetAttributes(
 		attribute.Int(codeexecutor.AttrExitCode, res.ExitCode),
