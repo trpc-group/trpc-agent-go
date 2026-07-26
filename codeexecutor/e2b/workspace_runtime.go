@@ -837,20 +837,22 @@ func (r *workspaceRuntime) runBashStreaming(
 	if len(maxOutputBytes) > 0 {
 		limit := maxOutputBytes[0]
 		if limit <= 0 {
-			limit = codeexecutor.DefaultMaxOutputBytes
+			stdoutB = codeexecutor.NewBoundedOutput(0)
+			stderrB = codeexecutor.NewBoundedOutput(0)
+		} else {
+			// RunProgram output includes framing sentinels in the same stream as
+			// user output. Retain the requested user prefix plus a small tail for
+			// the closing sentinel and exit code; boundRunOutput applies the exact
+			// user-facing limit after those frames have been parsed.
+			stdoutHeadBytes := limit + len(sentinelStdoutBegin) + 1
+			stderrHeadBytes := limit + len(sentinelStderrBegin) + 1
+			stdoutB = codeexecutor.NewBoundedOutputWithTail(
+				stdoutHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
+			)
+			stderrB = codeexecutor.NewBoundedOutputWithTail(
+				stderrHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
+			)
 		}
-		// RunProgram output includes framing sentinels in the same stream as
-		// user output. Retain the requested user prefix plus a small tail for
-		// the closing sentinel and exit code; boundRunOutput applies the exact
-		// user-facing limit after those frames have been parsed.
-		stdoutHeadBytes := limit + len(sentinelStdoutBegin) + 1
-		stderrHeadBytes := limit + len(sentinelStderrBegin) + 1
-		stdoutB = codeexecutor.NewBoundedOutputWithTail(
-			stdoutHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
-		)
-		stderrB = codeexecutor.NewBoundedOutputWithTail(
-			stderrHeadBytes+framedOutputTailBytes, framedOutputTailBytes,
-		)
 	}
 	opts := &ci.RunCodeOpts{
 		Language: ci.LanguageBash,

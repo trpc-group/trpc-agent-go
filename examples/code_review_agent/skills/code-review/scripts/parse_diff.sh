@@ -18,21 +18,98 @@ if [ ! -f "$DIFF_FILE" ]; then
     exit 1
 fi
 
-echo "=== Changed files ==="
-grep -E '^diff --git' "$DIFF_FILE" | sed 's|diff --git a/||; s| b/.*||' | sort -u
+python3 - "$DIFF_FILE" <<'PY'
+import sys
 
-echo ""
-echo "=== Added lines per file ==="
-awk '
-/^diff --git/ { file=$0; sub(/^diff --git a\//, "", file); sub(/ b\/.*/, "", file) }
-/^\+/ && !/^\+\+\+/ { count[file]++ }
-END { for (f in count) printf "  %s: +%d lines\n", f, count[f] }
-' "$DIFF_FILE"
 
-echo ""
-echo "=== Removed lines per file ==="
-awk '
-/^diff --git/ { file=$0; sub(/^diff --git a\//, "", file); sub(/ b\/.*/, "", file) }
-/^-/ && !/^---/ { count[file]++ }
-END { for (f in count) printf "  %s: -%d lines\n", f, count[f] }
-' "$DIFF_FILE"
+def split_header(line):
+    rest = line[len(b"diff --git "):]
+    tokens = []
+    pos = 0
+    while pos < len(rest) and len(tokens) < 2:
+        while pos < len(rest) and rest[pos:pos + 1] == b" ":
+            pos += 1
+        start = pos
+        if pos < len(rest) and rest[pos:pos + 1] == b'"':
+            pos += 1
+            escaped = False
+            while pos < len(rest):
+                byte = rest[pos]
+                pos += 1
+                if escaped:
+                    escaped = False
+                elif byte == ord("\\"):
+                    escaped = True
+                elif byte == ord('"'):
+                    break
+        else:
+            while pos < len(rest) and rest[pos:pos + 1] != b" ":
+                pos += 1
+        tokens.append(rest[start:pos])
+    return tokens
+
+
+def decode_git_path(token):
+    if len(token) < 2 or token[:1] != b'"' or token[-1:] != b'"':
+        raw = token
+    else:
+        source = token[1:-1]
+        raw = bytearray()
+        pos = 0
+        escapes = {
+            ord("a"): 7, ord("b"): 8, ord("t"): 9, ord("n"): 10,
+            ord("v"): 11, ord("f"): 12, ord("r"): 13,
+            ord('"'): 34, ord("\\"): 92,
+        }
+        while pos < len(source):
+            byte = source[pos]
+            pos += 1
+            if byte != ord("\\") or pos == len(source):
+                raw.append(byte)
+                continue
+            escaped = source[pos]
+            pos += 1
+            if ord("0") <= escaped <= ord("7"):
+                digits = bytes([escaped])
+                while pos < len(source) and len(digits) < 3 and ord("0") <= source[pos] <= ord("7"):
+                    digits += bytes([source[pos]])
+                    pos += 1
+                raw.append(int(digits, 8))
+            else:
+                raw.append(escapes.get(escaped, escaped))
+        raw = bytes(raw)
+    return raw.decode("utf-8", "surrogateescape")
+
+
+changed = set()
+added = {}
+removed = {}
+current = None
+with open(sys.argv[1], "rb") as diff:
+    for raw_line in diff:
+        line = raw_line.rstrip(b"\r\n")
+        if line.startswith(b"diff --git "):
+            tokens = split_header(line)
+            current = None
+            if len(tokens) == 2:
+                current = decode_git_path(tokens[0])
+                if current.startswith("a/"):
+                    current = current[2:]
+                changed.add(current)
+        elif current is not None and line.startswith(b"+") and not line.startswith(b"+++"):
+            added[current] = added.get(current, 0) + 1
+        elif current is not None and line.startswith(b"-") and not line.startswith(b"---"):
+            removed[current] = removed.get(current, 0) + 1
+
+print("=== Changed files ===")
+for name in sorted(changed):
+    print(name)
+print()
+print("=== Added lines per file ===")
+for name in sorted(added):
+    print(f"  {name}: +{added[name]} lines")
+print()
+print("=== Removed lines per file ===")
+for name in sorted(removed):
+    print(f"  {name}: -{removed[name]} lines")
+PY

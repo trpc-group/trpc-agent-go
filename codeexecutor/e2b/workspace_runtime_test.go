@@ -457,6 +457,26 @@ func TestRunProgram_BoundsOutputAndPreservesExitFrame(t *testing.T) {
 	require.Equal(t, 7, res.ExitCode)
 }
 
+func TestRunProgram_ZeroOutputLimitPreservesCompleteOutput(t *testing.T) {
+	expected := strings.Repeat("x", codeexecutor.DefaultMaxOutputBytes+1024)
+	srv := newMockE2BServer(t, func(code string) string {
+		stdout := sentinelStdoutBegin + "\n" + expected + "\n" +
+			sentinelStdoutEnd + "\n" + sentinelExitPrefix + "0\n"
+		stderr := sentinelStderrBegin + "\n" + sentinelStderrEnd + "\n"
+		return ndjsonLines(stdoutMsg(stdout), stderrMsg(stderr))
+	})
+	defer srv.close()
+	c := newMockedExecutor(t, srv)
+	res, err := c.RunProgram(
+		context.Background(),
+		codeexecutor.Workspace{ID: "x", Path: "/tmp/ws"},
+		codeexecutor.RunProgramSpec{Cmd: "large-output", Timeout: 3 * time.Second},
+	)
+	require.NoError(t, err)
+	require.Equal(t, expected, res.Stdout)
+	require.NotContains(t, res.Stdout, "output truncated")
+}
+
 func TestRunProgram_BashErrorSurfaced(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string {
 		// Emit an error event — runBashStreaming should translate this

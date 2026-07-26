@@ -54,16 +54,19 @@ type Finding struct {
 // Warning is a low-confidence finding that needs human review.
 type Warning Finding
 
-// dedupKey returns the key used for de-duplication.
-// Same (file, line, category) → same key.
+// dedupKey returns the key used for de-duplication. Rule findings are
+// distinct by rule ID so separate checks at the same location are preserved.
 func (f Finding) dedupKey() string {
-	return f.File + ":" + itoa(f.Line) + ":" + f.Category
+	identity := f.RuleID
+	if identity == "" {
+		identity = f.Source + "\x00" + f.Category + "\x00" + f.Title
+	}
+	return f.File + ":" + itoa(f.Line) + ":" + identity
 }
 
-// DedupFindings removes duplicate findings with the same
-// (file, line, category), keeping only the one with the highest
-// confidence. It also sorts the result by severity (critical first)
-// then by file and line.
+// DedupFindings removes duplicate findings from the same rule and location,
+// keeping only the one with the highest confidence. It also sorts the result
+// by severity (critical first), then by file and line.
 func DedupFindings(findings []Finding) []Finding {
 	if len(findings) == 0 {
 		return nil

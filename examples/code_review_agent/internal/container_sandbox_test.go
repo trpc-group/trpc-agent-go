@@ -10,9 +10,7 @@
 package internal
 
 import (
-	"archive/zip"
 	"context"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,6 +102,17 @@ func TestModuleCacheRequiresExplicitTrustedMode(t *testing.T) {
 	require.Equal(t, "/go/pkg/mod", moduleCachePath(true))
 }
 
+func TestDefaultDependencyEnvironmentFailsClosed(t *testing.T) {
+	env := sandboxProgramEnv(false, false)
+	require.Equal(t, "off", env["GOPROXY"])
+	require.Equal(t, "/tmp/gomodcache", env["GOMODCACHE"])
+	require.Equal(t, "-mod=readonly", env["GOFLAGS"])
+	for _, value := range env {
+		require.NotContains(t, value, "proxy.golang.org")
+		require.NotContains(t, value, "sum.golang.org")
+	}
+}
+
 func TestSandboxCleanupContextIgnoresParentCancellationButIsBounded(t *testing.T) {
 	parent, parentCancel := context.WithCancel(context.Background())
 	parentCancel()
@@ -144,57 +153,6 @@ func TestContainerSandboxCloseWaitsForActiveExecution(t *testing.T) {
 	}
 }
 
-func TestContainerSandboxCloseSynchronizesDependencyCache(t *testing.T) {
-	repo := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n"), 0o600))
-	cache := t.TempDir()
-	envStarted := make(chan struct{})
-	releaseEnv := make(chan struct{})
-	sandbox := &ContainerSandbox{
-		config:   withSandboxDefaults(SandboxConfig{}),
-		depCache: cache,
-		depReady: map[string]bool{},
-		goDownloadEnv: func(moduleCache, buildCache, home string) []string {
-			close(envStarted)
-			<-releaseEnv
-			return isolatedGoDownloadEnvForProxy(moduleCache, buildCache, home, "off")
-		},
-	}
-	prepareDone := make(chan error, 1)
-	go func() {
-		_, _, err := sandbox.prepareDependencies(context.Background(), repo, []string{"go", "test", "./..."})
-		prepareDone <- err
-	}()
-	select {
-	case <-envStarted:
-	case err := <-prepareDone:
-		close(releaseEnv)
-		require.Failf(t, "dependency preparation ended before synchronization point", "error: %v", err)
-	case <-time.After(time.Second):
-		close(releaseEnv)
-		require.Fail(t, "dependency preparation did not reach environment setup")
-	}
-	closeDone := make(chan error, 1)
-	go func() { closeDone <- sandbox.Close() }()
-
-	closedEarly := false
-	var closeErr error
-	select {
-	case closeErr = <-closeDone:
-		closedEarly = true
-	case <-time.After(20 * time.Millisecond):
-	}
-	close(releaseEnv)
-	require.NoError(t, <-prepareDone)
-	if !closedEarly {
-		closeErr = <-closeDone
-	}
-	require.False(t, closedEarly, "Close raced dependency preparation")
-	require.NoError(t, closeErr)
-	_, err := os.Stat(cache)
-	require.ErrorIs(t, err, os.ErrNotExist)
-}
-
 func TestDefaultDependencySetupUsesVendoredSnapshot(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n\nrequire example.com/dependency v1.0.0\n"), 0o600))
@@ -203,10 +161,9 @@ func TestDefaultDependencySetupUsesVendoredSnapshot(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "vendor", "modules.txt"), []byte("# example.com/dependency v1.0.0\n## explicit; go 1.21\nexample.com/dependency\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "vendor", "example.com", "dependency", "dependency.go"), []byte("package dependency\nconst Value = 1\n"), 0o600))
 
-	sandbox := &ContainerSandbox{config: withSandboxDefaults(SandboxConfig{})}
-	cache, vendor, err := sandbox.prepareDependencies(context.Background(), repo, []string{"go", "test", "./..."})
+	module, vendor, err := dependencyPlan(repo, []string{"go", "test", "./..."}, false)
 	require.NoError(t, err)
-	require.Empty(t, cache)
+	require.Equal(t, ".", module)
 	require.True(t, vendor)
 	cmd := exec.Command("go", "test", "-mod=vendor", "./...")
 	cmd.Dir = repo
@@ -214,56 +171,19 @@ func TestDefaultDependencySetupUsesVendoredSnapshot(t *testing.T) {
 	require.NoError(t, cmd.Run(), "vendored external dependency was not usable by the isolated default")
 }
 
-func TestDefaultDependencySetupDownloadsExternalModule(t *testing.T) {
-	proxyRoot := t.TempDir()
-	versionDir := filepath.Join(proxyRoot, "example.com", "dependency", "@v")
-	require.NoError(t, os.MkdirAll(versionDir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "v1.0.0.info"), []byte(`{"Version":"v1.0.0","Time":"2025-01-01T00:00:00Z"}`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(versionDir, "v1.0.0.mod"), []byte("module example.com/dependency\n\ngo 1.21\n"), 0o600))
-	zipFile, err := os.Create(filepath.Join(versionDir, "v1.0.0.zip"))
-	require.NoError(t, err)
-	zw := zip.NewWriter(zipFile)
-	for name, content := range map[string]string{
-		"example.com/dependency@v1.0.0/go.mod":        "module example.com/dependency\n\ngo 1.21\n",
-		"example.com/dependency@v1.0.0/dependency.go": "package dependency\nfunc Value() string { return \"ready\" }\n",
-	} {
-		entry, createErr := zw.Create(name)
-		require.NoError(t, createErr)
-		_, writeErr := entry.Write([]byte(content))
-		require.NoError(t, writeErr)
-	}
-	require.NoError(t, zw.Close())
-	require.NoError(t, zipFile.Close())
-
+func TestDefaultDependencySetupPlansIsolatedDownload(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n\nrequire example.com/dependency v1.0.0\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(repo, "reviewed_test.go"), []byte("package reviewed\nimport (\"testing\"; \"example.com/dependency\")\nfunc TestDependency(t *testing.T) { if dependency.Value() != \"ready\" { t.Fatal(\"dependency unavailable\") } }\n"), 0o600))
-	proxyURL := (&url.URL{Scheme: "file", Path: "/" + filepath.ToSlash(proxyRoot)}).String()
-	testGoEnv := func(moduleCache, buildCache, home, proxy string) []string {
-		env := isolatedGoDownloadEnvForProxy(moduleCache, buildCache, home, proxy)
-		for i := range env {
-			if strings.HasPrefix(env[i], "GOSUMDB=") {
-				env[i] = "GOSUMDB=off"
-			}
-		}
-		return env
-	}
-	sandbox := &ContainerSandbox{
-		config: withSandboxDefaults(SandboxConfig{}),
-		goDownloadEnv: func(moduleCache, buildCache, home string) []string {
-			return testGoEnv(moduleCache, buildCache, home, proxyURL)
-		},
-	}
-	cache, vendor, err := sandbox.prepareDependencies(context.Background(), repo, []string{"go", "test", "./..."})
-	require.NoError(t, err)
-	require.NotEmpty(t, cache)
-	require.False(t, vendor)
-	t.Cleanup(func() { require.NoError(t, sandbox.Close()) })
 
-	cmd := exec.Command("go", "test", "-mod=readonly", "./...")
-	cmd.Dir = repo
-	cmd.Env = testGoEnv(cache, filepath.Join(t.TempDir(), "build"), t.TempDir(), "off")
-	require.NoError(t, cmd.Run(), "downloaded dependency was not usable with network disabled")
+	module, vendor, err := dependencyPlan(repo, []string{"go", "test", "./..."}, false)
+	require.NoError(t, err)
+	require.Equal(t, ".", module)
+	require.False(t, vendor)
+
+	module, vendor, err = dependencyPlan(repo, []string{"go", "test", "./..."}, true)
+	require.NoError(t, err)
+	require.Empty(t, module)
+	require.False(t, vendor)
 }
 
 func TestSandboxDockerfileSelectsNonRootUser(t *testing.T) {

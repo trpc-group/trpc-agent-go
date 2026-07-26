@@ -92,6 +92,28 @@ func TestRuntime_RunProgram_BoundsOutputDuringCapture(t *testing.T) {
 	require.Equal(t, "ijkl\n... [output truncated at 4 bytes]", res.Stderr)
 }
 
+func TestRuntime_RunProgram_ZeroOutputLimitPreservesCompleteOutput(t *testing.T) {
+	if os.Getenv("GO_WANT_UNBOUNDED_OUTPUT_HELPER") == "1" {
+		_, _ = os.Stdout.WriteString(strings.Repeat("x", codeexecutor.DefaultMaxOutputBytes+1024))
+		os.Exit(0)
+	}
+	rt := local.NewRuntime("")
+	ctx := context.Background()
+	ws, err := rt.CreateWorkspace(ctx, "rt-unbounded-output", codeexecutor.WorkspacePolicy{})
+	require.NoError(t, err)
+	defer rt.Cleanup(ctx, ws)
+	testBinary, err := os.Executable()
+	require.NoError(t, err)
+	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: testBinary, Args: []string{"-test.run=^TestRuntime_RunProgram_ZeroOutputLimitPreservesCompleteOutput$"},
+		Env:     map[string]string{"GO_WANT_UNBOUNDED_OUTPUT_HELPER": "1"},
+		Timeout: 5 * time.Second,
+	})
+	require.NoError(t, err)
+	require.Len(t, res.Stdout, codeexecutor.DefaultMaxOutputBytes+1024)
+	require.NotContains(t, res.Stdout, "output truncated")
+}
+
 func TestRuntime_PathListSeparator(t *testing.T) {
 	rt := local.NewRuntime("")
 

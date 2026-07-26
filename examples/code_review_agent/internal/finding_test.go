@@ -39,6 +39,14 @@ func TestDedupFindings_DifferentKeys(t *testing.T) {
 	require.Len(t, deduped, 3)
 }
 
+func TestDedupFindings_PreservesDistinctRulesInSameCategory(t *testing.T) {
+	findings := []Finding{
+		{File: "a.go", Line: 10, Category: "security", RuleID: "RULE_A", Confidence: 0.9},
+		{File: "a.go", Line: 10, Category: "security", RuleID: "RULE_B", Confidence: 0.8},
+	}
+	require.Len(t, DedupFindings(findings), 2)
+}
+
 func TestDedupFindings_Empty(t *testing.T) {
 	require.Nil(t, DedupFindings(nil))
 }

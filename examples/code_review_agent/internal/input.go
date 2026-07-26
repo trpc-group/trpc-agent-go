@@ -102,16 +102,32 @@ func literalGitPathspecs(filePaths []string) ([]string, error) {
 }
 
 func appendUntrackedDiffs(ctx context.Context, repo string, pathspecs []string, output *limitedBuffer) error {
+	return appendUntrackedDiffsWithPathLimit(ctx, repo, pathspecs, output, maxInputDiffBytes)
+}
+
+func appendUntrackedDiffsWithPathLimit(
+	ctx context.Context,
+	repo string,
+	pathspecs []string,
+	output *limitedBuffer,
+	pathListLimit int,
+) error {
 	args := []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
 	args = append(args, pathspecs...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
 	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
-	data, err := cmd.Output()
-	if err != nil {
-		return fmt.Errorf("list untracked files: %w", err)
+	var names, stderr limitedBuffer
+	names.limit = pathListLimit
+	stderr.limit = 64 * 1024
+	cmd.Stdout, cmd.Stderr = &names, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("list untracked files: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
-	for _, rawName := range bytes.Split(data, []byte{0}) {
+	if names.exceeded {
+		return fmt.Errorf("untracked path list exceeds %d-byte limit", pathListLimit)
+	}
+	for _, rawName := range bytes.Split(names.Bytes(), []byte{0}) {
 		if len(rawName) == 0 {
 			continue
 		}
@@ -239,14 +255,14 @@ func pathInside(root, candidate string) (bool, error) {
 }
 
 type limitedBuffer struct {
-	bytes.Buffer
+	buffer   bytes.Buffer
 	limit    int
 	exceeded bool
 }
 
 func (b *limitedBuffer) Write(p []byte) (int, error) {
 	original := len(p)
-	remaining := b.limit - b.Len()
+	remaining := b.limit - b.buffer.Len()
 	if remaining <= 0 {
 		b.exceeded = true
 		return original, nil
@@ -255,9 +271,15 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 		p = p[:remaining]
 		b.exceeded = true
 	}
-	_, _ = b.Buffer.Write(p)
+	_, _ = b.buffer.Write(p)
 	return original, nil
 }
+
+func (b *limitedBuffer) Bytes() []byte { return b.buffer.Bytes() }
+
+func (b *limitedBuffer) Len() int { return b.buffer.Len() }
+
+func (b *limitedBuffer) String() string { return b.buffer.String() }
 
 func filteredGitEnv() []string {
 	allowed := map[string]bool{"PATH": true, "HOME": true, "USERPROFILE": true, "SYSTEMROOT": true, "TMP": true, "TEMP": true}

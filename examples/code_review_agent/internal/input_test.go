@@ -12,6 +12,7 @@ package internal
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,6 +112,32 @@ func TestLoadReviewInputIncludesUntrackedFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), "new file mode")
 	require.Contains(t, string(data), "+var apiKey")
+}
+
+func TestAppendUntrackedDiffsBoundsManySmallPaths(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	cmd := exec.Command("git", "init")
+	cmd.Dir = repo
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command("git", "config", "core.excludesFile", os.DevNull)
+	cmd.Dir = repo
+	require.NoError(t, cmd.Run())
+	for i := 0; i < 20; i++ {
+		name := fmt.Sprintf("f%02d.go", i)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte("package p\n"), 0o600))
+	}
+	list := exec.Command("git", "ls-files", "--others", "--exclude-standard", "-z", "--")
+	list.Dir = repo
+	names, err := list.Output()
+	require.NoError(t, err)
+	require.Greater(t, len(names), 32)
+	var output limitedBuffer
+	output.limit = maxInputDiffBytes
+	err = appendUntrackedDiffsWithPathLimit(context.Background(), repo, nil, &output, 32)
+	require.ErrorContains(t, err, "untracked path list exceeds")
 }
 
 func TestLoadReviewInputQuotesSpecialUntrackedNames(t *testing.T) {

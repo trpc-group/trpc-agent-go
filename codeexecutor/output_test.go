@@ -25,6 +25,22 @@ func TestBoundedOutputLimitsRetainedBytes(t *testing.T) {
 	}
 }
 
+func TestBoundedOutputNonPositiveLimitIsUnbounded(t *testing.T) {
+	for _, limit := range []int{0, -1} {
+		output := NewBoundedOutput(limit)
+		_, err := output.Write([]byte("complete output"))
+		if err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		if got := output.String(); got != "complete output" {
+			t.Fatalf("String() = %q, want complete output", got)
+		}
+		if got := output.RetainedBytes(); got != len("complete output") {
+			t.Fatalf("RetainedBytes() = %d, want %d", got, len("complete output"))
+		}
+	}
+}
+
 func TestBoundedOutputTailPreservesFraming(t *testing.T) {
 	output := NewBoundedOutputWithTail(32, 16)
 	_, _ = output.Write([]byte("BEGIN\n" + strings.Repeat("x", 100) + "\nEND\n"))

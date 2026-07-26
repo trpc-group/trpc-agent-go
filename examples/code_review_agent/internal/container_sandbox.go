@@ -18,7 +18,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -40,11 +39,7 @@ type ContainerSandbox struct {
 	runMu         sync.Mutex
 	mu            sync.Mutex
 	closed        bool
-	depMu         sync.Mutex
-	depCache      string
-	depReady      map[string]bool
 	closeExecutor func() error
-	goDownloadEnv func(moduleCache, buildCache, home string) []string
 }
 
 const (
@@ -122,12 +117,7 @@ func (s *ContainerSandbox) closeResources() error {
 	} else if s.executor != nil {
 		executorErr = s.executor.Close()
 	}
-	s.depMu.Lock()
-	defer s.depMu.Unlock()
-	cacheErr := os.RemoveAll(s.depCache)
-	s.depCache = ""
-	s.depReady = nil
-	return errors.Join(executorErr, cacheErr)
+	return executorErr
 }
 
 // Execute runs one previously-authorized command.
@@ -163,7 +153,7 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		return run
 	}
 	defer removeSnapshot()
-	dependencyCache, useVendor, err := s.prepareDependencies(timeoutCtx, snapshotPath, parts)
+	module, useVendor, err := dependencyPlan(snapshotPath, parts, s.config.TrustedModuleCache)
 	if err != nil {
 		s.classifyContainerSetupError(run, timeoutCtx, err)
 		return run
@@ -182,26 +172,44 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 		s.classifyContainerSetupError(run, timeoutCtx, err)
 		return run
 	}
-	gomodcache := moduleCachePath(s.config.TrustedModuleCache)
-	if dependencyCache != "" {
-		if err := s.executor.PutDirectory(timeoutCtx, ws, dependencyCache, "gomodcache"); err != nil {
-			s.classifyContainerSetupError(run, timeoutCtx, fmt.Errorf("stage isolated module cache: %w", err))
+	programEnv := sandboxProgramEnv(s.config.TrustedModuleCache, useVendor)
+	if module != "" && !useVendor {
+		dependencyResult, dependencyErr := s.executor.RunProgram(
+			timeoutCtx,
+			ws,
+			codeexecutor.RunProgramSpec{
+				Cmd: "go", Args: []string{"-C", module, "mod", "download", "all"}, Cwd: "repo",
+				CleanEnv: true, Timeout: s.config.Timeout, Env: programEnv,
+				Limits: codeexecutor.ResourceLimits{
+					CPUPercent: s.config.CPUPercent,
+					MemoryMB:   s.config.MemoryMB,
+					MaxPIDs:    s.config.MaxPIDs,
+				},
+				MaxOutputBytes: s.config.MaxOutputBytes,
+			},
+		)
+		if dependencyResult.TimedOut {
+			s.finishExecution(timeoutCtx, run, dependencyResult, dependencyErr)
 			return run
 		}
-		gomodcache = path.Join(ws.Path, "gomodcache")
-	}
-	programEnv := map[string]string{
-		"PATH":        "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
-		"GOPATH":      "/go",
-		"GOMODCACHE":  gomodcache,
-		"GOCACHE":     "/tmp/go-build",
-		"HOME":        "/tmp",
-		"GOTOOLCHAIN": "local",
-		"GOPROXY":     "off",
-		"GOFLAGS":     "-mod=readonly",
-	}
-	if useVendor {
-		programEnv["GOFLAGS"] = "-mod=vendor"
+		if dependencyErr != nil {
+			s.classifyContainerSetupError(
+				run, timeoutCtx, fmt.Errorf("prepare dependencies inside sandbox: %w", dependencyErr),
+			)
+			return run
+		}
+		if dependencyResult.ExitCode != 0 {
+			s.classifyContainerSetupError(
+				run,
+				timeoutCtx,
+				fmt.Errorf(
+					"prepare dependencies inside sandbox: go exited with status %d: %s",
+					dependencyResult.ExitCode,
+					strings.TrimSpace(dependencyResult.Stderr),
+				),
+			)
+			return run
+		}
 	}
 	result, err := s.executor.RunProgram(timeoutCtx, ws, codeexecutor.RunProgramSpec{
 		Cmd: parts[0], Args: parts[1:], Cwd: "repo", CleanEnv: true, Timeout: s.config.Timeout,
@@ -211,6 +219,23 @@ func (s *ContainerSandbox) Execute(ctx context.Context, taskID, command string, 
 	})
 	s.finishExecution(timeoutCtx, run, result, err)
 	return run
+}
+
+func sandboxProgramEnv(trustedModuleCache, useVendor bool) map[string]string {
+	programEnv := map[string]string{
+		"PATH":        "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+		"GOPATH":      "/go",
+		"GOMODCACHE":  moduleCachePath(trustedModuleCache),
+		"GOCACHE":     "/tmp/go-build",
+		"HOME":        "/tmp",
+		"GOTOOLCHAIN": "local",
+		"GOPROXY":     "off",
+		"GOFLAGS":     "-mod=readonly",
+	}
+	if useVendor {
+		programEnv["GOFLAGS"] = "-mod=vendor"
+	}
+	return programEnv
 }
 
 func sandboxCleanupContext(parent context.Context) (context.Context, context.CancelFunc) {
@@ -272,8 +297,8 @@ func moduleCachePath(trusted bool) string {
 	return "/tmp/gomodcache"
 }
 
-func (s *ContainerSandbox) prepareDependencies(ctx context.Context, snapshotRoot string, command []string) (string, bool, error) {
-	if s.config.TrustedModuleCache || len(command) == 0 || command[0] != "go" {
+func dependencyPlan(snapshotRoot string, command []string, trustedModuleCache bool) (string, bool, error) {
+	if trustedModuleCache || len(command) == 0 || command[0] != "go" {
 		return "", false, nil
 	}
 	module := "."
@@ -304,69 +329,21 @@ func (s *ContainerSandbox) prepareDependencies(ctx context.Context, snapshotRoot
 	if err != nil || !inside {
 		return "", false, fmt.Errorf("Go module directory %q escapes repository", module)
 	}
+	if info, err := os.Stat(filepath.Join(moduleDir, "go.mod")); err == nil && !info.IsDir() {
+		// Continue below to select vendor mode or an isolated download.
+	} else if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	} else if err != nil {
+		return "", false, fmt.Errorf("inspect Go module file for %q: %w", module, err)
+	} else {
+		return "", false, fmt.Errorf("Go module file for %q is not a regular file", module)
+	}
 	if info, err := os.Stat(filepath.Join(moduleDir, "vendor", "modules.txt")); err == nil && !info.IsDir() {
-		return "", true, nil
+		return filepath.ToSlash(module), true, nil
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", false, fmt.Errorf("inspect vendored dependencies for %q: %w", module, err)
 	}
-
-	s.depMu.Lock()
-	defer s.depMu.Unlock()
-	if s.depReady != nil && s.depReady[module] {
-		return s.depCache, false, nil
-	}
-	if s.depCache == "" {
-		s.depCache, err = os.MkdirTemp("", "code-review-gomodcache-")
-		if err != nil {
-			return "", false, fmt.Errorf("create isolated module cache: %w", err)
-		}
-		s.depReady = map[string]bool{}
-	}
-	home := filepath.Join(s.depCache, ".home")
-	buildCache := filepath.Join(s.depCache, ".build")
-	if err := os.MkdirAll(home, 0o700); err != nil {
-		return "", false, fmt.Errorf("create isolated Go home: %w", err)
-	}
-	cmd := exec.CommandContext(ctx, "go", "mod", "download", "all")
-	cmd.Dir = moduleDir
-	envBuilder := s.goDownloadEnv
-	if envBuilder == nil {
-		envBuilder = isolatedGoDownloadEnv
-	}
-	cmd.Env = envBuilder(s.depCache, buildCache, home)
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = 64*1024, 64*1024
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return "", false, fmt.Errorf("prepare isolated dependencies for module %q: %w: %s", module, err, strings.TrimSpace(stderr.String()))
-	}
-	s.depReady[module] = true
-	return s.depCache, false, nil
-}
-
-func isolatedGoDownloadEnv(moduleCache, buildCache, home string) []string {
-	return isolatedGoDownloadEnvForProxy(moduleCache, buildCache, home, "https://proxy.golang.org")
-}
-
-func isolatedGoDownloadEnvForProxy(moduleCache, buildCache, home, proxy string) []string {
-	env := []string{
-		"GOMODCACHE=" + moduleCache,
-		"GOCACHE=" + buildCache,
-		"HOME=" + home,
-		"GOENV=off",
-		"GOTOOLCHAIN=local",
-		"GOPROXY=" + proxy,
-		"GOSUMDB=sum.golang.org",
-		"GOPRIVATE=",
-		"GONOPROXY=none",
-		"GONOSUMDB=",
-	}
-	for _, key := range []string{"PATH", "SYSTEMROOT", "TEMP", "TMP"} {
-		if value, ok := os.LookupEnv(key); ok {
-			env = append(env, key+"="+value)
-		}
-	}
-	return env
+	return filepath.ToSlash(module), false, nil
 }
 
 func stageReviewSnapshot(ctx context.Context, root string, limit int64) (string, func(), error) {

@@ -11,8 +11,8 @@ package codeexecutor
 
 import "fmt"
 
-// DefaultMaxOutputBytes is the safe per-stream capture limit used when a
-// caller does not provide RunProgramSpec.MaxOutputBytes.
+// DefaultMaxOutputBytes is the recommended per-stream capture limit for
+// callers that want bounded output.
 const DefaultMaxOutputBytes = 4 * 1024 * 1024
 
 // BoundedOutput retains a bounded prefix and, optionally, a bounded tail of a
@@ -36,7 +36,7 @@ func NewBoundedOutput(limit int) *BoundedOutput {
 // user output.
 func NewBoundedOutputWithTail(limit, tailBytes int) *BoundedOutput {
 	if limit <= 0 {
-		limit = DefaultMaxOutputBytes
+		return &BoundedOutput{}
 	}
 	if tailBytes < 0 {
 		tailBytes = 0
@@ -56,6 +56,10 @@ func NewBoundedOutputWithTail(limit, tailBytes int) *BoundedOutput {
 func (b *BoundedOutput) Write(p []byte) (int, error) {
 	original := len(p)
 	b.total += int64(original)
+	if b.limit <= 0 {
+		b.head = append(b.head, p...)
+		return original, nil
+	}
 	if remaining := b.headLimit - len(b.head); remaining > 0 {
 		keep := min(remaining, len(p))
 		b.head = append(b.head, p[:keep]...)
@@ -79,7 +83,7 @@ func (b *BoundedOutput) Write(p []byte) (int, error) {
 // String returns retained output and a deterministic truncation marker.
 func (b *BoundedOutput) String() string {
 	result := string(b.head)
-	if b.total > int64(b.limit) {
+	if b.limit > 0 && b.total > int64(b.limit) {
 		result += fmt.Sprintf("\n... [output truncated at %d bytes]", b.limit)
 	}
 	return result + string(b.tail)

@@ -297,3 +297,25 @@ new file mode 100644
 		require.NotEqual(t, "TEST_MISSING", finding.RuleID, "test added in the same diff was ignored: %+v", finding)
 	}
 }
+
+func TestTestMissingRuleUsesExportedSymbolLine(t *testing.T) {
+	diff := `diff --git a/service/foo.go b/service/foo.go
+new file mode 100644
+--- /dev/null
++++ b/service/foo.go
+@@ -0,0 +1,4 @@
++package service
++
++// Exported is public.
++func Exported() {}
+`
+	files, err := ParseDiffString(diff)
+	require.NoError(t, err)
+	for _, finding := range DefaultRuleEngine().Run(files) {
+		if finding.RuleID == "TEST_MISSING" {
+			require.Equal(t, 4, finding.Line)
+			return
+		}
+	}
+	require.Fail(t, "expected TEST_MISSING finding")
+}

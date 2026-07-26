@@ -223,7 +223,11 @@ func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 		return nil
 	}
 
-	var exportedFuncs []string
+	type exportedFunc struct {
+		name string
+		line int
+	}
+	var exportedFuncs []exportedFunc
 	for _, hunk := range file.Hunks {
 		for _, line := range hunk.Lines {
 			if line.Type != LineAdded {
@@ -231,10 +235,10 @@ func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 			}
 			content := strings.TrimSpace(line.Content)
 			if m := reExportedFunc.FindStringSubmatch(content); m != nil {
-				exportedFuncs = append(exportedFuncs, m[1])
+				exportedFuncs = append(exportedFuncs, exportedFunc{name: m[1], line: line.Number})
 			}
 			if m := reExportedMethod.FindStringSubmatch(content); m != nil {
-				exportedFuncs = append(exportedFuncs, m[1])
+				exportedFuncs = append(exportedFuncs, exportedFunc{name: m[1], line: line.Number})
 			}
 		}
 	}
@@ -249,10 +253,15 @@ func (r *TestMissingRule) CheckFile(file DiffFile, files []DiffFile) []Finding {
 		}
 	}
 
+	names := make([]string, len(exportedFuncs))
+	for i, exported := range exportedFuncs {
+		names[i] = exported.name
+	}
 	return []Finding{{
 		Severity: SeverityLow,
+		Line:     exportedFuncs[0].line,
 		Title:    "New exported functions without tests",
-		Evidence: "Exported functions: " + strings.Join(exportedFuncs, ", "),
+		Evidence: "Exported functions: " + strings.Join(names, ", "),
 		Recommendation: "Add unit tests for new exported functions. " +
 			"Create a " + strings.TrimSuffix(file.Path, ".go") + "_test.go file.",
 		Confidence: 0.4, // Low confidence → goes to warnings
