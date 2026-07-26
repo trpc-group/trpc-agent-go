@@ -391,7 +391,7 @@ func TestReviewPermissionPolicyAllowsOrdinaryWorkspaceCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(snapshot.PermissionDecisions) != 1 ||
-		snapshot.PermissionDecisions[0].Decision != "allow" {
+		snapshot.PermissionDecisions[0].Decision != string(tool.PermissionActionAllow) {
 		t.Fatalf("permission audit = %#v, want one allow", snapshot.PermissionDecisions)
 	}
 	if len(snapshot.SandboxRuns) != 0 || len(governance.started) != 1 {
@@ -592,10 +592,10 @@ func TestBuildMonitoringSummaryUsesDurableFactsOnly(t *testing.T) {
 	snapshot := store.ReviewSnapshot{
 		Task: store.ReviewTaskRecord{StartedAt: started, FinishedAt: finished},
 		PermissionDecisions: []store.PermissionDecisionRecord{
-			{DecisionKind: "tool_permission", Decision: "allow", ToolCallID: "a"},
-			{DecisionKind: "tool_permission", Decision: "ask", ToolCallID: "b"},
-			{DecisionKind: "permission_request", Decision: "allow", ToolCallID: "c"},
-			{DecisionKind: "tool_permission", Decision: "deny", ToolCallID: "d"},
+			{DecisionKind: decisionKindToolPermission, Decision: string(tool.PermissionActionAllow), ToolCallID: "a"},
+			{DecisionKind: decisionKindToolPermission, Decision: string(tool.PermissionActionAsk), ToolCallID: "b"},
+			{DecisionKind: decisionKindPermissionRequest, Decision: string(tool.PermissionActionAllow), ToolCallID: "c"},
+			{DecisionKind: decisionKindToolPermission, Decision: string(tool.PermissionActionDeny), ToolCallID: "d"},
 		},
 		SandboxRuns: []store.SandboxRunRecord{
 			{Status: "succeeded", Duration: time.Second},

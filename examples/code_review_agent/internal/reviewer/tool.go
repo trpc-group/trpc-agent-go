@@ -26,9 +26,16 @@ const (
 )
 
 const (
-	permissionStatusGranted        = "granted"
-	permissionStatusDenied         = "denied"
-	permissionStatusApprovalNeeded = "approval_required"
+	// permissionStatusGranted is this example's request_tool_permission success
+	// status. It is intentionally distinct from framework PermissionAction
+	// values so Agent retry logic can key off the permission tool result.
+	permissionStatusGranted = "granted"
+)
+
+// Framework permission result statuses reused by request_tool_permission.
+const (
+	permissionStatusDenied         = tool.PermissionResultStatusDenied
+	permissionStatusApprovalNeeded = tool.PermissionResultStatusApprovalRequired
 )
 
 func requestToolPermissionInputSchema() *tool.Schema {
@@ -112,9 +119,7 @@ func (g *governedExecution) requestToolPermission(
 		return requestToolPermissionOutput{}, fmt.Errorf("encode target_arguments: %w", err)
 	}
 	if targetTool == workspaceExecToolName {
-		if _, denyReason, err := validateWorkspacePolicy(targetArguments); err != nil {
-			return requestToolPermissionOutput{}, err
-		} else if denyReason != "" {
+		if _, denyReason := validateWorkspacePolicy(targetArguments); denyReason != "" {
 			return requestToolPermissionOutput{}, fmt.Errorf("%s", denyReason)
 		}
 	}
@@ -181,7 +186,7 @@ func (g *governedExecution) recordPermissionRequest(
 	}
 	return g.recorder.RecordPermissionDecision(ctx, taskID, store.PermissionDecisionRecord{
 		ToolCallID:     toolCallID,
-		DecisionKind:   "permission_request",
+		DecisionKind:   decisionKindPermissionRequest,
 		Operation:      targetTool,
 		ToolName:       targetTool,
 		CommandPreview: string(targetArguments),

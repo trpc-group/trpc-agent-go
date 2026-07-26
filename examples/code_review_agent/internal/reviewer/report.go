@@ -20,6 +20,7 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
@@ -263,11 +264,12 @@ func buildMonitoringSummary(
 		summary.TotalDurationMS = end.Sub(snapshot.Task.StartedAt).Milliseconds()
 	}
 	for _, decision := range snapshot.PermissionDecisions {
-		if decision.DecisionKind != "tool_permission" {
+		if decision.DecisionKind != decisionKindToolPermission {
 			continue
 		}
 		summary.ToolCallCount++
-		if decision.Decision == "ask" || decision.Decision == "deny" {
+		if decision.Decision == string(tool.PermissionActionAsk) ||
+			decision.Decision == string(tool.PermissionActionDeny) {
 			summary.PermissionInterceptionCount++
 		}
 	}
@@ -392,7 +394,8 @@ func renderGovernanceSection(builder *strings.Builder, decisions []reportPermiss
 	builder.WriteString("## Governance Interceptions\n\n")
 	intercepted := make(map[string]bool)
 	for index, decision := range decisions {
-		if decision.Decision != "ask" && decision.Decision != "deny" {
+		if decision.Decision != string(tool.PermissionActionAsk) &&
+			decision.Decision != string(tool.PermissionActionDeny) {
 			continue
 		}
 		key := decision.ToolCallID

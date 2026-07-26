@@ -20,13 +20,18 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const modelName = "fake-model"
 
 const (
-	skillLoadTool             = "skill_load"
-	workspaceExecTool         = "workspace_exec"
+	// Framework skill/workspace tool names are not exported as package-level
+	// constants; these aliases keep the deterministic protocol in one place.
+	skillLoadTool     = "skill_load"
+	workspaceExecTool = "workspace_exec"
+	// requestToolPermissionTool and submitResultsTool are this example's
+	// business tools and share names with the reviewer package.
 	requestToolPermissionTool = "request_tool_permission"
 	submitResultsTool         = "submit_review_results"
 )
@@ -372,7 +377,7 @@ func approvalRequired(content string) bool {
 		Status string `json:"status"`
 	}
 	return json.Unmarshal([]byte(content), &result) == nil &&
-		result.Status == "approval_required"
+		result.Status == tool.PermissionResultStatusApprovalRequired
 }
 
 func permissionGranted(content string) bool {

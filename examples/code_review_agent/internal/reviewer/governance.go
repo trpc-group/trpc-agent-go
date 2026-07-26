@@ -27,21 +27,32 @@ import (
 )
 
 const (
+	// workspaceExecToolName matches tool/workspaceexec.Declaration Name.
+	// That package does not export a name constant.
 	workspaceExecToolName = "workspace_exec"
 	reviewChecksCommand   = "run-go-checks.sh"
 
+	// workspaceTimeoutBudget matches the framework workspace_exec default
+	// timeout. The framework value is unexported.
 	workspaceTimeoutBudget = 5 * time.Minute
 
-	denyEmptyCommand                  = "workspace_exec command must be a non-empty string"
-	denyEnvKey                        = "workspace_exec env key is not allowed"
-	denyEnvValueType                  = "workspace_exec env value must be a string"
-	denyEnvCGOValue                   = "workspace_exec CGO_ENABLED must be 0 or 1"
-	denyTimeoutNegative               = "workspace_exec timeout must not be negative"
-	denyTimeoutBudget                 = "workspace_exec timeout exceeds the five-minute budget"
-	denyArgsNotObject                 = "workspace_exec arguments must be a JSON object"
-	denyArgsTrailingData              = "workspace_exec arguments contain trailing data"
-	denyArgsInvalidJSON               = "workspace_exec arguments must be valid JSON"
-	askPermissionReason               = "Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted."
+	// Example-owned durable decision kinds. PermissionDecision.Decision reuses
+	// framework tool.PermissionAction values.
+	decisionKindToolPermission    = "tool_permission"
+	decisionKindPermissionRequest = "permission_request"
+
+	denyEmptyCommand     = "workspace_exec command must be a non-empty string"
+	denyInvalidCWD       = "workspace_exec cwd must be a string"
+	denyEnvKey           = "workspace_exec env key is not allowed"
+	denyEnvValueType     = "workspace_exec env value must be a string"
+	denyEnvCGOValue      = "workspace_exec CGO_ENABLED must be 0 or 1"
+	denyTimeoutNegative  = "workspace_exec timeout must not be negative"
+	denyTimeoutBudget    = "workspace_exec timeout exceeds the five-minute budget"
+	denyArgsNotObject    = "workspace_exec arguments must be a JSON object"
+	denyArgsTrailingData = "workspace_exec arguments contain trailing data"
+	denyArgsInvalidJSON  = "workspace_exec arguments must be valid JSON"
+	askPermissionReason  = "Call request_tool_permission with this target tool and its exact arguments, then retry the target tool only if permission is granted."
+
 	defaultToolOutputLimitBytes int64 = 16 * 1024
 )
 
@@ -159,11 +170,9 @@ func (g *governedExecution) PermissionPolicy() tool.PermissionPolicy {
 
 		decision := tool.AllowPermission()
 		commandPreview := string(req.Arguments)
+		command := ""
 		if req.ToolName == workspaceExecToolName {
-			fields, denyReason, err := validateWorkspacePolicy(req.Arguments)
-			if err != nil {
-				return tool.PermissionDecision{}, err
-			}
+			fields, denyReason := validateWorkspacePolicy(req.Arguments)
 			if denyReason != "" {
 				decision = tool.DenyPermission(denyReason)
 				if err := g.recordToolPermission(ctx, taskID, req, commandPreview, decision); err != nil {
@@ -171,19 +180,21 @@ func (g *governedExecution) PermissionPolicy() tool.PermissionPolicy {
 				}
 				return decision, nil
 			}
-			if fields.Command != "" {
-				commandPreview = fields.Command
+			command = fields.Command
+			if command != "" {
+				commandPreview = command
 			}
 		}
 
-		needsApproval, err := requiresApproval(req, req.Arguments, g.markers)
-		if err != nil {
-			return tool.PermissionDecision{}, err
-		}
-		if needsApproval {
+		if requiresApproval(req, command, g.markers) {
 			identity, err := approvalIdentity(req.ToolName, req.Arguments)
 			if err != nil {
-				return tool.PermissionDecision{}, err
+				// Invalid grant identity is a policy denial, not a silent skip.
+				decision = tool.DenyPermission(denyArgsInvalidJSON)
+				if recordErr := g.recordToolPermission(ctx, taskID, req, commandPreview, decision); recordErr != nil {
+					return tool.PermissionDecision{}, recordErr
+				}
+				return decision, nil
 			}
 			if g.hasGrant(req.ToolName, identity) {
 				decision = tool.AllowPermission()
@@ -216,7 +227,7 @@ func (g *governedExecution) recordToolPermission(
 ) error {
 	return g.recorder.RecordPermissionDecision(ctx, taskID, store.PermissionDecisionRecord{
 		ToolCallID:     req.ToolCallID,
-		DecisionKind:   "tool_permission",
+		DecisionKind:   decisionKindToolPermission,
 		Operation:      req.ToolName,
 		ToolName:       req.ToolName,
 		CommandPreview: command,
@@ -256,27 +267,20 @@ func (g *governedExecution) Callbacks() *tool.Callbacks {
 }
 
 // requiresApproval is the only risk-classification entry point. Ordinary tools
-// use framework metadata; workspace_exec additionally checks configured markers.
+// use framework metadata; workspace_exec uses the already-validated command
+// against configured markers. Policy denials are handled before this call.
 func requiresApproval(
 	req *tool.PermissionRequest,
-	arguments []byte,
+	command string,
 	markers []string,
-) (bool, error) {
+) bool {
 	if req.ToolName != workspaceExecToolName {
-		return req.Metadata.Destructive, nil
+		return req.Metadata.Destructive
 	}
 	if req.Metadata.Destructive {
-		return true, nil
+		return true
 	}
-	fields, denyReason, err := validateWorkspacePolicy(arguments)
-	if err != nil {
-		return false, err
-	}
-	if denyReason != "" {
-		// Policy denials are handled before risk classification.
-		return false, nil
-	}
-	return matchesRiskMarker(fields.Command, markers), nil
+	return matchesRiskMarker(command, markers)
 }
 
 func matchesRiskMarker(command string, markers []string) bool {
@@ -311,47 +315,49 @@ type workspacePolicyFields struct {
 
 // validateWorkspacePolicy enforces this example's non-overridable workspace
 // constraints without rewriting arguments or shadowing the full framework schema.
-func validateWorkspacePolicy(arguments []byte) (workspacePolicyFields, string, error) {
+// All failures return a stable deny reason so PermissionPolicy can persist a
+// tool_permission deny without skipping the audit row.
+func validateWorkspacePolicy(arguments []byte) (workspacePolicyFields, string) {
 	if len(bytes.TrimSpace(arguments)) == 0 {
-		return workspacePolicyFields{}, denyArgsNotObject, nil
+		return workspacePolicyFields{}, denyArgsNotObject
 	}
 	decoder := json.NewDecoder(bytes.NewReader(arguments))
 	decoder.UseNumber()
 	var raw map[string]json.RawMessage
 	if err := decoder.Decode(&raw); err != nil {
-		return workspacePolicyFields{}, "", fmt.Errorf("%s: %w", denyArgsInvalidJSON, err)
+		return workspacePolicyFields{}, denyArgsInvalidJSON
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return workspacePolicyFields{}, denyArgsTrailingData, nil
+			return workspacePolicyFields{}, denyArgsTrailingData
 		}
-		return workspacePolicyFields{}, "", fmt.Errorf("%s: %w", denyArgsInvalidJSON, err)
+		return workspacePolicyFields{}, denyArgsInvalidJSON
 	}
 
 	var fields workspacePolicyFields
 	if commandRaw, ok := raw["command"]; ok {
 		if err := json.Unmarshal(commandRaw, &fields.Command); err != nil {
-			return workspacePolicyFields{}, denyEmptyCommand, nil
+			return workspacePolicyFields{}, denyEmptyCommand
 		}
 	}
 	if strings.TrimSpace(fields.Command) == "" {
-		return workspacePolicyFields{}, denyEmptyCommand, nil
+		return workspacePolicyFields{}, denyEmptyCommand
 	}
 	if cwdRaw, ok := raw["cwd"]; ok && len(cwdRaw) > 0 && string(cwdRaw) != "null" {
 		if err := json.Unmarshal(cwdRaw, &fields.CWD); err != nil {
-			return workspacePolicyFields{}, denyEmptyCommand, nil
+			return workspacePolicyFields{}, denyInvalidCWD
 		}
 	}
 	if envRaw, ok := raw["env"]; ok && len(envRaw) > 0 && string(envRaw) != "null" {
 		if reason := validateWorkspaceEnv(envRaw); reason != "" {
-			return fields, reason, nil
+			return fields, reason
 		}
 	}
 	if reason := validateWorkspaceTimeout(raw); reason != "" {
-		return fields, reason, nil
+		return fields, reason
 	}
-	return fields, "", nil
+	return fields, ""
 }
 
 func validateWorkspaceEnv(envRaw json.RawMessage) string {

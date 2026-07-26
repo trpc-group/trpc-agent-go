@@ -55,17 +55,14 @@ func (g *governedExecution) governWorkspaceExecResult(
 	if g == nil {
 		return nil, errors.New("governed execution is not configured")
 	}
-	fields, _, err := validateWorkspacePolicy(args.Arguments)
-	if err != nil {
-		// AfterTool receives the final framework arguments. Decode failures
-		// are audit-path errors rather than policy denials.
-		fields = workspacePolicyFields{}
+	fields, denyReason := validateWorkspacePolicy(args.Arguments)
+	if denyReason != "" || fields.Command == "" {
+		// AfterTool still audits observed results for allowed calls. Fall back
+		// to best-effort field extraction when final arguments are incomplete.
 		if command, cwd := extractCommandAndCWD(args.Arguments); command != "" {
 			fields.Command = command
 			fields.CWD = cwd
 		}
-	} else if fields.Command == "" {
-		fields.Command, fields.CWD = extractCommandAndCWD(args.Arguments)
 	}
 
 	startedAt, finishedAt, found := g.finishExecution(args.ToolCallID)

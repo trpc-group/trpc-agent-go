@@ -131,12 +131,13 @@ func TestWorkspaceExactGrantIdentity(t *testing.T) {
 	identities := make(map[string]string)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			required, err := requiresApproval(&tool.PermissionRequest{
-				ToolName: workspaceExecToolName,
-			}, []byte(tt.arguments), riskMarkers)
-			if err != nil {
-				t.Fatal(err)
+			fields, denyReason := validateWorkspacePolicy([]byte(tt.arguments))
+			if denyReason != "" {
+				t.Fatalf("unexpected policy deny: %s", denyReason)
 			}
+			required := requiresApproval(&tool.PermissionRequest{
+				ToolName: workspaceExecToolName,
+			}, fields.Command, riskMarkers)
 			if !required {
 				t.Fatal("expected risk marker approval")
 			}
@@ -254,13 +255,25 @@ func TestWorkspacePolicyValidation(t *testing.T) {
 			arguments:  `{"command":"go test ./..."}{}`,
 			denyReason: denyArgsTrailingData,
 		},
+		{
+			name:       "invalid json",
+			arguments:  `{command`,
+			denyReason: denyArgsInvalidJSON,
+		},
+		{
+			name:       "non-object json",
+			arguments:  `["go test"]`,
+			denyReason: denyArgsInvalidJSON,
+		},
+		{
+			name:       "invalid cwd type",
+			arguments:  `{"command":"go test ./...","cwd":123}`,
+			denyReason: denyInvalidCWD,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, reason, err := validateWorkspacePolicy([]byte(tt.arguments))
-			if err != nil {
-				t.Fatal(err)
-			}
+			_, reason := validateWorkspacePolicy([]byte(tt.arguments))
 			if reason != tt.denyReason {
 				t.Fatalf("deny reason = %q, want %q", reason, tt.denyReason)
 			}
@@ -269,32 +282,54 @@ func TestWorkspacePolicyValidation(t *testing.T) {
 }
 
 func TestWorkspacePolicyDenyIsPersistedAndDoesNotStartSandbox(t *testing.T) {
-	ctx, governance := openGovernedTask(t, "policy-deny")
-	decision, err := governance.PermissionPolicy().CheckToolPermission(ctx, &tool.PermissionRequest{
-		ToolName:   workspaceExecToolName,
-		ToolCallID: "deny-call",
-		Arguments:  []byte(`{"command":"go test ./...","env":{"PATH":"/tmp"}}`),
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		arguments  string
+		denyReason string
+	}{
+		{
+			name:       "disallowed env",
+			arguments:  `{"command":"go test ./...","env":{"PATH":"/tmp"}}`,
+			denyReason: denyEnvKey,
+		},
+		{
+			name:       "invalid json",
+			arguments:  `{not-json`,
+			denyReason: denyArgsInvalidJSON,
+		},
 	}
-	if decision.Action != tool.PermissionActionDeny || decision.Reason != denyEnvKey {
-		t.Fatalf("decision = %#v", decision)
-	}
-	if len(governance.started) != 0 {
-		t.Fatalf("started executions = %#v", governance.started)
-	}
-	snapshot, err := governance.recorder.Snapshot(ctx, "policy-deny")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.PermissionDecisions) != 1 ||
-		snapshot.PermissionDecisions[0].Decision != "deny" ||
-		snapshot.PermissionDecisions[0].Reason != denyEnvKey {
-		t.Fatalf("permission audit = %#v", snapshot.PermissionDecisions)
-	}
-	if len(snapshot.SandboxRuns) != 0 {
-		t.Fatalf("sandbox runs = %#v", snapshot.SandboxRuns)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			taskID := "policy-deny-" + tt.name
+			ctx, governance := openGovernedTask(t, taskID)
+			decision, err := governance.PermissionPolicy().CheckToolPermission(ctx, &tool.PermissionRequest{
+				ToolName:   workspaceExecToolName,
+				ToolCallID: "deny-call",
+				Arguments:  []byte(tt.arguments),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tool.PermissionActionDeny || decision.Reason != tt.denyReason {
+				t.Fatalf("decision = %#v", decision)
+			}
+			if len(governance.started) != 0 {
+				t.Fatalf("started executions = %#v", governance.started)
+			}
+			snapshot, err := governance.recorder.Snapshot(ctx, taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snapshot.PermissionDecisions) != 1 ||
+				snapshot.PermissionDecisions[0].DecisionKind != decisionKindToolPermission ||
+				snapshot.PermissionDecisions[0].Decision != string(tool.PermissionActionDeny) ||
+				snapshot.PermissionDecisions[0].Reason != tt.denyReason {
+				t.Fatalf("permission audit = %#v", snapshot.PermissionDecisions)
+			}
+			if len(snapshot.SandboxRuns) != 0 {
+				t.Fatalf("sandbox runs = %#v", snapshot.SandboxRuns)
+			}
+		})
 	}
 }
 
@@ -409,7 +444,7 @@ func TestRequestToolPermissionDecisions(t *testing.T) {
 			}
 			recordedPermission := false
 			for _, recorded := range snapshot.PermissionDecisions {
-				if recorded.DecisionKind == "permission_request" {
+				if recorded.DecisionKind == decisionKindPermissionRequest {
 					recordedPermission = true
 					if recorded.Reason != "Collect observed test and vet evidence." {
 						t.Fatalf("recorded Reason = %q", recorded.Reason)
