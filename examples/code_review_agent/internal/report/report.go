@@ -316,31 +316,20 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 			CreatedAt: now.UTC(),
 		},
 	}
+	mdBytes := Markdown(r)
+	mdSum := sha256.Sum256(mdBytes)
+	records[1].SHA256 = hex.EncodeToString(mdSum[:])
 	if len(r.Artifacts) == 0 {
-		r.Artifacts = []review.ArtifactRecord{
-			{
-				ID:        records[0].ID,
-				TaskID:    records[0].TaskID,
-				Kind:      records[0].Kind,
-				Path:      filepath.Base(records[0].Path),
-				MimeType:  records[0].MimeType,
-				CreatedAt: records[0].CreatedAt,
-			},
-			{
-				ID:        records[1].ID,
-				TaskID:    records[1].TaskID,
-				Kind:      records[1].Kind,
-				Path:      filepath.Base(records[1].Path),
-				MimeType:  records[1].MimeType,
-				CreatedAt: records[1].CreatedAt,
-			},
-		}
+		r.Artifacts = cloneArtifactRecords(records)
+		// The JSON report cannot embed its own checksum without changing that
+		// checksum. Keep the JSON checksum external in the returned/store record,
+		// while embedding the stable Markdown checksum and matching paths.
+		r.Artifacts[0].SHA256 = ""
 	}
 	jsonBytes, err := JSON(r)
 	if err != nil {
 		return nil, err
 	}
-	mdBytes := Markdown(r)
 	artifacts := []struct {
 		index int
 		data  []byte
@@ -353,10 +342,18 @@ func Write(outDir string, r review.Report, now time.Time) ([]review.ArtifactReco
 		if err := os.WriteFile(record.Path, artifact.data, 0o600); err != nil {
 			return nil, fmt.Errorf("write %s: %w", filepath.Base(record.Path), err)
 		}
-		sum := sha256.Sum256(artifact.data)
-		record.SHA256 = hex.EncodeToString(sum[:])
+		if record.SHA256 == "" {
+			sum := sha256.Sum256(artifact.data)
+			record.SHA256 = hex.EncodeToString(sum[:])
+		}
 	}
 	return records, nil
+}
+
+func cloneArtifactRecords(records []review.ArtifactRecord) []review.ArtifactRecord {
+	out := make([]review.ArtifactRecord, len(records))
+	copy(out, records)
+	return out
 }
 
 func safeTaskID(taskID string) string {

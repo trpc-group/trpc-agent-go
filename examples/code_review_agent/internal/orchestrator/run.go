@@ -51,9 +51,13 @@ const (
 	containerCPULimit       = int64(1_000_000_000)
 	containerPIDsLimit      = int64(128)
 	containerStorageLimit   = "512m"
+	containerUser           = "65532:65532"
 	containerSandboxImage   = "golang:1.24"
 	containerGoBuildCache   = "/tmp/go-build"
 	containerGoModCache     = "/go/pkg/mod"
+	dependencyPrepTimeout   = 2 * time.Minute
+	dependencyPrepMaxBytes  = int64(512 << 20)
+	dependencyPrepMaxOutput = 32 << 10
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
@@ -902,6 +906,7 @@ func newWorkspaceRuntime(ctx context.Context, runtimeName string, taskID string,
 		Workspace:   ws,
 		Cwd:         workspace.runtimeCwd(runtimeName),
 		Timeout:     timeout,
+		OutputLimit: defaultMaxSandboxOutput,
 		Env:         workspaceRuntimeEnv(runtimeName),
 		TerminateFn: func(context.Context) { cleanup() },
 	}, cleanup, nil
@@ -957,6 +962,14 @@ func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), 
 			cleanup()
 			return "", nil, fmt.Errorf("stat review snapshot file %s: %w", file, err)
 		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, readErr := os.Readlink(src)
+			cleanup()
+			if readErr != nil {
+				return "", nil, fmt.Errorf("read review snapshot symlink %s: %w", file, readErr)
+			}
+			return "", nil, fmt.Errorf("unsupported review snapshot symlink %q -> %q", file, target)
+		}
 		if !info.Mode().IsRegular() {
 			continue
 		}
@@ -988,22 +1001,118 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	cacheRoot := filepath.Join(snapshotRoot, ".gopath")
 	modCache := filepath.Join(snapshotRoot, ".gomodcache")
 	buildCache := filepath.Join(snapshotRoot, ".gocache")
-	for _, dir := range []string{cacheRoot, modCache, buildCache} {
+	homeDir := filepath.Join(snapshotRoot, ".home")
+	tmpDir := filepath.Join(snapshotRoot, ".tmp")
+	for _, dir := range []string{cacheRoot, modCache, buildCache, homeDir, tmpDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create sandbox dependency cache: %w", err)
 		}
 	}
-	cmd := exec.CommandContext(ctx, "go", "mod", "download")
+	prepCtx, cancel := context.WithTimeout(ctx, dependencyPrepTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(prepCtx, "go", "mod", "download")
 	cmd.Dir = moduleDir
-	cmd.Env = append(os.Environ(),
+	cmd.Env = sandboxDependencyEnv(snapshotRoot, cacheRoot, modCache, buildCache, homeDir, tmpDir)
+	var output limitedBuffer
+	output.limit = dependencyPrepMaxOutput
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	if err := cmd.Run(); err != nil {
+		if errors.Is(prepCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("prepare sandbox dependencies timed out after %s", dependencyPrepTimeout)
+		}
+		return fmt.Errorf("prepare sandbox dependencies: %w: %s", err, redact.Text(strings.TrimSpace(output.String())).Text)
+	}
+	if err := ensureDependencyCacheWithinLimit([]string{cacheRoot, modCache, buildCache}, dependencyPrepMaxBytes); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sandboxDependencyEnv(snapshotRoot string, cacheRoot string, modCache string, buildCache string, homeDir string, tmpDir string) []string {
+	env := make([]string, 0, 18)
+	addHostEnv := func(key string) {
+		if value := os.Getenv(key); value != "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	for _, key := range []string{"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT"} {
+		addHostEnv(key)
+	}
+	env = append(env,
+		"HOME="+homeDir,
+		"USERPROFILE="+homeDir,
+		"TMPDIR="+tmpDir,
+		"TEMP="+tmpDir,
+		"TMP="+tmpDir,
 		"GOPATH="+cacheRoot,
 		"GOMODCACHE="+modCache,
 		"GOCACHE="+buildCache,
+		"GOPROXY=https://proxy.golang.org,direct",
+		"GOSUMDB=sum.golang.org",
+		"GONOSUMDB=",
+		"GOPRIVATE=",
+		"GOTOOLCHAIN=local",
+		"GOFLAGS=-mod=mod",
 	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("prepare sandbox dependencies: %w: %s", err, redact.Text(strings.TrimSpace(stderr.String())).Text)
+	_ = snapshotRoot
+	return env
+}
+
+type limitedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	remaining := b.limit - b.buf.Len()
+	if remaining > 0 {
+		if len(p) <= remaining {
+			_, _ = b.buf.Write(p)
+		} else {
+			_, _ = b.buf.Write(p[:remaining])
+			b.truncated = true
+		}
+	} else if len(p) > 0 {
+		b.truncated = true
+	}
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string {
+	if !b.truncated {
+		return b.buf.String()
+	}
+	return b.buf.String() + "\n[TRUNCATED]"
+}
+
+func ensureDependencyCacheWithinLimit(roots []string, limit int64) error {
+	var total int64
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if entry.IsDir() {
+				return nil
+			}
+			info, err := entry.Info()
+			if err != nil {
+				return err
+			}
+			total += info.Size()
+			if limit > 0 && total > limit {
+				return fmt.Errorf("sandbox dependency cache exceeded %d bytes", limit)
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("measure sandbox dependency cache: %w", err)
+		}
 	}
 	return nil
 }
@@ -1053,6 +1162,7 @@ func failedTaskContext(ctx context.Context) (context.Context, context.CancelFunc
 func containerConfig() tcontainer.Config {
 	return tcontainer.Config{
 		Image:      containerSandboxImage,
+		User:       containerUser,
 		WorkingDir: "/",
 		Cmd:        []string{"tail", "-f", "/dev/null"},
 		Tty:        true,
@@ -1066,6 +1176,8 @@ func containerHostConfig() tcontainer.HostConfig {
 		AutoRemove:  true,
 		Privileged:  false,
 		NetworkMode: "none",
+		CapDrop:     []string{"ALL"},
+		SecurityOpt: []string{"no-new-privileges:true"},
 		Resources: tcontainer.Resources{
 			Memory:    int64(512 << 20),
 			NanoCPUs:  containerCPULimit,
@@ -1081,31 +1193,29 @@ func containerBindMounts(repoRoot string) []bindMount {
 }
 
 func workspaceRuntimeEnv(runtimeName string) map[string]string {
-	env := map[string]string{
-		"GOPROXY":     os.Getenv("GOPROXY"),
-		"GOSUMDB":     os.Getenv("GOSUMDB"),
-		"GOTOOLCHAIN": os.Getenv("GOTOOLCHAIN"),
-		"GOFLAGS":     os.Getenv("GOFLAGS"),
-		"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
-	}
 	if runtimeName == "local" {
+		env := map[string]string{
+			"GOPROXY":     os.Getenv("GOPROXY"),
+			"GOSUMDB":     os.Getenv("GOSUMDB"),
+			"GOTOOLCHAIN": os.Getenv("GOTOOLCHAIN"),
+			"GOFLAGS":     os.Getenv("GOFLAGS"),
+			"CGO_ENABLED": os.Getenv("CGO_ENABLED"),
+		}
 		env["HOME"] = os.Getenv("HOME")
 		env["GOCACHE"] = os.Getenv("GOCACHE")
 		env["GOMODCACHE"] = os.Getenv("GOMODCACHE")
 		env["GOPATH"] = os.Getenv("GOPATH")
-	} else {
-		env["HOME"] = "/tmp"
-		env["GOPATH"] = "/go"
-		env["GOMODCACHE"] = containerGoModCache
-		env["GOCACHE"] = containerGoBuildCache
-		setDefaultEnv(env, "GOTOOLCHAIN", "local")
+		return env
 	}
-	return env
-}
-
-func setDefaultEnv(env map[string]string, key string, value string) {
-	if env[key] == "" {
-		env[key] = value
+	return map[string]string{
+		"HOME":        "/tmp",
+		"GOPATH":      "/go",
+		"GOMODCACHE":  containerGoModCache,
+		"GOCACHE":     containerGoBuildCache,
+		"GOPROXY":     "off",
+		"GOSUMDB":     "off",
+		"GOTOOLCHAIN": "local",
+		"GOFLAGS":     "-mod=mod",
 	}
 }
 
@@ -1142,10 +1252,17 @@ func hasExactModuleDecl(raw string, moduleDecl string) bool {
 }
 
 func statusFor(findings []review.Finding, runs []review.SandboxRun) string {
+	executedRuns := 0
 	for _, run := range runs {
 		if run.Status == sandboxrun.StatusFailed || run.Status == sandboxrun.StatusUnavailable {
 			return review.TaskStatusFailed
 		}
+		if run.Status != sandboxrun.StatusSkipped {
+			executedRuns++
+		}
+	}
+	if len(runs) > 0 && executedRuns == 0 {
+		return review.TaskStatusFailed
 	}
 	for _, finding := range findings {
 		if finding.Status == review.FindingStatusNeedsHumanReview {
@@ -1165,7 +1282,20 @@ func conclusionFor(status string, findings []review.Finding, runs []review.Sandb
 	if len(runs) == 0 {
 		return "no_sandbox_run"
 	}
+	if executedSandboxRunCount(runs) == 0 {
+		return "no_sandbox_run"
+	}
 	return "passed"
+}
+
+func executedSandboxRunCount(runs []review.SandboxRun) int {
+	count := 0
+	for _, run := range runs {
+		if run.Status != sandboxrun.StatusSkipped && run.Status != sandboxrun.StatusUnavailable {
+			count++
+		}
+	}
+	return count
 }
 
 func artifactPaths(artifacts []review.ArtifactRecord) (string, string) {

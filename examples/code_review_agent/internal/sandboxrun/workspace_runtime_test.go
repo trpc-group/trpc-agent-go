@@ -11,6 +11,7 @@ package sandboxrun
 import (
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,33 @@ func TestWorkspaceRuntimeBuildsCleanShellSpec(t *testing.T) {
 	}
 	if _, ok := runner.spec.Env["OPENAI_API_KEY"]; ok {
 		t.Fatalf("OPENAI_API_KEY unexpectedly passed through env: %#v", runner.spec.Env)
+	}
+}
+
+func TestWorkspaceRuntimeWrapsCommandWithBoundedCapture(t *testing.T) {
+	runner := &recordingRunner{}
+	rt := WorkspaceRuntime{
+		RuntimeName: "test-runtime",
+		Engine:      codeexecutor.NewEngine(nil, nil, runner),
+		Workspace:   codeexecutor.Workspace{ID: "ws-1"},
+		OutputLimit: 12,
+	}
+
+	_, err := rt.Run(context.Background(), "printf '%s' 'hello'")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if runner.spec.Cmd != "sh" {
+		t.Fatalf("Cmd = %q, want sh", runner.spec.Cmd)
+	}
+	if len(runner.spec.Args) != 2 || runner.spec.Args[0] != "-c" {
+		t.Fatalf("Args = %#v, want shell invocation", runner.spec.Args)
+	}
+	wrapper := runner.spec.Args[1]
+	for _, want := range []string{"mktemp", "dd if=", "count=12", "[TRUNCATED]", "sh -c"} {
+		if !strings.Contains(wrapper, want) {
+			t.Fatalf("bounded wrapper missing %q:\n%s", want, wrapper)
+		}
 	}
 }
 

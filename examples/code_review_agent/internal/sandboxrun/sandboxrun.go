@@ -65,6 +65,7 @@ type WorkspaceRuntime struct {
 	Cwd         string
 	Env         map[string]string
 	Timeout     time.Duration
+	OutputLimit int
 	TerminateFn func(context.Context)
 }
 
@@ -79,9 +80,13 @@ func (r WorkspaceRuntime) Run(ctx context.Context, command string) (Result, erro
 	if r.Engine == nil || r.Engine.Runner() == nil {
 		return Result{}, fmt.Errorf("workspace runtime %q is unavailable", r.Name())
 	}
+	runCommand := command
+	if r.OutputLimit > 0 {
+		runCommand = boundedShellCommand(command, r.OutputLimit)
+	}
 	spec := codeexecutor.RunProgramSpec{
-		Cmd:      shellCommand(command),
-		Args:     shellArgs(command),
+		Cmd:      shellCommand(runCommand),
+		Args:     shellArgs(runCommand),
 		Env:      r.runEnv(),
 		CleanEnv: true,
 		Cwd:      r.Cwd,
@@ -245,6 +250,36 @@ func shellArgs(command string) []string {
 		return []string{"-c", "true"}
 	}
 	return []string{"-c", command}
+}
+
+func boundedShellCommand(command string, limit int) string {
+	if strings.TrimSpace(command) == "" {
+		command = "true"
+	}
+	if limit <= 0 {
+		return command
+	}
+	return fmt.Sprintf(`out=$(mktemp) || exit 125
+err=$(mktemp) || { rm -f "$out"; exit 125; }
+trap 'rm -f "$out" "$err"' EXIT
+sh -c %s >"$out" 2>"$err"
+status=$?
+emit_limited() {
+	file="$1"
+	[ -s "$file" ] || return 0
+	dd if="$file" bs=1 count=%d 2>/dev/null
+	size=$(wc -c <"$file" | tr -d ' ')
+	if [ "$size" -gt %d ]; then
+		printf '\n[TRUNCATED]'
+	fi
+}
+emit_limited "$out"
+emit_limited "$err" >&2
+exit "$status"`, shellQuote(command), limit, limit)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func allowEnv(env map[string]string) map[string]string {
