@@ -27,17 +27,10 @@ import (
 )
 
 const (
-	// workspaceExecToolName matches tool/workspaceexec.Declaration Name.
-	// That package does not export a name constant.
 	workspaceExecToolName = "workspace_exec"
 	reviewChecksCommand   = "run-go-checks.sh"
-
-	// workspaceTimeoutBudget matches the framework workspace_exec default
-	// timeout. The framework value is unexported.
 	workspaceTimeoutBudget = 5 * time.Minute
 
-	// Example-owned durable decision kinds. PermissionDecision.Decision reuses
-	// framework tool.PermissionAction values.
 	decisionKindToolPermission    = "tool_permission"
 	decisionKindPermissionRequest = "permission_request"
 

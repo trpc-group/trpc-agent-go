@@ -26,14 +26,7 @@ const (
 )
 
 const (
-	// permissionStatusGranted is this example's request_tool_permission success
-	// status. It is intentionally distinct from framework PermissionAction
-	// values so Agent retry logic can key off the permission tool result.
-	permissionStatusGranted = "granted"
-)
-
-// Framework permission result statuses reused by request_tool_permission.
-const (
+	permissionStatusGranted        = "granted"
 	permissionStatusDenied         = tool.PermissionResultStatusDenied
 	permissionStatusApprovalNeeded = tool.PermissionResultStatusApprovalRequired
 )
@@ -195,9 +188,7 @@ func (g *governedExecution) recordPermissionRequest(
 	})
 }
 
-// newSubmitReviewResultsTool builds the business result-submission Tool. It is
-// intentionally separate from governed execution so grants and sandbox audit
-// cannot couple to result validation.
+// submit_review_results: result validation only, no execution grants.
 func newSubmitReviewResultsTool(recorder *reviewRecorder) tool.Tool {
 	return function.NewFunctionTool(
 		func(ctx context.Context, in submitReviewResultsInput) (submitReviewResultsOutput, error) {

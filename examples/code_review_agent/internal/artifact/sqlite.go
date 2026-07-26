@@ -20,10 +20,7 @@ import (
 	trpcartifact "trpc.group/trpc-go/trpc-agent-go/artifact"
 )
 
-// defaultArtifactMaxBytes is this example's per-artifact size cap. The framework
-// uses the same 64 MiB default for workspace artifact saves; the example keeps
-// an explicit local constant because framework-internal packages are not an
-// import surface for examples.
+// Per-artifact size limit (64 MiB).
 const defaultArtifactMaxBytes int64 = 64 * 1024 * 1024
 
 var _ trpcartifact.Service = (*sqliteArtifactService)(nil)

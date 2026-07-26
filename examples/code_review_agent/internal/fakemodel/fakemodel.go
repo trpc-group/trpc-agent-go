@@ -26,12 +26,8 @@ import (
 const modelName = "fake-model"
 
 const (
-	// Framework skill/workspace tool names are not exported as package-level
-	// constants; these aliases keep the deterministic protocol in one place.
-	skillLoadTool     = "skill_load"
-	workspaceExecTool = "workspace_exec"
-	// requestToolPermissionTool and submitResultsTool are this example's
-	// business tools and share names with the reviewer package.
+	skillLoadTool             = "skill_load"
+	workspaceExecTool         = "workspace_exec"
 	requestToolPermissionTool = "request_tool_permission"
 	submitResultsTool         = "submit_review_results"
 )
