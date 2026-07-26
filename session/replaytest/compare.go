@@ -361,6 +361,9 @@ func validateAllowedDiffRules(rules []AllowedDiffRule) error {
 		if strings.Contains(rule.Path, "*") {
 			return fmt.Errorf("allowed diff rule %d contains a wildcard path", i)
 		}
+		if rule.PathPrefix && rule.Path == "$" {
+			return fmt.Errorf("allowed diff rule %d uses a whole-snapshot path prefix", i)
+		}
 		if _, exists := seen[rule]; exists {
 			return fmt.Errorf("allowed diff rule %d is duplicated", i)
 		}

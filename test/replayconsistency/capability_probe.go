@@ -74,18 +74,22 @@ func runSessionPagingProbe(
 	if err != nil {
 		return failedProbe(result, fmt.Errorf("list all sessions: %w", err))
 	}
-	if err := validateProbeSessions(all, want); err != nil {
+	userKey := session.UserKey{AppName: fixture.appName, UserID: fixture.userID}
+	if err := validateProbeSessions(all, want, userKey); err != nil {
 		return failedProbe(result, err)
 	}
 	paged := make([]string, 0, len(want))
 	for offset := 0; offset < len(want); offset += probePageSize {
 		page, err := fixture.sessionService.ListSessions(
 			ctx,
-			session.UserKey{AppName: fixture.appName, UserID: fixture.userID},
+			userKey,
 			session.WithListSessionPage(offset, probePageSize),
 		)
 		if err != nil {
 			return failedProbe(result, fmt.Errorf("list session page at %d: %w", offset, err))
+		}
+		if err := validateProbeSessionScope(page, userKey); err != nil {
+			return failedProbe(result, fmt.Errorf("validate session page at %d: %w", offset, err))
 		}
 		pageIDs, err := sessionIDs(page)
 		if err != nil {
@@ -127,7 +131,7 @@ func runEventPagingProbe(
 	if err != nil {
 		return failedProbe(result, fmt.Errorf("get older event page: %w", err))
 	}
-	if err := validateEventPages(full, recent, older); err != nil {
+	if err := validateEventPages(full, recent, older, key); err != nil {
 		return failedProbe(result, err)
 	}
 	return result
@@ -212,9 +216,16 @@ func seedProbeSessions(ctx context.Context, fixture *replayFixture) ([]string, e
 	return want, nil
 }
 
-func validateProbeSessions(sessions []*session.Session, want []string) error {
+func validateProbeSessions(
+	sessions []*session.Session,
+	want []string,
+	key session.UserKey,
+) error {
 	if len(sessions) != len(want) {
 		return fmt.Errorf("unpaged session count = %d, want %d", len(sessions), len(want))
+	}
+	if err := validateProbeSessionScope(sessions, key); err != nil {
+		return fmt.Errorf("validate unpaged session scope: %w", err)
 	}
 	ids, err := sessionIDs(sessions)
 	if err != nil {
@@ -229,6 +240,21 @@ func validateProbeSessions(sessions []*session.Session, want []string) error {
 	}
 	if !reflect.DeepEqual(ids, want) {
 		return fmt.Errorf("unpaged session ids = %v, want %v", ids, want)
+	}
+	return nil
+}
+
+func validateProbeSessionScope(sessions []*session.Session, want session.UserKey) error {
+	for i, sess := range sessions {
+		if sess == nil {
+			return fmt.Errorf("session %d is nil", i)
+		}
+		if sess.AppName != want.AppName || sess.UserID != want.UserID {
+			return fmt.Errorf(
+				"session %q belongs to {%q %q}, want {%q %q}",
+				sess.ID, sess.AppName, sess.UserID, want.AppName, want.UserID,
+			)
+		}
 	}
 	return nil
 }
@@ -264,16 +290,32 @@ func seedProbeEvents(ctx context.Context, fixture *replayFixture) error {
 	return nil
 }
 
-func validateEventPages(full, recent, older *session.Session) error {
-	if full == nil || recent == nil || older == nil {
-		return errors.New("event pagination returned a nil session")
+func validateEventPages(
+	full, recent, older *session.Session,
+	key session.Key,
+) error {
+	for _, result := range []struct {
+		name string
+		sess *session.Session
+	}{
+		{name: "full", sess: full},
+		{name: "recent", sess: recent},
+		{name: "older", sess: older},
+	} {
+		if err := validatePhysicalSessionScope(result.sess, key); err != nil {
+			return fmt.Errorf("validate %s event session: %w", result.name, err)
+		}
+	}
+	wantFull := make([]string, probeEventCount)
+	for i := range wantFull {
+		wantFull[i] = fmt.Sprintf("page-event-%d", i)
 	}
 	fullIDs := eventIDs(full.Events)
-	if len(fullIDs) != probeEventCount {
-		return fmt.Errorf("full event count = %d, want %d", len(fullIDs), probeEventCount)
+	if !reflect.DeepEqual(fullIDs, wantFull) {
+		return fmt.Errorf("full event ids = %v, want %v", fullIDs, wantFull)
 	}
-	wantRecent := fullIDs[len(fullIDs)-probePageSize:]
-	wantOlder := fullIDs[:len(fullIDs)-probePageSize]
+	wantRecent := wantFull[len(wantFull)-probePageSize:]
+	wantOlder := wantFull[:len(wantFull)-probePageSize]
 	if !reflect.DeepEqual(eventIDs(recent.Events), wantRecent) ||
 		!reflect.DeepEqual(eventIDs(older.Events), wantOlder) {
 		return fmt.Errorf(

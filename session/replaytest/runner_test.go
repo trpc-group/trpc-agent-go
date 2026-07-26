@@ -257,6 +257,51 @@ func TestRunnerValidatesAllowedDiffRulesBeforeCreatingFixtures(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsDuplicateNamesBeforeCreatingFixtures(t *testing.T) {
+	newCalls := 0
+	newBackend := func(name string) Backend {
+		return Backend{Name: name, New: func(context.Context, string) (Fixture, error) {
+			newCalls++
+			return &fakeFixture{name: name, capabilities: allCapabilities()}, nil
+		}}
+	}
+	tests := []struct {
+		name     string
+		backends []Backend
+		cases    []ReplayCase
+		want     string
+	}{
+		{
+			name: "backend",
+			backends: []Backend{
+				newBackend("duplicate"), newBackend("duplicate"),
+			},
+			cases: []ReplayCase{{Name: "case"}},
+			want:  `backend name "duplicate" is duplicated`,
+		},
+		{
+			name:     "case",
+			backends: []Backend{newBackend("baseline")},
+			cases: []ReplayCase{
+				{Name: "duplicate"}, {Name: "duplicate"},
+			},
+			want: `case name "duplicate" is duplicated`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			newCalls = 0
+			_, err := (Runner{Backends: test.backends}).Run(context.Background(), test.cases)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Runner.Run() error = %v, want %q", err, test.want)
+			}
+			if newCalls != 0 {
+				t.Fatalf("backend.New() calls = %d, want 0", newCalls)
+			}
+		})
+	}
+}
+
 func TestRunnerContinuesAfterExpectedFailure(t *testing.T) {
 	const expectedAppliedOperations = 1
 	fixture := &fakeFixture{name: "inmemory", capabilities: allCapabilities()}
@@ -410,6 +455,89 @@ func TestRunnerEnforcesSnapshotInvariantsOnCandidates(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "backend \"candidate\"") {
 		t.Fatalf("Runner.Run() error = %v", err)
 	}
+}
+
+func TestRunnerIsolatesSnapshotsFromInvariants(t *testing.T) {
+	baselineSnapshot := comparisonFixture()
+	baselineSnapshot.Sessions[0].State = map[string]StateValueSnapshot{
+		"state": JSONStateValue(map[string]any{"nested": "original"}),
+	}
+	baselineSnapshot.Sessions[0].Events[0].Extensions =
+		map[string]any{"nested": map[string]any{"value": "original"}}
+	baselineSnapshot.Sessions[0].Summaries[0].Boundary =
+		map[string]any{"event": "event-1"}
+	baselineSnapshot.Sessions[0].Tracks[0].Events[0].Payload =
+		map[string]any{"value": "original"}
+	baselineSnapshot.Memories[0].Topics = []string{"original"}
+	baselineSnapshot.Memories[0].Metadata =
+		map[string]any{"nested": map[string]any{"value": "original"}}
+	baselineSnapshot.MemorySearches = []MemorySearchSnapshot{{
+		Results: []MemorySnapshot{{
+			ID: "search-result", Metadata: map[string]any{
+				"nested": map[string]any{"value": "original"},
+			},
+		}},
+	}}
+	candidateSnapshot := comparisonFixture()
+	candidateSnapshot.Sessions[0].State = cloneStateMap(baselineSnapshot.Sessions[0].State)
+	candidateSnapshot.Sessions[0].Events[0].Extensions =
+		cloneStringMap(baselineSnapshot.Sessions[0].Events[0].Extensions)
+	candidateSnapshot.Sessions[0].Summaries[0].Boundary =
+		cloneStringMap(baselineSnapshot.Sessions[0].Summaries[0].Boundary)
+	candidateSnapshot.Sessions[0].Tracks[0].Events[0].Payload =
+		cloneStringMap(baselineSnapshot.Sessions[0].Tracks[0].Events[0].Payload)
+	candidateSnapshot.Memories[0].Topics =
+		append([]string(nil), baselineSnapshot.Memories[0].Topics...)
+	candidateSnapshot.Memories[0].Metadata =
+		cloneStringMap(baselineSnapshot.Memories[0].Metadata)
+	candidateSnapshot.MemorySearches =
+		cloneSnapshot(baselineSnapshot).MemorySearches
+	candidateSnapshot.Sessions[0].Events[0].Content = "candidate"
+	runner := Runner{Backends: []Backend{
+		fakeBackend("baseline", &fakeFixture{
+			name: "baseline", capabilities: allCapabilities(), snapshot: baselineSnapshot,
+		}),
+		fakeBackend("candidate", &fakeFixture{
+			name: "candidate", capabilities: allCapabilities(), snapshot: candidateSnapshot,
+		}),
+	}}
+	mutate := SnapshotInvariant{
+		Name: "mutate nested values",
+		Check: func(snapshot Snapshot) error {
+			snapshot.Sessions[0].State["state"].Value.(map[string]any)["nested"] = "mutated"
+			snapshot.Sessions[0].Events[0].Content = "same"
+			snapshot.Sessions[0].Events[0].Extensions["nested"].(map[string]any)["value"] = "mutated"
+			snapshot.Sessions[0].Summaries[0].Boundary["event"] = "mutated"
+			snapshot.Sessions[0].Tracks[0].Events[0].Payload["value"] = "mutated"
+			snapshot.Memories[0].Topics[0] = "mutated"
+			snapshot.Memories[0].Metadata["nested"].(map[string]any)["value"] = "mutated"
+			snapshot.MemorySearches[0].Results[0].Metadata["nested"].(map[string]any)["value"] = "mutated"
+			return nil
+		},
+	}
+	if err := validateSnapshot(ReplayCase{Invariants: []SnapshotInvariant{mutate}}, baselineSnapshot); err != nil {
+		t.Fatalf("validateSnapshot() error = %v", err)
+	}
+	if baselineSnapshot.Sessions[0].State["state"].Value.(map[string]any)["nested"] != "original" ||
+		baselineSnapshot.Sessions[0].Events[0].Content != "answer" ||
+		baselineSnapshot.Sessions[0].Events[0].Extensions["nested"].(map[string]any)["value"] != "original" ||
+		baselineSnapshot.Sessions[0].Summaries[0].Boundary["event"] != "event-1" ||
+		baselineSnapshot.Sessions[0].Tracks[0].Events[0].Payload["value"] != "original" ||
+		baselineSnapshot.Memories[0].Topics[0] != "original" ||
+		baselineSnapshot.Memories[0].Metadata["nested"].(map[string]any)["value"] != "original" ||
+		baselineSnapshot.MemorySearches[0].Results[0].Metadata["nested"].(map[string]any)["value"] != "original" {
+		t.Fatalf("invariant mutation escaped snapshot boundary: %#v", baselineSnapshot)
+	}
+	report, err := runner.Run(context.Background(), []ReplayCase{{
+		Name: "isolated-invariant", Invariants: []SnapshotInvariant{mutate},
+	}})
+	if err != nil {
+		t.Fatalf("Runner.Run() error = %v", err)
+	}
+	differenceAt(
+		t, report.Differences,
+		"$.sessions[0].events[0].content",
+	)
 }
 
 func TestRunnerRejectsInvalidSnapshotInvariant(t *testing.T) {

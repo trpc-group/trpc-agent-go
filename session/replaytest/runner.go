@@ -107,15 +107,25 @@ func validateRunnerInputs(backends []Backend, cases []ReplayCase) error {
 	if len(backends) == 0 {
 		return errors.New("run replay cases: no backends configured")
 	}
+	backendNames := make(map[string]struct{}, len(backends))
 	for i, backend := range backends {
 		if backend.Name == "" || backend.New == nil {
 			return fmt.Errorf("run replay cases: backend %d is invalid", i)
 		}
+		if _, exists := backendNames[backend.Name]; exists {
+			return fmt.Errorf("run replay cases: backend name %q is duplicated", backend.Name)
+		}
+		backendNames[backend.Name] = struct{}{}
 	}
+	caseNames := make(map[string]struct{}, len(cases))
 	for _, replayCase := range cases {
 		if replayCase.Name == "" {
 			return errors.New("run replay cases: case name is empty")
 		}
+		if _, exists := caseNames[replayCase.Name]; exists {
+			return fmt.Errorf("run replay cases: case name %q is duplicated", replayCase.Name)
+		}
+		caseNames[replayCase.Name] = struct{}{}
 	}
 	return nil
 }
@@ -276,7 +286,7 @@ func validateSnapshot(replayCase ReplayCase, snapshot Snapshot) error {
 		if invariant.Name == "" || invariant.Check == nil {
 			return fmt.Errorf("snapshot invariant %d is invalid", i)
 		}
-		if err := invariant.Check(snapshot); err != nil {
+		if err := invariant.Check(cloneSnapshot(snapshot)); err != nil {
 			return fmt.Errorf(
 				"snapshot invariant %q: %w", invariant.Name, err,
 			)

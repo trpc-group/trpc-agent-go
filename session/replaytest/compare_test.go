@@ -234,6 +234,20 @@ func TestCompareSnapshotsConsumesPrefixRuleAcrossDifferences(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsRejectsWholeSnapshotPrefixRule(t *testing.T) {
+	_, err := CompareSnapshots(CompareInput{
+		Case: "case", Backend: "sqlite",
+		Baseline: comparisonFixture(), Actual: comparisonFixture(),
+		Options: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "case", Backend: "sqlite", Path: "$", PathPrefix: true,
+			Explanation: "too broad",
+		}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "whole-snapshot path prefix") {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+}
+
 func TestCompareSnapshotsReturnsEncodingErrors(t *testing.T) {
 	bad := Snapshot{Sessions: []SessionSnapshot{{State: map[string]StateValueSnapshot{
 		"bad": JSONStateValue(make(chan int)),
