@@ -265,6 +265,24 @@ func TestCodeExecutor_Close_NoClient(t *testing.T) {
 	require.NoError(t, c.Close())
 }
 
+func TestContextLifecycleGuardBranches(t *testing.T) {
+	_, err := NewWithContext(nil, WithContainerConfig(tcontainer.Config{}))
+	require.Error(t, err)
+
+	exec := &CodeExecutor{}
+	require.ErrorContains(
+		t,
+		exec.verifyPythonInstallation(context.Background()),
+		"container not initialized",
+	)
+	require.NoError(t, exec.cleanupWithContext(nil))
+	require.NoError(t, exec.CloseWithContext(nil))
+
+	exec = &CodeExecutor{closing: true}
+	_, err = exec.executionContainerID()
+	require.ErrorContains(t, err, "closing or closed")
+}
+
 func TestNew_Success(t *testing.T) {
 	const execID = "exec-new"
 	var inspectCalls int

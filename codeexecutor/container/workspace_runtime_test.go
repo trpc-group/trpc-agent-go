@@ -142,6 +142,36 @@ func TestWorkspaceRuntime_CreateAndCleanup(t *testing.T) {
 	require.NoError(t, rt.Cleanup(context.Background(), ws))
 }
 
+func TestWorkspaceRuntime_LifecycleGuardBranches(t *testing.T) {
+	var runtime *workspaceRuntime
+	_, err := runtime.CreateWorkspace(
+		context.Background(),
+		"nil-runtime",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.ErrorContains(t, err, "container executor not ready")
+	require.ErrorContains(
+		t,
+		runtime.stageInputsLocked(
+			context.Background(),
+			codeexecutor.Workspace{},
+			nil,
+		),
+		"container executor not ready",
+	)
+
+	runtime = &workspaceRuntime{ce: &CodeExecutor{closing: true}}
+	require.ErrorContains(
+		t,
+		runtime.stageInputsLocked(
+			context.Background(),
+			codeexecutor.Workspace{},
+			nil,
+		),
+		"closing or closed",
+	)
+}
+
 func TestWorkspaceRuntime_CreateWorkspace_AutoMapsInputs(t *testing.T) {
 	host := t.TempDir()
 	var cmds [][]string
