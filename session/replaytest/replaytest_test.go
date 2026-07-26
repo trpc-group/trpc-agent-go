@@ -167,6 +167,32 @@ func TestRunPropagatesBackendErrors(t *testing.T) {
 	}
 }
 
+func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), Backend{
+		Name:           "in_memory",
+		SessionService: sessionService,
+		MemoryService:  memoryService,
+	}, Case{
+		Name: "delete-memory",
+		Memories: []MemoryOp{
+			{
+				Name: "add", Operation: MemoryAdd,
+				Content: "temporary memory", ResultAlias: "temporary",
+			},
+			{
+				Name: "delete", Operation: MemoryDelete, Ref: "temporary",
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Snapshot.Memory)
+}
+
 type failingMemoryService struct {
 	memory.Service
 	addErr    error
