@@ -28,6 +28,8 @@ type ReviewOptions struct {
 	DiffFile          string
 	RepoPath          string
 	FileList          string
+	ChangedFiles      []string
+	ChangedModules    []string
 	Fixture           string
 	FixtureDir        string
 	OutDir            string

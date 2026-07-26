@@ -67,9 +67,9 @@ func marshalReportWithArtifacts(report ReviewReport, artifacts []ArtifactRecord)
 func renderMarkdown(report ReviewReport) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
-	fmt.Fprintf(&b, "- Task: `%s`\n", report.Task.ID)
-	fmt.Fprintf(&b, "- Status: `%s`\n", report.Task.Status)
-	fmt.Fprintf(&b, "- Diff hash: `%s`\n", report.Task.DiffHash)
+	fmt.Fprintf(&b, "- Task: `%s`\n", markdownInline(report.Task.ID))
+	fmt.Fprintf(&b, "- Status: `%s`\n", markdownInline(report.Task.Status))
+	fmt.Fprintf(&b, "- Diff hash: `%s`\n", markdownInline(report.Task.DiffHash))
 	fmt.Fprintf(&b, "- Conclusion: %s\n\n", report.Conclusion)
 	fmt.Fprintf(&b, "## Summary\n\n")
 	fmt.Fprintf(&b, "- Findings: %d\n", len(report.Findings))
@@ -94,14 +94,14 @@ func renderMarkdown(report ReviewReport) string {
 	renderFindingList(&b, report.NeedsHumanReview)
 	fmt.Fprintf(&b, "\n## Governance\n\n")
 	for _, d := range report.FilterSummary {
-		fmt.Fprintf(&b, "- filter `%s`: `%s`", d.Filter, d.Action)
+		fmt.Fprintf(&b, "- filter `%s`: `%s`", markdownInline(d.Filter), markdownInline(d.Action))
 		if d.Reason != "" {
 			fmt.Fprintf(&b, " - %s", d.Reason)
 		}
 		fmt.Fprintf(&b, "\n")
 	}
 	for _, d := range report.PermissionSummary {
-		fmt.Fprintf(&b, "- `%s`: `%s`", d.Action, d.Command)
+		fmt.Fprintf(&b, "- `%s`: `%s`", markdownInline(d.Action), markdownInline(d.Command))
 		if d.Reason != "" {
 			fmt.Fprintf(&b, " - %s", d.Reason)
 		}
@@ -109,7 +109,7 @@ func renderMarkdown(report ReviewReport) string {
 	}
 	fmt.Fprintf(&b, "\n## Sandbox\n\n")
 	for _, run := range report.SandboxRuns {
-		fmt.Fprintf(&b, "- `%s` on `%s`: %s exit=%d timed_out=%t truncated=%t\n", run.Command, run.Runtime, run.Status, run.ExitCode, run.TimedOut, run.Truncated)
+		fmt.Fprintf(&b, "- `%s` on `%s`: %s exit=%d timed_out=%t truncated=%t\n", markdownInline(run.Command), markdownInline(run.Runtime), markdownInline(run.Status), run.ExitCode, run.TimedOut, run.Truncated)
 	}
 	fmt.Fprintf(&b, "\n## Metrics\n\n")
 	fmt.Fprintf(&b, "- Total duration ms: %d\n", report.Metrics.TotalDurationMS)
@@ -123,10 +123,36 @@ func renderFindingList(b *strings.Builder, findings []Finding) {
 		return
 	}
 	for _, f := range findings {
-		fmt.Fprintf(b, "- [%s] %s:%d %s (`%s`, %.2f)\n", f.Severity, f.File, f.Line, f.Title, f.RuleID, f.Confidence)
-		fmt.Fprintf(b, "  Evidence: `%s`\n", strings.TrimSpace(f.Evidence))
+		fmt.Fprintf(b, "- [%s] %s:%d %s (`%s`, %.2f)\n", markdownInline(f.Severity), markdownInline(f.File), f.Line, markdownInline(f.Title), markdownInline(f.RuleID), f.Confidence)
+		fmt.Fprintf(b, "  Evidence:\n\n%s\n", markdownCodeBlock(strings.TrimSpace(f.Evidence)))
 		fmt.Fprintf(b, "  Recommendation: %s\n", f.Recommendation)
 	}
+}
+
+func markdownInline(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	replacer := strings.NewReplacer(
+		"\\", "\\\\",
+		"`", "\\`",
+		"[", "\\[",
+		"]", "\\]",
+		"(", "\\(",
+		")", "\\)",
+		"*", "\\*",
+		"_", "\\_",
+		"<", "\\<",
+		">", "\\>",
+	)
+	return replacer.Replace(s)
+}
+
+func markdownCodeBlock(s string) string {
+	fence := "```"
+	if strings.Contains(s, "```") {
+		fence = "````"
+	}
+	return fence + "\n" + s + "\n" + fence
 }
 
 func buildMetrics(start time.Time, runs []SandboxRun, permissions []PermissionRecord, findings []Finding, warnings []Finding, human []Finding) Metrics {

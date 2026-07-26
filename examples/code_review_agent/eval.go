@@ -34,6 +34,7 @@ type EvalFixtureLabel struct {
 	ExpectedRules     []string `json:"expected_rules"`
 	ExpectedHighRules []string `json:"expected_high_rules"`
 	AllowedExtraRules []string `json:"allowed_extra_rules"`
+	SecretValues      []string `json:"secret_values,omitempty"`
 }
 
 // EvalReport records measurable fixture review quality and redaction metrics.
@@ -92,7 +93,7 @@ func RunEvaluation(ctx context.Context, opts ReviewOptions, labelsPath string) (
 		if err != nil {
 			return EvalReport{}, "", "", fmt.Errorf("%s: %w", label.Name, err)
 		}
-		result, counts, err := evaluateFixture(label, review, []string{jsonPath, mdPath, next.DBPath}, manifest.SecretValues)
+		result, counts, err := evaluateFixture(label, review, []string{jsonPath, mdPath, next.DBPath}, fixtureSecretValues(label, manifest.SecretValues))
 		if err != nil {
 			return EvalReport{}, "", "", err
 		}
@@ -117,7 +118,8 @@ func RunEvaluation(ctx context.Context, opts ReviewOptions, labelsPath string) (
 		report.RedactionRateMeasured &&
 		report.HighRiskRecall >= 0.80 &&
 		report.FalsePositiveRate <= 0.15 &&
-		report.RedactionRate >= 0.95
+		report.RedactionRate >= 0.95 &&
+		report.SecretValueLeaks == 0
 	jsonPath, mdPath, err := writeEvalReport(report, opts.OutDir)
 	if err != nil {
 		return EvalReport{}, "", "", err
@@ -211,24 +213,36 @@ func scanArtifactsForSecrets(paths []string, secrets []string) ([]string, int, i
 	leaks := map[string]struct{}{}
 	checks := 0
 	failedChecks := 0
+	contents := make([]string, 0, len(paths))
 	for _, p := range paths {
 		raw, err := os.ReadFile(p)
 		if err != nil {
 			return nil, 0, 0, err
 		}
-		content := string(raw)
-		for i, secret := range secrets {
-			if secret == "" {
+		contents = append(contents, string(raw))
+	}
+	for i, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		checks++
+		for _, content := range contents {
+			if !strings.Contains(content, secret) {
 				continue
 			}
-			checks++
-			if strings.Contains(content, secret) {
-				failedChecks++
-				leaks[secretLeakID(i, secret)] = struct{}{}
-			}
+			failedChecks++
+			leaks[secretLeakID(i, secret)] = struct{}{}
+			break
 		}
 	}
 	return sortedKeys(leaks), checks, failedChecks, nil
+}
+
+func fixtureSecretValues(label EvalFixtureLabel, manifestSecrets []string) []string {
+	if len(label.SecretValues) > 0 {
+		return label.SecretValues
+	}
+	return manifestSecrets
 }
 
 func writeEvalReport(report EvalReport, outDir string) (string, string, error) {

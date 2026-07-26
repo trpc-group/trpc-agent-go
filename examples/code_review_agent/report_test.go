@@ -93,3 +93,25 @@ func TestWriteReportsRedactsSecrets(t *testing.T) {
 	require.NotContains(t, string(md), "supersecretpassword123")
 	require.NotContains(t, string(md), "bearer supersecretpassword123")
 }
+
+func TestRenderMarkdownEscapesUntrustedFields(t *testing.T) {
+	report := minimalReport("task-md-escape")
+	report.Findings = []Finding{{
+		Severity:       severityHigh,
+		Category:       "security",
+		File:           "pkg/evil\n[link](https://example.com)",
+		Line:           7,
+		Title:          "title with `tick`",
+		Evidence:       "```go\nfmt.Println(\"boom\")\n```",
+		Recommendation: "keep safe",
+		Confidence:     0.9,
+		Source:         "test",
+		RuleID:         "rule`\nnext",
+	}}
+
+	md := renderMarkdown(report)
+	require.Contains(t, md, "pkg/evil \\[link\\]\\(https://example.com\\):7")
+	require.Contains(t, md, "title with \\`tick\\`")
+	require.Contains(t, md, "(`rule\\` next`, 0.90)")
+	require.Contains(t, md, "````")
+}

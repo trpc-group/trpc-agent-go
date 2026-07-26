@@ -27,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -41,6 +42,7 @@ import (
 var (
 	_ codeexecutor.WorkspaceManager = (*workspaceRuntime)(nil)
 	_ codeexecutor.ProgramRunner    = (*workspaceRuntime)(nil)
+	perTurnWorkspaceSeq             uint64
 )
 
 const (
@@ -123,7 +125,7 @@ func (r *workspaceRuntime) CreateWorkspace(
 		h := stableWorkspaceHash(execID)
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
 	} else {
-		suf := time.Now().UnixNano()
+		suf := time.Now().UnixNano() + int64(atomic.AddUint64(&perTurnWorkspaceSeq, 1))
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
 	}
 
@@ -651,6 +653,9 @@ func (r *workspaceRuntime) RunProgram(
 		envAssign, quotedCmd, quotedArgs.String(),
 		stdinRedir,
 	)
+	if spec.DisableNetwork {
+		inner = wrapWithNetworkIsolation(inner)
+	}
 	script := buildRunWrapper(inner)
 
 	start := time.Now()
@@ -682,6 +687,12 @@ func (r *workspaceRuntime) RunProgram(
 		span.SetStatus(codes.Error, err.Error())
 	}
 	return res, err
+}
+
+func wrapWithNetworkIsolation(inner string) string {
+	return "if ! command -v unshare >/dev/null 2>&1; then " +
+		"echo 'network isolation requires unshare' >&2; exit 125; " +
+		"fi; unshare -n -- bash -lc " + shellQuote(inner)
 }
 
 // buildRunWrapper produces a bash script that executes `inner` while framing

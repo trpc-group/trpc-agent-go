@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -41,6 +42,7 @@ func TestNewSandboxRunnerFallbacks(t *testing.T) {
 	require.True(t, ok)
 	require.Nil(t, engine.exec)
 	require.True(t, engine.dryRun)
+	require.Empty(t, engine.goModCache)
 	_, err = NewSandboxRunner(ReviewOptions{Runtime: "unknown"})
 	require.Error(t, err)
 }
@@ -75,6 +77,7 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	r.repoPath = "."
 	r.skillsRoot = "skills"
 	r.goModCache = "host-mod-cache"
+	r.changedMods = []string{"pkg", "nested/module"}
 	runs, err = r.Run(context.Background(), "task", []string{skillScriptCommand}, NewCommandGate())
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
@@ -83,8 +86,10 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	require.Equal(t, "bash", runner.specs[1].Cmd)
 	require.Equal(t, []string{"../skills/code-review/scripts/run_go_checks.sh"}, runner.specs[1].Args)
 	require.Equal(t, "repo", runner.specs[1].Cwd)
+	require.False(t, runner.specs[1].DisableNetwork)
 	require.Equal(t, "../gomodcache", runner.specs[1].Env["GOMODCACHE"])
 	require.Equal(t, "../gocache", runner.specs[1].Env["GOCACHE"])
+	require.Equal(t, "pkg\nnested/module", runner.specs[1].Env["CODE_REVIEW_CHANGED_MODULES"])
 	require.Contains(t, fs.stageCalls, stageCall{src: ".", to: "repo"})
 	require.Contains(t, fs.stageCalls, stageCall{src: "skills", to: "skills"})
 	require.Contains(t, fs.stageCalls, stageCall{src: "host-mod-cache", to: "gomodcache"})
@@ -101,6 +106,28 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runs, 1)
 	require.Equal(t, "deny", runs[0].Status)
+
+	runner.result = codeexecutor.RunResult{
+		Stdout:   "test failed",
+		ExitCode: 1,
+		Duration: time.Millisecond,
+	}
+	runs, err = r.Run(context.Background(), "task", []string{"go test ./..."}, NewCommandGate())
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.Equal(t, "failed", runs[0].Status)
+	require.Equal(t, "execution_error", runs[0].ErrorType)
+
+	r.runtime = "e2b"
+	runner.result = codeexecutor.RunResult{
+		Stdout:   "ok",
+		ExitCode: 0,
+		Duration: time.Millisecond,
+	}
+	runs, err = r.Run(context.Background(), "task", []string{"go test ./..."}, NewCommandGate())
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	require.True(t, runner.specs[len(runner.specs)-1].DisableNetwork)
 }
 
 func TestEngineRunnerErrors(t *testing.T) {
@@ -124,6 +151,13 @@ func TestEngineRunnerErrors(t *testing.T) {
 	r = &engineRunner{runtime: "stub", exec: closer}
 	require.NoError(t, r.Close())
 	require.True(t, closer.closed)
+
+	cacheRoot := t.TempDir()
+	r = &engineRunner{cacheRoot: cacheRoot}
+	require.NoError(t, r.Close())
+	_, statErr := os.Stat(cacheRoot)
+	require.Error(t, statErr)
+
 	require.NoError(t, (*engineRunner)(nil).Close())
 	require.Equal(t, "abc", mustLimitOutput(t, "abc", 10))
 	require.Equal(t, "abc", mustLimitOutput(t, "abc", 0))

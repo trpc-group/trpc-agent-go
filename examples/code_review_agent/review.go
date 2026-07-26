@@ -12,7 +12,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,6 +72,13 @@ func RunReview(ctx context.Context, opts ReviewOptions) (ReviewReport, string, s
 		attribute.Int("diff.files", len(summary.Files)),
 		attribute.Int("diff.lines", summary.LineCount),
 	)
+	opts.ChangedFiles = changedRepoPaths(summary)
+	if opts.RepoPath != "" {
+		opts.ChangedModules, err = changedModuleDirs(opts.RepoPath, opts.ChangedFiles)
+		if err != nil {
+			return ReviewReport{}, "", "", err
+		}
+	}
 	taskID := "cr-" + summary.Hash[:12] + "-" + uuid.NewString()[:8]
 	task := ReviewTask{
 		ID:        taskID,
@@ -237,6 +246,93 @@ func reviewCommands(opts ReviewOptions) []string {
 		return []string{skillScriptCommand}
 	}
 	return []string{"go test ./...", "go vet ./...", skillScriptCommand}
+}
+
+func changedRepoPaths(summary DiffSummary) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, file := range summary.Files {
+		p := file.NewPath
+		if p == "" {
+			p = file.OldPath
+		}
+		if p == "" {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func changedModuleDirs(repoPath string, changedFiles []string) ([]string, error) {
+	if repoPath == "" || len(changedFiles) == 0 {
+		return nil, nil
+	}
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, file := range changedFiles {
+		modDir, err := nearestModuleDir(repoPath, file)
+		if err != nil {
+			return nil, err
+		}
+		if modDir == "" {
+			continue
+		}
+		if _, ok := seen[modDir]; ok {
+			continue
+		}
+		seen[modDir] = struct{}{}
+		out = append(out, modDir)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+func nearestModuleDir(repoPath string, changedFile string) (string, error) {
+	rel := filepath.FromSlash(changedFile)
+	abs := filepath.Join(repoPath, rel)
+	dir := abs
+	if info, err := os.Stat(abs); err == nil && !info.IsDir() {
+		dir = filepath.Dir(abs)
+	} else if err != nil {
+		dir = filepath.Dir(abs)
+	}
+	repoAbs, err := filepath.Abs(repoPath)
+	if err != nil {
+		return "", err
+	}
+	for {
+		modPath := filepath.Join(dir, "go.mod")
+		if _, err := os.Stat(modPath); err == nil {
+			relDir, err := filepath.Rel(repoAbs, dir)
+			if err != nil {
+				return "", err
+			}
+			if relDir == "." {
+				return ".", nil
+			}
+			return filepath.ToSlash(relDir), nil
+		}
+		if sameDir(dir, repoAbs) {
+			return "", nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "", nil
+		}
+		dir = parent
+	}
+}
+
+func sameDir(a string, b string) bool {
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && aa == bb
 }
 
 func diffSizeGate(summary DiffSummary, opts ReviewOptions) *Finding {

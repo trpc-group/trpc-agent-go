@@ -112,6 +112,17 @@ func TestAllFixturesParse(t *testing.T) {
 	}
 }
 
+func TestChangedModuleDirs(t *testing.T) {
+	repo := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "nested", "mod"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "mod", "go.mod"), []byte("module example.com/nested/mod\n\ngo 1.21\n"), 0o644))
+
+	mods, err := changedModuleDirs(repo, []string{"pkg/root.go", "nested/mod/service.go", "nested/mod/service_test.go"})
+	require.NoError(t, err)
+	require.Equal(t, []string{".", "nested/mod"}, mods)
+}
+
 func testOptions(t *testing.T, fixture string) ReviewOptions {
 	t.Helper()
 	out := t.TempDir()

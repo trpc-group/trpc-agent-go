@@ -9,7 +9,8 @@
       "name": "security",
       "expected_rules": ["go.security.secret"],
       "expected_high_rules": ["go.security.secret"],
-      "allowed_extra_rules": ["go.testing.missing"]
+      "allowed_extra_rules": ["go.testing.missing"],
+      "secret_values": ["AKID1234567890SECRET"]
     },
     {
       "name": "goroutine_context",
@@ -38,7 +39,8 @@
       "name": "duplicate",
       "expected_rules": ["go.security.secret"],
       "expected_high_rules": ["go.security.secret"],
-      "allowed_extra_rules": ["go.testing.missing"]
+      "allowed_extra_rules": ["go.testing.missing"],
+      "secret_values": ["AKID1234567890SECRET"]
     },
     {
       "name": "sandbox_failure",
@@ -56,13 +58,9 @@
       "name": "redaction",
       "expected_rules": ["go.security.secret"],
       "expected_high_rules": ["go.security.secret"],
-      "allowed_extra_rules": ["go.testing.missing"]
+      "allowed_extra_rules": ["go.testing.missing"],
+      "secret_values": ["supersecretpassword123", "abcdefghijklmnop"]
     }
   ],
-  "secret_values": [
-    "AKID1234567890SECRET",
-    "abcd1234secret",
-    "supersecretpassword123",
-    "abcdefghijklmnop"
-  ]
+  "secret_values": []
 }

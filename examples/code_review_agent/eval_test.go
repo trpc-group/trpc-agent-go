@@ -111,3 +111,19 @@ func TestRunEvaluationZeroDenominatorsDoNotPass(t *testing.T) {
 	require.False(t, report.RedactionRateMeasured)
 	require.False(t, report.PassedHiddenThreshold)
 }
+
+func TestScanArtifactsForSecretsFailsPerSecretNotPerArtifact(t *testing.T) {
+	dir := t.TempDir()
+	artifactA := filepath.Join(dir, "a.txt")
+	artifactB := filepath.Join(dir, "b.txt")
+	artifactC := filepath.Join(dir, "c.txt")
+	require.NoError(t, os.WriteFile(artifactA, []byte("clean"), 0o644))
+	require.NoError(t, os.WriteFile(artifactB, []byte("AKIA-LEAK"), 0o644))
+	require.NoError(t, os.WriteFile(artifactC, []byte("also clean"), 0o644))
+
+	leaks, checks, failed, err := scanArtifactsForSecrets([]string{artifactA, artifactB, artifactC}, []string{"AKIA-LEAK"})
+	require.NoError(t, err)
+	require.Equal(t, 1, checks)
+	require.Equal(t, 1, failed)
+	require.Len(t, leaks, 1)
+}

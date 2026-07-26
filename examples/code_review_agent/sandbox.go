@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -41,6 +42,8 @@ type engineRunner struct {
 	skillsRoot  string
 	dryRun      bool
 	goModCache  string
+	cacheRoot   string
+	changedMods []string
 }
 
 type fakeRunner struct {
@@ -70,7 +73,7 @@ func NewSandboxRunner(opts ReviewOptions) (SandboxRunner, error) {
 		if !opts.AllowTrustedLocal {
 			return nil, errors.New("local runtime requires --allow-trusted-local")
 		}
-		return &engineRunner{runtime: "local", exec: localexec.New(localexec.WithTimeout(timeout)), timeout: timeout, outputLimit: outputLimit, repoPath: opts.RepoPath, skillsRoot: opts.SkillsRoot, dryRun: opts.DryRun}, nil
+		return &engineRunner{runtime: "local", exec: localexec.New(localexec.WithTimeout(timeout)), timeout: timeout, outputLimit: outputLimit, repoPath: opts.RepoPath, skillsRoot: opts.SkillsRoot, dryRun: opts.DryRun, changedMods: opts.ChangedModules}, nil
 	case "fake":
 		return &fakeRunner{runtime: "fake", outputLimit: outputLimit, fail: opts.Fixture == "sandbox_failure", setupErr: opts.Fixture == "sandbox_setup_failure"}, nil
 	default:
@@ -161,23 +164,30 @@ func (r *engineRunner) runOne(ctx context.Context, eng codeexecutor.Engine, ws c
 	}
 	spec := r.commandSpec(command)
 	rr, err := eng.Runner().RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd:      spec.cmd,
-		Args:     spec.args,
-		Cwd:      spec.cwd,
-		CleanEnv: true,
-		Env:      sandboxEnv(spec.cwd, r.goModCache),
-		Timeout:  r.timeout,
+		Cmd:            spec.cmd,
+		Args:           spec.args,
+		Cwd:            spec.cwd,
+		CleanEnv:       true,
+		DisableNetwork: r.runtime == "e2b",
+		Env:            sandboxEnv(spec.cwd, r.goModCache, r.changedMods),
+		Timeout:        r.timeout,
 	})
 	run.CompletedAt = time.Now().UTC()
 	run.Duration = rr.Duration
 	run.ExitCode = rr.ExitCode
 	run.TimedOut = rr.TimedOut
 	run.Output, run.Truncated = limitOutput(RedactSecrets(rr.Stdout+rr.Stderr), r.outputLimit)
-	if err != nil {
+	if err != nil || rr.TimedOut || rr.ExitCode != 0 {
 		run.Status = "failed"
-		if rr.TimedOut {
+		switch {
+		case rr.TimedOut:
 			run.ErrorType = "timeout"
-		} else {
+		case rr.ExitCode != 0:
+			run.ErrorType = "execution_error"
+			if err == nil {
+				err = fmt.Errorf("command exited with code %d", rr.ExitCode)
+			}
+		default:
 			run.ErrorType = "execution_error"
 		}
 		return run, err
@@ -241,6 +251,10 @@ func (r *engineRunner) commandSpec(command string) sandboxCommandSpec {
 }
 
 func (r *engineRunner) Close() error {
+	if r != nil && r.cacheRoot != "" {
+		_ = os.RemoveAll(r.cacheRoot)
+		r.cacheRoot = ""
+	}
 	if r == nil || r.exec == nil {
 		return nil
 	}
@@ -324,10 +338,62 @@ func hostGoModCache() string {
 	return strings.TrimSpace(string(out))
 }
 
-func sandboxEnv(cwd string, stagedGoModCache string) map[string]string {
+func prepareIsolatedGoModCache(repoPath string, changedModules []string) (string, string, error) {
+	if repoPath == "" {
+		return "", "", nil
+	}
+	root, err := os.MkdirTemp("", "code-review-agent-gomodcache-*")
+	if err != nil {
+		return "", "", err
+	}
+	modCache := filepath.Join(root, "gomodcache")
+	goCache := filepath.Join(root, "gocache")
+	homeDir := filepath.Join(root, "home")
+	for _, dir := range []string{modCache, goCache, homeDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			_ = os.RemoveAll(root)
+			return "", "", err
+		}
+	}
+	modules := append([]string(nil), changedModules...)
+	if len(modules) == 0 {
+		modules = []string{"."}
+	}
+	seen := map[string]struct{}{}
+	for _, rel := range modules {
+		if rel == "" {
+			continue
+		}
+		if _, ok := seen[rel]; ok {
+			continue
+		}
+		seen[rel] = struct{}{}
+		moduleDir := repoPath
+		if rel != "." {
+			moduleDir = filepath.Join(repoPath, filepath.FromSlash(rel))
+		}
+		cmd := exec.Command("go", "mod", "download", "-modcacherw")
+		cmd.Dir = moduleDir
+		cmd.Env = append(os.Environ(),
+			"HOME="+homeDir,
+			"GOMODCACHE="+modCache,
+			"GOCACHE="+goCache,
+		)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			_ = os.RemoveAll(root)
+			return "", "", fmt.Errorf("prepare module cache for %s: %w: %s", rel, err, strings.TrimSpace(string(out)))
+		}
+	}
+	return modCache, root, nil
+}
+
+func sandboxEnv(cwd string, stagedGoModCache string, changedModules []string) map[string]string {
 	env := map[string]string{
 		"HOME": "/tmp",
 		"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin",
+	}
+	if len(changedModules) > 0 {
+		env["CODE_REVIEW_CHANGED_MODULES"] = strings.Join(changedModules, "\n")
 	}
 	if stagedGoModCache == "" {
 		return env

@@ -118,6 +118,13 @@ func gitDiff(ctx context.Context, repo string) (string, error) {
 	if _, err := gitTrackedFiles(ctx, repo); err != nil {
 		return "", err
 	}
+	untracked, err := gitUntrackedFiles(ctx, repo)
+	if err != nil {
+		return "", err
+	}
+	if len(untracked) > 0 {
+		return "", fmt.Errorf("repository has untracked files that are not included in review input: %s", strings.Join(untracked, ", "))
+	}
 	if hasHead(ctx, repo) {
 		out, err := runGitOutput(ctx, repo, "diff", "--no-ext-diff", "--no-textconv", "HEAD")
 		if err != nil {
@@ -144,13 +151,21 @@ func gitDiff(ctx context.Context, repo string) (string, error) {
 }
 
 func gitTrackedFiles(ctx context.Context, repo string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "ls-files", "-z")
+	return gitListFiles(ctx, repo, "ls-files", "-z")
+}
+
+func gitUntrackedFiles(ctx context.Context, repo string) ([]string, error) {
+	return gitListFiles(ctx, repo, "ls-files", "--others", "--exclude-standard", "-z")
+}
+
+func gitListFiles(ctx context.Context, repo string, args ...string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, fmt.Errorf("git ls-files: %w: %s", err, stderr.String())
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, stderr.String())
 	}
 	files := []string{}
 	for _, raw := range bytes.Split(out, []byte{0}) {
@@ -159,7 +174,7 @@ func gitTrackedFiles(ctx context.Context, repo string) ([]string, error) {
 		}
 		p, err := validateRepoPath(string(raw))
 		if err != nil {
-			return nil, fmt.Errorf("git ls-files path: %w", err)
+			return nil, fmt.Errorf("git %s path: %w", args[0], err)
 		}
 		files = append(files, p)
 	}

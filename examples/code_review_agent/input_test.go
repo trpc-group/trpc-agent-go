@@ -118,6 +118,8 @@ func TestGitDiffDisablesTextconv(t *testing.T) {
 	script := filepath.Join(repo, "textconv.sh")
 	require.NoError(t, os.WriteFile(script, []byte("#!/bin/sh\n"+"echo ran > \"$1\"\n"+"cat \"$2\"\n"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("*.txt diff=custom\n"), 0o644))
+	runGit(t, repo, "add", ".gitattributes", "textconv.sh")
+	runGit(t, repo, "commit", "-m", "add textconv config")
 	runGit(t, repo, "config", "diff.custom.textconv", script+" "+marker)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "note.txt"), []byte("two\n"), 0o644))
 
@@ -125,6 +127,22 @@ func TestGitDiffDisablesTextconv(t *testing.T) {
 	require.NoError(t, err)
 	_, statErr := os.Stat(marker)
 	require.Error(t, statErr)
+}
+
+func TestGitDiffRejectsUntrackedFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	runGit(t, repo, "config", "user.email", "test@example.com")
+	runGit(t, repo, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "new_file.go"), []byte("package main\n\nfunc NewFile() {}\n"), 0o644))
+
+	_, _, err := loadInput(context.Background(), ReviewOptions{RepoPath: repo})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "untracked files")
+	require.Contains(t, err.Error(), "new_file.go")
 }
 
 func runGit(t *testing.T, dir string, args ...string) {

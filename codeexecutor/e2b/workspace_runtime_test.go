@@ -538,6 +538,20 @@ func TestRunProgram_NoCleanEnvUsesPlainEnv(t *testing.T) {
 	require.NotContains(t, script, minimalCleanPATH)
 }
 
+func TestRunProgram_DisableNetworkWrapsCommand(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:            "echo",
+		Args:           []string{"hi"},
+		CleanEnv:       true,
+		DisableNetwork: true,
+		Timeout:        3 * time.Second,
+	})
+	require.Contains(t, script, "command -v unshare",
+		"network isolation must fail closed when unshare is unavailable")
+	require.Contains(t, script, "unshare -n -- bash -lc",
+		"network isolation must execute the command in a private net namespace")
+}
+
 func TestCollect_ReadsFiles(t *testing.T) {
 	calls := 0
 	srv := newMockE2BServer(t, func(code string) string {
