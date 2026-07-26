@@ -49,6 +49,21 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 		}
 	})
 
+	t.Run("whitespace-only flag falls back to file", func(t *testing.T) {
+		// The resolver trims the flag, so a whitespace-only value is not an explicit instruction and
+		// must fall back to the prompt file rather than being used verbatim.
+		got, src, err := resolveBaselineInstruction(" \t ", promptFile)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != "from file" {
+			t.Errorf("instruction = %q, want %q (whitespace flag should fall back to file)", got, "from file")
+		}
+		if src != promptFile {
+			t.Errorf("sourceFile = %q, want %q", src, promptFile)
+		}
+	})
+
 	t.Run("built-in default when both flag and file empty", func(t *testing.T) {
 		got, src, err := resolveBaselineInstruction("", "")
 		if err != nil {

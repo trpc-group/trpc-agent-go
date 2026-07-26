@@ -194,13 +194,35 @@ func criterionByName(d GateDecision, name string) (GateCriterion, bool) {
 	return GateCriterion{}, false
 }
 
+// mustCriterion returns the named gate criterion, failing the test if it is absent. Callers assert on
+// the returned criterion's fields, so a missing criterion must be caught rather than silently reading
+// as a zero value.
+func mustCriterion(t *testing.T, d GateDecision, name string) GateCriterion {
+	t.Helper()
+	c, ok := criterionByName(d, name)
+	if !ok {
+		t.Fatalf("gate criterion %q missing", name)
+	}
+	return c
+}
+
 func TestApplyGateExposesAllCriteria(t *testing.T) {
 	baseline := makeResult("val", makeCase("a", false, 0.0, critFinalResponseText(), ""))
 	candidate := makeResult("val", makeCase("a", true, 1.0, critFinalResponseText(), ""))
 	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"a"}}, baseline, candidate, GateObservations{})
-	for _, name := range []string{"has_validation_evidence", "validation_improves", "no_new_hard_fail", "key_cases_protected", "within_budget"} {
-		if _, ok := criterionByName(d, name); !ok {
-			t.Errorf("missing gate criterion %q", name)
+	want := []string{"has_validation_evidence", "validation_improves", "no_new_hard_fail", "key_cases_protected", "within_budget"}
+	// Assert the exact count and set, not just membership, so an added, missing, or duplicated
+	// criterion is caught.
+	if len(d.Criteria) != len(want) {
+		t.Fatalf("gate exposed %d criteria, want %d: %+v", len(d.Criteria), len(want), d.Criteria)
+	}
+	counts := make(map[string]int, len(d.Criteria))
+	for _, c := range d.Criteria {
+		counts[c.Name]++
+	}
+	for _, name := range want {
+		if counts[name] != 1 {
+			t.Errorf("criterion %q appears %d time(s), want exactly 1", name, counts[name])
 		}
 	}
 }
@@ -211,7 +233,7 @@ func TestApplyGateRejectsNilValidationEvidence(t *testing.T) {
 	if d.Accepted {
 		t.Fatalf("nil validation evidence must be rejected (fail closed), got accept")
 	}
-	if c, _ := criterionByName(d, "has_validation_evidence"); c.Passed {
+	if mustCriterion(t, d, "has_validation_evidence").Passed {
 		t.Errorf("has_validation_evidence should fail for nil results")
 	}
 	if !containsSubstring(d.Reasons, "no validation evidence") {
@@ -226,7 +248,7 @@ func TestApplyGateRejectsEmptyNonNilValidationEvidence(t *testing.T) {
 	if d.Accepted {
 		t.Fatalf("empty non-nil validation evidence must be rejected, got accept")
 	}
-	if c, _ := criterionByName(d, "has_validation_evidence"); c.Passed {
+	if mustCriterion(t, d, "has_validation_evidence").Passed {
 		t.Errorf("has_validation_evidence should fail for empty results")
 	}
 }
@@ -244,10 +266,10 @@ func TestApplyGateKeyCaseProtectedIsIndependentOfHardFail(t *testing.T) {
 		makeCase("a", true, 1.0, critFinalResponseText(), ""),
 	)
 	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"KEY"}}, baseline, candidate, GateObservations{})
-	if c, _ := criterionByName(d, "no_new_hard_fail"); !c.Passed {
+	if !mustCriterion(t, d, "no_new_hard_fail").Passed {
 		t.Errorf("no_new_hard_fail should pass (no pass→fail regression)")
 	}
-	if c, _ := criterionByName(d, "key_cases_protected"); c.Passed {
+	if mustCriterion(t, d, "key_cases_protected").Passed {
 		t.Errorf("key_cases_protected should FAIL (KEY not passing in candidate)")
 	}
 	if d.Accepted {
@@ -269,7 +291,7 @@ func TestApplyGateRejectsMisspelledKeyID(t *testing.T) {
 		makeCase("a", true, 1.0, critFinalResponseText(), ""),
 	)
 	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"KYE"}}, baseline, candidate, GateObservations{})
-	c, _ := criterionByName(d, "key_cases_protected")
+	c := mustCriterion(t, d, "key_cases_protected")
 	if c.Passed {
 		t.Errorf("key_cases_protected should fail for a key ID not present in results")
 	}
@@ -290,7 +312,7 @@ func TestApplyGateBudgetCriterion(t *testing.T) {
 
 	// Budget disabled (0) → within_budget passes and accept holds.
 	d := ApplyGate(GatePolicy{MinValidationGain: 0.01}, baseline, candidate, GateObservations{CandidateModelCalls: 999})
-	if c, _ := criterionByName(d, "within_budget"); !c.Passed {
+	if c := mustCriterion(t, d, "within_budget"); !c.Passed {
 		t.Errorf("budget disabled should pass, got %+v", c)
 	}
 	if !d.Accepted {
@@ -299,7 +321,7 @@ func TestApplyGateBudgetCriterion(t *testing.T) {
 
 	// Budget exceeded → within_budget fails and accept is vetoed.
 	d = ApplyGate(GatePolicy{MinValidationGain: 0.01, MaxCandidateModelCalls: 10}, baseline, candidate, GateObservations{CandidateModelCalls: 11})
-	if c, _ := criterionByName(d, "within_budget"); c.Passed {
+	if mustCriterion(t, d, "within_budget").Passed {
 		t.Errorf("budget exceeded should fail")
 	}
 	if d.Accepted {
@@ -308,7 +330,7 @@ func TestApplyGateBudgetCriterion(t *testing.T) {
 
 	// Budget met → within_budget passes.
 	d = ApplyGate(GatePolicy{MinValidationGain: 0.01, MaxCandidateModelCalls: 10}, baseline, candidate, GateObservations{CandidateModelCalls: 10})
-	if c, _ := criterionByName(d, "within_budget"); !c.Passed {
+	if !mustCriterion(t, d, "within_budget").Passed {
 		t.Errorf("budget met (equal) should pass")
 	}
 }
