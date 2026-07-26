@@ -760,9 +760,6 @@ func localReplaceTargetWithinSnapshot(moduleDir string, plan sandboxSnapshotPlan
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
-	if plan.fileSet == nil {
-		return true
-	}
 	rel = filepath.ToSlash(rel)
 	if rel == "." {
 		return plan.fileSet["go.mod"]

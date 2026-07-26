@@ -728,6 +728,15 @@ replace example.com/localmod => ./localmod
 	}
 }
 
+func TestLocalReplaceTargetWithinSnapshotRejectsNilFileSet(t *testing.T) {
+	repo := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "localmod", "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
+	plan := sandboxSnapshotPlan{root: repo}
+	if localReplaceTargetWithinSnapshot(repo, plan, "./localmod") {
+		t.Fatal("local replace target without a snapshot file set should be unavailable")
+	}
+}
+
 func TestWorkspaceSandboxRunnerSetupFailures(t *testing.T) {
 	pd := ParsedDiff{Raw: "diff --git a/a.go b/a.go\n"}
 	runner := &WorkspaceSandboxRunner{executorName: "mock", engine: &mockWorkspaceEngine{createErr: errors.New("no workspace")}}
