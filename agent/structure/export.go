@@ -186,11 +186,12 @@ func cloneSnapshot(raw *Snapshot) *Snapshot {
 }
 
 // CloneSurfaceValue returns a deep copy that callers may mutate independently.
+// It preserves the distinction between nil and non-nil empty collections.
 func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
 	cloned := SurfaceValue{
 		FewShot: cloneFewShot(value.FewShot),
 		Tools:   cloneToolRefs(value.Tools),
-		Skills:  append([]SkillRef(nil), value.Skills...),
+		Skills:  cloneSlice(value.Skills),
 	}
 	if value.Text != nil {
 		text := *value.Text
@@ -209,7 +210,7 @@ func CloneSurfaceValue(value SurfaceValue) SurfaceValue {
 }
 
 func cloneToolRefs(refs []ToolRef) []ToolRef {
-	if len(refs) == 0 {
+	if refs == nil {
 		return nil
 	}
 	out := make([]ToolRef, len(refs))
@@ -232,7 +233,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 		Type:                 schema.Type,
 		Description:          schema.Description,
 		Pattern:              schema.Pattern,
-		Required:             append([]string(nil), schema.Required...),
+		Required:             cloneSlice(schema.Required),
 		Properties:           cloneSchemaMap(schema.Properties),
 		Items:                cloneToolSchema(schema.Items),
 		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
@@ -244,7 +245,7 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 }
 
 func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {
-	if len(in) == 0 {
+	if in == nil {
 		return nil
 	}
 	out := make(map[string]*tool.Schema, len(in))
@@ -255,7 +256,7 @@ func cloneSchemaMap(in map[string]*tool.Schema) map[string]*tool.Schema {
 }
 
 func cloneSchemaValues(in []any) []any {
-	if len(in) == 0 {
+	if in == nil {
 		return nil
 	}
 	out := make([]any, len(in))
@@ -272,6 +273,9 @@ func cloneSchemaValue(value any) any {
 	case *tool.Schema:
 		return cloneToolSchema(current)
 	case map[string]any:
+		if current == nil {
+			return map[string]any(nil)
+		}
 		out := make(map[string]any, len(current))
 		for key, item := range current {
 			out[key] = cloneSchemaValue(item)
@@ -280,20 +284,29 @@ func cloneSchemaValue(value any) any {
 	case []any:
 		return cloneSchemaValues(current)
 	case []byte:
-		return append([]byte(nil), current...)
+		return cloneSlice(current)
 	default:
 		return current
 	}
 }
 
 func cloneFewShot(value []FewShotExample) []FewShotExample {
-	if len(value) == 0 {
+	if value == nil {
 		return nil
 	}
 	out := make([]FewShotExample, len(value))
 	for i, example := range value {
-		out[i].Messages = append([]FewShotMessage(nil), example.Messages...)
+		out[i].Messages = cloneSlice(example.Messages)
 	}
+	return out
+}
+
+func cloneSlice[T any](value []T) []T {
+	if value == nil {
+		return nil
+	}
+	out := make([]T, len(value))
+	copy(out, value)
 	return out
 }
 

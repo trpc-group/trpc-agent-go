@@ -263,6 +263,35 @@ func TestCloneSurfaceValue_ClonesEmptyModelHeaders(t *testing.T) {
 	assert.Empty(t, value.Model.Headers)
 }
 
+func TestCloneSurfaceValue_PreservesEmptyCollections(t *testing.T) {
+	value := SurfaceValue{
+		FewShot: []FewShotExample{{Messages: []FewShotMessage{}}, {}},
+		Tools:   []ToolRef{},
+		Skills:  []SkillRef{},
+	}
+	cloned := CloneSurfaceValue(value)
+	require.NotNil(t, cloned.FewShot)
+	require.NotNil(t, cloned.FewShot[0].Messages)
+	assert.Nil(t, cloned.FewShot[1].Messages)
+	require.NotNil(t, cloned.Tools)
+	require.NotNil(t, cloned.Skills)
+
+	schema := &tool.Schema{
+		Required:   []string{},
+		Properties: map[string]*tool.Schema{},
+		Enum:       []any{},
+		Defs:       map[string]*tool.Schema{},
+		Default:    []byte{},
+	}
+	cloned = CloneSurfaceValue(SurfaceValue{Tools: []ToolRef{{InputSchema: schema}}})
+	input := cloned.Tools[0].InputSchema
+	require.NotNil(t, input.Required)
+	require.NotNil(t, input.Properties)
+	require.NotNil(t, input.Enum)
+	require.NotNil(t, input.Defs)
+	require.NotNil(t, input.Default)
+}
+
 func TestModelRef_JSONOmitsEmptyFields(t *testing.T) {
 	data, err := json.Marshal(ModelRef{Name: "gpt-5.2"})
 	require.NoError(t, err)

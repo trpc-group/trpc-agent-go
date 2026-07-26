@@ -367,6 +367,74 @@ func TestGeneratePromptIterUsesTargetAndHints(t *testing.T) {
 
 func stringPointer(value string) *string { return &value }
 
+func TestGeneratePromptIterRejectsStaleInitialProfile(t *testing.T) {
+	engine := &promptIterStub{
+		structure: &astructure.Snapshot{
+			StructureID: "current", Surfaces: []astructure.Surface{
+				{SurfaceID: "system"}, {SurfaceID: "reviewer"},
+			},
+		},
+		candidate: "candidate",
+	}
+	_, err := GeneratePromptIter(context.Background(), engine, promptiterengine.RunRequest{
+		Train:      []promptiterengine.EvalSetInput{{EvalSetID: "train"}},
+		Validation: []promptiterengine.EvalSetInput{{EvalSetID: "validation"}},
+		InitialProfile: &promptiter.Profile{
+			StructureID: "stale",
+			Overrides: []promptiter.SurfaceOverride{{
+				SurfaceID: "reviewer", Value: astructure.SurfaceValue{Text: stringPointer("review")},
+			}},
+		},
+	}, "system", CandidateRequest{Prompt: "baseline"})
+	if err == nil || !strings.Contains(err.Error(), `structure id "stale" does not match current structure id "current"`) {
+		t.Fatalf("GeneratePromptIter() error = %v", err)
+	}
+	if engine.runCalls != 0 {
+		t.Fatalf("engine Run() calls = %d", engine.runCalls)
+	}
+}
+
+func TestGeneratePromptIterBindsUnboundProfileAndPreservesEmptyFewShot(t *testing.T) {
+	engine := &promptIterStub{
+		structure: &astructure.Snapshot{
+			StructureID: "current", Surfaces: []astructure.Surface{
+				{SurfaceID: "system"},
+				{
+					SurfaceID: "examples",
+					NodeID:    "answer",
+					Type:      astructure.SurfaceTypeFewShot,
+					Value: astructure.SurfaceValue{FewShot: []astructure.FewShotExample{{
+						Messages: []astructure.FewShotMessage{{Role: "user", Content: "baseline"}},
+					}}},
+				},
+			},
+		},
+		candidate: "candidate",
+	}
+	base := promptiterengine.RunRequest{
+		Train:      []promptiterengine.EvalSetInput{{EvalSetID: "train"}},
+		Validation: []promptiterengine.EvalSetInput{{EvalSetID: "validation"}},
+		InitialProfile: &promptiter.Profile{
+			Overrides: []promptiter.SurfaceOverride{{
+				SurfaceID: "examples", Value: astructure.SurfaceValue{FewShot: []astructure.FewShotExample{}},
+			}},
+		},
+	}
+	if _, err := GeneratePromptIter(
+		context.Background(), engine, base, "system", CandidateRequest{Prompt: "baseline"},
+	); err != nil {
+		t.Fatalf("GeneratePromptIter() error = %v", err)
+	}
+	if engine.request.InitialProfile.StructureID != "current" ||
+		len(engine.request.InitialProfile.Overrides) != 2 ||
+		engine.request.InitialProfile.Overrides[0].Value.FewShot == nil {
+		t.Fatalf("initial profile = %+v", engine.request.InitialProfile)
+	}
+	if base.InitialProfile.StructureID != "" || base.InitialProfile.Overrides[0].Value.FewShot == nil {
+		t.Fatalf("base profile was modified: %+v", base.InitialProfile)
+	}
+}
+
 func TestGeneratePromptIterRejectsMissingCandidate(t *testing.T) {
 	engine := &promptIterStub{structure: &astructure.Snapshot{
 		StructureID: "structure", Surfaces: []astructure.Surface{{SurfaceID: "system"}},
@@ -510,6 +578,7 @@ type promptIterStub struct {
 	structure   *astructure.Snapshot
 	candidate   string
 	request     promptiterengine.RunRequest
+	runCalls    int
 	describeErr error
 	runErr      error
 }
@@ -521,6 +590,7 @@ func (s *promptIterStub) Describe(context.Context) (*astructure.Snapshot, error)
 func (s *promptIterStub) Run(
 	_ context.Context, request *promptiterengine.RunRequest, _ ...promptiterengine.Option,
 ) (*promptiterengine.RunResult, error) {
+	s.runCalls++
 	s.request = *request
 	if s.runErr != nil {
 		return nil, s.runErr

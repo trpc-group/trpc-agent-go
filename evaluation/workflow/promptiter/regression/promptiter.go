@@ -49,9 +49,12 @@ func GeneratePromptIter(
 	runRequest.MaxRounds = 1
 	runRequest.TargetSurfaceIDs = []string{targetSurfaceID}
 	text := request.Prompt
-	runRequest.InitialProfile = profileWithPrompt(
+	runRequest.InitialProfile, err = profileWithPrompt(
 		base.InitialProfile, structure.StructureID, targetSurfaceID, text,
 	)
+	if err != nil {
+		return "", err
+	}
 	for _, hint := range request.Hints {
 		if hint.CaseID == "" || hint.MetricName == "" || strings.TrimSpace(hint.Reason) == "" {
 			return "", errors.New("PromptIter failure hint is incomplete")
@@ -70,9 +73,17 @@ func GeneratePromptIter(
 	return promptFromProfile(run.Rounds[0].OutputProfile, targetSurfaceID)
 }
 
-func profileWithPrompt(base *promptiter.Profile, structureID, targetSurfaceID, text string) *promptiter.Profile {
+func profileWithPrompt(
+	base *promptiter.Profile, structureID, targetSurfaceID, text string,
+) (*promptiter.Profile, error) {
 	profile := &promptiter.Profile{StructureID: structureID}
 	if base != nil {
+		if base.StructureID != "" && base.StructureID != structureID {
+			return nil, fmt.Errorf(
+				"promptiter initial profile structure id %q does not match current structure id %q",
+				base.StructureID, structureID,
+			)
+		}
 		profile.Overrides = append([]promptiter.SurfaceOverride(nil), base.Overrides...)
 		for index := range profile.Overrides {
 			profile.Overrides[index].Value = astructure.CloneSurfaceValue(profile.Overrides[index].Value)
@@ -85,11 +96,11 @@ func profileWithPrompt(base *promptiter.Profile, structureID, targetSurfaceID, t
 	for index := range profile.Overrides {
 		if profile.Overrides[index].SurfaceID == targetSurfaceID {
 			profile.Overrides[index] = target
-			return profile
+			return profile, nil
 		}
 	}
 	profile.Overrides = append(profile.Overrides, target)
-	return profile
+	return profile, nil
 }
 
 func promptFromProfile(profile *promptiter.Profile, targetSurfaceID string) (string, error) {
