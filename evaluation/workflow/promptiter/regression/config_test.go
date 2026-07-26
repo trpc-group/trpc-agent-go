@@ -17,6 +17,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/toolmock"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 func TestLoadRunConfigResolvesNativeInputsAndRawHashes(t *testing.T) {
@@ -37,7 +41,7 @@ func TestLoadRunConfigResolvesNativeInputsAndRawHashes(t *testing.T) {
 	require.Equal(t, fixture.rawHash(t, fixture.files.BaselinePrompt), config.InputHashes["baselinePrompt"])
 	require.Equal(t, fixture.rawHash(t, fixture.files.TrainEvalSet), config.InputHashes["trainEvalSet"])
 
-	evalManager, metricManager, err := NewInputManagers(fixture.files, config)
+	evalManager, metricManager, err := NewInputManagers(config)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, evalManager.Close())
@@ -63,50 +67,35 @@ func TestLoadRunConfigResolvesNativeInputsAndRawHashes(t *testing.T) {
 }
 
 func TestNewInputManagersVerifyAndFreezeHashedInputs(t *testing.T) {
-	t.Run("rejects source changed after config load", func(t *testing.T) {
+	t.Run("uses captured bytes after sources change or disappear", func(t *testing.T) {
 		fixture := newConfigFixture(t)
 		config, err := LoadRunConfig(context.Background(), "regression-test", fixture.files)
 		require.NoError(t, err)
-		data, err := os.ReadFile(fixture.files.TrainEvalSet)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(
-			fixture.files.TrainEvalSet,
-			append(data, ' '),
-			0o600,
-		))
+		require.NoError(t, os.WriteFile(fixture.files.TrainEvalSet, []byte(`{}`), 0o600))
+		require.NoError(t, os.Remove(fixture.files.ValidationEvalSet))
+		require.NoError(t, os.WriteFile(fixture.files.Metrics, []byte(`[]`), 0o600))
 
-		_, _, err = NewInputManagers(fixture.files, config)
-		require.ErrorContains(t, err, "train eval-set input hash")
-	})
-
-	t.Run("uses immutable verified bytes", func(t *testing.T) {
-		fixture := newConfigFixture(t)
-		config, err := LoadRunConfig(context.Background(), "regression-test", fixture.files)
-		require.NoError(t, err)
-		evalManager, metricManager, err := NewInputManagers(fixture.files, config)
+		evalManager, metricManager, err := NewInputManagers(config)
 		require.NoError(t, err)
 		t.Cleanup(func() {
 			require.NoError(t, evalManager.Close())
 			require.NoError(t, metricManager.Close())
 		})
 
-		before, err := evalManager.Get(
+		train, err := evalManager.Get(
 			context.Background(),
 			"regression-test",
 			config.Train.EvalSetID,
 		)
 		require.NoError(t, err)
-		require.Len(t, before.EvalCases, 3)
-		require.NoError(t, os.WriteFile(fixture.files.TrainEvalSet, []byte(`{}`), 0o600))
-		require.NoError(t, os.WriteFile(fixture.files.Metrics, []byte(`[]`), 0o600))
-
-		after, err := evalManager.Get(
+		require.Len(t, train.EvalCases, 3)
+		validation, err := evalManager.Get(
 			context.Background(),
 			"regression-test",
-			config.Train.EvalSetID,
+			config.Validation.EvalSetID,
 		)
 		require.NoError(t, err)
-		require.Equal(t, before, after)
+		require.Len(t, validation.EvalCases, 3)
 		metricNames, err := metricManager.List(
 			context.Background(),
 			"regression-test",
@@ -115,6 +104,262 @@ func TestNewInputManagersVerifyAndFreezeHashedInputs(t *testing.T) {
 		require.NoError(t, err)
 		require.ElementsMatch(t, []string{"quality", "safety"}, metricNames)
 	})
+
+	t.Run("keeps metrics snapshots separate", func(t *testing.T) {
+		fixture := newConfigFixture(t)
+		configA, err := LoadRunConfig(context.Background(), "regression-test", fixture.files)
+		require.NoError(t, err)
+		fixture.metrics = []map[string]any{{
+			"metricName": "quality-b",
+			"threshold":  0.5,
+			"criterion":  map[string]any{},
+		}}
+		fixture.gate()["primaryMetric"] = "quality-b"
+		fixture.gate()["metricDirections"] = map[string]any{
+			"quality-b": "higher_is_better",
+		}
+		fixture.writeMetrics(t)
+		fixture.writeRegression(t)
+		configB, err := LoadRunConfig(context.Background(), "regression-test", fixture.files)
+		require.NoError(t, err)
+
+		evalSetsA, metricsA, err := NewInputManagers(configA)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, evalSetsA.Close())
+			require.NoError(t, metricsA.Close())
+		})
+		evalSetsB, metricsB, err := NewInputManagers(configB)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			require.NoError(t, evalSetsB.Close())
+			require.NoError(t, metricsB.Close())
+		})
+		namesA, err := metricsA.List(context.Background(), "regression-test", configA.Train.EvalSetID)
+		require.NoError(t, err)
+		namesB, err := metricsB.List(context.Background(), "regression-test", configB.Train.EvalSetID)
+		require.NoError(t, err)
+		require.ElementsMatch(t, []string{"quality", "safety"}, namesA)
+		require.Equal(t, []string{"quality-b"}, namesB)
+	})
+
+	t.Run("rejects tampered bound bytes", func(t *testing.T) {
+		fixture := newConfigFixture(t)
+		config, err := LoadRunConfig(context.Background(), "regression-test", fixture.files)
+		require.NoError(t, err)
+		config.metricsInput[0] ^= 0xff
+
+		_, _, err = NewInputManagers(config)
+		require.ErrorContains(t, err, "metrics input hash")
+	})
+}
+
+func TestNormalizedEvalCaseInputTracksInferenceInputs(t *testing.T) {
+	text := " First part "
+	base := &evalset.EvalCase{
+		EvalID: "case-a",
+		ContextMessages: []*model.Message{{
+			Role:    model.RoleSystem,
+			Content: " System context ",
+		}},
+		Conversation: []*evalset.Invocation{
+			{
+				InvocationID: "invocation-a",
+				UserContent: &model.Message{
+					Role:    model.RoleUser,
+					Content: " First turn ",
+					ContentParts: []model.ContentPart{{
+						Type: model.ContentTypeText,
+						Text: &text,
+					}},
+				},
+				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "label-a"},
+				ToolMock: &toolmock.ToolMock{Actual: []*toolmock.Tool{{
+					Name: "lookup",
+					Arguments: &toolmock.ArgumentsMatch{
+						Expected: map[string]any{"region": " Singapore ", "order": "A-17"},
+					},
+					Result: map[string]any{"status": "ready"},
+				}}},
+			},
+			{
+				InvocationID: "invocation-b",
+				UserContent:  &model.Message{Role: model.RoleUser, Content: " Second turn "},
+			},
+		},
+		SessionInput: &evalset.SessionInput{
+			AppName: " Support App ",
+			UserID:  " User-A ",
+			State: map[string]any{
+				"locale": " EN-SG ",
+				"flags":  map[string]any{"beta": true, "tier": " Gold "},
+			},
+		},
+	}
+	identity := normalizedInputForTest(t, base)
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*evalset.EvalCase)
+	}{
+		{"context", func(item *evalset.EvalCase) {
+			item.ContextMessages[0].Content = "different context"
+		}},
+		{"session", func(item *evalset.EvalCase) {
+			item.SessionInput.State["locale"] = "fr-fr"
+		}},
+		{"content part", func(item *evalset.EvalCase) {
+			changed := "different part"
+			item.Conversation[0].UserContent.ContentParts[0].Text = &changed
+		}},
+		{"tool mock", func(item *evalset.EvalCase) {
+			item.Conversation[0].ToolMock.Actual[0].Result = map[string]any{"status": "late"}
+		}},
+		{"turn boundary", func(item *evalset.EvalCase) {
+			item.Conversation[0].UserContent.Content = "First turn Second turn"
+			item.Conversation = item.Conversation[:1]
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changed := cloneEvalCaseForTest(t, base)
+			test.mutate(changed)
+			require.NotEqual(t, identity, normalizedInputForTest(t, changed))
+		})
+	}
+}
+
+func TestNormalizedEvalCaseInputScenarioAndExcludedLabels(t *testing.T) {
+	maxInvocations := 3
+	scenario := &evalset.EvalCase{
+		EvalID: "scenario-a",
+		ConversationScenario: &evalset.ConversationScenario{
+			Driver:                evalset.ConversationScenarioDriverActual,
+			StartingPrompt:        " Start ",
+			ConversationPlan:      " Ask then finish ",
+			StopSignal:            " DONE ",
+			MaxAllowedInvocations: &maxInvocations,
+		},
+		SessionInput: &evalset.SessionInput{UserID: "user"},
+	}
+	identity := normalizedInputForTest(t, scenario)
+	for _, mutate := range []func(*evalset.ConversationScenario){
+		func(item *evalset.ConversationScenario) { item.Driver = evalset.ConversationScenarioDriverExpected },
+		func(item *evalset.ConversationScenario) { item.StartingPrompt = "different" },
+		func(item *evalset.ConversationScenario) { item.ConversationPlan = "different" },
+		func(item *evalset.ConversationScenario) { item.StopSignal = "different" },
+		func(item *evalset.ConversationScenario) { value := 4; item.MaxAllowedInvocations = &value },
+	} {
+		changed := cloneEvalCaseForTest(t, scenario)
+		mutate(changed.ConversationScenario)
+		require.NotEqual(t, identity, normalizedInputForTest(t, changed))
+	}
+	planOnly := cloneEvalCaseForTest(t, scenario)
+	planOnly.ConversationScenario.StartingPrompt = ""
+	require.NotEmpty(t, normalizedInputForTest(t, planOnly))
+
+	labeled := &evalset.EvalCase{
+		EvalID: "case-a",
+		Conversation: []*evalset.Invocation{{
+			InvocationID:  "invocation-a",
+			UserContent:   &model.Message{Role: model.RoleUser, Content: "same input"},
+			FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "expected-a"},
+			Tools:         []*evalset.Tool{{ID: "tool-a", Name: "expected-tool"}},
+		}},
+		SessionInput:      &evalset.SessionInput{UserID: "user"},
+		CreationTimestamp: &epochtime.EpochTime{Time: time.Unix(1, 0)},
+		Rubrics: []*evalset.EvalCaseRubric{{
+			ID:      "rubric-a",
+			Content: &evalset.EvalCaseRubricContent{Text: "label-a"},
+		}},
+	}
+	relabeled := cloneEvalCaseForTest(t, labeled)
+	relabeled.EvalID = "case-b"
+	relabeled.CreationTimestamp = &epochtime.EpochTime{Time: time.Unix(2, 0)}
+	relabeled.Rubrics[0].Content.Text = "label-b"
+	relabeled.Conversation[0].InvocationID = "invocation-b"
+	relabeled.Conversation[0].FinalResponse.Content = "expected-b"
+	relabeled.Conversation[0].Tools[0].Name = "different-expected-tool"
+	require.Equal(
+		t,
+		normalizedInputForTest(t, labeled),
+		normalizedInputForTest(t, relabeled),
+	)
+}
+
+func TestNormalizedEvalCaseInputIsMapStableAndUsesTraceActualInput(t *testing.T) {
+	first := &evalset.EvalCase{
+		EvalMode: evalset.EvalModeTrace,
+		Conversation: []*evalset.Invocation{{
+			UserContent:   &model.Message{Role: model.RoleUser, Content: "expected input"},
+			FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "expected output"},
+		}},
+		ActualConversation: []*evalset.Invocation{{
+			UserContent:   &model.Message{Role: model.RoleUser, Content: "actual input"},
+			FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "actual output"},
+		}},
+		SessionInput: &evalset.SessionInput{State: map[string]any{
+			"first":  "one",
+			"second": map[string]any{"a": 1, "b": 2},
+		}},
+	}
+	second := cloneEvalCaseForTest(t, first)
+	second.SessionInput.State = map[string]any{
+		"second": map[string]any{"b": 2, "a": 1},
+		"first":  "one",
+	}
+	second.Conversation[0].UserContent.Content = "different expected input"
+	second.ActualConversation[0].FinalResponse.Content = "different actual output"
+	require.Equal(t, normalizedInputForTest(t, first), normalizedInputForTest(t, second))
+
+	second.ActualConversation[0].UserContent.Content = "different actual input"
+	require.NotEqual(t, normalizedInputForTest(t, first), normalizedInputForTest(t, second))
+}
+
+func TestNormalizedEvalCaseInputPreservesStructuredStringSemantics(t *testing.T) {
+	base := &evalset.EvalCase{
+		Conversation: []*evalset.Invocation{{
+			UserContent: &model.Message{Role: model.RoleUser, Content: "same input"},
+			ToolMock: &toolmock.ToolMock{Actual: []*toolmock.Tool{{
+				Name:   "lookup",
+				Result: map[string]any{"token": "CaseSensitive"},
+			}}},
+		}},
+		SessionInput: &evalset.SessionInput{
+			UserID: "User-A",
+			State:  map[string]any{"key": "CaseSensitive"},
+		},
+	}
+	identity := normalizedInputForTest(t, base)
+
+	sessionChanged := cloneEvalCaseForTest(t, base)
+	sessionChanged.SessionInput.State["key"] = "casesensitive"
+	require.NotEqual(t, identity, normalizedInputForTest(t, sessionChanged))
+
+	userChanged := cloneEvalCaseForTest(t, base)
+	userChanged.SessionInput.UserID = "user-a"
+	require.NotEqual(t, identity, normalizedInputForTest(t, userChanged))
+
+	mockChanged := cloneEvalCaseForTest(t, base)
+	mockChanged.Conversation[0].ToolMock.Actual[0].Result = map[string]any{
+		"token": "casesensitive",
+	}
+	require.NotEqual(t, identity, normalizedInputForTest(t, mockChanged))
+}
+
+func normalizedInputForTest(t *testing.T, evalCase *evalset.EvalCase) string {
+	t.Helper()
+	normalized, err := normalizedEvalCaseInput(evalCase)
+	require.NoError(t, err)
+	return normalized
+}
+
+func cloneEvalCaseForTest(t *testing.T, source *evalset.EvalCase) *evalset.EvalCase {
+	t.Helper()
+	data, err := json.Marshal(source)
+	require.NoError(t, err)
+	var cloned evalset.EvalCase
+	require.NoError(t, json.Unmarshal(data, &cloned))
+	return &cloned
 }
 
 func TestBindRuntimeRefreshesEvaluatorProvenanceAndCopiesInput(t *testing.T) {

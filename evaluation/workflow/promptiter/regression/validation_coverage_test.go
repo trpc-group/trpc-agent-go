@@ -1830,11 +1830,11 @@ func TestConfigParsingDatasetAndLocatorHelpers(t *testing.T) {
 	require.Error(t, err)
 
 	require.Error(t, func() error {
-		_, err := loadNativeEvalSet(context.Background(), "app", "missing", "train")
+		_, err := loadNativeEvalSet(context.Background(), "app", []byte(`{`), "train")
 		return err
 	}())
 	require.Error(t, func() error {
-		_, err := loadNativeMetrics(context.Background(), "app", "train", "missing")
+		_, err := loadNativeMetrics(context.Background(), "app", "train", []byte(`[`))
 		return err
 	}())
 
@@ -1881,7 +1881,7 @@ func TestConfigParsingDatasetAndLocatorHelpers(t *testing.T) {
 		ConversationScenario: &evalset.ConversationScenario{StartingPrompt: " Scenario  Input "},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "scenario input", normalized)
+	require.Contains(t, normalized, `"startingPrompt":"scenario input"`)
 	partText := "part input"
 	normalized, err = normalizedEvalCaseInput(&evalset.EvalCase{
 		Conversation: []*evalset.Invocation{
@@ -1941,15 +1941,10 @@ func TestConfigParsingDatasetAndLocatorHelpers(t *testing.T) {
 	))
 
 	require.Len(t, profileFromPrompt("prompt", []string{"a", "b"}).Overrides, 2)
-	exact := &exactEvalSetLocator{path: "exact"}
-	require.Equal(t, "exact", exact.Build("", "", ""))
-	list, err := exact.List("", "")
-	require.NoError(t, err)
-	require.Empty(t, list)
 	input := &inputEvalSetLocator{paths: map[string]string{"b": "B", "a": "A"}}
 	require.Equal(t, "A", input.Build("", "", "a"))
 	require.Contains(t, input.Build("", "", "missing"), "__unknown_eval_set__")
-	list, err = input.List("", "")
+	list, err := input.List("", "")
 	require.NoError(t, err)
 	require.Equal(t, []string{"a", "b"}, list)
 	require.Equal(t, "metrics", (&inputMetricLocator{path: "metrics"}).Build("", "", ""))
@@ -2008,11 +2003,11 @@ func TestConfigurationLoadersAndFrozenManagersRejectPreflightFailures(t *testing
 	require.Error(t, err)
 	_, err = LoadRegressionConfig(filepath.Join(t.TempDir(), "missing.json"))
 	require.Error(t, err)
-	_, _, err = NewInputManagers(InputFiles{}, nil)
+	_, _, err = NewInputManagers(nil)
 	require.Error(t, err)
 	invalid := pipelineRunConfig()
 	invalid.RunID = ""
-	_, _, err = NewInputManagers(InputFiles{}, &invalid)
+	_, _, err = NewInputManagers(&invalid)
 	require.Error(t, err)
 }
 

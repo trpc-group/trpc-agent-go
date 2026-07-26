@@ -32,6 +32,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 const (
@@ -124,15 +125,25 @@ func LoadRunConfig(ctx context.Context, appName string, files InputFiles) (*RunC
 	if err := validateSingleJSON(rawInputs["metrics"]); err != nil {
 		return nil, fmt.Errorf("validate native metrics JSON: %w", err)
 	}
-	trainSet, err := loadNativeEvalSet(ctx, appName, files.TrainEvalSet, "train")
+	trainSet, err := loadNativeEvalSet(ctx, appName, rawInputs["trainEvalSet"], "train")
 	if err != nil {
 		return nil, err
 	}
-	validationSet, err := loadNativeEvalSet(ctx, appName, files.ValidationEvalSet, "validation")
+	validationSet, err := loadNativeEvalSet(
+		ctx,
+		appName,
+		rawInputs["validationEvalSet"],
+		"validation",
+	)
 	if err != nil {
 		return nil, err
 	}
-	nativeMetrics, err := loadNativeMetrics(ctx, appName, trainSet.EvalSetID, files.Metrics)
+	nativeMetrics, err := loadNativeMetrics(
+		ctx,
+		appName,
+		trainSet.EvalSetID,
+		rawInputs["metrics"],
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -169,20 +180,23 @@ func LoadRunConfig(ctx context.Context, appName string, files InputFiles) (*RunC
 	}
 	metricPolicyHash := hashStrings("native-metric-policy-v1", hashes["metrics"], string(gateJSON))
 	config := &RunConfig{
-		ReportID:           regressionConfig.ReportID,
-		GeneratedAt:        regressionConfig.GeneratedAt.UTC(),
-		Seed:               promptIterConfig.Seed,
-		InitialProfile:     initialProfile,
-		Train:              trainSpec,
-		Validation:         validationSpec,
-		PromptIter:         promptIterConfig.Policy,
-		Gate:               regressionConfig.Gate,
-		Output:             regressionConfig.Output,
-		InputHashes:        hashes,
-		MetricPolicyHash:   metricPolicyHash,
-		EvidenceLimit:      regressionConfig.EvidenceLimit,
-		CriticalCaseIDs:    append([]string(nil), regressionConfig.CriticalCaseIDs...),
-		HardFailureCaseIDs: append([]string(nil), regressionConfig.HardFailureCaseIDs...),
+		ReportID:               regressionConfig.ReportID,
+		GeneratedAt:            regressionConfig.GeneratedAt.UTC(),
+		Seed:                   promptIterConfig.Seed,
+		InitialProfile:         initialProfile,
+		Train:                  trainSpec,
+		Validation:             validationSpec,
+		PromptIter:             promptIterConfig.Policy,
+		Gate:                   regressionConfig.Gate,
+		Output:                 regressionConfig.Output,
+		InputHashes:            hashes,
+		MetricPolicyHash:       metricPolicyHash,
+		EvidenceLimit:          regressionConfig.EvidenceLimit,
+		CriticalCaseIDs:        append([]string(nil), regressionConfig.CriticalCaseIDs...),
+		HardFailureCaseIDs:     append([]string(nil), regressionConfig.HardFailureCaseIDs...),
+		trainEvalSetInput:      bytes.Clone(rawInputs["trainEvalSet"]),
+		validationEvalSetInput: bytes.Clone(rawInputs["validationEvalSet"]),
+		metricsInput:           bytes.Clone(rawInputs["metrics"]),
 	}
 	config.executionNonce, err = newExecutionNonce()
 	if err != nil {
@@ -341,27 +355,22 @@ func sealSourceConfig(config *RunConfig) error {
 }
 
 // NewInputManagers returns official local managers backed by immutable copies
-// of the exact bytes represented by config. Source files are hash-checked
-// before being copied so later edits cannot change an in-flight run.
-func NewInputManagers(files InputFiles, config *RunConfig) (evalset.Manager, metric.Manager, error) {
+// of the exact bytes represented by config.
+func NewInputManagers(config *RunConfig) (evalset.Manager, metric.Manager, error) {
 	if config == nil {
 		return nil, nil, errors.New("run config is nil")
 	}
 	if err := validateRunConfig(config); err != nil {
 		return nil, nil, fmt.Errorf("validate run config: %w", err)
 	}
-	paths, err := validateInputFiles(files)
-	if err != nil {
-		return nil, nil, err
-	}
 	inputNames := []string{"trainEvalSet", "validationEvalSet", "metrics"}
-	raw := make(map[string][]byte, len(inputNames))
+	raw := map[string][]byte{
+		"trainEvalSet":      bytes.Clone(config.trainEvalSetInput),
+		"validationEvalSet": bytes.Clone(config.validationEvalSetInput),
+		"metrics":           bytes.Clone(config.metricsInput),
+	}
 	for _, name := range inputNames {
-		data, err := os.ReadFile(paths[name])
-		if err != nil {
-			return nil, nil, fmt.Errorf("read %s input %s: %w", name, paths[name], err)
-		}
-		actualHash := hashBytes(data)
+		actualHash := hashBytes(raw[name])
 		if actualHash != config.InputHashes[name] {
 			label := strings.ReplaceAll(name, "EvalSet", " eval-set")
 			return nil, nil, fmt.Errorf(
@@ -371,7 +380,6 @@ func NewInputManagers(files InputFiles, config *RunConfig) (evalset.Manager, met
 				config.InputHashes[name],
 			)
 		}
-		raw[name] = data
 	}
 	snapshotDir, err := os.MkdirTemp("", "trpc-agent-regression-inputs-")
 	if err != nil {
@@ -802,29 +810,57 @@ func validateSingleJSON(data []byte) error {
 	return nil
 }
 
-func loadNativeEvalSet(ctx context.Context, appName, path, role string) (*evalset.EvalSet, error) {
-	manager := evalsetlocal.New(evalset.WithLocator(&exactEvalSetLocator{path: path}))
-	defer manager.Close()
-	result, err := manager.Get(ctx, appName, role)
-	if err != nil {
-		return nil, fmt.Errorf("load native %s eval set through manager: %w", role, err)
+func loadNativeEvalSet(
+	ctx context.Context,
+	appName string,
+	data []byte,
+	role string,
+) (*evalset.EvalSet, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return result, nil
+	if strings.TrimSpace(appName) == "" {
+		return nil, errors.New("app name is empty")
+	}
+	var result evalset.EvalSet
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("decode native %s eval set: %w", role, err)
+	}
+	if result.EvalCases == nil {
+		result.EvalCases = []*evalset.EvalCase{}
+	}
+	return &result, nil
 }
 
-func loadNativeMetrics(ctx context.Context, appName, evalSetID, path string) ([]*metric.EvalMetric, error) {
-	manager := metriclocal.New(metric.WithLocator(&inputMetricLocator{path: path}))
-	defer manager.Close()
-	names, err := manager.List(ctx, appName, evalSetID)
-	if err != nil {
-		return nil, fmt.Errorf("list native metrics through manager: %w", err)
+func loadNativeMetrics(
+	ctx context.Context,
+	appName string,
+	evalSetID string,
+	data []byte,
+) ([]*metric.EvalMetric, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	if len(names) == 0 {
+	if strings.TrimSpace(appName) == "" {
+		return nil, errors.New("app name is empty")
+	}
+	if strings.TrimSpace(evalSetID) == "" {
+		return nil, errors.New("eval set id is empty")
+	}
+	var decoded []*metric.EvalMetric
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return nil, fmt.Errorf("decode native metrics: %w", err)
+	}
+	if len(decoded) == 0 {
 		return nil, errors.New("native metrics inventory is empty")
 	}
-	results := make([]*metric.EvalMetric, 0, len(names))
-	seen := make(map[string]struct{}, len(names))
-	for _, name := range names {
+	results := make([]*metric.EvalMetric, 0, len(decoded))
+	seen := make(map[string]struct{}, len(decoded))
+	for _, item := range decoded {
+		if item == nil {
+			return nil, errors.New("native metric is nil")
+		}
+		name := item.MetricName
 		if strings.TrimSpace(name) == "" {
 			return nil, errors.New("native metric name is empty")
 		}
@@ -832,11 +868,7 @@ func loadNativeMetrics(ctx context.Context, appName, evalSetID, path string) ([]
 			return nil, fmt.Errorf("duplicate native metric name %q", name)
 		}
 		seen[name] = struct{}{}
-		item, err := manager.Get(ctx, appName, evalSetID, name)
-		if err != nil {
-			return nil, fmt.Errorf("get native metric %q through manager: %w", name, err)
-		}
-		if item == nil || item.Criterion == nil {
+		if item.Criterion == nil {
 			return nil, fmt.Errorf("native metric %q has no criterion", name)
 		}
 		if !finiteConfigNumber(item.Threshold) {
@@ -900,32 +932,171 @@ func buildDatasetSpec(
 	return spec, nil
 }
 
+const normalizedEvalCaseInputVersion = "inference-input-v2"
+
+type canonicalEvalCaseInput struct {
+	Version         string                         `json:"version"`
+	Scenario        *canonicalConversationScenario `json:"scenario,omitempty"`
+	ContextMessages []*model.Message               `json:"contextMessages,omitempty"`
+	SessionInput    *canonicalSessionInput         `json:"sessionInput,omitempty"`
+	Turns           []canonicalInputTurn           `json:"turns,omitempty"`
+}
+
+type canonicalConversationScenario struct {
+	Driver                string `json:"driver"`
+	StartingPrompt        string `json:"startingPrompt"`
+	ConversationPlan      string `json:"conversationPlan"`
+	StopSignal            string `json:"stopSignal"`
+	MaxAllowedInvocations *int   `json:"maxAllowedInvocations"`
+}
+
+type canonicalSessionInput struct {
+	AppName string `json:"appName"`
+	UserID  string `json:"userId"`
+	State   any    `json:"state"`
+}
+
+type canonicalInputTurn struct {
+	UserContent *model.Message `json:"userContent"`
+	ToolMock    any            `json:"toolMock,omitempty"`
+}
+
 func normalizedEvalCaseInput(evalCase *evalset.EvalCase) (string, error) {
-	parts := make([]string, 0, len(evalCase.Conversation)+1)
-	for _, invocation := range evalCase.Conversation {
-		if invocation == nil || invocation.UserContent == nil {
-			continue
+	if evalCase == nil {
+		return "", errors.New("eval case is nil")
+	}
+	identity := canonicalEvalCaseInput{Version: normalizedEvalCaseInputVersion}
+	var err error
+	identity.ContextMessages, err = canonicalInputMessages(evalCase.ContextMessages)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize context messages: %w", err)
+	}
+	if evalCase.SessionInput != nil {
+		state, err := canonicalInputValue(evalCase.SessionInput.State)
+		if err != nil {
+			return "", fmt.Errorf("canonicalize session state: %w", err)
 		}
-		content := strings.TrimSpace(invocation.UserContent.Content)
-		if content == "" && len(invocation.UserContent.ContentParts) > 0 {
-			encoded, err := json.Marshal(invocation.UserContent.ContentParts)
-			if err != nil {
-				return "", err
+		identity.SessionInput = &canonicalSessionInput{
+			AppName: evalCase.SessionInput.AppName,
+			UserID:  evalCase.SessionInput.UserID,
+			State:   state,
+		}
+	}
+
+	hasUserInput := false
+	if scenario := evalCase.ConversationScenario; scenario != nil {
+		identity.Scenario = &canonicalConversationScenario{
+			Driver:                string(scenario.Driver),
+			StartingPrompt:        normalizeInputText(scenario.StartingPrompt),
+			ConversationPlan:      normalizeInputText(scenario.ConversationPlan),
+			StopSignal:            normalizeInputText(scenario.StopSignal),
+			MaxAllowedInvocations: scenario.MaxAllowedInvocations,
+		}
+		hasUserInput = identity.Scenario.StartingPrompt != "" ||
+			identity.Scenario.ConversationPlan != ""
+	} else {
+		invocations := evalCase.Conversation
+		if evalCase.EvalMode == evalset.EvalModeTrace && len(evalCase.ActualConversation) > 0 {
+			invocations = evalCase.ActualConversation
+		}
+		identity.Turns = make([]canonicalInputTurn, len(invocations))
+		for i, invocation := range invocations {
+			if invocation == nil {
+				continue
 			}
-			content = string(encoded)
-		}
-		if content != "" {
-			parts = append(parts, content)
+			identity.Turns[i].UserContent, err = canonicalInputMessage(invocation.UserContent)
+			if err != nil {
+				return "", fmt.Errorf("canonicalize user message %d: %w", i+1, err)
+			}
+			hasUserInput = hasUserInput || invocation.UserContent != nil
+			if evalCase.EvalMode != evalset.EvalModeTrace &&
+				invocation.ToolMock != nil &&
+				len(invocation.ToolMock.Actual) > 0 {
+				identity.Turns[i].ToolMock, err = canonicalInputValue(invocation.ToolMock.Actual)
+				if err != nil {
+					return "", fmt.Errorf("canonicalize tool mock %d: %w", i+1, err)
+				}
+			}
 		}
 	}
-	if evalCase.ConversationScenario != nil {
-		parts = append(parts, evalCase.ConversationScenario.StartingPrompt)
-	}
-	normalized := strings.ToLower(strings.Join(strings.Fields(strings.Join(parts, "\n")), " "))
-	if normalized == "" {
+	if !hasUserInput {
 		return "", errors.New("user input is empty")
 	}
-	return normalized, nil
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return "", fmt.Errorf("marshal canonical input: %w", err)
+	}
+	return string(data), nil
+}
+
+func canonicalInputMessages(messages []*model.Message) ([]*model.Message, error) {
+	if len(messages) == 0 {
+		return nil, nil
+	}
+	result := make([]*model.Message, len(messages))
+	for i, message := range messages {
+		copied, err := canonicalInputMessage(message)
+		if err != nil {
+			return nil, fmt.Errorf("message %d: %w", i+1, err)
+		}
+		result[i] = copied
+	}
+	return result, nil
+}
+
+func canonicalInputMessage(message *model.Message) (*model.Message, error) {
+	if message == nil {
+		return nil, nil
+	}
+	copied := *message
+	copied.Role = model.Role(normalizeInputText(string(message.Role)))
+	copied.Content = normalizeInputText(message.Content)
+	copied.ReasoningContent = normalizeInputText(message.ReasoningContent)
+	copied.ContentParts = append([]model.ContentPart(nil), message.ContentParts...)
+	for i := range copied.ContentParts {
+		part := &copied.ContentParts[i]
+		if part.Text != nil {
+			text := normalizeInputText(*part.Text)
+			part.Text = &text
+		}
+	}
+	copied.ToolCalls = append([]model.ToolCall(nil), message.ToolCalls...)
+	for i := range copied.ToolCalls {
+		call := &copied.ToolCalls[i]
+		call.Function.Description = normalizeInputText(call.Function.Description)
+		call.Function.Arguments = bytes.Clone(call.Function.Arguments)
+		extraFields, err := canonicalInputValue(call.ExtraFields)
+		if err != nil {
+			return nil, fmt.Errorf("canonicalize tool call extra fields: %w", err)
+		}
+		if extraFields == nil {
+			call.ExtraFields = nil
+		} else {
+			call.ExtraFields = extraFields.(map[string]any)
+		}
+	}
+	return &copied, nil
+}
+
+func canonicalInputValue(value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	return decoded, nil
+}
+
+func normalizeInputText(value string) string {
+	return strings.ToLower(strings.Join(strings.Fields(value), " "))
 }
 
 func validateHeldoutExclusion(train, validation DatasetSpec) error {
@@ -1066,18 +1237,6 @@ func hashStrings(values ...string) string {
 
 func finiteConfigNumber(value float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0)
-}
-
-type exactEvalSetLocator struct {
-	path string
-}
-
-func (l *exactEvalSetLocator) Build(_, _, _ string) string {
-	return l.path
-}
-
-func (l *exactEvalSetLocator) List(_, _ string) ([]string, error) {
-	return []string{}, nil
 }
 
 type inputEvalSetLocator struct {

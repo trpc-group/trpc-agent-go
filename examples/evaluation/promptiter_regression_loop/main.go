@@ -95,7 +95,7 @@ func run(ctx context.Context, dataDir, outputDir string) (*regression.Report, er
 		return nil, err
 	}
 
-	evalSetManager, metricManager, err := regression.NewInputManagers(files, config)
+	evalSetManager, metricManager, err := regression.NewInputManagers(config)
 	if err != nil {
 		return nil, err
 	}

@@ -474,25 +474,28 @@ type RuntimeConfig struct {
 
 // RunConfig contains resolved in-memory inputs for one pipeline run.
 type RunConfig struct {
-	ReportID            string
-	RunID               string
-	GeneratedAt         time.Time
-	Seed                int64
-	InitialProfile      *promptiter.Profile
-	Train               DatasetSpec
-	Validation          DatasetSpec
-	PromptIter          PromptIterPolicy
-	Gate                GatePolicy
-	Output              OutputConfig
-	InputHashes         map[string]string
-	EvaluatorConfigHash string
-	MetricPolicyHash    string
-	Runtime             RuntimeConfig
-	CriticalCaseIDs     []string
-	HardFailureCaseIDs  []string
-	EvidenceLimit       int
-	sourceConfigHash    string
-	executionNonce      string
+	ReportID               string
+	RunID                  string
+	GeneratedAt            time.Time
+	Seed                   int64
+	InitialProfile         *promptiter.Profile
+	Train                  DatasetSpec
+	Validation             DatasetSpec
+	PromptIter             PromptIterPolicy
+	Gate                   GatePolicy
+	Output                 OutputConfig
+	InputHashes            map[string]string
+	EvaluatorConfigHash    string
+	MetricPolicyHash       string
+	Runtime                RuntimeConfig
+	CriticalCaseIDs        []string
+	HardFailureCaseIDs     []string
+	EvidenceLimit          int
+	sourceConfigHash       string
+	executionNonce         string
+	trainEvalSetInput      []byte
+	validationEvalSetInput []byte
+	metricsInput           []byte
 }
 
 // ResolvedConfig is the serializable configuration saved in the report.
