@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -411,6 +412,54 @@ func TestApplyConcurrentOperationsLetsCallsOverlap(t *testing.T) {
 	}
 }
 
+func TestNestedConcurrentSequencesAreAssignedOnce(t *testing.T) {
+	var seq int
+	ops := assignConcurrentSequences([]Operation{
+		{
+			Kind: OpConcurrent,
+			Concurrent: []Operation{
+				appendMsg("nested-a", "assistant", model.RoleAssistant, "a"),
+				appendMsg("nested-b", "assistant", model.RoleAssistant, "b"),
+			},
+		},
+		appendMsg("direct", "assistant", model.RoleAssistant, "direct"),
+	}, &seq)
+	if seq != 3 {
+		t.Fatalf("assigned seq = %d, want 3", seq)
+	}
+	ops = assignConcurrentSequences(ops, &seq)
+	if seq != 3 {
+		t.Fatalf("reassign touched sequence counter: %d", seq)
+	}
+	got := []int{
+		ops[0].Concurrent[0].Event.sequence,
+		ops[0].Concurrent[1].Event.sequence,
+		ops[1].Event.sequence,
+	}
+	want := []int{2, 1, 0}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sequences = %v, want %v", got, want)
+	}
+}
+
+func TestConcurrentStateWriteConflictIsRejected(t *testing.T) {
+	c := ReplayCase{
+		Name: "conflicting-state",
+		Key:  baseKey("conflicting-state"),
+		Operations: []Operation{{
+			Kind: OpConcurrent,
+			Concurrent: []Operation{
+				setState("phase", raw(`"a"`)),
+				setState("phase", raw(`"b"`)),
+			},
+		}},
+	}
+	_, err := NewInMemoryBackend().Apply(context.Background(), c)
+	if err == nil || !strings.Contains(err.Error(), "concurrent state mutations conflict") {
+		t.Fatalf("Apply() error = %v, want conflict", err)
+	}
+}
+
 func TestNormalizeEventPreservesCorrelationFields(t *testing.T) {
 	evt, err := eventFromSpec(EventSpec{
 		LogicalID:          "tool-response",
@@ -609,6 +658,34 @@ func TestMemoryStableIDIncludesMetadata(t *testing.T) {
 	}
 	if first.StableID == second.StableID {
 		t.Fatalf("metadata-only memory difference collapsed: %+v %+v", first, second)
+	}
+}
+
+func TestExpectedMemoryIDIncludesEpisodicMetadata(t *testing.T) {
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	c := ReplayCase{
+		Name: "no-id-episode",
+		Key:  baseKey("no-id-episode"),
+		Operations: []Operation{{
+			Kind: OpAddMemory,
+			Memory: &MemorySpec{
+				Content: "same episode",
+				Topics:  []string{"topic"},
+				Metadata: &memory.Metadata{
+					Kind:         memory.KindEpisode,
+					EventTime:    &when,
+					Participants: []string{"user", "agent"},
+					Location:     "room-a",
+				},
+			},
+		}},
+	}
+	snapshot, err := NewInMemoryBackend().Apply(context.Background(), c)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	if diffs := ValidateReplaySnapshot(snapshot, c); len(diffs) != 0 {
+		t.Fatalf("no-id episodic memory should validate without diffs: %+v", diffs)
 	}
 }
 
@@ -1493,11 +1570,58 @@ func TestStoreAndHelperErrorBranches(t *testing.T) {
 	if memoryUpdateOptions(nil) != nil {
 		t.Fatalf("nil memory update spec should not produce options")
 	}
-	if id, err := findMemoryID(context.Background(), meminmemory.NewMemoryService(), baseKey("missing"), "missing"); err == nil || id != "" {
+	if id, err := findMemoryID(context.Background(), meminmemory.NewMemoryService(), baseKey("missing"), &MemorySpec{Content: "missing"}); err == nil || id != "" {
 		t.Fatalf("findMemoryID missing result = %q, %v", id, err)
 	}
-	if id, err := findMemoryID(context.Background(), errMemoryService{readErr: errors.New("read")}, baseKey("err"), "x"); err == nil || id != "" {
+	if id, err := findMemoryID(context.Background(), errMemoryService{readErr: errors.New("read")}, baseKey("err"), &MemorySpec{Content: "x"}); err == nil || id != "" {
 		t.Fatalf("findMemoryID read error result = %q, %v", id, err)
+	}
+	lookupSvc := meminmemory.NewMemoryService()
+	defer lookupSvc.Close()
+	key := baseKey("lookup-full-identity")
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, location := range []string{"room-a", "room-b"} {
+		if err := lookupSvc.AddMemory(
+			context.Background(),
+			userKey(key),
+			"same episode",
+			[]string{"topic"},
+			memory.WithMetadata(&memory.Metadata{
+				Kind:      memory.KindEpisode,
+				EventTime: &when,
+				Location:  location,
+			}),
+		); err != nil {
+			t.Fatalf("AddMemory() error = %v", err)
+		}
+	}
+	id, err := findMemoryID(context.Background(), lookupSvc, key, &MemorySpec{
+		Content: "same episode",
+		Topics:  []string{"topic"},
+		Metadata: &memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &when,
+			Location:  "room-b",
+		},
+	})
+	if err != nil {
+		t.Fatalf("findMemoryID full identity error = %v", err)
+	}
+	entries, err := lookupSvc.ReadMemories(context.Background(), userKey(key), 100)
+	if err != nil {
+		t.Fatalf("ReadMemories() error = %v", err)
+	}
+	found := false
+	for _, entry := range entries {
+		if entry.ID == id && entry.Memory.Location != "room-b" {
+			t.Fatalf("findMemoryID matched wrong episode: %+v", entry.Memory)
+		}
+		if entry.ID == id {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("findMemoryID returned unknown id %q from entries %+v", id, entries)
 	}
 	if trackEvent, err := trackEventFromSpec(&TrackSpec{Name: "default", Payload: map[string]any{"ok": true}}); err != nil || trackEvent.Timestamp.IsZero() {
 		t.Fatalf("trackEventFromSpec default timestamp = %+v, %v", trackEvent, err)

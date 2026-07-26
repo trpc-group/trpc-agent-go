@@ -104,6 +104,9 @@ func (b *inMemoryBackend) Unsupported(cap Capability) string {
 }
 
 func (b *inMemoryBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, error) {
+	if err := validateReplayCase(c); err != nil {
+		return nil, err
+	}
 	sessions := sessinmemory.NewSessionService(
 		sessinmemory.WithSummarizer(deterministicSummarizer{}),
 		sessinmemory.WithAsyncSummaryNum(0),
@@ -187,6 +190,9 @@ func (b *serviceBackend) Unsupported(cap Capability) string {
 func (b *serviceBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, error) {
 	if b.factory == nil {
 		return nil, fmt.Errorf("service backend %q has no factory", b.name)
+	}
+	if err := validateReplayCase(c); err != nil {
+		return nil, err
 	}
 	bundle, err := b.factory(ctx, c)
 	if err != nil {
@@ -413,7 +419,7 @@ func (r *serviceRun) addMemory(spec *MemorySpec) error {
 	if spec.ID == "" {
 		return nil
 	}
-	id, err := findMemoryID(r.ctx, r.memories, r.caseDef.Key, spec.Content)
+	id, err := findMemoryID(r.ctx, r.memories, r.caseDef.Key, spec)
 	if err != nil {
 		return err
 	}
@@ -688,7 +694,7 @@ func (r *inMemoryRun) addMemory(spec *MemorySpec) error {
 	if spec.ID == "" {
 		return nil
 	}
-	id, err := findMemoryID(r.ctx, r.memories, r.caseDef.Key, spec.Content)
+	id, err := findMemoryID(r.ctx, r.memories, r.caseDef.Key, spec)
 	if err != nil {
 		return err
 	}
@@ -859,6 +865,9 @@ func (b *jsonFileBackend) Unsupported(cap Capability) string {
 
 func (b *jsonFileBackend) Apply(ctx context.Context, c ReplayCase) (*Snapshot, error) {
 	_ = ctx
+	if err := validateReplayCase(c); err != nil {
+		return nil, err
+	}
 	dir := b.dir
 	if dir == "" {
 		var err error
@@ -1145,8 +1154,12 @@ func assignConcurrentSequences(ops []Operation, seq *int) []Operation {
 				continue
 			}
 			eventCopy := *out[i].Event
-			eventCopy.UseSequence = true
-			eventCopy.Sequence = *seq
+			if eventCopy.useSequence {
+				out[i].Event = &eventCopy
+				continue
+			}
+			eventCopy.useSequence = true
+			eventCopy.sequence = *seq
 			out[i].Event = &eventCopy
 			*seq++
 		case OpConcurrent:
@@ -1154,6 +1167,78 @@ func assignConcurrentSequences(ops []Operation, seq *int) []Operation {
 		}
 	}
 	return out
+}
+
+func validateReplayCase(c ReplayCase) error {
+	if err := validateConcurrentStateMutations(c.Operations, "$.operations"); err != nil {
+		return fmt.Errorf("invalid replay case %q: %w", c.Name, err)
+	}
+	return nil
+}
+
+func validateConcurrentStateMutations(ops []Operation, path string) error {
+	for i, op := range ops {
+		opPath := fmt.Sprintf("%s[%d]", path, i)
+		if op.Kind != OpConcurrent {
+			if err := validateConcurrentStateMutations(op.Concurrent, opPath+".concurrent"); err != nil {
+				return err
+			}
+			continue
+		}
+		seen := map[string]string{}
+		for j, child := range op.Concurrent {
+			childPath := fmt.Sprintf("%s.concurrent[%d]", opPath, j)
+			keys := operationStateMutationKeys(child)
+			for key := range keys {
+				if prev, ok := seen[key]; ok {
+					return fmt.Errorf("concurrent state mutations conflict on key %q between %s and %s", key, prev, childPath)
+				}
+				if prev, ok := seen["*"]; ok && key != "*" {
+					return fmt.Errorf("concurrent state mutation for key %q conflicts with clear_state at %s and %s", key, prev, childPath)
+				}
+				if key == "*" {
+					for seenKey, prev := range seen {
+						if seenKey != "*" {
+							return fmt.Errorf("concurrent clear_state conflicts with state mutation for key %q at %s and %s", seenKey, prev, childPath)
+						}
+					}
+				}
+				seen[key] = childPath
+			}
+			if err := validateConcurrentStateMutations(child.Concurrent, childPath+".concurrent"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func operationStateMutationKeys(op Operation) map[string]struct{} {
+	keys := map[string]struct{}{}
+	collectStateMutationKeys(op, keys)
+	return keys
+}
+
+func collectStateMutationKeys(op Operation, keys map[string]struct{}) {
+	switch op.Kind {
+	case OpAppendEvent, OpRetryEvent:
+		if op.Event == nil {
+			return
+		}
+		for key := range op.Event.StateDelta {
+			keys[key] = struct{}{}
+		}
+	case OpSetState, OpDeleteState:
+		if op.State != nil && op.State.Key != "" {
+			keys[op.State.Key] = struct{}{}
+		}
+	case OpClearState:
+		keys["*"] = struct{}{}
+	case OpConcurrent:
+		for _, child := range op.Concurrent {
+			collectStateMutationKeys(child, keys)
+		}
+	}
 }
 
 func probeEventPage(
@@ -1431,8 +1516,8 @@ func reserveEventSequence(
 		return 0, false
 	}
 	sequence := *seq
-	if spec.UseSequence {
-		sequence = spec.Sequence
+	if spec.useSequence {
+		sequence = spec.sequence
 	} else {
 		*seq++
 	}
@@ -1619,17 +1704,22 @@ func memoryUpdateOptions(spec *MemorySpec) []memory.UpdateOption {
 	return []memory.UpdateOption{memory.WithUpdateMetadata(spec.Metadata)}
 }
 
-func findMemoryID(ctx context.Context, svc memory.Service, key session.Key, content string) (string, error) {
+func findMemoryID(ctx context.Context, svc memory.Service, key session.Key, spec *MemorySpec) (string, error) {
 	entries, err := svc.ReadMemories(ctx, userKey(key), 100)
 	if err != nil {
 		return "", err
 	}
+	target := stableMemorySpecID(key, spec)
 	for _, entry := range entries {
-		if entry != nil && entry.Memory != nil && entry.Memory.Memory == content {
+		normalized, ok := normalizeMemoryEntry(entry, nil)
+		if ok && normalized.StableID == target {
 			return entry.ID, nil
 		}
 	}
-	return "", fmt.Errorf("memory not found for content %q", content)
+	if spec == nil {
+		return "", fmt.Errorf("memory not found")
+	}
+	return "", fmt.Errorf("memory not found for content %q", spec.Content)
 }
 
 func cloneRaw(v []byte) []byte {

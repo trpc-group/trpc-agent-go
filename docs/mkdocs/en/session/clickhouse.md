@@ -124,7 +124,7 @@ The ClickHouse implementation uses the `ReplacingMergeTree` engine for data upda
 
 **Key characteristics:**
 
-1. **ReplacingMergeTree**: Using the `updated_at` field, ClickHouse automatically merges records with the same primary key in the background, keeping the latest version
+1. **ReplacingMergeTree**: Most tables use the `updated_at` field as the replacement version. `session_summaries` uses `version_at` so `updated_at` can keep the semantic summary cutoff.
 2. **FINAL queries**: All read operations use the `FINAL` keyword (e.g., `SELECT ... FINAL`) to ensure data parts are merged at query time for read consistency
 3. **Soft Delete**: Delete operations are implemented by inserting a new record with a `deleted_at` timestamp; queries filter by `deleted_at IS NULL`
 
@@ -135,8 +135,8 @@ CREATE TABLE IF NOT EXISTS session_states (
     app_name    String,
     user_id     String,
     session_id  String,
-    state       JSON COMMENT 'Session state in JSON format',
-    extra_data  JSON COMMENT 'Additional metadata',
+    state       String COMMENT 'Session state as JSON-encoded text',
+    extra_data  String COMMENT 'Additional metadata as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
@@ -156,8 +156,8 @@ CREATE TABLE IF NOT EXISTS session_events (
     user_id     String,
     session_id  String,
     event_id    String,
-    event       JSON COMMENT 'Event data in JSON format',
-    extra_data  JSON COMMENT 'Additional metadata',
+    event       String COMMENT 'Event data as JSON-encoded text',
+    extra_data  String COMMENT 'Additional metadata as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
@@ -177,12 +177,13 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     user_id     String,
     session_id  String,
     filter_key  String COMMENT 'Filter key for multiple summaries per session',
-    summary     JSON COMMENT 'Summary data in JSON format',
+    summary     String COMMENT 'Summary data as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
+    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplacingMergeTree(version_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 ORDER BY (app_name, user_id, session_id, filter_key)
 SETTINGS allow_nullable_key = 1
@@ -235,7 +236,7 @@ COMMENT 'User states table';
 
 ## Notes
 
-1. **ClickHouse version**: Requires ClickHouse 22.3+ for JSON type support
+1. **ClickHouse version**: Requires ClickHouse 22.3+
 2. **ReplacingMergeTree**: Data updates are implemented by inserting new records; background auto-merge handles deduplication
 3. **FINAL queries**: Using FINAL at read time ensures consistency but may impact performance
 4. **Soft delete cleanup**: `WithDeletedRetention` uses `ALTER TABLE DELETE`, which may have performance impact on large datasets; prefer ClickHouse Native TTL

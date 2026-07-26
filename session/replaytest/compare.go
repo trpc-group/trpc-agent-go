@@ -498,7 +498,7 @@ func expectedMemoryFromSpec(key session.Key, spec *MemorySpec) NormalizedMemory 
 			metadata["location"] = spec.Metadata.Location
 		}
 	}
-	stable := stableID(key.AppName, key.UserID, spec.Content, strings.Join(topics, ","), string(kind))
+	stable := stableMemorySpecID(key, spec)
 	id := stable
 	if spec.ID != "" {
 		id = spec.ID

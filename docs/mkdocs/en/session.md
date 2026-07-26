@@ -1369,7 +1369,7 @@ ClickHouse implementation uses `ReplacingMergeTree` engine to handle data update
 
 **Key Features:**
 
-1.  **ReplacingMergeTree**: Uses `updated_at` column as version for background deduplication, keeping the latest version.
+1.  **ReplacingMergeTree**: Most tables use `updated_at` as the replacement version. `session_summaries` uses `version_at` so `updated_at` can keep the semantic summary cutoff.
 2.  **FINAL Query**: All read operations use `FINAL` keyword (e.g., `SELECT ... FINAL`) to ensure data consistency by merging parts at query time.
 3.  **Soft Delete**: Deletion is implemented by inserting a new record with `deleted_at` timestamp. Queries filter with `deleted_at IS NULL`.
 
@@ -1379,8 +1379,8 @@ CREATE TABLE IF NOT EXISTS session_states (
     app_name    String,
     user_id     String,
     session_id  String,
-    state       JSON COMMENT 'Session state in JSON format',
-    extra_data  JSON COMMENT 'Additional metadata',
+    state       String COMMENT 'Session state as JSON-encoded text',
+    extra_data  String COMMENT 'Additional metadata as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Expiration time (application-level)',
@@ -1398,8 +1398,8 @@ CREATE TABLE IF NOT EXISTS session_events (
     user_id     String,
     session_id  String,
     event_id    String,
-    event       JSON COMMENT 'Event data in JSON format',
-    extra_data  JSON COMMENT 'Additional metadata',
+    event       String COMMENT 'Event data as JSON-encoded text',
+    extra_data  String COMMENT 'Additional metadata as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
@@ -1417,12 +1417,13 @@ CREATE TABLE IF NOT EXISTS session_summaries (
     user_id     String,
     session_id  String,
     filter_key  String COMMENT 'Filter key for multiple summaries per session',
-    summary     JSON COMMENT 'Summary data in JSON format',
+    summary     String COMMENT 'Summary data as JSON-encoded text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
+    version_at  DateTime64(9),
     expires_at  Nullable(DateTime64(6)) COMMENT 'Reserved for future use',
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
-) ENGINE = ReplacingMergeTree(updated_at)
+) ENGINE = ReplacingMergeTree(version_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
 -- CRITICAL: Removed deleted_at from ORDER BY to allow ReplacingMergeTree to collapse deleted records
 ORDER BY (app_name, user_id, session_id, filter_key)

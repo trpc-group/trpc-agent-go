@@ -107,9 +107,11 @@ const (
 	OpAppendTrack OperationKind = "append_track"
 	// OpRetryEvent appends the same event through retry semantics.
 	OpRetryEvent OperationKind = "retry_event"
-	// OpConcurrent runs child operations from separate goroutines. The harness
-	// gives earlier operations a longer deterministic delay so commits are
-	// intentionally interleaved instead of serialized in the listed order.
+	// OpConcurrent runs child operations from separate goroutines. Child
+	// operations are released together, so their commit order is intentionally
+	// backend and scheduler dependent. State mutations inside the same
+	// concurrent group must be disjoint; conflicting state writes are rejected
+	// during replay validation.
 	OpConcurrent OperationKind = "concurrent"
 	// OpUnsupportedProbe records unsupported backend capability metadata.
 	OpUnsupportedProbe OperationKind = "unsupported_probe"
@@ -153,8 +155,8 @@ type EventSpec struct {
 	Object             string                          `json:"object,omitempty"`
 	Done               bool                            `json:"done,omitempty"`
 	Partial            bool                            `json:"partial,omitempty"`
-	UseSequence        bool                            `json:"-"`
-	Sequence           int                             `json:"-"`
+	useSequence        bool
+	sequence           int
 }
 
 // ToolCallSpec describes a function call inside an assistant event.
@@ -176,7 +178,6 @@ type MemorySpec struct {
 	Content  string           `json:"content,omitempty"`
 	Topics   []string         `json:"topics,omitempty"`
 	Metadata *memory.Metadata `json:"metadata,omitempty"`
-	Query    string           `json:"query,omitempty"`
 }
 
 // MemoryQuerySpec describes one memory retrieval probe.

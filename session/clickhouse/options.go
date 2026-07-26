@@ -284,6 +284,11 @@ func WithCascadeFullSessionSummary(enable bool) ServiceOpt {
 // - User doesn't have DDL permissions
 // - Tables are managed by migration tools
 // - Running in production environment where schema is pre-created
+// Pre-created tables should match schema.sql. JSON payload columns are stored
+// as JSON-encoded String values, and session_summaries uses version_at as the
+// ReplacingMergeTree version column. Existing installations with JSON-typed
+// payload columns require an explicit replacement-table migration described in
+// schema.sql; this option does not alter or migrate existing tables.
 func WithSkipDBInit(skip bool) ServiceOpt {
 	return func(opts *ServiceOpts) {
 		opts.skipDBInit = skip

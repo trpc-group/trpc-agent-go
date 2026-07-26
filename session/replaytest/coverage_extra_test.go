@@ -369,7 +369,7 @@ func TestBackendHelperExtraBranches(t *testing.T) {
 		{Kind: OpAppendEvent},
 		{Kind: OpConcurrent, Concurrent: []Operation{{Kind: OpAppendEvent, Event: &EventSpec{LogicalID: "nested"}}}},
 	}, &seq)
-	if seq != 1 || !ops[1].Concurrent[0].Event.UseSequence {
+	if seq != 1 || !ops[1].Concurrent[0].Event.useSequence {
 		t.Fatalf("nested concurrent sequence assignment failed: seq=%d ops=%+v", seq, ops)
 	}
 	if operationsContain([]Operation{{Kind: OpConcurrent, Concurrent: []Operation{{Kind: OpTTLProbe}}}}, OpTTLProbe) != true {
