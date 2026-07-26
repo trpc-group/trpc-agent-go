@@ -44,17 +44,13 @@ import (
 const (
 	codeReviewAgentName = "code_review_agent"
 	skillPath           = "./skills"
+	// sandboxDockerDir is relative to the example working directory and holds
+	// the Dockerfile used by the container sandbox backend.
+	sandboxDockerDir = "docker"
+	// sandboxImageTag is the local tag applied when building that Dockerfile.
+	// It is not a public registry reference; the image is built on this host.
+	sandboxImageTag = "code-review-agent-sandbox:latest"
 )
-
-var reviewContainerEnvironment = []string{
-	"PATH=/usr/local/bin:/usr/local/go/bin:/usr/bin:/bin",
-	"HOME=/tmp",
-	"GOCACHE=/tmp/code-review-go-build",
-	"GOPATH=/tmp/code-review-go",
-	"GOENV=off",
-	"GOPROXY=off",
-	"GOTOOLCHAIN=local",
-}
 
 // ReviewStore persists task-scoped review projections. Conversation and tool
 // events are owned by the framework Session Service; artifact content is owned
@@ -454,20 +450,19 @@ func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, e
 		// Reviewed commands have already exited when task cleanup begins; only
 		// the container's keepalive tail remains. A short Docker stop grace
 		// avoids paying the daemon's 10-second default for every review task.
+		//
+		// Image content and offline Go defaults live in docker/Dockerfile.
+		// Host policy (network isolation, auto-remove) stays here.
 		stopTimeoutSeconds := 1
+		dockerDir := filepath.Join(pwd, sandboxDockerDir)
 		executor, err = containerexec.New(
+			containerexec.WithDockerFilePath(dockerDir),
 			containerexec.WithContainerConfig(
 				container.Config{
-					Image:      "golang:1.26-trixie",
-					WorkingDir: "/",
-					Env:        reviewContainerEnvironment,
-					// workspace_exec uses a login shell when no command policy is
-					// configured. Debian's login profile omits /usr/local/go/bin,
-					// so expose the image's Go binary through its retained PATH.
-					Cmd: []string{
-						"sh", "-c",
-						"ln -sf /usr/local/go/bin/go /usr/local/bin/go && exec tail -f /dev/null",
-					},
+					// Image is the local build tag. WorkingDir/Cmd come from
+					// docker/Dockerfile (WORKDIR + CMD); only create-time
+					// attach/stop options stay here.
+					Image:       sandboxImageTag,
 					Tty:         true,
 					OpenStdin:   true,
 					StopTimeout: &stopTimeoutSeconds,
