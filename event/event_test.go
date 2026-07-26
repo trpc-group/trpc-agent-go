@@ -585,11 +585,38 @@ func TestEmitEventWithTimeout_ClosedChannelPanicRecovery(t *testing.T) {
 func TestEmitEventWithTimeout_SlowPathClosedChannelPanicRecovery(t *testing.T) {
 	ch := make(chan *Event, 1)
 	ch <- New("fill", "author")
-	close(ch)
 
 	e := New("inv", "author")
+	errCh := make(chan error, 1)
+	fastPathDone := make(chan struct{})
 
-	err := EmitEventWithTimeout(context.Background(), ch, e, EmitWithoutTimeout)
+	go func() {
+		errCh <- EmitEventWithTimeout(context.Background(), ch, e, EmitWithoutTimeout, fastPathDone)
+	}()
+
+	<-fastPathDone
+	close(ch)
+
+	err := <-errCh
+	require.ErrorIs(t, err, ErrClosedChannelSend)
+}
+
+func TestEmitEventWithTimeout_SlowPathClosedChannelPanicRecovery_WithTimeout(t *testing.T) {
+	ch := make(chan *Event, 1)
+	ch <- New("fill", "author")
+
+	e := New("inv", "author")
+	errCh := make(chan error, 1)
+	fastPathDone := make(chan struct{})
+
+	go func() {
+		errCh <- EmitEventWithTimeout(context.Background(), ch, e, time.Second, fastPathDone)
+	}()
+
+	<-fastPathDone
+	close(ch)
+
+	err := <-errCh
 	require.ErrorIs(t, err, ErrClosedChannelSend)
 }
 
