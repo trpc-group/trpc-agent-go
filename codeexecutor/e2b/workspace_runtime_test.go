@@ -40,11 +40,12 @@ type mockE2BServer struct {
 	server  *httptest.Server
 	respond executeResponder
 
-	mu          sync.Mutex
-	createCalls int
-	execCalls   int
-	killCalls   int
-	lastCode    string
+	mu           sync.Mutex
+	createCalls  int
+	execCalls    int
+	killCalls    int
+	lastCode     string
+	lastLanguage string
 }
 
 func newMockE2BServer(t *testing.T, respond executeResponder) *mockE2BServer {
@@ -96,20 +97,44 @@ func (m *mockE2BServer) handle(w http.ResponseWriter, r *http.Request) {
 		m.mu.Unlock()
 		// Extract `code` from body.
 		var body struct {
-			Code string `json:"code"`
+			Code     string `json:"code"`
+			Language string `json:"language"`
 		}
 		data, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(data, &body)
 		m.mu.Lock()
 		m.lastCode = body.Code
+		m.lastLanguage = body.Language
 		m.mu.Unlock()
 		w.Header().Set("Content-Type", "application/x-ndjson")
 		if m.respond != nil {
-			_, _ = w.Write([]byte(m.respond(body.Code)))
+			code := body.Code
+			if decoded, ok := unwrapBashPythonWrapper(code); ok {
+				code = decoded
+			}
+			_, _ = w.Write([]byte(m.respond(code)))
 		}
 		return
 	}
 	w.WriteHeader(http.StatusNotFound)
+}
+
+func unwrapBashPythonWrapper(code string) (string, bool) {
+	const prefix = `_trpc_bash = base64.b64decode("`
+	start := strings.Index(code, prefix)
+	if start < 0 {
+		return "", false
+	}
+	start += len(prefix)
+	end := strings.Index(code[start:], `")`)
+	if end < 0 {
+		return "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(code[start : start+end])
+	if err != nil {
+		return "", false
+	}
+	return string(decoded), true
 }
 
 type redirectTransport struct {
@@ -482,6 +507,10 @@ func runProgramCaptureScript(
 	_, err := c.RunProgram(context.Background(), ws, spec)
 	require.NoError(t, err)
 	require.NotEmpty(t, gotScript)
+	srv.mu.Lock()
+	lastLanguage := srv.lastLanguage
+	srv.mu.Unlock()
+	require.Equal(t, string(ci.LanguagePython), lastLanguage)
 	return gotScript
 }
 

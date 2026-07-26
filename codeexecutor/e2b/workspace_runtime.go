@@ -822,8 +822,10 @@ func (r *workspaceRuntime) runBash(
 	return stdout, stderr, exit, err
 }
 
-// runBashStreaming is the low-level primitive: it invokes Sandbox.RunCode
-// with LanguageBash and collects the combined stream outputs.
+// runBashStreaming is the low-level primitive: it invokes Bash from the
+// Python kernel and collects the combined stream outputs. Code-interpreter
+// templates are guaranteed to provide Python, while a separate Bash kernel is
+// optional even when /bin/bash is installed in the sandbox.
 func (r *workspaceRuntime) runBashStreaming(
 	ctx context.Context, script string, timeout time.Duration,
 ) (string, string, int, error) {
@@ -832,12 +834,12 @@ func (r *workspaceRuntime) runBashStreaming(
 	}
 	var stdoutB, stderrB strings.Builder
 	opts := &ci.RunCodeOpts{
-		Language: ci.LanguageBash,
+		Language: ci.LanguagePython,
 		Timeout:  timeout,
 		OnStdout: func(m ci.OutputMessage) { stdoutB.WriteString(m.Line) },
 		OnStderr: func(m ci.OutputMessage) { stderrB.WriteString(m.Line) },
 	}
-	exec, err := r.ce.sbx.RunCode(ctx, script, opts)
+	exec, err := r.ce.sbx.RunCode(ctx, bashPythonWrapper(script), opts)
 	if err != nil {
 		return stdoutB.String(), stderrB.String(), -1, err
 	}
@@ -847,6 +849,44 @@ func (r *workspaceRuntime) runBashStreaming(
 		)
 	}
 	return stdoutB.String(), stderrB.String(), 0, nil
+}
+
+func bashPythonWrapper(script string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(script))
+	return fmt.Sprintf(`import base64
+import subprocess
+import sys
+import threading
+
+_trpc_bash = base64.b64decode(%q).decode("utf-8")
+_trpc_proc = subprocess.Popen(
+    ["bash", "-c", _trpc_bash],
+    stdout=subprocess.PIPE,
+    stderr=subprocess.PIPE,
+)
+
+def _trpc_forward(source, target):
+    while True:
+        chunk = source.read1(65536)
+        if not chunk:
+            break
+        target.write(chunk.decode("utf-8", errors="replace"))
+        target.flush()
+
+_trpc_stdout = threading.Thread(
+    target=_trpc_forward, args=(_trpc_proc.stdout, sys.stdout)
+)
+_trpc_stderr = threading.Thread(
+    target=_trpc_forward, args=(_trpc_proc.stderr, sys.stderr)
+)
+_trpc_stdout.start()
+_trpc_stderr.start()
+_trpc_proc.wait()
+_trpc_stdout.join()
+_trpc_stderr.join()
+if _trpc_proc.returncode != 0:
+    raise RuntimeError("bash exited with status %%d" %% _trpc_proc.returncode)
+`, encoded)
 }
 
 func isTimeoutErr(err error) bool {
