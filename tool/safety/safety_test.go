@@ -60,6 +60,22 @@ func TestScan_DangerousDelete(t *testing.T) {
 	assert.True(t, found, "expected finding with rule ID R-DEL-001")
 }
 
+func TestScan_DangerousDelete_WithEscapedExecutable(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	scanner := NewScanner(policy)
+
+	result := scanner.Scan(context.Background(), ScanInput{
+		Command:  "r\\m -rf /",
+		ToolName: "workspace_exec",
+		Backend:  "workspaceexec",
+	})
+
+	assert.Equal(t, DecisionDeny, result.Decision)
+	require.NotEmpty(t, result.Findings)
+	assert.Equal(t, "R-DEL-001", result.Findings[0].RuleID)
+}
+
 // TestScan_CredentialAccess verifies that reading SSH keys is denied with R-CRED-001.
 func TestScan_CredentialAccess(t *testing.T) {
 	policy := DefaultPolicy()
@@ -370,6 +386,37 @@ func TestScan_AllowListAllowed(t *testing.T) {
 
 	result := scanner.Scan(context.Background(), ScanInput{
 		Command:  "go build ./...",
+		ToolName: "workspace_exec",
+		Backend:  "workspaceexec",
+	})
+
+	assert.Equal(t, DecisionAllow, result.Decision)
+}
+
+func TestScan_AllowListRejectsPathfulBasenameBypass(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedCommands = []string{"go"}
+	scanner := NewScanner(policy)
+
+	result := scanner.Scan(context.Background(), ScanInput{
+		Command:  "./go test ./...",
+		ToolName: "workspace_exec",
+		Backend:  "workspaceexec",
+	})
+
+	assert.Equal(t, DecisionDeny, result.Decision)
+	require.NotEmpty(t, result.Findings)
+	assert.Equal(t, "R-CMD-001", result.Findings[0].RuleID)
+}
+
+func TestScan_AllowListExplicitPathStillAllowed(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.DefaultAction = DecisionAllow
+	policy.AllowedCommands = []string{"./go"}
+	scanner := NewScanner(policy)
+
+	result := scanner.Scan(context.Background(), ScanInput{
+		Command:  "./go test ./...",
 		ToolName: "workspace_exec",
 		Backend:  "workspaceexec",
 	})

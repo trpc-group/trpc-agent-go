@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,34 @@ type mockTool struct {
 }
 
 func (m *mockTool) Declaration() *tool.Declaration { return m.decl }
+
+type mockCallableTool struct {
+	mockTool
+	called bool
+}
+
+func (m *mockCallableTool) Call(_ context.Context, _ []byte) (any, error) {
+	m.called = true
+	return "ok", nil
+}
+
+type mockStreamableTool struct {
+	mockTool
+	streamed bool
+}
+
+func (m *mockStreamableTool) StreamableCall(_ context.Context, _ []byte) (*tool.StreamReader, error) {
+	m.streamed = true
+	stream := tool.NewStream(1)
+	stream.Writer.Send(tool.StreamChunk{Content: "ok"}, nil)
+	stream.Writer.Close()
+	return stream.Reader, nil
+}
+
+type mockCallableStreamableTool struct {
+	mockCallableTool
+	mockStreamableTool
+}
 
 // TestWrapTool verifies that WrapTool wraps a tool with safety scanning.
 func TestWrapTool(t *testing.T) {
@@ -106,7 +135,7 @@ func TestSafeTool_IsConcurrencySafe(t *testing.T) {
 
 	wrapped := WrapTool(inner, guard)
 	// safeTool implements IsConcurrencySafe; mockTool doesn't implement ConcurrencyAware.
-	st, ok := wrapped.(*safeTool)
+	st, ok := wrapped.(*safeToolBase)
 	require.True(t, ok)
 	assert.False(t, st.IsConcurrencySafe())
 }
@@ -122,7 +151,7 @@ func TestSafeTool_ShouldDefer(t *testing.T) {
 	}
 
 	wrapped := WrapTool(inner, guard)
-	st, ok := wrapped.(*safeTool)
+	st, ok := wrapped.(*safeToolBase)
 	require.True(t, ok)
 	// mockTool doesn't implement DeferredTool, so should return false.
 	assert.False(t, st.ShouldDefer(context.Background()))
@@ -139,7 +168,7 @@ func TestSafeTool_CheckPermission(t *testing.T) {
 	}
 
 	wrapped := WrapTool(inner, guard)
-	st, ok := wrapped.(*safeTool)
+	st, ok := wrapped.(*safeToolBase)
 	require.True(t, ok)
 	// mockTool doesn't implement PermissionChecker, so should return allow.
 	decision, err := st.CheckPermission(context.Background(), &tool.PermissionRequest{})
@@ -158,7 +187,7 @@ func TestSafeTool_ToolMetadata(t *testing.T) {
 	}
 
 	wrapped := WrapTool(inner, guard)
-	st, ok := wrapped.(*safeTool)
+	st, ok := wrapped.(*safeToolBase)
 	require.True(t, ok)
 	// mockTool doesn't implement MetadataProvider, so should return empty metadata.
 	metadata := st.ToolMetadata()
@@ -176,4 +205,58 @@ func TestWrapToolSet_EmptyToolSet(t *testing.T) {
 
 	tools := wrapped.Tools(context.Background())
 	assert.Empty(t, tools)
+}
+
+func TestWrapTool_PreservesCallableCapability(t *testing.T) {
+	guard, err := NewGuard(WithPolicy(PolicyFile{DefaultAction: DecisionAllow}))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	inner := &mockCallableTool{mockTool: mockTool{decl: &tool.Declaration{Name: "callable"}}}
+	wrapped := WrapTool(inner, guard)
+	callable, ok := wrapped.(tool.CallableTool)
+	require.True(t, ok)
+	result, err := callable.Call(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	assert.Equal(t, "ok", result)
+	assert.True(t, inner.called)
+}
+
+func TestWrapTool_PreservesStreamableCapability(t *testing.T) {
+	guard, err := NewGuard(WithPolicy(PolicyFile{DefaultAction: DecisionAllow}))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	inner := &mockStreamableTool{mockTool: mockTool{decl: &tool.Declaration{Name: "streamable"}}}
+	wrapped := WrapTool(inner, guard)
+	streamable, ok := wrapped.(tool.StreamableTool)
+	require.True(t, ok)
+	reader, err := streamable.StreamableCall(context.Background(), []byte(`{}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	assert.Equal(t, "ok", chunk.Content)
+	_, err = reader.Recv()
+	assert.Equal(t, io.EOF, err)
+	assert.True(t, inner.streamed)
+}
+
+func TestWrapTool_StreamOnlyDenyReturnsPermissionResult(t *testing.T) {
+	guard, err := NewGuard(WithPolicy(DefaultPolicy()))
+	require.NoError(t, err)
+	defer guard.Close()
+
+	inner := &mockStreamableTool{mockTool: mockTool{decl: &tool.Declaration{Name: "workspace_exec"}}}
+	wrapped := WrapTool(inner, guard)
+	streamable := wrapped.(tool.StreamableTool)
+	reader, err := streamable.StreamableCall(context.Background(), []byte(`{"command":"rm -rf /"}`))
+	require.NoError(t, err)
+	defer reader.Close()
+	chunk, err := reader.Recv()
+	require.NoError(t, err)
+	result, ok := chunk.Content.(tool.PermissionResult)
+	require.True(t, ok)
+	assert.Equal(t, tool.PermissionResultStatusDenied, result.Status)
+	assert.False(t, inner.streamed)
 }

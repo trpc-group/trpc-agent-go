@@ -22,49 +22,104 @@ import (
 //
 // WrapTool forwards optional interfaces implemented by the inner tool:
 // tool.MetadataProvider, tool.ConcurrencyAware, tool.DeferredTool,
-// and tool.PermissionChecker.
+// tool.PermissionChecker, tool.CallableTool, and tool.StreamableTool.
 func WrapTool(t tool.Tool, g *Guard) tool.Tool {
-	return &safeTool{
+	base := &safeToolBase{
 		Tool:  t,
 		guard: g,
 	}
+	callable, hasCallable := t.(tool.CallableTool)
+	streamable, hasStreamable := t.(tool.StreamableTool)
+	switch {
+	case hasCallable && hasStreamable:
+		return &safeCallableStreamableTool{safeToolBase: base, callable: callable, streamable: streamable}
+	case hasCallable:
+		return &safeCallableTool{safeToolBase: base, callable: callable}
+	case hasStreamable:
+		return &safeStreamableTool{safeToolBase: base, streamable: streamable}
+	default:
+		return base
+	}
 }
 
-// safeTool wraps a tool.Tool with safety scanning.
-type safeTool struct {
+// safeToolBase wraps a tool.Tool with shared safety scanning helpers.
+type safeToolBase struct {
 	tool.Tool
 	guard *Guard
 }
 
 // Declaration returns the original tool's declaration.
-func (st *safeTool) Declaration() *tool.Declaration {
+func (st *safeToolBase) Declaration() *tool.Declaration {
 	return st.Tool.Declaration()
 }
 
-// Call checks safety before delegating to the original tool.
-// If the guard denies the call, it returns a PermissionResult as the
-// result value without calling the inner tool.
-func (st *safeTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+func (st *safeToolBase) checkPermission(ctx context.Context, jsonArgs []byte) (tool.PermissionDecision, error) {
 	decision, err := st.guard.CheckToolPermission(ctx, &tool.PermissionRequest{
 		ToolName:  st.Declaration().Name,
 		Arguments: jsonArgs,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("safety check failed: %w", err)
+		return tool.PermissionDecision{}, fmt.Errorf("safety check failed: %w", err)
+	}
+	return decision, nil
+}
+
+type safeCallableTool struct {
+	*safeToolBase
+	callable tool.CallableTool
+}
+
+// Call checks safety before delegating to the original tool.
+// If the guard denies the call, it returns a PermissionResult as the
+// result value without calling the inner tool.
+func (st *safeCallableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	decision, err := st.checkPermission(ctx, jsonArgs)
+	if err != nil {
+		return nil, err
 	}
 	if decision.Action != tool.PermissionActionAllow {
 		return tool.PermissionResultFor(st.Declaration().Name, decision), nil
 	}
+	return st.callable.Call(ctx, jsonArgs)
+}
 
-	// Delegate to the original callable tool.
-	if ct, ok := st.Tool.(tool.CallableTool); ok {
-		return ct.Call(ctx, jsonArgs)
+type safeStreamableTool struct {
+	*safeToolBase
+	streamable tool.StreamableTool
+}
+
+func (st *safeStreamableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	decision, err := st.checkPermission(ctx, jsonArgs)
+	if err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("tool %s is not callable", st.Declaration().Name)
+	if decision.Action != tool.PermissionActionAllow {
+		stream := tool.NewStream(1)
+		stream.Writer.Send(tool.StreamChunk{
+			Content: tool.PermissionResultFor(st.Declaration().Name, decision),
+		}, nil)
+		stream.Writer.Close()
+		return stream.Reader, nil
+	}
+	return st.streamable.StreamableCall(ctx, jsonArgs)
+}
+
+type safeCallableStreamableTool struct {
+	*safeToolBase
+	callable   tool.CallableTool
+	streamable tool.StreamableTool
+}
+
+func (st *safeCallableStreamableTool) Call(ctx context.Context, jsonArgs []byte) (any, error) {
+	return (&safeCallableTool{safeToolBase: st.safeToolBase, callable: st.callable}).Call(ctx, jsonArgs)
+}
+
+func (st *safeCallableStreamableTool) StreamableCall(ctx context.Context, jsonArgs []byte) (*tool.StreamReader, error) {
+	return (&safeStreamableTool{safeToolBase: st.safeToolBase, streamable: st.streamable}).StreamableCall(ctx, jsonArgs)
 }
 
 // ToolMetadata forwards to the inner tool if it implements MetadataProvider.
-func (st *safeTool) ToolMetadata() tool.ToolMetadata {
+func (st *safeToolBase) ToolMetadata() tool.ToolMetadata {
 	if mp, ok := st.Tool.(tool.MetadataProvider); ok {
 		return mp.ToolMetadata()
 	}
@@ -72,7 +127,7 @@ func (st *safeTool) ToolMetadata() tool.ToolMetadata {
 }
 
 // IsConcurrencySafe forwards to the inner tool if it implements ConcurrencyAware.
-func (st *safeTool) IsConcurrencySafe() bool {
+func (st *safeToolBase) IsConcurrencySafe() bool {
 	if ca, ok := st.Tool.(tool.ConcurrencyAware); ok {
 		return ca.IsConcurrencySafe()
 	}
@@ -80,7 +135,7 @@ func (st *safeTool) IsConcurrencySafe() bool {
 }
 
 // ShouldDefer forwards to the inner tool if it implements DeferredTool.
-func (st *safeTool) ShouldDefer(ctx context.Context) bool {
+func (st *safeToolBase) ShouldDefer(ctx context.Context) bool {
 	if dt, ok := st.Tool.(tool.DeferredTool); ok {
 		return dt.ShouldDefer(ctx)
 	}
@@ -88,7 +143,7 @@ func (st *safeTool) ShouldDefer(ctx context.Context) bool {
 }
 
 // CheckPermission forwards to the inner tool if it implements PermissionChecker.
-func (st *safeTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+func (st *safeToolBase) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if pc, ok := st.Tool.(tool.PermissionChecker); ok {
 		return pc.CheckPermission(ctx, req)
 	}

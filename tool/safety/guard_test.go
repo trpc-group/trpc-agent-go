@@ -103,6 +103,29 @@ func TestGuard_CheckToolPermission_FailClosed(t *testing.T) {
 	assert.Contains(t, decision.Reason, "extraction failed")
 }
 
+func TestGuard_ExtractionFailureIsAuditedAndReported(t *testing.T) {
+	var buf bytes.Buffer
+	var receivedReport *Report
+	guard, err := NewGuard(
+		WithPolicy(DefaultPolicy()),
+		WithAuditWriter(&buf),
+		WithReportSink(func(r Report) { receivedReport = &r }),
+	)
+	require.NoError(t, err)
+	defer guard.Close()
+
+	decision, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte("not valid json"),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.NotZero(t, buf.Len())
+	require.NotNil(t, receivedReport)
+	assert.Equal(t, DecisionDeny, receivedReport.Decision)
+	assert.Equal(t, "workspace_exec", receivedReport.ToolName)
+}
+
 // TestGuard_WithAuditWriter verifies that audit events are written when configured.
 func TestGuard_WithAuditWriter(t *testing.T) {
 	var buf bytes.Buffer

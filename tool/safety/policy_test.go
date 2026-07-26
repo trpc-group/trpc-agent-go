@@ -236,6 +236,29 @@ func TestLoadPolicyFromBytes_UnknownJSONKey(t *testing.T) {
 	assert.Contains(t, err.Error(), "strict validation")
 }
 
+func TestLoadPolicyFromBytes_UnknownYAMLKey(t *testing.T) {
+	yamlData := []byte(`
+version: v1
+default_action: allow
+denied_commandz:
+  - rm
+`)
+	_, err := LoadPolicyFromBytes(yamlData)
+	assert.Error(t, err, "unknown YAML key should be rejected")
+	assert.Contains(t, err.Error(), "not valid JSON or YAML")
+}
+
+func TestLoadPolicyFromBytes_YAMLMultipleDocumentsRejected(t *testing.T) {
+	yamlData := []byte(`
+version: v1
+---
+default_action: deny
+`)
+	_, err := LoadPolicyFromBytes(yamlData)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "single document")
+}
+
 // TestLoadPolicyFromBytes_NegativeMaxTimeout verifies that negative max_timeout_sec is rejected.
 func TestLoadPolicyFromBytes_NegativeMaxTimeout(t *testing.T) {
 	yamlData := []byte(`

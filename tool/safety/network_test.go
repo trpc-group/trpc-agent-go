@@ -244,6 +244,49 @@ func TestNetworkEgress_CurlResolveFailsClosed(t *testing.T) {
 	assert.Contains(t, findings[0].Evidence, "--resolve")
 }
 
+func TestNetworkEgress_CurlConnectTo_TargetChecked(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "curl --connect-to allowed.example:443:evil.example:443 https://allowed.example",
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "evil.example")
+}
+
+func TestNetworkEgress_CurlProxy_TargetChecked(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "curl --proxy=evil.example:8080 https://allowed.example",
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "evil.example")
+}
+
+func TestNetworkEgress_CurlProxyEnv_Checked(t *testing.T) {
+	rule := &NetworkEgressRule{}
+	policy := PolicyFile{
+		NetworkAllowlist: []string{"allowed.example"},
+	}
+
+	findings := rule.Scan(context.Background(), ScanInput{
+		Command: "curl https://allowed.example",
+		Env:     map[string]string{"HTTPS_PROXY": "evil.example:8080"},
+	}, policy)
+
+	assert.NotEmpty(t, findings)
+	assert.Contains(t, findings[0].Evidence, "evil.example")
+}
+
 func TestNetworkEgress_ToolPathIsNormalized(t *testing.T) {
 	rule := &NetworkEgressRule{}
 	policy := PolicyFile{
@@ -394,6 +437,16 @@ func TestExtractCurlHosts(t *testing.T) {
 			expected: []string{"example.com"},
 			findings: 1,
 		},
+		{
+			name:     "connect-to extracts actual target",
+			args:     []string{"--connect-to", "allowed.example:443:evil.example:443", "https://allowed.example"},
+			expected: []string{"evil.example", "allowed.example"},
+		},
+		{
+			name:     "proxy extracts proxy host",
+			args:     []string{"--proxy=proxy.example:8080", "https://allowed.example"},
+			expected: []string{"proxy.example", "allowed.example"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -458,4 +511,12 @@ func TestParseUserHost(t *testing.T) {
 			assert.Equal(t, tt.expected, host)
 		})
 	}
+}
+
+func TestExtractProxyHostsFromEnv(t *testing.T) {
+	hosts := extractProxyHostsFromEnv(map[string]string{
+		"HTTP_PROXY":  "http://proxy.example:8080",
+		"HTTPS_PROXY": "socks5://secure-proxy.example:1080",
+	})
+	assert.Equal(t, []string{"proxy.example", "secure-proxy.example"}, hosts)
 }

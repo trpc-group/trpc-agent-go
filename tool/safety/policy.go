@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,9 +116,16 @@ func LoadPolicyFromBytes(data []byte) (PolicyFile, error) {
 		return base, nil
 	}
 
-	// YAML has no built-in strict mode for unknown keys, but we still
-	// validate max_timeout_sec.
-	if err := yaml.Unmarshal(data, extPolicy); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(extPolicy); err != nil {
+		return PolicyFile{}, fmt.Errorf("parse policy: not valid JSON or YAML: %w", err)
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return PolicyFile{}, fmt.Errorf("parse policy: YAML must contain a single document")
+		}
 		return PolicyFile{}, fmt.Errorf("parse policy: not valid JSON or YAML: %w", err)
 	}
 	if err := validatePolicyRaw(extPolicy); err != nil {

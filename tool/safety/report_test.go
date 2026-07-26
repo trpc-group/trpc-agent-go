@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -103,6 +104,46 @@ func TestWriteReportFile(t *testing.T) {
 	assert.Equal(t, report.RiskLevel, parsed.RiskLevel)
 	assert.Equal(t, report.ToolName, parsed.ToolName)
 	assert.Equal(t, report.Intercepted, parsed.Intercepted)
+}
+
+func TestWriteReportFile_ConcurrentWriters(t *testing.T) {
+	report := Report{Version: "1.0.0", ToolName: "workspace_exec", Decision: DecisionDeny}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			require.NoError(t, WriteReportFile(path, report))
+		}()
+	}
+	wg.Wait()
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	var parsed Report
+	require.NoError(t, json.Unmarshal(data, &parsed))
+	assert.Equal(t, report.Version, parsed.Version)
+}
+
+func TestWriteReportFile_IgnoresPreexistingLegacyTempSymlink(t *testing.T) {
+	report := Report{Version: "1.0.0", ToolName: "workspace_exec", Decision: DecisionDeny}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "report.json")
+	legacyTmp := filepath.Join(dir, "report.json.tmp")
+	trap := filepath.Join(dir, "trap.txt")
+	require.NoError(t, os.WriteFile(trap, []byte("do not touch"), 0o600))
+	if err := os.Symlink(trap, legacyTmp); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	require.NoError(t, WriteReportFile(path, report))
+
+	data, err := os.ReadFile(trap)
+	require.NoError(t, err)
+	assert.Equal(t, "do not touch", string(data))
 }
 
 // TestNewReport verifies that NewReport creates a report from a ScanResult.

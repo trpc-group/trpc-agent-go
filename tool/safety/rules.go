@@ -35,8 +35,11 @@ func (r *DangerousCommandRule) ID() string { return "R-DEL-001" }
 func (r *DangerousCommandRule) Name() string { return "Dangerous Command" }
 
 var dangerousCmdPatterns = []string{
-	"rm -rf", "rm -fr", "rmdir ", "mkfs ", "mkfs.", "dd if=",
-	"format ", "fdisk ",
+	"rm", "rmdir", "mkfs", "dd", "format", "fdisk", "mkfs.ext4", "mkfs.xfs",
+}
+
+var dangerousTextPatterns = []string{
+	"rm -rf", "rm -fr", "dd if=", "mkfs.", "format ", "fdisk ",
 }
 
 var systemPathPatterns = []string{
@@ -52,12 +55,15 @@ func (r *DangerousCommandRule) Scan(_ context.Context, input ScanInput, policy P
 	text := normalizedScanText(input)
 	var findings []Finding
 
-	// Use DeniedCommands from the policy (policy-driven).
 	deniedCmds := policy.DeniedCommands
 	if len(deniedCmds) == 0 {
 		deniedCmds = dangerousCmdPatterns
 	}
-	for _, pat := range deniedCmds {
+	if denied := deniedCommandFinding(input.Command, deniedCmds); denied != nil {
+		findings = append(findings, *denied)
+		return findings
+	}
+	for _, pat := range dangerousTextPatterns {
 		if strings.Contains(text, pat) {
 			findings = append(findings, Finding{
 				RuleID:         r.ID(),
@@ -680,9 +686,26 @@ func normalizePaths(text string) string {
 // isCommandAllowed checks whether the executable (or its basename) appears
 // in the allowed list. It uses filepath.Base to strip any path prefix.
 func isCommandAllowed(cmd string, allowed []string) bool {
-	base := filepath.Base(cmd)
+	hasPath := strings.ContainsAny(cmd, `/\`)
+	base := filepath.Base(strings.ReplaceAll(cmd, `\`, `/`))
+	bareFold := !hasPath && runtime.GOOS != "linux"
+	normalizeBare := func(value string) string {
+		if !bareFold {
+			return value
+		}
+		return strings.ToLower(strings.TrimSuffix(value, ".exe"))
+	}
+	normCmd := normalizeBare(cmd)
+	normBase := normalizeBare(base)
 	for _, a := range allowed {
-		if a == cmd || a == base {
+		if a == cmd {
+			return true
+		}
+		if hasPath || strings.ContainsAny(a, `/\`) {
+			continue
+		}
+		normAllowed := normalizeBare(a)
+		if normAllowed == normCmd || normAllowed == normBase {
 			return true
 		}
 	}
@@ -697,22 +720,24 @@ func isCommandAllowedExecutable(cmd string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return false
 	}
-	pipe, err := shellsafe.Parse(cmd)
-	if err != nil {
-		// Cannot parse the command; fall back to whole-string matching via
-		// isCommandAllowed. This asymmetry is intentional and fail-closed:
-		// successful parsing requires *every* pipeline command's executable
-		// to be allowed, while parse failure only checks the raw string,
-		// which is less precise but still conservative.
-		return isCommandAllowed(cmd, allowed)
+	return shellsafe.CheckCommand(cmd, shellsafe.PolicyFromLists(allowed, nil)) == nil
+}
+
+func deniedCommandFinding(command string, denied []string) *Finding {
+	if strings.TrimSpace(command) == "" || len(denied) == 0 {
+		return nil
 	}
-	for _, argv := range pipe.Commands {
-		if len(argv) == 0 {
-			continue
-		}
-		if !isCommandAllowed(argv[0], allowed) {
-			return false
+	if err := shellsafe.CheckCommand(command, shellsafe.PolicyFromLists(nil, denied)); err == nil {
+		return nil
+	} else if strings.Contains(err.Error(), "denied by denied_commands") {
+		return &Finding{
+			RuleID:         "R-DEL-001",
+			RuleName:       "Dangerous Command",
+			RiskLevel:      RiskLevelCritical,
+			Decision:       DecisionDeny,
+			Evidence:       err.Error(),
+			Recommendation: "Remove or restrict the destructive command; use safer alternatives.",
 		}
 	}
-	return true
+	return nil
 }

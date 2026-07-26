@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -59,18 +60,49 @@ func WriteReportFile(path string, r Report) error {
 	}
 
 	dir := filepath.Dir(path)
-	tmpFile := filepath.Join(dir, filepath.Base(path)+".tmp")
-
-	if err := os.WriteFile(tmpFile, data, 0o600); err != nil {
-		os.Remove(tmpFile) // Clean up the temp file on write failure.
-		return fmt.Errorf("write tmp report file: %w", err)
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return fmt.Errorf("create tmp report file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	cleanup := func() {
+		_ = os.Remove(tmpName)
 	}
 
-	if err := os.Rename(tmpFile, path); err != nil {
-		// Clean up the temp file on rename failure.
-		os.Remove(tmpFile)
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		cleanup()
+		return fmt.Errorf("write tmp report file: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close tmp report file: %w", err)
+	}
+
+	if err := replaceReportFile(tmpName, path); err != nil {
+		cleanup()
 		return fmt.Errorf("rename tmp report file: %w", err)
 	}
 
 	return nil
+}
+
+func replaceReportFile(tmpName, path string) error {
+	if err := os.Rename(tmpName, path); err == nil {
+		return nil
+	} else if runtime.GOOS != "windows" {
+		return err
+	}
+
+	var lastErr error
+	for i := 0; i < 5; i++ {
+		_ = os.Remove(path)
+		if err := os.Rename(tmpName, path); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return lastErr
 }

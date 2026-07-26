@@ -10,6 +10,7 @@ package safety
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"regexp"
@@ -45,7 +46,7 @@ var networkToolsDirect = map[string]bool{
 var urlBearingToolFlags = map[string]map[string]bool{
 	"curl": {
 		"--url": true, "-K": true, "--config": true,
-		"--resolve": true,
+		"--resolve": true, "--connect-to": true, "--proxy": true, "-x": true,
 	},
 	"wget": {
 		"-O": true, "--output-document": true,
@@ -66,7 +67,7 @@ var urlRe = regexp.MustCompile(`https?://[^\s'"<>]+`)
 // portion; if it is a full URL it returns the URL hostname.
 func hostFromArg(arg string) string {
 	// Try URL parse first.
-	if strings.HasPrefix(arg, "http://") || strings.HasPrefix(arg, "https://") {
+	if strings.Contains(arg, "://") {
 		u, err := url.Parse(arg)
 		if err == nil && u.Hostname() != "" {
 			return u.Hostname()
@@ -97,6 +98,26 @@ func extractCurlHosts(args []string) ([]string, []Finding) {
 		}
 		if finding, consumesNext, matched := curlResolveFinding(arg, i, len(args)); matched {
 			findings = append(findings, finding)
+			skipNext = consumesNext
+			continue
+		}
+		if host, consumesNext, finding, matched := curlConnectTarget(arg, i, args); matched {
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+			if finding != nil {
+				findings = append(findings, *finding)
+			}
+			skipNext = consumesNext
+			continue
+		}
+		if host, consumesNext, finding, matched := curlProxyHost(arg, i, args); matched {
+			if host != "" {
+				hosts = append(hosts, host)
+			}
+			if finding != nil {
+				findings = append(findings, *finding)
+			}
 			skipNext = consumesNext
 			continue
 		}
@@ -148,6 +169,47 @@ func curlURLHost(arg string, index int, args []string) (string, bool, bool) {
 	return "", false, false
 }
 
+func curlConnectTarget(arg string, index int, args []string) (string, bool, *Finding, bool) {
+	if arg == "--connect-to" {
+		if index+1 >= len(args) {
+			finding := curlMalformedOverrideFinding("--connect-to")
+			return "", false, &finding, true
+		}
+		host, err := connectToHost(args[index+1])
+		if err != nil {
+			finding := curlMalformedOverrideFinding("--connect-to")
+			return "", true, &finding, true
+		}
+		return host, true, nil, true
+	}
+	if strings.HasPrefix(arg, "--connect-to=") {
+		host, err := connectToHost(strings.TrimPrefix(arg, "--connect-to="))
+		if err != nil {
+			finding := curlMalformedOverrideFinding("--connect-to")
+			return "", false, &finding, true
+		}
+		return host, false, nil, true
+	}
+	return "", false, nil, false
+}
+
+func curlProxyHost(arg string, index int, args []string) (string, bool, *Finding, bool) {
+	switch {
+	case arg == "--proxy" || arg == "-x":
+		if index+1 >= len(args) {
+			finding := curlMalformedOverrideFinding(arg)
+			return "", false, &finding, true
+		}
+		return hostFromArg(args[index+1]), true, nil, true
+	case strings.HasPrefix(arg, "--proxy="):
+		return hostFromArg(strings.TrimPrefix(arg, "--proxy=")), false, nil, true
+	case strings.HasPrefix(arg, "-x") && len(arg) > 2:
+		return hostFromArg(arg[2:]), false, nil, true
+	default:
+		return "", false, nil, false
+	}
+}
+
 func curlSkipsNextArg(arg string) bool {
 	flags, ok := urlBearingToolFlags["curl"]
 	return ok && flags[arg]
@@ -184,6 +246,29 @@ func curlResolveOverrideFinding() Finding {
 		Evidence:       "curl --resolve overrides the destination endpoint",
 		Recommendation: "Remove --resolve or require explicit human review for endpoint overrides.",
 	}
+}
+
+func curlMalformedOverrideFinding(flag string) Finding {
+	return Finding{
+		RuleID:         "R-NET-001",
+		RuleName:       "Network Egress",
+		RiskLevel:      RiskLevelHigh,
+		Decision:       DecisionDeny,
+		Evidence:       "curl " + flag + " is malformed and cannot be safely scanned",
+		Recommendation: "Provide a complete endpoint override argument or remove the override.",
+	}
+}
+
+func connectToHost(value string) (string, error) {
+	parts := strings.Split(value, ":")
+	if len(parts) < 4 {
+		return "", fmt.Errorf("invalid --connect-to value")
+	}
+	host := strings.TrimSpace(parts[2])
+	if host == "" {
+		return "", fmt.Errorf("invalid --connect-to value")
+	}
+	return host, nil
 }
 
 // extractWgetHosts extracts target hostnames from wget arguments.
@@ -299,6 +384,7 @@ func domainMatchesAllowlist(domain string, allowlist []string) bool {
 func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy PolicyFile) []Finding {
 	var allHosts []string
 	var findings []Finding
+	networkIntent := false
 
 	// Parse the command via shellsafe if possible.
 	if input.Command != "" {
@@ -311,22 +397,30 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 				hosts, commandFindings := extractHostsFromCommand(argv[0], argv[1:])
 				allHosts = append(allHosts, hosts...)
 				findings = append(findings, commandFindings...)
+				if len(hosts) > 0 || len(commandFindings) > 0 || isNetworkTool(argv[0]) {
+					networkIntent = true
+				}
 			}
 		} else {
 			// Fallback: extract URLs from the raw command text.
-			allHosts = append(allHosts, extractHostsFromText(input.Command)...)
+			hosts := extractHostsFromText(input.Command)
+			allHosts = append(allHosts, hosts...)
+			networkIntent = networkIntent || len(hosts) > 0
 		}
 	}
 
 	// Scan code blocks for URLs and Python HTTP patterns.
 	text := normalizedScanText(input)
-	allHosts = append(allHosts, extractHostsFromText(text)...)
+	textHosts := extractHostsFromText(text)
+	allHosts = append(allHosts, textHosts...)
+	networkIntent = networkIntent || len(textHosts) > 0
 
 	// Detect Python HTTP calls in code blocks — produce a finding directly
 	// since we cannot extract the specific URL from Python code.
 	var pythonFindings []Finding
 	for _, block := range input.CodeBlocks {
 		if pythonNetRe.MatchString(block) {
+			networkIntent = true
 			pythonFindings = append(pythonFindings, Finding{
 				RuleID:         r.ID(),
 				RuleName:       r.Name(),
@@ -340,6 +434,10 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 
 	if len(allHosts) == 0 && len(pythonFindings) == 0 {
 		return nil
+	}
+
+	if networkIntent {
+		allHosts = append(allHosts, extractProxyHostsFromEnv(input.Env)...)
 	}
 
 	// Evaluate each host against the allowlist.
@@ -368,6 +466,27 @@ func (r *NetworkEgressRule) Scan(_ context.Context, input ScanInput, policy Poli
 	findings = append(findings, pythonFindings...)
 
 	return findings
+}
+
+func extractProxyHostsFromEnv(env map[string]string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	keys := []string{
+		"http_proxy", "https_proxy", "all_proxy",
+		"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+	}
+	hosts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		value := strings.TrimSpace(env[key])
+		if value == "" {
+			continue
+		}
+		if host := hostFromArg(value); host != "" {
+			hosts = append(hosts, host)
+		}
+	}
+	return hosts
 }
 
 // extractHostsFromCommand dispatches host extraction based on the tool name.
@@ -404,6 +523,15 @@ func normalizeExecutableName(tool string) string {
 	tool = strings.TrimSpace(tool)
 	tool = filepath.Base(strings.ReplaceAll(tool, `\`, `/`))
 	return strings.ToLower(tool)
+}
+
+func isNetworkTool(tool string) bool {
+	name := normalizeExecutableName(tool)
+	if networkToolsDirect[name] {
+		return true
+	}
+	_, ok := urlBearingToolFlags[name]
+	return ok
 }
 
 // extractHostsFromText finds http/https URLs in raw text and returns their

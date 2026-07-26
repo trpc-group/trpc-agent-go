@@ -146,15 +146,32 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	// Step 1: Extract request from tool arguments.
 	execReq, err := extractRequest(req.ToolName, req.Arguments, g.extractors)
 	if err != nil {
-		// Fail-closed: deny on extraction failure.
-		return tool.DenyPermission(fmt.Sprintf("safety guard: extraction failed: %v", err)), nil
+		result := ScanResult{
+			Decision:    DecisionDeny,
+			RiskLevel:   RiskLevelHigh,
+			ToolName:    req.ToolName,
+			Command:     string(req.Arguments),
+			Backend:     "unknown",
+			Intercepted: true,
+			Findings: []Finding{{
+				RuleID:         "R-GUARD-001",
+				RuleName:       "Extraction Failure",
+				RiskLevel:      RiskLevelHigh,
+				Decision:       DecisionDeny,
+				Evidence:       err.Error(),
+				Recommendation: "Provide valid tool arguments or use a tool-specific extractor that supports this request shape.",
+			}},
+		}
+		return g.finishPermissionCheck(result, time.Since(start))
 	}
 
 	// Step 2: Scan the request.
 	scanInput := execReq.ToScanInput(req.ToolName)
 	result := g.scanner.Scan(ctx, scanInput)
-	duration := time.Since(start)
+	return g.finishPermissionCheck(result, time.Since(start))
+}
 
+func (g *Guard) finishPermissionCheck(result ScanResult, duration time.Duration) (tool.PermissionDecision, error) {
 	// Step 3: Redact sensitive data.
 	redacted := false
 	if g.redactor != nil {
@@ -181,6 +198,9 @@ func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionReq
 	}
 
 	// Step 6: Convert Decision to tool.PermissionDecision.
+	if len(result.Findings) > 0 && result.Findings[0].RuleID == "R-GUARD-001" {
+		return tool.DenyPermission(fmt.Sprintf("safety guard: extraction failed: %s", result.Findings[0].Evidence)), nil
+	}
 	return decisionFromTool(result.Decision), nil
 }
 

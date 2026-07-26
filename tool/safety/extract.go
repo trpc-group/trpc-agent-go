@@ -259,9 +259,3 @@ func unmarshalCodeExecBlocks(raw json.RawMessage) ([]struct {
 		return nil, fmt.Errorf("code_blocks: expected array, object, or string, got %T", value)
 	}
 }
-
-// RegisterExtractor adds a custom extractor for a tool name.
-// This allows extending the guard with safety scanning for custom tools.
-func RegisterExtractor(extractors map[string]Extractor, toolName string, ext Extractor) {
-	extractors[toolName] = ext
-}

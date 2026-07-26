@@ -255,21 +255,6 @@ func TestExecRequest_ToScanInput(t *testing.T) {
 	assert.False(t, scanInput.PTY)
 }
 
-// TestRegisterExtractor verifies that custom extractors can be registered.
-func TestRegisterExtractor(t *testing.T) {
-	extractors := map[string]Extractor{}
-	customExt := func(toolName string, args []byte) (ExecRequest, error) {
-		return ExecRequest{Command: "custom", Backend: "custom_backend"}, nil
-	}
-
-	RegisterExtractor(extractors, "custom_tool", customExt)
-
-	assert.Contains(t, extractors, "custom_tool")
-	req, err := extractors["custom_tool"]("custom_tool", nil)
-	require.NoError(t, err)
-	assert.Equal(t, "custom", req.Command)
-}
-
 // TestExtractWorkspaceExec_EmptyCommand verifies handling of empty command.
 func TestExtractWorkspaceExec_EmptyCommand(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{
