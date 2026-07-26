@@ -70,6 +70,8 @@ func WithImplementation(name, version string) Option {
 }
 
 // WithSessionIDGenerator replaces the default UUID session ID generator.
+// The Server serializes calls to generator and rejects IDs that it has used
+// previously, including IDs from closed sessions and other connections.
 func WithSessionIDGenerator(generator func() string) Option {
 	return func(options *options) {
 		options.sessionIDGenerator = generator
@@ -109,6 +111,8 @@ type Server struct {
 	runOptions         []agent.RunOption
 	runOptionsFunc     RunOptionsFunc
 	reasoningEnabled   bool
+	sessionMu          sync.Mutex
+	usedSessionIDs     map[string]struct{}
 }
 
 // New creates an ACP server backed by a runner.
@@ -145,6 +149,7 @@ func New(r runner.Runner, opts ...Option) (*Server, error) {
 		runOptions:         append([]agent.RunOption(nil), options.runOptions...),
 		runOptionsFunc:     options.runOptionsFunc,
 		reasoningEnabled:   options.reasoningEnabled,
+		usedSessionIDs:     make(map[string]struct{}),
 	}
 	server.managedRunner, _ = r.(runner.ManagedRunner)
 	return server, nil
@@ -259,20 +264,28 @@ func (a *protocolAgent) NewSession(
 			map[string]any{"additionalDirectories": "additional directories are not supported"},
 		)
 	}
+	sessionID, err := a.server.newSessionID()
+	if err != nil {
+		return acpsdk.NewSessionResponse{}, err
+	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	sessionID := a.server.sessionIDGenerator()
-	if sessionID == "" {
-		return acpsdk.NewSessionResponse{}, errors.New("acp: generated empty session ID")
-	}
-	if _, exists := a.sessions[sessionID]; exists {
-		return acpsdk.NewSessionResponse{}, fmt.Errorf(
-			"acp: generated duplicate session ID %q",
-			sessionID,
-		)
-	}
 	a.sessions[sessionID] = &sessionState{id: sessionID, cwd: request.Cwd}
+	a.mu.Unlock()
 	return acpsdk.NewSessionResponse{SessionId: acpsdk.SessionId(sessionID)}, nil
+}
+
+func (s *Server) newSessionID() (string, error) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	sessionID := s.sessionIDGenerator()
+	if sessionID == "" {
+		return "", errors.New("acp: generated empty session ID")
+	}
+	if _, exists := s.usedSessionIDs[sessionID]; exists {
+		return "", fmt.Errorf("acp: generated duplicate session ID %q", sessionID)
+	}
+	s.usedSessionIDs[sessionID] = struct{}{}
+	return sessionID, nil
 }
 
 func (a *protocolAgent) Prompt(
@@ -315,6 +328,7 @@ func (a *protocolAgent) Prompt(
 	)
 	if err != nil {
 		if runCtx.Err() != nil {
+			a.stopPrompt(requestID, cancel)
 			return canceledPromptResponse(request.MessageId), nil
 		}
 		return acpsdk.PromptResponse{}, err
@@ -324,7 +338,8 @@ func (a *protocolAgent) Prompt(
 	for {
 		select {
 		case <-runCtx.Done():
-			go drainEvents(events)
+			a.stopPrompt(requestID, cancel)
+			drainEvents(events)
 			return canceledPromptResponse(request.MessageId), nil
 		case event, ok := <-events:
 			if !ok {
@@ -335,7 +350,8 @@ func (a *protocolAgent) Prompt(
 			}
 			updates, err := turn.translate(event)
 			if err != nil {
-				go drainEvents(events)
+				a.stopPrompt(requestID, cancel)
+				drainEvents(events)
 				return acpsdk.PromptResponse{}, err
 			}
 			for _, update := range updates {
@@ -344,10 +360,12 @@ func (a *protocolAgent) Prompt(
 					Update:    update,
 				}); err != nil {
 					if runCtx.Err() != nil {
-						go drainEvents(events)
+						a.stopPrompt(requestID, cancel)
+						drainEvents(events)
 						return canceledPromptResponse(request.MessageId), nil
 					}
-					go drainEvents(events)
+					a.stopPrompt(requestID, cancel)
+					drainEvents(events)
 					return acpsdk.PromptResponse{}, err
 				}
 			}
@@ -426,17 +444,15 @@ func (a *protocolAgent) beginPrompt(
 			map[string]any{"sessionId": "session is closed"},
 		)
 	}
-	previousCancel := session.cancel
-	previousRequestID := session.requestID
+	if session.requestID != "" {
+		session.mu.Unlock()
+		return acpsdk.NewInvalidParams(
+			map[string]any{"sessionId": "prompt already in progress"},
+		)
+	}
 	session.cancel = cancel
 	session.requestID = requestID
 	session.mu.Unlock()
-	if previousCancel != nil {
-		previousCancel()
-	}
-	if previousRequestID != "" && a.server.managedRunner != nil {
-		a.server.managedRunner.Cancel(previousRequestID)
-	}
 	return nil
 }
 
@@ -458,6 +474,16 @@ func (a *protocolAgent) cancelPrompt(session *sessionState) {
 		cancel()
 	}
 	if requestID != "" && a.server.managedRunner != nil {
+		a.server.managedRunner.Cancel(requestID)
+	}
+}
+
+func (a *protocolAgent) stopPrompt(
+	requestID string,
+	cancel context.CancelFunc,
+) {
+	cancel()
+	if a.server.managedRunner != nil {
 		a.server.managedRunner.Cancel(requestID)
 	}
 }

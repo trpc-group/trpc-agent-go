@@ -163,12 +163,40 @@ func TestTurnStateTranslatesRunnerEvents(t *testing.T) {
 
 func TestTurnStateAccumulatesUsageAcrossModelCalls(t *testing.T) {
 	state := newTurnState(false)
-	for _, usage := range []*model.Usage{
-		{PromptTokens: 2, CompletionTokens: 3, TotalTokens: 5},
-		{PromptTokens: 4, CompletionTokens: 1, TotalTokens: 5},
+	for _, response := range []*model.Response{
+		{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     1,
+				CompletionTokens: 1,
+				TotalTokens:      2,
+			},
+		},
+		{
+			Usage: &model.Usage{
+				PromptTokens:     2,
+				CompletionTokens: 3,
+				TotalTokens:      5,
+			},
+		},
+		{
+			IsPartial: true,
+			Usage: &model.Usage{
+				PromptTokens:     3,
+				CompletionTokens: 1,
+				TotalTokens:      4,
+			},
+		},
+		{
+			Usage: &model.Usage{
+				PromptTokens:     4,
+				CompletionTokens: 1,
+				TotalTokens:      5,
+			},
+		},
 	} {
 		_, err := state.translate(&event.Event{
-			Response: &model.Response{Usage: usage},
+			Response: response,
 		})
 		require.NoError(t, err)
 	}
@@ -184,7 +212,6 @@ func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
 	state := newTurnState(false)
 	for _, text := range []string{"first", "second"} {
 		updates, err := state.translate(&event.Event{
-			InvocationID: "invocation",
 			Response: &model.Response{
 				Choices: []model.Choice{{
 					Message: model.Message{Content: text},
@@ -195,6 +222,46 @@ func TestTurnStateSeparatesCompletedResponsesWithoutIDs(t *testing.T) {
 		require.Len(t, updates, 1)
 		assert.Equal(t, text, updates[0].AgentMessageChunk.Content.Text.Text)
 	}
+}
+
+func TestTurnStateAssociatesIDLessFinalResponseWithStream(t *testing.T) {
+	state := newTurnState(true)
+	events := []*event.Event{
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				ID:        "response",
+				IsPartial: true,
+				Choices: []model.Choice{{
+					Delta: model.Message{
+						Content:          "answer",
+						ReasoningContent: "thought",
+					},
+				}},
+			},
+		},
+		{
+			InvocationID: "invocation",
+			Response: &model.Response{
+				Choices: []model.Choice{{
+					Message: model.Message{
+						Content:          "answer",
+						ReasoningContent: "thought",
+					},
+				}},
+			},
+		},
+	}
+
+	var updates []acpsdk.SessionUpdate
+	for _, evt := range events {
+		translated, err := state.translate(evt)
+		require.NoError(t, err)
+		updates = append(updates, translated...)
+	}
+	require.Len(t, updates, 2)
+	assert.Equal(t, "thought", updates[0].AgentThoughtChunk.Content.Text.Text)
+	assert.Equal(t, "answer", updates[1].AgentMessageChunk.Content.Text.Text)
 }
 
 func TestTurnStateHandlesErrorsAndEmptyEvents(t *testing.T) {
@@ -242,7 +309,12 @@ func TestTurnStateMapsFinishReasons(t *testing.T) {
 		reason string
 		want   acpsdk.StopReason
 	}{
+		{reason: "length", want: acpsdk.StopReasonMaxTokens},
+		{reason: "max_tokens", want: acpsdk.StopReasonMaxTokens},
+		{reason: "MAX_TOKENS", want: acpsdk.StopReasonMaxTokens},
 		{reason: "content_filter", want: acpsdk.StopReasonRefusal},
+		{reason: "SAFETY", want: acpsdk.StopReasonRefusal},
+		{reason: "guardrail_intervened", want: acpsdk.StopReasonRefusal},
 		{reason: "refusal", want: acpsdk.StopReasonRefusal},
 		{reason: "cancelled", want: acpsdk.StopReasonCancelled},
 		{reason: "canceled", want: acpsdk.StopReasonCancelled},

@@ -202,6 +202,127 @@ func TestServerCancellation(t *testing.T) {
 	}
 }
 
+func TestProtocolAgentRejectsConcurrentPromptUntilRunFinishes(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	runner := &testRunner{
+		run: func(ctx context.Context) <-chan *event.Event {
+			events := make(chan *event.Event)
+			close(started)
+			go func() {
+				<-ctx.Done()
+				<-release
+				close(events)
+			}()
+			return events
+		},
+	}
+	server, err := New(
+		runner,
+		WithSessionIDGenerator(func() string { return "session-serialized" }),
+	)
+	require.NoError(t, err)
+	protocolAgent := newProtocolAgent(server)
+	session, err := protocolAgent.NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	require.NoError(t, err)
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, promptErr := protocolAgent.Prompt(
+			context.Background(),
+			acpsdk.PromptRequest{
+				SessionId: session.SessionId,
+				Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("first")},
+			},
+		)
+		firstResult <- promptErr
+	}()
+	<-started
+
+	_, err = protocolAgent.Prompt(
+		context.Background(),
+		acpsdk.PromptRequest{
+			SessionId: session.SessionId,
+			Prompt:    []acpsdk.ContentBlock{acpsdk.TextBlock("second")},
+		},
+	)
+	assert.ErrorContains(t, err, "prompt already in progress")
+	assert.Equal(t, 1, runner.callCount())
+
+	require.NoError(t, protocolAgent.Cancel(
+		context.Background(),
+		acpsdk.CancelNotification{SessionId: session.SessionId},
+	))
+	select {
+	case err := <-firstResult:
+		t.Fatalf("prompt returned before the runner finished: %v", err)
+	default:
+	}
+	close(release)
+	require.NoError(t, <-firstResult)
+}
+
+func TestServerSessionIDsAreUniqueAcrossConnectionsAndLifetime(t *testing.T) {
+	server, err := New(
+		&testRunner{},
+		WithSessionIDGenerator(func() string { return "shared-session" }),
+	)
+	require.NoError(t, err)
+	agents := []*protocolAgent{newProtocolAgent(server), newProtocolAgent(server)}
+	type result struct {
+		agent    *protocolAgent
+		response acpsdk.NewSessionResponse
+		err      error
+	}
+	results := make(chan result, len(agents))
+	var ready sync.WaitGroup
+	ready.Add(len(agents))
+	start := make(chan struct{})
+	for _, agentInstance := range agents {
+		go func(a *protocolAgent) {
+			ready.Done()
+			<-start
+			response, newSessionErr := a.NewSession(
+				context.Background(),
+				acpsdk.NewSessionRequest{Cwd: "/workspace"},
+			)
+			results <- result{agent: a, response: response, err: newSessionErr}
+		}(agentInstance)
+	}
+	ready.Wait()
+	close(start)
+
+	var succeeded result
+	var successCount int
+	var duplicateCount int
+	for range agents {
+		got := <-results
+		if got.err == nil {
+			succeeded = got
+			successCount++
+			continue
+		}
+		assert.ErrorContains(t, got.err, "duplicate session ID")
+		duplicateCount++
+	}
+	assert.Equal(t, 1, successCount)
+	assert.Equal(t, 1, duplicateCount)
+
+	_, err = succeeded.agent.CloseSession(
+		context.Background(),
+		acpsdk.CloseSessionRequest{SessionId: succeeded.response.SessionId},
+	)
+	require.NoError(t, err)
+	_, err = newProtocolAgent(server).NewSession(
+		context.Background(),
+		acpsdk.NewSessionRequest{Cwd: "/workspace"},
+	)
+	assert.ErrorContains(t, err, "duplicate session ID")
+}
+
 func TestServerValidation(t *testing.T) {
 	_, err := New(nil)
 	assert.ErrorContains(t, err, "runner is required")
@@ -363,6 +484,12 @@ func (r *testRunner) lastCall() runnerCall {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.calls[len(r.calls)-1]
+}
+
+func (r *testRunner) callCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.calls)
 }
 
 type testClient struct {
