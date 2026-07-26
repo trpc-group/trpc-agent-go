@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -220,6 +221,15 @@ func mergeStdinPayload(in *ScanInput, raw map[string]json.RawMessage, toolName s
 	stdin, ok := stringField(raw, "stdin")
 	if !ok || stdin == "" {
 		return
+	}
+	// For write_stdin / session-continuation tools, the executor may send
+	// incremental "chars" alongside the accumulated "stdin". Concatenate
+	// them so the scanner evaluates the full payload rather than the
+	// latest chunk alone, closing the incremental-stdin evasion gap
+	// reported in PR #2044 section 2 ("do not scan continuation chunks
+	// independently").
+	if chars, ok := stringField(raw, "chars"); ok && chars != "" && !strings.HasSuffix(stdin, chars) {
+		stdin = stdin + chars
 	}
 	if in.Command == "" {
 		in.Command = stdin

@@ -18,8 +18,14 @@ import (
 // payloads from bypassing the scanner.
 func combineInput(input ScanInput) string {
 	var parts []string
+	if input.Workdir != "" {
+		parts = append(parts, input.Workdir)
+	}
 	if input.Command != "" {
 		parts = append(parts, input.Command)
+	}
+	if input.NormalizedCommand != "" && input.NormalizedCommand != input.Command {
+		parts = append(parts, input.NormalizedCommand)
 	}
 	for _, cb := range input.CodeBlocks {
 		if cb.Code != "" {
@@ -851,9 +857,24 @@ func (r *ResourceAbuseRule) Check(input ScanInput) *ScanResult {
 			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskHigh, RuleID: r.ID(), Evidence: lp, Reason: "infinite loop: " + lp}
 		}
 	}
-	for _, fp := range []string{":(){ :|:& };:", "() {"} {
-		if strings.Contains(cmd, fp) {
-			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskCritical, RuleID: r.ID(), Evidence: fp, Reason: "fork bomb pattern"}
+	if strings.Contains(cmd, ":(){ :|:& };:") {
+		return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskCritical, RuleID: r.ID(), Evidence: ":(){ :|:& };:", Reason: "fork bomb pattern"}
+	}
+	// Only flag "() {" when it is not part of a Go/JS function declaration
+	// ("func main() {", "function foo() {", etc.).
+	if idx := strings.Index(cmd, "() {"); idx >= 0 {
+		start := idx - 20
+		if start < 0 {
+			start = 0
+		}
+		prefix := cmd[start:idx]
+		if !strings.Contains(prefix, "func") &&
+			!strings.Contains(prefix, "function") &&
+			!strings.Contains(prefix, "def ") &&
+			!strings.Contains(prefix, "class ") &&
+			!strings.Contains(prefix, "async ") {
+			return &ScanResult{Decision: DecisionDeny, RiskLevel: RiskCritical,
+				RuleID: r.ID(), Evidence: "() {", Reason: "fork bomb pattern"}
 		}
 	}
 	for _, rc := range []string{"stress ", "stress-ng", "yes ", "dd if=/dev/zero of=", ">/dev/null", ": >", "sha256sum /dev/zero", "md5sum /dev/zero"} {

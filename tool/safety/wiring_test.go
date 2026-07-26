@@ -218,9 +218,9 @@ func TestWrapToolSet_GuardsEveryTool(t *testing.T) {
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
 	}
-	guarded, ok := tools[0].(*GuardedTool)
+	guarded, ok := tools[0].(*guardedTool)
 	if !ok {
-		t.Fatalf("expected *GuardedTool, got %T", tools[0])
+		t.Fatalf("expected *guardedTool, got %T", tools[0])
 	}
 	out, err := guarded.Call(context.Background(), jsonCommandArgs("rm -rf /"))
 	if err != nil {
@@ -313,7 +313,7 @@ func TestGuardedToolSet_Close(t *testing.T) {
 // TestGuardedTool_Declaration_Nil verifies that a nil GuardedTool
 // returns nil from Declaration().
 func TestGuardedTool_Declaration_Nil(t *testing.T) {
-	var gt *GuardedTool
+	var gt *guardedTool
 	if d := gt.Declaration(); d != nil {
 		t.Errorf("nil GuardedTool should return nil declaration, got %+v", d)
 	}
@@ -586,8 +586,8 @@ func TestWrapTool_CombinedToolReturnsCombinedWrapper(t *testing.T) {
 	guard := NewGuard(WithRules(NewDangerousCommandRule()))
 
 	wrapped := WrapTool(inner, guard)
-	if _, ok := wrapped.(*GuardedCombinedTool); !ok {
-		t.Fatalf("expected *GuardedCombinedTool, got %T", wrapped)
+	if _, ok := wrapped.(*guardedCombinedTool); !ok {
+		t.Fatalf("expected *guardedCombinedTool, got %T", wrapped)
 	}
 }
 
@@ -595,7 +595,7 @@ func TestGuardedTool_PreservesPermissionChecker(t *testing.T) {
 	inner := &permissionCheckerStub{stubTool: stubTool{name: "permissioned"}}
 	guard := NewGuard(WithRules(NewDangerousCommandRule()))
 
-	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	wrapped := WrapTool(inner, guard).(*guardedTool)
 	checker, ok := tool.Tool(wrapped).(tool.PermissionChecker)
 	if !ok {
 		t.Fatal("wrapped tool should implement PermissionChecker")
@@ -621,7 +621,7 @@ func TestGuardedTool_CheckPermissionRunsGuardFirst(t *testing.T) {
 	inner := &permissionCheckerStub{stubTool: stubTool{name: "exec_command"}}
 	guard := NewGuard(WithRules(NewDangerousCommandRule()))
 
-	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	wrapped := WrapTool(inner, guard).(*guardedTool)
 	checker, ok := tool.Tool(wrapped).(tool.PermissionChecker)
 	if !ok {
 		t.Fatal("wrapped tool should implement PermissionChecker")
@@ -651,7 +651,7 @@ func TestGuardedTool_PreservesStateDelta(t *testing.T) {
 		stubTool: stubTool{name: "exec_command"},
 		delta:    map[string][]byte{"cwd": []byte(`"/tmp"`)},
 	}
-	wrapped := WrapTool(inner, NewGuard()).(*GuardedTool)
+	wrapped := WrapTool(inner, NewGuard()).(*guardedTool)
 
 	provider, ok := any(wrapped).(interface {
 		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
@@ -673,7 +673,7 @@ func TestGuardedCombinedTool_PreservesStateDelta(t *testing.T) {
 		combinedStub: combinedStub{name: "combined"},
 		delta:        map[string][]byte{"cwd": []byte(`"/workspace"`)},
 	}
-	wrapped := WrapTool(inner, NewGuard()).(*GuardedCombinedTool)
+	wrapped := WrapTool(inner, NewGuard()).(*guardedCombinedTool)
 
 	provider, ok := any(wrapped).(interface {
 		StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte
@@ -694,7 +694,7 @@ func TestGuardedTool_PreservesToolMetadata(t *testing.T) {
 	}
 	guard := NewGuard()
 
-	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	wrapped := WrapTool(inner, guard).(*guardedTool)
 	provider, ok := tool.Tool(wrapped).(tool.MetadataProvider)
 	if !ok {
 		t.Fatal("wrapped tool should implement MetadataProvider")
@@ -712,7 +712,7 @@ func TestGuardedTool_PreservesOptionalInterfaces(t *testing.T) {
 		skipSummarization: true,
 	}
 	guard := NewGuard()
-	wrapped := WrapTool(inner, guard).(*GuardedTool)
+	wrapped := WrapTool(inner, guard).(*guardedTool)
 
 	if !wrapped.LongRunning() {
 		t.Error("LongRunning should be preserved")
@@ -733,9 +733,9 @@ func TestGuardedStreamableTool_PreservesOptionalInterfaces(t *testing.T) {
 	if len(wrapped) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(wrapped))
 	}
-	st, ok := wrapped[0].(*GuardedStreamableTool)
+	st, ok := wrapped[0].(*guardedStreamableTool)
 	if !ok {
-		t.Fatalf("expected *GuardedStreamableTool, got %T", wrapped[0])
+		t.Fatalf("expected *guardedStreamableTool, got %T", wrapped[0])
 	}
 	if !st.LongRunning() {
 		t.Error("LongRunning should be preserved")
@@ -752,7 +752,7 @@ func TestGuardedCombinedTool_PreservesOptionalInterfaces(t *testing.T) {
 		skipSummarization: true,
 	}
 	guard := NewGuard()
-	wrapped := WrapTool(inner, guard).(*GuardedCombinedTool)
+	wrapped := WrapTool(inner, guard).(*guardedCombinedTool)
 
 	if !wrapped.LongRunning() {
 		t.Error("LongRunning should be preserved")

@@ -16,12 +16,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-// GuardedTool wraps a single tool.CallableTool so that every Call is
+// guardedTool wraps a single tool.CallableTool so that every Call is
 // intercepted by the supplied Guard before the underlying
 // implementation runs.
 //
 // This is the "pre-execution wiring" reviewer asked for in the
-// "Linked Issues" check: a GuardedTool is a drop-in replacement for
+// "Linked Issues" check: a guardedTool is a drop-in replacement for
 // any tool.CallableTool (e.g. an entry returned by hostexec.NewToolSet
 // or workspaceexec.NewExecTool) and can be registered with a Runner
 // directly. It is intentionally a small helper, not a hook into the
@@ -31,7 +31,7 @@ import (
 //
 // A nil guard is treated as "no policy" and the wrapper falls through
 // to the inner tool, so callers can pass an optional guard.
-type GuardedTool struct {
+type guardedTool struct {
 	// inner is the wrapped tool that actually executes the request.
 	inner tool.CallableTool
 	// guard performs the pre-execution permission check.
@@ -42,24 +42,24 @@ type GuardedTool struct {
 	extractor func(args []byte) ScanInput
 }
 
-// GuardedStreamableTool wraps a single tool.StreamableTool so that every
+// guardedStreamableTool wraps a single tool.StreamableTool so that every
 // StreamableCall is intercepted by the supplied Guard.
 //
 // Streamable-only tools (for example tool/skill.ExecTool) are valid
 // tools in this repository; wrapping them preserves the streaming
 // execution path while applying the same safety policy as callable
 // tools.
-type GuardedStreamableTool struct {
+type guardedStreamableTool struct {
 	inner     tool.StreamableTool
 	guard     *Guard
 	extractor func(args []byte) ScanInput
 }
 
-// GuardedCombinedTool wraps a tool that implements both tool.CallableTool
+// guardedCombinedTool wraps a tool that implements both tool.CallableTool
 // and tool.StreamableTool. It preserves both execution paths and gates
 // each of them with the supplied Guard, so the framework can choose
 // either Call or StreamableCall without bypassing the safety boundary.
-type GuardedCombinedTool struct {
+type guardedCombinedTool struct {
 	inner     tool.CallableTool
 	streamer  tool.StreamableTool
 	guard     *Guard
@@ -148,7 +148,7 @@ func runGuardCheck(
 // ToolName.
 //
 // If inner also implements tool.StreamableTool, WrapTool returns a
-// GuardedCombinedTool so that both Call and StreamableCall are gated.
+// guardedCombinedTool so that both Call and StreamableCall are gated.
 func WrapTool(inner tool.CallableTool, guard *Guard, opts ...GuardToolOption) tool.CallableTool {
 	if inner == nil {
 		return nil
@@ -158,14 +158,14 @@ func WrapTool(inner tool.CallableTool, guard *Guard, opts ...GuardToolOption) to
 	}
 	c := applyGuardOptions(opts)
 	if streamer, ok := inner.(tool.StreamableTool); ok {
-		return &GuardedCombinedTool{
+		return &guardedCombinedTool{
 			inner:     inner,
 			streamer:  streamer,
 			guard:     guard,
 			extractor: c.extractor,
 		}
 	}
-	return &GuardedTool{
+	return &guardedTool{
 		inner:     inner,
 		guard:     guard,
 		extractor: c.extractor,
@@ -176,9 +176,9 @@ func WrapTool(inner tool.CallableTool, guard *Guard, opts ...GuardToolOption) to
 // nil guard or an empty slice returns the original slice unchanged.
 //
 // It recognizes three categories:
-//   - callable-only tools are wrapped as GuardedTool;
-//   - streamable-only tools are wrapped as GuardedStreamableTool;
-//   - tools implementing both interfaces are wrapped as GuardedCombinedTool.
+//   - callable-only tools are wrapped as guardedTool;
+//   - streamable-only tools are wrapped as guardedStreamableTool;
+//   - tools implementing both interfaces are wrapped as guardedCombinedTool.
 //
 // Declaration-only tools are passed through unchanged so WrapTools can
 // be used on mixed slices.
@@ -193,20 +193,20 @@ func WrapTools(tools []tool.Tool, guard *Guard, opts ...GuardToolOption) []tool.
 		st, streamable := t.(tool.StreamableTool)
 		switch {
 		case callable && streamable:
-			out = append(out, &GuardedCombinedTool{
+			out = append(out, &guardedCombinedTool{
 				inner:     ct,
 				streamer:  st,
 				guard:     guard,
 				extractor: c.extractor,
 			})
 		case callable:
-			out = append(out, &GuardedTool{
+			out = append(out, &guardedTool{
 				inner:     ct,
 				guard:     guard,
 				extractor: c.extractor,
 			})
 		case streamable:
-			out = append(out, &GuardedStreamableTool{
+			out = append(out, &guardedStreamableTool{
 				inner:     st,
 				guard:     guard,
 				extractor: c.extractor,
@@ -269,12 +269,12 @@ func toolName(t tool.Tool) string {
 	return ""
 }
 
-// --- GuardedTool (callable-only) ---
+// --- guardedTool (callable-only) ---
 
 // Declaration returns the wrapped inner tool's declaration so callers
 // that introspect the tool's schema see the original definition
 // (argument / output schemas) unchanged.
-func (g *GuardedTool) Declaration() *tool.Declaration {
+func (g *guardedTool) Declaration() *tool.Declaration {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -285,7 +285,7 @@ func (g *GuardedTool) Declaration() *tool.Declaration {
 // when the decision is allow. Ask and Deny are returned to the model
 // as a structured PermissionResult so the framework's normal
 // permission-skip machinery handles the rest.
-func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
+func (g *guardedTool) Call(ctx context.Context, args []byte) (any, error) {
 	if g == nil || g.inner == nil {
 		return nil, fmt.Errorf("guarded tool: not configured")
 	}
@@ -303,7 +303,7 @@ func (g *GuardedTool) Call(ctx context.Context, args []byte) (any, error) {
 // if it implements tool.PermissionChecker. This preserves the inner
 // tool's non-negotiable permission contract without allowing callers
 // to bypass the safety guard.
-func (g *GuardedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+func (g *guardedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded tool: not configured")
 	}
@@ -333,7 +333,7 @@ func (g *GuardedTool) CheckPermission(ctx context.Context, req *tool.PermissionR
 }
 
 // ToolMetadata forwards to the inner tool if it publishes metadata.
-func (g *GuardedTool) ToolMetadata() tool.ToolMetadata {
+func (g *guardedTool) ToolMetadata() tool.ToolMetadata {
 	if g == nil || g.inner == nil {
 		return tool.ToolMetadata{}
 	}
@@ -342,7 +342,7 @@ func (g *GuardedTool) ToolMetadata() tool.ToolMetadata {
 
 // LongRunning forwards to the inner tool if it implements the optional
 // LongRunner interface.
-func (g *GuardedTool) LongRunning() bool {
+func (g *guardedTool) LongRunning() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -354,7 +354,7 @@ func (g *GuardedTool) LongRunning() bool {
 
 // SkipSummarization forwards to the inner tool if it implements the
 // optional skip-summarization interface.
-func (g *GuardedTool) SkipSummarization() bool {
+func (g *guardedTool) SkipSummarization() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -365,7 +365,7 @@ func (g *GuardedTool) SkipSummarization() bool {
 }
 
 // StateDelta forwards to the inner tool if it publishes response state deltas.
-func (g *GuardedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+func (g *guardedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -377,10 +377,10 @@ func (g *GuardedTool) StateDelta(toolCallID string, args []byte, resultJSON []by
 	return nil
 }
 
-// --- GuardedStreamableTool (streamable-only) ---
+// --- guardedStreamableTool (streamable-only) ---
 
 // Declaration returns the wrapped inner tool's declaration.
-func (g *GuardedStreamableTool) Declaration() *tool.Declaration {
+func (g *guardedStreamableTool) Declaration() *tool.Declaration {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -389,7 +389,7 @@ func (g *GuardedStreamableTool) Declaration() *tool.Declaration {
 
 // StreamableCall runs the guard check first and only delegates to the
 // inner tool when the decision is allow.
-func (g *GuardedStreamableTool) StreamableCall(ctx context.Context, args []byte) (*tool.StreamReader, error) {
+func (g *guardedStreamableTool) StreamableCall(ctx context.Context, args []byte) (*tool.StreamReader, error) {
 	if g == nil || g.inner == nil {
 		return nil, fmt.Errorf("guarded streamable tool: not configured")
 	}
@@ -405,7 +405,7 @@ func (g *GuardedStreamableTool) StreamableCall(ctx context.Context, args []byte)
 
 // CheckPermission runs the guard first, then forwards to the inner
 // tool if it implements tool.PermissionChecker.
-func (g *GuardedStreamableTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+func (g *guardedStreamableTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded streamable tool: not configured")
 	}
@@ -435,7 +435,7 @@ func (g *GuardedStreamableTool) CheckPermission(ctx context.Context, req *tool.P
 }
 
 // StateDelta forwards to the inner tool if it publishes response state deltas.
-func (g *GuardedStreamableTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+func (g *guardedStreamableTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -448,7 +448,7 @@ func (g *GuardedStreamableTool) StateDelta(toolCallID string, args []byte, resul
 }
 
 // ToolMetadata forwards to the inner tool if it publishes metadata.
-func (g *GuardedStreamableTool) ToolMetadata() tool.ToolMetadata {
+func (g *guardedStreamableTool) ToolMetadata() tool.ToolMetadata {
 	if g == nil || g.inner == nil {
 		return tool.ToolMetadata{}
 	}
@@ -457,7 +457,7 @@ func (g *GuardedStreamableTool) ToolMetadata() tool.ToolMetadata {
 
 // LongRunning forwards to the inner tool if it implements the optional
 // LongRunner interface.
-func (g *GuardedStreamableTool) LongRunning() bool {
+func (g *guardedStreamableTool) LongRunning() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -469,7 +469,7 @@ func (g *GuardedStreamableTool) LongRunning() bool {
 
 // SkipSummarization forwards to the inner tool if it implements the
 // optional skip-summarization interface.
-func (g *GuardedStreamableTool) SkipSummarization() bool {
+func (g *guardedStreamableTool) SkipSummarization() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -479,10 +479,10 @@ func (g *GuardedStreamableTool) SkipSummarization() bool {
 	return false
 }
 
-// --- GuardedCombinedTool (callable + streamable) ---
+// --- guardedCombinedTool (callable + streamable) ---
 
 // Declaration returns the wrapped inner tool's declaration.
-func (g *GuardedCombinedTool) Declaration() *tool.Declaration {
+func (g *guardedCombinedTool) Declaration() *tool.Declaration {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -491,7 +491,7 @@ func (g *GuardedCombinedTool) Declaration() *tool.Declaration {
 
 // Call runs the guard check first and only delegates to the inner tool
 // when the decision is allow.
-func (g *GuardedCombinedTool) Call(ctx context.Context, args []byte) (any, error) {
+func (g *guardedCombinedTool) Call(ctx context.Context, args []byte) (any, error) {
 	if g == nil || g.inner == nil {
 		return nil, fmt.Errorf("guarded combined tool: not configured")
 	}
@@ -507,7 +507,7 @@ func (g *GuardedCombinedTool) Call(ctx context.Context, args []byte) (any, error
 
 // StreamableCall runs the guard check first and only delegates to the
 // inner tool when the decision is allow.
-func (g *GuardedCombinedTool) StreamableCall(ctx context.Context, args []byte) (*tool.StreamReader, error) {
+func (g *guardedCombinedTool) StreamableCall(ctx context.Context, args []byte) (*tool.StreamReader, error) {
 	if g == nil || g.streamer == nil {
 		return nil, fmt.Errorf("guarded combined tool: not configured")
 	}
@@ -523,7 +523,7 @@ func (g *GuardedCombinedTool) StreamableCall(ctx context.Context, args []byte) (
 
 // CheckPermission runs the guard first, then forwards to the inner
 // tool if it implements tool.PermissionChecker.
-func (g *GuardedCombinedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
+func (g *guardedCombinedTool) CheckPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	if g == nil || g.inner == nil {
 		return tool.PermissionDecision{}, fmt.Errorf("guarded combined tool: not configured")
 	}
@@ -553,7 +553,7 @@ func (g *GuardedCombinedTool) CheckPermission(ctx context.Context, req *tool.Per
 }
 
 // ToolMetadata forwards to the inner tool if it publishes metadata.
-func (g *GuardedCombinedTool) ToolMetadata() tool.ToolMetadata {
+func (g *guardedCombinedTool) ToolMetadata() tool.ToolMetadata {
 	if g == nil || g.inner == nil {
 		return tool.ToolMetadata{}
 	}
@@ -562,7 +562,7 @@ func (g *GuardedCombinedTool) ToolMetadata() tool.ToolMetadata {
 
 // LongRunning forwards to the inner tool if it implements the optional
 // LongRunner interface.
-func (g *GuardedCombinedTool) LongRunning() bool {
+func (g *guardedCombinedTool) LongRunning() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -574,7 +574,7 @@ func (g *GuardedCombinedTool) LongRunning() bool {
 
 // SkipSummarization forwards to the inner tool if it implements the
 // optional skip-summarization interface.
-func (g *GuardedCombinedTool) SkipSummarization() bool {
+func (g *guardedCombinedTool) SkipSummarization() bool {
 	if g == nil || g.inner == nil {
 		return false
 	}
@@ -585,7 +585,7 @@ func (g *GuardedCombinedTool) SkipSummarization() bool {
 }
 
 // StateDelta forwards to the inner tool if it publishes response state deltas.
-func (g *GuardedCombinedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
+func (g *guardedCombinedTool) StateDelta(toolCallID string, args []byte, resultJSON []byte) map[string][]byte {
 	if g == nil || g.inner == nil {
 		return nil
 	}
@@ -606,10 +606,10 @@ var jsonCommandArgs = func(command string) []byte {
 	return b
 }
 
-var _ tool.Tool = (*GuardedTool)(nil)
-var _ tool.CallableTool = (*GuardedTool)(nil)
-var _ tool.Tool = (*GuardedStreamableTool)(nil)
-var _ tool.StreamableTool = (*GuardedStreamableTool)(nil)
-var _ tool.Tool = (*GuardedCombinedTool)(nil)
-var _ tool.CallableTool = (*GuardedCombinedTool)(nil)
-var _ tool.StreamableTool = (*GuardedCombinedTool)(nil)
+var _ tool.Tool = (*guardedTool)(nil)
+var _ tool.CallableTool = (*guardedTool)(nil)
+var _ tool.Tool = (*guardedStreamableTool)(nil)
+var _ tool.StreamableTool = (*guardedStreamableTool)(nil)
+var _ tool.Tool = (*guardedCombinedTool)(nil)
+var _ tool.CallableTool = (*guardedCombinedTool)(nil)
+var _ tool.StreamableTool = (*guardedCombinedTool)(nil)

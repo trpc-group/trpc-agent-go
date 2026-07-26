@@ -151,7 +151,7 @@ func TestIntegration_FullPipeline_AskReview(t *testing.T) {
 }
 
 // TestIntegration_GuardAndWrapTool_Integration verifies the
-// GuardedTool wiring layer works with the full rule set.
+// Guard wrapping layer works with the full rule set.
 func TestIntegration_GuardAndWrapTool_Integration(t *testing.T) {
 	guard := NewGuard()
 	sc := &integTestCallable{name: "exec_command"}

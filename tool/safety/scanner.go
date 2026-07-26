@@ -72,6 +72,21 @@ type ScanInput struct {
 	// ExecutorType tells the Scanner which backend will run the code.
 	// "local" means highest risk.
 	ExecutorType string
+
+	// Workdir is the current working directory when the tool is expected
+	// to execute. Rules that check sensitive file paths can use it to
+	// resolve relative-path traversals ("../.ssh/id_rsa") that evade
+	// substring-based deny lists when the workdir is different from the
+	// default home directory.
+	Workdir string
+
+	// NormalizedCommand is a shell-parsed, quote-stripped canonical form
+	// of Command. It is populated by the default extractor (via shellsafe)
+	// and used by combineInput so that rules performing substring matching
+	// also evaluate the normalised argv tokens. Shell escaping tricks like
+	// "c''url" or "c""url" are resolved to "curl" by the normaliser, closing
+	// the raw-text evasion gap reported in PR #2044.
+	NormalizedCommand string
 }
 
 // CodeBlock represents one code snippet from a codeexec call.

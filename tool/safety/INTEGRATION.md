@@ -69,8 +69,15 @@ if err != nil { /* handle */ }
 
 guard = safety.NewGuard(
     safety.WithRules(
+        safety.NewParseFailureRule(),
+        safety.NewShellWrapperRule(),
         safety.NewDangerousCommandRuleWithPolicy(policy),
         safety.NewNetworkAccessRuleWithPolicy(policy),
+        safety.NewShellBypassRule(),
+        safety.NewInstallAndMutateRule(),
+        safety.NewHostExecRiskRule(),
+        safety.NewResourceAbuseRule(),
+        safety.NewSensitiveInfoLeakRule(),
         safety.NewAskForReviewRule(),
     ),
 )
@@ -158,7 +165,13 @@ io.WriteString(auditFile, event.ToolName + ... + "\n")
 For OpenTelemetry, set the standard span attributes:
 
 ```go
-span.SetAttributesString(safety.SetSpanAttributes(report))
+import "go.opentelemetry.io/otel/attribute"
+
+attrs := []attribute.KeyValue{}
+for k, v := range safety.SetSpanAttributes(report) {
+    attrs = append(attrs, attribute.String(k, v))
+}
+span.SetAttributes(attrs...)
 ```
 
 ## Redaction (secrets)

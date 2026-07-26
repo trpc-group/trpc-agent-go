@@ -90,14 +90,17 @@ func (p *ParsedCommand) FirstExecutable() string {
 	return p.Segments[0][0]
 }
 
-// ShellWrapper is a small, conservative list of shell wrappers and
+// shellWrapper is a small, conservative list of shell wrappers and
 // re-executing builtins. Membership is independent of the shellsafe
 // implicit-deny set and is duplicated here so the safety package can
 // match it without depending on the shellsafe API surface.
 //
 // If you need to widen this list, update it in two places: shellsafe's
 // implicitDeny map (the source of truth) and this list.
-var ShellWrapper = []string{
+//
+// The slice is unexported (immutable from outside the package). Callers
+// that need a copy should use the ShellWrapper() helper.
+var shellWrapper = []string{
 	"sh", "bash", "zsh", "ash", "dash", "ksh", "mksh", "fish",
 	"pwsh", "powershell", "cmd",
 	"busybox", "toybox",
@@ -113,6 +116,15 @@ var ShellWrapper = []string{
 	"set", "shopt",
 	"cd", "pushd", "popd",
 	"printf", "read", "getopts",
+}
+
+// ShellWrapper returns a defensive copy of the built-in shell wrapper
+// deny set. The returned slice is safe for consumers to append to or
+// mutate without affecting the package-level list used by IsShellWrapper.
+func ShellWrapper() []string {
+	cp := make([]string, len(shellWrapper))
+	copy(cp, shellWrapper)
+	return cp
 }
 
 // IsShellWrapper reports whether name is one of the built-in shell
@@ -135,7 +147,7 @@ func IsShellWrapper(name string) bool {
 			break
 		}
 	}
-	for _, w := range ShellWrapper {
+	for _, w := range shellWrapper {
 		if low == w {
 			return true
 		}
