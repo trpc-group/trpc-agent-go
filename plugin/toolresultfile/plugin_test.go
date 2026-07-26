@@ -314,6 +314,18 @@ func TestContentMimeType(t *testing.T) {
 	require.Equal(t, textMimeType, contentMimeType("plain text"))
 }
 
+func TestRetrievalToolNamePrefersExactThenSortedPrefix(t *testing.T) {
+	request := &model.Request{Tools: map[string]tool.Tool{
+		"read_file":     declarationTool{name: "read_file"},
+		"aaa_read_file": declarationTool{name: "aaa_read_file"},
+		"zzz_read_file": declarationTool{name: "zzz_read_file"},
+	}}
+	require.Equal(t, "read_file", retrievalToolName(request))
+
+	delete(request.Tools, "read_file")
+	require.Equal(t, "aaa_read_file", retrievalToolName(request))
+}
+
 func TestOptions(t *testing.T) {
 	o := newOptions(
 		WithName("custom"),

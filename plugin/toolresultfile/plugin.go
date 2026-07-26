@@ -52,6 +52,10 @@ type toolResultFilePlugin struct {
 // prefix such as file_read_file). If any prerequisite is unavailable, or the
 // artifact service reports that writes are disabled, the plugin preserves tool
 // results inline.
+//
+// Serialized payloads that are not valid UTF-8 are also preserved inline
+// regardless of size because the default text-based file tool cannot safely
+// retrieve them.
 func New(opts ...Option) plugin.Plugin {
 	o := newOptions(opts...)
 	return &toolResultFilePlugin{
@@ -323,7 +327,10 @@ func retrievalToolName(request *model.Request) string {
 			candidate.Declaration().Name != "" {
 			name = candidate.Declaration().Name
 		}
-		if name == "read_file" || strings.HasSuffix(name, "_read_file") {
+		if name == "read_file" {
+			return name
+		}
+		if strings.HasSuffix(name, "_read_file") {
 			names = append(names, name)
 		}
 	}
