@@ -40,6 +40,9 @@ type AuditEvent struct {
 }
 
 // Auditor records safety decisions before they leave the safety package.
+// A Guard serializes calls to its configured Auditor. An Auditor shared by
+// multiple guards must support concurrent calls. Record must not synchronously
+// call back into the same Guard.
 type Auditor interface {
 	Record(ctx context.Context, event AuditEvent) error
 }
@@ -167,11 +170,17 @@ func (guard *Guard) finalizeReport(
 	if guard.auditor == nil {
 		return report, nil
 	}
-	if err := guard.auditor.Record(ctx, auditEventFromReport(report, phase)); err != nil {
+	if err := guard.recordAudit(ctx, auditEventFromReport(report, phase)); err != nil {
 		return auditFailureReport(report, phase == auditPhasePrecheck), fmt.Errorf(
 			"tool safety: record audit event: %w",
 			err,
 		)
 	}
 	return report, nil
+}
+
+func (guard *Guard) recordAudit(ctx context.Context, event AuditEvent) error {
+	guard.auditMu.Lock()
+	defer guard.auditMu.Unlock()
+	return guard.auditor.Record(ctx, event)
 }

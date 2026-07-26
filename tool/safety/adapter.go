@@ -14,7 +14,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -34,7 +35,8 @@ type AdaptRequest struct {
 	Metadata  tool.ToolMetadata
 }
 
-// InputAdapter normalizes one execution tool's JSON arguments for scanning.
+// InputAdapter normalizes one execution tool's JSON arguments into a
+// structurally valid ScanInput for scanning.
 type InputAdapter interface {
 	Adapt(context.Context, AdaptRequest, Binding) (ScanInput, error)
 }
@@ -72,11 +74,15 @@ func BindWorkspaceSession(toolName string) Binding {
 // match the value passed to hostexec.WithBaseDir; use "." when that option was
 // not set.
 func BindHostExec(toolName, baseDir string) Binding {
+	resolvedBaseDir, resolveErr := resolveHostBaseDir(baseDir)
 	return Binding{
 		ToolName: toolName,
 		Kind:     ExecutionKindHostExec,
 		Backend:  BackendHostExec,
-		Adapter:  hostExecAdapter{baseDir: resolveHostBaseDir(baseDir)},
+		Adapter: hostExecAdapter{
+			baseDir:    resolvedBaseDir,
+			resolveErr: resolveErr,
+		},
 	}
 }
 
@@ -101,16 +107,15 @@ func BindCodeExec(toolName string, backend Backend) Binding {
 }
 
 // BindCustom binds a caller-provided adapter for an MCP, Skill, or custom
-// execution tool.
+// execution tool. Custom bindings always use BackendCustom.
 func BindCustom(
 	toolName string,
-	backend Backend,
 	adapter InputAdapter,
 ) Binding {
 	return Binding{
 		ToolName: toolName,
 		Kind:     ExecutionKindCustom,
-		Backend:  backend,
+		Backend:  BackendCustom,
 		Adapter:  adapter,
 	}
 }
@@ -173,7 +178,8 @@ type workspaceExecAdapter struct{}
 type workspaceSessionAdapter struct{}
 
 type hostExecAdapter struct {
-	baseDir string
+	baseDir    string
+	resolveErr error
 }
 
 type hostSessionAdapter struct{}
@@ -285,6 +291,9 @@ func (adapter hostExecAdapter) Adapt(
 	if err := checkAdaptRequest(ctx, req, binding, ExecutionKindHostExec); err != nil {
 		return ScanInput{}, err
 	}
+	if adapter.resolveErr != nil {
+		return ScanInput{}, adapter.resolveErr
+	}
 	var input hostExecInput
 	if err := decodeArguments(req.Arguments, &input); err != nil {
 		return ScanInput{}, err
@@ -292,7 +301,10 @@ func (adapter hostExecAdapter) Adapt(
 	if strings.TrimSpace(input.Command) == "" {
 		return ScanInput{}, errors.New("tool safety: command is required")
 	}
-	workdir := resolveHostWorkdir(input.Workdir, adapter.baseDir)
+	workdir, err := resolveHostWorkdir(input.Workdir, adapter.baseDir)
+	if err != nil {
+		return ScanInput{}, err
+	}
 	yield := firstIntPtr(input.YieldTimeMS, input.YieldMs)
 	timeout := defaultHostTimeout
 	if raw := firstIntPtr(input.TimeoutSec, input.TimeoutSecOld); raw != nil && *raw > 0 {
@@ -681,23 +693,39 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveHostBaseDir(raw string) string {
-	return resolveHostWorkdir(raw, "")
+func resolveHostBaseDir(raw string) (string, error) {
+	baseDir, err := resolveHostWorkdir(raw, "")
+	if err != nil {
+		return "", err
+	}
+	if baseDir == "" {
+		return "", nil
+	}
+	return filepath.Abs(baseDir)
 }
 
-func resolveHostWorkdir(raw, baseDir string) string {
-	value := strings.ReplaceAll(strings.TrimSpace(raw), "\\", "/")
+func resolveHostWorkdir(raw, baseDir string) (string, error) {
+	value := strings.TrimSpace(raw)
 	if value == "" {
-		return baseDir
+		return baseDir, nil
 	}
-	if value == "~" || strings.HasPrefix(value, "~/") || lexicalPathAbsolute(value) {
-		return path.Clean(value)
+	if value == "~" {
+		return os.UserHomeDir()
 	}
-	baseDir = strings.ReplaceAll(strings.TrimSpace(baseDir), "\\", "/")
-	if baseDir == "" {
-		return path.Clean(value)
+	if strings.HasPrefix(value, "~/") {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		value = filepath.Join(homeDir, strings.TrimPrefix(value, "~/"))
 	}
-	return path.Clean(path.Join(baseDir, value))
+	if baseDir != "" && !filepath.IsAbs(value) {
+		return filepath.Join(baseDir, value), nil
+	}
+	if filepath.IsAbs(value) {
+		return value, nil
+	}
+	return filepath.Abs(value)
 }
 
 var (

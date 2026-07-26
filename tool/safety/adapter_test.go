@@ -12,7 +12,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestValidateBindings_ValidMatrix(t *testing.T) {
 		{name: "code local", binding: BindCodeExec("execute_local", BackendLocal)},
 		{name: "code container", binding: BindCodeExec("execute_container", BackendContainer)},
 		{name: "code remote", binding: BindCodeExec("execute_remote", BackendRemoteSandbox)},
-		{name: "custom", binding: BindCustom("custom.exec", BackendCustom, custom)},
+		{name: "custom", binding: BindCustom("custom.exec", custom)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -301,14 +302,13 @@ func TestWorkspaceSessionAdapter_AliasesAndOperations(t *testing.T) {
 
 func TestHostExecAdapter_PathDefaultsAndAliases(t *testing.T) {
 	base := t.TempDir()
-	lexicalBase := strings.ReplaceAll(base, "\\", "/")
 	binding := BindHostExec("named.exec_command", base)
 	input := requireAdapt(t, binding, `{
 		"command":"go test ./...","workdir":"sub","env":{"SAFE":"ok"},
 		"yield-time_ms":0,"yieldMs":999,"background":true,
 		"timeout_sec":0,"timeoutSec":999,"tty":false,"pty":true
 	}`)
-	require.Equal(t, path.Join(lexicalBase, "sub"), input.WorkingDir)
+	require.Equal(t, filepath.Join(base, "sub"), input.WorkingDir)
 	require.Equal(t, defaultHostTimeout, input.Timeout)
 	require.False(t, input.PTY)
 	require.True(t, input.Background)
@@ -316,7 +316,7 @@ func TestHostExecAdapter_PathDefaultsAndAliases(t *testing.T) {
 	require.Equal(t, map[string]string{"SAFE": "ok"}, input.Env)
 
 	defaults := requireAdapt(t, binding, `{"command":"date"}`)
-	require.Equal(t, lexicalBase, defaults.WorkingDir)
+	require.Equal(t, base, defaults.WorkingDir)
 	require.Equal(t, defaultHostTimeout, defaults.Timeout)
 
 	aliases := requireAdapt(t, binding, `{
@@ -325,20 +325,22 @@ func TestHostExecAdapter_PathDefaultsAndAliases(t *testing.T) {
 	require.Equal(t, 4*time.Second, aliases.Timeout)
 	require.True(t, aliases.PTY)
 
-	absolute := path.Join(strings.ReplaceAll(t.TempDir(), "\\", "/"), "absolute")
+	absolute := filepath.Join(t.TempDir(), "absolute")
 	absInput := requireAdapt(t, binding, fmt.Sprintf(
 		`{"command":"date","workdir":%q}`, absolute,
 	))
 	require.Equal(t, absolute, absInput.WorkingDir)
 }
 
-func TestHostExecAdapter_DefaultBaseAndLexicalHome(t *testing.T) {
+func TestHostExecAdapter_DefaultBaseAndHome(t *testing.T) {
 	binding := BindHostExec("exec_command", "")
 	input := requireAdapt(t, binding, `{"command":"date"}`)
 	require.Empty(t, input.WorkingDir)
 
 	homeInput := requireAdapt(t, binding, `{"command":"date","workdir":"~"}`)
-	require.Equal(t, "~", homeInput.WorkingDir)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.Equal(t, homeDir, homeInput.WorkingDir)
 }
 
 func TestHostSessionAdapter(t *testing.T) {
@@ -495,7 +497,7 @@ func TestBuiltinAdaptersRejectMalformedRequests(t *testing.T) {
 	}
 }
 
-func TestAdaptersNormalizeYieldAliasesAndLexicalHomeWorkdir(t *testing.T) {
+func TestAdaptersNormalizeYieldAliasesAndHomeWorkdir(t *testing.T) {
 	workspace := BindWorkspaceExec("workspace_exec")
 	for _, arguments := range []string{
 		`{"command":"date","background":true,"yield-time_ms":25}`,
@@ -507,7 +509,9 @@ func TestAdaptersNormalizeYieldAliasesAndLexicalHomeWorkdir(t *testing.T) {
 
 	host := BindHostExec("exec_command", "")
 	input := requireAdapt(t, host, `{"command":"date","workdir":"~/repo"}`)
-	require.Equal(t, "~/repo", input.WorkingDir)
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	require.Equal(t, filepath.Join(homeDir, "repo"), input.WorkingDir)
 }
 
 func TestBindCustom_PreservesExplicitAdapter(t *testing.T) {
@@ -518,7 +522,7 @@ func TestBindCustom_PreservesExplicitAdapter(t *testing.T) {
 		CodeBlocks: []CodeBlockInput{{Language: "custom", Code: "run"}},
 	}
 	adapter := &testAdapter{input: want}
-	binding := BindCustom("custom.run", BackendCustom, adapter)
+	binding := BindCustom("custom.run", adapter)
 	require.Same(t, adapter, binding.Adapter)
 	require.NoError(t, validateBinding(binding))
 	got, err := binding.Adapter.Adapt(context.Background(), AdaptRequest{}, binding)

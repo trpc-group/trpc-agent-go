@@ -252,6 +252,146 @@ func TestPathRuleUsesParsedArgvAndLexicalWorkingDirectory(t *testing.T) {
 	}
 }
 
+func TestPathRuleResolvesHostHomeAndRelativeBase(t *testing.T) {
+	homeDir, err := os.UserHomeDir()
+	require.NoError(t, err)
+	deniedBase, err := os.Getwd()
+	require.NoError(t, err)
+	tildeDeniedPath := homeDir
+	if runtime.GOOS == "windows" {
+		tildeDeniedPath = filepath.Join(deniedBase, "~", ".bash_history")
+	}
+
+	tests := []struct {
+		name        string
+		binding     Binding
+		command     string
+		deniedPaths []string
+	}{
+		{
+			name:        "home expansion",
+			binding:     BindHostExec("exec_command", "."),
+			command:     "cat ~/.bash_history",
+			deniedPaths: []string{tildeDeniedPath},
+		},
+		{
+			name:        "relative base",
+			binding:     BindHostExec("exec_command", "."),
+			command:     "cat secrets/token",
+			deniedPaths: []string{filepath.Join(deniedBase, "secrets", "token")},
+		},
+		{
+			name:        "bare relative filename",
+			binding:     BindHostExec("exec_command", "."),
+			command:     "cat secret.txt",
+			deniedPaths: []string{filepath.Join(deniedBase, "secret.txt")},
+		},
+		{
+			name:        "dash-prefixed operand after option terminator",
+			binding:     BindHostExec("exec_command", "."),
+			command:     "cat -- -secret",
+			deniedPaths: []string{filepath.Join(deniedBase, "-secret")},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := requireAdapt(t, test.binding, fmt.Sprintf(
+				`{"command":%q}`, test.command,
+			))
+			policy := DefaultPolicy()
+			policy.allowedCommands = []string{"cat"}
+			policy.deniedCommands = nil
+			policy.deniedPaths = test.deniedPaths
+			guard, guardErr := NewGuard(policy)
+			require.NoError(t, guardErr)
+
+			report, scanErr := guard.Scan(context.Background(), input)
+			require.NoError(t, scanErr)
+			require.Equal(t, DecisionDeny, report.Decision)
+			requireFinding(t, report, "PATH_FORBIDDEN")
+		})
+	}
+}
+
+func TestPathRuleTreatsOperandAfterOptionTerminatorLiterally(t *testing.T) {
+	require.False(t, argvHasTildePath(
+		[]string{"cat", "--", "--file=~/note"},
+	))
+
+	workingDir, err := os.Getwd()
+	require.NoError(t, err)
+	binding := BindHostExec("exec_command", ".")
+	input := requireAdapt(t, binding, `{
+		"command":"cat -- --file=note",
+		"yield_time_ms":0
+	}`)
+	policy := DefaultPolicy()
+	policy.allowedCommands = []string{"cat"}
+	policy.deniedCommands = nil
+	policy.deniedPaths = []string{filepath.Join(workingDir, "note")}
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+
+	report, err := guard.Scan(context.Background(), input)
+	require.NoError(t, err)
+	requireNotFinding(t, report, "PATH_FORBIDDEN")
+
+	if runtime.GOOS != "windows" {
+		input = requireAdapt(t, binding,
+			`{"command":"cat -- --file=~/note","env":{"HOME":"relative"}}`,
+		)
+		report, err = guard.Scan(context.Background(), input)
+		require.NoError(t, err)
+		requireNotFinding(t, report, "PATH_EFFECTIVE_UNRESOLVED")
+	}
+}
+
+func TestPathRuleUsesHostHOMEOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("cmd.exe does not expand tilde paths")
+	}
+	deniedHome := t.TempDir()
+	binding := BindHostExec("exec_command", ".")
+	input := requireAdapt(t, binding, `{
+		"command":"cat ~/secret.txt",
+		"env":{"HOME":"`+deniedHome+`"}
+	}`)
+	policy := DefaultPolicy()
+	policy.allowedCommands = []string{"cat"}
+	policy.deniedCommands = nil
+	policy.deniedPaths = []string{filepath.Join(deniedHome, "secret.txt")}
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+
+	report, err := guard.Scan(context.Background(), input)
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	requireFinding(t, report, "PATH_FORBIDDEN")
+
+	input.Env["HOME"] = "relative-home"
+	report, err = guard.Scan(context.Background(), input)
+	require.NoError(t, err)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	requireFinding(t, report, "PATH_EFFECTIVE_UNRESOLVED")
+}
+
+func TestPathRuleDoesNotTreatEmbeddedTildeAsHomePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("HOME expansion is POSIX-specific")
+	}
+	binding := BindHostExec("exec_command", ".")
+	input := requireAdapt(t, binding, `{
+		"command":"echo x~y",
+		"env":{"HOME":"relative-home"}
+	}`)
+	guard, err := NewGuard(DefaultPolicy())
+	require.NoError(t, err)
+
+	report, err := guard.Scan(context.Background(), input)
+	require.NoError(t, err)
+	requireNotFinding(t, report, "PATH_EFFECTIVE_UNRESOLVED")
+}
+
 func TestCommandRuleBlocksProcessWrappersInEverySegment(t *testing.T) {
 	guard, err := NewGuard(DefaultPolicy())
 	require.NoError(t, err)

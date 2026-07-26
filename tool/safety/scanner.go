@@ -19,6 +19,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
@@ -66,6 +67,7 @@ type guardOptions struct {
 type Guard struct {
 	policy  Policy
 	auditor Auditor
+	auditMu *sync.Mutex
 }
 
 // NewGuard creates a scanner from an already compiled policy.
@@ -85,6 +87,7 @@ func NewGuard(policy Policy, opts ...Option) (*Guard, error) {
 	return &Guard{
 		policy:  policy.clone(),
 		auditor: options.auditor,
+		auditMu: &sync.Mutex{},
 	}, nil
 }
 

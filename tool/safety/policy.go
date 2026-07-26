@@ -118,6 +118,31 @@ type rawEnvironment struct {
 	Allowed *[]string `json:"allowed" yaml:"allowed"`
 }
 
+type jsonPolicySchema map[string]jsonPolicySchema
+
+var policyJSONSchema = jsonPolicySchema{
+	"version": nil,
+	"commands": {
+		"allowed": nil,
+		"denied":  nil,
+	},
+	"paths": {
+		"denied": nil,
+	},
+	"network": {
+		"allowed_domains": nil,
+	},
+	"limits": {
+		"max_timeout":      nil,
+		"max_output_bytes": nil,
+		"max_sleep":        nil,
+		"max_concurrency":  nil,
+	},
+	"environment": {
+		"allowed": nil,
+	},
+}
+
 // DefaultPolicy returns a new copy of the built-in conservative policy.
 func DefaultPolicy() Policy {
 	return Policy{
@@ -178,6 +203,9 @@ func decodeYAMLPolicy(data []byte, out *rawPolicy) error {
 }
 
 func decodeJSONPolicy(data []byte, out *rawPolicy) error {
+	if err := validateJSONPolicyKeys(data); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(out); err != nil {
@@ -190,6 +218,81 @@ func decodeJSONPolicy(data []byte, out *rawPolicy) error {
 		return err
 	}
 	return nil
+}
+
+func validateJSONPolicyKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	return validateJSONValueKeys(decoder, policyJSONSchema)
+}
+
+func validateJSONValueKeys(
+	decoder *json.Decoder,
+	schema jsonPolicySchema,
+) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		return validateJSONObjectKeys(decoder, schema)
+	case '[':
+		for decoder.More() {
+			if err := validateJSONValueKeys(decoder, nil); err != nil {
+				return err
+			}
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+	_, err = decoder.Token()
+	return err
+}
+
+func validateJSONObjectKeys(
+	decoder *json.Decoder,
+	schema jsonPolicySchema,
+) error {
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok {
+			return errors.New("json object key must be a string")
+		}
+		if _, ok := seen[key]; ok {
+			return fmt.Errorf("duplicate json field %q", key)
+		}
+		seen[key] = struct{}{}
+		canonical, nested := canonicalJSONPolicyField(schema, key)
+		if canonical != "" && canonical != key {
+			return fmt.Errorf("json field %q must be written as %q", key, canonical)
+		}
+		if err := validateJSONValueKeys(decoder, nested); err != nil {
+			return err
+		}
+	}
+	_, err := decoder.Token()
+	return err
+}
+
+func canonicalJSONPolicyField(
+	schema jsonPolicySchema,
+	key string,
+) (string, jsonPolicySchema) {
+	for canonical, nested := range schema {
+		if strings.EqualFold(canonical, key) {
+			return canonical, nested
+		}
+	}
+	return "", nil
 }
 
 func compilePolicy(raw rawPolicy) (Policy, error) {

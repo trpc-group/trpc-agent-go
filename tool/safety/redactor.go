@@ -19,7 +19,7 @@ const (
 )
 
 var redactionPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|password|passwd|secret)["']?(\s*[:=]\s*)(?:"(?:(?s:\\(?:.|$))|[^"\\])*(?:"|$)|'(?:(?s:\\(?:.|$))|[^'\\])*(?:'|$)|[^\s"',;&}]+)`),
+	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?token|auth[_-]?token|token|password|passwd|secret)["']?(\s*[:=]\s*)(?:"(?:(?s:\\(?:.|$))|[^"\\])*(?:"|$)|'(?:(?s:\\(?:.|$))|[^'\\])*(?:'|$)|[^\s"',;&}]+)`),
 	regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`),
 	regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`),
 	regexp.MustCompile(`\bgh[pousr]_[A-Za-z0-9]{20,}\b`),

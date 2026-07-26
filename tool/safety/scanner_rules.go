@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
@@ -37,8 +39,28 @@ func (pathRule) Evaluate(
 	if input.Operation == OperationSessionPoll {
 		return nil
 	}
+	homeDir := ""
+	homeUncertain := false
+	if input.Kind == ExecutionKindHostExec {
+		var err error
+		input.WorkingDir, err = effectiveHostWorkingDir(input.WorkingDir)
+		if err != nil {
+			return []Finding{unresolvedHostPathFinding()}
+		}
+		if runtime.GOOS != "windows" && hostInputHasTildePath(input) {
+			homeDir, homeUncertain, err = effectiveHostHomeDir(input.Env)
+			if err != nil {
+				return []Finding{unresolvedHostPathFinding()}
+			}
+		}
+	}
 	findings := make([]Finding, 0)
-	for _, candidate := range pathTexts(input) {
+	if homeUncertain {
+		findings = append(findings, unresolvedHostPathFinding())
+	}
+	for _, candidate := range pathTexts(
+		input, input.Kind == ExecutionKindHostExec, homeDir,
+	) {
 		lower := normalizePathText(candidate.text)
 		switch {
 		case containsSSHCredential(lower):
@@ -73,14 +95,104 @@ func (pathRule) Evaluate(
 	return findings
 }
 
-func pathTexts(input ScanInput) []labeledText {
+func effectiveHostWorkingDir(raw string) (string, error) {
+	workingDir, err := resolveHostWorkdir(raw, "")
+	if err != nil {
+		return "", err
+	}
+	if workingDir != "" {
+		return workingDir, nil
+	}
+	return filepath.Abs(".")
+}
+
+func effectiveHostHomeDir(env map[string]string) (string, bool, error) {
+	if value, ok := env["HOME"]; ok {
+		value = strings.TrimSpace(value)
+		if value == "" || !filepath.IsAbs(value) {
+			return "", false, errors.New("host HOME is not an absolute path")
+		}
+		return value, false, nil
+	}
+	if value := strings.TrimSpace(os.Getenv("HOME")); value != "" {
+		if !filepath.IsAbs(value) {
+			return "", false, errors.New("process HOME is not an absolute path")
+		}
+		return value, true, nil
+	}
+	value, err := os.UserHomeDir()
+	return value, true, err
+}
+
+func hostInputHasTildePath(input ScanInput) bool {
+	if argvHasTildePath(input.Args) {
+		return true
+	}
+	for _, candidate := range shellCandidates(input) {
+		pipeline, err := shellsafe.ParseWithMaxSegments(
+			candidate.text, guardMaxSegments,
+		)
+		if err != nil {
+			continue
+		}
+		for _, argv := range pipeline.Commands {
+			if argvHasTildePath(argv) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func argvHasTildePath(argv []string) bool {
+	optionsEnded := false
+	for _, argument := range argv {
+		if tildePath(argument) {
+			return true
+		}
+		if argument == "--" {
+			optionsEnded = true
+			continue
+		}
+		if optionsEnded {
+			continue
+		}
+		if value, ok := optionPathValue(argument); ok && tildePath(value) {
+			return true
+		}
+	}
+	return false
+}
+
+func tildePath(value string) bool {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	return value == "~" || strings.HasPrefix(value, "~/")
+}
+
+func unresolvedHostPathFinding() Finding {
+	return newFinding(
+		"PATH_EFFECTIVE_UNRESOLVED",
+		RiskLevelHigh,
+		DecisionNeedsHumanReview,
+		"effective host path could not be resolved",
+		"provide an absolute host working directory and review the request",
+	)
+}
+
+func pathTexts(input ScanInput, hostPaths bool, homeDir string) []labeledText {
 	result := make([]labeledText, 0)
 	if len(input.Args) > 0 {
-		result = append(result, argvPathTexts(input.Args, "args", input.WorkingDir)...)
+		result = append(result,
+			argvPathTexts(
+				input.Args, "args", input.WorkingDir, hostPaths, homeDir,
+			)...)
 	}
 	for _, candidate := range shellCandidates(input) {
 		result = append(result,
-			parsedPathTexts(candidate.text, candidate.label, input.WorkingDir)...)
+			parsedPathTexts(
+				candidate.text, candidate.label, input.WorkingDir,
+				hostPaths, homeDir,
+			)...)
 	}
 	for _, candidate := range nonShellExecutableText(input) {
 		if candidate.label != "args" {
@@ -102,7 +214,13 @@ func pathTexts(input ScanInput) []labeledText {
 	return result
 }
 
-func parsedPathTexts(text, label, workingDir string) []labeledText {
+func parsedPathTexts(
+	text string,
+	label string,
+	workingDir string,
+	hostPaths bool,
+	homeDir string,
+) []labeledText {
 	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
 	if err != nil {
 		return []labeledText{{label, text}}
@@ -110,18 +228,44 @@ func parsedPathTexts(text, label, workingDir string) []labeledText {
 	result := make([]labeledText, 0)
 	for segmentIndex, argv := range pipeline.Commands {
 		segmentLabel := fmt.Sprintf("%s.segment[%d]", label, segmentIndex)
-		result = append(result, argvPathTexts(argv, segmentLabel, workingDir)...)
+		result = append(result,
+			argvPathTexts(
+				argv, segmentLabel, workingDir, hostPaths, homeDir,
+			)...)
 	}
 	return result
 }
 
-func argvPathTexts(argv []string, label, workingDir string) []labeledText {
+func argvPathTexts(
+	argv []string,
+	label string,
+	workingDir string,
+	hostPaths bool,
+	homeDir string,
+) []labeledText {
 	result := make([]labeledText, 0, len(argv))
+	optionsEnded := false
 	for index, argument := range argv {
 		argumentLabel := fmt.Sprintf("%s.argv[%d]", label, index)
-		result = appendPathValue(result, argumentLabel, argument, workingDir)
-		if value, ok := optionPathValue(argument); ok {
-			result = appendPathValue(result, argumentLabel+".value", value, workingDir)
+		forcePath := hostPaths && index > 0 &&
+			(optionsEnded || !strings.HasPrefix(argument, "-"))
+		result = appendPathValue(
+			result, argumentLabel, argument, workingDir,
+			hostPaths, homeDir, forcePath,
+		)
+		if argument == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded {
+			value, ok := optionPathValue(argument)
+			if !ok {
+				continue
+			}
+			result = appendPathValue(
+				result, argumentLabel+".value", value, workingDir,
+				hostPaths, homeDir, hostPaths,
+			)
 		}
 	}
 	return result
@@ -132,11 +276,26 @@ func appendPathValue(
 	label string,
 	value string,
 	workingDir string,
+	hostPaths bool,
+	homeDir string,
+	forcePath bool,
 ) []labeledText {
 	result = append(result, labeledText{label, value})
-	resolved, ok := lexicalPathValue(value, workingDir)
+	resolved, ok := lexicalPathValue(
+		value, workingDir, hostPaths, homeDir, forcePath,
+	)
 	if ok && resolved != value {
 		result = append(result, labeledText{label + ".resolved", resolved})
+	}
+	if hostPaths && runtime.GOOS != "windows" && tildePath(value) {
+		literal := filepath.ToSlash(filepath.Join(
+			workingDir, filepath.FromSlash(
+				strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"),
+			),
+		))
+		if literal != value && literal != resolved {
+			result = append(result, labeledText{label + ".literal", literal})
+		}
 	}
 	return result
 }
@@ -152,10 +311,21 @@ func optionPathValue(argument string) (string, bool) {
 	return argument[index+1:], true
 }
 
-func lexicalPathValue(value, workingDir string) (string, bool) {
+func lexicalPathValue(
+	value string,
+	workingDir string,
+	hostPaths bool,
+	homeDir string,
+	forcePath bool,
+) (string, bool) {
 	normalized := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
-	if normalized == "" || !looksLikePath(normalized) {
+	if normalized == "" ||
+		(!forcePath && !looksLikePath(normalized) &&
+			!(homeDir != "" && normalized == "~")) {
 		return "", false
+	}
+	if hostPaths {
+		return hostPathValue(normalized, workingDir, homeDir), true
 	}
 	if strings.HasPrefix(normalized, "~/") || lexicalPathAbsolute(normalized) {
 		return path.Clean(normalized), true
@@ -165,6 +335,24 @@ func lexicalPathValue(value, workingDir string) (string, bool) {
 		return path.Clean(normalized), true
 	}
 	return path.Clean(path.Join(base, normalized)), true
+}
+
+func hostPathValue(value, workingDir, homeDir string) string {
+	switch {
+	case runtime.GOOS != "windows" && value == "~" && homeDir != "":
+		return filepath.ToSlash(homeDir)
+	case runtime.GOOS != "windows" &&
+		strings.HasPrefix(value, "~/") && homeDir != "":
+		return filepath.ToSlash(filepath.Join(
+			homeDir, filepath.FromSlash(strings.TrimPrefix(value, "~/")),
+		))
+	case filepath.IsAbs(filepath.FromSlash(value)):
+		return filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+	default:
+		return filepath.ToSlash(filepath.Join(
+			workingDir, filepath.FromSlash(value),
+		))
+	}
 }
 
 func looksLikePath(value string) bool {

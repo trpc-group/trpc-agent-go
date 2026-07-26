@@ -19,6 +19,7 @@ import (
 func TestRedactTextSensitiveForms(t *testing.T) {
 	tests := []string{
 		"api_key=top-secret-value",
+		`{"token":"opaque-value"}`,
 		"Authorization: Bearer abc.def.ghi",
 		"AKIAIOSFODNN7EXAMPLE",
 		"ghp_123456789012345678901234567890",

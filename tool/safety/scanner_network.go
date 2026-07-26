@@ -218,11 +218,11 @@ func positionalTargets(command string, arguments []string) []string {
 }
 
 func firstPositionalTarget(command string, arguments []string) string {
-	targets := positionalTargets(command, arguments)
-	if len(targets) == 0 {
+	index := firstPositionalIndex(command, arguments)
+	if index < 0 {
 		return ""
 	}
-	return targets[0]
+	return arguments[index]
 }
 
 func inspectSSHRemoteCommand(argv []string, source string, policy Policy) []Finding {
@@ -239,9 +239,17 @@ func inspectSSHRemoteCommand(argv []string, source string, policy Policy) []Find
 
 func firstPositionalIndex(command string, arguments []string) int {
 	skipNext := false
+	optionsEnded := false
 	for index, argument := range arguments {
 		if skipNext {
 			skipNext = false
+			continue
+		}
+		if optionsEnded {
+			return index
+		}
+		if argument == "--" {
+			optionsEnded = true
 			continue
 		}
 		option, _, hasValue := strings.Cut(argument, "=")
@@ -305,6 +313,10 @@ func gitNetworkOperation(arguments []string) bool {
 
 func destinationRemapFindings(command string, argv []string, source string) []Finding {
 	reviewConfiguration := false
+	sshTargetIndex := -1
+	if command == "ssh" {
+		sshTargetIndex = firstPositionalIndex(command, argv[1:])
+	}
 	for index, argument := range argv[1:] {
 		lower := strings.ToLower(argument)
 		if dangerousNetworkOption(command, argument, argv, index+1) {
@@ -321,6 +333,15 @@ func destinationRemapFindings(command string, argv []string, source string) []Fi
 				ruleNetworkDestinationMap, RiskLevelHigh, DecisionDeny,
 				"network destination remapping detected: source="+safeLabel(source),
 				"remove proxy, host remapping, and jump-host options",
+			)}
+		}
+		if command == "ssh" &&
+			(sshTargetIndex < 0 || index < sshTargetIndex) &&
+			sshForwardingOption(argument) {
+			return []Finding{newFinding(
+				ruleNetworkDestinationMap, RiskLevelHigh, DecisionDeny,
+				"SSH forwarding changes the network destination: source="+safeLabel(source),
+				"remove SSH forwarding and proxy options",
 			)}
 		}
 		if remapOption(command, lower) || proxyOption(command, lower, argv, index+1) {
@@ -340,6 +361,15 @@ func destinationRemapFindings(command string, argv []string, source string) []Fi
 		)}
 	}
 	return nil
+}
+
+func sshForwardingOption(argument string) bool {
+	switch argument {
+	case "-L", "-R", "-D", "-W":
+		return true
+	default:
+		return false
+	}
 }
 
 func dangerousNetworkOption(command, argument string, argv []string, index int) bool {
@@ -378,10 +408,26 @@ func normalizeNetworkArgv(command string, argv []string) []string {
 	normalized := make([]string, 0, len(argv))
 	normalized = append(normalized, argv[0])
 	optionsEnded := false
+	consumeValue := false
 	for _, argument := range argv[1:] {
-		if optionsEnded || len(argument) < 3 || argument[0] != '-' || argument[1] == '-' {
+		if consumeValue {
 			normalized = append(normalized, argument)
-			optionsEnded = optionsEnded || argument == "--"
+			consumeValue = false
+			continue
+		}
+		if optionsEnded {
+			normalized = append(normalized, argument)
+			continue
+		}
+		if argument == "--" {
+			normalized = append(normalized, argument)
+			optionsEnded = true
+			continue
+		}
+		if len(argument) < 3 || argument[0] != '-' || argument[1] == '-' {
+			normalized = append(normalized, argument)
+			option, _, hasValue := strings.Cut(argument, "=")
+			consumeValue = optionRequiresValue(command, option) && !hasValue
 			continue
 		}
 		for index := 1; index < len(argument); index++ {
@@ -392,6 +438,8 @@ func normalizeNetworkArgv(command string, argv []string) []string {
 			}
 			if index+1 < len(argument) {
 				normalized = append(normalized, argument[index+1:])
+			} else {
+				consumeValue = true
 			}
 			break
 		}

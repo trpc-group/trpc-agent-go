@@ -118,6 +118,34 @@ type CodeBlockInput struct {
 }
 
 // ScanInput is the normalized in-memory request inspected by Guard.
+//
+// ToolName must be non-empty. Kind and Backend must be paired as follows:
+// workspace kinds use BackendWorkspaceExec, host kinds use BackendHostExec,
+// ExecutionKindCodeExec uses a code backend, and ExecutionKindCustom uses
+// BackendCustom.
+//
+// The valid operation and payload combinations are:
+//   - Workspace and host exec kinds use OperationExecute. Command must be
+//     non-empty, Args and Script must be empty, and session and code-block
+//     fields must have zero values.
+//   - Workspace and host session kinds use OperationSessionInput or
+//     OperationSessionPoll. Both require SessionID and no executable payload.
+//     Session input additionally requires non-empty SessionInput or Submit;
+//     polling requires both to have zero values.
+//   - The code exec kind uses OperationCodeExecute. CodeBlocks must be
+//     non-empty, every block must contain Language and Code, and shell and
+//     session fields must have zero values.
+//   - The custom kind may use any operation above. For OperationExecute,
+//     exactly one of Command, Args, or Script must be non-empty.
+//
+// Timeout is not part of structural validation. The resource rules require a
+// positive timeout within policy limits for workspace, host, and custom
+// execution requests.
+//
+// Guard.Scan reports an invalid shape as SAFETY_INPUT_INVALID with a deny
+// decision. An invalid ScanInput returned by an InputAdapter is treated as an
+// unparsable tool request and produces TOOL_INPUT_UNPARSABLE with a
+// needs-human-review decision.
 type ScanInput struct {
 	ToolName     string
 	SessionID    string

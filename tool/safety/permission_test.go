@@ -12,12 +12,25 @@ package safety
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
+
+type unsafeAuditor struct {
+	events []AuditEvent
+}
+
+func (auditor *unsafeAuditor) Record(
+	_ context.Context,
+	event AuditEvent,
+) error {
+	auditor.events = append(auditor.events, event)
+	return nil
+}
 
 func TestNewPermissionPolicyRequiresAuditedGuard(t *testing.T) {
 	guard, err := NewGuard(DefaultPolicy())
@@ -60,7 +73,6 @@ func TestPermissionPolicyPreservesAdapterCancellation(t *testing.T) {
 		t.Run(wantErr.Error(), func(t *testing.T) {
 			binding := BindCustom(
 				"custom.exec",
-				BackendCustom,
 				&testAdapter{err: wantErr},
 			)
 			policy, policyErr := NewPermissionPolicy(guard, binding)
@@ -83,7 +95,7 @@ func TestAdaptSafelyOverwritesUntrustedAdapterIdentity(t *testing.T) {
 		Args: nil,
 		Env:  map[string]string{"SAFE": "value"},
 	}}
-	binding := BindCustom("custom.exec", BackendCustom, adapter)
+	binding := BindCustom("custom.exec", adapter)
 	req := AdaptRequest{
 		ToolName: "custom.exec",
 		Metadata: tool.ToolMetadata{OpenWorld: true},
@@ -124,7 +136,7 @@ func TestPermissionPolicyRejectsInvalidOrPanickingAdapterOutput(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			binding := BindCustom("custom.exec", BackendCustom, test.adapter)
+			binding := BindCustom("custom.exec", test.adapter)
 			policy, err := NewPermissionPolicy(guard, binding)
 			require.NoError(t, err)
 			decision, checkErr := policy.CheckToolPermission(
@@ -224,7 +236,7 @@ func TestPermissionPolicyFailsClosedAcrossMalformedBindingSchemas(t *testing.T) 
 		BindHostExec("exec_command", ""),
 		BindHostSession("write_stdin"),
 		BindCodeExec("execute_code", BackendLocal),
-		BindCustom("custom.exec", BackendCustom, &testAdapter{err: errors.New("invalid")}),
+		BindCustom("custom.exec", &testAdapter{err: errors.New("invalid")}),
 	}
 	for _, binding := range bindings {
 		policy, policyErr := NewPermissionPolicy(guard, binding)
@@ -239,6 +251,60 @@ func TestPermissionPolicyFailsClosedAcrossMalformedBindingSchemas(t *testing.T) 
 		require.Equal(t, tool.PermissionActionAsk, decision.Action)
 	}
 	require.Len(t, auditor.events, len(bindings))
+}
+
+func TestPermissionPolicySerializesAuditorCalls(t *testing.T) {
+	const checks = 64
+	auditor := &unsafeAuditor{}
+	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
+	require.NoError(t, err)
+	policy, err := NewPermissionPolicy(
+		guard,
+		BindWorkspaceExec("workspace_exec"),
+	)
+	require.NoError(t, err)
+
+	start := make(chan struct{})
+	errs := make(chan error, checks)
+	var wait sync.WaitGroup
+	for i := 0; i < checks; i++ {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			_, checkErr := policy.CheckToolPermission(
+				context.Background(),
+				permissionRequest(`{"command":"go test ./...","timeout_sec":30}`),
+			)
+			errs <- checkErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(errs)
+	for checkErr := range errs {
+		require.NoError(t, checkErr)
+	}
+	require.Len(t, auditor.events, checks)
+}
+
+func TestHostAdapterResolutionFailureNeedsHumanReview(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	binding := BindHostExec("exec_command", ".")
+	binding.Adapter = hostExecAdapter{resolveErr: errors.New("resolve failed")}
+	policy, err := NewPermissionPolicy(guard, binding)
+	require.NoError(t, err)
+
+	decision, err := policy.CheckToolPermission(
+		context.Background(),
+		&tool.PermissionRequest{
+			ToolName:  binding.ToolName,
+			Arguments: []byte(`{"command":"date"}`),
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAsk, decision.Action)
+	require.Contains(t, decision.Reason, "TOOL_INPUT_UNPARSABLE")
 }
 
 func TestPermissionPolicyAuditFailurePreventsAllow(t *testing.T) {

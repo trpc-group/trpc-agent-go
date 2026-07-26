@@ -11,6 +11,7 @@ package safety
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -196,7 +197,8 @@ func TestWrapOutputGuardDoesNotRepeatPermissionPrecheck(t *testing.T) {
 
 func TestWrapOutputGuardReturnsBlockedResult(t *testing.T) {
 	guard, auditor := newWrapperGuard(t, nil)
-	inner := newFakeCallable(map[string]string{"token": "ghp_abcdefghijklmnopqrstuvwxyz123456"})
+	const opaqueToken = "opaque-value"
+	inner := newFakeCallable(map[string]string{"token": opaqueToken})
 	wrapper := wrapOutput(t, guard, inner)
 
 	result, err := wrapper.Call(context.Background(), nil)
@@ -208,6 +210,12 @@ func TestWrapOutputGuardReturnsBlockedResult(t *testing.T) {
 	require.True(t, blocked.Redacted)
 	require.Len(t, auditor.events, 1)
 	require.True(t, auditor.events[0].Blocked)
+	encodedResult, err := json.Marshal(blocked)
+	require.NoError(t, err)
+	encodedEvent, err := json.Marshal(auditor.events[0])
+	require.NoError(t, err)
+	require.NotContains(t, string(encodedResult), opaqueToken)
+	require.NotContains(t, string(encodedEvent), opaqueToken)
 }
 
 func TestWrapOutputGuardBlocksOversizedAndUninspectableResults(t *testing.T) {

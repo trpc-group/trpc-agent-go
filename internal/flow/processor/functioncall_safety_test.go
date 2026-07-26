@@ -83,7 +83,7 @@ func TestInvalidSafetyAdapterStopsFrameworkToolExecution(t *testing.T) {
 			)
 			require.NoError(t, err)
 			policy, err := safety.NewPermissionPolicy(guard, safety.BindCustom(
-				safetyTestToolName, safety.BackendCustom, test.adapter,
+				safetyTestToolName, test.adapter,
 			))
 			require.NoError(t, err)
 			invocation := &agent.Invocation{RunOptions: agent.NewRunOptions(
