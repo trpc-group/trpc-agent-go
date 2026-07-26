@@ -913,6 +913,39 @@ func TestPipelineRejectsNilBaselineEvaluationResults(t *testing.T) {
 	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
 }
 
+func TestPipelineRejectsBaselineCasesWithoutMetricCoverage(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+	_, err := Pipeline{
+		Evaluator: &scriptedEvaluator{results: map[Phase]*promptiterengine.EvaluationResult{
+			PhaseBaselineTrain: evalResult("train", []caseSpec{
+				{id: "covered", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				{id: "missing", metric: "metric", status: status.EvalStatusNotEvaluated},
+			}),
+			PhaseBaselineValidation: evalResult("validation", []caseSpec{
+				{id: "validation", metric: "metric", score: 1, status: status.EvalStatusPassed},
+			}),
+		}},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
+}
+
 func TestPipelineRejectsMissingCollaboratorsAndMetricsPath(t *testing.T) {
 	cfg := Config{
 		AppName:             "app",

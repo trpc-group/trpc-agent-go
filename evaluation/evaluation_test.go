@@ -2172,7 +2172,7 @@ func TestAggregateCaseRunsPrefersInvocationReasonOverJoinedAggregateReason(t *te
 	assert.Equal(t, "second turn failed", result.MetricResults[0].Details.Reason)
 }
 
-func TestAggregateCaseRunsUsesLastMatchingFailedInvocationReason(t *testing.T) {
+func TestAggregateCaseRunsSelectsFirstMatchingFailedInvocationDeterministically(t *testing.T) {
 	run := makeEvalCaseResult("set", "case", "metric", 0, 1, status.EvalStatusFailed)
 	run.OverallEvalMetricResults[0].Details = nil
 	run.EvalMetricResultPerInvocation = []*evalresult.EvalMetricResultPerInvocation{
@@ -2203,8 +2203,28 @@ func TestAggregateCaseRunsUsesLastMatchingFailedInvocationReason(t *testing.T) {
 	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{run})
 	assert.NoError(t, err)
 	require.Len(t, result.MetricResults, 1)
-	require.NotNil(t, result.MetricResults[0].Details)
-	assert.Equal(t, "second turn failed", result.MetricResults[0].Details.Reason)
+	assert.Same(t,
+		run.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details,
+		result.MetricResults[0].Details,
+	)
+	assert.Equal(t, "first turn failed", result.MetricResults[0].Details.Reason)
+}
+
+func TestAggregateCaseRunsSelectsDetailsMatchingAggregateScoreAcrossRuns(t *testing.T) {
+	first := makeEvalCaseResult("set", "case", "metric", 0.2, 1, status.EvalStatusFailed)
+	first.OverallEvalMetricResults[0].Details = nil
+	first.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details = &evalresult.EvalMetricResultDetails{Reason: "first run"}
+
+	second := makeEvalCaseResult("set", "case", "metric", 0.4, 1, status.EvalStatusFailed)
+	second.OverallEvalMetricResults[0].Details = nil
+	second.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Score = 0.3
+	second.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details = &evalresult.EvalMetricResultDetails{Reason: "aggregate matching run"}
+
+	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{first, second})
+	require.NoError(t, err)
+	require.Len(t, result.MetricResults, 1)
+	assert.Same(t, second.EvalMetricResultPerInvocation[0].EvalMetricResults[0].Details, result.MetricResults[0].Details)
+	assert.Equal(t, "aggregate matching run", result.MetricResults[0].Details.Reason)
 }
 
 func TestAggregateCaseRunsUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {

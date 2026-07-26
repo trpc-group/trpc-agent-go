@@ -277,22 +277,71 @@ func toolCallsFromTrace(trace *atrace.Trace) []structuredToolCall {
 		return nil
 	}
 	var out []structuredToolCall
-	seenCallIDs := make(map[string]struct{})
+	callIndexes := make(map[string]int)
 	for _, step := range trace.Steps {
 		for _, call := range toolCallsFromSnapshotAt(step.Output, step.StepID) {
-			// A trace can repeat the same model response in a later snapshot. Tool
-			// call IDs identify one logical call; calls without an ID remain
-			// occurrence-based and are preserved per emitting step.
 			if call.ID != "" {
-				if _, seen := seenCallIDs[call.ID]; seen {
+				if index, seen := callIndexes[call.ID]; seen {
+					out[index] = mergeStructuredToolCall(out[index], call)
 					continue
 				}
-				seenCallIDs[call.ID] = struct{}{}
+				callIndexes[call.ID] = len(out)
 			}
 			out = append(out, call)
 		}
 	}
 	return out
+}
+
+func mergeStructuredToolCall(existing, incoming structuredToolCall) structuredToolCall {
+	merged := existing
+	if merged.ID == "" {
+		merged.ID = incoming.ID
+	}
+	if merged.StepID == "" {
+		merged.StepID = incoming.StepID
+	}
+	if merged.Name == "" {
+		merged.Name = incoming.Name
+	}
+	merged.Arguments = mergeStreamingJSONValue(merged.Arguments, incoming.Arguments)
+	merged.Result = mergeStreamingJSONValue(merged.Result, incoming.Result)
+	return merged
+}
+
+func mergeStreamingJSONValue(existing, incoming any) any {
+	if existing == nil {
+		return incoming
+	}
+	if incoming == nil || reflect.DeepEqual(existing, incoming) {
+		return existing
+	}
+	existingText, existingIsText := existing.(string)
+	incomingText, incomingIsText := incoming.(string)
+	if existingIsText && incomingIsText {
+		if strings.HasPrefix(incomingText, existingText) {
+			return normalizeJSONLike(incomingText)
+		}
+		if strings.HasPrefix(existingText, incomingText) {
+			return existing
+		}
+		if combined := existingText + incomingText; json.Valid([]byte(combined)) {
+			return normalizeJSONLike(combined)
+		}
+		if json.Valid([]byte(incomingText)) && len(incomingText) > len(existingText) {
+			return normalizeJSONLike(incomingText)
+		}
+		return existing
+	}
+	existingJSON, existingErr := json.Marshal(existing)
+	incomingJSON, incomingErr := json.Marshal(incoming)
+	if existingErr == nil && incomingErr == nil {
+		if len(incomingJSON) >= len(existingJSON) {
+			return incoming
+		}
+		return existing
+	}
+	return incoming
 }
 
 func toolCallsFromSnapshot(snapshot *atrace.Snapshot) []structuredToolCall {
@@ -363,6 +412,7 @@ func toolCallFromMap(value any) (structuredToolCall, bool) {
 	if !ok {
 		return structuredToolCall{}, false
 	}
+	id := firstStringField(object, "id", "tool_call_id", "tool_id")
 	name := stringField(object, "tool_name")
 	if name == "" {
 		name = stringField(object, "name")
@@ -377,11 +427,11 @@ func toolCallFromMap(value any) (structuredToolCall, bool) {
 			args = firstExistingField(function, "arguments", "args", "input")
 		}
 	}
-	if strings.TrimSpace(name) == "" {
+	if strings.TrimSpace(name) == "" && id == "" {
 		return structuredToolCall{}, false
 	}
 	return structuredToolCall{
-		ID:        firstStringField(object, "id", "tool_call_id", "tool_id"),
+		ID:        id,
 		Name:      strings.TrimSpace(name),
 		Arguments: normalizeJSONLike(args),
 		Result:    normalizeJSONLike(result),

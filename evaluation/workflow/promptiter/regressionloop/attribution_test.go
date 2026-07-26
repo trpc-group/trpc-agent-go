@@ -954,6 +954,25 @@ func TestToolCallsFromTraceExtractsNestedModelResponseCallsByID(t *testing.T) {
 	assert.Equal(t, map[string]any{"id": "A"}, calls[0].Arguments)
 }
 
+func TestToolCallsFromTraceMergesStreamingToolCallArguments(t *testing.T) {
+	trace := &atrace.Trace{Steps: []atrace.Step{
+		{
+			StepID: "model-call-1",
+			Output: &atrace.Snapshot{Text: `{"choices":[{"delta":{"tool_calls":[{"id":"call-1","function":{"name":"lookup","arguments":"{\"id\":\""}}]}}]}`},
+		},
+		{
+			StepID: "model-call-2",
+			Output: &atrace.Snapshot{Text: `{"choices":[{"delta":{"tool_calls":[{"id":"call-1","function":{"arguments":"A\"}"}}]}}]}`},
+		},
+	}}
+
+	calls := toolCallsFromTrace(trace)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call-1", calls[0].ID)
+	assert.Equal(t, "lookup", calls[0].Name)
+	assert.Equal(t, map[string]any{"id": "A"}, calls[0].Arguments)
+}
+
 func TestAttributeFailuresUsesStructuredFormatRouteAndFinalDiff(t *testing.T) {
 	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
 		{

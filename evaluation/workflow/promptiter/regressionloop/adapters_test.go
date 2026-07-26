@@ -254,7 +254,7 @@ func TestAdaptEvaluationResultUsesReasonFromSelectedAggregateEvidence(t *testing
 	assert.Same(t, secondExpected, gotMetric.ExpectedInvocation)
 }
 
-func TestAdaptEvaluationResultUsesLastMatchingFailedInvocationEvidence(t *testing.T) {
+func TestAdaptEvaluationResultKeepsReasonAndEvidenceFromSameFailedInvocation(t *testing.T) {
 	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
 	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
 	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
@@ -307,9 +307,9 @@ func TestAdaptEvaluationResultUsesLastMatchingFailedInvocationEvidence(t *testin
 	require.Len(t, result.EvalSets[0].Cases, 1)
 	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
 	gotMetric := result.EvalSets[0].Cases[0].Metrics[0]
-	assert.Equal(t, "second turn failed", gotMetric.Reason)
-	assert.Same(t, secondActual, gotMetric.ActualInvocation)
-	assert.Same(t, secondExpected, gotMetric.ExpectedInvocation)
+	assert.Equal(t, "first turn failed", gotMetric.Reason)
+	assert.Same(t, firstActual, gotMetric.ActualInvocation)
+	assert.Nil(t, gotMetric.ExpectedInvocation)
 }
 
 func TestAdaptEvaluationResultUsesAggregateDetailsIdentityWhenReasonsRepeat(t *testing.T) {
@@ -491,6 +491,15 @@ func TestEvaluationServiceEvaluatorRejectsUnappliedPromptOrProfile(t *testing.T)
 		}},
 	})
 	assert.ErrorContains(t, err, "requires a prompt applier")
+}
+
+func TestEvaluationServiceEvaluatorSkipsTypedNilPromptApplierWithoutPrompt(t *testing.T) {
+	var applier PromptApplier = (*typedNilPromptApplier)(nil)
+	_, err := EvaluationServiceEvaluator{
+		Evaluator:     &adapterFakeEvaluator{},
+		PromptApplier: applier,
+	}.Evaluate(context.Background(), EvaluationRequest{EvalSetID: "validation"})
+	assert.ErrorContains(t, err, "evaluation result is nil")
 }
 
 func TestEvaluationServiceEvaluatorDelegatesAndAdapts(t *testing.T) {
@@ -820,6 +829,15 @@ type adapterFakeEvaluator struct {
 	evalSetID string
 	result    *evaluation.EvaluationResult
 	err       error
+}
+
+type typedNilPromptApplier struct{}
+
+func (a *typedNilPromptApplier) EvaluationOptions(EvaluationRequest) ([]evaluation.Option, error) {
+	if a == nil {
+		panic("typed nil prompt applier was called")
+	}
+	return nil, nil
 }
 
 func (e *adapterFakeEvaluator) Evaluate(_ context.Context, evalSetID string, _ ...evaluation.Option) (*evaluation.EvaluationResult, error) {

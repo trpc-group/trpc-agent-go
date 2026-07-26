@@ -260,19 +260,34 @@ func validateBaselineEvaluationResult(phase Phase, result *promptiterengine.Eval
 	if result == nil {
 		return fmt.Errorf("%s evaluator returned nil result without error", phase)
 	}
+	if len(result.EvalSets) == 0 {
+		return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
+	}
+	sawCase := false
 	for _, evalSet := range result.EvalSets {
+		if len(evalSet.Cases) == 0 {
+			continue
+		}
 		for _, evalCase := range evalSet.Cases {
+			sawCase = true
+			caseCovered := false
 			for _, metric := range evalCase.Metrics {
-				if strings.TrimSpace(metric.MetricName) == "" ||
-					metric.Status == status.EvalStatusNotEvaluated ||
-					math.IsNaN(metric.Score) || math.IsInf(metric.Score, 0) {
-					continue
+				if strings.TrimSpace(metric.MetricName) != "" &&
+					metric.Status != status.EvalStatusNotEvaluated &&
+					!math.IsNaN(metric.Score) && !math.IsInf(metric.Score, 0) {
+					caseCovered = true
+					break
 				}
-				return nil
+			}
+			if !caseCovered {
+				return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
 			}
 		}
 	}
-	return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
+	if !sawCase {
+		return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
+	}
+	return nil
 }
 
 func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...bool) CostSummary {

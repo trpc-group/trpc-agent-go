@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"sort"
 	"sync"
 	"time"
@@ -541,7 +542,7 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		score     float64
 		threshold float64
 		criterion *criterion.Criterion
-		details   *evalresult.EvalMetricResultDetails
+		fallback  *evalresult.EvalMetricResultDetails
 	}
 	// Group metrics results by metric name.
 	aggregatedMetrics := make(map[string]*aggregatedMetric)
@@ -566,8 +567,8 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 			aggregatedMetrics[metric.MetricName].count++
 			aggregatedMetrics[metric.MetricName].score += metric.Score
 			aggregatedMetrics[metric.MetricName].criterion = metric.Criterion
-			if aggregatedMetrics[metric.MetricName].details == nil {
-				aggregatedMetrics[metric.MetricName].details = metricDetailsForAggregate(metric, run)
+			if aggregatedMetrics[metric.MetricName].fallback == nil && metric.Details != nil {
+				aggregatedMetrics[metric.MetricName].fallback = metric.Details
 			}
 		}
 	}
@@ -579,14 +580,15 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 		if average >= aggregatedMetric.threshold {
 			evalStatus = status.EvalStatusPassed
 		}
-		metricResults = append(metricResults, &evalresult.EvalMetricResult{
+		metric := &evalresult.EvalMetricResult{
 			MetricName: name,
 			Score:      average,
 			EvalStatus: evalStatus,
 			Threshold:  aggregatedMetric.threshold,
 			Criterion:  aggregatedMetric.criterion,
-			Details:    aggregatedMetric.details,
-		})
+		}
+		metric.Details = metricDetailsForAggregate(metric, runs, aggregatedMetric.fallback)
+		metricResults = append(metricResults, metric)
 	}
 	overallStatus, err := summarizeAggregateCaseRunsStatus(runStatuses, metricResults, hasRunError)
 	if err != nil {
@@ -600,34 +602,50 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 	}, nil
 }
 
-func metricDetailsForAggregate(metric *evalresult.EvalMetricResult, run *evalresult.EvalCaseResult) *evalresult.EvalMetricResultDetails {
+func metricDetailsForAggregate(
+	metric *evalresult.EvalMetricResult,
+	runs []*evalresult.EvalCaseResult,
+	fallback *evalresult.EvalMetricResultDetails,
+) *evalresult.EvalMetricResultDetails {
 	if metric == nil {
 		return nil
 	}
-	if run == nil {
-		return metric.Details
-	}
-	var statusMatch *evalresult.EvalMetricResultDetails
+	var identityMatch *evalresult.EvalMetricResultDetails
 	var scoreMatch *evalresult.EvalMetricResultDetails
-	for _, perInvocation := range run.EvalMetricResultPerInvocation {
-		if perInvocation == nil {
+	var statusMatch *evalresult.EvalMetricResultDetails
+	for _, run := range runs {
+		if run == nil {
 			continue
 		}
-		for _, perMetric := range perInvocation.EvalMetricResults {
-			if perMetric == nil || perMetric.MetricName != metric.MetricName {
+		for _, perInvocation := range run.EvalMetricResultPerInvocation {
+			if perInvocation == nil {
 				continue
 			}
-			if perMetric.Details == nil || perMetric.Details.Reason == "" {
-				continue
-			}
-			if perMetric.EvalStatus == metric.EvalStatus {
-				if perMetric.Score == metric.Score {
-					scoreMatch = perMetric.Details
+			for _, perMetric := range perInvocation.EvalMetricResults {
+				if perMetric == nil || perMetric.MetricName != metric.MetricName ||
+					perMetric.Details == nil || perMetric.Details.Reason == "" {
 					continue
 				}
-				statusMatch = perMetric.Details
+				if perMetric.EvalStatus != metric.EvalStatus {
+					continue
+				}
+				if fallback != nil && perMetric.Details == fallback {
+					if identityMatch == nil {
+						identityMatch = perMetric.Details
+					}
+				}
+				if scoresMatch(perMetric.Score, metric.Score) {
+					if scoreMatch == nil {
+						scoreMatch = perMetric.Details
+					}
+				} else if statusMatch == nil {
+					statusMatch = perMetric.Details
+				}
 			}
 		}
+	}
+	if identityMatch != nil {
+		return identityMatch
 	}
 	if scoreMatch != nil {
 		return scoreMatch
@@ -635,12 +653,11 @@ func metricDetailsForAggregate(metric *evalresult.EvalMetricResult, run *evalres
 	if statusMatch != nil {
 		return statusMatch
 	}
-	// Do not copy an unrelated invocation's reason when the aggregate score
-	// and status do not identify a matching per-invocation metric.
-	if metric.Details != nil {
-		return metric.Details
-	}
-	return nil
+	return fallback
+}
+
+func scoresMatch(left, right float64) bool {
+	return math.Abs(left-right) <= 1e-9
 }
 
 func summarizeAggregateCaseRunsStatus(runStatuses []status.EvalStatus, metricResults []*evalresult.EvalMetricResult, hasRunError bool) (status.EvalStatus, error) {

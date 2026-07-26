@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 
@@ -65,7 +66,7 @@ func (e EvaluationServiceEvaluator) Evaluate(
 	options := append([]evaluation.Option{
 		evaluation.WithRunDetailsEnabled(true),
 	}, e.Options...)
-	if e.PromptApplier != nil {
+	if !isNilPromptApplier(e.PromptApplier) {
 		promptOptions, err := e.PromptApplier.EvaluationOptions(request)
 		if err != nil {
 			return nil, fmt.Errorf("apply prompt: %w", err)
@@ -320,7 +321,10 @@ func AdaptEvaluationResult(result *evaluation.EvaluationResult) (*promptiterengi
 			if metric == nil || metric.EvalStatus == status.EvalStatusNotEvaluated {
 				continue
 			}
-			evidence := invocationEvidenceForMetric(metric, evalCase)
+			evidence, err := invocationEvidenceForMetric(metric, evalCase)
+			if err != nil {
+				return nil, fmt.Errorf("adapt metric %q: %w", metric.MetricName, err)
+			}
 			reason := metricReason(metric)
 			if reason == "" {
 				reason = evidence.reason
@@ -401,9 +405,9 @@ type metricInvocationEvidence struct {
 func invocationEvidenceForMetric(
 	result *evalresult.EvalMetricResult,
 	evalCase *evaluation.EvaluationCaseResult,
-) metricInvocationEvidence {
+) (metricInvocationEvidence, error) {
 	if result == nil || evalCase == nil {
-		return metricInvocationEvidence{}
+		return metricInvocationEvidence{}, nil
 	}
 	var first metricInvocationEvidence
 	var identityMatch metricInvocationEvidence
@@ -431,30 +435,35 @@ func invocationEvidenceForMetric(
 				if !first.found {
 					first = evidence
 				}
-				if result.Details != nil && metric.Details == result.Details {
-					identityMatch = evidence
+				if result.Details != nil && metric.Details == result.Details &&
+					metric.EvalStatus == result.EvalStatus {
+					if !identityMatch.found {
+						identityMatch = evidence
+					}
 					continue
 				}
 				if metricMatchesAggregate(result, metric) {
-					exactMatch = evidence
+					if !exactMatch.found {
+						exactMatch = evidence
+					}
 					continue
 				}
-				if metric.EvalStatus == result.EvalStatus {
+				if metric.EvalStatus == result.EvalStatus && !statusMatch.found {
 					statusMatch = evidence
 				}
 			}
 		}
 	}
 	if identityMatch.found {
-		return identityMatch
+		return identityMatch, nil
 	}
 	if exactMatch.found {
-		return exactMatch
+		return exactMatch, nil
 	}
 	if statusMatch.found {
-		return statusMatch
+		return statusMatch, nil
 	}
-	return first
+	return first, nil
 }
 
 func metricMatchesAggregate(aggregate, candidate *evalresult.EvalMetricResult) bool {
@@ -468,7 +477,7 @@ func metricMatchesAggregate(aggregate, candidate *evalresult.EvalMetricResult) b
 	if aggregateReason != "" {
 		return aggregateReason == metricReason(candidate)
 	}
-	return candidate.Score == aggregate.Score
+	return math.Abs(candidate.Score-aggregate.Score) <= 1e-9
 }
 
 func metricReason(metric *evalresult.EvalMetricResult) string {
