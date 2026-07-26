@@ -1197,6 +1197,7 @@ func TestCleanupExpired(t *testing.T) {
 				AddRow("app-1", "user-1", "session-1"))
 
 		// Mock: Soft delete session states
+		expectDuplicateSessionStateRepair(mock)
 		mock.ExpectExec("UPDATE session_states SET deleted_at").
 			WillReturnError(fmt.Errorf("database error"))
 
@@ -1718,6 +1719,7 @@ func TestCleanupExpiredSessions_DeleteError(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"app_name", "user_id", "session_id"}).
 			AddRow("app", "user", "sess"))
 
+	expectDuplicateSessionStateRepair(mock)
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE session_states SET deleted_at = ?")).
 		WillReturnError(assert.AnError)
 	mock.ExpectRollback()

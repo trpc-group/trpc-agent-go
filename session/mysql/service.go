@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	drivermysql "github.com/go-sql-driver/mysql"
 	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/session/hook"
@@ -34,6 +35,11 @@ var _ session.Service = (*Service)(nil)
 var _ session.TrackService = (*Service)(nil)
 
 var errSessionNotFound = errors.New("session not found")
+
+const (
+	createSessionTransactionAttempts = 3
+	mySQLErrLockDeadlock             = 1213
+)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -241,9 +247,45 @@ func (s *Service) CreateSession(
 	// Calculate expires_at based on TTL
 	expiresAt := calculateExpiresAt(s.opts.sessionTTL)
 
-	var sessionExists bool
-	var existingExpiresAt sql.NullTime
-	err = s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
+	for attempt := 0; attempt < createSessionTransactionAttempts; attempt++ {
+		err = s.createSessionTransaction(ctx, key, sessState, sessBytes, expiresAt, now)
+		if err == nil {
+			break
+		}
+		if !isMySQLDeadlock(err) || attempt+1 == createSessionTransactionAttempts {
+			return nil, err
+		}
+	}
+
+	appState, err := s.ListAppStates(ctx, key.AppName)
+	if err != nil {
+		return nil, fmt.Errorf("list app states failed: %w", err)
+	}
+
+	userState, err := s.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
+	if err != nil {
+		return nil, fmt.Errorf("list user states failed: %w", err)
+	}
+
+	sess := session.NewSession(
+		key.AppName, key.UserID, sessState.ID,
+		session.WithSessionState(sessState.State),
+		session.WithSessionCreatedAt(sessState.CreatedAt),
+		session.WithSessionUpdatedAt(sessState.UpdatedAt),
+	)
+
+	return mergeState(appState, userState, sess), nil
+}
+
+func (s *Service) createSessionTransaction(
+	ctx context.Context,
+	key session.Key,
+	sessState *SessionState,
+	sessBytes []byte,
+	expiresAt *time.Time,
+	now time.Time,
+) error {
+	return s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx, fmt.Sprintf(
 			`SELECT expires_at FROM %s WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL FOR UPDATE`,
 			s.tableSessionStates,
@@ -253,6 +295,8 @@ func (s *Service) CreateSession(
 		}
 		defer rows.Close()
 
+		var sessionExists bool
+		var existingExpiresAt sql.NullTime
 		if rows.Next() {
 			sessionExists = true
 			if err := rows.Scan(&existingExpiresAt); err != nil {
@@ -267,7 +311,6 @@ func (s *Service) CreateSession(
 		}
 
 		if sessionExists {
-			// If session exists and has not expired, reject creation.
 			if !existingExpiresAt.Valid || existingExpiresAt.Time.After(now) {
 				log.ErrorfContext(
 					ctx,
@@ -321,29 +364,14 @@ func (s *Service) CreateSession(
 			return fmt.Errorf("create session failed: %w", err)
 		}
 		return nil
+	}, func(options *sql.TxOptions) {
+		options.Isolation = sql.LevelSerializable
 	})
-	if err != nil {
-		return nil, err
-	}
+}
 
-	appState, err := s.ListAppStates(ctx, key.AppName)
-	if err != nil {
-		return nil, fmt.Errorf("list app states failed: %w", err)
-	}
-
-	userState, err := s.ListUserStates(ctx, session.UserKey{AppName: key.AppName, UserID: key.UserID})
-	if err != nil {
-		return nil, fmt.Errorf("list user states failed: %w", err)
-	}
-
-	sess := session.NewSession(
-		key.AppName, key.UserID, sessState.ID,
-		session.WithSessionState(sessState.State),
-		session.WithSessionCreatedAt(sessState.CreatedAt),
-		session.WithSessionUpdatedAt(sessState.UpdatedAt),
-	)
-
-	return mergeState(appState, userState, sess), nil
+func isMySQLDeadlock(err error) bool {
+	var mysqlErr *drivermysql.MySQLError
+	return errors.As(err, &mysqlErr) && mysqlErr.Number == mySQLErrLockDeadlock
 }
 
 // GetSession gets a session.
@@ -970,9 +998,10 @@ func (s *Service) cleanupExpiredSessions(ctx context.Context, now time.Time) {
 	err := s.mysqlClient.Transaction(ctx, func(tx *sql.Tx) error {
 		// 1. Find and lock expired sessions
 		// Use LIMIT to avoid locking too many rows in one transaction.
+		// #nosec G201 -- table names are validated during service construction.
 		query := fmt.Sprintf(`SELECT app_name, user_id, session_id FROM %s
 			WHERE expires_at IS NOT NULL AND expires_at <= ? AND deleted_at IS NULL
-			ORDER BY expires_at, app_name, user_id, session_id
+			ORDER BY expires_at
 			LIMIT 1000 FOR UPDATE`,
 			s.tableSessionStates)
 
@@ -1038,17 +1067,15 @@ func (s *Service) deleteSessions(ctx context.Context, tx *sql.Tx, keys []session
 		return 0, nil
 	}
 	uniqueKeys := deduplicateSessionKeys(verifiedKeys)
-	hasDuplicateStates := len(uniqueKeys) != len(verifiedKeys)
-
 	childWhereClause, childArgs := s.sessionKeysWhereClause(uniqueKeys)
 	stateWhereClause = childWhereClause + " AND expires_at IS NOT NULL AND expires_at <= ?"
 	stateArgs = append(append([]any(nil), childArgs...), now)
 
 	if s.opts.softDelete {
-		if hasDuplicateStates {
-			if err := s.deleteDuplicateSessionStates(ctx, tx, uniqueKeys, now); err != nil {
-				return 0, err
-			}
+		// Always let MySQL perform duplicate repair so equality follows the
+		// table collation rather than Go's byte-wise string comparison.
+		if err := s.deleteDuplicateSessionStates(ctx, tx, uniqueKeys, now); err != nil {
+			return 0, err
 		}
 		return len(uniqueKeys), s.softDeleteSessions(ctx, tx, stateWhereClause, stateArgs, childWhereClause, childArgs, now)
 	}
@@ -1083,6 +1110,7 @@ func (s *Service) deleteDuplicateSessionStates(
 	whereClause = strings.ReplaceAll(whereClause, "session_id", "duplicate.session_id")
 	whereClause = strings.ReplaceAll(whereClause, "deleted_at", "duplicate.deleted_at")
 
+	// #nosec G201 -- table names are validated during service construction.
 	query := fmt.Sprintf(`DELETE duplicate FROM %s AS duplicate
 		INNER JOIN %s AS canonical
 			ON canonical.app_name = duplicate.app_name
