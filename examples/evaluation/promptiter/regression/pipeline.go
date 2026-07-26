@@ -212,11 +212,62 @@ func runPipeline(
 		return optimizationReport{}, err
 	}
 	if options.WritePrompt && report.GateDecision.Accepted {
-		if err := os.WriteFile(config.Inputs.PromptSource, []byte(strings.TrimSpace(selected.Prompt)+"\n"), 0o644); err != nil {
+		if err := replaceFileAtomically(
+			config.Inputs.PromptSource,
+			[]byte(strings.TrimSpace(selected.Prompt)+"\n"),
+			os.Rename,
+		); err != nil {
 			return optimizationReport{}, fmt.Errorf("write accepted prompt: %w", err)
 		}
 	}
 	return report, nil
+}
+
+func replaceFileAtomically(
+	path string,
+	data []byte,
+	renameFile func(string, string) error,
+) error {
+	if renameFile == nil {
+		return errors.New("rename function is nil")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat prompt source: %w", err)
+	}
+	temporary, err := os.CreateTemp(
+		filepath.Dir(path),
+		"."+filepath.Base(path)+".tmp-*",
+	)
+	if err != nil {
+		return fmt.Errorf("create temporary prompt: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = temporary.Close()
+		}
+		_ = os.Remove(temporaryPath)
+	}()
+	if err := temporary.Chmod(info.Mode()); err != nil {
+		return fmt.Errorf("preserve prompt mode: %w", err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		return fmt.Errorf("write temporary prompt: %w", err)
+	}
+	if err := temporary.Sync(); err != nil {
+		return fmt.Errorf("sync temporary prompt: %w", err)
+	}
+	closeErr := temporary.Close()
+	closed = true
+	if closeErr != nil {
+		return fmt.Errorf("close temporary prompt: %w", closeErr)
+	}
+	if err := renameFile(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace prompt source: %w", err)
+	}
+	return nil
 }
 
 func summarizeFailures(summaries ...evaluationSummary) map[failureCategory]int {

@@ -56,27 +56,40 @@ func decideGate(
 	criticalPassed, criticalDetail := checkCriticalCases(config, baseline, candidate)
 	addCheck("critical_cases", criticalPassed, criticalDetail)
 
-	costPassed := config.MaxEstimatedCostUSD <= 0 ||
-		candidate.Cost.EstimatedCostUSD <= config.MaxEstimatedCostUSD+scoreEpsilon
+	costPassed := true
+	costDetail := "candidate cost budget is not configured"
+	if config.MaxEstimatedCostUSD != nil {
+		limit := *config.MaxEstimatedCostUSD
+		costPassed = candidate.Cost.EstimatedCostUSD <= limit+scoreEpsilon
+		if limit == 0 {
+			costPassed = candidate.Cost.EstimatedCostUSD == 0
+		}
+		costDetail = fmt.Sprintf(
+			"candidate cost budget: estimated $%.6f, limit $%.6f",
+			candidate.Cost.EstimatedCostUSD,
+			limit,
+		)
+	}
 	addCheck(
 		"cost_budget",
 		costPassed,
-		fmt.Sprintf(
-			"candidate cost budget: estimated $%.6f, limit $%.6f",
-			candidate.Cost.EstimatedCostUSD,
-			config.MaxEstimatedCostUSD,
-		),
+		costDetail,
 	)
 
-	toolCallsPassed := config.MaxToolCalls <= 0 || candidate.Cost.ToolCalls <= config.MaxToolCalls
+	toolCallsPassed := true
+	toolCallsDetail := "candidate tool-call budget is not configured"
+	if config.MaxToolCalls != nil {
+		toolCallsPassed = candidate.Cost.ToolCalls <= *config.MaxToolCalls
+		toolCallsDetail = fmt.Sprintf(
+			"candidate tool-call budget: used %d, limit %d",
+			candidate.Cost.ToolCalls,
+			*config.MaxToolCalls,
+		)
+	}
 	addCheck(
 		"tool_call_budget",
 		toolCallsPassed,
-		fmt.Sprintf(
-			"candidate tool-call budget: used %d, limit %d",
-			candidate.Cost.ToolCalls,
-			config.MaxToolCalls,
-		),
+		toolCallsDetail,
 	)
 
 	decision.Accepted = len(decision.Reasons) == 0

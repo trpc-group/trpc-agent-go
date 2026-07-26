@@ -5,17 +5,20 @@ responsibilities. Evaluation Service is the source of truth for quality: every
 baseline and candidate run emits a final response, tool trajectory, and
 execution trace, then the configured built-in metrics produce per-case scores
 and pass/fail states. The loop does not infer success from optimizer output.
-This makes fake runs and model-backed runs comparable and prevents a candidate
-from bypassing evaluation.
+Cases with inference or evaluator execution errors abort the pipeline instead
+of disappearing from the score denominator. This makes fake runs and
+model-backed runs comparable and prevents a candidate from bypassing
+evaluation.
 
 Failure attribution is deterministic and evidence based. It first inspects
 expected and actual knowledge-search calls, structured JSON validity, tool
 names and arguments, trace routing errors, and metric reasons. A generic final
 response mismatch is used only after more specific signals have been checked.
 Every failed case receives at least one category and human-readable evidence;
-the first category is the primary attribution used in summary counts. The full
-list remains in the JSON report so ambiguous failures can be audited instead
-of being forced into one label.
+summary counts include every matched category, so one ambiguous case can
+contribute to multiple categories and totals can exceed the failed-case count.
+The full list remains in the JSON report so ambiguous failures can be audited
+instead of being forced into one label.
 
 Candidates use PromptIter's `SurfacePatch` and `Profile` contracts for the
 target instruction surface. In deterministic mode, configured patch text
@@ -43,4 +46,5 @@ Audit artifacts record all candidate prompts, metric results, traces, deltas,
 gate checks, rejection reasons, token estimates, tool calls, latency, seed, and
 fake model pricing. JSON supports automation; Markdown supports reviewer
 approval. Source prompt write-back is opt-in and occurs only after acceptance,
-so a generated candidate cannot silently enter production.
+using a synced same-directory temporary file and atomic rename so a failed
+replacement cannot truncate the original prompt.

@@ -53,6 +53,27 @@ func TestValidateConfigRejectsInvalidCostAndFailureTargets(t *testing.T) {
 			errorContains: "output token cost",
 		},
 		{
+			name: "negative minimum validation gain",
+			mutate: func(config *pipelineConfig) {
+				config.Gate.MinValidationScoreGain = -0.1
+			},
+			errorContains: "minimum validation score gain",
+		},
+		{
+			name: "negative maximum estimated cost",
+			mutate: func(config *pipelineConfig) {
+				config.Gate.MaxEstimatedCostUSD = float64Pointer(-0.1)
+			},
+			errorContains: "maximum estimated cost",
+		},
+		{
+			name: "negative maximum tool calls",
+			mutate: func(config *pipelineConfig) {
+				config.Gate.MaxToolCalls = intPointer(-1)
+			},
+			errorContains: "maximum tool calls",
+		},
+		{
 			name: "empty targets",
 			mutate: func(config *pipelineConfig) {
 				config.Candidates[0].TargetFailures = nil

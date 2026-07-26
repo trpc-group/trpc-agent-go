@@ -130,8 +130,8 @@ type gateConfig struct {
 	AllowNewHardFails      bool     `json:"allowNewHardFails"`
 	CriticalCaseIDs        []string `json:"criticalCaseIds"`
 	MaxCriticalScoreDrop   float64  `json:"maxCriticalScoreDrop"`
-	MaxEstimatedCostUSD    float64  `json:"maxEstimatedCostUsd"`
-	MaxToolCalls           int      `json:"maxToolCalls"`
+	MaxEstimatedCostUSD    *float64 `json:"maxEstimatedCostUsd,omitempty"`
+	MaxToolCalls           *int     `json:"maxToolCalls,omitempty"`
 }
 
 type gateCheck struct {

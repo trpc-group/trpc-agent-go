@@ -105,11 +105,14 @@ func validateConfig(config pipelineConfig) error {
 		return errors.New("fake model prompt token cost must not be negative")
 	case config.FakeModel.OutputCostPerMillionTokens < 0:
 		return errors.New("fake model output token cost must not be negative")
+	case config.Gate.MinValidationScoreGain < 0:
+		return errors.New("minimum validation score gain must not be negative")
 	case config.Gate.MaxCriticalScoreDrop < 0:
 		return errors.New("maximum critical score drop must not be negative")
-	case config.Gate.MaxEstimatedCostUSD < 0:
+	case config.Gate.MaxEstimatedCostUSD != nil &&
+		*config.Gate.MaxEstimatedCostUSD < 0:
 		return errors.New("maximum estimated cost must not be negative")
-	case config.Gate.MaxToolCalls < 0:
+	case config.Gate.MaxToolCalls != nil && *config.Gate.MaxToolCalls < 0:
 		return errors.New("maximum tool calls must not be negative")
 	case len(config.Candidates) == 0:
 		return errors.New("candidate list is empty")

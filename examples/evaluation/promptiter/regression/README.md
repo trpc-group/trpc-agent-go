@@ -77,7 +77,10 @@ This is the example's explicit overfitting regression.
 A candidate must pass all checks. Round gate decisions compare against the
 currently accepted validation result. The top-level gate is recomputed between
 the original baseline and final selected prompt so its reasons match the
-top-level delta and control prompt write-back.
+top-level delta and control prompt write-back. Omitting a cost or tool-call
+limit disables that check; configuring `0` enforces a strict zero-usage budget.
+Accepted prompt write-back uses a synced same-directory temporary file and an
+atomic rename while preserving the source file mode.
 
 ## Deterministic Task Format
 

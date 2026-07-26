@@ -213,12 +213,16 @@ func (r *evaluationRuntime) adaptEvaluation(
 	if result == nil {
 		return evaluationSummary{}, errors.New("evaluation result is nil")
 	}
+	if expectedSet == nil {
+		return evaluationSummary{}, errors.New("expected eval set is nil")
+	}
 	expectedCases := make(map[string]*evalset.EvalCase, len(expectedSet.EvalCases))
 	for _, evalCase := range expectedSet.EvalCases {
 		if evalCase != nil {
 			expectedCases[evalCase.EvalID] = evalCase
 		}
 	}
+	seenCases := make(map[string]struct{}, len(result.EvalCases))
 	summary := evaluationSummary{
 		EvalSetID: result.EvalSetID,
 		Cases:     make([]caseEvaluation, 0, len(result.EvalCases)),
@@ -229,10 +233,17 @@ func (r *evaluationRuntime) adaptEvaluation(
 		if evalCase == nil {
 			continue
 		}
+		if _, ok := seenCases[evalCase.EvalCaseID]; ok {
+			return evaluationSummary{}, fmt.Errorf(
+				"evaluation returned duplicate case %q",
+				evalCase.EvalCaseID,
+			)
+		}
+		seenCases[evalCase.EvalCaseID] = struct{}{}
 		expected, ok := expectedCases[evalCase.EvalCaseID]
 		if !ok {
 			return evaluationSummary{}, fmt.Errorf(
-				"expected eval case %q is missing",
+				"evaluation returned unexpected case %q",
 				evalCase.EvalCaseID,
 			)
 		}
@@ -253,6 +264,19 @@ func (r *evaluationRuntime) adaptEvaluation(
 		summary.LatencyMillis += adapted.LatencyMillis
 		summary.Cases = append(summary.Cases, adapted)
 	}
+	missingCases := make([]string, 0)
+	for caseID := range expectedCases {
+		if _, ok := seenCases[caseID]; !ok {
+			missingCases = append(missingCases, caseID)
+		}
+	}
+	if len(missingCases) != 0 {
+		sort.Strings(missingCases)
+		return evaluationSummary{}, fmt.Errorf(
+			"evaluation result is missing expected case(s): %s",
+			strings.Join(missingCases, ", "),
+		)
+	}
 	if metricCount == 0 {
 		return evaluationSummary{}, errors.New("evaluation result contains no metric scores")
 	}
@@ -272,15 +296,43 @@ func (r *evaluationRuntime) adaptCase(
 		return caseEvaluation{}, errors.New("case must contain exactly one inference run detail")
 	}
 	inference := result.RunDetails[0].Inference
+	if inference.Status != status.EvalStatusPassed ||
+		strings.TrimSpace(inference.ErrorMessage) != "" {
+		detail := strings.TrimSpace(inference.ErrorMessage)
+		if detail == "" {
+			detail = fmt.Sprintf("status %q", inference.Status)
+		}
+		return caseEvaluation{}, fmt.Errorf("inference failed: %s", detail)
+	}
+	if len(result.EvalCaseResults) != 1 || result.EvalCaseResults[0] == nil {
+		return caseEvaluation{}, errors.New(
+			"case must contain exactly one evaluation run result",
+		)
+	}
+	runResult := result.EvalCaseResults[0]
+	if detail := strings.TrimSpace(runResult.ErrorMessage); detail != "" {
+		return caseEvaluation{}, fmt.Errorf("evaluation failed: %s", detail)
+	}
 	actualInvocations := inference.Inferences
 	expectedInvocations := expected.Conversation
 	actualResponse := lastResponse(actualInvocations)
 	expectedResponse := lastResponse(expectedInvocations)
 	actualTools := flattenTools(actualInvocations)
 	expectedTools := flattenTools(expectedInvocations)
-	metricResults := result.MetricResults
-	if len(result.EvalCaseResults) == 1 && result.EvalCaseResults[0] != nil {
-		metricResults = result.EvalCaseResults[0].OverallEvalMetricResults
+	metricResults := runResult.OverallEvalMetricResults
+	if len(metricResults) == 0 {
+		return caseEvaluation{}, errors.New("evaluation produced no metric results")
+	}
+	for _, metricResult := range metricResults {
+		if metricResult == nil {
+			return caseEvaluation{}, errors.New("evaluation produced a nil metric result")
+		}
+		if metricResult.EvalStatus == status.EvalStatusNotEvaluated {
+			return caseEvaluation{}, fmt.Errorf(
+				"metric %q was not evaluated",
+				metricResult.MetricName,
+			)
+		}
 	}
 	metrics := adaptMetrics(metricResults)
 	adapted := caseEvaluation{

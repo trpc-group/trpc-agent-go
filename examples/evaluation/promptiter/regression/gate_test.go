@@ -20,8 +20,8 @@ func TestDecideGate(t *testing.T) {
 		AllowNewHardFails:      false,
 		CriticalCaseIDs:        []string{"critical"},
 		MaxCriticalScoreDrop:   0,
-		MaxEstimatedCostUSD:    0.02,
-		MaxToolCalls:           2,
+		MaxEstimatedCostUSD:    float64Pointer(0.02),
+		MaxToolCalls:           intPointer(2),
 	}
 	baseline := evaluationSummary{
 		Score: 0.60,
@@ -117,6 +117,90 @@ func TestDecideGate(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestDecideGateEnforcesExplicitZeroBudgets(t *testing.T) {
+	config := gateConfig{
+		MinValidationScoreGain: 0,
+		AllowNewHardFails:      false,
+		MaxEstimatedCostUSD:    float64Pointer(0),
+		MaxToolCalls:           intPointer(0),
+	}
+	baseline := evaluationSummary{
+		Score: 0,
+		Cases: []caseEvaluation{{
+			CaseID: "case",
+			Score:  0,
+			Passed: false,
+		}},
+	}
+	candidate := evaluationSummary{
+		Score: 1,
+		Cases: []caseEvaluation{{
+			CaseID: "case",
+			Score:  1,
+			Passed: true,
+		}},
+		Cost: costSummary{
+			EstimatedCostUSD: scoreEpsilon,
+			ToolCalls:        1,
+		},
+	}
+	delta, err := compareEvaluations(baseline, candidate)
+	if err != nil {
+		t.Fatalf("compareEvaluations returned error: %v", err)
+	}
+	decision := decideGate(config, baseline, candidate, delta)
+	if decision.Accepted {
+		t.Fatal("candidate using resources passed explicit zero budgets")
+	}
+	if !containsReason(decision.Reasons, "cost budget") {
+		t.Fatalf("reasons %v do not contain cost budget", decision.Reasons)
+	}
+	if !containsReason(decision.Reasons, "tool-call budget") {
+		t.Fatalf("reasons %v do not contain tool-call budget", decision.Reasons)
+	}
+}
+
+func TestDecideGateAllowsResourcesWhenBudgetsAreOmitted(t *testing.T) {
+	config := gateConfig{
+		MinValidationScoreGain: 0,
+		AllowNewHardFails:      false,
+	}
+	baseline := evaluationSummary{
+		Cases: []caseEvaluation{{
+			CaseID: "case",
+			Passed: false,
+		}},
+	}
+	candidate := evaluationSummary{
+		Score: 1,
+		Cases: []caseEvaluation{{
+			CaseID: "case",
+			Score:  1,
+			Passed: true,
+		}},
+		Cost: costSummary{
+			EstimatedCostUSD: 1,
+			ToolCalls:        100,
+		},
+	}
+	delta, err := compareEvaluations(baseline, candidate)
+	if err != nil {
+		t.Fatalf("compareEvaluations returned error: %v", err)
+	}
+	decision := decideGate(config, baseline, candidate, delta)
+	if !decision.Accepted {
+		t.Fatalf("candidate was rejected with omitted budgets: %v", decision.Reasons)
+	}
+}
+
+func float64Pointer(value float64) *float64 {
+	return &value
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func containsReason(reasons []string, part string) bool {

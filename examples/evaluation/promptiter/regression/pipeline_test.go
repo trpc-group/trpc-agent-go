@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,9 @@ func TestRunPipelineTopLevelGateUsesBaselineForChainedRounds(t *testing.T) {
 			t.Fatalf("round %d was rejected: %v", round.Round, round.Decision.Reasons)
 		}
 	}
+	if !report.GateDecision.Accepted {
+		t.Fatalf("top-level gate rejected: %v", report.GateDecision.Reasons)
+	}
 	if report.Delta.ScoreDelta != 0.5 {
 		t.Fatalf("top-level score delta = %.4f, want 0.5000", report.Delta.ScoreDelta)
 	}
@@ -203,6 +207,69 @@ func TestSummarizeFailuresCountsAllAttributions(t *testing.T) {
 	}
 	if counts[failureToolCall] != 1 {
 		t.Fatalf("tool-call failure count = %d, want 1", counts[failureToolCall])
+	}
+}
+
+func TestReplaceFileAtomicallyPreservesSourceOnRenameFailure(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prompt.txt")
+	if err := os.WriteFile(path, []byte("baseline\n"), 0o600); err != nil {
+		t.Fatalf("write baseline prompt: %v", err)
+	}
+	renameError := errors.New("rename failed")
+	err := replaceFileAtomically(
+		path,
+		[]byte("candidate\n"),
+		func(_, _ string) error {
+			return renameError
+		},
+	)
+	if !errors.Is(err, renameError) {
+		t.Fatalf("replaceFileAtomically error = %v, want %v", err, renameError)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read baseline prompt: %v", err)
+	}
+	if string(content) != "baseline\n" {
+		t.Fatalf("prompt content = %q, want original baseline", content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat baseline prompt: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("prompt mode = %o, want 600", info.Mode().Perm())
+	}
+	temporary, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".prompt.txt.tmp-*"))
+	if err != nil {
+		t.Fatalf("find temporary prompt files: %v", err)
+	}
+	if len(temporary) != 0 {
+		t.Fatalf("temporary prompt files were not removed: %v", temporary)
+	}
+}
+
+func TestReplaceFileAtomicallyPreservesSourceMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "prompt.txt")
+	if err := os.WriteFile(path, []byte("baseline\n"), 0o600); err != nil {
+		t.Fatalf("write baseline prompt: %v", err)
+	}
+	if err := replaceFileAtomically(path, []byte("candidate\n"), os.Rename); err != nil {
+		t.Fatalf("replaceFileAtomically returned error: %v", err)
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read replaced prompt: %v", err)
+	}
+	if string(content) != "candidate\n" {
+		t.Fatalf("prompt content = %q, want candidate", content)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat replaced prompt: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("prompt mode = %o, want 600", info.Mode().Perm())
 	}
 }
 
