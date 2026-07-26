@@ -297,9 +297,9 @@ func validateSteps(step ReplayStep, index int) error {
 			return fmt.Errorf("step %d (%s): unknown memory op %q", index, step.Type, step.Memory.Op)
 		}
 
-			if expected := memoryTypeOp[step.Type]; step.Memory.Op != expected {
-				return fmt.Errorf("step %d: type %q requires op %q, got %q", index, step.Type, expected, step.Memory.Op)
-			}
+		if expected := memoryTypeOp[step.Type]; step.Memory.Op != expected {
+			return fmt.Errorf("step %d: type %q requires op %q, got %q", index, step.Type, expected, step.Memory.Op)
+		}
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %d (%s): summary is required", index, step.Type)
@@ -321,9 +321,9 @@ func validateSteps(step ReplayStep, index int) error {
 	}
 
 	for i, nested := range step.Concurrent {
-			if !validConcurrentStepTypes[nested.Type] {
-				return fmt.Errorf("step %d concurrent child %d: type %q is not allowed inside concurrent_events", index, i, nested.Type)
-			}
+		if !validConcurrentStepTypes[nested.Type] {
+			return fmt.Errorf("step %d concurrent child %d: type %q is not allowed inside concurrent_events", index, i, nested.Type)
+		}
 		if err := validateSteps(nested, i); err != nil {
 			return err
 		}

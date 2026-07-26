@@ -419,23 +419,23 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 				}
 			},
 		},
-			{
-				name: "summary_cutoff_corrupted", section: "summary",
-				ref: refSummary,
-				inject: func(s *ReplaySnapshot) {
-					// Corrupt the CutoffAt in the boundary to a wrong
-					// non-zero timestamp.  Should be detected even
-					// though CutoffAt is no longer a boolean.
-					for k, entry := range s.Summaries {
-						if entry.Boundary != nil {
-							entry.Boundary.CutoffAt = "1999-12-31T23:59:59Z"
-							s.Summaries[k] = entry
-							break
-						}
+		{
+			name: "summary_cutoff_corrupted", section: "summary",
+			ref: refSummary,
+			inject: func(s *ReplaySnapshot) {
+				// Corrupt the CutoffAt in the boundary to a wrong
+				// non-zero timestamp.  Should be detected even
+				// though CutoffAt is no longer a boolean.
+				for k, entry := range s.Summaries {
+					if entry.Boundary != nil {
+						entry.Boundary.CutoffAt = "1999-12-31T23:59:59Z"
+						s.Summaries[k] = entry
+						break
 					}
-				},
+				}
 			},
-			{
+		},
+		{
 			name: "error_recovery_duplicate_event", section: "events",
 			ref: refErrRec,
 			inject: func(s *ReplaySnapshot) {
@@ -687,7 +687,7 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			name: "fault_both_modes_set",
 			steps: []ReplayStep{
 				{
-					Type: StepAppendEvent,
+					Type:  StepAppendEvent,
 					Event: &actionEvent{Author: "user", Role: "user", Content: "hi"},
 					Fault: &FaultConfig{FailBefore: true, FailAfter: true},
 				},
@@ -698,7 +698,7 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			name: "fault_neither_mode_set",
 			steps: []ReplayStep{
 				{
-					Type: StepAppendEvent,
+					Type:  StepAppendEvent,
 					Event: &actionEvent{Author: "user", Role: "user", Content: "hi"},
 					Fault: &FaultConfig{},
 				},
@@ -706,44 +706,44 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			wantContain: "at least one of fail_before or fail_after",
 		},
 
-			{
-				name: "add_memory_with_delete_op",
-				steps: []ReplayStep{
-					{Type: StepAddMemory, Memory: &actionMemory{Op: "delete", Content: "x"}},
-				},
-				wantContain: "requires op",
+		{
+			name: "add_memory_with_delete_op",
+			steps: []ReplayStep{
+				{Type: StepAddMemory, Memory: &actionMemory{Op: "delete", Content: "x"}},
 			},
-			{
-				name: "update_memory_with_add_op",
-				steps: []ReplayStep{
-					{Type: StepUpdateMemory, Memory: &actionMemory{Op: "add", Ref: "m1", Content: "x"}},
-				},
-				wantContain: "requires op",
+			wantContain: "requires op",
+		},
+		{
+			name: "update_memory_with_add_op",
+			steps: []ReplayStep{
+				{Type: StepUpdateMemory, Memory: &actionMemory{Op: "add", Ref: "m1", Content: "x"}},
 			},
-			{
-				name: "concurrent_create_session_rejected",
-				steps: []ReplayStep{
-					{
-						Type: StepConcurrentEvents,
-						Concurrent: []ReplayStep{
-							{Type: StepCreateSession},
-						},
+			wantContain: "requires op",
+		},
+		{
+			name: "concurrent_create_session_rejected",
+			steps: []ReplayStep{
+				{
+					Type: StepConcurrentEvents,
+					Concurrent: []ReplayStep{
+						{Type: StepCreateSession},
 					},
 				},
-				wantContain: "not allowed inside concurrent_events",
 			},
-			{
-				name: "concurrent_create_summary_rejected",
-				steps: []ReplayStep{
-					{
-						Type: StepConcurrentEvents,
-						Concurrent: []ReplayStep{
-							{Type: StepCreateSummary, Summary: &actionSummary{FilterKey: "main", Text: "hi"}},
-						},
+			wantContain: "not allowed inside concurrent_events",
+		},
+		{
+			name: "concurrent_create_summary_rejected",
+			steps: []ReplayStep{
+				{
+					Type: StepConcurrentEvents,
+					Concurrent: []ReplayStep{
+						{Type: StepCreateSummary, Summary: &actionSummary{FilterKey: "main", Text: "hi"}},
 					},
 				},
-				wantContain: "not allowed inside concurrent_events",
 			},
+			wantContain: "not allowed inside concurrent_events",
+		},
 		{
 			name: "nested concurrent valid (sanity check)",
 			steps: []ReplayStep{
@@ -909,6 +909,7 @@ func TestFaultInjection_SentinelError(t *testing.T) {
 			"expected underlying error %v, got: %v", realErr, err)
 	})
 }
+
 // ---------------------------------------------------------------------------
 // Load-time rejection of unknown JSON fields
 // ---------------------------------------------------------------------------

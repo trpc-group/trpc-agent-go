@@ -224,12 +224,12 @@ func normalizeSummaries(sess *session.Session) map[string]summarySnapshot {
 			UpdatedAtNonZero: !sum.UpdatedAt.IsZero(),
 		}
 		if boundary := sum.CutoffBoundary(); boundary != nil {
-			
+
 			entry.Boundary = &replayBoundary{
 				Version:     boundary.Version,
 				FilterKey:   boundary.FilterKey,
 				LastEventID: boundary.LastEventID,
-					CutoffAt:    timeToString(boundary.CutoffAt),
+				CutoffAt:    timeToString(boundary.CutoffAt),
 			}
 		}
 		out[fk] = entry
