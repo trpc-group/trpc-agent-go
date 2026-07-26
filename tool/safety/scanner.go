@@ -126,7 +126,7 @@ func (s *Scanner) Scan(ctx context.Context, req Request) Report {
 	if req.Backend == BackendUnknown && p.FailClosedOnUnsupportedBackend {
 		findings = append(findings, finding(ruleUnknownBackend, "unsupported_backend", RiskMedium,
 			"backend is unknown", "wire the safety guard to a supported execution tool",
-			p.UnknownToolAction))
+			maxDecision(p.UnknownToolAction, DecisionAsk)))
 	}
 
 	findings = append(findings, scanExecutableInputs(req, p)...)
@@ -754,7 +754,30 @@ func sensitivePathCandidates(text string) []string {
 			out = append(out, match[1])
 		}
 	}
+	out = append(out, localURLPathCandidates(text)...)
 	return uniqueStrings(out)
+}
+
+func localURLPathCandidates(text string) []string {
+	var out []string
+	for _, raw := range urlRe.FindAllString(text, -1) {
+		u, err := url.Parse(raw)
+		if err != nil || !isLocalURLScheme(u.Scheme) {
+			continue
+		}
+		pathPart := u.Path
+		if pathPart == "" {
+			pathPart = u.Opaque
+		}
+		if pathPart == "" {
+			continue
+		}
+		if decoded, err := url.PathUnescape(pathPart); err == nil {
+			pathPart = decoded
+		}
+		out = append(out, pathPart)
+	}
+	return out
 }
 
 func pathCandidateBoundary(text string, start int) bool {
@@ -1207,6 +1230,13 @@ func scanNetworkCommandSegments(cmds [][]string, p Policy) []Finding {
 					"review curl config files before execution because they can override URLs, proxies, and connection targets",
 					DecisionAsk))
 			}
+			findings = append(findings,
+				networkTargetFindings(curlURLTargets(argv[1:]), p)...)
+			continue
+		}
+		if cmd == "wget" {
+			findings = append(findings,
+				networkTargetFindings(wgetURLTargets(argv[1:]), p)...)
 			continue
 		}
 		if cmd != "ssh" && cmd != "scp" && cmd != "sftp" {
@@ -1628,6 +1658,169 @@ func curlConfigEvidence(args []string) []string {
 		out = append(out, "curl "+pending)
 	}
 	return uniqueStrings(out)
+}
+
+func curlURLTargets(args []string) []string {
+	var out []string
+	pending := ""
+	optionsEnded := false
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pending != "" {
+			if pending == "--url" {
+				out = append(out, arg)
+			}
+			pending = ""
+			continue
+		}
+		if !optionsEnded && arg == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && strings.HasPrefix(arg, "-") {
+			name, value, hasValue := strings.Cut(arg, "=")
+			if name == "--url" {
+				if hasValue {
+					out = append(out, value)
+				} else {
+					pending = name
+				}
+				continue
+			}
+			if !hasValue && curlOptionNeedsOperand(arg) {
+				pending = arg
+			}
+			continue
+		}
+		if looksLikeNetworkOperand(arg) {
+			out = append(out, arg)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func wgetURLTargets(args []string) []string {
+	var out []string
+	pending := ""
+	optionsEnded := false
+	for _, raw := range args {
+		arg := strings.Trim(strings.TrimSpace(raw), `"'`)
+		if shellSeparatorToken(arg) {
+			break
+		}
+		arg = strings.Trim(arg, ";|&")
+		if arg == "" {
+			continue
+		}
+		if pending != "" {
+			pending = ""
+			continue
+		}
+		if !optionsEnded && arg == "--" {
+			optionsEnded = true
+			continue
+		}
+		if !optionsEnded && strings.HasPrefix(arg, "-") {
+			if !strings.Contains(arg, "=") && wgetOptionNeedsOperand(arg) {
+				pending = arg
+			}
+			continue
+		}
+		if looksLikeNetworkOperand(arg) {
+			out = append(out, arg)
+		}
+	}
+	return uniqueStrings(out)
+}
+
+func curlOptionNeedsOperand(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		name, _, _ := strings.Cut(arg, "=")
+		switch name {
+		case "--abstract-unix-socket", "--alt-svc", "--cacert", "--capath",
+			"--cert", "--cert-type", "--ciphers", "--config", "--connect-to",
+			"--cookie", "--cookie-jar", "--data", "--data-ascii",
+			"--data-binary", "--data-raw", "--data-urlencode", "--dns-interface",
+			"--dns-ipv4-addr", "--dns-ipv6-addr", "--dns-servers", "--dump-header",
+			"--form", "--form-string", "--header", "--hostpubsha256",
+			"--interface", "--key", "--key-type", "--limit-rate", "--mail-from",
+			"--mail-rcpt", "--max-filesize", "--output", "--preproxy",
+			"--proxy", "--proxy-header", "--proxy-user", "--range", "--referer",
+			"--request", "--resolve", "--socks5", "--socks5-hostname",
+			"--unix-socket", "--user", "--user-agent", "--write-out":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.TrimLeft(arg, "-") {
+	case "A", "b", "c", "C", "d", "D", "e", "F", "H", "K", "m", "o",
+		"r", "u", "w", "x", "X", "Y", "z":
+		return true
+	default:
+		return false
+	}
+}
+
+func wgetOptionNeedsOperand(arg string) bool {
+	if strings.HasPrefix(arg, "--") {
+		name, _, _ := strings.Cut(arg, "=")
+		switch name {
+		case "--accept", "--append-output", "--bind-address", "--body-data",
+			"--body-file", "--ca-certificate", "--ca-directory", "--certificate",
+			"--config", "--connect-timeout", "--directory-prefix", "--domains",
+			"--exclude-directories", "--execute", "--header", "--http-password",
+			"--http-user", "--input-file", "--limit-rate", "--load-cookies",
+			"--method", "--output-document", "--output-file", "--password",
+			"--post-data", "--post-file", "--private-key", "--proxy-user",
+			"--proxy-password", "--referer", "--reject", "--save-cookies",
+			"--timeout", "--tries", "--user", "--user-agent", "--wait":
+			return true
+		default:
+			return false
+		}
+	}
+	switch strings.TrimLeft(arg, "-") {
+	case "A", "B", "D", "e", "i", "O", "o", "P", "Q", "T", "t", "U":
+		return true
+	default:
+		return false
+	}
+}
+
+func networkTargetFindings(targets []string, p Policy) []Finding {
+	var findings []Finding
+	for _, target := range targets {
+		target = strings.TrimSpace(target)
+		if target == "" {
+			continue
+		}
+		host := ""
+		if strings.Contains(target, "://") {
+			u, err := url.Parse(target)
+			if err != nil || isLocalURLScheme(u.Scheme) {
+				continue
+			}
+			host = strings.ToLower(u.Hostname())
+		} else {
+			host = hostFromSchemelessTarget(target)
+		}
+		if host == "" || domainAllowed(host, p.AllowedDomains) {
+			continue
+		}
+		findings = append(findings, finding(ruleNetworkEgress,
+			"network_egress", RiskCritical, target,
+			"add the domain to allowed_domains or remove the outbound network call",
+			p.NonWhitelistedNetworkAction))
+	}
+	return findings
 }
 
 func curlHostsFromOptionOperand(option, operand string) []string {

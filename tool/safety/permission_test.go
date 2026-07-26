@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -255,6 +256,42 @@ func TestPermissionPolicyScansSkillOutputFiles(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyScansSkillOutputsGlobs(t *testing.T) {
+	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
+	for _, toolName := range []string{"skill_run", "skill_exec"} {
+		t.Run(toolName, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName: toolName,
+				Arguments: []byte(`{
+					"command":"echo ok",
+					"outputs":{"globs":[".env"]}
+				}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, ruleSensitivePath)
+		})
+	}
+}
+
+func TestPermissionPolicyScansSkillDeclarativeInputs(t *testing.T) {
+	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
+	for _, toolName := range []string{"skill_run", "skill_exec"} {
+		t.Run(toolName, func(t *testing.T) {
+			decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+				ToolName: toolName,
+				Arguments: []byte(`{
+					"command":"cat work/inputs/passwd",
+					"inputs":[{"from":"host:///etc/passwd","to":"work/inputs/passwd"}]
+				}`),
+			})
+			require.NoError(t, err)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, ruleSensitivePath)
+		})
+	}
+}
+
 func TestParseHostExecAppliesEffectiveDefaultTimeout(t *testing.T) {
 	tests := []struct {
 		name string
@@ -394,6 +431,73 @@ func TestPermissionPolicyAuditFailureMode(t *testing.T) {
 	require.Contains(t, decision.Reason, "audit failed")
 }
 
+func TestPermissionPolicyWithScannerDoesNotShareRecordingSink(t *testing.T) {
+	sink := &errorAuditSink{}
+	scanner := NewScanner(DefaultPolicy(), WithAuditSink(sink))
+	pp1 := NewPermissionPolicy(WithScanner(scanner), WithAuditFailureMode(AuditFailClosed))
+	pp2 := NewPermissionPolicy(WithScanner(scanner), WithAuditFailureMode(AuditFailClosed))
+
+	require.NotSame(t, pp1.scanner, pp2.scanner)
+	require.NotSame(t, pp1.scanner.audit, pp2.scanner.audit)
+	require.Same(t,
+		pp1.scanner.audit.(*recordingAuditSink).sink,
+		pp2.scanner.audit.(*recordingAuditSink).sink,
+	)
+	_, ok := scanner.audit.(*recordingAuditSink)
+	require.False(t, ok)
+}
+
+func TestPermissionPolicyWithScannerScopesConcurrentAuditFailures(t *testing.T) {
+	sink := newCoordinatedAuditSink("fail_workspace_exec")
+	scanner := NewScanner(DefaultPolicy(), WithAuditSink(sink))
+	failPolicy := NewPermissionPolicy(WithScanner(scanner), WithAuditFailureMode(AuditFailClosed))
+	okPolicy := NewPermissionPolicy(WithScanner(scanner), WithAuditFailureMode(AuditFailClosed))
+
+	start := make(chan struct{})
+	results := make(chan auditPolicyResult, 2)
+	run := func(toolName string, pp *PermissionPolicy) {
+		<-start
+		decision, err := pp.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+			ToolName:  toolName,
+			Arguments: []byte(`{"command":"echo ok"}`),
+		})
+		results <- auditPolicyResult{toolName: toolName, decision: decision, err: err}
+	}
+
+	go run("fail_workspace_exec", failPolicy)
+	go run("ok_workspace_exec", okPolicy)
+	close(start)
+
+	seen := map[string]bool{}
+	for len(seen) < 2 {
+		select {
+		case toolName := <-sink.ready:
+			seen[toolName] = true
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for concurrent audit writes")
+		}
+	}
+	close(sink.release)
+
+	got := map[string]auditPolicyResult{}
+	for len(got) < 2 {
+		select {
+		case result := <-results:
+			got[result.toolName] = result
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for permission decisions")
+		}
+	}
+
+	require.True(t, seen["fail_workspace_exec"])
+	require.True(t, seen["ok_workspace_exec"])
+	require.NoError(t, got["fail_workspace_exec"].err)
+	require.Equal(t, tool.PermissionActionDeny, got["fail_workspace_exec"].decision.Action)
+	require.Contains(t, got["fail_workspace_exec"].decision.Reason, "audit failed")
+	require.NoError(t, got["ok_workspace_exec"].err)
+	require.Equal(t, tool.PermissionActionAllow, got["ok_workspace_exec"].decision.Action)
+}
+
 func TestPermissionPolicyMapsHostExecAndCodeExec(t *testing.T) {
 	pp := NewPermissionPolicy(WithPolicy(DefaultPolicy()))
 	tty := true
@@ -456,6 +560,35 @@ func (failingWriter) Write([]byte) (int, error) {
 }
 
 var _ io.Writer = failingWriter{}
+
+type coordinatedAuditSink struct {
+	failTool string
+	ready    chan string
+	release  chan struct{}
+}
+
+func newCoordinatedAuditSink(failTool string) *coordinatedAuditSink {
+	return &coordinatedAuditSink{
+		failTool: failTool,
+		ready:    make(chan string, 2),
+		release:  make(chan struct{}),
+	}
+}
+
+func (s *coordinatedAuditSink) WriteAudit(ev AuditEvent) error {
+	s.ready <- ev.ToolName
+	<-s.release
+	if ev.ToolName == s.failTool {
+		return errors.New("audit failed")
+	}
+	return nil
+}
+
+type auditPolicyResult struct {
+	toolName string
+	decision tool.PermissionDecision
+	err      error
+}
 
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()

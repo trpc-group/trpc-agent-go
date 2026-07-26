@@ -59,13 +59,16 @@ type PermissionOption func(*PermissionPolicy)
 // WithScanner uses a caller supplied scanner.
 func WithScanner(scanner *Scanner) PermissionOption {
 	return func(p *PermissionPolicy) {
-		p.scanner = scanner
 		if scanner != nil {
 			policy := scanner.Policy()
+			p.scanner = cloneScanner(scanner)
 			p.unsupportedAction = policy.UnknownToolAction
 			p.auditFailureMode = policy.AuditFailureMode
 			p.scanner.audit = recordingSink(p.scanner.audit)
+			p.scanner.policy.AuditFailureMode = p.auditFailureMode
+			return
 		}
+		p.scanner = nil
 	}
 }
 
@@ -155,6 +158,16 @@ func recordingSink(sink AuditSink) AuditSink {
 	return newRecordingAuditSink(sink)
 }
 
+func cloneScanner(scanner *Scanner) *Scanner {
+	if scanner == nil {
+		return nil
+	}
+	return &Scanner{
+		policy: scanner.Policy(),
+		audit:  scanner.audit,
+	}
+}
+
 // WithAuditFailureMode controls whether audit write failures are best-effort
 // or fail closed. Unknown modes default to best-effort.
 func WithAuditFailureMode(mode AuditFailureMode) PermissionOption {
@@ -164,6 +177,9 @@ func WithAuditFailureMode(mode AuditFailureMode) PermissionOption {
 			p.auditFailureMode = AuditFailClosed
 		default:
 			p.auditFailureMode = AuditBestEffort
+		}
+		if p.scanner != nil {
+			p.scanner.policy.AuditFailureMode = p.auditFailureMode
 		}
 	}
 }
@@ -252,6 +268,7 @@ func (p *PermissionPolicy) scan(ctx context.Context, req Request) (Report, error
 	p.scanMu.Lock()
 	defer p.scanMu.Unlock()
 
+	p.scanner.policy.AuditFailureMode = p.auditFailureMode
 	if sink, ok := p.scanner.audit.(*recordingAuditSink); ok {
 		sink.clear()
 	}
@@ -409,17 +426,19 @@ type execArgs struct {
 }
 
 type skillArgs struct {
-	Command     string            `json:"command"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Stdin       string            `json:"stdin,omitempty"`
-	EditorText  string            `json:"editor_text,omitempty"`
-	Timeout     int               `json:"timeout,omitempty"`
-	TTY         bool              `json:"tty,omitempty"`
-	Background  bool              `json:"background,omitempty"`
-	YieldMS     int               `json:"yield_ms,omitempty"`
-	PollLines   int               `json:"poll_lines,omitempty"`
-	OutputFiles []string          `json:"output_files,omitempty"`
+	Command     string                   `json:"command"`
+	Cwd         string                   `json:"cwd,omitempty"`
+	Env         map[string]string        `json:"env,omitempty"`
+	Stdin       string                   `json:"stdin,omitempty"`
+	EditorText  string                   `json:"editor_text,omitempty"`
+	Timeout     int                      `json:"timeout,omitempty"`
+	TTY         bool                     `json:"tty,omitempty"`
+	Background  bool                     `json:"background,omitempty"`
+	YieldMS     int                      `json:"yield_ms,omitempty"`
+	PollLines   int                      `json:"poll_lines,omitempty"`
+	OutputFiles []string                 `json:"output_files,omitempty"`
+	Inputs      []codeexecutor.InputSpec `json:"inputs,omitempty"`
+	Outputs     *codeexecutor.OutputSpec `json:"outputs,omitempty"`
 }
 
 type writeStdinArgs struct {
@@ -488,10 +507,7 @@ func parseSkillRun(name string, args []byte) (Request, error) {
 		Env:        in.Env,
 		TimeoutSec: in.Timeout,
 		Background: in.Background,
-		Metadata: map[string]string{
-			"editor_text":  strings.TrimSpace(in.EditorText),
-			"output_files": strings.Join(in.OutputFiles, "\n"),
-		},
+		Metadata:   skillMetadata(in),
 	}, nil
 }
 
@@ -506,6 +522,46 @@ func parseSkillExec(name string, args []byte) (Request, error) {
 	}
 	req.TTY = in.TTY
 	return req, nil
+}
+
+func skillMetadata(in skillArgs) map[string]string {
+	md := map[string]string{
+		"editor_text":  strings.TrimSpace(in.EditorText),
+		"output_files": strings.Join(in.OutputFiles, "\n"),
+	}
+	if in.Outputs != nil {
+		md["outputs.globs"] = strings.Join(in.Outputs.Globs, "\n")
+		md["outputs.name_template"] = in.Outputs.NameTemplate
+	}
+	if len(in.Inputs) > 0 {
+		var from []string
+		var to []string
+		var all []string
+		for _, spec := range in.Inputs {
+			src := normalizeSkillInputSourceForScan(spec.From)
+			dst := strings.TrimSpace(spec.To)
+			if src != "" {
+				from = append(from, src)
+				all = append(all, "from="+src)
+			}
+			if dst != "" {
+				to = append(to, dst)
+				all = append(all, "to="+dst)
+			}
+		}
+		md["inputs.from"] = strings.Join(from, "\n")
+		md["inputs.to"] = strings.Join(to, "\n")
+		md["inputs"] = strings.Join(all, "\n")
+	}
+	return md
+}
+
+func normalizeSkillInputSourceForScan(src string) string {
+	src = strings.TrimSpace(src)
+	if strings.HasPrefix(src, "host://") {
+		return strings.TrimPrefix(src, "host://")
+	}
+	return src
 }
 
 func parseHostExec(name string, args []byte) (Request, error) {

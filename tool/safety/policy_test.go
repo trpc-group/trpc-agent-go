@@ -210,3 +210,15 @@ func TestProductionPolicyUsesFailClosedDefaults(t *testing.T) {
 	require.Equal(t, AuditFailClosed, p.AuditFailureMode)
 	require.True(t, p.RedactSensitivePaths)
 }
+
+func TestFailClosedOnUnsupportedBackendRequiresReviewByDefault(t *testing.T) {
+	p := DefaultPolicy()
+	p.FailClosedOnUnsupportedBackend = true
+	report := NewScanner(p).Scan(nil, Request{
+		ToolName: "custom_tool",
+		Backend:  BackendUnknown,
+		RawArgs:  `{"note":"hello"}`,
+	})
+	require.Equal(t, DecisionAsk, report.Decision)
+	require.True(t, hasRule(report, ruleUnknownBackend))
+}
