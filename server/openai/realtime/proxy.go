@@ -31,6 +31,13 @@ type Proxy struct {
 	config    modelrealtime.Config
 	connector modelrealtime.Connector
 	handler   http.Handler
+	ctx       context.Context
+	cancel    context.CancelFunc
+	sessionMu sync.Mutex
+	sessionWG sync.WaitGroup
+	closed    bool
+	closeOnce sync.Once
+	done      chan struct{}
 }
 
 // Option configures a Proxy.
@@ -61,10 +68,14 @@ func New(opts ...Option) (*Proxy, error) {
 		return nil, errors.New("openai realtime proxy: upstream URL is required")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	proxy := &Proxy{
 		path:      options.path,
 		config:    cloneConfig(options.config),
 		connector: options.connector,
+		ctx:       ctx,
+		cancel:    cancel,
+		done:      make(chan struct{}),
 	}
 	proxy.setupHandler()
 	return proxy, nil
@@ -84,8 +95,9 @@ func WithUpstream(config modelrealtime.Config) Option {
 	}
 }
 
-// WithConnector replaces the upstream connector. It is useful for custom
-// transports and deterministic tests.
+// WithConnector replaces the upstream connector. Custom implementations must
+// satisfy the concurrency and cancellation contracts on modelrealtime.Connector
+// and modelrealtime.Conn.
 func WithConnector(connector modelrealtime.Connector) Option {
 	return func(options *proxyOptions) {
 		options.connector = connector
@@ -111,13 +123,37 @@ func (p *Proxy) Path() string {
 	return p.path
 }
 
+// Close stops accepting proxy sessions, closes both peers of every active
+// session, and waits for their relay goroutines to exit. Close is idempotent.
+func (p *Proxy) Close() error {
+	p.closeOnce.Do(func() {
+		p.sessionMu.Lock()
+		p.closed = true
+		p.cancel()
+		p.sessionMu.Unlock()
+		p.sessionWG.Wait()
+		close(p.done)
+	})
+	<-p.done
+	return nil
+}
+
 func (p *Proxy) setupHandler() {
-	websocketHandler := websocket.Handler(p.handleWebSocket)
+	websocketHandler := websocket.Server{
+		Handler: websocket.Handler(p.handleWebSocket),
+		Handshake: func(*websocket.Config, *http.Request) error {
+			return nil
+		},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc(p.path, func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if p.isClosed() {
+			http.Error(w, "proxy is closed", http.StatusServiceUnavailable)
 			return
 		}
 		websocketHandler.ServeHTTP(w, r)
@@ -126,11 +162,15 @@ func (p *Proxy) setupHandler() {
 }
 
 func (p *Proxy) handleWebSocket(downstreamWS *websocket.Conn) {
-	ctx, cancel := context.WithCancel(downstreamWS.Request().Context())
-	defer cancel()
+	ctx, cancel, finish, ok := p.beginSession(downstreamWS.Request().Context())
+	if !ok {
+		_ = downstreamWS.Close()
+		return
+	}
+	defer finish()
 
 	upstream, err := p.connector.Connect(ctx, cloneConfig(p.config))
-	if err != nil {
+	if err != nil || upstream == nil {
 		p.sendConnectionError(ctx, downstreamWS)
 		return
 	}
@@ -152,6 +192,32 @@ func (p *Proxy) handleWebSocket(downstreamWS *websocket.Conn) {
 	_ = downstream.Close()
 	_ = upstream.Close()
 	relayWG.Wait()
+}
+
+func (p *Proxy) isClosed() bool {
+	p.sessionMu.Lock()
+	defer p.sessionMu.Unlock()
+	return p.closed
+}
+
+func (p *Proxy) beginSession(
+	parent context.Context,
+) (context.Context, context.CancelFunc, func(), bool) {
+	p.sessionMu.Lock()
+	if p.closed {
+		p.sessionMu.Unlock()
+		return nil, nil, nil, false
+	}
+	p.sessionWG.Add(1)
+	p.sessionMu.Unlock()
+
+	ctx, cancel := context.WithCancel(parent)
+	stopOwnerCancellation := context.AfterFunc(p.ctx, cancel)
+	return ctx, cancel, func() {
+		stopOwnerCancellation()
+		cancel()
+		p.sessionWG.Done()
+	}, true
 }
 
 func (*Proxy) relay(

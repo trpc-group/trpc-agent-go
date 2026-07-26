@@ -10,8 +10,11 @@
 package realtime
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -83,12 +86,114 @@ func TestProxyForwardsEventsBidirectionally(t *testing.T) {
 	}
 }
 
+func TestProxyAcceptsHandshakeWithoutOrigin(t *testing.T) {
+	upstream := newFakeConn()
+	proxy, err := New(
+		WithUpstream(modelrealtime.Config{URL: "wss://api.openai.example/v1/realtime"}),
+		WithConnector(&fakeConnector{conn: upstream}),
+	)
+	require.NoError(t, err)
+	defer proxy.Close()
+	server := httptest.NewServer(proxy.Handler())
+	defer server.Close()
+
+	conn, response := dialWithoutOrigin(t, server.URL, proxy.Path())
+	assert.Equal(t, http.StatusSwitchingProtocols, response.StatusCode)
+	require.NoError(t, conn.Close())
+	select {
+	case <-upstream.closed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for upstream cleanup")
+	}
+}
+
+func TestProxyCloseStopsHijackedSessions(t *testing.T) {
+	upstream := newFakeConn()
+	proxy, err := New(
+		WithUpstream(modelrealtime.Config{URL: "wss://api.openai.example/v1/realtime"}),
+		WithConnector(&fakeConnector{conn: upstream}),
+	)
+	require.NoError(t, err)
+	server := httptest.NewServer(proxy.Handler())
+	defer server.Close()
+	downstream, err := websocket.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+proxy.Path(),
+		"",
+		"http://localhost",
+	)
+	require.NoError(t, err)
+	defer downstream.Close()
+
+	require.NoError(t, websocket.Message.Send(
+		downstream,
+		`{"type":"session.update"}`,
+	))
+	select {
+	case <-upstream.sent:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for active relay")
+	}
+
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- proxy.Close()
+	}()
+	select {
+	case err := <-closeResult:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("proxy close did not wait for and stop active relays")
+	}
+	select {
+	case <-upstream.closed:
+	default:
+		t.Fatal("upstream connection was not closed")
+	}
+	var payload string
+	assert.Error(t, websocket.Message.Receive(downstream, &payload))
+	require.NoError(t, proxy.Close())
+
+	request := httptest.NewRequest(http.MethodGet, proxy.Path(), nil)
+	recorder := httptest.NewRecorder()
+	proxy.Handler().ServeHTTP(recorder, request)
+	assert.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+}
+
 func TestProxyReportsUpstreamConnectionError(t *testing.T) {
 	proxy, err := New(
 		WithUpstream(modelrealtime.Config{URL: "wss://api.openai.example/v1/realtime"}),
 		WithConnector(&fakeConnector{err: errors.New("dial failed")}),
 	)
 	require.NoError(t, err)
+
+	server := httptest.NewServer(proxy.Handler())
+	defer server.Close()
+	conn, err := websocket.Dial(
+		"ws"+strings.TrimPrefix(server.URL, "http")+proxy.Path(),
+		"",
+		"http://localhost",
+	)
+	require.NoError(t, err)
+	defer conn.Close()
+
+	var payload string
+	require.NoError(t, websocket.Message.Receive(conn, &payload))
+	assert.JSONEq(t, `{
+		"type":"error",
+		"error":{
+			"type":"connection_error",
+			"message":"upstream connection failed"
+		}
+	}`, payload)
+}
+
+func TestProxyRejectsNilSuccessfulConnectorConnection(t *testing.T) {
+	proxy, err := New(
+		WithUpstream(modelrealtime.Config{URL: "wss://api.openai.example/v1/realtime"}),
+		WithConnector(&fakeConnector{}),
+	)
+	require.NoError(t, err)
+	defer proxy.Close()
 
 	server := httptest.NewServer(proxy.Handler())
 	defer server.Close()
@@ -204,4 +309,33 @@ func (c *fakeConn) Close() error {
 		close(c.closed)
 	})
 	return nil
+}
+
+func dialWithoutOrigin(
+	t *testing.T,
+	serverURL string,
+	path string,
+) (net.Conn, *http.Response) {
+	t.Helper()
+	address := strings.TrimPrefix(serverURL, "http://")
+	conn, err := net.Dial("tcp", address)
+	require.NoError(t, err)
+	_, err = fmt.Fprintf(
+		conn,
+		"GET %s HTTP/1.1\r\n"+
+			"Host: %s\r\n"+
+			"Upgrade: websocket\r\n"+
+			"Connection: Upgrade\r\n"+
+			"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"+
+			"Sec-WebSocket-Version: 13\r\n\r\n",
+		path,
+		address,
+	)
+	require.NoError(t, err)
+	response, err := http.ReadResponse(
+		bufio.NewReader(conn),
+		&http.Request{Method: http.MethodGet},
+	)
+	require.NoError(t, err)
+	return conn, response
 }

@@ -10,9 +10,11 @@
 package realtime
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync"
@@ -39,17 +41,22 @@ type Config struct {
 	// Header contains additional handshake headers. Connect clones it before
 	// adding defaults and never mutates the caller's map.
 	Header http.Header
-	// MaxPayloadBytes limits received frame payloads. Values less than one use
-	// the 16 MiB default.
+	// MaxPayloadBytes limits complete received event payloads. Values less than
+	// one use the 16 MiB default.
 	MaxPayloadBytes int
 }
 
-// Connector opens Realtime WebSocket connections.
+// Connector opens Realtime WebSocket connections. Connect may be called
+// concurrently and must honor ctx promptly. A successful call must return a
+// non-nil Conn.
 type Connector interface {
 	Connect(ctx context.Context, config Config) (Conn, error)
 }
 
-// Conn sends and receives Realtime events.
+// Conn sends and receives Realtime events. One Send and one Receive may run
+// concurrently, and Close may run concurrently with both. Implementations must
+// honor operation contexts promptly. Close must be idempotent and unblock
+// in-flight Send and Receive calls.
 type Conn interface {
 	Send(ctx context.Context, event Event) error
 	Receive(ctx context.Context) (Event, error)
@@ -91,6 +98,9 @@ func (*WebSocketConnector) Connect(ctx context.Context, config Config) (Conn, er
 	}
 	ws, err := wsConfig.DialContext(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		return nil, fmt.Errorf("realtime: connect websocket: %w", err)
 	}
 	return NewWebSocketConn(ws, config.MaxPayloadBytes), nil
@@ -114,11 +124,13 @@ func validateConfig(config Config) error {
 }
 
 type webSocketConn struct {
-	conn      *websocket.Conn
-	sendMu    sync.Mutex
-	receiveMu sync.Mutex
-	closeOnce sync.Once
-	closeErr  error
+	conn            *websocket.Conn
+	reader          *bufio.Reader
+	maxPayloadBytes int
+	sendGate        chan struct{}
+	receiveGate     chan struct{}
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 // NewWebSocketConn adapts an x/net WebSocket connection to Conn.
@@ -127,12 +139,20 @@ func NewWebSocketConn(conn *websocket.Conn, maxPayloadBytes int) Conn {
 		maxPayloadBytes = defaultMaxPayloadBytes
 	}
 	conn.MaxPayloadBytes = maxPayloadBytes
-	return &webSocketConn{conn: conn}
+	return &webSocketConn{
+		conn:            conn,
+		reader:          bufio.NewReader(conn),
+		maxPayloadBytes: maxPayloadBytes,
+		sendGate:        make(chan struct{}, 1),
+		receiveGate:     make(chan struct{}, 1),
+	}
 }
 
 func (c *webSocketConn) Send(ctx context.Context, event Event) error {
-	c.sendMu.Lock()
-	defer c.sendMu.Unlock()
+	if err := acquire(ctx, c.sendGate); err != nil {
+		return err
+	}
+	defer release(c.sendGate)
 
 	raw, err := event.MarshalJSON()
 	if err != nil {
@@ -150,19 +170,91 @@ func (c *webSocketConn) Send(ctx context.Context, event Event) error {
 }
 
 func (c *webSocketConn) Receive(ctx context.Context) (Event, error) {
-	c.receiveMu.Lock()
-	defer c.receiveMu.Unlock()
+	if err := acquire(ctx, c.receiveGate); err != nil {
+		return Event{}, err
+	}
+	defer release(c.receiveGate)
 
 	stop := interruptOnCancel(ctx, c.conn.SetReadDeadline)
 	defer stop()
-	var payload string
-	if err := websocket.Message.Receive(c.conn, &payload); err != nil {
+	payload, err := readEventPayload(c.reader, c.maxPayloadBytes)
+	if err != nil {
 		if ctx.Err() != nil {
 			return Event{}, ctx.Err()
 		}
 		return Event{}, fmt.Errorf("realtime: receive event: %w", err)
 	}
-	return ParseEvent([]byte(payload))
+	return ParseEvent(payload)
+}
+
+func acquire(ctx context.Context, gate chan struct{}) error {
+	select {
+	case gate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func release(gate chan struct{}) {
+	<-gate
+}
+
+func readEventPayload(reader *bufio.Reader, maxPayloadBytes int) ([]byte, error) {
+	payload := make([]byte, 0, 512)
+	depth := 0
+	inString := false
+	escaped := false
+	started := false
+	for {
+		b, err := reader.ReadByte()
+		if err != nil {
+			if errors.Is(err, io.EOF) && len(payload) != 0 {
+				return nil, io.ErrUnexpectedEOF
+			}
+			return nil, err
+		}
+		payload = append(payload, b)
+		if len(payload) > maxPayloadBytes {
+			return nil, websocket.ErrFrameTooLarge
+		}
+		if !started {
+			switch b {
+			case ' ', '\t', '\r', '\n':
+				continue
+			case '{':
+				started = true
+				depth = 1
+				continue
+			default:
+				return nil, errors.New("event payload must be a JSON object")
+			}
+		}
+		if inString {
+			if escaped {
+				escaped = false
+				continue
+			}
+			switch b {
+			case '\\':
+				escaped = true
+			case '"':
+				inString = false
+			}
+			continue
+		}
+		switch b {
+		case '"':
+			inString = true
+		case '{', '[':
+			depth++
+		case '}', ']':
+			depth--
+			if depth == 0 {
+				return payload, nil
+			}
+		}
+	}
 }
 
 func interruptOnCancel(

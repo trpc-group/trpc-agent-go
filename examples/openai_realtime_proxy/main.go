@@ -44,6 +44,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("create OpenAI Realtime proxy: %v", err)
 	}
+	defer proxy.Close()
 
 	if !isLoopbackListenAddress(*addr) {
 		log.Fatal(

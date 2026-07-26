@@ -40,4 +40,6 @@ Then send these events one line at a time:
 The proxy preserves complete JSON events, including event types that were added
 after the installed framework version. For remote deployment, import the proxy
 package and wrap `Proxy.Handler()` with client authentication, authorization,
-origin validation, TLS, and request limits before serving it.
+origin validation, TLS, and request limits before serving it. Call
+`Proxy.Close()` before shutting down the HTTP server so hijacked WebSocket
+sessions and their upstream connections are closed and awaited.
