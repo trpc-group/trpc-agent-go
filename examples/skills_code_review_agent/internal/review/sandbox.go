@@ -505,7 +505,7 @@ func unavailableRepoCheckRuns(taskID, executor, reason string) []SandboxRun {
 	case "e2b_egress_not_enforced":
 		stderr = "repository checks are disabled for E2B because outbound network egress is not denied; only diff summary is executed"
 	case "dependency_unavailable":
-		stderr = "repository declares external modules without a vendor directory; offline container checks cannot resolve dependencies"
+		stderr = "repository declares external modules without dependencies available in the staged snapshot; offline container checks cannot resolve dependencies"
 	case "snapshot_budget_exceeded":
 		stderr = "repository snapshot exceeds host-side sandbox staging budgets; repository checks are unavailable for this review"
 	default:
@@ -606,7 +606,7 @@ func repoHasUnvendoredExternalModules(repoPath string) bool {
 }
 
 func repoHasUnvendoredExternalModulesForSnapshot(repoPath string, plan sandboxSnapshotPlan) bool {
-	if _, err := os.Stat(filepath.Join(repoPath, "vendor")); err == nil {
+	if snapshotHasVendoredDependencies(repoPath, plan) {
 		return false
 	}
 	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
@@ -614,6 +614,36 @@ func repoHasUnvendoredExternalModulesForSnapshot(repoPath string, plan sandboxSn
 		return false
 	}
 	return goModHasRequireOutsideSnapshot(string(data), repoPath, plan)
+}
+
+func snapshotHasVendoredDependencies(repoPath string, plan sandboxSnapshotPlan) bool {
+	vendorDir := filepath.Join(repoPath, "vendor")
+	info, err := os.Lstat(vendorDir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return false
+	}
+	return regularFileWithinSnapshot(filepath.Join(vendorDir, "modules.txt"), plan)
+}
+
+func regularFileWithinSnapshot(filePath string, plan sandboxSnapshotPlan) bool {
+	root, err := filepath.Abs(plan.root)
+	if err != nil {
+		return false
+	}
+	absFile, err := filepath.Abs(filePath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(root, absFile)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	rel = normalizeSandboxRelPath(rel)
+	if rel == "" || !plan.fileSet[rel] {
+		return false
+	}
+	info, err := os.Lstat(absFile)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func goModHasRequire(data string) bool {

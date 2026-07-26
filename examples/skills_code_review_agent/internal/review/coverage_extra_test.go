@@ -628,6 +628,70 @@ func TestWorkspaceSandboxRunnerMarksExternalModulesUnavailableOffline(t *testing
 	}
 }
 
+func TestWorkspaceSandboxRunnerRejectsVendorMissingFromSnapshot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, ".gitignore"), "vendor/\n")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/deps\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n")
+	writeTestFile(t, filepath.Join(repo, "vendor", "modules.txt"), "# github.com/stretchr/testify v1.9.0\n")
+	runGit(t, repo, "add", ".gitignore", "go.mod")
+
+	engine := &mockWorkspaceEngine{}
+	runner := &WorkspaceSandboxRunner{
+		executorName:     "container",
+		engine:           engine,
+		timeout:          time.Second,
+		outputLimitBytes: 1024,
+		outputDir:        t.TempDir(),
+	}
+	result := runner.RunChecks(testContext(t), "task-ignored-vendor", repo, ParsedDiff{Raw: "diff"})
+	if len(engine.runSpecs) != 1 || engine.runSpecs[0].Cmd != "bash" {
+		t.Fatalf("expected ignored vendor to skip repo commands, specs=%+v result=%+v", engine.runSpecs, result.Runs)
+	}
+	var unavailable int
+	for _, run := range result.Runs {
+		if run.ErrorType == "dependency_unavailable" && run.Status == "skipped" {
+			unavailable++
+		}
+	}
+	if unavailable != 3 {
+		t.Fatalf("expected three dependency-unavailable runs, got %+v", result.Runs)
+	}
+}
+
+func TestRepoHasUnvendoredExternalModulesAllowsVendoredSnapshot(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/deps\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n")
+	writeTestFile(t, filepath.Join(repo, "vendor", "modules.txt"), "# github.com/stretchr/testify v1.9.0\n")
+	writeTestFile(t, filepath.Join(repo, "vendor", "github.com", "stretchr", "testify", "doc.go"), "package testify\n")
+	runGit(t, repo, "add", "go.mod", "vendor/modules.txt", "vendor/github.com/stretchr/testify/doc.go")
+	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repoHasUnvendoredExternalModulesForSnapshot(repo, plan) {
+		t.Fatal("vendored dependencies included in the snapshot should allow offline repo checks")
+	}
+}
+
+func TestRepoHasUnvendoredExternalModulesRejectsSymlinkedVendor(t *testing.T) {
+	repo := t.TempDir()
+	externalVendor := t.TempDir()
+	writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/deps\n\ngo 1.23\n\nrequire github.com/stretchr/testify v1.9.0\n")
+	writeTestFile(t, filepath.Join(externalVendor, "modules.txt"), "# github.com/stretchr/testify v1.9.0\n")
+	if err := os.Symlink(externalVendor, filepath.Join(repo, "vendor")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	plan := sandboxSnapshotPlan{
+		root:    repo,
+		fileSet: map[string]bool{"go.mod": true, "vendor/modules.txt": true},
+	}
+	if !repoHasUnvendoredExternalModulesForSnapshot(repo, plan) {
+		t.Fatal("symlinked vendor directory should not make offline dependencies available")
+	}
+}
+
 func TestWorkspaceSandboxRunnerAllowsLocalReplaceModulesOffline(t *testing.T) {
 	repo := t.TempDir()
 	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
