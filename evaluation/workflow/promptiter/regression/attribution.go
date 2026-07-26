@@ -9,7 +9,6 @@
 package regression
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -102,7 +101,9 @@ func attributeCase(evalCase CaseSummary) Failure {
 		}
 	}
 	sort.Strings(metricNames)
+	sort.Slice(failedMetrics, func(i, j int) bool { return failedMetrics[i].Name < failedMetrics[j].Name })
 	failure := Failure{CaseID: evalCase.ID, MetricNames: metricNames}
+	toolCategory, toolReason, hasToolFailure := attributeToolFailure(failedMetrics)
 	switch {
 	case evalCase.Error != "" || routeHasError(evalCase.ActualInvocations):
 		failure.Category = FailureExecutionError
@@ -110,15 +111,9 @@ func attributeCase(evalCase CaseSummary) Failure {
 	case routesDiffer(evalCase.ActualInvocations, evalCase.ExpectedInvocations):
 		failure.Category = FailureRouteError
 		failure.Reason = "actual route does not match expected route"
-	case toolCallsDiffer(evalCase.ActualInvocations, evalCase.ExpectedInvocations, toolOrderSensitive(failedMetrics)):
-		failure.Category = FailureToolCallError
-		failure.Reason = "actual tool names or order do not match expected trajectory"
-	case toolArgumentsDiffer(evalCase.ActualInvocations, evalCase.ExpectedInvocations, toolOrderSensitive(failedMetrics)):
-		failure.Category = FailureToolArgumentError
-		failure.Reason = "tool arguments do not match expected arguments"
-	case toolResultsDiffer(evalCase.ActualInvocations, evalCase.ExpectedInvocations, toolOrderSensitive(failedMetrics)):
-		failure.Category = FailureToolCallError
-		failure.Reason = "tool results do not match expected results"
+	case hasToolFailure:
+		failure.Category = toolCategory
+		failure.Reason = toolReason
 	case formatFailure(failedMetrics):
 		failure.Category = FailureFormatError
 		failure.Reason = metricReasonText(failedMetrics, "response format did not satisfy the evaluator")
@@ -196,115 +191,26 @@ func routesDiffer(actual, expected []InvocationSummary) bool {
 	return false
 }
 
-func toolCallsDiffer(actual, expected []InvocationSummary, orderSensitive bool) bool {
-	if len(expected) == 0 {
-		return false
-	}
-	if len(actual) != len(expected) {
-		return true
-	}
-	for i := range actual {
-		if len(actual[i].Tools) != len(expected[i].Tools) {
-			return true
-		}
-		actualNames, expectedNames := toolNames(actual[i].Tools), toolNames(expected[i].Tools)
-		if !orderSensitive {
-			sort.Strings(actualNames)
-			sort.Strings(expectedNames)
-		}
-		if strings.Join(actualNames, "\x00") != strings.Join(expectedNames, "\x00") {
-			return true
-		}
-	}
-	return false
-}
-
-func toolArgumentsDiffer(actual, expected []InvocationSummary, orderSensitive bool) bool {
-	if len(expected) == 0 || len(actual) != len(expected) {
-		return false
-	}
-	for i := range actual {
-		if len(actual[i].Tools) != len(expected[i].Tools) {
-			return false
-		}
-		left, right := toolSignatures(actual[i].Tools), toolSignatures(expected[i].Tools)
-		if !orderSensitive {
-			sort.Strings(left)
-			sort.Strings(right)
-		}
-		if strings.Join(left, "\x00") != strings.Join(right, "\x00") {
-			return true
-		}
-	}
-	return false
-}
-
-func toolResultsDiffer(actual, expected []InvocationSummary, orderSensitive bool) bool {
-	if len(expected) == 0 || len(actual) != len(expected) {
-		return false
-	}
-	for i := range actual {
-		if len(actual[i].Tools) != len(expected[i].Tools) {
-			return false
-		}
-		left, right := toolResultSignatures(actual[i].Tools), toolResultSignatures(expected[i].Tools)
-		if !orderSensitive {
-			sort.Strings(left)
-			sort.Strings(right)
-		}
-		if strings.Join(left, "\x00") != strings.Join(right, "\x00") {
-			return true
-		}
-	}
-	return false
-}
-
-func toolOrderSensitive(metrics []MetricSummary) bool {
+func attributeToolFailure(metrics []MetricSummary) (FailureCategory, string, bool) {
+	var toolMetrics []MetricSummary
 	for _, metric := range metrics {
-		if metric.Criterion == "tool_trajectory" && metric.ToolOrderSensitive {
-			return true
+		if metric.Criterion == "tool_trajectory" {
+			toolMetrics = append(toolMetrics, metric)
 		}
 	}
-	return false
-}
-
-func toolNames(tools []ToolSummary) []string {
-	result := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		result = append(result, tool.Name)
+	if len(toolMetrics) == 0 {
+		return "", "", false
 	}
-	return result
-}
-
-func toolSignatures(tools []ToolSummary) []string {
-	result := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		var value any
-		if json.Unmarshal(tool.Arguments, &value) == nil {
-			canonical, _ := json.Marshal(value)
-			result = append(result, tool.Name+"\x00"+string(canonical))
-		} else {
-			result = append(result, tool.Name+"\x00"+string(tool.Arguments))
+	for _, metric := range toolMetrics {
+		if strings.Contains(strings.ToLower(metric.Reason), "arguments mismatch") {
+			return FailureToolArgumentError, firstNonEmpty(
+				metric.Reason, "tool trajectory arguments did not satisfy the evaluator",
+			), true
 		}
 	}
-	return result
-}
-
-func toolResultSignatures(tools []ToolSummary) []string {
-	result := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		result = append(result, tool.Name+"\x00"+canonicalJSON(tool.Arguments)+"\x00"+canonicalJSON(tool.Result))
-	}
-	return result
-}
-
-func canonicalJSON(raw json.RawMessage) string {
-	var value any
-	if json.Unmarshal(raw, &value) != nil {
-		return string(raw)
-	}
-	canonical, _ := json.Marshal(value)
-	return string(canonical)
+	return FailureToolCallError, firstNonEmpty(
+		toolMetrics[0].Reason, "tool trajectory did not satisfy the evaluator",
+	), true
 }
 
 func formatFailure(metrics []MetricSummary) bool {

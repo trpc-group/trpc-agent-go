@@ -88,7 +88,7 @@ func TestSummarizeMetricEvidence(t *testing.T) {
 	if metrics[0].Reason != "missing citation" || strings.Join(metrics[0].RubricTypes, ",") != "format,knowledge" {
 		t.Fatalf("judge metric = %+v", metrics[0])
 	}
-	if metrics[1].Criterion != "tool_trajectory" || !metrics[1].ToolOrderSensitive {
+	if metrics[1].Criterion != "tool_trajectory" {
 		t.Fatalf("tool metric = %+v", metrics[1])
 	}
 }

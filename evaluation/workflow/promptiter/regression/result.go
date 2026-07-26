@@ -58,15 +58,14 @@ type CaseSummary struct {
 
 // MetricSummary contains the aggregate facts needed to compare and explain a metric.
 type MetricSummary struct {
-	Name               string   `json:"name"`
-	Score              float64  `json:"score"`
-	Threshold          float64  `json:"threshold"`
-	Passed             bool     `json:"passed"`
-	Evaluated          bool     `json:"evaluated"`
-	Reason             string   `json:"reason,omitempty"`
-	Criterion          string   `json:"criterion,omitempty"`
-	RubricTypes        []string `json:"rubric_types,omitempty"`
-	ToolOrderSensitive bool     `json:"tool_order_sensitive,omitempty"`
+	Name        string   `json:"name"`
+	Score       float64  `json:"score"`
+	Threshold   float64  `json:"threshold"`
+	Passed      bool     `json:"passed"`
+	Evaluated   bool     `json:"evaluated"`
+	Reason      string   `json:"reason,omitempty"`
+	Criterion   string   `json:"criterion,omitempty"`
+	RubricTypes []string `json:"rubric_types,omitempty"`
 }
 
 // InvocationSummary is the bounded execution evidence used by failure attribution.
@@ -274,7 +273,6 @@ func summarizeMetric(metric *evalresult.EvalMetricResult, runs []*evalresult.Eva
 	switch {
 	case metric.Criterion.ToolTrajectory != nil:
 		result.Criterion = "tool_trajectory"
-		result.ToolOrderSensitive = metric.Criterion.ToolTrajectory.OrderSensitive
 	case metric.Criterion.FinalResponse != nil:
 		result.Criterion = "final_response"
 	case metric.Criterion.LLMJudge != nil:

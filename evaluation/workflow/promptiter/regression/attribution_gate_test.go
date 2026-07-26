@@ -37,18 +37,33 @@ func TestAttributeCategories(t *testing.T) {
 			c.ActualInvocations = invocation(nil, []RouteStep{{Agent: "wrong"}})
 			c.ExpectedInvocations = invocation(nil, []RouteStep{{Agent: "right"}})
 		}), want: FailureRouteError},
-		{name: "tool call", evalCase: failedCase("case", MetricSummary{Name: "m", Evaluated: true}, func(c *CaseSummary) {
+		{name: "tool call", evalCase: failedCase("case", MetricSummary{
+			Name: "tools", Evaluated: true, Criterion: "tool_trajectory",
+			Reason: "number of tool calls mismatch",
+		}, nil), want: FailureToolCallError},
+		{name: "tool arguments", evalCase: failedCase("case", MetricSummary{
+			Name: "tools", Evaluated: true, Criterion: "tool_trajectory",
+			Reason: "match tools: arguments mismatch: values differ",
+		}, nil), want: FailureToolArgumentError},
+		{name: "tool result", evalCase: failedCase("case", MetricSummary{
+			Name: "tools", Evaluated: true, Criterion: "tool_trajectory",
+			Reason: "match tools: result mismatch",
+		}, nil), want: FailureToolCallError},
+		{name: "final response ignores unrelated tool evidence", evalCase: failedCase("case", MetricSummary{
+			Name: "answer", Evaluated: true, Criterion: "final_response", Reason: "wrong answer",
+		}, func(c *CaseSummary) {
 			c.ActualInvocations = invocation([]ToolSummary{tool("search", `{}`)}, nil)
 			c.ExpectedInvocations = invocation([]ToolSummary{tool("lookup", `{}`)}, nil)
-		}), want: FailureToolCallError},
-		{name: "tool arguments", evalCase: failedCase("case", MetricSummary{Name: "m", Evaluated: true}, func(c *CaseSummary) {
-			c.ActualInvocations = invocation([]ToolSummary{tool("search", `{"q":"go"}`)}, nil)
-			c.ExpectedInvocations = invocation([]ToolSummary{tool("search", `{"q":"rust"}`)}, nil)
-		}), want: FailureToolArgumentError},
-		{name: "tool result", evalCase: failedCase("case", MetricSummary{Name: "m", Evaluated: true}, func(c *CaseSummary) {
-			c.ActualInvocations = invocation([]ToolSummary{{Name: "search", Arguments: json.RawMessage(`{"q":"go"}`), Result: json.RawMessage(`{"answer":"wrong"}`)}}, nil)
-			c.ExpectedInvocations = invocation([]ToolSummary{{Name: "search", Arguments: json.RawMessage(`{"q":"go"}`), Result: json.RawMessage(`{"answer":"right"}`)}}, nil)
-		}), want: FailureToolCallError},
+		}), want: FailureFinalResponse},
+		{name: "passed subset or custom tool metric does not override failure", evalCase: failedCase("case", MetricSummary{
+			Name: "answer", Evaluated: true, Criterion: "final_response", Reason: "wrong answer",
+		}, func(c *CaseSummary) {
+			c.Metrics = append(c.Metrics, MetricSummary{
+				Name: "tools", Evaluated: true, Passed: true, Criterion: "tool_trajectory",
+			})
+			c.ActualInvocations = invocation([]ToolSummary{tool("extra", `{}`)}, nil)
+			c.ExpectedInvocations = invocation([]ToolSummary{tool("expected", `{}`)}, nil)
+		}), want: FailureFinalResponse},
 		{name: "format", evalCase: failedCase("case", MetricSummary{
 			Name: "judge", Evaluated: true, RubricTypes: []string{"JSON format"}, Reason: "invalid schema",
 		}, nil), want: FailureFormatError},
@@ -74,6 +89,11 @@ func TestAttributeCategories(t *testing.T) {
 			}
 			if attribution.Failures[0].Reason == "" || attribution.Counts[test.want] != 1 {
 				t.Fatalf("attribution = %+v", attribution)
+			}
+			if strings.HasPrefix(test.name, "tool ") &&
+				attribution.Failures[0].Reason != test.evalCase.Metrics[0].Reason {
+				t.Fatalf("reason = %q, want evaluator reason %q",
+					attribution.Failures[0].Reason, test.evalCase.Metrics[0].Reason)
 			}
 		})
 	}
@@ -140,36 +160,6 @@ func TestHintsPreserveMetricSpecificReasons(t *testing.T) {
 	if len(hints) != 2 || hints[0].MetricName != "format" || hints[0].Reason != "invalid JSON" ||
 		hints[1].MetricName != "quality" || hints[1].Reason != "missing citation" {
 		t.Fatalf("hints = %+v", hints)
-	}
-}
-
-func TestToolComparisonKeepsArgumentsAndResultsAssociated(t *testing.T) {
-	tool := func(argument, result string) ToolSummary {
-		return ToolSummary{Name: "search", Arguments: json.RawMessage(argument), Result: json.RawMessage(result)}
-	}
-	paired := []ToolSummary{tool(`{"q":"a"}`, `1`), tool(`{"q":"b"}`, `2`)}
-	tests := []struct {
-		name           string
-		actual         []ToolSummary
-		orderSensitive bool
-		wantDifferent  bool
-	}{
-		{name: "result mismatch", actual: []ToolSummary{tool(`{"q":"a"}`, `9`), tool(`{"q":"b"}`, `2`)}, wantDifferent: true},
-		{name: "cross paired", actual: []ToolSummary{tool(`{"q":"a"}`, `2`), tool(`{"q":"b"}`, `1`)}, wantDifferent: true},
-		{name: "order insensitive", actual: []ToolSummary{paired[1], paired[0]}},
-		{name: "order sensitive", actual: []ToolSummary{paired[1], paired[0]}, orderSensitive: true, wantDifferent: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			actual := []InvocationSummary{{Tools: test.actual}}
-			expected := []InvocationSummary{{Tools: paired}}
-			got := toolCallsDiffer(actual, expected, test.orderSensitive) ||
-				toolArgumentsDiffer(actual, expected, test.orderSensitive) ||
-				toolResultsDiffer(actual, expected, test.orderSensitive)
-			if got != test.wantDifferent {
-				t.Fatalf("trajectory differs = %t, want %t", got, test.wantDifferent)
-			}
-		})
 	}
 }
 
