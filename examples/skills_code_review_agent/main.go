@@ -283,9 +283,10 @@ func moduleRootAndTarget(repo, pkg string) (dir, target string) {
 	}
 	rel, err := filepath.Rel(root, abs)
 	if err != nil || rel == "." {
-		return root, "./..."
+		return root, "."
 	}
-	return root, "./" + filepath.ToSlash(rel) + "/..."
+	// Vet only the changed package itself, not every descendant package.
+	return root, "./" + filepath.ToSlash(rel)
 }
 
 func changedGoPackages(diffs []parser.FileDiff) []string {

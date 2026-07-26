@@ -328,15 +328,15 @@ func TestModuleRootAndTargetNestedModule(t *testing.T) {
 	if dir != nested {
 		t.Errorf("module root = %q, want %q", dir, nested)
 	}
-	if target != "./internal/bar/..." {
-		t.Errorf("target = %q, want ./internal/bar/...", target)
+	if target != "./internal/bar" {
+		t.Errorf("target = %q, want ./internal/bar", target)
 	}
 
 	if err := os.MkdirAll(filepath.Join(repo, "pkg"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if dir, target := moduleRootAndTarget(repo, "pkg"); dir != repo || target != "./pkg/..." {
-		t.Errorf("repo-level pkg: got (%q, %q), want (%q, ./pkg/...)", dir, target, repo)
+	if dir, target := moduleRootAndTarget(repo, "pkg"); dir != repo || target != "./pkg" {
+		t.Errorf("repo-level pkg: got (%q, %q), want (%q, ./pkg)", dir, target, repo)
 	}
 }
 

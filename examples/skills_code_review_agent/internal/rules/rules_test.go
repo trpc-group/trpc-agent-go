@@ -111,3 +111,45 @@ func TestErrorHandlingSameLineCheck(t *testing.T) {
 		t.Error("same-line `if err := ...; err != nil` should not trigger EH-001")
 	}
 }
+
+// MT-002 must not flag a goroutine outside a loop (no loop-variable capture),
+// but must still flag one launched inside a loop.
+func TestDataRaceOnlyFlagsLoopGoroutine(t *testing.T) {
+	nonLoop := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,3 @@\n" +
+		"+func f() {\n" +
+		"+\tgo func() { doWork() }()\n" +
+		"+}\n"
+	if hasRule(findingsFor(t, nonLoop), "MT-002") {
+		t.Error("MT-002 should not fire for a goroutine outside a loop")
+	}
+	inLoop := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,6 @@\n" +
+		"+func f(items []int) {\n" +
+		"+\tfor _, item := range items {\n" +
+		"+\t\tgo func() {\n" +
+		"+\t\t\thandle(item)\n" +
+		"+\t\t}()\n" +
+		"+\t}\n" +
+		"+}\n"
+	if !hasRule(findingsFor(t, inLoop), "MT-002") {
+		t.Error("MT-002 should fire for a goroutine inside a loop")
+	}
+}
+
+// PF-002 must not classify %v (which accepts any type) as a strconv-compatible
+// conversion, but must still flag %d.
+func TestFmtSprintfVerbVNotFlagged(t *testing.T) {
+	verbV := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,3 @@\n" +
+		"+func f(v any) string {\n" +
+		"+\treturn fmt.Sprintf(\"%v\", v)\n" +
+		"+}\n"
+	if hasRule(findingsFor(t, verbV), "PF-002") {
+		t.Error("PF-002 should not fire for the v verb")
+	}
+	verbD := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,3 @@\n" +
+		"+func f(n int) string {\n" +
+		"+\treturn fmt.Sprintf(\"%d\", n)\n" +
+		"+}\n"
+	if !hasRule(findingsFor(t, verbD), "PF-002") {
+		t.Error("PF-002 should fire for the d verb")
+	}
+}

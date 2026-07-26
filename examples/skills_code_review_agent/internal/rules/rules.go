@@ -451,14 +451,25 @@ func mutexNoDeferRule(file string, hunk parser.Hunk, startLine int, seen map[ded
 	}
 }
 
-// MT-002: variable captured by goroutine closure without synchronisation.
+// MT-002: goroutine started inside a loop may capture the loop variable without synchronisation.
 var reGoFuncClose = regexp.MustCompile(`\bgo\s+func\s*\(\s*\)`)
 var reSyncPrim = regexp.MustCompile(`\batomic\.\w+|\bsync\.\w+|\bmu\.`)
 
 func dataRaceRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
+	inLoop := false
 	for i, l := range added {
-		if !reGoFuncClose.MatchString(l) {
+		trimmed := strings.TrimSpace(l)
+		if strings.HasPrefix(trimmed, "for ") || trimmed == "for {" {
+			inLoop = true
+		}
+		if inLoop && strings.Contains(trimmed, "}") {
+			inLoop = false
+		}
+		// Only a parameterless goroutine launched inside a loop is a likely
+		// loop-variable-capture data race; a bare go func() elsewhere captures
+		// nothing loop-scoped, so flagging every one produces false positives.
+		if !inLoop || !reGoFuncClose.MatchString(l) {
 			continue
 		}
 		window := added[i:]
@@ -474,7 +485,7 @@ func dataRaceRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeK
 			Category:       CatMutexMisuse,
 			File:           file,
 			Line:           lineNums[i],
-			Title:          "Goroutine closure captures variables without synchronisation",
+			Title:          "Goroutine in loop may capture the loop variable without synchronisation",
 			Evidence:       strings.TrimSpace(l),
 			Recommendation: "Protect shared variables with sync/atomic, or pass them as arguments to avoid data races.",
 			Confidence:     "low",
@@ -522,8 +533,9 @@ func stringConcatLoopRule(file string, hunk parser.Hunk, startLine int, seen map
 	}
 }
 
-// PF-002: fmt.Sprintf used for single integer/bool conversion (strconv is faster).
-var reFmtSprintfConv = regexp.MustCompile(`\bfmt\.Sprintf\s*\(\s*"%[dvtf]"\s*,`)
+// PF-002: fmt.Sprintf used for a single int/bool/float conversion (strconv is faster).
+// %v is intentionally excluded: it accepts any type, so it is not a strconv-equivalent conversion.
+var reFmtSprintfConv = regexp.MustCompile(`\bfmt\.Sprintf\s*\(\s*"%[dtf]"\s*,`)
 
 func fmtSprintfConvRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
