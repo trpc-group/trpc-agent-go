@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -252,23 +253,45 @@ func (e *Executor) runE2BCommand(ctx context.Context, taskID, scriptName, comman
 	ctx, cancel := context.WithTimeout(ctx, e.config.Timeout)
 	defer cancel()
 
-	// E2B 简化实现 - 实际应该使用 E2B SDK
-	// 这里模拟执行
+	// E2B executor is not yet implemented - return unsupported error
 	durationMs := int(time.Since(startTime).Milliseconds())
 
 	return store.SandboxRun{
 		TaskID:     taskID,
 		ScriptName: scriptName,
 		Command:    command,
-		ExitCode:   0,
-		Stdout:     "E2B execution completed (simulated)",
-		Stderr:     "",
+		ExitCode:   -1,
+		Stdout:     "",
+		Stderr:     "E2B executor is not yet implemented. Please use local or container executor.",
 		DurationMs: durationMs,
 		Truncated:  false,
 	}
 }
 
-// buildEnv 构建环境变量（白名单）
+// validateWorkDir validates that the working directory is not in a forbidden location
+func (e *Executor) validateWorkDir(workDir string) error {
+	absPath, err := filepath.Abs(workDir)
+	if err != nil {
+		return fmt.Errorf("cannot resolve path: %w", err)
+	}
+
+	// Check against forbidden directories
+	for _, forbidden := range e.config.ForbiddenDirs {
+		forbiddenAbs, _ := filepath.Abs(forbidden)
+		if strings.HasPrefix(absPath, forbiddenAbs) {
+			return fmt.Errorf("path %s is in forbidden directory %s", absPath, forbidden)
+		}
+	}
+
+	// Check for path traversal
+	if strings.Contains(absPath, "..") {
+		return fmt.Errorf("path traversal detected: %s", absPath)
+	}
+
+	return nil
+}
+
+// buildEnv builds environment variables (whitelist only)
 func (e *Executor) buildEnv() []string {
 	env := make([]string, 0)
 
@@ -278,7 +301,7 @@ func (e *Executor) buildEnv() []string {
 		}
 	}
 
-	// 使用隔离的 HOME
+	// Use isolated HOME
 	env = append(env, "HOME=/tmp/golens-sandbox")
 
 	return env

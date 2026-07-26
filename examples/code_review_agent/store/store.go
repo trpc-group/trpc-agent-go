@@ -103,6 +103,12 @@ func InitDB(dbPath string) (*sql.DB, error) {
 		return nil, err
 	}
 
+	// Enable foreign key constraints
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
 	schema := `
 	CREATE TABLE IF NOT EXISTS review_tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,

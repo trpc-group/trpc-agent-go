@@ -51,11 +51,20 @@ func NewPermissionPolicy() *PermissionPolicy {
 	}
 }
 
-// Evaluate 评估命令权限
+// Evaluate evaluates command permission
 func (p *PermissionPolicy) Evaluate(command string) PermissionDecision {
-	commandLower := strings.ToLower(strings.TrimSpace(command))
+	commandTrimmed := strings.TrimSpace(command)
+	commandLower := strings.ToLower(commandTrimmed)
 
-	// 检查危险命令
+	// 1. Check for shell injection attempts
+	if containsShellInjection(commandTrimmed) {
+		return PermissionDecision{
+			Decision: "deny",
+			Reason:   "shell injection attempt detected",
+		}
+	}
+
+	// 2. Check dangerous patterns
 	for _, pattern := range p.DangerousPatterns {
 		if pattern.MatchString(commandLower) {
 			return PermissionDecision{
@@ -65,9 +74,9 @@ func (p *PermissionPolicy) Evaluate(command string) PermissionDecision {
 		}
 	}
 
-	// 检查高风险命令
+	// 3. Check high-risk commands (exact prefix match with space boundary)
 	for _, highRisk := range p.HighRiskCommands {
-		if strings.HasPrefix(commandLower, strings.ToLower(highRisk)) {
+		if isCommandPrefix(commandLower, strings.ToLower(highRisk)) {
 			return PermissionDecision{
 				Decision: "needs_human_review",
 				Reason:   "high risk command",
@@ -75,9 +84,9 @@ func (p *PermissionPolicy) Evaluate(command string) PermissionDecision {
 		}
 	}
 
-	// 检查白名单
+	// 4. Check whitelist (exact prefix match with space boundary)
 	for _, allowed := range p.AllowedCommands {
-		if strings.HasPrefix(commandLower, strings.ToLower(allowed)) {
+		if isCommandPrefix(commandLower, strings.ToLower(allowed)) {
 			return PermissionDecision{
 				Decision: "allow",
 				Reason:   "command in whitelist",
@@ -85,11 +94,36 @@ func (p *PermissionPolicy) Evaluate(command string) PermissionDecision {
 		}
 	}
 
-	// 默认需要审核
+	// 5. Default: needs review
 	return PermissionDecision{
 		Decision: "needs_human_review",
 		Reason:   "command not in whitelist",
 	}
+}
+
+// isCommandPrefix checks if command starts with prefix followed by space or end of string
+func isCommandPrefix(command, prefix string) bool {
+	if !strings.HasPrefix(command, prefix) {
+		return false
+	}
+	if len(command) == len(prefix) {
+		return true
+	}
+	return command[len(prefix)] == ' '
+}
+
+// containsShellInjection checks for common shell injection patterns
+func containsShellInjection(command string) bool {
+	dangerousChars := []string{
+		";", "|", "&", "$(", "`", "&&", "||",
+		">", "<", ">>", "<<",
+	}
+	for _, char := range dangerousChars {
+		if strings.Contains(command, char) {
+			return true
+		}
+	}
+	return false
 }
 
 // SecretDetector 敏感信息检测器

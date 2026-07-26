@@ -109,7 +109,7 @@ func (o *Orchestrator) Run(ctx context.Context, config *ReviewConfig) *ReviewRes
 	if config.DiffFile != "" {
 		diffResult, err = parser.ParseFile(config.DiffFile)
 	} else {
-		diffResult, err = parser.ParseGitDiff()
+		diffResult, err = parser.ParseGitDiff(ctx)
 	}
 
 	if err != nil {

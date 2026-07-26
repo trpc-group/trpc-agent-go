@@ -7,6 +7,7 @@ package input
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -27,10 +28,10 @@ func NewDiffParser(repoPath string) *DiffParser {
 	return &DiffParser{repoPath: repoPath}
 }
 
-// ParseGitDiff 使用 git diff 命令解析工作区变更
-func (p *DiffParser) ParseGitDiff() (*DiffParseResult, error) {
-	// 执行 git diff
-	cmd := exec.Command("git", "diff", "HEAD")
+// ParseGitDiff uses git diff command to parse working tree changes
+func (p *DiffParser) ParseGitDiff(ctx context.Context) (*DiffParseResult, error) {
+	// Execute git diff with context for cancellation
+	cmd := exec.CommandContext(ctx, "git", "diff", "HEAD")
 	cmd.Dir = p.repoPath
 
 	output, err := cmd.Output()
@@ -39,8 +40,8 @@ func (p *DiffParser) ParseGitDiff() (*DiffParseResult, error) {
 	}
 
 	if len(output) == 0 {
-		// 没有变更，尝试 git diff --cached
-		cmd = exec.Command("git", "diff", "--cached")
+		// No changes, try git diff --cached
+		cmd = exec.CommandContext(ctx, "git", "diff", "--cached")
 		cmd.Dir = p.repoPath
 		output, err = cmd.Output()
 		if err != nil {
@@ -182,8 +183,8 @@ func (p *DiffParser) ParseFile(diffFilePath string) (*DiffParseResult, error) {
 	return p.Parse(file)
 }
 
-// Parse 解析 diff 内容
-func (p *DiffParser) Parse(reader interface{ Read([]byte) (int, error) }) (*DiffParseResult, error) {
+// Parse parses diff content from io.Reader
+func (p *DiffParser) Parse(reader io.Reader) (*DiffParseResult, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
 
@@ -267,13 +268,17 @@ func (p *DiffParser) Parse(reader interface{ Read([]byte) (int, error) }) (*Diff
 				change.Type = "add"
 				change.NewLine = newLine
 				newLine++
-				currentFile.Additions++
+				if currentFile != nil {
+					currentFile.Additions++
+				}
 				result.TotalAdded++
 			case '-':
 				change.Type = "delete"
 				change.OldLine = oldLine
 				oldLine++
-				currentFile.Deletions++
+				if currentFile != nil {
+					currentFile.Deletions++
+				}
 				result.TotalDeleted++
 			case ' ':
 				change.Type = "context"

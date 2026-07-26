@@ -100,7 +100,7 @@ func run() error {
 		diffResult, err = parser.ParseFile(*flagDiffFile)
 	} else {
 		// 方式2: 解析 git 工作区变更
-		diffResult, err = parser.ParseGitDiff()
+		diffResult, err = parser.ParseGitDiff(ctx)
 	}
 
 	if err != nil {
@@ -149,18 +149,20 @@ func run() error {
 	// 6. 去重降噪
 	uniqueFindings, warnings := rules.DeduplicateFindings(findings)
 
-	// 7. 权限策略检查
+	// 7. Permission policy check
 	permPolicy := security.NewPermissionPolicy()
 	secretDetector := security.NewSecretDetector()
 
-	// 记录权限决策
-	permDecision := store.PermissionDecision{
+	// Record initial permission decision
+	permDecision := permPolicy.Evaluate("review")
+	if err := store.SavePermissionDecision(db, &store.PermissionDecision{
 		TaskID:   taskID,
 		Command:  "review",
-		Decision: "allow",
-		Reason:   "code review operation",
+		Decision: string(permDecision.Decision),
+		Reason:   permDecision.Reason,
+	}); err != nil {
+		log.Printf("Warning: failed to save permission decision: %v", err)
 	}
-	store.SavePermissionDecision(db, &permDecision)
 
 	// 8. 沙箱执行（非 dry-run 模式）
 	var sandboxRuns []store.SandboxRun
@@ -171,20 +173,22 @@ func run() error {
 		deniedCommands := make(map[string]bool)
 		for _, script := range []string{"go vet", "staticcheck"} {
 			decision := permPolicy.Evaluate(script)
-			store.SavePermissionDecision(db, &store.PermissionDecision{
+			if err := store.SavePermissionDecision(db, &store.PermissionDecision{
 				TaskID:   taskID,
 				Command:  script,
 				Decision: string(decision.Decision),
 				Reason:   decision.Reason,
-			})
+			}); err != nil {
+				log.Printf("Warning: failed to save permission decision: %v", err)
+			}
 			if decision.Decision == "deny" {
 				deniedCommands[script] = true
 			}
 		}
 
-		// 只有命令未被拒绝时才执行
+		// Only execute if commands are not denied
 		if !deniedCommands["go vet"] && !deniedCommands["staticcheck"] {
-			// 根据执行器类型创建沙箱
+			// Create sandbox executor based on type
 			var sandboxExec *sandbox.Executor
 			switch *flagExec {
 			case "container":
@@ -201,22 +205,39 @@ func run() error {
 			}
 			sandboxRuns = runs
 
-			// 保存沙箱执行记录
+			// Save sandbox run records and check for failures
+			sandboxFailed := false
 			for _, run := range sandboxRuns {
-				store.SaveSandboxRun(db, &run)
+				if err := store.SaveSandboxRun(db, &run); err != nil {
+					log.Printf("Warning: failed to save sandbox run: %v", err)
+				}
+				if run.ExitCode != 0 {
+					sandboxFailed = true
+				}
+			}
+
+			// Mark task as failed if sandbox execution failed
+			if sandboxFailed {
+				store.UpdateTaskStatus(db, taskID, "failed", "sandbox execution failed")
 			}
 		} else {
 			log.Printf("Warning: sandbox execution skipped due to permission denial")
 		}
 	}
 
-	// 9. 敏感信息脱敏检查
+	// 9. Sensitive information redaction
 	for i := range uniqueFindings {
 		if secretDetector.Detect(uniqueFindings[i].Evidence) {
 			uniqueFindings[i].Evidence = "<redacted>"
 		}
 		if secretDetector.Detect(uniqueFindings[i].Description) {
 			uniqueFindings[i].Description = secretDetector.RedactText(uniqueFindings[i].Description)
+		}
+		if secretDetector.Detect(uniqueFindings[i].Title) {
+			uniqueFindings[i].Title = secretDetector.RedactText(uniqueFindings[i].Title)
+		}
+		if secretDetector.Detect(uniqueFindings[i].Recommendation) {
+			uniqueFindings[i].Recommendation = secretDetector.RedactText(uniqueFindings[i].Recommendation)
 		}
 	}
 
@@ -416,16 +437,23 @@ func readDiffContent(diffFile string) string {
 	return string(content)
 }
 
-// parseAIFindings 解析 AI 返回的 findings
+// parseAIFindings parses findings from AI response
 func parseAIFindings(response string, taskID string) []store.Finding {
 	findings := make([]store.Finding, 0)
 
-	// 尝试解析 JSON
+	// Strip markdown code fences if present
+	response = strings.TrimPrefix(response, "```json")
+	response = strings.TrimPrefix(response, "```")
+	response = strings.TrimSuffix(response, "```")
+	response = strings.TrimSpace(response)
+
+	// Try to parse JSON
 	var result struct {
 		Findings []store.Finding `json:"findings"`
 	}
 
 	if err := json.Unmarshal([]byte(response), &result); err != nil {
+		log.Printf("Warning: failed to parse AI findings JSON: %v", err)
 		return findings
 	}
 

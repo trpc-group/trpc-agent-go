@@ -35,18 +35,16 @@ func NewRuleEngine() *RuleEngine {
 		rules: make([]Rule, 0),
 	}
 
-	// 注册内置规则（使用预编译的正则表达式）
+	// Register built-in rules (with pre-compiled regex patterns)
+	// Note: ErrorHandlingRule, NilCheckRule, and DeferInLoopRule are disabled
+	// because they require AST analysis for accurate detection
 	engine.Register(NewSQLInjectionRule())
 	engine.Register(NewSensitiveInfoRule())
 	engine.Register(&GoroutineLeakRule{})
 	engine.Register(NewContextLeakRule())
 	engine.Register(NewResourceLeakRule())
-	engine.Register(NewErrorHandlingRule())
 	engine.Register(NewMissingTestRule())
 	engine.Register(NewDatabaseTransactionRule())
-	// Go 特定规则
-	engine.Register(&NilCheckRule{})
-	engine.Register(NewDeferInLoopRule())
 	engine.Register(NewErrorWrapRule())
 
 	return engine
@@ -344,12 +342,19 @@ func (r *ResourceLeakRule) Severity() string { return "high" }
 func (r *ResourceLeakRule) Check(file *input.DiffFile, changes []input.Change) []store.Finding {
 	findings := make([]store.Finding, 0)
 
+	// Track open/close state per function scope
 	hasOpen := false
 	openLine := 0
 
 	for _, change := range changes {
 		if change.Type != "add" {
 			continue
+		}
+
+		// Check for new function declaration - reset state
+		if strings.HasPrefix(strings.TrimSpace(change.Content), "func ") {
+			hasOpen = false
+			openLine = 0
 		}
 
 		if r.openPattern.MatchString(change.Content) {
@@ -362,6 +367,7 @@ func (r *ResourceLeakRule) Check(file *input.DiffFile, changes []input.Change) [
 
 		if hasOpen && r.closePattern.MatchString(change.Content) {
 			hasOpen = false
+			openLine = 0
 		}
 	}
 
@@ -520,12 +526,19 @@ func (r *DatabaseTransactionRule) Severity() string { return "high" }
 func (r *DatabaseTransactionRule) Check(file *input.DiffFile, changes []input.Change) []store.Finding {
 	findings := make([]store.Finding, 0)
 
+	// Track transaction state per function scope
 	hasBegin := false
 	beginLine := 0
 
 	for _, change := range changes {
 		if change.Type != "add" {
 			continue
+		}
+
+		// Check for new function declaration - reset state
+		if strings.HasPrefix(strings.TrimSpace(change.Content), "func ") {
+			hasBegin = false
+			beginLine = 0
 		}
 
 		if r.beginPattern.MatchString(change.Content) {
@@ -538,6 +551,7 @@ func (r *DatabaseTransactionRule) Check(file *input.DiffFile, changes []input.Ch
 
 		if hasBegin && (r.commitPattern.MatchString(change.Content) || r.rollbackPattern.MatchString(change.Content)) {
 			hasBegin = false
+			beginLine = 0
 		}
 	}
 

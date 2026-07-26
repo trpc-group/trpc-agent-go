@@ -221,7 +221,7 @@ func SaveMarkdown(report *ReviewReport, filename string) error {
 	return os.WriteFile(filename, []byte(content), 0644)
 }
 
-// GenerateMarkdownString 生成 Markdown 字符串
+// GenerateMarkdownString generates Markdown report string
 func GenerateMarkdownString(report *ReviewReport) string {
 	var sb strings.Builder
 
@@ -229,6 +229,7 @@ func GenerateMarkdownString(report *ReviewReport) string {
 	sb.WriteString(fmt.Sprintf("**Task ID:** %s\n", report.TaskID))
 	sb.WriteString(fmt.Sprintf("**Timestamp:** %s\n\n", report.Timestamp.Format(time.RFC3339)))
 
+	// Summary
 	sb.WriteString("## Summary\n\n")
 	sb.WriteString(fmt.Sprintf("- **Total Findings:** %d\n", report.Summary.TotalFindings))
 	sb.WriteString(fmt.Sprintf("- **Critical:** %d\n", report.Summary.CriticalCount))
@@ -238,6 +239,7 @@ func GenerateMarkdownString(report *ReviewReport) string {
 	sb.WriteString(fmt.Sprintf("- **Overall Risk:** %s\n", report.Summary.OverallRisk))
 	sb.WriteString(fmt.Sprintf("- **Duration:** %dms\n\n", report.Summary.DurationMs))
 
+	// Findings
 	if len(report.Findings) > 0 {
 		sb.WriteString("## Findings\n\n")
 		for i, f := range report.Findings {
@@ -254,6 +256,48 @@ func GenerateMarkdownString(report *ReviewReport) string {
 				sb.WriteString(fmt.Sprintf("**Recommendation:** %s\n\n", f.Recommendation))
 			}
 		}
+	}
+
+	// Warnings
+	if len(report.Warnings) > 0 {
+		sb.WriteString("## Warnings\n\n")
+		for _, w := range report.Warnings {
+			sb.WriteString(fmt.Sprintf("- **%s** (%s:%d) - %s\n", w.Title, w.File, w.Line, w.Description))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Sandbox Runs
+	if len(report.Sandbox) > 0 {
+		sb.WriteString("## Sandbox Runs\n\n")
+		for _, s := range report.Sandbox {
+			status := "✅"
+			if s.ExitCode != 0 {
+				status = "❌"
+			}
+			sb.WriteString(fmt.Sprintf("- %s %s (exit: %d, %dms)\n", status, s.ScriptName, s.ExitCode, s.DurationMs))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Permission Decisions
+	if len(report.PermissionDecisions) > 0 {
+		sb.WriteString("## Permission Decisions\n\n")
+		for _, p := range report.PermissionDecisions {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s (%s)\n", p.Command, p.Decision, p.Reason))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Monitoring
+	if report.Monitoring != nil {
+		sb.WriteString("## Monitoring\n\n")
+		sb.WriteString(fmt.Sprintf("- **Total Duration:** %dms\n", report.Monitoring.TotalDurationMs))
+		sb.WriteString(fmt.Sprintf("- **Sandbox Duration:** %dms\n", report.Monitoring.SandboxDurationMs))
+		sb.WriteString(fmt.Sprintf("- **Tool Calls:** %d\n", report.Monitoring.ToolCallsCount))
+		sb.WriteString(fmt.Sprintf("- **Permission Blocks:** %d\n", report.Monitoring.PermissionBlocksCount))
+		sb.WriteString(fmt.Sprintf("- **Findings Count:** %d\n", report.Monitoring.FindingsCount))
+		sb.WriteString("\n")
 	}
 
 	return sb.String()
