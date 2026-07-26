@@ -26,6 +26,11 @@ import (
 	"go.opentelemetry.io/otel/baggage"
 )
 
+// The SDK's batch processor permits a single export to take up to 30 seconds.
+// Shutdown needs a longer but still finite window so a final batch can finish
+// or retry instead of silently dropping the Agent's last model and tool spans.
+const langfuseCleanupTimeout = time.Minute
+
 var (
 	langfusePublicKey = flag.String("langfuse-public-key", os.Getenv("LANGFUSE_PUBLIC_KEY"), "Langfuse public key")
 	langfuseSecretKey = flag.String("langfuse-secret-key", os.Getenv("LANGFUSE_SECRET_KEY"), "Langfuse secret key")
@@ -34,10 +39,13 @@ var (
 	langfuseInsecure  = flag.Bool("langfuse-insecure", false, "Use insecure Langfuse transport")
 )
 
-// The SDK's batch processor permits a single export to take up to 30 seconds.
-// Shutdown needs a longer but still finite window so a final batch can finish
-// or retry instead of silently dropping the Agent's last model and tool spans.
-const langfuseCleanupTimeout = time.Minute
+type langfuseConfig struct {
+	publicKey string
+	secretKey string
+	host      string
+	insecure  bool
+	enabled   bool
+}
 
 func setupLangfuseRun(
 	ctx context.Context,
@@ -73,14 +81,6 @@ func setupLangfuseRun(
 	}
 
 	return runContext, runOptions, cleanup, nil
-}
-
-type langfuseConfig struct {
-	publicKey string
-	secretKey string
-	host      string
-	insecure  bool
-	enabled   bool
 }
 
 func startLangfuseTraceIfConfigured(

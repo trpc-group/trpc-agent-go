@@ -152,16 +152,6 @@ type PreparedInput struct {
 	cleanup         func() error
 }
 
-// Close releases task-owned temporary snapshot files.
-func (p *PreparedInput) Close() error {
-	if p == nil || p.cleanup == nil {
-		return nil
-	}
-	cleanup := p.cleanup
-	p.cleanup = nil
-	return cleanup()
-}
-
 // ArtifactStore is the small portion of artifact.Service used while preparing
 // review input. artifact.Service itself satisfies this interface.
 type ArtifactStore interface {
@@ -176,6 +166,16 @@ type Limits struct {
 	MaxHunks        int
 	MaxHunkBytes    int
 	GitTimeout      time.Duration
+}
+
+// Close releases task-owned temporary snapshot files.
+func (p *PreparedInput) Close() error {
+	if p == nil || p.cleanup == nil {
+		return nil
+	}
+	cleanup := p.cleanup
+	p.cleanup = nil
+	return cleanup()
 }
 
 func (l Limits) withDefaults() Limits {

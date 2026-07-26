@@ -21,61 +21,12 @@ import (
 )
 
 const (
-	requestToolPermissionName = "request_tool_permission"
-	submitReviewResultsName   = "submit_review_results"
-)
-
-const (
+	requestToolPermissionName      = "request_tool_permission"
+	submitReviewResultsName        = "submit_review_results"
 	permissionStatusGranted        = "granted"
 	permissionStatusDenied         = tool.PermissionResultStatusDenied
 	permissionStatusApprovalNeeded = tool.PermissionResultStatusApprovalRequired
 )
-
-func requestToolPermissionInputSchema() *tool.Schema {
-	return &tool.Schema{
-		Type: "object",
-		Properties: map[string]*tool.Schema{
-			"target_tool": {
-				Type:        "string",
-				Description: "Exact model-visible name of the tool that returned approval_required.",
-			},
-			"target_arguments": {
-				Type:                 "object",
-				Description:          "Complete argument object that will be copied when retrying the target tool.",
-				AdditionalProperties: true,
-			},
-			"reason": {
-				Type:        "string",
-				Description: "Concise user-facing Reason explaining why this target tool call is needed.",
-			},
-		},
-		Required:             []string{"target_tool", "target_arguments", "reason"},
-		AdditionalProperties: false,
-	}
-}
-
-func requestToolPermissionOutputSchema() *tool.Schema {
-	return &tool.Schema{
-		Type: "object",
-		Properties: map[string]*tool.Schema{
-			"status": {
-				Type: "string",
-				Enum: []any{
-					permissionStatusGranted,
-					permissionStatusDenied,
-					permissionStatusApprovalNeeded,
-				},
-			},
-			"target_tool": {Type: "string"},
-			"target_arguments": {
-				Type:                 "object",
-				AdditionalProperties: true,
-			},
-		},
-		Required:             []string{"status", "target_tool", "target_arguments"},
-		AdditionalProperties: false,
-	}
-}
 
 type requestToolPermissionInput struct {
 	TargetTool      string                     `json:"target_tool"`
@@ -87,6 +38,33 @@ type requestToolPermissionOutput struct {
 	TargetTool      string                     `json:"target_tool"`
 	TargetArguments map[string]json.RawMessage `json:"target_arguments"`
 	Status          string                     `json:"status"`
+}
+
+type submitReviewResultsInput struct {
+	Findings         []reviewResultInput `json:"findings" jsonschema:"description=High-confidence findings after a mandatory root-cause merge pass; if one edit fixes two observations submit one finding in the most-specific category and merge the evidence,required"`
+	Warnings         []reviewResultInput `json:"warnings" jsonschema:"description=Low-confidence warnings that should not be mixed into findings,required"`
+	NeedsHumanReview []reviewResultInput `json:"needs_human_review" jsonschema:"description=Items that require human review before being treated as findings,required"`
+	Conclusion       string              `json:"conclusion" jsonschema:"description=Short final conclusion for the current review task,required"`
+}
+
+type reviewResultInput struct {
+	Severity       string  `json:"severity" jsonschema:"description=Review severity: critical, high, medium, low, or warning"`
+	Category       string  `json:"category" jsonschema:"description=Most-specific review category: correctness, security, sensitive_info, concurrency, resource_lifecycle, error_handling, tests, or database_lifecycle. Use database_lifecycle for database/sql resources. Correctness is only a fallback; a missing Close is one lifecycle item and a removed cancellation path plus its unused context is one concurrency item"`
+	File           string  `json:"file" jsonschema:"description=Repository-relative file path"`
+	Line           int     `json:"line" jsonschema:"description=Line number for the issue, or 0 when no exact line is available"`
+	Title          string  `json:"title" jsonschema:"description=Concise title for the review item"`
+	Evidence       string  `json:"evidence" jsonschema:"description=Concrete evidence from the diff, tool output, or inspected code"`
+	Recommendation string  `json:"recommendation" jsonschema:"description=Actionable fix recommendation,required"`
+	Confidence     float64 `json:"confidence" jsonschema:"description=Confidence score from 0 to 1"`
+	Source         string  `json:"source" jsonschema:"description=Evidence source, such as agent, skill, static_rule, sandbox, go_test, go_vet"`
+	RuleID         string  `json:"rule_id" jsonschema:"description=Rule id or check id that produced the item"`
+}
+
+type submitReviewResultsOutput struct {
+	Status           string `json:"status"`
+	FindingCount     int    `json:"finding_count"`
+	WarningCount     int    `json:"warning_count"`
+	HumanReviewCount int    `json:"human_review_count"`
 }
 
 func (g *governedExecution) requestToolPermission(
@@ -199,33 +177,6 @@ func newSubmitReviewResultsTool(recorder *reviewRecorder) tool.Tool {
 	)
 }
 
-type submitReviewResultsInput struct {
-	Findings         []reviewResultInput `json:"findings" jsonschema:"description=High-confidence findings after a mandatory root-cause merge pass; if one edit fixes two observations submit one finding in the most-specific category and merge the evidence,required"`
-	Warnings         []reviewResultInput `json:"warnings" jsonschema:"description=Low-confidence warnings that should not be mixed into findings,required"`
-	NeedsHumanReview []reviewResultInput `json:"needs_human_review" jsonschema:"description=Items that require human review before being treated as findings,required"`
-	Conclusion       string              `json:"conclusion" jsonschema:"description=Short final conclusion for the current review task,required"`
-}
-
-type reviewResultInput struct {
-	Severity       string  `json:"severity" jsonschema:"description=Review severity: critical, high, medium, low, or warning"`
-	Category       string  `json:"category" jsonschema:"description=Most-specific review category: correctness, security, sensitive_info, concurrency, resource_lifecycle, error_handling, tests, or database_lifecycle. Use database_lifecycle for database/sql resources. Correctness is only a fallback; a missing Close is one lifecycle item and a removed cancellation path plus its unused context is one concurrency item"`
-	File           string  `json:"file" jsonschema:"description=Repository-relative file path"`
-	Line           int     `json:"line" jsonschema:"description=Line number for the issue, or 0 when no exact line is available"`
-	Title          string  `json:"title" jsonschema:"description=Concise title for the review item"`
-	Evidence       string  `json:"evidence" jsonschema:"description=Concrete evidence from the diff, tool output, or inspected code"`
-	Recommendation string  `json:"recommendation" jsonschema:"description=Actionable fix recommendation,required"`
-	Confidence     float64 `json:"confidence" jsonschema:"description=Confidence score from 0 to 1"`
-	Source         string  `json:"source" jsonschema:"description=Evidence source, such as agent, skill, static_rule, sandbox, go_test, go_vet"`
-	RuleID         string  `json:"rule_id" jsonschema:"description=Rule id or check id that produced the item"`
-}
-
-type submitReviewResultsOutput struct {
-	Status           string `json:"status"`
-	FindingCount     int    `json:"finding_count"`
-	WarningCount     int    `json:"warning_count"`
-	HumanReviewCount int    `json:"human_review_count"`
-}
-
 func submitReviewResults(
 	ctx context.Context,
 	recorder *reviewRecorder,
@@ -260,4 +211,50 @@ func submitReviewResults(
 		WarningCount:     counts.WarningCount,
 		HumanReviewCount: counts.HumanReviewCount,
 	}, nil
+}
+
+func requestToolPermissionInputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"target_tool": {
+				Type:        "string",
+				Description: "Exact model-visible name of the tool that returned approval_required.",
+			},
+			"target_arguments": {
+				Type:                 "object",
+				Description:          "Complete argument object that will be copied when retrying the target tool.",
+				AdditionalProperties: true,
+			},
+			"reason": {
+				Type:        "string",
+				Description: "Concise user-facing Reason explaining why this target tool call is needed.",
+			},
+		},
+		Required:             []string{"target_tool", "target_arguments", "reason"},
+		AdditionalProperties: false,
+	}
+}
+
+func requestToolPermissionOutputSchema() *tool.Schema {
+	return &tool.Schema{
+		Type: "object",
+		Properties: map[string]*tool.Schema{
+			"status": {
+				Type: "string",
+				Enum: []any{
+					permissionStatusGranted,
+					permissionStatusDenied,
+					permissionStatusApprovalNeeded,
+				},
+			},
+			"target_tool": {Type: "string"},
+			"target_arguments": {
+				Type:                 "object",
+				AdditionalProperties: true,
+			},
+		},
+		Required:             []string{"status", "target_tool", "target_arguments"},
+		AdditionalProperties: false,
+	}
 }

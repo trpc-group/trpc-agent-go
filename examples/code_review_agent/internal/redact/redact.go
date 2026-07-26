@@ -203,6 +203,24 @@ func New() *Sanitizer {
 	}}
 }
 
+// AppendEventHook returns the framework-native Session persistence hook. It is
+// intentionally a final safety net; input and tool paths still redact before
+// they hand content to Session Service.
+func AppendEventHook(s *Sanitizer) session.AppendEventHook {
+	return func(ctx *session.AppendEventContext, next func() error) error {
+		if s == nil {
+			return errors.New("session redaction hook requires a sanitizer")
+		}
+		if ctx == nil {
+			return errors.New("session redaction hook received nil context")
+		}
+		if _, err := s.MaskEvent(ctx.Event); err != nil {
+			return err
+		}
+		return next()
+	}
+}
+
 // DetectAndMask replaces every detected credential and returns review-safe
 // signals. Multiline replacements preserve newline counts so diff navigation
 // and candidate-line mappings remain valid.
@@ -309,24 +327,6 @@ func (s *Sanitizer) MaskEvent(evt *event.Event) (count int, err error) {
 	return count, nil
 }
 
-// AppendEventHook returns the framework-native Session persistence hook. It is
-// intentionally a final safety net; input and tool paths still redact before
-// they hand content to Session Service.
-func AppendEventHook(s *Sanitizer) session.AppendEventHook {
-	return func(ctx *session.AppendEventContext, next func() error) error {
-		if s == nil {
-			return errors.New("session redaction hook requires a sanitizer")
-		}
-		if ctx == nil {
-			return errors.New("session redaction hook received nil context")
-		}
-		if _, err := s.MaskEvent(ctx.Event); err != nil {
-			return err
-		}
-		return next()
-	}
-}
-
 // findMatches orders candidates by position, then prefers the longest and
 // earlier-declared rule at the same position. That gives specific token rules
 // precedence over the generic assignment rule and keeps replacement offsets
@@ -392,6 +392,37 @@ func (s *Sanitizer) findMatches(input []byte) []match {
 	return filtered
 }
 
+// maskJSONValue recursively visits JSON string values while preserving arrays,
+// objects, numbers, and booleans. Tool results and Event JSON therefore keep a
+// model-compatible shape after masking.
+func (s *Sanitizer) maskJSONValue(value any) (maskedValue any, redactionCount int) {
+	switch typed := value.(type) {
+	case string:
+		result := s.DetectAndMask([]byte(typed))
+		return string(result.Masked), len(result.Signals)
+	case []any:
+		out := make([]any, len(typed))
+		count := 0
+		for i, item := range typed {
+			maskedItem, itemCount := s.maskJSONValue(item)
+			out[i] = maskedItem
+			count += itemCount
+		}
+		return out, count
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		count := 0
+		for key, item := range typed {
+			maskedItem, itemCount := s.maskJSONValue(item)
+			out[key] = maskedItem
+			count += itemCount
+		}
+		return out, count
+	default:
+		return value, 0
+	}
+}
+
 // replaceMatches consumes the non-overlapping offsets produced by findMatches.
 // PEM replacements retain their original newline count so diff navigation
 // stays stable even though the complete credential block is removed.
@@ -431,35 +462,4 @@ func lineAt(input []byte, offset int) []byte {
 func fingerprint(value []byte) string {
 	sum := sha256.Sum256(value)
 	return hex.EncodeToString(sum[:8])
-}
-
-// maskJSONValue recursively visits JSON string values while preserving arrays,
-// objects, numbers, and booleans. Tool results and Event JSON therefore keep a
-// model-compatible shape after masking.
-func (s *Sanitizer) maskJSONValue(value any) (maskedValue any, redactionCount int) {
-	switch typed := value.(type) {
-	case string:
-		result := s.DetectAndMask([]byte(typed))
-		return string(result.Masked), len(result.Signals)
-	case []any:
-		out := make([]any, len(typed))
-		count := 0
-		for i, item := range typed {
-			maskedItem, itemCount := s.maskJSONValue(item)
-			out[i] = maskedItem
-			count += itemCount
-		}
-		return out, count
-	case map[string]any:
-		out := make(map[string]any, len(typed))
-		count := 0
-		for key, item := range typed {
-			maskedItem, itemCount := s.maskJSONValue(item)
-			out[key] = maskedItem
-			count += itemCount
-		}
-		return out, count
-	default:
-		return value, 0
-	}
 }

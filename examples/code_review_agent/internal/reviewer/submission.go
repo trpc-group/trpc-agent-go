@@ -46,6 +46,11 @@ type unknownLineLiteralKey struct {
 	ruleID         string
 }
 
+type reviewSubmissionCandidate struct {
+	result store.ReviewResultRecord
+	origin string
+}
+
 type canonicalResultAccumulator struct {
 	result       store.ReviewResultRecord
 	firstOrigin  string
@@ -53,9 +58,32 @@ type canonicalResultAccumulator struct {
 	evidenceSeen map[string]struct{}
 }
 
-type reviewSubmissionCandidate struct {
-	result store.ReviewResultRecord
-	origin string
+func newCanonicalResultAccumulator(
+	result store.ReviewResultRecord,
+	origin string,
+) canonicalResultAccumulator {
+	return canonicalResultAccumulator{
+		result:       result,
+		firstOrigin:  origin,
+		evidence:     []string{result.Evidence},
+		evidenceSeen: map[string]struct{}{result.Evidence: {}},
+	}
+}
+
+func (a *canonicalResultAccumulator) merge(incoming store.ReviewResultRecord) {
+	if strongerReviewResult(incoming, a.result) {
+		a.result = incoming
+	}
+	if _, exists := a.evidenceSeen[incoming.Evidence]; !exists {
+		a.evidenceSeen[incoming.Evidence] = struct{}{}
+		a.evidence = append(a.evidence, incoming.Evidence)
+	}
+}
+
+func (a canonicalResultAccumulator) finalize() store.ReviewResultRecord {
+	result := a.result
+	result.Evidence = strings.Join(a.evidence, " Supporting evidence: ")
+	return result
 }
 
 // canonicalizeReviewSubmission validates and canonicalizes one complete tool
@@ -355,34 +383,6 @@ func literalKeyForUnknownLine(result store.ReviewResultRecord) unknownLineLitera
 		source:         result.Source,
 		ruleID:         result.RuleID,
 	}
-}
-
-func newCanonicalResultAccumulator(
-	result store.ReviewResultRecord,
-	origin string,
-) canonicalResultAccumulator {
-	return canonicalResultAccumulator{
-		result:       result,
-		firstOrigin:  origin,
-		evidence:     []string{result.Evidence},
-		evidenceSeen: map[string]struct{}{result.Evidence: {}},
-	}
-}
-
-func (a *canonicalResultAccumulator) merge(incoming store.ReviewResultRecord) {
-	if strongerReviewResult(incoming, a.result) {
-		a.result = incoming
-	}
-	if _, exists := a.evidenceSeen[incoming.Evidence]; !exists {
-		a.evidenceSeen[incoming.Evidence] = struct{}{}
-		a.evidence = append(a.evidence, incoming.Evidence)
-	}
-}
-
-func (a canonicalResultAccumulator) finalize() store.ReviewResultRecord {
-	result := a.result
-	result.Evidence = strings.Join(a.evidence, " Supporting evidence: ")
-	return result
 }
 
 func strongerReviewResult(candidate, current store.ReviewResultRecord) bool {

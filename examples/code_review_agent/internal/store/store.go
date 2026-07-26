@@ -307,6 +307,13 @@ WHERE task_id = ?`, conclusion, taskID)
 	return counts, nil
 }
 
+func (s *SQLite) ready() error {
+	if s == nil || s.db == nil {
+		return errors.New("sqlite store is not initialized")
+	}
+	return nil
+}
+
 func insertReviewResult(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -328,13 +335,6 @@ INSERT INTO review_results (
 		result.Source, result.RuleID, formatTime(result.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("save review result for task %s: %w", taskID, err)
-	}
-	return nil
-}
-
-func (s *SQLite) ready() error {
-	if s == nil || s.db == nil {
-		return errors.New("sqlite store is not initialized")
 	}
 	return nil
 }
@@ -381,7 +381,8 @@ func boolInt(value bool) int {
 	return 0
 }
 
-func formatTime(value time.Time) string        { return value.UTC().Format(time.RFC3339Nano) }
+func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+
 func durationMillis(value time.Duration) int64 { return value.Milliseconds() }
 
 func parseStoredTime(value string) (time.Time, error) {

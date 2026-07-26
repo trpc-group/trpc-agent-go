@@ -41,9 +41,10 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const codeReviewAgentName = "code_review_agent"
-
-const skillPath = "./skills"
+const (
+	codeReviewAgentName = "code_review_agent"
+	skillPath           = "./skills"
+)
 
 var reviewContainerEnvironment = []string{
 	"PATH=/usr/local/bin:/usr/local/go/bin:/usr/bin:/bin",
@@ -71,6 +72,32 @@ type ReviewStore interface {
 		string,
 	) (store.ReviewResultCounts, error)
 	LoadTaskSnapshot(context.Context, string) (store.ReviewSnapshot, error)
+}
+
+// Dependencies contains the durable services and shared sanitizer required to
+// construct a task-scoped Agent and Runner after review input is prepared.
+type Dependencies struct {
+	Store           ReviewStore
+	SessionService  session.Service
+	ArtifactService artifact.Service
+	Sanitizer       *redact.Sanitizer
+}
+
+// Validate checks that all required dependencies are provided
+func (d Dependencies) Validate() error {
+	if d.Store == nil {
+		return errors.New("review store is required")
+	}
+	if d.SessionService == nil {
+		return errors.New("session service is required")
+	}
+	if d.ArtifactService == nil {
+		return errors.New("artifact service is required")
+	}
+	if d.Sanitizer == nil {
+		return errors.New("sanitizer is required")
+	}
+	return nil
 }
 
 // reviewer is a code review agent that uses Agent Skills, governed workspace execution,
@@ -268,19 +295,6 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 	return outcome, nil
 }
 
-// Runner copies ArtifactService into agent.Invocation, and the workspace
-// resolver uses it while acquiring a workspace. workspace_exec reconciliation
-// later stages artifact:// requirements with the original tool context,
-// however, so that public context must carry the same task-scoped identity.
-func withWorkspaceArtifactContext(
-	ctx context.Context,
-	service artifact.Service,
-	info artifact.SessionInfo,
-) context.Context {
-	ctx = codeexecutor.WithArtifactService(ctx, service)
-	return codeexecutor.WithArtifactSession(ctx, info)
-}
-
 // validateReviewCompletion verifies that the Agent used the structured result
 // tool before stopping. Which Skill checks it runs belongs to the Skill and
 // model workflow, not reviewer orchestration.
@@ -347,6 +361,23 @@ func (r *reviewer) newRunner(
 	}, nil
 }
 
+func (r *reviewer) newReviewModel(fixture string) (configured model.Model, err error) {
+	switch r.config.Mode {
+	case "fake-model":
+		if fixture == "" {
+			return nil, errors.New("fixture is required when mode is fake-model")
+		}
+		return fakemodel.NewForFixture(fixture)
+	default:
+		return openai.New(
+			r.config.Model.Name,
+			openai.WithAPIKey(r.config.Model.APIKey),
+			openai.WithBaseURL(r.config.Model.BaseURL),
+			openai.WithVariant(openai.VariantDeepSeek),
+		), nil
+	}
+}
+
 // ownedReviewRunner closes the resources created together for one review task.
 // Framework Runner deliberately treats an injected CodeExecutor as borrowed, so
 // closing Runner alone cannot stop and remove the task's container.
@@ -372,6 +403,19 @@ func (r *ownedReviewRunner) Close() error {
 	return r.closeErr
 }
 
+// Runner copies ArtifactService into agent.Invocation, and the workspace
+// resolver uses it while acquiring a workspace. workspace_exec reconciliation
+// later stages artifact:// requirements with the original tool context,
+// however, so that public context must carry the same task-scoped identity.
+func withWorkspaceArtifactContext(
+	ctx context.Context,
+	service artifact.Service,
+	info artifact.SessionInfo,
+) context.Context {
+	ctx = codeexecutor.WithArtifactService(ctx, service)
+	return codeexecutor.WithArtifactSession(ctx, info)
+}
+
 func closeCodeExecutor(executor codeexecutor.CodeExecutor) error {
 	if executor == nil {
 		return nil
@@ -381,49 +425,6 @@ func closeCodeExecutor(executor codeexecutor.CodeExecutor) error {
 		return nil
 	}
 	return closer.Close()
-}
-
-func (r *reviewer) newReviewModel(fixture string) (configured model.Model, err error) {
-	switch r.config.Mode {
-	case "fake-model":
-		if fixture == "" {
-			return nil, errors.New("fixture is required when mode is fake-model")
-		}
-		return fakemodel.NewForFixture(fixture)
-	default:
-		return openai.New(
-			r.config.Model.Name,
-			openai.WithAPIKey(r.config.Model.APIKey),
-			openai.WithBaseURL(r.config.Model.BaseURL),
-			openai.WithVariant(openai.VariantDeepSeek),
-		), nil
-	}
-}
-
-// Dependencies contains the durable services and shared sanitizer required to
-// construct a task-scoped Agent and Runner after review input is prepared.
-type Dependencies struct {
-	Store           ReviewStore
-	SessionService  session.Service
-	ArtifactService artifact.Service
-	Sanitizer       *redact.Sanitizer
-}
-
-// Validate checks that all required dependencies are provided
-func (d Dependencies) Validate() error {
-	if d.Store == nil {
-		return errors.New("review store is required")
-	}
-	if d.SessionService == nil {
-		return errors.New("session service is required")
-	}
-	if d.ArtifactService == nil {
-		return errors.New("artifact service is required")
-	}
-	if d.Sanitizer == nil {
-		return errors.New("sanitizer is required")
-	}
-	return nil
 }
 
 // getSkillRepos return a skills repository

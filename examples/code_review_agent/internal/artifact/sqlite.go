@@ -23,12 +23,12 @@ import (
 // Per-artifact size limit (64 MiB).
 const defaultArtifactMaxBytes int64 = 64 * 1024 * 1024
 
-var _ trpcartifact.Service = (*sqliteArtifactService)(nil)
-
 type sqliteArtifactService struct {
 	db       *sql.DB
 	maxBytes int64
 }
+
+var _ trpcartifact.Service = (*sqliteArtifactService)(nil)
 
 // New creates an Artifact Service using an initialized caller-owned database.
 func New(db *sql.DB) (service trpcartifact.Service, err error) {

@@ -23,9 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
-const modelName = "fake-model"
-
 const (
+	modelName                 = "fake-model"
 	skillLoadTool             = "skill_load"
 	workspaceExecTool         = "workspace_exec"
 	requestToolPermissionTool = "request_tool_permission"
@@ -226,59 +225,6 @@ func (f *FakeModel) Info() model.Info {
 	}
 }
 
-func findingScenario(fixture string, finding reviewResult) scenario {
-	return scenario{
-		fixture: fixture,
-		submission: submission{
-			Findings:   []reviewResult{finding},
-			Conclusion: "One actionable issue found. Go checks completed successfully.",
-		},
-	}
-}
-
-func reviewChecksArguments() map[string]any {
-	return map[string]any{
-		"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
-		"timeout_sec": 120,
-	}
-}
-
-func duplicateFindingScenario() scenario {
-	findings := []reviewResult{
-		{
-			Severity: "high", Category: "resource_lifecycle", File: "http.go", Line: 19,
-			Title:          "HTTP response body is not closed",
-			Evidence:       "The response returned by http.Get leaves response.Body open on the successful path.",
-			Recommendation: "Defer response.Body.Close() after checking the error.",
-			Confidence:     0.99, Source: "agent", RuleID: "GO-RES-001",
-		},
-		{
-			Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
-			Title:          "Leaked HTTP response body",
-			Evidence:       "The changed success path returns without closing response.Body.",
-			Recommendation: "Restore a deferred response.Body.Close().",
-			Confidence:     0.96, Source: "skill", RuleID: "GO-RES-001",
-		},
-	}
-	corrected := submission{
-		Findings:   findings,
-		Conclusion: "One actionable resource lifecycle issue found. Go checks completed successfully.",
-	}
-	conflicting := corrected
-	conflicting.Warnings = []reviewResult{{
-		Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
-		Title:          "Response body cleanup needs review",
-		Evidence:       "The same response body observation was routed as a warning.",
-		Recommendation: "Choose one result collection for this rule and location.",
-		Confidence:     0.75, Source: "agent", RuleID: "GO-RES-001",
-	}}
-	return scenario{
-		fixture:         "acceptance-duplicate-finding",
-		submission:      conflicting,
-		retrySubmission: &corrected,
-	}
-}
-
 func (f *FakeModel) toolCall(request *model.Request, name string, arguments any) *model.Response {
 	if _, ok := request.Tools[name]; !ok {
 		available := make([]string, 0, len(request.Tools))
@@ -321,6 +267,59 @@ func (f *FakeModel) completion() *model.Response {
 			Message:      model.NewAssistantMessage("Review results submitted for " + f.scenario.fixture + "."),
 			FinishReason: &finishReason,
 		}},
+	}
+}
+
+func findingScenario(fixture string, finding reviewResult) scenario {
+	return scenario{
+		fixture: fixture,
+		submission: submission{
+			Findings:   []reviewResult{finding},
+			Conclusion: "One actionable issue found. Go checks completed successfully.",
+		},
+	}
+}
+
+func duplicateFindingScenario() scenario {
+	findings := []reviewResult{
+		{
+			Severity: "high", Category: "resource_lifecycle", File: "http.go", Line: 19,
+			Title:          "HTTP response body is not closed",
+			Evidence:       "The response returned by http.Get leaves response.Body open on the successful path.",
+			Recommendation: "Defer response.Body.Close() after checking the error.",
+			Confidence:     0.99, Source: "agent", RuleID: "GO-RES-001",
+		},
+		{
+			Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
+			Title:          "Leaked HTTP response body",
+			Evidence:       "The changed success path returns without closing response.Body.",
+			Recommendation: "Restore a deferred response.Body.Close().",
+			Confidence:     0.96, Source: "skill", RuleID: "GO-RES-001",
+		},
+	}
+	corrected := submission{
+		Findings:   findings,
+		Conclusion: "One actionable resource lifecycle issue found. Go checks completed successfully.",
+	}
+	conflicting := corrected
+	conflicting.Warnings = []reviewResult{{
+		Severity: "medium", Category: "resource_lifecycle", File: "http.go", Line: 19,
+		Title:          "Response body cleanup needs review",
+		Evidence:       "The same response body observation was routed as a warning.",
+		Recommendation: "Choose one result collection for this rule and location.",
+		Confidence:     0.75, Source: "agent", RuleID: "GO-RES-001",
+	}}
+	return scenario{
+		fixture:         "acceptance-duplicate-finding",
+		submission:      conflicting,
+		retrySubmission: &corrected,
+	}
+}
+
+func reviewChecksArguments() map[string]any {
+	return map[string]any{
+		"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"timeout_sec": 120,
 	}
 }
 

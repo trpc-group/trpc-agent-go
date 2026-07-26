@@ -27,8 +27,8 @@ import (
 )
 
 const (
-	workspaceExecToolName = "workspace_exec"
-	reviewChecksCommand   = "run-go-checks.sh"
+	workspaceExecToolName  = "workspace_exec"
+	reviewChecksCommand    = "run-go-checks.sh"
 	workspaceTimeoutBudget = 5 * time.Minute
 
 	decisionKindToolPermission    = "tool_permission"
@@ -73,6 +73,13 @@ type governedExecution struct {
 type grantKey struct {
 	ToolName string
 	Identity string
+}
+
+// workspacePolicyFields is the minimal subset this example validates. Full raw
+// JSON remains the identity and audit source; unknown fields are never dropped.
+type workspacePolicyFields struct {
+	Command string
+	CWD     string
 }
 
 func newGovernedExecution(
@@ -297,13 +304,6 @@ func approvalIdentity(toolName string, arguments []byte) (string, error) {
 		return "", fmt.Errorf("canonical workspace_exec identity: %w", err)
 	}
 	return string(identity), nil
-}
-
-// workspacePolicyFields is the minimal subset this example validates. Full raw
-// JSON remains the identity and audit source; unknown fields are never dropped.
-type workspacePolicyFields struct {
-	Command string
-	CWD     string
 }
 
 // validateWorkspacePolicy enforces this example's non-overridable workspace
