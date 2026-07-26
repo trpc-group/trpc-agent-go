@@ -25,7 +25,7 @@ type SQLite struct {
 }
 
 // NewSQLite creates a review store using an initialized caller-owned database.
-func NewSQLite(db *sql.DB) (store *SQLite, err error) {
+func NewSQLite(db *sql.DB) (*SQLite, error) {
 	if db == nil {
 		return nil, errors.New("sqlite database is required")
 	}
@@ -43,27 +43,9 @@ func (s *SQLite) SaveTask(ctx context.Context, task ReviewTaskRecord) error {
 	if task.StartedAt.IsZero() {
 		task.StartedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO review_tasks (
-	task_id, app_name, user_id, task_status, input_kind, input_summary_json,
-	input_artifact_name, input_artifact_version, monitoring_summary_json,
-	conclusion, json_report_name, json_report_version, markdown_report_name,
-	markdown_report_version, started_at, finished_at, error_type, error_message
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(task_id) DO UPDATE SET
-	app_name = excluded.app_name, user_id = excluded.user_id,
-	task_status = excluded.task_status, input_kind = excluded.input_kind,
-	input_summary_json = excluded.input_summary_json,
-	input_artifact_name = excluded.input_artifact_name,
-	input_artifact_version = excluded.input_artifact_version,
-	monitoring_summary_json = excluded.monitoring_summary_json,
-	conclusion = excluded.conclusion, json_report_name = excluded.json_report_name,
-	json_report_version = excluded.json_report_version,
-	markdown_report_name = excluded.markdown_report_name,
-	markdown_report_version = excluded.markdown_report_version,
-	started_at = excluded.started_at, finished_at = excluded.finished_at,
-	error_type = excluded.error_type, error_message = excluded.error_message,
-	updated_at = CURRENT_TIMESTAMP`,
+
+	// Argument order matches _sqlUpsertReviewTask column list.
+	_, err := s.db.ExecContext(ctx, _sqlUpsertReviewTask,
 		task.TaskID,
 		task.AppName,
 		task.UserID,
@@ -90,74 +72,38 @@ ON CONFLICT(task_id) DO UPDATE SET
 }
 
 // UpdateTaskInput records the durable projection of prepared review input.
-func (s *SQLite) UpdateTaskInput(ctx context.Context, taskID string, input TaskInputRecord) error {
+func (s *SQLite) UpdateTaskInput(
+	ctx context.Context,
+	taskID string,
+	input TaskInputRecord,
+) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
 	if taskID == "" || input.InputKind == "" || input.InputArtifactName == "" {
 		return errors.New("task input requires task id, input kind, and artifact name")
 	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET input_kind = ?, input_summary_json = ?,
-	input_artifact_name = ?, input_artifact_version = ?,
-	updated_at = CURRENT_TIMESTAMP WHERE task_id = ?`,
-		input.InputKind, jsonDefault(input.InputSummaryJSON, "{}"),
-		input.InputArtifactName, input.InputArtifactVersion, taskID)
+
+	// Argument order matches _sqlUpdateTaskInput SET / WHERE columns.
+	result, err := s.db.ExecContext(ctx, _sqlUpdateTaskInput,
+		input.InputKind,
+		jsonDefault(input.InputSummaryJSON, "{}"),
+		input.InputArtifactName,
+		input.InputArtifactVersion,
+		taskID,
+	)
 	if err != nil {
 		return fmt.Errorf("update review task input %s: %w", taskID, err)
 	}
 	return requireUpdatedTask(result, taskID)
 }
 
-// FinalizeTask atomically publishes the complete terminal task projection.
-func (s *SQLite) FinalizeTask(
+// SavePermissionDecision records a governance decision made before execution.
+func (s *SQLite) SavePermissionDecision(
 	ctx context.Context,
 	taskID string,
-	finalization TaskFinalization,
+	decision PermissionDecisionRecord,
 ) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
-	if taskID == "" {
-		return errors.New("review task id is required")
-	}
-	switch finalization.Status {
-	case "completed", "failed", "canceled":
-	default:
-		return fmt.Errorf("invalid terminal review task status %q", finalization.Status)
-	}
-	if !json.Valid([]byte(finalization.MonitoringSummaryJSON)) {
-		return errors.New("monitoring summary must be valid JSON")
-	}
-	if finalization.FinishedAt.IsZero() {
-		finalization.FinishedAt = time.Now()
-	}
-	var jsonName, markdownName any
-	var jsonVersion, markdownVersion any
-	if finalization.Reports != nil {
-		if finalization.Reports.JSONName == "" || finalization.Reports.MarkdownName == "" {
-			return errors.New("JSON and Markdown report names are required")
-		}
-		jsonName, jsonVersion = finalization.Reports.JSONName, finalization.Reports.JSONVersion
-		markdownName, markdownVersion = finalization.Reports.MarkdownName, finalization.Reports.MarkdownVersion
-	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET task_status = ?, monitoring_summary_json = ?,
-	json_report_name = ?, json_report_version = ?, markdown_report_name = ?,
-	markdown_report_version = ?, finished_at = ?, error_type = ?,
-	error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE task_id = ?`,
-		finalization.Status, finalization.MonitoringSummaryJSON,
-		jsonName, jsonVersion, markdownName, markdownVersion,
-		formatTime(finalization.FinishedAt), nullableString(finalization.ErrorType),
-		nullableString(finalization.ErrorMessage), taskID)
-	if err != nil {
-		return fmt.Errorf("finalize review task %s: %w", taskID, err)
-	}
-	return requireUpdatedTask(result, taskID)
-}
-
-// SavePermissionDecision records a governance decision made before execution.
-func (s *SQLite) SavePermissionDecision(ctx context.Context, taskID string, decision PermissionDecisionRecord) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -167,15 +113,19 @@ func (s *SQLite) SavePermissionDecision(ctx context.Context, taskID string, deci
 	if decision.DecidedAt.IsZero() {
 		decision.DecidedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO permission_decisions (
-	task_id, tool_call_id, decision_kind, operation, tool_name,
-	command_preview, decision, reason, decided_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, taskID, nullableString(decision.ToolCallID),
+
+	// Argument order matches _sqlSavePermissionDecision column list.
+	_, err := s.db.ExecContext(ctx, _sqlSavePermissionDecision,
+		taskID,
+		nullableString(decision.ToolCallID),
 		emptyDefault(decision.DecisionKind, "tool_permission"),
-		emptyDefault(decision.Operation, "tool_call"), nullableString(decision.ToolName),
-		nullableString(decision.CommandPreview), emptyDefault(decision.Decision, "allow"),
-		nullableString(decision.Reason), formatTime(decision.DecidedAt))
+		emptyDefault(decision.Operation, "tool_call"),
+		nullableString(decision.ToolName),
+		nullableString(decision.CommandPreview),
+		emptyDefault(decision.Decision, "allow"),
+		nullableString(decision.Reason),
+		formatTime(decision.DecidedAt),
+	)
 	if err != nil {
 		return fmt.Errorf("save permission decision for task %s: %w", taskID, err)
 	}
@@ -183,7 +133,11 @@ INSERT INTO permission_decisions (
 }
 
 // SaveSandboxRun records one governed workspace execution attempt.
-func (s *SQLite) SaveSandboxRun(ctx context.Context, taskID string, run SandboxRunRecord) error {
+func (s *SQLite) SaveSandboxRun(
+	ctx context.Context,
+	taskID string,
+	run SandboxRunRecord,
+) error {
 	if err := s.ready(); err != nil {
 		return err
 	}
@@ -193,18 +147,26 @@ func (s *SQLite) SaveSandboxRun(ctx context.Context, taskID string, run SandboxR
 	if run.StartedAt.IsZero() {
 		run.StartedAt = time.Now()
 	}
-	_, err := s.db.ExecContext(ctx, `
-INSERT INTO sandbox_runs (
-	task_id, tool_call_id, backend, workdir, command_preview, sandbox_status,
-	exit_code, timed_out, output_summary, output_truncated, redaction_count,
-	started_at, finished_at, duration_ms, error_type, error_message
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		taskID, nullableString(run.ToolCallID), emptyDefault(run.Backend, "unknown"),
-		nullableString(run.Workdir), run.CommandPreview,
-		emptyDefault(run.Status, "succeeded"), nullableInt(run.ExitCode), boolInt(run.TimedOut),
-		nullableString(run.OutputSummary), boolInt(run.OutputTruncated), run.RedactionCount,
-		formatTime(run.StartedAt), nullableTime(run.FinishedAt), durationMillis(run.Duration),
-		nullableString(run.ErrorType), nullableString(run.ErrorMessage))
+
+	// Argument order matches _sqlSaveSandboxRun column list.
+	_, err := s.db.ExecContext(ctx, _sqlSaveSandboxRun,
+		taskID,
+		nullableString(run.ToolCallID),
+		emptyDefault(run.Backend, "unknown"),
+		nullableString(run.Workdir),
+		run.CommandPreview,
+		emptyDefault(run.Status, "succeeded"),
+		nullableInt(run.ExitCode),
+		boolInt(run.TimedOut),
+		nullableString(run.OutputSummary),
+		boolInt(run.OutputTruncated),
+		run.RedactionCount,
+		formatTime(run.StartedAt),
+		nullableTime(run.FinishedAt),
+		durationMillis(run.Duration),
+		nullableString(run.ErrorType),
+		nullableString(run.ErrorMessage),
+	)
 	if err != nil {
 		return fmt.Errorf("save sandbox run for task %s: %w", taskID, err)
 	}
@@ -227,6 +189,7 @@ func (s *SQLite) SubmitReviewResults(
 	if taskID == "" {
 		return ReviewResultCounts{}, errors.New("review task id is required")
 	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ReviewResultCounts{}, fmt.Errorf(
@@ -239,8 +202,7 @@ func (s *SQLite) SubmitReviewResults(
 
 	// Acquire the SQLite write transaction and reject an unknown task before
 	// replacing any projection rows.
-	confirmed, err := tx.ExecContext(ctx, `
-UPDATE review_tasks SET updated_at = updated_at WHERE task_id = ?`, taskID)
+	confirmed, err := tx.ExecContext(ctx, _sqlTouchReviewTask, taskID)
 	if err != nil {
 		return ReviewResultCounts{}, fmt.Errorf(
 			"confirm review task %s: %w",
@@ -251,11 +213,8 @@ UPDATE review_tasks SET updated_at = updated_at WHERE task_id = ?`, taskID)
 	if err := requireUpdatedTask(confirmed, taskID); err != nil {
 		return ReviewResultCounts{}, err
 	}
-	if _, err := tx.ExecContext(
-		ctx,
-		`DELETE FROM review_results WHERE task_id = ?`,
-		taskID,
-	); err != nil {
+
+	if _, err := tx.ExecContext(ctx, _sqlDeleteReviewResults, taskID); err != nil {
 		return ReviewResultCounts{}, fmt.Errorf(
 			"replace review results for task %s: %w",
 			taskID,
@@ -284,9 +243,7 @@ UPDATE review_tasks SET updated_at = updated_at WHERE task_id = ?`, taskID)
 		}
 	}
 
-	updated, err := tx.ExecContext(ctx, `
-UPDATE review_tasks SET conclusion = ?, updated_at = CURRENT_TIMESTAMP
-WHERE task_id = ?`, conclusion, taskID)
+	updated, err := tx.ExecContext(ctx, _sqlUpdateTaskConclusion, conclusion, taskID)
 	if err != nil {
 		return ReviewResultCounts{}, fmt.Errorf(
 			"update review task conclusion %s: %w",
@@ -307,6 +264,66 @@ WHERE task_id = ?`, conclusion, taskID)
 	return counts, nil
 }
 
+// FinalizeTask atomically publishes the complete terminal task projection.
+func (s *SQLite) FinalizeTask(
+	ctx context.Context,
+	taskID string,
+	finalization TaskFinalization,
+) error {
+	if err := s.ready(); err != nil {
+		return err
+	}
+	if taskID == "" {
+		return errors.New("review task id is required")
+	}
+	switch finalization.Status {
+	case "completed", "failed", "canceled":
+	default:
+		return fmt.Errorf("invalid terminal review task status %q", finalization.Status)
+	}
+	if !json.Valid([]byte(finalization.MonitoringSummaryJSON)) {
+		return errors.New("monitoring summary must be valid JSON")
+	}
+	if finalization.FinishedAt.IsZero() {
+		finalization.FinishedAt = time.Now()
+	}
+
+	var (
+		jsonName        any
+		jsonVersion     any
+		markdownName    any
+		markdownVersion any
+	)
+	if finalization.Reports != nil {
+		if finalization.Reports.JSONName == "" ||
+			finalization.Reports.MarkdownName == "" {
+			return errors.New("JSON and Markdown report names are required")
+		}
+		jsonName = finalization.Reports.JSONName
+		jsonVersion = finalization.Reports.JSONVersion
+		markdownName = finalization.Reports.MarkdownName
+		markdownVersion = finalization.Reports.MarkdownVersion
+	}
+
+	// Argument order matches _sqlFinalizeTask SET / WHERE columns.
+	result, err := s.db.ExecContext(ctx, _sqlFinalizeTask,
+		finalization.Status,
+		finalization.MonitoringSummaryJSON,
+		jsonName,
+		jsonVersion,
+		markdownName,
+		markdownVersion,
+		formatTime(finalization.FinishedAt),
+		nullableString(finalization.ErrorType),
+		nullableString(finalization.ErrorMessage),
+		taskID,
+	)
+	if err != nil {
+		return fmt.Errorf("finalize review task %s: %w", taskID, err)
+	}
+	return requireUpdatedTask(result, taskID)
+}
+
 func (s *SQLite) ready() error {
 	if s == nil || s.db == nil {
 		return errors.New("sqlite store is not initialized")
@@ -323,16 +340,23 @@ func insertReviewResult(
 	if result.CreatedAt.IsZero() {
 		result.CreatedAt = time.Now()
 	}
-	_, err := tx.ExecContext(ctx, `
-INSERT INTO review_results (
-	task_id, result_kind, severity, category, file_path, line, title, evidence,
-	recommendation, confidence, source, rule_id, created_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+
+	// Argument order matches _sqlInsertReviewResult column list.
+	_, err := tx.ExecContext(ctx, _sqlInsertReviewResult,
 		taskID,
-		result.ResultKind, result.Severity, result.Category, result.File,
-		result.Line, result.Title,
-		result.Evidence, nullableString(result.Recommendation), result.Confidence,
-		result.Source, result.RuleID, formatTime(result.CreatedAt))
+		result.ResultKind,
+		result.Severity,
+		result.Category,
+		result.File,
+		result.Line,
+		result.Title,
+		result.Evidence,
+		nullableString(result.Recommendation),
+		result.Confidence,
+		result.Source,
+		result.RuleID,
+		formatTime(result.CreatedAt),
+	)
 	if err != nil {
 		return fmt.Errorf("save review result for task %s: %w", taskID, err)
 	}
@@ -381,9 +405,13 @@ func boolInt(value bool) int {
 	return 0
 }
 
-func formatTime(value time.Time) string { return value.UTC().Format(time.RFC3339Nano) }
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
 
-func durationMillis(value time.Duration) int64 { return value.Milliseconds() }
+func durationMillis(value time.Duration) int64 {
+	return value.Milliseconds()
+}
 
 func parseStoredTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
