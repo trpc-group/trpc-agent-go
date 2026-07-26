@@ -15,12 +15,17 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-// PreSummaryHookContext carries all inputs for pre-summary hooks.
+// PreSummaryHookContext carries all inputs for pre-summary hooks. When the
+// prompt contains {previous_summary}, Events and Text contain only newly
+// uncovered conversation content and PreviousSummary carries the prior rolling
+// summary. Prompts without that placeholder retain the legacy merged view in
+// Events and Text.
 type PreSummaryHookContext struct {
-	Ctx     context.Context
-	Session *session.Session
-	Events  []event.Event
-	Text    string
+	Ctx             context.Context
+	Session         *session.Session
+	Events          []event.Event
+	Text            string
+	PreviousSummary string
 }
 
 // PreSummaryHook adjusts or enriches input text before summarization, e.g. add tool-call info, redact, or reorder events.

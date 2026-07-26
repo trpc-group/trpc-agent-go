@@ -62,6 +62,7 @@ default:
 - loopback hosts such as `localhost` and `127.0.0.1`
 - private network IPs such as `10.x.x.x` and `192.168.x.x`
 - `file://` URLs
+- search-engine result pages
 
 If you need them, enable them explicitly in config:
 
@@ -73,6 +74,7 @@ tools:
         allow_loopback: true
         allow_private_networks: true
         allow_file_urls: true
+        allow_search_result_pages: true
 ```
 
 You can also restrict browsing to a domain set:
