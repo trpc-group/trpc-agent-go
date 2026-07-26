@@ -27,6 +27,8 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?s)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----`),
 }
 
+var credentialFlagPattern = regexp.MustCompile(`(?i)(--(?:api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|oauth[-_]?token|session[-_]?token|csrf[-_]?token|xsrf[-_]?token|jwt[-_]?token|client[-_]?secret|password|passwd|secret|token)\b\s+)(?:"[^"]+"|'[^']+'|[^\s]+)`)
+
 func redactString(s string) (string, bool) {
 	redacted := false
 	out := s
@@ -41,7 +43,16 @@ func redactString(s string) (string, bool) {
 		redacted = true
 		out = next
 	}
+	if next, changed := redactCredentialFlags(out); changed {
+		redacted = true
+		out = next
+	}
 	return out, redacted
+}
+
+func redactCredentialFlags(s string) (string, bool) {
+	out := credentialFlagPattern.ReplaceAllString(s, `${1}<redacted>`)
+	return out, out != s
 }
 
 var credentialURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^\s"'<>]+`)
@@ -57,11 +68,14 @@ func redactURLCredentials(s string) (string, bool) {
 	for _, match := range matches {
 		raw := s[match[0]:match[1]]
 		u, err := url.Parse(raw)
-		if err != nil || u.User == nil {
+		if err != nil || u.User == nil || u.User.String() == "" {
 			continue
 		}
 		password, hasPassword := u.User.Password()
-		if !hasPassword || password == "" {
+		if !hasPassword && u.User.Username() == "" {
+			continue
+		}
+		if hasPassword && password == "" && u.User.Username() == "" {
 			continue
 		}
 		if !redacted {

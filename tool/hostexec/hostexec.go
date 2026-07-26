@@ -309,6 +309,15 @@ func (t *execCommandTool) Call(
 	return mapExecResult(res), nil
 }
 
+// EffectiveWorkdir resolves the model-provided workdir using the configured
+// host tool base directory before permission checks run.
+func (t *execCommandTool) EffectiveWorkdir(raw string) (string, error) {
+	if t == nil {
+		return "", errors.New(errExecToolNotConfigured)
+	}
+	return resolveWorkdir(raw, t.baseDir)
+}
+
 type writeStdinTool struct {
 	mgr *manager
 }

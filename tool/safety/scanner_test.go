@@ -427,6 +427,86 @@ func TestDefaultScanner_DetectsCodeResourceAbuse(t *testing.T) {
 	}
 }
 
+func TestDefaultScanner_GatesCollectedSecretPaths(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName:        "skill_run",
+		Backend:         BackendHost,
+		Command:         "true",
+		CollectionPaths: []string{"out/.env"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.output_collection", report.RuleID)
+	require.True(t, report.Redacted)
+}
+
+func TestDefaultScanner_AppliesNetworkAllowlistToProxyEnv(t *testing.T) {
+	for _, proxy := range []string{"http://evil.example:8080", "evil.example:8080"} {
+		report, err := MustDefaultScanner(Policy{
+			NetworkAllowlist: []string{"allowed.example"},
+		}).Scan(context.Background(), ScanRequest{
+			ToolName: "exec_command",
+			Backend:  BackendHost,
+			Command:  "curl https://allowed.example",
+			Env:      map[string]string{"HTTPS_PROXY": proxy},
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, proxy)
+		require.Equal(t, "network.proxy_non_allowlisted_domain", report.RuleID, proxy)
+	}
+}
+
+func TestDefaultScanner_DeniesURLUsernameCredentials(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{
+		NetworkAllowlist: []string{"allowed.example"},
+	}).Scan(context.Background(), ScanRequest{
+		ToolName: "exec_command",
+		Backend:  BackendHost,
+		Command:  "curl https://ghp_value@allowed.example/path",
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "secret.inline_value", report.RuleID)
+	require.True(t, report.Redacted)
+	require.NotContains(t, report.Command, "ghp_value")
+}
+
+func TestDefaultScanner_DetectsSpaceSeparatedCredentialFlags(t *testing.T) {
+	scanner := MustDefaultScanner(Policy{})
+	for _, req := range []ScanRequest{
+		{
+			ToolName: "exec_command",
+			Backend:  BackendHost,
+			Command:  "cli --token abc123",
+		},
+		{
+			ToolName: "exec_command",
+			Backend:  BackendHost,
+			Args:     []string{"cli", "--password", "hunter2"},
+		},
+	} {
+		report, err := scanner.Scan(context.Background(), req)
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision)
+		require.Equal(t, "secret.inline_value", report.RuleID)
+		require.True(t, report.Redacted)
+		require.NotContains(t, report.Command, "abc123")
+		require.NotContains(t, report.Command, "hunter2")
+	}
+}
+
+func TestDefaultScanner_DetectsSpaceSeparatedCredentialFlagsInUnknownArrays(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName:     "mcp_call",
+		Backend:      BackendUnknown,
+		RawArguments: []byte(`["--token", "abc123"]`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "secret.inline_value", report.RuleID)
+	require.True(t, report.Redacted)
+}
+
 func TestDefaultScanner_DetectsDependencyInstallVariants(t *testing.T) {
 	scanner := MustDefaultScanner(Policy{})
 	for _, command := range []string{

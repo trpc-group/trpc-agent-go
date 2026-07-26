@@ -11,13 +11,29 @@ package safety
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+
+	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const (
 	workspaceExecDefaultTimeoutSec = 300
 	hostExecDefaultTimeoutSec      = 1800
 	skillDefaultTimeoutSec         = 300
+)
+
+type parserKind string
+
+const (
+	parserUnknown       parserKind = "unknown"
+	parserWorkspaceExec parserKind = "workspace_exec"
+	parserHostExec      parserKind = "exec_command"
+	parserSkillExec     parserKind = "skill_exec"
+	parserWriteStdin    parserKind = "write_stdin"
+	parserKillSession   parserKind = "kill_session"
+	parserCodeExec      parserKind = "execute_code"
 )
 
 // requestsFromToolCall parses a PermissionRequest-like tool call payload into
@@ -28,22 +44,58 @@ func requestsFromToolCall(
 	args []byte,
 	metadata map[string]any,
 ) ([]ScanRequest, error) {
+	return requestsFromToolCallWithParser(
+		toolName,
+		toolCallID,
+		backend,
+		args,
+		metadata,
+		parserKindFromToolName(toolName),
+		nil,
+	)
+}
+
+func requestsFromPermissionRequest(
+	req *tool.PermissionRequest,
+	backend Backend,
+	metadata map[string]any,
+) ([]ScanRequest, error) {
+	if req == nil {
+		return nil, fmt.Errorf("permission request is required")
+	}
+	return requestsFromToolCallWithParser(
+		req.ToolName,
+		req.ToolCallID,
+		backend,
+		req.Arguments,
+		metadata,
+		parserKindForPermissionRequest(req),
+		req.Tool,
+	)
+}
+
+func requestsFromToolCallWithParser(
+	toolName, toolCallID string,
+	backend Backend,
+	args []byte,
+	metadata map[string]any,
+	kind parserKind,
+	parserTool tool.Tool,
+) ([]ScanRequest, error) {
 	canonicalToolName := normalizeToolName(toolName)
 	if backend == "" {
-		backend = inferBackend(canonicalToolName)
+		backend = inferBackendForParser(canonicalToolName, kind)
 	}
-	switch canonicalToolName {
-	case "workspace_exec":
-		return parseExecArgs(toolName, "workspace_exec", toolCallID, backend, args, "cwd", metadata)
-	case "exec_command":
-		return parseExecArgs(toolName, "exec_command", toolCallID, backend, args, "workdir", metadata)
-	case "skill_run":
-		return parseExecArgs(toolName, "skill_run", toolCallID, backend, args, "cwd", metadata)
-	case "skill_exec":
-		return parseExecArgs(toolName, "skill_exec", toolCallID, backend, args, "cwd", metadata)
-	case "workspace_write_stdin", "write_stdin", "skill_write_stdin":
+	switch kind {
+	case parserWorkspaceExec, parserHostExec, parserSkillExec:
+		cwdField := "cwd"
+		if kind == parserHostExec {
+			cwdField = "workdir"
+		}
+		return parseExecArgs(toolName, kind, toolCallID, backend, args, cwdField, metadata, parserTool)
+	case parserWriteStdin:
 		return parseWriteStdinArgs(toolName, toolCallID, backend, args, metadata)
-	case "workspace_kill_session", "kill_session":
+	case parserKillSession:
 		return []ScanRequest{{
 			ToolName:     toolName,
 			ToolCallID:   toolCallID,
@@ -51,7 +103,7 @@ func requestsFromToolCall(
 			RawArguments: append([]byte(nil), args...),
 			Metadata:     metadata,
 		}}, nil
-	case "execute_code":
+	case parserCodeExec:
 		return parseCodeExecArgs(toolName, toolCallID, backend, args, metadata)
 	default:
 		return []ScanRequest{{
@@ -61,6 +113,89 @@ func requestsFromToolCall(
 			RawArguments: append([]byte(nil), args...),
 			Metadata:     metadata,
 		}}, nil
+	}
+}
+
+func parserKindFromToolName(toolName string) parserKind {
+	switch normalizeToolName(toolName) {
+	case "workspace_exec":
+		return parserWorkspaceExec
+	case "exec_command", "skill_run":
+		if normalizeToolName(toolName) == "skill_run" {
+			return parserSkillExec
+		}
+		return parserHostExec
+	case "skill_exec":
+		return parserSkillExec
+	case "workspace_write_stdin", "write_stdin", "skill_write_stdin":
+		return parserWriteStdin
+	case "workspace_kill_session", "kill_session", "skill_kill_session":
+		return parserKillSession
+	case "execute_code":
+		return parserCodeExec
+	default:
+		return parserUnknown
+	}
+}
+
+func parserKindForPermissionRequest(req *tool.PermissionRequest) parserKind {
+	if req == nil {
+		return parserUnknown
+	}
+	if semantic := internaltool.ResolveSemantic(req.Tool); semantic != nil {
+		if kind := parserKindFromDeclaration(semantic.Declaration()); kind != parserUnknown {
+			return kind
+		}
+	}
+	if kind := parserKindFromDeclaration(req.Declaration); kind != parserUnknown {
+		return kind
+	}
+	return parserKindFromToolName(req.ToolName)
+}
+
+func parserKindFromDeclaration(decl *tool.Declaration) parserKind {
+	if decl == nil || decl.InputSchema == nil {
+		return parserUnknown
+	}
+	props := decl.InputSchema.Properties
+	if _, ok := props["code_blocks"]; ok {
+		return parserCodeExec
+	}
+	if _, ok := props["command"]; ok {
+		if _, ok := props["skill"]; ok {
+			return parserSkillExec
+		}
+		if _, ok := props["workdir"]; ok {
+			return parserHostExec
+		}
+		if _, ok := props["cwd"]; ok {
+			return parserWorkspaceExec
+		}
+	}
+	if _, ok := props["chars"]; ok {
+		return parserWriteStdin
+	}
+	if _, ok := props["session_id"]; ok {
+		return parserKillSession
+	}
+	return parserUnknown
+}
+
+func inferBackendForParser(toolName string, kind parserKind) Backend {
+	switch kind {
+	case parserWorkspaceExec:
+		return BackendWorkspace
+	case parserHostExec, parserSkillExec:
+		return BackendHost
+	case parserWriteStdin, parserKillSession:
+		if strings.HasPrefix(toolName, "workspace_") {
+			return BackendWorkspace
+		}
+		return BackendHost
+	case parserCodeExec:
+		return BackendCodeExec
+	default:
+		return inferBackend(toolName)
 	}
 }
 
@@ -92,11 +227,12 @@ func inferBackend(toolName string) Backend {
 }
 
 func parseExecArgs(
-	toolName, toolKind, toolCallID string,
+	toolName string, toolKind parserKind, toolCallID string,
 	backend Backend,
 	args []byte,
 	cwdField string,
 	metadata map[string]any,
+	parserTool tool.Tool,
 ) ([]ScanRequest, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(args, &raw); err != nil {
@@ -109,13 +245,28 @@ func parseExecArgs(
 	if strings.TrimSpace(command) == "" {
 		return nil, fmt.Errorf("command is required")
 	}
-	timeout, err := timeoutField(toolKind, raw)
+	timeout, err := timeoutField(string(toolKind), raw)
 	if err != nil {
 		return nil, err
 	}
 	cwd, err := stringField(raw, cwdField)
 	if err != nil {
 		return nil, err
+	}
+	cwdResolved := true
+	resolveHostCwd := toolKind == parserHostExec && parserTool != nil
+	if toolKind == parserHostExec {
+		cwd, cwdResolved, err = resolveEffectiveWorkdir(parserTool, cwd)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", cwdField, err)
+		}
+	}
+	var collectionPaths []string
+	if toolKind == parserSkillExec {
+		collectionPaths, err = collectionPathsField(raw)
+		if err != nil {
+			return nil, err
+		}
 	}
 	env, err := stringMapField(raw, "env")
 	if err != nil {
@@ -134,20 +285,78 @@ func parseExecArgs(
 		return nil, err
 	}
 	req := ScanRequest{
-		ToolName:     toolName,
-		ToolCallID:   toolCallID,
-		Backend:      backend,
-		Command:      command,
-		Cwd:          cwd,
-		Env:          env,
-		Stdin:        stdin,
-		TimeoutSec:   timeout,
-		Background:   background,
-		TTY:          tty,
-		RawArguments: append([]byte(nil), args...),
-		Metadata:     metadata,
+		ToolName:              toolName,
+		ToolCallID:            toolCallID,
+		Backend:               backend,
+		Command:               command,
+		Cwd:                   cwd,
+		Env:                   env,
+		Stdin:                 stdin,
+		TimeoutSec:            timeout,
+		Background:            background,
+		TTY:                   tty,
+		RawArguments:          append([]byte(nil), args...),
+		CollectionPaths:       collectionPaths,
+		CwdResolutionRequired: resolveHostCwd,
+		CwdResolved:           cwdResolved,
+		Metadata:              metadata,
 	}
 	return []ScanRequest{req}, nil
+}
+
+func resolveEffectiveWorkdir(parserTool tool.Tool, raw string) (string, bool, error) {
+	semantic := internaltool.ResolveSemantic(parserTool)
+	if resolver, ok := semantic.(interface {
+		EffectiveWorkdir(string) (string, error)
+	}); ok {
+		resolved, err := resolver.EffectiveWorkdir(raw)
+		return resolved, err == nil, err
+	}
+	return raw, filepath.IsAbs(strings.TrimSpace(raw)), nil
+}
+
+func collectionPathsField(raw map[string]json.RawMessage) ([]string, error) {
+	paths, err := stringSliceField(raw, "output_files")
+	if err != nil {
+		return nil, err
+	}
+	if outputRaw, ok := raw["outputs"]; ok && string(outputRaw) != "null" {
+		var outputs map[string]json.RawMessage
+		if err := json.Unmarshal(outputRaw, &outputs); err != nil {
+			return nil, fmt.Errorf("outputs: expected object: %w", err)
+		}
+		globs, err := stringSliceField(outputs, "globs")
+		if err != nil {
+			return nil, fmt.Errorf("outputs.globs: %w", err)
+		}
+		paths = append(paths, globs...)
+	}
+	return dedupeStrings(paths), nil
+}
+
+func stringSliceField(raw map[string]json.RawMessage, key string) ([]string, error) {
+	b, ok := raw[key]
+	if !ok || string(b) == "null" {
+		return nil, nil
+	}
+	var out []string
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("%s: expected string array: %w", key, err)
+	}
+	return out, nil
+}
+
+func dedupeStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 func parseWriteStdinArgs(

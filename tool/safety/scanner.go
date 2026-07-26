@@ -73,27 +73,7 @@ func (s *DefaultScanner) Scan(ctx context.Context, req ScanRequest) (Report, err
 		findings = s.scanRequest(ctx, req)
 	}
 	report := buildReport(req, findings, time.Since(start))
-	report.Command, report.Redacted = s.redactReportText(report.Command)
-	if report.Evidence != "" {
-		var redacted bool
-		report.Evidence, redacted = s.redactReportText(report.Evidence)
-		report.Redacted = report.Redacted || redacted
-	}
-	if report.Recommendation != "" {
-		var redacted bool
-		report.Recommendation, redacted = s.redactReportText(report.Recommendation)
-		report.Redacted = report.Redacted || redacted
-	}
-	for i := range report.Findings {
-		var redacted bool
-		report.Findings[i].Evidence, redacted = s.redactReportText(report.Findings[i].Evidence)
-		report.Findings[i].Redacted = report.Findings[i].Redacted || redacted
-		report.Redacted = report.Redacted || report.Findings[i].Redacted
-		report.Findings[i].Recommendation, redacted = s.redactReportText(report.Findings[i].Recommendation)
-		report.Findings[i].Redacted = report.Findings[i].Redacted || redacted
-		report.Redacted = report.Redacted || redacted
-	}
-	return report, nil
+	return normalizeReportText(report, s.policy.DeniedPaths), nil
 }
 
 func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Finding {
@@ -111,7 +91,8 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 	var findings []Finding
 	findings = append(findings, s.scanSize(req)...)
 	findings = append(findings, s.scanEnv(req.Env)...)
-	findings = append(findings, s.scanCwd(req.Cwd)...)
+	findings = append(findings, s.scanCwd(req)...)
+	findings = append(findings, s.scanCollectionPaths(req)...)
 	findings = append(findings, s.scanOutputLimit(req)...)
 	switch {
 	case req.Command != "":
@@ -167,7 +148,17 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 	return findings
 }
 
-func (s *DefaultScanner) scanCwd(cwd string) []Finding {
+func (s *DefaultScanner) scanCwd(req ScanRequest) []Finding {
+	if req.CwdResolutionRequired && !req.CwdResolved {
+		return []Finding{{
+			RuleID:         "path.workdir_unresolved",
+			RiskLevel:      RiskHigh,
+			Decision:       DecisionNeedsHumanReview,
+			Evidence:       "host execution workdir could not be resolved before scanning",
+			Recommendation: "resolve the host tool base directory before execution",
+		}}
+	}
+	cwd := req.Cwd
 	if strings.TrimSpace(cwd) == "" {
 		return nil
 	}
@@ -189,6 +180,30 @@ func (s *DefaultScanner) scanCwd(cwd string) []Finding {
 		}}
 	}
 	return nil
+}
+
+func (s *DefaultScanner) scanCollectionPaths(req ScanRequest) []Finding {
+	if len(req.CollectionPaths) == 0 {
+		return nil
+	}
+	var findings []Finding
+	for _, collectionPath := range req.CollectionPaths {
+		for _, denied := range s.policy.DeniedPaths {
+			if !sensitivePathMatch(collectionPath, denied) &&
+				!sensitivePathMatch(joinCwdPath(req.Cwd, collectionPath), denied) {
+				continue
+			}
+			findings = append(findings, Finding{
+				RuleID:         "path.output_collection",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionDeny,
+				Evidence:       "<redacted>",
+				Recommendation: "do not collect credential or secret paths from tool workspaces",
+				Redacted:       true,
+			})
+		}
+	}
+	return findings
 }
 
 func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {
@@ -250,8 +265,69 @@ func (s *DefaultScanner) scanEnv(env map[string]string) []Finding {
 				Redacted:       true,
 			})
 		}
+		findings = append(findings, s.scanProxyEnv(key, value)...)
 	}
 	return findings
+}
+
+func (s *DefaultScanner) scanProxyEnv(key, value string) []Finding {
+	if !isProxyEnv(key) || strings.TrimSpace(value) == "" {
+		return nil
+	}
+	host, ok := proxyHost(value)
+	if !ok {
+		decision := DecisionAsk
+		if len(s.policy.NetworkAllowlist) > 0 {
+			decision = DecisionDeny
+		}
+		return []Finding{{
+			RuleID:         "network.proxy_invalid",
+			RiskLevel:      RiskHigh,
+			Decision:       decision,
+			Evidence:       key,
+			Recommendation: "use a proxy value with an explicit resolvable host",
+		}}
+	}
+	if s.hostAllowed(host) {
+		return nil
+	}
+	decision := DecisionAsk
+	rule := "network.proxy_external_domain"
+	if len(s.policy.NetworkAllowlist) > 0 {
+		decision = DecisionDeny
+		rule = "network.proxy_non_allowlisted_domain"
+	}
+	return []Finding{{
+		RuleID:         rule,
+		RiskLevel:      RiskHigh,
+		Decision:       decision,
+		Evidence:       host,
+		Recommendation: "add the proxy host to network_allowlist or remove the proxy override",
+	}}
+}
+
+func isProxyEnv(key string) bool {
+	switch strings.ToUpper(strings.TrimSpace(key)) {
+	case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY":
+		return true
+	default:
+		return false
+	}
+}
+
+func proxyHost(value string) (string, bool) {
+	raw := strings.Trim(strings.TrimSpace(value), `"'`)
+	if raw == "" {
+		return "", false
+	}
+	if !strings.Contains(raw, "://") {
+		raw = "//" + raw
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Hostname() == "" {
+		return "", false
+	}
+	return strings.ToLower(strings.TrimSuffix(u.Hostname(), ".")), true
 }
 
 func (s *DefaultScanner) scanCommand(req ScanRequest) []Finding {
@@ -734,9 +810,23 @@ func (s *DefaultScanner) scanDecodedUnknownArguments(req ScanRequest, value any)
 		return s.scanTextForUnknownRisk(req, v)
 	case []any:
 		var findings []Finding
+		var argv []string
+		flushArgv := func() {
+			if len(argv) == 0 {
+				return
+			}
+			findings = append(findings, s.scanTextForUnknownRisk(req, strings.Join(argv, " "))...)
+			argv = nil
+		}
 		for _, item := range v {
+			if text, ok := item.(string); ok {
+				argv = append(argv, text)
+				continue
+			}
+			flushArgv()
 			findings = append(findings, s.scanDecodedUnknownArguments(req, item)...)
 		}
+		flushArgv()
 		return findings
 	case map[string]any:
 		var findings []Finding

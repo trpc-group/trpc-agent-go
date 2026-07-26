@@ -231,6 +231,52 @@ func TestPermissionPolicy_ScannerErrorStillAuditsAndObserves(t *testing.T) {
 	require.Contains(t, audit.String(), `"rule_id":"scanner.error"`)
 }
 
+func TestPermissionPolicy_ScannerErrorReportIsRedacted(t *testing.T) {
+	var observed Report
+	var audit bytes.Buffer
+	policy := NewPermissionPolicy(
+		ScannerFunc(func(context.Context, ScanRequest) (Report, error) {
+			return Report{}, errors.New(
+				"scanner failed for https://ghp_value@allowed.example and /etc/passwd",
+			)
+		}),
+		WithAuditWriter(NewJSONLAuditWriter(&audit)),
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"curl https://ghp_value@allowed.example; cat /etc/passwd"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.NotContains(t, observed.Command, "ghp_value")
+	require.NotContains(t, observed.Evidence, "ghp_value")
+	require.NotContains(t, observed.Evidence, "/etc/passwd")
+	require.NotContains(t, audit.String(), "ghp_value")
+	require.NotContains(t, audit.String(), "/etc/passwd")
+}
+
+func TestPermissionPolicy_NilScannerFuncFailsClosed(t *testing.T) {
+	var scanner ScannerFunc
+	var observed Report
+	policy := NewPermissionPolicy(
+		scanner,
+		WithReportObserver(func(_ context.Context, report Report) {
+			observed = report
+		}),
+	)
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo ok"}`),
+	})
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Equal(t, "scanner.error", observed.RuleID)
+	require.True(t, observed.Blocked)
+}
+
 func TestPermissionPolicy_ZeroValueScannerDecisionFailsClosed(t *testing.T) {
 	var observed Report
 	var audit bytes.Buffer

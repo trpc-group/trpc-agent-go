@@ -59,6 +59,24 @@ func TestRedactString_RedactsGenericURLUserinfo(t *testing.T) {
 	require.Contains(t, out, "mongodb://db.example/app")
 }
 
+func TestRedactString_RedactsURLUsernameOnly(t *testing.T) {
+	input := `curl https://ghp_value@allowed.example/path`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.NotContains(t, out, "ghp_value")
+	require.Contains(t, out, "https://allowed.example/path")
+}
+
+func TestRedactString_RedactsSpaceSeparatedCredentialFlags(t *testing.T) {
+	input := `cli --token abc123 --password "hunter 2"`
+	out, redacted := redactString(input)
+	require.True(t, redacted)
+	require.Contains(t, out, "--token <redacted>")
+	require.Contains(t, out, "--password <redacted>")
+	require.NotContains(t, out, "abc123")
+	require.NotContains(t, out, "hunter 2")
+}
+
 func TestRedactString_NoSecretLeavesInput(t *testing.T) {
 	out, redacted := redactString("plain output")
 	require.False(t, redacted)

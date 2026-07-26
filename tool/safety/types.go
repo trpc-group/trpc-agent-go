@@ -12,6 +12,7 @@ package safety
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -83,21 +84,24 @@ func (b Backend) Valid() bool {
 
 // ScanRequest describes one pending tool call or script execution.
 type ScanRequest struct {
-	ToolName     string            `json:"tool_name"`
-	ToolCallID   string            `json:"tool_call_id,omitempty"`
-	Backend      Backend           `json:"backend"`
-	Command      string            `json:"command,omitempty"`
-	Args         []string          `json:"args,omitempty"`
-	Cwd          string            `json:"cwd,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Stdin        string            `json:"stdin,omitempty"`
-	TimeoutSec   int               `json:"timeout_sec,omitempty"`
-	Background   bool              `json:"background,omitempty"`
-	TTY          bool              `json:"tty,omitempty"`
-	Language     string            `json:"language,omitempty"`
-	Code         string            `json:"code,omitempty"`
-	RawArguments []byte            `json:"-"`
-	Metadata     map[string]any    `json:"metadata,omitempty"`
+	ToolName              string            `json:"tool_name"`
+	ToolCallID            string            `json:"tool_call_id,omitempty"`
+	Backend               Backend           `json:"backend"`
+	Command               string            `json:"command,omitempty"`
+	Args                  []string          `json:"args,omitempty"`
+	Cwd                   string            `json:"cwd,omitempty"`
+	Env                   map[string]string `json:"env,omitempty"`
+	Stdin                 string            `json:"stdin,omitempty"`
+	TimeoutSec            int               `json:"timeout_sec,omitempty"`
+	Background            bool              `json:"background,omitempty"`
+	TTY                   bool              `json:"tty,omitempty"`
+	Language              string            `json:"language,omitempty"`
+	Code                  string            `json:"code,omitempty"`
+	RawArguments          []byte            `json:"-"`
+	CollectionPaths       []string          `json:"collection_paths,omitempty"`
+	CwdResolutionRequired bool              `json:"-"`
+	CwdResolved           bool              `json:"-"`
+	Metadata              map[string]any    `json:"metadata,omitempty"`
 }
 
 // Finding describes one scanner finding.
@@ -151,5 +155,8 @@ type ScannerFunc func(context.Context, ScanRequest) (Report, error)
 
 // Scan implements Scanner.
 func (f ScannerFunc) Scan(ctx context.Context, req ScanRequest) (Report, error) {
+	if f == nil {
+		return Report{}, errors.New("nil scanner function")
+	}
 	return f(ctx, req)
 }

@@ -11,10 +11,13 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/codeexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 )
 
@@ -94,6 +97,15 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 				require.Equal(t, BackendHost, reqs[0].Backend)
 				require.Equal(t, "curl https://evil.example", reqs[0].Command)
 				require.Equal(t, ".", reqs[0].Cwd)
+			},
+		},
+		{
+			name:     "skill_output_collection_paths",
+			toolName: "skill_run",
+			args:     []byte(`{"command":"true","output_files":[".env"],"outputs":{"globs":["out/*.txt"]}}`),
+			assert: func(t *testing.T, reqs []ScanRequest) {
+				require.Len(t, reqs, 1)
+				require.ElementsMatch(t, []string{".env", "out/*.txt"}, reqs[0].CollectionPaths)
 			},
 		},
 		{
@@ -298,6 +310,54 @@ func TestRequestsFromToolCall_RecognizesNamedHostexecTools(t *testing.T) {
 	require.Equal(t, 1800, reqs[0].TimeoutSec)
 	require.True(t, reqs[0].Background)
 	require.True(t, reqs[0].TTY)
+}
+
+func TestRequestsFromPermissionRequest_UsesRenamedToolSchemas(t *testing.T) {
+	hostBase := t.TempDir()
+	hostSet, err := hostexec.NewToolSet(
+		hostexec.WithName("local"),
+		hostexec.WithBaseDir(hostBase),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	namedHostSet := internaltool.NewNamedToolSet(hostSet)
+	var hostTool tool.Tool
+	for _, candidate := range namedHostSet.Tools(context.Background()) {
+		if candidate.Declaration().InputSchema.Properties["workdir"] != nil {
+			hostTool = candidate
+			break
+		}
+	}
+	require.NotNil(t, hostTool)
+	hostReq := &tool.PermissionRequest{
+		Tool:      hostTool,
+		ToolName:  hostTool.Declaration().Name,
+		Arguments: []byte(`{"command":"cat passwd"}`),
+	}
+	hostScanReqs, err := requestsFromPermissionRequest(hostReq, defaultBackendResolver(hostReq), nil)
+	require.NoError(t, err)
+	require.Len(t, hostScanReqs, 1)
+	require.Equal(t, BackendHost, hostScanReqs[0].Backend)
+	require.Equal(t, filepath.Clean(hostBase), filepath.Clean(hostScanReqs[0].Cwd))
+	require.True(t, hostScanReqs[0].CwdResolved)
+	report, err := MustDefaultScanner(Policy{
+		DeniedPaths: []string{filepath.Join(hostBase, "passwd")},
+	}).Scan(context.Background(), hostScanReqs[0])
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.sensitive_credentials", report.RuleID)
+
+	codeTool := codeexec.NewTool(nil, codeexec.WithName("run_code"))
+	codeReq := &tool.PermissionRequest{
+		Tool:      codeTool,
+		ToolName:  "run_code",
+		Arguments: []byte(`{"code_blocks":[{"language":"python","code":"while True: pass"}]}`),
+	}
+	codeScanReqs, err := requestsFromPermissionRequest(codeReq, defaultBackendResolver(codeReq), nil)
+	require.NoError(t, err)
+	require.Len(t, codeScanReqs, 1)
+	require.Equal(t, BackendCodeExec, codeScanReqs[0].Backend)
+	require.Equal(t, "python", codeScanReqs[0].Language)
 }
 
 func TestUnmarshalCodeBlocks_RejectsStringifiedInvalidJSON(t *testing.T) {

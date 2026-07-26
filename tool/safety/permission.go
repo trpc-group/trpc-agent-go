@@ -104,18 +104,12 @@ func (p *permissionPolicy) CheckToolPermission(
 	if p.resolver != nil {
 		backend = p.resolver(req)
 	}
-	scanReqs, err := requestsFromToolCall(
-		req.ToolName,
-		req.ToolCallID,
-		backend,
-		req.Arguments,
-		metadata,
-	)
+	scanReqs, err := requestsFromPermissionRequest(req, backend, metadata)
 	if err != nil {
 		decision := DecisionDeny
 		risk := RiskHigh
 		recommendation := "fix tool arguments before execution"
-		if req.ToolName == "execute_code" {
+		if parserKindForPermissionRequest(req) == parserCodeExec {
 			decision = DecisionAsk
 			risk = RiskMedium
 			recommendation = "review malformed code execution arguments before retrying"
@@ -172,10 +166,13 @@ func (p *permissionPolicy) finish(
 	ctx context.Context,
 	report Report,
 ) (tool.PermissionDecision, error) {
+	report = normalizeReportText(report, p.auditDeniedPaths)
 	report.Blocked = report.Decision != DecisionAllow
 	auditErr := p.writeAudit(ctx, report)
 	if auditErr != nil {
-		report.AuditError = auditErr.Error()
+		report.AuditError, _ = redactReportTextWithDeniedPaths(
+			auditErr.Error(), p.auditDeniedPaths,
+		)
 	}
 	if p.observer != nil {
 		p.observer(ctx, report)
@@ -279,7 +276,10 @@ func defaultBackendResolver(req *tool.PermissionRequest) Backend {
 	if req == nil {
 		return BackendUnknown
 	}
-	return inferBackend(normalizeToolName(req.ToolName))
+	return inferBackendForParser(
+		normalizeToolName(req.ToolName),
+		parserKindForPermissionRequest(req),
+	)
 }
 
 func permissionAction(decision Decision) string {

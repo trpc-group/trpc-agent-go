@@ -124,3 +124,30 @@ func redactReportTextWithDeniedPaths(text string, deniedPaths []string) (string,
 	}
 	return out, redacted
 }
+
+func normalizeReportText(report Report, deniedPaths []string) Report {
+	redact := func(text string) (string, bool) {
+		return redactReportTextWithDeniedPaths(text, deniedPaths)
+	}
+	var changed bool
+	if report.Command, changed = redact(report.Command); changed {
+		report.Redacted = true
+	}
+	if report.Evidence, changed = redact(report.Evidence); changed {
+		report.Redacted = true
+	}
+	if report.Recommendation, changed = redact(report.Recommendation); changed {
+		report.Redacted = true
+	}
+	for i := range report.Findings {
+		if report.Findings[i].Evidence, changed = redact(report.Findings[i].Evidence); changed {
+			report.Findings[i].Redacted = true
+			report.Redacted = true
+		}
+		if report.Findings[i].Recommendation, changed = redact(report.Findings[i].Recommendation); changed {
+			report.Findings[i].Redacted = true
+			report.Redacted = true
+		}
+	}
+	return report
+}
