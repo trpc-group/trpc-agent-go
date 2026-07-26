@@ -317,18 +317,18 @@ func NormalizeFinding(f review.Finding) review.Finding {
 
 // SanitizeFinding 在 Provider 输出进入报告和存储前脱敏 evidence。
 func SanitizeFinding(f review.Finding) review.Finding {
-	f.Severity = strings.TrimSpace(f.Severity)
-	f.Category = strings.TrimSpace(f.Category)
-	f.File = strings.TrimSpace(f.File)
-	f.Title = strings.TrimSpace(f.Title)
-	f.Evidence = strings.TrimSpace(review.RedactSecrets(f.Evidence))
-	f.Recommendation = strings.TrimSpace(review.RedactSecrets(f.Recommendation))
-	f.Confidence = strings.TrimSpace(f.Confidence)
-	f.RuleID = strings.TrimSpace(review.RedactSecrets(f.RuleID))
+	f.Severity = sanitizeProviderString(f.Severity, maxFindingSeverityLen)
+	f.Category = sanitizeProviderString(f.Category, maxFindingCategoryLen)
+	f.File = sanitizeProviderString(f.File, maxFindingFileLen)
+	f.Title = sanitizeProviderString(f.Title, maxFindingTitleLen)
+	f.Evidence = sanitizeProviderString(f.Evidence, maxFindingEvidenceLen)
+	f.Recommendation = sanitizeProviderString(f.Recommendation, maxFindingRecommendationLen)
+	f.Confidence = sanitizeProviderString(f.Confidence, maxFindingConfidenceLen)
+	f.RuleID = sanitizeProviderString(f.RuleID, maxFindingRuleIDLen)
 	if f.Status == "" {
 		f.Status = "finding"
 	}
-	f.Status = strings.TrimSpace(f.Status)
+	f.Status = sanitizeProviderString(f.Status, maxFindingStatusLen)
 	return f
 }
 

@@ -276,6 +276,24 @@ func TestNormalizeFindingSanitizesAndBoundsProviderStrings(t *testing.T) {
 	}
 }
 
+func TestSanitizeFindingRedactsEveryProviderControlledString(t *testing.T) {
+	const secret = "sk-provider-all-fields-1234567890"
+	finding := SanitizeFinding(review.Finding{
+		Severity: secret, Category: secret, File: secret, Title: secret,
+		Evidence: secret, Recommendation: secret, Confidence: secret,
+		RuleID: secret, Status: secret,
+	})
+	for name, value := range map[string]string{
+		"severity": finding.Severity, "category": finding.Category, "file": finding.File,
+		"title": finding.Title, "evidence": finding.Evidence, "recommendation": finding.Recommendation,
+		"confidence": finding.Confidence, "rule_id": finding.RuleID, "status": finding.Status,
+	} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("%s leaked provider secret: %+v", name, finding)
+		}
+	}
+}
+
 func hasRuleID(findings []review.Finding, ruleID string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID {
