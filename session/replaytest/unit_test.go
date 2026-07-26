@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,12 +121,12 @@ func TestMissingValue_MarshalJSON(t *testing.T) {
 	mv := MissingValue{}
 	raw, err := json.Marshal(mv)
 	require.NoError(t, err)
-	assert.Equal(t, `{"__missing":true}`, string(raw))
+	assert.Equal(t, fmt.Sprintf(`{"%s":"%s"}`, missingValueSentinelKey, missingValueSentinelType), string(raw))
 }
 
 func TestMissingValue_UnmarshalJSON_RejectsInput(t *testing.T) {
 	var mv MissingValue
-	err := mv.UnmarshalJSON([]byte(`{"__missing":true}`))
+	err := mv.UnmarshalJSON([]byte(fmt.Sprintf(`{"%s":"%s"}`, missingValueSentinelKey, missingValueSentinelType)))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "synthetic")
 }
@@ -139,9 +140,9 @@ func TestMissingValue_DistinctFromNil(t *testing.T) {
 
 // --- Capabilities tests ---
 
-func TestCapabilities_Has_OmittedMeansSupported(t *testing.T) {
+func TestCapabilities_Has_OmittedMeansUnsupported(t *testing.T) {
 	caps := Capabilities{}
-	assert.True(t, caps.Has("events"), "omitted capability should default to supported")
+	assert.False(t, caps.Has("events"), "omitted capability should default to unsupported")
 }
 
 func TestCapabilities_Has_ExplicitTrue(t *testing.T) {
@@ -379,6 +380,35 @@ func TestNormalizer_MemoryUnordered(t *testing.T) {
 	assert.Equal(t, -1, snap.Memories[1].Rank)
 }
 
+func TestNormalizeMemories_PreservesDuplicateMemoryIdentity(t *testing.T) {
+	aliasesLeft := NewIDAliasMap()
+	aliasesRight := NewIDAliasMap()
+	leftEntries := []*memory.Entry{
+		{ID: "dup-id", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "alpha"}, Score: 0.9},
+		{ID: "dup-id", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "beta"}, Score: 0.8},
+	}
+	rightEntries := []*memory.Entry{
+		{ID: "id-a", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "alpha"}, Score: 0.9},
+		{ID: "id-b", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "beta"}, Score: 0.8},
+	}
+
+	left, err := normalizeMemories(leftEntries, aliasesLeft, false, 6)
+	require.NoError(t, err)
+	right, err := normalizeMemories(rightEntries, aliasesRight, false, 6)
+	require.NoError(t, err)
+
+	assert.Equal(t, left[0].ID, left[1].ID, "duplicate source IDs should stay aliased together")
+	assert.NotEqual(t, right[0].ID, right[1].ID, "distinct source IDs should stay distinguishable")
+
+	diffs, err := Compare("memory-id-identity", "left", "right",
+		Snapshot{Memories: left},
+		Snapshot{Memories: right},
+		nil,
+	)
+	require.NoError(t, err)
+	assert.True(t, hasUnexpectedDiffs(diffs))
+}
+
 func TestNormalizer_ScoreQuantization(t *testing.T) {
 	score := normalizeMemoryScore(0.123456789, 4)
 	assert.Equal(t, 0.1235, score)
@@ -438,7 +468,7 @@ func TestDiff_MissingValueVsMissingValue(t *testing.T) {
 
 func TestDiff_MissingValueSentinelPayloadDoesNotMaskMissingKey(t *testing.T) {
 	left := Snapshot{State: map[string]any{
-		"k1":    map[string]any{"__missing": true},
+		"k1":    map[string]any{missingValueSentinelKey: missingValueSentinelType},
 		"other": "same",
 	}}
 	right := Snapshot{State: map[string]any{"other": "same"}}
@@ -447,7 +477,7 @@ func TestDiff_MissingValueSentinelPayloadDoesNotMaskMissingKey(t *testing.T) {
 	require.Len(t, diffs, 1)
 	assert.Equal(t, "$.state.k1", diffs[0].Path)
 	assert.Equal(t, SeverityCritical, diffs[0].Severity)
-	assert.Equal(t, map[string]any{"__missing": true}, diffs[0].ValueA)
+	assert.Equal(t, map[string]any{missingValueSentinelKey: missingValueSentinelType}, diffs[0].ValueA)
 	_, isMissing := diffs[0].ValueB.(MissingValue)
 	assert.True(t, isMissing)
 }
@@ -561,7 +591,19 @@ func TestHarness_Validation_OpsWithoutRun(t *testing.T) {
 		Ops:          []Op{{Type: OpCreateSession}},
 	})
 	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Ops/ParallelGroups without Run")
+	assert.Contains(t, err.Error(), "declarative execution is not yet implemented")
+}
+
+func TestHarness_Validation_OpsWithRunRejected(t *testing.T) {
+	h := Harness{Backends: makeBackends(t, sessKey("v"))}
+	_, err := h.Run(context.Background(), Case{
+		Name:         "test",
+		RequiredCaps: []string{CapEvents},
+		Ops:          []Op{{Type: OpCreateSession}},
+		Run:          func(ctx context.Context, b Backend) error { return nil },
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "declarative execution is not yet implemented")
 }
 
 func TestHarness_Validation_LessThanTwoBackends(t *testing.T) {
@@ -1309,6 +1351,19 @@ func (s *failingScopedStateSessionService) ListUserStates(ctx context.Context, u
 	return nil, nil
 }
 
+type cleanupOrderingSessionService struct {
+	mockSessionService
+	lateWriteDone *atomic.Uint32
+	cleanupSeen   chan bool
+}
+
+func (s *cleanupOrderingSessionService) DeleteSession(_ context.Context, _ session.Key, _ ...session.Option) error {
+	if s.cleanupSeen != nil {
+		s.cleanupSeen <- s.lateWriteDone.Load() == 1
+	}
+	return nil
+}
+
 type eventOnlyScopedStateSessionService struct {
 	failingScopedStateSessionService
 	sess *session.Session
@@ -1418,13 +1473,11 @@ func TestCheckpoint_SaveAndLoadResult(t *testing.T) {
 	assert.Len(t, loaded.BackendMetrics, 1)
 }
 
-func TestCheckpoint_LoadFallbackToDoneMarker(t *testing.T) {
+func TestCheckpoint_DoneMarkerAloneDoesNotResumeAsPass(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, saveCheckpoint(dir, "legacy-case"))
-	loaded, ok := loadCheckpointResult(dir, "legacy-case")
-	require.True(t, ok)
-	assert.Equal(t, "legacy-case", loaded.Name)
-	assert.Equal(t, StatusPass, loaded.Status)
+	_, ok := loadCheckpointResult(dir, "legacy-case")
+	assert.False(t, ok, "legacy done markers must not silently resume as pass")
 }
 
 func TestCheckpoint_ResultAtomicWrite(t *testing.T) {
@@ -2258,6 +2311,53 @@ func TestHarness_ExecuteRunWithProtection_Timeout(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestHarness_ExecuteRunWithProtection_WaitsForCallbackExitBeforeCleanup(t *testing.T) {
+	key := sessKey("timeout-cleanup-order")
+	var lateWriteDone atomic.Uint32
+	cleanupSeen := make(chan bool, 1)
+	h := Harness{
+		Backends: []Backend{
+			{
+				Name: "slow-timeout",
+				Sess: &cleanupOrderingSessionService{
+					lateWriteDone: &lateWriteDone,
+					cleanupSeen:   cleanupSeen,
+				},
+				Caps:    AllCapabilities(),
+				SessKey: func() session.Key { return key },
+			},
+			{
+				Name:    "peer",
+				Sess:    &mockSessionService{},
+				Caps:    AllCapabilities(),
+				SessKey: func() session.Key { return key },
+			},
+		},
+		Timeout: 10 * time.Millisecond,
+	}
+
+	start := time.Now()
+	_, err := h.Run(context.Background(), Case{
+		Name:         "timeout_cleanup_wait",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			<-ctx.Done()
+			time.Sleep(30 * time.Millisecond)
+			lateWriteDone.Store(1)
+			return nil
+		},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timed out")
+	assert.GreaterOrEqual(t, time.Since(start), 30*time.Millisecond)
+	select {
+	case observed := <-cleanupSeen:
+		assert.True(t, observed, "cleanup should start only after the callback exits")
+	default:
+		t.Fatal("expected cleanup observation")
+	}
+}
+
 func TestHarness_CaptureOnBackend_CtxCancelled(t *testing.T) {
 	key := sessKey("ctx-cancel")
 	backends := makeBackends(t, key)
@@ -2362,6 +2462,39 @@ func TestHarness_Run_RateLimitError(t *testing.T) {
 	assert.Contains(t, err.Error(), "rate limited")
 }
 
+func TestHarness_Run_RateLimitCalledPerPhase(t *testing.T) {
+	key := sessKey("ratelimit-phase")
+	backends := makeBackends(t, key)
+	callCount := 0
+	backends[0].RateLimit = func(ctx context.Context) error {
+		callCount++
+		return nil
+	}
+	h := Harness{Backends: backends}
+	c := Case{
+		Name:         "ratelimit_phase_test",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			_, err := backend.Sess.CreateSession(ctx, key, nil)
+			if err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			if err := backend.Sess.AppendEvent(ctx, sess, newUserEvent("one")); err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newUserEvent("two"))
+		},
+	}
+	result, err := h.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPass, result.Status)
+	assert.Equal(t, 2, callCount, "rate limiting should apply once before Run and once before Capture")
+}
+
 func TestHarness_WriteReadReport_FullRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "full_report.json")
@@ -2458,6 +2591,27 @@ func TestHarness_BackendsForCase_IsolatesAppAndUserNamespaces(t *testing.T) {
 		assert.Contains(t, k.UserID, "scope_case")
 		assert.Contains(t, k.SessionID, "scope_case")
 	}
+}
+
+func TestHarness_BackendsForCase_ReusesSharedOperationMutex(t *testing.T) {
+	key := sessKey("for-case-locks")
+	backends := makeBackends(t, key)
+	h := Harness{Backends: backends}
+
+	first := h.backendsForCase(Case{Name: "case_one"})
+	second := h.backendsForCase(Case{Name: "case_two"})
+
+	firstSess, ok := first[0].Sess.(*lockedSessionService)
+	require.True(t, ok)
+	secondSess, ok := second[0].Sess.(*lockedSessionService)
+	require.True(t, ok)
+	assert.Same(t, firstSess.mu, secondSess.mu, "case-local wrappers should share one mutex per underlying backend")
+
+	firstMem, ok := first[0].Mem.(*lockedMemoryService)
+	require.True(t, ok)
+	secondMem, ok := second[0].Mem.(*lockedMemoryService)
+	require.True(t, ok)
+	assert.Same(t, firstMem.mu, secondMem.mu, "memory wrappers should share one mutex per underlying backend")
 }
 
 func TestHarness_Run_AllowedDiffs(t *testing.T) {
@@ -2987,14 +3141,14 @@ func TestNormalize_IntPointer(t *testing.T) {
 }
 
 func TestNormalize_RestoreMissingInAny(t *testing.T) {
-	// Map with __missing sentinel.
-	input := map[string]any{"__missing": true}
+	// Map with missing-value sentinel.
+	input := map[string]any{missingValueSentinelKey: missingValueSentinelType}
 	result := restoreMissingInAny(input)
 	_, ok := result.(MissingValue)
 	assert.True(t, ok, "should restore MissingValue")
 
-	// Slice with __missing sentinel.
-	input2 := []any{map[string]any{"__missing": true}}
+	// Slice with missing-value sentinel.
+	input2 := []any{map[string]any{missingValueSentinelKey: missingValueSentinelType}}
 	result2 := restoreMissingInAny(input2)
 	slice, ok := result2.([]any)
 	require.True(t, ok)
@@ -3009,10 +3163,10 @@ func TestNormalize_RestoreMissingInAny(t *testing.T) {
 func TestNormalize_RestoreMissingInSnapshot(t *testing.T) {
 	snap := &Snapshot{
 		Events: []map[string]any{
-			{"k1": map[string]any{"__missing": true}},
+			{"k1": map[string]any{missingValueSentinelKey: missingValueSentinelType}},
 		},
 		State: map[string]any{
-			"k2": map[string]any{"__missing": true},
+			"k2": map[string]any{missingValueSentinelKey: missingValueSentinelType},
 		},
 	}
 	restoreMissingInSnapshot(snap)
@@ -3212,7 +3366,6 @@ func TestCapture_SkipsScopedStateWhenCapabilityDisabled(t *testing.T) {
 		},
 		Caps: Capabilities{
 			CapEvents: {Supported: true},
-			CapState:  {Supported: false, Reason: "event-only backend"},
 		},
 		SessKey: func() session.Key { return key },
 	}
@@ -3245,6 +3398,17 @@ func TestValidateCase_UnsafeName(t *testing.T) {
 	err := validateCase(c)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "safe file name")
+}
+
+func TestValidateCase_RejectsDeclarativeFieldsEvenWithRun(t *testing.T) {
+	c := Case{
+		Name: "ops-with-run",
+		Ops:  []Op{{Type: OpCreateSession}},
+		Run:  func(ctx context.Context, b Backend) error { return nil },
+	}
+	err := validateCase(c)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "declarative execution is not yet implemented")
 }
 
 func TestValidateBackends_EmptyName(t *testing.T) {
@@ -4412,6 +4576,44 @@ func TestHarness_RunSuite_CircuitBreakerSkipsFailedBackendSequential(t *testing.
 	}
 }
 
+func TestHarness_RunSuite_CircuitBreakerStopsParallelDispatchAfterTrip(t *testing.T) {
+	key := sessKey("cb-parallel-stop")
+	backends := makeBackends(t, key)
+	var badProbeCalls atomic.Int32
+	var goodProbeCalls atomic.Int32
+	backends[0].Probe = func(ctx context.Context) error {
+		badProbeCalls.Add(1)
+		return errors.New("probe failed")
+	}
+	backends[1].Probe = func(ctx context.Context) error {
+		goodProbeCalls.Add(1)
+		return errors.New("probe failed")
+	}
+
+	h := Harness{
+		Backends:                  backends,
+		Normalizer:                NewNormalizer(DefaultNormalizerConfig()),
+		CircuitBreakerMaxFailures: 1,
+		Parallelism:               2,
+	}
+	cases := []Case{
+		{Name: "cb_parallel_1", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error { return nil }},
+		{Name: "cb_parallel_2", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error { return nil }},
+		{Name: "cb_parallel_3", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error { return nil }},
+		{Name: "cb_parallel_4", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error { return nil }},
+		{Name: "cb_parallel_5", RequiredCaps: []string{CapEvents}, Run: func(ctx context.Context, backend Backend) error { return nil }},
+	}
+
+	report, err := h.RunSuite(context.Background(), cases, "")
+	require.NoError(t, err)
+	require.LessOrEqual(t, int(badProbeCalls.Load()), h.Parallelism)
+	require.LessOrEqual(t, int(goodProbeCalls.Load()), h.Parallelism)
+	assert.Less(t, int(badProbeCalls.Load()), len(cases), "after all backends trip, remaining cases should not be dispatched")
+	assert.Less(t, int(goodProbeCalls.Load()), len(cases), "after all backends trip, remaining cases should not be dispatched")
+	assert.LessOrEqual(t, len(report.Cases), h.Parallelism)
+	assert.Less(t, len(report.Cases), len(cases))
+}
+
 func TestHarness_RunSuite_ParallelExecution(t *testing.T) {
 	key := sessKey("parallel-suite")
 	backends := makeBackends(t, key)
@@ -5125,6 +5327,51 @@ func TestHarness_Run_SnapshotDirError(t *testing.T) {
 	assert.Equal(t, StatusPass, result.Status)
 }
 
+func TestHarness_Run_SnapshotDirSanitizesBackendName(t *testing.T) {
+	key := sessKey("snapdir-backend-name")
+	backends := makeBackends(t, key)
+	backends[0].Name = `x/../../outside`
+	normalizer := NewNormalizer(DefaultNormalizerConfig())
+	snapshotDir := t.TempDir()
+	parentDir := filepath.Dir(snapshotDir)
+	outsidePath := filepath.Join(parentDir, "outside.json")
+
+	h := Harness{
+		Backends:    backends,
+		Normalizer:  normalizer,
+		SnapshotDir: snapshotDir,
+	}
+	c := Case{
+		Name:         "snapdir_backend_name_test",
+		RequiredCaps: []string{CapEvents},
+		Run: func(ctx context.Context, backend Backend) error {
+			_, err := backend.Sess.CreateSession(ctx, key, nil)
+			if err != nil {
+				return err
+			}
+			sess, err := backend.Sess.GetSession(ctx, key)
+			if err != nil {
+				return err
+			}
+			return backend.Sess.AppendEvent(ctx, sess, newUserEvent("hello"))
+		},
+	}
+
+	result, err := h.Run(context.Background(), c)
+	require.NoError(t, err)
+	assert.Equal(t, StatusPass, result.Status)
+	_, statErr := os.Stat(outsidePath)
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
+
+	files, err := os.ReadDir(snapshotDir)
+	require.NoError(t, err)
+	require.NotEmpty(t, files)
+	for _, file := range files {
+		assert.False(t, strings.Contains(file.Name(), ".."))
+		assert.False(t, strings.ContainsAny(file.Name(), `/\`))
+	}
+}
+
 func TestHarness_Run_GoldenDirLoadError(t *testing.T) {
 	key := sessKey("golden-err")
 	backends := makeBackends(t, key)
@@ -5741,7 +5988,7 @@ func TestHarness_SaveCheckpointAndProgress_BothSet(t *testing.T) {
 			progressCalled = true
 		},
 	}
-	h.saveCheckpointAndProgress(dir, "test-case", CaseResult{Name: "test-case", Status: StatusPass}, 1, 2)
+	require.NoError(t, h.saveCheckpointAndProgress(dir, "test-case", CaseResult{Name: "test-case", Status: StatusPass}, 1, 2))
 	assert.True(t, progressCalled)
 
 	// Verify checkpoint was saved.
@@ -5860,8 +6107,8 @@ func TestHarness_Run_SectionsAllSkipped(t *testing.T) {
 	normalizer := NewNormalizer(DefaultNormalizerConfig())
 
 	// Set backends with all caps explicitly unsupported.
-	// Note: an empty Capabilities{} means all caps are supported (omitted = supported),
-	// so we must explicitly mark each as unsupported.
+	// Empty capability maps now default to unsupported, but this explicit table
+	// keeps the unsupported section list deterministic for assertions.
 	noCaps := Capabilities{
 		CapEvents:  {Supported: false, Reason: "not implemented"},
 		CapState:   {Supported: false, Reason: "not implemented"},
@@ -6625,7 +6872,7 @@ func TestHarness_saveCheckpointAndProgress(t *testing.T) {
 		Status: StatusPass,
 	}
 	h := Harness{}
-	h.saveCheckpointAndProgress(dir, "checkpoint-progress-case", result, 3, 10)
+	require.NoError(t, h.saveCheckpointAndProgress(dir, "checkpoint-progress-case", result, 3, 10))
 
 	// Verify the result can be loaded back (uses .result.json format).
 	loaded, ok := loadCheckpointResult(dir, "checkpoint-progress-case")
@@ -6652,7 +6899,7 @@ func TestHarness_saveCheckpointAndProgress_WithProgressFunc(t *testing.T) {
 		Name:   "progress-func-case",
 		Status: StatusPass,
 	}
-	h.saveCheckpointAndProgress(dir, "progress-func-case", result, 7, 15)
+	require.NoError(t, h.saveCheckpointAndProgress(dir, "progress-func-case", result, 7, 15))
 	assert.True(t, progressCalled)
 	assert.Equal(t, 7, progressCompleted)
 	assert.Equal(t, 15, progressTotal)

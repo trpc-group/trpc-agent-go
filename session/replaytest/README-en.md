@@ -14,8 +14,8 @@ comparison, so comparisons are detached from Go struct layout.
 - `IDAliasMap` replaces unstable IDs with stable aliases such as `event-000`
   and `tool-call-001`, while preserving cross-reference relationships.
 - `nil` values in `StateDelta` are normalized to `MissingValue{}` and
-  serialized as `{"__missing":true}`, so "field absent" and "field present
-  with null" stay distinguishable.
+  serialized as a replaytest-private sentinel object, so "field absent" and
+  "field present with null" stay distinguishable.
 - Volatile payload keys such as `duration`, `duration_ms`, `elapsed`,
   `elapsed_ms`, `latency`, and `latency_ms` are stripped before comparison.
 - Summary comparison converts time-like metadata to event indices for stable

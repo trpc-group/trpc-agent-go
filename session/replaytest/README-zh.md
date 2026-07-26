@@ -12,7 +12,7 @@ Go 结构体布局。
 - `IDAliasMap` 会把不稳定 ID 替换成稳定别名，例如 `event-000`、
   `tool-call-001`，同时保留交叉引用关系。
 - `StateDelta` 里的 `nil` 会归一化成 `MissingValue{}`，序列化为
-  `{"__missing":true}`，从而严格区分“字段缺失”和“字段存在但值为 null”。
+  replaytest 私有的哨兵对象，从而严格区分“字段缺失”和“字段存在但值为 null”。
 - `duration`、`duration_ms`、`elapsed`、`elapsed_ms`、`latency`、
   `latency_ms` 等易变字段会在比较前移除。
 - Summary 比较会把时间类元数据转换为 event index，Track 比较会归一化

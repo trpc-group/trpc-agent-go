@@ -25,8 +25,10 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // DefaultCaseTimeout is the default per-case execution timeout.
@@ -85,6 +87,154 @@ type Harness struct {
 	// It returns an error if memory pressure is too high, or nil otherwise.
 	memoryCheckFn  func(maxUsagePct float64) error
 	circuitBreaker *circuitBreaker
+}
+
+type lockedSessionService struct {
+	inner session.Service
+	mu    *sync.Mutex
+}
+
+func (s *lockedSessionService) CreateSession(ctx context.Context, key session.Key, state session.StateMap, options ...session.Option) (*session.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.CreateSession(ctx, key, state, options...)
+}
+func (s *lockedSessionService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.GetSession(ctx, key, options...)
+}
+func (s *lockedSessionService) ListSessions(ctx context.Context, userKey session.UserKey, options ...session.Option) ([]*session.Session, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.ListSessions(ctx, userKey, options...)
+}
+func (s *lockedSessionService) DeleteSession(ctx context.Context, key session.Key, options ...session.Option) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteSession(ctx, key, options...)
+}
+func (s *lockedSessionService) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.UpdateAppState(ctx, appName, state)
+}
+func (s *lockedSessionService) DeleteAppState(ctx context.Context, appName string, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteAppState(ctx, appName, key)
+}
+func (s *lockedSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.ListAppStates(ctx, appName)
+}
+func (s *lockedSessionService) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.UpdateUserState(ctx, userKey, state)
+}
+func (s *lockedSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.ListUserStates(ctx, userKey)
+}
+func (s *lockedSessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteUserState(ctx, userKey, key)
+}
+func (s *lockedSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.UpdateSessionState(ctx, key, state)
+}
+func (s *lockedSessionService) AppendEvent(ctx context.Context, sess *session.Session, event *event.Event, options ...session.Option) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.AppendEvent(ctx, sess, event, options...)
+}
+func (s *lockedSessionService) CreateSessionSummary(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+func (s *lockedSessionService) EnqueueSummaryJob(ctx context.Context, sess *session.Session, filterKey string, force bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.EnqueueSummaryJob(ctx, sess, filterKey, force)
+}
+func (s *lockedSessionService) GetSessionSummaryText(ctx context.Context, sess *session.Session, opts ...session.SummaryOption) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.GetSessionSummaryText(ctx, sess, opts...)
+}
+func (s *lockedSessionService) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Close()
+}
+
+type lockedTrackService struct {
+	inner session.TrackService
+	mu    *sync.Mutex
+}
+
+func (s *lockedTrackService) AppendTrackEvent(ctx context.Context, sess *session.Session, event *session.TrackEvent, opts ...session.Option) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.AppendTrackEvent(ctx, sess, event, opts...)
+}
+
+type lockedMemoryService struct {
+	inner memory.Service
+	mu    *sync.Mutex
+}
+
+func (s *lockedMemoryService) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.ReadMemories(ctx, userKey, limit)
+}
+func (s *lockedMemoryService) SearchMemories(ctx context.Context, userKey memory.UserKey, query string, opts ...memory.SearchOption) ([]*memory.Entry, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.SearchMemories(ctx, userKey, query, opts...)
+}
+func (s *lockedMemoryService) AddMemory(ctx context.Context, userKey memory.UserKey, content string, topics []string, opts ...memory.AddOption) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.AddMemory(ctx, userKey, content, topics, opts...)
+}
+func (s *lockedMemoryService) UpdateMemory(ctx context.Context, memoryKey memory.Key, content string, topics []string, opts ...memory.UpdateOption) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.UpdateMemory(ctx, memoryKey, content, topics, opts...)
+}
+func (s *lockedMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.DeleteMemory(ctx, memoryKey)
+}
+func (s *lockedMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.ClearMemories(ctx, userKey)
+}
+func (s *lockedMemoryService) Tools() []tool.Tool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Tools()
+}
+func (s *lockedMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.EnqueueAutoMemoryJob(ctx, sess)
+}
+func (s *lockedMemoryService) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inner.Close()
 }
 
 func (h Harness) logf(format string, args ...any) {
@@ -452,7 +602,7 @@ func (h Harness) Run(ctx context.Context, replayCase Case) (CaseResult, error) {
 			Snapshots: []Snapshot{snapshots[0].snapshot},
 		}
 		if err := SaveGoldenTrace(h.GoldenDir, trace); err != nil {
-			h.logf("replay: failed to update golden trace for %s: %v", replayCase.Name, err)
+			return result, &ReplayError{Kind: ErrReportWrite, Case: replayCase.Name, Cause: fmt.Errorf("update golden trace: %w", err)}
 		}
 	}
 
@@ -607,7 +757,7 @@ func (h Harness) captureOnBackend(
 	// Save snapshot for crash recovery if SnapshotDir is set.
 	// Reuse the already-marshaled bytes to avoid double serialization.
 	if h.SnapshotDir != "" && snapErr == nil {
-		snapPath := filepath.Join(h.SnapshotDir, fmt.Sprintf("%s_%s.json", replayCase.Name, backend.Name))
+		snapPath := filepath.Join(h.SnapshotDir, snapshotFileName(replayCase.Name, backend.Name))
 		if err := saveBytesAtomic(snapPath, snapRaw); err != nil {
 			h.logf("replay: warning: failed to save snapshot %s: %v", snapPath, err)
 		}
@@ -626,7 +776,20 @@ func (h Harness) captureOnBackend(
 func (h Harness) backendsForCase(c Case) []Backend {
 	backends := make([]Backend, len(h.Backends))
 	for i, b := range h.Backends {
+		if h.Backends[i].operationMu == nil {
+			h.Backends[i].operationMu = &sync.Mutex{}
+		}
 		backends[i] = b
+		backends[i].operationMu = h.Backends[i].operationMu
+		if backends[i].Sess != nil {
+			backends[i].Sess = &lockedSessionService{inner: backends[i].Sess, mu: backends[i].operationMu}
+		}
+		if backends[i].Track != nil {
+			backends[i].Track = &lockedTrackService{inner: backends[i].Track, mu: backends[i].operationMu}
+		}
+		if backends[i].Mem != nil {
+			backends[i].Mem = &lockedMemoryService{inner: backends[i].Mem, mu: backends[i].operationMu}
+		}
 		if b.SessKey != nil {
 			origKey := b.SessKey()
 			suffix := caseNamespaceSuffix(c.Name)
@@ -642,8 +805,19 @@ func (h Harness) backendsForCase(c Case) []Backend {
 }
 
 func caseNamespaceSuffix(caseName string) string {
+	return safePathComponent(caseName, "case")
+}
+
+func snapshotFileName(caseName, backendName string) string {
+	return fmt.Sprintf("%s_%s.json",
+		safePathComponent(caseName, "case"),
+		safePathComponent(backendName, "backend"),
+	)
+}
+
+func safePathComponent(raw, fallback string) string {
 	var builder strings.Builder
-	for _, r := range caseName {
+	for _, r := range raw {
 		switch {
 		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '_':
 			builder.WriteRune(r)
@@ -653,9 +827,10 @@ func caseNamespaceSuffix(caseName string) string {
 	}
 	sanitized := strings.Trim(builder.String(), "-")
 	if sanitized == "" {
-		return "case"
+		sanitized = fallback
 	}
-	return sanitized
+	sum := sha256.Sum256([]byte(raw))
+	return fmt.Sprintf("%s-%x", sanitized, sum[:4])
 }
 
 // RunSuite runs multiple cases with checkpoint/resume support, circuit breaker,
@@ -726,7 +901,9 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 				break
 			}
 
-			result, err := suiteHarness.Run(ctx, c)
+			caseHarness := suiteHarness
+			caseHarness.Backends = h.backendsForCase(c)
+			result, err := caseHarness.Run(ctx, c)
 			if err != nil {
 				h.recordCBFailure(cb, err)
 				return nil, fmt.Errorf("run case %q: %w", c.Name, err)
@@ -735,7 +912,9 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 
 			results = append(results, result)
 			completed++
-			h.saveCheckpointAndProgress(checkpointDir, c.Name, result, completed, total)
+			if err := h.saveCheckpointAndProgress(checkpointDir, c.Name, result, completed, total); err != nil {
+				return nil, err
+			}
 		}
 	} else {
 		// Parallel execution with worker pool.
@@ -751,6 +930,9 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 		caseCh := make(chan int)
 		resultCh := make(chan indexedResult, len(pendingCases))
 		runnableCases := append([]Case(nil), pendingCases...)
+		closeCaseCh := sync.OnceFunc(func() {
+			close(caseCh)
+		})
 
 		// Spawn workers.
 		actualWorkers := parallelism
@@ -792,43 +974,64 @@ func (h Harness) RunSuite(ctx context.Context, cases []Case, checkpointDir strin
 			}()
 		}
 
-		go func() {
-			defer close(caseCh)
-			for i := range runnableCases {
-				if suiteCtx.Err() != nil {
-					return
-				}
-				if cb != nil && h.allBackendsTripped(cb) {
-					h.logf("replay: all backends tripped, stopping parallel dispatch at case %s", runnableCases[i].Name)
-					return
-				}
-				caseCh <- i
-			}
-		}()
-
 		// Close resultCh when all workers finish.
 		go func() {
 			wg.Wait()
 			close(resultCh)
 		}()
 
-		// Collect results in dispatch order.
 		orderedResults := make([]indexedResult, len(runnableCases))
-		received := 0
-		for ir := range resultCh {
-			received++
+		nextDispatch := 0
+		inFlight := 0
+		dispatchOne := func(idx int) bool {
+			if suiteCtx.Err() != nil {
+				return false
+			}
+			if cb != nil && h.allBackendsTripped(cb) {
+				h.logf("replay: all backends tripped, stopping parallel dispatch at case %s", runnableCases[idx].Name)
+				return false
+			}
+			caseCh <- idx
+			inFlight++
+			nextDispatch++
+			return true
+		}
+		for inFlight < actualWorkers && nextDispatch < len(runnableCases) {
+			if !dispatchOne(nextDispatch) {
+				break
+			}
+		}
+
+		for inFlight > 0 {
+			ir, ok := <-resultCh
+			if !ok {
+				break
+			}
+			inFlight--
 			if ir.err != nil {
 				h.recordCBFailure(cb, ir.err)
 				// Cancel remaining work on first error.
 				suiteCancel()
+				closeCaseCh()
 				wg.Wait()
 				return nil, fmt.Errorf("run case %q: %w", runnableCases[ir.index].Name, ir.err)
 			}
 			h.recordCBSuccess(cb, ir.result)
 			orderedResults[ir.index] = ir
 			completed++
-			h.saveCheckpointAndProgress(checkpointDir, runnableCases[ir.index].Name, ir.result, completed, total)
+			if err := h.saveCheckpointAndProgress(checkpointDir, runnableCases[ir.index].Name, ir.result, completed, total); err != nil {
+				suiteCancel()
+				closeCaseCh()
+				wg.Wait()
+				return nil, err
+			}
+			for inFlight < actualWorkers && nextDispatch < len(runnableCases) {
+				if !dispatchOne(nextDispatch) {
+					break
+				}
+			}
 		}
+		closeCaseCh()
 
 		// Append in order.
 		for _, ir := range orderedResults {
@@ -927,20 +1130,21 @@ func (h Harness) handleBackendFailure(result *CaseResult, err error) bool {
 }
 
 // saveCheckpointAndProgress saves checkpoint and calls progress callback.
-func (h Harness) saveCheckpointAndProgress(checkpointDir, caseName string, result CaseResult, completed, total int) {
+func (h Harness) saveCheckpointAndProgress(checkpointDir, caseName string, result CaseResult, completed, total int) error {
 	if checkpointDir != "" {
 		if cpErr := saveCheckpointResult(checkpointDir, caseName, result); cpErr != nil {
-			h.logf("replay: failed to save checkpoint for %s: %v", caseName, cpErr)
+			return fmt.Errorf("save checkpoint for %s: %w", caseName, cpErr)
 		}
 	}
 	if h.ProgressFunc != nil {
 		h.ProgressFunc(completed, total, result)
 	}
+	return nil
 }
 
 // executeRunWithProtection runs a Case.Run function with panic recovery and timeout.
-// The goroutine communicates its outcome via a buffered channel so that on timeout
-// the function can return without the goroutine racing to write to the shared result.
+// On cancellation or timeout, it waits for the callback goroutine to exit before
+// returning so cleanup and later cases never reuse a backend concurrently.
 func (h Harness) executeRunWithProtection(
 	ctx context.Context,
 	replayCase Case,
@@ -978,9 +1182,12 @@ func (h Harness) executeRunWithProtection(
 			return fmt.Errorf("run on %s: %w", backend.Name, outcome.err)
 		}
 	case <-caseCtx.Done():
-		// Context cancelled or timed out. The goroutine may still be running,
-		// but it writes to the buffered outcomeCh so there is no data race
-		// on the shared result after we return.
+		outcome := <-outcomeCh
+		if outcome.panicRecovered != nil {
+			result.PanicRecovered = outcome.panicRecovered
+			result.PanicStack = outcome.panicStack
+			return nil
+		}
 		if caseCtx.Err() == context.DeadlineExceeded {
 			return fmt.Errorf("run on %s: timed out after %s", backend.Name, timeout)
 		}
@@ -1257,10 +1464,6 @@ func loadCheckpointResult(dir, caseName string) (CaseResult, bool) {
 			return result, true
 		}
 	}
-	// Fall back to old done-marker format (no result data).
-	if checkpointExists(dir, caseName) {
-		return CaseResult{Name: caseName, Status: StatusPass}, true
-	}
 	return CaseResult{}, false
 }
 
@@ -1457,12 +1660,10 @@ func validateCase(replayCase Case) error {
 		strings.ContainsAny(name, `/\`) || filepath.Clean(name) != name {
 		return fmt.Errorf("replay case %q is not a safe file name", replayCase.Name)
 	}
+	if len(replayCase.Ops) > 0 || len(replayCase.ParallelGroups) > 0 {
+		return fmt.Errorf("replay case %q uses Ops/ParallelGroups, but declarative execution is not yet implemented", replayCase.Name)
+	}
 	if replayCase.Run == nil {
-		// Ops and ParallelGroups are reserved for future declarative execution.
-		// Currently only Run is supported; reject cases that rely on Ops alone.
-		if len(replayCase.Ops) > 0 || len(replayCase.ParallelGroups) > 0 {
-			return fmt.Errorf("replay case %q uses Ops/ParallelGroups without Run; declarative execution is not yet implemented, use Run instead", replayCase.Name)
-		}
 		return fmt.Errorf("replay case %q requires a Run function", replayCase.Name)
 	}
 	seen := make(map[string]struct{}, len(replayCase.RequiredCaps))

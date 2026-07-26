@@ -227,7 +227,11 @@ func normalizeMemories(
 	unordered bool,
 	scorePrecision int,
 ) ([]MemorySnapshot, error) {
-	result := make([]MemorySnapshot, 0, len(entries))
+	type normalizedMemory struct {
+		snapshot MemorySnapshot
+		original string
+	}
+	result := make([]normalizedMemory, 0, len(entries))
 	for rank, entry := range entries {
 		if entry == nil {
 			return nil, fmt.Errorf("memory %d is nil", rank)
@@ -250,22 +254,27 @@ func normalizeMemories(
 		}
 		score := normalizeMemoryScore(entry.Score, scorePrecision)
 		item.Score = &score
-		result = append(result, item)
+		result = append(result, normalizedMemory{
+			snapshot: item,
+			original: entry.ID,
+		})
 	}
 	if unordered {
 		for i := range result {
-			result[i].Rank = -1
+			result[i].snapshot.Rank = -1
 		}
 		sort.Slice(result, func(i, j int) bool {
-			left, _ := json.Marshal(result[i])
-			right, _ := json.Marshal(result[j])
+			left, _ := json.Marshal(result[i].snapshot)
+			right, _ := json.Marshal(result[j].snapshot)
 			return string(left) < string(right)
 		})
 	}
+	snapshots := make([]MemorySnapshot, len(result))
 	for i := range result {
-		result[i].ID = aliases.Alias(fmt.Sprintf("memory-%d", i), "memory")
+		result[i].snapshot.ID = aliases.Alias(result[i].original, "memory")
+		snapshots[i] = result[i].snapshot
 	}
-	return result, nil
+	return snapshots, nil
 }
 
 func normalizeMemoryScore(score float64, precision int) float64 {

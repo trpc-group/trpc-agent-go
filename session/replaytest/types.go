@@ -39,6 +39,11 @@ type IDAliasMap struct {
 	memoryCounter     int
 }
 
+const (
+	missingValueSentinelKey  = "__replaytest_missing__"
+	missingValueSentinelType = "missing-value-v1"
+)
+
 // NewIDAliasMap creates an empty alias map.
 func NewIDAliasMap() *IDAliasMap {
 	return &IDAliasMap{
@@ -116,7 +121,7 @@ type MissingValue struct{}
 
 // MarshalJSON produces a distinctive sentinel.
 func (MissingValue) MarshalJSON() ([]byte, error) {
-	return []byte(`{"__missing":true}`), nil
+	return []byte(`{"` + missingValueSentinelKey + `":"` + missingValueSentinelType + `"}`), nil
 }
 
 // UnmarshalJSON rejects any input; MissingValue is synthetic-only.
@@ -155,7 +160,7 @@ func (s Snapshot) Clone() (Snapshot, error) {
 
 // restoreMissingInSnapshot walks generic map/slice fields and restores
 // MissingValue sentinels that were lost during JSON round-trip.
-// MissingValue marshals as {"__missing":true}, but json.Unmarshal into
+// MissingValue marshals as a replaytest-private sentinel object, but json.Unmarshal into
 // map[string]any produces a regular map, not a MissingValue instance.
 func restoreMissingInSnapshot(s *Snapshot) {
 	for _, m := range s.Events {
@@ -175,7 +180,7 @@ func restoreMissingInSnapshot(s *Snapshot) {
 }
 
 // restoreMissingInMap walks a map[string]any in place and replaces any
-// map[string]any{"__missing": true} with MissingValue{}.
+// map[string]any{missingValueSentinelKey: missingValueSentinelType} with MissingValue{}.
 func restoreMissingInMap(m map[string]any) {
 	if m == nil {
 		return
@@ -186,11 +191,11 @@ func restoreMissingInMap(m map[string]any) {
 }
 
 // restoreMissingInAny walks a generic value and replaces any
-// map[string]any{"__missing": true} with MissingValue{}.
+// map[string]any{missingValueSentinelKey: missingValueSentinelType} with MissingValue{}.
 func restoreMissingInAny(v any) any {
 	switch tv := v.(type) {
 	case map[string]any:
-		if len(tv) == 1 && tv["__missing"] == true {
+		if len(tv) == 1 && tv[missingValueSentinelKey] == missingValueSentinelType {
 			return MissingValue{}
 		}
 		restoreMissingInMap(tv)
@@ -263,14 +268,14 @@ type CapabilityDesc struct {
 }
 
 // Capabilities maps capability names to their descriptors.
-// An omitted capability defaults to supported for backward compatibility.
+// An omitted capability defaults to unsupported.
 type Capabilities map[string]CapabilityDesc
 
 // Has reports whether the given capability is supported.
-// An omitted capability defaults to supported.
+// Capabilities must be declared explicitly; omitted entries are unsupported.
 func (c Capabilities) Has(cap string) bool {
 	desc, ok := c[cap]
-	return !ok || desc.Supported
+	return ok && desc.Supported
 }
 
 // AllCapabilities returns Capabilities with everything enabled.
@@ -408,6 +413,9 @@ type Backend struct {
 	Track session.TrackService
 	Mem   memory.Service
 	Caps  Capabilities
+	// operationMu serializes shared backend service access when a suite derives
+	// multiple case-local Backend copies from one underlying service instance.
+	operationMu *sync.Mutex
 	// SessKey returns the session key for this backend. Override per test.
 	SessKey func() session.Key
 	// Load overrides capture reads for backends that need custom consistency logic.
@@ -420,9 +428,9 @@ type Backend struct {
 	Retry *RetryPolicy
 	// IsRetryable overrides the default transient error detection. Optional.
 	IsRetryable func(err error) bool
-	// RateLimit controls per-backend operation rate limiting. Optional.
-	// The function is called before each backend operation; it should block
-	// until the operation is allowed or return an error if the context is cancelled.
+	// RateLimit controls per-backend phase rate limiting. Optional.
+	// The function is called before the Run phase and again before the Capture
+	// phase; imperative operations inside Case.Run are not intercepted.
 	RateLimit func(ctx context.Context) error
 }
 
@@ -535,8 +543,9 @@ func DefaultNormalizerConfig() NormalizerConfig {
 	}
 }
 
-// Case defines a replay test case. It supports both Op-based declarative
-// cases and function-based imperative cases.
+// Case defines a replay test case.
+// Only the imperative Run callback is currently executable; declarative
+// fields remain reserved and are rejected by validation until implemented.
 type Case struct {
 	Name                   string
 	RequiredCaps           []string
@@ -546,7 +555,7 @@ type Case struct {
 	Ops                    []Op
 	ParallelGroups         [][]Op
 	CountOnly              bool
-	// Run overrides Op-based execution. If non-nil, it takes precedence.
+	// Run is the only currently supported execution entrypoint.
 	Run func(ctx context.Context, backend Backend) error
 }
 
