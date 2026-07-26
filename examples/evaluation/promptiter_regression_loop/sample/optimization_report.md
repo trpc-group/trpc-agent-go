@@ -1,8 +1,11 @@
 # PromptIter Regression Report
 
-- Run: `20260722T033916.163604406Z-1adfcdb325b6`
+- Run: `sample-c30a7d2ed68a`
 - Status: `succeeded`
 - Mode: `deterministic-fake-model`
+- Seed: `2003`
+- Config SHA-256: `1adfcdb325b676d37218eaa974238526701e278f193f216771167b0e549895c3`
+- Input SHA-256: `c30a7d2ed68a044ee8504f493908a6b9d5399201e2bc23894fd914b9b6ef2685`
 - Baseline train score: `0.3333`
 - Baseline validation score: `0.6667`
 - Write back: `true`
@@ -62,7 +65,7 @@ Gate reasons:
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | validation_account_security | 1.0000 | 1.0000 | 1.0000 | +0.0000 | +0.0000 | unchanged |
 | validation_delivery_update | 1.0000 | 1.0000 | 1.0000 | +0.0000 | +0.0000 | unchanged |
-| validation_return_shipping | 0.0000 | 1.0000 | 1.0000 | +1.0000 | +0.0000 | new_pass |
+| validation_return_shipping | 0.0000 | 1.0000 | 1.0000 | +1.0000 | +0.0000 | unchanged |
 
 ### Attempt 3
 
@@ -82,7 +85,7 @@ Gate reasons:
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | validation_account_security | 1.0000 | 1.0000 | 0.0000 | -1.0000 | -1.0000 | new_fail |
 | validation_delivery_update | 1.0000 | 1.0000 | 1.0000 | +0.0000 | +0.0000 | unchanged |
-| validation_return_shipping | 0.0000 | 1.0000 | 1.0000 | +1.0000 | +0.0000 | new_pass |
+| validation_return_shipping | 0.0000 | 1.0000 | 1.0000 | +1.0000 | +0.0000 | unchanged |
 
 ## Failure Attribution
 
@@ -97,6 +100,6 @@ Baseline failures: `3`; classified without fallback: `3`.
 - Model calls: `51`
 - Tool calls: `0`
 - Measured: `true`
-- Run duration: `15.838418ms`
-- Audited trace duration: `11.691089ms`
+- Run duration: `0s`
+- Audited trace duration: `0s`
 - Cost basis: measured token and call counts; no currency estimate is assigned in fake mode

@@ -20,7 +20,7 @@ import (
 	"unicode/utf8"
 )
 
-const reportSchemaVersion = "promptiter-regression/v1"
+const reportSchemaVersion = "promptiter-regression/v2"
 
 // ReportPaths identifies one atomically published report generation.
 type ReportPaths struct {
@@ -138,6 +138,9 @@ func WriteMarkdown(writer io.Writer, report *Report) error {
 	fmt.Fprintf(&buffer, "- Run: `%s`\n", markdownInline(report.Run.ID))
 	fmt.Fprintf(&buffer, "- Status: `%s`\n", markdownInline(report.Run.Status))
 	fmt.Fprintf(&buffer, "- Mode: `%s`\n", markdownInline(report.Run.Mode))
+	fmt.Fprintf(&buffer, "- Seed: `%d`\n", report.Run.Seed)
+	fmt.Fprintf(&buffer, "- Config SHA-256: `%s`\n", markdownInline(report.Run.ConfigSHA256))
+	fmt.Fprintf(&buffer, "- Input SHA-256: `%s`\n", markdownInline(report.Run.InputSHA256))
 	fmt.Fprintf(&buffer, "- Baseline train score: `%.4f`\n", report.BaselineTrain.OverallScore)
 	fmt.Fprintf(&buffer, "- Baseline validation score: `%.4f`\n", report.BaselineValidation.OverallScore)
 	fmt.Fprintf(&buffer, "- Write back: `%t`\n", report.ShouldWriteBack)
@@ -178,20 +181,15 @@ func WriteMarkdown(writer io.Writer, report *Report) error {
 			fmt.Fprintf(&buffer, "- %s\n", markdownText(reason))
 		}
 		fmt.Fprintln(&buffer)
-		acceptedCases := make(map[string]CaseDelta, len(round.Delta.Cases))
-		for _, acceptedCase := range round.Delta.Cases {
-			acceptedCases[acceptedCase.CaseID] = acceptedCase
-		}
 		fmt.Fprintln(&buffer, "| Case | Baseline | Accepted | Candidate | Baseline delta | Accepted delta | Transition |")
 		fmt.Fprintln(&buffer, "| --- | ---: | ---: | ---: | ---: | ---: | --- |")
 		for _, evalCase := range round.Delta.Cases {
 			baselineCase := findCaseDelta(round.BaselineDelta, evalCase.CaseID)
-			acceptedCase := acceptedCases[evalCase.CaseID]
 			fmt.Fprintf(&buffer, "| %s | %.4f | %.4f | %.4f | %+.4f | %+.4f | %s |\n",
 				markdownTable(evalCase.CaseID), baselineCase.BaselineScore,
-				acceptedCase.BaselineScore, evalCase.CandidateScore,
-				baselineCase.ScoreDelta, acceptedCase.ScoreDelta,
-				markdownTable(string(baselineCase.Kind)))
+				evalCase.BaselineScore, evalCase.CandidateScore,
+				baselineCase.ScoreDelta, evalCase.ScoreDelta,
+				markdownTable(string(evalCase.Kind)))
 		}
 	}
 	fmt.Fprintln(&buffer)

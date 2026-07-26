@@ -30,6 +30,10 @@ metrics.json
 promptiter.json
 ```
 
+The evalsets and metrics are loaded from the directory containing
+`promptiter.json`. Relative baseline-prompt and output paths use the same base,
+so a custom configuration does not need its directory name to match `appName`.
+
 The train and validation evalsets contain three cases each. The fixed exact-match answers make the following behaviors reproducible:
 
 | Profile | Train | Validation | Release result |
@@ -73,9 +77,9 @@ output/<run-id>/optimization_report.json
 output/<run-id>/optimization_report.md
 ```
 
-The JSON report retains full normalized case and metric evidence, traces, PromptIter patches, attribution results, gate decisions, seed, model/config identity, measured token and call counts, and durations. Each round has `delta` relative to the last accepted validation result and `baselineDelta` relative to the immutable original validation baseline. Token and call counts are the auditable cost basis in fake mode; the example does not invent a currency estimate without a model price table. The Markdown report summarizes both deltas and the same release decision for human review.
+The JSON report retains full normalized case and metric evidence, traces, PromptIter patches, attribution results, gate decisions, seed, model/config identity, a combined identity for every decision input, measured token and call counts, and durations. All file-backed inputs are read once and the same immutable snapshot supplies both that identity and every evaluation stage. The seed is reproducibility metadata; it does not vary the fully deterministic fake model or stages. Each round has `delta` relative to the last accepted validation result and `baselineDelta` relative to the immutable original validation baseline. Token and call counts are the auditable cost basis in fake mode; the example does not invent a currency estimate without a model price table. Total usage intentionally includes PromptIter's internal evaluations and the independent candidate train and release-validation evaluations because both consume execution budget. The Markdown report summarizes both deltas and the same release decision for human review.
 
-A complete deterministic sample is checked in as [optimization_report.json](./output/20260722T033916.163604406Z-1adfcdb325b6/optimization_report.json) and [optimization_report.md](./output/20260722T033916.163604406Z-1adfcdb325b6/optimization_report.md).
+A complete deterministic sample is checked in as [optimization_report.json](./sample/optimization_report.json) and [optimization_report.md](./sample/optimization_report.md). Its run identity and timestamps are fixed, and runtime durations are normalized to zero so regenerating the sample does not create machine-dependent churn. Normal runs continue to publish under `output/`, which is ignored by Git.
 
 Publication uses a staging directory followed by one directory rename, so readers cannot observe JSON from one run beside Markdown from another. A run ID collision fails instead of overwriting prior audit evidence.
 
@@ -89,6 +93,8 @@ Publication uses a staging directory followed by one directory rename, so reader
 - maximum validation token, model-call, and tool-call budgets.
 
 Missing cases or metrics, duplicate identities, changed metric thresholds, unknown metric states, failed traces, execution errors, and unmeasured usage under an enabled budget all fail closed. Comparing with the original baseline as well as the last accepted result prevents a sequence of small accepted changes from hiding cumulative regression.
+
+Token, model-call, and tool-call budgets are optional. An omitted or `null` budget disables that check; an explicit `0` prohibits any corresponding usage.
 
 ## Adaptation Boundary
 

@@ -19,10 +19,14 @@ import (
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
 )
 
 const defaultTimeout = 2 * time.Minute
+
+const evalSetFileSuffix = ".evalset.json"
 
 var defaultConfigCandidates = []string{
 	"data/promptiter-regression-app/promptiter.json",
@@ -59,6 +63,15 @@ type config struct {
 	DataDir              string                `json:"-"`
 	ConfigPath           string                `json:"-"`
 	ConfigSHA256         string                `json:"-"`
+	configData           []byte
+}
+
+type inputSnapshot struct {
+	sha256         string
+	baselinePrompt string
+	evalSets       map[string]*evalset.EvalSet
+	metrics        []*metric.EvalMetric
+	catalog        regression.AttributionCatalog
 }
 
 func resolveConfigPath(path string) (string, error) {
@@ -93,6 +106,7 @@ func loadConfig(path string) (*config, error) {
 	}
 	cfg.ConfigPath = filepath.ToSlash(resolved)
 	cfg.ConfigSHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
+	cfg.configData = append([]byte(nil), data...)
 	cfg.DataDir = filepath.Dir(resolved)
 	if cfg.Timeout == 0 {
 		cfg.Timeout = durationValue(defaultTimeout)
@@ -149,6 +163,9 @@ func validateConfig(cfg *config) error {
 			return fmt.Errorf("%s is empty", name)
 		}
 	}
+	if cfg.TrainEvalSetID == cfg.ValidationEvalSetID {
+		return errors.New("train and validation eval set ids must be different")
+	}
 	if time.Duration(cfg.Timeout) <= 0 {
 		return errors.New("timeout must be greater than zero")
 	}
@@ -166,14 +183,70 @@ func validateConfig(cfg *config) error {
 	return nil
 }
 
-func loadBaselinePrompt(path string) (string, error) {
-	data, err := os.ReadFile(path)
+func loadInputSnapshot(cfg *config) (*inputSnapshot, error) {
+	if cfg == nil {
+		return nil, errors.New("config is nil")
+	}
+	if len(cfg.configData) == 0 {
+		return nil, errors.New("config source bytes are unavailable")
+	}
+	inputs := []struct {
+		name string
+		path string
+		data []byte
+	}{
+		{name: "config", path: cfg.ConfigPath, data: cfg.configData},
+		{name: "baselinePrompt", path: cfg.BaselinePromptSource},
+		{name: "trainEvalSet", path: filepath.Join(cfg.DataDir, cfg.TrainEvalSetID+evalSetFileSuffix)},
+		{name: "validationEvalSet", path: filepath.Join(cfg.DataDir, cfg.ValidationEvalSetID+evalSetFileSuffix)},
+		{name: "metrics", path: filepath.Join(cfg.DataDir, "metrics.json")},
+	}
+	var combined []byte
+	for index := range inputs {
+		if inputs[index].data == nil {
+			data, err := os.ReadFile(inputs[index].path)
+			if err != nil {
+				return nil, fmt.Errorf("read %s input: %w", inputs[index].name, err)
+			}
+			inputs[index].data = data
+		}
+		digest := sha256.Sum256(inputs[index].data)
+		combined = append(combined, inputs[index].name...)
+		combined = append(combined, 0)
+		combined = append(combined, digest[:]...)
+	}
+	baselinePrompt := strings.TrimSpace(string(inputs[1].data))
+	if baselinePrompt == "" {
+		return nil, errors.New("baseline prompt is empty")
+	}
+	evalSets := make(map[string]*evalset.EvalSet, 2)
+	for _, item := range []struct {
+		id   string
+		name string
+		data []byte
+	}{
+		{id: cfg.TrainEvalSetID, name: "train eval set", data: inputs[2].data},
+		{id: cfg.ValidationEvalSetID, name: "validation eval set", data: inputs[3].data},
+	} {
+		var value evalset.EvalSet
+		if err := json.Unmarshal(item.data, &value); err != nil {
+			return nil, fmt.Errorf("decode %s: %w", item.name, err)
+		}
+		evalSets[item.id] = &value
+	}
+	var metrics []*metric.EvalMetric
+	if err := json.Unmarshal(inputs[4].data, &metrics); err != nil {
+		return nil, fmt.Errorf("decode metrics: %w", err)
+	}
+	catalog, err := regression.CatalogFromMetrics(metrics)
 	if err != nil {
-		return "", fmt.Errorf("read baseline prompt: %w", err)
+		return nil, fmt.Errorf("build attribution catalog: %w", err)
 	}
-	prompt := strings.TrimSpace(string(data))
-	if prompt == "" {
-		return "", errors.New("baseline prompt is empty")
-	}
-	return prompt, nil
+	return &inputSnapshot{
+		sha256:         fmt.Sprintf("%x", sha256.Sum256(combined)),
+		baselinePrompt: baselinePrompt,
+		evalSets:       evalSets,
+		metrics:        metrics,
+		catalog:        catalog,
+	}, nil
 }

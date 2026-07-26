@@ -53,6 +53,38 @@ func TestReportRejectsIncompleteRound(t *testing.T) {
 	}
 }
 
+func TestWriteMarkdownUsesAcceptedDeltaTransition(t *testing.T) {
+	report := newTestReport(t)
+	original := testEvaluation("validation", testCaseSpec{id: "case-1", score: 0, passed: false})
+	accepted := testEvaluation("validation", testCaseSpec{id: "case-1", score: 1, passed: true})
+	candidate := testEvaluation("validation", testCaseSpec{id: "case-1", score: 1, passed: true})
+	acceptedDelta, err := Compare(accepted, candidate)
+	if err != nil {
+		t.Fatalf("Compare(accepted) error = %v", err)
+	}
+	baselineDelta, err := Compare(original, candidate)
+	if err != nil {
+		t.Fatalf("Compare(original) error = %v", err)
+	}
+	round := testRound(t, 1, "candidate", false)
+	round.Delta = acceptedDelta
+	round.BaselineDelta = baselineDelta
+	if err := AppendRound(report, round); err != nil {
+		t.Fatalf("AppendRound() error = %v", err)
+	}
+	if err := FinalizeReport(report, nil); err != nil {
+		t.Fatalf("FinalizeReport() error = %v", err)
+	}
+	var markdown bytes.Buffer
+	if err := WriteMarkdown(&markdown, report); err != nil {
+		t.Fatalf("WriteMarkdown() error = %v", err)
+	}
+	want := "| case-1 | 0.0000 | 1.0000 | 1.0000 | +1.0000 | +0.0000 | unchanged |"
+	if !strings.Contains(markdown.String(), want) {
+		t.Fatalf("Markdown transition did not match accepted delta:\n%s", markdown.String())
+	}
+}
+
 func TestWriteReportsRejectsGenerationCollision(t *testing.T) {
 	report := newTestReport(t)
 	if err := FinalizeReport(report, nil); err != nil {

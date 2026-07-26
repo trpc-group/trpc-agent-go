@@ -15,6 +15,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
+	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -79,6 +80,7 @@ func TestNormalizeAgentEvaluationCountsInvocationUsage(t *testing.T) {
 					}},
 					ExecutionTraces: []*atrace.Trace{{
 						Status: atrace.TraceStatusCompleted,
+						Usage:  &model.Usage{},
 						Steps:  []atrace.Step{{NodeType: "llm"}},
 					}},
 				},
@@ -95,8 +97,8 @@ func TestNormalizeAgentEvaluationCountsInvocationUsage(t *testing.T) {
 	baseline := testEvaluation("validation", testCaseSpec{id: "tool-case", score: 0, passed: false})
 	decision, err := Decide(GatePolicy{
 		MinValidationScoreGain:  1,
-		MaxValidationModelCalls: 1,
-		MaxValidationToolCalls:  1,
+		MaxValidationModelCalls: intPointer(1),
+		MaxValidationToolCalls:  intPointer(1),
 	}, GateInput{
 		OriginalBaseline: baseline,
 		AcceptedBaseline: baseline,
@@ -109,6 +111,233 @@ func TestNormalizeAgentEvaluationCountsInvocationUsage(t *testing.T) {
 		!reasonsContain(decision.Reasons, "model calls 2 exceed budget 1") ||
 		!reasonsContain(decision.Reasons, "tool calls 2 exceed budget 1") {
 		t.Fatalf("decision = %+v, want model and tool budget rejection", decision)
+	}
+}
+
+func TestNormalizeAgentEvaluationRejectsCallBudgetWithoutFinalResponse(t *testing.T) {
+	result, err := NormalizeAgentEvaluation(&evaluation.EvaluationResult{
+		EvalSetID:     "validation",
+		OverallStatus: status.EvalStatusPassed,
+		EvalCases: []*evaluation.EvaluationCaseResult{{
+			EvalCaseID:    "empty-invocation",
+			OverallStatus: status.EvalStatusPassed,
+			MetricResults: []*evalresult.EvalMetricResult{{
+				MetricName: "quality", Score: 1, Threshold: 1,
+				EvalStatus: status.EvalStatusPassed,
+			}},
+			RunDetails: []*evaluation.EvaluationCaseRunDetails{{
+				Inference: &evaluation.EvaluationInferenceDetails{
+					Inferences: []*evalset.Invocation{{}},
+					ExecutionTraces: []*atrace.Trace{{
+						Status: atrace.TraceStatusCompleted,
+						Usage:  &model.Usage{},
+					}},
+				},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeAgentEvaluation() error = %v", err)
+	}
+	if result.Usage.Measured {
+		t.Fatalf("usage = %+v, want unmeasured without a final response", result.Usage)
+	}
+	baseline := testEvaluation("validation", testCaseSpec{id: "empty-invocation", score: 0, passed: false})
+	decision, err := Decide(GatePolicy{
+		MinValidationScoreGain:  1,
+		MaxValidationModelCalls: intPointer(1),
+	}, GateInput{OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: result})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Accepted || !reasonsContain(decision.Reasons, "usage is not measured") {
+		t.Fatalf("decision = %+v, want unmeasured-usage rejection", decision)
+	}
+}
+
+func TestNormalizeAgentEvaluationRejectsTokenBudgetWithoutCompleteLLMUsage(t *testing.T) {
+	tests := []struct {
+		name  string
+		steps []atrace.Step
+	}{
+		{name: "all llm usage missing", steps: []atrace.Step{{NodeType: "llm"}}},
+		{name: "all agent usage missing", steps: []atrace.Step{{NodeType: "agent"}}},
+		{name: "partially missing", steps: []atrace.Step{
+			{NodeType: "llm", Usage: &model.Usage{TotalTokens: 1}},
+			{NodeType: "llm"},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := NormalizeAgentEvaluation(&evaluation.EvaluationResult{
+				EvalSetID:     "validation",
+				OverallStatus: status.EvalStatusPassed,
+				EvalCases: []*evaluation.EvaluationCaseResult{{
+					EvalCaseID:    "missing-token-usage",
+					OverallStatus: status.EvalStatusPassed,
+					MetricResults: []*evalresult.EvalMetricResult{{
+						MetricName: "quality", Score: 1, Threshold: 1,
+						EvalStatus: status.EvalStatusPassed,
+					}},
+					RunDetails: []*evaluation.EvaluationCaseRunDetails{{
+						Inference: &evaluation.EvaluationInferenceDetails{
+							Inferences: []*evalset.Invocation{{
+								FinalResponse: &model.Message{Role: model.RoleAssistant},
+							}},
+							ExecutionTraces: []*atrace.Trace{{
+								Status: atrace.TraceStatusCompleted,
+								Steps:  test.steps,
+							}},
+						},
+					}},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("NormalizeAgentEvaluation() error = %v", err)
+			}
+			if result.Usage.Measured {
+				t.Fatalf("usage = %+v, want unmeasured without complete LLM token usage", result.Usage)
+			}
+			baseline := testEvaluation("validation", testCaseSpec{id: "missing-token-usage", score: 0, passed: false})
+			decision, err := Decide(GatePolicy{
+				MinValidationScoreGain: 1,
+				MaxValidationTokens:    intPointer(100),
+			}, GateInput{OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: result})
+			if err != nil {
+				t.Fatalf("Decide() error = %v", err)
+			}
+			if decision.Accepted || !reasonsContain(decision.Reasons, "usage is not measured") {
+				t.Fatalf("decision = %+v, want unmeasured-usage rejection", decision)
+			}
+		})
+	}
+}
+
+func TestTraceUsageSupportsAgentNodeType(t *testing.T) {
+	usage := traceUsage(&atrace.Trace{Steps: []atrace.Step{{
+		NodeType: "agent",
+		Usage:    &model.Usage{TotalTokens: 7},
+	}}})
+	if !usage.Measured || usage.ModelCalls != 1 || usage.TotalTokens != 7 {
+		t.Fatalf("trace usage = %+v, want one measured model call with 7 tokens", usage)
+	}
+}
+
+func TestNormalizeAgentEvaluationAggregatesEveryInvocationTrace(t *testing.T) {
+	tests := []struct {
+		name         string
+		secondTrace  *atrace.Trace
+		wantTokens   int
+		wantMeasured bool
+		wantReason   string
+	}{
+		{
+			name: "counts second trace tokens",
+			secondTrace: &atrace.Trace{
+				Status: atrace.TraceStatusCompleted,
+				Usage:  &model.Usage{TotalTokens: 60},
+			},
+			wantTokens: 120, wantMeasured: true,
+			wantReason: "validation tokens 120 exceed budget 100",
+		},
+		{
+			name: "marks missing second usage unmeasured",
+			secondTrace: &atrace.Trace{
+				Status: atrace.TraceStatusCompleted,
+			},
+			wantTokens: 60, wantMeasured: false,
+			wantReason: "usage is not measured",
+		},
+		{
+			name:        "marks missing second trace unmeasured",
+			secondTrace: nil,
+			wantTokens:  60, wantMeasured: false,
+			wantReason: "usage is not measured",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := NormalizeAgentEvaluation(&evaluation.EvaluationResult{
+				EvalSetID:     "validation",
+				OverallStatus: status.EvalStatusPassed,
+				EvalCases: []*evaluation.EvaluationCaseResult{{
+					EvalCaseID:    "multi-turn",
+					OverallStatus: status.EvalStatusPassed,
+					MetricResults: []*evalresult.EvalMetricResult{{
+						MetricName: "quality", Score: 1, Threshold: 1,
+						EvalStatus: status.EvalStatusPassed,
+					}},
+					RunDetails: []*evaluation.EvaluationCaseRunDetails{{
+						Inference: &evaluation.EvaluationInferenceDetails{
+							Inferences: []*evalset.Invocation{
+								{FinalResponse: &model.Message{Role: model.RoleAssistant}},
+								{FinalResponse: &model.Message{Role: model.RoleAssistant}},
+							},
+							ExecutionTraces: []*atrace.Trace{
+								{
+									Status: atrace.TraceStatusCompleted,
+									Usage:  &model.Usage{TotalTokens: 60},
+								},
+								test.secondTrace,
+							},
+						},
+					}},
+				}},
+			})
+			if err != nil {
+				t.Fatalf("NormalizeAgentEvaluation() error = %v", err)
+			}
+			if got := result.Usage.TotalTokens; got != test.wantTokens {
+				t.Fatalf("usage tokens = %d, want %d", got, test.wantTokens)
+			}
+			if got := result.Usage.Measured; got != test.wantMeasured {
+				t.Fatalf("usage measured = %t, want %t", got, test.wantMeasured)
+			}
+			baseline := testEvaluation("validation", testCaseSpec{id: "multi-turn", score: 0, passed: false})
+			decision, err := Decide(GatePolicy{
+				MinValidationScoreGain: 1,
+				MaxValidationTokens:    intPointer(100),
+			}, GateInput{OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: result})
+			if err != nil {
+				t.Fatalf("Decide() error = %v", err)
+			}
+			if decision.Accepted || !reasonsContain(decision.Reasons, test.wantReason) {
+				t.Fatalf("decision = %+v, want reason containing %q", decision, test.wantReason)
+			}
+		})
+	}
+}
+
+func TestNormalizeEngineEvaluationUsesStableStatusSeverityAndScores(t *testing.T) {
+	metrics := []promptiterengine.MetricResult{
+		{MetricName: "passed", Score: 1, Status: status.EvalStatusPassed},
+		{MetricName: "skipped", Score: 100, Status: status.EvalStatusNotEvaluated},
+		{MetricName: "unknown", Score: 0.5, Status: status.EvalStatusUnknown},
+		{MetricName: "failed", Score: 0, Status: status.EvalStatusFailed},
+	}
+	orders := [][]promptiterengine.MetricResult{
+		metrics,
+		{metrics[3], metrics[2], metrics[1], metrics[0]},
+	}
+	for index, ordered := range orders {
+		result, err := NormalizeEngineEvaluation(&promptiterengine.EvaluationResult{
+			OverallScore: 0.5,
+			EvalSets: []promptiterengine.EvalSetResult{{
+				EvalSetID: "validation",
+				Cases: []promptiterengine.CaseResult{{
+					EvalCaseID: "mixed-status", Metrics: ordered,
+				}},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("NormalizeEngineEvaluation(order %d) error = %v", index, err)
+		}
+		if result.OverallStatus != status.EvalStatusFailed {
+			t.Fatalf("order %d status = %q, want failed", index, result.OverallStatus)
+		}
+		if got, want := result.Cases[0].Score, 0.5; got != want {
+			t.Fatalf("order %d case score = %v, want %v", index, got, want)
+		}
 	}
 }
 

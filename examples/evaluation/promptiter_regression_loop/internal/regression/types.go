@@ -166,16 +166,17 @@ type DeltaSummary struct {
 	Cases      []CaseDelta       `json:"cases"`
 }
 
-// GatePolicy controls whether a candidate may be released.
+// GatePolicy controls whether a candidate may be released. A nil usage budget
+// disables that check; a non-nil zero budget prohibits any corresponding use.
 type GatePolicy struct {
 	MinValidationScoreGain    float64  `json:"minValidationScoreGain"`
 	RejectNewFailures         bool     `json:"rejectNewFailures"`
 	RejectCriticalRegressions bool     `json:"rejectCriticalRegressions"`
 	CriticalCaseIDs           []string `json:"criticalCaseIds"`
 	MaxCriticalScoreDrop      float64  `json:"maxCriticalScoreDrop"`
-	MaxValidationTokens       int      `json:"maxValidationTokens"`
-	MaxValidationModelCalls   int      `json:"maxValidationModelCalls"`
-	MaxValidationToolCalls    int      `json:"maxValidationToolCalls"`
+	MaxValidationTokens       *int     `json:"maxValidationTokens"`
+	MaxValidationModelCalls   *int     `json:"maxValidationModelCalls"`
+	MaxValidationToolCalls    *int     `json:"maxValidationToolCalls"`
 }
 
 // GateDecision records both detected regressions and enforced reasons.
@@ -221,16 +222,18 @@ type RoundReport struct {
 
 // RunMetadata records reproducibility and lifecycle data.
 type RunMetadata struct {
-	ID           string        `json:"id"`
-	Status       string        `json:"status"`
-	Mode         string        `json:"mode"`
-	Seed         int64         `json:"seed"`
-	Model        string        `json:"model"`
-	ConfigPath   string        `json:"configPath"`
-	ConfigSHA256 string        `json:"configSha256"`
-	StartedAt    time.Time     `json:"startedAt"`
-	Duration     time.Duration `json:"durationNanos"`
-	Error        string        `json:"error,omitempty"`
+	ID           string `json:"id"`
+	Status       string `json:"status"`
+	Mode         string `json:"mode"`
+	Seed         int64  `json:"seed"`
+	Model        string `json:"model"`
+	ConfigPath   string `json:"configPath"`
+	ConfigSHA256 string `json:"configSha256"`
+	// InputSHA256 identifies the combined contents of every release-decision input.
+	InputSHA256 string        `json:"inputSha256"`
+	StartedAt   time.Time     `json:"startedAt"`
+	Duration    time.Duration `json:"durationNanos"`
+	Error       string        `json:"error,omitempty"`
 }
 
 // Report is the versioned optimization audit artifact.

@@ -810,6 +810,8 @@ func TestInference_PrefersRootFinalResponseOverChildFinalResponse(t *testing.T) 
 	require.Len(t, result.Invocations, 1)
 	require.NotNil(t, result.Invocations[0].FinalResponse)
 	assert.Equal(t, "root answer", result.Invocations[0].FinalResponse.Content)
+	require.Len(t, result.Invocations[0].IntermediateResponses, 1)
+	assert.Equal(t, "child answer", result.Invocations[0].IntermediateResponses[0].Content)
 }
 
 func TestInference_PreservesInvocationAlignmentWhenRunnerRunFailsMidway(t *testing.T) {
@@ -899,6 +901,46 @@ func TestInferenceInvocationCapturesModelResponsesAndToolExecutions(t *testing.T
 	assert.Equal(t, "answer", result.FinalResponse.Content)
 	require.Len(t, result.Tools, 1)
 	assert.Equal(t, "call-1", result.Tools[0].ID)
+	assert.Equal(t, "weather", result.Tools[0].Name)
+	assert.Equal(t, map[string]any{"city": "Shenzhen"}, result.Tools[0].Arguments)
+	assert.Equal(t, map[string]any{"source": "real"}, result.Tools[0].Result)
+}
+
+func TestInferenceInvocationFiltersNonModelResponses(t *testing.T) {
+	ctx := context.Background()
+	session := &evalset.SessionInput{UserID: "user"}
+	r := &fakeRunner{events: []*event.Event{
+		{
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "keep"},
+			}}},
+		},
+		{
+			Response: &model.Response{IsPartial: true, Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleAssistant, Content: "partial"},
+			}}},
+		},
+		{
+			Response: &model.Response{Choices: []model.Choice{{
+				Message: model.Message{Role: model.RoleUser, Content: "not assistant"},
+			}}},
+		},
+		{Response: &model.Response{}},
+		makeFinalEvent("answer"),
+		makeRunnerCompletionEvent("root-inv", nil),
+	}}
+
+	result, executionTrace, err := inferenceInvocation(ctx, r, "session", session, &evalset.Invocation{
+		InvocationID: "inv",
+		UserContent:  &model.Message{Role: model.RoleUser, Content: "hi"},
+	}, nil, nil)
+
+	require.NoError(t, err)
+	assert.Nil(t, executionTrace)
+	require.Len(t, result.IntermediateResponses, 1)
+	assert.Equal(t, "keep", result.IntermediateResponses[0].Content)
+	require.NotNil(t, result.FinalResponse)
+	assert.Equal(t, "answer", result.FinalResponse.Content)
 }
 
 func TestInferenceInvocationRejectsUnexpectedToolResultResponse(t *testing.T) {

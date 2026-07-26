@@ -13,6 +13,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"time"
 
@@ -40,9 +41,21 @@ func run() error {
 		return pipelineErr
 	}
 	paths, writeErr := regression.WriteReports(cfg.OutputDir, report)
-	if writeErr == nil {
-		fmt.Printf("PromptIter regression loop completed\nJSON report: %s\nMarkdown report: %s\nWrite back: %t\n",
-			paths.JSONPath, paths.MarkdownPath, report.ShouldWriteBack)
-	}
+	printCompletion(os.Stdout, paths, report, pipelineErr, writeErr)
 	return errors.Join(pipelineErr, writeErr)
+}
+
+func printCompletion(
+	writer io.Writer,
+	paths regression.ReportPaths,
+	report *regression.Report,
+	pipelineErr error,
+	writeErr error,
+) {
+	if pipelineErr != nil || writeErr != nil {
+		return
+	}
+	fmt.Fprintf(writer,
+		"PromptIter regression loop completed\nJSON report: %s\nMarkdown report: %s\nWrite back: %t\n",
+		paths.JSONPath, paths.MarkdownPath, report.ShouldWriteBack)
 }

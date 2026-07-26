@@ -116,6 +116,97 @@ func TestDecideRejectsUnknownOverallStatus(t *testing.T) {
 	}
 }
 
+func TestDecideRejectsIncompleteBaselineEvidence(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*EvaluationResult)
+	}{
+		{
+			name: "unknown metric",
+			mutate: func(result *EvaluationResult) {
+				result.Cases[0].Metrics[0].Status = status.EvalStatusUnknown
+			},
+		},
+		{
+			name: "incomplete trace",
+			mutate: func(result *EvaluationResult) {
+				result.Cases[0].Trace.Status = "incomplete"
+			},
+		},
+		{
+			name: "execution error",
+			mutate: func(result *EvaluationResult) {
+				result.Cases[0].ErrorMessage = "runner failed"
+			},
+		},
+	}
+	for _, baselineName := range []string{"original", "accepted"} {
+		for _, test := range tests {
+			t.Run(baselineName+"/"+test.name, func(t *testing.T) {
+				original := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 0, passed: false})
+				accepted := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 0, passed: false})
+				if baselineName == "original" {
+					test.mutate(original)
+				} else {
+					test.mutate(accepted)
+				}
+				candidate := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 1, passed: true})
+				_, err := Decide(GatePolicy{MinValidationScoreGain: 0.2}, GateInput{
+					OriginalBaseline: original, AcceptedBaseline: accepted, Candidate: candidate,
+				})
+				if err == nil || !strings.Contains(err.Error(), baselineName+" baseline") {
+					t.Fatalf("Decide() error = %v, want invalid %s-baseline error", err, baselineName)
+				}
+			})
+		}
+	}
+}
+
+func TestDecideAllowsFailedBaselineQualityMetric(t *testing.T) {
+	baseline := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 0, passed: false})
+	candidate := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 1, passed: true})
+	decision, err := Decide(GatePolicy{MinValidationScoreGain: 0.2}, GateInput{
+		OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if !decision.Accepted {
+		t.Fatalf("decision = %+v, want ordinary failed baseline metric to remain comparable", decision)
+	}
+}
+
+func TestDecideEnforcesExplicitZeroToolCallBudget(t *testing.T) {
+	baseline := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 0, passed: false})
+	candidate := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 1, passed: true})
+	candidate.Usage.ToolCalls = 1
+	decision, err := Decide(GatePolicy{
+		MinValidationScoreGain: 0.2,
+		MaxValidationToolCalls: intPointer(0),
+	}, GateInput{OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Accepted || !reasonsContain(decision.Reasons, "tool calls 1 exceed budget 0") {
+		t.Fatalf("decision = %+v, want explicit zero-budget rejection", decision)
+	}
+}
+
+func TestDecideLeavesOmittedBudgetsDisabled(t *testing.T) {
+	baseline := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 0, passed: false})
+	candidate := testEvaluation("validation", testCaseSpec{id: "ordinary", score: 1, passed: true})
+	candidate.Usage = Usage{TotalTokens: 1, ModelCalls: 1, ToolCalls: 1}
+	decision, err := Decide(GatePolicy{MinValidationScoreGain: 0.2}, GateInput{
+		OriginalBaseline: baseline, AcceptedBaseline: baseline, Candidate: candidate,
+	})
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if !decision.Accepted {
+		t.Fatalf("decision = %+v, want omitted budgets disabled", decision)
+	}
+}
+
 func TestAddUsagePreservesMeasurementProvenance(t *testing.T) {
 	got := AddUsage(Usage{TotalTokens: 10, Measured: true}, Usage{TotalTokens: 5, Measured: false})
 	if got.TotalTokens != 15 || got.Measured {
@@ -132,8 +223,12 @@ func testGatePolicy() GatePolicy {
 		RejectNewFailures:         true,
 		RejectCriticalRegressions: true,
 		CriticalCaseIDs:           []string{"security"},
-		MaxValidationTokens:       100,
+		MaxValidationTokens:       intPointer(100),
 	}
+}
+
+func intPointer(value int) *int {
+	return &value
 }
 
 func reasonsContain(reasons []string, value string) bool {

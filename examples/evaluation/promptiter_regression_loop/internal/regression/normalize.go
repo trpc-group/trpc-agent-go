@@ -142,8 +142,7 @@ func normalizeAgentCase(
 	if evaluated > 0 {
 		result.Score /= float64(evaluated)
 	}
-	trace := firstTrace(evalCase.RunDetails)
-	result.Trace = normalizeTrace(trace)
+	result.Trace = normalizeRunDetails(evalCase.RunDetails)
 	if usage, ok := invocationUsage(evalCase.RunDetails); ok {
 		result.Trace.Usage.ModelCalls = usage.ModelCalls
 		result.Trace.Usage.ToolCalls = usage.ToolCalls
@@ -184,7 +183,9 @@ func invocationUsage(details []*evaluation.EvaluationCaseRunDetails) (Usage, boo
 				}
 				usage.ModelCalls++
 			}
-			if invocation.FinalResponse != nil {
+			if invocation.FinalResponse == nil {
+				usage.Measured = false
+			} else {
 				usage.ModelCalls++
 			}
 			for _, toolCall := range invocation.Tools {
@@ -247,23 +248,68 @@ func runMetricReason(result *evalresult.EvalCaseResult, name string) string {
 	return ""
 }
 
-func firstTrace(details []*evaluation.EvaluationCaseRunDetails) *atrace.Trace {
+func normalizeRunDetails(details []*evaluation.EvaluationCaseRunDetails) Trace {
+	result := Trace{
+		Status: string(atrace.TraceStatusCompleted),
+		Steps:  []TraceStep{},
+		Usage:  Usage{Measured: true},
+	}
+	foundTrace := false
 	for _, detail := range details {
 		if detail == nil || detail.Inference == nil {
+			markTraceIncomplete(&result)
 			continue
 		}
-		for _, executionTrace := range detail.Inference.ExecutionTraces {
-			if executionTrace != nil {
-				return executionTrace
-			}
+		traceCount := len(detail.Inference.ExecutionTraces)
+		if len(detail.Inference.Inferences) > traceCount {
+			traceCount = len(detail.Inference.Inferences)
 		}
-		for _, invocation := range detail.Inference.Inferences {
-			if invocation != nil && invocation.ExecutionTrace != nil {
-				return invocation.ExecutionTrace
+		if traceCount == 0 {
+			markTraceIncomplete(&result)
+			continue
+		}
+		for index := 0; index < traceCount; index++ {
+			var executionTrace *atrace.Trace
+			if index < len(detail.Inference.ExecutionTraces) {
+				executionTrace = detail.Inference.ExecutionTraces[index]
 			}
+			if executionTrace == nil && index < len(detail.Inference.Inferences) {
+				invocation := detail.Inference.Inferences[index]
+				if invocation != nil {
+					executionTrace = invocation.ExecutionTrace
+				}
+			}
+			if executionTrace == nil {
+				markTraceIncomplete(&result)
+				continue
+			}
+			foundTrace = true
+			mergeTrace(&result, normalizeTrace(executionTrace))
 		}
 	}
-	return nil
+	if !foundTrace {
+		markTraceIncomplete(&result)
+	}
+	return result
+}
+
+func mergeTrace(result *Trace, next Trace) {
+	result.Steps = append(result.Steps, next.Steps...)
+	result.Usage = AddUsage(result.Usage, next.Usage)
+	if next.Output != "" {
+		result.Output = next.Output
+	}
+	if result.Status == string(atrace.TraceStatusCompleted) &&
+		next.Status != string(atrace.TraceStatusCompleted) {
+		result.Status = next.Status
+	}
+}
+
+func markTraceIncomplete(result *Trace) {
+	result.Usage.Measured = false
+	if result.Status == string(atrace.TraceStatusCompleted) {
+		result.Status = string(atrace.TraceStatusIncomplete)
+	}
 }
 
 // NormalizeEngineEvaluation converts a PromptIter engine result for internal
@@ -294,6 +340,7 @@ func NormalizeEngineEvaluation(result *promptiterengine.EvaluationResult) (*Eval
 				Metrics: make([]MetricResult, 0, len(evalCase.Metrics)), Passed: true,
 				Trace: normalizeTrace(evalCase.Trace),
 			}
+			evaluatedMetrics := 0
 			for _, metricResult := range evalCase.Metrics {
 				if !finite(metricResult.Score) {
 					return nil, fmt.Errorf("PromptIter metric %q score is not finite", metricResult.MetricName)
@@ -302,31 +349,23 @@ func NormalizeEngineEvaluation(result *promptiterengine.EvaluationResult) (*Eval
 					Name: metricResult.MetricName, Score: metricResult.Score,
 					Status: metricResult.Status, Reason: metricResult.Reason,
 				})
-				caseResult.Score += metricResult.Score
+				if metricResult.Status != status.EvalStatusNotEvaluated {
+					caseResult.Score += metricResult.Score
+					evaluatedMetrics++
+				}
 				if metricResult.Status != status.EvalStatusPassed {
 					caseResult.Passed = false
 				}
-				switch metricResult.Status {
-				case status.EvalStatusPassed:
-					// Keep the aggregate status passed unless another metric lowers it.
-				case status.EvalStatusUnknown:
-					normalized.OverallStatus = status.EvalStatusUnknown
-				case status.EvalStatusNotEvaluated:
-					if normalized.OverallStatus == status.EvalStatusPassed {
-						normalized.OverallStatus = status.EvalStatusNotEvaluated
-					}
-				case status.EvalStatusFailed:
-					if normalized.OverallStatus == status.EvalStatusPassed {
-						normalized.OverallStatus = status.EvalStatusFailed
-					}
-				default:
-					normalized.OverallStatus = status.EvalStatusUnknown
+				if evalStatusSeverity(metricResult.Status) > evalStatusSeverity(normalized.OverallStatus) {
+					normalized.OverallStatus = normalizedEvalStatus(metricResult.Status)
 				}
 			}
 			if len(caseResult.Metrics) == 0 {
 				return nil, fmt.Errorf("PromptIter case %q has no metrics", evalCase.EvalCaseID)
 			}
-			caseResult.Score /= float64(len(caseResult.Metrics))
+			if evaluatedMetrics > 0 {
+				caseResult.Score /= float64(evaluatedMetrics)
+			}
 			normalized.Cases = append(normalized.Cases, caseResult)
 			normalized.Usage = AddUsage(normalized.Usage, caseResult.Trace.Usage)
 		}
@@ -366,7 +405,7 @@ func traceUsage(executionTrace *atrace.Trace) Usage {
 	if executionTrace == nil {
 		return Usage{}
 	}
-	usage := Usage{Measured: true}
+	usage := Usage{Measured: executionTrace.Usage != nil}
 	if executionTrace.EndedAt.After(executionTrace.StartedAt) {
 		usage.Duration = executionTrace.EndedAt.Sub(executionTrace.StartedAt)
 	}
@@ -376,12 +415,18 @@ func traceUsage(executionTrace *atrace.Trace) Usage {
 		usage.TotalTokens = executionTrace.Usage.TotalTokens
 	}
 	stepTokens := Usage{}
+	modelSteps := 0
+	modelStepsWithUsage := 0
 	for _, step := range executionTrace.Steps {
 		if step.NodeType == "tool" {
 			usage.ToolCalls++
 		}
-		if step.NodeType == "llm" {
+		if step.NodeType == "llm" || step.NodeType == "agent" {
 			usage.ModelCalls++
+			modelSteps++
+			if step.Usage != nil {
+				modelStepsWithUsage++
+			}
 		}
 		if step.Usage != nil {
 			stepTokens.PromptTokens += step.Usage.PromptTokens
@@ -393,11 +438,35 @@ func traceUsage(executionTrace *atrace.Trace) Usage {
 		usage.PromptTokens = stepTokens.PromptTokens
 		usage.CompletionTokens = stepTokens.CompletionTokens
 		usage.TotalTokens = stepTokens.TotalTokens
+		usage.Measured = modelSteps > 0 && modelStepsWithUsage == modelSteps
 	}
 	if usage.ModelCalls == 0 && executionTrace.Usage != nil {
 		usage.ModelCalls = 1
 	}
 	return usage
+}
+
+func normalizedEvalStatus(value status.EvalStatus) status.EvalStatus {
+	switch value {
+	case status.EvalStatusPassed, status.EvalStatusNotEvaluated,
+		status.EvalStatusUnknown, status.EvalStatusFailed:
+		return value
+	default:
+		return status.EvalStatusUnknown
+	}
+}
+
+func evalStatusSeverity(value status.EvalStatus) int {
+	switch normalizedEvalStatus(value) {
+	case status.EvalStatusFailed:
+		return 3
+	case status.EvalStatusUnknown:
+		return 2
+	case status.EvalStatusNotEvaluated:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // AddUsage combines independently measured usage without changing provenance.

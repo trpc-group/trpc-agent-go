@@ -36,11 +36,11 @@ func ValidateGatePolicy(policy GatePolicy) error {
 		return errors.New("maximum critical score drop is not finite")
 	case policy.MaxCriticalScoreDrop < 0:
 		return errors.New("maximum critical score drop is negative")
-	case policy.MaxValidationTokens < 0:
+	case negativeBudget(policy.MaxValidationTokens):
 		return errors.New("maximum validation tokens is negative")
-	case policy.MaxValidationModelCalls < 0:
+	case negativeBudget(policy.MaxValidationModelCalls):
 		return errors.New("maximum validation model calls is negative")
-	case policy.MaxValidationToolCalls < 0:
+	case negativeBudget(policy.MaxValidationToolCalls):
 		return errors.New("maximum validation tool calls is negative")
 	}
 	seen := make(map[string]struct{}, len(policy.CriticalCaseIDs))
@@ -68,7 +68,13 @@ func Decide(policy GatePolicy, input GateInput) (*GateDecision, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validateBaselineEvidence("original baseline", input.OriginalBaseline); err != nil {
+		return nil, err
+	}
 	if _, err := indexCases("accepted baseline", input.AcceptedBaseline); err != nil {
+		return nil, err
+	}
+	if err := validateBaselineEvidence("accepted baseline", input.AcceptedBaseline); err != nil {
 		return nil, err
 	}
 	if err := validateCriticalCaseScope(policy.CriticalCaseIDs, originalCases); err != nil {
@@ -184,50 +190,68 @@ func collectCriticalRegressions(ids []string, maxDrop float64, deltas ...*DeltaS
 	return sortedSet(set)
 }
 
-func appendCandidateIntegrityReasons(candidate *EvaluationResult, decision *GateDecision) {
-	if candidate.OverallStatus != status.EvalStatusPassed && candidate.OverallStatus != status.EvalStatusFailed {
-		decision.Reasons = append(decision.Reasons,
-			fmt.Sprintf("candidate overall evaluation status is %s", candidate.OverallStatus))
+func validateBaselineEvidence(name string, baseline *EvaluationResult) error {
+	reasons := evaluationIntegrityReasons(name, baseline)
+	if len(reasons) == 0 {
+		return nil
 	}
-	for _, evalCase := range candidate.Cases {
+	return errors.New(strings.Join(reasons, "; "))
+}
+
+func appendCandidateIntegrityReasons(candidate *EvaluationResult, decision *GateDecision) {
+	decision.Reasons = append(decision.Reasons, evaluationIntegrityReasons("candidate", candidate)...)
+}
+
+func evaluationIntegrityReasons(name string, result *EvaluationResult) []string {
+	resultReasons := make([]string, 0)
+	if result.OverallStatus != status.EvalStatusPassed && result.OverallStatus != status.EvalStatusFailed {
+		resultReasons = append(resultReasons,
+			fmt.Sprintf("%s overall evaluation status is %s", name, result.OverallStatus))
+	}
+	for _, evalCase := range result.Cases {
 		if evalCase.Trace.Status != "completed" {
-			decision.Reasons = append(decision.Reasons,
-				fmt.Sprintf("candidate trace for %s is %s", evalCase.CaseID, evalCase.Trace.Status))
+			resultReasons = append(resultReasons,
+				fmt.Sprintf("%s trace for %s is %s", name, evalCase.CaseID, evalCase.Trace.Status))
 		}
 		if evalCase.ErrorMessage != "" {
-			decision.Reasons = append(decision.Reasons,
-				fmt.Sprintf("candidate case %s failed execution", evalCase.CaseID))
+			resultReasons = append(resultReasons,
+				fmt.Sprintf("%s case %s failed execution", name, evalCase.CaseID))
 		}
 		for _, metricResult := range evalCase.Metrics {
 			if metricResult.Status == status.EvalStatusNotEvaluated || metricResult.Status == status.EvalStatusUnknown {
-				decision.Reasons = append(decision.Reasons,
-					fmt.Sprintf("candidate metric %s/%s is %s",
-						evalCase.CaseID, metricResult.Name, metricResult.Status))
+				resultReasons = append(resultReasons,
+					fmt.Sprintf("%s metric %s/%s is %s",
+						name, evalCase.CaseID, metricResult.Name, metricResult.Status))
 			}
 		}
 	}
+	return resultReasons
 }
 
 func appendBudgetReasons(policy GatePolicy, candidate *EvaluationResult, decision *GateDecision) {
-	budgetEnabled := policy.MaxValidationTokens > 0 || policy.MaxValidationModelCalls > 0 ||
-		policy.MaxValidationToolCalls > 0
+	budgetEnabled := policy.MaxValidationTokens != nil || policy.MaxValidationModelCalls != nil ||
+		policy.MaxValidationToolCalls != nil
 	if budgetEnabled && !candidate.Usage.Measured {
 		decision.Reasons = append(decision.Reasons, "candidate validation usage is not measured")
 		return
 	}
 	usage := candidate.Usage
-	if policy.MaxValidationTokens > 0 && usage.TotalTokens > policy.MaxValidationTokens {
+	if policy.MaxValidationTokens != nil && usage.TotalTokens > *policy.MaxValidationTokens {
 		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
-			"validation tokens %d exceed budget %d", usage.TotalTokens, policy.MaxValidationTokens))
+			"validation tokens %d exceed budget %d", usage.TotalTokens, *policy.MaxValidationTokens))
 	}
-	if policy.MaxValidationModelCalls > 0 && usage.ModelCalls > policy.MaxValidationModelCalls {
+	if policy.MaxValidationModelCalls != nil && usage.ModelCalls > *policy.MaxValidationModelCalls {
 		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
-			"validation model calls %d exceed budget %d", usage.ModelCalls, policy.MaxValidationModelCalls))
+			"validation model calls %d exceed budget %d", usage.ModelCalls, *policy.MaxValidationModelCalls))
 	}
-	if policy.MaxValidationToolCalls > 0 && usage.ToolCalls > policy.MaxValidationToolCalls {
+	if policy.MaxValidationToolCalls != nil && usage.ToolCalls > *policy.MaxValidationToolCalls {
 		decision.Reasons = append(decision.Reasons, fmt.Sprintf(
-			"validation tool calls %d exceed budget %d", usage.ToolCalls, policy.MaxValidationToolCalls))
+			"validation tool calls %d exceed budget %d", usage.ToolCalls, *policy.MaxValidationToolCalls))
 	}
+}
+
+func negativeBudget(value *int) bool {
+	return value != nil && *value < 0
 }
 
 func finalizeDecision(decision *GateDecision) *GateDecision {

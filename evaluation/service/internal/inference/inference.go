@@ -200,16 +200,22 @@ func inferenceInvocation(
 		return nil, nil, fmt.Errorf("runner run: %w", err)
 	}
 	// Capture the invocation ID, final response, tool uses, and tool responses.
+	type finalResponseCandidate struct {
+		message       *model.Message
+		responseIndex int
+	}
 	var (
-		invocationID   string
-		finalResponse  *model.Message
-		finalByInvID   = make(map[string]*model.Message)
-		fallbackFinal  *model.Message
-		executionTrace *trace.Trace
-		eventErr       error
-		tools          = make([]*evalset.Tool, 0)
-		responses      = make([]*model.Message, 0)
-		toolIDIdx      = make(map[string]int)
+		invocationID     string
+		selectedFinal    finalResponseCandidate
+		hasSelectedFinal bool
+		finalByInvID     = make(map[string]finalResponseCandidate)
+		fallbackFinal    finalResponseCandidate
+		hasFallbackFinal bool
+		executionTrace   *trace.Trace
+		eventErr         error
+		tools            = make([]*evalset.Tool, 0)
+		responses        = make([]*model.Message, 0)
+		toolIDIdx        = make(map[string]int)
 	)
 	for event := range events {
 		if event == nil {
@@ -226,12 +232,16 @@ func inferenceInvocation(
 			invocationID = event.InvocationID
 		}
 		if message := eventFinalResponse(event); message != nil {
+			candidate := finalResponseCandidate{message: message, responseIndex: len(responses)}
+			responses = append(responses, message)
 			if event.IsRunnerCompletion() {
-				finalResponse = message
+				selectedFinal = candidate
+				hasSelectedFinal = true
 			} else if event.InvocationID != "" {
-				finalByInvID[event.InvocationID] = message
+				finalByInvID[event.InvocationID] = candidate
 			} else {
-				fallbackFinal = message
+				fallbackFinal = candidate
+				hasFallbackFinal = true
 			}
 		}
 		if event.Error != nil {
@@ -244,7 +254,9 @@ func inferenceInvocation(
 		if event.IsFinalResponse() {
 			continue
 		}
-		responses = appendModelResponse(responses, event)
+		if message := eventModelResponse(event); message != nil {
+			responses = append(responses, message)
+		}
 		// Capture tool call uses.
 		if event.IsToolCallResponse() {
 			toolcalls, err := convertTools(event)
@@ -266,11 +278,20 @@ func inferenceInvocation(
 			}
 		}
 	}
-	if finalResponse == nil && invocationID != "" {
-		finalResponse = finalByInvID[invocationID]
+	if !hasSelectedFinal && invocationID != "" {
+		selectedFinal, hasSelectedFinal = finalByInvID[invocationID]
 	}
-	if finalResponse == nil {
-		finalResponse = fallbackFinal
+	if !hasSelectedFinal && hasFallbackFinal {
+		selectedFinal = fallbackFinal
+		hasSelectedFinal = true
+	}
+	var finalResponse *model.Message
+	if hasSelectedFinal {
+		finalResponse = selectedFinal.message
+		responses = append(
+			responses[:selectedFinal.responseIndex],
+			responses[selectedFinal.responseIndex+1:]...,
+		)
 	}
 	result := &evalset.Invocation{
 		InvocationID:          invocationID,
@@ -283,14 +304,6 @@ func inferenceInvocation(
 		return result, executionTrace, eventErr
 	}
 	return result, executionTrace, nil
-}
-
-func appendModelResponse(responses []*model.Message, evt *event.Event) []*model.Message {
-	message := eventModelResponse(evt)
-	if message == nil {
-		return responses
-	}
-	return append(responses, message)
 }
 
 func eventModelResponse(evt *event.Event) *model.Message {

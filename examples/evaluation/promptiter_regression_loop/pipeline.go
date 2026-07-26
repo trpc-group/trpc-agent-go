@@ -9,16 +9,12 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
@@ -33,7 +29,7 @@ func runPipeline(
 	ctx context.Context,
 	cfg *config,
 	now func() time.Time,
-) (report *regression.Report, resultErr error) {
+) (*regression.Report, error) {
 	if ctx == nil {
 		return nil, errors.New("context is nil")
 	}
@@ -46,28 +42,30 @@ func runPipeline(
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	baselinePrompt, err := loadBaselinePrompt(cfg.BaselinePromptSource)
+	inputs, err := loadInputSnapshot(cfg)
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := buildRuntime(cfg, baselinePrompt)
+	return runPipelineWithSnapshot(ctx, cfg, inputs, now)
+}
+
+func runPipelineWithSnapshot(
+	ctx context.Context,
+	cfg *config,
+	inputs *inputSnapshot,
+	now func() time.Time,
+) (report *regression.Report, resultErr error) {
+	if inputs == nil {
+		return nil, errors.New("input snapshot is nil")
+	}
+	runtime, err := buildRuntime(ctx, cfg, inputs)
 	if err != nil {
 		return nil, err
 	}
 	startedAt := now().UTC()
 	defer func() {
-		if closeErr := runtime.Close(); closeErr != nil {
-			resultErr = errors.Join(resultErr, closeErr)
-			if report != nil {
-				report.Run.Duration = nonNegativeDuration(now().UTC().Sub(startedAt))
-				_ = regression.FinalizeReport(report, resultErr)
-			}
-		}
+		resultErr = handleRuntimeClose(report, startedAt, now, resultErr, runtime.Close())
 	}()
-	catalog, err := loadAttributionCatalog(filepath.Join(cfg.DataDir, "metrics.json"))
-	if err != nil {
-		return nil, err
-	}
 	baselineTrain, err := runtime.evaluateProfile(ctx, cfg.TrainEvalSetID, nil)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline train: %w", err)
@@ -77,13 +75,14 @@ func runPipeline(
 		return nil, fmt.Errorf("evaluate baseline validation: %w", err)
 	}
 	metadata := regression.RunMetadata{
-		ID:           runID(startedAt, cfg.ConfigSHA256),
+		ID:           runID(startedAt, inputs.sha256),
 		Status:       "running",
 		Mode:         offlineMode,
 		Seed:         cfg.Seed,
 		Model:        fakeModelName,
 		ConfigPath:   cfg.ConfigPath,
 		ConfigSHA256: cfg.ConfigSHA256,
+		InputSHA256:  inputs.sha256,
 		StartedAt:    startedAt,
 	}
 	report, err = regression.NewReport(
@@ -91,8 +90,8 @@ func runPipeline(
 		baselineTrain,
 		baselineValidation,
 		regression.MergeAttributions(
-			regression.AttributeFailures(baselineTrain, catalog),
-			regression.AttributeFailures(baselineValidation, catalog),
+			regression.AttributeFailures(baselineTrain, inputs.catalog),
+			regression.AttributeFailures(baselineValidation, inputs.catalog),
 		),
 	)
 	if err != nil {
@@ -100,7 +99,7 @@ func runPipeline(
 	}
 	acceptedProfile := (*promptiter.Profile)(nil)
 	acceptedValidation := baselineValidation
-	acceptedPrompt := regression.PromptRecord{SurfaceID: cfg.TargetSurfaceID, Text: baselinePrompt}
+	acceptedPrompt := regression.PromptRecord{SurfaceID: cfg.TargetSurfaceID, Text: inputs.baselinePrompt}
 	for index, candidateText := range cfg.CandidatePrompts {
 		if err := ctx.Err(); err != nil {
 			return failPipeline(report, startedAt, now, err)
@@ -176,8 +175,8 @@ func runPipeline(
 			Delta:              delta,
 			BaselineDelta:      baselineDelta,
 			Attribution: regression.MergeAttributions(
-				regression.AttributeFailures(candidateTrain, catalog),
-				regression.AttributeFailures(candidateValidation, catalog),
+				regression.AttributeFailures(candidateTrain, inputs.catalog),
+				regression.AttributeFailures(candidateValidation, inputs.catalog),
 			),
 			Gate:     *decision,
 			Patches:  patches,
@@ -300,22 +299,6 @@ func engineRunUsage(result *promptiterengine.RunResult) (regression.Usage, error
 	return usage, nil
 }
 
-func loadAttributionCatalog(path string) (regression.AttributionCatalog, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return regression.AttributionCatalog{}, fmt.Errorf("read metrics: %w", err)
-	}
-	var metrics []*metric.EvalMetric
-	if err := json.Unmarshal(data, &metrics); err != nil {
-		return regression.AttributionCatalog{}, fmt.Errorf("decode metrics: %w", err)
-	}
-	catalog, err := regression.CatalogFromMetrics(metrics)
-	if err != nil {
-		return regression.AttributionCatalog{}, fmt.Errorf("build attribution catalog: %w", err)
-	}
-	return catalog, nil
-}
-
 func failPipeline(
 	report *regression.Report,
 	startedAt time.Time,
@@ -328,6 +311,25 @@ func failPipeline(
 	report.Run.Duration = nonNegativeDuration(now().UTC().Sub(startedAt))
 	finalizeErr := regression.FinalizeReport(report, cause)
 	return report, errors.Join(cause, finalizeErr)
+}
+
+func handleRuntimeClose(
+	report *regression.Report,
+	startedAt time.Time,
+	now func() time.Time,
+	resultErr error,
+	closeErr error,
+) error {
+	if closeErr == nil {
+		return resultErr
+	}
+	resultErr = errors.Join(resultErr, closeErr)
+	if report == nil || report.Run.Status == "succeeded" {
+		return resultErr
+	}
+	report.Run.Duration = nonNegativeDuration(now().UTC().Sub(startedAt))
+	_ = regression.FinalizeReport(report, resultErr)
+	return resultErr
 }
 
 func runID(startedAt time.Time, configHash string) string {

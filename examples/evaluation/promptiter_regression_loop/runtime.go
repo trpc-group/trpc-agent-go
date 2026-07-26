@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -19,10 +18,8 @@ import (
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	evalresultinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/inmemory"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
-	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
-	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
+	metricinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter_regression_loop/internal/regression"
@@ -35,42 +32,54 @@ const (
 	caseParallelism    = 1
 )
 
-type sharedMetricLocator struct{}
-
-func (sharedMetricLocator) Build(baseDir, appName, _ string) string {
-	return filepath.Join(baseDir, appName, "metrics.json")
-}
-
 type promptIterRuntime struct {
 	candidate      *llmagent.LLMAgent
 	agentEvaluator evaluation.AgentEvaluator
 	runner         runner.Runner
 }
 
-func buildRuntime(cfg *config, baselinePrompt string) (*promptIterRuntime, error) {
+func buildRuntime(ctx context.Context, cfg *config, inputs *inputSnapshot) (*promptIterRuntime, error) {
 	if cfg == nil {
 		return nil, errors.New("config is nil")
 	}
-	if strings.TrimSpace(baselinePrompt) == "" {
+	if inputs == nil {
+		return nil, errors.New("input snapshot is nil")
+	}
+	if strings.TrimSpace(inputs.baselinePrompt) == "" {
 		return nil, errors.New("baseline prompt is empty")
+	}
+	evalSetManager := evalsetinmemory.New()
+	metricManager := metricinmemory.New()
+	for _, evalSetID := range []string{cfg.TrainEvalSetID, cfg.ValidationEvalSetID} {
+		evalSetValue := inputs.evalSets[evalSetID]
+		if evalSetValue == nil {
+			return nil, fmt.Errorf("input snapshot is missing eval set %q", evalSetID)
+		}
+		if _, err := evalSetManager.Create(ctx, cfg.AppName, evalSetID); err != nil {
+			return nil, fmt.Errorf("create snapshot eval set %q: %w", evalSetID, err)
+		}
+		for _, evalCase := range evalSetValue.EvalCases {
+			if err := evalSetManager.AddCase(ctx, cfg.AppName, evalSetID, evalCase); err != nil {
+				return nil, fmt.Errorf("add snapshot case to %q: %w", evalSetID, err)
+			}
+		}
+		for _, metricValue := range inputs.metrics {
+			if err := metricManager.Add(ctx, cfg.AppName, evalSetID, metricValue); err != nil {
+				return nil, fmt.Errorf("add snapshot metric to %q: %w", evalSetID, err)
+			}
+		}
 	}
 	temperature := 0.0
 	candidate := llmagent.New(
 		candidateAgentName,
 		llmagent.WithModel(&deterministicModel{}),
-		llmagent.WithInstruction(baselinePrompt),
+		llmagent.WithInstruction(inputs.baselinePrompt),
 		llmagent.WithGenerationConfig(model.GenerationConfig{
 			Temperature: &temperature,
 			Stream:      false,
 		}),
 	)
 	candidateRunner := runner.NewRunner(cfg.AppName, candidate)
-	managerBaseDir := filepath.Dir(cfg.DataDir)
-	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(managerBaseDir))
-	metricManager := metriclocal.New(
-		metric.WithBaseDir(managerBaseDir),
-		metric.WithLocator(sharedMetricLocator{}),
-	)
 	agentEvaluator, err := evaluation.New(
 		cfg.AppName,
 		candidateRunner,
