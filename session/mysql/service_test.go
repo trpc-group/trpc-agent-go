@@ -4171,7 +4171,7 @@ func TestConcurrentCreateSessionSerializesMissingKeyAcrossIsolationLevels(
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	prefix := fmt.Sprintf("create_it_%d_", time.Now().UnixNano())
+	prefix := fmt.Sprintf("ci%x_", time.Now().UnixNano())
 	bootstrap, err := NewService(
 		WithMySQLClientDSN(dsn),
 		WithTablePrefix(prefix),
@@ -4182,7 +4182,7 @@ func TestConcurrentCreateSessionSerializesMissingKeyAcrossIsolationLevels(
 	require.NoError(t, err)
 	require.NoError(t, adminDB.PingContext(ctx))
 	t.Cleanup(func() {
-		require.NoError(t, bootstrap.Close())
+		assert.NoError(t, bootstrap.Close())
 		for _, table := range []string{
 			bootstrap.tableSessionTracks,
 			bootstrap.tableSessionEvents,
@@ -4227,7 +4227,7 @@ func TestConcurrentCreateSessionSerializesMissingKeyAcrossIsolationLevels(
 			}
 			defer func() {
 				for _, db := range dbs {
-					require.NoError(t, db.Close())
+					assert.NoError(t, db.Close())
 				}
 			}()
 
