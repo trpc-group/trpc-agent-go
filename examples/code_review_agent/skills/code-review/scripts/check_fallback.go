@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,8 +60,8 @@ func main() {
 		lineIndex++
 		line := scanner.Text()
 		switch {
-		case strings.HasPrefix(line, "+++ b/"):
-			currentFile = strings.TrimPrefix(line, "+++ b/")
+		case strings.HasPrefix(line, "+++ "):
+			currentFile = normalizeDiffPath(strings.TrimPrefix(line, "+++ "))
 			continue
 		case strings.HasPrefix(line, "@@"):
 			match := hunkStart.FindStringSubmatch(line)
@@ -109,6 +110,12 @@ func main() {
 			if strings.Contains(text, "TODO(") || strings.Contains(text, "FIXME") {
 				addFinding("medium", "maintainability", "New code contains a TODO or FIXME marker",
 					"Remove the marker or turn it into a tracked issue before merging.", "todo-marker")
+			}
+			if shouldReportSecret(text) {
+				addFinding("critical", "security", "Potential secret appears in added code", "Replace the literal with a secret manager or environment lookup.", "secret-leak")
+			}
+			if !isGoFile(currentFile) {
+				continue
 			}
 			if strings.Contains(text, "panic(") {
 				addFinding("high", "error_handling", "New function panics directly",
@@ -173,10 +180,6 @@ func main() {
 				!databaseHasCleanup(text, hunkText) {
 				addFinding("high", "database", "Database handle or transaction has no cleanup path",
 					"Defer Close() for handles and Rollback() for transactions in the same scope.", "db-lifecycle")
-			}
-			if shouldReportSecret(text) {
-				addFinding("critical", "security", "Potential secret appears in added code",
-					"Replace the literal with a secret manager or environment lookup.", "secret-leak")
 			}
 		case strings.HasPrefix(line, " ") && newLine > 0:
 			newLine++
@@ -289,7 +292,7 @@ func buildHunkTexts(data string) map[int]string {
 			flush()
 			hunkLines = hunkLines[:0]
 			hunkIndexes = hunkIndexes[:0]
-		case strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "+++ b/"):
+		case strings.HasPrefix(line, "diff --git ") || strings.HasPrefix(line, "+++ "):
 			continue
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			hunkLines = append(hunkLines, strings.TrimSpace(strings.TrimPrefix(line, "+")))
@@ -437,3 +440,17 @@ func stringConcatLHS(text string) string {
 	}
 	return strings.Trim(fields[len(fields)-1], " \t;")
 }
+
+func normalizeDiffPath(raw string) string {
+	path := strings.TrimSpace(raw)
+	if len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"' {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			path = unquoted
+		}
+	}
+	path = strings.TrimPrefix(path, "b/")
+	path = strings.TrimPrefix(path, "a/")
+	return path
+}
+
+func isGoFile(path string) bool { return strings.HasSuffix(path, ".go") }

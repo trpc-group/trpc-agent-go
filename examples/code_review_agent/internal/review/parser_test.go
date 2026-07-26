@@ -86,3 +86,18 @@ func TestParseUnifiedDiffTracksNewLineNumbersAcrossMixedHunk(t *testing.T) {
 		t.Fatalf("added line numbers = %v, want %v", added, want)
 	}
 }
+
+func TestParseUnifiedDiffDecodesQuotedPathsAndInfersLanguage(t *testing.T) {
+	diff := "diff --git \"a/docs/\\346\\261\\211\\t.md\" \"b/docs/\\346\\261\\211\\t.md\"\n" +
+		"--- \"a/docs/\\346\\261\\211\\t.md\"\n" +
+		"+++ \"b/docs/\\346\\261\\211\\t.md\"\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+TODO(example): keep docs aligned\n"
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	if len(parsed.Files) != 1 || parsed.Files[0].Path != "docs/汉\t.md" || parsed.Files[0].Language != "markdown" {
+		t.Fatalf("quoted path parsing = %+v, want decoded markdown file", parsed.Files)
+	}
+}

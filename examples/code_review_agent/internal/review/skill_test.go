@@ -215,6 +215,34 @@ func TestSkillRulesKeepDifferentLinesAndHonorFollowingCleanup(t *testing.T) {
 	}
 }
 
+func TestSkillRulesDecodeQuotedPathsAndSkipGoOnlyChecksForMarkdown(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := "diff --git \"a/docs/\\346\\261\\211\\t.md\" \"b/docs/\\346\\261\\211\\t.md\"\n" +
+		"--- \"a/docs/\\346\\261\\211\\t.md\"\n" +
+		"+++ \"b/docs/\\346\\261\\211\\t.md\"\n" +
+		"@@ -0,0 +1,3 @@\n" +
+		"+TODO(example): document rollout\n" +
+		"+const apiKey = \"sk-1234567890abcdef\"\n" +
+		"+panic(\"documentation only\")\n"
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		payload := runSkillCheck(t, skillRoot, diff, env)
+		if countSkillRule(payload.Findings, "todo-marker") != 1 || countSkillRule(payload.Findings, "secret-leak") != 1 {
+			t.Fatalf("expected generic findings, got %+v", payload.Findings)
+		}
+		if countSkillRule(payload.Findings, "panic-direct") != 0 {
+			t.Fatalf("markdown must not trigger Go-only rules: %+v", payload.Findings)
+		}
+		for _, finding := range payload.Findings {
+			if finding.RuleID == "todo-marker" && finding.File != "docs/汉\t.md" {
+				t.Fatalf("quoted file path = %q, want decoded path", finding.File)
+			}
+		}
+	}
+}
+
 func TestSkillCheckScriptFallbackParityForDuplicateRuleLines(t *testing.T) {
 	t.Parallel()
 

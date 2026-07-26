@@ -265,6 +265,23 @@ func TestRunAllowsFixedExecutableWithDynamicArguments(t *testing.T) {
 	assertNoRule(t, result.Findings, "command-injection")
 }
 
+func TestRunKeepsGenericRulesButSkipsGoOnlyRulesForNonGoFiles(t *testing.T) {
+	result := runUnifiedDiff(t, "diff --git a/docs/review.md b/docs/review.md\n"+
+		"--- a/docs/review.md\n+++ b/docs/review.md\n"+
+		"@@ -0,0 +1,5 @@\n"+
+		"+TODO(example): document rollout\n"+
+		"+const apiKey = \"sk-1234567890abcdef\"\n"+
+		"+panic(\"boom\")\n"+
+		"+go func() {}\n"+
+		"+child, cancel := context.WithCancel(ctx)\n")
+	assertRule(t, result.Findings, "todo-marker", "medium", "finding")
+	assertRule(t, result.Findings, "secret-leak", "critical", "finding")
+	for _, ruleID := range []string{"panic-direct", "goroutine-leak", "context-leak", "missing-test-hint"} {
+		assertNoRule(t, result.Findings, ruleID)
+		assertNoRule(t, result.Warnings, ruleID)
+	}
+}
+
 func runUnifiedDiff(t *testing.T, diff string) Analysis {
 	t.Helper()
 	parsed, err := review.ParseUnifiedDiff(diff)

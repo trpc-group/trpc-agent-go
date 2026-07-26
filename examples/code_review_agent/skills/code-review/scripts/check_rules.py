@@ -35,7 +35,7 @@ def build_hunk_texts(lines):
             hunk_lines = []
             hunk_indexes = []
             continue
-        if line.startswith("diff --git ") or line.startswith("+++ b/"):
+        if line.startswith("diff --git ") or line.startswith("+++ "):
             continue
         if line.startswith("+") and not line.startswith("+++"):
             hunk_lines.append(line[1:].strip())
@@ -63,6 +63,39 @@ def redact(text: str) -> str:
 
 def contains_any(text: str, *items: str) -> bool:
     return any(item in text for item in items)
+
+
+def decode_git_path(raw: str) -> str:
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == '"' and raw[-1] == '"':
+        body = raw[1:-1]
+        out = bytearray()
+        index = 0
+        while index < len(body):
+            if body[index] != "\\":
+                out.extend(body[index].encode("utf-8"))
+                index += 1
+                continue
+            index += 1
+            if index >= len(body):
+                out.append(ord("\\"))
+                break
+            if "0" <= body[index] <= "7":
+                digits = body[index:index + 3]
+                out.append(int(digits, 8))
+                index += len(digits)
+                continue
+            escapes = {"n": 10, "r": 13, "t": 9, "\\": ord("\\"), '"': ord('"')}
+            out.append(escapes.get(body[index], ord(body[index])))
+            index += 1
+        raw = out.decode("utf-8", errors="replace")
+    if raw.startswith("a/") or raw.startswith("b/"):
+        raw = raw[2:]
+    return raw
+
+
+def is_go_file(path: str) -> bool:
+    return path.endswith(".go")
 
 
 secret_value_pattern = re.compile(r"(?i)(sk-[A-Za-z0-9_-]{8,}|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|Bearer\s+[A-Za-z0-9\-._~+/=]{8,}|[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[a-z][a-z0-9+.-]*://[^/\s:@]+:[^@\s/]+@)")
@@ -255,8 +288,8 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
     hunk_texts = build_hunk_texts(lines)
     for index, raw in enumerate(lines):
         line = raw.rstrip("\n")
-        if line.startswith("+++ b/"):
-            current_file = line[len("+++ b/"):]
+        if line.startswith("+++ "):
+            current_file = decode_git_path(line[len("+++ "):])
             continue
         if line.startswith("@@"):
             match = re.search(r"\+(\d+)", line)
@@ -274,6 +307,12 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "New code contains a TODO or FIXME marker", text,
                             "Remove the marker or turn it into a tracked issue before merging.",
                             "todo-marker")
+            if should_report_secret(text):
+                add_finding("critical", "security", current_file, new_line,
+                            "Potential secret appears in added code", text,
+                            "Replace the literal with a secret manager or environment lookup.", "secret-leak")
+            if not is_go_file(current_file):
+                continue
             if "panic(" in text:
                 add_finding("high", "error_handling", current_file, new_line,
                             "New function panics directly", text,
@@ -344,11 +383,6 @@ with open(path, "r", encoding="utf-8", errors="replace") as f:
                             "Database handle or transaction has no cleanup path", text,
                             "Defer Close() for handles and Rollback() for transactions in the same scope.",
                             "db-lifecycle")
-            if should_report_secret(text):
-                add_finding("critical", "security", current_file, new_line,
-                            "Potential secret appears in added code", text,
-                            "Replace the literal with a secret manager or environment lookup.",
-                            "secret-leak")
         elif line.startswith(" ") and new_line > 0:
             new_line += 1
             current_hunk.append(line[1:])

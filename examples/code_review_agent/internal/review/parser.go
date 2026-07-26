@@ -65,13 +65,10 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			if current == nil {
 				current = &ParsedFile{}
 			}
-			path := strings.TrimPrefix(line, "+++ ")
-			path = strings.TrimPrefix(path, "b/")
-			path = strings.TrimPrefix(path, "a/")
-			path = strings.TrimSpace(path)
+			path := normalizeDiffPath(strings.TrimPrefix(line, "+++ "))
 			if path != "/dev/null" {
 				current.Path = filepath.ToSlash(path)
-				current.Language = "go"
+				current.Language = languageForPath(path)
 				current.IsTestFile = strings.HasSuffix(path, "_test.go")
 			}
 		case strings.HasPrefix(line, "@@ "):
@@ -111,13 +108,30 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 	if current != nil {
 		parsed.Files = append(parsed.Files, *current)
 	}
-	for i := range parsed.Files {
-		if parsed.Files[i].Path == "" {
-			continue
-		}
-		if parsed.Files[i].Language == "" {
-			parsed.Files[i].Language = "go"
+	return parsed, nil
+}
+
+func normalizeDiffPath(raw string) string {
+	path := strings.TrimSpace(raw)
+	if len(path) >= 2 && path[0] == '"' && path[len(path)-1] == '"' {
+		if unquoted, err := strconv.Unquote(path); err == nil {
+			path = unquoted
 		}
 	}
-	return parsed, nil
+	path = strings.TrimPrefix(path, "b/")
+	path = strings.TrimPrefix(path, "a/")
+	return filepath.ToSlash(path)
+}
+
+func languageForPath(path string) string {
+	switch ext := strings.ToLower(filepath.Ext(path)); ext {
+	case ".go":
+		return "go"
+	case ".md", ".markdown":
+		return "markdown"
+	case "":
+		return ""
+	default:
+		return strings.TrimPrefix(ext, ".")
+	}
 }

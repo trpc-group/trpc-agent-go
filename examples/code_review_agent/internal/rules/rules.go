@@ -49,6 +49,7 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 				if file.Path == "" {
 					continue
 				}
+				isGoFile := file.Language == "go" || strings.HasSuffix(file.Path, ".go")
 				if strings.Contains(text, "TODO(") || strings.Contains(text, "FIXME") {
 					out.Findings = append(out.Findings, review.Finding{
 						Severity:       "medium",
@@ -63,6 +64,17 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 						RuleID:         "todo-marker",
 						Status:         "finding",
 					})
+				}
+				if shouldReportSecret(text) {
+					out.Findings = append(out.Findings, review.Finding{
+						Severity: "critical", Category: "security", File: file.Path, Line: line.NewLine,
+						Title: "Potential secret appears in added code", Evidence: redact(text),
+						Recommendation: "Replace the literal with a secret manager or environment lookup.",
+						Confidence:     "high", Source: "rule", RuleID: "secret-leak", Status: "finding",
+					})
+				}
+				if !isGoFile {
+					continue
 				}
 				if strings.Contains(text, "panic(") {
 					out.Findings = append(out.Findings, review.Finding{
@@ -286,21 +298,6 @@ func Run(diff review.ParsedDiff, opts Options) Analysis {
 							Status:         "finding",
 						})
 					}
-				}
-				if shouldReportSecret(text) {
-					out.Findings = append(out.Findings, review.Finding{
-						Severity:       "critical",
-						Category:       "security",
-						File:           file.Path,
-						Line:           line.NewLine,
-						Title:          "Potential secret appears in added code",
-						Evidence:       redact(text),
-						Recommendation: "Replace the literal with a secret manager or environment lookup.",
-						Confidence:     "high",
-						Source:         "rule",
-						RuleID:         "secret-leak",
-						Status:         "finding",
-					})
 				}
 			}
 		}
