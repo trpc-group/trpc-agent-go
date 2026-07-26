@@ -122,11 +122,23 @@ jobs:
         run: |
           set -euo pipefail
           cd test
-          go test ./...
+          go test \
+            -coverpkg=trpc.group/trpc-go/trpc-agent-go/session/replaytest \
+            -coverprofile=coverage-e2e.out \
+            ./...
+          sed -i 's|^trpc.group/trpc-go/trpc-agent-go/|./|' coverage-e2e.out
+      - name: Upload e2e coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-e2e
+          path: test/coverage-e2e.out
+          if-no-files-found: error
   coverage:
     name: coverage
     runs-on: ubuntu-latest
-    needs: test-go-modules
+    needs:
+      - test-go-modules
+      - e2e
     steps:
       - uses: actions/checkout@v3
       - name: Download coverage artifacts
@@ -144,10 +156,31 @@ jobs:
             echo "no coverage files found" >&2
             exit 1
           fi
-          cp "${files[0]}" coverage.out
-          for file in "${files[@]:1}"; do
-            tail -n +2 "${file}" >> coverage.out
-          done
+          python3 - coverage.out "${files[@]}" <<'PYCODE'
+          import sys
+
+          output_path, *input_paths = sys.argv[1:]
+          mode = None
+          blocks = {}
+          for input_path in input_paths:
+              with open(input_path, "r", encoding="utf-8") as profile:
+                  profile_mode = profile.readline().strip()
+                  if mode is None:
+                      mode = profile_mode
+                  elif profile_mode != mode:
+                      raise SystemExit(
+                          f"coverage mode mismatch: {profile_mode!r} != {mode!r}"
+                      )
+                  for line in profile:
+                      location, statements, count = line.split()
+                      key = (location, statements)
+                      blocks[key] = max(blocks.get(key, 0), int(count))
+
+          with open(output_path, "w", encoding="utf-8") as output:
+              output.write(f"{mode}\n")
+              for (location, statements), count in blocks.items():
+                  output.write(f"{location} {statements} {count}\n")
+          PYCODE
       - name: Upload merged coverage artifact
         uses: actions/upload-artifact@v4
         with:
