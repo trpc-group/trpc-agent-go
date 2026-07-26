@@ -268,8 +268,13 @@ func evaluateSafetyRules(input GateInput, candidate Candidate, maxWallClock time
 	return rules
 }
 
-// hardFailCases returns new-fail cases whose candidate-side root cause is in
-// the configured hard-fail category set.
+// hardFailCases returns the cases on which the candidate introduces a new
+// hard-category root cause. Two shapes count: a pass-to-fail flip whose
+// candidate-side root cause is hard (or unattributed), and an already-failing
+// case whose candidate-side root cause moves into a hard category that was
+// absent from its baseline attribution — the pass state and even the case
+// score can stay unchanged while a soft failure turns into a tool, route, or
+// format failure, and hard categories are red lines either way.
 func hardFailCases(deltas []CaseDelta, categories []string) []string {
 	hard := make(map[FailureCategory]struct{}, len(categories))
 	for _, category := range categories {
@@ -277,18 +282,37 @@ func hardFailCases(deltas []CaseDelta, categories []string) []string {
 	}
 	cases := make([]string, 0)
 	for _, delta := range deltas {
-		if delta.Kind != DeltaNewFail {
-			continue
-		}
-		if delta.CandidateAttribution == nil {
-			// A new failure without attribution is conservatively hard.
-			cases = append(cases, delta.EvalCaseID)
-			continue
-		}
-		for _, cause := range delta.CandidateAttribution.RootCauses {
-			if _, ok := hard[cause.Category]; ok {
+		switch {
+		case delta.Kind == DeltaNewFail:
+			if delta.CandidateAttribution == nil {
+				// A new failure without attribution is conservatively hard.
 				cases = append(cases, delta.EvalCaseID)
-				break
+				continue
+			}
+			for _, cause := range delta.CandidateAttribution.RootCauses {
+				if _, ok := hard[cause.Category]; ok {
+					cases = append(cases, delta.EvalCaseID)
+					break
+				}
+			}
+		case !delta.BaselinePass && !delta.CandidatePass && delta.CandidateAttribution != nil:
+			// Failing on both sides: only a hard root cause the baseline did not
+			// already exhibit counts as new. A missing baseline attribution
+			// conservatively counts every hard candidate root as new.
+			baseline := make(map[FailureCategory]struct{})
+			if delta.BaselineAttribution != nil {
+				for _, cause := range delta.BaselineAttribution.Chain {
+					baseline[cause.Category] = struct{}{}
+				}
+			}
+			for _, cause := range delta.CandidateAttribution.RootCauses {
+				if _, isHard := hard[cause.Category]; !isHard {
+					continue
+				}
+				if _, known := baseline[cause.Category]; !known {
+					cases = append(cases, delta.EvalCaseID)
+					break
+				}
 			}
 		}
 	}
@@ -395,6 +419,11 @@ type CaseDelta struct {
 	CandidateScore float64 `json:"candidateScore"`
 	// ScoreDelta is candidate minus baseline.
 	ScoreDelta float64 `json:"scoreDelta"`
+	// BaselineAttribution explains the baseline-side failure when the case
+	// already failed under the baseline. The hard-fail gate compares it with
+	// CandidateAttribution to detect failure-category transitions that flip
+	// neither the pass state nor the case score.
+	BaselineAttribution *CaseAttribution `json:"baselineAttribution,omitempty"`
 	// CandidateAttribution explains the candidate-side failure when the case
 	// fails under the candidate.
 	CandidateAttribution *CaseAttribution `json:"candidateAttribution,omitempty"`

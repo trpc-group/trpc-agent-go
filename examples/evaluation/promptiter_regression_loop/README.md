@@ -51,9 +51,12 @@ Finishes in well under a second and produces:
   the accepted overrides merged onto any previously written-back baseline
   profile, so the artifact always describes the complete behavior that passed
   the gate (e.g. an improved tool description inherited from an earlier
-  acceptance), not just this run's patches. Both files are removed at the
-  start of every run, so a later rejecting run never leaves a stale accepted
-  candidate next to its rejection report.
+  acceptance), not just this run's patches. The reports and the candidate
+  artifacts are published as **one transaction**: a rejecting run removes any
+  stale accepted candidate in the same unit that writes its rejection report,
+  and a failure anywhere in the publication rolls everything back, so the
+  stable paths never show reports that disagree with the candidate state
+  next to them.
 - With `-write-back`, acceptance also updates the on-disk baseline:
   `baseline_prompt.txt` receives the instruction text, and
   `baseline_profile.json` (next to it) receives the **merged effective
@@ -75,13 +78,23 @@ business outcome; only pipeline execution errors exit non-zero.
 
 ```bash
 export OPENAI_API_KEY="..."
-export OPENAI_BASE_URL="..."   # optional
-go run . -mode real
+export OPENAI_BASE_URL="..."   # optional, defaults to the OpenAI endpoint
+go run . -mode real \
+  -model deepseek-v3.2 \
+  -worker-model gpt-5.2 \
+  -judge-model gpt-5.2
 ```
 
-Real mode assembles OpenAI-compatible models for the candidate and the
-PromptIter workers (backwarder/aggregator/optimizer/judge). To add an
-LLM-judged metric, append to `metrics.json`:
+Real mode assembles OpenAI-compatible models for the candidate (`-model`),
+the PromptIter workers (`-worker-model`, backwarder/aggregator/optimizer),
+and the judge used by `llmJudge` metrics (`-judge-model`). **All roles
+resolve against the single `OPENAI_BASE_URL` endpoint, so that endpoint must
+serve every configured model name.** The defaults mix a DeepSeek candidate
+with GPT workers and therefore assume an OpenAI-compatible gateway exposing
+both families; when your endpoint serves a single provider, point every flag
+at model names from that provider (e.g. `-model gpt-5.2`).
+
+To add an LLM-judged metric, append to `metrics.json`:
 
 ```jsonc
 {
@@ -222,12 +235,18 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 
 **失败归因**：确定性规则引擎输出因果链而非扁平标签。工具类失败对实际/期望
 轨迹做结构化 diff，区分错调、漏调与参数错误；format/knowledge 由 criterion
-结构与 rubric 类型推导，metric 名映射仅作补充。多信号按 route→tool→response
+结构与 rubric 类型推导，metric 名映射仅作补充。配置的 metricCategoryHints
+在加载后与实际 metric 名集合比对，未知 metric 名直接报错（fail closed）：
+拼错的 hint 若被静默忽略，对应 metric 会回落到 final_response_mismatch，
+可能让本应触发 hard-fail 红线的失败漏过门禁。多信号按 route→tool→response
 传播序折叠：下游症状标记 derivedFrom，仅根因转为 LossHints（P0–P2）反哺引擎。
 
 **接受策略**：安全门对每个候选执行硬规则——验证集增益阈值、新增 hard fail
 上限、退化 case 上限、关键 case 保护、调用与墙钟预算，逐条输出实测值与理由；
-过闸候选中取验证集分数最高者。质量红线永不参与 tradeoff。
+过闸候选中取验证集分数最高者。质量红线永不参与 tradeoff。新增 hard fail
+规则同时覆盖两种形态：pass 转 fail 且候选侧根因属 hard 类别（或无归因，
+保守计入），以及 baseline 已失败的 case 在候选下根因迁移进 baseline 归因中
+不存在的 hard 类别——后者 pass 状态与分数都可能不变，仅靠 delta 规则不可见。
 
 **防过拟合**：外层 gate 基于逐 case delta 而非聚合分。样例内置该场景：候选使
 验证集总分上升（引擎内层接受），但受保护 case 由 pass 转 fail，安全门确定性
@@ -238,6 +257,8 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 快照）、每轮全部引擎事件、per-round 成本耗时、归因、候选与 gate 决策，重跑
 不会混入历史轮次；报告汇总 baseline/candidate 分数、双集逐 case delta 与规则
 明细，报告中的外部数据（case ID、理由、模型证据、候选 prompt）经 Markdown
-转义与动态围栏渲染，防止模型输出注入报告结构。fake 模式下评测分数、归因与
-gate 决策完全确定：同输入必得同结论；runId、时间戳、耗时等审计字段随每次
-运行变化。
+转义与动态围栏渲染，防止模型输出注入报告结构。报告与可部署候选产物（含
+回写基线）在同一发布单元内原子生效：接受即一并写入，拒绝即一并清除历史
+候选，任一步失败整体回滚，稳定路径上不会出现报告与候选状态不一致的中间
+态。fake 模式下评测分数、归因与 gate 决策完全确定：同输入必得同结论；
+runId、时间戳、耗时等审计字段随每次运行变化。

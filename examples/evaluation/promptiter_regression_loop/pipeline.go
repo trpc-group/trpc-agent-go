@@ -16,6 +16,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -131,10 +132,13 @@ type Result struct {
 	// Gate is the final two-stage gate decision.
 	Gate *GateDecision `json:"gate"`
 	// CandidatePrompt is the accepted candidate's instruction text; empty on
-	// rejection.
+	// rejection and when the accepted profile touched no instruction surface.
 	CandidatePrompt string `json:"candidatePrompt,omitempty"`
 	// CandidatePromptPath is where the accepted prompt was written.
 	CandidatePromptPath string `json:"candidatePromptPath,omitempty"`
+	// CandidateProfilePath is where the accepted effective profile was
+	// written; empty on rejection.
+	CandidateProfilePath string `json:"candidateProfilePath,omitempty"`
 	// ReportJSONPath and ReportMarkdownPath locate the generated reports.
 	ReportJSONPath     string `json:"reportJsonPath"`
 	ReportMarkdownPath string `json:"reportMarkdownPath"`
@@ -325,15 +329,19 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 	}
 
 	// The accepted candidate artifacts (and the optional write-back) are only
-	// staged here; publication is deferred until the S6 reports succeed so a
-	// report failure cannot leave deployable candidate files or a mutated
-	// baseline behind without the reports that explain them.
+	// staged here. On rejection the stable candidate artifact paths are staged
+	// for removal instead: a previously accepted run may have left its
+	// candidate files there, and leaving them next to a fresh rejection report
+	// would let consumers of the stable paths deploy a stale candidate despite
+	// the latest gate decision.
 	var staged []stagedFile
 	if decision.Accepted {
 		staged, err = stageCandidateArtifacts(opts, inputs, result, decision)
 		if err != nil {
 			return nil, err
 		}
+	} else {
+		staged = stageCandidateRemovals(opts.OutputDir)
 	}
 
 	result.Cost = tracker.Snapshot()
@@ -345,40 +353,36 @@ func runPipeline(ctx context.Context, opts Options) (*Result, error) {
 	}
 	result.Message = decision.Summary
 
-	// S6: machine- and human-readable reports plus the run summary.
+	// S6: machine- and human-readable reports plus the run summary. The
+	// reports are rendered in memory and published together with the staged
+	// candidate state as one rollback unit, so a failure anywhere in the
+	// publication leaves both the previous reports and the previous deployable
+	// state intact — the stable paths never expose a decision whose candidate
+	// artifacts were not successfully published.
 	stageStart = time.Now()
 	logger.Printf("S6: reports")
-	jsonPath, markdownPath, err := WriteReports(opts, result)
+	reportFiles, jsonPath, markdownPath, err := renderReports(opts, result)
 	if err != nil {
 		return nil, err
 	}
 	result.ReportJSONPath = jsonPath
 	result.ReportMarkdownPath = markdownPath
 	result.StageDurations["s6_report"] = time.Since(stageStart)
-
-	// Publish the staged candidate artifacts only now that every required
-	// report exists.
-	if err := publishFiles(staged); err != nil {
+	if err := publishFiles(append(reportFiles, staged...)); err != nil {
 		return nil, err
 	}
 	logger.Printf("gate decision: %s", decision.Summary)
 	return result, nil
 }
 
-// prepareOutputDir creates the output directory and removes the deployable
-// candidate artifacts a previous run may have left behind. The paths are
-// stable across runs, so without this cleanup a rejecting rerun would leave
-// the previously accepted candidate_prompt.txt / candidate_profile.json next
-// to its rejection report, and consumers of the stable paths could deploy a
-// stale candidate despite the latest gate decision.
+// prepareOutputDir creates the output directory. Stale deployable candidate
+// artifacts from a previous run are not removed here: their removal (on
+// rejection) or replacement (on acceptance) is staged and published together
+// with the reports, so the stable paths always change as one consistent unit
+// and a failed run keeps the previous run's reports and candidate state.
 func prepareOutputDir(outputDir string) error {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir %q: %w", outputDir, err)
-	}
-	for _, name := range []string{candidatePromptFileName, candidateProfileFileName} {
-		if err := os.Remove(filepath.Join(outputDir, name)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove stale candidate artifact %q: %w", name, err)
-		}
 	}
 	return nil
 }
@@ -396,12 +400,31 @@ func buildAttributor(
 		return nil, nil, fmt.Errorf("list metrics: %w", err)
 	}
 	metrics := make([]*metric.EvalMetric, 0, len(metricNames))
+	knownMetrics := make(map[string]struct{}, len(metricNames))
 	for _, metricName := range metricNames {
 		evalMetric, err := metricManager.Get(ctx, opts.Config.AppName, opts.Config.EvalSets.Train, metricName)
 		if err != nil {
 			return nil, nil, fmt.Errorf("get metric %q: %w", metricName, err)
 		}
 		metrics = append(metrics, evalMetric)
+		knownMetrics[evalMetric.MetricName] = struct{}{}
+	}
+	// A hint keyed by a metric name that does not exist is silently unused,
+	// and the metric it was meant to classify falls back to
+	// final_response_mismatch — a mistyped route_error hint could then slip a
+	// hard failure past a nonzero regression allowance. Fail closed instead.
+	unknownHints := make([]string, 0)
+	for hintMetric := range opts.Config.Attribution.MetricCategoryHints {
+		if _, ok := knownMetrics[hintMetric]; !ok {
+			unknownHints = append(unknownHints, hintMetric)
+		}
+	}
+	if len(unknownHints) > 0 {
+		sort.Strings(unknownHints)
+		return nil, nil, fmt.Errorf(
+			"attribution.metricCategoryHints references metric(s) not defined for the app: %s",
+			strings.Join(unknownHints, ", "),
+		)
 	}
 	attributor := NewAttributor(metrics, opts.Config.Attribution.MetricCategoryHints)
 	expected := make(map[string][]*evalset.Invocation)
@@ -445,6 +468,13 @@ func buildCandidates(
 	audit *auditWriter,
 	epsilon float64,
 ) ([]Candidate, error) {
+	// Baseline attributions ride along on each delta so the hard-fail gate can
+	// detect a failure-category transition on a case that fails on both sides.
+	baselineAttributions := make(map[string]*CaseAttribution, len(result.BaselineAttributions))
+	for i := range result.BaselineAttributions {
+		attribution := result.BaselineAttributions[i]
+		baselineAttributions[attribution.EvalSetID+"/"+attribution.EvalCaseID] = &attribution
+	}
 	candidates := make([]Candidate, 0, len(runResult.Rounds))
 	for index, round := range runResult.Rounds {
 		if round.Validation == nil || round.OutputProfile == nil {
@@ -460,10 +490,13 @@ func buildCandidates(
 			snapshotByKey[snapshotKey(snapshot)] = snapshot
 		}
 		for i := range deltas {
+			key := deltas[i].EvalSetID + "/" + deltas[i].EvalCaseID
+			if !deltas[i].BaselinePass {
+				deltas[i].BaselineAttribution = baselineAttributions[key]
+			}
 			if deltas[i].CandidatePass {
 				continue
 			}
-			key := deltas[i].EvalSetID + "/" + deltas[i].EvalCaseID
 			if snapshot, ok := snapshotByKey[key]; ok {
 				deltas[i].CandidateAttribution = attributor.Attribute(snapshot, expected[key])
 			}
@@ -499,18 +532,32 @@ func buildCandidates(
 	return candidates, nil
 }
 
-// stagedFile is one deferred artifact write. Candidate outputs and the
-// write-back baseline are staged after the gate decision and published only
-// once the S6 reports succeed, so a report failure never leaves a deployable
-// candidate (or a mutated baseline) behind.
+// stagedFile is one deferred artifact operation: a content write, or a
+// removal when remove is set. Reports, candidate outputs, and the write-back
+// baseline are staged after the gate decision and published in one
+// publishFiles call, so a failure never leaves reports that disagree with
+// the deployable candidate state.
 type stagedFile struct {
 	path    string
 	content []byte
+	// remove deletes the path instead of writing content, used to clear the
+	// stable candidate artifacts of a previously accepted run on rejection.
+	remove bool
 }
 
-// publishFiles writes every staged file. When any write fails, files already
-// written are restored to their prior content (or removed when they did not
-// exist) so an error never leaves a partially published candidate.
+// stageCandidateRemovals stages the deletion of the stable deployable
+// candidate artifacts, so a rejecting run clears any previously accepted
+// candidate in the same rollback unit that publishes its rejection reports.
+func stageCandidateRemovals(outputDir string) []stagedFile {
+	return []stagedFile{
+		{path: filepath.Join(outputDir, candidatePromptFileName), remove: true},
+		{path: filepath.Join(outputDir, candidateProfileFileName), remove: true},
+	}
+}
+
+// publishFiles applies every staged operation. When any step fails, files
+// already touched are restored to their prior content (or removed when they
+// did not exist) so an error never leaves a partially published state.
 func publishFiles(files []stagedFile) error {
 	type priorState struct {
 		path    string
@@ -540,6 +587,13 @@ func publishFiles(files []stagedFile) error {
 			return fmt.Errorf("snapshot %q before publish: %w", file.path, err)
 		}
 		priors = append(priors, prior)
+		if file.remove {
+			if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				rollback()
+				return fmt.Errorf("remove %q: %w", file.path, err)
+			}
+			continue
+		}
 		if err := os.WriteFile(file.path, file.content, 0o644); err != nil {
 			rollback()
 			return fmt.Errorf("publish %q: %w", file.path, err)
@@ -590,8 +644,9 @@ func stageCandidateArtifacts(opts Options, inputs *resolvedInputs, result *Resul
 		return nil, fmt.Errorf("marshal candidate profile: %w", err)
 	}
 	profileFileContent := append(profileContent, '\n')
+	result.CandidateProfilePath = filepath.Join(opts.OutputDir, candidateProfileFileName)
 	staged := []stagedFile{{
-		path:    filepath.Join(opts.OutputDir, candidateProfileFileName),
+		path:    result.CandidateProfilePath,
 		content: profileFileContent,
 	}}
 	if promptText != "" {

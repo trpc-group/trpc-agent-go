@@ -34,18 +34,32 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
+// Default real-mode model names, overridable through -model, -worker-model,
+// and -judge-model. Every role resolves against the single OpenAI-compatible
+// endpoint configured by OPENAI_BASE_URL / OPENAI_API_KEY, so that endpoint
+// must serve every configured model name. The defaults mix a DeepSeek
+// candidate with GPT workers and therefore assume a gateway exposing both
+// families; when your endpoint serves a single provider, override the flags
+// with model names from that provider (e.g. -model gpt-5.2).
+const (
+	defaultRealCandidateModel = "deepseek-v3.2"
+	defaultRealWorkerModel    = "gpt-5.2"
+	defaultRealJudgeModel     = "gpt-5.2"
+)
+
 var (
 	dataDir    = flag.String("data-dir", "./data", "Directory containing evalset, metric, and prompt source files")
 	outputDir  = flag.String("output-dir", "./output", "Directory receiving reports, audit files, and the candidate prompt")
 	configPath = flag.String("config", "", "Pipeline configuration file (default <data-dir>/promptiter-regression-app/promptiter.json)")
 	mode       = flag.String("mode", "fake", "Model sourcing mode: fake (deterministic, no API key) or real (OPENAI_API_KEY)")
 	writeBack  = flag.Bool("write-back", false, "Overwrite the baseline prompt source on acceptance instead of only emitting output/candidate_prompt.txt")
-)
 
-// Default real-mode model names.
-const (
-	defaultRealCandidateModel = "deepseek-v3.2"
-	defaultRealWorkerModel    = "gpt-5.2"
+	candidateModelName = flag.String("model", defaultRealCandidateModel,
+		"Real-mode model for the candidate agent; must be served by the OPENAI_BASE_URL endpoint")
+	workerModelName = flag.String("worker-model", defaultRealWorkerModel,
+		"Real-mode model for the PromptIter workers (backwarder/aggregator/optimizer); must be served by the OPENAI_BASE_URL endpoint")
+	judgeModelName = flag.String("judge-model", defaultRealJudgeModel,
+		"Real-mode model for the judge used by llmJudge metrics; must be served by the OPENAI_BASE_URL endpoint")
 )
 
 func main() {
@@ -124,7 +138,20 @@ func buildComponents(ctx context.Context, pipelineMode Mode, inputs *resolvedInp
 	if pipelineMode == ModeFake {
 		return buildFakeComponents(inputs.baselinePrompt, inputs.baselineToolDescriptions)
 	}
-	return buildRealComponents(ctx, inputs.baselinePrompt, inputs.baselineToolDescriptions, tracker)
+	models := realModels{
+		candidate: strings.TrimSpace(*candidateModelName),
+		worker:    strings.TrimSpace(*workerModelName),
+		judge:     strings.TrimSpace(*judgeModelName),
+	}
+	return buildRealComponents(ctx, inputs.baselinePrompt, inputs.baselineToolDescriptions, models, tracker)
+}
+
+// realModels names the per-role models used in real mode. All of them are
+// served through the single OPENAI_BASE_URL / OPENAI_API_KEY endpoint.
+type realModels struct {
+	candidate string
+	worker    string
+	judge     string
 }
 
 // buildFakeComponents wires the deterministic scripted runtime: scripted
@@ -150,14 +177,18 @@ func buildFakeComponents(baselinePrompt string, toolDescriptions map[string]stri
 // the PromptIter worker stages. Every worker runner is wrapped with the
 // tracker so its model calls land in the cost report and the
 // max_model_calls gate budget.
-func buildRealComponents(ctx context.Context, baselinePrompt string, toolDescriptions map[string]string, tracker *CostTracker) (Components, func(), error) {
-	candidateModel, err := loadOpenAIModel(defaultRealCandidateModel)
+func buildRealComponents(ctx context.Context, baselinePrompt string, toolDescriptions map[string]string, models realModels, tracker *CostTracker) (Components, func(), error) {
+	candidateModel, err := loadOpenAIModel(models.candidate)
 	if err != nil {
 		return Components{}, nil, fmt.Errorf("load candidate model: %w", err)
 	}
-	workerModel, err := loadOpenAIModel(defaultRealWorkerModel)
+	workerModel, err := loadOpenAIModel(models.worker)
 	if err != nil {
 		return Components{}, nil, fmt.Errorf("load worker model: %w", err)
+	}
+	judgeModel, err := loadOpenAIModel(models.judge)
+	if err != nil {
+		return Components{}, nil, fmt.Errorf("load judge model: %w", err)
 	}
 	backwarderRunner := tracker.Wrap("backwarder",
 		runner.NewRunner("promptiter-backwarder", newWorkerAgent("promptiter-backwarder", workerModel)))
@@ -166,7 +197,7 @@ func buildRealComponents(ctx context.Context, baselinePrompt string, toolDescrip
 	optimizerRunner := tracker.Wrap("optimizer",
 		runner.NewRunner("promptiter-optimizer", newWorkerAgent("promptiter-optimizer", workerModel)))
 	judgeRunner := tracker.Wrap("judge",
-		runner.NewRunner("promptiter-judge", newWorkerAgent("promptiter-judge", workerModel)))
+		runner.NewRunner("promptiter-judge", newWorkerAgent("promptiter-judge", judgeModel)))
 	closer := func() {
 		backwarderRunner.Close()
 		aggregatorRunner.Close()
@@ -195,8 +226,9 @@ func buildRealComponents(ctx context.Context, baselinePrompt string, toolDescrip
 		Optimizer:      optimizerInstance,
 		Judge:          judgeRunner,
 		ModelInfo: map[string]string{
-			"candidate": defaultRealCandidateModel,
-			"worker":    defaultRealWorkerModel,
+			"candidate": models.candidate,
+			"worker":    models.worker,
+			"judge":     models.judge,
 		},
 	}
 	return components, closer, nil

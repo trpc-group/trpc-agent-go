@@ -273,13 +273,29 @@ func buildNextSteps(opts Options, result *Result) []string {
 }
 
 func writeBackStep(opts Options, result *Result) string {
+	promptSourcePath := opts.Config.PromptSourcePath()
+	baselineProfilePath := filepath.Join(filepath.Dir(promptSourcePath), baselineProfileFileName)
 	if opts.WriteBack {
-		return "已按 -write-back 将候选 prompt 回写到 " + opts.Config.PromptSourcePath() + "。"
+		return fmt.Sprintf(
+			"已按 -write-back 将候选 prompt 回写到 %s，并把 effective profile 回写到 %s。",
+			markdownEscape(promptSourcePath), markdownEscape(baselineProfilePath),
+		)
 	}
+	profileCommand := fmt.Sprintf("cp %s %s",
+		markdownEscape(result.CandidateProfilePath), markdownEscape(baselineProfilePath))
+	if result.CandidatePromptPath == "" {
+		// The accepted profile touched no instruction surface: the baseline
+		// prompt stays in force and only the profile needs promotion.
+		return fmt.Sprintf(
+			"确认后晋升候选（本次仅接受非指令 override，prompt 保持 baseline）：%s。",
+			profileCommand,
+		)
+	}
+	promptCommand := fmt.Sprintf("cp %s %s",
+		markdownEscape(result.CandidatePromptPath), markdownEscape(promptSourcePath))
 	return fmt.Sprintf(
-		"确认后回写源 prompt：cp %s %s（或重跑时加 -write-back）。",
-		result.CandidatePromptPath,
-		opts.Config.PromptSourcePath(),
+		"确认后一并晋升候选 prompt 与 effective profile（只回写 prompt 会丢失非指令 override）：%s && %s。",
+		promptCommand, profileCommand,
 	)
 }
 
@@ -291,29 +307,44 @@ func formatStageDurations(durations map[string]time.Duration) map[string]string 
 	return formatted
 }
 
-// WriteReports persists optimization_report.json and optimization_report.md
-// under the output directory. The markdown template renders the gate verdict
-// unconditionally, so the result must carry a gate decision.
-func WriteReports(opts Options, result *Result) (jsonPath, markdownPath string, err error) {
+// renderReports builds optimization_report.json and optimization_report.md
+// as staged files without touching the filesystem, so the pipeline can
+// publish them atomically with the candidate artifacts. The markdown
+// template renders the gate verdict unconditionally, so the result must
+// carry a gate decision.
+func renderReports(opts Options, result *Result) (files []stagedFile, jsonPath, markdownPath string, err error) {
 	if result.Gate == nil {
-		return "", "", errors.New("cannot write reports: result has no gate decision")
+		return nil, "", "", errors.New("cannot write reports: result has no gate decision")
 	}
 	report := BuildReport(opts, result)
 	jsonPath = filepath.Join(opts.OutputDir, "optimization_report.json")
 	content, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
-		return "", "", fmt.Errorf("marshal optimization report: %w", err)
-	}
-	if err := os.WriteFile(jsonPath, append(content, '\n'), 0o644); err != nil {
-		return "", "", fmt.Errorf("write %q: %w", jsonPath, err)
+		return nil, "", "", fmt.Errorf("marshal optimization report: %w", err)
 	}
 	markdownPath = filepath.Join(opts.OutputDir, "optimization_report.md")
 	markdown, err := RenderMarkdown(report)
 	if err != nil {
+		return nil, "", "", err
+	}
+	files = []stagedFile{
+		{path: jsonPath, content: append(content, '\n')},
+		{path: markdownPath, content: []byte(markdown)},
+	}
+	return files, jsonPath, markdownPath, nil
+}
+
+// WriteReports renders and immediately publishes both report files. The
+// pipeline itself uses renderReports so the reports join the candidate
+// artifacts in one publication unit; this helper serves callers that have no
+// other artifacts to publish.
+func WriteReports(opts Options, result *Result) (jsonPath, markdownPath string, err error) {
+	files, jsonPath, markdownPath, err := renderReports(opts, result)
+	if err != nil {
 		return "", "", err
 	}
-	if err := os.WriteFile(markdownPath, []byte(markdown), 0o644); err != nil {
-		return "", "", fmt.Errorf("write %q: %w", markdownPath, err)
+	if err := publishFiles(files); err != nil {
+		return "", "", err
 	}
 	return jsonPath, markdownPath, nil
 }

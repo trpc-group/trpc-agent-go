@@ -113,9 +113,10 @@ func reportFixture(t *testing.T, accepted bool) (Options, *Result) {
 				},
 			},
 		},
-		Candidates:          []Candidate{candidate},
-		CandidatePrompt:     prompt,
-		CandidatePromptPath: "output/candidate_prompt.txt",
+		Candidates:           []Candidate{candidate},
+		CandidatePrompt:      prompt,
+		CandidatePromptPath:  "output/candidate_prompt.txt",
+		CandidateProfilePath: "output/candidate_profile.json",
 		Cost: CostSummary{
 			Scopes: map[string]ScopeCost{"candidate": {RunCalls: 18, ModelCalls: 26, PromptTokens: 7000, CompletionTokens: 500}},
 			Total:  ScopeCost{RunCalls: 18, ModelCalls: 26, PromptTokens: 7000, CompletionTokens: 500},
@@ -128,6 +129,7 @@ func reportFixture(t *testing.T, accepted bool) (Options, *Result) {
 		result.Status = StatusRejected
 		result.CandidatePrompt = ""
 		result.CandidatePromptPath = ""
+		result.CandidateProfilePath = ""
 	}
 	opts := Options{
 		Config:     config,
@@ -214,7 +216,11 @@ func TestReportMarkdownAcceptPath(t *testing.T) {
 	assert.Contains(t, markdown, "| min_validation_score_gain |")
 	assert.Contains(t, markdown, "canary")
 	assert.Contains(t, markdown, "evalset/recorder")
-	assert.Contains(t, markdown, "-write-back")
+	// The promotion step installs both accepted artifacts, not the prompt
+	// alone: prompt into the prompt source, effective profile into the
+	// adjacent baseline_profile.json.
+	assert.Contains(t, markdown, "cp output/candidate_prompt.txt baseline_prompt.txt")
+	assert.Contains(t, markdown, "cp output/candidate_profile.json baseline_profile.json")
 	assert.Contains(t, markdown, "优化后的指令")
 	// Train delta section renders when known.
 	assert.Contains(t, markdown, "逐 case delta（train）")
@@ -222,6 +228,32 @@ func TestReportMarkdownAcceptPath(t *testing.T) {
 	// Multi-line evidence is flattened into one list line.
 	assert.Contains(t, markdown, "多行 证据 文本")
 	assert.NotContains(t, markdown, "多行\n证据")
+}
+
+// TestWriteBackStepPromotesFullProfile locks the promotion contract: the
+// recommended command installs the effective profile alongside the prompt (a
+// prompt-only copy would drop accepted non-instruction overrides), a
+// tool-only acceptance (no instruction text, CandidatePromptPath empty)
+// promotes just the profile, and the write-back notice names both targets.
+func TestWriteBackStepPromotesFullProfile(t *testing.T) {
+	opts, result := reportFixture(t, true)
+
+	both := writeBackStep(opts, result)
+	assert.Contains(t, both, "cp output/candidate_prompt.txt baseline_prompt.txt")
+	assert.Contains(t, both, "cp output/candidate_profile.json baseline_profile.json")
+
+	toolOnly := *result
+	toolOnly.CandidatePrompt = ""
+	toolOnly.CandidatePromptPath = ""
+	step := writeBackStep(opts, &toolOnly)
+	assert.Contains(t, step, "cp output/candidate_profile.json baseline_profile.json")
+	assert.NotContains(t, step, "candidate_prompt.txt")
+	assert.Contains(t, step, "prompt 保持 baseline")
+
+	opts.WriteBack = true
+	written := writeBackStep(opts, result)
+	assert.Contains(t, written, "baseline_prompt.txt")
+	assert.Contains(t, written, "baseline_profile.json")
 }
 
 // TestReportMarkdownRejectPath asserts the reject wording, overfitting call

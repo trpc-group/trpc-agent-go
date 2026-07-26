@@ -134,6 +134,61 @@ func TestGateUnattributedNewFailIsConservativelyHard(t *testing.T) {
 	assert.False(t, ruleByName(t, decision.Rules, "max_new_hard_fails").Passed)
 }
 
+// TestGateDetectsNewHardCauseOnAlreadyFailingCase: a case failing on both
+// sides whose root cause moves from a soft category into a hard one — with
+// pass state and score unchanged — still trips max_new_hard_fails. Without
+// baseline-attribution comparison this transition is invisible to every
+// delta rule, letting gains elsewhere carry the candidate through.
+func TestGateDetectsNewHardCauseOnAlreadyFailingCase(t *testing.T) {
+	candidate := passingCandidate(1, 0.9)
+	candidate.Deltas = append(candidate.Deltas, CaseDelta{
+		EvalCaseID:    "val_soft_to_hard",
+		EvalSetID:     "validation",
+		Kind:          DeltaUnchanged,
+		BaselinePass:  false,
+		CandidatePass: false,
+		BaselineScore: 0.5, CandidateScore: 0.5,
+		BaselineAttribution: &CaseAttribution{
+			RootCauses: []FailureCause{{Category: CauseFinalResponseMismatch}},
+			Chain:      []FailureCause{{Category: CauseFinalResponseMismatch}},
+		},
+		CandidateAttribution: &CaseAttribution{
+			RootCauses: []FailureCause{{Category: CauseToolCallError}},
+		},
+	})
+	decision, err := EvaluateGate(gateInput(strictGate(), candidate))
+	require.NoError(t, err)
+	assert.False(t, decision.Accepted)
+	outcome := ruleByName(t, decision.Rules, "max_new_hard_fails")
+	assert.False(t, outcome.Passed)
+	assert.Contains(t, outcome.Reason, "val_soft_to_hard")
+}
+
+// TestGateUnchangedHardCauseIsNotNew: a case that already failed with the
+// same hard root cause under the baseline introduces nothing new, so it does
+// not count against max_new_hard_fails.
+func TestGateUnchangedHardCauseIsNotNew(t *testing.T) {
+	candidate := passingCandidate(1, 0.9)
+	candidate.Deltas = append(candidate.Deltas, CaseDelta{
+		EvalCaseID:    "val_still_hard",
+		EvalSetID:     "validation",
+		Kind:          DeltaUnchanged,
+		BaselinePass:  false,
+		CandidatePass: false,
+		BaselineAttribution: &CaseAttribution{
+			RootCauses: []FailureCause{{Category: CauseToolCallError}},
+			Chain:      []FailureCause{{Category: CauseToolCallError}},
+		},
+		CandidateAttribution: &CaseAttribution{
+			RootCauses: []FailureCause{{Category: CauseToolCallError}},
+		},
+	})
+	decision, err := EvaluateGate(gateInput(strictGate(), candidate))
+	require.NoError(t, err)
+	assert.True(t, ruleByName(t, decision.Rules, "max_new_hard_fails").Passed)
+	assert.True(t, decision.Accepted)
+}
+
 func TestGateRejectsProtectedCaseRegression(t *testing.T) {
 	candidate := passingCandidate(1, 0.9)
 	candidate.Deltas[1] = CaseDelta{

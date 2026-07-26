@@ -105,8 +105,10 @@ type EngineConfig struct {
 type GateConfig struct {
 	// MinValidationScoreGain is the minimum validation score delta to accept.
 	MinValidationScoreGain float64 `json:"minValidationScoreGain"`
-	// MaxNewHardFails caps validation cases that newly fail with a hard-fail
-	// attribution category.
+	// MaxNewHardFails caps validation cases on which the candidate introduces
+	// a new hard-fail attribution category: pass-to-fail flips with a hard (or
+	// missing) root cause, plus already-failing cases whose root cause moves
+	// into a hard category absent from the baseline attribution.
 	MaxNewHardFails int `json:"maxNewHardFails"`
 	// MaxRegressedCases caps validation cases that newly fail or lose score.
 	MaxRegressedCases int `json:"maxRegressedCases"`

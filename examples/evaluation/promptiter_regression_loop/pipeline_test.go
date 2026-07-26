@@ -462,9 +462,138 @@ func TestConfigRejectsDuplicateProtectedCases(t *testing.T) {
 	assert.Contains(t, err.Error(), "duplicated")
 }
 
-// TestAcceptedRunWithReportFailurePublishesNothing locks the staged
-// publication order: when the gate accepts a candidate but S6 report writing
-// fails, neither the deployable candidate artifacts nor the write-back
+// TestPipelineRejectsUnknownMetricHint locks the fail-closed rule for
+// attribution hints: a hint keyed by a metric name that does not exist would
+// be silently unused, and the metric it was meant to classify would fall
+// back to final_response_mismatch — a mistyped route_error hint could then
+// slip a hard failure past a nonzero regression allowance.
+func TestPipelineRejectsUnknownMetricHint(t *testing.T) {
+	config, inputs := loadExampleInputs(t)
+	config.Attribution.MetricCategoryHints = map[string]string{
+		"tool_trajectory_avg_scor": string(CauseRouteError),
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, err := runPipeline(ctx, Options{
+		Config:    config,
+		Inputs:    inputs,
+		DataDir:   testDataDir,
+		OutputDir: t.TempDir(),
+		Mode:      ModeFake,
+		Components: Components{
+			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, inputs.baselineToolDescriptions),
+			Backwarder:     NewBackwarder(),
+			Aggregator:     NewAggregator(),
+			Optimizer:      NewOptimizer(),
+		},
+		Logger: log.New(os.Stderr, "[test] ", 0),
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "tool_trajectory_avg_scor")
+	assert.Contains(t, err.Error(), "metricCategoryHints")
+}
+
+// TestPublishFailureKeepsPreviousReportsAndDeployableState locks the
+// one-transaction publication contract: when a later run fails on its last
+// staged write, the previous run's reports AND its deployable candidate
+// artifacts must all survive untouched — consumers of the stable paths can
+// never observe reports that disagree with the candidate state next to them.
+func TestPublishFailureKeepsPreviousReportsAndDeployableState(t *testing.T) {
+	dataDir := copyTestData(t)
+	outputDir := t.TempDir()
+	relax := func(config *Config) {
+		config.Gate.ProtectedCases = nil
+		config.Gate.MaxRegressedCases = 1
+		config.Gate.MaxNewHardFails = 1
+	}
+
+	// First run: accepted without write-back, publishing reports plus the
+	// candidate artifacts.
+	config, inputs := loadInputsAt(t, dataDir)
+	relax(config)
+	first := runExamplePipeline(t, config, inputs, dataDir, outputDir, false)
+	require.Equal(t, StatusAccepted, first.Status)
+	stablePaths := []string{
+		filepath.Join(outputDir, "optimization_report.json"),
+		filepath.Join(outputDir, "optimization_report.md"),
+		filepath.Join(outputDir, "candidate_prompt.txt"),
+		filepath.Join(outputDir, "candidate_profile.json"),
+	}
+	previous := make(map[string]string, len(stablePaths))
+	for _, path := range stablePaths {
+		content, err := os.ReadFile(path)
+		require.NoError(t, err)
+		previous[path] = string(content)
+	}
+	originalPrompt, err := os.ReadFile(inputs.promptSourcePath)
+	require.NoError(t, err)
+
+	// Second run with write-back: a directory squatting on the write-back
+	// profile path makes the *last* staged write fail after the reports and
+	// candidate artifacts were already replaced, forcing a full rollback.
+	config, inputs = loadInputsAt(t, dataDir)
+	relax(config)
+	require.NoError(t, os.MkdirAll(inputs.baselineProfilePath, 0o755))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	_, err = runPipeline(ctx, Options{
+		Config:    config,
+		Inputs:    inputs,
+		DataDir:   dataDir,
+		OutputDir: outputDir,
+		Mode:      ModeFake,
+		WriteBack: true,
+		Components: Components{
+			CandidateAgent: NewAgent(NewModel(""), inputs.baselinePrompt, inputs.baselineToolDescriptions),
+			Backwarder:     NewBackwarder(),
+			Aggregator:     NewAggregator(),
+			Optimizer:      NewOptimizer(),
+		},
+		Logger: log.New(os.Stderr, "[test] ", 0),
+	})
+	require.Error(t, err)
+
+	for _, path := range stablePaths {
+		content, err := os.ReadFile(path)
+		require.NoError(t, err, path)
+		assert.Equal(t, previous[path], string(content),
+			"%s must roll back to the previous run's content", path)
+	}
+	promptAfter, err := os.ReadFile(inputs.promptSourcePath)
+	require.NoError(t, err)
+	assert.Equal(t, string(originalPrompt), string(promptAfter),
+		"the write-back must not survive a failed publication")
+}
+
+// TestRejectingRerunRemovesStaleCandidateArtifacts: the stable candidate
+// paths of a previously accepted run are cleared by a later rejecting run in
+// the same publication unit as its rejection reports, so consumers can never
+// deploy a stale candidate against the latest gate decision.
+func TestRejectingRerunRemovesStaleCandidateArtifacts(t *testing.T) {
+	outputDir := t.TempDir()
+	config, inputs := loadExampleInputs(t)
+	config.Gate.ProtectedCases = nil
+	config.Gate.MaxRegressedCases = 1
+	config.Gate.MaxNewHardFails = 1
+	accepted := runExamplePipeline(t, config, inputs, testDataDir, outputDir, false)
+	require.Equal(t, StatusAccepted, accepted.Status)
+	require.FileExists(t, filepath.Join(outputDir, "candidate_prompt.txt"))
+	require.FileExists(t, filepath.Join(outputDir, "candidate_profile.json"))
+
+	// The committed strict preset rejects the same candidate.
+	strictConfig, strictInputs := loadExampleInputs(t)
+	rejected := runExamplePipeline(t, strictConfig, strictInputs, testDataDir, outputDir, false)
+	require.Equal(t, StatusRejected, rejected.Status)
+	assert.NoFileExists(t, filepath.Join(outputDir, "candidate_prompt.txt"))
+	assert.NoFileExists(t, filepath.Join(outputDir, "candidate_profile.json"))
+	markdown, err := os.ReadFile(rejected.ReportMarkdownPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(markdown), "**拒绝**")
+}
+
+// TestAcceptedRunWithReportFailurePublishesNothing locks the one-transaction
+// publication: when the gate accepts a candidate but publishing the report
+// files fails, neither the deployable candidate artifacts nor the write-back
 // baseline may be left behind.
 func TestAcceptedRunWithReportFailurePublishesNothing(t *testing.T) {
 	dataDir := copyTestData(t)
