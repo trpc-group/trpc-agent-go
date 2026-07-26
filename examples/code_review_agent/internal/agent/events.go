@@ -30,20 +30,48 @@ const (
 	reviewEventTaskFailed    = "cr_agent.task_failed"
 )
 
+type reviewEventSinkContextKey struct{}
+
+type reviewEventSink func(context.Context, *agentevent.Event)
+
+func withReviewEventSink(ctx context.Context, sink reviewEventSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, reviewEventSinkContextKey{}, sink)
+}
+
+func reviewEventSinkFromContext(ctx context.Context) reviewEventSink {
+	sink, _ := ctx.Value(reviewEventSinkContextKey{}).(reviewEventSink)
+	return sink
+}
+
 func (a *Agent) emitReviewEvent(ctx context.Context, taskID, object, content string) {
-	if a == nil || a.cfg.EventSink == nil {
+	if a == nil {
 		return
 	}
-	a.cfg.EventSink(ctx, reviewEvent(taskID, object, content))
+	a.emitEvent(ctx, reviewEvent(taskID, object, content))
 }
 
 func (a *Agent) emitReviewResultEvent(ctx context.Context, result review.Result) {
-	if a == nil || a.cfg.EventSink == nil {
+	if a == nil {
 		return
 	}
 	ev := reviewEvent(result.TaskID, reviewEventTaskFinished, result.Conclusion.Status)
 	ev.StructuredOutput = result
-	a.cfg.EventSink(ctx, ev)
+	a.emitEvent(ctx, ev)
+}
+
+func (a *Agent) emitEvent(ctx context.Context, ev *agentevent.Event) {
+	if ev == nil {
+		return
+	}
+	if a.cfg.EventSink != nil {
+		a.cfg.EventSink(ctx, ev)
+	}
+	if sink := reviewEventSinkFromContext(ctx); sink != nil {
+		sink(ctx, ev.Clone())
+	}
 }
 
 func reviewEvent(taskID, object, content string) *agentevent.Event {

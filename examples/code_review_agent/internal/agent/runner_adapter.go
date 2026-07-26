@@ -69,22 +69,17 @@ func (a reviewRunnerAgent) Run(ctx context.Context, invocation *officialagent.In
 		return nil, fmt.Errorf("agent is required")
 	}
 	events := make(chan *agentevent.Event, runnerEventBufferSize)
-	local := *a.base
-	originalSink := local.cfg.EventSink
-	local.cfg.EventSink = func(ctx context.Context, ev *agentevent.Event) {
+	ctx = withReviewEventSink(ctx, func(ctx context.Context, ev *agentevent.Event) {
 		_ = ctx
 		if ev == nil {
 			return
 		}
-		if originalSink != nil {
-			originalSink(ctx, ev.Clone())
-		}
 		officialagent.InjectIntoEvent(invocation, ev)
 		_ = forwardRunnerEvent(ctx, events, ev)
-	}
+	})
 	go func() {
 		defer close(events)
-		if _, err := local.runDirect(ctx, a.req); err != nil {
+		if _, err := a.base.runDirect(ctx, a.req); err != nil {
 			ev := agentevent.NewErrorEvent("", officialReviewAgentName, "run_error", review.RedactSecrets(err.Error()))
 			officialagent.InjectIntoEvent(invocation, ev)
 			_ = forwardRunnerEvent(ctx, events, ev)
