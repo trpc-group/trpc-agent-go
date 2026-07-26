@@ -54,7 +54,7 @@ func TestGenerateContentRunsDeterministicToolCallingFlow(t *testing.T) {
 
 	runChecks := generateOne(t, fake, &model.Request{Messages: messages, Tools: availableTools})
 	assertToolCall(t, runChecks, "workspace_exec", map[string]any{
-		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"timeout_sec": float64(120),
 	})
 	if content := runChecks.Choices[0].Message.Content; content != "" {
@@ -69,7 +69,7 @@ func TestGenerateContentRunsDeterministicToolCallingFlow(t *testing.T) {
 	assertToolCall(t, requestPermission, "request_tool_permission", map[string]any{
 		"target_tool": "workspace_exec",
 		"target_arguments": map[string]any{
-			"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+			"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 			"timeout_sec": float64(120),
 		},
 		"reason": "Run the affected module's bundled checks to collect observed go test and go vet evidence for the review.",
@@ -81,7 +81,7 @@ func TestGenerateContentRunsDeterministicToolCallingFlow(t *testing.T) {
 
 	retryChecks := generateOne(t, fake, &model.Request{Messages: messages, Tools: availableTools})
 	assertToolCall(t, retryChecks, "workspace_exec", map[string]any{
-		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"timeout_sec": float64(120),
 	})
 	if firstID, retryID := runChecks.Choices[0].Message.ToolCalls[0].ID,

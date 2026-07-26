@@ -22,6 +22,7 @@ import (
 
 const (
 	requestToolPermissionName = "request_tool_permission"
+	submitReviewResultsName   = "submit_review_results"
 )
 
 const (
@@ -29,40 +30,6 @@ const (
 	permissionStatusDenied         = "denied"
 	permissionStatusApprovalNeeded = "approval_required"
 )
-
-type reviewToolSet struct {
-	recorder *reviewRecorder
-	runState *reviewRunState
-	approver *Approver
-	tools    []tool.Tool
-}
-
-func newReviewToolSet(
-	recorder *reviewRecorder,
-	runState *reviewRunState,
-	approver *Approver,
-) tool.ToolSet {
-	set := &reviewToolSet{
-		recorder: recorder,
-		runState: runState,
-		approver: approver,
-	}
-	set.tools = []tool.Tool{
-		function.NewFunctionTool(
-			set.requestToolPermission,
-			function.WithName(requestToolPermissionName),
-			function.WithDescription("Request user permission for a specific target tool call. Pass the exact target tool name and complete argument object from an approval_required call, plus a concise Reason. The result echoes target_arguments; if granted, retry the real target tool by copying that complete object without dropping or changing fields."),
-			function.WithInputSchema(requestToolPermissionInputSchema()),
-			function.WithOutputSchema(requestToolPermissionOutputSchema()),
-		),
-		function.NewFunctionTool(
-			set.submitReviewResults,
-			function.WithName("submit_review_results"),
-			function.WithDescription("Submit code review findings, warnings, human-review items, and conclusion for the current review task."),
-		),
-	}
-	return set
-}
 
 func requestToolPermissionInputSchema() *tool.Schema {
 	return &tool.Schema{
@@ -110,18 +77,6 @@ func requestToolPermissionOutputSchema() *tool.Schema {
 	}
 }
 
-func (s *reviewToolSet) Tools(context.Context) []tool.Tool {
-	return s.tools
-}
-
-func (s *reviewToolSet) Close() error {
-	return nil
-}
-
-func (s *reviewToolSet) Name() string {
-	return "code_review_tools"
-}
-
 type requestToolPermissionInput struct {
 	TargetTool      string                     `json:"target_tool"`
 	TargetArguments map[string]json.RawMessage `json:"target_arguments"`
@@ -134,11 +89,11 @@ type requestToolPermissionOutput struct {
 	Status          string                     `json:"status"`
 }
 
-func (s *reviewToolSet) requestToolPermission(
+func (g *governedExecution) requestToolPermission(
 	ctx context.Context,
 	in requestToolPermissionInput,
 ) (requestToolPermissionOutput, error) {
-	if s == nil || s.recorder == nil || s.runState == nil {
+	if g == nil || g.recorder == nil || g.approver == nil {
 		return requestToolPermissionOutput{}, fmt.Errorf("permission request tool is not configured")
 	}
 	targetTool := strings.TrimSpace(in.TargetTool)
@@ -156,21 +111,28 @@ func (s *reviewToolSet) requestToolPermission(
 	if err != nil {
 		return requestToolPermissionOutput{}, fmt.Errorf("encode target_arguments: %w", err)
 	}
+	if targetTool == workspaceExecToolName {
+		if _, denyReason, err := validateWorkspacePolicy(targetArguments); err != nil {
+			return requestToolPermissionOutput{}, err
+		} else if denyReason != "" {
+			return requestToolPermissionOutput{}, fmt.Errorf("%s", denyReason)
+		}
+	}
 	identity, err := approvalIdentity(targetTool, targetArguments)
 	if err != nil {
 		return requestToolPermissionOutput{}, err
 	}
 
-	decision, err := s.approver.decide(
+	decision, err := g.approver.decide(
 		ctx,
 		targetTool,
-		s.recorder.mask(string(targetArguments)),
-		s.recorder.mask(reason),
+		g.recorder.mask(string(targetArguments)),
+		g.recorder.mask(reason),
 	)
 	if err != nil {
 		return requestToolPermissionOutput{}, err
 	}
-	if err := s.recordPermissionRequest(
+	if err := g.recordPermissionRequest(
 		ctx,
 		targetTool,
 		targetArguments,
@@ -183,7 +145,7 @@ func (s *reviewToolSet) requestToolPermission(
 	var status string
 	switch decision.Action {
 	case tool.PermissionActionAllow:
-		s.runState.grant(targetTool, identity)
+		g.grant(targetTool, identity)
 		status = permissionStatusGranted
 	case tool.PermissionActionDeny:
 		status = permissionStatusDenied
@@ -202,7 +164,7 @@ func (s *reviewToolSet) requestToolPermission(
 	}, nil
 }
 
-func (s *reviewToolSet) recordPermissionRequest(
+func (g *governedExecution) recordPermissionRequest(
 	ctx context.Context,
 	targetTool string,
 	targetArguments []byte,
@@ -217,7 +179,7 @@ func (s *reviewToolSet) recordPermissionRequest(
 	if !ok || toolCallID == "" {
 		return fmt.Errorf("permission request requires a non-empty tool call id")
 	}
-	return s.recorder.RecordPermissionDecision(ctx, taskID, store.PermissionDecisionRecord{
+	return g.recorder.RecordPermissionDecision(ctx, taskID, store.PermissionDecisionRecord{
 		ToolCallID:     toolCallID,
 		DecisionKind:   "permission_request",
 		Operation:      targetTool,
@@ -226,6 +188,19 @@ func (s *reviewToolSet) recordPermissionRequest(
 		Decision:       string(decision.Action),
 		Reason:         reason,
 	})
+}
+
+// newSubmitReviewResultsTool builds the business result-submission Tool. It is
+// intentionally separate from governed execution so grants and sandbox audit
+// cannot couple to result validation.
+func newSubmitReviewResultsTool(recorder *reviewRecorder) tool.Tool {
+	return function.NewFunctionTool(
+		func(ctx context.Context, in submitReviewResultsInput) (submitReviewResultsOutput, error) {
+			return submitReviewResults(ctx, recorder, in)
+		},
+		function.WithName(submitReviewResultsName),
+		function.WithDescription("Submit code review findings, warnings, human-review items, and conclusion for the current review task."),
+	)
 }
 
 type submitReviewResultsInput struct {
@@ -255,18 +230,18 @@ type submitReviewResultsOutput struct {
 	HumanReviewCount int    `json:"human_review_count"`
 }
 
-func (s *reviewToolSet) submitReviewResults(
+func submitReviewResults(
 	ctx context.Context,
+	recorder *reviewRecorder,
 	in submitReviewResultsInput,
-) (output submitReviewResultsOutput, err error) {
+) (submitReviewResultsOutput, error) {
 	taskID, err := reviewTaskIDFromContext(ctx)
 	if err != nil {
 		return submitReviewResultsOutput{}, err
 	}
-	if s == nil || s.recorder == nil {
+	if recorder == nil {
 		return submitReviewResultsOutput{}, fmt.Errorf("review recorder is not configured")
 	}
-
 	if strings.TrimSpace(in.Conclusion) == "" {
 		return submitReviewResultsOutput{}, fmt.Errorf("review conclusion is required")
 	}
@@ -274,7 +249,7 @@ func (s *reviewToolSet) submitReviewResults(
 	if err != nil {
 		return submitReviewResultsOutput{}, err
 	}
-	counts, err := s.recorder.SubmitReviewResults(
+	counts, err := recorder.SubmitReviewResults(
 		ctx,
 		taskID,
 		submission.Results,
@@ -283,7 +258,6 @@ func (s *reviewToolSet) submitReviewResults(
 	if err != nil {
 		return submitReviewResultsOutput{}, err
 	}
-
 	return submitReviewResultsOutput{
 		Status:           "accepted",
 		FindingCount:     counts.FindingCount,

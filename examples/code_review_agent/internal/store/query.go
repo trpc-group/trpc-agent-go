@@ -108,12 +108,10 @@ WHERE task_id = ? ORDER BY id`, taskID)
 
 func (s *SQLite) loadSandboxRuns(ctx context.Context, taskID string) ([]SandboxRunRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT COALESCE(tool_call_id, ''), backend,
-	COALESCE(workdir, ''), command_preview, env_allowlist_json, timeout_ms,
-	output_limit_bytes, artifact_limit_bytes, sandbox_status, exit_code, timed_out,
-	COALESCE(stdout_summary, ''), COALESCE(stderr_summary, ''), stdout_truncated,
-	stderr_truncated, redaction_count, started_at, finished_at, duration_ms,
-	COALESCE(error_type, ''), COALESCE(error_message, '') FROM sandbox_runs
-WHERE task_id = ? ORDER BY id`, taskID)
+	COALESCE(workdir, ''), command_preview, sandbox_status, exit_code, timed_out,
+	COALESCE(output_summary, ''), output_truncated, redaction_count, started_at,
+	finished_at, duration_ms, COALESCE(error_type, ''), COALESCE(error_message, '')
+FROM sandbox_runs WHERE task_id = ? ORDER BY id`, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("load sandbox runs for task %s: %w", taskID, err)
 	}
@@ -122,23 +120,21 @@ WHERE task_id = ? ORDER BY id`, taskID)
 	for rows.Next() {
 		var record SandboxRunRecord
 		var exitCode sql.NullInt64
-		var timedOut, stdoutTruncated, stderrTruncated int
-		var timeoutMS, durationMS int64
+		var timedOut, outputTruncated int
+		var durationMS int64
 		var startedAt string
 		var finishedAt sql.NullString
 		if err := rows.Scan(&record.ToolCallID, &record.Backend, &record.Workdir,
-			&record.CommandPreview, &record.EnvAllowlistJSON, &timeoutMS,
-			&record.OutputLimitBytes, &record.ArtifactLimitBytes, &record.Status,
-			&exitCode, &timedOut, &record.StdoutSummary, &record.StderrSummary,
-			&stdoutTruncated, &stderrTruncated, &record.RedactionCount,
+			&record.CommandPreview, &record.Status, &exitCode, &timedOut,
+			&record.OutputSummary, &outputTruncated, &record.RedactionCount,
 			&startedAt, &finishedAt, &durationMS, &record.ErrorType,
 			&record.ErrorMessage); err != nil {
 			return nil, err
 		}
 		record.ExitCode = nullableIntPointer(exitCode)
 		record.TimedOut = timedOut != 0
-		record.StdoutTruncated, record.StderrTruncated = stdoutTruncated != 0, stderrTruncated != 0
-		record.Timeout, record.Duration = time.Duration(timeoutMS)*time.Millisecond, time.Duration(durationMS)*time.Millisecond
+		record.OutputTruncated = outputTruncated != 0
+		record.Duration = time.Duration(durationMS) * time.Millisecond
 		record.StartedAt, _ = parseStoredTime(startedAt)
 		if finishedAt.Valid {
 			record.FinishedAt, _ = parseStoredTime(finishedAt.String)

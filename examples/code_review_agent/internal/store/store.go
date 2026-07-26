@@ -89,57 +89,6 @@ ON CONFLICT(task_id) DO UPDATE SET
 	return nil
 }
 
-// UpdateTaskConclusion records the Agent's final structured conclusion.
-func (s *SQLite) UpdateTaskConclusion(ctx context.Context, taskID, conclusion string) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET conclusion = ?, updated_at = CURRENT_TIMESTAMP
-WHERE task_id = ?`, nullableString(conclusion), taskID)
-	if err != nil {
-		return fmt.Errorf("update review task conclusion %s: %w", taskID, err)
-	}
-	return requireUpdatedTask(result, taskID)
-}
-
-// UpdateTaskMonitoring records the bounded JSON monitoring summary.
-func (s *SQLite) UpdateTaskMonitoring(ctx context.Context, taskID, summaryJSON string) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
-	if !json.Valid([]byte(summaryJSON)) {
-		return errors.New("monitoring summary must be valid JSON")
-	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET monitoring_summary_json = ?, updated_at = CURRENT_TIMESTAMP
-WHERE task_id = ?`, summaryJSON, taskID)
-	if err != nil {
-		return fmt.Errorf("update review task monitoring %s: %w", taskID, err)
-	}
-	return requireUpdatedTask(result, taskID)
-}
-
-// UpdateTaskReports stores artifact references without copying report content
-// into the Review Store.
-func (s *SQLite) UpdateTaskReports(ctx context.Context, taskID string, refs ReportReferences) error {
-	if err := s.ready(); err != nil {
-		return err
-	}
-	if refs.JSONName == "" || refs.MarkdownName == "" {
-		return errors.New("JSON and Markdown report names are required")
-	}
-	result, err := s.db.ExecContext(ctx, `
-UPDATE review_tasks SET json_report_name = ?, json_report_version = ?,
-	markdown_report_name = ?, markdown_report_version = ?, updated_at = CURRENT_TIMESTAMP
-WHERE task_id = ?`, refs.JSONName, refs.JSONVersion, refs.MarkdownName,
-		refs.MarkdownVersion, taskID)
-	if err != nil {
-		return fmt.Errorf("update review task reports %s: %w", taskID, err)
-	}
-	return requireUpdatedTask(result, taskID)
-}
-
 // UpdateTaskInput records the durable projection of prepared review input.
 func (s *SQLite) UpdateTaskInput(ctx context.Context, taskID string, input TaskInputRecord) error {
 	if err := s.ready(); err != nil {
@@ -158,22 +107,6 @@ UPDATE review_tasks SET input_kind = ?, input_summary_json = ?,
 		return fmt.Errorf("update review task input %s: %w", taskID, err)
 	}
 	return requireUpdatedTask(result, taskID)
-}
-
-// FinishTask records the terminal task status and any orchestration error.
-func (s *SQLite) FinishTask(ctx context.Context, taskID string, runErr error) error {
-	status := "completed"
-	errorType := ""
-	errorMessage := ""
-	if runErr != nil {
-		status = "failed"
-		errorType = fmt.Sprintf("%T", runErr)
-		errorMessage = runErr.Error()
-	}
-	return s.FinalizeTask(ctx, taskID, TaskFinalization{
-		Status: status, MonitoringSummaryJSON: "{}",
-		ErrorType: errorType, ErrorMessage: errorMessage,
-	})
 }
 
 // FinalizeTask atomically publishes the complete terminal task projection.
@@ -262,18 +195,14 @@ func (s *SQLite) SaveSandboxRun(ctx context.Context, taskID string, run SandboxR
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO sandbox_runs (
-	task_id, tool_call_id, backend, workdir, command_preview, env_allowlist_json,
-	timeout_ms, output_limit_bytes, artifact_limit_bytes, sandbox_status,
-	exit_code, timed_out, stdout_summary, stderr_summary, stdout_truncated,
-	stderr_truncated, redaction_count, started_at, finished_at, duration_ms,
-	error_type, error_message
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	task_id, tool_call_id, backend, workdir, command_preview, sandbox_status,
+	exit_code, timed_out, output_summary, output_truncated, redaction_count,
+	started_at, finished_at, duration_ms, error_type, error_message
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		taskID, nullableString(run.ToolCallID), emptyDefault(run.Backend, "unknown"),
-		nullableString(run.Workdir), run.CommandPreview, jsonDefault(run.EnvAllowlistJSON, "[]"),
-		durationMillis(run.Timeout), run.OutputLimitBytes, run.ArtifactLimitBytes,
+		nullableString(run.Workdir), run.CommandPreview,
 		emptyDefault(run.Status, "succeeded"), nullableInt(run.ExitCode), boolInt(run.TimedOut),
-		nullableString(run.StdoutSummary), nullableString(run.StderrSummary),
-		boolInt(run.StdoutTruncated), boolInt(run.StderrTruncated), run.RedactionCount,
+		nullableString(run.OutputSummary), boolInt(run.OutputTruncated), run.RedactionCount,
 		formatTime(run.StartedAt), nullableTime(run.FinishedAt), durationMillis(run.Duration),
 		nullableString(run.ErrorType), nullableString(run.ErrorMessage))
 	if err != nil {

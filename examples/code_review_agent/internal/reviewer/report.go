@@ -91,21 +91,19 @@ type reportPermission struct {
 }
 
 type reportSandboxRun struct {
-	ToolCallID       string `json:"tool_call_id,omitempty"`
-	Backend          string `json:"backend"`
-	CommandPreview   string `json:"command_preview"`
-	Workdir          string `json:"workdir,omitempty"`
-	TimeoutMS        int64  `json:"timeout_ms"`
-	OutputLimitBytes int64  `json:"output_limit_bytes"`
-	Status           string `json:"status"`
-	ExitCode         *int   `json:"exit_code,omitempty"`
-	TimedOut         bool   `json:"timed_out"`
-	OutputSummary    string `json:"output_summary,omitempty"`
-	OutputTruncated  bool   `json:"output_truncated"`
-	RedactionCount   int    `json:"redaction_count"`
-	DurationMS       int64  `json:"duration_ms"`
-	ErrorType        string `json:"error_type,omitempty"`
-	ErrorMessage     string `json:"error_message,omitempty"`
+	ToolCallID      string `json:"tool_call_id,omitempty"`
+	Backend         string `json:"backend"`
+	CommandPreview  string `json:"command_preview"`
+	Workdir         string `json:"workdir,omitempty"`
+	Status          string `json:"status"`
+	ExitCode        *int   `json:"exit_code,omitempty"`
+	TimedOut        bool   `json:"timed_out"`
+	OutputSummary   string `json:"output_summary,omitempty"`
+	OutputTruncated bool   `json:"output_truncated"`
+	RedactionCount  int    `json:"redaction_count"`
+	DurationMS      int64  `json:"duration_ms"`
+	ErrorType       string `json:"error_type,omitempty"`
+	ErrorMessage    string `json:"error_message,omitempty"`
 }
 
 type reportReviewResult struct {
@@ -129,7 +127,6 @@ func (r *reviewer) finalizeReviewTask(
 	ctx context.Context,
 	taskID string,
 	info artifact.SessionInfo,
-	tracker *reviewRunState,
 	runErr error,
 ) (ReviewOutcome, error) {
 	finishedAt := time.Now()
@@ -137,7 +134,7 @@ func (r *reviewer) finalizeReviewTask(
 	errorMessage = r.recorder.mask(errorMessage)
 	snapshot, err := r.recorder.Snapshot(ctx, taskID)
 	if err != nil {
-		monitoring := buildMonitoringSummary(store.ReviewSnapshot{}, tracker, finishedAt, "snapshot_failure")
+		monitoring := buildMonitoringSummary(store.ReviewSnapshot{}, finishedAt, "snapshot_failure")
 		monitoringJSON, encodeErr := json.Marshal(monitoring)
 		if encodeErr != nil {
 			monitoringJSON = []byte(`{"exception_distribution":{"snapshot_failure":1}}`)
@@ -149,12 +146,12 @@ func (r *reviewer) finalizeReviewTask(
 		})
 		return ReviewOutcome{TaskID: taskID}, errors.Join(err, encodeErr, finishErr)
 	}
-	monitoring := buildMonitoringSummary(snapshot, tracker, finishedAt, errorType)
+	monitoring := buildMonitoringSummary(snapshot, finishedAt, errorType)
 	monitoringJSON, err := json.Marshal(monitoring)
 	if err != nil {
 		encodeErr := fmt.Errorf("encode monitoring summary: %w", err)
 		finishErr := r.finalizeTaskWithoutReports(
-			ctx, taskID, snapshot, tracker, finishedAt, errors.Join(runErr, encodeErr),
+			ctx, taskID, snapshot, finishedAt, errors.Join(runErr, encodeErr),
 		)
 		return ReviewOutcome{TaskID: taskID}, errors.Join(encodeErr, finishErr)
 	}
@@ -166,7 +163,7 @@ func (r *reviewer) finalizeReviewTask(
 	if err != nil {
 		encodeErr := fmt.Errorf("encode JSON report: %w", err)
 		finishErr := r.finalizeTaskWithoutReports(
-			ctx, taskID, snapshot, tracker, finishedAt, errors.Join(runErr, encodeErr),
+			ctx, taskID, snapshot, finishedAt, errors.Join(runErr, encodeErr),
 		)
 		return ReviewOutcome{TaskID: taskID}, errors.Join(encodeErr, finishErr)
 	}
@@ -177,7 +174,7 @@ func (r *reviewer) finalizeReviewTask(
 	if err != nil {
 		artifactErr := fmt.Errorf("save JSON review report: %w", err)
 		finishErr := r.finalizeTaskWithoutReports(
-			ctx, taskID, snapshot, tracker, finishedAt, errors.Join(runErr, artifactErr),
+			ctx, taskID, snapshot, finishedAt, errors.Join(runErr, artifactErr),
 		)
 		return ReviewOutcome{TaskID: taskID}, errors.Join(artifactErr, finishErr)
 	}
@@ -188,7 +185,7 @@ func (r *reviewer) finalizeReviewTask(
 		cleanupErr := r.dependencies.ArtifactService.DeleteArtifact(ctx, info, jsonReportName)
 		artifactErr := fmt.Errorf("save Markdown review report: %w", err)
 		finishErr := r.finalizeTaskWithoutReports(
-			ctx, taskID, snapshot, tracker, finishedAt, errors.Join(runErr, artifactErr),
+			ctx, taskID, snapshot, finishedAt, errors.Join(runErr, artifactErr),
 		)
 		return ReviewOutcome{TaskID: taskID}, errors.Join(artifactErr, cleanupErr, finishErr)
 	}
@@ -215,12 +212,11 @@ func (r *reviewer) finalizeTaskWithoutReports(
 	ctx context.Context,
 	taskID string,
 	snapshot store.ReviewSnapshot,
-	tracker *reviewRunState,
 	finishedAt time.Time,
 	runErr error,
 ) error {
 	status, errorType, errorMessage := terminalTaskOutcome(runErr)
-	monitoring := buildMonitoringSummary(snapshot, tracker, finishedAt, errorType)
+	monitoring := buildMonitoringSummary(snapshot, finishedAt, errorType)
 	monitoringJSON, err := json.Marshal(monitoring)
 	if err != nil {
 		monitoringJSON = []byte(`{"exception_distribution":{"finalization_failure":1}}`)
@@ -247,13 +243,10 @@ func terminalTaskOutcome(runErr error) (status, errorType, errorMessage string) 
 	}
 }
 
-// buildMonitoringSummary treats durable permission and sandbox rows as the
-// reportable facts. In-memory counters cover failures before persistence; max
-// reconciliation prevents the same callback-observed failure or ask decision
-// from being counted twice once its durable row exists.
+// buildMonitoringSummary projects issue-required monitoring fields only from
+// durable ReviewSnapshot facts and the terminal task outcome.
 func buildMonitoringSummary(
 	snapshot store.ReviewSnapshot,
-	tracker *reviewRunState,
 	finishedAt time.Time,
 	terminalErrorType string,
 ) monitoringSummary {
@@ -263,36 +256,20 @@ func buildMonitoringSummary(
 		ExceptionDistribution:  make(map[string]int),
 	}
 	if !snapshot.Task.StartedAt.IsZero() {
-		summary.TotalDurationMS = finishedAt.Sub(snapshot.Task.StartedAt).Milliseconds()
-	}
-	toolCalls := make(map[string]struct{})
-	interceptions := make(map[string]struct{})
-	for index, decision := range snapshot.PermissionDecisions {
-		toolCallID := decision.ToolCallID
-		if toolCallID == "" {
-			toolCallID = fmt.Sprintf("row:%d", index)
+		end := finishedAt
+		if !snapshot.Task.FinishedAt.IsZero() {
+			end = snapshot.Task.FinishedAt
 		}
-		toolCalls[toolCallID] = struct{}{}
+		summary.TotalDurationMS = end.Sub(snapshot.Task.StartedAt).Milliseconds()
+	}
+	for _, decision := range snapshot.PermissionDecisions {
+		if decision.DecisionKind != "tool_permission" {
+			continue
+		}
+		summary.ToolCallCount++
 		if decision.Decision == "ask" || decision.Decision == "deny" {
-			interceptions[toolCallID] = struct{}{}
+			summary.PermissionInterceptionCount++
 		}
-	}
-	summary.ToolCallCount = len(toolCalls)
-	summary.PermissionInterceptionCount = len(interceptions)
-	if tracker != nil {
-		tracker.mu.Lock()
-		if summary.TotalDurationMS == 0 {
-			summary.TotalDurationMS = finishedAt.Sub(tracker.startedAt).Milliseconds()
-		}
-		summary.ToolCallCount = max(summary.ToolCallCount, tracker.toolCalls)
-		summary.PermissionInterceptionCount = max(
-			summary.PermissionInterceptionCount,
-			tracker.permissionInterceptions,
-		)
-		for kind, count := range tracker.exceptions {
-			summary.ExceptionDistribution[kind] = count
-		}
-		tracker.mu.Unlock()
 	}
 	for _, result := range snapshot.Results {
 		summary.ResultKindDistribution[result.ResultKind]++
@@ -308,32 +285,13 @@ func buildMonitoringSummary(
 			if kind == "" {
 				kind = run.Status
 			}
-			// The callback tracker observes the same sandbox failure before it
-			// is persisted. The durable row replaces that provisional count.
-			summary.ExceptionDistribution[kind] = max(
-				summary.ExceptionDistribution[kind],
-				countSandboxExceptions(snapshot.SandboxRuns, kind),
-			)
+			summary.ExceptionDistribution[kind]++
 		}
 	}
 	if terminalErrorType != "" {
 		summary.ExceptionDistribution[terminalErrorType]++
 	}
 	return summary
-}
-
-func countSandboxExceptions(runs []store.SandboxRunRecord, kind string) int {
-	count := 0
-	for _, run := range runs {
-		runKind := run.ErrorType
-		if runKind == "" && run.Status != "succeeded" {
-			runKind = run.Status
-		}
-		if runKind == kind {
-			count++
-		}
-	}
-	return count
 }
 
 func buildReportDocument(
@@ -379,9 +337,8 @@ func buildReportDocument(
 		document.SandboxRuns = append(document.SandboxRuns, reportSandboxRun{
 			ToolCallID: run.ToolCallID, Backend: run.Backend,
 			CommandPreview: run.CommandPreview, Workdir: run.Workdir,
-			TimeoutMS: run.Timeout.Milliseconds(), OutputLimitBytes: run.OutputLimitBytes,
 			Status: run.Status, ExitCode: run.ExitCode, TimedOut: run.TimedOut,
-			OutputSummary: run.StdoutSummary, OutputTruncated: run.StdoutTruncated,
+			OutputSummary: run.OutputSummary, OutputTruncated: run.OutputTruncated,
 			RedactionCount: run.RedactionCount, DurationMS: run.Duration.Milliseconds(),
 			ErrorType: run.ErrorType, ErrorMessage: run.ErrorMessage,
 		})

@@ -246,11 +246,9 @@ func TestSubmitReviewResultsReturnsCommittedCanonicalCounts(t *testing.T) {
 	duplicate.Evidence = "supporting evidence"
 	duplicate.Confidence = 0.95
 
-	set := &reviewToolSet{
-		recorder: newReviewRecorder(resources.ReviewStore, redact.New()),
-	}
-	output, err := set.submitReviewResults(
+	output, err := submitReviewResults(
 		reviewInvocationContext(ctx, taskID),
+		newReviewRecorder(resources.ReviewStore, redact.New()),
 		submitReviewResultsInput{
 			Findings:   []reviewResultInput{result, duplicate},
 			Warnings:   []reviewResultInput{},

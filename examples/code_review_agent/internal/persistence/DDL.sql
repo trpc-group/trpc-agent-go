@@ -57,8 +57,10 @@ CREATE TABLE IF NOT EXISTS permission_decisions (
 );
 
 -- Isolated execution records for commands, scripts, tests, and static checks.
--- The record is a task-scoped audit projection; command execution is provided
--- by the injected CodeExecutor runtime.
+-- The record is a task-scoped audit projection of facts observed after an
+-- allowed workspace_exec call. Framework configuration such as env allowlists
+-- and output budgets is not stored as a per-run observation. output_summary is
+-- the framework-aggregated terminal output, not separate stdout/stderr streams.
 CREATE TABLE IF NOT EXISTS sandbox_runs (
     id INTEGER PRIMARY KEY,
     task_id TEXT NOT NULL,
@@ -66,17 +68,11 @@ CREATE TABLE IF NOT EXISTS sandbox_runs (
     backend TEXT NOT NULL,
     workdir TEXT,
     command_preview TEXT NOT NULL,
-    env_allowlist_json TEXT NOT NULL DEFAULT '[]',
-    timeout_ms INTEGER NOT NULL DEFAULT 0,
-    output_limit_bytes INTEGER NOT NULL DEFAULT 0,
-    artifact_limit_bytes INTEGER NOT NULL DEFAULT 0,
     sandbox_status TEXT NOT NULL,
     exit_code INTEGER,
     timed_out INTEGER NOT NULL DEFAULT 0,
-    stdout_summary TEXT,
-    stderr_summary TEXT,
-    stdout_truncated INTEGER NOT NULL DEFAULT 0,
-    stderr_truncated INTEGER NOT NULL DEFAULT 0,
+    output_summary TEXT,
+    output_truncated INTEGER NOT NULL DEFAULT 0,
     redaction_count INTEGER NOT NULL DEFAULT 0,
     started_at TEXT NOT NULL,
     finished_at TEXT,

@@ -58,29 +58,25 @@ type PermissionDecisionRecord struct {
 	DecidedAt      time.Time
 }
 
-// SandboxRunRecord records facts observed by the governed execution wrapper.
+// SandboxRunRecord records facts observed from an allowed workspace_exec call.
+// Policy configuration such as env allowlists and output budgets is not stored
+// as a per-run observation.
 type SandboxRunRecord struct {
-	ToolCallID         string
-	Backend            string
-	Workdir            string
-	CommandPreview     string
-	EnvAllowlistJSON   string
-	Timeout            time.Duration
-	OutputLimitBytes   int64
-	ArtifactLimitBytes int64
-	Status             string
-	ExitCode           *int
-	TimedOut           bool
-	StdoutSummary      string
-	StderrSummary      string
-	StdoutTruncated    bool
-	StderrTruncated    bool
-	RedactionCount     int
-	StartedAt          time.Time
-	FinishedAt         time.Time
-	Duration           time.Duration
-	ErrorType          string
-	ErrorMessage       string
+	ToolCallID      string
+	Backend         string
+	Workdir         string
+	CommandPreview  string
+	Status          string
+	ExitCode        *int
+	TimedOut        bool
+	OutputSummary   string
+	OutputTruncated bool
+	RedactionCount  int
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	Duration        time.Duration
+	ErrorType       string
+	ErrorMessage    string
 }
 
 // ReviewResultRecord is a finding, warning, or human-review item submitted by

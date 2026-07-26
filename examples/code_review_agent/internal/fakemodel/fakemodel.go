@@ -237,7 +237,7 @@ func findingScenario(fixture string, finding reviewResult) scenario {
 
 func reviewChecksArguments() map[string]any {
 	return map[string]any{
-		"command":     "sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"command":     "skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"timeout_sec": 120,
 	}
 }

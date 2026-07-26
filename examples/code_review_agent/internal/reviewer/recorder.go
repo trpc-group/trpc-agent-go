@@ -68,8 +68,7 @@ func (r *reviewRecorder) RecordSandboxRun(ctx context.Context, taskID string, ru
 		return errors.New("review recorder requires a store")
 	}
 	run.CommandPreview = r.mask(run.CommandPreview)
-	run.StdoutSummary = r.mask(run.StdoutSummary)
-	run.StderrSummary = r.mask(run.StderrSummary)
+	run.OutputSummary = r.mask(run.OutputSummary)
 	run.ErrorMessage = r.mask(run.ErrorMessage)
 	return r.store.SaveSandboxRun(ctx, taskID, run)
 }

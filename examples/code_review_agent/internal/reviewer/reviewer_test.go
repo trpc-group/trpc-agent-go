@@ -201,40 +201,47 @@ func TestValidateReviewCompletionDoesNotRequireSkillScriptCall(t *testing.T) {
 	}
 }
 
-func TestRedactingToolCallbackReplacesCredentialBearingResult(t *testing.T) {
-	callbacks := newRedactingToolCallbacks(redact.New())
-	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
-		ToolName: "workspace_exec",
-		Result: map[string]any{
-			"status": "completed",
-			"output": "password=tool-output-secret",
+func TestGovernedCallbacksRedactGenericToolOutput(t *testing.T) {
+	governance := newGovernedExecution(nil, redact.New(), newApprover(ApprovalConfig{}, true), "local")
+	callbacks := governance.Callbacks()
+	tests := []struct {
+		name   string
+		args   *tool.AfterToolArgs
+		secret string
+	}{
+		{
+			name: "result",
+			args: &tool.AfterToolArgs{
+				ToolName: "ordinary_tool",
+				Result: map[string]any{
+					"status": "completed",
+					"output": "password=tool-output-secret",
+				},
+			},
+			secret: "tool-output-secret",
 		},
-	})
-	if err != nil {
-		t.Fatal(err)
+		{
+			name: "error",
+			args: &tool.AfterToolArgs{
+				ToolName: "ordinary_tool",
+				Error:    fmt.Errorf("command failed with token=tool-error-secret"),
+			},
+			secret: "tool-error-secret",
+		},
 	}
-	if result == nil || result.CustomResult == nil {
-		t.Fatal("credential-bearing result was not replaced")
-	}
-	if strings.Contains(toString(result.CustomResult), "tool-output-secret") {
-		t.Fatalf("custom result contains plaintext: %#v", result.CustomResult)
-	}
-}
-
-func TestRedactingToolCallbackReplacesCredentialBearingError(t *testing.T) {
-	callbacks := newRedactingToolCallbacks(redact.New())
-	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
-		ToolName: "workspace_exec",
-		Error:    fmt.Errorf("command failed with token=tool-error-secret"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result == nil || result.CustomResult == nil {
-		t.Fatal("credential-bearing error was not replaced")
-	}
-	if strings.Contains(toString(result.CustomResult), "tool-error-secret") {
-		t.Fatalf("custom error result contains plaintext: %#v", result.CustomResult)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := callbacks.RunAfterTool(context.Background(), tt.args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result == nil || result.CustomResult == nil {
+				t.Fatal("credential-bearing tool output was not replaced")
+			}
+			if strings.Contains(fmt.Sprint(result.CustomResult), tt.secret) {
+				t.Fatalf("custom result contains plaintext: %#v", result.CustomResult)
+			}
+		})
 	}
 }
 
@@ -258,7 +265,7 @@ func TestApproverDecisions(t *testing.T) {
 			).decide(
 				context.Background(),
 				workspaceExecToolName,
-				"sh scripts/run-go-checks.sh work/inputs/repo",
+				"skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 				"Collect repository check evidence.",
 			)
 			if err != nil {
@@ -287,7 +294,7 @@ func TestCommandApproverStopsWaitingWhenContextIsCanceled(t *testing.T) {
 	).decide(
 		ctx,
 		workspaceExecToolName,
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"Collect repository check evidence.",
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -310,7 +317,7 @@ func TestCommandApproverDoesNotReuseLateResponseAfterCancellation(t *testing.T) 
 	_, err := approver.decide(
 		ctx,
 		workspaceExecToolName,
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"Collect repository check evidence.",
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -334,7 +341,7 @@ func TestCommandApproverDoesNotReuseLateResponseAfterCancellation(t *testing.T) 
 	decision, err := approver.decide(
 		context.Background(),
 		workspaceExecToolName,
-		"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
+		"skills/code-review/scripts/run-go-checks.sh work/inputs/repo",
 		"Collect repository check evidence again.",
 	)
 	if !errors.Is(err, errApprovalInputUnavailable) {
@@ -346,35 +353,13 @@ func TestCommandApproverDoesNotReuseLateResponseAfterCancellation(t *testing.T) 
 }
 
 func TestReviewPermissionPolicyAsksForConfiguredScriptReference(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "read-skill-script"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	tracker := newReviewRunState()
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"read-script",
-		[]byte(`{"command":"cat skills/code-review/scripts/run-go-checks.sh"}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
-	)
-	decision, err := policy.CheckToolPermission(
-		reviewInvocationContext(ctx, taskID),
+	ctx, governance := openGovernedTask(t, "read-skill-script")
+	decision, err := governance.PermissionPolicy().CheckToolPermission(
+		ctx,
 		&tool.PermissionRequest{
-			ToolName: workspaceExecToolName, ToolCallID: "read-script", Arguments: arguments,
+			ToolName:   workspaceExecToolName,
+			ToolCallID: "read-script",
+			Arguments:  []byte(`{"command":"cat skills/code-review/scripts/run-go-checks.sh"}`),
 		},
 	)
 	if err != nil {
@@ -383,49 +368,25 @@ func TestReviewPermissionPolicyAsksForConfiguredScriptReference(t *testing.T) {
 	if decision.Action != tool.PermissionActionAsk {
 		t.Fatalf("configured script reference decision = %#v, want ask", decision)
 	}
-	if tracker.permissionInterceptions != 1 || len(tracker.executions) != 0 {
-		t.Fatalf("configured script reference state = interceptions:%d executions:%d",
-			tracker.permissionInterceptions, len(tracker.executions))
+	if len(governance.started) != 0 {
+		t.Fatalf("configured script reference started executions = %#v", governance.started)
 	}
 }
 
-func TestReviewPermissionPolicyDoesNotForceChecksThroughSkillScript(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(redact.New()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "raw-baseline-bypass-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	tracker := newReviewRunState()
-	arguments := prepareWorkspaceExecCall(
-		t,
-		tracker,
-		"raw-go-test",
-		[]byte(`{"command":"cd work/inputs/repo && go test ./... 2>&1","timeout_sec":120}`),
-	)
-	policy := newReviewPermissionPolicy(
-		newReviewRecorder(resources.ReviewStore, redact.New()),
-		tracker,
-	)
-	decision, err := policy.CheckToolPermission(reviewInvocationContext(ctx, taskID), &tool.PermissionRequest{
-		ToolName: workspaceExecToolName, ToolCallID: "raw-go-test",
-		Arguments: arguments,
+func TestReviewPermissionPolicyAllowsOrdinaryWorkspaceCommand(t *testing.T) {
+	ctx, governance := openGovernedTask(t, "raw-baseline-bypass-task")
+	decision, err := governance.PermissionPolicy().CheckToolPermission(ctx, &tool.PermissionRequest{
+		ToolName:   workspaceExecToolName,
+		ToolCallID: "raw-go-test",
+		Arguments:  []byte(`{"command":"cd work/inputs/repo && go test ./... 2>&1","timeout_sec":120}`),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.Action != tool.PermissionActionAllow {
-		t.Fatalf("decision = %#v, want ordinary workspace execution to remain allowed", decision)
+		t.Fatalf("decision = %#v, want allow", decision)
 	}
-	snapshot, err := resources.ReviewStore.LoadTaskSnapshot(ctx, taskID)
+	snapshot, err := governance.recorder.Snapshot(ctx, "raw-baseline-bypass-task")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,13 +394,9 @@ func TestReviewPermissionPolicyDoesNotForceChecksThroughSkillScript(t *testing.T
 		snapshot.PermissionDecisions[0].Decision != "allow" {
 		t.Fatalf("permission audit = %#v, want one allow", snapshot.PermissionDecisions)
 	}
-	if len(snapshot.SandboxRuns) != 0 || len(tracker.executions) != 1 {
-		t.Fatalf("ordinary command execution state: runs=%d pending=%d",
-			len(snapshot.SandboxRuns), len(tracker.executions))
-	}
-	if tracker.permissionInterceptions != 0 {
-		t.Fatalf("ordinary command was counted as a permission interception: %d",
-			tracker.permissionInterceptions)
+	if len(snapshot.SandboxRuns) != 0 || len(governance.started) != 1 {
+		t.Fatalf("ordinary command execution state: runs=%d started=%d",
+			len(snapshot.SandboxRuns), len(governance.started))
 	}
 }
 
@@ -477,11 +434,11 @@ func TestValidateReviewResultsEnforcesFindingConfidenceAndLocalPath(t *testing.T
 }
 
 func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
-	tools := newReviewToolSet(
-		nil,
-		newReviewRunState(),
-		newApprover(ApprovalConfig{}, true),
-	).Tools(context.Background())
+	governance := newGovernedExecution(nil, redact.New(), newApprover(ApprovalConfig{}, true), "local")
+	tools := []tool.Tool{
+		governance.PermissionTool(),
+		newSubmitReviewResultsTool(nil),
+	}
 	if len(tools) != 2 {
 		t.Fatalf("review tools = %d, want 2", len(tools))
 	}
@@ -494,7 +451,7 @@ func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
 			required: []string{"reason", "target_arguments", "target_tool"},
 		},
 		{
-			name:     "submit_review_results",
+			name:     submitReviewResultsName,
 			required: []string{"conclusion", "findings", "needs_human_review", "warnings"},
 		},
 	}
@@ -522,7 +479,7 @@ func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
 				outputArguments := outputSchema.Properties["target_arguments"]
 				if outputArguments == nil || outputArguments.Type != "object" ||
 					outputArguments.AdditionalProperties != true {
-					t.Fatalf("output target_arguments schema = %#v, want an arbitrary object", outputArguments)
+					t.Fatalf("output target_arguments schema = %#v", outputArguments)
 				}
 			}
 		})
@@ -530,45 +487,16 @@ func TestReviewToolSchemasRequireRuntimeFields(t *testing.T) {
 }
 
 func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	sanitizer := redact.New()
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(sanitizer))
+	ctx, governance := openGovernedTask(t, "governed-output-task")
+	governance.outputLimitBytes = 96
+	governance.backend = "container"
+	arguments := []byte(`{"command":"skills/code-review/scripts/run-go-checks.sh work/inputs/repo","timeout_sec":120}`)
+	identity, err := approvalIdentity(workspaceExecToolName, arguments)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resources.Close()
-	const taskID = "governed-output-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ctx = reviewInvocationContext(ctx, taskID)
-	tracker := newReviewRunState()
-	recorder := newReviewRecorder(resources.ReviewStore, sanitizer)
-	arguments := []byte(`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1","timeout_sec":120}`)
-	callbacks := newGovernedToolCallbacks(sanitizer, recorder, tracker, governedToolConfig{
-		Backend: "container", OutputLimitBytes: 96, ArtifactMaxBytes: 1024,
-	})
-	beforeResult, err := callbacks.RunBeforeTool(ctx, &tool.BeforeToolArgs{
-		ToolName: workspaceExecToolName, ToolCallID: "output-call", Arguments: arguments,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if beforeResult != nil && len(beforeResult.ModifiedArguments) > 0 {
-		arguments = beforeResult.ModifiedArguments
-	}
-	identity, err := approvalIdentity(workspaceExecToolName, []byte(
-		`{"command":"sh skills/code-review/scripts/run-go-checks.sh work/inputs/repo 2>&1","timeout_sec":120}`,
-	))
-	if err != nil {
-		t.Fatalf("approval identity = %q, err = %v", identity, err)
-	}
-	tracker.grant(workspaceExecToolName, identity)
-	policy := newReviewPermissionPolicy(recorder, tracker)
-	decision, err := policy.CheckToolPermission(ctx, &tool.PermissionRequest{
+	governance.grant(workspaceExecToolName, identity)
+	decision, err := governance.PermissionPolicy().CheckToolPermission(ctx, &tool.PermissionRequest{
 		ToolName: workspaceExecToolName, ToolCallID: "output-call", Arguments: arguments,
 	})
 	if err != nil || decision.Action != tool.PermissionActionAllow {
@@ -576,7 +504,7 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 	}
 
 	secret := "sk-0123456789abcdef"
-	result, err := callbacks.RunAfterTool(ctx, &tool.AfterToolArgs{
+	result, err := governance.Callbacks().RunAfterTool(ctx, &tool.AfterToolArgs{
 		ToolName: workspaceExecToolName, ToolCallID: "output-call", Arguments: arguments,
 		Result: map[string]any{"status": "exited", "output": secret + strings.Repeat("世", 100), "exit_code": 0},
 	})
@@ -591,43 +519,28 @@ func TestGovernedWorkspaceExecMasksTruncatesAndAudits(t *testing.T) {
 		t.Fatalf("bounded result = %s", encoded)
 	}
 
-	db, err := sql.Open("sqlite", dbPath)
+	snapshot, err := governance.recorder.Snapshot(ctx, "governed-output-task")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	var status, summary string
-	var limit, truncated, redactions int
-	if err := db.QueryRow(`SELECT sandbox_status, stdout_summary, output_limit_bytes,
-stdout_truncated, redaction_count FROM sandbox_runs WHERE task_id = ?`, taskID).
-		Scan(&status, &summary, &limit, &truncated, &redactions); err != nil {
-		t.Fatal(err)
+	if len(snapshot.SandboxRuns) != 1 {
+		t.Fatalf("sandbox runs = %#v", snapshot.SandboxRuns)
 	}
-	if status != "succeeded" || len(summary) > 96 || limit != 96 || truncated != 1 || redactions < 1 {
-		t.Fatalf("sandbox audit = status:%s bytes:%d limit:%d truncated:%d redactions:%d",
-			status, len(summary), limit, truncated, redactions)
+	run := snapshot.SandboxRuns[0]
+	if run.Status != "succeeded" || len(run.OutputSummary) > 96 || !run.OutputTruncated || run.RedactionCount < 1 {
+		t.Fatalf("sandbox audit = %#v", run)
 	}
-	if strings.Contains(summary, secret) {
+	if strings.Contains(run.OutputSummary, secret) {
 		t.Fatal("sandbox audit contains plaintext secret")
 	}
 }
 
 func TestGovernedWorkspaceExecConvertsTimeoutToModelEvidence(t *testing.T) {
-	tracker := newReviewRunState()
-	input := workspaceExecInput{Command: "sleep 10", Timeout: 1}
-	if err := tracker.prepareWorkspaceExecution(
-		"timeout-call",
-		[]byte(`{"command":"sleep 10","timeout_sec":1}`),
-		input,
-		input,
-	); err != nil {
+	governance := newGovernedExecution(nil, redact.New(), newApprover(ApprovalConfig{}, true), "container")
+	if err := governance.beginExecution("timeout-call"); err != nil {
 		t.Fatal(err)
 	}
-	if err := tracker.beginExecution("timeout-call"); err != nil {
-		t.Fatal(err)
-	}
-	callbacks := newGovernedToolCallbacks(redact.New(), nil, tracker, governedToolConfig{Backend: "container"})
-	result, err := callbacks.RunAfterTool(context.Background(), &tool.AfterToolArgs{
+	result, err := governance.Callbacks().RunAfterTool(context.Background(), &tool.AfterToolArgs{
 		ToolName: workspaceExecToolName, ToolCallID: "timeout-call",
 		Arguments: []byte(`{"command":"sleep 10","timeout_sec":1}`),
 		Error:     context.DeadlineExceeded,
@@ -636,39 +549,17 @@ func TestGovernedWorkspaceExecConvertsTimeoutToModelEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(result.CustomResult)
-	if !strings.Contains(string(encoded), `"status":"timed_out"`) || !strings.Contains(string(encoded), "deadline exceeded") {
+	if !strings.Contains(string(encoded), `"status":"timed_out"`) ||
+		!strings.Contains(string(encoded), "deadline exceeded") {
 		t.Fatalf("timeout result = %s", encoded)
-	}
-	if tracker.sandboxDuration < 0 || tracker.exceptions["timeout"] != 1 {
-		t.Fatalf("tracker timeout evidence = %#v", tracker)
 	}
 }
 
 func TestGovernedWorkspaceExecDoesNotTreatMissingStartAsSuccess(t *testing.T) {
-	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "review.db")
-	sanitizer := redact.New()
-	resources, err := persistence.Open(ctx, dbPath, redact.AppendEventHook(sanitizer))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resources.Close()
-	const taskID = "missing-execution-start-task"
-	if err := resources.ReviewStore.SaveTask(ctx, store.ReviewTaskRecord{
-		TaskID: taskID, AppName: codeReviewAgentName, UserID: "reviewer", InputKind: "fixture",
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	tracker := newReviewRunState()
-	callbacks := newGovernedToolCallbacks(
-		sanitizer,
-		newReviewRecorder(resources.ReviewStore, sanitizer),
-		tracker,
-		governedToolConfig{Backend: "container"},
-	)
-	result, err := callbacks.RunAfterTool(
-		reviewInvocationContext(ctx, taskID),
+	ctx, governance := openGovernedTask(t, "missing-execution-start-task")
+	governance.backend = "container"
+	result, err := governance.Callbacks().RunAfterTool(
+		ctx,
 		&tool.AfterToolArgs{
 			ToolName:   workspaceExecToolName,
 			ToolCallID: "unapproved-call",
@@ -684,7 +575,7 @@ func TestGovernedWorkspaceExecDoesNotTreatMissingStartAsSuccess(t *testing.T) {
 		!strings.Contains(string(encoded), "without an approved execution start") {
 		t.Fatalf("model result = %s", encoded)
 	}
-	snapshot, err := resources.ReviewStore.LoadTaskSnapshot(ctx, taskID)
+	snapshot, err := governance.recorder.Snapshot(ctx, "missing-execution-start-task")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -695,48 +586,43 @@ func TestGovernedWorkspaceExecDoesNotTreatMissingStartAsSuccess(t *testing.T) {
 	}
 }
 
-func TestGovernedWorkspaceExecFiltersEnvironmentOverrides(t *testing.T) {
-	tracker := newReviewRunState()
-	callbacks := newGovernedToolCallbacks(
-		redact.New(),
-		nil,
-		tracker,
-		governedToolConfig{Backend: "local"},
-	)
-	result, err := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
-		ToolName:   workspaceExecToolName,
-		ToolCallID: "environment-call",
-		Arguments:  []byte(`{"command":"go test ./...","env":{"CGO_ENABLED":"0","PATH":"/tmp/bin","TOKEN":"plaintext"},"stdin":"input","yield-time_ms":25,"future_option":{"enabled":true}}`),
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestBuildMonitoringSummaryUsesDurableFactsOnly(t *testing.T) {
+	started := time.Now().Add(-2 * time.Second)
+	finished := started.Add(2 * time.Second)
+	snapshot := store.ReviewSnapshot{
+		Task: store.ReviewTaskRecord{StartedAt: started, FinishedAt: finished},
+		PermissionDecisions: []store.PermissionDecisionRecord{
+			{DecisionKind: "tool_permission", Decision: "allow", ToolCallID: "a"},
+			{DecisionKind: "tool_permission", Decision: "ask", ToolCallID: "b"},
+			{DecisionKind: "permission_request", Decision: "allow", ToolCallID: "c"},
+			{DecisionKind: "tool_permission", Decision: "deny", ToolCallID: "d"},
+		},
+		SandboxRuns: []store.SandboxRunRecord{
+			{Status: "succeeded", Duration: time.Second},
+			{Status: "failed", Duration: 500 * time.Millisecond, ErrorType: "nonzero_exit"},
+		},
+		Results: []store.ReviewResultRecord{
+			{ResultKind: "finding", Severity: "high"},
+			{ResultKind: "warning", Severity: "low"},
+		},
 	}
-	if result == nil || len(result.ModifiedArguments) == 0 {
-		t.Fatal("environment governance did not replace workspace_exec arguments")
+	summary := buildMonitoringSummary(snapshot, finished, "review_failure")
+	if summary.ToolCallCount != 3 {
+		t.Fatalf("tool call count = %d, want 3 tool_permission rows", summary.ToolCallCount)
 	}
-	var input workspaceExecInput
-	if err := json.Unmarshal(result.ModifiedArguments, &input); err != nil {
-		t.Fatal(err)
+	if summary.PermissionInterceptionCount != 2 {
+		t.Fatalf("interception count = %d, want ask+deny only", summary.PermissionInterceptionCount)
 	}
-	if got, want := input.Env, map[string]string{"CGO_ENABLED": "0"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("governed environment = %#v, want %#v", got, want)
+	if summary.SandboxDurationMS != 1500 {
+		t.Fatalf("sandbox duration = %d", summary.SandboxDurationMS)
 	}
-	if tracker.exceptions["environment_override_filtered"] != 1 {
-		t.Fatalf("exception distribution = %#v", tracker.exceptions)
+	if summary.FindingCount != 1 || summary.ResultKindDistribution["warning"] != 1 {
+		t.Fatalf("result projection = %#v", summary)
 	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(result.ModifiedArguments, &fields); err != nil {
-		t.Fatal(err)
+	if summary.ExceptionDistribution["nonzero_exit"] != 1 ||
+		summary.ExceptionDistribution["review_failure"] != 1 {
+		t.Fatalf("exception distribution = %#v", summary.ExceptionDistribution)
 	}
-	for _, field := range []string{"stdin", "yield-time_ms", "future_option"} {
-		if _, ok := fields[field]; !ok {
-			t.Fatalf("governance removed workspace_exec field %q: %s", field, result.ModifiedArguments)
-		}
-	}
-}
-
-func toString(value any) string {
-	return fmt.Sprint(value)
 }
 
 func reviewInvocationContext(ctx context.Context, taskID string) context.Context {
@@ -744,31 +630,4 @@ func reviewInvocationContext(ctx context.Context, taskID string) context.Context
 		agent.WithRuntimeState(map[string]any{runtimeStateReviewTaskID: taskID}),
 	)))
 	return agent.NewInvocationContext(ctx, invocation)
-}
-
-func prepareWorkspaceExecCall(
-	t *testing.T,
-	tracker *reviewRunState,
-	toolCallID string,
-	arguments []byte,
-) []byte {
-	t.Helper()
-	callbacks := newGovernedToolCallbacks(
-		redact.New(),
-		nil,
-		tracker,
-		governedToolConfig{Backend: "local"},
-	)
-	result, err := callbacks.RunBeforeTool(context.Background(), &tool.BeforeToolArgs{
-		ToolName:   workspaceExecToolName,
-		ToolCallID: toolCallID,
-		Arguments:  arguments,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result != nil && len(result.ModifiedArguments) > 0 {
-		return result.ModifiedArguments
-	}
-	return arguments
 }

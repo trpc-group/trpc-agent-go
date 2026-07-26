@@ -67,7 +67,7 @@ For every affected runnable Go module, run the bundled shell script from the
 workspace root:
 
 ```bash
-sh skills/code-review/scripts/run-go-checks.sh <module-path>
+skills/code-review/scripts/run-go-checks.sh <module-path>
 ```
 
 Use the exact `module_dir` supplied for that module in the review input as

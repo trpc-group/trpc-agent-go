@@ -38,6 +38,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/skill"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 const codeReviewAgentName = "code_review_agent"
@@ -131,7 +132,6 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 		sessionID = taskID
 	)
 	outcome.TaskID = taskID
-	tracker := newReviewRunState()
 
 	inputKind, err := r.inputs.InputKind(spec)
 	if err != nil {
@@ -158,7 +158,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 		finalizeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 		defer cancel()
 		finalOutcome, finalizeErr := r.finalizeReviewTask(
-			finalizeCtx, taskID, sessionInfo, tracker, retErr,
+			finalizeCtx, taskID, sessionInfo, retErr,
 		)
 		if finalOutcome.TaskID != "" {
 			outcome = finalOutcome
@@ -191,7 +191,13 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 		return outcome, err
 	}
 
-	reviewRunner, err := r.newRunner(prepared.Bootstrap, spec.Fixture, tracker)
+	governance := newGovernedExecution(
+		r.recorder,
+		r.dependencies.Sanitizer,
+		r.approver,
+		r.config.Sandbox.Backend,
+	)
+	reviewRunner, err := r.newRunner(prepared.Bootstrap, spec.Fixture, governance)
 	if err != nil {
 		return outcome, err
 	}
@@ -234,7 +240,7 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 			agent.WithRuntimeState(map[string]any{
 				runtimeStateReviewTaskID: taskID,
 			}),
-			agent.WithToolPermissionPolicy(newReviewPermissionPolicy(r.recorder, tracker)),
+			agent.WithToolPermissionPolicy(governance.PermissionPolicy()),
 		)...,
 	)
 	if err != nil {
@@ -298,7 +304,7 @@ func (r *reviewer) validateReviewCompletion(
 func (r *reviewer) newRunner(
 	bootstrap codeexecutor.WorkspaceBootstrapSpec,
 	fixture string,
-	tracker *reviewRunState,
+	governance *governedExecution,
 ) (reviewRunner runner.Runner, err error) {
 	modelInstance, err := r.newReviewModel(fixture)
 	if err != nil {
@@ -313,8 +319,10 @@ func (r *reviewer) newRunner(
 	if err != nil {
 		return nil, fmt.Errorf("create code executor: %w", err)
 	}
-	governedConfig := defaultGovernedToolConfig(r.config.Sandbox.Backend)
-	reviewTools := newReviewToolSet(r.recorder, tracker, r.approver)
+	reviewTools := []tool.Tool{
+		governance.PermissionTool(),
+		newSubmitReviewResultsTool(r.recorder),
+	}
 	reviewAgent := llmagent.New(codeReviewAgentName,
 		llmagent.WithDescription("A code review agent with Agent Skills, governed workspace execution, persistent task records, and structured reports"),
 		llmagent.WithModel(modelInstance),
@@ -323,13 +331,8 @@ func (r *reviewer) newRunner(
 		llmagent.WithCodeExecutor(codeExec),
 		llmagent.WithWorkspaceBootstrap(bootstrap),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
-		llmagent.WithTools(reviewTools.Tools(context.Background())),
-		llmagent.WithToolCallbacks(newGovernedToolCallbacks(
-			r.dependencies.Sanitizer,
-			r.recorder,
-			tracker,
-			governedConfig,
-		)),
+		llmagent.WithTools(reviewTools),
+		llmagent.WithToolCallbacks(governance.Callbacks()),
 		llmagent.WithGlobalInstruction(systemPrompt),
 	)
 	frameworkRunner := runner.NewRunner(

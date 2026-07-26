@@ -20,24 +20,8 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/store"
-	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
-
-const defaultToolOutputLimitBytes int64 = 16 * 1024
-
-type governedToolConfig struct {
-	Backend          string
-	OutputLimitBytes int64
-	ArtifactMaxBytes int64
-}
-
-func defaultGovernedToolConfig(backend string) governedToolConfig {
-	return governedToolConfig{
-		Backend: backend, OutputLimitBytes: defaultToolOutputLimitBytes,
-		ArtifactMaxBytes: workspacefacade.DefaultArtifactMaxBytes,
-	}
-}
 
 type workspaceExecOutput struct {
 	Status          string `json:"status"`
@@ -61,152 +45,37 @@ type boundedWorkspaceExecOutput struct {
 	Error           string `json:"error,omitempty"`
 }
 
-// newRedactingToolCallbacks is retained for focused redaction tests. Runtime
-// construction uses newGovernedToolCallbacks so workspace execution is also
-// bounded and recorded before its result reaches the model or Session.
-func newRedactingToolCallbacks(sanitizer *redact.Sanitizer) *tool.Callbacks {
-	callbacks := tool.NewCallbacks()
-	callbacks.RegisterAfterTool(func(
-		_ context.Context,
-		args *tool.AfterToolArgs,
-	) (*tool.AfterToolResult, error) {
-		if args == nil {
-			return nil, nil
-		}
-		return redactGenericToolResult(sanitizer, args)
-	})
-	return callbacks
-}
-
-func newGovernedToolCallbacks(
-	sanitizer *redact.Sanitizer,
-	recorder *reviewRecorder,
-	tracker *reviewRunState,
-	config governedToolConfig,
-) *tool.Callbacks {
-	if config.OutputLimitBytes <= 0 {
-		config.OutputLimitBytes = defaultToolOutputLimitBytes
-	}
-	if config.ArtifactMaxBytes <= 0 {
-		config.ArtifactMaxBytes = workspacefacade.DefaultArtifactMaxBytes
-	}
-	callbacks := tool.NewCallbacks()
-	callbacks.RegisterBeforeTool(func(
-		_ context.Context,
-		args *tool.BeforeToolArgs,
-	) (*tool.BeforeToolResult, error) {
-		if args == nil {
-			return nil, nil
-		}
-		if tracker == nil {
-			return nil, errors.New("review run state is not configured")
-		}
-		if args.ToolName != workspaceExecToolName {
-			return nil, nil
-		}
-		original, input, modified, filteredEnvironment, err := prepareWorkspaceExecArguments(
-			args.Arguments,
-			config,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if filteredEnvironment > 0 {
-			tracker.recordException("environment_override_filtered")
-		}
-		if err := tracker.prepareWorkspaceExecution(
-			args.ToolCallID,
-			args.Arguments,
-			original,
-			input,
-		); err != nil {
-			return nil, err
-		}
-		if modified == nil {
-			return nil, nil
-		}
-		return &tool.BeforeToolResult{ModifiedArguments: modified}, nil
-	})
-	callbacks.RegisterAfterTool(func(
-		ctx context.Context,
-		args *tool.AfterToolArgs,
-	) (*tool.AfterToolResult, error) {
-		if args == nil {
-			return nil, nil
-		}
-		if args.ToolName != workspaceExecToolName {
-			return redactGenericToolResult(sanitizer, args)
-		}
-		return governWorkspaceExecResult(ctx, sanitizer, recorder, tracker, config, args)
-	})
-	return callbacks
-}
-
-// prepareWorkspaceExecArguments prepares workspace_exec arguments for execution by filtering
-// environment variables and adding container timeout when needed.
-func prepareWorkspaceExecArguments(
-	arguments []byte,
-	config governedToolConfig,
-) (
-	original workspaceExecInput,
-	executed workspaceExecInput,
-	modified []byte,
-	filteredEnvironment int,
-	err error,
-) {
-	original, err = decodeWorkspaceExecInput(arguments)
-	if err != nil {
-		return original, executed, nil, 0,
-			fmt.Errorf("decode workspace_exec governance arguments: %w", err)
-	}
-	executed = original
-	executed, filteredEnvironment = executed.withAllowedEnvironment()
-	changed := filteredEnvironment > 0
-	if config.Backend == "container" {
-		var wrapped bool
-		executed, wrapped = executed.withContainerTimeout()
-		changed = changed || wrapped
-	}
-	if !changed {
-		return original, executed, nil, filteredEnvironment, nil
-	}
-	modified, err = executed.modifiedArguments()
-	if err != nil {
-		return original, executed, nil, filteredEnvironment,
-			fmt.Errorf("encode workspace_exec governance arguments: %w", err)
-	}
-	return original, executed, modified, filteredEnvironment, nil
-}
-
-// governWorkspaceExecResult closes the execution prepared and allowed under the
-// same tool_call_id. Re-parsing args here would confuse the Agent's original
-// command with the timeout/environment rewrite; a missing start is therefore
-// persisted as a governance failure instead of being guessed into a success.
-func governWorkspaceExecResult(
+// governWorkspaceExecResult records only facts observed after an allowed
+// workspace_exec call. Missing execution starts are durable governance
+// failures, not successes.
+func (g *governedExecution) governWorkspaceExecResult(
 	ctx context.Context,
-	sanitizer *redact.Sanitizer,
-	recorder *reviewRecorder,
-	tracker *reviewRunState,
-	config governedToolConfig,
 	args *tool.AfterToolArgs,
 ) (*tool.AfterToolResult, error) {
-	input, err := decodeWorkspaceExecInput(args.Arguments)
-	if err != nil {
-		return nil, fmt.Errorf("decode workspace_exec audit arguments: %w", err)
+	if g == nil {
+		return nil, errors.New("governed execution is not configured")
 	}
-	start, finishedAt, found := tracker.finishExecution(args.ToolCallID)
+	fields, _, err := validateWorkspacePolicy(args.Arguments)
+	if err != nil {
+		// AfterTool receives the final framework arguments. Decode failures
+		// are audit-path errors rather than policy denials.
+		fields = workspacePolicyFields{}
+		if command, cwd := extractCommandAndCWD(args.Arguments); command != "" {
+			fields.Command = command
+			fields.CWD = cwd
+		}
+	} else if fields.Command == "" {
+		fields.Command, fields.CWD = extractCommandAndCWD(args.Arguments)
+	}
+
+	startedAt, finishedAt, found := g.finishExecution(args.ToolCallID)
 	var governanceErr error
-	if found {
-		input = start.executed
-	} else {
+	if !found {
 		governanceErr = fmt.Errorf(
 			"workspace execution %q completed without an approved execution start",
 			args.ToolCallID,
 		)
-		start = executionStart{executed: input, startedAt: finishedAt}
-		if tracker != nil {
-			tracker.recordException("missing_execution_start")
-		}
+		startedAt = finishedAt
 	}
 
 	var output workspaceExecOutput
@@ -220,63 +89,63 @@ func governWorkspaceExecResult(
 		}
 	}
 
+	limit := g.outputLimitBytes
+	if limit <= 0 {
+		limit = defaultToolOutputLimitBytes
+	}
 	maskedOutput := output.Output
 	redactionCount := 0
-	if sanitizer != nil {
-		maskedOutput, redactionCount = sanitizer.MaskString(maskedOutput)
+	if g.sanitizer != nil {
+		maskedOutput, redactionCount = g.sanitizer.MaskString(maskedOutput)
 	}
-	boundedOutput, truncated := truncateUTF8(maskedOutput, config.OutputLimitBytes)
-	sourceTruncated := output.OutputTruncated
-	if sourceTruncated && !truncated {
-		boundedOutput, _ = truncateUTF8(maskedOutput+"\n...[output truncated]", config.OutputLimitBytes)
+	boundedOutput, truncated := truncateUTF8(maskedOutput, limit)
+	if output.OutputTruncated && !truncated {
+		boundedOutput, _ = truncateUTF8(maskedOutput+"\n...[output truncated]", limit)
 	}
-	truncated = truncated || sourceTruncated
+	truncated = truncated || output.OutputTruncated
+
 	maskedError := ""
 	if args.Error != nil {
 		maskedError = args.Error.Error()
-		if sanitizer != nil {
+		if g.sanitizer != nil {
 			var count int
-			maskedError, count = sanitizer.MaskString(maskedError)
+			maskedError, count = g.sanitizer.MaskString(maskedError)
 			redactionCount += count
 		}
-		maskedError, _ = truncateUTF8(maskedError, config.OutputLimitBytes)
+		maskedError, _ = truncateUTF8(maskedError, limit)
 	}
 
 	effectiveErr := args.Error
 	if effectiveErr == nil {
 		effectiveErr = governanceErr
 	}
-	timedOut := isTimeoutError(effectiveErr) || isTimeoutExit(input.Command, output.ExitCode)
+	timedOut := isTimeoutError(effectiveErr)
 	status := "succeeded"
 	if timedOut {
 		status = "timed_out"
 	} else if effectiveErr != nil || (output.ExitCode != nil && *output.ExitCode != 0) {
 		status = "failed"
 	}
-	if governanceErr == nil {
-		if timedOut {
-			tracker.recordException("timeout")
-		} else if effectiveErr != nil {
-			tracker.recordException(errorKind(effectiveErr))
-		} else if output.ExitCode != nil && *output.ExitCode != 0 {
-			tracker.recordException("nonzero_exit")
-		}
-	}
 
-	if recorder != nil {
+	if g.recorder != nil {
 		taskID, err := reviewTaskIDFromContext(ctx)
 		if err != nil {
 			return nil, err
 		}
 		run := store.SandboxRunRecord{
-			ToolCallID: args.ToolCallID, Backend: config.Backend,
-			Workdir: input.CWD, CommandPreview: input.Command,
-			EnvAllowlistJSON: input.envKeysJSON(), Timeout: input.timeout(),
-			OutputLimitBytes: config.OutputLimitBytes, ArtifactLimitBytes: config.ArtifactMaxBytes,
-			Status: status, ExitCode: output.ExitCode, TimedOut: timedOut,
-			StdoutSummary: boundedOutput, StdoutTruncated: truncated,
-			RedactionCount: redactionCount, StartedAt: start.startedAt,
-			FinishedAt: finishedAt, Duration: finishedAt.Sub(start.startedAt),
+			ToolCallID:      args.ToolCallID,
+			Backend:         g.backend,
+			Workdir:         fields.CWD,
+			CommandPreview:  fields.Command,
+			Status:          status,
+			ExitCode:        output.ExitCode,
+			TimedOut:        timedOut,
+			OutputSummary:   boundedOutput,
+			OutputTruncated: truncated,
+			RedactionCount:  redactionCount,
+			StartedAt:       startedAt,
+			FinishedAt:      finishedAt,
+			Duration:        finishedAt.Sub(startedAt),
 		}
 		if governanceErr != nil {
 			run.ErrorType = "missing_execution_start"
@@ -287,15 +156,20 @@ func governWorkspaceExecResult(
 		} else if output.ExitCode != nil && *output.ExitCode != 0 {
 			run.ErrorType = "nonzero_exit"
 		}
-		if err := recorder.RecordSandboxRun(ctx, taskID, run); err != nil {
+		if err := g.recorder.RecordSandboxRun(ctx, taskID, run); err != nil {
 			return nil, err
 		}
 	}
 
 	modelResult := boundedWorkspaceExecOutput{
-		Status: output.Status, Output: boundedOutput, ExitCode: output.ExitCode,
-		SessionID: output.SessionID, Offset: output.Offset, NextOffset: output.NextOffset,
-		OutputTruncated: truncated, RedactionCount: redactionCount,
+		Status:          output.Status,
+		Output:          boundedOutput,
+		ExitCode:        output.ExitCode,
+		SessionID:       output.SessionID,
+		Offset:          output.Offset,
+		NextOffset:      output.NextOffset,
+		OutputTruncated: truncated,
+		RedactionCount:  redactionCount,
 	}
 	if timedOut {
 		modelResult.Status = "timed_out"
@@ -308,6 +182,15 @@ func governWorkspaceExecResult(
 		}
 	}
 	return &tool.AfterToolResult{CustomResult: modelResult}, nil
+}
+
+func extractCommandAndCWD(arguments []byte) (command, cwd string) {
+	var partial struct {
+		Command string `json:"command"`
+		CWD     string `json:"cwd"`
+	}
+	_ = json.Unmarshal(arguments, &partial)
+	return partial.Command, partial.CWD
 }
 
 func redactGenericToolResult(
@@ -364,12 +247,9 @@ func isTimeoutError(err error) bool {
 		return true
 	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "deadline exceeded") || strings.Contains(message, "timed out") || strings.Contains(message, "timeout")
-}
-
-func isTimeoutExit(command string, exitCode *int) bool {
-	return exitCode != nil && *exitCode == 124 &&
-		strings.HasPrefix(strings.TrimSpace(command), "exec /usr/bin/timeout ")
+	return strings.Contains(message, "deadline exceeded") ||
+		strings.Contains(message, "timed out") ||
+		strings.Contains(message, "timeout")
 }
 
 func errorKind(err error) string {
