@@ -119,22 +119,13 @@ server, _ := a2aserver.New(
 
 ```go
 import (
-	"context"
-	"net/http"
-	"net/http/cookiejar"
-
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
-	jar, _ := cookiejar.New(nil)
-
 	// 连接到 A2A 服务
-	a2aClient, _ := client.NewA2AClient(
-		"http://localhost:8080/",
-		client.WithHTTPClient(&http.Client{Jar: jar}),
-	)
+	client, _ := client.NewA2AClient("http://localhost:8080/")
 
 	// 发送消息给 Agent
 	message := protocol.NewMessage(
@@ -143,12 +134,10 @@ func main() {
 	)
 
 	// Agent 会自动处理并返回结果
-	response, _ := a2aClient.SendMessage(context.Background(),
+	response, _ := client.SendMessage(context.Background(),
 		protocol.SendMessageParams{Message: message})
 }
 ```
-
-对于直接使用 A2A 协议的匿名客户端，请像上面一样配置 HTTP cookie jar。没有可信 user ID header 时，服务端会使用 HTTP-only anonymous principal cookie 维持会话连续性；直连客户端如果没有 jar，每次调用都会获得新的匿名 principal。已认证部署也可以由可信网关代码发送 `X-User-ID` 等 user ID header。
 
 ### 高级配置
 

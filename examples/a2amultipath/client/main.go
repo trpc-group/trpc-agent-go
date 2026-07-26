@@ -14,8 +14,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net/http"
-	"net/http/cookiejar"
 
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
@@ -31,14 +29,7 @@ func main() {
 	message := flag.String("msg", defaultMessage, "User message")
 	flag.Parse()
 
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		log.Fatalf("create cookie jar: %v", err)
-	}
-	c, err := client.NewA2AClient(
-		*agentURL,
-		client.WithHTTPClient(&http.Client{Jar: jar}),
-	)
+	c, err := client.NewA2AClient(*agentURL)
 	if err != nil {
 		log.Fatalf("create client: %v", err)
 	}
