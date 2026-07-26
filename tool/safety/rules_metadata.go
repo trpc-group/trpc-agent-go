@@ -42,7 +42,8 @@ func ruleMetadata(in ScanInput, p Policy) []Finding {
 	}
 	// OpenWorld tools: ask by default so the operator can review
 	// external access. The policy's Network action overrides this.
-	if in.Metadata.OpenWorld && !in.Metadata.SearchOrRead {
+	if in.Metadata.OpenWorld &&
+		!(in.Metadata.SearchOrRead || in.Metadata.ReadOnly) {
 		risk := RiskMedium
 		action := p.Rules.Network.Action
 		decision := ruleDecision(action, risk, p)

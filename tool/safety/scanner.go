@@ -275,13 +275,15 @@ func (s *scanner) applySessionInputBuffer(in ScanInput) ScanInput {
 		return in
 	}
 	if in.SessionID == "" {
-		limit := sessionInputBufferLimit(classifySessionInfo(in))
-		if len(in.SessionInput) > limit {
+		if sessionInputExceedsStandaloneLimit(in) {
 			in.sessionInputOverflow = true
 		}
 		return in
 	}
 	if s.sessions == nil {
+		if sessionInputExceedsStandaloneLimit(in) {
+			in.sessionInputOverflow = true
+		}
 		return in
 	}
 	_, combined, found, withinLimit := s.sessions.previewInput(
@@ -290,6 +292,9 @@ func (s *scanner) applySessionInputBuffer(in ScanInput) ScanInput {
 		in.sessionSubmit,
 	)
 	if !found {
+		if sessionInputExceedsStandaloneLimit(in) {
+			in.sessionInputOverflow = true
+		}
 		return in
 	}
 	if !withinLimit {
@@ -298,6 +303,14 @@ func (s *scanner) applySessionInputBuffer(in ScanInput) ScanInput {
 	}
 	in.SessionInput = combined
 	return in
+}
+
+func sessionInputExceedsStandaloneLimit(in ScanInput) bool {
+	size := len(in.SessionInput)
+	if in.sessionSubmit {
+		size++
+	}
+	return size > sessionInputBufferLimit(classifySessionInfo(in))
 }
 
 func classifySessionInfo(in ScanInput) sessionInfo {

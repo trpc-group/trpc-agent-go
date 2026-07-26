@@ -257,6 +257,13 @@ func decodeRequiredFields(
 		}
 		in.Command = cmd
 	}
+	if profile.CodeField != "" {
+		block, err := decodeCodeField(raw, profile)
+		if err != nil {
+			return fmt.Errorf("tool %q: %w", toolName, err)
+		}
+		in.CodeBlocks = []CodeBlock{block}
+	}
 	if profile.CodeBlocksField != "" {
 		blocks, err := decodeCodeBlocks(raw, profile.CodeBlocksField)
 		if err != nil {
@@ -265,6 +272,40 @@ func decodeRequiredFields(
 		in.CodeBlocks = blocks
 	}
 	return nil
+}
+
+func decodeCodeField(
+	raw map[string]any,
+	profile ToolProfile,
+) (CodeBlock, error) {
+	code, err := requiredString(raw, profile.CodeField)
+	if err != nil {
+		return CodeBlock{}, err
+	}
+	language := strings.TrimSpace(profile.DefaultLanguage)
+	if profile.LanguageField != "" {
+		if value, present := raw[profile.LanguageField]; present &&
+			value != nil {
+			explicit, ok := value.(string)
+			if !ok {
+				return CodeBlock{}, fmt.Errorf(
+					"field %q must be a string, got %T",
+					profile.LanguageField,
+					value,
+				)
+			}
+			if explicit = strings.TrimSpace(explicit); explicit != "" {
+				language = explicit
+			}
+		}
+	}
+	if language == "" {
+		return CodeBlock{}, fmt.Errorf(
+			"field %q is required",
+			profile.LanguageField,
+		)
+	}
+	return CodeBlock{Language: language, Code: code}, nil
 }
 
 // decodeSessionFields handles declarative session-tool argument shapes.
@@ -325,12 +366,29 @@ func decodeOptionalFields(
 			}
 		}
 	} else {
+		timeoutDecoded := false
 		for _, f := range profile.TimeoutFields {
 			if v, ok := rawInt(raw, f); ok {
 				if err := setDecodedTimeout(in, v, toolName, f); err != nil {
 					return err
 				}
+				timeoutDecoded = true
 				break
+			}
+		}
+		if !timeoutDecoded {
+			for _, f := range profile.TimeoutMillisecondsFields {
+				if v, ok := rawInt(raw, f); ok {
+					if err := setDecodedTimeoutMilliseconds(
+						in,
+						v,
+						toolName,
+						f,
+					); err != nil {
+						return err
+					}
+					break
+				}
 			}
 		}
 	}
@@ -346,6 +404,25 @@ func decodeOptionalFields(
 			break
 		}
 	}
+	return nil
+}
+
+func setDecodedTimeoutMilliseconds(
+	in *ScanInput,
+	milliseconds int,
+	toolName string,
+	field string,
+) error {
+	if milliseconds < 0 ||
+		int64(milliseconds) > math.MaxInt64/int64(time.Millisecond) {
+		return fmt.Errorf(
+			"tool %q: field %q must be between 0 and %d milliseconds",
+			toolName,
+			field,
+			math.MaxInt64/int64(time.Millisecond),
+		)
+	}
+	in.Timeout = time.Duration(milliseconds) * time.Millisecond
 	return nil
 }
 

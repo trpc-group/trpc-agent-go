@@ -12,8 +12,10 @@ package tool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime/debug"
+	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
@@ -25,6 +27,7 @@ const (
 
 	beforeToolCallbackPanic         = "before tool callback panic"
 	afterToolCallbackPanic          = "after tool callback panic"
+	afterToolResultFinalizerPanic   = "after tool result finalizer panic"
 	toolResultMessagesCallbackPanic = "tool result messages callback panic"
 )
 
@@ -120,6 +123,125 @@ type AfterToolResult struct {
 	CustomResult any
 	// SkipSummarization requests ending the turn after the tool response.
 	SkipSummarization bool
+}
+
+// AfterToolResultFinalizer transforms the final CustomResult returned by one
+// after-tool callback chain.
+type AfterToolResultFinalizer func(
+	ctx context.Context,
+	args *AfterToolArgs,
+	result *AfterToolResult,
+) (*AfterToolResult, error)
+
+const maxAfterToolResultFinalizers = 1024
+
+type afterToolResultFinalizerEntry struct {
+	token     uint64
+	finalizer AfterToolResultFinalizer
+}
+
+var afterToolResultFinalizers = struct {
+	sync.Mutex
+	byDeclaration map[*Declaration]afterToolResultFinalizerEntry
+	next          uint64
+	active        int
+}{
+	byDeclaration: make(map[*Declaration]afterToolResultFinalizerEntry),
+}
+
+// RegisterAfterToolResultFinalizer associates a finalizer with one tool
+// declaration. Registrations are bounded and remain active until the returned
+// cleanup function is called.
+func RegisterAfterToolResultFinalizer(
+	declaration *Declaration,
+	finalizer AfterToolResultFinalizer,
+) (cleanup func(), err error) {
+	if declaration == nil || finalizer == nil {
+		return nil, errors.New(
+			"after-tool result finalizer declaration and function are required",
+		)
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	if _, exists :=
+		afterToolResultFinalizers.byDeclaration[declaration]; exists {
+		return nil, errors.New(
+			"after-tool result finalizer is already registered for declaration",
+		)
+	}
+	if afterToolResultFinalizers.active >=
+		maxAfterToolResultFinalizers {
+		return nil, errors.New(
+			"after-tool result finalizer registry is full",
+		)
+	}
+	afterToolResultFinalizers.next++
+	entry := afterToolResultFinalizerEntry{
+		token:     afterToolResultFinalizers.next,
+		finalizer: finalizer,
+	}
+	afterToolResultFinalizers.byDeclaration[declaration] = entry
+	afterToolResultFinalizers.active++
+	return func() {
+		afterToolResultFinalizers.Lock()
+		defer afterToolResultFinalizers.Unlock()
+		removed := false
+		for currentDeclaration, current := range afterToolResultFinalizers.byDeclaration {
+			if current.token != entry.token {
+				continue
+			}
+			delete(
+				afterToolResultFinalizers.byDeclaration,
+				currentDeclaration,
+			)
+			removed = true
+		}
+		if removed && afterToolResultFinalizers.active > 0 {
+			afterToolResultFinalizers.active--
+		}
+	}, nil
+}
+
+func afterToolResultFinalizerFor(
+	declaration *Declaration,
+) (AfterToolResultFinalizer, bool) {
+	if declaration == nil {
+		return nil, false
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	entry, ok :=
+		afterToolResultFinalizers.byDeclaration[declaration]
+	return entry.finalizer, ok
+}
+
+// PropagateAfterToolResultFinalizer binds a declaration overlay to the same
+// finalizer as source.
+func PropagateAfterToolResultFinalizer(
+	source *Declaration,
+	target *Declaration,
+) error {
+	if source == nil || target == nil {
+		return errors.New(
+			"after-tool result finalizer declarations are required",
+		)
+	}
+	afterToolResultFinalizers.Lock()
+	defer afterToolResultFinalizers.Unlock()
+	entry, ok := afterToolResultFinalizers.byDeclaration[source]
+	if !ok {
+		return errors.New(
+			"source declaration has no after-tool result finalizer",
+		)
+	}
+	if current, exists :=
+		afterToolResultFinalizers.byDeclaration[target]; exists && current.token != entry.token {
+		return errors.New(
+			"target declaration has a different after-tool result finalizer",
+		)
+	}
+	afterToolResultFinalizers.byDeclaration[target] = entry
+	return nil
 }
 
 // AfterToolCallbackStructured is called after a tool is executed.
@@ -267,7 +389,29 @@ func (c *Callbacks) RunToolResultMessages(
 		toolName,
 		&err,
 	)
+	restore := normalizeToolResultMessagesInput(in)
+	defer restore()
 	return c.ToolResultMessages(ctx, in)
+}
+
+func normalizeToolResultMessagesInput(
+	in *ToolResultMessagesInput,
+) func() {
+	if in == nil {
+		return func() {}
+	}
+	type callbackResultGetter interface {
+		GetCallbackResult() any
+	}
+	getter, ok := in.Result.(callbackResultGetter)
+	if !ok {
+		return func() {}
+	}
+	original := in.Result
+	in.Result = getter.GetCallbackResult()
+	return func() {
+		in.Result = original
+	}
 }
 
 // RegisterBeforeTool registers a before tool callback.
@@ -549,6 +693,28 @@ func (c *Callbacks) runAfterToolCallback(
 	return cb(ctx, args)
 }
 
+func (c *Callbacks) runAfterToolResultFinalizer(
+	ctx context.Context,
+	finalizer AfterToolResultFinalizer,
+	args *AfterToolArgs,
+	result *AfterToolResult,
+) (finalized *AfterToolResult, err error) {
+	toolCallID := ""
+	toolName := ""
+	if args != nil {
+		toolCallID = args.ToolCallID
+		toolName = args.ToolName
+	}
+	defer recoverToolCallbackPanic(
+		ctx,
+		afterToolResultFinalizerPanic,
+		toolCallID,
+		toolName,
+		&err,
+	)
+	return finalizer(ctx, args, result)
+}
+
 // normalizeAfterToolArgsResult temporarily rewrites args.Result to the
 // callback-facing result shape and returns a restore function.
 func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
@@ -575,22 +741,52 @@ func normalizeAfterToolArgsResult(args *AfterToolArgs) func() {
 func (c *Callbacks) RunAfterTool(
 	ctx context.Context,
 	args *AfterToolArgs,
-) (*AfterToolResult, error) {
+) (result *AfterToolResult, err error) {
+	var finalizer AfterToolResultFinalizer
+	var hasFinalizer bool
+	if args != nil {
+		finalizer, hasFinalizer =
+			afterToolResultFinalizerFor(args.Declaration)
+	}
+	if hasFinalizer {
+		defer func() {
+			finalized, finalizerErr :=
+				c.runAfterToolResultFinalizer(
+					ctx,
+					finalizer,
+					args,
+					result,
+				)
+			if finalized != nil {
+				result = finalized
+			} else if finalizerErr != nil && result != nil {
+				safeResult := *result
+				safeResult.CustomResult = nil
+				result = &safeResult
+			}
+			err = errors.Join(err, finalizerErr)
+		}()
+	}
 	var lastResult *AfterToolResult
 	var firstErr error
 
 	for _, cb := range c.AfterTool {
-		result, err := c.runAfterToolCallback(ctx, cb, args)
+		callbackResult, callbackErr :=
+			c.runAfterToolCallback(ctx, cb, args)
 
-		if c.handleCallbackError(err, &firstErr) {
-			return result, err
+		if c.handleCallbackError(callbackErr, &firstErr) {
+			return callbackResult, callbackErr
 		}
 
-		if c.processAfterToolResult(result, &ctx, &lastResult) {
+		if c.processAfterToolResult(
+			callbackResult,
+			&ctx,
+			&lastResult,
+		) {
 			if c.continueOnError && firstErr != nil {
-				return result, firstErr
+				return callbackResult, firstErr
 			}
-			return result, nil
+			return callbackResult, nil
 		}
 	}
 

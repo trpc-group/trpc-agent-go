@@ -18,6 +18,7 @@ import (
 	"sync"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -32,9 +33,9 @@ import (
 // arguments are unchanged; the safety scan itself is repeated immediately
 // before execution.
 //
-// WrapTool intentionally accepts tool.CallableTool. Streamable-only tools
-// require a stream-aware wrapper so partial chunks can be redacted before
-// they are observed.
+// WrapTool intentionally accepts non-streaming tool.CallableTool values.
+// Tools that also support streaming require a stream-aware wrapper so partial
+// chunks can be redacted before they are observed.
 func WrapTool(
 	t tool.CallableTool,
 	guard *Guard,
@@ -45,20 +46,65 @@ func WrapTool(
 	if guard == nil {
 		return nil, errors.New("safety guard is nil")
 	}
+	if supportsStreaming(t) {
+		return nil, errors.New(
+			"streamable tool requires CheckToolPermission or a stream-aware wrapper",
+		)
+	}
 	decl := t.Declaration()
 	if decl == nil || decl.Name == "" {
 		return nil, errors.New("tool declaration name is empty")
 	}
+	declaration := *decl
 	metadata := tool.MetadataOf(t)
-	return &wrappedCallableTool{
+	wrapped := &wrappedCallableTool{
 		wrappedToolBase: wrappedToolBase{
 			tool:        t,
 			guard:       guard,
-			declaration: decl,
+			declaration: &declaration,
 			metadata:    metadata,
 		},
 		callable: t,
-	}, nil
+	}
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		wrapped.Declaration(),
+		wrapped.finalizeAfterToolCallbackResult,
+	)
+	if err != nil {
+		return nil, fmt.Errorf(
+			"register after-tool result finalizer: %w",
+			err,
+		)
+	}
+	if err := guard.addCallbackFinalizerCleanup(cleanup); err != nil {
+		cleanup()
+		return nil, err
+	}
+	return wrapped, nil
+}
+
+func supportsStreaming(t tool.Tool) bool {
+	const maxOriginalDepth = 32
+	t = internaltool.ResolveSemantic(t)
+	for depth := 0; t != nil && depth < maxOriginalDepth; depth++ {
+		if preference, ok := t.(interface{ StreamInner() bool }); ok &&
+			!preference.StreamInner() {
+			return false
+		}
+		if _, ok := t.(tool.StreamableTool); ok {
+			return true
+		}
+		original, ok := t.(interface{ Original() tool.Tool })
+		if !ok {
+			return false
+		}
+		next := original.Original()
+		if next == t {
+			return false
+		}
+		t = internaltool.ResolveSemantic(next)
+	}
+	return false
 }
 
 type wrappedToolBase struct {
@@ -201,6 +247,9 @@ func (w *wrappedCallableTool) CheckPermission(
 	if req == nil {
 		return tool.DenyPermission("permission request is nil"), nil
 	}
+	if err := ctx.Err(); err != nil {
+		return tool.PermissionDecision{}, err
+	}
 	innerReq := *req
 	innerReq.Tool = w.tool
 	innerReq.Declaration = w.Declaration()
@@ -208,6 +257,9 @@ func (w *wrappedCallableTool) CheckPermission(
 	innerChecked := false
 	if checker, ok := w.tool.(tool.PermissionChecker); ok {
 		decision, err = checker.CheckPermission(ctx, &innerReq)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return tool.PermissionDecision{}, contextErr
+		}
 		if err != nil {
 			return tool.PermissionDecision{}, w.sanitizeError(
 				"wrapped tool permission check failed", err,
@@ -229,9 +281,23 @@ func (w *wrappedCallableTool) CheckPermission(
 		innerChecked = true
 	}
 	decision, err = w.guard.previewToolCall(ctx, req)
-	if err == nil && decision.Action == tool.PermissionActionAllow &&
-		innerChecked {
-		w.rememberPrecheck(req.ToolCallID, req.Arguments)
+	if err == nil && decision.Action == tool.PermissionActionAllow {
+		callbackDeclaration := req.Declaration
+		if callbackDeclaration == nil {
+			callbackDeclaration = w.Declaration()
+		}
+		if propagateErr := tool.PropagateAfterToolResultFinalizer(
+			w.Declaration(),
+			callbackDeclaration,
+		); propagateErr != nil {
+			return tool.PermissionDecision{}, w.sanitizeError(
+				"propagate after-tool result finalizer",
+				propagateErr,
+			)
+		}
+		if innerChecked {
+			w.rememberPrecheck(req.ToolCallID, req.Arguments)
+		}
 	}
 	return decision, err
 }
@@ -270,9 +336,16 @@ func (w *wrappedCallableTool) Call(
 		}
 		finishing = true
 		result, err = w.completeCallSafely(
-			ctx, toolCallID, jsonArgs, result, panicErr,
+			ctx,
+			toolCallID,
+			jsonArgs,
+			result,
+			panicErr,
 		)
 	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	var ok bool
 	toolCallID, ok = tool.ToolCallIDFromContext(ctx)
@@ -290,6 +363,9 @@ func (w *wrappedCallableTool) Call(
 	if checker, ok := w.tool.(tool.PermissionChecker); ok &&
 		!w.consumePrecheck(toolCallID, jsonArgs) {
 		decision, err := checker.CheckPermission(ctx, req)
+		if contextErr := ctx.Err(); contextErr != nil {
+			return nil, contextErr
+		}
 		if err != nil {
 			return nil, w.sanitizeError(
 				"wrapped tool permission check failed", err,
@@ -325,7 +401,11 @@ func (w *wrappedCallableTool) Call(
 	result = originalResult
 	finishing = true
 	return w.completeCallSafely(
-		ctx, toolCallID, jsonArgs, originalResult, callErr,
+		ctx,
+		toolCallID,
+		jsonArgs,
+		originalResult,
+		callErr,
 	)
 }
 
@@ -396,7 +476,11 @@ func (w *wrappedCallableTool) completeCallSafely(
 		}
 	}()
 	return w.completeCall(
-		ctx, toolCallID, jsonArgs, result, callErr,
+		ctx,
+		toolCallID,
+		jsonArgs,
+		result,
+		callErr,
 	)
 }
 
@@ -493,6 +577,64 @@ type safeResult struct {
 	callback   any
 	retryError bool
 	meta       map[string]any
+}
+
+func (w *wrappedCallableTool) finalizeAfterToolCallbackResult(
+	_ context.Context,
+	args *tool.AfterToolArgs,
+	result *tool.AfterToolResult,
+) (*tool.AfterToolResult, error) {
+	hasCustomResult := result != nil && result.CustomResult != nil
+	var effective any
+	var capabilitySource any
+	if hasCustomResult {
+		effective = result.CustomResult
+		capabilitySource = effective
+	} else if args != nil {
+		effective = args.Result
+		capabilitySource = effective
+		if callback, ok := effective.(interface {
+			GetCallbackResult() any
+		}); ok {
+			effective = callback.GetCallbackResult()
+		}
+	} else {
+		return result, nil
+	}
+	if carrier, ok := effective.(*safeResult); ok {
+		effective = carrier.value
+	}
+	if capabilitySource == nil {
+		capabilitySource = effective
+	}
+	safeArgs := &tool.AfterToolArgs{
+		Result: effective,
+		Meta:   resultMetadata(capabilitySource),
+	}
+	if args != nil {
+		*safeArgs = *args
+		safeArgs.Result = effective
+		safeArgs.Meta = resultMetadata(capabilitySource)
+	}
+	safe, _, changed, _, _ :=
+		w.guard.redactAndLimitTracked(effective)
+	metaChanged := w.guard.redactMetaIfNeeded(safeArgs)
+	if !hasCustomResult && !changed && !metaChanged {
+		return result, nil
+	}
+	preserved := preserveResultCapabilities(
+		w.guard,
+		capabilitySource,
+		safe,
+		changed || metaChanged,
+		safeArgs.Meta,
+	)
+	out := tool.AfterToolResult{}
+	if result != nil {
+		out = *result
+	}
+	out.CustomResult = preserved
+	return &out, nil
 }
 
 func preserveResultCapabilities(

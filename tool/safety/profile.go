@@ -40,12 +40,22 @@ type ToolProfile struct {
 	NetworkRestricted bool
 	// CommandField is the JSON key holding the shell command.
 	CommandField string
+	// CodeField is the JSON key holding one source-code string.
+	CodeField string
+	// LanguageField is the optional JSON key holding the CodeField language.
+	LanguageField string
+	// DefaultLanguage is used for CodeField when LanguageField is absent or
+	// empty.
+	DefaultLanguage string
 	// CodeBlocksField is the JSON key holding the code blocks array.
 	CodeBlocksField string
 	// WorkingDirFields lists candidate JSON keys for the working directory.
 	WorkingDirFields []string
 	// TimeoutFields lists candidate JSON keys for the timeout in seconds.
 	TimeoutFields []string
+	// TimeoutMillisecondsFields lists candidate JSON keys for the timeout in
+	// milliseconds.
+	TimeoutMillisecondsFields []string
 	// EnvironmentField is the JSON key for the env map.
 	EnvironmentField string
 	// BackgroundFields lists candidate JSON keys for the background flag.
@@ -67,6 +77,35 @@ type ToolProfile struct {
 func (p ToolProfile) validate() error {
 	if strings.TrimSpace(p.Name) == "" {
 		return errors.New("tool profile name is empty")
+	}
+	hasCodeField := strings.TrimSpace(p.CodeField) != ""
+	hasLanguageField := strings.TrimSpace(p.LanguageField) != ""
+	hasDefaultLanguage := strings.TrimSpace(p.DefaultLanguage) != ""
+	executionFields := 0
+	for _, field := range []string{
+		p.CommandField,
+		p.CodeField,
+		p.CodeBlocksField,
+	} {
+		if strings.TrimSpace(field) != "" {
+			executionFields++
+		}
+	}
+	if executionFields > 1 {
+		return errors.New(
+			"tool profile must declare only one execution field",
+		)
+	}
+	if !hasCodeField &&
+		(hasLanguageField || hasDefaultLanguage) {
+		return errors.New(
+			"tool profile language fields require a code field",
+		)
+	}
+	if hasCodeField && !hasLanguageField && !hasDefaultLanguage {
+		return errors.New(
+			"tool profile code field requires a language field or default language",
+		)
 	}
 	if p.CreatesSession && p.TerminatesSession {
 		return errors.New(
@@ -152,6 +191,24 @@ func DefaultToolProfiles() []ToolProfile {
 			CodeBlocksField:     "code_blocks",
 		},
 		{
+			Name:                "execute_tool_code",
+			Backend:             BackendCodeExec,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			CodeField:           "code",
+			DefaultLanguage:     "python",
+		},
+		{
+			Name:                "run_workflow",
+			Backend:             BackendCodeExec,
+			Isolated:            true,
+			EnvironmentIsolated: true,
+			NetworkRestricted:   false,
+			CodeField:           "code",
+			DefaultLanguage:     "python",
+		},
+		{
 			Name:              "write_stdin",
 			Backend:           BackendHostExec,
 			DefaultTimeout:    30 * time.Second,
@@ -222,11 +279,15 @@ func DefaultToolProfiles() []ToolProfile {
 		{
 			Name:                "skill_write_stdin",
 			Backend:             BackendWorkspaceExec,
+			DefaultTimeout:      400 * time.Millisecond,
 			Isolated:            true,
 			EnvironmentIsolated: true,
 			NetworkRestricted:   false,
-			SessionIDFields:     []string{"session_id"},
-			SessionInputField:   "chars",
+			TimeoutMillisecondsFields: []string{
+				"yield_ms",
+			},
+			SessionIDFields:   []string{"session_id"},
+			SessionInputField: "chars",
 			SessionSubmitFields: []string{
 				"submit",
 			},
@@ -234,10 +295,14 @@ func DefaultToolProfiles() []ToolProfile {
 		{
 			Name:                "skill_poll_session",
 			Backend:             BackendWorkspaceExec,
+			DefaultTimeout:      400 * time.Millisecond,
 			Isolated:            true,
 			EnvironmentIsolated: true,
 			NetworkRestricted:   false,
-			SessionIDFields:     []string{"session_id"},
+			TimeoutMillisecondsFields: []string{
+				"yield_ms",
+			},
+			SessionIDFields: []string{"session_id"},
 		},
 		{
 			Name:                "skill_kill_session",
@@ -260,6 +325,9 @@ type profileRegistry map[string]ToolProfile
 func cloneToolProfile(p ToolProfile) ToolProfile {
 	p.WorkingDirFields = slices.Clone(p.WorkingDirFields)
 	p.TimeoutFields = slices.Clone(p.TimeoutFields)
+	p.TimeoutMillisecondsFields = slices.Clone(
+		p.TimeoutMillisecondsFields,
+	)
 	p.BackgroundFields = slices.Clone(p.BackgroundFields)
 	p.PTYFields = slices.Clone(p.PTYFields)
 	p.SessionIDFields = slices.Clone(p.SessionIDFields)

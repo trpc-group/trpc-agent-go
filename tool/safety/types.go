@@ -10,6 +10,8 @@ package safety
 
 import (
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // Decision is the canonical safety decision returned by the scanner.
@@ -113,7 +115,7 @@ type ScanInput struct {
 	// Destructive, OpenWorld, ConcurrencySafe, and ReadOnly into
 	// findings so the policy can deny or ask based on tool-declared
 	// capabilities without inspecting the arguments.
-	Metadata ToolMetadata
+	Metadata tool.ToolMetadata
 
 	sessionSubmit        bool
 	sessionInputOverflow bool
@@ -122,27 +124,8 @@ type ScanInput struct {
 	sessionTerminates    bool
 }
 
-// ToolMetadata mirrors the tool's published metadata. It is populated
-// by the callable wrapper from tool.PermissionRequest.Metadata.
-type ToolMetadata struct {
-	// ReadOnly reports that the tool does not intentionally mutate
-	// external state.
-	ReadOnly bool
-	// Destructive reports that the tool may delete, overwrite, or
-	// otherwise irreversibly change external state.
-	Destructive bool
-	// ConcurrencySafe reports that independent calls to the same tool
-	// can run at the same time without corrupting shared state.
-	ConcurrencySafe bool
-	// SearchOrRead reports that the tool primarily searches or reads
-	// data.
-	SearchOrRead bool
-	// OpenWorld reports that the tool can reach outside the current
-	// process or workspace.
-	OpenWorld bool
-	// MaxResultSize is an optional advisory result-size limit in bytes.
-	MaxResultSize int
-}
+// ToolMetadata is an alias for the canonical tool metadata contract.
+type ToolMetadata = tool.ToolMetadata
 
 // Finding is one rule result. Decision is the action contributed by this
 // finding after rule overrides and risk thresholds are applied.

@@ -91,17 +91,25 @@ if err != nil {
 ```
 
 `WrapTool` currently accepts `tool.CallableTool`, which covers the
-canonical workspaceexec, hostexec, and codeexec call surfaces. A
-streamable-only tool needs a stream-aware wrapper so partial chunks are
-redacted before consumers observe them.
+canonical non-streaming workspaceexec, hostexec, and codeexec call
+surfaces. It rejects tools that also implement `tool.StreamableTool`,
+because returning a callable-only wrapper would silently disable their
+streamed events. Streamable tools need a stream-aware wrapper so partial
+chunks are redacted before consumers observe them.
 
 The returned wrapper also implements `tool.PermissionChecker`. Frameworks
 may call that precheck before `Call`; the wrapper only reuses the inner
 tool's allow result when the tool call id and arguments are unchanged, and
 always repeats the safety scan immediately before execution.
 
-For streamable-only tools such as `skill_exec` and
-`skill_write_stdin`, use the guard as the run's `tool.PermissionPolicy`.
+For framework-managed calls, the wrapper result carries an internal
+finalizer recognized by `tool.Callbacks`. Every after-tool callback chain
+applies that finalizer before returning, including early `CustomResult`
+short-circuits, so callback replacements are redacted and size-limited
+before becoming model-facing results.
+
+For streamable tools such as `skill_exec` and `skill_write_stdin`, use
+the guard as the run's `tool.PermissionPolicy`.
 The default profiles decode their command and session fields before
 execution. A permission policy provides preflight scanning and audit;
 post-execution result redaction, completion audit, and session lifecycle

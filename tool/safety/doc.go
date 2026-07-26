@@ -22,13 +22,16 @@
 // WrapTool applies the guard to a tool.CallableTool and owns the complete
 // preflight, execution, result-redaction, audit, and cleanup lifecycle.
 // The guard also exposes OpenTelemetry span attributes for the existing
-// execute-tool span.
+// execute-tool span. Framework calls carry an internal result finalizer
+// recognized by tool.Callbacks, so an after-tool callback replacement is
+// redacted and size-limited even when an earlier callback short-circuits the
+// remaining callback chain.
 //
-// Guard implements tool.PermissionPolicy for streamable-only tools that
-// cannot use WrapTool. The policy path performs preflight scanning and
-// audit only; it cannot redact streamed output, observe completion, or
-// track session lifecycle. Session follow-up calls that cannot be
-// correlated therefore require human review.
+// Guard implements tool.PermissionPolicy for tools that support streaming
+// and therefore cannot use WrapTool. The policy path performs preflight
+// scanning and audit only; it cannot redact streamed output, observe
+// completion, or track session lifecycle. Session follow-up calls that cannot
+// be correlated therefore require human review.
 //
 // # Fail-closed behavior
 //

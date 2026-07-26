@@ -277,6 +277,10 @@ func TestCoverrules_RuleMetadata_OpenWorld(t *testing.T) {
 	// Read-only/search tools are exempt.
 	readIn := ScanInput{Metadata: ToolMetadata{OpenWorld: true, SearchOrRead: true}}
 	require.Empty(t, ruleMetadata(readIn, p))
+	mcpReadOnly := ScanInput{
+		Metadata: ToolMetadata{OpenWorld: true, ReadOnly: true},
+	}
+	require.Empty(t, ruleMetadata(mcpReadOnly, p))
 
 	// An allow action is upgraded to ask for non-read-only tools.
 	p.Rules.Network.Action = DecisionAllow

@@ -262,6 +262,12 @@ func redactUnknownTypeDepth(
 			"reason": "tool result type could not be serialized safely",
 		}, true, nil
 	}
+	if err := rejectDuplicateJSONKeys(raw); err != nil {
+		return map[string]any{
+			"status": "redacted",
+			"reason": "tool result could not be decoded safely",
+		}, true, nil
+	}
 
 	decoded, err := decodeJSONValue(raw)
 	if err != nil {

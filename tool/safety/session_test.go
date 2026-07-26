@@ -46,7 +46,11 @@ func TestSessionTracker_KilledSessionCannotBeReused(t *testing.T) {
 		SessionID:    "sess-1",
 		SessionInput: "echo hello",
 	}, sessions)
-	require.Contains(t, ruleIDSet(findings), "host.residual_session")
+	require.Contains(
+		t,
+		ruleIDSet(findings),
+		"host.finalized_session_input",
+	)
 }
 
 func TestSessionTracker_QuarantineDoesNotResurrectKilledSession(
@@ -130,7 +134,30 @@ func TestScanner_SubmitOnlyChecksSessionLifecycle(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotEqual(t, DecisionAllow, report.Decision)
-	require.Contains(t, ruleIDSet(report.Findings), "host.residual_session")
+	require.Contains(
+		t,
+		ruleIDSet(report.Findings),
+		"host.finalized_session_input",
+	)
+}
+
+func TestScanner_LimitsSessionInputWithoutTracker(t *testing.T) {
+	scanner := newTestScanner(t, testPolicy(t))
+	scanner.sessions = nil
+
+	report, err := scanner.Scan(context.Background(), ScanInput{
+		ToolName:     "write_stdin",
+		Backend:      BackendHostExec,
+		SessionID:    "external",
+		SessionInput: strings.Repeat("x", maxSessionInputBuffer+1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Contains(
+		t,
+		ruleIDSet(report.Findings),
+		"host.session_input_too_large",
+	)
 }
 
 func TestSessionTracker_PreservesWhitespaceChunks(t *testing.T) {

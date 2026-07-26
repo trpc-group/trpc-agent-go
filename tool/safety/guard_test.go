@@ -707,6 +707,25 @@ func TestWithToolProfileValidatesSessionContract(t *testing.T) {
 		}),
 	)
 	require.ErrorContains(t, err, "require a session input field")
+
+	_, err = NewGuard(
+		WithPolicy(testPolicy(t)),
+		WithToolProfile(ToolProfile{
+			Name:      "broken_code",
+			CodeField: "code",
+		}),
+	)
+	require.ErrorContains(t, err, "requires a language field")
+
+	_, err = NewGuard(
+		WithPolicy(testPolicy(t)),
+		WithToolProfile(ToolProfile{
+			Name:            "ambiguous_code",
+			CommandField:    "command",
+			CodeBlocksField: "code_blocks",
+		}),
+	)
+	require.ErrorContains(t, err, "only one execution field")
 }
 
 // TestGuard_EmptyToolCallIDCannotBypassConcurrency verifies that an
@@ -722,6 +741,63 @@ func TestGuard_EmptyToolCallIDCannotBypassConcurrency(t *testing.T) {
 	require.Contains(t, decision.Reason,
 		"resource.concurrency_id_required")
 	require.Equal(t, int64(0), guard.concurrency.activeCount())
+}
+
+func TestGuard_CanceledContextPropagatesBeforeDecision(t *testing.T) {
+	guard := newTestGuard(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	for _, request := range []*tool.PermissionRequest{
+		{
+			ToolName:   "workspace_exec",
+			ToolCallID: "canceled-deny",
+			Arguments: []byte(
+				`{"command":"rm -rf /","timeout":10}`,
+			),
+		},
+		{
+			ToolName:   "workspace_exec",
+			ToolCallID: "canceled-malformed",
+			Arguments:  []byte(`{`),
+		},
+	} {
+		_, err := guard.checkToolCall(ctx, request)
+		require.ErrorIs(t, err, context.Canceled)
+
+		_, err = guard.CheckToolPermission(ctx, request)
+		require.ErrorIs(t, err, context.Canceled)
+	}
+}
+
+func TestGuard_UnknownSessionInputStillEnforcesSizeLimit(t *testing.T) {
+	guard := newTestGuard(t)
+	input := strings.Repeat("x", maxSessionInputBuffer+1)
+
+	for _, sessionID := range []string{"unknown", "finalized"} {
+		if sessionID == "finalized" {
+			guard.sessions.register(sessionID)
+			guard.sessions.kill(sessionID)
+		}
+		decision, err := guard.checkToolCall(
+			context.Background(),
+			&tool.PermissionRequest{
+				ToolName:   "write_stdin",
+				ToolCallID: "large-" + sessionID,
+				Arguments: []byte(
+					`{"session_id":"` + sessionID +
+						`","chars":"` + input + `"}`,
+				),
+			},
+		)
+		require.NoError(t, err)
+		require.Equal(t, tool.PermissionActionDeny, decision.Action)
+		require.Contains(
+			t,
+			decision.Reason,
+			"host.session_input_too_large",
+		)
+	}
 }
 
 func TestGuard_DuplicateActiveToolCallIDIsDenied(t *testing.T) {

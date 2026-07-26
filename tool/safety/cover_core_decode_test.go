@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"testing"
@@ -48,6 +49,50 @@ func TestCovercore_DecodeRequestWrongCodeBlocksType(t *testing.T) {
 	_, err := decodeRequest("execute_code", []byte(`{"code_blocks":42}`), newProfileRegistry())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "code_blocks")
+}
+
+func TestCovercore_DecodeRequestSingleCodeField(t *testing.T) {
+	reg := newProfileRegistry()
+	for _, toolName := range []string{
+		"execute_tool_code",
+		"run_workflow",
+	} {
+		in, err := decodeRequest(
+			toolName,
+			[]byte(`{"code":"print(1)"}`),
+			reg,
+		)
+		require.NoError(t, err)
+		require.Equal(t, BackendCodeExec, in.Backend)
+		require.Equal(t, []CodeBlock{{
+			Language: "python",
+			Code:     "print(1)",
+		}}, in.CodeBlocks)
+	}
+
+	reg.register(ToolProfile{
+		Name:          "custom_code",
+		Backend:       BackendMCP,
+		CodeField:     "source",
+		LanguageField: "language",
+	})
+	in, err := decodeRequest(
+		"custom_code",
+		[]byte(`{"source":"console.log(1)","language":"javascript"}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, []CodeBlock{{
+		Language: "javascript",
+		Code:     "console.log(1)",
+	}}, in.CodeBlocks)
+
+	_, err = decodeRequest(
+		"custom_code",
+		[]byte(`{"source":"console.log(1)","language":42}`),
+		reg,
+	)
+	require.ErrorContains(t, err, `"language" must be a string`)
 }
 
 // TestCovercore_DecodeRequestEnvError covers the optional-field error
@@ -257,14 +302,66 @@ func TestCovercore_DefaultProfileTimeoutParity(t *testing.T) {
 	require.Equal(t, "stdin", skillExec.SessionInputField)
 	skillWrite, ok := reg.lookup("skill_write_stdin")
 	require.True(t, ok)
+	require.Equal(t, 400*time.Millisecond, skillWrite.DefaultTimeout)
+	require.Equal(
+		t,
+		[]string{"yield_ms"},
+		skillWrite.TimeoutMillisecondsFields,
+	)
 	require.Equal(t, []string{"session_id"}, skillWrite.SessionIDFields)
 	require.Equal(t, "chars", skillWrite.SessionInputField)
 	require.Equal(t, []string{"submit"}, skillWrite.SessionSubmitFields)
+	skillPoll, ok := reg.lookup("skill_poll_session")
+	require.True(t, ok)
+	require.Equal(t, 400*time.Millisecond, skillPoll.DefaultTimeout)
+	require.Equal(
+		t,
+		[]string{"yield_ms"},
+		skillPoll.TimeoutMillisecondsFields,
+	)
+	toolCode, ok := reg.lookup("execute_tool_code")
+	require.True(t, ok)
+	require.Equal(t, "code", toolCode.CodeField)
+	require.Equal(t, "python", toolCode.DefaultLanguage)
+	workflow, ok := reg.lookup("run_workflow")
+	require.True(t, ok)
+	require.Equal(t, "code", workflow.CodeField)
+	require.Equal(t, "python", workflow.DefaultLanguage)
 	skillKill, ok := reg.lookup("skill_kill_session")
 	require.True(t, ok)
 	require.True(t, skillKill.TerminatesSession)
 
 	in, err := decodeRequest(
+		"skill_poll_session",
+		[]byte(`{"session_id":"session","yield_ms":1500}`),
+		reg,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 1500*time.Millisecond, in.Timeout)
+
+	policy := testPolicy(t)
+	policy.MaxTimeout = time.Second
+	scanner := newTestScanner(t, policy)
+	report, err := scanner.Scan(context.Background(), in)
+	require.NoError(t, err)
+	require.Contains(
+		t,
+		ruleIDSet(report.Findings),
+		"resource.timeout_exceeded",
+	)
+
+	report, err = scanner.Scan(context.Background(), ScanInput{
+		ToolName:  "skill_poll_session",
+		SessionID: "session",
+	})
+	require.NoError(t, err)
+	require.NotContains(
+		t,
+		ruleIDSet(report.Findings),
+		"resource.timeout_exceeded",
+	)
+
+	in, err = decodeRequest(
 		"workspace_exec",
 		[]byte(`{"command":"ls","timeout":10,"timeout_sec":3600}`),
 		reg,

@@ -48,6 +48,14 @@ type wrapperTestTool struct {
 	structured      bool
 }
 
+type wrapperTestContextKey struct{}
+
+type panicMarshalResult struct{}
+
+func (panicMarshalResult) MarshalJSON() ([]byte, error) {
+	panic("marshal panic")
+}
+
 type blockingAuditWriter struct {
 	started chan struct{}
 	release chan struct{}
@@ -70,6 +78,34 @@ type blockingPostAuditWriter struct {
 
 type originalToolWrapper struct {
 	inner tool.Tool
+}
+
+type streamableWrapperTestTool struct {
+	*wrapperTestTool
+}
+
+type codeOnlyWrapperTestTool struct {
+	*wrapperTestTool
+}
+
+func (t *codeOnlyWrapperTestTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{
+		Name: t.name,
+		InputSchema: &tool.Schema{
+			Type:     "object",
+			Required: []string{"code"},
+			Properties: map[string]*tool.Schema{
+				"code": {Type: "string"},
+			},
+		},
+	}
+}
+
+func (*streamableWrapperTestTool) StreamableCall(
+	context.Context,
+	[]byte,
+) (*tool.StreamReader, error) {
+	return nil, nil
 }
 
 func (w *originalToolWrapper) Declaration() *tool.Declaration {
@@ -97,7 +133,10 @@ func (t *wrapperTestTool) Declaration() *tool.Declaration {
 	if name == "" {
 		name = "workspace_exec"
 	}
-	return &tool.Declaration{Name: name}
+	return &tool.Declaration{
+		Name:        name,
+		InputSchema: &tool.Schema{Type: "object"},
+	}
 }
 
 func (t *wrapperTestTool) Call(
@@ -1167,10 +1206,464 @@ func TestWrapTool_DisabledRedactionPreservesCallbackPayload(t *testing.T) {
 	require.Equal(t, secret, callback[0].Text)
 }
 
+func TestWrapTool_FinalizesCallbackReplacement(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	guard.scanner.policy.MaxOutputSize = 64
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: "original result",
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-1",
+	)
+	arguments := []byte(`{"command":"ls","timeout":10}`)
+	frameworkDeclaration :=
+		internaltool.NewUnprefixedNamedTool(wrapped).Declaration()
+	decision, err := wrapped.(tool.PermissionChecker).CheckPermission(
+		ctx,
+		&tool.PermissionRequest{
+			Tool:        wrapped,
+			ToolName:    frameworkDeclaration.Name,
+			ToolCallID:  "call-1",
+			Declaration: frameworkDeclaration,
+			Arguments:   arguments,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
+	result, err := wrapped.Call(
+		callCtx,
+		arguments,
+	)
+	require.NoError(t, err)
+
+	pluginCallbacks := tool.NewCallbacks()
+	pluginCallbacks.RegisterAfterTool(func(
+		ctx context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		require.Equal(t, "original result", args.Result)
+		return &tool.AfterToolResult{
+			Context: context.WithValue(
+				ctx,
+				wrapperTestContextKey{},
+				"plugin",
+			),
+		}, nil
+	})
+	pluginResult, err := pluginCallbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    "workspace_exec",
+			Declaration: frameworkDeclaration,
+			Arguments:   arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, pluginResult.CustomResult)
+
+	localCallbacks := tool.NewCallbacks()
+	localCallbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{
+				"password": "hunter2",
+				"text":     strings.Repeat("x", 256),
+			},
+		}, nil
+	})
+	localResult, err := localCallbacks.RunAfterTool(
+		pluginResult.Context,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-1",
+			ToolName:    "workspace_exec",
+			Declaration: frameworkDeclaration,
+			Arguments:   arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(localResult.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+	require.LessOrEqual(t, len(raw), 64)
+}
+
+func TestWrapTool_FinalizesCallbackReplacementAfterNilResult(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{result: nil}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-nil-result",
+	)
+	callCtx := tool.WithoutToolResultAttachmentBudget(ctx)
+	result, err := wrapped.Call(
+		callCtx,
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.NoError(t, err)
+	require.Nil(t, result)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalResult, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-nil-result",
+			ToolName:    "workspace_exec",
+			Declaration: wrapped.Declaration(),
+			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalResult.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_FinalizesInPlaceCallbackMutation(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: map[string]any{"value": "safe"},
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-in-place-mutation",
+	)
+	result, err := wrapped.Call(
+		tool.WithoutToolResultAttachmentBudget(ctx),
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.NoError(t, err)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		args.Result.(map[string]any)["password"] = "hunter2"
+		return &tool.AfterToolResult{}, nil
+	})
+	finalResult, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-in-place-mutation",
+			ToolName:    "workspace_exec",
+			Declaration: wrapped.Declaration(),
+			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, finalResult.CustomResult)
+	raw, err := json.Marshal(finalResult.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_FinalizerPreservesCallbackCapability(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: &wrapperCallbackResult{
+			Output: "ok",
+			Callback: []wrapperCallbackContent{{
+				Text: "safe",
+			}},
+		},
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-callback-capability",
+	)
+	result, err := wrapped.Call(
+		tool.WithoutToolResultAttachmentBudget(ctx),
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.NoError(t, err)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		args *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		callback := args.Result.([]wrapperCallbackContent)
+		callback[0].Text = "sk_live_1234567890abcdef1234"
+		return &tool.AfterToolResult{}, nil
+	})
+	finalResult, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-callback-capability",
+			ToolName:    "workspace_exec",
+			Declaration: wrapped.Declaration(),
+			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	carrier, ok := finalResult.CustomResult.(interface {
+		GetCallbackResult() any
+	})
+	require.True(t, ok)
+	callback := carrier.GetCallbackResult().([]wrapperCallbackContent)
+	require.NotContains(t, callback[0].Text, "sk_live_")
+}
+
+func TestWrapTool_CompletionPanicRetainsCallbackFinalizer(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: panicMarshalResult{},
+	}, guard)
+	require.NoError(t, err)
+	ctx := context.WithValue(
+		context.Background(),
+		tool.ContextKeyToolCallID{},
+		"call-completion-panic",
+	)
+	_, err = wrapped.Call(
+		tool.WithoutToolResultAttachmentBudget(ctx),
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.ErrorContains(t, err, "safety completion panicked")
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalResult, err := callbacks.RunAfterTool(
+		ctx,
+		&tool.AfterToolArgs{
+			ToolCallID:  "call-completion-panic",
+			ToolName:    "workspace_exec",
+			Declaration: wrapped.Declaration(),
+			Arguments:   []byte(`{"command":"ls","timeout":10}`),
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalResult.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_PrecheckRetainsFinalizerAfterContextReplacement(
+	t *testing.T,
+) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{
+		result: "original",
+	}, guard)
+	require.NoError(t, err)
+	replacedCtx := context.WithValue(
+		context.Background(),
+		wrapperTestContextKey{},
+		"replacement",
+	)
+	req := &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call-replaced-context",
+		Arguments:  []byte(`{"command":"ls","timeout":10}`),
+	}
+	decision, err := wrapped.(tool.PermissionChecker).CheckPermission(
+		replacedCtx,
+		req,
+	)
+	require.NoError(t, err)
+	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	result, err := wrapped.Call(
+		tool.WithoutToolResultAttachmentBudget(replacedCtx),
+		req.Arguments,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "original", result)
+
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterAfterTool(func(
+		_ context.Context,
+		_ *tool.AfterToolArgs,
+	) (*tool.AfterToolResult, error) {
+		return &tool.AfterToolResult{
+			CustomResult: map[string]any{"password": "hunter2"},
+		}, nil
+	})
+	finalResult, err := callbacks.RunAfterTool(
+		replacedCtx,
+		&tool.AfterToolArgs{
+			ToolCallID:  req.ToolCallID,
+			ToolName:    req.ToolName,
+			Declaration: wrapped.Declaration(),
+			Arguments:   req.Arguments,
+			Result:      result,
+		},
+	)
+	require.NoError(t, err)
+	raw, err := json.Marshal(finalResult.CustomResult)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
+}
+
+func TestWrapTool_PropagatesCanceledContext(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = wrapped.Call(
+		ctx,
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.False(t, inner.called)
+}
+
+func TestWrapTool_CanceledContextPreemptsInnerDenial(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	inner := &wrapperTestTool{
+		decision: tool.DenyPermission("inner denied"),
+	}
+	wrapped, err := WrapTool(inner, guard)
+	require.NoError(t, err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = wrapped.(tool.PermissionChecker).CheckPermission(
+		ctx,
+		&tool.PermissionRequest{
+			ToolName:   "workspace_exec",
+			ToolCallID: "canceled-check",
+			Arguments:  []byte(`{"command":"ls","timeout":10}`),
+		},
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	_, err = wrapped.Call(
+		ctx,
+		[]byte(`{"command":"ls","timeout":10}`),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, inner.permissionCalls)
+	require.False(t, inner.called)
+}
+
+func TestWrapTool_CloseRemovesCallbackFinalizer(t *testing.T) {
+	guard, _ := newWrapperTestGuard(t)
+	wrapped, err := WrapTool(&wrapperTestTool{}, guard)
+	require.NoError(t, err)
+	overlay := &tool.Declaration{
+		Name:        "overlay",
+		InputSchema: &tool.Schema{Type: "object"},
+	}
+	require.NoError(
+		t,
+		tool.PropagateAfterToolResultFinalizer(
+			wrapped.Declaration(),
+			overlay,
+		),
+	)
+	require.NoError(t, guard.Close())
+	require.ErrorContains(
+		t,
+		tool.PropagateAfterToolResultFinalizer(
+			wrapped.Declaration(),
+			&tool.Declaration{Name: "after-close"},
+		),
+		"no after-tool result finalizer",
+	)
+}
+
+func TestWrapTool_ScansSingleCodeField(t *testing.T) {
+	policy := testPolicy(t)
+	policy.Audit.Path = ""
+	policy.Audit.Required = false
+	guard, err := NewGuard(
+		WithPolicy(policy),
+		WithToolProfile(ToolProfile{
+			Name:            "custom_code",
+			Backend:         BackendMCP,
+			CodeField:       "code",
+			DefaultLanguage: "python",
+		}),
+	)
+	require.NoError(t, err)
+	defer guard.Close()
+
+	safeInner := &codeOnlyWrapperTestTool{
+		wrapperTestTool: &wrapperTestTool{
+			name:   "custom_code",
+			result: "ok",
+		},
+	}
+	safeTool, err := WrapTool(safeInner, guard)
+	require.NoError(t, err)
+	_, err = safeTool.Call(
+		context.Background(),
+		[]byte(`{"code":"x = 1"}`),
+	)
+	require.NoError(t, err)
+	require.True(t, safeInner.called)
+
+	dangerousInner := &codeOnlyWrapperTestTool{
+		wrapperTestTool: &wrapperTestTool{
+			name:   "custom_code",
+			result: "should not execute",
+		},
+	}
+	dangerousTool, err := WrapTool(dangerousInner, guard)
+	require.NoError(t, err)
+	result, err := dangerousTool.Call(
+		context.Background(),
+		[]byte(`{"code":"import os; os.system('rm -rf /')"}`),
+	)
+	require.NoError(t, err)
+	require.False(t, dangerousInner.called)
+	require.Equal(
+		t,
+		tool.PermissionResultStatusDenied,
+		result.(tool.PermissionResult).Status,
+	)
+}
+
 func TestWrapTool_RejectsInvalidInputs(t *testing.T) {
 	guard, _ := newWrapperTestGuard(t)
 	_, err := WrapTool(nil, guard)
 	require.ErrorContains(t, err, "tool is nil")
 	_, err = WrapTool(&wrapperTestTool{}, nil)
 	require.ErrorContains(t, err, "safety guard is nil")
+	_, err = WrapTool(
+		internaltool.NewUnprefixedNamedTool(&wrapperTestTool{}),
+		guard,
+	)
+	require.NoError(t, err)
+	_, err = WrapTool(
+		&streamableWrapperTestTool{
+			wrapperTestTool: &wrapperTestTool{stream: true},
+		},
+		guard,
+	)
+	require.ErrorContains(t, err, "streamable tool")
 }

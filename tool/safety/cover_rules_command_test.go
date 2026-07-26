@@ -957,6 +957,14 @@ func TestCoverrules_RuleHost_SessionTracking(t *testing.T) {
 	ids = ruleIDSet(ruleHost(kill, a, p, sess))
 	require.Contains(t, ids, "host.residual_session")
 
+	write := ScanInput{
+		ToolName:     "workspace_write_stdin",
+		SessionID:    "s1",
+		SessionInput: "echo hello",
+	}
+	ids = ruleIDSet(ruleSessionInputBoundary(write, sess))
+	require.Contains(t, ids, "host.finalized_session_input")
+
 	// kill_session on a live session is fine.
 	sess.register("s2")
 	kill.SessionID = "s2"

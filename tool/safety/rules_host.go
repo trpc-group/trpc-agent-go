@@ -22,6 +22,7 @@ import (
 //   - host.privilege           sudo/su/doas/runuser invocation.
 //   - host.pty_long_session    PTY session without a bounded timeout.
 //   - host.background_session  background host process without cleanup plan.
+//   - host.finalized_session_input  write to an already-finalized session.
 //   - host.residual_session    repeated kill of a finalized session.
 //   - capability.missing_isolation  profile does not declare required
 //     isolation/environment/network boundary.
@@ -105,7 +106,7 @@ func ruleSessionInputBoundary(
 	}
 	if sess.isKilled(in.SessionID) {
 		return []Finding{{
-			RuleID:         "host.residual_session",
+			RuleID:         "host.finalized_session_input",
 			RiskLevel:      RiskMedium,
 			Decision:       DecisionAsk,
 			Evidence:       "write_stdin to an already-finalized session",

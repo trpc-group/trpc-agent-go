@@ -169,15 +169,16 @@ type Guard struct {
 	// and released during wrapper completion.
 	concurrency *concurrencyLimiter
 
-	mu          sync.Mutex
-	cond        *sync.Cond
-	inFlight    int
-	closing     bool
-	closed      bool
-	closeErr    error
-	scanEvents  map[string]scanEvent // keyed by tool call id
-	releases    map[string]func()    // keyed by tool call id
-	activeCalls map[string]struct{}  // model tool call ids currently in flight
+	mu                        sync.Mutex
+	cond                      *sync.Cond
+	inFlight                  int
+	closing                   bool
+	closed                    bool
+	closeErr                  error
+	scanEvents                map[string]scanEvent // keyed by tool call id
+	releases                  map[string]func()    // keyed by tool call id
+	activeCalls               map[string]struct{}  // model tool call ids currently in flight
+	callbackFinalizerCleanups []func()
 }
 
 var _ tool.PermissionPolicy = (*Guard)(nil)
@@ -284,6 +285,22 @@ func (g *Guard) beginWrappedCall() error {
 	return nil
 }
 
+func (g *Guard) addCallbackFinalizerCleanup(cleanup func()) error {
+	if cleanup == nil {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.closing || g.closed {
+		return errors.New("safety guard is closed")
+	}
+	g.callbackFinalizerCleanups = append(
+		g.callbackFinalizerCleanups,
+		cleanup,
+	)
+	return nil
+}
+
 func (g *Guard) endWrappedCall() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -334,8 +351,14 @@ func (g *Guard) checkToolCall(
 	if req == nil {
 		return tool.DenyPermission("permission request is nil"), nil
 	}
+	if err := ctx.Err(); err != nil {
+		return tool.PermissionDecision{}, err
+	}
 	in, decodeErr := g.scanInputForRequest(req)
 	if decodeErr != nil {
+		if err := ctx.Err(); err != nil {
+			return tool.PermissionDecision{}, err
+		}
 		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
 	}
 
@@ -344,15 +367,25 @@ func (g *Guard) checkToolCall(
 		return tool.PermissionDecision{}, err
 	}
 	report := g.scanPermission(ctx, req, in)
+	if err := ctx.Err(); err != nil {
+		if sessionRelease != nil {
+			sessionRelease()
+		}
+		return tool.PermissionDecision{}, err
+	}
 
 	// Concurrency gate first, preflight audit second, so the persisted
 	// record carries the final decision. A denied call never executes, so
 	// a slot acquired by the gate is released here instead of in the
 	// completion handler.
-	release := combineReleases(
-		sessionRelease,
-		g.gateConcurrency(ctx, req, &report),
-	)
+	concurrencyRelease, err := g.gateConcurrency(ctx, req, &report)
+	if err != nil {
+		if sessionRelease != nil {
+			sessionRelease()
+		}
+		return tool.PermissionDecision{}, err
+	}
+	release := combineReleases(sessionRelease, concurrencyRelease)
 	release, reserved := g.reserveAllowedCall(req, &report, release)
 	transferred := false
 	defer func() {
@@ -407,6 +440,9 @@ func (g *Guard) CheckToolPermission(
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
 	if req != nil && g.ownsWrappedTool(req.Tool) {
+		if err := ctx.Err(); err != nil {
+			return tool.PermissionDecision{}, err
+		}
 		return tool.AllowPermission(), nil
 	}
 	return g.previewToolCallWithAudit(ctx, req, true)
@@ -440,6 +476,9 @@ func (g *Guard) previewToolCallWithAudit(
 	if req == nil {
 		return tool.DenyPermission("permission request is nil"), nil
 	}
+	if err := ctx.Err(); err != nil {
+		return tool.PermissionDecision{}, err
+	}
 	if err := g.beginWrappedCall(); err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
@@ -447,9 +486,15 @@ func (g *Guard) previewToolCallWithAudit(
 
 	in, decodeErr := g.scanInputForRequest(req)
 	if decodeErr != nil {
+		if err := ctx.Err(); err != nil {
+			return tool.PermissionDecision{}, err
+		}
 		return g.permissionForDecodeFailure(ctx, req, decodeErr), nil
 	}
 	report := g.scanPermission(ctx, req, in)
+	if err := ctx.Err(); err != nil {
+		return tool.PermissionDecision{}, err
+	}
 	if report.Decision == DecisionAllow && !auditAllowed {
 		return tool.AllowPermission(), nil
 	}
@@ -467,14 +512,7 @@ func (g *Guard) scanInputForRequest(
 	if err != nil {
 		return ScanInput{}, err
 	}
-	in.Metadata = ToolMetadata{
-		ReadOnly:        req.Metadata.ReadOnly,
-		Destructive:     req.Metadata.Destructive,
-		ConcurrencySafe: req.Metadata.ConcurrencySafe,
-		SearchOrRead:    req.Metadata.SearchOrRead,
-		OpenWorld:       req.Metadata.OpenWorld,
-		MaxResultSize:   req.Metadata.MaxResultSize,
-	}
+	in.Metadata = req.Metadata
 	if in.OutputSizeHint == 0 && req.Metadata.MaxResultSize > 0 {
 		in.OutputSizeHint = int64(req.Metadata.MaxResultSize)
 	}
@@ -643,9 +681,9 @@ func (g *Guard) gateConcurrency(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 	report *ScanReport,
-) (release func()) {
+) (func(), error) {
 	if report.Decision != DecisionAllow {
-		return nil
+		return nil, nil
 	}
 	if req.ToolCallID == "" && g.concurrency.enabled() {
 		report.Decision = DecisionDeny
@@ -659,10 +697,14 @@ func (g *Guard) gateConcurrency(
 			Recommendation: "Generate a unique tool call id before executing the tool",
 		})
 		sortFindings(report.Findings)
-		return nil
+		return nil, nil
 	}
 	release, err := g.concurrency.acquire(ctx, req.ToolName)
 	if err != nil {
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		report.Decision = DecisionDeny
 		report.Intercepted = true
 		report.RiskLevel = RiskHigh
@@ -674,9 +716,9 @@ func (g *Guard) gateConcurrency(
 			Recommendation: "Reduce concurrent tool calls or raise the concurrency policy cap",
 		})
 		sortFindings(report.Findings)
-		return nil
+		return nil, nil
 	}
-	return release
+	return release, nil
 }
 
 // auditPreflightOrDeny appends the preflight audit event. When the
@@ -1253,12 +1295,20 @@ func (g *Guard) Close() error {
 	g.scanEvents = nil
 	g.releases = nil
 	g.activeCalls = nil
+	callbackFinalizerCleanups := append(
+		[]func(){},
+		g.callbackFinalizerCleanups...,
+	)
+	g.callbackFinalizerCleanups = nil
 	audit := g.audit
 	closeAudit := g.closeAudit
 	g.audit = nil
 	g.mu.Unlock()
 	for _, release := range releases {
 		release()
+	}
+	for _, cleanup := range callbackFinalizerCleanups {
+		cleanup()
 	}
 	if g.sessions != nil {
 		g.sessions.reset()

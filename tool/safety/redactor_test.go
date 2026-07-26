@@ -18,6 +18,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type duplicateKeyResult struct{}
+
+func (duplicateKeyResult) MarshalJSON() ([]byte, error) {
+	return []byte(`{"password":"hunter2","password":""}`), nil
+}
+
 func TestRedactString_JWT(t *testing.T) {
 	in := "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
 	out, changed := redactString(in)
@@ -144,6 +150,16 @@ func TestRedactValue_TypedResultNoSecretUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, changed)
 	require.Equal(t, in, out)
+}
+
+func TestRedactValue_TypedResultDuplicateKeyFailsClosed(t *testing.T) {
+	out, changed, err := redactValue(duplicateKeyResult{})
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "redacted", out.(map[string]any)["status"])
+	raw, err := json.Marshal(out)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "hunter2")
 }
 
 func TestRedactValue_StructuredJSONSecrets(t *testing.T) {
