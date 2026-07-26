@@ -59,6 +59,7 @@ type CodeExecutor struct {
 	autoInputs  bool
 	lifecycleMu sync.Mutex
 	closeMu     sync.Mutex
+	closing     bool
 	closed      bool
 }
 
@@ -524,6 +525,9 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 func (c *CodeExecutor) executionContainerID() (string, error) {
 	c.lifecycleMu.Lock()
 	defer c.lifecycleMu.Unlock()
+	if c.closing || c.closed {
+		return "", fmt.Errorf("container executor is closing or closed")
+	}
 	id := c.containerID
 	if id == "" && c.container != nil {
 		id = c.container.ID
@@ -532,6 +536,22 @@ func (c *CodeExecutor) executionContainerID() (string, error) {
 		return "", fmt.Errorf("container not initialized")
 	}
 	return id, nil
+}
+
+func (c *CodeExecutor) executionContainer() (*client.Client, string, error) {
+	c.lifecycleMu.Lock()
+	defer c.lifecycleMu.Unlock()
+	if c.closing || c.closed {
+		return nil, "", fmt.Errorf("container executor is closing or closed")
+	}
+	id := c.containerID
+	if id == "" && c.container != nil {
+		id = c.container.ID
+	}
+	if c.client == nil || id == "" {
+		return nil, "", fmt.Errorf("container not initialized")
+	}
+	return c.client, id, nil
 }
 
 // initContainer initializes the Docker container
@@ -674,9 +694,6 @@ func (c *CodeExecutor) cleanupWithContext(ctx context.Context) error {
 			if c.containerID == id {
 				c.containerID = ""
 			}
-			if c.container != nil && c.container.ID == id {
-				c.container = nil
-			}
 		}
 		c.lifecycleMu.Unlock()
 		log.DebugfContext(ctx, "Container %s stopped and removed", id)
@@ -703,17 +720,19 @@ func (c *CodeExecutor) CloseWithContext(ctx context.Context) error {
 		c.lifecycleMu.Unlock()
 		return nil
 	}
+	c.closing = true
 	c.lifecycleMu.Unlock()
 	cleanupErr := c.cleanupWithContext(ctx)
 	c.lifecycleMu.Lock()
-	cleanupComplete := c.containerID == "" && c.container == nil
+	cleanupComplete := c.containerID == ""
+	dockerClient := c.client
 	c.lifecycleMu.Unlock()
 	if cleanupErr != nil && !cleanupComplete {
 		return cleanupErr
 	}
 	var clientErr error
-	if c.client != nil {
-		clientErr = c.client.Close()
+	if dockerClient != nil {
+		clientErr = dockerClient.Close()
 	}
 	if clientErr == nil {
 		c.lifecycleMu.Lock()

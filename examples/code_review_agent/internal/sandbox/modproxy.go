@@ -59,8 +59,8 @@ type moduleVersion struct {
 	path, version, sum, modSum string
 }
 
-func buildModuleProxy(ctx context.Context, repoPath, moduleCache string) (result moduleProxy, resultErr error) {
-	versions, err := readModuleVersions(repoPath)
+func buildModuleProxy(ctx context.Context, repoPath, moduleCache string, moduleRoots []string) (result moduleProxy, resultErr error) {
+	versions, err := readModuleVersions(repoPath, moduleRoots)
 	if err != nil {
 		return result, err
 	}
@@ -113,65 +113,13 @@ func buildModuleProxy(ctx context.Context, repoPath, moduleCache string) (result
 	return result, nil
 }
 
-func readModuleVersions(repoPath string) ([]moduleVersion, error) {
-	sumPath := filepath.Join(repoPath, "go.sum")
-	info, err := os.Lstat(sumPath)
-	if os.IsNotExist(err) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, dependencyError("inspect go.sum", err)
-	}
-	if !info.Mode().IsRegular() || info.Size() > maxGoSumBytes {
-		return nil, dependencyError("inspect go.sum", errors.New("go.sum is not a bounded regular file"))
-	}
-	file, err := os.Open(sumPath)
-	if err != nil {
-		return nil, dependencyError("open go.sum", err)
-	}
-	defer file.Close()
-	opened, err := file.Stat()
-	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
-		return nil, dependencyError("verify go.sum", errors.Join(err, errors.New("go.sum changed while opening")))
-	}
+func readModuleVersions(repoPath string, moduleRoots []string) ([]moduleVersion, error) {
 	selected := make(map[string]moduleVersion)
-	scanner := bufio.NewScanner(io.LimitReader(file, maxGoSumBytes+1))
-	scanner.Buffer(make([]byte, 4096), maxGoSumBytes)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
+	for _, moduleRoot := range moduleRoots {
+		sumPath := filepath.Join(repoPath, filepath.FromSlash(moduleRoot), "go.sum")
+		if err := readModuleSum(sumPath, selected); err != nil {
+			return nil, err
 		}
-		fields := strings.Fields(line)
-		if len(fields) != 3 {
-			return nil, dependencyError("parse go.sum", fmt.Errorf("malformed line %q", line))
-		}
-		version := strings.TrimSuffix(fields[1], "/go.mod")
-		isMod := version != fields[1]
-		if !strings.HasPrefix(fields[2], "h1:") || module.Check(fields[0], version) != nil {
-			return nil, dependencyError("parse go.sum", fmt.Errorf("invalid module entry %q", scanner.Text()))
-		}
-		key := fields[0] + "\x00" + version
-		entry := selected[key]
-		entry.path, entry.version = fields[0], version
-		if isMod {
-			if entry.modSum != "" && entry.modSum != fields[2] {
-				return nil, dependencyError("parse go.sum", errors.New("conflicting go.mod sums"))
-			}
-			entry.modSum = fields[2]
-		} else {
-			if entry.sum != "" && entry.sum != fields[2] {
-				return nil, dependencyError("parse go.sum", errors.New("conflicting module sums"))
-			}
-			entry.sum = fields[2]
-		}
-		selected[key] = entry
-		if len(selected) > maxProxyModules {
-			return nil, dependencyError("parse go.sum", errors.New("module count exceeds limit"))
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, dependencyError("read go.sum", err)
 	}
 	versions := make([]moduleVersion, 0, len(selected))
 	for _, version := range selected {
@@ -182,6 +130,76 @@ func readModuleVersions(repoPath string) ([]moduleVersion, error) {
 			versions[i].path == versions[j].path && versions[i].version < versions[j].version
 	})
 	return versions, nil
+}
+
+func readModuleSum(sumPath string, selected map[string]moduleVersion) (resultErr error) {
+	info, err := os.Lstat(sumPath)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return dependencyError("inspect go.sum", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxGoSumBytes {
+		return dependencyError("inspect go.sum", errors.New("go.sum is not a bounded regular file"))
+	}
+	file, err := os.Open(sumPath)
+	if err != nil {
+		return dependencyError("open go.sum", err)
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, file.Close())
+	}()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
+		return dependencyError("verify go.sum", errors.Join(err, errors.New("go.sum changed while opening")))
+	}
+	scanner := bufio.NewScanner(io.LimitReader(file, maxGoSumBytes+1))
+	scanner.Buffer(make([]byte, 4096), maxGoSumBytes)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		if err := mergeModuleSumLine(selected, line); err != nil {
+			return dependencyError("parse go.sum", err)
+		}
+		if len(selected) > maxProxyModules {
+			return dependencyError("parse go.sum", errors.New("module count exceeds limit"))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return dependencyError("read go.sum", err)
+	}
+	return nil
+}
+
+func mergeModuleSumLine(selected map[string]moduleVersion, line string) error {
+	fields := strings.Fields(line)
+	if len(fields) != 3 {
+		return fmt.Errorf("malformed line %q", line)
+	}
+	version := strings.TrimSuffix(fields[1], "/go.mod")
+	isMod := version != fields[1]
+	if !strings.HasPrefix(fields[2], "h1:") || module.Check(fields[0], version) != nil {
+		return fmt.Errorf("invalid module entry %q", line)
+	}
+	key := fields[0] + "\x00" + version
+	entry := selected[key]
+	entry.path, entry.version = fields[0], version
+	if isMod {
+		if entry.modSum != "" && entry.modSum != fields[2] {
+			return errors.New("conflicting go.mod sums")
+		}
+		entry.modSum = fields[2]
+	} else {
+		if entry.sum != "" && entry.sum != fields[2] {
+			return errors.New("conflicting module sums")
+		}
+		entry.sum = fields[2]
+	}
+	selected[key] = entry
+	return nil
 }
 
 func resolveModuleCache(ctx context.Context) (string, error) {

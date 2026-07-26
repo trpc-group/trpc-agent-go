@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -31,6 +32,7 @@ const (
 	targetUID            = 65532
 	runnerErrorExitCode  = 2
 	targetDirectoryCount = 4
+	maxModuleRoots       = 64
 	privateDirectoryMode = 0o700
 	privateFileMode      = 0o600
 	resultOverheadBytes  = 16 << 10
@@ -45,10 +47,19 @@ var resultPattern = regexp.MustCompile(`^result-[a-f0-9]{16}\.json$`)
 
 type config struct {
 	checkID, resultName, cwd string
+	moduleRoots              []string
 	timeout                  time.Duration
 	outputLimit              int64
 	configureProcess         func(*exec.Cmd)
 	prepare                  func() error
+}
+
+type moduleRootFlag []string
+
+func (f *moduleRootFlag) String() string { return strings.Join(*f, ",") }
+func (f *moduleRootFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
 }
 
 type checkResult struct {
@@ -102,6 +113,7 @@ func parseConfig(args []string) (config, error) {
 	set.StringVar(&value.resultName, "result", "", "opaque result basename")
 	set.DurationVar(&value.timeout, "timeout", value.timeout, "inner timeout")
 	set.Int64Var(&value.outputLimit, "output-limit", value.outputLimit, "bytes retained per stream")
+	set.Var((*moduleRootFlag)(&value.moduleRoots), "module-root", "go module root relative to staged repository")
 	if err := set.Parse(args); err != nil {
 		return config{}, err
 	}
@@ -120,7 +132,31 @@ func parseConfig(args []string) (config, error) {
 	if value.outputLimit <= 0 || value.outputLimit > maxOutputLimit {
 		return config{}, errors.New("output limit outside allowed range")
 	}
+	if len(value.moduleRoots) == 0 {
+		value.moduleRoots = []string{"."}
+	}
+	if err := validateModuleRoots(value.moduleRoots); err != nil {
+		return config{}, err
+	}
 	return value, nil
+}
+
+func validateModuleRoots(roots []string) error {
+	if len(roots) == 0 || len(roots) > maxModuleRoots {
+		return errors.New("module roots outside allowed bounds")
+	}
+	previous := ""
+	for index, root := range roots {
+		if root == "" || filepath.IsAbs(root) || strings.Contains(root, `\`) ||
+			path.Clean(root) != root || root == ".." || strings.HasPrefix(root, "../") {
+			return fmt.Errorf("invalid module root %q", root)
+		}
+		if index > 0 && root <= previous {
+			return errors.New("module roots must be unique and sorted")
+		}
+		previous = root
+	}
+	return nil
 }
 
 func fixedCommand(checkID string) ([]string, error) {
@@ -149,36 +185,49 @@ func executeWithPreparation(value config, argv []string, prepare func() error) c
 	}
 	timedCtx, cancel := context.WithTimeout(context.Background(), value.timeout)
 	defer cancel()
-	// #nosec G204 -- argv comes only from fixedCommand's closed check ID map.
-	cmd := exec.CommandContext(timedCtx, argv[0], argv[1:]...)
-	cmd.Dir = value.cwd
-	cmd.Env = targetEnvironment()
-	cmd.WaitDelay = terminationGrace
-	if value.configureProcess == nil {
-		configureTargetProcess(cmd, targetUID)
-	} else {
-		value.configureProcess(cmd)
-	}
 	stdout := &boundedWriter{limit: value.outputLimit}
 	stderr := &boundedWriter{limit: value.outputLimit}
-	cmd.Stdout, cmd.Stderr = stdout, stderr
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		return killProcess(cmd.Process)
+	roots := value.moduleRoots
+	if len(roots) == 0 {
+		roots = []string{"."}
 	}
-	waitErr := cmd.Run()
-	timedOut := errors.Is(timedCtx.Err(), context.DeadlineExceeded)
-	result := checkResult{
-		CheckID: value.checkID, ExitCode: exitCode(cmd), TimedOut: timedOut,
-		DurationMS: time.Since(started).Milliseconds(), Stdout: stdout.String(), Stderr: stderr.String(),
+	for _, moduleRoot := range roots {
+		// #nosec G204 -- argv comes only from fixedCommand's closed check ID map.
+		cmd := exec.CommandContext(timedCtx, argv[0], argv[1:]...)
+		cmd.Dir = filepath.Join(value.cwd, filepath.FromSlash(moduleRoot))
+		cmd.Env = targetEnvironment()
+		cmd.WaitDelay = terminationGrace
+		if value.configureProcess == nil {
+			configureTargetProcess(cmd, targetUID)
+		} else {
+			value.configureProcess(cmd)
+		}
+		cmd.Stdout, cmd.Stderr = stdout, stderr
+		cmd.Cancel = func() error {
+			if cmd.Process == nil {
+				return nil
+			}
+			return killProcess(cmd.Process)
+		}
+		waitErr := cmd.Run()
+		timedOut := errors.Is(timedCtx.Err(), context.DeadlineExceeded)
+		result := checkResult{
+			CheckID: value.checkID, ExitCode: exitCode(cmd), TimedOut: timedOut,
+			DurationMS: time.Since(started).Milliseconds(), Stdout: stdout.String(), Stderr: stderr.String(),
+			StdoutTruncated: stdout.truncated, StderrTruncated: stderr.truncated,
+		}
+		if waitErr != nil && (timedOut || !isExitError(waitErr)) {
+			result.Error = waitErr.Error()
+		}
+		if waitErr != nil {
+			return result
+		}
+	}
+	return checkResult{
+		CheckID: value.checkID, ExitCode: 0, DurationMS: time.Since(started).Milliseconds(),
+		Stdout: stdout.String(), Stderr: stderr.String(),
 		StdoutTruncated: stdout.truncated, StderrTruncated: stderr.truncated,
 	}
-	if waitErr != nil && (timedOut || !isExitError(waitErr)) {
-		result.Error = waitErr.Error()
-	}
-	return result
 }
 
 func isExitError(err error) bool { var exitErr *exec.ExitError; return errors.As(err, &exitErr) }
@@ -196,7 +245,7 @@ func failedResult(checkID string, started time.Time, err error) checkResult {
 
 func targetEnvironment() []string {
 	keys := []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "TMPDIR", "GOMAXPROCS",
-		"GOPROXY", "GOSUMDB", "GOENV", "GOTOOLCHAIN", "GOVCS"}
+		"GOPROXY", "GOSUMDB", "GOENV", "GOTOOLCHAIN", "GOVCS", "GOWORK"}
 	env := make([]string, 0, len(keys))
 	for _, key := range keys {
 		if value := os.Getenv(key); value != "" {

@@ -94,7 +94,7 @@ func TestDecisionDigestBindsArtifactAndEnvironment(t *testing.T) {
 
 	reordered := first
 	reordered.Env = make(map[string]string, len(first.Env))
-	keys := []string{"CR_REPO_DIR", "CR_RESULT_DIR", "GOENV", "GOMAXPROCS", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOVCS", "HOME", "PATH", "TMPDIR"}
+	keys := []string{"CR_REPO_DIR", "CR_RESULT_DIR", "GOENV", "GOMAXPROCS", "GOMODCACHE", "GOCACHE", "GOPROXY", "GOSUMDB", "GOTOOLCHAIN", "GOVCS", "GOWORK", "HOME", "PATH", "TMPDIR"}
 	for _, key := range keys {
 		reordered.Env[key] = first.Env[key]
 	}
@@ -195,6 +195,33 @@ func TestAuthorizerAllowsDeclaredLocalFallback(t *testing.T) {
 	}
 }
 
+func TestAuthorizerBindsValidatedModuleRoots(t *testing.T) {
+	rootSpec := validSpec(t)
+	rootRecorder := &memoryRecorder{}
+	if err := (Authorizer{Policy: tool.PermissionPolicyFunc(DefaultPolicy), Recorder: rootRecorder}).
+		Authorize(context.Background(), rootSpec); err != nil {
+		t.Fatalf("Authorize(root) error = %v", err)
+	}
+	nestedSpec := rootSpec
+	nestedSpec.ModuleRoots = []string{"nested"}
+	nestedRecorder := &memoryRecorder{}
+	if err := (Authorizer{Policy: tool.PermissionPolicyFunc(DefaultPolicy), Recorder: nestedRecorder}).
+		Authorize(context.Background(), nestedSpec); err != nil {
+		t.Fatalf("Authorize(nested) error = %v", err)
+	}
+	if rootRecorder.decisions[0].ArgsDigest == nestedRecorder.decisions[0].ArgsDigest {
+		t.Fatal("module roots are absent from ArgsDigest")
+	}
+	for _, roots := range [][]string{nil, {"../escape"}, {"nested", "."}, {"nested", "nested"}} {
+		spec := rootSpec
+		spec.ModuleRoots = roots
+		if err := (Authorizer{Policy: tool.PermissionPolicyFunc(DefaultPolicy), Recorder: &memoryRecorder{}}).
+			Authorize(context.Background(), spec); err == nil {
+			t.Fatalf("Authorize accepted module roots %v", roots)
+		}
+	}
+}
+
 func validSpec(t *testing.T) CheckSpec {
 	t.Helper()
 	root := t.TempDir()
@@ -206,12 +233,12 @@ func validSpec(t *testing.T) CheckSpec {
 	if err := os.WriteFile(runner, []byte("runner"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json", RepositoryDigest: strings.Repeat("1", 64), DependencyDigest: strings.Repeat("0", 64),
+	return CheckSpec{ID: "go-test", Runtime: "container", RunnerPath: runner, SkillRoot: root, Cwd: "repo", Artifact: "result-0123456789abcdef.json", RepositoryDigest: strings.Repeat("1", 64), DependencyDigest: strings.Repeat("0", 64), ModuleRoots: []string{"."},
 		RepoSource: root, Argv: []string{"go", "test", "-mod=readonly", "./..."}, Env: map[string]string{
 			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 			"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp",
 			"GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy", "GOSUMDB": "off",
-			"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
+			"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "GOWORK": "off",
 			"CR_RESULT_DIR": "/tmp/run/ws_cr-0123456789abcdef_0/out", "CR_REPO_DIR": "/tmp/run/ws_cr-0123456789abcdef_0/work",
 		}, Timeout: time.Minute}
 }

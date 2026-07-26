@@ -1688,7 +1688,7 @@ func TestClose_RetriesCleanupAfterRemoveFailure(t *testing.T) {
 	assert.NoError(t, exec.Close())
 	assert.Equal(t, 2, removeCount)
 	assert.Empty(t, exec.containerID)
-	assert.Nil(t, exec.container)
+	assert.Equal(t, "retry-id", exec.container.ID)
 	assert.True(t, exec.closed)
 }
 
@@ -1740,12 +1740,67 @@ func TestClose_TreatsNotFoundAsAlreadyCleaned(t *testing.T) {
 	assert.Equal(t, 1, stopCount)
 	assert.Equal(t, 1, removeCount)
 	assert.Empty(t, exec.containerID)
-	assert.Nil(t, exec.container)
+	assert.Equal(t, "gone-id", exec.container.ID)
 	assert.True(t, exec.closed)
 	// A second close is idempotent and does not issue more Docker requests.
 	assert.NoError(t, exec.Close())
 	assert.Equal(t, 1, stopCount)
 	assert.Equal(t, 1, removeCount)
+}
+
+func TestCloseWithContextRejectsConcurrentWorkspaceOperations(t *testing.T) {
+	stopStarted := make(chan struct{})
+	releaseStop := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseStop) })
+	defer release()
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/concurrent-id/stop"):
+			close(stopStarted)
+			<-releaseStop
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/concurrent-id"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{
+		client:      cli,
+		containerID: "concurrent-id",
+		container:   &tcontainer.Summary{ID: "concurrent-id"},
+	}
+	engine := exec.Engine()
+	require.NotNil(t, engine)
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- exec.CloseWithContext(context.Background())
+	}()
+	<-stopStarted
+
+	_, err := engine.Manager().CreateWorkspace(
+		context.Background(), "concurrent",
+		codeexecutor.WorkspacePolicy{},
+	)
+	require.ErrorContains(t, err, "closing or closed")
+
+	ws := codeexecutor.Workspace{ID: "concurrent", Path: "/tmp/run/ws_concurrent"}
+	err = engine.FS().PutFiles(context.Background(), ws, []codeexecutor.PutFile{{
+		Path: "input.txt", Content: []byte("data"), Mode: 0o600,
+	}})
+	require.ErrorContains(t, err, "closing or closed")
+
+	_, err = engine.Runner().RunProgram(
+		context.Background(), ws,
+		codeexecutor.RunProgramSpec{Cmd: "go", Args: []string{"version"}},
+	)
+	require.ErrorContains(t, err, "closing or closed")
+
+	release()
+	require.NoError(t, <-closeDone)
 }
 
 func TestInitContainerWithoutClient(t *testing.T) {

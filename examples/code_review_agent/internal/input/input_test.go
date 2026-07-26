@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -257,6 +258,16 @@ func TestPureHelpers(t *testing.T) {
 	got := ResolvePackages("repo", files)
 	if len(got) != 2 || got[0] != "a" || got[1] != "z" {
 		t.Fatalf("ResolvePackages() = %v", got)
+	}
+	hints := ResolveModuleHints([]diffparse.ChangedFile{
+		{NewPath: "nested/go.mod"},
+		{NewPath: "other/go.sum"},
+		{NewPath: "pkg/value.go"},
+		{OldPath: "oldmod/value.go", NewPath: "newmod/value.go"},
+		{NewPath: "README.md"},
+	})
+	if !slices.Equal(hints, []string{"nested", "newmod", "oldmod", "other", "pkg"}) {
+		t.Fatalf("ResolveModuleHints() = %v", hints)
 	}
 	var buffer boundedBuffer
 	buffer.limit = 3

@@ -11,9 +11,12 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -152,6 +155,90 @@ func TestTaskIDRoundTripsWithoutRedaction(t *testing.T) {
 	review, err := database.GetReview(ctx, taskID)
 	if err != nil || review.Task.ID != taskID || len(review.Runs) != 1 {
 		t.Fatalf("GetReview() = %#v, %v", review, err)
+	}
+}
+
+func TestReviewLoadersUseOneSQLiteSnapshot(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "review.db")
+	reader, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(reader) error = %v", err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	writer, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(writer) error = %v", err)
+	}
+	t.Cleanup(func() { _ = writer.Close() })
+
+	const taskID = "task-snapshot"
+	createTestTask(t, reader, taskID, testTime())
+	request := completeRequest(taskID, "run-snapshot", testTime().Add(time.Second))
+	if err := reader.SaveRun(ctx, taskID, SandboxRun{ID: "run-snapshot", Status: "passed"}); err != nil {
+		t.Fatalf("SaveRun() error = %v", err)
+	}
+	firstRead := make(chan struct{})
+	prepared := make(chan error, 1)
+	allowCommit := make(chan struct{})
+	releaseCommit := sync.OnceFunc(func() { close(allowCommit) })
+	defer releaseCommit()
+	finalized := make(chan error, 1)
+	usedTransaction := false
+	reader.loadSnapshot = func(ctx context.Context, queryer reviewQueryer, id string) (Review, error) {
+		_, usedTransaction = queryer.(*sql.Tx)
+		task, loadErr := loadTask(ctx, queryer, id)
+		close(firstRead)
+		if loadErr != nil || task.Status != StatusRunning {
+			return Review{}, errors.Join(loadErr, errors.New("first snapshot read was not running"))
+		}
+		if prepareErr := <-prepared; prepareErr != nil {
+			return Review{}, prepareErr
+		}
+		return loadReview(ctx, queryer, id)
+	}
+	go func() {
+		<-firstRead
+		tx, txErr := writer.db.BeginTx(ctx, nil)
+		if txErr == nil {
+			txErr = insertFindings(ctx, tx, request.TaskID, request.Findings)
+		}
+		if txErr == nil {
+			txErr = insertMetrics(ctx, tx, request.TaskID, request.Metrics)
+		}
+		if txErr == nil {
+			txErr = insertArtifacts(ctx, tx, request.TaskID, request.Artifacts)
+		}
+		if txErr == nil {
+			txErr = insertReport(ctx, tx, request.TaskID, request.Report)
+		}
+		if txErr == nil {
+			txErr = finishTask(ctx, tx, request)
+		}
+		prepared <- txErr
+		if txErr != nil {
+			if tx != nil {
+				_ = tx.Rollback()
+			}
+			finalized <- txErr
+			return
+		}
+		<-allowCommit
+		finalized <- tx.Commit()
+	}()
+
+	before, err := reader.GetReview(ctx, taskID)
+	if err != nil || !usedTransaction || before.Task.Status != StatusRunning || len(before.Findings) != 0 {
+		t.Fatalf("pre-commit review = %#v, %v", before, err)
+	}
+	releaseCommit()
+	if err := <-finalized; err != nil {
+		t.Fatalf("commit finalization: %v", err)
+	}
+	reader.loadSnapshot = nil
+	after, err := reader.GetReview(ctx, taskID)
+	if err != nil || after.Task.Status != StatusCompleted || len(after.Findings) != 1 {
+		t.Fatalf("post-commit review = %#v, %v", after, err)
 	}
 }
 

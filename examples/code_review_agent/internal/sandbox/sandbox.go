@@ -51,7 +51,6 @@ const (
 	resultFilePrefix        = "result-"
 	workspaceIDPrefix       = "cr-"
 	workspaceRoot           = "/tmp/run"
-	stagingSourcePath       = "/opt/trpc-agent/skills"
 	runnerRelativePath      = "scripts/checkrunner/main.go"
 )
 
@@ -84,6 +83,7 @@ type Container struct {
 	Authorizer                           governance.Authorizer
 	BuildContext, SkillRoot, ModuleCache string
 	RepositoryDigest                     string
+	Packages                             []string
 	factory                              func(string) (containerExecutor, error)
 }
 type containerExecutor interface {
@@ -103,7 +103,12 @@ type checkRequest struct {
 // Check authorizes, stages, runs, collects, and destroys one container.
 func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout time.Duration) (result Run, resultErr error) {
 	result = failedRun(checkID)
-	proxy, err := buildModuleProxy(ctx, repoPath, c.ModuleCache)
+	moduleRoots, err := resolveModuleRoots(repoPath, c.Packages)
+	if err != nil {
+		result.Error = redact.String(err.Error())
+		return result, err
+	}
+	proxy, err := buildModuleProxy(ctx, repoPath, c.ModuleCache, moduleRoots)
 	if err != nil {
 		result.Error = redact.String(err.Error())
 		return result, err
@@ -129,7 +134,7 @@ func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout 
 			return result, err
 		}
 	}
-	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, DependencyDigest: proxy.Digest, DependencyModules: proxy.Modules, DependencyBytes: proxy.Bytes, DependencyEntries: proxy.Entries, DependencyExpandedBytes: proxy.ExpandedBytes}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "container", RunnerPath: runnerSource, SkillRoot: c.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), ModuleRoots: moduleRoots, Timeout: timeout, RepositoryDigest: repositoryDigest, DependencyDigest: proxy.Digest, DependencyModules: proxy.Modules, DependencyBytes: proxy.Bytes, DependencyEntries: proxy.Entries, DependencyExpandedBytes: proxy.ExpandedBytes}
 	executor, err := c.createExecutor(ctx, repoPath, workspaceID, proxy.Path)
 	if err != nil {
 		return result, err
@@ -170,7 +175,7 @@ func executeContainer(ctx context.Context, executor containerExecutor, request c
 	if err := authorizer.Authorize(ctx, request.spec); err != nil {
 		return run, err
 	}
-	if err := engine.FS().StageDirectory(ctx, workspace, request.repoPath, codeexecutor.DirWork, codeexecutor.StageOptions{ReadOnly: true, AllowMount: true}); err != nil {
+	if err := engine.FS().StageDirectory(ctx, workspace, request.repoPath, codeexecutor.DirWork, codeexecutor.StageOptions{ReadOnly: true, AllowMount: false}); err != nil {
 		return run, fmt.Errorf("stage reviewed repository: %w", err)
 	}
 	return runWorkspace(ctx, engine, workspace, request)
@@ -179,7 +184,11 @@ func runWorkspace(ctx context.Context, engine codeexecutor.Engine, workspace cod
 	run := failedRun(request.checkID)
 	outerTimeout := request.timeout + outerGrace
 	callStarted := time.Now()
-	outer, runErr := engine.Runner().RunProgram(ctx, workspace, codeexecutor.RunProgramSpec{Cmd: "/usr/local/bin/cr-checkrunner", Args: []string{"--check", request.checkID, "--result", request.artifact, "--timeout", request.timeout.String(), "--output-limit", fmt.Sprint(runnerOutputBytes)}, Env: request.spec.Env, CleanEnv: true, Cwd: ".", Timeout: outerTimeout})
+	runnerArgs := []string{"--check", request.checkID, "--result", request.artifact, "--timeout", request.timeout.String(), "--output-limit", fmt.Sprint(runnerOutputBytes)}
+	for _, moduleRoot := range request.spec.ModuleRoots {
+		runnerArgs = append(runnerArgs, "--module-root", moduleRoot)
+	}
+	outer, runErr := engine.Runner().RunProgram(ctx, workspace, codeexecutor.RunProgramSpec{Cmd: "/usr/local/bin/cr-checkrunner", Args: runnerArgs, Env: request.spec.Env, CleanEnv: true, Cwd: ".", Timeout: outerTimeout})
 	run.Duration = time.Since(callStarted)
 	if runErr != nil {
 		run.Error = redact.String(runErr.Error())
@@ -274,17 +283,17 @@ func validateRunnerResult(result runnerResult, request checkRequest) error {
 func failedRun(checkID string) Run {
 	return Run{CheckID: checkID, Runtime: "container", Status: "failed", ExitCode: -1}
 }
-func (c Container) newExecutor(ctx context.Context, repoPath, containerName, proxyPath string) (*containerexec.CodeExecutor, error) {
+func (c Container) newExecutor(ctx context.Context, containerName, proxyPath string) (*containerexec.CodeExecutor, error) {
 	pids := int64(containerPIDs)
-	repoPath, err := filepath.Abs(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("resolve staging source: %w", err)
-	}
-	executor, err := containerexec.NewWithContext(ctx, containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: []string{repoPath + ":" + stagingSourcePath + ":ro", proxyPath + ":" + moduleProxyTarget + ":ro"}, CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
+	executor, err := containerexec.NewWithContext(ctx, containerexec.WithDockerFilePath(c.BuildContext), containerexec.WithContainerName(containerName), containerexec.WithContainerConfig(tcontainer.Config{Image: ImageTag, Cmd: []string{"tail", "-f", "/dev/null"}, WorkingDir: "/", User: "0:0", Tty: false, OpenStdin: false}), containerexec.WithHostConfig(tcontainer.HostConfig{AutoRemove: false, NetworkMode: "none", Privileged: false, ReadonlyRootfs: true, Binds: containerBinds(proxyPath), CapDrop: strslice.StrSlice{"ALL"}, CapAdd: strslice.StrSlice{"SETUID", "SETGID", "KILL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: tcontainer.Resources{Memory: containerMemoryBytes, MemorySwap: containerMemoryBytes, NanoCPUs: containerNanoCPUs, PidsLimit: &pids}, Tmpfs: map[string]string{"/tmp": fmt.Sprintf("rw,exec,nosuid,nodev,size=%dm,mode=1777", tmpfsSizeMegabytes)}}), containerexec.WithAutoInputs(false))
 	if err != nil {
 		return nil, err
 	}
 	return executor, nil
+}
+
+func containerBinds(proxyPath string) []string {
+	return []string{proxyPath + ":" + moduleProxyTarget + ":ro"}
 }
 
 func closeContainerExecutor(ctx context.Context, executor containerExecutor) error {
@@ -297,7 +306,7 @@ func (c Container) createExecutor(ctx context.Context, repoPath, containerName, 
 	if c.factory != nil {
 		return c.factory(repoPath)
 	}
-	return c.newExecutor(ctx, repoPath, containerName, proxyPath)
+	return c.newExecutor(ctx, containerName, proxyPath)
 }
 func fixedArgv(checkID string) []string {
 	if checkID == "go-vet" {
@@ -306,7 +315,7 @@ func fixedArgv(checkID string) []string {
 	return []string{"go", "test", "-mod=readonly", "./..."}
 }
 func targetEnv(workspace string) map[string]string {
-	return map[string]string{"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home", "GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "GOPROXY": "file://" + moduleProxyTarget, "GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work"}
+	return map[string]string{"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home", "GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "GOPROXY": "file://" + moduleProxyTarget, "GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "GOWORK": "off", "CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work"}
 }
 func randomToken() (string, error) {
 	data := make([]byte, randomTokenBytes)
@@ -321,6 +330,7 @@ type Fake struct {
 	Authorizer       governance.Authorizer
 	SkillRoot        string
 	RepositoryDigest string
+	Packages         []string
 }
 
 // Check authorizes and binds a deterministic fake result.
@@ -333,6 +343,10 @@ func (f Fake) Check(ctx context.Context, checkID, repoPath string, timeout time.
 		return result, err
 	}
 	artifact := resultFilePrefix + token + ".json"
+	moduleRoots, err := resolveModuleRoots(repoPath, f.Packages)
+	if err != nil {
+		return result, err
+	}
 	repositoryDigest := f.RepositoryDigest
 	if repositoryDigest == "" && repoPath != "" {
 		repositoryDigest, err = reviewinput.DigestRepository(repoPath)
@@ -340,7 +354,7 @@ func (f Fake) Check(ctx context.Context, checkID, repoPath string, timeout time.
 			return result, err
 		}
 	}
-	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0"), DependencyDigest: emptyProxyDigest()}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(f.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: f.SkillRoot, Cwd: "repo", Artifact: artifact, Argv: fixedArgv(checkID), ModuleRoots: moduleRoots, Timeout: timeout, RepositoryDigest: repositoryDigest, Env: targetEnv(workspaceRoot + "/ws_" + workspaceIDPrefix + token + "_0"), DependencyDigest: emptyProxyDigest()}
 	if err := f.Authorizer.Authorize(ctx, spec); err != nil {
 		return result, err
 	}
@@ -366,6 +380,7 @@ type Local struct {
 	SkillRoot        string
 	WorkRoot         string
 	RepositoryDigest string
+	Packages         []string
 }
 
 // Check runs on the host and is only an explicitly approved development fallback.
@@ -380,6 +395,10 @@ func (l Local) Check(ctx context.Context, checkID, repoPath string, timeout time
 	info, err := os.Stat(repoPath)
 	if err != nil || !info.IsDir() {
 		return result, errors.Join(errors.New("local repository is not a directory"), err)
+	}
+	moduleRoots, err := resolveModuleRoots(repoPath, l.Packages)
+	if err != nil {
+		return result, err
 	}
 	workRoot, err := l.createWorkRoot(repoPath)
 	if err != nil {
@@ -401,7 +420,7 @@ func (l Local) Check(ctx context.Context, checkID, repoPath string, timeout time
 		return result, errors.New("local repository differs from authorized snapshot")
 	}
 	repositoryDigest = currentDigest
-	spec := governance.CheckSpec{ID: checkID, Runtime: "local", Network: true, HostWrite: true, RunnerPath: filepath.Join(l.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: l.SkillRoot, Cwd: "repo", Artifact: resultFilePrefix + token + ".json", RepoSource: repoPath, Argv: fixedArgv(checkID), Timeout: timeout, RepositoryDigest: repositoryDigest, Env: localEnvironment(workRoot, repoPath)}
+	spec := governance.CheckSpec{ID: checkID, Runtime: "local", Network: true, HostWrite: true, RunnerPath: filepath.Join(l.SkillRoot, filepath.FromSlash(runnerRelativePath)), SkillRoot: l.SkillRoot, Cwd: "repo", Artifact: resultFilePrefix + token + ".json", RepoSource: repoPath, Argv: fixedArgv(checkID), ModuleRoots: moduleRoots, Timeout: timeout, RepositoryDigest: repositoryDigest, Env: localEnvironment(workRoot, repoPath)}
 	if err := l.Authorizer.Authorize(ctx, spec); err != nil {
 		return result, err
 	}
@@ -431,33 +450,41 @@ func (l Local) createWorkRoot(repoPath string) (string, error) {
 func runLocalCommand(ctx context.Context, spec governance.CheckSpec) (result Run, resultErr error) {
 	result = failedRun(spec.ID)
 	result.Runtime = "local"
+	result.Status = ""
 	timedCtx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
-	// spec.Argv was matched against fixedArgv by governance before execution.
-	//nolint:gosec
-	command := exec.CommandContext(timedCtx, spec.Argv[0], spec.Argv[1:]...)
-	command.Dir = spec.RepoSource
-	command.Env = environmentList(spec.Env)
-	command.WaitDelay = localTerminationWait
 	stdout, stderr := &limitedBuffer{limit: localOutputBytes}, &limitedBuffer{limit: localOutputBytes}
-	command.Stdout, command.Stderr = stdout, stderr
-	err := command.Run()
+	for _, moduleRoot := range spec.ModuleRoots {
+		// spec.Argv and ModuleRoots were validated by governance before execution.
+		//nolint:gosec
+		command := exec.CommandContext(timedCtx, spec.Argv[0], spec.Argv[1:]...)
+		command.Dir = filepath.Join(spec.RepoSource, filepath.FromSlash(moduleRoot))
+		command.Env = environmentList(spec.Env)
+		command.WaitDelay = localTerminationWait
+		command.Stdout, command.Stderr = stdout, stderr
+		err := command.Run()
+		result.ExitCode = processExitCode(command)
+		if errors.Is(timedCtx.Err(), context.DeadlineExceeded) {
+			result.Status, result.TimedOut = "timeout", true
+			result.Error = redact.String(timedCtx.Err().Error())
+			break
+		}
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			result.Status, result.Error = "failed", redact.String(exitErr.Error())
+			break
+		}
+		if err != nil {
+			result.Error = redact.String(err.Error())
+			result.Stdout, result.Stderr = redact.String(stdout.String()), redact.String(stderr.String())
+			result.Truncated = stdout.truncated || stderr.truncated
+			return result, fmt.Errorf("run local check in module %q: %w", moduleRoot, err)
+		}
+	}
 	result.Stdout, result.Stderr = redact.String(stdout.String()), redact.String(stderr.String())
 	result.Truncated = stdout.truncated || stderr.truncated
-	result.ExitCode = processExitCode(command)
-	if errors.Is(timedCtx.Err(), context.DeadlineExceeded) {
-		result.Status, result.TimedOut = "timeout", true
-		result.Error = redact.String(timedCtx.Err().Error())
+	if result.Status != "" {
 		return result, nil
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		result.Status, result.Error = "failed", redact.String(exitErr.Error())
-		return result, nil
-	}
-	if err != nil {
-		result.Error = redact.String(err.Error())
-		return result, fmt.Errorf("run local check: %w", err)
 	}
 	result.Status, result.ExitCode = "completed", 0
 	return result, nil

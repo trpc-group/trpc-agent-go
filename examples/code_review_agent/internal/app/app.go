@@ -150,7 +150,8 @@ func (s *runState) runChecks(ctx context.Context) error {
 	}
 	recorder := &decisionRecorder{store: s.reviewer.Store, taskID: s.taskID, tracker: s.tracker}
 	authorizer := governance.Authorizer{Policy: tool.PermissionPolicyFunc(governance.DefaultPolicy), Recorder: recorder}
-	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, RepositoryDigest: s.summary.RepositoryDigest, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
+	moduleHints := append(append([]string(nil), s.summary.Packages...), s.summary.ModuleHints...)
+	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, RepositoryDigest: s.summary.RepositoryDigest, Packages: moduleHints, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
 	if err != nil {
 		return fmt.Errorf("create sandbox checker: %w", err)
 	}
@@ -224,16 +225,16 @@ func checkTimeout(total time.Duration) time.Duration {
 // DefaultCheckerFactory selects only validated CLI runtime capabilities.
 func DefaultCheckerFactory(authorizer governance.Authorizer, config CheckerConfig) (Checker, error) {
 	if config.DryRun || config.Runtime == "fake" {
-		return sandbox.Fake{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
+		return sandbox.Fake{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages}, nil
 	}
 	if config.Runtime == "container" {
-		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
+		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages}, nil
 	}
 	if config.Runtime == "local" {
 		if !config.AllowLocal {
 			return nil, errors.New("local runtime requires explicit development fallback approval")
 		}
-		return sandbox.Local{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest}, nil
+		return sandbox.Local{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages}, nil
 	}
 	return nil, fmt.Errorf("runtime %q is not implemented", config.Runtime)
 }
@@ -448,6 +449,7 @@ type Checker interface {
 // CheckerConfig contains validated checker construction options.
 type CheckerConfig struct {
 	Runtime, SkillPath, BuildContext, RepositoryDigest string
+	Packages                                           []string
 	DryRun, AllowLocal                                 bool
 }
 

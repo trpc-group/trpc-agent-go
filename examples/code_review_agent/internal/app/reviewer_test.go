@@ -289,12 +289,12 @@ func (c *mutationSnapshotChecker) Check(ctx context.Context, checkID, repoPath s
 	spec := governance.CheckSpec{
 		ID: checkID, Runtime: "fake", RunnerPath: filepath.Join(c.skillRoot, "scripts", "checkrunner", "main.go"),
 		SkillRoot: c.skillRoot, Cwd: "repo", Artifact: "result-0123456789abcdef.json",
-		RepositoryDigest: digest, DependencyDigest: strings.Repeat("0", 64), Argv: argv, Timeout: timeout,
+		RepositoryDigest: digest, DependencyDigest: strings.Repeat("0", 64), ModuleRoots: []string{"."}, Argv: argv, Timeout: timeout,
 		Env: map[string]string{
 			"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 			"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache",
 			"TMPDIR": "/tmp/cr-target/tmp", "GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy",
-			"GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
+			"GOSUMDB": "off", "GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "GOWORK": "off",
 			"CR_RESULT_DIR": workspace + "/out", "CR_REPO_DIR": workspace + "/work",
 		},
 	}

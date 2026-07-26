@@ -362,10 +362,13 @@ type Summary struct {
 	Cleanup  func() error
 	Files    []diffparse.ChangedFile
 	Packages []string
-	Sources  map[string][]byte
-	RawDiff  []byte
-	Hunks    int
-	Added    int
+	// ModuleHints includes changed Go packages and module metadata directories.
+	// It is ephemeral execution input and is not persisted as package metadata.
+	ModuleHints []string
+	Sources     map[string][]byte
+	RawDiff     []byte
+	Hunks       int
+	Added       int
 }
 
 // PersistableMetadata excludes raw diff and source content.
@@ -442,7 +445,8 @@ func Load(ctx context.Context, config Config) (Summary, error) {
 	}
 	digest := sha256.Sum256(raw)
 	packages := ResolvePackages(repoRoot, files)
-	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, RepositoryDigest: snapshotDigest, Cleanup: cleanup, Files: files, Packages: packages, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
+	moduleHints := ResolveModuleHints(files)
+	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, RepositoryDigest: snapshotDigest, Cleanup: cleanup, Files: files, Packages: packages, ModuleHints: moduleHints, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
 }
 
 func cleanupLoadSnapshot(cleanup func() error, cause error) error {
@@ -559,6 +563,30 @@ func ResolvePackages(root string, files []diffparse.ChangedFile) []string {
 	sort.Strings(result)
 	return result
 }
+
+// ResolveModuleHints derives directories whose selected Go module must be checked.
+func ResolveModuleHints(files []diffparse.ChangedFile) []string {
+	seen := make(map[string]struct{})
+	for _, file := range files {
+		for _, filePath := range []string{file.OldPath, file.NewPath} {
+			if filePath == "" {
+				continue
+			}
+			base := filepath.Base(filePath)
+			if filepath.Ext(filePath) != ".go" && base != "go.mod" && base != "go.sum" {
+				continue
+			}
+			seen[filepath.ToSlash(filepath.Dir(filePath))] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for directory := range seen {
+		result = append(result, directory)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func secureRepoRoot(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {

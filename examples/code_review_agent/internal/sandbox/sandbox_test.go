@@ -115,11 +115,12 @@ func (f *fakeRuntime) RunProgram(_ context.Context, _ codeexecutor.Workspace, sp
 
 type testRecorder struct {
 	values []governance.Decision
+	err    error
 }
 
 func (r *testRecorder) SaveDecision(_ context.Context, value governance.Decision) error {
 	r.values = append(r.values, value)
-	return nil
+	return r.err
 }
 func TestContainerCheckWithFakeEngine(t *testing.T) {
 	runtime := &fakeRuntime{}
@@ -139,7 +140,7 @@ func TestContainerCheckWithFakeEngine(t *testing.T) {
 	if !runtime.cleanupHadDeadline {
 		t.Fatal("workspace cleanup has no deadline")
 	}
-	if runtime.stageCalls != 1 || runtime.stageSource != repo || runtime.stageDestination != codeexecutor.DirWork || !runtime.stageOptions.ReadOnly || !runtime.stageOptions.AllowMount {
+	if runtime.stageCalls != 1 || runtime.stageSource != repo || runtime.stageDestination != codeexecutor.DirWork || !runtime.stageOptions.ReadOnly || runtime.stageOptions.AllowMount {
 		t.Fatalf("staging calls=%d source=%q destination=%q options=%+v", runtime.stageCalls, runtime.stageSource, runtime.stageDestination, runtime.stageOptions)
 	}
 }
@@ -248,6 +249,30 @@ func TestContainerCheckDenyStopsBeforeStaging(t *testing.T) {
 	}
 	if runtime.stageCalls != 0 || runtime.runCalls != 0 || !runtime.cleanupHadDeadline {
 		t.Fatalf("stage calls=%d run calls=%d cleanup deadline=%t", runtime.stageCalls, runtime.runCalls, runtime.cleanupHadDeadline)
+	}
+}
+
+func TestContainerDecisionPersistenceFailureStopsBeforeStaging(t *testing.T) {
+	runtime := &fakeRuntime{}
+	container := testContainer(t, runtime, &testRecorder{err: errors.New("persist failed")})
+	if _, err := container.Check(context.Background(), "go-test", t.TempDir(), time.Second); err == nil {
+		t.Fatal("check continued after decision persistence failure")
+	}
+	if runtime.stageCalls != 0 || runtime.runCalls != 0 {
+		t.Fatalf("stage calls=%d run calls=%d", runtime.stageCalls, runtime.runCalls)
+	}
+}
+
+func TestContainerBindsExcludeReviewedRepository(t *testing.T) {
+	binds := containerBinds("proxy")
+	if len(binds) != 1 || binds[0] != "proxy:"+moduleProxyTarget+":ro" {
+		t.Fatalf("container binds = %v", binds)
+	}
+}
+
+func TestContainerEnvironmentDisablesGoWorkspaces(t *testing.T) {
+	if got := targetEnv("/tmp/run/ws_cr-0123456789abcdef_0")["GOWORK"]; got != "off" {
+		t.Fatalf("GOWORK = %q", got)
 	}
 }
 func testContainer(t *testing.T, fake *fakeRuntime, recorder *testRecorder) Container {
@@ -359,16 +384,54 @@ func writeLocalFixture(t *testing.T, root, name, content string) {
 	}
 }
 
+func TestResolveModuleRootsSelectsChangedNestedModules(t *testing.T) {
+	repo := t.TempDir()
+	for _, directory := range []string{"rootpkg", filepath.Join("nested", "pkg")} {
+		if err := os.MkdirAll(filepath.Join(repo, directory), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLocalFixture(t, repo, "go.mod", "module root.example/repo\n\ngo 1.21\n")
+	writeLocalFixture(t, filepath.Join(repo, "nested"), "go.mod", "module nested.example/repo\n\ngo 1.21\n")
+
+	roots, err := resolveModuleRoots(repo, []string{"nested/pkg", "rootpkg", "nested/missing"})
+	if err != nil || !slices.Equal(roots, []string{".", "nested"}) {
+		t.Fatalf("resolveModuleRoots() = %v, %v", roots, err)
+	}
+	if _, err := resolveModuleRoots(repo, []string{"../escape"}); err == nil {
+		t.Fatal("resolveModuleRoots accepted escaping package")
+	}
+}
+
+func TestReadModuleVersionsAggregatesSelectedModuleSums(t *testing.T) {
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeLocalFixture(t, repo, "go.sum", "example.com/root v1.0.0 h1:root\n")
+	writeLocalFixture(t, nested, "go.sum", "example.com/nested v1.2.0/go.mod h1:nested\n")
+
+	versions, err := readModuleVersions(repo, []string{".", "nested"})
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("readModuleVersions() = %#v, %v", versions, err)
+	}
+	writeLocalFixture(t, nested, "go.sum", "example.com/root v1.0.0 h1:conflict\n")
+	if _, err := readModuleVersions(repo, []string{".", "nested"}); err == nil {
+		t.Fatal("readModuleVersions accepted conflicting sums across modules")
+	}
+}
+
 func TestBuildModuleProxyVerifiedAndDeterministic(t *testing.T) {
 	repo, cache := t.TempDir(), t.TempDir()
 	modulePath, version := "github.com/example/dependency", "v1.2.3"
 	writeModuleCacheFixture(t, repo, cache, modulePath, version)
-	first, err := buildModuleProxy(context.Background(), repo, cache)
+	first, err := buildModuleProxy(context.Background(), repo, cache, []string{"."})
 	if err != nil {
 		t.Fatalf("buildModuleProxy() error = %v", err)
 	}
 	defer first.Close()
-	second, err := buildModuleProxy(context.Background(), repo, cache)
+	second, err := buildModuleProxy(context.Background(), repo, cache, []string{"."})
 	if err != nil {
 		t.Fatalf("second buildModuleProxy() error = %v", err)
 	}
@@ -394,7 +457,7 @@ func TestBuildModuleProxyKnownGoCacheEntry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(sum), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	proxy, err := buildModuleProxy(context.Background(), repo, "")
+	proxy, err := buildModuleProxy(context.Background(), repo, "", []string{"."})
 	if err != nil {
 		t.Fatalf("buildModuleProxy(known cache) error = %v", err)
 	}
@@ -419,7 +482,7 @@ func TestBuildModuleProxyIncludesGoModOnlyEntry(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(lines[1]+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	proxy, err := buildModuleProxy(context.Background(), repo, cache)
+	proxy, err := buildModuleProxy(context.Background(), repo, cache, []string{"."})
 	if err != nil {
 		t.Fatalf("buildModuleProxy() error = %v", err)
 	}
@@ -461,7 +524,7 @@ func TestBuildModuleProxyRejectsUnsafeInputs(t *testing.T) {
 			repo, cache := t.TempDir(), t.TempDir()
 			modPath, zipPath := writeModuleCacheFixture(t, repo, cache, "github.com/example/dependency", "v1.2.3")
 			test.mutate(t, modPath, zipPath)
-			if proxy, err := buildModuleProxy(context.Background(), repo, cache); !errors.Is(err, ErrDependencyCache) {
+			if proxy, err := buildModuleProxy(context.Background(), repo, cache, []string{"."}); !errors.Is(err, ErrDependencyCache) {
 				_ = proxy.Close()
 				t.Fatalf("buildModuleProxy() error = %v", err)
 			}
@@ -475,7 +538,7 @@ func TestBuildModuleProxyRejectsUnsafeInputs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "go.sum"), []byte(sum.String()), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir()); !errors.Is(err, ErrDependencyCache) {
+	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir(), []string{"."}); !errors.Is(err, ErrDependencyCache) {
 		t.Fatalf("module limit error = %v", err)
 	}
 }
@@ -489,7 +552,7 @@ func TestBuildModuleProxyRejectsSymlinkGoSum(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(repo, "go.sum")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
-	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir()); !errors.Is(err, ErrDependencyCache) {
+	if _, err := buildModuleProxy(context.Background(), repo, t.TempDir(), []string{"."}); !errors.Is(err, ErrDependencyCache) {
 		t.Fatalf("buildModuleProxy() error = %v", err)
 	}
 }
@@ -651,7 +714,7 @@ func TestContainerConfigurationRealDocker(t *testing.T) {
 	name := "cr-inspect-" + mustRandomToken(t)
 	runner := Container{BuildContext: root, SkillRoot: filepath.Join(root, "skills", "code-review")}
 	repo := filepath.Join(root, "fixtures", "composite", "repo")
-	proxy, err := buildModuleProxy(ctx, repo, "")
+	proxy, err := buildModuleProxy(ctx, repo, "", []string{"."})
 	if err != nil {
 		t.Fatalf("buildModuleProxy() error = %v", err)
 	}
@@ -660,7 +723,7 @@ func TestContainerConfigurationRealDocker(t *testing.T) {
 			t.Errorf("proxy Close() error = %v", err)
 		}
 	})
-	executor, err := runner.newExecutor(ctx, repo, name, proxy.Path)
+	executor, err := runner.newExecutor(ctx, name, proxy.Path)
 	if err != nil {
 		t.Fatalf("newExecutor() error = %v", err)
 	}
@@ -708,9 +771,8 @@ func assertContainerConfig(t *testing.T, config *container.Config, host *contain
 	if host.AutoRemove || host.Privileged || !host.ReadonlyRootfs || host.NetworkMode != "none" {
 		t.Fatalf("host hardening = %#v", host)
 	}
-	if len(host.Binds) != 2 || !strings.HasSuffix(host.Binds[0], ":"+stagingSourcePath+":ro") ||
-		!strings.HasSuffix(host.Binds[1], ":"+moduleProxyTarget+":ro") {
-		t.Fatalf("staging source is not read-only = %v", host.Binds)
+	if len(host.Binds) != 1 || !strings.HasSuffix(host.Binds[0], ":"+moduleProxyTarget+":ro") {
+		t.Fatalf("only module proxy may be mounted before authorization: %v", host.Binds)
 	}
 	for _, capability := range []string{"SETUID", "SETGID", "KILL"} {
 		if !hasCapability([]string(host.CapAdd), capability) {

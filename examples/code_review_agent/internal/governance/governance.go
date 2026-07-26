@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -31,6 +32,8 @@ var resultNamePattern = regexp.MustCompile(`^result-[a-f0-9]{16}\.json$`)
 var targetWorkspacePattern = regexp.MustCompile(`^/tmp/run/ws_cr-[a-f0-9]{16}_[0-9]+$`)
 var dependencyDigestPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
+const maxModuleRoots = 64
+
 var fixedArgs = map[string][]string{
 	"go-test": {"go", "test", "-mod=readonly", "./..."},
 	"go-vet":  {"go", "vet", "-mod=readonly", "./..."},
@@ -40,7 +43,7 @@ var fixedEnv = map[string]string{
 	"PATH": "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp/cr-target/home",
 	"GOCACHE": "/tmp/cr-target/gocache", "GOMODCACHE": "/tmp/cr-target/gomodcache", "TMPDIR": "/tmp/cr-target/tmp",
 	"GOMAXPROCS": "2", "GOPROXY": "file:///opt/trpc-agent/modproxy", "GOSUMDB": "off",
-	"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off",
+	"GOENV": "off", "GOTOOLCHAIN": "local", "GOVCS": "*:off", "GOWORK": "off",
 }
 
 var localEnvKeys = []string{"PATH", "HOME", "GOCACHE", "GOMODCACHE", "GOTMPDIR", "TMPDIR",
@@ -51,6 +54,7 @@ type CheckSpec struct {
 	ID, Runtime, RunnerPath, SkillRoot, Cwd, Artifact string
 	RepoSource, RepositoryDigest, DependencyDigest    string
 	Argv                                              []string
+	ModuleRoots                                       []string
 	Env                                               map[string]string
 	Timeout                                           time.Duration
 	DependencyModules, DependencyEntries              int
@@ -93,7 +97,8 @@ func (a Authorizer) Authorize(ctx context.Context, spec CheckSpec) error {
 	arguments, err := json.Marshal(map[string]any{"check_id": spec.ID, "runtime": spec.Runtime, "argv": spec.Argv,
 		"repository_digest": spec.RepositoryDigest,
 		"dependency_digest": spec.DependencyDigest, "dependency_modules": spec.DependencyModules, "dependency_bytes": spec.DependencyBytes,
-		"dependency_entries": spec.DependencyEntries, "dependency_expanded_bytes": spec.DependencyExpandedBytes})
+		"dependency_entries": spec.DependencyEntries, "dependency_expanded_bytes": spec.DependencyExpandedBytes,
+		"module_roots": spec.ModuleRoots})
 	if err != nil {
 		return err
 	}
@@ -150,6 +155,9 @@ func validateExecution(spec CheckSpec, expected []string) (string, error) {
 	if !equalStrings(spec.Argv, expected) {
 		return "critical", errors.New("argv differs from fixed check manifest")
 	}
+	if err := validateModuleRoots(spec.ModuleRoots); err != nil {
+		return "critical", err
+	}
 	if risk, err := validateCheckBounds(spec); err != nil {
 		return risk, err
 	}
@@ -157,6 +165,24 @@ func validateExecution(spec CheckSpec, expected []string) (string, error) {
 		return "critical", err
 	}
 	return "", nil
+}
+
+func validateModuleRoots(roots []string) error {
+	if len(roots) == 0 || len(roots) > maxModuleRoots {
+		return errors.New("module roots are outside allowed bounds")
+	}
+	previous := ""
+	for index, root := range roots {
+		if root == "" || filepath.IsAbs(root) || strings.Contains(root, `\`) ||
+			path.Clean(root) != root || root == ".." || strings.HasPrefix(root, "../") {
+			return fmt.Errorf("module root %q is not a clean repository-relative path", root)
+		}
+		if index > 0 && root <= previous {
+			return errors.New("module roots are not unique and sorted")
+		}
+		previous = root
+	}
+	return nil
 }
 
 func validateRuntimeCapabilities(spec CheckSpec) error {
@@ -296,6 +322,7 @@ func digestFields(spec CheckSpec) []string {
 		spec.RepoSource, spec.RepositoryDigest, spec.DependencyDigest, fmt.Sprint(spec.DependencyModules), fmt.Sprint(spec.DependencyBytes),
 		fmt.Sprint(spec.DependencyEntries), fmt.Sprint(spec.DependencyExpandedBytes), spec.Timeout.String(),
 		fmt.Sprint(spec.Network), fmt.Sprint(spec.Privileged), fmt.Sprint(spec.HostWrite)}
+	fields = append(fields, spec.ModuleRoots...)
 	fields = append(fields, spec.Argv...)
 	keys := make([]string, 0, len(spec.Env))
 	for key := range spec.Env {

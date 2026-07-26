@@ -133,6 +133,18 @@ func TestExecuteWrapper(t *testing.T) {
 	}
 }
 
+func TestExecuteChecksEverySelectedModuleRoot(t *testing.T) {
+	value := testConfig(t)
+	value.moduleRoots = []string{".", "nested"}
+	if err := os.Mkdir(filepath.Join(value.cwd, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	result := executeWithPreparation(value, helperCommand("fail-nested"), func() error { return nil })
+	if result.ExitCode != 7 || result.TimedOut || result.Error != "" {
+		t.Fatalf("nested module result = %#v", result)
+	}
+}
+
 func helperCommand(mode string) []string {
 	return []string{os.Args[0], "-test.run=TestHelperProcess", "--", mode}
 }
@@ -149,6 +161,15 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(7)
 	case "timeout":
 		time.Sleep(3 * time.Second)
+		os.Exit(0)
+	case "fail-nested":
+		cwd, err := os.Getwd()
+		if err != nil {
+			os.Exit(2)
+		}
+		if filepath.Base(cwd) == "nested" {
+			os.Exit(7)
+		}
 		os.Exit(0)
 	default:
 		t.Fatalf("unknown helper mode %q", mode)
@@ -264,8 +285,10 @@ func TestFailureAndEnvironmentBranches(t *testing.T) {
 	}
 	t.Setenv("HOME", "included-home")
 	t.Setenv("GOCACHE", "")
+	t.Setenv("GOWORK", "off")
 	environment := strings.Join(targetEnvironment(), "\n")
-	if !strings.Contains(environment, "HOME=included-home") || strings.Contains(environment, "GOCACHE=") {
+	if !strings.Contains(environment, "HOME=included-home") || !strings.Contains(environment, "GOWORK=off") ||
+		strings.Contains(environment, "GOCACHE=") {
 		t.Fatalf("targetEnvironment() = %q", environment)
 	}
 }
@@ -279,7 +302,13 @@ func validArgs(checkID string) []string {
 func invalidConfigArgs() [][]string {
 	base := validArgs("go-test")
 	with := func(args ...string) []string { return append(append([]string(nil), base...), args...) }
-	return [][]string{with("--timeout", "100m"), with("--timeout", "0s"), with("--output-limit", "0"), with("--output-limit", "99999999")}
+	return [][]string{
+		with("--timeout", "100m"), with("--timeout", "0s"),
+		with("--output-limit", "0"), with("--output-limit", "99999999"),
+		with("--module-root", "../escape"),
+		with("--module-root", "nested", "--module-root", "."),
+		with("--module-root", "nested", "--module-root", "nested"),
+	}
 }
 
 func testConfig(t *testing.T) config {

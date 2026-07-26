@@ -190,35 +190,59 @@ func encodeCountMap(values map[string]int) (string, error) {
 
 // GetReview loads the full replayable aggregate for a task ID.
 func (s *SQLiteStore) GetReview(ctx context.Context, taskID string) (Review, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Review{}, fmt.Errorf("begin review snapshot: %w", err)
+	}
+	loader := loadReview
+	if s.loadSnapshot != nil {
+		loader = s.loadSnapshot
+	}
+	result, err := loader(ctx, tx, taskID)
+	if err != nil {
+		return Review{}, errors.Join(err, tx.Rollback())
+	}
+	if err := tx.Commit(); err != nil {
+		return Review{}, fmt.Errorf("commit review snapshot: %w", err)
+	}
+	return result, nil
+}
+
+type reviewQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func loadReview(ctx context.Context, queryer reviewQueryer, taskID string) (Review, error) {
 	result := Review{}
 	var err error
-	if result.Task, err = loadTask(ctx, s.db, taskID); err != nil {
+	if result.Task, err = loadTask(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Input, err = loadInputSummary(ctx, s.db, taskID); err != nil {
+	if result.Input, err = loadInputSummary(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Runs, err = loadRuns(ctx, s.db, taskID); err != nil {
+	if result.Runs, err = loadRuns(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Decisions, err = loadDecisions(ctx, s.db, taskID); err != nil {
+	if result.Decisions, err = loadDecisions(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Findings, err = loadFindings(ctx, s.db, taskID); err != nil {
+	if result.Findings, err = loadFindings(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Metrics, err = loadMetrics(ctx, s.db, taskID); err != nil {
+	if result.Metrics, err = loadMetrics(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Artifacts, err = loadArtifacts(ctx, s.db, taskID); err != nil {
+	if result.Artifacts, err = loadArtifacts(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
-	if result.Report, err = loadReport(ctx, s.db, taskID); err != nil {
+	if result.Report, err = loadReport(ctx, queryer, taskID); err != nil {
 		return Review{}, err
 	}
 	return result, nil
 }
-func loadTask(ctx context.Context, db *sql.DB, taskID string) (Task, error) {
+func loadTask(ctx context.Context, db reviewQueryer, taskID string) (Task, error) {
 	const query = `SELECT id,status,input_kind,input_digest,started_at,finished_at,conclusion,error
         FROM review_tasks WHERE id=?`
 	var task Task
@@ -243,7 +267,7 @@ func loadTask(ctx context.Context, db *sql.DB, taskID string) (Task, error) {
 	}
 	return task, nil
 }
-func loadInputSummary(ctx context.Context, db *sql.DB, taskID string) (InputSummary, error) {
+func loadInputSummary(ctx context.Context, db reviewQueryer, taskID string) (InputSummary, error) {
 	const query = `SELECT file_count,hunk_count,added_lines,packages_json FROM input_summaries WHERE task_id=?`
 	var result InputSummary
 	var packages string
@@ -259,7 +283,7 @@ func loadInputSummary(ctx context.Context, db *sql.DB, taskID string) (InputSumm
 	}
 	return result, nil
 }
-func loadRuns(ctx context.Context, db *sql.DB, taskID string) (result []SandboxRun, resultErr error) {
+func loadRuns(ctx context.Context, db reviewQueryer, taskID string) (result []SandboxRun, resultErr error) {
 	const query = `SELECT id,check_id,runtime,status,duration_ms,exit_code,timed_out,
         output_truncated,stdout,stderr,error_type,error FROM sandbox_runs WHERE task_id=? ORDER BY id`
 	rows, err := db.QueryContext(ctx, query, taskID)
@@ -278,7 +302,7 @@ func loadRuns(ctx context.Context, db *sql.DB, taskID string) (result []SandboxR
 	}
 	return result, rows.Err()
 }
-func loadDecisions(ctx context.Context, db *sql.DB, taskID string) (result []Decision, resultErr error) {
+func loadDecisions(ctx context.Context, db reviewQueryer, taskID string) (result []Decision, resultErr error) {
 	const query = `SELECT id,stage,tool,check_id,args_digest,risk,action,reason,decided_at
         FROM governance_decisions WHERE task_id=? ORDER BY decided_at,id`
 	rows, err := db.QueryContext(ctx, query, taskID)
@@ -302,7 +326,7 @@ func loadDecisions(ctx context.Context, db *sql.DB, taskID string) (result []Dec
 	}
 	return result, rows.Err()
 }
-func loadFindings(ctx context.Context, db *sql.DB, taskID string) (result []reviewmodel.Finding, resultErr error) {
+func loadFindings(ctx context.Context, db reviewQueryer, taskID string) (result []reviewmodel.Finding, resultErr error) {
 	const query = `SELECT bucket,severity,category,file,line,title,evidence,recommendation,confidence,source,rule_id
         FROM findings WHERE task_id=? ORDER BY bucket,severity,file,line,category,rule_id`
 	rows, err := db.QueryContext(ctx, query, taskID)
@@ -321,7 +345,7 @@ func loadFindings(ctx context.Context, db *sql.DB, taskID string) (result []revi
 	}
 	return result, rows.Err()
 }
-func loadMetrics(ctx context.Context, db *sql.DB, taskID string) (Metrics, error) {
+func loadMetrics(ctx context.Context, db reviewQueryer, taskID string) (Metrics, error) {
 	const query = `SELECT total_duration_ms,sandbox_duration_ms,tool_calls,permission_blocks,
         finding_count,severity_json,error_types_json FROM review_metrics WHERE task_id=?`
 	var result Metrics
@@ -341,7 +365,7 @@ func loadMetrics(ctx context.Context, db *sql.DB, taskID string) (Metrics, error
 	}
 	return result, nil
 }
-func loadArtifacts(ctx context.Context, db *sql.DB, taskID string) (result []Artifact, resultErr error) {
+func loadArtifacts(ctx context.Context, db reviewQueryer, taskID string) (result []Artifact, resultErr error) {
 	const query = `SELECT id,run_id,kind,path,sha256,size_bytes,created_at
         FROM artifacts WHERE task_id=? ORDER BY id`
 	rows, err := db.QueryContext(ctx, query, taskID)
@@ -367,7 +391,7 @@ func loadArtifacts(ctx context.Context, db *sql.DB, taskID string) (result []Art
 	}
 	return result, rows.Err()
 }
-func loadReport(ctx context.Context, db *sql.DB, taskID string) (Report, error) {
+func loadReport(ctx context.Context, db reviewQueryer, taskID string) (Report, error) {
 	const query = `SELECT schema_version,conclusion,canonical_json,canonical_markdown,
         json_path,json_sha256,markdown_path,markdown_sha256 FROM reports WHERE task_id=?`
 	var result Report
@@ -396,7 +420,10 @@ const (
 )
 
 // SQLiteStore persists complete review aggregates in SQLite.
-type SQLiteStore struct{ db *sql.DB }
+type SQLiteStore struct {
+	db           *sql.DB
+	loadSnapshot func(context.Context, reviewQueryer, string) (Review, error)
+}
 
 // Open creates or opens a store and applies embedded migrations.
 func Open(ctx context.Context, path string) (*SQLiteStore, error) {
