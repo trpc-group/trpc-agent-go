@@ -591,7 +591,7 @@ func TestEmitEventWithTimeout_SlowPathClosedChannelPanicRecovery(t *testing.T) {
 	fastPathDone := make(chan struct{})
 
 	go func() {
-		errCh <- EmitEventWithTimeout(context.Background(), ch, e, EmitWithoutTimeout, fastPathDone)
+		errCh <- emitEventWithTimeout(context.Background(), ch, e, EmitWithoutTimeout, fastPathDone)
 	}()
 
 	<-fastPathDone
@@ -610,7 +610,7 @@ func TestEmitEventWithTimeout_SlowPathClosedChannelPanicRecovery_WithTimeout(t *
 	fastPathDone := make(chan struct{})
 
 	go func() {
-		errCh <- EmitEventWithTimeout(context.Background(), ch, e, time.Second, fastPathDone)
+		errCh <- emitEventWithTimeout(context.Background(), ch, e, time.Second, fastPathDone)
 	}()
 
 	<-fastPathDone

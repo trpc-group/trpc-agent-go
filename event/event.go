@@ -480,8 +480,14 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled
 }
 
 // EmitEventWithTimeout sends an event to the channel with optional timeout.
-// An optional barrier channel can be passed to synchronize with the fast-path completion (for testing only).
 func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
+	e *Event, timeout time.Duration) error {
+	return emitEventWithTimeout(ctx, ch, e, timeout)
+}
+
+// emitEventWithTimeout sends an event to the channel with optional timeout.
+// An optional barrier channel can be passed to synchronize with the fast-path completion (for testing only).
+func emitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	e *Event, timeout time.Duration, barrier ...chan<- struct{}) (err error) {
 	if e == nil || ch == nil {
 		return nil
