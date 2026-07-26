@@ -1,0 +1,36 @@
+diff --git a/handler.go b/handler.go
+new file mode 100644
+--- /dev/null
++++ b/handler.go
+@@ -0,0 +1,30 @@
++package main
++
++import (
++	"database/sql"
++	"fmt"
++	"net/http"
++)
++
++func handleRequest(w http.ResponseWriter, r *http.Request, db *sql.DB) {
++	username := r.URL.Query().Get("username")
++
++	// 问题: SQL 注入 (第一次)
++	query := fmt.Sprintf("SELECT * FROM users WHERE name = '%s'", username)
++	rows, err := db.Query(query)
++	if err != nil {
++		http.Error(w, err.Error(), 500)
++		return
++	}
++	defer rows.Close()
++
++	// 问题: SQL 注入 (第二次 - 同一行同类问题，应该去重)
++	query2 := fmt.Sprintf("SELECT * FROM orders WHERE user = '%s'", username)
++	rows2, err := db.Query(query2)
++	if err != nil {
++		http.Error(w, err.Error(), 500)
++		return
++	}
++	defer rows2.Close()
++
++	fmt.Fprintf(w, "OK")
++}

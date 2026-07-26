@@ -1,0 +1,30 @@
+diff --git a/worker.go b/worker.go
+new file mode 100644
+--- /dev/null
++++ b/worker.go
+@@ -0,0 +1,20 @@
++package main
++
++import (
++	"fmt"
++	"time"
++)
++
++func startWorker() {
++	// 问题: goroutine 泄漏 - 没有退出机制
++	go func() {
++		for {
++			time.Sleep(1 * time.Second)
++			fmt.Println("working...")
++		}
++	}()
++}
++
++func startWorkerWithChannel() <-chan string {
++	ch := make(chan string)
++	// 问题: goroutine 泄漏 - channel 永远不会关闭
++	go func() {
++		ch <- "result"
++	}()
++	return ch
++}

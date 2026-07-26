@@ -1,0 +1,29 @@
+diff --git a/math.go b/math.go
+new file mode 100644
+--- /dev/null
++++ b/math.go
+@@ -0,0 +1,20 @@
++package math
++
++// Add adds two integers
++func Add(a, b int) int {
++	return a + b
++}
++
++// Subtract subtracts two integers
++func Subtract(a, b int) int {
++	return a - b
++}
++
++// Multiply multiplies two integers
++func Multiply(a, b int) int {
++	return a * b
++}
++
++// Divide divides two integers
++func Divide(a, b int) (int, error) {
++	if b == 0 {
++		return 0, errors.New("division by zero")
++	}
++	return a / b, nil
++}

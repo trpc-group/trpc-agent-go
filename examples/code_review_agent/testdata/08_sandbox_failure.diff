@@ -1,0 +1,22 @@
+diff --git a/broken.go b/broken.go
+new file mode 100644
+--- /dev/null
++++ b/broken.go
+@@ -0,0 +1,15 @@
++package main
++
++import "fmt"
++
++// 这个文件有语法错误，会导致 go vet 或 go test 失败
++func broken() {
++	fmt.Println("broken"
++}
++
++func anotherBroken() {
++	x := 10
++	if x > 5 {
++		fmt.Println("big")
++	} else {
++		fmt.Println("small")
++	}
++
