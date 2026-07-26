@@ -55,10 +55,12 @@ func promptToMessage(blocks []acpsdk.ContentBlock) (model.Message, error) {
 type turnState struct {
 	textByResponse      map[string]string
 	reasoningByResponse map[string]string
+	activeResponses     map[string]string
 	toolCalls           map[string]toolCallState
 	stopReason          acpsdk.StopReason
 	usage               *acpsdk.Usage
 	reasoningEnabled    bool
+	nextResponse        uint64
 }
 
 type toolCallState struct {
@@ -70,6 +72,7 @@ func newTurnState(reasoningEnabled bool) *turnState {
 	return &turnState{
 		textByResponse:      make(map[string]string),
 		reasoningByResponse: make(map[string]string),
+		activeResponses:     make(map[string]string),
 		toolCalls:           make(map[string]toolCallState),
 		stopReason:          acpsdk.StopReasonEndTurn,
 		reasoningEnabled:    reasoningEnabled,
@@ -83,7 +86,7 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 	if evt.IsTerminalError() {
 		return nil, evt.Response.Error
 	}
-	if evt.Response.Usage != nil {
+	if evt.Response.Usage != nil && !evt.Response.IsPartial {
 		if s.usage == nil {
 			s.usage = &acpsdk.Usage{}
 		}
@@ -94,7 +97,8 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 
 	var updates []acpsdk.SessionUpdate
 	for _, choice := range evt.Response.Choices {
-		key := responseKey(evt, choice.Index)
+		streamKey := responseStreamKey(evt, choice.Index)
+		key := s.responseKey(evt, streamKey)
 		if s.reasoningEnabled {
 			if reasoning := s.contentDelta(
 				s.reasoningByResponse,
@@ -122,19 +126,34 @@ func (s *turnState) translate(evt *event.Event) ([]acpsdk.SessionUpdate, error) 
 			updates = append(updates, update)
 		}
 		s.applyFinishReason(choice.FinishReason)
-		if evt.Response.ID == "" && !evt.Response.IsPartial {
+		if !evt.Response.IsPartial {
 			delete(s.textByResponse, key)
 			delete(s.reasoningByResponse, key)
+			if s.activeResponses[streamKey] == key {
+				delete(s.activeResponses, streamKey)
+			}
 		}
 	}
 	return updates, nil
 }
 
-func responseKey(evt *event.Event, choiceIndex int) string {
-	if evt.Response.ID != "" {
-		return fmt.Sprintf("%s/%d", evt.Response.ID, choiceIndex)
-	}
+func responseStreamKey(evt *event.Event, choiceIndex int) string {
 	return fmt.Sprintf("%s/%d", evt.InvocationID, choiceIndex)
+}
+
+func (s *turnState) responseKey(evt *event.Event, streamKey string) string {
+	if evt.Response.ID != "" {
+		key := fmt.Sprintf("%s/%s", evt.Response.ID, streamKey)
+		s.activeResponses[streamKey] = key
+		return key
+	}
+	if key := s.activeResponses[streamKey]; key != "" {
+		return key
+	}
+	s.nextResponse++
+	key := fmt.Sprintf("response-%d/%s", s.nextResponse, streamKey)
+	s.activeResponses[streamKey] = key
+	return key
 }
 
 func (*turnState) contentDelta(
@@ -228,10 +247,19 @@ func (s *turnState) applyFinishReason(finishReason *string) {
 	if finishReason == nil {
 		return
 	}
-	switch *finishReason {
-	case "length":
+	switch strings.ToLower(strings.TrimSpace(*finishReason)) {
+	case "length", "max_tokens":
 		s.stopReason = acpsdk.StopReasonMaxTokens
-	case "content_filter", "refusal":
+	case "blocked",
+		"blocklist",
+		"content_filter",
+		"content_filtered",
+		"guardrail_intervened",
+		"prohibited_content",
+		"recitation",
+		"refusal",
+		"safety",
+		"spii":
 		s.stopReason = acpsdk.StopReasonRefusal
 	case "cancelled", "canceled":
 		s.stopReason = acpsdk.StopReasonCancelled
