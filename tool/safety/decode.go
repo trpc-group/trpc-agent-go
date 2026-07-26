@@ -300,9 +300,15 @@ func decodeCodeField(
 		}
 	}
 	if language == "" {
+		if profile.LanguageField != "" {
+			return CodeBlock{}, fmt.Errorf(
+				"field %q is required",
+				profile.LanguageField,
+			)
+		}
 		return CodeBlock{}, fmt.Errorf(
-			"field %q is required",
-			profile.LanguageField,
+			"profile %q must declare a default language or a language field",
+			profile.Name,
 		)
 	}
 	return CodeBlock{Language: language, Code: code}, nil
@@ -519,6 +525,9 @@ func rawInt(raw map[string]any, key string) (int, bool) {
 	}
 	switch n := v.(type) {
 	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
 		return int(n), true
 	case int:
 		return n, true

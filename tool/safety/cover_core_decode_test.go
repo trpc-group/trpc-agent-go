@@ -93,6 +93,28 @@ func TestCovercore_DecodeRequestSingleCodeField(t *testing.T) {
 		reg,
 	)
 	require.ErrorContains(t, err, `"language" must be a string`)
+
+	_, err = decodeCodeField(
+		map[string]any{"code": "print(1)"},
+		ToolProfile{
+			Name:      "missing_language",
+			CodeField: "code",
+		},
+	)
+	require.ErrorContains(
+		t,
+		err,
+		`profile "missing_language" must declare`,
+	)
+	_, err = decodeCodeField(
+		map[string]any{"code": "print(1)"},
+		ToolProfile{
+			Name:          "explicit_language",
+			CodeField:     "code",
+			LanguageField: "language",
+		},
+	)
+	require.ErrorContains(t, err, `field "language" is required`)
 }
 
 // TestCovercore_DecodeRequestEnvError covers the optional-field error
@@ -489,6 +511,15 @@ func TestCovercore_RawInt(t *testing.T) {
 
 	_, ok = rawInt(map[string]any{"k": true}, "k")
 	require.False(t, ok)
+
+	for _, value := range []float64{
+		math.NaN(),
+		math.Inf(1),
+		math.Inf(-1),
+	} {
+		_, ok = rawInt(map[string]any{"k": value}, "k")
+		require.False(t, ok)
+	}
 }
 
 // TestCovercore_DecodeEnvMap covers the absent, malformed, and non-string

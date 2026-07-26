@@ -769,6 +769,56 @@ func TestRunAfterTool_FinalizerScopedByDeclaration(t *testing.T) {
 	require.ErrorContains(t, err, "already registered")
 }
 
+func TestRegisterAfterToolResultFinalizer_BoundsPropagatedTargets(
+	t *testing.T,
+) {
+	source := &tool.Declaration{Name: "source"}
+	cleanup, err := tool.RegisterAfterToolResultFinalizer(
+		source,
+		func(
+			_ context.Context,
+			_ *tool.AfterToolArgs,
+			result *tool.AfterToolResult,
+		) (*tool.AfterToolResult, error) {
+			return result, nil
+		},
+	)
+	require.NoError(t, err)
+	defer cleanup()
+	targets := make([]*tool.Declaration, 0, 1023)
+	for i := 0; i < 1023; i++ {
+		target := &tool.Declaration{Name: "target"}
+		targets = append(targets, target)
+		require.NoError(
+			t,
+			tool.PropagateAfterToolResultFinalizer(
+				source,
+				target,
+			),
+		)
+	}
+	err = tool.PropagateAfterToolResultFinalizer(
+		source,
+		&tool.Declaration{Name: "overflow"},
+	)
+	require.ErrorContains(t, err, "registry is full")
+
+	cleanup()
+	replacementCleanup, err :=
+		tool.RegisterAfterToolResultFinalizer(
+			targets[0],
+			func(
+				_ context.Context,
+				_ *tool.AfterToolArgs,
+				result *tool.AfterToolResult,
+			) (*tool.AfterToolResult, error) {
+				return result, nil
+			},
+		)
+	require.NoError(t, err)
+	replacementCleanup()
+}
+
 func TestRunAfterTool_WithError(t *testing.T) {
 	callbacks := tool.NewCallbacks()
 

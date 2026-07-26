@@ -143,15 +143,22 @@ type afterToolResultFinalizerEntry struct {
 var afterToolResultFinalizers = struct {
 	sync.Mutex
 	byDeclaration map[*Declaration]afterToolResultFinalizerEntry
+	targets       map[uint64]map[*Declaration]struct{}
 	next          uint64
-	active        int
+	bindings      int
 }{
 	byDeclaration: make(map[*Declaration]afterToolResultFinalizerEntry),
+	targets:       make(map[uint64]map[*Declaration]struct{}),
 }
 
 // RegisterAfterToolResultFinalizer associates a finalizer with one tool
-// declaration. Registrations are bounded and remain active until the returned
-// cleanup function is called.
+// declaration by pointer identity. Declarations with equal fields or names are
+// distinct keys. The process-global registry is concurrency-safe and bounded
+// across original and propagated declaration bindings.
+//
+// Registration fails when declaration already has a finalizer or the registry
+// is full. The returned cleanup removes the original declaration and every
+// target later bound through PropagateAfterToolResultFinalizer.
 func RegisterAfterToolResultFinalizer(
 	declaration *Declaration,
 	finalizer AfterToolResultFinalizer,
@@ -169,7 +176,7 @@ func RegisterAfterToolResultFinalizer(
 			"after-tool result finalizer is already registered for declaration",
 		)
 	}
-	if afterToolResultFinalizers.active >=
+	if afterToolResultFinalizers.bindings >=
 		maxAfterToolResultFinalizers {
 		return nil, errors.New(
 			"after-tool result finalizer registry is full",
@@ -181,23 +188,29 @@ func RegisterAfterToolResultFinalizer(
 		finalizer: finalizer,
 	}
 	afterToolResultFinalizers.byDeclaration[declaration] = entry
-	afterToolResultFinalizers.active++
+	afterToolResultFinalizers.targets[entry.token] =
+		map[*Declaration]struct{}{declaration: {}}
+	afterToolResultFinalizers.bindings++
 	return func() {
 		afterToolResultFinalizers.Lock()
 		defer afterToolResultFinalizers.Unlock()
-		removed := false
-		for currentDeclaration, current := range afterToolResultFinalizers.byDeclaration {
-			if current.token != entry.token {
+		removed := 0
+		for target := range afterToolResultFinalizers.targets[entry.token] {
+			current, exists :=
+				afterToolResultFinalizers.byDeclaration[target]
+			if !exists || current.token != entry.token {
 				continue
 			}
 			delete(
 				afterToolResultFinalizers.byDeclaration,
-				currentDeclaration,
+				target,
 			)
-			removed = true
+			removed++
 		}
-		if removed && afterToolResultFinalizers.active > 0 {
-			afterToolResultFinalizers.active--
+		delete(afterToolResultFinalizers.targets, entry.token)
+		afterToolResultFinalizers.bindings -= removed
+		if afterToolResultFinalizers.bindings < 0 {
+			afterToolResultFinalizers.bindings = 0
 		}
 	}, nil
 }
@@ -216,7 +229,10 @@ func afterToolResultFinalizerFor(
 }
 
 // PropagateAfterToolResultFinalizer binds a declaration overlay to the same
-// finalizer as source.
+// finalizer as source. Source and target are keyed by pointer identity in the
+// process-global concurrency-safe registry. Propagation is idempotent for an
+// existing binding to the same finalizer, fails for a conflicting binding or a
+// full registry, and makes the source registration's cleanup remove target.
 func PropagateAfterToolResultFinalizer(
 	source *Declaration,
 	target *Declaration,
@@ -235,12 +251,24 @@ func PropagateAfterToolResultFinalizer(
 		)
 	}
 	if current, exists :=
-		afterToolResultFinalizers.byDeclaration[target]; exists && current.token != entry.token {
+		afterToolResultFinalizers.byDeclaration[target]; exists {
+		if current.token != entry.token {
+			return errors.New(
+				"target declaration has a different after-tool result finalizer",
+			)
+		}
+		return nil
+	}
+	if afterToolResultFinalizers.bindings >=
+		maxAfterToolResultFinalizers {
 		return errors.New(
-			"target declaration has a different after-tool result finalizer",
+			"after-tool result finalizer registry is full",
 		)
 	}
 	afterToolResultFinalizers.byDeclaration[target] = entry
+	afterToolResultFinalizers.targets[entry.token][target] =
+		struct{}{}
+	afterToolResultFinalizers.bindings++
 	return nil
 }
 
@@ -258,7 +286,9 @@ type AfterToolCallbackStructured = func(
 	args *AfterToolArgs,
 ) (*AfterToolResult, error)
 
-// ToolResultMessagesInput contains all parameters for generating messages from a tool result.
+// ToolResultMessagesInput contains all parameters for generating messages from
+// a tool result. An input is single-use and must not be shared across
+// goroutines.
 type ToolResultMessagesInput struct {
 	// ToolName is the name of the tool.
 	ToolName string
@@ -266,7 +296,10 @@ type ToolResultMessagesInput struct {
 	Declaration *Declaration
 	// Arguments is the final tool arguments in JSON bytes (after before-tool callbacks).
 	Arguments []byte
-	// Result is the final tool execution result (after after-tool callbacks).
+	// Result is the final tool execution result after after-tool callbacks.
+	// When the result implements GetCallbackResult() any, ToolResultMessages
+	// receives that callback-facing projection and should type-assert against
+	// the projected type rather than the raw result type.
 	Result any
 	// ToolCallID is the ID of the tool call issued by the model.
 	ToolCallID string
@@ -366,8 +399,10 @@ func (c *Callbacks) RegisterToolResultMessages(cb ToolResultMessagesFunc) *Callb
 	return c
 }
 
-// RunToolResultMessages runs the ToolResultMessages callback (if set) with panic
-// recovery, returning an error when the callback panics.
+// RunToolResultMessages runs the ToolResultMessages callback, if set, with
+// panic recovery. When Result implements GetCallbackResult() any, the callback
+// observes that projection. The function temporarily mutates and restores in,
+// so the input is single-use and must not be shared across goroutines.
 func (c *Callbacks) RunToolResultMessages(
 	ctx context.Context,
 	in *ToolResultMessagesInput,
