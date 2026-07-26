@@ -18,6 +18,9 @@ import (
 // SpanStartFilter decides whether a span should be recorded when it is
 // created. The parameters contain only information available at span start.
 // Returning false drops the span before any attributes or events are recorded.
+// Implementations may be called concurrently and must be safe for concurrent
+// use. They must treat the SamplingParameters and its referenced slices as
+// read-only.
 type SpanStartFilter func(sdktrace.SamplingParameters) bool
 
 // SpanExportFilter decides whether a completed span should be exported.

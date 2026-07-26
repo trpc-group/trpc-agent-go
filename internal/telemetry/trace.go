@@ -287,6 +287,10 @@ const (
 
 // TraceToolCall traces the invocation of a tool call.
 func TraceToolCall(span trace.Span, sess *session.Session, declaration *tool.Declaration, args []byte, rspEvent *event.Event, err error) {
+	if !span.IsRecording() {
+		return
+	}
+
 	span.SetAttributes(
 		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),
@@ -337,6 +341,10 @@ const ToolNameMergedTools = "(merged tools)"
 // Calling this function is not needed for telemetry purposes. This is provided
 // for preventing trace-query requests typically sent by web UIs.
 func TraceMergedToolCalls(span trace.Span, rspEvent *event.Event) {
+	if !span.IsRecording() {
+		return
+	}
+
 	span.SetAttributes(
 		attribute.String(semconvtrace.KeyGenAISystem, semconvtrace.SystemTRPCGoAgent),
 		attribute.String(semconvtrace.KeyGenAIOperationName, OperationExecuteTool),

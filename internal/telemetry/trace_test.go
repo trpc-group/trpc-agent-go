@@ -275,6 +275,8 @@ func TestTraceFunctions_NonRecordingSpan_ReturnsEarly(t *testing.T) {
 	TraceBeforeInvokeAgent(span, nil, "", "", nil)
 	TraceAfterInvokeAgent(span, nil, nil, 0, model.ErrorTypeRunError)
 	TraceChat(span, nil)
+	TraceToolCall(span, nil, nil, nil, nil, nil)
+	TraceMergedToolCalls(span, nil)
 }
 
 func TestTraceBeforeAfter_Tool_Merged_Chat_Embedding(t *testing.T) {
