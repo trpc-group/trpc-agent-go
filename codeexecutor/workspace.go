@@ -94,10 +94,10 @@ type RunProgramSpec struct {
 	// outbound networking disabled. Runtimes that cannot enforce this
 	// should fail closed rather than silently allowing network access.
 	DisableNetwork bool
-	Cwd      string // relative to workspace root
-	Stdin    string
-	Timeout  time.Duration
-	Limits   ResourceLimits
+	Cwd            string // relative to workspace root
+	Stdin          string
+	Timeout        time.Duration
+	Limits         ResourceLimits
 }
 
 // RunResult captures a single program run result.

@@ -159,13 +159,13 @@ func TestGraphCallOptionsFromConfigs_ClonesValueType(t *testing.T) {
 			Stop: []string{callOptsTestStopA},
 		},
 		nodes: map[string]*callNodeOptions{
-			callOptsTestNodeLLM: &callNodeOptions{
+			callOptsTestNodeLLM: {
 				generation: model.GenerationConfigPatch{
 					Stop: []string{callOptsTestStopB},
 				},
 				child: &callOptions{
 					nodes: map[string]*callNodeOptions{
-						callOptsTestNodeDeep: &callNodeOptions{
+						callOptsTestNodeDeep: {
 							generation: model.GenerationConfigPatch{
 								Temperature: model.Float64Ptr(
 									callOptsTestTempGlobal,
@@ -210,7 +210,7 @@ func TestWithScopedGraphCallOptions_RemovesKeyWhenEmpty(t *testing.T) {
 	cfgs := map[string]any{
 		graphCallOptionsKey: &callOptions{
 			nodes: map[string]*callNodeOptions{
-				callOptsTestNodeChild: &callNodeOptions{},
+				callOptsTestNodeChild: {},
 			},
 		},
 	}
@@ -254,7 +254,7 @@ func TestDesignateNode_SetsChildNodes(t *testing.T) {
 
 func TestMergeCallNodes_MergesExistingKey(t *testing.T) {
 	a := map[string]*callNodeOptions{
-		callOptsTestNodeLLM: &callNodeOptions{
+		callOptsTestNodeLLM: {
 			generation: model.GenerationConfigPatch{
 				MaxTokens: model.IntPtr(callOptsTestMaxTokens),
 				Stop:      []string{callOptsTestStopA},
@@ -266,12 +266,12 @@ func TestMergeCallNodes_MergesExistingKey(t *testing.T) {
 			},
 		},
 		"skip-nil": nil,
-		"skip-empty": &callNodeOptions{
+		"skip-empty": {
 			generation: model.GenerationConfigPatch{},
 		},
 	}
 	b := map[string]*callNodeOptions{
-		callOptsTestNodeLLM: &callNodeOptions{
+		callOptsTestNodeLLM: {
 			generation: model.GenerationConfigPatch{
 				Temperature: model.Float64Ptr(callOptsTestTempNode),
 				Stop:        []string{callOptsTestStopB},
@@ -346,7 +346,7 @@ func TestCallOptions_EarlyReturnPaths(t *testing.T) {
 
 	noMatch := &callOptions{
 		nodes: map[string]*callNodeOptions{
-			"other": &callNodeOptions{},
+			"other": {},
 		},
 	}
 	require.Equal(
@@ -377,7 +377,7 @@ func TestCallOptions_CloneHelpers_EdgeCases(t *testing.T) {
 	require.Nil(t, cloneCallNodeMap(map[string]*callNodeOptions{}))
 	require.Nil(t, cloneCallNodeMap(map[string]*callNodeOptions{
 		"x": nil,
-		"y": &callNodeOptions{},
+		"y": {},
 	}))
 	require.Nil(t, graphCallOptionsFromConfigs(nil))
 	require.Nil(t, graphCallOptionsFromConfigs(map[string]any{
@@ -421,7 +421,7 @@ func TestDesignateNode_EmptyScopedOptions(t *testing.T) {
 func TestMergeCallNodes_ReturnsNilWhenInputsSkipAllEntries(t *testing.T) {
 	out := mergeCallNodes(nil, map[string]*callNodeOptions{
 		"skip-nil":   nil,
-		"skip-empty": &callNodeOptions{},
+		"skip-empty": {},
 	})
 	require.Nil(t, out)
 }
@@ -437,8 +437,8 @@ func TestStringSetHelpers_EdgeCases(t *testing.T) {
 	_, ok = created["root"]
 	require.True(t, ok)
 
-	require.Nil(t, cloneStringSet(map[string]struct{}{"": struct{}{}}))
-	cloned := cloneStringSet(map[string]struct{}{"": struct{}{}, "root": struct{}{}})
+	require.Nil(t, cloneStringSet(map[string]struct{}{"": {}}))
+	cloned := cloneStringSet(map[string]struct{}{"": {}, "root": {}})
 	require.Len(t, cloned, 1)
 	_, ok = cloned[""]
 	require.False(t, ok)
@@ -446,10 +446,10 @@ func TestStringSetHelpers_EdgeCases(t *testing.T) {
 	require.True(t, ok)
 
 	require.Nil(t, mergeStringSet(
-		map[string]struct{}{"": struct{}{}},
-		map[string]struct{}{"": struct{}{}},
+		map[string]struct{}{"": {}},
+		map[string]struct{}{"": {}},
 	))
-	merged := mergeStringSet(nil, map[string]struct{}{"": struct{}{}, "root": struct{}{}})
+	merged := mergeStringSet(nil, map[string]struct{}{"": {}, "root": {}})
 	require.Len(t, merged, 1)
 	_, ok = merged[""]
 	require.False(t, ok)

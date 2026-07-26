@@ -2414,7 +2414,7 @@ func TestLocalInferenceDefaultModeRejectsActualConversation(t *testing.T) {
 			makeInvocation("fixture-inv-1", "prompt"),
 		},
 		ActualConversation: []*evalset.Invocation{
-			&evalset.Invocation{
+			{
 				FinalResponse: &model.Message{Role: model.RoleAssistant, Content: "answer"},
 			},
 		},

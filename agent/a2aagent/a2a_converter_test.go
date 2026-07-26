@@ -2890,7 +2890,7 @@ func TestParseA2AMessageParts_StateDeltaMetadata(t *testing.T) {
 		"_node_metadata": []byte(`{"nodeId":"planner","phase":"start"}`),
 		"json_string":    []byte(`"hello"`),
 		"plain_text":     []byte("raw-text"),
-		"empty_value":    []byte{},
+		"empty_value":    {},
 		"deleted":        nil,
 	}
 	msg := &protocol.Message{

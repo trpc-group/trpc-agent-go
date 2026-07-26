@@ -754,7 +754,7 @@ func (s *Service) getLimitedSessionEvents(
 		return nil, err
 	}
 	if len(refs) == 0 && filterAfterTime.IsZero() {
-		return [][]event.Event{[]event.Event{}}, nil
+		return [][]event.Event{{}}, nil
 	}
 	eventAfterTime := maxTime(filterAfterTime, restoreAfterTime)
 	filteredEvents := filterEventsByTimestamp(events, eventAfterTime)
@@ -776,7 +776,7 @@ func (s *Service) getLimitedSessionEvents(
 		return nil, err
 	}
 	if !ok {
-		return [][]event.Event{[]event.Event{}}, nil
+		return [][]event.Event{{}}, nil
 	}
 	return [][]event.Event{append([]event.Event{anchor}, filteredEvents...)}, nil
 }

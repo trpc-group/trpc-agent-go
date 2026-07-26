@@ -467,7 +467,7 @@ func TestTimeTravel_History_LimitZeroAndSkipNil(t *testing.T) {
 			gotFilter = filter
 			return []*gr.CheckpointTuple{
 				nil,
-				&gr.CheckpointTuple{},
+				{},
 				tuple1,
 				tuple2,
 			}, nil

@@ -481,7 +481,7 @@ func TestEvaluationSelector_MetricWithJudgeRunnerHandlesNilAndCopiesSamples(t *t
 		},
 	}
 	selector := newEvaluationSelector(&options{
-		metrics:               []*metric.EvalMetric{nil, &metric.EvalMetric{}, evalMetric},
+		metrics:               []*metric.EvalMetric{nil, {}, evalMetric},
 		judgeRunner:           noOpRunner{},
 		judgeRunnerNumSamples: &numSamples,
 	}).(*evaluationSelector)

@@ -415,7 +415,7 @@ func TestExecutor_RecordTraceChannelSource_RespectsChannelBehavior(t *testing.T)
 	exec.recordTraceChannelSource(execCtx, "barrier", "right", "s3", 2)
 	assert.Equal(t, []string{"s3"}, execCtx.traceChannelSources["last"])
 	assert.Equal(t, []string{"s1", "s2"}, execCtx.traceChannelSources["topic"])
-	assert.Equal(t, map[string][]string{"left": []string{"s2"}, "right": []string{"s3"}}, execCtx.traceBarrierChannelSources["barrier"])
+	assert.Equal(t, map[string][]string{"left": {"s2"}, "right": {"s3"}}, execCtx.traceBarrierChannelSources["barrier"])
 	assert.ElementsMatch(t, []string{"s2", "s3"}, exec.tracePredecessorsForChannels(execCtx, []string{"barrier"}))
 }
 
@@ -459,7 +459,7 @@ func TestExecutor_ProcessChannelWrites_RecordsMultipleTraceSources(t *testing.T)
 		traceChannelSourceSteps:    make(map[string]int),
 		traceBarrierChannelSources: make(map[string]map[string][]string),
 		traceSourceStepIDsByTaskID: map[string][]string{
-			"task": []string{"s1", "s2"},
+			"task": {"s1", "s2"},
 		},
 	}
 	exec.processChannelWrites(context.Background(), nil, execCtx, "task", []channelWriteEntry{
