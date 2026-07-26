@@ -11,6 +11,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/event"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 // testdataDir resolves the testdata directory relative to this file.
@@ -415,7 +419,23 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 				}
 			},
 		},
-		{
+			{
+				name: "summary_cutoff_corrupted", section: "summary",
+				ref: refSummary,
+				inject: func(s *ReplaySnapshot) {
+					// Corrupt the CutoffAt in the boundary to a wrong
+					// non-zero timestamp.  Should be detected even
+					// though CutoffAt is no longer a boolean.
+					for k, entry := range s.Summaries {
+						if entry.Boundary != nil {
+							entry.Boundary.CutoffAt = "1999-12-31T23:59:59Z"
+							s.Summaries[k] = entry
+							break
+						}
+					}
+				},
+			},
+			{
 			name: "error_recovery_duplicate_event", section: "events",
 			ref: refErrRec,
 			inject: func(s *ReplaySnapshot) {
@@ -664,6 +684,67 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 			wantContain: "state is required",
 		},
 		{
+			name: "fault_both_modes_set",
+			steps: []ReplayStep{
+				{
+					Type: StepAppendEvent,
+					Event: &actionEvent{Author: "user", Role: "user", Content: "hi"},
+					Fault: &FaultConfig{FailBefore: true, FailAfter: true},
+				},
+			},
+			wantContain: "exactly one of fail_before or fail_after",
+		},
+		{
+			name: "fault_neither_mode_set",
+			steps: []ReplayStep{
+				{
+					Type: StepAppendEvent,
+					Event: &actionEvent{Author: "user", Role: "user", Content: "hi"},
+					Fault: &FaultConfig{},
+				},
+			},
+			wantContain: "at least one of fail_before or fail_after",
+		},
+
+			{
+				name: "add_memory_with_delete_op",
+				steps: []ReplayStep{
+					{Type: StepAddMemory, Memory: &actionMemory{Op: "delete", Content: "x"}},
+				},
+				wantContain: "requires op",
+			},
+			{
+				name: "update_memory_with_add_op",
+				steps: []ReplayStep{
+					{Type: StepUpdateMemory, Memory: &actionMemory{Op: "add", Ref: "m1", Content: "x"}},
+				},
+				wantContain: "requires op",
+			},
+			{
+				name: "concurrent_create_session_rejected",
+				steps: []ReplayStep{
+					{
+						Type: StepConcurrentEvents,
+						Concurrent: []ReplayStep{
+							{Type: StepCreateSession},
+						},
+					},
+				},
+				wantContain: "not allowed inside concurrent_events",
+			},
+			{
+				name: "concurrent_create_summary_rejected",
+				steps: []ReplayStep{
+					{
+						Type: StepConcurrentEvents,
+						Concurrent: []ReplayStep{
+							{Type: StepCreateSummary, Summary: &actionSummary{FilterKey: "main", Text: "hi"}},
+						},
+					},
+				},
+				wantContain: "not allowed inside concurrent_events",
+			},
+		{
 			name: "nested concurrent valid (sanity check)",
 			steps: []ReplayStep{
 				{
@@ -750,6 +831,157 @@ func diffSections(diffs []DiffEntry) string {
 }
 
 // TestMain discovers the testdata directory when running from the repo root.
+
+// ---------------------------------------------------------------------------
+// Fault injection sentinel error — regression tests
+// ---------------------------------------------------------------------------
+
+// stubSessionService returns a fixed error from AppendEvent for testing
+// that the fault wrapper does not swallow real backend errors.
+type stubSessionService struct {
+	session.Service
+	appendErr error
+}
+
+func (s *stubSessionService) AppendEvent(
+	ctx context.Context, sess *session.Session, evt *event.Event, opts ...session.Option,
+) error {
+	return s.appendErr
+}
+
+func TestFaultInjection_SentinelError(t *testing.T) {
+	backends := NewReplayBackends(t)
+	backend := backends[0]
+	ctx := context.Background()
+
+	key := session.Key{AppName: "ft", UserID: "u", SessionID: "sid"}
+	sess, err := backend.SessionService.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	fw := &faultSessionService{Service: backend.SessionService}
+
+	t.Run("fail_before_returns_sentinel", func(t *testing.T) {
+		fw.nextFault = &FaultConfig{FailBefore: true}
+		evt := buildEvent(&actionEvent{Author: "user", Role: "user", Content: "hi"}, 0, time.Now())
+		err := fw.AppendEvent(ctx, sess, evt)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrFaultInjected),
+			"expected ErrFaultInjected, got: %v", err)
+	})
+
+	t.Run("fail_after_returns_sentinel", func(t *testing.T) {
+		fw.nextFault = &FaultConfig{FailAfter: true}
+		evt := buildEvent(&actionEvent{Author: "user", Role: "user", Content: "ok"}, 1, time.Now())
+		err := fw.AppendEvent(ctx, sess, evt)
+		require.Error(t, err)
+		require.True(t, errors.Is(err, ErrFaultInjected),
+			"expected ErrFaultInjected, got: %v", err)
+	})
+
+	t.Run("no_fault_no_error", func(t *testing.T) {
+		fw.nextFault = nil
+		evt := buildEvent(&actionEvent{Author: "user", Role: "user", Content: "clean"}, 2, time.Now())
+		err := fw.AppendEvent(ctx, sess, evt)
+		require.NoError(t, err)
+	})
+
+	t.Run("underlying_error_not_sentinel", func(t *testing.T) {
+		// Wrap a stub that returns a real backend error with a
+		// FaultConfig carrying FailAfter.  The wrapper must return
+		// the underlying error — not ErrFaultInjected — because
+		// the backend error happens before the fault fires.
+		realErr := errors.New("simulated backend failure")
+		stub := &stubSessionService{
+			Service:   backend.SessionService,
+			appendErr: realErr,
+		}
+		fw2 := &faultSessionService{
+			Service:   stub,
+			nextFault: &FaultConfig{FailAfter: true},
+		}
+		evt := buildEvent(&actionEvent{Author: "user", Role: "user", Content: "boom"}, 3, time.Now())
+		err := fw2.AppendEvent(ctx, sess, evt)
+		require.Error(t, err)
+		require.False(t, errors.Is(err, ErrFaultInjected),
+			"real backend error should NOT be ErrFaultInjected, got: %v", err)
+		require.True(t, errors.Is(err, realErr),
+			"expected underlying error %v, got: %v", realErr, err)
+	})
+}
+// ---------------------------------------------------------------------------
+// Load-time rejection of unknown JSON fields
+// ---------------------------------------------------------------------------
+
+func TestReplayCase_Load_RejectsUnknownFields(t *testing.T) {
+	dir := t.TempDir()
+
+	writeJSON := func(name, content string) string {
+		t.Helper()
+		p := filepath.Join(dir, name)
+		require.NoError(t, os.WriteFile(p, []byte(content), 0644))
+		return p
+	}
+
+	t.Run("misspelled_top_level_key", func(t *testing.T) {
+		path := writeJSON("top_level.json", `{
+			"name": "typo-test",
+			"desciption": "misspelled",
+			"app_name": "app",
+			"user_id": "u",
+			"session_id": "s",
+			"steps": [{"type": "create_session"}, {"type": "get_session"}]
+		}`)
+		_, err := LoadReplayCase(path)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unmarshal")
+	})
+
+	t.Run("misspelled_nested_verify_field", func(t *testing.T) {
+		// "events_count" is correct, "events_cout" is not.
+		path := writeJSON("verify.json", `{
+			"name": "verify-typo",
+			"steps": [
+				{"type": "create_session"},
+				{"type": "get_session"}
+			],
+			"verify": {"events_cout": 1}
+		}`)
+		_, err := LoadReplayCase(path)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unmarshal")
+	})
+
+	t.Run("misspelled_fault_field", func(t *testing.T) {
+		// "fail_before" is correct, "fail_befor" is not.
+		path := writeJSON("fault.json", `{
+			"name": "fault-typo",
+			"steps": [
+				{"type": "create_session"},
+				{
+					"type": "append_event",
+					"event": {"author": "user", "role": "user", "content": "hello"},
+					"fault": {"fail_befor": true}
+				},
+				{"type": "get_session"}
+			]
+		}`)
+		_, err := LoadReplayCase(path)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "unmarshal")
+	})
+
+	t.Run("trailing_json_value", func(t *testing.T) {
+		path := writeJSON("trailing.json", `{
+			"name": "trailing-test",
+			"steps": [{"type": "create_session"}, {"type": "get_session"}]
+		}{"trailing": "garbage"}`)
+		_, err := LoadReplayCase(path)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "trailing data")
+	})
+}
+
 func TestMain(m *testing.M) {
 	// Change to the directory containing this file so that testdata/
 	// is always resolved correctly regardless of cwd.

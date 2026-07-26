@@ -25,23 +25,30 @@ cd test && go test ./replaytest/... -v
 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 ```
 
-## Lightweight Mode
+## Supported Backends
 
-Compares **InMemory** against **SQLite** using temporary databases created in `t.TempDir()`. No external services required, runs in ~110ms. This is the default and always-on mode.
+**Lightweight mode** (default, always-on) compares **InMemory** against **SQLite** using temporary databases created in `t.TempDir()`. No external services required. This mode already exercises every operation the framework covers.
 
 Acceptance target: ≤ 30 seconds for the full 10-case suite.
 
-## Integration Mode
+## Configuration
 
-Additional backends can be enabled via environment variables (future enhancement):
+| Variable | Status | Description |
+|----------|--------|-------------|
+| `TRPC_AGENT_REPLAY_REPORT_PATH` | ✅ active | Custom diff report output path |
+
+No other environment variables are read. Setting any other variable has no effect on which backends are used; `NewReplayBackends` always constructs only InMemory and SQLite.
+
+## Roadmap: Additional Backends
+
+The following backends are planned for a future iteration. Once `NewReplayBackends` learns to construct them from environment variables, requesting an unavailable backend will fail the test rather than silently falling back to the lightweight pair:
 
 | Variable | Backend |
 |----------|---------|
-| `TRPC_AGENT_REPLAY_REDIS_ADDR` | Redis |
-| `TRPC_AGENT_REPLAY_POSTGRES_DSN` | PostgreSQL |
-| `TRPC_AGENT_REPLAY_MYSQL_DSN` | MySQL |
-| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN` | ClickHouse |
-| `TRPC_AGENT_REPLAY_REPORT_PATH` | Custom diff report output path |
+| `TRPC_AGENT_REPLAY_REDIS_ADDR` (planned) | Redis |
+| `TRPC_AGENT_REPLAY_POSTGRES_DSN` (planned) | PostgreSQL |
+| `TRPC_AGENT_REPLAY_MYSQL_DSN` (planned) | MySQL |
+| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN` (planned) | ClickHouse |
 
 ## Replay Case JSON Format
 
@@ -69,6 +76,8 @@ Each replay case is a JSON file with the following structure:
 | `update_app_state` | Update app-level state | `state` |
 | `update_user_state` | Update user-level state | `state` |
 | `update_session_state` | Update session-level state | `state` |
+| `delete_app_state` | Delete an app-level state key | `state` |
+| `delete_user_state` | Delete a user-level state key | `state` |
 | `add_memory` | Add a memory entry | `memory` |
 | `update_memory` | Update a memory entry by alias | `memory` |
 | `delete_memory` | Delete a memory entry by alias | `memory` |
@@ -139,6 +148,7 @@ Both lightweight-mode backends (InMemory, SQLite) fully support every operation 
 |-----------|:--------:|:------:|
 | Session create / event append | ✅ | ✅ |
 | State update (app / user / session) | ✅ | ✅ |
+| State delete (app / user) | ✅ | ✅ |
 | Memory CRUD | ✅ | ✅ |
 | Session summary | ✅ | ✅ |
 | Track event append | ✅ | ✅ |

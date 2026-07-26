@@ -10,6 +10,7 @@ package replaytest
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -92,6 +93,19 @@ type FaultConfig struct {
 	FailAfter  bool `json:"fail_after,omitempty"`
 }
 
+// Validate checks that exactly one of fail_before or fail_after is set.
+// Both empty and both set are scenario authoring errors caught at load
+// time so fault injection cannot silently no-op or behave ambiguously.
+func (f *FaultConfig) Validate() error {
+	if f.FailBefore && f.FailAfter {
+		return errors.New("exactly one of fail_before or fail_after must be set, not both")
+	}
+	if !f.FailBefore && !f.FailAfter {
+		return errors.New("at least one of fail_before or fail_after must be set")
+	}
+	return nil
+}
+
 // actionEvent describes a single event to be appended.
 type actionEvent struct {
 	ID         string         `json:"id,omitempty"`
@@ -168,15 +182,30 @@ type AllowedDiffRule struct {
 	Reason   string `json:"reason"`
 }
 
-// LoadReplayCase reads a ReplayCase from a JSON file.
+// LoadReplayCase reads a ReplayCase from a JSON file.  Unknown fields at
+// any nesting level are rejected so that typos such as fail_befor or
+// events_order_presereved are caught at load time rather than silently
+// disabling the intended assertion or fault.
 func LoadReplayCase(path string) (*ReplayCase, error) {
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("read replay case file: %w", err)
+		return nil, fmt.Errorf("open replay case file: %w", err)
 	}
+	defer f.Close()
+
+	dec := json.NewDecoder(f)
+	dec.DisallowUnknownFields()
+
 	var rc ReplayCase
-	if err := json.Unmarshal(data, &rc); err != nil {
+	if err := dec.Decode(&rc); err != nil {
 		return nil, fmt.Errorf("unmarshal replay case: %w", err)
+	}
+	// Reject trailing JSON values (e.g. two objects concatenated or
+	// a second value after the first object).
+	if dec.More() {
+		return nil, fmt.Errorf(
+			"unexpected trailing data after JSON object in %s", path,
+		)
 	}
 	if err := rc.Validate(); err != nil {
 		return nil, fmt.Errorf("validate replay case %q: %w", rc.Name, err)
@@ -236,6 +265,14 @@ func validateSteps(step ReplayStep, index int) error {
 		return fmt.Errorf("step %d: unknown type %q", index, step.Type)
 	}
 
+	// Validate fault config so injection cannot silently no-op
+	// (both modes false) or behave ambiguously (both true).
+	if step.Fault != nil {
+		if err := step.Fault.Validate(); err != nil {
+			return fmt.Errorf("step %d: %w", index, err)
+		}
+	}
+
 	// Validate required payloads are present so malformed scenarios are
 	// caught at load time with a descriptive error rather than panicking
 	// deep inside execution.
@@ -259,6 +296,10 @@ func validateSteps(step ReplayStep, index int) error {
 		if !validMemoryOps[step.Memory.Op] {
 			return fmt.Errorf("step %d (%s): unknown memory op %q", index, step.Type, step.Memory.Op)
 		}
+
+			if expected := memoryTypeOp[step.Type]; step.Memory.Op != expected {
+				return fmt.Errorf("step %d: type %q requires op %q, got %q", index, step.Type, expected, step.Memory.Op)
+			}
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %d (%s): summary is required", index, step.Type)
@@ -280,6 +321,9 @@ func validateSteps(step ReplayStep, index int) error {
 	}
 
 	for i, nested := range step.Concurrent {
+			if !validConcurrentStepTypes[nested.Type] {
+				return fmt.Errorf("step %d concurrent child %d: type %q is not allowed inside concurrent_events", index, i, nested.Type)
+			}
 		if err := validateSteps(nested, i); err != nil {
 			return err
 		}
@@ -292,4 +336,21 @@ var validMemoryOps = map[string]bool{
 	"add":    true,
 	"update": true,
 	"delete": true,
+}
+
+// memoryTypeOp maps step types to their required memory operation.
+var memoryTypeOp = map[string]string{
+	StepAddMemory:    "add",
+	StepUpdateMemory: "update",
+	StepDeleteMemory: "delete",
+}
+
+// validConcurrentStepTypes lists step types permitted inside
+// concurrent_events blocks.  runConcurrentSteps only supports
+// event append and memory operations.
+var validConcurrentStepTypes = map[string]bool{
+	StepAppendEvent:  true,
+	StepAddMemory:    true,
+	StepUpdateMemory: true,
+	StepDeleteMemory: true,
 }

@@ -11,6 +11,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -22,6 +23,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
+
+// ErrFaultInjected is a sentinel error returned by fault wrappers to
+// distinguish injected faults from genuine backend errors.  Drivers
+// use errors.Is to recognise injection failures and treat every other
+// error as a test-fatal backend defect.
+var ErrFaultInjected = errors.New("fault injected")
 
 // faultSessionService wraps a session.Service to inject transient
 // faults for error-recovery testing.  The driver sets nextFault before
@@ -41,14 +48,14 @@ func (s *faultSessionService) CreateSession(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return nil, fmt.Errorf("fault injected: fail before CreateSession")
+		return nil, fmt.Errorf("%w: fail before CreateSession", ErrFaultInjected)
 	}
 	sess, err := s.Service.CreateSession(ctx, key, state, opts...)
 	if err != nil {
 		return sess, err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return sess, fmt.Errorf("fault injected: fail after CreateSession")
+		return sess, fmt.Errorf("%w: fail after CreateSession", ErrFaultInjected)
 	}
 	return sess, nil
 }
@@ -59,14 +66,14 @@ func (s *faultSessionService) AppendEvent(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before AppendEvent")
+		return fmt.Errorf("%w: fail before AppendEvent", ErrFaultInjected)
 	}
 	err := s.Service.AppendEvent(ctx, sess, evt, opts...)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after AppendEvent")
+		return fmt.Errorf("%w: fail after AppendEvent", ErrFaultInjected)
 	}
 	return nil
 }
@@ -77,14 +84,14 @@ func (s *faultSessionService) UpdateAppState(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before UpdateAppState")
+		return fmt.Errorf("%w: fail before UpdateAppState", ErrFaultInjected)
 	}
 	err := s.Service.UpdateAppState(ctx, appName, state)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after UpdateAppState")
+		return fmt.Errorf("%w: fail after UpdateAppState", ErrFaultInjected)
 	}
 	return nil
 }
@@ -95,14 +102,14 @@ func (s *faultSessionService) UpdateUserState(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before UpdateUserState")
+		return fmt.Errorf("%w: fail before UpdateUserState", ErrFaultInjected)
 	}
 	err := s.Service.UpdateUserState(ctx, userKey, state)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after UpdateUserState")
+		return fmt.Errorf("%w: fail after UpdateUserState", ErrFaultInjected)
 	}
 	return nil
 }
@@ -113,14 +120,14 @@ func (s *faultSessionService) UpdateSessionState(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before UpdateSessionState")
+		return fmt.Errorf("%w: fail before UpdateSessionState", ErrFaultInjected)
 	}
 	err := s.Service.UpdateSessionState(ctx, key, state)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after UpdateSessionState")
+		return fmt.Errorf("%w: fail after UpdateSessionState", ErrFaultInjected)
 	}
 	return nil
 }
@@ -131,14 +138,14 @@ func (s *faultSessionService) CreateSessionSummary(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before CreateSessionSummary")
+		return fmt.Errorf("%w: fail before CreateSessionSummary", ErrFaultInjected)
 	}
 	err := s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after CreateSessionSummary")
+		return fmt.Errorf("%w: fail after CreateSessionSummary", ErrFaultInjected)
 	}
 	return nil
 }
@@ -157,14 +164,14 @@ func (s *faultTrackService) AppendTrackEvent(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before AppendTrackEvent")
+		return fmt.Errorf("%w: fail before AppendTrackEvent", ErrFaultInjected)
 	}
 	err := s.TrackService.AppendTrackEvent(ctx, sess, event, opts...)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after AppendTrackEvent")
+		return fmt.Errorf("%w: fail after AppendTrackEvent", ErrFaultInjected)
 	}
 	return nil
 }
@@ -184,14 +191,14 @@ func (s *faultMemoryService) AddMemory(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before AddMemory")
+		return fmt.Errorf("%w: fail before AddMemory", ErrFaultInjected)
 	}
 	err := s.Service.AddMemory(ctx, userKey, mem, topics, opts...)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after AddMemory")
+		return fmt.Errorf("%w: fail after AddMemory", ErrFaultInjected)
 	}
 	return nil
 }
@@ -203,14 +210,14 @@ func (s *faultMemoryService) UpdateMemory(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before UpdateMemory")
+		return fmt.Errorf("%w: fail before UpdateMemory", ErrFaultInjected)
 	}
 	err := s.Service.UpdateMemory(ctx, memoryKey, memory, topics, opts...)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after UpdateMemory")
+		return fmt.Errorf("%w: fail after UpdateMemory", ErrFaultInjected)
 	}
 	return nil
 }
@@ -221,14 +228,14 @@ func (s *faultMemoryService) DeleteMemory(
 	cfg := s.nextFault
 	s.nextFault = nil
 	if cfg != nil && cfg.FailBefore {
-		return fmt.Errorf("fault injected: fail before DeleteMemory")
+		return fmt.Errorf("%w: fail before DeleteMemory", ErrFaultInjected)
 	}
 	err := s.Service.DeleteMemory(ctx, memoryKey)
 	if err != nil {
 		return err
 	}
 	if cfg != nil && cfg.FailAfter {
-		return fmt.Errorf("fault injected: fail after DeleteMemory")
+		return fmt.Errorf("%w: fail after DeleteMemory", ErrFaultInjected)
 	}
 	return nil
 }
@@ -294,7 +301,7 @@ func RunReplayCase(
 				ctx, key, stateMapFromJSON(step.State),
 			)
 			if err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault on create session: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -314,7 +321,7 @@ func RunReplayCase(
 			sess := mustGetSession(t, ctx, backend, key)
 			evt := buildEvent(step.Event, stepIdx, baseTime)
 			if err := backend.SessionService.AppendEvent(ctx, sess, evt); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -331,7 +338,7 @@ func RunReplayCase(
 			if err := backend.SessionService.UpdateAppState(
 				ctx, key.AppName, stateMapFromJSON(step.State),
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -349,7 +356,7 @@ func RunReplayCase(
 			if err := backend.SessionService.UpdateUserState(
 				ctx, uk, stateMapFromJSON(step.State),
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -366,7 +373,7 @@ func RunReplayCase(
 			if err := backend.SessionService.UpdateSessionState(
 				ctx, key, stateMapFromJSON(step.State),
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -402,7 +409,7 @@ func RunReplayCase(
 			if err := applyMemoryOp(
 				ctx, backend.MemoryService, memKey, aliases, step.Memory,
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -421,7 +428,7 @@ func RunReplayCase(
 			if err := backend.SessionService.CreateSessionSummary(
 				ctx, sess, step.Summary.FilterKey, step.Summary.Force,
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -447,7 +454,7 @@ func RunReplayCase(
 					Timestamp: baseTime.Add(time.Duration(stepIdx) * time.Second),
 				},
 			); err != nil {
-				if step.Fault != nil {
+				if errors.Is(err, ErrFaultInjected) {
 					t.Logf("step %d: expected fault: %v", stepIdx, err)
 					stepIdx++
 					continue
@@ -460,6 +467,12 @@ func RunReplayCase(
 
 		case StepGetSession:
 			// snapshot point — captured at end of scenario.
+		}
+		// Fault-marked steps must return ErrFaultInjected.  A nil error
+		// here means the injection did not fire (e.g. nextFault wasn't
+		// set, or the wrapper was missing).
+		if step.Fault != nil {
+			t.Fatalf("step %d: fault injection did not fire (no error returned)", stepIdx)
 		}
 		stepIdx++
 	}

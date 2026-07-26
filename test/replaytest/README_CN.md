@@ -25,23 +25,30 @@ cd test && go test ./replaytest/... -v
 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 ```
 
-## 轻量模式
+## 支持的后端
 
-对比 **InMemory** 与 **SQLite**，使用 `t.TempDir()` 创建的临时数据库。无需任何外部服务，运行时间约 110ms。这是默认且始终开启的模式。
+**轻量模式**（默认，始终开启）对比 **InMemory** 与 **SQLite**，使用 `t.TempDir()` 创建的临时数据库。无需任何外部服务。该模式已覆盖框架支持的所有操作。
 
 验收目标：完整 10 条用例套件耗时 ≤ 30 秒。
 
-## 集成模式
+## 环境变量
 
-可通过环境变量开启额外后端（未来增强）：
+| 变量 | 状态 | 说明 |
+|----------|--------|-------------|
+| `TRPC_AGENT_REPLAY_REPORT_PATH` | ✅ 已启用 | 自定义差异报告输出路径 |
+
+暂不支持其他环境变量。设置任何其他变量均不影响后端选择；`NewReplayBackends` 始终只构建 InMemory 和 SQLite。
+
+## 路线图：扩展后端
+
+以下后端计划在未来版本支持。`NewReplayBackends` 从环境变量构建对应后端后，请求不可用的后端将导致测试失败而非静默回退到轻量模式：
 
 | 变量 | 后端 |
 |----------|---------|
-| `TRPC_AGENT_REPLAY_REDIS_ADDR` | Redis |
-| `TRPC_AGENT_REPLAY_POSTGRES_DSN` | PostgreSQL |
-| `TRPC_AGENT_REPLAY_MYSQL_DSN` | MySQL |
-| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN` | ClickHouse |
-| `TRPC_AGENT_REPLAY_REPORT_PATH` | 自定义差异报告输出路径 |
+| `TRPC_AGENT_REPLAY_REDIS_ADDR`（规划中） | Redis |
+| `TRPC_AGENT_REPLAY_POSTGRES_DSN`（规划中） | PostgreSQL |
+| `TRPC_AGENT_REPLAY_MYSQL_DSN`（规划中） | MySQL |
+| `TRPC_AGENT_REPLAY_CLICKHOUSE_DSN`（规划中） | ClickHouse |
 
 ## Replay Case JSON 格式
 
@@ -69,6 +76,8 @@ go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 | `update_app_state` | 更新应用级状态 | `state` |
 | `update_user_state` | 更新用户级状态 | `state` |
 | `update_session_state` | 更新会话级状态 | `state` |
+| `delete_app_state` | 删除应用级状态 key | `state` |
+| `delete_user_state` | 删除用户级状态 key | `state` |
 | `add_memory` | 新增记忆条目 | `memory` |
 | `update_memory` | 通过别名更新记忆 | `memory` |
 | `delete_memory` | 通过别名删除记忆 | `memory` |
@@ -139,6 +148,7 @@ go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 |-----------|:--------:|:------:|
 | Session 创建 / 事件追加 | ✅ | ✅ |
 | State 更新（app / user / session） | ✅ | ✅ |
+| State 删除（app / user） | ✅ | ✅ |
 | Memory 增删改查 | ✅ | ✅ |
 | Session 摘要生成 | ✅ | ✅ |
 | Track 事件追加 | ✅ | ✅ |

@@ -55,7 +55,6 @@ type summarySnapshot struct {
 	Summary          string          `json:"summary"`
 	Topics           []string        `json:"topics,omitempty"`
 	UpdatedAtNonZero bool            `json:"updated_at_non_zero"`
-	CutoffAtNonZero  bool            `json:"cutoff_at_non_zero"`
 	Boundary         *replayBoundary `json:"boundary,omitempty"`
 }
 
@@ -63,6 +62,7 @@ type replayBoundary struct {
 	Version     int    `json:"version"`
 	FilterKey   string `json:"filter_key"`
 	LastEventID string `json:"last_event_id,omitempty"`
+	CutoffAt    string `json:"cutoff_at,omitempty"`
 }
 
 type trackSnap struct {
@@ -224,11 +224,12 @@ func normalizeSummaries(sess *session.Session) map[string]summarySnapshot {
 			UpdatedAtNonZero: !sum.UpdatedAt.IsZero(),
 		}
 		if boundary := sum.CutoffBoundary(); boundary != nil {
-			entry.CutoffAtNonZero = !boundary.CutoffAt.IsZero()
+			
 			entry.Boundary = &replayBoundary{
 				Version:     boundary.Version,
 				FilterKey:   boundary.FilterKey,
 				LastEventID: boundary.LastEventID,
+					CutoffAt:    timeToString(boundary.CutoffAt),
 			}
 		}
 		out[fk] = entry
