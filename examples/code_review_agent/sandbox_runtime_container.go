@@ -18,15 +18,6 @@ import (
 )
 
 func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
-	goModCache := ""
-	cacheRoot := ""
-	if opts.RepoPath != "" && !opts.DryRun {
-		var err error
-		goModCache, cacheRoot, err = prepareIsolatedGoModCache(opts.RepoPath, opts.ChangedModules)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if opts.DryRun {
 		return &engineRunner{
 			runtime:     "container",
@@ -35,8 +26,6 @@ func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit i
 			repoPath:    opts.RepoPath,
 			skillsRoot:  opts.SkillsRoot,
 			dryRun:      true,
-			goModCache:  goModCache,
-			cacheRoot:   cacheRoot,
 			changedMods: opts.ChangedModules,
 		}, nil
 	}
@@ -53,23 +42,12 @@ func newContainerRunner(opts ReviewOptions, timeout time.Duration, outputLimit i
 		repoPath:    opts.RepoPath,
 		skillsRoot:  opts.SkillsRoot,
 		dryRun:      opts.DryRun,
-		goModCache:  goModCache,
-		cacheRoot:   cacheRoot,
 		changedMods: opts.ChangedModules,
 	}, nil
 }
 
 func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) (SandboxRunner, error) {
 	lifetime := totalSandboxLifetime(timeout, reviewCommands(opts))
-	goModCache := ""
-	cacheRoot := ""
-	if opts.RepoPath != "" && !opts.DryRun {
-		var err error
-		goModCache, cacheRoot, err = prepareIsolatedGoModCache(opts.RepoPath, opts.ChangedModules)
-		if err != nil {
-			return nil, err
-		}
-	}
 	if opts.DryRun {
 		return &engineRunner{
 			runtime:     "e2b",
@@ -78,8 +56,6 @@ func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) 
 			repoPath:    opts.RepoPath,
 			skillsRoot:  opts.SkillsRoot,
 			dryRun:      true,
-			goModCache:  goModCache,
-			cacheRoot:   cacheRoot,
 			changedMods: opts.ChangedModules,
 		}, nil
 	}
@@ -98,8 +74,6 @@ func newE2BRunner(opts ReviewOptions, timeout time.Duration, outputLimit int64) 
 		repoPath:    opts.RepoPath,
 		skillsRoot:  opts.SkillsRoot,
 		dryRun:      opts.DryRun,
-		goModCache:  goModCache,
-		cacheRoot:   cacheRoot,
 		changedMods: opts.ChangedModules,
 	}, nil
 }

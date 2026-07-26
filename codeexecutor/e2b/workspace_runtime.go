@@ -40,9 +40,9 @@ import (
 
 // Compile-time check that workspaceRuntime satisfies the expected interfaces.
 var (
-	_ codeexecutor.WorkspaceManager = (*workspaceRuntime)(nil)
-	_ codeexecutor.ProgramRunner    = (*workspaceRuntime)(nil)
-	perTurnWorkspaceSeq             uint64
+	_                   codeexecutor.WorkspaceManager = (*workspaceRuntime)(nil)
+	_                   codeexecutor.ProgramRunner    = (*workspaceRuntime)(nil)
+	perTurnWorkspaceSeq uint64
 )
 
 const (
@@ -125,8 +125,11 @@ func (r *workspaceRuntime) CreateWorkspace(
 		h := stableWorkspaceHash(execID)
 		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s", h))
 	} else {
-		suf := time.Now().UnixNano() + int64(atomic.AddUint64(&perTurnWorkspaceSeq, 1))
-		wsPath = path.Join(r.cfg.runBase, fmt.Sprintf("ws_%s_%d", safe, suf))
+		suf := atomic.AddUint64(&perTurnWorkspaceSeq, 1)
+		wsPath = path.Join(
+			r.cfg.runBase,
+			fmt.Sprintf("ws_%s_%d_%d", safe, time.Now().UnixNano(), suf),
+		)
 	}
 
 	var sb strings.Builder

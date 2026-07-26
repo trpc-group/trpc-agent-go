@@ -30,7 +30,19 @@ const (
 	defaultMaxChangedFiles = 200
 )
 
-// RunReview executes the full deterministic review pipeline.
+// RunReview executes the deterministic review pipeline and writes the
+// resulting report artifacts under opts.OutDir.
+//
+// The returned ReviewReport contains the completed task metadata, redacted diff
+// summary, findings, warnings, human-review gates, sandbox execution records,
+// artifact metadata, and aggregate metrics for the run. The returned jsonPath
+// and mdPath identify the persisted JSON and Markdown report files created for
+// that report.
+//
+// On success, err is nil and both artifact paths refer to files written by this
+// call. On failure, err describes the first blocking validation, I/O, sandbox,
+// or persistence error, and the report and artifact paths are returned only for
+// work that completed before the failure.
 func RunReview(ctx context.Context, opts ReviewOptions) (ReviewReport, string, string, error) {
 	ctx, span := otel.Tracer("trpc-agent-go/examples/code_review_agent").Start(ctx, "code_review_agent.review")
 	defer span.End()

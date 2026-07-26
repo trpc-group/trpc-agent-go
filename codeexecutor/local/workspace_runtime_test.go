@@ -69,6 +69,20 @@ func TestRuntime_RunProgram_Basic(t *testing.T) {
 	require.Contains(t, res.Stdout, "hello runtime")
 }
 
+func TestRuntime_RunProgram_DisableNetworkFailsClosed(t *testing.T) {
+	rt := local.NewRuntime("")
+	_, err := rt.RunProgram(
+		context.Background(),
+		codeexecutor.Workspace{Path: t.TempDir()},
+		codeexecutor.RunProgramSpec{
+			Cmd:            "bash",
+			Args:           []string{"-c", "true"},
+			DisableNetwork: true,
+		},
+	)
+	require.ErrorContains(t, err, "does not support DisableNetwork")
+}
+
 func TestRuntime_PathListSeparator(t *testing.T) {
 	rt := local.NewRuntime("")
 

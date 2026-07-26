@@ -42,7 +42,6 @@ func TestNewSandboxRunnerFallbacks(t *testing.T) {
 	require.True(t, ok)
 	require.Nil(t, engine.exec)
 	require.True(t, engine.dryRun)
-	require.Empty(t, engine.goModCache)
 	_, err = NewSandboxRunner(ReviewOptions{Runtime: "unknown"})
 	require.Error(t, err)
 }
@@ -76,7 +75,6 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 
 	r.repoPath = "."
 	r.skillsRoot = "skills"
-	r.goModCache = "host-mod-cache"
 	r.changedMods = []string{"pkg", "nested/module"}
 	runs, err = r.Run(context.Background(), "task", []string{skillScriptCommand}, NewCommandGate())
 	require.NoError(t, err)
@@ -87,12 +85,9 @@ func TestEngineRunnerDryRunAndExecution(t *testing.T) {
 	require.Equal(t, []string{"../skills/code-review/scripts/run_go_checks.sh"}, runner.specs[1].Args)
 	require.Equal(t, "repo", runner.specs[1].Cwd)
 	require.False(t, runner.specs[1].DisableNetwork)
-	require.Equal(t, "../gomodcache", runner.specs[1].Env["GOMODCACHE"])
-	require.Equal(t, "../gocache", runner.specs[1].Env["GOCACHE"])
 	require.Equal(t, "pkg\nnested/module", runner.specs[1].Env["CODE_REVIEW_CHANGED_MODULES"])
 	require.Contains(t, fs.stageCalls, stageCall{src: ".", to: "repo"})
 	require.Contains(t, fs.stageCalls, stageCall{src: "skills", to: "skills"})
-	require.Contains(t, fs.stageCalls, stageCall{src: "host-mod-cache", to: "gomodcache"})
 
 	r.outputLimit = 40
 	runner.result.Stdout = `token="AKID1234567890SECRET"`

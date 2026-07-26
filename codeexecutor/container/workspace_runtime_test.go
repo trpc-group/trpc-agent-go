@@ -365,6 +365,20 @@ func TestWorkspaceRuntime_RunProgram_InsertsWorkspaceEnv(t *testing.T) {
 	require.Contains(t, joined, ws.Path)
 }
 
+func TestWorkspaceRuntime_RunProgram_DisableNetworkFailsClosed(t *testing.T) {
+	rt := &workspaceRuntime{}
+	_, err := rt.RunProgram(
+		context.Background(),
+		codeexecutor.Workspace{Path: testRunBase},
+		codeexecutor.RunProgramSpec{
+			Cmd:            "bash",
+			Args:           []string{"-lc", "true"},
+			DisableNetwork: true,
+		},
+	)
+	require.ErrorContains(t, err, "does not support DisableNetwork")
+}
+
 // runProgramCaptureExec runs spec through a fake-docker
 // workspaceRuntime and returns the bash argv and the ExecCreate Env
 // handed to ContainerExecCreate, so CleanEnv tests can assert how

@@ -14,8 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -121,11 +119,6 @@ func (r *engineRunner) Run(ctx context.Context, taskID string, commands []string
 	if r.skillsRoot != "" {
 		if err := eng.FS().StageDirectory(ctx, ws, r.skillsRoot, "skills", codeexecutor.StageOptions{ReadOnly: true, AllowMount: true}); err != nil {
 			return nil, fmt.Errorf("stage skills: %w", err)
-		}
-	}
-	if r.goModCache != "" {
-		if err := eng.FS().StageDirectory(ctx, ws, r.goModCache, "gomodcache", codeexecutor.StageOptions{ReadOnly: true, AllowMount: true}); err != nil {
-			return nil, fmt.Errorf("stage gomodcache: %w", err)
 		}
 	}
 	runs := make([]SandboxRun, 0, len(commands))
@@ -329,64 +322,6 @@ func limitOutput(out string, max int64) (string, bool) {
 	return out[:keep] + marker, true
 }
 
-func hostGoModCache() string {
-	cmd := exec.Command("go", "env", "GOMODCACHE")
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func prepareIsolatedGoModCache(repoPath string, changedModules []string) (string, string, error) {
-	if repoPath == "" {
-		return "", "", nil
-	}
-	root, err := os.MkdirTemp("", "code-review-agent-gomodcache-*")
-	if err != nil {
-		return "", "", err
-	}
-	modCache := filepath.Join(root, "gomodcache")
-	goCache := filepath.Join(root, "gocache")
-	homeDir := filepath.Join(root, "home")
-	for _, dir := range []string{modCache, goCache, homeDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			_ = os.RemoveAll(root)
-			return "", "", err
-		}
-	}
-	modules := append([]string(nil), changedModules...)
-	if len(modules) == 0 {
-		modules = []string{"."}
-	}
-	seen := map[string]struct{}{}
-	for _, rel := range modules {
-		if rel == "" {
-			continue
-		}
-		if _, ok := seen[rel]; ok {
-			continue
-		}
-		seen[rel] = struct{}{}
-		moduleDir := repoPath
-		if rel != "." {
-			moduleDir = filepath.Join(repoPath, filepath.FromSlash(rel))
-		}
-		cmd := exec.Command("go", "mod", "download", "-modcacherw")
-		cmd.Dir = moduleDir
-		cmd.Env = append(os.Environ(),
-			"HOME="+homeDir,
-			"GOMODCACHE="+modCache,
-			"GOCACHE="+goCache,
-		)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			_ = os.RemoveAll(root)
-			return "", "", fmt.Errorf("prepare module cache for %s: %w: %s", rel, err, strings.TrimSpace(string(out)))
-		}
-	}
-	return modCache, root, nil
-}
-
 func sandboxEnv(cwd string, stagedGoModCache string, changedModules []string) map[string]string {
 	env := map[string]string{
 		"HOME": "/tmp",
@@ -395,14 +330,5 @@ func sandboxEnv(cwd string, stagedGoModCache string, changedModules []string) ma
 	if len(changedModules) > 0 {
 		env["CODE_REVIEW_CHANGED_MODULES"] = strings.Join(changedModules, "\n")
 	}
-	if stagedGoModCache == "" {
-		return env
-	}
-	prefix := ""
-	if cwd != "." && cwd != "" {
-		prefix = "../"
-	}
-	env["GOMODCACHE"] = prefix + "gomodcache"
-	env["GOCACHE"] = prefix + "gocache"
 	return env
 }
