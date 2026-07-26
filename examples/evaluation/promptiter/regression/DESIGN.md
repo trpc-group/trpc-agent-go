@@ -10,7 +10,7 @@ of disappearing from the score denominator. This makes fake runs and
 model-backed runs comparable and prevents a candidate from bypassing
 evaluation.
 
-Failure attribution is deterministic and evidence based. It first inspects
+Failure attribution is deterministic and evidence-based. It first inspects
 expected and actual knowledge-search calls, structured JSON validity, tool
 names and arguments, trace routing errors, and metric reasons. A generic final
 response mismatch is used only after more specific signals have been checked.
