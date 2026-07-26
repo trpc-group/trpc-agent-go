@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -90,10 +91,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 	if p == nil {
 		return tool.DenyPermission("tool safety guard permission policy is nil"), nil
 	}
-	scanReq, ok, err := RequestFromPermissionRequest(req)
-	if err == nil && !ok {
-		scanReq, ok, err = p.requestFromExtension(req)
-	}
+	scanReq, ok, err := p.scanRequest(req)
 	if err != nil {
 		return tool.DenyPermission(err.Error()), nil
 	}
@@ -114,6 +112,24 @@ func (p *PermissionPolicy) CheckToolPermission(
 	default:
 		return tool.DenyPermission("tool safety guard returned an unknown decision"), nil
 	}
+}
+
+// scanRequest resolves a permission request into a scan request. An exact
+// built-in name keeps its documented precedence, a parser registered for that
+// exact name comes next, and wrapper resolution runs last so that a registered
+// parser still wins for a name the framework only decorated.
+func (p *PermissionPolicy) scanRequest(
+	req *tool.PermissionRequest,
+) (Request, bool, error) {
+	scanReq, ok, err := requestFromPermission(req, false)
+	if ok || err != nil {
+		return scanReq, ok, err
+	}
+	scanReq, ok, err = p.requestFromExtension(req)
+	if ok || err != nil {
+		return scanReq, ok, err
+	}
+	return requestFromPermission(req, true)
 }
 
 func (p *PermissionPolicy) requestFromExtension(
@@ -158,8 +174,19 @@ func permissionReason(report Report) string {
 
 // RequestFromPermissionRequest extracts command/code execution inputs from a
 // framework permission request.
+//
+// Built-in executors are identified by the model-visible name and, when the
+// framework decorated the tool, by the declaration of the semantic tool behind
+// the wrapper. Reports keep the model-visible name.
 func RequestFromPermissionRequest(
 	req *tool.PermissionRequest,
+) (Request, bool, error) {
+	return requestFromPermission(req, true)
+}
+
+func requestFromPermission(
+	req *tool.PermissionRequest,
+	resolveWrappers bool,
 ) (Request, bool, error) {
 	if req == nil {
 		return Request{}, false, nil
@@ -171,46 +198,97 @@ func RequestFromPermissionRequest(
 	if toolName == "" {
 		return Request{}, false, nil
 	}
-	base := Request{
-		ToolName: toolName,
-		Metadata: ToolMetadata{
-			ReadOnly:        req.Metadata.ReadOnly,
-			Destructive:     req.Metadata.Destructive,
-			ConcurrencySafe: req.Metadata.ConcurrencySafe,
-			SearchOrRead:    req.Metadata.SearchOrRead,
-			OpenWorld:       req.Metadata.OpenWorld,
-			MaxResultSize:   req.Metadata.MaxResultSize,
-		},
+	builtin, execTool := resolveBuiltinExecTool(req, resolveWrappers)
+	if builtin == "" {
+		return Request{}, false, nil
 	}
-	switch toolName {
-	case "workspace_exec":
+	base := Request{ToolName: toolName, Metadata: req.Metadata}
+	switch builtin {
+	case builtinWorkspaceExec:
 		return parseExecLikeArgs(
-			base, req.Arguments, BackendWorkspaceExec, "cwd", req.Tool,
+			base, req.Arguments, BackendWorkspaceExec, "cwd", execTool,
 		)
-	case "exec_command":
+	case builtinExecCommand:
 		return parseExecLikeArgs(
-			base, req.Arguments, BackendHostExec, "workdir", req.Tool,
+			base, req.Arguments, BackendHostExec, "workdir", execTool,
 		)
-	case "write_stdin", "workspace_write_stdin":
-		return parseWriteStdinArgs(base, req.Arguments, toolName)
-	case "execute_code":
+	case builtinWriteStdin, builtinWorkspaceWriteStdin:
+		return parseWriteStdinArgs(base, req.Arguments, builtin)
+	case builtinExecuteCode:
 		return parseCodeExecArgs(base, req.Arguments)
 	default:
 		return Request{}, false, nil
 	}
 }
 
+// Built-in executor tool names parsed natively by the guard.
+const (
+	builtinWorkspaceExec       = "workspace_exec"
+	builtinExecCommand         = "exec_command"
+	builtinWriteStdin          = "write_stdin"
+	builtinWorkspaceWriteStdin = "workspace_write_stdin"
+	builtinExecuteCode         = "execute_code"
+)
+
+var builtinExecToolNames = map[string]struct{}{
+	builtinWorkspaceExec:       {},
+	builtinExecCommand:         {},
+	builtinWriteStdin:          {},
+	builtinWorkspaceWriteStdin: {},
+	builtinExecuteCode:         {},
+}
+
+// resolveBuiltinExecTool identifies the built-in executor behind a permission
+// request and returns the tool to use for capability lookups.
+//
+// A ToolSet member is exposed with the set name prefixed, so hostexec.NewToolSet
+// is called as hostexec_exec_command, and the wrapper also hides capability
+// interfaces such as tool.ExecPermissionContextResolver. Classification
+// therefore falls back to the declaration of the semantic tool, and capability
+// lookups use that unwrapped tool.
+func resolveBuiltinExecTool(
+	req *tool.PermissionRequest,
+	resolveWrappers bool,
+) (string, tool.Tool) {
+	if _, ok := builtinExecToolNames[req.ToolName]; ok {
+		return req.ToolName, itool.ResolveSemantic(req.Tool)
+	}
+	if req.Declaration != nil {
+		if _, ok := builtinExecToolNames[req.Declaration.Name]; ok {
+			return req.Declaration.Name, itool.ResolveSemantic(req.Tool)
+		}
+	}
+	if !resolveWrappers {
+		return "", nil
+	}
+	semantic := itool.ResolveSemantic(req.Tool)
+	if semantic == nil {
+		return "", nil
+	}
+	decl := semantic.Declaration()
+	if decl == nil {
+		return "", nil
+	}
+	if _, ok := builtinExecToolNames[decl.Name]; ok {
+		return decl.Name, semantic
+	}
+	return "", nil
+}
+
 type execLikeArgs struct {
-	Command       string            `json:"command"`
-	Cwd           string            `json:"cwd"`
-	Workdir       string            `json:"workdir"`
-	Env           map[string]string `json:"env"`
-	Background    bool              `json:"background"`
-	Timeout       int               `json:"timeout"`
-	TimeoutSec    *int              `json:"timeout_sec"`
-	TimeoutSecOld *int              `json:"timeoutSec"`
-	TTY           *bool             `json:"tty"`
-	PTY           *bool             `json:"pty"`
+	Command string            `json:"command"`
+	Cwd     string            `json:"cwd"`
+	Workdir string            `json:"workdir"`
+	Env     map[string]string `json:"env"`
+	// Stdin is forwarded verbatim to the spawned process by workspace_exec.
+	// hostexec's exec_command has no such argument and ignores the field.
+	Stdin         string `json:"stdin"`
+	Background    bool   `json:"background"`
+	Timeout       int    `json:"timeout"`
+	TimeoutSec    *int   `json:"timeout_sec"`
+	TimeoutSecOld *int   `json:"timeoutSec"`
+	TTY           *bool  `json:"tty"`
+	PTY           *bool  `json:"pty"`
 }
 
 func parseExecLikeArgs(
@@ -254,6 +332,12 @@ func parseExecLikeArgs(
 	base.TimeoutSeconds = timeout
 	base.Background = in.Background
 	base.TTY = boolValue(in.TTY) || boolValue(in.PTY)
+	if backend == BackendWorkspaceExec {
+		// Only workspace_exec forwards initial stdin to the process, so the
+		// scan mirrors that executor rather than flagging a field hostexec
+		// silently drops.
+		base.Stdin = in.Stdin
+	}
 	return base, true, nil
 }
 

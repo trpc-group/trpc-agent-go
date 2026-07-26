@@ -29,6 +29,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
@@ -224,15 +225,11 @@ func (p Policy) withDefaults() Policy {
 	return p
 }
 
-// ToolMetadata captures the execution-relevant metadata used by the guard.
-type ToolMetadata struct {
-	ReadOnly        bool `json:"read_only,omitempty"`
-	Destructive     bool `json:"destructive,omitempty"`
-	ConcurrencySafe bool `json:"concurrency_safe,omitempty"`
-	SearchOrRead    bool `json:"search_or_read,omitempty"`
-	OpenWorld       bool `json:"open_world,omitempty"`
-	MaxResultSize   int  `json:"max_result_size,omitempty"`
-}
+// ToolMetadata is the framework tool metadata contract, reused so that guard
+// scans and extension parsers share a single data model with the rest of the
+// framework. Metadata fields added to tool.ToolMetadata reach a scan without a
+// parallel type to update.
+type ToolMetadata = tool.ToolMetadata
 
 // CodeBlock is a script block supplied to a code execution tool.
 type CodeBlock struct {
@@ -242,14 +239,20 @@ type CodeBlock struct {
 
 // Request describes one pending tool execution.
 type Request struct {
-	ToolName       string            `json:"tool_name,omitempty"`
-	Command        string            `json:"command,omitempty"`
-	Args           []string          `json:"args,omitempty"`
-	Cwd            string            `json:"cwd,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
-	Metadata       ToolMetadata      `json:"metadata,omitempty"`
-	Backend        string            `json:"backend,omitempty"`
-	TimeoutSeconds int               `json:"timeout_seconds,omitempty"`
+	ToolName string            `json:"tool_name,omitempty"`
+	Command  string            `json:"command,omitempty"`
+	Args     []string          `json:"args,omitempty"`
+	Cwd      string            `json:"cwd,omitempty"`
+	Env      map[string]string `json:"env,omitempty"`
+	// Stdin is the initial standard input the executor forwards to the spawned
+	// process. workspace_exec passes it verbatim to the interpreter, so a
+	// payload carried here never appears in Command.
+	Stdin string `json:"stdin,omitempty"`
+	// Metadata reuses the framework tool.ToolMetadata contract and therefore
+	// serializes with its Go field names rather than snake case.
+	Metadata       ToolMetadata `json:"metadata,omitempty"`
+	Backend        string       `json:"backend,omitempty"`
+	TimeoutSeconds int          `json:"timeout_seconds,omitempty"`
 	// MaxOutputBytes is a caller-declared execution cap. A scan validates the
 	// value but does not truncate executor output itself.
 	MaxOutputBytes   int64       `json:"max_output_bytes,omitempty"`
@@ -340,17 +343,31 @@ func WriteAuditJSONL(w io.Writer, report Report) error {
 	return nil
 }
 
+// openAuditFile opens the audit sink. It is a package-level seam so tests can
+// exercise a successful write followed by a failing close.
+var openAuditFile = func(path string) (io.WriteCloser, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+}
+
 // AppendAuditFile appends one report event to a JSONL audit file.
+//
+// The file is always closed. A close error is reported when the write itself
+// succeeded, because filesystems can surface a delayed write failure only at
+// close and the caller must not treat that event as committed.
 func AppendAuditFile(path string, report Report) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := openAuditFile(path)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return WriteAuditJSONL(f, report)
+	writeErr := WriteAuditJSONL(f, report)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return writeErr
+	}
+	return closeErr
 }
 
 // Scan evaluates a pending tool execution against the policy.
@@ -374,6 +391,7 @@ func (s scanner) scan(req Request) Report {
 	findings = append(findings, s.scanMetadata(req)...)
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanRequestEnvelope(req)...)
+	findings = append(findings, s.scanStdin(req)...)
 	if len(req.CodeBlocks) > 0 {
 		for _, block := range req.CodeBlocks {
 			findings = append(findings, s.scanCodeBlock(req, block)...)
@@ -1468,7 +1486,14 @@ func (s scanner) scanMetadata(req Request) []Finding {
 
 func (s scanner) scanEnv(env map[string]string) []Finding {
 	var findings []Finding
-	for k, v := range env {
+	// Iterate in key order so a report lists findings deterministically.
+	keys := make([]string, 0, len(env))
+	for k := range env {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+	for _, k := range keys {
+		v := env[k]
 		if len(s.policy.EnvAllowlist) > 0 && !s.envAllowed(k) {
 			findings = append(findings, newFinding(
 				DecisionNeedsHumanReview,
@@ -1479,7 +1504,138 @@ func (s scanner) scanEnv(env map[string]string) []Finding {
 					"update the policy after review.",
 			))
 		}
+		findings = append(findings, s.scanExecutionEnv(k, v)...)
 		findings = append(findings, s.scanSecretText(k+"="+v, "environment")...)
+	}
+	return findings
+}
+
+// scanExecutionEnv flags overrides of variables that decide which executable
+// runs or which startup files a login shell sources. Both execution paths hand
+// request environment values to a shell, and workspace_exec only enables its
+// clean-environment hardening when its separate command policy is configured,
+// so an allowlist entry keyed on the variable name alone is not sufficient.
+func (s scanner) scanExecutionEnv(key, value string) []Finding {
+	if !isExecutionResolvingEnvVar(key) {
+		return nil
+	}
+	if untrustedExecutionEnvValue(value) {
+		return []Finding{newFinding(
+			DecisionDeny,
+			RiskCritical,
+			"environment.execution_resolution_override",
+			[]string{fmt.Sprintf(
+				"environment variable %q redirects executable or shell startup "+
+					"resolution to a relative or empty location", key)},
+			"Do not point PATH, HOME, or loader variables at relative or "+
+				"writable locations; rely on the executor's clean environment.",
+		)}
+	}
+	return []Finding{newFinding(
+		DecisionNeedsHumanReview,
+		RiskHigh,
+		"environment.execution_resolution_override",
+		[]string{fmt.Sprintf(
+			"environment variable %q changes executable or shell startup "+
+				"resolution", key)},
+		"Review overrides of PATH, HOME, and loader variables, or rely on the "+
+			"executor's clean environment instead.",
+	)}
+}
+
+func isExecutionResolvingEnvVar(key string) bool {
+	_, ok := executionResolvingEnvVars[strings.ToUpper(strings.TrimSpace(key))]
+	return ok
+}
+
+// untrustedExecutionEnvValue reports whether an execution-resolving value
+// leaves resolution up to the working directory. An empty value makes a shell
+// fall back to its own defaults, and a relative entry resolves against the
+// process CWD, which the request also controls.
+func untrustedExecutionEnvValue(value string) bool {
+	if strings.TrimSpace(value) == "" {
+		return true
+	}
+	for _, entry := range splitEnvPathList(strings.TrimSpace(value)) {
+		if isRelativePathEntry(entry) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitEnvPathList(value string) []string {
+	if strings.ContainsRune(value, ';') {
+		return strings.Split(value, ";")
+	}
+	if strings.ContainsRune(value, ':') && !windowsDrivePathRE.MatchString(value) {
+		return strings.Split(value, ":")
+	}
+	return []string{value}
+}
+
+func isRelativePathEntry(entry string) bool {
+	e := strings.ReplaceAll(strings.TrimSpace(strings.Trim(entry, `"'`)), "\\", "/")
+	if e == "" {
+		return true
+	}
+	if strings.HasPrefix(e, "/") || windowsDrivePathRE.MatchString(e) {
+		// Absolute POSIX, UNC, and drive-qualified paths resolve independently
+		// of the working directory.
+		return strings.Contains(e, "/./") || strings.Contains(e, "/../") ||
+			strings.HasSuffix(e, "/.") || strings.HasSuffix(e, "/..")
+	}
+	return true
+}
+
+// scanStdin inspects the initial standard input forwarded to the process.
+// The payload never reaches Command, so without this the scan only sees a
+// harmless-looking interpreter name.
+func (s scanner) scanStdin(req Request) []Finding {
+	stdin := strings.TrimSpace(req.Stdin)
+	if stdin == "" {
+		return nil
+	}
+	findings := []Finding{newFinding(
+		DecisionNeedsHumanReview,
+		RiskHigh,
+		"process.initial_stdin",
+		[]string{"initial stdin is forwarded unparsed to the spawned process"},
+		"Review initial standard input before execution, or move the payload "+
+			"into an audited workspace file that the command reads by path.",
+	)}
+	findings = append(findings, s.scanSecretText(stdin, "initial stdin")...)
+	findings = append(findings, s.scanTextPaths(stdin, "initial stdin")...)
+	findings = append(findings, s.scanNetwork(stdin)...)
+	findings = append(findings, s.scanCodeNetwork(stdin)...)
+	return findings
+}
+
+// scanTextPaths checks denied paths in free-form text whose interpreter is not
+// known, covering both quoted literals and whitespace-separated tokens.
+func (s scanner) scanTextPaths(text, source string) []Finding {
+	var findings []Finding
+	seen := make(map[string]struct{})
+	candidates := codeStringLiterals(text)
+	candidates = append(candidates, strings.Fields(text)...)
+	for _, candidate := range candidates {
+		for _, path := range pathCandidates(candidate) {
+			if _, ok := seen[path]; ok {
+				continue
+			}
+			seen[path] = struct{}{}
+			if !s.pathDenied(path) {
+				continue
+			}
+			findings = append(findings, newFinding(
+				DecisionDeny,
+				RiskCritical,
+				"sensitive.path_access",
+				[]string{fmt.Sprintf("%s references denied path %q", source, path)},
+				"Do not access system paths, SSH material, credentials, or "+
+					"secrets from tool execution.",
+			))
+		}
 	}
 	return findings
 }
@@ -1816,6 +1972,17 @@ func newFinding(
 }
 
 var (
+	// executionResolvingEnvVars decide which executable a command resolves to
+	// or which startup files an interpreter or login shell sources. Overriding
+	// one redirects an otherwise safe command, so allowlisting them by name is
+	// not enough.
+	executionResolvingEnvVars = map[string]struct{}{
+		"PATH": {}, "HOME": {}, "SHELL": {}, "IFS": {}, "ZDOTDIR": {},
+		"BASH_ENV": {}, "ENV": {}, "LD_PRELOAD": {}, "LD_LIBRARY_PATH": {},
+		"LD_AUDIT": {}, "DYLD_INSERT_LIBRARIES": {}, "DYLD_LIBRARY_PATH": {},
+		"PYTHONPATH": {}, "PYTHONSTARTUP": {}, "NODE_OPTIONS": {},
+		"PERL5LIB": {}, "RUBYOPT": {}, "GIT_SSH_COMMAND": {},
+	}
 	unresolvedReexecWrappers = map[string]struct{}{
 		"sh": {}, "bash": {}, "zsh": {}, "ash": {}, "dash": {},
 		"ksh": {}, "mksh": {}, "fish": {}, "pwsh": {}, "powershell": {},
@@ -1849,16 +2016,33 @@ var (
 		`(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)=([^ \t\n\r;&|]+)`)
 	secretSplitValueRE = regexp.MustCompile(
 		`(?i)(--?(?:api[_-]?key|token|password|passwd|secret|private[_-]?key|credential))([ \t]+)([^ \t\n\r;&|]+)`)
+	// authorizationHeaderRE matches Authorization and Proxy-Authorization
+	// header values in either header syntax or CLI flag form. The scheme is
+	// optional so that a bare credential is still recognized.
+	authorizationHeaderRE = regexp.MustCompile(
+		`(?i)((?:proxy-)?authorization\s*:\s*)((?:bearer|basic|digest|token|apikey)\s+)?([^\s'"\\]+)`)
 	codeStringLiteralRE = regexp.MustCompile(
 		`(?s)(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)')`)
+	// codeNetworkCallRE matches direct and chained socket connects. The
+	// receiver form allows constructor arguments so that
+	// socket.socket(AF_INET, SOCK_STREAM).connect(...) is inspected too.
 	codeNetworkCallRE = regexp.MustCompile(
-		`(?i)\b(?:socket\.(?:create_connection|getaddrinfo)|socket\.socket\s*\(\s*\)\s*\.connect|[a-z_][a-z0-9_]*\.connect|http\.client\.(?:http|https)connection)\s*\(\s*\(?\s*["']([^"']+)["']`)
-	windowsCmdExpansionRE = regexp.MustCompile(`%[A-Za-z_][A-Za-z0-9_]*%`)
+		`(?i)\b(?:socket\.(?:create_connection|getaddrinfo)|socket\.socket\s*\([^()]*\)\s*\.connect|[a-z_][a-z0-9_]*\.connect|http\.client\.(?:http|https)connection)\s*\(\s*\(?\s*["']([^"']+)["']`)
+	// windowsCmdExpansionRE matches cmd.exe variable expansion in every form
+	// the interpreter accepts: the plain %VAR%, the substring modifier
+	// %VAR:~start,len%, and the substitution modifier %VAR:old=new%. The
+	// modifier forms rewrite the token before execution, so
+	// %COMSPEC:cmd.exe=shutdown.exe% resolves to a different executable than
+	// the one the scan can see.
+	windowsCmdExpansionRE = regexp.MustCompile(
+		`%[A-Za-z_][A-Za-z0-9_]*(?::(?:~[+-]?\d+(?:,[+-]?\d+)?|\*?[^%=]*=[^%]*))?%`)
+	windowsDrivePathRE = regexp.MustCompile(`^(?:[A-Za-z]:[\\/]|//|\\\\)`)
 )
 
 func looksSensitive(text string) bool {
 	return secretValueRE.MatchString(text) ||
 		secretSplitValueRE.MatchString(text) ||
+		authorizationHeaderRE.MatchString(text) ||
 		(secretNameRE.MatchString(text) && strings.Contains(text, "="))
 }
 
@@ -1870,6 +2054,7 @@ func newRedactor() *redactor { return &redactor{} }
 
 func (r *redactor) redact(s string) string {
 	orig := s
+	s = authorizationHeaderRE.ReplaceAllString(s, "${1}${2}[REDACTED_SECRET]")
 	s = secretValueRE.ReplaceAllString(s, "[REDACTED_SECRET]")
 	s = secretNameValueRE.ReplaceAllString(s, "$1=[REDACTED_SECRET]")
 	s = secretSplitValueRE.ReplaceAllString(s, "$1$2[REDACTED_SECRET]")

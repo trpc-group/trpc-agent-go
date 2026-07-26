@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -21,6 +22,7 @@ import (
 	"sync"
 	"testing"
 
+	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
@@ -1472,7 +1474,11 @@ func TestScanMetadataEnvAndTelemetry(t *testing.T) {
 		Command:  "go test ./...",
 		Metadata: ToolMetadata{Destructive: true},
 		Env: map[string]string{
-			"PATH":    "/bin",
+			// LANG is allowlisted and does not resolve executables, so this
+			// case isolates the metadata and allowlist rules. Execution
+			// resolving variables are covered by
+			// TestScanExecutionResolvingEnvOverrides.
+			"LANG":    "C",
 			"BAD_ENV": "1",
 		},
 	}, DefaultPolicy())
@@ -2299,4 +2305,405 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	w.calls++
 	w.data = append(w.data, p...)
 	return len(p), nil
+}
+
+// TestPermissionPolicyScansToolSetPrefixedBuiltins proves that a built-in
+// executor reached through a ToolSet keeps its scan. llmagent exposes ToolSet
+// members through NewNamedToolSet, so the model-visible name carries the set
+// prefix and the wrapper hides tool.ExecPermissionContextResolver.
+func TestPermissionPolicyScansToolSetPrefixedBuiltins(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		setOptions []hostexec.Option
+		execName   string
+		stdinName  string
+	}{
+		{
+			name:      "default tool set name",
+			execName:  "hostexec_exec_command",
+			stdinName: "hostexec_write_stdin",
+		},
+		{
+			name:       "custom tool set name",
+			setOptions: []hostexec.Option{hostexec.WithName("shell")},
+			execName:   "shell_exec_command",
+			stdinName:  "shell_write_stdin",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := append(
+				[]hostexec.Option{hostexec.WithBaseDir(t.TempDir())},
+				tc.setOptions...,
+			)
+			set, err := hostexec.NewToolSet(opts...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = set.Close() })
+
+			ctx := context.Background()
+			named := make(map[string]tool.Tool)
+			for _, tl := range itool.NewNamedToolSet(set).Tools(ctx) {
+				named[tl.Declaration().Name] = tl
+			}
+			for _, want := range []string{tc.execName, tc.stdinName} {
+				if named[want] == nil {
+					t.Fatalf("tool %q not exposed, got %v", want, named)
+				}
+			}
+
+			policy := NewPermissionPolicy(DefaultPolicy())
+			for _, call := range []struct {
+				toolName string
+				args     string
+				want     tool.PermissionAction
+			}{
+				{tc.execName, `{"command":"sudo id"}`, tool.PermissionActionDeny},
+				{tc.stdinName, `{"chars":"cat /etc/shadow\n","submit":true}`, tool.PermissionActionAsk},
+			} {
+				tl := named[call.toolName]
+				decision, err := policy.CheckToolPermission(ctx, &tool.PermissionRequest{
+					Tool:        tl,
+					ToolName:    call.toolName,
+					Declaration: tl.Declaration(),
+					Arguments:   []byte(call.args),
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if decision.Action != call.want {
+					t.Fatalf("%s action = %q, want %q", call.toolName, decision.Action, call.want)
+				}
+			}
+		})
+	}
+}
+
+// TestPermissionPolicyScansWorkspaceExecInitialStdin proves that a payload
+// carried only in stdin is scanned. workspace_exec forwards the field verbatim
+// to the interpreter, so it never appears in the command.
+func TestPermissionPolicyScansWorkspaceExecInitialStdin(t *testing.T) {
+	policy := NewPermissionPolicy(DefaultPolicy())
+	for _, tc := range []struct {
+		name string
+		args string
+		want tool.PermissionAction
+	}{
+		{
+			name: "denied path in stdin",
+			args: `{"command":"python","stdin":"print(open('/etc/passwd').read())"}`,
+			want: tool.PermissionActionDeny,
+		},
+		{
+			name: "non allowlisted host in stdin",
+			args: `{"command":"python","stdin":"import socket\nsocket.create_connection(('evil.example', 443))"}`,
+			want: tool.PermissionActionDeny,
+		},
+		{
+			name: "benign stdin still needs review",
+			args: `{"command":"python","stdin":"print(1)"}`,
+			want: tool.PermissionActionAsk,
+		},
+		{
+			name: "absent stdin keeps the command decision",
+			args: `{"command":"go test ./..."}`,
+			want: tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{
+					ToolName:  "workspace_exec",
+					Arguments: []byte(tc.args),
+				},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if decision.Action != tc.want {
+				t.Fatalf("action = %q, want %q (%s)", decision.Action, tc.want, decision.Reason)
+			}
+		})
+	}
+}
+
+// TestPermissionPolicyIgnoresStdinForHostExec keeps the adapter aligned with
+// each executor: exec_command has no stdin argument and drops the field, so
+// scanning it would block a request the executor never acts on.
+func TestPermissionPolicyIgnoresStdinForHostExec(t *testing.T) {
+	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"echo hi","stdin":"print(open('/etc/passwd').read())"}`),
+	})
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	if req.Stdin != "" {
+		t.Fatalf("hostexec request captured stdin = %q, want empty", req.Stdin)
+	}
+}
+
+// TestScanExecutionResolvingEnvOverrides proves that a safe command paired with
+// hostile execution-resolving variables never returns allow. Both execution
+// paths hand request environment values to a shell, and workspace_exec only
+// enables clean-environment hardening when its separate command policy is set,
+// so allowlisting these variables by name is not sufficient.
+func TestScanExecutionResolvingEnvOverrides(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+		want Decision
+	}{
+		{
+			name: "hostile HOME and PATH",
+			env:  map[string]string{"HOME": ".", "PATH": "."},
+			want: DecisionDeny,
+		},
+		{
+			name: "relative PATH entry among absolute ones",
+			env:  map[string]string{"PATH": "/usr/bin:./bin"},
+			want: DecisionDeny,
+		},
+		{
+			name: "empty HOME falls back to shell defaults",
+			env:  map[string]string{"HOME": ""},
+			want: DecisionDeny,
+		},
+		{
+			name: "loader injection",
+			env:  map[string]string{"LD_PRELOAD": "/tmp/evil.so"},
+			want: DecisionNeedsHumanReview,
+		},
+		{
+			name: "absolute PATH still needs review",
+			env:  map[string]string{"PATH": "/usr/bin:/bin"},
+			want: DecisionNeedsHumanReview,
+		},
+		{
+			name: "windows absolute PATH still needs review",
+			env:  map[string]string{"PATH": `C:\Windows\System32;C:\tools`},
+			want: DecisionNeedsHumanReview,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  "echo hi",
+				Env:      tc.env,
+			}, DefaultPolicy())
+			if report.Decision != tc.want {
+				t.Fatalf("decision = %q, want %q: %+v", report.Decision, tc.want, report)
+			}
+			if report.RuleID != "environment.execution_resolution_override" {
+				t.Fatalf("rule = %q, want environment.execution_resolution_override", report.RuleID)
+			}
+		})
+	}
+
+	// A variable that does not resolve executables keeps the command decision.
+	report := Scan(Request{
+		ToolName: "workspace_exec",
+		Backend:  BackendWorkspaceExec,
+		Command:  "echo hi",
+		Env:      map[string]string{"LANG": "C"},
+	}, DefaultPolicy())
+	if report.Decision != DecisionAllow {
+		t.Fatalf("LANG override decision = %q, want allow: %+v", report.Decision, report)
+	}
+}
+
+// TestScanRedactsAuthorizationCredentials proves that a bearer or basic
+// credential never survives into any exposed report field.
+func TestScanRedactsAuthorizationCredentials(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+		secret  string
+	}{
+		{
+			name:    "bearer header",
+			command: `curl -H 'Authorization: Bearer abc123opaque' https://api.github.com`,
+			secret:  "abc123opaque",
+		},
+		{
+			name:    "basic header",
+			command: `curl -H "Authorization: Basic dXNlcjpwYXNz" https://api.github.com`,
+			secret:  "dXNlcjpwYXNz",
+		},
+		{
+			name:    "proxy authorization header",
+			command: `curl -H 'Proxy-Authorization: Bearer proxysecret' https://api.github.com`,
+			secret:  "proxysecret",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName: "workspace_exec",
+				Backend:  BackendWorkspaceExec,
+				Command:  tc.command,
+			}, DefaultPolicy())
+			if report.Decision == DecisionAllow || !report.Redacted {
+				t.Fatalf("credential command should not be allowed unredacted: %+v", report)
+			}
+			if strings.Contains(report.Command, tc.secret) ||
+				strings.Contains(report.SafeSummary, tc.secret) {
+				t.Fatalf("report retained the credential: %+v", report)
+			}
+			raw, err := json.Marshal(report)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(raw, []byte(tc.secret)) {
+				t.Fatalf("serialized report leaked the credential: %s", raw)
+			}
+			var event bytes.Buffer
+			if err := WriteAuditJSONL(&event, report); err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(event.Bytes(), []byte(tc.secret)) {
+				t.Fatalf("audit event leaked the credential: %s", event.String())
+			}
+		})
+	}
+}
+
+// TestToolMetadataReusesFrameworkContract locks the guard onto the framework
+// metadata contract. A field added to tool.ToolMetadata must reach a scan
+// without updating a parallel type here.
+func TestToolMetadataReusesFrameworkContract(t *testing.T) {
+	meta := tool.ToolMetadata{
+		ReadOnly:        true,
+		Destructive:     true,
+		ConcurrencySafe: true,
+		SearchOrRead:    true,
+		OpenWorld:       true,
+		MaxResultSize:   4096,
+	}
+	// The alias makes assignment in both directions a compile-time guarantee.
+	var guardMeta ToolMetadata = meta
+	if tool.ToolMetadata(guardMeta) != meta {
+		t.Fatalf("guard metadata = %+v, want %+v", guardMeta, meta)
+	}
+	req, ok, err := RequestFromPermissionRequest(&tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+		Metadata:  meta,
+	})
+	if err != nil || !ok {
+		t.Fatalf("ok = %v, err = %v", ok, err)
+	}
+	if req.Metadata != meta {
+		t.Fatalf("request metadata = %+v, want %+v", req.Metadata, meta)
+	}
+}
+
+// TestAppendAuditFilePropagatesCloseError proves that a delayed write failure
+// surfaced only at close is reported, so a caller cannot treat an uncommitted
+// event as audited.
+func TestAppendAuditFilePropagatesCloseError(t *testing.T) {
+	original := openAuditFile
+	t.Cleanup(func() { openAuditFile = original })
+
+	closeErr := errors.New("close failed")
+	sink := &failingCloser{}
+	openAuditFile = func(string) (io.WriteCloser, error) {
+		return sink, nil
+	}
+
+	sink.closeErr = closeErr
+	if err := AppendAuditFile("audit.jsonl", Report{
+		Decision: DecisionAllow, RuleID: "ok", RiskLevel: RiskLow,
+	}); !errors.Is(err, closeErr) {
+		t.Fatalf("AppendAuditFile close error = %v, want %v", err, closeErr)
+	}
+	if !sink.closed {
+		t.Fatal("audit file was not closed")
+	}
+
+	// A write failure keeps precedence, and the file is still closed.
+	sink2 := &failingCloser{writeErr: errors.New("write failed"), closeErr: closeErr}
+	openAuditFile = func(string) (io.WriteCloser, error) { return sink2, nil }
+	err := AppendAuditFile("audit.jsonl", Report{
+		Decision: DecisionAllow, RuleID: "ok", RiskLevel: RiskLow,
+	})
+	if !errors.Is(err, sink2.writeErr) {
+		t.Fatalf("AppendAuditFile write error = %v, want %v", err, sink2.writeErr)
+	}
+	if !sink2.closed {
+		t.Fatal("audit file was not closed after a write failure")
+	}
+
+	// The permission path must refuse to allow an execution it could not audit.
+	openAuditFile = func(string) (io.WriteCloser, error) { return &failingCloser{closeErr: closeErr}, nil }
+	policy := NewPermissionPolicy(DefaultPolicy(), WithAuditPath("audit.jsonl"))
+	decision, err := policy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"go test ./..."}`),
+	})
+	if err == nil {
+		t.Fatal("CheckToolPermission audit close error = nil")
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Fatalf("audit close error action = %q, want deny", decision.Action)
+	}
+}
+
+type failingCloser struct {
+	writeErr error
+	closeErr error
+	closed   bool
+}
+
+func (f *failingCloser) Write(p []byte) (int, error) {
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	return len(p), nil
+}
+
+func (f *failingCloser) Close() error {
+	f.closed = true
+	return f.closeErr
+}
+
+// TestScanFailsClosedOnWindowsCmdExpansion proves that every cmd.exe expansion
+// form is blocked. cmd.exe rewrites the token before execution, so a modifier
+// can resolve to an executable the scan never sees.
+func TestScanFailsClosedOnWindowsCmdExpansion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{"plain variable", `%COMSPEC% /c shutdown /s /t 0`},
+		{"substitution modifier", `%COMSPEC:cmd.exe=shutdown.exe% /s /t 0`},
+		{"substitution with wildcard", `%COMSPEC:*\=shutdown.exe% /s /t 0`},
+		{"substring modifier", `%COMSPEC:~0,3% /c shutdown /s /t 0`},
+		{"negative substring modifier", `%PATH:~-4% /c shutdown`},
+		{"caret escape", `sh^utdown /s /t 0`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := Scan(Request{
+				ToolName:       "exec_command",
+				Backend:        BackendHostExec,
+				Command:        tc.command,
+				TimeoutSeconds: 10,
+			}, DefaultPolicy())
+			if report.Decision != DecisionDeny {
+				t.Fatalf("decision = %q, want deny: %+v", report.Decision, report)
+			}
+		})
+	}
+
+	// A workspace command is parsed by the POSIX grammar and is unaffected.
+	report := Scan(Request{
+		ToolName:       "workspace_exec",
+		Backend:        BackendWorkspaceExec,
+		Command:        "go test ./...",
+		TimeoutSeconds: 10,
+	}, DefaultPolicy())
+	if report.Decision != DecisionAllow {
+		t.Fatalf("workspace decision = %q, want allow: %+v", report.Decision, report)
+	}
 }
