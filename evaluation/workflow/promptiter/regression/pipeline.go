@@ -143,8 +143,9 @@ func New(
 }
 
 // Run executes the auditable Evaluation + PromptIter + held-out release loop.
-// Operational failures are retained in the returned report; error is reserved
-// for invalid inputs that prevent a report identity from being established.
+// Operational failures are retained in the returned report. Context
+// cancellation and deadline errors are returned with the finalized report;
+// other returned errors prevent a report identity from being established.
 //
 //nolint:gocyclo // Keep the outer state-machine transitions visible in execution order.
 func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) {
@@ -199,12 +200,17 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 	if baselineTrain != nil {
 		state.SearchTrain = baselineTrain
 	}
-	if trainErr != nil || !snapshotCompleted(baselineTrain) {
+	trainTerminationErr := contextTerminationError(ctx, trainErr)
+	if trainTerminationErr != nil || trainErr != nil || !snapshotCompleted(baselineTrain) {
+		auditErr := trainErr
+		if trainTerminationErr != nil {
+			auditErr = trainTerminationErr
+		}
 		report.Status = PipelineRunFailed
 		report.StopReason = StopNecessaryRunFailed
-		report.Errors = appendErrors(report.Errors, trainErr)
+		report.Errors = appendErrors(report.Errors, auditErr)
 		finalizeReport(report, state)
-		return report, nil
+		return report, trainTerminationErr
 	}
 	if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
 		report.Status = PipelineBudgetStopped
@@ -240,12 +246,19 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 		state.Released.EvaluationRunID = initial.EvaluationRunID
 		report.InitialProfile.EvaluationRunID = initial.EvaluationRunID
 	}
-	if validationErr != nil || !snapshotCompleted(baselineValidation) {
+	validationTerminationErr := contextTerminationError(ctx, validationErr)
+	if validationTerminationErr != nil ||
+		validationErr != nil ||
+		!snapshotCompleted(baselineValidation) {
+		auditErr := validationErr
+		if validationTerminationErr != nil {
+			auditErr = validationTerminationErr
+		}
 		report.Status = PipelineRunFailed
 		report.StopReason = StopNecessaryRunFailed
-		report.Errors = appendErrors(report.Errors, validationErr)
+		report.Errors = appendErrors(report.Errors, auditErr)
 		finalizeReport(report, state)
-		return report, nil
+		return report, validationTerminationErr
 	}
 	if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
 		report.Status = PipelineBudgetStopped
@@ -321,8 +334,32 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 			report,
 			&candidateReport,
 		)
-		if runErr != nil {
-			candidateReport.Errors = append(candidateReport.Errors, runErr.Error())
+		promptIterTerminationErr := contextTerminationError(ctx, runErr)
+		if promptIterTerminationErr != nil || runErr != nil {
+			auditErr := runErr
+			if promptIterTerminationErr != nil {
+				auditErr = promptIterTerminationErr
+			}
+			candidateReport.Errors = append(candidateReport.Errors, auditErr.Error())
+			if promptIterTerminationErr != nil {
+				candidateReport.PromptIterStatus = string(promptiterengine.RunStatusCanceled)
+				candidateReport.SearchDecision = notEvaluableDecision(auditErr.Error())
+				candidateReport.ReleaseDecision = notEvaluableDecision(auditErr.Error())
+				candidateReport.Transition = unchangedTransition(
+					searchParent.Hash,
+					releasedParent.Hash,
+					"native PromptIter run was canceled",
+				)
+				report.Candidates = append(report.Candidates, candidateReport)
+				report.Status = PipelineRunFailed
+				report.StopReason = StopNecessaryRunFailed
+				report.Errors = append(
+					report.Errors,
+					fmt.Sprintf("round %d promptiter canceled: %v", round, auditErr),
+				)
+				finalizeReport(report, state)
+				return report, promptIterTerminationErr
+			}
 			if errors.Is(runErr, errPromptIterBudgetExhausted) {
 				candidateReport.PromptIterStatus = "budget_stopped"
 				candidateReport.SearchDecision = notEvaluableDecision(runErr.Error())
@@ -465,9 +502,16 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 			&candidateReport.Resources,
 		)
 		candidateReport.Train = candidateTrain
-		if candidateTrainErr != nil || !snapshotCompleted(candidateTrain) {
+		candidateTrainTerminationErr := contextTerminationError(ctx, candidateTrainErr)
+		if candidateTrainTerminationErr != nil ||
+			candidateTrainErr != nil ||
+			!snapshotCompleted(candidateTrain) {
+			auditErr := candidateTrainErr
+			if candidateTrainTerminationErr != nil {
+				auditErr = candidateTrainTerminationErr
+			}
 			candidateReport.Status = EvaluationNotEvaluable
-			candidateReport.Errors = appendErrors(candidateReport.Errors, candidateTrainErr)
+			candidateReport.Errors = appendErrors(candidateReport.Errors, auditErr)
 			candidateReport.SearchDecision = notEvaluableDecision(
 				"candidate train evaluation is not complete",
 			)
@@ -486,6 +530,10 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 				report.Errors,
 				fmt.Sprintf("round %d candidate train evaluation is not complete", round),
 			)
+			if candidateTrainTerminationErr != nil {
+				finalizeReport(report, state)
+				return report, candidateTrainTerminationErr
+			}
 			break
 		}
 		if stopped, reason := budgetStop(cfg.Gate, report.Resources.Cumulative); stopped {
@@ -515,9 +563,16 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 			&candidateReport.Resources,
 		)
 		candidateReport.Validation = candidateValidation
-		if candidateValidationErr != nil || !snapshotCompleted(candidateValidation) {
+		candidateValidationTerminationErr := contextTerminationError(ctx, candidateValidationErr)
+		if candidateValidationTerminationErr != nil ||
+			candidateValidationErr != nil ||
+			!snapshotCompleted(candidateValidation) {
+			auditErr := candidateValidationErr
+			if candidateValidationTerminationErr != nil {
+				auditErr = candidateValidationTerminationErr
+			}
 			candidateReport.Status = EvaluationNotEvaluable
-			candidateReport.Errors = appendErrors(candidateReport.Errors, candidateValidationErr)
+			candidateReport.Errors = appendErrors(candidateReport.Errors, auditErr)
 			candidateReport.SearchDecision = notEvaluableDecision(
 				"candidate held-out evaluation is not complete",
 			)
@@ -547,6 +602,10 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 				report.Errors,
 				fmt.Sprintf("round %d candidate evaluation is not complete", round),
 			)
+			if candidateValidationTerminationErr != nil {
+				finalizeReport(report, state)
+				return report, candidateValidationTerminationErr
+			}
 			break
 		}
 		candidateReport.Status = EvaluationCompleted
@@ -661,6 +720,24 @@ func (p *Pipeline) Run(ctx context.Context, config *RunConfig) (*Report, error) 
 	}
 	finalizeReport(report, state)
 	return report, nil
+}
+
+func contextTerminationError(ctx context.Context, operationErr error) error {
+	ctxErr := ctx.Err()
+	if operationErr == nil {
+		return ctxErr
+	}
+	if errors.Is(operationErr, context.Canceled) ||
+		errors.Is(operationErr, context.DeadlineExceeded) {
+		if ctxErr != nil && !errors.Is(operationErr, ctxErr) {
+			return errors.Join(operationErr, ctxErr)
+		}
+		return operationErr
+	}
+	if ctxErr != nil {
+		return errors.Join(operationErr, ctxErr)
+	}
+	return nil
 }
 
 func (p *Pipeline) runPromptIter(

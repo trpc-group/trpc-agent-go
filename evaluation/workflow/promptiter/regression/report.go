@@ -166,10 +166,10 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(markdownPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(markdownPath), 0o700); err != nil {
 		return fmt.Errorf("create Markdown output directory: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o700); err != nil {
 		return fmt.Errorf("create JSON output directory: %w", err)
 	}
 	markdownTemp, err := writeClosedTemp(markdownPath, markdownData)
@@ -1603,7 +1603,7 @@ func writeClosedTemp(target string, data []byte) (path string, err error) {
 			os.Remove(path)
 		}
 	}()
-	if err = file.Chmod(0o644); err != nil {
+	if err = file.Chmod(0o600); err != nil {
 		return "", err
 	}
 	if _, err = file.Write(data); err != nil {

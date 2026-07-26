@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -137,6 +138,27 @@ func TestRunDeterministicNativePipeline(t *testing.T) {
 	var persisted regression.Report
 	require.NoError(t, json.Unmarshal(data, &persisted))
 	require.Equal(t, report.RunID, persisted.RunID)
+
+	failedRunDir := t.TempDir()
+	err = writeRunArtifacts(
+		report,
+		fmt.Errorf("pipeline canceled: %w", context.Canceled),
+		filepath.Join(failedRunDir, reportJSON),
+		filepath.Join(failedRunDir, reportMarkdown),
+	)
+	require.ErrorIs(t, err, context.Canceled)
+	require.FileExists(t, filepath.Join(failedRunDir, reportJSON))
+	require.FileExists(t, filepath.Join(failedRunDir, reportMarkdown))
+
+	samePath := filepath.Join(t.TempDir(), "same")
+	err = writeRunArtifacts(report, context.DeadlineExceeded, samePath, samePath)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorContains(t, err, "must be different")
+	require.ErrorContains(
+		t,
+		writeRunArtifacts(nil, nil, samePath, samePath),
+		"neither a report nor an error",
+	)
 }
 
 func guardExpectedResponse(caseID string) string {

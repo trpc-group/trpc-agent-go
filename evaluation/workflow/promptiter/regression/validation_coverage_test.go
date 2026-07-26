@@ -3548,7 +3548,7 @@ func TestPipelineCoversTrainingCompleteAndNativeFailureStops(t *testing.T) {
 	t.Run("native engine error", func(t *testing.T) {
 		engine := &pipelineStaticEngine{
 			structure: pipelineTestStructure(),
-			err:       context.Canceled,
+			err:       errors.New("native engine unavailable"),
 		}
 		pipeline, err := New(engine, &pipelineSnapshotEvaluator{})
 		require.NoError(t, err)
@@ -3558,7 +3558,7 @@ func TestPipelineCoversTrainingCompleteAndNativeFailureStops(t *testing.T) {
 		require.Equal(t, PipelineRunFailed, report.Status)
 		require.Equal(t, StopNecessaryRunFailed, report.StopReason)
 		require.Len(t, report.Candidates, 1)
-		require.Contains(t, strings.Join(report.Errors, " "), "context canceled")
+		require.Contains(t, strings.Join(report.Errors, " "), "native engine unavailable")
 	})
 }
 

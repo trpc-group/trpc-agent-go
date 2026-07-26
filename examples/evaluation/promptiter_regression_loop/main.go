@@ -165,15 +165,13 @@ func run(ctx context.Context, dataDir, outputDir string) (*regression.Report, er
 		return nil, err
 	}
 	report, err := pipeline.Run(ctx, config)
-	if err != nil {
-		return nil, err
-	}
-	if err := regression.WriteArtifacts(
+	if artifactErr := writeRunArtifacts(
 		report,
+		err,
 		filepath.Join(outputDir, config.Output.JSON),
 		filepath.Join(outputDir, config.Output.Markdown),
-	); err != nil {
-		return nil, err
+	); artifactErr != nil {
+		return report, artifactErr
 	}
 	validationScore := "unavailable"
 	if report.BaselineValidation != nil {
@@ -188,6 +186,22 @@ func run(ctx context.Context, dataDir, outputDir string) (*regression.Report, er
 		validationScore,
 	)
 	return report, nil
+}
+
+func writeRunArtifacts(
+	report *regression.Report,
+	runErr error,
+	jsonPath string,
+	markdownPath string,
+) error {
+	if report == nil && runErr == nil {
+		return errors.New("pipeline returned neither a report nor an error")
+	}
+	var writeErr error
+	if report != nil {
+		writeErr = regression.WriteArtifacts(report, jsonPath, markdownPath)
+	}
+	return errors.Join(runErr, writeErr)
 }
 
 func newDeterministicAgent(meter *regression.UsageMeter) *llmagent.LLMAgent {

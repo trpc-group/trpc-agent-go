@@ -185,6 +185,212 @@ func TestPipelineStopsNativePromptIterAtObservedBudgetBoundary(t *testing.T) {
 	require.Equal(t, 1, inferenceCalls, "observer must stop PromptIter before later native stages")
 }
 
+func TestPipelinePropagatesContextTerminationWithFinalizedReport(t *testing.T) {
+	terminations := []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+	}
+	stages := []string{
+		"baseline_train",
+		"baseline_validation",
+		"promptiter_engine",
+		"candidate_train",
+		"candidate_validation",
+	}
+	for _, termination := range terminations {
+		for _, stage := range stages {
+			t.Run(termination.name+"/"+stage, func(t *testing.T) {
+				engine := &pipelineStaticEngine{
+					structure: pipelineTestStructure(),
+					result:    pipelineCandidateRunResult(),
+				}
+				if stage == "promptiter_engine" {
+					engine.err = fmt.Errorf("native engine stopped: %w", termination.err)
+				}
+				evaluator := snapshotEvaluatorFunc(func(
+					_ context.Context,
+					request SnapshotRequest,
+				) (*EvaluationSnapshot, error) {
+					candidate := strings.Contains(
+						pipelineProfileText(request.Profile),
+						"candidate",
+					)
+					shouldStop := false
+					switch stage {
+					case "baseline_train":
+						shouldStop = strings.Contains(
+							request.EvaluationRunID,
+							"/baseline_train",
+						)
+					case "baseline_validation":
+						shouldStop = strings.Contains(
+							request.EvaluationRunID,
+							"/baseline_validation",
+						)
+					case "candidate_train":
+						shouldStop = candidate && request.Split == "train"
+					case "candidate_validation":
+						shouldStop = candidate &&
+							request.Split == "heldout_validation"
+					}
+					if shouldStop {
+						snapshot := pipelineSnapshot(request, 0, false, false)
+						snapshot.Status = EvaluationRunFailed
+						snapshot.Error = termination.err.Error()
+						return snapshot, fmt.Errorf(
+							"%s stopped: %w",
+							stage,
+							termination.err,
+						)
+					}
+					score := 0.2
+					passed := false
+					if request.Split == "heldout_validation" {
+						score = 0.4
+					}
+					if candidate {
+						score = 0.9
+						passed = true
+					}
+					return pipelineSnapshot(request, score, passed, false), nil
+				})
+				pipeline, err := New(engine, evaluator)
+				require.NoError(t, err)
+				config := pipelineRunConfig()
+
+				report, err := pipeline.Run(context.Background(), &config)
+				require.ErrorIs(t, err, termination.err)
+				require.NotNil(t, report)
+				require.Equal(t, PipelineRunFailed, report.Status)
+				require.Equal(t, StopNecessaryRunFailed, report.StopReason)
+				require.Equal(t, report.InitialProfile.Hash, report.SearchProfile.Hash)
+				require.Equal(t, report.InitialProfile.Hash, report.ReleasedProfile.Hash)
+				require.NotEmpty(t, report.FinalDecision.Reasons)
+				require.NotEmpty(t, report.Errors)
+				if stage == "promptiter_engine" {
+					require.Len(t, report.Candidates, 1)
+					require.Equal(
+						t,
+						string(promptiterengine.RunStatusCanceled),
+						report.Candidates[0].PromptIterStatus,
+					)
+				}
+				_, renderErr := RenderJSON(report)
+				require.NoError(t, renderErr)
+				_, renderErr = RenderMarkdown(report)
+				require.NoError(t, renderErr)
+			})
+		}
+	}
+}
+
+func TestPipelinePropagatesPromptIterObserverContextTermination(t *testing.T) {
+	for _, termination := range []struct {
+		name string
+		err  error
+	}{
+		{name: "canceled", err: context.Canceled},
+		{name: "deadline", err: context.DeadlineExceeded},
+	} {
+		t.Run(termination.name, func(t *testing.T) {
+			ctx := context.Background()
+			nativeEvaluator, _, _ := pipelineNativeEvaluator(
+				t,
+				ctx,
+				&pipelineNativeService{surfaceID: pipelineTestSurfaceID},
+			)
+			t.Cleanup(func() {
+				require.NoError(t, nativeEvaluator.Close())
+			})
+			nativeEngine, err := promptiterengine.New(
+				ctx,
+				promptiterengine.WithStructure(pipelineTestStructure()),
+				promptiterengine.WithAgentEvaluator(nativeEvaluator),
+				promptiterengine.WithBackwarder(&pipelineBackwarder{}),
+				promptiterengine.WithAggregator(pipelineAggregator{}),
+				promptiterengine.WithOptimizer(pipelineOptimizer{}),
+			)
+			require.NoError(t, err)
+			pipeline, err := New(
+				nativeEngine,
+				&pipelineSnapshotEvaluator{},
+				WithEngineObserver(func(
+					context.Context,
+					*promptiterengine.Event,
+				) error {
+					return fmt.Errorf("observer stopped: %w", termination.err)
+				}),
+			)
+			require.NoError(t, err)
+			config := pipelineRunConfig()
+
+			report, err := pipeline.Run(ctx, &config)
+			require.ErrorIs(t, err, termination.err)
+			require.NotNil(t, report)
+			require.Equal(t, PipelineRunFailed, report.Status)
+			require.Len(t, report.Candidates, 1)
+			require.Equal(
+				t,
+				string(promptiterengine.RunStatusCanceled),
+				report.Candidates[0].PromptIterStatus,
+			)
+			_, renderErr := RenderJSON(report)
+			require.NoError(t, renderErr)
+			_, renderErr = RenderMarkdown(report)
+			require.NoError(t, renderErr)
+		})
+	}
+}
+
+func TestContextTerminationErrorUsesCanceledContextWithoutOperationError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, contextTerminationError(ctx, nil), context.Canceled)
+	providerErr := errors.New("provider unavailable")
+	joined := contextTerminationError(ctx, providerErr)
+	require.ErrorIs(t, joined, context.Canceled)
+	require.ErrorIs(t, joined, providerErr)
+	require.NoError(t, contextTerminationError(context.Background(), nil))
+	require.NoError(t, contextTerminationError(context.Background(), providerErr))
+}
+
+func TestPipelineAuditsCanceledContextWhenEvaluatorOmitsError(t *testing.T) {
+	for _, status := range []EvaluationStatus{
+		EvaluationCompleted,
+		EvaluationRunFailed,
+	} {
+		t.Run(string(status), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			evaluator := snapshotEvaluatorFunc(func(
+				_ context.Context,
+				request SnapshotRequest,
+			) (*EvaluationSnapshot, error) {
+				snapshot := pipelineSnapshot(request, 0, false, false)
+				snapshot.Status = status
+				if status == EvaluationRunFailed {
+					snapshot.Error = "evaluation stopped"
+				}
+				return snapshot, nil
+			})
+			pipeline, err := New(
+				&pipelineStaticEngine{structure: pipelineTestStructure()},
+				evaluator,
+			)
+			require.NoError(t, err)
+			config := pipelineRunConfig()
+
+			report, err := pipeline.Run(ctx, &config)
+			require.ErrorIs(t, err, context.Canceled)
+			require.NotNil(t, report)
+			require.Contains(t, strings.Join(report.Errors, "\n"), context.Canceled.Error())
+		})
+	}
+}
+
 func TestPipelinePreservesNotEvaluableCandidateAndUpdatesNeitherProfile(t *testing.T) {
 	structure := pipelineTestStructure()
 	config := pipelineRunConfig()

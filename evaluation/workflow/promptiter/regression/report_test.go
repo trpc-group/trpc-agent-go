@@ -275,6 +275,14 @@ func TestWriteArtifactsValidatesPathsAndPublishesCanonicalJSONLast(t *testing.T)
 	require.NoError(t, WriteArtifacts(report, jsonPath, markdownPath))
 	require.FileExists(t, jsonPath)
 	require.FileExists(t, markdownPath)
+	outputInfo, err := os.Stat(filepath.Dir(jsonPath))
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), outputInfo.Mode().Perm())
+	for _, path := range []string{jsonPath, markdownPath} {
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 	jsonData, err := os.ReadFile(jsonPath)
 	require.NoError(t, err)
 	var decoded Report
@@ -287,6 +295,30 @@ func TestWriteArtifactsValidatesPathsAndPublishesCanonicalJSONLast(t *testing.T)
 	err = WriteArtifacts(report, jsonPath, jsonPath)
 	require.ErrorContains(t, err, "different")
 	require.ErrorContains(t, WriteArtifacts(nil, jsonPath, markdownPath), "report is nil")
+}
+
+func TestWriteArtifactsRestrictsOverwrittenFilesWithoutChangingExistingDirectory(t *testing.T) {
+	report := testReport(t)
+	dir := filepath.Join(t.TempDir(), "existing")
+	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(t, os.Chmod(dir, 0o755))
+	jsonPath := filepath.Join(dir, "optimization_report.json")
+	markdownPath := filepath.Join(dir, "optimization_report.md")
+	for _, path := range []string{jsonPath, markdownPath} {
+		require.NoError(t, os.WriteFile(path, []byte("old"), 0o644))
+		require.NoError(t, os.Chmod(path, 0o644))
+	}
+
+	require.NoError(t, WriteArtifacts(report, jsonPath, markdownPath))
+
+	dirInfo, err := os.Stat(dir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o755), dirInfo.Mode().Perm())
+	for _, path := range []string{jsonPath, markdownPath} {
+		info, statErr := os.Stat(path)
+		require.NoError(t, statErr)
+		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+	}
 }
 
 func TestWriteArtifactsReturnsPublishFailure(t *testing.T) {
