@@ -466,15 +466,15 @@ func TestExecTool_HelperFunctions(t *testing.T) {
 
 func TestExecTool_LiveEngine_Errors(t *testing.T) {
 	var nilTool *ExecTool
-	_, err := nilTool.liveEngine()
+	_, err := nilTool.liveEngine(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires an executor")
 
-	_, err = (&ExecTool{exec: &noEngineExec{}}).liveEngine()
+	_, err = (&ExecTool{exec: &noEngineExec{}}).liveEngine(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "EngineProvider")
 
-	_, err = (&ExecTool{exec: &badEngineExec{}}).liveEngine()
+	_, err = (&ExecTool{exec: &badEngineExec{}}).liveEngine(context.Background())
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "live workspace support")
 }

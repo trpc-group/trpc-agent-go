@@ -608,7 +608,7 @@ func (t *ExecTool) prepareExec(
 	if err != nil {
 		return execRequest{}, err
 	}
-	eng, err := t.liveEngine()
+	eng, err := t.liveEngine(ctx)
 	if err != nil {
 		return execRequest{}, err
 	}
@@ -969,9 +969,23 @@ func (t *ExecTool) reconcileWorkspace(
 	return nil
 }
 
-func (t *ExecTool) liveEngine() (codeexecutor.Engine, error) {
+func (t *ExecTool) liveEngine(ctx context.Context) (codeexecutor.Engine, error) {
 	if t == nil || t.exec == nil {
 		return nil, errors.New("workspace_exec requires an executor")
+	}
+	if provider, ok := t.exec.(interface {
+		EngineWithContext(context.Context) (codeexecutor.Engine, error)
+	}); ok {
+		eng, err := provider.EngineWithContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if eng == nil || eng.Manager() == nil || eng.Runner() == nil {
+			return nil, errors.New(
+				"workspace_exec requires an executor with live workspace support",
+			)
+		}
+		return eng, nil
 	}
 	ep, ok := t.exec.(codeexecutor.EngineProvider)
 	if !ok || ep == nil {
@@ -1074,6 +1088,11 @@ func normalizeCWD(raw string) (string, error) {
 func supportsInteractiveSessions(exec codeexecutor.CodeExecutor) bool {
 	if exec == nil {
 		return false
+	}
+	if _, ok := exec.(interface {
+		EngineWithContext(context.Context) (codeexecutor.Engine, error)
+	}); ok {
+		return true
 	}
 	provider, ok := exec.(codeexecutor.EngineProvider)
 	if !ok {

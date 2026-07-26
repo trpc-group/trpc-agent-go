@@ -166,11 +166,11 @@ func TestAgentRunUsesFrameworkSkillPermissionExecutorAndStore(t *testing.T) {
 // TestLocalFallbackExecutorsUseIsolatedWorkDirs 固定并发评测时本地执行目录隔离。
 func TestLocalFallbackExecutorsUseIsolatedWorkDirs(t *testing.T) {
 
-	first, err := execution.NewExecutor(execution.Config{Runtime: RuntimeLocalFallback, Timeout: testReviewTimeout})
+	first, err := execution.NewExecutor(context.Background(), execution.Config{Runtime: RuntimeLocalFallback, Timeout: testReviewTimeout})
 	if err != nil {
 		t.Fatalf("execution.NewExecutor first returned error: %v", err)
 	}
-	second, err := execution.NewExecutor(execution.Config{Runtime: RuntimeLocalFallback, Timeout: testReviewTimeout})
+	second, err := execution.NewExecutor(context.Background(), execution.Config{Runtime: RuntimeLocalFallback, Timeout: testReviewTimeout})
 	if err != nil {
 		t.Fatalf("execution.NewExecutor second returned error: %v", err)
 	}
@@ -1859,7 +1859,7 @@ func TestAgentRunE2BRuntimeRecordsUnsupportedAudit(t *testing.T) {
 // e2b 不能静默回退到 local/container execution。
 func TestE2BExecutorIsExplicitUnsupportedAdapter(t *testing.T) {
 
-	exec, err := execution.NewExecutor(execution.Config{Runtime: RuntimeE2B})
+	exec, err := execution.NewExecutor(context.Background(), execution.Config{Runtime: RuntimeE2B})
 	if err != nil {
 		t.Fatalf("execution.NewExecutor returned error: %v", err)
 	}

@@ -224,7 +224,7 @@ func TestFakeExecutionRuntimeIsTestOnlyAndSeparateFromLocalFallback(t *testing.T
 	if RuntimeFakeExecution == RuntimeLocalFallback {
 		t.Fatalf("fake execution runtime must not alias local fallback")
 	}
-	exec, err := NewExecutor(Config{Runtime: RuntimeFakeExecution})
+	exec, err := NewExecutor(context.Background(), Config{Runtime: RuntimeFakeExecution})
 	if err != nil {
 		t.Fatalf("NewExecutor fake runtime returned error: %v", err)
 	}
@@ -249,7 +249,7 @@ func TestCleanupExecutorRemovesLocalFallbackWorkDirExactlyOnce(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("TMPDIR", base)
 
-	exec, err := NewExecutor(Config{Runtime: RuntimeLocalFallback})
+	exec, err := NewExecutor(context.Background(), Config{Runtime: RuntimeLocalFallback})
 	if err != nil {
 		t.Fatalf("NewExecutor returned error: %v", err)
 	}
@@ -311,7 +311,7 @@ func TestLazyExecutorDefersFactoryUntilUseAndUnusedClose(t *testing.T) {
 	t.Parallel()
 
 	factoryCalls := 0
-	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(context.Context, Config) (codeexecutor.CodeExecutor, error) {
 		factoryCalls++
 		return &closeSpyExecutor{}, nil
 	})
@@ -335,7 +335,7 @@ func TestLazyExecutorInitializesAndClosesUnderlyingExecutorOnce(t *testing.T) {
 
 	spy := &closeSpyExecutor{}
 	factoryCalls := 0
-	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(context.Context, Config) (codeexecutor.CodeExecutor, error) {
 		factoryCalls++
 		return spy, nil
 	})
@@ -364,6 +364,41 @@ func TestLazyExecutorInitializesAndClosesUnderlyingExecutorOnce(t *testing.T) {
 	}
 }
 
+func TestLazyExecutorCancelsInitializationWithoutPublishingExecutor(t *testing.T) {
+	factoryStarted := make(chan struct{})
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(ctx context.Context, _ Config) (codeexecutor.CodeExecutor, error) {
+		close(factoryStarted)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	executeDone := make(chan error, 1)
+	go func() {
+		_, err := exec.ExecuteCode(ctx, codeexecutor.CodeExecutionInput{})
+		executeDone <- err
+	}()
+	<-factoryStarted
+	cancel()
+
+	select {
+	case err := <-executeDone:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ExecuteCode error = %v, want context cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ExecuteCode did not return after initialization cancellation")
+	}
+	if err := exec.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+	exec.mu.Lock()
+	published := exec.exec
+	exec.mu.Unlock()
+	if published != nil {
+		t.Fatalf("canceled initialization published executor %T", published)
+	}
+}
+
 func TestLazyExecutorCloseWaitsForRacingInitializationCleanup(t *testing.T) {
 	t.Parallel()
 
@@ -375,7 +410,7 @@ func TestLazyExecutorCloseWaitsForRacingInitializationCleanup(t *testing.T) {
 		closeStart: make(chan struct{}),
 		closeAllow: make(chan struct{}),
 	}
-	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(Config) (codeexecutor.CodeExecutor, error) {
+	exec := NewLazyExecutor(Config{Runtime: RuntimeContainer}, func(context.Context, Config) (codeexecutor.CodeExecutor, error) {
 		close(factoryStarted)
 		<-releaseFactory
 		return spy, nil

@@ -19,7 +19,13 @@ import (
 )
 
 // ExecutorFactory constructs a runtime-specific CodeExecutor.
-type ExecutorFactory func(Config) (codeexecutor.CodeExecutor, error)
+type ExecutorFactory func(context.Context, Config) (codeexecutor.CodeExecutor, error)
+
+// ContextEngineProvider exposes an engine whose initialization can honor the
+// context of the workspace operation that needs it.
+type ContextEngineProvider interface {
+	EngineWithContext(context.Context) (codeexecutor.Engine, error)
+}
 
 var defaultCodeBlockDelimiter = codeexecutor.CodeBlockDelimiter{
 	Start: "```",
@@ -63,7 +69,7 @@ func (e *LazyExecutor) ExecuteCode(
 	ctx context.Context,
 	input codeexecutor.CodeExecutionInput,
 ) (codeexecutor.CodeExecutionResult, error) {
-	exec, err := e.ensure()
+	exec, err := e.ensure(ctx)
 	if err != nil {
 		return codeexecutor.CodeExecutionResult{}, err
 	}
@@ -81,15 +87,24 @@ func (e *LazyExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 
 func (e *LazyExecutor) Engine() codeexecutor.Engine {
-	exec, err := e.ensure()
+	eng, err := e.EngineWithContext(context.Background())
 	if err != nil {
 		return lazyErrorEngine{err: err}
 	}
+	return eng
+}
+
+// EngineWithContext initializes the executor only while ctx remains live.
+func (e *LazyExecutor) EngineWithContext(ctx context.Context) (codeexecutor.Engine, error) {
+	exec, err := e.ensure(ctx)
+	if err != nil {
+		return nil, err
+	}
 	ep, ok := exec.(codeexecutor.EngineProvider)
 	if !ok || ep == nil {
-		return nil
+		return nil, nil
 	}
-	return ep.Engine()
+	return ep.Engine(), nil
 }
 
 func (e *LazyExecutor) Close() error {
@@ -124,7 +139,10 @@ func (e *LazyExecutor) Close() error {
 	return err
 }
 
-func (e *LazyExecutor) ensure() (codeexecutor.CodeExecutor, error) {
+func (e *LazyExecutor) ensure(ctx context.Context) (codeexecutor.CodeExecutor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	e.mu.Lock()
 	if e.closed {
 		err := e.closeErr
@@ -139,7 +157,11 @@ func (e *LazyExecutor) ensure() (codeexecutor.CodeExecutor, error) {
 		initializing := e.initializing
 		e.mu.Unlock()
 		if initializing {
-			<-done
+			select {
+			case <-done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 			e.mu.Lock()
 			exec, err := e.exec, e.initErr
 			e.mu.Unlock()
@@ -157,7 +179,7 @@ func (e *LazyExecutor) ensure() (codeexecutor.CodeExecutor, error) {
 	cfg := e.cfg
 	e.mu.Unlock()
 
-	exec, err := factory(cfg)
+	exec, err := factory(ctx, cfg)
 	if err != nil {
 		err = fmt.Errorf("create %s executor: %w", cfg.Runtime, err)
 	}
