@@ -4,4 +4,4 @@ Pipeline 在 PromptIter 外层构建可审计闭环：读取 prompt、训练/验
 
 失败归因综合 metric 名、reason、trace、最终回复、工具轨迹、结构化 invocation 和 metrics.json criterion 原文，给出主因与次级标签；结构化证据优先于配置 hint，并在报告中记录冲突。可选 `AttributionJudge` 只在 unknown 或低置信 rubric fallback 时介入，默认 fake/确定性模式无需 API Key。
 
-Gate 按验证集分数提升、hard fail、关键 case 退化、任意降分开关、成本/调用/耗时预算决策，防止训练集提升但验证退化的过拟合候选进入生产。JSON/Markdown 审计每轮 prompt、评测、delta、归因、拒绝理由、seed、模型/fake 配置和成本。
+Gate 按验证集分数提升、hard fail、关键 case 退化、任意降分开关、成本/调用/耗时预算决策，防止训练集提升但验证退化的过拟合候选进入生产。JSON/Markdown 审计每轮 prompt、评测、delta、归因、拒绝理由、模型/fake 配置和成本。执行快照正文默认不写入报告；仅在调用方确认制品访问边界后，显式设置 `includeRawSnapshots` 才会保留原始 trace payload。

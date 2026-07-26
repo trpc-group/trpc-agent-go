@@ -5,7 +5,6 @@
   "trainEvalSetId": "train",
   "validationEvalSetId": "validation",
   "scenario": "overfit",
-  "seed": 20260710,
   "targetSurfaceIds": ["support_agent#instruction"],
   "gate": {
     "minValidationScoreGain": 0.05,

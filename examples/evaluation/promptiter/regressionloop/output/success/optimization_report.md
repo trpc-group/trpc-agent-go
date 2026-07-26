@@ -33,6 +33,12 @@
 | validation | val_overfit_refund_policy | final_response | 1.000 | 1.000 | +0.000 | unchanged |
 | validation | val_prompt_fix_generalizes | tool_trajectory | 0.000 | 1.000 | +1.000 | newly_passed |
 
+## Candidate Surfaces
+
+| surface | value | reason |
+| --- | --- | --- |
+| support_agent#instruction | Answer support questions briefly. |  |
+
 ## Failure Attribution
 
 Baseline failures: `5`; candidate failures: `0`; combined: `5`.

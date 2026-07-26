@@ -18,16 +18,20 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
+	evalsetinmemory "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/aggregator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/backwarder"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/optimizer"
+	"trpc.group/trpc-go/trpc-agent-go/internal/surfacepatch"
 )
 
 func TestPipelineFeedsTrainAttributionIntoLossHints(t *testing.T) {
@@ -645,6 +649,74 @@ func TestPipelineRerunsFinalCandidateValidation(t *testing.T) {
 	assert.Equal(t, 6, result.Report.Cost.ModelCalls)
 }
 
+func TestPipelineAppliesCandidateProfileThroughEvaluationService(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+
+	evalSetManager := evalsetinmemory.New()
+	for _, evalSetID := range []string{"train", "validation"} {
+		_, err := evalSetManager.Create(ctx, "app", evalSetID)
+		require.NoError(t, err)
+		require.NoError(t, evalSetManager.AddCase(ctx, "app", evalSetID, &evalset.EvalCase{EvalID: "case"}))
+	}
+	capturing := &adapterCapturingService{}
+	agentEvaluator, err := evaluation.New(
+		"app",
+		adapterNoopRunner{},
+		evaluation.WithEvalSetManager(evalSetManager),
+		evaluation.WithEvaluationService(capturing),
+		evaluation.WithRunDetailsEnabled(true),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = agentEvaluator.Close() })
+
+	candidatePrompt := "candidate profile applied by final validation"
+	iterator := &capturingPromptIterator{result: &promptiterengine.RunResult{
+		Status: promptiterengine.RunStatusSucceeded,
+		Rounds: []promptiterengine.RoundResult{{
+			Round: 1,
+			OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+				SurfaceID: "agent#instruction",
+				Value:     astructure.SurfaceValue{Text: &candidatePrompt},
+			}}},
+			Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+		}},
+	}}
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+
+	_, err = (Pipeline{
+		Evaluator: EvaluationServiceEvaluator{
+			Evaluator:     agentEvaluator,
+			PromptApplier: TextPromptSurfaceApplier{SurfaceIDs: cfg.TargetSurfaceIDs},
+		},
+		PromptIterator: iterator,
+		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+	}).Run(ctx, cfg)
+	require.NoError(t, err)
+	require.Len(t, capturing.inferenceOptions, 3)
+	runOptions := agent.NewRunOptions(capturing.inferenceOptions[2].RunOptions...)
+	patch, ok := surfacepatch.PatchForNode(runOptions.CustomAgentConfigs, "agent")
+	require.True(t, ok)
+	instruction, ok := patch.Instruction()
+	require.True(t, ok)
+	assert.Equal(t, candidatePrompt, instruction)
+}
+
 func TestPipelineRerunsFinalToolCandidateValidation(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
@@ -765,6 +837,80 @@ func TestPipelineRejectsFinalCandidateEvaluatorNilResult(t *testing.T) {
 		Clock:          &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
 	}.Run(context.Background(), cfg)
 	assert.ErrorContains(t, err, "nil result without error")
+}
+
+func TestPipelineRejectsNilBaselineEvaluationResults(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+
+	_, err := Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned nil result")
+
+	_, err = Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{
+					{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_validation evaluator returned nil result")
+
+	_, err = Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: &promptiterengine.EvaluationResult{
+					EvalSets: []promptiterengine.EvalSetResult{{EvalSetID: "train"}},
+				},
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
+
+	_, err = Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{{
+					id: "case", metric: "metric", status: status.EvalStatusNotEvaluated,
+				}}),
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
 }
 
 func TestPipelineRejectsMissingCollaboratorsAndMetricsPath(t *testing.T) {

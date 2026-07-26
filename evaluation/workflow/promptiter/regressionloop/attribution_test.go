@@ -225,6 +225,60 @@ func TestAttributeFailuresUsesOptionalJudgeFallback(t *testing.T) {
 	assert.Contains(t, attrs[0].Evidence, "judge_evidence=missing citation")
 }
 
+func TestAttributeFailuresRedactsFallbackJudgeRequest(t *testing.T) {
+	judge := &capturingAttributionJudge{
+		result: AttributionJudgeResult{Category: FailureRubricFailure, Confidence: 0.8},
+	}
+	result := &promptiterengine.EvaluationResult{
+		EvalSets: []promptiterengine.EvalSetResult{
+			{
+				EvalSetID: "validation",
+				Cases: []promptiterengine.CaseResult{
+					{
+						EvalCaseID: "case",
+						ActualInvocation: &evalset.Invocation{
+							FinalResponse: assistantMessage(`{"message":"final response contains Bearer final-secret and sk-final-secret-value"}`),
+						},
+						Trace: &atrace.Trace{
+							Status: atrace.TraceStatusCompleted,
+							Steps: []atrace.Step{
+								{StepID: "out", Error: "authorization: Bearer trace-error-secret", Output: &atrace.Snapshot{Text: `{"api_key":"output-secret","authorization":"Bearer trace-secret"}`}},
+							},
+						},
+						Metrics: []promptiterengine.MetricResult{
+							{
+								MetricName: "llm_quality",
+								Score:      0,
+								Status:     status.EvalStatusFailed,
+								Reason:     "token: reason-secret",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	attrs := AttributeFailuresWithOptions(context.Background(), result, AttributionOptions{Judge: judge})
+	require.Len(t, attrs, 1)
+	require.Len(t, judge.requests, 1)
+	requestText := judge.requests[0].Reason + " " + strings.Join(judge.requests[0].Evidence, " ")
+	assert.NotContains(t, requestText, "reason-secret")
+	assert.NotContains(t, requestText, "trace-secret")
+	assert.NotContains(t, requestText, "trace-error-secret")
+	assert.NotContains(t, requestText, "output-secret")
+	assert.NotContains(t, requestText, "final-secret")
+	assert.NotContains(t, requestText, "final-secret-value")
+	assert.Contains(t, requestText, "[REDACTED]")
+
+	redacted := strings.Join(redactEvidence([]string{"step_error[step]=authorization: Bearer trace-secret"}), " ")
+	assert.NotContains(t, redacted, "trace-secret")
+	assert.Contains(t, redacted, "[REDACTED]")
+	redactedReason := redactSensitiveString("Bearer reason-secret api_key=sk-reason-secret-value")
+	assert.NotContains(t, redactedReason, "reason-secret")
+	assert.NotContains(t, redactedReason, "reason-secret-value")
+}
+
 func TestAttributionHintsMergesMetricsAndConfig(t *testing.T) {
 	hints := AttributionHints(
 		Config{
@@ -332,7 +386,10 @@ func TestAttributionCoversTraceAndFallbackBranches(t *testing.T) {
 	}
 	calls := toolCallsFromTrace(traceWithRepeatedCalls)
 	require.Len(t, calls, 2)
-	assert.Equal(t, calls[0], calls[1])
+	assert.Equal(t, calls[0].Name, calls[1].Name)
+	assert.Equal(t, calls[0].Arguments, calls[1].Arguments)
+	assert.Equal(t, "1", calls[0].StepID)
+	assert.Equal(t, "2", calls[1].StepID)
 
 	category, confidence, method := classifyFailure("custom_metric", "", trace, nil, nil, nil, nil)
 	assert.Equal(t, FailureInferenceError, category)
@@ -857,6 +914,46 @@ func TestAttributeFailuresMatchesTraceOnlyRepeatedToolCallsIndividually(t *testi
 	assert.Equal(t, "structured_diff", byCase["trace_repeated_bad_second"].Method)
 }
 
+func TestToolCallsFromTraceDoesNotDoubleCountAdjacentHistorySnapshots(t *testing.T) {
+	trace := &atrace.Trace{Steps: []atrace.Step{
+		{
+			StepID: "emit-call",
+			Output: &atrace.Snapshot{Text: `{"tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}`},
+		},
+		{
+			StepID: "history-replay",
+			Input:  &atrace.Snapshot{Text: `{"messages":[{"role":"assistant","tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}]}`},
+			Output: &atrace.Snapshot{Text: `{"messages":[{"role":"assistant","tool_calls":[{"name":"lookup","arguments":{"id":"A"}}]}],"content":"tool response"}`},
+		},
+	}}
+
+	calls := toolCallsFromTrace(trace)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "lookup", calls[0].Name)
+	assert.Equal(t, map[string]any{"id": "A"}, calls[0].Arguments)
+}
+
+func TestToolCallsFromTraceExtractsNestedModelResponseCallsByID(t *testing.T) {
+	trace := &atrace.Trace{Steps: []atrace.Step{
+		{
+			StepID: "model-call",
+			Output: &atrace.Snapshot{Text: `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{\"id\":\"A\"}"}}]}}]}`},
+		},
+		{
+			// This is a repeated response snapshot for the same logical call.
+			StepID: "response-replay",
+			Output: &atrace.Snapshot{Text: `{"choices":[{"delta":{"tool_calls":[{"id":"call-1","function":{"name":"lookup","arguments":"{\"id\":\"A\"}"}}]}}]}`},
+		},
+	}}
+
+	calls := toolCallsFromTrace(trace)
+	require.Len(t, calls, 1)
+	assert.Equal(t, "call-1", calls[0].ID)
+	assert.Equal(t, "model-call", calls[0].StepID)
+	assert.Equal(t, "lookup", calls[0].Name)
+	assert.Equal(t, map[string]any{"id": "A"}, calls[0].Arguments)
+}
+
 func TestAttributeFailuresUsesStructuredFormatRouteAndFinalDiff(t *testing.T) {
 	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
 		{
@@ -1136,4 +1233,14 @@ func (j fakeAttributionJudge) ClassifyFailure(context.Context, AttributionJudgeR
 		Evidence:    j.evidence,
 		Secondaries: j.secondaries,
 	}, nil
+}
+
+type capturingAttributionJudge struct {
+	requests []AttributionJudgeRequest
+	result   AttributionJudgeResult
+}
+
+func (j *capturingAttributionJudge) ClassifyFailure(_ context.Context, request AttributionJudgeRequest) (AttributionJudgeResult, error) {
+	j.requests = append(j.requests, request)
+	return j.result, nil
 }

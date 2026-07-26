@@ -33,6 +33,20 @@
 | validation | val_overfit_refund_policy | final_response | 1.000 | 1.000 | +0.000 | unchanged |
 | validation | val_prompt_fix_generalizes | tool_trajectory | 0.000 | 0.000 | +0.000 | unchanged |
 
+## Candidate Surfaces
+
+| surface | value | reason |
+| --- | --- | --- |
+| support_agent#instruction | Answer support questions briefly. | trace-smoke replayed the configured surface without optimizer changes |
+
+## Round Patches
+
+### Round 1
+
+| surface | value | reason |
+| --- | --- | --- |
+| support_agent#instruction | Answer support questions briefly. | trace-smoke replayed the configured surface without optimizer changes |
+
 ## Failure Attribution
 
 Baseline failures: `5`; candidate failures: `0`; combined: `5`.

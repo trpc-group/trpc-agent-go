@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
@@ -58,6 +59,9 @@ func (e EvaluationServiceEvaluator) Evaluate(
 	if e.Evaluator == nil {
 		return nil, errors.New("evaluation service evaluator is nil")
 	}
+	if isNilPromptApplier(e.PromptApplier) && requestRequiresPromptApplication(request) {
+		return nil, errors.New("prompt/profile request requires a prompt applier")
+	}
 	options := append([]evaluation.Option{
 		evaluation.WithRunDetailsEnabled(true),
 	}, e.Options...)
@@ -73,6 +77,24 @@ func (e EvaluationServiceEvaluator) Evaluate(
 		return nil, err
 	}
 	return AdaptEvaluationResult(result)
+}
+
+func isNilPromptApplier(applier PromptApplier) bool {
+	if applier == nil {
+		return true
+	}
+	value := reflect.ValueOf(applier)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
+func requestRequiresPromptApplication(request EvaluationRequest) bool {
+	return strings.TrimSpace(request.Prompt) != "" ||
+		(request.Profile != nil && len(request.Profile.Overrides) > 0)
 }
 
 // PromptApplier turns a prompt source into evaluation options for one run.
@@ -193,12 +215,6 @@ func BuildPromptProfile(surfaceIDs []string, prompt string) (*promptiter.Profile
 	return &promptiter.Profile{Overrides: overrides}, nil
 }
 
-// BuildTextPromptProfile builds a PromptIter initial profile from a prompt file.
-// Deprecated: use BuildPromptProfile.
-func BuildTextPromptProfile(surfaceIDs []string, prompt string) (*promptiter.Profile, error) {
-	return BuildPromptProfile(surfaceIDs, prompt)
-}
-
 func promptSurfaceValue(
 	nodeID string,
 	surfaceType astructure.SurfaceType,
@@ -304,11 +320,11 @@ func AdaptEvaluationResult(result *evaluation.EvaluationResult) (*promptiterengi
 			if metric == nil || metric.EvalStatus == status.EvalStatusNotEvaluated {
 				continue
 			}
-			reason := ""
-			if metric.Details != nil {
-				reason = metric.Details.Reason
-			}
 			evidence := invocationEvidenceForMetric(metric, evalCase)
+			reason := metricReason(metric)
+			if reason == "" {
+				reason = evidence.reason
+			}
 			if evidence.runID != 0 {
 				if firstEvidenceRunID == 0 {
 					firstEvidenceRunID = evidence.runID
@@ -378,6 +394,8 @@ type metricInvocationEvidence struct {
 	actual   *evalset.Invocation
 	expected *evalset.Invocation
 	runID    int
+	reason   string
+	found    bool
 }
 
 func invocationEvidenceForMetric(
@@ -388,6 +406,8 @@ func invocationEvidenceForMetric(
 		return metricInvocationEvidence{}
 	}
 	var first metricInvocationEvidence
+	var identityMatch metricInvocationEvidence
+	var exactMatch metricInvocationEvidence
 	var statusMatch metricInvocationEvidence
 	for _, caseResult := range evalCase.EvalCaseResults {
 		if caseResult == nil {
@@ -405,20 +425,33 @@ func invocationEvidenceForMetric(
 					actual:   perInvocation.ActualInvocation,
 					expected: perInvocation.ExpectedInvocation,
 					runID:    caseResult.RunID,
+					reason:   metricReason(metric),
+					found:    true,
 				}
-				if first.actual == nil && first.expected == nil {
+				if !first.found {
 					first = evidence
 				}
-				if metricMatchesAggregate(result, metric) {
-					return evidence
+				if result.Details != nil && metric.Details == result.Details {
+					identityMatch = evidence
+					continue
 				}
-				if statusMatch.actual == nil && statusMatch.expected == nil && metric.EvalStatus == result.EvalStatus {
+				if metricMatchesAggregate(result, metric) {
+					exactMatch = evidence
+					continue
+				}
+				if metric.EvalStatus == result.EvalStatus {
 					statusMatch = evidence
 				}
 			}
 		}
 	}
-	if statusMatch.actual != nil || statusMatch.expected != nil {
+	if identityMatch.found {
+		return identityMatch
+	}
+	if exactMatch.found {
+		return exactMatch
+	}
+	if statusMatch.found {
 		return statusMatch
 	}
 	return first
@@ -428,12 +461,12 @@ func metricMatchesAggregate(aggregate, candidate *evalresult.EvalMetricResult) b
 	if aggregate == nil || candidate == nil || candidate.EvalStatus != aggregate.EvalStatus {
 		return false
 	}
+	if aggregate.Details != nil && candidate.Details == aggregate.Details {
+		return true
+	}
 	aggregateReason := metricReason(aggregate)
 	if aggregateReason != "" {
 		return aggregateReason == metricReason(candidate)
-	}
-	if metricReason(candidate) != "" {
-		return false
 	}
 	return candidate.Score == aggregate.Score
 }

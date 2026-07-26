@@ -369,20 +369,20 @@ func TestCandidatePromptCoversProfileValueVariants(t *testing.T) {
 
 	first := "first prompt"
 	second := "second prompt"
-	text, err = CandidateTextPrompt(&promptiterengine.RunResult{
+	override, err := candidateTextOverride(&promptiterengine.RunResult{
 		AcceptedProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
 			{Value: astructure.SurfaceValue{Text: &first}},
 			{Value: astructure.SurfaceValue{Text: &second}},
 		}},
 	})
-	assert.Empty(t, text)
+	assert.Empty(t, override.Text)
 	assert.ErrorContains(t, err, "multiple text overrides")
 }
 
 func TestTraceReportAndSnapshotHelpers(t *testing.T) {
 	assert.Nil(t, traceReportFromTrace(nil))
 	assert.Nil(t, snapshotReportFromSnapshot(nil))
-	assert.Equal(t, "snapshot", snapshotReportFromSnapshot(&atrace.Snapshot{Text: "snapshot"}).Text)
+	assert.Empty(t, snapshotReportFromSnapshot(&atrace.Snapshot{Text: "snapshot"}).Text)
 
 	trace := &atrace.Trace{
 		RootAgentName:    "root",
@@ -409,8 +409,73 @@ func TestTraceReportAndSnapshotHelpers(t *testing.T) {
 	require.NotNil(t, report)
 	assert.Equal(t, "root", report.RootAgentName)
 	require.Len(t, report.Steps, 1)
-	assert.Equal(t, "input", report.Steps[0].Input.Text)
-	assert.Equal(t, "output", report.Steps[0].Output.Text)
+	require.NotNil(t, report.Steps[0].Input)
+	require.NotNil(t, report.Steps[0].Output)
+	assert.Empty(t, report.Steps[0].Input.Text)
+	assert.Empty(t, report.Steps[0].Output.Text)
+}
+
+func TestEvaluationReportOmitsRawExecutionSnapshotPayloads(t *testing.T) {
+	result := &promptiterengine.EvaluationResult{
+		EvalSets: []promptiterengine.EvalSetResult{
+			{
+				EvalSetID: "validation",
+				Cases: []promptiterengine.CaseResult{
+					{
+						EvalSetID:  "validation",
+						EvalCaseID: "case",
+						Trace: &atrace.Trace{Steps: []atrace.Step{
+							{
+								StepID: "step",
+								Input:  &atrace.Snapshot{Text: `{"user":"alice@example.com","api_key":"input-secret"}`},
+								Output: &atrace.Snapshot{Text: `{"authorization":"Bearer output-secret"}`},
+							},
+						}},
+						Metrics: []promptiterengine.MetricResult{
+							{MetricName: "metric", Score: 1, Status: status.EvalStatusPassed},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	report := evaluationReportFromResult(result)
+	bytes, err := json.Marshal(report)
+	require.NoError(t, err)
+	text := string(bytes)
+	assert.NotContains(t, text, "alice@example.com")
+	assert.NotContains(t, text, "input-secret")
+	assert.NotContains(t, text, "output-secret")
+}
+
+func TestEvaluationReportIncludesRawSnapshotsOnlyWithExplicitOptIn(t *testing.T) {
+	result := &promptiterengine.EvaluationResult{
+		EvalSets: []promptiterengine.EvalSetResult{{
+			EvalSetID: "validation",
+			Cases: []promptiterengine.CaseResult{{
+				EvalSetID:  "validation",
+				EvalCaseID: "case",
+				Trace: &atrace.Trace{Steps: []atrace.Step{{
+					Output: &atrace.Snapshot{Text: "controlled trace payload"},
+				}}},
+				Metrics: []promptiterengine.MetricResult{{MetricName: "metric", Score: 1, Status: status.EvalStatusPassed}},
+			}},
+		}},
+	}
+
+	defaultReport := BuildReport(ReportInput{BaselineTrain: result})
+	defaultBytes, err := json.Marshal(defaultReport)
+	require.NoError(t, err)
+	assert.NotContains(t, string(defaultBytes), "controlled trace payload")
+
+	optInReport := BuildReport(ReportInput{
+		Config:        Config{IncludeRawSnapshots: true},
+		BaselineTrain: result,
+	})
+	optInBytes, err := json.Marshal(optInReport)
+	require.NoError(t, err)
+	assert.Contains(t, string(optInBytes), "controlled trace payload")
 }
 
 func TestBuildReportUsesRejectedFinalCandidateForAudit(t *testing.T) {

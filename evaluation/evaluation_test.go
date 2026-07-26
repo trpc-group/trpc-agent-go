@@ -2111,6 +2111,102 @@ func TestAggregateCaseRunsPreservesPerInvocationReason(t *testing.T) {
 	assert.Equal(t, "judge reason from invocation", result.MetricResults[0].Details.Reason)
 }
 
+func TestAggregateCaseRunsPreservesReasonFromMatchingInvocation(t *testing.T) {
+	run := makeEvalCaseResult("set", "case", "metric", 0, 1, status.EvalStatusFailed)
+	run.OverallEvalMetricResults[0].Details = nil
+	run.EvalMetricResultPerInvocation = []*evalresult.EvalMetricResultPerInvocation{
+		{
+			EvalMetricResults: []*evalresult.EvalMetricResult{
+				{
+					MetricName: "metric",
+					Score:      0.4,
+					EvalStatus: status.EvalStatusFailed,
+					Threshold:  1,
+					Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+				},
+			},
+		},
+		{
+			EvalMetricResults: []*evalresult.EvalMetricResult{
+				{
+					MetricName: "metric",
+					Score:      0,
+					EvalStatus: status.EvalStatusFailed,
+					Threshold:  1,
+					Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+				},
+			},
+		},
+	}
+
+	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{run})
+	assert.NoError(t, err)
+	require.Len(t, result.MetricResults, 1)
+	require.NotNil(t, result.MetricResults[0].Details)
+	assert.Same(t,
+		run.EvalMetricResultPerInvocation[1].EvalMetricResults[0].Details,
+		result.MetricResults[0].Details,
+	)
+	assert.Equal(t, "second turn failed", result.MetricResults[0].Details.Reason)
+}
+
+func TestAggregateCaseRunsPrefersInvocationReasonOverJoinedAggregateReason(t *testing.T) {
+	run := makeEvalCaseResult("set", "case", "metric", 0, 1, status.EvalStatusFailed)
+	run.OverallEvalMetricResults[0].Details = &evalresult.EvalMetricResultDetails{Reason: "first turn failed; second turn failed"}
+	selectedDetails := &evalresult.EvalMetricResultDetails{Reason: "second turn failed"}
+	run.EvalMetricResultPerInvocation = []*evalresult.EvalMetricResultPerInvocation{
+		{EvalMetricResults: []*evalresult.EvalMetricResult{{
+			MetricName: "metric", Score: 0.4, EvalStatus: status.EvalStatusFailed,
+			Threshold: 1, Details: &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+		}}},
+		{EvalMetricResults: []*evalresult.EvalMetricResult{{
+			MetricName: "metric", Score: 0, EvalStatus: status.EvalStatusFailed,
+			Threshold: 1, Details: selectedDetails,
+		}}},
+	}
+
+	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{run})
+	assert.NoError(t, err)
+	require.Len(t, result.MetricResults, 1)
+	assert.Same(t, selectedDetails, result.MetricResults[0].Details)
+	assert.Equal(t, "second turn failed", result.MetricResults[0].Details.Reason)
+}
+
+func TestAggregateCaseRunsUsesLastMatchingFailedInvocationReason(t *testing.T) {
+	run := makeEvalCaseResult("set", "case", "metric", 0, 1, status.EvalStatusFailed)
+	run.OverallEvalMetricResults[0].Details = nil
+	run.EvalMetricResultPerInvocation = []*evalresult.EvalMetricResultPerInvocation{
+		{
+			EvalMetricResults: []*evalresult.EvalMetricResult{
+				{
+					MetricName: "metric",
+					Score:      0,
+					EvalStatus: status.EvalStatusFailed,
+					Threshold:  1,
+					Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+				},
+			},
+		},
+		{
+			EvalMetricResults: []*evalresult.EvalMetricResult{
+				{
+					MetricName: "metric",
+					Score:      0,
+					EvalStatus: status.EvalStatusFailed,
+					Threshold:  1,
+					Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+				},
+			},
+		},
+	}
+
+	result, err := aggregateCaseRuns("case", []*evalresult.EvalCaseResult{run})
+	assert.NoError(t, err)
+	require.Len(t, result.MetricResults, 1)
+	require.NotNil(t, result.MetricResults[0].Details)
+	assert.Equal(t, "second turn failed", result.MetricResults[0].Details.Reason)
+}
+
 func TestAggregateCaseRunsUsesCaseFinalStatusWhenMetricsFail(t *testing.T) {
 	runs := []*evalresult.EvalCaseResult{
 		{

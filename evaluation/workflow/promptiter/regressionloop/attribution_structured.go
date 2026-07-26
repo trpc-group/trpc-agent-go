@@ -21,6 +21,8 @@ import (
 )
 
 type structuredToolCall struct {
+	ID        string
+	StepID    string
 	Name      string
 	Arguments any
 	Result    any
@@ -275,14 +277,29 @@ func toolCallsFromTrace(trace *atrace.Trace) []structuredToolCall {
 		return nil
 	}
 	var out []structuredToolCall
+	seenCallIDs := make(map[string]struct{})
 	for _, step := range trace.Steps {
-		out = append(out, toolCallsFromSnapshot(step.Input)...)
-		out = append(out, toolCallsFromSnapshot(step.Output)...)
+		for _, call := range toolCallsFromSnapshotAt(step.Output, step.StepID) {
+			// A trace can repeat the same model response in a later snapshot. Tool
+			// call IDs identify one logical call; calls without an ID remain
+			// occurrence-based and are preserved per emitting step.
+			if call.ID != "" {
+				if _, seen := seenCallIDs[call.ID]; seen {
+					continue
+				}
+				seenCallIDs[call.ID] = struct{}{}
+			}
+			out = append(out, call)
+		}
 	}
 	return out
 }
 
 func toolCallsFromSnapshot(snapshot *atrace.Snapshot) []structuredToolCall {
+	return toolCallsFromSnapshotAt(snapshot, "")
+}
+
+func toolCallsFromSnapshotAt(snapshot *atrace.Snapshot, stepID string) []structuredToolCall {
 	if snapshot == nil || strings.TrimSpace(snapshot.Text) == "" {
 		return nil
 	}
@@ -291,30 +308,52 @@ func toolCallsFromSnapshot(snapshot *atrace.Snapshot) []structuredToolCall {
 		return nil
 	}
 	var out []structuredToolCall
-	extractToolCalls(value, &out)
+	extractCallEmittingToolCalls(value, stepID, &out)
 	return out
 }
 
-func extractToolCalls(value any, out *[]structuredToolCall) {
+func extractCallEmittingToolCalls(value any, stepID string, out *[]structuredToolCall) {
 	switch typed := value.(type) {
 	case []any:
 		for _, item := range typed {
-			extractToolCalls(item, out)
+			extractCallEmittingToolCalls(item, stepID, out)
 		}
 	case map[string]any:
 		if calls, ok := typed["tool_calls"].([]any); ok {
 			for _, rawCall := range calls {
 				if call, ok := toolCallFromMap(rawCall); ok {
+					call.StepID = stepID
 					*out = append(*out, call)
 				}
 			}
-			delete(typed, "tool_calls")
+			return
+		}
+		// LLM responses serialize tool calls below choices[].message or
+		// choices[].delta. Restrict traversal to these call-emitting fields so
+		// message-history inputs and tool-response snapshots are not recounted.
+		if choices, ok := typed["choices"].([]any); ok {
+			for _, choice := range choices {
+				choiceMap, ok := choice.(map[string]any)
+				if !ok {
+					continue
+				}
+				for _, field := range []string{"message", "delta"} {
+					if message, ok := choiceMap[field].(map[string]any); ok {
+						extractCallEmittingToolCalls(message, stepID, out)
+					}
+				}
+			}
+			return
+		}
+		for _, field := range []string{"message", "delta"} {
+			if message, ok := typed[field].(map[string]any); ok {
+				extractCallEmittingToolCalls(message, stepID, out)
+				return
+			}
 		}
 		if call, ok := toolCallFromMap(typed); ok {
+			call.StepID = stepID
 			*out = append(*out, call)
-		}
-		for _, child := range typed {
-			extractToolCalls(child, out)
 		}
 	}
 }
@@ -342,10 +381,20 @@ func toolCallFromMap(value any) (structuredToolCall, bool) {
 		return structuredToolCall{}, false
 	}
 	return structuredToolCall{
+		ID:        firstStringField(object, "id", "tool_call_id", "tool_id"),
 		Name:      strings.TrimSpace(name),
 		Arguments: normalizeJSONLike(args),
 		Result:    normalizeJSONLike(result),
 	}, true
+}
+
+func firstStringField(object map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := stringField(object, key); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func formatMismatch(actualFinal, expectedFinal string) bool {
@@ -441,20 +490,6 @@ func toolNames(tools []structuredToolCall) []string {
 	}
 	sort.Strings(names)
 	return names
-}
-
-func dedupeToolCalls(tools []structuredToolCall) []structuredToolCall {
-	seen := make(map[string]struct{}, len(tools))
-	out := make([]structuredToolCall, 0, len(tools))
-	for _, tool := range tools {
-		key := fmt.Sprintf("%s/%v/%v", tool.Name, tool.Arguments, tool.Result)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		out = append(out, tool)
-	}
-	return out
 }
 
 func jsonValuesEqual(actual, expected any) bool {
@@ -595,14 +630,16 @@ func redactJSONFields(value any) any {
 
 var (
 	sensitiveStringFieldPattern = regexp.MustCompile(
-		`(?i)\b(authorization|access[_ -]?token|api[_ -]?key|client[_ -]?secret|cookie|credentials?|password|passwd|private[_ -]?key|pwd|refresh[_ -]?token|secret|session[_ -]?id|session[_ -]?token|set[_ -]?cookie|token)\b(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+(?:\s+[^\s,;&]+)?)`,
+		`(?i)(?:\b|(['"]))(authorization|access[_ -]?token|api[_ -]?key|client[_ -]?secret|cookie|credentials?|password|passwd|private[_ -]?key|pwd|refresh[_ -]?token|secret|session[_ -]?id|session[_ -]?token|set[_ -]?cookie|token)(['"]?)(\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;&]+(?:\s+[^\s,;&]+)?)`,
 	)
-	bearerCredentialPattern = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+`)
+	bearerCredentialPattern     = regexp.MustCompile(`(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+`)
+	standaloneCredentialPattern = regexp.MustCompile(`(?i)\b(?:sk|rk|pk)-[A-Za-z0-9_-]{8,}\b|\bgh[opusr]_[A-Za-z0-9_]{8,}\b|\bAKIA[0-9A-Z]{16}\b`)
 )
 
 func redactSensitiveString(value string) string {
-	value = sensitiveStringFieldPattern.ReplaceAllString(value, `${1}${2}[REDACTED]`)
-	return bearerCredentialPattern.ReplaceAllString(value, `$1 [REDACTED]`)
+	value = sensitiveStringFieldPattern.ReplaceAllString(value, `${1}${2}${3}${4}[REDACTED]`)
+	value = bearerCredentialPattern.ReplaceAllString(value, `$1 [REDACTED]`)
+	return standaloneCredentialPattern.ReplaceAllString(value, `[REDACTED]`)
 }
 
 func isSensitiveFieldKey(key string) bool {

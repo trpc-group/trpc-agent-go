@@ -33,6 +33,20 @@
 | validation | val_overfit_refund_policy | final_response | 1.000 | 0.000 | -1.000 | newly_failed |
 | validation | val_prompt_fix_generalizes | tool_trajectory | 0.000 | 1.000 | +1.000 | newly_passed |
 
+## Candidate Surfaces
+
+| surface | value | reason |
+| --- | --- | --- |
+| support_agent#instruction | OVERFIT_PROMPT: optimize train failures aggressively, even if validation policy dates change. |  |
+
+## Round Patches
+
+### Round 1
+
+| surface | value | reason |
+| --- | --- | --- |
+| support_agent#instruction | OVERFIT_PROMPT: optimize train failures aggressively, even if validation policy dates change. | deterministic fake optimizer generated a scenario-specific candidate |
+
 ## Failure Attribution
 
 Baseline failures: `5`; candidate failures: `2`; combined: `7`.

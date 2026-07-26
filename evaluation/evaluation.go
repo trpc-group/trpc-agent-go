@@ -601,12 +601,14 @@ func aggregateCaseRuns(caseID string, runs []*evalresult.EvalCaseResult) (*Evalu
 }
 
 func metricDetailsForAggregate(metric *evalresult.EvalMetricResult, run *evalresult.EvalCaseResult) *evalresult.EvalMetricResultDetails {
-	if metric != nil && metric.Details != nil && metric.Details.Reason != "" {
-		return metric.Details
-	}
-	if run == nil || metric == nil {
+	if metric == nil {
 		return nil
 	}
+	if run == nil {
+		return metric.Details
+	}
+	var statusMatch *evalresult.EvalMetricResultDetails
+	var scoreMatch *evalresult.EvalMetricResultDetails
 	for _, perInvocation := range run.EvalMetricResultPerInvocation {
 		if perInvocation == nil {
 			continue
@@ -615,11 +617,26 @@ func metricDetailsForAggregate(metric *evalresult.EvalMetricResult, run *evalres
 			if perMetric == nil || perMetric.MetricName != metric.MetricName {
 				continue
 			}
-			if perMetric.Details != nil && perMetric.Details.Reason != "" {
-				return perMetric.Details
+			if perMetric.Details == nil || perMetric.Details.Reason == "" {
+				continue
+			}
+			if perMetric.EvalStatus == metric.EvalStatus {
+				if perMetric.Score == metric.Score {
+					scoreMatch = perMetric.Details
+					continue
+				}
+				statusMatch = perMetric.Details
 			}
 		}
 	}
+	if scoreMatch != nil {
+		return scoreMatch
+	}
+	if statusMatch != nil {
+		return statusMatch
+	}
+	// Do not copy an unrelated invocation's reason when the aggregate score
+	// and status do not identify a matching per-invocation metric.
 	if metric.Details != nil {
 		return metric.Details
 	}

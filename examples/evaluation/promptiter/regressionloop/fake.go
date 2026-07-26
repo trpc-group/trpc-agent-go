@@ -152,9 +152,19 @@ func (p traceSmokePromptIterator) Run(_ context.Context, req *promptiterengine.R
 		AppName:            p.appName,
 		ID:                 "trace-smoke-regression-loop",
 		Status:             promptiterengine.RunStatusSucceeded,
-		CurrentRound:       0,
+		CurrentRound:       1,
 		BaselineValidation: baselineValidation,
 		AcceptedProfile:    &promptiter.Profile{},
+		Rounds: []promptiterengine.RoundResult{
+			{
+				Round:   1,
+				Patches: replayPatchSet(req.InitialProfile),
+				Acceptance: &promptiterengine.AcceptanceDecision{
+					Accepted: false,
+					Reason:   "trace-smoke replays traces and does not run optimizer acceptance",
+				},
+			},
+		},
 	}, nil
 }
 
@@ -259,6 +269,21 @@ func fakePatchSet(surfaceID, prompt string) *promptiter.PatchSet {
 			},
 		},
 	}
+}
+
+func replayPatchSet(profile *promptiter.Profile) *promptiter.PatchSet {
+	if profile == nil || len(profile.Overrides) == 0 {
+		return nil
+	}
+	patches := make([]promptiter.SurfacePatch, 0, len(profile.Overrides))
+	for _, override := range profile.Overrides {
+		patches = append(patches, promptiter.SurfacePatch{
+			SurfaceID: override.SurfaceID,
+			Value:     override.Value,
+			Reason:    "trace-smoke replayed the configured surface without optimizer changes",
+		})
+	}
+	return &promptiter.PatchSet{Patches: patches}
 }
 
 func firstTargetSurface(req *promptiterengine.RunRequest) string {

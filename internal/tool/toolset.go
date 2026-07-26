@@ -121,9 +121,7 @@ func mergeDeclaration(base *tool.Declaration, override tool.Declaration) tool.De
 	if override.Name != "" {
 		merged.Name = override.Name
 	}
-	if override.Description != "" {
-		merged.Description = override.Description
-	}
+	merged.Description = override.Description
 	if override.InputSchema != nil {
 		merged.InputSchema = override.InputSchema
 	}

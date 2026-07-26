@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,6 +72,15 @@ func TestFakeEngineScenarios(t *testing.T) {
 			assert.NotEmpty(t, result.Report.Rounds)
 			assert.FileExists(t, result.JSONPath)
 			assert.FileExists(t, result.MarkdownPath)
+			assert.True(t, result.Report.Cost.ModelCallsMeasured)
+			assert.NotEmpty(t, result.Report.CandidateSurfaces)
+			jsonReport, err := os.ReadFile(result.JSONPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(jsonReport), `"modelCallsMeasured": true`)
+			assert.Contains(t, string(jsonReport), `"candidateSurfaces"`)
+			md, err := os.ReadFile(result.MarkdownPath)
+			require.NoError(t, err)
+			assert.Contains(t, string(md), "## Candidate Surfaces")
 		})
 	}
 }
@@ -96,6 +106,13 @@ func TestTraceSmokeModeGeneratesAuditableReport(t *testing.T) {
 	assert.NotNil(t, result.Report.BaselineValidation.EvalSets[0].Cases[0].Trace)
 	assert.Equal(t, "trace-smoke", result.Report.Metadata.Scenario)
 	assert.Contains(t, result.Report.Metadata.FakeConfig["optimization"], "skipped")
+	assert.NotEmpty(t, result.Report.CandidateSurfaces)
+	jsonReport, err := os.ReadFile(result.JSONPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(jsonReport), `"candidateSurfaces"`)
+	md, err := os.ReadFile(result.MarkdownPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(md), "## Candidate Surfaces")
 }
 
 func TestTraceFakeEngineModeRunsFullOptimizationWithTraces(t *testing.T) {
@@ -119,6 +136,39 @@ func TestTraceFakeEngineModeRunsFullOptimizationWithTraces(t *testing.T) {
 	assert.NotNil(t, result.Report.CandidateValidation.EvalSets[0].Cases[0].Trace)
 	assert.Equal(t, "deterministic-trace-fake-engine", result.Report.Metadata.FakeConfig["runner"])
 	assert.Contains(t, result.Report.Metadata.FakeConfig["optimization"], "complete")
+}
+
+func TestCommittedAuditFixturesMatchCurrentSchema(t *testing.T) {
+	fixtures := []string{
+		"optimization_report.json",
+		"ineffective/optimization_report.json",
+		"overfit/optimization_report.json",
+		"success/optimization_report.json",
+		"trace-fake-engine/ineffective/optimization_report.json",
+		"trace-fake-engine/overfit/optimization_report.json",
+		"trace-fake-engine/success/optimization_report.json",
+		"trace-smoke/optimization_report.json",
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture, func(t *testing.T) {
+			jsonPath := filepath.Join("output", fixture)
+			data, err := os.ReadFile(jsonPath)
+			require.NoError(t, err)
+			var report struct {
+				Cost struct {
+					ModelCallsMeasured bool `json:"modelCallsMeasured"`
+				} `json:"cost"`
+				CandidateSurfaces []json.RawMessage `json:"candidateSurfaces"`
+			}
+			require.NoError(t, json.Unmarshal(data, &report))
+			assert.True(t, report.Cost.ModelCallsMeasured)
+			assert.NotEmpty(t, report.CandidateSurfaces)
+
+			markdown, err := os.ReadFile(strings.TrimSuffix(jsonPath, ".json") + ".md")
+			require.NoError(t, err)
+			assert.Contains(t, string(markdown), "## Candidate Surfaces")
+		})
+	}
 }
 
 func TestLoadConfigResolvesDefaultPathFromModuleParent(t *testing.T) {

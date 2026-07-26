@@ -164,8 +164,8 @@ func AttributeFailuresWithOptions(
 						EvalSetID:           evalSet.EvalSetID,
 						EvalCaseID:          evalCase.EvalCaseID,
 						MetricName:          metric.MetricName,
-						Reason:              reason,
-						Evidence:            append([]string(nil), evidence...),
+						Reason:              redactSensitiveString(reason),
+						Evidence:            redactEvidence(evidence),
 						CandidateCategories: append([]FailureCategory{category}, secondaryCategories...),
 					})
 					if err != nil {
@@ -213,6 +213,17 @@ func AttributeFailuresWithOptions(
 		return attributions[i].MetricName < attributions[j].MetricName
 	})
 	return attributions
+}
+
+func redactEvidence(evidence []string) []string {
+	if len(evidence) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		out = append(out, redactSensitiveString(item))
+	}
+	return out
 }
 
 // AttributionHints merges metrics.json hints and promptiter.json attribution

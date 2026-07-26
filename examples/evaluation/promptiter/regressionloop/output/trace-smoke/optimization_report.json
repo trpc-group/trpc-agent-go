@@ -4,9 +4,8 @@
     "startedAt": "2026-07-10T08:00:00Z",
     "finishedAt": "2026-07-10T08:00:00.15Z",
     "duration": "150ms",
-    "seed": 20260710,
-    "promptSource": "data/eval-optimization-regression-app/baseline_prompt.txt",
-    "metricsPath": "data/eval-optimization-regression-app/metrics.json",
+    "promptSource": "data\\eval-optimization-regression-app\\baseline_prompt.txt",
+    "metricsPath": "data\\eval-optimization-regression-app\\metrics.json",
     "metricNames": [
       "final_response",
       "json_format",
@@ -56,9 +55,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for train_prompt_fix_success"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -88,9 +85,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for train_optimization_ineffective"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -120,9 +115,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for train_overfit_success"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -163,9 +156,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_prompt_fix_generalizes"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -195,9 +186,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_optimization_ineffective"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -227,9 +216,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_overfit_refund_policy"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -270,9 +257,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_prompt_fix_generalizes"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -302,9 +287,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_optimization_ineffective"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -334,9 +317,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_overfit_refund_policy"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -377,9 +358,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_prompt_fix_generalizes"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -409,9 +388,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_optimization_ineffective"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -441,9 +418,7 @@
                   "appliedSurfaceIds": [
                     "support_agent#instruction"
                   ],
-                  "output": {
-                    "text": "trace output for val_overfit_refund_policy"
-                  }
+                  "output": {}
                 }
               ]
             },
@@ -460,6 +435,24 @@
       }
     ]
   },
+  "rounds": [
+    {
+      "round": 1,
+      "trainScore": 0,
+      "validationScore": 0,
+      "accepted": false,
+      "reason": "trace-smoke replays traces and does not run optimizer acceptance",
+      "patches": [
+        {
+          "surfaceId": "support_agent#instruction",
+          "value": {
+            "text": "Answer support questions briefly.\r\n"
+          },
+          "reason": "trace-smoke replayed the configured surface without optimizer changes"
+        }
+      ]
+    }
+  ],
   "delta": {
     "overallScoreDelta": 0,
     "summary": {
@@ -784,7 +777,17 @@
   },
   "cost": {
     "modelCalls": 6,
+    "modelCallsMeasured": true,
     "source": "cost_provider"
   },
-  "latency": "150ms"
+  "latency": "150ms",
+  "candidateSurfaces": [
+    {
+      "surfaceId": "support_agent#instruction",
+      "value": {
+        "text": "Answer support questions briefly.\r\n"
+      },
+      "reason": "trace-smoke replayed the configured surface without optimizer changes"
+    }
+  ]
 }

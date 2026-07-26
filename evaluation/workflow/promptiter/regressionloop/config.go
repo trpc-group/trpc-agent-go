@@ -20,17 +20,19 @@ import (
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
-// Config carries the reproducible regression-loop inputs.
+// Config carries regression-loop inputs and report settings.
 type Config struct {
-	AppName             string            `json:"appName"`
-	PromptSource        string            `json:"promptSource"`
-	MetricsPath         string            `json:"metricsPath"`
-	TrainEvalSetID      string            `json:"trainEvalSetId"`
-	ValidationEvalSetID string            `json:"validationEvalSetId"`
-	Scenario            string            `json:"scenario,omitempty"`
-	OutputJSON          string            `json:"outputJson"`
-	OutputMarkdown      string            `json:"outputMarkdown"`
-	Seed                int64             `json:"seed"`
+	AppName             string `json:"appName"`
+	PromptSource        string `json:"promptSource"`
+	MetricsPath         string `json:"metricsPath"`
+	TrainEvalSetID      string `json:"trainEvalSetId"`
+	ValidationEvalSetID string `json:"validationEvalSetId"`
+	Scenario            string `json:"scenario,omitempty"`
+	OutputJSON          string `json:"outputJson"`
+	OutputMarkdown      string `json:"outputMarkdown"`
+	// IncludeRawSnapshots opts into storing raw trace input/output payloads in
+	// audit reports. It is disabled by default because snapshots can be sensitive.
+	IncludeRawSnapshots bool              `json:"includeRawSnapshots,omitempty"`
 	TargetSurfaceIDs    []string          `json:"targetSurfaceIds"`
 	Gate                GateConfig        `json:"gate"`
 	PromptIter          PromptIterConfig  `json:"promptiter"`

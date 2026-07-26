@@ -196,6 +196,161 @@ func TestAdaptEvaluationResultDisambiguatesFailedInvocationsByReason(t *testing.
 	assert.Same(t, secondExpected, result.EvalSets[0].Cases[0].Metrics[0].ExpectedInvocation)
 }
 
+func TestAdaptEvaluationResultUsesReasonFromSelectedAggregateEvidence(t *testing.T) {
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID: "case",
+				MetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+					},
+				},
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation: firstActual,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										Score:      0.4,
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+									},
+								},
+							},
+							{
+								ActualInvocation:   secondActual,
+								ExpectedInvocation: secondExpected,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										Score:      0,
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets, 1)
+	require.Len(t, result.EvalSets[0].Cases, 1)
+	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
+	gotMetric := result.EvalSets[0].Cases[0].Metrics[0]
+	assert.Equal(t, "second turn failed", gotMetric.Reason)
+	assert.Same(t, secondActual, gotMetric.ActualInvocation)
+	assert.Same(t, secondExpected, gotMetric.ExpectedInvocation)
+}
+
+func TestAdaptEvaluationResultUsesLastMatchingFailedInvocationEvidence(t *testing.T) {
+	firstActual := &evalset.Invocation{InvocationID: "actual-1"}
+	secondActual := &evalset.Invocation{InvocationID: "actual-2"}
+	secondExpected := &evalset.Invocation{InvocationID: "expected-2"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{
+			{
+				EvalCaseID: "case",
+				MetricResults: []*evalresult.EvalMetricResult{
+					{
+						MetricName: "quality",
+						Score:      0,
+						EvalStatus: status.EvalStatusFailed,
+					},
+				},
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{
+						EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+							{
+								ActualInvocation: firstActual,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										Score:      0,
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "first turn failed"},
+									},
+								},
+							},
+							{
+								ActualInvocation:   secondActual,
+								ExpectedInvocation: secondExpected,
+								EvalMetricResults: []*evalresult.EvalMetricResult{
+									{
+										MetricName: "quality",
+										Score:      0,
+										EvalStatus: status.EvalStatusFailed,
+										Details:    &evalresult.EvalMetricResultDetails{Reason: "second turn failed"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets, 1)
+	require.Len(t, result.EvalSets[0].Cases, 1)
+	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
+	gotMetric := result.EvalSets[0].Cases[0].Metrics[0]
+	assert.Equal(t, "second turn failed", gotMetric.Reason)
+	assert.Same(t, secondActual, gotMetric.ActualInvocation)
+	assert.Same(t, secondExpected, gotMetric.ExpectedInvocation)
+}
+
+func TestAdaptEvaluationResultUsesAggregateDetailsIdentityWhenReasonsRepeat(t *testing.T) {
+	selectedActual := &evalset.Invocation{InvocationID: "selected"}
+	otherActual := &evalset.Invocation{InvocationID: "other"}
+	selectedDetails := &evalresult.EvalMetricResultDetails{Reason: "same reason"}
+	otherDetails := &evalresult.EvalMetricResultDetails{Reason: "same reason"}
+	result, err := AdaptEvaluationResult(&evaluation.EvaluationResult{
+		EvalSetID: "validation",
+		EvalCases: []*evaluation.EvaluationCaseResult{{
+			EvalCaseID: "case",
+			MetricResults: []*evalresult.EvalMetricResult{{
+				MetricName: "quality",
+				Score:      0,
+				EvalStatus: status.EvalStatusFailed,
+				Details:    selectedDetails,
+			}},
+			// Deliberately put the selected details first in the aggregate object
+			// but visit the other invocation last, where reason-only matching would
+			// choose the wrong evidence.
+			EvalCaseResults: []*evalresult.EvalCaseResult{
+				{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{{
+					ActualInvocation: selectedActual,
+					EvalMetricResults: []*evalresult.EvalMetricResult{{
+						MetricName: "quality", Score: 0, EvalStatus: status.EvalStatusFailed, Details: selectedDetails,
+					}},
+				}}},
+				{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{{
+					ActualInvocation: otherActual,
+					EvalMetricResults: []*evalresult.EvalMetricResult{{
+						MetricName: "quality", Score: 0, EvalStatus: status.EvalStatusFailed, Details: otherDetails,
+					}},
+				}}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.EvalSets[0].Cases[0].Metrics, 1)
+	assert.Same(t, selectedActual, result.EvalSets[0].Cases[0].Metrics[0].ActualInvocation)
+}
+
 func TestAdaptEvaluationResultKeepsMetricEvidenceAndTraceInSameRun(t *testing.T) {
 	firstActual := &evalset.Invocation{InvocationID: "actual-run-1"}
 	secondActual := &evalset.Invocation{InvocationID: "actual-run-2"}
@@ -311,6 +466,31 @@ func TestEvaluationServiceEvaluatorPropagatesErrors(t *testing.T) {
 		}),
 	}.Evaluate(context.Background(), EvaluationRequest{EvalSetID: "validation"})
 	assert.ErrorContains(t, err, "apply prompt")
+}
+
+func TestEvaluationServiceEvaluatorRejectsUnappliedPromptOrProfile(t *testing.T) {
+	evaluator := EvaluationServiceEvaluator{Evaluator: &adapterFakeEvaluator{}}
+	_, err := evaluator.Evaluate(context.Background(), EvaluationRequest{
+		EvalSetID: "validation",
+		Prompt:    "prompt",
+	})
+	assert.ErrorContains(t, err, "requires a prompt applier")
+
+	var nilApplier PromptApplier = PromptApplierFunc(nil)
+	_, err = (EvaluationServiceEvaluator{
+		Evaluator:     &adapterFakeEvaluator{},
+		PromptApplier: nilApplier,
+	}).Evaluate(context.Background(), EvaluationRequest{EvalSetID: "validation", Prompt: "prompt"})
+	assert.ErrorContains(t, err, "requires a prompt applier")
+
+	text := "prompt"
+	_, err = evaluator.Evaluate(context.Background(), EvaluationRequest{
+		EvalSetID: "validation",
+		Profile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{
+			{SurfaceID: "agent#instruction", Value: astructure.SurfaceValue{Text: &text}},
+		}},
+	})
+	assert.ErrorContains(t, err, "requires a prompt applier")
 }
 
 func TestEvaluationServiceEvaluatorDelegatesAndAdapts(t *testing.T) {
@@ -551,18 +731,6 @@ func TestPromptSurfaceRunOptionSupportsTextSurfaceTypesAndErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "invalid prompt surface id")
 	_, err = promptSurfaceRunOption("support_agent#unknown", "prompt")
 	assert.ErrorContains(t, err, "not a supported prompt surface")
-}
-
-func TestBuildTextPromptProfileUsesPromptSourceText(t *testing.T) {
-	profile, err := BuildTextPromptProfile(
-		[]string{"support_agent#instruction"},
-		"baseline prompt\n",
-	)
-	require.NoError(t, err)
-	require.NotNil(t, profile)
-	require.Len(t, profile.Overrides, 1)
-	require.NotNil(t, profile.Overrides[0].Value.Text)
-	assert.Equal(t, "baseline prompt\n", *profile.Overrides[0].Value.Text)
 }
 
 func TestBuildPromptProfileCoversEmptyInvalidAndUnsupportedSurfaces(t *testing.T) {

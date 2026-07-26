@@ -12,10 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
@@ -112,6 +114,9 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline train: %w", err)
 	}
+	if err := validateBaselineEvaluationResult(PhaseBaselineTrain, baselineTrain); err != nil {
+		return nil, err
+	}
 	baselineValidation, err := p.Evaluator.Evaluate(ctx, EvaluationRequest{
 		Phase:     PhaseBaselineValidation,
 		EvalSetID: cfg.ValidationEvalSetID,
@@ -122,6 +127,9 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 	})
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline validation: %w", err)
+	}
+	if err := validateBaselineEvaluationResult(PhaseBaselineValidation, baselineValidation); err != nil {
+		return nil, err
 	}
 	attributionHints := AttributionHints(cfg, metrics)
 	attributionOptions := AttributionOptions{
@@ -246,6 +254,25 @@ func validateCandidateProfileTargets(profile *promptiter.Profile, targetSurfaceI
 		)
 	}
 	return nil
+}
+
+func validateBaselineEvaluationResult(phase Phase, result *promptiterengine.EvaluationResult) error {
+	if result == nil {
+		return fmt.Errorf("%s evaluator returned nil result without error", phase)
+	}
+	for _, evalSet := range result.EvalSets {
+		for _, evalCase := range evalSet.Cases {
+			for _, metric := range evalCase.Metrics {
+				if strings.TrimSpace(metric.MetricName) == "" ||
+					metric.Status == status.EvalStatusNotEvaluated ||
+					math.IsNaN(metric.Score) || math.IsInf(metric.Score, 0) {
+					continue
+				}
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
 }
 
 func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...bool) CostSummary {

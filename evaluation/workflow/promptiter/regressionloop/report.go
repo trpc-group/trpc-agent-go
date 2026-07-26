@@ -63,7 +63,6 @@ func BuildReport(input ReportInput) OptimizationReport {
 			StartedAt:        input.StartedAt,
 			FinishedAt:       input.FinishedAt,
 			Duration:         Duration{Duration: input.FinishedAt.Sub(input.StartedAt)},
-			Seed:             input.Config.Seed,
 			PromptSource:     input.Config.PromptSource,
 			MetricsPath:      input.Config.MetricsPath,
 			MetricNames:      metricNames(input.Metrics),
@@ -75,11 +74,11 @@ func BuildReport(input ReportInput) OptimizationReport {
 			FakeConfig:       cloneStringMap(input.Config.FakeConfig),
 			AttributionHints: cloneAttributionHints(attributionHints),
 		},
-		BaselineTrain:                      evaluationReportFromResult(input.BaselineTrain),
-		BaselineValidation:                 evaluationReportFromResult(input.BaselineValidation),
-		AcceptedValidation:                 evaluationReportFromResult(acceptedValidation),
-		CandidateValidation:                evaluationReportFromResult(candidateValidation),
-		Rounds:                             BuildRoundAudit(input.PromptIterRun, input.BaselineValidation, input.Config.Gate.CriticalCaseIDs),
+		BaselineTrain:                      evaluationReportFromResultWithOptions(input.BaselineTrain, input.Config.IncludeRawSnapshots),
+		BaselineValidation:                 evaluationReportFromResultWithOptions(input.BaselineValidation, input.Config.IncludeRawSnapshots),
+		AcceptedValidation:                 evaluationReportFromResultWithOptions(acceptedValidation, input.Config.IncludeRawSnapshots),
+		CandidateValidation:                evaluationReportFromResultWithOptions(candidateValidation, input.Config.IncludeRawSnapshots),
+		Rounds:                             buildRoundAuditWithOptions(input.PromptIterRun, input.BaselineValidation, input.Config.Gate.CriticalCaseIDs, input.Config.IncludeRawSnapshots),
 		Delta:                              delta,
 		GateDecision:                       gate,
 		BaselineFailureAttributions:        baselineAttributions,
@@ -120,6 +119,15 @@ func BuildRoundAudit(
 	baselineValidation *promptiterengine.EvaluationResult,
 	criticalCaseIDs []string,
 ) []RoundAudit {
+	return buildRoundAuditWithOptions(run, baselineValidation, criticalCaseIDs, false)
+}
+
+func buildRoundAuditWithOptions(
+	run *promptiterengine.RunResult,
+	baselineValidation *promptiterengine.EvaluationResult,
+	criticalCaseIDs []string,
+	includeRawSnapshots bool,
+) []RoundAudit {
 	if run == nil {
 		return nil
 	}
@@ -130,14 +138,16 @@ func BuildRoundAudit(
 			TrainScore:      scoreOf(round.Train),
 			ValidationScore: scoreOf(round.Validation),
 			Patches:         patchesAudit(round.Patches),
-			Validation:      evaluationReportFromResult(round.Validation),
+			Validation:      evaluationReportFromResultWithOptions(round.Validation, includeRawSnapshots),
 		}
 		if round.Acceptance != nil {
 			audit.Accepted = round.Acceptance.Accepted
 			audit.Reason = round.Acceptance.Reason
 		}
-		delta := ComputeDelta(baselineValidation, round.Validation, criticalCaseIDs)
-		audit.Delta = &delta
+		if round.Validation != nil {
+			delta := ComputeDelta(baselineValidation, round.Validation, criticalCaseIDs)
+			audit.Delta = &delta
+		}
 		rounds = append(rounds, audit)
 	}
 	return rounds
@@ -152,14 +162,6 @@ func CandidatePrompt(run *promptiterengine.RunResult) string {
 		return ""
 	}
 	return override.Text
-}
-
-func CandidateTextPrompt(run *promptiterengine.RunResult) (string, error) {
-	override, err := candidateTextOverride(run)
-	if err != nil {
-		return "", err
-	}
-	return override.Text, nil
 }
 
 type textOverride struct {
@@ -587,10 +589,12 @@ func patchesAudit(patches *promptiter.PatchSet) []PatchAudit {
 
 // CandidateSurfaces returns the final candidate profile as structured audit
 // rows so non-text surfaces are visible in both JSON and Markdown reports.
+// If an integration only records round patches, use the latest patch set as
+// the audited candidate surface without implying engine acceptance.
 func CandidateSurfaces(run *promptiterengine.RunResult) []PatchAudit {
 	profile := finalCandidateProfile(run)
 	if profile == nil || len(profile.Overrides) == 0 {
-		return nil
+		return latestRoundPatches(run)
 	}
 	out := make([]PatchAudit, 0, len(profile.Overrides))
 	for _, override := range profile.Overrides {
@@ -600,6 +604,18 @@ func CandidateSurfaces(run *promptiterengine.RunResult) []PatchAudit {
 		})
 	}
 	return out
+}
+
+func latestRoundPatches(run *promptiterengine.RunResult) []PatchAudit {
+	if run == nil {
+		return nil
+	}
+	for i := len(run.Rounds) - 1; i >= 0; i-- {
+		if patches := patchesAudit(run.Rounds[i].Patches); len(patches) > 0 {
+			return patches
+		}
+	}
+	return nil
 }
 
 func patchValueAudit(value astructure.SurfaceValue) *PatchValueAudit {
@@ -725,6 +741,10 @@ func patchValueSummary(value *PatchValueAudit) string {
 }
 
 func evaluationReportFromResult(result *promptiterengine.EvaluationResult) *EvaluationReport {
+	return evaluationReportFromResultWithOptions(result, false)
+}
+
+func evaluationReportFromResultWithOptions(result *promptiterengine.EvaluationResult, includeRawSnapshots bool) *EvaluationReport {
 	if result == nil {
 		return nil
 	}
@@ -743,7 +763,7 @@ func evaluationReportFromResult(result *promptiterengine.EvaluationResult) *Eval
 				EvalSetID:  evalCase.EvalSetID,
 				EvalCaseID: evalCase.EvalCaseID,
 				SessionID:  evalCase.SessionID,
-				Trace:      traceReportFromTrace(evalCase.Trace),
+				Trace:      traceReportFromTraceWithOptions(evalCase.Trace, includeRawSnapshots),
 				Metrics:    make([]MetricReport, 0, len(evalCase.Metrics)),
 			}
 			for _, metric := range evalCase.Metrics {
@@ -762,6 +782,10 @@ func evaluationReportFromResult(result *promptiterengine.EvaluationResult) *Eval
 }
 
 func traceReportFromTrace(trace *atrace.Trace) *TraceReport {
+	return traceReportFromTraceWithOptions(trace, false)
+}
+
+func traceReportFromTraceWithOptions(trace *atrace.Trace, includeRawSnapshots bool) *TraceReport {
 	if trace == nil {
 		return nil
 	}
@@ -782,8 +806,8 @@ func traceReportFromTrace(trace *atrace.Trace) *TraceReport {
 			NodeID:             step.NodeID,
 			PredecessorStepIDs: append([]string(nil), step.PredecessorStepIDs...),
 			AppliedSurfaceIDs:  append([]string(nil), step.AppliedSurfaceIDs...),
-			Input:              snapshotReportFromSnapshot(step.Input),
-			Output:             snapshotReportFromSnapshot(step.Output),
+			Input:              snapshotReportFromSnapshotWithOptions(step.Input, includeRawSnapshots),
+			Output:             snapshotReportFromSnapshotWithOptions(step.Output, includeRawSnapshots),
 			Error:              step.Error,
 		})
 	}
@@ -791,8 +815,15 @@ func traceReportFromTrace(trace *atrace.Trace) *TraceReport {
 }
 
 func snapshotReportFromSnapshot(snapshot *atrace.Snapshot) *SnapshotReport {
+	return snapshotReportFromSnapshotWithOptions(snapshot, false)
+}
+
+func snapshotReportFromSnapshotWithOptions(snapshot *atrace.Snapshot, includeRawSnapshots bool) *SnapshotReport {
 	if snapshot == nil {
 		return nil
+	}
+	if !includeRawSnapshots {
+		return &SnapshotReport{}
 	}
 	return &SnapshotReport{Text: snapshot.Text}
 }

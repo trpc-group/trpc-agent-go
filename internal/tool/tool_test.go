@@ -346,6 +346,23 @@ func TestApplyDeclarationsOverlaysMatchingTools(t *testing.T) {
 	require.Nil(t, ApplyDeclarations(nil, declarations))
 }
 
+func TestApplyDeclarationsPreservesExplicitEmptyDescription(t *testing.T) {
+	inputSchema := &tool.Schema{Type: "object"}
+	outputSchema := &tool.Schema{Type: "string"}
+	base := &simpleTool{
+		name:         "plain",
+		desc:         "old description",
+		inputSchema:  inputSchema,
+		outputSchema: outputSchema,
+	}
+
+	got := ApplyDeclarations([]tool.Tool{base}, []tool.Declaration{{Name: "plain"}})
+	require.Len(t, got, 1)
+	require.Equal(t, "", got[0].Declaration().Description)
+	require.Same(t, inputSchema, got[0].Declaration().InputSchema)
+	require.Same(t, outputSchema, got[0].Declaration().OutputSchema)
+}
+
 func TestApplyDeclarationsPreservesCallableAndStreamableCapabilities(t *testing.T) {
 	ctx := context.Background()
 	callableBase := &callableOnlyTool{

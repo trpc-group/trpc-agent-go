@@ -170,7 +170,6 @@ type RunMetadata struct {
 	StartedAt        time.Time                  `json:"startedAt"`
 	FinishedAt       time.Time                  `json:"finishedAt"`
 	Duration         Duration                   `json:"duration"`
-	Seed             int64                      `json:"seed"`
 	PromptSource     string                     `json:"promptSource"`
 	MetricsPath      string                     `json:"metricsPath"`
 	MetricNames      []string                   `json:"metricNames,omitempty"`
@@ -251,7 +250,8 @@ type StepReport struct {
 	Error              string          `json:"error,omitempty"`
 }
 
-// SnapshotReport stores a text snapshot in camelCase JSON.
+// SnapshotReport stores optional raw snapshot text. Text is populated only
+// when Config.IncludeRawSnapshots is explicitly enabled.
 type SnapshotReport struct {
 	Text string `json:"text,omitempty"`
 }
