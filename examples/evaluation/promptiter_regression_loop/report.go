@@ -218,11 +218,21 @@ func newOptimizationReport(
 	if err != nil {
 		return nil, fmt.Errorf("build candidate validation attribution: %w", err)
 	}
-	gate, err := buildGateReport(baselineValidation, candidateValidation, delta, ctx.FinalGate, ctx.LatencyMs, ctx.ModelCallCount, ctx.Mode, gateReportOptions{
-		LatencyCheckSkippedReason: ctx.LatencyCheckSkippedReason,
-	})
-	if err != nil {
-		return nil, err
+	var gate *GateReport
+	if accepted {
+		gate, err = buildGateReport(baselineValidation, candidateValidation, delta, ctx.FinalGate, ctx.LatencyMs, ctx.ModelCallCount, ctx.Mode, gateReportOptions{
+			LatencyCheckSkippedReason: ctx.LatencyCheckSkippedReason,
+		})
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		gate, err = buildNoAcceptedRoundGateReport(baselineValidation, candidateValidation, delta, ctx.FinalGate, ctx.LatencyMs, ctx.ModelCallCount, ctx.Mode, gateReportOptions{
+			LatencyCheckSkippedReason: ctx.LatencyCheckSkippedReason,
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 	return &OptimizationReport{
 		Phase:                       phaseVersion,
@@ -245,9 +255,14 @@ func newOptimizationReport(
 			Validation: baselineValidation,
 		},
 		Candidate: ReportCandidate{
-			Train:           effectiveCandidateTrain,
-			Validation:      candidateValidation,
-			AcceptedProfile: profileSummary(result.AcceptedProfile),
+			Train:      effectiveCandidateTrain,
+			Validation: candidateValidation,
+			AcceptedProfile: func() *ProfileSummary {
+				if !accepted {
+					return nil
+				}
+				return profileSummary(result.AcceptedProfile)
+			}(),
 		},
 		Rounds: rounds,
 		Delta:  delta,

@@ -50,6 +50,10 @@ func runTraceSmokePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult,
 	}
 	cfg.DataDir = resolveExamplePath(cfg.DataDir)
 	cfg.OutputDir = resolveExamplePath(cfg.OutputDir)
+	configuredMetrics, err := readConfiguredMetricNames(cfg.DataDir)
+	if err != nil {
+		return nil, err
+	}
 
 	runtime, err := buildTraceSmokeRuntime(cfg)
 	if err != nil {
@@ -76,6 +80,9 @@ func runTraceSmokePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult,
 	if err != nil {
 		return nil, err
 	}
+	if err := validateConfiguredMetrics("trace smoke validation", engineResult, configuredMetrics); err != nil {
+		return nil, err
+	}
 	attribution, err := buildFailureAttribution(engineResult)
 	if err != nil {
 		return nil, err
@@ -86,7 +93,7 @@ func runTraceSmokePipeline(ctx context.Context, cfg RunConfig) (*PipelineResult,
 		ReportContext{
 			Mode:                        cfg.Mode,
 			Seed:                        deterministicSeed,
-			ConfiguredValidationMetrics: []string{},
+			ConfiguredValidationMetrics: configuredMetrics,
 			ModelConfig:                 fakeModelConfigSummary(),
 			SampleReport:                cfg.SampleReport,
 			LatencyMs:                   latencyMs,

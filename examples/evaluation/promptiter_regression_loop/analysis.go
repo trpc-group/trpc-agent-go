@@ -410,6 +410,24 @@ func buildGateReport(
 	return report, nil
 }
 
+func buildNoAcceptedRoundGateReport(
+	baseline, candidate *EvaluationSummary,
+	delta *ValidationDelta,
+	cfg finalGateConfig,
+	latencyMs int64,
+	modelCallCount int,
+	mode string,
+	options ...gateReportOptions,
+) (*GateReport, error) {
+	report, err := buildGateReport(baseline, candidate, delta, cfg, latencyMs, modelCallCount, mode, options...)
+	if err != nil {
+		return nil, err
+	}
+	report.Reasons = []string{"no accepted PromptIter round; candidate falls back to baseline"}
+	report.Decision = gateDecisionReject
+	return report, nil
+}
+
 func buildFailureAttribution(result *promptiterengine.EvaluationResult) (*FailureAttribution, error) {
 	if result == nil {
 		return nil, errors.New("evaluation result is nil")

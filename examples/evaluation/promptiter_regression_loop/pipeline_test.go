@@ -124,7 +124,7 @@ func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	require.Equal(t, traceSmokeMode, result.Report.Mode)
 	require.True(t, result.Report.SampleReport)
 	require.Equal(t, deterministicSeed, result.Report.Seed)
-	require.Empty(t, result.Report.ConfiguredValidationMetrics)
+	require.Equal(t, []string{"tool_trajectory_avg_score", "final_response_avg_score"}, result.Report.ConfiguredValidationMetrics)
 	require.Equal(t, fakeModelConfigSummary(), result.Report.ModelConfig)
 	require.Empty(t, result.Report.ConfigPath)
 	require.Empty(t, result.Report.ConfigSHA256)
@@ -149,6 +149,28 @@ func TestRunTraceSmokePipelineEndToEnd(t *testing.T) {
 	require.Zero(t, result.Report.LatencyMs)
 	require.FileExists(t, result.ReportJSONPath)
 	require.FileExists(t, result.ReportMarkdownPath)
+}
+
+func TestTraceSmokeValidationFailsClosedOnMissingConfiguredMetric(t *testing.T) {
+	agentResult := agentEvaluationResultForAdapter(
+		"trace_case",
+		[]*evalresult.EvalMetricResult{
+			evalMetricForTest("tool_trajectory_avg_score", 1, status.EvalStatusPassed, ""),
+			evalMetricForTest("final_response_avg_score", 1, status.EvalStatusPassed, ""),
+		},
+		&evaluation.EvaluationInferenceDetails{
+			SessionID:       "trace-session",
+			ExecutionTraces: []*atrace.Trace{traceForTest("trace_from_trace_smoke")},
+		},
+	)
+	engineResult, err := adaptAgentEvaluationResultToEngine(agentResult)
+	require.NoError(t, err)
+	require.Len(t, engineResult.EvalSets, 1)
+	require.Len(t, engineResult.EvalSets[0].Cases, 1)
+	engineResult.EvalSets[0].Cases[0].Metrics = engineResult.EvalSets[0].Cases[0].Metrics[:1]
+
+	err = validateConfiguredMetrics("trace smoke validation", engineResult, []string{"tool_trajectory_avg_score", "final_response_avg_score"})
+	require.ErrorContains(t, err, "missing configured metric")
 }
 
 func TestReportLatencyMs(t *testing.T) {
@@ -1418,12 +1440,23 @@ func TestReportUsesLastAcceptedRoundAndHandlesNoAcceptedRound(t *testing.T) {
 	report, err = newOptimizationReport(noAccepted, nil, ReportContext{
 		Mode:             fakeMode,
 		TargetSurfaceIDs: []string{target},
-		FinalGate:        defaultFinalGateConfig(),
+		FinalGate: func() finalGateConfig {
+			cfg := defaultFinalGateConfig()
+			cfg.MinValidationGain = 0
+			return cfg
+		}(),
 	})
 	require.NoError(t, err)
 	require.NotNil(t, report.Candidate.Train)
 	require.Equal(t, report.Baseline.Train, report.Candidate.Train)
 	require.Equal(t, report.Baseline.Validation, report.Candidate.Validation)
+	require.Nil(t, report.Candidate.AcceptedProfile)
+	require.Equal(t, gateDecisionReject, report.Gate.Decision)
+	require.Equal(t, []string{"no accepted PromptIter round; candidate falls back to baseline"}, report.Gate.Reasons)
+	raw, err := json.Marshal(report)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "acceptedProfile")
+	require.NotContains(t, string(renderMarkdownReport(report)), "PromptIter Accepted Profile")
 }
 
 func writeMetricsFile(t *testing.T, dataDir string, content []byte) {
