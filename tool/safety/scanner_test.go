@@ -353,13 +353,13 @@ func TestPathRuleUsesHostHOMEOverride(t *testing.T) {
 	deniedHome := t.TempDir()
 	binding := BindHostExec("exec_command", ".")
 	input := requireAdapt(t, binding, `{
-		"command":"cat ~/secret.txt",
+		"command":"cat ~/blocked.txt",
 		"env":{"HOME":"`+deniedHome+`"}
 	}`)
 	policy := DefaultPolicy()
 	policy.allowedCommands = []string{"cat"}
 	policy.deniedCommands = nil
-	policy.deniedPaths = []string{filepath.Join(deniedHome, "secret.txt")}
+	policy.deniedPaths = []string{filepath.Join(deniedHome, "blocked.txt")}
 	guard, err := NewGuard(policy)
 	require.NoError(t, err)
 
