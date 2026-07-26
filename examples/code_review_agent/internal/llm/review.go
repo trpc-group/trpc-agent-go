@@ -14,6 +14,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,6 +31,16 @@ const (
 	BackendOfficial     = "trpc-agent-go/model.Model"
 	BackendHTTP         = "http"
 	BackendOpenAI       = "trpc-agent-go/model/openai"
+
+	maxFindingSeverityLen       = 32
+	maxFindingCategoryLen       = 128
+	maxFindingFileLen           = 512
+	maxFindingTitleLen          = 256
+	maxFindingEvidenceLen       = 2048
+	maxFindingRecommendationLen = 512
+	maxFindingConfidenceLen     = 32
+	maxFindingRuleIDLen         = 128
+	maxFindingStatusLen         = 64
 )
 
 // Provider 是语义审查 Provider 边界。
@@ -164,7 +175,21 @@ func RunReview(ctx context.Context, taskID string, provider Provider, audit Audi
 		summary.ExceptionCount = 1
 		return ResultWithModelError(result, taskID, err), summary
 	}
-	result = MergeFindings(result, output.Findings)
+	validFindings, rejectedCount := validateProviderFindings(output.Findings, diff)
+	result = MergeFindings(result, validFindings)
+	if rejectedCount > 0 {
+		result.Warnings = append(result.Warnings, review.Finding{
+			Severity:       "low",
+			Category:       "model",
+			Title:          "Model findings outside the reviewed diff were ignored",
+			Evidence:       fmt.Sprintf("ignored %d unanchored model finding(s)", rejectedCount),
+			Recommendation: "Review the model output only against added lines in the submitted diff.",
+			Confidence:     "high",
+			Source:         "model_validation",
+			RuleID:         "model-invalid-anchor",
+			Status:         "needs_human_review",
+		})
+	}
 	summary.FindingCount = CountModelSourceFindings(result.Findings) + CountModelSourceFindings(result.Warnings)
 	return result, summary
 }
@@ -203,6 +228,61 @@ func MergeFindings(result review.Result, modelFindings []review.Finding) review.
 	return result
 }
 
+// ValidateProviderFindings 仅保留锚定到 diff 新增行的 Provider findings。
+func ValidateProviderFindings(modelFindings []review.Finding, diff []byte) []review.Finding {
+	validated, _ := validateProviderFindings(modelFindings, diff)
+	return validated
+}
+
+func validateProviderFindings(modelFindings []review.Finding, diff []byte) ([]review.Finding, int) {
+	allowedLines, err := providerAddedLines(diff)
+	if err != nil {
+		return nil, len(modelFindings)
+	}
+	validated := make([]review.Finding, 0, len(modelFindings))
+	rejected := 0
+	for _, finding := range modelFindings {
+		finding = NormalizeFinding(finding)
+		lines, ok := allowedLines[finding.File]
+		if !ok {
+			rejected++
+			continue
+		}
+		if _, ok := lines[finding.Line]; !ok {
+			rejected++
+			continue
+		}
+		validated = append(validated, finding)
+	}
+	return validated, rejected
+}
+
+func providerAddedLines(diff []byte) (map[string]map[int]struct{}, error) {
+	parsed, err := review.ParseUnifiedDiff(string(diff))
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]map[int]struct{}, len(parsed.Files))
+	for _, file := range parsed.Files {
+		path := normalizeFindingFile(file.Path)
+		if path == "" {
+			continue
+		}
+		if _, ok := allowed[path]; !ok {
+			allowed[path] = map[int]struct{}{}
+		}
+		for _, hunk := range file.Hunks {
+			for _, line := range hunk.Lines {
+				if line.Kind != "add" || line.NewLine <= 0 {
+					continue
+				}
+				allowed[path][line.NewLine] = struct{}{}
+			}
+		}
+	}
+	return allowed, nil
+}
+
 // NormalizeFinding 填充默认值并归一化 source。
 func NormalizeFinding(f review.Finding) review.Finding {
 	f = SanitizeFinding(f)
@@ -222,16 +302,67 @@ func NormalizeFinding(f review.Finding) review.Finding {
 	if f.Title == "" {
 		f.Title = "Model review signal"
 	}
+	f.Severity = normalizeFindingEnum(f.Severity, "low", "critical", "high", "medium", "low")
+	f.Category = sanitizeProviderString(f.Category, maxFindingCategoryLen)
+	f.File = normalizeFindingFile(f.File)
+	f.File = sanitizeProviderString(f.File, maxFindingFileLen)
+	f.Title = sanitizeProviderString(f.Title, maxFindingTitleLen)
+	f.Evidence = sanitizeProviderString(f.Evidence, maxFindingEvidenceLen)
+	f.Recommendation = sanitizeProviderString(f.Recommendation, maxFindingRecommendationLen)
+	f.Confidence = normalizeFindingEnum(f.Confidence, "low", "high", "medium", "low")
+	f.RuleID = sanitizeProviderString(f.RuleID, maxFindingRuleIDLen)
+	f.Status = normalizeFindingEnum(f.Status, "finding", "finding", "warning", "needs_human_review")
 	return f
 }
 
 // SanitizeFinding 在 Provider 输出进入报告和存储前脱敏 evidence。
 func SanitizeFinding(f review.Finding) review.Finding {
-	f.Evidence = review.RedactSecrets(f.Evidence)
+	f.Severity = strings.TrimSpace(f.Severity)
+	f.Category = strings.TrimSpace(f.Category)
+	f.File = strings.TrimSpace(f.File)
+	f.Title = strings.TrimSpace(f.Title)
+	f.Evidence = strings.TrimSpace(review.RedactSecrets(f.Evidence))
+	f.Recommendation = strings.TrimSpace(review.RedactSecrets(f.Recommendation))
+	f.Confidence = strings.TrimSpace(f.Confidence)
+	f.RuleID = strings.TrimSpace(review.RedactSecrets(f.RuleID))
 	if f.Status == "" {
 		f.Status = "finding"
 	}
+	f.Status = strings.TrimSpace(f.Status)
 	return f
+}
+
+func sanitizeProviderString(value string, limit int) string {
+	value = strings.TrimSpace(review.RedactSecrets(value))
+	return boundString(value, limit)
+}
+
+func normalizeFindingEnum(value string, fallback string, allowed ...string) string {
+	value = strings.ToLower(sanitizeProviderString(value, maxFindingStatusLen))
+	for _, candidate := range allowed {
+		if value == candidate {
+			return value
+		}
+	}
+	return fallback
+}
+
+func normalizeFindingFile(path string) string {
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	path = strings.TrimPrefix(path, "a/")
+	path = strings.TrimPrefix(path, "b/")
+	return path
+}
+
+func boundString(value string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
 }
 
 func NormalizeSource(source string) string {

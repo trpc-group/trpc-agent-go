@@ -151,6 +151,131 @@ func TestRunReviewAndFindingSanitizationRedactShortDeclarationSecrets(t *testing
 	}
 }
 
+func TestRunReviewKeepsOnlyProviderFindingsOnAddedLines(t *testing.T) {
+	const secret = "sk-provider-linecheck-1234567890"
+	diff := []byte("diff --git a/main.go b/main.go\n" +
+		"--- a/main.go\n" +
+		"+++ b/main.go\n" +
+		"@@ -1,2 +1,5 @@\n" +
+		" package main\n" +
+		" \n" +
+		"+func run() {\n" +
+		"+\tprintln(\"ok\")\n" +
+		"+}\n")
+	provider := ProviderFunc(func(_ context.Context, input Input) (Output, error) {
+		_ = input
+		return Output{Findings: []review.Finding{
+			{
+				Severity:       "medium",
+				Category:       "logic",
+				File:           "b/main.go",
+				Line:           4,
+				Title:          "Valid semantic risk " + secret,
+				Evidence:       "provider saw " + secret,
+				Recommendation: "review " + secret,
+				Confidence:     "high",
+				Source:         "model",
+				RuleID:         "valid-model-finding",
+			},
+			{
+				Severity:       "medium",
+				Category:       "logic",
+				File:           "main.go",
+				Line:           99,
+				Title:          "Off-diff line",
+				Evidence:       "should be dropped",
+				Recommendation: "drop it",
+				Confidence:     "high",
+				Source:         "model",
+				RuleID:         "off-diff-line",
+			},
+			{
+				Severity:       "medium",
+				Category:       "logic",
+				File:           "other.go",
+				Line:           4,
+				Title:          "Wrong file",
+				Evidence:       "should be dropped",
+				Recommendation: "drop it",
+				Confidence:     "high",
+				Source:         "model",
+				RuleID:         "wrong-file",
+			},
+		}}, nil
+	})
+
+	result, summary := RunReview(context.Background(), "task-1", provider, Audit{}, review.Result{}, diff, review.InputMetadata{})
+	if len(result.Findings) != 1 {
+		t.Fatalf("expected exactly one validated model finding, got %+v", result.Findings)
+	}
+	if finding := result.Findings[0]; finding.RuleID != "valid-model-finding" {
+		t.Fatalf("expected valid finding to survive validation, got %+v", finding)
+	} else {
+		for _, field := range []string{finding.Title, finding.Evidence, finding.Recommendation} {
+			if strings.Contains(field, secret) {
+				t.Fatalf("provider-controlled result field leaked secret after sanitization: %+v", finding)
+			}
+		}
+	}
+	if summary.FindingCount != 1 {
+		t.Fatalf("expected summary to count only validated provider findings, got %+v", summary)
+	}
+	if !hasRuleID(result.Warnings, "model-invalid-anchor") {
+		t.Fatalf("expected invalid provider anchors to produce an audit warning, got %+v", result.Warnings)
+	}
+}
+
+func TestNormalizeFindingSanitizesAndBoundsProviderStrings(t *testing.T) {
+	const secret = "sk-provider-bounds-1234567890"
+	finding := NormalizeFinding(review.Finding{
+		Severity:       "  medium  ",
+		Category:       strings.Repeat("category-", 20) + secret,
+		File:           " b/secret.go ",
+		Title:          strings.Repeat("title-", 60) + secret,
+		Evidence:       "evidence " + secret + strings.Repeat("x", 3000),
+		Recommendation: "recommendation " + secret + strings.Repeat("y", 1000),
+		Confidence:     " high ",
+		Source:         "custom-provider",
+		RuleID:         "rule-" + secret + strings.Repeat("z", 200),
+		Status:         " finding ",
+	})
+
+	if finding.File != "secret.go" {
+		t.Fatalf("expected normalized file path, got %+v", finding)
+	}
+	for name, value := range map[string]string{
+		"category":       finding.Category,
+		"title":          finding.Title,
+		"evidence":       finding.Evidence,
+		"recommendation": finding.Recommendation,
+		"rule_id":        finding.RuleID,
+	} {
+		if strings.Contains(value, secret) {
+			t.Fatalf("%s leaked provider secret after normalization: %+v", name, finding)
+		}
+	}
+	if len([]rune(finding.Category)) > maxFindingCategoryLen ||
+		len([]rune(finding.Title)) > maxFindingTitleLen ||
+		len([]rune(finding.Evidence)) > maxFindingEvidenceLen ||
+		len([]rune(finding.Recommendation)) > maxFindingRecommendationLen ||
+		len([]rune(finding.RuleID)) > maxFindingRuleIDLen {
+		t.Fatalf("expected normalized finding strings to be bounded, got lengths category=%d title=%d evidence=%d recommendation=%d rule=%d",
+			len([]rune(finding.Category)),
+			len([]rune(finding.Title)),
+			len([]rune(finding.Evidence)),
+			len([]rune(finding.Recommendation)),
+			len([]rune(finding.RuleID)),
+		)
+	}
+	if finding.Severity != "medium" || finding.Confidence != "high" || finding.Status != "finding" {
+		t.Fatalf("expected normalized enums, got %+v", finding)
+	}
+	invalid := NormalizeFinding(review.Finding{Severity: "critical-secret", Confidence: "certain", Status: "published"})
+	if invalid.Severity != "low" || invalid.Confidence != "low" || invalid.Status != "finding" {
+		t.Fatalf("invalid provider enums must fall back safely, got %+v", invalid)
+	}
+}
+
 func hasRuleID(findings []review.Finding, ruleID string) bool {
 	for _, finding := range findings {
 		if finding.RuleID == ruleID {
