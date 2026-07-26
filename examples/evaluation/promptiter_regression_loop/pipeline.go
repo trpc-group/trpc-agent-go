@@ -173,6 +173,9 @@ func validateEvalSet(name string, set EvalSet, promptIDs []string) (map[string]b
 			if trace.LatencyMS < 0 {
 				return nil, fmt.Errorf("%s case %q prompt %q has negative latency", name, evalCase.ID, promptID)
 			}
+			if evalCase.RetrievalRequired != nil && trace.RetrievalHit == nil {
+				return nil, fmt.Errorf("%s case %q prompt %q is missing retrieval telemetry", name, evalCase.ID, promptID)
+			}
 		}
 	}
 	return caseIDs, nil
@@ -364,7 +367,7 @@ func ScoreCase(c EvalCase, trace RunTrace, metrics MetricsConfig) CaseResult {
 		trace.FormatValid &&
 		sameToolCalls(c.ExpectedToolCalls, trace.ToolCalls) &&
 		(c.ExpectedRoute == "" || trace.Route == c.ExpectedRoute) &&
-		(c.RetrievalRequired == nil || trace.RetrievalHit == *c.RetrievalRequired)
+		retrievalContractPassed(c.RetrievalRequired, trace.RetrievalHit)
 	result := CaseResult{
 		CaseID:        c.ID,
 		Critical:      c.Critical,
@@ -392,8 +395,10 @@ func AttributeFailure(c EvalCase, trace RunTrace, responseSimilarity float64) (A
 		return AttributionToolArgs, "tool arguments do not match the expected trajectory"
 	case !trace.FormatValid:
 		return AttributionFormat, "final response violates the required structured format"
-	case c.RetrievalRequired != nil && trace.RetrievalHit != *c.RetrievalRequired:
-		return AttributionKnowledge, fmt.Sprintf("retrieval hit %t, expected %t", trace.RetrievalHit, *c.RetrievalRequired)
+	case c.RetrievalRequired != nil && trace.RetrievalHit == nil:
+		return AttributionKnowledge, "retrieval telemetry is missing"
+	case c.RetrievalRequired != nil && *trace.RetrievalHit != *c.RetrievalRequired:
+		return AttributionKnowledge, fmt.Sprintf("retrieval hit %t, expected %t", *trace.RetrievalHit, *c.RetrievalRequired)
 	case responseSimilarity < 1:
 		return AttributionFinalResponse, "final response does not contain the expected facts"
 	default:
@@ -401,8 +406,20 @@ func AttributeFailure(c EvalCase, trace RunTrace, responseSimilarity float64) (A
 	}
 }
 
+func retrievalContractPassed(required, observed *bool) bool {
+	return required == nil || (observed != nil && *observed == *required)
+}
+
 func CompareEvaluations(baseline, candidate EvaluationResult) DeltaSummary {
-	d := DeltaSummary{ScoreDelta: round(candidate.OverallScore - baseline.OverallScore)}
+	baselineAggregate, baselineErrors := summarizeEvaluation(baseline)
+	candidateAggregate, candidateErrors := summarizeEvaluation(candidate)
+	d := DeltaSummary{ScoreDelta: round(candidateAggregate.OverallScore - baselineAggregate.OverallScore)}
+	for _, err := range baselineErrors {
+		d.CaseSetErrors = append(d.CaseSetErrors, "invalid baseline aggregate: "+err)
+	}
+	for _, err := range candidateErrors {
+		d.CaseSetErrors = append(d.CaseSetErrors, "invalid candidate aggregate: "+err)
+	}
 	base := make(map[string]CaseResult, len(baseline.Cases))
 	candidateIDs := make(map[string]bool, len(candidate.Cases))
 	for _, c := range baseline.Cases {
@@ -427,19 +444,7 @@ func CompareEvaluations(baseline, candidate EvaluationResult) DeltaSummary {
 			continue
 		}
 		cd := CaseDelta{CaseID: c.CaseID, BaselineScore: b.Score, CandidateScore: c.Score, ScoreDelta: round(c.Score - b.Score), NewlyPassed: !b.Passed && c.Passed, NewlyFailed: b.Passed && !c.Passed, Critical: b.Critical || c.Critical}
-		if cd.NewlyPassed {
-			d.NewlyPassed++
-		}
-		if cd.NewlyFailed {
-			d.NewlyFailed++
-		}
-		if cd.ScoreDelta > 0 {
-			d.Improved++
-		}
-		if cd.ScoreDelta < 0 {
-			d.Regressed++
-		}
-		d.Cases = append(d.Cases, cd)
+		recordCaseDelta(&d, cd)
 	}
 	if len(candidate.Cases) != len(candidateIDs) {
 		d.CaseSetErrors = append(d.CaseSetErrors, "non-bijective candidate case set")
@@ -448,7 +453,8 @@ func CompareEvaluations(baseline, candidate EvaluationResult) DeltaSummary {
 		if !candidateIDs[id] {
 			d.CaseSetErrors = append(d.CaseSetErrors, "missing candidate case: "+id)
 			baselineCase := base[id]
-			d.Cases = append(d.Cases, CaseDelta{CaseID: id, BaselineScore: baselineCase.Score, CandidateScore: 0, ScoreDelta: round(-baselineCase.Score), NewlyFailed: baselineCase.Passed, Critical: baselineCase.Critical})
+			caseDelta := CaseDelta{CaseID: id, BaselineScore: baselineCase.Score, CandidateScore: 0, ScoreDelta: round(-baselineCase.Score), NewlyFailed: baselineCase.Passed, Critical: baselineCase.Critical}
+			recordCaseDelta(&d, caseDelta)
 		}
 	}
 	sort.Slice(d.Cases, func(i, j int) bool { return d.Cases[i].CaseID < d.Cases[j].CaseID })
@@ -456,21 +462,60 @@ func CompareEvaluations(baseline, candidate EvaluationResult) DeltaSummary {
 	return d
 }
 
+func recordCaseDelta(summary *DeltaSummary, delta CaseDelta) {
+	if delta.NewlyPassed {
+		summary.NewlyPassed++
+	}
+	if delta.NewlyFailed {
+		summary.NewlyFailed++
+	}
+	if delta.ScoreDelta > 0 {
+		summary.Improved++
+	}
+	if delta.ScoreDelta < 0 {
+		summary.Regressed++
+	}
+	summary.Cases = append(summary.Cases, delta)
+}
+
 func ApplyGate(cfg GateConfig, baseline, candidate EvaluationResult, delta DeltaSummary) GateDecision {
 	d := GateDecision{Accepted: true}
-	for _, caseError := range delta.CaseSetErrors {
+	baselineAggregate, candidateAggregate, expectedScoreDelta, validationErrors :=
+		validateGateEvaluationInputs(baseline, candidate, delta)
+	for _, caseError := range validationErrors {
 		d.Accepted = false
 		d.Reasons = append(d.Reasons, "invalid evaluation case set: "+caseError)
 	}
-	if delta.ScoreDelta <= cfg.MinValidationGain {
+	if expectedScoreDelta <= 0 || expectedScoreDelta < cfg.MinValidationGain {
 		d.Accepted = false
-		d.Reasons = append(d.Reasons, fmt.Sprintf("validation gain %.3f must be greater than %.3f", delta.ScoreDelta, cfg.MinValidationGain))
+		d.Reasons = append(d.Reasons, fmt.Sprintf("validation gain %.3f must be positive and reach %.3f", expectedScoreDelta, cfg.MinValidationGain))
 	}
+	applyProtectedCaseRules(&d, cfg, candidate, delta)
+	if cfg.MaxCostIncrease != nil && candidateAggregate.TotalCost-baselineAggregate.TotalCost > *cfg.MaxCostIncrease {
+		d.Accepted = false
+		d.Reasons = append(d.Reasons, "cost increase exceeds budget")
+	}
+	if cfg.MaxToolCalls != nil && candidateAggregate.ToolCalls > *cfg.MaxToolCalls {
+		d.Accepted = false
+		d.Reasons = append(d.Reasons, "tool call budget exceeded")
+	}
+	if d.Accepted {
+		d.Reasons = []string{fmt.Sprintf("accepted: validation score improved by %.3f with no protected regression", expectedScoreDelta)}
+	}
+	return d
+}
+
+func applyProtectedCaseRules(
+	decision *GateDecision,
+	cfg GateConfig,
+	candidate EvaluationResult,
+	delta DeltaSummary,
+) {
 	if cfg.NoNewHardFails {
 		for _, c := range delta.Cases {
 			if c.Critical && c.NewlyFailed {
-				d.Accepted = false
-				d.Reasons = append(d.Reasons, "new hard fail: "+c.CaseID)
+				decision.Accepted = false
+				decision.Reasons = append(decision.Reasons, "new hard fail: "+c.CaseID)
 			}
 		}
 	}
@@ -487,30 +532,123 @@ func ApplyGate(cfg GateConfig, baseline, candidate EvaluationResult, delta Delta
 			continue
 		}
 		if c.NewlyFailed {
-			d.Accepted = false
-			d.Reasons = append(d.Reasons, "critical case newly failed: "+c.CaseID)
+			decision.Accepted = false
+			decision.Reasons = append(decision.Reasons, "critical case newly failed: "+c.CaseID)
 		}
 		if c.ScoreDelta < 0 {
-			d.Accepted = false
-			d.Reasons = append(d.Reasons, "critical case regressed: "+c.CaseID)
+			decision.Accepted = false
+			decision.Reasons = append(decision.Reasons, "critical case regressed: "+c.CaseID)
 		}
 		if passed, exists := candidatePassed[c.CaseID]; exists && !passed {
-			d.Accepted = false
-			d.Reasons = append(d.Reasons, "critical case did not pass: "+c.CaseID)
+			decision.Accepted = false
+			decision.Reasons = append(decision.Reasons, "critical case did not pass: "+c.CaseID)
 		}
 	}
-	if cfg.MaxCostIncrease != nil && candidate.TotalCost-baseline.TotalCost > *cfg.MaxCostIncrease {
-		d.Accepted = false
-		d.Reasons = append(d.Reasons, "cost increase exceeds budget")
+}
+
+func validateGateEvaluationInputs(
+	baseline, candidate EvaluationResult,
+	delta DeltaSummary,
+) (evaluationAggregate, evaluationAggregate, float64, []string) {
+	baselineAggregate, baselineErrors := summarizeEvaluation(baseline)
+	candidateAggregate, candidateErrors := summarizeEvaluation(candidate)
+	validationErrors := append([]string(nil), delta.CaseSetErrors...)
+	for _, err := range baselineErrors {
+		validationErrors = append(validationErrors, "invalid baseline aggregate: "+err)
 	}
-	if cfg.MaxToolCalls != nil && candidate.ToolCalls > *cfg.MaxToolCalls {
-		d.Accepted = false
-		d.Reasons = append(d.Reasons, "tool call budget exceeded")
+	for _, err := range candidateErrors {
+		validationErrors = append(validationErrors, "invalid candidate aggregate: "+err)
 	}
-	if d.Accepted {
-		d.Reasons = []string{fmt.Sprintf("accepted: validation score improved by %.3f with no protected regression", delta.ScoreDelta)}
+	expectedScoreDelta := round(candidateAggregate.OverallScore - baselineAggregate.OverallScore)
+	if delta.ScoreDelta != expectedScoreDelta {
+		validationErrors = append(validationErrors, fmt.Sprintf(
+			"score delta %.3f does not match case aggregates %.3f",
+			delta.ScoreDelta,
+			expectedScoreDelta,
+		))
 	}
-	return d
+	seen := map[string]bool{}
+	unique := validationErrors[:0]
+	for _, validationError := range validationErrors {
+		if seen[validationError] {
+			continue
+		}
+		seen[validationError] = true
+		unique = append(unique, validationError)
+	}
+	return baselineAggregate, candidateAggregate, expectedScoreDelta, unique
+}
+
+type evaluationAggregate struct {
+	OverallScore float64
+	TotalCost    float64
+	ToolCalls    int
+	LatencyMS    int64
+	Passed       int
+	Failed       int
+}
+
+func summarizeEvaluation(result EvaluationResult) (evaluationAggregate, []string) {
+	var aggregate evaluationAggregate
+	var validationErrors []string
+	if len(result.Cases) == 0 {
+		return aggregate, []string{"cases must not be empty"}
+	}
+	for _, item := range result.Cases {
+		if !finite(item.Score) || item.Score < 0 || item.Score > 1 {
+			validationErrors = append(validationErrors, fmt.Sprintf("case %q has invalid score", item.CaseID))
+		} else {
+			aggregate.OverallScore += item.Score
+		}
+		if !finite(item.Trace.Cost) || item.Trace.Cost < 0 {
+			validationErrors = append(validationErrors, fmt.Sprintf("case %q has invalid cost", item.CaseID))
+		} else {
+			aggregate.TotalCost += item.Trace.Cost
+		}
+		if item.Trace.LatencyMS < 0 || item.Trace.LatencyMS > math.MaxInt64-aggregate.LatencyMS {
+			validationErrors = append(validationErrors, fmt.Sprintf("case %q has invalid latency", item.CaseID))
+		} else {
+			aggregate.LatencyMS += item.Trace.LatencyMS
+		}
+		if len(item.Trace.ToolCalls) > math.MaxInt-aggregate.ToolCalls {
+			validationErrors = append(validationErrors, fmt.Sprintf("case %q overflows tool calls", item.CaseID))
+		} else {
+			aggregate.ToolCalls += len(item.Trace.ToolCalls)
+		}
+		if !sameToolCalls(item.ToolCalls, item.Trace.ToolCalls) {
+			validationErrors = append(validationErrors, fmt.Sprintf("case %q tool calls disagree with its trace", item.CaseID))
+		}
+		if item.Passed {
+			aggregate.Passed++
+		} else {
+			aggregate.Failed++
+		}
+	}
+	aggregate.OverallScore = round(aggregate.OverallScore / float64(len(result.Cases)))
+	aggregate.TotalCost = round(aggregate.TotalCost)
+	for _, check := range []struct {
+		name       string
+		supplied   any
+		recomputed any
+	}{
+		{"overall score", result.OverallScore, aggregate.OverallScore},
+		{"total cost", result.TotalCost, aggregate.TotalCost},
+		{"tool calls", result.ToolCalls, aggregate.ToolCalls},
+		{"latency", result.LatencyMS, aggregate.LatencyMS},
+		{"passed count", result.Passed, aggregate.Passed},
+		{"failed count", result.Failed, aggregate.Failed},
+	} {
+		if !reflect.DeepEqual(check.supplied, check.recomputed) {
+			validationErrors = append(validationErrors, fmt.Sprintf(
+				"%s %v does not match recomputed %v",
+				check.name,
+				check.supplied,
+				check.recomputed,
+			))
+		}
+	}
+	sort.Strings(validationErrors)
+	return aggregate, validationErrors
 }
 
 func CountAttributions(results ...EvaluationResult) map[Attribution]int {

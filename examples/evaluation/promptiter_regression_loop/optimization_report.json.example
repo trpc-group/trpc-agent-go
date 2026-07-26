@@ -668,7 +668,7 @@
       "gate": {
         "accepted": false,
         "reasons": [
-          "validation gain 0.000 must be greater than 0.080"
+          "validation gain 0.000 must be positive and reach 0.080"
         ]
       },
       "duration_ms": 0
@@ -898,7 +898,7 @@
       "gate": {
         "accepted": false,
         "reasons": [
-          "validation gain -0.273 must be greater than 0.080",
+          "validation gain -0.273 must be positive and reach 0.080",
           "new hard fail: validation-refund",
           "critical case newly failed: validation-refund",
           "critical case regressed: validation-refund",

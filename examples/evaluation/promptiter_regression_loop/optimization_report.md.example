@@ -50,7 +50,7 @@
 - Validation score: 0.706
 - Validation delta: +0.000
 - Newly passed / failed: 0 / 0
-- Gate: REJECT — validation gain 0.000 must be greater than 0.080
+- Gate: REJECT — validation gain 0.000 must be positive and reach 0.080
 - Cost: 0.250; tool calls: 2; latency: 51 ms
 
 | Case | Baseline | Candidate | Delta | Change |
@@ -65,7 +65,7 @@
 - Validation score: 0.433
 - Validation delta: -0.273
 - Newly passed / failed: 0 / 1
-- Gate: REJECT — validation gain -0.273 must be greater than 0.080; new hard fail: validation-refund; critical case newly failed: validation-refund; critical case regressed: validation-refund; critical case did not pass: validation-refund
+- Gate: REJECT — validation gain -0.273 must be positive and reach 0.080; new hard fail: validation-refund; critical case newly failed: validation-refund; critical case regressed: validation-refund; critical case did not pass: validation-refund
 - Cost: 0.250; tool calls: 2; latency: 40 ms
 
 | Case | Baseline | Candidate | Delta | Change |

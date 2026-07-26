@@ -20,6 +20,32 @@ import (
 	"testing"
 )
 
+func boolPointer(value bool) *bool {
+	return &value
+}
+
+func evaluationFromCases(cases ...CaseResult) EvaluationResult {
+	result := EvaluationResult{Cases: cases}
+	for index := range result.Cases {
+		item := &result.Cases[index]
+		if item.Trace.ToolCalls == nil && item.ToolCalls != nil {
+			item.Trace.ToolCalls = item.ToolCalls
+		}
+		result.OverallScore += item.Score
+		result.TotalCost += item.Trace.Cost
+		result.ToolCalls += len(item.Trace.ToolCalls)
+		result.LatencyMS += item.Trace.LatencyMS
+		if item.Passed {
+			result.Passed++
+		} else {
+			result.Failed++
+		}
+	}
+	result.OverallScore = round(result.OverallScore / float64(len(result.Cases)))
+	result.TotalCost = round(result.TotalCost)
+	return result
+}
+
 func TestAttributeFailure(t *testing.T) {
 	retrievalRequired := true
 	expectedCalls := []ToolCall{{Name: "weather", Arguments: map[string]any{"city": "Shenzhen"}}}
@@ -38,9 +64,9 @@ func TestAttributeFailure(t *testing.T) {
 		{"route", RunTrace{Route: "chat"}, AttributionRoute},
 		{"tool", RunTrace{Route: "weather", ToolCalls: []ToolCall{{Name: "search"}}}, AttributionToolCall},
 		{"args", RunTrace{Route: "weather", ToolCalls: []ToolCall{{Name: "weather", Arguments: map[string]any{"city": "Beijing"}}}}, AttributionToolArgs},
-		{"format", RunTrace{Route: "weather", ToolCalls: expectedCalls, RetrievalHit: true}, AttributionFormat},
+		{"format", RunTrace{Route: "weather", ToolCalls: expectedCalls, RetrievalHit: boolPointer(true)}, AttributionFormat},
 		{"knowledge", RunTrace{Route: "weather", ToolCalls: expectedCalls, FormatValid: true}, AttributionKnowledge},
-		{"response", RunTrace{Route: "weather", ToolCalls: expectedCalls, FormatValid: true, RetrievalHit: true}, AttributionFinalResponse},
+		{"response", RunTrace{Route: "weather", ToolCalls: expectedCalls, FormatValid: true, RetrievalHit: boolPointer(true)}, AttributionFinalResponse},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -60,6 +86,24 @@ func TestScoreCaseRuntimeErrorCannotPass(t *testing.T) {
 	got := ScoreCase(c, trace, metrics)
 	if got.Passed || got.Attribution != AttributionRuntime {
 		t.Fatalf("runtime failure must not pass: %+v", got)
+	}
+}
+
+func TestScoreCaseRequiresRetrievalTelemetryForFalseContract(t *testing.T) {
+	retrievalRequired := false
+	evalCase := EvalCase{
+		ID:                "no-retrieval",
+		ExpectedResponse:  "ok",
+		RetrievalRequired: &retrievalRequired,
+	}
+	result := ScoreCase(
+		evalCase,
+		RunTrace{FinalResponse: "ok", FormatValid: true},
+		MetricsConfig{ResponseWeight: 1, FormatWeight: 1, PassThreshold: 1},
+	)
+	if result.Passed || result.Attribution != AttributionKnowledge ||
+		!strings.Contains(result.Reason, "missing") {
+		t.Fatalf("missing retrieval telemetry satisfied a false contract: %+v", result)
 	}
 }
 
@@ -114,7 +158,7 @@ func TestExecutionContractsAreHardRequirements(t *testing.T) {
 		Critical:          true,
 	}
 	metrics := MetricsConfig{ResponseWeight: 0.7, ToolWeight: 0.2, FormatWeight: 0.1, PassThreshold: 0.75}
-	baseline := ScoreCase(c, RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "weather", FormatValid: true, RetrievalHit: true}, metrics)
+	baseline := ScoreCase(c, RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "weather", FormatValid: true, RetrievalHit: boolPointer(true)}, metrics)
 	if !baseline.Passed {
 		t.Fatalf("baseline should pass: %+v", baseline)
 	}
@@ -123,10 +167,10 @@ func TestExecutionContractsAreHardRequirements(t *testing.T) {
 		name  string
 		trace RunTrace
 	}{
-		{"route", RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "chat", FormatValid: true, RetrievalHit: true}},
+		{"route", RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "chat", FormatValid: true, RetrievalHit: boolPointer(true)}},
 		{"retrieval", RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "weather", FormatValid: true}},
-		{"format", RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "weather", RetrievalHit: true}},
-		{"arguments", RunTrace{FinalResponse: "sunny", ToolCalls: []ToolCall{{Name: "weather", Arguments: map[string]any{"city": "Beijing"}}}, Route: "weather", FormatValid: true, RetrievalHit: true}},
+		{"format", RunTrace{FinalResponse: "sunny", ToolCalls: expectedCalls, Route: "weather", RetrievalHit: boolPointer(true)}},
+		{"arguments", RunTrace{FinalResponse: "sunny", ToolCalls: []ToolCall{{Name: "weather", Arguments: map[string]any{"city": "Beijing"}}}, Route: "weather", FormatValid: true, RetrievalHit: boolPointer(true)}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,11 +178,10 @@ func TestExecutionContractsAreHardRequirements(t *testing.T) {
 			if candidate.Passed {
 				t.Fatalf("execution regression passed weighted scoring: %+v", candidate)
 			}
-			delta := CompareEvaluations(
-				EvaluationResult{OverallScore: baseline.Score, Cases: []CaseResult{baseline}},
-				EvaluationResult{OverallScore: candidate.Score, Cases: []CaseResult{candidate}},
-			)
-			gate := ApplyGate(GateConfig{NoNewHardFails: true}, EvaluationResult{}, EvaluationResult{}, delta)
+			baselineResult := evaluationFromCases(baseline)
+			candidateResult := evaluationFromCases(candidate)
+			delta := CompareEvaluations(baselineResult, candidateResult)
+			gate := ApplyGate(GateConfig{NoNewHardFails: true}, baselineResult, candidateResult, delta)
 			if gate.Accepted {
 				t.Fatalf("gate accepted execution regression: %+v", gate)
 			}
@@ -150,8 +193,8 @@ func TestExecutionContractsAreHardRequirements(t *testing.T) {
 }
 
 func TestCompareEvaluations(t *testing.T) {
-	base := EvaluationResult{OverallScore: .5, Cases: []CaseResult{{CaseID: "a", Score: .4, Passed: false}, {CaseID: "b", Score: .8, Passed: true}}}
-	candidate := EvaluationResult{OverallScore: .6, Cases: []CaseResult{{CaseID: "a", Score: .8, Passed: true}, {CaseID: "b", Score: .4, Passed: false}}}
+	base := evaluationFromCases(CaseResult{CaseID: "a", Score: .4, Passed: false}, CaseResult{CaseID: "b", Score: .8, Passed: true})
+	candidate := evaluationFromCases(CaseResult{CaseID: "a", Score: .8, Passed: true}, CaseResult{CaseID: "b", Score: .6, Passed: false})
 	d := CompareEvaluations(base, candidate)
 	if d.NewlyPassed != 1 || d.NewlyFailed != 1 || d.ScoreDelta != .1 {
 		t.Fatalf("unexpected delta: %+v", d)
@@ -159,8 +202,15 @@ func TestCompareEvaluations(t *testing.T) {
 }
 
 func TestGateRejectsOverfitHardRegression(t *testing.T) {
-	base := EvaluationResult{OverallScore: .7, TotalCost: 1, ToolCalls: 1, Cases: []CaseResult{{CaseID: "critical", Critical: true, Score: 1, Passed: true}}}
-	candidate := EvaluationResult{OverallScore: .8, TotalCost: 1, ToolCalls: 1, Cases: []CaseResult{{CaseID: "critical", Critical: true, Score: .2, Passed: false}}}
+	call := []ToolCall{{Name: "lookup"}}
+	base := evaluationFromCases(
+		CaseResult{CaseID: "critical", Critical: true, Score: 1, Passed: true, ToolCalls: call, Trace: RunTrace{Cost: .5}},
+		CaseResult{CaseID: "normal", Score: .4, Passed: true, Trace: RunTrace{Cost: .5}},
+	)
+	candidate := evaluationFromCases(
+		CaseResult{CaseID: "critical", Critical: true, Score: .6, Passed: false, ToolCalls: call, Trace: RunTrace{Cost: .5}},
+		CaseResult{CaseID: "normal", Score: 1, Passed: true, Trace: RunTrace{Cost: .5}},
+	)
 	delta := CompareEvaluations(base, candidate)
 	maxCostIncrease := 1.0
 	maxToolCalls := 2
@@ -171,8 +221,8 @@ func TestGateRejectsOverfitHardRegression(t *testing.T) {
 }
 
 func TestConfiguredCriticalCaseRejectsNewFailureWithHigherScore(t *testing.T) {
-	base := EvaluationResult{OverallScore: .5, Cases: []CaseResult{{CaseID: "critical", Score: .6, Passed: true}}}
-	candidate := EvaluationResult{OverallScore: .7, Cases: []CaseResult{{CaseID: "critical", Score: .8, Passed: false}}}
+	base := evaluationFromCases(CaseResult{CaseID: "critical", Score: .6, Passed: true})
+	candidate := evaluationFromCases(CaseResult{CaseID: "critical", Score: .8, Passed: false})
 	delta := CompareEvaluations(base, candidate)
 	gate := ApplyGate(GateConfig{MinValidationGain: .1, CriticalCaseIDs: []string{"critical"}}, base, candidate, delta)
 	if gate.Accepted || !strings.Contains(strings.Join(gate.Reasons, " "), "critical case newly failed") {
@@ -195,8 +245,8 @@ func TestGateRejectsNonBijectiveEvaluationCases(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := EvaluationResult{OverallScore: .5, Cases: tt.baseline}
-			candidate := EvaluationResult{OverallScore: .8, Cases: tt.candidate}
+			base := evaluationFromCases(tt.baseline...)
+			candidate := evaluationFromCases(tt.candidate...)
 			delta := CompareEvaluations(base, candidate)
 			gate := ApplyGate(GateConfig{MinValidationGain: .1}, base, candidate, delta)
 			if gate.Accepted || !strings.Contains(strings.Join(gate.Reasons, " "), tt.want) {
@@ -206,18 +256,26 @@ func TestGateRejectsNonBijectiveEvaluationCases(t *testing.T) {
 	}
 }
 
+func TestMissingCandidateCaseUpdatesSummaryCounters(t *testing.T) {
+	base := evaluationFromCases(
+		CaseResult{CaseID: "present", Score: .8, Passed: true},
+		CaseResult{CaseID: "missing", Score: .6, Passed: true},
+	)
+	candidate := evaluationFromCases(
+		CaseResult{CaseID: "present", Score: .9, Passed: true},
+	)
+	delta := CompareEvaluations(base, candidate)
+	if delta.NewlyFailed != 1 || delta.Regressed != 1 {
+		t.Fatalf("missing case was absent from delta counters: %+v", delta)
+	}
+}
+
 func TestGateRejectsMissingProtectedCaseEvenWithHigherScore(t *testing.T) {
-	base := EvaluationResult{
-		OverallScore: .7,
-		Cases: []CaseResult{
-			{CaseID: "critical", Critical: true, Score: .7, Passed: true},
-			{CaseID: "normal", Score: .7, Passed: true},
-		},
-	}
-	candidate := EvaluationResult{
-		OverallScore: .95,
-		Cases:        []CaseResult{{CaseID: "normal", Score: .95, Passed: true}},
-	}
+	base := evaluationFromCases(
+		CaseResult{CaseID: "critical", Critical: true, Score: .7, Passed: true},
+		CaseResult{CaseID: "normal", Score: .7, Passed: true},
+	)
+	candidate := evaluationFromCases(CaseResult{CaseID: "normal", Score: .95, Passed: true})
 	delta := CompareEvaluations(base, candidate)
 	gate := ApplyGate(
 		GateConfig{
@@ -237,20 +295,14 @@ func TestGateRejectsMissingProtectedCaseEvenWithHigherScore(t *testing.T) {
 }
 
 func TestGateRejectsCriticalCaseThatFailsEvenWithHigherScore(t *testing.T) {
-	base := EvaluationResult{
-		OverallScore: .5,
-		Cases: []CaseResult{
-			{CaseID: "critical", Critical: true, Score: .9, Passed: true},
-			{CaseID: "normal", Score: .4, Passed: true},
-		},
-	}
-	candidate := EvaluationResult{
-		OverallScore: .8,
-		Cases: []CaseResult{
-			{CaseID: "critical", Critical: true, Score: .9, Passed: false},
-			{CaseID: "normal", Score: .95, Passed: true},
-		},
-	}
+	base := evaluationFromCases(
+		CaseResult{CaseID: "critical", Critical: true, Score: .9, Passed: true},
+		CaseResult{CaseID: "normal", Score: .4, Passed: true},
+	)
+	candidate := evaluationFromCases(
+		CaseResult{CaseID: "critical", Critical: true, Score: .9, Passed: false},
+		CaseResult{CaseID: "normal", Score: .95, Passed: true},
+	)
 	delta := CompareEvaluations(base, candidate)
 	gate := ApplyGate(
 		GateConfig{
@@ -270,8 +322,12 @@ func TestGateRejectsCriticalCaseThatFailsEvenWithHigherScore(t *testing.T) {
 }
 
 func TestGateOmittedBudgetsAreDisabled(t *testing.T) {
-	base := EvaluationResult{OverallScore: .5, TotalCost: 1, ToolCalls: 0}
-	candidate := EvaluationResult{OverallScore: .7, TotalCost: 3, ToolCalls: 4}
+	base := evaluationFromCases(CaseResult{CaseID: "case", Score: .5, Passed: true, Trace: RunTrace{Cost: 1}})
+	calls := []ToolCall{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}
+	candidate := evaluationFromCases(CaseResult{
+		CaseID: "case", Score: .7, Passed: true, ToolCalls: calls,
+		Trace: RunTrace{Cost: 3},
+	})
 	delta := CompareEvaluations(base, candidate)
 	gate := ApplyGate(GateConfig{MinValidationGain: .1}, base, candidate, delta)
 	if !gate.Accepted {
@@ -280,12 +336,52 @@ func TestGateOmittedBudgetsAreDisabled(t *testing.T) {
 }
 
 func TestGateRejectsZeroGainConsistently(t *testing.T) {
-	base := EvaluationResult{OverallScore: .8}
-	candidate := EvaluationResult{OverallScore: .8}
+	base := evaluationFromCases(CaseResult{CaseID: "case", Score: .8, Passed: true})
+	candidate := evaluationFromCases(CaseResult{CaseID: "case", Score: .8, Passed: true})
 	delta := CompareEvaluations(base, candidate)
 	gate := ApplyGate(GateConfig{MinValidationGain: 0}, base, candidate, delta)
 	if gate.Accepted {
 		t.Fatalf("zero-gain candidate must not be accepted: %+v", gate)
+	}
+}
+
+func TestGateAcceptsGainAtConfiguredMinimum(t *testing.T) {
+	base := evaluationFromCases(CaseResult{CaseID: "case", Score: .5, Passed: true})
+	candidate := evaluationFromCases(CaseResult{CaseID: "case", Score: .6, Passed: true})
+	delta := CompareEvaluations(base, candidate)
+	gate := ApplyGate(GateConfig{MinValidationGain: .1}, base, candidate, delta)
+	if !gate.Accepted {
+		t.Fatalf("gain at configured minimum was rejected: delta=%+v gate=%+v", delta, gate)
+	}
+}
+
+func TestGateRecomputesMappedAggregates(t *testing.T) {
+	base := evaluationFromCases(CaseResult{
+		CaseID: "case", Score: .5, Passed: true,
+		Trace: RunTrace{Cost: 1, LatencyMS: 10},
+	})
+	calls := []ToolCall{{Name: "lookup"}, {Name: "fetch"}}
+	candidate := evaluationFromCases(CaseResult{
+		CaseID: "case", Score: .4, Passed: true, ToolCalls: calls,
+		Trace: RunTrace{Cost: 3, LatencyMS: 20},
+	})
+	candidate.OverallScore = .9
+	candidate.TotalCost = 0
+	candidate.ToolCalls = 0
+	maxCostIncrease := .5
+	maxToolCalls := 1
+	delta := CompareEvaluations(base, candidate)
+	gate := ApplyGate(GateConfig{
+		MinValidationGain: .1,
+		MaxCostIncrease:   &maxCostIncrease,
+		MaxToolCalls:      &maxToolCalls,
+	}, base, candidate, delta)
+	reasons := strings.Join(gate.Reasons, " ")
+	if gate.Accepted || delta.ScoreDelta != -.1 ||
+		!strings.Contains(reasons, "invalid candidate aggregate") ||
+		!strings.Contains(reasons, "cost increase exceeds budget") ||
+		!strings.Contains(reasons, "tool call budget exceeded") {
+		t.Fatalf("mapped aggregate tampering was trusted: delta=%+v gate=%+v", delta, gate)
 	}
 }
 

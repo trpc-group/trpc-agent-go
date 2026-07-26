@@ -12,6 +12,8 @@ format validity, retrieval signals, cost, latency, and tool-call count. The
 pipeline interfaces and report model can also wrap a real PromptIter run: map
 each engine round and Evaluation Service result into the same candidate and
 case result structures before applying the shared regression gate.
+Mapped aggregate score, pass/fail counts, cost, latency, and tool-call totals
+are recomputed from case results before any gate decision.
 
 ## Run
 
@@ -48,10 +50,12 @@ go test ./promptiter_regression_loop
 
 Each case owns its fixed `expected_route`, optional tri-state
 `retrieval_required`, and ordered `expected_tool_calls`. Observed runs contain
-only runtime signals. Tool-call arguments are JSON values, so numbers, arrays,
-and nested objects round-trip without being coerced to strings. All four JSON
-input files reject unknown fields to prevent misspelled safeguards from being
-silently disabled.
+only runtime signals. When a case declares either value of
+`retrieval_required`, its observed `retrieval_hit` telemetry must be present;
+an omitted value is not treated as `false`. Tool-call arguments are JSON
+values, so numbers, arrays, and nested objects round-trip without being coerced
+to strings. All four JSON input files reject unknown fields to prevent
+misspelled safeguards from being silently disabled.
 
 The sample deliberately covers three outcomes. `focused` improves both sets and
 is accepted. `ineffective` changes wording without improving validation and is

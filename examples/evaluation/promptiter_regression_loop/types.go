@@ -36,7 +36,7 @@ type RunTrace struct {
 	ToolCalls     []ToolCall `json:"tool_calls,omitempty"`
 	Route         string     `json:"route,omitempty"`
 	FormatValid   bool       `json:"format_valid"`
-	RetrievalHit  bool       `json:"retrieval_hit"`
+	RetrievalHit  *bool      `json:"retrieval_hit,omitempty"`
 	Cost          float64    `json:"cost"`
 	LatencyMS     int64      `json:"latency_ms"`
 	Error         string     `json:"error,omitempty"`
