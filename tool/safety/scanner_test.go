@@ -354,7 +354,9 @@ func TestPathRuleUsesHostHOMEOverride(t *testing.T) {
 	binding := BindHostExec("exec_command", ".")
 	input := requireAdapt(t, binding, `{
 		"command":"cat ~/blocked.txt",
-		"env":{"HOME":"`+deniedHome+`"}
+		"env":{"HOME":"`+deniedHome+`"},
+		"yield-time_ms":0,
+		"timeout_sec":30
 	}`)
 	policy := DefaultPolicy()
 	policy.allowedCommands = []string{"cat"}
@@ -371,7 +373,7 @@ func TestPathRuleUsesHostHOMEOverride(t *testing.T) {
 	input.Env["HOME"] = "relative-home"
 	report, err = guard.Scan(context.Background(), input)
 	require.NoError(t, err)
-	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision, report)
 	requireFinding(t, report, "PATH_EFFECTIVE_UNRESOLVED")
 }
 
