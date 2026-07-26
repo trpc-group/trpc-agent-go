@@ -24,15 +24,19 @@ import (
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
+	"trpc.group/trpc-go/trpc-agent-go/artifact"
+	artifactinmemory "trpc.group/trpc-go/trpc-agent-go/artifact/inmemory"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/graph"
 	"trpc.group/trpc-go/trpc-agent-go/internal/state/appender"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
+	"trpc.group/trpc-go/trpc-agent-go/plugin/toolresultfile"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	agentskill "trpc.group/trpc-go/trpc-agent-go/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolfile "trpc.group/trpc-go/trpc-agent-go/tool/file"
 	"trpc.group/trpc-go/trpc-agent-go/tool/function"
 )
 
@@ -428,6 +432,71 @@ func TestRunnerCandidateSelector_ExecutesToolsAndCommitsOnlyWinner(t *testing.T)
 	assert.Contains(t, sessionText, "final-1")
 	assert.NotContains(t, sessionText, "tool-0")
 	assert.NotContains(t, sessionText, "final-0")
+}
+
+func TestRunnerCandidateSelector_ToolResultFileFailsOpen(t *testing.T) {
+	ctx := context.Background()
+	sessionService := sessioninmemory.NewSessionService()
+	artifacts := artifactinmemory.NewService()
+	modelStub := newCandidateToolCallModel(
+		"candidate_lookup",
+		candidateAttemptArgs,
+	)
+	largeResult := strings.Repeat("candidate-result-", 8)
+	lookup := function.NewFunctionTool(
+		func(context.Context, candidateLookupInput) (string, error) {
+			return largeResult, nil
+		},
+		function.WithName("candidate_lookup"),
+		function.WithDescription("Returns a large candidate result."),
+	)
+	fileToolSet, err := toolfile.NewToolSet(
+		toolfile.WithBaseDir(t.TempDir()),
+	)
+	require.NoError(t, err)
+	var readFile tool.Tool
+	for _, candidate := range fileToolSet.Tools(ctx) {
+		if candidate.Declaration().Name == "read_file" {
+			readFile = candidate
+			break
+		}
+	}
+	require.NotNil(t, readFile)
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{lookup, readFile}),
+	)
+	r := NewRunner(
+		"app",
+		ag,
+		WithSessionService(sessionService),
+		WithArtifactService(artifacts),
+		WithPlugins(toolresultfile.New(
+			toolresultfile.WithThresholdBytes(1),
+		)),
+		WithCandidateSelector(
+			&fixedCandidateSelector{winner: 1},
+			WithCandidateAttempts(2),
+		),
+	)
+	ch, err := r.Run(
+		ctx,
+		"user",
+		"session",
+		model.NewUserMessage("question"),
+	)
+	require.NoError(t, err)
+	events := collectRunnerEvents(ch)
+	assert.Contains(t, responseContents(events), "final-1")
+
+	keys, err := artifacts.ListArtifactKeys(ctx, artifact.SessionInfo{
+		AppName:   "app",
+		UserID:    "user",
+		SessionID: "session",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, keys)
 }
 
 func TestRunnerCandidateSelector_ExecutesToolSetTools(t *testing.T) {

@@ -24,6 +24,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/plugin"
 	"trpc.group/trpc-go/trpc-agent-go/session"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
+	toolfile "trpc.group/trpc-go/trpc-agent-go/tool/file"
 )
 
 func TestPluginExternalizesLargeToolResult(t *testing.T) {
@@ -37,6 +39,7 @@ func TestPluginExternalizesLargeToolResult(t *testing.T) {
 	ev := toolResultEvent(large, small)
 	args := &plugin.AfterToolMessagesArgs{
 		Invocation:         inv,
+		Request:            testRequest(),
 		ToolResultEvent:    ev,
 		Messages:           []model.Message{large, small},
 		ToolResultMessages: []model.Message{large, small},
@@ -79,6 +82,7 @@ func TestPluginPreservesInlineResultsWithoutArtifactTarget(t *testing.T) {
 		context.Background(),
 		&plugin.AfterToolMessagesArgs{
 			Invocation:         &agent.Invocation{},
+			Request:            testRequest(),
 			ToolResultMessages: []model.Message{msg},
 		},
 	)
@@ -96,6 +100,7 @@ func TestPluginPreservesResultsBelowThreshold(t *testing.T) {
 		context.Background(),
 		&plugin.AfterToolMessagesArgs{
 			Invocation:         testInvocation(artifacts),
+			Request:            testRequest(),
 			ToolResultMessages: []model.Message{msg},
 		},
 	)
@@ -113,6 +118,7 @@ func TestPluginExternalizesResultAtThreshold(t *testing.T) {
 		context.Background(),
 		&plugin.AfterToolMessagesArgs{
 			Invocation:         testInvocation(artifacts),
+			Request:            testRequest(),
 			ToolResultMessages: []model.Message{msg},
 			ToolResultEvent:    toolResultEvent(msg),
 		},
@@ -133,6 +139,7 @@ func TestPluginSaveFailurePreservesOriginalResult(t *testing.T) {
 	ev := toolResultEvent(msg)
 	args := &plugin.AfterToolMessagesArgs{
 		Invocation:         testInvocation(artifacts),
+		Request:            testRequest(),
 		ToolResultMessages: []model.Message{msg},
 		ToolResultEvent:    ev,
 	}
@@ -158,6 +165,7 @@ func TestPluginExternalizesMultipartResultWithoutLeavingPartsInline(t *testing.T
 		ctx,
 		&plugin.AfterToolMessagesArgs{
 			Invocation:         inv,
+			Request:            testRequest(),
 			ToolResultMessages: []model.Message{msg},
 			ToolResultEvent:    ev,
 		},
@@ -200,6 +208,7 @@ func TestPluginVersionsRepeatedToolResults(t *testing.T) {
 			ctx,
 			&plugin.AfterToolMessagesArgs{
 				Invocation:         inv,
+				Request:            testRequest(),
 				ToolResultMessages: []model.Message{msg},
 				ToolResultEvent:    toolResultEvent(msg),
 			},
@@ -211,6 +220,93 @@ func TestPluginVersionsRepeatedToolResults(t *testing.T) {
 			"@"+string(rune('0'+version)),
 		)
 	}
+}
+
+func TestPluginPreservesInlineResultWithoutReadFile(t *testing.T) {
+	ctx := context.Background()
+	artifacts := artifactmem.NewService()
+	inv := testInvocation(artifacts)
+	manager, err := plugin.NewManager(New(WithThresholdBytes(1)))
+	require.NoError(t, err)
+	msg := model.NewToolMessage("call", "lookup", "large")
+
+	result, err := manager.AfterToolMessages(
+		ctx,
+		&plugin.AfterToolMessagesArgs{
+			Invocation:         inv,
+			Request:            &model.Request{},
+			ToolResultMessages: []model.Message{msg},
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result)
+	keys, err := artifacts.ListArtifactKeys(ctx, artifactInfo(inv))
+	require.NoError(t, err)
+	require.Empty(t, keys)
+}
+
+func TestPluginPreservesInlineResultWhenArtifactWritesDisabled(t *testing.T) {
+	ctx := context.Background()
+	artifacts := readOnlyArtifactService{Service: artifactmem.NewService()}
+	manager, err := plugin.NewManager(New(WithThresholdBytes(1)))
+	require.NoError(t, err)
+	msg := model.NewToolMessage("call", "lookup", "large")
+
+	result, err := manager.AfterToolMessages(
+		ctx,
+		&plugin.AfterToolMessagesArgs{
+			Invocation:         testInvocation(artifacts),
+			Request:            testRequest(),
+			ToolResultMessages: []model.Message{msg},
+		},
+	)
+	require.NoError(t, err)
+	require.Nil(t, result)
+}
+
+func TestPluginChunksLargeSingleLineJSONForDefaultReadFile(t *testing.T) {
+	ctx := context.Background()
+	artifacts := artifactmem.NewService()
+	inv := testInvocation(artifacts)
+	readFile := defaultReadFileTool(t)
+	request := &model.Request{
+		Tools: map[string]tool.Tool{"read_file": readFile},
+	}
+	manager, err := plugin.NewManager(New(WithThresholdBytes(1)))
+	require.NoError(t, err)
+	content := `{"value":"` +
+		strings.Repeat("界", artifactChunkSize) +
+		`"}`
+	require.Greater(t, len(content), 1024*1024)
+	msg := model.NewToolMessage("call", "lookup", content)
+
+	result, err := manager.AfterToolMessages(
+		agent.NewInvocationContext(ctx, inv),
+		&plugin.AfterToolMessagesArgs{
+			Invocation:         inv,
+			Request:            request,
+			ToolResultMessages: []model.Message{msg},
+			ToolResultEvent:    toolResultEvent(msg),
+		},
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Contains(t, result.ToolResultMessages[0].Content, "manifest")
+
+	manifestRef := "artifact://" +
+		artifactManifestName(inv, msg.ToolID) + "@0"
+	manifestJSON := callReadFile(t, readFile, inv, manifestRef)
+	var manifest artifactChunkManifest
+	require.NoError(t, json.Unmarshal([]byte(manifestJSON), &manifest))
+	require.Equal(t, len(content), manifest.ByteCount)
+	require.Equal(t, jsonMimeType, manifest.MimeType)
+	require.Greater(t, len(manifest.Parts), 2)
+
+	var reconstructed strings.Builder
+	for _, ref := range manifest.Parts {
+		reconstructed.WriteString(callReadFile(t, readFile, inv, ref))
+	}
+	require.Equal(t, content, reconstructed.String())
 }
 
 func TestContentMimeType(t *testing.T) {
@@ -244,6 +340,68 @@ func testInvocation(service artifact.Service) *agent.Invocation {
 	}
 }
 
+func artifactInfo(inv *agent.Invocation) artifact.SessionInfo {
+	return artifact.SessionInfo{
+		AppName:   inv.Session.AppName,
+		UserID:    inv.Session.UserID,
+		SessionID: inv.Session.ID,
+	}
+}
+
+func testRequest() *model.Request {
+	readFile := declarationTool{name: "read_file"}
+	return &model.Request{
+		Tools: map[string]tool.Tool{"read_file": readFile},
+	}
+}
+
+type declarationTool struct {
+	name string
+}
+
+func (t declarationTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: t.name}
+}
+
+func defaultReadFileTool(t *testing.T) tool.CallableTool {
+	t.Helper()
+	toolSet, err := toolfile.NewToolSet(toolfile.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	for _, candidate := range toolSet.Tools(context.Background()) {
+		if candidate.Declaration().Name != "read_file" {
+			continue
+		}
+		readFile, ok := candidate.(tool.CallableTool)
+		require.True(t, ok)
+		return readFile
+	}
+	t.Fatal("default file tool set did not expose read_file")
+	return nil
+}
+
+func callReadFile(
+	t *testing.T,
+	readFile tool.CallableTool,
+	inv *agent.Invocation,
+	ref string,
+) string {
+	t.Helper()
+	input, err := json.Marshal(map[string]string{"file_name": ref})
+	require.NoError(t, err)
+	output, err := readFile.Call(
+		agent.NewInvocationContext(context.Background(), inv),
+		input,
+	)
+	require.NoError(t, err)
+	encoded, err := json.Marshal(output)
+	require.NoError(t, err)
+	var response struct {
+		Contents string `json:"contents"`
+	}
+	require.NoError(t, json.Unmarshal(encoded, &response))
+	return response.Contents
+}
+
 type failingArtifactService struct {
 	artifact.Service
 	err error
@@ -256,6 +414,14 @@ func (s failingArtifactService) SaveArtifact(
 	*artifact.Artifact,
 ) (int, error) {
 	return 0, s.err
+}
+
+type readOnlyArtifactService struct {
+	artifact.Service
+}
+
+func (readOnlyArtifactService) ArtifactWritesEnabled() bool {
+	return false
 }
 
 func toolResultEvent(messages ...model.Message) *event.Event {

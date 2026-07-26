@@ -104,6 +104,13 @@ type readOnlyArtifactService struct {
 	base artifact.Service
 }
 
+// ArtifactWritesEnabled reports that candidate attempts must not persist
+// artifacts. Plugins can use this capability signal to fail open without
+// attempting a write that would invalidate an otherwise successful candidate.
+func (s *readOnlyArtifactService) ArtifactWritesEnabled() bool {
+	return false
+}
+
 func newReadOnlyArtifactService(base artifact.Service) artifact.Service {
 	if base == nil {
 		return nil
