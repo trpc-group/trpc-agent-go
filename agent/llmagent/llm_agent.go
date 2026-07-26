@@ -1150,6 +1150,15 @@ func appendWorkspaceExecToolWithExecutor(
 			),
 		)
 	}
+	if options != nil &&
+		options.workspaceExecOutputLimits.MaxOutputBytes > 0 {
+		toolOpts = append(
+			toolOpts,
+			toolworkspaceexec.WithOutputLimits(
+				options.workspaceExecOutputLimits,
+			),
+		)
+	}
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
