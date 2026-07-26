@@ -60,15 +60,15 @@ The deterministic fake behavior is scripted in `./fixtures/regression-loop.fake.
 | `-max-rounds-without-acceptance` | Maximum consecutive rejected rounds before stopping | `2` |
 | `-target-score` | Validation score that stops optimization when reached | `1.0` |
 | `-gate-min-validation-gain` | Minimum validation mean gain the **acceptance gate** requires (`validation_improves`) | `0.01` |
-| `-key-cases` | Comma-separated validation case IDs that must not regress pass→fail (`key_cases_protected`) | `val_resolved_freeform_KEY` |
+| `-key-cases` | Comma-separated validation case IDs that must be present **and passing** in the candidate (`key_cases_protected`) | `val_resolved_freeform_KEY` |
 | `-max-candidate-model-calls` | Budget: max candidate model invocations the gate allows (`within_budget`); `0` disables it | `0` |
-| `-baseline-prompt-file` | File holding the baseline instruction; used when `-candidate-instruction` is empty | `./data/promptiter-regression-loop-app/baseline-prompt.txt` |
+| `-baseline-prompt-file` | File holding the baseline instruction (used when `-candidate-instruction` is empty). A configured path that cannot be read or is blank is a **fatal error**; pass an empty string to use the built-in default instead | `./data/promptiter-regression-loop-app/baseline-prompt.txt` |
 | `-candidate-instruction` | Baseline instruction; overrides `-baseline-prompt-file` when set | *(empty → file)* |
 | `-debug-io` | Log candidate, judge, and worker agent IO | `false` |
 
 (The parallelism flags — `-eval-case-parallelism`, `-parallel-*`, etc. — mirror the syncrun example.)
 
-The baseline instruction is resolved with precedence: explicit `-candidate-instruction` > `-baseline-prompt-file` contents > built-in default.
+The baseline instruction is resolved with precedence: explicit `-candidate-instruction` > `-baseline-prompt-file` contents > built-in default. A **non-empty** `-baseline-prompt-file` is treated as a commitment: if it is missing, unreadable, or blank the run fails loud rather than silently substituting the built-in default (a path typo in a CI gate must not optimize a different prompt than intended). The built-in default is used only when the file path is explicitly empty.
 
 ## Acceptance gate criteria
 
@@ -76,10 +76,16 @@ The gate accepts the optimized candidate only when **every** enabled criterion p
 
 | Criterion | Pass condition |
 | --- | --- |
+| `has_validation_evidence` | at least one validation case was evaluated (fails closed on an empty/nil set) |
 | `validation_improves` | validation mean gain ≥ `-gate-min-validation-gain` |
 | `no_new_hard_fail` | no validation case regressed pass→fail (the overfitting veto) |
-| `key_cases_protected` | no `-key-cases` case regressed pass→fail |
+| `key_cases_protected` | every `-key-cases` ID is present in the candidate results **and** passes there |
 | `within_budget` | candidate model calls ≤ `-max-candidate-model-calls` (skipped when `0`) |
+
+`key_cases_protected` is stricter than `no_new_hard_fail` and enforced independently: it can veto a
+candidate that `no_new_hard_fail` would accept (e.g. a key case that was already failing at baseline
+and still fails is not a *regression*, but still violates key protection), and a misspelled/absent key
+ID fails the criterion rather than silently reading as "retained pass".
 
 ## Run
 
@@ -108,9 +114,10 @@ The `openai` source is an **optional** real-model path (the required core flow i
   new_pass     val_refund_billing           0.000 → 1.000 (+1.000)
   new_fail     val_resolved_freeform_KEY    1.000 → 0.000 (-1.000)
   new_pass     val_parcel_shipping          0.000 → 1.000 (+1.000)
+  ✅ has_validation_evidence    3 validation case(s) evaluated
   ✅ validation_improves        validation mean 0.333 → 0.667 (gain +0.333, required ≥ 0.010)
   ❌ no_new_hard_fail           1 case(s) regressed pass→fail: [val_resolved_freeform_KEY]
-  ❌ key_cases_protected        KEY case(s) [val_resolved_freeform_KEY] regressed pass→fail
+  ❌ key_cases_protected        KEY case issue — not passing in candidate: [val_resolved_freeform_KEY]
   ✅ within_budget              no budget configured (candidate model calls: 33)
 Gate decision: REJECT
   - rejected: KEY validation case(s) [val_resolved_freeform_KEY] regressed pass→fail (overfitting)
@@ -142,9 +149,12 @@ runs the engine, writes files); everything worth testing is in `pipeline`.
 **Failure attribution** maps each failing case to one of six categories (response mismatch, tool-call
 error, tool-arg error, route error, format error, knowledge recall). The primary signal is the
 criterion type on the metric result; a free-text reason disambiguates sub-categories that share a
-type (a tool-trajectory failure could be a wrong tool, wrong args, or wrong sequence). Because the
-signal is inherently heuristic, the classifier is intentionally simple and its keyword boundaries are
-pinned by tests, which double as executable documentation.
+type (a tool-trajectory failure could be a wrong tool, wrong args, or wrong sequence). The evaluation
+service aggregates metric results without copying their `Details`, so the reason is recovered from the
+retained per-run results (`EvalCaseResults`) — otherwise the reason-disambiguated categories would be
+unreachable on real evaluator output. Because the signal is inherently heuristic, the classifier is
+intentionally simple and its keyword boundaries are pinned by tests, which double as executable
+documentation.
 
 **Determinism** for the fake path uses a scripted candidate model plus deterministic
 backwarder/aggregator/optimizer implementations (mirroring the engine's own tests). Faking the LLM
@@ -152,12 +162,15 @@ backwarder alone is fragile — its output must reference runtime-real step and 
 fake path swaps the whole collaborator trio for deterministic stages, while the `openai` path keeps
 the real LLM-driven ones. This is a deliberate deviation that buys a hermetic, sub-second CI run.
 
-**The gate** enforces four independent criteria, all of which must pass to accept: `validation_improves`
-(mean gain ≥ threshold), `no_new_hard_fail` (no `pass → fail`), `key_cases_protected` (named critical
-cases hold), and `within_budget` (candidate model calls ≤ budget, skipped when unset). `no_new_hard_fail`
-is the overfitting veto: a candidate that lifts the aggregate while breaking a previously-passing case is
-rejected despite the higher mean. `key_cases_protected` is stricter still, and the report names the
-business-critical case that broke. **Audit** artifacts capture every run fact the issue enumerates —
+**The gate** enforces five independent criteria, all of which must pass to accept:
+`has_validation_evidence` (at least one validation case was evaluated — the gate fails *closed*, never
+approving a candidate on empty evidence), `validation_improves` (mean gain ≥ threshold),
+`no_new_hard_fail` (no `pass → fail`), `key_cases_protected` (named critical cases are present and
+passing), and `within_budget` (candidate model calls ≤ budget, skipped when unset). `no_new_hard_fail`
+is the overfitting veto: a candidate that lifts the aggregate while breaking a previously-passing case
+is rejected despite the higher mean. `key_cases_protected` is stricter still and genuinely independent
+— it requires the named cases to exist and pass in the candidate, so it can reject where
+`no_new_hard_fail` would accept, and the report names the business-critical case that broke. **Audit** artifacts capture every run fact the issue enumerates —
 baseline/candidate scores, per-case deltas, gate decision and reasons, per-category attribution
 statistics, a cost/latency summary, each round's prompt, the config snapshot, and the determinism basis —
 as both machine-readable JSON and human-readable Markdown, and the process exits non-zero on rejection.

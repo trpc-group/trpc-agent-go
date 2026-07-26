@@ -407,18 +407,27 @@ func fixturePath(cfg runConfig) string {
 // explicit flag value > baseline prompt file > built-in default constant. It returns the resolved
 // instruction and the source file actually read (empty when the flag or the default was used), so
 // the audit report can record where the baseline prompt came from.
-func resolveBaselineInstruction(flagValue, promptFile string) (instruction, sourceFile string) {
+//
+// A non-empty promptFile is treated as an operator commitment: if it cannot be read or is blank, the
+// function returns an error rather than silently falling back to the built-in default — a path typo
+// in a CI regression gate must fail loud, not optimize and approve a different prompt than intended.
+// The built-in default is reserved for an explicitly absent prompt file (empty promptFile).
+func resolveBaselineInstruction(flagValue, promptFile string) (instruction, sourceFile string, err error) {
 	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
-		return trimmed, ""
+		return trimmed, "", nil
 	}
-	if promptFile != "" {
-		if data, err := os.ReadFile(promptFile); err == nil {
-			if fromFile := strings.TrimSpace(string(data)); fromFile != "" {
-				return fromFile, promptFile
-			}
-		}
+	if promptFile == "" {
+		return defaultCandidateInstruction, "", nil
 	}
-	return defaultCandidateInstruction, ""
+	data, err := os.ReadFile(promptFile)
+	if err != nil {
+		return "", "", fmt.Errorf("read baseline prompt file %q: %w", promptFile, err)
+	}
+	fromFile := strings.TrimSpace(string(data))
+	if fromFile == "" {
+		return "", "", fmt.Errorf("baseline prompt file %q is blank", promptFile)
+	}
+	return fromFile, promptFile, nil
 }
 
 // targetSurfaceID is the instruction surface of the candidate agent that PromptIter optimizes.

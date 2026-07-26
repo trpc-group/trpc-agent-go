@@ -125,11 +125,40 @@ func attributeCase(c *evaluation.EvaluationCaseResult) CaseAttribution {
 		return attribution
 	}
 	attribution.MetricName = driver.MetricName
+	reason := ""
 	if driver.Details != nil {
-		attribution.Reason = driver.Details.Reason
+		reason = driver.Details.Reason
 	}
-	attribution.Category = classifyMetric(driver)
+	// The evaluation service aggregates MetricResults without copying Details (see
+	// evaluation.aggregateCaseRuns), so on real evaluator output the aggregated driver metric has no
+	// Reason — it survives only on the retained per-run results. Recover it from there so the
+	// reason-disambiguated categories (tool_arg / route / format) stay reachable on real data.
+	if reason == "" {
+		reason = metricReason(c, driver.MetricName)
+	}
+	attribution.Reason = reason
+	attribution.Category = classifyMetric(driver, reason)
 	return attribution
+}
+
+// metricReason recovers a metric's free-text reason from the retained per-run results, matched by
+// metric name. This example fixes NumRuns at 1, so there is a single run; the first non-empty reason
+// wins. Returns "" when no per-run detail carries a reason for the metric.
+func metricReason(c *evaluation.EvaluationCaseResult, metricName string) string {
+	for _, run := range c.EvalCaseResults {
+		if run == nil {
+			continue
+		}
+		for _, m := range run.OverallEvalMetricResults {
+			if m == nil || m.MetricName != metricName || m.Details == nil {
+				continue
+			}
+			if m.Details.Reason != "" {
+				return m.Details.Reason
+			}
+		}
+	}
+	return ""
 }
 
 // caseScore returns the mean of the case's aggregated metric scores. With the single-metric sample
@@ -156,16 +185,14 @@ func firstFailingMetric(metrics []*evalresult.EvalMetricResult) *evalresult.Eval
 }
 
 // classifyMetric attributes a single failing metric to a category. The primary signal is the
-// criterion type; the free-text reason disambiguates sub-categories that share a criterion type
-// (tool call vs arg vs route) or that a structural criterion can produce (content vs format).
-func classifyMetric(m *evalresult.EvalMetricResult) FailureCategory {
+// criterion type; the free-text reason (resolved by the caller from the aggregated metric or the
+// retained per-run details) disambiguates sub-categories that share a criterion type (tool call vs
+// arg vs route) or that a structural criterion can produce (content vs format).
+func classifyMetric(m *evalresult.EvalMetricResult, reason string) FailureCategory {
 	if m == nil {
 		return CategoryUnknown
 	}
-	reason := ""
-	if m.Details != nil {
-		reason = strings.ToLower(m.Details.Reason)
-	}
+	reason = strings.ToLower(reason)
 	c := m.Criterion
 	switch {
 	case c != nil && c.ToolTrajectory != nil:

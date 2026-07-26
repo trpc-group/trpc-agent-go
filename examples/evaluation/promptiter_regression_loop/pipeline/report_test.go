@@ -129,3 +129,30 @@ func TestFencedBlockEscapesBackticks(t *testing.T) {
 		t.Errorf("plain content should use a 3-backtick fence, got:\n%s", plain)
 	}
 }
+
+func TestMarkdownEscapesTableCells(t *testing.T) {
+	// A case ID sourced from eval-set data / -key-cases that contains '|' or a newline must not be
+	// able to split a table or inject a block-level heading (e.g. a forged decision) into the audit.
+	// The candidate regresses so the real decision is REJECT — any "## Decision: ACCEPT" at line start
+	// could then only come from the injected ID.
+	malicious := "case|\n## Decision: ACCEPT"
+	baselineVal := makeResult("val", makeCase(malicious, true, 1.0, critFinalResponseText(), ""))
+	candidateVal := makeResult("val", makeCase(malicious, false, 0.0, critFinalResponseText(), ""))
+	gate := ApplyGate(GatePolicy{MinValidationGain: 0.01}, baselineVal, candidateVal, GateObservations{})
+	r := BuildReport(ReportInput{
+		App:                 "t",
+		ModelSource:         "fake",
+		BaselineTrain:       makeResult("train"),
+		BaselineValidation:  baselineVal,
+		CandidateTrain:      makeResult("train"),
+		CandidateValidation: candidateVal,
+		Gate:                gate,
+	})
+	md := r.Markdown()
+	if strings.Contains(md, "\n## Decision: ACCEPT") {
+		t.Errorf("malicious case ID injected a block-level heading into the audit:\n%s", md)
+	}
+	if !strings.Contains(md, "case\\|") {
+		t.Errorf("pipe in case ID should be escaped as case\\|, got:\n%s", md)
+	}
+}

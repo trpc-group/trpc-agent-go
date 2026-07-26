@@ -194,14 +194,93 @@ func criterionByName(d GateDecision, name string) (GateCriterion, bool) {
 	return GateCriterion{}, false
 }
 
-func TestApplyGateExposesFourDistinctCriteria(t *testing.T) {
+func TestApplyGateExposesAllCriteria(t *testing.T) {
 	baseline := makeResult("val", makeCase("a", false, 0.0, critFinalResponseText(), ""))
 	candidate := makeResult("val", makeCase("a", true, 1.0, critFinalResponseText(), ""))
 	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"a"}}, baseline, candidate, GateObservations{})
-	for _, name := range []string{"validation_improves", "no_new_hard_fail", "key_cases_protected", "within_budget"} {
+	for _, name := range []string{"has_validation_evidence", "validation_improves", "no_new_hard_fail", "key_cases_protected", "within_budget"} {
 		if _, ok := criterionByName(d, name); !ok {
 			t.Errorf("missing gate criterion %q", name)
 		}
+	}
+}
+
+func TestApplyGateRejectsNilValidationEvidence(t *testing.T) {
+	// A gate with no validation evidence must fail CLOSED, not accept vacuously.
+	d := ApplyGate(GatePolicy{}, nil, nil, GateObservations{})
+	if d.Accepted {
+		t.Fatalf("nil validation evidence must be rejected (fail closed), got accept")
+	}
+	if c, _ := criterionByName(d, "has_validation_evidence"); c.Passed {
+		t.Errorf("has_validation_evidence should fail for nil results")
+	}
+	if !containsSubstring(d.Reasons, "no validation evidence") {
+		t.Errorf("reasons should mention no validation evidence, got %v", d.Reasons)
+	}
+}
+
+func TestApplyGateRejectsEmptyNonNilValidationEvidence(t *testing.T) {
+	// Even with MinValidationGain=0 (which makes a zero gain "improve"), an empty case set is rejected.
+	empty := makeResult("val")
+	d := ApplyGate(GatePolicy{MinValidationGain: 0}, empty, empty, GateObservations{})
+	if d.Accepted {
+		t.Fatalf("empty non-nil validation evidence must be rejected, got accept")
+	}
+	if c, _ := criterionByName(d, "has_validation_evidence"); c.Passed {
+		t.Errorf("has_validation_evidence should fail for empty results")
+	}
+}
+
+func TestApplyGateKeyCaseProtectedIsIndependentOfHardFail(t *testing.T) {
+	// KEY fails at baseline and still fails at candidate (fail→fail, NOT a pass→fail regression) while
+	// a normal case improves, so the mean rises and no_new_hard_fail is satisfied. key_cases_protected
+	// must independently veto — proving it can reject a candidate no_new_hard_fail would accept.
+	baseline := makeResult("val",
+		makeCase("KEY", false, 0.0, critFinalResponseText(), ""),
+		makeCase("a", false, 0.0, critFinalResponseText(), ""),
+	)
+	candidate := makeResult("val",
+		makeCase("KEY", false, 0.0, critFinalResponseText(), ""),
+		makeCase("a", true, 1.0, critFinalResponseText(), ""),
+	)
+	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"KEY"}}, baseline, candidate, GateObservations{})
+	if c, _ := criterionByName(d, "no_new_hard_fail"); !c.Passed {
+		t.Errorf("no_new_hard_fail should pass (no pass→fail regression)")
+	}
+	if c, _ := criterionByName(d, "key_cases_protected"); c.Passed {
+		t.Errorf("key_cases_protected should FAIL (KEY not passing in candidate)")
+	}
+	if d.Accepted {
+		t.Errorf("expected reject: key_cases_protected independently vetoes")
+	}
+	if len(d.KeyRegressions) != 0 {
+		t.Errorf("KeyRegressions should be empty (fail→fail is not a regression), got %v", d.KeyRegressions)
+	}
+}
+
+func TestApplyGateRejectsMisspelledKeyID(t *testing.T) {
+	// A configured key ID absent from the results must fail the criterion, not read as "retained pass".
+	baseline := makeResult("val",
+		makeCase("KEY", true, 1.0, critFinalResponseText(), ""),
+		makeCase("a", false, 0.0, critFinalResponseText(), ""),
+	)
+	candidate := makeResult("val",
+		makeCase("KEY", true, 1.0, critFinalResponseText(), ""),
+		makeCase("a", true, 1.0, critFinalResponseText(), ""),
+	)
+	d := ApplyGate(GatePolicy{MinValidationGain: 0.01, KeyCaseIDs: []string{"KYE"}}, baseline, candidate, GateObservations{})
+	c, _ := criterionByName(d, "key_cases_protected")
+	if c.Passed {
+		t.Errorf("key_cases_protected should fail for a key ID not present in results")
+	}
+	if d.Accepted {
+		t.Errorf("expected reject on misspelled key ID")
+	}
+	if !containsSubstring([]string{c.Detail}, "not found") {
+		t.Errorf("detail should say the key ID was not found, got %q", c.Detail)
+	}
+	if containsSubstring([]string{c.Detail}, "all present and passing") {
+		t.Errorf("misspelled key must not be reported as passing, got %q", c.Detail)
 	}
 }
 

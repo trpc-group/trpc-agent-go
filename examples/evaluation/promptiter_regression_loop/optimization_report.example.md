@@ -1,6 +1,6 @@
 # PromptIter Regression-Loop Optimization Report
 
-- Generated at: 2026-07-25T11:26:05Z
+- Generated at: 2026-07-26T00:57:38Z
 - App: `promptiter-regression-loop-app`
 - Model source: `fake`
 - Target surface: `candidate#instruction`
@@ -14,8 +14,8 @@
 
 ## Cost & latency
 
-- Total wall-clock: 123 ms
-- Baseline eval: 23 ms · candidate eval: 19 ms
+- Total wall-clock: 109 ms
+- Baseline eval: 24 ms · candidate eval: 18 ms
 - Candidate model calls: 33
 - Note: fake mode: no monetary token cost; candidate model calls and latency are the cost proxy
 
@@ -37,9 +37,10 @@ STRICT OUTPUT: read the support message and reply with exactly one line 'categor
 
 | Criterion | Passed | Detail |
 |---|---|---|
+| has_validation_evidence | ✅ | 3 validation case(s) evaluated |
 | validation_improves | ✅ | validation mean 0.333 → 0.667 (gain +0.333, required ≥ 0.010) |
 | no_new_hard_fail | ❌ | 1 case(s) regressed pass→fail: [val_resolved_freeform_KEY] |
-| key_cases_protected | ❌ | KEY case(s) [val_resolved_freeform_KEY] regressed pass→fail |
+| key_cases_protected | ❌ | KEY case issue — not passing in candidate: [val_resolved_freeform_KEY] |
 | within_budget | ✅ | no budget configured (candidate model calls: 33) |
 
 ## Validation per-case delta

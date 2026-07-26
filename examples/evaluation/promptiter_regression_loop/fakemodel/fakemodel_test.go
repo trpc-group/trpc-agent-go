@@ -44,6 +44,24 @@ func TestLoadFixtureRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestLoadFixtureRejectsTrailingData(t *testing.T) {
+	dir := t.TempDir()
+
+	// A second JSON object concatenated after the first must not be silently ignored.
+	dup := filepath.Join(dir, "dup.json")
+	require.NoError(t, os.WriteFile(dup, []byte(`{"candidate":{"default":"x"}}{"candidate":{"default":"y"}}`), 0o644))
+	if _, err := LoadFixture(dup); err == nil {
+		t.Fatalf("expected error for trailing JSON value, got nil")
+	}
+
+	// Arbitrary trailing garbage after a valid value must also error.
+	garbage := filepath.Join(dir, "garbage.json")
+	require.NoError(t, os.WriteFile(garbage, []byte(`{"candidate":{"default":"x"}} not-json`), 0o644))
+	if _, err := LoadFixture(garbage); err == nil {
+		t.Fatalf("expected error for trailing garbage, got nil")
+	}
+}
+
 func generate(t *testing.T, m *ScriptedModel, instruction, input string) string {
 	t.Helper()
 	req := &model.Request{Messages: []model.Message{

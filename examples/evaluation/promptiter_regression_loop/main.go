@@ -38,7 +38,7 @@ var (
 	dataDir            = flag.String("data-dir", "./data", "Directory containing evaluation set and metric files")
 	outputDir          = flag.String("output-dir", "./output", "Directory where evaluation results and reports are written")
 	fixturesDir        = flag.String("fixtures-dir", "./fixtures", "Directory containing deterministic fake-model fixtures")
-	baselinePromptFile = flag.String("baseline-prompt-file", "./data/promptiter-regression-loop-app/baseline-prompt.txt", "File holding the baseline candidate instruction; used when -candidate-instruction is empty")
+	baselinePromptFile = flag.String("baseline-prompt-file", "./data/promptiter-regression-loop-app/baseline-prompt.txt", "File holding the baseline candidate instruction; used when -candidate-instruction is empty. A configured path that cannot be read or is blank is a fatal error; pass an empty string to use the built-in default instruction instead")
 	modelSrc           = flag.String("model-source", "fake", "Model source for all LLM roles: fake (no API key) or openai")
 
 	modelName            = flag.String("model", "deepseek-v3.2", "Model identifier for the candidate agent (openai source)")
@@ -71,7 +71,10 @@ var (
 func main() {
 	flag.Parse()
 	logger := log.New(log.Writer(), "", log.LstdFlags|log.Lmicroseconds)
-	instruction, baselineSource := resolveBaselineInstruction(*candidateInstruction, *baselinePromptFile)
+	instruction, baselineSource, err := resolveBaselineInstruction(*candidateInstruction, *baselinePromptFile)
+	if err != nil {
+		log.Fatal(err)
+	}
 	cfg := runConfig{
 		DataDir:                    *dataDir,
 		OutputDir:                  *outputDir,

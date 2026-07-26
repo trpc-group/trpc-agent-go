@@ -11,6 +11,7 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 )
@@ -171,13 +172,17 @@ type GateDecision struct {
 
 // ApplyGate applies the acceptance gate to a candidate's validation result versus the baseline's.
 // A candidate is accepted only when every enabled criterion passes:
+//   - has_validation_evidence: at least one validation case was evaluated (fails closed otherwise)
 //   - validation_improves:  validation mean gain ≥ MinValidationGain
 //   - no_new_hard_fail:      no validation case regressed pass→fail
-//   - key_cases_protected:   no configured key case regressed pass→fail
+//   - key_cases_protected:   every configured key case exists in the candidate results AND passes
 //   - within_budget:         candidate model calls ≤ MaxCandidateModelCalls (skipped when 0)
 //
 // no_new_hard_fail is the overfitting veto: a candidate that raises the aggregate while breaking a
-// previously-passing case is rejected even though its mean went up.
+// previously-passing case is rejected even though its mean went up. key_cases_protected is stricter
+// and independent: it requires the named cases to be present and passing in the candidate, so it can
+// veto a candidate that no_new_hard_fail would accept (e.g. a key case that failed at baseline and
+// still fails is not a regression, but still violates key protection).
 func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evaluation.EvaluationResult, obs GateObservations) GateDecision {
 	deltas := DiffResults(baselineValidation, candidateValidation)
 	// Derive the means from the same matched case set as deltas so the aggregate always agrees with
@@ -185,6 +190,11 @@ func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evalu
 	// scores it), rather than silently excluded from the denominator.
 	baseMean, candMean := meansFromDeltas(deltas)
 	gain := candMean - baseMean
+
+	byID := make(map[string]CaseDelta, len(deltas))
+	for _, d := range deltas {
+		byID[d.EvalCaseID] = d
+	}
 
 	keyCases := make(map[string]bool, len(policy.KeyCaseIDs))
 	for _, id := range policy.KeyCaseIDs {
@@ -199,14 +209,29 @@ func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evalu
 			}
 		}
 	}
+	// key_cases_protected is enforced independently of no_new_hard_fail: each configured key ID must
+	// be present in the candidate results (a misspelled/absent ID fails, rather than silently reading
+	// as "retained pass") and must pass there.
+	var keyMissing, keyFailing []string
+	for _, id := range policy.KeyCaseIDs {
+		d, ok := byID[id]
+		if !ok {
+			keyMissing = append(keyMissing, id)
+			continue
+		}
+		if !d.CandidatePassed {
+			keyFailing = append(keyFailing, id)
+		}
+	}
 
+	hasEvidence := len(deltas) > 0
 	improves := gain >= policy.MinValidationGain
 	noHardFail := len(regressions) == 0
-	keyProtected := len(keyRegressions) == 0
+	keyProtected := len(keyMissing) == 0 && len(keyFailing) == 0
 	withinBudget := policy.MaxCandidateModelCalls == 0 || obs.CandidateModelCalls <= policy.MaxCandidateModelCalls
 
 	decision := GateDecision{
-		Accepted:                improves && noHardFail && keyProtected && withinBudget,
+		Accepted:                hasEvidence && improves && noHardFail && keyProtected && withinBudget,
 		BaselineValidationMean:  baseMean,
 		CandidateValidationMean: candMean,
 		ValidationGain:          gain,
@@ -215,6 +240,11 @@ func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evalu
 		ValidationDeltas:        deltas,
 	}
 	decision.Criteria = []GateCriterion{
+		{
+			Name:   "has_validation_evidence",
+			Passed: hasEvidence,
+			Detail: evidenceDetail(len(deltas)),
+		},
 		{
 			Name:   "validation_improves",
 			Passed: improves,
@@ -228,7 +258,7 @@ func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evalu
 		{
 			Name:   "key_cases_protected",
 			Passed: keyProtected,
-			Detail: keyProtectedDetail(policy.KeyCaseIDs, keyRegressions),
+			Detail: keyProtectedDetail(policy.KeyCaseIDs, keyMissing, keyFailing),
 		},
 		{
 			Name:   "within_budget",
@@ -240,6 +270,13 @@ func ApplyGate(policy GatePolicy, baselineValidation, candidateValidation *evalu
 	return decision
 }
 
+func evidenceDetail(n int) string {
+	if n == 0 {
+		return "no validation cases evaluated — gate fails closed"
+	}
+	return fmt.Sprintf("%d validation case(s) evaluated", n)
+}
+
 func hardFailDetail(regressions []string) string {
 	if len(regressions) == 0 {
 		return "no validation case regressed (pass→fail)"
@@ -247,14 +284,21 @@ func hardFailDetail(regressions []string) string {
 	return fmt.Sprintf("%d case(s) regressed pass→fail: %v", len(regressions), regressions)
 }
 
-func keyProtectedDetail(keyCaseIDs, keyRegressions []string) string {
+func keyProtectedDetail(keyCaseIDs, keyMissing, keyFailing []string) string {
 	if len(keyCaseIDs) == 0 {
 		return "no key cases configured"
 	}
-	if len(keyRegressions) == 0 {
-		return fmt.Sprintf("key case(s) %v all retained pass", keyCaseIDs)
+	if len(keyMissing) == 0 && len(keyFailing) == 0 {
+		return fmt.Sprintf("key case(s) %v all present and passing in candidate", keyCaseIDs)
 	}
-	return fmt.Sprintf("KEY case(s) %v regressed pass→fail", keyRegressions)
+	parts := make([]string, 0, 2)
+	if len(keyMissing) > 0 {
+		parts = append(parts, fmt.Sprintf("not found in candidate results: %v", keyMissing))
+	}
+	if len(keyFailing) > 0 {
+		parts = append(parts, fmt.Sprintf("not passing in candidate: %v", keyFailing))
+	}
+	return "KEY case issue — " + strings.Join(parts, "; ")
 }
 
 func budgetDetail(maxCalls, calls int) string {
@@ -277,8 +321,18 @@ func buildReasons(d GateDecision) []string {
 	}
 	for _, c := range d.Criteria {
 		switch c.Name {
+		case "has_validation_evidence":
+			if !c.Passed {
+				reasons = append(reasons, "rejected: no validation evidence — gate fails closed")
+			}
 		case "validation_improves":
 			if !c.Passed {
+				reasons = append(reasons, fmt.Sprintf("rejected: %s", c.Detail))
+			}
+		case "key_cases_protected":
+			// Report the key-case violation only when it is not already covered by the pass→fail
+			// overfitting reason above (i.e. a missing key ID or a key case that was already failing).
+			if !c.Passed && len(d.KeyRegressions) == 0 {
 				reasons = append(reasons, fmt.Sprintf("rejected: %s", c.Detail))
 			}
 		case "within_budget":

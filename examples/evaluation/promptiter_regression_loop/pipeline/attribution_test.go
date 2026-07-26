@@ -12,7 +12,10 @@ package pipeline
 import (
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 func TestClassifyMetricAllCategories(t *testing.T) {
@@ -36,9 +39,54 @@ func TestClassifyMetricAllCategories(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			c := makeCase("c", false, 0, tc.crit, tc.reason)
-			got := classifyMetric(c.MetricResults[0])
+			got := classifyMetric(c.MetricResults[0], tc.reason)
 			if got != tc.want {
 				t.Fatalf("classifyMetric(%q) = %q, want %q", tc.reason, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAttributeCaseReadsReasonFromRetainedPerRunDetails reproduces REAL evaluator output:
+// aggregateCaseRuns copies Criterion but NOT Details into the aggregated MetricResults, so the
+// driver metric has nil Details and the reason lives only on the per-run EvalCaseResults. Attribution
+// must recover the reason from there, otherwise the three reason-disambiguated categories collapse to
+// their criterion-type default (tool_arg/route → tool_call, format → mismatch/knowledge).
+func TestAttributeCaseReadsReasonFromRetainedPerRunDetails(t *testing.T) {
+	tests := []struct {
+		name   string
+		crit   *criterion.Criterion
+		reason string
+		want   FailureCategory
+	}{
+		{"tool arg", critToolTrajectory(), "argument mismatch on the called tool", CategoryToolArgError},
+		{"tool route", critToolTrajectory(), "routed to the wrong tool name", CategoryRouteError},
+		{"format json", critFinalResponseJSON(), "output is invalid json", CategoryFormatError},
+		{"format judge", critLLMJudge(), "judge response failed to parse", CategoryFormatError},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &evaluation.EvaluationCaseResult{
+				EvalCaseID:    "c",
+				OverallStatus: status.EvalStatusFailed,
+				// Aggregated metric as the framework builds it: Criterion set, Details nil.
+				MetricResults: []*evalresult.EvalMetricResult{
+					{MetricName: "m", EvalStatus: status.EvalStatusFailed, Criterion: tc.crit},
+				},
+				// Per-run result retains the reason.
+				EvalCaseResults: []*evalresult.EvalCaseResult{
+					{OverallEvalMetricResults: []*evalresult.EvalMetricResult{
+						{MetricName: "m", EvalStatus: status.EvalStatusFailed, Criterion: tc.crit,
+							Details: &evalresult.EvalMetricResultDetails{Reason: tc.reason}},
+					}},
+				},
+			}
+			attrs := AttributeResult(makeResult("s", c))
+			if attrs[0].Category != tc.want {
+				t.Fatalf("category = %q, want %q (reason %q was not recovered from per-run details)", attrs[0].Category, tc.want, tc.reason)
+			}
+			if attrs[0].Reason != tc.reason {
+				t.Errorf("reason = %q, want %q", attrs[0].Reason, tc.reason)
 			}
 		})
 	}

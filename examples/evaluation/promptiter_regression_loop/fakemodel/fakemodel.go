@@ -29,7 +29,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -78,7 +80,9 @@ type Transition struct {
 
 // LoadFixture reads and validates a fixture JSON file. Unknown fields are rejected so a misspelled
 // key (e.g. "inputContain" instead of "inputContains") surfaces as an error instead of being
-// silently ignored and producing a fixture that behaves unexpectedly.
+// silently ignored and producing a fixture that behaves unexpectedly. Trailing data after the first
+// JSON value is also rejected, so a duplicated/concatenated document does not silently load only its
+// first half.
 func LoadFixture(path string) (*Fixture, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -89,6 +93,9 @@ func LoadFixture(path string) (*Fixture, error) {
 	var fixture Fixture
 	if err := dec.Decode(&fixture); err != nil {
 		return nil, fmt.Errorf("parse fixture %s: %w", path, err)
+	}
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse fixture %s: unexpected trailing data after JSON value", path)
 	}
 	return &fixture, nil
 }

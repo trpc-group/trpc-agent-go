@@ -215,7 +215,7 @@ func (r Report) Markdown() string {
 	fmt.Fprintf(&b, "- Engine accepted candidate: **%t**\n", r.EngineAccepted)
 	fmt.Fprintf(&b, "- Acceptance gate accepted candidate: **%t**\n\n", r.GateAccepted)
 	for _, reason := range r.Gate.Reasons {
-		fmt.Fprintf(&b, "  - %s\n", reason)
+		fmt.Fprintf(&b, "  - %s\n", mdCell(reason))
 	}
 	b.WriteString("\n")
 
@@ -235,7 +235,7 @@ func (r Report) Markdown() string {
 	fmt.Fprintf(&b, "## Gate criteria (validation)\n\n")
 	fmt.Fprintf(&b, "| Criterion | Passed | Detail |\n|---|---|---|\n")
 	for _, c := range r.Gate.Criteria {
-		fmt.Fprintf(&b, "| %s | %s | %s |\n", c.Name, checkMark(c.Passed), c.Detail)
+		fmt.Fprintf(&b, "| %s | %s | %s |\n", mdCell(c.Name), checkMark(c.Passed), mdCell(c.Detail))
 	}
 	b.WriteString("\n")
 
@@ -249,7 +249,7 @@ func (r Report) Markdown() string {
 	fmt.Fprintf(&b, "| Round | Train | Validation | Accepted | Δ | Stop | Reason |\n|---|---|---|---|---|---|---|\n")
 	for _, rd := range r.Rounds {
 		fmt.Fprintf(&b, "| %d | %.3f | %.3f | %t | %+.3f | %t | %s |\n",
-			rd.Round, rd.TrainScore, rd.ValidationScore, rd.Accepted, rd.ScoreDelta, rd.Stopped, rd.StopReason)
+			rd.Round, rd.TrainScore, rd.ValidationScore, rd.Accepted, rd.ScoreDelta, rd.Stopped, mdCell(rd.StopReason))
 	}
 	b.WriteString("\n")
 
@@ -268,7 +268,7 @@ func (r Report) Markdown() string {
 		r.Config.MaxRounds, r.Config.MinScoreGain, r.Config.GateMinValidationGain, r.Config.TargetScore)
 	fmt.Fprintf(&b, "- Max candidate model calls (budget): %d (0 = disabled)\n", r.Config.MaxCandidateModelCalls)
 	if len(r.Config.KeyCaseIDs) > 0 {
-		fmt.Fprintf(&b, "- Key cases: %v\n", r.Config.KeyCaseIDs)
+		fmt.Fprintf(&b, "- Key cases: %s\n", mdCell(fmt.Sprintf("%v", r.Config.KeyCaseIDs)))
 	}
 	if r.Config.BaselinePromptFile != "" {
 		fmt.Fprintf(&b, "- Baseline prompt file: `%s`\n", r.Config.BaselinePromptFile)
@@ -293,7 +293,7 @@ func writeDeltaTable(b *strings.Builder, title string, deltas []CaseDelta) {
 	fmt.Fprintf(b, "| Case | Class | Baseline | Candidate | Δ |\n|---|---|---|---|---|\n")
 	for _, d := range deltas {
 		fmt.Fprintf(b, "| %s | %s | %.3f | %.3f | %+.3f |\n",
-			d.EvalCaseID, d.Class, d.BaselineScore, d.CandidateScore, d.ScoreDelta)
+			mdCell(d.EvalCaseID), mdCell(string(d.Class)), d.BaselineScore, d.CandidateScore, d.ScoreDelta)
 	}
 	b.WriteString("\n")
 }
@@ -302,7 +302,7 @@ func writeSetSection(b *strings.Builder, title string, set SetReport) {
 	fmt.Fprintf(b, "## %s (mean %.3f, %s)\n\n", title, set.MeanScore, set.OverallStatus)
 	fmt.Fprintf(b, "| Case | Passed | Score | Failure category |\n|---|---|---|---|\n")
 	for _, c := range set.Cases {
-		fmt.Fprintf(b, "| %s | %s | %.3f | %s |\n", c.EvalCaseID, checkMark(c.Passed), c.Score, c.Category)
+		fmt.Fprintf(b, "| %s | %s | %.3f | %s |\n", mdCell(c.EvalCaseID), checkMark(c.Passed), c.Score, mdCell(string(c.Category)))
 	}
 	b.WriteString("\n")
 	if len(set.AttributionStats) > 0 {
@@ -320,6 +320,19 @@ func checkMark(passed bool) string {
 		return "✅"
 	}
 	return "❌"
+}
+
+// mdCell escapes a dynamic string for safe inclusion in a GFM table cell. A literal '|' would start
+// a new column and a newline would end the row and return to block context (allowing a forged
+// heading or decision line), so both are neutralized. Case IDs and reasons originate from eval-set
+// data and the -key-cases flag, so they are external and untrusted. This is the table-cell analogue
+// of fencedBlock's code-fence hardening.
+func mdCell(s string) string {
+	s = strings.ReplaceAll(s, "|", "\\|")
+	s = strings.ReplaceAll(s, "\r\n", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	return s
 }
 
 // fencedBlock renders content as a fenced code block labeled lang. It picks a backtick fence longer

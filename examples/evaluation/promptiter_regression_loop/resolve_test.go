@@ -24,7 +24,10 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 	missingFile := filepath.Join(dir, "does-not-exist.txt")
 
 	t.Run("explicit flag wins over file", func(t *testing.T) {
-		got, src := resolveBaselineInstruction("  from flag ", promptFile)
+		got, src, err := resolveBaselineInstruction("  from flag ", promptFile)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if got != "from flag" {
 			t.Errorf("instruction = %q, want %q", got, "from flag")
 		}
@@ -34,7 +37,10 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 	})
 
 	t.Run("file used when flag empty", func(t *testing.T) {
-		got, src := resolveBaselineInstruction("", promptFile)
+		got, src, err := resolveBaselineInstruction("", promptFile)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if got != "from file" {
 			t.Errorf("instruction = %q, want %q", got, "from file")
 		}
@@ -43,8 +49,11 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("default when flag empty and file missing", func(t *testing.T) {
-		got, src := resolveBaselineInstruction("", missingFile)
+	t.Run("built-in default when both flag and file empty", func(t *testing.T) {
+		got, src, err := resolveBaselineInstruction("", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if got != defaultCandidateInstruction {
 			t.Errorf("instruction = %q, want default", got)
 		}
@@ -53,17 +62,20 @@ func TestResolveBaselineInstructionPrecedence(t *testing.T) {
 		}
 	})
 
-	t.Run("default when file exists but is blank", func(t *testing.T) {
+	t.Run("error when configured file missing", func(t *testing.T) {
+		got, src, err := resolveBaselineInstruction("", missingFile)
+		if err == nil {
+			t.Fatalf("expected error for missing configured file, got instruction=%q src=%q", got, src)
+		}
+	})
+
+	t.Run("error when configured file is blank", func(t *testing.T) {
 		blankFile := filepath.Join(dir, "blank-prompt.txt")
 		if err := os.WriteFile(blankFile, []byte("   \n\t\n"), 0o644); err != nil {
 			t.Fatalf("write blank prompt file: %v", err)
 		}
-		got, src := resolveBaselineInstruction("", blankFile)
-		if got != defaultCandidateInstruction {
-			t.Errorf("instruction = %q, want default (blank file falls back)", got)
-		}
-		if src != "" {
-			t.Errorf("sourceFile = %q, want empty (blank file not used as source)", src)
+		if _, _, err := resolveBaselineInstruction("", blankFile); err == nil {
+			t.Fatalf("expected error for blank configured file")
 		}
 	})
 }
