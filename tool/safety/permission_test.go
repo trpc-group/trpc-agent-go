@@ -26,6 +26,7 @@ import (
 	internaltool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool/hostexec"
+	skilltool "trpc.group/trpc-go/trpc-agent-go/tool/skill"
 	"trpc.group/trpc-go/trpc-agent-go/tool/workspaceexec"
 )
 
@@ -159,6 +160,50 @@ func TestPermissionPolicyCanonicalSessionWritesRequireReview(t *testing.T) {
 			encoded, encodeErr := json.Marshal(events[0])
 			require.NoError(t, encodeErr)
 			require.NotContains(t, string(encoded), fragment)
+		})
+	}
+}
+
+func TestPermissionPolicySessionWritesRejectPrivateKeys(t *testing.T) {
+	hostSet, err := hostexec.NewToolSet(hostexec.WithBaseDir(t.TempDir()))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, hostSet.Close()) })
+	hostWrite := findTool(t, hostSet.Tools(context.Background()), "write_stdin")
+	workspaceWrite := workspaceexec.NewWriteStdinTool(
+		workspaceexec.NewExecTool(nil),
+	)
+	runTool := skilltool.NewRunTool(nil, nil)
+	skillWrite := skilltool.NewWriteStdinTool(skilltool.NewExecTool(runTool))
+
+	const privateKey = "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----"
+	for _, tc := range []struct {
+		name string
+		tool tool.Tool
+	}{
+		{"host", hostWrite},
+		{"workspace", workspaceWrite},
+		{"skill", skillWrite},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &recordingAuditSink{}
+			policy := NewPermissionPolicy(
+				mustPermissionGuard(t, DefaultPolicy()), WithAuditSink(sink),
+			)
+			arguments := mustJSON(t, map[string]any{
+				"session_id": "session", "chars": privateKey,
+			})
+			decision, checkErr := policy.CheckToolPermission(
+				context.Background(), &tool.PermissionRequest{
+					Tool: tc.tool, Arguments: arguments,
+				},
+			)
+			require.NoError(t, checkErr)
+			require.Equal(t, tool.PermissionActionDeny, decision.Action)
+			require.Contains(t, decision.Reason, "sensitive.private_key")
+			events := sink.snapshot()
+			require.Len(t, events, 1)
+			require.Equal(t, "sensitive.private_key", events[0].RuleID)
+			require.True(t, events[0].Redacted)
 		})
 	}
 }
@@ -319,7 +364,7 @@ func TestPermissionPolicyFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPermissionPolicyNilOptionsAndSinkAreNoOps(t *testing.T) {
+func TestPermissionPolicyRequiredAuditRejectsNilSink(t *testing.T) {
 	policy := NewPermissionPolicy(
 		mustPermissionGuard(t, DefaultPolicy()),
 		nil,
@@ -332,8 +377,9 @@ func TestPermissionPolicyNilOptionsAndSinkAreNoOps(t *testing.T) {
 		workspacePermissionRequest(`{"command":"go test ./tool/safety"}`),
 	)
 
-	require.NoError(t, err)
-	require.Equal(t, tool.PermissionActionAllow, decision.Action)
+	require.Error(t, err)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, err.Error(), "required tool safety audit sink is nil")
 }
 
 func TestPermissionPolicyClosedWorldNonExecutionAllowsWithoutScan(t *testing.T) {

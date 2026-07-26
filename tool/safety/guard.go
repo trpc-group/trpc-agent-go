@@ -34,12 +34,18 @@ func NewGuard(policy Policy) (*Guard, error) {
 	return &Guard{policy: clonePolicy(policy)}, nil
 }
 
-// Scan evaluates req and returns a complete safety report.
+// Scan evaluates req and returns a complete safety report. A nil receiver
+// returns a redacted, critical deny report.
 func (g *Guard) Scan(req Request) Report {
 	started := time.Now()
 	if g == nil {
-		report := newReport(req)
+		report := aggregateReport(req, []Finding{newFinding(
+			DecisionDeny, RiskCritical, "safety.guard_nil",
+			"tool safety guard is nil",
+			"configure a validated safety guard before execution",
+		)})
 		report.DurationMillis = time.Since(started).Milliseconds()
+		redactReport(&report)
 		return report
 	}
 	findings := scanExecution(g.policy, req)

@@ -569,6 +569,7 @@ func TestResultProcessorPostAuditCorrelationAndStatusPrecedence(t *testing.T) {
 	}{
 		{name: "success", limit: 4096, result: "safe", want: "success"},
 		{name: "execution error", limit: 4096, result: "safe", execErr: errors.New("failed"), want: "execution_error"},
+		{name: "empty execution error", limit: 4096, result: "safe", execErr: errors.New(""), want: "execution_error"},
 		{name: "redacted", limit: 4096, result: map[string]string{"token": resultSecret}, want: "redacted", redacted: true},
 		{name: "truncated", limit: 180, result: strings.Repeat("x", 4096), want: "truncated", truncated: true},
 		{name: "truncated beats redacted", limit: 180, result: map[string]string{"token": resultSecret, "safe": strings.Repeat("x", 4096)}, want: "truncated", redacted: true, truncated: true},
@@ -640,12 +641,26 @@ func TestResultProcessorAuditFailureModes(t *testing.T) {
 	}
 
 	guard := mustResultGuard(t, 4096)
-	processor, err := NewResultProcessor(
+	_, err := NewResultProcessor(
 		guard, nil, WithResultAuditFailureMode(AuditRequired),
 	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "required tool safety audit sink is nil")
+}
+
+func TestResultAuditStatusPreservesExecutionErrorAfterRedaction(t *testing.T) {
+	sink := &recordingAuditSink{}
+	processor := mustResultProcessor(t, 4096, sink)
+	processed, err := processor.Process(
+		context.Background(), validResultPreflight(), "token=sk-secret-value",
+		errors.New("password=hunter2"),
+	)
 	require.NoError(t, err)
-	_, err = processor.Process(context.Background(), validResultPreflight(), "safe", nil)
-	require.NoError(t, err)
+	require.True(t, processed.Redacted)
+	require.NotEmpty(t, processed.ExecutionError)
+	events := sink.snapshot()
+	require.Len(t, events, 1)
+	require.Equal(t, "execution_error", events[0].ExecutionStatus)
 }
 
 func TestResultProcessorConcurrentJSONLAudit(t *testing.T) {

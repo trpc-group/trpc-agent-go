@@ -39,6 +39,34 @@ func TestGuardScansShellAndPaths(t *testing.T) {
 	}
 }
 
+func TestGuardRejectsRecursiveForcedCurrentDirectoryDelete(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, command := range []string{
+		"rm -rf .",
+		"rm --recursive --force ./",
+		"rm --rec --for .",
+		"rm . -fr",
+		"rm -r --force -- .",
+	} {
+		report := guard.Scan(safety.Request{Command: command, Cwd: "work"})
+		require.Equal(t, safety.DecisionDeny, report.Decision, command)
+		require.Equal(t, "dangerous.rm_rf", report.RuleID, command)
+	}
+}
+
+func TestNilGuardFailsClosedAndRedacts(t *testing.T) {
+	var guard *safety.Guard
+	report := guard.Scan(safety.Request{
+		Command: "rm -rf / token=sk-secret-value",
+	})
+	require.Equal(t, safety.DecisionDeny, report.Decision)
+	require.Equal(t, safety.RiskCritical, report.RiskLevel)
+	require.Equal(t, "safety.guard_nil", report.RuleID)
+	require.True(t, report.Blocked)
+	require.True(t, report.Redacted)
+	require.NotContains(t, report.Command, "sk-secret-value")
+}
+
 func TestGuardScansCwdAndNormalizedPaths(t *testing.T) {
 	guard := mustGuard(t, safety.DefaultPolicy())
 	tests := []struct {
@@ -59,6 +87,29 @@ func TestGuardScansCwdAndNormalizedPaths(t *testing.T) {
 			require.Equal(t, "sensitive.path", report.RuleID)
 		})
 	}
+}
+
+func TestGuardRejectsLeadingParentTraversal(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		Command: "cat ../../../../etc/shadow",
+	})
+	require.Equal(t, safety.DecisionDeny, report.Decision)
+	require.Equal(t, "sensitive.path", report.RuleID)
+}
+
+func TestGuardResolvesParentTraversalAgainstWorkspaceCwd(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+
+	safe := guard.Scan(safety.Request{
+		Command: "cat ../README.md", Cwd: "docs",
+	})
+	require.Equal(t, safety.DecisionAllow, safe.Decision)
+
+	unsafe := guard.Scan(safety.Request{
+		Command: "cat ../../../../etc/shadow", Cwd: "docs",
+	})
+	require.Equal(t, safety.DecisionDeny, unsafe.Decision)
+	require.Equal(t, "sensitive.path", unsafe.RuleID)
 }
 
 func TestGuardScansArgvAndCommandPolicy(t *testing.T) {
@@ -149,15 +200,6 @@ func TestGuardNormalizesAllowedPipeline(t *testing.T) {
 	require.NotEmpty(t, report.Evidence)
 	require.NotEmpty(t, report.Recommendation)
 	require.Empty(t, report.Findings)
-}
-
-func TestNilGuardDoesNotScanRequest(t *testing.T) {
-	var guard *safety.Guard
-	report := guard.Scan(safety.Request{Command: "rm -rf /"})
-	require.Equal(t, safety.DecisionAllow, report.Decision)
-	require.Equal(t, "safety.no_findings", report.RuleID)
-	require.NotEmpty(t, report.Evidence)
-	require.NotEmpty(t, report.Recommendation)
 }
 
 func mustGuard(t *testing.T, policy safety.Policy) *safety.Guard {

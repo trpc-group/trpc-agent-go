@@ -60,9 +60,9 @@ type ResultProcessor struct {
 // of guard's maximum output limit. Guard must be non-nil and its configured
 // limit must be positive and large enough to serialize the stable minimal safe
 // result returned on truncation failure. The default audit mode is
-// AuditBestEffort. A nil sink disables post-execution audit writes, including
-// in AuditRequired mode. Nil options are ignored. The caller retains ownership
-// of guard and sink.
+// AuditBestEffort. A nil sink disables best-effort post-execution audit writes
+// and is rejected in AuditRequired mode. Nil options are ignored. The caller
+// retains ownership of guard and sink.
 func NewResultProcessor(
 	guard *Guard,
 	sink AuditSink,
@@ -93,13 +93,17 @@ func NewResultProcessor(
 	if !validAuditFailureMode(processor.auditFailureMode) {
 		return nil, errors.New("tool safety result processor audit failure mode is invalid")
 	}
+	if processor.auditFailureMode == AuditRequired && processor.auditSink == nil {
+		return nil, errors.New("required tool safety audit sink is nil")
+	}
 	return processor, nil
 }
 
 // WithResultAuditFailureMode configures post-execution audit handling.
 // AuditBestEffort returns a safe processed value when the sink fails;
 // AuditRequired returns that value together with an error preserving the sink
-// cause. Unsupported modes cause NewResultProcessor to return an error.
+// cause and requires a non-nil sink. Unsupported modes cause
+// NewResultProcessor to return an error.
 func WithResultAuditFailureMode(mode AuditFailureMode) ResultOption {
 	return func(processor *ResultProcessor) {
 		if processor != nil {
@@ -155,7 +159,10 @@ func (p *ResultProcessor) Process(
 		return processed, err
 	}
 
-	event := resultAuditEvent(preflight, processed, time.Since(started).Milliseconds())
+	event := resultAuditEvent(
+		preflight, processed, executionErr != nil,
+		time.Since(started).Milliseconds(),
+	)
 	if p.auditSink != nil {
 		if err := p.auditSink.Record(ctx, event); err != nil &&
 			p.auditFailureMode == AuditRequired {
@@ -377,6 +384,7 @@ func validBackend(backend Backend) bool {
 func resultAuditEvent(
 	preflight Report,
 	processed ProcessedResult,
+	executionFailed bool,
 	durationMillis int64,
 ) AuditEvent {
 	return AuditEvent{
@@ -392,18 +400,21 @@ func resultAuditEvent(
 		DurationMillis:  durationMillis,
 		Redacted:        processed.Redacted,
 		Intercepted:     false,
-		ExecutionStatus: resultExecutionStatus(processed),
+		ExecutionStatus: resultExecutionStatus(processed, executionFailed),
 	}
 }
 
-func resultExecutionStatus(processed ProcessedResult) string {
+func resultExecutionStatus(
+	processed ProcessedResult,
+	executionFailed bool,
+) string {
 	switch {
 	case processed.Truncated:
 		return "truncated"
+	case executionFailed:
+		return "execution_error"
 	case processed.Redacted:
 		return "redacted"
-	case processed.ExecutionError != "":
-		return "execution_error"
 	default:
 		return "success"
 	}

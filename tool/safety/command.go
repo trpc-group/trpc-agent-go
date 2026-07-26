@@ -43,10 +43,11 @@ func scanCommand(policy Policy, req Request) ([][]string, []Finding) {
 	}
 
 	findings := make([]Finding, 0, 3)
-	if containsForcedRootDelete(segments) {
+	if containsForcedBroadDelete(segments) {
 		findings = append(findings, newFinding(
-			DecisionDeny, RiskCritical, "dangerous.rm_rf", "rm -rf targets /",
-			"remove the root operand and use a narrowly scoped path",
+			DecisionDeny, RiskCritical, "dangerous.rm_rf",
+			"rm recursively and forcibly targets / or the current directory",
+			"remove the broad operand and use a narrowly scoped path",
 		))
 	}
 
@@ -101,12 +102,13 @@ func cloneSegments(segments [][]string) [][]string {
 	return copyOfSegments
 }
 
-func containsForcedRootDelete(segments [][]string) bool {
+func containsForcedBroadDelete(segments [][]string) bool {
 	for _, argv := range segments {
 		if len(argv) == 0 || commandBase(argv[0]) != "rm" {
 			continue
 		}
 		hasRecursive, hasForce := false, false
+		var operands []string
 		options := true
 		for _, arg := range argv[1:] {
 			if options && arg == "--" {
@@ -114,17 +116,41 @@ func containsForcedRootDelete(segments [][]string) bool {
 				continue
 			}
 			if options && strings.HasPrefix(arg, "-") && arg != "-" {
-				flags := strings.TrimLeft(arg, "-")
-				hasRecursive = hasRecursive || strings.ContainsAny(flags, "rR")
-				hasForce = hasForce || strings.Contains(flags, "f")
+				if isLongOptionAbbreviation(arg, "--recursive") {
+					hasRecursive = true
+					continue
+				}
+				if isLongOptionAbbreviation(arg, "--force") {
+					hasForce = true
+					continue
+				}
+				if !strings.HasPrefix(arg, "--") {
+					flags := strings.TrimPrefix(arg, "-")
+					hasRecursive = hasRecursive || strings.ContainsAny(flags, "rR")
+					hasForce = hasForce || strings.Contains(flags, "f")
+				}
 				continue
 			}
-			if hasRecursive && hasForce && normalizePath(arg) == "/" {
+			operands = append(operands, arg)
+		}
+		if !hasRecursive || !hasForce {
+			continue
+		}
+		for _, operand := range operands {
+			target := path.Clean(strings.ReplaceAll(
+				strings.Trim(strings.TrimSpace(operand), "\"'"), "\\", "/",
+			))
+			if target == "/" || target == "." {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+func isLongOptionAbbreviation(value, full string) bool {
+	return len(value) > 2 && strings.HasPrefix(value, "--") &&
+		strings.HasPrefix(full, value)
 }
 
 func commandBase(command string) string {

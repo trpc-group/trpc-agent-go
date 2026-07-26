@@ -25,7 +25,9 @@ func scanPaths(policy Policy, cwd string, segments [][]string) []Finding {
 				continue
 			}
 			for _, candidate := range pathCandidates(argv, index, arg) {
-				if finding, ok := deniedPathFinding(policy.DeniedPaths, candidate); ok {
+				if finding, ok := deniedPathFindingFromCwd(
+					policy.DeniedPaths, cwd, candidate,
+				); ok {
 					return []Finding{finding}
 				}
 			}
@@ -284,6 +286,41 @@ func deniedPathFinding(deniedPaths []string, value string) (Finding, bool) {
 	if candidate == "" {
 		return Finding{}, false
 	}
+	if len(deniedPaths) > 0 &&
+		(candidate == ".." || strings.HasPrefix(candidate, "../")) {
+		return newFinding(
+			DecisionDeny, RiskHigh, "sensitive.path",
+			"parent traversal may escape into denied_paths",
+			"use a workspace-relative path without parent traversal",
+		), true
+	}
+	return matchDeniedPathFinding(deniedPaths, candidate)
+}
+
+func deniedPathFindingFromCwd(
+	deniedPaths []string,
+	cwd string,
+	value string,
+) (Finding, bool) {
+	candidate := normalizePath(value)
+	if candidate == "" || (candidate != ".." && !strings.HasPrefix(candidate, "../")) {
+		return deniedPathFinding(deniedPaths, value)
+	}
+	base := normalizePath(cwd)
+	if base == "" || base == ".." || strings.HasPrefix(base, "../") {
+		return deniedPathFinding(deniedPaths, value)
+	}
+	resolved := path.Clean(path.Join(base, candidate))
+	if resolved == ".." || strings.HasPrefix(resolved, "../") {
+		return deniedPathFinding(deniedPaths, value)
+	}
+	return matchDeniedPathFinding(deniedPaths, resolved)
+}
+
+func matchDeniedPathFinding(
+	deniedPaths []string,
+	candidate string,
+) (Finding, bool) {
 	for _, deniedPath := range deniedPaths {
 		denied := normalizePath(deniedPath)
 		if denied == "" || !matchesDeniedPath(candidate, denied) {

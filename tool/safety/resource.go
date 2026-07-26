@@ -58,11 +58,30 @@ func scanResources(policy Policy, req Request, segments [][]string) []Finding {
 			"run the process in the foreground with bounded lifetime and cleanup",
 		))
 	}
+	if req.Backend == BackendWorkspaceExec && req.Background {
+		findings = append(findings, newFinding(
+			DecisionDeny, RiskHigh, "workspace.background",
+			"workspace execution requested a background process",
+			"run the process in the foreground with bounded lifetime and cleanup",
+		))
+	}
 	if req.Backend == BackendHostExec && req.TTY {
 		findings = append(findings, newFinding(
 			DecisionNeedsHumanReview, RiskHigh, "host.tty",
 			"host execution requested a persistent PTY session",
 			"review session lifetime, cleanup, and host access before execution",
+		))
+	}
+	if req.Backend == BackendWorkspaceExec && req.TTY {
+		ruleID := "workspace.tty"
+		evidence := "workspace execution requested a persistent TTY session"
+		if req.ToolName == "skill_exec" {
+			ruleID = "skill.tty"
+			evidence = "skill execution requested a persistent TTY session"
+		}
+		findings = append(findings, newFinding(
+			DecisionNeedsHumanReview, RiskHigh, ruleID, evidence,
+			"review session lifetime, cleanup, and workspace access before execution",
 		))
 	}
 	for _, argv := range segments {
@@ -223,20 +242,37 @@ func parallelism(argv []string) int {
 	}
 	base := commandBase(argv[0])
 	goTest := isGoTestCommand(argv)
+	maximum := 0
 	for i, arg := range argv[1:] {
 		lower := strings.ToLower(arg)
 		if value, ok := attachedParallelism(base, goTest, lower); ok {
-			return value
+			if value == 0 && (base == "make" || base == "ninja") {
+				return 33
+			}
+			maximum = max(maximum, value)
+			continue
 		}
 		if value, ok := longParallelism(goTest, lower); ok {
-			return value
+			if value == 0 && (base == "make" || base == "ninja") {
+				return 33
+			}
+			maximum = max(maximum, value)
+			continue
 		}
-		if separateParallelismOption(base, goTest, lower) && i+2 < len(argv) {
-			value, _ := strconv.Atoi(argv[i+2])
-			return value
+		if separateParallelismOption(base, goTest, lower) {
+			if i+2 < len(argv) {
+				value, err := strconv.Atoi(argv[i+2])
+				if err == nil && value > 0 {
+					maximum = max(maximum, value)
+					continue
+				}
+			}
+			if base == "make" || base == "ninja" {
+				return 33
+			}
 		}
 	}
-	return 0
+	return maximum
 }
 
 func attachedParallelism(base string, goTest bool, arg string) (int, bool) {

@@ -51,7 +51,7 @@ var _ tool.PermissionPolicy = (*PermissionPolicy)(nil)
 // NewPermissionPolicy returns a pre-execution permission policy for guard.
 // A nil guard is accepted for configuration assembly but every check then
 // fails closed. Nil options are ignored. Audit writes are best effort by
-// default.
+// default. AuditRequired without a non-nil sink fails every check closed.
 func NewPermissionPolicy(
 	guard *Guard,
 	opts ...PermissionOption,
@@ -69,7 +69,8 @@ func NewPermissionPolicy(
 }
 
 // WithAuditSink configures the sink that receives one secret-minimizing
-// preflight event per check. A nil sink disables audit writes without error.
+// preflight event per check. A nil sink disables best-effort audit writes and
+// fails checks configured with AuditRequired.
 func WithAuditSink(sink AuditSink) PermissionOption {
 	return func(policy *PermissionPolicy) {
 		if policy != nil {
@@ -81,7 +82,8 @@ func WithAuditSink(sink AuditSink) PermissionOption {
 // WithAuditFailureMode configures how sink failures affect permission checks.
 // AuditBestEffort preserves the scan decision. AuditRequired returns the sink
 // error and prevents an allowed execution; already intercepted decisions stay
-// intercepted. An unsupported mode fails closed when the policy is checked.
+// intercepted. AuditRequired also requires a non-nil sink. An unsupported mode
+// fails closed when the policy is checked.
 func WithAuditFailureMode(mode AuditFailureMode) PermissionOption {
 	return func(policy *PermissionPolicy) {
 		if policy != nil {
@@ -94,8 +96,8 @@ func WithAuditFailureMode(mode AuditFailureMode) PermissionOption {
 // records at most one preflight audit event, and maps the result to the
 // framework permission actions. A nil receiver, nil guard, nil request,
 // malformed request, cancelled context, unsupported decision, or invalid
-// audit mode returns a deny decision and a lowercase error. A nil context is
-// treated as context.Background.
+// audit configuration returns a deny decision and a lowercase error. A nil
+// context is treated as context.Background.
 func (p *PermissionPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
@@ -117,6 +119,11 @@ func (p *PermissionPolicy) CheckToolPermission(
 	if req == nil {
 		report := failClosedReport(nil, "safety.request_nil")
 		return p.completePermission(ctx, report, errors.New("tool safety permission request is nil"))
+	}
+	if p.auditFailureMode == AuditRequired && p.auditSink == nil {
+		report := failClosedReport(req, "safety.audit_required")
+		return p.completePermission(ctx, report,
+			errors.New("required tool safety audit sink is nil"))
 	}
 
 	decoded, scan, err := requestFromPermissionRequest(req)
