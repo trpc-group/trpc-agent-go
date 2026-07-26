@@ -11,7 +11,7 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -148,6 +148,7 @@ var (
 	networkURLRE          = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^\s"'<>|]+`)
 	networkOverrideRE     = regexp.MustCompile(`(?i)(^|\s)(?:(?:--connect-to|--resolve|--proxy|--preproxy|--unix-socket|--config|--insecure|--location|--location-trusted)(?:[=\s]|$)|-[a-z]*l[a-z]*(?:[=\s]|$)|-[a-z]*[xk][^\s]*)`)
 	gitNetworkOverrideRE  = regexp.MustCompile(`(?i)(^|\s)(?:-c|--config-env)(?:[=\s]|$)|\b(?:https?\.proxy|url\.[^\s]+\.insteadof)=`)
+	gitExecutionModeRE    = regexp.MustCompile(`(?i)(^|\s)(?:-c|--config-env|--exec-path|--upload-pack|--receive-pack|--ext-diff)(?:[=\s]|$)|\b(?:config|hook|difftool|mergetool)\b`)
 	destructiveCommandRE  = regexp.MustCompile(`\brm\s+[^\n]*(?:-rf|-fr)|\b(?:mkfs|dd)\b`)
 	secretReadRE          = regexp.MustCompile(`(?i)(cat|type|grep|less|head|tail)\s+[^\n]*(\.env|credentials|id_rsa|\.ssh)`)
 	shellWrapperRE        = regexp.MustCompile(`\b(?:sh|bash|dash|zsh|ksh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)\s+(?:-[a-z]*c|/c|-command)\b|\beval\b`)
@@ -254,15 +255,21 @@ func (g *Guard) Scan(req Request) ScanResult {
 	if destructiveCommandRE.MatchString(lower) {
 		add("deny", "critical", "DESTRUCTIVE_COMMAND", req.Command, "do not run destructive filesystem commands")
 	}
-	workingDir := strings.ToLower(filepath.ToSlash(filepath.Clean(req.WorkingDir)))
-	normalizedCommand := strings.ToLower(strings.ReplaceAll(req.Command, `\`, "/"))
+	commandPaths, unresolvedPaths := commandPathOperands(req.Command, req.WorkingDir)
+	if unresolvedPaths {
+		add("ask", "high", "PATH_EXPANSION", req.Command, "use literal path operands without expansion or globs")
+	}
+	workingDir := normalizePolicyPath(req.WorkingDir, "")
 	for _, path := range g.policy.ForbiddenPaths {
-		normalizedPath := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
-		if strings.Contains(normalizedCommand, normalizedPath) {
-			add("deny", "critical", "FORBIDDEN_PATH", path, "remove access to the protected path")
-		}
-		if req.WorkingDir != "" && strings.Contains(workingDir, normalizedPath) {
+		normalizedPath := normalizePolicyPath(path, "")
+		if req.WorkingDir != "" && protectedPathMatch(workingDir, normalizedPath) {
 			add("deny", "critical", "FORBIDDEN_WORKING_DIR", req.WorkingDir, "choose a working directory outside protected paths")
+		}
+		for _, operand := range commandPaths {
+			if protectedPathMatch(operand, normalizedPath) {
+				add("deny", "critical", "FORBIDDEN_PATH", path, "remove access to the protected path")
+				break
+			}
 		}
 	}
 	if secretReadRE.MatchString(req.Command) {
@@ -284,6 +291,9 @@ func (g *Guard) Scan(req Request) ScanResult {
 				add("deny", "critical", "NETWORK_NOT_ALLOWLISTED", target.Hostname(), "add a reviewed domain to allowed_domains or remove the request")
 			}
 		}
+	}
+	if base == "git" && gitExecutionModeRE.MatchString(lower) {
+		add("ask", "high", "GIT_EXECUTION_MODE", req.Command, "remove Git options or modes that can select another executable")
 	}
 	if isShellWrapper(tokens) || shellWrapperRE.MatchString(lower) {
 		add("ask", "high", "SHELL_WRAPPER", req.Command, "expand and review the wrapped command before execution")
@@ -334,6 +344,131 @@ func (g *Guard) Scan(req Request) ScanResult {
 	r.DurationMicros = time.Since(started).Microseconds()
 	r.SpanAttributes = map[string]string{"tool.safety.decision": r.Decision, "tool.safety.risk_level": r.RiskLevel, "tool.safety.rule_id": r.RuleID, "tool.safety.backend": r.Backend}
 	return r
+}
+
+func commandPathOperands(command, workingDir string) ([]string, bool) {
+	words, unresolved := conservativeShellWords(command)
+	paths := make([]string, 0, len(words))
+	for _, word := range words {
+		if strings.Contains(word, "://") {
+			continue
+		}
+		if i := strings.IndexByte(word, '='); i >= 0 {
+			word = word[i+1:]
+		}
+		if !looksLikePath(word) {
+			continue
+		}
+		paths = append(paths, normalizePolicyPath(word, workingDir))
+	}
+	return paths, unresolved
+}
+
+func conservativeShellWords(command string) ([]string, bool) {
+	var words []string
+	var word strings.Builder
+	var quote byte
+	unresolved := false
+	flush := func() {
+		if word.Len() > 0 {
+			words = append(words, word.String())
+			word.Reset()
+		}
+	}
+	for i := 0; i < len(command); i++ {
+		current := command[i]
+		if current == '\\' && quote != '\'' {
+			if i+1 < len(command) && isShellEscapedByte(command[i+1]) {
+				i++
+				word.WriteByte(command[i])
+			} else {
+				word.WriteByte('/')
+			}
+			continue
+		}
+		if quote != 0 {
+			if current == quote {
+				quote = 0
+			} else {
+				if current == '$' || current == '`' {
+					unresolved = true
+				}
+				word.WriteByte(current)
+			}
+			continue
+		}
+		switch current {
+		case '\'', '"':
+			quote = current
+		case ' ', '\t', '\r', '\n', ';', '&', '|', '<', '>':
+			flush()
+		case '$', '`', '*', '?', '[', ']', '{', '}':
+			unresolved = true
+			word.WriteByte(current)
+		default:
+			word.WriteByte(current)
+		}
+	}
+	if quote != 0 {
+		unresolved = true
+	}
+	flush()
+	return words, unresolved
+}
+
+func isShellEscapedByte(value byte) bool {
+	return strings.ContainsRune(" \t\r\n\\'\"$`*?[]{}", rune(value))
+}
+
+func looksLikePath(value string) bool {
+	return strings.ContainsAny(value, `/\`) ||
+		strings.HasPrefix(value, ".") ||
+		strings.HasPrefix(value, "~") ||
+		strings.EqualFold(value, ".env") ||
+		strings.Contains(strings.ToLower(value), "credentials")
+}
+
+func normalizePolicyPath(value, workingDir string) string {
+	value = strings.TrimSpace(strings.Trim(value, `"'`))
+	value = strings.ReplaceAll(value, `\`, "/")
+	if value == "" {
+		return ""
+	}
+	if workingDir != "" && !strings.HasPrefix(value, "/") &&
+		!strings.HasPrefix(value, "~") && !hasWindowsVolume(value) {
+		base := strings.ReplaceAll(workingDir, `\`, "/")
+		value = path.Join(base, value)
+	}
+	return strings.ToLower(path.Clean(value))
+}
+
+func hasWindowsVolume(value string) bool {
+	return len(value) >= 2 &&
+		((value[0] >= 'a' && value[0] <= 'z') ||
+			(value[0] >= 'A' && value[0] <= 'Z')) &&
+		value[1] == ':'
+}
+
+func protectedPathMatch(candidate, protected string) bool {
+	if candidate == "" || protected == "" {
+		return false
+	}
+	if candidate == protected || strings.HasPrefix(candidate, protected+"/") {
+		return true
+	}
+	if strings.Count(protected, "/") == 1 &&
+		(strings.HasSuffix(candidate, protected) ||
+			strings.Contains(candidate, protected+"/")) {
+		return true
+	}
+	if !strings.Contains(protected, "/") {
+		for _, component := range strings.Split(candidate, "/") {
+			if component == protected {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isNetworkCommand(tokens []string) bool {

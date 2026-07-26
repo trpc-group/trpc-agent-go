@@ -18,10 +18,13 @@ go run . \
 The sample requests are scanned only; dangerous commands are never executed.
 The checked-in report and audit examples contain all thirteen sample results;
 only timestamps and scan durations are normalized.
-`Guard.Wrap` is the execution-boundary adapter: it scans first, writes one audit
-event, rejects `deny`/`ask`, and invokes the wrapped executor only for `allow`.
-It can back an equivalent `tool.PermissionPolicy` for `workspaceexec`,
-`hostexec`, or `codeexec`.
+`Guard.Wrap` is the standalone execution-boundary adapter: it scans first,
+writes one audit event, rejects `deny`/`ask`, and invokes the wrapped executor
+only for `allow`. `NewPermissionPolicyAdapter` is the framework adapter for the
+actual `exec_command` and `workspace_exec` schemas. Supply trusted executor
+defaults and install it with `agent.WithToolPermissionPolicyFunc`; the adapter
+derives the backend from the tool name and never trusts model arguments for
+output bounds.
 
 ## Security layers
 

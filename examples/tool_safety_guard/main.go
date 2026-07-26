@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -40,6 +41,14 @@ func main() {
 }
 
 func run(policyPath, samplesPath, reportPath, auditPath string) error {
+	if e := validateDistinctPaths(map[string]string{
+		"policy":  policyPath,
+		"samples": samplesPath,
+		"report":  reportPath,
+		"audit":   auditPath,
+	}); e != nil {
+		return e
+	}
 	policy, e := LoadPolicy(policyPath)
 	if e != nil {
 		return e
@@ -103,6 +112,65 @@ func run(policyPath, samplesPath, reportPath, auditPath string) error {
 		return fmt.Errorf("sample expectations matched %d of %d requests", report.MatchedExpected, report.Samples)
 	}
 	return nil
+}
+
+func validateDistinctPaths(paths map[string]string) error {
+	type namedPath struct {
+		name      string
+		path      string
+		canonical string
+		info      os.FileInfo
+	}
+	names := []string{"policy", "samples", "report", "audit"}
+	resolved := make([]namedPath, 0, len(names))
+	for _, name := range names {
+		value := paths[name]
+		canonical, err := canonicalFilePath(value)
+		if err != nil {
+			return fmt.Errorf("resolve %s path: %w", name, err)
+		}
+		info, err := os.Stat(value)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat %s path: %w", name, err)
+		}
+		resolved = append(resolved, namedPath{
+			name: name, path: value, canonical: canonical, info: info,
+		})
+	}
+	for i := range resolved {
+		for j := i + 1; j < len(resolved); j++ {
+			if i < 2 && j < 2 {
+				continue
+			}
+			same := resolved[i].canonical == resolved[j].canonical
+			if resolved[i].info != nil && resolved[j].info != nil {
+				same = same || os.SameFile(resolved[i].info, resolved[j].info)
+			}
+			if same {
+				return fmt.Errorf(
+					"%s and %s paths refer to the same file",
+					resolved[i].name,
+					resolved[j].name,
+				)
+			}
+		}
+	}
+	return nil
+}
+
+func canonicalFilePath(value string) (string, error) {
+	absolute, err := filepath.Abs(filepath.Clean(value))
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(absolute); err == nil {
+		return resolved, nil
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(absolute))
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(parent, filepath.Base(absolute)), nil
 }
 
 func flushAndCloseAudit(writer *bufio.Writer, closer io.Closer) error {
