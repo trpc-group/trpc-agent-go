@@ -100,7 +100,7 @@
       "baseline": "m1",
       "compared": "45b448ee4f1af21d74c9d83951e27787af6e9373b1a09adb548ee1fc1bac47bc",
       "allowed_diff": true,
-      "explanation": "memory services generate backend-specific IDs"
+      "explanation": "memory service assigns the canonical memory ID"
     },
     {
       "case": "memory",
@@ -109,7 +109,9 @@
       "locator": "memory[id=m1]",
       "field_path": "/memories/0/metadata/kind",
       "baseline": "preference",
-      "compared": null,
+      "compared": {
+        "$missing": true
+      },
       "allowed_diff": true,
       "explanation": "memory services do not persist this metadata field"
     },
@@ -120,7 +122,9 @@
       "locator": "memory[id=m1]",
       "field_path": "/memories/0/similarity",
       "baseline": 0.912,
-      "compared": null,
+      "compared": {
+        "$missing": true
+      },
       "allowed_diff": true,
       "explanation": "similarity is query-derived rather than persisted"
     },
@@ -144,7 +148,7 @@
       "baseline": "m1",
       "compared": "45b448ee4f1af21d74c9d83951e27787af6e9373b1a09adb548ee1fc1bac47bc",
       "allowed_diff": true,
-      "explanation": "memory services generate backend-specific IDs"
+      "explanation": "memory service assigns the canonical memory ID"
     },
     {
       "case": "memory",
@@ -153,7 +157,9 @@
       "locator": "memory[id=m1]",
       "field_path": "/memories/0/metadata/kind",
       "baseline": "preference",
-      "compared": null,
+      "compared": {
+        "$missing": true
+      },
       "allowed_diff": true,
       "explanation": "memory services do not persist this metadata field"
     },
@@ -164,7 +170,9 @@
       "locator": "memory[id=m1]",
       "field_path": "/memories/0/similarity",
       "baseline": 0.912,
-      "compared": null,
+      "compared": {
+        "$missing": true
+      },
       "allowed_diff": true,
       "explanation": "similarity is query-derived rather than persisted"
     },
@@ -266,7 +274,7 @@
         {
           "boundary": {
             "filter_key": "conversation",
-            "last_event_seq": 11,
+            "last_event_seq": 9,
             "version": 1
           },
           "filter_key": "conversation",
@@ -290,7 +298,7 @@
         {
           "boundary": {
             "filter_key": "conversation",
-            "last_event_seq": 11,
+            "last_event_seq": 9,
             "version": 1
           },
           "filter_key": "conversation",
@@ -310,7 +318,9 @@
       "session_id": "s8",
       "locator": "track",
       "field_path": "/state/tracks",
-      "baseline": null,
+      "baseline": {
+        "$missing": true
+      },
       "compared": [
         "tool/weather"
       ],
@@ -323,7 +333,9 @@
       "session_id": "s8",
       "locator": "track",
       "field_path": "/state/tracks",
-      "baseline": null,
+      "baseline": {
+        "$missing": true
+      },
       "compared": [
         "tool/weather"
       ],
@@ -336,7 +348,9 @@
       "session_id": "s8",
       "locator": "track[name=tool/weather]",
       "field_path": "/tracks/0/error",
-      "baseline": null,
+      "baseline": {
+        "$missing": true
+      },
       "compared": "timeout",
       "allowed_diff": false,
       "explanation": "normalized values differ"
@@ -347,7 +361,9 @@
       "session_id": "s8",
       "locator": "track[name=tool/weather]",
       "field_path": "/tracks/0/error",
-      "baseline": null,
+      "baseline": {
+        "$missing": true
+      },
       "compared": "timeout",
       "allowed_diff": false,
       "explanation": "normalized values differ"
@@ -356,142 +372,10 @@
       "case": "concurrent-order",
       "backend": "sqlite-services",
       "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/author",
-      "baseline": "agent-a",
-      "compared": "agent-b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/branch",
-      "baseline": "tool-a",
-      "compared": "tool-b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/content",
-      "baseline": "a",
-      "compared": "b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/author",
-      "baseline": "agent-b",
-      "compared": "agent-a",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/branch",
-      "baseline": "tool-b",
-      "compared": "tool-a",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/content",
-      "baseline": "b",
-      "compared": "a",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "sqlite-services",
-      "session_id": "s9",
       "locator": "event[seq=2]",
       "field_path": "/events/2/seq",
       "baseline": 2,
       "compared": 1,
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/author",
-      "baseline": "agent-a",
-      "compared": "agent-b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/branch",
-      "baseline": "tool-a",
-      "compared": "tool-b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/content",
-      "baseline": "a",
-      "compared": "b",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/author",
-      "baseline": "agent-b",
-      "compared": "agent-a",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/branch",
-      "baseline": "tool-b",
-      "compared": "tool-a",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "concurrent-order",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s9",
-      "locator": "event[seq=2]",
-      "field_path": "/events/2/content",
-      "baseline": "b",
-      "compared": "a",
       "allowed_diff": false,
       "explanation": "normalized values differ"
     },
@@ -515,7 +399,7 @@
       "baseline": "m10",
       "compared": "4d77bdba8dd7374c193330ac23d70ba818921dee589ec6fda0e59dbc9fab8c11",
       "allowed_diff": true,
-      "explanation": "memory services generate backend-specific IDs"
+      "explanation": "memory service assigns the canonical memory ID"
     },
     {
       "case": "retry-recovery",
@@ -533,53 +417,17 @@
       "backend": "sqlite-services",
       "session_id": "s10",
       "locator": "event[seq=1]",
-      "field_path": "/events/1/author",
-      "baseline": null,
-      "compared": "user",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/content",
-      "baseline": null,
-      "compared": "once",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/id",
-      "baseline": null,
-      "compared": "stable",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/role",
-      "baseline": null,
-      "compared": "user",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/seq",
-      "baseline": null,
-      "compared": 1,
+      "field_path": "/events/1",
+      "baseline": {
+        "$missing": true
+      },
+      "compared": {
+        "author": "user",
+        "content": "once",
+        "id": "stable",
+        "role": "user",
+        "seq": 1
+      },
       "allowed_diff": false,
       "explanation": "normalized values differ"
     },
@@ -592,7 +440,7 @@
       "baseline": "m10",
       "compared": "4d77bdba8dd7374c193330ac23d70ba818921dee589ec6fda0e59dbc9fab8c11",
       "allowed_diff": true,
-      "explanation": "memory services generate backend-specific IDs"
+      "explanation": "memory service assigns the canonical memory ID"
     },
     {
       "case": "retry-recovery",
@@ -610,53 +458,17 @@
       "backend": "inmemory-services-vs-sqlite-services",
       "session_id": "s10",
       "locator": "event[seq=1]",
-      "field_path": "/events/1/author",
-      "baseline": null,
-      "compared": "user",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/content",
-      "baseline": null,
-      "compared": "once",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/id",
-      "baseline": null,
-      "compared": "stable",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/role",
-      "baseline": null,
-      "compared": "user",
-      "allowed_diff": false,
-      "explanation": "normalized values differ"
-    },
-    {
-      "case": "retry-recovery",
-      "backend": "inmemory-services-vs-sqlite-services",
-      "session_id": "s10",
-      "locator": "event[seq=1]",
-      "field_path": "/events/1/seq",
-      "baseline": null,
-      "compared": 1,
+      "field_path": "/events/1",
+      "baseline": {
+        "$missing": true
+      },
+      "compared": {
+        "author": "user",
+        "content": "once",
+        "id": "stable",
+        "role": "user",
+        "seq": 1
+      },
       "allowed_diff": false,
       "explanation": "normalized values differ"
     }

@@ -43,7 +43,7 @@ func (s *deterministicSummarizer) set(text string) {
 	s.text = text
 	s.mu.Unlock()
 }
-func (s *deterministicSummarizer) ShouldSummarize(*frameworksession.Session) bool { return true }
+func (s *deterministicSummarizer) ShouldSummarize(*frameworksession.Session) bool { return false }
 func (s *deterministicSummarizer) Summarize(context.Context, *frameworksession.Session) (string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -144,7 +144,7 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 	// canonical ordering, so an exception cannot drift to a different element.
 	for index, item := range canonical.Memories {
 		prefix := fmt.Sprintf("/memories/%d", index)
-		b.unsupported[prefix+"/id"] = "memory services generate backend-specific IDs"
+		b.unsupported[prefix+"/id"] = memoryGeneratedIDCapability
 		if item.Scope != "user" {
 			b.unsupported[prefix+"/scope"] = "memory services persist user-scoped memories"
 		}
@@ -153,7 +153,7 @@ func (b *serviceBackend) Begin(input Snapshot) error {
 		}
 		for key := range item.Metadata {
 			if key != "topics" {
-				b.unsupported[prefix+"/metadata/"+key] = "memory services do not persist this metadata field"
+				b.unsupported[prefix+"/metadata/"+escapeJSONPointerToken(key)] = "memory services do not persist this metadata field"
 			}
 		}
 	}

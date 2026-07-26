@@ -87,6 +87,8 @@ type Backend interface {
 	Close() error
 }
 
+const memoryGeneratedIDCapability = "memory service assigns the canonical memory ID"
+
 func clone(v Snapshot) Snapshot {
 	data, _ := json.Marshal(v)
 	var out Snapshot
@@ -137,12 +139,7 @@ func Cases() []ReplayCase {
 			return s
 		}, "/memories/0/content", func(s *Snapshot) { s.Memories[0].Content = "likes coffee" }),
 		summaryUpdateCase(),
-		snapshotCase("summary-truncation", func() Snapshot {
-			s := base("s7", Event{Seq: 10, Author: "user", Role: "user", Content: "retained", FilterKey: "conversation"}, Event{Seq: 11, Author: "agent", Role: "assistant", Content: "new", FilterKey: "conversation"})
-			s.Summaries = []Summary{{ID: "sum2", SessionID: "s7", FilterKey: "conversation", Text: "events 1-9", Version: 1}}
-			s.Summaries[0].Boundary = expectedSummaryBoundary(s.Events, s.Summaries[0].FilterKey)
-			return s
-		}, "/summaries", func(s *Snapshot) { s.Summaries = nil }),
+		summaryTruncationCase(),
 		snapshotCase("track-events", func() Snapshot {
 			s := base("s8")
 			s.Tracks = []TrackEvent{{Name: "tool/weather", Type: "finish", InvocationID: "i1", DurationMS: 12.345}}
@@ -153,10 +150,57 @@ func Cases() []ReplayCase {
 	}
 }
 
+func summaryTruncationCase() ReplayCase {
+	build := func() Snapshot {
+		events := make([]Event, 0, 11)
+		for seq := 1; seq <= 9; seq++ {
+			events = append(events, Event{
+				Seq: seq, Author: "user", Role: "user",
+				Content: fmt.Sprintf("historical-%d", seq), FilterKey: "conversation",
+			})
+		}
+		events = append(events,
+			Event{Seq: 10, Author: "user", Role: "user", Content: "retained", FilterKey: "conversation"},
+			Event{Seq: 11, Author: "agent", Role: "assistant", Content: "new", FilterKey: "conversation"},
+		)
+		s := base("s7", events...)
+		s.Summaries = []Summary{{
+			ID: "sum2", SessionID: "s7", FilterKey: "conversation",
+			Text: "events 1-9", Version: 1,
+			Boundary: expectedSummaryBoundary(events[:9], "conversation"),
+		}}
+		return s
+	}
+	return ReplayCase{
+		Name: "summary-truncation", Expected: build, FaultPath: "/summaries",
+		Run: func(backend Backend) error {
+			expected := build()
+			if err := backend.Begin(expected); err != nil {
+				return err
+			}
+			for _, event := range expected.Events[:9] {
+				if err := backend.AppendEvent(event); err != nil {
+					return err
+				}
+			}
+			if err := backend.CreateSummary(expected.Summaries[0]); err != nil {
+				return err
+			}
+			for _, event := range expected.Events[9:] {
+				if err := backend.AppendEvent(event); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+		Mutate: func(s *Snapshot) { s.Summaries = nil },
+	}
+}
+
 func stateUpdateCase() ReplayCase {
 	build := func() Snapshot {
 		s := base("s4")
-		s.State = map[string]any{"count": 2, "keep": true}
+		s.State = map[string]any{"count": 2, "keep": true, "removed": nil}
 		return s
 	}
 	return ReplayCase{
@@ -230,19 +274,20 @@ func concurrentCase() ReplayCase {
 			if err := backend.AppendEvent(expected.Events[0]); err != nil {
 				return err
 			}
-			start := make(chan struct{})
 			errs := make(chan error, 2)
+			firstDone := make(chan struct{})
 			var wg sync.WaitGroup
-			for _, event := range expected.Events[1:] {
-				event := event
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					<-start
-					errs <- backend.AppendEvent(event)
-				}()
-			}
-			close(start)
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				defer close(firstDone)
+				errs <- backend.AppendEvent(expected.Events[1])
+			}()
+			go func() {
+				defer wg.Done()
+				<-firstDone
+				errs <- backend.AppendEvent(expected.Events[2])
+			}()
 			wg.Wait()
 			close(errs)
 			for err := range errs {
@@ -354,9 +399,6 @@ func Normalize(s Snapshot) Snapshot {
 		s.Events[i].Timestamp = ""
 	}
 	for i := range s.Memories {
-		if strings.HasPrefix(s.Memories[i].ID, "generated-") {
-			s.Memories[i].ID = ""
-		}
 		s.Memories[i].Similarity = float64(int(s.Memories[i].Similarity*1000+.5)) / 1000
 	}
 	for i := range s.Summaries {
@@ -366,7 +408,6 @@ func Normalize(s Snapshot) Snapshot {
 		s.Tracks[i].Timestamp = ""
 		s.Tracks[i].DurationMS = float64(int(s.Tracks[i].DurationMS + .5))
 	}
-	sort.SliceStable(s.Events, func(i, j int) bool { return s.Events[i].Seq < s.Events[j].Seq })
 	sort.Slice(s.Memories, func(i, j int) bool {
 		left, right := memoryStableKey(s.Memories[i]), memoryStableKey(s.Memories[j])
 		if left == right {
@@ -440,16 +481,28 @@ func Compare(caseName, backend string, a, b Snapshot) []Difference {
 }
 
 func CompareBackends(caseName, backend string, a, b Snapshot) []Difference {
-	unsupported := cloneStringMap(a.Unsupported)
-	if unsupported == nil {
-		unsupported = map[string]string{}
+	unsupported := map[string]string{}
+	for path, reason := range a.Unsupported {
+		if isExpectedOnlyCapability(path, reason) {
+			continue
+		}
+		unsupported[path] = reason
 	}
 	for path, reason := range b.Unsupported {
+		if isExpectedOnlyCapability(path, reason) {
+			continue
+		}
 		if _, exists := unsupported[path]; !exists {
 			unsupported[path] = reason
 		}
 	}
 	return compareWithCapabilities(caseName, backend, a, b, unsupported)
+}
+
+func isExpectedOnlyCapability(path, reason string) bool {
+	return reason == memoryGeneratedIDCapability &&
+		strings.HasPrefix(path, "/memories/") &&
+		strings.HasSuffix(path, "/id")
 }
 
 func compareWithCapabilities(caseName, backend string, a, b Snapshot, unsupported map[string]string) []Difference {
@@ -495,41 +548,13 @@ func walk(c, backend, sid, locator, path string, a, b any, unsupported map[strin
 		am, aok = map[string]any{}, true
 	}
 	if aok && bok {
-		keys := map[string]bool{}
-		for k := range am {
-			keys[k] = true
-		}
-		for k := range bm {
-			keys[k] = true
-		}
-		list := make([]string, 0, len(keys))
-		for k := range keys {
-			list = append(list, k)
-		}
-		sort.Strings(list)
-		for _, k := range list {
-			next := path + "/" + k
-			walk(c, backend, sid, identify(locator, k, am[k], bm[k]), next, am[k], bm[k], unsupported, out)
-		}
+		walkMaps(c, backend, sid, locator, path, am, bm, unsupported, out)
 		return
 	}
 	aa, aok := a.([]any)
 	bb, bok := b.([]any)
 	if aok && bok {
-		n := len(aa)
-		if len(bb) > n {
-			n = len(bb)
-		}
-		for i := 0; i < n; i++ {
-			var av, bv any
-			if i < len(aa) {
-				av = aa[i]
-			}
-			if i < len(bb) {
-				bv = bb[i]
-			}
-			walk(c, backend, sid, elementLocator(locator, i, av, bv), fmt.Sprintf("%s/%d", path, i), av, bv, unsupported, out)
-		}
+		walkSlices(c, backend, sid, locator, path, aa, bb, unsupported, out)
 		return
 	}
 	aj, _ := json.Marshal(a)
@@ -538,6 +563,98 @@ func walk(c, backend, sid, locator, path string, a, b any, unsupported map[strin
 		allowed, explanation := unsupportedDifference(path, unsupported)
 		*out = append(*out, Difference{Case: c, Backend: backend, SessionID: sid, Locator: locator, Path: path, Baseline: a, Compared: b, Allowed: allowed, Explanation: explanation})
 	}
+}
+
+func walkMaps(
+	c, backend, sid, locator, path string,
+	a, b map[string]any,
+	unsupported map[string]string,
+	out *[]Difference,
+) {
+	keys := map[string]bool{}
+	for key := range a {
+		keys[key] = true
+	}
+	for key := range b {
+		keys[key] = true
+	}
+	list := make([]string, 0, len(keys))
+	for key := range keys {
+		list = append(list, key)
+	}
+	sort.Strings(list)
+	for _, key := range list {
+		next := path + "/" + escapeJSONPointerToken(key)
+		av, aExists := a[key]
+		bv, bExists := b[key]
+		if !aExists || !bExists {
+			if nested, ok := av.(map[string]any); ok && len(nested) > 0 {
+				walk(c, backend, sid, identify(locator, key, av, bv), next, av, map[string]any{}, unsupported, out)
+				continue
+			}
+			if nested, ok := bv.(map[string]any); ok && len(nested) > 0 {
+				walk(c, backend, sid, identify(locator, key, av, bv), next, map[string]any{}, bv, unsupported, out)
+				continue
+			}
+			appendMissingDifference(c, backend, sid, identify(locator, key, av, bv), next, av, aExists, bv, bExists, unsupported, out)
+			continue
+		}
+		walk(c, backend, sid, identify(locator, key, av, bv), next, av, bv, unsupported, out)
+	}
+}
+
+func walkSlices(
+	c, backend, sid, locator, path string,
+	a, b []any,
+	unsupported map[string]string,
+	out *[]Difference,
+) {
+	length := len(a)
+	if len(b) > length {
+		length = len(b)
+	}
+	for index := 0; index < length; index++ {
+		var av, bv any
+		if index < len(a) {
+			av = a[index]
+		}
+		if index < len(b) {
+			bv = b[index]
+		}
+		next := fmt.Sprintf("%s/%d", path, index)
+		nextLocator := elementLocator(locator, index, av, bv)
+		if index >= len(a) || index >= len(b) {
+			appendMissingDifference(c, backend, sid, nextLocator, next, av, index < len(a), bv, index < len(b), unsupported, out)
+			continue
+		}
+		walk(c, backend, sid, nextLocator, next, av, bv, unsupported, out)
+	}
+}
+
+func appendMissingDifference(
+	c, backend, sid, locator, path string,
+	a any, aExists bool,
+	b any, bExists bool,
+	unsupported map[string]string,
+	out *[]Difference,
+) {
+	if !aExists {
+		a = map[string]any{"$missing": true}
+	}
+	if !bExists {
+		b = map[string]any{"$missing": true}
+	}
+	allowed, explanation := unsupportedDifference(path, unsupported)
+	*out = append(*out, Difference{
+		Case: c, Backend: backend, SessionID: sid, Locator: locator,
+		Path: path, Baseline: a, Compared: b,
+		Allowed: allowed, Explanation: explanation,
+	})
+}
+
+func escapeJSONPointerToken(value string) string {
+	value = strings.ReplaceAll(value, "~", "~0")
+	return strings.ReplaceAll(value, "/", "~1")
 }
 
 func unsupportedDifference(path string, unsupported map[string]string) (bool, string) {

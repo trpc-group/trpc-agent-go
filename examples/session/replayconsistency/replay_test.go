@@ -163,10 +163,41 @@ func TestNormalization(t *testing.T) {
 	b := clone(a)
 	a.Memories[0].Similarity = .91231
 	b.Memories[0].Similarity = .91239
-	a.Memories[0].ID = "generated-a"
-	b.Memories[0].ID = "generated-b"
 	if d := Compare("normalize", "json", a, b); len(d) > 0 {
 		t.Fatal(d)
+	}
+}
+
+func TestComparePreservesEventOrder(t *testing.T) {
+	a := base("event-order",
+		Event{Seq: 1, Role: "user", Content: "first"},
+		Event{Seq: 2, Role: "assistant", Content: "second"},
+	)
+	b := clone(a)
+	b.Events[0], b.Events[1] = b.Events[1], b.Events[0]
+	if diffs := Compare("event-order", "json", a, b); !hasNonAllowed(diffs) {
+		t.Fatalf("reordered transcript was normalized away: %+v", diffs)
+	}
+}
+
+func TestCompareDistinguishesMissingKeysFromNull(t *testing.T) {
+	a := base("missing-null")
+	a.State = map[string]any{
+		"removed": nil,
+		"nested":  map[string]any{"present": nil},
+	}
+	b := clone(a)
+	delete(b.State, "removed")
+	delete(b.State["nested"].(map[string]any), "present")
+	diffs := Compare("missing-null", "json", a, b)
+	paths := map[string]bool{}
+	for _, diff := range diffs {
+		paths[diff.Path] = true
+	}
+	for _, path := range []string{"/state/removed", "/state/nested/present"} {
+		if !paths[path] {
+			t.Fatalf("missing key and JSON null compared equal at %s: %+v", path, diffs)
+		}
 	}
 }
 
@@ -243,10 +274,21 @@ func TestZeroSequenceSummaryBoundaryIsRepresented(t *testing.T) {
 
 type recordingBackend struct {
 	Backend
-	updates []struct {
+	operations []string
+	updates    []struct {
 		key   string
 		value any
 	}
+}
+
+func (b *recordingBackend) AppendEvent(event Event) error {
+	b.operations = append(b.operations, fmt.Sprintf("event:%d", event.Seq))
+	return b.Backend.AppendEvent(event)
+}
+
+func (b *recordingBackend) CreateSummary(summary Summary) error {
+	b.operations = append(b.operations, "summary:"+summary.FilterKey)
+	return b.Backend.CreateSummary(summary)
 }
 
 func (b *recordingBackend) UpdateState(key string, value any) error {
@@ -257,7 +299,28 @@ func (b *recordingBackend) UpdateState(key string, value any) error {
 	return b.Backend.UpdateState(key, value)
 }
 
-func TestStateCaseExercisesDeletion(t *testing.T) {
+func TestSummaryTruncationCreatesSummaryBeforeRetainedEvents(t *testing.T) {
+	backend := &recordingBackend{Backend: NewInMemoryBackend()}
+	t.Cleanup(func() { _ = backend.Close() })
+	if err := summaryTruncationCase().Run(backend); err != nil {
+		t.Fatal(err)
+	}
+	summaryIndex := -1
+	retainedIndex := -1
+	for index, operation := range backend.operations {
+		switch operation {
+		case "summary:conversation":
+			summaryIndex = index
+		case "event:10":
+			retainedIndex = index
+		}
+	}
+	if summaryIndex < 0 || retainedIndex < 0 || summaryIndex >= retainedIndex {
+		t.Fatalf("summary was not created before retained events: %v", backend.operations)
+	}
+}
+
+func TestStateCaseExercisesExplicitNull(t *testing.T) {
 	backend := &recordingBackend{Backend: NewInMemoryBackend()}
 	t.Cleanup(func() { _ = backend.Close() })
 	if err := stateUpdateCase().Run(backend); err != nil {
@@ -268,7 +331,7 @@ func TestStateCaseExercisesDeletion(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("state replay case did not exercise deletion: %+v", backend.updates)
+	t.Fatalf("state replay case did not exercise explicit null: %+v", backend.updates)
 }
 
 func TestUnsupportedCapabilityMarksMatchingDiffAllowed(t *testing.T) {
@@ -366,6 +429,40 @@ func TestMetadataAllowanceDoesNotCoverPersistedTopics(t *testing.T) {
 	}
 }
 
+func TestCapabilityPathsEscapeMetadataKeys(t *testing.T) {
+	backend := NewInMemoryBackend()
+	t.Cleanup(func() { _ = backend.Close() })
+	fixture := base("escaped-capability")
+	fixture.Memories = []Memory{{
+		Content: "memory", Scope: "user",
+		Metadata: map[string]any{
+			"topics":   []string{"kept"},
+			"topics/0": "private",
+		},
+	}}
+	if err := ReplaySnapshot(backend, fixture); err != nil {
+		t.Fatal(err)
+	}
+	got, err := backend.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	got.Memories[0].Metadata["topics"] = []string{"changed"}
+	diffs := Compare("escaped-capability", backend.Name(), fixture, got)
+	var privateAllowed, topicRejected bool
+	for _, diff := range diffs {
+		switch diff.Path {
+		case "/memories/0/metadata/topics~10":
+			privateAllowed = diff.Allowed
+		case "/memories/0/metadata/topics/0":
+			topicRejected = !diff.Allowed
+		}
+	}
+	if !privateAllowed || !topicRejected {
+		t.Fatalf("escaped capability path covered persisted topic: %+v", diffs)
+	}
+}
+
 func TestUnexpectedStateIsNotErased(t *testing.T) {
 	backend := NewInMemoryBackend()
 	t.Cleanup(func() { _ = backend.Close() })
@@ -390,7 +487,7 @@ func TestSummaryBoundaryMutationIsDetected(t *testing.T) {
 	fixture := Cases()[6].Expected()
 	backend := NewInMemoryBackend()
 	t.Cleanup(func() { _ = backend.Close() })
-	if err := ReplaySnapshot(backend, fixture); err != nil {
+	if err := summaryTruncationCase().Run(backend); err != nil {
 		t.Fatal(err)
 	}
 	got, err := backend.Load()
@@ -450,6 +547,22 @@ func TestBackendCapabilityComparisonIsSymmetric(t *testing.T) {
 		if len(diffs) != 1 || !diffs[0].Allowed {
 			t.Fatalf("capability handling depends on argument order: %+v", diffs)
 		}
+	}
+}
+
+func TestCompareBackendsChecksCanonicalMemoryIDs(t *testing.T) {
+	left := base("memory-id")
+	left.Memories = []Memory{{ID: "canonical-a", Content: "memory", Scope: "user"}}
+	left.Unsupported = map[string]string{
+		"/memories/0/id": memoryGeneratedIDCapability,
+	}
+	right := clone(left)
+	right.Memories[0].ID = "canonical-b"
+	if diffs := Compare("memory-id", "service", left, right); len(diffs) != 1 || !diffs[0].Allowed {
+		t.Fatalf("expected-to-service generated ID difference was not allowed: %+v", diffs)
+	}
+	if diffs := CompareBackends("memory-id", "service-pair", left, right); len(diffs) != 1 || diffs[0].Allowed {
+		t.Fatalf("cross-backend canonical ID difference was hidden: %+v", diffs)
 	}
 }
 
