@@ -14,13 +14,86 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/examples/evaluation/promptiter/regressionloop/internal/config"
 )
+
+func TestNewRejectsNullFixtureEntries(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    func(*config.Config) string
+		payload func(*config.Config) any
+		wantErr string
+	}{
+		{
+			name: "eval case", file: func(cfg *config.Config) string { return cfg.Evaluation.TrainFile },
+			payload: func(cfg *config.Config) any {
+				return map[string]any{"evalSetId": cfg.Evaluation.TrainEvalSetID, "evalCases": []any{nil}}
+			},
+			wantErr: "null case at index 0",
+		},
+		{
+			name: "metric", file: func(cfg *config.Config) string { return cfg.Evaluation.MetricsFile },
+			payload: func(*config.Config) any { return []any{nil} }, wantErr: "null metric at index 0",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			baseDir, cfg := copyFixture(t)
+			payload, err := json.Marshal(test.payload(cfg))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(baseDir, test.file(cfg)), payload, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			baseline, err := os.ReadFile(filepath.Join(baseDir, cfg.Prompt.SourceFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			environment, err := New(context.Background(), baseDir, string(baseline), cfg)
+			if environment != nil {
+				_ = environment.Close()
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("New() error = %v, want substring %q", err, test.wantErr)
+			}
+		})
+	}
+}
+
+func TestAdaptEvaluationResultPreservesSparseExpectedInvocations(t *testing.T) {
+	actual := &evalset.Invocation{InvocationID: "actual"}
+	expected := &evalset.Invocation{InvocationID: "expected"}
+	result, err := adaptEvaluationResult("set", &evaluation.EvaluationResult{EvalCases: []*evaluation.EvaluationCaseResult{{
+		EvalCaseID: "case",
+		RunDetails: []*evaluation.EvaluationCaseRunDetails{{Inference: &evaluation.EvaluationInferenceDetails{
+			Inferences: []*evalset.Invocation{nil, nil, actual},
+		}}},
+		EvalCaseResults: []*evalresult.EvalCaseResult{{EvalMetricResultPerInvocation: []*evalresult.EvalMetricResultPerInvocation{
+			nil, {}, {ExpectedInvocation: expected},
+		}}},
+		MetricResults: []*evalresult.EvalMetricResult{{MetricName: "quality", Score: 1, EvalStatus: status.EvalStatusPassed}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := result.EvalSets[0].Cases[0]
+	if len(got.ActualInvocations) != 3 || got.ActualInvocations[0] != nil || got.ActualInvocations[1] != nil || got.ActualInvocations[2] != actual {
+		t.Fatalf("actual invocation evidence = %#v", got.ActualInvocations)
+	}
+	if len(got.ExpectedInvocations) != 3 || got.ExpectedInvocations[0] != nil || got.ExpectedInvocations[1] != nil || got.ExpectedInvocations[2] != expected {
+		t.Fatalf("expected invocation evidence = %#v", got.ExpectedInvocations)
+	}
+}
 
 func TestFileInputsDriveActualMetricResults(t *testing.T) {
 	baseDir, cfg := copyFixture(t)

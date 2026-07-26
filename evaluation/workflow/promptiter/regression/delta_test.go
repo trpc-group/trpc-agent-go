@@ -42,6 +42,31 @@ func TestCompareAllTransitions(t *testing.T) {
 	}
 }
 
+func TestComparePreservesEvalSetIdentityForDuplicateCaseIDs(t *testing.T) {
+	baseline := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{
+		{EvalSetID: "set-a", Cases: []engine.CaseResult{{EvalCaseID: "shared", Metrics: []engine.MetricResult{{MetricName: "quality", Score: 1, Status: status.EvalStatusPassed}}}}},
+		{EvalSetID: "set-b", Cases: []engine.CaseResult{{EvalCaseID: "shared", Metrics: []engine.MetricResult{{MetricName: "quality", Score: 0, Status: status.EvalStatusFailed}}}}},
+	}}
+	candidate := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{
+		{EvalSetID: "set-a", Cases: []engine.CaseResult{{EvalCaseID: "shared", Metrics: []engine.MetricResult{{MetricName: "quality", Score: 0, Status: status.EvalStatusFailed}}}}},
+		{EvalSetID: "set-b", Cases: []engine.CaseResult{{EvalCaseID: "shared", Metrics: []engine.MetricResult{{MetricName: "quality", Score: 1, Status: status.EvalStatusPassed}}}}},
+	}}
+
+	got := Compare(baseline, candidate)
+	if len(got.PerCase) != 2 {
+		t.Fatalf("per-case deltas = %#v, want two eval-set-qualified entries", got.PerCase)
+	}
+	want := map[string]Transition{"set-a": TransitionNewlyFailed, "set-b": TransitionNewlyPassed}
+	for _, item := range got.PerCase {
+		if item.CaseID != "shared" || item.Transition != want[item.EvalSetID] {
+			t.Errorf("unexpected qualified case delta: %#v", item)
+		}
+	}
+	if len(got.NewlyFailed) != 1 || len(got.NewlyPassed) != 1 {
+		t.Fatalf("aggregate transitions lost duplicate case identities: %#v", got)
+	}
+}
+
 type testCaseState struct {
 	score float64
 	pass  bool

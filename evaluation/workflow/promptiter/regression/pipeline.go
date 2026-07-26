@@ -97,10 +97,15 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 	releasedProfile := initialProfile
 	hasReleasedCandidate := false
 	baselineRef := ""
+	baselineArtifacts := ArtifactReferences{}
 	if options.Config.SaveArtifacts {
 		baselineRef = options.Config.BaselineProfileRef
 		if baselineRef == "" {
 			baselineRef = "baseline/input_profile.json"
+		}
+		baselineArtifacts = ArtifactReferences{
+			InputProfile: baselineRef, TrainEvaluation: "baseline/train_evaluation.json",
+			ValidationEvaluation: "baseline/validation_evaluation.json",
 		}
 	}
 	releasedRef := baselineRef
@@ -154,7 +159,7 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 			initialTrain = round.Train
 			releasedTrain = initialTrain
 			releasedValidation = initialValidation
-			if err := persistBaseline(options, initialTrain, initialValidation); err != nil {
+			if err := persistBaseline(options, baselineArtifacts, initialTrain, initialValidation); err != nil {
 				return nil, err
 			}
 		}
@@ -242,10 +247,6 @@ func Run(ctx context.Context, options Options) (*Report, error) {
 	}
 	finished := now()
 	totalMeasurement := options.Meter.Total()
-	baselineArtifacts := ArtifactReferences{}
-	if options.Config.SaveArtifacts {
-		baselineArtifacts = ArtifactReferences{InputProfile: "baseline/input_profile.json", TrainEvaluation: "baseline/train_evaluation.json", ValidationEvaluation: "baseline/validation_evaluation.json"}
-	}
 	baseline := BaselineSnapshot{
 		Train:      summarizeEvaluationWithResources(initialTrain, initialTrainMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
 		Validation: summarizeEvaluationWithResources(initialValidation, initialValidationMeasurement, options.Config.EstimatedCost, options.Config.ExpectedAgentName, options.Config.ExpectedAgentNames),
@@ -335,17 +336,17 @@ func validateOptions(options Options) error {
 	return nil
 }
 
-func persistBaseline(options Options, train, validation *engine.EvaluationResult) error {
+func persistBaseline(options Options, references ArtifactReferences, train, validation *engine.EvaluationResult) error {
 	if !options.Config.SaveArtifacts {
 		return nil
 	}
-	if err := writeJSON(options.Artifacts, "baseline/input_profile.json", options.InitialProfile); err != nil {
+	if err := writeJSON(options.Artifacts, references.InputProfile, options.InitialProfile); err != nil {
 		return err
 	}
-	if err := writeJSON(options.Artifacts, "baseline/train_evaluation.json", train); err != nil {
+	if err := writeJSON(options.Artifacts, references.TrainEvaluation, train); err != nil {
 		return err
 	}
-	return writeJSON(options.Artifacts, "baseline/validation_evaluation.json", validation)
+	return writeJSON(options.Artifacts, references.ValidationEvaluation, validation)
 }
 
 func persistRound(options Options, round int, input, candidate *promptiter.Profile, train, validation *engine.EvaluationResult, delta DeltaBundle, decision GateDecision) error {

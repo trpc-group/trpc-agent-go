@@ -64,6 +64,39 @@ func TestRunSeparatesPromptIterAcceptanceFromReleaseGate(t *testing.T) {
 	}
 }
 
+func TestRunPersistsCustomBaselineProfileReference(t *testing.T) {
+	initial := testProfile("initial")
+	candidate := testProfile("candidate")
+	artifacts := &memoryArtifacts{files: map[string][]byte{}}
+	report, err := Run(context.Background(), Options{
+		Config: Config{
+			TrainEvalSetID: "train", ValidationEvalSetID: "validation", TargetSurfaceIDs: []string{"agent#instruction"},
+			MaxRounds: 1, MaxRoundsWithoutRelease: 1, SaveArtifacts: true,
+			BaselineProfileRef: "profiles/custom_baseline.json",
+			ReleaseGate:        GatePolicy{MinValidationScoreGain: 0.1, RequireCompleteEvaluation: true},
+		},
+		Engine:    &pipelineEngine{result: pipelineRunResult(0.8, 0.8, 0.7, candidate)},
+		Evaluator: pipelineEvaluator{result: pipelineEvaluation(0.7, status.EvalStatusPassed)}, Meter: pipelineMeter{},
+		InitialProfile: initial, Artifacts: artifacts,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const customRef = "profiles/custom_baseline.json"
+	if report.Rounds[0].ReleaseGate.Accepted {
+		t.Fatal("candidate unexpectedly passed the release gate")
+	}
+	if report.Baseline.Artifacts.InputProfile != customRef || report.WriteBack.AcceptedProfileRef != customRef {
+		t.Fatalf("custom baseline references are inconsistent: baseline=%#v writeBack=%#v", report.Baseline.Artifacts, report.WriteBack)
+	}
+	if _, ok := artifacts.files[customRef]; !ok {
+		t.Fatalf("custom baseline profile was not persisted: %#v", artifacts.files)
+	}
+	if _, ok := artifacts.files["baseline/input_profile.json"]; ok {
+		t.Fatal("default baseline profile was persisted alongside custom reference")
+	}
+}
+
 func TestReleaseGateUsesLastReleasedBaseline(t *testing.T) {
 	report, requests := runLastReleasedBaselineScenario(t)
 	if len(report.Rounds) != 3 {
@@ -291,7 +324,7 @@ func TestMeasurementDeltaAndDisabledArtifactPersistence(t *testing.T) {
 	}
 	artifacts := &memoryArtifacts{files: map[string][]byte{}}
 	options := Options{Config: Config{SaveArtifacts: false}, Artifacts: artifacts}
-	if err := persistBaseline(options, nil, nil); err != nil {
+	if err := persistBaseline(options, ArtifactReferences{}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := persistRound(options, 1, nil, nil, nil, nil, DeltaBundle{}, GateDecision{}); err != nil {

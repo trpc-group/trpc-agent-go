@@ -196,14 +196,18 @@ func summarizeTrace(trace *atrace.Trace) []TraceStep {
 func summarizeTools(evalCase engine.CaseResult) ToolEvidence {
 	evidence := ToolEvidence{}
 	for _, invocation := range evalCase.ActualInvocations {
-		if invocation != nil {
-			evidence.Actual = append(evidence.Actual, invocation.Tools)
+		if invocation == nil {
+			evidence.Actual = append(evidence.Actual, nil)
+			continue
 		}
+		evidence.Actual = append(evidence.Actual, invocation.Tools)
 	}
 	for _, invocation := range evalCase.ExpectedInvocations {
-		if invocation != nil {
-			evidence.Expected = append(evidence.Expected, invocation.Tools)
+		if invocation == nil {
+			evidence.Expected = append(evidence.Expected, nil)
+			continue
 		}
+		evidence.Expected = append(evidence.Expected, invocation.Tools)
 	}
 	return evidence
 }
@@ -238,10 +242,10 @@ func Markdown(value *Report) []byte {
 		fmt.Fprintf(&out, "Validation score delta vs initial: `%+.4f`; vs search input: `%+.4f`; vs last released: `%+.4f`.\n\n", round.Delta.AgainstInitial.ScoreDelta, round.Delta.AgainstRoundInput.ScoreDelta, round.Delta.AgainstLastReleased.ScoreDelta)
 		fmt.Fprintln(&out, "Validation comparison against last released profile:")
 		fmt.Fprintln(&out)
-		fmt.Fprintln(&out, "| Case | Baseline | Candidate | Delta | Transition |")
-		fmt.Fprintln(&out, "|---|---:|---:|---:|---|")
+		fmt.Fprintln(&out, "| Eval set | Case | Baseline | Candidate | Delta | Transition |")
+		fmt.Fprintln(&out, "|---|---|---:|---:|---:|---|")
 		for _, item := range round.Delta.AgainstLastReleased.PerCase {
-			fmt.Fprintf(&out, "| %s | %.4f | %.4f | %+.4f | %s |\n", item.CaseID, item.BaselineScore, item.CandidateScore, item.ScoreDelta, item.Transition)
+			fmt.Fprintf(&out, "| %s | %s | %.4f | %.4f | %+.4f | %s |\n", item.EvalSetID, item.CaseID, item.BaselineScore, item.CandidateScore, item.ScoreDelta, item.Transition)
 		}
 		fmt.Fprintln(&out, "\nResource comparison against last released profile:")
 		fmt.Fprintln(&out, "\n| Set | Side | Model calls | Tool calls | Case runs | Latency | Cost |")

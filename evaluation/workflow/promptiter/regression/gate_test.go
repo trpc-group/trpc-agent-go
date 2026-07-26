@@ -65,6 +65,19 @@ func TestDecideCriticalCasesAndAllReasons(t *testing.T) {
 	}
 }
 
+func TestDecideChecksDuplicateCriticalCaseIDsAcrossEvalSets(t *testing.T) {
+	input := validGateInput()
+	input.ValidationDelta.PerCase = []CaseDelta{
+		{EvalSetID: "set-a", CaseID: "must", CandidatePass: true},
+		{EvalSetID: "set-b", CaseID: "must", CandidatePass: false},
+	}
+	decision := Decide(GatePolicy{
+		CriticalCases:        []CriticalCasePolicy{{CaseID: "must", MustPass: true}},
+		MaxModelCallIncrease: 100, MaxToolCallIncrease: 100, MaxLatencyIncrease: 100, MaxCostIncrease: 100,
+	}, input)
+	assertGateReason(t, decision, "critical_case_regression:must")
+}
+
 func TestModelCallBudgetRejectsCandidate(t *testing.T) {
 	input := validGateInput()
 	input.CandidateUsage.ModelCalls = input.InputUsage.ModelCalls + 2

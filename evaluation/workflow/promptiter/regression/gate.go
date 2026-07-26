@@ -93,14 +93,20 @@ func Decide(policy GatePolicy, input GateInput) GateDecision {
 		add("validationRegression", validationDelta >= -epsilon,
 			fmt.Sprintf("validation delta %.4f", validationDelta), "validation_regression")
 	}
-	caseIndex := make(map[string]CaseDelta, len(input.ValidationDelta.PerCase))
+	caseIndex := make(map[string][]CaseDelta, len(input.ValidationDelta.PerCase))
 	for _, item := range input.ValidationDelta.PerCase {
-		caseIndex[item.CaseID] = item
+		caseIndex[item.CaseID] = append(caseIndex[item.CaseID], item)
 	}
 	criticalOK := true
 	for _, critical := range policy.CriticalCases {
-		item, ok := caseIndex[critical.CaseID]
-		failed := !ok || critical.MustPass && !item.CandidatePass || ok && item.ScoreDelta < -critical.MaxScoreDrop-epsilon
+		items := caseIndex[critical.CaseID]
+		failed := len(items) == 0
+		for _, item := range items {
+			if critical.MustPass && !item.CandidatePass || item.ScoreDelta < -critical.MaxScoreDrop-epsilon {
+				failed = true
+				break
+			}
+		}
 		if failed {
 			criticalOK = false
 			decision.Reasons = append(decision.Reasons, "critical_case_regression:"+critical.CaseID)

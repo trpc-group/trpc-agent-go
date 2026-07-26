@@ -31,8 +31,9 @@ const (
 	TransitionRegressed     Transition = "regressed"
 )
 
-// CaseDelta records one case's score and pass-state change.
+// CaseDelta records one eval-set-qualified case's score and pass-state change.
 type CaseDelta struct {
+	EvalSetID      string     `json:"evalSetId"`
 	CaseID         string     `json:"caseId"`
 	BaselinePass   bool       `json:"baselinePass"`
 	CandidatePass  bool       `json:"candidatePass"`
@@ -56,22 +57,32 @@ type caseState struct {
 	score   float64
 }
 
+type caseKey struct {
+	evalSetID string
+	caseID    string
+}
+
 // Compare computes candidate changes against a baseline evaluation.
 func Compare(baseline, candidate *engine.EvaluationResult) Delta {
 	baselineCases := caseStates(baseline)
 	candidateCases := caseStates(candidate)
-	ids := make(map[string]struct{}, len(baselineCases)+len(candidateCases))
+	ids := make(map[caseKey]struct{}, len(baselineCases)+len(candidateCases))
 	for id := range baselineCases {
 		ids[id] = struct{}{}
 	}
 	for id := range candidateCases {
 		ids[id] = struct{}{}
 	}
-	caseIDs := make([]string, 0, len(ids))
+	caseIDs := make([]caseKey, 0, len(ids))
 	for id := range ids {
 		caseIDs = append(caseIDs, id)
 	}
-	sort.Strings(caseIDs)
+	sort.Slice(caseIDs, func(i, j int) bool {
+		if caseIDs[i].evalSetID != caseIDs[j].evalSetID {
+			return caseIDs[i].evalSetID < caseIDs[j].evalSetID
+		}
+		return caseIDs[i].caseID < caseIDs[j].caseID
+	})
 	result := Delta{NewlyPassed: []string{}, NewlyFailed: []string{}, PerCase: make([]CaseDelta, 0, len(caseIDs))}
 	if baseline != nil && candidate != nil {
 		result.ScoreDelta = candidate.OverallScore - baseline.OverallScore
@@ -80,16 +91,16 @@ func Compare(baseline, candidate *engine.EvaluationResult) Delta {
 		before := baselineCases[id]
 		after := candidateCases[id]
 		item := CaseDelta{
-			CaseID: id, BaselinePass: before.pass, CandidatePass: after.pass,
+			EvalSetID: id.evalSetID, CaseID: id.caseID, BaselinePass: before.pass, CandidatePass: after.pass,
 			BaselineScore: before.score, CandidateScore: after.score, ScoreDelta: after.score - before.score,
 		}
 		switch {
 		case !before.pass && after.pass:
 			item.Transition = TransitionNewlyPassed
-			result.NewlyPassed = append(result.NewlyPassed, id)
+			result.NewlyPassed = append(result.NewlyPassed, id.caseID)
 		case before.pass && !after.pass:
 			item.Transition = TransitionNewlyFailed
-			result.NewlyFailed = append(result.NewlyFailed, id)
+			result.NewlyFailed = append(result.NewlyFailed, id.caseID)
 		case item.ScoreDelta > 0:
 			item.Transition = TransitionImproved
 		case item.ScoreDelta < 0:
@@ -104,8 +115,8 @@ func Compare(baseline, candidate *engine.EvaluationResult) Delta {
 	return result
 }
 
-func caseStates(result *engine.EvaluationResult) map[string]caseState {
-	states := make(map[string]caseState)
+func caseStates(result *engine.EvaluationResult) map[caseKey]caseState {
+	states := make(map[caseKey]caseState)
 	if result == nil {
 		return states
 	}
@@ -125,7 +136,11 @@ func caseStates(result *engine.EvaluationResult) map[string]caseState {
 			if evaluated > 0 {
 				state.score /= float64(evaluated)
 			}
-			states[evalCase.EvalCaseID] = state
+			evalSetID := evalCase.EvalSetID
+			if evalSetID == "" {
+				evalSetID = evalSet.EvalSetID
+			}
+			states[caseKey{evalSetID: evalSetID, caseID: evalCase.EvalCaseID}] = state
 		}
 	}
 	return states

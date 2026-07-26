@@ -115,6 +115,26 @@ func TestAttributeFailuresAlwaysExplainsFailedCase(t *testing.T) {
 	}
 }
 
+func TestAttributeFailuresExplainsIncompleteMetricStatuses(t *testing.T) {
+	result := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{{Cases: []engine.CaseResult{
+		{EvalCaseID: "unknown", Metrics: []engine.MetricResult{{MetricName: "quality", Status: status.EvalStatusUnknown}}},
+		{EvalCaseID: "not-evaluated", Metrics: []engine.MetricResult{{MetricName: "quality", Status: status.EvalStatusNotEvaluated}}},
+	}}}}
+	got := AttributeFailures(result, AttributionOptions{})
+	if len(got) != 2 {
+		t.Fatalf("incomplete attributions = %#v, want two cases", got)
+	}
+	for _, item := range got {
+		if len(item.Reasons) != 1 || item.Reasons[0].Code != FailureEvaluationIncomplete || item.Reasons[0].Metric != "quality" {
+			t.Errorf("incomplete attribution for %q = %#v", item.CaseID, item.Reasons)
+		}
+	}
+	stats := failureStats(SummarizeEvaluation(result, got))
+	if stats[FailureEvaluationIncomplete] != 2 {
+		t.Fatalf("incomplete attribution stats = %#v", stats)
+	}
+}
+
 func TestAttributeFailuresUsesDefaultExpectedAgentWithCaseOverride(t *testing.T) {
 	result := &engine.EvaluationResult{EvalSets: []engine.EvalSetResult{{Cases: []engine.CaseResult{
 		{EvalCaseID: "default", Trace: &atrace.Trace{Steps: []atrace.Step{{AgentName: "wrong"}}}, Metrics: []engine.MetricResult{{MetricName: "quality", Status: status.EvalStatusFailed}}},

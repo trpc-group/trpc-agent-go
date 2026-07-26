@@ -205,6 +205,11 @@ func readEvalSet(path string) (*evalset.EvalSet, error) {
 	if value.EvalSetID == "" || len(value.EvalCases) == 0 {
 		return nil, fmt.Errorf("evalset %q has no id or cases", path)
 	}
+	for i, evalCase := range value.EvalCases {
+		if evalCase == nil {
+			return nil, fmt.Errorf("evalset %q has null case at index %d", path, i)
+		}
+	}
 	return &value, nil
 }
 
@@ -219,6 +224,11 @@ func readMetrics(path string) ([]*metric.EvalMetric, error) {
 	}
 	if len(value) == 0 {
 		return nil, fmt.Errorf("metrics %q is empty", path)
+	}
+	for i, evalMetric := range value {
+		if evalMetric == nil {
+			return nil, fmt.Errorf("metrics %q has null metric at index %d", path, i)
+		}
 	}
 	return value, nil
 }
@@ -392,10 +402,17 @@ func adaptEvaluationResult(evalSetID string, result *evaluation.EvaluationResult
 			}
 		}
 		if len(evalCase.EvalCaseResults) > 0 && evalCase.EvalCaseResults[0] != nil {
-			for _, perInvocation := range evalCase.EvalCaseResults[0].EvalMetricResultPerInvocation {
+			perInvocations := evalCase.EvalCaseResults[0].EvalMetricResultPerInvocation
+			expected := make([]*evalset.Invocation, len(perInvocations))
+			hasExpected := false
+			for i, perInvocation := range perInvocations {
 				if perInvocation != nil && perInvocation.ExpectedInvocation != nil {
-					item.ExpectedInvocations = append(item.ExpectedInvocations, perInvocation.ExpectedInvocation)
+					expected[i] = perInvocation.ExpectedInvocation
+					hasExpected = true
 				}
+			}
+			if hasExpected {
+				item.ExpectedInvocations = expected
 			}
 		}
 		for _, metricResult := range evalCase.MetricResults {

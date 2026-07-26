@@ -32,6 +32,9 @@ const (
 	FailureKnowledgeGap          = "knowledge_gap"
 	FailureExecutionError        = "execution_error"
 	FailureEvaluationMismatch    = "evaluation_mismatch"
+	// FailureEvaluationIncomplete identifies a metric that did not produce a
+	// definitive passed or failed status.
+	FailureEvaluationIncomplete = "evaluation_incomplete"
 )
 
 // FailureReason is one structured, explainable failure attribution.
@@ -76,13 +79,21 @@ func AttributeFailures(result *engine.EvaluationResult, options AttributionOptio
 }
 
 func attributeCase(evalCase engine.CaseResult, expectedAgent string) []FailureReason {
+	if len(evalCase.Metrics) == 0 {
+		return []FailureReason{{Code: FailureEvaluationIncomplete, Message: "evaluation case has no metric results"}}
+	}
 	failedMetrics := make([]engine.MetricResult, 0)
+	incompleteMetrics := make([]engine.MetricResult, 0)
 	for _, metric := range evalCase.Metrics {
-		if metric.Status == status.EvalStatusFailed {
+		switch metric.Status {
+		case status.EvalStatusFailed:
 			failedMetrics = append(failedMetrics, metric)
+		case status.EvalStatusPassed:
+		default:
+			incompleteMetrics = append(incompleteMetrics, metric)
 		}
 	}
-	if len(failedMetrics) == 0 {
+	if len(failedMetrics) == 0 && len(incompleteMetrics) == 0 {
 		return nil
 	}
 	reasons := structuredInvocationReasons(evalCase, failedMetrics)
@@ -106,6 +117,12 @@ func attributeCase(evalCase engine.CaseResult, expectedAgent string) []FailureRe
 		code, message := classifyMetric(metric.MetricName, metric.Reason)
 		reasons = append(reasons, FailureReason{Code: code, Message: message, Metric: metric.MetricName})
 	}
+	for _, metric := range incompleteMetrics {
+		reasons = append(reasons, FailureReason{
+			Code: FailureEvaluationIncomplete, Metric: metric.MetricName,
+			Message: fmt.Sprintf("metric %q has incomplete status %q", metric.MetricName, metric.Status),
+		})
+	}
 	reasons = deduplicateReasons(reasons)
 	if len(reasons) == 0 {
 		return []FailureReason{{Code: FailureEvaluationMismatch, Message: "evaluation failed without a specific structured signal"}}
@@ -121,6 +138,9 @@ func structuredInvocationReasons(evalCase engine.CaseResult, failed []engine.Met
 	reasons := make([]FailureReason, 0)
 	for i := 0; i < count; i++ {
 		actual, expected := evalCase.ActualInvocations[i], evalCase.ExpectedInvocations[i]
+		if actual == nil && expected == nil {
+			continue
+		}
 		if metricFailed(failed, "final", "response", "rouge") && !messagesEqual(actual, expected) {
 			reasons = append(reasons, FailureReason{Code: FailureFinalResponseMismatch, Message: "actual final response differs from the expected response"})
 		}

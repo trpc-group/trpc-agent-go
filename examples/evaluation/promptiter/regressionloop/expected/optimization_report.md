@@ -26,11 +26,11 @@ Validation score delta vs initial: `+0.2222`; vs search input: `+0.2222`; vs las
 
 Validation comparison against last released profile:
 
-| Case | Baseline | Candidate | Delta | Transition |
-|---|---:|---:|---:|---|
-| val-01 | 0.6667 | 1.0000 | +0.3333 | newly_passed |
-| val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
-| val-03 | 0.6667 | 1.0000 | +0.3333 | newly_passed |
+| Eval set | Case | Baseline | Candidate | Delta | Transition |
+|---|---|---:|---:|---:|---|
+| recap-validation | val-01 | 0.6667 | 1.0000 | +0.3333 | newly_passed |
+| recap-validation | val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| recap-validation | val-03 | 0.6667 | 1.0000 | +0.3333 | newly_passed |
 
 Resource comparison against last released profile:
 
@@ -55,11 +55,11 @@ Validation score delta vs initial: `+0.2222`; vs search input: `+0.0000`; vs las
 
 Validation comparison against last released profile:
 
-| Case | Baseline | Candidate | Delta | Transition |
-|---|---:|---:|---:|---|
-| val-01 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
-| val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
-| val-03 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| Eval set | Case | Baseline | Candidate | Delta | Transition |
+|---|---|---:|---:|---:|---|
+| recap-validation | val-01 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| recap-validation | val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| recap-validation | val-03 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
 
 Resource comparison against last released profile:
 
@@ -84,11 +84,11 @@ Validation score delta vs initial: `+0.1111`; vs search input: `-0.1111`; vs las
 
 Validation comparison against last released profile:
 
-| Case | Baseline | Candidate | Delta | Transition |
-|---|---:|---:|---:|---|
-| val-01 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
-| val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
-| val-03 | 1.0000 | 0.6667 | -0.3333 | newly_failed |
+| Eval set | Case | Baseline | Candidate | Delta | Transition |
+|---|---|---:|---:|---:|---|
+| recap-validation | val-01 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| recap-validation | val-02 | 1.0000 | 1.0000 | +0.0000 | unchanged_pass |
+| recap-validation | val-03 | 1.0000 | 0.6667 | -0.3333 | newly_failed |
 
 Resource comparison against last released profile:
 

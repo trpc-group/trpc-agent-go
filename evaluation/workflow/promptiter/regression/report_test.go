@@ -67,7 +67,8 @@ func TestSummarizeEvaluationIncludesTraceAndToolEvidence(t *testing.T) {
 	if len(summary.PerCase) != 1 || len(summary.PerCase[0].Trace) != 1 {
 		t.Fatalf("trace summary = %#v", summary.PerCase)
 	}
-	if len(summary.PerCase[0].Tools.Actual) != 1 || len(summary.PerCase[0].Tools.Expected) != 1 {
+	if len(summary.PerCase[0].Tools.Actual) != 2 || summary.PerCase[0].Tools.Actual[0] != nil || len(summary.PerCase[0].Tools.Actual[1]) != 1 ||
+		len(summary.PerCase[0].Tools.Expected) != 2 || summary.PerCase[0].Tools.Expected[0] != nil || len(summary.PerCase[0].Tools.Expected[1]) != 1 {
 		t.Fatalf("tool summary = %#v", summary.PerCase[0].Tools)
 	}
 }
