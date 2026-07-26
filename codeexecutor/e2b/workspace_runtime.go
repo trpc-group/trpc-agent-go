@@ -638,18 +638,17 @@ func (r *workspaceRuntime) RunProgram(
 		quotedArgs.WriteString(shellQuote(a))
 	}
 
-	var stdinRedir string
+	var stdinPipe string
 	if spec.Stdin != "" {
 		b64 := base64.StdEncoding.EncodeToString([]byte(spec.Stdin))
-		stdinRedir = " < <(printf %s " + shellQuote(b64) + " | base64 -d)"
+		stdinPipe = "printf %s " + shellQuote(b64) + " | base64 -d | "
 	}
 
 	inner := fmt.Sprintf(
 		"mkdir -p %s %s && cd %s && %s%s%s%s",
 		shellQuote(runDir), shellQuote(outDir),
 		shellQuote(cwd),
-		envAssign, quotedCmd, quotedArgs.String(),
-		stdinRedir,
+		stdinPipe, envAssign, quotedCmd, quotedArgs.String(),
 	)
 	script := buildRunWrapper(inner)
 

@@ -465,6 +465,16 @@ func TestRunProgram_FramedOutput(t *testing.T) {
 	assert.False(t, res.TimedOut)
 }
 
+func TestRunProgram_StdinUsesPortablePipe(t *testing.T) {
+	script := runProgramCaptureScript(t, codeexecutor.RunProgramSpec{
+		Cmd:   "cat",
+		Stdin: "input data",
+	})
+	require.Contains(t, script, "| base64 -d |")
+	require.NotContains(t, script, "< <(",
+		"stdin must not depend on /dev/fd process substitution")
+}
+
 func TestRunProgram_BashErrorSurfaced(t *testing.T) {
 	srv := newMockE2BServer(t, func(code string) string {
 		// Emit an error event — runBashStreaming should translate this
