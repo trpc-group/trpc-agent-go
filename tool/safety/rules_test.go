@@ -10,6 +10,7 @@ package safety
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -538,6 +539,93 @@ func TestSensitiveInfoLeakRule_Allow(t *testing.T) {
 	}
 }
 
+func TestSensitiveInfoLeakRule_Workdir(t *testing.T) {
+	// A command referencing a relative sensitive path inside a workdir
+	// must be detected once the resolved path is included in the scan input.
+	rule := NewSensitiveInfoLeakRule()
+	result := rule.Check(ScanInput{Workdir: "/secrets", Command: "cat ./api_key > /tmp/x"})
+	if result == nil || result.Decision != DecisionDeny {
+		t.Fatalf("expected deny when workdir resolves to sensitive path, got %+v", result)
+	}
+}
+
+func TestCombineInput(t *testing.T) {
+	t.Run("includes all sources and resolved relative paths", func(t *testing.T) {
+		got := combineInput(ScanInput{
+			Workdir:           "/home/user/project",
+			Command:           "cat ../.ssh/id_rsa",
+			NormalizedCommand: "cat ../.ssh/id_rsa",
+			CodeBlocks:        []CodeBlock{{Code: "print('hi')"}},
+		})
+		if !strings.Contains(got, "/home/user/project") {
+			t.Errorf("expected workdir in combined input, got %q", got)
+		}
+		if !strings.Contains(got, "cat ../.ssh/id_rsa") {
+			t.Errorf("expected command in combined input, got %q", got)
+		}
+		if !strings.Contains(got, "print('hi')") {
+			t.Errorf("expected code block in combined input, got %q", got)
+		}
+		// NormalizedCommand equal to Command is not duplicated.
+		if strings.Count(got, "cat ../.ssh/id_rsa") != 1 {
+			t.Errorf("expected Command not duplicated when NormalizedCommand is identical, got %q", got)
+		}
+
+		resolved := filepath.ToSlash(filepath.Clean(filepath.Join("/home/user/project", "../.ssh/id_rsa")))
+		if !strings.Contains(got, resolved) {
+			t.Errorf("expected resolved relative path %q in combined input, got %q", resolved, got)
+		}
+	})
+
+	t.Run("resolves basename operands inside sensitive workdirs", func(t *testing.T) {
+		got := combineInput(ScanInput{Workdir: "/home/user/.ssh", Command: "cat id_rsa"})
+		if !strings.Contains(got, "/home/user/.ssh/id_rsa") {
+			t.Errorf("expected resolved sensitive path in combined input, got %q", got)
+		}
+	})
+
+	t.Run("does not resolve plain words in non-sensitive workdirs", func(t *testing.T) {
+		got := combineInput(ScanInput{Workdir: "/etc", Command: "echo shadow"})
+		if strings.Contains(got, "/etc/shadow") {
+			t.Errorf("did not expect '/etc/shadow' resolution for plain word in non-sensitive workdir, got %q", got)
+		}
+	})
+}
+
+func TestResourceAbuseRule_ForkBombExcludesFunctionDeclarations(t *testing.T) {
+	rule := NewResourceAbuseRule()
+
+	t.Run("function declarations are not fork bombs", func(t *testing.T) {
+		for _, cmd := range []string{
+			"func main() { fmt.Println(\"hi\") }",
+			"function foo() { echo bar; }",
+			"def my_func() { print(1) }",
+			"class MyClass() { method() { } }",
+			"async function run() { await x(); }",
+		} {
+			t.Run(cmd, func(t *testing.T) {
+				if result := rule.Check(ScanInput{Command: cmd}); result != nil {
+					t.Errorf("%q should not be flagged as fork bomb: %+v", cmd, result)
+				}
+			})
+		}
+	})
+
+	t.Run("bare shell fork bomb still denied", func(t *testing.T) {
+		result := rule.Check(ScanInput{Command: "foo() { foo | foo & }; foo"})
+		if result == nil || result.Decision != DecisionDeny {
+			t.Fatalf("expected deny for bare fork bomb, got %+v", result)
+		}
+	})
+
+	t.Run("classic colon fork bomb denied", func(t *testing.T) {
+		result := rule.Check(ScanInput{Command: ":(){ :|:& };:"})
+		if result == nil || result.Decision != DecisionDeny {
+			t.Fatalf("expected deny for classic fork bomb, got %+v", result)
+		}
+	})
+}
+
 // ---------- Rule 8: Ask for Review ----------
 
 func TestAskForReviewRule_Ask(t *testing.T) {
@@ -816,6 +904,115 @@ func TestIsMoreSevere_HigherRiskSameDecision(t *testing.T) {
 func TestIsMoreSevere_NilCurrent(t *testing.T) {
 	if !isMoreSevere(&ScanResult{Decision: DecisionAllow, RiskLevel: RiskNone}, nil) {
 		t.Error("any result should be more severe than nil current")
+	}
+}
+
+// ---------- isSensitiveWorkdir & resolveRelativePaths ----------
+
+func TestIsSensitiveWorkdir(t *testing.T) {
+	yes := []string{"/home/user/.ssh", "/home/user/.aws/creds", "/root/.kube/config", "/app/.docker"}
+	no := []string{"/home/user", "/tmp", "/var/log", "/"}
+	for _, wd := range yes {
+		t.Run(wd, func(t *testing.T) {
+			if !isSensitiveWorkdir(wd) {
+				t.Errorf("expected %q to be sensitive", wd)
+			}
+		})
+	}
+	for _, wd := range no {
+		t.Run(wd, func(t *testing.T) {
+			if isSensitiveWorkdir(wd) {
+				t.Errorf("expected %q to be NOT sensitive", wd)
+			}
+		})
+	}
+}
+
+func TestResolveRelativePaths(t *testing.T) {
+	t.Run("empty args", func(t *testing.T) {
+		if got := resolveRelativePaths("", "cat file"); len(got) != 0 {
+			t.Fatalf("expected nil for empty workdir, got %v", got)
+		}
+		if got := resolveRelativePaths("/tmp", ""); len(got) != 0 {
+			t.Fatalf("expected nil for empty command, got %v", got)
+		}
+	})
+	t.Run("absolute paths skipped", func(t *testing.T) {
+		got := resolveRelativePaths("/home/user", "ls /etc/passwd")
+		if len(got) != 0 {
+			t.Fatalf("absolute paths should be skipped, got %v", got)
+		}
+	})
+	t.Run("shell tokens skipped", func(t *testing.T) {
+		got := resolveRelativePaths("/home/user", "echo foo && cat id_rsa")
+		// "&&" should be skipped, "foo" is not last+not_path, "cat" is not last+not_path
+		// Workdir "/home/user" is not sensitive, "id_rsa" is last but workdir not sensitive
+		// So nothing should resolve
+		if len(got) != 0 {
+			t.Fatalf("non-sensitive workdir should skip basename, got %v", got)
+		}
+	})
+	t.Run("relative path resolved", func(t *testing.T) {
+		got := resolveRelativePaths("/home/user", "cat ../.ssh/id_rsa")
+		if len(got) != 1 || !strings.Contains(got[0], "/home/.ssh/id_rsa") {
+			t.Fatalf("expected resolved relative path, got %v", got)
+		}
+	})
+	t.Run("basename in sensitive workdir", func(t *testing.T) {
+		got := resolveRelativePaths("/home/user/.ssh", "cat id_rsa")
+		if len(got) != 1 || !strings.Contains(got[0], "/home/user/.ssh/id_rsa") {
+			t.Fatalf("expected basename resolved in sensitive workdir, got %v", got)
+		}
+	})
+}
+
+// ---------- Rule 6: Resource Abuse Detection ----------
+
+func TestResourceAbuseRule_ForkBombVariants(t *testing.T) {
+	rule := NewResourceAbuseRule()
+	denyCases := []string{
+		":(){ :|:& };:",
+		"() { :|:& }; :",
+		"bash -c ':(){ :|:& };:'",
+	}
+	for _, cmd := range denyCases {
+		t.Run(cmd, func(t *testing.T) {
+			res := rule.Check(ScanInput{Command: cmd})
+			if res == nil {
+				t.Fatalf("expected deny for %q, got nil", cmd)
+			}
+			if res.Decision != DecisionDeny {
+				t.Errorf("expected deny for %q, got %s", cmd, res.Decision)
+			}
+			if res.RuleID != rule.ID() {
+				t.Errorf("expected RuleID=%s, got %s", rule.ID(), res.RuleID)
+			}
+		})
+	}
+}
+
+func TestResourceAbuseRule_FunctionDeclarationsAllowed(t *testing.T) {
+	rule := NewResourceAbuseRule()
+	allowCases := []string{
+		"func main() { fmt.Println() }",
+		"function foo() { return 1; }",
+		"def bar() { pass }",
+		"class Baz() { init() {} }",
+		"async () => { await x() }",
+	}
+	for _, cmd := range allowCases {
+		t.Run(cmd, func(t *testing.T) {
+			if res := rule.Check(ScanInput{Command: cmd}); res != nil {
+				t.Errorf("expected allow for function declaration %q, got %+v", cmd, res)
+			}
+		})
+	}
+}
+
+func TestResourceAbuseRule_EmptyInput(t *testing.T) {
+	rule := NewResourceAbuseRule()
+	if res := rule.Check(ScanInput{}); res != nil {
+		t.Errorf("expected nil for empty input, got %+v", res)
 	}
 }
 

@@ -97,6 +97,20 @@ func TestIsShellWrapper(t *testing.T) {
 	}
 }
 
+func TestShellWrapper_DefensiveCopy(t *testing.T) {
+	original := ShellWrapper()
+	if len(original) == 0 {
+		t.Fatal("expected non-empty shell wrapper list")
+	}
+
+	// Mutating the returned slice must not affect subsequent calls.
+	original[0] = "__mutated__"
+	again := ShellWrapper()
+	if again[0] == "__mutated__" {
+		t.Fatal("ShellWrapper() returned a shared slice; mutations leaked")
+	}
+}
+
 func TestParseCommand_Executables_EmptySegments(t *testing.T) {
 	// A command that produces segments with one empty argv.
 	p := &ParsedCommand{Segments: [][]string{{"ls"}, {""}}}

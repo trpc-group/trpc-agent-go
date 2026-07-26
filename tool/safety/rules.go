@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -23,16 +24,73 @@ func combineInput(input ScanInput) string {
 	}
 	if input.Command != "" {
 		parts = append(parts, input.Command)
+		parts = append(parts, resolveRelativePaths(input.Workdir, input.Command)...)
 	}
 	if input.NormalizedCommand != "" && input.NormalizedCommand != input.Command {
 		parts = append(parts, input.NormalizedCommand)
+		parts = append(parts, resolveRelativePaths(input.Workdir, input.NormalizedCommand)...)
 	}
 	for _, cb := range input.CodeBlocks {
 		if cb.Code != "" {
 			parts = append(parts, cb.Code)
+			parts = append(parts, resolveRelativePaths(input.Workdir, cb.Code)...)
 		}
 	}
 	return strings.ToLower(strings.Join(parts, " "))
+}
+
+// sensitiveWorkdirSuffixes marks directories that commonly contain files
+// matched by the sensitive-info rule. When a command runs inside one of
+// these directories, even a basename operand is resolved so that rules
+// can detect access to files like "id_rsa" inside "/home/user/.ssh".
+var sensitiveWorkdirSuffixes = []string{".ssh", ".aws", ".kube", ".docker", ".git", ".npm", ".pypirc"}
+
+func isSensitiveWorkdir(workdir string) bool {
+	wd := strings.ToLower(workdir)
+	for _, suffix := range sensitiveWorkdirSuffixes {
+		if strings.HasSuffix(wd, suffix) || strings.Contains(wd, suffix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveRelativePaths joins tokens that look like relative paths with
+// the current workdir and returns the cleaned, slash-normalised paths.
+// This closes the evasion where a command runs in a sensitive directory
+// but only references a file by its basename ("cat id_rsa" in
+// "/home/user/.ssh").
+func resolveRelativePaths(workdir, s string) []string {
+	if workdir == "" || s == "" {
+		return nil
+	}
+	sensitiveWD := isSensitiveWorkdir(workdir)
+	fields := strings.Fields(s)
+	var paths []string
+	for i, tok := range fields {
+		if tok == "" {
+			continue
+		}
+		// Skip flags, absolute paths, URLs and tokens with shell meta-characters.
+		if strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "/") || strings.Contains(tok, "://") {
+			continue
+		}
+		if strings.ContainsAny(tok, "|;<>()$`\"'&") {
+			continue
+		}
+		// Resolve tokens that look like relative paths (../.ssh/id_rsa,
+		// ./config, .bashrc, ...). Also resolve the last non-flag operand
+		// when the working directory itself is sensitive, so "cat id_rsa"
+		// inside "/home/user/.ssh" is evaluated as "/home/user/.ssh/id_rsa".
+		isLast := i == len(fields)-1
+		looksLikePath := strings.ContainsAny(tok, "./")
+		if !looksLikePath && !(sensitiveWD && isLast) {
+			continue
+		}
+		p := filepath.ToSlash(filepath.Clean(filepath.Join(workdir, tok)))
+		paths = append(paths, p)
+	}
+	return paths
 }
 
 // isRecursiveForceRm reports whether cmd (already lower-cased and

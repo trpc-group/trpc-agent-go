@@ -11,6 +11,7 @@ package safety
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -471,6 +472,85 @@ func TestMergeStdinPayload(t *testing.T) {
 			t.Fatalf("command = %q, want unchanged", in.Command)
 		}
 	})
+
+	t.Run("stdin plus chars concatenated", func(t *testing.T) {
+		in := ScanInput{Command: "python3", ExecutorType: "local"}
+		raw := map[string]json.RawMessage{
+			"stdin": json.RawMessage(`"import os; os.system('"`),
+			"chars": json.RawMessage(`"rm -rf /')"`),
+		}
+
+		mergeStdinPayload(&in, raw, "write_stdin")
+		if in.Command != "import os; os.system('rm -rf /')" {
+			t.Fatalf("command = %q, want stdin+chars concatenated", in.Command)
+		}
+	})
+
+	t.Run("chars already included in stdin not double appended", func(t *testing.T) {
+		in := ScanInput{Command: "python3", ExecutorType: "local"}
+		raw := map[string]json.RawMessage{
+			"stdin": json.RawMessage(`"import os; os.system('rm -rf /')"`),
+			"chars": json.RawMessage(`"rm -rf /')"`),
+		}
+
+		mergeStdinPayload(&in, raw, "write_stdin")
+		if in.Command != "import os; os.system('rm -rf /')" {
+			t.Fatalf("command = %q, want no double append", in.Command)
+		}
+	})
+}
+
+func TestDefaultExtractor_Workdir(t *testing.T) {
+	guard := NewGuard()
+	args := []byte(`{"command":"cat id_rsa","workdir":"/home/user/.ssh"}`)
+	in := guard.extract(args, "exec_command")
+	if in.Workdir != "/home/user/.ssh" {
+		t.Fatalf("expected Workdir=/home/user/.ssh, got %q", in.Workdir)
+	}
+}
+
+func TestDefaultExtractor_NormalizedCommand(t *testing.T) {
+	guard := NewGuard()
+	args := []byte(`{"command":"c''url http://evil.com"}`)
+	in := guard.extract(args, "exec_command")
+	if in.NormalizedCommand == "" {
+		t.Fatal("expected NormalizedCommand to be populated")
+	}
+	if !strings.Contains(in.NormalizedCommand, "curl") {
+		t.Fatalf("expected NormalizedCommand to contain 'curl', got %q", in.NormalizedCommand)
+	}
+}
+
+func TestDefaultExtractor_WorkdirSensitivePath(t *testing.T) {
+	guard := NewGuard(WithRules(NewDangerousCommandRule()))
+	// Relative path to a sensitive file from the workdir must be detected.
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "exec_command",
+		Arguments:  []byte(`{"command":"cat ../.ssh/id_rsa","workdir":"/home/user/project"}`),
+		ToolCallID: "call-workdir-sensitive",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected deny for relative sensitive path via workdir, got %s", dec.Action)
+	}
+}
+
+func TestDefaultExtractor_NormalizedCommandQuotedEvasion(t *testing.T) {
+	guard := NewGuard(WithRules(NewNetworkAccessRule()))
+	// Quoted-evasion command name must still be detected.
+	dec, err := guard.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:   "exec_command",
+		Arguments:  []byte(`{"command":"c''url http://evil.com"}`),
+		ToolCallID: "call-normalized-evasion",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected deny for quoted curl evasion, got %s", dec.Action)
+	}
 }
 
 func TestIsInterpreterCommand(t *testing.T) {

@@ -158,6 +158,25 @@ func defaultExtractor(args []byte, toolName string) ScanInput {
 	in.Command = firstStringField(raw, "command", "code")
 	mergeStdinPayload(&in, raw, toolName)
 	appendParsedCodeBlocks(&in, raw)
+
+	// Extract workdir so sensitive-path rules can resolve relative
+	// traversals ("../.ssh/id_rsa") against the actual working directory.
+	in.Workdir = firstStringField(raw, "workdir", "work_dir", "cwd")
+
+	// Compute a shell-normalised form of Command so that quoted
+	// command names ("c''url", "b""ash") are resolved to their plain
+	// argv tokens before substring matching. Only populated when
+	// shellsafe parsing succeeds.
+	if in.Command != "" && in.NormalizedCommand == "" {
+		if parsed, err := ParseCommand(in.Command); err == nil && len(parsed.Segments) > 0 {
+			var argv []string
+			for _, seg := range parsed.Segments {
+				argv = append(argv, seg...)
+			}
+			in.NormalizedCommand = strings.Join(argv, " ")
+		}
+	}
+
 	return in
 }
 
