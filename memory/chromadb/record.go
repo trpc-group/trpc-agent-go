@@ -144,6 +144,36 @@ func decodeStoredRecord(id string, document *string, metadata map[string]any) (*
 	}, nil
 }
 
+// decodeGetResponse converts validated columnar Get output into owned records.
+func decodeGetResponse(response *getRecordsResponse) ([]*storedRecord, error) {
+	if response == nil {
+		return nil, errors.New("get records returned a nil response")
+	}
+	if response.Documents == nil || response.Metadatas == nil {
+		return nil, errors.New("get records did not include documents and metadatas")
+	}
+	documents := *response.Documents
+	metadatas := *response.Metadatas
+	ids := response.IDs.value
+	if len(documents) != len(ids) || len(metadatas) != len(ids) {
+		return nil, fmt.Errorf(
+			"get records column length mismatch: ids=%d documents=%d metadatas=%d",
+			len(ids),
+			len(documents),
+			len(metadatas),
+		)
+	}
+	records := make([]*storedRecord, len(ids))
+	for i, id := range ids {
+		record, err := decodeStoredRecord(id, documents[i], metadatas[i])
+		if err != nil {
+			return nil, err
+		}
+		records[i] = record
+	}
+	return records, nil
+}
+
 type decodedMetadata struct {
 	appName      string
 	userID       string
@@ -256,6 +286,28 @@ func decodeTimestamps(metadata map[string]any) (time.Time, time.Time, int64, err
 		return time.Time{}, time.Time{}, 0, err
 	}
 	return time.Unix(0, createdAtNS).UTC(), time.Unix(0, updatedAtNS).UTC(), deletedAtNS, nil
+}
+
+// addRequest encodes one stored record as a create-only REST batch.
+func addRequest(record *storedRecord) addRecordsRequest {
+	document := record.entry.Memory.Memory
+	return addRecordsRequest{
+		IDs:        []string{record.entry.ID},
+		Embeddings: [][]float32{record.embedding},
+		Documents:  []*string{&document},
+		Metadatas:  []map[string]any{addMetadata(record)},
+	}
+}
+
+// updateRequest encodes one stored record with explicit optional-field clearing.
+func updateRequest(record *storedRecord) updateRecordsRequest {
+	document := record.entry.Memory.Memory
+	return updateRecordsRequest{
+		IDs:        []string{record.entry.ID},
+		Embeddings: [][]float32{record.embedding},
+		Documents:  []*string{&document},
+		Metadatas:  []map[string]any{updateMetadata(record)},
+	}
 }
 
 // addMetadata encodes a new record while omitting absent optional fields.
@@ -525,6 +577,41 @@ func samePersistedRecord(left, right *storedRecord) bool {
 	}
 	return left.entry.CreatedAt.Equal(right.entry.CreatedAt) &&
 		left.entry.UpdatedAt.Equal(right.entry.UpdatedAt)
+}
+
+// moreRecentRecord orders records by update time, creation time, and stable ID.
+func moreRecentRecord(left, right *storedRecord) bool {
+	if !left.entry.UpdatedAt.Equal(right.entry.UpdatedAt) {
+		return left.entry.UpdatedAt.After(right.entry.UpdatedAt)
+	}
+	if !left.entry.CreatedAt.Equal(right.entry.CreatedAt) {
+		return left.entry.CreatedAt.After(right.entry.CreatedAt)
+	}
+	return left.entry.ID < right.entry.ID
+}
+
+// nextPageSize caps a requested page at the adapter's read-page limit.
+func nextPageSize(current, limit int) int {
+	if limit <= 0 {
+		return defaultReadPageSize
+	}
+	remaining := limit - current
+	if remaining < defaultReadPageSize {
+		return remaining
+	}
+	return defaultReadPageSize
+}
+
+// intPointer returns a pointer used to distinguish an explicit REST integer field.
+func intPointer(value int) *int {
+	copy := value
+	return &copy
+}
+
+// stringSlicePointer copies an include list before attaching it to a request.
+func stringSlicePointer(value []string) *[]string {
+	copy := append([]string(nil), value...)
+	return &copy
 }
 
 // sameMemoryIdentity compares all framework-level memory identity fields.

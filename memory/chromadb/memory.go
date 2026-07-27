@@ -12,7 +12,6 @@ import (
 	"context"
 	"fmt"
 	"sort"
-	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -151,76 +150,6 @@ func (svc *Service) countActiveAtLeast(
 	}
 	return count, nil
 }
-
-// decodeGetResponse converts validated columnar Get output into owned records.
-func decodeGetResponse(response *getRecordsResponse) ([]*storedRecord, error) {
-	if response == nil {
-		return nil, fmt.Errorf("get records returned a nil response")
-	}
-	if response.Documents == nil || response.Metadatas == nil {
-		return nil, fmt.Errorf("get records did not include documents and metadatas")
-	}
-	documents := *response.Documents
-	metadatas := *response.Metadatas
-	ids := response.IDs.value
-	if len(documents) != len(ids) || len(metadatas) != len(ids) {
-		return nil, fmt.Errorf(
-			"get records column length mismatch: ids=%d documents=%d metadatas=%d",
-			len(ids),
-			len(documents),
-			len(metadatas),
-		)
-	}
-	records := make([]*storedRecord, len(ids))
-	for i, id := range ids {
-		record, err := decodeStoredRecord(id, documents[i], metadatas[i])
-		if err != nil {
-			return nil, err
-		}
-		records[i] = record
-	}
-	return records, nil
-}
-
-// moreRecentRecord orders records by update time, creation time, and stable ID.
-func moreRecentRecord(left, right *storedRecord) bool {
-	if !left.entry.UpdatedAt.Equal(right.entry.UpdatedAt) {
-		return left.entry.UpdatedAt.After(right.entry.UpdatedAt)
-	}
-	if !left.entry.CreatedAt.Equal(right.entry.CreatedAt) {
-		return left.entry.CreatedAt.After(right.entry.CreatedAt)
-	}
-	return left.entry.ID < right.entry.ID
-}
-
-// nextPageSize caps a requested page at the adapter's read-page limit.
-func nextPageSize(current, limit int) int {
-	if limit <= 0 {
-		return defaultReadPageSize
-	}
-	remaining := limit - current
-	if remaining < defaultReadPageSize {
-		return remaining
-	}
-	return defaultReadPageSize
-}
-
-// intPointer returns a pointer used to distinguish an explicit REST integer field.
-func intPointer(value int) *int {
-	copy := value
-	return &copy
-}
-
-// stringSlicePointer copies an include list before attaching it to a request.
-func stringSlicePointer(value []string) *[]string {
-	copy := append([]string(nil), value...)
-	return &copy
-}
-
-const (
-	fnvOffset64 = uint64(14695981039346656037)
-	fnvPrime64  = uint64(1099511628211)
-)
 
 // AddMemory adds a memory or refreshes an existing record with the same canonical ID.
 //
@@ -419,9 +348,8 @@ func (svc *Service) applyUpdate(
 		now,
 	)
 	old.embedding = embedding
-	old.deletedAtNS = notDeletedAtNS
 	if newID == command.key.MemoryID {
-		if err := svc.updateAndVerify(ctx, scope, old); err != nil {
+		if err := svc.updateActiveAndVerify(ctx, scope, old); err != nil {
 			return err
 		}
 		setUpdateResult(opts, newID)
@@ -462,15 +390,7 @@ func (svc *Service) rotateRecord(
 	record *storedRecord,
 	opts []memory.UpdateOption,
 ) error {
-	target, err := svc.fetchRecordByID(ctx, record.entry.ID, nil)
-	if err != nil {
-		return fmt.Errorf("check update target %s: %w", record.entry.ID, err)
-	}
-	if target == nil {
-		if err := svc.client.addRecords(ctx, svc.collection, addRequest(record)); err != nil {
-			return fmt.Errorf("add update target %s: %w", record.entry.ID, err)
-		}
-	} else if err := validateUpdateTarget(target, record, scope); err != nil {
+	if err := svc.ensureRotationTarget(ctx, scope, record); err != nil {
 		return err
 	}
 	if err := svc.verifyRotationTarget(ctx, scope, record); err != nil {
@@ -488,17 +408,95 @@ func (svc *Service) rotateRecord(
 	return nil
 }
 
+// ensureRotationTarget creates a missing target, resumes a completed write, or
+// replaces a tombstone without overwriting an unrelated active record.
+func (svc *Service) ensureRotationTarget(
+	ctx context.Context,
+	scope recordScope,
+	record *storedRecord,
+) error {
+	target, err := svc.fetchRecordByID(ctx, record.entry.ID, nil)
+	if err != nil {
+		return fmt.Errorf("check update target %s: %w", record.entry.ID, err)
+	}
+	if target == nil {
+		return svc.addRotationTarget(ctx, record)
+	}
+	if err := validateRecordOwner(target, scope); err != nil {
+		return err
+	}
+	if target.deletedAtNS == notDeletedAtNS {
+		return validateUpdateTarget(target, record)
+	}
+	return svc.replaceRotationTombstone(ctx, scope, target, record)
+}
+
+// replaceRotationTombstone removes the exact tombstone observed by the update
+// before recreating its canonical ID. The source remains active until this
+// transition succeeds, so a failed Add can be retried safely.
+func (svc *Service) replaceRotationTombstone(
+	ctx context.Context,
+	scope recordScope,
+	target *storedRecord,
+	record *storedRecord,
+) error {
+	if svc.opts.softDelete {
+		record.entry.CreatedAt = target.entry.CreatedAt
+	}
+	response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
+		IDs: []string{target.entry.ID},
+		Where: andWhere(
+			ownedScopeWhere(scope),
+			eqWhere(metadataDeletedAtKey, target.deletedAtNS),
+		),
+	})
+	if err != nil {
+		return fmt.Errorf("delete update target tombstone %s: %w", target.entry.ID, err)
+	}
+	if response.Deleted.value == 1 {
+		return svc.addRotationTarget(ctx, record)
+	}
+	return svc.resolveRotationTargetRace(ctx, scope, record)
+}
+
+// resolveRotationTargetRace handles a tombstone delete that lost its response
+// or raced with another writer changing the same target.
+func (svc *Service) resolveRotationTargetRace(
+	ctx context.Context,
+	scope recordScope,
+	record *storedRecord,
+) error {
+	actual, err := svc.fetchRecordByID(ctx, record.entry.ID, nil)
+	if err != nil {
+		return fmt.Errorf("reload update target %s: %w", record.entry.ID, err)
+	}
+	if actual == nil {
+		return svc.addRotationTarget(ctx, record)
+	}
+	if err := validateRecordOwner(actual, scope); err != nil {
+		return err
+	}
+	if actual.deletedAtNS == notDeletedAtNS {
+		return validateUpdateTarget(actual, record)
+	}
+	return fmt.Errorf("memory update target %s changed concurrently", record.entry.ID)
+}
+
+// addRotationTarget writes one create-only target for an ID-changing update.
+func (svc *Service) addRotationTarget(ctx context.Context, record *storedRecord) error {
+	if err := svc.client.addRecords(ctx, svc.collection, addRequest(record)); err != nil {
+		return fmt.Errorf("add update target %s: %w", record.entry.ID, err)
+	}
+	return nil
+}
+
 // validateUpdateTarget prevents an ID rotation from overwriting unrelated content.
 func validateUpdateTarget(
 	actual *storedRecord,
 	expected *storedRecord,
-	scope recordScope,
 ) error {
-	if err := validateRecordOwner(actual, scope); err != nil {
-		return err
-	}
 	if actual.updateToken != expected.updateToken || !sameSemanticRecord(actual, expected) {
-		return fmt.Errorf("memory update target %s is occupied", expected.entry.ID)
+		return memoryAlreadyExistsError(expected.entry.ID)
 	}
 	return nil
 }
@@ -513,8 +511,42 @@ func (svc *Service) verifyRotationTarget(
 	if err != nil {
 		return fmt.Errorf("verify update target %s: %w", expected.entry.ID, err)
 	}
-	if actual == nil || !sameSemanticRecord(actual, expected) {
-		return fmt.Errorf("verify update target %s: content mismatch", expected.entry.ID)
+	if actual == nil {
+		return fmt.Errorf("verify update target %s: record is missing", expected.entry.ID)
+	}
+	if err := validateRecordOwner(actual, scope); err != nil {
+		return err
+	}
+	if !sameSemanticRecord(actual, expected) {
+		return memoryAlreadyExistsError(expected.entry.ID)
+	}
+	return nil
+}
+
+// updateActiveAndVerify updates an active source without writing deleted_at_ns.
+//
+// Chroma Update has no conditional selector. Omitting the lifecycle field
+// prevents this request from reviving a source tombstoned by another Service
+// after the initial active read.
+func (svc *Service) updateActiveAndVerify(
+	ctx context.Context,
+	scope recordScope,
+	record *storedRecord,
+) error {
+	request := updateRequest(record)
+	delete(request.Metadatas[0], metadataDeletedAtKey)
+	if err := svc.client.updateRecords(ctx, svc.collection, request); err != nil {
+		return fmt.Errorf("update memory %s: %w", record.entry.ID, err)
+	}
+	actual, err := svc.fetchRecordByID(ctx, record.entry.ID, activeScopeWhere(scope))
+	if err != nil {
+		return fmt.Errorf("verify updated memory %s: %w", record.entry.ID, err)
+	}
+	if actual == nil {
+		return memoryNotFoundError(record.entry.ID)
+	}
+	if !samePersistedRecord(actual, record) {
+		return fmt.Errorf("verify updated memory %s: content mismatch", record.entry.ID)
 	}
 	return nil
 }
@@ -536,28 +568,6 @@ func (svc *Service) updateAndVerify(
 		return fmt.Errorf("verify updated memory %s: content mismatch", record.entry.ID)
 	}
 	return nil
-}
-
-// addRequest encodes one stored record as a create-only REST batch.
-func addRequest(record *storedRecord) addRecordsRequest {
-	document := record.entry.Memory.Memory
-	return addRecordsRequest{
-		IDs:        []string{record.entry.ID},
-		Embeddings: [][]float32{record.embedding},
-		Documents:  []*string{&document},
-		Metadatas:  []map[string]any{addMetadata(record)},
-	}
-}
-
-// updateRequest encodes one stored record with explicit optional-field clearing.
-func updateRequest(record *storedRecord) updateRecordsRequest {
-	document := record.entry.Memory.Memory
-	return updateRecordsRequest{
-		IDs:        []string{record.entry.ID},
-		Embeddings: [][]float32{record.embedding},
-		Documents:  []*string{&document},
-		Metadatas:  []map[string]any{updateMetadata(record)},
-	}
 }
 
 // DeleteMemory idempotently deletes a memory for a user.
@@ -762,21 +772,14 @@ func memoryNotFoundError(id string) error {
 	return fmt.Errorf("memory with id %s not found", id)
 }
 
+// memoryAlreadyExistsError preserves the shared memory service conflict text.
+func memoryAlreadyExistsError(id string) error {
+	return fmt.Errorf("memory with id %s already exists", id)
+}
+
 // setUpdateResult reports a rotated memory ID through the framework update options.
 func setUpdateResult(opts []memory.UpdateOption, id string) {
 	if result := memory.ResolveUpdateResult(opts); result != nil {
 		result.MemoryID = id
 	}
-}
-
-// writeLock maps one app/user scope to a stable in-process lock stripe.
-func (svc *Service) writeLock(scope recordScope) *sync.Mutex {
-	hash := fnvOffset64
-	for _, value := range []string{scope.appName, "\x00", scope.userID} {
-		for i := 0; i < len(value); i++ {
-			hash ^= uint64(value[i])
-			hash *= fnvPrime64
-		}
-	}
-	return &svc.writeLocks[hash%uint64(len(svc.writeLocks))]
 }

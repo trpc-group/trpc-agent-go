@@ -273,7 +273,9 @@ func TestServiceUpdateMemoryRevivesSoftDeletedTarget(t *testing.T) {
 	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"deleted"}))
 	entries := readTestMemories(t, service, userKey)
 	sourceID := testMemoryEntryByContent(t, entries, "source").ID
-	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	target := testMemoryEntryByContent(t, entries, "target")
+	targetID := target.ID
+	targetCreatedAt := target.CreatedAt
 	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
 		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
 	}))
@@ -293,6 +295,7 @@ func TestServiceUpdateMemoryRevivesSoftDeletedTarget(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, targetID, entries[0].ID)
 	assert.Equal(t, []string{"revived"}, entries[0].Memory.Topics)
+	assert.True(t, entries[0].CreatedAt.Equal(targetCreatedAt))
 }
 
 func TestServiceUpdateMemoryHardDeleteReplacesSoftDeletedTarget(t *testing.T) {
@@ -311,7 +314,9 @@ func TestServiceUpdateMemoryHardDeleteReplacesSoftDeletedTarget(t *testing.T) {
 	require.NoError(t, softService.AddMemory(ctx, userKey, "source", nil))
 	require.NoError(t, softService.AddMemory(ctx, userKey, "target", []string{"deleted"}))
 	entries := readTestMemories(t, softService, userKey)
-	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	source := testMemoryEntryByContent(t, entries, "source")
+	sourceID := source.ID
+	sourceCreatedAt := source.CreatedAt
 	targetID := testMemoryEntryByContent(t, entries, "target").ID
 	require.NoError(t, softService.DeleteMemory(ctx, memory.Key{
 		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
@@ -332,6 +337,7 @@ func TestServiceUpdateMemoryHardDeleteReplacesSoftDeletedTarget(t *testing.T) {
 	require.Len(t, entries, 1)
 	assert.Equal(t, targetID, entries[0].ID)
 	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
+	assert.True(t, entries[0].CreatedAt.Equal(sourceCreatedAt))
 }
 
 func TestServiceUpdateMemoryHardDeleteRejectsTombstoneSource(t *testing.T) {
@@ -602,6 +608,56 @@ func TestServiceUpdateMemoryRollsForwardAfterPartialFailure(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	assert.Equal(t, result.MemoryID, entries[0].ID)
+}
+
+func TestServiceUpdateMemoryRollsForwardAfterTombstoneReplacementFailure(t *testing.T) {
+	service, fake := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithSoftDelete(true),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "tombstone-roll-forward"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", nil))
+	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"deleted"}))
+	entries := readTestMemories(t, service, userKey)
+	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
+	}))
+	key := memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID,
+	}
+	fake.status["add"] = http.StatusBadRequest
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		key,
+		"target",
+		[]string{"replacement"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	entries = readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, sourceID, entries[0].ID)
+
+	delete(fake.status, "add")
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		key,
+		"target",
+		[]string{"replacement"},
+		memory.WithUpdateResult(result),
+	))
+	assert.Equal(t, targetID, result.MemoryID)
+	entries = readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
 }
 
 func TestServiceDeleteMemoryRejectsInvalidDeleteCount(t *testing.T) {

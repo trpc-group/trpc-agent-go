@@ -39,6 +39,7 @@ func TestIntegrationChromaDB159(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, softService.Close()) })
 	runIntegrationClear(t, softService, true)
+	runIntegrationUpdateContracts(t, service, softService)
 }
 
 func integrationOptions(baseURL string) []ServiceOpt {
@@ -163,4 +164,118 @@ func runIntegrationClear(t *testing.T, service *Service, soft bool) {
 	entries, err = service.ReadMemories(ctx, userKey, 0)
 	require.NoError(t, err)
 	assert.Empty(t, entries)
+}
+
+func runIntegrationUpdateContracts(
+	t *testing.T,
+	hardService *Service,
+	softService *Service,
+) {
+	t.Helper()
+	t.Run("active target conflict", func(t *testing.T) {
+		runIntegrationActiveTargetConflict(t, hardService)
+	})
+	t.Run("soft target revival", func(t *testing.T) {
+		runIntegrationSoftTargetRevival(t, softService)
+	})
+	t.Run("hard target replacement", func(t *testing.T) {
+		runIntegrationHardTargetReplacement(t, hardService, softService)
+	})
+}
+
+func runIntegrationActiveTargetConflict(t *testing.T, service *Service) {
+	t.Helper()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "integration", UserID: "active-target"}
+	require.NoError(t, service.ClearMemories(ctx, userKey))
+	t.Cleanup(func() { _ = service.ClearMemories(context.Background(), userKey) })
+	require.NoError(t, service.AddMemory(ctx, userKey, "contract source", []string{"source"}))
+	require.NoError(t, service.AddMemory(ctx, userKey, "contract target", []string{"target"}))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	sourceID := integrationEntryByContent(t, entries, "contract source").ID
+	targetID := integrationEntryByContent(t, entries, "contract target").ID
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err = service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"contract target",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.EqualError(t, err, fmt.Sprintf("memory with id %s already exists", targetID))
+	assert.Equal(t, "unchanged", result.MemoryID)
+	entries, err = service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, []string{"source"}, integrationEntryByContent(t, entries, "contract source").Memory.Topics)
+	assert.Equal(t, []string{"target"}, integrationEntryByContent(t, entries, "contract target").Memory.Topics)
+}
+
+func runIntegrationSoftTargetRevival(t *testing.T, service *Service) {
+	t.Helper()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "integration", UserID: "soft-target"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "soft source", nil))
+	require.NoError(t, service.AddMemory(ctx, userKey, "soft target", []string{"deleted"}))
+	entries, err := service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	sourceID := integrationEntryByContent(t, entries, "soft source").ID
+	target := integrationEntryByContent(t, entries, "soft target")
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: target.ID,
+	}))
+	result := &memory.UpdateResult{}
+
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"soft target",
+		[]string{"revived"},
+		memory.WithUpdateResult(result),
+	))
+
+	assert.Equal(t, target.ID, result.MemoryID)
+	entries, err = service.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{"revived"}, entries[0].Memory.Topics)
+	assert.True(t, entries[0].CreatedAt.Equal(target.CreatedAt))
+}
+
+func runIntegrationHardTargetReplacement(
+	t *testing.T,
+	hardService *Service,
+	softService *Service,
+) {
+	t.Helper()
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "integration", UserID: "hard-target"}
+	require.NoError(t, softService.AddMemory(ctx, userKey, "hard source", nil))
+	require.NoError(t, softService.AddMemory(ctx, userKey, "hard target", []string{"deleted"}))
+	entries, err := softService.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	source := integrationEntryByContent(t, entries, "hard source")
+	targetID := integrationEntryByContent(t, entries, "hard target").ID
+	require.NoError(t, softService.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
+	}))
+	result := &memory.UpdateResult{}
+
+	require.NoError(t, hardService.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: source.ID},
+		"hard target",
+		[]string{"replacement"},
+		memory.WithUpdateResult(result),
+	))
+
+	assert.Equal(t, targetID, result.MemoryID)
+	entries, err = hardService.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
+	assert.True(t, entries[0].CreatedAt.Equal(source.CreatedAt))
 }

@@ -28,6 +28,11 @@ var _ memory.Service = (*Service)(nil)
 
 var errServiceClosed = errors.New("chromadb memory service is closed")
 
+const (
+	fnvOffset64 = uint64(14695981039346656037)
+	fnvPrime64  = uint64(1099511628211)
+)
+
 // Service stores and searches memories through a ChromaDB REST server.
 //
 // The Service owns HTTP resources that it creates, but it never closes a client or
@@ -440,6 +445,18 @@ func (svc *Service) beginOperation() error {
 // endOperation releases the lifecycle read lock acquired by beginOperation.
 func (svc *Service) endOperation() {
 	svc.lifecycleMu.RUnlock()
+}
+
+// writeLock maps one app/user scope to a stable in-process lock stripe.
+func (svc *Service) writeLock(scope recordScope) *sync.Mutex {
+	hash := fnvOffset64
+	for _, value := range []string{scope.appName, "\x00", scope.userID} {
+		for i := 0; i < len(value); i++ {
+			hash ^= uint64(value[i])
+			hash *= fnvPrime64
+		}
+	}
+	return &svc.writeLocks[hash%uint64(len(svc.writeLocks))]
 }
 
 // Tools returns the memory tools exposed by the service configuration.
