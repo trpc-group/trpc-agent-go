@@ -666,6 +666,17 @@ func TestWithOptions(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:   "WithPreAuthA2AMiddleware",
+			option: WithPreAuthA2AMiddleware(&traceContextMiddleware{}),
+			validate: func(
+				t *testing.T,
+				opts *options,
+				_ runner.Runner,
+			) {
+				require.Len(t, opts.preAuthMiddlewares, 1)
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -863,14 +874,19 @@ func TestAnonymousUserCookieMiddleware_CookieAttributes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			middleware := anonymousUserCookieMiddleware{
 				userIDHeader: serverUserIDHeader,
+			}
+			terminal := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cookie, err := r.Cookie(anonymousUserIDCookie)
+				assert.NoError(t, err)
+				assert.True(t, isAnonymousUserID(cookie.Value))
+			})
+			responseFinalizer := anonymousUserCookieResponseMiddleware{
 				secureCookie: tt.secureCookie,
 			}
 			handler := middleware.Wrap(
-				http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					cookie, err := r.Cookie(anonymousUserIDCookie)
-					assert.NoError(t, err)
-					assert.True(t, isAnonymousUserID(cookie.Value))
-				}),
+				auth.NewMiddleware(
+					&defaultAuthProvider{userIDHeader: serverUserIDHeader},
+				).Wrap(anonymousAuthUserMiddleware{}.Wrap(responseFinalizer.Wrap(terminal))),
 			)
 			req := httptest.NewRequest(http.MethodGet, tt.target, nil)
 			rr := httptest.NewRecorder()
