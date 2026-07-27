@@ -646,27 +646,67 @@ func (t *RunTool) prepareWorkspaceForRun(
 	error,
 ) {
 	eng := t.ensureEngine()
-	ws, err := t.createWorkspace(ctx, eng, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	staged, stageWarn, err := t.stageUserFileInputs(ctx, eng, ws)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	ctxIO := withArtifactContext(ctx)
-	if len(in.Inputs) > 0 {
-		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			return nil, codeexecutor.Workspace{}, "", nil, nil,
-				nil, err
+	prepared, acquired, err := t.prepareWorkspaceAttempt(ctx, eng, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		if acquired {
+			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+		}
+		prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
 		}
 	}
-	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
+	if err != nil {
+		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
+	}
+	return eng,
+		prepared.handle.Workspace,
+		prepared.skillRoot,
+		prepared.ctxIO,
+		prepared.staged,
+		prepared.warnings,
 		nil
+}
+
+type workspaceRunPreparation struct {
+	handle    codeexecutor.WorkspaceHandle
+	skillRoot string
+	ctxIO     context.Context
+	staged    []stagedInput
+	warnings  []string
+}
+
+func (t *RunTool) prepareWorkspaceAttempt(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, bool, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, in.Skill)
+	if err != nil {
+		return workspaceRunPreparation{}, false, err
+	}
+	prepared := workspaceRunPreparation{handle: handle}
+	ws := handle.Workspace
+	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.skillRoot = stageRes.WorkspaceSkillDir
+	prepared.staged, prepared.warnings, err = t.stageUserFileInputs(
+		ctx, eng, ws,
+	)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.ctxIO = withArtifactContext(ctx)
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(
+			prepared.ctxIO, ws, in.Inputs,
+		); err != nil {
+			return prepared, true, err
+		}
+	}
+	return prepared, true, nil
 }
 
 func (t *RunTool) stageSkillForRun(
@@ -907,13 +947,20 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
+}
+
+func (t *RunTool) createWorkspaceHandle(
+	ctx context.Context, eng codeexecutor.Engine, name string,
+) (codeexecutor.WorkspaceHandle, error) {
 	if t.reg == nil || t.wsr == nil {
 		if t.reg == nil {
 			t.reg = codeexecutor.NewWorkspaceRegistry()
 		}
 		t.wsr = workspacesession.NewResolver(t.exec, t.reg)
 	}
-	return t.wsr.CreateWorkspace(ctx, eng, name)
+	return t.wsr.CreateWorkspaceHandle(ctx, eng, name)
 }
 
 // stageSkill materializes the skill source under skills/<name>.

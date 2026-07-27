@@ -4206,6 +4206,55 @@ func TestRunTool_stageUserFileInputs_StalePropagates(t *testing.T) {
 	require.Empty(t, warnings)
 }
 
+func TestRunTool_PreparationStaleInvalidatesLegacyHandleAndRetries(
+	t *testing.T,
+) {
+	manager := &legacySkillRetryManager{}
+	fs := &staleOnceSkillFS{}
+	eng := &managedEngine{
+		m: manager,
+		f: fs,
+		r: &stubRunner{
+			res: codeexecutor.RunResult{ExitCode: 0},
+		},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	user := model.NewUserMessage("upload")
+	user.AddFileData(
+		uploadNotesTxt,
+		[]byte(contentHi),
+		"text/plain",
+	)
+	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	_, ws, _, _, staged, warnings, err := rt.prepareWorkspaceForRun(
+		ctx,
+		runInput{Skill: testSkillName},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "skill-workspace", ws.ID)
+	require.Len(t, staged, 1)
+	require.Empty(t, warnings)
+	require.Equal(t, 2, manager.creates,
+		"stale legacy cache entry must be invalidated before retry")
+	require.Equal(t, 2, fs.collectCalls)
+}
+
 func TestSanitizeUserFileName(t *testing.T) {
 	tests := []struct {
 		name string
@@ -5339,6 +5388,26 @@ type stubFS struct {
 	putFiles []codeexecutor.PutFile
 }
 
+type staleOnceSkillFS struct {
+	stubFS
+	collectCalls int
+}
+
+func (f *staleOnceSkillFS) Collect(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+	patterns []string,
+) ([]codeexecutor.File, error) {
+	f.collectCalls++
+	if f.collectCalls == 1 {
+		return nil, fmt.Errorf(
+			"workspace rotated before metadata read: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	}
+	return f.stubFS.Collect(ctx, ws, patterns)
+}
+
 func (s *stubFS) PutFiles(
 	_ context.Context,
 	_ codeexecutor.Workspace,
@@ -5389,6 +5458,29 @@ func (*stubFS) CollectOutputs(
 type stubManager struct {
 	ws  codeexecutor.Workspace
 	err error
+}
+
+type legacySkillRetryManager struct {
+	creates int
+}
+
+func (m *legacySkillRetryManager) CreateWorkspace(
+	_ context.Context,
+	_ string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates++
+	return codeexecutor.Workspace{
+		ID:   "skill-workspace",
+		Path: "/tmp/skill-workspace",
+	}, nil
+}
+
+func (*legacySkillRetryManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
 }
 
 func (m *stubManager) CreateWorkspace(

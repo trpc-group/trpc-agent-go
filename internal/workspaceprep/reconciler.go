@@ -98,13 +98,11 @@ func (r *defaultReconciler) Reconcile(
 		if warn != "" {
 			warnings = append(warnings, warn)
 		}
-		if err != nil {
-			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				return warnings, markRetryUnsafe(
-					err,
-					commandMayHaveStarted,
-				)
-			}
+		if staleErr := staleRetryError(
+			err,
+			commandMayHaveStarted,
+		); staleErr != nil {
+			return warnings, staleErr
 		}
 		if applyAttempted && req.Kind() == KindCommand {
 			// A non-stale command result does not prove that the command
@@ -124,11 +122,11 @@ func (r *defaultReconciler) Reconcile(
 				if saveErr := r.saveReconcileMetadata(
 					ctx, eng, ws, baseMD, md, changedKeys,
 				); saveErr != nil {
-					if errors.Is(saveErr, codeexecutor.ErrWorkspaceStale) {
-						return warnings, markRetryUnsafe(
-							saveErr,
-							commandMayHaveStarted,
-						)
+					if staleErr := staleRetryError(
+						saveErr,
+						commandMayHaveStarted,
+					); staleErr != nil {
+						return warnings, staleErr
 					}
 					return warnings, fmt.Errorf(
 						"workspaceprep: save metadata after "+
@@ -151,11 +149,11 @@ func (r *defaultReconciler) Reconcile(
 		if err := r.saveReconcileMetadata(
 			ctx, eng, ws, baseMD, md, changedKeys,
 		); err != nil {
-			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				return warnings, markRetryUnsafe(
-					err,
-					commandMayHaveStarted,
-				)
+			if staleErr := staleRetryError(
+				err,
+				commandMayHaveStarted,
+			); staleErr != nil {
+				return warnings, staleErr
 			}
 			warnings = append(warnings, fmt.Sprintf(
 				"save metadata: %v", err,
@@ -163,6 +161,13 @@ func (r *defaultReconciler) Reconcile(
 		}
 	}
 	return warnings, nil
+}
+
+func staleRetryError(err error, unsafe bool) error {
+	if !errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return nil
+	}
+	return markRetryUnsafe(err, unsafe)
 }
 
 func markRetryUnsafe(err error, unsafe bool) error {
