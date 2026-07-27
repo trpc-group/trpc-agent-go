@@ -1165,9 +1165,10 @@ func pathCandidates(c ruleCtx) []string {
 // optionValueCandidates extracts path-bearing portions embedded inside one
 // argv token, so a forbidden path cannot hide in an option value that never
 // stands alone as a token: "--upload-file=/etc/shadow" (inline long-option
-// value), "-T/etc/shadow" (inline short-option value), and the curl @file
-// read syntax ("--data-binary=@/etc/shadow", "-F name=@/etc/shadow",
-// "-d @/etc/shadow"). Extraction is command-agnostic and deliberately
+// value), "-T/etc/shadow" (inline short-option value), and curl's
+// read-from-file markers ("--data-binary=@/etc/shadow", "-F name=@/etc/shadow",
+// "-d @/etc/shadow", "--data-urlencode name@/etc/shadow",
+// "-F story=</etc/shadow"). Extraction is command-agnostic and deliberately
 // over-inclusive: an extra candidate matters only if it matches a forbidden
 // pattern, and over-matching fails toward protection.
 func optionValueCandidates(a string) []string {
@@ -1177,26 +1178,42 @@ func optionValueCandidates(a string) []string {
 			return
 		}
 		out = append(out, v)
-		// @path is curl's read-from-file marker (-d @file, -F name=@file).
-		if strings.HasPrefix(v, "@") && len(v) > 1 {
-			out = append(out, v[1:])
-		}
+		out = append(out, fileMarkerPaths(v)...)
 	}
 	if i := strings.IndexByte(a, '='); i >= 0 {
-		// "--flag=value" and form-field "name=@file" tokens.
+		// "--flag=value" and form-field "name=@file" / "name=<file" tokens.
 		add(a[i+1:])
 		return out
 	}
-	if strings.HasPrefix(a, "@") {
-		add(a)
-		return out
-	}
 	// Inline short-option value ("-T/etc/shadow", "-d@/etc/shadow",
-	// "-T~/.ssh/id_rsa"): the path-like tail starts at the first /, ~ or @.
+	// "-T~/.ssh/id_rsa"): the path-like tail starts at the first /, ~, @ or <.
 	if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
-		if idx := strings.IndexAny(a, "/~@"); idx > 0 {
+		if idx := strings.IndexAny(a, "/~@<"); idx > 0 {
 			add(a[idx:])
 		}
+		return out
+	}
+	// A bare (non-option) token can still carry a read-from-file marker: the
+	// value of "-d"/"--data-urlencode"/"-F" arrives as its own token, and the
+	// path may sit behind a field name ("name@/etc/shadow") or a "<" that the
+	// shell never saw because the value was quoted.
+	return append(out, fileMarkerPaths(a)...)
+}
+
+// fileMarkerPaths returns the path portions hidden behind curl's
+// read-from-file markers in v. "<" is the form-field file read
+// ("-F story=</etc/shadow" uploads the file's contents) and "@" marks a file
+// either as a prefix ("@/etc/shadow") or as a field-name separator
+// ("--data-urlencode name@/etc/shadow"), neither of which leaves the bare path
+// as a token of its own.
+func fileMarkerPaths(v string) []string {
+	var out []string
+	if rest := strings.TrimPrefix(v, "<"); rest != v && rest != "" {
+		out = append(out, rest)
+		v = rest
+	}
+	if i := strings.IndexByte(v, '@'); i >= 0 && i+1 < len(v) {
+		out = append(out, v[i+1:])
 	}
 	return out
 }
