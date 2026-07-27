@@ -504,6 +504,29 @@ func TestExecTool_LiveEngineRejectsInvalidContextProviderEngine(t *testing.T) {
 	require.False(t, supportsInteractiveSessions(&noEngineExec{}))
 }
 
+func TestExecTool_LiveEngineRejectsContextProviderMissingComponents(t *testing.T) {
+	tests := []struct {
+		name string
+		eng  codeexecutor.Engine
+	}{
+		{
+			name: "manager",
+			eng:  codeexecutor.NewEngine(nil, &nonInteractiveFS{}, &nonInteractiveRunner{}),
+		},
+		{
+			name: "runner",
+			eng:  codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, nil),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := (&ExecTool{exec: &contextEngineExec{eng: tt.eng}}).liveEngine(context.Background())
+			require.ErrorContains(t, err, "live workspace support")
+		})
+	}
+}
+
 func TestExecTool_CallUsesContextAwareProvider(t *testing.T) {
 	ctx := context.WithValue(context.Background(), "request", "context-aware")
 	eng := codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, &nonInteractiveRunner{})
