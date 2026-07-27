@@ -768,6 +768,34 @@ func TestToolSet_MetadataAndOptions(t *testing.T) {
 	require.NoError(t, nilSet.Close())
 }
 
+// TestWithSafetyScanner verifies that WithSafetyScanner option can be
+// applied and produces a working tool set with safety checks.
+func TestWithSafetyScanner(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	baseDir := t.TempDir()
+	set, err := NewToolSet(
+		WithBaseDir(baseDir),
+		WithSafetyScanner(nil),
+	)
+	require.NoError(t, err)
+	defer set.Close()
+
+	tools := set.Tools(context.Background())
+	require.Len(t, tools, 3)
+
+	// Execute a safe command to verify the tool still works with nil safety.
+	callable, ok := tools[0].(tool.CallableTool)
+	require.True(t, ok)
+
+	args, _ := json.Marshal(map[string]string{"command": "echo hello"})
+	result, err := callable.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+}
+
 func TestToolCalls_NotConfigured(t *testing.T) {
 	var execTool *execCommandTool
 	_, err := execTool.Call(

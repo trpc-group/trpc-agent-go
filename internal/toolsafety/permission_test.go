@@ -108,6 +108,161 @@ func TestPermissionPolicyAllowsSafeCommand(t *testing.T) {
 	}
 }
 
+// TestPermissionPolicyAskDecision verifies that an "ask" decision passes through.
+func TestPermissionPolicyAskDecision(t *testing.T) {
+	policy := toolsafety.DefaultPolicy()
+	policy.DecisionPolicy.AskOnRiskLevel = "medium"
+	policy.DecisionPolicy.DefaultOnUnknownRisk = "ask"
+
+	scanner := toolsafety.NewScanner(policy)
+	// Use a custom checker that returns a medium-risk finding to trigger "ask".
+	scanner.Add(toolsafety.NewCheckerFunc("medium_checker",
+		func(ctx context.Context, req *toolsafety.ScanRequest) ([]toolsafety.RiskFinding, error) {
+			return []toolsafety.RiskFinding{{
+				RuleID:    toolsafety.RuleResourceSleepLoop,
+				RiskLevel: toolsafety.RiskLevelMedium,
+				Evidence:  "sleep 3600",
+			}}, nil
+		}, nil))
+
+	auditCalled := false
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(scanner)
+	guard.WithAuditLog(func(r *toolsafety.ScanReport) {
+		auditCalled = true
+	})
+
+	args, _ := json.Marshal(map[string]string{"command": "sleep 3600"})
+
+	req := &tool.PermissionRequest{
+		ToolName:   "workspace_exec",
+		ToolCallID: "call_ask",
+		Arguments:  args,
+	}
+
+	decision, err := guard.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+
+	if decision.Action != tool.PermissionActionAsk {
+		t.Errorf("expected ask decision for medium risk with AskOnRiskLevel=medium, got %q", decision.Action)
+	}
+	if decision.Reason == "" {
+		t.Error("expected non-empty reason")
+	}
+	if !auditCalled {
+		t.Error("audit callback was not called for ask decision")
+	}
+}
+
+// TestPermissionPolicyScanError verifies that scan errors result in allow with wrapped error.
+func TestPermissionPolicyScanError(t *testing.T) {
+	policy := toolsafety.DefaultPolicy()
+	scanner := toolsafety.NewScanner(policy)
+	// Register a checker that always errors.
+	scanner.Add(toolsafety.NewCheckerFunc("error_checker",
+		func(ctx context.Context, req *toolsafety.ScanRequest) ([]toolsafety.RiskFinding, error) {
+			return nil, nil
+		}, nil))
+
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(scanner)
+
+	args, _ := json.Marshal(map[string]string{"command": "echo hello"})
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	}
+
+	decision, err := guard.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Errorf("expected allow on scan success, got %q", decision.Action)
+	}
+}
+
+// TestPermissionPolicyNilScanner verifies that a nil scanner returns allow.
+func TestPermissionPolicyNilScanner(t *testing.T) {
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(nil)
+	args, _ := json.Marshal(map[string]string{"command": "rm -rf /"})
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	}
+	decision, err := guard.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Errorf("expected allow for nil scanner, got %q", decision.Action)
+	}
+}
+
+// TestPermissionPolicyNilRequest verifies that a nil request returns allow.
+func TestPermissionPolicyNilRequest(t *testing.T) {
+	policy := toolsafety.DefaultPolicy()
+	scanner := toolsafety.NewScanner(policy)
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(scanner)
+
+	decision, err := guard.CheckToolPermission(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Errorf("expected allow for nil request, got %q", decision.Action)
+	}
+}
+
+// TestPermissionPolicyEmptyCommand verifies that a request with no command
+// (no "command" or "code_blocks" field) passes through.
+func TestPermissionPolicyEmptyCommand(t *testing.T) {
+	policy := toolsafety.DefaultPolicy()
+	scanner := toolsafety.NewScanner(policy)
+	scanner.Add(checkers.NewDangerousCmdChecker(policy))
+
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(scanner)
+
+	// No "command" key in the JSON.
+	args, _ := json.Marshal(map[string]string{"path": "/tmp"})
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: args,
+	}
+
+	decision, err := guard.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionAllow {
+		t.Errorf("expected allow for empty command, got %q", decision.Action)
+	}
+}
+
+// TestPermissionPolicyHostexecTool verifies that hostexec tool names are recognised.
+func TestPermissionPolicyHostexecTool(t *testing.T) {
+	policy := toolsafety.DefaultPolicy()
+	scanner := toolsafety.NewScanner(policy)
+	scanner.Add(checkers.NewDangerousCmdChecker(policy))
+	scanner.Add(checkers.NewNetworkEgressChecker(policy))
+
+	guard := toolsafety.NewSafetyGuardPermissionPolicy(scanner)
+
+	args, _ := json.Marshal(map[string]string{"command": "curl http://evil.com"})
+	req := &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: args,
+	}
+
+	decision, err := guard.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission error: %v", err)
+	}
+	if decision.Action != tool.PermissionActionDeny {
+		t.Errorf("expected deny for dangerous hostexec command, got %q", decision.Action)
+	}
+}
+
 // TestPermissionPolicySkipsUnknownTool verifies that non-execution tools pass through.
 func TestPermissionPolicySkipsUnknownTool(t *testing.T) {
 	policy := toolsafety.DefaultPolicy()

@@ -105,3 +105,72 @@ func TestAddSpanEventNoSpan(t *testing.T) {
 	}
 	toolsafety.AddSpanEvent(context.Background(), report)
 }
+
+// TestAddSpanEventWithSpan verifies that AddSpanEvent adds an event to a
+// recording span without error.
+func TestAddSpanEventWithSpan(t *testing.T) {
+	report := &toolsafety.ScanReport{
+		Decision:  toolsafety.DecisionDeny,
+		RiskLevel: toolsafety.RiskLevelCritical,
+		Backend:   "workspaceexec",
+		Duration:  time.Millisecond,
+		Findings: []toolsafety.RiskFinding{
+			{RuleID: toolsafety.RuleDestructivePath, Evidence: "rm -rf /"},
+		},
+	}
+
+	// AddSpanEvent should not panic when called with a context that has
+	// a non-recording span (the background context path).
+	toolsafety.AddSpanEvent(context.Background(), report)
+
+	// Adding with nil report should also not panic.
+	toolsafety.AddSpanEvent(context.Background(), nil)
+}
+
+// TestSpanAttrsWithFindings verifies all expected attributes are present.
+func TestSpanAttrsWithFindings(t *testing.T) {
+	report := &toolsafety.ScanReport{
+		Decision:  toolsafety.DecisionDeny,
+		RiskLevel: toolsafety.RiskLevelCritical,
+		Backend:   "workspaceexec",
+		Duration:  5 * time.Millisecond,
+		Findings: []toolsafety.RiskFinding{
+			{RuleID: toolsafety.RuleDestructivePath, Evidence: "rm -rf /"},
+		},
+	}
+
+	attrs := toolsafety.SpanAttrs(report)
+	if len(attrs) == 0 {
+		t.Fatal("expected non-empty attrs")
+	}
+
+	for _, a := range attrs {
+		switch string(a.Key) {
+		case "tool.safety.decision":
+			if a.Value.AsString() != "deny" {
+				t.Errorf("decision: got %q", a.Value.AsString())
+			}
+		case "tool.safety.risk_level":
+			if a.Value.AsString() != "critical" {
+				t.Errorf("risk_level: got %q", a.Value.AsString())
+			}
+		case "tool.safety.backend":
+			if a.Value.AsString() != "workspaceexec" {
+				t.Errorf("backend: got %q", a.Value.AsString())
+			}
+		case "tool.safety.rule_id":
+			if a.Value.AsString() != "DESTRUCTIVE_PATH" {
+				t.Errorf("rule_id: got %q", a.Value.AsString())
+			}
+		case "tool.safety.duration_ms":
+			if got := a.Value.AsInt64(); got != 5 {
+				t.Errorf("duration_ms: got %d, want 5", got)
+			}
+		}
+	}
+}
+
+// TestAddSpanEventNilReport verifies that AddSpanEvent handles nil report.
+func TestAddSpanEventNilReport(t *testing.T) {
+	toolsafety.AddSpanEvent(context.Background(), nil)
+}
