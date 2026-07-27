@@ -76,6 +76,8 @@ func CompareCases(baseline, candidate []CaseEvaluation, passK int) (Comparison, 
 		comparison.Deltas = append(comparison.Deltas, delta)
 		comparison.BaselineErrorRuns += countRunErrors(baseCase.Runs)
 		comparison.CandidateErrorRuns += countRunErrors(candidateCase.Runs)
+		comparison.BaselineHardFailureRuns += countHardFailures(baseCase.Runs)
+		comparison.CandidateHardFailureRuns += countHardFailures(candidateCase.Runs)
 		comparison.BaselineMeanScore += baseMean
 		comparison.CandidateMeanScore += candidateMean
 		comparison.Usage = comparison.Usage.Add(sumUsage(baseCase.Runs)).Add(sumUsage(candidateCase.Runs))

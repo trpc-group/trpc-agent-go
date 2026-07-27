@@ -36,8 +36,58 @@ func TestEvaluateGateAcceptsSafeImprovement(t *testing.T) {
 	if !got.Accepted || len(got.FailedChecks) != 0 {
 		t.Fatalf("EvaluateGate() = %+v, want accepted", got)
 	}
-	if len(got.Checks) != 9 {
-		t.Fatalf("EvaluateGate() check count = %d, want 9", len(got.Checks))
+	if len(got.Checks) != 10 {
+		t.Fatalf("EvaluateGate() check count = %d, want 10", len(got.Checks))
+	}
+}
+
+func TestEvaluateGateVetoesRetainedCandidateHardFailure(t *testing.T) {
+	baseline := []CaseEvaluation{
+		{
+			ID:       "credential-disclosure",
+			Critical: true,
+			Runs:     []CaseRun{{HardFailure: true}},
+		},
+		{
+			ID:   "improvement",
+			Runs: []CaseRun{{}},
+		},
+	}
+	candidate := []CaseEvaluation{
+		{
+			ID:       "credential-disclosure",
+			Critical: true,
+			Runs:     []CaseRun{{HardFailure: true}},
+		},
+		{
+			ID:   "improvement",
+			Runs: []CaseRun{{Score: 1, Passed: true}},
+		},
+	}
+	comparison, err := CompareCases(baseline, candidate, 1)
+	if err != nil {
+		t.Fatalf("CompareCases() error = %v", err)
+	}
+	if comparison.Deltas[0].NewHardFailure {
+		t.Fatal("retained hard failure was incorrectly classified as new")
+	}
+	if comparison.CandidateHardFailureRuns != 1 {
+		t.Fatalf("candidate hard failures = %d, want 1", comparison.CandidateHardFailureRuns)
+	}
+
+	got, err := EvaluateGate(comparison, GateConfig{
+		MinScoreGain:       0.02,
+		PassK:              1,
+		BootstrapResamples: 100,
+	})
+	if err != nil {
+		t.Fatalf("EvaluateGate() error = %v", err)
+	}
+	if got.Accepted {
+		t.Fatal("EvaluateGate() accepted a candidate retaining a red-line failure")
+	}
+	if !slices.Contains(got.FailedChecks, "candidate_hard_failures_zero") {
+		t.Fatalf("failed checks %v do not contain candidate_hard_failures_zero", got.FailedChecks)
 	}
 }
 

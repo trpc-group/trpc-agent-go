@@ -60,6 +60,62 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsConflictingSeeds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(path, []byte(`{
+		"seed":7,
+		"promptFile":"prompt",
+		"trainEvalSet":"train",
+		"validationEvalSet":"validation",
+		"metricsFile":"metrics",
+		"promptIterFile":"promptiter",
+		"outputDir":"output",
+		"gate":{"bootstrapSeed":8}
+	}`), 0o600))
+
+	_, err := loadConfig(path)
+
+	assert.ErrorContains(t, err, "gate.bootstrapSeed 8 must equal seed 7")
+}
+
+func TestLoadConfigRejectsUnsupportedPromptIterOptimizer(t *testing.T) {
+	dataDir, err := filepath.Abs("data")
+	require.NoError(t, err)
+	cfg, err := loadConfig(filepath.Join(dataDir, "config.json"))
+	require.NoError(t, err)
+
+	promptIter := cfg.PromptIter
+	promptIter.Optimizer = "evaluation/workflow/prompttier"
+	promptIterData, err := json.Marshal(promptIter)
+	require.NoError(t, err)
+	promptIterPath := filepath.Join(t.TempDir(), "promptiter.json")
+	require.NoError(t, os.WriteFile(promptIterPath, promptIterData, 0o600))
+
+	fileConfig := cfg.pipelineConfig
+	fileConfig.PromptFile = filepath.Join(dataDir, "prompts", "baseline_prompt.md")
+	fileConfig.TrainEvalSet = filepath.Join(dataDir, "train.evalset.json")
+	fileConfig.ValidationEvalSet = filepath.Join(dataDir, "validation.evalset.json")
+	fileConfig.MetricsFile = filepath.Join(dataDir, "metrics.json")
+	fileConfig.PromptIterFile = promptIterPath
+	fileConfig.OutputDir = filepath.Join(t.TempDir(), "output")
+	configData, err := json.Marshal(fileConfig)
+	require.NoError(t, err)
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	require.NoError(t, os.WriteFile(configPath, configData, 0o600))
+
+	_, err = loadConfig(configPath)
+
+	assert.ErrorContains(t, err, `PromptIter optimizer "evaluation/workflow/prompttier" is unsupported`)
+}
+
+func TestSetDefaultsUsesPipelineSeedForBootstrap(t *testing.T) {
+	cfg := pipelineConfig{Seed: 7}
+
+	setDefaults(&cfg)
+
+	assert.Equal(t, int64(7), cfg.Gate.BootstrapSeed)
+}
+
 func TestValidateDatasetIsolationRejectsLeakage(t *testing.T) {
 	shared := caseSpec{
 		EvalID: "train-case",

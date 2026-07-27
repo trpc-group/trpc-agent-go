@@ -21,8 +21,9 @@ import (
 )
 
 const (
-	modeFake = "fake"
-	modeLive = "live"
+	modeFake                     = "fake"
+	modeLive                     = "live"
+	supportedPromptIterOptimizer = "evaluation/workflow/promptiter"
 )
 
 type pipelineConfig struct {
@@ -229,6 +230,9 @@ func setDefaults(cfg *pipelineConfig) {
 	if cfg.Gate.BootstrapRounds == 0 {
 		cfg.Gate.BootstrapRounds = 5000
 	}
+	if cfg.Gate.BootstrapSeed == 0 {
+		cfg.Gate.BootstrapSeed = cfg.Seed
+	}
 	if cfg.Live.Model == "" {
 		cfg.Live.Model = "deepseek-v4-flash"
 	}
@@ -300,6 +304,12 @@ func validateConfig(cfg pipelineConfig) error {
 		return errors.New("gate.passK must be greater than zero")
 	case cfg.Gate.MinScoreGain < 0:
 		return errors.New("gate.minScoreGain must be non-negative")
+	case cfg.Gate.BootstrapSeed != cfg.Seed:
+		return fmt.Errorf(
+			"gate.bootstrapSeed %d must equal seed %d",
+			cfg.Gate.BootstrapSeed,
+			cfg.Seed,
+		)
 	case cfg.Gate.MaxCostCNY < 0:
 		return errors.New("gate.maxCostCNY must be non-negative")
 	case cfg.Gate.MaxCalls < 0 || cfg.Gate.MaxTokens < 0:
@@ -362,8 +372,12 @@ func validateLoadedInputs(
 		return errors.New("PromptIter minScoreGain must be non-negative")
 	case strings.TrimSpace(promptIter.Target) == "":
 		return errors.New("PromptIter target is required")
-	case strings.TrimSpace(promptIter.Optimizer) == "":
-		return errors.New("PromptIter optimizer is required")
+	case strings.TrimSpace(promptIter.Optimizer) != supportedPromptIterOptimizer:
+		return fmt.Errorf(
+			"PromptIter optimizer %q is unsupported; want %q",
+			promptIter.Optimizer,
+			supportedPromptIterOptimizer,
+		)
 	case !promptIter.TrainOnlyOptimization:
 		return errors.New("PromptIter must use train-only optimization")
 	case promptIter.CandidateValidationRuns != cfg.Gate.PassK:

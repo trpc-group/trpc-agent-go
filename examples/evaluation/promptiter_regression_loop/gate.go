@@ -57,6 +57,18 @@ func EvaluateGate(comparison Comparison, config GateConfig) (GateResult, error) 
 				comparison.CandidateErrorRuns,
 			),
 		),
+		newGateCheck(
+			"candidate_hard_failures_zero",
+			comparison.CandidateHardFailureRuns == 0,
+			float64(comparison.CandidateHardFailureRuns),
+			0,
+			"==",
+			fmt.Sprintf(
+				"candidate validation must contain no red-line failures (baseline=%d, candidate=%d)",
+				comparison.BaselineHardFailureRuns,
+				comparison.CandidateHardFailureRuns,
+			),
+		),
 		newGateCheck("minimum_score_gain", comparison.MeanScoreGain >= config.MinScoreGain,
 			comparison.MeanScoreGain, config.MinScoreGain, ">=", "candidate validation mean must improve by the configured minimum"),
 		newGateCheck("no_new_hard_failure", newHardFailures == 0,

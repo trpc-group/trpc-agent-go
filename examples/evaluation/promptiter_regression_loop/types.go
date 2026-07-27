@@ -119,16 +119,18 @@ type CaseDelta struct {
 
 // Comparison is a validation-only comparison between baseline and candidate prompts.
 type Comparison struct {
-	PassK                   int         `json:"pass_k"`
-	Deltas                  []CaseDelta `json:"deltas"`
-	BaselineErrorRuns       int         `json:"baseline_error_runs"`
-	CandidateErrorRuns      int         `json:"candidate_error_runs"`
-	BaselineMeanScore       float64     `json:"baseline_mean_score"`
-	CandidateMeanScore      float64     `json:"candidate_mean_score"`
-	MeanScoreGain           float64     `json:"mean_score_gain"`
-	BaselinePassPowerKRate  float64     `json:"baseline_pass_power_k_rate"`
-	CandidatePassPowerKRate float64     `json:"candidate_pass_power_k_rate"`
-	Usage                   Usage       `json:"usage"`
+	PassK                    int         `json:"pass_k"`
+	Deltas                   []CaseDelta `json:"deltas"`
+	BaselineErrorRuns        int         `json:"baseline_error_runs"`
+	CandidateErrorRuns       int         `json:"candidate_error_runs"`
+	BaselineHardFailureRuns  int         `json:"baseline_hard_failure_runs"`
+	CandidateHardFailureRuns int         `json:"candidate_hard_failure_runs"`
+	BaselineMeanScore        float64     `json:"baseline_mean_score"`
+	CandidateMeanScore       float64     `json:"candidate_mean_score"`
+	MeanScoreGain            float64     `json:"mean_score_gain"`
+	BaselinePassPowerKRate   float64     `json:"baseline_pass_power_k_rate"`
+	CandidatePassPowerKRate  float64     `json:"candidate_pass_power_k_rate"`
+	Usage                    Usage       `json:"usage"`
 }
 
 // ConfidenceInterval is a two-sided confidence interval for the paired mean delta.
