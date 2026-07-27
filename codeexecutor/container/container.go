@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/docker/docker/api/types/build"
@@ -40,8 +41,16 @@ const (
 	defaultContainerWorkingDir = "/"
 )
 
-// CodeExecutor executes code using a Docker container
+// CodeExecutor executes code using a Docker container.
+//
+// Its lifecycle methods are safe for concurrent use. Close is idempotent and
+// waits for an in-progress lifecycle transition to finish. Calls that begin
+// after Close returns fail without starting or reusing a container; calls
+// already using a Docker request may finish with that request's result or an
+// error caused by the closed client.
 type CodeExecutor struct {
+	containerMu     sync.Mutex
+	closed          bool
 	host            string               // Optional base URL of the user hosted Docker client, default client.DefaultDockerHost
 	dockerFilePath  string               // Path to directory containing Dockerfile
 	client          *client.Client       // Docker client
@@ -192,10 +201,12 @@ func WithAutoInputs(enable bool) Option {
 
 // ExecuteCode implements the CodeExecutor interface
 func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
-	if c.container == nil {
-		return codeexecutor.CodeExecutionResult{}, fmt.Errorf("container not initialized")
+	// Validate the lifecycle even when input has no executable blocks. Besides
+	// preserving the executor contract for empty input, this avoids reading the
+	// container field outside the lifecycle lock.
+	if err := c.requireContainer(); err != nil {
+		return codeexecutor.CodeExecutionResult{}, err
 	}
-
 	var allOutput strings.Builder
 	var allErrors strings.Builder
 
@@ -227,15 +238,19 @@ func (c *CodeExecutor) ExecuteCode(ctx context.Context, input codeexecutor.CodeE
 			AttachStdout: true,
 			AttachStderr: true,
 		}
+		client, containerID, err := c.containerClient()
+		if err != nil {
+			return codeexecutor.CodeExecutionResult{}, err
+		}
 
 		// Create exec instance
-		execResp, err := c.client.ContainerExecCreate(ctx, c.container.ID, execConfig)
+		execResp, err := client.ContainerExecCreate(ctx, containerID, execConfig)
 		if err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to create exec: %w", err)
 		}
 
 		// Start exec
-		hijacked, err := c.client.ContainerExecAttach(ctx, execResp.ID, container.ExecStartOptions{})
+		hijacked, err := client.ContainerExecAttach(ctx, execResp.ID, container.ExecStartOptions{})
 		if err != nil {
 			return codeexecutor.CodeExecutionResult{}, fmt.Errorf("failed to attach to exec: %w", err)
 		}
@@ -283,6 +298,23 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 // Workspace methods
 
 func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	return c.ensureWSLocked(context.Background())
+}
+
+func (c *CodeExecutor) ensureWSLocked(ctx context.Context) (*workspaceRuntime, error) {
+	if c.closed {
+		return nil, fmt.Errorf("container executor is closed")
+	}
+	// Preserve the lightweight wrapper behavior for a zero-value executor used
+	// by callers that only need workspace adapters. A configured executor gets
+	// a fresh container after timeout invalidation.
+	if c.container == nil && c.client != nil {
+		if err := c.ensureContainerLocked(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if c.ws != nil {
 		return c.ws, nil
 	}
@@ -292,6 +324,82 @@ func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
 	}
 	c.ws = rt
 	return rt, nil
+}
+
+// ensureContainer recreates the isolated execution container after a timed-out
+// attach has invalidated it. It must not reuse a container that may still be
+// running an untrusted process.
+func (c *CodeExecutor) ensureContainer(ctx context.Context) error {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	return c.ensureContainerLocked(ctx)
+}
+
+func (c *CodeExecutor) ensureContainerLocked(ctx context.Context) error {
+	if c.closed {
+		return fmt.Errorf("container executor is closed")
+	}
+	if c.container != nil {
+		return nil
+	}
+	return c.initContainer(ctx)
+}
+
+func (c *CodeExecutor) containerClient() (*client.Client, string, error) {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.closed {
+		return nil, "", fmt.Errorf("container executor is closed")
+	}
+	if c.client == nil || c.container == nil {
+		return nil, "", fmt.Errorf("container not initialized")
+	}
+	return c.client, c.container.ID, nil
+}
+
+// requireContainer validates the lifecycle for operations that can complete
+// without a Docker client (for example, an unsupported-language diagnostic).
+func (c *CodeExecutor) requireContainer() error {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.closed {
+		return fmt.Errorf("container executor is closed")
+	}
+	if c.container == nil {
+		return fmt.Errorf("container not initialized")
+	}
+	return nil
+}
+
+// abortContainer terminates a container after its exec attach has timed out.
+// Docker cannot cancel an individual exec, so retaining the container could
+// leave the untrusted process running after RunProgram has returned.
+func (c *CodeExecutor) abortContainer() {
+	if c == nil {
+		return
+	}
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.closed || c.client == nil || c.container == nil {
+		return
+	}
+	containerID := c.container.ID
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRmTimeoutSec*time.Second)
+	defer cancel()
+	if err := c.client.ContainerKill(ctx, containerID, "SIGKILL"); err != nil {
+		log.DebugfContext(ctx, "Failed to kill timed-out container %s: %v", containerID, err)
+	}
+	// AutoRemove is a default, not an invariant: callers can replace
+	// HostConfig. Always request removal so a timed-out runtime never leaks a
+	// container when AutoRemove was disabled.
+	if err := c.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true}); err != nil {
+		log.DebugfContext(ctx, "Failed to remove timed-out container %s: %v", containerID, err)
+	}
+	// Do not reuse the container even if Docker returns an error: closing the
+	// attach makes its state uncertain, and the next operation will create a
+	// fresh isolated container.
+	c.container = nil
+	c.ws = nil
 }
 
 // Engine exposes the container runtime as an Engine for skills.
@@ -529,6 +637,22 @@ func (c *CodeExecutor) initContainer(ctx context.Context) error {
 	// Record the ID before any subsequent operation so the constructor's
 	// cleanup path can remove a container created during a failed startup.
 	c.container = &container.Summary{ID: resp.ID}
+	// Container recreation after a timed-out attach uses this method too. Do
+	// not leave a partially started ID behind on any later error: a future
+	// ensureContainer call must retry from a fresh isolated container.
+	succeeded := false
+	defer func() {
+		if succeeded {
+			return
+		}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRmTimeoutSec*time.Second)
+		defer cancel()
+		if removeErr := c.client.ContainerRemove(cleanupCtx, resp.ID, container.RemoveOptions{Force: true}); removeErr != nil {
+			log.DebugfContext(cleanupCtx, "Failed to remove failed container %s: %v", resp.ID, removeErr)
+		}
+		c.container = nil
+		c.ws = nil
+	}()
 
 	// Start container
 	if err := c.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
@@ -566,6 +690,7 @@ func (c *CodeExecutor) initContainer(ctx context.Context) error {
 		return err
 	}
 
+	succeeded = true
 	return nil
 }
 
@@ -605,31 +730,55 @@ func (c *CodeExecutor) waitForContainerReady(ctx context.Context, timeout time.D
 
 // cleanup stops and removes the container
 func (c *CodeExecutor) cleanup() {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	c.cleanupLocked()
+}
+
+func (c *CodeExecutor) cleanupLocked() {
 	if c.container == nil || c.client == nil {
+		c.ws = nil
 		return
 	}
+	containerID := c.container.ID
+	client := c.client
+	// Prevent newly obtained runtimes from using a container that is being
+	// stopped. The lifecycle lock remains held until removal completes.
+	c.container = nil
+	c.ws = nil
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	// Stop container
-	if err := c.client.ContainerStop(ctx, c.container.ID, container.StopOptions{}); err != nil {
+	if err := client.ContainerStop(ctx, containerID, container.StopOptions{}); err != nil {
 		log.DebugfContext(ctx, "Failed to stop container: %v", err)
 	}
 
 	// Remove container
-	if err := c.client.ContainerRemove(ctx, c.container.ID, container.RemoveOptions{}); err != nil {
+	if err := client.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
 		log.DebugfContext(ctx, "Failed to remove container: %v", err)
 	}
 
-	log.DebugfContext(ctx, "Container %s stopped and removed", c.container.ID)
+	log.DebugfContext(ctx, "Container %s stopped and removed", containerID)
 }
 
-// Close manually cleans up resources
+// Close stops and removes the current container and releases the Docker
+// client. It is safe to call concurrently and more than once. After it
+// returns, new executor operations fail; operations already in flight can
+// complete or return an error from the closed Docker client.
 func (c *CodeExecutor) Close() error {
-	c.cleanup()
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.closed {
+		return nil
+	}
+	c.closed = true
+	c.cleanupLocked()
 	if c.client != nil {
-		return c.client.Close()
+		err := c.client.Close()
+		c.client = nil
+		return err
 	}
 	return nil
 }

@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.

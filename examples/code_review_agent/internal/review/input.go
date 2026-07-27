@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -316,6 +315,16 @@ func ParseUnifiedDiff(raw string) (ParsedInput, error) {
 				files[currentFile] = true
 				parsed.Statuses[currentFile] = fileModified
 			}
+		case strings.HasPrefix(line, "old mode "), strings.HasPrefix(line, "new mode "):
+			if headerFile != "" {
+				files[headerFile] = true
+				parsed.Statuses[headerFile] = fileModified
+			}
+		case strings.HasPrefix(line, "copy from "), strings.HasPrefix(line, "copy to "):
+			if headerFile != "" {
+				files[headerFile] = true
+				parsed.Statuses[headerFile] = fileAdded
+			}
 		case strings.HasPrefix(line, "Binary files "):
 			if headerFile == "" {
 				marker := strings.LastIndex(line, " and ")
@@ -463,7 +472,9 @@ func cleanDiffPath(value string) string {
 	if value == "/dev/null" {
 		return ""
 	}
-	value = strings.TrimPrefix(strings.TrimPrefix(value, "a/"), "b/")
+	if strings.HasPrefix(value, "a/") || strings.HasPrefix(value, "b/") {
+		value = value[2:]
+	}
 	return cleanRepositoryPath(value)
 }
 

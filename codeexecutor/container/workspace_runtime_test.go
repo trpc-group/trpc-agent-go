@@ -1417,6 +1417,56 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 	require.True(t, res.TimedOut)
 }
 
+func TestWorkspaceRuntime_RunProgram_InterruptsBlockedAttachOnTimeout(t *testing.T) {
+	killed := make(chan struct{}, 1)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/"+testCID+"/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"` + testExec1 + `"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/exec/"+testExec1+"/start"):
+			hijacker, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("response writer cannot hijack")
+			}
+			conn, buf, err := hijacker.Hijack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+			_ = buf.Flush()
+			_, _ = io.Copy(io.Discard, conn)
+			_ = conn.Close()
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/"+testCID+"/kill"):
+			select {
+			case killed <- struct{}{}:
+			default:
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/"+testCID):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{ce: &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: testCID}}, cfg: runtimeConfig{runContainerBase: testRunBase}}
+	started := time.Now()
+	result, err := rt.RunProgram(context.Background(), codeexecutor.Workspace{ID: "timeout", Path: path.Join(testRunBase, "timeout")}, codeexecutor.RunProgramSpec{Cmd: "bash", Args: []string{"-lc", "sleep 60"}, Timeout: 20 * time.Millisecond})
+	if err == nil || !result.TimedOut {
+		t.Fatalf("blocked attach returned result=%+v err=%v", result, err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("blocked attach returned too late: %s", elapsed)
+	}
+	select {
+	case <-killed:
+	case <-time.After(time.Second):
+		t.Fatal("timeout did not terminate the container")
+	}
+}
+
 func TestWorkspaceRuntime_RunProgram_NoDupWorkspaceEnv(t *testing.T) {
 	var captured []string
 	handler := func(w http.ResponseWriter, r *http.Request) {

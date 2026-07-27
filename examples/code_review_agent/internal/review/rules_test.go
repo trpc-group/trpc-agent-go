@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -9,6 +8,7 @@
 package review
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,6 +82,50 @@ func TestLooksSecretRequiresLiteralCredentialEvidence(t *testing.T) {
 	for _, test := range cases {
 		if got := looksSecret(test.line); got != test.want {
 			t.Errorf("looksSecret(%q) = %t, want %t", test.line, got, test.want)
+		}
+	}
+}
+
+func TestMultilinePEMIsDetectedAtSafeHunkAnchor(t *testing.T) {
+	raw := "diff --git a/credentials.go b/credentials.go\n--- a/credentials.go\n+++ b/credentials.go\n@@ -1 +1,5 @@\n package credentials\n+privateKey := `\n+-----BEGIN PRIVATE KEY-----\n+MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n+-----END PRIVATE KEY-----\n+`\n"
+	input, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	findings, _, _ := analyze(input)
+	var secretFindings []Finding
+	for _, finding := range findings {
+		if finding.RuleID == "go/security/hardcoded-secret" {
+			secretFindings = append(secretFindings, finding)
+		}
+	}
+	if len(secretFindings) != 1 || secretFindings[0].Line != 2 {
+		t.Fatalf("multiline PEM finding = %+v", secretFindings)
+	}
+	if strings.Contains(secretFindings[0].Evidence, "MIIEvQ") {
+		t.Fatalf("PEM material leaked into finding evidence: %q", secretFindings[0].Evidence)
+	}
+	dir := t.TempDir()
+	report := Report{Task: Task{ID: "pem", Status: TaskCompleted}, Findings: secretFindings, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	_, paths, err := publish(report, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths.JSON, filepath.Join(dir, "reviews.sqlite")} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "MIIEvQ") {
+			t.Fatalf("PEM material crossed persistence boundary %s", path)
 		}
 	}
 }

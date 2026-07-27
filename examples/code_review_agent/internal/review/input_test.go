@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -110,6 +109,21 @@ func TestParseUnifiedDiffTracksRenameAndBinaryChanges(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedDiffTracksMetadataOnlyChanges(t *testing.T) {
+	raw := "diff --git a/cmd/tool.sh b/cmd/tool.sh\nold mode 100644\nnew mode 100755\n" +
+		"diff --git a/templates/base.txt b/templates/copied.txt\nsimilarity index 100%\ncopy from templates/base.txt\ncopy to templates/copied.txt\n"
+	got, err := ParseUnifiedDiff(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Files) != 2 || got.Files[0] != "cmd/tool.sh" || got.Files[1] != "templates/copied.txt" {
+		t.Fatalf("metadata-only files = %#v", got.Files)
+	}
+	if got.Statuses["cmd/tool.sh"] != fileModified || got.Statuses["templates/copied.txt"] != fileAdded {
+		t.Fatalf("metadata-only statuses = %#v", got.Statuses)
+	}
+}
+
 func TestParseUnifiedDiffTracksBinaryPathWithSpaces(t *testing.T) {
 	raw := "diff --git a/assets/old logo.bin b/assets/new logo.bin\nBinary files a/assets/old logo.bin and b/assets/new logo.bin differ\n"
 	got, err := ParseUnifiedDiff(raw)
@@ -207,6 +221,9 @@ func TestCleanDiffPathHandlesQuotedAndUnsafePaths(t *testing.T) {
 	}
 	if got := cleanDiffPath("b/pkg/a.go\t2026-01-01"); got != "pkg/a.go" {
 		t.Fatalf("timestamped path = %q", got)
+	}
+	if got := cleanDiffPath("a/b/service.go"); got != "b/service.go" {
+		t.Fatalf("top-level b directory was lost from deleted path: %q", got)
 	}
 	for _, path := range []string{"/dev/null", "../escape.go", "/absolute.go"} {
 		if got := cleanDiffPath(path); got != "" {

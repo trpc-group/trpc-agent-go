@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -11,7 +10,9 @@ package review
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -121,7 +122,7 @@ func TestInputFailureIsPersistedForAudit(t *testing.T) {
 	}
 	defer store.Close()
 	report, err := store.Load(context.Background(), "input-failure")
-	if err != nil || report.Task.Status != TaskFailed || report.Task.InputMode != "diff_file" || len(report.SandboxRuns) != 1 {
+	if err != nil || report.Task.Status != TaskFailed || report.Task.InputMode != "diff_file" || len(report.SandboxRuns) != 1 || report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS || report.Metrics.TotalDurationScope != "failure_audit" {
 		t.Fatalf("input failure was not persisted: report=%+v err=%v", report, err)
 	}
 }
@@ -148,7 +149,7 @@ func TestSandboxConfigurationFailureIsPersistedForAudit(t *testing.T) {
 			}
 			defer store.Close()
 			report, err := store.Load(context.Background(), taskID)
-			if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) != 1 || report.SandboxRuns[0].Command != "initialize_sandbox" {
+			if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) != 1 || report.SandboxRuns[0].Command != "initialize_sandbox" || report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS || report.Metrics.TotalDurationScope != "failure_audit" {
 				t.Fatalf("sandbox configuration failure was not persisted: report=%+v err=%v", report, err)
 			}
 		})
@@ -164,15 +165,17 @@ func TestReportRedactionCoversFileNamesBeforePersistence(t *testing.T) {
 		Findings: []Finding{{
 			File: "internal/api_key=" + secret + ".go", Evidence: "reviewed " + secret,
 		}},
+		Artifacts: []Artifact{{
+			Name: "api_key=" + secret + ".json", Path: "out/api_key=" + secret + ".json", Provenance: "source=" + secret,
+		}},
 		Metrics: Metrics{SeverityDistribution: map[string]int{}},
 	}
-	report := redactReport(rawReport)
-	if strings.Contains(report.Findings[0].File, secret) {
-		t.Fatalf("plaintext secret remained in file name: %q", report.Findings[0].File)
-	}
-	report, paths, err := publish(report, dir)
+	report, paths, err := publish(rawReport, dir)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(report.Findings[0].File, secret) {
+		t.Fatalf("plaintext secret remained in published file name: %q", report.Findings[0].File)
 	}
 	store, err := openStore(dbPath)
 	if err != nil {
@@ -298,7 +301,7 @@ func TestRunPersistsFailureWhenReportStagingFails(t *testing.T) {
 	}
 	defer store.Close()
 	report, err := store.Load(context.Background(), taskID)
-	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "stage_report" {
+	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "stage_report" || report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS || report.Metrics.TotalDurationScope != "failure_audit" {
 		t.Fatalf("failed publication was not retained for audit: report=%+v err=%v", report, err)
 	}
 }
@@ -326,8 +329,26 @@ func TestRunPersistsFailureWhenFinalizationFails(t *testing.T) {
 	}
 	defer store.Close()
 	report, err := store.Load(context.Background(), "finalization-failure")
-	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "finalize_report" {
+	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "finalize_report" || report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS || report.Metrics.TotalDurationScope != "failure_audit" {
 		t.Fatalf("finalization failure was not retained for audit: report=%+v err=%v", report, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "finalization-failure")); !os.IsNotExist(err) {
+		t.Fatalf("published report remained after finalization failed: %v", err)
+	}
+}
+
+func TestRunPublishesReportBeforeCompletingStore(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	factory := func(_ context.Context, cfg Config) (Store, error) {
+		store, err := openStore(cfg.DatabasePath)
+		if err != nil {
+			return nil, err
+		}
+		return &requirePublishedStore{Store: store, outputDir: cfg.OutputDir}, nil
+	}
+	if _, _, err := Run(context.Background(), Config{TaskID: "ordered-publication", Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: dbPath, StoreFactory: factory}); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -489,7 +510,7 @@ func TestRunUsesInjectedStoreFactory(t *testing.T) {
 func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	dir := t.TempDir()
 	const delay = 25 * time.Millisecond
-	report, _, err := Run(context.Background(), Config{
+	report, paths, err := Run(context.Background(), Config{
 		Fixture: "clean", DryRun: true, OutputDir: dir, DatabasePath: filepath.Join(dir, "reviews.sqlite"),
 		StoreFactory: func(_ context.Context, cfg Config) (Store, error) {
 			store, err := openStore(cfg.DatabasePath)
@@ -504,6 +525,29 @@ func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	}
 	if report.Metrics.PreparationDurationMS < delay.Milliseconds() {
 		t.Fatalf("preparation duration %dms excluded persistence delay", report.Metrics.PreparationDurationMS)
+	}
+	if report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS {
+		t.Fatalf("total duration %dms precedes preparation duration %dms", report.Metrics.TotalDurationMS, report.Metrics.PreparationDurationMS)
+	}
+	data, err := os.ReadFile(paths.JSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var published Report
+	if err := json.Unmarshal(data, &published); err != nil {
+		t.Fatal(err)
+	}
+	if published.Metrics.TotalDurationMS <= 0 || published.Metrics.TotalDurationMS > report.Metrics.TotalDurationMS || published.Metrics.TotalDurationScope != "pre_publication_snapshot" {
+		t.Fatalf("published total duration must be a positive pre-publication snapshot: published=%d final=%d", published.Metrics.TotalDurationMS, report.Metrics.TotalDurationMS)
+	}
+	store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	metrics, err := store.LoadMetrics(context.Background(), report.Task.ID)
+	if err != nil || metrics.TotalDurationMS != report.Metrics.TotalDurationMS || metrics.TotalDurationScope != "published_report" {
+		t.Fatalf("persisted total duration mismatch: metrics=%+v err=%v", metrics, err)
 	}
 }
 
@@ -521,6 +565,20 @@ type failOnceFinalizeStore struct {
 	Store
 	err    error
 	failed bool
+}
+
+type requirePublishedStore struct {
+	Store
+	outputDir string
+}
+
+func (s requirePublishedStore) Finalize(ctx context.Context, report Report) error {
+	if report.Task.Status == TaskCompleted {
+		if _, err := os.Stat(filepath.Join(s.outputDir, report.Task.ID)); err != nil {
+			return fmt.Errorf("report was not published before completion: %w", err)
+		}
+	}
+	return s.Store.Finalize(ctx, report)
 }
 
 func (s *failOnceFinalizeStore) Finalize(ctx context.Context, report Report) error {

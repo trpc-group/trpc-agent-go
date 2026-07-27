@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -97,24 +96,37 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	}
 	report.Task.Status, report.Task.EndedAt = TaskCompleted, time.Now()
 	report.Metrics = collectMetrics(started, report)
+	// Report files are immutable inputs to the atomic directory rename. Record a
+	// useful pre-publication snapshot in those files; the canonical final value
+	// is measured immediately after the rename and persisted below.
+	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
+	report.Metrics.TotalDurationScope = "pre_publication_snapshot"
 	stagedReport, paths, staged, err := stageReport(report, cfg.OutputDir)
 	if err != nil {
 		return failStoredReview("stage_report", err)
 	}
 	report = stagedReport
 	defer staged.cleanup()
+	if err := staged.commit(); err != nil {
+		return failStoredReview("publish_report", err)
+	}
+	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
+	report.Metrics.TotalDurationScope = "published_report"
+	failPublishedReview := func(operation string, cause error) (Report, ReportPaths, error) {
+		if rollbackErr := staged.rollback(); rollbackErr != nil {
+			cause = fmt.Errorf("%w; roll back published report: %v", cause, rollbackErr)
+		}
+		return failStoredReview(operation, cause)
+	}
 	if err := store.Finalize(ctx, report); err != nil {
-		return failStoredReview("finalize_report", err)
+		return failPublishedReview("finalize_report", err)
 	}
 	stored, err = store.Load(ctx, report.Task.ID)
 	if err != nil {
-		return failStoredReview("verify_final_store", err)
+		return failPublishedReview("verify_final_store", err)
 	}
-	if stored.Task.Status != TaskCompleted || stored.Metrics.PreparationDurationMS != report.Metrics.PreparationDurationMS {
-		return failStoredReview("verify_final_store", errors.New("finalized review verification mismatch"))
-	}
-	if err := staged.commit(); err != nil {
-		return failStoredReview("publish_report", err)
+	if stored.Task.Status != TaskCompleted || stored.Metrics.PreparationDurationMS != report.Metrics.PreparationDurationMS || stored.Metrics.TotalDurationMS != report.Metrics.TotalDurationMS {
+		return failPublishedReview("verify_final_store", errors.New("finalized review verification mismatch"))
 	}
 	return report, paths, nil
 }
@@ -125,6 +137,7 @@ func markStoredFailure(ctx context.Context, store Store, cfg Config, report Repo
 	report.SandboxRuns = append(report.SandboxRuns, setupFailure(cfg.Executor, operation, cause, cfg.OutputLimit))
 	report.Conclusion = "Review failed after persistence; inspect the audit record before retrying."
 	report.Metrics = collectMetrics(report.Task.StartedAt, report)
+	report.Metrics.TotalDurationScope = "failure_audit"
 	return store.Finalize(ctx, redactReport(report))
 }
 
@@ -136,6 +149,7 @@ func persistFailure(ctx context.Context, store Store, cfg Config, task Task, inp
 		Conclusion:  "Review setup failed; inspect the persisted failure record before retrying.",
 	}
 	report.Metrics = collectMetrics(task.StartedAt, report)
+	report.Metrics.TotalDurationScope = "failure_audit"
 	report = redactReport(report)
 	if err := store.Save(ctx, report); err != nil {
 		return Report{}, ReportPaths{}, fmt.Errorf("persist %s failure: %w", operation, err)
@@ -255,7 +269,8 @@ func sandboxReviewItems(runs []SandboxRun) []Finding {
 }
 
 func collectMetrics(started time.Time, report Report) Metrics {
-	metrics := Metrics{PreparationDurationMS: time.Since(started).Milliseconds(), ToolCallCount: len(report.SandboxRuns), FindingCount: len(report.Findings), WarningCount: len(report.Warnings), NeedsHumanCount: len(report.NeedsHumanReview), SeverityDistribution: map[string]int{}, ErrorDistribution: map[string]int{}}
+	durationMS := time.Since(started).Milliseconds()
+	metrics := Metrics{PreparationDurationMS: durationMS, TotalDurationMS: durationMS, TotalDurationScope: "preparation", ToolCallCount: len(report.SandboxRuns), FindingCount: len(report.Findings), WarningCount: len(report.Warnings), NeedsHumanCount: len(report.NeedsHumanReview), SeverityDistribution: map[string]int{}, ErrorDistribution: map[string]int{}}
 	for _, run := range report.SandboxRuns {
 		metrics.SandboxDurationMS += run.DurationMS
 		if run.ErrorType != "" && run.ErrorType != ErrorDryRun {

@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -59,7 +58,7 @@ func analyzeWithRuleIDs(input ParsedInput, enabled map[string]bool) (findings, w
 			id: "go/security/hardcoded-secret", category: "security", severity: SeverityCritical,
 			title: "Hard-coded credential-like value", confidence: .98,
 			recommendation: "Move the credential to a secret manager or an injected environment variable, then rotate the exposed value.",
-			match:          func(line ChangedLine, _ map[string]string) bool { return looksSecret(line.Text) },
+			match:          hardcodedSecretMatch,
 		},
 		{
 			id: "go/security/dynamic-shell", category: "security", severity: SeverityHigh,
@@ -184,6 +183,28 @@ func analyzeWithRuleIDs(input ParsedInput, enabled map[string]bool) (findings, w
 	warnings = dedupe(warnings)
 	needsHuman = dedupe(needsHuman)
 	return findings, warnings, needsHuman, decisions
+}
+
+func hardcodedSecretMatch(line ChangedLine, all map[string]string) bool {
+	context := all[line.File]
+	if context == "" {
+		context = line.Text
+	}
+	if !looksSecret(context) && !looksSecret(line.Text) {
+		return false
+	}
+	// Preserve single-line token and credential detection. Multiline raw
+	// literals and PEM blocks are detected from the hunk context below.
+	if looksSecret(line.Text) || secretAssignmentAnchor.MatchString(line.Text) {
+		return true
+	}
+	if !pemPrivateKeyBegin.MatchString(line.Text) {
+		return false
+	}
+	// Prefer an assignment line in the same hunk as the finding anchor. If the
+	// block has no named assignment, the PEM begin line remains the anchor.
+	prefix, _, found := strings.Cut(context, line.Text)
+	return !found || !secretAssignmentAnchor.MatchString(prefix)
 }
 
 func dynamicInvocationContext(input ParsedInput, line ChangedLine) string {

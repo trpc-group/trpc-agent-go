@@ -1094,6 +1094,8 @@ func TestInitContainer_StartError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
 			startCalled = true
 			http.Error(w, "start fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1115,6 +1117,7 @@ func TestInitContainer_StartError(t *testing.T) {
 	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.True(t, startCalled)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_WaitError(t *testing.T) {
@@ -1138,6 +1141,8 @@ func TestInitContainer_WaitError(t *testing.T) {
 			}
 			assert.Failf(t, "unexpected inspect call", "%d", inspectCalls)
 			return
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1159,6 +1164,7 @@ func TestInitContainer_WaitError(t *testing.T) {
 	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 1, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_InspectError(t *testing.T) {
@@ -1181,6 +1187,8 @@ func TestInitContainer_InspectError(t *testing.T) {
 				return
 			}
 			http.Error(w, "inspect fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1202,6 +1210,7 @@ func TestInitContainer_InspectError(t *testing.T) {
 	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_NotRunning(t *testing.T) {
@@ -1225,6 +1234,8 @@ func TestInitContainer_NotRunning(t *testing.T) {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"State":{"Running":false,"Status":"created","ExitCode":0}}`))
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1246,6 +1257,7 @@ func TestInitContainer_NotRunning(t *testing.T) {
 	err := exec.initContainer(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_VerifyError(t *testing.T) {
@@ -1272,6 +1284,8 @@ func TestInitContainer_VerifyError(t *testing.T) {
 		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/exec"):
 			execCreateCalled = true
 			http.Error(w, "exec fail", http.StatusInternalServerError)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
 			return
@@ -1294,6 +1308,7 @@ func TestInitContainer_VerifyError(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, 2, inspectCalls)
 	assert.True(t, execCreateCalled)
+	assert.Nil(t, exec.container)
 }
 
 func TestInitContainer_Success(t *testing.T) {
@@ -1647,6 +1662,67 @@ func TestCleanupStopsAndRemovesContainer(t *testing.T) {
 	defer mu.Unlock()
 	assert.Equal(t, 1, stopCount)
 	assert.Equal(t, 1, removeCount)
+}
+
+func TestCodeExecutor_AbortContainerRemovesTimedOutContainer(t *testing.T) {
+	var killCount, removeCount int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/kill"):
+			killCount++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/test-id"):
+			removeCount++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "test-id"}}
+
+	exec.abortContainer()
+
+	assert.Equal(t, 1, killCount)
+	assert.Equal(t, 1, removeCount)
+	assert.Nil(t, exec.container)
+	assert.Nil(t, exec.ws)
+}
+
+func TestCodeExecutor_CloseAndAbortSerializeLifecycle(t *testing.T) {
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/kill"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/test-id/stop"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/test-id"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "test-id"}}
+	start := make(chan struct{})
+	done := make(chan error, 2)
+	go func() {
+		<-start
+		exec.abortContainer()
+		done <- nil
+	}()
+	go func() {
+		<-start
+		done <- exec.Close()
+	}()
+	close(start)
+	for range 2 {
+		require.NoError(t, <-done)
+	}
+	_, _, err := exec.containerClient()
+	require.Error(t, err)
 }
 
 func TestContainerCodeExecutor_Basic(t *testing.T) {

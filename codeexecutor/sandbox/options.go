@@ -66,7 +66,8 @@ func WithWorkspaceRoot(root string) Option {
 }
 
 // WithOutputMaxBytes limits stdout/stderr capture per stream. Non-positive
-// values retain DefaultOutputMaxBytes.
+// values retain DefaultOutputMaxBytes. A positive RunProgramSpec.MaxOutputBytes
+// can only lower this limit for an individual program run.
 func WithOutputMaxBytes(n int) Option {
 	return func(r *Runtime) {
 		if n > 0 {

@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -35,6 +34,17 @@ func (s stagedReport) commit() error {
 	return os.Rename(s.tempDir, s.finalDir)
 }
 
+// rollback removes a report directory that was published before its matching
+// database finalization completed. A process interruption can still leave a
+// running task with staged artifacts, but the Store is never marked completed
+// before the directory rename succeeds.
+func (s stagedReport) rollback() error {
+	if s.finalDir == "" {
+		return nil
+	}
+	return os.RemoveAll(s.finalDir)
+}
+
 func publish(report Report, outputDir string) (Report, ReportPaths, error) {
 	report, paths, staged, err := stageReport(report, outputDir)
 	if err != nil {
@@ -48,6 +58,10 @@ func publish(report Report, outputDir string) (Report, ReportPaths, error) {
 }
 
 func stageReport(report Report, outputDir string) (Report, ReportPaths, stagedReport, error) {
+	// stageReport is a persistence boundary in addition to Store. Keep this
+	// guard here so callers cannot accidentally write an unredacted Report by
+	// bypassing Run.
+	report = redactReport(report)
 	taskDir := filepath.Join(outputDir, report.Task.ID)
 	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return Report{}, ReportPaths{}, stagedReport{}, err
@@ -164,7 +178,7 @@ func renderMarkdown(report Report) []byte {
 		fmt.Fprintf(&b, "- %s %s: %s; exit=%d; timeout=%t; duration=%dms; error=%s\n", markdownText(run.Command), markdownText(stringsJoin(run.Args)), markdownText(string(run.Status)), run.ExitCode, run.TimedOut, run.DurationMS, markdownText(string(run.ErrorType)))
 	}
 	b.WriteString("\n## Monitoring\n\n")
-	fmt.Fprintf(&b, "- Preparation duration: %dms\n- Sandbox duration: %dms\n- Tool calls: %d\n- Permission denies: %d\n- Permission asks: %d\n", report.Metrics.PreparationDurationMS, report.Metrics.SandboxDurationMS, report.Metrics.ToolCallCount, report.Metrics.PermissionDenyCount, report.Metrics.PermissionAskCount)
+	fmt.Fprintf(&b, "- Preparation duration: %dms\n- Total duration (%s): %dms\n- Sandbox duration: %dms\n- Tool calls: %d\n- Permission denies: %d\n- Permission asks: %d\n", report.Metrics.PreparationDurationMS, markdownText(report.Metrics.TotalDurationScope), report.Metrics.TotalDurationMS, report.Metrics.SandboxDurationMS, report.Metrics.ToolCallCount, report.Metrics.PermissionDenyCount, report.Metrics.PermissionAskCount)
 	keys := make([]string, 0, len(report.Metrics.SeverityDistribution))
 	for key := range report.Metrics.SeverityDistribution {
 		keys = append(keys, key)

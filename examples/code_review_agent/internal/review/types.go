@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -112,21 +111,40 @@ const (
 	fileDeleted  FileStatus = "deleted"
 )
 
-// Config configures a review pipeline run.
+// Config configures a review pipeline run. Supply exactly one primary input:
+// DiffFile, RepoPath, FileList, or Fixture; FileList may additionally use
+// RepoPath to read the named files. TaskID is optional; when set it must
+// contain at most 80 ASCII letters, digits, hyphens, or underscores and cannot
+// look like a credential. Empty values select the documented safe defaults: a
+// container executor, a 45-second timeout, a 64 KiB output limit, output/ for
+// reports, and OutputDir/reviews.sqlite for persistence.
 type Config struct {
-	TaskID       string
-	DiffFile     string
-	RepoPath     string
-	FileList     string
-	Fixture      string
-	OutputDir    string
+	// TaskID is the queryable task identity. An empty value generates a random ID.
+	TaskID string
+	// DiffFile is a unified-diff file input.
+	DiffFile string
+	// RepoPath selects Git diff input from a repository path.
+	RepoPath string
+	// FileList is a newline-delimited list of files to review.
+	FileList string
+	// Fixture selects a deterministic example fixture for testing.
+	Fixture string
+	// OutputDir is the parent directory for the published task directory.
+	OutputDir string
+	// DatabasePath is the SQLite audit database path.
 	DatabasePath string
-	Executor     Executor
-	AllowLocal   bool
-	DryRun       bool
-	FakeModel    bool
-	Timeout      time.Duration
-	OutputLimit  int
+	// Executor selects the sandbox backend; local development fallback requires AllowLocal.
+	Executor Executor
+	// AllowLocal explicitly permits the local development fallback executor.
+	AllowLocal bool
+	// DryRun selects deterministic execution without launching sandbox commands.
+	DryRun bool
+	// FakeModel enables deterministic model-like fixture behavior.
+	FakeModel bool
+	// Timeout bounds each sandbox command; non-positive values use the default.
+	Timeout time.Duration
+	// OutputLimit bounds each captured sandbox stream; non-positive values use the default.
+	OutputLimit int
 	// StoreFactory creates the persistence adapter used by Run. The returned
 	// Store is owned and closed by Run. Nil selects the SQLite adapter.
 	StoreFactory StoreFactory
@@ -229,7 +247,10 @@ type SandboxRun struct {
 	OutputTruncated bool          `json:"output_truncated"`
 }
 
-// Artifact describes a bounded file produced by the review pipeline.
+// Artifact describes a bounded file produced by the review pipeline. Path is a
+// slash-separated, task-directory-relative path safe to store portably.
+// Provenance is "validated_sandbox", "synthetic_dry_run", or another explicit
+// fallback source; consumers must not treat synthetic artifacts as script output.
 type Artifact struct {
 	Name      string `json:"name"`
 	Path      string `json:"path"`
@@ -246,16 +267,27 @@ type Metrics struct {
 	// PreparationDurationMS measures completed work before the final report
 	// directory is atomically published. Publication is intentionally excluded
 	// because the report itself contains this metric.
-	PreparationDurationMS int64          `json:"preparation_duration_ms"`
-	SandboxDurationMS     int64          `json:"sandbox_duration_ms"`
-	ToolCallCount         int            `json:"tool_call_count"`
-	PermissionDenyCount   int            `json:"permission_deny_count"`
-	PermissionAskCount    int            `json:"permission_ask_count"`
-	FindingCount          int            `json:"finding_count"`
-	WarningCount          int            `json:"warning_count"`
-	NeedsHumanCount       int            `json:"needs_human_review_count"`
-	SeverityDistribution  map[string]int `json:"severity_distribution"`
-	ErrorDistribution     map[string]int `json:"error_distribution"`
+	PreparationDurationMS int64 `json:"preparation_duration_ms"`
+	// TotalDurationMS measures the complete review pipeline through the atomic
+	// publication of the JSON and Markdown report directory. TotalDurationScope
+	// states whether a value is an immutable pre-publication report snapshot, a
+	// completed published-report value, or a completed failure-audit value.
+	TotalDurationMS int64 `json:"total_duration_ms"`
+	// TotalDurationScope identifies the completed phases included in
+	// TotalDurationMS: "pre_publication_snapshot", "published_report", or
+	// "failure_audit". Query the finalized SQLite record for the canonical
+	// published-report value rather than treating an immutable report artifact's
+	// pre-publication snapshot as final.
+	TotalDurationScope   string         `json:"total_duration_scope"`
+	SandboxDurationMS    int64          `json:"sandbox_duration_ms"`
+	ToolCallCount        int            `json:"tool_call_count"`
+	PermissionDenyCount  int            `json:"permission_deny_count"`
+	PermissionAskCount   int            `json:"permission_ask_count"`
+	FindingCount         int            `json:"finding_count"`
+	WarningCount         int            `json:"warning_count"`
+	NeedsHumanCount      int            `json:"needs_human_review_count"`
+	SeverityDistribution map[string]int `json:"severity_distribution"`
+	ErrorDistribution    map[string]int `json:"error_distribution"`
 }
 
 // Report contains the complete structured result of a review task.
@@ -274,7 +306,9 @@ type Report struct {
 	Mode                ExecutionMode        `json:"mode"`
 }
 
-// ReportPaths identifies the published JSON and Markdown reports.
+// ReportPaths identifies the published JSON and Markdown reports. The paths
+// are rooted at Config.OutputDir (and therefore are relative when OutputDir is
+// relative); they exist only after Run returns successfully.
 type ReportPaths struct {
 	JSON     string
 	Markdown string

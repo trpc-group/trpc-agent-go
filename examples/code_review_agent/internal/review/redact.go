@@ -1,4 +1,3 @@
-//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -27,6 +26,12 @@ var redactionPatterns = []*regexp.Regexp{
 var secretLiteralAssignment = regexp.MustCompile(
 	`(?i)\b(?:password|passwd|token|api[_-]?key|apikey|client[_-]?secret|secret|private[_-]?key)\b\s*(?::=|=|:)\s*("[^"]+"|'[^']+'|` + "`[^`]+`" + `)`,
 )
+
+var secretAssignmentAnchor = regexp.MustCompile(
+	`(?i)\b(?:password|passwd|token|api[_-]?key|apikey|client[_-]?secret|secret|private[_-]?key)\b\s*(?::=|=|:)\s*(?:` + "`" + `)?`,
+)
+
+var pemPrivateKeyBegin = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
 func redact(value string) string {
 	for index, pattern := range redactionPatterns {
@@ -78,8 +83,14 @@ func redactReport(report Report) Report {
 		decision.Reason = redact(decision.Reason)
 		decision.TargetBucket = redact(decision.TargetBucket)
 	}
-	// Artifact names and paths are generated from fixed relative names. Keeping
-	// them unchanged preserves the audit links between the report and files.
+	for index := range report.Artifacts {
+		artifact := &report.Artifacts[index]
+		artifact.Name = redact(artifact.Name)
+		artifact.Path = redact(artifact.Path)
+		artifact.MIMEType = redact(artifact.MIMEType)
+		artifact.Provenance = redact(artifact.Provenance)
+		artifact.content = redact(artifact.content)
+	}
 	report.Metrics.SeverityDistribution = redactMetricKeys(report.Metrics.SeverityDistribution)
 	report.Metrics.ErrorDistribution = redactMetricKeys(report.Metrics.ErrorDistribution)
 	report.Conclusion = redact(report.Conclusion)
