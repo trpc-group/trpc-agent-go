@@ -56,9 +56,9 @@ func TestExport_TeamCoordinator_MembersHangFromCoordinatorRoot(t *testing.T) {
 		EntryNodeID: "team",
 		Nodes: []structure.Node{
 			{NodeID: "team", Kind: structure.NodeKindAgent, Name: "team"},
-			{NodeID: "team/coordinator", Kind: structure.NodeKindLLM, Name: "team"},
-			{NodeID: "team/coordinator/delegate", Kind: structure.NodeKindLLM, Name: "delegate"},
-			{NodeID: "team/researcher", Kind: structure.NodeKindLLM, Name: "researcher"},
+			{NodeID: "team/coordinator", Kind: structure.NodeKindAgent, Name: "team"},
+			{NodeID: "team/coordinator/delegate", Kind: structure.NodeKindAgent, Name: "delegate"},
+			{NodeID: "team/researcher", Kind: structure.NodeKindAgent, Name: "researcher"},
 		},
 		Edges: []structure.Edge{
 			{FromNodeID: "team", ToNodeID: "team/coordinator"},
@@ -127,9 +127,9 @@ func TestExport_TeamCoordinator_CoordinatorNamespaceAvoidsMemberCollision(t *tes
 		EntryNodeID: "team",
 		Nodes: []structure.Node{
 			{NodeID: "team", Kind: structure.NodeKindAgent, Name: "team"},
-			{NodeID: "team/coordinator", Kind: structure.NodeKindLLM, Name: "team"},
-			{NodeID: "team/coordinator/researcher", Kind: structure.NodeKindLLM, Name: "researcher"},
-			{NodeID: "team/researcher", Kind: structure.NodeKindLLM, Name: "researcher"},
+			{NodeID: "team/coordinator", Kind: structure.NodeKindAgent, Name: "team"},
+			{NodeID: "team/coordinator/researcher", Kind: structure.NodeKindAgent, Name: "researcher"},
+			{NodeID: "team/researcher", Kind: structure.NodeKindAgent, Name: "researcher"},
 		},
 		Edges: []structure.Edge{
 			{FromNodeID: "team", ToNodeID: "team/coordinator"},
@@ -219,8 +219,8 @@ func TestExport_TeamSwarm_DoesNotRecursivelyExpandMemberRoster(t *testing.T) {
 		EntryNodeID: "swarm",
 		Nodes: []structure.Node{
 			{NodeID: "swarm", Kind: structure.NodeKindAgent, Name: "swarm"},
-			{NodeID: "swarm/alpha", Kind: structure.NodeKindLLM, Name: "alpha"},
-			{NodeID: "swarm/beta", Kind: structure.NodeKindLLM, Name: "beta"},
+			{NodeID: "swarm/alpha", Kind: structure.NodeKindAgent, Name: "alpha"},
+			{NodeID: "swarm/beta", Kind: structure.NodeKindAgent, Name: "beta"},
 		},
 		Edges: []structure.Edge{
 			{FromNodeID: "swarm", ToNodeID: "swarm/alpha"},
@@ -268,9 +268,9 @@ func TestExport_TeamSwarm_ThreeMembersFormDirectedCompleteGraph(t *testing.T) {
 		EntryNodeID: "swarm",
 		Nodes: []structure.Node{
 			{NodeID: "swarm", Kind: structure.NodeKindAgent, Name: "swarm"},
-			{NodeID: "swarm/alpha", Kind: structure.NodeKindLLM, Name: "alpha"},
-			{NodeID: "swarm/beta", Kind: structure.NodeKindLLM, Name: "beta"},
-			{NodeID: "swarm/gamma", Kind: structure.NodeKindLLM, Name: "gamma"},
+			{NodeID: "swarm/alpha", Kind: structure.NodeKindAgent, Name: "alpha"},
+			{NodeID: "swarm/beta", Kind: structure.NodeKindAgent, Name: "beta"},
+			{NodeID: "swarm/gamma", Kind: structure.NodeKindAgent, Name: "gamma"},
 		},
 		Edges: []structure.Edge{
 			{FromNodeID: "swarm", ToNodeID: "swarm/alpha"},

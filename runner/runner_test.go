@@ -9701,19 +9701,19 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDeepNestedWorkflowPatches(
 		t,
 		snapshot,
 		"start",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	plannerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	workerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var startPatch agent.SurfacePatch
 	startPatch.SetInstruction("start patched instruction")
@@ -9828,13 +9828,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectChainChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	writerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"writer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var plannerPatch agent.SurfacePatch
 	plannerPatch.SetInstruction("planner patched instruction")
@@ -9983,13 +9983,13 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectParallelBranchPatches(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	reviewerNodeID := requireNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"reviewer",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var researcherPatch agent.SurfacePatch
 	researcherPatch.SetInstruction("researcher patched instruction")
@@ -10146,7 +10146,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesDirectCycleChildPatch(
 		t,
 		snapshot,
 		"worker",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var workerPatch agent.SurfacePatch
 	workerPatch.SetInstruction("worker patched instruction")
@@ -10749,7 +10749,7 @@ func TestRunner_Run_WithSurfacePatchForNode_AppliesGraphCompositeChildPatch(
 		t,
 		snapshot,
 		"planner",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	require.Equal(t, "assistant/pipeline/planner", plannerNodeID)
 	var patch agent.SurfacePatch
