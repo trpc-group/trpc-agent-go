@@ -258,6 +258,73 @@ func TestExecTool_PartialMetadataCommitReturnsFiles(t *testing.T) {
 	require.Contains(t, out.Result.Warnings, warnPartialOutputCommit)
 }
 
+func TestExecTool_PartialStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	fs := &partialStaleSkillFS{
+		stubFS: &stubFS{},
+		manifest: codeexecutor.OutputManifest{
+			Files: []codeexecutor.FileRef{{
+				Name:    outATxt,
+				Content: contentHi,
+			}},
+		},
+	}
+	exitCode := 0
+	session := &stubProgramSession{
+		id: "partial-stale",
+		polls: []codeexecutor.ProgramPoll{{
+			Status:   codeexecutor.ProgramStatusExited,
+			ExitCode: &exitCode,
+		}},
+		runResult: codeexecutor.RunResult{ExitCode: 0},
+	}
+	runner := &staleWriteSkillRunner{session: session}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: manager,
+			f: fs,
+			r: runner,
+		}},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	args, err := jsonMarshal(execInput{
+		runInput: runInput{
+			Skill:   testSkillName,
+			Command: echoOK,
+			Outputs: &codeexecutor.OutputSpec{
+				Globs:  []string{outGlobTxt},
+				Inline: true,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	reader, err := execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out := drainExecStream(t, reader)
+	require.NotNil(t, out.Result)
+	require.Contains(t, out.Result.Warnings, warnPartialOutputCommit)
+	require.Len(t, out.Result.OutputFiles, 1)
+	require.Equal(t, 1, runner.starts,
+		"partial output must not replay the completed session")
+	require.Equal(t, 1, manager.creates)
+
+	reader, err = execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out = drainExecStream(t, reader)
+	require.NotNil(t, out.Result)
+	require.Equal(t, 2, runner.starts)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 func TestKillSessionTool_RemovesSession(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -503,6 +570,7 @@ func (s *stubProgramSession) RunResult() codeexecutor.RunResult {
 
 type staleWriteSkillRunner struct {
 	session *stubProgramSession
+	starts  int
 }
 
 func (*staleWriteSkillRunner) RunProgram(
@@ -518,6 +586,7 @@ func (r *staleWriteSkillRunner) StartProgram(
 	codeexecutor.Workspace,
 	codeexecutor.InteractiveProgramSpec,
 ) (codeexecutor.ProgramSession, error) {
+	r.starts++
 	return r.session, nil
 }
 

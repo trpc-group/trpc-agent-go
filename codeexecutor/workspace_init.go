@@ -145,6 +145,14 @@ func NewWorkspaceInitHook(spec WorkspaceInitSpec) WorkspaceInitHook {
 // information—the same requirements as [WorkspaceFS.StageInputs]. Standard agent
 // workspace-session tooling injects that context before [WorkspaceRegistry.Acquire],
 // so init hooks can load artifacts without extra setup.
+//
+// When a hook fails, a legacy manager receives best-effort cleanup unless the
+// error is [ErrWorkspaceStale]. An instance-aware manager is never cleaned up
+// automatically after hook failure: checking [WorkspaceInstanceProvider.InstanceID]
+// and calling [WorkspaceManager.Cleanup] cannot be atomic, so cleanup could affect
+// a replacement instance that reused the logical workspace path. Such backends
+// should reclaim failed workspaces through their instance lifecycle or TTL. The
+// original hook error is preserved and is not converted to [ErrWorkspaceStale].
 func NewWorkspaceInitExecutor(
 	exec CodeExecutor,
 	hooks ...WorkspaceInitHook,
@@ -278,19 +286,11 @@ func (m *workspaceInstanceInitManager) CreateWorkspace(
 	execID string,
 	pol WorkspacePolicy,
 ) (Workspace, error) {
-	instanceID, err := m.provider.InstanceID(ctx)
-	if err != nil {
-		return Workspace{}, err
-	}
-	if instanceID == "" {
-		return Workspace{}, errWorkspaceInstanceIDEmpty
-	}
 	return m.workspaceInitManager.createWorkspace(
 		ctx,
 		execID,
 		pol,
-		m.provider,
-		instanceID,
+		false,
 	)
 }
 
@@ -299,15 +299,14 @@ func (m *workspaceInitManager) CreateWorkspace(
 	execID string,
 	pol WorkspacePolicy,
 ) (Workspace, error) {
-	return m.createWorkspace(ctx, execID, pol, nil, "")
+	return m.createWorkspace(ctx, execID, pol, true)
 }
 
 func (m *workspaceInitManager) createWorkspace(
 	ctx context.Context,
 	execID string,
 	pol WorkspacePolicy,
-	provider WorkspaceInstanceProvider,
-	instanceID WorkspaceInstanceID,
+	cleanupHookFailure bool,
 ) (Workspace, error) {
 	ws, err := m.inner.CreateWorkspace(ctx, execID, pol)
 	if err != nil {
@@ -330,22 +329,20 @@ func (m *workspaceInitManager) createWorkspace(
 				// newly provisioned data.
 				return Workspace{}, hookErr
 			}
+			if !cleanupHookFailure {
+				// InstanceID and Cleanup are separate backend calls, so a
+				// check-before-cleanup cannot prevent rotation between them.
+				// Never clean up through an instance-aware wrapper: its
+				// deterministic workspace path may already belong to a
+				// replacement instance.
+				return Workspace{}, hookErr
+			}
 			// Best-effort cleanup without inheriting deadline/cancel from ctx,
 			// which may already be expired when the hook failed for timeout.
 			cleanCtx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx),
 				workspaceInitCleanupTimeout,
 			)
-			if provider != nil {
-				currentID, probeErr := provider.InstanceID(cleanCtx)
-				if probeErr != nil || currentID != instanceID {
-					cancel()
-					// The deterministic workspace path may now refer to a
-					// replacement instance. Preserve the original hook error,
-					// but do not risk deleting the replacement.
-					return Workspace{}, hookErr
-				}
-			}
 			cerr := m.inner.Cleanup(cleanCtx, ws)
 			cancel()
 			if cerr != nil {

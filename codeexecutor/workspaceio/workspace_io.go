@@ -252,10 +252,11 @@ func (w *Workspace) SaveArtifact(
 		cfg.MaxBytes = workspacefacade.DefaultArtifactMaxBytes
 	}
 	ctxIO := workspacefacade.WithArtifactContext(ctx)
-	eng, ws, err := w.bindWorkspace(ctxIO)
+	eng, handle, err := w.bindWorkspaceHandle(ctxIO)
 	if err != nil {
 		return nil, err
 	}
+	ws := handle.Workspace
 	manifest, err := eng.FS().CollectOutputs(ctxIO, ws, codeexecutor.OutputSpec{
 		Globs:         []string{rel},
 		MaxFiles:      1,
@@ -264,6 +265,9 @@ func (w *Workspace) SaveArtifact(
 		Save:          true,
 		Inline:        false,
 	})
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		w.resolver.InvalidateWorkspaceHandle(handle)
+	}
 	// ErrPartialOutputCommit means the artifact already landed in the
 	// service but some non-fatal post-commit work failed (e.g. cleanup
 	// or secondary inline read). Mirror tool/workspaceexec.SaveArtifact
@@ -373,22 +377,29 @@ func (w *Workspace) RunProgram(
 func (w *Workspace) bindWorkspace(
 	ctx context.Context,
 ) (codeexecutor.Engine, codeexecutor.Workspace, error) {
+	eng, handle, err := w.bindWorkspaceHandle(ctx)
+	return eng, handle.Workspace, err
+}
+
+func (w *Workspace) bindWorkspaceHandle(
+	ctx context.Context,
+) (codeexecutor.Engine, codeexecutor.WorkspaceHandle, error) {
 	if w == nil || w.resolver == nil {
-		return nil, codeexecutor.Workspace{}, errors.New(
+		return nil, codeexecutor.WorkspaceHandle{}, errors.New(
 			"workspaceio: workspace is not initialized",
 		)
 	}
 	eng := w.resolver.EnsureEngine()
 	if eng == nil || eng.FS() == nil || eng.Manager() == nil {
-		return nil, codeexecutor.Workspace{}, errors.New(
+		return nil, codeexecutor.WorkspaceHandle{}, errors.New(
 			"workspaceio: executor does not expose a live workspace engine",
 		)
 	}
-	ws, err := w.resolver.CreateWorkspace(ctx, eng, "workspace")
+	handle, err := w.resolver.CreateWorkspaceHandle(ctx, eng, "workspace")
 	if err != nil {
-		return nil, codeexecutor.Workspace{}, err
+		return nil, codeexecutor.WorkspaceHandle{}, err
 	}
-	return eng, ws, nil
+	return eng, handle, nil
 }
 
 // toFile converts a codeexecutor.File into the public File type.

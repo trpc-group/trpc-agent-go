@@ -512,12 +512,15 @@ func (t *RunTool) Call(
 		}
 		return nil, err
 	}
-	files, manifest, outputWarn, err := t.prepareOutputs(
+	files, manifest, outputWarn, partialStale, err := t.prepareOutputs(
 		prepared.ctxIO,
 		prepared.eng,
 		ws,
 		in,
 	)
+	if partialStale {
+		t.invalidateWorkspaceHandle(prepared.handle)
+	}
 	if err != nil {
 		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 			t.invalidateWorkspaceHandle(prepared.handle)
@@ -1869,21 +1872,29 @@ func withArtifactContext(ctx context.Context) context.Context {
 }
 
 // prepareOutputs collects files either through OutputSpec or legacy
-// output_files patterns. It returns collected files and optional
-// manifest.
+// output_files patterns. The bool result reports a non-fatal partial commit
+// that also carried ErrWorkspaceStale, allowing callers to invalidate the
+// exact handle while preserving the partial output result.
 func (t *RunTool) prepareOutputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) ([]codeexecutor.File, *codeexecutor.OutputManifest, []string, error) {
+) (
+	[]codeexecutor.File,
+	*codeexecutor.OutputManifest,
+	[]string,
+	bool,
+	error,
+) {
 	var files []codeexecutor.File
 	var manifest *codeexecutor.OutputManifest
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
+		stale := errors.Is(err, codeexecutor.ErrWorkspaceStale)
 		if err != nil &&
 			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		manifest = &m
 		if in.Outputs.Inline {
@@ -1892,15 +1903,15 @@ func (t *RunTool) prepareOutputs(
 		if err != nil {
 			return files, manifest, []string{
 				warnPartialOutputCommit,
-			}, nil
+			}, stale, nil
 		}
-		return files, manifest, nil, nil
+		return files, manifest, nil, false, nil
 	}
 	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
-	return fs, nil, nil, nil
+	return fs, nil, nil, false, nil
 }
 
 func outputFilesFromManifest(

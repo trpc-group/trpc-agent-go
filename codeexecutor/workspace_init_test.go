@@ -349,23 +349,66 @@ func TestWorkspaceInitManager_CleanupFailureIsReported(t *testing.T) {
 }
 
 func TestWorkspaceInitManager_StaleHookSkipsCleanup(t *testing.T) {
+	staleHook := func(context.Context, WorkspaceInitEnv) error {
+		return fmt.Errorf("backend rotated: %w", ErrWorkspaceStale)
+	}
+
+	t.Run("legacy manager", func(t *testing.T) {
+		inner := &cleanupRecordingWM{}
+		mgr := &workspaceInitManager{
+			inner: inner,
+			eng:   NewEngine(inner, &recordingFS{}, &recordingRunner{}),
+			hooks: []WorkspaceInitHook{staleHook},
+		}
+
+		_, err := mgr.CreateWorkspace(
+			context.Background(), "x", WorkspacePolicy{},
+		)
+		require.ErrorIs(t, err, ErrWorkspaceStale)
+		require.Zero(t, inner.cleanupCalls)
+	})
+
+	t.Run("instance-aware manager", func(t *testing.T) {
+		inner := &cleanupInstanceWM{instanceID: "instance-1"}
+		eng := NewEngine(inner, &recordingFS{}, &recordingRunner{})
+		mgr := newWorkspaceInitEngine(
+			eng,
+			[]WorkspaceInitHook{staleHook},
+		).Manager()
+
+		_, err := mgr.CreateWorkspace(
+			context.Background(), "x", WorkspacePolicy{},
+		)
+		require.ErrorIs(t, err, ErrWorkspaceStale)
+		require.Zero(t, inner.cleanupCalls)
+		require.Zero(t, inner.instanceCalls)
+	})
+}
+
+func TestWorkspaceInitManager_LegacyOrdinaryHookErrorCleansUp(
+	t *testing.T,
+) {
+	timeoutErr := errors.New("timeout after command submission")
 	inner := &cleanupRecordingWM{}
 	mgr := &workspaceInitManager{
 		inner: inner,
 		eng:   NewEngine(inner, &recordingFS{}, &recordingRunner{}),
 		hooks: []WorkspaceInitHook{
 			func(context.Context, WorkspaceInitEnv) error {
-				return fmt.Errorf("backend rotated: %w", ErrWorkspaceStale)
+				return timeoutErr
 			},
 		},
 	}
 
-	_, err := mgr.CreateWorkspace(context.Background(), "x", WorkspacePolicy{})
-	require.ErrorIs(t, err, ErrWorkspaceStale)
-	require.Zero(t, inner.cleanupCalls)
+	_, err := mgr.CreateWorkspace(
+		context.Background(), "x", WorkspacePolicy{},
+	)
+	require.ErrorIs(t, err, timeoutErr)
+	require.NotErrorIs(t, err, ErrWorkspaceStale)
+	require.Equal(t, 1, inner.cleanupCalls)
 }
 
-func TestWorkspaceInitManager_OrdinaryHookErrorFencesCleanupByInstance(
+func TestWorkspaceInitManager_InstanceAwareOrdinaryHookErrorSkipsCleanup(
 	t *testing.T,
 ) {
 	timeoutErr := errors.New("timeout after command submission")
@@ -387,10 +430,12 @@ func TestWorkspaceInitManager_OrdinaryHookErrorFencesCleanupByInstance(
 			context.Background(), "x", WorkspacePolicy{},
 		)
 		require.ErrorIs(t, err, timeoutErr)
+		require.NotErrorIs(t, err, ErrWorkspaceStale)
 		require.Zero(t, inner.cleanupCalls)
+		require.Zero(t, inner.instanceCalls)
 	})
 
-	t.Run("stable instance still cleans up", func(t *testing.T) {
+	t.Run("stable instance also skips cleanup", func(t *testing.T) {
 		inner := &cleanupInstanceWM{instanceID: "instance-1"}
 		eng := NewEngine(inner, &recordingFS{}, &recordingRunner{})
 		mgr := newWorkspaceInitEngine(
@@ -406,7 +451,9 @@ func TestWorkspaceInitManager_OrdinaryHookErrorFencesCleanupByInstance(
 			context.Background(), "x", WorkspacePolicy{},
 		)
 		require.ErrorIs(t, err, timeoutErr)
-		require.Equal(t, 1, inner.cleanupCalls)
+		require.NotErrorIs(t, err, ErrWorkspaceStale)
+		require.Zero(t, inner.cleanupCalls)
+		require.Zero(t, inner.instanceCalls)
 	})
 }
 
@@ -426,8 +473,9 @@ func (m *cleanupRecordingWM) Cleanup(context.Context, Workspace) error {
 }
 
 type cleanupInstanceWM struct {
-	instanceID   WorkspaceInstanceID
-	cleanupCalls int
+	instanceID    WorkspaceInstanceID
+	instanceCalls int
+	cleanupCalls  int
 }
 
 func (m *cleanupInstanceWM) CreateWorkspace(
@@ -444,6 +492,7 @@ func (m *cleanupInstanceWM) Cleanup(context.Context, Workspace) error {
 func (m *cleanupInstanceWM) InstanceID(
 	context.Context,
 ) (WorkspaceInstanceID, error) {
+	m.instanceCalls++
 	return m.instanceID, nil
 }
 

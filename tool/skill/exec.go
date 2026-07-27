@@ -642,12 +642,15 @@ func (t *ExecTool) captureFinalResult(
 	if err != nil {
 		return nil, err
 	}
-	files, manifest, outputWarn, err := t.run.prepareOutputs(
+	files, manifest, outputWarn, partialStale, err := t.run.prepareOutputs(
 		ctxIO,
 		sess.eng,
 		sess.ws,
 		sess.in,
 	)
+	if partialStale {
+		t.run.invalidateWorkspaceHandle(sess.handle)
+	}
 	if err != nil {
 		return nil, err
 	}

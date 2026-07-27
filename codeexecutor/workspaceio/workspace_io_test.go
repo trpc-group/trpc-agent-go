@@ -12,6 +12,7 @@ package workspaceio
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -425,6 +426,7 @@ func (s *stubFSExec) Engine() codeexecutor.Engine { return s.eng }
 // backend that emits the error organically.
 type partialCommitFS struct {
 	codeexecutor.WorkspaceFS
+	err error
 }
 
 func (p *partialCommitFS) CollectOutputs(
@@ -436,7 +438,31 @@ func (p *partialCommitFS) CollectOutputs(
 	if err != nil {
 		return m, err
 	}
+	if p.err != nil {
+		return m, p.err
+	}
 	return m, codeexecutor.ErrPartialOutputCommit
+}
+
+type countingWorkspaceManager struct {
+	inner   codeexecutor.WorkspaceManager
+	creates int
+}
+
+func (m *countingWorkspaceManager) CreateWorkspace(
+	ctx context.Context,
+	execID string,
+	policy codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates++
+	return m.inner.CreateWorkspace(ctx, execID, policy)
+}
+
+func (m *countingWorkspaceManager) Cleanup(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) error {
+	return m.inner.Cleanup(ctx, ws)
 }
 
 // TestSaveArtifact_PartialCommitStillReturnsRef pins the contract that
@@ -470,6 +496,46 @@ func TestSaveArtifact_PartialCommitStillReturnsRef(t *testing.T) {
 	require.NotNil(t, ref)
 	require.Equal(t, "out/done.txt", ref.Path)
 	require.NotEmpty(t, ref.SavedAs)
+}
+
+func TestSaveArtifact_PartialStaleInvalidatesWorkspace(t *testing.T) {
+	rt := localexec.NewRuntime("")
+	manager := &countingWorkspaceManager{inner: rt}
+	fs := &partialCommitFS{
+		WorkspaceFS: rt,
+		err: errors.Join(
+			codeexecutor.ErrPartialOutputCommit,
+			codeexecutor.ErrWorkspaceStale,
+		),
+	}
+	eng := codeexecutor.NewEngine(manager, fs, rt)
+	exec := &stubFSExec{eng: eng}
+	ws := New(exec, codeexecutor.NewWorkspaceRegistry())
+	svc := inmemory.NewService()
+	inv := agent.NewInvocation(
+		agent.WithInvocationMessage(model.NewUserMessage("hi")),
+		agent.WithInvocationSession(&session.Session{
+			ID: "sess-partial-stale", AppName: "app", UserID: "user",
+		}),
+		agent.WithInvocationArtifactService(svc),
+	)
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	require.NoError(t, ws.PutFiles(ctx, codeexecutor.PutFile{
+		Path: "out/done.txt", Content: []byte("ok"),
+	}))
+	require.Equal(t, 1, manager.creates)
+
+	ref, err := ws.SaveArtifact(ctx, "out/done.txt")
+	require.NoError(t, err)
+	require.NotNil(t, ref)
+	require.Equal(t, "out/done.txt", ref.Path)
+	require.NotEmpty(t, ref.SavedAs)
+
+	_, err = ws.Collect(ctx, "out/done.txt")
+	require.NoError(t, err)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
 }
 
 // captureCtxStageFS snapshots the ctx that StageInputs receives without

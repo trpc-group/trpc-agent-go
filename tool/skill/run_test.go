@@ -3093,6 +3093,64 @@ func TestRunTool_OutputsSpec_PartialMetadataCommitReturnsFiles(
 	require.Contains(t, out.Warnings, warnPartialOutputCommit)
 }
 
+func TestRunTool_OutputsSpec_PartialStaleInvalidatesWithoutReplay(
+	t *testing.T,
+) {
+	manager := &legacySkillRetryManager{}
+	fs := &partialStaleSkillFS{
+		stubFS: &stubFS{},
+		manifest: codeexecutor.OutputManifest{
+			Files: []codeexecutor.FileRef{{
+				Name:     outATxt,
+				Content:  contentHi,
+				MIMEType: "text/plain",
+			}},
+		},
+	}
+	runner := &stubRunner{
+		res: codeexecutor.RunResult{ExitCode: 0},
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: manager,
+			f: fs,
+			r: runner,
+		}},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	enc, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+		Outputs: &codeexecutor.OutputSpec{
+			Globs:  []string{outGlobTxt},
+			Inline: true,
+		},
+	})
+	require.NoError(t, err)
+
+	res, err := rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	out := res.(runOutput)
+	require.Contains(t, out.Warnings, warnPartialOutputCommit)
+	require.Len(t, out.OutputFiles, 1)
+	require.Equal(t, contentHi, out.OutputFiles[0].Content)
+	require.Equal(t, 1, runner.calls,
+		"partial output must not replay the completed command")
+	require.Equal(t, 1, manager.creates)
+
+	_, err = rt.Call(context.Background(), enc)
+	require.NoError(t, err)
+	require.Equal(t, 2, runner.calls)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 // Using Outputs spec with Save=true and Inline=false should attach
 // artifact refs from manifest without inlining file content.
 func TestRunTool_OutputsSpec_Save_NoInline(t *testing.T) {
@@ -5467,6 +5525,22 @@ type stubFS struct {
 type staleOnceSkillFS struct {
 	stubFS
 	collectCalls int
+}
+
+type partialStaleSkillFS struct {
+	*stubFS
+	manifest codeexecutor.OutputManifest
+}
+
+func (f *partialStaleSkillFS) CollectOutputs(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	return f.manifest, errors.Join(
+		codeexecutor.ErrPartialOutputCommit,
+		codeexecutor.ErrWorkspaceStale,
+	)
 }
 
 func (f *staleOnceSkillFS) Collect(
