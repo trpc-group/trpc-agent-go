@@ -31,8 +31,8 @@ type caseResult struct {
 	Score          float64                                     `json:"score"`
 	ExecutionError string                                      `json:"executionError,omitempty"`
 	Metrics        []metricResult                              `json:"metrics"`
-	MetricEvidence []*evalresult.EvalMetricResultPerInvocation `json:"metricEvidence,omitempty"`
-	RunDetails     []*evaluation.EvaluationCaseRunDetails      `json:"runDetails,omitempty"`
+	MetricEvidence []*evalresult.EvalMetricResultPerInvocation `json:"-"`
+	RunDetails     []*evaluation.EvaluationCaseRunDetails      `json:"-"`
 }
 
 type evaluationSnapshot struct {
