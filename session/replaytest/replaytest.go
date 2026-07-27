@@ -35,6 +35,8 @@ import (
 
 // Backend groups the services needed to execute a replay case.
 type Backend struct {
+	// Name identifies the backend within one comparison. It must be non-empty
+	// and must not contain surrounding whitespace.
 	Name           string
 	SessionService session.Service
 	TrackService   session.TrackService
@@ -81,12 +83,16 @@ type SummaryStep struct {
 	Force     bool
 	Text      string
 	WantText  string
+	// EventPrefix is the number of leading Case.Events that must be appended
+	// before this summary runs. Nil means all events.
+	EventPrefix *int
 }
 
 // TrackSpec describes one track event append.
 type TrackSpec struct {
-	Name      string
-	Payload   map[string]any
+	Name string
+	// Payload accepts any JSON-marshalable value, including arrays and scalars.
+	Payload   any
 	Timestamp time.Time
 }
 
@@ -165,15 +171,24 @@ type SummaryBoundary struct {
 
 // TrackSnapshot contains one normalized track and its ordered events.
 type TrackSnapshot struct {
-	Name   string               `json:"name"`
+	// Name is the map key returned by the session backend.
+	Name string `json:"name"`
+	// Track is the identity stored on the outer TrackEvents container.
+	Track  string               `json:"track"`
 	Events []TrackEventSnapshot `json:"events"`
 }
 
 // TrackEventSnapshot contains stable track event fields.
 type TrackEventSnapshot struct {
-	Track     string `json:"track,omitempty"`
-	Payload   any    `json:"payload,omitempty"`
-	Timestamp string `json:"timestamp,omitempty"`
+	Track     string               `json:"track,omitempty"`
+	Payload   TrackPayloadSnapshot `json:"payload"`
+	Timestamp string               `json:"timestamp,omitempty"`
+}
+
+// TrackPayloadSnapshot preserves the representation class of track payload bytes.
+type TrackPayloadSnapshot struct {
+	Kind  string `json:"kind"`
+	Value any    `json:"value,omitempty"`
 }
 
 // StateBytesSnapshot preserves the representation class of state bytes.
@@ -215,7 +230,7 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 	if err := createSessionAndState(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
-	if err := appendEvents(ctx, backend, key, tc); err != nil {
+	if err := runEventSummaryTimeline(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
 	if err := appendTracks(ctx, backend, key, tc); err != nil {
@@ -228,9 +243,6 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 	if err := assertMemoryQueries(ctx, backend, userKey, tc); err != nil {
 		return Result{}, err
 	}
-	if err := createSummaries(ctx, backend, key, tc); err != nil {
-		return Result{}, err
-	}
 	if err := validateStateScopes(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
@@ -238,6 +250,13 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 }
 
 func validateBackend(backend Backend) error {
+	name := strings.TrimSpace(backend.Name)
+	if name == "" {
+		return fmt.Errorf("replay backend name is empty")
+	}
+	if name != backend.Name {
+		return fmt.Errorf("replay backend name %q has surrounding whitespace", backend.Name)
+	}
 	if backend.SessionService == nil {
 		return fmt.Errorf("replay backend %q has nil session service", backend.Name)
 	}
@@ -284,8 +303,48 @@ func createSessionAndState(ctx context.Context, backend Backend, key session.Key
 	return nil
 }
 
-func appendEvents(ctx context.Context, backend Backend, key session.Key, tc Case) error {
-	for i, evt := range tc.Events {
+func runEventSummaryTimeline(ctx context.Context, backend Backend, key session.Key, tc Case) error {
+	appended := 0
+	for i, spec := range tc.Summaries {
+		target, err := summaryEventPrefix(tc, i, appended)
+		if err != nil {
+			return err
+		}
+		if err := appendEventRange(ctx, backend, key, tc, appended, target); err != nil {
+			return err
+		}
+		appended = target
+		if err := createSummary(ctx, backend, key, spec); err != nil {
+			return fmt.Errorf("summary step %d for case %q: %w", i, tc.Name, err)
+		}
+	}
+	return appendEventRange(ctx, backend, key, tc, appended, len(tc.Events))
+}
+
+func summaryEventPrefix(tc Case, stepIndex, appended int) (int, error) {
+	spec := tc.Summaries[stepIndex]
+	target := len(tc.Events)
+	if spec.EventPrefix != nil {
+		target = *spec.EventPrefix
+	}
+	if target < 0 || target > len(tc.Events) {
+		return 0, fmt.Errorf(
+			"summary step %d for case %q has event prefix %d outside [0,%d]",
+			stepIndex, tc.Name, target, len(tc.Events),
+		)
+	}
+	if target < appended {
+		return 0, fmt.Errorf(
+			"summary step %d for case %q has event prefix %d before already appended prefix %d",
+			stepIndex, tc.Name, target, appended,
+		)
+	}
+	return target, nil
+}
+
+func appendEventRange(ctx context.Context, backend Backend, key session.Key, tc Case, start, end int) error {
+	for i := start; i < end; i++ {
+		evt := tc.Events[i]
 		got, err := backend.SessionService.GetSession(ctx, key)
 		if err != nil {
 			return fmt.Errorf("get session before event %d for case %q: %w", i, tc.Name, err)
@@ -364,15 +423,6 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 		sort.Strings(got)
 		if !reflect.DeepEqual(got, want) {
 			return fmt.Errorf("memory query %d for case %q returned contents %q, want %q", i, tc.Name, got, want)
-		}
-	}
-	return nil
-}
-
-func createSummaries(ctx context.Context, backend Backend, key session.Key, tc Case) error {
-	for i, spec := range tc.Summaries {
-		if err := createSummary(ctx, backend, key, spec); err != nil {
-			return fmt.Errorf("summary step %d for case %q: %w", i, tc.Name, err)
 		}
 	}
 	return nil
@@ -829,15 +879,21 @@ func normalizeBytes(value []byte) any {
 	return StateBytesSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(value)}
 }
 
-func normalizeRawJSON(value json.RawMessage) any {
+func normalizeTrackPayload(value json.RawMessage) TrackPayloadSnapshot {
+	if value == nil {
+		return TrackPayloadSnapshot{Kind: "nil"}
+	}
 	if len(value) == 0 {
-		return nil
+		return TrackPayloadSnapshot{Kind: "empty"}
 	}
 	var decoded any
 	if err := decodeJSON(value, &decoded); err == nil {
-		return canonicalJSON(decoded)
+		return TrackPayloadSnapshot{Kind: "json", Value: canonicalJSON(decoded)}
 	}
-	return normalizeBytes(value)
+	if utf8.Valid(value) {
+		return TrackPayloadSnapshot{Kind: "utf8", Value: string(value)}
+	}
+	return TrackPayloadSnapshot{Kind: "base64", Value: base64.StdEncoding.EncodeToString(value)}
 }
 
 func decodeJSON(data []byte, out any) error {
@@ -950,9 +1006,10 @@ func normalizeTracks(tracks map[session.Track]*session.TrackEvents) []TrackSnaps
 		events := tracks[session.Track(name)]
 		snapshot := TrackSnapshot{Name: name}
 		if events != nil {
+			snapshot.Track = string(events.Track)
 			for _, evt := range events.Events {
 				snapshot.Events = append(snapshot.Events, TrackEventSnapshot{
-					Track: string(evt.Track), Payload: normalizeRawJSON(evt.Payload), Timestamp: normalizeTime(evt.Timestamp),
+					Track: string(evt.Track), Payload: normalizeTrackPayload(evt.Payload), Timestamp: normalizeTime(evt.Timestamp),
 				})
 			}
 		}

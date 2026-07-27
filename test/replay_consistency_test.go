@@ -55,6 +55,7 @@ type summaryEntry = replaytest.SummaryEntry
 type summaryBoundary = replaytest.SummaryBoundary
 type trackSnapshot = replaytest.TrackSnapshot
 type trackEventSnapshot = replaytest.TrackEventSnapshot
+type trackPayloadSnapshot = replaytest.TrackPayloadSnapshot
 type replayStateBytesSnapshot = replaytest.StateBytesSnapshot
 type diffEntry = replaytest.Diff
 type allowedDiffRule = replaytest.AllowedDiffRule
@@ -105,16 +106,17 @@ type memoryQuerySpec struct {
 }
 
 type summaryStep struct {
-	name      string
-	filterKey string
-	force     bool
-	text      string
-	wantText  string
+	name        string
+	filterKey   string
+	force       bool
+	text        string
+	wantText    string
+	eventPrefix *int
 }
 
 type trackSpec struct {
 	name      string
-	payload   map[string]any
+	payload   any
 	timestamp time.Time
 }
 
@@ -171,6 +173,19 @@ type replayRetrySessionService struct {
 type replayRetryMemoryService struct {
 	memory.Service
 	fault *replayFailOnce
+}
+
+type replaySessionReadMutationService struct {
+	session.Service
+	mutate func(*session.Session)
+}
+
+type replayStaleSummaryBoundaryService struct {
+	session.Service
+	mu            sync.Mutex
+	summaryCalls  int
+	filterKey     string
+	firstBoundary *session.SummaryBoundary
 }
 
 type replayRetryComparison struct {
@@ -424,7 +439,7 @@ func toReplayTestCase(tc replayCase) replaytest.Case {
 	for _, spec := range tc.summaries {
 		summaries = append(summaries, replaytest.SummaryStep{
 			Name: spec.name, FilterKey: spec.filterKey, Force: spec.force,
-			Text: spec.text, WantText: spec.wantText,
+			Text: spec.text, WantText: spec.wantText, EventPrefix: spec.eventPrefix,
 		})
 	}
 	tracks := make([]replaytest.TrackSpec, 0, len(tc.tracks))
@@ -669,6 +684,79 @@ func (s *replayRetryMemoryService) AddMemory(
 			return s.Service.AddMemory(ctx, userKey, memoryText, topics, opts...)
 		})
 	})
+}
+
+func (s *replaySessionReadMutationService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	got = got.Clone()
+	s.mutate(got)
+	return got, nil
+}
+
+func (s *replayStaleSummaryBoundaryService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	if err := s.Service.CreateSessionSummary(ctx, sess, filterKey, force); err != nil {
+		return err
+	}
+	key := session.Key{AppName: sess.AppName, UserID: sess.UserID, SessionID: sess.ID}
+	got, err := s.Service.GetSession(ctx, key)
+	if err != nil {
+		return err
+	}
+	if got == nil {
+		return fmt.Errorf("get session after summary returned nil")
+	}
+	got.SummariesMu.RLock()
+	summary := got.Summaries[filterKey]
+	got.SummariesMu.RUnlock()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.summaryCalls++
+	if s.summaryCalls == 1 && summary != nil {
+		s.filterKey = filterKey
+		s.firstBoundary = summary.Boundary.Clone()
+	}
+	return nil
+}
+
+func (s *replayStaleSummaryBoundaryService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err != nil || got == nil {
+		return got, err
+	}
+	s.mu.Lock()
+	shouldMutate := s.summaryCalls >= 2 && s.firstBoundary != nil
+	filterKey := s.filterKey
+	boundary := s.firstBoundary.Clone()
+	s.mu.Unlock()
+	if !shouldMutate {
+		return got, nil
+	}
+	got = got.Clone()
+	got.SummariesMu.Lock()
+	if summary := got.Summaries[filterKey]; summary != nil {
+		summary = summary.Clone()
+		summary.Boundary = boundary
+		got.Summaries[filterKey] = summary
+	}
+	got.SummariesMu.Unlock()
+	return got, nil
 }
 
 func wrapReplayBackendForRetry(backend backendBundle, fault *replayFailOnce) backendBundle {
@@ -1010,7 +1098,13 @@ func withReplaySummaryWantText(text string) func(*summaryStep) {
 	}
 }
 
-func replayTrack(name string, index int, payload map[string]any) trackSpec {
+func withReplaySummaryEventPrefix(prefix int) func(*summaryStep) {
+	return func(spec *summaryStep) {
+		spec.eventPrefix = &prefix
+	}
+}
+
+func replayTrack(name string, index int, payload any) trackSpec {
 	return trackSpec{
 		name:      name,
 		payload:   payload,
@@ -1190,22 +1284,60 @@ func requireReplayCaseSemantics(
 ) {
 	t.Helper()
 
-	if tc.name != "memory_same_content_identity" {
-		return
-	}
-	require.NotEmpty(t, tc.memories)
-	want := tc.memories[0]
-	require.NotNil(t, want.metadata)
-	require.NotNil(t, want.metadata.EventTime)
-	for _, result := range results {
-		require.Lenf(t, result.snapshot.Memory, 1, "backend=%s", result.backend)
-		got := result.snapshot.Memory[0]
-		require.Equal(t, want.content, got.Content, "backend=%s", result.backend)
-		require.Equal(t, want.topics, got.Topics, "backend=%s", result.backend)
-		require.Equal(t, string(want.metadata.Kind), got.Kind, "backend=%s", result.backend)
-		require.Equal(t, normalizeReplayTime(*want.metadata.EventTime), got.EventTime, "backend=%s", result.backend)
-		require.Equal(t, want.metadata.Participants, got.Participants, "backend=%s", result.backend)
-		require.Equal(t, want.metadata.Location, got.Location, "backend=%s", result.backend)
+	switch tc.name {
+	case "memory_same_content_identity":
+		require.NotEmpty(t, tc.memories)
+		want := tc.memories[0]
+		require.NotNil(t, want.metadata)
+		require.NotNil(t, want.metadata.EventTime)
+		for _, result := range results {
+			require.Lenf(t, result.snapshot.Memory, 1, "backend=%s", result.backend)
+			got := result.snapshot.Memory[0]
+			require.Equal(t, want.content, got.Content, "backend=%s", result.backend)
+			require.Equal(t, want.topics, got.Topics, "backend=%s", result.backend)
+			require.Equal(t, string(want.metadata.Kind), got.Kind, "backend=%s", result.backend)
+			require.Equal(t, normalizeReplayTime(*want.metadata.EventTime), got.EventTime, "backend=%s", result.backend)
+			require.Equal(t, want.metadata.Participants, got.Participants, "backend=%s", result.backend)
+			require.Equal(t, want.metadata.Location, got.Location, "backend=%s", result.backend)
+		}
+	case "summary_overwrite_boundary":
+		for _, result := range results {
+			got, ok := result.snapshot.Summary[session.SummaryFilterKeyAllContents]
+			require.Truef(t, ok, "backend=%s", result.backend)
+			require.Equal(t, "updated full summary", got.Summary, "backend=%s", result.backend)
+			require.NotNil(t, got.Boundary, "backend=%s", result.backend)
+			require.NotNil(t, got.Boundary.LastEventIndex, "backend=%s", result.backend)
+			require.Equal(t, 3, *got.Boundary.LastEventIndex, "backend=%s", result.backend)
+			require.Equal(t, normalizeReplayTime(replaySpecTime(3)), got.Boundary.CutoffAt, "backend=%s", result.backend)
+		}
+	case "track_events":
+		wantPayloads := []trackPayloadSnapshot{
+			{Kind: "json", Value: []any{"array", json.Number("2")}},
+			{Kind: "json", Value: "scalar"},
+			{Kind: "json", Value: json.Number("9007199254740993")},
+			{Kind: "json", Value: true},
+			{Kind: "json"},
+		}
+		for _, result := range results {
+			var payloadTrack *trackSnapshot
+			for i := range result.snapshot.Tracks {
+				track := &result.snapshot.Tracks[i]
+				require.Equal(t, track.Name, track.Track, "backend=%s", result.backend)
+				for _, evt := range track.Events {
+					require.Equal(t, track.Name, evt.Track, "backend=%s", result.backend)
+					require.NotEmpty(t, evt.Payload.Kind, "backend=%s", result.backend)
+				}
+				if track.Name == "payload.domain" {
+					payloadTrack = track
+				}
+			}
+			require.NotNil(t, payloadTrack, "backend=%s", result.backend)
+			gotPayloads := make([]trackPayloadSnapshot, 0, len(payloadTrack.Events))
+			for _, evt := range payloadTrack.Events {
+				gotPayloads = append(gotPayloads, evt.Payload)
+			}
+			require.Equal(t, wantPayloads, gotPayloads, "backend=%s", result.backend)
+		}
 	}
 }
 
@@ -1579,11 +1711,13 @@ func basicReplayCases() []replayCase {
 					session.SummaryFilterKeyAllContents,
 					"first full summary",
 					withReplaySummaryName("first full summary"),
+					withReplaySummaryEventPrefix(2),
 				),
 				replaySummary(
 					session.SummaryFilterKeyAllContents,
 					"updated full summary",
 					withReplaySummaryName("updated full summary"),
+					withReplaySummaryEventPrefix(4),
 				),
 			},
 		},
@@ -1617,6 +1751,11 @@ func basicReplayCases() []replayCase {
 					"state": "done",
 					"error": nil,
 				}),
+				replayTrack("payload.domain", 3, []any{"array", json.Number("2")}),
+				replayTrack("payload.domain", 4, "scalar"),
+				replayTrack("payload.domain", 5, json.Number("9007199254740993")),
+				replayTrack("payload.domain", 6, true),
+				replayTrack("payload.domain", 7, nil),
 			},
 		},
 	}
@@ -1801,7 +1940,7 @@ func TestReplayConsistencySnapshotNormalize_PreservesLargeJSONNumbers(t *testing
 		t,
 		diffs,
 		"tracks",
-		"$.tracks[0].events[0].payload.big",
+		"$.tracks[0].events[0].payload.value.big",
 		map[string]any{
 			"track_name":        "tool",
 			"track_event_index": 0,
@@ -1925,11 +2064,14 @@ func TestReplayConsistencySnapshotDiff_MutationsHavePrecisePaths(t *testing.T) {
 		{
 			name:    "track payload",
 			section: "tracks",
-			path:    "$.tracks[0].events[0].payload.a",
+			path:    "$.tracks[0].events[0].payload.value.a",
 			mutate: func(snapshot *replaySnapshot) {
-				snapshot.Tracks[0].Events[0].Payload = map[string]any{
-					"a": json.Number("2"),
-					"b": json.Number("2"),
+				snapshot.Tracks[0].Events[0].Payload = trackPayloadSnapshot{
+					Kind: "json",
+					Value: map[string]any{
+						"a": json.Number("2"),
+						"b": json.Number("2"),
+					},
 				}
 			},
 			expectedContext: map[string]any{
@@ -2047,11 +2189,14 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 		{
 			name:     "track_payload_drift",
 			section:  "tracks",
-			pathGlob: "$.tracks[0].events[0].payload.a",
+			pathGlob: "$.tracks[0].events[0].payload.value.a",
 			mutate: func(snapshot *replaySnapshot) {
-				snapshot.Tracks[0].Events[0].Payload = map[string]any{
-					"a": json.Number("99"),
-					"b": json.Number("2"),
+				snapshot.Tracks[0].Events[0].Payload = trackPayloadSnapshot{
+					Kind: "json",
+					Value: map[string]any{
+						"a": json.Number("99"),
+						"b": json.Number("2"),
+					},
 				}
 			},
 			context: map[string]any{
@@ -2066,9 +2211,12 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 			mutate: func(snapshot *replaySnapshot) {
 				snapshot.Tracks[0].Events = append(snapshot.Tracks[0].Events, trackEventSnapshot{
 					Track: "tool",
-					Payload: map[string]any{
-						"a": json.Number("3"),
-						"b": json.Number("4"),
+					Payload: trackPayloadSnapshot{
+						Kind: "json",
+						Value: map[string]any{
+							"a": json.Number("3"),
+							"b": json.Number("4"),
+						},
 					},
 					Timestamp: normalizeReplayTime(replayBaseTime.Add(10 * time.Second)),
 				})
@@ -2102,6 +2250,100 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 				require.False(t, diff.Allowed)
 			}
 			requireReplayDiff(t, diffs, tt.section, tt.pathGlob, tt.context)
+		})
+	}
+}
+
+func TestReplayConsistencyAnomaly_ServiceContractMutationsDetected(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		caseName string
+		wrap     func(backendBundle) backendBundle
+		section  string
+		pathGlob string
+		context  map[string]any
+	}{
+		{
+			name:     "stale summary boundary",
+			caseName: "summary_overwrite_boundary",
+			wrap: func(backend backendBundle) backendBundle {
+				backend.sessionService = &replayStaleSummaryBoundaryService{Service: backend.sessionService}
+				return backend
+			},
+			section:  "summary",
+			pathGlob: `$.summary[""].boundary.last_event_index`,
+		},
+		{
+			name:     "wrong track container",
+			caseName: "track_events",
+			wrap: func(backend backendBundle) backendBundle {
+				backend.sessionService = &replaySessionReadMutationService{
+					Service: backend.sessionService,
+					mutate: func(sess *session.Session) {
+						sess.TracksMu.Lock()
+						defer sess.TracksMu.Unlock()
+						if events := sess.Tracks["tool.latency"]; events != nil {
+							events.Track = "wrong-container"
+						}
+					},
+				}
+				return backend
+			},
+			section:  "tracks",
+			pathGlob: "$.tracks[2].track",
+			context:  map[string]any{"track_name": "tool.latency"},
+		},
+		{
+			name:     "json null restored as nil payload",
+			caseName: "track_events",
+			wrap: func(backend backendBundle) backendBundle {
+				backend.sessionService = &replaySessionReadMutationService{
+					Service: backend.sessionService,
+					mutate: func(sess *session.Session) {
+						sess.TracksMu.Lock()
+						defer sess.TracksMu.Unlock()
+						if events := sess.Tracks["payload.domain"]; events != nil && len(events.Events) == 5 {
+							events.Events[4].Payload = nil
+						}
+					},
+				}
+				return backend
+			},
+			section:  "tracks",
+			pathGlob: "$.tracks[0].events[4].payload.kind",
+			context: map[string]any{
+				"track_name":        "payload.domain",
+				"track_event_index": 4,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			baselineBackends := makeReplayBackends(t)
+			mutatedBackends := makeReplayBackends(t)
+			tc := replayCaseByName(t, tt.caseName)
+			for i, baselineBackend := range baselineBackends {
+				mutatedBackend := tt.wrap(mutatedBackends[i])
+				mutatedBackend.name += "_mutated"
+				baseline := runReplayCaseOnBackend(t, ctx, baselineBackend, tc)
+				mutated := runReplayCaseOnBackend(t, ctx, mutatedBackend, tc)
+				diffs := replaytest.CompareSnapshots(
+					tc.name,
+					baseline.key.SessionID,
+					baseline.backend,
+					mutated.backend,
+					baseline.snapshot,
+					mutated.snapshot,
+					nil,
+				)
+				require.NotEmpty(t, diffs, "backend=%s", baseline.backend)
+				for _, diff := range diffs {
+					require.False(t, diff.Allowed, "backend=%s diff=%+v", baseline.backend, diff)
+				}
+				requireReplayDiff(t, diffs, tt.section, tt.pathGlob, tt.context)
+			}
 		})
 	}
 }

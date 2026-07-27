@@ -29,6 +29,23 @@ import (
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
+func TestRunRejectsInvalidBackendNames(t *testing.T) {
+	tests := []struct {
+		name string
+		want string
+	}{
+		{name: "", want: "replay backend name is empty"},
+		{name: " \t", want: "replay backend name is empty"},
+		{name: " sqlite ", want: `replay backend name " sqlite " has surrounding whitespace`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Run(context.Background(), Backend{Name: test.name}, Case{Name: "invalid"})
+			require.EqualError(t, err, test.want)
+		})
+	}
+}
+
 func TestRunRejectsMissingServices(t *testing.T) {
 	ctx := context.Background()
 	_, err := Run(ctx, Backend{Name: "missing-session"}, Case{Name: "invalid"})
@@ -69,6 +86,13 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 				Name: " ",
 			}}},
 			want: `track 0 for case "empty-track" has empty name`,
+		},
+		{
+			name: "unsupported track payload",
+			tc: Case{Name: "bad-track-payload", Tracks: []TrackSpec{{
+				Name: "trace", Payload: make(chan int),
+			}}},
+			want: `marshal track 0 for case "bad-track-payload": json: unsupported type: chan int`,
 		},
 		{
 			name: "unknown memory operation",
@@ -119,6 +143,119 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			require.EqualError(t, err, test.want)
 		})
 	}
+}
+
+func TestSummaryEventPrefixValidation(t *testing.T) {
+	zero, one, two, negative, tooLarge := 0, 1, 2, -1, 3
+	tests := []struct {
+		name     string
+		prefix   *int
+		appended int
+		want     int
+		wantErr  string
+	}{
+		{name: "nil means all", want: 2},
+		{name: "zero", prefix: &zero, want: 0},
+		{name: "same prefix", prefix: &one, appended: 1, want: 1},
+		{name: "increasing prefix", prefix: &two, appended: 1, want: 2},
+		{
+			name: "negative", prefix: &negative,
+			wantErr: `summary step 0 for case "timeline" has event prefix -1 outside [0,2]`,
+		},
+		{
+			name: "too large", prefix: &tooLarge,
+			wantErr: `summary step 0 for case "timeline" has event prefix 3 outside [0,2]`,
+		},
+		{
+			name: "decreasing", prefix: &one, appended: 2,
+			wantErr: `summary step 0 for case "timeline" has event prefix 1 before already appended prefix 2`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tc := Case{
+				Name: "timeline", Events: []*event.Event{{}, {}},
+				Summaries: []SummaryStep{{EventPrefix: test.prefix}},
+			}
+			got, err := summaryEventPrefix(tc, 0, test.appended)
+			if test.wantErr != "" {
+				require.EqualError(t, err, test.wantErr)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestRunInterleavesEventsAndSummaries(t *testing.T) {
+	summarizer := &recordingSummarizer{}
+	baseSessionService := sessinmemory.NewSessionService(sessinmemory.WithSummarizer(summarizer))
+	defer baseSessionService.Close()
+	sessionService := &recordingSummarySessionService{Service: baseSessionService}
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	firstPrefix, finalPrefix := 2, 4
+	baseTime := time.Date(2026, time.July, 28, 1, 2, 3, 0, time.UTC)
+	events := make([]*event.Event, 0, finalPrefix)
+	for i, id := range []string{"event-0", "event-1", "event-2", "event-3"} {
+		events = append(events, replayTimelineEvent(id, baseTime.Add(time.Duration(i)*time.Second)))
+	}
+	result, err := Run(context.Background(), Backend{
+		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+		SetSummaryText: func(text string) { summarizer.text = text },
+	}, Case{
+		Name:   "summary-timeline",
+		Events: events,
+		Summaries: []SummaryStep{
+			{Name: "first", Force: true, Text: "first summary", EventPrefix: &firstPrefix},
+			{Name: "second", Force: true, Text: "second summary", EventPrefix: &finalPrefix},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []int{2, 4}, sessionService.eventCounts)
+	require.Len(t, result.Snapshot.Events, 4)
+	summary := result.Snapshot.Summary[session.SummaryFilterKeyAllContents]
+	require.Equal(t, "second summary", summary.Summary)
+	require.NotNil(t, summary.Boundary)
+	require.Equal(t, finalPrefix-1, *summary.Boundary.LastEventIndex)
+	require.Equal(t, normalizeTime(baseTime.Add(3*time.Second)), summary.Boundary.CutoffAt)
+}
+
+func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), Backend{
+		Name: "in_memory", SessionService: sessionService,
+		TrackService: sessionService, MemoryService: memoryService,
+	}, Case{
+		Name: "track-payload-domain",
+		Tracks: []TrackSpec{
+			{Name: "domain", Payload: map[string]any{"value": json.Number("9007199254740993")}},
+			{Name: "domain", Payload: []any{"array", json.Number("2")}},
+			{Name: "domain", Payload: "scalar"},
+			{Name: "domain", Payload: json.Number("9007199254740993")},
+			{Name: "domain", Payload: true},
+			{Name: "domain", Payload: nil},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Snapshot.Tracks, 1)
+	track := result.Snapshot.Tracks[0]
+	require.Equal(t, "domain", track.Name)
+	require.Equal(t, "domain", track.Track)
+	require.Equal(t, []TrackPayloadSnapshot{
+		{Kind: "json", Value: map[string]any{"value": json.Number("9007199254740993")}},
+		{Kind: "json", Value: []any{"array", json.Number("2")}},
+		{Kind: "json", Value: "scalar"},
+		{Kind: "json", Value: json.Number("9007199254740993")},
+		{Kind: "json", Value: true},
+		{Kind: "json", Value: nil},
+	}, trackPayloads(track.Events))
 }
 
 func TestRunPropagatesBackendErrors(t *testing.T) {
@@ -924,12 +1061,55 @@ func TestNormalizationHandlesInvalidAndEmptyInputs(t *testing.T) {
 
 	binary := normalizeBytes([]byte{0xff, 0x00})
 	require.Equal(t, StateBytesSnapshot{Kind: "base64", Value: "/wA="}, binary)
-	require.Nil(t, normalizeRawJSON(nil))
-	require.Equal(t, StateBytesSnapshot{Kind: "utf8", Value: "{"}, normalizeRawJSON(json.RawMessage("{")))
+
+	nilPayload := normalizeTrackPayload(nil)
+	emptyPayload := normalizeTrackPayload(json.RawMessage{})
+	nullPayload := normalizeTrackPayload(json.RawMessage("null"))
+	utf8Payload := normalizeTrackPayload(json.RawMessage("{"))
+	binaryPayload := normalizeTrackPayload(json.RawMessage{0xff, 0x00})
+	require.Equal(t, TrackPayloadSnapshot{Kind: "nil"}, nilPayload)
+	require.Equal(t, TrackPayloadSnapshot{Kind: "empty"}, emptyPayload)
+	require.Equal(t, TrackPayloadSnapshot{Kind: "json"}, nullPayload)
+	require.Equal(t, TrackPayloadSnapshot{Kind: "utf8", Value: "{"}, utf8Payload)
+	require.Equal(t, TrackPayloadSnapshot{Kind: "base64", Value: "/wA="}, binaryPayload)
+	require.NotEqual(t, nilPayload, emptyPayload)
+	require.NotEqual(t, nilPayload, nullPayload)
+	require.Equal(
+		t,
+		TrackPayloadSnapshot{Kind: "json", Value: map[string]any{
+			"a": json.Number("1"), "b": json.Number("2"),
+		}},
+		normalizeTrackPayload(json.RawMessage(` {"b":2,"a":1} `)),
+	)
 
 	var decoded any
 	require.EqualError(t, decodeJSON([]byte(`{} []`), &decoded), "unexpected trailing JSON value")
 	require.ErrorContains(t, decodeJSON([]byte(`{} {`), &decoded), "decode trailing JSON value")
+}
+
+func TestTrackSnapshotsPreserveContainerAndPayloadIdentity(t *testing.T) {
+	leftSession := replayTrackSession("tool", json.RawMessage("null"))
+	rightSession := replayTrackSession("wrong-container", json.RawMessage("null"))
+	left := BuildSnapshot(leftSession, nil)
+	right := BuildSnapshot(rightSession, nil)
+
+	require.Equal(t, "tool", left.Tracks[0].Name)
+	require.Equal(t, "tool", left.Tracks[0].Track)
+	require.Equal(t, "tool", left.Tracks[0].Events[0].Track)
+	diffs := CompareSnapshots("container", "session-1", "left", "right", left, right, nil)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "tracks", diffs[0].Section)
+	require.Equal(t, "$.tracks[0].track", diffs[0].Path)
+	require.Equal(t, "tool", diffs[0].Context["track_name"])
+	require.False(t, diffs[0].Allowed)
+
+	rightSession = replayTrackSession("tool", nil)
+	right = BuildSnapshot(rightSession, nil)
+	diffs = CompareSnapshots("payload", "session-1", "left", "right", left, right, nil)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "$.tracks[0].events[0].payload.kind", diffs[0].Path)
+	require.Equal(t, 0, diffs[0].Context["track_event_index"])
+	require.False(t, diffs[0].Allowed)
 }
 
 func TestPathParsersRejectMalformedPaths(t *testing.T) {
@@ -1021,6 +1201,67 @@ type errorWriter struct{}
 
 func (errorWriter) Write([]byte) (int, error) {
 	return 0, errors.New("write failed")
+}
+
+type recordingSummarizer struct {
+	text string
+}
+
+func (s *recordingSummarizer) ShouldSummarize(*session.Session) bool { return true }
+
+func (s *recordingSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
+	return s.text, nil
+}
+
+func (*recordingSummarizer) SetPrompt(string) {}
+
+func (*recordingSummarizer) SetModel(model.Model) {}
+
+func (*recordingSummarizer) Metadata() map[string]any { return map[string]any{} }
+
+type recordingSummarySessionService struct {
+	session.Service
+	eventCounts []int
+}
+
+func (s *recordingSummarySessionService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	s.eventCounts = append(s.eventCounts, len(sess.GetEvents()))
+	return s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+func replayTimelineEvent(id string, timestamp time.Time) *event.Event {
+	return &event.Event{
+		ID: id, InvocationID: "timeline", Author: "user", Timestamp: timestamp,
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.NewUserMessage(id),
+		}}},
+	}
+}
+
+func trackPayloads(events []TrackEventSnapshot) []TrackPayloadSnapshot {
+	out := make([]TrackPayloadSnapshot, 0, len(events))
+	for _, evt := range events {
+		out = append(out, evt.Payload)
+	}
+	return out
+}
+
+func replayTrackSession(container session.Track, payload json.RawMessage) *session.Session {
+	sess := session.NewSession("app", "user", "session-1")
+	sess.Tracks = map[session.Track]*session.TrackEvents{
+		"tool": {
+			Track: container,
+			Events: []session.TrackEvent{{
+				Track: "tool", Payload: payload, Timestamp: time.Unix(1, 0),
+			}},
+		},
+	}
+	return sess
 }
 
 func replayTestSession(generated string, timestamp time.Time) *session.Session {

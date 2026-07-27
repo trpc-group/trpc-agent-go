@@ -73,9 +73,11 @@ Snapshots include these sections:
 - `state`: visible merged session/app/user/temp state, normalized as tagged byte values so nil, JSON, UTF-8 text, and binary bytes remain distinct
 - `memory`: content, topics, and metadata; raw memory IDs are only used for report context
 - `summary`: `Session.Summaries[filterKey]`, summary text, topics, boundary metadata, and `GetSessionSummaryText`
-- `tracks`: track name, each embedded event track, event order, payload, and timestamp
+- `tracks`: the track map key, outer `TrackEvents.Track`, each embedded `TrackEvent.Track`, event order, payload, and timestamp
 
 Backend-regenerated event IDs, response IDs and timing metadata, and backend-generated memory IDs are omitted during normalization. Caller-supplied `Event.Timestamp` values are retained as UTC `RFC3339Nano` strings so persistence drift remains visible. JSON normalization uses `json.Decoder.UseNumber` so large integers remain precise. Business-field differences are not allowed by default.
+
+Track payload fixtures accept the complete JSON value domain: objects, arrays, strings, numbers, booleans, and null. Persisted `json.RawMessage` values use a tagged snapshot with `nil`, `empty`, `json`, `utf8`, or `base64` kind. Valid JSON is canonicalized inside `payload.value`, while raw nil, empty bytes, JSON null, invalid UTF-8 text, and binary bytes remain distinguishable.
 
 Each memory query declares `ExpectedContents`. Search results are compared as an exact unordered content multiset, so backend-specific IDs, scores, and ranking are ignored while missing, unrelated, extra, and duplicate results remain observable.
 
@@ -86,6 +88,8 @@ Cases with app, user, or session state also validate each scope as a backend con
 ## Summary And Track Strategy
 
 The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.
+
+Each `SummaryStep` may set `EventPrefix` to the number of leading case events that must be appended before that summary runs. Prefixes must stay within the event list and be monotonically non-decreasing; equal prefixes are allowed. A nil prefix preserves the default of running after all events. This allows a case to append events, summarize, append more events, and verify that the stored boundary advances.
 
 Summary comparison covers:
 
@@ -99,10 +103,11 @@ A non-empty summary boundary anchor that cannot be mapped to the current snapsho
 
 Track comparison covers:
 
-- track name
+- track map-key name
+- outer `TrackEvents.Track` container identity
 - each `TrackEvent.Track` value
 - event order within each track
-- canonical JSON payload
+- tagged payload representation, with canonical JSON under `payload.value`
 - fixed timestamp
 
 Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track diffs, also check the track index in the state section.
@@ -111,7 +116,8 @@ Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track d
 
 The test harness includes three kinds of anomaly injection:
 
-- snapshot mutation: partial event loss, event timestamp drift, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, and track order drift
+- snapshot mutation: partial event loss, event timestamp drift, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, outer track-container drift, and track order drift
+- service-contract mutation: a stale summary boundary after interleaved event appends, an incorrect outer track identity, and JSON null restored as a nil raw payload
 - in-execution retry: fail-before-write must converge to the single-success baseline when retried with identical input; ambiguous fail-after-write verifies idempotent Memory Add, state update, and summary overwrite results
 - SQLite/public API injection: state pollution, memory pollution, and summary overwrite
 - SQLite/storage injection: a duplicate memory row that simulates storage corruption and verifies that it is reported as an unallowed memory diff
@@ -154,6 +160,7 @@ The current runnable matrix only includes `InMemory` and `SQLite`. External back
 When adding a backend:
 
 - keep default local tests free of external-service dependencies
+- give the backend a non-empty name with no surrounding whitespace; the name is the report and `allowed_diff` identity
 - normalize backend-generated IDs and response timing metadata while preserving caller-supplied event timestamps
 - preserve summary and track semantics across backends
 - prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`

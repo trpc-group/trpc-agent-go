@@ -73,9 +73,11 @@ snapshot 覆盖以下 section：
 - `state`：session/app/user/temp state 合并后的可见状态，并以带标签的 byte value 表示，确保 nil、JSON、UTF-8 文本和二进制字节可区分
 - `memory`：content、topics、metadata；raw memory ID 只用于 report 定位
 - `summary`：`Session.Summaries[filterKey]`、summary text、topics、boundary metadata、`GetSessionSummaryText`
-- `tracks`：track name、每个事件内嵌的 track、event order、payload、timestamp
+- `tracks`：track map key、外层 `TrackEvents.Track`、每个事件内嵌的 `TrackEvent.Track`、event order、payload、timestamp
 
 后端重新生成的 event ID、response ID 与时间元数据，以及后端生成的 memory ID 会在 normalize 时移除。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串，使持久化时间漂移能够被发现。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
+
+Track payload fixture 支持完整 JSON 值域：object、array、string、number、boolean 和 null。持久化后的 `json.RawMessage` 使用带标签快照，kind 为 `nil`、`empty`、`json`、`utf8` 或 `base64`。合法 JSON 在 `payload.value` 内做 canonical normalize，同时保留 raw nil、空字节、JSON null、非 JSON UTF-8 文本和二进制字节之间的可观察差异。
 
 每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
@@ -86,6 +88,8 @@ Memory 操作别名按完整 canonical identity 解析，而不是只比较 cont
 ## Summary 与 Track 策略
 
 Go 版 summary 使用原生 session summary 语义，不生成 Python 风格的 summary event，也不比较 historical summary event。
+
+每个 `SummaryStep` 可以通过 `EventPrefix` 指定执行 summary 前应已追加的 `Case.Events` 前缀长度。前缀必须位于事件列表范围内并保持单调不减，允许相同前缀；nil 保持默认的“全部事件后执行”。因此用例可以表达“追加事件、总结、继续追加、再次总结”，并验证持久化 boundary 确实推进。
 
 summary 比较重点：
 
@@ -99,10 +103,11 @@ summary 比较重点：
 
 track 比较重点：
 
-- track name
+- track map-key name
+- 外层 `TrackEvents.Track` 容器身份
 - 每个 `TrackEvent.Track` 值
 - 同一 track 下事件顺序
-- payload canonical JSON
+- 带标签的 payload 表示；合法 JSON 位于 `payload.value`
 - 固定 timestamp
 
 注意：`AppendTrackEvent` 会维护 `state["tracks"]`。如果调试 track diff，同时也要留意 state section 中的 track index。
@@ -111,7 +116,8 @@ track 比较重点：
 
 测试框架包含三类异常注入：
 
-- snapshot mutation：partial event loss、event timestamp drift、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、track order drift
+- snapshot mutation：partial event loss、event timestamp drift、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、outer track-container drift、track order drift
+- service-contract mutation：事件交错追加后仍返回旧 summary boundary、错误的外层 track 身份，以及 JSON null 被恢复成 nil raw payload
 - 执行中 retry：fail-before-write 使用相同输入重试后必须与单次成功 baseline 一致；ambiguous fail-after-write 验证 Memory Add、state update 和 summary overwrite 的幂等结果
 - SQLite/public API injection：state pollution、memory pollution、summary overwrite
 - SQLite/storage injection：直接注入 duplicate memory row，用于模拟存储损坏，并验证它会被报告为 unallowed memory diff
@@ -154,6 +160,7 @@ ID 和时间类差异应优先通过 normalize 或 runner 修正，不应使用 
 接入新后端时应保持：
 
 - 默认本地测试不需要外部服务
+- backend 名称非空、没有首尾空白；该名称同时是 report 与 `allowed_diff` 使用的身份
 - 后端生成的 ID 与 response 时间元数据通过 normalize 处理，同时保留调用方提供的事件时间戳
 - summary 与 track 语义与现有后端一致
 - 新后端差异必须先由异常注入测试证明可定位，再评估是否需要 `allowed_diff`
