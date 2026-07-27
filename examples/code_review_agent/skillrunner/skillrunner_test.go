@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -180,6 +180,40 @@ func TestScriptRunStatusClassification(t *testing.T) {
 func TestGoEnvE2BDoesNotLeakHostPaths(t *testing.T) {
 	if got := goEnv("e2b"); len(got) != 0 {
 		t.Fatalf("e2b env leaked host values: %#v", got)
+	}
+}
+
+func TestE2BSandboxTimeoutCoversRunnableScripts(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want time.Duration
+	}{
+		{
+			name: "default timeout without repository",
+			cfg:  Config{},
+			want: 2*defaultScriptTimeout + e2bSandboxLifetimeGrace,
+		},
+		{
+			name: "default timeout with repository",
+			cfg:  Config{RepoPath: "."},
+			want: 3*defaultScriptTimeout + e2bSandboxLifetimeGrace,
+		},
+		{
+			name: "custom timeout with repository",
+			cfg: Config{
+				RepoPath: ".",
+				Timeout:  2 * time.Minute,
+			},
+			want: 6*time.Minute + e2bSandboxLifetimeGrace,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := e2bSandboxTimeout(tt.cfg); got != tt.want {
+				t.Fatalf("e2b sandbox timeout = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

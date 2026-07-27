@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -41,8 +41,10 @@ const (
 	// DefaultSkillName is the skill executed by this runner.
 	DefaultSkillName = "code-review"
 
-	outputExcerptLimit = 4096
-	repoStageTarget    = "work/repo"
+	outputExcerptLimit      = 4096
+	repoStageTarget         = "work/repo"
+	defaultScriptTimeout    = 30 * time.Second
+	e2bSandboxLifetimeGrace = 30 * time.Second
 )
 
 // Config controls skill script execution.
@@ -104,7 +106,7 @@ func RunScripts(ctx context.Context, cfg Config) Result {
 		cfg.SkillName = DefaultSkillName
 	}
 	if cfg.Timeout <= 0 {
-		cfg.Timeout = 30 * time.Second
+		cfg.Timeout = defaultScriptTimeout
 	}
 	// The OS sandbox validates host paths and requires them to be
 	// absolute, so resolve the skills root before staging.
@@ -312,7 +314,7 @@ func buildExecutor(ctx context.Context, cfg Config) (codeexecutor.CodeExecutor, 
 		return exec, func() { _ = exec.Close() }, nil
 	case "e2b":
 		exec, err := e2bexec.NewWithContext(ctx,
-			e2bexec.WithSandboxTimeout(cfg.Timeout+30*time.Second),
+			e2bexec.WithSandboxTimeout(e2bSandboxTimeout(cfg)),
 			e2bexec.WithExecutionTimeout(cfg.Timeout),
 		)
 		if err != nil {
@@ -324,6 +326,22 @@ func buildExecutor(ctx context.Context, cfg Config) (codeexecutor.CodeExecutor, 
 			"skill scripts support managed/container/e2b/local-dev sandboxes; got %q",
 			cfg.SandboxKind)
 	}
+}
+
+// e2bSandboxTimeout returns a wall-clock lifetime that covers every script
+// that can run in the shared E2B sandbox, plus workspace setup and cleanup.
+func e2bSandboxTimeout(cfg Config) time.Duration {
+	commandTimeout := cfg.Timeout
+	if commandTimeout <= 0 {
+		commandTimeout = defaultScriptTimeout
+	}
+	lifetime := e2bSandboxLifetimeGrace
+	for _, spec := range buildScripts(cfg) {
+		if spec.skipReason == "" {
+			lifetime += commandTimeout
+		}
+	}
+	return lifetime
 }
 
 // sandboxExecutor builds the OS-sandboxed executor mirroring sandboxrunner.

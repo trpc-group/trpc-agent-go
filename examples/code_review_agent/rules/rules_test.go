@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -23,8 +23,7 @@ func TestScanSecretAndDedup(t *testing.T) {
 +++ b/foo.go
 @@ -1,3 +1,5 @@
  package foo
- 
-+var apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
+` + " \n" + `+var apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
 +var apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
 `)
 	files, err := diffparser.ParseUnifiedDiff(diff)

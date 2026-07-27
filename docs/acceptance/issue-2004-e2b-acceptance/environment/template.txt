@@ -1,7 +1,0 @@
-alias: code-interpreter-v1
-image: chyoyushin/code-review-sandbox:go1.24.4-v1
-architecture: linux/amd64
-go: 1.24.4
-ports: 49983,49999
-health: 49999/health
-writable-layer: 4G

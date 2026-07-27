@@ -2,7 +2,7 @@
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
-// Copyright (C) 2025 Tencent.  All rights reserved.
+// Copyright (C) 2026 Tencent.  All rights reserved.
 //
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
@@ -18,8 +18,7 @@ func TestParseUnifiedDiff(t *testing.T) {
 +++ b/foo.go
 @@ -1,3 +1,4 @@
  package foo
- 
-+func Bar() {}
+` + " \n" + `+func Bar() {}
 `)
 	files, err := ParseUnifiedDiff(diff)
 	if err != nil {
