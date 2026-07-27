@@ -99,6 +99,12 @@ const (
 	// SearchMemories so the backend can stop scanning once candidates
 	// drop below a clearly irrelevant band.
 	reconcileMinProbeScore = 0.30
+
+	// reconcileRetainedTokenCoverage is the minimum fraction of an
+	// existing memory's tokens that a new Add must retain before the Add
+	// may replace that memory. Similarity locates candidates; it must not
+	// by itself authorize a lossy rewrite.
+	reconcileRetainedTokenCoverage = 0.80
 )
 
 // Reconcile decision tiers. A higher tier is always preferred when
@@ -930,6 +936,10 @@ func (w *AutoMemoryWorker) decideAddOp(
 		}
 		j := tokenJaccard(op.Memory, c.Memory.Memory)
 		tier := reconcileDecisionTier(c.Score, j)
+		if tier != reconcileTierNone &&
+			!reconcileAddPreservesStoredMemory(op, c.Memory) {
+			tier = reconcileTierNone
+		}
 		if best == nil ||
 			tier > bestTier ||
 			(tier == bestTier &&
@@ -975,6 +985,53 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+// reconcileAddPreservesStoredMemory prevents a similar but narrower Add from
+// erasing an existing fact. Explicit extractor Update operations bypass this
+// gate because they carry an intentional state transition.
+func reconcileAddPreservesStoredMemory(
+	op *extractor.Operation,
+	stored *memory.Memory,
+) bool {
+	if op == nil || stored == nil {
+		return false
+	}
+	if exactMemoryDuplicate(op, stored) {
+		return true
+	}
+	if retainedMemoryTokenCoverage(stored.Memory, op.Memory) <
+		reconcileRetainedTokenCoverage {
+		return false
+	}
+	if !criticalValuesPreserved(stored.Memory, op.Memory) ||
+		negationSignature(stored.Memory) != negationSignature(op.Memory) {
+		return false
+	}
+	if changeMarkerPattern.MatchString(op.Memory) &&
+		!changeMarkerPattern.MatchString(stored.Memory) {
+		return false
+	}
+	return true
+}
+
+func retainedMemoryTokenCoverage(stored, fresh string) float64 {
+	storedTokens := textTokenSet(stored)
+	freshTokens := textTokenSet(fresh)
+	for _, role := range []string{"user", "assistant"} {
+		delete(storedTokens, role)
+		delete(freshTokens, role)
+	}
+	if len(storedTokens) == 0 {
+		return 0
+	}
+	var retained int
+	for token := range storedTokens {
+		if _, ok := freshTokens[token]; ok {
+			retained++
+		}
+	}
+	return float64(retained) / float64(len(storedTokens))
 }
 
 // reconcileMetadataCompatible rejects candidates whose explicit identity

@@ -48,7 +48,7 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
 }
 
-func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {
+func TestUpdatePoliciesPreserveDistinctResult(t *testing.T) {
 	stored := []*memory.Entry{{
 		ID: "tips",
 		Memory: &memory.Memory{
@@ -68,8 +68,8 @@ func TestAssistantResultPolicyPreservesDistinctResult(t *testing.T) {
 		context.Background(), reconcileUserKey(), incoming, stored,
 	)
 	require.Len(t, ordinary, 1)
-	assert.Equal(t, extractor.OperationUpdate, ordinary[0].Type)
-	assert.Equal(t, "tips", ordinary[0].MemoryID)
+	assert.Equal(t, extractor.OperationAdd, ordinary[0].Type)
+	assert.Empty(t, ordinary[0].MemoryID)
 
 	assistantResult := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(), incoming, stored,

@@ -2229,6 +2229,55 @@ func TestReconcileOps_RewriteAsUpdateOnMidSignal(t *testing.T) {
 	assert.Equal(t, "Lives in Portland Oregon", out[0].Memory)
 }
 
+func TestReconcileOps_KeepsRelatedPlanDetail(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "trip",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory: "Planning a birthday trip to Hawaii in October, specifically to Oahu.",
+			Topics: []string{"Hawaii", "Oahu", "birthday", "trip"},
+		},
+		Score: 0.85,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	in := []*extractor.Operation{{
+		Type: extractor.OperationAdd,
+		Memory: "trails: Interested in hiking on Oahu during the planned " +
+			"October birthday trip to Hawaii.",
+		Topics: []string{"Hawaii", "Oahu", "hiking", "trails"},
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
+func TestReconcileOps_KeepsLossyCriticalValueRewrite(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "reservation",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory: "Dinner reservation is for 8 people at 7 PM.",
+		},
+		Score: 0.97,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	in := []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "Dinner reservation is at 7 PM.",
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
 // TestReconcileOps_KeepsOpWhenNotSimilar verifies that unrelated facts
 // are passed through unchanged so reconcile never collapses distinct
 // memories into a single row.
@@ -2634,13 +2683,12 @@ func TestReconcileOps_PrefersHigherTierCandidate(t *testing.T) {
 			Score: 0.20,
 		},
 		{
-			// Vector-backed duplicate: Score crosses the skip bar and
-			// token overlap clears the corroboration floor, so this
-			// entry is tier "skip" and must win the pick.
+			// Exact duplicate: Score crosses the skip bar and the
+			// loss-aware gate accepts it, so this entry must win.
 			ID:      "mem-strong",
 			AppName: "app", UserID: "u1",
 			Memory: &memory.Memory{
-				Memory: "foo bar alternate wording",
+				Memory: "foo bar baz quux",
 				Topics: []string{"x"},
 			},
 			Score: 0.95,
