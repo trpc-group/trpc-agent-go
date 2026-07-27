@@ -445,9 +445,7 @@ func (w *AutoMemoryWorker) createAutoMemory(
 
 	// Execute operations.
 	for _, op := range ops {
-		if err := w.executeOperation(ctx, userKey, op); err != nil {
-			return fmt.Errorf("auto_memory: persist operation failed: %w", err)
-		}
+		w.executeOperation(ctx, userKey, op)
 	}
 
 	return nil
@@ -562,10 +560,7 @@ func (w *AutoMemoryWorker) executeOperation(
 	ctx context.Context,
 	userKey memory.UserKey,
 	op *extractor.Operation,
-) error {
-	if op == nil {
-		return nil
-	}
+) {
 	if et := w.config.EnabledTools; et != nil {
 		if name, ok := operationToolName[op.Type]; ok {
 			if _, enabled := et[name]; !enabled {
@@ -573,110 +568,81 @@ func (w *AutoMemoryWorker) executeOperation(
 					"auto_memory: skipping disabled %s "+
 						"operation for user %s/%s",
 					op.Type, userKey.AppName, userKey.UserID)
-				return nil
+				return
 			}
 		}
 	}
 
 	switch op.Type {
 	case extractor.OperationAdd:
-		return w.executeAdd(ctx, userKey, op)
+		ep := opToMetadata(op)
+		if err := w.operator.AddMemory(ctx, userKey,
+			op.Memory, op.Topics,
+			memory.WithMetadata(ep)); err != nil {
+			log.WarnfContext(ctx,
+				"auto_memory: add memory failed "+
+					"for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err)
+		}
 	case extractor.OperationUpdate:
-		return w.executeUpdate(ctx, userKey, op)
+		memKey := memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: op.MemoryID,
+		}
+		ep := opToMetadata(op)
+		if err := w.operator.UpdateMemory(ctx, memKey,
+			op.Memory, op.Topics,
+			memory.WithUpdateMetadata(ep)); err != nil {
+			if isMemoryNotFoundError(err) {
+				if !w.isToolEnabled(memory.AddToolName) {
+					log.DebugfContext(ctx,
+						"auto_memory: update-not-found "+
+							"fallback skipped (add disabled)"+
+							" for user %s/%s, memory_id=%s",
+						userKey.AppName, userKey.UserID,
+						op.MemoryID)
+					return
+				}
+				if addErr := w.operator.AddMemory(
+					ctx, userKey, op.Memory, op.Topics,
+					memory.WithMetadata(ep),
+				); addErr != nil {
+					log.WarnfContext(ctx,
+						"auto_memory: update missing, "+
+							"add memory failed for user "+
+							"%s/%s, memory_id=%s: %v",
+						userKey.AppName, userKey.UserID,
+						op.MemoryID, addErr,
+					)
+				}
+				return
+			}
+			log.WarnfContext(ctx,
+				"auto_memory: update memory failed "+
+					"for user %s/%s, memory_id=%s: %v",
+				userKey.AppName, userKey.UserID,
+				op.MemoryID, err)
+		}
 	case extractor.OperationDelete:
-		return w.executeDelete(ctx, userKey, op)
+		memKey := memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: op.MemoryID,
+		}
+		if err := w.operator.DeleteMemory(ctx, memKey); err != nil {
+			log.WarnfContext(ctx, "auto_memory: delete memory failed for user %s/%s, memory_id=%s: %v",
+				userKey.AppName, userKey.UserID, op.MemoryID, err)
+		}
 	case extractor.OperationClear:
-		return w.executeClear(ctx, userKey)
+		if err := w.operator.ClearMemories(ctx, userKey); err != nil {
+			log.WarnfContext(ctx, "auto_memory: clear memories failed for user %s/%s: %v",
+				userKey.AppName, userKey.UserID, err)
+		}
 	default:
-		return fmt.Errorf("unknown operation type %q", op.Type)
+		log.WarnfContext(ctx, "auto_memory: unknown operation type '%s' for user %s/%s",
+			op.Type, userKey.AppName, userKey.UserID)
 	}
-}
-
-func (w *AutoMemoryWorker) executeAdd(
-	ctx context.Context,
-	userKey memory.UserKey,
-	op *extractor.Operation,
-) error {
-	err := w.operator.AddMemory(
-		ctx,
-		userKey,
-		op.Memory,
-		op.Topics,
-		memory.WithMetadata(opToMetadata(op)),
-	)
-	if err != nil {
-		return fmt.Errorf("add memory: %w", err)
-	}
-	return nil
-}
-
-func (w *AutoMemoryWorker) executeUpdate(
-	ctx context.Context,
-	userKey memory.UserKey,
-	op *extractor.Operation,
-) error {
-	key := memory.Key{
-		AppName:  userKey.AppName,
-		UserID:   userKey.UserID,
-		MemoryID: op.MemoryID,
-	}
-	metadata := opToMetadata(op)
-	err := w.operator.UpdateMemory(
-		ctx,
-		key,
-		op.Memory,
-		op.Topics,
-		memory.WithUpdateMetadata(metadata),
-	)
-	if err == nil {
-		return nil
-	}
-	if !isMemoryNotFoundError(err) {
-		return fmt.Errorf("update memory %s: %w", op.MemoryID, err)
-	}
-	if !w.isToolEnabled(memory.AddToolName) {
-		log.DebugfContext(ctx,
-			"auto_memory: update-not-found fallback skipped (add disabled) "+
-				"for user %s/%s, memory_id=%s",
-			userKey.AppName, userKey.UserID, op.MemoryID)
-		return nil
-	}
-	if err := w.operator.AddMemory(
-		ctx,
-		userKey,
-		op.Memory,
-		op.Topics,
-		memory.WithMetadata(metadata),
-	); err != nil {
-		return fmt.Errorf("update missing; add memory %s: %w", op.MemoryID, err)
-	}
-	return nil
-}
-
-func (w *AutoMemoryWorker) executeDelete(
-	ctx context.Context,
-	userKey memory.UserKey,
-	op *extractor.Operation,
-) error {
-	key := memory.Key{
-		AppName:  userKey.AppName,
-		UserID:   userKey.UserID,
-		MemoryID: op.MemoryID,
-	}
-	if err := w.operator.DeleteMemory(ctx, key); err != nil {
-		return fmt.Errorf("delete memory %s: %w", op.MemoryID, err)
-	}
-	return nil
-}
-
-func (w *AutoMemoryWorker) executeClear(
-	ctx context.Context,
-	userKey memory.UserKey,
-) error {
-	if err := w.operator.ClearMemories(ctx, userKey); err != nil {
-		return fmt.Errorf("clear memories: %w", err)
-	}
-	return nil
 }
 
 // opToMetadata converts extractor.Operation episodic
