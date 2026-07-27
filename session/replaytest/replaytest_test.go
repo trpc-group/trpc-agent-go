@@ -327,6 +327,11 @@ func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
 	require.False(t, HasUnallowedDiffs(diffs))
 }
 
+func TestWildcardMatchHandlesRepeatedAndMissingSegments(t *testing.T) {
+	require.True(t, wildcardMatch("events.**.id", "events.item.id"))
+	require.False(t, wildcardMatch("events.*.missing", "events.item.id"))
+}
+
 func TestWriteReportUsesEmptyArrayForNilDiffs(t *testing.T) {
 	var out bytes.Buffer
 	require.NoError(t, WriteReport(&out, nil))
