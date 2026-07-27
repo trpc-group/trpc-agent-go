@@ -27,6 +27,7 @@ const (
 	assistantResultPolicyName = "assistant-result-preserving"
 	resultOldCoverage         = 0.95
 	resultNewCoverage         = 0.70
+	resultSubsetScore         = 0.90
 
 	changeMarkerEnglishPattern = `\b(?:now|currently|no longer|instead|` +
 		`chang(?:e|ed)|used to|decid(?:e|ed)|booked|` +
@@ -48,6 +49,7 @@ var (
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
 	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
+	listOrdinalPattern      = regexp.MustCompile(`\b\d{1,2}[.)]\s*`)
 )
 
 type assistantResultCandidate struct {
@@ -280,6 +282,14 @@ func classifyAssistantResultCandidate(
 	oldCoverage, newCoverage := directionalTokenCoverage(
 		entry.Memory.Memory, op.Memory,
 	)
+	if assistantResultCoveredByExisting(op, entry, newCoverage) {
+		return &assistantResultCandidate{
+			entry:       entry,
+			duplicate:   true,
+			oldCoverage: oldCoverage,
+			newCoverage: newCoverage,
+		}
+	}
 	if oldCoverage < resultOldCoverage || newCoverage < resultNewCoverage {
 		return nil
 	}
@@ -297,6 +307,42 @@ func classifyAssistantResultCandidate(
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
 	}
+}
+
+func assistantResultCoveredByExisting(
+	op *extractor.Operation,
+	entry *memory.Entry,
+	newCoverage float64,
+) bool {
+	if op == nil || !validMemoryEntry(entry) ||
+		entry.Score < resultSubsetScore ||
+		newCoverage < resultNewCoverage {
+		return false
+	}
+	stored := entry.Memory.Memory
+	fresh := op.Memory
+	if negationSignature(stored) != negationSignature(fresh) ||
+		!criticalValuesPreserved(
+			listOrdinalPattern.ReplaceAllString(fresh, ""),
+			stored,
+		) ||
+		!capitalizedTokensPreserved(fresh, stored) {
+		return false
+	}
+	return !changeMarkerPattern.MatchString(fresh) ||
+		changeMarkerPattern.MatchString(stored)
+}
+
+func capitalizedTokensPreserved(oldText, newText string) bool {
+	newTokens := stringSet(capitalizedTokenPattern.FindAllString(newText, -1))
+	for token := range stringSet(
+		capitalizedTokenPattern.FindAllString(oldText, -1),
+	) {
+		if _, ok := newTokens[token]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func selectExactDuplicate(

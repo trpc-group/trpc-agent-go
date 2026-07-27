@@ -680,6 +680,16 @@ Inspect the assistant's direct reply separately from normal user memories. Use
 memory_add_assistant_result, never memory_add or memory_update, for a concrete
 result the user requested and could refer to later.
 
+- SOURCE SEPARATION: this block overrides the general ALL SPEAKERS rule for
+  user-bound memories. Ordinary memory_add, memory_update, memory_delete, and
+  memory_clear operations may derive facts only from user messages. Assistant
+  text may resolve what a terse user reference means, but it must not supply a
+  missing user choice, plan, preference, action, relationship, or value.
+  Never combine a user goal with an assistant-introduced entity or treat the
+  object of a request as a confirmed choice. For example, "I am planning a trip
+  to Italy; recommend day trips near Milan" supports a trip to Italy and an
+  interest in Milan day trips, but not a plan to stay in or specifically visit
+  Milan.
 - DIRECT-RESULT CHECK: retain a requested named answer, recommendation or
   shortlist, ordering, plan, decision, calculation, or requested extraction,
   classification, or transformation. Do not store only the user's goal while

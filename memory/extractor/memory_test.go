@@ -234,6 +234,9 @@ func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
 	normalizedPrompt := strings.Join(strings.Fields(prompt), " ")
 	assert.Contains(t, prompt, "<assistant_result_extraction>")
 	assert.Contains(t, prompt, "DIRECT-RESULT CHECK")
+	assert.Contains(t, prompt, "SOURCE SEPARATION")
+	assert.Contains(t, normalizedPrompt,
+		"supports a trip to Italy and an interest in Milan day trips")
 	assert.Contains(t, normalizedPrompt,
 		"requested extraction, classification, or transformation")
 	assert.Contains(t, prompt, "rationale, disclaimer, opinion, analysis")

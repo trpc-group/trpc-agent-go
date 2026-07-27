@@ -159,6 +159,76 @@ func TestAssistantResultPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "time")
 }
 
+func TestAssistantResultPolicy_DropsCoveredSubset(t *testing.T) {
+	existing := []*memory.Entry{{
+		ID: "existing-result",
+		Memory: &memory.Memory{
+			Memory: "Assistant result: Recommended Atlas, Birch, and Cedar. " +
+				"Atlas is fastest, Birch is cheapest, and Cedar is easiest.",
+			Kind: memory.KindFact,
+		},
+		Score: 0.95,
+	}}
+	in := []*extractor.Operation{{
+		Type: extractor.OperationAdd,
+		Memory: "Assistant result: Recommended options: " +
+			"1) Atlas, 2) Birch, 3) Cedar.",
+		MemoryKind: memory.KindFact,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+
+	out := worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), in, existing,
+	)
+	assert.Empty(t, out)
+}
+
+func TestAssistantResultPolicy_KeepsSubsetWithChangedValue(t *testing.T) {
+	existing := []*memory.Entry{{
+		ID: "existing-result",
+		Memory: &memory.Memory{
+			Memory: "Assistant result: Recommended Plan Atlas with a $100 budget.",
+			Kind:   memory.KindFact,
+		},
+		Score: 0.97,
+	}}
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Assistant result: Recommended Plan Atlas with a $200 budget.",
+		MemoryKind: memory.KindFact,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+
+	out := worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), in, existing,
+	)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+}
+
+func TestAssistantResultPolicy_KeepsSubsetWithChangedEntity(t *testing.T) {
+	existing := []*memory.Entry{{
+		ID: "existing-result",
+		Memory: &memory.Memory{
+			Memory: "Assistant result: Recommended Atlas and Birch.",
+			Kind:   memory.KindFact,
+		},
+		Score: 0.97,
+	}}
+	in := []*extractor.Operation{{
+		Type:       extractor.OperationAdd,
+		Memory:     "Assistant result: Recommended Atlas and Cedar.",
+		MemoryKind: memory.KindFact,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+
+	out := worker.applyAssistantResultPolicy(
+		context.Background(), reconcileUserKey(), in, existing,
+	)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+}
+
 func TestAssistantResultPolicy_ChangedStateRemainsAdditive(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "job",
