@@ -156,6 +156,168 @@ func TestComparator_MemoryAndTrack(t *testing.T) {
 	}
 }
 
+// TestComparator_TrackOwnershipFields ensures map-key agreement is not enough:
+// TrackEvents.Track and each TrackEvent.Track must match independently.
+func TestComparator_TrackOwnershipFields(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "track_ownership"}
+	ts := time.Unix(10, 0).UTC()
+	payload := []byte(`{"ok":true}`)
+
+	base := func(container, eventTrack session.Track) *Snapshot {
+		return &Snapshot{
+			Backend: "x",
+			Session: &session.Session{
+				Tracks: map[session.Track]*session.TrackEvents{
+					"tool": {
+						Track: container,
+						Events: []session.TrackEvent{
+							{Track: eventTrack, Payload: payload, Timestamp: ts},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Same payload/time; only container Track differs.
+	a := base("tool", "tool")
+	b := base("other", "tool")
+	n := NewNormalizer()
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	foundContainer := false
+	for _, d := range diffs {
+		if !d.Allowed && d.Path == `tracks["tool"].track` {
+			foundContainer = true
+		}
+	}
+	if !foundContainer {
+		t.Fatalf("expected container track ownership diff, got %+v", diffs)
+	}
+
+	// Only per-event Track differs.
+	a2 := base("tool", "tool")
+	b2 := base("tool", "other")
+	a2, _ = n.Normalize(a2)
+	b2, _ = n.Normalize(b2)
+	diffs2 := c.Compare(tc, a2, b2, InMemoryProfile(), InMemoryProfile())
+	foundEvent := false
+	for _, d := range diffs2 {
+		if !d.Allowed && d.Path == `tracks["tool"].events[0].track` {
+			foundEvent = true
+		}
+	}
+	if !foundEvent {
+		t.Fatalf("expected event track ownership diff, got %+v", diffs2)
+	}
+
+	// Matching ownership: no track ownership paths.
+	a3 := base("tool", "tool")
+	b3 := base("tool", "tool")
+	a3, _ = n.Normalize(a3)
+	b3, _ = n.Normalize(b3)
+	for _, d := range c.Compare(tc, a3, b3, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && (d.Path == `tracks["tool"].track` || d.Path == `tracks["tool"].events[0].track`) {
+			t.Fatalf("unexpected ownership diff on equal fixtures: %+v", d)
+		}
+	}
+}
+
+// TestComparator_SecondarySessionSummaryAndTrack ensures Snapshot.Sessions
+// entries compare summaries and tracks (not only identity/events/state).
+func TestComparator_SecondarySessionSummaryAndTrack(t *testing.T) {
+	c := NewComparator()
+	tc := ReplayCase{Name: "secondary_session"}
+	n := NewNormalizer()
+	ts := time.Unix(20, 0).UTC()
+	primaryID := "primary-sess"
+	secondaryID := "secondary-sess"
+
+	mkSnap := func(sumText string, trackPayload []byte) *Snapshot {
+		return &Snapshot{
+			Backend:   "x",
+			SessionID: primaryID,
+			Session: &session.Session{
+				ID: primaryID,
+				// Primary has matching summaries so only secondary differs.
+				Summaries: map[string]*session.Summary{
+					"": {Summary: "primary-ok", UpdatedAt: ts},
+				},
+			},
+			Sessions: map[string]*session.Session{
+				primaryID: {
+					ID: primaryID,
+					// Compared via Snapshot.Session; skipped in extra map.
+				},
+				secondaryID: {
+					ID: secondaryID,
+					Summaries: map[string]*session.Summary{
+						"": {Summary: sumText, UpdatedAt: ts},
+					},
+					Tracks: map[session.Track]*session.TrackEvents{
+						"tool": {
+							Track: "tool",
+							Events: []session.TrackEvent{
+								{Track: "tool", Payload: trackPayload, Timestamp: ts},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	// Only secondary summary text differs.
+	a := mkSnap("sec-summary-a", []byte(`{"v":1}`))
+	b := mkSnap("sec-summary-b", []byte(`{"v":1}`))
+	a, _ = n.Normalize(a)
+	b, _ = n.Normalize(b)
+	diffs := c.Compare(tc, a, b, InMemoryProfile(), InMemoryProfile())
+	foundSum := false
+	wantSumPath := `sessions["secondary-sess"].summaries[""].summary`
+	for _, d := range diffs {
+		if !d.Allowed && d.Path == wantSumPath {
+			foundSum = true
+		}
+	}
+	if !foundSum {
+		t.Fatalf("expected secondary summary diff path %s, got %+v", wantSumPath, diffs)
+	}
+
+	// Only secondary track payload differs.
+	a2 := mkSnap("same", []byte(`{"v":1}`))
+	b2 := mkSnap("same", []byte(`{"v":2}`))
+	a2, _ = n.Normalize(a2)
+	b2, _ = n.Normalize(b2)
+	diffs2 := c.Compare(tc, a2, b2, InMemoryProfile(), InMemoryProfile())
+	foundTrack := false
+	wantTrackPath := `sessions["secondary-sess"].tracks["tool"].events[0].payload`
+	for _, d := range diffs2 {
+		if !d.Allowed && d.Path == wantTrackPath {
+			foundTrack = true
+		}
+	}
+	if !foundTrack {
+		t.Fatalf("expected secondary track diff path %s, got %+v", wantTrackPath, diffs2)
+	}
+
+	// Equal secondary summary+track: no those paths.
+	a3 := mkSnap("same", []byte(`{"v":1}`))
+	b3 := mkSnap("same", []byte(`{"v":1}`))
+	a3, _ = n.Normalize(a3)
+	b3, _ = n.Normalize(b3)
+	for _, d := range c.Compare(tc, a3, b3, InMemoryProfile(), InMemoryProfile()) {
+		if d.Allowed {
+			continue
+		}
+		if d.Path == wantSumPath || d.Path == wantTrackPath {
+			t.Fatalf("unexpected secondary diff on equal fixtures: %+v", d)
+		}
+	}
+}
+
 func TestComparator_BranchLocalSemantic(t *testing.T) {
 	c := NewComparator()
 	tc := ReplayCase{Name: "concurrent_interleaved", EventCompareMode: EventCompareBranchLocal}
@@ -415,8 +577,73 @@ func TestComparator_SessionIdentityFields(t *testing.T) {
 	bOK.Backend = "b"
 	for _, d := range cmp.Compare(tc, aOK, bOK, InMemoryProfile(), InMemoryProfile()) {
 		if !d.Allowed && (d.Path == "session_id" || d.Path == "session.id" ||
-			d.Path == "session.app_name" || d.Path == "session.user_id") {
+			d.Path == "session.app_name" || d.Path == "session.user_id" ||
+			d.Path == "session.created_at" || d.Path == "session.updated_at") {
 			t.Fatalf("unexpected identity diff when equal: %+v", d)
+		}
+	}
+}
+
+// TestComparator_SessionAuditTimestamps: non-zero audit times collapse to
+// FixedTimestamp (aligned across backends); zero vs non-zero still diffs.
+func TestComparator_SessionAuditTimestamps(t *testing.T) {
+	cmp := NewComparator()
+	n := NewNormalizer()
+	tc := ReplayCase{Name: "session_audit_time"}
+	evt := *UserEvent("e1", "hello")
+
+	mk := func(created, updated time.Time) *Snapshot {
+		return &Snapshot{
+			Backend:   "x",
+			SessionID: "s1",
+			Session: &session.Session{
+				ID:        "s1",
+				AppName:   DefaultApp,
+				UserID:    DefaultUser,
+				CreatedAt: created,
+				UpdatedAt: updated,
+				Events:    []event.Event{evt},
+			},
+		}
+	}
+
+	// Different non-zero clocks → both become FixedTimestamp → no audit diff.
+	a1 := mk(time.Unix(1, 0).UTC(), time.Unix(2, 0).UTC())
+	b1 := mk(time.Unix(100, 0).UTC(), time.Unix(200, 0).UTC())
+	a1, _ = n.Normalize(a1)
+	b1, _ = n.Normalize(b1)
+	if !a1.Session.CreatedAt.Equal(FixedTimestamp) || !b1.Session.CreatedAt.Equal(FixedTimestamp) {
+		t.Fatalf("expected FixedTimestamp, got a=%v b=%v", a1.Session.CreatedAt, b1.Session.CreatedAt)
+	}
+	for _, d := range cmp.Compare(tc, a1, b1, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && (d.Path == "session.created_at" || d.Path == "session.updated_at") {
+			t.Fatalf("non-zero clocks should align after normalize: %+v", d)
+		}
+	}
+
+	// Populated vs zero CreatedAt → must fail after normalize.
+	a2 := mk(time.Unix(1, 0).UTC(), time.Time{})
+	b2 := mk(time.Time{}, time.Time{})
+	a2, _ = n.Normalize(a2)
+	b2, _ = n.Normalize(b2)
+	found := false
+	for _, d := range cmp.Compare(tc, a2, b2, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && d.Path == "session.created_at" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected session.created_at diff for non-zero vs zero")
+	}
+
+	// Both zero → no created_at/updated_at diff.
+	a3 := mk(time.Time{}, time.Time{})
+	b3 := mk(time.Time{}, time.Time{})
+	a3, _ = n.Normalize(a3)
+	b3, _ = n.Normalize(b3)
+	for _, d := range cmp.Compare(tc, a3, b3, InMemoryProfile(), InMemoryProfile()) {
+		if !d.Allowed && (d.Path == "session.created_at" || d.Path == "session.updated_at") {
+			t.Fatalf("unexpected audit diff when both zero: %+v", d)
 		}
 	}
 }

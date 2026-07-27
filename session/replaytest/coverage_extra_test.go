@@ -159,6 +159,99 @@ func TestRun_RejectsEmptyBackends(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsNilSessionService(t *testing.T) {
+	h := NewHarness(DefaultHarnessOpts())
+	h.AddBackend(NamedBackend{
+		Name:           "broken",
+		Profile:        InMemoryProfile(),
+		SessionService: nil,
+		MemoryService:  nil, // optional; must not be required by validateBackends
+	})
+	report, err := h.Run(context.Background(), []ReplayCase{CaseSingleTurnText()})
+	if err == nil {
+		t.Fatalf("expected config error for nil SessionService, got report=%+v", report)
+	}
+	if !strings.Contains(err.Error(), "SessionService") {
+		t.Fatalf("err=%v", err)
+	}
+	if report != nil {
+		t.Fatalf("expected nil report on config error, got %+v", report)
+	}
+}
+
+func TestExecuteCase_NilAppendEventReturnsError(t *testing.T) {
+	b := openInMemoryBackend(t)
+	tc := ReplayCase{
+		Name: "nil_append_event",
+		Steps: []Step{
+			AppendEventStep{
+				StepKey:    "bad_append",
+				SessionKey: SessionKeyFor("nil-event"),
+				Event:      nil,
+			},
+		},
+	}
+	_, err := executeCase(context.Background(), tc, b)
+	if err == nil {
+		t.Fatal("expected error for nil AppendEventStep.Event")
+	}
+	if !strings.Contains(err.Error(), "Event is nil") {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "bad_append") {
+		t.Fatalf("error should include step key, got %v", err)
+	}
+	// Zero-value step is also constructible and must not panic.
+	tcZero := ReplayCase{
+		Name:  "zero_append_event",
+		Steps: []Step{AppendEventStep{}},
+	}
+	_, err = executeCase(context.Background(), tcZero, b)
+	if err == nil {
+		t.Fatal("expected error for zero-value AppendEventStep")
+	}
+	if !strings.Contains(err.Error(), "Event is nil") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestExecuteCase_UnknownStateScopeReturnsError(t *testing.T) {
+	b := openInMemoryBackend(t)
+	key := SessionKeyFor("unknown-scope")
+	tc := ReplayCase{
+		Name: "unknown_state_scope",
+		Steps: []Step{
+			UpdateStateStep{
+				StepKey:    "bad_scope",
+				SessionKey: key,
+				Scope:      "users", // typo must not fall through to session state
+				State:      session.StateMap{"k": []byte("v")},
+			},
+		},
+	}
+	_, err := executeCase(context.Background(), tc, b)
+	if err == nil {
+		t.Fatal("expected error for unknown UpdateStateStep.Scope")
+	}
+	if !strings.Contains(err.Error(), "unknown scope") {
+		t.Fatalf("err=%v", err)
+	}
+	if !strings.Contains(err.Error(), "users") {
+		t.Fatalf("error should mention scope value, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "bad_scope") {
+		t.Fatalf("error should include step key, got %v", err)
+	}
+	// No session should have been created for a rejected scope.
+	got, gerr := b.SessionService.GetSession(context.Background(), key)
+	if gerr != nil {
+		t.Fatalf("GetSession: %v", gerr)
+	}
+	if got != nil {
+		t.Fatalf("expected no session write on unknown scope, got %+v", got)
+	}
+}
+
 func TestRun_RejectsUnregisteredReference(t *testing.T) {
 	// Default ReferenceBackend is "inmemory"; register only a differently named backend.
 	h := NewHarness(DefaultHarnessOpts())
@@ -185,7 +278,8 @@ func TestRun_RejectsCapabilitySkippedReference(t *testing.T) {
 	})
 	ref := openInMemoryBackend(t)
 	ref.Name = "ref"
-	ref.Profile.SupportsTrack = false
+	ref.Profile.SupportsMemory = false
+	ref.MemoryService = nil
 	a := openInMemoryBackend(t)
 	a.Name = "a"
 	b := openInMemoryBackend(t)
@@ -193,13 +287,54 @@ func TestRun_RejectsCapabilitySkippedReference(t *testing.T) {
 	h.AddBackend(ref)
 	h.AddBackend(a)
 	h.AddBackend(b)
-
-	_, err := h.Run(context.Background(), []ReplayCase{CaseTrackEvents()})
+	_, err := h.Run(context.Background(), []ReplayCase{CaseMemoryWriteAndRead()})
 	if err == nil {
 		t.Fatal("expected error when reference is capability-skipped but other backends compared")
 	}
-	if !strings.Contains(err.Error(), "reference backend") && !strings.Contains(err.Error(), "no snapshot") {
+	if !strings.Contains(err.Error(), "reference backend") || !strings.Contains(err.Error(), "ref") ||
+		!strings.Contains(err.Error(), "memory_write_and_read") || !strings.Contains(err.Error(), "memory") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+type countedRunService struct {
+	session.Service
+	gets int
+}
+
+func (s *countedRunService) GetSession(ctx context.Context, key session.Key, options ...session.Option) (*session.Session, error) {
+	s.gets++
+	return s.Service.GetSession(ctx, key, options...)
+}
+
+func TestRun_RejectsCapabilitySkippedReferenceBeforeExecutingOthers(t *testing.T) {
+	h := NewHarness(HarnessOpts{
+		ComparisonMode:   ComparisonReference,
+		ReferenceBackend: "ref",
+		Mode:             "lightweight",
+	})
+	ref := openInMemoryBackend(t)
+	ref.Name = "ref"
+	ref.Profile.SupportsSessionState = false
+	spyBase := openInMemoryBackend(t)
+	spy := &countedRunService{Service: spyBase.SessionService}
+	spyBackend := NamedBackend{
+		Name: "spy", Profile: spyBase.Profile,
+		SessionService: spy, MemoryService: spyBase.MemoryService,
+	}
+	h.AddBackend(ref)
+	h.AddBackend(spyBackend)
+
+	_, err := h.Run(context.Background(), []ReplayCase{CaseStateCRUD()})
+	if err == nil {
+		t.Fatal("expected early error for reference missing session_state")
+	}
+	if !strings.Contains(err.Error(), "reference backend") || !strings.Contains(err.Error(), "ref") ||
+		!strings.Contains(err.Error(), "state_crud") || !strings.Contains(err.Error(), "session_state") {
+		t.Fatalf("err=%v", err)
+	}
+	if spy.gets != 0 {
+		t.Fatalf("spy backend executed before reference capability error: GetSession calls=%d", spy.gets)
 	}
 }
 
@@ -565,9 +700,60 @@ func TestExecuteCase_ParallelConcurrentInterleaved(t *testing.T) {
 	if snap.Session == nil {
 		t.Fatal("nil session")
 	}
-	// seed + 2 branches * 2 events
-	if n := len(snap.Session.Events); n != 5 {
-		t.Fatalf("events=%d want 5", n)
+	assertConcurrentInterleavedSemantics(t, snap.Session.Events)
+}
+
+func assertConcurrentInterleavedSemantics(t *testing.T, events []event.Event) {
+	t.Helper()
+	wantContent := map[string]string{
+		"c10.seed": "seed",
+		"c10.a.1":  "a1",
+		"c10.a.2":  "a2",
+		"c10.b.1":  "b1",
+		"c10.b.2":  "b2",
+	}
+	wantBranch := map[string]string{
+		"c10.seed": "",
+		"c10.a.1":  "branchA",
+		"c10.a.2":  "branchA",
+		"c10.b.1":  "branchB",
+		"c10.b.2":  "branchB",
+	}
+	if len(events) != len(wantContent) {
+		t.Fatalf("events=%d want %d", len(events), len(wantContent))
+	}
+	positions := map[string]int{}
+	branchCounts := map[string]int{}
+	for i, ev := range events {
+		key := eventLogicalKey(&ev, i)
+		if _, ok := wantContent[key]; !ok {
+			t.Fatalf("unexpected logical key %q at index %d (event=%+v)", key, i, ev)
+		}
+		if _, exists := positions[key]; exists {
+			t.Fatalf("duplicate logical key %q in events %+v", key, events)
+		}
+		positions[key] = i
+		if got := messageContent(ev); got != wantContent[key] {
+			t.Fatalf("content for %s=%q want %q", key, got, wantContent[key])
+		}
+		if ev.Branch != wantBranch[key] {
+			t.Fatalf("branch for %s=%q want %q", key, ev.Branch, wantBranch[key])
+		}
+		branchCounts[ev.Branch]++
+	}
+	for key := range wantContent {
+		if _, ok := positions[key]; !ok {
+			t.Fatalf("missing logical key %q in positions %v", key, positions)
+		}
+	}
+	if branchCounts[""] != 1 || branchCounts["branchA"] != 2 || branchCounts["branchB"] != 2 {
+		t.Fatalf("branch counts=%v", branchCounts)
+	}
+	if positions["c10.a.1"] > positions["c10.a.2"] {
+		t.Fatalf("branchA order wrong: %v", positions)
+	}
+	if positions["c10.b.1"] > positions["c10.b.2"] {
+		t.Fatalf("branchB order wrong: %v", positions)
 	}
 }
 

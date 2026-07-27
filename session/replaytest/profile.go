@@ -57,5 +57,14 @@ func MissingCaps(c Caps, p BackendProfile) []string {
 	if c.NeedsAsyncSummary && !p.SupportsAsyncSummary {
 		missing = append(missing, "async_summary")
 	}
+	if c.NeedsAppState && !p.SupportsAppState {
+		missing = append(missing, "app_state")
+	}
+	if c.NeedsUserState && !p.SupportsUserState {
+		missing = append(missing, "user_state")
+	}
+	if c.NeedsSessionState && !p.SupportsSessionState {
+		missing = append(missing, "session_state")
+	}
 	return missing
 }

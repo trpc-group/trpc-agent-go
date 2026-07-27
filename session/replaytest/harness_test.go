@@ -8,6 +8,7 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -270,6 +271,53 @@ func TestRunCase_PreservesSkippedWhenSingleBackendRuns(t *testing.T) {
 	}
 	if cr.Status != StatusSkipped {
 		t.Fatalf("status=%s want skipped when any backend skipped; reason=%q", cr.Status, cr.Skipped)
+	}
+}
+
+func TestRunCase_StateCapabilitiesSkip(t *testing.T) {
+	tests := []struct {
+		name   string
+		caseFn func() ReplayCase
+		edit   func(*BackendProfile)
+		want   string
+	}{
+		{
+			name:   "session_state",
+			caseFn: func() ReplayCase { return CaseStateCRUD() },
+			edit:   func(p *BackendProfile) { p.SupportsSessionState = false },
+			want:   "session_state",
+		},
+		{
+			name:   "app_state",
+			caseFn: func() ReplayCase { return CaseAppUserStateBoundary() },
+			edit:   func(p *BackendProfile) { p.SupportsAppState = false },
+			want:   "app_state",
+		},
+		{
+			name:   "user_state",
+			caseFn: func() ReplayCase { return CaseAppUserStateBoundary() },
+			edit:   func(p *BackendProfile) { p.SupportsUserState = false },
+			want:   "user_state",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := NewHarness(DefaultHarnessOpts())
+			b := openInMemoryBackend(t)
+			b.Name = "limited"
+			tt.edit(&b.Profile)
+			h.AddBackend(b)
+			cr, err := h.runCase(context.Background(), tt.caseFn())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cr.Status != StatusSkipped {
+				t.Fatalf("status=%s want skipped (%s)", cr.Status, cr.Skipped)
+			}
+			if !strings.Contains(cr.Skipped, tt.want) {
+				t.Fatalf("skipped=%q want capability %q", cr.Skipped, tt.want)
+			}
+		})
 	}
 }
 

@@ -35,52 +35,13 @@ func (n *Normalizer) Normalize(snapshot *Snapshot) (*Snapshot, error) {
 	}
 	out := cloneSnapshot(snapshot)
 	if out.Session != nil {
-		normalizeState(out.Session.State)
-		for i := range out.Session.Events {
-			if key := eventLogicalKey(&out.Session.Events[i], i); key != "" {
-				out.Session.Events[i].ID = key
-			}
-			out.Session.Events[i].Timestamp = out.Session.Events[i].Timestamp.UTC()
-			canonicalExtensions(out.Session.Events[i].Extensions)
-			if out.Session.Events[i].Response != nil {
-				out.Session.Events[i].Response.Timestamp = out.Session.Events[i].Response.Timestamp.UTC()
-			}
-		}
-		for _, sum := range out.Session.Summaries {
-			if sum == nil {
-				continue
-			}
-			sum.UpdatedAt = sum.UpdatedAt.UTC()
-			sort.Strings(sum.Topics)
-			if sum.Boundary != nil {
-				sum.Boundary.CutoffAt = sum.Boundary.CutoffAt.UTC()
-			}
-		}
-		for _, tracks := range out.Session.Tracks {
-			if tracks == nil {
-				continue
-			}
-			for i := range tracks.Events {
-				tracks.Events[i].Timestamp = tracks.Events[i].Timestamp.UTC()
-				tracks.Events[i].Payload = canonicalRaw(tracks.Events[i].Payload)
-			}
-		}
+		normalizeSession(out.Session)
 	}
 	for _, sess := range out.Sessions {
 		if sess == nil {
 			continue
 		}
-		normalizeState(sess.State)
-		for i := range sess.Events {
-			if key := eventLogicalKey(&sess.Events[i], i); key != "" {
-				sess.Events[i].ID = key
-			}
-			sess.Events[i].Timestamp = sess.Events[i].Timestamp.UTC()
-			canonicalExtensions(sess.Events[i].Extensions)
-			if sess.Events[i].Response != nil {
-				sess.Events[i].Response.Timestamp = sess.Events[i].Response.Timestamp.UTC()
-			}
-		}
+		normalizeSession(sess)
 	}
 	normalizeState(out.AppState)
 	normalizeState(out.UserState)
@@ -96,6 +57,86 @@ func (n *Normalizer) Normalize(snapshot *Snapshot) (*Snapshot, error) {
 		return memoryID(out.Memories[i]) < memoryID(out.Memories[j])
 	})
 	return out, nil
+}
+
+// normalizeSession rewrites event IDs to replay logical keys and keeps summary
+// boundaries pointing at those logical IDs (raw backend IDs are not comparable).
+func normalizeSession(sess *session.Session) {
+	if sess == nil {
+		return
+	}
+	normalizeState(sess.State)
+	idMap := normalizeSessionEvents(sess)
+	normalizeSessionSummaries(sess, idMap)
+	normalizeSessionTracks(sess)
+	// Audit timestamps are backend-assigned clocks: keep presence (zero vs
+	// non-zero) but collapse non-zero values to FixedTimestamp like memory.
+	if !sess.CreatedAt.IsZero() {
+		sess.CreatedAt = FixedTimestamp
+	}
+	if !sess.UpdatedAt.IsZero() {
+		sess.UpdatedAt = FixedTimestamp
+	}
+}
+
+// normalizeSessionEvents rewrites each event ID to its logical key and returns
+// rawID → logicalID for summary boundary remapping. The map is built before IDs
+// are overwritten so LastEventID can still resolve backend-generated IDs.
+func normalizeSessionEvents(sess *session.Session) map[string]string {
+	idMap := map[string]string{}
+	for i := range sess.Events {
+		ev := &sess.Events[i]
+		rawID := ev.ID
+		logical := eventLogicalKey(ev, i)
+		if logical != "" {
+			if rawID != "" {
+				idMap[rawID] = logical
+			}
+			// raw == logical still records identity for boundary lookups.
+			if rawID == "" {
+				idMap[logical] = logical
+			}
+			ev.ID = logical
+		}
+		ev.Timestamp = ev.Timestamp.UTC()
+		canonicalExtensions(ev.Extensions)
+		if ev.Response != nil {
+			ev.Response.Timestamp = ev.Response.Timestamp.UTC()
+		}
+	}
+	return idMap
+}
+
+func normalizeSessionSummaries(sess *session.Session, eventIDMap map[string]string) {
+	for _, sum := range sess.Summaries {
+		if sum == nil {
+			continue
+		}
+		sum.UpdatedAt = sum.UpdatedAt.UTC()
+		sort.Strings(sum.Topics)
+		if sum.Boundary == nil {
+			continue
+		}
+		sum.Boundary.CutoffAt = sum.Boundary.CutoffAt.UTC()
+		if sum.Boundary.LastEventID == "" || eventIDMap == nil {
+			continue
+		}
+		if logical, ok := eventIDMap[sum.Boundary.LastEventID]; ok && logical != "" {
+			sum.Boundary.LastEventID = logical
+		}
+	}
+}
+
+func normalizeSessionTracks(sess *session.Session) {
+	for _, tracks := range sess.Tracks {
+		if tracks == nil {
+			continue
+		}
+		for i := range tracks.Events {
+			tracks.Events[i].Timestamp = tracks.Events[i].Timestamp.UTC()
+			tracks.Events[i].Payload = canonicalRaw(tracks.Events[i].Payload)
+		}
+	}
 }
 
 func cloneSnapshot(in *Snapshot) *Snapshot {

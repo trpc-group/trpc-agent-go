@@ -6,6 +6,7 @@
 package replaytest
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,83 @@ func TestNormalizer_EventIDAndPrivateState(t *testing.T) {
 	}
 	if string(out.Session.State["color"]) != "red" {
 		t.Fatal("public state lost")
+	}
+}
+
+// TestNormalizer_SummaryBoundaryLastEventIDRemap ensures summary boundaries track
+// rewritten event IDs: different raw backend IDs with the same logical extension
+// and matching LastEventID must compare equal after Normalize.
+func TestNormalizer_SummaryBoundaryLastEventIDRemap(t *testing.T) {
+	n := NewNormalizer()
+	cutoff := time.Unix(100, 0).UTC()
+
+	build := func(rawEventID string) *Snapshot {
+		ev := UserEvent("logical.boundary", "hello")
+		ev.ID = rawEventID
+		return &Snapshot{
+			Backend:   "b-" + rawEventID,
+			SessionID: "s-boundary",
+			Session: &session.Session{
+				ID:     "s-boundary",
+				Events: []event.Event{*ev},
+				Summaries: map[string]*session.Summary{
+					"": {
+						Summary:   "full",
+						Topics:    []string{"t"},
+						UpdatedAt: cutoff,
+						Boundary: &session.SummaryBoundary{
+							Version:     session.SummaryBoundaryVersion,
+							FilterKey:   "",
+							CutoffAt:    cutoff,
+							LastEventID: rawEventID,
+						},
+					},
+				},
+			},
+		}
+	}
+
+	a := build("uuid-backend-a")
+	b := build("uuid-backend-b")
+
+	// Without remap, raw LastEventID would differ even though events are equivalent.
+	if a.Session.Summaries[""].Boundary.LastEventID == b.Session.Summaries[""].Boundary.LastEventID {
+		t.Fatal("fixture must use distinct raw event IDs")
+	}
+
+	na, err := n.Normalize(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nb, err := n.Normalize(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if na.Session.Events[0].ID != "logical.boundary" {
+		t.Fatalf("event id a=%q", na.Session.Events[0].ID)
+	}
+	if nb.Session.Events[0].ID != "logical.boundary" {
+		t.Fatalf("event id b=%q", nb.Session.Events[0].ID)
+	}
+	gotA := na.Session.Summaries[""].Boundary.LastEventID
+	gotB := nb.Session.Summaries[""].Boundary.LastEventID
+	if gotA != "logical.boundary" || gotB != "logical.boundary" {
+		t.Fatalf("boundary LastEventID a=%q b=%q want logical.boundary", gotA, gotB)
+	}
+
+	diffs := NewComparator().Compare(
+		ReplayCase{Name: "boundary_remap"},
+		na, nb,
+		InMemoryProfile(), InMemoryProfile(),
+	)
+	for _, d := range diffs {
+		if !d.Allowed && strings.Contains(d.Path, "boundary") {
+			t.Fatalf("unexpected boundary diff after remap: %+v", d)
+		}
+	}
+	if ErrorDiffCount(diffs) != 0 {
+		t.Fatalf("expected no error diffs, got %+v", diffs)
 	}
 }
 

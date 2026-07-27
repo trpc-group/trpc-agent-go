@@ -88,6 +88,9 @@ func (h *Harness) backendNames() []string {
 
 func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error) {
 	cr := CaseResult{CaseName: tc.Name, Status: StatusPassed}
+	if err := h.validateReferenceCaseCaps(tc); err != nil {
+		return cr, err
+	}
 	snaps, profiles, err := h.collectCaseSnapshots(ctx, tc, &cr)
 	if err != nil {
 		return cr, err
@@ -111,6 +114,45 @@ func (h *Harness) runCase(ctx context.Context, tc ReplayCase) (CaseResult, error
 	return cr, nil
 }
 
+func (h *Harness) validateReferenceCaseCaps(tc ReplayCase) error {
+	if h.opts.ComparisonMode == ComparisonAllPairs || len(h.backends) < 2 {
+		return nil
+	}
+	ref := h.opts.ReferenceBackend
+	if ref == "" {
+		ref = DefaultHarnessOpts().ReferenceBackend
+	}
+	for _, b := range h.backends {
+		name := b.Name
+		if name == "" {
+			name = b.Profile.Name
+		}
+		if name != ref {
+			continue
+		}
+		missing := MissingCaps(tc.RequiredCaps, b.Profile)
+		if tc.RequiredCaps.NeedsMemory && b.MemoryService == nil && !containsString(missing, "memory") {
+			missing = append(missing, "memory")
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf("reference backend %q unsupported for case %q: %v", ref, tc.Name, missing)
+		}
+		return nil
+	}
+	// validateReferenceBackend catches this at Run entry; direct runCase callers
+	// can still exercise skip/fallback helpers without registering the default ref.
+	return nil
+}
+
+func containsString(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+	return false
+}
+
 func validateBackends(backends []NamedBackend) error {
 	if len(backends) == 0 {
 		// Empty config would leave every CaseResult at the default "passed"
@@ -128,6 +170,11 @@ func validateBackends(backends []NamedBackend) error {
 		}
 		if _, ok := seen[name]; ok {
 			return fmt.Errorf("duplicate backend name %q", name)
+		}
+		// SessionService is required for every backend; a nil service panics in
+		// ensureSession. MemoryService stays optional until a memory step runs.
+		if b.SessionService == nil {
+			return fmt.Errorf("backend %q: SessionService is nil", name)
 		}
 		seen[name] = struct{}{}
 	}
@@ -360,6 +407,9 @@ func (e *caseExecutor) ensureSession(ctx context.Context, key session.Key) (*ses
 }
 
 func (e *caseExecutor) appendEvent(ctx context.Context, step AppendEventStep) error {
+	if step.Event == nil {
+		return fmt.Errorf("append_event %q: Event is nil", step.StepKey)
+	}
 	key := step.SessionKey
 	if key.SessionID == "" {
 		if sid := e.getSnapshotSessionID(); sid != "" {
@@ -412,7 +462,8 @@ func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) er
 			return e.backend.SessionService.DeleteUserState(ctx, step.UserKey, step.DeleteKey)
 		}
 		return e.backend.SessionService.UpdateUserState(ctx, step.UserKey, step.State)
-	default:
+	case "", "session":
+		// Empty scope keeps zero-value compatibility; "session" is explicit.
 		if _, err := e.ensureSession(ctx, step.SessionKey); err != nil {
 			return err
 		}
@@ -420,6 +471,11 @@ func (e *caseExecutor) updateState(ctx context.Context, step UpdateStateStep) er
 		unlock := e.lockSessionKey(step.SessionKey)
 		defer unlock()
 		return e.backend.SessionService.UpdateSessionState(ctx, step.SessionKey, step.State)
+	default:
+		// Reject typos like "users" before any backend write (would silently
+		// hit session state on every backend and false-green the matrix).
+		return fmt.Errorf("update_state %q: unknown scope %q (want \"\", \"session\", \"app\", or \"user\")",
+			step.StepKey, step.Scope)
 	}
 }
 

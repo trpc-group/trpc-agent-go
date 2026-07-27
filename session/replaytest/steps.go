@@ -35,12 +35,12 @@ func (s AppendEventStep) Key() string { return s.StepKey }
 // UpdateStateStep updates app/user/session state.
 type UpdateStateStep struct {
 	StepKey    string
-	Scope      string // app | user | session
+	Scope      string // "" | session | app | user  ("" means session)
 	SessionKey session.Key
 	UserKey    session.UserKey
 	AppName    string
 	State      session.StateMap
-	DeleteKey  string
+	DeleteKey  string // when set, delete instead of update
 }
 
 // Type implements Step.

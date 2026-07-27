@@ -28,6 +28,9 @@ type Caps struct {
 	NeedsTrack        bool
 	NeedsMemory       bool
 	NeedsAsyncSummary bool
+	NeedsAppState     bool
+	NeedsUserState    bool
+	NeedsSessionState bool
 }
 
 // Step is one typed operation in a ReplayCase.

@@ -70,6 +70,22 @@ func compareSessionIdentity(a, b *Snapshot) []Diff {
 			Explanation: "session user_id mismatch",
 		})
 	}
+	if !a.Session.CreatedAt.Equal(b.Session.CreatedAt) {
+		diffs = append(diffs, Diff{
+			Path:        "session.created_at",
+			Baseline:    a.Session.CreatedAt,
+			Actual:      b.Session.CreatedAt,
+			Explanation: "session created_at presence/value mismatch",
+		})
+	}
+	if !a.Session.UpdatedAt.Equal(b.Session.UpdatedAt) {
+		diffs = append(diffs, Diff{
+			Path:        "session.updated_at",
+			Baseline:    a.Session.UpdatedAt,
+			Actual:      b.Session.UpdatedAt,
+			Explanation: "session updated_at presence/value mismatch",
+		})
+	}
 	return diffs
 }
 
@@ -147,18 +163,14 @@ func compareSnapshotStates(tc ReplayCase, backendA, backendB, sessionID string, 
 }
 
 func compareSummaries(tc ReplayCase, backendA, backendB, sessionID string, a, b *Snapshot) []Diff {
-	var diffs []Diff
-	sumA, sumB := map[string]*session.Summary{}, map[string]*session.Summary{}
-	if a.Session != nil && a.Session.Summaries != nil {
+	var sumA, sumB map[string]*session.Summary
+	if a.Session != nil {
 		sumA = a.Session.Summaries
 	}
-	if b.Session != nil && b.Session.Summaries != nil {
+	if b.Session != nil {
 		sumB = b.Session.Summaries
 	}
-	for _, fk := range unionKeys(sumA, sumB) {
-		diffs = append(diffs, compareOneSummary(tc, backendA, backendB, sessionID, fk, sumA[fk], sumB[fk], sumA, sumB)...)
-	}
-	return diffs
+	return compareSessionSummaries(tc, backendA, backendB, sessionID, sumA, sumB)
 }
 
 func compareOneSummary(
@@ -206,18 +218,14 @@ func compareOneSummary(
 }
 
 func compareTracks(tc ReplayCase, backendA, backendB, sessionID string, a, b *Snapshot) []Diff {
-	var diffs []Diff
-	tracksA, tracksB := map[session.Track]*session.TrackEvents{}, map[session.Track]*session.TrackEvents{}
-	if a.Session != nil && a.Session.Tracks != nil {
+	var tracksA, tracksB map[session.Track]*session.TrackEvents
+	if a.Session != nil {
 		tracksA = a.Session.Tracks
 	}
-	if b.Session != nil && b.Session.Tracks != nil {
+	if b.Session != nil {
 		tracksB = b.Session.Tracks
 	}
-	for _, name := range unionTrackKeys(tracksA, tracksB) {
-		diffs = append(diffs, compareOneTrack(tc, backendA, backendB, sessionID, name, tracksA[name], tracksB[name], tracksA, tracksB)...)
-	}
-	return diffs
+	return compareSessionTracks(tc, backendA, backendB, sessionID, tracksA, tracksB)
 }
 
 func compareOneTrack(
@@ -243,11 +251,18 @@ func compareOneTrack(
 		add(fmt.Sprintf("tracks[%q]", name), okA, okB, "track presence mismatch")
 		return diffs
 	}
+	// Ownership on the container (map key alone is not enough).
+	if ta.Track != tb.Track {
+		add(fmt.Sprintf("tracks[%q].track", name), ta.Track, tb.Track, "track container ownership mismatch")
+	}
 	if len(ta.Events) != len(tb.Events) {
 		add(fmt.Sprintf("tracks[%q].events.length", name), len(ta.Events), len(tb.Events), "track event count mismatch")
 	}
 	n := min(len(ta.Events), len(tb.Events))
 	for i := 0; i < n; i++ {
+		if ta.Events[i].Track != tb.Events[i].Track {
+			add(fmt.Sprintf("tracks[%q].events[%d].track", name, i), ta.Events[i].Track, tb.Events[i].Track, "track event ownership mismatch")
+		}
 		if !bytes.Equal(ta.Events[i].Payload, tb.Events[i].Payload) {
 			add(fmt.Sprintf("tracks[%q].events[%d].payload", name, i), string(ta.Events[i].Payload), string(tb.Events[i].Payload), "track payload mismatch")
 		}
@@ -597,6 +612,67 @@ func compareOneExtraSession(
 		d.BackendA, d.BackendB = backendA, backendB
 		diffs = append(diffs, d)
 	}
+	// Secondary sessions are the public multi-session capture surface: reuse
+	// primary summary/track semantics with a sessions["id"]. path prefix.
+	diffs = append(diffs, prefixDiffPaths(
+		compareSessionSummaries(tc, backendA, backendB, id, sa.Summaries, sb.Summaries),
+		prefix,
+	)...)
+	diffs = append(diffs, prefixDiffPaths(
+		compareSessionTracks(tc, backendA, backendB, id, sa.Tracks, sb.Tracks),
+		prefix,
+	)...)
+	return diffs
+}
+
+// compareSessionSummaries compares summary maps with primary-session semantics.
+func compareSessionSummaries(
+	tc ReplayCase, backendA, backendB, sessionID string,
+	sumA, sumB map[string]*session.Summary,
+) []Diff {
+	if sumA == nil {
+		sumA = map[string]*session.Summary{}
+	}
+	if sumB == nil {
+		sumB = map[string]*session.Summary{}
+	}
+	var diffs []Diff
+	for _, fk := range unionKeys(sumA, sumB) {
+		diffs = append(diffs, compareOneSummary(tc, backendA, backendB, sessionID, fk, sumA[fk], sumB[fk], sumA, sumB)...)
+	}
+	return diffs
+}
+
+// compareSessionTracks compares track maps with primary-session semantics.
+func compareSessionTracks(
+	tc ReplayCase, backendA, backendB, sessionID string,
+	tracksA, tracksB map[session.Track]*session.TrackEvents,
+) []Diff {
+	if tracksA == nil {
+		tracksA = map[session.Track]*session.TrackEvents{}
+	}
+	if tracksB == nil {
+		tracksB = map[session.Track]*session.TrackEvents{}
+	}
+	var diffs []Diff
+	for _, name := range unionTrackKeys(tracksA, tracksB) {
+		diffs = append(diffs, compareOneTrack(tc, backendA, backendB, sessionID, name, tracksA[name], tracksB[name], tracksA, tracksB)...)
+	}
+	return diffs
+}
+
+// prefixDiffPaths rewrites Diff.Path with a stable sessions[...] prefix.
+func prefixDiffPaths(diffs []Diff, prefix string) []Diff {
+	if prefix == "" {
+		return diffs
+	}
+	for i := range diffs {
+		if diffs[i].Path == "" {
+			diffs[i].Path = prefix
+			continue
+		}
+		diffs[i].Path = prefix + "." + diffs[i].Path
+	}
 	return diffs
 }
 
@@ -619,6 +695,12 @@ func compareExtraSessionIdentity(
 	}
 	if sa.UserID != sb.UserID {
 		add(prefix+".user_id", sa.UserID, sb.UserID, "session user_id mismatch")
+	}
+	if !sa.CreatedAt.Equal(sb.CreatedAt) {
+		add(prefix+".created_at", sa.CreatedAt, sb.CreatedAt, "session created_at presence/value mismatch")
+	}
+	if !sa.UpdatedAt.Equal(sb.UpdatedAt) {
+		add(prefix+".updated_at", sa.UpdatedAt, sb.UpdatedAt, "session updated_at presence/value mismatch")
 	}
 	return diffs
 }

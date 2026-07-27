@@ -82,8 +82,9 @@ func CaseToolCallConversation() ReplayCase {
 func CaseStateCRUD() ReplayCase {
 	key := SessionKeyFor("state_crud")
 	return ReplayCase{
-		Name:        "state_crud",
-		Description: "session state write and overwrite",
+		Name:         "state_crud",
+		Description:  "session state write and overwrite",
+		RequiredCaps: Caps{NeedsSessionState: true},
 		Steps: []Step{
 			UpdateStateStep{
 				StepKey: "c4.state.init", Scope: "session", SessionKey: key,
@@ -250,6 +251,11 @@ func CaseAppUserStateBoundary() ReplayCase {
 	return ReplayCase{
 		Name:        "app_user_state_boundary",
 		Description: "app/user/session state write, list, overwrite, and delete stay isolated",
+		RequiredCaps: Caps{
+			NeedsAppState:     true,
+			NeedsUserState:    true,
+			NeedsSessionState: true,
+		},
 		Steps: []Step{
 			UpdateStateStep{
 				StepKey: "c12.app.set", Scope: "app", AppName: DefaultApp,
