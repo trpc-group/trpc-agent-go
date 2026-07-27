@@ -18,8 +18,8 @@ import (
 
 func TestDeterministicRuntimeUsesRealPromptIterStages(t *testing.T) {
 	runtime, err := buildRuntime(context.Background(), runtimeConfig{
-		Config:  validConfig(),
-		DataDir: t.TempDir(),
+		Config:    validConfig(),
+		DataDir:   t.TempDir(),
 		OutputDir: t.TempDir(),
 	})
 	require.NoError(t, err)
