@@ -613,19 +613,26 @@ func (e *memoryExtractor) availableActionsBlockForRequest(
 }
 
 func (e *memoryExtractor) effectiveEnabledTools() map[string]struct{} {
-	if e.updatePolicy != UpdatePolicyAddOnly {
+	if e.updatePolicy == UpdatePolicyReconcile {
 		return e.enabledTools
 	}
-	if e.enabledTools != nil {
-		if _, ok := e.enabledTools[memory.AddToolName]; !ok {
-			return map[string]struct{}{}
+	enabled := make(map[string]struct{}, len(backgroundTools))
+	for name := range backgroundTools {
+		if !e.policyAllowsAction(name) {
+			continue
 		}
+		if e.enabledTools != nil {
+			if _, ok := e.enabledTools[name]; !ok {
+				continue
+			}
+		}
+		enabled[name] = struct{}{}
 	}
-	return map[string]struct{}{memory.AddToolName: {}}
+	return enabled
 }
 
 func (e *memoryExtractor) actionEnabled(name string) bool {
-	if e.updatePolicy == UpdatePolicyAddOnly && name != memory.AddToolName {
+	if !e.policyAllowsAction(name) {
 		return false
 	}
 	if e.enabledTools == nil {
@@ -635,9 +642,20 @@ func (e *memoryExtractor) actionEnabled(name string) bool {
 	return ok
 }
 
+func (e *memoryExtractor) policyAllowsAction(name string) bool {
+	switch e.updatePolicy {
+	case UpdatePolicyConservative:
+		return name != memory.UpdateToolName
+	case UpdatePolicyAddOnly:
+		return name == memory.AddToolName
+	default:
+		return true
+	}
+}
+
 func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
 	switch policy {
-	case UpdatePolicyAddOnly:
+	case UpdatePolicyConservative, UpdatePolicyAddOnly:
 		return policy
 	default:
 		return UpdatePolicyReconcile
@@ -646,6 +664,8 @@ func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
 
 func updatePolicyPrompt(policy UpdatePolicy) string {
 	switch normalizeUpdatePolicy(policy) {
+	case UpdatePolicyConservative:
+		return conservativePrompt
 	case UpdatePolicyAddOnly:
 		return addOnlyPrompt
 	default:
@@ -688,6 +708,24 @@ const addOnlyPrompt = `
 - You may only add genuinely new memories. Skip exact duplicates.
 - Never update, delete, or clear a stored memory. Changed or corrected states
   must be added separately so earlier history remains intact.
+</update_policy>
+`
+
+const conservativePrompt = `
+
+<update_policy name="conservative">
+These rules override any earlier instruction to update a stored memory.
+- Express every new, corrected, or changed state supported by the current
+  conversation with memory_add. The memory worker will remove only safe
+  duplicates after extraction.
+- Preserve the source action or relationship and its arguments. For example,
+  "stay in Kyoto" must remain a stay relationship, not merely a trip to Kyoto.
+  Asking for information, recommendations, or options about an entity does not
+  by itself establish a plan, choice, preference, visit, or other relationship
+  with that entity.
+- Keep earlier states as history. Use memory_delete only for an explicit
+  request to forget a specific memory, and memory_clear only for an explicit
+  request to forget everything.
 </update_policy>
 `
 

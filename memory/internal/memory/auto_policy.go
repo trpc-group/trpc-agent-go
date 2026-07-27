@@ -27,6 +27,13 @@ const (
 	assistantResultPolicyName = "assistant-result-preserving"
 	resultOldCoverage         = 0.95
 	resultNewCoverage         = 0.70
+
+	changeMarkerEnglishPattern = `\b(?:now|currently|no longer|instead|` +
+		`chang(?:e|ed)|used to|decid(?:e|ed)|booked|` +
+		`cho(?:ose|se|sen)|select(?:ed)?|start(?:ed)?|stop(?:ped)?|` +
+		`cancel(?:ed|led)?|complete(?:d)?|finish(?:ed)?)\b`
+	changeMarkerCJKPattern = `(?:现在|目前|不再|改为|变成|而是|曾经|` +
+		`决定|预订|选择|开始|停止|取消|完成)`
 )
 
 var (
@@ -34,7 +41,8 @@ var (
 		`(?i)\b[0-9]+(?:[.:/-][0-9]+)*\b|(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
 	changeMarkerPattern = regexp.MustCompile(
-		`(?i)(?:\bnow\b|\bcurrently\b|\bno longer\b|\binstead\b|\bchanged?\b|\bused to\b|现在|目前|不再|改为|变成|而是|曾经)`,
+		`(?i)(?:` + changeMarkerEnglishPattern + `|` +
+			changeMarkerCJKPattern + `)`,
 	)
 	negationPattern = regexp.MustCompile(
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
@@ -65,7 +73,7 @@ func updatePolicyFromMetadata(ext extractor.MemoryExtractor) extractor.UpdatePol
 		policy = extractor.UpdatePolicy(value)
 	}
 	switch policy {
-	case extractor.UpdatePolicyAddOnly:
+	case extractor.UpdatePolicyConservative, extractor.UpdatePolicyAddOnly:
 		return policy
 	default:
 		return extractor.UpdatePolicyReconcile

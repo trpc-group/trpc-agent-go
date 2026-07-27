@@ -57,6 +57,9 @@ const (
 	// UpdatePolicyReconcile preserves the existing automatic reconciliation
 	// behavior, including merging moderately similar memories.
 	UpdatePolicyReconcile UpdatePolicy = "reconcile"
+	// UpdatePolicyConservative extracts new or corrected states as additions,
+	// then lets the memory worker reconcile only lossless duplicates.
+	UpdatePolicyConservative UpdatePolicy = "conservative"
 	// UpdatePolicyAddOnly permits automatic extraction to add memories or skip
 	// duplicates, but never to update, delete, or clear stored memories.
 	UpdatePolicyAddOnly UpdatePolicy = "add-only"

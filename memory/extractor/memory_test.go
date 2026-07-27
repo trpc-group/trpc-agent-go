@@ -189,6 +189,7 @@ func TestExtractor_UpdatePolicyOptions(t *testing.T) {
 	}{
 		{name: "default", want: UpdatePolicyReconcile},
 		{name: "reconcile", in: UpdatePolicyReconcile, want: UpdatePolicyReconcile},
+		{name: "conservative", in: UpdatePolicyConservative, want: UpdatePolicyConservative},
 		{name: "add only", in: UpdatePolicyAddOnly, want: UpdatePolicyAddOnly},
 		{name: "unknown", in: UpdatePolicy("custom"), want: UpdatePolicyReconcile},
 	}
@@ -211,6 +212,13 @@ func TestExtractor_UpdatePolicyOptions(t *testing.T) {
 		addOnly.buildSystemPrompt(time.Now(), nil),
 		`<update_policy name="add-only">`,
 	)
+	conservative := NewExtractor(m,
+		WithUpdatePolicy(UpdatePolicyConservative)).(*memoryExtractor)
+	conservativePrompt := conservative.buildSystemPrompt(time.Now(), nil)
+	assert.Contains(t, conservativePrompt,
+		`<update_policy name="conservative">`)
+	assert.Contains(t, conservativePrompt,
+		`"stay in Kyoto" must remain a stay relationship`)
 }
 
 func TestExtractor_AssistantResultExtractionOption(t *testing.T) {
@@ -1325,6 +1333,16 @@ func TestExtractor_AvailableActionsBlock(t *testing.T) {
 		assert.NotContains(t, block, memory.ClearToolName)
 	})
 
+	t.Run("conservative policy hides only update", func(t *testing.T) {
+		conservative := NewExtractor(m,
+			WithUpdatePolicy(UpdatePolicyConservative)).(*memoryExtractor)
+		block := conservative.availableActionsBlock()
+		assert.Contains(t, block, memory.AddToolName)
+		assert.NotContains(t, block, memory.UpdateToolName)
+		assert.Contains(t, block, memory.DeleteToolName)
+		assert.Contains(t, block, memory.ClearToolName)
+	})
+
 	t.Run("tool in order but not in descriptions", func(t *testing.T) {
 		// Temporarily add a name to toolActionOrder that has no description.
 		origOrder := toolActionOrder
@@ -1389,6 +1407,22 @@ func TestExtractor_Extract_AddOnlyTools(t *testing.T) {
 	require.NotNil(t, m.lastRequest)
 	assert.Len(t, m.lastRequest.Tools, 1)
 	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
+}
+
+func TestExtractor_Extract_ConservativeTools(t *testing.T) {
+	m := newMockModelWithToolCalls(nil)
+	e := NewExtractor(m, WithUpdatePolicy(UpdatePolicyConservative))
+
+	_, err := e.Extract(context.Background(), []model.Message{
+		model.NewUserMessage("I am planning to stay on Oahu."),
+	}, nil)
+	require.NoError(t, err)
+	require.NotNil(t, m.lastRequest)
+	assert.Len(t, m.lastRequest.Tools, 3)
+	assert.Contains(t, m.lastRequest.Tools, memory.AddToolName)
+	assert.NotContains(t, m.lastRequest.Tools, memory.UpdateToolName)
+	assert.Contains(t, m.lastRequest.Tools, memory.DeleteToolName)
+	assert.Contains(t, m.lastRequest.Tools, memory.ClearToolName)
 }
 
 func TestExtractor_EnabledToolsConfigurer(t *testing.T) {

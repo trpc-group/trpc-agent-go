@@ -28,6 +28,7 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	}{
 		{name: "missing", want: extractor.UpdatePolicyReconcile},
 		{name: "reconcile", raw: "reconcile", want: extractor.UpdatePolicyReconcile},
+		{name: "typed conservative", raw: extractor.UpdatePolicyConservative, want: extractor.UpdatePolicyConservative},
 		{name: "typed add only", raw: extractor.UpdatePolicyAddOnly, want: extractor.UpdatePolicyAddOnly},
 		{name: "removed history policy", raw: "history-preserving", want: extractor.UpdatePolicyReconcile},
 		{name: "unknown", raw: "custom", want: extractor.UpdatePolicyReconcile},
@@ -46,6 +47,39 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 		})
 	}
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
+}
+
+func TestConservativePolicy_ReconcilesAddsAndPreservesExplicitForget(t *testing.T) {
+	stored := []*memory.Entry{{
+		ID: "job",
+		Memory: &memory.Memory{
+			Memory: "Works at Acme as an engineer.",
+			Topics: []string{"work"},
+		},
+		Score: 0.95,
+	}}
+	operator := newMockOperator()
+	operator.searchResults = stored
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
+	worker.updatePolicy = extractor.UpdatePolicyConservative
+
+	out := worker.applyUpdatePolicy(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type:   extractor.OperationAdd,
+				Memory: "Works at Acme as an engineer.",
+				Topics: []string{"work"},
+			},
+			{Type: extractor.OperationDelete, MemoryID: "obsolete"},
+			{Type: extractor.OperationClear},
+		},
+		stored,
+	)
+	require.Len(t, out, 2)
+	assert.Equal(t, extractor.OperationDelete, out[0].Type)
+	assert.Equal(t, extractor.OperationClear, out[1].Type)
 }
 
 func TestUpdatePoliciesPreserveDistinctResult(t *testing.T) {
