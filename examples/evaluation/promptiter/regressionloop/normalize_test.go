@@ -65,6 +65,25 @@ func TestNormalizeEvaluationKeepsFailedInferenceWithoutMessage(t *testing.T) {
 	assert.Equal(t, status.EvalStatusFailed, got.Cases[0].Metrics[0].Status)
 }
 
+func TestNormalizeEvaluationKeepsEvaluationFailureWithoutMessage(t *testing.T) {
+	input := &evaluation.EvaluationResult{
+		EvalSetID:     "validation",
+		OverallStatus: status.EvalStatusFailed,
+		EvalCases: []*evaluation.EvaluationCaseResult{{
+			EvalCaseID:    "critical",
+			OverallStatus: status.EvalStatusFailed,
+			EvalCaseResults: []*evalresult.EvalCaseResult{{
+				FinalEvalStatus: status.EvalStatusFailed,
+			}},
+		}},
+	}
+
+	got, err := normalizeEvaluation(input, validationCatalog("critical", "quality"))
+	require.NoError(t, err)
+	assert.Equal(t, "evaluation run failed", got.Cases[0].ExecutionError)
+	assert.Equal(t, status.EvalStatusFailed, got.Cases[0].Metrics[0].Status)
+}
+
 func TestNormalizeEvaluationRejectsAggregateOnly(t *testing.T) {
 	_, err := normalizeEvaluation(&evaluation.EvaluationResult{
 		EvalSetID: "validation",
@@ -151,6 +170,44 @@ func TestNormalizeEvaluationPrefersRetainedReasonAndComputesScore(t *testing.T) 
 	assert.InDelta(t, 0.6, got.Score, 1e-12)
 	assert.Equal(t, "retained reason", got.Cases[0].Metrics[0].Reason)
 	assert.Equal(t, "format aggregate", got.Cases[0].Metrics[1].Reason)
+}
+
+func TestNormalizeEvaluationDoesNotTreatMetricFailureAsExecutionFailure(t *testing.T) {
+	failedMetric := testMetric(
+		"quality", 0, status.EvalStatusFailed, "answer mismatch",
+	)
+	result := evaluationWithMetrics("validation", "critical", failedMetric)
+	result.EvalCases[0].EvalCaseResults = []*evalresult.EvalCaseResult{{
+		EvalSetID:                "validation",
+		EvalID:                   "critical",
+		FinalEvalStatus:          status.EvalStatusFailed,
+		OverallEvalMetricResults: []*evalresult.EvalMetricResult{failedMetric},
+	}}
+
+	got, err := normalizeEvaluation(result, validationCatalog("critical", "quality"))
+	require.NoError(t, err)
+	assert.Empty(t, got.Cases[0].ExecutionError)
+	assert.Equal(t, "answer mismatch", got.Cases[0].Metrics[0].Reason)
+	assert.Equal(t, attributionFinalResponseMismatch, attributeCase(got.Cases[0]).Primary.Category)
+}
+
+func TestNormalizeEvaluationKeepsExecutionFailureAcrossMixedRuns(t *testing.T) {
+	failedMetric := testMetric(
+		"quality", 0, status.EvalStatusFailed, "answer mismatch",
+	)
+	result := evaluationWithMetrics("validation", "critical", failedMetric)
+	result.EvalCases[0].EvalCaseResults = []*evalresult.EvalCaseResult{
+		{FinalEvalStatus: status.EvalStatusFailed},
+		{
+			FinalEvalStatus:          status.EvalStatusFailed,
+			OverallEvalMetricResults: []*evalresult.EvalMetricResult{failedMetric},
+		},
+	}
+
+	got, err := normalizeEvaluation(result, validationCatalog("critical", "quality"))
+	require.NoError(t, err)
+	assert.Equal(t, "evaluation run failed", got.Cases[0].ExecutionError)
+	assert.Equal(t, attributionRuntimeError, attributeCase(got.Cases[0]).Primary.Category)
 }
 
 func TestNormalizeEvaluationPreservesSparseInvocationEvidence(t *testing.T) {

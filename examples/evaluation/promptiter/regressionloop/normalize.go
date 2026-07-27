@@ -211,7 +211,8 @@ func caseExecutionError(evalCase *evaluation.EvaluationCaseResult) string {
 		}
 	}
 	for _, result := range evalCase.EvalCaseResults {
-		if result != nil && result.FinalEvalStatus == status.EvalStatusFailed {
+		if result != nil && result.FinalEvalStatus == status.EvalStatusFailed &&
+			!hasRunMetricEvidence(result) {
 			return "evaluation run failed"
 		}
 	}
@@ -221,6 +222,18 @@ func caseExecutionError(evalCase *evaluation.EvaluationCaseResult) string {
 		}
 	}
 	return ""
+}
+
+func hasRunMetricEvidence(result *evalresult.EvalCaseResult) bool {
+	if len(result.OverallEvalMetricResults) != 0 {
+		return true
+	}
+	for _, invocation := range result.EvalMetricResultPerInvocation {
+		if invocation != nil && len(invocation.EvalMetricResults) != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func validateTerminalStatus(subject string, value status.EvalStatus) error {
