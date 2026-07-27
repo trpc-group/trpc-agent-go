@@ -205,6 +205,8 @@ func TestAppendResponseExtendsSnapshot(t *testing.T) {
 }
 
 func TestInvalidateClearsSnapshotUntilNextAttach(t *testing.T) {
+	Invalidate(nil)
+
 	inv := agent.NewInvocation()
 	req := &model.Request{
 		Messages: []model.Message{model.NewUserMessage("question")},

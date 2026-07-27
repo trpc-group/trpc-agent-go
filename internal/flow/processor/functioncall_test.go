@@ -2941,10 +2941,22 @@ func TestPerToolCallResultEventsParallelEmitAsCompleted(t *testing.T) {
 			ToolResultEventPerCallEnabled: true,
 		}),
 	)
+	var attachmentGrants atomic.Int64
+	callbacks := tool.NewCallbacks()
+	callbacks.RegisterToolResultMessages(func(
+		ctx context.Context,
+		_ *tool.ToolResultMessagesInput,
+	) (any, error) {
+		attachmentGrants.Add(int64(
+			tool.ReserveToolResultAttachments(ctx, 1),
+		))
+		return nil, nil
+	})
 	var postStateValues []string
 	p := NewFunctionCallResponseProcessor(
 		true,
-		nil,
+		callbacks,
+		WithToolResultAttachmentBudget(1),
 		WithPostToolResultHook(func(
 			_ context.Context,
 			_ *agent.Invocation,
@@ -3009,6 +3021,7 @@ func TestPerToolCallResultEventsParallelEmitAsCompleted(t *testing.T) {
 	assert.Equal(t, second.ID, result.event.ID)
 	assert.Equal(t, []string{"call-fast", "call-slow"}, afterToolIDs)
 	assert.Equal(t, []string{"slow", "fast"}, postStateValues)
+	assert.Equal(t, int64(1), attachmentGrants.Load())
 	select {
 	case extra := <-eventChan:
 		t.Fatalf("unexpected merged or duplicate tool result event: %+v", extra)
@@ -3505,6 +3518,138 @@ func TestPerToolCallResultEventsKeepMappedDeferredTransferOnLegacyPath(t *testin
 		rsp,
 		tools,
 	))
+}
+
+func TestPerToolCallResultEventsSingleCallFallsBackAndUnknownCallsRemainEligible(
+	t *testing.T,
+) {
+	inv := agent.NewInvocation(
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolResultEventPerCallEnabled: true,
+		}),
+	)
+	p := NewFunctionCallResponseProcessor(true, nil)
+	knownTool := &mockCallableTool{
+		declaration: &tool.Declaration{Name: "known"},
+	}
+
+	assert.False(t, p.shouldEmitToolResultEventPerToolCall(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls([]model.ToolCall{{
+			ID:       "call-known",
+			Function: model.FunctionDefinitionParam{Name: "known"},
+		}}),
+		map[string]tool.Tool{"known": knownTool},
+	))
+	assert.True(t, p.shouldEmitToolResultEventPerToolCall(
+		context.Background(),
+		inv,
+		newToolCallResponseWithCalls([]model.ToolCall{
+			{
+				ID:       "call-unknown-1",
+				Function: model.FunctionDefinitionParam{Name: "unknown-1"},
+			},
+			{
+				ID:       "call-unknown-2",
+				Function: model.FunctionDefinitionParam{Name: "unknown-2"},
+			},
+		}),
+		nil,
+	))
+}
+
+func TestCloneToolResultForStateFinalizationDetachesNestedEventData(
+	t *testing.T,
+) {
+	text := "original text"
+	toolCallIndex := 3
+	finishReason := "tool_calls"
+	original := &event.Event{
+		ID:        "tool-result",
+		Version:   1,
+		Branch:    "branch",
+		FilterKey: "filter",
+		ParentMetadata: &event.ParentInvocationMetadata{
+			TriggerType: agent.TriggerTypeToolCall,
+			TriggerID:   "parent-call",
+			TriggerName: "parent-tool",
+		},
+		Response: &model.Response{Choices: []model.Choice{{
+			Message: model.Message{
+				ContentParts: []model.ContentPart{{
+					Type:       model.ContentTypeText,
+					Text:       &text,
+					Image:      &model.Image{Data: []byte{1}},
+					Audio:      &model.Audio{Data: []byte{2}},
+					File:       &model.File{Data: []byte{3}},
+					ContentRef: &model.ContentRef{ArtifactRef: "artifact://result@1"},
+				}},
+				ToolCalls: []model.ToolCall{{
+					ID:    "nested-call",
+					Index: &toolCallIndex,
+					Function: model.FunctionDefinitionParam{
+						Arguments: []byte(`{"value":"original"}`),
+					},
+					ExtraFields: map[string]any{
+						"metadata": map[string]any{
+							"value": "original",
+						},
+					},
+				}},
+			},
+			FinishReason: &finishReason,
+		}}},
+	}
+
+	cloned := cloneToolResultForStateFinalization(toolResult{
+		event: original,
+	}).event
+	require.NotNil(t, cloned)
+	require.NotSame(t, original, cloned)
+	require.Equal(t, original.ID, cloned.ID)
+	require.Equal(t, original.Version, cloned.Version)
+	require.Equal(t, original.FilterKey, cloned.FilterKey)
+
+	cloned.ParentMetadata.TriggerID = "changed"
+	*cloned.Choices[0].FinishReason = "changed"
+	clonedPart := &cloned.Choices[0].Message.ContentParts[0]
+	*clonedPart.Text = "changed"
+	clonedPart.Image.Data[0] = 9
+	clonedPart.Audio.Data[0] = 9
+	clonedPart.File.Data[0] = 9
+	clonedPart.ContentRef.ArtifactRef = "artifact://changed@1"
+	nestedCall := &cloned.Choices[0].Message.ToolCalls[0]
+	nestedCall.Function.Arguments[0] = '['
+	*nestedCall.Index = 9
+	nestedCall.ExtraFields["metadata"].(map[string]any)["value"] = "changed"
+
+	originalPart := original.Choices[0].Message.ContentParts[0]
+	require.Equal(t, "parent-call", original.ParentMetadata.TriggerID)
+	require.Equal(t, "tool_calls", *original.Choices[0].FinishReason)
+	require.Equal(t, "original text", *originalPart.Text)
+	require.Equal(t, []byte{1}, originalPart.Image.Data)
+	require.Equal(t, []byte{2}, originalPart.Audio.Data)
+	require.Equal(t, []byte{3}, originalPart.File.Data)
+	require.Equal(t, "artifact://result@1", originalPart.ContentRef.ArtifactRef)
+	require.Equal(
+		t,
+		`{"value":"original"}`,
+		string(original.Choices[0].Message.ToolCalls[0].Function.Arguments),
+	)
+	require.Equal(t, 3, *original.Choices[0].Message.ToolCalls[0].Index)
+	require.Equal(
+		t,
+		"original",
+		original.Choices[0].Message.ToolCalls[0].
+			ExtraFields["metadata"].(map[string]any)["value"],
+	)
+
+	withoutResponse := cloneToolResultForStateFinalization(toolResult{
+		event: &event.Event{ID: "without-response"},
+	}).event
+	require.NotNil(t, withoutResponse)
+	require.Nil(t, withoutResponse.Response)
 }
 
 func TestReplacementToolChoices_PreservesOriginalOrder(t *testing.T) {
