@@ -1282,6 +1282,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#update-semantics-and-id-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Update Semantics and ID Rotation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-tool-implementation" class="md-nav__link">
     <span class="md-ellipsis">
       Custom Tool Implementation
@@ -3853,6 +3862,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#update-semantics-and-id-rotation" class="md-nav__link">
+    <span class="md-ellipsis">
+      Update Semantics and ID Rotation
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#custom-tool-implementation" class="md-nav__link">
     <span class="md-ellipsis">
       Custom Tool Implementation
@@ -5148,10 +5166,58 @@ default unless you expose them explicitly.</p>
   episodic metadata. Topics are intentionally excluded, so changing tags does
   not create a new memory. Adding the same content and identity metadata for the
   same user is idempotent and overwrites the existing entry (not append).
-  UpdatedAt is refreshed.</li>
+  UpdatedAt is refreshed. If that canonical ID belongs to a soft-deleted row,
+  <code>AddMemory</code> reactivates it.</li>
 <li>If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).</li>
 </ul>
+<h3 id="update-semantics-and-id-rotation">Update Semantics and ID Rotation</h3>
+<p><code>UpdateMemory</code> first applies the requested content, topics, and episodic
+metadata, then recalculates the canonical memory ID. Topics are not part of the
+ID, so a topics-only update stays on the same ID.</p>
+<p>The operation follows this state machine:</p>
+<table>
+<thead>
+<tr>
+<th>State after applying the update</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Source is missing or soft-deleted</td>
+<td>Return a not-found error without changing <code>UpdateResult</code></td>
+</tr>
+<tr>
+<td>Canonical ID is unchanged</td>
+<td>Update the active source in place</td>
+</tr>
+<tr>
+<td>New ID does not exist</td>
+<td>Create the target and retire the source</td>
+</tr>
+<tr>
+<td>New ID is soft-deleted</td>
+<td>Reactivate the target; hard-delete mode replaces the stale tombstone</td>
+</tr>
+<tr>
+<td>New ID is already active</td>
+<td>Return a conflict error without modifying either record</td>
+</tr>
+</tbody>
+</table>
+<p>For backends with soft deletion enabled, a successful ID rotation preserves
+the old source as a tombstone. With hard deletion, the old source is removed.
+SQL backends perform target preparation and source retirement atomically.</p>
+<p>Timestamp behavior is also stable across SQL backends:</p>
+<ul>
+<li>A newly inserted target inherits the source <code>CreatedAt</code>.</li>
+<li>A reactivated target preserves its own <code>CreatedAt</code>.</li>
+<li>A hard-delete replacement of a stale target inherits the source <code>CreatedAt</code>.</li>
+<li>Every successful update refreshes <code>UpdatedAt</code>.</li>
+</ul>
+<p>On success, <code>UpdateResult.MemoryID</code> receives the effective canonical ID. On
+error, the caller-provided result remains unchanged.</p>
 <h3 id="custom-tool-implementation">Custom Tool Implementation</h3>
 <p>Note: In Auto mode, <code>Tools()</code> exposes <code>memory_search</code> by default, <code>memory_load</code>
 when enabled, and any additional enabled tools you explicitly expose with
@@ -5872,6 +5938,12 @@ backend, it requires an <strong>embedder</strong> to generate embeddings.</p>
 <li><code>WithExtraOptions(...options)</code>: Extra options passed to Redis client</li>
 </ul>
 <p><strong>Note</strong>: <code>WithRedisClientURL</code> takes priority over <code>WithRedisInstance</code></p>
+<p><strong>Redis ACL requirement</strong>: <code>UpdateMemory</code> uses a server-side Lua script to
+atomically validate and rotate memory IDs. ACL users must be allowed to run
+<code>EVALSHA</code> and <code>EVAL</code> (<code>EVAL</code> is required when the script is not yet cached), in
+addition to the script's <code>HEXISTS</code>, <code>HSET</code>, and <code>HDEL</code> commands and access to
+the configured memory-key pattern. Do not remove <code>EVAL</code> after warm-up because
+the Redis script cache can be cleared by a restart or <code>SCRIPT FLUSH</code>.</p>
 <p><strong>Key prefix example</strong>:</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-17-1">1</a></span>
 <span class="normal"><a href="#__codelineno-17-2">2</a></span>
@@ -6311,7 +6383,7 @@ falls back to <code>BLOB</code> storage with Go-side cosine similarity for older
 </span><span id="__span-31-6"><a id="__codelineno-31-6" name="__codelineno-31-6"></a>Complex JSON → PostgreSQL (JSONB indexing and queries)
 </span><span id="__span-31-7"><a id="__codelineno-31-7" name="__codelineno-31-7"></a>MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 </span><span id="__span-31-8"><a id="__codelineno-31-8" name="__codelineno-31-8"></a>Vector Search → pgvector (similarity search with embeddings)
-</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a>Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
+</span><span id="__span-31-9"><a id="__codelineno-31-9" name="__codelineno-31-9"></a>Audit Trail → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec (soft delete support)
 </span></code></pre></div></td></tr></table></div>
 <p><strong>Register PostgreSQL Instance (Optional):</strong></p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-32-1"> 1</a></span>
@@ -6591,7 +6663,7 @@ low-weight CJK character trigram fallback</p>
 <h3 id="soft-delete-considerations">Soft Delete Considerations</h3>
 <p><strong>Support status</strong>:</p>
 <ul>
-<li>✅ MySQL, PostgreSQL, pgvector: support soft delete</li>
+<li>✅ MySQL, PostgreSQL, pgvector, SQLite, SQLiteVec: support soft delete</li>
 <li>❌ InMemory, Redis: not supported (hard delete only)</li>
 </ul>
 <p><strong>Soft delete configuration</strong>:</p>
@@ -6626,7 +6698,7 @@ low-weight CJK character trigram fallback</p>
 <tr>
 <td>Recovery</td>
 <td>Cannot recover</td>
-<td>Can manually clear <code>deleted_at</code></td>
+<td>Re-add or rotate an update to the same ID</td>
 </tr>
 <tr>
 <td>Storage</td>
@@ -7913,7 +7985,7 @@ modes and does not write local offload state.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 22, 2026 02:31:48 UTC">2026-07-22 02:31:48</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="July 27, 2026 02:36:40 UTC">2026-07-27 02:36:40</span>
   </span>
 
     

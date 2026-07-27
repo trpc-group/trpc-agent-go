@@ -1348,6 +1348,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      更新语义与 ID 轮转
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       自定义工具实现
@@ -3976,6 +3985,15 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#id_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      更新语义与 ID 轮转
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#_21" class="md-nav__link">
     <span class="md-ellipsis">
       自定义工具实现
@@ -5465,9 +5483,54 @@ Auto 模式下哪些已启用工具会通过 <code>Tools()</code> 暴露给 Agen
 </span></code></pre></div></td></tr></table></div>
 <h3 id="id_1">覆盖语义（ID 与重复）</h3>
 <ul>
-<li>记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。</li>
+<li>记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。如果该规范 ID 对应软删除记录，<code>AddMemory</code> 会将其重新激活。</li>
 <li>如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。</li>
 </ul>
+<h3 id="id_2">更新语义与 ID 轮转</h3>
+<p><code>UpdateMemory</code> 会先应用新的内容、topics 和事件元数据，再重新计算规范 Memory
+ID。topics 不参与 ID 计算，因此只修改 topics 时 ID 保持不变。</p>
+<p>更新遵循以下状态机：</p>
+<table>
+<thead>
+<tr>
+<th>应用更新后的状态</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>source 不存在或已软删除</td>
+<td>返回 not-found 错误，且不修改 <code>UpdateResult</code></td>
+</tr>
+<tr>
+<td>规范 ID 不变</td>
+<td>原地更新 active source</td>
+</tr>
+<tr>
+<td>newID 不存在</td>
+<td>创建 target，再淘汰 source</td>
+</tr>
+<tr>
+<td>newID 是软删除记录</td>
+<td>重新激活 target；硬删除模式会替换旧 tombstone</td>
+</tr>
+<tr>
+<td>newID 已是 active</td>
+<td>返回冲突错误，source 和 target 都不修改</td>
+</tr>
+</tbody>
+</table>
+<p>启用软删除时，成功的 ID 轮转会把旧 source 保留为 tombstone；硬删除模式则移除旧
+source。SQL 后端会原子地完成 target 准备和 source 淘汰。</p>
+<p>SQL 后端的时间戳语义保持一致：</p>
+<ul>
+<li>新插入的 target 继承 source 的 <code>CreatedAt</code>。</li>
+<li>重新激活的 target 保留自己的 <code>CreatedAt</code>。</li>
+<li>硬删除模式替换旧 target tombstone 时，replacement 继承 source 的 <code>CreatedAt</code>。</li>
+<li>每次成功更新都会刷新 <code>UpdatedAt</code>。</li>
+</ul>
+<p>成功时，<code>UpdateResult.MemoryID</code> 返回最终生效的规范 ID；失败时，调用方传入的
+result 保持不变。</p>
 <h3 id="_21">自定义工具实现</h3>
 <p>提示：在 Auto 模式下，<code>Tools()</code> 默认暴露 <code>memory_search</code>；<code>memory_load</code> 在启用后可暴露，
 其他已启用工具需配合 <code>WithAutoMemoryExposedTools()</code> 显式暴露。像 <code>memory_clear</code> 这类危险操作通常更适合由业务侧直接控制。</p>
@@ -6191,6 +6254,11 @@ Auto 模式下哪些已启用工具会通过 <code>Tools()</code> 暴露给 Agen
 <li><code>WithExtraOptions(...options)</code>: 传递给 Redis 客户端的额外选项</li>
 </ul>
 <p><strong>注意</strong>：<code>WithRedisClientURL</code> 优先级高于 <code>WithRedisInstance</code></p>
+<p><strong>Redis ACL 要求</strong>：<code>UpdateMemory</code> 使用服务端 Lua 脚本，以原子方式校验并
+轮换记忆 ID。除脚本使用的 <code>HEXISTS</code>、<code>HSET</code>、<code>HDEL</code> 命令和对应记忆 key
+访问权限外，ACL 用户还必须具有 <code>EVALSHA</code> 和 <code>EVAL</code> 权限；脚本尚未缓存时
+需要 <code>EVAL</code>。Redis 重启或执行 <code>SCRIPT FLUSH</code> 后脚本缓存可能被清除，因此
+不能只在预热阶段临时授予 <code>EVAL</code>。</p>
 <p><strong>Key 前缀示例</strong>：</p>
 <div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-19-1">1</a></span>
 <span class="normal"><a href="#__codelineno-19-2">2</a></span>
@@ -6789,7 +6857,7 @@ MySQL 9.0+ 使用原生 <code>VECTOR</code> 类型，旧版本自动降级为 <c
 <tr>
 <td>恢复</td>
 <td>无法恢复</td>
-<td>可手动清除 <code>deleted_at</code></td>
+<td>重新 Add，或将更新轮转到相同 ID</td>
 </tr>
 <tr>
 <td>存储</td>
@@ -8018,7 +8086,7 @@ local/backend/collect 模式。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月22日 02:31:48 UTC">2026-07-22 02:31:48</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月27日 02:36:40 UTC">2026-07-27 02:36:40</span>
   </span>
 
     
