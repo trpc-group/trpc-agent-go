@@ -10,6 +10,7 @@ package chromadb
 
 import (
 	"context"
+	"math"
 	"net/http"
 	"sync"
 	"testing"
@@ -194,12 +195,41 @@ func TestNewServiceValidatesCollectionSchema(t *testing.T) {
 			wantError: "missing defaults",
 		},
 		{
+			name: "missing keys",
+			schema: &collectionSchema{
+				Defaults: enabledCollectionSchema().Defaults,
+			},
+			wantError: "missing keys",
+		},
+		{
 			name: "missing type default",
 			schema: &collectionSchema{
 				Defaults: map[string]map[string]schemaIndexState{},
 				Keys:     map[string]map[string]schemaIndexState{},
 			},
 			wantError: "string defaults",
+		},
+		{
+			name: "missing default index",
+			schema: &collectionSchema{
+				Defaults: map[string]map[string]schemaIndexState{
+					"string": {},
+				},
+				Keys: map[string]map[string]schemaIndexState{},
+			},
+			wantError: "missing default string_inverted_index",
+		},
+		{
+			name: "missing enabled state",
+			schema: &collectionSchema{
+				Defaults: map[string]map[string]schemaIndexState{
+					"string": {
+						"string_inverted_index": {},
+					},
+				},
+				Keys: map[string]map[string]schemaIndexState{},
+			},
+			wantError: "missing enabled",
 		},
 	}
 
@@ -214,6 +244,130 @@ func TestNewServiceValidatesCollectionSchema(t *testing.T) {
 			assert.Contains(t, err.Error(), tt.wantError)
 		})
 	}
+}
+
+func TestUniqueDatabase(t *testing.T) {
+	tests := []struct {
+		name      string
+		databases []string
+		want      string
+		wantError string
+	}{
+		{name: "one", databases: []string{"database"}, want: "database"},
+		{
+			name:      "wildcards and duplicate",
+			databases: []string{"", "*", "database", "database"},
+			want:      "database",
+		},
+		{name: "none", databases: []string{"", "*"}, wantError: "unique database"},
+		{
+			name:      "multiple",
+			databases: []string{"first", "second"},
+			wantError: "multiple databases",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, err := uniqueDatabase(tt.databases)
+			if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, value)
+		})
+	}
+}
+
+func TestNewServiceReportsInitializationFailures(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*fakeChroma)
+		options   []ServiceOpt
+		wantError string
+	}{
+		{
+			name: "identity request",
+			configure: func(fake *fakeChroma) {
+				fake.status["identity"] = http.StatusBadRequest
+			},
+			options:   []ServiceOpt{WithAPIKey("key")},
+			wantError: "resolve chromadb scope",
+		},
+		{
+			name: "preflight request",
+			configure: func(fake *fakeChroma) {
+				fake.status["preflight"] = http.StatusBadRequest
+			},
+			wantError: "preflight checks",
+		},
+		{
+			name: "invalid max batch size",
+			configure: func(fake *fakeChroma) {
+				fake.maxBatch = 0
+			},
+			wantError: "invalid chromadb max batch size",
+		},
+		{
+			name: "get collection",
+			configure: func(fake *fakeChroma) {
+				fake.status["get_collection"] = http.StatusBadRequest
+			},
+			wantError: "get chromadb collection",
+		},
+		{
+			name: "create collection",
+			configure: func(fake *fakeChroma) {
+				fake.collectionExists = false
+				fake.status["create_collection"] = http.StatusBadRequest
+			},
+			wantError: "create chromadb collection",
+		},
+		{
+			name: "collection name mismatch",
+			configure: func(fake *fakeChroma) {
+				fake.collectionName = "different"
+			},
+			wantError: "collection name mismatch",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fake := newFakeChroma()
+			defer fake.close()
+			tt.configure(fake)
+			options := []ServiceOpt{
+				WithBaseURL(fake.server.URL),
+				WithEmbedder(&testEmbedder{dimension: 3}),
+			}
+			options = append(options, tt.options...)
+
+			service, err := NewService(options...)
+
+			assert.Nil(t, service)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantError)
+		})
+	}
+}
+
+func TestValidateCollectionAndMetadata(t *testing.T) {
+	service := &Service{opts: serviceOpts{collectionName: defaultCollectionName}}
+	require.EqualError(
+		t,
+		service.validateCollection(nil),
+		"chromadb collection response has no id",
+	)
+
+	err := validateCollectionMetadata(map[string]any{
+		metadataSchemaVersionKey: "invalid",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode chromadb collection schema version")
+	assert.NoError(t, validateCollectionMetadata(nil))
 }
 
 func TestNewServiceAutoCreatesMarkedCosineCollection(t *testing.T) {
@@ -430,6 +584,132 @@ func TestServiceCloseDoesNotCloseInjectedTransport(t *testing.T) {
 	require.NoError(t, service.Close())
 
 	assert.Zero(t, transport.closes())
+}
+
+func TestServiceRejectsInvalidKeys(t *testing.T) {
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{}
+	memoryKey := memory.Key{}
+
+	_, err := service.ReadMemories(ctx, userKey, 0)
+	require.Error(t, err)
+	require.Error(t, service.AddMemory(ctx, userKey, "memory", nil))
+	require.Error(t, service.UpdateMemory(ctx, memoryKey, "memory", nil))
+	require.Error(t, service.DeleteMemory(ctx, memoryKey))
+	require.Error(t, service.ClearMemories(ctx, userKey))
+	_, err = service.SearchMemories(ctx, userKey, "query")
+	require.Error(t, err)
+}
+
+func TestServiceOperationsFailAfterClose(t *testing.T) {
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+	require.NoError(t, service.Close())
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	memoryKey := memory.Key{
+		AppName: "app", UserID: "user", MemoryID: "memory",
+	}
+	operations := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "read",
+			run: func() error {
+				_, err := service.ReadMemories(ctx, userKey, 0)
+				return err
+			},
+		},
+		{
+			name: "add",
+			run: func() error {
+				return service.AddMemory(ctx, userKey, "memory", nil)
+			},
+		},
+		{
+			name: "update",
+			run: func() error {
+				return service.UpdateMemory(ctx, memoryKey, "memory", nil)
+			},
+		},
+		{
+			name: "delete",
+			run: func() error {
+				return service.DeleteMemory(ctx, memoryKey)
+			},
+		},
+		{
+			name: "clear",
+			run: func() error {
+				return service.ClearMemories(ctx, userKey)
+			},
+		},
+		{
+			name: "search",
+			run: func() error {
+				_, err := service.SearchMemories(ctx, userKey, "query")
+				return err
+			},
+		},
+		{
+			name: "enqueue",
+			run: func() error {
+				return service.EnqueueAutoMemoryJob(ctx, nil)
+			},
+		},
+	}
+
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			assert.ErrorIs(t, operation.run(), errServiceClosed)
+		})
+	}
+}
+
+func TestServiceEmbedValidatesVectors(t *testing.T) {
+	tests := []struct {
+		name           string
+		values         []float64
+		indexDimension int
+		wantError      string
+	}{
+		{name: "empty", wantError: "empty embedding"},
+		{name: "NaN", values: []float64{math.NaN()}, wantError: "finite float32"},
+		{name: "infinity", values: []float64{math.Inf(1)}, wantError: "finite float32"},
+		{name: "float32 overflow", values: []float64{math.MaxFloat64}, wantError: "finite float32"},
+		{
+			name:           "dimension mismatch",
+			values:         []float64{1, 0},
+			indexDimension: 3,
+			wantError:      "dimension mismatch",
+		},
+		{name: "inferred dimension", values: []float64{1, 0}},
+		{name: "matching dimension", values: []float64{1, 0}, indexDimension: 2},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			embedder := &testEmbedder{
+				values: map[string][]float64{"query": tt.values},
+			}
+			service := &Service{
+				opts:           serviceOpts{embedder: embedder},
+				indexDimension: tt.indexDimension,
+			}
+
+			values, err := service.embed(context.Background(), "query")
+
+			if tt.wantError != "" {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tt.wantError)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, len(tt.values), len(values))
+			assert.Equal(t, len(tt.values), service.indexDimension)
+		})
+	}
 }
 
 func ExampleNewService() {

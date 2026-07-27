@@ -15,6 +15,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"trpc.group/trpc-go/trpc-agent-go/memory"
 )
 
 func TestOptionsDefaults(t *testing.T) {
@@ -90,6 +92,181 @@ func TestOptionsIgnoreNonPositiveWorkerValues(t *testing.T) {
 
 	assert.Equal(t, workers, opts.asyncMemoryNum)
 	assert.Equal(t, queueSize, opts.memoryQueueSize)
+}
+
+func TestOptionsConfigureToolsFromZeroValue(t *testing.T) {
+	opts := serviceOpts{}
+	creator := defaultServiceOpts().toolCreators[memory.AddToolName]
+	names := []string{memory.SearchToolName}
+	expose := WithAutoMemoryExposedTools(names...)
+	names[0] = memory.ClearToolName
+
+	WithCollectionName(" custom_memories ")(&opts)
+	WithDisableAutoMemoryOnExternalContext(true)(&opts)
+	WithCustomTool(memory.AddToolName, creator)(&opts)
+	WithToolEnabled(memory.UpdateToolName, true)(&opts)
+	WithToolEnabled(memory.AddToolName, false)(&opts)
+	expose(&opts)
+	WithToolExposed(memory.LoadToolName, true)(&opts)
+
+	assert.Equal(t, "custom_memories", opts.collectionName)
+	assert.True(t, opts.disableAutoMemoryOnExternalContext)
+	assert.NotNil(t, opts.toolCreators[memory.AddToolName])
+	assert.NotContains(t, opts.enabledTools, memory.AddToolName)
+	assert.Contains(t, opts.enabledTools, memory.UpdateToolName)
+	assert.Contains(t, opts.toolExposed, memory.SearchToolName)
+	assert.NotContains(t, opts.toolExposed, memory.ClearToolName)
+	assert.Contains(t, opts.toolExposed, memory.LoadToolName)
+	assert.Contains(t, opts.userExplicitlySet, memory.AddToolName)
+	assert.Contains(t, opts.userExplicitlySet, memory.UpdateToolName)
+
+	WithToolExposed(memory.SearchToolName, false)(&opts)
+	assert.NotContains(t, opts.toolExposed, memory.SearchToolName)
+	assert.Contains(t, opts.toolHidden, memory.SearchToolName)
+}
+
+func TestOptionsRejectInvalidToolConfiguration(t *testing.T) {
+	creator := defaultServiceOpts().toolCreators[memory.AddToolName]
+	tests := []struct {
+		name      string
+		configure func(*serviceOpts)
+		match     string
+	}{
+		{
+			name: "invalid creator name",
+			configure: func(opts *serviceOpts) {
+				opts.toolCreators["invalid"] = creator
+			},
+			match: "invalid memory tool name",
+		},
+		{
+			name: "nil creator",
+			configure: func(opts *serviceOpts) {
+				opts.toolCreators[memory.AddToolName] = nil
+			},
+			match: "creator is nil",
+		},
+		{
+			name: "invalid enabled tool",
+			configure: func(opts *serviceOpts) {
+				opts.enabledTools["invalid"] = struct{}{}
+			},
+			match: "invalid memory tool name",
+		},
+		{
+			name: "invalid exposed tool",
+			configure: func(opts *serviceOpts) {
+				opts.toolExposed["invalid"] = struct{}{}
+			},
+			match: "invalid memory tool name",
+		},
+		{
+			name: "invalid hidden tool",
+			configure: func(opts *serviceOpts) {
+				opts.toolHidden["invalid"] = struct{}{}
+			},
+			match: "invalid memory tool name",
+		},
+		{
+			name: "invalid explicit tool",
+			configure: func(opts *serviceOpts) {
+				opts.userExplicitlySet["invalid"] = struct{}{}
+			},
+			match: "invalid memory tool name",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := defaultServiceOpts()
+			tt.configure(&opts)
+
+			err := validateToolOptions(opts)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.match)
+		})
+	}
+}
+
+func TestValidateNumericOptions(t *testing.T) {
+	zero := 0
+	tests := []struct {
+		name      string
+		configure func(*serviceOpts)
+		match     string
+	}{
+		{
+			name: "index dimension",
+			configure: func(opts *serviceOpts) {
+				opts.indexDimension = &zero
+			},
+			match: "index dimension",
+		},
+		{
+			name: "max results",
+			configure: func(opts *serviceOpts) {
+				opts.maxResults = 0
+			},
+			match: "max results",
+		},
+		{
+			name: "negative threshold",
+			configure: func(opts *serviceOpts) {
+				opts.similarityThreshold = -0.01
+			},
+			match: "similarity threshold",
+		},
+		{
+			name: "hybrid candidate limit",
+			configure: func(opts *serviceOpts) {
+				opts.hybridCandidateLimit = 0
+			},
+			match: "hybrid candidate limit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := defaultServiceOpts()
+			tt.configure(&opts)
+
+			err := validateNumericOptions(opts)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.match)
+		})
+	}
+}
+
+func TestValidateEmbeddingDimensions(t *testing.T) {
+	t.Run("negative embedder dimension", func(t *testing.T) {
+		opts := defaultServiceOpts()
+		opts.embedder = &testEmbedder{dimension: -1}
+
+		err := validateEmbeddingDimensions(opts)
+
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid dimension")
+	})
+
+	t.Run("unknown embedder dimension", func(t *testing.T) {
+		dimension := 3
+		opts := defaultServiceOpts()
+		opts.embedder = &testEmbedder{}
+		opts.indexDimension = &dimension
+
+		assert.NoError(t, validateEmbeddingDimensions(opts))
+	})
+
+	t.Run("matching dimensions", func(t *testing.T) {
+		dimension := 3
+		opts := defaultServiceOpts()
+		opts.embedder = &testEmbedder{dimension: dimension}
+		opts.indexDimension = &dimension
+
+		assert.NoError(t, validateEmbeddingDimensions(opts))
+	})
 }
 
 func TestOptionsRejectInvalidFinalState(t *testing.T) {
@@ -248,6 +425,28 @@ func TestOptionsRejectInvalidFinalState(t *testing.T) {
 			err := normalizeAndValidateOptions(&opts)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.match)
+		})
+	}
+}
+
+func TestNormalizeAndValidateOptionsRejectsNil(t *testing.T) {
+	err := normalizeAndValidateOptions(nil)
+
+	require.EqualError(t, err, "chromadb options are nil")
+}
+
+func TestCanonicalHTTPHeaders(t *testing.T) {
+	headers, err := canonicalHTTPHeaders(map[string]string{
+		"x-custom_token": "value",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"X-Custom_token": "value"}, headers)
+
+	for _, name := range []string{"", " X-Test", "X Test"} {
+		t.Run(name, func(t *testing.T) {
+			_, err := canonicalHTTPHeaders(map[string]string{name: "value"})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid HTTP header name")
 		})
 	}
 }
