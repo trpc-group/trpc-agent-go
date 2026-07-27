@@ -17,6 +17,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -55,12 +56,14 @@ const (
 
 // MemoryOp describes one memory mutation.
 type MemoryOp struct {
-	Name        string
-	Operation   MemoryOperation
-	Ref         string
-	Content     string
-	Topics      []string
-	Metadata    *memory.Metadata
+	Name      string
+	Operation MemoryOperation
+	// Ref is a logical alias that advances when an update rotates the memory ID.
+	Ref      string
+	Content  string
+	Topics   []string
+	Metadata *memory.Metadata
+	// ResultAlias optionally binds an additional alias to the operation result.
 	ResultAlias string
 }
 
@@ -228,6 +231,9 @@ func Run(ctx context.Context, backend Backend, tc Case) (Result, error) {
 	if err := createSummaries(ctx, backend, key, tc); err != nil {
 		return Result{}, err
 	}
+	if err := validateStateScopes(ctx, backend, key, tc); err != nil {
+		return Result{}, err
+	}
 	return buildResult(ctx, backend, key, userKey, tc.Name)
 }
 
@@ -372,6 +378,103 @@ func createSummaries(ctx context.Context, backend Backend, key session.Key, tc C
 	return nil
 }
 
+func validateStateScopes(ctx context.Context, backend Backend, key session.Key, tc Case) (err error) {
+	if len(tc.AppState) == 0 && len(tc.UserState) == 0 && len(tc.SessionState) == 0 {
+		return nil
+	}
+
+	appState := stateWithoutPrefix(tc.AppState, session.StateAppPrefix)
+	gotAppState, err := backend.SessionService.ListAppStates(ctx, key.AppName)
+	if err != nil {
+		return fmt.Errorf("list app state for case %q on backend %q: %w", tc.Name, backend.Name, err)
+	}
+	if err := requireStateScope(tc.Name, backend.Name, "app", gotAppState, appState); err != nil {
+		return err
+	}
+
+	userKey := session.UserKey{AppName: key.AppName, UserID: key.UserID}
+	userState := stateWithoutPrefix(tc.UserState, session.StateUserPrefix)
+	gotUserState, err := backend.SessionService.ListUserStates(ctx, userKey)
+	if err != nil {
+		return fmt.Errorf("list user state for case %q on backend %q: %w", tc.Name, backend.Name, err)
+	}
+	if err := requireStateScope(tc.Name, backend.Name, "user", gotUserState, userState); err != nil {
+		return err
+	}
+
+	peerKey := key
+	peerKey.SessionID += "-scope-peer"
+	peer, err := backend.SessionService.CreateSession(ctx, peerKey, nil)
+	if err != nil {
+		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
+	}
+	defer func() {
+		if deleteErr := backend.SessionService.DeleteSession(ctx, peerKey); deleteErr != nil {
+			err = errors.Join(err, fmt.Errorf(
+				"delete state-scope peer %q for case %q on backend %q: %w",
+				peerKey.SessionID, tc.Name, backend.Name, deleteErr,
+			))
+		}
+	}()
+	if peer == nil {
+		return fmt.Errorf("create state-scope peer for case %q on backend %q returned nil", tc.Name, backend.Name)
+	}
+
+	peer, err = backend.SessionService.GetSession(ctx, peerKey)
+	if err != nil {
+		return fmt.Errorf("get state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
+	}
+	if peer == nil {
+		return fmt.Errorf("get state-scope peer for case %q on backend %q returned nil", tc.Name, backend.Name)
+	}
+	peerState := mergeScopedState(appState, userState)
+	return requireStateScope(tc.Name, backend.Name, "peer", peer.SnapshotState(), peerState)
+}
+
+func requireStateScope(caseName, backendName, scope string, got, want session.StateMap) error {
+	normalizedGot := normalizeState(got)
+	normalizedWant := normalizeState(want)
+	if reflect.DeepEqual(normalizedGot, normalizedWant) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s state for case %q on backend %q = %#v, want %#v",
+		scope, caseName, backendName, normalizedGot, normalizedWant,
+	)
+}
+
+func stateWithoutPrefix(state session.StateMap, prefix string) session.StateMap {
+	out := make(session.StateMap, len(state))
+	for key, value := range state {
+		key = strings.TrimPrefix(key, prefix)
+		if value == nil {
+			out[key] = nil
+			continue
+		}
+		out[key] = append([]byte(nil), value...)
+	}
+	return out
+}
+
+func mergeScopedState(appState, userState session.StateMap) session.StateMap {
+	out := make(session.StateMap, len(appState)+len(userState))
+	for key, value := range appState {
+		if value == nil {
+			out[session.StateAppPrefix+key] = nil
+			continue
+		}
+		out[session.StateAppPrefix+key] = append([]byte(nil), value...)
+	}
+	for key, value := range userState {
+		if value == nil {
+			out[session.StateUserPrefix+key] = nil
+			continue
+		}
+		out[session.StateUserPrefix+key] = append([]byte(nil), value...)
+	}
+	return out
+}
+
 func buildResult(ctx context.Context, backend Backend, key session.Key, userKey memory.UserKey, caseName string) (Result, error) {
 	got, err := backend.SessionService.GetSession(ctx, key)
 	if err != nil {
@@ -437,7 +540,7 @@ func applyMemoryOp(ctx context.Context, service memory.Service, userKey memory.U
 			return err
 		}
 		if op.ResultAlias != "" {
-			id, err := findMemoryID(ctx, service, userKey, op.Content)
+			id, err := findMemoryID(ctx, service, userKey, op)
 			if err != nil {
 				return err
 			}
@@ -459,10 +562,11 @@ func applyMemoryOp(ctx context.Context, service memory.Service, userKey memory.U
 		}, op.Content, append([]string(nil), op.Topics...), opts...); err != nil {
 			return err
 		}
+		if result.MemoryID == "" {
+			return fmt.Errorf("memory update returned empty ID")
+		}
+		aliases[op.Ref] = result.MemoryID
 		if op.ResultAlias != "" {
-			if result.MemoryID == "" {
-				return fmt.Errorf("memory update returned empty ID")
-			}
 			aliases[op.ResultAlias] = result.MemoryID
 		}
 	case MemoryDelete:
@@ -481,17 +585,116 @@ func applyMemoryOp(ctx context.Context, service memory.Service, userKey memory.U
 	return nil
 }
 
-func findMemoryID(ctx context.Context, service memory.Service, userKey memory.UserKey, content string) (string, error) {
+type canonicalMemoryIdentity struct {
+	AppName      string
+	UserID       string
+	Content      string
+	Kind         memory.Kind
+	EventTime    string
+	Participants string
+	Location     string
+}
+
+// Keep this identity logic aligned with GenerateMemoryID,
+// metadataIdentityKind, metadataIdentityParticipants, and
+// metadataIdentityLocation in memory/internal/memory/memory.go. replaytest
+// cannot import that internal package, so runtime identity changes must update
+// this helper and TestCanonicalMemoryIdentityMatchesRuntimeIDs together.
+func newCanonicalMemoryIdentity(appName, userID string, mem *memory.Memory) canonicalMemoryIdentity {
+	identity := canonicalMemoryIdentity{AppName: appName, UserID: userID}
+	if mem == nil {
+		return identity
+	}
+	participants := canonicalIdentityParticipants(mem.Participants)
+	location := strings.TrimSpace(mem.Location)
+	identity.Content = mem.Memory
+	identity.Kind = canonicalIdentityKind(mem.Kind, mem.EventTime != nil, len(mem.Participants) > 0, location != "")
+	if mem.EventTime != nil {
+		identity.EventTime = mem.EventTime.UTC().Format("2006-01-02T15:04:05Z07:00")
+	}
+	identity.Participants = strings.Join(participants, ",")
+	identity.Location = location
+	return identity
+}
+
+func canonicalMemoryOpIdentity(userKey memory.UserKey, op MemoryOp) canonicalMemoryIdentity {
+	mem := &memory.Memory{Memory: op.Content}
+	if op.Metadata != nil {
+		mem.Kind = op.Metadata.Kind
+		mem.EventTime = op.Metadata.EventTime
+		mem.Participants = canonicalIdentityParticipants(op.Metadata.Participants)
+		mem.Location = strings.TrimSpace(op.Metadata.Location)
+	}
+	return newCanonicalMemoryIdentity(userKey.AppName, userKey.UserID, mem)
+}
+
+func canonicalIdentityKind(kind memory.Kind, hasEventTime, hasParticipants, hasLocation bool) memory.Kind {
+	if kind != "" && kind != memory.KindFact {
+		return kind
+	}
+	if hasEventTime || hasParticipants || hasLocation {
+		return memory.KindFact
+	}
+	return ""
+}
+
+func canonicalIdentityParticipants(values []string) []string {
+	participants := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			participants = append(participants, value)
+		}
+	}
+	sort.Slice(participants, func(i, j int) bool {
+		left := strings.ToLower(participants[i])
+		right := strings.ToLower(participants[j])
+		if left != right {
+			return left < right
+		}
+		return participants[i] < participants[j]
+	})
+	out := participants[:0]
+	var previous string
+	for _, participant := range participants {
+		folded := strings.ToLower(participant)
+		if len(out) > 0 && folded == previous {
+			continue
+		}
+		out = append(out, participant)
+		previous = folded
+	}
+	return out
+}
+
+func findMemoryID(ctx context.Context, service memory.Service, userKey memory.UserKey, op MemoryOp) (string, error) {
 	entries, err := service.ReadMemories(ctx, userKey, 0)
 	if err != nil {
 		return "", err
 	}
+	want := canonicalMemoryOpIdentity(userKey, op)
+	var matches []string
 	for _, entry := range entries {
-		if entry != nil && entry.Memory != nil && entry.Memory.Memory == content {
-			return entry.ID, nil
+		if entry == nil || entry.Memory == nil {
+			continue
+		}
+		got := newCanonicalMemoryIdentity(entry.AppName, entry.UserID, entry.Memory)
+		if got == want {
+			matches = append(matches, entry.ID)
 		}
 	}
-	return "", fmt.Errorf("memory with content %q not found", content)
+	sort.Strings(matches)
+	switch len(matches) {
+	case 0:
+		return "", fmt.Errorf("memory identity %+v not found", want)
+	case 1:
+		if matches[0] == "" {
+			return "", fmt.Errorf("memory identity %+v resolved to empty ID", want)
+		}
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("memory identity %+v is ambiguous across IDs %q", want, matches)
+	}
 }
 
 func applyMemoriesConcurrently(ctx context.Context, service memory.Service, userKey memory.UserKey, ops []MemoryOp) error {

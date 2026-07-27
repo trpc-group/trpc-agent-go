@@ -79,6 +79,10 @@ Backend-regenerated event IDs, response IDs and timing metadata, and backend-gen
 
 Each memory query declares `ExpectedContents`. Search results are compared as an exact unordered content multiset, so backend-specific IDs, scores, and ranking are ignored while missing, unrelated, extra, and duplicate results remain observable.
 
+Memory operation aliases follow canonical memory identity rather than content alone. Add aliases include app, user, content, kind, event time, participants, and location while intentionally excluding topics. An update always advances its referenced alias to the effective ID returned by the backend, so a later update or delete does not reuse an ID that was rotated after content or identity metadata changed.
+
+Cases with app, user, or session state also validate each scope as a backend contract. The runner reads app and user state separately, creates a temporary peer session under the same app/user, and requires the peer to inherit only app/user values. The peer is deleted on every return path. Missing propagation, leaked session/temp state, and cleanup failures are runner errors; they are not snapshot differences and cannot be accepted with `allowed_diff`.
+
 ## Summary And Track Strategy
 
 The Go version uses native session summary semantics. It does not create Python-style summary events and does not compare historical summary events.

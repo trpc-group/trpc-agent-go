@@ -15,6 +15,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -191,6 +193,557 @@ func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Empty(t, result.Snapshot.Memory)
+}
+
+func TestRunRefreshesUpdatedMemoryAlias(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), Backend{
+		Name:           "in_memory",
+		SessionService: sessionService,
+		MemoryService:  memoryService,
+	}, Case{
+		Name: "update-memory-alias",
+		Memories: []MemoryOp{
+			{Operation: MemoryAdd, Content: "memory v1", ResultAlias: "memory"},
+			{Operation: MemoryUpdate, Ref: "memory", Content: "memory v2"},
+			{Operation: MemoryUpdate, Ref: "memory", Content: "memory v3"},
+			{Operation: MemoryDelete, Ref: "memory"},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Snapshot.Memory)
+}
+
+func TestRunRejectsEmptyUpdatedMemoryID(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := &emptyUpdateResultMemoryService{Service: meminmemory.NewMemoryService()}
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), Backend{
+		Name:           "empty_update_result",
+		SessionService: sessionService,
+		MemoryService:  memoryService,
+	}, Case{
+		Name: "empty-update-result",
+		Memories: []MemoryOp{
+			{Operation: MemoryAdd, Content: "memory v1", ResultAlias: "memory"},
+			{Operation: MemoryUpdate, Ref: "memory", Content: "memory v2"},
+		},
+	})
+	require.EqualError(t, err, `memory operation 1 for case "empty-update-result": memory update returned empty ID`)
+}
+
+func TestRunResolvesAddAliasByCanonicalIdentity(t *testing.T) {
+	firstTime := time.Date(2026, time.July, 1, 1, 0, 0, 0, time.UTC)
+	secondTime := firstTime.Add(time.Hour)
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := &orderedReadMemoryService{Service: meminmemory.NewMemoryService()}
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), Backend{
+		Name:           "ordered_memory",
+		SessionService: sessionService,
+		MemoryService:  memoryService,
+	}, Case{
+		Name: "same-content-episodes",
+		Memories: []MemoryOp{
+			{
+				Operation: MemoryAdd, Content: "User attended a project review.", ResultAlias: "first",
+				Metadata: &memory.Metadata{
+					Kind: memory.KindEpisode, EventTime: &firstTime,
+					Participants: []string{"User", "Ada"}, Location: "Shenzhen",
+				},
+			},
+			{
+				Operation: MemoryAdd, Content: "User attended a project review.", ResultAlias: "second",
+				Metadata: &memory.Metadata{
+					Kind: memory.KindEpisode, EventTime: &secondTime,
+					Participants: []string{"User", "Bob"}, Location: "Guangzhou",
+				},
+			},
+			{Operation: MemoryDelete, Ref: "second"},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, result.Snapshot.Memory, 1)
+	remaining := result.Snapshot.Memory[0]
+	require.Equal(t, normalizeTime(firstTime), remaining.EventTime)
+	require.Equal(t, []string{"Ada", "User"}, remaining.Participants)
+	require.Equal(t, "Shenzhen", remaining.Location)
+}
+
+func TestRunResolvesIdempotentAddAlias(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	result, err := Run(context.Background(), Backend{
+		Name:           "in_memory",
+		SessionService: sessionService,
+		MemoryService:  memoryService,
+	}, Case{
+		Name: "idempotent-add-alias",
+		Memories: []MemoryOp{
+			{Operation: MemoryAdd, Content: "same memory", ResultAlias: "first"},
+			{Operation: MemoryAdd, Content: "same memory", ResultAlias: "second"},
+			{Operation: MemoryDelete, Ref: "second"},
+		},
+	})
+	require.NoError(t, err)
+	require.Empty(t, result.Snapshot.Memory)
+}
+
+func TestFindMemoryIDRejectsAmbiguousIdentity(t *testing.T) {
+	at := time.Date(2026, time.July, 1, 1, 0, 0, 0, time.UTC)
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	newEntry := func(id string) *memory.Entry {
+		return &memory.Entry{
+			ID: id, AppName: userKey.AppName, UserID: userKey.UserID,
+			Memory: &memory.Memory{
+				Memory: "same episode", Kind: memory.KindEpisode, EventTime: &at,
+				Participants: []string{"Alice"}, Location: "Kyoto",
+			},
+		}
+	}
+	service := &fixedReadMemoryService{entries: []*memory.Entry{newEntry("z-id"), newEntry("a-id")}}
+	_, err := findMemoryID(context.Background(), service, userKey, MemoryOp{
+		Content: "same episode",
+		Metadata: &memory.Metadata{
+			Kind: memory.KindEpisode, EventTime: &at,
+			Participants: []string{"Alice"}, Location: "Kyoto",
+		},
+	})
+	require.ErrorContains(t, err, `ambiguous across IDs ["a-id" "z-id"]`)
+}
+
+func TestFindMemoryIDReportsResolutionErrors(t *testing.T) {
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	op := MemoryOp{Content: "target"}
+	tests := []struct {
+		name    string
+		service *fixedReadMemoryService
+		want    string
+	}{
+		{
+			name:    "read failure",
+			service: &fixedReadMemoryService{readErr: errors.New("read failed")},
+			want:    "read failed",
+		},
+		{
+			name: "identity not found",
+			service: &fixedReadMemoryService{entries: []*memory.Entry{
+				nil,
+				{ID: "nil-memory", AppName: "app", UserID: "user"},
+				{ID: "other", AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "other"}},
+			}},
+			want: "not found",
+		},
+		{
+			name: "empty id",
+			service: &fixedReadMemoryService{entries: []*memory.Entry{{
+				AppName: "app", UserID: "user", Memory: &memory.Memory{Memory: "target"},
+			}}},
+			want: "resolved to empty ID",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := findMemoryID(context.Background(), test.service, userKey, op)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+	require.Equal(t, canonicalMemoryIdentity{AppName: "app", UserID: "user"}, newCanonicalMemoryIdentity("app", "user", nil))
+	require.Equal(t, memory.Kind("custom"), canonicalIdentityKind(memory.Kind("custom"), false, false, false))
+}
+
+func TestCanonicalMemoryIdentityMatchesRuntimeIDs(t *testing.T) {
+	baseTime := time.Date(2026, time.July, 1, 1, 2, 3, 100, time.UTC)
+	nextDay := baseTime.Add(24 * time.Hour)
+	sameInstant := baseTime.In(time.FixedZone("UTC+8", 8*60*60))
+	sameSecond := baseTime.Add(500 * time.Millisecond)
+	defaultKey := memory.UserKey{AppName: "app", UserID: "user"}
+
+	tests := []struct {
+		name      string
+		leftKey   memory.UserKey
+		rightKey  memory.UserKey
+		left      MemoryOp
+		right     MemoryOp
+		wantEqual bool
+	}{
+		{
+			name: "content differs", leftKey: defaultKey, rightKey: defaultKey,
+			left: MemoryOp{Content: "coffee"}, right: MemoryOp{Content: "tea"},
+		},
+		{
+			name: "topics excluded", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "coffee", Topics: []string{"drink"}},
+			right: MemoryOp{Content: "coffee", Topics: []string{"preference"}}, wantEqual: true,
+		},
+		{
+			name: "episode time differs", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &baseTime}},
+			right: MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &nextDay}},
+		},
+		{
+			name: "participants canonicalized", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, Participants: []string{"Alice", "Bob"}}},
+			right: MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, Participants: []string{"bob", " Alice ", "Bob"}}}, wantEqual: true,
+		},
+		{
+			name: "user differs", leftKey: defaultKey,
+			rightKey: memory.UserKey{AppName: "app", UserID: "other"},
+			left:     MemoryOp{Content: "coffee"}, right: MemoryOp{Content: "coffee"},
+		},
+		{
+			name: "app differs", leftKey: defaultKey,
+			rightKey: memory.UserKey{AppName: "other", UserID: "user"},
+			left:     MemoryOp{Content: "coffee"}, right: MemoryOp{Content: "coffee"},
+		},
+		{
+			name: "explicit fact keeps legacy identity", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "coffee"},
+			right: MemoryOp{Content: "coffee", Metadata: &memory.Metadata{Kind: memory.KindFact}}, wantEqual: true,
+		},
+		{
+			name: "blank participants are removed before identity", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "coffee"},
+			right: MemoryOp{Content: "coffee", Metadata: &memory.Metadata{Participants: []string{" "}}}, wantEqual: true,
+		},
+		{
+			name: "equivalent timezone", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &baseTime}},
+			right: MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &sameInstant}}, wantEqual: true,
+		},
+		{
+			name: "subsecond excluded", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &baseTime}},
+			right: MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, EventTime: &sameSecond}}, wantEqual: true,
+		},
+		{
+			name: "location trimmed", leftKey: defaultKey, rightKey: defaultKey,
+			left:  MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, Location: "Kyoto"}},
+			right: MemoryOp{Content: "meeting", Metadata: &memory.Metadata{Kind: memory.KindEpisode, Location: " Kyoto "}}, wantEqual: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			leftIdentity := canonicalMemoryOpIdentity(test.leftKey, test.left)
+			rightIdentity := canonicalMemoryOpIdentity(test.rightKey, test.right)
+			require.Equal(t, test.wantEqual, leftIdentity == rightIdentity)
+
+			leftID := addAndReadMemoryID(t, test.leftKey, test.left)
+			rightID := addAndReadMemoryID(t, test.rightKey, test.right)
+			require.Equal(t, test.wantEqual, leftID == rightID)
+		})
+	}
+}
+
+func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
+	ctx := context.Background()
+	tc := replayStateScopeCase("state-scope-success")
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+
+	_, err := Run(ctx, Backend{
+		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+	}, tc)
+	require.NoError(t, err)
+	peerKey := replayKey(tc.Name)
+	peerKey.SessionID += "-scope-peer"
+	peer, err := sessionService.GetSession(ctx, peerKey)
+	require.NoError(t, err)
+	require.Nil(t, peer)
+	require.Equal(t, session.StateMap{"nil": nil}, stateWithoutPrefix(
+		session.StateMap{session.StateAppPrefix + "nil": nil}, session.StateAppPrefix,
+	))
+	require.Equal(t, session.StateMap{
+		session.StateAppPrefix + "nil":  nil,
+		session.StateUserPrefix + "nil": nil,
+	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
+}
+
+func TestRunRejectsIncorrectStateScopes(t *testing.T) {
+	tests := []struct {
+		name            string
+		configure       func(*scopeSessionService)
+		wantErrors      []string
+		wantDeleteCalls int
+	}{
+		{
+			name:       "app state read mismatch",
+			configure:  func(service *scopeSessionService) { service.emptyAppState = true },
+			wantErrors: []string{"app state for case"},
+		},
+		{
+			name: "app state read failure",
+			configure: func(service *scopeSessionService) {
+				service.listAppErr = errors.New("list app failed")
+			},
+			wantErrors: []string{"list app state", "list app failed"},
+		},
+		{
+			name: "user state read failure",
+			configure: func(service *scopeSessionService) {
+				service.listUserErr = errors.New("list user failed")
+			},
+			wantErrors: []string{"list user state", "list user failed"},
+		},
+		{
+			name: "peer create failure",
+			configure: func(service *scopeSessionService) {
+				service.createPeerErr = errors.New("create peer failed")
+			},
+			wantErrors: []string{"create state-scope peer", "create peer failed"},
+		},
+		{
+			name:            "peer create returns nil",
+			configure:       func(service *scopeSessionService) { service.nilCreatePeer = true },
+			wantErrors:      []string{"create state-scope peer", "returned nil"},
+			wantDeleteCalls: 1,
+		},
+		{
+			name: "peer read failure",
+			configure: func(service *scopeSessionService) {
+				service.getPeerErr = errors.New("get peer failed")
+			},
+			wantErrors:      []string{"get state-scope peer", "get peer failed"},
+			wantDeleteCalls: 1,
+		},
+		{
+			name:            "peer read returns nil",
+			configure:       func(service *scopeSessionService) { service.nilGetPeer = true },
+			wantErrors:      []string{"get state-scope peer", "returned nil"},
+			wantDeleteCalls: 1,
+		},
+		{
+			name:       "peer does not inherit",
+			configure:  func(service *scopeSessionService) { service.stripPeerState = true },
+			wantErrors: []string{"peer state for case"}, wantDeleteCalls: 1,
+		},
+		{
+			name:       "cleanup failure",
+			configure:  func(service *scopeSessionService) { service.deleteErr = errors.New("cleanup failed") },
+			wantErrors: []string{"delete state-scope peer", "cleanup failed"}, wantDeleteCalls: 1,
+		},
+		{
+			name: "validation and cleanup failures",
+			configure: func(service *scopeSessionService) {
+				service.stripPeerState = true
+				service.deleteErr = errors.New("cleanup failed")
+			},
+			wantErrors: []string{"peer state for case", "delete state-scope peer", "cleanup failed"}, wantDeleteCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := sessinmemory.NewSessionService()
+			defer base.Close()
+			sessionService := &scopeSessionService{Service: base}
+			test.configure(sessionService)
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+
+			_, err := Run(context.Background(), Backend{
+				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+			}, replayStateScopeCase(strings.ReplaceAll(test.name, " ", "-")))
+			require.Error(t, err)
+			for _, want := range test.wantErrors {
+				require.ErrorContains(t, err, want)
+			}
+			require.Equal(t, test.wantDeleteCalls, sessionService.deleteCalls)
+		})
+	}
+}
+
+type emptyUpdateResultMemoryService struct {
+	memory.Service
+}
+
+func (s *emptyUpdateResultMemoryService) UpdateMemory(
+	ctx context.Context,
+	key memory.Key,
+	content string,
+	topics []string,
+	opts ...memory.UpdateOption,
+) error {
+	if err := s.Service.UpdateMemory(ctx, key, content, topics, opts...); err != nil {
+		return err
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = ""
+	}
+	return nil
+}
+
+type orderedReadMemoryService struct {
+	memory.Service
+}
+
+func (s *orderedReadMemoryService) ReadMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	entries, err := s.Service.ReadMemories(ctx, userKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		left := entries[i].Memory.EventTime
+		right := entries[j].Memory.EventTime
+		if left == nil || right == nil {
+			return entries[i].ID < entries[j].ID
+		}
+		return left.Before(*right)
+	})
+	return entries, nil
+}
+
+type fixedReadMemoryService struct {
+	memory.Service
+	entries []*memory.Entry
+	readErr error
+}
+
+func (s *fixedReadMemoryService) ReadMemories(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	return s.entries, nil
+}
+
+func addAndReadMemoryID(t *testing.T, userKey memory.UserKey, op MemoryOp) string {
+	t.Helper()
+	service := meminmemory.NewMemoryService()
+	t.Cleanup(func() { require.NoError(t, service.Close()) })
+	var opts []memory.AddOption
+	if op.Metadata != nil {
+		opts = append(opts, memory.WithMetadata(op.Metadata))
+	}
+	require.NoError(t, service.AddMemory(
+		context.Background(), userKey, op.Content, append([]string(nil), op.Topics...), opts...,
+	))
+	entries, err := service.ReadMemories(context.Background(), userKey, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	return entries[0].ID
+}
+
+func replayStateScopeCase(name string) Case {
+	return Case{
+		Name: name,
+		InitialState: session.StateMap{
+			"session:init": []byte(`{"ready":true}`),
+		},
+		AppState: session.StateMap{
+			session.StateAppPrefix + "feature": []byte(`{"enabled":true}`),
+		},
+		UserState: session.StateMap{
+			session.StateUserPrefix + "locale": []byte(`"zh-CN"`),
+		},
+		SessionState: session.StateMap{
+			session.StateTempPrefix + "scratch": []byte("working"),
+			"session:mode":                      []byte(`{"name":"matrix"}`),
+		},
+	}
+}
+
+type scopeSessionService struct {
+	session.Service
+	emptyAppState  bool
+	stripPeerState bool
+	deleteErr      error
+	listAppErr     error
+	listUserErr    error
+	createPeerErr  error
+	getPeerErr     error
+	nilCreatePeer  bool
+	nilGetPeer     bool
+	deleteCalls    int
+}
+
+func (s *scopeSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
+	if s.listAppErr != nil {
+		return nil, s.listAppErr
+	}
+	if s.emptyAppState {
+		return session.StateMap{}, nil
+	}
+	return s.Service.ListAppStates(ctx, appName)
+}
+
+func (s *scopeSessionService) ListUserStates(
+	ctx context.Context,
+	key session.UserKey,
+) (session.StateMap, error) {
+	if s.listUserErr != nil {
+		return nil, s.listUserErr
+	}
+	return s.Service.ListUserStates(ctx, key)
+}
+
+func (s *scopeSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.createPeerErr != nil {
+		return nil, s.createPeerErr
+	}
+	got, err := s.Service.CreateSession(ctx, key, state, opts...)
+	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") && s.nilCreatePeer {
+		return nil, nil
+	}
+	return got, err
+}
+
+func (s *scopeSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) (*session.Session, error) {
+	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.getPeerErr != nil {
+		return nil, s.getPeerErr
+	}
+	got, err := s.Service.GetSession(ctx, key, opts...)
+	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") && s.nilGetPeer {
+		return nil, nil
+	}
+	if err != nil || got == nil || !s.stripPeerState || !strings.HasSuffix(key.SessionID, "-scope-peer") {
+		return got, err
+	}
+	for stateKey := range got.SnapshotState() {
+		if strings.HasPrefix(stateKey, session.StateAppPrefix) || strings.HasPrefix(stateKey, session.StateUserPrefix) {
+			got.DeleteState(stateKey)
+		}
+	}
+	return got, nil
+}
+
+func (s *scopeSessionService) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	opts ...session.Option,
+) error {
+	s.deleteCalls++
+	if err := s.Service.DeleteSession(ctx, key, opts...); err != nil {
+		return err
+	}
+	return s.deleteErr
 }
 
 type failingMemoryService struct {

@@ -79,6 +79,10 @@ snapshot 覆盖以下 section：
 
 每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
+Memory 操作别名按完整 canonical identity 解析，而不是只比较 content。Add alias 会比较 app、user、content、kind、event time、participants 和 location，并刻意排除 topics。Update 每次都会用后端返回的有效 ID 推进原 `Ref` alias，因此内容或身份元数据导致 ID 轮换后，后续 update/delete 不会继续使用旧 ID。
+
+包含 app、user 或 session state 的 case 还会直接验证作用域契约。Runner 分别读取 app/user state，并在同一 app/user 下创建临时 peer session；peer 必须只继承 app/user 值，且会在所有返回路径中删除。app/user 传播缺失、session/temp state 泄漏和 peer 清理失败都是 runner error，不属于 snapshot diff，也不能通过 `allowed_diff` 放行。
+
 ## Summary 与 Track 策略
 
 Go 版 summary 使用原生 session summary 语义，不生成 Python 风格的 summary event，也不比较 historical summary event。

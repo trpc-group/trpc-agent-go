@@ -1104,6 +1104,7 @@ func TestReplayConsistencyMatrix_BasicCases(t *testing.T) {
 				results = append(results, runReplayCaseOnBackend(t, ctx, backend, tc))
 			}
 			requireReplayCaseIsolation(t, tc, results)
+			requireReplayCaseSemantics(t, tc, results)
 			diffs := compareReplayCaseResults(tc, results)
 			allDiffs = append(allDiffs, diffs...)
 			require.Falsef(
@@ -1182,8 +1183,35 @@ func requireReplayCaseIsolation(
 	}
 }
 
+func requireReplayCaseSemantics(
+	t *testing.T,
+	tc replayCase,
+	results []replayCaseResult,
+) {
+	t.Helper()
+
+	if tc.name != "memory_same_content_identity" {
+		return
+	}
+	require.NotEmpty(t, tc.memories)
+	want := tc.memories[0]
+	require.NotNil(t, want.metadata)
+	require.NotNil(t, want.metadata.EventTime)
+	for _, result := range results {
+		require.Lenf(t, result.snapshot.Memory, 1, "backend=%s", result.backend)
+		got := result.snapshot.Memory[0]
+		require.Equal(t, want.content, got.Content, "backend=%s", result.backend)
+		require.Equal(t, want.topics, got.Topics, "backend=%s", result.backend)
+		require.Equal(t, string(want.metadata.Kind), got.Kind, "backend=%s", result.backend)
+		require.Equal(t, normalizeReplayTime(*want.metadata.EventTime), got.EventTime, "backend=%s", result.backend)
+		require.Equal(t, want.metadata.Participants, got.Participants, "backend=%s", result.backend)
+		require.Equal(t, want.metadata.Location, got.Location, "backend=%s", result.backend)
+	}
+}
+
 func basicReplayCases() []replayCase {
 	episodeTime := time.Date(2026, 7, 1, 3, 0, 0, 0, time.UTC)
+	secondEpisodeTime := episodeTime.Add(time.Hour)
 	toolCallIndex := 0
 	return []replayCase{
 		{
@@ -1335,6 +1363,33 @@ func basicReplayCases() []replayCase {
 						"User visited Shenzhen library with Ada.",
 					},
 				},
+			},
+		},
+		{
+			name: "memory_same_content_identity",
+			memories: []memoryOpSpec{
+				{
+					name: "add first review episode", op: "add", resultAlias: "first_review",
+					content: "User attended the quarterly project review.",
+					topics:  []string{"episode", "review"},
+					metadata: replayMemoryMetadata(
+						memory.KindEpisode, &episodeTime, []string{"Ada", "User"}, "Shenzhen",
+					),
+				},
+				{
+					name: "add second review episode", op: "add", resultAlias: "second_review",
+					content: "User attended the quarterly project review.",
+					topics:  []string{"episode", "review"},
+					metadata: replayMemoryMetadata(
+						memory.KindEpisode, &secondEpisodeTime, []string{"Bob", "User"}, "Guangzhou",
+					),
+				},
+				{
+					name: "update second review episode", op: "update", ref: "second_review",
+					content: "User attended the follow-up quarterly project review.",
+					topics:  []string{"episode", "follow-up", "review"},
+				},
+				{name: "delete second review episode", op: "delete", ref: "second_review"},
 			},
 		},
 		{
