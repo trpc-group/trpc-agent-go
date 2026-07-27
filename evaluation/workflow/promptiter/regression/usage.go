@@ -81,6 +81,12 @@ func buildCandidateUsages(
 		if err != nil {
 			return nil, fmt.Errorf("round %d cumulative usage: %w", round.Round, err)
 		}
+		// PromptIterLatency is measured around the complete Engine.Run call. The
+		// stage durations are useful attribution detail but may omit framework
+		// overhead or overlap, so never allow them to understate the gate input.
+		if cumulativeSummary.PromptIterLatency < supplement.PromptIterLatency {
+			cumulativeSummary.PromptIterLatency = supplement.PromptIterLatency
+		}
 		result[round.Round] = candidateUsage{round: roundSummary, cumulative: cumulativeSummary}
 	}
 	return result, nil

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -47,7 +48,7 @@ func TestCaptureOutputCollectsStructuredOutputAndFinalContent(t *testing.T) {
 
 	output, err := CaptureOutput(events)
 
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"k": "v"}, output.StructuredOutput)
 	assert.Equal(t, "final content", output.FinalContent)
 	assert.Equal(t, 1, output.Usage.Calls)

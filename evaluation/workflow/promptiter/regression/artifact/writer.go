@@ -22,6 +22,8 @@ import (
 )
 
 // WriteReports renders and atomically stores the final JSON and Markdown reports.
+// It returns portable File.Name values plus host-local File.Path values as
+// documented by File. ctx may cancel before publication; result is read-only.
 func WriteReports(
 	ctx context.Context,
 	store *Store,

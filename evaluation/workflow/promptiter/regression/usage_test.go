@@ -99,3 +99,14 @@ func TestBuildCandidateUsagesSeparatesRoundAndCumulativeTotals(t *testing.T) {
 	assert.Equal(t, 6*time.Second, result[2].cumulative.PromptIterLatency)
 	assert.InDelta(t, .6, result[2].cumulative.EstimatedCost, 1e-9)
 }
+
+func TestBuildCandidateUsagesUsesMeasuredRunLatencyAsGateLowerBound(t *testing.T) {
+	source := &engine.RunResult{
+		BaselineValidation: &engine.EvaluationResult{Duration: time.Second, Usage: promptiter.Usage{Complete: true}},
+		Rounds:             []engine.RoundResult{{Round: 1, Duration: time.Second, Usage: promptiter.Usage{Complete: true}}},
+	}
+	usage := UsageSupplement{PromptIterLatency: 3 * time.Second}
+	result, err := buildCandidateUsages(source, usage)
+	require.NoError(t, err)
+	assert.Equal(t, 3*time.Second, result[1].cumulative.PromptIterLatency)
+}

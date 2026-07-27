@@ -274,11 +274,25 @@ func sanitizeGateDecision(
 			result.Rules[index] = rule
 			result.Rules[index].Rule = sanitizeContent(policy, rule.Rule)
 			result.Rules[index].Reason = sanitizeContent(policy, rule.Reason)
-			result.Rules[index].Observed = sanitizeArbitraryValue(rule.Observed, policy)
-			result.Rules[index].Threshold = sanitizeArbitraryValue(rule.Threshold, policy)
+			result.Rules[index].Observed = sanitizeRuleValue(rule.Observed, policy)
+			result.Rules[index].Threshold = sanitizeRuleValue(rule.Threshold, policy)
 		}
 	}
 	return &result
+}
+
+func sanitizeRuleValue(source RuleValue, policy AuditPolicy) RuleValue {
+	result := source
+	if source.Type == RuleValueText {
+		result.Value = sanitizeContent(policy, source.Value)
+	}
+	if err := result.validate(); err != nil {
+		// Renderers may be called directly, bypassing Analyzer's dependency
+		// validation. Normalize malformed external values so they remain redacted
+		// and preserve the documented JSON type contract at persistence time.
+		return TextRuleValue("[invalid rule value]")
+	}
+	return result
 }
 
 func sanitizeStrings(source []string, policy AuditPolicy) []string {
@@ -326,6 +340,7 @@ func SanitizeRunResult(source *RunResult) (*RunResult, error) {
 	policy := AuditPolicy{}
 	if result.Spec != nil {
 		policy = result.Spec.Audit
+		result.Spec.InputFingerprint = sanitizeInputFingerprint(policy, result.Spec.InputFingerprint)
 		result.Spec.Metadata = sanitizeMetadata(result.Spec.Metadata, policy)
 	}
 	result.ErrorMessage = sanitizeContent(policy, result.ErrorMessage)
@@ -342,6 +357,14 @@ func SanitizeRunResult(source *RunResult) (*RunResult, error) {
 		sanitizeCandidateResult(&result.Candidates[index], policy)
 	}
 	return &result, nil
+}
+
+func sanitizeInputFingerprint(policy AuditPolicy, value string) string {
+	value = sanitizeContent(policy, value)
+	if value == "" || inputFingerprintPattern.MatchString(value) {
+		return value
+	}
+	return redactedValue
 }
 
 // prepareRunResultForClone replaces the two extensible value graphs that can

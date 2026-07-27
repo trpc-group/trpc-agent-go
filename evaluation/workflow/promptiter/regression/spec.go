@@ -22,6 +22,7 @@ import (
 )
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+var inputFingerprintPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)
 
 var windowsReservedRunIDNames = map[string]struct{}{
 	"AUX": {}, "CON": {}, "NUL": {}, "PRN": {},
@@ -50,6 +51,9 @@ func (s *RunSpec) Validate() error {
 		}
 	}
 	if err := ValidateRunID(s.RunID); err != nil {
+		return err
+	}
+	if err := ValidateInputFingerprint(s.InputFingerprint); err != nil {
 		return err
 	}
 	if s.Runtime.NumRuns <= 0 {
@@ -90,6 +94,15 @@ func (s *RunSpec) Validate() error {
 			return fmt.Errorf("duplicate critical case id %q", caseID)
 		}
 		seenCases[caseID] = struct{}{}
+	}
+	return nil
+}
+
+// ValidateInputFingerprint checks that an input fingerprint is a canonical
+// SHA-256 digest suitable for JSON and Markdown reports.
+func ValidateInputFingerprint(value string) error {
+	if !inputFingerprintPattern.MatchString(value) {
+		return errors.New("input fingerprint must be a lowercase 64-character SHA-256 hex digest")
 	}
 	return nil
 }

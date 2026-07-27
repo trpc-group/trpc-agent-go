@@ -12,6 +12,11 @@ package regression
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -48,31 +53,58 @@ const (
 
 // RunSpec contains caller-controlled audit and release policy inputs.
 type RunSpec struct {
-	RunID            string                  `json:"runId"`
-	TargetSurfaceID  string                  `json:"targetSurfaceId"`
-	MetricPolicies   map[string]MetricPolicy `json:"metricPolicies"`
-	CriticalCaseIDs  []string                `json:"criticalCaseIds,omitempty"`
-	Gate             GatePolicy              `json:"gate"`
-	Budget           BudgetPolicy            `json:"budget"`
-	Runtime          RuntimePolicy           `json:"runtime"`
-	Audit            AuditPolicy             `json:"audit,omitempty"`
-	InputFingerprint string                  `json:"inputFingerprint"`
-	Metadata         map[string]string       `json:"metadata,omitempty"`
+	// RunID identifies this audit and its report bundle. It must satisfy
+	// ValidateRunID and be unique within the selected artifact store.
+	RunID string `json:"runId"`
+	// TargetSurfaceID identifies the only profile surface a candidate may
+	// change. It must be non-empty and present in the audited profiles.
+	TargetSurfaceID string `json:"targetSurfaceId"`
+	// MetricPolicies defines every metric considered by delta and gate
+	// evaluation. It must contain at least one valid policy.
+	MetricPolicies map[string]MetricPolicy `json:"metricPolicies"`
+	// CriticalCaseIDs identifies validation cases that must not regress. Each
+	// ID must be unique and present in baseline validation evidence.
+	CriticalCaseIDs []string `json:"criticalCaseIds,omitempty"`
+	// Gate defines the deterministic release policy applied to each candidate.
+	Gate GatePolicy `json:"gate"`
+	// Budget defines optional resource limits. A zero limit disables the
+	// corresponding limit unless its field documentation states otherwise.
+	Budget BudgetPolicy `json:"budget"`
+	// Runtime declares reproducibility evidence for the audited execution.
+	Runtime RuntimePolicy `json:"runtime"`
+	// Audit controls redaction and retention of report content.
+	Audit AuditPolicy `json:"audit,omitempty"`
+	// InputFingerprint is the lowercase SHA-256 digest of the audited inputs.
+	// It must use the format accepted by ValidateInputFingerprint so it can be
+	// persisted and rendered safely.
+	InputFingerprint string `json:"inputFingerprint"`
+	// Metadata contains optional caller annotations. Values are copied and
+	// sanitized before they are retained in a report.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // MetricPolicy configures weighting, floors, and hard-failure semantics.
 type MetricPolicy struct {
-	Weight   float64 `json:"weight"`
-	Floor    float64 `json:"floor,omitempty"`
-	HardFail bool    `json:"hardFail,omitempty"`
+	// Weight is a finite positive contribution to weighted score deltas.
+	Weight float64 `json:"weight"`
+	// Floor is the optional minimum validation metric score. Zero disables the
+	// floor rule for this metric.
+	Floor float64 `json:"floor,omitempty"`
+	// HardFail marks a newly failing metric as a mandatory gate rejection.
+	HardFail bool `json:"hardFail,omitempty"`
 }
 
 // GatePolicy configures deterministic validation acceptance rules.
 type GatePolicy struct {
-	MinValidationGain    float64 `json:"minValidationGain"`
-	MaxCaseRegression    float64 `json:"maxCaseRegression"`
+	// MinValidationGain is the minimum weighted validation-score delta.
+	MinValidationGain float64 `json:"minValidationGain"`
+	// MaxCaseRegression is the largest permitted per-metric validation decline.
+	MaxCaseRegression float64 `json:"maxCaseRegression"`
+	// MaxGeneralizationGap is the optional maximum train-minus-validation
+	// weighted gain. Zero disables this overfitting rule.
 	MaxGeneralizationGap float64 `json:"maxGeneralizationGap,omitempty"`
-	RejectAnyNewFail     bool    `json:"rejectAnyNewFail"`
+	// RejectAnyNewFail rejects a candidate that introduces any validation failure.
+	RejectAnyNewFail bool `json:"rejectAnyNewFail"`
 	// RequirePromptIterAcceptance makes PromptIter's round acceptance a
 	// mandatory release rule instead of advisory evidence.
 	RequirePromptIterAcceptance bool `json:"requirePromptIterAcceptance,omitempty"`
@@ -84,29 +116,45 @@ type GatePolicy struct {
 
 // BudgetPolicy limits aggregate model calls, tokens, cost, and wall time.
 type BudgetPolicy struct {
-	MaxCalls             int           `json:"maxCalls,omitempty"`
-	MaxTokens            int64         `json:"maxTokens,omitempty"`
-	MaxEstimatedCost     float64       `json:"maxEstimatedCost,omitempty"`
+	// MaxCalls is the optional maximum number of model calls; zero disables it.
+	MaxCalls int `json:"maxCalls,omitempty"`
+	// MaxTokens is the optional maximum aggregate token count; zero disables it.
+	MaxTokens int64 `json:"maxTokens,omitempty"`
+	// MaxEstimatedCost is the optional maximum estimated cost; zero disables it.
+	MaxEstimatedCost float64 `json:"maxEstimatedCost,omitempty"`
+	// MaxPromptIterLatency is the optional upper bound on complete PromptIter
+	// latency; zero disables it.
 	MaxPromptIterLatency time.Duration `json:"maxPromptIterLatency,omitempty"`
-	RequireKnownCost     bool          `json:"requireKnownCost,omitempty"`
+	// RequireKnownCost rejects evidence whose cost provenance is unknown.
+	RequireKnownCost bool `json:"requireKnownCost,omitempty"`
 }
 
 // RuntimePolicy records caller-owned reproducibility declarations that are not
 // part of the PromptIter Engine configuration itself.
 type RuntimePolicy struct {
+	// Seed is the caller-declared seed used for reproducibility evidence.
 	Seed int64 `json:"seed"`
 	// SeedApplied is true only when the seed was actually passed to every
 	// stochastic model or optimizer component covered by the audit.
-	SeedApplied   bool `json:"seedApplied"`
-	NumRuns       int  `json:"numRuns"`
+	SeedApplied bool `json:"seedApplied"`
+	// NumRuns is the positive count of complete evaluation runs per case.
+	NumRuns int `json:"numRuns"`
+	// Deterministic declares that all audited execution components were
+	// deterministic under the supplied runtime configuration.
 	Deterministic bool `json:"deterministic,omitempty"`
 }
 
 // PromptIterConfiguration is the effective execution policy retained by the
 // Engine and copied into the audit report.
 type PromptIterConfiguration struct {
-	NumRuns                              int      `json:"numRuns"`
-	TraceUsageCoversAllCalls             bool     `json:"traceUsageCoversAllCalls,omitempty"`
+	NumRuns                  int  `json:"numRuns"`
+	TraceUsageCoversAllCalls bool `json:"traceUsageCoversAllCalls,omitempty"`
+	// RetainAuditEvidence records whether the Engine retained repeated raw
+	// evaluation observations for this run. False is emitted explicitly.
+	RetainAuditEvidence bool `json:"retainAuditEvidence"`
+	// EvaluateFinalCandidateTrain records whether the terminal candidate was
+	// evaluated on training sets. False is emitted explicitly.
+	EvaluateFinalCandidateTrain          bool     `json:"evaluateFinalCandidateTrain"`
 	EvalCaseParallelism                  int      `json:"evalCaseParallelism,omitempty"`
 	EvalCaseParallelInferenceEnabled     bool     `json:"evalCaseParallelInferenceEnabled,omitempty"`
 	EvalCaseParallelEvaluationEnabled    bool     `json:"evalCaseParallelEvaluationEnabled,omitempty"`
@@ -360,13 +408,137 @@ type DeltaReport struct {
 	Cases               []CaseDelta `json:"cases"`
 }
 
-// GateRuleResult records one deterministic gate rule outcome.
+// RuleValueType identifies the scalar encoded by a RuleValue.
+//
+// The type tag keeps report JSON stable. RuleValue is encoded as one JSON
+// string in the form "type|value", while Type tells consumers how to interpret
+// that canonical scalar.
+type RuleValueType string
+
+const (
+	// RuleValueBoolean encodes a boolean value using strconv.FormatBool.
+	RuleValueBoolean RuleValueType = "boolean"
+	// RuleValueInteger encodes a base-10 signed integer.
+	RuleValueInteger RuleValueType = "integer"
+	// RuleValueNumber encodes a finite floating-point number.
+	RuleValueNumber RuleValueType = "number"
+	// RuleValueText encodes arbitrary sanitized text.
+	RuleValueText RuleValueType = "text"
+	// RuleValueDuration encodes a time.Duration using time.Duration.String.
+	RuleValueDuration RuleValueType = "duration"
+)
+
+// RuleValue is a tagged, canonical scalar used in GateRuleResult evidence.
+//
+// Construct values with the helper functions below. Consumers must use Type
+// rather than guessing from Value; this gives JSON reports one stable string
+// representation for every gate rule without inflating report artifacts.
+type RuleValue struct {
+	Type  RuleValueType `json:"type"`
+	Value string        `json:"value"`
+}
+
+// BooleanRuleValue returns a canonical boolean gate value.
+func BooleanRuleValue(value bool) RuleValue {
+	return RuleValue{Type: RuleValueBoolean, Value: strconv.FormatBool(value)}
+}
+
+// IntegerRuleValue returns a canonical signed-integer gate value.
+func IntegerRuleValue(value int64) RuleValue {
+	return RuleValue{Type: RuleValueInteger, Value: strconv.FormatInt(value, 10)}
+}
+
+// NumberRuleValue returns a canonical finite floating-point gate value.
+// Non-finite inputs produce an invalid RuleValue and are rejected by Analyzer.
+func NumberRuleValue(value float64) RuleValue {
+	return RuleValue{Type: RuleValueNumber, Value: strconv.FormatFloat(value, 'g', -1, 64)}
+}
+
+// TextRuleValue returns a textual gate value. Report generation sanitizes its
+// Value according to the audit policy before it crosses a persistence boundary.
+func TextRuleValue(value string) RuleValue {
+	return RuleValue{Type: RuleValueText, Value: value}
+}
+
+// DurationRuleValue returns a canonical duration gate value.
+func DurationRuleValue(value time.Duration) RuleValue {
+	return RuleValue{Type: RuleValueDuration, Value: value.String()}
+}
+
+// String returns RuleValue's canonical scalar representation for display.
+func (v RuleValue) String() string {
+	return v.Value
+}
+
+// MarshalJSON encodes a RuleValue as the stable tagged scalar "type|value".
+func (v RuleValue) MarshalJSON() ([]byte, error) {
+	if err := v.validate(); err != nil {
+		return nil, err
+	}
+	return json.Marshal(string(v.Type) + "|" + v.Value)
+}
+
+// UnmarshalJSON decodes and validates the stable tagged scalar "type|value".
+func (v *RuleValue) UnmarshalJSON(data []byte) error {
+	var encoded string
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return fmt.Errorf("decode rule value: %w", err)
+	}
+	separator := strings.IndexByte(encoded, '|')
+	if separator <= 0 {
+		return fmt.Errorf("invalid tagged rule value %q", encoded)
+	}
+	decoded := RuleValue{
+		Type:  RuleValueType(encoded[:separator]),
+		Value: encoded[separator+1:],
+	}
+	if err := decoded.validate(); err != nil {
+		return err
+	}
+	*v = decoded
+	return nil
+}
+
+func (v RuleValue) validate() error {
+	switch v.Type {
+	case RuleValueBoolean:
+		value, err := strconv.ParseBool(v.Value)
+		if err != nil || strconv.FormatBool(value) != v.Value {
+			return fmt.Errorf("invalid boolean value %q", v.Value)
+		}
+	case RuleValueInteger:
+		value, err := strconv.ParseInt(v.Value, 10, 64)
+		if err != nil || strconv.FormatInt(value, 10) != v.Value {
+			return fmt.Errorf("invalid integer value %q", v.Value)
+		}
+	case RuleValueNumber:
+		value, err := strconv.ParseFloat(v.Value, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) ||
+			strconv.FormatFloat(value, 'g', -1, 64) != v.Value {
+			return fmt.Errorf("invalid finite number value %q", v.Value)
+		}
+	case RuleValueText:
+		// Text is intentionally unconstrained; it is redacted before persistence.
+	case RuleValueDuration:
+		value, err := time.ParseDuration(v.Value)
+		if err != nil || value.String() != v.Value {
+			return fmt.Errorf("invalid duration value %q", v.Value)
+		}
+	default:
+		return fmt.Errorf("unknown rule value type %q", v.Type)
+	}
+	return nil
+}
+
+// GateRuleResult records one deterministic gate rule outcome. Observed and
+// Threshold always use RuleValue's tagged-string JSON schema, never arbitrary
+// JSON values.
 type GateRuleResult struct {
-	Rule      string `json:"rule"`
-	Passed    bool   `json:"passed"`
-	Observed  any    `json:"observed"`
-	Threshold any    `json:"threshold"`
-	Reason    string `json:"reason,omitempty"`
+	Rule      string    `json:"rule"`
+	Passed    bool      `json:"passed"`
+	Observed  RuleValue `json:"observed"`
+	Threshold RuleValue `json:"threshold"`
+	Reason    string    `json:"reason,omitempty"`
 }
 
 // GateInput contains the evidence needed for one candidate decision.
@@ -431,15 +603,26 @@ type RunResult struct {
 
 // Attributor classifies a failed training case.
 type Attributor interface {
+	// Attribute classifies one failed or execution-error training case. The
+	// context controls the call; case must be non-nil and is read-only. A
+	// successful result must be non-nil, identify the same case, and contain a
+	// category, reason, and at least one evidence item.
 	Attribute(context.Context, *CaseResult) (*AttributionResult, error)
 }
 
 // DeltaEngine computes stable case- and metric-level changes.
 type DeltaEngine interface {
+	// Compare computes a deterministic baseline-to-candidate report. Both
+	// snapshots and metricPolicies are read-only and must be valid; a successful
+	// result must be non-nil and describe compatible evidence. Valid but incomplete
+	// evidence is returned with DeltaReport.Complete false so Gate can fail closed.
 	Compare(*EvaluationSnapshot, *EvaluationSnapshot, map[string]MetricPolicy) (*DeltaReport, error)
 }
 
 // Gate applies deterministic acceptance policy to one candidate.
 type Gate interface {
+	// Decide applies release policy to one candidate. input is read-only and
+	// must be non-nil. A successful result must be non-nil and satisfy the
+	// GateDecision evidence contract, including canonical RuleValue fields.
 	Decide(*GateInput) (*GateDecision, error)
 }

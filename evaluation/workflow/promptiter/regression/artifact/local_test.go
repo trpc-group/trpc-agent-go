@@ -60,6 +60,9 @@ func TestWriteReportsCreatesIdempotentCompleteBundle(t *testing.T) {
 	for _, file := range first {
 		assert.NotEmpty(t, file.SHA256)
 		assert.Positive(t, file.Size)
+		assert.True(t, filepath.IsAbs(file.Path))
+		assert.False(t, filepath.IsAbs(filepath.FromSlash(file.Name)))
+		assert.NotContains(t, file.Name, filepath.ToSlash(store.root))
 		_, err := os.Stat(file.Path)
 		require.NoError(t, err)
 	}
@@ -207,7 +210,7 @@ func artifactResult(runID string) *regression.RunResult {
 		Decision:      regression.DecisionRejected,
 		Spec: &regression.RunSpec{
 			RunID:            runID,
-			InputFingerprint: "fixture",
+			InputFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			MetricPolicies: map[string]regression.MetricPolicy{
 				"quality": {Weight: 1},
 			},

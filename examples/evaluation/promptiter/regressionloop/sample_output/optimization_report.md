@@ -8,14 +8,16 @@
 - Random seed: `not applied` (configured value: `7`)
 - Audit runs: `2`
 - Deterministic runtime: `true`
-- Started: `2026-07-17 18:22:01.626 UTC`
-- Finished: `2026-07-17 18:22:01.628 UTC`
-- Duration: `2.097 ms`
+- Started: `2026-07-27 10:47:06.284 UTC`
+- Finished: `2026-07-27 10:47:06.285 UTC`
+- Duration: `0.539 ms`
 
 ## PromptIter execution
 
 - Evaluation runs: `2`
 - Trace usage covers all Evaluation calls: `true`
+- Retain audit evidence: `true`
+- Evaluate final candidate on train: `true`
 - Hard round limit: `4`
 - Acceptance minimum score gain: `0.01`
 - Stop after consecutive unaccepted rounds: `disabled`
@@ -106,8 +108,8 @@ Refunds and unopened returns are allowed within 30 days.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 886 | 0.000000 | true | 5.3606ms | true |
-| cumulative | 28 | 1302 | 0.000000 | true | 8.0351ms | true |
+| round | 18 | 886 | 0.000000 | true | 6.0083ms | true |
+| cumulative | 28 | 1302 | 0.000000 | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -137,9 +139,9 @@ Decision: `rejected`
 | new_hard_failures | true | 0 | 0 |  |
 | critical_regressions | true | 0 | 0 |  |
 | case_regression | true | 0 | 0 |  |
-| validation_gain | false | 0.033333 | 0.2 | validation gain is below the required minimum |
+| validation_gain | false | 0.03333333333333333 | 0.2 | validation gain is below the required minimum |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.008333 | 0.3 |  |
+| generalization_gap | true | 0.008333333333333331 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -166,8 +168,8 @@ Route refund disputes to refund-specialist.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1116 | 0.000000 | true | 5.8814ms | true |
-| cumulative | 46 | 2418 | 0.000000 | true | 13.9165ms | true |
+| round | 18 | 1116 | 0.000000 | true | 4.9568ms | true |
+| cumulative | 46 | 2418 | 0.000000 | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -199,7 +201,7 @@ Decision: `rejected`
 | case_regression | true | 0 | 0 |  |
 | validation_gain | false | 0.1 | 0.2 | validation gain is below the required minimum |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.025 | 0.3 |  |
+| generalization_gap | true | 0.024999999999999994 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -227,8 +229,8 @@ When the user asks for JSON, return only valid JSON.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1336 | 0.000000 | true | 6.2183ms | true |
-| cumulative | 64 | 3754 | 0.000000 | true | 20.1348ms | true |
+| round | 18 | 1336 | 0.000000 | true | 4.8698ms | true |
+| cumulative | 64 | 3754 | 0.000000 | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -258,9 +260,9 @@ Decision: `rejected`
 | new_hard_failures | true | 0 | 0 |  |
 | critical_regressions | true | 0 | 0 |  |
 | case_regression | true | 0 | 0 |  |
-| validation_gain | false | 0.166667 | 0.2 | validation gain is below the required minimum |
+| validation_gain | false | 0.15 | 0.2 | validation gain is below the required minimum |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.041667 | 0.3 |  |
+| generalization_gap | true | 0.037500000000000006 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -289,8 +291,8 @@ For order lookups, call get_order with the order_id argument.
 
 | Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
 |---|---:|---:|---:|---:|---:|---:|
-| round | 26 | 2340 | 0.000000 | true | 6.5055ms | true |
-| cumulative | 90 | 6094 | 0.000000 | true | 26.6403ms | true |
+| round | 26 | 2340 | 0.000000 | true | 8.1389ms | true |
+| cumulative | 90 | 6094 | 0.000000 | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -320,9 +322,9 @@ Decision: `accepted`
 | new_hard_failures | true | 0 | 0 |  |
 | critical_regressions | true | 0 | 0 |  |
 | case_regression | true | 0 | 0 |  |
-| validation_gain | true | 0.266667 | 0.2 |  |
+| validation_gain | true | 0.25 | 0.2 |  |
 | train_delta_available | true | true | true |  |
-| generalization_gap | true | 0.066667 | 0.3 |  |
+| generalization_gap | true | 0.0625 | 0.3 |  |
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
@@ -332,4 +334,4 @@ Decision: `accepted`
 
 ## Usage
 
-Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 46.6345ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.
+Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 49.5554ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.

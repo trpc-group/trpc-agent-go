@@ -87,16 +87,17 @@ func TestPolicyDecideAppliesQualityAndMetricRules(t *testing.T) {
 			configure: func(input *regression.GateInput) {
 				input.Spec.Gate.MaxGeneralizationGap = .1
 				input.TrainDelta.CandidateScore = .5
+				input.TrainDelta.WeightedScoreDelta = .5
 			},
 			decision: regression.DecisionRejected, rule: "generalization_gap",
 		},
 		{
-			name: "validation gain uses overall score delta",
+			name: "validation gain uses weighted score delta",
 			configure: func(input *regression.GateInput) {
 				input.Spec.Gate.MinValidationGain = .15
 				input.ValidationDelta.BaselineScore = .4
-				input.ValidationDelta.CandidateScore = .5
-				input.ValidationDelta.WeightedScoreDelta = .9
+				input.ValidationDelta.CandidateScore = .9
+				input.ValidationDelta.WeightedScoreDelta = .1
 			},
 			decision: regression.DecisionRejected, rule: "validation_gain",
 		},

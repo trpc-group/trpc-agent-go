@@ -23,6 +23,8 @@ func TestPromptIterConfigurationCopiesEffectiveSettings(t *testing.T) {
 	source := validConfiguration()
 	source.StopPolicy.TargetScore = &target
 	source.TargetSurfaceIDs = []string{"target", "secondary"}
+	source.RetainAuditEvidence = true
+	source.EvaluateFinalCandidateTrain = true
 	actual := promptIterConfiguration(source)
 	require.NotNil(t, actual.TargetScore)
 	assert.Equal(t, target, *actual.TargetScore)
@@ -31,6 +33,8 @@ func TestPromptIterConfigurationCopiesEffectiveSettings(t *testing.T) {
 	source.TargetSurfaceIDs[0] = "changed"
 	assert.Equal(t, .8, *actual.TargetScore)
 	assert.Equal(t, "target", actual.TargetSurfaceIDs[0])
+	assert.True(t, actual.RetainAuditEvidence)
+	assert.True(t, actual.EvaluateFinalCandidateTrain)
 }
 
 func TestCloneRunSpecOwnsMutableConfiguration(t *testing.T) {

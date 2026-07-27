@@ -33,10 +33,11 @@ func TestValidateGateDecisionRejectsContradictoryEvidence(t *testing.T) {
 		{name: "unknown decision", decision: &GateDecision{Decision: Decision("unknown")}, error: "unknown decision"},
 		{name: "missing rules", decision: &GateDecision{Decision: DecisionAccepted}, error: "no rule evidence"},
 		{name: "unnamed rule", decision: &GateDecision{Decision: DecisionAccepted, Rules: []GateRuleResult{{Passed: true}}}, error: "unnamed rule"},
-		{name: "failed rule without reason", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain"}}}, error: "has no reason"},
-		{name: "accepted with failed rule", decision: &GateDecision{Decision: DecisionAccepted, Rules: []GateRuleResult{{Rule: "gain", Reason: "too low"}}}, error: "accepted decision contains failed rules"},
-		{name: "rejected without failed rule", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain", Passed: true}}}, error: "no failed rule"},
-		{name: "rejected without reasons", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain", Reason: "too low"}}}, error: "no reasons"},
+		{name: "invalid observed value", decision: &GateDecision{Decision: DecisionAccepted, Rules: []GateRuleResult{{Rule: "gain", Passed: true, Observed: RuleValue{Type: RuleValueNumber, Value: "NaN"}, Threshold: NumberRuleValue(0)}}}, error: "invalid observed value"},
+		{name: "failed rule without reason", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain", Observed: NumberRuleValue(0), Threshold: NumberRuleValue(1)}}}, error: "has no reason"},
+		{name: "accepted with failed rule", decision: &GateDecision{Decision: DecisionAccepted, Rules: []GateRuleResult{{Rule: "gain", Observed: NumberRuleValue(0), Threshold: NumberRuleValue(1), Reason: "too low"}}}, error: "accepted decision contains failed rules"},
+		{name: "rejected without failed rule", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain", Passed: true, Observed: NumberRuleValue(1), Threshold: NumberRuleValue(0)}}}, error: "no failed rule"},
+		{name: "rejected without reasons", decision: &GateDecision{Decision: DecisionRejected, Rules: []GateRuleResult{{Rule: "gain", Observed: NumberRuleValue(0), Threshold: NumberRuleValue(1), Reason: "too low"}}}, error: "no reasons"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -45,8 +46,11 @@ func TestValidateGateDecisionRejectsContradictoryEvidence(t *testing.T) {
 	}
 	require.NoError(t, validateGateDecision(&GateDecision{
 		Decision: DecisionInconclusive,
-		Rules:    []GateRuleResult{{Rule: "usage", Reason: "unknown"}},
-		Reasons:  []string{"usage is incomplete"},
+		Rules: []GateRuleResult{{
+			Rule: "usage", Reason: "unknown",
+			Observed: TextRuleValue("unknown"), Threshold: TextRuleValue("complete usage"),
+		}},
+		Reasons: []string{"usage is incomplete"},
 	}))
 }
 

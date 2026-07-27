@@ -46,7 +46,7 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 	fmt.Fprintf(&builder, "- Decision: `%s`\n", result.Decision)
 	builder.WriteString("- Release authority: `Regression release gate`\n")
 	fmt.Fprintf(&builder, "- Selected candidate: `%s`\n", result.SelectedCandidateID)
-	fmt.Fprintf(&builder, "- Input fingerprint: `%s`\n", result.Spec.InputFingerprint)
+	fmt.Fprintf(&builder, "- Input fingerprint: `%s`\n", escapeInlineCode(result.Spec.InputFingerprint))
 	writeRandomSeed(&builder, result.Spec.Runtime)
 	fmt.Fprintf(&builder, "- Audit runs: `%d`\n", result.Spec.Runtime.NumRuns)
 	fmt.Fprintf(&builder, "- Deterministic runtime: `%t`\n", result.Spec.Runtime.Deterministic)
@@ -164,8 +164,8 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 		for _, rule := range candidate.Gate.Rules {
 			fmt.Fprintf(&builder, "| %s | %t | %s | %s | %s |\n",
 				escapeCell(rule.Rule), rule.Passed,
-				escapeCell(formatReportValue(rule.Observed)),
-				escapeCell(formatReportValue(rule.Threshold)),
+				escapeCell(rule.Observed.String()),
+				escapeCell(rule.Threshold.String()),
 				escapeCell(rule.Reason),
 			)
 		}
@@ -245,6 +245,8 @@ func writePromptIterConfiguration(
 	fmt.Fprintf(builder, "- Evaluation runs: `%d`\n", configuration.NumRuns)
 	fmt.Fprintf(builder, "- Trace usage covers all Evaluation calls: `%t`\n",
 		configuration.TraceUsageCoversAllCalls)
+	fmt.Fprintf(builder, "- Retain audit evidence: `%t`\n", configuration.RetainAuditEvidence)
+	fmt.Fprintf(builder, "- Evaluate final candidate on train: `%t`\n", configuration.EvaluateFinalCandidateTrain)
 	fmt.Fprintf(builder, "- Hard round limit: `%d`\n", configuration.MaxRounds)
 	fmt.Fprintf(builder, "- Acceptance minimum score gain: `%s`\n", formatScore(configuration.MinScoreGain))
 	if configuration.MaxRoundsWithoutAcceptance <= 0 {
@@ -307,19 +309,6 @@ func formatDuration(started, ended time.Time) string {
 
 func formatScore(value float64) string {
 	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.6f", value), "0"), ".")
-}
-
-func formatReportValue(value any) string {
-	switch typed := value.(type) {
-	case float64:
-		return formatScore(typed)
-	case float32:
-		return formatScore(float64(typed))
-	case time.Duration:
-		return typed.String()
-	default:
-		return fmt.Sprint(value)
-	}
 }
 
 func writeAttributionCounts(

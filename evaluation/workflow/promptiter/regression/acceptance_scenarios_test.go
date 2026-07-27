@@ -9,6 +9,7 @@
 package regression_test
 
 import (
+	"errors"
 	"testing"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
@@ -210,11 +211,11 @@ func TestFailureAttributionCompletePipelineScenarios(t *testing.T) {
 			},
 		},
 		{
-			name: "structured tool backend failure", expected: regression.FailureToolResultHandling,
+			name: "explicit tool execution failure", expected: regression.FailureToolResultHandling,
 			prepare: func(result *engine.CaseResult) {
 				passingMetricScenario(result)
 				result.RunDetails[0].Inference.Inferences[0].Tools = []*evalset.Tool{{
-					Name: "get_order", Result: map[string]any{"error": "backend unavailable"},
+					Name: "get_order", Result: errors.New("backend unavailable"),
 				}}
 			},
 		},

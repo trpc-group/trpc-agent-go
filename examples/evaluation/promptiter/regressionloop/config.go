@@ -139,7 +139,7 @@ func (i *inputs) validate() error {
 		Budget:           i.config.Budget,
 		Runtime:          regression.RuntimePolicy{Seed: i.config.Seed, NumRuns: i.config.NumRuns, Deterministic: true},
 		Audit:            i.config.Audit,
-		InputFingerprint: "computed-after-validation",
+		InputFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	}).Validate()
 }
 

@@ -376,46 +376,14 @@ func adaptObservation(
 	return observation, input, true
 }
 
-// toolResultError extracts an explicit failure message from the tool result
-// captured by the evaluation service. evalset.Tool does not carry a separate
-// error field, so only conventional structured error keys are treated as
-// failures; ordinary string results remain successful tool output.
+// toolResultError extracts an explicit Go execution error from a tool result.
+// Tool result maps are business payloads: fields such as "error" are not a
+// reliable execution-error contract and must remain available to evaluators.
 func toolResultError(result any) string {
 	if err, ok := result.(error); ok && err != nil {
 		return strings.TrimSpace(err.Error())
 	}
-	for _, values := range []map[string]any{
-		asStringAnyMap(result),
-		asStringStringMap(result),
-	} {
-		for _, key := range []string{"error", "errorMessage", "err"} {
-			if value, ok := values[key]; ok && value != nil {
-				if message := strings.TrimSpace(fmt.Sprint(value)); message != "" {
-					return message
-				}
-			}
-		}
-	}
 	return ""
-}
-
-func asStringAnyMap(value any) map[string]any {
-	if values, ok := value.(map[string]any); ok {
-		return values
-	}
-	return nil
-}
-
-func asStringStringMap(value any) map[string]any {
-	values, ok := value.(map[string]string)
-	if !ok {
-		return nil
-	}
-	result := make(map[string]any, len(values))
-	for key, value := range values {
-		result[key] = value
-	}
-	return result
 }
 
 func marshalAuditValue(value any) string {

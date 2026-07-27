@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	atrace "trpc.group/trpc-go/trpc-agent-go/agent/trace"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -107,6 +109,20 @@ func TestAnalyzerReturnsFailedResultForInvalidSpec(t *testing.T) {
 	if err == nil || result.Status != regression.RunStatusFailed || result.ErrorMessage == "" {
 		t.Fatalf("result=%+v err=%v", result, err)
 	}
+}
+
+func TestAnalyzerRetainsValidSpecWhenSourcePreflightFails(t *testing.T) {
+	analyzer, err := regression.New(regression.Dependencies{
+		Attributor: attribution.NewRules(), DeltaEngine: delta.New(0), Gate: gate.NewPolicy(),
+	})
+	require.NoError(t, err)
+	spec := auditSpec()
+	result, err := analyzer.Analyze(context.Background(), spec, nil, regression.UsageSupplement{})
+	require.ErrorContains(t, err, "PromptIter result is nil")
+	assert.Equal(t, regression.RunStatusFailed, result.Status)
+	assert.Equal(t, spec.RunID, result.RunID)
+	require.NotNil(t, result.Spec)
+	assert.Equal(t, spec.InputFingerprint, result.Spec.InputFingerprint)
 }
 
 func TestAnalyzerReturnsCanceledResultWhenAttributionIsCanceled(t *testing.T) {
@@ -686,10 +702,8 @@ func TestScenarioCustomPolicyModulesCannotLeakSecretsIntoAudit(t *testing.T) {
 				Reasons:  []string{"access_token=gate-reason-secret"},
 				Rules: []regression.GateRuleResult{{
 					Rule: "custom", Passed: true,
-					Observed: map[string]any{
-						"secret":  "observed-secret",
-						"payload": failingAuditPayload{secret: "gate-payload-secret"},
-					},
+					Observed:  regression.TextRuleValue("api_key=observed-secret"),
+					Threshold: regression.TextRuleValue("not applicable"),
 				}},
 			}, nil
 		}),
@@ -721,8 +735,8 @@ func TestScenarioCustomPolicyModulesCannotLeakSecretsIntoAudit(t *testing.T) {
 			t.Fatalf("custom policy output leaked %q: %s", secret, serialized)
 		}
 	}
-	if !strings.Contains(serialized, "[UNSERIALIZABLE:") {
-		t.Fatalf("custom gate payload was not converted to safe audit evidence: %s", serialized)
+	if !strings.Contains(serialized, `"text|`) {
+		t.Fatalf("custom gate value did not keep the stable typed schema: %s", serialized)
 	}
 }
 
@@ -997,7 +1011,7 @@ func completeTestCostBreakdown(
 func auditSpec() *regression.RunSpec {
 	return &regression.RunSpec{
 		RunID: "run", TargetSurfaceID: "agent#instruction",
-		InputFingerprint: "fingerprint",
+		InputFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		Runtime:          regression.RuntimePolicy{Seed: 7, NumRuns: 1},
 		MetricPolicies: map[string]regression.MetricPolicy{
 			"quality": {Weight: 1},

@@ -19,11 +19,21 @@ import (
 )
 
 // File describes one generated report file.
+//
+// Name is the slash-separated, portable path relative to the report-store
+// root. Path is the absolute, symlink-resolved path on the host that wrote the
+// bundle; it is provided for immediate local access and must not be used as a
+// portable identifier. SHA256 is the lowercase SHA-256 digest of file content,
+// and Size is the content length in bytes.
 type File struct {
-	Name   string `json:"name"`
-	Path   string `json:"path"`
+	// Name is the portable slash-separated path relative to the store root.
+	Name string `json:"name"`
+	// Path is the absolute, resolved host path of this file.
+	Path string `json:"path"`
+	// SHA256 is the lowercase SHA-256 digest of the file content.
 	SHA256 string `json:"sha256"`
-	Size   int64  `json:"size"`
+	// Size is the file content length in bytes.
+	Size int64 `json:"size"`
 }
 
 // Store owns the resolved directory beneath which report bundles are written.
@@ -31,7 +41,11 @@ type Store struct {
 	root string
 }
 
-// NewStore creates a local report store.
+// NewStore creates a local report store rooted at root. It rejects a blank
+// root, creates the directory with owner-readable permissions when necessary,
+// and resolves it to an absolute physical host path. The store therefore owns
+// local filesystem state; callers needing portable report references should
+// retain File.Name and SHA256 rather than the resolved root or File.Path.
 func NewStore(root string) (*Store, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("artifact root is empty")

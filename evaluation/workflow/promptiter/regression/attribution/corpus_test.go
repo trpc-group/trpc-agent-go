@@ -26,6 +26,11 @@ type attributionCorpusEntry struct {
 	Case     regression.CaseResult      `json:"case"`
 }
 
+const (
+	minimumAttributionRecall = .80
+	maximumFalsePositiveRate = .15
+)
+
 func TestFrozenAttributionCorpus(t *testing.T) {
 	data, err := os.ReadFile("testdata/corpus.json")
 	require.NoError(t, err)
@@ -36,11 +41,20 @@ func TestFrozenAttributionCorpus(t *testing.T) {
 	matrix := make(map[regression.FailureCategory]map[regression.FailureCategory]int)
 	totals := make(map[regression.FailureCategory]int)
 	correct := make(map[regression.FailureCategory]int)
+	negativeCases := 0
+	falsePositives := 0
 	for _, entry := range corpus {
 		actual, attributeErr := NewRules().Attribute(context.Background(), &entry.Case)
 		require.NoError(t, attributeErr, entry.ID)
 		require.NotEmpty(t, actual.Reason, entry.ID)
 		require.NotEmpty(t, actual.Evidence, entry.ID)
+		if entry.Expected == regression.FailureUnknown {
+			negativeCases++
+			if actual.Category != regression.FailureUnknown {
+				falsePositives++
+			}
+			continue
+		}
 		if matrix[entry.Expected] == nil {
 			matrix[entry.Expected] = make(map[regression.FailureCategory]int)
 		}
@@ -65,5 +79,9 @@ func TestFrozenAttributionCorpus(t *testing.T) {
 		require.GreaterOrEqual(t, float64(correct[category])/float64(totals[category]), .50,
 			"category %s is below minimum accuracy", category)
 	}
-	require.GreaterOrEqual(t, float64(allCorrect)/float64(len(corpus)), .75)
+	require.GreaterOrEqual(t, float64(allCorrect)/float64(len(corpus)-negativeCases), minimumAttributionRecall)
+	require.GreaterOrEqual(t, negativeCases, 4, "corpus must contain independent no-attribution cases")
+	falsePositiveRate := float64(falsePositives) / float64(negativeCases)
+	t.Logf("attribution negatives=%d false_positives=%d rate=%.3f", negativeCases, falsePositives, falsePositiveRate)
+	require.LessOrEqual(t, falsePositiveRate, maximumFalsePositiveRate)
 }

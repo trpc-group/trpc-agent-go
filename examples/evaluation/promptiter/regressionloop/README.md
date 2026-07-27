@@ -39,9 +39,10 @@ Usage accounting has one authority. Calls, input tokens, output tokens, total
 tokens, and completeness come from Engine telemetry; callers cannot replace
 or declare those fields. Each `RoundResult` carries the usage and execution
 duration of that round, while the audit exposes both round-only and cumulative
-candidate summaries. Candidate resource gates use the cumulative summary, so
-an early candidate cannot spend a later round's budget and a late candidate
-cannot hide earlier work. A caller may supplement only facts the Engine cannot
+candidate summaries. Candidate resource gates use the cumulative summary, with
+the measured complete `Engine.Run` latency as a lower bound so framework
+overhead and overlapping stages cannot hide a latency-budget breach. A caller
+may supplement only facts the Engine cannot
 derive: measured PromptIter latency and an exact baseline/per-round cost
 breakdown with its pricing source. The Analyzer rejects missing, extra, or
 inconsistent cost entries before any budget rule runs. `promptIterLatency`

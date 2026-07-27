@@ -85,7 +85,7 @@ func TestSelectedProfileAllowsRepeatedProfileWithUniqueCandidateIDs(t *testing.T
 	assert.Equal(t, "same-output", *selected.Overrides[0].Value.Text)
 }
 
-func TestSelectionUsesOverallScoreAndStableTieBreakers(t *testing.T) {
+func TestSelectionUsesWeightedScoreAndStableTieBreakers(t *testing.T) {
 	accepted := func(id string, round int, gain, weightedGain float64) CandidateResult {
 		return CandidateResult{
 			Candidate: Candidate{ID: id, Round: round},
@@ -98,7 +98,7 @@ func TestSelectionUsesOverallScoreAndStableTieBreakers(t *testing.T) {
 	result := &RunResult{Candidates: []CandidateResult{
 		{Candidate: Candidate{ID: "ignored", Round: 1}},
 		{Candidate: Candidate{ID: "uncertain", Round: 2}, Gate: &GateDecision{Decision: DecisionInconclusive}},
-		accepted("weighted-only", 1, .1, .9),
+		accepted("raw-only", 1, .9, .1),
 		accepted("later", 3, .2, .2),
 		accepted("zeta", 2, .2, .2),
 		accepted("alpha", 2, .2, .2),

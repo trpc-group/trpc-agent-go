@@ -11,6 +11,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"math"
 	"os"
 	"testing"
 	"time"
@@ -1430,6 +1431,28 @@ func TestValidateRunRequest(t *testing.T) {
 			NumRuns: -1,
 		},
 	}), "evaluation num runs must be non-negative")
+	for _, test := range []struct {
+		name   string
+		mutate func(*promptiterengine.RunRequest)
+		want   string
+	}{
+		{name: "negative evaluation parallelism", mutate: func(request *promptiterengine.RunRequest) { request.EvaluationOptions.EvalCaseParallelism = -1 }, want: "evaluation case parallelism must be non-negative"},
+		{name: "non-finite minimum gain", mutate: func(request *promptiterengine.RunRequest) { request.AcceptancePolicy.MinScoreGain = math.NaN() }, want: "acceptance minimum score gain must be finite"},
+		{name: "negative stop rounds", mutate: func(request *promptiterengine.RunRequest) { request.StopPolicy.MaxRoundsWithoutAcceptance = -1 }, want: "max rounds without acceptance must be non-negative"},
+		{name: "non-finite target score", mutate: func(request *promptiterengine.RunRequest) {
+			value := math.Inf(1)
+			request.StopPolicy.TargetScore = &value
+		}, want: "stop target score must be finite"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := &promptiterengine.RunRequest{
+				Train: testEvalSetInputs("train"), Validation: testEvalSetInputs("validation"),
+				MaxRounds: 1, TargetSurfaceIDs: []string{"candidate#instruction"},
+			}
+			test.mutate(request)
+			assert.EqualError(t, validateRunRequest(request), test.want)
+		})
+	}
 	assert.EqualError(t, validateRunRequest(&promptiterengine.RunRequest{
 		Train:      testEvalSetInputs("train"),
 		Validation: testEvalSetInputs("validation"),

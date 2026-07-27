@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression"
 )
@@ -52,8 +53,8 @@ type decisionBuilder struct {
 func (b *decisionBuilder) add(
 	rule string,
 	passed bool,
-	observed any,
-	threshold any,
+	observed regression.RuleValue,
+	threshold regression.RuleValue,
 	reason string,
 	inconclusive bool,
 ) {
@@ -85,7 +86,7 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 			reason = "PromptIter did not accept this round"
 		}
 		b.add("promptiter_acceptance", input.PromptIterAccepted,
-			input.PromptIterAccepted, true, reason, false)
+			booleanValue(input.PromptIterAccepted), booleanValue(true), reason, false)
 	} else if !input.PromptIterAccepted {
 		reason := input.PromptIterReason
 		if reason == "" {
@@ -93,9 +94,11 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 		}
 		b.decision.Warnings = append(b.decision.Warnings, reason)
 	}
-	b.add("target_surface_scope", input.CandidateProfileValid, input.CandidateProfileValid, true,
+	b.add("target_surface_scope", input.CandidateProfileValid,
+		booleanValue(input.CandidateProfileValid), booleanValue(true),
 		input.CandidateProfileReason, false)
-	b.add("profile_changed", input.CandidateProfileChanged, input.CandidateProfileChanged, true,
+	b.add("profile_changed", input.CandidateProfileChanged,
+		booleanValue(input.CandidateProfileChanged), booleanValue(true),
 		"candidate does not change the configured target surface", false)
 	complete := input.ValidationDelta.Complete
 	if input.TrainDelta != nil {
@@ -103,36 +106,38 @@ func (b *decisionBuilder) addQualityRules(input *regression.GateInput) {
 	}
 	// A release decision cannot treat missing cases or metrics as optional: doing
 	// so would allow a candidate to improve its score by dropping bad evidence.
-	b.add("complete_results", complete, complete, true,
+	b.add("complete_results", complete, booleanValue(complete), booleanValue(true),
 		"evaluation results are incomplete", true)
 	b.add("new_failures", !policy.RejectAnyNewFail || input.ValidationDelta.NewFailures == 0,
-		input.ValidationDelta.NewFailures, 0, "validation introduced new failures", false)
+		integerValue(input.ValidationDelta.NewFailures), integerValue(0), "validation introduced new failures", false)
 	b.add("new_hard_failures", input.ValidationDelta.NewHardFailures == 0,
-		input.ValidationDelta.NewHardFailures, 0, "validation introduced hard failures", false)
+		integerValue(input.ValidationDelta.NewHardFailures), integerValue(0), "validation introduced hard failures", false)
 	b.add("critical_regressions", input.ValidationDelta.CriticalRegressions == 0,
-		input.ValidationDelta.CriticalRegressions, 0, "critical validation cases regressed", false)
+		integerValue(input.ValidationDelta.CriticalRegressions), integerValue(0), "critical validation cases regressed", false)
 	worstRegression := worstMetricRegression(input.ValidationDelta)
 	b.add("case_regression", worstRegression <= policy.MaxCaseRegression,
-		worstRegression, policy.MaxCaseRegression, "a validation metric regressed beyond the allowed limit", false)
-	validationGain := input.ValidationDelta.CandidateScore - input.ValidationDelta.BaselineScore
+		numberValue(worstRegression), numberValue(policy.MaxCaseRegression), "a validation metric regressed beyond the allowed limit", false)
+	// Metric weights define the release policy, so every cross-metric quality
+	// comparison uses the weighted delta produced by the delta engine.
+	validationGain := input.ValidationDelta.WeightedScoreDelta
 	b.add("validation_gain", validationGain >= policy.MinValidationGain,
-		validationGain, policy.MinValidationGain,
+		numberValue(validationGain), numberValue(policy.MinValidationGain),
 		"validation gain is below the required minimum", false)
 	if policy.MaxGeneralizationGap > 0 {
 		trainAvailable := input.TrainDelta != nil
-		b.add("train_delta_available", trainAvailable, trainAvailable, true,
+		b.add("train_delta_available", trainAvailable, booleanValue(trainAvailable), booleanValue(true),
 			"candidate training delta is unavailable for the generalization gate", true)
 	}
 	if input.TrainDelta != nil && policy.MaxGeneralizationGap > 0 {
-		trainGain := input.TrainDelta.CandidateScore - input.TrainDelta.BaselineScore
+		trainGain := input.TrainDelta.WeightedScoreDelta
 		generalizationGap := trainGain - validationGain
 		b.add("generalization_gap", generalizationGap <= policy.MaxGeneralizationGap,
-			generalizationGap, policy.MaxGeneralizationGap,
+			numberValue(generalizationGap), numberValue(policy.MaxGeneralizationGap),
 			"train and validation gains indicate overfitting", false)
 	}
 	if policy.MaxScoreStdDev > 0 {
 		b.add("score_stability", input.CandidateValidation.ScoreStdDev <= policy.MaxScoreStdDev,
-			input.CandidateValidation.ScoreStdDev, policy.MaxScoreStdDev,
+			numberValue(input.CandidateValidation.ScoreStdDev), numberValue(policy.MaxScoreStdDev),
 			"validation score variance exceeds the allowed limit", false)
 	}
 }
@@ -146,11 +151,11 @@ func (b *decisionBuilder) addMetricFloorRules(input *regression.GateInput) {
 		}
 		minimum, found := minimumMetric(input.CandidateValidation, name)
 		if !found {
-			b.add("metric_floor/"+name, false, "missing", policy.Floor,
+			b.add("metric_floor/"+name, false, regression.TextRuleValue("missing"), numberValue(policy.Floor),
 				fmt.Sprintf("metric %q is missing from validation evidence", name), true)
 			continue
 		}
-		b.add("metric_floor/"+name, minimum >= policy.Floor, minimum, policy.Floor,
+		b.add("metric_floor/"+name, minimum >= policy.Floor, numberValue(minimum), numberValue(policy.Floor),
 			fmt.Sprintf("metric %q is below its floor", name), false)
 	}
 }
@@ -168,25 +173,25 @@ func (b *decisionBuilder) addBudgetRules(input *regression.GateInput) {
 	budget := input.Spec.Budget
 	usage := input.TotalUsage
 	if budgetConfigured(budget) {
-		b.add("usage_complete", usage.Complete, usage.Complete, true,
+		b.add("usage_complete", usage.Complete, booleanValue(usage.Complete), booleanValue(true),
 			"resource usage does not cover the complete optimization pipeline", true)
 	}
 	if budget.RequireKnownCost || budget.MaxEstimatedCost > 0 {
-		b.add("known_cost", usage.CostKnown, usage.CostKnown, true,
+		b.add("known_cost", usage.CostKnown, booleanValue(usage.CostKnown), booleanValue(true),
 			"estimated cost is unknown", true)
 	}
 	if budget.MaxCalls > 0 {
 		b.add("call_budget", usage.Calls <= budget.MaxCalls,
-			usage.Calls, budget.MaxCalls, "model call budget exceeded", false)
+			integerValue(usage.Calls), integerValue(budget.MaxCalls), "model call budget exceeded", false)
 	}
 	if budget.MaxTokens > 0 {
 		b.add("token_budget", usage.TotalTokens <= budget.MaxTokens,
-			usage.TotalTokens, budget.MaxTokens, "token budget exceeded", false)
+			regression.IntegerRuleValue(usage.TotalTokens), regression.IntegerRuleValue(budget.MaxTokens), "token budget exceeded", false)
 	}
 	b.addCostRule(budget, usage)
 	if budget.MaxPromptIterLatency > 0 {
 		b.add("promptiter_latency_budget", usage.PromptIterLatency <= budget.MaxPromptIterLatency,
-			usage.PromptIterLatency, budget.MaxPromptIterLatency,
+			durationValue(usage.PromptIterLatency), durationValue(budget.MaxPromptIterLatency),
 			"PromptIter latency budget exceeded", false)
 	}
 }
@@ -206,9 +211,25 @@ func (b *decisionBuilder) addCostRule(
 	}
 	if usage.CostKnown {
 		b.add("cost_budget", usage.EstimatedCost <= budget.MaxEstimatedCost,
-			usage.EstimatedCost, budget.MaxEstimatedCost,
+			numberValue(usage.EstimatedCost), numberValue(budget.MaxEstimatedCost),
 			"estimated cost budget exceeded", false)
 	}
+}
+
+func booleanValue(value bool) regression.RuleValue {
+	return regression.BooleanRuleValue(value)
+}
+
+func integerValue(value int) regression.RuleValue {
+	return regression.IntegerRuleValue(int64(value))
+}
+
+func numberValue(value float64) regression.RuleValue {
+	return regression.NumberRuleValue(value)
+}
+
+func durationValue(value time.Duration) regression.RuleValue {
+	return regression.DurationRuleValue(value)
 }
 
 func worstMetricRegression(report *regression.DeltaReport) float64 {

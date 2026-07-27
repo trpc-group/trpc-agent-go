@@ -22,15 +22,31 @@ import (
 )
 
 // Dependencies supplies deterministic audit policy modules.
+//
+// Attributor, DeltaEngine, and Gate are required and retained by Analyzer for
+// its lifetime; callers must not mutate their behavior concurrently with an
+// analysis. Now is optional and defaults to time.Now. It is used only to stamp
+// the audit lifecycle, not to change policy decisions.
 type Dependencies struct {
-	Attributor  Attributor
+	// Attributor is required and classifies failed training evidence.
+	Attributor Attributor
+	// DeltaEngine is required and compares baseline and candidate evidence.
 	DeltaEngine DeltaEngine
-	Gate        Gate
-	Now         func() time.Time
+	// Gate is required and makes each candidate release decision.
+	Gate Gate
+	// Now optionally supplies audit timestamps; nil uses time.Now.
+	Now func() time.Time
 }
 
 // Analyzer converts one completed PromptIter run into a release audit report.
 type Analyzer interface {
+	// Analyze audits one successful PromptIter run. ctx controls the complete
+	// operation; spec, source, and their nested evidence are read-only and must
+	// satisfy their validation contracts. usageSupplement supplies only resource
+	// facts not measurable from the engine result. It returns a non-nil RunResult
+	// for both success and failure after analysis starts; an error accompanies
+	// failed or canceled audits. The returned report is safe to persist after the
+	// configured audit-policy redaction is applied by a report writer.
 	Analyze(context.Context, *RunSpec, *engine.RunResult, UsageSupplement) (*RunResult, error)
 }
 
@@ -38,7 +54,9 @@ type analyzer struct {
 	deps Dependencies
 }
 
-// New creates a PromptIter audit analyzer.
+// New creates a PromptIter audit analyzer. It returns an error when any
+// required dependency is nil. The analyzer retains the supplied dependencies;
+// callers must keep them valid and safe for the analyzer's lifetime.
 func New(deps Dependencies) (Analyzer, error) {
 	switch {
 	case deps.Attributor == nil:
@@ -90,6 +108,9 @@ func (a *analyzer) Analyze(
 	if err = spec.Validate(); err != nil {
 		return result, fmt.Errorf("preflight: %w", err)
 	}
+	// A valid spec makes even a later preflight failure traceable and reportable.
+	result.RunID = spec.RunID
+	result.Spec = cloneRunSpec(spec)
 	if source == nil {
 		return result, errors.New("PromptIter result is nil")
 	}
@@ -104,8 +125,6 @@ func (a *analyzer) Analyze(
 	if err != nil {
 		return result, fmt.Errorf("candidate usage: %w", err)
 	}
-	result.RunID = spec.RunID
-	result.Spec = cloneRunSpec(spec)
 	result.PromptIter = promptIterConfiguration(source.Configuration)
 	baselineProfile := source.InitialProfile
 	result.BaselineProfile = promptiter.CloneProfile(baselineProfile)
@@ -509,6 +528,12 @@ func validateGateDecision(decision *GateDecision) error {
 		if strings.TrimSpace(rule.Rule) == "" {
 			return errors.New("decision contains an unnamed rule")
 		}
+		if err := rule.Observed.validate(); err != nil {
+			return fmt.Errorf("rule %q has invalid observed value: %w", rule.Rule, err)
+		}
+		if err := rule.Threshold.validate(); err != nil {
+			return fmt.Errorf("rule %q has invalid threshold value: %w", rule.Rule, err)
+		}
 		if rule.Passed {
 			continue
 		}
@@ -547,7 +572,7 @@ func selectCandidate(result *RunResult) {
 		if candidate.Gate.Decision != DecisionAccepted || candidate.ValidationDelta == nil {
 			continue
 		}
-		gain := candidate.ValidationDelta.CandidateScore - candidate.ValidationDelta.BaselineScore
+		gain := candidate.ValidationDelta.WeightedScoreDelta
 		if gain > bestGain || (gain == bestGain && candidatePrecedes(
 			candidate.Candidate, bestRound, bestID,
 		)) {

@@ -59,7 +59,7 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 		StartedAt: time.Unix(1, 0).UTC(), EndedAt: time.Unix(2, 0).UTC(),
 		Spec: &regression.RunSpec{
 			TargetSurfaceID:  "agent#instruction",
-			InputFingerprint: "fingerprint",
+			InputFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			Runtime:          regression.RuntimePolicy{Seed: 7, SeedApplied: true, NumRuns: 2},
 		},
 		PromptIter: &regression.PromptIterConfiguration{
@@ -104,10 +104,12 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 				Warnings: []string{"PromptIter accepted an audit-rejected round"},
 				Rules: []regression.GateRuleResult{
 					{
-						Rule: "new_failures", Passed: false, Observed: 1, Threshold: 0,
+						Rule: "new_failures", Passed: false,
+						Observed: regression.IntegerRuleValue(1), Threshold: regression.IntegerRuleValue(0),
 						Reason: "validation introduced new failures",
 					},
-					{Rule: "validation_gain", Passed: true, Observed: .25, Threshold: .2},
+					{Rule: "validation_gain", Passed: true,
+						Observed: regression.NumberRuleValue(.25), Threshold: regression.NumberRuleValue(.2)},
 				},
 			},
 		}},
@@ -126,6 +128,7 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 		"PromptIter accepted an audit-rejected round", "Random seed: `7` (applied)",
 		"Started: `1970-01-01 00:00:01.000 UTC`", "Duration: `1.000 s`",
 		"Hard round limit: `4`", "Acceptance minimum score gain: `0.01`",
+		"Retain audit evidence: `false`", "Evaluate final candidate on train: `false`",
 		"Stop after consecutive unaccepted rounds: `2`", "Early-stop target score: `disabled`",
 		"Effective profile change: `true`", "PromptIter stop: `target score reached`",
 		"## Optimization progress", "| 0 | 0.3 | 0 | n/a | baseline | n/a |",
@@ -141,6 +144,16 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 	if !strings.Contains(string(encoded), "candidate prompt") || !strings.Contains(string(encoded), "attributionCounts") {
 		t.Fatalf("JSON omitted candidate prompt or attribution counts: %s", encoded)
 	}
+	if !strings.Contains(string(encoded), `"retainAuditEvidence":false`) ||
+		!strings.Contains(string(encoded), `"evaluateFinalCandidateTrain":false`) {
+		t.Fatalf("JSON omitted default audit configuration: %s", encoded)
+	}
+	for _, expected := range []string{
+		`"observed":"integer|1"`,
+		`"threshold":"number|0.2"`,
+	} {
+		assert.Contains(t, string(encoded), expected)
+	}
 }
 
 func TestScenarioPromptAndMetadataCannotBreakMarkdownStructure(t *testing.T) {
@@ -149,7 +162,7 @@ func TestScenarioPromptAndMetadataCannotBreakMarkdownStructure(t *testing.T) {
 		RunID: "markdown-safe",
 		Spec: &regression.RunSpec{
 			TargetSurfaceID:  "agent#instruction",
-			InputFingerprint: "fingerprint",
+			InputFingerprint: "api_key=fingerprint-secret`\nnext",
 			Runtime:          regression.RuntimePolicy{NumRuns: 1},
 			Metadata: map[string]string{
 				"model`name": "line one\nline `two`",
@@ -180,7 +193,7 @@ func TestScenarioRenderersDefensivelySanitizeDirectRunResults(t *testing.T) {
 		RunID: "direct-render",
 		Spec: &regression.RunSpec{
 			TargetSurfaceID:  "agent#instruction",
-			InputFingerprint: "fingerprint",
+			InputFingerprint: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			Runtime:          regression.RuntimePolicy{NumRuns: 1},
 			Metadata:         map[string]string{"authorization": "metadata-secret"},
 		},
@@ -211,7 +224,13 @@ func TestScenarioRenderersDefensivelySanitizeDirectRunResults(t *testing.T) {
 				Decision: regression.DecisionAccepted,
 				Rules: []regression.GateRuleResult{{
 					Rule: "custom", Passed: true,
-					Observed: failingReportPayload{secret: "gate-payload-secret"},
+					Observed:  regression.TextRuleValue("api_key=gate-payload-secret"),
+					Threshold: regression.TextRuleValue("not applicable"),
+				}, {
+					Rule:      "malformed",
+					Passed:    true,
+					Observed:  regression.RuleValue{Type: regression.RuleValueNumber, Value: "api_key=invalid-value-secret"},
+					Threshold: regression.NumberRuleValue(0),
 				}},
 			},
 		}},
@@ -228,15 +247,14 @@ func TestScenarioRenderersDefensivelySanitizeDirectRunResults(t *testing.T) {
 	for _, secret := range []string{
 		"profile-secret", "metadata-secret", "model-secret", "input-secret",
 		"response-secret", "argument-secret", "schema-payload-secret",
-		"gate-payload-secret",
+		"gate-payload-secret", "invalid-value-secret", "fingerprint-secret",
 	} {
 		if strings.Contains(combined, secret) {
 			t.Fatalf("renderer leaked %q: %s", secret, combined)
 		}
 	}
-	if !strings.Contains(combined, "[UNSERIALIZABLE:") {
-		t.Fatalf("renderer did not safely represent unsupported extension values: %s", combined)
-	}
+	assert.Contains(t, combined, `"text|`)
+	assert.Contains(t, combined, "[invalid rule value]")
 	if result.BaselineTrain.Cases[0].Input == "" ||
 		result.BaselineTrain.Cases[0].Runs[0].FinalResponse == "" {
 		t.Fatal("renderer mutated the caller's run result")
@@ -305,9 +323,9 @@ func TestFormattingHelpersHandleMissingShortAndLongDurations(t *testing.T) {
 	assert.Equal(t, "not recorded", formatDuration(start, start.Add(-time.Second)))
 	assert.Equal(t, "125.000 ms", formatDuration(start, start.Add(125*time.Millisecond)))
 	assert.Equal(t, "1m1s", formatDuration(start, start.Add(61*time.Second)))
-	assert.Equal(t, "1.25", formatReportValue(float32(1.25)))
-	assert.Equal(t, "250ms", formatReportValue(250*time.Millisecond))
-	assert.Equal(t, "value", formatReportValue("value"))
+	assert.Equal(t, "1.25", regression.NumberRuleValue(1.25).String())
+	assert.Equal(t, "250ms", regression.DurationRuleValue(250*time.Millisecond).String())
+	assert.Equal(t, "value", regression.TextRuleValue("value").String())
 }
 
 func TestProfileTextHandlesMissingEmptyAndUnserializableSurfaces(t *testing.T) {

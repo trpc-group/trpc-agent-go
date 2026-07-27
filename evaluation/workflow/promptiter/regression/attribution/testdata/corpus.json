@@ -133,5 +133,48 @@
       "passed": false,
       "metrics": [{"name": "opaque_external_judge", "score": 0, "threshold": 1, "passed": false, "reason": "External contract failed; detailed evidence was not returned."}]
     }
+  },
+  {
+    "id": "negative-generic-quality-shortfall",
+    "expected": "unknown",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "negative-generic-quality-shortfall",
+      "passed": false,
+      "metrics": [{"name": "overall_quality", "score": 0.4, "threshold": 0.8, "passed": false, "reason": "The independent judge recorded a quality shortfall without diagnostic evidence."}],
+      "runs": [{"runId": 0, "finalResponse": "The request has been processed."}]
+    }
+  },
+  {
+    "id": "negative-matching-execution-evidence",
+    "expected": "unknown",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "negative-matching-execution-evidence",
+      "passed": false,
+      "metrics": [],
+      "runs": [{"runId": 0, "route": "billing", "expectedRoute": "billing", "finalResponse": "Your balance is zero.", "expectedFinalResponse": "Your balance is zero.", "tools": [{"name": "lookup_balance", "arguments": "{\"account\":\"A-19\"}", "result": "{\"balance\":0}"}], "expectedTools": [{"name": "lookup_balance", "arguments": "{\"account\":\"A-19\"}", "result": "{\"balance\":0}"}]}]
+    }
+  },
+  {
+    "id": "negative-unexplained-evaluation-failure",
+    "expected": "unknown",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "negative-unexplained-evaluation-failure",
+      "passed": false,
+      "metrics": [],
+      "runs": [{"runId": 0, "finalResponse": "The requested summary is available."}]
+    }
+  },
+  {
+    "id": "negative-neutral-rubric",
+    "expected": "unknown",
+    "case": {
+      "evalSetId": "frozen-validation",
+      "caseId": "negative-neutral-rubric",
+      "passed": false,
+      "metrics": [{"name": "presentation_quality", "score": 0.5, "threshold": 0.9, "passed": false, "rubrics": [{"id": "clarity", "score": 0.5, "reason": "The response needs more detail, but the evaluator supplied no causal classification."}]}]
+    }
   }
 ]

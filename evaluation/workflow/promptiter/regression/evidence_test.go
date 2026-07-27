@@ -113,11 +113,16 @@ func TestAdaptEvaluationPreservesRichRepeatedRunEvidence(t *testing.T) {
 	value := richEvidenceEvaluation()
 	caseValue := &value.EvalSets[0].Cases[0]
 	secondDetail := cloneEvidenceRunDetail(caseValue.RunDetails[0], 2)
-	secondDetail.Inference.Inferences[0].Tools[0].Result = map[string]string{"errorMessage": "backend unavailable"}
+	secondDetail.Inference.Inferences[0].Tools[0].Result = map[string]any{"error": false}
 	secondDetail.Inference.ExecutionTraces[0].Steps[0].StepID = ""
-	secondResult := cloneEvidenceRunResult(caseValue.RunResults[0], 2, .25)
+	secondResult := cloneEvidenceRunResult(caseValue.RunResults[0], 2, .75)
 	caseValue.RunDetails = append(caseValue.RunDetails, secondDetail)
 	caseValue.RunResults = append(caseValue.RunResults, secondResult)
+	thirdDetail := cloneEvidenceRunDetail(caseValue.RunDetails[0], 3)
+	thirdDetail.Inference.Inferences[0].Tools[0].Result = map[string]any{"error": "account not found"}
+	thirdResult := cloneEvidenceRunResult(caseValue.RunResults[0], 3, .75)
+	caseValue.RunDetails = append(caseValue.RunDetails, thirdDetail)
+	caseValue.RunResults = append(caseValue.RunResults, thirdResult)
 
 	snapshot, err := adaptEvaluation(value, testProfile("target", "prompt"), map[string]struct{}{"case": {}})
 	require.NoError(t, err)
@@ -126,13 +131,14 @@ func TestAdaptEvaluationPreservesRichRepeatedRunEvidence(t *testing.T) {
 	result := snapshot.Cases[0]
 	assert.True(t, result.Critical)
 	assert.Equal(t, "question", result.Input)
-	assert.InDelta(t, math.Sqrt(.125), snapshot.ScoreStdDev, 1e-9)
-	require.Len(t, result.Runs, 2)
+	assert.Zero(t, snapshot.ScoreStdDev)
+	require.Len(t, result.Runs, 3)
 	assert.Equal(t, "expected", result.Runs[0].ExpectedFinalResponse)
 	assert.Equal(t, "expected-route", result.Runs[0].ExpectedRoute)
 	require.Len(t, result.Runs[0].ExpectedTools, 1)
 	assert.JSONEq(t, `{"id":"expected"}`, result.Runs[0].ExpectedTools[0].Arguments)
-	assert.Equal(t, "backend unavailable", result.Runs[1].Tools[0].Error)
+	assert.Empty(t, result.Runs[1].Tools[0].Error)
+	assert.Empty(t, result.Runs[2].Tools[0].Error)
 	assert.Equal(t, "step-1", result.Runs[1].Trace[0].StepID)
 }
 
@@ -154,8 +160,8 @@ func TestEvidenceCompletenessMarkersFailClosed(t *testing.T) {
 
 	assert.Empty(t, toolResultError("ordinary result"))
 	assert.Equal(t, "failure", toolResultError(errors.New(" failure ")))
-	assert.Equal(t, "bad request", toolResultError(map[string]any{"err": "bad request"}))
-	assert.Empty(t, asStringStringMap(42))
+	assert.Empty(t, toolResultError(map[string]any{"error": false}))
+	assert.Empty(t, toolResultError(map[string]any{"error": "account not found"}))
 	assert.Equal(t, "[UNSERIALIZABLE:chan int]", marshalAuditValue(make(chan int)))
 	assert.Zero(t, scoreStdDev(runMetricScores{1: {}}))
 }

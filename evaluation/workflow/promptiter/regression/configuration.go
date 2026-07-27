@@ -20,6 +20,8 @@ func promptIterConfiguration(source engine.RunConfiguration) *PromptIterConfigur
 	result := &PromptIterConfiguration{
 		NumRuns:                              source.EvaluationOptions.NumRuns,
 		TraceUsageCoversAllCalls:             source.EvaluationOptions.TraceUsageCoversAllCalls,
+		RetainAuditEvidence:                  source.RetainAuditEvidence,
+		EvaluateFinalCandidateTrain:          source.EvaluateFinalCandidateTrain,
 		EvalCaseParallelism:                  source.EvaluationOptions.EvalCaseParallelism,
 		EvalCaseParallelInferenceEnabled:     source.EvaluationOptions.EvalCaseParallelInferenceEnabled,
 		EvalCaseParallelEvaluationEnabled:    source.EvaluationOptions.EvalCaseParallelEvaluationEnabled,
