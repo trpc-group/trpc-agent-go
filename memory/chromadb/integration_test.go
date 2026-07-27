@@ -26,27 +26,43 @@ func TestIntegrationChromaDB159(t *testing.T) {
 	if baseURL == "" {
 		t.Skip("CHROMADB_INTEGRATION_URL is not set")
 	}
+	appName := fmt.Sprintf("integration-%d-%d", os.Getpid(), time.Now().UnixNano())
 	options := integrationOptions(baseURL)
 	service, err := NewService(options...)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
 
-	runIntegrationCRUD(t, service)
-	runIntegrationClear(t, service, false)
+	runIntegrationCRUD(t, service, appName)
+	runIntegrationClear(t, service, appName, false)
 
-	softOptions := append(options, WithSoftDelete(true))
+	softOptions := append(
+		append([]ServiceOpt(nil), options...),
+		WithSoftDelete(true),
+	)
 	softService, err := NewService(softOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, softService.Close()) })
-	runIntegrationClear(t, softService, true)
+	t.Cleanup(func() {
+		_, cleanupErr := service.client.deleteRecords(
+			context.Background(),
+			service.collection,
+			deleteRecordsRequest{
+				Where: eqWhere(metadataAppNameKey, appName),
+			},
+		)
+		if cleanupErr != nil {
+			t.Errorf("clean integration records: %v", cleanupErr)
+		}
+	})
+	runIntegrationClear(t, softService, appName, true)
 	t.Run("active target conflict", func(t *testing.T) {
-		runIntegrationActiveTargetConflict(t, service)
+		runIntegrationActiveTargetConflict(t, service, appName)
 	})
 	t.Run("soft target revival", func(t *testing.T) {
-		runIntegrationSoftTargetRevival(t, softService)
+		runIntegrationSoftTargetRevival(t, softService, appName)
 	})
 	t.Run("hard target replacement", func(t *testing.T) {
-		runIntegrationHardTargetReplacement(t, service, softService)
+		runIntegrationHardTargetReplacement(t, service, softService, appName)
 	})
 }
 
@@ -73,10 +89,10 @@ func integrationOptions(baseURL string) []ServiceOpt {
 	return options
 }
 
-func runIntegrationCRUD(t *testing.T, service *Service) {
+func runIntegrationCRUD(t *testing.T, service *Service, appName string) {
 	t.Helper()
 	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "integration", UserID: "crud"}
+	userKey := memory.UserKey{AppName: appName, UserID: "crud"}
 	require.NoError(t, service.ClearMemories(ctx, userKey))
 	t.Cleanup(func() {
 		_ = service.ClearMemories(context.Background(), userKey)
@@ -151,14 +167,19 @@ func integrationEntryByContent(
 	return nil
 }
 
-func runIntegrationClear(t *testing.T, service *Service, soft bool) {
+func runIntegrationClear(
+	t *testing.T,
+	service *Service,
+	appName string,
+	soft bool,
+) {
 	t.Helper()
 	ctx := context.Background()
 	mode := "hard"
 	if soft {
 		mode = "soft"
 	}
-	userKey := memory.UserKey{AppName: "integration", UserID: mode + "-clear"}
+	userKey := memory.UserKey{AppName: appName, UserID: mode + "-clear"}
 	require.NoError(t, service.ClearMemories(ctx, userKey))
 	for i := 0; i < defaultReadPageSize+1; i++ {
 		content := fmt.Sprintf("%s-clear-%03d", mode, i)
@@ -174,10 +195,14 @@ func runIntegrationClear(t *testing.T, service *Service, soft bool) {
 	assert.Empty(t, entries)
 }
 
-func runIntegrationActiveTargetConflict(t *testing.T, service *Service) {
+func runIntegrationActiveTargetConflict(
+	t *testing.T,
+	service *Service,
+	appName string,
+) {
 	t.Helper()
 	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "integration", UserID: "active-target"}
+	userKey := memory.UserKey{AppName: appName, UserID: "active-target"}
 	require.NoError(t, service.ClearMemories(ctx, userKey))
 	t.Cleanup(func() { _ = service.ClearMemories(context.Background(), userKey) })
 	require.NoError(t, service.AddMemory(ctx, userKey, "contract source", []string{"source"}))
@@ -205,10 +230,14 @@ func runIntegrationActiveTargetConflict(t *testing.T, service *Service) {
 	assert.Equal(t, []string{"target"}, integrationEntryByContent(t, entries, "contract target").Memory.Topics)
 }
 
-func runIntegrationSoftTargetRevival(t *testing.T, service *Service) {
+func runIntegrationSoftTargetRevival(
+	t *testing.T,
+	service *Service,
+	appName string,
+) {
 	t.Helper()
 	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "integration", UserID: "soft-target"}
+	userKey := memory.UserKey{AppName: appName, UserID: "soft-target"}
 	require.NoError(t, service.ClearMemories(ctx, userKey))
 	t.Cleanup(func() { _ = service.ClearMemories(context.Background(), userKey) })
 	require.NoError(t, service.AddMemory(ctx, userKey, "soft source", nil))
@@ -242,10 +271,11 @@ func runIntegrationHardTargetReplacement(
 	t *testing.T,
 	hardService *Service,
 	softService *Service,
+	appName string,
 ) {
 	t.Helper()
 	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "integration", UserID: "hard-target"}
+	userKey := memory.UserKey{AppName: appName, UserID: "hard-target"}
 	require.NoError(t, hardService.ClearMemories(ctx, userKey))
 	t.Cleanup(func() { _ = hardService.ClearMemories(context.Background(), userKey) })
 	require.NoError(t, softService.AddMemory(ctx, userKey, "hard source", nil))

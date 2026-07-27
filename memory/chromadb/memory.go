@@ -106,6 +106,7 @@ func (svc *Service) listRecords(
 		if err != nil {
 			return nil, err
 		}
+		recordCount := len(records)
 		for _, record := range page {
 			if _, ok := seen[record.entry.ID]; ok {
 				continue
@@ -115,6 +116,12 @@ func (svc *Service) listRecords(
 			if limit > 0 && len(records) >= limit {
 				return records[:limit], nil
 			}
+		}
+		if len(records) == recordCount {
+			return nil, fmt.Errorf(
+				"get records pagination made no progress at offset %d",
+				offset,
+			)
 		}
 		offset += len(response.IDs.value)
 	}

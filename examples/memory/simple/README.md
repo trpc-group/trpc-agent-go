@@ -116,10 +116,16 @@ defer runner.Close()
 | `MYSQL_USER`              | MySQL user                   | `root`                   |
 | `MYSQL_PASSWORD`          | MySQL password               | ``                       |
 | `MYSQL_DATABASE`          | MySQL database name          | `trpc_agent_go`          |
+| `MYSQLVEC_HOST`           | MySQL Vector host            | `localhost`              |
+| `MYSQLVEC_PORT`           | MySQL Vector port            | `3306`                   |
+| `MYSQLVEC_USER`           | MySQL Vector user            | `root`                   |
+| `MYSQLVEC_PASSWORD`       | MySQL Vector password        | ``                       |
+| `MYSQLVEC_DATABASE`       | MySQL Vector database name   | `trpc_agent_go`          |
+| `MYSQLVEC_EMBEDDER_MODEL` | MySQL Vector embedder model  | `text-embedding-3-small` |
 
 ### Embedding Environment Variables (Optional)
 
-When using vector backends (`sqlitevec`, `pgvector`, `chromadb`), you can configure a
+When using vector backends (`sqlitevec`, `mysqlvec`, `pgvector`, `chromadb`), you can configure a
 separate embedding endpoint / API key:
 
 | Variable                  | Description                      | Default Value |
@@ -133,8 +139,8 @@ separate embedding endpoint / API key:
 | Argument       | Description                                                             | Default Value   |
 | -------------- | ----------------------------------------------------------------------- | --------------- |
 | `-model`       | Name of the model to use                                                | `deepseek-v4-flash` |
-| `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `postgres`, `pgvector`, or `chromadb` | `inmemory` |
-| `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/PostgreSQL/pgvector/ChromaDB memory service  | `false`         |
+| `-memory`      | Memory service: `inmemory`, `sqlite`, `sqlitevec`, `redis`, `mysql`, `mysqlvec`, `postgres`, `pgvector`, or `chromadb` | `inmemory` |
+| `-soft-delete` | Enable soft delete for SQLite/SQLiteVec/MySQL/MySQLVec/PostgreSQL/pgvector/ChromaDB memory service  | `false`         |
 | `-streaming`   | Enable streaming mode for responses                                     | `true`          |
 
 ## Usage
@@ -325,10 +331,13 @@ The example demonstrates a custom clear tool with enhanced logging:
 
 ### Memory Service Integration
 
-- Supports multiple backends: in-memory, Redis, MySQL, PostgreSQL, pgvector, and ChromaDB
+- Supports in-memory, SQLite, SQLiteVec, Redis, MySQL, MySQL Vector, PostgreSQL, pgvector, and ChromaDB backends
 - Uses `memoryinmemory.NewMemoryService()` for in-memory storage
+- Uses `memorysqlite.NewService()` for SQLite storage
+- Uses `memorysqlitevec.NewService()` for SQLite vector storage
 - Uses `memoryredis.NewService()` for Redis-based storage
 - Uses `memorymysql.NewService()` for MySQL-based storage
+- Uses `memorymysqlvec.NewService()` for MySQL vector storage
 - Uses `memorypostgres.NewService()` for PostgreSQL-based storage
 - Uses `memorypgvector.NewService()` for pgvector-based storage with vector similarity search
 - Uses `memorychromadb.NewService()` for ChromaDB storage with cosine and hybrid search

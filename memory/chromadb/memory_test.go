@@ -886,6 +886,24 @@ func TestServiceReadMemoriesSortsAcrossPages(t *testing.T) {
 	assert.Equal(t, want[1], entries[1].ID)
 }
 
+func TestServiceReadMemoriesRejectsPaginationWithoutProgress(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	putFakeRecord(fake, newAddRecord(scope, "memory", nil, nil, time.Now().UTC()))
+	fake.mu.Lock()
+	fake.ignoreGetOffset = true
+	fake.mu.Unlock()
+
+	_, err := service.ReadMemories(
+		context.Background(),
+		memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+		0,
+	)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "pagination made no progress")
+}
+
 func TestDecodeGetResponseRejectsMalformedColumns(t *testing.T) {
 	document := "memory"
 	documents := []*string{&document}

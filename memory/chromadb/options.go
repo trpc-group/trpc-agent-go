@@ -493,6 +493,7 @@ func WithExtractor(e extractor.MemoryExtractor) ServiceOpt {
 }
 
 // WithAsyncMemoryNum sets the number of automatic memory workers.
+// A non-positive value is ignored and leaves the current value unchanged.
 func WithAsyncMemoryNum(num int) ServiceOpt {
 	return func(opts *serviceOpts) {
 		if num > 0 {
@@ -502,6 +503,7 @@ func WithAsyncMemoryNum(num int) ServiceOpt {
 }
 
 // WithMemoryQueueSize sets the automatic memory queue size per worker.
+// A non-positive value is ignored and leaves the current value unchanged.
 func WithMemoryQueueSize(size int) ServiceOpt {
 	return func(opts *serviceOpts) {
 		if size > 0 {

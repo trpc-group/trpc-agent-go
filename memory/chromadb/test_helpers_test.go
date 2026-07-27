@@ -141,6 +141,7 @@ type fakeChroma struct {
 	addAfterWrite    int
 	addFailuresLeft  int
 	deleteCount      *int
+	ignoreGetOffset  bool
 }
 
 func newFakeChroma() *fakeChroma {
@@ -354,6 +355,9 @@ func (f *fakeChroma) handleGet(writer http.ResponseWriter, request *http.Request
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ids := f.filteredIDs(payload.IDs, payload.Where)
+	if f.ignoreGetOffset {
+		payload.Offset = nil
+	}
 	ids = paginateIDs(ids, payload.Offset, payload.Limit)
 	response := map[string]any{"ids": ids, "include": dereferenceStrings(payload.Include)}
 	f.includeRecords(response, ids, dereferenceStrings(payload.Include))
@@ -472,13 +476,17 @@ func matchesFakeWhere(metadata map[string]any, where map[string]any) bool {
 		return true
 	}
 	for key, raw := range where {
+		var matched bool
 		switch key {
 		case "$and":
-			return everyFakeClause(metadata, raw)
+			matched = everyFakeClause(metadata, raw)
 		case "$or":
-			return anyFakeClause(metadata, raw)
+			matched = anyFakeClause(metadata, raw)
 		default:
-			return matchesFakeComparison(metadata[key], raw)
+			matched = matchesFakeComparison(metadata[key], raw)
+		}
+		if !matched {
+			return false
 		}
 	}
 	return true

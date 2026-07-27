@@ -461,3 +461,19 @@ func TestWhereBuilders(t *testing.T) {
 	assert.Contains(t, where, "$or")
 	assert.Nil(t, eventTimeWhere(memory.SearchOptions{}))
 }
+
+func TestMatchesFakeWhereRequiresEveryTopLevelClause(t *testing.T) {
+	where := map[string]any{
+		metadataAppNameKey: map[string]any{"$eq": "app"},
+		metadataUserIDKey:  map[string]any{"$eq": "user"},
+	}
+
+	assert.True(t, matchesFakeWhere(map[string]any{
+		metadataAppNameKey: "app",
+		metadataUserIDKey:  "user",
+	}, where))
+	assert.False(t, matchesFakeWhere(map[string]any{
+		metadataAppNameKey: "app",
+		metadataUserIDKey:  "different",
+	}, where))
+}

@@ -344,9 +344,9 @@ appRunner := runner.NewRunner(
 
 ### Memory Service
 
-Configure the memory service in code. Five backends are supported: in-memory,
-Redis, MySQL, PostgreSQL, and pgvector. Two vector search backends are also
-available: sqlitevec and mysqlvec.
+Configure the memory service in code. Nine built-in backends are supported:
+in-memory, SQLite, SQLiteVec, Redis, MySQL, MySQL Vec, PostgreSQL, pgvector,
+and ChromaDB.
 
 #### Configuration Example
 
@@ -1317,7 +1317,7 @@ Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
 Managed Vector Service → ChromaDB (REST-based cosine and hybrid search)
-Audit Trail → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
+Audit Trail → MySQL/MySQL Vec/PostgreSQL/pgvector/SQLite/SQLiteVec/ChromaDB (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -1341,17 +1341,17 @@ postgresService, err := memorypostgres.NewService(
 
 ### Storage Backend Comparison
 
-| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | PostgreSQL     | pgvector      | ChromaDB       |
-| ------------------------ | --------- | ---------- | ----------- | ---------- | -------------- | -------------- | ------------- | -------------- |
-| Data Persistence         | ❌        | ✅         | ✅          | ✅         | ✅             | ✅             | ✅            | ✅             |
-| Distributed Support      | ❌        | ❌         | ❌          | ✅         | ✅             | ✅             | ✅            | ✅             |
-| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)   | Partial    | ✅ (ACID)      | ✅ (ACID)      | ✅ (ACID)     | Best effort    |
-| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | Powerful (SQL) | SQL + Vectors | Vector + Local |
-| JSON Support             | ❌        | Basic      | Basic       | Partial    | ✅ (JSON)      | ✅ (JSONB)     | ✅ (JSONB)    | Metadata       |
-| Performance              | Very High | Med-High   | Medium-High | High       | Medium-High    | Medium-High    | Medium-High   | High           |
-| Configuration Complexity | Low       | Low        | Medium      | Medium     | Medium         | Medium         | Medium        | Medium         |
-| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | Production     | Vector Search | Vector Service |
-| Monitoring Tools         | None      | None       | None        | Rich       | Very Rich      | Very Rich      | Very Rich     | Chroma tooling |
+| Feature                  | In-Memory | SQLite     | SQLiteVec    | Redis      | MySQL          | MySQL Vec     | PostgreSQL     | pgvector      | ChromaDB       |
+| ------------------------ | --------- | ---------- | ------------ | ---------- | -------------- | ------------- | -------------- | ------------- | -------------- |
+| Data Persistence         | ❌        | ✅         | ✅           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
+| Distributed Support      | ❌        | ❌         | ❌           | ✅         | ✅             | ✅            | ✅             | ✅            | ✅             |
+| Transaction Support      | ❌        | ✅ (ACID)  | ✅ (ACID)    | Partial    | ✅ (ACID)      | ✅ (ACID)     | ✅ (ACID)      | ✅ (ACID)     | Best effort    |
+| Query Capability         | Simple    | SQL        | SQL + Vector | Medium     | Powerful (SQL) | SQL + Vector  | Powerful (SQL) | SQL + Vectors | Vector + Local |
+| JSON Support             | ❌        | Basic      | Basic        | Partial    | ✅ (JSON)      | ✅ (JSON)     | ✅ (JSONB)     | ✅ (JSONB)    | Metadata       |
+| Performance              | Very High | Med-High   | Medium-High  | High       | Medium-High    | Medium-High   | Medium-High    | Medium-High   | High           |
+| Configuration Complexity | Low       | Low        | Medium       | Medium     | Medium         | Medium        | Medium         | Medium        | Medium         |
+| Use Case                 | Dev/Test  | Local Dev  | Local Vector | Production | Production     | MySQL Vector  | Production     | Vector Search | Vector Service |
+| Monitoring Tools         | None      | None       | None         | Rich       | Very Rich      | Very Rich     | Very Rich      | Very Rich     | Chroma tooling |
 
 **Selection Guide:**
 
@@ -1360,6 +1360,7 @@ postgresService, err := memorypostgres.NewService(
 - **Local Development (Vector Search)**: Use SQLiteVec when you want semantic search in a single-file SQLite DB
 - **Production (High Performance)**: Use Redis storage for high concurrency scenarios
 - **Production (Data Integrity)**: Use MySQL storage when ACID guarantees and complex queries are needed
+- **Production (MySQL Vector Search)**: Use MySQL Vec for similarity search on MySQL 9.0+
 - **Production (PostgreSQL)**: Use PostgreSQL storage when JSONB support and advanced PostgreSQL features are needed
 - **Production (Vector Search)**: Use pgvector storage when similarity search with embeddings is needed
 - **Production (Vector Service)**: Use ChromaDB for REST-based cosine and hybrid memory search
@@ -1421,6 +1422,7 @@ Search behavior depends on the backend:
 
 - For `inmemory` / `redis` / `mysql` / `postgres`: `SearchMemories` uses **BM25-style lexical matching** (not semantic search).
 - For `pgvector` / `mysqlvec` / `sqlitevec`: `SearchMemories` uses **vector similarity search** and requires an embedder.
+- For `chromadb`: `SearchMemories` uses ChromaDB vector search and supports kind fallback and hybrid search.
 
 **Lexical matching details** (non-vector backends):
 
@@ -1456,13 +1458,13 @@ Search: "写代码" ❌ No match (different words)
 **Recommendations**:
 
 - Use explicit keywords and topic tags to improve hit rate
-- If you need semantic similarity search, use the pgvector, mysqlvec, or sqlitevec backend
+- If you need semantic similarity search, use the pgvector, mysqlvec, sqlitevec, or ChromaDB backend
 
 ### Soft Delete Considerations
 
 **Support status**:
 
-- ✅ MySQL, PostgreSQL, pgvector, SQLite, SQLiteVec: support soft delete
+- ✅ MySQL, MySQL Vec, PostgreSQL, pgvector, SQLite, SQLiteVec, ChromaDB: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:

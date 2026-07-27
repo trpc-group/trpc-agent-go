@@ -49,7 +49,8 @@ const (
 	MemoryPGVector  MemoryType = "pgvector"
 	MemoryMySQL     MemoryType = "mysql"
 	MemoryMySQLVec  MemoryType = "mysqlvec"
-	MemoryChromaDB  MemoryType = "chromadb"
+	// MemoryChromaDB selects the ChromaDB-backed memory service.
+	MemoryChromaDB MemoryType = "chromadb"
 )
 
 // MemoryServiceConfig holds configuration for creating a memory service.
