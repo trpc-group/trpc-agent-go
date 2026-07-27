@@ -235,3 +235,19 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	require.Equal(t, "myapp/u1/sess-art", ws.ID)
 	require.True(t, probe.sawOK)
 }
+
+func TestNewResolver_TypedNilAcquirerUsesDefault(t *testing.T) {
+	var typedNil *codeexecutor.WorkspaceRegistry
+	r := NewResolver(nil, typedNil)
+	// The typed-nil acquirer is normalized to a real default registry.
+	require.NotNil(t, r.reg)
+
+	// End to end: acquiring a workspace falls back to the default registry and
+	// does not panic on a nil receiver via reg.Acquire.
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	ws, err := r.CreateWorkspace(context.Background(), eng, "workspace")
+	require.NoError(t, err)
+	require.Equal(t, "workspace", ws.ID)
+	require.Equal(t, []string{"workspace"}, mgr.created)
+}

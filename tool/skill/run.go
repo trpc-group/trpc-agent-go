@@ -49,7 +49,7 @@ import (
 type RunTool struct {
 	repo skill.Repository
 	exec codeexecutor.CodeExecutor
-	reg  *codeexecutor.WorkspaceRegistry
+	reg  codeexecutor.WorkspaceAcquirer
 	wsr  *workspacesession.Resolver
 	sst  *skillstage.Stager
 
@@ -223,8 +223,20 @@ func WithRequireSkillLoaded(enable bool) func(*RunTool) {
 func WithWorkspaceRegistry(
 	reg *codeexecutor.WorkspaceRegistry,
 ) func(*RunTool) {
+	return WithWorkspaceAcquirer(reg)
+}
+
+// WithWorkspaceAcquirer is the interface-based form of WithWorkspaceRegistry.
+// Pass a custom codeexecutor.WorkspaceAcquirer (for example a shared,
+// distributed registry) so skill_run resolves session workspaces through it
+// instead of the default in-memory registry. A typed-nil acquirer is
+// normalized to a true nil so the default registry is used instead of
+// panicking.
+func WithWorkspaceAcquirer(
+	reg codeexecutor.WorkspaceAcquirer,
+) func(*RunTool) {
 	return func(t *RunTool) {
-		t.reg = reg
+		t.reg = workspacesession.NormalizeAcquirer(reg)
 	}
 }
 
