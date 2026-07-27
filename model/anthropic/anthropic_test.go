@@ -168,59 +168,111 @@ func Test_Model_GenerateContent_NilRequest(t *testing.T) {
 }
 
 func TestModel_GenerateContent_ToolsDisabledAfterCallback(t *testing.T) {
-	var captured map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(
-		w http.ResponseWriter,
-		r *http.Request,
-	) {
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"msg-test",
-			"type":"message",
-			"role":"assistant",
-			"model":"claude-test",
-			"content":[{"type":"text","text":"ok"}],
-			"stop_reason":"end_turn",
-			"stop_sequence":null,
-			"usage":{"input_tokens":1,"output_tokens":1}
-		}`))
-	}))
-	defer server.Close()
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var captured map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(
+				w http.ResponseWriter,
+				r *http.Request,
+			) {
+				require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					_, _ = w.Write([]byte(strings.Join([]string{
+						"event: message_start",
+						`data: {"type":"message_start","message":{"id":"msg-test","type":"message","role":"assistant","model":"claude-test","content":[]}}`,
+						"",
+						"event: content_block_start",
+						`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+						"",
+						"event: content_block_delta",
+						`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}`,
+						"",
+						"event: content_block_stop",
+						`data: {"type":"content_block_stop","index":0}`,
+						"",
+						"event: message_delta",
+						`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":1}}`,
+						"",
+						"event: message_stop",
+						`data: {"type":"message_stop"}`,
+						"",
+					}, "\n")))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{
+					"id":"msg-test",
+					"type":"message",
+					"role":"assistant",
+					"model":"claude-test",
+					"content":[{"type":"text","text":"ok"}],
+					"stop_reason":"end_turn",
+					"stop_sequence":null,
+					"usage":{"input_tokens":1,"output_tokens":1}
+				}`))
+			}))
+			defer server.Close()
 
-	m := New(
-		"claude-test",
-		WithAPIKey("test-key"),
-		WithBaseURL(server.URL),
-		WithChatRequestCallback(func(
-			_ context.Context,
-			request *anthropic.MessageNewParams,
-		) {
-			request.Tools = []anthropic.ToolUnionParam{{
-				OfTool: &anthropic.ToolParam{Name: "callback_tool"},
-			}}
-			request.ToolChoice =
-				anthropic.ToolChoiceParamOfTool("callback_tool")
-			request.SetExtraFields(map[string]any{
-				"tools":          []any{},
-				"tool_choice":    map[string]any{"type": "any"},
-				"callback_field": "preserved",
+			m := New(
+				"claude-test",
+				WithAPIKey("test-key"),
+				WithBaseURL(server.URL),
+				WithAnthropicClientOptions(
+					anthropicopt.WithJSONSet("tools", []any{}),
+					anthropicopt.WithJSONSet(
+						"client_option_field",
+						"preserved",
+					),
+				),
+				WithAnthropicRequestOptions(
+					anthropicopt.WithJSONSet(
+						"tool_choice",
+						map[string]any{"type": "any"},
+					),
+					anthropicopt.WithJSONSet(
+						"request_option_field",
+						"preserved",
+					),
+				),
+				WithChatRequestCallback(func(
+					_ context.Context,
+					request *anthropic.MessageNewParams,
+				) {
+					request.Tools = []anthropic.ToolUnionParam{{
+						OfTool: &anthropic.ToolParam{
+							Name: "callback_tool",
+						},
+					}}
+					request.ToolChoice =
+						anthropic.ToolChoiceParamOfTool("callback_tool")
+					request.SetExtraFields(map[string]any{
+						"tools":          []any{},
+						"tool_choice":    map[string]any{"type": "any"},
+						"callback_field": "preserved",
+					})
+				}),
+			)
+			ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+			responseChan, err := m.GenerateContent(ctx, &model.Request{
+				Messages: []model.Message{model.NewUserMessage("test")},
+				GenerationConfig: model.GenerationConfig{
+					Stream: stream,
+				},
 			})
-		}),
-	)
-	ctx := imodelrequest.WithToolsDisabled(context.Background())
+			require.NoError(t, err)
+			for range responseChan {
+			}
 
-	responseChan, err := m.GenerateContent(ctx, &model.Request{
-		Messages: []model.Message{model.NewUserMessage("test")},
-	})
-	require.NoError(t, err)
-	for range responseChan {
+			require.NotNil(t, captured)
+			require.NotContains(t, captured, "tools")
+			require.NotContains(t, captured, "tool_choice")
+			require.Equal(t, "preserved", captured["callback_field"])
+			require.Equal(t, "preserved", captured["client_option_field"])
+			require.Equal(t, "preserved", captured["request_option_field"])
+		})
 	}
-
-	require.NotNil(t, captured)
-	require.NotContains(t, captured, "tools")
-	require.NotContains(t, captured, "tool_choice")
-	require.Equal(t, "preserved", captured["callback_field"])
 }
 
 func Test_convertUserMessage(t *testing.T) {

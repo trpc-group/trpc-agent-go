@@ -1017,7 +1017,29 @@ func (m *Model) buildChatRequestWithToolControl(
 			IncludeUsage: openai.Bool(true),
 		}
 	}
-	return chatRequest, opts
+	return chatRequest, appendToolControlDeleteOptions(
+		opts,
+		disableToolFields,
+	)
+}
+
+func appendToolControlDeleteOptions(
+	opts []openaiopt.RequestOption,
+	enabled bool,
+) []openaiopt.RequestOption {
+	if !enabled {
+		return opts
+	}
+	for _, key := range []string{
+		"tools",
+		"tool_choice",
+		"parallel_tool_calls",
+		"function_call",
+		"functions",
+	} {
+		opts = append(opts, openaiopt.WithJSONDel(key))
+	}
+	return opts
 }
 
 func disableChatRequestTools(request *openai.ChatCompletionNewParams) {

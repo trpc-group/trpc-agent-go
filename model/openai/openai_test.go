@@ -673,6 +673,14 @@ func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
 		"gpt-3.5-turbo",
 		WithBaseURL(server.URL),
 		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
 		WithChatRequestCallback(func(
 			_ context.Context,
 			request *openaigo.ChatCompletionNewParams,
@@ -714,6 +722,7 @@ func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
 	require.NotContains(t, captured, "function_call")
 	require.NotContains(t, captured, "functions")
 	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
 }
 
 func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
@@ -6188,6 +6197,14 @@ func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
 		"gpt-3.5-turbo",
 		WithBaseURL(server.URL),
 		WithAPIKey("test-key"),
+		WithOpenAIOptions(
+			openaiopt.WithJSONSet("tools", []any{}),
+			openaiopt.WithJSONSet("tool_choice", "required"),
+			openaiopt.WithJSONSet("parallel_tool_calls", true),
+			openaiopt.WithJSONSet("function_call", "auto"),
+			openaiopt.WithJSONSet("functions", []any{}),
+			openaiopt.WithJSONSet("client_option_field", "preserved"),
+		),
 		WithExtraFields(map[string]any{
 			"tool_choice":         "required",
 			"parallel_tool_calls": true,
@@ -6239,6 +6256,7 @@ func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
 	require.Equal(t, "model-value", captured["model_field"])
 	require.Equal(t, "request-value", captured["request_field"])
 	require.Equal(t, "preserved", captured["callback_field"])
+	require.Equal(t, "preserved", captured["client_option_field"])
 }
 
 func TestDisableChatRequestTools_WholeObjectOverride(t *testing.T) {

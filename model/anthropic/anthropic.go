@@ -168,6 +168,18 @@ func disableChatRequestTools(request *anthropic.MessageNewParams) {
 	}
 }
 
+func (m *Model) requestOptions(ctx context.Context) []option.RequestOption {
+	if !imodelrequest.ToolsDisabled(ctx) {
+		return m.anthropicRequestOptions
+	}
+	opts := append([]option.RequestOption(nil), m.anthropicRequestOptions...)
+	return append(
+		opts,
+		option.WithJSONDel("tools"),
+		option.WithJSONDel("tool_choice"),
+	)
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *anthropic.MessageNewParams,
@@ -555,7 +567,7 @@ func (m *Model) handleNonStreamingResponse(
 	responseChan chan<- *model.Response,
 ) {
 	// Issue non-streaming request.
-	message, err := m.client.Messages.New(ctx, chatRequest, m.anthropicRequestOptions...)
+	message, err := m.client.Messages.New(ctx, chatRequest, m.requestOptions(ctx)...)
 	if err != nil {
 		m.sendErrorResponse(ctx, responseChan, model.ErrorTypeAPIError, err)
 		return
@@ -611,7 +623,7 @@ func (m *Model) handleStreamingResponse(
 	responseChan chan<- *model.Response,
 ) {
 	// Issue streaming request.
-	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.anthropicRequestOptions...)
+	stream := m.client.Messages.NewStreaming(ctx, chatRequest, m.requestOptions(ctx)...)
 	defer stream.Close()
 	// Accumulator to build final response.
 	acc := newStreamingMessageAccumulator()

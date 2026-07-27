@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"google.golang.org/genai"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -181,7 +182,10 @@ func (m *Model) GenerateContent(
 	if len(chatRequest) == 0 {
 		return nil, errors.New("gemini: no content after message conversion")
 	}
-	generateConfig := m.buildChatConfig(request)
+	generateConfig := m.buildChatConfigWithToolControl(
+		request,
+		imodelrequest.ToolsDisabled(ctx),
+	)
 	// Execute callback synchronously before starting the goroutine
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
@@ -664,6 +668,13 @@ func (m *Model) InputTokenBudget(_ context.Context, _ *model.Request) int {
 
 // buildChatConfig converts our Request to Gemini request config.
 func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentConfig {
+	return m.buildChatConfigWithToolControl(request, false)
+}
+
+func (m *Model) buildChatConfigWithToolControl(
+	request *model.Request,
+	disableToolFields bool,
+) *genai.GenerateContentConfig {
 	chatRequest := &genai.GenerateContentConfig{
 		Tools: m.convertTools(request.Tools),
 	}
@@ -721,7 +732,22 @@ func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentCo
 		requestExtras,
 		rewriteBypassThoughtSignatures,
 	)
+	if disableToolFields {
+		chatRequest.Tools = nil
+		chatRequest.ToolConfig = nil
+		chatRequest.HTTPOptions.ExtrasRequestProvider =
+			chainExtrasRequestProvider(
+				chatRequest.HTTPOptions.ExtrasRequestProvider,
+				deleteGeminiToolControls,
+			)
+	}
 	return chatRequest
+}
+
+func deleteGeminiToolControls(body map[string]any) map[string]any {
+	delete(body, "tools")
+	delete(body, "toolConfig")
+	return body
 }
 
 // buildThinkingConfig converts our Request to Gemini request ThinkingConfig
