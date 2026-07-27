@@ -67,6 +67,9 @@ type Request struct {
 	// operands are resolved against it before the sensitive-path rule
 	// runs, so a denied file reached via a workdir cannot slip through.
 	Workdir string
+	// Stdin is inline input fed to a command (for example Python code
+	// passed to an interpreter via its stdin). Scanned as a code block.
+	Stdin string
 	// Env is the environment overlay requested for the call.
 	Env map[string]string
 	// TimeoutSec is the requested timeout in seconds (0 = default).
@@ -88,6 +91,9 @@ type Request struct {
 	// finding and applies policy.ParseErrorDecision, so unparsable
 	// input fails closed instead of scanning an empty command.
 	Malformed bool
+	// EnvelopeSize is the raw argument byte length when known before
+	// decoding. Used by oversized() without retaining the full payload.
+	EnvelopeSize int
 }
 
 // Scan evaluates req against policy and returns a structured report.
@@ -155,6 +161,9 @@ func Scan(req Request, policy Policy) Report {
 	// Code blocks: analyse each block's text and its leading command.
 	for _, b := range req.CodeBlocks {
 		sc.scanCodeBlock(b)
+	}
+	if strings.TrimSpace(req.Stdin) != "" {
+		sc.scanCodeBlock(CodeBlock{Language: "shell", Code: req.Stdin})
 	}
 
 	report.Command = sc.redactString(commandPreview(req))
@@ -271,6 +280,7 @@ func (s *scanner) scanArgvStructure(argv []string) {
 		})
 	}
 	s.scanResolvedPaths(argv)
+	s.scanInterpreterInline(argv)
 }
 
 // applyCommandPolicy enforces the allow/deny lists via shellsafe. Its
@@ -722,6 +732,8 @@ func (s *scanner) scanCodeBlock(b CodeBlock) {
 
 	if isShellLanguage(b.Language) {
 		s.scanShellScript(b.Code)
+	} else {
+		s.scanCodeBlockURLs(b.Code)
 	}
 
 	lc := strings.ToLower(b.Code)
@@ -767,6 +779,62 @@ func (s *scanner) scanShellScript(code string) {
 		for _, argv := range pipe.Commands {
 			s.scanArgvStructure(argv)
 		}
+	}
+}
+
+// scanInterpreterInline detects interpreter one-liners (python -c,
+// node -e, ruby -e, perl -e) and scans the inline payload as a code
+// block so network egress and other rules apply to the embedded code.
+func (s *scanner) scanInterpreterInline(argv []string) {
+	if len(argv) < 3 {
+		return
+	}
+	base := strings.ToLower(lastPathSegment(argv[0]))
+	lang, ok := inlineInterpreterLanguages[base]
+	if !ok {
+		return
+	}
+	flagIdx := -1
+	for i := 1; i < len(argv); i++ {
+		if inlineExecFlag(base, argv[i]) {
+			flagIdx = i
+			break
+		}
+	}
+	if flagIdx < 0 || flagIdx+1 >= len(argv) {
+		return
+	}
+	code := strings.Join(argv[flagIdx+1:], " ")
+	code = strings.Trim(code, `"'`)
+	if code == "" {
+		return
+	}
+	s.scanCodeBlock(CodeBlock{Language: lang, Code: code})
+}
+
+// scanCodeBlockURLs extracts URL-like strings from a non-shell code
+// block and checks each host against the egress allowlist.
+func (s *scanner) scanCodeBlockURLs(text string) {
+	seen := map[string]struct{}{}
+	for _, u := range extractURLsFromText(text) {
+		host := hostFromToken(u)
+		if host == "" {
+			continue
+		}
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		if s.hostAllowed(host) {
+			continue
+		}
+		s.add(Finding{
+			RuleID:         RuleNetworkEgress,
+			RiskLevel:      RiskHigh,
+			Decision:       s.policy.Network.Decision,
+			Evidence:       "network destination in code block: " + host,
+			Recommendation: "add the destination host to network.allowed_hosts if it is trusted",
+		})
 	}
 }
 

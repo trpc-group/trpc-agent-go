@@ -90,11 +90,11 @@ func TestMergePolicyListsAndScalars(t *testing.T) {
 		DeniedCommands:            []string{"nc"}, // replaces default
 		DeniedPaths:               []string{},     // explicit clear
 		Network:                   NetworkPolicy{AllowedHosts: []string{"proxy.golang.org"}},
-		Limits:                    LimitsPolicy{MaxSleepSec: 5},
 		Env:                       EnvPolicy{AllowedNames: []string{"PATH"}},
 		DependencyInstallDecision: DecisionDeny,
 	}
 	out := mergePolicy(DefaultPolicy(), loaded)
+	out.Limits = mergeLimits(out.Limits, rawLimitsPolicy{MaxSleepSec: intPtr(5)})
 
 	if len(out.DeniedCommands) != 1 || out.DeniedCommands[0] != "nc" {
 		t.Errorf("denied_commands not replaced: %v", out.DeniedCommands)
@@ -158,8 +158,35 @@ func TestLoadPolicyMissingFile(t *testing.T) {
 	}
 }
 
+func TestLoadPolicyExplicitZeroLimits(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "zero-limits.yaml")
+	content := `limits:
+  max_timeout_sec: 0
+  max_sleep_sec: 0
+`
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p, err := LoadPolicy(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if p.Limits.MaxTimeoutSec != 0 {
+		t.Errorf("max_timeout_sec = %d, want 0", p.Limits.MaxTimeoutSec)
+	}
+	if p.Limits.MaxSleepSec != 0 {
+		t.Errorf("max_sleep_sec = %d, want 0", p.Limits.MaxSleepSec)
+	}
+	if p.Limits.MaxOutputBytes != DefaultPolicy().Limits.MaxOutputBytes {
+		t.Errorf("max_output_bytes default not preserved: %d", p.Limits.MaxOutputBytes)
+	}
+}
+
 func TestDefaultPolicyValid(t *testing.T) {
 	if err := DefaultPolicy().Validate(); err != nil {
 		t.Fatalf("default policy invalid: %v", err)
 	}
 }
+
+func intPtr(v int) *int { return &v }

@@ -454,6 +454,63 @@ func isShellLanguage(lang string) bool {
 	return ok
 }
 
+// inlineInterpreterLanguages maps interpreter basenames to the code-
+// block language tag used when scanning inline -c/-e payloads.
+var inlineInterpreterLanguages = map[string]string{
+	"python": "python", "python3": "python", "python2": "python",
+	"node": "javascript", "nodejs": "javascript",
+	"ruby": "ruby",
+	"perl": "perl",
+}
+
+func inlineExecFlag(interpreter, flag string) bool {
+	flag = strings.ToLower(strings.TrimSpace(flag))
+	switch interpreter {
+	case "python", "python3", "python2":
+		return flag == "-c"
+	case "node", "nodejs":
+		return flag == "-e" || flag == "--eval"
+	case "ruby", "perl":
+		return flag == "-e"
+	default:
+		return false
+	}
+}
+
+// extractURLsFromText finds URL-shaped substrings in arbitrary code.
+func extractURLsFromText(text string) []string {
+	lc := strings.ToLower(text)
+	var out []string
+	for _, prefix := range []string{"https://", "http://", "//"} {
+		start := 0
+		for {
+			i := strings.Index(lc[start:], prefix)
+			if i < 0 {
+				break
+			}
+			i += start
+			end := i + len(prefix)
+			for end < len(text) && !urlTerminator(text[end]) {
+				end++
+			}
+			if end > i+len(prefix) {
+				out = append(out, text[i:end])
+			}
+			start = end
+		}
+	}
+	return out
+}
+
+func urlTerminator(b byte) bool {
+	switch b {
+	case ' ', '\t', '\n', '\r', '"', '\'', '`', ')', ']', '}', ',', ';':
+		return true
+	default:
+		return false
+	}
+}
+
 func hostFromToken(tok string) string {
 	// Strip scheme.
 	if i := strings.Index(tok, "://"); i >= 0 {
@@ -535,8 +592,11 @@ func commandPreview(req Request) string {
 // oversized reports whether the request payload exceeds the envelope
 // cap the scanner is willing to inspect in full.
 func oversized(req Request) bool {
-	total := len(req.Command)
+	total := req.EnvelopeSize + len(req.Command) + len(req.Workdir) + len(req.Stdin)
 	for _, a := range req.Args {
+		total += len(a)
+	}
+	for _, a := range req.RawArgs {
 		total += len(a)
 	}
 	for _, b := range req.CodeBlocks {

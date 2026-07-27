@@ -127,6 +127,15 @@ type LimitsPolicy struct {
 	MaxPipelineSegments int `json:"max_pipeline_segments" yaml:"max_pipeline_segments"`
 }
 
+// rawLimitsPolicy is the decode overlay for limits fields so explicit
+// zero values are distinguishable from absent keys.
+type rawLimitsPolicy struct {
+	MaxTimeoutSec       *int   `json:"max_timeout_sec" yaml:"max_timeout_sec"`
+	MaxOutputBytes      *int64 `json:"max_output_bytes" yaml:"max_output_bytes"`
+	MaxSleepSec         *int   `json:"max_sleep_sec" yaml:"max_sleep_sec"`
+	MaxPipelineSegments *int   `json:"max_pipeline_segments" yaml:"max_pipeline_segments"`
+}
+
 // EnvPolicy controls environment-variable handling.
 type EnvPolicy struct {
 	// AllowedNames lists environment variable names a tool call may
@@ -253,16 +262,28 @@ func LoadPolicy(path string) (Policy, error) {
 // so extension-less JSON payloads still parse).
 func ParsePolicy(raw []byte, ext string) (Policy, error) {
 	loaded := Policy{}
+	var rawLimits rawLimitsPolicy
 	var err error
+	limitsWrapper := struct {
+		Limits rawLimitsPolicy `json:"limits" yaml:"limits"`
+	}{}
 	if ext == ".json" {
 		err = json.Unmarshal(raw, &loaded)
+		if err == nil {
+			err = json.Unmarshal(raw, &limitsWrapper)
+		}
 	} else {
 		err = yaml.Unmarshal(raw, &loaded)
+		if err == nil {
+			err = yaml.Unmarshal(raw, &limitsWrapper)
+		}
 	}
 	if err != nil {
 		return Policy{}, fmt.Errorf("safety: decode policy: %w", err)
 	}
+	rawLimits = limitsWrapper.Limits
 	merged := mergePolicy(DefaultPolicy(), loaded)
+	merged.Limits = mergeLimits(merged.Limits, rawLimits)
 	if err := merged.Validate(); err != nil {
 		return Policy{}, err
 	}
@@ -283,7 +304,6 @@ func mergePolicy(base, loaded Policy) Policy {
 	out.DeniedPaths = mergeList(out.DeniedPaths, loaded.DeniedPaths)
 	out.DestructivePatterns = mergeList(out.DestructivePatterns, loaded.DestructivePatterns)
 	out.Network = mergeNetwork(out.Network, loaded.Network)
-	out.Limits = mergeLimits(out.Limits, loaded.Limits)
 	out.Env = mergeEnv(out.Env, loaded.Env)
 	out.HostExec = mergeHostExec(out.HostExec, loaded.HostExec)
 	out.DependencyInstallDecision = firstDecision(loaded.DependencyInstallDecision, out.DependencyInstallDecision)
@@ -318,18 +338,18 @@ func mergeNetwork(base, loaded NetworkPolicy) NetworkPolicy {
 	return base
 }
 
-func mergeLimits(base, loaded LimitsPolicy) LimitsPolicy {
-	if loaded.MaxTimeoutSec != 0 {
-		base.MaxTimeoutSec = loaded.MaxTimeoutSec
+func mergeLimits(base LimitsPolicy, raw rawLimitsPolicy) LimitsPolicy {
+	if raw.MaxTimeoutSec != nil {
+		base.MaxTimeoutSec = *raw.MaxTimeoutSec
 	}
-	if loaded.MaxOutputBytes != 0 {
-		base.MaxOutputBytes = loaded.MaxOutputBytes
+	if raw.MaxOutputBytes != nil {
+		base.MaxOutputBytes = *raw.MaxOutputBytes
 	}
-	if loaded.MaxSleepSec != 0 {
-		base.MaxSleepSec = loaded.MaxSleepSec
+	if raw.MaxSleepSec != nil {
+		base.MaxSleepSec = *raw.MaxSleepSec
 	}
-	if loaded.MaxPipelineSegments != 0 {
-		base.MaxPipelineSegments = loaded.MaxPipelineSegments
+	if raw.MaxPipelineSegments != nil {
+		base.MaxPipelineSegments = *raw.MaxPipelineSegments
 	}
 	return base
 }

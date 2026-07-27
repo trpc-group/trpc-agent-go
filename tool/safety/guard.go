@@ -30,6 +30,9 @@ const (
 	// publishes no execution ToolMetadata, so it is classified by name
 	// like the other command surfaces.
 	toolSkillRun = "skill_run"
+	toolWriteStdin          = "write_stdin"
+	toolWorkspaceWriteStdin = "workspace_write_stdin"
+	toolSkillWriteStdin     = "skill_write_stdin"
 )
 
 // ExecKind names an execution surface the guard knows how to scan. It
@@ -177,11 +180,11 @@ func WithExecToolNames(names map[string]ExecKind) GuardOption {
 // denies every call (with the validation error as the reason) rather
 // than silently allowing traffic; call Err to detect this at startup.
 func NewGuard(policy Policy, opts ...GuardOption) *Guard {
-	g := &Guard{policy: policy}
+	g := &Guard{policy: copyPolicy(policy)}
 	for _, o := range opts {
 		o(g)
 	}
-	if err := policy.Validate(); err != nil {
+	if err := g.policy.Validate(); err != nil {
 		g.policyErr = err
 	}
 	return g
@@ -196,8 +199,8 @@ func (g *Guard) Err() error {
 	return g.policyErr
 }
 
-// Policy returns the guard's active policy.
-func (g *Guard) Policy() Policy { return g.policy }
+// Policy returns a deep copy of the guard's active policy.
+func (g *Guard) Policy() Policy { return copyPolicy(g.policy) }
 
 // CheckToolPermission implements tool.PermissionPolicy. It converts
 // the request into a scan Request, runs Scan, records the audit event
@@ -287,13 +290,7 @@ func (g *Guard) toScanRequest(req *tool.PermissionRequest) (Request, bool) {
 		if g.allowUnmapped {
 			return Request{}, false
 		}
-		// Unknown tool. If it advertises open-world/destructive
-		// metadata we still scan defensively; otherwise treat it as a
-		// non-exec tool and skip.
-		if req.Metadata.OpenWorld || req.Metadata.Destructive {
-			return g.parseGeneric(base, req.Arguments), true
-		}
-		return Request{}, false
+		return g.parseGeneric(base, req.Arguments), true
 	}
 }
 
@@ -306,6 +303,10 @@ func (g *Guard) toScanRequest(req *tool.PermissionRequest) (Request, bool) {
 // scanning the raw text as a command, preserving the legacy behaviour
 // for callers that pass a bare shell string.
 func (g *Guard) parseGeneric(base Request, raw []byte) Request {
+	if len(raw) > maxEnvelopeBytes {
+		base.EnvelopeSize = len(raw)
+		return base
+	}
 	trimmed := strings.TrimSpace(string(raw))
 	if trimmed == "" {
 		return base
@@ -361,6 +362,7 @@ func collectStringValues(v any) []string {
 
 type execArgs struct {
 	Command       string            `json:"command"`
+	Stdin         string            `json:"stdin,omitempty"`
 	Cwd           string            `json:"cwd,omitempty"`
 	Workdir       string            `json:"workdir,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
@@ -379,6 +381,7 @@ func (g *Guard) parseExec(base Request, raw []byte) Request {
 		return base
 	}
 	base.Command = in.Command
+	base.Stdin = in.Stdin
 	base.Workdir = firstNonEmpty(in.Cwd, in.Workdir)
 	base.Env = in.Env
 	base.Background = in.Background
@@ -474,7 +477,9 @@ func (g *Guard) classify(name string) (string, toolKind) {
 		}
 	}
 	switch {
-	case strings.HasSuffix(n, toolWorkspaceExec), strings.HasSuffix(n, toolSkillRun):
+	case strings.HasSuffix(n, toolWorkspaceExec), strings.HasSuffix(n, toolSkillRun),
+		strings.HasSuffix(n, toolWriteStdin), strings.HasSuffix(n, toolWorkspaceWriteStdin),
+		strings.HasSuffix(n, toolSkillWriteStdin):
 		return BackendWorkspaceExec, kindWorkspaceExec
 	case strings.HasSuffix(n, toolHostExec):
 		return BackendHostExec, kindHostExec
@@ -552,6 +557,23 @@ func firstIntArg(vals ...*int) int {
 }
 
 func boolArg(v *bool) bool { return v != nil && *v }
+
+func copyPolicy(p Policy) Policy {
+	cp := p
+	cp.AllowedCommands = append([]string(nil), p.AllowedCommands...)
+	cp.DeniedCommands = append([]string(nil), p.DeniedCommands...)
+	cp.DeniedPaths = append([]string(nil), p.DeniedPaths...)
+	cp.DestructivePatterns = append([]string(nil), p.DestructivePatterns...)
+	cp.Network.AllowedHosts = append([]string(nil), p.Network.AllowedHosts...)
+	cp.Network.EgressCommands = append([]string(nil), p.Network.EgressCommands...)
+	cp.Env.AllowedNames = append([]string(nil), p.Env.AllowedNames...)
+	cp.Env.DeniedNames = append([]string(nil), p.Env.DeniedNames...)
+	if p.RedactSecrets != nil {
+		v := *p.RedactSecrets
+		cp.RedactSecrets = &v
+	}
+	return cp
+}
 
 // fileSink appends audit events to a JSONL file.
 type fileSink struct {
