@@ -11,6 +11,7 @@ package regression
 import (
 	"encoding/json"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +33,12 @@ func TestRuleValueUsesStableTaggedJSONSchema(t *testing.T) {
 		if err != nil {
 			t.Fatalf("marshal rule value: %v", err)
 		}
-		if !strings.Contains(string(data), `"`+string(value.Type)+`|`) {
-			t.Fatalf("rule value did not use the tagged JSON schema: %s", data)
+		var tagged string
+		if err := json.Unmarshal(data, &tagged); err != nil {
+			t.Fatalf("decode tagged rule value: %v", err)
+		}
+		if want := string(value.Type) + "|" + value.Value; tagged != want {
+			t.Fatalf("rule value tagged JSON = %q, want %q", tagged, want)
 		}
 		var decoded RuleValue
 		if err := json.Unmarshal(data, &decoded); err != nil || decoded != value {
@@ -55,6 +60,23 @@ func TestRuleValueUsesStableTaggedJSONSchema(t *testing.T) {
 		}
 		if _, err := json.Marshal(value); err == nil {
 			t.Fatalf("invalid rule value %+v was marshaled", value)
+		}
+	}
+}
+
+func TestRuntimePolicySerializesFalseDeterministicValue(t *testing.T) {
+	for _, deterministic := range []bool{false, true} {
+		data, err := json.Marshal(RuntimePolicy{NumRuns: 1, Deterministic: deterministic})
+		if err != nil {
+			t.Fatalf("marshal runtime policy: %v", err)
+		}
+		var encoded map[string]json.RawMessage
+		if err := json.Unmarshal(data, &encoded); err != nil {
+			t.Fatalf("decode runtime policy: %v", err)
+		}
+		value, ok := encoded["deterministic"]
+		if !ok || string(value) != strconv.FormatBool(deterministic) {
+			t.Fatalf("deterministic JSON value = %s (present=%t), want explicit %t", value, ok, deterministic)
 		}
 	}
 }

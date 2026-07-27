@@ -28,7 +28,7 @@ import (
 // analysis. Now is optional and defaults to time.Now. It is used only to stamp
 // the audit lifecycle, not to change policy decisions.
 type Dependencies struct {
-	// Attributor is required and classifies failed training evidence.
+	// Attributor is required and classifies failed training and validation evidence.
 	Attributor Attributor
 	// DeltaEngine is required and compares baseline and candidate evidence.
 	DeltaEngine DeltaEngine

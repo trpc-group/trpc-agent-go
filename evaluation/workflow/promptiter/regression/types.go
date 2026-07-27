@@ -140,8 +140,10 @@ type RuntimePolicy struct {
 	// NumRuns is the positive count of complete evaluation runs per case.
 	NumRuns int `json:"numRuns"`
 	// Deterministic declares that all audited execution components were
-	// deterministic under the supplied runtime configuration.
-	Deterministic bool `json:"deterministic,omitempty"`
+	// deterministic under the supplied runtime configuration. False is emitted
+	// explicitly so an audit distinguishes a nondeterministic run from omitted
+	// reproducibility evidence.
+	Deterministic bool `json:"deterministic"`
 }
 
 // PromptIterConfiguration is the effective execution policy retained by the
@@ -601,10 +603,11 @@ type RunResult struct {
 	ErrorMessage        string                   `json:"errorMessage,omitempty"`
 }
 
-// Attributor classifies a failed training case.
+// Attributor classifies failed or execution-error training and validation cases.
 type Attributor interface {
-	// Attribute classifies one failed or execution-error training case. The
-	// context controls the call; case must be non-nil and is read-only. A
+	// Attribute classifies one failed or execution-error case from a training or
+	// validation snapshot. The context controls the call; case must be non-nil
+	// and is read-only. A
 	// successful result must be non-nil, identify the same case, and contain a
 	// category, reason, and at least one evidence item.
 	Attribute(context.Context, *CaseResult) (*AttributionResult, error)
