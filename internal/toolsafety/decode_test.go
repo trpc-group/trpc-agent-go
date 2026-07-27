@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making
 // trpc-agent-go available.
 //
@@ -65,5 +66,31 @@ func TestLoadPolicyFromJSON(t *testing.T) {
 	}
 	if policy.DecisionPolicy == nil || policy.DecisionPolicy.AskOnRiskLevel != "high" {
 		t.Error("decision_policy not parsed correctly")
+	}
+}
+
+// TestLoadPolicyFromInvalidYAML covers the parse error path in loadYAML (75%).
+func TestLoadPolicyFromInvalidYAML(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "invalid.yaml")
+	content := "version: 1.0\n  invalid indentation\nbroken"
+	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadPolicy(tmp)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML, got nil")
+	}
+}
+
+// TestLoadPolicyFromInvalidJSON covers the parse error path in loadJSON (75%).
+func TestLoadPolicyFromInvalidJSON(t *testing.T) {
+	tmp := filepath.Join(t.TempDir(), "invalid.json")
+	content := `{"version": "1.0", invalid json`
+	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadPolicy(tmp)
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
 	}
 }
