@@ -1,0 +1,7 @@
+name: "long_running"
+description: "Long running — sleep 3600"
+command: "sleep 3600"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "medium"
+expected_rules: ["RESOURCE_SLEEP_LOOP"]

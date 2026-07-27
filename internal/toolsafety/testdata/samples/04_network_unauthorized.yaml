@@ -1,0 +1,7 @@
+name: "network_unauthorized"
+description: "Network egress to non-whitelisted domain"
+command: "curl http://evil.com"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "high"
+expected_rules: ["NETWORK_UNAUTHORIZED"]

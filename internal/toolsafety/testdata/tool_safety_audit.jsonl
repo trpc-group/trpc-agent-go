@@ -1,0 +1,3 @@
+{"timestamp":"2026-07-27T10:00:00Z","tool_name":"workspace_exec","decision":"deny","risk_level":"critical","rule_id":"DESTRUCTIVE_PATH","evidence":"rm -rf /","duration_ms":0,"sanitized":false,"intercepted":true,"backend":"workspaceexec"}
+{"timestamp":"2026-07-27T10:01:00Z","tool_name":"exec_command","decision":"deny","risk_level":"high","rule_id":"NETWORK_UNAUTHORIZED","evidence":"curl http://evil.com","duration_ms":1,"sanitized":false,"intercepted":true,"backend":"hostexec"}
+{"timestamp":"2026-07-27T10:02:00Z","tool_name":"workspace_exec","decision":"allow","risk_level":"none","rule_id":"","evidence":"","duration_ms":0,"sanitized":false,"intercepted":false,"backend":"workspaceexec"}

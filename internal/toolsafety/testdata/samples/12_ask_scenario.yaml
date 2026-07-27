@@ -1,0 +1,7 @@
+name: "ask_unknown_domain"
+description: "Ask scenario — unknown domain not in whitelist or blocklist"
+command: "curl https://unknown-api.example.com"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "high"
+expected_rules: ["NETWORK_UNAUTHORIZED"]

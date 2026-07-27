@@ -1,0 +1,98 @@
+version: "1.0"
+
+# 命令级策略（传递给 shellsafe.Policy）
+allowed_commands:
+  - "ls"
+  - "cat"
+  - "echo"
+  - "pwd"
+  - "git"
+  - "go"
+  - "python3"
+  - "pip3"
+  - "make"
+
+denied_commands:
+  - "rm"
+  - "dd"
+  - "mkfs"
+  - "shred"
+  - "chmod"
+  - "chown"
+
+# 危险模式（正则匹配 argv 或脚本中的内容）
+dangerous_patterns:
+  - pattern: 'rm\s+(-rf?\s+)?/?$'
+    risk_level: "critical"
+    description: "Destructive recursive delete on root"
+    rule_id: "DESTRUCTIVE_PATH"
+  - pattern: 'pip\s+install\s+'
+    risk_level: "high"
+    description: "Dependency install via pip"
+    rule_id: "DEPENDENCY_INSTALL"
+  - pattern: 'npm\s+install\s+'
+    risk_level: "high"
+    description: "Dependency install via npm"
+    rule_id: "DEPENDENCY_INSTALL"
+  - pattern: 'go\s+install\s+'
+    risk_level: "high"
+    description: "Dependency install via go"
+    rule_id: "DEPENDENCY_INSTALL"
+
+# 网络策略
+network_policy:
+  allowed_domains:
+    - "api.github.com"
+    - "pypi.org"
+    - "files.pythonhosted.org"
+    - "registry.npmjs.org"
+    - "proxy.golang.org"
+  blocked_domains: []
+  default_action: "deny"
+
+# 路径策略
+path_policy:
+  denied_paths:
+    - "/etc/**"
+    - "/var/**"
+    - "/usr/**"
+  sensitive_paths:
+    - "**/.env"
+    - "**/.ssh/**"
+    - "**/id_rsa*"
+    - "**/*.pem"
+    - "**/credentials"
+    - "**/config.json"
+  allowed_paths:
+    - "/tmp/**"
+    - "/workspace/**"
+
+# 资源限制
+resource_policy:
+  max_timeout_s: 300
+  max_output_bytes: 10485760   # 10MB
+  max_sleep_s: 60
+  max_process_count: 10
+
+# 敏感信息模式（输出脱敏用）
+sensitive_patterns:
+  - "(?i)(api[_-]?key|apikey)\\s*[:=]\\s*['\"][^'\"]+['\"]"
+  - "(?i)(secret|token|password|passwd)\\s*[:=]\\s*['\"][^'\"]+['\"]"
+  - "-----BEGIN (RSA |EC )?PRIVATE KEY-----"
+  - "gh[ps]_[A-Za-z0-9]{36}"
+  - "sk-[A-Za-z0-9]{32,}"
+
+# 决策策略
+decision_policy:
+  default_on_parse_failure: "deny"
+  default_on_unknown_risk: "ask"
+  ask_on_risk_level: "high"
+
+# 审计策略
+audit_policy:
+  enabled: true
+  output_path: "/var/log/tool_safety_audit.jsonl"
+  sensitive_fields:
+    - "command"
+    - "args"
+    - "env"

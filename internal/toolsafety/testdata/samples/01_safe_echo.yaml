@@ -1,0 +1,6 @@
+name: "safe_echo"
+description: "Safe command — basic echo"
+command: "echo 'hello world'"
+backend: "workspaceexec"
+expected_decision: "allow"
+expected_risk_level: "none"

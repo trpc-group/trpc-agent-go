@@ -28,6 +28,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/envscrub"
 	"trpc.group/trpc-go/trpc-agent-go/internal/programsession"
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsafety"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspacefacade"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceinput"
 	"trpc.group/trpc-go/trpc-agent-go/internal/workspaceprep"
@@ -79,6 +80,13 @@ type ExecTool struct {
 	allowedCmds []string
 	deniedCmds  []string
 	outputLimit int
+
+	// safetyScanner optionally runs the tool execution safety guard
+	// before every workspace_exec command. When set, the command is
+	// checked against the scanner's policy before being passed to the
+	// shellsafe policy. A deny or ask decision blocks execution and
+	// returns a structured error to the caller.
+	safetyScanner *toolsafety.Scanner
 
 	mu       sync.Mutex
 	sessions map[string]*execSession
@@ -279,6 +287,15 @@ func WithAllowedCommands(cmds ...string) func(*ExecTool) {
 func WithDeniedCommands(cmds ...string) func(*ExecTool) {
 	return func(t *ExecTool) {
 		t.setDeniedCommands(cmds)
+	}
+}
+
+// WithSafetyScanner sets an optional safety scanner that runs before
+// every workspace_exec command. When the scanner returns a deny or ask
+// decision the command is rejected before reaching the shellsafe policy.
+func WithSafetyScanner(scanner *toolsafety.Scanner) func(*ExecTool) {
+	return func(t *ExecTool) {
+		t.safetyScanner = scanner
 	}
 }
 
@@ -629,7 +646,7 @@ func (t *ExecTool) prepareExec(
 	ctx context.Context,
 	in execInput,
 ) (execRequest, error) {
-	if err := t.checkCommandPolicy(in.Command); err != nil {
+	if err := t.checkCommandPolicy(ctx, in.Command); err != nil {
 		return execRequest{}, err
 	}
 	cwd, err := normalizeCWD(in.Cwd)
@@ -676,13 +693,26 @@ func (t *ExecTool) prepareExec(
 // checkCommandPolicy enforces the optional allow/deny lists. When no
 // policy is configured the command runs with the historical
 // "anything goes via sh -lc" semantics.
-func (t *ExecTool) checkCommandPolicy(command string) error {
+func (t *ExecTool) checkCommandPolicy(ctx context.Context, command string) error {
 	policy := t.commandPolicy()
 	if !policy.Active() {
 		return nil
 	}
 	if err := shellsafe.CheckCommand(command, policy); err != nil {
 		return fmt.Errorf("workspace_exec: %w", err)
+	}
+	if t.safetyScanner != nil {
+		report, err := t.safetyScanner.Scan(ctx, &toolsafety.ScanRequest{
+			ToolName: "workspace_exec",
+			Command:  command,
+			Backend:  "workspaceexec",
+		})
+		if err != nil {
+			return fmt.Errorf("workspace_exec: safety scan error: %w", err)
+		}
+		if report.Decision == toolsafety.DecisionDeny {
+			return fmt.Errorf("workspace_exec: safety check denied: %s", toolsafety.FormatFinding(report))
+		}
 	}
 	return nil
 }

@@ -16,6 +16,7 @@ import (
 	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolsafety"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -23,9 +24,10 @@ import (
 type Option func(*config)
 
 type config struct {
-	name        string
-	description string
-	languages   []string
+	name          string
+	description   string
+	languages     []string
+	safetyScanner *toolsafety.Scanner
 }
 
 // WithName sets the tool name.
@@ -43,6 +45,14 @@ func WithLanguages(langs ...string) Option {
 	return func(c *config) {
 		// Defensive copy to avoid caller mutation.
 		c.languages = append([]string(nil), langs...)
+	}
+}
+
+// WithSafetyScanner sets an optional safety scanner for code block execution.
+// When set, bash code blocks are scanned for dangerous patterns before execution.
+func WithSafetyScanner(scanner *toolsafety.Scanner) Option {
+	return func(c *config) {
+		c.safetyScanner = scanner
 	}
 }
 
@@ -71,12 +81,13 @@ func applyOptions(opts ...Option) config {
 // keep the concrete implementation unexported.
 func NewTool(exec codeexecutor.CodeExecutor, opts ...Option) tool.CallableTool {
 	cfg := applyOptions(opts...)
-	return &executeCodeTool{executor: exec, cfg: cfg}
+	return &executeCodeTool{executor: exec, cfg: cfg, safety: cfg.safetyScanner}
 }
 
 type executeCodeTool struct {
 	executor codeexecutor.CodeExecutor
 	cfg      config
+	safety   *toolsafety.Scanner
 }
 
 // Declaration returns the tool's declaration.
@@ -221,6 +232,27 @@ func (t *executeCodeTool) Call(ctx context.Context, args []byte) (any, error) {
 	for i, b := range input.CodeBlocks {
 		if b.Language == "" || !t.isSupportedLanguage(b.Language) {
 			return codeexecutor.CodeExecutionResult{Output: fmt.Sprintf("Error: unsupported language: %d: %s", i, b.Language)}, nil
+		}
+	}
+
+	// Run safety check on bash code blocks if a scanner is configured.
+	if t.safety != nil {
+		for _, b := range input.CodeBlocks {
+			if b.Language == "bash" || b.Language == "sh" {
+				report, err := t.safety.Scan(ctx, &toolsafety.ScanRequest{
+					ToolName: t.cfg.name,
+					Command:  b.Code,
+					Backend:  "codeexec",
+				})
+				if err != nil {
+					return nil, fmt.Errorf("codeexec: safety scan error: %w", err)
+				}
+				if report.Decision == toolsafety.DecisionDeny {
+					return codeexecutor.CodeExecutionResult{
+						Output: "Error: command blocked by safety policy: " + toolsafety.FormatFinding(report),
+					}, nil
+				}
+			}
 		}
 	}
 
