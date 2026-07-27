@@ -107,7 +107,7 @@ func renderMarkdown(report regressionReport) ([]byte, error) {
 		}
 		output.WriteByte('\n')
 	}
-	return output.Bytes(), nil
+	return append(bytes.TrimRight(output.Bytes(), "\n"), '\n'), nil
 }
 
 func stableReport(report regressionReport) regressionReport {

@@ -102,3 +102,10 @@ func TestSanitizeReportTextRedactsQuotedAssignments(t *testing.T) {
 	assert.NotContains(t, got, "generic-value-1234")
 	assert.NotContains(t, got, "hunter-1234")
 }
+
+func TestRenderMarkdownHasSingleTrailingNewline(t *testing.T) {
+	got, err := renderMarkdown(minimalReport())
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(string(got), "\n"))
+	assert.False(t, strings.HasSuffix(string(got), "\n\n"))
+}
