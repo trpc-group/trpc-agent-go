@@ -4308,6 +4308,146 @@ func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {
 	require.Contains(t, startID, "trpc-agent-go-toolcall:")
 }
 
+func TestRunEmitsToolResultsAsEachParallelCallCompletes(t *testing.T) {
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseSlow)
+		})
+	}
+	t.Cleanup(release)
+
+	slowTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			close(slowStarted)
+			select {
+			case <-releaseSlow:
+				return "slow", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("slow"),
+		function.WithDescription("Waits until released."),
+	)
+	fastTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			select {
+			case <-slowStarted:
+				return "fast", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("fast"),
+		function.WithDescription("Returns after the slow tool starts."),
+	)
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:     "tool-calls",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-slow",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "slow",
+									Arguments: []byte(`{}`),
+								},
+							},
+							{
+								ID:   "call-fast",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "fast",
+									Arguments: []byte(`{}`),
+								},
+							},
+						},
+					},
+				}},
+			}},
+			{{
+				ID:     "final",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{slowTool, fastTool}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	underlying := baserunner.NewRunner("per-tool-result-agui-app", ag)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(
+		underlying,
+		WithRunOptionResolver(func(
+			context.Context,
+			*adapter.RunAgentInput,
+		) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithToolResultEventPerCallEnabled(true),
+			}, nil
+		}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "run tools"}},
+	})
+	require.NoError(t, err)
+
+	var events []aguievents.Event
+	for {
+		select {
+		case evt, ok := <-eventCh:
+			require.True(t, ok, "event stream closed before the first tool result")
+			events = append(events, evt)
+			result, ok := evt.(*aguievents.ToolCallResultEvent)
+			if !ok {
+				continue
+			}
+			require.Equal(t, "call-fast", result.ToolCallID)
+			goto firstResultReceived
+		case <-ctx.Done():
+			require.FailNow(t, "timeout waiting for the first tool result")
+		}
+	}
+
+firstResultReceived:
+	release()
+	events = append(events, collectEvents(t, eventCh)...)
+
+	var resultIDs []string
+	for _, evt := range events {
+		if result, ok := evt.(*aguievents.ToolCallResultEvent); ok {
+			resultIDs = append(resultIDs, result.ToolCallID)
+		}
+	}
+	require.Equal(t, []string{"call-fast", "call-slow"}, resultIDs)
+	require.NoError(t, aguievents.ValidateSequence(events))
+}
+
 func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {
 	const canonicalToolCallID = "trpc-agent-go-toolcall:inv-1:rsp-1:call-1:c0:t0"
 	rawToolMeta, err := json.Marshal(graph.ToolExecutionMetadata{

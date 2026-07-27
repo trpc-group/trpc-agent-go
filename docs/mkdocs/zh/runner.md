@@ -527,6 +527,40 @@ tool(result B)
 
 可运行示例：`examples/steer/`
 
+#### 逐个接收工具结果事件
+
+当模型的一次回复请求多个工具时，Runner 默认会等待所有工具执行完，再发送一个
+合并的 `tool.response` 事件。如果希望改为每个工具调用完成后分别发送一个结果事件，
+可以为本次 `Run` 开启以下选项：
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithToolResultEventPerCallEnabled(true),
+)
+```
+
+开启后：
+
+- 每个工具调用完成时，`eventChan` 都会收到一个最终的 `tool.response` 事件。
+  每个事件只包含一个调用的结果，可以通过结果消息中的 `ToolID` 与原调用对应。
+- 所有工具完成后，不会再额外发送一个合并结果事件。
+- 每个结果事件会分别保存到 Session。
+- 并行工具的结果按实际完成顺序发送，可能与模型发起调用的顺序不同。
+
+例如，模型依次请求 A 和 B，但 B 先完成：
+
+```text
+eventChan 收到：result B -> result A
+提供给模型：result A -> result B
+```
+
+该选项只改变应用收到结果的时机。Runner 仍会等待所有工具调用完成后才发起下一次
+模型请求，并按原始 tool-call 顺序把结果提供给模型。
+
 #### 按请求覆盖 AppName（多租户隔离）
 
 默认情况下，Runner 使用构造时传入的 `appName` 作为 session key 和事件过滤 key。

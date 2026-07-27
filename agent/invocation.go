@@ -970,6 +970,14 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
+// WithToolResultEventPerCallEnabled toggles per-call result events for
+// eligible multi-tool rounds.
+func WithToolResultEventPerCallEnabled(enabled bool) RunOption {
+	return func(opts *RunOptions) {
+		opts.ToolResultEventPerCallEnabled = enabled
+	}
+}
+
 // WithToolPermissionPolicy sets a per-run policy that is checked after
 // before-tool callbacks finalize arguments and immediately before the
 // framework executes a tool call.
@@ -1397,6 +1405,10 @@ type RunOptions struct {
 	// assistant tool_call response so the caller can execute the tool
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
+
+	// ToolResultEventPerCallEnabled enables per-call result events for
+	// eligible multi-tool rounds.
+	ToolResultEventPerCallEnabled bool
 
 	// ToolPermissionPolicy checks whether a tool call may run after the model
 	// has requested it, after argument repair, and after before-tool callbacks
