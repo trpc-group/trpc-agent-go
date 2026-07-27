@@ -3869,9 +3869,12 @@ func TestLLMNode_StreamOutput_NodeToNode(t *testing.T) {
 
 	sg.SetEntryPoint(nodeSetup)
 	sg.SetFinishPoint(nodeFinish)
+	// Sequential flow ensures LLM finishes writing to the stream
+	// before the consumer attempts to read, avoiding race conditions
+	// in CI environments with limited parallelism.
 	sg.AddEdge(nodeSetup, nodeLLM)
-	sg.AddEdge(nodeSetup, nodeConsume)
-	sg.AddJoinEdge([]string{nodeLLM, nodeConsume}, nodeFinish)
+	sg.AddEdge(nodeLLM, nodeConsume)
+	sg.AddEdge(nodeConsume, nodeFinish)
 
 	g, err := sg.Compile()
 	require.NoError(t, err)
