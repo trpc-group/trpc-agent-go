@@ -1,0 +1,869 @@
+{
+  "schemaVersion": 1,
+  "runId": "sample",
+  "status": "succeeded",
+  "accepted": true,
+  "mode": "deterministic",
+  "seed": 2003,
+  "structureId": "struct_c1028268acff55f4a6bfe78ba31056f7fa2bb63810c0d291757cdd4fac39a50a",
+  "fingerprints": {
+    "config": "61eec187ea4ecb8269c3b8b6e3b8cbd6fee0e74a2f8d091484aa079057b1884e",
+    "metrics": "31562355701df5b5e1e76b04b979440148d7e92285769b9c2fb799df35293e4d",
+    "prompt": "8e8c444ad6765a9be3ad775466c8b6e45de59acd773140a1533e4ec3b73a00ca",
+    "train": "babec21ef80ff4dcd965094c0f928856f431046cdfc2a29268ed8fd151bedbb3",
+    "validation": "b79431caf0dedba7c512bc37910429fa9109e15edc2e11bd4b0018129c65efe0"
+  },
+  "roles": {
+    "candidate": {
+      "model": "regression-candidate",
+      "inputPerMillion": 0,
+      "outputPerMillion": 0,
+      "maxRetries": 0
+    },
+    "judge": {
+      "model": "regression-judge",
+      "inputPerMillion": 0,
+      "outputPerMillion": 0,
+      "maxRetries": 0
+    },
+    "worker": {
+      "model": "regression-worker",
+      "inputPerMillion": 0,
+      "outputPerMillion": 0,
+      "maxRetries": 0
+    }
+  },
+  "baseline": {
+    "evalSetId": "validation",
+    "status": "failed",
+    "score": 0.6666666666666666,
+    "cases": [
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation-json-format",
+        "status": "failed",
+        "score": 0.6666666666666666,
+        "executionError": "evaluation run failed",
+        "metrics": [
+          {
+            "name": "json_format",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "name": "response_pattern",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-json\"} does not match regex ^\\{\"answer\":\"balanced: validation-json\"\\}$"
+          },
+          {
+            "name": "tool_trajectory",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation-security-critical",
+        "status": "failed",
+        "score": 0.6666666666666666,
+        "executionError": "evaluation run failed",
+        "metrics": [
+          {
+            "name": "json_format",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "name": "response_pattern",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-security-critical\"} does not match regex ^\\{\"answer\":\"balanced: validation-security-critical\"\\}$"
+          },
+          {
+            "name": "tool_trajectory",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ]
+      },
+      {
+        "evalSetId": "validation",
+        "evalCaseId": "validation-shipping-return",
+        "status": "failed",
+        "score": 0.6666666666666666,
+        "executionError": "evaluation run failed",
+        "metrics": [
+          {
+            "name": "json_format",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          },
+          {
+            "name": "response_pattern",
+            "score": 0,
+            "threshold": 1,
+            "status": "failed",
+            "reason": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-return\"} does not match regex ^\\{\"answer\":\"balanced: validation-return\"\\}$"
+          },
+          {
+            "name": "tool_trajectory",
+            "score": 1,
+            "threshold": 1,
+            "status": "passed"
+          }
+        ]
+      }
+    ],
+    "duration": 0
+  },
+  "rounds": [
+    {
+      "number": 1,
+      "candidatePrompt": "[balanced] answer the request accurately and concisely",
+      "candidateSource": "promptiter_output_profile",
+      "delta": {
+        "baselineScore": 0.6666666666666666,
+        "candidateScore": 1,
+        "scoreDelta": 0.33333333333333337,
+        "metrics": [
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_pass",
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_pass",
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_pass",
+            "baselineStatus": "failed",
+            "candidateStatus": "passed",
+            "baselineScore": 0,
+            "candidateScore": 1,
+            "scoreDelta": 1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          }
+        ]
+      },
+      "gate": {
+        "accepted": true,
+        "checks": [
+          {
+            "id": "case_drop",
+            "enabled": true,
+            "passed": true,
+            "observed": 0,
+            "limit": 0
+          },
+          {
+            "id": "critical_case",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "estimated_cost",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "evidence_shape",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "hard_failures",
+            "enabled": true,
+            "passed": true,
+            "observed": 0,
+            "limit": 0
+          },
+          {
+            "id": "latency",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "minimum_gain",
+            "enabled": true,
+            "passed": true,
+            "observed": 0.33333333333333337,
+            "limit": 0.05
+          },
+          {
+            "id": "model_calls",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "run_status",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "tokens",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "tool_calls",
+            "enabled": false,
+            "passed": true
+          }
+        ]
+      },
+      "usage": {
+        "modelCalls": {
+          "known": true,
+          "value": 23
+        },
+        "toolCalls": {
+          "known": true,
+          "value": 0
+        },
+        "tokens": {
+          "known": true,
+          "value": 460
+        },
+        "estimatedCost": {
+          "known": true,
+          "value": 0
+        },
+        "latencyMillis": {
+          "known": true,
+          "value": 0
+        }
+      }
+    },
+    {
+      "number": 2,
+      "candidatePrompt": "[ineffective] answer the request accurately and concisely",
+      "candidateSource": "promptiter_output_profile",
+      "delta": {
+        "baselineScore": 1,
+        "candidateScore": 0.6666666666666666,
+        "scoreDelta": -0.33333333333333337,
+        "metrics": [
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          }
+        ]
+      },
+      "gate": {
+        "accepted": false,
+        "checks": [
+          {
+            "id": "case_drop",
+            "enabled": true,
+            "passed": false,
+            "observed": 0.33333333333333337,
+            "limit": 0,
+            "reason": "a case score drop exceeds the limit"
+          },
+          {
+            "id": "critical_case",
+            "enabled": true,
+            "passed": false,
+            "observed": "critical evidence validation-security-critical/ did not pass",
+            "reason": "a critical rule failed"
+          },
+          {
+            "id": "estimated_cost",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "evidence_shape",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "hard_failures",
+            "enabled": true,
+            "passed": false,
+            "observed": 3,
+            "limit": 0,
+            "reason": "candidate retains too many hard failures"
+          },
+          {
+            "id": "latency",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "minimum_gain",
+            "enabled": true,
+            "passed": false,
+            "observed": -0.33333333333333337,
+            "limit": 0.05,
+            "reason": "validation gain is below the minimum"
+          },
+          {
+            "id": "model_calls",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "run_status",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "tokens",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "tool_calls",
+            "enabled": false,
+            "passed": true
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "evalCaseId": "validation-json-format",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        },
+        {
+          "evalCaseId": "validation-security-critical",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        },
+        {
+          "evalCaseId": "validation-shipping-return",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        }
+      ],
+      "usage": {
+        "modelCalls": {
+          "known": true,
+          "value": 38
+        },
+        "toolCalls": {
+          "known": true,
+          "value": 0
+        },
+        "tokens": {
+          "known": true,
+          "value": 748
+        },
+        "estimatedCost": {
+          "known": true,
+          "value": 0
+        },
+        "latencyMillis": {
+          "known": true,
+          "value": 0
+        }
+      }
+    },
+    {
+      "number": 3,
+      "candidatePrompt": "[overfit] answer the request accurately and concisely",
+      "candidateSource": "promptiter_output_profile",
+      "delta": {
+        "baselineScore": 1,
+        "candidateScore": 0.6666666666666666,
+        "scoreDelta": -0.33333333333333337,
+        "metrics": [
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-json-format",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-security-critical",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "json_format"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "response_pattern"
+            },
+            "kind": "new_failure",
+            "baselineStatus": "passed",
+            "candidateStatus": "failed",
+            "baselineScore": 1,
+            "candidateScore": 0,
+            "scoreDelta": -1
+          },
+          {
+            "key": {
+              "EvalSetID": "validation",
+              "EvalCaseID": "validation-shipping-return",
+              "MetricName": "tool_trajectory"
+            },
+            "kind": "unchanged_pass",
+            "baselineStatus": "passed",
+            "candidateStatus": "passed",
+            "baselineScore": 1,
+            "candidateScore": 1,
+            "scoreDelta": 0
+          }
+        ]
+      },
+      "gate": {
+        "accepted": false,
+        "checks": [
+          {
+            "id": "case_drop",
+            "enabled": true,
+            "passed": false,
+            "observed": 0.33333333333333337,
+            "limit": 0,
+            "reason": "a case score drop exceeds the limit"
+          },
+          {
+            "id": "critical_case",
+            "enabled": true,
+            "passed": false,
+            "observed": "critical evidence validation-security-critical/ did not pass",
+            "reason": "a critical rule failed"
+          },
+          {
+            "id": "estimated_cost",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "evidence_shape",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "hard_failures",
+            "enabled": true,
+            "passed": false,
+            "observed": 3,
+            "limit": 0,
+            "reason": "candidate retains too many hard failures"
+          },
+          {
+            "id": "latency",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "minimum_gain",
+            "enabled": true,
+            "passed": false,
+            "observed": -0.33333333333333337,
+            "limit": 0.05,
+            "reason": "validation gain is below the minimum"
+          },
+          {
+            "id": "model_calls",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "run_status",
+            "enabled": true,
+            "passed": true,
+            "observed": ""
+          },
+          {
+            "id": "tokens",
+            "enabled": false,
+            "passed": true
+          },
+          {
+            "id": "tool_calls",
+            "enabled": false,
+            "passed": true
+          }
+        ]
+      },
+      "attributions": [
+        {
+          "evalCaseId": "validation-json-format",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        },
+        {
+          "evalCaseId": "validation-security-critical",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        },
+        {
+          "evalCaseId": "validation-shipping-return",
+          "primary": {
+            "category": "runtime_error",
+            "evidence": "evaluation run failed"
+          }
+        }
+      ],
+      "usage": {
+        "modelCalls": {
+          "known": true,
+          "value": 53
+        },
+        "toolCalls": {
+          "known": true,
+          "value": 0
+        },
+        "tokens": {
+          "known": true,
+          "value": 1049
+        },
+        "estimatedCost": {
+          "known": true,
+          "value": 0
+        },
+        "latencyMillis": {
+          "known": true,
+          "value": 0
+        }
+      }
+    }
+  ],
+  "usage": {
+    "modelCalls": {
+      "known": true,
+      "value": 53
+    },
+    "toolCalls": {
+      "known": true,
+      "value": 0
+    },
+    "tokens": {
+      "known": true,
+      "value": 1049
+    },
+    "estimatedCost": {
+      "known": true,
+      "value": 0
+    },
+    "latencyMillis": {
+      "known": true,
+      "value": 0
+    }
+  },
+  "attributionCounts": {
+    "runtime_error": 6
+  }
+}
