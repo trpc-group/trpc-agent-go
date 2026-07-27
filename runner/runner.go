@@ -1462,9 +1462,7 @@ func (r *runner) processSingleAgentEvent(
 	if agentEvent == nil {
 		return nil
 	}
-	if hasToolResultRoundMarker {
-		toolresultround.Mark(agentEvent, toolResultRoundIncomplete)
-	}
+	restoreToolResultRoundMarker(agentEvent, hasToolResultRoundMarker, toolResultRoundIncomplete)
 	agentEvent = errorEventWithContent(agentEvent)
 	excludeRootCompletion := shouldExcludeRootCompletion(
 		routedEvent,
@@ -1561,6 +1559,13 @@ func (r *runner) processSingleAgentEvent(
 	finishRunnerLatencySpan(emitSpan, emitStarted, nil)
 
 	return nil
+}
+
+func restoreToolResultRoundMarker(evt *event.Event, hasMarker, incomplete bool) {
+	if !hasMarker {
+		return
+	}
+	toolresultround.Mark(evt, incomplete)
 }
 
 func isDynamicWorkflowChildEvent(evt *event.Event) bool {
