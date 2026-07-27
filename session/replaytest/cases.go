@@ -12,6 +12,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -81,6 +82,7 @@ func replayToolCall(ctx context.Context, backend Backend) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	call := newReplayEvent("tool-call", model.RoleAssistant, "", "tools")
+	call.Tag = "tool-call"
 	call.Choices[0].Message.ToolCalls = []model.ToolCall{{
 		ID:   "weather-1",
 		Type: "function",
@@ -90,13 +92,19 @@ func replayToolCall(ctx context.Context, backend Backend) (Snapshot, error) {
 		},
 	}}
 	result := newReplayEvent("tool-result", model.RoleTool, "sunny", "tools")
+	result.Tag = "tool-response"
+	result.StateDelta = map[string][]byte{"event_state": []byte("weather-read")}
 	result.Choices[0].Message.ToolID = "weather-1"
 	result.Choices[0].Message.ToolName = "weather"
 	if err := event.SetExtension(result, event.ToolCallArgsExtensionKey,
 		map[string]any{"weather-1": map[string]any{"city": "Shenzhen"}}); err != nil {
 		return Snapshot{}, err
 	}
-	if err := appendEvents(ctx, backend, sess, call, result); err != nil {
+	if err := appendEvents(ctx, backend, sess,
+		newReplayEvent("tool-user", model.RoleUser, "what is the weather", "tools"),
+		call,
+		result,
+	); err != nil {
 		return Snapshot{}, err
 	}
 	return Capture(ctx, backend, key)
@@ -138,7 +146,10 @@ func replayMemoryReadWrite(ctx context.Context, backend Backend) (Snapshot, erro
 	})); err != nil {
 		return Snapshot{}, fmt.Errorf("write episodic memory: %w", err)
 	}
-	return Capture(ctx, backend, key)
+	if isUnsupported(backend, "memory_search") {
+		return Capture(ctx, backend, key)
+	}
+	return Capture(ctx, backend, key, WithMemorySearchQueries("prefers"))
 }
 
 func replaySummaryUpdate(ctx context.Context, backend Backend) (Snapshot, error) {
@@ -171,7 +182,7 @@ func replaySummaryUpdate(ctx context.Context, backend Backend) (Snapshot, error)
 	if err := backend.Session.CreateSessionSummary(ctx, fresh, "branch-a", true); err != nil {
 		return Snapshot{}, fmt.Errorf("update branch summary: %w", err)
 	}
-	return Capture(ctx, backend, key, "branch-a")
+	return Capture(ctx, backend, key, WithSummaryFilterKeys("branch-a"))
 }
 
 func replaySummaryWithFollowUpEvents(ctx context.Context, backend Backend) (Snapshot, error) {
@@ -198,7 +209,7 @@ func replaySummaryWithFollowUpEvents(ctx context.Context, backend Backend) (Snap
 	); err != nil {
 		return Snapshot{}, err
 	}
-	return Capture(ctx, backend, key, session.SummaryFilterKeyAllContents)
+	return Capture(ctx, backend, key, WithSummaryFilterKeys(session.SummaryFilterKeyAllContents))
 }
 
 func replayTrackEvents(ctx context.Context, backend Backend) (Snapshot, error) {
@@ -206,17 +217,29 @@ func replayTrackEvents(ctx context.Context, backend Backend) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if isUnsupported(backend, "tracks") {
+		return Capture(ctx, backend, key)
+	}
 	trackService, ok := backend.Session.(session.TrackService)
 	if !ok {
 		return Snapshot{}, fmt.Errorf("backend %q does not support track events", backend.Name)
 	}
 	if err := appendTrackEvents(ctx, trackService, sess,
-		newReplayTrackEvent("tool", map[string]any{"state": "started", "invocation": "call-1"}),
-		newReplayTrackEvent("tool", map[string]any{"state": "failed", "error": "timeout", "duration_ms": 15}),
+		newReplayTrackEvent("tool", map[string]any{"event_type": "started", "invocation": "call-1"}),
+		newReplayTrackEvent("tool", map[string]any{"event_type": "exception", "error": "timeout", "duration_ms": 15}),
 	); err != nil {
 		return Snapshot{}, err
 	}
 	return Capture(ctx, backend, key)
+}
+
+func isUnsupported(backend Backend, path string) bool {
+	for _, capability := range backend.Unsupported {
+		if capability.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func replayInterleavedWrites(ctx context.Context, backend Backend) (Snapshot, error) {
@@ -256,10 +279,12 @@ func replayRetryRecovery(ctx context.Context, backend Backend) (Snapshot, error)
 		return Snapshot{}, err
 	}
 	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
-	for attempt := 0; attempt < 2; attempt++ {
-		if err := backend.Memory.AddMemory(ctx, userKey, "retry-safe fact", []string{"recovery"}); err != nil {
-			return Snapshot{}, fmt.Errorf("write retry memory: %w", err)
-		}
+	writer := &acknowledgedRetryMemory{Service: backend.Memory}
+	if err := writer.AddMemory(ctx, userKey, "retry-safe fact", []string{"recovery"}); err == nil {
+		return Snapshot{}, errors.New("expected injected acknowledgement failure")
+	}
+	if err := writer.AddMemory(ctx, userKey, "retry-safe fact", []string{"recovery"}); err != nil {
+		return Snapshot{}, fmt.Errorf("retry memory write: %w", err)
 	}
 	if err := backend.Session.UpdateSessionState(ctx, key, session.StateMap{"attempt": []byte("1")}); err != nil {
 		return Snapshot{}, err
@@ -272,6 +297,30 @@ func replayRetryRecovery(ctx context.Context, backend Backend) (Snapshot, error)
 		return Snapshot{}, err
 	}
 	return Capture(ctx, backend, key)
+}
+
+// acknowledgedRetryMemory simulates a successful write whose acknowledgement
+// is lost. A retry must not create a duplicate durable memory entry.
+type acknowledgedRetryMemory struct {
+	memory.Service
+	failed bool
+}
+
+func (m *acknowledgedRetryMemory) AddMemory(
+	ctx context.Context,
+	userKey memory.UserKey,
+	content string,
+	topics []string,
+	opts ...memory.AddOption,
+) error {
+	if err := m.Service.AddMemory(ctx, userKey, content, topics, opts...); err != nil {
+		return err
+	}
+	if !m.failed {
+		m.failed = true
+		return errors.New("injected acknowledgement failure")
+	}
+	return nil
 }
 
 func createCaseSession(ctx context.Context, backend Backend, name string) (session.Key, *session.Session, error) {
@@ -308,7 +357,9 @@ func newReplayEvent(id string, role model.Role, content, filterKey string) *even
 	}}}}
 	replayEvent := event.NewResponseEvent("replay-invocation", "replay-agent", response, event.WithBranch(filterKey))
 	replayEvent.ID = id
-	replayEvent.Timestamp = time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC)
+	// Let persistence backends assign a current-era summary boundary. Capture
+	// normalizes this clock value before comparison.
+	replayEvent.Timestamp = time.Now().UTC()
 	replayEvent.FilterKey = filterKey
 	return replayEvent
 }
@@ -318,6 +369,6 @@ func newReplayTrackEvent(track session.Track, payload any) *session.TrackEvent {
 	return &session.TrackEvent{
 		Track:     track,
 		Payload:   raw,
-		Timestamp: time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC),
+		Timestamp: time.Now().UTC(),
 	}
 }

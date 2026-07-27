@@ -1,4 +1,25 @@
 {
   "baseline": "inmemory",
-  "differences": []
+  "differences": [
+    {
+      "case": "summary_update",
+      "backend": "sqlite",
+      "session_id": "summary_update",
+      "path": "data.summaries.branch-a.summary",
+      "baseline": "replay summary: add this too",
+      "actual": "lost summary",
+      "allowed_diff": false,
+      "reason": "injected example mismatch"
+    },
+    {
+      "case": "track_events",
+      "backend": "backend-without-tracks",
+      "session_id": "track_events",
+      "path": "data.tracks",
+      "baseline": "supported",
+      "actual": "unsupported",
+      "allowed_diff": true,
+      "reason": "backend has no track storage"
+    }
+  ]
 }

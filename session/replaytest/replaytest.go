@@ -16,9 +16,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -30,10 +32,41 @@ import (
 // Session and Memory must use the same logical application and user namespace.
 // Track cases require Session to also implement session.TrackService.
 type Backend struct {
-	Name    string
-	Session session.Service
-	Memory  memory.Service
+	Name        string
+	Session     session.Service
+	Memory      memory.Service
+	Unsupported []Unsupported
 }
+
+// Unsupported declares a snapshot field that a backend cannot provide. Path
+// is relative to Snapshot.Data, for example "tracks" or "memories.search".
+// The harness records matching differences as allowed and explains why.
+type Unsupported struct {
+	Path   string
+	Reason string
+}
+
+// BackendFactory constructs an optional integration backend from an endpoint
+// configured through an environment variable.
+type BackendFactory func(context.Context, string) (Backend, error)
+
+// OptionalBackend configures a backend that is enabled only when Environment
+// has a non-empty value.
+type OptionalBackend struct {
+	Name        string
+	Environment string
+	Factory     BackendFactory
+}
+
+// Environment variables conventionally used for optional integration
+// backends. The caller provides the matching BackendFactory so this module does
+// not impose connection clients or credentials on lightweight users.
+const (
+	EnvRedisURL      = "REPLAYTEST_REDIS_URL"
+	EnvPostgresDSN   = "REPLAYTEST_POSTGRES_DSN"
+	EnvMySQLDSN      = "REPLAYTEST_MYSQL_DSN"
+	EnvClickHouseDSN = "REPLAYTEST_CLICKHOUSE_DSN"
+)
 
 // Case is one deterministic mutation sequence followed by a snapshot read.
 // Implementations should use a case-specific session ID so cases can share a
@@ -41,6 +74,31 @@ type Backend struct {
 type Case struct {
 	Name   string
 	Replay func(context.Context, Backend) (Snapshot, error)
+}
+
+// CaptureOption configures additional observable data captured from a replay.
+type CaptureOption func(*captureOptions)
+
+type captureOptions struct {
+	summaryFilterKeys []string
+	memoryQueries     []string
+}
+
+// WithSummaryFilterKeys captures only the requested summary scopes. Without
+// this option, Capture includes all summaries returned by the session service.
+func WithSummaryFilterKeys(filterKeys ...string) CaptureOption {
+	return func(options *captureOptions) {
+		options.summaryFilterKeys = append(options.summaryFilterKeys, filterKeys...)
+	}
+}
+
+// WithMemorySearchQueries captures retrieval results in the backend-provided
+// order for each query. Similarity scores are normalized while result identity
+// and ordering remain comparable.
+func WithMemorySearchQueries(queries ...string) CaptureOption {
+	return func(options *captureOptions) {
+		options.memoryQueries = append(options.memoryQueries, queries...)
+	}
 }
 
 // Snapshot is the normalized observable result of a replay case.
@@ -67,6 +125,41 @@ type Difference struct {
 type Report struct {
 	Baseline    string       `json:"baseline"`
 	Differences []Difference `json:"differences"`
+}
+
+// LoadOptionalBackends builds integrations whose environment variables are
+// set. It returns human-readable skip records for unset integrations.
+func LoadOptionalBackends(
+	ctx context.Context,
+	configs ...OptionalBackend,
+) ([]Backend, []string, error) {
+	backends := make([]Backend, 0, len(configs))
+	skipped := make([]string, 0, len(configs))
+	for _, config := range configs {
+		if config.Name == "" || config.Environment == "" {
+			return nil, nil, errors.New("optional backend name and environment are required")
+		}
+		endpoint := strings.TrimSpace(os.Getenv(config.Environment))
+		if endpoint == "" {
+			skipped = append(skipped, config.Name+": "+config.Environment+" is not set")
+			continue
+		}
+		if config.Factory == nil {
+			return nil, nil, fmt.Errorf("optional backend %q factory is required", config.Name)
+		}
+		backend, err := config.Factory(ctx, endpoint)
+		if err != nil {
+			return nil, nil, fmt.Errorf("create optional backend %q: %w", config.Name, err)
+		}
+		if backend.Name == "" {
+			backend.Name = config.Name
+		}
+		if err := validateBackend(backend); err != nil {
+			return nil, nil, err
+		}
+		backends = append(backends, backend)
+	}
+	return backends, skipped, nil
 }
 
 // HasDisallowedDifferences reports whether a report contains a failing
@@ -116,8 +209,11 @@ func Run(ctx context.Context, backends []Backend, cases []Case) (Report, error) 
 				))
 				continue
 			}
-			report.Differences = append(report.Differences, Compare(
-				replayCase.Name, backend.Name, baseline, actual,
+			differences := Compare(replayCase.Name, backend.Name, baseline, actual)
+			markAllowedUnsupported(differences, backend.Unsupported)
+			report.Differences = append(report.Differences, differences...)
+			report.Differences = append(report.Differences, unsupportedDifferences(
+				replayCase.Name, backend.Name, baseline.SessionID, backend.Unsupported,
 			)...)
 		}
 	}
@@ -127,6 +223,16 @@ func Run(ctx context.Context, backends []Backend, cases []Case) (Report, error) 
 // Compare returns field-level differences between normalized snapshots.
 func Compare(caseName, backend string, baseline, actual Snapshot) []Difference {
 	var differences []Difference
+	if baseline.SessionID != actual.SessionID {
+		differences = append(differences, Difference{
+			Case:      caseName,
+			Backend:   backend,
+			SessionID: baseline.SessionID,
+			Path:      "session_id",
+			Baseline:  marshalValue(baseline.SessionID),
+			Actual:    marshalValue(actual.SessionID),
+		})
+	}
 	compareValue(
 		"data", baseline.Data, actual.Data,
 		func(path string, left, right any) {
@@ -144,13 +250,12 @@ func Compare(caseName, backend string, baseline, actual Snapshot) []Difference {
 }
 
 // Capture reads a session and its memories, removes volatile backend values,
-// and returns a snapshot that can be compared by Compare. summaryFilterKeys
-// identifies the summary scopes that the replay case expects to observe.
+// and returns a snapshot that can be compared by Compare.
 func Capture(
 	ctx context.Context,
 	backend Backend,
 	key session.Key,
-	summaryFilterKeys ...string,
+	options ...CaptureOption,
 ) (Snapshot, error) {
 	if err := validateBackend(backend); err != nil {
 		return Snapshot{}, err
@@ -173,13 +278,17 @@ func Capture(
 		return Snapshot{}, fmt.Errorf("read memories: %w", err)
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
-	summaries := make(map[string]string, len(summaryFilterKeys))
-	for _, filterKey := range summaryFilterKeys {
-		if text, ok := backend.Session.GetSessionSummaryText(
-			ctx, sess, session.WithSummaryFilterKey(filterKey),
-		); ok {
-			summaries[filterKey] = text
-		}
+	captureConfig := captureOptions{}
+	for _, option := range options {
+		option(&captureConfig)
+	}
+	summaries, err := loadSummaries(ctx, backend.Session, key, captureConfig.summaryFilterKeys)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	memorySearch, err := loadMemorySearches(ctx, backend.Memory, key, captureConfig.memoryQueries)
+	if err != nil {
+		return Snapshot{}, err
 	}
 	events := sess.GetEvents()
 	if events == nil {
@@ -197,16 +306,81 @@ func Capture(
 		entries = []*memory.Entry{}
 	}
 	data, err := normalize(map[string]any{
-		"events":    events,
-		"state":     state,
-		"summaries": summaries,
-		"tracks":    tracks,
-		"memories":  entries,
+		"events":        events,
+		"state":         state,
+		"summaries":     summaries,
+		"tracks":        tracks,
+		"memories":      entries,
+		"memory_search": memorySearch,
 	})
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("normalize snapshot: %w", err)
 	}
 	return Snapshot{SessionID: key.SessionID, Data: data.(map[string]any)}, nil
+}
+
+func loadMemorySearches(
+	ctx context.Context,
+	service memory.Service,
+	key session.Key,
+	queries []string,
+) (map[string][]*memory.Entry, error) {
+	results := make(map[string][]*memory.Entry, len(queries))
+	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
+	for _, query := range queries {
+		entries, err := service.SearchMemories(ctx, userKey, query)
+		if err != nil {
+			return nil, fmt.Errorf("search memories for %q: %w", query, err)
+		}
+		if entries == nil {
+			entries = []*memory.Entry{}
+		}
+		results[query] = entries
+	}
+	return results, nil
+}
+
+func loadSummaries(
+	ctx context.Context,
+	service session.Service,
+	key session.Key,
+	filterKeys []string,
+) (map[string]*session.Summary, error) {
+	sessions, err := service.ListSessions(ctx, session.UserKey{
+		AppName: key.AppName,
+		UserID:  key.UserID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list sessions for summaries: %w", err)
+	}
+	for _, listed := range sessions {
+		if listed == nil || listed.ID != key.SessionID {
+			continue
+		}
+		return selectSummaries(listed.Summaries, filterKeys), nil
+	}
+	return nil, errors.New("session not found while loading summaries")
+}
+
+func selectSummaries(
+	summaries map[string]*session.Summary,
+	filterKeys []string,
+) map[string]*session.Summary {
+	selected := make(map[string]*session.Summary)
+	if len(filterKeys) == 0 {
+		for filterKey, summary := range summaries {
+			if copied := summary.Clone(); copied != nil {
+				selected[filterKey] = copied
+			}
+		}
+		return selected
+	}
+	for _, filterKey := range filterKeys {
+		if copied := summaries[filterKey].Clone(); copied != nil {
+			selected[filterKey] = copied
+		}
+	}
+	return selected
 }
 
 func validateBackends(backends []Backend) error {
@@ -228,7 +402,47 @@ func validateBackend(backend Backend) error {
 	if backend.Memory == nil {
 		return fmt.Errorf("backend %q memory service is required", backend.Name)
 	}
+	for _, unsupported := range backend.Unsupported {
+		if strings.TrimSpace(unsupported.Path) == "" || strings.TrimSpace(unsupported.Reason) == "" {
+			return fmt.Errorf("backend %q unsupported path and reason are required", backend.Name)
+		}
+	}
 	return nil
+}
+
+func markAllowedUnsupported(differences []Difference, unsupported []Unsupported) {
+	for index := range differences {
+		for _, capability := range unsupported {
+			if (capability.Path == "tracks" && differences[index].Path == "data.state.tracks") ||
+				differences[index].Path == "data."+capability.Path ||
+				strings.HasPrefix(differences[index].Path, "data."+capability.Path+".") ||
+				strings.HasPrefix(differences[index].Path, "data."+capability.Path+"[") {
+				differences[index].AllowedDiff = true
+				differences[index].Reason = capability.Reason
+				break
+			}
+		}
+	}
+}
+
+func unsupportedDifferences(
+	caseName, backend, sessionID string,
+	unsupported []Unsupported,
+) []Difference {
+	differences := make([]Difference, 0, len(unsupported))
+	for _, capability := range unsupported {
+		differences = append(differences, Difference{
+			Case:        caseName,
+			Backend:     backend,
+			SessionID:   sessionID,
+			Path:        "data." + capability.Path,
+			Baseline:    json.RawMessage(`"supported"`),
+			Actual:      json.RawMessage(`"unsupported"`),
+			AllowedDiff: true,
+			Reason:      capability.Reason,
+		})
+	}
+	return differences
 }
 
 func executionDifference(caseName, backend, sessionID string, err error) Difference {
@@ -270,6 +484,15 @@ func stripVolatile(value any, path []string) any {
 		out := make(map[string]any, len(current))
 		for key, child := range current {
 			if isVolatileKey(key, path) {
+				if key == "updated_at" && containsPath(path, "summaries") {
+					// Summary recency is part of the contract, but exact wall-clock
+					// values differ across backends. Preserve its presence.
+					out[key] = "normalized"
+				}
+				continue
+			}
+			if key == "score" && containsPath(path, "memory_search") {
+				out[key] = "normalized"
 				continue
 			}
 			out[key] = stripVolatile(child, append(path, key))
@@ -284,6 +507,15 @@ func stripVolatile(value any, path []string) any {
 	default:
 		return value
 	}
+}
+
+func containsPath(path []string, target string) bool {
+	for _, component := range path {
+		if component == target {
+			return true
+		}
+	}
+	return false
 }
 
 func isVolatileKey(key string, path []string) bool {
@@ -339,9 +571,30 @@ func compareValue(path string, left, right any, add func(string, any, any)) {
 			if index < len(rightSlice) {
 				rightItem = rightSlice[index]
 			}
-			compareValue(path+"["+strconv.Itoa(index)+"]", leftItem, rightItem, add)
+			compareValue(sliceItemPath(path, index, leftItem, rightItem), leftItem, rightItem, add)
 		}
 		return
 	}
 	add(path, left, right)
+}
+
+func sliceItemPath(path string, index int, left, right any) string {
+	if strings.HasPrefix(path, "data.memories") || strings.HasPrefix(path, "data.memory_search") {
+		if id := snapshotID(left); id != "" {
+			return path + "[memory_id=" + id + "]"
+		}
+		if id := snapshotID(right); id != "" {
+			return path + "[memory_id=" + id + "]"
+		}
+	}
+	return path + "[" + strconv.Itoa(index) + "]"
+}
+
+func snapshotID(value any) string {
+	entry, ok := value.(map[string]any)
+	if !ok {
+		return ""
+	}
+	id, _ := entry["id"].(string)
+	return id
 }

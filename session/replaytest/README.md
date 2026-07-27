@@ -1,32 +1,48 @@
 # Session and Memory Replay Consistency
 
-`replaytest` is a small, backend-neutral harness for verifying that the same
-conversation replay produces the same persisted session and memory view. The
-lightweight suite compares InMemory with SQLite and needs no service
-credentials. Additional Redis, Postgres, MySQL, or ClickHouse backends can be
-added by constructing a `replaytest.Backend` with their existing session and
-memory services and passing it to `replaytest.Run`.
+`replaytest` is a backend-neutral harness for checking that one deterministic
+Agent trajectory produces the same durable Session and Memory view across
+storage implementations. Lightweight mode compares InMemory with SQLite for
+both Session and Memory and needs no credentials. `StandardCases()` exposes ten
+public cases: a single turn, multiple turns, tool calls and argument
+extensions, state overwrite/deletion, memory reads and writes, summary update,
+summary plus later events, tracks, deterministic concurrent interleaving, and
+acknowledgement-loss retry recovery.
 
-Each replay case uses a fixed app, user, session ID, event payload, and track
-payload. The snapshot reader loads events, session state, filter-key summaries,
-tracks, and memories after the mutation sequence. JSON is decoded before
-comparison, so map ordering never produces a mismatch. The normalizer removes
-generated event and response IDs plus wall-clock fields such as event,
-summary, track, and memory timestamps. Memory IDs remain visible because they
-identify the affected memory in a report. Those fields are the current
-`allowed_diff` policy; a backend-specific field should be removed only when it
-cannot affect replay semantics.
+Each case has fixed logical IDs and payloads. `Capture` reloads events, state,
+memories, tracks, and the summaries returned by `ListSessions`, retaining a
+summary's filter-key, boundary version, last event ID, text, and normalized
+update-presence. `WithMemorySearchQueries` preserves retrieval order and memory
+identity while normalizing backend-specific similarity scores. This makes
+summary loss, overwrite, wrong scope, wrong session identity, and memory
+ordering observable. JSON decoding makes map ordering irrelevant. Generated
+event/response IDs, clock values, JSON object order, and backend private timing
+values are normalized.
 
-`StandardCases()` contains ten public cases: a single turn, multiple turns,
-tool calls and argument extensions, state overwrite/deletion, memory writes,
-summary update, summary plus later events, tracks, deterministic interleaving,
-and retry recovery. `Run` uses the first backend as the baseline and emits one
-field-level report record per mismatch. A record carries the case, backend,
-session ID, field path, baseline JSON, actual JSON, `allowed_diff`, and an
-explanation for replay execution failures. The checked-in JSON fixture is the
-expected report from the lightweight run.
+Set `Backend.Unsupported` with a data-relative path such as `tracks` or
+`memories.search` and a reason. Matching differences become `allowed_diff`,
+and the report also contains an explicit `supported`/`unsupported` record. The
+sample `testdata/session_memory_summary_track_diff_report.json` shows both a
+blocking mismatch and an allowed difference. Every other difference contains
+the case, backend, session ID, field path, baseline JSON, and actual JSON.
 
-Run the suite with:
+Optional Redis, Postgres, MySQL, and ClickHouse integrations are enabled by
+passing factories to `LoadOptionalBackends` with `REPLAYTEST_REDIS_URL`,
+`REPLAYTEST_POSTGRES_DSN`, `REPLAYTEST_MYSQL_DSN`, or
+`REPLAYTEST_CLICKHOUSE_DSN`. Unset variables produce a reported skip, so the
+lightweight suite remains deterministic. Factories keep connection ownership
+and credentials with the implementation-specific modules.
+
+```go
+optional, skipped, err := replaytest.LoadOptionalBackends(ctx,
+    replaytest.OptionalBackend{Name: "redis", Environment: replaytest.EnvRedisURL, Factory: newRedisBackend},
+    replaytest.OptionalBackend{Name: "postgres", Environment: replaytest.EnvPostgresDSN, Factory: newPostgresBackend},
+)
+_ = skipped // emit with the report or test log
+report, err := replaytest.Run(ctx, append([]replaytest.Backend{inMemory, sqlite}, optional...), replaytest.StandardCases())
+```
+
+Run lightweight mode with:
 
 ```bash
 cd session/replaytest && go test ./...
