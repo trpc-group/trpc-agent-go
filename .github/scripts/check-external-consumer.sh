@@ -207,7 +207,6 @@ check_module_as_external_consumer() {
 		cd "${consumer_dir}"
 		go mod init example.com/trpc-agent-go-external-consumer
 		add_repository_replaces
-		go mod edit "-require=${module_path}@v0.0.0-00010101000000-000000000000"
 		write_consumer_test "${package_file}" "${consumer_dir}/consumer_test.go"
 		go mod tidy
 		go test ./...

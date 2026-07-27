@@ -466,85 +466,17 @@ func TestExecTool_HelperFunctions(t *testing.T) {
 
 func TestExecTool_LiveEngine_Errors(t *testing.T) {
 	var nilTool *ExecTool
-	_, err := nilTool.liveEngine(context.Background())
+	_, err := nilTool.liveEngine()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "requires an executor")
 
-	_, err = (&ExecTool{exec: &noEngineExec{}}).liveEngine(context.Background())
+	_, err = (&ExecTool{exec: &noEngineExec{}}).liveEngine()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "EngineProvider")
 
-	_, err = (&ExecTool{exec: &badEngineExec{}}).liveEngine(context.Background())
+	_, err = (&ExecTool{exec: &badEngineExec{}}).liveEngine()
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "live workspace support")
-}
-
-func TestExecTool_LiveEngineUsesContextAwareProvider(t *testing.T) {
-	ctx := context.WithValue(context.Background(), "request", "context-aware")
-	eng := codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, &nonInteractiveRunner{})
-	exec := &contextEngineExec{eng: eng}
-	tool := &ExecTool{exec: exec}
-
-	got, err := tool.liveEngine(ctx)
-	require.NoError(t, err)
-	require.Same(t, eng, got)
-	require.Same(t, ctx, exec.ctx)
-	require.True(t, supportsInteractiveSessions(exec))
-}
-
-func TestExecTool_LiveEnginePropagatesContextProviderError(t *testing.T) {
-	want := errors.New("context engine failed")
-	_, err := (&ExecTool{exec: &contextEngineExec{err: want}}).liveEngine(context.Background())
-	require.ErrorIs(t, err, want)
-}
-
-func TestExecTool_LiveEngineRejectsInvalidContextProviderEngine(t *testing.T) {
-	_, err := (&ExecTool{exec: &contextEngineExec{}}).liveEngine(context.Background())
-	require.ErrorContains(t, err, "live workspace support")
-	require.False(t, supportsInteractiveSessions(&noEngineExec{}))
-}
-
-func TestExecTool_LiveEngineRejectsContextProviderMissingComponents(t *testing.T) {
-	tests := []struct {
-		name string
-		eng  codeexecutor.Engine
-	}{
-		{
-			name: "manager",
-			eng:  codeexecutor.NewEngine(nil, &nonInteractiveFS{}, &nonInteractiveRunner{}),
-		},
-		{
-			name: "runner",
-			eng:  codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, nil),
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := (&ExecTool{exec: &contextEngineExec{eng: tt.eng}}).liveEngine(context.Background())
-			require.ErrorContains(t, err, "live workspace support")
-		})
-	}
-}
-
-func TestExecTool_CallUsesContextAwareProvider(t *testing.T) {
-	ctx := context.WithValue(context.Background(), "request", "context-aware")
-	eng := codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, &nonInteractiveRunner{})
-	exec := &contextEngineExec{eng: eng}
-
-	result, err := NewExecTool(exec).Call(ctx, []byte(`{"command":"echo hello"}`))
-	require.NoError(t, err)
-	require.Equal(t, codeexecutor.ProgramStatusExited, result.(execOutput).Status)
-	require.Same(t, ctx, exec.ctx)
-}
-
-func TestExecTool_CallPropagatesContextProviderError(t *testing.T) {
-	want := errors.New("context engine failed")
-	_, err := NewExecTool(&contextEngineExec{err: want}).Call(
-		context.Background(),
-		[]byte(`{"command":"echo hello"}`),
-	)
-	require.ErrorIs(t, err, want)
 }
 
 func TestExecTool_Call_NotConfigured(t *testing.T) {
@@ -1018,25 +950,6 @@ func (e *badEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 
 func (e *badEngineExec) Engine() codeexecutor.Engine {
 	return codeexecutor.NewEngine(nil, nil, nil)
-}
-
-type contextEngineExec struct {
-	eng codeexecutor.Engine
-	err error
-	ctx context.Context
-}
-
-func (*contextEngineExec) ExecuteCode(context.Context, codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
-	return codeexecutor.CodeExecutionResult{}, nil
-}
-
-func (*contextEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
-	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
-}
-
-func (e *contextEngineExec) EngineWithContext(ctx context.Context) (codeexecutor.Engine, error) {
-	e.ctx = ctx
-	return e.eng, e.err
 }
 
 func (e *nonInteractiveExec) Engine() codeexecutor.Engine {

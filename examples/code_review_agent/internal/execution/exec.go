@@ -57,7 +57,7 @@ type Config struct {
 }
 
 // NewExecutor 为配置的 runtime 创建 trpc-agent-go CodeExecutor。
-func NewExecutor(ctx context.Context, cfg Config) (codeexecutor.CodeExecutor, error) {
+func NewExecutor(cfg Config) (codeexecutor.CodeExecutor, error) {
 	switch cfg.Runtime {
 	case RuntimeLocalFallback:
 		workDir, err := os.MkdirTemp("", "cr-agent-localexec-*")
@@ -90,7 +90,7 @@ func NewExecutor(ctx context.Context, cfg Config) (codeexecutor.CodeExecutor, er
 		if strings.TrimSpace(cfg.ContainerRepoHostPath) != "" {
 			opts = append(opts, containerexec.WithBindMount(cfg.ContainerRepoHostPath, ContainerRepoMountPath, "ro"))
 		}
-		exec, err := containerexec.NewWithContext(ctx, opts...)
+		exec, err := containerexec.New(opts...)
 		if err != nil {
 			return nil, fmt.Errorf("create container executor: %w", err)
 		}

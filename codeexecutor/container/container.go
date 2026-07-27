@@ -56,11 +56,6 @@ type CodeExecutor struct {
 
 // New creates a new CodeExecutor instance
 func New(opts ...Option) (*CodeExecutor, error) {
-	return NewWithContext(context.Background(), opts...)
-}
-
-// NewWithContext creates a CodeExecutor and uses ctx for Docker setup.
-func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
 	c := &CodeExecutor{
 		hostConfig: container.HostConfig{
 			AutoRemove:  true,   // Automatically remove container after it stops
@@ -109,9 +104,7 @@ func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) 
 	}
 
 	// Initialize container
-	if err := c.initContainerWithContext(ctx); err != nil {
-		c.cleanup()
-		_ = c.client.Close()
+	if err := c.initContainer(); err != nil {
 		return nil, fmt.Errorf("failed to initialize container: %w", err)
 	}
 
@@ -500,10 +493,8 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 
 // initContainer initializes the Docker container
 func (c *CodeExecutor) initContainer() error {
-	return c.initContainerWithContext(context.Background())
-}
+	ctx := context.Background()
 
-func (c *CodeExecutor) initContainerWithContext(ctx context.Context) error {
 	if c.client == nil {
 		return fmt.Errorf("docker client is not initialized")
 	}
@@ -525,7 +516,6 @@ func (c *CodeExecutor) initContainerWithContext(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
-	c.container = &container.Summary{ID: resp.ID}
 
 	// Start container
 	if err := c.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {

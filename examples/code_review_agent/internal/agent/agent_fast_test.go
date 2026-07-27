@@ -257,7 +257,7 @@ func TestNewDryRunDoesNotCreateContainerExecutor(t *testing.T) {
 		Runtime:    RuntimeContainer,
 		OutputDir:  t.TempDir(),
 		Timeout:    time.Second,
-		ExecutorFactory: func(context.Context, execution.Config) (codeexecutor.CodeExecutor, error) {
+		ExecutorFactory: func(execution.Config) (codeexecutor.CodeExecutor, error) {
 			factoryCalls++
 			return execution.FakeExecutor{}, nil
 		},

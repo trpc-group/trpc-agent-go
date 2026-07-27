@@ -1097,45 +1097,6 @@ func TestInitContainer_StartError(t *testing.T) {
 	assert.True(t, startCalled)
 }
 
-func TestNewWithContextCleansUpContainerAfterInitializationFailure(t *testing.T) {
-	var stopped, removed bool
-	handler := func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/_ping":
-			w.Header().Set("API-Version", api.DefaultVersion)
-			w.WriteHeader(http.StatusOK)
-		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"Id":"cid","Warnings":[]}`))
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/start"):
-			http.Error(w, "start fail", http.StatusInternalServerError)
-		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/cid/stop"):
-			stopped = true
-			w.WriteHeader(http.StatusNoContent)
-		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/cid"):
-			removed = true
-			w.WriteHeader(http.StatusNoContent)
-		default:
-			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
-		}
-	}
-	server := httptest.NewServer(http.HandlerFunc(handler))
-	defer server.Close()
-	parsed, err := url.Parse(server.URL)
-	assert.NoError(t, err)
-
-	_, err = NewWithContext(context.Background(),
-		WithHost("tcp://"+parsed.Host),
-		WithContainerConfig(tcontainer.Config{Image: "python:3.9-slim"}),
-	)
-	assert.Error(t, err)
-	assert.True(t, stopped)
-	assert.True(t, removed)
-}
-
 func TestInitContainer_WaitError(t *testing.T) {
 	var inspectCalls int
 	handler := func(w http.ResponseWriter, r *http.Request) {

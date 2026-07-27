@@ -228,7 +228,7 @@ func New(cfg Config) (*Agent, error) {
 	if cfg.Runtime == RuntimeContainer {
 		exec = execution.NewLazyExecutor(execCfg, execFactory)
 	} else {
-		exec, err = execFactory(context.Background(), execCfg)
+		exec, err = execFactory(execCfg)
 		if err != nil {
 			return nil, err
 		}

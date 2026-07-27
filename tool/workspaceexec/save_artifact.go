@@ -117,7 +117,7 @@ func (t *SaveArtifactTool) Call(
 		)
 	}
 	ctxIO := workspacefacade.WithArtifactContext(ctx)
-	eng, err := t.exec.liveEngine(ctx)
+	eng, err := t.exec.liveEngine()
 	if err != nil {
 		return nil, err
 	}
