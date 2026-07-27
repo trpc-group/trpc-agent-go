@@ -138,6 +138,17 @@ func TestValidateConfigBoundaries(t *testing.T) {
 			},
 			message: "candidate base URL",
 		},
+		{
+			name: "credential in base URL",
+			mutate: func(cfg *config) {
+				cfg.Mode = modeLive
+				cfg.Candidate = validLiveRole()
+				cfg.Candidate.BaseURL = "https://user:secret@example.com/v1"
+				cfg.Judge = validLiveRole()
+				cfg.Worker = validLiveRole()
+			},
+			message: "candidate base URL must not contain credentials",
+		},
 	}
 
 	for _, tt := range tests {

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
@@ -187,23 +188,23 @@ func buildRuntime(ctx context.Context, cfg runtimeConfig) (*runtime, error) {
 func buildRuntimeModels(cfg config, runLedger *ledger) (runtimeModels, error) {
 	if cfg.Mode == modeDeterministic {
 		return runtimeModels{
-			candidate: newCountedModel(
+			candidate: newDeterministicCountedModel(
 				"candidate", "candidate", newScriptedModel("candidate"),
 				runLedger, rolePricing(cfg.Candidate),
 			),
-			judge: newCountedModel(
+			judge: newDeterministicCountedModel(
 				"judge", "judge", newScriptedModel("judge"),
 				runLedger, rolePricing(cfg.Judge),
 			),
-			backwarder: newCountedModel(
+			backwarder: newDeterministicCountedModel(
 				"worker", "backwarder", newScriptedModel("backwarder"),
 				runLedger, rolePricing(cfg.Worker),
 			),
-			aggregator: newCountedModel(
+			aggregator: newDeterministicCountedModel(
 				"worker", "aggregator", newScriptedModel("aggregator"),
 				runLedger, rolePricing(cfg.Worker),
 			),
-			optimizer: newCountedModel(
+			optimizer: newDeterministicCountedModel(
 				"worker", "optimizer", newScriptedModel("optimizer"),
 				runLedger, rolePricing(cfg.Worker),
 			),
@@ -237,6 +238,18 @@ func buildRuntimeModels(cfg config, runLedger *ledger) (runtimeModels, error) {
 		aggregator: aggregatorModel,
 		optimizer:  optimizerModel,
 	}, nil
+}
+
+func newDeterministicCountedModel(
+	role, stage string,
+	base model.Model,
+	runLedger *ledger,
+	prices pricing,
+) *countedModel {
+	counted := newCountedModel(role, stage, base, runLedger, prices)
+	zero := time.Duration(0)
+	counted.latencyOverride = &zero
+	return counted
 }
 
 func newLiveModel(role string, cfg roleConfig, runLedger *ledger) (model.Model, error) {

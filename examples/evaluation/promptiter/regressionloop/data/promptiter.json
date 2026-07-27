@@ -1,0 +1,34 @@
+{
+  "mode": "deterministic",
+  "seed": 2003,
+  "maxRounds": 3,
+  "trainEvalSetId": "train",
+  "searchEvalSetId": "train",
+  "validationEvalSetId": "validation",
+  "metricFileId": "regression",
+  "minValidationGain": 0.05,
+  "maxHardFailures": 0,
+  "maxCaseScoreDrop": 0,
+  "critical": [
+    {
+      "evalCaseId": "validation-security-critical",
+      "mustPass": true,
+      "maxScoreDrop": 0
+    }
+  ],
+  "evalCaseParallelism": 1,
+  "parallelInference": false,
+  "parallelEvaluation": false,
+  "candidate": {
+    "inputPerMillion": 0,
+    "outputPerMillion": 0
+  },
+  "judge": {
+    "inputPerMillion": 0,
+    "outputPerMillion": 0
+  },
+  "worker": {
+    "inputPerMillion": 0,
+    "outputPerMillion": 0
+  }
+}

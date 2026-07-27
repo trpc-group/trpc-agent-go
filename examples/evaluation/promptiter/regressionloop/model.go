@@ -10,16 +10,18 @@ package main
 
 import (
 	"context"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
 type countedModel struct {
-	role    string
-	stage   string
-	base    model.Model
-	ledger  *ledger
-	pricing pricing
+	role            string
+	stage           string
+	base            model.Model
+	ledger          *ledger
+	pricing         pricing
+	latencyOverride *time.Duration
 }
 
 func newCountedModel(role, stage string, base model.Model, ledger *ledger, pricing pricing) *countedModel {
@@ -36,7 +38,7 @@ func (m *countedModel) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
-	ticket := m.ledger.beginCall(m.stage, m.role, m.pricing)
+	ticket := m.ledger.beginCall(m.stage, m.role, m.pricing, m.latencyOverride)
 	responses, err := m.base.GenerateContent(ctx, request)
 	if err != nil {
 		ticket.finish(0, 0, false, err.Error())

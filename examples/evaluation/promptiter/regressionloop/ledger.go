@@ -64,17 +64,18 @@ func (l *ledger) record(call modelCall) {
 	l.addUsageLocked(call, usageKnown)
 }
 
-func (l *ledger) beginCall(stage, role string, prices pricing) *callTicket {
+func (l *ledger) beginCall(stage, role string, prices pricing, durationOverride *time.Duration) *callTicket {
 	l.mu.Lock()
 	l.modelCalls++
 	l.pending++
 	l.mu.Unlock()
 	return &callTicket{
-		ledger:  l,
-		stage:   stage,
-		role:    role,
-		pricing: prices,
-		start:   time.Now(),
+		ledger:           l,
+		stage:            stage,
+		role:             role,
+		pricing:          prices,
+		start:            time.Now(),
+		durationOverride: durationOverride,
 	}
 }
 
@@ -134,12 +135,13 @@ func (l *ledger) canReserve(reservation usageSummary, policy gatePolicy) error {
 }
 
 type callTicket struct {
-	ledger  *ledger
-	stage   string
-	role    string
-	pricing pricing
-	start   time.Time
-	done    bool
+	ledger           *ledger
+	stage            string
+	role             string
+	pricing          pricing
+	start            time.Time
+	durationOverride *time.Duration
+	done             bool
 }
 
 func (t *callTicket) finish(promptTokens, completionTokens int, usageKnown bool, callErr string) {
@@ -150,13 +152,17 @@ func (t *callTicket) finish(promptTokens, completionTokens int, usageKnown bool,
 	t.ledger.mu.Lock()
 	defer t.ledger.mu.Unlock()
 	t.ledger.pending--
+	duration := time.Since(t.start)
+	if t.durationOverride != nil {
+		duration = *t.durationOverride
+	}
 	t.ledger.addUsageLocked(modelCall{
 		Stage:            t.stage,
 		Role:             t.role,
 		PromptTokens:     promptTokens,
 		CompletionTokens: completionTokens,
 		Pricing:          t.pricing,
-		Duration:         time.Since(t.start),
+		Duration:         duration,
 		Err:              callErr,
 	}, usageKnown)
 }

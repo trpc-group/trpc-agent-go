@@ -111,18 +111,19 @@ func scriptedCandidateResponse(messages []model.Message, requestText string) str
 			break
 		}
 	}
+	answer := "baseline: " + input
 	switch {
 	case strings.Contains(requestText, "[balanced]"):
-		return "balanced: " + input
+		answer = "balanced: " + input
 	case strings.Contains(requestText, "[ineffective]"):
-		return "baseline: " + input
+		answer = "baseline: " + input
 	case strings.Contains(requestText, "[overfit]") && strings.Contains(strings.ToLower(input), "train"):
-		return "overfit-training: " + input
+		answer = "overfit-training: " + input
 	case strings.Contains(requestText, "[overfit]"):
-		return "overfit-regression: " + input
-	default:
-		return "baseline: " + input
+		answer = "overfit-regression: " + input
 	}
+	payload, _ := json.Marshal(map[string]string{"answer": answer})
+	return string(payload)
 }
 
 func scriptedJudgeResponse(request *model.Request, requestText string) (string, error) {

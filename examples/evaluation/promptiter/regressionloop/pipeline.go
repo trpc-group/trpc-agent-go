@@ -36,6 +36,7 @@ type pipelineResult struct {
 	ReleasedProfile *promptiter.Profile
 	BaselineTrain   evaluationSnapshot
 	Baseline        evaluationSnapshot
+	Released        evaluationSnapshot
 	Rounds          []roundReport
 }
 
@@ -70,7 +71,8 @@ func (p *pipeline) run(ctx context.Context) (*pipelineResult, error) {
 	result := &pipelineResult{
 		InitialProfile: initial, SearchProfile: initial, ReleasedProfile: initial,
 		BaselineTrain: baselineTrain, Baseline: baselineValidation,
-		Rounds: make([]roundReport, 0, p.cfg.MaxRounds),
+		Released: baselineValidation,
+		Rounds:   make([]roundReport, 0, p.cfg.MaxRounds),
 	}
 	releasedSnapshot := baselineValidation
 	lossHints := trainingLossHints(baselineTrain)
@@ -129,6 +131,7 @@ func (p *pipeline) run(ctx context.Context) (*pipelineResult, error) {
 		if decision.Accepted {
 			result.ReleasedProfile = candidate
 			result.SearchProfile = candidate
+			result.Released = candidateSnapshot
 			releasedSnapshot = candidateSnapshot
 		}
 	}
@@ -174,7 +177,14 @@ func (p *pipeline) evaluateProfile(
 	if err != nil {
 		return evaluationSnapshot{}, err
 	}
-	return normalizeEvaluation(result, expected)
+	normalized, err := normalizeEvaluation(result, expected)
+	if err != nil {
+		return evaluationSnapshot{}, err
+	}
+	if p.cfg.Mode == modeDeterministic {
+		normalized.Duration = 0
+	}
+	return normalized, nil
 }
 
 func (p *pipeline) runRequest(profile *promptiter.Profile, hints []promptiterengine.LossHint) *promptiterengine.RunRequest {

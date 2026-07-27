@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -195,6 +196,15 @@ func validateLiveRole(name string, role roleConfig) error {
 	}
 	if role.APIKeyEnv != defaultAPIKeyEnv && strings.TrimSpace(role.BaseURL) == "" {
 		return fmt.Errorf("%s base URL is required with non-default credentials", name)
+	}
+	if strings.TrimSpace(role.BaseURL) != "" {
+		parsed, err := url.Parse(strings.TrimSpace(role.BaseURL))
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+			return fmt.Errorf("%s base URL is invalid", name)
+		}
+		if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return fmt.Errorf("%s base URL must not contain credentials, query, or fragment", name)
+		}
 	}
 	return nil
 }

@@ -21,8 +21,10 @@ const reportSchemaVersion = 1
 type effectiveRole struct {
 	Model      string   `json:"model"`
 	BaseURL    string   `json:"baseURL,omitempty"`
+	APIKeyEnv  string   `json:"apiKeyEnv,omitempty"`
 	InputPerM  *float64 `json:"inputPerMillion,omitempty"`
 	OutputPerM *float64 `json:"outputPerMillion,omitempty"`
+	MaxRetries int      `json:"maxRetries"`
 }
 
 type roundReport struct {
