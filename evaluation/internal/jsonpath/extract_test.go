@@ -59,6 +59,12 @@ func TestExtractReturnsRenderedValue(t *testing.T) {
 			value: "true",
 		},
 		{
+			name:  "false boolean",
+			raw:   `{"ok":false}`,
+			path:  "$.ok",
+			value: "false",
+		},
+		{
 			name:  "null",
 			raw:   `{"value":null}`,
 			path:  "$.value",
@@ -100,10 +106,34 @@ func TestExtractRejectsInvalidInputs(t *testing.T) {
 			wantErr: "parse source json",
 		},
 		{
+			name:    "multiple json values",
+			raw:     `{} {}`,
+			path:    "$",
+			wantErr: "multiple JSON values",
+		},
+		{
+			name:    "invalid trailing json",
+			raw:     `{} [`,
+			path:    "$",
+			wantErr: "parse source json",
+		},
+		{
 			name:    "invalid root selector",
 			raw:     `{"payload":{"answer":"Paris"}}`,
 			path:    "$payload.answer",
 			wantErr: "invalid root selector",
+		},
+		{
+			name:    "missing key after dot",
+			raw:     `{"payload":{"answer":"Paris"}}`,
+			path:    "$.payload.",
+			wantErr: "missing key",
+		},
+		{
+			name:    "unexpected closing bracket",
+			raw:     `{"payload":{"answer":"Paris"}}`,
+			path:    "$.payload]",
+			wantErr: "unexpected ]",
 		},
 		{
 			name:    "wildcard",
@@ -118,6 +148,12 @@ func TestExtractRejectsInvalidInputs(t *testing.T) {
 			wantErr: `key "answer" not found`,
 		},
 		{
+			name:    "object expected",
+			raw:     `{"payload":[]}`,
+			path:    "$.payload.answer",
+			wantErr: "expects object before key",
+		},
+		{
 			name:    "index out of range",
 			raw:     `{"items":[]}`,
 			path:    "$.items[0]",
@@ -128,6 +164,24 @@ func TestExtractRejectsInvalidInputs(t *testing.T) {
 			raw:     `{"items":{}}`,
 			path:    "$.items[0]",
 			wantErr: "expects array before index 0",
+		},
+		{
+			name:    "missing closing bracket",
+			raw:     `{"items":[]}`,
+			path:    "$.items[0",
+			wantErr: "missing ]",
+		},
+		{
+			name:    "missing index",
+			raw:     `{"items":[]}`,
+			path:    "$.items[]",
+			wantErr: "missing index",
+		},
+		{
+			name:    "invalid index",
+			raw:     `{"items":[]}`,
+			path:    "$.items[one]",
+			wantErr: "invalid index",
 		},
 		{
 			name:    "missing delimiter after index",
