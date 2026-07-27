@@ -46,8 +46,12 @@ type registry struct {
 	evaluators map[string]evaluator.Evaluator
 }
 
-// New creates a evaluator registry
-func New() Registry {
+// New creates an evaluator registry.
+func New(opt ...Option) Registry {
+	opts := &options{}
+	for _, o := range opt {
+		o(opts)
+	}
 	r := &registry{
 		evaluators: make(map[string]evaluator.Evaluator),
 	}
@@ -67,7 +71,11 @@ func New() Registry {
 	r.Register(rubricKnowledgeRecall.Name(), rubricKnowledgeRecall)
 	hallucinationEvaluator := hallucination.New()
 	r.Register(hallucinationEvaluator.Name(), hallucinationEvaluator)
-	templateEvaluator := llmtemplate.New()
+	templateOptions := []llmtemplate.Option(nil)
+	if opts.llmOperatorRegistry != nil {
+		templateOptions = append(templateOptions, llmtemplate.WithOperatorRegistry(opts.llmOperatorRegistry))
+	}
+	templateEvaluator := llmtemplate.New(templateOptions...)
 	r.Register(templateEvaluator.Name(), templateEvaluator)
 	verifierPairwiseEvaluator := verifierpairwise.New()
 	r.Register(verifierPairwiseEvaluator.Name(), verifierPairwiseEvaluator)

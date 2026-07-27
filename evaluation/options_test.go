@@ -62,7 +62,6 @@ func (stubEvalCaseResultAggregator) Aggregate(context.Context, *service.EvalCase
 
 func TestNewOptionsDefaults(t *testing.T) {
 	opts := newOptions()
-
 	assert.Equal(t, defaultNumRuns, opts.numRuns)
 	assert.NotNil(t, opts.evalSetManager)
 	assert.NotNil(t, opts.evalResultManager)
@@ -101,14 +100,18 @@ func TestWithMetricManager(t *testing.T) {
 func TestWithRegistry(t *testing.T) {
 	custom := registry.New()
 	opts := newOptions(WithRegistry(custom))
-
 	assert.Equal(t, custom, opts.registry)
+}
+
+func TestWithRegistryNil(t *testing.T) {
+	opts := newOptions(WithRegistry(nil))
+	err := opts.validate(false)
+	assert.ErrorContains(t, err, "registry is nil")
 }
 
 func TestWithMetricRegistry(t *testing.T) {
 	custom := metricregistry.New()
 	opts := newOptions(WithMetricRegistry(custom))
-
 	assert.Equal(t, custom, opts.metricRegistry)
 }
 
