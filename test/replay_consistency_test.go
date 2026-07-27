@@ -100,8 +100,8 @@ type memoryOpSpec struct {
 }
 
 type memoryQuerySpec struct {
-	query      string
-	minResults int
+	query            string
+	expectedContents []string
 }
 
 type summaryStep struct {
@@ -435,7 +435,9 @@ func toReplayTestCase(tc replayCase) replaytest.Case {
 	}
 	queries := make([]replaytest.MemoryQuery, 0, len(tc.queries))
 	for _, spec := range tc.queries {
-		queries = append(queries, replaytest.MemoryQuery{Query: spec.query, MinResults: spec.minResults})
+		queries = append(queries, replaytest.MemoryQuery{
+			Query: spec.query, ExpectedContents: append([]string(nil), spec.expectedContents...),
+		})
 	}
 	return replaytest.Case{
 		Name: tc.name, InitialState: tc.initialState, AppState: tc.appState,
@@ -1321,8 +1323,18 @@ func basicReplayCases() []replayCase {
 				},
 			},
 			queries: []memoryQuerySpec{
-				{query: "jasmine tea afternoon", minResults: 1},
-				{query: "Shenzhen library Ada", minResults: 1},
+				{
+					query: "jasmine tea afternoon",
+					expectedContents: []string{
+						"User likes jasmine tea in the afternoon.",
+					},
+				},
+				{
+					query: "Shenzhen library Ada",
+					expectedContents: []string{
+						"User visited Shenzhen library with Ada.",
+					},
+				},
 			},
 		},
 		{
@@ -1366,7 +1378,13 @@ func basicReplayCases() []replayCase {
 				},
 			},
 			queries: []memoryQuerySpec{
-				{query: "concurrent repeated project note", minResults: 2},
+				{
+					query: "repeated note from branch",
+					expectedContents: []string{
+						"Concurrent write records repeated project note from branch A.",
+						"Concurrent write records repeated project note from branch B.",
+					},
+				},
 			},
 		},
 		{
@@ -1922,6 +1940,17 @@ func TestReplayConsistencyAnomaly_SnapshotMutations(t *testing.T) {
 			context: map[string]any{"event_index": 0},
 		},
 		{
+			name:     "event_timestamp_drift",
+			section:  "events",
+			pathGlob: "$.events[0].timestamp",
+			mutate: func(snapshot *replaySnapshot) {
+				snapshot.Events[0]["timestamp"] = normalizeReplayTime(
+					time.Date(2026, time.July, 1, 1, 3, 4, 4, time.UTC),
+				)
+			},
+			context: map[string]any{"event_index": 0},
+		},
+		{
 			name:     "summary_loss",
 			section:  "summary",
 			pathGlob: `$.summary["branch/a"]*`,
@@ -2380,6 +2409,56 @@ func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
 			}},
 		},
 		{
+			name: "root path rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "root wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$*",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "root repeated wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$**",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "root child wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$.*",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "root index wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$[*]",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
 			name: "backend wildcard rejected",
 			rules: []allowedDiffRule{{
 				Section:  "memory",
@@ -2531,7 +2610,7 @@ func newReplaySnapshotFixtureWithSummaryAnchor(
 		InvocationID: "invocation-1",
 		Author:       "agent",
 		ID:           eventID,
-		Timestamp:    fixed.Add(time.Duration(len(generated)) * time.Minute),
+		Timestamp:    fixed.Add(time.Minute),
 		Branch:       "branch/a",
 		FilterKey:    "branch/a",
 		Tag:          "tool",

@@ -90,11 +90,11 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 			want: `concurrent memory operations for case "concurrent-update": unsupported concurrent memory operation "update"`,
 		},
 		{
-			name: "insufficient query results",
+			name: "query contents mismatch",
 			tc: Case{Name: "query", Queries: []MemoryQuery{{
-				Query: "missing", MinResults: 1,
+				Query: "missing", ExpectedContents: []string{"missing memory"},
 			}}},
-			want: `memory query 0 for case "query" returned 0 results, want at least 1`,
+			want: `memory query 0 for case "query" returned contents [], want ["missing memory"]`,
 		},
 	}
 
@@ -195,9 +195,11 @@ func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
 
 type failingMemoryService struct {
 	memory.Service
-	addErr    error
-	readErr   error
-	searchErr error
+	addErr          error
+	readErr         error
+	searchErr       error
+	searchResults   []*memory.Entry
+	useSearchResult bool
 }
 
 func (s *failingMemoryService) AddMemory(
@@ -233,12 +235,85 @@ func (s *failingMemoryService) SearchMemories(
 	if s.searchErr != nil {
 		return nil, s.searchErr
 	}
+	if s.useSearchResult {
+		return s.searchResults, nil
+	}
 	return s.Service.SearchMemories(ctx, userKey, query, opts...)
 }
 
+func TestAssertMemoryQueriesValidatesExactContents(t *testing.T) {
+	entry := func(content string) *memory.Entry {
+		return &memory.Entry{Memory: &memory.Memory{Memory: content}}
+	}
+	tests := []struct {
+		name     string
+		results  []*memory.Entry
+		expected []string
+		wantErr  string
+	}{
+		{
+			name:     "wrong content",
+			results:  []*memory.Entry{entry("wrong")},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "wrong content" returned contents ["wrong"], want ["expected"]`,
+		},
+		{
+			name:     "unexpected extra content",
+			results:  []*memory.Entry{entry("expected"), entry("unrelated")},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "unexpected extra content" returned contents ["expected" "unrelated"], want ["expected"]`,
+		},
+		{
+			name:     "order ignored",
+			results:  []*memory.Entry{entry("second"), entry("first")},
+			expected: []string{"first", "second"},
+		},
+		{
+			name:     "nil result",
+			results:  []*memory.Entry{nil},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "nil result" returned nil result at index 0, want contents ["expected"]`,
+		},
+		{
+			name:     "nil memory",
+			results:  []*memory.Entry{{}},
+			expected: []string{"expected"},
+			wantErr:  `memory query 0 for case "nil memory" returned result with nil memory at index 0, want contents ["expected"]`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			service := &failingMemoryService{
+				Service:         meminmemory.NewMemoryService(),
+				searchResults:   test.results,
+				useSearchResult: true,
+			}
+			defer service.Close()
+			err := assertMemoryQueries(
+				context.Background(),
+				Backend{MemoryService: service},
+				memory.UserKey{AppName: "app", UserID: "user"},
+				Case{Name: test.name, Queries: []MemoryQuery{{
+					Query: "query", ExpectedContents: test.expected,
+				}}},
+			)
+			if test.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err, test.wantErr)
+		})
+	}
+}
+
 func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
-	left := BuildSnapshot(replayTestSession("left", time.Unix(1, 0)), nil)
-	right := BuildSnapshot(replayTestSession("right", time.Unix(2, 0)), nil)
+	timestamp := time.Unix(1, 0)
+	leftSession := replayTestSession("left", timestamp)
+	rightSession := replayTestSession("right", timestamp)
+	rightSession.Events[0].Response.Timestamp = timestamp.Add(time.Second)
+	left := BuildSnapshot(leftSession, nil)
+	right := BuildSnapshot(rightSession, nil)
 	diffs := CompareSnapshots(
 		"generated",
 		"session-1",
@@ -249,6 +324,26 @@ func TestBuildSnapshotNormalizesGeneratedEventFields(t *testing.T) {
 		nil,
 	)
 	require.Empty(t, diffs)
+}
+
+func TestBuildSnapshotPreservesSuppliedEventTimestamp(t *testing.T) {
+	leftTime := time.Date(2026, time.July, 24, 8, 9, 10, 123, time.FixedZone("UTC+8", 8*60*60))
+	rightTime := leftTime.Add(time.Second)
+	left := BuildSnapshot(replayTestSession("same", leftTime), nil)
+	right := BuildSnapshot(replayTestSession("same", rightTime), nil)
+
+	require.Equal(t, normalizeTime(leftTime), left.Events[0]["timestamp"])
+	diffs := CompareSnapshots("timestamp", "session-1", "left", "right", left, right, nil)
+	require.Len(t, diffs, 1)
+	require.Equal(t, "events", diffs[0].Section)
+	require.Equal(t, "$.events[0].timestamp", diffs[0].Path)
+	require.Equal(t, normalizeTime(leftTime), diffs[0].Left)
+	require.Equal(t, normalizeTime(rightTime), diffs[0].Right)
+	require.Equal(t, 0, diffs[0].Context["event_index"])
+	require.False(t, diffs[0].Allowed)
+
+	sameInstant := BuildSnapshot(replayTestSession("same", leftTime.UTC()), nil)
+	require.Empty(t, CompareSnapshots("timestamp", "session-1", "left", "right", left, sameInstant, nil))
 }
 
 func TestNormalizeStatePreservesJSONNumbersAndByteKinds(t *testing.T) {
@@ -325,6 +420,35 @@ func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
 	require.Equal(t, "fixture drift", diffs[0].Reason)
 	require.Equal(t, 0, diffs[0].Context["event_index"])
 	require.False(t, HasUnallowedDiffs(diffs))
+}
+
+func TestAllowedDiffRulesRejectRootOnlyWildcards(t *testing.T) {
+	invalid := []string{"$", "$*", "$**", "$.*", "$[*]", "*", "**", "***"}
+	for _, path := range invalid {
+		require.Falsef(t, allowedPathHasConcreteSegment(path), "path=%q", path)
+	}
+	require.True(t, allowedPathHasConcreteSegment("$.memory[0].content"))
+	require.True(t, allowedPathHasConcreteSegment("$.memory[*].content"))
+
+	newEntries := func() []Diff {
+		return []Diff{
+			{Section: "memory", Path: "$.memory[0].content", BackendA: "left", BackendB: "right"},
+			{Section: "memory", Path: "$.memory[0].topics[0]", BackendA: "left", BackendB: "right"},
+		}
+	}
+	rootWildcardEntries := newEntries()
+	applyAllowedDiffRules(rootWildcardEntries, []AllowedDiffRule{{
+		Section: "memory", Path: "$*", BackendA: "left", BackendB: "right", Reason: "too broad",
+	}})
+	require.False(t, rootWildcardEntries[0].Allowed)
+	require.False(t, rootWildcardEntries[1].Allowed)
+
+	partialWildcardEntries := newEntries()
+	applyAllowedDiffRules(partialWildcardEntries, []AllowedDiffRule{{
+		Section: "memory", Path: "$.memory[*].content", BackendA: "left", BackendB: "right", Reason: "known content drift",
+	}})
+	require.True(t, partialWildcardEntries[0].Allowed)
+	require.False(t, partialWildcardEntries[1].Allowed)
 }
 
 func TestWildcardMatchHandlesRepeatedAndMissingSegments(t *testing.T) {

@@ -66,8 +66,9 @@ type MemoryOp struct {
 
 // MemoryQuery describes one memory search assertion.
 type MemoryQuery struct {
-	Query      string
-	MinResults int
+	Query string
+	// ExpectedContents is the exact unordered multiset of result contents.
+	ExpectedContents []string
 }
 
 // SummaryStep describes one summary creation and read-back assertion.
@@ -126,7 +127,7 @@ type SessionSnapshot struct {
 	UserID string `json:"user_id"`
 }
 
-// EventSnapshot is a generated-field-free event representation.
+// EventSnapshot is a normalized event representation.
 type EventSnapshot map[string]any
 
 // MemorySnapshot contains stable memory fields and raw IDs for diagnostics.
@@ -342,8 +343,21 @@ func assertMemoryQueries(ctx context.Context, backend Backend, userKey memory.Us
 		if err != nil {
 			return fmt.Errorf("memory query %d for case %q: %w", i, tc.Name, err)
 		}
-		if len(results) < query.MinResults {
-			return fmt.Errorf("memory query %d for case %q returned %d results, want at least %d", i, tc.Name, len(results), query.MinResults)
+		want := append([]string{}, query.ExpectedContents...)
+		sort.Strings(want)
+		got := make([]string, 0, len(results))
+		for resultIndex, result := range results {
+			if result == nil {
+				return fmt.Errorf("memory query %d for case %q returned nil result at index %d, want contents %q", i, tc.Name, resultIndex, want)
+			}
+			if result.Memory == nil {
+				return fmt.Errorf("memory query %d for case %q returned result with nil memory at index %d, want contents %q", i, tc.Name, resultIndex, want)
+			}
+			got = append(got, result.Memory.Memory)
+		}
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			return fmt.Errorf("memory query %d for case %q returned contents %q, want %q", i, tc.Name, got, want)
 		}
 	}
 	return nil
@@ -570,7 +584,7 @@ func normalizeEvents(events []event.Event) []EventSnapshot {
 			panic(fmt.Sprintf("unmarshal replay event: %v", err))
 		}
 		delete(normalized, "id")
-		delete(normalized, "timestamp")
+		normalized["timestamp"] = normalizeTime(evt.Timestamp)
 		delete(normalized, "created")
 		if response, ok := normalized["response"].(map[string]any); ok {
 			delete(response, "id")
@@ -1045,15 +1059,18 @@ func (rule AllowedDiffRule) matches(entry Diff) bool {
 	backendA := strings.TrimSpace(rule.BackendA)
 	backendB := strings.TrimSpace(rule.BackendB)
 	reason := strings.TrimSpace(rule.Reason)
-	if section == "" || section == "*" || path == "" || !allowedPathHasLiteral(path) ||
+	if section == "" || section == "*" || path == "" || !allowedPathHasConcreteSegment(path) ||
 		backendA == "" || backendA == "*" || backendB == "" || backendB == "*" || reason == "" {
 		return false
 	}
 	return section == entry.Section && wildcardMatch(path, entry.Path) && backendRuleMatches(backendA, backendB, entry.BackendA, entry.BackendB)
 }
 
-func allowedPathHasLiteral(path string) bool {
-	return strings.TrimSpace(strings.ReplaceAll(path, "*", "")) != ""
+func allowedPathHasConcreteSegment(path string) bool {
+	path = strings.TrimSpace(path)
+	path = strings.TrimPrefix(path, "$")
+	path = strings.ReplaceAll(path, "*", "")
+	return strings.Trim(path, " \t\r\n.[]\"'") != ""
 }
 
 func backendRuleMatches(ruleA, ruleB, entryA, entryB string) bool {

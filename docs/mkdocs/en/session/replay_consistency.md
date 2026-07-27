@@ -69,13 +69,15 @@ The `context` object carries section-specific location data such as `event_index
 Snapshots include these sections:
 
 - `session`: session ID, app, and user ID
-- `events`: messages, tool calls, tool responses, branch, filter key, tag, state delta, extensions, and actions
+- `events`: messages, tool calls, tool responses, caller-supplied event timestamp, branch, filter key, tag, state delta, extensions, and actions
 - `state`: visible merged session/app/user/temp state, normalized as tagged byte values so nil, JSON, UTF-8 text, and binary bytes remain distinct
 - `memory`: content, topics, and metadata; raw memory IDs are only used for report context
 - `summary`: `Session.Summaries[filterKey]`, summary text, topics, boundary metadata, and `GetSessionSummaryText`
 - `tracks`: track name, each embedded event track, event order, payload, and timestamp
 
-Generated fields such as event IDs, response IDs, timestamps, and backend-generated memory IDs are normalized. JSON normalization uses `json.Decoder.UseNumber` so large integers remain precise. Business-field differences are not allowed by default.
+Backend-regenerated event IDs, response IDs and timing metadata, and backend-generated memory IDs are omitted during normalization. Caller-supplied `Event.Timestamp` values are retained as UTC `RFC3339Nano` strings so persistence drift remains visible. JSON normalization uses `json.Decoder.UseNumber` so large integers remain precise. Business-field differences are not allowed by default.
+
+Each memory query declares `ExpectedContents`. Search results are compared as an exact unordered content multiset, so backend-specific IDs, scores, and ranking are ignored while missing, unrelated, extra, and duplicate results remain observable.
 
 ## Summary And Track Strategy
 
@@ -105,7 +107,7 @@ Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track d
 
 The test harness includes three kinds of anomaly injection:
 
-- snapshot mutation: partial event loss, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, and track order drift
+- snapshot mutation: partial event loss, event timestamp drift, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, and track order drift
 - in-execution retry: fail-before-write must converge to the single-success baseline when retried with identical input; ambiguous fail-after-write verifies idempotent Memory Add, state update, and summary overwrite results
 - SQLite/public API injection: state pollution, memory pollution, and summary overwrite
 - SQLite/storage injection: a duplicate memory row that simulates storage corruption and verifies that it is reported as an unallowed memory diff
@@ -133,7 +135,7 @@ Example:
 Rules:
 
 - `section` is required and cannot be empty or `*`
-- `path` is required and cannot be empty or a pure wildcard such as `*`, `**`, or `***`
+- `path` is required and must contain a concrete field or fixed index below the JSONPath root; root-only patterns such as `$`, `$*`, `$.*`, and `$[*]` are rejected together with pure wildcards such as `*`, `**`, and `***`
 - `backend_a` and `backend_b` are required and cannot be empty or `*`
 - `reason` is required and cannot be blank
 - backend pairs match in either order
@@ -148,6 +150,6 @@ The current runnable matrix only includes `InMemory` and `SQLite`. External back
 When adding a backend:
 
 - keep default local tests free of external-service dependencies
-- normalize generated ID and timestamp fields
+- normalize backend-generated IDs and response timing metadata while preserving caller-supplied event timestamps
 - preserve summary and track semantics across backends
 - prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`

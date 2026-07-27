@@ -69,13 +69,15 @@ CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=replay-report.json go test ./... -ru
 snapshot 覆盖以下 section：
 
 - `session`：session ID、app、user ID
-- `events`：消息、工具调用、工具响应、branch、filter key、tag、state delta、extensions、actions
+- `events`：消息、工具调用、工具响应、调用方提供的事件时间戳、branch、filter key、tag、state delta、extensions、actions
 - `state`：session/app/user/temp state 合并后的可见状态，并以带标签的 byte value 表示，确保 nil、JSON、UTF-8 文本和二进制字节可区分
 - `memory`：content、topics、metadata；raw memory ID 只用于 report 定位
 - `summary`：`Session.Summaries[filterKey]`、summary text、topics、boundary metadata、`GetSessionSummaryText`
 - `tracks`：track name、每个事件内嵌的 track、event order、payload、timestamp
 
-生成型字段通过 normalize 处理，例如 event ID、response ID、timestamp 和后端生成的 memory ID。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
+后端重新生成的 event ID、response ID 与时间元数据，以及后端生成的 memory ID 会在 normalize 时移除。调用方提供的 `Event.Timestamp` 会保留为 UTC `RFC3339Nano` 字符串，使持久化时间漂移能够被发现。JSON 归一化使用 `json.Decoder.UseNumber`，避免大整数精度丢失。业务字段差异不会默认放行。
+
+每个 memory query 都声明 `ExpectedContents`。查询结果按照无序的精确内容多重集合比较，因此忽略后端特有的 ID、score 和排序，同时仍能发现缺失、无关、额外和重复结果。
 
 ## Summary 与 Track 策略
 
@@ -105,7 +107,7 @@ track 比较重点：
 
 测试框架包含三类异常注入：
 
-- snapshot mutation：partial event loss、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、track order drift
+- snapshot mutation：partial event loss、event timestamp drift、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、track order drift
 - 执行中 retry：fail-before-write 使用相同输入重试后必须与单次成功 baseline 一致；ambiguous fail-after-write 验证 Memory Add、state update 和 summary overwrite 的幂等结果
 - SQLite/public API injection：state pollution、memory pollution、summary overwrite
 - SQLite/storage injection：直接注入 duplicate memory row，用于模拟存储损坏，并验证它会被报告为 unallowed memory diff
@@ -133,7 +135,7 @@ track 比较重点：
 规则：
 
 - `section` 必填，不能是空字符串或 `*`
-- `path` 必填，不能是空字符串，也不能是 `*`、`**`、`***` 这类纯通配符
+- `path` 必填，并且必须在 JSONPath 根节点下包含具体字段或固定索引；除 `*`、`**`、`***` 这类纯通配符外，`$`、`$*`、`$.*`、`$[*]` 等仅包含根节点的模式同样无效
 - `backend_a` 和 `backend_b` 必填，不能是空字符串或 `*`
 - `reason` 必填且不能为空白
 - backend pair 支持左右顺序互换
@@ -148,6 +150,6 @@ ID 和时间类差异应优先通过 normalize 或 runner 修正，不应使用 
 接入新后端时应保持：
 
 - 默认本地测试不需要外部服务
-- 生成型 ID/时间字段通过 normalize 处理
+- 后端生成的 ID 与 response 时间元数据通过 normalize 处理，同时保留调用方提供的事件时间戳
 - summary 与 track 语义与现有后端一致
 - 新后端差异必须先由异常注入测试证明可定位，再评估是否需要 `allowed_diff`
