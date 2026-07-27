@@ -498,6 +498,12 @@ func TestExecTool_LiveEnginePropagatesContextProviderError(t *testing.T) {
 	require.ErrorIs(t, err, want)
 }
 
+func TestExecTool_LiveEngineRejectsInvalidContextProviderEngine(t *testing.T) {
+	_, err := (&ExecTool{exec: &contextEngineExec{}}).liveEngine(context.Background())
+	require.ErrorContains(t, err, "live workspace support")
+	require.False(t, supportsInteractiveSessions(&noEngineExec{}))
+}
+
 func TestExecTool_Call_NotConfigured(t *testing.T) {
 	_, err := (&ExecTool{}).Call(context.Background(), []byte(`{"command":"echo hi"}`))
 	require.Error(t, err)
