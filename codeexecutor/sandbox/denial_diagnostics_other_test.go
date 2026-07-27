@@ -12,13 +12,14 @@
 package sandbox
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
 func TestNonDarwinDenialDiagnosticsStubs(t *testing.T) {
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if err := rt.ensureDenialMonitor(); err != nil {
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor: %v", err)
 	}
 	caps := rt.DiagnosticsCapability()
@@ -35,11 +36,15 @@ func TestNonDarwinDenialDiagnosticsStubs(t *testing.T) {
 	if rt.sandboxDenialCollectingReady() {
 		t.Fatalf("sandboxDenialCollectingReady = true, want false")
 	}
-	denials := rt.collectSandboxDenials("tag", "/bin/cat", time.Millisecond)
-	if denials != nil {
-		t.Fatalf("collectSandboxDenials = %#v, want nil", denials)
+	denials, truncated := rt.collectSandboxDenials(
+		context.Background(), "tag", 0, "/bin/cat", time.Millisecond,
+	)
+	if denials != nil || truncated {
+		t.Fatalf("collectSandboxDenials = (%#v, %v), want nil/false", denials, truncated)
 	}
-
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
 	rt.setDenialFilter(DenialFilter{
 		Ignore: []DenialIgnoreRule{{
 			Operations: []string{"file-read-data"},

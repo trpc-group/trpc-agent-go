@@ -534,7 +534,14 @@ func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
 		}},
 	}
 	rt := NewRuntime()
-	rt.macosDenialDiagnostics().prodMonitor = &macosLogStreamMonitor{ring: ring}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
 	go func() {
 		time.Sleep(120 * time.Millisecond)
 		ring.mu.Lock()
@@ -548,7 +555,13 @@ func TestCollectSandboxDenialsWaitsForCurrentRunTag(t *testing.T) {
 			tagged: true,
 		})
 	}()
-	denials := rt.collectSandboxDenials(runTag, "/bin/cat", 2*time.Second)
+	denials, _ := rt.collectSandboxDenials(
+		context.Background(),
+		runTag,
+		0,
+		"/bin/cat",
+		2*time.Second,
+	)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/current" {
 		t.Fatalf("denials=%#v, want current run denial after stale ring event", denials)
 	}
@@ -558,7 +571,18 @@ func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
 	if _, err := os.Stat(macosSandboxExecPath); err != nil {
 		t.Skip("sandbox-exec not available")
 	}
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	// Cached probe says the event stream is unavailable, so ensureDenialMonitor
+	// must not start a production monitor and RunProgram should degrade.
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: false,
+		StrongCorrelation:    false,
+	})
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	t.Cleanup(func() { _ = rt.Close() })
 	if _, err := rt.macosPreflight(); err != nil {
 		t.Skipf("sandbox-exec preflight unavailable: %v", err)
 	}
@@ -566,19 +590,6 @@ func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rt.ensureDenialMonitor(); err != nil {
-		t.Fatalf("ensureDenialMonitor: %v", err)
-	}
-	d := rt.macosDenialDiagnostics()
-	d.mu.Lock()
-	d.prodMonitor = nil
-	d.caps = DiagnosticsCapability{
-		Supported:            true,
-		ProbeCompleted:       true,
-		EventStreamAvailable: false,
-		StrongCorrelation:    false,
-	}
-	d.mu.Unlock()
 
 	ctx, diagnosticsCh := WithDiagnostics(context.Background())
 	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
@@ -596,41 +607,7 @@ func TestRunProgramWithDiagnosticsDegradesWhenMonitorUnavailable(t *testing.T) {
 		t.Fatalf("diagnostics = %#v, want nil denials when monitor unavailable", diagnostics)
 	}
 	if rt.sandboxDenialCollectingReady() {
-		t.Fatalf("sandboxDenialCollectingReady = true, want false after simulated monitor loss")
-	}
-}
-
-func TestRunProgramWithDiagnosticsProbeFailureDisablesCollection(t *testing.T) {
-	if _, err := os.Stat(macosSandboxExecPath); err != nil {
-		t.Skip("sandbox-exec not available")
-	}
-	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
-	if _, err := rt.macosPreflight(); err != nil {
-		t.Skipf("sandbox-exec preflight unavailable: %v", err)
-	}
-	ws, err := rt.CreateWorkspace(context.Background(), "macos/diagnostics-probe-failure", codeexecutor.WorkspacePolicy{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	d := rt.macosDenialDiagnostics()
-	d.monitorOnce.Do(func() {
-		d.monitorErr = errors.New("simulated probe failure")
-	})
-
-	ctx, diagnosticsCh := WithDiagnostics(context.Background())
-	res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
-		Cmd:  "bash",
-		Args: []string{"-c", "echo ok"},
-	})
-	diagnostics := <-diagnosticsCh
-	if err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	if res.ExitCode != 0 || strings.TrimSpace(res.Stdout) != "ok" {
-		t.Fatalf("run result = %#v, want successful echo ok", res)
-	}
-	if diagnostics.Denials != nil {
-		t.Fatalf("diagnostics = %#v, want nil denials when probe fails", diagnostics)
+		t.Fatalf("sandboxDenialCollectingReady = true, want false when stream unavailable")
 	}
 }
 
@@ -639,10 +616,11 @@ func TestDiagnosticsCapabilityProbe(t *testing.T) {
 		t.Skip("sandbox-exec not available")
 	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	t.Cleanup(func() { _ = rt.Close() })
 	if _, err := rt.macosPreflight(); err != nil {
 		t.Skipf("sandbox-exec preflight unavailable: %v", err)
 	}
-	if err := rt.ensureDenialMonitor(); err != nil {
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor: %v", err)
 	}
 	caps := rt.DiagnosticsCapability()
@@ -704,10 +682,11 @@ func TestMacOSSandboxExecCollectsDefaultDenyDiagnosticsWhenSupported(t *testing.
 		t.Skip("sandbox-exec not available")
 	}
 	rt := NewRuntime(WithWorkspaceRoot(t.TempDir()))
+	t.Cleanup(func() { _ = rt.Close() })
 	if _, err := rt.macosPreflight(); err != nil {
 		t.Skipf("sandbox-exec preflight unavailable: %v", err)
 	}
-	_ = rt.ensureDenialMonitor()
+	_ = rt.ensureDenialMonitor(context.Background())
 	caps := rt.DiagnosticsCapability()
 	if !caps.DefaultDenyTaggable {
 		t.Skip("default-deny messages are not supported on this host")
@@ -971,4 +950,119 @@ func TestMacOSSandboxExecTimeoutKillsProcessGroup(t *testing.T) {
 func processExists(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || err == syscall.EPERM
+}
+
+func TestRunProgramWithDiagnosticsCanceledContextReturnsPromptly(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	t.Cleanup(func() { _ = rt.Close() })
+	if _, err := rt.macosPreflight(); err != nil {
+		t.Skipf("sandbox-exec preflight unavailable: %v", err)
+	}
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"macos/diagnostics-canceled",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, diagnosticsCh := WithDiagnostics(context.Background())
+	ctx, cancel := context.WithCancel(base)
+	cancel()
+	start := time.Now()
+	_, runErr := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:  "bash",
+		Args: []string{"-c", "echo ok"},
+	})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("canceled diagnostics run took too long: %s", time.Since(start))
+	}
+	if !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("run error = %v, want context.Canceled", runErr)
+	}
+	if isKind(runErr, ErrSetupFailed) {
+		t.Fatalf("run error = %v, want cancel not ErrSetupFailed", runErr)
+	}
+	select {
+	case <-diagnosticsCh:
+	case <-time.After(time.Second):
+		t.Fatal("diagnostics channel did not deliver")
+	}
+}
+
+func TestRunProgramWithDiagnosticsShortTimeoutReturnsErrTimeout(t *testing.T) {
+	if _, err := os.Stat(macosSandboxExecPath); err != nil {
+		t.Skip("sandbox-exec not available")
+	}
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	t.Cleanup(func() { _ = rt.Close() })
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"macos/diagnostics-short-timeout",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	start := time.Now()
+	res, runErr := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-c", "echo ok"},
+		Timeout: time.Millisecond,
+	})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("short-timeout diagnostics run took too long: %s", time.Since(start))
+	}
+	if !isKind(runErr, ErrTimeout) {
+		t.Fatalf("run error = %v, want ErrTimeout (not ErrSetupFailed)", runErr)
+	}
+	if isKind(runErr, ErrSetupFailed) {
+		t.Fatalf("run error = %v, want ErrTimeout not ErrSetupFailed", runErr)
+	}
+	if !res.TimedOut {
+		t.Fatalf("TimedOut = false, want true: %#v", res)
+	}
+	if res.ExitCode != -1 {
+		t.Fatalf("ExitCode = %d, want -1 for timeout", res.ExitCode)
+	}
+	select {
+	case <-diagnosticsCh:
+	case <-time.After(time.Second):
+		t.Fatal("diagnostics channel did not deliver")
+	}
+}
+
+func TestMacOSPreflightProbeHonorsContext(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "slow-seatbelt")
+	if err := os.WriteFile(
+		script,
+		[]byte("#!/bin/sh\nexec sleep 1\n"),
+		0o700,
+	); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	_, err := runMacOSSeatbeltPreflightProbe(ctx, script)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("preflight error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("preflight ignored context and took %s", elapsed)
+	}
 }

@@ -12,6 +12,7 @@
 package sandbox
 
 import (
+	"context"
 	"time"
 )
 
@@ -34,20 +35,26 @@ func (r *Runtime) newSandboxDenialRun(
 	return sandboxDenialRun{}
 }
 
-func (r *Runtime) ensureDenialMonitor() error {
+func (r *Runtime) ensureDenialMonitor(ctx context.Context) error {
+	_ = r
+	_ = ctx
 	return nil
 }
 
 func (r *Runtime) collectSandboxDenials(
+	ctx context.Context,
 	runTag string,
+	droppedAtStart uint64,
 	cmd string,
 	settleTimeout time.Duration,
-) []Denial {
+) ([]Denial, bool) {
 	_ = r
+	_ = ctx
 	_ = runTag
+	_ = droppedAtStart
 	_ = cmd
 	_ = settleTimeout
-	return nil
+	return nil, false
 }
 
 func (r *Runtime) sandboxDenialRunForCollecting(
@@ -60,4 +67,8 @@ func (r *Runtime) sandboxDenialRunForCollecting(
 
 func (r *Runtime) sandboxDenialCollectingReady() bool {
 	return false
+}
+
+func (r *Runtime) closeDenialDiagnostics() error {
+	return nil
 }

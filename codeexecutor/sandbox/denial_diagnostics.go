@@ -22,6 +22,7 @@ const (
 type sandboxDenialRun struct {
 	enabled              bool
 	runTag               string
+	droppedAtStart       uint64
 	defaultDenyTaggable  bool
 	explicitDenyTaggable bool
 }
@@ -58,6 +59,10 @@ const (
 // Diagnostics captures sandbox-specific diagnostics for one program run.
 type Diagnostics struct {
 	Denials []Denial
+	// Truncated reports that the shared denial ring dropped one or more events
+	// after this run began and before its collection snapshot. Callers must not
+	// assume Denials is a complete record when Truncated is true.
+	Truncated bool
 }
 
 // DenialFilterScope selects which diagnostic outputs a filter rule applies to.
@@ -71,6 +76,9 @@ const (
 )
 
 // DenialTargetMatcher matches denial targets using structured fields.
+// Within a single matcher, Exact/Prefix/Suffix/Glob are alternatives: any
+// non-empty field that matches the denial target is enough for that matcher to
+// hit. Empty fields are ignored. A zero-value matcher never matches.
 type DenialTargetMatcher struct {
 	Exact  string
 	Prefix string
@@ -79,6 +87,14 @@ type DenialTargetMatcher struct {
 }
 
 // DenialIgnoreRule ignores matching sandbox denials from diagnostic output.
+//
+// Matching is conjunctive across configured constraints: a non-empty Command
+// must be a substring of RunProgramSpec.Cmd, Operations must contain the denial
+// operation when set, Targets must match via any listed matcher when set, and
+// RawContains must find at least one substring in Denial.Raw when set. A rule
+// with every constraint empty is ignored. Scope "" and DenialFilterAll apply to
+// every diagnostic output; DenialFilterDenials applies only when collecting
+// Diagnostics.Denials; any other Scope value never matches.
 type DenialIgnoreRule struct {
 	Scope DenialFilterScope
 	// Command, when non-empty, must be a substring of RunProgramSpec.Cmd. It
@@ -91,6 +107,11 @@ type DenialIgnoreRule struct {
 
 // DenialFilter configures user-defined sandbox denial filtering for diagnostic
 // output. Automatic noise filtering is backend-specific.
+//
+// Zero-value DenialFilter keeps automatic backend noise filters enabled and
+// applies no Ignore rules. Ignore rules are disjunctive: any matching rule
+// suppresses the denial. DisableAutomatic skips only the automatic filters;
+// Ignore rules still apply.
 type DenialFilter struct {
 	DisableAutomatic bool
 	Ignore           []DenialIgnoreRule
