@@ -372,7 +372,7 @@ func TestRecordComparison(t *testing.T) {
 
 	assert.False(t, sameRecordIdentity(nil, right))
 	assert.True(t, sameRecordIdentity(left, right))
-	assert.True(t, sameSemanticRecord(left, right))
+	assert.True(t, sameRecordState(left, right))
 	assert.True(t, samePersistedRecord(left, right))
 
 	right.entry.ID = "different"
@@ -380,17 +380,17 @@ func TestRecordComparison(t *testing.T) {
 	right.entry.ID = left.entry.ID
 
 	right.entry.Memory.Topics = []string{"different"}
-	assert.False(t, sameSemanticRecord(left, right))
+	assert.False(t, sameRecordState(left, right))
 	right.entry.Memory.Topics = []string{"topic"}
 
 	right.deletedAtNS = 1
-	assert.False(t, sameSemanticRecord(left, right))
+	assert.False(t, sameRecordState(left, right))
 	right.deletedAtNS = left.deletedAtNS
 	right.updateToken = "token"
-	assert.False(t, sameSemanticRecord(left, right))
+	assert.False(t, sameRecordState(left, right))
 	right.updateToken = left.updateToken
 	right.replacesID = "old"
-	assert.False(t, sameSemanticRecord(left, right))
+	assert.False(t, sameRecordState(left, right))
 	right.replacesID = left.replacesID
 
 	right.entry.UpdatedAt = now.Add(time.Second)

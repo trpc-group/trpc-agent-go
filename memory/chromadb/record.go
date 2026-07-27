@@ -341,21 +341,21 @@ func updateMetadata(record *storedRecord) map[string]any {
 	mem := record.entry.Memory
 	// Chroma distinguishes omitted metadata from an explicit null update. Null removes
 	// an existing optional key, while omission would preserve its previous value.
-	setOptionalMetadata(metadata, metadataTopicsKey, slices.Clone(mem.Topics), len(mem.Topics) > 0)
+	setNullableMetadata(metadata, metadataTopicsKey, slices.Clone(mem.Topics), len(mem.Topics) > 0)
 	if mem.EventTime == nil {
 		metadata[metadataEventTimeKey] = nil
 	} else {
 		metadata[metadataEventTimeKey] = mem.EventTime.UTC().UnixNano()
 	}
-	setOptionalMetadata(
+	setNullableMetadata(
 		metadata,
 		metadataParticipantsKey,
 		slices.Clone(mem.Participants),
 		len(mem.Participants) > 0,
 	)
-	setOptionalMetadata(metadata, metadataLocationKey, mem.Location, mem.Location != "")
-	setOptionalMetadata(metadata, metadataUpdateTokenKey, record.updateToken, record.updateToken != "")
-	setOptionalMetadata(metadata, metadataReplacesIDKey, record.replacesID, record.replacesID != "")
+	setNullableMetadata(metadata, metadataLocationKey, mem.Location, mem.Location != "")
+	setNullableMetadata(metadata, metadataUpdateTokenKey, record.updateToken, record.updateToken != "")
+	setNullableMetadata(metadata, metadataReplacesIDKey, record.replacesID, record.replacesID != "")
 	return metadata
 }
 
@@ -375,8 +375,8 @@ func requiredMetadata(record *storedRecord) map[string]any {
 	}
 }
 
-// setOptionalMetadata includes only values explicitly present on an Add operation.
-func setOptionalMetadata(metadata map[string]any, key string, value any, present bool) {
+// setNullableMetadata writes null for an absent value so Chroma removes the existing key.
+func setNullableMetadata(metadata map[string]any, key string, value any, present bool) {
 	if present {
 		metadata[key] = value
 		return
@@ -559,8 +559,8 @@ func sameRecordIdentity(left, right *storedRecord) bool {
 	return sameMemoryIdentity(leftEntry.Memory, rightEntry.Memory)
 }
 
-// sameSemanticRecord compares user-visible content while ignoring lifecycle bookkeeping.
-func sameSemanticRecord(left, right *storedRecord) bool {
+// sameRecordState compares identity, topics, deletion state, and rotation bookkeeping.
+func sameRecordState(left, right *storedRecord) bool {
 	if !sameRecordIdentity(left, right) {
 		return false
 	}
@@ -570,9 +570,9 @@ func sameSemanticRecord(left, right *storedRecord) bool {
 		left.replacesID == right.replacesID
 }
 
-// samePersistedRecord compares semantic content together with creation time.
+// samePersistedRecord compares record state together with creation and update times.
 func samePersistedRecord(left, right *storedRecord) bool {
-	if !sameSemanticRecord(left, right) {
+	if !sameRecordState(left, right) {
 		return false
 	}
 	return left.entry.CreatedAt.Equal(right.entry.CreatedAt) &&

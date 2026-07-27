@@ -317,7 +317,14 @@ func (svc *Service) UpdateMemory(
 	lock := svc.writeLock(scope)
 	lock.Lock()
 	defer lock.Unlock()
-	return svc.applyUpdate(ctx, command, embedding, token, opts)
+	effectiveID, err := svc.applyUpdate(ctx, command, embedding, token)
+	if err != nil {
+		return err
+	}
+	if result := memory.ResolveUpdateResult(opts); result != nil {
+		result.MemoryID = effectiveID
+	}
+	return nil
 }
 
 // applyUpdate resumes a prior rotation or updates the currently owned source record.
@@ -326,15 +333,14 @@ func (svc *Service) applyUpdate(
 	command updateCommand,
 	embedding []float32,
 	token string,
-	opts []memory.UpdateOption,
-) error {
+) (string, error) {
 	scope := recordScope{appName: command.key.AppName, userID: command.key.UserID}
 	old, err := svc.fetchRecordByID(ctx, command.key.MemoryID, activeScopeWhere(scope))
 	if err != nil {
-		return fmt.Errorf("load memory %s: %w", command.key.MemoryID, err)
+		return "", fmt.Errorf("load memory %s: %w", command.key.MemoryID, err)
 	}
 	if old == nil {
-		return svc.resolveCompletedUpdate(ctx, scope, command.key.MemoryID, token, opts)
+		return svc.resolveCompletedUpdate(ctx, scope, command.key.MemoryID, token)
 	}
 
 	now := time.Now().UTC()
@@ -350,14 +356,16 @@ func (svc *Service) applyUpdate(
 	old.embedding = embedding
 	if newID == command.key.MemoryID {
 		if err := svc.updateActiveAndVerify(ctx, scope, old); err != nil {
-			return err
+			return "", err
 		}
-		setUpdateResult(opts, newID)
-		return nil
+		return newID, nil
 	}
 	old.updateToken = token
 	old.replacesID = command.key.MemoryID
-	return svc.rotateRecord(ctx, scope, command.key.MemoryID, old, opts)
+	if err := svc.rotateRecord(ctx, scope, command.key.MemoryID, old); err != nil {
+		return "", err
+	}
+	return newID, nil
 }
 
 // resolveCompletedUpdate locates an idempotent rotation target when the old ID is absent.
@@ -366,20 +374,18 @@ func (svc *Service) resolveCompletedUpdate(
 	scope recordScope,
 	oldID string,
 	token string,
-	opts []memory.UpdateOption,
-) error {
+) (string, error) {
 	records, err := svc.listRecords(ctx, tokenWhere(scope, token), 2)
 	if err != nil {
-		return fmt.Errorf("find completed memory update: %w", err)
+		return "", fmt.Errorf("find completed memory update: %w", err)
 	}
 	if len(records) == 0 {
-		return memoryNotFoundError(oldID)
+		return "", fmt.Errorf("memory with id %s not found", oldID)
 	}
 	if len(records) > 1 {
-		return fmt.Errorf("memory update token %s matches multiple records", token)
+		return "", fmt.Errorf("memory update token %s matches multiple records", token)
 	}
-	setUpdateResult(opts, records[0].entry.ID)
-	return nil
+	return records[0].entry.ID, nil
 }
 
 // rotateRecord commits the new ID before retiring the old ID for roll-forward safety.
@@ -388,7 +394,6 @@ func (svc *Service) rotateRecord(
 	scope recordScope,
 	oldID string,
 	record *storedRecord,
-	opts []memory.UpdateOption,
 ) error {
 	if err := svc.ensureRotationTarget(ctx, scope, record); err != nil {
 		return err
@@ -404,7 +409,6 @@ func (svc *Service) rotateRecord(
 			err,
 		)
 	}
-	setUpdateResult(opts, record.entry.ID)
 	return nil
 }
 
@@ -463,7 +467,7 @@ func validateUpdateTarget(
 	actual *storedRecord,
 	expected *storedRecord,
 ) error {
-	if !sameSemanticRecord(actual, expected) {
+	if !sameRecordState(actual, expected) {
 		return fmt.Errorf("memory with id %s already exists", expected.entry.ID)
 	}
 	return nil
@@ -508,7 +512,7 @@ func (svc *Service) updateActiveAndVerify(
 		return fmt.Errorf("verify updated memory %s: %w", record.entry.ID, err)
 	}
 	if actual == nil {
-		return memoryNotFoundError(record.entry.ID)
+		return fmt.Errorf("memory with id %s not found", record.entry.ID)
 	}
 	if !samePersistedRecord(actual, record) {
 		return fmt.Errorf("verify updated memory %s: content mismatch", record.entry.ID)
@@ -730,16 +734,4 @@ func validateRecordOwner(record *storedRecord, scope recordScope) error {
 		)
 	}
 	return nil
-}
-
-// memoryNotFoundError preserves the shared memory service not-found error text.
-func memoryNotFoundError(id string) error {
-	return fmt.Errorf("memory with id %s not found", id)
-}
-
-// setUpdateResult reports a rotated memory ID through the framework update options.
-func setUpdateResult(opts []memory.UpdateOption, id string) {
-	if result := memory.ResolveUpdateResult(opts); result != nil {
-		result.MemoryID = id
-	}
 }

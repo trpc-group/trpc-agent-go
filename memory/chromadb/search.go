@@ -46,17 +46,22 @@ func (svc *Service) SearchMemories(
 		return nil, fmt.Errorf("generate query embedding: %w", err)
 	}
 
-	limit := resolveSearchLimit(svc.opts.maxResults, searchOpts.MaxResults)
+	if searchOpts.MaxResults <= 0 {
+		searchOpts.MaxResults = svc.opts.maxResults
+	}
+	if searchOpts.SimilarityThreshold <= 0 || math.IsNaN(searchOpts.SimilarityThreshold) {
+		searchOpts.SimilarityThreshold = svc.opts.similarityThreshold
+	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
-	results, err := svc.searchDense(ctx, scope, queryEmbedding, searchOpts, limit)
+	results, err := svc.searchDense(ctx, scope, queryEmbedding, searchOpts)
 	if err != nil {
 		return nil, err
 	}
 	results = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results)
 	if searchOpts.HybridSearch {
-		results = svc.applyHybridSearch(ctx, scope, searchOpts, results, limit)
+		results = svc.applyHybridSearch(ctx, scope, searchOpts, results)
 	}
-	return finalizeSearchResults(results, searchOpts, limit), nil
+	return finalizeSearchResults(results, searchOpts), nil
 }
 
 // searchDense runs cosine retrieval and applies the configured similarity threshold.
@@ -65,12 +70,11 @@ func (svc *Service) searchDense(
 	scope recordScope,
 	embedding []float32,
 	opts memory.SearchOptions,
-	limit int,
 ) ([]*memory.Entry, error) {
 	response, err := svc.client.queryRecords(ctx, svc.collection, queryRecordsRequest{
 		Where:           searchWhere(scope, opts),
 		QueryEmbeddings: [][]float32{embedding},
-		NResults:        limit,
+		NResults:        opts.MaxResults,
 		Include:         []string{"documents", "metadatas", "distances"},
 	})
 	if err != nil {
@@ -80,10 +84,16 @@ func (svc *Service) searchDense(
 	if err != nil {
 		return nil, fmt.Errorf("decode memory search results: %w", err)
 	}
-	return filterSimilarity(results, resolveSimilarityThreshold(
-		svc.opts.similarityThreshold,
-		opts.SimilarityThreshold,
-	)), nil
+	if opts.SimilarityThreshold <= 0 {
+		return results, nil
+	}
+	filtered := results[:0]
+	for _, entry := range results {
+		if entry.Score >= opts.SimilarityThreshold {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered, nil
 }
 
 // applyKindFallback retries without a kind constraint while reusing the query vector.
@@ -98,11 +108,11 @@ func (svc *Service) applyKindFallback(
 		len(results) >= imemory.MinKindFallbackResults {
 		return results
 	}
-	limit := resolveSearchLimit(svc.opts.maxResults, opts.MaxResults)
+	limit := opts.MaxResults
 	fallbackOpts := opts
 	fallbackOpts.Kind = ""
 	fallbackOpts.KindFallback = false
-	fallback, err := svc.searchDense(ctx, scope, embedding, fallbackOpts, limit)
+	fallback, err := svc.searchDense(ctx, scope, embedding, fallbackOpts)
 	if err != nil || len(fallback) == 0 {
 		return results
 	}
@@ -115,8 +125,8 @@ func (svc *Service) applyHybridSearch(
 	scope recordScope,
 	opts memory.SearchOptions,
 	dense []*memory.Entry,
-	limit int,
 ) []*memory.Entry {
+	limit := opts.MaxResults
 	records, err := svc.listRecords(
 		ctx,
 		activeScopeWhere(scope),
@@ -134,7 +144,6 @@ func (svc *Service) applyHybridSearch(
 	keywordOpts.Deduplicate = false
 	keywordOpts.HybridSearch = false
 	keywordOpts.SimilarityThreshold = 0
-	keywordOpts.MaxResults = limit
 	keyword := imemory.SearchEntries(
 		entries,
 		keywordOpts,
@@ -152,43 +161,38 @@ func decodeQueryResponse(response *queryRecordsResponse) ([]*memory.Entry, error
 	if response == nil {
 		return nil, fmt.Errorf("query records returned a nil response")
 	}
-	ids := response.IDs.value
-	if len(ids) != 1 {
-		return nil, fmt.Errorf("query records returned %d result batches, expected 1", len(ids))
+	idBatches := response.IDs.value
+	if len(idBatches) != 1 {
+		return nil, fmt.Errorf("query records returned %d result batches, expected 1", len(idBatches))
 	}
 	if response.Documents == nil || response.Metadatas == nil || response.Distances == nil {
 		return nil, fmt.Errorf("query records did not include documents, metadatas, and distances")
 	}
-	documents, err := onlyQueryBatch("documents", *response.Documents)
-	if err != nil {
-		return nil, err
+	documentBatches := *response.Documents
+	if len(documentBatches) != 1 {
+		return nil, fmt.Errorf(
+			"query records returned %d documents batches, expected 1",
+			len(documentBatches),
+		)
 	}
-	metadatas, err := onlyQueryBatch("metadatas", *response.Metadatas)
-	if err != nil {
-		return nil, err
+	metadataBatches := *response.Metadatas
+	if len(metadataBatches) != 1 {
+		return nil, fmt.Errorf(
+			"query records returned %d metadatas batches, expected 1",
+			len(metadataBatches),
+		)
 	}
-	distances, err := onlyQueryBatch("distances", *response.Distances)
-	if err != nil {
-		return nil, err
+	distanceBatches := *response.Distances
+	if len(distanceBatches) != 1 {
+		return nil, fmt.Errorf(
+			"query records returned %d distances batches, expected 1",
+			len(distanceBatches),
+		)
 	}
-	return decodeQueryBatch(ids[0], documents, metadatas, distances)
-}
-
-// onlyQueryBatch requires exactly one result batch for the single-vector API.
-func onlyQueryBatch[T any](name string, batches [][]T) ([]T, error) {
-	if len(batches) != 1 {
-		return nil, fmt.Errorf("query records returned %d %s batches, expected 1", len(batches), name)
-	}
-	return batches[0], nil
-}
-
-// decodeQueryBatch converts one columnar query batch into scored memory entries.
-func decodeQueryBatch(
-	ids []string,
-	documents []*string,
-	metadatas []map[string]any,
-	distances []*float32,
-) ([]*memory.Entry, error) {
+	ids := idBatches[0]
+	documents := documentBatches[0]
+	metadatas := metadataBatches[0]
+	distances := distanceBatches[0]
 	if len(documents) != len(ids) || len(metadatas) != len(ids) || len(distances) != len(ids) {
 		return nil, fmt.Errorf(
 			"query records column length mismatch: ids=%d documents=%d metadatas=%d distances=%d",
@@ -217,25 +221,10 @@ func decodeQueryBatch(
 	return results, nil
 }
 
-// filterSimilarity keeps dense results meeting the inclusive score threshold.
-func filterSimilarity(entries []*memory.Entry, threshold float64) []*memory.Entry {
-	if threshold <= 0 {
-		return entries
-	}
-	filtered := entries[:0]
-	for _, entry := range entries {
-		if entry.Score >= threshold {
-			filtered = append(filtered, entry)
-		}
-	}
-	return filtered
-}
-
 // finalizeSearchResults deduplicates, sorts, and limits the merged retrieval output.
 func finalizeSearchResults(
 	results []*memory.Entry,
 	opts memory.SearchOptions,
-	limit int,
 ) []*memory.Entry {
 	if len(results) > 1 {
 		if opts.Kind != "" && opts.KindFallback {
@@ -247,26 +236,10 @@ func finalizeSearchResults(
 	if opts.Deduplicate && len(results) > 1 {
 		results = imemory.DeduplicateResults(results)
 	}
-	if limit > 0 && len(results) > limit {
-		results = results[:limit]
+	if opts.MaxResults > 0 && len(results) > opts.MaxResults {
+		results = results[:opts.MaxResults]
 	}
 	return results
-}
-
-// resolveSearchLimit applies a positive per-request override to the service default.
-func resolveSearchLimit(defaultLimit, override int) int {
-	if override > 0 {
-		return override
-	}
-	return defaultLimit
-}
-
-// resolveSimilarityThreshold applies a positive per-request threshold override.
-func resolveSimilarityThreshold(defaultThreshold, override float64) float64 {
-	if override > 0 {
-		return override
-	}
-	return defaultThreshold
 }
 
 // clampScore bounds cosine similarity to the framework's zero-to-one score range.
