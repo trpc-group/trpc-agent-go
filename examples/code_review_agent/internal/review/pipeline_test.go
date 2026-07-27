@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -540,14 +541,21 @@ func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	if published.Metrics.TotalDurationMS <= 0 || published.Metrics.TotalDurationMS > report.Metrics.TotalDurationMS || published.Metrics.TotalDurationScope != "pre_publication_snapshot" {
 		t.Fatalf("published total duration must be a positive pre-publication snapshot: published=%d final=%d", published.Metrics.TotalDurationMS, report.Metrics.TotalDurationMS)
 	}
+	if !published.Task.EndedAt.Before(report.Task.EndedAt) {
+		t.Fatalf("canonical completion timestamp must follow the immutable report snapshot: published=%s canonical=%s", published.Task.EndedAt, report.Task.EndedAt)
+	}
 	store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	metrics, err := store.LoadMetrics(context.Background(), report.Task.ID)
-	if err != nil || metrics.TotalDurationMS != report.Metrics.TotalDurationMS || metrics.TotalDurationScope != "published_report" {
+	if err != nil || metrics.TotalDurationMS != report.Metrics.TotalDurationMS || metrics.TotalDurationScope != "finalization_complete" {
 		t.Fatalf("persisted total duration mismatch: metrics=%+v err=%v", metrics, err)
+	}
+	task, err := store.LoadTask(context.Background(), report.Task.ID)
+	if err != nil || !task.EndedAt.Equal(report.Task.EndedAt) {
+		t.Fatalf("persisted completion timestamp mismatch: task=%+v err=%v", task, err)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -1415,6 +1416,48 @@ func TestWorkspaceRuntime_RunProgram_TimedOut(t *testing.T) {
 	)
 	require.Error(t, err)
 	require.True(t, res.TimedOut)
+}
+
+func TestWorkspaceRuntime_RunProgram_BoundsContainerSetup(t *testing.T) {
+	setupStarted := make(chan struct{})
+	setupCanceled := make(chan struct{})
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/images/json") {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		close(setupStarted)
+		select {
+		case <-r.Context().Done():
+			close(setupCanceled)
+		case <-time.After(time.Second):
+			t.Error("container setup request was not canceled")
+		}
+	}
+	cli, cleanup := fakeDocker(t, handler)
+	defer cleanup()
+	rt := &workspaceRuntime{
+		ce:  &CodeExecutor{client: cli},
+		cfg: runtimeConfig{runContainerBase: testRunBase},
+	}
+
+	started := time.Now()
+	_, err := rt.RunProgram(context.Background(), codeexecutor.Workspace{ID: "setup-timeout", Path: path.Join(testRunBase, "setup-timeout")}, codeexecutor.RunProgramSpec{Cmd: "true", Timeout: 20 * time.Millisecond})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("setup timeout error = %v, want context deadline exceeded", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("container setup returned too late: %s", elapsed)
+	}
+	select {
+	case <-setupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("container setup did not start")
+	}
+	select {
+	case <-setupCanceled:
+	case <-time.After(time.Second):
+		t.Fatal("container setup did not observe cancellation")
+	}
 }
 
 func TestWorkspaceRuntime_RunProgram_InterruptsBlockedAttachOnTimeout(t *testing.T) {

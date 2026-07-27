@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -94,6 +95,10 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if stored.Task.ID != report.Task.ID {
 		return failStoredReview("verify_initial_store", errors.New("stored review task ID mismatch"))
 	}
+	// The immutable report files contain a completed pre-publication snapshot so
+	// they never present a running task after a successful directory rename. The
+	// canonical task timestamp is refreshed at the terminal Store finalization
+	// boundary below.
 	report.Task.Status, report.Task.EndedAt = TaskCompleted, time.Now()
 	report.Metrics = collectMetrics(started, report)
 	// Report files are immutable inputs to the atomic directory rename. Record a
@@ -110,14 +115,19 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if err := staged.commit(); err != nil {
 		return failStoredReview("publish_report", err)
 	}
-	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
-	report.Metrics.TotalDurationScope = "published_report"
 	failPublishedReview := func(operation string, cause error) (Report, ReportPaths, error) {
 		if rollbackErr := staged.rollback(); rollbackErr != nil {
 			cause = fmt.Errorf("%w; roll back published report: %v", cause, rollbackErr)
 		}
 		return failStoredReview(operation, cause)
 	}
+	// Keep the stored task running until the report directory is durable. The
+	// single terminal transaction then records a mutually consistent completed
+	// task timestamp and duration, so a process interruption cannot leave a
+	// partially finalized completed record behind.
+	report.Task.EndedAt = time.Now()
+	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
+	report.Metrics.TotalDurationScope = "finalization_complete"
 	if err := store.Finalize(ctx, report); err != nil {
 		return failPublishedReview("finalize_report", err)
 	}

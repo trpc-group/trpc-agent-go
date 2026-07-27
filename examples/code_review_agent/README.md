@@ -90,7 +90,12 @@ go test -count=1 -cover ./internal/review
 
 Core tests cover diff line mapping, file-list traversal, rule fixtures, clean-diff false positives, deduplication, credential redaction, Permission decisions, sandbox failure recovery, safe repository snapshots, SQLite round trips, and report sections.
 
-The current core-package coverage is `85.3% of statements`; the command above
+Report files are immutable pre-publication snapshots. Query SQLite by task ID
+for the canonical terminal task timestamp and total duration, which include
+durable report publication and are recorded at the terminal Store finalization
+boundary.
+
+The current core-package coverage is `86.4% of statements`; the command above
 is the source of truth and coverage must remain at or above 85%.
 
 ## Framework integration

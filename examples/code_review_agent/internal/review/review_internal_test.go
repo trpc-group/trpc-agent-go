@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -382,6 +383,135 @@ func TestReportAndStoreErrorPaths(t *testing.T) {
 	}
 	if _, err := store.LoadMetrics(context.Background(), "missing"); err == nil {
 		t.Fatal("missing metrics were returned")
+	}
+	if err := store.Finalize(context.Background(), Report{Task: Task{ID: "missing", Status: TaskCompleted}}); err == nil {
+		t.Fatal("finalized a task that was never saved")
+	}
+}
+
+func TestStagedReportCommitRollbackAndAtomicReplace(t *testing.T) {
+	root := t.TempDir()
+	finalDir := filepath.Join(root, "published")
+	firstStage := filepath.Join(root, "first-stage")
+	if err := os.Mkdir(firstStage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(firstStage, "report.txt"), "first")
+	first := stagedReport{tempDir: firstStage, finalDir: finalDir}
+	if err := first.commit(); err != nil {
+		t.Fatalf("commit staged report: %v", err)
+	}
+	if err := first.rollback(); err != nil {
+		t.Fatalf("rollback published report: %v", err)
+	}
+	if _, err := os.Stat(finalDir); !os.IsNotExist(err) {
+		t.Fatalf("rollback left final report directory behind: %v", err)
+	}
+	if err := (stagedReport{}).rollback(); err != nil {
+		t.Fatalf("empty rollback returned an error: %v", err)
+	}
+
+	writeFile(t, finalDir, "existing")
+	secondStage := filepath.Join(root, "second-stage")
+	if err := os.Mkdir(secondStage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := (stagedReport{tempDir: secondStage, finalDir: finalDir}).commit(); err == nil {
+		t.Fatal("commit replaced an existing report directory")
+	}
+
+	target := filepath.Join(root, "report.json")
+	writeFile(t, target, "old")
+	if err := atomicWrite(target, []byte("new")); err != nil {
+		t.Fatalf("replace report atomically: %v", err)
+	}
+	contents, err := os.ReadFile(target)
+	if err != nil || string(contents) != "new" {
+		t.Fatalf("atomic replacement result = %q, %v", contents, err)
+	}
+}
+
+func TestSnapshotCopyRejectsChangedOrExistingTargets(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "source.go")
+	writeFile(t, source, "a")
+	original, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, source, "changed")
+	if err := copyBoundedFile(source, filepath.Join(root, "changed.go"), original); err == nil {
+		t.Fatal("snapshot copied a source whose size changed after inspection")
+	}
+
+	stable, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(root, "existing.go")
+	writeFile(t, target, "existing")
+	if err := copyBoundedFile(source, target, stable); err == nil {
+		t.Fatal("snapshot overwrote an existing target")
+	}
+	if _, err := diffStatsArtifact(strings.Repeat("x", maxArtifactBytes+1), "synthetic_dry_run"); err == nil {
+		t.Fatal("oversized diff statistics artifact was accepted")
+	}
+}
+
+func TestStoreRoundTripsCompleteAuditRecords(t *testing.T) {
+	store, err := openStore(filepath.Join(t.TempDir(), "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC().Round(0)
+	report := Report{
+		Task:                Task{ID: "complete-audit", Status: TaskRunning, InputMode: "diff_file", StartedAt: now, EndedAt: now},
+		Input:               DiffSummary{Digest: "digest", FilesChanged: 1, GoFiles: 1, AddedLines: 2, DeletedLines: 1},
+		SandboxRuns:         []SandboxRun{{Command: "diff_stats.sh", Executor: ExecutorContainer, Status: RunSuccess, DurationMS: 3}},
+		PermissionDecisions: []PermissionDecision{{Command: "bash", Action: PermissionAllow, Reason: "approved", CreatedAt: now}},
+		FilterDecisions:     []FilterDecision{{Fingerprint: "finding", Action: "keep", Reason: "actionable", TargetBucket: "finding"}},
+		Findings:            []Finding{{Fingerprint: "finding", Severity: "high", Category: "security", File: "main.go", Line: 7, Title: "unsafe", Evidence: "evidence", Recommendation: "fix"}},
+		Warnings:            []Finding{{Fingerprint: "warning", Severity: "low", Category: "quality", File: "main.go", Line: 9}},
+		NeedsHumanReview:    []Finding{{Fingerprint: "human", Severity: "medium", Category: "review", File: "main.go", Line: 11}},
+		Artifacts:           []Artifact{{Name: "diff_stats.json", Path: "diff_stats.json", MIMEType: "application/json", SizeBytes: 3, Provenance: "validated_sandbox_script"}},
+		Metrics:             Metrics{SeverityDistribution: map[string]int{"high": 1}},
+		Conclusion:          "review in progress",
+	}
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatalf("save complete audit report: %v", err)
+	}
+	if runs, err := store.LoadRuns(context.Background(), report.Task.ID); err != nil || len(runs) != 1 || runs[0].Command != "diff_stats.sh" {
+		t.Fatalf("sandbox run round trip failed: runs=%+v err=%v", runs, err)
+	}
+	if decisions, err := store.LoadDecisions(context.Background(), report.Task.ID); err != nil || len(decisions) != 1 || decisions[0].Reason != "approved" {
+		t.Fatalf("permission decision round trip failed: decisions=%+v err=%v", decisions, err)
+	}
+	if decisions, err := store.LoadFilterDecisions(context.Background(), report.Task.ID); err != nil || len(decisions) != 1 || decisions[0].TargetBucket != "finding" {
+		t.Fatalf("filter decision round trip failed: decisions=%+v err=%v", decisions, err)
+	}
+	for _, bucket := range []string{"finding", "warning", "needs_human_review"} {
+		findings, err := store.LoadFindings(context.Background(), report.Task.ID, bucket)
+		if err != nil || len(findings) != 1 {
+			t.Fatalf("%s findings round trip failed: findings=%+v err=%v", bucket, findings, err)
+		}
+	}
+
+	report.Task.Status = TaskCompleted
+	report.Task.EndedAt = now.Add(time.Second)
+	report.Artifacts = append(report.Artifacts, Artifact{Name: "review_report.json", Path: "report/review_report.json", MIMEType: "application/json", SizeBytes: 5})
+	report.Conclusion = "review complete"
+	if err := store.Finalize(context.Background(), report); err != nil {
+		t.Fatalf("finalize complete audit report: %v", err)
+	}
+	loaded, err := store.Load(context.Background(), report.Task.ID)
+	if err != nil || loaded.Task.Status != TaskCompleted || loaded.Conclusion != "review complete" {
+		t.Fatalf("final report round trip failed: report=%+v err=%v", loaded, err)
+	}
+	artifacts, err := store.LoadArtifacts(context.Background(), report.Task.ID)
+	if err != nil || len(artifacts) != 2 || !hasArtifactProvenance(artifacts, "diff_stats.json", "validated_sandbox_script") {
+		t.Fatalf("final artifacts round trip failed: artifacts=%+v err=%v", artifacts, err)
 	}
 }
 

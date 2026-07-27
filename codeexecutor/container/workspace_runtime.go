@@ -424,7 +424,13 @@ func (r *workspaceRuntime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	if err := r.ce.ensureContainer(ctx); err != nil {
+	t := spec.Timeout
+	if t <= 0 {
+		t = 10 * time.Second
+	}
+	setupCtx, cancelSetup := context.WithTimeout(ctx, t)
+	defer cancelSetup()
+	if err := r.ce.ensureContainer(setupCtx); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
 	_, span := atrace.Tracer.Start(ctx,
@@ -434,10 +440,6 @@ func (r *workspaceRuntime) RunProgram(
 		attribute.String(codeexecutor.AttrCwd, spec.Cwd),
 	)
 	defer span.End()
-	t := spec.Timeout
-	if t <= 0 {
-		t = 10 * time.Second
-	}
 	cwd := ws.Path
 	if spec.Cwd != "" {
 		cwd = path.Join(ws.Path, filepath.ToSlash(spec.Cwd))

@@ -1,3 +1,4 @@
+//
 // Tencent is pleased to support the open source community by making trpc-agent-go available.
 //
 // Copyright (C) 2026 Tencent.  All rights reserved.
@@ -150,7 +151,10 @@ type Config struct {
 	StoreFactory StoreFactory
 }
 
-// Task records the identity, input mode, and lifecycle of a review.
+// Task records the identity, input mode, and lifecycle of a review. EndedAt is
+// the terminal timestamp in the canonical Store record. Immutable report files
+// retain a pre-publication snapshot; callers that need the final timestamp
+// must query the Store by task ID.
 type Task struct {
 	ID        string     `json:"id"`
 	Status    TaskStatus `json:"status"`
@@ -268,16 +272,16 @@ type Metrics struct {
 	// directory is atomically published. Publication is intentionally excluded
 	// because the report itself contains this metric.
 	PreparationDurationMS int64 `json:"preparation_duration_ms"`
-	// TotalDurationMS measures the complete review pipeline through the atomic
-	// publication of the JSON and Markdown report directory. TotalDurationScope
-	// states whether a value is an immutable pre-publication report snapshot, a
-	// completed published-report value, or a completed failure-audit value.
+	// TotalDurationMS measures completed work up to the terminal Store
+	// finalization boundary. TotalDurationScope states whether a value is an
+	// immutable pre-publication report snapshot, a finalized Store value, or a
+	// completed failure-audit value.
 	TotalDurationMS int64 `json:"total_duration_ms"`
 	// TotalDurationScope identifies the completed phases included in
-	// TotalDurationMS: "pre_publication_snapshot", "published_report", or
-	// "failure_audit". Query the finalized SQLite record for the canonical
-	// published-report value rather than treating an immutable report artifact's
-	// pre-publication snapshot as final.
+	// TotalDurationMS: "pre_publication_snapshot", "finalization_complete", or
+	// "failure_audit". Query the finalized SQLite record for the canonical value
+	// rather than treating an immutable report artifact's pre-publication
+	// snapshot as final.
 	TotalDurationScope   string         `json:"total_duration_scope"`
 	SandboxDurationMS    int64          `json:"sandbox_duration_ms"`
 	ToolCallCount        int            `json:"tool_call_count"`
