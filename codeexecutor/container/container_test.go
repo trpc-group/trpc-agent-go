@@ -1101,6 +1101,9 @@ func TestNewWithContextCleansUpContainerAfterInitializationFailure(t *testing.T)
 	var stopped, removed bool
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case (r.Method == http.MethodGet || r.Method == http.MethodHead) && r.URL.Path == "/_ping":
+			w.Header().Set("API-Version", api.DefaultVersion)
+			w.WriteHeader(http.StatusOK)
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
