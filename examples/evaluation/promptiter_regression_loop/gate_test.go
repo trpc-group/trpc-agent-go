@@ -142,6 +142,16 @@ func TestAttributeFailuresFromMetricReason(t *testing.T) {
 	require.Equal(t, FailureFormatError, failures[1].Category)
 }
 
+func TestAttributeFailuresMapsFrameworkToolArgumentReason(t *testing.T) {
+	failures := AttributeFailures([]MetricResult{{
+		MetricName: "tool_trajectory_avg_score",
+		Status:     status.EvalStatusFailed,
+		Reason:     "tool trajectory mismatch: match tools: arguments mismatch",
+	}}, Invocation{}, Invocation{})
+	require.Len(t, failures, 1)
+	require.Equal(t, FailureToolArgumentError, failures[0].Category)
+}
+
 func TestStructuredOutputGuardUsesFrameworkFinalResponseCompare(t *testing.T) {
 	input, err := loadInput(filepath.Join("data", "promptiter.json"))
 	require.NoError(t, err)
@@ -200,6 +210,121 @@ func TestStructuredOutputGuardScoringMatchesJSONReferenceOnly(t *testing.T) {
 	)
 	require.Equal(t, status.EvalStatusPassed, result.Status)
 	require.Equal(t, float64(1), result.Score)
+}
+
+func TestLocalEvaluatorRejectsUnsupportedMetrics(t *testing.T) {
+	_, err := newLocalEvaluator([]MetricInput{{
+		MetricName: "tool_trajactory_typo",
+		Threshold:  1,
+	}}, FakeEngineConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unsupported deterministic metric")
+
+	result := scoreMetric(
+		MetricInput{MetricName: "tool_trajactory_typo", Threshold: 1},
+		EvalCase{EvalID: "unsupported_metric"},
+		Invocation{},
+		Invocation{},
+	)
+	require.Equal(t, status.EvalStatusFailed, result.Status)
+	require.Equal(t, float64(0), result.Score)
+	require.Contains(t, result.Reason, "unsupported deterministic metric")
+}
+
+func TestLocalEvaluatorRejectsEmptyMetricList(t *testing.T) {
+	_, err := newLocalEvaluator(nil, FakeEngineConfig{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "requires at least one metric")
+}
+
+func TestLocalEvaluatorRejectsMultiTurnCases(t *testing.T) {
+	evaluator, err := newLocalEvaluator([]MetricInput{{
+		MetricName: "llm_rubric_critic",
+		Threshold:  1,
+	}}, FakeEngineConfig{})
+	require.NoError(t, err)
+
+	_, err = evaluator.Evaluate(context.Background(), "multi_turn", EvalSetInput{
+		EvalSetID: "multi_turn_set",
+		Cases: []EvalCase{{
+			EvalID: "multi_turn_case",
+			Conversation: []Invocation{
+				{FinalResponse: assistant("turn one")},
+				{FinalResponse: assistant("turn two should not be ignored")},
+			},
+		}},
+	}, "")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "supports exactly one")
+}
+
+func TestToolTrajectoryScoringHonorsOrderInsensitiveCriterion(t *testing.T) {
+	input, err := loadInput(filepath.Join("data", "promptiter.json"))
+	require.NoError(t, err)
+	var configured MetricInput
+	for _, metric := range input.Metrics {
+		if metric.MetricName == "tool_trajectory_avg_score" {
+			configured = metric
+			break
+		}
+	}
+	require.NotNil(t, configured.Criterion)
+	require.NotNil(t, configured.Criterion.ToolTrajectory)
+	require.False(t, configured.Criterion.ToolTrajectory.OrderSensitive)
+
+	weatherTool := ToolCall{
+		ID:        "weather",
+		Name:      "lookup_weather",
+		Arguments: map[string]any{"city": "Paris", "date": "today"},
+		Result:    map[string]any{"condition": "sunny"},
+	}
+	policyTool := ToolCall{
+		ID:        "policy",
+		Name:      "lookup_policy",
+		Arguments: map[string]any{"kind": "refund"},
+		Result:    map[string]any{"window_days": 30},
+	}
+	result := scoreMetric(
+		configured,
+		EvalCase{EvalID: "reordered_tools"},
+		Invocation{Tools: []ToolCall{weatherTool, policyTool}},
+		Invocation{Tools: []ToolCall{policyTool, weatherTool}},
+	)
+	require.Equal(t, status.EvalStatusPassed, result.Status)
+	require.Equal(t, float64(1), result.Score)
+}
+
+func TestToolTrajectoryScoringPreservesArgumentFailureReason(t *testing.T) {
+	input, err := loadInput(filepath.Join("data", "promptiter.json"))
+	require.NoError(t, err)
+	var configured MetricInput
+	for _, metric := range input.Metrics {
+		if metric.MetricName == "tool_trajectory_avg_score" {
+			configured = metric
+			break
+		}
+	}
+
+	result := scoreMetric(
+		configured,
+		EvalCase{EvalID: "wrong_tool_arguments"},
+		Invocation{Tools: []ToolCall{{
+			ID:        "expected",
+			Name:      "lookup_weather",
+			Arguments: map[string]any{"city": "Paris"},
+			Result:    map[string]any{"condition": "sunny"},
+		}}},
+		Invocation{Tools: []ToolCall{{
+			ID:        "actual",
+			Name:      "lookup_weather",
+			Arguments: map[string]any{"city": "France"},
+			Result:    map[string]any{"condition": "sunny"},
+		}}},
+	)
+	require.Equal(t, status.EvalStatusFailed, result.Status)
+	require.Contains(t, result.Reason, "tool argument error")
+	failures := AttributeFailures([]MetricResult{result}, Invocation{}, Invocation{})
+	require.Equal(t, FailureToolArgumentError, failures[0].Category)
 }
 
 func TestRenderMarkdownReportIncludesDecisionAndDelta(t *testing.T) {

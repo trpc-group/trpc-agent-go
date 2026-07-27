@@ -35,7 +35,34 @@ func newLocalEvaluator(metrics []MetricInput, engine FakeEngineConfig) (*localEv
 	if err != nil {
 		return nil, err
 	}
+	if err := validateMetricInputs(registry, metrics); err != nil {
+		return nil, err
+	}
 	return &localEvaluator{metrics: metrics, engine: engine, registry: registry}, nil
+}
+
+func validateMetricInputs(registry metricregistry.Registry, metrics []MetricInput) error {
+	if len(metrics) == 0 {
+		return fmt.Errorf("deterministic evaluator requires at least one metric")
+	}
+	for _, metricInput := range metrics {
+		switch metricEvaluator(metricInput) {
+		case "final_response_avg_score":
+			if registry != nil {
+				if err := registry.Resolve(evalMetricFromInput(metricInput)); err != nil {
+					return fmt.Errorf("metric %q configuration error: %w", metricInput.MetricName, err)
+				}
+			}
+		case structuredOutputGuardMetric, "final_response_exact", "llm_rubric_critic", "format_json":
+		case "tool_trajectory_exact", "tool_trajectory_avg_score":
+			if metricInput.Criterion == nil || metricInput.Criterion.ToolTrajectory == nil {
+				return fmt.Errorf("metric %q requires toolTrajectory criterion", metricInput.MetricName)
+			}
+		default:
+			return fmt.Errorf("unsupported deterministic metric %q", metricEvaluator(metricInput))
+		}
+	}
+	return nil
 }
 
 func (e *localEvaluator) Evaluate(ctx context.Context, name string, set EvalSetInput, prompt string) (EvaluationRun, error) {
@@ -75,6 +102,13 @@ func (e *localEvaluator) Evaluate(ctx context.Context, name string, set EvalSetI
 func (e *localEvaluator) evaluateCase(evalSetID string, evalCase EvalCase, prompt string) (CaseResult, error) {
 	if len(evalCase.Conversation) == 0 {
 		return CaseResult{}, fmt.Errorf("eval case %s has no conversation", evalCase.EvalID)
+	}
+	if len(evalCase.Conversation) != 1 {
+		return CaseResult{}, fmt.Errorf(
+			"eval case %s has %d conversation turns; deterministic evaluator supports exactly one",
+			evalCase.EvalID,
+			len(evalCase.Conversation),
+		)
 	}
 	expected := evalCase.Conversation[0]
 	actual := fakeInvocation(evalCase, expected, prompt)
@@ -162,11 +196,12 @@ func scoreMetricWithRegistry(
 			}
 		}
 	case "tool_trajectory_exact", "tool_trajectory_avg_score":
-		score, reason = scoreToolTrajectory(expected.Tools, actual.Tools)
+		score, reason = scoreToolTrajectoryMetric(metricInput, expected, actual)
 	case "format_json":
 		score, reason = scoreJSONFormat(expected, actual)
 	default:
-		score = 1
+		score = 0
+		reason = fmt.Sprintf("unsupported deterministic metric %q", metricEvaluator(metricInput))
 	}
 	statusValue := status.EvalStatusPassed
 	if score < threshold {
@@ -253,29 +288,69 @@ func toEvalSetInvocation(invocation Invocation) *evalset.Invocation {
 	return result
 }
 
-func scoreToolTrajectory(expected, actual []ToolCall) (float64, string) {
-	switch {
-	case len(expected) == 0 && len(actual) == 0:
-		return 1, ""
-	case len(expected) == 0 && len(actual) > 0:
-		return 0, "route error: expected direct answer but tool was called"
-	case len(expected) > 0 && len(actual) == 0:
-		return 0, "tool call error: expected a tool call but no tool was called"
-	case len(expected) != len(actual):
-		return 0, "tool call error: tool call count does not match expectation"
+func scoreToolTrajectoryMetric(metricInput MetricInput, expected, actual Invocation) (float64, string) {
+	if metricInput.Criterion == nil || metricInput.Criterion.ToolTrajectory == nil {
+		return 0, "tool trajectory criterion not configured"
 	}
-	for i := range expected {
-		if expected[i].Name != actual[i].Name {
-			return 0, "tool call error: tool name does not match expectation"
-		}
-		if !jsonEqual(expected[i].Arguments, actual[i].Arguments) {
-			return 0, "tool argument error: tool arguments do not match expectation"
-		}
-		if !jsonEqual(expected[i].Result, actual[i].Result) {
-			return 0, "tool call error: tool result does not match expectation"
-		}
+	ok, err := metricInput.Criterion.ToolTrajectory.Match(
+		toEvalSetInvocation(actual),
+		toEvalSetInvocation(expected),
+	)
+	if err != nil {
+		return 0, normalizeToolTrajectoryReason(expected, actual, err)
+	}
+	if !ok {
+		return 0, "tool trajectory mismatch"
 	}
 	return 1, ""
+}
+
+func normalizeToolTrajectoryReason(expected, actual Invocation, err error) string {
+	switch {
+	case len(expected.Tools) == 0 && len(actual.Tools) > 0:
+		return "route error: expected direct answer but tool was called"
+	case len(expected.Tools) > 0 && len(actual.Tools) == 0:
+		return "tool call error: expected a tool call but no tool was called"
+	}
+	if reason := diagnoseToolTrajectoryMismatch(expected.Tools, actual.Tools); reason != "" {
+		return reason
+	}
+	reason := err.Error()
+	switch {
+	case strings.Contains(reason, "number of tool calls mismatch"):
+		return "tool call error: tool call count does not match expectation"
+	case strings.Contains(reason, "arguments mismatch"):
+		return "tool argument error: tool arguments do not match expectation"
+	case strings.Contains(reason, "result mismatch"):
+		return "tool call error: tool result does not match expectation"
+	case strings.Contains(reason, "name mismatch"):
+		return "tool call error: tool name does not match expectation"
+	default:
+		return fmt.Sprintf("tool trajectory mismatch: %v", err)
+	}
+}
+
+func diagnoseToolTrajectoryMismatch(expected, actual []ToolCall) string {
+	if len(expected) != len(actual) {
+		return ""
+	}
+	used := make([]bool, len(actual))
+	for _, expectedTool := range expected {
+		for idx, actualTool := range actual {
+			if used[idx] || expectedTool.Name != actualTool.Name {
+				continue
+			}
+			used[idx] = true
+			switch {
+			case !jsonEqual(expectedTool.Arguments, actualTool.Arguments):
+				return "tool argument error: tool arguments do not match expectation"
+			case !jsonEqual(expectedTool.Result, actualTool.Result):
+				return "tool call error: tool result does not match expectation"
+			}
+			break
+		}
+	}
+	return ""
 }
 
 func scoreStructuredOutputGuard(expected, actual Invocation) (float64, string) {

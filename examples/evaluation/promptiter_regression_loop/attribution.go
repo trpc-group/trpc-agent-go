@@ -72,7 +72,8 @@ func classifyFailure(metric MetricResult) string {
 		return FailureFormatError
 	case strings.Contains(reason, "route error"):
 		return FailureRouteError
-	case strings.Contains(reason, "tool argument"):
+	case strings.Contains(reason, "tool argument") ||
+		strings.Contains(reason, "arguments mismatch"):
 		return FailureToolArgumentError
 	case strings.Contains(reason, "tool call") || strings.Contains(metric.MetricName, "tool"):
 		return FailureToolCallError
