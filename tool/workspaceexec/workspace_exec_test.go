@@ -1478,6 +1478,42 @@ func TestExecTool_WorkspaceStaleBeforeRunRetriesOnce(t *testing.T) {
 	require.Equal(t, 1, starts, "the user command must start only once")
 }
 
+func TestExecTool_UnsafeStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &staleRetryManager{instance: 1}
+	runner := &staleRetryRunner{
+		manager: manager,
+		userErrors: []error{errors.Join(
+			codeexecutor.ErrWorkspaceStale,
+			codeexecutor.ErrWorkspaceRetryUnsafe,
+		)},
+	}
+	exec := newStaleRetryExec(
+		manager,
+		&nonInteractiveFS{},
+		runner,
+	)
+	tl := NewExecTool(exec)
+	args, err := json.Marshal(execInput{Command: "side-effect"})
+	require.NoError(t, err)
+
+	_, err = tl.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	require.Equal(t, 1, manager.createCount())
+	attempts, starts := runner.counts()
+	require.Equal(t, 1, attempts, "unsafe stale must not replay")
+	require.Zero(t, starts)
+
+	got, err := tl.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"the next call must rebuild the invalidated workspace once")
+	attempts, starts = runner.counts()
+	require.Equal(t, 2, attempts)
+	require.Equal(t, 1, starts)
+}
+
 func TestExecTool_WorkspaceStaleBeforeInteractiveStartRetriesOnce(
 	t *testing.T,
 ) {

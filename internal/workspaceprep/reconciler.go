@@ -24,13 +24,14 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/internal/skillstage"
 )
 
-// ErrReconcileRetryUnsafe marks a stale reconciliation result that happened
-// after at least one command completed successfully. The error still wraps
-// [codeexecutor.ErrWorkspaceStale], but callers must not replay reconciliation
-// automatically because an arbitrary command could execute twice.
-var ErrReconcileRetryUnsafe = errors.New(
-	"workspaceprep: reconciliation is unsafe to retry",
-)
+// ErrReconcileRetryUnsafe marks a stale reconciliation result after a command
+// may have started. The error still wraps [codeexecutor.ErrWorkspaceStale], but
+// callers must not replay reconciliation automatically because an arbitrary
+// command could execute twice.
+//
+// Deprecated: use [codeexecutor.ErrWorkspaceRetryUnsafe]. This alias remains
+// for compatibility with existing internal callers.
+var ErrReconcileRetryUnsafe = codeexecutor.ErrWorkspaceRetryUnsafe
 
 // defaultReconciler is the process-local, single-node implementation
 // of Reconciler. It uses a keyed mutex on ws.Path to serialize

@@ -622,6 +622,8 @@ func TestReconciler_StaleRetryDisposition(t *testing.T) {
 		)
 		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
 		require.ErrorIs(t, err, ErrReconcileRetryUnsafe)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+		require.False(t, codeexecutor.IsWorkspaceRetrySafe(err))
 		require.Equal(t, 1, laterCalls)
 	})
 

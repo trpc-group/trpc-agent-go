@@ -490,12 +490,14 @@ func (t *RunTool) Call(
 	rr, err := t.runPrepared(prepared, in)
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		t.invalidateWorkspaceHandle(prepared.handle)
-		prepared, err = t.prepareWorkspaceForRun(ctx, in)
-		if err == nil {
-			rr, err = t.runPrepared(prepared, in)
-		}
-		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-			t.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, err = t.prepareWorkspaceForRun(ctx, in)
+			if err == nil {
+				rr, err = t.runPrepared(prepared, in)
+			}
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.invalidateWorkspaceHandle(prepared.handle)
+			}
 		}
 	}
 	if err != nil {
@@ -663,9 +665,11 @@ func (t *RunTool) prepareWorkspaceForRun(
 		if acquired {
 			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
 		}
-		prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
-		if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
-			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+				t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+			}
 		}
 	}
 	if err != nil {

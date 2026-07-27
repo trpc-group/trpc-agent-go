@@ -179,11 +179,12 @@ func (w *Workspace) Collect(
 	if len(patterns) == 0 {
 		return []*File{}, nil
 	}
-	eng, ws, err := w.bindWorkspace(ctx)
+	eng, handle, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := eng.FS().Collect(ctx, ws, patterns)
+	raw, err := eng.FS().Collect(ctx, handle.Workspace, patterns)
+	w.invalidateWorkspaceHandleIfStale(handle, err)
 	if err != nil {
 		return nil, err
 	}
@@ -213,11 +214,13 @@ func (w *Workspace) PutFiles(
 	if len(files) == 0 {
 		return nil
 	}
-	eng, ws, err := w.bindWorkspace(ctx)
+	eng, handle, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return err
 	}
-	return eng.FS().PutFiles(ctx, ws, files)
+	err = eng.FS().PutFiles(ctx, handle.Workspace, files)
+	w.invalidateWorkspaceHandleIfStale(handle, err)
+	return err
 }
 
 // SaveArtifact persists an existing workspace file as an artifact via
@@ -265,9 +268,7 @@ func (w *Workspace) SaveArtifact(
 		Save:          true,
 		Inline:        false,
 	})
-	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-		w.resolver.InvalidateWorkspaceHandle(handle)
-	}
+	w.invalidateWorkspaceHandleIfStale(handle, err)
 	// ErrPartialOutputCommit means the artifact already landed in the
 	// service but some non-fatal post-commit work failed (e.g. cleanup
 	// or secondary inline read). Mirror tool/workspaceexec.SaveArtifact
@@ -321,11 +322,13 @@ func (w *Workspace) StageInputs(
 		return nil
 	}
 	ctxIO := workspacefacade.WithArtifactContext(ctx)
-	eng, ws, err := w.bindWorkspace(ctxIO)
+	eng, handle, err := w.bindWorkspaceHandle(ctxIO)
 	if err != nil {
 		return err
 	}
-	return eng.FS().StageInputs(ctxIO, ws, specs)
+	err = eng.FS().StageInputs(ctxIO, handle.Workspace, specs)
+	w.invalidateWorkspaceHandleIfStale(handle, err)
+	return err
 }
 
 // RunProgram executes a program inside the current invocation's
@@ -360,7 +363,7 @@ func (w *Workspace) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 	spec.Cwd = cwd
-	eng, ws, err := w.bindWorkspace(ctx)
+	eng, handle, err := w.bindWorkspaceHandle(ctx)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -370,15 +373,9 @@ func (w *Workspace) RunProgram(
 			"workspaceio: executor does not expose a program runner",
 		)
 	}
-	return runner.RunProgram(ctx, ws, spec)
-}
-
-// bindWorkspace resolves the engine and acquires the invocation workspace.
-func (w *Workspace) bindWorkspace(
-	ctx context.Context,
-) (codeexecutor.Engine, codeexecutor.Workspace, error) {
-	eng, handle, err := w.bindWorkspaceHandle(ctx)
-	return eng, handle.Workspace, err
+	result, err := runner.RunProgram(ctx, handle.Workspace, spec)
+	w.invalidateWorkspaceHandleIfStale(handle, err)
+	return result, err
 }
 
 func (w *Workspace) bindWorkspaceHandle(
@@ -400,6 +397,16 @@ func (w *Workspace) bindWorkspaceHandle(
 		return nil, codeexecutor.WorkspaceHandle{}, err
 	}
 	return eng, handle, nil
+}
+
+func (w *Workspace) invalidateWorkspaceHandleIfStale(
+	handle codeexecutor.WorkspaceHandle,
+	err error,
+) {
+	if w != nil && w.resolver != nil &&
+		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		w.resolver.InvalidateWorkspaceHandle(handle)
+	}
 }
 
 // toFile converts a codeexecutor.File into the public File type.

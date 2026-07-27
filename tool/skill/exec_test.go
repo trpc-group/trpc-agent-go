@@ -12,6 +12,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -325,6 +326,59 @@ func TestExecTool_PartialStaleInvalidatesWithoutReplay(t *testing.T) {
 		"the next call must rebuild the invalidated workspace once")
 }
 
+func TestExecTool_UnsafeStartStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	exitCode := 0
+	runner := &staleWriteSkillRunner{
+		session: &stubProgramSession{
+			id: "started-after-unsafe",
+			polls: []codeexecutor.ProgramPoll{{
+				Status:   codeexecutor.ProgramStatusExited,
+				ExitCode: &exitCode,
+			}},
+			runResult: codeexecutor.RunResult{ExitCode: 0},
+		},
+		startErrors: []error{errors.Join(
+			codeexecutor.ErrWorkspaceStale,
+			codeexecutor.ErrWorkspaceRetryUnsafe,
+		)},
+	}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: &managedEngine{
+			m: manager,
+			f: &stubFS{},
+			r: runner,
+		}},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	args, err := jsonMarshal(execInput{runInput: runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	}})
+	require.NoError(t, err)
+
+	_, err = execTool.StreamableCall(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	require.Equal(t, 1, runner.starts, "unsafe stale must not replay")
+	require.Equal(t, 1, manager.creates)
+
+	reader, err := execTool.StreamableCall(context.Background(), args)
+	require.NoError(t, err)
+	_, out := drainExecStream(t, reader)
+	require.Equal(t, codeexecutor.ProgramStatusExited, out.Status)
+	require.Equal(t, 2, runner.starts)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 func TestKillSessionTool_RemovesSession(t *testing.T) {
 	root := t.TempDir()
 	writeSkill(t, root, testSkillName)
@@ -569,8 +623,9 @@ func (s *stubProgramSession) RunResult() codeexecutor.RunResult {
 }
 
 type staleWriteSkillRunner struct {
-	session *stubProgramSession
-	starts  int
+	session     *stubProgramSession
+	startErrors []error
+	starts      int
 }
 
 func (*staleWriteSkillRunner) RunProgram(
@@ -587,6 +642,11 @@ func (r *staleWriteSkillRunner) StartProgram(
 	codeexecutor.InteractiveProgramSpec,
 ) (codeexecutor.ProgramSession, error) {
 	r.starts++
+	if len(r.startErrors) > 0 {
+		err := r.startErrors[0]
+		r.startErrors = r.startErrors[1:]
+		return nil, err
+	}
 	return r.session, nil
 }
 

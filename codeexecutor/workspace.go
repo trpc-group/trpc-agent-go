@@ -62,15 +62,36 @@ type Workspace struct {
 }
 
 // ErrWorkspaceStale reports that a workspace handle belongs to a physical
-// execution-environment instance that is no longer current.
+// execution-environment instance that is no longer current. Callers should
+// invalidate the exact [WorkspaceHandle] whenever an error matches this value.
 //
-// Backends must return this error only when they know that the requested
-// operation did not start, or when the failed operation is safe for a higher
-// layer to reconcile again. In particular, transport timeouts, lost responses,
-// ordinary file-system errors, and non-zero program exit codes must not be
-// converted to ErrWorkspaceStale: their side effects may be unknown, and
-// retrying them could execute a user command twice.
+// A standalone ErrWorkspaceStale remains safe to retry for compatibility.
+// Errors that also match [ErrWorkspaceRetryUnsafe] or
+// [ErrPartialOutputCommit] are invalidation-only signals and must not be
+// replayed. Callers performing automatic replay must use
+// [IsWorkspaceRetrySafe] rather than testing ErrWorkspaceStale alone.
+//
+// Backends must not return a standalone ErrWorkspaceStale for transport
+// timeouts, lost responses, ordinary file-system errors, or non-zero program
+// exit codes when side effects may be unknown. Such failures must remain
+// ordinary errors or join ErrWorkspaceRetryUnsafe.
 var ErrWorkspaceStale = errors.New("codeexecutor: workspace is stale")
+
+// ErrWorkspaceRetryUnsafe marks a stale operation that may have produced side
+// effects and therefore must not be replayed automatically. The enclosing error
+// should also match [ErrWorkspaceStale] so callers can invalidate its handle.
+var ErrWorkspaceRetryUnsafe = errors.New(
+	"codeexecutor: workspace operation is unsafe to retry",
+)
+
+// IsWorkspaceRetrySafe reports whether err authorizes automatic workspace
+// replay. A stale partial output commit is always unsafe because outputs or
+// artifacts may already have been persisted.
+func IsWorkspaceRetrySafe(err error) bool {
+	return errors.Is(err, ErrWorkspaceStale) &&
+		!errors.Is(err, ErrWorkspaceRetryUnsafe) &&
+		!errors.Is(err, ErrPartialOutputCommit)
+}
 
 // WorkspaceInstanceID identifies the physical execution-environment instance
 // to which a cached [Workspace] handle belongs.

@@ -676,7 +676,7 @@ func (t *ExecTool) callWithWorkspaceRetry(
 	if acquired {
 		t.resolver.InvalidateWorkspaceHandle(req.workspaceHandle)
 	}
-	if errors.Is(err, workspaceprep.ErrReconcileRetryUnsafe) {
+	if !codeexecutor.IsWorkspaceRetrySafe(err) {
 		return out, err
 	}
 	retry := base

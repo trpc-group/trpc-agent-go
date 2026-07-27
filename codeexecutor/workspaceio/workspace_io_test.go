@@ -465,6 +465,150 @@ func (m *countingWorkspaceManager) Cleanup(
 	return m.inner.Cleanup(ctx, ws)
 }
 
+type staleOperationBackend struct {
+	operation string
+	calls     int
+}
+
+func (b *staleOperationBackend) operationError(operation string) error {
+	if b.operation != operation {
+		return nil
+	}
+	b.calls++
+	if b.calls == 1 {
+		return codeexecutor.ErrWorkspaceStale
+	}
+	return nil
+}
+
+func (b *staleOperationBackend) PutFiles(
+	context.Context,
+	codeexecutor.Workspace,
+	[]codeexecutor.PutFile,
+) error {
+	return b.operationError("put_files")
+}
+
+func (*staleOperationBackend) StageDirectory(
+	context.Context,
+	codeexecutor.Workspace,
+	string,
+	string,
+	codeexecutor.StageOptions,
+) error {
+	return nil
+}
+
+func (b *staleOperationBackend) Collect(
+	context.Context,
+	codeexecutor.Workspace,
+	[]string,
+) ([]codeexecutor.File, error) {
+	return nil, b.operationError("collect")
+}
+
+func (b *staleOperationBackend) StageInputs(
+	context.Context,
+	codeexecutor.Workspace,
+	[]codeexecutor.InputSpec,
+) error {
+	return b.operationError("stage_inputs")
+}
+
+func (*staleOperationBackend) CollectOutputs(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	return codeexecutor.OutputManifest{}, nil
+}
+
+func (b *staleOperationBackend) RunProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{}, b.operationError("run_program")
+}
+
+func TestBackendOperationStaleInvalidatesLegacyHandleWithoutReplay(
+	t *testing.T,
+) {
+	tests := []struct {
+		name      string
+		operation string
+		call      func(*Workspace) error
+	}{
+		{
+			name:      "collect",
+			operation: "collect",
+			call: func(ws *Workspace) error {
+				_, err := ws.Collect(context.Background(), "work/a.txt")
+				return err
+			},
+		},
+		{
+			name:      "put files",
+			operation: "put_files",
+			call: func(ws *Workspace) error {
+				return ws.PutFiles(
+					context.Background(),
+					codeexecutor.PutFile{Path: "work/a.txt"},
+				)
+			},
+		},
+		{
+			name:      "stage inputs",
+			operation: "stage_inputs",
+			call: func(ws *Workspace) error {
+				return ws.StageInputs(
+					context.Background(),
+					[]codeexecutor.InputSpec{{
+						From: "data:text/plain,hello",
+						To:   "in/a.txt",
+					}},
+				)
+			},
+		},
+		{
+			name:      "run program",
+			operation: "run_program",
+			call: func(ws *Workspace) error {
+				_, err := ws.RunProgram(
+					context.Background(),
+					codeexecutor.RunProgramSpec{Cmd: "true"},
+				)
+				return err
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rt := localexec.NewRuntime("")
+			manager := &countingWorkspaceManager{inner: rt}
+			backend := &staleOperationBackend{
+				operation: tt.operation,
+			}
+			eng := codeexecutor.NewEngine(manager, backend, backend)
+			ws := New(
+				&stubFSExec{eng: eng},
+				codeexecutor.NewWorkspaceRegistry(),
+			)
+
+			err := tt.call(ws)
+			require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+			require.Equal(t, 1, backend.calls,
+				"the stale operation must not replay in the current call")
+			require.Equal(t, 1, manager.creates)
+
+			require.NoError(t, tt.call(ws))
+			require.Equal(t, 2, backend.calls)
+			require.Equal(t, 2, manager.creates,
+				"the next call must rebuild the invalidated workspace once")
+		})
+	}
+}
+
 // TestSaveArtifact_PartialCommitStillReturnsRef pins the contract that
 // ErrPartialOutputCommit is non-fatal: the artifact has already been
 // persisted and callers must still receive the ref. Mirrors the same

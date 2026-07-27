@@ -4351,6 +4351,46 @@ func TestRunTool_RunStaleInvalidatesLegacyHandleAndRetries(
 		"pre-start stale must rebuild the exact legacy cache entry")
 }
 
+func TestRunTool_UnsafeStaleInvalidatesWithoutReplay(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	runner := &staleOnceSkillRunner{firstErr: errors.Join(
+		codeexecutor.ErrWorkspaceStale,
+		codeexecutor.ErrWorkspaceRetryUnsafe,
+	)}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: runner,
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceRetryUnsafe)
+	require.Equal(t, 1, runner.calls, "unsafe stale must not replay")
+	require.Equal(t, 1, manager.creates)
+
+	_, err = rt.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, 2, runner.calls)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 func TestRunTool_OutputStaleInvalidatesWithoutReplayingCommand(
 	t *testing.T,
 ) {
@@ -5671,7 +5711,8 @@ func (r *stubRunner) RunProgram(
 }
 
 type staleOnceSkillRunner struct {
-	calls int
+	calls    int
+	firstErr error
 }
 
 func (r *staleOnceSkillRunner) RunProgram(
@@ -5681,6 +5722,9 @@ func (r *staleOnceSkillRunner) RunProgram(
 ) (codeexecutor.RunResult, error) {
 	r.calls++
 	if r.calls == 1 {
+		if r.firstErr != nil {
+			return codeexecutor.RunResult{}, r.firstErr
+		}
 		return codeexecutor.RunResult{}, fmt.Errorf(
 			"program did not start: %w",
 			codeexecutor.ErrWorkspaceStale,

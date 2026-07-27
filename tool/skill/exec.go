@@ -359,9 +359,11 @@ func (t *ExecTool) StreamableCall(
 	prepared, proc, err := t.startProgramAttempt(ctx, in)
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		t.run.invalidateWorkspaceHandle(prepared.handle)
-		prepared, proc, err = t.startProgramAttempt(ctx, in)
-		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-			t.run.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, proc, err = t.startProgramAttempt(ctx, in)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.run.invalidateWorkspaceHandle(prepared.handle)
+			}
 		}
 	}
 	if err != nil {
