@@ -128,14 +128,14 @@ inspection.
 
 ```go
 guard, err := safety.NewGuard(
-    safety.WithPolicyFile("tool_safety_policy.yaml"),
-    safety.WithAuditFile("tool_safety_audit.jsonl"),
+safety.WithPolicyFile("tool_safety_policy.yaml"),
+safety.WithAuditFile("tool_safety_audit.jsonl"),
 )
 if err != nil { /* ... */ }
 defer guard.Close()
 
 events, err := runner.Run(ctx, userID, sessionID, msg,
-    agent.WithToolPermissionPolicy(guard))
+agent.WithToolPermissionPolicy(guard))
 ```
 
 A runnable, offline demo lives in

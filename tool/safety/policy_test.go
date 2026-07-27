@@ -195,6 +195,41 @@ func TestCompileRejectsUnknownBackend(t *testing.T) {
 	}
 }
 
+// TestCompileDefaultsEmptyBackends pins the partial-policy fix: a policy that
+// leaves Backends nil (typical for WithPolicy(&Policy{...})) inherits the
+// default tool→backend mapping instead of compiling to an empty index that
+// would let every exec tool bypass scanning.
+func TestCompileDefaultsEmptyBackends(t *testing.T) {
+	p := Policy{ForbiddenPaths: []string{"/etc/shadow"}}
+	if err := p.compile(); err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	for tool, want := range map[string]string{
+		"workspace_exec": BackendWorkspace,
+		"exec_command":   BackendHost,
+		"execute_code":   BackendCode,
+	} {
+		if got := p.backendFor(tool); got != want {
+			t.Errorf("backendFor(%q) = %q, want %q (default mapping inherited)", tool, got, want)
+		}
+	}
+}
+
+// TestCompileRejectsToollessBackends pins that an explicitly configured
+// backend map that maps no tool at all is rejected: compiled as-is the guard
+// would scan nothing.
+func TestCompileRejectsToollessBackends(t *testing.T) {
+	p := DefaultPolicy()
+	p.Backends = map[string][]string{BackendWorkspace: {}, BackendHost: {" "}}
+	err := p.compile()
+	if err == nil {
+		t.Fatalf("compile should reject a backend map that maps no tool")
+	}
+	if !strings.Contains(err.Error(), "no tool is mapped") {
+		t.Errorf("error = %v, want no-tool-mapped error", err)
+	}
+}
+
 func TestCompileRejectsDuplicateToolMapping(t *testing.T) {
 	p := DefaultPolicy()
 	p.Backends = map[string][]string{
@@ -315,6 +350,38 @@ func TestLoadPolicyRejectsUnknownFields(t *testing.T) {
 			// come up on a silently weakened policy.
 			if _, err := NewGuard(WithPolicyFile(path)); err == nil {
 				t.Errorf("NewGuard should fail on the unknown field in %q", tc.content)
+			}
+		})
+	}
+}
+
+// TestLoadPolicyRejectsTrailingDocuments pins single-document decoding: a
+// second YAML "---" document or a trailing JSON value decodes nowhere and
+// would be silently ignored, so an operator could deploy a file whose
+// trailing security restriction never loads. Each ignored portion here
+// carries a restriction (a denied command) to make the stake concrete.
+func TestLoadPolicyRejectsTrailingDocuments(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		name    string
+		file    string
+		content string
+	}{
+		{"yaml second document", "two.yaml",
+			"version: 1\n---\ncommands:\n  denied: [dd]\n"},
+		{"json second value", "two.json",
+			"{\"version\": 1}\n{\"commands\": {\"denied\": [\"dd\"]}}"},
+		{"json trailing garbage", "garbage.json",
+			"{\"version\": 1} trailing"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(dir, tc.file)
+			if err := os.WriteFile(path, []byte(tc.content), 0o644); err != nil {
+				t.Fatalf("write policy: %v", err)
+			}
+			if _, err := LoadPolicy(path); err == nil {
+				t.Errorf("LoadPolicy should reject trailing content in %q", tc.content)
 			}
 		})
 	}

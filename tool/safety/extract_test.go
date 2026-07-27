@@ -135,6 +135,6 @@ func TestExtractEmptyArgs(t *testing.T) {
 		t.Fatalf("extract: %v", err)
 	}
 	if er.Command != "" || er.Cwd != "" {
-		t.Errorf("empty args should yield zero ExecRequest, got %+v", er)
+		t.Errorf("empty args should yield zero execRequest, got %+v", er)
 	}
 }

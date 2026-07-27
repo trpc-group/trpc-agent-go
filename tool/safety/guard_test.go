@@ -173,6 +173,42 @@ func TestWithPolicyCompilesUncompiledPolicy(t *testing.T) {
 	}
 }
 
+// TestWithPolicyPartialPolicyStillScans pins that a partial programmatic
+// policy — one that sets only a restriction and leaves Backends nil — cannot
+// silently disable scanning. Without the default tool→backend mapping the
+// backend index would be empty, workspace_exec would resolve to backend ""
+// and CheckToolPermission would allow the call without ever evaluating the
+// configured forbidden path.
+func TestWithPolicyPartialPolicyStillScans(t *testing.T) {
+	g, err := NewGuard(WithPolicy(&Policy{ForbiddenPaths: []string{"/etc/shadow"}}))
+	if err != nil {
+		t.Fatalf("NewGuard: %v", err)
+	}
+	req := &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"cat /etc/shadow"}`),
+	}
+	dec, err := g.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("action = %q, want deny; a partial programmatic policy must still scan workspace_exec", dec.Action)
+	}
+	// The unparsable fail-closed default must survive the partial policy too.
+	req = &tool.PermissionRequest{
+		ToolName:  "workspace_exec",
+		Arguments: []byte(`{"command":"echo $(id)"}`),
+	}
+	dec, err = g.CheckToolPermission(context.Background(), req)
+	if err != nil {
+		t.Fatalf("CheckToolPermission: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("action = %q, want deny for unparsable command under a partial policy", dec.Action)
+	}
+}
+
 // TestWithPolicyDeepCopyIsolation verifies WithPolicy takes a private deep copy:
 // mutating the caller's policy maps/slices after NewGuard must not change the
 // guard's decisions, and compile() must not have rewritten the caller's maps.

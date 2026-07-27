@@ -113,7 +113,7 @@ func (f Finding) effectiveAction() Action {
 
 // ruleCtx bundles the inputs handed to every rule.
 type ruleCtx struct {
-	er      ExecRequest
+	er      execRequest
 	pipe    *shellsafe.Pipeline
 	policy  *Policy
 	backend string
@@ -147,7 +147,7 @@ var builtinRules = []ruleFn{
 // unparsable command is not a blind spot. For the code backend, shell-language
 // code blocks are parsed and merged into the pipeline so every argv-level rule
 // applies to them; other languages get the code-specific checks.
-func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, RiskLevel) {
+func (p *Policy) scan(er execRequest, backend string) ([]Finding, Decision, RiskLevel) {
 	var findings []Finding
 	var pipe *shellsafe.Pipeline
 	if backend == BackendCode {
@@ -180,7 +180,7 @@ func (p *Policy) scan(er ExecRequest, backend string) ([]Finding, Decision, Risk
 // would sidestep every argv-level rule, and a URL whitelist pass over the
 // source. The raw-text rules (secret, resource) run separately on the
 // concatenated Command.
-func (p *Policy) scanCodeBlocks(blocks []CodeBlock) ([]Finding, *shellsafe.Pipeline) {
+func (p *Policy) scanCodeBlocks(blocks []codeBlock) ([]Finding, *shellsafe.Pipeline) {
 	var findings []Finding
 	var merged *shellsafe.Pipeline
 	for _, b := range blocks {
@@ -229,7 +229,7 @@ var codeBridgePatterns = []string{
 }
 
 // codeBridgeFindings flags non-shell code that can launch shell commands.
-func codeBridgeFindings(b CodeBlock) []Finding {
+func codeBridgeFindings(b codeBlock) []Finding {
 	low := strings.ToLower(b.Code)
 	for _, pat := range codeBridgePatterns {
 		if strings.Contains(low, pat) {
@@ -531,16 +531,21 @@ func ruleNetwork(c ruleCtx) []Finding {
 		}
 		sawDownload = true
 		before := len(out)
-		// An opaque curl config file (-K/--config) can define url/proxy/resolve
-		// and other egress controls the guard cannot see, so it fails closed
-		// regardless of the whitelist.
+		// Opaque curl options fail closed regardless of the whitelist: a
+		// -K/--config file can define url/proxy/resolve egress the guard
+		// cannot see, and --unix-socket/--abstract-unix-socket reroute the
+		// connection to a local socket the domain whitelist cannot vet.
 		if cmd == "curl" {
-			if opt, ok := curlOpaqueConfigOption(argv[1:]); ok {
+			if opt, ok := curlOpaqueOption(argv[1:]); ok {
+				evidence := argv[0] + " " + opt + " (opaque config may define url/proxy/resolve)"
+				if opt == "--unix-socket" || opt == "--abstract-unix-socket" {
+					evidence = argv[0] + " " + opt + " (connection rerouted to a local socket the whitelist cannot vet)"
+				}
 				out = append(out, Finding{
 					RuleID:         ruleNetworkID,
 					Category:       catNetwork,
 					RiskLevel:      RiskHigh,
-					Evidence:       argv[0] + " " + opt + " (opaque config may define url/proxy/resolve)",
+					Evidence:       evidence,
 					Recommendation: recNetwork,
 					action:         c.policy.Network.OnNonWhitelisted,
 				})
@@ -558,16 +563,45 @@ func ruleNetwork(c ruleCtx) []Finding {
 					action:         c.policy.Network.OnNonWhitelisted,
 				})
 			}
+			if c.policy.Network.RequireRedirectFree && curlFollowsRedirects(argv[1:]) {
+				// Opt-in egress-boundary posture: a redirect-following client
+				// can be bounced from a whitelisted URL to any host, so the
+				// whitelist proves nothing about the final destination.
+				out = append(out, Finding{
+					RuleID:         ruleNetworkID,
+					Category:       catNetwork,
+					RiskLevel:      RiskHigh,
+					Evidence:       argv[0] + " -L/--location (redirect target cannot be statically verified; drop -L under require_redirect_free)",
+					Recommendation: recNetwork,
+					action:         c.policy.Network.OnNonWhitelisted,
+				})
+			}
 		} else if opt, ok := genericOpaqueOption(cmd, argv[1:]); ok {
 			// Non-curl equivalents of the opaque curl config: wget
-			// -e/--execute/--config, ssh/scp -o/-F, scp/sftp -S can redirect
-			// the real egress (proxy, ProxyCommand, transport program) in ways
-			// the guard cannot read, so they fail closed too.
+			// -e/--execute/--config, ssh/scp -o/-F, ssh -D (dynamic SOCKS
+			// proxy), scp/sftp -S/-D can redirect the real egress (proxy,
+			// ProxyCommand, tunnel, transport program) in ways the guard
+			// cannot read, so they fail closed too.
 			out = append(out, Finding{
 				RuleID:         ruleNetworkID,
 				Category:       catNetwork,
 				RiskLevel:      RiskHigh,
 				Evidence:       argv[0] + " " + opt + " (opaque option may redirect egress via proxy/config)",
+				Recommendation: recNetwork,
+				action:         c.policy.Network.OnNonWhitelisted,
+			})
+		}
+		if cmd == "wget" && c.policy.Network.RequireRedirectFree &&
+			!wgetRedirectsDisabled(argv[1:]) {
+			// wget follows redirects by default, so under the opt-in
+			// egress-boundary posture every wget without an explicit
+			// --max-redirect=0 fails closed: the redirect target is the
+			// server's choice, not the whitelisted URL's.
+			out = append(out, Finding{
+				RuleID:         ruleNetworkID,
+				Category:       catNetwork,
+				RiskLevel:      RiskHigh,
+				Evidence:       argv[0] + " (follows redirects by default; pass --max-redirect=0 under require_redirect_free)",
 				Recommendation: recNetwork,
 				action:         c.policy.Network.OnNonWhitelisted,
 			})
@@ -1103,20 +1137,65 @@ func pathCandidates(c ruleCtx) []string {
 	if c.pipe != nil {
 		for _, argv := range c.pipe.Commands {
 			for _, a := range argv {
-				out = append(out, a)
-				// A file:// URI is a filesystem access in disguise: add its
-				// decoded path so "curl file:///etc/shadow" matches the
-				// forbidden-path globs, not just the raw URI string.
-				if p := fileURIPath(a); p != "" {
-					out = append(out, p)
-				}
-				// A relative path is what the OS resolves against cwd: add the
-				// resolved form so "cat ../../etc/shadow" run from /var/www
-				// matches an absolute forbidden pattern too.
-				if j := resolveAgainstCwd(cwd, a); j != "" {
-					out = append(out, j)
+				// Each argv token contributes itself plus any path-bearing
+				// portion embedded in an option value ("--upload-file=/x",
+				// "-T/x", "@/x"); every candidate then gets the file-URI and
+				// cwd-resolved variants.
+				for _, cand := range append([]string{a}, optionValueCandidates(a)...) {
+					out = append(out, cand)
+					// A file:// URI is a filesystem access in disguise: add its
+					// decoded path so "curl file:///etc/shadow" matches the
+					// forbidden-path globs, not just the raw URI string.
+					if p := fileURIPath(cand); p != "" {
+						out = append(out, p)
+					}
+					// A relative path is what the OS resolves against cwd: add
+					// the resolved form so "cat ../../etc/shadow" run from
+					// /var/www matches an absolute forbidden pattern too.
+					if j := resolveAgainstCwd(cwd, cand); j != "" {
+						out = append(out, j)
+					}
 				}
 			}
+		}
+	}
+	return out
+}
+
+// optionValueCandidates extracts path-bearing portions embedded inside one
+// argv token, so a forbidden path cannot hide in an option value that never
+// stands alone as a token: "--upload-file=/etc/shadow" (inline long-option
+// value), "-T/etc/shadow" (inline short-option value), and the curl @file
+// read syntax ("--data-binary=@/etc/shadow", "-F name=@/etc/shadow",
+// "-d @/etc/shadow"). Extraction is command-agnostic and deliberately
+// over-inclusive: an extra candidate matters only if it matches a forbidden
+// pattern, and over-matching fails toward protection.
+func optionValueCandidates(a string) []string {
+	var out []string
+	add := func(v string) {
+		if v == "" {
+			return
+		}
+		out = append(out, v)
+		// @path is curl's read-from-file marker (-d @file, -F name=@file).
+		if strings.HasPrefix(v, "@") && len(v) > 1 {
+			out = append(out, v[1:])
+		}
+	}
+	if i := strings.IndexByte(a, '='); i >= 0 {
+		// "--flag=value" and form-field "name=@file" tokens.
+		add(a[i+1:])
+		return out
+	}
+	if strings.HasPrefix(a, "@") {
+		add(a)
+		return out
+	}
+	// Inline short-option value ("-T/etc/shadow", "-d@/etc/shadow",
+	// "-T~/.ssh/id_rsa"): the path-like tail starts at the first /, ~ or @.
+	if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") {
+		if idx := strings.IndexAny(a, "/~@"); idx > 0 {
+			add(a[idx:])
 		}
 	}
 	return out

@@ -128,15 +128,15 @@ func TestSampleMatrix(t *testing.T) {
 }
 
 // build500Commands returns 500 distinct, parseable workspace commands.
-func build500Commands() []ExecRequest {
+func build500Commands() []execRequest {
 	base := []string{
 		"go test ./...", "ls -la", "git status", "cat a.txt | grep x",
 		"echo hello world", "grep -r foo .", "sed -n 1p file", "jq . data.json",
 		"curl https://github.com/org/repo", "rm -rf build",
 	}
-	reqs := make([]ExecRequest, 0, 500)
+	reqs := make([]execRequest, 0, 500)
 	for i := 0; i < 500; i++ {
-		reqs = append(reqs, ExecRequest{Command: base[i%len(base)] + " " + strconv.Itoa(i)})
+		reqs = append(reqs, execRequest{Command: base[i%len(base)] + " " + strconv.Itoa(i)})
 	}
 	return reqs
 }
@@ -160,7 +160,7 @@ func BenchmarkScan(b *testing.B) {
 	if err != nil {
 		b.Fatalf("LoadPolicy: %v", err)
 	}
-	er := ExecRequest{Command: "cat a.txt | grep pattern"}
+	er := execRequest{Command: "cat a.txt | grep pattern"}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		p.scan(er, BackendWorkspace)

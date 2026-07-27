@@ -48,7 +48,7 @@ type AuditEvent struct {
 // separately by redactReport before the report is emitted.
 func buildReport(
 	toolName, backend string,
-	er ExecRequest,
+	er execRequest,
 	findings []Finding,
 	decision Decision,
 	risk RiskLevel,
