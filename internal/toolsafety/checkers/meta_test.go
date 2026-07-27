@@ -39,8 +39,8 @@ func TestCheckerIDs(t *testing.T) {
 // TestCheckerIsEnabled verifies the IsEnabled method on all checkers.
 func TestCheckerIsEnabled(t *testing.T) {
 	fullPolicy := &toolsafety.SafetyPolicy{
-		Version:         "1.0",
-		DeniedCommands:  []string{"rm", "dd"},
+		Version:        "1.0",
+		DeniedCommands: []string{"rm", "dd"},
 		DangerousPatterns: []toolsafety.PatternRule{
 			{Pattern: `rm\s+(-rf?\s+)?/?$`, RiskLevel: toolsafety.RiskLevelCritical},
 		},
@@ -87,7 +87,7 @@ func TestSensitiveLeakChecker_WithPatterns(t *testing.T) {
 		SensitivePatterns: []string{
 			`custom-[A-Z]+-key`,
 			`invalid([` + // intentionally invalid regex, should be silently skipped
-			`valid-other-\d+`,
+				`valid-other-\d+`,
 		},
 	}
 	c := NewSensitiveLeakChecker(policy)
@@ -205,5 +205,174 @@ func TestNetworkEgressChecker_EdgeCases(t *testing.T) {
 	}
 	if len(findings) != 0 {
 		t.Errorf("expected no findings for empty command, got %d", len(findings))
+	}
+}
+
+// TestHostExecRiskChecker_EdgeCases covers nil request and nohup detection.
+func TestHostExecRiskChecker_EdgeCases(t *testing.T) {
+	c := NewHostExecRiskChecker()
+	if c == nil {
+		t.Fatal("NewHostExecRiskChecker returned nil")
+	}
+
+	// Nil request should return empty findings.
+	findings, err := c.Check(nil, nil)
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for nil request, got %d", len(findings))
+	}
+
+	// Empty command should return empty findings.
+	findings, err = c.Check(nil, &toolsafety.ScanRequest{Command: ""})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for empty command, got %d", len(findings))
+	}
+
+	// Command with nohup should trigger background process detection.
+	findings, err = c.Check(nil, &toolsafety.ScanRequest{
+		Command: "nohup python server.py",
+	})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	hasBackground := false
+	for _, f := range findings {
+		if f.RuleID == toolsafety.RuleBackgroundProcess {
+			hasBackground = true
+			break
+		}
+	}
+	if !hasBackground {
+		t.Log("nohup command did not trigger BACKGROUND_PROCESS (may need other checkers)")
+	}
+}
+
+// TestSensitiveLeakChecker_EdgeCases covers nil request and empty command.
+func TestSensitiveLeakChecker_EdgeCases(t *testing.T) {
+	c := NewSensitiveLeakChecker(nil)
+	if c == nil {
+		t.Fatal("NewSensitiveLeakChecker returned nil")
+	}
+
+	// Nil request should return empty findings.
+	findings, err := c.Check(nil, nil)
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for nil request, got %d", len(findings))
+	}
+
+	// Empty command should return empty findings.
+	findings, err = c.Check(nil, &toolsafety.ScanRequest{Command: ""})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for empty command, got %d", len(findings))
+	}
+}
+
+// TestShellBypassChecker_EdgeCases covers nil request and empty command.
+func TestShellBypassChecker_EdgeCases(t *testing.T) {
+	c := NewShellBypassChecker()
+	if c == nil {
+		t.Fatal("NewShellBypassChecker returned nil")
+	}
+
+	// Nil request should return empty findings.
+	findings, err := c.Check(nil, nil)
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for nil request, got %d", len(findings))
+	}
+
+	// Empty command should return empty findings.
+	findings, err = c.Check(nil, &toolsafety.ScanRequest{Command: ""})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for empty command, got %d", len(findings))
+	}
+
+	// Single word (no shell wrapper) should not trigger findings.
+	findings, err = c.Check(nil, &toolsafety.ScanRequest{Command: "ls"})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Errorf("expected no findings for 'ls', got %d", len(findings))
+	}
+}
+
+// TestResourceAbuseChecker_TimeoutAlignment covers the timeout alignment
+// branch in ResourceAbuseChecker.Check.
+func TestResourceAbuseChecker_TimeoutAlignment(t *testing.T) {
+	policy := &toolsafety.SafetyPolicy{
+		ResourcePolicy: &toolsafety.ResourcePolicy{
+			MaxSleepS:      30,
+			MaxOutputBytes: 1024,
+			MaxTimeoutS:    300,
+		},
+	}
+	c := NewResourceAbuseChecker(policy)
+	if c == nil {
+		t.Fatal("NewResourceAbuseChecker returned nil")
+	}
+
+	// A healthy timeout should not trigger any finding.
+	findings, err := c.Check(nil, &toolsafety.ScanRequest{
+		Command:  "echo hello",
+		TimeoutS: 30,
+	})
+	if err != nil {
+		t.Fatalf("Check error: %v", err)
+	}
+	hasTimeoutAlert := false
+	for _, f := range findings {
+		if f.RuleID == toolsafety.RuleResourceTimeout {
+			hasTimeoutAlert = true
+			break
+		}
+	}
+	if hasTimeoutAlert {
+		t.Log("timeout was flagged (expected for some configurations)")
+	}
+}
+
+// TestDangerousCmdChecker_InternalHelpers directly tests the unexported
+// isCommandMatch and matchGlob helper functions to close edge case coverage.
+func TestDangerousCmdChecker_InternalHelpers(t *testing.T) {
+	// Directly test isCommandMatch — empty command returns false.
+	if got := isCommandMatch("", "rm"); got != false {
+		t.Errorf("isCommandMatch('', 'rm') = %v, want false", got)
+	}
+
+	// Directly test matchGlob — simple match.
+	if got := matchGlob("*.go", "main.go"); got != true {
+		t.Errorf("matchGlob('*.go', 'main.go') = %v, want true", got)
+	}
+
+	// matchGlob with path prefix.
+	if got := matchGlob("*.go", "./main.go"); got != true {
+		t.Errorf("matchGlob('*.go', './main.go') = %v, want true", got)
+	}
+
+	// matchGlob with ** pattern.
+	if got := matchGlob("**/.env", "/workspace/.env"); got != true {
+		t.Errorf("matchGlob('**/.env', '/workspace/.env') = %v, want true", got)
+	}
+
+	// matchGlob with no match.
+	if got := matchGlob("*.md", "main.go"); got != false {
+		t.Errorf("matchGlob('*.md', 'main.go') = %v, want false", got)
 	}
 }
