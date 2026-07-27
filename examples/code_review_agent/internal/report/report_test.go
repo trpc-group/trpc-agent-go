@@ -143,6 +143,30 @@ func TestMarkdownIncludesAcceptanceSections(t *testing.T) {
 	}
 }
 
+func TestMarkdownEscapesDiffDerivedValues(t *testing.T) {
+	r := review.Report{
+		Task:    review.ReviewTask{ID: "task-1", Status: review.TaskStatusFailed},
+		Summary: "changed file: pkg/\n![remote](https://example.invalid/a.png)",
+		Findings: []review.Finding{{
+			Severity:       review.SeverityHigh,
+			RuleID:         "security.markdown",
+			File:           "pkg/\n<img src=x onerror=alert(1)>.go",
+			Title:          "backtick \x60 and <b>HTML</b>",
+			Evidence:       "\x60\n<img src=x> [link](https://example.invalid)",
+			Recommendation: "<script>alert(1)</script>",
+		}},
+	}
+	md := string(Markdown(r))
+	if strings.Contains(md, "\n![") || strings.Contains(md, "<img") || strings.Contains(md, "<script") {
+		t.Fatalf("Markdown() rendered active markup:\n%s", md)
+	}
+	for _, want := range []string{"\\n", "\\u0060", "&lt;img", "&lt;script"} {
+		if !strings.Contains(md, want) {
+			t.Fatalf("Markdown() missing inert encoding %q:\n%s", want, md)
+		}
+	}
+}
+
 func TestWriteReportsCreatesArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	r := review.Report{Task: review.ReviewTask{ID: "task-1", Status: review.TaskStatusPassed}, Summary: "ok", Conclusion: "passed"}

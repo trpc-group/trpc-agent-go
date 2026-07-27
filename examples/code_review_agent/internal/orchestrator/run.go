@@ -58,6 +58,7 @@ const (
 	dependencyPrepTimeout   = 2 * time.Minute
 	dependencyPrepMaxBytes  = int64(512 << 20)
 	dependencyPrepMaxOutput = 32 << 10
+	reviewSnapshotMaxBytes  = int64(512 << 20)
 	reviewAgentModuleDir    = "examples/code_review_agent"
 	rootModuleDecl          = "module trpc.group/trpc-go/trpc-agent-go"
 )
@@ -924,6 +925,14 @@ func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws c
 		snapshotCleanup()
 		return nil, err
 	}
+	if err := lockReviewSnapshotSource(stageRoot, []string{
+		filepath.Join(stageRoot, ".gopath"),
+		filepath.Join(stageRoot, ".gomodcache"),
+		filepath.Join(stageRoot, ".gocache"),
+	}); err != nil {
+		snapshotCleanup()
+		return nil, err
+	}
 	if err := fs.StageDirectory(ctx, ws, stageRoot, codeexecutor.DirWork, codeexecutor.StageOptions{AllowMount: true}); err != nil {
 		if snapshotCleanup != nil {
 			snapshotCleanup()
@@ -934,6 +943,10 @@ func stageReviewWorkspace(ctx context.Context, fs codeexecutor.WorkspaceFS, ws c
 }
 
 func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), error) {
+	return buildReviewSnapshotWithLimit(ctx, repoRoot, reviewSnapshotMaxBytes)
+}
+
+func buildReviewSnapshotWithLimit(ctx context.Context, repoRoot string, maxBytes int64) (string, func(), error) {
 	files, err := trackedReviewFiles(ctx, repoRoot)
 	if err != nil {
 		return "", nil, err
@@ -943,6 +956,7 @@ func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), 
 		return "", nil, fmt.Errorf("create review snapshot: %w", err)
 	}
 	cleanup := func() { _ = os.RemoveAll(snapshot) }
+	var snapshotBytes int64
 	for _, file := range files {
 		if excludedReviewSnapshotPath(file) {
 			continue
@@ -973,31 +987,53 @@ func buildReviewSnapshot(ctx context.Context, repoRoot string) (string, func(), 
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		data, err := os.ReadFile(src)
-		if err != nil {
+		if maxBytes >= 0 && info.Size() > maxBytes-snapshotBytes {
 			cleanup()
-			return "", nil, fmt.Errorf("read review snapshot file %s: %w", file, err)
+			return "", nil, fmt.Errorf("review snapshot exceeds %d bytes at %s", maxBytes, file)
 		}
 		dest := filepath.Join(snapshot, clean)
 		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 			cleanup()
 			return "", nil, fmt.Errorf("create review snapshot directory: %w", err)
 		}
-		if err := os.WriteFile(dest, data, info.Mode().Perm()); err != nil {
+		written, err := copyReviewSnapshotFile(src, dest, info.Mode().Perm(), maxBytes-snapshotBytes)
+		if err != nil {
 			cleanup()
-			return "", nil, fmt.Errorf("write review snapshot file %s: %w", file, err)
+			return "", nil, fmt.Errorf("copy review snapshot file %s: %w", file, err)
 		}
+		snapshotBytes += written
 	}
 	return snapshot, cleanup, nil
 }
 
+func copyReviewSnapshotFile(src string, dest string, mode os.FileMode, maxBytes int64) (int64, error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return 0, err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+	limited := io.Reader(in)
+	if maxBytes >= 0 {
+		limited = io.LimitReader(in, maxBytes+1)
+	}
+	written, err := io.Copy(out, limited)
+	if err != nil {
+		return written, err
+	}
+	if maxBytes >= 0 && written > maxBytes {
+		_ = os.Remove(dest)
+		return written, fmt.Errorf("review snapshot exceeds %d bytes", maxBytes)
+	}
+	return written, nil
+}
+
 func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, dependencySubdir string) error {
 	moduleDir := filepath.Join(snapshotRoot, filepath.FromSlash(dependencySubdir))
-	if _, err := os.Stat(filepath.Join(moduleDir, "go.mod")); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return fmt.Errorf("stat sandbox go.mod: %w", err)
-	}
 	cacheRoot := filepath.Join(snapshotRoot, ".gopath")
 	modCache := filepath.Join(snapshotRoot, ".gomodcache")
 	buildCache := filepath.Join(snapshotRoot, ".gocache")
@@ -1007,6 +1043,13 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create sandbox dependency cache: %w", err)
 		}
+	}
+	_, moduleErr := os.Stat(filepath.Join(moduleDir, "go.mod"))
+	if errors.Is(moduleErr, os.ErrNotExist) {
+		return makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache})
+	}
+	if moduleErr != nil {
+		return fmt.Errorf("stat sandbox go.mod: %w", moduleErr)
 	}
 	prepCtx, cancel := context.WithTimeout(ctx, dependencyPrepTimeout)
 	defer cancel()
@@ -1025,6 +1068,56 @@ func prepareSandboxDependencies(ctx context.Context, snapshotRoot string, depend
 	}
 	if err := ensureDependencyCacheWithinLimit([]string{cacheRoot, modCache, buildCache}, dependencyPrepMaxBytes); err != nil {
 		return err
+	}
+	if err := makeSandboxCachesWritable(snapshotRoot, []string{cacheRoot, modCache, buildCache}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func makeSandboxCachesWritable(snapshotRoot string, roots []string) error {
+	for _, root := range roots {
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			mode := os.FileMode(0o666)
+			if entry.IsDir() {
+				mode = 0o777
+			}
+			if err := os.Chmod(path, mode); err != nil {
+				return err
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("make sandbox cache writable %s: %w", filepath.Join(snapshotRoot, filepath.Base(root)), err)
+		}
+	}
+	return nil
+}
+
+func lockReviewSnapshotSource(root string, writableRoots []string) error {
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		for _, writableRoot := range writableRoots {
+			if path == writableRoot || strings.HasPrefix(path, writableRoot+string(os.PathSeparator)) {
+				return nil
+			}
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return os.Chmod(path, info.Mode().Perm()&^0o222)
+		}
+		return os.Chmod(path, info.Mode().Perm()&^0o222)
+	})
+	if err != nil {
+		return fmt.Errorf("make review snapshot source read-only: %w", err)
 	}
 	return nil
 }

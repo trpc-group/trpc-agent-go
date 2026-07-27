@@ -25,3 +25,19 @@ func TestTextRedactsSecrets(t *testing.T) {
 		t.Fatalf("redacted text = %q, want two placeholders", got.Text)
 	}
 }
+
+func TestTextRedactsQuotedSecretsWithPunctuation(t *testing.T) {
+	input := "password=\"p@ssword123!\" token='abc:defgh' secret=\"value with spaces!\" api_key=\"key/@:value!\""
+	got := Text(input)
+	if got.Count != 4 {
+		t.Fatalf("Count = %d, want 4", got.Count)
+	}
+	for _, secret := range []string{"p@ssword123!", "abc:defgh", "value with spaces!", "key/@:value!"} {
+		if strings.Contains(got.Text, secret) {
+			t.Fatalf("redacted text leaked %q: %s", secret, got.Text)
+		}
+	}
+	if strings.Count(got.Text, Placeholder) != 4 {
+		t.Fatalf("redacted text = %q, want four placeholders", got.Text)
+	}
+}

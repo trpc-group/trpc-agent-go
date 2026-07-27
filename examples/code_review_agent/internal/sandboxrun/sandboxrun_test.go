@@ -13,6 +13,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunRecordsFailureWithoutPanic(t *testing.T) {
@@ -106,6 +107,33 @@ func TestRunTerminatesRuntimeAfterTimeoutResult(t *testing.T) {
 	}
 	if !runtime.terminated {
 		t.Fatal("runtime was not terminated after timeout")
+	}
+}
+
+type blockingTerminatingRuntime struct{}
+
+func (blockingTerminatingRuntime) Name() string { return "container" }
+
+func (blockingTerminatingRuntime) Run(context.Context, string) (Result, error) {
+	return Result{}, context.Canceled
+}
+
+func (blockingTerminatingRuntime) Terminate(context.Context) {
+	select {}
+}
+
+func TestRunBoundsBlockingRuntimeTermination(t *testing.T) {
+	previous := terminationTimeout
+	terminationTimeout = 20 * time.Millisecond
+	defer func() { terminationTimeout = previous }()
+
+	start := time.Now()
+	run := Run(context.Background(), blockingTerminatingRuntime{}, "task-1", "run-1", "go test ./...", 1024)
+	if run.ErrorType != ErrorCanceled {
+		t.Fatalf("ErrorType = %q, want %q", run.ErrorType, ErrorCanceled)
+	}
+	if elapsed := time.Since(start); elapsed < terminationTimeout {
+		t.Fatalf("Run returned before termination deadline: %s", elapsed)
 	}
 }
 

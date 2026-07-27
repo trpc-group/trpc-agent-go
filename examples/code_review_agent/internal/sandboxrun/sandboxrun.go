@@ -35,6 +35,8 @@ const (
 	ErrorCanceled           = "canceled"
 )
 
+var terminationTimeout = 2 * time.Second
+
 // Result is the raw outcome from a runtime.
 type Result struct {
 	ExitCode        int
@@ -173,7 +175,7 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		var terminateOnce sync.Once
 		terminate = func() {
 			terminateOnce.Do(func() {
-				terminator.Terminate(context.WithoutCancel(ctx))
+				terminateBounded(terminator, ctx)
 			})
 		}
 		stopMonitor := make(chan struct{})
@@ -228,6 +230,20 @@ func Run(ctx context.Context, runtime Runtime, taskID string, id string, command
 		record.ErrorType = ErrorCommandFailed
 	}
 	return record
+}
+
+func terminateBounded(terminator Terminator, ctx context.Context) {
+	terminationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), terminationTimeout)
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		terminator.Terminate(terminationCtx)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-terminationCtx.Done():
+	}
 }
 
 func appendStderr(existing string, extra string, limit int) truncatedText {

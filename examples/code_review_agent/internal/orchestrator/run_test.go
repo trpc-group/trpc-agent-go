@@ -214,16 +214,18 @@ func TestWorkspaceRuntimeEnvProvidesContainerGoCacheDefaults(t *testing.T) {
 		"GOCACHE":     "/tmp/go-build",
 		"GOMODCACHE":  "/go/pkg/mod",
 		"GOPATH":      "/go",
-		"GOPROXY":     "https://proxy.example,direct",
-		"GOSUMDB":     "sum.example",
+		"GOPROXY":     "off",
+		"GOSUMDB":     "off",
 		"GOTOOLCHAIN": "local",
 		"GOFLAGS":     "-mod=mod",
-		"CGO_ENABLED": "0",
 	}
 	for key, value := range want {
 		if env[key] != value {
 			t.Fatalf("%s = %q, want %q", key, env[key], value)
 		}
+	}
+	if _, ok := env["CGO_ENABLED"]; ok {
+		t.Fatalf("container env leaked CGO_ENABLED: %#v", env)
 	}
 }
 
@@ -241,7 +243,7 @@ func TestWorkspaceRuntimeEnvUsesContainerPathsForNonLocalRuntime(t *testing.T) {
 		"GOCACHE":     "/tmp/go-build",
 		"GOMODCACHE":  "/go/pkg/mod",
 		"GOPATH":      "/go",
-		"GOTOOLCHAIN": "auto",
+		"GOTOOLCHAIN": "local",
 	}
 	for key, value := range want {
 		if env[key] != value {
@@ -675,6 +677,80 @@ func TestBuildReviewSnapshotExcludesGitIgnoredAndEnvironmentFiles(t *testing.T) 
 	}
 }
 
+func TestBuildReviewSnapshotRejectsOversizeFileBeforeCopy(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not installed")
+	}
+	repo := t.TempDir()
+	runGitCommand(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "large.txt"), []byte("0123456789"), 0o600); err != nil {
+		t.Fatalf("WriteFile(large.txt) error = %v", err)
+	}
+	runGitCommand(t, repo, "add", "large.txt")
+
+	snapshot, cleanup, err := buildReviewSnapshotWithLimit(context.Background(), repo, 4)
+	if err == nil {
+		if cleanup != nil {
+			cleanup()
+		}
+		t.Fatal("buildReviewSnapshotWithLimit() error = nil, want snapshot size rejection")
+	}
+	if snapshot != "" || cleanup != nil {
+		t.Fatalf("snapshot cleanup = %q/%v, want no materialized snapshot", snapshot, cleanup)
+	}
+	if !strings.Contains(err.Error(), "exceeds 4 bytes") {
+		t.Fatalf("error = %q, want snapshot size message", err)
+	}
+}
+
+func TestReviewSnapshotKeepsSourceReadOnlyAndCachesWritable(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "pkg")
+	cache := filepath.Join(root, ".gocache")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatalf("MkdirAll(source) error = %v", err)
+	}
+	if err := os.MkdirAll(cache, 0o755); err != nil {
+		t.Fatalf("MkdirAll(cache) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "a.go"), []byte("package pkg\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(source) error = %v", err)
+	}
+
+	if err := makeSandboxCachesWritable(root, []string{cache}); err != nil {
+		t.Fatalf("makeSandboxCachesWritable() error = %v", err)
+	}
+	if err := lockReviewSnapshotSource(root, []string{cache}); err != nil {
+		t.Fatalf("lockReviewSnapshotSource() error = %v", err)
+	}
+	sourceInfo, err := os.Stat(filepath.Join(source, "a.go"))
+	if err != nil {
+		t.Fatalf("Stat(source) error = %v", err)
+	}
+	if sourceInfo.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("source mode = %o, want read-only", sourceInfo.Mode().Perm())
+	}
+	cacheInfo, err := os.Stat(cache)
+	if err != nil {
+		t.Fatalf("Stat(cache) error = %v", err)
+	}
+	if cacheInfo.Mode().Perm()&0o222 == 0 {
+		t.Fatalf("cache mode = %o, want writable", cacheInfo.Mode().Perm())
+	}
+}
+
+func TestSkippedOnlySandboxPlanNeedsHumanReview(t *testing.T) {
+	runs := []review.SandboxRun{{
+		Status: sandboxrun.StatusSkipped,
+	}}
+	if got := statusFor(nil, runs); got != review.TaskStatusFailed {
+		t.Fatalf("statusFor() = %q, want failed", got)
+	}
+	if got := conclusionFor(review.TaskStatusFailed, nil, runs); got != "needs_human_review" {
+		t.Fatalf("conclusionFor() = %q, want needs_human_review", got)
+	}
+}
+
 type recordingStageFS struct {
 	src string
 }
@@ -848,6 +924,12 @@ func TestContainerHostConfigDisablesNetworkEgress(t *testing.T) {
 	if cfg.Privileged {
 		t.Fatal("Privileged = true, want false")
 	}
+	if len(cfg.CapDrop) != 1 || cfg.CapDrop[0] != "ALL" {
+		t.Fatalf("CapDrop = %#v, want [ALL]", cfg.CapDrop)
+	}
+	if len(cfg.SecurityOpt) != 1 || cfg.SecurityOpt[0] != "no-new-privileges:true" {
+		t.Fatalf("SecurityOpt = %#v, want no-new-privileges", cfg.SecurityOpt)
+	}
 	if cfg.Resources.Memory != int64(512<<20) {
 		t.Fatalf("Memory = %d, want %d", cfg.Resources.Memory, int64(512<<20))
 	}
@@ -869,6 +951,9 @@ func TestContainerConfigUsesGo124Image(t *testing.T) {
 	}
 	if cfg.WorkingDir != "/" {
 		t.Fatalf("WorkingDir = %q, want /", cfg.WorkingDir)
+	}
+	if cfg.User != containerUser {
+		t.Fatalf("User = %q, want %q", cfg.User, containerUser)
 	}
 }
 

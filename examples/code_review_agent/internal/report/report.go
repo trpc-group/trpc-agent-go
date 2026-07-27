@@ -14,11 +14,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
@@ -141,33 +143,56 @@ func redactStrings(values []string) []string {
 	return redacted
 }
 
+func markdownCode(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		case '\x60':
+			b.WriteString("\\u0060")
+		default:
+			if unicode.IsControl(r) {
+				fmt.Fprintf(&b, "\\u%04x", r)
+				continue
+			}
+			b.WriteRune(r)
+		}
+	}
+	return "`" + html.EscapeString(b.String()) + "`"
+}
+
 // Markdown renders a redacted Markdown report.
 func Markdown(r review.Report) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# Code Review Report\n\n")
-	fmt.Fprintf(&b, "Task `%s` finished with status `%s`.\n\n", r.Task.ID, r.Task.Status)
-	fmt.Fprintf(&b, "## Summary\n\n%s\n\n", r.Summary)
+	fmt.Fprintf(&b, "Task %s finished with status %s.\n\n", markdownCode(r.Task.ID), markdownCode(r.Task.Status))
+	fmt.Fprintf(&b, "## Summary\n\n%s\n\n", markdownCode(r.Summary))
 	writeFindingsSummary(&b, r)
 	fmt.Fprintf(&b, "## Model Plan\n\n")
 	if r.Plan.Model == "" {
 		fmt.Fprintf(&b, "No model plan recorded.\n\n")
 	} else {
-		fmt.Fprintf(&b, "- model: %s\n", r.Plan.Model)
-		fmt.Fprintf(&b, "- provider: %s\n", r.Plan.Provider)
-		fmt.Fprintf(&b, "- source: %s\n", r.Plan.Source)
-		fmt.Fprintf(&b, "- skill: %s\n", r.Plan.Skill)
-		fmt.Fprintf(&b, "- runtime: %s\n", r.Plan.Runtime)
-		fmt.Fprintf(&b, "- commands: %s\n", strings.Join(r.Plan.Commands, ", "))
-		fmt.Fprintf(&b, "- rules: %s\n\n", strings.Join(r.Plan.RuleSources, ", "))
+		fmt.Fprintf(&b, "- model: %s\n", markdownCode(r.Plan.Model))
+		fmt.Fprintf(&b, "- provider: %s\n", markdownCode(r.Plan.Provider))
+		fmt.Fprintf(&b, "- source: %s\n", markdownCode(r.Plan.Source))
+		fmt.Fprintf(&b, "- skill: %s\n", markdownCode(r.Plan.Skill))
+		fmt.Fprintf(&b, "- runtime: %s\n", markdownCode(r.Plan.Runtime))
+		fmt.Fprintf(&b, "- commands: %s\n", markdownCode(strings.Join(r.Plan.Commands, ", ")))
+		fmt.Fprintf(&b, "- rules: %s\n\n", markdownCode(strings.Join(r.Plan.RuleSources, ", ")))
 	}
 	fmt.Fprintf(&b, "## Findings\n\n")
 	if len(r.Findings) == 0 {
 		fmt.Fprintf(&b, "No findings.\n\n")
 	} else {
 		for _, finding := range r.Findings {
-			fmt.Fprintf(&b, "- **%s** `%s` %s:%d - %s\n", finding.Severity, finding.RuleID, finding.File, finding.Line, finding.Title)
-			fmt.Fprintf(&b, "  Evidence: `%s`\n", strings.TrimSpace(finding.Evidence))
-			fmt.Fprintf(&b, "  Recommendation: %s\n", finding.Recommendation)
+			fmt.Fprintf(&b, "- %s %s %s:%d - %s\n", markdownCode(finding.Severity), markdownCode(finding.RuleID), markdownCode(finding.File), finding.Line, markdownCode(finding.Title))
+			fmt.Fprintf(&b, "  Evidence: %s\n", markdownCode(strings.TrimSpace(finding.Evidence)))
+			fmt.Fprintf(&b, "  Recommendation: %s\n", markdownCode(finding.Recommendation))
 		}
 		fmt.Fprintf(&b, "\n")
 	}
@@ -179,8 +204,8 @@ func Markdown(r review.Report) []byte {
 	} else {
 		fmt.Fprintf(&b, "Blocked or escalated decisions: %d.\n\n", blockedDecisionCount(r.PermissionDecisions))
 		for _, decision := range r.PermissionDecisions {
-			fmt.Fprintf(&b, "- `%s` action=%s safety=%s risk=%s blocked=%t reason=%s\n",
-				decision.ToolName, decision.FrameworkAction, decision.SafetyDecision, decision.RiskLevel, decision.Blocked, decision.Reason)
+			fmt.Fprintf(&b, "- %s action=%s safety=%s risk=%s blocked=%t reason=%s\n",
+				markdownCode(decision.ToolName), markdownCode(decision.FrameworkAction), markdownCode(decision.SafetyDecision), markdownCode(decision.RiskLevel), decision.Blocked, markdownCode(decision.Reason))
 		}
 		fmt.Fprintf(&b, "\n")
 	}
@@ -190,8 +215,8 @@ func Markdown(r review.Report) []byte {
 	} else {
 		fmt.Fprintf(&b, "Sandbox duration: %d ms. Output is redacted and capped.\n\n", r.Metrics.SandboxDurationMillis)
 		for _, run := range r.SandboxRuns {
-			fmt.Fprintf(&b, "- `%s` runtime=%s status=%s exit=%d error=%s truncated=%t\n",
-				run.Command, run.Runtime, run.Status, run.ExitCode, run.ErrorType, run.OutputTruncated)
+			fmt.Fprintf(&b, "- %s runtime=%s status=%s exit=%d error=%s truncated=%t\n",
+				markdownCode(run.Command), markdownCode(run.Runtime), markdownCode(run.Status), run.ExitCode, markdownCode(run.ErrorType), run.OutputTruncated)
 		}
 		fmt.Fprintf(&b, "\n")
 	}
@@ -202,9 +227,9 @@ func Markdown(r review.Report) []byte {
 	fmt.Fprintf(&b, "- total duration ms: %d\n", r.Metrics.TotalDurationMillis)
 	fmt.Fprintf(&b, "- sandbox duration ms: %d\n", r.Metrics.SandboxDurationMillis)
 	fmt.Fprintf(&b, "- tool calls: %d\n", r.Metrics.ToolCallCount)
-	fmt.Fprintf(&b, "- severity distribution: %s\n", r.Metrics.SeverityDistributionJSON)
-	fmt.Fprintf(&b, "- error distribution: %s\n", r.Metrics.ErrorDistributionJSON)
-	fmt.Fprintf(&b, "\nConclusion: %s\n", r.Conclusion)
+	fmt.Fprintf(&b, "- severity distribution: %s\n", markdownCode(r.Metrics.SeverityDistributionJSON))
+	fmt.Fprintf(&b, "- error distribution: %s\n", markdownCode(r.Metrics.ErrorDistributionJSON))
+	fmt.Fprintf(&b, "\nConclusion: %s\n", markdownCode(r.Conclusion))
 	return []byte(redact.Text(b.String()).Text)
 }
 
@@ -213,7 +238,7 @@ func writeFindingsSummary(b *strings.Builder, r review.Report) {
 	fmt.Fprintf(b, "| Severity | Count |\n")
 	fmt.Fprintf(b, "| --- | ---: |\n")
 	for _, severity := range []string{review.SeverityCritical, review.SeverityHigh, review.SeverityMedium, review.SeverityLow} {
-		fmt.Fprintf(b, "| %s | %d |\n", severity, r.Metrics.SeverityDistribution[severity])
+		fmt.Fprintf(b, "| %s | %d |\n", markdownCode(severity), r.Metrics.SeverityDistribution[severity])
 	}
 	fmt.Fprintf(b, "\n")
 
@@ -228,7 +253,7 @@ func writeFindingsSummary(b *strings.Builder, r review.Report) {
 	fmt.Fprintf(b, "| Category | Count |\n")
 	fmt.Fprintf(b, "| --- | ---: |\n")
 	for _, category := range sortedIntKeys(categoryCounts) {
-		fmt.Fprintf(b, "| %s | %d |\n", category, categoryCounts[category])
+		fmt.Fprintf(b, "| %s | %d |\n", markdownCode(category), categoryCounts[category])
 	}
 	fmt.Fprintf(b, "\n")
 }
@@ -246,7 +271,7 @@ func writeFixRecommendations(b *strings.Builder, findings []review.Finding) {
 			continue
 		}
 		seen[key] = true
-		fmt.Fprintf(b, "- `%s`: %s\n", finding.RuleID, finding.Recommendation)
+		fmt.Fprintf(b, "- %s: %s\n", markdownCode(finding.RuleID), markdownCode(finding.Recommendation))
 	}
 	if len(seen) == 0 {
 		fmt.Fprintf(b, "No executable recommendations recorded.\n")
@@ -267,8 +292,8 @@ func writeHumanReview(b *strings.Builder, findings []review.Finding) {
 		return
 	}
 	for _, finding := range items {
-		fmt.Fprintf(b, "- `%s` %s:%d status=%s confidence=%.2f title=%s\n",
-			finding.RuleID, finding.File, finding.Line, finding.Status, finding.Confidence, finding.Title)
+		fmt.Fprintf(b, "- %s %s:%d status=%s confidence=%.2f title=%s\n",
+			markdownCode(finding.RuleID), markdownCode(finding.File), finding.Line, markdownCode(finding.Status), finding.Confidence, markdownCode(finding.Title))
 	}
 	fmt.Fprintf(b, "\n")
 }
