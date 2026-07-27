@@ -365,6 +365,51 @@ func TestWorkspaceInitManager_StaleHookSkipsCleanup(t *testing.T) {
 	require.Zero(t, inner.cleanupCalls)
 }
 
+func TestWorkspaceInitManager_OrdinaryHookErrorFencesCleanupByInstance(
+	t *testing.T,
+) {
+	timeoutErr := errors.New("timeout after command submission")
+
+	t.Run("rotation skips cleanup", func(t *testing.T) {
+		inner := &cleanupInstanceWM{instanceID: "instance-1"}
+		eng := NewEngine(inner, &recordingFS{}, &recordingRunner{})
+		mgr := newWorkspaceInitEngine(
+			eng,
+			[]WorkspaceInitHook{
+				func(context.Context, WorkspaceInitEnv) error {
+					inner.instanceID = "instance-2"
+					return timeoutErr
+				},
+			},
+		).Manager()
+
+		_, err := mgr.CreateWorkspace(
+			context.Background(), "x", WorkspacePolicy{},
+		)
+		require.ErrorIs(t, err, timeoutErr)
+		require.Zero(t, inner.cleanupCalls)
+	})
+
+	t.Run("stable instance still cleans up", func(t *testing.T) {
+		inner := &cleanupInstanceWM{instanceID: "instance-1"}
+		eng := NewEngine(inner, &recordingFS{}, &recordingRunner{})
+		mgr := newWorkspaceInitEngine(
+			eng,
+			[]WorkspaceInitHook{
+				func(context.Context, WorkspaceInitEnv) error {
+					return timeoutErr
+				},
+			},
+		).Manager()
+
+		_, err := mgr.CreateWorkspace(
+			context.Background(), "x", WorkspacePolicy{},
+		)
+		require.ErrorIs(t, err, timeoutErr)
+		require.Equal(t, 1, inner.cleanupCalls)
+	})
+}
+
 type cleanupRecordingWM struct {
 	cleanupCalls int
 }
@@ -378,6 +423,28 @@ func (m *cleanupRecordingWM) CreateWorkspace(
 func (m *cleanupRecordingWM) Cleanup(context.Context, Workspace) error {
 	m.cleanupCalls++
 	return nil
+}
+
+type cleanupInstanceWM struct {
+	instanceID   WorkspaceInstanceID
+	cleanupCalls int
+}
+
+func (m *cleanupInstanceWM) CreateWorkspace(
+	_ context.Context, id string, _ WorkspacePolicy,
+) (Workspace, error) {
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *cleanupInstanceWM) Cleanup(context.Context, Workspace) error {
+	m.cleanupCalls++
+	return nil
+}
+
+func (m *cleanupInstanceWM) InstanceID(
+	context.Context,
+) (WorkspaceInstanceID, error) {
+	return m.instanceID, nil
 }
 
 type cleanupFailWM struct {

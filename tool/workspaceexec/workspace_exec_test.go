@@ -1118,6 +1118,32 @@ func (p writeFailProgramSession) Write(string, bool) error { return p.err }
 func (p writeFailProgramSession) Kill(time.Duration) error { return nil }
 func (p writeFailProgramSession) Close() error             { return nil }
 
+type staleWriteRunner struct{}
+
+func (staleWriteRunner) RunProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{Stdout: "ok"}, nil
+}
+
+func (staleWriteRunner) StartProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	return writeFailProgramSession{
+		poll: codeexecutor.ProgramPoll{
+			Status: codeexecutor.ProgramStatusRunning,
+		},
+		err: fmt.Errorf(
+			"old session backend is gone: %w",
+			codeexecutor.ErrWorkspaceStale,
+		),
+	}, nil
+}
+
 type staleRetryManager struct {
 	mu         sync.Mutex
 	instance   int
@@ -1484,6 +1510,49 @@ func TestExecTool_WorkspaceStaleBeforeInteractiveStartRetriesOnce(
 	attempts, starts := runner.startCounts()
 	require.Equal(t, 2, attempts)
 	require.Equal(t, 1, starts)
+}
+
+func TestExecTool_StaleSessionWriteInvalidatesLegacyWorkspace(
+	t *testing.T,
+) {
+	manager := &legacyABAManager{}
+	exec := &staleRetryExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			&nonInteractiveFS{},
+			staleWriteRunner{},
+		),
+	}
+	execTool := NewExecTool(exec)
+	startArgs, err := json.Marshal(execInput{
+		Command:    "interactive",
+		Background: true,
+	})
+	require.NoError(t, err)
+
+	started, err := execTool.Call(context.Background(), startArgs)
+	require.NoError(t, err)
+	require.Equal(t, "write-fail", started.(execOutput).SessionID)
+	require.Equal(t, 1, manager.createCount())
+
+	writeArgs, err := json.Marshal(writeInput{
+		SessionID: "write-fail",
+		Chars:     "must-not-replay",
+	})
+	require.NoError(t, err)
+	_, err = NewWriteStdinTool(execTool).Call(
+		context.Background(),
+		writeArgs,
+	)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	nextArgs, err := json.Marshal(execInput{Command: "printf ok"})
+	require.NoError(t, err)
+	got, err := execTool.Call(context.Background(), nextArgs)
+	require.NoError(t, err)
+	require.Equal(t, "ok", got.(execOutput).Output)
+	require.Equal(t, 2, manager.createCount(),
+		"the next call must rebuild exactly once")
 }
 
 func TestExecTool_WorkspaceStaleTwiceStops(t *testing.T) {

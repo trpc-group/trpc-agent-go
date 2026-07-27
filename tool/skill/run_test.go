@@ -4242,17 +4242,93 @@ func TestRunTool_PreparationStaleInvalidatesLegacyHandleAndRetries(
 	inv := agent.NewInvocation(agent.WithInvocationMessage(user))
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 
-	_, ws, _, _, staged, warnings, err := rt.prepareWorkspaceForRun(
+	prepared, err := rt.prepareWorkspaceForRun(
 		ctx,
 		runInput{Skill: testSkillName},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "skill-workspace", ws.ID)
-	require.Len(t, staged, 1)
-	require.Empty(t, warnings)
+	require.Equal(t, "skill-workspace", prepared.handle.Workspace.ID)
+	require.Len(t, prepared.staged, 1)
+	require.Empty(t, prepared.warnings)
 	require.Equal(t, 2, manager.creates,
 		"stale legacy cache entry must be invalidated before retry")
 	require.Equal(t, 2, fs.collectCalls)
+}
+
+func TestRunTool_RunStaleInvalidatesLegacyHandleAndRetries(
+	t *testing.T,
+) {
+	manager := &legacySkillRetryManager{}
+	runner := &staleOnceSkillRunner{}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: runner,
+	}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{
+				WorkspaceSkillDir: path.Join(
+					codeexecutor.DirSkills,
+					testSkillName,
+				),
+			}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, 2, runner.calls)
+	require.Equal(t, 2, manager.creates,
+		"pre-start stale must rebuild the exact legacy cache entry")
+}
+
+func TestRunTool_OutputStaleInvalidatesWithoutReplayingCommand(
+	t *testing.T,
+) {
+	manager := &legacySkillRetryManager{}
+	fs := &staleOnceSkillFS{}
+	runner := &stubRunner{
+		res: codeexecutor.RunResult{ExitCode: 0},
+	}
+	eng := &managedEngine{m: manager, f: fs, r: runner}
+	rt := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	args, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+
+	_, err = rt.Call(context.Background(), args)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	require.Equal(t, 1, runner.calls,
+		"the completed command must not be replayed")
+	require.Equal(t, 1, manager.creates)
+
+	_, err = rt.Call(context.Background(), args)
+	require.NoError(t, err)
+	require.Equal(t, 2, runner.calls)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace")
 }
 
 func TestSanitizeUserFileName(t *testing.T) {
@@ -5520,6 +5596,25 @@ func (r *stubRunner) RunProgram(
 	return r.res, r.err
 }
 
+type staleOnceSkillRunner struct {
+	calls int
+}
+
+func (r *staleOnceSkillRunner) RunProgram(
+	_ context.Context,
+	_ codeexecutor.Workspace,
+	_ codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	r.calls++
+	if r.calls == 1 {
+		return codeexecutor.RunResult{}, fmt.Errorf(
+			"program did not start: %w",
+			codeexecutor.ErrWorkspaceStale,
+		)
+	}
+	return codeexecutor.RunResult{ExitCode: 0}, nil
+}
+
 type stubEngine struct {
 	f codeexecutor.WorkspaceFS
 	r codeexecutor.ProgramRunner
@@ -5830,7 +5925,7 @@ func TestRunTool_prepareWorkspaceForRun_CreateWorkspaceError(t *testing.T) {
 		}},
 	)
 
-	_, _, _, _, _, _, err := rt.prepareWorkspaceForRun(
+	_, err := rt.prepareWorkspaceForRun(
 		context.Background(),
 		runInput{Skill: testSkillName},
 	)

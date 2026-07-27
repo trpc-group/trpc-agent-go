@@ -273,10 +273,41 @@ func (m *workspaceInstanceInitManager) InstanceID(
 	return m.provider.InstanceID(ctx)
 }
 
+func (m *workspaceInstanceInitManager) CreateWorkspace(
+	ctx context.Context,
+	execID string,
+	pol WorkspacePolicy,
+) (Workspace, error) {
+	instanceID, err := m.provider.InstanceID(ctx)
+	if err != nil {
+		return Workspace{}, err
+	}
+	if instanceID == "" {
+		return Workspace{}, errWorkspaceInstanceIDEmpty
+	}
+	return m.workspaceInitManager.createWorkspace(
+		ctx,
+		execID,
+		pol,
+		m.provider,
+		instanceID,
+	)
+}
+
 func (m *workspaceInitManager) CreateWorkspace(
 	ctx context.Context,
 	execID string,
 	pol WorkspacePolicy,
+) (Workspace, error) {
+	return m.createWorkspace(ctx, execID, pol, nil, "")
+}
+
+func (m *workspaceInitManager) createWorkspace(
+	ctx context.Context,
+	execID string,
+	pol WorkspacePolicy,
+	provider WorkspaceInstanceProvider,
+	instanceID WorkspaceInstanceID,
 ) (Workspace, error) {
 	ws, err := m.inner.CreateWorkspace(ctx, execID, pol)
 	if err != nil {
@@ -305,6 +336,16 @@ func (m *workspaceInitManager) CreateWorkspace(
 				context.WithoutCancel(ctx),
 				workspaceInitCleanupTimeout,
 			)
+			if provider != nil {
+				currentID, probeErr := provider.InstanceID(cleanCtx)
+				if probeErr != nil || currentID != instanceID {
+					cancel()
+					// The deterministic workspace path may now refer to a
+					// replacement instance. Preserve the original hook error,
+					// but do not risk deleting the replacement.
+					return Workspace{}, hookErr
+				}
+			}
 			cerr := m.inner.Cleanup(cleanCtx, ws)
 			cancel()
 			if cerr != nil {

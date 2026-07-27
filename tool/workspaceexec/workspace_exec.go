@@ -100,6 +100,7 @@ type execSession struct {
 	mu sync.Mutex
 
 	proc        codeexecutor.ProgramSession
+	handle      codeexecutor.WorkspaceHandle
 	exitedAt    time.Time
 	finalized   bool
 	finalizedAt time.Time
@@ -890,7 +891,10 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{proc: proc})
+	t.putSession(proc.ID(), &execSession{
+		proc:   proc,
+		handle: req.workspaceHandle,
+	})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
 	out = t.limitOutput(out)
@@ -938,6 +942,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 	appendNewline := firstBoolValue(in.AppendNewline, in.Submit)
 	if in.Chars != "" || appendNewline {
 		if err := sess.proc.Write(in.Chars, appendNewline); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 	}
@@ -979,6 +984,7 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 	poll := sess.proc.Poll(nil)
 	if poll.Status == codeexecutor.ProgramStatusRunning {
 		if err := sess.proc.Kill(programsession.DefaultSessionKill); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 		status = "killed"
@@ -1096,6 +1102,7 @@ func (t *ExecTool) finalizeAndRemoveSession(id string) error {
 	}
 	t.markSessionFinalized(sess)
 	if err := sess.proc.Close(); err != nil {
+		t.invalidateSessionWorkspaceIfStale(sess, err)
 		return err
 	}
 	_, err = t.removeSession(id)
@@ -1121,8 +1128,20 @@ func (t *ExecTool) cleanupExpiredLocked() {
 		if expired {
 			if err := sess.proc.Close(); err == nil {
 				delete(t.sessions, id)
+			} else {
+				t.invalidateSessionWorkspaceIfStale(sess, err)
 			}
 		}
+	}
+}
+
+func (t *ExecTool) invalidateSessionWorkspaceIfStale(
+	sess *execSession,
+	err error,
+) {
+	if t != nil && t.resolver != nil &&
+		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.resolver.InvalidateWorkspaceHandle(sess.handle)
 	}
 }
 

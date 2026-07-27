@@ -328,6 +328,72 @@ func TestExecArtifactsStateDelta(t *testing.T) {
 	require.Equal(t, "artifact://a.txt@3", got.Artifacts[0].Ref)
 }
 
+func TestExecTool_StaleWriteInvalidatesLegacyWorkspace(t *testing.T) {
+	manager := &legacySkillRetryManager{}
+	session := &stubProgramSession{
+		id: "stale-write",
+		polls: []codeexecutor.ProgramPoll{{
+			Status: codeexecutor.ProgramStatusRunning,
+			Output: "ready",
+		}},
+		writeErr: codeexecutor.ErrWorkspaceStale,
+	}
+	runner := &staleWriteSkillRunner{session: session}
+	eng := &managedEngine{
+		m: manager,
+		f: &stubFS{},
+		r: runner,
+	}
+	runTool := NewRunTool(
+		&mockRepo{},
+		&engineExec{eng: eng},
+		WithSkillStager(skillStagerFunc(func(
+			context.Context,
+			SkillStageRequest,
+		) (SkillStageResult, error) {
+			return SkillStageResult{WorkspaceSkillDir: "."}, nil
+		})),
+	)
+	execTool := NewExecTool(runTool)
+	startArgs, err := jsonMarshal(execInput{
+		runInput: runInput{
+			Skill:   testSkillName,
+			Command: echoOK,
+		},
+	})
+	require.NoError(t, err)
+	reader, err := execTool.StreamableCall(
+		context.Background(),
+		startArgs,
+	)
+	require.NoError(t, err)
+	_, started := drainExecStream(t, reader)
+	require.Equal(t, "stale-write", started.SessionID)
+	require.Equal(t, 1, manager.creates)
+
+	writeArgs, err := jsonMarshal(sessionWriteInput{
+		SessionID: "stale-write",
+		Chars:     "must-not-replay",
+	})
+	require.NoError(t, err)
+	_, err = NewWriteStdinTool(execTool).StreamableCall(
+		context.Background(),
+		writeArgs,
+	)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	runArgs, err := jsonMarshal(runInput{
+		Skill:   testSkillName,
+		Command: echoOK,
+	})
+	require.NoError(t, err)
+	_, err = runTool.Call(context.Background(), runArgs)
+	require.NoError(t, err)
+	require.Equal(t, 2, manager.creates)
+	require.Equal(t, []string{"must-not-replay"}, session.writes,
+		"stdin must not be replayed after an uncertain session write")
+}
+
 type stubProgramSession struct {
 	mu         sync.Mutex
 	id         string
@@ -335,6 +401,7 @@ type stubProgramSession struct {
 	logOutput  string
 	runResult  codeexecutor.RunResult
 	writes     []string
+	writeErr   error
 	killErr    error
 	killCalled bool
 	closeCount int
@@ -412,7 +479,7 @@ func (s *stubProgramSession) Write(
 		data += "\n"
 	}
 	s.writes = append(s.writes, data)
-	return nil
+	return s.writeErr
 }
 
 func (s *stubProgramSession) Kill(grace time.Duration) error {
@@ -432,6 +499,26 @@ func (s *stubProgramSession) Close() error {
 
 func (s *stubProgramSession) RunResult() codeexecutor.RunResult {
 	return s.runResult
+}
+
+type staleWriteSkillRunner struct {
+	session *stubProgramSession
+}
+
+func (*staleWriteSkillRunner) RunProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.RunProgramSpec,
+) (codeexecutor.RunResult, error) {
+	return codeexecutor.RunResult{ExitCode: 0}, nil
+}
+
+func (r *staleWriteSkillRunner) StartProgram(
+	context.Context,
+	codeexecutor.Workspace,
+	codeexecutor.InteractiveProgramSpec,
+) (codeexecutor.ProgramSession, error) {
+	return r.session, nil
 }
 
 type logOnlyProgramSession struct {
