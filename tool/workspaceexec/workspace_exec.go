@@ -49,6 +49,10 @@ const (
 	envWorkspaceExecDeniedCommands  = "TRPC_AGENT_WORKSPACE_EXEC_DENIED_COMMANDS"
 )
 
+type contextEngineProvider interface {
+	EngineWithContext(context.Context) (codeexecutor.Engine, error)
+}
+
 // ExecTool executes shell commands in the shared executor workspace.
 type ExecTool struct {
 	exec      codeexecutor.CodeExecutor
@@ -973,27 +977,13 @@ func (t *ExecTool) liveEngine(ctx context.Context) (codeexecutor.Engine, error) 
 	if t == nil || t.exec == nil {
 		return nil, errors.New("workspace_exec requires an executor")
 	}
-	if provider, ok := t.exec.(interface {
-		EngineWithContext(context.Context) (codeexecutor.Engine, error)
-	}); ok {
+	if provider, ok := t.exec.(contextEngineProvider); ok {
 		eng, err := provider.EngineWithContext(ctx)
 		if err != nil {
 			return nil, err
 		}
-		if eng == nil {
-			return nil, errors.New(
-				"workspace_exec requires an executor with live workspace support",
-			)
-		}
-		if eng.Manager() == nil {
-			return nil, errors.New(
-				"workspace_exec requires an executor with live workspace support",
-			)
-		}
-		if eng.Runner() == nil {
-			return nil, errors.New(
-				"workspace_exec requires an executor with live workspace support",
-			)
+		if eng == nil || eng.Manager() == nil || eng.Runner() == nil {
+			return nil, errors.New("workspace_exec requires an executor with live workspace support")
 		}
 		return eng, nil
 	}
@@ -1099,9 +1089,7 @@ func supportsInteractiveSessions(exec codeexecutor.CodeExecutor) bool {
 	if exec == nil {
 		return false
 	}
-	if _, ok := exec.(interface {
-		EngineWithContext(context.Context) (codeexecutor.Engine, error)
-	}); ok {
+	if _, ok := exec.(contextEngineProvider); ok {
 		return true
 	}
 	provider, ok := exec.(codeexecutor.EngineProvider)
