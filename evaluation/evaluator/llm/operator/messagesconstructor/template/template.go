@@ -10,9 +10,11 @@
 package template
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/messagesconstructor"
@@ -207,15 +209,25 @@ func resolveMetricValue(evalMetric *metric.EvalMetric, source *metricllm.Templat
 		if len(rubrics) == 0 {
 			return "", fmt.Errorf("metric rubrics are empty")
 		}
-		raw, err := json.Marshal(rubrics)
+		raw, err := encodeJSONForPrompt(rubrics)
 		if err != nil {
 			return "", fmt.Errorf("marshal metric rubrics: %w", err)
 		}
-		return string(raw), nil
+		return raw, nil
 	default:
 		return "", fmt.Errorf("unsupported source %s.%s",
 			metricllm.TemplateVariableScopeMetric, source.Field)
 	}
+}
+
+func encodeJSONForPrompt(value any) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }
 
 func visibleRubrics(rubrics []*metricllm.Rubric) []*metricllm.Rubric {

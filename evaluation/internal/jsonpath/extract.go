@@ -10,8 +10,10 @@
 package jsonpath
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 )
@@ -24,7 +26,16 @@ type segment struct {
 // Extract extracts a rendered value from raw JSON using a restricted path subset.
 func Extract(rawValue, path string) (string, error) {
 	var value any
-	if err := json.Unmarshal([]byte(rawValue), &value); err != nil {
+	decoder := json.NewDecoder(strings.NewReader(rawValue))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return "", fmt.Errorf("parse source json for path %q: %w", path, err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return "", fmt.Errorf("parse source json for path %q: multiple JSON values", path)
+		}
 		return "", fmt.Errorf("parse source json for path %q: %w", path, err)
 	}
 	segments, err := parse(path)
@@ -87,6 +98,9 @@ func parse(path string) ([]segment, error) {
 			segments = append(segments, segment{index: &index})
 			i = next
 		default:
+			if len(segments) != 0 || i != 0 {
+				return nil, fmt.Errorf("json path %q missing delimiter before key", path)
+			}
 			key, next, err := parseKey(path, i)
 			if err != nil {
 				return nil, err
@@ -147,10 +161,20 @@ func renderValue(value any) (string, error) {
 		}
 		return "false", nil
 	default:
-		raw, err := json.Marshal(v)
+		raw, err := encodeJSON(v)
 		if err != nil {
 			return "", fmt.Errorf("marshal json path value: %w", err)
 		}
-		return string(raw), nil
+		return raw, nil
 	}
+}
+
+func encodeJSON(value any) (string, error) {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(buf.String(), "\n"), nil
 }

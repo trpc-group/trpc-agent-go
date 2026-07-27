@@ -64,6 +64,18 @@ func TestExtractReturnsRenderedValue(t *testing.T) {
 			path:  "$.value",
 			value: "null",
 		},
+		{
+			name:  "large number",
+			raw:   `{"id":9007199254740993}`,
+			path:  "$.id",
+			value: "9007199254740993",
+		},
+		{
+			name:  "object keeps comparison characters",
+			raw:   `{"rule":{"text":"x < y > z & a"}}`,
+			path:  "$.rule",
+			value: `{"text":"x < y > z & a"}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -116,6 +128,12 @@ func TestExtractRejectsInvalidInputs(t *testing.T) {
 			raw:     `{"items":{}}`,
 			path:    "$.items[0]",
 			wantErr: "expects array before index 0",
+		},
+		{
+			name:    "missing delimiter after index",
+			raw:     `{"items":[{"name":"first"}]}`,
+			path:    "$.items[0]name",
+			wantErr: "missing delimiter",
 		},
 	}
 	for _, tt := range tests {

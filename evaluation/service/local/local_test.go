@@ -4271,6 +4271,7 @@ func TestLocalEvaluateUsesEvalCaseResultAggregator(t *testing.T) {
 	assert.Same(t, inferenceResult, aggregator.input.InferenceResult)
 	require.Len(t, aggregator.input.EvalMetrics, 1)
 	assert.Equal(t, fakeEval.name, aggregator.input.EvalMetrics[0].MetricName)
+	assert.Equal(t, 0.8, aggregator.input.EvalMetrics[0].Threshold)
 	assert.Equal(t, map[string]any{"weight": 0.7}, aggregator.input.EvalMetrics[0].Extension)
 	require.Len(t, aggregator.input.MetricResults, 1)
 	assert.Equal(t, status.EvalStatusFailed, aggregator.input.MetricResults[0].EvalStatus)

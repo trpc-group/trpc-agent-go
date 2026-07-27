@@ -1738,7 +1738,7 @@ The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in r
 
 `actual.userContent`, `actual.finalResponse`, and `expected.finalResponse` render the current scoring turn's user input, actual final response, and expected final response respectively. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID` to specify the trace step `NodeID`; the resolver selects the last matching step from the current invocation's `executionTrace.steps` and reads `Input.Text` or `Output.Text`. When using a trace source, the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`. If the current actual invocation has no `ExecutionTrace`, evaluation fails. `expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly. `metric.rubrics` renders the effective `criterion.llmJudge.rubrics` for the current metric as a JSON string, including case-level rubrics after merging.
 
-`source.path` is optional. It extracts a JSON subfield after the source value is resolved. It supports a restricted JSONPath subset: root selector `$`, object fields such as `.field`, and array indexes such as `[index]`, for example `$[0].content.text`. Wildcards and filters are not supported. Extracted strings are rendered as-is; extracted objects or arrays are encoded back to JSON strings.
+`source.path` is optional. It extracts a JSON subfield after the source value is resolved. It supports a restricted JSONPath subset: root selector `$`, object fields such as `.field`, and array indexes such as `[index]`, for example `$[0].content.text`. Quoted bracket keys, wildcards, filters, field names containing dots, and missing delimiters after array indexes are not supported. If the resolved source is not valid JSON, or if the path is invalid, missing, out of range, or reaches the wrong type, evaluation fails. Extracted strings are rendered as-is; extracted objects or arrays are encoded back to JSON strings.
 
 For example, a template can bind the first rubric text from the current metric:
 
@@ -2545,7 +2545,7 @@ Variable bindings support the following sources:
 
 Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly. `metric.rubrics` renders the effective `criterion.llmJudge.rubrics` for the current metric as a JSON string, including case-level rubrics after merging.
 
-`source.path` can extract a JSON subfield from the resolved source value. It supports restricted JSONPath forms such as `$`, `.field`, and `[index]`. For example:
+`source.path` can extract a JSON subfield from the resolved source value. It supports restricted JSONPath forms such as `$`, `.field`, and `[index]`; quoted bracket keys, wildcards, filters, field names containing dots, and missing delimiters after array indexes are not supported. If the source is not valid JSON or path traversal fails, evaluation fails. For example:
 
 ```json
 {

@@ -1736,7 +1736,7 @@ type RubricContent struct {
 
 其中 `actual.userContent`、`actual.finalResponse`、`expected.finalResponse` 分别渲染当前评分轮的用户输入、实际最终回答和预期最终回答；`actual.traceStepInput` 与 `actual.traceStepOutput` 需要在 `source.selector.nodeID` 中指定 trace step 的 `NodeID`，解析器会在当前 invocation 的 `executionTrace.steps` 中选择最后一个匹配 step，并分别读取 `Input.Text` 或 `Output.Text`。使用 trace source 时，发起评估需要传入 `agent.WithExecutionTraceEnabled(true)`；如果当前 actual invocation 没有 `ExecutionTrace`，评估会报错。`expected.finalResponse` 要求当前预期轮必须存在 `finalResponse`；如果模板绑定了该字段，但预期轮只有占位 `userContent`、没有 `finalResponse`，评估会直接报错。`metric.rubrics` 会把当前指标生效的 `criterion.llmJudge.rubrics` 渲染为 JSON 字符串，包含 case 级 rubric 合并后的结果。
 
-`source.path` 是可选字段，用于在来源值解析完成后继续提取 JSON 子字段。它支持受限 JSONPath：根选择器 `$`、对象字段 `.field`、数组下标 `[index]`，例如 `$[0].content.text`；不支持通配符或过滤表达式。提取到字符串时会原样渲染，提取到对象或数组时会重新编码为 JSON 字符串。
+`source.path` 是可选字段，用于在来源值解析完成后继续提取 JSON 子字段。它支持受限 JSONPath：根选择器 `$`、对象字段 `.field`、数组下标 `[index]`，例如 `$[0].content.text`；不支持带引号的方括号 key、通配符、过滤表达式、字段名中包含点号的 key，也不支持数组下标后省略分隔符。来源值不是合法 JSON、路径语法非法、字段或下标不存在、越界或类型不匹配时，评估会失败。提取到字符串时会原样渲染，提取到对象或数组时会重新编码为 JSON 字符串。
 
 例如，模板可以把当前指标的第一条 rubric 文本绑定为一个变量：
 
@@ -2542,7 +2542,7 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 
 模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`actual.traceStepInput` 与 `actual.traceStepOutput` 需要配置 `source.selector.nodeID`，解析器会选择当前 invocation execution trace 中最后一个 `NodeID` 匹配的 step。使用 trace source 时，评估调用方需要开启 `agent.WithExecutionTraceEnabled(true)`；`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`，如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。`metric.rubrics` 会把当前指标生效的 `criterion.llmJudge.rubrics` 渲染为 JSON 字符串，包含 case 级 rubric 合并后的结果。
 
-`source.path` 可以从来源值中继续提取 JSON 子字段，支持 `$`、`.field`、`[index]` 这类受限 JSONPath。例如：
+`source.path` 可以从来源值中继续提取 JSON 子字段，支持 `$`、`.field`、`[index]` 这类受限 JSONPath；不支持带引号的方括号 key、通配符、过滤表达式、字段名中包含点号的 key，也不支持数组下标后省略分隔符。来源值不是合法 JSON 或路径解析失败时，评估会失败。例如：
 
 ```json
 {

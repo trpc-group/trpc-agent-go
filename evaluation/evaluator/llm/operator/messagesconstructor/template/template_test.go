@@ -152,13 +152,16 @@ func TestConstructMessagesRendersMetricRubrics(t *testing.T) {
 		},
 	)
 	evalMetric.Criterion.LLMJudge.Rubrics = []*criterionllm.Rubric{
-		{ID: "r1", Content: &criterionllm.RubricContent{Text: "Must be correct."}},
+		{ID: "r1", Content: &criterionllm.RubricContent{Text: "Must preserve x < y > z & value."}},
 	}
 	messages, err := constructor.ConstructMessages(context.Background(), nil, nil, evalMetric)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].Content, `"id":"r1"`)
-	assert.Contains(t, messages[0].Content, `"text":"Must be correct."`)
+	assert.Contains(t, messages[0].Content, `"text":"Must preserve x < y > z & value."`)
+	assert.NotContains(t, messages[0].Content, `\u003c`)
+	assert.NotContains(t, messages[0].Content, `\u003e`)
+	assert.NotContains(t, messages[0].Content, `\u0026`)
 }
 
 func TestConstructMessagesAppliesJSONPath(t *testing.T) {
@@ -166,7 +169,7 @@ func TestConstructMessagesAppliesJSONPath(t *testing.T) {
 	actual := &evalset.Invocation{
 		ExecutionTrace: &agenttrace.Trace{
 			Steps: []agenttrace.Step{
-				{NodeID: "fetch", Output: &agenttrace.Snapshot{Text: `{"payload":{"answer":"Paris","evidence":{"city":"Paris"}}}`}},
+				{NodeID: "fetch", Output: &agenttrace.Snapshot{Text: `{"payload":{"answer":"Paris","evidence":{"city":"Paris","comparison":"x < y > z & a"}}}`}},
 			},
 		},
 	}
@@ -203,7 +206,10 @@ func TestConstructMessagesAppliesJSONPath(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].Content, "Answer: Paris")
-	assert.Contains(t, messages[0].Content, `Evidence: {"city":"Paris"}`)
+	assert.Contains(t, messages[0].Content, `Evidence: {"city":"Paris","comparison":"x < y > z & a"}`)
+	assert.NotContains(t, messages[0].Content, `\u003c`)
+	assert.NotContains(t, messages[0].Content, `\u003e`)
+	assert.NotContains(t, messages[0].Content, `\u0026`)
 }
 
 func TestConstructMessagesRejectsDuplicateBindings(t *testing.T) {
