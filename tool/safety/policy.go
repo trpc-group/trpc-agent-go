@@ -83,10 +83,26 @@ type CommandPolicy struct {
 }
 
 // NetworkPolicy configures outbound-network detection.
+//
+// Contract: allowed_domains statically vets the destinations named in the
+// command itself — the initial request URL and every host smuggled through a
+// connection-redirect/proxy option. It is an initial-target check, not a full
+// egress boundary: a whitelisted endpoint can still HTTP-redirect the client
+// to a non-whitelisted host at runtime (curl only with -L/--location; wget by
+// default). Enable RequireRedirectFree to fail redirect-following invocations
+// closed, or enforce the boundary at runtime (sandbox egress rules).
 type NetworkPolicy struct {
 	DownloadCommands []string `yaml:"download_commands" json:"download_commands"`
 	AllowedDomains   []string `yaml:"allowed_domains" json:"allowed_domains"`
 	OnNonWhitelisted Action   `yaml:"on_non_whitelisted" json:"on_non_whitelisted"`
+	// RequireRedirectFree upgrades allowed_domains from an initial-target check
+	// to a static egress boundary: a curl invocation that follows redirects
+	// (-L/--location/--location-trusted) and a wget invocation that does not
+	// disable them (--max-redirect=0; wget follows redirects by default) fail
+	// closed via OnNonWhitelisted, because the redirect target cannot be
+	// statically verified. Off by default so common whitelisted usage
+	// ("curl -sSL https://host", plain wget) stays allowed.
+	RequireRedirectFree bool `yaml:"require_redirect_free" json:"require_redirect_free"`
 	// CurlRequireDisabledConfig fails a curl invocation closed (via
 	// OnNonWhitelisted) unless its first option is -q/--disable. curl reads an
 	// implicit default config (~/.curlrc, $CURL_HOME/.curlrc,
@@ -185,14 +201,18 @@ type domainMatcher struct {
 }
 
 // DefaultPolicy returns the built-in safe defaults: unparsable commands are
-// denied, anything not matched by a rule is allowed, non-whitelisted network
-// access is denied, and the backend map points at the real tool names. The
-// defaults are protective out of the box — obviously destructive binaries and
-// privilege escalation are denied, well-known credential paths are forbidden
-// and common secret shapes are flagged/redacted — while leaving no command
-// allow-list, so ordinary commands still run. Note that a non-empty denied
-// list activates shellsafe, which also rejects shell wrappers (bash -c, eval,
-// ...); a policy file can override every list.
+// denied, anything not matched by a rule is allowed, and the backend map
+// points at the real tool names. The defaults are protective out of the box —
+// obviously destructive binaries and privilege escalation are denied,
+// well-known credential paths are forbidden and common secret shapes are
+// flagged/redacted — while leaving no command allow-list, so ordinary commands
+// still run. Network checking is INACTIVE until configured: the defaults set
+// neither network.download_commands nor network.allowed_domains, so the
+// default guard allows "curl https://anything" — on_non_whitelisted: deny only
+// takes effect once a policy configures download commands and a domain
+// whitelist. Note that a non-empty denied list activates shellsafe, which also
+// rejects shell wrappers (bash -c, eval, ...); a policy file can override
+// every list.
 func DefaultPolicy() Policy {
 	return Policy{
 		Version:          1,
@@ -258,14 +278,35 @@ func LoadPolicy(policyPath string) (*Policy, error) {
 		dec := yaml.NewDecoder(bytes.NewReader(raw))
 		dec.KnownFields(true)
 		// io.EOF marks an empty document; the defaults stand.
-		if err := dec.Decode(&p); err != nil && !errors.Is(err, io.EOF) {
+		err := dec.Decode(&p)
+		if err != nil && !errors.Is(err, io.EOF) {
 			return nil, fmt.Errorf("parse yaml policy %q: %w", policyPath, err)
+		}
+		// Exactly one document: a second "---" document would be decoded
+		// nowhere and silently ignored, letting an operator deploy a file whose
+		// trailing restrictions never load. Only the first Decode consuming a
+		// document needs the check (an empty file is already at EOF).
+		if err == nil {
+			var extra any
+			if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+				return nil, fmt.Errorf(
+					"parse yaml policy %q: unexpected second document; the policy must be a single YAML document",
+					policyPath)
+			}
 		}
 	case ".json":
 		dec := json.NewDecoder(bytes.NewReader(raw))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&p); err != nil {
 			return nil, fmt.Errorf("parse json policy %q: %w", policyPath, err)
+		}
+		// Exactly one value: a second JSON value (or trailing garbage) would be
+		// ignored while the operator believes it applies.
+		var extra any
+		if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf(
+				"parse json policy %q: unexpected trailing content; the policy must be a single JSON value",
+				policyPath)
 		}
 	default:
 		return nil, fmt.Errorf(
@@ -337,8 +378,25 @@ func (p *Policy) compile() error {
 	}
 	c.allowedDomains = compileDomains(p.Network.AllowedDomains)
 	c.shellPolicy = shellsafe.PolicyFromLists(p.Commands.Allowed, p.Commands.Denied)
+	// A partial programmatic policy (WithPolicy(&Policy{ForbiddenPaths: ...}))
+	// leaves Backends nil; compiled as-is it would produce an empty backend
+	// index, every exec tool would resolve to backend "" and be allowed without
+	// scanning — the restriction the caller configured would silently never
+	// run. Inherit the default tool→backend mapping instead, so a partial
+	// policy tightens the defaults rather than disabling the guard.
+	if len(p.Backends) == 0 {
+		p.Backends = DefaultPolicy().Backends
+	}
 	if c.backendIndex, err = buildBackendIndex(p.Backends); err != nil {
 		return err
+	}
+	// A backend map that names backends but maps no tool (e.g. all-blank tool
+	// lists) is rejected rather than defaulted: it is an explicit, malformed
+	// configuration, and compiling it would also leave every tool unscanned.
+	if len(c.backendIndex) == 0 {
+		return errors.New(
+			"backends: no tool is mapped to any backend; the guard would scan nothing " +
+				"(omit backends entirely to inherit the defaults)")
 	}
 	p.compiled = c
 	return nil

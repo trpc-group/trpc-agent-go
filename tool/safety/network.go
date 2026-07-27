@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -82,26 +83,32 @@ var genericOptions = map[string]map[string]optClass{
 		// targets. Every host in their values is whitelist-checked.
 		"-J": optHost, "-W": optHost, "-L": optHost, "-R": optHost,
 		// -o sets any client option (ProxyCommand/ProxyJump/Hostname);
-		// -F reads an opaque config file. Both fail closed.
-		"-o": optOpaque, "-F": optOpaque,
+		// -F reads an opaque config file. -D opens a dynamic SOCKS proxy whose
+		// destinations are chosen per-connection at runtime — unlike -W/-L/-R
+		// there is no target in the value to whitelist-check, so the tunnel
+		// could reach any host through the approved ssh server. All fail
+		// closed.
+		"-o": optOpaque, "-F": optOpaque, "-D": optOpaque,
 		"-i": optValue, "-l": optValue, "-p": optValue, "-b": optValue,
 		"-c": optValue, "-m": optValue, "-e": optValue, "-E": optValue,
-		"-D": optValue, "-I": optValue, "-Q": optValue, "-S": optValue,
+		"-I": optValue, "-Q": optValue, "-S": optValue,
 		"-w": optValue, "-B": optValue,
 	},
 	"scp": {
 		"-J": optHost,
 		// -o/-F as for ssh; -S swaps in an arbitrary transport program that
 		// then owns the connection, so it is as opaque as a ProxyCommand.
-		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque,
+		// -D connects straight to a local sftp-server program (no ssh at all),
+		// which owns the transfer just like -S.
+		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque, "-D": optOpaque,
 		"-i": optValue, "-l": optValue, "-P": optValue, "-c": optValue,
-		"-D": optValue, "-X": optValue,
+		"-X": optValue,
 	},
 	"sftp": {
 		"-J": optHost,
-		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque,
+		"-o": optOpaque, "-F": optOpaque, "-S": optOpaque, "-D": optOpaque,
 		"-i": optValue, "-l": optValue, "-P": optValue, "-c": optValue,
-		"-b": optValue, "-B": optValue, "-D": optValue, "-R": optValue,
+		"-b": optValue, "-B": optValue, "-R": optValue,
 		"-X": optValue,
 	},
 	"nc": {
@@ -137,6 +144,18 @@ var curlLongValueOptions = map[string]bool{
 	"--data-raw": true, "--data-ascii": true, "--form": true, "--header": true,
 	"--user-agent": true, "--referer": true, "--cookie": true, "--cookie-jar": true,
 	"--user": true, "--config": true, "--output-dir": true,
+	"--unix-socket": true, "--abstract-unix-socket": true,
+}
+
+// curlOpaqueLongOptions are curl long options whose mere presence fails the
+// invocation closed (curlOpaqueOption): --config points at a file that can
+// define url/proxy/resolve egress the guard cannot read;
+// --unix-socket/--abstract-unix-socket replace the network destination with a
+// local socket (e.g. /var/run/docker.sock), so the recorded URL host says
+// nothing about what curl actually reaches — a domain whitelist cannot vet a
+// socket path.
+var curlOpaqueLongOptions = map[string]bool{
+	"--config": true, "--unix-socket": true, "--abstract-unix-socket": true,
 }
 
 // curlShortValueBytes are curl short flags that consume a value: the value is the
@@ -607,16 +626,20 @@ func cleanHostField(f string) string {
 	return ""
 }
 
-// curlOpaqueConfigOption reports whether a -K/--config option is present, in the
-// "-K file", "--config=file" or bundled short-flag ("-sK file") form. Its file
-// can define url/proxy/resolve and other egress controls the guard cannot read,
-// so its mere presence fails closed. Detection is intentionally conservative: a
-// short-flag token containing 'K' anywhere counts, erring toward fail-closed.
-func curlOpaqueConfigOption(args []string) (string, bool) {
+// curlOpaqueOption reports whether an opaque curl option is present whose mere
+// presence fails closed: the -K/--config file (which can define
+// url/proxy/resolve egress the guard cannot read) or a Unix-socket destination
+// override (--unix-socket/--abstract-unix-socket, which reroutes the
+// connection to a local socket the domain whitelist cannot vet). All spellings
+// count: "-K file", "--config=file", "--unix-socket /path",
+// "--unix-socket=/path" and the bundled short form ("-sK file"). Detection is
+// intentionally conservative: a short-flag token containing 'K' anywhere
+// counts, erring toward fail-closed.
+func curlOpaqueOption(args []string) (string, bool) {
 	for _, a := range args {
 		if strings.HasPrefix(a, "--") {
-			if flag, _, _ := splitFlagValue(a); flag == "--config" {
-				return "--config", true
+			if flag, _, _ := splitFlagValue(a); curlOpaqueLongOptions[flag] {
+				return flag, true
 			}
 			continue
 		}
@@ -627,6 +650,50 @@ func curlOpaqueConfigOption(args []string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// curlFollowsRedirects reports whether a curl invocation follows HTTP
+// redirects: -L/--location/--location-trusted in long, short or bundled
+// short-flag form. Used by the opt-in network.require_redirect_free posture —
+// the redirect target is chosen by the server at runtime, so a whitelisted
+// initial URL proves nothing about where a redirect-following client ends up.
+// Detection is conservative like curlOpaqueOption: an 'L' anywhere in a short
+// bundle counts, erring toward fail-closed.
+func curlFollowsRedirects(args []string) bool {
+	for _, a := range args {
+		if a == "--location" || a == "--location-trusted" {
+			return true
+		}
+		if strings.HasPrefix(a, "-") && !strings.HasPrefix(a, "--") &&
+			strings.IndexByte(a[1:], 'L') >= 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// wgetRedirectsDisabled reports whether a wget invocation has redirect
+// following turned off. wget follows redirects by default; only an explicit
+// --max-redirect=0 (or "--max-redirect 0") disables it, so under the opt-in
+// network.require_redirect_free posture every other wget invocation fails
+// closed.
+func wgetRedirectsDisabled(args []string) bool {
+	for i, a := range args {
+		flag, val, hasInline := splitFlagValue(a)
+		if flag != "--max-redirect" {
+			continue
+		}
+		if !hasInline {
+			if i+1 >= len(args) {
+				continue
+			}
+			val = args[i+1]
+		}
+		if n, err := strconv.Atoi(strings.TrimSpace(val)); err == nil && n == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // curlDefaultConfigDisabled reports whether curl's implicit default config is

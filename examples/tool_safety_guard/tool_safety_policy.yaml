@@ -1,29 +1,37 @@
-# Tool Execution Safety Guard — trimmed policy for THIS demo only.
-#
-# This is intentionally a small subset, kept short so the example reads easily.
-# It is NOT the reference: the canonical, fully annotated policy (every field,
-# with rationale) is tool/safety/testdata/tool_safety_policy.yaml, which the
-# package tests keep honest. When in doubt, copy from there — do not treat this
-# file as the source of truth. main_test.go pins the demo decisions so an
-# over-aggressive trim here fails the build.
-#
-# Editing this file changes allow/deny lists, forbidden paths, the network
+# Tool Execution Safety Guard — example policy.
+# Editing this file changes the allow/deny lists, forbidden paths, network
 # whitelist and limits without any code change.
 version: 1
 
+# How to treat a command that internal/shellsafe cannot safely parse, and the
+# fallback when no rule fires. unparsable defaults to deny (fail closed).
 unparsable_action: deny
 default_action: allow
 
+# Tool name -> backend identifier. Defaults already cover the real tool names;
+# override here if a host/code tool was renamed via WithName.
 backends:
   workspace_exec: [workspace_exec]
   host: [exec_command]
   code: [execute_code]
 
+# The guard cannot see which executor backs workspace_exec, and
+# codeexecutor/local runs commands directly on the host. The host-risk rule
+# (R-HOST-001: background/PTY denial, sudo/nohup) therefore also applies to
+# the workspace backend unless this is explicitly set to true. Only declare
+# isolation when the workspace tool genuinely runs in a sandbox
+# (container/e2b).
+workspace_isolated: false
+
+# Allowed binaries. Note download tools (curl/wget) and installers (pip) are
+# allowed here so the network/dependency rules can govern *what* they do; their
+# destinations and subcommands are still policed below.
 commands:
   allowed: [go, git, ls, cat, echo, grep, sed, awk, jq, python3,
             curl, wget, pip, pip3, sleep, yes]
   denied: [dd, mkfs, shutdown, reboot, chmod, chown]
   # Opt-in: route any multi-segment pipeline / command chain to human review.
+  # Off so legitimate pipes (cat a | grep b) stay allowed.
   review_pipelines: false
 
 denied_subcommands:
@@ -49,8 +57,20 @@ network:
   # Fail curl closed unless -q/--disable is its first option (the implicit
   # ~/.curlrc can inject url/proxy/resolve the guard cannot see). Off by default
   # so a plain whitelisted "curl https://host" still allows; the explicit
-  # -K/--config file is always failed closed regardless of this flag.
+  # -K/--config file is always failed closed regardless of this flag, as are
+  # curl --unix-socket/--abstract-unix-socket (the connection is rerouted to a
+  # local socket the domain whitelist cannot vet) and the non-curl opaque
+  # egress options (wget -e/--execute/--config, ssh/scp -o/-F, ssh -D dynamic
+  # SOCKS proxy, scp/sftp -S/-D).
   curl_require_disabled_config: false
+  # Contract: allowed_domains statically vets the destinations named in the
+  # command (initial URL, proxy/redirect options). It is NOT a full egress
+  # boundary by default: a whitelisted server can still HTTP-redirect the
+  # client elsewhere at runtime (curl only with -L; wget by default). Set this
+  # to true to fail redirect-following invocations closed (curl -L/--location
+  # denies; wget requires --max-redirect=0), or enforce the boundary at
+  # runtime via sandbox egress rules.
+  require_redirect_free: false
 
 resources:
   max_timeout_sec: 300
@@ -68,13 +88,22 @@ secrets:
     - "ghp_[0-9A-Za-z]{36}"
     - "sk-[A-Za-z0-9_-]{12,}"
     - "xox[baprs]-[A-Za-z0-9-]{10,}"
-    # The bounded full PEM block first so redaction removes the whole key,
-    # then the bare header so a truncated key is still caught.
+    # The bounded full PEM block first (header, base64 body, END marker) so
+    # redaction removes the whole key, then the bare header so a truncated key
+    # is still caught; the order matters for redaction.
     - "-----BEGIN [A-Z ]*PRIVATE KEY-----[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY-----"
     - "-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    # Full RFC 6750 token68 charset (incl. +, /, ~, =) so no bearer-token
+    # suffix survives redaction.
     - "(?i)bearer\\s+[a-z0-9._~+/=-]+"
     # Name-based heuristic: a secret-named key=value assignment is flagged and
     # redacted whatever the value looks like.
     - '(?i)(api[_-]?key|token|password|passwd|secret|private[_-]?key|credential)[a-z0-9_]*=["'']?[^\s"'']+'
 
+# Per-rule overrides let you relax or tighten a single rule without code
+# changes, e.g. route dependency installs to human review instead of blocking.
+# Example (left empty so the shipped policy matches the documented sample
+# matrix; uncomment to demonstrate):
+#   rule_overrides:
+#     R-DEP-001: {action: needs_human_review}
 rule_overrides: {}

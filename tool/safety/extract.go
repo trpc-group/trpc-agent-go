@@ -14,9 +14,9 @@ import (
 	"strings"
 )
 
-// ExecRequest is the backend-agnostic view of a tool call that the rule engine
+// execRequest is the backend-agnostic view of a tool call that the rule engine
 // scans. It is produced by extract from the raw tool arguments.
-type ExecRequest struct {
+type execRequest struct {
 	// Command is the shell command (workspace_exec / exec_command) or the
 	// concatenated source code (execute_code).
 	Command string
@@ -34,14 +34,14 @@ type ExecRequest struct {
 	// CodeBlocks holds the individual execute_code blocks; Command carries
 	// their concatenation for the raw-text (secret/resource) rules while the
 	// per-block language drives the code-specific rules.
-	CodeBlocks []CodeBlock
+	CodeBlocks []codeBlock
 	// ToolDestructive is true when the tool's published metadata
 	// (tool.ToolMetadata.Destructive) marks it as destructive.
 	ToolDestructive bool
 }
 
-// CodeBlock is one script block passed to the execute_code tool.
-type CodeBlock struct {
+// codeBlock is one script block passed to the execute_code tool.
+type codeBlock struct {
 	Code     string `json:"code"`
 	Language string `json:"language"`
 }
@@ -73,20 +73,20 @@ func backendOf(toolName string, p *Policy) string {
 	return p.backendFor(toolName)
 }
 
-// extract turns the raw tool arguments into an ExecRequest for the given
+// extract turns the raw tool arguments into an execRequest for the given
 // backend. A JSON error is returned to the caller, which fails closed via the
 // policy's unparsable_action.
-func extract(args []byte, backend string) (ExecRequest, error) {
+func extract(args []byte, backend string) (execRequest, error) {
 	if backend == BackendCode {
 		return extractCode(args)
 	}
 	var a execArgs
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
-			return ExecRequest{}, fmt.Errorf("parse exec args: %w", err)
+			return execRequest{}, fmt.Errorf("parse exec args: %w", err)
 		}
 	}
-	return ExecRequest{
+	return execRequest{
 		Command:    a.Command,
 		Cwd:        firstNonEmpty(a.Cwd, a.Workdir),
 		Env:        a.Env,
@@ -102,13 +102,13 @@ func extract(args []byte, backend string) (ExecRequest, error) {
 // with the code-specific rules; Command carries the concatenated source for
 // the raw-text (secret / resource) rules. The sandbox remains the primary
 // isolation for code execution (see README).
-func extractCode(args []byte) (ExecRequest, error) {
+func extractCode(args []byte) (execRequest, error) {
 	var a struct {
 		CodeBlocks json.RawMessage `json:"code_blocks"`
 	}
 	if len(args) > 0 {
 		if err := json.Unmarshal(args, &a); err != nil {
-			return ExecRequest{}, fmt.Errorf("parse code args: %w", err)
+			return execRequest{}, fmt.Errorf("parse code args: %w", err)
 		}
 	}
 	blocks := parseCodeBlocks(a.CodeBlocks)
@@ -119,7 +119,7 @@ func extractCode(args []byte) (ExecRequest, error) {
 		}
 		sb.WriteString(b.Code)
 	}
-	return ExecRequest{Command: sb.String(), CodeBlocks: blocks}, nil
+	return execRequest{Command: sb.String(), CodeBlocks: blocks}, nil
 }
 
 // parseCodeBlocks extracts the blocks from a code_blocks value. It accepts the
@@ -127,38 +127,38 @@ func extractCode(args []byte) (ExecRequest, error) {
 // string) and falls back to a single language-less block holding the raw bytes
 // so the scan still has something to inspect; a language-less block is treated
 // as shell, so unparsable garbage fails closed instead of slipping through.
-func parseCodeBlocks(raw json.RawMessage) []CodeBlock {
+func parseCodeBlocks(raw json.RawMessage) []codeBlock {
 	if len(raw) == 0 {
 		return nil
 	}
 	var val any
 	if err := json.Unmarshal(raw, &val); err != nil {
-		return []CodeBlock{{Code: string(raw)}}
+		return []codeBlock{{Code: string(raw)}}
 	}
 	if s, ok := val.(string); ok {
 		// Double-encoded array: unwrap and re-parse.
 		raw = json.RawMessage(s)
 		if err := json.Unmarshal(raw, &val); err != nil {
-			return []CodeBlock{{Code: s}}
+			return []codeBlock{{Code: s}}
 		}
 	}
 	switch val.(type) {
 	case nil:
 		return nil
 	case []any:
-		var blocks []CodeBlock
+		var blocks []codeBlock
 		if err := json.Unmarshal(raw, &blocks); err != nil {
-			return []CodeBlock{{Code: string(raw)}}
+			return []codeBlock{{Code: string(raw)}}
 		}
 		return blocks
 	case map[string]any:
-		var b CodeBlock
+		var b codeBlock
 		if err := json.Unmarshal(raw, &b); err != nil {
-			return []CodeBlock{{Code: string(raw)}}
+			return []codeBlock{{Code: string(raw)}}
 		}
-		return []CodeBlock{b}
+		return []codeBlock{b}
 	default:
-		return []CodeBlock{{Code: string(raw)}}
+		return []codeBlock{{Code: string(raw)}}
 	}
 }
 

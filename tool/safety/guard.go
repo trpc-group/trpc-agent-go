@@ -57,9 +57,14 @@ func WithPolicyFile(path string) Option {
 // WithPolicy uses a caller-supplied policy. It is deep-copied, validated and
 // compiled into a private copy, so a Policy built programmatically (not via
 // LoadPolicy) gets its secret/domain/path matchers compiled instead of silently
-// running empty. The deep copy also means caller mutations to the original
-// policy's maps/slices after NewGuard cannot change the guard's behavior or race
-// with concurrent checks. A nil policy is rejected.
+// running empty. A partial policy that leaves Backends unset inherits the
+// default tool→backend mapping, so WithPolicy(&Policy{ForbiddenPaths: ...})
+// still scans the built-in exec tools instead of allowing everything through
+// an empty backend index; start from DefaultPolicy() to inherit the other
+// protective defaults (denied binaries, forbidden paths, secret patterns) as
+// well. The deep copy also means caller mutations to the original policy's
+// maps/slices after NewGuard cannot change the guard's behavior or race with
+// concurrent checks. A nil policy is rejected.
 func WithPolicy(p *Policy) Option {
 	return func(g *Guard) error {
 		if p == nil {
@@ -168,7 +173,7 @@ func (g *Guard) CheckToolPermission(
 	er, err := extract(req.Arguments, backend)
 	if err != nil {
 		findings := []Finding{argParseFinding(err, g.policy.UnparsableAction)}
-		return g.finalize(ctx, req.ToolName, backend, ExecRequest{},
+		return g.finalize(ctx, req.ToolName, backend, execRequest{},
 			findings, actionToDecision(g.policy.UnparsableAction), RiskHigh, start)
 	}
 	er.ToolDestructive = req.Metadata.Destructive
@@ -184,7 +189,7 @@ func (g *Guard) CheckToolPermission(
 func (g *Guard) finalize(
 	ctx context.Context,
 	toolName, backend string,
-	er ExecRequest,
+	er execRequest,
 	findings []Finding,
 	decision Decision,
 	risk RiskLevel,

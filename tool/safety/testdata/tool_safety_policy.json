@@ -10,7 +10,7 @@
   "workspace_isolated": false,
   "commands": {
     "allowed": ["go", "git", "ls", "cat", "echo", "grep", "sed", "awk", "jq",
-                "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],
+      "python3", "curl", "wget", "pip", "pip3", "sleep", "yes"],
     "denied": ["dd", "mkfs", "shutdown", "reboot", "chmod", "chown"],
     "review_pipelines": false
   },
@@ -32,8 +32,9 @@
   "network": {
     "download_commands": ["curl", "wget", "nc", "ssh", "scp", "ftp"],
     "allowed_domains": ["github.com", "*.googleapis.com", "pypi.org", "registry.npmjs.org",
-                        "proxy.golang.org", "sum.golang.org", "files.pythonhosted.org"],
-    "on_non_whitelisted": "deny"
+      "proxy.golang.org", "sum.golang.org", "files.pythonhosted.org"],
+    "on_non_whitelisted": "deny",
+    "require_redirect_free": false
   },
   "resources": {
     "max_timeout_sec": 300,
