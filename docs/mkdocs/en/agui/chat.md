@@ -339,6 +339,71 @@ stateResolver := func(_ context.Context, input *adapter.RunAgentInput) (map[stri
 server, _ := agui.New(runner, agui.WithAGUIRunnerOptions(aguirunner.WithStateResolver(stateResolver)))
 ```
 
+## Run Hook
+
+`RunHook` is for real-time conversation runs where server-side background logic proactively pushes AG-UI events to the frontend at its own pace. It is used for server-initiated UI status updates, rather than translating internal events that the Agent has already produced into AG-UI events; use a custom Translator or event translation callbacks for the latter.
+
+After `RUN_STARTED` is sent, AG-UI creates the `Run` for the current request, binds it to the execution `ctx`, starts `RunHook`, and then calls the underlying Runner. A hook can use the `run` argument directly. Agent, Tool, or other business code that runs with the same `ctx` can retrieve the same `Run` through `aguirunner.RunFromContext(ctx)`. Events sent with `run.Emit(ctx, event)` are written into the SSE stream for the current request. If `SessionService` is configured, these events are also written to AG-UI history and can be restored through the [message snapshot route](history.md). They are not written to normal session events, so they do not become model context in later runs.
+
+The following example shows a background report task that pushes generation progress every 100ms. For the complete example, see [examples/agui/server/runhook](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/runhook). For proactive progress updates from GraphAgent nodes, see [examples/agui/server/graph_progress](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/agui/server/graph_progress).
+
+```go
+import (
+	aguievents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
+	"trpc.group/trpc-go/trpc-agent-go/runner"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui"
+	aguirunner "trpc.group/trpc-go/trpc-agent-go/server/agui/runner"
+)
+
+const reportEventName = "background.report.status"
+
+func pushBackgroundReportStatus(ctx context.Context, run *aguirunner.Run) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for step := 1; step <= 5; step++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+		err := run.Emit(ctx, aguievents.NewCustomEvent(
+			reportEventName,
+			aguievents.WithValue(map[string]any{
+				"progress": step * 20,
+			}),
+		))
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+coreRunner := runner.NewRunner(agent.Info().Name, agent)
+server, _ := agui.New(coreRunner, agui.WithRunHook(pushBackgroundReportStatus))
+```
+
+When Agent or Tool code needs to push events proactively, do not store `Run` in state yourself. If the code receives the `ctx` for the current run, read it from `ctx`.
+
+```go
+func emitReportStatus(ctx context.Context, progress int) error {
+	run, ok := aguirunner.RunFromContext(ctx)
+	if !ok {
+		return nil
+	}
+	return run.Emit(ctx, aguievents.NewCustomEvent(
+		reportEventName,
+		aguievents.WithValue(map[string]any{
+			"progress": progress,
+		}),
+	))
+}
+```
+
+If the background task needs business fields from the current request, call `run.Input()` to get the `RunAgentInput`, for example to read business parameters from `forwardedProps`. Treat the request body as read-only in the hook, and do not keep rewriting it after the run has started.
+
+`run.Emit` is for UI events proactively produced by the server. It should not send framework-owned events such as `RUN_STARTED`, `RUN_FINISHED`, `RUN_ERROR`, or `MESSAGES_SNAPSHOT`. If the Agent finishes before the hook, the framework waits for the hook to return before sending the final run terminal event, so UI events pushed from the hook do not appear after the terminal event. The hook should honor `ctx.Done()` and return promptly when the run is canceled or times out. If the hook returns an error, the current AG-UI run returns `RUN_ERROR`.
+
 ## Custom Translator
 
 [Translator](index.md#translator) converts internal framework events into AG-UI events. The built-in Translator translates internal framework events into standard events defined by the AG-UI protocol, maintains streaming event state, and finalizes open streams when a run ends. A custom Translator can implement this conversion independently or wrap the built-in Translator to extend event output while preserving the default translation and finalization logic.
@@ -733,7 +798,7 @@ The top-level `timestamp` on a real-time AG-UI event is the protocol event times
 
 `parentMetadata` is necessary because `parentInvocationId` only identifies the parent execution, not the specific tool call inside it. When a model issues parallel AgentTool calls to the same sub-agent in one turn, all spawned invocations share the same `parentInvocationId`; only `parentMetadata.triggerId` can disambiguate which `TOOL_CALL_START` each child invocation belongs to. When the parent did not invoke this child via a tool call (e.g., a top-level run), `parentMetadata` is absent.
 
-The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also carry source information. In this case, `rawEvent` is not source information for one event, but a source index built by message and tool call:
+The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also carry source information. In this case, `rawEvent` is not source information for one event, but a source index built by message, tool call, and run:
 
 ```json
 {
@@ -761,12 +826,21 @@ The `MESSAGES_SNAPSHOT` event returned by the message snapshot route can also ca
         "branch": "root.member-a",
         "timestamp": 1781258401000
       }
+    },
+    "runs": {
+      "run-1": {
+        "author": "demo-user",
+        "forwardedProps": {
+          "file_url": "https://example.com/demo.png"
+        },
+        "timestamp": 1781258400000
+      }
     }
   }
 }
 ```
 
-When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source and timestamp. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
+When restoring historical messages, use `rawEvent.messages[messageId]` to get the message source and timestamp, or `rawEvent.toolCalls[toolCallId]` to get the tool call source and timestamp. To restore request-level `forwardedProps`, read `rawEvent.runs[runId].forwardedProps`. The indexed `timestamp` first reuses the top-level `timestamp` from the historical real-time event; only old data without an event `timestamp` falls back to the persisted track event time. Source information in the index uses the same fields as `rawEvent` in real-time events, so the frontend can reuse those field semantics to restore grouping state.
 
 ## External Tools
 

@@ -13,15 +13,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/coderuntime/localpython"
 )
 
 var errWorkflowGuestExitTimeout = errors.New("dynamicworkflow: guest did not exit after completion")
@@ -38,9 +38,41 @@ const (
 // callback protocol. It is intended only for development or an environment
 // that the application has already isolated; it is not a security sandbox.
 //
-// Set Python to select a specific interpreter. The default is python3.
+// Its single-field layout is retained for source compatibility; use
+// NewLocalRunner for advanced configuration.
 type LocalRunner struct {
+	// Python selects the Python interpreter. The default is python3.
 	Python string
+}
+
+// LocalRunnerConfig configures a local Dynamic Workflow guest process.
+type LocalRunnerConfig struct {
+	// Python selects the Python interpreter. The default is python3.
+	Python string
+	// Timeout optionally bounds the full local execution, including host
+	// callbacks. The zero value relies on the caller's context.
+	Timeout time.Duration
+	// MaxCodeBytes bounds the workflow source size before launching Python.
+	// The default is 64 KiB. Use a negative value to disable this limit.
+	MaxCodeBytes int
+	// Env supplies explicitly approved guest environment variables. Shell,
+	// loader, and Python preload/search-path variables are still filtered.
+	Env []string
+	// WorkDir sets the guest process working directory. When empty, the runner
+	// creates an empty temporary directory and removes it after the guest exits.
+	// WorkDir is not automatically added to Python's module search path.
+	WorkDir string
+}
+
+type configuredLocalRunner struct {
+	config LocalRunnerConfig
+}
+
+// NewLocalRunner returns a local Runtime with advanced process configuration.
+// The returned runtime is not a security sandbox.
+func NewLocalRunner(config LocalRunnerConfig) Runtime {
+	config.Env = append([]string(nil), config.Env...)
+	return &configuredLocalRunner{config: config}
 }
 
 type protocolMessage struct {
@@ -48,6 +80,7 @@ type protocolMessage struct {
 	ID     string          `json:"id,omitempty"`
 	Kind   CallKind        `json:"kind,omitempty"`
 	Name   string          `json:"name,omitempty"`
+	Code   string          `json:"code,omitempty"`
 	Args   json.RawMessage `json:"args,omitempty"`
 	Result json.RawMessage `json:"result,omitempty"`
 	Stdout string          `json:"stdout,omitempty"`
@@ -55,10 +88,16 @@ type protocolMessage struct {
 }
 
 type workflowGuestProcess struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout io.Reader
-	stderr *limitedBuffer
+	process workflowProcess
+	stdin   io.WriteCloser
+	stdout  io.Reader
+	stderr  *limitedBuffer
+	code    string
+}
+
+type workflowProcess interface {
+	Wait() error
+	Kill() error
 }
 
 type workflowGuestState struct {
@@ -72,49 +111,72 @@ func (r LocalRunner) ExecuteWorkflow(
 	req Request,
 	handler CallHandler,
 ) (Result, error) {
+	return executeLocalWorkflow(ctx, LocalRunnerConfig{Python: r.Python}, req, handler)
+}
+
+func (r configuredLocalRunner) ExecuteWorkflow(
+	ctx context.Context,
+	req Request,
+	handler CallHandler,
+) (Result, error) {
+	runCtx, cancel := localExecutionContext(ctx, r.config.Timeout)
+	defer cancel()
+	return executeLocalWorkflow(runCtx, r.config, req, handler)
+}
+
+func executeLocalWorkflow(
+	ctx context.Context,
+	config LocalRunnerConfig,
+	req Request,
+	handler CallHandler,
+) (Result, error) {
 	if handler == nil {
 		return Result{}, required("call handler")
 	}
-	guest, err := r.startWorkflowGuest(ctx, req.Code)
+	guest, err := startWorkflowGuest(ctx, config, req.Code)
 	if err != nil {
 		return Result{}, err
 	}
 	return runWorkflowGuest(ctx, guest, handler)
 }
 
-func (r LocalRunner) startWorkflowGuest(
+func localExecutionContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
+func startWorkflowGuest(
 	ctx context.Context,
+	config LocalRunnerConfig,
 	code string,
 ) (*workflowGuestProcess, error) {
-	python := strings.TrimSpace(r.Python)
-	if python == "" {
-		python = "python3"
-	}
-	cmd := exec.CommandContext(
-		ctx,
-		python,
-		"-c",
-		pythonGuest,
-		base64.StdEncoding.EncodeToString([]byte(code)),
-	)
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: create guest stdin: %w", err)
-	}
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, fmt.Errorf("dynamicworkflow: create guest stdout: %w", err)
-	}
 	stderr := newLimitedBuffer(workflowGuestCapturedOutputLimit)
-	cmd.Stderr = stderr
-	if err := cmd.Start(); err != nil {
+	proc, err := localpython.StartScript(
+		ctx,
+		localpython.Config{
+			Python:       config.Python,
+			MaxCodeBytes: config.MaxCodeBytes,
+			Env:          config.Env,
+			WorkDir:      config.WorkDir,
+		},
+		code,
+		"guest.py",
+		[]byte(pythonGuest),
+		nil,
+		nil,
+		stderr,
+	)
+	if err != nil {
 		return nil, fmt.Errorf("dynamicworkflow: start Python guest: %w", err)
 	}
 	return &workflowGuestProcess{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: stdout,
-		stderr: stderr,
+		process: proc,
+		stdin:   proc.Stdin(),
+		stdout:  proc.Stdout(),
+		stderr:  stderr,
+		code:    code,
 	}, nil
 }
 
@@ -133,6 +195,10 @@ func runWorkflowGuest(
 	calls := &sync.WaitGroup{}
 	writeErr := &workflowWriteError{}
 	state := &workflowGuestState{}
+	if err := encoder.Encode(protocolMessage{Type: "run", Code: guest.code}); err != nil {
+		state.guestErr = fmt.Errorf("dynamicworkflow: write workflow source: %w", err)
+		return finishWorkflowGuest(ctx, cancelCallbacks, guest, scanner, calls, writeErr, state)
+	}
 	for scanner.Scan() {
 		if stop := processWorkflowGuestMessage(
 			callbackCtx,
@@ -285,6 +351,9 @@ func finishWorkflowGuest(
 	if err := waitWorkflowGuestCallbacks(ctx, calls); err != nil && state.guestErr == nil {
 		state.guestErr = err
 	}
+	if err := ctx.Err(); err != nil && state.guestErr == nil && state.completed == nil {
+		state.guestErr = err
+	}
 	writeErr.Lock()
 	if writeErr.err != nil && state.guestErr == nil && state.completed == nil {
 		state.guestErr = fmt.Errorf("dynamicworkflow: write guest response: %w", writeErr.err)
@@ -359,7 +428,7 @@ func workflowGuestScannerError(err error) error {
 func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 	waitCh := make(chan error, 1)
 	go func() {
-		waitCh <- guest.cmd.Wait()
+		waitCh <- guest.process.Wait()
 	}()
 	timer := time.NewTimer(workflowGuestExitGrace)
 	defer timer.Stop()
@@ -378,10 +447,10 @@ func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 }
 
 func killWorkflowGuest(guest *workflowGuestProcess) {
-	if guest == nil || guest.cmd == nil || guest.cmd.Process == nil {
+	if guest == nil || guest.process == nil {
 		return
 	}
-	_ = guest.cmd.Process.Kill()
+	_ = guest.process.Kill()
 }
 
 func guestErrorWithStderr(err error, stderr string) error {
@@ -445,6 +514,7 @@ func (b *limitedBuffer) Exceeded() bool {
 }
 
 var _ Runtime = LocalRunner{}
+var _ Runtime = (*configuredLocalRunner)(nil)
 
 // pythonGuest is deliberately small: workflow source receives only the
 // documented host callbacks. LocalRunner is not a sandbox; production runners
@@ -452,7 +522,6 @@ var _ Runtime = LocalRunner{}
 const pythonGuest = `
 import asyncio
 import ast
-import base64
 import inspect
 import io
 import json
@@ -463,6 +532,59 @@ import traceback
 _CAPTURED_OUTPUT_LIMIT = 1048576
 _PROTOCOL_LINE_LIMIT = 4194304
 _protocol_stdout = sys.stdout
+_FORBIDDEN_NODES = (
+    ast.Import,
+    ast.ImportFrom,
+    ast.ClassDef,
+    ast.With,
+    ast.AsyncWith,
+    ast.Try,
+    ast.Global,
+    ast.Nonlocal,
+)
+_FORBIDDEN_CALL_NAMES = {
+    "open",
+    "eval",
+    "exec",
+    "compile",
+    "__import__",
+    "input",
+    "breakpoint",
+    "globals",
+    "locals",
+    "vars",
+    "dir",
+    "getattr",
+    "setattr",
+    "delattr",
+}
+_SAFE_BUILTINS = {
+    "abs": abs,
+    "all": all,
+    "any": any,
+    "bool": bool,
+    "dict": dict,
+    "enumerate": enumerate,
+    "Exception": Exception,
+    "float": float,
+    "int": int,
+    "isinstance": isinstance,
+    "len": len,
+    "list": list,
+    "max": max,
+    "min": min,
+    "print": print,
+    "range": range,
+    "round": round,
+    "set": set,
+    "sorted": sorted,
+    "str": str,
+    "sum": sum,
+    "tuple": tuple,
+    "TypeError": TypeError,
+    "ValueError": ValueError,
+    "zip": zip,
+}
 
 class _LimitedStdout(io.StringIO):
     def __init__(self, limit):
@@ -678,12 +800,51 @@ def _contains_outer_return(node):
         return False
     return any(_contains_outer_return(child) for child in ast.iter_child_nodes(node))
 
+def _validate_workflow_ast(parsed):
+    for node in ast.walk(parsed):
+        if isinstance(node, _FORBIDDEN_NODES):
+            raise RuntimeError(
+                "workflow code uses unsupported Python syntax: "
+                + node.__class__.__name__
+            )
+        if isinstance(node, ast.Name):
+            if node.id.startswith("__") and node.id.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot access Python dunder names: " + node.id
+                )
+            if node.id in _FORBIDDEN_CALL_NAMES:
+                raise RuntimeError(
+                    "workflow code cannot access restricted name: " + node.id
+                )
+        if isinstance(node, ast.Attribute):
+            if node.attr.startswith("__") and node.attr.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot access Python dunder attributes: " + node.attr
+                )
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in _FORBIDDEN_CALL_NAMES:
+                raise RuntimeError(
+                    "workflow code cannot call restricted function: " + func.id
+                )
+            if isinstance(func, ast.Attribute) and func.attr.startswith("__") and func.attr.endswith("__"):
+                raise RuntimeError(
+                    "workflow code cannot call Python dunder methods: " + func.attr
+                )
+
 async def _main():
     global _bridge
-    source = base64.b64decode(sys.argv[1]).decode("utf-8")
+    request_line = sys.stdin.readline()
+    if not request_line:
+        raise RuntimeError("host closed workflow bridge before sending source")
+    request = json.loads(request_line)
+    if request.get("type") != "run" or not isinstance(request.get("code"), str):
+        raise RuntimeError("invalid workflow run request")
+    source = request["code"]
     wrapped = "async def __workflow__():\n" + "\n".join("    " + line for line in source.splitlines())
 
     parsed = ast.parse(wrapped, "<dynamic-workflow>", "exec")
+    _validate_workflow_ast(parsed)
     workflow = parsed.body[0]
     if not any(_contains_outer_return(statement) for statement in workflow.body):
         raise RuntimeError(
@@ -692,6 +853,7 @@ async def _main():
     # JSON-style literals make generated AgentSpec dictionaries less brittle
     # when a model emits JSON inside otherwise valid Python source.
     scope = {
+        "__builtins__": _SAFE_BUILTINS,
         "call_tool": call_tool,
         "agent": agent,
         "parallel": parallel,

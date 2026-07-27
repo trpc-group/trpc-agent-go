@@ -563,8 +563,36 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 覆盖语义（ID 与重复）
 
-- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。
+- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。如果该规范 ID 对应软删除记录，`AddMemory` 会将其重新激活。
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
+
+### 更新语义与 ID 轮转
+
+`UpdateMemory` 会先应用新的内容、topics 和事件元数据，再重新计算规范 Memory
+ID。topics 不参与 ID 计算，因此只修改 topics 时 ID 保持不变。
+
+更新遵循以下状态机：
+
+| 应用更新后的状态 | 结果 |
+| ---------------- | ---- |
+| source 不存在或已软删除 | 返回 not-found 错误，且不修改 `UpdateResult` |
+| 规范 ID 不变 | 原地更新 active source |
+| newID 不存在 | 创建 target，再淘汰 source |
+| newID 是软删除记录 | 重新激活 target；硬删除模式会替换旧 tombstone |
+| newID 已是 active | 返回冲突错误，source 和 target 都不修改 |
+
+启用软删除时，成功的 ID 轮转会把旧 source 保留为 tombstone；硬删除模式则移除旧
+source。SQL 后端会原子地完成 target 准备和 source 淘汰。
+
+SQL 后端的时间戳语义保持一致：
+
+- 新插入的 target 继承 source 的 `CreatedAt`。
+- 重新激活的 target 保留自己的 `CreatedAt`。
+- 硬删除模式替换旧 target tombstone 时，replacement 继承 source 的 `CreatedAt`。
+- 每次成功更新都会刷新 `UpdatedAt`。
+
+成功时，`UpdateResult.MemoryID` 返回最终生效的规范 ID；失败时，调用方传入的
+result 保持不变。
 
 ### 自定义工具实现
 
@@ -1010,6 +1038,12 @@ redisService, err := memoryredis.NewService(
 - `WithExtraOptions(...options)`: 传递给 Redis 客户端的额外选项
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
+
+**Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
+轮换记忆 ID。除脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
+访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
+需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
+不能只在预热阶段临时授予 `EVAL`。
 
 **Key 前缀示例**：
 
@@ -1481,7 +1515,7 @@ mysqlService, err := memorymysql.NewService(
 | ---- | -------- | ------------------------------------ |
 | 删除 | 立即移除 | 设置 `deleted_at` 字段               |
 | 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
-| 恢复 | 无法恢复 | 可手动清除 `deleted_at`              |
+| 恢复 | 无法恢复 | 重新 Add，或将更新轮转到相同 ID      |
 | 存储 | 节省空间 | 占用空间                             |
 
 **迁移陷阱**：

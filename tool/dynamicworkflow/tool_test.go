@@ -51,7 +51,10 @@ func TestWorkflowToolOnlyExposesCallToolWhenConfigured(t *testing.T) {
 	withoutCodeCallableTools, err := NewTool(scriptedRuntime{}, []agent.Agent{reviewer})
 	require.NoError(t, err)
 	require.NotContains(t, withoutCodeCallableTools.Declaration().Description, "call_tool")
-	require.NotContains(t, withoutCodeCallableTools.Declaration().InputSchema.Properties["code"].Description, "call_tool")
+	codeDescription := withoutCodeCallableTools.Declaration().InputSchema.Properties["code"].Description
+	require.NotContains(t, codeDescription, "call_tool")
+	require.Contains(t, codeDescription, "import modules")
+	require.Contains(t, codeDescription, "class/with/try/global/nonlocal")
 
 	lookup := &testTool{name: "lookup", call: func(context.Context, []byte) (any, error) {
 		return map[string]any{"ok": true}, nil

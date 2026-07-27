@@ -12,6 +12,7 @@ package file
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,8 +52,8 @@ func (f *fileToolSet) searchFile(
 		BaseDirectory: f.baseDir,
 	}
 	if req == nil {
-		err := fmt.Errorf("request cannot be nil")
-		rsp.Message = fmt.Sprintf("Error: %v", err)
+		err := errors.New("request cannot be nil")
+		rsp.Message = "Error: " + err.Error()
 		return rsp, err
 	}
 	rsp.Path = req.Path
@@ -60,7 +61,7 @@ func (f *fileToolSet) searchFile(
 	// Validate pattern
 	if req.Pattern == "" {
 		rsp.Message = "Error: pattern cannot be empty"
-		return rsp, fmt.Errorf("pattern cannot be empty")
+		return rsp, errors.New("pattern cannot be empty")
 	}
 
 	ref, err := fileref.Parse(req.Path)
@@ -70,7 +71,7 @@ func (f *fileToolSet) searchFile(
 	}
 	if ref.Scheme == fileref.SchemeArtifact {
 		rsp.Message = "Error: searching artifact:// is not supported"
-		return rsp, fmt.Errorf("searching artifact:// is not supported")
+		return rsp, errors.New("searching artifact:// is not supported")
 	}
 	if ref.Scheme == fileref.SchemeWorkspace {
 		rsp.Path = fileref.WorkspaceRef(ref.Path)
