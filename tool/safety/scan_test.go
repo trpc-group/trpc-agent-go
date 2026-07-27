@@ -672,7 +672,7 @@ func TestOversizedRawArgsAndStdin(t *testing.T) {
 func TestOversizedEnvelopeSize(t *testing.T) {
 	pol := testPolicy()
 	r := Scan(Request{
-		ToolName:     "custom_mcp_tool", Backend: BackendUnknown,
+		ToolName: "custom_mcp_tool", Backend: BackendUnknown,
 		EnvelopeSize: maxEnvelopeBytes + 1,
 	}, pol)
 	if r.Decision != DecisionDeny {

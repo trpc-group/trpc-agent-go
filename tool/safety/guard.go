@@ -29,7 +29,7 @@ const (
 	// skill_run executes a command inside a skill workspace but
 	// publishes no execution ToolMetadata, so it is classified by name
 	// like the other command surfaces.
-	toolSkillRun = "skill_run"
+	toolSkillRun            = "skill_run"
 	toolWriteStdin          = "write_stdin"
 	toolWorkspaceWriteStdin = "workspace_write_stdin"
 	toolSkillWriteStdin     = "skill_write_stdin"
