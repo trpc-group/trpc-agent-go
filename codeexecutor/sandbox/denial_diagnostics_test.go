@@ -41,6 +41,28 @@ func TestWithDiagnosticsReturnsBufferedChannel(t *testing.T) {
 	}
 }
 
+func TestRuntimeAndExecutorCloseAreNilSafeAndIdempotent(t *testing.T) {
+	var nilRuntime *Runtime
+	if err := nilRuntime.Close(); err != nil {
+		t.Fatalf("nil Runtime.Close: %v", err)
+	}
+	var nilExecutor *CodeExecutor
+	if err := nilExecutor.Close(); err != nil {
+		t.Fatalf("nil CodeExecutor.Close: %v", err)
+	}
+	if err := (&CodeExecutor{}).Close(); err != nil {
+		t.Fatalf("CodeExecutor without runtime Close: %v", err)
+	}
+
+	executor := New()
+	if err := executor.Close(); err != nil {
+		t.Fatalf("CodeExecutor.Close: %v", err)
+	}
+	if err := executor.Close(); err != nil {
+		t.Fatalf("second CodeExecutor.Close: %v", err)
+	}
+}
+
 func TestRunProgramWithDiagnosticsDisabledProfile(t *testing.T) {
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),

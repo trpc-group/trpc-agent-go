@@ -1066,3 +1066,31 @@ func TestMacOSPreflightProbeHonorsContext(t *testing.T) {
 		t.Fatalf("preflight ignored context and took %s", elapsed)
 	}
 }
+
+func TestCompleteMacOSPreflightCachesInternalDeadline(t *testing.T) {
+	rt := NewRuntime()
+	_, err := rt.completeMacOSPreflight(
+		context.Background(),
+		"probe timed out",
+		context.DeadlineExceeded,
+	)
+	if !isKind(err, ErrSetupFailed) {
+		t.Fatalf("completeMacOSPreflight error = %v, want ErrSetupFailed", err)
+	}
+	if !rt.preflightDone || rt.preflightErr == nil {
+		t.Fatal("internal probe deadline was not cached as a setup failure")
+	}
+}
+
+func TestCompleteMacOSPreflightDoesNotCacheCallerCancellation(t *testing.T) {
+	rt := NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := rt.completeMacOSPreflight(ctx, "", context.Canceled)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("completeMacOSPreflight error = %v, want context.Canceled", err)
+	}
+	if rt.preflightDone || rt.preflightErr != nil {
+		t.Fatal("caller cancellation was cached as a permanent preflight result")
+	}
+}

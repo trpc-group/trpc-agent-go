@@ -345,6 +345,21 @@ func TestRandomHexProducesExpectedLength(t *testing.T) {
 	}
 }
 
+func TestIncompleteDiagnosticsProbePreservesCallerCancellation(t *testing.T) {
+	caps := DiagnosticsCapability{Supported: true}
+	got, ok, err := incompleteDiagnosticsProbe(context.Background(), caps)
+	if err != nil || ok || got != caps {
+		t.Fatalf("healthy incomplete probe = %#v, %v, %v", got, ok, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	got, ok, err = incompleteDiagnosticsProbe(ctx, caps)
+	if !errors.Is(err, context.Canceled) || ok || got != caps {
+		t.Fatalf("canceled incomplete probe = %#v, %v, %v", got, ok, err)
+	}
+}
+
 func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	resetDiagnosticsCapsCacheForTest()
 	t.Cleanup(resetDiagnosticsCapsCacheForTest)
@@ -364,6 +379,12 @@ func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	caps := rt.DiagnosticsCapability()
 	if caps.EventStreamAvailable || !caps.ProbeCompleted || !caps.Supported {
 		t.Fatalf("caps = %#v, want supported probed cache without event stream", caps)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.state != macosDenialDegraded {
+		t.Fatalf("diagnostics state = %v, want degraded", d.state)
 	}
 }
 
@@ -700,6 +721,7 @@ func TestRuntimeCloseStopsDenialMonitor(t *testing.T) {
 		StrongCorrelation:    true,
 	})
 	rt := NewRuntime()
+	t.Cleanup(func() { _ = rt.Close() })
 	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor: %v", err)
 	}
@@ -738,6 +760,7 @@ func TestLiveProdMonitorClearsDeadMonitorAndRestarts(t *testing.T) {
 		StrongCorrelation:    true,
 		ProbeCompleted:       true,
 	}
+	d.state = macosDenialRunning
 	d.mu.Unlock()
 	if rt.sandboxDenialCollectingReady() {
 		t.Fatal("sandboxDenialCollectingReady = true for closed done channel")
@@ -745,6 +768,12 @@ func TestLiveProdMonitorClearsDeadMonitorAndRestarts(t *testing.T) {
 	caps := rt.DiagnosticsCapability()
 	if caps.EventStreamAvailable {
 		t.Fatalf("caps.EventStreamAvailable = true after dead monitor, want false")
+	}
+	d.mu.RLock()
+	state := d.state
+	d.mu.RUnlock()
+	if state != macosDenialIdle {
+		t.Fatalf("diagnostics state = %v after monitor death, want idle", state)
 	}
 	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor after monitor death: %v", err)
@@ -754,31 +783,26 @@ func TestLiveProdMonitorClearsDeadMonitorAndRestarts(t *testing.T) {
 	}
 }
 
-func TestEnsureDenialMonitorRestartsAfterClose(t *testing.T) {
-	resetDiagnosticsCapsCacheForTest()
-	t.Cleanup(resetDiagnosticsCapsCacheForTest)
-	storeCachedDiagnosticsCaps(DiagnosticsCapability{
-		Supported:            true,
-		ProbeCompleted:       true,
-		EventStreamAvailable: true,
-		StrongCorrelation:    true,
-	})
+func TestEnsureDenialMonitorDoesNotRestartAfterClose(t *testing.T) {
 	rt := NewRuntime()
-	t.Cleanup(func() { _ = rt.Close() })
-	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
-		t.Fatalf("ensureDenialMonitor: %v", err)
-	}
-	if !rt.sandboxDenialCollectingReady() {
-		t.Skip("log stream unavailable on this host")
-	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: &macosDenialRing{}}
+	d.caps.EventStreamAvailable = true
+	d.mu.Unlock()
 	if err := rt.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor after Close: %v", err)
 	}
-	if !rt.sandboxDenialCollectingReady() {
-		t.Fatal("sandboxDenialCollectingReady = false after restart, want true")
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true after Close")
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.prodMonitor != nil {
+		t.Fatal("ensureDenialMonitor restarted monitor after Close")
 	}
 }
 
@@ -835,11 +859,13 @@ func TestEnsureDenialMonitorHonorsCancellationWhileInitializationBusy(t *testing
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
+		close(started)
 		done <- rt.ensureDenialMonitor(ctx)
 	}()
-	time.Sleep(20 * time.Millisecond)
+	<-started
 	cancel()
 
 	select {
@@ -875,9 +901,174 @@ func TestRuntimeCloseRetainsMonitorWhenStopDoesNotComplete(t *testing.T) {
 		t.Fatal("Close returned nil when monitor did not stop")
 	}
 	d.mu.RLock()
-	defer d.mu.RUnlock()
 	if d.prodMonitor != monitor {
+		d.mu.RUnlock()
 		t.Fatal("Close discarded ownership of a monitor that did not stop")
+	}
+	if d.state != macosDenialClosed {
+		d.mu.RUnlock()
+		t.Fatal("Close did not leave diagnostics in terminal state")
+	}
+	d.mu.RUnlock()
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor after failed Close: %v", err)
+	}
+	close(monitor.done)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("retry Close after monitor exit: %v", err)
+	}
+}
+
+func TestRuntimeCloseRetainsInitializationMonitorWhenStopDoesNotComplete(
+	t *testing.T,
+) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	monitor := &macosLogStreamMonitor{
+		cancel: func() {},
+		done:   make(chan struct{}),
+		ring:   &macosDenialRing{},
+	}
+	d.mu.Lock()
+	d.initMonitor = monitor
+	d.mu.Unlock()
+
+	if err := rt.Close(); err == nil {
+		t.Fatal("Close returned nil when initialization monitor did not stop")
+	}
+	d.mu.RLock()
+	if d.initMonitor != monitor {
+		d.mu.RUnlock()
+		t.Fatal("Close discarded ownership of an initialization monitor")
+	}
+	d.mu.RUnlock()
+
+	close(monitor.done)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("retry Close after initialization monitor exit: %v", err)
+	}
+}
+
+func TestReleaseInitializationMonitorRetainsOwnershipOnTimeout(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	monitor := &macosLogStreamMonitor{
+		cancel: func() {},
+		done:   make(chan struct{}),
+		ring:   &macosDenialRing{},
+	}
+
+	if err := releaseInitializationMonitor(d, monitor); err == nil {
+		t.Fatal("releaseInitializationMonitor returned nil when stop timed out")
+	}
+	d.mu.RLock()
+	if d.initMonitor != monitor || d.monitorErr == nil {
+		d.mu.RUnlock()
+		t.Fatal("failed release did not retain initialization monitor ownership")
+	}
+	d.mu.RUnlock()
+
+	close(monitor.done)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close after initialization monitor exit: %v", err)
+	}
+}
+
+func TestInstallDenialMonitorRetainsOwnershipWhenClosedStopTimesOut(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	monitor := &macosLogStreamMonitor{
+		cancel: func() {},
+		done:   make(chan struct{}),
+		ring:   &macosDenialRing{},
+	}
+	d.mu.Lock()
+	d.state = macosDenialClosed
+	d.mu.Unlock()
+
+	if err := installDenialMonitor(
+		d,
+		DiagnosticsCapability{EventStreamAvailable: true},
+		monitor,
+	); err == nil {
+		t.Fatal("installDenialMonitor returned nil when stop did not complete")
+	}
+	d.mu.RLock()
+	if d.prodMonitor != monitor || d.monitorErr == nil {
+		d.mu.RUnlock()
+		t.Fatal("failed stop did not retain monitor ownership and error")
+	}
+	d.mu.RUnlock()
+
+	close(monitor.done)
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close after monitor exit: %v", err)
+	}
+}
+
+func TestRuntimeCloseJoinsInFlightCloseAttempt(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	wantErr := errors.New("shared close result")
+	attempt := &macosDenialCloseAttempt{done: make(chan struct{})}
+	d.mu.Lock()
+	d.closeAttempt = attempt
+	d.mu.Unlock()
+
+	started := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		close(started)
+		result <- rt.Close()
+	}()
+	<-started
+	attempt.err = wantErr
+	close(attempt.done)
+	if err := <-result; !errors.Is(err, wantErr) {
+		t.Fatalf("concurrent Close error = %v, want shared result", err)
+	}
+
+	d.mu.Lock()
+	d.closeAttempt = nil
+	d.mu.Unlock()
+}
+
+func TestRuntimeCloseIsBoundedWhileInitializationBusy(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	if err := d.lockInit(context.Background()); err != nil {
+		t.Fatalf("lockInit: %v", err)
+	}
+	canceled := make(chan struct{}, 1)
+	d.mu.Lock()
+	d.initCancel = func() {
+		select {
+		case canceled <- struct{}{}:
+		default:
+		}
+	}
+	d.mu.Unlock()
+
+	start := time.Now()
+	err := rt.Close()
+	elapsed := time.Since(start)
+	if err == nil {
+		t.Fatal("Close returned nil while initialization gate remained held")
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("Close took %s, want a bounded return", elapsed)
+	}
+	select {
+	case <-canceled:
+	default:
+		t.Fatal("Close did not cancel in-flight initialization")
+	}
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor after Close: %v", err)
+	}
+	d.unlockInit()
+	if err := rt.Close(); err != nil {
+		t.Fatalf("retry Close after initialization completed: %v", err)
 	}
 }
 
