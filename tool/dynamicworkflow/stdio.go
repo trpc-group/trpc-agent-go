@@ -774,12 +774,39 @@ async def pipeline(items, *stages):
     if not all(callable(stage) for stage in stages):
         raise TypeError("pipeline stages must be functions")
 
+    resolved_stages = []
+    for stage in stages:
+        try:
+            signature = inspect.signature(stage)
+        except (TypeError, ValueError):
+            arity = 3
+        else:
+            arity = None
+            for candidate in (3, 2, 1):
+                try:
+                    signature.bind(*([None] * candidate))
+                except TypeError:
+                    continue
+                arity = candidate
+                break
+            if arity is None:
+                raise TypeError(
+                    "pipeline stages must accept 1, 2, or 3 positional arguments"
+                )
+        resolved_stages.append((stage, arity))
+
     async def _run_item(item, index):
         previous = item
-        for stage in stages:
+        for stage, arity in resolved_stages:
             if previous is None:
                 return None
-            awaitable = stage(previous, item, index)
+            if arity == 3:
+                args = (previous, item, index)
+            elif arity == 2:
+                args = (previous, item)
+            else:
+                args = (previous,)
+            awaitable = stage(*args)
             if not inspect.isawaitable(awaitable):
                 raise TypeError("pipeline stages must return an awaitable")
             previous = await awaitable
@@ -794,11 +821,38 @@ def _contains_outer_return(node):
     if isinstance(node, ast.Return):
         return True
     # A return nested in a helper is not a return from __workflow__. In
-    # particular, this rejects an uncalled async def run() wrapper,
-    # which otherwise completes successfully with a misleading null result.
+    # particular, it must not make an arbitrary uncalled helper look like a
+    # completed workflow. A sole conventional run/main wrapper is handled
+    # explicitly below.
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
         return False
     return any(_contains_outer_return(child) for child in ast.iter_child_nodes(node))
+
+def _conventional_workflow_wrapper(statements):
+    if (
+        statements
+        and isinstance(statements[0], ast.Expr)
+        and isinstance(statements[0].value, ast.Constant)
+        and isinstance(statements[0].value.value, str)
+    ):
+        statements = statements[1:]
+    if len(statements) != 1:
+        return None
+    candidate = statements[0]
+    if not isinstance(candidate, ast.AsyncFunctionDef):
+        return None
+    if candidate.name not in {"run", "main"}:
+        return None
+    args = candidate.args
+    if (
+        args.posonlyargs
+        or args.args
+        or args.vararg is not None
+        or args.kwonlyargs
+        or args.kwarg is not None
+    ):
+        return None
+    return candidate
 
 def _validate_workflow_ast(parsed):
     for node in ast.walk(parsed):
@@ -847,9 +901,17 @@ async def _main():
     _validate_workflow_ast(parsed)
     workflow = parsed.body[0]
     if not any(_contains_outer_return(statement) for statement in workflow.body):
-        raise RuntimeError(
-            "workflow code must contain a return statement outside nested functions or classes"
-        )
+        wrapper = _conventional_workflow_wrapper(workflow.body)
+        if wrapper is None:
+            raise RuntimeError(
+                "workflow code must contain a return statement outside nested functions or classes"
+            )
+        workflow.body.append(ast.Return(value=ast.Await(value=ast.Call(
+            func=ast.Name(id=wrapper.name, ctx=ast.Load()),
+            args=[],
+            keywords=[],
+        ))))
+        ast.fix_missing_locations(parsed)
     # JSON-style literals make generated AgentSpec dictionaries less brittle
     # when a model emits JSON inside otherwise valid Python source.
     scope = {
@@ -862,7 +924,7 @@ async def _main():
         "false": False,
         "null": None,
     }
-    exec(compile(wrapped, "<dynamic-workflow>", "exec"), scope)
+    exec(compile(parsed, "<dynamic-workflow>", "exec"), scope)
     _bridge = _Bridge(asyncio.get_running_loop())
     _bridge.start()
     try:
