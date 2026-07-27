@@ -479,6 +479,25 @@ func TestExecTool_LiveEngine_Errors(t *testing.T) {
 	require.Contains(t, err.Error(), "live workspace support")
 }
 
+func TestExecTool_LiveEngineUsesContextAwareProvider(t *testing.T) {
+	ctx := context.WithValue(context.Background(), "request", "context-aware")
+	eng := codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, &nonInteractiveRunner{})
+	exec := &contextEngineExec{eng: eng}
+	tool := &ExecTool{exec: exec}
+
+	got, err := tool.liveEngine(ctx)
+	require.NoError(t, err)
+	require.Same(t, eng, got)
+	require.Same(t, ctx, exec.ctx)
+	require.True(t, supportsInteractiveSessions(exec))
+}
+
+func TestExecTool_LiveEnginePropagatesContextProviderError(t *testing.T) {
+	want := errors.New("context engine failed")
+	_, err := (&ExecTool{exec: &contextEngineExec{err: want}}).liveEngine(context.Background())
+	require.ErrorIs(t, err, want)
+}
+
 func TestExecTool_Call_NotConfigured(t *testing.T) {
 	_, err := (&ExecTool{}).Call(context.Background(), []byte(`{"command":"echo hi"}`))
 	require.Error(t, err)
@@ -950,6 +969,25 @@ func (e *badEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 
 func (e *badEngineExec) Engine() codeexecutor.Engine {
 	return codeexecutor.NewEngine(nil, nil, nil)
+}
+
+type contextEngineExec struct {
+	eng codeexecutor.Engine
+	err error
+	ctx context.Context
+}
+
+func (*contextEngineExec) ExecuteCode(context.Context, codeexecutor.CodeExecutionInput) (codeexecutor.CodeExecutionResult, error) {
+	return codeexecutor.CodeExecutionResult{}, nil
+}
+
+func (*contextEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
+	return codeexecutor.CodeBlockDelimiter{Start: "```", End: "```"}
+}
+
+func (e *contextEngineExec) EngineWithContext(ctx context.Context) (codeexecutor.Engine, error) {
+	e.ctx = ctx
+	return e.eng, e.err
 }
 
 func (e *nonInteractiveExec) Engine() codeexecutor.Engine {
