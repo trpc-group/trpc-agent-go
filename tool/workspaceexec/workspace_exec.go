@@ -958,7 +958,11 @@ func (t *ExecTool) sanitizeOutputWith(
 ) execOutput {
 	if t != nil && t.safetyScanner != nil {
 		if sanitizer != nil {
-			out.Output = sanitizer.Sanitize(out.Output)
+			if out.Status == codeexecutor.ProgramStatusExited {
+				out.Output = sanitizer.SanitizeFinal(out.Output)
+			} else {
+				out.Output = sanitizer.Sanitize(out.Output)
+			}
 		} else {
 			out.Output = t.safetyScanner.SanitizeOutput(out.Output)
 		}

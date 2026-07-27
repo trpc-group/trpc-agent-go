@@ -45,7 +45,7 @@ func decisionRank(d Decision) int {
 	switch d {
 	case DecisionDeny:
 		return 3
-	case DecisionAsk, DecisionNeedsHumanReview:
+	case DecisionAsk:
 		return 2
 	case DecisionAllow:
 		return 0
@@ -79,7 +79,5 @@ func riskRank(r RiskLevel) int {
 }
 
 func blocked(d Decision) bool {
-	return d == DecisionDeny ||
-		d == DecisionAsk ||
-		d == DecisionNeedsHumanReview
+	return d == DecisionDeny || d == DecisionAsk
 }

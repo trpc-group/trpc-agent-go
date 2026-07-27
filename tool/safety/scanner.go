@@ -140,6 +140,7 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 		} else {
 			findings = append(findings, s.scanCommandInCwd(req.Command, req.Cwd)...)
 		}
+		findings = append(findings, s.scanStdin(req)...)
 	}
 	if len(req.CodeBlocks) > 0 {
 		for i, block := range req.CodeBlocks {
@@ -151,7 +152,6 @@ func (s *Scanner) scanRequest(req ExecutionRequest) []Finding {
 	}
 	if req.Stdin != "" {
 		findings = append(findings, s.scanSecretTextAt(req.Stdin, "stdin")...)
-		findings = append(findings, s.scanStdin(req)...)
 	}
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanResources(req)...)

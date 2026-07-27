@@ -21,6 +21,15 @@ func (s *Scanner) scanStdin(req ExecutionRequest) []Finding {
 	}
 	var findings []Finding
 	for i, argv := range pipe.Commands {
+		if config := curlFileConfig(argv); config != "" {
+			findings = append(findings, finding(
+				RuleShellParseUnsafe, CategoryShellBypass, RiskHigh, DecisionDeny,
+				"curl config file cannot be scanned safely: "+config,
+				fmt.Sprintf("command.segment[%d]", i),
+				"Use explicit curl arguments or pass a reviewable config on stdin.",
+			))
+			continue
+		}
 		if !curlReadsConfigFromStdin(argv) {
 			continue
 		}
@@ -40,6 +49,30 @@ func (s *Scanner) scanStdin(req ExecutionRequest) []Finding {
 	return findings
 }
 
+func curlFileConfig(argv []string) string {
+	if len(argv) < 2 || normalizeCommandName(argv[0]) != "curl" {
+		return ""
+	}
+	for i := 1; i < len(argv); i++ {
+		arg := strings.TrimSpace(argv[i])
+		switch {
+		case strings.HasPrefix(arg, "--config="):
+			if value := strings.TrimPrefix(arg, "--config="); value != "-" {
+				return value
+			}
+		case arg == "--config" || arg == "-K":
+			if i+1 < len(argv) && argv[i+1] != "-" {
+				return argv[i+1]
+			}
+		case strings.HasPrefix(arg, "-K") && len(arg) > 2:
+			if value := arg[2:]; value != "-" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
 func curlReadsConfigFromStdin(argv []string) bool {
 	if len(argv) < 2 || normalizeCommandName(argv[0]) != "curl" {
 		return false
@@ -49,8 +82,14 @@ func curlReadsConfigFromStdin(argv []string) bool {
 		if arg == "--config=-" || arg == "-k-" {
 			return true
 		}
+		if strings.HasPrefix(arg, "--config=") || (strings.HasPrefix(arg, "-k") && len(arg) > 2) {
+			return false
+		}
 		if (arg == "--config" || arg == "-k") && i+1 < len(argv) && argv[i+1] == "-" {
 			return true
+		}
+		if arg == "--config" || arg == "-k" {
+			return false
 		}
 	}
 	return false

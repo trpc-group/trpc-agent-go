@@ -14,10 +14,11 @@ type Decision string
 
 // Decision values used by reports and permission decisions.
 const (
-	DecisionAllow            Decision = "allow"
-	DecisionDeny             Decision = "deny"
-	DecisionAsk              Decision = "ask"
-	DecisionNeedsHumanReview Decision = "needs_human_review"
+	DecisionAllow Decision = "allow"
+	DecisionDeny  Decision = "deny"
+	DecisionAsk   Decision = "ask"
+	// DecisionNeedsHumanReview is retained as a source-compatible alias for ask.
+	DecisionNeedsHumanReview Decision = DecisionAsk
 )
 
 // RiskLevel is the severity assigned to a finding or final report.

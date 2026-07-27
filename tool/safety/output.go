@@ -34,10 +34,11 @@ type SanitizedOutput struct {
 // sensitive-value state across calls. It is intended for one execution
 // session and is safe for concurrent use.
 type OutputSanitizer struct {
-	mu           sync.Mutex
-	scanner      *Scanner
-	pending      string
-	inPrivateKey bool
+	mu            sync.Mutex
+	scanner       *Scanner
+	pending       string
+	pendingSecret string
+	inPrivateKey  bool
 }
 
 // NewOutputSanitizer creates an output sanitizer for one streaming session.
@@ -47,6 +48,15 @@ func (s *Scanner) NewOutputSanitizer() *OutputSanitizer {
 
 // Sanitize redacts one incremental output chunk.
 func (s *OutputSanitizer) Sanitize(output string) string {
+	return s.sanitize(output, false)
+}
+
+// SanitizeFinal redacts the last chunk and releases buffered state.
+func (s *OutputSanitizer) SanitizeFinal(output string) string {
+	return s.sanitize(output, true)
+}
+
+func (s *OutputSanitizer) sanitize(output string, final bool) string {
 	if s == nil || s.scanner == nil {
 		return output
 	}
@@ -55,8 +65,43 @@ func (s *OutputSanitizer) Sanitize(output string) string {
 	if s.scanner.redactor == nil || !s.scanner.redactor.enabled {
 		return s.scanner.SanitizeOutput(output)
 	}
-	visible := s.redactPrivateKeyChunks(s.pending + output)
+	visible := s.redactPrivateKeyChunks(s.pending + s.pendingSecret + output)
+	s.pendingSecret = ""
+	visible, _ = s.scanner.redactor.Redact(visible)
+	if start := possibleCredentialStart(visible, s.scanner.redactor.streamPrefixes); start >= 0 {
+		if final {
+			visible = visible[:start] + s.scanner.redactor.replacement
+		} else {
+			s.pendingSecret = visible[start:]
+			visible = visible[:start]
+		}
+	}
+	if final && s.pending != "" {
+		visible += s.scanner.redactor.replacement
+		s.pending = ""
+	}
 	return s.scanner.SanitizeOutput(visible)
+}
+
+func possibleCredentialStart(input string, prefixes []string) int {
+	lower := strings.ToLower(input)
+	best := -1
+	for _, rawPrefix := range prefixes {
+		prefix := strings.ToLower(rawPrefix)
+		if i := strings.LastIndex(lower, prefix); i >= 0 && (best < 0 || i < best) {
+			best = i
+		}
+		for n := min(len(lower), len(prefix)-1); n >= 3; n-- {
+			if strings.HasSuffix(lower, prefix[:n]) {
+				start := len(input) - n
+				if best < 0 || start < best {
+					best = start
+				}
+				break
+			}
+		}
+	}
+	return best
 }
 
 func (s *OutputSanitizer) redactPrivateKeyChunks(input string) string {

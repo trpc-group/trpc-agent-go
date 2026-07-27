@@ -45,7 +45,10 @@ func (s *Scanner) scanNetworkArgv(argv []string, loc string) []Finding {
 			"Specify an allowed domain or avoid outbound network access.",
 		)}
 	}
-	var findings []Finding
+	findings := s.scanCurlProxyEndpoints(argv, loc)
+	if len(findings) > 0 {
+		return findings
+	}
 	for _, domain := range domains {
 		switch {
 		case domainMatches(domain, s.policy.DeniedNetworkDomains):
@@ -72,6 +75,52 @@ func (s *Scanner) scanNetworkArgv(argv []string, loc string) []Finding {
 		}
 	}
 	return findings
+}
+
+func (s *Scanner) scanCurlProxyEndpoints(argv []string, loc string) []Finding {
+	var findings []Finding
+	for _, domain := range curlProxyEndpoints(argv) {
+		if domainMatches(domain, s.policy.AllowedNetworkDomains) && !domainMatches(domain, s.policy.DeniedNetworkDomains) {
+			continue
+		}
+		findings = append(findings, finding(RuleNetworkDeniedDomain, CategoryNetwork, RiskHigh, DecisionDeny,
+			"curl proxy domain is not allowed: "+domain, loc,
+			"Use an approved proxy domain or remove the proxy option."))
+	}
+	return findings
+}
+
+func curlProxyEndpoints(argv []string) []string {
+	var out []string
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
+		value := ""
+		switch {
+		case strings.HasPrefix(arg, "--proxy="):
+			value = arg[len("--proxy="):]
+		case strings.HasPrefix(arg, "--preproxy="):
+			value = arg[len("--preproxy="):]
+		case arg == "--proxy" || arg == "--preproxy" || arg == "-x":
+			if i+1 < len(argv) {
+				i++
+				value = argv[i]
+			}
+		case strings.HasPrefix(arg, "-x") && len(arg) > 2:
+			value = arg[2:]
+		}
+		if value == "" {
+			continue
+		}
+		if u, err := url.Parse(value); err == nil && u.Hostname() != "" {
+			out = append(out, strings.ToLower(u.Hostname()))
+			continue
+		}
+		value = strings.TrimPrefix(value, "[")
+		if host := strings.Split(value, ":")[0]; host != "" {
+			out = append(out, strings.ToLower(host))
+		}
+	}
+	return cleanStrings(out)
 }
 
 func curlDestinationRewriteFinding(argv []string, loc string) []Finding {

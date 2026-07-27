@@ -234,6 +234,31 @@ func (p Policy) normalized() (Policy, error) {
 	if err := p.validate(); err != nil {
 		return Policy{}, err
 	}
+	p.AllowedCommands = append([]string(nil), p.AllowedCommands...)
+	p.DeniedCommands = append([]string(nil), p.DeniedCommands...)
+	p.ForbiddenPaths = append([]string(nil), p.ForbiddenPaths...)
+	p.AllowedNetworkDomains = append([]string(nil), p.AllowedNetworkDomains...)
+	p.DeniedNetworkDomains = append([]string(nil), p.DeniedNetworkDomains...)
+	p.EnvAllowlist = append([]string(nil), p.EnvAllowlist...)
+	p.BackendRules.CodeExec.AllowedLanguages = append([]string(nil), p.BackendRules.CodeExec.AllowedLanguages...)
+	p.Redaction.ExtraPatterns = append([]string(nil), p.Redaction.ExtraPatterns...)
+	if p.Redaction.Enabled != nil {
+		p.Redaction.Enabled = boolPointer(*p.Redaction.Enabled)
+	}
+	if p.Audit.FailClosed != nil {
+		p.Audit.FailClosed = boolPointer(*p.Audit.FailClosed)
+	}
+	deps := make([]DependencyCommandPolicy, len(p.DependencyCommands))
+	for i, dep := range p.DependencyCommands {
+		deps[i] = dep
+		deps[i].Subcommands = append([]string(nil), dep.Subcommands...)
+	}
+	p.DependencyCommands = deps
+	rules := make(map[string]RulePolicyOverride, len(p.Rules))
+	for id, rule := range p.Rules {
+		rules[id] = rule
+	}
+	p.Rules = rules
 	return p, nil
 }
 
@@ -350,7 +375,7 @@ func normalizeHostExecRules(got, def HostExecRules) HostExecRules {
 
 func validDecision(d Decision) bool {
 	switch d {
-	case DecisionAllow, DecisionDeny, DecisionAsk, DecisionNeedsHumanReview:
+	case DecisionAllow, DecisionDeny, DecisionAsk:
 		return true
 	default:
 		return false

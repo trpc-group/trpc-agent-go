@@ -29,9 +29,6 @@ func newReport(req ExecutionRequest, command string, findings []Finding, durMS f
 		decision = stricterDecision(decision, f.Action)
 		risk = higherRisk(risk, f.RiskLevel)
 		ruleIDs = append(ruleIDs, f.RuleID)
-		if f.Recommendation != "" && blocked(f.Action) {
-			recommendation = f.Recommendation
-		}
 		if redactor != nil {
 			if s, ok := redactor.Redact(f.Evidence); ok {
 				f.Evidence = s
@@ -58,6 +55,12 @@ func newReport(req ExecutionRequest, command string, findings []Finding, durMS f
 		}
 	}
 	primary := primaryFindingRuleID(findings, ruleIDs)
+	for i := range findings {
+		if findings[i].RuleID == primary && findings[i].Recommendation != "" {
+			recommendation = findings[i].Recommendation
+			break
+		}
+	}
 	ruleIDs = moveRuleFirst(ruleIDs, primary)
 	report := Report{
 		SchemaVersion:  "1",

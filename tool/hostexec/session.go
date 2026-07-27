@@ -264,6 +264,9 @@ func (s *session) sanitizeOutput(
 	}
 	s.mu.Unlock()
 	if sanitizer != nil {
+		if final {
+			return sanitizer.SanitizeFinal(output)
+		}
 		return sanitizer.Sanitize(output)
 	}
 	return fallback.SanitizeOutput(output)

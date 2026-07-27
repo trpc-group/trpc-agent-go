@@ -54,6 +54,7 @@ func TestExecCommandTool_SafetyScannerBlocksBeforeHostShell(t *testing.T) {
 func TestExecCommandTool_SafetyScannerSanitizesOutput(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	policy.BackendRules.HostExec.BackgroundAction = safety.DecisionAllow
 	policy.ResourceLimits.MaxOutputBytes = 24
 	policy.ForbiddenPaths = []string{".env"}
 	scanner, err := safety.NewScanner(policy)
@@ -94,6 +95,7 @@ func TestExecCommandTool_SafetyScannerSanitizesOutput(t *testing.T) {
 func TestExecCommandTool_SafetyScannerScansEffectiveDefaultTimeout(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	policy.BackendRules.HostExec.BackgroundAction = safety.DecisionAllow
 	policy.ForbiddenPaths = []string{"/blocked/**"}
 	scanner, err := safety.NewScanner(policy)
 	if err != nil {
@@ -121,6 +123,29 @@ func TestExecCommandTool_SafetyScannerScansEffectiveDefaultTimeout(t *testing.T)
 	if err == nil || !errors.Is(err, safety.ErrBlocked) ||
 		!strings.Contains(err.Error(), safety.RuleResourceTimeout) {
 		t.Fatalf("error = %v, want effective default timeout review", err)
+	}
+}
+
+func TestExecCommandTool_SafetyScannerAppliesBackgroundPolicyToYield(t *testing.T) {
+	policy := safety.DefaultPolicy()
+	policy.BackendRules.HostExec.DefaultAction = safety.DecisionAllow
+	policy.BackendRules.HostExec.BackgroundAction = safety.DecisionDeny
+	policy.BackendRules.HostExec.MaxTimeoutMS = int64(defaultTimeoutS) * 1000
+	scanner := safety.MustScanner(policy)
+	set, err := NewToolSet(WithSafetyScanner(scanner))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer set.Close()
+	var execTool tool.CallableTool
+	for _, tl := range set.Tools(context.Background()) {
+		if tl.Declaration().Name == toolExecCommand {
+			execTool = tl.(tool.CallableTool)
+		}
+	}
+	_, err = execTool.Call(context.Background(), []byte(`{"command":"sleep 1","yield_time_ms":1}`))
+	if err == nil || !errors.Is(err, safety.ErrBlocked) || !strings.Contains(err.Error(), safety.RuleHostBackground) {
+		t.Fatalf("error = %v, want background block", err)
 	}
 }
 

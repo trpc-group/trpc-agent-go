@@ -33,6 +33,9 @@ func (s *Scanner) scanForbiddenPathsInCwd(args []string, cwd, loc string) []Find
 	for _, arg := range args {
 		clean := normalizePathToken(arg)
 		if clean == "" {
+			clean = configuredBarePath(arg, s.policy.ForbiddenPaths)
+		}
+		if clean == "" {
 			continue
 		}
 		candidates := []string{clean}
@@ -82,6 +85,23 @@ func normalizePathToken(s string) string {
 		return ""
 	}
 	return filepath.ToSlash(filepath.Clean(s))
+}
+
+func configuredBarePath(value string, patterns []string) string {
+	value = strings.Trim(strings.TrimSpace(value), `"'`)
+	if value == "" || strings.HasPrefix(value, "-") || strings.ContainsAny(value, `/\`) {
+		return ""
+	}
+	for _, pattern := range patterns {
+		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
+		if pattern == "" || strings.Contains(pattern, "/") {
+			continue
+		}
+		if ok, _ := doublestar.PathMatch(pattern, value); ok {
+			return filepath.ToSlash(filepath.Clean(value))
+		}
+	}
+	return ""
 }
 
 func isKnownSensitiveBareFilename(s string) bool {

@@ -297,6 +297,7 @@ func (t *execCommandTool) Call(
 	if strings.TrimSpace(in.Command) == "" {
 		return nil, errors.New(errCommandRequired)
 	}
+	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	workdir, err := resolveWorkdir(in.Workdir, t.baseDir)
 	if err != nil {
 		return nil, err
@@ -304,7 +305,6 @@ func (t *execCommandTool) Call(
 	if err := t.checkSafety(ctx, in, workdir); err != nil {
 		return nil, err
 	}
-	yield := firstInt(in.YieldTimeMS, in.YieldMs)
 	timeout := firstInt(in.TimeoutSec, in.TimeoutSecOld)
 	var sanitizer *safety.OutputSanitizer
 	if t.safety != nil {
@@ -325,7 +325,11 @@ func (t *execCommandTool) Call(
 		return nil, err
 	}
 	if t.safety != nil {
-		res.Output = sanitizer.Sanitize(res.Output)
+		if res.Status == programStatusExited {
+			res.Output = sanitizer.SanitizeFinal(res.Output)
+		} else {
+			res.Output = sanitizer.Sanitize(res.Output)
+		}
 	}
 	return mapExecResult(res), nil
 }
@@ -344,6 +348,8 @@ func (t *execCommandTool) checkSafety(
 		timeoutSeconds = *timeout
 	}
 	timeoutMS := timeoutDuration(timeoutSeconds).Milliseconds()
+	yield := firstInt(in.YieldTimeMS, in.YieldMs)
+	effectiveBackground := in.Background || yield == nil || *yield > 0
 	report, err := t.safety.Scan(ctx, safety.ExecutionRequest{
 		ToolName:   toolExecCommand,
 		Backend:    safety.BackendHostExec,
@@ -352,7 +358,7 @@ func (t *execCommandTool) checkSafety(
 		Env:        in.Env,
 		TimeoutMS:  timeoutMS,
 		TTY:        firstBool(in.TTY, in.PTY),
-		Background: in.Background,
+		Background: effectiveBackground,
 	})
 	if err != nil {
 		return err

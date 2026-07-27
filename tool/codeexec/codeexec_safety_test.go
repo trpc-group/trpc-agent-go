@@ -42,7 +42,7 @@ func TestExecuteCodeTool_SafetyScannerSanitizesOutput(t *testing.T) {
 	exec := &safetyTestExecutor{result: codeexecutor.CodeExecutionResult{
 		Output: "token=super-secret-value",
 		OutputFiles: []codeexecutor.File{{
-			Name: "result.txt", Content: strings.Repeat("x", 64), MIMEType: "text/plain",
+			Name: "sk-1234567890abcdef.txt", Content: strings.Repeat("x", 64), MIMEType: "text/plain",
 		}},
 	}}
 	tl := NewTool(exec, WithSafetyScanner(scanner))
@@ -55,7 +55,10 @@ func TestExecuteCodeTool_SafetyScannerSanitizesOutput(t *testing.T) {
 	result := got.(codeexecutor.CodeExecutionResult)
 	visibleBytes := len(result.Output)
 	for _, file := range result.OutputFiles {
-		visibleBytes += len(file.Content)
+		visibleBytes += len(file.Name) + len(file.Content)
+		if strings.Contains(file.Name, "sk-") {
+			t.Fatalf("file name leaked secret: %q", file.Name)
+		}
 	}
 	if visibleBytes > 32 {
 		t.Fatalf("visible output bytes = %d, want <= 32", visibleBytes)

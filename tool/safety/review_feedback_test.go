@@ -76,6 +76,51 @@ func TestScannerRejectsCurlDestinationRewrite(t *testing.T) {
 	}
 }
 
+func TestScannerRejectsCurlProxyAndFileConfig(t *testing.T) {
+	scanner := MustScanner(DefaultPolicy())
+	for _, command := range []string{
+		"curl --proxy evil.example:8080 https://proxy.example.test",
+		"curl -xevil.example:8080 https://proxy.example.test",
+		"curl --preproxy=evil.example:8080 https://proxy.example.test",
+		"curl --config rules.cfg https://proxy.example.test",
+		"curl -Krules.cfg https://proxy.example.test",
+	} {
+		report, err := scanner.Scan(context.Background(), ExecutionRequest{Command: command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if report.Decision != DecisionDeny {
+			t.Fatalf("%q decision = %s, want deny", command, report.Decision)
+		}
+	}
+}
+
+func TestScannerMatchesConfiguredBareForbiddenPaths(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.ForbiddenPaths = []string{"vault", "token-*"}
+	scanner := MustScanner(policy)
+	for _, command := range []string{"cat vault", "cat token-prod"} {
+		report, err := scanner.Scan(context.Background(), ExecutionRequest{Command: command})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !contains(report.RuleIDs, RuleForbiddenPath) {
+			t.Fatalf("%q rules = %v", command, report.RuleIDs)
+		}
+	}
+}
+
+func TestScannerRejectsAbsoluteWorkspaceCwd(t *testing.T) {
+	scanner := MustScanner(DefaultPolicy())
+	report, err := scanner.Scan(context.Background(), ExecutionRequest{Backend: BackendWorkspaceExec, Command: "echo ok", Cwd: "/tmp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionDeny || !contains(report.RuleIDs, RuleForbiddenPath) {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
 func TestScannerFindsDependencySubcommandAfterGlobalOptions(t *testing.T) {
 	scanner := MustScanner(DefaultPolicy())
 	for _, command := range []string{
@@ -206,5 +251,56 @@ func TestOutputSanitizerRedactsSplitPrivateKey(t *testing.T) {
 	got := output.String()
 	if strings.Count(got, "[REDACTED]") != 1 || !strings.Contains(got, "before") || !strings.Contains(got, "after") {
 		t.Fatalf("stream output = %q, want surrounding text and one replacement", got)
+	}
+}
+
+func TestOutputSanitizerRedactsSplitCredentials(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.Redaction.ExtraPatterns = []string{`CUSTOM-[0-9]{6}`}
+	for _, chunks := range [][]string{
+		{"before sk-123456", "7890abcdef after"},
+		{"Authorization: Bearer abc.", "def-123\n"},
+		{"CUSTOM-123", "456\n"},
+	} {
+		sanitizer := MustScanner(policy).NewOutputSanitizer()
+		var output strings.Builder
+		for _, chunk := range chunks {
+			output.WriteString(sanitizer.Sanitize(chunk))
+		}
+		got := output.String()
+		if strings.Contains(got, "1234567890abcdef") || strings.Contains(got, "abc.def-123") || strings.Contains(got, "CUSTOM-123456") {
+			t.Fatalf("split credential leaked: %q", got)
+		}
+	}
+}
+
+func TestScannerSnapshotsPolicyReferences(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.AllowedNetworkDomains = []string{"proxy.example.test"}
+	policy.BackendRules.CodeExec.AllowedLanguages = []string{"python"}
+	policy.DependencyCommands = []DependencyCommandPolicy{{Command: "pkg", Subcommands: []string{"install"}, Action: DecisionDeny}}
+	policy.Rules = map[string]RulePolicyOverride{RuleDependencyInstall: {Action: DecisionDeny}}
+	scanner := MustScanner(policy)
+	policy.AllowedNetworkDomains[0] = "evil.example"
+	policy.BackendRules.CodeExec.AllowedLanguages[0] = "ruby"
+	policy.DependencyCommands[0].Subcommands[0] = "remove"
+	policy.Rules[RuleDependencyInstall] = RulePolicyOverride{Action: DecisionAllow}
+	report, err := scanner.Scan(context.Background(), ExecutionRequest{Command: "pkg install item"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != DecisionDeny || !contains(report.RuleIDs, RuleDependencyInstall) {
+		t.Fatalf("report = %#v", report)
+	}
+}
+
+func TestReportRecommendationComesFromPrimaryFinding(t *testing.T) {
+	findings := []Finding{
+		finding("critical", CategoryHostExec, RiskCritical, DecisionDeny, "critical", "one", "critical recommendation"),
+		finding("medium", CategoryResource, RiskMedium, DecisionDeny, "medium", "two", "medium recommendation"),
+	}
+	report := newReport(ExecutionRequest{}, "command", findings, 0, nil)
+	if report.RuleIDs[0] != "critical" || report.Recommendation != "critical recommendation" {
+		t.Fatalf("report = %#v", report)
 	}
 }

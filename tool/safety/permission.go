@@ -87,7 +87,7 @@ func (p *PermissionPolicy) CheckToolPermission(
 		return tool.AllowPermission(), nil
 	case DecisionDeny:
 		return tool.DenyPermission(permissionReason(report)), nil
-	case DecisionAsk, DecisionNeedsHumanReview:
+	case DecisionAsk:
 		return tool.AskPermission(permissionReason(report)), nil
 	default:
 		return tool.AskPermission(permissionReason(report)), nil

@@ -7,6 +7,8 @@
 
 package safety
 
+import "strings"
+
 func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 	var findings []Finding
 	switch req.Backend {
@@ -43,6 +45,11 @@ func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 			))
 		}
 	case BackendWorkspaceExec:
+		if s.policy.BackendRules.WorkspaceExec.RequireWorkspaceRelativeCwd && req.Cwd != "" &&
+			(strings.HasPrefix(req.Cwd, "/") || strings.HasPrefix(req.Cwd, "~") || strings.HasPrefix(req.Cwd, "..")) {
+			findings = append(findings, finding(RuleForbiddenPath, CategoryPolicy, RiskCritical, DecisionDeny,
+				"workspace cwd must be relative: "+req.Cwd, "cwd", "Use a path relative to the workspace root."))
+		}
 		if req.TTY && s.policy.BackendRules.WorkspaceExec.DenyTTY {
 			findings = append(findings, finding(
 				RuleHostPTY, CategoryHostExec, RiskMedium, DecisionDeny,
