@@ -56,6 +56,10 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario, stableCost
 	if err != nil {
 		return err
 	}
+	expectedMetrics, err := loadMetricNames(dataDir, sc.metricFileID)
+	if err != nil {
+		return err
+	}
 	rt, err := buildRuntime(ctx, dataDir, outputDir, cfg.BaselineInstruction, sc)
 	if err != nil {
 		return err
@@ -76,9 +80,13 @@ func run(ctx context.Context, dataDir, outputDir string, sc scenario, stableCost
 
 	gate := resolveGate(cfg, sc)
 	report, err := regloop.Analyze(result, regloop.Options{
-		App:  appName,
-		Mode: "fake",
-		Gate: gate,
+		AppName: appName,
+		Mode:    "fake",
+		Gate:    gate,
+		// Every configured metric must carry terminal evidence in both phases; a
+		// silently-skipped metric (see the README metric-naming gotcha) now fails
+		// the gate instead of shrinking the evidence unnoticed.
+		ExpectedMetrics: expectedMetrics,
 		Cost: regloop.CostInput{
 			DurationMs: durationMs,
 			ModelCalls: rt.calls.snapshot(),

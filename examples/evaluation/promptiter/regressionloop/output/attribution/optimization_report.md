@@ -26,7 +26,7 @@
 - responseMismatch: 1
 - toolError: 1
 
-Terminal-loss severity (training signal): unknown=4
+Terminal-loss severity (training signal, accumulated across rounds): unknown=4
 
 ## Release Gate
 

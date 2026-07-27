@@ -105,7 +105,7 @@
     "baseline": {
       "responseMismatch": 3
     },
-    "bySeverity": {
+    "trainingTerminalLossesBySeverity": {
       "unknown": 3
     },
     "details": [
@@ -151,6 +151,7 @@
       "candidate": 9,
       "optimizer": 1
     },
+    "modelCallsKnown": true,
     "totalModelCalls": 14,
     "estimated": true,
     "note": "evaluated cases is a case count; model calls are counted per role, distinct from cases"

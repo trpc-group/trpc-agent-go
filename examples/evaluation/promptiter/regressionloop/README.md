@@ -97,6 +97,9 @@ under [`output/`](./output).
 > **Metric naming gotcha:** `metricName` must equal a registered evaluator name
 > (`final_response_avg_score`, `tool_trajectory_avg_score`, …). The evaluator is
 > resolved by name, not by criterion type; a custom name is silently skipped.
+> The pipeline passes the configured metric names to the analysis as
+> `expectedMetrics`, so a silently-skipped metric now fails the release gate
+> ("missing expected metric") instead of shrinking the evidence unnoticed.
 
 ## How the deterministic (fake) mode works
 
@@ -137,7 +140,10 @@ The report's `cost` records observable counts: wall-clock `durationMs`, per-role
 `modelCalls` (candidate/judge/backwarder/aggregator/optimizer — judge is 0 since
 no `llmJudge` metric is configured), and `evaluatedCases` (a case count, kept
 distinct from model calls). The engine carries no token accounting, so `cost` is
-labelled `"estimated": true`. The report also records the accepted candidate's
+labelled `"estimated": true`; `modelCallsKnown` distinguishes an instrumented
+zero from an uninstrumented run (rendered "unavailable"). Config values under
+secret-looking keys (api keys, tokens, authorization) are redacted before the
+report is written. The report also records the accepted candidate's
 surface projection (typed per `SurfaceValue` variant — text, few-shot, model,
 tools, skills — with model credentials never written), per-round output
 surfaces / validation / delta, and the run config (`deterministic`,

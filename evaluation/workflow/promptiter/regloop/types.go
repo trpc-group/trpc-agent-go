@@ -149,11 +149,18 @@ type DeltaSummary struct {
 	UnexpectedMetrics int `json:"unexpectedMetrics"`
 }
 
-// AttributionReport summarizes baseline failures by category and severity.
+// AttributionReport summarizes baseline validation failures by category
+// (Baseline / Details) plus, as a separate population, the severity mix of the
+// training signal.
 type AttributionReport struct {
-	Baseline   map[FailureCategory]int `json:"baseline"`
-	BySeverity map[string]int          `json:"bySeverity"`
-	Details    []FailureDetail         `json:"details,omitempty"`
+	Baseline map[FailureCategory]int `json:"baseline"`
+	// TrainingTerminalLossesBySeverity counts terminal TRAINING losses by
+	// severity, accumulated across every optimization round. It deliberately does
+	// NOT summarize the same population as Baseline/Details (baseline validation
+	// failures): the same case can recur in multiple rounds and the dataset is
+	// the training split, so the two must not be conflated by consumers.
+	TrainingTerminalLossesBySeverity map[string]int  `json:"trainingTerminalLossesBySeverity"`
+	Details                          []FailureDetail `json:"details,omitempty"`
 }
 
 // FailureDetail is one classified failed metric.
@@ -184,7 +191,12 @@ type CostReport struct {
 	// ModelCalls counts model invocations per role (candidate, judge, backwarder,
 	// aggregator, optimizer); empty when the caller does not instrument them.
 	ModelCalls map[string]int `json:"modelCalls,omitempty"`
-	// TotalModelCalls is the sum of ModelCalls.
+	// ModelCallsKnown is false when the caller did not instrument model calls;
+	// TotalModelCalls is then meaningless and must not be read as a measured
+	// zero-call run.
+	ModelCallsKnown bool `json:"modelCallsKnown"`
+	// TotalModelCalls is the sum of ModelCalls; only meaningful when
+	// ModelCallsKnown is true.
 	TotalModelCalls int    `json:"totalModelCalls"`
 	Estimated       bool   `json:"estimated"`
 	Note            string `json:"note,omitempty"`

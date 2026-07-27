@@ -83,7 +83,7 @@ func TestComputeDeltaVanishedFailingMetricCannotInflateGain(t *testing.T) {
 	if delta.Summary.MissingMetrics != 1 || delta.Summary.NewlyFailed != 0 {
 		t.Fatalf("summary=%+v want MissingMetrics=1", delta.Summary)
 	}
-	gate := ReleaseGate{MinTotalGain: 0.2}.Evaluate(GateInput{
+	gate := ReleaseGate{MinTotalGain: 0.2}.evaluate(gateInput{
 		ProfileAccepted: true,
 		TotalGain:       0.5,
 		Delta:           delta,

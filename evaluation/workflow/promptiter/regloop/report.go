@@ -18,22 +18,32 @@ import (
 	"strings"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
 )
 
 // Options configures how one run result is turned into a report.
 type Options struct {
-	// App names the optimization target for the report header.
-	App string
+	// AppName names the optimization target for the report header. It is only
+	// used when the RunResult does not carry its own AppName (direct engine runs);
+	// a manager-backed result's AppName is authoritative.
+	AppName string
 	// Mode records how the run was executed (e.g. "fake" or "live").
 	Mode string
 	// Gate is the release policy applied to the candidate.
 	Gate ReleaseGate
-	// Config echoes run configuration into the report for auditing.
+	// Config echoes run configuration into the report for auditing. Values under
+	// sensitive-looking keys (api keys, tokens, authorization headers, ...) are
+	// redacted before serialization; do not rely on this map to carry secrets.
 	Config map[string]any
 	// Cost carries runtime cost facts the pure package cannot observe.
 	Cost CostInput
+	// ExpectedMetrics lists the metric names every case in both compared phases
+	// must carry. It catches metrics that were silently skipped (e.g. a name not
+	// matching any registered evaluator) in both phases, which the key-set
+	// comparison alone cannot see. Empty disables the shape check.
+	ExpectedMetrics []string
 }
 
 // CostInput carries caller-measured cost facts (wall-clock, model calls) that
@@ -59,10 +69,10 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	delta := ComputeDelta(result.BaselineValidation, candidateValidation)
 
 	attribution := Attribute(result.BaselineValidation)
-	attribution.BySeverity = severityCounts(result.Rounds)
+	attribution.TrainingTerminalLossesBySeverity = severityCounts(result.Rounds)
 
 	totalGain := candidate.OverallScore - baseline.OverallScore
-	gate := opts.Gate.Evaluate(GateInput{
+	gate := opts.Gate.evaluate(gateInput{
 		ProfileAccepted: acceptedRound > 0,
 		TotalGain:       totalGain,
 		Rounds:          len(result.Rounds),
@@ -77,7 +87,7 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 	// or failed run may retain an accepted round, and a slimmed RunResult that
 	// omits evaluation cases would hide regressions and release on aggregate gain
 	// alone — both must be rejected rather than released.
-	gate = applyReleasePreconditions(gate, result, candidateValidation, acceptedRound)
+	gate = applyReleasePreconditions(gate, result, candidateValidation, acceptedRound, opts.ExpectedMetrics)
 
 	// Project the accepted candidate's surfaces only when a round was actually
 	// accepted; the engine keeps the initial profile as AcceptedProfile when every
@@ -88,8 +98,16 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 		acceptedSurfaces = candidateSurfaces(result.AcceptedProfile)
 	}
 
+	// The manager populates RunResult.AppName; when present it is the
+	// authoritative identity, and the option only labels direct engine runs
+	// where that field is empty.
+	app := result.AppName
+	if app == "" {
+		app = opts.AppName
+	}
+
 	return &Report{
-		App:      opts.App,
+		App:      app,
 		Mode:     opts.Mode,
 		Status:   string(result.Status),
 		Baseline: baseline,
@@ -104,8 +122,75 @@ func Analyze(result *engine.RunResult, opts Options) (*Report, error) {
 		Gate:               gate,
 		Cost:               costReport(result, opts.Cost),
 		Rounds:             roundReports(result),
-		Config:             opts.Config,
+		Config:             sanitizeConfig(opts.Config),
 	}, nil
+}
+
+// sensitiveKeyFragments flags config keys whose values must never be
+// serialized into the audit report.
+var sensitiveKeyFragments = []string{
+	"apikey", "api_key", "secret", "token", "password", "credential",
+	"authorization", "bearer",
+}
+
+// isSensitiveKey reports whether a config key looks like it carries a secret.
+func isSensitiveKey(key string) bool {
+	lower := strings.ToLower(key)
+	for _, fragment := range sensitiveKeyFragments {
+		if strings.Contains(lower, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+// sanitizeConfig deep-copies an audit config, replacing every value stored
+// under a sensitive-looking key with a redaction marker. The report is designed
+// to be persisted (and often committed), so unlike the typed surface
+// projection, an arbitrary caller-provided map must be scrubbed before it is
+// serialized.
+func sanitizeConfig(config map[string]any) map[string]any {
+	if config == nil {
+		return nil
+	}
+	return sanitizeMap(config)
+}
+
+func sanitizeMap(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for key, value := range m {
+		if isSensitiveKey(key) {
+			out[key] = "[redacted]"
+			continue
+		}
+		out[key] = sanitizeValue(value)
+	}
+	return out
+}
+
+func sanitizeValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		return sanitizeMap(v)
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, s := range v {
+			if isSensitiveKey(key) {
+				out[key] = "[redacted]"
+				continue
+			}
+			out[key] = s
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, item := range v {
+			out[i] = sanitizeValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 // candidateSurfaces projects a profile down to a stable audit view: every
@@ -174,9 +259,10 @@ func totalModelCalls(calls map[string]int) int {
 
 // applyReleasePreconditions forces the gate closed when the result cannot
 // support a trustworthy release decision: the run must have completed
-// successfully, both phases must carry comparable per-case data, and an
-// accepted round must come with the actual accepted profile artifact.
-func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult, acceptedRound int) GateResult {
+// successfully, both phases must carry comparable per-case data with terminal
+// metric evidence, and an accepted round must come with the actual accepted
+// profile artifact.
+func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candidate *engine.EvaluationResult, acceptedRound int, expectedMetrics []string) GateResult {
 	if result.Status != engine.RunStatusSucceeded {
 		gate.Released = false
 		gate.Reasons = append(gate.Reasons, fmt.Sprintf("run did not complete successfully (status %q)", result.Status))
@@ -193,7 +279,48 @@ func applyReleasePreconditions(gate GateResult, result *engine.RunResult, candid
 		gate.Released = false
 		gate.Reasons = append(gate.Reasons, "per-case results unavailable; cannot verify regressions")
 	}
+	phases := []struct {
+		name   string
+		result *engine.EvaluationResult
+	}{{"baseline", result.BaselineValidation}, {"candidate", candidate}}
+	for _, phase := range phases {
+		if issue := metricEvidenceIssue(phase.name, phase.result, expectedMetrics); issue != "" {
+			gate.Released = false
+			gate.Reasons = append(gate.Reasons, issue)
+		}
+	}
 	return gate
+}
+
+// metricEvidenceIssue reports the first incomplete-evidence problem in one
+// phase, or "" when every case carries a terminal (passed/failed) result for
+// every metric — including every expected metric name. A metric retained as
+// not_evaluated is excluded from aggregate scoring, and a name that matches no
+// registered evaluator is silently omitted from both phases; either way part of
+// the validation never ran and an aggregate gain cannot be trusted.
+func metricEvidenceIssue(phase string, result *engine.EvaluationResult, expectedMetrics []string) string {
+	if result == nil {
+		return ""
+	}
+	for _, set := range result.EvalSets {
+		for _, evalCase := range set.Cases {
+			present := make(map[string]bool, len(evalCase.Metrics))
+			for _, m := range evalCase.Metrics {
+				present[m.MetricName] = true
+				if m.Status != status.EvalStatusPassed && m.Status != status.EvalStatusFailed {
+					return fmt.Sprintf("%s metric %q on case %q has non-terminal status %q; evidence incomplete",
+						phase, m.MetricName, evalCase.EvalCaseID, m.Status)
+				}
+			}
+			for _, name := range expectedMetrics {
+				if !present[name] {
+					return fmt.Sprintf("%s case %q is missing expected metric %q; evidence incomplete",
+						phase, evalCase.EvalCaseID, name)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 // hasComparableCases reports whether the result carries at least one case with
@@ -222,10 +349,13 @@ func costReport(result *engine.RunResult, cost CostInput) CostReport {
 		evaluatedCases += caseCount(round.Train) + caseCount(round.Validation)
 	}
 	return CostReport{
-		Rounds:          rounds,
-		EvaluatedCases:  evaluatedCases,
-		DurationMs:      cost.DurationMs,
-		ModelCalls:      cost.ModelCalls,
+		Rounds:         rounds,
+		EvaluatedCases: evaluatedCases,
+		DurationMs:     cost.DurationMs,
+		ModelCalls:     cost.ModelCalls,
+		// A nil map means the caller did not instrument calls; the audit must not
+		// present that as a measured zero-call run.
+		ModelCallsKnown: cost.ModelCalls != nil,
 		TotalModelCalls: totalModelCalls(cost.ModelCalls),
 		Estimated:       true,
 		Note:            "evaluated cases is a case count; model calls are counted per role, distinct from cases",
@@ -309,11 +439,11 @@ func (r *Report) Markdown() string {
 		}
 		b.WriteString("\n")
 	}
-	if len(r.FailureAttribution.BySeverity) > 0 {
-		fmt.Fprintf(&b, "Terminal-loss severity (training signal): ")
-		parts := make([]string, 0, len(r.FailureAttribution.BySeverity))
-		for _, sev := range sortedStringKeys(r.FailureAttribution.BySeverity) {
-			parts = append(parts, fmt.Sprintf("%s=%d", sev, r.FailureAttribution.BySeverity[sev]))
+	if len(r.FailureAttribution.TrainingTerminalLossesBySeverity) > 0 {
+		fmt.Fprintf(&b, "Terminal-loss severity (training signal, accumulated across rounds): ")
+		parts := make([]string, 0, len(r.FailureAttribution.TrainingTerminalLossesBySeverity))
+		for _, sev := range sortedStringKeys(r.FailureAttribution.TrainingTerminalLossesBySeverity) {
+			parts = append(parts, fmt.Sprintf("%s=%d", sev, r.FailureAttribution.TrainingTerminalLossesBySeverity[sev]))
 		}
 		fmt.Fprintf(&b, "%s\n\n", strings.Join(parts, ", "))
 	}
@@ -334,10 +464,15 @@ func (r *Report) Markdown() string {
 	}
 
 	fmt.Fprintf(&b, "## Cost (estimated)\n\n")
-	fmt.Fprintf(&b, "- rounds: %d\n- evaluated cases: %d\n- duration: %d ms\n- model calls: %d\n",
-		r.Cost.Rounds, r.Cost.EvaluatedCases, r.Cost.DurationMs, r.Cost.TotalModelCalls)
-	for _, role := range sortedStringKeys(r.Cost.ModelCalls) {
-		fmt.Fprintf(&b, "  - %s: %d\n", role, r.Cost.ModelCalls[role])
+	fmt.Fprintf(&b, "- rounds: %d\n- evaluated cases: %d\n- duration: %d ms\n",
+		r.Cost.Rounds, r.Cost.EvaluatedCases, r.Cost.DurationMs)
+	if r.Cost.ModelCallsKnown {
+		fmt.Fprintf(&b, "- model calls: %d\n", r.Cost.TotalModelCalls)
+		for _, role := range sortedStringKeys(r.Cost.ModelCalls) {
+			fmt.Fprintf(&b, "  - %s: %d\n", role, r.Cost.ModelCalls[role])
+		}
+	} else {
+		fmt.Fprintf(&b, "- model calls: unavailable (not instrumented)\n")
 	}
 	fmt.Fprintf(&b, "- note: %s\n", r.Cost.Note)
 	return b.String()

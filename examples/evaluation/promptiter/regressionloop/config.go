@@ -87,6 +87,34 @@ func loadLoopConfig(dataDir string) (*loopConfig, error) {
 	return cfg, nil
 }
 
+// loadMetricNames reads the metric names configured in the scenario's metrics
+// file, so the analysis can verify every configured metric was actually
+// evaluated in both phases (a name matching no registered evaluator is
+// silently skipped by the evaluation stack).
+func loadMetricNames(dataDir, metricFileID string) ([]string, error) {
+	path := filepath.Join(dataDir, appName, metricFileID+".metrics.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read metrics config: %w", err)
+	}
+	var entries []struct {
+		MetricName string `json:"metricName"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("parse metrics config: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.MetricName != "" {
+			names = append(names, entry.MetricName)
+		}
+	}
+	if len(names) == 0 {
+		return nil, fmt.Errorf("metrics config %s declares no metric names", path)
+	}
+	return names, nil
+}
+
 // releaseGate builds the default harness release gate from the loaded config.
 // Scenarios may override it (see scenario.gateOverride).
 func (c *loopConfig) releaseGate() regloop.ReleaseGate {

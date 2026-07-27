@@ -24,7 +24,7 @@ func Attribute(result *engine.EvaluationResult) AttributionReport {
 	counts := map[FailureCategory]int{}
 	details := make([]FailureDetail, 0)
 	if result == nil {
-		return AttributionReport{Baseline: counts, BySeverity: map[string]int{}}
+		return AttributionReport{Baseline: counts, TrainingTerminalLossesBySeverity: map[string]int{}}
 	}
 	for _, set := range result.EvalSets {
 		for _, evalCase := range set.Cases {
@@ -45,9 +45,9 @@ func Attribute(result *engine.EvaluationResult) AttributionReport {
 		}
 	}
 	return AttributionReport{
-		Baseline:   counts,
-		BySeverity: map[string]int{},
-		Details:    details,
+		Baseline:                         counts,
+		TrainingTerminalLossesBySeverity: map[string]int{},
+		Details:                          details,
 	}
 }
 

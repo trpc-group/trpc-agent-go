@@ -11,8 +11,10 @@ package regloop
 import "fmt"
 
 // ReleaseGate is the harness-level publish policy layered on top of the engine's
-// own MinScoreGain acceptance. It decides whether an engine-accepted candidate is
-// safe to write back to the source prompt.
+// own MinScoreGain acceptance. It is applied through Analyze, which is the only
+// release path: Analyze derives the gate's evidence from the RunResult and
+// enforces the release preconditions (run status, per-case data, accepted
+// profile artifact) that the gate rules alone cannot see.
 type ReleaseGate struct {
 	// MinTotalGain is the minimum validation overall-score gain required to release.
 	MinTotalGain float64
@@ -26,8 +28,10 @@ type ReleaseGate struct {
 	MaxModelCalls int
 }
 
-// GateInput carries everything the gate needs to decide on one run.
-type GateInput struct {
+// gateInput carries everything the gate needs to decide on one run. It is
+// internal: only Analyze may build it, so callers cannot hand the gate
+// unvalidated evidence.
+type gateInput struct {
 	// ProfileAccepted is whether the engine accepted a candidate profile.
 	ProfileAccepted bool
 	// TotalGain is the validation overall-score gain vs baseline.
@@ -43,16 +47,23 @@ type GateInput struct {
 	Delta DeltaReport
 }
 
-// Evaluate applies the gate to one run. A candidate is releasable only when the
+// evaluate applies the gate to one run. A candidate is releasable only when the
 // engine accepted a profile; without an accepted profile there is nothing to
 // release, regardless of the score gain (which is otherwise zero-gain when the
 // candidate falls back to the baseline).
-func (g ReleaseGate) Evaluate(in GateInput) GateResult {
+func (g ReleaseGate) evaluate(in gateInput) GateResult {
 	if !in.ProfileAccepted {
 		return GateResult{Released: false, Reasons: []string{"no candidate profile was accepted by the engine"}}
 	}
 	released := true
 	reasons := make([]string, 0, 5)
+
+	// Fail closed without per-case evidence: an aggregate gain alone cannot prove
+	// the absence of regressions, so an empty delta is never releasable.
+	if len(in.Delta.CaseDeltas) == 0 {
+		released = false
+		reasons = append(reasons, "no per-case delta evidence; cannot verify regressions")
+	}
 
 	if in.TotalGain+scoreEpsilon >= g.MinTotalGain {
 		reasons = append(reasons, fmt.Sprintf("total gain %.3f >= threshold %.3f", in.TotalGain, g.MinTotalGain))

@@ -44,9 +44,9 @@ func acceptedRunFixture() *engine.RunResult {
 func TestAnalyzeAcceptedRun(t *testing.T) {
 	result := acceptedRunFixture()
 	report, err := Analyze(result, Options{
-		App:  "eval-optimization-app",
-		Mode: "fake",
-		Gate: ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4},
+		AppName: "eval-optimization-app",
+		Mode:    "fake",
+		Gate:    ReleaseGate{MinTotalGain: 0.5, MaxRounds: 4},
 	})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
@@ -63,8 +63,8 @@ func TestAnalyzeAcceptedRun(t *testing.T) {
 	if report.FailureAttribution.Baseline[CategoryResponseMismatch] != 1 {
 		t.Fatalf("baseline responseMismatch=%d want 1", report.FailureAttribution.Baseline[CategoryResponseMismatch])
 	}
-	if report.FailureAttribution.BySeverity["P1"] != 1 {
-		t.Fatalf("severity P1=%d want 1", report.FailureAttribution.BySeverity["P1"])
+	if report.FailureAttribution.TrainingTerminalLossesBySeverity["P1"] != 1 {
+		t.Fatalf("severity P1=%d want 1", report.FailureAttribution.TrainingTerminalLossesBySeverity["P1"])
 	}
 	if !report.Gate.Released {
 		t.Fatalf("gate not released: %v", report.Gate.Reasons)
@@ -191,6 +191,133 @@ func TestRoundReportDeltaUsesLastAcceptedBaseline(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRedactsSensitiveConfig(t *testing.T) {
+	// The report is persisted (and often committed); secrets under any nesting of
+	// the caller-provided config must never reach the serialized JSON.
+	report, err := Analyze(acceptedRunFixture(), Options{
+		Gate: ReleaseGate{MinTotalGain: 0.5},
+		Config: map[string]any{
+			"apiKey":   "sk-super-secret",
+			"scenario": "success",
+			"nested": map[string]any{
+				"authToken": "tok-abc",
+				"keep":      "visible",
+			},
+			"headers": map[string]string{"Authorization": "Bearer xyz"},
+			"list":    []any{map[string]any{"password": "hunter2", "name": "ok"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	payload, err := report.JSON()
+	if err != nil {
+		t.Fatalf("json: %v", err)
+	}
+	for _, secret := range []string{"sk-super-secret", "tok-abc", "Bearer xyz", "hunter2"} {
+		if strings.Contains(string(payload), secret) {
+			t.Fatalf("secret %q leaked into report JSON", secret)
+		}
+	}
+	for _, kept := range []string{"success", "visible", `"name": "ok"`, "[redacted]"} {
+		if !strings.Contains(string(payload), kept) {
+			t.Fatalf("expected %q in report JSON", kept)
+		}
+	}
+}
+
+func TestAnalyzeFailsClosedOnNonTerminalMetric(t *testing.T) {
+	// One improving metric plus one metric the evaluator retained as
+	// not_evaluated: the key sets match, but part of validation never ran, so an
+	// aggregate gain must not release.
+	result := acceptedRunFixture()
+	result.BaselineValidation = evalR(0.25, caseR("c1",
+		metricR("m1", 0.0, status.EvalStatusFailed, "text mismatch"),
+		metricR("m2", 0.0, status.EvalStatusFailed, "text mismatch"),
+	))
+	result.Rounds = []engine.RoundResult{lossRound(1, evalR(0.5, caseR("c1",
+		metricR("m1", 1.0, status.EvalStatusPassed, ""),
+		metricR("m2", 0.0, status.EvalStatusNotEvaluated, ""),
+	)), true, 0.25)}
+	report, err := Analyze(result, Options{Gate: ReleaseGate{MinTotalGain: 0.1}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("non-terminal metric must not release, reasons=%v", report.Gate.Reasons)
+	}
+	if !strings.Contains(strings.Join(report.Gate.Reasons, " "), "non-terminal status") {
+		t.Fatalf("reason must flag non-terminal status, got %v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzeFailsClosedOnMissingExpectedMetric(t *testing.T) {
+	// A metric name that matches no registered evaluator is silently omitted from
+	// BOTH phases, so the key-set comparison cannot see it; only the expected
+	// shape can. The run itself is otherwise releasable.
+	report, err := Analyze(acceptedRunFixture(), Options{
+		Gate:            ReleaseGate{MinTotalGain: 0.5},
+		ExpectedMetrics: []string{"final_response_avg_score", "tool_trajectory_avg_score"},
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Gate.Released {
+		t.Fatalf("missing expected metric must not release, reasons=%v", report.Gate.Reasons)
+	}
+	if !strings.Contains(strings.Join(report.Gate.Reasons, " "), "missing expected metric") {
+		t.Fatalf("reason must flag the missing metric, got %v", report.Gate.Reasons)
+	}
+}
+
+func TestAnalyzePrefersRunResultAppName(t *testing.T) {
+	result := acceptedRunFixture()
+	result.AppName = "manager-app"
+	report, err := Analyze(result, Options{AppName: "mismatched-option", Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.App != "manager-app" {
+		t.Fatalf("app=%q want the RunResult's own AppName", report.App)
+	}
+	result.AppName = ""
+	report, err = Analyze(result, Options{AppName: "direct-engine-app", Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.App != "direct-engine-app" {
+		t.Fatalf("app=%q want the option fallback for direct engine runs", report.App)
+	}
+}
+
+func TestAnalyzeCostDistinguishesUnknownFromZeroCalls(t *testing.T) {
+	// Default CostInput (nil map): not instrumented, must not read as measured 0.
+	report, err := Analyze(acceptedRunFixture(), Options{Gate: ReleaseGate{MinTotalGain: 0.5}})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if report.Cost.ModelCallsKnown {
+		t.Fatalf("nil ModelCalls must be reported as unknown, cost=%+v", report.Cost)
+	}
+	if !strings.Contains(report.Markdown(), "model calls: unavailable") {
+		t.Fatalf("markdown must render unknown calls as unavailable")
+	}
+	// Explicitly instrumented empty map: a genuine measured zero.
+	report, err = Analyze(acceptedRunFixture(), Options{
+		Gate: ReleaseGate{MinTotalGain: 0.5},
+		Cost: CostInput{ModelCalls: map[string]int{}},
+	})
+	if err != nil {
+		t.Fatalf("analyze: %v", err)
+	}
+	if !report.Cost.ModelCallsKnown || report.Cost.TotalModelCalls != 0 {
+		t.Fatalf("instrumented zero must be known, cost=%+v", report.Cost)
+	}
+	if !strings.Contains(report.Markdown(), "model calls: 0") {
+		t.Fatalf("markdown must render a measured zero")
+	}
+}
+
 func TestAnalyzeProjectsToolSurface(t *testing.T) {
 	// An accepted tool-surface optimization must appear in the audit; dropping
 	// every non-text override would release a change the report never records.
@@ -268,7 +395,7 @@ func TestAnalyzeNil(t *testing.T) {
 }
 
 func TestReportJSONRoundTrips(t *testing.T) {
-	report, err := Analyze(acceptedRunFixture(), Options{App: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}})
+	report, err := Analyze(acceptedRunFixture(), Options{AppName: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
@@ -286,7 +413,7 @@ func TestReportJSONRoundTrips(t *testing.T) {
 }
 
 func TestReportMarkdownAndWriteFiles(t *testing.T) {
-	report, err := Analyze(acceptedRunFixture(), Options{App: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}})
+	report, err := Analyze(acceptedRunFixture(), Options{AppName: "app", Mode: "fake", Gate: ReleaseGate{MinTotalGain: 0.5}})
 	if err != nil {
 		t.Fatalf("analyze: %v", err)
 	}
