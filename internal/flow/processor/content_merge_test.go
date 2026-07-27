@@ -249,6 +249,67 @@ func Test_rearrangeAsyncFuncRespHist_MergesSeparateResponseEvents(t *testing.T) 
 	assert.Len(t, out[1].Response.Choices, 2)
 }
 
+func Test_rearrangeAsyncFuncRespHist_PreservesContentPartsResults(t *testing.T) {
+	p := NewContentRequestProcessor()
+	part1 := "result 1"
+	part2 := "result 2"
+	call := event.Event{Response: &model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role: model.RoleAssistant,
+			ToolCalls: []model.ToolCall{
+				{ID: "call-1"},
+				{ID: "call-2"},
+			},
+		}}},
+	}}
+	result2 := event.Event{Response: &model.Response{
+		Choices: []model.Choice{{Message: model.Message{
+			Role:   model.RoleTool,
+			ToolID: "call-2",
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &part2,
+			}},
+		}}},
+	}}
+	toolresultround.Mark(&result2, true)
+	result1 := event.Event{Response: &model.Response{
+		Choices: []model.Choice{{Delta: model.Message{
+			Role:   model.RoleTool,
+			ToolID: "call-1",
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeText,
+				Text: &part1,
+			}},
+		}}},
+	}}
+	toolresultround.Mark(&result1, false)
+
+	out := p.rearrangeAsyncFuncRespHist(
+		[]event.Event{call, result2, result1},
+	)
+
+	require.Len(t, out, 2)
+	require.Equal(t, []string{"call-1", "call-2"}, out[1].GetToolResultIDs())
+	require.Len(t, out[1].Response.Choices, 2)
+	assert.Equal(
+		t,
+		[]model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: &part1,
+		}},
+		out[1].Response.Choices[0].Delta.ContentParts,
+	)
+	assert.Equal(
+		t,
+		[]model.ContentPart{{
+			Type: model.ContentTypeText,
+			Text: &part2,
+		}},
+		out[1].Response.Choices[1].Message.ContentParts,
+	)
+}
+
 func Test_rearrangeAsyncFuncRespHist_UnmarkedResultsKeepArrivalOrder(
 	t *testing.T,
 ) {
@@ -361,6 +422,62 @@ func Test_rearrangeAsyncFuncRespHist_OmitsIncompleteToolRound(t *testing.T) {
 		model.RoleUser,
 		out[1].Response.Choices[0].Message.Role,
 	)
+	for _, evt := range out {
+		assert.False(t, evt.IsToolResultResponse())
+	}
+}
+
+func Test_rearrangeAsyncFuncRespHist_OmitsIncompleteToolRoundWithoutResults(
+	t *testing.T,
+) {
+	p := NewContentRequestProcessor()
+	call := event.Event{
+		Author:       "assistant",
+		InvocationID: "interrupted-invocation",
+		RequestID:    "interrupted-request",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.Message{
+					Role:    model.RoleAssistant,
+					Content: "I will check both sources.",
+					ToolCalls: []model.ToolCall{
+						{ID: "call-a"},
+						{ID: "call-b"},
+					},
+				},
+			}},
+		},
+	}
+	terminalError := event.NewErrorEvent(
+		call.InvocationID,
+		call.Author,
+		model.ErrorTypeFlowError,
+		"tool round interrupted",
+	)
+	terminalError.RequestID = call.RequestID
+	toolresultround.Mark(terminalError, true)
+	nextUser := event.Event{
+		Author: "user",
+		Response: &model.Response{
+			Choices: []model.Choice{{
+				Message: model.NewUserMessage("continue"),
+			}},
+		},
+	}
+
+	out := p.rearrangeAsyncFuncRespHist(
+		[]event.Event{call, *terminalError, nextUser},
+	)
+
+	require.Len(t, out, 3)
+	assert.False(t, out[0].IsToolCallResponse())
+	assert.Equal(
+		t,
+		"I will check both sources.",
+		out[0].Response.Choices[0].Message.Content,
+	)
+	assert.Empty(t, out[0].GetToolCallIDs())
+	assert.True(t, out[1].IsError())
 	for _, evt := range out {
 		assert.False(t, evt.IsToolResultResponse())
 	}

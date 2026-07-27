@@ -3019,6 +3019,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 			callIDs := evt.GetToolCallIDs()
 			perToolCallResultRound := hasPerToolCallResultRound(
 				events,
+				i,
 				responseMatches,
 			)
 			if !allToolCallIDsMatched(callIDs, events, responseMatches) &&
@@ -3069,6 +3070,7 @@ func (p *ContentRequestProcessor) rearrangeAsyncFuncRespHist(
 
 func hasPerToolCallResultRound(
 	events []event.Event,
+	callEventIndex int,
 	matches []matchedToolResponseEvent,
 ) bool {
 	for _, match := range matches {
@@ -3079,7 +3081,36 @@ func hasPerToolCallResultRound(
 			return true
 		}
 	}
+
+	if callEventIndex < 0 || callEventIndex >= len(events) {
+		return false
+	}
+	callEvent := events[callEventIndex]
+	for i := callEventIndex + 1; i < len(events); i++ {
+		candidate := &events[i]
+		if !sameToolResultRound(callEvent, *candidate) {
+			continue
+		}
+		if candidate.IsUserMessage() || candidate.IsToolCallResponse() {
+			break
+		}
+		if toolresultround.HasMarker(candidate) {
+			return true
+		}
+	}
 	return false
+}
+
+func sameToolResultRound(callEvent, candidate event.Event) bool {
+	if callEvent.InvocationID == "" ||
+		callEvent.InvocationID != candidate.InvocationID {
+		return false
+	}
+	if callEvent.RequestID == "" && candidate.RequestID == "" {
+		return true
+	}
+	return callEvent.RequestID != "" &&
+		callEvent.RequestID == candidate.RequestID
 }
 
 // orderToolResultChoicesByCallOrder projects tool-result choices in the order
@@ -3242,7 +3273,11 @@ func (p *ContentRequestProcessor) mergeFunctionResponseEvents(
 	var allChoices []model.Choice
 	for _, evt := range functionResponseEvents {
 		for _, choice := range evt.Choices {
-			if choice.Message.Content != "" && choice.Message.ToolID != "" {
+			message := choice.Message
+			if message.ToolID == "" {
+				message = choice.Delta
+			}
+			if message.ToolID != "" && model.HasPayload(message) {
 				allChoices = append(allChoices, choice)
 			}
 		}

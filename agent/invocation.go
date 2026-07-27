@@ -970,8 +970,11 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 	}
 }
 
-// WithToolResultEventPerCallEnabled toggles per-call result events for
-// eligible multi-tool rounds.
+// WithToolResultEventPerCallEnabled controls whether each result is emitted as
+// its tool call completes in framework-executed, non-long-running multi-tool
+// rounds. No additional aggregate event is emitted, and the next model call
+// still waits for all results. Other rounds keep the existing behavior.
+// Disabled by default.
 func WithToolResultEventPerCallEnabled(enabled bool) RunOption {
 	return func(opts *RunOptions) {
 		opts.ToolResultEventPerCallEnabled = enabled
@@ -1406,8 +1409,8 @@ type RunOptions struct {
 	// externally and later provide tool results (RoleTool messages).
 	ToolExecutionFilter tool.FilterFunc
 
-	// ToolResultEventPerCallEnabled enables per-call result events for
-	// eligible multi-tool rounds.
+	// ToolResultEventPerCallEnabled enables the behavior documented by
+	// [WithToolResultEventPerCallEnabled].
 	ToolResultEventPerCallEnabled bool
 
 	// ToolPermissionPolicy checks whether a tool call may run after the model
