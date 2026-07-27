@@ -1029,6 +1029,17 @@ func disableChatRequestTools(request *openai.ChatCompletionNewParams) {
 	request.ParallelToolCalls = param.Opt[bool]{}
 	request.FunctionCall = openai.ChatCompletionNewParamsFunctionCallUnion{}
 	request.Functions = nil
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
 }
 
 // buildThinkingOption converts our Request to OpenAI request RequestOption.

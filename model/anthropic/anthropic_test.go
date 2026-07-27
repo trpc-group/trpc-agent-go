@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	agentlog "trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -163,6 +165,62 @@ func Test_Model_GenerateContent_NilRequest(t *testing.T) {
 	ch, err := m.GenerateContent(ctx, nil)
 	assert.Error(t, err)
 	assert.Nil(t, ch)
+}
+
+func TestModel_GenerateContent_ToolsDisabledAfterCallback(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		r *http.Request,
+	) {
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&captured))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"msg-test",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-test",
+			"content":[{"type":"text","text":"ok"}],
+			"stop_reason":"end_turn",
+			"stop_sequence":null,
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	}))
+	defer server.Close()
+
+	m := New(
+		"claude-test",
+		WithAPIKey("test-key"),
+		WithBaseURL(server.URL),
+		WithChatRequestCallback(func(
+			_ context.Context,
+			request *anthropic.MessageNewParams,
+		) {
+			request.Tools = []anthropic.ToolUnionParam{{
+				OfTool: &anthropic.ToolParam{Name: "callback_tool"},
+			}}
+			request.ToolChoice =
+				anthropic.ToolChoiceParamOfTool("callback_tool")
+			request.SetExtraFields(map[string]any{
+				"tools":          []any{},
+				"tool_choice":    map[string]any{"type": "any"},
+				"callback_field": "preserved",
+			})
+		}),
+	)
+	ctx := imodelrequest.WithToolsDisabled(context.Background())
+
+	responseChan, err := m.GenerateContent(ctx, &model.Request{
+		Messages: []model.Message{model.NewUserMessage("test")},
+	})
+	require.NoError(t, err)
+	for range responseChan {
+	}
+
+	require.NotNil(t, captured)
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "tool_choice")
+	require.Equal(t, "preserved", captured["callback_field"])
 }
 
 func Test_convertUserMessage(t *testing.T) {

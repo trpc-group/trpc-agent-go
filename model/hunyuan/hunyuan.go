@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -201,6 +202,15 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *hunyuan.ChatCompletionNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = ""
+	request.CustomTool = nil
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *hunyuan.ChatCompletionNewParams,
@@ -258,6 +268,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {

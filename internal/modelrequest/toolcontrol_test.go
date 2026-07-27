@@ -11,6 +11,7 @@ package modelrequest
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,8 +29,10 @@ func TestDeleteToolControlFields(t *testing.T) {
 		"tools":               []any{},
 		"function_call":       "auto",
 		"functions":           []any{},
+		"custom_tool":         map[string]any{},
 		"FunctionCall":        "auto",
 		"Functions":           []any{},
+		"CustomTool":          map[string]any{},
 		"keep":                "value",
 	}
 
@@ -46,4 +49,28 @@ func TestDeleteToolControlFields(t *testing.T) {
 		map[string]any{"keep": "value"},
 		FilterToolControlFields(unfiltered, true),
 	)
+}
+
+func TestFilterToolControlObject(t *testing.T) {
+	filtered, ok := FilterToolControlObject(json.RawMessage(`{
+		"model": "test-model",
+		"tools": [],
+		"tool_choice": "required",
+		"custom": "value"
+	}`))
+
+	require.True(t, ok)
+	data, err := json.Marshal(filtered)
+	require.NoError(t, err)
+	var captured map[string]any
+	require.NoError(t, json.Unmarshal(data, &captured))
+	require.Equal(t, map[string]any{
+		"model":  "test-model",
+		"custom": "value",
+	}, captured)
+
+	_, ok = FilterToolControlObject("not-an-object")
+	require.False(t, ok)
+	_, ok = FilterToolControlObject(nil)
+	require.False(t, ok)
 }

@@ -10,7 +10,10 @@
 // Package modelrequest coordinates internal model request controls.
 package modelrequest
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type toolsDisabledKey struct{}
 
@@ -56,6 +59,29 @@ func FilterToolControlFields(
 	return filtered
 }
 
+// FilterToolControlObject converts a JSON object to a map without
+// provider-specific tool controls. It reports false when value cannot be
+// encoded as a JSON object.
+func FilterToolControlObject(value any) (map[string]any, bool) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return nil, false
+	}
+	rawFields := make(map[string]json.RawMessage)
+	if err := json.Unmarshal(data, &rawFields); err != nil {
+		return nil, false
+	}
+	if rawFields == nil {
+		return nil, false
+	}
+	fields := make(map[string]any, len(rawFields))
+	for key, value := range rawFields {
+		fields[key] = value
+	}
+	DeleteToolControlFields(fields)
+	return fields, true
+}
+
 // IsToolControlField reports whether a provider-specific field can declare or
 // force tool use.
 func IsToolControlField(key string) bool {
@@ -65,11 +91,13 @@ func IsToolControlField(key string) bool {
 		"tools",
 		"function_call",
 		"functions",
+		"custom_tool",
 		"ToolChoice",
 		"ParallelToolCalls",
 		"Tools",
 		"FunctionCall",
-		"Functions":
+		"Functions",
+		"CustomTool":
 		return true
 	default:
 		return false

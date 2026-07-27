@@ -28,6 +28,7 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/anthropics/anthropic-sdk-go/packages/param"
 	"github.com/anthropics/anthropic-sdk-go/shared/constant"
+	imodelrequest "trpc.group/trpc-go/trpc-agent-go/internal/modelrequest"
 	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -148,6 +149,25 @@ func (m *Model) runChatRequestCallback(
 	m.chatRequestCallback(ctx, chatRequest)
 }
 
+func disableChatRequestTools(request *anthropic.MessageNewParams) {
+	if request == nil {
+		return
+	}
+	request.Tools = nil
+	request.ToolChoice = anthropic.ToolChoiceUnionParam{}
+	if override, ok := request.Overrides(); ok {
+		if filtered, ok := imodelrequest.FilterToolControlObject(override); ok {
+			request.SetExtraFields(filtered)
+		}
+		return
+	}
+	if fields := request.ExtraFields(); len(fields) > 0 {
+		request.SetExtraFields(
+			imodelrequest.FilterToolControlFields(fields, true),
+		)
+	}
+}
+
 func (m *Model) runChatResponseCallback(
 	ctx context.Context,
 	chatRequest *anthropic.MessageNewParams,
@@ -205,6 +225,9 @@ func (m *Model) GenerateContent(
 	// to avoid a race where the runner and HTTP handler finish
 	// (closing the SSE writer) while the callback is still running.
 	m.runChatRequestCallback(ctx, chatRequest)
+	if imodelrequest.ToolsDisabled(ctx) {
+		disableChatRequestTools(chatRequest)
+	}
 	// Send chat request and handle response.
 	responseChan := make(chan *model.Response, m.channelBufferSize)
 	go func() {

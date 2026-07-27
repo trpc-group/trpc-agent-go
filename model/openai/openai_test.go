@@ -29,6 +29,7 @@ import (
 	openai "github.com/openai/openai-go"
 	openaigo "github.com/openai/openai-go"
 	openaiopt "github.com/openai/openai-go/option"
+	openaiparam "github.com/openai/openai-go/packages/param"
 	"github.com/openai/openai-go/packages/respjson"
 	"github.com/openai/openai-go/packages/ssestream"
 	"go.opentelemetry.io/otel/attribute"
@@ -685,6 +686,14 @@ func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
 			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
 				Name: "callback_function",
 			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
 		}),
 	)
 	req := &model.Request{
@@ -702,7 +711,9 @@ func TestModel_GenerateContentIter_ToolsDisabledAfterCallback(t *testing.T) {
 	require.NotContains(t, captured, "tool_choice")
 	require.NotContains(t, captured, "parallel_tool_calls")
 	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
 	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["callback_field"])
 }
 
 func TestModel_ChatTelemetry_DefaultDisabledAndExplicitFalse(t *testing.T) {
@@ -6191,6 +6202,14 @@ func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
 			request.Functions = []openaigo.ChatCompletionNewParamsFunction{{
 				Name: "callback_function",
 			}}
+			request.SetExtraFields(map[string]any{
+				"tools":               []any{},
+				"tool_choice":         "required",
+				"parallel_tool_calls": true,
+				"function_call":       "auto",
+				"functions":           []any{},
+				"callback_field":      "preserved",
+			})
 		}),
 	)
 	req := &model.Request{
@@ -6219,6 +6238,37 @@ func TestModel_GenerateContent_ToolsDisabledFiltersExtraFields(t *testing.T) {
 	require.NotContains(t, captured, "functions")
 	require.Equal(t, "model-value", captured["model_field"])
 	require.Equal(t, "request-value", captured["request_field"])
+	require.Equal(t, "preserved", captured["callback_field"])
+}
+
+func TestDisableChatRequestTools_WholeObjectOverride(t *testing.T) {
+	request := openaiparam.Override[openaigo.ChatCompletionNewParams](
+		map[string]any{
+			"model": "gpt-3.5-turbo",
+			"messages": []any{
+				map[string]any{"role": "user", "content": "test"},
+			},
+			"tools":               []any{},
+			"tool_choice":         "required",
+			"parallel_tool_calls": true,
+			"function_call":       "auto",
+			"functions":           []any{},
+			"custom":              "preserved",
+		},
+	)
+
+	disableChatRequestTools(&request)
+
+	data, err := json.Marshal(request)
+	require.NoError(t, err)
+	var captured map[string]any
+	require.NoError(t, json.Unmarshal(data, &captured))
+	require.NotContains(t, captured, "tool_choice")
+	require.NotContains(t, captured, "parallel_tool_calls")
+	require.NotContains(t, captured, "tools")
+	require.NotContains(t, captured, "function_call")
+	require.NotContains(t, captured, "functions")
+	require.Equal(t, "preserved", captured["custom"])
 }
 
 func TestModel_GenerateContent_RequestHeadersOverrideModelHeaders(t *testing.T) {
