@@ -11,7 +11,6 @@ package reviewer
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,11 +32,6 @@ func TestReviewIntegrationArchitectureBranches(t *testing.T) {
 	// resolution and skill loading.
 	moduleRoot := filepath.Clean(filepath.Join("..", ".."))
 	t.Chdir(moduleRoot)
-
-	backend := "local"
-	if os.Getenv("CODE_REVIEW_CONTAINER_ACCEPTANCE") == "1" {
-		backend = "container"
-	}
 
 	tests := []struct {
 		name    string
@@ -168,7 +162,7 @@ func TestReviewIntegrationArchitectureBranches(t *testing.T) {
 			}, Config{
 				Mode: "fake-model",
 				Sandbox: SandboxConfig{
-					Backend: backend,
+					Backend: "local",
 				},
 			})
 			if err != nil {
