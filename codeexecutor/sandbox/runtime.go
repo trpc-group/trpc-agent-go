@@ -162,9 +162,10 @@ func (r *Runtime) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error 
 }
 
 // Close releases runtime-owned resources such as macOS denial diagnostics
-// monitors. It does not remove workspaces; call Cleanup for that. Close is
-// safe to call more than once. If shutdown does not complete promptly, Close
-// returns an error and retains ownership so a later call can retry.
+// monitors and permanently disables diagnostics for this runtime. It does not
+// remove workspaces; call Cleanup for that. Close is safe to call more than
+// once. If shutdown does not complete promptly, Close returns an error and
+// retains ownership so a later call can retry.
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil

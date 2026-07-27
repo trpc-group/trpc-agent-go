@@ -54,7 +54,8 @@ func (e *CodeExecutor) Runtime() *Runtime {
 }
 
 // Close releases runtime-owned resources such as macOS denial diagnostics
-// monitors. It is safe to call more than once; shutdown errors can be retried.
+// monitors and permanently disables diagnostics. It is safe to call more than
+// once; shutdown errors can be retried.
 func (e *CodeExecutor) Close() error {
 	if e == nil || e.runtime == nil {
 		return nil

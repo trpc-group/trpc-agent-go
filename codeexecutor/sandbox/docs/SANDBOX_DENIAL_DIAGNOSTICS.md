@@ -20,7 +20,8 @@ When the runtime is no longer needed, call `Runtime.Close()` (or
 `CodeExecutor.Close()`) so the production `/usr/bin/log stream` monitor is
 stopped. `Close` is idempotent after successful shutdown. If monitor shutdown
 does not complete promptly, `Close` returns an error and retains ownership so a
-later `Close` can retry.
+later `Close` can retry. The first `Close` call permanently disables diagnostics
+for that runtime; later runs cannot restart the monitor.
 
 ## Runtime Architecture
 
@@ -44,7 +45,7 @@ The first diagnostics-enabled `RunProgram` may spend a short time probing when
 the process cache is cold. Later runs reuse the cached capability result and the
 already-running monitor. If the monitor process exits, capability reporting and
 collection readiness become unavailable and a later `ensureDenialMonitor` may
-start a new monitor.
+start a new monitor, unless `Close` has been called.
 
 Probe events use a separate temporary monitor and suffix (`_PROBE_SBX`) so they
 never pollute the production ring buffer.

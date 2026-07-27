@@ -114,10 +114,17 @@ func (r *Runtime) macosPreflightContext(ctx context.Context) (string, error) {
 		return "", r.preflightErr
 	}
 	stderr, err := runMacOSSeatbeltPreflightProbe(ctx, macosSandboxExecPath)
+	return r.completeMacOSPreflight(ctx, stderr, err)
+}
+
+func (r *Runtime) completeMacOSPreflight(
+	ctx context.Context,
+	stderr string,
+	err error,
+) (string, error) {
 	if err != nil {
-		if errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) {
-			return "", err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
 		}
 		r.preflightErr = backendError(
 			ErrSetupFailed,
