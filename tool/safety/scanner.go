@@ -29,8 +29,9 @@ type Scanner struct {
 }
 
 // NewScanner returns a Scanner using the given policy, or DefaultPolicy when
-// policy is nil. A caller-provided policy built directly as a struct literal is
-// compiled here so its lookup maps, defaults and validation are populated. A
+// policy is nil. The policy is DEEP-COPIED and then compiled, so its lookup
+// maps, defaults and validation are populated and later mutation of the
+// caller's policy cannot change this scanner's decisions or race with a scan. A
 // policy that fails validation yields a fail-closed scanner that DENIES every
 // tool call (rather than silently substituting unrelated defaults, which could
 // re-allow what the caller meant to deny). Use NewScannerChecked to receive the
@@ -39,12 +40,12 @@ func NewScanner(policy *Policy) *Scanner {
 	if policy == nil {
 		policy = DefaultPolicy()
 	}
-	snap := *policy
+	snap := policy.clone()
 	if err := snap.compile(); err != nil {
 		log.Errorf("safety: invalid policy, scanner will deny all tool calls: %v", err)
 		return &Scanner{policy: DefaultPolicy(), now: time.Now, failClosed: true}
 	}
-	return &Scanner{policy: &snap, now: time.Now}
+	return &Scanner{policy: snap, now: time.Now}
 }
 
 // NewScannerChecked is like NewScanner but returns the policy compilation error
@@ -54,15 +55,18 @@ func NewScannerChecked(policy *Policy) (*Scanner, error) {
 	if policy == nil {
 		policy = DefaultPolicy()
 	}
-	snap := *policy
+	snap := policy.clone()
 	if err := snap.compile(); err != nil {
 		return nil, err
 	}
-	return &Scanner{policy: &snap, now: time.Now}, nil
+	return &Scanner{policy: snap, now: time.Now}, nil
 }
 
-// Policy returns the scanner's active policy.
-func (s *Scanner) Policy() *Policy { return s.policy }
+// Policy returns a deep copy of the scanner's active policy. The copy shares no
+// storage with the scanner, so inspecting or mutating it can neither change a
+// running scanner's decisions, leave its compiled lookups stale, nor race with
+// a concurrent Scan. Build a new Scanner to apply a changed policy.
+func (s *Scanner) Policy() *Policy { return s.policy.clone() }
 
 // Scan evaluates in and returns a fully aggregated, redacted report. The
 // context is accepted for symmetry and cancellation of future async rules; the

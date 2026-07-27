@@ -111,15 +111,18 @@ allowed/denied commands, limits and secret patterns **without touching code**:
 | `network.allowed_domains` | hosts a network command may reach; others are denied |
 | `dependency_install.patterns` | install invocations that require review |
 | `limits.max_timeout_sec` | requested timeouts above this are flagged for review |
-| `limits.max_output_bytes` | result-size limit: the AfterTool `OutputLimitCallback` truncates exec-tool output above this before it is returned to the model |
+| `limits.max_output_bytes` | result-size limit: the AfterTool `OutputLimitCallback` truncates an exec-tool result above this before it is returned to the model (stdout and codeexec file contents share the budget) |
 | `secret_patterns` | inline-secret regexes used for detection and redaction |
 | `default_decision_on_parse_failure` | `deny` (default) or `ask` for unparsable commands |
 | `risk_overrides` | bump/lower a rule's risk by id |
 
-Output is capped at execution time by the AfterTool callback; the actual command
-timeout is enforced by the executor itself (`RunProgramSpec.Timeout`), so the
-guard only flags an oversized *requested* timeout for review rather than
-duplicating that enforcement.
+Neither limit is a runtime resource ceiling. The AfterTool callback trims an
+oversized result *after* the tool has already run, so `max_output_bytes` bounds
+what reaches the model — stdout plus, for codeexec, the returned file contents,
+against one shared budget — not what the executor may produce. The actual
+command timeout is enforced by the executor itself (`RunProgramSpec.Timeout`),
+so the guard only flags an oversized *requested* timeout for review rather than
+duplicating that enforcement. Use executor-level limits for real ceilings.
 
 ## Backend boundaries
 

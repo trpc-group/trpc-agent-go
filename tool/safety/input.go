@@ -44,16 +44,6 @@ type CodeBlock struct {
 	Code     string
 }
 
-// ToolMetadataView is a minimal read-only projection of tool.ToolMetadata.
-// It is populated by the permission adapter so the engine does not depend on
-// the semantic evolution of the tool package.
-type ToolMetadataView struct {
-	// ReadOnly reports the tool does not intentionally mutate external state.
-	ReadOnly bool
-	// Destructive reports the tool may irreversibly change external state.
-	Destructive bool
-}
-
 // ScanInput is the normalised input to a scan. Exactly one of Command or
 // CodeBlocks is typically populated depending on the backend.
 type ScanInput struct {
@@ -76,8 +66,6 @@ type ScanInput struct {
 	Env map[string]string
 	// TimeoutSec is the requested timeout in seconds (0 if unset).
 	TimeoutSec int
-	// Metadata is the projection of the tool's published metadata.
-	Metadata ToolMetadataView
 }
 
 // Decision is the guard's verdict for a rule or an overall report. The zero

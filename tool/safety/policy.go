@@ -14,12 +14,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
 // EnvPolicyPath is the environment variable that points at a policy file.
@@ -108,12 +112,67 @@ type Policy struct {
 
 	// Compiled lookup structures (populated by compile, not serialised).
 	deniedCmdSet    map[string]struct{}
-	allowedCmdSet   map[string]struct{}
 	networkCmdSet   map[string]struct{}
 	envWhitelistSet map[string]struct{}
 	allowedDomains  []string
 	deniedPaths     []*pathMatcher
 	secrets         []compiledSecret
+	allowMatcher    shellsafe.Policy
+}
+
+// commandAllowed reports whether a segment's raw argv[0] satisfies the strict
+// allowlist. It delegates to internal/shellsafe's matching contract rather than
+// comparing lower-cased basenames, so the guard and the framework agree on
+// executable identity: a pathful command ("./go", "/tmp/go") never matches a
+// bare allow entry, and bare entries keep their case on Linux. A basename
+// comparison would let a workspace-controlled binary reuse an allowlisted name
+// and skip review. An empty allowlist allows nothing.
+//
+// shellsafe's unconditional implicit-deny set (shell wrappers, re-executing and
+// stateful builtins) also applies here, so such a command is never reported as
+// allowlisted; the dedicated wrapper rules and the line-level backstop provide
+// its more specific deny.
+func (p *Policy) commandAllowed(argv []string) bool {
+	if len(argv) == 0 || len(p.allowMatcher.Allow) == 0 {
+		return false
+	}
+	return p.allowMatcher.Check(&shellsafe.Pipeline{Commands: [][]string{argv}}) == nil
+}
+
+// clone returns a deep copy of p: every slice, map and nested slice is
+// reallocated, so the copy shares no mutable storage with the original and can
+// neither be mutated through the caller's pointer nor race with a scan. nil and
+// empty-but-present lists stay distinct because applyDefaults is presence-aware
+// (an absent list gets defaults, an explicit [] is honoured as an opt-out).
+func (p *Policy) clone() *Policy {
+	if p == nil {
+		return nil
+	}
+	c := *p
+	c.AllowedCommands = slices.Clone(p.AllowedCommands)
+	c.DeniedCommands = slices.Clone(p.DeniedCommands)
+	c.DeniedPathPatterns = slices.Clone(p.DeniedPathPatterns)
+	c.EnvWhitelist = slices.Clone(p.EnvWhitelist)
+	c.SecretPatterns = slices.Clone(p.SecretPatterns)
+	c.RiskOverrides = maps.Clone(p.RiskOverrides)
+	c.Network.Commands = slices.Clone(p.Network.Commands)
+	c.Network.AllowedDomains = slices.Clone(p.Network.AllowedDomains)
+	// DependencyRule carries its own slice, so the outer clone is not enough.
+	c.DependencyInstall.Patterns = slices.Clone(p.DependencyInstall.Patterns)
+	for i := range c.DependencyInstall.Patterns {
+		c.DependencyInstall.Patterns[i].ArgsPrefix = slices.Clone(p.DependencyInstall.Patterns[i].ArgsPrefix)
+	}
+	// Compiled lookups are rebuilt by compile, but a clone taken after
+	// compilation must stay usable on its own, so copy the containers too. Their
+	// elements (pathMatcher, compiledSecret) are immutable once built.
+	c.deniedCmdSet = maps.Clone(p.deniedCmdSet)
+	c.networkCmdSet = maps.Clone(p.networkCmdSet)
+	c.envWhitelistSet = maps.Clone(p.envWhitelistSet)
+	c.allowedDomains = slices.Clone(p.allowedDomains)
+	c.deniedPaths = slices.Clone(p.deniedPaths)
+	c.secrets = slices.Clone(p.secrets)
+	c.allowMatcher = shellsafe.PolicyFromLists(c.AllowedCommands, nil)
+	return &c
 }
 
 type compiledSecret struct {
@@ -227,8 +286,12 @@ func DefaultPolicy() *Policy {
 	return p
 }
 
+// defaultNetworkCommands lists the executables treated as network clients. git
+// is included because its remote subcommands (clone/fetch/pull/push/ls-remote)
+// are egress just like curl; the network rule exempts git's purely local
+// subcommands so `git status` is unaffected (see gitIsNetworkOp).
 func defaultNetworkCommands() []string {
-	return []string{"curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "telnet", "socat"}
+	return []string{"curl", "wget", "nc", "ncat", "ssh", "scp", "sftp", "telnet", "socat", "git"}
 }
 
 func defaultDeniedCommands() []string {
@@ -341,8 +404,10 @@ func (p *Policy) compile() error {
 	}
 
 	p.deniedCmdSet = toCommandSet(p.DeniedCommands)
-	p.allowedCmdSet = toCommandSet(p.AllowedCommands)
 	p.networkCmdSet = toCommandSet(p.Network.Commands)
+	// The allowlist matches on the raw argv[0] via shellsafe's strict contract
+	// (see commandAllowed), not on a lower-cased basename set.
+	p.allowMatcher = shellsafe.PolicyFromLists(p.AllowedCommands, nil)
 
 	p.envWhitelistSet = make(map[string]struct{}, len(p.EnvWhitelist))
 	for _, k := range p.EnvWhitelist {

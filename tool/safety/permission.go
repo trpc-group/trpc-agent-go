@@ -100,16 +100,31 @@ func (p *PermissionPolicy) backendFor(name string) Backend {
 // kept raw so it can be decoded with the same flexible logic codeexec uses (it
 // accepts an array, a single object, or a double-encoded JSON string).
 type execArgs struct {
-	Command       string            `json:"command"`
-	Cwd           string            `json:"cwd"`
-	Workdir       string            `json:"workdir"`
-	Env           map[string]string `json:"env"`
-	Stdin         string            `json:"stdin"`
-	Chars         string            `json:"chars"`
-	Timeout       int               `json:"timeout"`
-	TimeoutSec    *int              `json:"timeout_sec"`
-	TimeoutSecOld *int              `json:"timeoutSec"`
-	CodeBlocks    json.RawMessage   `json:"code_blocks"`
+	Command string            `json:"command"`
+	Cwd     string            `json:"cwd"`
+	Workdir string            `json:"workdir"`
+	Env     map[string]string `json:"env"`
+	Stdin   string            `json:"stdin"`
+	Chars   string            `json:"chars"`
+	// AppendNewline and its "submit" alias make the session run whatever it has
+	// buffered, so they are a write even when Chars is empty
+	// (tool/hostexec, tool/workspaceexec, tool/skill).
+	AppendNewline *bool           `json:"append_newline"`
+	Submit        *bool           `json:"submit"`
+	Timeout       int             `json:"timeout"`
+	TimeoutSec    *int            `json:"timeout_sec"`
+	TimeoutSecOld *int            `json:"timeoutSec"`
+	CodeBlocks    json.RawMessage `json:"code_blocks"`
+}
+
+// anyTrue reports whether any of the optional booleans is present and set.
+func anyTrue(vals ...*bool) bool {
+	for _, v := range vals {
+		if v != nil && *v {
+			return true
+		}
+	}
+	return false
 }
 
 // isStdinWriteTool reports whether a tool name is a follow-up stdin writer for
@@ -198,21 +213,20 @@ func (p *PermissionPolicy) ScanRequest(ctx context.Context, req *tool.Permission
 		Env:        a.Env,
 		Stdin:      a.Stdin,
 		TimeoutSec: firstTimeout(a.TimeoutSec, a.TimeoutSecOld, a.Timeout),
-		Metadata: ToolMetadataView{
-			ReadOnly:    req.Metadata.ReadOnly,
-			Destructive: req.Metadata.Destructive,
-		},
 	}
 	return p.scanner.Scan(ctx, in), true
 }
 
-// scanStdinWrite guards follow-up input to an interactive session. A non-empty
-// write cannot be statically validated (a payload may be split across calls), so
-// it is denied; an empty write (a poll) is left to the tool.
+// scanStdinWrite guards follow-up input to an interactive session. Any write is
+// denied: the payload cannot be statically validated and may be assembled across
+// several calls, so whitespace-only characters still advance the buffered
+// command line, and a submit (append_newline, or its "submit" alias) makes the
+// session RUN what it has buffered even when chars is empty. Only a genuine poll
+// — no characters and no submit — is left to the tool.
 func (p *PermissionPolicy) scanStdinWrite(req *tool.PermissionRequest) (ScanReport, bool) {
 	var a execArgs
 	_ = json.Unmarshal(req.Arguments, &a)
-	if strings.TrimSpace(a.Chars) == "" {
+	if a.Chars == "" && !anyTrue(a.AppendNewline, a.Submit) {
 		return ScanReport{}, false
 	}
 	r := ScanReport{

@@ -27,6 +27,7 @@ const (
 	RuleNetNonWhitelist    = "net.non_whitelist"
 	RuleNetAllowedDomain   = "net.allowed_domain"
 	RuleNetUnknownTarget   = "net.unknown_target"
+	RuleNetRoutingOverride = "net.routing_override"
 	RuleReverseShell       = "net.reverse_shell"
 	RuleUnsafeConstruct    = "shell.unsafe_construct"
 	RuleInterpreterInline  = "shell.interpreter_inline"
@@ -191,7 +192,7 @@ func (s *Scanner) segmentFindings(argv []string, line string, in ScanInput) []Fi
 	// 11. Optional strict allowlist. Runs unless the segment is already denied,
 	// so an earlier allow finding (e.g. net.allowed_domain) cannot suppress it.
 	if s.policy.EnforceAllowlist && !hasDeny(out) {
-		if _, ok := s.policy.allowedCmdSet[base]; !ok {
+		if !s.policy.commandAllowed(argv) {
 			out = append(out, s.finding(RuleNotAllowed, CategoryDangerousCommand,
 				RiskMedium, DecisionAsk, seg, line,
 				"Command is not on the allowlist; approve it or add it to allowed_commands."))
@@ -379,6 +380,18 @@ func (s *Scanner) network(base string, argv []string, seg, line string, in ScanI
 	}
 	if _, ok := s.policy.networkCmdSet[base]; !ok {
 		return nil
+	}
+	// git is a network command only for its remote subcommands; git status/log/
+	// commit perform no egress and must not be dragged into the host allowlist.
+	if base == "git" && !gitIsNetworkOp(argv) {
+		return nil
+	}
+	// A connection-routing override (--connect-to/--resolve) decouples the URL
+	// from the peer actually contacted, so host allowlisting cannot be trusted.
+	if hasRoutingOverride(argv) {
+		return []Finding{s.finding(RuleNetRoutingOverride, CategoryNetworkExfil,
+			RiskCritical, DecisionDeny, seg, line,
+			"Connection-routing override (--connect-to/--resolve) redirects the request to a peer the allowlisted URL does not name; remove it or wrap the intent in an audited script.")}
 	}
 	hosts := extractHosts(argv)
 	if len(hosts) == 0 {

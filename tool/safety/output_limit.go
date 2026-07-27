@@ -19,12 +19,13 @@ import (
 )
 
 // OutputLimitCallback returns an AfterTool callback that enforces the policy's
-// Limits.MaxOutputBytes as a RESULT-SIZE limit: it truncates a recognised exec
-// tool's captured output before the result is returned to the model, once the
-// output exceeds the cap. It bounds what the model sees, not what the executor
-// produces (AfterTool runs after the tool has already generated and captured
-// its output), so it is not a runtime resource ceiling — pair it with an
-// executor-level cap for that.
+// Limits.MaxOutputBytes as a RESULT-SIZE limit: before a recognised exec tool's
+// result reaches the model, it truncates the model-facing payload — the captured
+// output and, for codeexec, the returned file contents — down to one shared
+// budget. It bounds what the model sees, not what the executor produces
+// (AfterTool runs after the tool has already generated and captured its output),
+// so it is not a runtime resource ceiling — pair it with an executor-level cap
+// for that.
 //
 // Register it alongside the permission policy, for example:
 //
@@ -59,18 +60,25 @@ func (p *PermissionPolicy) OutputLimitCallback() tool.AfterToolCallbackStructure
 	}
 }
 
-// limitResultOutput truncates the "output" field of a tool result to at most
-// max bytes (on a UTF-8 rune boundary). It round-trips through JSON so it works
-// for any exec result shape that carries an "output" string, preserving the
-// result's other fields and adding an "output_truncated" marker. It returns the
-// possibly-replaced result and whether a truncation happened.
+// limitResultOutput bounds every model-facing text field of a tool result to a
+// SINGLE shared budget of max bytes: the top-level "output" string first, then
+// each codeexec "output_files[*].content" from whatever remains. Sharing one
+// budget matters — codeexec returns file contents to the model alongside stdout
+// (codeexecutor.CodeExecutionResult), so a per-field cap would let a short
+// "output" plus arbitrarily many or arbitrarily large files sail past the limit.
+//
+// It round-trips through JSON so it works for any exec result shape that carries
+// those fields, preserving the result's other fields and marking what it cut
+// ("output_truncated" on the result, "truncated" on a file, which is already
+// part of the codeexec file schema). It returns the possibly-replaced result and
+// whether anything was truncated.
 //
 // Replacing the typed result with a map is safe: RunAfterTool passes the
 // original args.Result to every callback (it does not feed one callback's
 // CustomResult into the next) and stops at the first CustomResult, so no later
 // callback ever receives this map; the framework then serialises it to JSON for
 // the model, where it is identical to the original result apart from the
-// truncated output and the added marker.
+// truncated fields and the added markers.
 func limitResultOutput(result any, max int64) (any, bool) {
 	blob, err := json.Marshal(result)
 	if err != nil {
@@ -84,20 +92,64 @@ func limitResultOutput(result any, max int64) (any, bool) {
 	if err := dec.Decode(&m); err != nil {
 		return result, false
 	}
-	out, ok := m["output"].(string)
-	if !ok || int64(len(out)) <= max {
+	remaining, changed := max, false
+	if out, ok := m["output"].(string); ok {
+		kept, cut := clampText(out, remaining, max)
+		if cut {
+			m["output"] = kept
+			m["output_truncated"] = true
+			changed = true
+		}
+		remaining = spend(remaining, kept)
+	}
+	files, _ := m["output_files"].([]any)
+	for _, f := range files {
+		fm, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, ok := fm["content"].(string)
+		if !ok || content == "" {
+			continue
+		}
+		kept, cut := clampText(content, remaining, max)
+		if cut {
+			fm["content"] = kept
+			fm["truncated"] = true
+			changed = true
+		}
+		remaining = spend(remaining, kept)
+	}
+	if !changed {
 		return result, false
 	}
-	marker := fmt.Sprintf("\n...[truncated by tool safety guard: output exceeded max_output_bytes=%d]", max)
-	// Budget for the marker so the final output field stays within the cap
-	// (best-effort: a cap smaller than the marker itself cannot be honoured).
-	budget := max - int64(len(marker))
-	if budget < 0 {
-		budget = 0
-	}
-	m["output"] = truncateUTF8(out, int(budget)) + marker
-	m["output_truncated"] = true
 	return m, true
+}
+
+// clampText truncates s to budget bytes on a UTF-8 rune boundary and appends a
+// marker naming the configured cap. It reports whether it truncated. A budget
+// smaller than the marker itself cannot be honoured, so the marker is kept and
+// the text dropped: the model is told the field was cut rather than being shown
+// a silently partial value.
+func clampText(s string, budget, max int64) (string, bool) {
+	if int64(len(s)) <= budget {
+		return s, false
+	}
+	marker := fmt.Sprintf("\n...[truncated by tool safety guard: result exceeded max_output_bytes=%d]", max)
+	room := budget - int64(len(marker))
+	if room < 0 {
+		room = 0
+	}
+	return truncateUTF8(s, int(room)) + marker, true
+}
+
+// spend deducts the bytes a kept field consumed from the shared budget, never
+// going below zero.
+func spend(budget int64, kept string) int64 {
+	if budget -= int64(len(kept)); budget < 0 {
+		return 0
+	}
+	return budget
 }
 
 // truncateUTF8 returns at most max bytes of s without splitting a multi-byte
