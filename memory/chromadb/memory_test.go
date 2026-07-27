@@ -262,7 +262,7 @@ func TestServiceUpdateMemoryRejectsActiveTargetWithoutMutation(t *testing.T) {
 }
 
 func TestServiceUpdateMemoryRevivesSoftDeletedTarget(t *testing.T) {
-	service, _ := newTestChromaService(
+	service, fake := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
 		WithSoftDelete(true),
@@ -279,6 +279,7 @@ func TestServiceUpdateMemoryRevivesSoftDeletedTarget(t *testing.T) {
 	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
 		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
 	}))
+	fake.status["delete"] = http.StatusBadRequest
 	result := &memory.UpdateResult{MemoryID: "unchanged"}
 
 	err := service.UpdateMemory(
@@ -610,7 +611,7 @@ func TestServiceUpdateMemoryRollsForwardAfterPartialFailure(t *testing.T) {
 	assert.Equal(t, result.MemoryID, entries[0].ID)
 }
 
-func TestServiceUpdateMemoryRollsForwardAfterTombstoneReplacementFailure(t *testing.T) {
+func TestServiceUpdateMemoryRetriesAfterTombstoneRevivalFailure(t *testing.T) {
 	service, fake := newTestChromaService(
 		t,
 		&testEmbedder{dimension: 3},
@@ -629,7 +630,7 @@ func TestServiceUpdateMemoryRollsForwardAfterTombstoneReplacementFailure(t *test
 	key := memory.Key{
 		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID,
 	}
-	fake.status["add"] = http.StatusBadRequest
+	fake.status["update"] = http.StatusBadRequest
 	result := &memory.UpdateResult{MemoryID: "unchanged"}
 
 	err := service.UpdateMemory(
@@ -646,7 +647,7 @@ func TestServiceUpdateMemoryRollsForwardAfterTombstoneReplacementFailure(t *test
 	require.Len(t, entries, 1)
 	assert.Equal(t, sourceID, entries[0].ID)
 
-	delete(fake.status, "add")
+	delete(fake.status, "update")
 	require.NoError(t, service.UpdateMemory(
 		ctx,
 		key,

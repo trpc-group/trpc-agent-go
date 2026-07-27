@@ -420,7 +420,10 @@ func (svc *Service) ensureRotationTarget(
 		return fmt.Errorf("check update target %s: %w", record.entry.ID, err)
 	}
 	if target == nil {
-		return svc.addRotationTarget(ctx, record)
+		if err := svc.client.addRecords(ctx, svc.collection, addRequest(record)); err != nil {
+			return fmt.Errorf("add update target %s: %w", record.entry.ID, err)
+		}
+		return nil
 	}
 	if err := validateRecordOwner(target, scope); err != nil {
 		return err
@@ -428,21 +431,14 @@ func (svc *Service) ensureRotationTarget(
 	if target.deletedAtNS == notDeletedAtNS {
 		return validateUpdateTarget(target, record)
 	}
-	return svc.replaceRotationTombstone(ctx, scope, target, record)
-}
-
-// replaceRotationTombstone removes the exact tombstone observed by the update
-// before recreating its canonical ID. The source remains active until this
-// transition succeeds, so a failed Add can be retried safely.
-func (svc *Service) replaceRotationTombstone(
-	ctx context.Context,
-	scope recordScope,
-	target *storedRecord,
-	record *storedRecord,
-) error {
 	if svc.opts.softDelete {
 		record.entry.CreatedAt = target.entry.CreatedAt
+		if err := svc.client.updateRecords(ctx, svc.collection, updateRequest(record)); err != nil {
+			return fmt.Errorf("revive update target %s: %w", record.entry.ID, err)
+		}
+		return nil
 	}
+
 	response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
 		IDs: []string{target.entry.ID},
 		Where: andWhere(
@@ -453,37 +449,9 @@ func (svc *Service) replaceRotationTombstone(
 	if err != nil {
 		return fmt.Errorf("delete update target tombstone %s: %w", target.entry.ID, err)
 	}
-	if response.Deleted.value == 1 {
-		return svc.addRotationTarget(ctx, record)
+	if response.Deleted.value != 1 {
+		return fmt.Errorf("memory update target %s changed concurrently", record.entry.ID)
 	}
-	return svc.resolveRotationTargetRace(ctx, scope, record)
-}
-
-// resolveRotationTargetRace handles a tombstone delete that lost its response
-// or raced with another writer changing the same target.
-func (svc *Service) resolveRotationTargetRace(
-	ctx context.Context,
-	scope recordScope,
-	record *storedRecord,
-) error {
-	actual, err := svc.fetchRecordByID(ctx, record.entry.ID, nil)
-	if err != nil {
-		return fmt.Errorf("reload update target %s: %w", record.entry.ID, err)
-	}
-	if actual == nil {
-		return svc.addRotationTarget(ctx, record)
-	}
-	if err := validateRecordOwner(actual, scope); err != nil {
-		return err
-	}
-	if actual.deletedAtNS == notDeletedAtNS {
-		return validateUpdateTarget(actual, record)
-	}
-	return fmt.Errorf("memory update target %s changed concurrently", record.entry.ID)
-}
-
-// addRotationTarget writes one create-only target for an ID-changing update.
-func (svc *Service) addRotationTarget(ctx context.Context, record *storedRecord) error {
 	if err := svc.client.addRecords(ctx, svc.collection, addRequest(record)); err != nil {
 		return fmt.Errorf("add update target %s: %w", record.entry.ID, err)
 	}
@@ -495,8 +463,8 @@ func validateUpdateTarget(
 	actual *storedRecord,
 	expected *storedRecord,
 ) error {
-	if actual.updateToken != expected.updateToken || !sameSemanticRecord(actual, expected) {
-		return memoryAlreadyExistsError(expected.entry.ID)
+	if !sameSemanticRecord(actual, expected) {
+		return fmt.Errorf("memory with id %s already exists", expected.entry.ID)
 	}
 	return nil
 }
@@ -517,10 +485,7 @@ func (svc *Service) verifyRotationTarget(
 	if err := validateRecordOwner(actual, scope); err != nil {
 		return err
 	}
-	if !sameSemanticRecord(actual, expected) {
-		return memoryAlreadyExistsError(expected.entry.ID)
-	}
-	return nil
+	return validateUpdateTarget(actual, expected)
 }
 
 // updateActiveAndVerify updates an active source without writing deleted_at_ns.
@@ -770,11 +735,6 @@ func validateRecordOwner(record *storedRecord, scope recordScope) error {
 // memoryNotFoundError preserves the shared memory service not-found error text.
 func memoryNotFoundError(id string) error {
 	return fmt.Errorf("memory with id %s not found", id)
-}
-
-// memoryAlreadyExistsError preserves the shared memory service conflict text.
-func memoryAlreadyExistsError(id string) error {
-	return fmt.Errorf("memory with id %s already exists", id)
 }
 
 // setUpdateResult reports a rotated memory ID through the framework update options.

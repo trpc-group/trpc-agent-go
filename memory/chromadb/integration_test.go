@@ -39,7 +39,15 @@ func TestIntegrationChromaDB159(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, softService.Close()) })
 	runIntegrationClear(t, softService, true)
-	runIntegrationUpdateContracts(t, service, softService)
+	t.Run("active target conflict", func(t *testing.T) {
+		runIntegrationActiveTargetConflict(t, service)
+	})
+	t.Run("soft target revival", func(t *testing.T) {
+		runIntegrationSoftTargetRevival(t, softService)
+	})
+	t.Run("hard target replacement", func(t *testing.T) {
+		runIntegrationHardTargetReplacement(t, service, softService)
+	})
 }
 
 func integrationOptions(baseURL string) []ServiceOpt {
@@ -166,23 +174,6 @@ func runIntegrationClear(t *testing.T, service *Service, soft bool) {
 	assert.Empty(t, entries)
 }
 
-func runIntegrationUpdateContracts(
-	t *testing.T,
-	hardService *Service,
-	softService *Service,
-) {
-	t.Helper()
-	t.Run("active target conflict", func(t *testing.T) {
-		runIntegrationActiveTargetConflict(t, hardService)
-	})
-	t.Run("soft target revival", func(t *testing.T) {
-		runIntegrationSoftTargetRevival(t, softService)
-	})
-	t.Run("hard target replacement", func(t *testing.T) {
-		runIntegrationHardTargetReplacement(t, hardService, softService)
-	})
-}
-
 func runIntegrationActiveTargetConflict(t *testing.T, service *Service) {
 	t.Helper()
 	ctx := context.Background()
@@ -218,6 +209,8 @@ func runIntegrationSoftTargetRevival(t *testing.T, service *Service) {
 	t.Helper()
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "integration", UserID: "soft-target"}
+	require.NoError(t, service.ClearMemories(ctx, userKey))
+	t.Cleanup(func() { _ = service.ClearMemories(context.Background(), userKey) })
 	require.NoError(t, service.AddMemory(ctx, userKey, "soft source", nil))
 	require.NoError(t, service.AddMemory(ctx, userKey, "soft target", []string{"deleted"}))
 	entries, err := service.ReadMemories(ctx, userKey, 0)
@@ -253,6 +246,8 @@ func runIntegrationHardTargetReplacement(
 	t.Helper()
 	ctx := context.Background()
 	userKey := memory.UserKey{AppName: "integration", UserID: "hard-target"}
+	require.NoError(t, hardService.ClearMemories(ctx, userKey))
+	t.Cleanup(func() { _ = hardService.ClearMemories(context.Background(), userKey) })
 	require.NoError(t, softService.AddMemory(ctx, userKey, "hard source", nil))
 	require.NoError(t, softService.AddMemory(ctx, userKey, "hard target", []string{"deleted"}))
 	entries, err := softService.ReadMemories(ctx, userKey, 0)
