@@ -387,6 +387,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	releaseFirstRequest := make(chan struct{})
 	var firstStartedOnce sync.Once
 	var secondObservedOnce sync.Once
+	var releaseFirstOnce sync.Once
 	handlerErrs := make(chan error, 1)
 	reportHandlerError := func(err error) {
 		select {
@@ -435,7 +436,11 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		mu.Unlock()
 		if shouldBlock {
 			firstStartedOnce.Do(func() { close(firstRequestStarted) })
-			<-releaseFirstRequest
+			select {
+			case <-releaseFirstRequest:
+			case <-r.Context().Done():
+				return
+			}
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:  cookieName,
@@ -463,6 +468,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		}
 	}))
 	defer srv.Close()
+	defer releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 	serverURL = srv.URL
 
 	a, err := New(WithAgentCardURL(serverURL))
@@ -480,7 +486,9 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 	}
 
 	runAnonymous := func(invocationID string) error {
-		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		eventChan, runErr := a.Run(ctx, &agent.Invocation{
 			InvocationID: invocationID,
 			Session:      sess,
 			Message:      model.NewUserMessage("test message"),
@@ -522,7 +530,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentInitialAcquisition(t *testi
 		t.Fatal("second anonymous request bypassed initialization lock")
 	default:
 	}
-	close(releaseFirstRequest)
+	releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 	select {
 	case err := <-firstDone:
 		require.NoError(t, err)
@@ -565,6 +573,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	releaseFirstRequest := make(chan struct{})
 	var firstStartedOnce sync.Once
 	var secondObservedOnce sync.Once
+	var releaseFirstOnce sync.Once
 	handlerErrs := make(chan error, 1)
 	reportHandlerError := func(err error) {
 		select {
@@ -613,7 +622,11 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 		mu.Unlock()
 		if shouldBlock {
 			firstStartedOnce.Do(func() { close(firstRequestStarted) })
-			<-releaseFirstRequest
+			select {
+			case <-releaseFirstRequest:
+			case <-r.Context().Done():
+				return
+			}
 		}
 		http.SetCookie(w, &http.Cookie{
 			Name:  cookieName,
@@ -641,6 +654,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 		}
 	}))
 	defer srv.Close()
+	defer releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 	serverURL = srv.URL
 
 	a, err := New(WithAgentCardURL(serverURL))
@@ -665,8 +679,10 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 	t.Cleanup(func() { require.NoError(t, r.Close()) })
 
 	run := func(message string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		eventChan, runErr := r.Run(
-			context.Background(),
+			ctx,
 			"local-user",
 			"session-a",
 			model.NewUserMessage(message),
@@ -704,7 +720,7 @@ func TestA2AAgent_AnonymousCookiesSerializeConcurrentPersistentSessionInitializa
 		t.Fatal("second persistent anonymous request bypassed initialization lock")
 	default:
 	}
-	close(releaseFirstRequest)
+	releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 
 	select {
 	case err := <-firstDone:
@@ -990,7 +1006,9 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		sess *session.Session,
 		invocationID string,
 	) error {
-		eventChan, runErr := a.Run(context.Background(), &agent.Invocation{
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		eventChan, runErr := a.Run(ctx, &agent.Invocation{
 			InvocationID: invocationID,
 			Session:      sess,
 			Message:      model.NewUserMessage("test message"),
@@ -1031,7 +1049,6 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 		var firstStartedOnce sync.Once
 		var secondObservedOnce sync.Once
 		var releaseFirstOnce sync.Once
-		defer releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 		handlerErrs := make(chan error, 1)
 		reportHandlerError := func(err error) {
 			select {
@@ -1080,7 +1097,11 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 			mu.Unlock()
 			if shouldBlock {
 				firstStartedOnce.Do(func() { close(firstRequestStarted) })
-				<-releaseFirstRequest
+				select {
+				case <-releaseFirstRequest:
+				case <-r.Context().Done():
+					return
+				}
 			}
 			http.SetCookie(w, &http.Cookie{
 				Name:  cookieName,
@@ -1108,6 +1129,7 @@ func TestA2AAgent_AnonymousCookieInitializationDoesNotBlockIndependentScopes(t *
 			}
 		}))
 		defer srv.Close()
+		defer releaseFirstOnce.Do(func() { close(releaseFirstRequest) })
 		serverURL = srv.URL
 
 		a, err := New(WithAgentCardURL(serverURL))
@@ -1607,6 +1629,23 @@ func TestAnonymousCookieStateRejectsInvalidValues(t *testing.T) {
 	withoutSession.capture(context.Background(), anonymousTestCookieValue(3))
 	_, ok = withoutSession.load()
 	require.False(t, ok)
+
+	persistSession := &session.Session{
+		AppName: "app",
+		UserID:  "user-1",
+		ID:      "session-a",
+	}
+	persistSession.SetState("state-key", []byte(anonymousTestCookieValue(4)))
+	clone := &session.Session{}
+	persistentState := newAnonymousCookieState(
+		clone,
+		persistSession,
+		nil,
+		"state-key",
+	)
+	cookieValue, ok := persistentState.load()
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(4), cookieValue)
 }
 
 func TestAnonymousCookieJarHandlesCookieBoundaries(t *testing.T) {

@@ -405,7 +405,18 @@ func (s *anonymousCookieState) load() (string, bool) {
 	if s == nil {
 		return "", false
 	}
-	return loadAnonymousCookieFromSession(s.session, s.key)
+	if hasPersistentSessionKey(s.persistSession) {
+		if cookieValue, ok := loadAnonymousCookieFromSession(s.persistSession, s.key); ok {
+			return cookieValue, true
+		}
+	}
+	if cookieValue, ok := loadAnonymousCookieFromSession(s.session, s.key); ok {
+		return cookieValue, true
+	}
+	if s.persistSession != s.session {
+		return loadAnonymousCookieFromSession(s.persistSession, s.key)
+	}
+	return "", false
 }
 
 func loadAnonymousCookieFromSession(sess *session.Session, key string) (string, bool) {
