@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 
+	openaiopt "github.com/openai/openai-go/option"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	evalresultlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult/local"
@@ -253,7 +254,10 @@ func newLiveStageModel(role, stage string, cfg roleConfig, runLedger *ledger) (m
 	if apiKey == "" {
 		return nil, fmt.Errorf("%s API key environment %q is empty", role, cfg.APIKeyEnv)
 	}
-	options := []openai.Option{openai.WithAPIKey(apiKey)}
+	options := []openai.Option{
+		openai.WithAPIKey(apiKey),
+		openai.WithOpenAIOptions(openaiopt.WithMaxRetries(0)),
+	}
 	if cfg.BaseURL != "" {
 		options = append(options, openai.WithBaseURL(cfg.BaseURL))
 	}
