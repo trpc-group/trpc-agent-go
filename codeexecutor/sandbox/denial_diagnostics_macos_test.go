@@ -12,6 +12,8 @@
 package sandbox
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -285,7 +287,9 @@ func TestCollectSandboxDenialsAppliesRuntimeDenialFilter(t *testing.T) {
 	}
 	d.mu.Unlock()
 
-	denials := rt.collectSandboxDenials(runTag, "/bin/cat", time.Millisecond)
+	denials, _ := rt.collectSandboxDenials(
+		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+	)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
 		t.Fatalf("filtered denials = %#v, want only /private/tmp/keep", denials)
 	}
@@ -324,7 +328,9 @@ func TestCollectSandboxDenialsFiltersAutomaticNoise(t *testing.T) {
 	}
 	d.mu.Unlock()
 
-	denials := rt.collectSandboxDenials(runTag, "/bin/cat", time.Millisecond)
+	denials, _ := rt.collectSandboxDenials(
+		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+	)
 	if len(denials) != 1 || denials[0].Target != "/private/tmp/keep" {
 		t.Fatalf("auto-filtered denials = %#v, want only user-relevant denial", denials)
 	}
@@ -349,7 +355,7 @@ func TestInitDenialMonitorHonorsCachedCapsWithoutEventStream(t *testing.T) {
 	})
 
 	rt := NewRuntime()
-	if err := rt.ensureDenialMonitor(); err != nil {
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor: %v", err)
 	}
 	if rt.sandboxDenialCollectingReady() {
@@ -372,7 +378,8 @@ func TestInitDenialMonitorUsesCachedCapsWithAvailableEventStream(t *testing.T) {
 	})
 
 	rt := NewRuntime()
-	if err := rt.ensureDenialMonitor(); err != nil {
+	t.Cleanup(func() { _ = rt.Close() })
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
 		t.Fatalf("ensureDenialMonitor: %v", err)
 	}
 	if !rt.sandboxDenialCollectingReady() {
@@ -470,7 +477,11 @@ func TestMacOSDenialRingBufferOverflowEvictsOldest(t *testing.T) {
 	if ring.count() != macosSandboxDenialBufferSize {
 		t.Fatalf("ring count = %d, want %d", ring.count(), macosSandboxDenialBufferSize)
 	}
-	first := ring.snapshot()[0].denial.Target
+	events, truncated := ring.snapshot()
+	if !truncated {
+		t.Fatal("snapshot Truncated = false, want true after overflow")
+	}
+	first := events[0].denial.Target
 	if !strings.HasSuffix(first, "/private/tmp/b") {
 		t.Fatalf("oldest event target = %q, want second inserted target", first)
 	}
@@ -479,7 +490,7 @@ func TestMacOSDenialRingBufferOverflowEvictsOldest(t *testing.T) {
 func TestMacOSDenialRingWaitForSettleUsesDefaultTimeout(t *testing.T) {
 	ring := &macosDenialRing{}
 	start := time.Now()
-	ring.waitForSettle(0)
+	_ = ring.waitForSettle(context.Background(), 0)
 	if time.Since(start) < 250*time.Millisecond {
 		t.Fatalf("waitForSettle(0) returned too quickly: %s", time.Since(start))
 	}
@@ -488,7 +499,7 @@ func TestMacOSDenialRingWaitForSettleUsesDefaultTimeout(t *testing.T) {
 func TestMacOSDenialRingWaitForRunTagSettleEmptyTagUsesSettle(t *testing.T) {
 	ring := &macosDenialRing{}
 	start := time.Now()
-	ring.waitForRunTagSettle("", 0)
+	_ = ring.waitForRunTagSettle(context.Background(), "", 0)
 	if time.Since(start) < 250*time.Millisecond {
 		t.Fatalf("waitForRunTagSettle empty tag returned too quickly: %s", time.Since(start))
 	}
@@ -497,7 +508,11 @@ func TestMacOSDenialRingWaitForRunTagSettleEmptyTagUsesSettle(t *testing.T) {
 func TestMacOSDenialRingWaitForRunTagSettleUsesDefaultTimeout(t *testing.T) {
 	ring := &macosDenialRing{}
 	start := time.Now()
-	ring.waitForRunTagSettle("TRPC_RUN_tag_END_0123456789abcdef_SBX", 0)
+	_ = ring.waitForRunTagSettle(
+		context.Background(),
+		"TRPC_RUN_tag_END_0123456789abcdef_SBX",
+		0,
+	)
 	if time.Since(start) < 250*time.Millisecond {
 		t.Fatalf("waitForRunTagSettle default timeout returned too quickly: %s", time.Since(start))
 	}
@@ -672,5 +687,240 @@ func TestMacOSLogStreamMonitorStopTimesOutWhenDoneNeverCloses(t *testing.T) {
 	monitor.stop()
 	if time.Since(start) < 400*time.Millisecond {
 		t.Fatalf("stop returned too quickly: %s", time.Since(start))
+	}
+}
+
+func TestRuntimeCloseStopsDenialMonitor(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+	})
+	rt := NewRuntime()
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Skip("log stream unavailable on this host")
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true after Close, want false")
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+}
+
+func TestLiveProdMonitorClearsDeadMonitorAndRestarts(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+	})
+	rt := NewRuntime()
+	t.Cleanup(func() { _ = rt.Close() })
+	done := make(chan struct{})
+	close(done)
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{done: done, ring: &macosDenialRing{}}
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
+	if rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = true for closed done channel")
+	}
+	caps := rt.DiagnosticsCapability()
+	if caps.EventStreamAvailable {
+		t.Fatalf("caps.EventStreamAvailable = true after dead monitor, want false")
+	}
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor after monitor death: %v", err)
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Skip("log stream unavailable on this host")
+	}
+}
+
+func TestEnsureDenialMonitorRestartsAfterClose(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:            true,
+		ProbeCompleted:       true,
+		EventStreamAvailable: true,
+		StrongCorrelation:    true,
+	})
+	rt := NewRuntime()
+	t.Cleanup(func() { _ = rt.Close() })
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor: %v", err)
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Skip("log stream unavailable on this host")
+	}
+	if err := rt.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := rt.ensureDenialMonitor(context.Background()); err != nil {
+		t.Fatalf("ensureDenialMonitor after Close: %v", err)
+	}
+	if !rt.sandboxDenialCollectingReady() {
+		t.Fatal("sandboxDenialCollectingReady = false after restart, want true")
+	}
+}
+
+func TestCollectSandboxDenialsReportsTruncated(t *testing.T) {
+	runTag := "TRPC_RUN_trunc_END_0123456789abcdef_SBX"
+	rt := NewRuntime()
+	ring := &macosDenialRing{}
+	for i := 0; i < macosSandboxDenialBufferSize+1; i++ {
+		line := []byte(
+			`{"eventMessage":"Sandbox: cat deny(1) file-read-data /private/tmp/x` +
+				string(rune('a'+i%26)) + `\n` + runTag + `"}`,
+		)
+		ring.addLine(line, runTag)
+	}
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: ring}
+	d.caps = DiagnosticsCapability{
+		EventStreamAvailable: true,
+		ProbeCompleted:       true,
+	}
+	d.mu.Unlock()
+	denials, truncated := rt.collectSandboxDenials(
+		context.Background(), runTag, 0, "/bin/cat", time.Millisecond,
+	)
+	if !truncated {
+		t.Fatal("truncated = false, want true after ring overflow")
+	}
+	if len(denials) == 0 {
+		t.Fatal("denials empty after overflow, want remaining tagged events")
+	}
+}
+
+func TestEnsureDenialMonitorHonorsCanceledContext(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	rt := NewRuntime()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := rt.ensureDenialMonitor(ctx)
+	if err == nil {
+		t.Fatal("ensureDenialMonitor with canceled context returned nil error")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ensureDenialMonitor error = %v, want context.Canceled", err)
+	}
+}
+
+func TestEnsureDenialMonitorHonorsCancellationWhileInitializationBusy(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	if err := d.lockInit(context.Background()); err != nil {
+		t.Fatalf("lockInit: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- rt.ensureDenialMonitor(ctx)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		d.unlockInit()
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ensureDenialMonitor error = %v, want context.Canceled", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		d.unlockInit()
+		err := <-done
+		t.Fatalf(
+			"ensureDenialMonitor stayed blocked after cancellation; eventual error = %v",
+			err,
+		)
+	}
+}
+
+func TestRuntimeCloseRetainsMonitorWhenStopDoesNotComplete(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	monitor := &macosLogStreamMonitor{
+		cancel: func() {},
+		done:   make(chan struct{}),
+		ring:   &macosDenialRing{},
+	}
+	d.mu.Lock()
+	d.prodMonitor = monitor
+	d.caps.EventStreamAvailable = true
+	d.mu.Unlock()
+
+	if err := rt.Close(); err == nil {
+		t.Fatal("Close returned nil when monitor did not stop")
+	}
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.prodMonitor != monitor {
+		t.Fatal("Close discarded ownership of a monitor that did not stop")
+	}
+}
+
+func TestMacOSDenialRingTruncationUsesRunBaseline(t *testing.T) {
+	ring := &macosDenialRing{}
+	runTag := "TRPC_RUN_baseline_END_0123456789abcdef_SBX"
+	for i := 0; i < macosSandboxDenialBufferSize+1; i++ {
+		ring.addLine([]byte(
+			`{"eventMessage":"Sandbox: cat deny(1) file-read-data /tmp/old`+
+				string(rune('a'+i%26))+`"}`,
+		), "")
+	}
+	baseline := ring.dropCount()
+	if _, truncated := ring.snapshotSince(baseline); truncated {
+		t.Fatal("historical drops marked a new run truncated")
+	}
+	ring.addLine([]byte(
+		`{"eventMessage":"Sandbox: cat deny(1) file-read-data /tmp/current\n`+
+			runTag+`"}`,
+	), runTag)
+	if _, truncated := ring.snapshotSince(baseline); !truncated {
+		t.Fatal("drop after run baseline was not reported")
+	}
+}
+
+func TestCollectSandboxDenialsHonorsCanceledContext(t *testing.T) {
+	rt := NewRuntime()
+	d := rt.macosDenialDiagnostics()
+	d.mu.Lock()
+	d.prodMonitor = &macosLogStreamMonitor{ring: &macosDenialRing{}}
+	d.caps.EventStreamAvailable = true
+	d.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	_, _ = rt.collectSandboxDenials(
+		ctx,
+		"TRPC_RUN_canceled_END_0123456789abcdef_SBX",
+		0,
+		"/bin/cat",
+		2*time.Second,
+	)
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("collection ignored canceled context and took %s", elapsed)
 	}
 }

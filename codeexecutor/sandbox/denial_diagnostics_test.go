@@ -169,7 +169,9 @@ func TestWithDenialFilterOption(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithDenialFilter(filter),
 	)
-	if denials := rt.collectSandboxDenials("", "/bin/cat", time.Millisecond); denials != nil {
+	if denials, _ := rt.collectSandboxDenials(
+		context.Background(), "", 0, "/bin/cat", time.Millisecond,
+	); denials != nil {
 		t.Fatalf("collectSandboxDenials with empty tag = %#v, want nil", denials)
 	}
 	run := rt.sandboxDenialRunForCollecting(DangerFullAccessProfile())

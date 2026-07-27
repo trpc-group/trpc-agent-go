@@ -16,21 +16,35 @@ res, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
 diagnostics := <-diagnosticsCh
 ```
 
+When the runtime is no longer needed, call `Runtime.Close()` (or
+`CodeExecutor.Close()`) so the production `/usr/bin/log stream` monitor is
+stopped. `Close` is idempotent after successful shutdown. If monitor shutdown
+does not complete promptly, `Close` returns an error and retains ownership so a
+later `Close` can retry.
+
 ## Runtime Architecture
 
 When diagnostics are first requested through `WithDiagnostics`, the runtime
-performs a one-time capability probe and starts a persistent
-`/usr/bin/log stream --style ndjson` monitor for the lifetime of the `Runtime`.
-The monitor uses an `ENDSWITH` predicate on a per-runtime `sessionSuffix`
-(`_END_<hex>_SBX`). Each diagnostics run injects a unique `runTag`
-(`TRPC_RUN_<hex>_END_<hex>_SBX`) into Seatbelt deny messages when the host
-supports tagging.
+performs a capability probe (unless a completed probe is already cached for the
+current macOS version) and starts a persistent
+`/usr/bin/log stream --style ndjson` monitor for the lifetime of the `Runtime`
+until `Close`. The monitor uses an `ENDSWITH` predicate on a per-runtime
+`sessionSuffix` (`_END_<hex>_SBX`). Each diagnostics run injects a unique
+`runTag` (`TRPC_RUN_<hex>_END_<hex>_SBX`) into Seatbelt deny messages when the
+host supports tagging.
 
-The first diagnostics-enabled `RunProgram` may block for up to about one second
-while the probe runs. Later runs reuse the cached capability result and the
-already-running monitor. The production `log stream` monitor is owned by the
-`Runtime` and has no explicit shutdown hook today; it lives until the runtime's
-process exits.
+Probe and monitor startup honor the `RunProgram` context / timeout. If that
+context is already canceled or the run deadline expires during initialization,
+`RunProgram` returns the existing cancel / `ErrTimeout` result without calling
+`cmd.Start` (it does not turn a late probe into `ErrSetupFailed`). If the
+context remains valid but monitoring is unavailable, the command still runs and
+diagnostics are omitted.
+
+The first diagnostics-enabled `RunProgram` may spend a short time probing when
+the process cache is cold. Later runs reuse the cached capability result and the
+already-running monitor. If the monitor process exits, capability reporting and
+collection readiness become unavailable and a later `ensureDenialMonitor` may
+start a new monitor.
 
 Probe events use a separate temporary monitor and suffix (`_PROBE_SBX`) so they
 never pollute the production ring buffer.
@@ -71,6 +85,12 @@ for _, denial := range diagnostics.Denials {
     fmt.Printf("denied %s %s\n", denial.Operation, denial.Target)
 }
 ```
+
+`Diagnostics.Truncated` is true when the shared denial ring dropped one or more
+raw events after this run began and before its collection snapshot (the ring
+keeps at most 100 events). Callers must not treat `Denials` as complete when
+`Truncated` is true. Historical drops from earlier runs do not permanently mark
+later diagnostics as truncated.
 
 Only log lines whose `eventMessage` contains the current `runTag` are attached to
 `Diagnostics.Denials`. There are no log-based nearby hints.
@@ -130,6 +150,13 @@ rt := sandbox.NewRuntime(
 matching against `RunProgramSpec.Cmd` only, `Operations`, structured `Targets`
 (`Exact`, `Prefix`, `Suffix`, `Glob`), and `RawContains`. `RawRegex` is
 intentionally not supported.
+
+Zero-value `DenialFilter` keeps automatic filters enabled. Rules in `Ignore` are
+disjunctive (any matching rule suppresses a denial). Within a rule, configured
+constraints are conjunctive. Within one `DenialTargetMatcher`, non-empty fields
+are alternatives. Empty `Scope` and `DenialFilterAll` apply broadly;
+`DenialFilterDenials` applies only to `Diagnostics.Denials`; unknown scopes never
+match.
 
 Set `DisableAutomatic: true` to keep the three default daemon filters visible.
 

@@ -54,8 +54,9 @@ type macosSandboxDenialEvent struct {
 }
 
 type macosDenialRing struct {
-	mu     sync.Mutex
-	events []macosSandboxDenialEvent
+	mu      sync.Mutex
+	events  []macosSandboxDenialEvent
+	dropped uint64
 }
 
 type macosLogStreamMonitor struct {
@@ -67,10 +68,10 @@ type macosLogStreamMonitor struct {
 
 type macosDenialDiagnostics struct {
 	mu            sync.RWMutex
+	initGate      chan struct{}
 	filter        DenialFilter
 	sessionSuffix string
 	caps          DiagnosticsCapability
-	monitorOnce   sync.Once
 	monitorErr    error
 	prodMonitor   *macosLogStreamMonitor
 }
@@ -81,12 +82,23 @@ func (r *Runtime) initDenialDiagnosticsState() {
 
 func (r *Runtime) macosDenialDiagnostics() *macosDenialDiagnostics {
 	if d, ok := r.denials.(*macosDenialDiagnostics); ok && d != nil {
+		d.mu.Lock()
 		if d.sessionSuffix == "" {
 			d.sessionSuffix = newMacOSSessionSuffix()
 		}
+		if d.initGate == nil {
+			d.initGate = make(chan struct{}, 1)
+			d.initGate <- struct{}{}
+		}
+		d.mu.Unlock()
 		return d
 	}
-	d := &macosDenialDiagnostics{sessionSuffix: newMacOSSessionSuffix()}
+	initGate := make(chan struct{}, 1)
+	initGate <- struct{}{}
+	d := &macosDenialDiagnostics{
+		initGate:      initGate,
+		sessionSuffix: newMacOSSessionSuffix(),
+	}
 	r.denials = d
 	return d
 }
@@ -106,10 +118,14 @@ func (r *Runtime) diagnosticsCapabilityForPlatform() DiagnosticsCapability {
 		return DiagnosticsCapability{}
 	}
 	d := r.macosDenialDiagnostics()
-	d.mu.RLock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	caps := d.caps
-	d.mu.RUnlock()
 	caps.Supported = true
+	if r.liveProdMonitorLocked(d) == nil {
+		caps.EventStreamAvailable = false
+		caps.StrongCorrelation = false
+	}
 	return caps
 }
 
@@ -123,10 +139,16 @@ func (r *Runtime) newSandboxDenialRun(
 	d.mu.RLock()
 	caps := d.caps
 	sessionSuffix := d.sessionSuffix
+	monitor := d.prodMonitor
 	d.mu.RUnlock()
+	var droppedAtStart uint64
+	if monitor != nil && monitor.ring != nil {
+		droppedAtStart = monitor.ring.dropCount()
+	}
 	return sandboxDenialRun{
 		enabled:              true,
 		runTag:               newMacOSSandboxDenialRunTag(sessionSuffix),
+		droppedAtStart:       droppedAtStart,
 		defaultDenyTaggable:  caps.DefaultDenyTaggable,
 		explicitDenyTaggable: caps.ExplicitDenyTaggable,
 	}
@@ -144,20 +166,109 @@ func (r *Runtime) sandboxDenialRunForCollecting(
 
 func (r *Runtime) sandboxDenialCollectingReady() bool {
 	d := r.macosDenialDiagnostics()
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	return d.prodMonitor != nil && d.caps.EventStreamAvailable
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return r.liveProdMonitorLocked(d) != nil
 }
 
-func (r *Runtime) ensureDenialMonitor() error {
+func (r *Runtime) liveProdMonitorLocked(
+	d *macosDenialDiagnostics,
+) *macosLogStreamMonitor {
+	m := d.prodMonitor
+	if m == nil || !d.caps.EventStreamAvailable {
+		return nil
+	}
+	if m.done == nil {
+		return m
+	}
+	select {
+	case <-m.done:
+		d.prodMonitor = nil
+		d.caps.EventStreamAvailable = false
+		d.caps.StrongCorrelation = false
+		return nil
+	default:
+		return m
+	}
+}
+
+func (r *Runtime) closeDenialDiagnostics() error {
 	d := r.macosDenialDiagnostics()
-	d.monitorOnce.Do(func() {
-		d.monitorErr = r.initDenialMonitor(d)
-	})
-	return d.monitorErr
+	if err := d.lockInit(context.Background()); err != nil {
+		return err
+	}
+	defer d.unlockInit()
+	d.mu.Lock()
+	m := d.prodMonitor
+	d.caps.EventStreamAvailable = false
+	d.caps.StrongCorrelation = false
+	d.mu.Unlock()
+	var stopErr error
+	if m != nil {
+		stopErr = m.stop()
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if stopErr != nil {
+		d.monitorErr = stopErr
+		return stopErr
+	}
+	if d.prodMonitor == m {
+		d.prodMonitor = nil
+	}
+	d.monitorErr = nil
+	return nil
 }
 
-func (r *Runtime) initDenialMonitor(d *macosDenialDiagnostics) error {
+func (r *Runtime) ensureDenialMonitor(ctx context.Context) error {
+	d := r.macosDenialDiagnostics()
+	if err := d.lockInit(ctx); err != nil {
+		return err
+	}
+	defer d.unlockInit()
+
+	d.mu.Lock()
+	if r.liveProdMonitorLocked(d) != nil {
+		d.mu.Unlock()
+		return nil
+	}
+	if d.prodMonitor != nil {
+		err := d.monitorErr
+		d.mu.Unlock()
+		if err != nil {
+			return err
+		}
+		return errors.New("previous log stream monitor has not stopped")
+	}
+	d.mu.Unlock()
+
+	err := r.initDenialMonitor(ctx, d)
+	d.mu.Lock()
+	d.monitorErr = err
+	d.mu.Unlock()
+	return err
+}
+
+func (d *macosDenialDiagnostics) lockInit(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-d.initGate:
+		return nil
+	}
+}
+
+func (d *macosDenialDiagnostics) unlockInit() {
+	d.initGate <- struct{}{}
+}
+
+func (r *Runtime) initDenialMonitor(
+	ctx context.Context,
+	d *macosDenialDiagnostics,
+) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if cached, ok := loadCachedDiagnosticsCaps(); ok {
 		caps := cached
 		caps.ProbeCompleted = true
@@ -170,8 +281,12 @@ func (r *Runtime) initDenialMonitor(d *macosDenialDiagnostics) error {
 		d.mu.RLock()
 		sessionSuffix := d.sessionSuffix
 		d.mu.RUnlock()
-		monitor, err := startMacOSLogStreamMonitor(sessionSuffix)
+		monitor, err := startMacOSLogStreamMonitor(ctx, sessionSuffix)
 		if err != nil {
+			if errors.Is(err, context.Canceled) ||
+				errors.Is(err, context.DeadlineExceeded) {
+				return err
+			}
 			caps.EventStreamAvailable = false
 			caps.StrongCorrelation = false
 			d.mu.Lock()
@@ -186,7 +301,7 @@ func (r *Runtime) initDenialMonitor(d *macosDenialDiagnostics) error {
 		return nil
 	}
 
-	caps, err := r.probeDiagnosticsCapabilities()
+	caps, err := r.probeDiagnosticsCapabilities(ctx)
 	if err != nil {
 		return err
 	}
@@ -202,8 +317,12 @@ func (r *Runtime) initDenialMonitor(d *macosDenialDiagnostics) error {
 	d.mu.RLock()
 	sessionSuffix := d.sessionSuffix
 	d.mu.RUnlock()
-	monitor, err := startMacOSLogStreamMonitor(sessionSuffix)
+	monitor, err := startMacOSLogStreamMonitor(ctx, sessionSuffix)
 	if err != nil {
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
 		caps.EventStreamAvailable = false
 		caps.StrongCorrelation = false
 		d.mu.Lock()
@@ -219,20 +338,22 @@ func (r *Runtime) initDenialMonitor(d *macosDenialDiagnostics) error {
 }
 
 func (r *Runtime) collectSandboxDenials(
+	ctx context.Context,
 	runTag string,
+	droppedAtStart uint64,
 	cmd string,
 	settleTimeout time.Duration,
-) []Denial {
+) ([]Denial, bool) {
 	d := r.macosDenialDiagnostics()
-	d.mu.RLock()
-	monitor := d.prodMonitor
+	d.mu.Lock()
+	monitor := r.liveProdMonitorLocked(d)
 	filter := cloneDenialFilter(d.filter)
-	d.mu.RUnlock()
+	d.mu.Unlock()
 	if runTag == "" || monitor == nil {
-		return nil
+		return nil, false
 	}
-	monitor.ring.waitForRunTagSettle(runTag, settleTimeout)
-	events := monitor.ring.snapshot()
+	_ = monitor.ring.waitForRunTagSettle(ctx, runTag, settleTimeout)
+	events, truncated := monitor.ring.snapshotSince(droppedAtStart)
 	var tagged []Denial
 	for _, event := range events {
 		if !event.tagged || !containsExactSandboxTag(event.denial.Raw, runTag) {
@@ -240,28 +361,41 @@ func (r *Runtime) collectSandboxDenials(
 		}
 		tagged = append(tagged, event.denial)
 	}
-	return applyMacOSSandboxDenialFilters(tagged, cmd, filter)
+	return applyMacOSSandboxDenialFilters(tagged, cmd, filter), truncated
 }
 
-func (r *Runtime) probeDiagnosticsCapabilities() (DiagnosticsCapability, error) {
+func (r *Runtime) probeDiagnosticsCapabilities(
+	ctx context.Context,
+) (DiagnosticsCapability, error) {
 	caps := DiagnosticsCapability{
 		Supported: true,
 	}
-	seatbelt, err := r.macosPreflight()
+	if err := ctx.Err(); err != nil {
+		return caps, err
+	}
+	seatbelt, err := r.macosPreflightContext(ctx)
 	if err != nil {
 		return caps, nil
 	}
 
-	probe := func() (DiagnosticsCapability, bool) {
-		return r.runDiagnosticsCapabilityProbe(seatbelt)
+	probe := func() (DiagnosticsCapability, bool, error) {
+		return r.runDiagnosticsCapabilityProbe(ctx, seatbelt)
 	}
 
-	probed, ok := probe()
+	probed, ok, err := probe()
+	if err != nil {
+		return probed, err
+	}
 	if ok {
 		return probed, nil
 	}
-	time.Sleep(200 * time.Millisecond)
-	probed, ok = probe()
+	if err := waitCtx(ctx, 200*time.Millisecond); err != nil {
+		return probed, err
+	}
+	probed, ok, err = probe()
+	if err != nil {
+		return probed, err
+	}
 	if ok {
 		return probed, nil
 	}
@@ -269,10 +403,14 @@ func (r *Runtime) probeDiagnosticsCapabilities() (DiagnosticsCapability, error) 
 }
 
 func (r *Runtime) runDiagnosticsCapabilityProbe(
+	ctx context.Context,
 	seatbelt string,
-) (DiagnosticsCapability, bool) {
+) (DiagnosticsCapability, bool, error) {
 	caps := DiagnosticsCapability{
 		Supported: true,
+	}
+	if err := ctx.Err(); err != nil {
+		return caps, false, err
 	}
 	probeSuffix := newMacOSProbeSuffix()
 	probeTag := "TRPC_RUN_PROBE_D_" + randomHex(8) + probeSuffix
@@ -291,25 +429,31 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 	probeExplicitPath := filepath.Join(probeDirCanon, "explicit_target")
 	for _, path := range []string{probeDefaultPath, probeExplicitPath} {
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			return caps, false
+			return caps, false, nil
 		}
 	}
 
-	monitor, err := startMacOSLogStreamMonitor(probeSuffix)
+	monitor, err := startMacOSLogStreamMonitor(ctx, probeSuffix)
 	if err != nil {
-		return caps, false
+		if errors.Is(err, context.Canceled) ||
+			errors.Is(err, context.DeadlineExceeded) {
+			return caps, false, err
+		}
+		return caps, false, nil
 	}
 	defer monitor.stop()
-	time.Sleep(100 * time.Millisecond)
+	if err := waitCtx(ctx, 100*time.Millisecond); err != nil {
+		return caps, false, err
+	}
 
 	policy := macosDiagnosticsProbePolicy(probeTag, explicitTag, probeExplicitPath)
 	profilePath, err := writeMacOSSeatbeltProfile(policy)
 	if err != nil {
-		return caps, false
+		return caps, false, nil
 	}
 	defer os.Remove(profilePath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	probeCtx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
 	for _, spec := range []struct {
 		args []string
@@ -317,20 +461,27 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 		{args: []string{"/bin/cat", probeDefaultPath}},
 		{args: []string{"/bin/cat", probeExplicitPath}},
 	} {
+		if err := probeCtx.Err(); err != nil {
+			return caps, false, err
+		}
 		cmdArgs := append([]string{"-f", profilePath, "--"}, spec.args...)
-		cmd := exec.CommandContext(ctx, seatbelt, cmdArgs...)
+		cmd := exec.CommandContext(probeCtx, seatbelt, cmdArgs...)
 		cmd.Dir = probeDirCanon
 		cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "LANG=C"}
 		if err := cmd.Run(); err == nil {
-			return caps, false
+			return caps, false, nil
 		}
-		time.Sleep(100 * time.Millisecond)
+		if err := waitCtx(probeCtx, 100*time.Millisecond); err != nil {
+			return caps, false, err
+		}
 	}
 
-	monitor.ring.waitForSettle(sandboxDenialProbeTimeout)
-	events := monitor.ring.snapshot()
+	if err := monitor.ring.waitForSettle(ctx, sandboxDenialProbeTimeout); err != nil {
+		return caps, false, err
+	}
+	events, _ := monitor.ring.snapshot()
 	if len(events) == 0 {
-		return caps, false
+		return caps, false, nil
 	}
 
 	caps.EventStreamAvailable = true
@@ -350,7 +501,7 @@ func (r *Runtime) runDiagnosticsCapabilityProbe(
 		caps.ExplicitDenyTaggable = true
 	}
 	caps.StrongCorrelation = caps.ExplicitDenyTaggable || caps.DefaultDenyTaggable
-	return caps, true
+	return caps, true, nil
 }
 
 type probeExpectation struct {
@@ -426,13 +577,23 @@ func macosDiagnosticsProbePolicy(probeTag, explicitTag, explicitPath string) str
 	return base + "\n\n" + explicit
 }
 
-func startMacOSLogStreamMonitor(suffix string) (*macosLogStreamMonitor, error) {
+func startMacOSLogStreamMonitor(
+	ctx context.Context,
+	suffix string,
+) (*macosLogStreamMonitor, error) {
 	return startMacOSLogStreamMonitorWithPredicate(
+		ctx,
 		fmt.Sprintf(`eventMessage ENDSWITH %q`, suffix),
 	)
 }
 
-func startMacOSLogStreamMonitorWithPredicate(predicate string) (*macosLogStreamMonitor, error) {
+func startMacOSLogStreamMonitorWithPredicate(
+	ctx context.Context,
+	predicate string,
+) (*macosLogStreamMonitor, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	monitorCtx, cancel := context.WithCancel(context.Background())
 	ring := &macosDenialRing{}
 	monitor := &macosLogStreamMonitor{
@@ -484,6 +645,8 @@ func startMacOSLogStreamMonitorWithPredicate(predicate string) (*macosLogStreamM
 		}
 		_ = cmd.Wait()
 	}()
+	readyTimer := time.NewTimer(sandboxDenialProbeTimeout)
+	defer readyTimer.Stop()
 	select {
 	case <-monitor.ready:
 		select {
@@ -493,18 +656,43 @@ func startMacOSLogStreamMonitorWithPredicate(predicate string) (*macosLogStreamM
 			return nil, err
 		default:
 		}
-	case <-time.After(sandboxDenialProbeTimeout):
+	case <-ctx.Done():
+		_ = monitor.stop()
+		return nil, ctx.Err()
+	case <-readyTimer.C:
 	}
 	return monitor, nil
 }
 
-func (m *macosLogStreamMonitor) stop() {
+func (m *macosLogStreamMonitor) stop() error {
+	if m == nil {
+		return nil
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
+	if m.done == nil {
+		return nil
+	}
 	select {
 	case <-m.done:
+		return nil
 	case <-time.After(500 * time.Millisecond):
+		return errors.New("timed out stopping macOS log stream monitor")
+	}
+}
+
+func waitCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
 	}
 }
 
@@ -521,10 +709,17 @@ func (ring *macosDenialRing) addLine(line []byte, runTag string) {
 	defer ring.mu.Unlock()
 	if len(ring.events) >= macosSandboxDenialBufferSize {
 		copy(ring.events, ring.events[1:])
-		ring.events[len(ring.events)-1] = macosSandboxDenialEvent{denial: denial, tagged: tagged}
+		ring.events[len(ring.events)-1] = macosSandboxDenialEvent{
+			denial: denial,
+			tagged: tagged,
+		}
+		ring.dropped++
 		return
 	}
-	ring.events = append(ring.events, macosSandboxDenialEvent{denial: denial, tagged: tagged})
+	ring.events = append(ring.events, macosSandboxDenialEvent{
+		denial: denial,
+		tagged: tagged,
+	})
 }
 
 func (ring *macosDenialRing) count() int {
@@ -545,15 +740,30 @@ func (ring *macosDenialRing) countMatchingRunTag(runTag string) int {
 	return count
 }
 
-func (ring *macosDenialRing) snapshot() []macosSandboxDenialEvent {
+func (ring *macosDenialRing) snapshot() ([]macosSandboxDenialEvent, bool) {
+	return ring.snapshotSince(0)
+}
+
+func (ring *macosDenialRing) snapshotSince(
+	droppedAtStart uint64,
+) ([]macosSandboxDenialEvent, bool) {
 	ring.mu.Lock()
 	defer ring.mu.Unlock()
 	out := make([]macosSandboxDenialEvent, len(ring.events))
 	copy(out, ring.events)
-	return out
+	return out, ring.dropped > droppedAtStart
 }
 
-func (ring *macosDenialRing) waitForSettle(timeout time.Duration) {
+func (ring *macosDenialRing) dropCount() uint64 {
+	ring.mu.Lock()
+	defer ring.mu.Unlock()
+	return ring.dropped
+}
+
+func (ring *macosDenialRing) waitForSettle(
+	ctx context.Context,
+	timeout time.Duration,
+) error {
 	if timeout <= 0 {
 		timeout = sandboxDenialSettleTimeout
 	}
@@ -561,22 +771,31 @@ func (ring *macosDenialRing) waitForSettle(timeout time.Duration) {
 	idleStart := time.Now()
 	lastCount := -1
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		count := ring.count()
 		if count != lastCount {
 			lastCount = count
 			idleStart = time.Now()
 		}
 		if count > 0 && time.Since(idleStart) >= 50*time.Millisecond {
-			return
+			return nil
 		}
-		time.Sleep(10 * time.Millisecond)
+		if err := waitCtx(ctx, 10*time.Millisecond); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (ring *macosDenialRing) waitForRunTagSettle(runTag string, timeout time.Duration) {
+func (ring *macosDenialRing) waitForRunTagSettle(
+	ctx context.Context,
+	runTag string,
+	timeout time.Duration,
+) error {
 	if runTag == "" {
-		ring.waitForSettle(timeout)
-		return
+		return ring.waitForSettle(ctx, timeout)
 	}
 	if timeout <= 0 {
 		timeout = sandboxDenialSettleTimeout
@@ -585,16 +804,22 @@ func (ring *macosDenialRing) waitForRunTagSettle(runTag string, timeout time.Dur
 	idleStart := time.Now()
 	lastCount := -1
 	for time.Now().Before(deadline) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		count := ring.countMatchingRunTag(runTag)
 		if count != lastCount {
 			lastCount = count
 			idleStart = time.Now()
 		}
 		if count > 0 && time.Since(idleStart) >= 50*time.Millisecond {
-			return
+			return nil
 		}
-		time.Sleep(10 * time.Millisecond)
+		if err := waitCtx(ctx, 10*time.Millisecond); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 func parseMacOSSandboxDenialLogLine(

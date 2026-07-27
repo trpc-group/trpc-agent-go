@@ -45,6 +45,8 @@ type Runtime struct {
 	runLocks map[string]*workspaceRunLock
 
 	preflightOnce  sync.Once
+	preflightGate  chan struct{}
+	preflightDone  bool
 	preflightErr   error
 	bwrapPath      string
 	bwrapMountProc bool
@@ -62,7 +64,9 @@ func NewRuntime(opts ...Option) *Runtime {
 		outputMaxBytes: defaultOutputMaxBytes,
 		defaultTimeout: defaultRunTimeout,
 		runLocks:       map[string]*workspaceRunLock{},
+		preflightGate:  make(chan struct{}, 1),
 	}
+	r.preflightGate <- struct{}{}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(r)
@@ -155,6 +159,17 @@ func (r *Runtime) Cleanup(ctx context.Context, ws codeexecutor.Workspace) error 
 		return nil
 	}
 	return os.RemoveAll(ws.Path)
+}
+
+// Close releases runtime-owned resources such as macOS denial diagnostics
+// monitors. It does not remove workspaces; call Cleanup for that. Close is
+// safe to call more than once. If shutdown does not complete promptly, Close
+// returns an error and retains ownership so a later call can retry.
+func (r *Runtime) Close() error {
+	if r == nil {
+		return nil
+	}
+	return r.closeDenialDiagnostics()
 }
 
 func sanitizeID(id string) string {

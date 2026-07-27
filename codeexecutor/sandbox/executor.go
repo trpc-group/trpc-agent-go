@@ -53,6 +53,15 @@ func (e *CodeExecutor) Runtime() *Runtime {
 	return e.runtime
 }
 
+// Close releases runtime-owned resources such as macOS denial diagnostics
+// monitors. It is safe to call more than once; shutdown errors can be retried.
+func (e *CodeExecutor) Close() error {
+	if e == nil || e.runtime == nil {
+		return nil
+	}
+	return e.runtime.Close()
+}
+
 // CodeBlockDelimiter returns the delimiters used for fenced code blocks.
 func (e *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 	return e.codeBlockDelimiter

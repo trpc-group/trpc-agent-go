@@ -62,9 +62,27 @@ func (r *Runtime) runProgram(
 	start := time.Now()
 	env := r.buildEnvironment(ws, spec)
 	diagnostics := sandboxDenialRun{}
-	if diagnosticsCh != nil && prep.profile.enforcement() == enforcementManaged &&
-		r.ensureDenialMonitor() == nil {
-		diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
+	if diagnosticsCh != nil && prep.profile.enforcement() == enforcementManaged {
+		_ = r.ensureDenialMonitor(runCtx)
+		if err := runCtx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				return codeexecutor.RunResult{
+						TimedOut: true,
+						Duration: time.Since(start),
+						ExitCode: -1,
+					}, &sandboxError{
+						Kind: ErrTimeout,
+						Op:   "run",
+						Err:  context.DeadlineExceeded,
+					}
+			}
+			return codeexecutor.RunResult{
+				Duration: time.Since(start),
+			}, err
+		}
+		if r.sandboxDenialCollectingReady() {
+			diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
+		}
 	}
 	cmd, backendName, cleanup, err := r.commandForProfile(
 		runCtx, prep.profile, ws, prep.cwd, env, spec, diagnostics,
@@ -111,12 +129,15 @@ func (r *Runtime) runProgram(
 		TimedOut: timedOut,
 	}
 	if diagnostics.enabled {
-		denials := r.collectSandboxDenials(
+		denials, truncated := r.collectSandboxDenials(
+			runCtx,
 			diagnostics.runTag,
+			diagnostics.droppedAtStart,
 			spec.Cmd,
 			sandboxDenialSettleTimeout,
 		)
 		runDiagnostics.Denials = denials
+		runDiagnostics.Truncated = truncated
 	}
 	if timedOut {
 		return result, &sandboxError{
