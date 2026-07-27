@@ -42,14 +42,85 @@ var sessionReconnectErrorPatterns = []string{
 	"session not found",      // Explicit session not found error
 }
 
-const processAlreadyFinishedText = "process already finished"
+const (
+	processAlreadyFinishedText = "process already finished"
+	closeErrorsPrefix          = "close errors: ["
+	closeErrorsSuffix          = "]"
+)
 
 func isBenignMCPClientCloseError(err error) bool {
 	if err == nil {
 		return false
 	}
+	for closeErr := err; closeErr != nil; {
+		if _, ok := closeErr.(interface{ Unwrap() []error }); ok {
+			return false
+		}
+		if closeErr == os.ErrClosed {
+			return true
+		}
+		unwrapper, ok := closeErr.(interface{ Unwrap() error })
+		if !ok {
+			break
+		}
+		closeErr = unwrapper.Unwrap()
+	}
+
+	errText := err.Error()
+	if strings.HasPrefix(errText, closeErrorsPrefix) {
+		return isBenignFlattenedCloseError(errText)
+	}
 	return errors.Is(err, os.ErrProcessDone) ||
-		strings.Contains(err.Error(), processAlreadyFinishedText)
+		strings.Contains(errText, processAlreadyFinishedText)
+}
+
+func isBenignFlattenedCloseError(errText string) bool {
+	// trpc-mcp-go v0.0.10 flattens stdio close errors with %v, so the
+	// original causes are unavailable to errors.Is. Parse its aggregate
+	// conservatively and accept it only when every entry is benign.
+	if !strings.HasPrefix(errText, closeErrorsPrefix) ||
+		!strings.HasSuffix(errText, closeErrorsSuffix) {
+		return false
+	}
+
+	entriesText := strings.TrimSuffix(
+		strings.TrimPrefix(errText, closeErrorsPrefix),
+		closeErrorsSuffix,
+	)
+	const failedToPrefix = "failed to "
+	if !strings.HasPrefix(entriesText, failedToPrefix) {
+		return false
+	}
+
+	entries := strings.Split(
+		strings.TrimPrefix(entriesText, failedToPrefix),
+		" "+failedToPrefix,
+	)
+	for _, entry := range entries {
+		const killProcessPrefix = "kill process: "
+		if strings.HasPrefix(entry, killProcessPrefix) {
+			if !strings.HasSuffix(entry, processAlreadyFinishedText) {
+				return false
+			}
+			continue
+		}
+
+		const closePrefix = "close "
+		if !strings.HasPrefix(entry, closePrefix) {
+			return false
+		}
+		stream, closeErr, ok := strings.Cut(
+			strings.TrimPrefix(entry, closePrefix),
+			": ",
+		)
+		isStdioStream := stream == "stdin" || stream == "stdout" ||
+			stream == "stderr"
+		if !ok || !isStdioStream ||
+			!strings.HasSuffix(closeErr, os.ErrClosed.Error()) {
+			return false
+		}
+	}
+	return true
 }
 
 // ToolSet implements the ToolSet interface for MCP tools.
