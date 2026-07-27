@@ -12,11 +12,25 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 )
 
-const reportSchemaVersion = 1
+const (
+	reportSchemaVersion    = 1
+	maxReportTextBytes     = 4096
+	reportTruncationMarker = "… [truncated]"
+)
+
+var (
+	sensitiveAssignmentPattern = regexp.MustCompile(
+		`(?i)(["']?(?:api[_ -]?key|authorization|token|secret|password|credential)["']?\s*[:=]\s*)(?:(?:bearer\s+)?(?:"[^"]*"|'[^']*'|[^\s,;}\]]+))`,
+	)
+	bearerCredentialPattern = regexp.MustCompile(`(?i)\bbearer\s+[a-z0-9._~+/=-]{8,}`)
+	providerKeyPattern      = regexp.MustCompile(`(?i)\b(?:sk|rk)-[a-z0-9_-]{8,}\b`)
+)
 
 type effectiveRole struct {
 	Model      string   `json:"model"`
@@ -56,7 +70,7 @@ type regressionReport struct {
 }
 
 func renderJSON(report regressionReport) ([]byte, error) {
-	stable := stableReport(report)
+	stable := prepareReport(report)
 	contents, err := json.MarshalIndent(stable, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal report: %w", err)
@@ -65,7 +79,7 @@ func renderJSON(report regressionReport) ([]byte, error) {
 }
 
 func renderMarkdown(report regressionReport) ([]byte, error) {
-	report = stableReport(report)
+	report = prepareReport(report)
 	var output bytes.Buffer
 	fmt.Fprintf(&output, "# PromptIter Regression Report\n\n")
 	fmt.Fprintf(&output, "- Run: `%s`\n", markdownCell(report.RunID))
@@ -115,6 +129,11 @@ func stableReport(report regressionReport) regressionReport {
 		round.Gate.Checks = append([]gateCheck(nil), round.Gate.Checks...)
 		sort.SliceStable(round.Gate.Checks, func(i, j int) bool { return round.Gate.Checks[i].ID < round.Gate.Checks[j].ID })
 		round.Attributions = append([]caseAttribution(nil), round.Attributions...)
+		for j := range round.Attributions {
+			round.Attributions[j].Secondary = append(
+				[]attribution(nil), round.Attributions[j].Secondary...,
+			)
+		}
 		sort.SliceStable(round.Attributions, func(i, j int) bool {
 			return round.Attributions[i].EvalCaseID < round.Attributions[j].EvalCaseID
 		})
@@ -134,6 +153,52 @@ func stableReport(report regressionReport) regressionReport {
 		})
 	}
 	return report
+}
+
+func prepareReport(report regressionReport) regressionReport {
+	report = stableReport(report)
+	report.TerminalError = sanitizeReportText(report.TerminalError)
+	for i := range report.Rounds {
+		round := &report.Rounds[i]
+		round.CandidatePrompt = sanitizeReportText(round.CandidatePrompt)
+		round.Error = sanitizeReportText(round.Error)
+		for j := range round.Gate.Checks {
+			check := &round.Gate.Checks[j]
+			check.Reason = sanitizeReportText(check.Reason)
+			if observed, ok := check.Observed.(string); ok {
+				check.Observed = sanitizeReportText(observed)
+			}
+		}
+		for j := range round.Attributions {
+			item := &round.Attributions[j]
+			item.Primary.Evidence = sanitizeReportText(item.Primary.Evidence)
+			for k := range item.Secondary {
+				item.Secondary[k].Evidence = sanitizeReportText(item.Secondary[k].Evidence)
+			}
+		}
+	}
+	for i := range report.Baseline.Cases {
+		evalCase := &report.Baseline.Cases[i]
+		evalCase.ExecutionError = sanitizeReportText(evalCase.ExecutionError)
+		for j := range evalCase.Metrics {
+			evalCase.Metrics[j].Reason = sanitizeReportText(evalCase.Metrics[j].Reason)
+		}
+	}
+	return report
+}
+
+func sanitizeReportText(value string) string {
+	value = sensitiveAssignmentPattern.ReplaceAllString(value, `${1}[REDACTED]`)
+	value = bearerCredentialPattern.ReplaceAllString(value, "Bearer [REDACTED]")
+	value = providerKeyPattern.ReplaceAllString(value, "[REDACTED]")
+	if len(value) <= maxReportTextBytes {
+		return value
+	}
+	limit := maxReportTextBytes - len(reportTruncationMarker)
+	for limit > 0 && !utf8.ValidString(value[:limit]) {
+		limit--
+	}
+	return value[:limit] + reportTruncationMarker
 }
 
 func markdownCell(value string) string {
