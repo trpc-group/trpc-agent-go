@@ -102,6 +102,14 @@ func TestValidateConfigBoundaries(t *testing.T) {
 			message: "max tool calls",
 		},
 		{
+			name: "negative deterministic pricing",
+			mutate: func(cfg *config) {
+				value := -1.0
+				cfg.Candidate.InputPerM = &value
+			},
+			message: "candidate input price",
+		},
+		{
 			name: "critical rule without condition",
 			mutate: func(cfg *config) {
 				cfg.Critical = []criticalRule{{EvalCaseID: "case-1"}}

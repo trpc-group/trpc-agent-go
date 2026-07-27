@@ -156,15 +156,20 @@ func (cfg config) validate() error {
 			return fmt.Errorf("critical rule %d maximum score drop must be nonnegative", i)
 		}
 	}
-	if cfg.Mode == modeLive {
-		roles := []struct {
-			name string
-			cfg  roleConfig
-		}{
-			{name: "candidate", cfg: cfg.Candidate},
-			{name: "judge", cfg: cfg.Judge},
-			{name: "worker", cfg: cfg.Worker},
+	roles := []struct {
+		name string
+		cfg  roleConfig
+	}{
+		{name: "candidate", cfg: cfg.Candidate},
+		{name: "judge", cfg: cfg.Judge},
+		{name: "worker", cfg: cfg.Worker},
+	}
+	for _, role := range roles {
+		if err := validateRolePricing(role.name, role.cfg); err != nil {
+			return err
 		}
+	}
+	if cfg.Mode == modeLive {
 		for _, role := range roles {
 			if err := validateLiveRole(role.name, role.cfg); err != nil {
 				return err
@@ -191,6 +196,10 @@ func validateLiveRole(name string, role roleConfig) error {
 	if role.APIKeyEnv != defaultAPIKeyEnv && strings.TrimSpace(role.BaseURL) == "" {
 		return fmt.Errorf("%s base URL is required with non-default credentials", name)
 	}
+	return nil
+}
+
+func validateRolePricing(name string, role roleConfig) error {
 	if role.InputPerM != nil && *role.InputPerM < 0 {
 		return fmt.Errorf("%s input price must be nonnegative", name)
 	}
