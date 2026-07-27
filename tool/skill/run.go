@@ -911,8 +911,9 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 			"skill_run: falling back to local engine; " +
 				"workspace resolver is not configured",
 		)
-		rt := localexec.NewRuntime("")
-		return codeexecutor.NewEngine(rt, rt, rt)
+		// Audited local capabilities (SupportsCleanEnv=true) so policy
+		// mode with allowed/denied commands still works on the fallback.
+		return localexec.New().Engine()
 	}
 	return t.wsr.EnsureEngine()
 }

@@ -12,6 +12,7 @@ package workspacesession
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -56,8 +57,9 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 		"workspacesession: falling back to local engine; " +
 			"executor does not expose EngineProvider",
 	)
-	rt := localexec.NewRuntime("")
-	return codeexecutor.NewEngine(rt, rt, rt)
+	// Use local.CodeExecutor.Engine so SupportsCleanEnv/DeclarativeIO
+	// match the audited local backend (policy mode can honor CleanEnv).
+	return localexec.New().Engine()
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.
@@ -95,7 +97,12 @@ func KeyFromInvocation(inv *agent.Invocation) string {
 	app := inv.Session.AppName
 	user := inv.Session.UserID
 	id := inv.Session.ID
-	// Always three length-prefixed fields (including empties).
+	// Require a non-empty Session.ID so placeholder sessions do not all
+	// collapse to the same durable registry key (e.g. "0:/0:/0:").
+	if strings.TrimSpace(id) == "" {
+		return ""
+	}
+	// Always three length-prefixed fields (including empty app/user).
 	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
 		len(app), app, len(user), user, len(id), id)
 }

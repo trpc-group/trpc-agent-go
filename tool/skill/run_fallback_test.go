@@ -198,3 +198,13 @@ func TestInvariant_Preflight_InputsBeforePrepare(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
 }
+
+
+func TestInvariant_CleanEnv_LocalFallbackHonorsPolicy(t *testing.T) {
+	rt := &RunTool{exec: nil, wsr: nil}
+	eng := rt.ensureEngine()
+	require.NotNil(t, eng)
+	require.True(t, eng.Describe().SupportsCleanEnv,
+		"local fallback engine must support CleanEnv for policy mode")
+	require.NoError(t, checkSkillRunnerSupportsPolicy(eng))
+}

@@ -252,6 +252,14 @@ const (
 	// execution_id. Without a session in context, a non-empty
 	// ExecutionID is used as-is (trusted caller path).
 	//
+	// IMPORTANT (shared-sandbox boundary): namespacing only selects a
+	// different directory under the same remote sandbox process/user.
+	// It is NOT OS-level multi-tenant isolation. One CodeExecutor /
+	// one OpenSandbox instance must serve a single trust boundary
+	// (one tenant or one trusted multi-turn session). Do not share the
+	// same executor across untrusted users expecting filesystem
+	// confinement; allocate a sandbox per trust boundary instead.
+	//
 	// Concurrent calls with the same session ID are NOT safe: they
 	// reuse one workspace and will race on source files and output
 	// directories. The caller must serialize calls sharing a session
@@ -915,9 +923,10 @@ func (c *CodeExecutor) Collect(
 
 // StageInputs maps external inputs into the sandbox workspace.
 //
-// Not implemented in v1; returns ErrNotImplementedV1. Callers can
-// detect this with errors.Is(err, ErrNotImplementedV1) and fall back
-// to PutFiles.
+// Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported
+// (ErrNotImplementedV1 is an alias). Callers should use
+// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) and fall
+// back to PutFiles.
 func (c *CodeExecutor) StageInputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	specs []codeexecutor.InputSpec,
@@ -927,9 +936,10 @@ func (c *CodeExecutor) StageInputs(
 
 // CollectOutputs applies the declarative output spec in the sandbox.
 //
-// Not implemented in v1; returns ErrNotImplementedV1. Callers can
-// detect this with errors.Is(err, ErrNotImplementedV1) and fall back
-// to Collect.
+// Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported
+// (ErrNotImplementedV1 is an alias). Callers should use
+// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) and fall
+// back to Collect.
 func (c *CodeExecutor) CollectOutputs(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.OutputSpec,
@@ -1068,26 +1078,39 @@ func (c *CodeExecutor) resolveWorkspaceExecID(
 }
 
 // executionIDFromContext builds a stable, injective workspace key from
-// the agent invocation session. Empty when the context has no session.
+// the agent invocation session. Empty when the context has no session
+// or the session lacks a usable identity (see sessionIdentityOK).
 //
-// All three fields are always included with length prefixes so empty
-// fields and embedded separators cannot collide. Example collisions
-// avoided: (App="a", User="", ID="b") vs (App="", User="a", ID="b")
-// both used to become "a/b" when empty parts were omitted.
+// Encoding uses length prefixes so empty non-required fields and
+// embedded separators cannot collide. Example collisions avoided:
+// (App="a", User="", ID="b") vs (App="", User="a", ID="b").
 func executionIDFromContext(ctx context.Context) string {
 	inv, ok := agent.InvocationFromContext(ctx)
 	if !ok || inv == nil || inv.Session == nil {
 		return ""
 	}
-	return encodeSessionWorkspaceKey(
-		inv.Session.AppName,
-		inv.Session.UserID,
-		inv.Session.ID,
-	)
+	app := inv.Session.AppName
+	user := inv.Session.UserID
+	id := inv.Session.ID
+	if !sessionIdentityOK(app, user, id) {
+		// Placeholder / empty sessions must not collapse to one durable key
+		// (e.g. all-empty -> "0:/0:/0:").
+		return ""
+	}
+	return encodeSessionWorkspaceKey(app, user, id)
+}
+
+// sessionIdentityOK reports whether the session fields form a stable
+// identity for PerSession workspace isolation. Session.ID is required;
+// empty AppName/UserID alone is allowed (single-tenant agents), but a
+// completely empty triple is rejected.
+func sessionIdentityOK(app, user, id string) bool {
+	return strings.TrimSpace(id) != ""
 }
 
 // encodeSessionWorkspaceKey returns an injective encoding of the three
 // session identity fields for PerSession workspace hashing.
+// Caller must ensure sessionIdentityOK first when using as a durable key.
 func encodeSessionWorkspaceKey(app, user, id string) string {
 	// length-prefixed segments: always three fields, including empties.
 	// Parsing is: for each field, read decimal length, ':', then N bytes.
@@ -1133,20 +1156,16 @@ func (c *CodeExecutor) Close() error {
 	return nil
 }
 
-// ErrNotImplementedV1 is returned by the v1 stub implementations of
-// StageInputs and CollectOutputs on CodeExecutor (the direct methods).
-// Callers can detect it with errors.Is(err, ErrNotImplementedV1) and
-// fall back to PutFiles / Collect.
+// ErrNotImplementedV1 is a deprecated alias of
+// codeexecutor.ErrDeclarativeIONotSupported kept for older call sites
+// that already match on this name. New code should use
+// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) for both
+// Engine().FS() and direct CodeExecutor StageInputs/CollectOutputs.
 //
-// When accessed via Engine().FS(), the gatingFS wrapper installed by
-// NewEngineWithCapabilities intercepts StageInputs/CollectOutputs and
-// returns codeexecutor.ErrDeclarativeIONotSupported instead, because
-// this engine advertises SupportsDeclarativeIO=false. Cross-package
-// callers that use the Engine interface should check
-// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported).
-var ErrNotImplementedV1 = errors.New("opensandbox: not implemented in v1")
+// Direct stubs return the neutral sentinel so callers have one
+// errors.Is path regardless of access surface.
+var ErrNotImplementedV1 = codeexecutor.ErrDeclarativeIONotSupported
 
-// errNotImplementedV1 is retained as a package-private alias for
-// backward compatibility with existing test assertions and the
+// errNotImplementedV1 is the package-private alias used by
 // StageInputs/CollectOutputs stubs in workspace_collect.go.
-var errNotImplementedV1 = ErrNotImplementedV1
+var errNotImplementedV1 = codeexecutor.ErrDeclarativeIONotSupported

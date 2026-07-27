@@ -12,6 +12,7 @@ package opensandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -1660,4 +1661,55 @@ func TestInvariant_Isolation_SkillRegistryKeyMatchesSessionKey(t *testing.T) {
 	wsReg, err := exec.CreateWorkspace(ctx, sessionKey, codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
 	require.Equal(t, wsEmpty.Path, wsReg.Path)
+}
+
+
+// TestInvariant_Isolation_EmptySessionRejected ensures placeholder sessions
+// (empty ID) do not collapse to one durable PerSession workspace.
+func TestInvariant_Isolation_EmptySessionRejected(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	u, err := url.Parse(m.server.URL)
+	require.NoError(t, err)
+	exec, err := New(
+		WithDomain(u.Host),
+		WithProtocol("http"),
+		WithAPIKey("test-key"),
+		WithWorkspacePersistence(WorkspacePersistencePerSession),
+	)
+	require.NoError(t, err)
+	defer exec.Close()
+
+	ctxEmpty := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{},
+	})
+	require.Equal(t, "", executionIDFromContext(ctxEmpty))
+	ctxWS := agent.NewInvocationContext(context.Background(), &agent.Invocation{
+		Session: &session.Session{ID: "   "},
+	})
+	require.Equal(t, "", executionIDFromContext(ctxWS), "whitespace-only Session.ID must be rejected")
+
+	blocks := []codeexecutor.CodeBlock{{Language: "bash", Code: "echo ok"}}
+	_, err = exec.ExecuteCode(ctxEmpty, codeexecutor.CodeExecutionInput{CodeBlocks: blocks})
+	require.Error(t, err, "PerSession must fail closed without stable session ID")
+
+	_, err = exec.CreateWorkspace(ctxEmpty, "", codeexecutor.WorkspacePolicy{})
+	require.Error(t, err)
+}
+
+// TestInvariant_Error_DirectStubUsesNeutralSentinel locks one errors.Is path
+// for declarative I/O whether via Engine.FS or direct CodeExecutor methods.
+func TestInvariant_Error_DirectStubUsesNeutralSentinel(t *testing.T) {
+	m := newMockServer(t)
+	defer m.close()
+	exec := newTestExecutor(t, m)
+	defer exec.Close()
+	ws := codeexecutor.Workspace{ID: "x", Path: "/tmp/run/ws_x"}
+	err := exec.StageInputs(context.Background(), ws, nil)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
+	require.True(t, errors.Is(err, ErrNotImplementedV1), "alias must still match")
+	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{})
+	require.Error(t, err)
+	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
 }

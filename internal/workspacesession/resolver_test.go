@@ -127,6 +127,8 @@ func TestResolver_EnsureEngine(t *testing.T) {
 	require.NotNil(t, fallback.Manager())
 	require.NotNil(t, fallback.FS())
 	require.NotNil(t, fallback.Runner())
+	require.True(t, fallback.Describe().SupportsCleanEnv,
+		"local fallback must advertise SupportsCleanEnv for policy mode")
 }
 
 func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
@@ -260,4 +262,15 @@ func TestKeyFromInvocation_Injective(t *testing.T) {
 		AppName: "x", UserID: "", ID: "",
 	}})
 	require.NotEqual(t, c, e)
+}
+
+
+func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		AppName: "app", UserID: "u", ID: "",
+	}}))
+	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
+		ID: "only-id",
+	}}))
 }

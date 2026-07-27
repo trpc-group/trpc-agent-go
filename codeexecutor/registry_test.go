@@ -173,3 +173,118 @@ func TestWorkspaceRegistry_Release(t *testing.T) {
 	// unknown id is no-op
 	require.NoError(t, r.Release(ctx, wm, "missing"))
 }
+
+
+type failOnceWM struct {
+	mu       sync.Mutex
+	cleanErr error
+	cleans   int
+	creates  int
+	ws       Workspace
+}
+
+func (f *failOnceWM) CreateWorkspace(_ context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.creates++
+	f.ws = Workspace{ID: id, Path: "/tmp/" + id}
+	return f.ws, nil
+}
+
+func (f *failOnceWM) Cleanup(_ context.Context, _ Workspace) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.cleans++
+	if f.cleanErr != nil {
+		err := f.cleanErr
+		f.cleanErr = nil
+		return err
+	}
+	return nil
+}
+
+func TestWorkspaceRegistry_Release_RetryOnCleanupFailure(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &failOnceWM{cleanErr: errors.New("cleanup boom")}
+	ctx := context.Background()
+	ws, err := r.Acquire(ctx, wm, "retry-id")
+	require.NoError(t, err)
+
+	err = r.Release(ctx, wm, "retry-id")
+	require.Error(t, err)
+	got, ok := r.Get("retry-id")
+	require.True(t, ok)
+	require.Equal(t, ws, got)
+
+	require.NoError(t, r.Release(ctx, wm, "retry-id"))
+	_, ok = r.Get("retry-id")
+	require.False(t, ok)
+}
+
+type blockingCleanupWM struct {
+	entered chan struct{}
+	release chan struct{}
+	mu      sync.Mutex
+	creates int
+	cleans  int
+}
+
+func (b *blockingCleanupWM) CreateWorkspace(_ context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
+	b.mu.Lock()
+	b.creates++
+	b.mu.Unlock()
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (b *blockingCleanupWM) Cleanup(ctx context.Context, _ Workspace) error {
+	b.mu.Lock()
+	b.cleans++
+	b.mu.Unlock()
+	close(b.entered)
+	select {
+	case <-b.release:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestWorkspaceRegistry_Release_SerializesAcquire(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &blockingCleanupWM{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ctx := context.Background()
+	_, err := r.Acquire(ctx, wm, "serial-id")
+	require.NoError(t, err)
+
+	doneRelease := make(chan error, 1)
+	go func() {
+		doneRelease <- r.Release(ctx, wm, "serial-id")
+	}()
+	<-wm.entered
+
+	acquired := make(chan struct{})
+	var acqWS Workspace
+	var acqErr error
+	go func() {
+		acqWS, acqErr = r.Acquire(ctx, wm, "serial-id")
+		close(acquired)
+	}()
+
+	select {
+	case <-acquired:
+		t.Fatal("Acquire must wait for in-flight Release")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(wm.release)
+	require.NoError(t, <-doneRelease)
+	<-acquired
+	require.NoError(t, acqErr)
+	require.Equal(t, "serial-id", acqWS.ID)
+	wm.mu.Lock()
+	require.Equal(t, 2, wm.creates)
+	wm.mu.Unlock()
+}
