@@ -32,6 +32,17 @@ func newTestChromaService(
 	t.Helper()
 	fake := newFakeChroma()
 	t.Cleanup(fake.close)
+	service := newTestChromaServiceWithFake(t, fake, embedder, options...)
+	return service, fake
+}
+
+func newTestChromaServiceWithFake(
+	t *testing.T,
+	fake *fakeChroma,
+	embedder *testEmbedder,
+	options ...ServiceOpt,
+) *Service {
+	t.Helper()
 	base := []ServiceOpt{
 		WithBaseURL(fake.server.URL),
 		WithEmbedder(embedder),
@@ -39,7 +50,35 @@ func newTestChromaService(
 	service, err := NewService(append(base, options...)...)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, service.Close()) })
-	return service, fake
+	return service
+}
+
+func readTestMemories(
+	t *testing.T,
+	service *Service,
+	userKey memory.UserKey,
+) []*memory.Entry {
+	t.Helper()
+
+	entries, err := service.ReadMemories(context.Background(), userKey, 0)
+	require.NoError(t, err)
+	return entries
+}
+
+func testMemoryEntryByContent(
+	t *testing.T,
+	entries []*memory.Entry,
+	content string,
+) *memory.Entry {
+	t.Helper()
+
+	for _, entry := range entries {
+		if entry.Memory.Memory == content {
+			return entry
+		}
+	}
+	t.Fatalf("memory %q was not found", content)
+	return nil
 }
 
 func TestServiceAddMemoryIsIdempotentAndReplacesTopics(t *testing.T) {
@@ -193,6 +232,254 @@ func TestServiceUpdateMemoryRotatesID(t *testing.T) {
 	assert.Equal(t, result.MemoryID, entries[0].ID)
 	assert.Equal(t, "new content", entries[0].Memory.Memory)
 	assert.Equal(t, []string{"new"}, entries[0].Memory.Topics)
+}
+
+func TestServiceUpdateMemoryRejectsActiveTargetWithoutMutation(t *testing.T) {
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "active-target"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", []string{"source"}))
+	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"target"}))
+	entries := readTestMemories(t, service, userKey)
+	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"target",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.EqualError(t, err, fmt.Sprintf("memory with id %s already exists", targetID))
+	assert.Equal(t, "unchanged", result.MemoryID)
+	entries = readTestMemories(t, service, userKey)
+	require.Len(t, entries, 2)
+	assert.Equal(t, []string{"source"}, testMemoryEntryByContent(t, entries, "source").Memory.Topics)
+	assert.Equal(t, []string{"target"}, testMemoryEntryByContent(t, entries, "target").Memory.Topics)
+}
+
+func TestServiceUpdateMemoryRevivesSoftDeletedTarget(t *testing.T) {
+	service, _ := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithSoftDelete(true),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "soft-target"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", nil))
+	require.NoError(t, service.AddMemory(ctx, userKey, "target", []string{"deleted"}))
+	entries := readTestMemories(t, service, userKey)
+	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	require.NoError(t, service.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
+	}))
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"target",
+		[]string{"revived"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, targetID, result.MemoryID)
+	entries = readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, targetID, entries[0].ID)
+	assert.Equal(t, []string{"revived"}, entries[0].Memory.Topics)
+}
+
+func TestServiceUpdateMemoryHardDeleteReplacesSoftDeletedTarget(t *testing.T) {
+	fake := newFakeChroma()
+	t.Cleanup(fake.close)
+	embedder := &testEmbedder{dimension: 3}
+	softService := newTestChromaServiceWithFake(
+		t,
+		fake,
+		embedder,
+		WithSoftDelete(true),
+	)
+	hardService := newTestChromaServiceWithFake(t, fake, embedder)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "hard-target"}
+	require.NoError(t, softService.AddMemory(ctx, userKey, "source", nil))
+	require.NoError(t, softService.AddMemory(ctx, userKey, "target", []string{"deleted"}))
+	entries := readTestMemories(t, softService, userKey)
+	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	require.NoError(t, softService.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
+	}))
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := hardService.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"target",
+		[]string{"replacement"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, targetID, result.MemoryID)
+	entries = readTestMemories(t, hardService, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, targetID, entries[0].ID)
+	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
+}
+
+func TestServiceUpdateMemoryHardDeleteRejectsTombstoneSource(t *testing.T) {
+	fake := newFakeChroma()
+	t.Cleanup(fake.close)
+	embedder := &testEmbedder{dimension: 3}
+	softService := newTestChromaServiceWithFake(
+		t,
+		fake,
+		embedder,
+		WithSoftDelete(true),
+	)
+	hardService := newTestChromaServiceWithFake(t, fake, embedder)
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "same identity", content: "source"},
+		{name: "rotated identity", content: "target"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			userKey := memory.UserKey{AppName: "app", UserID: tt.name}
+			require.NoError(t, softService.AddMemory(ctx, userKey, "source", nil))
+			entries := readTestMemories(t, softService, userKey)
+			sourceID := entries[0].ID
+			key := memory.Key{
+				AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID,
+			}
+			require.NoError(t, softService.DeleteMemory(ctx, key))
+			result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+			err := hardService.UpdateMemory(
+				ctx,
+				key,
+				tt.content,
+				nil,
+				memory.WithUpdateResult(result),
+			)
+
+			require.ErrorContains(t, err, "not found")
+			assert.Equal(t, "unchanged", result.MemoryID)
+			assert.Empty(t, readTestMemories(t, hardService, userKey))
+		})
+	}
+}
+
+func TestServiceUpdateMemorySameIDDoesNotReviveConcurrentlyDeletedSource(t *testing.T) {
+	service, fake := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithSoftDelete(true),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "same-id-source-delete"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", []string{"old"}))
+	sourceID := readTestMemories(t, service, userKey)[0].ID
+	var once sync.Once
+	fake.requestHook = func(operation string) {
+		if operation != "update" {
+			return
+		}
+		once.Do(func() {
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			fake.records[sourceID].metadata[metadataDeletedAtKey] =
+				time.Now().UTC().UnixNano()
+		})
+	}
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"source",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.ErrorContains(t, err, "not found")
+	assert.Equal(t, "unchanged", result.MemoryID)
+	assert.Empty(t, readTestMemories(t, service, userKey))
+}
+
+func TestServiceUpdateMemoryConcurrentTargetCreationDoesNotOverwriteTarget(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "concurrent-target"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", nil))
+	sourceID := readTestMemories(t, service, userKey)[0].ID
+	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
+	competingTarget := newAddRecord(
+		scope,
+		"target",
+		[]string{"competing"},
+		nil,
+		time.Now().UTC(),
+	)
+	var once sync.Once
+	fake.requestHook = func(operation string) {
+		if operation == "add" {
+			once.Do(func() { putFakeRecord(fake, competingTarget) })
+		}
+	}
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"target",
+		[]string{"updated"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	entries := readTestMemories(t, service, userKey)
+	require.Len(t, entries, 2)
+	assert.Equal(t, []string{"competing"}, testMemoryEntryByContent(t, entries, "target").Memory.Topics)
+	assert.Equal(t, sourceID, testMemoryEntryByContent(t, entries, "source").ID)
+}
+
+func TestServiceAddMemoryAfterSoftDeleteRotationRevivesSource(t *testing.T) {
+	service, _ := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithSoftDelete(true),
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "re-add-source"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", nil))
+	sourceID := readTestMemories(t, service, userKey)[0].ID
+	result := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID},
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	))
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", nil))
+
+	entries := readTestMemories(t, service, userKey)
+	require.Len(t, entries, 2)
+	assert.Equal(t, sourceID, testMemoryEntryByContent(t, entries, "source").ID)
+	assert.Equal(t, result.MemoryID, testMemoryEntryByContent(t, entries, "target").ID)
 }
 
 func TestServiceUpdateMemoryReturnsEmbeddingFailureBeforeWrite(t *testing.T) {
