@@ -157,6 +157,9 @@ review = await agent(
 历史，适合并发分支。显式传相同 `instance_id` 表示复用同一条子历史；
 并发调用同一个 `instance_id` 会被串行执行，避免同时读写同一段会话历史。
 
+复用的历史包含子 Agent 的输入和产生的事件。动态 `instruction` 只配置当前这次
+调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 `input` 中。
+
 这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
 也不能新增基础 Agent 本来没有的宿主能力。
 
@@ -289,6 +292,11 @@ facts = await call_tool("search_catalog", query="trail backpack")
 
 `call_tool` 只能调用 `WithCodeCallableTools` 显式传入的工具。它不会自动看到根 Agent 的工具。
 
+`agent(..., tools=[...])` 只是授权子 Agent 使用这些工具，并不保证模型一定调用；
+结构化输出约束的是子 Agent 最终回答的形状，而不是字段的数据来源。如果 Python
+控制流必须使用宿主工具的精确结果，应先通过 `call_tool` 取得原始数据，再交给
+Agent 解读。
+
 不要把执行类工具、`run_workflow` 自身、`execute_tool_code`、`transfer_to_agent`、
 `await_user_reply`、workspace 工具或 AgentTool 放进 `WithCodeCallableTools`。这些工具容易形成
 递归或混合控制流边界；workflow 调用子 Agent 应使用 `agent(...)`。
@@ -324,8 +332,42 @@ Go 框架掌控。
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
 Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。
 
-生产环境应提供自己的 `dynamicworkflow.Runtime`，例如容器、microVM 或远端 sandbox，
-并在里面落实文件系统、网络、进程、依赖和资源限制。
+需要本地 OS 隔离时，可以直接使用内置 sandbox runner：
+
+```go
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.NewSandboxRunner(),
+    childAgents,
+)
+```
+
+使用上面不带 option 的构造方式时，每次 workflow 都会使用一次性 workspace 和
+clean process environment。该 runner 复用 `codeexecutor/sandbox`，默认限制网络；
+sandbox 初始化失败时会直接报错，不会 fallback 到本地执行。Linux 需要
+`bubblewrap`，macOS 使用 `/usr/bin/sandbox-exec`，Windows 尚未实现 managed
+backend。
+
+`SandboxRunner.Timeout` 会为完整 workflow 设置 deadline，并把取消信号传导给 guest、
+宿主 Tool 和子 Agent callback。Go context 采用协作式取消，call handler 必须在
+context 结束后及时返回。零值不会额外添加 deadline，而是依赖调用方 context；生产
+环境必须为调用方 context 设置 deadline，或者显式配置该 timeout。两者同时存在时，
+以更早到期者为准。CPU、内存和进程数配额仍应由外层容器、microVM 或远端 runtime
+提供。
+
+`SandboxRunner.Python` 为空时，sandbox 会从自己的 clean PATH 解析 `python3`。任何
+非空值（包括显式的 `"python3"`）都会先通过宿主 PATH 解析并转换成绝对路径。如果
+解释器不在 backend 默认开放的 runtime 路径中，还需要通过
+`sandbox.WorkspaceWriteProfile().WithReadPaths(...)` 扩展 managed permission
+profile，并将其传给 `sandbox.WithPermissionProfile(...)`。
+
+OS sandbox 仍然运行在宿主机上，并会开放启动 Python 所需的平台与 runtime 路径；
+具体只读可见范围因 backend 而异。它不等价于 microVM 级租户边界。如果 guest 不能
+看到任何宿主文件，或者需要更强的资源与租户隔离，应使用容器、microVM 或远端
+`Runtime`。
+
+可运行代码见
+[Sandbox Dynamic Workflow 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/sandbox)：
+生成的 workflow 在 managed sandbox 中运行，子 Agent 工具与事件仍留在 Go 框架内。
 
 生成的 workflow 代码应该调用宿主工具，而不是直接调用 HTTP API。认证、授权、
 重试、幂等、审计、限流和 API 版本适配仍应由业务工具在 Go 侧掌控。

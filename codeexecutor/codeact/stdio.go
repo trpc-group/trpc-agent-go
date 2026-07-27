@@ -28,9 +28,9 @@ var guestPython string
 var completedGuestWaitTimeout = 2 * time.Second
 var completedGuestKillWaitTimeout = 100 * time.Millisecond
 
-// stdioRunner starts a guest process that speaks the local stdio protocol.
-// It is an implementation detail of LocalRunner; non-stdio backends implement
-// Runtime directly.
+// stdioRunner starts a guest process that speaks the built-in stdio protocol.
+// It is an implementation detail of the local and OS-sandbox runners;
+// non-stdio backends implement Runtime directly.
 type stdioRunner interface {
 	start(context.Context, Request, string) (stdioProcess, error)
 }
@@ -40,6 +40,10 @@ type stdioProcess interface {
 	Stdout() io.ReadCloser
 	Wait() error
 	Kill() error
+}
+
+type stdioProcessDiagnostics interface {
+	diagnosticOutput() string
 }
 
 // LocalRunner runs the guest with a caller-supplied Python executable. Use it
@@ -185,47 +189,68 @@ func executeStdio(ctx context.Context, runner stdioRunner, req Request, handler 
 			_ = p.Wait()
 		}
 	}()
+	fail := func(err error) (Result, error) {
+		closeStdin()
+		if !waited {
+			_ = p.Kill()
+			_ = p.Wait()
+			waited = true
+		}
+		return Result{}, stdioErrorWithDiagnostics(p, err)
+	}
 
 	enc := json.NewEncoder(p.Stdin())
 	dec := bufio.NewScanner(p.Stdout())
 	dec.Buffer(make([]byte, 1024), 4<<20)
 	if err := enc.Encode(protocolMessage{Type: "run", Code: req.Code}); err != nil {
-		return Result{}, err
+		return fail(err)
 	}
 	for dec.Scan() {
 		var msg protocolMessage
 		if err := json.Unmarshal(dec.Bytes(), &msg); err != nil {
-			return Result{}, fmt.Errorf("codeact: malformed guest message: %w", err)
+			return fail(fmt.Errorf("codeact: malformed guest message: %w", err))
 		}
 		switch msg.Type {
 		case "tool_call":
 			if err := handleStdioToolCall(ctx, handler, enc, msg); err != nil {
-				return Result{}, err
+				return fail(err)
 			}
 		case "complete":
 			closeStdin()
 			waited = true
 			waitErr := waitForCompletedGuest(ctx, p, completedGuestWaitTimeout)
 			if waitErr != nil {
-				return Result{}, fmt.Errorf("codeact: wait for guest: %w", waitErr)
+				return fail(fmt.Errorf("codeact: wait for guest: %w", waitErr))
 			}
 			if msg.Name != "" {
-				return Result{}, errors.New(msg.Name)
+				return fail(errors.New(msg.Name))
 			}
 			return Result{Value: msg.Args, Stdout: msg.Code}, nil
 		default:
-			return Result{}, fmt.Errorf("codeact: unknown guest message %q", msg.Type)
+			return fail(fmt.Errorf("codeact: unknown guest message %q", msg.Type))
 		}
 	}
 	if err := dec.Err(); err != nil {
-		return Result{}, err
+		return fail(err)
 	}
 	select {
 	case <-ctx.Done():
-		return Result{}, ctx.Err()
+		return fail(ctx.Err())
 	case <-time.After(10 * time.Millisecond):
 	}
-	return Result{}, errors.New("codeact: guest exited without a completion message")
+	return fail(errors.New("codeact: guest exited without a completion message"))
+}
+
+func stdioErrorWithDiagnostics(p stdioProcess, err error) error {
+	diagnostics, ok := p.(stdioProcessDiagnostics)
+	if !ok {
+		return err
+	}
+	output := strings.TrimSpace(diagnostics.diagnosticOutput())
+	if output == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %s", err, output)
 }
 
 func handleStdioToolCall(

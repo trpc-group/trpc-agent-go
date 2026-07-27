@@ -174,6 +174,10 @@ the same `instance_id` explicitly means the calls share one child history; if
 those calls happen concurrently, they are serialized to avoid concurrent reads
 and writes to the same conversation branch.
 
+The shared history contains child inputs and emitted events. A dynamic
+`instruction` is configuration for that call only and is not persisted as a
+conversation message. Put facts that a later call must remember in `input`.
+
 These options affect only the current child Agent call. A workflow cannot use
 them to change the model, permission policy, or add host capabilities that the
 base Agent did not already have.
@@ -317,6 +321,12 @@ facts = await call_tool("search_catalog", query="trail backpack")
 `call_tool` can only call tools explicitly passed through
 `WithCodeCallableTools`. It does not automatically see the root Agent's tools.
 
+Selecting a tool through `agent(..., tools=[...])` authorizes the child Agent
+to use it; it does not guarantee that the model will call it. Structured output
+constrains the child's final response shape, not the provenance of its fields.
+When Python control flow must consume an exact host-tool result, use
+`call_tool` first and pass those facts to an Agent for interpretation.
+
 Do not put execution tools, `run_workflow` itself, `execute_tool_code`,
 `transfer_to_agent`, `await_user_reply`, workspace tools, or AgentTools into
 `WithCodeCallableTools`. They create recursive or mixed control-flow
@@ -362,9 +372,47 @@ default, rejects generated source larger than 64 KiB unless configured
 otherwise, and enforces the documented restricted Python subset. These are
 intentional behavior changes rather than a security sandbox boundary.
 
-In production, provide your own `dynamicworkflow.Runtime`, such as a container,
-microVM, or remote sandbox, and enforce filesystem, network, process,
-dependency, and resource limits there.
+For local OS isolation, use the built-in sandbox runner:
+
+```go
+workflow, err := dynamicworkflow.NewTool(
+    dynamicworkflow.NewSandboxRunner(),
+    childAgents,
+)
+```
+
+With the no-option constructor shown above, every workflow gets a one-shot
+workspace and clean process environment. The runner uses
+`codeexecutor/sandbox`, restricts networking by default, and fails closed
+instead of falling back to local execution. Linux requires `bubblewrap`; macOS
+uses `/usr/bin/sandbox-exec`; Windows has no managed backend.
+
+`SandboxRunner.Timeout` sets a deadline for the complete workflow and
+propagates cancellation to the guest and host Tool or child-Agent callbacks. Go
+context cancellation is cooperative: call handlers must return promptly when
+their context is done. The zero value adds no deadline and relies on the
+caller's context. A production caller must provide a context deadline or
+configure this timeout; if both are present, the earlier deadline wins. CPU,
+memory, and process-count quotas remain the responsibility of the surrounding
+container, microVM, or remote runtime.
+
+When `SandboxRunner.Python` is empty, the sandbox resolves `python3` from its
+clean PATH. Any non-empty value, including an explicit `"python3"`, is resolved
+through the host PATH and converted to an absolute path. An interpreter outside
+the backend's default runtime paths may also need a managed permission profile
+extended with `sandbox.WorkspaceWriteProfile().WithReadPaths(...)` and passed
+through `sandbox.WithPermissionProfile(...)`.
+
+The OS sandbox remains host-local and grants the platform/runtime paths needed
+to launch Python; exact read visibility differs by backend. It is not a tenant
+boundary equivalent to a microVM. Use a container, microVM, or remote `Runtime`
+when the guest must have no host filesystem visibility or needs stronger
+resource and tenant isolation.
+
+See the runnable
+[Sandbox Dynamic Workflow example](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/sandbox)
+for an Agent whose generated workflow runs in the managed sandbox while child
+Agent tools and events remain in Go.
 
 Generated workflow code should call host tools rather than direct HTTP APIs.
 Authentication, authorization, retries, idempotency, audit, rate limiting, and

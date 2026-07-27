@@ -88,11 +88,12 @@ type protocolMessage struct {
 }
 
 type workflowGuestProcess struct {
-	process workflowProcess
-	stdin   io.WriteCloser
-	stdout  io.Reader
-	stderr  *limitedBuffer
-	code    string
+	process    workflowProcess
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	stderr     *limitedBuffer
+	stderrDone <-chan struct{}
+	code       string
 }
 
 type workflowProcess interface {
@@ -364,6 +365,9 @@ func finishWorkflowGuest(
 	}
 	_ = guest.stdin.Close()
 	waitErr := waitWorkflowGuest(ctx, guest)
+	if guest.stderrDone != nil {
+		<-guest.stderrDone
+	}
 	if guest.stderr.Exceeded() && state.guestErr == nil {
 		state.guestErr = fmt.Errorf(
 			"dynamicworkflow: guest stderr exceeds %d bytes",
