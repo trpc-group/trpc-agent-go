@@ -679,3 +679,185 @@ func TestOversizedEnvelopeSize(t *testing.T) {
 		t.Errorf("oversized envelope size = %q, want deny", r.Decision)
 	}
 }
+
+func TestScanSoftWrapper(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "sudo cat /etc/hostname",
+	}, pol)
+	if r.Decision != DecisionAsk {
+		t.Errorf("sudo wrapper = %q, want ask (%v)", r.Decision, r.RuleIDs())
+	}
+	if !hasRule(r, RuleShellBypass) {
+		t.Errorf("expected shell_bypass for sudo, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanCodeBlockDuplicateURLs(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "execute_code", Backend: BackendCodeExec,
+		CodeBlocks: []CodeBlock{{
+			Language: "python",
+			Code:     `requests.get("https://evil.example.com/a")\nrequests.get("https://evil.example.com/b")`,
+		}},
+	}, pol)
+	egressCount := 0
+	for _, f := range r.Findings {
+		if f.RuleID == RuleNetworkEgress {
+			egressCount++
+		}
+	}
+	if egressCount != 1 {
+		t.Errorf("expected 1 deduplicated egress finding, got %d", egressCount)
+	}
+}
+
+func TestScanResourceTextYesCommand(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "yes | head -n 1000",
+	}, pol)
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("yes command should flag resource_abuse, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanResourceTextInfiniteLoop(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "while true; do echo x; done",
+	}, pol)
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("while true should flag resource_abuse, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanPipelineSegmentsLimit(t *testing.T) {
+	pol := testPolicy()
+	pol.Limits.MaxPipelineSegments = 2
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "cat file | grep x | sort | uniq",
+	}, pol)
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("pipeline over limit should flag resource_abuse, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanDestructiveMetadata(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName:    "workspace_exec",
+		Backend:     BackendWorkspaceExec,
+		Command:     "ls",
+		Destructive: true,
+	}, pol)
+	if !hasRule(r, RuleDestructiveIntent) {
+		t.Errorf("destructive metadata should flag destructive_intent, got %v", r.RuleIDs())
+	}
+	if r.Decision != DecisionAsk {
+		t.Errorf("destructive metadata = %q, want ask", r.Decision)
+	}
+}
+
+func TestScanEnvAllowlist(t *testing.T) {
+	pol := testPolicy()
+	pol.Env.AllowedNames = []string{"PATH", "HOME"}
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "ls",
+		Env:     map[string]string{"CUSTOM_VAR": "value"},
+	}, pol)
+	if !hasRule(r, RuleEnvPolicy) {
+		t.Errorf("env not in allowlist should flag env_policy, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanCommandPreviewCodeBlocks(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName:   "execute_code",
+		Backend:    BackendCodeExec,
+		CodeBlocks: []CodeBlock{{Language: "python", Code: "print('hello')"}},
+	}, pol)
+	if r.Command == "" {
+		t.Error("command preview for code blocks should not be empty")
+	}
+	if !strings.Contains(r.Command, "[python]") {
+		t.Errorf("command preview should contain language tag, got %q", r.Command)
+	}
+}
+
+func TestScanCommandPreviewArgs(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "exec_command", Backend: BackendHostExec,
+		Args: []string{"echo", "hello"},
+	}, pol)
+	if r.Command == "" {
+		t.Error("command preview for args should not be empty")
+	}
+}
+
+func TestScanHostExecTimeout(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName:   "exec_command",
+		Backend:    BackendHostExec,
+		Command:    "sleep 1",
+		TimeoutSec: 9999,
+	}, pol)
+	if !hasRule(r, RuleResourceAbuse) {
+		t.Errorf("excessive timeout should flag resource_abuse, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanCustomDestructivePattern(t *testing.T) {
+	pol := testPolicy()
+	pol.DestructivePatterns = []string{"destroy_everything"}
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "destroy_everything --force",
+	}, pol)
+	if !hasRule(r, RuleDangerousCommand) {
+		t.Errorf("custom destructive pattern should flag dangerous_command, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanCustomEgressCommands(t *testing.T) {
+	pol := testPolicy()
+	pol.Network.EgressCommands = []string{"my_fetcher"}
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "my_fetcher http://evil.example.com",
+	}, pol)
+	if !hasRule(r, RuleNetworkEgress) {
+		t.Errorf("custom egress command should flag network_egress, got %v", r.RuleIDs())
+	}
+}
+
+func TestScanRawArgsEmptyValue(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "http_fetch", Backend: BackendUnknown,
+		RawArgs: []string{"", "   ", "hello"},
+	}, pol)
+	if r.Decision != DecisionAllow {
+		t.Errorf("raw args with empty values and safe text = %q, want allow", r.Decision)
+	}
+}
+
+func TestScanWildcardHostAllowed(t *testing.T) {
+	pol := testPolicy()
+	r := Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "curl https://go.golang.org/list",
+	}, pol)
+	if r.Decision != DecisionAllow {
+		t.Errorf("wildcard-matched host = %q, want allow (%v)", r.Decision, r.RuleIDs())
+	}
+}

@@ -473,3 +473,192 @@ func TestGuardOversizedMCPArgsDenied(t *testing.T) {
 		t.Errorf("oversized MCP args = %q, want deny", dec.Action)
 	}
 }
+
+func TestGuardDirectScan(t *testing.T) {
+	g := NewGuard(testPolicy())
+	r := g.Scan(Request{
+		ToolName: "workspace_exec", Backend: BackendWorkspaceExec,
+		Command: "rm -rf / --no-preserve-root",
+	})
+	if r.Decision != DecisionDeny {
+		t.Errorf("Guard.Scan deny = %q, want deny", r.Decision)
+	}
+}
+
+func TestGuardNilRequest(t *testing.T) {
+	g := NewGuard(testPolicy())
+	dec, err := g.CheckToolPermission(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("nil request = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardExecKindHost(t *testing.T) {
+	g := NewGuard(testPolicy(), WithExecToolNames(map[string]ExecKind{
+		"my_host_exec": ExecHost,
+	}))
+	req := &tool.PermissionRequest{
+		ToolName:  "my_host_exec",
+		Arguments: mustArgs(t, map[string]any{"command": "top", "tty": true}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionAsk {
+		t.Errorf("custom host exec PTY = %q, want ask", dec.Action)
+	}
+}
+
+func TestGuardExecKindUnknown(t *testing.T) {
+	g := NewGuard(testPolicy(), WithExecToolNames(map[string]ExecKind{
+		"unknown_tool": ExecKind("invalid"),
+	}))
+	req := &tool.PermissionRequest{
+		ToolName:  "unknown_tool",
+		Arguments: mustArgs(t, map[string]any{"command": "ls"}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action == "" {
+		t.Error("expected a decision for unknown ExecKind")
+	}
+}
+
+func TestCollectStringValuesNested(t *testing.T) {
+	top := map[string]any{
+		"a": "hello",
+		"b": []any{"world", "foo"},
+		"c": map[string]any{"d": "bar"},
+	}
+	out := collectStringValues(top)
+	if len(out) != 4 {
+		t.Errorf("expected 4 strings, got %d: %v", len(out), out)
+	}
+}
+
+func TestDecodeCodeBlocksSingleObject(t *testing.T) {
+	raw := json.RawMessage(`{"language":"python","code":"print(1)"}`)
+	blocks, err := decodeCodeBlocks(raw)
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Language != "python" {
+		t.Errorf("single object decode = %+v", blocks)
+	}
+}
+
+func TestDecodeCodeBlocksDoubleEncoded(t *testing.T) {
+	raw := json.RawMessage(`"[{\"language\":\"bash\",\"code\":\"echo hi\"}]"`)
+	blocks, err := decodeCodeBlocks(raw)
+	if err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if len(blocks) != 1 || blocks[0].Language != "bash" {
+		t.Errorf("double-encoded decode = %+v", blocks)
+	}
+}
+
+func TestDecodeCodeBlocksNull(t *testing.T) {
+	blocks, err := decodeCodeBlocks(json.RawMessage(`null`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(blocks) != 0 {
+		t.Errorf("null should give empty blocks, got %v", blocks)
+	}
+}
+
+func TestDecodeCodeBlocksEmpty(t *testing.T) {
+	blocks, err := decodeCodeBlocks(nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(blocks) != 0 {
+		t.Errorf("empty should give empty blocks, got %v", blocks)
+	}
+}
+
+func TestReasonForTruncation(t *testing.T) {
+	report := Report{
+		Decision: DecisionDeny,
+		Findings: []Finding{
+			{RuleID: "a", Evidence: "ev1"},
+			{RuleID: "b", Evidence: "ev2"},
+			{RuleID: "c", Evidence: "ev3"},
+			{RuleID: "d", Evidence: "ev4"},
+		},
+	}
+	reason := reasonFor(report)
+	if !strings.Contains(reason, "...") {
+		t.Errorf("expected truncation marker, got %q", reason)
+	}
+}
+
+func TestGuardParseExecAllFields(t *testing.T) {
+	g := NewGuard(testPolicy())
+	timeout := 999
+	req := &tool.PermissionRequest{
+		ToolName: "exec_command",
+		Arguments: mustArgs(t, map[string]any{
+			"command":    "cat data.txt",
+			"stdin":      "extra input",
+			"cwd":        "/tmp",
+			"env":        map[string]string{"FOO": "bar"},
+			"background": true,
+			"timeout":    timeout,
+			"pty":        true,
+		}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action == "" {
+		t.Error("expected a decision")
+	}
+}
+
+func TestGuardParseGenericEmptyArgs(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "custom_mcp_tool",
+		Arguments: []byte(`   `),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionAllow {
+		t.Errorf("empty args = %q, want allow", dec.Action)
+	}
+}
+
+func TestGuardParseGenericNonJSON(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "custom_mcp_tool",
+		Arguments: []byte(`go test ./...`),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action == "" {
+		t.Error("expected a decision for non-JSON args")
+	}
+}
+
+func TestGuardParseCodeMalformed(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: []byte(`not json at all`),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("malformed code args = %q, want deny", dec.Action)
+	}
+}
+
+func TestGuardParseCodeMalformedBlocks(t *testing.T) {
+	g := NewGuard(testPolicy())
+	req := &tool.PermissionRequest{
+		ToolName:  "execute_code",
+		Arguments: mustArgs(t, map[string]any{"code_blocks": "not-valid"}),
+	}
+	dec, _ := g.CheckToolPermission(context.Background(), req)
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("malformed code_blocks = %q, want deny", dec.Action)
+	}
+}
