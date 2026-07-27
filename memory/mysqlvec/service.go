@@ -413,7 +413,7 @@ func (s *Service) rotateMemory(
 		case err != nil:
 			return fmt.Errorf("check rotated memory target: %w", err)
 		case targetActive:
-			return fmt.Errorf("cannot rotate memory: target id %s already active", newID)
+			return fmt.Errorf("memory with id %s already exists", newID)
 		case s.opts.softDelete:
 			updateTargetQuery := fmt.Sprintf(
 				"UPDATE %s SET memory_content = ?, topics = ?, embedding = "+embeddingExpr+", "+

@@ -2357,3 +2357,161 @@ func TestTools_AutoMemoryMode(t *testing.T) {
 	assert.False(t, toolNames[memory.AddToolName], "Add tool should not be exposed via Tools()")
 	assert.False(t, toolNames[memory.ClearToolName], "Clear tool should not be exposed via Tools()")
 }
+
+func TestService_AddMemoryAfterSoftDeleteRotationRevivesSource(t *testing.T) {
+	db, mock := setupMockDB(t)
+	defer db.Close()
+
+	svc := setupMockService(t, db)
+	svc.opts.memoryLimit = 0
+	svc.opts.softDelete = true
+
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	sourceMemory := "source"
+	targetMemory := "target"
+	sourceID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: sourceMemory},
+		userKey.AppName,
+		userKey.UserID,
+	)
+	sourceKey := memory.Key{
+		AppName:  userKey.AppName,
+		UserID:   userKey.UserID,
+		MemoryID: sourceID,
+	}
+	targetID := imemory.GenerateMemoryID(
+		&memory.Memory{Memory: targetMemory, Kind: memory.KindFact},
+		userKey.AppName,
+		userKey.UserID,
+	)
+
+	expectAddMemoryRevivesTombstone(mock, userKey)
+	require.NoError(t, svc.AddMemory(ctx, userKey, sourceMemory, nil))
+
+	mock.ExpectQuery("SELECT memory_data").
+		WithArgs(sourceKey.AppName, sourceKey.UserID, sourceKey.MemoryID).
+		WillReturnRows(sqlmock.NewRows([]string{"memory_data"}).
+			AddRow(marshalUpdateTestEntry(t, sourceKey, sourceMemory, nil)))
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(sourceKey.AppName, sourceKey.UserID, targetID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("UPDATE.*SET deleted_at").
+		WithArgs(
+			sqlmock.AnyArg(),
+			sourceKey.AppName,
+			sourceKey.UserID,
+			sourceKey.MemoryID,
+		).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, svc.UpdateMemory(
+		ctx,
+		sourceKey,
+		targetMemory,
+		nil,
+		memory.WithUpdateResult(result),
+	))
+	require.Equal(t, targetID, result.MemoryID)
+
+	expectAddMemoryRevivesTombstone(mock, userKey)
+	require.NoError(t, svc.AddMemory(ctx, userKey, sourceMemory, nil))
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func expectAddMemoryRevivesTombstone(
+	mock sqlmock.Sqlmock,
+	userKey memory.UserKey,
+) {
+	mock.ExpectExec(
+		"INSERT INTO.*ON DUPLICATE KEY UPDATE.*deleted_at = NULL",
+	).
+		WithArgs(
+			userKey.AppName,
+			userKey.UserID,
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+			sqlmock.AnyArg(),
+		).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+}
+
+func TestService_UpdateMemory_HardDeleteRejectsTombstoneSource(t *testing.T) {
+	tests := []struct {
+		name      string
+		memoryStr string
+	}{
+		{
+			name:      "same identity",
+			memoryStr: "source",
+		},
+		{
+			name:      "rotated identity",
+			memoryStr: "target",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			db, mock := setupMockDB(t)
+			svc := setupMockService(t, db)
+			svc.opts.softDelete = false
+			t.Cleanup(func() {
+				require.NoError(t, mock.ExpectationsWereMet())
+				_ = db.Close()
+			})
+
+			key := memory.Key{
+				AppName:  "app",
+				UserID:   "user",
+				MemoryID: "source-id",
+			}
+			mock.ExpectQuery("SELECT memory_data FROM memories.*deleted_at IS NULL").
+				WithArgs(key.AppName, key.UserID, key.MemoryID).
+				WillReturnRows(sqlmock.NewRows([]string{"memory_data"}))
+
+			result := &memory.UpdateResult{MemoryID: "unchanged"}
+			err := svc.UpdateMemory(
+				context.Background(),
+				key,
+				tt.memoryStr,
+				nil,
+				memory.WithUpdateResult(result),
+			)
+			require.ErrorContains(t, err, "not found")
+			require.Equal(t, "unchanged", result.MemoryID)
+		})
+	}
+}
+
+func TestService_UpdateMemory_HardDeleteRollsBackWhenSourceBecomesTombstone(
+	t *testing.T,
+) {
+	svc, mock, key, targetID := setupUpdateMemoryRotationMock(t, false)
+	mock.ExpectQuery("SELECT deleted_at IS NULL, memory_data FROM.*FOR UPDATE").
+		WithArgs(key.AppName, key.UserID, targetID).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("INSERT INTO").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec("DELETE FROM memories.*deleted_at IS NULL").
+		WithArgs(key.AppName, key.UserID, key.MemoryID).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectRollback()
+
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+	err := svc.UpdateMemory(
+		context.Background(),
+		key,
+		"target",
+		nil,
+		memory.WithUpdateResult(result),
+	)
+	require.ErrorContains(t, err, "not found")
+	require.Equal(t, "unchanged", result.MemoryID)
+}

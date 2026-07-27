@@ -1243,7 +1243,7 @@ ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
-Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
+Audit Trail → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -1387,7 +1387,7 @@ Search: "写代码" ❌ No match (different words)
 
 **Support status**:
 
-- ✅ MySQL, PostgreSQL, pgvector: support soft delete
+- ✅ MySQL, PostgreSQL, pgvector, SQLite, SQLiteVec: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:
