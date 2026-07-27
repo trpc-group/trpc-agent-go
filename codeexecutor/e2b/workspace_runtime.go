@@ -380,7 +380,7 @@ func (r *workspaceRuntime) stageInput(
 		return r.stageArtifactInput(ctx, md, sp, to, dest)
 	case strings.HasPrefix(sp.From, inputSchemeHost):
 		host := strings.TrimPrefix(sp.From, inputSchemeHost)
-		err := r.PutDirectory(ctx, ws, host, path.Dir(to))
+		err := r.PutDirectory(ctx, ws, host, to)
 		return host, nil, err
 	case strings.HasPrefix(sp.From, inputSchemeWorkspace):
 		return r.stageCopyInsideSandbox(ctx, ws, sp, inputSchemeWorkspace,

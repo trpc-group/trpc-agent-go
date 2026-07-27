@@ -1,0 +1,14 @@
+[
+  {
+    "kind": "json_report",
+    "path": "/root/code-review-real-e2b.FgbAOI/review_report.json",
+    "sha256": "8288ee9bbebf292b40a524ef23feb4e4a711703387b4dee9cf83d57eaa5ef468",
+    "size_bytes": 6464
+  },
+  {
+    "kind": "markdown_report",
+    "path": "/root/code-review-real-e2b.FgbAOI/review_report.md",
+    "sha256": "75f0355e6f23fd3a9fc1dd005f4bda4f92cdb9ce4b43ad908f3df8d090468e26",
+    "size_bytes": 2181
+  }
+]

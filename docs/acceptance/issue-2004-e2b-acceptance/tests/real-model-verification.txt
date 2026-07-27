@@ -1,0 +1,6 @@
+REAL MODEL E2B: PASS
+task: cr-346aa512-3289-43df-9ba6-7eba4c03bdfe
+model_duration_ms: 1612
+sandbox_duration_ms: 39549
+sandbox_runs: 6
+summary: 0 high-confidence findings and 1 human-review items detected. Model review: The diff adds a simple, safe multiplication function with no security, resource, or error handling issues.

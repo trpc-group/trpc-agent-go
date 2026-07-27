@@ -143,6 +143,23 @@ func TestRunChecksNoRepoNoRuns(t *testing.T) {
 	}
 }
 
+func TestSandboxEnvE2BUsesRemoteSafeCaches(t *testing.T) {
+	got := sandboxEnv(Config{SandboxKind: "e2b"})
+	want := map[string]string{
+		"GOCACHE": "/tmp/go-build",
+		"GOPATH":  "/tmp/go",
+		"HOME":    "/tmp",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("e2b env = %#v, want %#v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Fatalf("e2b env %s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
 // TestEngineRunStatusClassification covers completed, failed, and timeout mapping.
 func TestEngineRunStatusClassification(t *testing.T) {
 	start := time.Now()

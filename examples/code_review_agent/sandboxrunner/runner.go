@@ -263,6 +263,12 @@ func sandboxEnv(cfg Config) map[string]string {
 			"HOME":    "/tmp",
 			"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		}
+	case "e2b":
+		return map[string]string{
+			"GOCACHE": "/tmp/go-build",
+			"GOPATH":  "/tmp/go",
+			"HOME":    "/tmp",
+		}
 	default:
 		return nil
 	}

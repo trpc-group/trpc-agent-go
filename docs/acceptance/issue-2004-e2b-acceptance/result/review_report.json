@@ -1,0 +1,220 @@
+{
+  "task": {
+    "id": "cr-346aa512-3289-43df-9ba6-7eba4c03bdfe",
+    "status": "completed",
+    "input_type": "repo_path",
+    "input_summary": "/root/review-target; sha256=0af12ab90a5f3d638889779172ca298df7de0e45c9296d7f3e067668e6ebe0c8; bytes=330; files=1",
+    "repo_path": "/root/review-target",
+    "started_at": "2026-07-27T09:15:13.309449579Z",
+    "finished_at": "2026-07-27T09:15:58.654659961Z"
+  },
+  "files": [
+    {
+      "old_path": "calculator.go",
+      "new_path": "calculator.go",
+      "language": "go",
+      "package_name": "reviewtarget",
+      "hunks": [
+        {
+          "old_start": 1,
+          "old_count": 6,
+          "new_start": 1,
+          "new_count": 11,
+          "lines": [
+            {
+              "kind": "context",
+              "old_line": 1,
+              "new_line": 1,
+              "content": "package reviewtarget"
+            },
+            {
+              "kind": "context",
+              "old_line": 2,
+              "new_line": 2,
+              "content": ""
+            },
+            {
+              "kind": "context",
+              "old_line": 3,
+              "new_line": 3,
+              "content": "// Add returns the sum of a and b."
+            },
+            {
+              "kind": "context",
+              "old_line": 4,
+              "new_line": 4,
+              "content": "func Add(a, b int) int {"
+            },
+            {
+              "kind": "context",
+              "old_line": 5,
+              "new_line": 5,
+              "content": "\treturn a + b"
+            },
+            {
+              "kind": "context",
+              "old_line": 6,
+              "new_line": 6,
+              "content": "}"
+            },
+            {
+              "kind": "added",
+              "new_line": 7,
+              "content": ""
+            },
+            {
+              "kind": "added",
+              "new_line": 8,
+              "content": "// Multiply returns the product of a and b."
+            },
+            {
+              "kind": "added",
+              "new_line": 9,
+              "content": "func Multiply(a, b int) int {"
+            },
+            {
+              "kind": "added",
+              "new_line": 10,
+              "content": "\treturn a * b"
+            },
+            {
+              "kind": "added",
+              "new_line": 11,
+              "content": "}"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "findings": [],
+  "warnings": [],
+  "needs_human_review": [
+    {
+      "severity": "medium",
+      "category": "testing",
+      "file": "calculator.go",
+      "line": 7,
+      "title": "Changed Go code without nearby test changes",
+      "evidence": "No _test.go file is present in the same diff.",
+      "recommendation": "Add or update tests that cover the changed behavior.",
+      "confidence": 0.58,
+      "source": "rule-only",
+      "rule_id": "TEST001"
+    }
+  ],
+  "sandbox_runs": [
+    {
+      "command": "go test ./...",
+      "status": "completed",
+      "duration_ms": 9812,
+      "stdout_excerpt": "ok  \texample.com/review-target\t0.003s"
+    },
+    {
+      "command": "go vet ./...",
+      "status": "completed",
+      "duration_ms": 8074
+    },
+    {
+      "command": "staticcheck ./...",
+      "status": "completed",
+      "duration_ms": 11513
+    },
+    {
+      "command": "bash skills/code-review/scripts/diff_summary.sh -",
+      "status": "completed",
+      "duration_ms": 52,
+      "stdout_excerpt": "files_changed=1\nadded_lines=5"
+    },
+    {
+      "command": "bash skills/code-review/scripts/secret_scan.sh -",
+      "status": "completed",
+      "duration_ms": 58
+    },
+    {
+      "command": "bash skills/code-review/scripts/go_static_checks.sh work/repo",
+      "status": "completed",
+      "duration_ms": 10040,
+      "stdout_excerpt": "ok  \texample.com/review-target\t0.002s"
+    }
+  ],
+  "permission_decisions": [
+    {
+      "command": "go test ./...",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:16.110462747Z"
+    },
+    {
+      "command": "go vet ./...",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:26.143769647Z"
+    },
+    {
+      "command": "staticcheck ./...",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:34.430145824Z"
+    },
+    {
+      "command": "bash skills/code-review/scripts/diff_summary.sh -",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:46.434601088Z"
+    },
+    {
+      "command": "bash skills/code-review/scripts/secret_scan.sh -",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:47.692122493Z"
+    },
+    {
+      "command": "bash skills/code-review/scripts/go_static_checks.sh work/repo",
+      "decision": "allow",
+      "reason": "command is allow-listed for code review checks",
+      "created_at": "2026-07-27T09:15:47.98115927Z"
+    }
+  ],
+  "filter_decisions": [
+    {
+      "rule_id": "TEST001",
+      "file": "calculator.go",
+      "line": 7,
+      "source": "rule-only",
+      "confidence": 0.58,
+      "stage": "confidence",
+      "decision": "needs_human_review",
+      "reason": "confidence 0.58 in [0.45, 0.75) routes to human review",
+      "created_at": "2026-07-27T09:15:14.497298486Z"
+    }
+  ],
+  "metrics": {
+    "total_duration_ms": 45345,
+    "sandbox_duration_ms": 39549,
+    "model_duration_ms": 1612,
+    "tool_call_count": 6,
+    "model_call_count": 1,
+    "permission_deny_count": 0,
+    "permission_intercept_count": 0,
+    "blocked_command_count": 0,
+    "skipped_command_count": 0,
+    "finding_count": 0,
+    "warning_count": 0,
+    "needs_human_review_count": 1,
+    "severity_counts": {},
+    "exception_counts": {},
+    "filter_decision_counts": {
+      "needs_human_review": 1
+    }
+  },
+  "artifacts": [
+    {
+      "kind": "markdown_report",
+      "path": "/root/code-review-real-e2b.FgbAOI/review_report.md",
+      "sha256": "75f0355e6f23fd3a9fc1dd005f4bda4f92cdb9ce4b43ad908f3df8d090468e26",
+      "size_bytes": 2181
+    }
+  ],
+  "summary": "0 high-confidence findings and 1 human-review items detected. Model review: The diff adds a simple, safe multiplication function with no security, resource, or error handling issues."
+}

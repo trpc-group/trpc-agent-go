@@ -12,6 +12,7 @@ package skillrunner
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -35,9 +36,22 @@ func TestE2BSkillIntegration(t *testing.T) {
 
 func assertSkillIntegration(t *testing.T, kind string) {
 	t.Helper()
+	repo := t.TempDir()
+	files := map[string]string{
+		"go.mod":        "module skillcheck\n\ngo 1.21\n",
+		"check.go":      "package skillcheck\n\nfunc Add(a, b int) int { return a + b }\n",
+		"check_test.go": "package skillcheck\n\nimport \"testing\"\n\nfunc TestAdd(t *testing.T) { if Add(1, 2) != 3 { t.Fatal(\"bad sum\") } }\n",
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(repo, name),
+			[]byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	result := RunScripts(context.Background(), Config{
 		TaskID: "skill-integration-" + kind, SkillsRoot: skillsRoot,
 		SandboxKind: kind, Timeout: time.Minute, DiffText: testDiff,
+		RepoPath: repo,
 	})
 	if result.Err != nil {
 		t.Fatal(result.Err)
@@ -45,7 +59,7 @@ func assertSkillIntegration(t *testing.T, kind string) {
 	if len(result.Runs) != 3 {
 		t.Fatalf("%s skill runs=%d, want 3", kind, len(result.Runs))
 	}
-	for _, run := range result.Runs[:2] {
+	for _, run := range result.Runs {
 		if run.Status != "completed" || run.ExitCode != 0 {
 			t.Fatalf("%s skill script failed: %+v", kind, run)
 		}
