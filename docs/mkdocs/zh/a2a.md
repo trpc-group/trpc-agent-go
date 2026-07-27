@@ -123,17 +123,18 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
 	jar, _ := cookiejar.New(nil)
-
-	// 连接到 A2A 服务
-	a2aClient, _ := client.NewA2AClient(
+	httpClient := &http.Client{Jar: jar}
+	// 该 helper 会持久化匿名 Cookie，并在 principal 建立前串行化同一 client 的首次并发请求。
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
 		"http://localhost:8080/",
-		client.WithHTTPClient(&http.Client{Jar: jar}),
+		client.WithHTTPClient(httpClient),
 	)
 
 	// 发送消息给 Agent
@@ -148,7 +149,10 @@ func main() {
 }
 ```
 
-对于直接使用 A2A 协议的匿名客户端，请像上面一样配置 HTTP cookie jar。没有可信 user ID header 时，服务端会使用 HTTP-only anonymous principal cookie 维持会话连续性；直连客户端如果没有 jar，每次调用都会获得新的匿名 principal。已认证部署也可以由可信网关代码发送 `X-User-ID` 等 user ID header。
+匿名直连 client 应复用同一个 client 和 Cookie Jar。`NewAnonymousA2AClient`
+会在服务端建立匿名 principal 期间，串行化该 client 发出的首次请求。
+这个保证只覆盖单个 client 实例；不同 client 需要自行协调。浏览器 client
+应先完成一次初始请求，再开始并发匿名消息发送，或者提供可信用户身份。
 
 ### 高级配置
 
@@ -939,7 +943,8 @@ subAgent, _ := a2aagent.New(
 | `WithErrorHandler(handler)` | 自定义错误处理 |
 | `WithA2AToAgentConverter(conv)` | 自定义 A2A→Agent 消息转换 |
 | `WithEventToA2AConverter(conv)` | 自定义 Event→A2A 消息转换 |
-| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项 |
+| `WithExtraA2AOptions(opts...)` | 透传底层 A2A Server 选项；其中 middleware 可读取最终认证用户。自定义认证 provider 必须返回非空 UserID，空身份会被拒绝 |
+| `WithPreAuthA2AMiddleware(middlewares...)` | 添加必须在匿名 Cookie 认证前执行的请求 middleware |
 | `WithDebugLogging(enabled)` | 开启调试日志 |
 
 ### A2AAgent 完整配置项一览

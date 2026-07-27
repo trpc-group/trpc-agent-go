@@ -127,17 +127,19 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent/a2aagent"
 	"trpc.group/trpc-go/trpc-a2a-go/client"
 	"trpc.group/trpc-go/trpc-a2a-go/protocol"
 )
 
 func main() {
 	jar, _ := cookiejar.New(nil)
-
-	// Connect to A2A service
-	a2aClient, _ := client.NewA2AClient(
+	httpClient := &http.Client{Jar: jar}
+	// The helper persists the anonymous cookie and serializes this client's
+	// first concurrent requests until the principal is established.
+	a2aClient, _ := a2aagent.NewAnonymousA2AClient(
 		"http://localhost:8080/",
-		client.WithHTTPClient(&http.Client{Jar: jar}),
+		client.WithHTTPClient(httpClient),
 	)
 
 	// Send message to Agent
@@ -152,11 +154,12 @@ func main() {
 }
 ```
 
-For anonymous direct protocol clients, configure an HTTP cookie jar as shown
-above. Without a trusted user ID header, the server uses an HTTP-only anonymous
-principal cookie for session continuity; a direct client without a jar receives
-a fresh anonymous principal on each call. Authenticated deployments can instead
-send a trusted user ID header such as `X-User-ID` from gateway-controlled code.
+For anonymous direct clients, reuse the same client and cookie jar for later
+requests. `NewAnonymousA2AClient` serializes the first requests made through
+that client while the server establishes the anonymous principal. The
+guarantee is per client instance; coordinate separate clients independently.
+Browser clients should complete one initial request before starting concurrent
+anonymous message sends, or provide a trusted user identity instead.
 
 ### Advanced Configuration
 
@@ -970,7 +973,8 @@ Through the combined use of A2A Server and A2AAgent, you can easily build distri
 | `WithErrorHandler(handler)` | Custom error handler |
 | `WithA2AToAgentConverter(conv)` | Custom A2A→Agent message converter |
 | `WithEventToA2AConverter(conv)` | Custom Event→A2A message converter |
-| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server |
+| `WithExtraA2AOptions(opts...)` | Pass-through options for underlying A2A Server; middleware observes the final authenticated user. Custom auth providers must return a non-empty UserID; empty identities are rejected. |
+| `WithPreAuthA2AMiddleware(middlewares...)` | Add request middleware that must run before anonymous-cookie authentication |
 | `WithDebugLogging(enabled)` | Enable debug logging |
 
 ### A2AAgent Configuration Reference
