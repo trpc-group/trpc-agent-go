@@ -66,17 +66,28 @@ type ReplayCase struct {
 type OperationKind string
 
 const (
-	OperationCreateSession      OperationKind = "create_session"
-	OperationAppendEvent        OperationKind = "append_event"
+	// OperationCreateSession creates the replay session.
+	OperationCreateSession OperationKind = "create_session"
+	// OperationAppendEvent appends one transcript event.
+	OperationAppendEvent OperationKind = "append_event"
+	// OperationUpdateSessionState updates session-scoped state.
 	OperationUpdateSessionState OperationKind = "update_session_state"
-	OperationAddMemory          OperationKind = "add_memory"
-	OperationUpdateMemory       OperationKind = "update_memory"
-	OperationDeleteMemory       OperationKind = "delete_memory"
-	OperationCreateSummary      OperationKind = "create_summary"
-	OperationAppendTrack        OperationKind = "append_track"
-	OperationConcurrent         OperationKind = "concurrent"
-	OperationRetry              OperationKind = "retry"
-	OperationExpectError        OperationKind = "expect_error"
+	// OperationAddMemory writes one memory.
+	OperationAddMemory OperationKind = "add_memory"
+	// OperationUpdateMemory updates an existing memory.
+	OperationUpdateMemory OperationKind = "update_memory"
+	// OperationDeleteMemory deletes an existing memory.
+	OperationDeleteMemory OperationKind = "delete_memory"
+	// OperationCreateSummary creates or refreshes a summary.
+	OperationCreateSummary OperationKind = "create_summary"
+	// OperationAppendTrack appends one observability track event.
+	OperationAppendTrack OperationKind = "append_track"
+	// OperationConcurrent runs nested operations concurrently.
+	OperationConcurrent OperationKind = "concurrent"
+	// OperationRetry repeats nested operations to exercise idempotence.
+	OperationRetry OperationKind = "retry"
+	// OperationExpectError requires nested operations to fail cleanly.
+	OperationExpectError OperationKind = "expect_error"
 )
 
 // Operation is one replay step. Nested operations are executed in stable order

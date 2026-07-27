@@ -109,6 +109,7 @@ var _ session.Service = (*JSONSessionService)(nil)
 var _ session.TrackService = (*JSONSessionService)(nil)
 var _ SummaryOwnerProvider = (*JSONSessionService)(nil)
 
+// CreateSession creates a session in the JSON file-backed store.
 func (s *JSONSessionService) CreateSession(
 	ctx context.Context,
 	key session.Key,
@@ -139,6 +140,7 @@ func (s *JSONSessionService) CreateSession(
 	return cloneSessionJSON(out), err
 }
 
+// GetSession returns a session from the JSON file-backed store.
 func (s *JSONSessionService) GetSession(
 	ctx context.Context,
 	key session.Key,
@@ -173,6 +175,7 @@ func (s *JSONSessionService) GetSession(
 	return cloneSessionJSON(out), err
 }
 
+// ListSessions lists sessions from the JSON file-backed store.
 func (s *JSONSessionService) ListSessions(
 	ctx context.Context,
 	userKey session.UserKey,
@@ -219,6 +222,7 @@ func (s *JSONSessionService) ListSessions(
 	return cloneSessionSliceJSON(out), err
 }
 
+// DeleteSession deletes a session from the JSON file-backed store.
 func (s *JSONSessionService) DeleteSession(ctx context.Context, key session.Key, options ...session.Option) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
@@ -230,6 +234,7 @@ func (s *JSONSessionService) DeleteSession(ctx context.Context, key session.Key,
 	})
 }
 
+// UpdateAppState updates app-scoped state in the JSON file-backed store.
 func (s *JSONSessionService) UpdateAppState(ctx context.Context, appName string, state session.StateMap) error {
 	if appName == "" {
 		return session.ErrAppNameRequired
@@ -243,6 +248,7 @@ func (s *JSONSessionService) UpdateAppState(ctx context.Context, appName string,
 	})
 }
 
+// DeleteAppState deletes app-scoped state from the JSON file-backed store.
 func (s *JSONSessionService) DeleteAppState(ctx context.Context, appName string, key string) error {
 	if appName == "" {
 		return session.ErrAppNameRequired
@@ -255,6 +261,7 @@ func (s *JSONSessionService) DeleteAppState(ctx context.Context, appName string,
 	})
 }
 
+// ListAppStates returns app-scoped state from the JSON file-backed store.
 func (s *JSONSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
 	if appName == "" {
 		return nil, session.ErrAppNameRequired
@@ -270,6 +277,7 @@ func (s *JSONSessionService) ListAppStates(ctx context.Context, appName string) 
 	return out, err
 }
 
+// UpdateUserState updates user-scoped state in the JSON file-backed store.
 func (s *JSONSessionService) UpdateUserState(ctx context.Context, userKey session.UserKey, state session.StateMap) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -284,6 +292,7 @@ func (s *JSONSessionService) UpdateUserState(ctx context.Context, userKey sessio
 	})
 }
 
+// ListUserStates returns user-scoped state from the JSON file-backed store.
 func (s *JSONSessionService) ListUserStates(ctx context.Context, userKey session.UserKey) (session.StateMap, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
@@ -299,6 +308,7 @@ func (s *JSONSessionService) ListUserStates(ctx context.Context, userKey session
 	return out, err
 }
 
+// DeleteUserState deletes user-scoped state from the JSON file-backed store.
 func (s *JSONSessionService) DeleteUserState(ctx context.Context, userKey session.UserKey, key string) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -311,6 +321,7 @@ func (s *JSONSessionService) DeleteUserState(ctx context.Context, userKey sessio
 	})
 }
 
+// UpdateSessionState updates session-scoped state in the JSON file-backed store.
 func (s *JSONSessionService) UpdateSessionState(ctx context.Context, key session.Key, state session.StateMap) error {
 	if err := key.CheckSessionKey(); err != nil {
 		return err
@@ -336,6 +347,7 @@ func (s *JSONSessionService) UpdateSessionState(ctx context.Context, key session
 	})
 }
 
+// AppendEvent appends an event to a session in the JSON file-backed store.
 func (s *JSONSessionService) AppendEvent(
 	ctx context.Context,
 	sess *session.Session,
@@ -363,6 +375,7 @@ func (s *JSONSessionService) AppendEvent(
 	})
 }
 
+// CreateSessionSummary creates or refreshes a session summary in the JSON file-backed store.
 func (s *JSONSessionService) CreateSessionSummary(
 	ctx context.Context,
 	sess *session.Session,
@@ -413,6 +426,7 @@ func (s *JSONSessionService) CreateSessionSummary(
 	})
 }
 
+// EnqueueSummaryJob runs summary creation through the configured summary policy.
 func (s *JSONSessionService) EnqueueSummaryJob(
 	ctx context.Context,
 	sess *session.Session,
@@ -435,6 +449,7 @@ func (s *JSONSessionService) EnqueueSummaryJob(
 	)
 }
 
+// GetSessionSummaryText returns stored summary text for a session.
 func (s *JSONSessionService) GetSessionSummaryText(
 	ctx context.Context,
 	sess *session.Session,
@@ -463,6 +478,7 @@ func (s *JSONSessionService) GetSessionSummaryText(
 	return text, ok
 }
 
+// AppendTrackEvent appends a track event to a session in the JSON file-backed store.
 func (s *JSONSessionService) AppendTrackEvent(
 	ctx context.Context,
 	sess *session.Session,
@@ -513,6 +529,7 @@ func (s *JSONSessionService) SummaryOwnerIDs(ctx context.Context, key session.Ke
 	return out, err
 }
 
+// Close releases any owned temporary JSON storage.
 func (s *JSONSessionService) Close() error {
 	if s.ownedDir != "" {
 		return os.RemoveAll(s.ownedDir)
@@ -573,7 +590,7 @@ func (s *JSONSessionService) writeSessionStore(store *jsonSessionStore) error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)
@@ -641,6 +658,7 @@ func NewJSONMemoryService(opts ...JSONMemoryOption) *JSONMemoryService {
 
 var _ memory.Service = (*JSONMemoryService)(nil)
 
+// AddMemory adds or updates a memory in the JSON file-backed store.
 func (s *JSONMemoryService) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -664,6 +682,7 @@ func (s *JSONMemoryService) AddMemory(
 	})
 }
 
+// UpdateMemory updates an existing memory in the JSON file-backed store.
 func (s *JSONMemoryService) UpdateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -713,6 +732,7 @@ func (s *JSONMemoryService) UpdateMemory(
 	})
 }
 
+// DeleteMemory deletes a memory from the JSON file-backed store.
 func (s *JSONMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.Key) error {
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
@@ -731,6 +751,7 @@ func (s *JSONMemoryService) DeleteMemory(ctx context.Context, memoryKey memory.K
 	})
 }
 
+// ClearMemories clears all memories for a user in the JSON file-backed store.
 func (s *JSONMemoryService) ClearMemories(ctx context.Context, userKey memory.UserKey) error {
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
@@ -741,6 +762,7 @@ func (s *JSONMemoryService) ClearMemories(ctx context.Context, userKey memory.Us
 	})
 }
 
+// ReadMemories reads memories for a user from the JSON file-backed store.
 func (s *JSONMemoryService) ReadMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -771,6 +793,7 @@ func (s *JSONMemoryService) ReadMemories(
 	return cloneMemoryEntriesJSON(out), err
 }
 
+// SearchMemories searches memories for a user from the JSON file-backed store.
 func (s *JSONMemoryService) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -811,16 +834,19 @@ func (s *JSONMemoryService) SearchMemories(
 	return cloneMemoryEntriesJSON(entries), err
 }
 
+// Tools returns memory tools exposed by the JSON memory service.
 func (s *JSONMemoryService) Tools() []tool.Tool {
 	temp := memoryinmemory.NewMemoryService()
 	defer temp.Close()
 	return temp.Tools()
 }
 
+// EnqueueAutoMemoryJob is a no-op for the JSON replay memory service.
 func (s *JSONMemoryService) EnqueueAutoMemoryJob(ctx context.Context, sess *session.Session) error {
 	return nil
 }
 
+// Close releases any owned temporary JSON memory storage.
 func (s *JSONMemoryService) Close() error {
 	if s.ownedDir != "" {
 		return os.RemoveAll(s.ownedDir)
@@ -873,7 +899,7 @@ func (s *JSONMemoryService) writeMemoryStore(store *jsonMemoryStore) error {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
+	if err := os.WriteFile(tmp, append(raw, '\n'), 0o600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)

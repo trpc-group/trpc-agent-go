@@ -46,112 +46,147 @@ func (rt *replayRuntime) apply(ctx context.Context, op Operation) error {
 	case OperationCreateSession:
 		return rt.createSession(ctx, op.State)
 	case OperationAppendEvent:
-		if err := rt.ensureSession(ctx); err != nil {
-			return err
-		}
-		if op.Event == nil {
-			return fmt.Errorf("event operation is nil")
-		}
-		return rt.backend.Session.AppendEvent(ctx, rt.sess, op.Event)
+		return rt.appendEvent(ctx, op)
 	case OperationUpdateSessionState:
-		if err := rt.ensureSession(ctx); err != nil {
-			return err
-		}
-		key := rt.sessionKey()
-		if err := rt.backend.Session.UpdateSessionState(ctx, key, op.State); err != nil {
-			return err
-		}
-		return rt.refreshSession(ctx)
+		return rt.updateSessionState(ctx, op)
 	case OperationAddMemory:
-		if op.Memory == nil {
-			return fmt.Errorf("memory operation is nil")
-		}
-		if rt.backend.Memory == nil {
-			return nil
-		}
-		userKey := memory.UserKey{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID}
-		opts := memoryAddOptions(op.Memory)
-		return rt.backend.Memory.AddMemory(ctx, userKey, op.Memory.Content, op.Memory.Topics, opts...)
+		return rt.addMemory(ctx, op)
 	case OperationUpdateMemory:
-		if op.Memory == nil {
-			return fmt.Errorf("memory operation is nil")
-		}
-		if rt.backend.Memory == nil {
-			return nil
-		}
-		memoryID, err := rt.resolveMemoryID(ctx, op.Memory)
-		if err != nil {
-			return err
-		}
-		opts := memoryUpdateOptions(op.Memory)
-		key := memory.Key{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID, MemoryID: memoryID}
-		return rt.backend.Memory.UpdateMemory(ctx, key, op.Memory.Content, op.Memory.Topics, opts...)
+		return rt.updateMemory(ctx, op)
 	case OperationDeleteMemory:
-		if op.Memory == nil {
-			return fmt.Errorf("memory operation is nil")
-		}
-		if rt.backend.Memory == nil {
-			return nil
-		}
-		memoryID, err := rt.resolveMemoryID(ctx, op.Memory)
-		if err != nil {
-			return err
-		}
-		key := memory.Key{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID, MemoryID: memoryID}
-		return rt.backend.Memory.DeleteMemory(ctx, key)
+		return rt.deleteMemory(ctx, op)
 	case OperationCreateSummary:
-		if err := rt.ensureSession(ctx); err != nil {
-			return err
-		}
-		if op.Summary == nil {
-			return fmt.Errorf("summary operation is nil")
-		}
-		if err := rt.backend.Session.CreateSessionSummary(
-			ctx,
-			rt.sess,
-			op.Summary.FilterKey,
-			op.Summary.Force,
-		); err != nil {
-			return err
-		}
-		return rt.refreshSession(ctx)
+		return rt.createSummary(ctx, op)
 	case OperationAppendTrack:
-		if err := rt.ensureSession(ctx); err != nil {
-			return err
-		}
-		trackSvc, ok := rt.backend.Session.(session.TrackService)
-		if !ok {
-			return nil
-		}
-		if err := trackSvc.AppendTrackEvent(ctx, rt.sess, op.Track); err != nil {
-			return err
-		}
-		return rt.refreshSession(ctx)
+		return rt.appendTrack(ctx, op)
 	case OperationConcurrent:
 		return rt.applyConcurrent(ctx, op.Operations)
 	case OperationRetry:
-		count := op.RetryCount
-		if count <= 0 {
-			count = 2
-		}
-		for i := 0; i < count; i++ {
-			for j := range op.Operations {
-				if err := rt.apply(ctx, op.Operations[j]); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return rt.applyRetry(ctx, op)
 	case OperationExpectError:
-		for i := range op.Operations {
-			if err := rt.apply(ctx, op.Operations[i]); err == nil {
-				return fmt.Errorf("expected operation %d to fail", i)
-			}
-		}
-		return rt.refreshSession(ctx)
+		return rt.expectError(ctx, op)
 	default:
 		return fmt.Errorf("unsupported operation kind %q", op.Kind)
 	}
+}
+
+func (rt *replayRuntime) appendEvent(ctx context.Context, op Operation) error {
+	if err := rt.ensureSession(ctx); err != nil {
+		return err
+	}
+	if op.Event == nil {
+		return fmt.Errorf("event operation is nil")
+	}
+	return rt.backend.Session.AppendEvent(ctx, rt.sess, op.Event)
+}
+
+func (rt *replayRuntime) updateSessionState(ctx context.Context, op Operation) error {
+	if err := rt.ensureSession(ctx); err != nil {
+		return err
+	}
+	if err := rt.backend.Session.UpdateSessionState(ctx, rt.sessionKey(), op.State); err != nil {
+		return err
+	}
+	return rt.refreshSession(ctx)
+}
+
+func (rt *replayRuntime) addMemory(ctx context.Context, op Operation) error {
+	if op.Memory == nil {
+		return fmt.Errorf("memory operation is nil")
+	}
+	if rt.backend.Memory == nil {
+		return nil
+	}
+	userKey := memory.UserKey{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID}
+	opts := memoryAddOptions(op.Memory)
+	return rt.backend.Memory.AddMemory(ctx, userKey, op.Memory.Content, op.Memory.Topics, opts...)
+}
+
+func (rt *replayRuntime) updateMemory(ctx context.Context, op Operation) error {
+	if op.Memory == nil {
+		return fmt.Errorf("memory operation is nil")
+	}
+	if rt.backend.Memory == nil {
+		return nil
+	}
+	memoryID, err := rt.resolveMemoryID(ctx, op.Memory)
+	if err != nil {
+		return err
+	}
+	opts := memoryUpdateOptions(op.Memory)
+	key := memory.Key{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID, MemoryID: memoryID}
+	return rt.backend.Memory.UpdateMemory(ctx, key, op.Memory.Content, op.Memory.Topics, opts...)
+}
+
+func (rt *replayRuntime) deleteMemory(ctx context.Context, op Operation) error {
+	if op.Memory == nil {
+		return fmt.Errorf("memory operation is nil")
+	}
+	if rt.backend.Memory == nil {
+		return nil
+	}
+	memoryID, err := rt.resolveMemoryID(ctx, op.Memory)
+	if err != nil {
+		return err
+	}
+	key := memory.Key{AppName: rt.cfg.AppName, UserID: rt.cfg.UserID, MemoryID: memoryID}
+	return rt.backend.Memory.DeleteMemory(ctx, key)
+}
+
+func (rt *replayRuntime) createSummary(ctx context.Context, op Operation) error {
+	if err := rt.ensureSession(ctx); err != nil {
+		return err
+	}
+	if op.Summary == nil {
+		return fmt.Errorf("summary operation is nil")
+	}
+	if err := rt.backend.Session.CreateSessionSummary(
+		ctx,
+		rt.sess,
+		op.Summary.FilterKey,
+		op.Summary.Force,
+	); err != nil {
+		return err
+	}
+	return rt.refreshSession(ctx)
+}
+
+func (rt *replayRuntime) appendTrack(ctx context.Context, op Operation) error {
+	if err := rt.ensureSession(ctx); err != nil {
+		return err
+	}
+	trackSvc, ok := rt.backend.Session.(session.TrackService)
+	if !ok {
+		return nil
+	}
+	if err := trackSvc.AppendTrackEvent(ctx, rt.sess, op.Track); err != nil {
+		return err
+	}
+	return rt.refreshSession(ctx)
+}
+
+func (rt *replayRuntime) applyRetry(ctx context.Context, op Operation) error {
+	count := op.RetryCount
+	if count <= 0 {
+		count = 2
+	}
+	for i := 0; i < count; i++ {
+		for j := range op.Operations {
+			if err := rt.apply(ctx, op.Operations[j]); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (rt *replayRuntime) expectError(ctx context.Context, op Operation) error {
+	for i := range op.Operations {
+		if err := rt.apply(ctx, op.Operations[i]); err == nil {
+			return fmt.Errorf("expected operation %d to fail", i)
+		}
+	}
+	return rt.refreshSession(ctx)
 }
 
 func (rt *replayRuntime) applyConcurrent(ctx context.Context, ops []Operation) error {
