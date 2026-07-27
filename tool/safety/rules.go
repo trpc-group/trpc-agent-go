@@ -530,111 +530,7 @@ func ruleNetwork(c ruleCtx) []Finding {
 			continue
 		}
 		sawDownload = true
-		before := len(out)
-		// Opaque curl options fail closed regardless of the whitelist: a
-		// -K/--config file can define url/proxy/resolve egress the guard
-		// cannot see, and --unix-socket/--abstract-unix-socket reroute the
-		// connection to a local socket the domain whitelist cannot vet.
-		if cmd == "curl" {
-			if opt, ok := curlOpaqueOption(argv[1:]); ok {
-				evidence := argv[0] + " " + opt + " (opaque config may define url/proxy/resolve)"
-				if opt == "--unix-socket" || opt == "--abstract-unix-socket" {
-					evidence = argv[0] + " " + opt + " (connection rerouted to a local socket the whitelist cannot vet)"
-				}
-				out = append(out, Finding{
-					RuleID:         ruleNetworkID,
-					Category:       catNetwork,
-					RiskLevel:      RiskHigh,
-					Evidence:       evidence,
-					Recommendation: recNetwork,
-					action:         c.policy.Network.OnNonWhitelisted,
-				})
-			} else if c.policy.Network.CurlRequireDisabledConfig &&
-				!curlDefaultConfigDisabled(argv[1:]) {
-				// curl reads an implicit default config (~/.curlrc et al.) that
-				// can inject url/proxy/resolve unless -q/--disable is the first
-				// option. Opt-in fail-closed; the guard cannot see the file.
-				out = append(out, Finding{
-					RuleID:         ruleNetworkID,
-					Category:       catNetwork,
-					RiskLevel:      RiskHigh,
-					Evidence:       argv[0] + " (implicit curl config may define url/proxy/resolve; pass -q/--disable first)",
-					Recommendation: recNetwork,
-					action:         c.policy.Network.OnNonWhitelisted,
-				})
-			}
-			if c.policy.Network.RequireRedirectFree && curlFollowsRedirects(argv[1:]) {
-				// Opt-in egress-boundary posture: a redirect-following client
-				// can be bounced from a whitelisted URL to any host, so the
-				// whitelist proves nothing about the final destination.
-				out = append(out, Finding{
-					RuleID:         ruleNetworkID,
-					Category:       catNetwork,
-					RiskLevel:      RiskHigh,
-					Evidence:       argv[0] + " -L/--location (redirect target cannot be statically verified; drop -L under require_redirect_free)",
-					Recommendation: recNetwork,
-					action:         c.policy.Network.OnNonWhitelisted,
-				})
-			}
-		} else if opt, ok := genericOpaqueOption(cmd, argv[1:]); ok {
-			// Non-curl equivalents of the opaque curl config: wget
-			// -e/--execute/--config, ssh/scp -o/-F, ssh -D (dynamic SOCKS
-			// proxy), scp/sftp -S/-D can redirect the real egress (proxy,
-			// ProxyCommand, tunnel, transport program) in ways the guard
-			// cannot read, so they fail closed too.
-			out = append(out, Finding{
-				RuleID:         ruleNetworkID,
-				Category:       catNetwork,
-				RiskLevel:      RiskHigh,
-				Evidence:       argv[0] + " " + opt + " (opaque option may redirect egress via proxy/config)",
-				Recommendation: recNetwork,
-				action:         c.policy.Network.OnNonWhitelisted,
-			})
-		}
-		if cmd == "wget" && c.policy.Network.RequireRedirectFree &&
-			!wgetRedirectsDisabled(argv[1:]) {
-			// wget follows redirects by default, so under the opt-in
-			// egress-boundary posture every wget without an explicit
-			// --max-redirect=0 fails closed: the redirect target is the
-			// server's choice, not the whitelisted URL's.
-			out = append(out, Finding{
-				RuleID:         ruleNetworkID,
-				Category:       catNetwork,
-				RiskLevel:      RiskHigh,
-				Evidence:       argv[0] + " (follows redirects by default; pass --max-redirect=0 under require_redirect_free)",
-				Recommendation: recNetwork,
-				action:         c.policy.Network.OnNonWhitelisted,
-			})
-		}
-		hosts := extractHosts(cmd, argv[1:])
-		for _, host := range hosts {
-			if c.policy.domainAllowed(host) {
-				continue
-			}
-			out = append(out, Finding{
-				RuleID:         ruleNetworkID,
-				Category:       catNetwork,
-				RiskLevel:      RiskHigh,
-				Evidence:       argv[0] + " -> " + host,
-				Recommendation: recNetwork,
-				action:         c.policy.Network.OnNonWhitelisted,
-			})
-		}
-		// Fallback: the command carries a non-option operand we could not turn
-		// into a checkable host (a URL hidden in an unrecognized option, a
-		// listener spec, ...). We cannot clear it against the whitelist, so
-		// route it to review instead of silently allowing it. Pure-flag
-		// invocations (curl --version, wget --help) have no operand and no
-		// egress, so they are left to allow rather than flagged.
-		if len(hosts) == 0 && len(out) == before && hasNonOptionOperand(argv[1:]) {
-			out = append(out, Finding{
-				RuleID:         ruleNetworkID,
-				Category:       catNetwork,
-				RiskLevel:      RiskMedium,
-				Evidence:       argv[0] + " (no parseable network target to check against the whitelist)",
-				Recommendation: recNetwork,
-			})
-		}
+		out = append(out, downloadCommandFindings(c, cmd, argv)...)
 	}
 	// A proxy environment override redirects a download command's real egress
 	// just like a command-line proxy option, so its destination must clear the
@@ -643,6 +539,111 @@ func ruleNetwork(c ruleCtx) []Finding {
 		out = append(out, proxyEnvFindings(c)...)
 	}
 	return out
+}
+
+// downloadCommandFindings scans one download-command invocation: first the
+// egress controls that fail closed on their own merits, then every host the
+// command names against the whitelist, then the no-target fallback.
+func downloadCommandFindings(c ruleCtx, cmd string, argv []string) []Finding {
+	args := argv[1:]
+	out := egressControlFindings(c, cmd, argv)
+	hosts := extractHosts(cmd, args)
+	for _, host := range hosts {
+		if c.policy.domainAllowed(host) {
+			continue
+		}
+		out = append(out, networkFinding(c, argv[0]+" -> "+host))
+	}
+	// Fallback: the command carries a non-option operand we could not turn
+	// into a checkable host (a URL hidden in an unrecognized option, a
+	// listener spec, ...). We cannot clear it against the whitelist, so route
+	// it to review instead of silently allowing it. Pure-flag invocations
+	// (curl --version, wget --help) have no operand and no egress, so they are
+	// left to allow rather than flagged.
+	if len(hosts) == 0 && len(out) == 0 && hasNonOptionOperand(args) {
+		out = append(out, Finding{
+			RuleID:         ruleNetworkID,
+			Category:       catNetwork,
+			RiskLevel:      RiskMedium,
+			Evidence:       argv[0] + " (no parseable network target to check against the whitelist)",
+			Recommendation: recNetwork,
+		})
+	}
+	return out
+}
+
+// egressControlFindings flags the client options that decide where a download
+// command really connects, independently of the host named on the command
+// line: an opaque config the guard cannot read, a destination override, or
+// redirect following whose target is the server's choice at runtime.
+func egressControlFindings(c ruleCtx, cmd string, argv []string) []Finding {
+	args := argv[1:]
+	var out []Finding
+	if cmd == "curl" {
+		out = append(out, curlEgressFindings(c, argv)...)
+	} else if opt, ok := genericOpaqueOption(cmd, args); ok {
+		// Non-curl equivalents of the opaque curl config: wget
+		// -e/--execute/--config, ssh/scp -o/-F, ssh -D (dynamic SOCKS proxy),
+		// scp/sftp -S/-D can redirect the real egress (proxy, ProxyCommand,
+		// tunnel, transport program) in ways the guard cannot read, so they
+		// fail closed too.
+		out = append(out, networkFinding(c,
+			argv[0]+" "+opt+" (opaque option may redirect egress via proxy/config)"))
+	}
+	// wget follows redirects by default, so under the opt-in egress-boundary
+	// posture every wget without an explicit --max-redirect=0 fails closed:
+	// the redirect target is the server's choice, not the whitelisted URL's.
+	if cmd == "wget" && c.policy.Network.RequireRedirectFree && !wgetRedirectsDisabled(args) {
+		out = append(out, networkFinding(c,
+			argv[0]+" (follows redirects by default; pass --max-redirect=0 under require_redirect_free)"))
+	}
+	return out
+}
+
+// curlEgressFindings covers curl's own destination-control surface: the opaque
+// -K/--config file and the Unix-socket overrides fail closed regardless of the
+// whitelist, the implicit ~/.curlrc is fail-closed under the opt-in
+// curl_require_disabled_config, and -L/--location is fail-closed under the
+// opt-in require_redirect_free (a redirect-following client can be bounced
+// from a whitelisted URL to any host, so the whitelist proves nothing about
+// the final destination).
+func curlEgressFindings(c ruleCtx, argv []string) []Finding {
+	args := argv[1:]
+	var out []Finding
+	if opt, ok := curlOpaqueOption(args); ok {
+		out = append(out, networkFinding(c, argv[0]+" "+opt+" "+curlOpaqueReason(opt)))
+	} else if c.policy.Network.CurlRequireDisabledConfig && !curlDefaultConfigDisabled(args) {
+		out = append(out, networkFinding(c,
+			argv[0]+" (implicit curl config may define url/proxy/resolve; pass -q/--disable first)"))
+	}
+	if c.policy.Network.RequireRedirectFree && curlFollowsRedirects(args) {
+		out = append(out, networkFinding(c, argv[0]+
+			" -L/--location (redirect target cannot be statically verified; drop -L under require_redirect_free)"))
+	}
+	return out
+}
+
+// curlOpaqueReason explains why an opaque curl option fails closed: a socket
+// override reroutes the connection away from the URL's host entirely, while a
+// config file can define url/proxy/resolve egress the guard cannot see.
+func curlOpaqueReason(opt string) string {
+	if opt == "--unix-socket" || opt == "--abstract-unix-socket" {
+		return "(connection rerouted to a local socket the whitelist cannot vet)"
+	}
+	return "(opaque config may define url/proxy/resolve)"
+}
+
+// networkFinding builds a whitelist-level R-NET-001 finding whose action
+// follows network.on_non_whitelisted.
+func networkFinding(c ruleCtx, evidence string) Finding {
+	return Finding{
+		RuleID:         ruleNetworkID,
+		Category:       catNetwork,
+		RiskLevel:      RiskHigh,
+		Evidence:       evidence,
+		Recommendation: recNetwork,
+		action:         c.policy.Network.OnNonWhitelisted,
+	}
 }
 
 // proxyEnvVars are the environment keys (matched case-insensitively) that
