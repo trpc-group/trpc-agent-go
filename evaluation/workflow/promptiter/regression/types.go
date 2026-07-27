@@ -17,10 +17,25 @@ import (
 	"math"
 	"time"
 
-	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
-	"trpc.group/trpc-go/trpc-agent-go/model"
+)
+
+const (
+	// ConfigSchemaVersion is the only promptiter.json schema understood by this package.
+	ConfigSchemaVersion = "1.1"
+	// ReportSchemaVersion is the optimization_report.json schema emitted by this package.
+	ReportSchemaVersion = "1.1"
+)
+
+// RuntimeMode identifies the source of evaluator outputs.
+type RuntimeMode string
+
+const (
+	// RuntimeModeFake evaluates deterministic fake-model scenarios.
+	RuntimeModeFake RuntimeMode = "fake"
+	// RuntimeModeTrace evaluates strict trace replays.
+	RuntimeModeTrace RuntimeMode = "trace"
 )
 
 // FailureCategory is a stable, machine-readable failure attribution label.
@@ -145,33 +160,88 @@ type FakeOutput struct {
 	Usage                Usage           `json:"usage"`
 }
 
-// EvalCase is a standard-evalset-compatible case plus deterministic fake
-// outputs. Conversation is the expected reference transcript.
-type EvalCase struct {
-	EvalID                string                        `json:"evalId"`
-	EvalMode              evalset.EvalMode              `json:"evalMode,omitempty"`
-	ExpectedRunnerEnabled bool                          `json:"expectedRunnerEnabled,omitempty"`
-	ContextMessages       []*model.Message              `json:"contextMessages,omitempty"`
-	Conversation          []*evalset.Invocation         `json:"conversation"`
-	ConversationScenario  *evalset.ConversationScenario `json:"conversationScenario,omitempty"`
-	ActualConversation    []*evalset.Invocation         `json:"actualConversation,omitempty"`
-	SessionInput          *evalset.SessionInput         `json:"sessionInput,omitempty"`
-	Rubrics               []*evalset.EvalCaseRubric     `json:"rubrics,omitempty"`
-	CreationTimestamp     *epochtime.EpochTime          `json:"creationTimestamp,omitempty"`
-	Critical              bool                          `json:"critical,omitempty"`
-	Tags                  []string                      `json:"tags,omitempty"`
-	Expectations          Expectations                  `json:"expectations,omitempty"`
-	FakeResponses         map[string]FakeOutput         `json:"fakeResponses"`
+// RegressionEvalCase adds deterministic regression metadata to the canonical
+// evalset.EvalCase model. The regression runner intentionally supports exactly
+// one Conversation invocation per case.
+type RegressionEvalCase struct {
+	evalset.EvalCase
+	Critical      bool                  `json:"critical,omitempty"`
+	Tags          []string              `json:"tags,omitempty"`
+	Expectations  Expectations          `json:"expectations,omitempty"`
+	FakeResponses map[string]FakeOutput `json:"fakeResponses"`
 }
 
-// EvalSet is the on-disk train or validation evaluation set.
-type EvalSet struct {
-	EvalSetID         string               `json:"evalSetId"`
-	Name              string               `json:"name,omitempty"`
-	Description       string               `json:"description,omitempty"`
-	CreationTimestamp *epochtime.EpochTime `json:"creationTimestamp,omitempty"`
-	PassThreshold     *float64             `json:"passThreshold,omitempty"`
-	EvalCases         []EvalCase           `json:"evalCases"`
+// RegressionEvalSet is the restricted on-disk train or validation contract.
+// Canonical evalset metadata is embedded, while Cases carries regression-only
+// case extensions.
+type RegressionEvalSet struct {
+	evalset.EvalSet
+	PassThreshold *float64             `json:"passThreshold,omitempty"`
+	Cases         []RegressionEvalCase `json:"evalCases"`
+}
+
+// RegressionCaseExtension supplies regression-only data when adapting a
+// canonical evalset.EvalSet.
+type RegressionCaseExtension struct {
+	Critical      bool
+	Tags          []string
+	Expectations  Expectations
+	FakeResponses map[string]FakeOutput
+}
+
+// NewRegressionEvalSet adapts the canonical evalset model to the intentionally
+// restricted regression contract. Each canonical case must have a matching
+// extension keyed by EvalID.
+func NewRegressionEvalSet(
+	set *evalset.EvalSet,
+	passThreshold *float64,
+	extensions map[string]RegressionCaseExtension,
+) (*RegressionEvalSet, error) {
+	if set == nil {
+		return nil, errors.New("eval set is nil")
+	}
+	canonical := *set
+	canonical.EvalCases = nil
+	regressionSet := &RegressionEvalSet{
+		EvalSet:       canonical,
+		PassThreshold: passThreshold,
+		Cases:         make([]RegressionEvalCase, 0, len(set.EvalCases)),
+	}
+	for i, evalCase := range set.EvalCases {
+		if evalCase == nil {
+			return nil, fmt.Errorf("canonical eval case %d is nil", i)
+		}
+		extension, ok := extensions[evalCase.EvalID]
+		if !ok {
+			return nil, fmt.Errorf("canonical eval case %q has no regression extension", evalCase.EvalID)
+		}
+		regressionSet.Cases = append(regressionSet.Cases, RegressionEvalCase{
+			EvalCase:      *evalCase,
+			Critical:      extension.Critical,
+			Tags:          append([]string(nil), extension.Tags...),
+			Expectations:  extension.Expectations,
+			FakeResponses: extension.FakeResponses,
+		})
+	}
+	if len(extensions) != len(regressionSet.Cases) {
+		return nil, errors.New("regression extensions contain unknown eval case ids")
+	}
+	return regressionSet, nil
+}
+
+// StandardEvalSet converts the regression wrapper back to the canonical model.
+// Regression-only fields are intentionally omitted.
+func (s *RegressionEvalSet) StandardEvalSet() *evalset.EvalSet {
+	if s == nil {
+		return nil
+	}
+	set := s.EvalSet
+	set.EvalCases = make([]*evalset.EvalCase, 0, len(s.Cases))
+	for i := range s.Cases {
+		evalCase := s.Cases[i].EvalCase
+		set.EvalCases = append(set.EvalCases, &evalCase)
+	}
+	return &set
 }
 
 // MetricConfig configures a local deterministic metric. MetricName uses the
@@ -376,7 +446,7 @@ type FakeEngineConfig struct {
 type Config struct {
 	SchemaVersion string            `json:"schemaVersion"`
 	RunID         string            `json:"runId,omitempty"`
-	Mode          string            `json:"mode"`
+	Mode          RuntimeMode       `json:"mode"`
 	Seed          int64             `json:"seed"`
 	MaxRounds     int               `json:"maxRounds"`
 	Surface       SurfaceConfig     `json:"surface"`
@@ -441,7 +511,7 @@ type CostLatencySummary struct {
 type Report struct {
 	SchemaVersion           string                  `json:"schemaVersion"`
 	RunID                   string                  `json:"runId"`
-	Mode                    string                  `json:"mode"`
+	Mode                    RuntimeMode             `json:"mode"`
 	Seed                    int64                   `json:"seed"`
 	StartedAt               time.Time               `json:"startedAt"`
 	CompletedAt             time.Time               `json:"completedAt"`

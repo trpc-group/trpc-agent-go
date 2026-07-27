@@ -26,10 +26,10 @@ func TestStrictTraceReplayRequiresCompleteEvidence(t *testing.T) {
 			Weight:     1,
 		}}, "baseline", "trace")
 		require.NoError(t, err)
-		set := &EvalSet{
-			EvalSetID:     "strict-trace",
+		set := &RegressionEvalSet{
+			EvalSet:       evalset.EvalSet{EvalSetID: "strict-trace"},
 			PassThreshold: testScore(1),
-			EvalCases: []EvalCase{newFailureCase(
+			Cases: []RegressionEvalCase{newFailureCase(
 				"case", "answer", nil, Expectations{}, output,
 			)},
 		}
@@ -234,10 +234,10 @@ func TestStrictTraceReplayAuditsFailedExecutionEvidence(t *testing.T) {
 		t.Helper()
 		evaluator, err := NewLocalEvaluator([]MetricConfig{{MetricName: metricFinalResponse, Threshold: 1, Weight: 1}}, "baseline", "trace")
 		require.NoError(t, err)
-		set := &EvalSet{
-			EvalSetID:     "failed-trace",
+		set := &RegressionEvalSet{
+			EvalSet:       evalset.EvalSet{EvalSetID: "failed-trace"},
 			PassThreshold: testScore(1),
-			EvalCases: []EvalCase{newFailureCase(
+			Cases: []RegressionEvalCase{newFailureCase(
 				"case", "answer", nil, Expectations{}, output,
 			)},
 		}

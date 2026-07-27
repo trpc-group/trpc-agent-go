@@ -50,7 +50,7 @@ func RenderMarkdown(report *Report) (string, error) {
 	fmt.Fprintf(&builder, "# PromptIter 优化回归报告\n\n")
 	fmt.Fprintf(&builder, "- 结论：**%s候选 `%s`**\n", decisionText, markdownCell(report.CandidatePrompt.ID))
 	fmt.Fprintf(&builder, "- 运行 ID：`%s`\n", markdownCell(report.RunID))
-	fmt.Fprintf(&builder, "- 模式 / 随机种子：`%s` / `%d`\n", markdownCell(report.Mode), report.Seed)
+	fmt.Fprintf(&builder, "- 模式 / 随机种子：`%s` / `%d`\n", markdownCell(string(report.Mode)), report.Seed)
 	fmt.Fprintf(&builder, "- Baseline prompt SHA-256：`%s`\n", report.BaselinePrompt.SHA256)
 	fmt.Fprintf(&builder, "- Candidate prompt SHA-256：`%s`\n", report.CandidatePrompt.SHA256)
 	fmt.Fprintf(&builder, "- Candidate semantic SHA-256（不含 fake marker）：`%s`\n", report.CandidatePrompt.SemanticSHA256)

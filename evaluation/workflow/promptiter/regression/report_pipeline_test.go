@@ -32,7 +32,7 @@ type provenanceTamperingEvaluator struct {
 
 func (e provenanceTamperingEvaluator) Evaluate(
 	ctx context.Context,
-	set *EvalSet,
+	set *RegressionEvalSet,
 	variantID string,
 	prompt string,
 ) (*EvaluationSummary, error) {
@@ -43,7 +43,7 @@ func (e provenanceTamperingEvaluator) Evaluate(
 	return summary, err
 }
 
-func (e provenanceTamperingEvaluator) RuntimeMode() string {
+func (e provenanceTamperingEvaluator) RuntimeMode() RuntimeMode {
 	return e.base.RuntimeMode()
 }
 
@@ -55,7 +55,7 @@ func TestDeterministicPromptIterBuildsProfileAndPatchSet(t *testing.T) {
 	require.NoError(t, err)
 
 	baselinePrompt := "Answer with grounded facts."
-	candidate, err := optimizer.Propose(context.Background(), OptimizeRequest{
+	proposal, err := optimizer.Propose(context.Background(), OptimizeRequest{
 		Round:          1,
 		BaselinePrompt: baselinePrompt,
 		Train: &EvaluationSummary{
@@ -71,21 +71,26 @@ func TestDeterministicPromptIterBuildsProfileAndPatchSet(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, candidate)
+	require.NotNil(t, proposal)
 
-	expectedPrompt := buildCandidatePrompt(
+	expectedProposal := buildProposedPrompt(
 		baselinePrompt,
 		config.Candidates[0],
 		[]FailureCategory{FailureFinalResponseMismatch},
-		config.Seed,
 	)
+	assert.Equal(t, expectedProposal, proposal.Prompt)
+	assert.Contains(t, proposal.Reason, string(FailureFinalResponseMismatch))
+
+	pipeline := &Pipeline{config: config}
+	candidate, err := pipeline.materializeCandidate(proposal, 1, baselinePrompt)
+	require.NoError(t, err)
+	expectedPrompt := expectedProposal + "\n\n[[trpc-promptiter-candidate:accepted;seed:424242]]"
 	expectedSurfaceID := structure.SurfaceID("candidate", structure.SurfaceTypeInstruction)
 	assert.Equal(t, "accepted", candidate.ID)
 	assert.Equal(t, 1, candidate.Round)
 	assert.Equal(t, expectedPrompt, candidate.Prompt)
 	assert.Equal(t, HashText(expectedPrompt), candidate.PromptHash)
 	assert.Equal(t, expectedSurfaceID, candidate.SurfaceID)
-	assert.Contains(t, candidate.Reason, string(FailureFinalResponseMismatch))
 
 	var profile *promptiter.Profile = candidate.Profile
 	require.NotNil(t, profile)
@@ -111,7 +116,7 @@ func TestPipelineRejectsForgedCandidatePromptHash(t *testing.T) {
 	config.Candidates = config.Candidates[:1]
 	optimizer, err := NewDeterministicPromptIter(config)
 	require.NoError(t, err)
-	candidate, err := optimizer.Propose(context.Background(), OptimizeRequest{
+	proposal, err := optimizer.Propose(context.Background(), OptimizeRequest{
 		Round:          1,
 		BaselinePrompt: "baseline",
 		Train: &EvaluationSummary{Cases: []CaseResult{{
@@ -120,21 +125,26 @@ func TestPipelineRejectsForgedCandidatePromptHash(t *testing.T) {
 		}}},
 	})
 	require.NoError(t, err)
-	candidate.PromptHash = "forged"
 	pipeline := &Pipeline{config: config}
+	candidate, err := pipeline.materializeCandidate(proposal, 1, "baseline")
+	require.NoError(t, err)
+	candidate.PromptHash = "forged"
 	err = pipeline.validateCandidate(candidate, 1, map[string]struct{}{})
 	require.ErrorContains(t, err, "does not match computed hash")
 }
 
-func TestNewPipelineRequiresEvaluatorRuntimeMode(t *testing.T) {
+func TestNewPipelineRejectsEvaluatorRuntimeModeMismatch(t *testing.T) {
 	config := newReportPipelineTestConfig()
-	base, err := NewLocalEvaluator([]MetricConfig{{MetricName: metricFinalResponse, Threshold: 1, Weight: 1}}, "baseline")
+	base, err := NewLocalEvaluator(
+		[]MetricConfig{{MetricName: metricFinalResponse, Threshold: 1, Weight: 1}},
+		"baseline",
+		RuntimeModeTrace,
+	)
 	require.NoError(t, err)
 	optimizer, err := NewDeterministicPromptIter(config)
 	require.NoError(t, err)
-	withoutMode := struct{ Evaluator }{Evaluator: base}
-	_, err = NewPipeline(config, withoutMode, optimizer, time.Now)
-	require.ErrorContains(t, err, "explicit RuntimeMode capability")
+	_, err = NewPipeline(config, base, optimizer, time.Now)
+	require.ErrorContains(t, err, "does not match config mode")
 }
 
 func TestPipelineIndependentlyRejectsTamperedPromptBinding(t *testing.T) {
@@ -176,7 +186,7 @@ func TestPipelineRequiresEveryCandidateValidationCaseToRerun(t *testing.T) {
 	pipeline, err := NewPipeline(config, base, optimizer, time.Now)
 	require.NoError(t, err)
 	validation := newReportPipelineValidationSet()
-	delete(validation.EvalCases[0].FakeResponses, "accepted")
+	delete(validation.Cases[0].FakeResponses, "accepted")
 	_, err = pipeline.Run(
 		context.Background(),
 		"Answer with grounded facts.",
@@ -193,17 +203,19 @@ func TestPipelineRejectsCandidateWithExtraSurfaceFields(t *testing.T) {
 	config.Candidates = config.Candidates[:1]
 	optimizer, err := NewDeterministicPromptIter(config)
 	require.NoError(t, err)
-	candidate, err := optimizer.Propose(context.Background(), OptimizeRequest{
+	proposal, err := optimizer.Propose(context.Background(), OptimizeRequest{
 		Round:          1,
 		BaselinePrompt: "baseline",
 		Train:          &EvaluationSummary{Cases: []CaseResult{{CaseID: "case"}}},
 	})
 	require.NoError(t, err)
+	pipeline := &Pipeline{config: config}
+	candidate, err := pipeline.materializeCandidate(proposal, 1, "baseline")
+	require.NoError(t, err)
 	syntax := structure.PromptSyntaxSingleBrace
 	candidate.Profile.Overrides[0].Value.PromptSyntax = &syntax
 	candidate.PatchSet.Patches[0].Value.PromptSyntax = &syntax
 
-	pipeline := &Pipeline{config: config}
 	err = pipeline.validateCandidate(candidate, 1, map[string]struct{}{})
 	require.ErrorContains(t, err, "profile override does not match candidate prompt")
 }
@@ -219,27 +231,10 @@ func TestPipelineRejectsWhitespaceOnlySemanticPromptChange(t *testing.T) {
 		HardFail:   true,
 	}}, config.FakeEngine.FallbackVariant)
 	require.NoError(t, err)
-	optimizer := optimizerFunc(func(_ context.Context, request OptimizeRequest) (*Candidate, error) {
-		prompt := strings.TrimSpace(request.BaselinePrompt) +
-			"\n\n[[trpc-promptiter-candidate:accepted;seed:424242]]"
-		surfaceID := structure.SurfaceID("candidate", structure.SurfaceTypeInstruction)
-		value := structure.SurfaceValue{Text: &prompt}
-		return &Candidate{
-			ID:         "accepted",
-			Round:      request.Round,
-			Prompt:     prompt,
-			PromptHash: HashText(prompt),
-			SurfaceID:  surfaceID,
-			Reason:     "whitespace-only semantic change",
-			Profile: &promptiter.Profile{
-				StructureID: config.Surface.StructureID,
-				Overrides:   []promptiter.SurfaceOverride{{SurfaceID: surfaceID, Value: value}},
-			},
-			PatchSet: &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{{
-				SurfaceID: surfaceID,
-				Value:     value,
-				Reason:    "whitespace-only semantic change",
-			}}},
+	optimizer := optimizerFunc(func(_ context.Context, request OptimizeRequest) (*PromptProposal, error) {
+		return &PromptProposal{
+			Prompt: strings.TrimSpace(request.BaselinePrompt),
+			Reason: "whitespace-only semantic change",
 		}, nil
 	})
 	pipeline, err := NewPipeline(config, evaluator, optimizer, time.Now)
@@ -247,17 +242,17 @@ func TestPipelineRejectsWhitespaceOnlySemanticPromptChange(t *testing.T) {
 	baselinePrompt := "  Answer with grounded facts. \n"
 	train := newReportPipelineTrainSet()
 	validation := newReportPipelineValidationSet()
-	for index := range train.EvalCases {
-		delete(train.EvalCases[index].FakeResponses, "overfit")
-		output := train.EvalCases[index].FakeResponses["accepted"]
+	for index := range train.Cases {
+		delete(train.Cases[index].FakeResponses, "overfit")
+		output := train.Cases[index].FakeResponses["accepted"]
 		output.PromptSemanticSHA256 = HashText(strings.TrimSpace(baselinePrompt))
-		train.EvalCases[index].FakeResponses["accepted"] = output
+		train.Cases[index].FakeResponses["accepted"] = output
 	}
-	for index := range validation.EvalCases {
-		delete(validation.EvalCases[index].FakeResponses, "overfit")
-		output := validation.EvalCases[index].FakeResponses["accepted"]
+	for index := range validation.Cases {
+		delete(validation.Cases[index].FakeResponses, "overfit")
+		output := validation.Cases[index].FakeResponses["accepted"]
 		output.PromptSemanticSHA256 = HashText(strings.TrimSpace(baselinePrompt))
-		validation.EvalCases[index].FakeResponses["accepted"] = output
+		validation.Cases[index].FakeResponses["accepted"] = output
 	}
 	report, err := pipeline.Run(
 		context.Background(),
@@ -284,7 +279,12 @@ func TestPipelineRejectsEmptyValidationSet(t *testing.T) {
 	require.NoError(t, err)
 	pipeline, err := NewPipeline(config, evaluator, optimizer, time.Now)
 	require.NoError(t, err)
-	_, err = pipeline.Run(context.Background(), "baseline", newReportPipelineTrainSet(), &EvalSet{EvalSetID: "empty-validation"})
+	_, err = pipeline.Run(
+		context.Background(),
+		"baseline",
+		newReportPipelineTrainSet(),
+		&RegressionEvalSet{EvalSet: evalset.EvalSet{EvalSetID: "empty-validation"}},
+	)
 	require.ErrorContains(t, err, "evalCases are empty")
 }
 
@@ -302,7 +302,7 @@ func TestPipelineRejectsTrainValidationCaseOverlap(t *testing.T) {
 	require.NoError(t, err)
 	train := newReportPipelineTrainSet()
 	validation := newReportPipelineValidationSet()
-	validation.EvalCases[0].EvalID = train.EvalCases[0].EvalID
+	validation.Cases[0].EvalID = train.Cases[0].EvalID
 	_, err = pipeline.Run(context.Background(), "Answer with grounded facts.", train, validation)
 	require.ErrorContains(t, err, "appears in both train and validation")
 }
@@ -360,6 +360,7 @@ func TestPipelineSelectsAcceptedCandidateAndRejectsOverfit(t *testing.T) {
 
 func TestReportArtifactsContainRequiredFieldsAndUseAtomicWrites(t *testing.T) {
 	report := runReportPipelineTest(t)
+	assert.Equal(t, ReportSchemaVersion, report.SchemaVersion)
 
 	jsonData, err := MarshalReportJSON(report)
 	require.NoError(t, err)
@@ -496,7 +497,7 @@ func runReportPipelineTest(t *testing.T) *Report {
 func newReportPipelineTestConfig() Config {
 	zero := 0
 	return Config{
-		SchemaVersion: "1.0",
+		SchemaVersion: ConfigSchemaVersion,
 		Mode:          "fake",
 		Seed:          424242,
 		MaxRounds:     2,
@@ -534,11 +535,11 @@ func newReportPipelineTestConfig() Config {
 	}
 }
 
-func newReportPipelineTrainSet() *EvalSet {
-	return &EvalSet{
-		EvalSetID:     "train",
+func newReportPipelineTrainSet() *RegressionEvalSet {
+	return &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "train"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{
+		Cases: []RegressionEvalCase{
 			newReportPipelineCase(
 				"train-fix",
 				false,
@@ -563,11 +564,11 @@ func newReportPipelineTrainSet() *EvalSet {
 	}
 }
 
-func newReportPipelineValidationSet() *EvalSet {
-	return &EvalSet{
-		EvalSetID:     "validation",
+func newReportPipelineValidationSet() *RegressionEvalSet {
+	return &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "validation"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{
+		Cases: []RegressionEvalCase{
 			newReportPipelineCase(
 				"validation-fix",
 				false,
@@ -597,7 +598,7 @@ func newReportPipelineCase(
 	critical bool,
 	expected string,
 	responses map[string]string,
-) EvalCase {
+) RegressionEvalCase {
 	finalResponse := model.NewAssistantMessage(expected)
 	fakeResponses := make(map[string]FakeOutput, len(responses))
 	for variant, response := range responses {
@@ -627,15 +628,17 @@ func newReportPipelineCase(
 		}
 		fakeResponses[variant] = output
 	}
-	return EvalCase{
-		EvalID:   caseID,
-		Critical: critical,
-		Conversation: []*evalset.Invocation{
-			{
-				InvocationID:  caseID + "-invocation",
-				FinalResponse: &finalResponse,
+	return RegressionEvalCase{
+		EvalCase: evalset.EvalCase{
+			EvalID: caseID,
+			Conversation: []*evalset.Invocation{
+				{
+					InvocationID:  caseID + "-invocation",
+					FinalResponse: &finalResponse,
+				},
 			},
 		},
+		Critical:      critical,
 		FakeResponses: fakeResponses,
 	}
 }
@@ -646,12 +649,13 @@ func reportPipelinePromptSemanticHash(variant string) string {
 		if candidate.ID != variant {
 			continue
 		}
-		prompt := buildCandidatePrompt(
+		proposedPrompt := buildProposedPrompt(
 			"Answer with grounded facts.",
 			candidate,
 			[]FailureCategory{FailureFinalResponseMismatch},
-			config.Seed,
 		)
+		prompt := proposedPrompt + "\n\n" +
+			"[[trpc-promptiter-candidate:" + candidate.ID + ";seed:424242]]"
 		return HashText(semanticPromptContent(prompt))
 	}
 	return ""
@@ -675,9 +679,9 @@ func assertFileMode(t *testing.T, path string, expected os.FileMode) {
 	assert.Equal(t, expected, info.Mode().Perm())
 }
 
-type optimizerFunc func(context.Context, OptimizeRequest) (*Candidate, error)
+type optimizerFunc func(context.Context, OptimizeRequest) (*PromptProposal, error)
 
-func (function optimizerFunc) Propose(ctx context.Context, request OptimizeRequest) (*Candidate, error) {
+func (function optimizerFunc) Propose(ctx context.Context, request OptimizeRequest) (*PromptProposal, error) {
 	return function(ctx, request)
 }
 

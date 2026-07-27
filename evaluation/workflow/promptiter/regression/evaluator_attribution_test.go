@@ -35,10 +35,10 @@ func TestLocalEvaluatorFailureAttributionDeterminismAndUsage(t *testing.T) {
 	}
 
 	valid := false
-	set := &EvalSet{
-		EvalSetID:     "six-failure-categories",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "six-failure-categories"},
 		PassThreshold: testScore(0.99),
-		EvalCases: []EvalCase{
+		Cases: []RegressionEvalCase{
 			newFailureCase(
 				"final-response",
 				"expected answer",
@@ -229,18 +229,20 @@ func newFailureCase(
 	expectedTools []*evalset.Tool,
 	expectations Expectations,
 	output FakeOutput,
-) EvalCase {
+) RegressionEvalCase {
 	output.PromptSemanticSHA256 = HashText(testSemanticPrompt)
-	return EvalCase{
-		EvalID: id,
-		Conversation: []*evalset.Invocation{{
-			InvocationID: id + "-invocation",
-			FinalResponse: &model.Message{
-				Role:    model.RoleAssistant,
-				Content: expectedResponse,
-			},
-			Tools: expectedTools,
-		}},
+	return RegressionEvalCase{
+		EvalCase: evalset.EvalCase{
+			EvalID: id,
+			Conversation: []*evalset.Invocation{{
+				InvocationID: id + "-invocation",
+				FinalResponse: &model.Message{
+					Role:    model.RoleAssistant,
+					Content: expectedResponse,
+				},
+				Tools: expectedTools,
+			}},
+		},
 		Expectations: expectations,
 		FakeResponses: map[string]FakeOutput{
 			"candidate": output,
@@ -282,10 +284,10 @@ func TestLocalEvaluatorWrongToolNameCannotEarnArgumentOrResultCredit(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "wrong-tool-name",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "wrong-tool-name"},
 		PassThreshold: testScore(0.5),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"wrong-name",
 			"done",
 			[]*evalset.Tool{{Name: "weather"}},
@@ -319,10 +321,10 @@ func TestLocalEvaluatorOmittedRouteArgumentsAndResultAreUnconstrained(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "optional-signals",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "optional-signals"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"optional",
 			"done",
 			[]*evalset.Tool{{Name: "weather"}},
@@ -358,10 +360,10 @@ func TestLocalEvaluatorTraceToolTimeoutIsHardFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "trace-error",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "trace-error"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"timeout",
 			"done",
 			nil,
@@ -397,10 +399,10 @@ func TestLocalEvaluatorTraceModeRequiresAndReplaysRecordedTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "trace-replay",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "trace-replay"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"trace-case",
 			"recorded answer",
 			nil,
@@ -413,7 +415,7 @@ func TestLocalEvaluatorTraceModeRequiresAndReplaysRecordedTrace(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "has no recorded trace") {
 		t.Fatalf("trace mode missing-trace error = %v", err)
 	}
-	output := set.EvalCases[0].FakeResponses["candidate"]
+	output := set.Cases[0].FakeResponses["candidate"]
 	elapsed := int64(1)
 	output.Trace = []TraceStep{{
 		StepID:    "replay-1",
@@ -423,7 +425,7 @@ func TestLocalEvaluatorTraceModeRequiresAndReplaysRecordedTrace(t *testing.T) {
 		Message:   "recorded answer",
 		Usage:     &output.Usage,
 	}}
-	set.EvalCases[0].FakeResponses["candidate"] = output
+	set.Cases[0].FakeResponses["candidate"] = output
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -442,10 +444,10 @@ func TestLocalEvaluatorFakeModeRejectsContradictoryTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "fake-trace-consistency",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "fake-trace-consistency"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case",
 			"recorded answer",
 			nil,
@@ -478,10 +480,10 @@ func TestLocalEvaluatorRejectsUnknownTraceStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "trace-status",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "trace-status"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case",
 			"answer",
 			nil,
@@ -510,10 +512,10 @@ func TestLocalEvaluatorRejectsMultipleYAMLDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "yaml-single-document",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "yaml-single-document"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case",
 			"",
 			nil,
@@ -541,10 +543,10 @@ func TestLocalEvaluatorExecutionErrorCannotPassZeroThreshold(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	set := &EvalSet{
-		EvalSetID:     "execution-error",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "execution-error"},
 		PassThreshold: testScore(0),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case",
 			"",
 			nil,

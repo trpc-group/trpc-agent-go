@@ -21,9 +21,9 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
-// LoadEvalSet reads and validates an evaluation-set JSON file.
-func LoadEvalSet(path string) (*EvalSet, error) {
-	var set EvalSet
+// LoadRegressionEvalSet reads and validates an evaluation-set JSON file.
+func LoadRegressionEvalSet(path string) (*RegressionEvalSet, error) {
+	var set RegressionEvalSet
 	if err := readJSON(path, &set, true); err != nil {
 		return nil, fmt.Errorf("load eval set: %w", err)
 	}
@@ -204,14 +204,14 @@ func scanJSONValue(decoder *json.Decoder, path string) error {
 	return nil
 }
 
-func validateEvalSet(set *EvalSet) error {
+func validateEvalSet(set *RegressionEvalSet) error {
 	if set == nil {
 		return errors.New("eval set is nil")
 	}
 	if strings.TrimSpace(set.EvalSetID) == "" {
 		return errors.New("evalSetId is empty")
 	}
-	if len(set.EvalCases) == 0 {
+	if len(set.Cases) == 0 {
 		return errors.New("evalCases are empty")
 	}
 	if set.PassThreshold == nil {
@@ -221,9 +221,9 @@ func validateEvalSet(set *EvalSet) error {
 	if !finiteScore(*set.PassThreshold) || *set.PassThreshold < 0 || *set.PassThreshold > 1 {
 		return errors.New("passThreshold must be in [0,1]")
 	}
-	seen := make(map[string]struct{}, len(set.EvalCases))
-	for i := range set.EvalCases {
-		evalCase := &set.EvalCases[i]
+	seen := make(map[string]struct{}, len(set.Cases))
+	for i := range set.Cases {
+		evalCase := &set.Cases[i]
 		if strings.TrimSpace(evalCase.EvalID) == "" {
 			return fmt.Errorf("case %d evalId is empty", i)
 		}
@@ -314,10 +314,10 @@ func validateConfig(cfg *Config) error {
 	if cfg == nil {
 		return errors.New("config is nil")
 	}
-	if strings.TrimSpace(cfg.SchemaVersion) == "" {
-		return errors.New("schemaVersion is empty")
+	if cfg.SchemaVersion != ConfigSchemaVersion {
+		return fmt.Errorf("schemaVersion %q is unsupported; use %q", cfg.SchemaVersion, ConfigSchemaVersion)
 	}
-	if cfg.Mode != "fake" && cfg.Mode != "trace" {
+	if cfg.Mode != RuntimeModeFake && cfg.Mode != RuntimeModeTrace {
 		return fmt.Errorf("mode %q is unsupported; use fake or trace", cfg.Mode)
 	}
 	if cfg.MaxRounds <= 0 {
@@ -431,7 +431,7 @@ func knownFailureCategory(category FailureCategory) bool {
 	}
 }
 
-func expectedInvocation(evalCase *EvalCase) *evalset.Invocation {
+func expectedInvocation(evalCase *RegressionEvalCase) *evalset.Invocation {
 	if evalCase == nil {
 		return nil
 	}

@@ -21,14 +21,16 @@ import (
 )
 
 func TestValidateEvalSetFailClosedBoundaries(t *testing.T) {
-	newSet := func() *EvalSet {
+	newSet := func() *RegressionEvalSet {
 		threshold := 0.8
-		return &EvalSet{
-			EvalSetID:     "set",
+		return &RegressionEvalSet{
+			EvalSet:       evalset.EvalSet{EvalSetID: "set"},
 			PassThreshold: &threshold,
-			EvalCases: []EvalCase{{
-				EvalID:       "case",
-				Conversation: []*evalset.Invocation{{}},
+			Cases: []RegressionEvalCase{{
+				EvalCase: evalset.EvalCase{
+					EvalID:       "case",
+					Conversation: []*evalset.Invocation{{}},
+				},
 				FakeResponses: map[string]FakeOutput{
 					"baseline": {},
 				},
@@ -41,79 +43,79 @@ func TestValidateEvalSetFailClosedBoundaries(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*EvalSet)
+		mutate func(*RegressionEvalSet)
 		want   string
 	}{
-		{name: "set id", mutate: func(set *EvalSet) { set.EvalSetID = " " }, want: "evalSetId is empty"},
-		{name: "cases", mutate: func(set *EvalSet) { set.EvalCases = nil }, want: "evalCases are empty"},
-		{name: "threshold nan", mutate: func(set *EvalSet) { *set.PassThreshold = math.NaN() }, want: "passThreshold"},
-		{name: "threshold negative", mutate: func(set *EvalSet) { *set.PassThreshold = -1 }, want: "passThreshold"},
-		{name: "threshold high", mutate: func(set *EvalSet) { *set.PassThreshold = 2 }, want: "passThreshold"},
-		{name: "case id", mutate: func(set *EvalSet) { set.EvalCases[0].EvalID = " " }, want: "evalId is empty"},
-		{name: "duplicate case", mutate: func(set *EvalSet) {
-			set.EvalCases = append(set.EvalCases, set.EvalCases[0])
+		{name: "set id", mutate: func(set *RegressionEvalSet) { set.EvalSetID = " " }, want: "evalSetId is empty"},
+		{name: "cases", mutate: func(set *RegressionEvalSet) { set.Cases = nil }, want: "evalCases are empty"},
+		{name: "threshold nan", mutate: func(set *RegressionEvalSet) { *set.PassThreshold = math.NaN() }, want: "passThreshold"},
+		{name: "threshold negative", mutate: func(set *RegressionEvalSet) { *set.PassThreshold = -1 }, want: "passThreshold"},
+		{name: "threshold high", mutate: func(set *RegressionEvalSet) { *set.PassThreshold = 2 }, want: "passThreshold"},
+		{name: "case id", mutate: func(set *RegressionEvalSet) { set.Cases[0].EvalID = " " }, want: "evalId is empty"},
+		{name: "duplicate case", mutate: func(set *RegressionEvalSet) {
+			set.Cases = append(set.Cases, set.Cases[0])
 		}, want: "duplicate evalId"},
-		{name: "conversation count", mutate: func(set *EvalSet) { set.EvalCases[0].Conversation = nil }, want: "exactly one"},
-		{name: "expected invocation", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Conversation = []*evalset.Invocation{nil}
+		{name: "conversation count", mutate: func(set *RegressionEvalSet) { set.Cases[0].Conversation = nil }, want: "exactly one"},
+		{name: "expected invocation", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Conversation = []*evalset.Invocation{nil}
 		}, want: "no expected invocation"},
-		{name: "nil expected tool", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Conversation[0].Tools = []*evalset.Tool{nil}
+		{name: "nil expected tool", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Conversation[0].Tools = []*evalset.Tool{nil}
 		}, want: "nil or unnamed"},
-		{name: "unnamed expected tool", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Conversation[0].Tools = []*evalset.Tool{{Name: " "}}
+		{name: "unnamed expected tool", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Conversation[0].Tools = []*evalset.Tool{{Name: " "}}
 		}, want: "nil or unnamed"},
-		{name: "responses", mutate: func(set *EvalSet) { set.EvalCases[0].FakeResponses = nil }, want: "fakeResponses are empty"},
-		{name: "documents", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Expectations.MinRetrievedDocuments = -1
+		{name: "responses", mutate: func(set *RegressionEvalSet) { set.Cases[0].FakeResponses = nil }, want: "fakeResponses are empty"},
+		{name: "documents", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Expectations.MinRetrievedDocuments = -1
 		}, want: "minRetrievedDocuments"},
-		{name: "format", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Expectations.ResponseFormat = "toml"
+		{name: "format", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Expectations.ResponseFormat = "toml"
 		}, want: "responseFormat"},
-		{name: "empty fact", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Expectations.RequiredFacts = []string{" "}
+		{name: "empty fact", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Expectations.RequiredFacts = []string{" "}
 		}, want: "required fact is empty"},
-		{name: "duplicate fact", mutate: func(set *EvalSet) {
-			set.EvalCases[0].Expectations.RequiredFacts = []string{"Fact", " fact "}
+		{name: "duplicate fact", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].Expectations.RequiredFacts = []string{"Fact", " fact "}
 		}, want: "duplicate required fact"},
-		{name: "variant id", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses = map[string]FakeOutput{"bad id": {}}
+		{name: "variant id", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses = map[string]FakeOutput{"bad id": {}}
 		}, want: "variant id"},
-		{name: "retrieved documents", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{RetrievedDocuments: -1}
+		{name: "retrieved documents", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{RetrievedDocuments: -1}
 		}, want: "retrievedDocuments"},
-		{name: "prompt hash", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{PromptSemanticSHA256: "BAD"}
+		{name: "prompt hash", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{PromptSemanticSHA256: "BAD"}
 		}, want: "promptSemanticSha256"},
-		{name: "rubric nan", mutate: func(set *EvalSet) {
+		{name: "rubric nan", mutate: func(set *RegressionEvalSet) {
 			value := math.NaN()
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
 		}, want: "rubricScore"},
-		{name: "rubric negative", mutate: func(set *EvalSet) {
+		{name: "rubric negative", mutate: func(set *RegressionEvalSet) {
 			value := -1.0
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
 		}, want: "rubricScore"},
-		{name: "rubric high", mutate: func(set *EvalSet) {
+		{name: "rubric high", mutate: func(set *RegressionEvalSet) {
 			value := 2.0
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{RubricScore: &value}
 		}, want: "rubricScore"},
-		{name: "usage", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{Usage: Usage{ModelCalls: -1}}
+		{name: "usage", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{Usage: Usage{ModelCalls: -1}}
 		}, want: "usage"},
-		{name: "nil output tool", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{Tools: []*evalset.Tool{nil}}
+		{name: "nil output tool", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{Tools: []*evalset.Tool{nil}}
 		}, want: "nil or unnamed"},
-		{name: "unnamed output tool", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{Tools: []*evalset.Tool{{Name: " "}}}
+		{name: "unnamed output tool", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{Tools: []*evalset.Tool{{Name: " "}}}
 		}, want: "nil or unnamed"},
-		{name: "trace id", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{Trace: []TraceStep{{Kind: "llm"}}}
+		{name: "trace id", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{Trace: []TraceStep{{Kind: "llm"}}}
 		}, want: "id is empty"},
-		{name: "duplicate trace id", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{Trace: []TraceStep{{StepID: "one"}, {StepID: "one"}}}
+		{name: "duplicate trace id", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{Trace: []TraceStep{{StepID: "one"}, {StepID: "one"}}}
 		}, want: "duplicate trace step"},
-		{name: "invalid trace", mutate: func(set *EvalSet) {
-			set.EvalCases[0].FakeResponses["baseline"] = FakeOutput{
+		{name: "invalid trace", mutate: func(set *RegressionEvalSet) {
+			set.Cases[0].FakeResponses["baseline"] = FakeOutput{
 				Response: "actual",
 				Trace:    []TraceStep{{StepID: "one", Kind: "llm", Status: "completed", Message: "different"}},
 			}
@@ -443,6 +445,34 @@ func TestSummaryAndOptimizerBoundaries(t *testing.T) {
 	} {
 		_, err := optimizer.Propose(context.Background(), request)
 		assert.Error(t, err)
+	}
+
+	pipeline := &Pipeline{config: config}
+	for _, test := range []struct {
+		name     string
+		proposal *PromptProposal
+		round    int
+		baseline string
+		want     string
+	}{
+		{name: "nil", round: 1, baseline: "prompt", want: "nil proposal"},
+		{name: "round", proposal: &PromptProposal{Prompt: "prompt", Reason: "reason"}, round: 0, baseline: "prompt", want: "outside"},
+		{name: "prompt", proposal: &PromptProposal{Reason: "reason"}, round: 1, baseline: "prompt", want: "empty prompt"},
+		{name: "reason", proposal: &PromptProposal{Prompt: "prompt"}, round: 1, baseline: "prompt", want: "empty reason"},
+		{name: "baseline", proposal: &PromptProposal{Prompt: "prompt-forged", Reason: "reason"}, round: 1, baseline: "prompt", want: "preserve"},
+		{name: "marker", proposal: &PromptProposal{
+			Prompt: "prompt\n[[trpc-promptiter-candidate:forged;seed:1]]",
+			Reason: "reason",
+		}, round: 1, baseline: "prompt", want: "reserved"},
+		{name: "utf8", proposal: &PromptProposal{
+			Prompt: string([]byte{'p', 0xff}),
+			Reason: "reason",
+		}, round: 1, baseline: "prompt", want: "UTF-8"},
+	} {
+		t.Run("materialize "+test.name, func(t *testing.T) {
+			_, err := pipeline.materializeCandidate(test.proposal, test.round, test.baseline)
+			assert.ErrorContains(t, err, test.want)
+		})
 	}
 
 	for _, prompt := range []string{

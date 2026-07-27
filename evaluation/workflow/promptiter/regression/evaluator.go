@@ -34,7 +34,9 @@ const (
 
 // Evaluator scores a prompt variant on an evaluation set.
 type Evaluator interface {
-	Evaluate(ctx context.Context, set *EvalSet, variantID, prompt string) (*EvaluationSummary, error)
+	Evaluate(ctx context.Context, set *RegressionEvalSet, variantID, prompt string) (*EvaluationSummary, error)
+	// RuntimeMode reports the output source used by Evaluate.
+	RuntimeMode() RuntimeMode
 }
 
 // LocalEvaluator is an API-key-free, deterministic evaluator. It consumes
@@ -42,25 +44,29 @@ type Evaluator interface {
 type LocalEvaluator struct {
 	metrics         []MetricConfig
 	fallbackVariant string
-	mode            string
+	mode            RuntimeMode
 }
 
 // NewLocalEvaluator creates a deterministic evaluator.
-func NewLocalEvaluator(metrics []MetricConfig, fallbackVariant string, runtimeMode ...string) (*LocalEvaluator, error) {
+func NewLocalEvaluator(
+	metrics []MetricConfig,
+	fallbackVariant string,
+	runtimeMode ...RuntimeMode,
+) (*LocalEvaluator, error) {
 	if err := validateMetrics(metrics); err != nil {
 		return nil, err
 	}
 	if fallbackVariant == "" {
 		fallbackVariant = "baseline"
 	}
-	mode := "fake"
+	mode := RuntimeModeFake
 	if len(runtimeMode) > 1 {
 		return nil, errors.New("at most one runtime mode may be configured")
 	}
 	if len(runtimeMode) == 1 {
 		mode = runtimeMode[0]
 	}
-	if mode != "fake" && mode != "trace" {
+	if mode != RuntimeModeFake && mode != RuntimeModeTrace {
 		return nil, fmt.Errorf("unsupported local evaluator mode %q", mode)
 	}
 	return &LocalEvaluator{
@@ -71,14 +77,14 @@ func NewLocalEvaluator(metrics []MetricConfig, fallbackVariant string, runtimeMo
 }
 
 // RuntimeMode reports whether outputs are fake-model scenarios or strict trace replays.
-func (e *LocalEvaluator) RuntimeMode() string {
+func (e *LocalEvaluator) RuntimeMode() RuntimeMode {
 	return e.mode
 }
 
 // Evaluate scores every case in input order and attaches explainable failure attribution.
 func (e *LocalEvaluator) Evaluate(
 	ctx context.Context,
-	set *EvalSet,
+	set *RegressionEvalSet,
 	variantID string,
 	prompt string,
 ) (*EvaluationSummary, error) {
@@ -119,16 +125,16 @@ func (e *LocalEvaluator) Evaluate(
 		EvalSetID:        set.EvalSetID,
 		VariantID:        variantID,
 		PassThreshold:    passThreshold,
-		Cases:            make([]CaseResult, 0, len(set.EvalCases)),
+		Cases:            make([]CaseResult, 0, len(set.Cases)),
 		AttributionStats: make(map[FailureCategory]int),
 	}
-	for i := range set.EvalCases {
+	for i := range set.Cases {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		result, err := e.evaluateCase(ctx, &set.EvalCases[i], variantID, prompt, passThreshold)
+		result, err := e.evaluateCase(ctx, &set.Cases[i], variantID, prompt, passThreshold)
 		if err != nil {
-			return nil, fmt.Errorf("evaluate case %q: %w", set.EvalCases[i].EvalID, err)
+			return nil, fmt.Errorf("evaluate case %q: %w", set.Cases[i].EvalID, err)
 		}
 		result.FailureAttributions = AttributeFailure(*result)
 		if len(result.FailureAttributions) > 0 {
@@ -160,7 +166,7 @@ func (e *LocalEvaluator) Evaluate(
 
 func (e *LocalEvaluator) evaluateCase(
 	ctx context.Context,
-	evalCase *EvalCase,
+	evalCase *RegressionEvalCase,
 	variantID string,
 	prompt string,
 	passThreshold float64,

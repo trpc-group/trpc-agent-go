@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadEvalSetRejectsMisspelledSafetyFields(t *testing.T) {
+func TestLoadRegressionEvalSetRejectsMisspelledSafetyFields(t *testing.T) {
 	tests := []struct {
 		name     string
 		caseBody string
@@ -52,7 +52,7 @@ func TestLoadEvalSetRejectsMisspelledSafetyFields(t *testing.T) {
   }]
 }`
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-			_, err := LoadEvalSet(path)
+			_, err := LoadRegressionEvalSet(path)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), test.unknown)
 		})
@@ -62,7 +62,7 @@ func TestLoadEvalSetRejectsMisspelledSafetyFields(t *testing.T) {
 func TestLoadConfigAcceptsTraceReplayMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "promptiter.json")
 	content := `{
-  "schemaVersion": "1.0",
+  "schemaVersion": "1.1",
   "mode": "trace",
   "seed": 1,
   "maxRounds": 1,
@@ -74,10 +74,10 @@ func TestLoadConfigAcceptsTraceReplayMode(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 	config, err := LoadConfig(path)
 	require.NoError(t, err)
-	assert.Equal(t, "trace", config.Mode)
+	assert.Equal(t, RuntimeModeTrace, config.Mode)
 }
 
-func TestLoadEvalSetPreservesExplicitZeroPassThreshold(t *testing.T) {
+func TestLoadRegressionEvalSetPreservesExplicitZeroPassThreshold(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "set.json")
 	content := `{
   "evalSetId": "zero-threshold",
@@ -89,13 +89,13 @@ func TestLoadEvalSetPreservesExplicitZeroPassThreshold(t *testing.T) {
   }]
 }`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	set, err := LoadEvalSet(path)
+	set, err := LoadRegressionEvalSet(path)
 	require.NoError(t, err)
 	require.NotNil(t, set.PassThreshold)
 	assert.Zero(t, *set.PassThreshold)
 }
 
-func TestLoadEvalSetRejectsDuplicateJSONKeys(t *testing.T) {
+func TestLoadRegressionEvalSetRejectsDuplicateJSONKeys(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "set.json")
 	content := `{
   "evalSetId": "duplicates",
@@ -108,20 +108,20 @@ func TestLoadEvalSetRejectsDuplicateJSONKeys(t *testing.T) {
   }]
 }`
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-	_, err := LoadEvalSet(path)
+	_, err := LoadRegressionEvalSet(path)
 	require.ErrorContains(t, err, `duplicate key "critical"`)
 }
 
-func TestLoadEvalSetRejectsInvalidUTF8(t *testing.T) {
+func TestLoadRegressionEvalSetRejectsInvalidUTF8(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "set.json")
 	content := append([]byte(`{"evalSetId":"`), 0xff)
 	content = append(content, []byte(`"}`)...)
 	require.NoError(t, os.WriteFile(path, content, 0o600))
-	_, err := LoadEvalSet(path)
+	_, err := LoadRegressionEvalSet(path)
 	require.ErrorContains(t, err, "not valid UTF-8")
 }
 
-func TestLoadEvalSetRejectsInvalidPromptSemanticHash(t *testing.T) {
+func TestLoadRegressionEvalSetRejectsInvalidPromptSemanticHash(t *testing.T) {
 	tests := []struct {
 		name string
 		hash string
@@ -148,7 +148,7 @@ func TestLoadEvalSetRejectsInvalidPromptSemanticHash(t *testing.T) {
   }]
 }`, test.hash)
 			require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
-			_, err := LoadEvalSet(path)
+			_, err := LoadRegressionEvalSet(path)
 			require.ErrorContains(t, err, "must be 64 lowercase hexadecimal characters")
 		})
 	}

@@ -14,6 +14,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 )
 
 func TestLocalEvaluatorBindsExplicitCandidateOutputToSemanticPrompt(t *testing.T) {
@@ -23,10 +24,10 @@ func TestLocalEvaluatorBindsExplicitCandidateOutputToSemanticPrompt(t *testing.T
 		Weight:     1,
 	}}, "baseline")
 	require.NoError(t, err)
-	set := &EvalSet{
-		EvalSetID:     "binding",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "binding"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case", "answer", nil, Expectations{},
 			FakeOutput{Response: "answer", Usage: Usage{ModelCalls: 1}},
 		)},
@@ -42,9 +43,9 @@ func TestLocalEvaluatorBindsExplicitCandidateOutputToSemanticPrompt(t *testing.T
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", changedPrompt)
 	require.ErrorContains(t, err, "does not match evaluated prompt")
 
-	output := set.EvalCases[0].FakeResponses["candidate"]
+	output := set.Cases[0].FakeResponses["candidate"]
 	output.PromptSemanticSHA256 = ""
-	set.EvalCases[0].FakeResponses["candidate"] = output
+	set.Cases[0].FakeResponses["candidate"] = output
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	require.ErrorContains(t, err, "has no prompt semantic hash binding")
 }
@@ -64,7 +65,7 @@ func TestLocalEvaluatorAuditsBaselineFallback(t *testing.T) {
 	baselineOutput.PromptSemanticSHA256 = HashText("baseline prompt")
 	delete(evalCase.FakeResponses, "candidate")
 	evalCase.FakeResponses["baseline"] = baselineOutput
-	set := &EvalSet{EvalSetID: "fallback", PassThreshold: testScore(1), EvalCases: []EvalCase{evalCase}}
+	set := &RegressionEvalSet{EvalSet: evalset.EvalSet{EvalSetID: "fallback"}, PassThreshold: testScore(1), Cases: []RegressionEvalCase{evalCase}}
 	prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	require.NoError(t, err)
@@ -81,10 +82,10 @@ func TestValidateEvaluationSummaryRejectsInvalidResponseProvenance(t *testing.T)
 		Weight:     1,
 	}}, "baseline")
 	require.NoError(t, err)
-	set := &EvalSet{
-		EvalSetID:     "provenance",
+	set := &RegressionEvalSet{
+		EvalSet:       evalset.EvalSet{EvalSetID: "provenance"},
 		PassThreshold: testScore(1),
-		EvalCases: []EvalCase{newFailureCase(
+		Cases: []RegressionEvalCase{newFailureCase(
 			"case", "answer", nil, Expectations{},
 			FakeOutput{Response: "answer", Usage: Usage{ModelCalls: 1}},
 		)},

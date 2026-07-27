@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
@@ -30,14 +31,23 @@ type OptimizeRequest struct {
 	Train          *EvaluationSummary
 }
 
-// Optimizer proposes a PromptIter profile without deciding whether it is safe to publish.
-type Optimizer interface {
-	Propose(ctx context.Context, request OptimizeRequest) (*Candidate, error)
+// PromptProposal contains optimizer-owned content. The Pipeline owns candidate
+// identity, provenance markers, target surfaces, Profile, and PatchSet so every
+// Optimizer implementation can satisfy the public contract without reproducing
+// a private wire protocol.
+type PromptProposal struct {
+	Prompt string
+	Reason string
 }
 
-// DeterministicPromptIter is an offline PromptIter adapter. It emits the same
-// Profile and PatchSet domain contracts as the production engine while using a
-// scripted proposal list so the full loop works without an API key.
+// Optimizer proposes prompt content without deciding whether it is safe to publish.
+type Optimizer interface {
+	Propose(ctx context.Context, request OptimizeRequest) (*PromptProposal, error)
+}
+
+// DeterministicPromptIter is an offline PromptIter adapter. It uses a scripted
+// proposal list so the full loop works without an API key. Pipeline converts
+// its PromptProposal into the canonical Profile and PatchSet contracts.
 type DeterministicPromptIter struct {
 	config Config
 }
@@ -54,7 +64,7 @@ func NewDeterministicPromptIter(config Config) (*DeterministicPromptIter, error)
 func (o *DeterministicPromptIter) Propose(
 	ctx context.Context,
 	request OptimizeRequest,
-) (*Candidate, error) {
+) (*PromptProposal, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -69,53 +79,25 @@ func (o *DeterministicPromptIter) Propose(
 	}
 	proposal := o.config.Candidates[request.Round-1]
 	matched := matchedFailureCategories(request.Train, proposal.AddressCategories)
-	prompt := buildCandidatePrompt(
+	prompt := buildProposedPrompt(
 		request.BaselinePrompt,
 		proposal,
 		matched,
-		o.config.Seed,
 	)
-	surfaceType := astructure.SurfaceType(o.config.Surface.Type)
-	surfaceID := astructure.SurfaceID(o.config.Surface.NodeID, surfaceType)
 	reason := proposal.Reason
 	if len(proposal.AddressCategories) > 0 {
 		reason = fmt.Sprintf("%s; matched failure categories: %v", reason, matched)
 	}
-	patch := promptiter.SurfacePatch{
-		SurfaceID: surfaceID,
-		Value: astructure.SurfaceValue{
-			Text: &prompt,
-		},
+	return &PromptProposal{
+		Prompt: prompt,
 		Reason: reason,
-	}
-	profile := &promptiter.Profile{
-		StructureID: o.config.Surface.StructureID,
-		Overrides: []promptiter.SurfaceOverride{
-			{
-				SurfaceID: surfaceID,
-				Value:     patch.Value,
-			},
-		},
-	}
-	return &Candidate{
-		ID:         proposal.ID,
-		Round:      request.Round,
-		Prompt:     prompt,
-		PromptHash: HashText(prompt),
-		SurfaceID:  surfaceID,
-		Reason:     reason,
-		PatchSet: &promptiter.PatchSet{
-			Patches: []promptiter.SurfacePatch{patch},
-		},
-		Profile: profile,
 	}, nil
 }
 
-func buildCandidatePrompt(
+func buildProposedPrompt(
 	baseline string,
 	proposal CandidateConfig,
 	matched []FailureCategory,
-	seed int64,
 ) string {
 	sections := []string{
 		strings.TrimSpace(baseline),
@@ -124,8 +106,67 @@ func buildCandidatePrompt(
 	if rules := failureDerivedRules(matched); rules != "" {
 		sections = append(sections, "PromptIter 根据训练失败归因生成的通用约束：\n"+rules)
 	}
-	sections = append(sections, fmt.Sprintf("%s%s;seed:%d]]", promptVariantMarkerPrefix, proposal.ID, seed))
 	return strings.Join(sections, "\n\n")
+}
+
+func (p *Pipeline) materializeCandidate(
+	proposal *PromptProposal,
+	round int,
+	baselinePrompt string,
+) (*Candidate, error) {
+	if proposal == nil {
+		return nil, errors.New("optimizer returned a nil proposal")
+	}
+	if round <= 0 || round > len(p.config.Candidates) {
+		return nil, fmt.Errorf("round %d is outside configured candidate range", round)
+	}
+	if strings.TrimSpace(proposal.Prompt) == "" {
+		return nil, errors.New("optimizer returned an empty prompt")
+	}
+	if strings.TrimSpace(proposal.Reason) == "" {
+		return nil, errors.New("optimizer returned an empty reason")
+	}
+	if !utf8.ValidString(proposal.Prompt) || !utf8.ValidString(proposal.Reason) {
+		return nil, errors.New("optimizer prompt and reason must be valid UTF-8")
+	}
+	trimmedBaseline := strings.TrimSpace(baselinePrompt)
+	trimmedProposal := strings.TrimSpace(proposal.Prompt)
+	if trimmedProposal != trimmedBaseline && !strings.HasPrefix(trimmedProposal, trimmedBaseline+"\n") {
+		return nil, errors.New("optimizer proposal does not preserve the baseline prompt")
+	}
+	if strings.Contains(proposal.Prompt, promptVariantMarkerPrefix) {
+		return nil, errors.New("optimizer proposal contains a reserved candidate marker")
+	}
+	candidateConfig := p.config.Candidates[round-1]
+	prompt := trimmedProposal + "\n\n" +
+		fmt.Sprintf("%s%s;seed:%d]]", promptVariantMarkerPrefix, candidateConfig.ID, p.config.Seed)
+	surfaceType := astructure.SurfaceType(p.config.Surface.Type)
+	surfaceID := astructure.SurfaceID(p.config.Surface.NodeID, surfaceType)
+	patch := promptiter.SurfacePatch{
+		SurfaceID: surfaceID,
+		Value: astructure.SurfaceValue{
+			Text: &prompt,
+		},
+		Reason: proposal.Reason,
+	}
+	return &Candidate{
+		ID:         candidateConfig.ID,
+		Round:      round,
+		Prompt:     prompt,
+		PromptHash: HashText(prompt),
+		SurfaceID:  surfaceID,
+		Reason:     proposal.Reason,
+		PatchSet: &promptiter.PatchSet{
+			Patches: []promptiter.SurfacePatch{patch},
+		},
+		Profile: &promptiter.Profile{
+			StructureID: p.config.Surface.StructureID,
+			Overrides: []promptiter.SurfaceOverride{{
+				SurfaceID: surfaceID,
+				Value:     patch.Value,
+			}},
+		},
+	}, nil
 }
 
 func failureDerivedRules(categories []FailureCategory) string {

@@ -178,13 +178,13 @@ type EvalSet struct {
 }
 ```
 
-赛题扩展的 [`EvalCase`](../../../evaluation/workflow/promptiter/regression/types.go) 保留标准 `evalset.Invocation` 形状，同时增加：
+回归流程没有复制或冒充标准模型，而是用 [`RegressionEvalSet` / `RegressionEvalCase`](../../../evaluation/workflow/promptiter/regression/types.go) 显式包装 `evalset.EvalSet` / `evalset.EvalCase`，并增加：
 
 - `Critical`：关键 case 标记；
 - `Expectations`：route、格式、必需知识和最少文档数；
 - `FakeResponses`：不同 Prompt 变体对应的确定性输出。
 
-这种设计不是另起炉灶，而是在标准 evalset 不能表达的离线场景信息上做加法。
+这个格式是一个有意受限的回归契约：每个 case 当前只允许一个 `Conversation` invocation。已有标准 evalset 可通过 `NewRegressionEvalSet` 加上按 `EvalID` 索引的 `RegressionCaseExtension` 转入，并可通过 `StandardEvalSet` 转回标准模型。这样标准字段仍由 `evaluation/evalset` 拥有，格式限制和扩展字段也不会被误认为通用 evalset 能力。
 
 #### Invocation
 
@@ -473,15 +473,16 @@ CLI 不包含评分或决策逻辑。这样核心包可以直接被测试、其�
 
 ```go
 type Evaluator interface {
-    Evaluate(ctx context.Context, set *EvalSet, variantID, prompt string) (*EvaluationSummary, error)
+    Evaluate(ctx context.Context, set *RegressionEvalSet, variantID, prompt string) (*EvaluationSummary, error)
+    RuntimeMode() RuntimeMode
 }
 
 type Optimizer interface {
-    Propose(ctx context.Context, request OptimizeRequest) (*Candidate, error)
+    Propose(ctx context.Context, request OptimizeRequest) (*PromptProposal, error)
 }
 ```
 
-Pipeline 只依赖“能评测”和“能提候选”这两种能力，不关心背后是 fake model、trace replay、真实 Evaluation Service，还是原生 PromptIter Engine。这叫依赖倒置或面向接口编程。
+Pipeline 只依赖“能评测”和“能提 prompt 内容”这两种能力，不关心背后是 fake model、trace replay、真实 Evaluation Service，还是原生 PromptIter Engine。`RuntimeMode` 是 Evaluator 的编译期契约，因此不会到运行时才发现 adapter 缺少模式声明。Optimizer 只返回 `PromptProposal`；候选 ID、seed marker、目标 surface、`Profile` 和 `PatchSet` 全部由 Pipeline 统一生成，外部 adapter 不需要复制私有协议。
 
 通俗地说，Pipeline 需要的是“阅卷员”和“教练”，而不是指定某个具体人的姓名。替换实现时，主流程不需要重写；测试还可以注入故意篡改数据的假实现，验证 Pipeline 能否发现问题。
 
@@ -869,7 +870,7 @@ Markdown 提供：
 
 下面以 `train_weather_tool_args` 为例，把文件、函数和报告串起来：
 
-1. [`LoadEvalSet`](../../../evaluation/workflow/promptiter/regression/load.go) 从 `train.evalset.json` 读出期望工具和三个 variant 输出。
+1. [`LoadRegressionEvalSet`](../../../evaluation/workflow/promptiter/regression/load.go) 从 `train.evalset.json` 读出期望工具和三个 variant 输出。
 2. `Pipeline.Run` 先请求 `variantID=baseline`。
 3. `LocalEvaluator.evaluateCase` 取出 `FakeResponses["baseline"]`。
 4. `toolTrajectoryScore` 比较期望与实际工具名、arguments、result。

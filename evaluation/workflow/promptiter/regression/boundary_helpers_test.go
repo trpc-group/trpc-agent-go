@@ -236,11 +236,13 @@ func TestValidateCandidateBoundaries(t *testing.T) {
 	pipeline := &Pipeline{config: config}
 	newCandidate := func(t *testing.T) *Candidate {
 		t.Helper()
-		candidate, err := optimizer.Propose(context.Background(), OptimizeRequest{
+		proposal, err := optimizer.Propose(context.Background(), OptimizeRequest{
 			Round:          1,
 			BaselinePrompt: "baseline prompt",
 			Train:          &EvaluationSummary{},
 		})
+		require.NoError(t, err)
+		candidate, err := pipeline.materializeCandidate(proposal, 1, "baseline prompt")
 		require.NoError(t, err)
 		return candidate
 	}
@@ -309,7 +311,7 @@ func TestConfigValidationBoundaries(t *testing.T) {
 		mutate func(*Config)
 		want   string
 	}{
-		{name: "schema", mutate: func(config *Config) { config.SchemaVersion = " " }, want: "schemaVersion"},
+		{name: "schema", mutate: func(config *Config) { config.SchemaVersion = "9.9" }, want: "unsupported"},
 		{name: "mode", mutate: func(config *Config) { config.Mode = "remote" }, want: "unsupported"},
 		{name: "rounds zero", mutate: func(config *Config) { config.MaxRounds = 0 }, want: "greater than 0"},
 		{name: "rounds exceed", mutate: func(config *Config) { config.MaxRounds = 3 }, want: "exceeds"},
@@ -431,11 +433,11 @@ func TestEvaluatorMetricBoundaries(t *testing.T) {
 	assert.ErrorContains(t, err, "unsupported local evaluator mode")
 	evaluator, err := NewLocalEvaluator([]MetricConfig{metric}, "")
 	require.NoError(t, err)
-	assert.Equal(t, "fake", evaluator.RuntimeMode())
+	assert.Equal(t, RuntimeModeFake, evaluator.RuntimeMode())
 	assert.Equal(t, "baseline", evaluator.fallbackVariant)
 	evaluator, err = NewLocalEvaluator([]MetricConfig{metric}, "baseline", "trace")
 	require.NoError(t, err)
-	assert.Equal(t, "trace", evaluator.RuntimeMode())
+	assert.Equal(t, RuntimeModeTrace, evaluator.RuntimeMode())
 
 	ctx := context.Background()
 	emptyExpected := &evalset.Invocation{}

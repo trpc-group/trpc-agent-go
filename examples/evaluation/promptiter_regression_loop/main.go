@@ -45,11 +45,11 @@ func run(ctx context.Context, dataDir, configPath, promptPath, outputDir string)
 	if err != nil {
 		return err
 	}
-	train, err := regression.LoadEvalSet(filepath.Join(dataDir, "train.evalset.json"))
+	train, err := regression.LoadRegressionEvalSet(filepath.Join(dataDir, "train.evalset.json"))
 	if err != nil {
 		return err
 	}
-	validation, err := regression.LoadEvalSet(filepath.Join(dataDir, "validation.evalset.json"))
+	validation, err := regression.LoadRegressionEvalSet(filepath.Join(dataDir, "validation.evalset.json"))
 	if err != nil {
 		return err
 	}

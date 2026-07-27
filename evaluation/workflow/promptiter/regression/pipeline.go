@@ -46,12 +46,8 @@ func NewPipeline(config Config, evaluator Evaluator, optimizer Optimizer, clock 
 	if optimizer == nil {
 		return nil, errors.New("optimizer is nil")
 	}
-	modeReporter, reportsMode := evaluator.(interface{ RuntimeMode() string })
-	if !reportsMode {
-		return nil, fmt.Errorf("%s mode requires an evaluator with explicit RuntimeMode capability", config.Mode)
-	}
-	if reportsMode && modeReporter.RuntimeMode() != config.Mode {
-		return nil, fmt.Errorf("evaluator runtime mode %q does not match config mode %q", modeReporter.RuntimeMode(), config.Mode)
+	if evaluator.RuntimeMode() != config.Mode {
+		return nil, fmt.Errorf("evaluator runtime mode %q does not match config mode %q", evaluator.RuntimeMode(), config.Mode)
 	}
 	if clock == nil {
 		clock = time.Now
@@ -70,8 +66,8 @@ func NewPipeline(config Config, evaluator Evaluator, optimizer Optimizer, clock 
 func (p *Pipeline) Run(
 	ctx context.Context,
 	baselinePrompt string,
-	train *EvalSet,
-	validation *EvalSet,
+	train *RegressionEvalSet,
+	validation *RegressionEvalSet,
 ) (*Report, error) {
 	if stringsTrimmedEmpty(baselinePrompt) {
 		return nil, errors.New("baseline prompt is empty")
@@ -100,11 +96,11 @@ func (p *Pipeline) Run(
 	if train.EvalSetID == validation.EvalSetID {
 		return nil, errors.New("train and validation eval set ids must differ")
 	}
-	trainCaseIDs := make(map[string]struct{}, len(train.EvalCases))
-	for _, evalCase := range train.EvalCases {
+	trainCaseIDs := make(map[string]struct{}, len(train.Cases))
+	for _, evalCase := range train.Cases {
 		trainCaseIDs[evalCase.EvalID] = struct{}{}
 	}
-	for _, evalCase := range validation.EvalCases {
+	for _, evalCase := range validation.Cases {
 		if _, ok := trainCaseIDs[evalCase.EvalID]; ok {
 			return nil, fmt.Errorf("case %q appears in both train and validation", evalCase.EvalID)
 		}
@@ -140,7 +136,7 @@ func (p *Pipeline) Run(
 	baselineSemanticHash := HashText(semanticPromptContent(baselinePrompt))
 	surfaceID := surfaceIDFromConfig(p.config.Surface)
 	report := &Report{
-		SchemaVersion: p.config.SchemaVersion,
+		SchemaVersion: ReportSchemaVersion,
 		RunID:         p.config.RunID,
 		Mode:          p.config.Mode,
 		Seed:          p.config.Seed,
@@ -174,13 +170,17 @@ func (p *Pipeline) Run(
 		if err != nil {
 			return nil, fmt.Errorf("clone baseline train for round %d optimizer: %w", round, err)
 		}
-		candidate, err := p.optimizer.Propose(ctx, OptimizeRequest{
+		proposal, err := p.optimizer.Propose(ctx, OptimizeRequest{
 			Round:          round,
 			BaselinePrompt: baselinePrompt,
 			Train:          optimizerTrain,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("propose round %d: %w", round, err)
+		}
+		candidate, err := p.materializeCandidate(proposal, round, baselinePrompt)
+		if err != nil {
+			return nil, fmt.Errorf("materialize round %d candidate: %w", round, err)
 		}
 		if err := p.validateCandidate(candidate, round, seenCandidateIDs); err != nil {
 			return nil, fmt.Errorf("validate round %d candidate: %w", round, err)
@@ -288,12 +288,12 @@ func (p *Pipeline) Run(
 	return report, nil
 }
 
-func (p *Pipeline) validateEvalSetVariants(set *EvalSet) error {
+func (p *Pipeline) validateEvalSetVariants(set *RegressionEvalSet) error {
 	allowed := map[string]struct{}{"baseline": {}}
 	for _, candidate := range p.config.Candidates {
 		allowed[candidate.ID] = struct{}{}
 	}
-	for _, evalCase := range set.EvalCases {
+	for _, evalCase := range set.Cases {
 		if _, ok := evalCase.FakeResponses["baseline"]; !ok {
 			return fmt.Errorf("case %q has no baseline fake response", evalCase.EvalID)
 		}
@@ -306,9 +306,9 @@ func (p *Pipeline) validateEvalSetVariants(set *EvalSet) error {
 	return nil
 }
 
-func (p *Pipeline) validateCriticalCases(validation *EvalSet) error {
-	available := make(map[string]struct{}, len(validation.EvalCases))
-	for _, evalCase := range validation.EvalCases {
+func (p *Pipeline) validateCriticalCases(validation *RegressionEvalSet) error {
+	available := make(map[string]struct{}, len(validation.Cases))
+	for _, evalCase := range validation.Cases {
 		available[evalCase.EvalID] = struct{}{}
 	}
 	for _, id := range p.config.Gate.CriticalCaseIDs {
@@ -321,7 +321,7 @@ func (p *Pipeline) validateCriticalCases(validation *EvalSet) error {
 
 func (p *Pipeline) evaluate(
 	ctx context.Context,
-	set *EvalSet,
+	set *RegressionEvalSet,
 	variantID string,
 	prompt string,
 ) (*EvaluationSummary, error) {
@@ -443,9 +443,9 @@ type evalSetCoverageSnapshot struct {
 	cases         map[string]bool
 }
 
-func snapshotEvalSetCoverage(set *EvalSet) evalSetCoverageSnapshot {
-	cases := make(map[string]bool, len(set.EvalCases))
-	for _, evalCase := range set.EvalCases {
+func snapshotEvalSetCoverage(set *RegressionEvalSet) evalSetCoverageSnapshot {
+	cases := make(map[string]bool, len(set.Cases))
+	for _, evalCase := range set.Cases {
 		cases[evalCase.EvalID] = evalCase.Critical
 	}
 	return evalSetCoverageSnapshot{
@@ -490,12 +490,12 @@ func validateSummaryCoverage(coverage evalSetCoverageSnapshot, summary *Evaluati
 	return nil
 }
 
-func cloneEvalSet(set *EvalSet) (*EvalSet, error) {
+func cloneEvalSet(set *RegressionEvalSet) (*RegressionEvalSet, error) {
 	data, err := json.Marshal(set)
 	if err != nil {
 		return nil, err
 	}
-	var cloned EvalSet
+	var cloned RegressionEvalSet
 	if err := json.Unmarshal(data, &cloned); err != nil {
 		return nil, err
 	}
