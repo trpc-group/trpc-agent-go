@@ -504,6 +504,26 @@ func TestExecTool_LiveEngineRejectsInvalidContextProviderEngine(t *testing.T) {
 	require.False(t, supportsInteractiveSessions(&noEngineExec{}))
 }
 
+func TestExecTool_CallUsesContextAwareProvider(t *testing.T) {
+	ctx := context.WithValue(context.Background(), "request", "context-aware")
+	eng := codeexecutor.NewEngine(&nonInteractiveMgr{}, &nonInteractiveFS{}, &nonInteractiveRunner{})
+	exec := &contextEngineExec{eng: eng}
+
+	result, err := NewExecTool(exec).Call(ctx, []byte(`{"command":"echo hello"}`))
+	require.NoError(t, err)
+	require.Equal(t, codeexecutor.ProgramStatusExited, result.(execOutput).Status)
+	require.Same(t, ctx, exec.ctx)
+}
+
+func TestExecTool_CallPropagatesContextProviderError(t *testing.T) {
+	want := errors.New("context engine failed")
+	_, err := NewExecTool(&contextEngineExec{err: want}).Call(
+		context.Background(),
+		[]byte(`{"command":"echo hello"}`),
+	)
+	require.ErrorIs(t, err, want)
+}
+
 func TestExecTool_Call_NotConfigured(t *testing.T) {
 	_, err := (&ExecTool{}).Call(context.Background(), []byte(`{"command":"echo hi"}`))
 	require.Error(t, err)
