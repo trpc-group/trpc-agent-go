@@ -40,6 +40,7 @@ func NewAnonymousA2AClient(agentURL string, opts ...client.Option) (*client.A2AC
 type anonymousA2AClientInitMiddleware struct {
 	gate     chan struct{}
 	jarMu    sync.Mutex
+	jar      http.CookieJar
 	waitHook func()
 }
 
@@ -75,8 +76,15 @@ func (h *anonymousA2AClientInitHandler) Handle(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !h.middleware.needsInitialization(httpClient, req) {
+	if httpClient == nil || req == nil {
 		return h.next.Handle(ctx, httpClient, req)
+	}
+	if !h.middleware.needsInitialization(req) {
+		requestClient, err := h.middleware.clientWithCookieJar(httpClient)
+		if err != nil {
+			return nil, err
+		}
+		return h.next.Handle(ctx, requestClient, req)
 	}
 
 	release, err := h.middleware.acquire(ctx)
@@ -85,38 +93,56 @@ func (h *anonymousA2AClientInitHandler) Handle(
 	}
 	defer release()
 
-	if err := h.middleware.ensureCookieJar(httpClient); err != nil {
+	if err := h.middleware.ensureCookieJar(); err != nil {
 		return nil, err
 	}
 	// The first request owns the gate until the HTTP client has processed its
 	// response and stored Set-Cookie in the jar. A waiter can then send through
 	// the same jar and continue under the principal established by the winner.
-	return h.next.Handle(ctx, httpClient, req)
+	requestClient, err := h.middleware.clientWithCookieJar(httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return h.next.Handle(ctx, requestClient, req)
 }
 
 func (m *anonymousA2AClientInitMiddleware) needsInitialization(
-	httpClient *http.Client,
 	req *http.Request,
 ) bool {
 	m.jarMu.Lock()
 	defer m.jarMu.Unlock()
-	return anonymousA2AClientNeedsInitialization(httpClient, req)
+	return anonymousA2AClientJarNeedsInitialization(m.jar, req)
 }
 
-func (m *anonymousA2AClientInitMiddleware) ensureCookieJar(
-	httpClient *http.Client,
-) error {
+func (m *anonymousA2AClientInitMiddleware) ensureCookieJar() error {
 	m.jarMu.Lock()
 	defer m.jarMu.Unlock()
-	if httpClient.Jar != nil {
+	if m.jar != nil {
 		return nil
 	}
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		return fmt.Errorf("anonymous A2A client: create cookie jar: %w", err)
 	}
-	httpClient.Jar = jar
+	m.jar = jar
 	return nil
+}
+
+func (m *anonymousA2AClientInitMiddleware) clientWithCookieJar(
+	httpClient *http.Client,
+) (*http.Client, error) {
+	if httpClient == nil {
+		return nil, nil
+	}
+	if err := m.ensureCookieJar(); err != nil {
+		return nil, err
+	}
+	m.jarMu.Lock()
+	jar := m.jar
+	m.jarMu.Unlock()
+	requestClient := *httpClient
+	requestClient.Jar = jar
+	return &requestClient, nil
 }
 
 func (m *anonymousA2AClientInitMiddleware) acquire(ctx context.Context) (func(), error) {
@@ -136,14 +162,14 @@ func (m *anonymousA2AClientInitMiddleware) acquire(ctx context.Context) (func(),
 	}
 }
 
-func anonymousA2AClientNeedsInitialization(httpClient *http.Client, req *http.Request) bool {
-	if httpClient == nil || req == nil || req.URL == nil {
+func anonymousA2AClientJarNeedsInitialization(jar http.CookieJar, req *http.Request) bool {
+	if req == nil || req.URL == nil {
 		return false
 	}
-	if httpClient.Jar == nil {
+	if jar == nil {
 		return true
 	}
-	for _, cookie := range httpClient.Jar.Cookies(req.URL) {
+	for _, cookie := range jar.Cookies(req.URL) {
 		if cookie != nil && cookie.Name == anonymousUserIDCookieName && isAnonymousUserIDCookieValue(cookie.Value) {
 			return false
 		}

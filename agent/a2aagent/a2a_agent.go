@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -862,9 +863,10 @@ func (j *anonymousCookieJar) Cookies(u *url.URL) []*http.Cookie {
 }
 
 type anonymousCookieURLScope struct {
-	scheme string
-	host   string
-	path   string
+	scheme   string
+	hostname string
+	port     int
+	path     string
 }
 
 func anonymousCookieURLScopeFromAgentURL(agentURL string) anonymousCookieURLScope {
@@ -874,18 +876,31 @@ func anonymousCookieURLScopeFromAgentURL(agentURL string) anonymousCookieURLScop
 		return anonymousCookieURLScope{}
 	}
 	return anonymousCookieURLScope{
-		scheme: parsed.Scheme,
-		host:   parsed.Host,
-		path:   parsed.Path,
+		scheme:   parsed.Scheme,
+		hostname: parsed.Hostname(),
+		port:     anonymousCookieURLPort(parsed),
+		path:     parsed.Path,
 	}
 }
 
 func (s anonymousCookieURLScope) matches(u *url.URL) bool {
-	if u == nil || s.scheme == "" || s.host == "" {
+	if u == nil || s.scheme == "" || s.hostname == "" {
 		return false
 	}
-	if !strings.EqualFold(u.Scheme, s.scheme) ||
-		!strings.EqualFold(u.Host, s.host) {
+	requestScheme := strings.ToLower(u.Scheme)
+	if requestScheme != s.scheme &&
+		!(s.scheme == "http" && requestScheme == "https") {
+		return false
+	}
+	if !strings.EqualFold(u.Hostname(), s.hostname) {
+		return false
+	}
+	requestPort := anonymousCookieURLPort(u)
+	if s.scheme == "http" && requestScheme == "https" && s.port == 80 {
+		if requestPort != 443 {
+			return false
+		}
+	} else if requestPort != s.port {
 		return false
 	}
 	basePath := s.path
@@ -894,6 +909,27 @@ func (s anonymousCookieURLScope) matches(u *url.URL) bool {
 	}
 	reqPath := canonicalAnonymousCookieURLPath(u)
 	return reqPath == basePath || strings.HasPrefix(reqPath, basePath+"/")
+}
+
+func anonymousCookieURLPort(u *url.URL) int {
+	if u == nil {
+		return 0
+	}
+	if port := u.Port(); port != "" {
+		parsedPort, err := strconv.Atoi(port)
+		if err == nil {
+			return parsedPort
+		}
+		return 0
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return 80
+	case "https":
+		return 443
+	default:
+		return 0
+	}
 }
 
 func canonicalAnonymousCookieURLPath(u *url.URL) string {

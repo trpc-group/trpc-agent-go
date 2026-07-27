@@ -207,8 +207,9 @@ func TestAnonymousA2AClientSerializesFirstRequests(t *testing.T) {
 	}, received)
 	parsedURL, err := url.Parse(srv.URL)
 	require.NoError(t, err)
-	require.NotNil(t, httpClient.Jar)
-	cookies := httpClient.Jar.Cookies(parsedURL)
+	require.Nil(t, httpClient.Jar)
+	require.NotNil(t, middleware.jar)
+	cookies := middleware.jar.Cookies(parsedURL)
 	require.Len(t, cookies, 1)
 	require.Equal(t, anonymousTestCookieValue(1), cookies[0].Value)
 }
@@ -358,6 +359,66 @@ func TestNewAnonymousA2AClientInstallsCookieJar(t *testing.T) {
 	received := append([]string(nil), receivedCookies...)
 	mu.Unlock()
 	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, received)
+}
+
+func TestAnonymousA2AClientsDoNotModifySharedHTTPClient(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cookieValue := anonymousTestCookieValue(1)
+		if cookie, err := r.Cookie(anonymousUserIDCookieName); err == nil {
+			cookieValue = cookie.Value
+		}
+		http.SetCookie(w, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: cookieValue,
+			Path:  "/",
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			JSONRPC string           `json:"jsonrpc"`
+			ID      any              `json:"id"`
+			Result  protocol.Message `json:"result"`
+		}{
+			JSONRPC: "2.0",
+			Result: protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "response",
+				Role:      protocol.MessageRoleAgent,
+				Parts:     []protocol.Part{protocol.NewTextPart("test response")},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	sharedClient := &http.Client{}
+	clients := make([]*client.A2AClient, 4)
+	for i := range clients {
+		var err error
+		clients[i], err = NewAnonymousA2AClient(
+			srv.URL,
+			client.WithHTTPClient(sharedClient),
+		)
+		require.NoError(t, err)
+	}
+
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]protocol.Part{protocol.NewTextPart("hello")},
+	)
+	errs := make(chan error, len(clients))
+	var wg sync.WaitGroup
+	for _, directClient := range clients {
+		wg.Add(1)
+		go func(directClient *client.A2AClient) {
+			defer wg.Done()
+			errs <- sendDirectClientMessage(directClient, message)
+		}(directClient)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Nil(t, sharedClient.Jar)
 }
 
 func sendDirectClientMessage(directClient *client.A2AClient, message protocol.Message) error {

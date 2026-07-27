@@ -2170,6 +2170,93 @@ func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
 
 	rootScope := anonymousCookieURLScopeFromAgentURL("https://example.com")
 	require.True(t, rootScope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/anything"}))
+
+	httpScope := anonymousCookieURLScopeFromAgentURL("http://example.com/a2a")
+	require.True(t, httpScope.matches(&url.URL{Scheme: "http", Host: "example.com:80", Path: "/a2a/message"}))
+	require.True(t, httpScope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/a2a/message"}))
+	require.True(t, httpScope.matches(&url.URL{Scheme: "https", Host: "example.com:443", Path: "/a2a/message"}))
+	require.False(t, httpScope.matches(&url.URL{Scheme: "https", Host: "example.com:8443", Path: "/a2a/message"}))
+	require.False(t, httpScope.matches(&url.URL{Scheme: "https", Host: "other.example.com", Path: "/a2a/message"}))
+
+	nonDefaultPortScope := anonymousCookieURLScopeFromAgentURL("http://example.com:8080/a2a")
+	require.True(t, nonDefaultPortScope.matches(&url.URL{Scheme: "http", Host: "example.com:8080", Path: "/a2a/message"}))
+	require.True(t, nonDefaultPortScope.matches(&url.URL{Scheme: "https", Host: "example.com:8080", Path: "/a2a/message"}))
+	require.False(t, nonDefaultPortScope.matches(&url.URL{Scheme: "https", Host: "example.com", Path: "/a2a/message"}))
+}
+
+type anonymousCookieRedirectTransport struct {
+	mu              sync.Mutex
+	receivedCookies []string
+}
+
+func (t *anonymousCookieRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Scheme == "http" {
+		return &http.Response{
+			StatusCode: http.StatusFound,
+			Header: http.Header{
+				"Location": []string{"https://example.com/a2a"},
+			},
+			Body:    io.NopCloser(strings.NewReader("")),
+			Request: req,
+		}, nil
+	}
+	if req.URL.Scheme != "https" {
+		return nil, fmt.Errorf("unexpected URL scheme %q", req.URL.Scheme)
+	}
+	cookieValue := ""
+	if cookie, err := req.Cookie(anonymousUserIDCookieName); err == nil {
+		cookieValue = cookie.Value
+	}
+	t.mu.Lock()
+	t.receivedCookies = append(t.receivedCookies, cookieValue)
+	t.mu.Unlock()
+	if cookieValue == "" {
+		cookieValue = anonymousTestCookieValue(1)
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header: http.Header{
+			"Set-Cookie": []string{
+				anonymousUserIDCookieName + "=" + cookieValue + "; Path=/",
+			},
+		},
+		Body:    io.NopCloser(strings.NewReader("ok")),
+		Request: req,
+	}, nil
+}
+
+func TestAnonymousCookieHTTPRedirectToHTTPSReusesPrincipal(t *testing.T) {
+	const agentURL = "http://example.com/a2a"
+
+	state := newAnonymousCookieState(
+		&session.Session{AppName: "app", ID: "session-a"},
+		nil,
+		nil,
+		anonymousCookieStateKey(agentURL),
+	)
+	transport := &anonymousCookieRedirectTransport{}
+	handler := &anonymousCookieHTTPReqHandler{
+		next:   &httpClientDoHandler{},
+		cookie: state,
+		scope:  anonymousCookieURLScopeFromAgentURL(agentURL),
+	}
+	httpClient := &http.Client{Transport: transport}
+
+	for i := 0; i < 2; i++ {
+		req, err := http.NewRequest(http.MethodGet, agentURL, nil)
+		require.NoError(t, err)
+		resp, err := handler.Handle(context.Background(), httpClient, req)
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+	}
+
+	transport.mu.Lock()
+	receivedCookies := append([]string(nil), transport.receivedCookies...)
+	transport.mu.Unlock()
+	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, receivedCookies)
+	cookieValue, ok := state.load()
+	require.True(t, ok)
+	require.Equal(t, anonymousTestCookieValue(1), cookieValue)
 }
 
 func TestA2AAgent_AnonymousInvocationsReuseConfiguredClient(
