@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -24,13 +25,14 @@ type metricResult struct {
 }
 
 type caseResult struct {
-	EvalSetID      string                                 `json:"evalSetId"`
-	EvalCaseID     string                                 `json:"evalCaseId"`
-	Status         status.EvalStatus                      `json:"status"`
-	Score          float64                                `json:"score"`
-	ExecutionError string                                 `json:"executionError,omitempty"`
-	Metrics        []metricResult                         `json:"metrics"`
-	RunDetails     []*evaluation.EvaluationCaseRunDetails `json:"runDetails,omitempty"`
+	EvalSetID      string                                      `json:"evalSetId"`
+	EvalCaseID     string                                      `json:"evalCaseId"`
+	Status         status.EvalStatus                           `json:"status"`
+	Score          float64                                     `json:"score"`
+	ExecutionError string                                      `json:"executionError,omitempty"`
+	Metrics        []metricResult                              `json:"metrics"`
+	MetricEvidence []*evalresult.EvalMetricResultPerInvocation `json:"metricEvidence,omitempty"`
+	RunDetails     []*evaluation.EvaluationCaseRunDetails      `json:"runDetails,omitempty"`
 }
 
 type evaluationSnapshot struct {

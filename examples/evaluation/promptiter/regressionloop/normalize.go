@@ -86,7 +86,12 @@ func normalizeCase(evalSetID string, input *evaluation.EvaluationCaseResult, exp
 		return caseResult{}, err
 	}
 	executionError := caseExecutionError(input)
-	detailedReasons, err := retainedMetricReasons(evalSetID, input.EvalCaseID, input.EvalCaseResults, expected)
+	detailedReasons, metricEvidence, err := retainedMetricEvidence(
+		evalSetID,
+		input.EvalCaseID,
+		input.EvalCaseResults,
+		expected,
+	)
 	if err != nil {
 		return caseResult{}, err
 	}
@@ -101,6 +106,7 @@ func normalizeCase(evalSetID string, input *evaluation.EvaluationCaseResult, exp
 		Status:         input.OverallStatus,
 		ExecutionError: executionError,
 		Metrics:        make([]metricResult, 0, len(expected.MetricNames)),
+		MetricEvidence: metricEvidence,
 		RunDetails:     input.RunDetails,
 	}
 	var scoreSum float64
@@ -154,35 +160,35 @@ func aggregateMetrics(metrics []*evalresult.EvalMetricResult, expected *catalog)
 	return result, nil
 }
 
-func retainedMetricReasons(
+func retainedMetricEvidence(
 	evalSetID string,
 	caseID string,
 	results []*evalresult.EvalCaseResult,
 	expected *catalog,
-) (map[string]string, error) {
+) (map[string]string, []*evalresult.EvalMetricResultPerInvocation, error) {
 	reasons := make(map[string]string)
 	if len(results) == 0 {
-		return reasons, nil
+		return reasons, nil, nil
 	}
 	retained := results[0]
 	if retained == nil {
-		return nil, errors.New("retained case result is null")
+		return nil, nil, errors.New("retained case result is null")
 	}
 	if retained.EvalSetID != "" && retained.EvalSetID != evalSetID {
-		return nil, fmt.Errorf("retained evaluation set ID %q does not match %q", retained.EvalSetID, evalSetID)
+		return nil, nil, fmt.Errorf("retained evaluation set ID %q does not match %q", retained.EvalSetID, evalSetID)
 	}
 	if retained.EvalID != "" && retained.EvalID != caseID {
-		return nil, fmt.Errorf("retained case ID %q does not match %q", retained.EvalID, caseID)
+		return nil, nil, fmt.Errorf("retained case ID %q does not match %q", retained.EvalID, caseID)
 	}
 	for i, metric := range retained.OverallEvalMetricResults {
 		if metric == nil {
-			return nil, fmt.Errorf("null retained metric at index %d", i)
+			return nil, nil, fmt.Errorf("null retained metric at index %d", i)
 		}
 		if !contains(expected.MetricNames, metric.MetricName) {
-			return nil, fmt.Errorf("unexpected retained metric %q", metric.MetricName)
+			return nil, nil, fmt.Errorf("unexpected retained metric %q", metric.MetricName)
 		}
 		if _, ok := reasons[metric.MetricName]; ok {
-			return nil, fmt.Errorf("duplicate retained metric %q", metric.MetricName)
+			return nil, nil, fmt.Errorf("duplicate retained metric %q", metric.MetricName)
 		}
 		if metric.Details == nil {
 			reasons[metric.MetricName] = ""
@@ -190,7 +196,7 @@ func retainedMetricReasons(
 		}
 		reasons[metric.MetricName] = metric.Details.Reason
 	}
-	return reasons, nil
+	return reasons, retained.EvalMetricResultPerInvocation, nil
 }
 
 func caseExecutionError(evalCase *evaluation.EvaluationCaseResult) string {

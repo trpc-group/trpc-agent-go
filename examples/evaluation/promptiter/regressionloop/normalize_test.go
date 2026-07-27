@@ -153,6 +153,28 @@ func TestNormalizeEvaluationPrefersRetainedReasonAndComputesScore(t *testing.T) 
 	assert.Equal(t, "format aggregate", got.Cases[0].Metrics[1].Reason)
 }
 
+func TestNormalizeEvaluationPreservesSparseInvocationEvidence(t *testing.T) {
+	result := evaluationWithMetrics("validation", "critical",
+		testMetric("quality", 0, status.EvalStatusFailed, "mismatch"))
+	evidence := []*evalresult.EvalMetricResultPerInvocation{
+		{ExpectedInvocation: nil, ActualInvocation: nil},
+		{EvalMetricResults: []*evalresult.EvalMetricResult{
+			testMetric("quality", 0, status.EvalStatusFailed, "mismatch"),
+		}},
+	}
+	result.EvalCases[0].EvalCaseResults = []*evalresult.EvalCaseResult{{
+		EvalSetID:                     "validation",
+		EvalID:                        "critical",
+		EvalMetricResultPerInvocation: evidence,
+	}}
+
+	got, err := normalizeEvaluation(result, validationCatalog("critical", "quality"))
+	require.NoError(t, err)
+	require.Len(t, got.Cases[0].MetricEvidence, 2)
+	assert.Same(t, evidence[0], got.Cases[0].MetricEvidence[0])
+	assert.Same(t, evidence[1], got.Cases[0].MetricEvidence[1])
+}
+
 func validationCatalog(caseID string, metricNames ...string) *catalog {
 	keys := make(map[resultKey]struct{}, len(metricNames))
 	for _, name := range metricNames {
