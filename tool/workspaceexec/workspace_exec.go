@@ -980,7 +980,17 @@ func (t *ExecTool) liveEngine(ctx context.Context) (codeexecutor.Engine, error) 
 		if err != nil {
 			return nil, err
 		}
-		if eng == nil || eng.Manager() == nil || eng.Runner() == nil {
+		if eng == nil {
+			return nil, errors.New(
+				"workspace_exec requires an executor with live workspace support",
+			)
+		}
+		if eng.Manager() == nil {
+			return nil, errors.New(
+				"workspace_exec requires an executor with live workspace support",
+			)
+		}
+		if eng.Runner() == nil {
 			return nil, errors.New(
 				"workspace_exec requires an executor with live workspace support",
 			)
