@@ -207,3 +207,25 @@ func TestMaskEventPreservesRuntimeFieldsAndMasksStateDelta(t *testing.T) {
 		t.Fatalf("StateDelta contains plaintext: %q", evt.StateDelta["credential"])
 	}
 }
+
+func TestMaskValueNestedJSONString(t *testing.T) {
+	s := New()
+	// Tool argument blobs are often JSON objects stored as strings.
+	outer := map[string]any{
+		"arguments": `{"reason":"password=\"Sup3rSecretValueNested\""}`,
+	}
+	masked, count, err := s.MaskValue(outer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count < 1 {
+		t.Fatal("expected nested assignment redaction")
+	}
+	encoded, _ := json.Marshal(masked)
+	if strings.Contains(string(encoded), "Sup3rSecretValueNested") {
+		t.Fatalf("plaintext survived nested JSON mask: %s", encoded)
+	}
+	if !strings.Contains(string(encoded), "[REDACTED]") {
+		t.Fatalf("expected redacted marker in %s", encoded)
+	}
+}

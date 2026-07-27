@@ -11,8 +11,10 @@ package reviewer
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/redact"
@@ -125,6 +127,23 @@ func (r *reviewRecorder) Snapshot(ctx context.Context, taskID string) (store.Rev
 func (r *reviewRecorder) mask(value string) string {
 	if r == nil || r.sanitizer == nil || value == "" {
 		return value
+	}
+	// Permission and tool argument previews are often JSON objects. Masking the
+	// raw serialized form leaves password="..." values JSON-escaped as
+	// password=\"...\", which the assignment rule cannot match. Walk decoded
+	// JSON string values first so each field is redacted in its natural form.
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+		var decoded any
+		if err := json.Unmarshal([]byte(value), &decoded); err == nil {
+			maskedValue, count, err := r.sanitizer.MaskValue(decoded)
+			if err == nil && count > 0 {
+				encoded, err := json.Marshal(maskedValue)
+				if err == nil {
+					return string(encoded)
+				}
+			}
+		}
 	}
 	masked, _ := r.sanitizer.MaskString(value)
 	return masked

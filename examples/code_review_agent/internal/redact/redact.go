@@ -398,6 +398,22 @@ func (s *Sanitizer) findMatches(input []byte) []match {
 func (s *Sanitizer) maskJSONValue(value any) (maskedValue any, redactionCount int) {
 	switch typed := value.(type) {
 	case string:
+		// Tool call arguments and similar fields are often JSON objects stored
+		// as strings. Decode one level so assignment rules see unescaped field
+		// values (password="...") instead of JSON-escaped password=\"...\".
+		trimmed := strings.TrimSpace(typed)
+		if len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[') {
+			var nested any
+			if err := json.Unmarshal([]byte(typed), &nested); err == nil {
+				nestedMasked, nestedCount := s.maskJSONValue(nested)
+				if nestedCount > 0 {
+					encoded, err := json.Marshal(nestedMasked)
+					if err == nil {
+						return string(encoded), nestedCount
+					}
+				}
+			}
+		}
 		result := s.DetectAndMask([]byte(typed))
 		return string(result.Masked), len(result.Signals)
 	case []any:
