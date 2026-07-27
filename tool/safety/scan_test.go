@@ -399,7 +399,7 @@ func TestDangerousRmFlagForms(t *testing.T) {
 // TestRmSegmentsRespectShellBoundaries covers the CodeRabbit follow-up:
 // the free-text rm tokeniser must stop at a command boundary so a system
 // path belonging to the *next* command is not folded into a scoped rm
-// and mis-flagged. The catastrophic in-code-block form stays denied.
+// and incorrectly flagged. The catastrophic in-code-block form stays denied.
 func TestRmSegmentsRespectShellBoundaries(t *testing.T) {
 	pol := testPolicy()
 
