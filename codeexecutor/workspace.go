@@ -12,6 +12,7 @@ package codeexecutor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -46,12 +47,96 @@ const (
 	AttrMountUsed = "mount_used"
 )
 
-// Workspace represents an isolated execution workspace.
-// Path is host path for local runtime or a logical mount path for
-// containers.
+// Workspace represents an isolated logical execution workspace.
 type Workspace struct {
-	ID   string
+	// ID identifies the logical workspace, typically for an execution,
+	// session, or invocation. It may remain unchanged when the backend
+	// replaces the physical execution environment, so it must not be used to
+	// detect whether a cached handle is stale. Instance-aware backends expose
+	// that separate identity through [WorkspaceInstanceProvider].
+	ID string
+	// Path is a host path for a local runtime or a logical mount path for
+	// containers. Like ID, a deterministic Path may be reused across physical
+	// execution-environment instances.
 	Path string
+}
+
+// ErrWorkspaceStale reports that a workspace handle belongs to a physical
+// execution-environment instance that is no longer current. Callers should
+// invalidate the exact [WorkspaceHandle] whenever an error matches this value.
+//
+// A standalone ErrWorkspaceStale remains safe to retry for compatibility.
+// Errors that also match [ErrWorkspaceRetryUnsafe] or
+// [ErrPartialOutputCommit] are invalidation-only signals and must not be
+// replayed. Callers performing automatic replay must use
+// [IsWorkspaceRetrySafe] rather than testing ErrWorkspaceStale alone.
+//
+// Backends must not return a standalone ErrWorkspaceStale for transport
+// timeouts, lost responses, ordinary file-system errors, or non-zero program
+// exit codes when side effects may be unknown. Such failures must remain
+// ordinary errors or join ErrWorkspaceRetryUnsafe.
+var ErrWorkspaceStale = errors.New("codeexecutor: workspace is stale")
+
+// ErrWorkspaceRetryUnsafe marks a stale operation that may have produced side
+// effects and therefore must not be replayed automatically. The enclosing error
+// should also match [ErrWorkspaceStale] so callers can invalidate its handle.
+var ErrWorkspaceRetryUnsafe = errors.New(
+	"codeexecutor: workspace operation is unsafe to retry",
+)
+
+// IsWorkspaceRetrySafe reports whether err authorizes automatic workspace
+// replay. A stale partial output commit is always unsafe because outputs or
+// artifacts may already have been persisted.
+func IsWorkspaceRetrySafe(err error) bool {
+	return errors.Is(err, ErrWorkspaceStale) &&
+		!errors.Is(err, ErrWorkspaceRetryUnsafe) &&
+		!errors.Is(err, ErrPartialOutputCommit)
+}
+
+// WorkspaceInstanceID identifies the physical execution-environment instance
+// to which a cached [Workspace] handle belongs.
+//
+// The value is opaque to the framework and must be non-empty. It must remain
+// stable while cached workspaces can be reused, and must change whenever the
+// backend recreates the environment such that cached handles need to be
+// recreated. Unlike [Workspace.ID], it identifies that physical instance
+// rather than the logical workspace. It is not a workspace-content, file, or
+// metadata version.
+type WorkspaceInstanceID string
+
+// WorkspaceHandle binds a logical [Workspace] to the backend instance that
+// created it and to one exact [WorkspaceRegistry] cache entry.
+//
+// InstanceID is empty for legacy managers that do not implement
+// [WorkspaceInstanceProvider]. The registry-owned identity is intentionally
+// private: callers can copy a handle and pass it back to
+// [WorkspaceRegistry.Invalidate], but cannot forge or reuse its cache token.
+type WorkspaceHandle struct {
+	Workspace  Workspace
+	InstanceID WorkspaceInstanceID
+
+	registry   *WorkspaceRegistry
+	registryID string
+	entryToken uint64
+}
+
+// WorkspaceInstanceProvider is an optional [WorkspaceManager] capability for
+// backends whose physical execution environment can be replaced while logical
+// workspace IDs remain stable.
+//
+// InstanceID must return the current opaque, non-empty instance ID. The ID must
+// change on every physical environment replacement; an ID must never be reused
+// within a process, even if a platform-level identifier is reused.
+//
+// The lookup may make the backend ready (for example, by lazily reconnecting),
+// but must not modify workspace contents. Implementations must follow the
+// stability and change rules documented on [WorkspaceInstanceID].
+//
+// A wrapper around a WorkspaceManager must forward this capability when the
+// wrapped manager implements it. A wrapper whose manager does not implement it
+// must not synthesize an empty ID or otherwise advertise the capability.
+type WorkspaceInstanceProvider interface {
+	InstanceID(ctx context.Context) (WorkspaceInstanceID, error)
 }
 
 // WorkspacePolicy configures workspace behavior.

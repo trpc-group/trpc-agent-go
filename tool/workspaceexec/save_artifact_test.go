@@ -299,6 +299,51 @@ func TestSaveArtifactTool_ManifestFailures(t *testing.T) {
 	})
 }
 
+func TestSaveArtifactTool_PartialStaleInvalidatesWorkspace(
+	t *testing.T,
+) {
+	manager := &countingSaveManager{}
+	fs := stubOutputFS{
+		manifest: codeexecutor.OutputManifest{
+			Files: []codeexecutor.FileRef{{
+				Name:      "out/site.zip",
+				SavedAs:   "out/site.zip",
+				Version:   2,
+				SizeBytes: 10,
+			}},
+		},
+		err: errors.Join(
+			codeexecutor.ErrPartialOutputCommit,
+			codeexecutor.ErrWorkspaceStale,
+		),
+	}
+	execTool := NewExecTool(&stubEngineExec{
+		eng: codeexecutor.NewEngine(
+			manager,
+			fs,
+			&nonInteractiveRunner{},
+		),
+	})
+	tl := NewSaveArtifactTool(execTool)
+	ctx := saveArtifactContext()
+	enc, err := json.Marshal(saveArtifactInput{Path: "out/site.zip"})
+	require.NoError(t, err)
+
+	res, err := tl.Call(ctx, enc)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		"artifact://out/site.zip@2",
+		res.(saveArtifactOutput).Ref,
+	)
+	require.Equal(t, 1, manager.creates)
+
+	_, err = tl.Call(ctx, enc)
+	require.NoError(t, err)
+	require.Equal(t, 2, manager.creates,
+		"the next call must rebuild the invalidated workspace once")
+}
+
 func TestSaveArtifactTool_StateDeltaFallbacks(t *testing.T) {
 	tl := NewSaveArtifactTool(NewExecTool(localexec.New()))
 
@@ -417,6 +462,29 @@ func (s *stubEngineExec) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 }
 
 func (s *stubEngineExec) Engine() codeexecutor.Engine { return s.eng }
+
+type countingSaveManager struct {
+	creates int
+}
+
+func (m *countingSaveManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates++
+	return codeexecutor.Workspace{
+		ID:   id,
+		Path: "/tmp/" + id,
+	}, nil
+}
+
+func (*countingSaveManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
+}
 
 type stubOutputFS struct {
 	manifest codeexecutor.OutputManifest

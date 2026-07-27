@@ -1588,9 +1588,22 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     // Prompt is the judge template text.
 	ResponseScorerName       string                     // ResponseScorerName is the response scorer name.
+	StructuredOutputName     string                     // StructuredOutputName is the structured output provider name.
+	ResponseScorerOptions    *ResponseScorerOptions     // ResponseScorerOptions configures response scoring.
 	VariableBindings         []*TemplateVariableBinding // VariableBindings is the variable binding list.
 	SampleAggregatorName     string                     // SampleAggregatorName is the sample aggregator name.
 	InvocationAggregatorName string                     // InvocationAggregatorName is the invocation aggregator name.
+}
+
+// ResponseScorerOptions represents response scorer-specific options.
+type ResponseScorerOptions struct {
+	Categories []*CategoryScore // Categories maps categorical labels to numeric scores.
+}
+
+// CategoryScore maps one categorical label to a numeric score.
+type CategoryScore struct {
+	Label string  // Label is the category label.
+	Score float64 // Score is the numeric score between 0 and 1.
 }
 
 // TemplateVariableBinding represents one template variable binding.
@@ -1604,6 +1617,7 @@ type TemplateVariableSource struct {
 	Scope    TemplateVariableScope     // Scope is the source scope.
 	Field    TemplateVariableField     // Field is the source field.
 	Selector *TemplateVariableSelector // Selector is the trace step selector.
+	Path     string                    // Path is an optional JSONPath for extracting a subfield from the source value.
 }
 
 // TemplateVariableSelector represents a template variable selector.
@@ -1617,6 +1631,7 @@ type TemplateVariableScope string
 const (
 	TemplateVariableScopeActual   TemplateVariableScope = "actual"
 	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+	TemplateVariableScopeMetric   TemplateVariableScope = "metric"
 )
 
 // TemplateVariableField represents the template variable source field.
@@ -1627,6 +1642,7 @@ const (
 	TemplateVariableFieldFinalResponse   TemplateVariableField = "finalResponse"
 	TemplateVariableFieldTraceStepInput  TemplateVariableField = "traceStepInput"
 	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
+	TemplateVariableFieldRubrics         TemplateVariableField = "rubrics"
 )
 
 // Rubric represents one evaluation rubric.
@@ -1707,24 +1723,59 @@ When `sampleParallelismEnabled=true` and `sampleParallelism=2`, the parallelism 
 
 The target metric uses `criterion.llmJudge` to carry the rubric list. Built-in rubric evaluators read the merged criteria and use structured output by default to make the judge return per-rubric scores through `rubricScores`. During `Evaluate`, after metric-level rubrics and `EvalCase.rubrics` are merged and before the judge model is called, each merged rubric used by structured output must have a non-empty and unique `id`. If validation fails, evaluation returns an error such as `llm judge rubric id is required for structured output` or `duplicate llm judge rubric id "accuracy"`. To debug ID conflicts, inspect the merged `criterion.llmJudge.rubrics` from the metric configuration and case-level rubrics. Custom rubric evaluators can read the same field.
 
-`template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not read `rubrics`; evaluation criteria should be written directly into `template.prompt`.
+`template` is used only by `llm_judge_template`. It keeps template-based evaluation focused on cases where the prompt changes while the evaluation orchestration stays the same. Template evaluators do not evaluate structured `rubrics` like the `llm_rubric_*` family by default; write the evaluation criteria directly into `template.prompt`, or explicitly bind `metric.rubrics` when the prompt needs the current metric rubrics.
 
 `template.prompt` uses double-brace template syntax such as `{{question}}` and `{{answer}}`. Every placeholder must be explicitly bound in `variableBindings`. Unbound variables, unknown variables, or binding resolution failures all result in errors.
 
-`template.variableBindings` supports values from `actual` and `expected` in the current scoring turn:
+`template.variableBindings` supports values from `actual`, `expected`, and the current metric configuration:
 
 - `actual.userContent`
 - `actual.finalResponse`
 - `actual.traceStepInput`
 - `actual.traceStepOutput`
 - `expected.finalResponse`
+- `metric.rubrics`
 
-`actual.userContent`, `actual.finalResponse`, and `expected.finalResponse` render the current scoring turn's user input, actual final response, and expected final response respectively. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID` to specify the trace step `NodeID`; the resolver selects the last matching step from the current invocation's `executionTrace.steps` and reads `Input.Text` or `Output.Text`. When using a trace source, the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`. If the current actual invocation has no `ExecutionTrace`, evaluation fails. `expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly.
+`actual.userContent`, `actual.finalResponse`, and `expected.finalResponse` render the current scoring turn's user input, actual final response, and expected final response respectively. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID` to specify the trace step `NodeID`; the resolver selects the last matching step from the current invocation's `executionTrace.steps` and reads `Input.Text` or `Output.Text`. When using a trace source, the evaluation call must pass `agent.WithExecutionTraceEnabled(true)`. If the current actual invocation has no `ExecutionTrace`, evaluation fails. `expected.finalResponse` requires the current expected turn to contain `finalResponse`. If the template binds that field but the expected turn has only placeholder `userContent` and no `finalResponse`, evaluation fails directly. `metric.rubrics` renders the effective `criterion.llmJudge.rubrics` for the current metric as a JSON string, including case-level rubrics after merging.
+
+`source.path` is optional. It extracts a JSON subfield after the source value is resolved. It supports a restricted JSONPath subset: root selector `$`, object fields such as `.field`, and array indexes such as `[index]`, for example `$[0].content.text`. Quoted bracket keys, wildcards, filters, field names containing dots, and missing delimiters after array indexes are not supported. If the resolved source is not valid JSON, or if the path is invalid, missing, out of range, or reaches the wrong type, evaluation fails. Extracted strings are rendered as-is; extracted objects or arrays are encoded back to JSON strings.
+
+For example, a template can bind the first rubric text from the current metric:
+
+```json
+{
+  "templateVariable": "first_rubric",
+  "source": {
+    "scope": "metric",
+    "field": "rubrics",
+    "path": "$[0].content.text"
+  }
+}
+```
+
+If the agent final response is itself a valid JSON string, `path` can extract fields from it. For example, when `actual.finalResponse.content` is `{"answer":"Paris","confidence":0.98}`:
+
+```json
+{
+  "templateVariable": "answer",
+  "source": {
+    "scope": "actual",
+    "field": "finalResponse",
+    "path": "$.answer"
+  }
+}
+```
+
+Plain natural-language text, Markdown fenced JSON, or content with extra prefixes or suffixes is not trimmed or repaired automatically.
 
 `template.responseScorerName` specifies how judge output is parsed. The current supported values are:
 
 - `single_score`: the judge returns `{"score": number, "reason": string}`.
 - `rubric_scores`: the judge returns `{"rubricScores": [{"id": string, "score": number, "reason": string}]}`.
+- `boolean`: the judge returns `{"passed": boolean, "reason": string}`. `passed=true` maps to score `1`, and `passed=false` maps to score `0`.
+- `categorical`: the judge returns `{"category": string, "reason": string}`. Configure `template.responseScorerOptions.categories` to map each allowed label to a numeric score between `0` and `1`.
+
+`template.structuredOutputName` is optional. When omitted, the template evaluator uses the structured output provider with the same name as `responseScorerName` if one is registered. Set it when the judge JSON schema and response scorer should be named independently, for example when a platform scorer parses a platform-owned schema.
 
 `template.sampleAggregatorName` and `template.invocationAggregatorName` are optional. They default to `majority_vote` and `average`. Template evaluation reuses the standard LLM Judge sampling and multi-turn aggregation flow.
 
@@ -2472,15 +2523,15 @@ Example metric configuration for LLM pairwise comparison:
 
 ##### LLM Template Evaluator
 
-The LLM template evaluator uses the evaluator name `llm_judge_template` and belongs to the LLM Judge evaluator family. It is suitable for scenarios where the evaluation orchestration stays the same, but you want to reduce the number of evaluator definitions by customizing the judge prompt, variable bindings, and response parsing strategy. Unlike the `llm_rubric_*` family, template evaluators do not consume structured `rubrics`; evaluation criteria should be written directly into `criterion.llmJudge.template.prompt`.
+The LLM template evaluator uses the evaluator name `llm_judge_template` and belongs to the LLM Judge evaluator family. It is suitable for scenarios where the evaluation orchestration stays the same, but you want to reduce the number of evaluator definitions by customizing the judge prompt, variable bindings, and response parsing strategy. Unlike the `llm_rubric_*` family, template evaluators do not evaluate structured `rubrics` by default; evaluation criteria usually belong in `criterion.llmJudge.template.prompt`, and prompts can explicitly bind `metric.rubrics` when they need the current metric rubrics.
 
-Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score` and another using `rubric_scores`, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
+Template evaluators are typically configured with `evaluatorName: "llm_judge_template"`, while `metricName` remains the metric instance name. This allows one metric file to define multiple template metrics, such as one using `single_score`, another using `rubric_scores`, and another using a platform-registered scorer, while reusing the same evaluator implementation and keeping distinct `metricName` values in results.
 
 The template evaluator runs as follows:
 
 1. `messagesconstructor/template` renders the unique judge input for the current turn from `template.prompt` and `template.variableBindings`.
-2. The judge model returns JSON that matches the structured output schema for `responseScorerName`.
-3. `responsescorer/singlescore` or `responsescorer/rubricscores` parses the judge output.
+2. The judge model returns JSON that matches the structured output schema for `structuredOutputName`, or `responseScorerName` when `structuredOutputName` is omitted.
+3. The response scorer selected by `responseScorerName` parses the judge output.
 4. Sample aggregation defaults to `majority_vote`, and multi-turn aggregation defaults to `average`. You can override them through `template.sampleAggregatorName` and `template.invocationAggregatorName`.
 
 Variable bindings support the following sources:
@@ -2490,13 +2541,71 @@ Variable bindings support the following sources:
 - `actual.traceStepInput`
 - `actual.traceStepOutput`
 - `expected.finalResponse`
+- `metric.rubrics`
 
-Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly.
+Every placeholder in the template must be explicitly bound in `variableBindings`. `actual.traceStepInput` and `actual.traceStepOutput` require `source.selector.nodeID`; the resolver selects the last step whose `NodeID` matches in the current invocation execution trace. When using a trace source, the evaluation caller must enable `agent.WithExecutionTraceEnabled(true)`. Binding `expected.finalResponse` requires the current expected turn to contain `finalResponse`; if the template uses that field but the expected turn does not contain a final response, evaluation fails directly. `metric.rubrics` renders the effective `criterion.llmJudge.rubrics` for the current metric as a JSON string, including case-level rubrics after merging.
 
-The template evaluator currently supports two response parsing modes:
+`source.path` can extract a JSON subfield from the resolved source value. It supports restricted JSONPath forms such as `$`, `.field`, and `[index]`; quoted bracket keys, wildcards, filters, field names containing dots, and missing delimiters after array indexes are not supported. If the source is not valid JSON or path traversal fails, evaluation fails. For example:
+
+```json
+{
+  "templateVariable": "first_rubric",
+  "source": {
+    "scope": "metric",
+    "field": "rubrics",
+    "path": "$[0].content.text"
+  }
+}
+```
+
+If the agent final response is itself a valid JSON string, `path` can extract fields from it. For example, when `actual.finalResponse.content` is `{"answer":"Paris","confidence":0.98}`:
+
+```json
+{
+  "templateVariable": "answer",
+  "source": {
+    "scope": "actual",
+    "field": "finalResponse",
+    "path": "$.answer"
+  }
+}
+```
+
+The template evaluator currently provides four built-in response parsing modes:
 
 - `single_score`: the judge returns `score` and `reason`
 - `rubric_scores`: the judge returns `rubricScores`
+- `boolean`: the judge returns `passed` and `reason`
+- `categorical`: the judge returns `category` and `reason`; configure `responseScorerOptions.categories` to map labels to numeric scores
+
+Platforms can register custom template operators and inject them when creating the evaluator. A custom structured output provider is optional; register it when the judge model should be constrained to a platform-owned JSON schema.
+
+```go
+opRegistry := operatorregistry.New()
+_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
+_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+
+evalRegistry := evaluatorregistry.New(
+	evaluatorregistry.WithLLMOperatorRegistry(opRegistry),
+)
+
+agentEvaluator, err := evaluation.New(
+	"app",
+	runner,
+	evaluation.WithRegistry(evalRegistry),
+)
+```
+
+The metric references the registered names:
+
+```json
+{
+  "template": {
+    "responseScorerName": "platform_score",
+    "structuredOutputName": "platform_schema"
+  }
+}
+```
 
 Example template metric configuration:
 

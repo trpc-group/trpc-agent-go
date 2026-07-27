@@ -98,9 +98,10 @@ func WithUpdateMetadata(m *Metadata) UpdateOption {
 	return func(o *updateOptions) { o.metadata = m }
 }
 
-// UpdateResult captures the effective memory ID after an update.
-// When memory identity changes due to updated content or metadata,
-// MemoryID contains the rotated canonical key.
+// UpdateResult captures the effective memory ID after a successful update.
+// When memory identity changes due to updated content or metadata, MemoryID
+// contains the rotated canonical key. UpdateMemory leaves the result unchanged
+// when it returns an error.
 type UpdateResult struct {
 	MemoryID string
 }
@@ -176,13 +177,17 @@ type Service interface {
 	Reader
 
 	// AddMemory adds or updates a memory for a user (idempotent).
+	// Backends that support soft deletion reactivate a matching tombstone.
 	// Options may include WithMetadata for episodic metadata.
 	AddMemory(ctx context.Context, userKey UserKey, memory string,
 		topics []string, opts ...AddOption) error
 
-	// UpdateMemory updates an existing memory for a user.
-	// Options may include WithUpdateMetadata for episodic
-	// metadata.
+	// UpdateMemory updates an existing active memory for a user.
+	// A soft-deleted source is treated as not found. Options may include
+	// WithUpdateMetadata for episodic metadata. When the canonical ID changes,
+	// a missing or soft-deleted target becomes active. If the target is already
+	// active, UpdateMemory returns an error without modifying either memory.
+	// In soft-delete mode, a successful rotation retains the source tombstone.
 	UpdateMemory(ctx context.Context, memoryKey Key, memory string,
 		topics []string, opts ...UpdateOption) error
 
