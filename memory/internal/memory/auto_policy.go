@@ -27,7 +27,6 @@ const (
 	assistantResultPolicyName = "assistant-result-preserving"
 	resultOldCoverage         = 0.95
 	resultNewCoverage         = 0.70
-	resultSubsetScore         = 0.90
 
 	changeMarkerEnglishPattern = `\b(?:now|currently|no longer|instead|` +
 		`chang(?:e|ed)|used to|decid(?:e|ed)|booked|` +
@@ -49,7 +48,6 @@ var (
 		`(?i)(?:\bnot\b|\bno\b|\bnever\b|\bwithout\b|n't|不再|不是|没有|从未|未|无)`,
 	)
 	capitalizedTokenPattern = regexp.MustCompile(`\b[A-Z][A-Za-z0-9_-]*\b`)
-	listOrdinalPattern      = regexp.MustCompile(`\b\d{1,2}[.)]\s*`)
 )
 
 type assistantResultCandidate struct {
@@ -282,18 +280,11 @@ func classifyAssistantResultCandidate(
 	oldCoverage, newCoverage := directionalTokenCoverage(
 		entry.Memory.Memory, op.Memory,
 	)
-	if assistantResultCoveredByExisting(op, entry, newCoverage) {
-		return &assistantResultCandidate{
-			entry:       entry,
-			duplicate:   true,
-			oldCoverage: oldCoverage,
-			newCoverage: newCoverage,
-		}
-	}
 	if oldCoverage < resultOldCoverage || newCoverage < resultNewCoverage {
 		return nil
 	}
 	if !materialTokensPreserved(entry.Memory.Memory, op.Memory) ||
+		!memoryTokenOrderPreserved(entry.Memory.Memory, op.Memory) ||
 		!criticalValuesPreserved(entry.Memory.Memory, op.Memory) ||
 		negationSignature(entry.Memory.Memory) != negationSignature(op.Memory) {
 		return nil
@@ -307,42 +298,6 @@ func classifyAssistantResultCandidate(
 		oldCoverage: oldCoverage,
 		newCoverage: newCoverage,
 	}
-}
-
-func assistantResultCoveredByExisting(
-	op *extractor.Operation,
-	entry *memory.Entry,
-	newCoverage float64,
-) bool {
-	if op == nil || !validMemoryEntry(entry) ||
-		entry.Score < resultSubsetScore ||
-		newCoverage < resultNewCoverage {
-		return false
-	}
-	stored := entry.Memory.Memory
-	fresh := op.Memory
-	if negationSignature(stored) != negationSignature(fresh) ||
-		!criticalValuesPreserved(
-			listOrdinalPattern.ReplaceAllString(fresh, ""),
-			stored,
-		) ||
-		!capitalizedTokensPreserved(fresh, stored) {
-		return false
-	}
-	return !changeMarkerPattern.MatchString(fresh) ||
-		changeMarkerPattern.MatchString(stored)
-}
-
-func capitalizedTokensPreserved(oldText, newText string) bool {
-	newTokens := stringSet(capitalizedTokenPattern.FindAllString(newText, -1))
-	for token := range stringSet(
-		capitalizedTokenPattern.FindAllString(oldText, -1),
-	) {
-		if _, ok := newTokens[token]; !ok {
-			return false
-		}
-	}
-	return true
 }
 
 func selectExactDuplicate(
@@ -397,6 +352,54 @@ func materialTokensPreserved(oldText, newText string) bool {
 		}
 	}
 	return true
+}
+
+func memoryTokenOrderPreserved(oldText, newText string) bool {
+	oldTokens := orderedMemoryTokens(oldText)
+	newTokens := orderedMemoryTokens(newText)
+	if len(oldTokens) == 0 || len(newTokens) == 0 {
+		return false
+	}
+	next := 0
+	for _, token := range newTokens {
+		if token != oldTokens[next] {
+			continue
+		}
+		next++
+		if next == len(oldTokens) {
+			return true
+		}
+	}
+	return false
+}
+
+func orderedMemoryTokens(text string) []string {
+	var tokens []string
+	var word strings.Builder
+	flushWord := func() {
+		if word.Len() == 0 {
+			return
+		}
+		token := strings.ToLower(word.String())
+		word.Reset()
+		if token == "user" || token == "assistant" {
+			return
+		}
+		tokens = append(tokens, token)
+	}
+	for _, r := range text {
+		switch {
+		case isCJK(r):
+			flushWord()
+			tokens = append(tokens, string(r))
+		case unicode.IsLetter(r) || unicode.IsNumber(r):
+			word.WriteRune(unicode.ToLower(r))
+		default:
+			flushWord()
+		}
+	}
+	flushWord()
+	return tokens
 }
 
 func exactMemoryDuplicate(op *extractor.Operation, stored *memory.Memory) bool {

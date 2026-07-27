@@ -1004,7 +1004,8 @@ func reconcileAddPreservesStoredMemory(
 		reconcileRetainedTokenCoverage {
 		return false
 	}
-	if !criticalValuesPreserved(stored.Memory, op.Memory) ||
+	if !memoryTokenOrderPreserved(stored.Memory, op.Memory) ||
+		!criticalValuesPreserved(stored.Memory, op.Memory) ||
 		negationSignature(stored.Memory) != negationSignature(op.Memory) {
 		return false
 	}

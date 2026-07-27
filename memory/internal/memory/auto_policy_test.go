@@ -159,7 +159,7 @@ func TestAssistantResultPolicy_StrictEnrichmentUpdates(t *testing.T) {
 	assert.Contains(t, out[0].Topics, "time")
 }
 
-func TestAssistantResultPolicy_DropsCoveredSubset(t *testing.T) {
+func TestAssistantResultPolicy_KeepsCoveredSubset(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "existing-result",
 		Memory: &memory.Memory{
@@ -180,44 +180,24 @@ func TestAssistantResultPolicy_DropsCoveredSubset(t *testing.T) {
 	out := worker.applyAssistantResultPolicy(
 		context.Background(), reconcileUserKey(), in, existing,
 	)
-	assert.Empty(t, out)
-}
-
-func TestAssistantResultPolicy_KeepsSubsetWithChangedValue(t *testing.T) {
-	existing := []*memory.Entry{{
-		ID: "existing-result",
-		Memory: &memory.Memory{
-			Memory: "Assistant result: Recommended Plan Atlas with a $100 budget.",
-			Kind:   memory.KindFact,
-		},
-		Score: 0.97,
-	}}
-	in := []*extractor.Operation{{
-		Type:       extractor.OperationAdd,
-		Memory:     "Assistant result: Recommended Plan Atlas with a $200 budget.",
-		MemoryKind: memory.KindFact,
-	}}
-	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-
-	out := worker.applyAssistantResultPolicy(
-		context.Background(), reconcileUserKey(), in, existing,
-	)
 	require.Len(t, out, 1)
 	assert.Equal(t, extractor.OperationAdd, out[0].Type)
 }
 
-func TestAssistantResultPolicy_KeepsSubsetWithChangedEntity(t *testing.T) {
+func TestAssistantResultPolicy_KeepsChangedRelationships(t *testing.T) {
 	existing := []*memory.Entry{{
 		ID: "existing-result",
 		Memory: &memory.Memory{
-			Memory: "Assistant result: Recommended Atlas and Birch.",
-			Kind:   memory.KindFact,
+			Memory: "Assistant result: Recommended steel for strength " +
+				"and wood for cost.",
+			Kind: memory.KindFact,
 		},
 		Score: 0.97,
 	}}
 	in := []*extractor.Operation{{
-		Type:       extractor.OperationAdd,
-		Memory:     "Assistant result: Recommended Atlas and Cedar.",
+		Type: extractor.OperationAdd,
+		Memory: "Assistant result: Recommended steel for cost " +
+			"and wood for strength.",
 		MemoryKind: memory.KindFact,
 	}}
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())

@@ -2301,6 +2301,29 @@ func TestReconcileOps_KeepsCommittedStateAfterTentativeState(t *testing.T) {
 	assert.Empty(t, out[0].MemoryID)
 }
 
+func TestReconcileOps_KeepsChangedRelationships(t *testing.T) {
+	op := newMockOperator()
+	op.searchResults = []*memory.Entry{{
+		ID:      "material-choice",
+		AppName: "app", UserID: "u1",
+		Memory: &memory.Memory{
+			Memory: "Uses steel for strength and wood for cost.",
+		},
+		Score: 0.97,
+	}}
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, op)
+
+	in := []*extractor.Operation{{
+		Type:   extractor.OperationAdd,
+		Memory: "Uses steel for cost and wood for strength.",
+	}}
+
+	out := worker.reconcileOps(context.Background(), reconcileUserKey(), in)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+}
+
 // TestReconcileOps_KeepsOpWhenNotSimilar verifies that unrelated facts
 // are passed through unchanged so reconcile never collapses distinct
 // memories into a single row.
