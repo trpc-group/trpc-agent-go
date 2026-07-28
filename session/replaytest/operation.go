@@ -233,6 +233,16 @@ func validateWriteMemory(operation Operation) error {
 	if operation.Memory == nil {
 		return fmt.Errorf("write memory requires memory")
 	}
+	if operation.Memory.AppName == "" || operation.Memory.UserID == "" {
+		return fmt.Errorf("write memory requires app name and user id")
+	}
+	wantScope := MemoryScope{
+		AppName: operation.Memory.AppName,
+		UserID:  operation.Memory.UserID,
+	}
+	if operation.Memory.Scope != (MemoryScope{}) && operation.Memory.Scope != wantScope {
+		return fmt.Errorf("write memory scope must match app name and user id")
+	}
 	return nil
 }
 

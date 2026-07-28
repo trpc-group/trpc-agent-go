@@ -163,27 +163,48 @@ func (comparator *snapshotComparator) compareMaps(
 	for _, key := range ordered {
 		baselineValue, baselineOK := baseline[key]
 		actualValue, actualOK := actual[key]
-		childPath := path + "." + key
+		childPath := appendMapPath(path, key)
 		childLocator := locatorForValue(childPath, baselineValue, actualValue, locator)
+		if isStateMapPath(path) {
+			childLocator.StateKey = key
+		}
 		switch {
 		case !baselineOK:
 			if _, ok := actualValue.([]any); ok {
-				comparator.compareValues(childPath, []any{}, actualValue, locator)
+				comparator.compareValues(childPath, []any{}, actualValue, childLocator)
 				continue
 			}
 			comparator.differences = append(comparator.differences,
 				comparator.newDifference(childPath, childLocator, missingValue, actualValue))
 		case !actualOK:
 			if _, ok := baselineValue.([]any); ok {
-				comparator.compareValues(childPath, baselineValue, []any{}, locator)
+				comparator.compareValues(childPath, baselineValue, []any{}, childLocator)
 				continue
 			}
 			comparator.differences = append(comparator.differences,
 				comparator.newDifference(childPath, childLocator, baselineValue, missingValue))
 		default:
-			comparator.compareValues(childPath, baselineValue, actualValue, locator)
+			comparator.compareValues(childPath, baselineValue, actualValue, childLocator)
 		}
 	}
+}
+
+func appendMapPath(path, key string) string {
+	if key != "" && !strings.ContainsAny(key, ".[]*") {
+		return path + "." + key
+	}
+	encoded, _ := json.Marshal(key)
+	return path + "[" + string(encoded) + "]"
+}
+
+func isStateMapPath(path string) bool {
+	if strings.HasSuffix(path, ".state") {
+		return isCollectionItem(strings.TrimSuffix(path, ".state"), "sessions")
+	}
+	if strings.HasSuffix(path, ".state_delta") {
+		return isSessionEventItem(strings.TrimSuffix(path, ".state_delta"))
+	}
+	return false
 }
 
 func (comparator *snapshotComparator) compareSlices(
@@ -300,7 +321,6 @@ func ruleMatches(rule AllowedDiffRule, caseName, backend, differencePath string)
 }
 
 func locatorForValue(path string, baseline, actual any, locator Locator) Locator {
-	locator.StateKey = stateKeyForPath(path, locator.StateKey)
 	value, ok := actual.(map[string]any)
 	if !ok {
 		baselineValue, baselineOK := baseline.(map[string]any)
@@ -329,18 +349,6 @@ func locatorForValue(path string, baseline, actual any, locator Locator) Locator
 	return locator
 }
 
-func stateKeyForPath(path, current string) string {
-	separator := strings.LastIndex(path, ".")
-	if separator < 0 {
-		return current
-	}
-	parent := path[:separator]
-	if strings.HasSuffix(parent, ".state") || strings.HasSuffix(parent, ".state_delta") {
-		return path[separator+1:]
-	}
-	return current
-}
-
 func memoryScope(value map[string]any) (string, string) {
 	scope, ok := value["scope"].(map[string]any)
 	if ok {
@@ -358,7 +366,7 @@ func validateAllowedDiffRules(rules []AllowedDiffRule) error {
 				i,
 			)
 		}
-		if strings.Contains(rule.Path, "*") {
+		if hasPathWildcard(rule.Path) {
 			return fmt.Errorf("allowed diff rule %d contains a wildcard path", i)
 		}
 		if rule.PathPrefix && rule.Path == "$" {
@@ -370,6 +378,27 @@ func validateAllowedDiffRules(rules []AllowedDiffRule) error {
 		seen[rule] = struct{}{}
 	}
 	return nil
+}
+
+func hasPathWildcard(path string) bool {
+	inQuotedSegment := false
+	escaped := false
+	for i := 0; i < len(path); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case inQuotedSegment && path[i] == '\\':
+			escaped = true
+		case inQuotedSegment && path[i] == '"':
+			inQuotedSegment = false
+		case !inQuotedSegment && path[i] == '[' && i+1 < len(path) && path[i+1] == '"':
+			inQuotedSegment = true
+			i++
+		case !inQuotedSegment && path[i] == '*':
+			return true
+		}
+	}
+	return false
 }
 
 func scoreValuesEqual(path string, baseline, actual any, tolerance float64) bool {

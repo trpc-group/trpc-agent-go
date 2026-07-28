@@ -12,8 +12,10 @@ package replayconsistency
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -109,6 +111,132 @@ func TestValidatePhysicalSessionScopeRejectsLeaks(t *testing.T) {
 	} {
 		if err := validatePhysicalSessionScope(sess, want); err == nil {
 			t.Fatalf("validatePhysicalSessionScope(%#v) error = nil", sess)
+		}
+	}
+}
+
+func TestReplayFixtureCleansUpUncertainSessionCreation(t *testing.T) {
+	service := &uncertainCreateSessionService{
+		Service: sessioninmemory.NewSessionService(),
+	}
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "uncertain-create",
+		sessionService: service,
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	const sessionID = "uncertain-session"
+	err := fixture.Apply(context.Background(), replaytest.Operation{
+		Kind: replaytest.OperationCreateSession, SessionID: sessionID,
+	})
+	if !errors.Is(err, errUncertainCreate) {
+		t.Fatalf("fixture.Apply() error = %v, want %v", err, errUncertainCreate)
+	}
+	key := fixture.sessionKey(sessionID)
+	sess, err := service.Service.GetSession(context.Background(), key)
+	if err != nil {
+		t.Fatalf("committed session missing before cleanup: %v", err)
+	}
+	if sess == nil {
+		t.Fatal("committed session is nil before cleanup")
+	}
+	if err := fixture.Close(); err != nil {
+		t.Fatalf("fixture.Close() error = %v", err)
+	}
+	if deleted := service.deletedKeys(); !reflect.DeepEqual(deleted, []session.Key{key}) {
+		t.Fatalf("deleted session keys = %#v, want %#v", deleted, []session.Key{key})
+	}
+	sess, err = service.Service.GetSession(context.Background(), key)
+	if err != nil {
+		t.Fatalf("get session after cleanup: %v", err)
+	}
+	if sess != nil {
+		t.Fatalf("session remains after cleanup: %#v", sess)
+	}
+	if err := fixture.Apply(context.Background(), replaytest.Operation{
+		Kind: replaytest.OperationCreateSession, SessionID: "after-close",
+	}); !errors.Is(err, errReplayFixtureClosed) {
+		t.Fatalf("fixture.Apply() after close error = %v, want %v", err, errReplayFixtureClosed)
+	}
+	if _, err := fixture.Snapshot(context.Background()); !errors.Is(err, errReplayFixtureClosed) {
+		t.Fatalf("fixture.Snapshot() after close error = %v, want %v", err, errReplayFixtureClosed)
+	}
+}
+
+func TestReplayFixtureCloseWaitsForInFlightCreate(t *testing.T) {
+	committed := make(chan struct{})
+	release := make(chan struct{})
+	deleted := make(chan session.Key, 1)
+	service := &uncertainCreateSessionService{
+		Service:       sessioninmemory.NewSessionService(),
+		committed:     committed,
+		release:       release,
+		deletedSignal: deleted,
+	}
+	fixture := newReplayFixture(replayFixtureConfig{
+		name:           "concurrent-close",
+		sessionService: service,
+		memoryService:  memoryinmemory.NewMemoryService(),
+		summarizer:     &replaySummarizer{},
+	})
+	const sessionID = "in-flight-session"
+	applyResult := make(chan error, 1)
+	go func() {
+		applyResult <- fixture.Apply(context.Background(), replaytest.Operation{
+			Kind: replaytest.OperationCreateSession, SessionID: sessionID,
+		})
+	}()
+	<-committed
+	closeResult := make(chan error, 1)
+	go func() {
+		closeResult <- fixture.Close()
+	}()
+	deadline := time.Now().Add(time.Second)
+	for fixture.lifecycleMu.TryRLock() {
+		fixture.lifecycleMu.RUnlock()
+		if time.Now().After(deadline) {
+			t.Fatal("fixture.Close() did not queue for the lifecycle lock")
+		}
+		runtime.Gosched()
+	}
+	select {
+	case key := <-deleted:
+		t.Fatalf("session deleted before create returned: %#v", key)
+	case err := <-closeResult:
+		t.Fatalf("fixture.Close() returned before create: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-applyResult; !errors.Is(err, errUncertainCreate) {
+		t.Fatalf("fixture.Apply() error = %v, want %v", err, errUncertainCreate)
+	}
+	if err := <-closeResult; err != nil {
+		t.Fatalf("fixture.Close() error = %v", err)
+	}
+	select {
+	case key := <-deleted:
+		if key != fixture.sessionKey(sessionID) {
+			t.Fatalf("deleted session key = %#v", key)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("in-flight session was not deleted")
+	}
+}
+
+func TestReplayFixtureCloseReturnsCachedError(t *testing.T) {
+	closeErr := errors.New("close session service")
+	fixture := newReplayFixture(replayFixtureConfig{
+		name: "close-error",
+		sessionService: &closeErrorSessionService{
+			Service: sessioninmemory.NewSessionService(),
+			err:     closeErr,
+		},
+		memoryService: memoryinmemory.NewMemoryService(),
+		summarizer:    &replaySummarizer{},
+	})
+	for i := 0; i < 2; i++ {
+		if err := fixture.Close(); !errors.Is(err, closeErr) {
+			t.Fatalf("fixture.Close() call %d error = %v, want %v", i+1, err, closeErr)
 		}
 	}
 }
@@ -241,6 +369,72 @@ type blockingSessionService struct {
 	session.Service
 	entered chan struct{}
 	release <-chan struct{}
+}
+
+var errUncertainCreate = errors.New("uncertain session creation")
+
+type uncertainCreateSessionService struct {
+	session.Service
+	mu            sync.Mutex
+	deleted       []session.Key
+	committed     chan struct{}
+	release       <-chan struct{}
+	deletedSignal chan<- session.Key
+}
+
+type closeErrorSessionService struct {
+	session.Service
+	err error
+}
+
+func (service *closeErrorSessionService) Close() error {
+	return errors.Join(service.Service.Close(), service.err)
+}
+
+func (service *uncertainCreateSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	sess, err := service.Service.CreateSession(ctx, key, state, options...)
+	if err != nil {
+		return nil, err
+	}
+	if service.committed != nil {
+		close(service.committed)
+	}
+	if service.release != nil {
+		select {
+		case <-service.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return sess, errUncertainCreate
+}
+
+func (service *uncertainCreateSessionService) DeleteSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) error {
+	service.mu.Lock()
+	service.deleted = append(service.deleted, key)
+	service.mu.Unlock()
+	if service.deletedSignal != nil {
+		select {
+		case service.deletedSignal <- key:
+		default:
+		}
+	}
+	return service.Service.DeleteSession(ctx, key, options...)
+}
+
+func (service *uncertainCreateSessionService) deletedKeys() []session.Key {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	return append([]session.Key(nil), service.deleted...)
 }
 
 func (service *blockingSessionService) AppendEvent(

@@ -149,6 +149,48 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 			want:      "write memory requires memory",
 		},
 		{
+			name: "write memory without app name",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					UserID: "user",
+				},
+			},
+			want: "requires app name and user id",
+		},
+		{
+			name: "write memory without user id",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app",
+				},
+			},
+			want: "requires app name and user id",
+		},
+		{
+			name: "write memory with partial scope",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user",
+					Scope: MemoryScope{AppName: "app"},
+				},
+			},
+			want: "scope must match",
+		},
+		{
+			name: "write memory with conflicting scope",
+			operation: Operation{
+				Kind: OperationWriteMemory,
+				Memory: &MemorySnapshot{
+					AppName: "app", UserID: "user",
+					Scope: MemoryScope{AppName: "other", UserID: "user"},
+				},
+			},
+			want: "scope must match",
+		},
+		{
 			name: "search score above one",
 			operation: Operation{
 				Kind: OperationSearchMemory, SearchQuery: "query", SearchLimit: 1,
@@ -179,6 +221,23 @@ func TestOperationValidateRejectsInvalidConfigurations(t *testing.T) {
 				t.Fatalf("Operation.Validate() error = %v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestOperationValidateAcceptsWriteMemoryOwnership(t *testing.T) {
+	for _, scope := range []MemoryScope{
+		{},
+		{AppName: "app", UserID: "user"},
+	} {
+		operation := Operation{
+			Kind: OperationWriteMemory,
+			Memory: &MemorySnapshot{
+				AppName: "app", UserID: "user", Scope: scope,
+			},
+		}
+		if err := operation.Validate(); err != nil {
+			t.Fatalf("Operation.Validate() scope=%#v error = %v", scope, err)
+		}
 	}
 }
 

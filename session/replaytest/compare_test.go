@@ -234,6 +234,34 @@ func TestCompareSnapshotsConsumesPrefixRuleAcrossDifferences(t *testing.T) {
 	}
 }
 
+func TestCompareSnapshotsConsumesPrefixRuleForEscapedMapKey(t *testing.T) {
+	const path = `$.sessions[0].events[0].extensions["a.b"]`
+	baseline := Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{"a.b": map[string]any{"x": "before", "y": "before"}},
+	}}}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{"a.b": map[string]any{"x": "after", "y": "after"}},
+	}}}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "case", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "case", Backend: "sqlite", Path: path, PathPrefix: true,
+			Explanation: "known dotted extension representation",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	if len(differences) != 2 {
+		t.Fatalf("differences = %#v, want two", differences)
+	}
+	for _, difference := range differences {
+		if !difference.AllowedDiff || !strings.HasPrefix(difference.Path, path+".") {
+			t.Fatalf("difference was not allowed by escaped prefix: %#v", difference)
+		}
+	}
+}
+
 func TestCompareSnapshotsRejectsWholeSnapshotPrefixRule(t *testing.T) {
 	_, err := CompareSnapshots(CompareInput{
 		Case: "case", Backend: "sqlite",
@@ -444,6 +472,147 @@ func TestCompareSnapshotsDistinguishesMissingNullTextAndBinaryState(t *testing.T
 				t.Fatalf("state difference = %#v", differences)
 			}
 		})
+	}
+}
+
+func TestCompareSnapshotsEscapesDottedStateKeysAndPreservesLocators(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{
+			"a.b": TextStateValue("before"),
+		},
+		Events: []EventSnapshot{{
+			StateDelta: map[string]StateValueSnapshot{
+				"a.b": TextStateValue("before"),
+			},
+		}},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{
+			"a.b": TextStateValue("after"),
+		},
+		Events: []EventSnapshot{{
+			StateDelta: map[string]StateValueSnapshot{
+				"a.b": TextStateValue("after"),
+			},
+		}},
+	}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "dotted-state", Backend: "sqlite", Baseline: baseline, Actual: actual,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	for _, path := range []string{
+		`$.sessions[0].state["a.b"].value`,
+		`$.sessions[0].events[0].state_delta["a.b"].value`,
+	} {
+		difference := differenceAt(t, differences, path)
+		if difference.Locator.StateKey != "a.b" {
+			t.Fatalf("%s state key = %q, want %q", path, difference.Locator.StateKey, "a.b")
+		}
+	}
+}
+
+func TestCompareSnapshotsDistinguishesDottedAndNestedMapKeys(t *testing.T) {
+	const dottedPath = `$.sessions[0].events[0].extensions["a.b"]`
+	baseline := Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{
+			"a.b": "literal-before",
+			"a":   map[string]any{"b": "nested-before"},
+		},
+	}}}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{Events: []EventSnapshot{{
+		Extensions: map[string]any{
+			"a.b": "literal-after",
+			"a":   map[string]any{"b": "nested-after"},
+		},
+	}}}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "dotted-extension", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "dotted-extension", Backend: "sqlite", Path: dottedPath,
+			Explanation: "literal dotted key is expected",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	if difference := differenceAt(t, differences, dottedPath); !difference.AllowedDiff {
+		t.Fatalf("dotted difference = %#v", difference)
+	}
+	if difference := differenceAt(
+		t, differences, "$.sessions[0].events[0].extensions.a.b",
+	); difference.AllowedDiff {
+		t.Fatalf("nested difference = %#v", difference)
+	}
+}
+
+func TestCompareSnapshotsPreservesStateLocatorAcrossNestedMaps(t *testing.T) {
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{
+			"outer": JSONStateValue(map[string]any{
+				"state": map[string]any{"x": "before"},
+			}),
+		},
+		Events: []EventSnapshot{{
+			Extensions: map[string]any{
+				"state": map[string]any{"x": "before"},
+			},
+		}},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{
+			"outer": JSONStateValue(map[string]any{
+				"state": map[string]any{"x": "after"},
+			}),
+		},
+		Events: []EventSnapshot{{
+			Extensions: map[string]any{
+				"state": map[string]any{"x": "after"},
+			},
+		}},
+	}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "nested-state", Backend: "sqlite", Baseline: baseline, Actual: actual,
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	stateDifference := differenceAt(
+		t, differences, "$.sessions[0].state.outer.value.state.x",
+	)
+	if stateDifference.Locator.StateKey != "outer" {
+		t.Fatalf("nested state locator = %#v", stateDifference.Locator)
+	}
+	extensionDifference := differenceAt(
+		t, differences, "$.sessions[0].events[0].extensions.state.x",
+	)
+	if extensionDifference.Locator.StateKey != "" {
+		t.Fatalf("extension locator = %#v", extensionDifference.Locator)
+	}
+}
+
+func TestCompareSnapshotsAllowsLiteralWildcardMapKeyRule(t *testing.T) {
+	const path = `$.sessions[0].state["*"].value`
+	baseline := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{"*": TextStateValue("before")},
+	}}}
+	actual := Snapshot{Sessions: []SessionSnapshot{{
+		State: map[string]StateValueSnapshot{"*": TextStateValue("after")},
+	}}}
+	differences, err := CompareSnapshots(CompareInput{
+		Case: "wildcard-key", Backend: "sqlite", Baseline: baseline, Actual: actual,
+		Options: CompareOptions{AllowedDiffRules: []AllowedDiffRule{{
+			Case: "wildcard-key", Backend: "sqlite", Path: path,
+			Explanation: "literal wildcard key is expected",
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("CompareSnapshots() error = %v", err)
+	}
+	difference := differenceAt(t, differences, path)
+	if !difference.AllowedDiff || difference.Locator.StateKey != "*" {
+		t.Fatalf("wildcard key difference = %#v", difference)
 	}
 }
 

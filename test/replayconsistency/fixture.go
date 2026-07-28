@@ -44,21 +44,27 @@ const (
 
 var replayScopeSequence atomic.Uint64
 
+var errReplayFixtureClosed = errors.New("replay fixture is closed")
+
 type replayFixture struct {
-	mu             sync.Mutex
-	summaryMu      sync.Mutex
-	name           string
-	sessionService session.Service
-	memoryService  memory.Service
-	summarizer     *replaySummarizer
-	capabilities   replaytest.CapabilitySet
-	appName        string
-	userID         string
-	sessionIDs     map[string]struct{}
-	replayWindows  map[string]string
-	memoryScopes   map[replaytest.MemoryScope]memory.UserKey
-	stateDeletes   map[string]map[string]struct{}
-	searches       []replaytest.MemorySearchSnapshot
+	lifecycleMu       sync.RWMutex
+	closed            bool
+	closeErr          error
+	mu                sync.Mutex
+	summaryMu         sync.Mutex
+	name              string
+	sessionService    session.Service
+	memoryService     memory.Service
+	summarizer        *replaySummarizer
+	capabilities      replaytest.CapabilitySet
+	appName           string
+	userID            string
+	sessionIDs        map[string]struct{}
+	cleanupSessionIDs map[string]struct{}
+	replayWindows     map[string]string
+	memoryScopes      map[replaytest.MemoryScope]memory.UserKey
+	stateDeletes      map[string]map[string]struct{}
+	searches          []replaytest.MemorySearchSnapshot
 }
 
 type replayFixtureConfig struct {
@@ -90,17 +96,18 @@ func newReplayFixture(config replayFixtureConfig) *replayFixture {
 		capabilities[capability] = false
 	}
 	return &replayFixture{
-		name:           config.name,
-		sessionService: config.sessionService,
-		memoryService:  config.memoryService,
-		summarizer:     config.summarizer,
-		capabilities:   capabilities,
-		appName:        replayAppName + "-" + scopeID,
-		userID:         replayUserID + "-" + scopeID,
-		sessionIDs:     make(map[string]struct{}),
-		replayWindows:  make(map[string]string),
-		memoryScopes:   make(map[replaytest.MemoryScope]memory.UserKey),
-		stateDeletes:   make(map[string]map[string]struct{}),
+		name:              config.name,
+		sessionService:    config.sessionService,
+		memoryService:     config.memoryService,
+		summarizer:        config.summarizer,
+		capabilities:      capabilities,
+		appName:           replayAppName + "-" + scopeID,
+		userID:            replayUserID + "-" + scopeID,
+		sessionIDs:        make(map[string]struct{}),
+		cleanupSessionIDs: make(map[string]struct{}),
+		replayWindows:     make(map[string]string),
+		memoryScopes:      make(map[replaytest.MemoryScope]memory.UserKey),
+		stateDeletes:      make(map[string]map[string]struct{}),
 	}
 }
 
@@ -113,6 +120,11 @@ func (fixture *replayFixture) Capabilities() replaytest.CapabilitySet {
 }
 
 func (fixture *replayFixture) Apply(ctx context.Context, operation replaytest.Operation) error {
+	fixture.lifecycleMu.RLock()
+	defer fixture.lifecycleMu.RUnlock()
+	if fixture.closed {
+		return errReplayFixtureClosed
+	}
 	return fixture.apply(ctx, operation)
 }
 
@@ -120,6 +132,11 @@ func (fixture *replayFixture) ApplyWithFault(
 	ctx context.Context,
 	operation replaytest.Operation,
 ) error {
+	fixture.lifecycleMu.RLock()
+	defer fixture.lifecycleMu.RUnlock()
+	if fixture.closed {
+		return errReplayFixtureClosed
+	}
 	if operation.FailurePoint == replaytest.FailureAfterWrite {
 		if err := fixture.apply(ctx, operation); err != nil {
 			return fmt.Errorf("apply before injected failure: %w", err)
@@ -161,6 +178,9 @@ func (fixture *replayFixture) applyCreateSession(
 	ctx context.Context,
 	operation replaytest.Operation,
 ) error {
+	fixture.mu.Lock()
+	fixture.cleanupSessionIDs[operation.SessionID] = struct{}{}
+	fixture.mu.Unlock()
 	_, err := fixture.sessionService.CreateSession(ctx, fixture.sessionKey(operation.SessionID), nil)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
@@ -315,6 +335,11 @@ func (fixture *replayFixture) applyAppendTrack(
 }
 
 func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot, error) {
+	fixture.lifecycleMu.RLock()
+	defer fixture.lifecycleMu.RUnlock()
+	if fixture.closed {
+		return replaytest.Snapshot{}, errReplayFixtureClosed
+	}
 	bookkeeping := fixture.snapshotBookkeeping()
 	var snapshot replaytest.Snapshot
 	for _, id := range bookkeeping.sessionIDs {
@@ -356,11 +381,12 @@ func (fixture *replayFixture) Snapshot(ctx context.Context) (replaytest.Snapshot
 }
 
 type fixtureBookkeeping struct {
-	sessionIDs    []string
-	replayWindows map[string]string
-	memoryScopes  []memoryScopeBinding
-	stateDeletes  map[string]map[string]struct{}
-	searches      []replaytest.MemorySearchSnapshot
+	sessionIDs        []string
+	cleanupSessionIDs []string
+	replayWindows     map[string]string
+	memoryScopes      []memoryScopeBinding
+	stateDeletes      map[string]map[string]struct{}
+	searches          []replaytest.MemorySearchSnapshot
 }
 
 type memoryScopeBinding struct {
@@ -372,14 +398,18 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 	fixture.mu.Lock()
 	defer fixture.mu.Unlock()
 	bookkeeping := fixtureBookkeeping{
-		sessionIDs:    make([]string, 0, len(fixture.sessionIDs)),
-		replayWindows: make(map[string]string, len(fixture.replayWindows)),
-		memoryScopes:  make([]memoryScopeBinding, 0, len(fixture.memoryScopes)),
-		stateDeletes:  make(map[string]map[string]struct{}, len(fixture.stateDeletes)),
-		searches:      cloneMemorySearchSnapshots(fixture.searches),
+		sessionIDs:        make([]string, 0, len(fixture.sessionIDs)),
+		cleanupSessionIDs: make([]string, 0, len(fixture.cleanupSessionIDs)),
+		replayWindows:     make(map[string]string, len(fixture.replayWindows)),
+		memoryScopes:      make([]memoryScopeBinding, 0, len(fixture.memoryScopes)),
+		stateDeletes:      make(map[string]map[string]struct{}, len(fixture.stateDeletes)),
+		searches:          cloneMemorySearchSnapshots(fixture.searches),
 	}
 	for id := range fixture.sessionIDs {
 		bookkeeping.sessionIDs = append(bookkeeping.sessionIDs, id)
+	}
+	for id := range fixture.cleanupSessionIDs {
+		bookkeeping.cleanupSessionIDs = append(bookkeeping.cleanupSessionIDs, id)
 	}
 	for id, filterKey := range fixture.replayWindows {
 		bookkeeping.replayWindows[id] = filterKey
@@ -396,6 +426,7 @@ func (fixture *replayFixture) snapshotBookkeeping() fixtureBookkeeping {
 		}
 	}
 	sort.Strings(bookkeeping.sessionIDs)
+	sort.Strings(bookkeeping.cleanupSessionIDs)
 	sort.Slice(bookkeeping.memoryScopes, func(i, j int) bool {
 		left, right := bookkeeping.memoryScopes[i].logical, bookkeeping.memoryScopes[j].logical
 		if left.AppName != right.AppName {
@@ -445,12 +476,18 @@ func stateTombstones(state session.StateMap) map[string]struct{} {
 }
 
 func (fixture *replayFixture) Close() error {
+	fixture.lifecycleMu.Lock()
+	defer fixture.lifecycleMu.Unlock()
+	if fixture.closed {
+		return fixture.closeErr
+	}
+	fixture.closed = true
 	ctx, cancel := context.WithTimeout(context.Background(), fixtureCleanupTimeout)
 	defer cancel()
 	bookkeeping := fixture.snapshotBookkeeping()
 	cleanupErrors := make([]error, 0,
-		len(bookkeeping.sessionIDs)+len(bookkeeping.memoryScopes)+serviceCloseOperationCount)
-	for _, id := range bookkeeping.sessionIDs {
+		len(bookkeeping.cleanupSessionIDs)+len(bookkeeping.memoryScopes)+serviceCloseOperationCount)
+	for _, id := range bookkeeping.cleanupSessionIDs {
 		cleanupErrors = append(cleanupErrors, fixture.sessionService.DeleteSession(
 			ctx, fixture.sessionKey(id),
 		))
@@ -459,7 +496,8 @@ func (fixture *replayFixture) Close() error {
 		cleanupErrors = append(cleanupErrors, fixture.memoryService.ClearMemories(ctx, scope.physical))
 	}
 	cleanupErrors = append(cleanupErrors, fixture.sessionService.Close(), fixture.memoryService.Close())
-	return errors.Join(cleanupErrors...)
+	fixture.closeErr = errors.Join(cleanupErrors...)
+	return fixture.closeErr
 }
 
 func (fixture *replayFixture) getSession(

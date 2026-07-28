@@ -188,7 +188,7 @@ func TestStandardReplayCasesDetectWriteBoundaryFaults(t *testing.T) {
 	expectedPaths := map[string]string{
 		"single-turn":             ".events[",
 		"multi-turn":              ".events[",
-		"tool-call":               ".extensions.trpc_agent.tool_call_args.call-1",
+		"tool-call":               `.extensions["trpc_agent.tool_call_args"].call-1`,
 		"state-update":            ".state.write_fault",
 		"memory-read-write":       "$.memories[",
 		"summary-update":          ".summaries[",

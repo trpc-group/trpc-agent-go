@@ -174,7 +174,10 @@ type TrackEventSnapshot struct {
 	Timestamp    time.Time      `json:"timestamp,omitempty"`
 }
 
-// MemorySnapshot captures one persisted memory entry.
+// MemorySnapshot captures one persisted memory entry. Write-memory operations
+// require AppName and UserID. Scope may be left zero-valued on write input
+// because fixtures populate the observed namespace; when non-zero, it must
+// match AppName and UserID.
 type MemorySnapshot struct {
 	ID        string         `json:"id"`
 	AppName   string         `json:"app_name"`
@@ -220,7 +223,9 @@ type Locator struct {
 	TrackName        string `json:"track_name,omitempty"`
 }
 
-// Difference describes one normalized mismatch.
+// Difference describes one normalized mismatch. Path uses dot notation for
+// simple map keys. Empty keys and keys containing '.', '[', ']', or '*' use
+// bracket notation with JSON string escaping, for example ["a.b"].
 type Difference struct {
 	Case        string  `json:"case"`
 	Backend     string  `json:"backend"`
@@ -232,7 +237,8 @@ type Difference struct {
 	Explanation string  `json:"explanation,omitempty"`
 }
 
-// AllowedDiffRule permits one exact path or a deliberately bounded prefix.
+// AllowedDiffRule permits one exact Difference.Path or a deliberately bounded
+// prefix. Path follows the Difference path grammar.
 type AllowedDiffRule struct {
 	Case        string `json:"case,omitempty"`
 	Backend     string `json:"backend,omitempty"`
