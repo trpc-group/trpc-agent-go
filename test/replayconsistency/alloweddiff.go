@@ -22,20 +22,21 @@ type AllowedDiffRule struct {
 	// Path is the projection path the rule covers. It matches the path itself
 	// and anything nested beneath it, so a rule on a slice covers its elements
 	// and its length.
-	Path string
+	Path string `json:"path"`
 	// Reason states why backends may legitimately differ here.
-	Reason string
+	Reason string `json:"reason"`
 }
 
 // allowedDiffRules is the complete allow list.
-var allowedDiffRules = []AllowedDiffRule{
-	{
-		Path: "memories.readOrder",
-		Reason: "ReadMemories orders by an update timestamp the service assigns from the wall clock. " +
-			"Writes that land in the same tick tie, and backends break ties differently. " +
-			"Membership, identifiers, content and topics are still compared exactly through memories.entries.",
-	},
-}
+//
+// It is empty, and that is the intended state rather than an oversight. No
+// difference observed so far is one both backends are entitled to have: the
+// three that exist are recorded as known divergences instead, which keeps them
+// described as problems rather than blessed as behavior. A value that is
+// nondeterministic by construction, such as the order ReadMemories returns,
+// is excluded from the projection with a diffskip tag rather than compared and
+// then forgiven here.
+var allowedDiffRules []AllowedDiffRule
 
 // AllowedDiffRules returns the allow list so that documentation and reports
 // can render the same source of truth the comparator uses.
@@ -52,12 +53,12 @@ func AllowedDiffRules() []AllowedDiffRule {
 // the place where inconvenient findings go to be forgotten.
 type KnownDivergence struct {
 	// Path is the projection path, matched like AllowedDiffRule.Path.
-	Path string
+	Path string `json:"path"`
 	// Backend is the backend that differs from the baseline.
-	Backend string
+	Backend string `json:"backend"`
 	// Note states what was observed, what the suspected mechanism is, and how
 	// confident the harness is about it.
-	Note string
+	Note string `json:"note"`
 }
 
 // knownDivergences is the complete tracked list.

@@ -46,9 +46,18 @@ TRPC_REPLAY_REDIS_URL=redis://127.0.0.1:6379 go test ./replayconsistency/
 
 每次运行使用独立的 key 前缀，因此即使指向共享服务，也不会读到其他运行的数据。
 
-新增后端只需在 `IntegrationBackends` 里加一项，并在 `test/go.mod` 中引入对应
-模块。用例和比较器无需改动，因为它们只依赖 `session.Service` 与
-`memory.Service`。
+新增后端需要在 `IntegrationBackends` 里加一项，并在 `test/go.mod` 中加上
+`require`。本仓库内的后端都是独立模块，因此还需要一条指向本地检出的 `replace`：
+
+```bash
+cd test
+go mod edit -replace=trpc.group/trpc-go/trpc-agent-go/session/postgres=../session/postgres
+go mod tidy
+```
+
+缺少 `replace` 时，框架会解析到已发布版本，于是拿当前检出去和某个 release 比对，
+而不是和自身比对。无论哪种情况，用例和比较器都无需改动，因为它们只依赖
+`session.Service` 与 `memory.Service`。
 
 ## 用例
 
@@ -86,10 +95,13 @@ TRPC_REPLAY_REDIS_URL=redis://127.0.0.1:6379 go test ./replayconsistency/
 携带形如
 `sessions[ref="app/u1/s1"].summaries[filterKey="tool"].text` 的路径。
 
-**分类。** 差异分为 allowed、known、fatal 三类。allowed 表示两个后端都没错，
-这份清单刻意保持很短，因为每一条都是保证上的一个缺口；known 表示差异真实存在，
-在结论未定之前先带证据记录而不是让构建失败；其余一律失败。summary 还会投影它
-实际挂在哪个 session 下，因此「摘要归属错误」是可见的，而不只是表现为缺失。
+**分类。** 差异分为 allowed、known、fatal 三类。allowed 表示两个后端都有权如此，
+这份清单目前是空的，且这正是预期状态——迄今观察到的差异没有一条配得上被认定为
+正常行为；known 表示差异真实存在，在结论未定之前先带证据记录而不是让构建失败；
+其余一律失败。像 `ReadMemories` 在写入时间戳相同时的返回顺序这类「构造上就不确定」
+的值，会用带说明的标签从投影中排除，而不是先比较再豁免，这样报告才是可复现的。
+summary 还会投影它实际挂在哪个 session 下，因此「摘要归属错误」是可见的，而不只是
+表现为缺失。
 
 **自检。** 故障注入会刻意破坏某一个后端，并要求比较器必须发现：事件丢失、重复、
 乱序，摘要丢失、filter key 错误、归属 session 错误，state key 丢失与泄漏，以及

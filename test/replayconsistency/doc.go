@@ -30,9 +30,9 @@
 // compared field by field against the baseline backend, and each difference
 // becomes a [Divergence] carrying a structured path such as
 //
-//	session[app/user/sess-1].events[3].toolCalls[0].function.name
-//	session[app/user/sess-1].summaries[filterKey="tool/code"].text
-//	memory[app/user/mem-2].topics
+//	sessions[ref="app/user/sess-1"].events[3].toolCalls[0].name
+//	sessions[ref="app/user/sess-1"].summaries[filterKey="tool/code"].text
+//	memories.entries[id="mem-2"].topics
 //
 // # Fail-closed comparison
 //

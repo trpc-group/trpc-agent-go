@@ -8,33 +8,27 @@
   ],
   "summary": {
     "cases": 10,
-    "divergences": 25,
-    "allowed": 2,
+    "divergences": 23,
+    "allowed": 0,
     "known": 23,
     "fatal": 0,
     "unsupported": 0
   },
-  "allowedDiffRules": [
-    {
-      "Path": "memories.readOrder",
-      "Reason": "ReadMemories orders by an update timestamp the service assigns from the wall clock. Writes that land in the same tick tie, and backends break ties differently. Membership, identifiers, content and topics are still compared exactly through memories.entries."
-    }
-  ],
   "knownDivergences": [
     {
-      "Path": "sessions[ref=\"replay/u-state/s-state\"].state[key=\"lang\"]",
-      "Backend": "redis",
-      "Note": "An event state delta whose value is nil leaves the previous value in place instead of storing nil. session/inmemory and session/sqlite both store nil, matching session.ApplyEventStateDelta. The redis hashidx path applies deltas inside a Lua script guarded by next(stateDelta) ~= nil. Observed against miniredis, whose Lua decodes JSON null to a Lua nil; a Lua table cannot hold a nil value, so the key disappears, the table reads as empty and the guard skips the whole update. Real Redis decodes null to a cjson.null sentinel and would likely apply the delta, so this may be an emulation difference rather than a backend defect. Recorded rather than asserted until it is confirmed against a real Redis server through the integration mode."
+      "path": "sessions[ref=\"replay/u-state/s-state\"].state[key=\"lang\"]",
+      "backend": "redis",
+      "note": "An event state delta whose value is nil leaves the previous value in place instead of storing nil. session/inmemory and session/sqlite both store nil, matching session.ApplyEventStateDelta. The redis hashidx path applies deltas inside a Lua script guarded by next(stateDelta) ~= nil. Observed against miniredis, whose Lua decodes JSON null to a Lua nil; a Lua table cannot hold a nil value, so the key disappears, the table reads as empty and the guard skips the whole update. Real Redis decodes null to a cjson.null sentinel and would likely apply the delta, so this may be an emulation difference rather than a backend defect. Recorded rather than asserted until it is confirmed against a real Redis server through the integration mode."
     },
     {
-      "Path": "sessions[ref=\"replay/u-interleaved/s-interleaved\"].events",
-      "Backend": "redis",
-      "Note": "Events appended out of timestamp order read back in timestamp order rather than append order. session/inmemory appends to a slice and session/sqlite inserts rows read back by insertion, so both preserve the order the caller wrote. The redis hashidx path indexes events with ZADD \u003ckey\u003e \u003cevent timestamp\u003e \u003ceventID\u003e and reads that sorted set back by score, so the timestamp decides the order. This is the reordering the issue describes: a caller that appends a late-arriving tool result carrying an earlier timestamp replays it in a different position depending on the backend. The mechanism is ordinary Redis sorted-set behavior rather than an artifact of the in-process server used by the lightweight mode."
+      "path": "sessions[ref=\"replay/u-interleaved/s-interleaved\"].events",
+      "backend": "redis",
+      "note": "Events appended out of timestamp order read back in timestamp order rather than append order. session/inmemory appends to a slice and session/sqlite inserts rows read back by insertion, so both preserve the order the caller wrote. The redis hashidx path indexes events with ZADD \u003ckey\u003e \u003cevent timestamp\u003e \u003ceventID\u003e and reads that sorted set back by score, so the timestamp decides the order. This is the reordering the issue describes: a caller that appends a late-arriving tool result carrying an earlier timestamp replays it in a different position depending on the backend. The mechanism is ordinary Redis sorted-set behavior rather than an artifact of the in-process server used by the lightweight mode."
     },
     {
-      "Path": "sessions[ref=\"replay/u-retry/s-retry\"].events.length",
-      "Backend": "redis",
-      "Note": "Re-appending an event with an identifier that was already stored collapses the two writes, while session/inmemory and session/sqlite keep both. The redis hashidx path stores events with HSET \u003ckey\u003e \u003ceventID\u003e \u003cjson\u003e, so a repeated identifier overwrites the field; sqlite inserts a new row with no uniqueness constraint on the event identifier, and inmemory appends unconditionally. session.Service does not document whether AppendEvent is idempotent, so neither behavior violates a stated contract, but a retry after a crash means different things depending on where the data lives."
+      "path": "sessions[ref=\"replay/u-retry/s-retry\"].events.length",
+      "backend": "redis",
+      "note": "Re-appending an event with an identifier that was already stored collapses the two writes, while session/inmemory and session/sqlite keep both. The redis hashidx path stores events with HSET \u003ckey\u003e \u003ceventID\u003e \u003cjson\u003e, so a repeated identifier overwrites the field; sqlite inserts a new row with no uniqueness constraint on the event identifier, and inmemory appends unconditionally. session.Service does not document whether AppendEvent is idempotent, so neither behavior violates a stated contract, but a retry after a crash means different things depending on where the data lives."
     }
   ],
   "cases": [
@@ -80,29 +74,7 @@
     },
     {
       "case": "memory-write-update-delete",
-      "description": "memory add, topic-only update, content update with identifier rotation, and delete",
-      "divergences": [
-        {
-          "case": "memory-write-update-delete",
-          "baseline": "inmemory",
-          "backend": "redis",
-          "path": "memories.readOrder[0]",
-          "baselineValue": "ac288398605d1cb0f030d0dfc86e9c9df79d35e4ee154de9c35a372acde73c7f",
-          "backendValue": "34fee61ba5ae70af55f61bd8431d8daf6e35cec0b5f2605c0a67c1574a10eb6d",
-          "allowedDiff": true,
-          "reason": "ReadMemories orders by an update timestamp the service assigns from the wall clock. Writes that land in the same tick tie, and backends break ties differently. Membership, identifiers, content and topics are still compared exactly through memories.entries."
-        },
-        {
-          "case": "memory-write-update-delete",
-          "baseline": "inmemory",
-          "backend": "redis",
-          "path": "memories.readOrder[1]",
-          "baselineValue": "34fee61ba5ae70af55f61bd8431d8daf6e35cec0b5f2605c0a67c1574a10eb6d",
-          "backendValue": "ac288398605d1cb0f030d0dfc86e9c9df79d35e4ee154de9c35a372acde73c7f",
-          "allowedDiff": true,
-          "reason": "ReadMemories orders by an update timestamp the service assigns from the wall clock. Writes that land in the same tick tie, and backends break ties differently. Membership, identifiers, content and topics are still compared exactly through memories.entries."
-        }
-      ]
+      "description": "memory add, topic-only update, content update with identifier rotation, and delete"
     },
     {
       "case": "summary-generate-and-update",

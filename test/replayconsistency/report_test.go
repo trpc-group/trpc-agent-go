@@ -92,8 +92,21 @@ func TestReport(t *testing.T) {
 		return
 	}
 
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("sample report %s is missing; regenerate it with "+
+	// The committed artifact is compared byte for byte rather than merely
+	// checked for existence. A stale sample would otherwise keep passing while
+	// the documentation published divergences the harness no longer finds.
+	//
+	// This is only safe because the report is reproducible. Everything in it is
+	// derived from the script: timestamps are offsets from a shared base,
+	// memory identifiers are content hashes, and values that tie on the wall
+	// clock are excluded from comparison rather than forgiven after the fact.
+	want, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("sample report %s is unreadable (%v); regenerate it with "+
+			"go test ./replayconsistency/ -run TestReport -update-report", path, err)
+	}
+	if string(want) != string(data) {
+		t.Errorf("sample report %s is out of date; regenerate it with "+
 			"go test ./replayconsistency/ -run TestReport -update-report", path)
 	}
 }

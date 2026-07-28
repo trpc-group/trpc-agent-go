@@ -155,6 +155,7 @@ plugins:
                     - PGVector Session: session/pgvector.md
                     - ClickHouse Session: session/clickhouse.md
                     - MongoDB Session: session/mongodb.md
+                    - 回放一致性: session/replay_consistency.md
                 - Knowledge:
                     - 概述: knowledge/index.md
                     - Embedder: knowledge/embedder.md

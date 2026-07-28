@@ -117,13 +117,17 @@ type MemoryView struct {
 	// Entries are ordered by identifier so that comparison covers membership
 	// and content without depending on read-back order.
 	Entries []MemoryEntryView `json:"entries,omitempty"`
-	// ReadOrder is the identifier sequence the backend actually returned.
+	// ReadOrder is the identifier sequence the backend actually returned. It is
+	// recorded for debugging but deliberately not compared.
+	//
 	// ReadMemories orders by an update timestamp the service assigns from the
-	// wall clock, so writes landing in the same tick tie and different
-	// backends break the tie differently. The order is projected so it appears
-	// in the report, and declared as an allowed difference so it does not fail
-	// a run on its own.
-	ReadOrder []string `json:"readOrder,omitempty"`
+	// wall clock, so writes landing in the same tick tie, and the tie breaks
+	// differently between backends and between runs of the same backend.
+	// Comparing it produces a result that changes run to run, which is noise
+	// rather than signal: it would make the artifact churn and teach readers to
+	// ignore the differences it reports. Membership, identifiers, content and
+	// topics are still compared exactly through Entries.
+	ReadOrder []string `json:"readOrder,omitempty" diffskip:"ReadMemories ties on a wall-clock timestamp, so the order is not reproducible even for one backend"`
 }
 
 // MemoryEntryView projects one memory.

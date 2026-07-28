@@ -51,9 +51,20 @@ TRPC_REPLAY_REDIS_URL=redis://127.0.0.1:6379 go test ./replayconsistency/
 Each run uses a fresh key prefix, so replaying against a shared server cannot
 observe another run's data.
 
-Adding a backend is one entry in `IntegrationBackends` plus its module in
-`test/go.mod`. The cases and the comparator need no change, because they depend
-only on `session.Service` and `memory.Service`.
+Adding a backend takes one entry in `IntegrationBackends` and a `require` line
+in `test/go.mod`. Backends that live in this repository are separate modules, so
+they also need a `replace` directive pointing at the local checkout:
+
+```bash
+cd test
+go mod edit -replace=trpc.group/trpc-go/trpc-agent-go/session/postgres=../session/postgres
+go mod tidy
+```
+
+Without the `replace`, the harness resolves a published version and compares
+the current checkout against a release rather than against itself. The cases
+and the comparator need no change either way, because they depend only on
+`session.Service` and `memory.Service`.
 
 ## Cases
 
@@ -98,12 +109,15 @@ is part of the contract. Divergences carry a path such as
 `sessions[ref="app/u1/s1"].summaries[filterKey="tool"].text`.
 
 **Classification.** A difference is either allowed, known, or fatal. Allowed
-means both backends are right, and the list is deliberately short because every
-entry is a hole in the guarantee. Known means the difference is real and
-recorded with evidence rather than failing the build while the question is
-open. Anything else fails. Summaries also project the session they surfaced
-under, so a summary attributed to the wrong session is visible rather than
-merely absent.
+means both backends are entitled to it; that list is currently empty, which is
+the intended state, because nothing observed so far deserves to be blessed as
+behavior. Known means the difference is real and recorded with evidence rather
+than failing the build while the question is open. Anything else fails. A value
+that is nondeterministic by construction, such as the order `ReadMemories`
+returns when writes tie on the wall clock, is excluded from the projection with
+a documented tag rather than compared and then forgiven, so the report stays
+reproducible. Summaries also project the session they surfaced under, so a
+summary attributed to the wrong session is visible rather than merely absent.
 
 **Self-verification.** Fault injection corrupts one backend on purpose and
 requires the comparator to notice: dropped, duplicated and reordered events,
