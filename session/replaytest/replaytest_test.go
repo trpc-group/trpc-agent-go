@@ -545,6 +545,447 @@ func TestReportFixtureDocumentsDiffAndAllowedDiff(t *testing.T) {
 	require.JSONEq(t, string(fixture), string(generated))
 }
 
+func TestRunReportsReplayFailures(t *testing.T) {
+	baseline := newInMemoryBackend(t)
+	actual := newInMemoryBackend(t)
+	actual.Name = "actual"
+	replayErr := errors.New("replay failed")
+
+	report, err := Run(context.Background(), []Backend{baseline, actual}, []Case{
+		{
+			Name: "baseline_failure",
+			Replay: func(_ context.Context, backend Backend) (Snapshot, error) {
+				if backend.Name == baseline.Name {
+					return Snapshot{}, replayErr
+				}
+				return Snapshot{SessionID: "unused"}, nil
+			},
+		},
+		{
+			Name: "actual_failure",
+			Replay: func(_ context.Context, backend Backend) (Snapshot, error) {
+				if backend.Name == actual.Name {
+					return Snapshot{}, replayErr
+				}
+				return Snapshot{SessionID: "session", Data: map[string]any{}}, nil
+			},
+		},
+	})
+	require.NoError(t, err)
+	require.Len(t, report.Differences, 2)
+	require.True(t, report.HasDisallowedDifferences())
+	require.Equal(t, "replay", report.Differences[0].Path)
+	require.Equal(t, "backend replay failed", report.Differences[0].Reason)
+
+	allowed := Report{Differences: []Difference{{AllowedDiff: true}}}
+	require.False(t, allowed.HasDisallowedDifferences())
+}
+
+func TestRunAndBackendValidationErrors(t *testing.T) {
+	valid := newInMemoryBackend(t)
+	tests := []struct {
+		name     string
+		backends []Backend
+		want     string
+	}{
+		{
+			name:     "missing name",
+			backends: []Backend{{Session: valid.Session, Memory: valid.Memory}, valid},
+			want:     "backend name is required",
+		},
+		{
+			name:     "missing session",
+			backends: []Backend{{Name: "missing-session", Memory: valid.Memory}, valid},
+			want:     `backend "missing-session" session service is required`,
+		},
+		{
+			name:     "missing memory",
+			backends: []Backend{{Name: "missing-memory", Session: valid.Session}, valid},
+			want:     `backend "missing-memory" memory service is required`,
+		},
+		{
+			name: "invalid unsupported",
+			backends: []Backend{{
+				Name: "invalid", Session: valid.Session, Memory: valid.Memory,
+				Unsupported: []Unsupported{{Path: "tracks"}},
+			}, valid},
+			want: `backend "invalid" unsupported path and reason are required`,
+		},
+		{
+			name: "invalid private metadata",
+			backends: []Backend{{
+				Name: "invalid", Session: valid.Session, Memory: valid.Memory,
+				PrivateMetadataPaths: []string{" "},
+			}, valid},
+			want: `backend "invalid" private metadata path is required`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := Run(context.Background(), test.backends, StandardCases())
+			require.EqualError(t, err, test.want)
+		})
+	}
+
+	_, err := Run(context.Background(), []Backend{valid, valid}, []Case{{Name: "invalid"}})
+	require.EqualError(t, err, "replay case name and function are required")
+}
+
+func TestLoadOptionalBackendsConfigurationErrors(t *testing.T) {
+	_, _, err := LoadOptionalBackends(context.Background(), OptionalBackend{})
+	require.EqualError(t, err, "optional backend name and environment are required")
+
+	const environment = "REPLAYTEST_MISSING_FACTORY"
+	t.Setenv(environment, "endpoint")
+	_, _, err = LoadOptionalBackends(context.Background(), OptionalBackend{
+		Name: "missing-factory", Environment: environment,
+	})
+	require.EqualError(t, err, `optional backend "missing-factory" factory is required`)
+}
+
+type captureSessionService struct {
+	session.Service
+	getSessionFunc  func(context.Context, session.Key, ...session.Option) (*session.Session, error)
+	listSessionFunc func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error)
+}
+
+func (s *captureSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	return s.getSessionFunc(ctx, key, options...)
+}
+
+func (s *captureSessionService) ListSessions(
+	ctx context.Context,
+	key session.UserKey,
+	options ...session.Option,
+) ([]*session.Session, error) {
+	return s.listSessionFunc(ctx, key, options...)
+}
+
+type captureMemoryService struct {
+	memory.Service
+	readFunc   func(context.Context, memory.UserKey, int) ([]*memory.Entry, error)
+	searchFunc func(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error)
+}
+
+func (m *captureMemoryService) ReadMemories(
+	ctx context.Context,
+	key memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	return m.readFunc(ctx, key, limit)
+}
+
+func (m *captureMemoryService) SearchMemories(
+	ctx context.Context,
+	key memory.UserKey,
+	query string,
+	options ...memory.SearchOption,
+) ([]*memory.Entry, error) {
+	return m.searchFunc(ctx, key, query, options...)
+}
+
+func TestCaptureReadFailures(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	readErr := errors.New("read failed")
+	baseSession := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sessionService := &captureSessionService{
+		getSessionFunc: func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return baseSession, nil
+		},
+		listSessionFunc: func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+			return []*session.Session{baseSession}, nil
+		},
+	}
+	memoryService := &captureMemoryService{
+		readFunc: func(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+			return nil, nil
+		},
+		searchFunc: func(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
+			return nil, nil
+		},
+	}
+	backend := Backend{Name: "stub", Session: sessionService, Memory: memoryService}
+
+	sessionService.getSessionFunc = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		return nil, readErr
+	}
+	_, err := Capture(context.Background(), backend, key)
+	require.ErrorIs(t, err, readErr)
+
+	sessionService.getSessionFunc = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		return nil, nil
+	}
+	_, err = Capture(context.Background(), backend, key)
+	require.EqualError(t, err, "session not found")
+
+	sessionService.getSessionFunc = func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+		return baseSession, nil
+	}
+	memoryService.readFunc = func(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+		return nil, readErr
+	}
+	_, err = Capture(context.Background(), backend, key)
+	require.ErrorIs(t, err, readErr)
+
+	memoryService.readFunc = func(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+		return nil, nil
+	}
+	sessionService.listSessionFunc = func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+		return nil, readErr
+	}
+	_, err = Capture(context.Background(), backend, key)
+	require.ErrorIs(t, err, readErr)
+
+	sessionService.listSessionFunc = func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+		return []*session.Session{nil, session.NewSession("app", "user", "other")}, nil
+	}
+	_, err = Capture(context.Background(), backend, key)
+	require.EqualError(t, err, "session not found while loading summaries")
+
+	sessionService.listSessionFunc = func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+		return []*session.Session{baseSession}, nil
+	}
+	memoryService.searchFunc = func(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
+		return nil, readErr
+	}
+	_, err = Capture(context.Background(), backend, key, WithMemorySearchQueries("query"))
+	require.ErrorIs(t, err, readErr)
+}
+
+func TestCaptureHandlesEmptyValuesAndNormalizeError(t *testing.T) {
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	sess := session.NewSession(key.AppName, key.UserID, key.SessionID)
+	sess.Summaries = map[string]*session.Summary{
+		"branch": nil,
+		"kept":   {Summary: "summary"},
+	}
+	sessionService := &captureSessionService{
+		getSessionFunc: func(context.Context, session.Key, ...session.Option) (*session.Session, error) {
+			return sess, nil
+		},
+		listSessionFunc: func(context.Context, session.UserKey, ...session.Option) ([]*session.Session, error) {
+			return []*session.Session{sess}, nil
+		},
+	}
+	memoryService := &captureMemoryService{
+		readFunc: func(context.Context, memory.UserKey, int) ([]*memory.Entry, error) {
+			return []*memory.Entry{nil}, nil
+		},
+		searchFunc: func(context.Context, memory.UserKey, string, ...memory.SearchOption) ([]*memory.Entry, error) {
+			return nil, nil
+		},
+	}
+	backend := Backend{Name: "stub", Session: sessionService, Memory: memoryService}
+	snapshot, err := Capture(context.Background(), backend, key,
+		WithSummaryFilterKeys("branch", "kept"),
+		WithMemorySearchQueries("empty"),
+	)
+	require.NoError(t, err)
+	require.Equal(t, []any{}, snapshot.Data["memory_search"].(map[string]any)["empty"])
+	require.Equal(t, map[string]any{}, snapshot.Data["memories"].([]any)[0])
+
+	sess.Tracks = map[session.Track]*session.TrackEvents{
+		"invalid": {
+			Track:  "invalid",
+			Events: []session.TrackEvent{{Track: "invalid", Payload: json.RawMessage("{")}},
+		},
+	}
+	_, err = Capture(context.Background(), backend, key, WithSummaryFilterKeys("kept"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "normalize snapshot")
+}
+
+func TestNormalizationAndPathFallbacks(t *testing.T) {
+	require.NotEmpty(t, marshalValue(func() {}))
+	_, err := normalize(make(chan int), nil)
+	require.Error(t, err)
+	require.Equal(t, "", lastPathComponent(nil))
+	require.Equal(t, "data.items[0]", sliceItemPath("data.items", 0, "plain", nil))
+	require.Equal(t, "data.memories[memory_id=left]",
+		sliceItemPath("data.memories", 0, map[string]any{"id": "left"}, nil))
+	require.Equal(t, "data.memories[memory_id=right]",
+		sliceItemPath("data.memories", 0, nil, map[string]any{"id": "right"}))
+	require.Equal(t, "", snapshotID(map[string]any{}))
+	require.Equal(t, "", snapshotID(map[string]any{"id": 3}))
+}
+
+type failingSessionService struct {
+	session.Service
+	operation string
+	err       error
+}
+
+func (s *failingSessionService) CreateSession(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+	options ...session.Option,
+) (*session.Session, error) {
+	if s.operation == "create" {
+		return nil, s.err
+	}
+	return s.Service.CreateSession(ctx, key, state, options...)
+}
+
+func (s *failingSessionService) AppendEvent(
+	ctx context.Context,
+	sess *session.Session,
+	replayEvent *event.Event,
+	options ...session.Option,
+) error {
+	if s.operation == "append" {
+		return s.err
+	}
+	return s.Service.AppendEvent(ctx, sess, replayEvent, options...)
+}
+
+func (s *failingSessionService) UpdateSessionState(
+	ctx context.Context,
+	key session.Key,
+	state session.StateMap,
+) error {
+	if s.operation == "state" {
+		return s.err
+	}
+	return s.Service.UpdateSessionState(ctx, key, state)
+}
+
+func (s *failingSessionService) GetSession(
+	ctx context.Context,
+	key session.Key,
+	options ...session.Option,
+) (*session.Session, error) {
+	if s.operation == "get" {
+		return nil, s.err
+	}
+	return s.Service.GetSession(ctx, key, options...)
+}
+
+func (s *failingSessionService) CreateSessionSummary(
+	ctx context.Context,
+	sess *session.Session,
+	filterKey string,
+	force bool,
+) error {
+	if s.operation == "summary" {
+		return s.err
+	}
+	return s.Service.CreateSessionSummary(ctx, sess, filterKey, force)
+}
+
+type failingMemoryService struct {
+	memory.Service
+	err error
+}
+
+func (m *failingMemoryService) AddMemory(
+	context.Context,
+	memory.UserKey,
+	string,
+	[]string,
+	...memory.AddOption,
+) error {
+	return m.err
+}
+
+type failingTrackSessionService struct {
+	*failingSessionService
+}
+
+func (s *failingTrackSessionService) AppendTrackEvent(
+	context.Context,
+	*session.Session,
+	*session.TrackEvent,
+	...session.Option,
+) error {
+	return s.err
+}
+
+func TestStandardCaseErrorPaths(t *testing.T) {
+	failure := errors.New("injected failure")
+	cases := make(map[string]Case)
+	for _, replayCase := range StandardCases() {
+		cases[replayCase.Name] = replayCase
+	}
+
+	for name, replayCase := range cases {
+		t.Run(name+"/create", func(t *testing.T) {
+			backend := newInMemoryBackend(t)
+			backend.Session = &failingSessionService{
+				Service: backend.Session, operation: "create", err: failure,
+			}
+			_, err := replayCase.Replay(context.Background(), backend)
+			require.ErrorIs(t, err, failure)
+		})
+	}
+
+	for _, name := range []string{
+		"single_turn", "multi_turn", "tool_call", "summary_update",
+		"summary_with_follow_up_events", "interleaved_writes", "retry_recovery",
+	} {
+		t.Run(name+"/append", func(t *testing.T) {
+			backend := newInMemoryBackend(t)
+			backend.Session = &failingSessionService{
+				Service: backend.Session, operation: "append", err: failure,
+			}
+			_, err := cases[name].Replay(context.Background(), backend)
+			require.ErrorIs(t, err, failure)
+		})
+	}
+
+	for _, name := range []string{"state_updates", "retry_recovery"} {
+		t.Run(name+"/state", func(t *testing.T) {
+			backend := newInMemoryBackend(t)
+			backend.Session = &failingSessionService{
+				Service: backend.Session, operation: "state", err: failure,
+			}
+			_, err := cases[name].Replay(context.Background(), backend)
+			require.ErrorIs(t, err, failure)
+		})
+	}
+
+	for _, name := range []string{"memory_read_write", "retry_recovery"} {
+		t.Run(name+"/memory", func(t *testing.T) {
+			backend := newInMemoryBackend(t)
+			backend.Memory = &failingMemoryService{Service: backend.Memory, err: failure}
+			_, err := cases[name].Replay(context.Background(), backend)
+			require.ErrorIs(t, err, failure)
+		})
+	}
+
+	for _, operation := range []string{"get", "summary"} {
+		for _, name := range []string{"summary_update", "summary_with_follow_up_events"} {
+			t.Run(name+"/"+operation, func(t *testing.T) {
+				backend := newInMemoryBackend(t)
+				backend.Session = &failingSessionService{
+					Service: backend.Session, operation: operation, err: failure,
+				}
+				_, err := cases[name].Replay(context.Background(), backend)
+				require.ErrorIs(t, err, failure)
+			})
+		}
+	}
+
+	t.Run("track service missing", func(t *testing.T) {
+		backend := newInMemoryBackend(t)
+		backend.Session = &failingSessionService{Service: backend.Session}
+		_, err := cases["track_events"].Replay(context.Background(), backend)
+		require.EqualError(t, err, `backend "inmemory" does not support track events`)
+	})
+	t.Run("track append", func(t *testing.T) {
+		backend := newInMemoryBackend(t)
+		backend.Session = &failingTrackSessionService{failingSessionService: &failingSessionService{
+			Service: backend.Session, err: failure,
+		}}
+		_, err := cases["track_events"].Replay(context.Background(), backend)
+		require.ErrorIs(t, err, failure)
+	})
+}
+
 type closeTrackingSession struct {
 	session.Service
 	closeCalls int
