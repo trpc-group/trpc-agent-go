@@ -46,6 +46,7 @@ type Source struct {
 	textReader             reader.Reader
 	chunkSize              int
 	chunkOverlap           int
+	chunkLengthFunc        func(string) (int, error)
 	customChunkingStrategy chunking.Strategy
 	ocrExtractor           ocr.Extractor
 	transformers           []transform.Transformer
@@ -83,6 +84,12 @@ func (s *Source) initializeReaders() {
 	}
 	if s.chunkOverlap != 0 {
 		opts = append(opts, reader.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.chunkLengthFunc != nil {
+		opts = append(
+			opts,
+			reader.WithChunkLengthFunc(s.chunkLengthFunc),
+		)
 	}
 	if s.customChunkingStrategy != nil {
 		opts = append(opts, reader.WithCustomChunkingStrategy(s.customChunkingStrategy))
@@ -181,8 +188,23 @@ func (s *Source) isFile(input string) bool {
 // processAsURL processes the input as a URL.
 func (s *Source) processAsURL(ctx context.Context, input string) ([]*document.Document, error) {
 	var opts []urlsource.Option
-	opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
-	opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
+	if s.customChunkingStrategy != nil {
+		opts = append(
+			opts,
+			urlsource.WithCustomChunkingStrategy(
+				s.customChunkingStrategy,
+			),
+		)
+	} else {
+		opts = append(opts, urlsource.WithChunkSize(s.chunkSize))
+		opts = append(opts, urlsource.WithChunkOverlap(s.chunkOverlap))
+		if s.chunkLengthFunc != nil {
+			opts = append(
+				opts,
+				urlsource.WithChunkLengthFunc(s.chunkLengthFunc),
+			)
+		}
+	}
 	if len(s.transformers) > 0 {
 		opts = append(opts, urlsource.WithTransformers(s.transformers...))
 	}
@@ -212,6 +234,12 @@ func (s *Source) processAsDirectory(ctx context.Context, input string) ([]*docum
 		}
 		if s.chunkOverlap != 0 {
 			opts = append(opts, dirsource.WithChunkOverlap(s.chunkOverlap))
+		}
+		if s.chunkLengthFunc != nil {
+			opts = append(
+				opts,
+				dirsource.WithChunkLengthFunc(s.chunkLengthFunc),
+			)
 		}
 	}
 
@@ -246,6 +274,12 @@ func (s *Source) processAsFile(ctx context.Context, input string) ([]*document.D
 		}
 		if s.chunkOverlap != 0 {
 			opts = append(opts, filesource.WithChunkOverlap(s.chunkOverlap))
+		}
+		if s.chunkLengthFunc != nil {
+			opts = append(
+				opts,
+				filesource.WithChunkLengthFunc(s.chunkLengthFunc),
+			)
 		}
 	}
 

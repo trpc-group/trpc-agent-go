@@ -15,6 +15,7 @@ replace (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector => ../../knowledge/vectorstore/pgvector
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec => ../../knowledge/vectorstore/sqlitevec
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector => ../../knowledge/vectorstore/tcvector
+	trpc.group/trpc-go/trpc-agent-go/model/tiktoken => ../../model/tiktoken
 	trpc.group/trpc-go/trpc-agent-go/storage/elasticsearch => ../../storage/elasticsearch
 	trpc.group/trpc-go/trpc-agent-go/storage/milvus => ../../storage/milvus
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
@@ -35,6 +36,7 @@ require (
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/pgvector v0.2.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/sqlitevec v1.9.0
 	trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore/tcvector v0.2.0
+	trpc.group/trpc-go/trpc-agent-go/model/tiktoken v0.0.0
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v1.9.0
 	trpc.group/trpc-go/trpc-mcp-go v0.0.10
 )
@@ -60,6 +62,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
+	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/elastic/elastic-transport-go/v8 v8.7.0 // indirect
@@ -146,6 +149,7 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/tiktoken-go/tokenizer v0.7.0 // indirect
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/tmc/grpc-websocket-proxy v0.0.0-20201229170055-e5319fda7802 // indirect

@@ -11,6 +11,7 @@
 package chunking
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -44,6 +45,26 @@ func validateChunkConfig(chunkSize, overlap int) error {
 	default:
 		return nil
 	}
+}
+
+func measureTextLength(
+	lengthFunc func(string) (int, error),
+	content string,
+) (int, error) {
+	if lengthFunc == nil {
+		return encoding.RuneCount(content), nil
+	}
+	length, err := lengthFunc(content)
+	if err != nil {
+		return 0, fmt.Errorf("measure text length: %w", err)
+	}
+	if length < 0 {
+		return 0, fmt.Errorf(
+			"measure text length: length function returned negative length %d",
+			length,
+		)
+	}
+	return length, nil
 }
 
 // cleanText normalizes whitespace in text content while ensuring UTF-8 safety.
@@ -171,6 +192,148 @@ func joinWithOverlapSeparator(
 	return overlapContent + separator + current, actualOverlap
 }
 
+func joinWithOverlapSeparatorByLength(
+	previous string,
+	current string,
+	maxOverlap int,
+	maxSize int,
+	separator string,
+	preserveSeparator bool,
+	lengthFunc func(string) (int, error),
+) (string, int, error) {
+	currentSize, err := measureTextLength(lengthFunc, current)
+	if err != nil {
+		return "", 0, err
+	}
+	if currentSize > maxSize {
+		return "", 0, fmt.Errorf(
+			"current content length %d exceeds chunk size %d",
+			currentSize,
+			maxSize,
+		)
+	}
+	if maxOverlap <= 0 || previous == "" {
+		return current, 0, nil
+	}
+
+	previousRunes := []rune(previous)
+	previousSize, err := measureTextLength(lengthFunc, previous)
+	if err != nil {
+		return "", 0, err
+	}
+	estimatedRunes := len(previousRunes)
+	if previousSize > maxOverlap {
+		estimatedRunes = max(
+			1,
+			len(previousRunes)*maxOverlap/previousSize,
+		)
+	}
+	estimatedStart := len(previousRunes) - estimatedRunes
+	starts := lengthBoundaryCandidates(previousRunes, estimatedStart)
+	if estimatedStart <= 0 {
+		starts = append([]int{0}, starts...)
+	}
+
+	bestContent := ""
+	bestSize := 0
+	bestRunes := 0
+	bestNatural := false
+	for _, start := range starts {
+		combined, overlapSize, runeSize, natural, ok, err :=
+			evaluateOverlapCandidateByLength(
+				previousRunes,
+				current,
+				start,
+				maxOverlap,
+				maxSize,
+				separator,
+				preserveSeparator,
+				lengthFunc,
+			)
+		if err != nil {
+			return "", 0, err
+		}
+		if !ok {
+			continue
+		}
+		if betterOverlapCandidate(
+			natural,
+			bestNatural,
+			overlapSize,
+			bestSize,
+			runeSize,
+			bestRunes,
+		) {
+			bestContent = combined
+			bestSize = overlapSize
+			bestRunes = runeSize
+			bestNatural = natural
+		}
+	}
+
+	if bestContent != "" {
+		return bestContent, bestSize, nil
+	}
+	return current, 0, nil
+}
+
+func evaluateOverlapCandidateByLength(
+	previous []rune,
+	current string,
+	start int,
+	maxOverlap int,
+	maxSize int,
+	separator string,
+	preserveSeparator bool,
+	lengthFunc func(string) (int, error),
+) (string, int, int, bool, bool, error) {
+	overlapContent := strings.TrimLeftFunc(
+		string(previous[start:]),
+		unicode.IsSpace,
+	)
+	if overlapContent == "" {
+		return "", 0, 0, false, false, nil
+	}
+	overlapSize, err := measureTextLength(lengthFunc, overlapContent)
+	if err != nil {
+		return "", 0, 0, false, false, err
+	}
+	if overlapSize <= 0 || overlapSize > maxOverlap {
+		return "", 0, 0, false, false, nil
+	}
+
+	natural := isNaturalTextStart(previous, start)
+	if !natural && !preserveSeparator {
+		separator = ""
+	}
+	combined := overlapContent + separator + current
+	combinedSize, err := measureTextLength(lengthFunc, combined)
+	if err != nil {
+		return "", 0, 0, false, false, err
+	}
+	if combinedSize > maxSize {
+		return "", 0, 0, false, false, nil
+	}
+	return combined, overlapSize, len([]rune(overlapContent)), natural, true, nil
+}
+
+func betterOverlapCandidate(
+	natural bool,
+	bestNatural bool,
+	size int,
+	bestSize int,
+	runes int,
+	bestRunes int,
+) bool {
+	if natural != bestNatural {
+		return natural
+	}
+	if size != bestSize {
+		return size > bestSize
+	}
+	return runes > bestRunes
+}
+
 func sourceChunkSeparators(
 	content string,
 	chunks []string,
@@ -231,6 +394,232 @@ func splitTextAtNaturalBoundary(content string, maxSize int) (string, string) {
 	prefix := strings.TrimSpace(string(contentRunes[:splitPosition]))
 	remaining := strings.TrimSpace(string(contentRunes[splitPosition:]))
 	return prefix, remaining
+}
+
+func splitTextAtNaturalBoundaryByLength(
+	content string,
+	maxSize int,
+	lengthFunc func(string) (int, error),
+) (string, string, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "", "", nil
+	}
+	if maxSize <= 0 {
+		return "", content, nil
+	}
+	contentRunes := []rune(content)
+	estimate, searchEnd, fits, err := estimateTextSplitByLength(
+		contentRunes,
+		maxSize,
+		lengthFunc,
+	)
+	if err != nil {
+		return "", "", err
+	}
+	if fits {
+		return content, "", nil
+	}
+	candidateContent := contentRunes[:searchEnd+1]
+	candidates := lengthBoundaryCandidates(candidateContent, estimate)
+	best, err := findTextSplitPositionByLength(
+		contentRunes,
+		candidates,
+		maxSize,
+		lengthFunc,
+	)
+	if err != nil {
+		return "", "", err
+	}
+	if best == 0 {
+		first := string(contentRunes[:1])
+		firstSize, err := measureTextLength(lengthFunc, first)
+		if err != nil {
+			return "", "", err
+		}
+		return "", "", fmt.Errorf(
+			"indivisible rune %q has length %d, exceeds chunk size %d",
+			first,
+			firstSize,
+			maxSize,
+		)
+	}
+
+	prefix := strings.TrimSpace(string(contentRunes[:best]))
+	prefixSize, err := measureTextLength(lengthFunc, prefix)
+	if err != nil {
+		return "", "", err
+	}
+	if prefix == "" || prefixSize > maxSize {
+		return "", "", fmt.Errorf(
+			"unable to split text within chunk size %d",
+			maxSize,
+		)
+	}
+	remaining := strings.TrimSpace(string(contentRunes[best:]))
+	return prefix, remaining, nil
+}
+
+func estimateTextSplitByLength(
+	content []rune,
+	maxSize int,
+	lengthFunc func(string) (int, error),
+) (int, int, bool, error) {
+	position := min(len(content), max(1, maxSize))
+	for {
+		prefix := strings.TrimSpace(string(content[:position]))
+		prefixSize, err := measureTextLength(lengthFunc, prefix)
+		if err != nil {
+			return 0, 0, false, err
+		}
+		if prefixSize > maxSize {
+			estimate := position
+			if prefixSize > 0 {
+				estimate = max(1, position*maxSize/prefixSize)
+			}
+			searchEnd := min(len(content)-1, position+32)
+			return estimate, searchEnd, false, nil
+		}
+		if position == len(content) {
+			return position, position - 1, true, nil
+		}
+		position = min(len(content), position*2)
+	}
+}
+
+func findTextSplitPositionByLength(
+	content []rune,
+	candidates []int,
+	maxSize int,
+	lengthFunc func(string) (int, error),
+) (int, error) {
+	bestHardPosition := 0
+	bestNaturalPosition := 0
+	bestNaturalTier := 0
+	minimumNaturalSize := max(1, maxSize/2)
+	for _, position := range candidates {
+		prefix := strings.TrimSpace(string(content[:position]))
+		if prefix == "" {
+			continue
+		}
+		prefixSize, err := measureTextLength(lengthFunc, prefix)
+		if err != nil {
+			return 0, err
+		}
+		if prefixSize <= 0 || prefixSize > maxSize {
+			continue
+		}
+		if position > bestHardPosition {
+			bestHardPosition = position
+		}
+		tier := textBoundaryTier(content, position)
+		if tier > 0 && prefixSize >= minimumNaturalSize &&
+			(tier > bestNaturalTier ||
+				(tier == bestNaturalTier &&
+					position > bestNaturalPosition)) {
+			bestNaturalTier = tier
+			bestNaturalPosition = position
+		}
+	}
+
+	best := bestNaturalPosition
+	if best == 0 {
+		best = bestHardPosition
+	}
+	return best, nil
+}
+
+// lengthBoundaryCandidates returns a bounded set of rune positions around an
+// estimated split. Length functions such as BPE tokenizers are not guaranteed
+// to be monotonic for every prefix, so callers measure every returned complete
+// candidate instead of relying on binary search.
+func lengthBoundaryCandidates(content []rune, estimate int) []int {
+	if len(content) <= 1 {
+		return nil
+	}
+	estimate = max(1, min(estimate, len(content)-1))
+	seen := make(map[int]struct{})
+	candidates := make([]int, 0, 64)
+	add := func(position int) {
+		position = max(1, min(position, len(content)-1))
+		position = safeTextSplitPosition(content, position)
+		if _, ok := seen[position]; ok {
+			return
+		}
+		seen[position] = struct{}{}
+		candidates = append(candidates, position)
+	}
+
+	add(estimate)
+	add(1)
+	add(len(content) - 1)
+	for _, offset := range []int{1, 2, 4, 8, 16, 32} {
+		add(estimate - offset)
+		add(estimate + offset)
+	}
+	for position := estimate; position > 1; {
+		next := max(1, position/2)
+		add(next)
+		if next == position {
+			break
+		}
+		position = next
+	}
+	for position := estimate; position < len(content)-1; {
+		next := position + max(1, (len(content)-position)/2)
+		add(next)
+		if next == position || next >= len(content)-1 {
+			break
+		}
+		position = next
+	}
+
+	var before [5][]int
+	var after [5][]int
+	for position := 1; position < len(content); position++ {
+		tier := textBoundaryTier(content, position)
+		if tier == 0 {
+			continue
+		}
+		if position <= estimate {
+			before[tier] = append(before[tier], position)
+			if len(before[tier]) > 4 {
+				before[tier] = before[tier][1:]
+			}
+			continue
+		}
+		if len(after[tier]) < 4 {
+			after[tier] = append(after[tier], position)
+		}
+	}
+	for tier := 4; tier >= 1; tier-- {
+		for _, position := range before[tier] {
+			add(position)
+		}
+		for _, position := range after[tier] {
+			add(position)
+		}
+	}
+	return candidates
+}
+
+func textBoundaryTier(content []rune, position int) int {
+	if position <= 0 || position >= len(content) {
+		return 0
+	}
+	previous := content[position-1]
+	switch {
+	case previous == '\n':
+		return 4
+	case isSentenceBoundary(content, position-1):
+		return 3
+	case strings.ContainsRune(",，;；:：、", previous):
+		return 2
+	case unicode.IsSpace(previous):
+		return 1
+	default:
+		return 0
+	}
 }
 
 // splitTextWithBalancedTail avoids leaving a very small final piece when one
@@ -301,6 +690,109 @@ func splitTextWithBalancedTail(
 		return hardPrefix, hardRemaining
 	}
 	return prefix, remaining
+}
+
+func splitTextWithBalancedTailByLength(
+	content string,
+	maxSize int,
+	lengthFunc func(string) (int, error),
+) (string, string, error) {
+	prefix, remaining, err := splitTextAtNaturalBoundaryByLength(
+		content,
+		maxSize,
+		lengthFunc,
+	)
+	if err != nil || remaining == "" || maxSize <= 1 {
+		return prefix, remaining, err
+	}
+
+	largeEnough, err := textLengthAtLeastByLength(
+		remaining,
+		max(1, maxSize/2),
+		lengthFunc,
+	)
+	if err != nil {
+		return "", "", err
+	}
+	if largeEnough {
+		return prefix, remaining, nil
+	}
+
+	contentRunes := []rune(strings.TrimSpace(content))
+	candidates := lengthBoundaryCandidates(contentRunes, len(contentRunes)/2)
+	minimumNaturalSize := max(1, maxSize*2/5)
+	bestPosition := 0
+	bestTier := -1
+	bestDifference := int(^uint(0) >> 1)
+	for _, position := range candidates {
+		candidatePrefix := strings.TrimSpace(
+			string(contentRunes[:position]),
+		)
+		candidateRemaining := strings.TrimSpace(
+			string(contentRunes[position:]),
+		)
+		if candidatePrefix == "" || candidateRemaining == "" {
+			continue
+		}
+		prefixSize, err := measureTextLength(
+			lengthFunc,
+			candidatePrefix,
+		)
+		if err != nil {
+			return "", "", err
+		}
+		remainingSize, err := measureTextLength(
+			lengthFunc,
+			candidateRemaining,
+		)
+		if err != nil {
+			return "", "", err
+		}
+		if prefixSize > maxSize ||
+			prefixSize < minimumNaturalSize ||
+			remainingSize < minimumNaturalSize {
+			continue
+		}
+		tier := textBoundaryTier(contentRunes, position)
+		difference := absInt(prefixSize - remainingSize)
+		if tier > bestTier ||
+			(tier == bestTier && difference < bestDifference) {
+			bestPosition = position
+			bestTier = tier
+			bestDifference = difference
+		}
+	}
+	if bestPosition > 0 {
+		return strings.TrimSpace(string(contentRunes[:bestPosition])),
+			strings.TrimSpace(string(contentRunes[bestPosition:])), nil
+	}
+	return prefix, remaining, nil
+}
+
+func textLengthAtLeastByLength(
+	content string,
+	minimum int,
+	lengthFunc func(string) (int, error),
+) (bool, error) {
+	contentRunes := []rune(strings.TrimSpace(content))
+	if len(contentRunes) == 0 {
+		return false, nil
+	}
+	position := min(len(contentRunes), max(1, minimum))
+	for {
+		prefix := strings.TrimSpace(string(contentRunes[:position]))
+		prefixSize, err := measureTextLength(lengthFunc, prefix)
+		if err != nil {
+			return false, err
+		}
+		if prefixSize >= minimum {
+			return true, nil
+		}
+		if position == len(contentRunes) {
+			return false, nil
+		}
+		position = min(len(contentRunes), position*2)
+	}
 }
 
 func preferredTextBoundary(content []rune, maxSize int) int {

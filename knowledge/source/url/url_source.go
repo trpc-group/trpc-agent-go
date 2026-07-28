@@ -45,6 +45,7 @@ type Source struct {
 	httpClient             *http.Client
 	chunkSize              int
 	chunkOverlap           int
+	chunkLengthFunc        func(string) (int, error)
 	customChunkingStrategy chunking.Strategy
 	transformers           []transform.Transformer
 	fileReaderType         source.FileReaderType
@@ -74,6 +75,12 @@ func New(urls []string, opts ...Option) *Source {
 	}
 	if s.chunkOverlap != 0 {
 		readerOpts = append(readerOpts, isource.WithChunkOverlap(s.chunkOverlap))
+	}
+	if s.chunkLengthFunc != nil {
+		readerOpts = append(
+			readerOpts,
+			isource.WithChunkLengthFunc(s.chunkLengthFunc),
+		)
 	}
 	if s.customChunkingStrategy != nil {
 		readerOpts = append(readerOpts, isource.WithCustomChunkingStrategy(s.customChunkingStrategy))

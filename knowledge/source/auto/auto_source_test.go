@@ -11,6 +11,7 @@ package auto
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/document"
@@ -27,9 +29,12 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
 )
 
-type mockChunkingStrategy struct{}
+type mockChunkingStrategy struct {
+	called bool
+}
 
 func (m *mockChunkingStrategy) Chunk(doc *document.Document) ([]*document.Document, error) {
+	m.called = true
 	return []*document.Document{doc}, nil
 }
 
@@ -171,6 +176,37 @@ func TestReadDocuments(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("custom-chunk-length-function", func(t *testing.T) {
+		const chunkSize = 20
+		lengthFunc := func(text string) (int, error) {
+			return 2 * utf8.RuneCountInString(text), nil
+		}
+		src := New(
+			[]string{input},
+			WithChunkSize(chunkSize),
+			WithChunkLengthFunc(lengthFunc),
+		)
+
+		docs, err := src.ReadDocuments(ctx)
+
+		if err != nil {
+			t.Fatalf("ReadDocuments returned error: %v", err)
+		}
+		if len(docs) <= 1 {
+			t.Fatalf("expected multiple chunks, got %d", len(docs))
+		}
+		for i, doc := range docs {
+			size, err := lengthFunc(doc.Content)
+			if err != nil {
+				t.Fatalf("length function returned error: %v", err)
+			}
+			if size > chunkSize {
+				t.Fatalf("chunk %d size %d exceeds expected max %d",
+					i, size, chunkSize)
+			}
+		}
+	})
 }
 
 // TestProcessAsURLError verifies error handling in processAsURL.
@@ -187,6 +223,33 @@ func TestProcessAsURLError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error from failed URL processing")
 	}
+}
+
+func TestProcessAsURLWithCustomChunking(t *testing.T) {
+	ctx := context.Background()
+	ts := httptest.NewServer(http.HandlerFunc(func(
+		w http.ResponseWriter,
+		_ *http.Request,
+	) {
+		_, _ = w.Write([]byte("custom strategy content"))
+	}))
+	defer ts.Close()
+
+	strategy := &mockChunkingStrategy{}
+	src := New(
+		[]string{},
+		WithCustomChunkingStrategy(strategy),
+		WithChunkSize(1),
+		WithChunkLengthFunc(func(string) (int, error) {
+			return 0, errors.New("default length function should not run")
+		}),
+	)
+
+	docs, err := src.processAsURL(ctx, ts.URL)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, docs)
+	require.True(t, strategy.called)
 }
 
 // TestProcessAsDirectoryError verifies error handling in processAsDirectory.

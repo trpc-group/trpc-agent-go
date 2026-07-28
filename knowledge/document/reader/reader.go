@@ -25,6 +25,7 @@ type Config struct {
 	Chunk                  bool
 	ChunkSize              int
 	ChunkOverlap           int
+	ChunkLengthFunc        func(string) (int, error)
 	CustomChunkingStrategy chunking.Strategy
 	OCRExtractor           ocr.Extractor
 	Transformers           []transform.Transformer
@@ -54,6 +55,19 @@ func WithChunkSize(size int) Option {
 func WithChunkOverlap(overlap int) Option {
 	return func(c *Config) {
 		c.ChunkOverlap = overlap
+		c.Chunk = true
+	}
+}
+
+// WithChunkLengthFunc sets the function used by supported default chunking
+// strategies to measure chunk size and overlap. By default, text strategies
+// measure Unicode runes. The function must return a deterministic,
+// non-negative length that broadly grows with its input.
+func WithChunkLengthFunc(
+	lengthFunc func(string) (int, error),
+) Option {
+	return func(c *Config) {
+		c.ChunkLengthFunc = lengthFunc
 		c.Chunk = true
 	}
 }

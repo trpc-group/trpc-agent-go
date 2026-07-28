@@ -207,9 +207,9 @@ registry.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| ChunkSize | 1024 | Maximum Unicode runes for FixedSizeChunking, RecursiveChunking, and MarkdownChunking |
+| ChunkSize | 1024 | Maximum Unicode runes for FixedSizeChunking, RecursiveChunking, and MarkdownChunking; uses the configured length function's unit when one is set |
 | JSON ChunkSize | 2000 | Maximum serialized bytes for JSONChunking |
-| Overlap | 0 | Maximum overlapping Unicode runes between adjacent chunks |
+| Overlap | 0 | Maximum overlapping Unicode runes between adjacent chunks; uses the configured length function's unit when one is set |
 
 > `overlap` only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. It is a maximum: the strategy may move the overlap start to a natural boundary or reduce it so the final chunk remains within `chunkSize`. A large overlap leaves less room for new content and produces more chunks. JSONChunking does not support overlap.
 
@@ -246,11 +246,42 @@ fileSrc := filesource.New(
 )
 ```
 
+### Token-based Chunk Budgets
+
+FixedSizeChunking, RecursiveChunking, and MarkdownChunking can use a custom length function instead of counting Unicode runes. Configure it on a Source to keep the Reader's format-specific default strategy. For example, Markdown files still use MarkdownChunking and retain their heading paths:
+
+```go
+import (
+    tiktoken "trpc.group/trpc-go/trpc-agent-go/model/tiktoken"
+    filesource "trpc.group/trpc-go/trpc-agent-go/knowledge/source/file"
+)
+
+counter, err := tiktoken.New("text-embedding-3-small")
+if err != nil {
+    return err
+}
+
+fileSrc := filesource.New(
+    []string{"./data/document.md"},
+    filesource.WithChunkSize(512),             // Maximum tokens
+    filesource.WithChunkOverlap(64),           // Maximum overlap tokens
+    filesource.WithChunkLengthFunc(counter.CountText),
+)
+```
+
+`WithChunkLengthFunc` is also available on DirSource, URLSource, AutoSource, and Reader. The text strategies measure each complete candidate, including separators and overlap, so each chunker's output `Document.Content` stays within the configured budget. The length function may be called repeatedly and concurrently; it should be local, deterministic, concurrency-safe, side-effect-free, and return a non-negative value that broadly grows with the input text. Local non-monotonic behavior from BPE tokenizers is supported, but arbitrary functions that do not behave like a text-length measurement are not. Errors are returned from `Chunk`.
+
+Choose a tokenizer that matches the embedding model and reserve margin for later processing. A Reader postprocessor can modify `Document.Content`, and the knowledge service can add file, chunk, and section metadata when it builds `EmbeddingText`; those later additions are outside the chunking budget.
+
+`MetaChunkSize` and `MetaOverlappedContentSize` remain Unicode-rune counts for backward compatibility; they do not change to token counts.
+
+This option affects the built-in FixedSizeChunking and MarkdownChunking selected by Readers. JSONChunking continues to use serialized bytes, and AST-based code Readers keep their structural chunking behavior. A custom strategy overrides the Source's size, overlap, and length-function options; configure its length function directly with `WithLengthFunc`, `WithRecursiveLengthFunc`, or `WithMarkdownLengthFunc`.
+
 ### Custom Chunking Strategy
 
 Use `WithCustomChunkingStrategy` to override the default chunking strategy.
 
-> **Note**: Custom chunking strategy completely overrides `WithChunkSize` and `WithChunkOverlap` configurations. Chunking parameters must be set within the custom strategy.
+> **Note**: Custom chunking strategy completely overrides `WithChunkSize`, `WithChunkOverlap`, and `WithChunkLengthFunc`. Chunking parameters must be set within the custom strategy.
 
 #### FixedSizeChunking - Fixed Size Chunking
 

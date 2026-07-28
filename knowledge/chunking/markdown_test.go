@@ -10,6 +10,7 @@
 package chunking
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -628,10 +629,41 @@ func TestMarkdownChunkingRebalancesSemanticTail(t *testing.T) {
 		content.WriteString(parts[i].content)
 	}
 
-	chunks := NewMarkdownChunking(
+	chunks, err := NewMarkdownChunking(
 		WithMarkdownChunkSize(chunkSize),
 	).mergeAdjacentChunks(content.String(), parts)
+	require.NoError(t, err)
 
+	require.Len(t, chunks, 2)
+	require.Equal(t, 1002, utf8.RuneCountInString(chunks[0].content))
+	require.Equal(t, 602, utf8.RuneCountInString(chunks[1].content))
+	require.Equal(t, []string{"Root"}, chunks[0].headerPath)
+	require.Equal(t, []string{"Root"}, chunks[1].headerPath)
+}
+
+func TestMarkdownChunkingCustomLengthRebalancesSemanticTail(t *testing.T) {
+	parts := []markdownChunk{
+		newMarkdownChunk(strings.Repeat("a", 600), []string{"Root"}),
+		newMarkdownChunk(strings.Repeat("b", 400), []string{"Root", "One"}),
+		newMarkdownChunk(strings.Repeat("c", 350), []string{"Root", "Two"}),
+		newMarkdownChunk(strings.Repeat("d", 250), []string{"Root", "Three"}),
+	}
+	var content strings.Builder
+	for i := range parts {
+		if i > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(parts[i].content)
+	}
+
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(3000),
+		WithMarkdownLengthFunc(func(text string) (int, error) {
+			return 2 * utf8.RuneCountInString(text), nil
+		}),
+	).mergeAdjacentChunks(content.String(), parts)
+
+	require.NoError(t, err)
 	require.Len(t, chunks, 2)
 	require.Equal(t, 1002, utf8.RuneCountInString(chunks[0].content))
 	require.Equal(t, 602, utf8.RuneCountInString(chunks[1].content))
@@ -2225,5 +2257,135 @@ func TestMarkdownChunking_ReservesBudgetForExplicitOverlap(t *testing.T) {
 		)
 		require.Contains(t, chunk.Metadata,
 			source.MetaOverlappedContentSize)
+	}
+}
+
+func TestMarkdownChunking_CustomLengthFunc(t *testing.T) {
+	lengthFunc := func(text string) (int, error) {
+		return 2 * utf8.RuneCountInString(text), nil
+	}
+	const (
+		chunkSize = 80
+		overlap   = 20
+	)
+	chunker := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+		WithMarkdownLengthFunc(lengthFunc),
+	)
+	content := `# Root
+
+Root context.
+
+## Mixed
+
+English and 中文 content should keep its Markdown structure while the custom length function controls the final budget. ` +
+		strings.Repeat("More mixed content. ", 10)
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "custom-markdown-length",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	var foundMixedPath bool
+	for i, chunk := range chunks {
+		size, err := lengthFunc(chunk.Content)
+		require.NoError(t, err)
+		require.LessOrEqual(t, size, chunkSize,
+			"chunk %d exceeds the custom length budget", i)
+		if chunk.Metadata[source.MetaMarkdownHeaderPath] == "Root > Mixed" {
+			foundMixedPath = true
+		}
+	}
+	require.True(t, foundMixedPath)
+}
+
+func TestMarkdownChunking_CustomLengthLargeOverlapWithinBudget(t *testing.T) {
+	lengthFunc := func(text string) (int, error) {
+		return 2 * utf8.RuneCountInString(text), nil
+	}
+	const (
+		chunkSize = 120
+		overlap   = 100
+	)
+	chunker := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+		WithMarkdownOverlap(overlap),
+		WithMarkdownLengthFunc(lengthFunc),
+	)
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "custom-large-overlap",
+		Content: strings.Repeat("token aware content ", 40),
+	})
+
+	require.NoError(t, err)
+	require.Greater(t, len(chunks), 1)
+	for i, chunk := range chunks {
+		size, err := lengthFunc(chunk.Content)
+		require.NoError(t, err)
+		require.LessOrEqual(t, size, chunkSize,
+			"chunk %d exceeds the custom length budget", i)
+	}
+}
+
+func TestMarkdownChunking_CustomLengthFuncError(t *testing.T) {
+	wantErr := errors.New("length failed")
+	chunker := NewMarkdownChunking(
+		WithMarkdownChunkSize(20),
+		WithMarkdownLengthFunc(func(string) (int, error) {
+			return 0, wantErr
+		}),
+	)
+
+	chunks, err := chunker.Chunk(&document.Document{
+		ID:      "length-error",
+		Content: "# Header\n\nContent",
+	})
+
+	require.ErrorIs(t, err, wantErr)
+	require.Nil(t, chunks)
+}
+
+func TestMarkdownChunking_CustomRuneLengthKeepsSemanticPacking(
+	t *testing.T,
+) {
+	content := `# Root
+
+Root introduction.
+
+## First
+
+First section has enough text to represent one semantic unit.
+
+## Second
+
+Second section has enough text to represent another semantic unit.
+
+## Third
+
+Third section has enough text to represent the final semantic unit.`
+	doc := &document.Document{ID: "markdown-rune-parity", Content: content}
+	defaultChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(180),
+	).Chunk(doc)
+	require.NoError(t, err)
+	customChunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(180),
+		WithMarkdownLengthFunc(func(text string) (int, error) {
+			return utf8.RuneCountInString(text), nil
+		}),
+	).Chunk(doc)
+	require.NoError(t, err)
+
+	require.Equal(t, documentContents(defaultChunks),
+		documentContents(customChunks))
+	for i := range defaultChunks {
+		require.Equal(t,
+			defaultChunks[i].Metadata[source.MetaMarkdownHeaderPath],
+			customChunks[i].Metadata[source.MetaMarkdownHeaderPath],
+		)
 	}
 }

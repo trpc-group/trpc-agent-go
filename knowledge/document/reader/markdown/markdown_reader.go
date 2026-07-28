@@ -56,7 +56,16 @@ func New(opts ...reader.Option) reader.Reader {
 	}
 
 	// Build chunking strategy using the default builder for markdown
-	strategy := reader.BuildChunkingStrategy(config, buildDefaultChunkingStrategy)
+	strategy := reader.BuildChunkingStrategy(
+		config,
+		func(chunkSize, overlap int) chunking.Strategy {
+			return buildDefaultChunkingStrategyWithLength(
+				chunkSize,
+				overlap,
+				config.ChunkLengthFunc,
+			)
+		},
+	)
 
 	// Create reader from config
 	return &Reader{
@@ -69,12 +78,30 @@ func New(opts ...reader.Option) reader.Reader {
 // buildDefaultChunkingStrategy builds the default chunking strategy for markdown reader.
 // Markdown uses MarkdownChunking with configurable chunk size and overlap.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
+	return buildDefaultChunkingStrategyWithLength(
+		chunkSize,
+		overlap,
+		nil,
+	)
+}
+
+func buildDefaultChunkingStrategyWithLength(
+	chunkSize int,
+	overlap int,
+	lengthFunc func(string) (int, error),
+) chunking.Strategy {
 	var opts []chunking.MarkdownOption
 	if chunkSize != 0 {
 		opts = append(opts, chunking.WithMarkdownChunkSize(chunkSize))
 	}
 	if overlap != 0 {
 		opts = append(opts, chunking.WithMarkdownOverlap(overlap))
+	}
+	if lengthFunc != nil {
+		opts = append(
+			opts,
+			chunking.WithMarkdownLengthFunc(lengthFunc),
+		)
 	}
 	return chunking.NewMarkdownChunking(opts...)
 }

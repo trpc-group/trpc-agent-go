@@ -46,6 +46,16 @@ func New(modelName string) (*Counter, error) {
 	return &Counter{encoding: enc}, nil
 }
 
+// CountText returns the token count for plain text using the configured
+// tokenizer.
+func (c *Counter) CountText(text string) (int, error) {
+	count, err := c.encoding.Count(text)
+	if err != nil {
+		return 0, fmt.Errorf("count text tokens failed: %w", err)
+	}
+	return count, nil
+}
+
 // CountTokens returns the token count for a single message using tiktoken-go.
 // It encodes Message.Content, Message.ReasoningContent, text ContentParts, and ToolCalls.
 func (c *Counter) CountTokens(_ context.Context, message model.Message) (int, error) {
