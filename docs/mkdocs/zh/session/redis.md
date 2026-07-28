@@ -33,6 +33,7 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key 前缀，所有 key 将以 `prefix:` 开头。适用于多应用共享同一 Redis 实例的场景 |
 | `WithCompatMode(mode CompatMode)` | `CompatMode` | `CompatModeLegacy` | 存储兼容模式。可选值：`CompatModeNone`、`CompatModeLegacy`、`CompatModeTransition`。详见[存储兼容模式](#存储兼容模式compatmode) |
 | `WithEnableUserSessionIndex(enable bool)` | `bool` | `false` | 启用 HashIdx 的用户级 Session 索引。详见[用户级 Session 索引](#用户级-session-索引) |
+| `WithDisableScriptCache(disable bool)` | `bool` | `false` | 默认保持 `EVALSHA`-first；启用后仅通过 `EVAL` 执行 Lua 脚本，适用于脚本缓存不可靠的后端，但每次调用都会发送完整脚本，增加带宽开销 |
 
 **异步持久化配置：**
 
