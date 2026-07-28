@@ -58,6 +58,12 @@ func TestRenderJSONIsStableWithoutMutatingReport(t *testing.T) {
 	assert.Equal(t, "z", report.Rounds[0].Gate.Checks[0].ID)
 }
 
+func TestRenderJSONOmitsUnusedSeed(t *testing.T) {
+	contents, err := renderJSON(minimalReport())
+	require.NoError(t, err)
+	assert.NotContains(t, string(contents), `"seed"`)
+}
+
 func TestRenderReportRedactsAndBoundsDynamicEvidence(t *testing.T) {
 	const secret = "sk-example-secret-value"
 	report := minimalReport()
@@ -108,4 +114,15 @@ func TestRenderMarkdownHasSingleTrailingNewline(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, strings.HasSuffix(string(got), "\n"))
 	assert.False(t, strings.HasSuffix(string(got), "\n\n"))
+}
+
+func TestRenderMarkdownSeparatesRoundsWithBlankLine(t *testing.T) {
+	report := minimalReport()
+	second := report.Rounds[0]
+	second.Number = 2
+	report.Rounds = append(report.Rounds, second)
+
+	got, err := renderMarkdown(report)
+	require.NoError(t, err)
+	assert.Contains(t, string(got), "| minimum_gain | fail |  |\n\n## Round 2")
 }

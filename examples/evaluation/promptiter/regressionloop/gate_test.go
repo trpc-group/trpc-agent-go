@@ -61,7 +61,26 @@ func TestGateFailsClosedForUnknownBudgetMeasurement(t *testing.T) {
 		Candidate: testSnapshot(0.5, testCase("critical", status.EvalStatusPassed, 0.5)),
 	})
 
+	assert.False(t, decision.Accepted)
 	assert.Contains(t, failedCheckIDs(decision), "tokens")
+}
+
+func TestGateCriticalCaseReasonOmitsEmptyMetricSeparator(t *testing.T) {
+	decision := decide(gateInput{
+		Policy: gatePolicy{Critical: []criticalRule{{
+			EvalCaseID: "critical", MustPass: true,
+		}}},
+		Baseline:  testSnapshot(0.5, testCase("critical", status.EvalStatusPassed, 0.5)),
+		Candidate: testSnapshot(0.5, testCase("critical", status.EvalStatusFailed, 0.5)),
+	})
+
+	for _, check := range decision.Checks {
+		if check.ID == "critical_case" {
+			assert.Equal(t, "critical evidence critical did not pass", check.Observed)
+			return
+		}
+	}
+	t.Fatal("critical_case check not found")
 }
 
 func TestGateCountsFailedMetricWhenCaseStatusIsInconsistent(t *testing.T) {

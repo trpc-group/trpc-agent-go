@@ -29,7 +29,7 @@ func publishBundle(root string, report regressionReport, profile *promptiter.Pro
 	if err := validateArtifactPath(root, report.RunID); err != nil {
 		return err
 	}
-	accepted := report.Accepted && report.Status == "succeeded"
+	accepted := report.Accepted && report.Status == reportStatusSucceeded
 	if accepted && (profile == nil || profile.StructureID == "") {
 		return errors.New("accepted succeeded report requires a complete candidate profile")
 	}

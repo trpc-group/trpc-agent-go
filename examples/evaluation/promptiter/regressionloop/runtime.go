@@ -44,12 +44,13 @@ type runtimeConfig struct {
 }
 
 type runtime struct {
-	engine     promptiterengine.Engine
-	evaluator  evaluation.AgentEvaluator
-	backwarder backwarder.Backwarder
-	aggregator aggregator.Aggregator
-	optimizer  optimizer.Optimizer
-	ledger     *ledger
+	engine        promptiterengine.Engine
+	evaluator     evaluation.AgentEvaluator
+	backwarder    backwarder.Backwarder
+	aggregator    aggregator.Aggregator
+	optimizer     optimizer.Optimizer
+	ledger        *ledger
+	judgeRequired bool
 
 	runners   []runner.Runner
 	closeOnce sync.Once
@@ -86,28 +87,42 @@ func buildRuntime(ctx context.Context, cfg runtimeConfig) (*runtime, error) {
 		return nil, err
 	}
 
+	metricManager := metriclocal.New(
+		metric.WithBaseDir(cfg.DataDir),
+		metric.WithLocator(&sharedMetricLocator{metricFileID: cfg.Config.MetricFileID}),
+	)
+	judgeRequired, err := metricsRequireJudge(
+		ctx, metricManager, regressionAppName, cfg.Config.TrainEvalSetID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("inspect runtime metrics: %w", err)
+	}
+
 	runLedger := newLedger()
-	models, err := buildRuntimeModels(cfg.Config, runLedger)
+	runLedger.setModelCallLimit(cfg.Config.MaxModelCalls)
+	models, err := buildRuntimeModels(cfg.Config, runLedger, judgeRequired)
 	if err != nil {
 		return nil, fmt.Errorf("build runtime models: %w", err)
 	}
 	candidateAgent := newCandidateAgent(models.candidate, cfg.CandidateInstruction)
-	judgeAgent := newJudgeAgent(models.judge)
 	backwarderAgent := newBackwarderAgent(models.backwarder)
 	aggregatorAgent := newAggregatorAgent(models.aggregator)
 	optimizerAgent := newOptimizerAgent(models.optimizer)
 
 	candidateRunner := runner.NewRunner(regressionAppName, candidateAgent)
-	judgeRunner := runner.NewRunner(judgeAgentName, judgeAgent)
 	backwarderRunner := runner.NewRunner(backwarderAgentName, backwarderAgent)
 	aggregatorRunner := runner.NewRunner(aggregatorAgentName, aggregatorAgent)
 	optimizerRunner := runner.NewRunner(optimizerAgentName, optimizerAgent)
 	runners := []runner.Runner{
 		candidateRunner,
-		judgeRunner,
 		backwarderRunner,
 		aggregatorRunner,
 		optimizerRunner,
+	}
+	var judgeRunner runner.Runner
+	if models.judge != nil {
+		judgeRunner = runner.NewRunner(judgeAgentName, newJudgeAgent(models.judge))
+		runners = append(runners, judgeRunner)
 	}
 	closeRunners := func() error {
 		var closeErr error
@@ -118,24 +133,25 @@ func buildRuntime(ctx context.Context, cfg runtimeConfig) (*runtime, error) {
 	}
 
 	evalSetManager := evalsetlocal.New(evalset.WithBaseDir(cfg.DataDir))
-	metricManager := metriclocal.New(
-		metric.WithBaseDir(cfg.DataDir),
-		metric.WithLocator(&sharedMetricLocator{metricFileID: cfg.Config.MetricFileID}),
-	)
 	evalResultManager := evalresultlocal.New(evalresult.WithBaseDir(cfg.OutputDir))
-	agentEvaluator, err := evaluation.New(
-		regressionAppName,
-		candidateRunner,
+	evaluatorOptions := []evaluation.Option{
 		evaluation.WithEvalSetManager(evalSetManager),
 		evaluation.WithMetricManager(metricManager),
 		evaluation.WithEvalResultManager(evalResultManager),
 		evaluation.WithMetricRegistry(metricregistry.New()),
-		evaluation.WithJudgeRunner(judgeRunner),
 		evaluation.WithNumRuns(1),
 		evaluation.WithRunDetailsEnabled(true),
 		evaluation.WithEvalCaseParallelism(cfg.Config.EvalCaseParallelism),
 		evaluation.WithEvalCaseParallelInferenceEnabled(cfg.Config.ParallelInference),
 		evaluation.WithEvalCaseParallelEvaluationEnabled(cfg.Config.ParallelEvaluation),
+	}
+	if judgeRunner != nil {
+		evaluatorOptions = append(evaluatorOptions, evaluation.WithJudgeRunner(judgeRunner))
+	}
+	agentEvaluator, err := evaluation.New(
+		regressionAppName,
+		candidateRunner,
+		evaluatorOptions...,
 	)
 	if err != nil {
 		_ = closeRunners()
@@ -175,26 +191,23 @@ func buildRuntime(ctx context.Context, cfg runtimeConfig) (*runtime, error) {
 	}
 
 	return &runtime{
-		engine:     engineInstance,
-		evaluator:  agentEvaluator,
-		backwarder: backwarderInstance,
-		aggregator: aggregatorInstance,
-		optimizer:  optimizerInstance,
-		ledger:     runLedger,
-		runners:    runners,
+		engine:        engineInstance,
+		evaluator:     agentEvaluator,
+		backwarder:    backwarderInstance,
+		aggregator:    aggregatorInstance,
+		optimizer:     optimizerInstance,
+		ledger:        runLedger,
+		judgeRequired: judgeRequired,
+		runners:       runners,
 	}, nil
 }
 
-func buildRuntimeModels(cfg config, runLedger *ledger) (runtimeModels, error) {
+func buildRuntimeModels(cfg config, runLedger *ledger, judgeRequired bool) (runtimeModels, error) {
 	if cfg.Mode == modeDeterministic {
-		return runtimeModels{
+		models := runtimeModels{
 			candidate: newDeterministicCountedModel(
 				"candidate", "candidate", newScriptedModel("candidate"),
 				runLedger, rolePricing(cfg.Candidate),
-			),
-			judge: newDeterministicCountedModel(
-				"judge", "judge", newScriptedModel("judge"),
-				runLedger, rolePricing(cfg.Judge),
 			),
 			backwarder: newDeterministicCountedModel(
 				"worker", "backwarder", newScriptedModel("backwarder"),
@@ -208,14 +221,17 @@ func buildRuntimeModels(cfg config, runLedger *ledger) (runtimeModels, error) {
 				"worker", "optimizer", newScriptedModel("optimizer"),
 				runLedger, rolePricing(cfg.Worker),
 			),
-		}, nil
+		}
+		if judgeRequired {
+			models.judge = newDeterministicCountedModel(
+				"judge", "judge", newScriptedModel("judge"),
+				runLedger, rolePricing(cfg.Judge),
+			)
+		}
+		return models, nil
 	}
 
 	candidate, err := newLiveStageModel("candidate", "candidate", cfg.Candidate, runLedger)
-	if err != nil {
-		return runtimeModels{}, err
-	}
-	judge, err := newLiveStageModel("judge", "judge", cfg.Judge, runLedger)
 	if err != nil {
 		return runtimeModels{}, err
 	}
@@ -231,13 +247,41 @@ func buildRuntimeModels(cfg config, runLedger *ledger) (runtimeModels, error) {
 	if err != nil {
 		return runtimeModels{}, err
 	}
-	return runtimeModels{
+	models := runtimeModels{
 		candidate:  candidate,
-		judge:      judge,
 		backwarder: backwarderModel,
 		aggregator: aggregatorModel,
 		optimizer:  optimizerModel,
-	}, nil
+	}
+	if judgeRequired {
+		judge, err := newLiveStageModel("judge", "judge", cfg.Judge, runLedger)
+		if err != nil {
+			return runtimeModels{}, err
+		}
+		models.judge = judge
+	}
+	return models, nil
+}
+
+func metricsRequireJudge(
+	ctx context.Context,
+	manager metric.Manager,
+	appName, evalSetID string,
+) (bool, error) {
+	metricNames, err := manager.List(ctx, appName, evalSetID)
+	if err != nil {
+		return false, err
+	}
+	for _, metricName := range metricNames {
+		evalMetric, err := manager.Get(ctx, appName, evalSetID, metricName)
+		if err != nil {
+			return false, err
+		}
+		if evalMetric != nil && evalMetric.Criterion != nil && evalMetric.Criterion.LLMJudge != nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func newDeterministicCountedModel(

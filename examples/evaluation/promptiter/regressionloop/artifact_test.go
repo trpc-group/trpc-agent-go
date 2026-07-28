@@ -38,6 +38,16 @@ func TestPublishBundleWritesAcceptedProfileWithPrivateModes(t *testing.T) {
 	assert.Equal(t, fs.FileMode(0o700), info.Mode().Perm())
 }
 
+func TestPublishBundlePreservesExistingRootMode(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "operator-owned")
+	require.NoError(t, os.Mkdir(root, 0o750))
+	require.NoError(t, publishBundle(root, minimalReport(), nil))
+
+	info, err := os.Stat(root)
+	require.NoError(t, err)
+	assert.Equal(t, fs.FileMode(0o750), info.Mode().Perm())
+}
+
 func TestPublishBundleRejectsCredentialBearingProfile(t *testing.T) {
 	root := t.TempDir()
 	report := minimalReport()

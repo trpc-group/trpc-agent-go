@@ -20,6 +20,8 @@ import (
 
 const (
 	reportSchemaVersion    = 1
+	reportStatusSucceeded  = "succeeded"
+	reportStatusFailed     = "failed"
 	maxReportTextBytes     = 4096
 	reportTruncationMarker = "… [truncated]"
 )
@@ -58,7 +60,6 @@ type regressionReport struct {
 	Status            string                      `json:"status"`
 	Accepted          bool                        `json:"accepted"`
 	Mode              runMode                     `json:"mode"`
-	Seed              int64                       `json:"seed"`
 	StructureID       string                      `json:"structureId"`
 	Fingerprints      map[string]string           `json:"fingerprints"`
 	Roles             map[string]effectiveRole    `json:"roles"`

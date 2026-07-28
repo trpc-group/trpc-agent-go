@@ -83,7 +83,7 @@ func attributeCase(evalCase caseResult) caseAttribution {
 func failedMetrics(metrics []metricResult) []metricResult {
 	result := make([]metricResult, 0, len(metrics))
 	for _, metric := range metrics {
-		if metric.Status != "passed" {
+		if metric.Status != status.EvalStatusPassed {
 			result = append(result, metric)
 		}
 	}
@@ -165,7 +165,8 @@ func categorySelector(category attributionCategory, names ...string) func(metric
 }
 
 func incompleteAttribution(metric metricResult) (attribution, bool) {
-	if metric.Status == "unknown" || metric.Status == "not_evaluated" || metric.Status == "" {
+	if metric.Status == status.EvalStatusUnknown ||
+		metric.Status == status.EvalStatusNotEvaluated || metric.Status == "" {
 		return attribution{
 			Category:   attributionEvaluationIncomplete,
 			MetricName: metric.Name,

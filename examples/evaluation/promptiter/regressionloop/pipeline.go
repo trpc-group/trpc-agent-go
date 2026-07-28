@@ -14,10 +14,11 @@ import (
 	"fmt"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
+	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	promptiterengine "trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/engine"
-	"trpc.group/trpc-go/trpc-agent-go/internal/profilecompiler"
 )
 
 type pipeline struct {
@@ -44,27 +45,34 @@ func (p *pipeline) run(ctx context.Context) (*pipelineResult, error) {
 	if err := p.validate(); err != nil {
 		return nil, err
 	}
+	p.ledger.setModelCallLimit(p.cfg.MaxModelCalls)
 	snapshot, err := p.engine.Describe(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("describe agent structure: %w", err)
 	}
-	structure, err := profilecompiler.NewStructure(snapshot)
-	if err != nil {
-		return nil, fmt.Errorf("build profile structure: %w", err)
-	}
-	initial, err := normalizeProfile(structure, nil)
+	initial, initialRunOptions, err := promptiterengine.CompileProfile(snapshot, nil)
 	if err != nil {
 		return nil, fmt.Errorf("normalize initial profile: %w", err)
 	}
-	if _, ok := structure.SurfaceIndex[p.targetSurfaceID]; !ok {
+	if !snapshotHasSurface(snapshot, p.targetSurfaceID) {
 		return nil, fmt.Errorf("target surface %q does not exist", p.targetSurfaceID)
 	}
 
-	baselineTrain, err := p.evaluateProfile(ctx, structure, initial, p.cfg.TrainEvalSetID, p.trainCatalog)
+	if err := p.canReserve(baselineReservation(
+		p.trainCatalog,
+		p.validationCatalog,
+	)); err != nil {
+		return nil, fmt.Errorf("reserve complete baseline budget: %w", err)
+	}
+	baselineTrain, err := p.evaluateProfile(
+		ctx, initialRunOptions, p.cfg.TrainEvalSetID, p.trainCatalog,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline training set: %w", err)
 	}
-	baselineValidation, err := p.evaluateProfile(ctx, structure, initial, p.cfg.ValidationEvalSetID, p.validationCatalog)
+	baselineValidation, err := p.evaluateProfile(
+		ctx, initialRunOptions, p.cfg.ValidationEvalSetID, p.validationCatalog,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("evaluate baseline held-out set: %w", err)
 	}
@@ -81,8 +89,12 @@ func (p *pipeline) run(ctx context.Context) (*pipelineResult, error) {
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := p.ledger.canReserve(promptIterReservation(p.trainCatalog), p.gatePolicy()); err != nil {
-			return result, fmt.Errorf("reserve promptiter budget: %w", err)
+		if err := p.canReserve(promptIterReservation(p.trainCatalog)); err != nil {
+			reservationErr := fmt.Errorf("reserve promptiter budget: %w", err)
+			result.Rounds = append(result.Rounds, failedRound(
+				round, releasedSnapshot, p.ledger.snapshot(), reservationErr.Error(),
+			))
+			return result, reservationErr
 		}
 		request := p.runRequest(result.SearchProfile, lossHints)
 		engineResult, runErr := p.engine.Run(ctx, request)
@@ -98,17 +110,19 @@ func (p *pipeline) run(ctx context.Context) (*pipelineResult, error) {
 			result.Rounds = append(result.Rounds, failedRound(round, releasedSnapshot, p.ledger.snapshot(), candidateErr.Error()))
 			continue
 		}
-		candidate, err = normalizeProfile(structure, candidate)
+		candidate, candidateRunOptions, err := promptiterengine.CompileProfile(
+			snapshot, candidate,
+		)
 		if err != nil {
 			result.Rounds = append(result.Rounds, failedRound(round, releasedSnapshot, p.ledger.snapshot(), err.Error()))
 			continue
 		}
-		if err := p.ledger.canReserve(validationReservation(p.validationCatalog), p.gatePolicy()); err != nil {
+		if err := p.canReserve(evaluationReservation(p.validationCatalog)); err != nil {
 			result.Rounds = append(result.Rounds, failedRound(round, releasedSnapshot, p.ledger.snapshot(), err.Error()))
 			continue
 		}
 		candidateSnapshot, evalErr := p.evaluateProfile(
-			ctx, structure, candidate, p.cfg.ValidationEvalSetID, p.validationCatalog,
+			ctx, candidateRunOptions, p.cfg.ValidationEvalSetID, p.validationCatalog,
 		)
 		if evalErr != nil {
 			result.Rounds = append(result.Rounds, failedRound(round, releasedSnapshot, p.ledger.snapshot(), evalErr.Error()))
@@ -159,15 +173,10 @@ func (p *pipeline) validate() error {
 
 func (p *pipeline) evaluateProfile(
 	ctx context.Context,
-	structure *profilecompiler.Structure,
-	profile *promptiter.Profile,
+	runOptions []agent.RunOption,
 	evalSetID string,
 	expected *catalog,
 ) (evaluationSnapshot, error) {
-	runOptions, err := compileProfileOptions(structure, profile)
-	if err != nil {
-		return evaluationSnapshot{}, fmt.Errorf("compile profile: %w", err)
-	}
 	result, err := p.evaluator.Evaluate(ctx, evalSetID,
 		evaluation.WithRunOptions(runOptions...),
 		evaluation.WithEvalCaseParallelism(p.cfg.EvalCaseParallelism),
@@ -191,7 +200,7 @@ func (p *pipeline) runRequest(profile *promptiter.Profile, hints []promptitereng
 	train := promptiterengine.EvalSetInput{EvalSetID: p.cfg.TrainEvalSetID, LossHints: hints}
 	return &promptiterengine.RunRequest{
 		Train:          []promptiterengine.EvalSetInput{train},
-		Validation:     []promptiterengine.EvalSetInput{{EvalSetID: p.cfg.SearchEvalSetID}},
+		Validation:     []promptiterengine.EvalSetInput{{EvalSetID: p.cfg.TrainEvalSetID}},
 		InitialProfile: profile,
 		EvaluationOptions: promptiterengine.EvaluationOptions{
 			EvalCaseParallelism:               p.cfg.EvalCaseParallelism,
@@ -214,48 +223,19 @@ func (p *pipeline) gatePolicy() gatePolicy {
 	}
 }
 
-func normalizeProfile(structure *profilecompiler.Structure, profile *promptiter.Profile) (*promptiter.Profile, error) {
-	var compilerProfile *profilecompiler.Profile
-	if profile != nil {
-		compilerProfile = &profilecompiler.Profile{StructureID: profile.StructureID}
-		for _, override := range profile.Overrides {
-			compilerProfile.Overrides = append(compilerProfile.Overrides, profilecompiler.SurfaceOverride{
-				SurfaceID: override.SurfaceID, Value: override.Value,
-			})
-		}
-	}
-	normalized, err := structure.NormalizeProfile(compilerProfile)
-	if err != nil {
-		return nil, err
-	}
-	result := &promptiter.Profile{StructureID: normalized.StructureID, Overrides: make([]promptiter.SurfaceOverride, 0, len(normalized.Overrides))}
-	for _, override := range normalized.Overrides {
-		result.Overrides = append(result.Overrides, promptiter.SurfaceOverride{SurfaceID: override.SurfaceID, Value: override.Value})
-	}
-	return result, nil
+func (p *pipeline) canReserve(reservation usageSummary) error {
+	return p.ledger.canReserve(reservation, gatePolicy{
+		MaxModelCalls: p.cfg.MaxModelCalls,
+	})
 }
 
-func compileProfileOptions(structure *profilecompiler.Structure, profile *promptiter.Profile) ([]agent.RunOption, error) {
-	normalized, err := normalizeProfile(structure, profile)
-	if err != nil {
-		return nil, err
+func snapshotHasSurface(snapshot *astructure.Snapshot, surfaceID string) bool {
+	for _, surface := range snapshot.Surfaces {
+		if surface.SurfaceID == surfaceID {
+			return true
+		}
 	}
-	compilerProfile := &profilecompiler.Profile{StructureID: normalized.StructureID}
-	for _, override := range normalized.Overrides {
-		compilerProfile.Overrides = append(compilerProfile.Overrides, profilecompiler.SurfaceOverride{SurfaceID: override.SurfaceID, Value: override.Value})
-	}
-	compilerProfile, err = structure.NormalizeProfile(compilerProfile)
-	if err != nil {
-		return nil, err
-	}
-	options, err := profilecompiler.CompileRunOptions(compilerProfile, true)
-	if err != nil {
-		return nil, err
-	}
-	if len(compilerProfile.Overrides) != 0 {
-		options = append(options, profilecompiler.WithProfile(compilerProfile))
-	}
-	return options, nil
+	return false
 }
 
 func outputProfile(result *promptiterengine.RunResult) (*promptiter.Profile, error) {
@@ -278,7 +258,7 @@ func trainingLossHints(snapshot evaluationSnapshot) []promptiterengine.LossHint 
 	var hints []promptiterengine.LossHint
 	for _, evalCase := range snapshot.Cases {
 		for _, metric := range evalCase.Metrics {
-			if metric.Status == "passed" {
+			if metric.Status == status.EvalStatusPassed {
 				continue
 			}
 			hints = append(hints, promptiterengine.LossHint{EvalCaseID: evalCase.EvalCaseID, MetricName: metric.Name, Reason: metric.Reason})
@@ -303,7 +283,7 @@ func engineLossHints(losses []promptiter.CaseLoss) []promptiterengine.LossHint {
 func snapshotAttributions(snapshot evaluationSnapshot) []caseAttribution {
 	var result []caseAttribution
 	for _, evalCase := range snapshot.Cases {
-		if evalCase.Status != "passed" {
+		if evalCase.Status != status.EvalStatusPassed {
 			result = append(result, attributeCase(evalCase))
 		}
 	}
@@ -334,6 +314,18 @@ func promptIterReservation(expected *catalog) usageSummary {
 	return usageSummary{ModelCalls: knownInt(calls)}
 }
 
-func validationReservation(expected *catalog) usageSummary {
-	return usageSummary{ModelCalls: knownInt(len(expected.EvalCaseIDs))}
+func evaluationReservation(expected *catalog) usageSummary {
+	return usageSummary{ModelCalls: knownInt(evaluationModelCalls(expected))}
+}
+
+func baselineReservation(catalogs ...*catalog) usageSummary {
+	calls := 0
+	for _, expected := range catalogs {
+		calls += evaluationModelCalls(expected)
+	}
+	return usageSummary{ModelCalls: knownInt(calls)}
+}
+
+func evaluationModelCalls(expected *catalog) int {
+	return len(expected.EvalCaseIDs) * (len(expected.MetricNames) + 1)
 }

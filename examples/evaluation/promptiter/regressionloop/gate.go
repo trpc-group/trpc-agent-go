@@ -14,7 +14,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
-type measurement[T int | int64 | float64] struct {
+type measurementValue interface {
+	int | int64 | float64
+}
+
+type measurement[T measurementValue] struct {
 	Known bool `json:"known"`
 	Value T    `json:"value"`
 }
@@ -123,11 +127,11 @@ func decide(input gateInput) gateDecision {
 	})
 
 	checks = append(checks,
-		intBudgetCheck("model_calls", input.Usage.ModelCalls, input.Policy.MaxModelCalls),
-		intBudgetCheck("tool_calls", input.Usage.ToolCalls, input.Policy.MaxToolCalls),
-		intBudgetCheck("tokens", input.Usage.Tokens, input.Policy.MaxTokens),
-		floatBudgetCheck("estimated_cost", input.Usage.EstimatedCost, input.Policy.MaxEstimatedCost),
-		int64BudgetCheck("latency", input.Usage.LatencyMillis, input.Policy.MaxLatencyMillis),
+		budgetCheck("model_calls", input.Usage.ModelCalls, input.Policy.MaxModelCalls),
+		budgetCheck("tool_calls", input.Usage.ToolCalls, input.Policy.MaxToolCalls),
+		budgetCheck("tokens", input.Usage.Tokens, input.Policy.MaxTokens),
+		budgetCheck("estimated_cost", input.Usage.EstimatedCost, input.Policy.MaxEstimatedCost),
+		budgetCheck("latency", input.Usage.LatencyMillis, input.Policy.MaxLatencyMillis),
 	)
 
 	decision := gateDecision{Accepted: true, Checks: checks}
@@ -159,22 +163,30 @@ func countHardFailures(snapshot evaluationSnapshot) int {
 
 func checkCriticalRules(rules []criticalRule, baseline, candidate evaluationSnapshot) (bool, string) {
 	for _, rule := range rules {
+		label := criticalRuleLabel(rule)
 		before, beforeOK := criticalScore(baseline, rule)
 		after, afterOK := criticalScore(candidate, rule)
 		if !beforeOK || !afterOK {
-			return false, fmt.Sprintf("missing critical evidence for %s/%s", rule.EvalCaseID, rule.MetricName)
+			return false, fmt.Sprintf("missing critical evidence for %s", label)
 		}
 		if rule.MustPass && !criticalPassed(candidate, rule) {
-			return false, fmt.Sprintf("critical evidence %s/%s did not pass", rule.EvalCaseID, rule.MetricName)
+			return false, fmt.Sprintf("critical evidence %s did not pass", label)
 		}
 		if rule.MinScore != nil && after < *rule.MinScore {
-			return false, fmt.Sprintf("critical evidence %s/%s score is below minimum", rule.EvalCaseID, rule.MetricName)
+			return false, fmt.Sprintf("critical evidence %s score is below minimum", label)
 		}
 		if rule.MaxScoreDrop != nil && before-after > *rule.MaxScoreDrop {
-			return false, fmt.Sprintf("critical evidence %s/%s score drop exceeds maximum", rule.EvalCaseID, rule.MetricName)
+			return false, fmt.Sprintf("critical evidence %s score drop exceeds maximum", label)
 		}
 	}
 	return true, ""
+}
+
+func criticalRuleLabel(rule criticalRule) string {
+	if rule.MetricName == "" {
+		return rule.EvalCaseID
+	}
+	return rule.EvalCaseID + "/" + rule.MetricName
 }
 
 func criticalScore(snapshot evaluationSnapshot, rule criticalRule) (float64, bool) {
@@ -230,25 +242,7 @@ func checkCaseDrop(baseline, candidate evaluationSnapshot, limit float64) (bool,
 	return largest <= limit, largest
 }
 
-func intBudgetCheck(id string, observed measurement[int], limit *int) gateCheck {
-	if limit == nil {
-		return gateCheck{ID: id, Passed: true}
-	}
-	passed := observed.Known && observed.Value <= *limit
-	return gateCheck{ID: id, Enabled: true, Passed: passed, Observed: observed, Limit: *limit,
-		Reason: failureReason(!passed, "measurement is unavailable or exceeds the budget")}
-}
-
-func int64BudgetCheck(id string, observed measurement[int64], limit *int64) gateCheck {
-	if limit == nil {
-		return gateCheck{ID: id, Passed: true}
-	}
-	passed := observed.Known && observed.Value <= *limit
-	return gateCheck{ID: id, Enabled: true, Passed: passed, Observed: observed, Limit: *limit,
-		Reason: failureReason(!passed, "measurement is unavailable or exceeds the budget")}
-}
-
-func floatBudgetCheck(id string, observed measurement[float64], limit *float64) gateCheck {
+func budgetCheck[T measurementValue](id string, observed measurement[T], limit *T) gateCheck {
 	if limit == nil {
 		return gateCheck{ID: id, Passed: true}
 	}

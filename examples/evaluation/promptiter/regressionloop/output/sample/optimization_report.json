@@ -4,10 +4,9 @@
   "status": "succeeded",
   "accepted": true,
   "mode": "deterministic",
-  "seed": 2003,
-  "structureId": "struct_c1028268acff55f4a6bfe78ba31056f7fa2bb63810c0d291757cdd4fac39a50a",
+  "structureId": "struct_50980e24c9af5cb448b82931d62fc751a5e4ef8c2bc2ac09862c5f711c2ad77c",
   "fingerprints": {
-    "config": "61eec187ea4ecb8269c3b8b6e3b8cbd6fee0e74a2f8d091484aa079057b1884e",
+    "config": "a9ef653bce1d0f5e5ddb55b2aae97d788a654e9f5c572268e4277d175850e9c0",
     "metrics": "31562355701df5b5e1e76b04b979440148d7e92285769b9c2fb799df35293e4d",
     "prompt": "8e8c444ad6765a9be3ad775466c8b6e45de59acd773140a1533e4ec3b73a00ca",
     "train": "babec21ef80ff4dcd965094c0f928856f431046cdfc2a29268ed8fd151bedbb3",
@@ -16,12 +15,6 @@
   "roles": {
     "candidate": {
       "model": "regression-candidate",
-      "inputPerMillion": 0,
-      "outputPerMillion": 0,
-      "maxRetries": 0
-    },
-    "judge": {
-      "model": "regression-judge",
       "inputPerMillion": 0,
       "outputPerMillion": 0,
       "maxRetries": 0
@@ -43,7 +36,6 @@
         "evalCaseId": "validation-json-format",
         "status": "failed",
         "score": 0.6666666666666666,
-        "executionError": "evaluation run failed",
         "metrics": [
           {
             "name": "json_format",
@@ -71,7 +63,6 @@
         "evalCaseId": "validation-security-critical",
         "status": "failed",
         "score": 0.6666666666666666,
-        "executionError": "evaluation run failed",
         "metrics": [
           {
             "name": "json_format",
@@ -99,7 +90,6 @@
         "evalCaseId": "validation-shipping-return",
         "status": "failed",
         "score": 0.6666666666666666,
-        "executionError": "evaluation run failed",
         "metrics": [
           {
             "name": "json_format",
@@ -489,7 +479,7 @@
             "id": "critical_case",
             "enabled": true,
             "passed": false,
-            "observed": "critical evidence validation-security-critical/ did not pass",
+            "observed": "critical evidence validation-security-critical did not pass",
             "reason": "a critical rule failed"
           },
           {
@@ -551,22 +541,25 @@
         {
           "evalCaseId": "validation-json-format",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-json\"} does not match regex ^\\{\"answer\":\"balanced: validation-json\"\\}$"
           }
         },
         {
           "evalCaseId": "validation-security-critical",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-security-critical\"} does not match regex ^\\{\"answer\":\"balanced: validation-security-critical\"\\}$"
           }
         },
         {
           "evalCaseId": "validation-shipping-return",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"baseline: validation-return\"} does not match regex ^\\{\"answer\":\"balanced: validation-return\"\\}$"
           }
         }
       ],
@@ -736,7 +729,7 @@
             "id": "critical_case",
             "enabled": true,
             "passed": false,
-            "observed": "critical evidence validation-security-critical/ did not pass",
+            "observed": "critical evidence validation-security-critical did not pass",
             "reason": "a critical rule failed"
           },
           {
@@ -798,22 +791,25 @@
         {
           "evalCaseId": "validation-json-format",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"overfit-regression: validation-json\"} does not match regex ^\\{\"answer\":\"balanced: validation-json\"\\}$"
           }
         },
         {
           "evalCaseId": "validation-security-critical",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"overfit-regression: validation-security-critical\"} does not match regex ^\\{\"answer\":\"balanced: validation-security-critical\"\\}$"
           }
         },
         {
           "evalCaseId": "validation-shipping-return",
           "primary": {
-            "category": "runtime_error",
-            "evidence": "evaluation run failed"
+            "category": "final_response_mismatch",
+            "metricName": "response_pattern",
+            "evidence": "final response mismatch: text mismatch: source {\"answer\":\"overfit-regression: validation-return\"} does not match regex ^\\{\"answer\":\"balanced: validation-return\"\\}$"
           }
         }
       ],
@@ -864,6 +860,6 @@
     }
   },
   "attributionCounts": {
-    "runtime_error": 6
+    "final_response_mismatch": 6
   }
 }

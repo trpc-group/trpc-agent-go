@@ -46,6 +46,7 @@ type ledger struct {
 	cost       float64
 	latency    time.Duration
 	pending    int
+	modelLimit *int
 
 	tokensUnknown bool
 	costUnknown   bool
@@ -56,6 +57,17 @@ func newLedger() *ledger {
 	return &ledger{}
 }
 
+func (l *ledger) setModelCallLimit(limit *int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if limit == nil {
+		l.modelLimit = nil
+		return
+	}
+	value := *limit
+	l.modelLimit = &value
+}
+
 func (l *ledger) record(call modelCall) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -64,8 +76,17 @@ func (l *ledger) record(call modelCall) {
 	l.addUsageLocked(call, usageKnown)
 }
 
-func (l *ledger) beginCall(stage, role string, prices pricing, durationOverride *time.Duration) *callTicket {
+func (l *ledger) beginCall(
+	stage, role string,
+	prices pricing,
+	durationOverride *time.Duration,
+) (*callTicket, error) {
 	l.mu.Lock()
+	if l.modelLimit != nil && l.modelCalls >= *l.modelLimit {
+		limit := *l.modelLimit
+		l.mu.Unlock()
+		return nil, fmt.Errorf("model call budget exhausted at limit %d", limit)
+	}
 	l.modelCalls++
 	l.pending++
 	l.mu.Unlock()
@@ -76,7 +97,7 @@ func (l *ledger) beginCall(stage, role string, prices pricing, durationOverride 
 		pricing:          prices,
 		start:            time.Now(),
 		durationOverride: durationOverride,
-	}
+	}, nil
 }
 
 func (l *ledger) recordToolCall() {

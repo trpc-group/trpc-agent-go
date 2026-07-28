@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -38,7 +39,10 @@ func (m *countedModel) GenerateContent(
 	ctx context.Context,
 	request *model.Request,
 ) (<-chan *model.Response, error) {
-	ticket := m.ledger.beginCall(m.stage, m.role, m.pricing, m.latencyOverride)
+	ticket, err := m.ledger.beginCall(m.stage, m.role, m.pricing, m.latencyOverride)
+	if err != nil {
+		return nil, err
+	}
 	responses, err := m.base.GenerateContent(ctx, request)
 	if err != nil {
 		ticket.finish(0, 0, false, err.Error())
@@ -47,26 +51,57 @@ func (m *countedModel) GenerateContent(
 	output := make(chan *model.Response)
 	go func() {
 		defer close(output)
-		var finalUsage *model.Usage
-		var responseErr string
-		for response := range responses {
-			if response != nil {
-				if response.Done && response.Usage != nil {
-					finalUsage = response.Usage
-				}
-				if response.Error != nil {
-					responseErr = response.Error.Error()
+		var latestUsage *model.Usage
+		var responseErr error
+		finish := func() {
+			if latestUsage == nil {
+				ticket.finish(0, 0, false, modelErrorString(responseErr))
+				return
+			}
+			ticket.finish(
+				latestUsage.PromptTokens,
+				latestUsage.CompletionTokens,
+				true,
+				modelErrorString(responseErr),
+			)
+		}
+		defer finish()
+		for {
+			var response *model.Response
+			var ok bool
+			select {
+			case <-ctx.Done():
+				responseErr = errors.Join(responseErr, ctx.Err())
+				return
+			case response, ok = <-responses:
+				if !ok {
+					return
 				}
 			}
-			output <- response
+			if response != nil {
+				if response.Usage != nil {
+					latestUsage = response.Usage
+				}
+				if response.Error != nil {
+					responseErr = errors.Join(responseErr, response.Error)
+				}
+			}
+			select {
+			case output <- response:
+			case <-ctx.Done():
+				responseErr = errors.Join(responseErr, ctx.Err())
+				return
+			}
 		}
-		if finalUsage == nil {
-			ticket.finish(0, 0, false, responseErr)
-			return
-		}
-		ticket.finish(finalUsage.PromptTokens, finalUsage.CompletionTokens, true, responseErr)
 	}()
 	return output, nil
+}
+
+func modelErrorString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (m *countedModel) Info() model.Info {

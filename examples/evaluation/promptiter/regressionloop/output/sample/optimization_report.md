@@ -39,6 +39,7 @@
 | run_status | pass |  |
 | tokens | pass |  |
 | tool_calls | pass |  |
+
 ## Round 2
 
 | Case | Metric | Change | Score delta |

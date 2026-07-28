@@ -57,7 +57,7 @@ func executeMain(ctx context.Context, args []string) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	result, err := runCLI(ctx, options)
-	if result != nil {
+	if result != nil && err == nil {
 		fmt.Printf("run=%s baseline=%.6f released=%.6f rounds=%d artifact=%s/%s\n",
 			options.RunID, result.Baseline.Score, result.Released.Score, len(result.Rounds),
 			options.OutputDir, options.RunID)
@@ -137,25 +137,28 @@ func runCLI(ctx context.Context, options cliOptions) (*pipelineResult, error) {
 	}
 
 	accepted := !reflect.DeepEqual(result.InitialProfile, result.ReleasedProfile)
+	roles := map[string]effectiveRole{
+		"candidate": effectiveRoleFromConfig("candidate", cfg.Mode, cfg.Candidate),
+		"worker":    effectiveRoleFromConfig("worker", cfg.Mode, cfg.Worker),
+	}
+	if runtimeInstance.judgeRequired {
+		roles["judge"] = effectiveRoleFromConfig("judge", cfg.Mode, cfg.Judge)
+	}
 	report := regressionReport{
-		SchemaVersion: reportSchemaVersion, RunID: options.RunID, Status: "succeeded",
-		Accepted: accepted, Mode: cfg.Mode, Seed: cfg.Seed,
+		SchemaVersion: reportSchemaVersion, RunID: options.RunID, Status: reportStatusSucceeded,
+		Accepted: accepted, Mode: cfg.Mode,
 		StructureID: result.InitialProfile.StructureID,
 		Fingerprints: map[string]string{
 			"prompt": fingerprintInputs(promptBytes), "train": fingerprintInputs(trainBytes),
 			"validation": fingerprintInputs(validationBytes), "metrics": fingerprintInputs(metricBytes),
 			"config": fingerprintInputs(configBytes),
 		},
-		Roles: map[string]effectiveRole{
-			"candidate": effectiveRoleFromConfig("candidate", cfg.Mode, cfg.Candidate),
-			"judge":     effectiveRoleFromConfig("judge", cfg.Mode, cfg.Judge),
-			"worker":    effectiveRoleFromConfig("worker", cfg.Mode, cfg.Worker),
-		},
+		Roles:    roles,
 		Baseline: result.Baseline, Rounds: result.Rounds, Usage: runtimeInstance.ledger.snapshot(),
 		AttributionCounts: attributionCounts(result.Rounds),
 	}
 	if terminalErr != nil {
-		report.Status = "failed"
+		report.Status = reportStatusFailed
 		report.Accepted = false
 		report.TerminalError = terminalErr.Error()
 	}

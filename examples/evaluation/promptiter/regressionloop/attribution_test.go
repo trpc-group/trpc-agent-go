@@ -18,12 +18,35 @@ import (
 )
 
 func TestAttributeUsesMetricScopedToolEvidence(t *testing.T) {
-	evalCase := failedCase("final_response", "answer mismatch")
-	evalCase.MetricEvidence = differingToolTrajectory()
+	evalCase := failedCase("tool_trajectory", "tool output mismatch")
+	evalCase.MetricEvidence = []*evalresult.EvalMetricResultPerInvocation{
+		{
+			ActualInvocation: &evalset.Invocation{Tools: []*evalset.Tool{{
+				Name: "search", Arguments: map[string]any{"q": "same"},
+			}}},
+			ExpectedInvocation: &evalset.Invocation{Tools: []*evalset.Tool{{
+				Name: "search", Arguments: map[string]any{"q": "same"},
+			}}},
+			EvalMetricResults: []*evalresult.EvalMetricResult{{
+				MetricName: "tool_trajectory", EvalStatus: status.EvalStatusFailed,
+			}},
+		},
+		{
+			ActualInvocation: &evalset.Invocation{Tools: []*evalset.Tool{{
+				Name: "search", Arguments: map[string]any{"q": "wrong"},
+			}}},
+			ExpectedInvocation: &evalset.Invocation{Tools: []*evalset.Tool{{
+				Name: "search", Arguments: map[string]any{"q": "right"},
+			}}},
+			EvalMetricResults: []*evalresult.EvalMetricResult{{
+				MetricName: "unrelated_metric", EvalStatus: status.EvalStatusFailed,
+			}},
+		},
+	}
 
 	got := attributeCase(evalCase)
 
-	assert.Equal(t, attributionFinalResponseMismatch, got.Primary.Category)
+	assert.Equal(t, attributionToolCallError, got.Primary.Category)
 }
 
 func TestAttributeIncompleteEvaluation(t *testing.T) {
@@ -101,8 +124,4 @@ func failedCase(metricName, reason string) caseResult {
 			Reason: reason,
 		}},
 	}
-}
-
-func differingToolTrajectory() []*evalresult.EvalMetricResultPerInvocation {
-	return []*evalresult.EvalMetricResultPerInvocation{{}}
 }

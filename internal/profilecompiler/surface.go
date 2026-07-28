@@ -14,6 +14,7 @@ import (
 	"reflect"
 
 	astructure "trpc.group/trpc-go/trpc-agent-go/agent/structure"
+	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
 // IsSupportedType reports whether the surface type is supported by PromptIter.
@@ -302,6 +303,127 @@ func sanitizeMessages(messages []astructure.FewShotMessage) []astructure.FewShot
 
 func sanitizeToolRefs(refs []astructure.ToolRef) []astructure.ToolRef {
 	return append([]astructure.ToolRef(nil), refs...)
+}
+
+func cloneToolSchema(schema *tool.Schema) *tool.Schema {
+	if schema == nil {
+		return nil
+	}
+	return &tool.Schema{
+		Type:                 schema.Type,
+		Description:          schema.Description,
+		Pattern:              schema.Pattern,
+		Required:             append([]string(nil), schema.Required...),
+		Properties:           cloneToolSchemaMap(schema.Properties),
+		Items:                cloneToolSchema(schema.Items),
+		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
+		Default:              cloneSchemaValue(schema.Default),
+		Enum:                 cloneSchemaValues(schema.Enum),
+		Ref:                  schema.Ref,
+		Defs:                 cloneToolSchemaMap(schema.Defs),
+	}
+}
+
+func cloneToolSchemaMap(input map[string]*tool.Schema) map[string]*tool.Schema {
+	if input == nil {
+		return nil
+	}
+	result := make(map[string]*tool.Schema, len(input))
+	for key, schema := range input {
+		result[key] = cloneToolSchema(schema)
+	}
+	return result
+}
+
+func cloneSchemaValues(input []any) []any {
+	if input == nil {
+		return nil
+	}
+	result := make([]any, len(input))
+	for i, value := range input {
+		result[i] = cloneSchemaValue(value)
+	}
+	return result
+}
+
+func cloneSchemaValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	return cloneDynamicValue(reflect.ValueOf(value)).Interface()
+}
+
+var toolSchemaPointerType = reflect.TypeOf((*tool.Schema)(nil))
+
+// cloneDynamicValue recursively copies JSON-compatible typed collections while
+// preserving their concrete Go types.
+func cloneDynamicValue(value reflect.Value) reflect.Value {
+	if !value.IsValid() {
+		return value
+	}
+	if value.Type() == toolSchemaPointerType {
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		return reflect.ValueOf(cloneToolSchema(value.Interface().(*tool.Schema)))
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := cloneDynamicValue(value.Elem())
+		result := reflect.New(value.Type()).Elem()
+		result.Set(cloned)
+		return result
+	case reflect.Pointer:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.New(value.Type().Elem())
+		result.Elem().Set(cloneDynamicValue(value.Elem()))
+		return result
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeMapWithSize(value.Type(), value.Len())
+		iterator := value.MapRange()
+		for iterator.Next() {
+			result.SetMapIndex(
+				cloneDynamicValue(iterator.Key()),
+				cloneDynamicValue(iterator.Value()),
+			)
+		}
+		return result
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		result := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneDynamicValue(value.Index(i)))
+		}
+		return result
+	case reflect.Array:
+		result := reflect.New(value.Type()).Elem()
+		for i := 0; i < value.Len(); i++ {
+			result.Index(i).Set(cloneDynamicValue(value.Index(i)))
+		}
+		return result
+	case reflect.Struct:
+		result := reflect.New(value.Type()).Elem()
+		result.Set(value)
+		for i := 0; i < value.NumField(); i++ {
+			if value.Type().Field(i).PkgPath != "" {
+				continue
+			}
+			result.Field(i).Set(cloneDynamicValue(value.Field(i)))
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func validatePromptSyntax(value *astructure.PromptSyntax) error {

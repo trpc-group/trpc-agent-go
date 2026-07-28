@@ -1,9 +1,7 @@
 {
   "mode": "deterministic",
-  "seed": 2003,
   "maxRounds": 3,
   "trainEvalSetId": "train",
-  "searchEvalSetId": "train",
   "validationEvalSetId": "validation",
   "metricFileId": "regression",
   "minValidationGain": 0.05,
@@ -20,10 +18,6 @@
   "parallelInference": false,
   "parallelEvaluation": false,
   "candidate": {
-    "inputPerMillion": 0,
-    "outputPerMillion": 0
-  },
-  "judge": {
     "inputPerMillion": 0,
     "outputPerMillion": 0
   },

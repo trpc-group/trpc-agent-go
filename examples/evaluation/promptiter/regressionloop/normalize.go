@@ -160,6 +160,8 @@ func aggregateMetrics(metrics []*evalresult.EvalMetricResult, expected *catalog)
 	return result, nil
 }
 
+// retainedMetricEvidence uses the first run as the stable diagnostic sample;
+// aggregate metrics remain authoritative for scoring and shape validation.
 func retainedMetricEvidence(
 	evalSetID string,
 	caseID string,
@@ -199,6 +201,9 @@ func retainedMetricEvidence(
 	return reasons, retained.EvalMetricResultPerInvocation, nil
 }
 
+// caseExecutionError prefers explicit run errors, then explicit inference
+// errors, and finally a failed inference status. A failed case status alone can
+// be an ordinary metric verdict and is not evidence of an execution failure.
 func caseExecutionError(evalCase *evaluation.EvaluationCaseResult) string {
 	for _, result := range evalCase.EvalCaseResults {
 		if result != nil && strings.TrimSpace(result.ErrorMessage) != "" {
@@ -210,30 +215,12 @@ func caseExecutionError(evalCase *evaluation.EvaluationCaseResult) string {
 			return detail.Inference.ErrorMessage
 		}
 	}
-	for _, result := range evalCase.EvalCaseResults {
-		if result != nil && result.FinalEvalStatus == status.EvalStatusFailed &&
-			!hasRunMetricEvidence(result) {
-			return "evaluation run failed"
-		}
-	}
 	for _, detail := range evalCase.RunDetails {
 		if detail != nil && detail.Inference != nil && detail.Inference.Status == status.EvalStatusFailed {
 			return "inference failed"
 		}
 	}
 	return ""
-}
-
-func hasRunMetricEvidence(result *evalresult.EvalCaseResult) bool {
-	if len(result.OverallEvalMetricResults) != 0 {
-		return true
-	}
-	for _, invocation := range result.EvalMetricResultPerInvocation {
-		if invocation != nil && len(invocation.EvalMetricResults) != 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func validateTerminalStatus(subject string, value status.EvalStatus) error {

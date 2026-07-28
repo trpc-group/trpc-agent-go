@@ -45,10 +45,8 @@ type criticalRule struct {
 
 type config struct {
 	Mode                runMode        `json:"mode"`
-	Seed                int64          `json:"seed"`
 	MaxRounds           int            `json:"maxRounds"`
 	TrainEvalSetID      string         `json:"trainEvalSetId"`
-	SearchEvalSetID     string         `json:"searchEvalSetId"`
 	ValidationEvalSetID string         `json:"validationEvalSetId"`
 	MetricFileID        string         `json:"metricFileId"`
 	MinValidationGain   float64        `json:"minValidationGain"`
@@ -107,20 +105,14 @@ func (cfg config) validate() error {
 	if strings.TrimSpace(cfg.TrainEvalSetID) == "" {
 		return errors.New("training evaluation set ID is empty")
 	}
-	if strings.TrimSpace(cfg.SearchEvalSetID) == "" {
-		return errors.New("search evaluation set ID is empty")
-	}
 	if strings.TrimSpace(cfg.ValidationEvalSetID) == "" {
 		return errors.New("validation evaluation set ID is empty")
 	}
 	if strings.TrimSpace(cfg.MetricFileID) == "" {
 		return errors.New("metric file ID is empty")
 	}
-	if cfg.SearchEvalSetID == cfg.ValidationEvalSetID {
-		return errors.New("search evaluation set must not use held-out validation")
-	}
-	if cfg.SearchEvalSetID != cfg.TrainEvalSetID {
-		return errors.New("search evaluation set must equal the training evaluation set")
+	if cfg.TrainEvalSetID == cfg.ValidationEvalSetID {
+		return errors.New("training evaluation set must not use held-out validation")
 	}
 	if cfg.MinValidationGain < 0 {
 		return errors.New("minimum validation gain must be nonnegative")
@@ -171,7 +163,13 @@ func (cfg config) validate() error {
 		}
 	}
 	if cfg.Mode == modeLive {
-		for _, role := range roles {
+		for _, role := range []struct {
+			name string
+			cfg  roleConfig
+		}{
+			{name: "candidate", cfg: cfg.Candidate},
+			{name: "worker", cfg: cfg.Worker},
+		} {
 			if err := validateLiveRole(role.name, role.cfg); err != nil {
 				return err
 			}

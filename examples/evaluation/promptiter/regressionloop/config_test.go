@@ -20,10 +20,8 @@ import (
 func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	path := writeTestFile(t, `{
 		"mode":"deterministic",
-		"seed":1,
 		"maxRounds":1,
 		"trainEvalSetId":"train",
-		"searchEvalSetId":"train",
 		"validationEvalSetId":"validation",
 		"metricFileId":"metrics",
 		"minValidationGain":0,
@@ -43,6 +41,22 @@ func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	require.ErrorContains(t, err, "unknown field")
 }
 
+func TestLoadConfigRejectsRemovedReproducibilityFields(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+	}{
+		{name: "seed", field: `"seed":1,`},
+		{name: "search eval set", field: `"searchEvalSetId":"train",`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := loadConfig(writeTestFile(t, validConfigJSON(tt.field)))
+			require.ErrorContains(t, err, "unknown field")
+		})
+	}
+}
+
 func TestLoadConfigPreservesExplicitZeroBudget(t *testing.T) {
 	path := writeTestFile(t, validConfigJSON(`"maxModelCalls":0,`))
 
@@ -59,9 +73,9 @@ func TestLoadConfigRejectsTrailingJSONValue(t *testing.T) {
 	require.ErrorContains(t, err, "trailing JSON value")
 }
 
-func TestValidateConfigRejectsHeldOutSearchInput(t *testing.T) {
+func TestValidateConfigRejectsHeldOutTrainingInput(t *testing.T) {
 	cfg := validConfig()
-	cfg.SearchEvalSetID = cfg.ValidationEvalSetID
+	cfg.TrainEvalSetID = cfg.ValidationEvalSetID
 
 	require.ErrorContains(t, cfg.validate(), "held-out validation")
 }
@@ -85,13 +99,6 @@ func TestValidateConfigBoundaries(t *testing.T) {
 				cfg.MaxRounds = 0
 			},
 			message: "max rounds",
-		},
-		{
-			name: "search differs from train",
-			mutate: func(cfg *config) {
-				cfg.SearchEvalSetID = "search"
-			},
-			message: "training evaluation set",
 		},
 		{
 			name: "negative budget",
@@ -170,10 +177,8 @@ func TestValidateConfigAllowsDeterministicRolesWithoutCredentials(t *testing.T) 
 func validConfig() config {
 	return config{
 		Mode:                modeDeterministic,
-		Seed:                1,
 		MaxRounds:           1,
 		TrainEvalSetID:      "train",
-		SearchEvalSetID:     "train",
 		ValidationEvalSetID: "validation",
 		MetricFileID:        "metrics",
 		MinValidationGain:   0,
@@ -193,10 +198,8 @@ func validLiveRole() roleConfig {
 func validConfigJSON(extra string) string {
 	return `{
 		"mode":"deterministic",
-		"seed":1,
 		"maxRounds":1,
 		"trainEvalSetId":"train",
-		"searchEvalSetId":"train",
 		"validationEvalSetId":"validation",
 		"metricFileId":"metrics",
 		"minValidationGain":0,

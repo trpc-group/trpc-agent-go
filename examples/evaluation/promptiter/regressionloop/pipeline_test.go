@@ -83,6 +83,90 @@ func TestCanceledRoundRemainsAuditedAndDoesNotAdvance(t *testing.T) {
 	assert.Contains(t, failedCheckIDs(result.Rounds[0].Gate), "run_status")
 }
 
+func TestZeroModelCallBudgetStopsBeforeBaselineEvaluation(t *testing.T) {
+	zero := 0
+	engine := &engineSpy{}
+	pipeline := testPipeline(engine, nil)
+	pipeline.cfg.MaxModelCalls = &zero
+	evaluator := pipeline.evaluator.(*evaluatorSequence)
+
+	result, err := pipeline.run(context.Background())
+
+	assert.Nil(t, result)
+	require.ErrorContains(t, err, "reserve complete baseline budget")
+	assert.Zero(t, evaluator.calls)
+	assert.Empty(t, engine.requests)
+}
+
+func TestBaselineReservationIncludesPotentialJudgeCalls(t *testing.T) {
+	maxModelCalls := 1
+	pipeline := testPipeline(&engineSpy{}, []float64{0.5, 0.5})
+	pipeline.cfg.MaxModelCalls = &maxModelCalls
+	evaluator := pipeline.evaluator.(*evaluatorSequence)
+
+	result, err := pipeline.run(context.Background())
+
+	assert.Nil(t, result)
+	require.ErrorContains(t, err, "reserve complete baseline budget")
+	assert.Zero(t, evaluator.calls)
+}
+
+func TestBaselineReservationCoversTrainAndHeldoutBeforeEvaluation(t *testing.T) {
+	maxModelCalls := 2
+	pipeline := testPipeline(&engineSpy{}, []float64{0.5, 0.5})
+	pipeline.cfg.MaxModelCalls = &maxModelCalls
+	evaluator := pipeline.evaluator.(*evaluatorSequence)
+
+	result, err := pipeline.run(context.Background())
+
+	assert.Nil(t, result)
+	require.ErrorContains(t, err, "reserve complete baseline budget")
+	assert.Zero(t, evaluator.calls)
+}
+
+func TestPermissiveNonModelBudgetsAllowRoundToRun(t *testing.T) {
+	maxToolCalls := 100
+	maxTokens := 1_000_000
+	maxCost := 1_000.0
+	maxLatencyMillis := int64(1_000_000)
+	engine := &engineSpy{outputs: []*promptiter.Profile{
+		profileWithPrompt("structure-1", "balanced"),
+	}}
+	pipeline := testPipeline(engine, []float64{0.5, 0.5, 0.8})
+	pipeline.cfg.MaxToolCalls = &maxToolCalls
+	pipeline.cfg.MaxTokens = &maxTokens
+	pipeline.cfg.MaxEstimatedCost = &maxCost
+	pipeline.cfg.MaxLatencyMillis = &maxLatencyMillis
+
+	result, err := pipeline.run(context.Background())
+
+	require.NoError(t, err)
+	require.Len(t, result.Rounds, 1)
+	assert.Len(t, engine.requests, 1)
+}
+
+func TestPromptIterReservationFailureRecordsAttemptedRound(t *testing.T) {
+	maxModelCalls := 4
+	pipeline := testPipeline(&engineSpy{}, []float64{0.5, 0.5})
+	pipeline.cfg.MaxModelCalls = &maxModelCalls
+
+	result, err := pipeline.run(context.Background())
+
+	require.ErrorContains(t, err, "reserve promptiter budget")
+	require.Len(t, result.Rounds, 1)
+	assert.Equal(t, 1, result.Rounds[0].Number)
+	assert.Contains(t, failedCheckIDs(result.Rounds[0].Gate), "run_status")
+}
+
+func TestRunRequestUsesTrainingSetForPromptIterValidation(t *testing.T) {
+	pipeline := testPipeline(&engineSpy{}, nil)
+
+	request := pipeline.runRequest(nil, nil)
+
+	require.Len(t, request.Validation, 1)
+	assert.Equal(t, pipeline.cfg.TrainEvalSetID, request.Validation[0].EvalSetID)
+}
+
 type engineSpy struct {
 	requests []*promptiterengine.RunRequest
 	outputs  []*promptiter.Profile
