@@ -5,7 +5,7 @@
   "candidateSource": "deterministic",
   "seed": 20260717,
   "durationMillis": 1,
-  "deterministicFingerprint": "654b2b960e511881041a89f1e8f4f050c54fa5443c081eee43fde859e44a2b4d",
+  "deterministicFingerprint": "4aaf1b7b064592cce0bcab0b3a2a6a2c69188fbb43e6caeb44920350642b5f05",
   "evaluationModel": {
     "provider": "deterministic",
     "name": "fake-trace-runner"
@@ -1108,7 +1108,7 @@
         "name": "tokens_budget",
         "passed": true,
         "observed": 0,
-        "threshold": 200000,
+        "threshold": 500000,
         "operator": "\u003c=",
         "detail": "usage must remain within budget"
       },

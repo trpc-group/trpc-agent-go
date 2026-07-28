@@ -171,8 +171,11 @@ func TestSetDefaultsInheritsLiveOptimizerModelSettings(t *testing.T) {
 		"live":{
 			"model":"evaluation-model",
 			"baseURL":"https://models.example.test",
+			"apiKeyEnv":"EVALUATION_API_KEY",
 			"timeoutSeconds":30,
 			"maxRetries":1,
+			"inputCNYPerMillion":3,
+			"outputCNYPerMillion":7,
 			"optimizer":{"temperature":0.25}
 		}
 	}`), &cfg))
@@ -181,6 +184,9 @@ func TestSetDefaultsInheritsLiveOptimizerModelSettings(t *testing.T) {
 
 	assert.Equal(t, "evaluation-model", cfg.Live.Optimizer.Model)
 	assert.Equal(t, "https://models.example.test", cfg.Live.Optimizer.BaseURL)
+	assert.Equal(t, "EVALUATION_API_KEY", cfg.Live.Optimizer.APIKeyEnv)
+	assert.Equal(t, 3.0, cfg.Live.Optimizer.InputCNYPerMillion)
+	assert.Equal(t, 7.0, cfg.Live.Optimizer.OutputCNYPerMillion)
 	assert.Equal(t, 30, cfg.Live.Optimizer.TimeoutSeconds)
 	assert.Equal(t, 1, cfg.Live.Optimizer.MaxRetries)
 	assert.Equal(t, 0.25, cfg.Live.Optimizer.Temperature)
@@ -188,6 +194,85 @@ func TestSetDefaultsInheritsLiveOptimizerModelSettings(t *testing.T) {
 	assert.Equal(t, 2, cfg.Live.Optimizer.Budget.MaxCalls)
 	assert.Equal(t, 16384, cfg.Live.Optimizer.Budget.MaxTokens)
 	assert.Equal(t, 1.0, cfg.Live.Optimizer.Budget.MaxCostCNY)
+}
+
+func TestValidateLiveOptimizerRequiresIndependentCredentialsAndPrices(t *testing.T) {
+	tests := []struct {
+		name      string
+		optimizer string
+		wantError string
+	}{
+		{
+			name: "independent endpoint requires an api key environment",
+			optimizer: `{
+				"baseURL":"https://optimizer.example.test",
+				"inputCNYPerMillion":5,
+				"outputCNYPerMillion":9
+			}`,
+			wantError: "live.optimizer.apiKeyEnv is required",
+		},
+		{
+			name: "independent endpoint cannot reuse the evaluation key",
+			optimizer: `{
+				"baseURL":"https://optimizer.example.test",
+				"apiKeyEnv":"EVALUATION_API_KEY",
+				"inputCNYPerMillion":5,
+				"outputCNYPerMillion":9
+			}`,
+			wantError: "must differ from live.apiKeyEnv",
+		},
+		{
+			name: "independent model requires explicit prices",
+			optimizer: `{
+				"model":"optimizer-model",
+				"apiKeyEnv":"OPTIMIZER_API_KEY"
+			}`,
+			wantError: "live.optimizer token prices",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var cfg pipelineConfig
+			require.NoError(t, json.Unmarshal([]byte(`{
+				"live":{
+					"model":"evaluation-model",
+					"baseURL":"https://evaluation.example.test",
+					"apiKeyEnv":"EVALUATION_API_KEY",
+					"inputCNYPerMillion":1,
+					"outputCNYPerMillion":2,
+					"optimizer":`+test.optimizer+`
+				}
+			}`), &cfg))
+
+			setDefaults(&cfg)
+
+			assert.ErrorContains(t, validateLiveConfig(cfg.Live), test.wantError)
+		})
+	}
+}
+
+func TestValidateLiveOptimizerAcceptsIndependentCredentialsAndPrices(t *testing.T) {
+	var cfg pipelineConfig
+	require.NoError(t, json.Unmarshal([]byte(`{
+		"live":{
+			"model":"evaluation-model",
+			"baseURL":"https://evaluation.example.test",
+			"apiKeyEnv":"EVALUATION_API_KEY",
+			"inputCNYPerMillion":1,
+			"outputCNYPerMillion":2,
+			"optimizer":{
+				"model":"optimizer-model",
+				"baseURL":"https://optimizer.example.test",
+				"apiKeyEnv":"OPTIMIZER_API_KEY",
+				"inputCNYPerMillion":5,
+				"outputCNYPerMillion":9
+			}
+		}
+	}`), &cfg))
+
+	setDefaults(&cfg)
+
+	assert.NoError(t, validateLiveConfig(cfg.Live))
 }
 
 func TestValidateLiveCallBudgetIncludesSymmetricRetries(t *testing.T) {

@@ -98,11 +98,17 @@ func runPipeline(ctx context.Context, configPath, mode string) error {
 		Provider: "deterministic",
 		Name:     "fake-promptiter-optimizer",
 	}
-	apiKey := ""
+	evaluationAPIKey := ""
+	optimizerAPIKey := ""
 	if mode == modeLive {
-		apiKey = strings.TrimSpace(os.Getenv(cfg.Live.APIKeyEnv))
+		evaluationAPIKey = strings.TrimSpace(os.Getenv(cfg.Live.APIKeyEnv))
+		optimizerAPIKey = strings.TrimSpace(os.Getenv(cfg.Live.Optimizer.APIKeyEnv))
 		budget = newLiveBudget(cfg.Gate, cfg.Live.Optimizer.Budget)
-		live, liveErr := newLiveGeneratorWithBudget(cfg.Live, budget, apiKey)
+		live, liveErr := newLiveGeneratorWithBudget(
+			cfg.Live,
+			budget,
+			evaluationAPIKey,
+		)
 		if liveErr != nil {
 			return fmt.Errorf("create live generator: %w", liveErr)
 		}
@@ -154,7 +160,12 @@ func runPipeline(ctx context.Context, configPath, mode string) error {
 	} else {
 		reservation := candidateEvaluationReservation(cfg)
 		budget.setEvaluationReserve(reservation)
-		runtime, runtimeErr := newLivePromptOptimizer(ctx, cfg, budget, apiKey)
+		runtime, runtimeErr := newLivePromptOptimizer(
+			ctx,
+			cfg,
+			budget,
+			optimizerAPIKey,
+		)
 		if runtimeErr != nil {
 			promptIterErr = runtimeErr
 			promptIterAudit = failedPromptIterAudit(

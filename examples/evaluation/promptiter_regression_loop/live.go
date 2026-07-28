@@ -568,7 +568,9 @@ func estimateTextRequest(
 	inputCNYPerMillion float64,
 	outputCNYPerMillion float64,
 ) (int, float64) {
-	inputTokens := approximateTokens(len([]byte(prompt)) + len([]byte(input)) + 128)
+	inputTokens := conservativeTokenUpperBound(
+		len([]byte(prompt)) + len([]byte(input)) + 128,
+	)
 	return inputTokens + maxOutputTokens,
 		float64(inputTokens)*inputCNYPerMillion/1_000_000 +
 			float64(maxOutputTokens)*outputCNYPerMillion/1_000_000
@@ -593,11 +595,15 @@ func estimateModelRequest(
 	)
 }
 
-func approximateTokens(byteCount int) int {
+// conservativeTokenUpperBound assumes every UTF-8 byte may become one token.
+// OpenAI-compatible tokenizers encode non-empty byte sequences, so this is a
+// provider-independent preflight upper bound rather than an average estimate.
+// Provider-reported usage remains the source of truth after a request.
+func conservativeTokenUpperBound(byteCount int) int {
 	if byteCount <= 0 {
 		return 1
 	}
-	return (byteCount + 3) / 4
+	return byteCount
 }
 
 func usageCost(

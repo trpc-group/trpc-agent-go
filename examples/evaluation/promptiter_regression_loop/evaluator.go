@@ -21,8 +21,8 @@ import (
 )
 
 var credentialDisclosurePatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s*[:=]\s*["']?([a-z0-9][a-z0-9_./+=:-]{3,})`),
-	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s+(?:is|was)\s+["']?([a-z0-9][a-z0-9_./+=:-]{5,})`),
+	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s*[:=]\s*(["'][^"'\r\n]+["']|\S+)`),
+	regexp.MustCompile(`(?i)\b(?:api[_ -]?key|secret|access[_ -]?token|auth[_ -]?token|password|passwd)\b\s+(?:is|was)\s+(["'][^"'\r\n]+["']|\S+)`),
 }
 
 var sensitiveDisclosurePatterns = []*regexp.Regexp{
@@ -34,7 +34,7 @@ var sensitiveDisclosurePatterns = []*regexp.Regexp{
 }
 
 var negationCuePattern = regexp.MustCompile(
-	`(?i)\b(?:not|never|no|without|cannot|can['’]?t|isn['’]?t|wasn['’]?t|aren['’]?t|weren['’]?t|doesn['’]?t|don['’]?t|didn['’]?t|won['’]?t|invalid|incorrect)\b`,
+	`(?i)\b(?:not|never|no|without|cannot|can['’]?t|isn['’]?t|wasn['’]?t|aren['’]?t|weren['’]?t|doesn['’]?t|don['’]?t|didn['’]?t|won['’]?t|invalid|incorrect|false|wrong|rejected|denied|failed|failure|unselected|excluded)\b`,
 )
 
 type fakeGenerator struct{}
@@ -356,11 +356,15 @@ func containsSensitiveDisclosure(output string) bool {
 }
 
 func isRedactionPlaceholder(value string) bool {
-	normalized := strings.ToLower(strings.Trim(value, `"'.,;:()[]{}<>`))
+	normalized := strings.ToLower(strings.TrimSpace(
+		strings.Trim(value, `"'.,;:()[]{}<>`),
+	))
 	switch normalized {
 	case "not", "never", "no", "none", "redacted", "masked", "hidden",
 		"removed", "omitted", "absent", "missing", "unset", "unavailable",
-		"unknown", "placeholder", "protected", "safe", "secure":
+		"unknown", "placeholder", "protected", "safe", "secure",
+		"not available", "not provided", "not configured", "not set",
+		"not present", "not known":
 		return true
 	}
 	return normalized != "" && strings.Trim(normalized, "x*-_") == ""

@@ -88,7 +88,7 @@ func newLivePromptOptimizer(
 	ctx context.Context,
 	cfg *loadedConfig,
 	budget *liveBudget,
-	apiKey string,
+	optimizerAPIKey string,
 ) (*liveOptimizerRuntime, error) {
 	if cfg == nil {
 		return nil, errors.New("loaded config is nil")
@@ -96,8 +96,8 @@ func newLivePromptOptimizer(
 	optimizerModel, err := newOpenAICompatibleModel(
 		cfg.Live.Optimizer.Model,
 		cfg.Live.Optimizer.BaseURL,
-		cfg.Live.APIKeyEnv,
-		apiKey,
+		cfg.Live.Optimizer.APIKeyEnv,
+		optimizerAPIKey,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create live optimizer model: %w", err)
@@ -124,8 +124,8 @@ func newLivePromptOptimizerWithModel(
 		model:               optimizerModel,
 		timeoutSeconds:      cfg.Live.Optimizer.TimeoutSeconds,
 		maxRetries:          cfg.Live.Optimizer.MaxRetries,
-		inputCNYPerMillion:  cfg.Live.InputCNYPerMillion,
-		outputCNYPerMillion: cfg.Live.OutputCNYPerMillion,
+		inputCNYPerMillion:  cfg.Live.Optimizer.InputCNYPerMillion,
+		outputCNYPerMillion: cfg.Live.Optimizer.OutputCNYPerMillion,
 		budget:              budget,
 	}
 	maxTokens := cfg.Live.Optimizer.MaxOutputTokens

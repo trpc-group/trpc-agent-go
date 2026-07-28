@@ -11,6 +11,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 
@@ -68,6 +71,8 @@ func TestLivePromptOptimizerUsesOfficialOptimizerWithoutValidationLeakage(t *tes
 	const validationSentinel = "VALIDATION_SENTINEL_MUST_NOT_REACH_OPTIMIZER"
 	cfg.Validation.EvalCases[0].Conversation[0].UserContent.Content += validationSentinel
 	cfg.Validation.EvalCases[0].Conversation[0].FinalResponse.Content += validationSentinel
+	cfg.Live.Optimizer.InputCNYPerMillion = 10
+	cfg.Live.Optimizer.OutputCNYPerMillion = 20
 
 	candidate := cfg.Prompt + `
 1. ROUTE_EXPLICITLY: select the route that matches the user's intent.
@@ -111,6 +116,141 @@ func TestLivePromptOptimizerUsesOfficialOptimizerWithoutValidationLeakage(t *tes
 	assert.Equal(t, 1, audit.Usage.Calls)
 	assert.Equal(t, 120, audit.Usage.InputTokens)
 	assert.Equal(t, 80, audit.Usage.OutputTokens)
+	assert.InDelta(t, 0.0028, audit.Usage.CostCNY, 1e-12)
+	assert.InDelta(t, 0.0028, budget.snapshot("").CostCNY, 1e-12)
+}
+
+func TestIndependentEndpointsReceiveOnlyTheirOwnCredentials(t *testing.T) {
+	cfg, err := loadConfig("data/config.json")
+	require.NoError(t, err)
+
+	var authMu sync.Mutex
+	var evaluationAuth []string
+	var optimizerAuth []string
+	evaluationServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			authMu.Lock()
+			evaluationAuth = append(evaluationAuth, r.Header.Get("Authorization"))
+			authMu.Unlock()
+			writeChatCompletion(t, w, "evaluation-model", "ok", 10, 2)
+		},
+	))
+	defer evaluationServer.Close()
+
+	candidate := cfg.Prompt + "\n8. USE_THE_INDEPENDENT_OPTIMIZER_CREDENTIAL."
+	optimizerResponse, err := json.Marshal(map[string]any{
+		"Value":  map[string]any{"Text": candidate},
+		"Reason": "use the independent optimizer endpoint",
+	})
+	require.NoError(t, err)
+	optimizerServer := httptest.NewServer(http.HandlerFunc(
+		func(w http.ResponseWriter, r *http.Request) {
+			authMu.Lock()
+			optimizerAuth = append(optimizerAuth, r.Header.Get("Authorization"))
+			authMu.Unlock()
+			writeChatCompletion(
+				t,
+				w,
+				"optimizer-model",
+				string(optimizerResponse),
+				12,
+				4,
+			)
+		},
+	))
+	defer optimizerServer.Close()
+
+	cfg.Live.Model = "evaluation-model"
+	cfg.Live.BaseURL = evaluationServer.URL
+	cfg.Live.APIKeyEnv = "EVALUATION_TEST_API_KEY"
+	cfg.Live.MaxRetries = 0
+	cfg.Live.Optimizer.Model = "optimizer-model"
+	cfg.Live.Optimizer.BaseURL = optimizerServer.URL
+	cfg.Live.Optimizer.APIKeyEnv = "OPTIMIZER_TEST_API_KEY"
+	cfg.Live.Optimizer.InputCNYPerMillion = 5
+	cfg.Live.Optimizer.OutputCNYPerMillion = 9
+	cfg.Live.Optimizer.MaxRetries = 0
+	require.NoError(t, validateLiveConfig(cfg.Live))
+	t.Setenv(cfg.Live.APIKeyEnv, "evaluation-secret")
+	t.Setenv(cfg.Live.Optimizer.APIKeyEnv, "optimizer-secret")
+
+	budget := newLiveBudget(cfg.Gate, cfg.Live.Optimizer.Budget)
+	evaluationGenerator, err := newLiveGeneratorWithBudget(
+		cfg.Live,
+		budget,
+		os.Getenv(cfg.Live.APIKeyEnv),
+	)
+	require.NoError(t, err)
+	_, err = evaluationGenerator.Generate(
+		context.Background(),
+		cfg.Prompt,
+		"evaluate this case",
+	)
+	require.NoError(t, err)
+
+	runtime, err := newLivePromptOptimizer(
+		context.Background(),
+		cfg,
+		budget,
+		os.Getenv(cfg.Live.Optimizer.APIKeyEnv),
+	)
+	require.NoError(t, err)
+	defer runtime.close()
+	got, _, err := runPromptIter(
+		context.Background(),
+		cfg,
+		runtime.optimizer,
+		candidateSourceLiveLLM,
+		func() Usage {
+			return budget.snapshot(budgetStageOptimizer).reportUsage()
+		},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, candidate, got)
+
+	authMu.Lock()
+	defer authMu.Unlock()
+	require.NotEmpty(t, evaluationAuth)
+	require.NotEmpty(t, optimizerAuth)
+	for _, authorization := range evaluationAuth {
+		assert.Equal(t, "Bearer evaluation-secret", authorization)
+		assert.NotContains(t, authorization, "optimizer-secret")
+	}
+	for _, authorization := range optimizerAuth {
+		assert.Equal(t, "Bearer optimizer-secret", authorization)
+		assert.NotContains(t, authorization, "evaluation-secret")
+	}
+}
+
+func writeChatCompletion(
+	t *testing.T,
+	w http.ResponseWriter,
+	modelName string,
+	content string,
+	promptTokens int,
+	completionTokens int,
+) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	require.NoError(t, json.NewEncoder(w).Encode(map[string]any{
+		"id":      "test-response",
+		"object":  "chat.completion",
+		"created": 1,
+		"model":   modelName,
+		"choices": []map[string]any{{
+			"index": 0,
+			"message": map[string]string{
+				"role":    "assistant",
+				"content": content,
+			},
+			"finish_reason": "stop",
+		}},
+		"usage": map[string]int{
+			"prompt_tokens":     promptTokens,
+			"completion_tokens": completionTokens,
+			"total_tokens":      promptTokens + completionTokens,
+		},
+	}))
 }
 
 func TestOptimizerBudgetPreservesCandidateEvaluationCapacity(t *testing.T) {

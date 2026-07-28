@@ -13,6 +13,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -113,6 +114,31 @@ func TestLiveGeneratorReservesBudgetBeforeCalling(t *testing.T) {
 	assert.Zero(t, client.calls)
 }
 
+func TestLiveGeneratorConservativePreflightRejectsNonASCII(t *testing.T) {
+	client := &scriptedModel{}
+	generator := &liveGenerator{
+		model: client,
+		cfg: liveConfig{
+			TimeoutSeconds:      1,
+			InputCNYPerMillion:  1,
+			OutputCNYPerMillion: 2,
+		},
+		budget: newLiveBudget(
+			gateFileConfig{MaxCalls: 10, MaxTokens: 600, MaxCostCNY: 20},
+			optimizerBudgetConfig{},
+		),
+	}
+
+	_, err := generator.Generate(
+		context.Background(),
+		"prompt",
+		strings.Repeat("界", 4),
+	)
+
+	assert.ErrorContains(t, err, "cannot reserve")
+	assert.Zero(t, client.calls)
+}
+
 func TestLiveGeneratorOwnsEveryHTTPRetry(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -180,4 +206,50 @@ func TestBudgetedOptimizerModelCountsRetriesInSharedBudget(t *testing.T) {
 	assert.Equal(t, 10, optimizerUsage.InputTokens)
 	assert.Equal(t, 2, optimizerUsage.OutputTokens)
 	assert.Equal(t, optimizerUsage, budget.snapshot(""))
+}
+
+func TestEvaluationAndOptimizerUseIndependentPrices(t *testing.T) {
+	budget := newLiveBudget(
+		gateFileConfig{MaxCalls: 10, MaxTokens: 10000, MaxCostCNY: 10},
+		optimizerBudgetConfig{MaxCalls: 3, MaxTokens: 10000, MaxCostCNY: 1},
+	)
+	evaluation := &liveGenerator{
+		model: &scriptedModel{},
+		cfg: liveConfig{
+			TimeoutSeconds:      1,
+			InputCNYPerMillion:  1,
+			OutputCNYPerMillion: 2,
+		},
+		budget: budget,
+	}
+	_, err := evaluation.Generate(context.Background(), "prompt", "input")
+	require.NoError(t, err)
+
+	optimizer := &budgetedRetryModel{
+		model:               &scriptedModel{},
+		timeoutSeconds:      1,
+		inputCNYPerMillion:  10,
+		outputCNYPerMillion: 20,
+		budget:              budget,
+	}
+	maxTokens := 32
+	responses, err := optimizer.GenerateContent(
+		context.Background(),
+		&model.Request{
+			Messages: []model.Message{model.NewUserMessage("optimize")},
+			GenerationConfig: model.GenerationConfig{
+				MaxTokens: &maxTokens,
+			},
+		},
+	)
+	require.NoError(t, err)
+	for range responses {
+	}
+
+	evaluationUsage := budget.snapshot(budgetStageEvaluation)
+	optimizerUsage := budget.snapshot(budgetStageOptimizer)
+	totalUsage := budget.snapshot("")
+	assert.InDelta(t, 0.000014, evaluationUsage.CostCNY, 1e-12)
+	assert.InDelta(t, 0.00014, optimizerUsage.CostCNY, 1e-12)
+	assert.InDelta(t, 0.000154, totalUsage.CostCNY, 1e-12)
 }

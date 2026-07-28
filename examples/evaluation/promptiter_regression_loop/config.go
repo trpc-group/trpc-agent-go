@@ -82,14 +82,17 @@ type liveConfig struct {
 }
 
 type liveOptimizerConfig struct {
-	Model           string                `json:"model"`
-	BaseURL         string                `json:"baseURL"`
-	Temperature     float64               `json:"temperature"`
-	MaxOutputTokens int                   `json:"maxOutputTokens"`
-	TimeoutSeconds  int                   `json:"timeoutSeconds"`
-	MaxRetries      int                   `json:"maxRetries"`
-	Budget          optimizerBudgetConfig `json:"budget"`
-	maxRetriesSet   bool
+	Model               string                `json:"model"`
+	BaseURL             string                `json:"baseURL"`
+	APIKeyEnv           string                `json:"apiKeyEnv"`
+	InputCNYPerMillion  float64               `json:"inputCNYPerMillion"`
+	OutputCNYPerMillion float64               `json:"outputCNYPerMillion"`
+	Temperature         float64               `json:"temperature"`
+	MaxOutputTokens     int                   `json:"maxOutputTokens"`
+	TimeoutSeconds      int                   `json:"timeoutSeconds"`
+	MaxRetries          int                   `json:"maxRetries"`
+	Budget              optimizerBudgetConfig `json:"budget"`
+	maxRetriesSet       bool
 }
 
 type optimizerBudgetConfig struct {
@@ -260,6 +263,18 @@ func setDefaults(cfg *pipelineConfig) {
 	if cfg.Live.Optimizer.BaseURL == "" {
 		cfg.Live.Optimizer.BaseURL = cfg.Live.BaseURL
 	}
+	if cfg.Live.Optimizer.APIKeyEnv == "" &&
+		sameModelEndpoint(cfg.Live.Optimizer.BaseURL, cfg.Live.BaseURL) {
+		cfg.Live.Optimizer.APIKeyEnv = cfg.Live.APIKeyEnv
+	}
+	sameOptimizerPricing := cfg.Live.Optimizer.Model == cfg.Live.Model &&
+		sameModelEndpoint(cfg.Live.Optimizer.BaseURL, cfg.Live.BaseURL)
+	if cfg.Live.Optimizer.InputCNYPerMillion == 0 && sameOptimizerPricing {
+		cfg.Live.Optimizer.InputCNYPerMillion = cfg.Live.InputCNYPerMillion
+	}
+	if cfg.Live.Optimizer.OutputCNYPerMillion == 0 && sameOptimizerPricing {
+		cfg.Live.Optimizer.OutputCNYPerMillion = cfg.Live.OutputCNYPerMillion
+	}
 	if cfg.Live.Optimizer.MaxOutputTokens == 0 {
 		cfg.Live.Optimizer.MaxOutputTokens = 1024
 	}
@@ -324,8 +339,12 @@ func validateLiveConfig(cfg liveConfig) error {
 		return errors.New("live.timeoutSeconds must be greater than zero")
 	case cfg.MaxRetries < 0:
 		return errors.New("live.maxRetries must be non-negative")
-	case cfg.InputCNYPerMillion <= 0 || cfg.OutputCNYPerMillion <= 0:
+	case !positiveFinite(cfg.InputCNYPerMillion) ||
+		!positiveFinite(cfg.OutputCNYPerMillion):
 		return errors.New("live token prices must be greater than zero")
+	case !sameModelEndpoint(cfg.Optimizer.BaseURL, cfg.BaseURL) &&
+		cfg.Optimizer.APIKeyEnv == cfg.APIKeyEnv:
+		return errors.New("live.optimizer.apiKeyEnv must differ from live.apiKeyEnv for a different baseURL")
 	}
 	return validateLiveOptimizerConfig(cfg.Optimizer)
 }
@@ -334,6 +353,11 @@ func validateLiveOptimizerConfig(cfg liveOptimizerConfig) error {
 	switch {
 	case strings.TrimSpace(cfg.Model) == "":
 		return errors.New("live.optimizer.model is required")
+	case strings.TrimSpace(cfg.APIKeyEnv) == "":
+		return errors.New("live.optimizer.apiKeyEnv is required")
+	case !positiveFinite(cfg.InputCNYPerMillion) ||
+		!positiveFinite(cfg.OutputCNYPerMillion):
+		return errors.New("live.optimizer token prices must be greater than zero")
 	case cfg.Temperature < 0 ||
 		math.IsNaN(cfg.Temperature) ||
 		math.IsInf(cfg.Temperature, 0):
@@ -354,6 +378,17 @@ func validateLiveOptimizerConfig(cfg liveOptimizerConfig) error {
 		return errors.New("live.optimizer.budget.maxCostCNY must be finite and greater than zero")
 	}
 	return nil
+}
+
+func sameModelEndpoint(left, right string) bool {
+	normalize := func(value string) string {
+		return strings.TrimRight(strings.ToLower(strings.TrimSpace(value)), "/")
+	}
+	return normalize(left) == normalize(right)
+}
+
+func positiveFinite(value float64) bool {
+	return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func validateLoadedInputs(

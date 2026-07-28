@@ -12,7 +12,7 @@
     "bootstrapSeed": 20260717,
     "bootstrapRounds": 5000,
     "maxCalls": 165,
-    "maxTokens": 200000,
+    "maxTokens": 500000,
     "maxCostCNY": 20.0
   },
   "live": {
@@ -26,13 +26,16 @@
     "optimizer": {
       "model": "",
       "baseURL": "",
+      "apiKeyEnv": "",
+      "inputCNYPerMillion": 0.0,
+      "outputCNYPerMillion": 0.0,
       "temperature": 0.0,
       "maxOutputTokens": 1024,
       "timeoutSeconds": 45,
       "maxRetries": 2,
       "budget": {
         "maxCalls": 3,
-        "maxTokens": 16384,
+        "maxTokens": 65536,
         "maxCostCNY": 1.0
       }
     }
