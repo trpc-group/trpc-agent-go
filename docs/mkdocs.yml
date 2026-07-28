@@ -46,6 +46,7 @@ nav:
           - PGVector Session: session/pgvector.md
           - ClickHouse Session: session/clickhouse.md
           - MongoDB Session: session/mongodb.md
+          - Replay Consistency: session/replay_consistency.md
       - Knowledge:
           - Overview: knowledge/index.md
           - Embedder: knowledge/embedder.md
