@@ -59,11 +59,22 @@ func TestGuardScanRecordsRedactedAuditEvent(t *testing.T) {
 	require.True(t, report.Redacted)
 	require.NotContains(t, report.Command, "top-secret-value")
 	require.Len(t, auditor.events, 1)
-	require.Equal(t, auditPhasePrecheck, auditor.events[0].Phase)
+	require.Equal(t, AuditPhasePrecheck, auditor.events[0].Phase)
 	require.Equal(t, report.Decision, auditor.events[0].Decision)
 	require.Equal(t, report.Blocked, auditor.events[0].Blocked)
 	require.True(t, auditor.events[0].Timestamp.Location() == nil ||
 		auditor.events[0].Timestamp.Location().String() == "UTC")
+}
+
+func TestGuardScanRecoversAuditorPanic(t *testing.T) {
+	guard, err := NewGuard(DefaultPolicy(), WithAuditor(panicAuditor{}))
+	require.NoError(t, err)
+
+	report, scanErr := guard.Scan(context.Background(), scanCommand("go test ./..."))
+
+	require.ErrorContains(t, scanErr, "auditor panicked")
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "AUDIT_WRITE_FAILED", report.RuleID)
 }
 
 func TestGuardScanFailsClosedWhenAuditFails(t *testing.T) {
@@ -90,7 +101,7 @@ func TestJSONLAuditorAppendsCompleteEvents(t *testing.T) {
 	require.NoError(t, err)
 
 	want := AuditEvent{
-		Phase:     auditPhasePrecheck,
+		Phase:     AuditPhasePrecheck,
 		ToolName:  "execute_e2b",
 		Backend:   BackendRemoteSandbox,
 		Decision:  DecisionDeny,

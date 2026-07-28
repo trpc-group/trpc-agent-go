@@ -101,8 +101,13 @@ func inspectNetworkArgv(
 		return inspectCustomNetworkArgv(argv, source, policy, customOpenWorld)
 	}
 	argv = normalizeNetworkArgv(command, argv)
-	if command == "git" && !gitNetworkOperation(argv[1:]) {
-		return nil, true
+	if command == "git" {
+		if findings := gitExecutionFindings(argv[1:], source); len(findings) > 0 {
+			return findings, true
+		}
+		if !gitNetworkOperation(argv[1:]) {
+			return nil, true
+		}
 	}
 	findings := destinationRemapFindings(command, argv, source)
 	findings = append(findings, ambientConfigurationFindings(command, argv, source)...)
@@ -138,22 +143,36 @@ func inspectCustomNetworkArgv(
 	}
 	targets := urlsInArguments(argv[1:])
 	downloader := isCustomDownloaderCommand(argv[0])
+	ambiguousTargets := make([]string, 0)
 	if downloader || openWorld {
 		for _, argument := range argv[1:] {
 			if downloader && looksLikeNetworkTarget(argument) ||
 				openWorld && looksLikeOpenWorldTarget(argument) {
 				targets = append(targets, argument)
+				continue
+			}
+			if openWorld && looksLikeBareDomain(argument) {
+				ambiguousTargets = append(ambiguousTargets, argument)
 			}
 		}
 	}
 	targets = uniqueStrings(targets)
-	if len(targets) == 0 || !commandAllowed(policy.allowedCommands, argv[0]) {
+	ambiguousTargets = uniqueStrings(ambiguousTargets)
+	if len(targets) == 0 && len(ambiguousTargets) == 0 ||
+		!commandAllowed(policy.allowedCommands, argv[0]) {
 		return nil, false
 	}
-	findings := make([]Finding, 0, len(targets)+1)
+	findings := make([]Finding, 0, len(targets)+len(ambiguousTargets)+1)
 	for _, target := range targets {
 		findings = append(findings,
 			evaluateLiteralOrURLTarget(target, source, policy)...)
+	}
+	for range ambiguousTargets {
+		findings = append(findings, networkReviewFinding(
+			ruleNetworkTargetReview,
+			"open-world argument may be a bare network host",
+			source,
+		))
 	}
 	findings = append(findings, newFinding(
 		ruleNetworkCustomClient, RiskLevelMedium, DecisionAsk,
@@ -309,6 +328,100 @@ func gitNetworkOperation(arguments []string) bool {
 		}
 	}
 	return false
+}
+
+func gitExecutionFindings(arguments []string, source string) []Finding {
+	subcommand := ""
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		config := ""
+		configFromEnv := false
+		switch {
+		case argument == "-c" && index+1 < len(arguments):
+			index++
+			config = arguments[index]
+		case strings.HasPrefix(argument, "-c") && len(argument) > 2:
+			config = strings.TrimPrefix(argument, "-c")
+		case argument == "--config-env" && index+1 < len(arguments):
+			index++
+			config = arguments[index]
+			configFromEnv = true
+		case strings.HasPrefix(argument, "--config-env="):
+			config = strings.TrimPrefix(argument, "--config-env=")
+			configFromEnv = true
+		case gitGlobalOptionTakesValue(argument) && index+1 < len(arguments):
+			index++
+			continue
+		case strings.HasPrefix(argument, "-"):
+			continue
+		default:
+			subcommand = argument
+		}
+		if gitAliasConfiguration(config) ||
+			configFromEnv && gitAliasKey(config) {
+			return []Finding{newFinding(
+				ruleNetworkExecutionOption,
+				RiskLevelHigh,
+				DecisionDeny,
+				"Git alias configuration can execute a command: source="+safeLabel(source),
+				"remove execution-capable Git alias configuration",
+			)}
+		}
+		if subcommand != "" {
+			break
+		}
+	}
+	if subcommand == "" || knownGitSubcommand(subcommand) {
+		return nil
+	}
+	return []Finding{networkReviewFinding(
+		ruleNetworkExecutionOption,
+		"Git subcommand may resolve to an execution-capable alias",
+		source,
+	)}
+}
+
+func gitGlobalOptionTakesValue(argument string) bool {
+	switch argument {
+	case "-C", "--git-dir", "--work-tree", "--namespace", "--super-prefix":
+		return true
+	default:
+		return false
+	}
+}
+
+func gitAliasConfiguration(config string) bool {
+	key, value, hasValue := strings.Cut(config, "=")
+	return hasValue && strings.HasPrefix(strings.ToLower(key), "alias.") &&
+		strings.Contains(value, "!")
+}
+
+func gitAliasKey(config string) bool {
+	key, _, hasValue := strings.Cut(config, "=")
+	return hasValue && strings.HasPrefix(strings.ToLower(key), "alias.")
+}
+
+func knownGitSubcommand(command string) bool {
+	switch command {
+	case "add", "am", "annotate", "apply", "archive", "bisect", "blame",
+		"branch", "bugreport", "bundle", "cat-file", "checkout", "cherry",
+		"cherry-pick", "clean", "clone", "commit", "config", "count-objects",
+		"describe", "diagnose", "diff", "difftool", "fetch", "for-each-ref",
+		"format-patch", "fsck", "gc", "grep", "hash-object", "help", "init",
+		"log", "ls-files", "ls-remote", "ls-tree", "maintenance", "merge",
+		"merge-base", "mergetool", "mktag", "mktree", "mv", "name-rev",
+		"notes", "pack-objects", "prune", "pull", "push", "range-diff",
+		"rebase", "reflog", "remote", "repack", "replace", "request-pull",
+		"rerere", "reset", "restore", "rev-list", "rev-parse", "rm",
+		"shortlog", "show", "show-branch", "show-ref", "sparse-checkout",
+		"stage", "stash", "status", "submodule", "switch", "symbolic-ref",
+		"tag", "unpack-objects", "update-index", "update-ref", "var",
+		"verify-commit", "verify-pack", "verify-tag", "whatchanged",
+		"worktree", "write-tree":
+		return true
+	default:
+		return false
+	}
 }
 
 func destinationRemapFindings(command string, argv []string, source string) []Finding {
@@ -685,7 +798,19 @@ func looksLikeOpenWorldTarget(value string) bool {
 		return true
 	}
 	host, path, hasPath := strings.Cut(value, "/")
-	return hasPath && path != "" && validDomainPattern(strings.ToLower(host))
+	return hasPath && path != "" &&
+		validDomainPattern(normalizeDomainCandidate(host))
+}
+
+func looksLikeBareDomain(value string) bool {
+	if strings.ContainsAny(value, `/\`) || strings.HasPrefix(value, "-") {
+		return false
+	}
+	return validDomainPattern(normalizeDomainCandidate(value))
+}
+
+func normalizeDomainCandidate(value string) string {
+	return strings.TrimSuffix(strings.ToLower(value), ".")
 }
 
 func uniqueStrings(values []string) []string {

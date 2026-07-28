@@ -42,6 +42,26 @@ type safetyCanaryTool struct {
 	calls int
 }
 
+type guardedSafetyTool struct {
+	calls             int
+	result            any
+	err               error
+	skipSummarization bool
+}
+
+func (*guardedSafetyTool) Declaration() *tool.Declaration {
+	return &tool.Declaration{Name: safetyTestToolName}
+}
+
+func (guarded *guardedSafetyTool) Call(context.Context, []byte) (any, error) {
+	guarded.calls++
+	return guarded.result, guarded.err
+}
+
+func (guarded *guardedSafetyTool) SkipSummarization() bool {
+	return guarded.skipSummarization
+}
+
 func (*safetyCanaryTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{Name: safetyTestToolName}
 }
@@ -109,4 +129,68 @@ func TestInvalidSafetyAdapterStopsFrameworkToolExecution(t *testing.T) {
 			require.Equal(t, "TOOL_INPUT_UNPARSABLE", auditor.events[0].RuleID)
 		})
 	}
+}
+
+func TestSafetyWrapperPreservesFrameworkSkipSummarization(t *testing.T) {
+	inner := &guardedSafetyTool{
+		result:            map[string]bool{"ok": true},
+		skipSummarization: true,
+	}
+	guard, err := safety.NewGuard(
+		safety.DefaultPolicy(),
+		safety.WithAuditor(&safetyAuditRecorder{}),
+	)
+	require.NoError(t, err)
+	wrapped, err := safety.WrapOutputGuard(
+		guard,
+		inner,
+		safety.BindCustom(safetyTestToolName, invalidSafetyAdapter{}),
+	)
+	require.NoError(t, err)
+
+	require.True(t, toolPrefersSkipSummarization(wrapped))
+}
+
+func TestSafetyWrapperPreservesStopErrorWithoutRetryOrOutput(t *testing.T) {
+	inner := &guardedSafetyTool{
+		result: map[string]string{"password": "secret-value"},
+		err:    agent.NewStopError("stop with secret-value"),
+	}
+	guard, err := safety.NewGuard(
+		safety.DefaultPolicy(),
+		safety.WithAuditor(&safetyAuditRecorder{}),
+	)
+	require.NoError(t, err)
+	wrapped, err := safety.WrapOutputGuard(
+		guard,
+		inner,
+		safety.BindCustom(safetyTestToolName, invalidSafetyAdapter{}),
+	)
+	require.NoError(t, err)
+	callable, ok := wrapped.(tool.CallableTool)
+	require.True(t, ok)
+	processor := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+		WithToolCallRetryPolicy(&tool.RetryPolicy{
+			MaxAttempts: 3,
+			RetryOn: func(context.Context, *tool.RetryInfo) (bool, error) {
+				return true, nil
+			},
+		}),
+	)
+
+	_, result, callErr := processor.executeCallableTool(
+		context.Background(),
+		model.ToolCall{Function: model.FunctionDefinitionParam{
+			Name: safetyTestToolName, Arguments: []byte(`{}`),
+		}},
+		callable,
+	)
+
+	require.Nil(t, result)
+	_, ok = agent.AsStopError(callErr)
+	require.True(t, ok)
+	require.NotContains(t, callErr.Error(), "secret-value")
+	require.Equal(t, 1, inner.calls)
 }

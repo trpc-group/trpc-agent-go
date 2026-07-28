@@ -90,6 +90,38 @@ func TestNetworkRuleReviewsGitNetworkOperations(t *testing.T) {
 	}
 }
 
+func TestNetworkRuleRejectsExecutionCapableGitAliases(t *testing.T) {
+	guard := newNetworkTestGuard(t)
+	for _, command := range []string{
+		`git -c alias.pwn='!rm -rf /tmp/target' pwn`,
+		`git -calias.pwn='!rm -rf /tmp/target' pwn`,
+		`git --config-env=alias.pwn=GIT_ALIAS pwn`,
+	} {
+		report, err := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, command, report)
+		requireNetworkRule(t, report, ruleNetworkExecutionOption)
+	}
+
+	report, err := guard.Scan(context.Background(), scanCommand("git pwn"))
+	require.NoError(t, err)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	requireNetworkRule(t, report, ruleNetworkExecutionOption)
+
+	for _, command := range []string{"git STATUS", "git Blame file.go"} {
+		report, err = guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionNeedsHumanReview, report.Decision, command)
+		requireNetworkRule(t, report, ruleNetworkExecutionOption)
+	}
+
+	for _, command := range []string{"git blame file.go", "git worktree list"} {
+		report, err = guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, err)
+		require.Equal(t, DecisionAllow, report.Decision, command, report)
+	}
+}
+
 func TestNetworkRuleDeniesDestinationRemapping(t *testing.T) {
 	guard := newNetworkTestGuard(t)
 	commands := []string{
@@ -252,7 +284,30 @@ func TestNetworkRuleChecksOpenWorldCustomClient(t *testing.T) {
 	safe.Metadata.OpenWorld = true
 	report, err = guard.Scan(context.Background(), safe)
 	require.NoError(t, err)
-	require.Equal(t, DecisionAllow, report.Decision)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	requireNetworkRule(t, report, ruleNetworkTargetReview)
+
+	bare := scanCommand("acme-pull evil.example")
+	bare.Kind = ExecutionKindCustom
+	bare.Backend = BackendCustom
+	bare.Metadata.OpenWorld = true
+	report, err = guard.Scan(context.Background(), bare)
+	require.NoError(t, err)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	requireNetworkRule(t, report, ruleNetworkTargetReview)
+
+	for _, command := range []string{
+		"acme-pull evil.example.",
+		"acme-pull evil.example./file",
+	} {
+		input := scanCommand(command)
+		input.Kind = ExecutionKindCustom
+		input.Backend = BackendCustom
+		input.Metadata.OpenWorld = true
+		report, err = guard.Scan(context.Background(), input)
+		require.NoError(t, err)
+		require.NotEqual(t, DecisionAllow, report.Decision, command)
+	}
 }
 
 func TestNetworkRuleChecksSSHRemoteCommand(t *testing.T) {

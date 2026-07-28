@@ -86,18 +86,20 @@ path, network, environment, timeout, concurrency, and output-limit inputs, but
 does not create the workspace sandbox.
 
 `hostexec` touches the host shell and therefore has a wider trust boundary.
-Safety Guard denies or escalates PTY, interactive, background, privilege, and
-long-lived-session risks found in explicit inputs. The host executor must still
-isolate inherited environment variables, enforce the deadline/output cap, and
-terminate the complete process tree. Guard cannot clean already inherited
+Current hostexec bindings cannot attest to a clean environment or non-login
+shell startup, so initial host execution requires human review. Safety Guard
+also denies or escalates PTY, interactive, background, privilege, and
+long-lived-session risks found in explicit inputs. Guard cannot clean inherited
 secrets or guarantee process cleanup by itself. Guard and executor policies are
 independent and must both allow a request.
 
-`codeexec` adapters scan each code block. Local, container, and E2B
-`CodeExecutor` backends still own actual filesystem, process, network, and
-resource isolation. Existing codeexec requests do not publish timeout/output
-fields, so only the wrapper adds an upper context timeout and returned-output
-cap.
+`codeexec` adapters scan each code block. Existing bindings do not attest to
+effective network isolation, including container configurations whose network
+mode can be overridden, so code execution requires human review when egress
+cannot be ruled out. Local, container, and remote `CodeExecutor` backends still
+own actual filesystem, process, network, and resource isolation. Existing
+codeexec requests do not publish timeout/output fields, so only the wrapper adds
+an upper context timeout and returned-output cap.
 
 Redaction covers Safety Guard reports, audit events, safety errors, and callable
 tool output withheld after a detected secret, including inline artifact content.

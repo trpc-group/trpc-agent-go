@@ -13,7 +13,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -60,6 +62,72 @@ func TestPermissionPolicyNilRequestFailsClosed(t *testing.T) {
 	decision, err := policy.CheckToolPermission(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestPermissionPolicySerializesAdapterCallsPerBinding(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	adapter := &concurrencyProbeAdapter{}
+	binding := BindCustom("custom.exec", adapter)
+	policy, err := NewPermissionPolicy(guard, binding)
+	require.NoError(t, err)
+
+	const calls = 16
+	start := make(chan struct{})
+	errs := make(chan error, calls)
+	var wg sync.WaitGroup
+	wg.Add(calls)
+	for i := 0; i < calls; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, checkErr := policy.CheckToolPermission(
+				context.Background(),
+				&tool.PermissionRequest{ToolName: binding.ToolName},
+			)
+			errs <- checkErr
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, int32(1), adapter.maxActive.Load())
+}
+
+func TestPermissionPolicyAdapterGateHonorsCancellation(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	adapter := &blockingAdapter{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	binding := BindCustom("custom.exec", adapter)
+	policy, err := NewPermissionPolicy(guard, binding)
+	require.NoError(t, err)
+
+	firstDone := make(chan error, 1)
+	go func() {
+		_, checkErr := policy.CheckToolPermission(
+			context.Background(),
+			&tool.PermissionRequest{ToolName: binding.ToolName},
+		)
+		firstDone <- checkErr
+	}()
+	<-adapter.entered
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	decision, checkErr := policy.CheckToolPermission(
+		ctx,
+		&tool.PermissionRequest{ToolName: binding.ToolName},
+	)
+	require.ErrorIs(t, checkErr, context.Canceled)
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+
+	close(adapter.release)
+	require.NoError(t, <-firstDone)
 }
 
 func TestPermissionPolicyPreservesAdapterCancellation(t *testing.T) {
@@ -206,6 +274,33 @@ func TestPermissionPolicyMapsSafetyDecisions(t *testing.T) {
 	require.Len(t, auditor.events, len(tests))
 }
 
+func TestPermissionPolicyRejectsConcurrencyEnvironment(t *testing.T) {
+	policyConfig := DefaultPolicy()
+	policyConfig.maxConcurrency = 2
+	auditor := &memoryAuditor{}
+	guard, err := NewGuard(policyConfig, WithAuditor(auditor))
+	require.NoError(t, err)
+	policy, err := NewPermissionPolicy(
+		guard,
+		BindWorkspaceExec("workspace_exec"),
+	)
+	require.NoError(t, err)
+
+	for _, arguments := range []string{
+		`{"command":"make","env":{"MAKEFLAGS":"-j1000"},"timeout_sec":30}`,
+		`{"command":"make","env":{"MAKEFLAGS":"j1000"},"timeout_sec":30}`,
+		`{"command":"go test ./...","env":{"GOFLAGS":"-p=1000"},"timeout_sec":30}`,
+	} {
+		decision, checkErr := policy.CheckToolPermission(
+			context.Background(),
+			permissionRequest(arguments),
+		)
+		require.NoError(t, checkErr)
+		require.Equal(t, tool.PermissionActionDeny, decision.Action)
+		require.Contains(t, decision.Reason, "RESOURCE_HIGH_CONCURRENCY")
+	}
+}
+
 func TestPermissionPolicyMalformedInputFailsClosedAndAudits(t *testing.T) {
 	auditor := &memoryAuditor{}
 	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
@@ -326,6 +421,25 @@ func TestPermissionPolicyAuditFailurePreventsAllow(t *testing.T) {
 	require.Contains(t, decision.Reason, "AUDIT_WRITE_FAILED")
 }
 
+func TestPermissionPolicyRecoversAuditorPanic(t *testing.T) {
+	guard, err := NewGuard(DefaultPolicy(), WithAuditor(panicAuditor{}))
+	require.NoError(t, err)
+	policy, err := NewPermissionPolicy(
+		guard,
+		BindWorkspaceExec("workspace_exec"),
+	)
+	require.NoError(t, err)
+
+	decision, checkErr := policy.CheckToolPermission(
+		context.Background(),
+		permissionRequest(`{"command":"go test ./...","timeout_sec":30}`),
+	)
+
+	require.ErrorContains(t, checkErr, "auditor panicked")
+	require.Equal(t, tool.PermissionActionDeny, decision.Action)
+	require.Contains(t, decision.Reason, "AUDIT_WRITE_FAILED")
+}
+
 func TestPermissionPolicyLeavesUnboundToolsUnchanged(t *testing.T) {
 	auditor := &memoryAuditor{}
 	guard, err := NewGuard(DefaultPolicy(), WithAuditor(auditor))
@@ -349,4 +463,49 @@ func permissionRequest(arguments string) *tool.PermissionRequest {
 		ToolName:  "workspace_exec",
 		Arguments: []byte(arguments),
 	}
+}
+
+type concurrencyProbeAdapter struct {
+	active    atomic.Int32
+	maxActive atomic.Int32
+}
+
+type blockingAdapter struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (adapter *blockingAdapter) Adapt(
+	context.Context,
+	AdaptRequest,
+	Binding,
+) (ScanInput, error) {
+	close(adapter.entered)
+	<-adapter.release
+	return ScanInput{
+		Operation: OperationExecute,
+		Command:   "go test ./...",
+		Timeout:   DefaultPolicy().maxTimeout,
+	}, nil
+}
+
+func (adapter *concurrencyProbeAdapter) Adapt(
+	context.Context,
+	AdaptRequest,
+	Binding,
+) (ScanInput, error) {
+	active := adapter.active.Add(1)
+	defer adapter.active.Add(-1)
+	for {
+		maxActive := adapter.maxActive.Load()
+		if active <= maxActive || adapter.maxActive.CompareAndSwap(maxActive, active) {
+			break
+		}
+	}
+	time.Sleep(time.Millisecond)
+	return ScanInput{
+		Operation: OperationExecute,
+		Command:   "go test ./...",
+		Timeout:   DefaultPolicy().maxTimeout,
+	}, nil
 }

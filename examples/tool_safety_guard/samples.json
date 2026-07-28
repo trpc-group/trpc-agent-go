@@ -131,7 +131,7 @@
   },
   {
     "name": "host PTY",
-    "expected_decision": "ask",
+    "expected_decision": "needs_human_review",
     "required_rule_id": "HOST_PTY_SESSION",
     "tool_name": "exec_command",
     "kind": "host_exec",

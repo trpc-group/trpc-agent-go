@@ -267,11 +267,11 @@
   {
     "name": "host PTY",
     "report": {
-      "decision": "ask",
-      "risk_level": "medium",
-      "rule_id": "HOST_PTY_SESSION",
-      "evidence": "PTY execution requested",
-      "recommendation": "use non-interactive execution when possible",
+      "decision": "needs_human_review",
+      "risk_level": "high",
+      "rule_id": "HOST_AMBIENT_ENVIRONMENT",
+      "evidence": "host execution may inherit login-shell and environment remapping",
+      "recommendation": "use an isolated workspace backend or review the host environment",
       "tool_name": "exec_command",
       "command": "go test ./...",
       "backend": "hostexec",
@@ -280,6 +280,13 @@
       "duration_ms": 0,
       "policy_version": "1",
       "findings": [
+        {
+          "rule_id": "HOST_AMBIENT_ENVIRONMENT",
+          "risk_level": "high",
+          "decision": "needs_human_review",
+          "evidence": "host execution may inherit login-shell and environment remapping",
+          "recommendation": "use an isolated workspace backend or review the host environment"
+        },
         {
           "rule_id": "HOST_PTY_SESSION",
           "risk_level": "medium",

@@ -20,23 +20,32 @@ import (
 )
 
 const (
-	auditPhasePrecheck  = "precheck"
-	auditPhasePostcheck = "postcheck"
-	auditFileMode       = os.FileMode(0o600)
+	auditFileMode = os.FileMode(0o600)
+)
+
+// AuditPhase identifies when a safety audit event was emitted. It aliases
+// string to preserve compatibility with existing AuditEvent literals.
+type AuditPhase = string
+
+const (
+	// AuditPhasePrecheck records a decision made before tool execution.
+	AuditPhasePrecheck AuditPhase = "precheck"
+	// AuditPhasePostcheck records a decision made after tool execution.
+	AuditPhasePostcheck AuditPhase = "postcheck"
 )
 
 // AuditEvent is the low-cardinality record emitted for one safety decision.
 type AuditEvent struct {
-	Timestamp  time.Time `json:"timestamp"`
-	Phase      string    `json:"phase"`
-	ToolName   string    `json:"tool_name"`
-	Backend    Backend   `json:"backend"`
-	Decision   Decision  `json:"decision"`
-	RiskLevel  RiskLevel `json:"risk_level"`
-	RuleID     string    `json:"rule_id"`
-	DurationMS int64     `json:"duration_ms"`
-	Redacted   bool      `json:"redacted"`
-	Blocked    bool      `json:"blocked"`
+	Timestamp  time.Time  `json:"timestamp"`
+	Phase      AuditPhase `json:"phase"`
+	ToolName   string     `json:"tool_name"`
+	Backend    Backend    `json:"backend"`
+	Decision   Decision   `json:"decision"`
+	RiskLevel  RiskLevel  `json:"risk_level"`
+	RuleID     string     `json:"rule_id"`
+	DurationMS int64      `json:"duration_ms"`
+	Redacted   bool       `json:"redacted"`
+	Blocked    bool       `json:"blocked"`
 }
 
 // Auditor records safety decisions before they leave the safety package.
@@ -128,7 +137,7 @@ func (auditor *JSONLAuditor) Close() error {
 	return nil
 }
 
-func auditEventFromReport(report Report, phase string) AuditEvent {
+func auditEventFromReport(report Report, phase AuditPhase) AuditEvent {
 	return AuditEvent{
 		Timestamp:  time.Now().UTC(),
 		Phase:      phase,
@@ -164,14 +173,14 @@ func auditFailureReport(report Report, blocked bool) Report {
 func (guard *Guard) finalizeReport(
 	ctx context.Context,
 	report Report,
-	phase string,
+	phase AuditPhase,
 ) (Report, error) {
 	report = redactReport(report)
 	if guard.auditor == nil {
 		return report, nil
 	}
 	if err := guard.recordAudit(ctx, auditEventFromReport(report, phase)); err != nil {
-		return auditFailureReport(report, phase == auditPhasePrecheck), fmt.Errorf(
+		return auditFailureReport(report, phase == AuditPhasePrecheck), fmt.Errorf(
 			"tool safety: record audit event: %w",
 			err,
 		)
@@ -179,8 +188,16 @@ func (guard *Guard) finalizeReport(
 	return report, nil
 }
 
-func (guard *Guard) recordAudit(ctx context.Context, event AuditEvent) error {
+func (guard *Guard) recordAudit(
+	ctx context.Context,
+	event AuditEvent,
+) (err error) {
 	guard.auditMu.Lock()
 	defer guard.auditMu.Unlock()
+	defer func() {
+		if recover() != nil {
+			err = errors.New("tool safety: auditor panicked")
+		}
+	}()
 	return guard.auditor.Record(ctx, event)
 }

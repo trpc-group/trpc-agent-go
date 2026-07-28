@@ -148,7 +148,7 @@ func publicSamplesRuntime() []publicSample {
 				input.Interactive = true
 				return input
 			}(),
-			decision:   DecisionAsk,
+			decision:   DecisionNeedsHumanReview,
 			requiredID: "HOST_PTY_SESSION",
 		},
 		{
@@ -902,9 +902,124 @@ func TestScanWithHighConcurrency(t *testing.T) {
 	guard, err := NewGuard(policy)
 	require.NoError(t, err)
 
-	report, scanErr := guard.Scan(context.Background(), scanCommand("xargs -P 4 -n 1 echo"))
+	for _, command := range []string{
+		"xargs -P 4 -n 1 echo",
+		"xargs -P=4 -n 1 echo",
+		"xargs -P4 -n 1 echo",
+		"xargs -P 0 -n 1 echo",
+		"xargs -P=0 -n 1 echo",
+		"xargs -P0 -n 1 echo",
+		"go test -p=1000 ./...",
+		"make -j=1000",
+		"make -j1000",
+		"make -kj1000",
+		"make -Bj1000",
+		"make -dj1000",
+		"make -Lj1000",
+		"make -Sj1000",
+		"make --jobs=1000",
+		"xargs -tP1000 echo",
+		"xargs --max-procs 1000",
+		"xargs --max-p=1000",
+		"cargo build -j 1000",
+		"cmake --build . -j 1000",
+		"parallel -j 1000",
+	} {
+		report, scanErr := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, scanErr)
+		requireFinding(t, report, "RESOURCE_HIGH_CONCURRENCY")
+	}
+}
+
+func TestScanRejectsConcurrencyEnvironment(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.maxConcurrency = 2
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+
+	for key, value := range map[string]string{
+		"MAKEFLAGS":    "-j1000",
+		"GNUMAKEFLAGS": "-kj1000",
+		"GOFLAGS":      "-p=1000",
+		"makeflags":    "j1000",
+	} {
+		input := scanCommand("go test ./...")
+		input.Env = map[string]string{key: value}
+		report, scanErr := guard.Scan(context.Background(), input)
+		require.NoError(t, scanErr)
+		requireFinding(t, report, "RESOURCE_HIGH_CONCURRENCY")
+	}
+
+	report, scanErr := guard.Scan(
+		context.Background(),
+		scanCommand("make -Cj1000"),
+	)
 	require.NoError(t, scanErr)
-	requireFinding(t, report, "RESOURCE_HIGH_CONCURRENCY")
+	require.NoError(t, findingAbsent(report, "RESOURCE_HIGH_CONCURRENCY"))
+}
+
+func TestScanFailsClosedOnUnparsableConcurrency(t *testing.T) {
+	policy := DefaultPolicy()
+	policy.maxConcurrency = 2
+	guard, err := NewGuard(policy)
+	require.NoError(t, err)
+
+	for _, command := range []string{
+		"go test -p=999999999999999999999999 ./...",
+		"make -j=dynamic",
+	} {
+		report, scanErr := guard.Scan(context.Background(), scanCommand(command))
+		require.NoError(t, scanErr)
+		requireFinding(t, report, "RESOURCE_CONCURRENCY_UNPARSABLE")
+	}
+
+	report, scanErr := guard.Scan(
+		context.Background(),
+		scanCommand("echo -- -j=1000"),
+	)
+	require.NoError(t, scanErr)
+	require.NoError(t, findingAbsent(report, "RESOURCE_HIGH_CONCURRENCY"))
+
+	report, scanErr = guard.Scan(
+		context.Background(),
+		scanCommand("curl --parallel https://api.github.com"),
+	)
+	require.NoError(t, scanErr)
+	require.NoError(t, findingAbsent(report, "RESOURCE_CONCURRENCY_UNPARSABLE"))
+}
+
+func TestScanReviewsUnattestedHostExecution(t *testing.T) {
+	guard, err := NewGuard(DefaultPolicy())
+	require.NoError(t, err)
+	input := scanCommand("go test ./...")
+	input.Kind = ExecutionKindHostExec
+	input.Backend = BackendHostExec
+
+	report, scanErr := guard.Scan(context.Background(), input)
+
+	require.NoError(t, scanErr)
+	require.Equal(t, DecisionNeedsHumanReview, report.Decision)
+	requireFinding(t, report, "HOST_AMBIENT_ENVIRONMENT")
+}
+
+func TestScanReviewsUnattestedCodeNetworkIsolation(t *testing.T) {
+	guard, err := NewGuard(DefaultPolicy())
+	require.NoError(t, err)
+	for _, block := range []CodeBlockInput{
+		{Language: "python", Code: `socket.create_connection(("evil.example", 443))`},
+		{Language: "go", Code: `net.Dial("tcp", "evil.example:443")`},
+		{Language: "javascript", Code: `net.connect(443, "evil.example")`},
+	} {
+		input := ScanInput{
+			ToolName: "execute_code", Kind: ExecutionKindCodeExec,
+			Operation: OperationCodeExecute, Backend: BackendLocal,
+			CodeBlocks: []CodeBlockInput{block},
+		}
+		report, scanErr := guard.Scan(context.Background(), input)
+		require.NoError(t, scanErr)
+		require.NotEqual(t, DecisionAllow, report.Decision, block)
+		requireFinding(t, report, "NETWORK_CODE_EGRESS_UNVERIFIED")
+	}
 }
 
 func TestScanWithSecretInEnv(t *testing.T) {

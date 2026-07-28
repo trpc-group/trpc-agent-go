@@ -36,7 +36,9 @@ type AdaptRequest struct {
 }
 
 // InputAdapter normalizes one execution tool's JSON arguments into a
-// structurally valid ScanInput for scanning.
+// structurally valid ScanInput for scanning. NewPermissionPolicy serializes
+// Adapt calls for each binding. An adapter shared across policies or bindings
+// must support concurrent calls.
 type InputAdapter interface {
 	Adapt(context.Context, AdaptRequest, Binding) (ScanInput, error)
 }

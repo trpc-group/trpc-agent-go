@@ -16,6 +16,7 @@ import (
 	"reflect"
 	"time"
 
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -157,7 +158,14 @@ func (wrapper *outputGuard) LongRunning() bool {
 	return ok && runner.LongRunning()
 }
 
-// Call delegates once, then withholds unsafe output without returning an error.
+// SkipSummarization delegates the semantic tool's final-result preference.
+func (wrapper *outputGuard) SkipSummarization() bool {
+	skipper, ok := wrapper.semantic.(interface{ SkipSummarization() bool })
+	return ok && skipper.SkipSummarization()
+}
+
+// Call delegates once, then withholds unsafe output. Terminal StopError
+// semantics are preserved with a redacted error.
 func (wrapper *outputGuard) Call(
 	ctx context.Context,
 	arguments []byte,
@@ -170,7 +178,8 @@ func (wrapper *outputGuard) Call(
 	result, err = wrapper.callable.Call(runCtx, arguments)
 	violation, blocked := wrapper.callViolation(runCtx, parentCtx, result, err)
 	if blocked {
-		return wrapper.blockedResult(parentCtx, started, violation), nil
+		return wrapper.blockedResult(parentCtx, started, violation),
+			redactedTerminalError(err)
 	}
 	return result, err
 }
@@ -192,7 +201,7 @@ func (wrapper *outputGuard) recoverPostcheck(
 		redacted:       true,
 	}
 	*result = wrapper.blockedResult(ctx, started, violation)
-	*err = nil
+	*err = redactedTerminalError(*err)
 }
 
 func (wrapper *outputGuard) callViolation(
@@ -265,7 +274,14 @@ func (wrapper *outputGuard) finalizePostcheckSafely(
 			err = errors.New("tool safety: auditor panicked")
 		}
 	}()
-	return wrapper.guard.finalizeReport(ctx, report, auditPhasePostcheck)
+	return wrapper.guard.finalizeReport(ctx, report, AuditPhasePostcheck)
+}
+
+func redactedTerminalError(err error) error {
+	if _, ok := agent.AsStopError(err); !ok {
+		return nil
+	}
+	return agent.NewStopError("tool execution stopped; output withheld by safety guard")
 }
 
 func (wrapper *outputGuard) violationReport(

@@ -419,6 +419,16 @@ func (networkRule) Evaluate(
 		return nil
 	}
 	findings := make([]Finding, 0)
+	if input.Kind == ExecutionKindCodeExec &&
+		input.Operation == OperationCodeExecute {
+		findings = append(findings, newFinding(
+			"NETWORK_CODE_EGRESS_UNVERIFIED",
+			RiskLevelHigh,
+			DecisionNeedsHumanReview,
+			"code execution backend does not attest to network isolation",
+			"use an attested network-isolated backend or review the code manually",
+		))
+	}
 	argsHandled := false
 	customOpenWorld := input.Metadata.OpenWorld && input.Backend == BackendCustom
 	if len(input.Args) > 0 {
@@ -604,6 +614,16 @@ func (hostRule) Evaluate(
 		return nil
 	}
 	findings := make([]Finding, 0)
+	if input.Kind == ExecutionKindHostExec &&
+		input.Operation == OperationExecute {
+		findings = append(findings, newFinding(
+			"HOST_AMBIENT_ENVIRONMENT",
+			RiskLevelHigh,
+			DecisionNeedsHumanReview,
+			"host execution may inherit login-shell and environment remapping",
+			"use an isolated workspace backend or review the host environment",
+		))
+	}
 	if input.Operation == OperationSessionInput {
 		findings = append(findings, newFinding(
 			"HOST_SESSION_INPUT",
@@ -774,10 +794,9 @@ func sensitiveEnvKey(key string) bool {
 type resourceRule struct{}
 
 var (
-	yesPattern          = regexp.MustCompile(`(^|[\s;|&])yes(?:\s|$)`)
-	infinitePattern     = regexp.MustCompile(`(?i)\bwhile\s+(?:true|1)\b|for\s*\(\s*;\s*;\s*\)|for\s*\{\s*\}|loop\s*\{`)
-	highParallelPattern = regexp.MustCompile(`(?i)(?:\s|^)(?:-p|-j)\s*([0-9]{1,6})\b`)
-	forkBombPattern     = regexp.MustCompile(`:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:\s*&`)
+	yesPattern      = regexp.MustCompile(`(^|[\s;|&])yes(?:\s|$)`)
+	infinitePattern = regexp.MustCompile(`(?i)\bwhile\s+(?:true|1)\b|for\s*\(\s*;\s*;\s*\)|for\s*\{\s*\}|loop\s*\{`)
+	forkBombPattern = regexp.MustCompile(`:\s*\(\s*\)\s*\{[^}]*:\s*\|\s*:\s*&`)
 )
 
 func (resourceRule) Evaluate(
@@ -792,7 +811,43 @@ func (resourceRule) Evaluate(
 	for _, text := range allExecutableText(input) {
 		findings = append(findings, resourceTextFindings(text, policy)...)
 	}
+	findings = append(findings,
+		resourceEnvironmentFindings(input.Env, policy.maxConcurrency)...)
 	return findings
+}
+
+func resourceEnvironmentFindings(
+	env map[string]string,
+	maxConcurrency int,
+) []Finding {
+	findings := make([]Finding, 0)
+	for key, value := range env {
+		var command string
+		switch strings.ToUpper(key) {
+		case "MAKEFLAGS", "GNUMAKEFLAGS":
+			command = "make"
+			value = normalizeMakeFlags(value)
+		case "GOFLAGS":
+			command = "go"
+		default:
+			continue
+		}
+		findings = append(findings, concurrencyFindings(
+			command+" "+value,
+			safeLabel("env."+key),
+			maxConcurrency,
+		)...)
+	}
+	return findings
+}
+
+func normalizeMakeFlags(value string) string {
+	fields := strings.Fields(value)
+	if len(fields) == 0 || strings.HasPrefix(fields[0], "-") {
+		return value
+	}
+	fields[0] = "-" + fields[0]
+	return strings.Join(fields, " ")
 }
 
 func timeoutFindings(input ScanInput, policy Policy) []Finding {
@@ -856,30 +911,199 @@ func resourceTextFindings(text labeledText, policy Policy) []Finding {
 			"remove recursive process creation",
 		))
 	}
-	for _, match := range highParallelPattern.FindAllStringSubmatch(lower, -1) {
-		value, err := strconv.Atoi(match[1])
-		if err != nil {
-			findings = append(findings, newFinding(
-				"RESOURCE_CONCURRENCY_UNPARSABLE",
-				RiskLevelHigh,
-				DecisionDeny,
-				"requested concurrency could not be bounded: source="+source,
-				"use a literal concurrency within the configured maximum",
-			))
-			break
-		}
-		if value > policy.maxConcurrency {
-			findings = append(findings, newFinding(
-				"RESOURCE_HIGH_CONCURRENCY",
-				RiskLevelHigh,
-				DecisionDeny,
-				"requested concurrency exceeds policy limit: source="+source,
-				"reduce concurrency to the configured maximum",
-			))
-			break
+	findings = append(findings,
+		concurrencyFindings(text.text, source, policy.maxConcurrency)...)
+	return findings
+}
+
+func concurrencyFindings(text, source string, maxConcurrency int) []Finding {
+	pipeline, err := shellsafe.ParseWithMaxSegments(text, guardMaxSegments)
+	if err != nil {
+		return nil
+	}
+	for _, argv := range pipeline.Commands {
+		command := strings.ToLower(commandBase(argv[0]))
+		for index := 1; index < len(argv); index++ {
+			if argv[index] == "--" {
+				break
+			}
+			value, option, matched, consumesNext, optionalValue :=
+				concurrencyOptionValue(command, argv[index])
+			if !matched {
+				continue
+			}
+			if consumesNext {
+				if optionalValue &&
+					(index+1 >= len(argv) ||
+						!literalNonNegativeInteger(argv[index+1])) {
+					value = "0"
+				} else {
+					index++
+				}
+				if value == "" && (index >= len(argv) || argv[index] == "--") {
+					return []Finding{unparsableConcurrencyFinding(source)}
+				}
+				if value == "" {
+					value = argv[index]
+				}
+			}
+			concurrency, parseErr := strconv.Atoi(value)
+			if parseErr != nil || concurrency < 0 {
+				return []Finding{unparsableConcurrencyFinding(source)}
+			}
+			if concurrency > maxConcurrency ||
+				concurrency == 0 && zeroMeansUnbounded(command, option) {
+				return []Finding{newFinding(
+					"RESOURCE_HIGH_CONCURRENCY",
+					RiskLevelHigh,
+					DecisionDeny,
+					"requested concurrency exceeds policy limit: source="+source,
+					"reduce concurrency to the configured maximum",
+				)}
+			}
 		}
 	}
-	return findings
+	return nil
+}
+
+func concurrencyOptionValue(
+	command string,
+	argument string,
+) (value, option string, matched, consumesNext, optionalValue bool) {
+	options := []string(nil)
+	longOptions := []string(nil)
+	switch command {
+	case "go":
+		options = []string{"-p"}
+	case "xargs":
+		options = []string{"-P"}
+		longOptions = []string{"--max-procs"}
+	case "make", "gmake", "ninja":
+		options = []string{"-j"}
+		longOptions = []string{"--jobs"}
+	default:
+		options = []string{"-j", "-p", "-P"}
+	}
+	for _, option := range options {
+		if argument == option {
+			return "", option, true, true, option == "-j"
+		}
+		if strings.HasPrefix(argument, option+"=") {
+			return strings.TrimPrefix(argument, option+"="),
+				option, true, false, false
+		}
+		if strings.HasPrefix(argument, option) && len(argument) > len(option) {
+			value := strings.TrimPrefix(argument, option)
+			if value[0] >= '0' && value[0] <= '9' {
+				return value, option, true, false, false
+			}
+		}
+		if value, ok := bundledConcurrencyValue(command, argument, option); ok {
+			return value, option, true, value == "", option == "-j"
+		}
+	}
+	for _, option := range longOptions {
+		if argument == option {
+			return "", option, true, true, option == "--jobs"
+		}
+		if strings.HasPrefix(argument, option+"=") {
+			return strings.TrimPrefix(argument, option+"="),
+				option, true, false, false
+		}
+	}
+	if command == "xargs" {
+		name, value, hasValue := strings.Cut(argument, "=")
+		if len(name) >= len("--max-p") &&
+			strings.HasPrefix("--max-procs", name) {
+			if hasValue {
+				return value, "--max-procs", true, false, false
+			}
+			return "", "--max-procs", true, true, false
+		}
+	}
+	return "", "", false, false, false
+}
+
+func bundledConcurrencyValue(
+	command string,
+	argument string,
+	option string,
+) (string, bool) {
+	if len(option) != 2 || len(argument) < 3 ||
+		!strings.HasPrefix(argument, "-") ||
+		strings.HasPrefix(argument, "--") {
+		return "", false
+	}
+	index := strings.Index(argument[1:], option[1:])
+	if index < 1 {
+		return "", false
+	}
+	for _, flag := range argument[1 : index+1] {
+		if shortOptionConsumesSuffix(command, flag) ||
+			!knownBundledShortOption(command, flag) {
+			return "", false
+		}
+	}
+	value := argument[index+2:]
+	value = strings.TrimPrefix(value, "=")
+	if value == "" || literalNonNegativeInteger(value) {
+		return value, true
+	}
+	return "", false
+}
+
+func shortOptionConsumesSuffix(command string, flag rune) bool {
+	switch command {
+	case "make", "gmake":
+		return strings.ContainsRune("CEfIlOoW", flag)
+	case "ninja":
+		return strings.ContainsRune("dfkltw", flag)
+	case "xargs":
+		return strings.ContainsRune("adEILns", flag)
+	default:
+		return true
+	}
+}
+
+func knownBundledShortOption(command string, flag rune) bool {
+	switch command {
+	case "make", "gmake":
+		return strings.ContainsRune("bBdehikLmnpqrRsStvw", flag)
+	case "ninja":
+		return strings.ContainsRune("nv", flag)
+	case "xargs":
+		return strings.ContainsRune("0oprtx", flag)
+	default:
+		return false
+	}
+}
+
+func literalNonNegativeInteger(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func zeroMeansUnbounded(command, option string) bool {
+	return command == "xargs" && (option == "-P" || option == "--max-procs") ||
+		(command == "make" || command == "gmake" || command == "ninja") &&
+			(option == "-j" || option == "--jobs")
+}
+
+func unparsableConcurrencyFinding(source string) Finding {
+	return newFinding(
+		"RESOURCE_CONCURRENCY_UNPARSABLE",
+		RiskLevelHigh,
+		DecisionDeny,
+		"requested concurrency could not be bounded: source="+source,
+		"use a literal concurrency within the configured maximum",
+	)
 }
 
 func timeoutApplicable(input ScanInput) bool {

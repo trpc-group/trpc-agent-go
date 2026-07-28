@@ -7,6 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package main demonstrates policy-driven tool safety scans.
 package main
 
 import (

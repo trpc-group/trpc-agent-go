@@ -125,7 +125,7 @@ func (guard *Guard) Scan(
 	if err != nil {
 		return report, err
 	}
-	return guard.finalizeReport(ctx, report, auditPhasePrecheck)
+	return guard.finalizeReport(ctx, report, AuditPhasePrecheck)
 }
 
 func (guard *Guard) scan(

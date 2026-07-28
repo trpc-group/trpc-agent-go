@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"trpc.group/trpc-go/trpc-agent-go/agent"
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -30,17 +31,18 @@ const (
 )
 
 type fakeCallableTool struct {
-	declaration      tool.Declaration
-	result           any
-	err              error
-	calls            int
-	metadata         tool.ToolMetadata
-	permission       tool.PermissionDecision
-	permissionChecks int
-	streamInner      bool
-	innerTextMode    tool.InnerTextMode
-	longRunning      bool
-	call             func(context.Context, []byte) (any, error)
+	declaration       tool.Declaration
+	result            any
+	err               error
+	calls             int
+	metadata          tool.ToolMetadata
+	permission        tool.PermissionDecision
+	permissionChecks  int
+	streamInner       bool
+	innerTextMode     tool.InnerTextMode
+	longRunning       bool
+	skipSummarization bool
+	call              func(context.Context, []byte) (any, error)
 }
 
 type safePayload struct {
@@ -96,6 +98,10 @@ func (fake *fakeCallableTool) InnerTextMode() tool.InnerTextMode {
 }
 
 func (fake *fakeCallableTool) LongRunning() bool { return fake.longRunning }
+
+func (fake *fakeCallableTool) SkipSummarization() bool {
+	return fake.skipSummarization
+}
 
 type minimalCallableTool struct {
 	declaration *tool.Declaration
@@ -181,6 +187,21 @@ func TestWrapOutputGuardPreservesSafeResult(t *testing.T) {
 	require.Empty(t, auditor.events)
 }
 
+func TestWrapOutputGuardDelegatesSkipSummarization(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	inner := newFakeCallable(safePayload{Status: "ok"})
+	inner.skipSummarization = true
+
+	wrapped, err := WrapOutputGuard(
+		guard, inner, BindWorkspaceExec(workspaceToolName),
+	)
+
+	require.NoError(t, err)
+	skipper, ok := wrapped.(interface{ SkipSummarization() bool })
+	require.True(t, ok)
+	require.True(t, skipper.SkipSummarization())
+}
+
 func TestWrapOutputGuardDoesNotRepeatPermissionPrecheck(t *testing.T) {
 	guard, auditor := newWrapperGuard(t, nil)
 	inner := newFakeCallable("executed")
@@ -259,6 +280,20 @@ func TestWrapOutputGuardHandlesToolErrors(t *testing.T) {
 	result, err = wrapOutput(t, guard, secret).Call(context.Background(), nil)
 	require.NoError(t, err)
 	require.Equal(t, ruleOutputSecret, result.(BlockedResult).RuleID)
+}
+
+func TestWrapOutputGuardPreservesRedactedStopError(t *testing.T) {
+	guard, _ := newWrapperGuard(t, nil)
+	inner := newFakeCallable(map[string]string{"password": "secret-value"})
+	inner.err = agent.NewStopError("stop with secret-value")
+
+	result, err := wrapOutput(t, guard, inner).Call(context.Background(), nil)
+
+	require.IsType(t, BlockedResult{}, result)
+	_, ok := agent.AsStopError(err)
+	require.True(t, ok)
+	require.NotContains(t, err.Error(), "secret-value")
+	require.Equal(t, 1, inner.calls)
 }
 
 func TestWrapOutputGuardBlocksOversizedToolError(t *testing.T) {

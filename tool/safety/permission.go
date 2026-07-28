@@ -32,15 +32,23 @@ func NewPermissionPolicy(
 	if len(validated) == 0 {
 		return nil, errors.New("tool safety: permission policy requires bindings")
 	}
+	adapterGates := make(map[string]chan struct{}, len(validated))
+	for toolName := range validated {
+		gate := make(chan struct{}, 1)
+		gate <- struct{}{}
+		adapterGates[toolName] = gate
+	}
 	return &permissionPolicy{
-		guard:    guard,
-		bindings: validated,
+		guard:        guard,
+		bindings:     validated,
+		adapterGates: adapterGates,
 	}, nil
 }
 
 type permissionPolicy struct {
-	guard    *Guard
-	bindings map[string]Binding
+	guard        *Guard
+	bindings     map[string]Binding
+	adapterGates map[string]chan struct{}
 }
 
 func (policy *permissionPolicy) CheckToolPermission(
@@ -58,7 +66,7 @@ func (policy *permissionPolicy) CheckToolPermission(
 		ToolName:  req.ToolName,
 		Arguments: append([]byte(nil), req.Arguments...),
 		Metadata:  req.Metadata,
-	}, binding)
+	}, binding, policy.adapterGates[req.ToolName])
 	decision := permissionDecision(report)
 	if err != nil {
 		return decision, err
@@ -104,8 +112,9 @@ func (guard *Guard) scanRequest(
 	ctx context.Context,
 	req AdaptRequest,
 	binding Binding,
+	adapterGate chan struct{},
 ) (Report, error) {
-	input, err := adaptSafely(ctx, req, binding)
+	input, err := adaptWithGate(ctx, req, binding, adapterGate)
 	if err != nil {
 		if errors.Is(err, context.Canceled) ||
 			errors.Is(err, context.DeadlineExceeded) {
@@ -117,7 +126,31 @@ func (guard *Guard) scanRequest(
 	if err != nil {
 		return report, err
 	}
-	return guard.finalizeReport(ctx, report, auditPhasePrecheck)
+	return guard.finalizeReport(ctx, report, AuditPhasePrecheck)
+}
+
+func adaptWithGate(
+	ctx context.Context,
+	req AdaptRequest,
+	binding Binding,
+	gate chan struct{},
+) (ScanInput, error) {
+	if gate == nil {
+		return adaptSafely(ctx, req, binding)
+	}
+	if ctx == nil {
+		<-gate
+	} else {
+		select {
+		case <-ctx.Done():
+			return ScanInput{}, ctx.Err()
+		case <-gate:
+		}
+	}
+	defer func() {
+		gate <- struct{}{}
+	}()
+	return adaptSafely(ctx, req, binding)
 }
 
 func adaptSafely(
@@ -161,5 +194,5 @@ func (guard *Guard) scanUnparsableRequest(
 		"review the arguments and execution binding",
 	)}
 	report := buildReport(guard.policy, input, scanOutcome{findings: findings})
-	return guard.finalizeReport(ctx, report, auditPhasePrecheck)
+	return guard.finalizeReport(ctx, report, AuditPhasePrecheck)
 }
