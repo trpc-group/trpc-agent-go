@@ -11,10 +11,10 @@ package main
 
 import (
 	"context"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent/llmagent"
@@ -28,8 +28,15 @@ import (
 )
 
 const (
-	formattedToolName = "run_formatted"
-	defaultToolName   = "run_default"
+	xmlLikeToolName = "bash_xml_like"
+	defaultToolName = "bash_default_json"
+
+	sampleCommand = `rg --json 'ResultFormatter' tool internal`
+	sampleArgs    = `{"command":"rg --json 'ResultFormatter' tool internal"}`
+	sampleOutput  = `{"type":"match","data":{"path":{"text":"tool/resultformat/formatter.go"},"lines":{"text":"type Formatter interface {\n"},"line_number":20}}
+{"type":"match","data":{"path":{"text":"tool/function/function_tool.go"},"lines":{"text":"func WithResultFormatter(formatter resultformat.Formatter) Option {\n"},"line_number":122}}
+{"type":"match","data":{"path":{"text":"internal/flow/processor/functioncall.go"},"lines":{"text":"content, err := formatter.Format(ctx, result)\n"},"line_number":3661}}
+{"type":"summary","data":{"elapsed_total":{"human":"0.004s"},"stats":{"searches":1,"searches_with_match":1,"bytes_searched":48291,"bytes_printed":615,"matched_lines":3,"matches":3}}}`
 )
 
 type commandArgs struct {
@@ -37,14 +44,9 @@ type commandArgs struct {
 }
 
 type commandResult struct {
-	ExitCode int    `json:"exit_code"`
-	Output   string `json:"output"`
-}
-
-type observation struct {
-	XMLName  xml.Name `xml:"observation"`
-	ExitCode int      `xml:"exit_code"`
-	Output   string   `xml:"output"`
+	Exception  string `json:"exception,omitempty"`
+	ReturnCode int    `json:"returncode"`
+	Output     string `json:"output"`
 }
 
 func main() {
@@ -55,16 +57,17 @@ func main() {
 }
 
 func run() error {
-	formattedTool := function.NewFunctionTool(
-		runCommand,
-		function.WithName(formattedToolName),
-		function.WithDescription("Run a command and return an XML observation."),
+	ctx := context.Background()
+	xmlLikeTool := function.NewFunctionTool(
+		runBash,
+		function.WithName(xmlLikeToolName),
+		function.WithDescription("Run a command and return an XML-like observation."),
 		function.WithResultFormatter(
 			resultformat.FormatterFunc[commandResult](formatObservation),
 		),
 	)
 	defaultTool := function.NewFunctionTool(
-		runCommand,
+		runBash,
 		function.WithName(defaultToolName),
 		function.WithDescription("Run a command and use the default JSON result."),
 	)
@@ -72,7 +75,7 @@ func run() error {
 	ag := llmagent.New(
 		"tool-result-formatting-example",
 		llmagent.WithModel(&scriptedModel{}),
-		llmagent.WithTools([]tool.Tool{formattedTool, defaultTool}),
+		llmagent.WithTools([]tool.Tool{xmlLikeTool, defaultTool}),
 	)
 	r := runner.NewRunner(
 		"tool-result-formatting-example",
@@ -82,7 +85,7 @@ func run() error {
 	defer r.Close()
 
 	events, err := r.Run(
-		context.Background(),
+		ctx,
 		"example-user",
 		"tool-result-formatting-session",
 		model.NewUserMessage("Run both command tools."),
@@ -95,20 +98,28 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	for _, name := range []string{formattedToolName, defaultToolName} {
+	counter := model.NewSimpleTokenCounter()
+	for _, name := range []string{xmlLikeToolName, defaultToolName} {
 		content, ok := results[name]
 		if !ok {
 			return fmt.Errorf("missing result for tool %q", name)
 		}
-		fmt.Printf("%s:\n%s\n\n", name, content)
+		tokens, err := counter.CountTokens(
+			ctx,
+			model.Message{Content: content},
+		)
+		if err != nil {
+			return fmt.Errorf("count tokens for tool %q: %w", name, err)
+		}
+		fmt.Printf("%s (estimated content tokens: %d):\n%s\n\n", name, tokens, content)
 	}
 	return nil
 }
 
-func runCommand(_ context.Context, args commandArgs) (commandResult, error) {
+func runBash(_ context.Context, args commandArgs) (commandResult, error) {
 	return commandResult{
-		ExitCode: 0,
-		Output:   "ran " + args.Command + ": <ok> & \"done\"",
+		ReturnCode: 0,
+		Output:     "$ " + args.Command + "\n" + sampleOutput,
 	}, nil
 }
 
@@ -116,14 +127,13 @@ func formatObservation(
 	_ context.Context,
 	result commandResult,
 ) (string, error) {
-	content, err := xml.Marshal(observation{
-		ExitCode: result.ExitCode,
-		Output:   result.Output,
-	})
-	if err != nil {
-		return "", err
+	var b strings.Builder
+	if result.Exception != "" {
+		fmt.Fprintf(&b, "<exception>%s</exception>\n", result.Exception)
 	}
-	return string(content), nil
+	fmt.Fprintf(&b, "<returncode>%d</returncode>\n", result.ReturnCode)
+	fmt.Fprintf(&b, "<output>\n%s</output>", result.Output)
+	return b.String(), nil
 }
 
 func collectToolResults(
@@ -166,7 +176,7 @@ func (m *scriptedModel) GenerateContent(
 	var response *model.Response
 	switch m.step {
 	case 1:
-		response = toolCallResponse("call-formatted", formattedToolName)
+		response = toolCallResponse("call-xml-like", xmlLikeToolName)
 	case 2:
 		response = toolCallResponse("call-default", defaultToolName)
 	default:
@@ -193,7 +203,7 @@ func toolCallResponse(id string, toolName string) *model.Response {
 					ID:   id,
 					Function: model.FunctionDefinitionParam{
 						Name:      toolName,
-						Arguments: []byte(`{"command":"status"}`),
+						Arguments: []byte(sampleArgs),
 					},
 				}},
 			},
