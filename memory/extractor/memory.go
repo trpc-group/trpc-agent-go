@@ -640,8 +640,8 @@ func (e *memoryExtractor) actionEnabled(name string) bool {
 
 func (e *memoryExtractor) policyAllowsAction(name string) bool {
 	switch e.updatePolicy {
-	case UpdatePolicyConservative:
-		return name != memory.UpdateToolName
+	case UpdatePolicyHistoryPreserving:
+		return name == memory.AddToolName
 	case UpdatePolicyAddOnly:
 		return name == memory.AddToolName
 	default:
@@ -651,7 +651,7 @@ func (e *memoryExtractor) policyAllowsAction(name string) bool {
 
 func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
 	switch policy {
-	case UpdatePolicyConservative, UpdatePolicyAddOnly:
+	case UpdatePolicyHistoryPreserving, UpdatePolicyAddOnly:
 		return policy
 	default:
 		return UpdatePolicyReconcile
@@ -660,8 +660,8 @@ func normalizeUpdatePolicy(policy UpdatePolicy) UpdatePolicy {
 
 func updatePolicyPrompt(policy UpdatePolicy) string {
 	switch normalizeUpdatePolicy(policy) {
-	case UpdatePolicyConservative:
-		return conservativePrompt
+	case UpdatePolicyHistoryPreserving:
+		return historyPreservingPrompt
 	case UpdatePolicyAddOnly:
 		return addOnlyPrompt
 	default:
@@ -717,10 +717,11 @@ const addOnlyPrompt = `
 </update_policy>
 `
 
-const conservativePrompt = `
+const historyPreservingPrompt = `
 
-<update_policy name="conservative">
-These rules override any earlier instruction to update a stored memory.
+<update_policy name="history-preserving">
+These rules override any earlier instruction to update, delete, or clear a
+stored memory.
 - Express every new, corrected, or changed state supported by the current
   conversation with memory_add. The memory worker will remove only safe
   duplicates after extraction.
@@ -729,9 +730,8 @@ These rules override any earlier instruction to update a stored memory.
   Asking for information, recommendations, or options about an entity does not
   by itself establish a plan, choice, preference, visit, or other relationship
   with that entity.
-- Keep earlier states as history. Use memory_delete only for an explicit
-  request to forget a specific memory, and memory_clear only for an explicit
-  request to forget everything.
+- Keep earlier states as history. Never update, delete, or clear a stored
+  memory during automatic extraction.
 </update_policy>
 `
 

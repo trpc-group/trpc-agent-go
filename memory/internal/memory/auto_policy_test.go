@@ -28,9 +28,9 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	}{
 		{name: "missing", want: extractor.UpdatePolicyReconcile},
 		{name: "reconcile", raw: "reconcile", want: extractor.UpdatePolicyReconcile},
-		{name: "typed conservative", raw: extractor.UpdatePolicyConservative, want: extractor.UpdatePolicyConservative},
+		{name: "typed history preserving", raw: extractor.UpdatePolicyHistoryPreserving, want: extractor.UpdatePolicyHistoryPreserving},
 		{name: "typed add only", raw: extractor.UpdatePolicyAddOnly, want: extractor.UpdatePolicyAddOnly},
-		{name: "removed history policy", raw: "history-preserving", want: extractor.UpdatePolicyReconcile},
+		{name: "removed conservative policy", raw: "conservative", want: extractor.UpdatePolicyReconcile},
 		{name: "unknown", raw: "custom", want: extractor.UpdatePolicyReconcile},
 		{name: "wrong type", raw: 42, want: extractor.UpdatePolicyReconcile},
 	}
@@ -49,7 +49,9 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
 }
 
-func TestConservativePolicy_ReconcilesAddsAndPreservesHistory(t *testing.T) {
+func TestHistoryPreservingPolicy_ReconcilesAddsAndPreservesHistory(
+	t *testing.T,
+) {
 	stored := []*memory.Entry{{
 		ID: "job",
 		Memory: &memory.Memory{
@@ -61,7 +63,7 @@ func TestConservativePolicy_ReconcilesAddsAndPreservesHistory(t *testing.T) {
 	operator := newMockOperator()
 	operator.searchResults = stored
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, operator)
-	worker.updatePolicy = extractor.UpdatePolicyConservative
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 
 	out := worker.applyUpdatePolicy(
 		context.Background(),
@@ -89,11 +91,11 @@ func TestConservativePolicy_ReconcilesAddsAndPreservesHistory(t *testing.T) {
 	assert.Equal(t, "Now works at Globex as an engineer.", out[0].Memory)
 }
 
-func TestConservativePolicy_FiltersDestructiveAssistantOperations(
+func TestHistoryPreservingPolicy_FiltersDestructiveAssistantOperations(
 	t *testing.T,
 ) {
 	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
-	worker.updatePolicy = extractor.UpdatePolicyConservative
+	worker.updatePolicy = extractor.UpdatePolicyHistoryPreserving
 
 	out := worker.applyAssistantResultPolicy(
 		context.Background(),
