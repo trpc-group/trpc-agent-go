@@ -19,6 +19,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/hashidx"
+	"trpc.group/trpc-go/trpc-agent-go/session/redis/internal/zset"
 )
 
 func TestService_AppendTrackEvent_SessionError(t *testing.T) {
@@ -127,6 +128,62 @@ func TestService_GetTrackEvents_ReadsTrackStorage(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, session.Track("missing"), missing.Track)
 			require.Empty(t, missing.Events)
+		})
+	}
+}
+
+func TestService_GetTrackEvents_ReadsTrackStorageWithoutSessionState(t *testing.T) {
+	tests := []struct {
+		name               string
+		mode               CompatMode
+		removeSessionState func(context.Context, *testing.T, string, session.Key)
+	}{
+		{
+			name: "hashidx",
+			mode: CompatModeNone,
+			removeSessionState: func(ctx context.Context, t *testing.T, redisURL string, key session.Key) {
+				client := buildRedisClient(t, redisURL)
+				defer client.Close()
+				require.NoError(t, client.Del(ctx, hashidx.GetSessionMetaKey("", key)).Err())
+			},
+		},
+		{
+			name: "zset",
+			mode: CompatModeTransition,
+			removeSessionState: func(ctx context.Context, t *testing.T, redisURL string, key session.Key) {
+				client := buildRedisClient(t, redisURL)
+				defer client.Close()
+				require.NoError(t, client.HDel(ctx, zset.GetSessionStateKey(key), key.SessionID).Err())
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+			trackTTL := time.Duration(0)
+			service, err := NewService(
+				WithRedisClientURL(redisURL),
+				WithCompatMode(tt.mode),
+				WithTrackEventTTL(trackTTL),
+			)
+			require.NoError(t, err)
+			defer service.Close()
+			ctx := context.Background()
+			key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session-track-only"}
+			sess, err := service.CreateSession(ctx, key, session.StateMap{})
+			require.NoError(t, err)
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"persisted"`),
+				Timestamp: time.Now(),
+			}))
+			tt.removeSessionState(ctx, t, redisURL, key)
+			got, err := service.GetTrackEvents(ctx, key, "alpha")
+			require.NoError(t, err)
+			require.Equal(t, session.Track("alpha"), got.Track)
+			require.Len(t, got.Events, 1)
+			require.JSONEq(t, `"persisted"`, string(got.Events[0].Payload))
 		})
 	}
 }

@@ -28,7 +28,9 @@ import (
 
 // Config holds configuration for ZSet session storage client.
 type Config struct {
-	SessionTTL        time.Duration
+	SessionTTL time.Duration
+	// TrackEventTTL controls track event expiration. Nil falls back to
+	// SessionTTL, and non-positive values disable expiration.
 	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration

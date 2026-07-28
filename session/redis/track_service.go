@@ -77,20 +77,47 @@ func (s *Service) GetTrackEvents(
 		return nil, fmt.Errorf("check session exists: %w", err)
 	}
 	if s.compatEnabled() && zsetExists {
-		events, err := s.zsetClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
-		if err != nil {
-			return nil, fmt.Errorf("get track events (zset): %w", err)
-		}
-		return &session.TrackEvents{Track: track, Events: events[track]}, nil
+		return s.getZSetTrackEvents(ctx, key, track, opt)
 	}
 	if hashidxExists {
-		events, err := s.hashidxClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
-		if err != nil {
-			return nil, fmt.Errorf("get track events (hashidx): %w", err)
-		}
-		return &session.TrackEvents{Track: track, Events: events[track]}, nil
+		return s.getHashIdxTrackEvents(ctx, key, track, opt)
 	}
-	return &session.TrackEvents{Track: track}, nil
+	if s.compatEnabled() {
+		trackEvents, err := s.getZSetTrackEvents(ctx, key, track, opt)
+		if err != nil {
+			return nil, err
+		}
+		if len(trackEvents.Events) > 0 {
+			return trackEvents, nil
+		}
+	}
+	return s.getHashIdxTrackEvents(ctx, key, track, opt)
+}
+
+func (s *Service) getZSetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opt *session.Options,
+) (*session.TrackEvents, error) {
+	events, err := s.zsetClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events (zset): %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: events[track]}, nil
+}
+
+func (s *Service) getHashIdxTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opt *session.Options,
+) (*session.TrackEvents, error) {
+	events, err := s.hashidxClient.GetTrackEvents(ctx, key, []session.Track{track}, opt.EventNum, opt.EventTime)
+	if err != nil {
+		return nil, fmt.Errorf("get track events (hashidx): %w", err)
+	}
+	return &session.TrackEvents{Track: track, Events: events[track]}, nil
 }
 
 // enqueueTrackEvent enqueues a track event for async persistence.
