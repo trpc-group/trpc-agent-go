@@ -829,6 +829,8 @@ def _contains_outer_return(node):
     return any(_contains_outer_return(child) for child in ast.iter_child_nodes(node))
 
 def _conventional_workflow_wrapper(statements):
+    # Recovery path for common non-canonical model output. The model-facing
+    # contract still asks for a direct workflow body ending in return.
     if (
         statements
         and isinstance(statements[0], ast.Expr)
@@ -851,6 +853,8 @@ def _conventional_workflow_wrapper(statements):
         or args.kwonlyargs
         or args.kwarg is not None
     ):
+        return None
+    if not any(_contains_outer_return(statement) for statement in candidate.body):
         return None
     return candidate
 

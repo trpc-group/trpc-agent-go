@@ -361,10 +361,11 @@ boundaries. Workflows should call child Agents through `agent(...)`.
 
 Dynamic Workflow is foreground and one-shot. Workflow code expresses the
 orchestration logic, while registered Agents and tools continue to run in the
-Go host. Each child Agent call gets a distinct conversation branch and remains
-part of the current run. With `IsolatedRequest` configured as above, a child
-sees only that branch; an Agent configured for broader history may also see
-ancestor context. Therefore:
+Go host. When `instance_id` is omitted, each child Agent call gets a distinct
+conversation branch; calls that explicitly reuse an `instance_id` share that
+child history. Every child call remains part of the current run. With
+`IsolatedRequest` configured as above, a child sees only its branch; an Agent
+configured for broader history may also see ancestor context. Therefore:
 
 - Frontends can observe child Agent output and tool-call progress from the same
   event stream.

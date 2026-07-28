@@ -249,6 +249,34 @@ async def run():
 	})
 }
 
+func TestLocalRunnerRejectsConventionalWrapperWithoutReturn(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 is not installed")
+	}
+	var calls int
+	_, err := Execute(
+		context.Background(),
+		LocalRunner{},
+		callHandlerFunc(func(
+			context.Context,
+			Call,
+		) (json.RawMessage, error) {
+			calls++
+			return json.RawMessage(`{"text":"unexpected"}`), nil
+		}),
+		`
+async def main():
+    await agent("draft", instruction="Write a draft.", tools=[])
+`,
+	)
+	require.ErrorContains(
+		t,
+		err,
+		"workflow code must contain a return statement outside nested functions or classes",
+	)
+	require.Zero(t, calls)
+}
+
 func TestLocalRunnerRejectsUncalledNonconventionalHelper(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")

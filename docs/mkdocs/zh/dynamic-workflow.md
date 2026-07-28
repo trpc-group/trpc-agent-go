@@ -327,9 +327,10 @@ facts = await call_tool("search_catalog", query="trail backpack")
 ## 事件、Session 与执行边界
 
 Dynamic Workflow 采用前台、一次性执行。workflow 代码负责表达编排逻辑，已注册的
-Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都会获得独立的会话分支，同时仍属于
-当前运行；按上例配置 `IsolatedRequest` 后，子 Agent 只看到自己的分支。如果基础 Agent
-选择了更宽的历史模式，它也可能看到祖先上下文。因此：
+Agent 和工具仍在 Go 宿主中运行。省略 `instance_id` 时，每次子 Agent 调用都会获得
+独立的会话分支；显式复用同一个 `instance_id` 的调用会共享对应子历史。所有子 Agent
+调用仍属于当前运行；按上例配置 `IsolatedRequest` 后，子 Agent 只看到自己的分支。
+如果基础 Agent 选择了更宽的历史模式，它也可能看到祖先上下文。因此：
 
 - 前端可以从同一个 event stream 看到子 Agent 输出和工具调用进度。
 - 配置的 Session Service 会持久化这些事件。

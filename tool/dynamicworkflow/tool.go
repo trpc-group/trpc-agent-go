@@ -125,6 +125,9 @@ func (t *workflowTool) Declaration() *tool.Declaration {
 	if capabilities := buildCapabilityHelp(t.agents, t.tools); capabilities != "" {
 		description += "\n\nHost capabilities available inside Python:\n" + capabilities
 	}
+	// Keep model guidance on the canonical direct-body form. LocalRunner
+	// separately tolerates a sole run/main wrapper as a recovery path for
+	// common non-canonical model output.
 	codeDescription := `Write a short executable workflow body: use await directly and finish with return. Python is orchestration glue only; delegate substantive work to agent(...) and use Python for control flow and small JSON data shaping. Do not assign the program to code, put it in a quoted string or Markdown fence, return Python source, define an uncalled wrapper, call asyncio.run(), import modules, use class/with/try/global/nonlocal, embed task deliverables or large scripts, or access undeclared host capabilities. Use Python True/False/None in source (JSON-style true/false/null aliases are also accepted in generated AgentSpec dictionaries). Use await agent(input, options=None) or await agent(input, **options) to create and run one child Agent. options may set template, instruction, instance_id, tools, skills, and structured_output; schema is shorthand for structured_output.schema. If exactly one template is registered, template may be omitted. Omitted tools and skills inherit eligible template capabilities; use [] to disable a capability type or a non-empty list to narrow it. For values used by later conditions or loops, request schema as a Python dict and read result["structured"]; do not ask for JSON text or parse JSON in workflow code. For provider-portable visible tool use, first collect unstructured tool-grounded text, then pass it to a tools=[] agent call with schema instead of combining non-empty tools with schema/structured_output. agent returns an envelope with text and optional structured fields. Pass or return result["text"] for plain text and result["structured"] for typed data; do not forward the full envelope unless its metadata is needed. Missing result["field"] / result.get("field") fall back to structured.
 
 Canonical one-shot pattern:
@@ -360,15 +363,7 @@ func modelVisibleWorkflowError(err error) string {
 			!strings.Contains(message, "workflow code ")) {
 		return message
 	}
-	lines := strings.Split(message, "\n")
-	summary := ""
-	for index := len(lines) - 1; index >= 0; index-- {
-		line := strings.TrimSpace(lines[index])
-		if line != "" {
-			summary = line
-			break
-		}
-	}
+	summary := generatedWorkflowExceptionSummary(message)
 	switch {
 	case strings.Contains(summary, "unsupported Python syntax: Import"):
 		return summary + "; remove imports because agent, parallel, pipeline, " +
@@ -381,6 +376,60 @@ func modelVisibleWorkflowError(err error) string {
 	default:
 		return summary
 	}
+}
+
+func generatedWorkflowExceptionSummary(message string) string {
+	lines := strings.Split(message, "\n")
+	tracebackStart := 0
+	for index, line := range lines {
+		if strings.Contains(line, "Traceback (most recent call last):") {
+			tracebackStart = index + 1
+		}
+	}
+	exceptionStart := -1
+	for index := tracebackStart; index < len(lines); index++ {
+		if workflowExceptionLine(lines[index]) {
+			exceptionStart = index
+			break
+		}
+	}
+	if exceptionStart < 0 {
+		for index := len(lines) - 1; index >= tracebackStart; index-- {
+			if strings.TrimSpace(lines[index]) != "" {
+				return strings.TrimSpace(lines[index])
+			}
+		}
+		return strings.TrimSpace(message)
+	}
+	start := exceptionStart
+	exception := strings.TrimSpace(lines[exceptionStart])
+	if strings.HasPrefix(exception, "SyntaxError:") ||
+		strings.HasPrefix(exception, "IndentationError:") ||
+		strings.HasPrefix(exception, "TabError:") {
+		for index := exceptionStart - 1; index >= tracebackStart; index-- {
+			if strings.Contains(lines[index], `File "<dynamic-workflow>"`) {
+				start = index
+				break
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(lines[start:], "\n"))
+}
+
+func workflowExceptionLine(line string) bool {
+	if line == "" || line != strings.TrimSpace(line) {
+		return false
+	}
+	colon := strings.IndexByte(line, ':')
+	if colon <= 0 {
+		return false
+	}
+	name := line[:colon]
+	if strings.ContainsAny(name, " \t/\\") {
+		return false
+	}
+	return strings.HasSuffix(name, "Error") ||
+		strings.HasSuffix(name, "Exception")
 }
 
 type workflowGateway struct {
