@@ -22,6 +22,7 @@ import (
 	itool "trpc.group/trpc-go/trpc-agent-go/internal/tool"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
+	"trpc.group/trpc-go/trpc-agent-go/tool/resultformat"
 )
 
 // FunctionTool implements the CallableTool interface for executing functions with arguments.
@@ -38,6 +39,9 @@ type FunctionTool[I, O any] struct {
 	// skipSummarization indicates whether the outer flow should skip
 	// the post-tool summarization step after this tool returns.
 	skipSummarization bool
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. When nil, the framework keeps its default JSON behavior.
+	resultFormatter resultformat.Formatter
 }
 
 // Option is a function that configures a FunctionTool.
@@ -52,6 +56,7 @@ type functionToolOptions struct {
 	skipSummarization bool
 	inputSchema       *tool.Schema
 	outputSchema      *tool.Schema
+	resultFormatter   resultformat.Formatter
 }
 
 // WithName sets the name of the function tool.
@@ -109,6 +114,17 @@ func WithOutputSchema(schema *tool.Schema) Option {
 	}
 }
 
+// WithResultFormatter sets the formatter for the function tool's final result.
+// The formatter changes only the default model-visible tool message content;
+// the framework continues to manage the message role, tool name, tool call ID,
+// ordering, and session persistence. When formatter is nil, the framework uses
+// its default JSON representation. Repeated configuration is last-writer-wins.
+func WithResultFormatter(formatter resultformat.Formatter) Option {
+	return func(opts *functionToolOptions) {
+		opts.resultFormatter = formatter
+	}
+}
+
 // NewFunctionTool creates and returns a new instance of FunctionTool with the specified
 // function implementation and optional configuration.
 // Parameters:
@@ -162,6 +178,7 @@ func NewFunctionTool[I, O any](fn func(context.Context, I) (O, error), opts ...O
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultFormatter:   options.resultFormatter,
 	}
 }
 
@@ -193,6 +210,13 @@ func (ft *FunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (ft *FunctionTool[I, O]) SkipSummarization() bool {
 	return ft.skipSummarization
+}
+
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// It is used by the framework's function-call flow; configure formatting with
+// WithResultFormatter rather than calling this method directly.
+func (ft *FunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return ft.resultFormatter
 }
 
 // Declaration returns the tool's declaration information.
@@ -230,6 +254,9 @@ type StreamableFunctionTool[I, O any] struct {
 	unmarshaler  unmarshaler
 	// skipSummarization has the same meaning as in FunctionTool.
 	skipSummarization bool
+	// resultFormatter optionally formats the final tool result as model-visible
+	// message content. Intermediate stream events are unaffected.
+	resultFormatter resultformat.Formatter
 }
 
 // NewStreamableFunctionTool creates a new StreamableFunctionTool instance.
@@ -280,6 +307,7 @@ func NewStreamableFunctionTool[I, O any](fn func(context.Context, I) (*tool.Stre
 		inputSchema:       iSchema,
 		outputSchema:      oSchema,
 		skipSummarization: options.skipSummarization,
+		resultFormatter:   options.resultFormatter,
 	}
 }
 
@@ -337,6 +365,12 @@ func (t *StreamableFunctionTool[I, O]) LongRunning() bool {
 // outer-agent summarization after tool.response.
 func (t *StreamableFunctionTool[I, O]) SkipSummarization() bool {
 	return t.skipSummarization
+}
+
+// ResultFormatter returns the formatter configured by WithResultFormatter.
+// Only the final streamable result is formatted; intermediate events are not.
+func (t *StreamableFunctionTool[I, O]) ResultFormatter() resultformat.Formatter {
+	return t.resultFormatter
 }
 
 type unmarshaler interface {
