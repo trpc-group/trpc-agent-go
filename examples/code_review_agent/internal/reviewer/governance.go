@@ -375,6 +375,10 @@ func validateWorkspaceEnv(envRaw json.RawMessage) string {
 	return ""
 }
 
+// validateWorkspaceTimeout checks whether the timeout requested by the Agent
+// in workspace_exec arguments exceeds this example's configured limit. The
+// framework is responsible for enforcing the deadline, terminating the
+// command, and reporting the resulting timeout.
 func validateWorkspaceTimeout(raw map[string]json.RawMessage) string {
 	seconds, present, err := decodeTimeoutSeconds(raw)
 	if err != nil {

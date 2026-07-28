@@ -447,12 +447,9 @@ func getCodeexecutor(pwd, sandbox string) (executor codeexecutor.CodeExecutor, e
 
 	switch sandbox {
 	case "container":
-		// Reviewed commands have already exited when task cleanup begins; only
-		// the container's keepalive tail remains. A short Docker stop grace
-		// avoids paying the daemon's 10-second default for every review task.
-		//
-		// Image content and offline Go defaults live in docker/Dockerfile.
-		// Host policy (network isolation, auto-remove) stays here.
+		// Use a 1-second stop timeout to avoid Docker's default 10-second wait.
+		// By cleanup time, the reviewed command has already exited; only the
+		// container's keepalive process remains.
 		stopTimeoutSeconds := 1
 		dockerDir := filepath.Join(pwd, sandboxDockerDir)
 		executor, err = containerexec.New(
