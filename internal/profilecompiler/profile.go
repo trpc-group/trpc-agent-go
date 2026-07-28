@@ -39,15 +39,13 @@ func CloneProfile(profile *Profile) *Profile {
 	if profile == nil {
 		return nil
 	}
-	cloned := &Profile{
-		StructureID: profile.StructureID,
-		Overrides:   make([]SurfaceOverride, len(profile.Overrides)),
-	}
+	cloned := *profile
+	cloned.Overrides = make([]SurfaceOverride, len(profile.Overrides))
 	for i, override := range profile.Overrides {
 		cloned.Overrides[i] = override
 		cloned.Overrides[i].Value = cloneSurfaceValue(override.Value)
 	}
-	return cloned
+	return &cloned
 }
 
 // CloneSnapshot returns a deep copy of snapshot for isolated compilation.
@@ -55,26 +53,22 @@ func CloneSnapshot(snapshot *astructure.Snapshot) *astructure.Snapshot {
 	if snapshot == nil {
 		return nil
 	}
-	cloned := &astructure.Snapshot{
-		StructureID: snapshot.StructureID,
-		EntryNodeID: snapshot.EntryNodeID,
-		Nodes:       append([]astructure.Node(nil), snapshot.Nodes...),
-		Edges:       append([]astructure.Edge(nil), snapshot.Edges...),
-		Surfaces:    make([]astructure.Surface, len(snapshot.Surfaces)),
-	}
+	cloned := *snapshot
+	cloned.Nodes = append([]astructure.Node(nil), snapshot.Nodes...)
+	cloned.Edges = append([]astructure.Edge(nil), snapshot.Edges...)
+	cloned.Surfaces = make([]astructure.Surface, len(snapshot.Surfaces))
 	for i, surface := range snapshot.Surfaces {
 		cloned.Surfaces[i] = surface
 		cloned.Surfaces[i].Value = cloneSurfaceValue(surface.Value)
 	}
-	return cloned
+	return &cloned
 }
 
 func cloneSurfaceValue(value astructure.SurfaceValue) astructure.SurfaceValue {
-	cloned := astructure.SurfaceValue{
-		FewShot: sanitizeExamples(value.FewShot),
-		Tools:   cloneProfileToolRefs(value.Tools),
-		Skills:  append([]astructure.SkillRef(nil), value.Skills...),
-	}
+	cloned := value
+	cloned.FewShot = sanitizeExamples(value.FewShot)
+	cloned.Tools = cloneProfileToolRefs(value.Tools)
+	cloned.Skills = append([]astructure.SkillRef(nil), value.Skills...)
 	if value.Text != nil {
 		text := *value.Text
 		cloned.Text = &text
@@ -97,12 +91,9 @@ func cloneProfileToolRefs(refs []astructure.ToolRef) []astructure.ToolRef {
 	}
 	cloned := make([]astructure.ToolRef, len(refs))
 	for i, ref := range refs {
-		cloned[i] = astructure.ToolRef{
-			ID:           ref.ID,
-			Description:  ref.Description,
-			InputSchema:  cloneToolSchema(ref.InputSchema),
-			OutputSchema: cloneToolSchema(ref.OutputSchema),
-		}
+		cloned[i] = ref
+		cloned[i].InputSchema = cloneToolSchema(ref.InputSchema)
+		cloned[i].OutputSchema = cloneToolSchema(ref.OutputSchema)
 	}
 	return cloned
 }

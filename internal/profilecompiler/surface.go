@@ -285,9 +285,8 @@ func sanitizeExamples(examples []astructure.FewShotExample) []astructure.FewShot
 	}
 	sanitized := make([]astructure.FewShotExample, len(examples))
 	for i := range examples {
-		sanitized[i] = astructure.FewShotExample{
-			Messages: sanitizeMessages(examples[i].Messages),
-		}
+		sanitized[i] = examples[i]
+		sanitized[i].Messages = sanitizeMessages(examples[i].Messages)
 	}
 	return sanitized
 }
@@ -309,19 +308,15 @@ func cloneToolSchema(schema *tool.Schema) *tool.Schema {
 	if schema == nil {
 		return nil
 	}
-	return &tool.Schema{
-		Type:                 schema.Type,
-		Description:          schema.Description,
-		Pattern:              schema.Pattern,
-		Required:             append([]string(nil), schema.Required...),
-		Properties:           cloneToolSchemaMap(schema.Properties),
-		Items:                cloneToolSchema(schema.Items),
-		AdditionalProperties: cloneSchemaValue(schema.AdditionalProperties),
-		Default:              cloneSchemaValue(schema.Default),
-		Enum:                 cloneSchemaValues(schema.Enum),
-		Ref:                  schema.Ref,
-		Defs:                 cloneToolSchemaMap(schema.Defs),
-	}
+	cloned := *schema
+	cloned.Required = append([]string(nil), schema.Required...)
+	cloned.Properties = cloneToolSchemaMap(schema.Properties)
+	cloned.Items = cloneToolSchema(schema.Items)
+	cloned.AdditionalProperties = cloneSchemaValue(schema.AdditionalProperties)
+	cloned.Default = cloneSchemaValue(schema.Default)
+	cloned.Enum = cloneSchemaValues(schema.Enum)
+	cloned.Defs = cloneToolSchemaMap(schema.Defs)
+	return &cloned
 }
 
 func cloneToolSchemaMap(input map[string]*tool.Schema) map[string]*tool.Schema {
