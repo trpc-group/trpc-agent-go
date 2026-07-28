@@ -34,7 +34,7 @@ func DefaultPolicy() Policy {
 			"id_rsa", "id_ed25519", "credentials", "secrets",
 		},
 		EnvAllowlist: []string{
-			"PATH", "HOME", "TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
+			"TMPDIR", "TEMP", "TMP", "LANG", "LC_ALL",
 			"CGO_ENABLED", "GOCACHE", "GOMODCACHE", "GOPATH",
 		},
 		ReviewCommands: []string{

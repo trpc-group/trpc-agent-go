@@ -34,6 +34,7 @@ type decodedPermissionRequest struct {
 	needsHumanReview bool
 	reviewRuleID     string
 	reviewEvidence   string
+	executableStdin  string
 	sensitiveContent []string
 	paths            []string
 }
@@ -164,7 +165,8 @@ func decodeWorkspaceExecution(
 	base.Background = in.Background
 	base.TTY = firstBoolValue(in.TTY, in.PTY)
 	decoded := decodedPermissionRequest{
-		Request: base, sensitiveContent: []string{in.Stdin},
+		Request: base, executableStdin: in.Stdin,
+		sensitiveContent: []string{in.Stdin},
 	}
 	if yield := firstIntPointer(in.YieldTimeMS, in.YieldMs); yield != nil && *yield != 0 {
 		decoded.needsHumanReview = true
@@ -282,15 +284,17 @@ func decodeCodeBlocks(raw json.RawMessage) ([]codeexecutor.CodeBlock, error) {
 }
 
 type skillExecutionArguments struct {
-	Skill      string                   `json:"skill"`
-	Command    string                   `json:"command"`
-	Cwd        string                   `json:"cwd,omitempty"`
-	Env        map[string]string        `json:"env,omitempty"`
-	Stdin      string                   `json:"stdin,omitempty"`
-	EditorText string                   `json:"editor_text,omitempty"`
-	Inputs     []codeexecutor.InputSpec `json:"inputs,omitempty"`
-	Timeout    int                      `json:"timeout,omitempty"`
-	TTY        bool                     `json:"tty,omitempty"`
+	Skill       string                   `json:"skill"`
+	Command     string                   `json:"command"`
+	Cwd         string                   `json:"cwd,omitempty"`
+	Env         map[string]string        `json:"env,omitempty"`
+	Stdin       string                   `json:"stdin,omitempty"`
+	EditorText  string                   `json:"editor_text,omitempty"`
+	Inputs      []codeexecutor.InputSpec `json:"inputs,omitempty"`
+	OutputFiles []string                 `json:"output_files,omitempty"`
+	Outputs     *codeexecutor.OutputSpec `json:"outputs,omitempty"`
+	Timeout     int                      `json:"timeout,omitempty"`
+	TTY         bool                     `json:"tty,omitempty"`
 }
 
 func decodeSkillExecution(
@@ -319,6 +323,7 @@ func decodeSkillExecution(
 	base.TTY = interactive && in.TTY
 	decoded := decodedPermissionRequest{
 		Request:          base,
+		executableStdin:  in.Stdin,
 		sensitiveContent: []string{in.Stdin, in.EditorText},
 	}
 	if interactive {
@@ -330,6 +335,10 @@ func decodeSkillExecution(
 		decoded.paths = append(
 			decoded.paths, skillInputPath(input.From), input.To,
 		)
+	}
+	decoded.paths = append(decoded.paths, in.OutputFiles...)
+	if in.Outputs != nil {
+		decoded.paths = append(decoded.paths, in.Outputs.Globs...)
 	}
 	return decoded, true, nil
 }
@@ -453,6 +462,11 @@ func scanDecodedPermissionRequest(
 	req decodedPermissionRequest,
 ) Report {
 	report := guard.Scan(req.Request)
+	for _, finding := range scanExecutableStdin(
+		guard.policy, req.Command, req.executableStdin,
+	) {
+		report = appendDecodedFinding(report, finding)
+	}
 	for _, content := range req.sensitiveContent {
 		contentFindings := scanSensitiveContent(content)
 		if len(contentFindings) > 0 {
@@ -685,6 +699,9 @@ func schemaHasExecutionPropertyAt(
 	active[schema] = true
 	defer delete(active, schema)
 	for name, property := range schema.Properties {
+		if pathKey(name) {
+			return true, true
+		}
 		switch strings.ToLower(name) {
 		case "command", "commands", "cmd", "script", "scripts", "shell",
 			"args", "argv", "code", "code_blocks", "url", "uri", "endpoint",

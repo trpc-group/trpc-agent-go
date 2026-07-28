@@ -38,7 +38,7 @@ allowed_commands: [go, cat, curl]
 denied_commands: [dd, mkfs, sudo]
 denied_paths: [/, /etc, /root, ~/.ssh, .env, credentials]
 network_allowlist: [github.com]
-env_allowlist: [PATH, HOME, TMPDIR]
+env_allowlist: [LANG, TMPDIR]
 review_commands: [go install, npm install]
 max_timeout_seconds: 30
 max_output_bytes: 1048576
@@ -55,6 +55,12 @@ review. Defaults also deny common privilege/system commands and sensitive
 paths, review common installers, allow a small environment-name set, cap
 timeout at 300 seconds and output at 4 MiB.
 
+The environment allowlist does not override execution-sensitive semantics.
+Per-request `PATH` and `PATHEXT` overrides are denied because they can replace
+an allowlisted executable. `HOME` requires human review because it changes
+shell profiles and global tool configuration. Process-startup injection
+variables such as `BASH_ENV` and `LD_PRELOAD` are denied even if listed.
+
 `Guard.Scan` returns `allow`, `deny`, `ask` or `needs_human_review` with a risk
 level, rule ID, evidence, recommendation, tool, backend and blocked flag.
 `deny` is blocked. Both review decisions require an application-controlled
@@ -69,6 +75,10 @@ failure follows `parse_error_action`; an unquoted pipeline follows
 `pipeline_action`. Configure either to `allow` only when another control owns
 that risk. This parser is not a complete shell interpreter and cannot resolve
 all expansions, aliases, sourced files or runtime-generated commands.
+
+Permission scanning also treats interpreter and `-f -` stdin as executable
+content, checks path-bearing arguments and Skill output globs, and reviews Git
+configuration that selects aliases, hooks, helpers or external programs.
 
 ## Filter and permission boundaries
 
@@ -112,7 +122,8 @@ untrusted input without strong isolation.
 `codeexec` decodes code blocks and delegates execution to a CodeExecutor. The
 guard scans every block, routes shell languages through command scanning and
 looks conservatively for process/network bridges and resource abuse in common
-languages. `codeexecutor/local` runs with local-host privileges;
+languages. Code languages without a conservative scanner require human
+review. `codeexecutor/local` runs with local-host privileges;
 `codeexecutor/container` can add container isolation when configured with
 restricted mounts, user, capabilities and networking; E2B moves execution to
 a remote sandbox with its own identity, network and retention controls. The

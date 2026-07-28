@@ -28,8 +28,7 @@ denied_paths:
 network_allowlist:
   - github.com
 env_allowlist:
-  - PATH
-  - HOME
+  - LANG
   - TMPDIR
 review_commands:
   - go install

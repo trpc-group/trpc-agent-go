@@ -85,6 +85,144 @@ func TestPermissionPolicyMapsDecisionsAndRecordsOnce(t *testing.T) {
 	}
 }
 
+func TestPermissionPolicyScansExecutableStdin(t *testing.T) {
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	for _, tc := range []struct {
+		name     string
+		request  *tool.PermissionRequest
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			name: "python stdin",
+			request: workspacePermissionRequest(
+				`{"command":"python -","stdin":"import os; os.system('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "node stdin",
+			request: workspacePermissionRequest(
+				`{"command":"node -","stdin":"require('child_process').execSync('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "python flag-only stdin",
+			request: workspacePermissionRequest(
+				`{"command":"python -u","stdin":"import os; os.system('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "node flag-only stdin",
+			request: workspacePermissionRequest(
+				`{"command":"node --input-type=module","stdin":"require('child_process').execSync('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "python option value before stdin marker",
+			request: workspacePermissionRequest(
+				`{"command":"python -W ignore -","stdin":"import os; os.system('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "node option value before stdin marker",
+			request: workspacePermissionRequest(
+				`{"command":"node --input-type module -","stdin":"require('child_process').execSync('rm -rf /')"}`,
+			),
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "makefile stdin",
+			request: workspacePermissionRequest(
+				`{"command":"make -f -","stdin":"all:\n\trm -rf /"}`,
+			),
+			want: tool.PermissionActionAsk, wantRule: "code.stdin_program",
+		},
+		{
+			name: "awk program stdin",
+			request: workspacePermissionRequest(
+				`{"command":"awk -f -","stdin":"BEGIN { system(\"rm -rf /\") }"}`,
+			),
+			want: tool.PermissionActionAsk, wantRule: "code.stdin_program",
+		},
+		{
+			name: "sed program stdin",
+			request: workspacePermissionRequest(
+				`{"command":"sed -f -","stdin":"1e rm -rf /"}`,
+			),
+			want: tool.PermissionActionAsk, wantRule: "code.stdin_program",
+		},
+		{
+			name: "skill python stdin",
+			request: &tool.PermissionRequest{
+				ToolName: "skill_run", Declaration: &tool.Declaration{Name: "skill_run"},
+				Arguments: []byte(
+					`{"skill":"demo","command":"python -","stdin":"import os; os.system('rm -rf /')"}`,
+				),
+			},
+			want: tool.PermissionActionDeny, wantRule: "code.process_bridge",
+		},
+		{
+			name: "ordinary data stdin",
+			request: workspacePermissionRequest(
+				`{"command":"cat","stdin":"ordinary input"}`,
+			),
+			want: tool.PermissionActionAllow,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(context.Background(), tc.request)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
+func TestPermissionPolicyClassifiesExecutionSensitiveEnvironment(t *testing.T) {
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	for _, tc := range []struct {
+		name     string
+		args     string
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{
+			"path override", `{"command":"go test","env":{"PATH":"./work/bin"}}`,
+			tool.PermissionActionDeny, "environment.executable_path",
+		},
+		{
+			"pathext override", `{"command":"go test","env":{"PATHEXT":".CMD"}}`,
+			tool.PermissionActionDeny, "environment.executable_path",
+		},
+		{
+			"home override", `{"command":"go test","env":{"HOME":"./evil-home"}}`,
+			tool.PermissionActionAsk, "environment.execution_context",
+		},
+		{
+			"ordinary locale", `{"command":"go test","env":{"LANG":"C"}}`,
+			tool.PermissionActionAllow, "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(
+				context.Background(), workspacePermissionRequest(tc.args),
+			)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
+}
+
 func TestPermissionPolicySkillWriteStdinSemantics(t *testing.T) {
 	guard := mustPermissionGuard(t, DefaultPolicy())
 	tests := []struct {
@@ -404,6 +542,67 @@ func TestPermissionPolicyClosedWorldNonExecutionAllowsWithoutScan(t *testing.T) 
 	require.Equal(t, DecisionAllow, events[0].Decision)
 	require.Equal(t, RiskLow, events[0].RiskLevel)
 	require.Equal(t, "safety.no_execution", events[0].RuleID)
+}
+
+func TestPermissionPolicyScansPathBearingArguments(t *testing.T) {
+	policy := NewPermissionPolicy(mustPermissionGuard(t, DefaultPolicy()))
+	closedRequest := func(key, value string) *tool.PermissionRequest {
+		return &tool.PermissionRequest{
+			ToolName: "local_reader",
+			Declaration: &tool.Declaration{Name: "local_reader", InputSchema: &tool.Schema{
+				Type: "object", AdditionalProperties: false,
+				Required:   []string{key},
+				Properties: map[string]*tool.Schema{key: {Type: "string"}},
+			}},
+			Arguments: mustJSON(t, map[string]any{key: value}),
+			Metadata:  tool.ToolMetadata{ReadOnly: true},
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		request  *tool.PermissionRequest
+		want     tool.PermissionAction
+		wantRule string
+	}{
+		{"closed path", closedRequest("path", ".env"), tool.PermissionActionDeny, "sensitive.path"},
+		{"closed file name", closedRequest("file_name", "~/.ssh/id_rsa"), tool.PermissionActionDeny, "sensitive.path"},
+		{"closed camel file", closedRequest("inputFile", ".env"), tool.PermissionActionDeny, "sensitive.path"},
+		{"closed camel path", closedRequest("filePath", "~/.ssh/id_rsa"), tool.PermissionActionDeny, "sensitive.path"},
+		{"ordinary query", closedRequest("query", ".env"), tool.PermissionActionAllow, ""},
+		{
+			"skill output files",
+			&tool.PermissionRequest{
+				ToolName: "skill_run", Declaration: &tool.Declaration{Name: "skill_run"},
+				Arguments: []byte(`{"skill":"demo","command":"go test","output_files":[".env"]}`),
+			},
+			tool.PermissionActionDeny, "sensitive.path",
+		},
+		{
+			"skill output globs",
+			&tool.PermissionRequest{
+				ToolName: "skill_run", Declaration: &tool.Declaration{Name: "skill_run"},
+				Arguments: []byte(`{"skill":"demo","command":"go test","outputs":{"globs":["**/.env"],"save":true}}`),
+			},
+			tool.PermissionActionDeny, "sensitive.path",
+		},
+		{
+			"safe skill output",
+			&tool.PermissionRequest{
+				ToolName: "skill_run", Declaration: &tool.Declaration{Name: "skill_run"},
+				Arguments: []byte(`{"skill":"demo","command":"go test","output_files":["out/report.json"]}`),
+			},
+			tool.PermissionActionAllow, "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			decision, err := policy.CheckToolPermission(context.Background(), tc.request)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, decision.Action)
+			if tc.wantRule != "" {
+				require.Contains(t, decision.Reason, tc.wantRule)
+			}
+		})
+	}
 }
 
 func TestPermissionPolicyAuditEventIsCompleteAndSecretMinimizing(t *testing.T) {

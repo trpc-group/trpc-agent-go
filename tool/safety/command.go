@@ -43,10 +43,10 @@ func scanCommand(policy Policy, req Request) ([][]string, []Finding) {
 	}
 
 	findings := make([]Finding, 0, 3)
-	if containsForcedBroadDelete(segments) {
+	if containsBroadRecursiveDelete(segments) {
 		findings = append(findings, newFinding(
 			DecisionDeny, RiskCritical, "dangerous.rm_rf",
-			"rm recursively and forcibly targets / or the current directory",
+			"rm recursively targets the current directory or forcibly targets /",
 			"remove the broad operand and use a narrowly scoped path",
 		))
 	}
@@ -102,7 +102,7 @@ func cloneSegments(segments [][]string) [][]string {
 	return copyOfSegments
 }
 
-func containsForcedBroadDelete(segments [][]string) bool {
+func containsBroadRecursiveDelete(segments [][]string) bool {
 	for _, argv := range segments {
 		if len(argv) == 0 || commandBase(argv[0]) != "rm" {
 			continue
@@ -133,14 +133,14 @@ func containsForcedBroadDelete(segments [][]string) bool {
 			}
 			operands = append(operands, arg)
 		}
-		if !hasRecursive || !hasForce {
+		if !hasRecursive {
 			continue
 		}
 		for _, operand := range operands {
 			target := path.Clean(strings.ReplaceAll(
 				strings.Trim(strings.TrimSpace(operand), "\"'"), "\\", "/",
 			))
-			if target == "/" || target == "." {
+			if target == "." || target == "/" && hasForce {
 				return true
 			}
 		}

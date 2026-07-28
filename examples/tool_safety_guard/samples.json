@@ -7,7 +7,7 @@
       "backend": "workspaceexec",
       "command": "go test ./tool/safety",
       "env": {
-        "PATH": "/usr/bin"
+        "LANG": "C"
       },
       "timeout_seconds": 30,
       "max_output_bytes": 2048

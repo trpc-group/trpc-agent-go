@@ -58,11 +58,22 @@ func (g *Guard) Scan(req Request) Report {
 }
 
 func scanExecution(policy Policy, req Request) []Finding {
+	return scanExecutionMode(policy, req, true)
+}
+
+func scanExecutionBase(policy Policy, req Request) []Finding {
+	return scanExecutionMode(policy, req, false)
+}
+
+func scanExecutionMode(policy Policy, req Request, indirection bool) []Finding {
 	segments, findings := scanCommand(policy, req)
 	findings = append(findings, scanPaths(policy, req.Cwd, segments)...)
 	findings = append(findings, scanNetwork(policy, segments)...)
 	findings = append(findings, scanResources(policy, req, segments)...)
 	findings = append(findings, scanInlineInterpreters(policy, segments)...)
+	if indirection {
+		findings = append(findings, scanCommandIndirection(policy, req, segments)...)
+	}
 	findings = append(findings, scanSensitiveContent(req.Command)...)
 	return findings
 }

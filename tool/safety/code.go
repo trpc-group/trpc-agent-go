@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
+	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 )
 
 const maxRawArgumentDepth = 32
@@ -27,6 +28,16 @@ const maxRawArgumentDepth = 32
 var (
 	pythonImportedBridgePattern = regexp.MustCompile(
 		`(?i)(?:from\s+subprocess\s+import|import\s+subprocess)(?s:.*?)\b(?:run|call|popen)\s*\(`,
+	)
+	pythonOSAliasPattern = regexp.MustCompile(
+		`(?m)\bimport\s+os\s+as\s+([A-Za-z_][A-Za-z0-9_]*)`,
+	)
+	pythonDynamicOSBridgePattern = regexp.MustCompile(
+		`(?i)__import__\s*\(\s*["']os["']\s*\)\s*\.\s*(?:system|popen)\s*\(`,
+	)
+	pythonFromProcessPattern = regexp.MustCompile(
+		`(?im)\bfrom\s+(os|subprocess)\s+import\s+` +
+			`(system|popen|run|call)(?:\s+as\s+([A-Za-z_][A-Za-z0-9_]*))?`,
 	)
 	goImportedBridgePattern = regexp.MustCompile(
 		`(?i)["']os/exec["'](?s:.*?)\b[A-Za-z_][A-Za-z0-9_]*\.Command(?:Context)?\s*\(`,
@@ -39,7 +50,7 @@ var (
 func scanCodeBlocks(policy Policy, blocks []codeexecutor.CodeBlock) []Finding {
 	var findings []Finding
 	for _, block := range blocks {
-		language := strings.ToLower(strings.TrimSpace(block.Language))
+		language, understood := scannerLanguage(block.Language)
 		if isShellLanguage(language) {
 			findings = append(findings, scanExecution(policy, Request{
 				Backend: BackendCodeExec,
@@ -47,13 +58,37 @@ func scanCodeBlocks(policy Policy, blocks []codeexecutor.CodeBlock) []Finding {
 			})...)
 			continue
 		}
+		if !understood {
+			findings = append(findings, newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "code.unsupported_language",
+				"code language has no conservative safety scanner: "+strings.TrimSpace(block.Language),
+				"review the code manually or use a language with a supported scanner",
+			))
+		}
 		findings = append(findings, scanCodeResourceAbuse(language, block.Code)...)
+		findings = append(findings, scanNotebookShellBridges(policy, language, block.Code)...)
 		findings = append(findings, scanProcessBridge(policy, language, block.Code)...)
 		findings = append(findings, scanCodeNetwork(policy, language, block.Code)...)
 		findings = append(findings, scanCodePaths(policy, block.Code)...)
 		findings = append(findings, scanSensitiveContent(block.Code)...)
 	}
 	return findings
+}
+
+func scannerLanguage(language string) (string, bool) {
+	language = strings.ToLower(strings.TrimSpace(language))
+	switch language {
+	case "", "python", "py", "python3":
+		return "python", true
+	case "go", "golang":
+		return "go", true
+	case "javascript", "js", "typescript", "ts", "node":
+		return "javascript", true
+	case "bash", "sh", "shell", "zsh", "ash", "dash":
+		return language, true
+	default:
+		return language, false
+	}
 }
 
 func scanInlineInterpreters(policy Policy, segments [][]string) []Finding {
@@ -95,6 +130,105 @@ func scanInlineInterpreters(policy Policy, segments [][]string) []Finding {
 		}
 	}
 	return findings
+}
+
+func scanExecutableStdin(policy Policy, command, stdin string) []Finding {
+	if stdin == "" {
+		return nil
+	}
+	pipe, err := shellsafe.Parse(command)
+	if err != nil || len(pipe.Commands) == 0 {
+		return nil
+	}
+	language, executable := stdinProgram(pipe.Commands[0])
+	if !executable {
+		return nil
+	}
+	var findings []Finding
+	if language != "" {
+		findings = append(findings, scanCodeBlocks(
+			policy,
+			[]codeexecutor.CodeBlock{{Language: language, Code: stdin}},
+		)...)
+	}
+	return append(findings, newFinding(
+		DecisionNeedsHumanReview, RiskHigh, "code.stdin_program",
+		"command consumes stdin as executable program content",
+		"review stdin as code or use a non-executable data input",
+	))
+}
+
+func stdinProgram(argv []string) (string, bool) {
+	if len(argv) == 0 {
+		return "", false
+	}
+	base := commandBase(argv[0])
+	switch {
+	case isPythonInterpreter(base):
+		return "python", interpreterReadsStdin(argv[1:], "-c", "-m")
+	case base == "node" || base == "nodejs":
+		return "javascript", interpreterReadsStdin(
+			argv[1:], "-e", "--eval", "-p", "--print", "-c", "--check",
+		)
+	case base == "ruby":
+		return base, interpreterReadsStdin(argv[1:], "-e")
+	case base == "perl":
+		return base, interpreterReadsStdin(argv[1:], "-e", "-E")
+	case base == "php":
+		return base, interpreterReadsStdin(argv[1:], "-r")
+	case base == "make" || base == "gmake":
+		return "", optionReadsStdin(argv[1:], "-f", "--file", "--makefile")
+	case base == "awk" || base == "gawk" || base == "mawk" || base == "nawk":
+		return "", optionReadsStdin(argv[1:], "-f", "--file")
+	case base == "sed":
+		return "", optionReadsStdin(argv[1:], "-f", "--file")
+	default:
+		return "", false
+	}
+}
+
+func interpreterReadsStdin(args []string, inlineFlags ...string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	for _, arg := range args {
+		if arg == "-" {
+			return true
+		}
+	}
+	for index, arg := range args {
+		if arg == "--" {
+			return index+1 == len(args)
+		}
+		for _, flag := range inlineFlags {
+			if arg == flag || strings.HasPrefix(arg, flag+"=") ||
+				!strings.HasPrefix(flag, "--") && strings.HasPrefix(arg, flag) &&
+					len(arg) > len(flag) {
+				return false
+			}
+		}
+		if !strings.HasPrefix(arg, "-") {
+			return false
+		}
+	}
+	return true
+}
+
+func optionReadsStdin(args []string, options ...string) bool {
+	for index, arg := range args {
+		for _, option := range options {
+			if arg == option && index+1 < len(args) && args[index+1] == "-" {
+				return true
+			}
+			if strings.HasPrefix(option, "--") && arg == option+"=-" {
+				return true
+			}
+			if !strings.HasPrefix(option, "--") && arg == option+"-" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func isPythonInterpreter(base string) bool {
@@ -169,6 +303,11 @@ func scanProcessBridge(policy Policy, language, code string) []Finding {
 		return nil
 	}
 	payload := strings.Join(processBridgeLiterals(language, code), " ")
+	return processBridgeFindings(policy, payload,
+		"code invokes a process or shell execution bridge")
+}
+
+func processBridgeFindings(policy Policy, payload, evidence string) []Finding {
 	nested := scanExecution(policy, Request{Backend: BackendCodeExec, Command: payload})
 	decision := DecisionNeedsHumanReview
 	risk := RiskHigh
@@ -178,7 +317,7 @@ func scanProcessBridge(policy Policy, language, code string) []Finding {
 	}
 	findings := []Finding{newFinding(
 		decision, risk, "code.process_bridge",
-		"code invokes a process or shell execution bridge",
+		evidence,
 		"replace dynamic process execution with a narrowly scoped tool",
 	)}
 	return append(findings, nested...)
@@ -186,12 +325,12 @@ func scanProcessBridge(policy Policy, language, code string) []Finding {
 
 func processBridgeLiterals(language, code string) []string {
 	literals := quotedLiterals(code)
-	if language != "go" && language != "golang" {
+	if language != "go" && language != "python" {
 		return literals
 	}
 	filtered := literals[:0]
 	for _, literal := range literals {
-		if literal != "os/exec" {
+		if literal != "os/exec" && literal != "os" && literal != "subprocess" {
 			filtered = append(filtered, literal)
 		}
 	}
@@ -202,9 +341,24 @@ func containsProcessBridge(language, code string) bool {
 	lower := strings.ToLower(code)
 	switch language {
 	case "python", "py":
-		return pythonImportedBridgePattern.MatchString(code) || containsAny(lower,
+		if pythonImportedBridgePattern.MatchString(code) ||
+			pythonDynamicOSBridgePattern.MatchString(code) || containsAny(lower,
 			"subprocess.run(", "subprocess.call(", "subprocess.popen(",
-			"os.system(", "os.popen(")
+			"os.system(", "os.popen(", "get_ipython().system(") {
+			return true
+		}
+		if pythonFromImportInvokesProcess(code) {
+			return true
+		}
+		for _, match := range executableSubmatches(pythonOSAliasPattern, code) {
+			if len(match) > 1 && containsAny(lower,
+				strings.ToLower(match[1])+".system(",
+				strings.ToLower(match[1])+".popen(",
+			) {
+				return true
+			}
+		}
+		return false
 	case "go", "golang":
 		return goImportedBridgePattern.MatchString(code) ||
 			containsAny(lower, "exec.command(", "exec.commandcontext(")
@@ -215,6 +369,139 @@ func containsProcessBridge(language, code string) bool {
 	default:
 		return false
 	}
+}
+
+func pythonFromImportInvokesProcess(code string) bool {
+	for _, match := range executableSubmatches(pythonFromProcessPattern, code) {
+		if len(match) < 4 {
+			continue
+		}
+		binding := match[2]
+		if match[3] != "" {
+			binding = match[3]
+		}
+		callPattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(binding) + `\s*\(`)
+		if len(executableSubmatches(callPattern, code)) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func scanNotebookShellBridges(policy Policy, language, code string) []Finding {
+	if language != "python" {
+		return nil
+	}
+	var findings []Finding
+	lines := strings.Split(code, "\n")
+	lineOffset := 0
+	for index, line := range lines {
+		currentOffset := lineOffset
+		lineOffset += len(line) + 1
+		if !pythonLineExecutable(code, currentOffset) {
+			continue
+		}
+		trimmed := strings.TrimSpace(line)
+		payload := ""
+		switch {
+		case strings.HasPrefix(trimmed, "!!"):
+			payload = strings.TrimSpace(strings.TrimPrefix(trimmed, "!!"))
+		case strings.HasPrefix(trimmed, "!") && !strings.HasPrefix(trimmed, "!="):
+			payload = strings.TrimSpace(strings.TrimPrefix(trimmed, "!"))
+		case strings.HasPrefix(strings.ToLower(trimmed), "%system "):
+			payload = strings.TrimSpace(trimmed[len("%system "):])
+		case strings.EqualFold(trimmed, "%%bash") || strings.EqualFold(trimmed, "%%sh"):
+			payload = strings.Join(lines[index+1:], "\n")
+		}
+		if payload == "" {
+			continue
+		}
+		findings = append(findings, processBridgeFindings(
+			policy, payload, "notebook shell escape executes an embedded command",
+		)...)
+		if strings.HasPrefix(strings.ToLower(trimmed), "%%") {
+			break
+		}
+	}
+	for _, args := range findCallArguments(code, "get_ipython().run_line_magic") {
+		if len(args) < 2 {
+			continue
+		}
+		magic := quotedLiterals(args[0])
+		payload := quotedLiterals(args[1])
+		if len(magic) != 1 || len(payload) != 1 ||
+			!strings.EqualFold(magic[0], "system") {
+			continue
+		}
+		findings = append(findings, processBridgeFindings(
+			policy, payload[0], "IPython line magic executes an embedded command",
+		)...)
+	}
+	for _, args := range findCallArguments(code, "get_ipython().run_cell_magic") {
+		if len(args) < 3 {
+			continue
+		}
+		magic := quotedLiterals(args[0])
+		payload := quotedLiterals(args[2])
+		if len(magic) != 1 || len(payload) != 1 ||
+			!strings.EqualFold(magic[0], "bash") && !strings.EqualFold(magic[0], "sh") {
+			continue
+		}
+		findings = append(findings, processBridgeFindings(
+			policy, payload[0], "IPython cell magic executes an embedded shell command",
+		)...)
+	}
+	return findings
+}
+
+func pythonLineExecutable(code string, position int) bool {
+	var quote byte
+	triple := false
+	escaped := false
+	comment := false
+	for index := 0; index < position; index++ {
+		current := code[index]
+		if comment {
+			if current == '\n' {
+				comment = false
+			}
+			continue
+		}
+		if quote != 0 {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if current == '\\' {
+				escaped = true
+				continue
+			}
+			if triple && current == quote && index+2 < position &&
+				code[index+1] == quote && code[index+2] == quote {
+				quote = 0
+				triple = false
+				index += 2
+				continue
+			}
+			if !triple && current == quote {
+				quote = 0
+			}
+			continue
+		}
+		if current == '#' {
+			comment = true
+			continue
+		}
+		if current != '\'' && current != '"' {
+			continue
+		}
+		quote = current
+		if index+2 < position && code[index+1] == current && code[index+2] == current {
+			triple = true
+			index += 2
+		}
+	}
+	return quote == 0 && !comment
 }
 
 func quotedLiterals(code string) []string {
@@ -966,6 +1253,12 @@ func walkRawString(policy Policy, value, parentKey string, depth int) []Finding 
 	if parentKey == "" || commandKey(parentKey) {
 		return scanExecution(policy, Request{Command: value})
 	}
+	if pathKey(parentKey) {
+		if finding, denied := deniedPathFinding(policy.DeniedPaths, value); denied {
+			return []Finding{finding}
+		}
+		return nil
+	}
 	if networkKey(parentKey) {
 		if isFileURL(value) {
 			if filePath, ok := fileURLPath(value); ok {
@@ -1107,7 +1400,7 @@ func boolMapValue(values map[string]any, names ...string) (bool, bool) {
 
 func commandKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "command", "commands", "cmd", "script", "scripts", "shell", "argv":
+	case "command", "commands", "cmd", "script", "scripts", "shell", "args", "argv":
 		return true
 	default:
 		return false
@@ -1121,6 +1414,36 @@ func networkKey(key string) bool {
 	default:
 		return false
 	}
+}
+
+func pathKey(key string) bool {
+	key = normalizedArgumentKey(key)
+	switch key {
+	case "path", "paths", "file", "files", "file_name", "file_names",
+		"filename", "filenames", "source", "sources":
+		return true
+	}
+	return strings.HasSuffix(key, "_path") || strings.HasSuffix(key, "_paths") ||
+		strings.HasSuffix(key, "_file") || strings.HasSuffix(key, "_files")
+}
+
+func normalizedArgumentKey(key string) string {
+	key = strings.TrimSpace(key)
+	var normalized strings.Builder
+	for index := 0; index < len(key); index++ {
+		current := key[index]
+		if current == '-' {
+			current = '_'
+		}
+		if current >= 'A' && current <= 'Z' {
+			if normalized.Len() > 0 && key[index-1] != '_' && key[index-1] != '-' {
+				normalized.WriteByte('_')
+			}
+			current += 'a' - 'A'
+		}
+		normalized.WriteByte(current)
+	}
+	return normalized.String()
 }
 
 func findingsDecision(findings []Finding) Decision {

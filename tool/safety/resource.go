@@ -96,17 +96,70 @@ func scanEnvironment(policy Policy, environment map[string]string) []Finding {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	var findings []Finding
 	for _, key := range keys {
+		switch executionEnvironmentClass(key) {
+		case environmentExecutablePath:
+			findings = append(findings, newFinding(
+				DecisionDeny, RiskCritical, "environment.executable_path",
+				"environment override changes executable path resolution: "+key,
+				"remove the executable path override and use the backend's trusted path",
+			))
+			continue
+		case environmentCodeInjection:
+			findings = append(findings, newFinding(
+				DecisionDeny, RiskCritical, "environment.code_injection",
+				"environment override can inject code during process startup: "+key,
+				"remove the process startup injection variable",
+			))
+			continue
+		case environmentExecutionContext:
+			findings = append(findings, newFinding(
+				DecisionNeedsHumanReview, RiskHigh, "environment.execution_context",
+				"environment override changes shell profiles or global tool configuration: "+key,
+				"review the effective startup files and tool configuration",
+			))
+			continue
+		}
 		if stringAllowedFold(key, policy.EnvAllowlist) {
 			continue
 		}
-		return []Finding{newFinding(
+		findings = append(findings, newFinding(
 			DecisionDeny, RiskHigh, "environment.variable",
 			"environment variable is not allowlisted: "+key,
 			"remove the variable or add its name to env_allowlist",
-		)}
+		))
 	}
-	return nil
+	return findings
+}
+
+type environmentClass uint8
+
+const (
+	environmentOrdinary environmentClass = iota
+	environmentExecutablePath
+	environmentCodeInjection
+	environmentExecutionContext
+)
+
+func executionEnvironmentClass(key string) environmentClass {
+	key = strings.ToUpper(strings.TrimSpace(key))
+	if strings.HasPrefix(key, "GIT_CONFIG_") {
+		return environmentCodeInjection
+	}
+	switch key {
+	case "PATH", "PATHEXT":
+		return environmentExecutablePath
+	case "BASH_ENV", "ENV", "ZDOTDIR", "LD_PRELOAD", "LD_LIBRARY_PATH",
+		"LD_AUDIT", "DYLD_INSERT_LIBRARIES", "DYLD_LIBRARY_PATH",
+		"PYTHONSTARTUP", "PYTHONPATH", "NODE_OPTIONS", "RUBYOPT",
+		"PERL5OPT", "JAVA_TOOL_OPTIONS", "JDK_JAVA_OPTIONS", "CLASSPATH":
+		return environmentCodeInjection
+	case "HOME":
+		return environmentExecutionContext
+	default:
+		return environmentOrdinary
+	}
 }
 
 func scanSegmentResources(policy Policy, argv []string) []Finding {

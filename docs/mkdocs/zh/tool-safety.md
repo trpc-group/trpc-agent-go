@@ -32,7 +32,7 @@ allowed_commands: [go, cat, curl]
 denied_commands: [dd, mkfs, sudo]
 denied_paths: [/, /etc, /root, ~/.ssh, .env, credentials]
 network_allowlist: [github.com]
-env_allowlist: [PATH, HOME, TMPDIR]
+env_allowlist: [LANG, TMPDIR]
 review_commands: [go install, npm install]
 max_timeout_seconds: 30
 max_output_bytes: 1048576
@@ -47,6 +47,11 @@ pipeline_action: needs_human_review
 常见提权/系统命令和敏感路径，复核常见依赖安装命令，将超时限制为 300 秒，
 将输出限制为 4 MiB。
 
+环境变量白名单不能覆盖与执行相关的安全语义。请求级 `PATH` 和 `PATHEXT`
+会改变白名单命令对应的实际可执行文件，因此始终拒绝；`HOME` 会改变 Shell
+启动文件和工具全局配置，因此需要人工复核；`BASH_ENV`、`LD_PRELOAD` 等
+进程启动注入变量即使写入白名单也会拒绝。
+
 `Guard.Scan` 返回 `allow`、`deny`、`ask` 或 `needs_human_review`，报告包含
 风险等级、rule ID、evidence、recommendation、Tool、backend 和 blocked。
 deny 会被拦截；两种复核决策都必须进入应用自己控制的审批流程，不能静默放行。
@@ -58,6 +63,10 @@ Guard 复用 `internal/shellsafe`，只解析一次命令结构，再对参数�
 `parse_error_action`，未引用的管道遵循 `pipeline_action`。只有在其他控制措施
 明确承担风险时才应配置为 allow。该解析器不是完整 Shell 解释器，无法解析
 所有变量、alias、source 文件或运行时生成的命令。
+
+Permission 扫描还会把解释器 stdin 和 `-f -` stdin 作为可执行内容处理，
+检查路径类参数与 Skill 输出 glob，并复核会选择 alias、hook、helper 或外部
+程序的 Git 配置。
 
 ## Filter 与 Permission 边界
 
@@ -93,7 +102,8 @@ socket、凭据或过宽的文件系统挂载。符号链接与挂载边界仍�
 ### codeexec 与 CodeExecutor
 
 `codeexec` 解析 code blocks 后委托 CodeExecutor。Guard 会扫描每个 block，
-将 Shell 语言交给命令扫描，并保守识别常见语言中的进程/网络桥接和资源滥用。
+将 Shell 语言交给命令扫描，并保守识别常见语言中的进程/网络桥接和资源滥用；
+没有保守扫描器的代码语言需要人工复核。
 `codeexecutor/local` 具有本机权限；`codeexecutor/container` 只有在限制挂载、
 用户、capability 与网络时才提供容器隔离；E2B 是远端沙箱，同时需要独立管理
 身份、网络和留存策略。Guard 不会把这些后端变成同一安全等级，也不会替调用方

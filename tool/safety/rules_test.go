@@ -58,6 +58,24 @@ func TestGuardTreatsEmptyNetworkAllowlistAsDenyAll(t *testing.T) {
 	require.Equal(t, "network.destination", report.RuleID)
 }
 
+func TestGuardDeniesRecursiveCurrentDirectoryDeletion(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, tc := range []struct {
+		command  string
+		decision safety.Decision
+		rule     string
+	}{
+		{"rm -r .", safety.DecisionDeny, "dangerous.rm_rf"},
+		{"rm -R .", safety.DecisionDeny, "dangerous.rm_rf"},
+		{"rm --recursive .", safety.DecisionDeny, "dangerous.rm_rf"},
+		{"rm -r ./build", safety.DecisionAllow, "safety.no_findings"},
+	} {
+		report := guard.Scan(safety.Request{Command: tc.command})
+		require.Equal(t, tc.decision, report.Decision, tc.command)
+		require.Equal(t, tc.rule, report.RuleID, tc.command)
+	}
+}
+
 func TestGuardScansCustomNetworkDestinations(t *testing.T) {
 	policy := safety.DefaultPolicy()
 	policy.NetworkAllowlist = []string{"github.com"}
@@ -78,6 +96,23 @@ func TestGuardScansCustomNetworkDestinations(t *testing.T) {
 			require.Equal(t, safety.DecisionDeny, report.Decision)
 			require.Equal(t, tc.rule, report.RuleID)
 		})
+	}
+}
+
+func TestGuardScansPathBearingRawArguments(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, raw := range []json.RawMessage{
+		json.RawMessage(`{"path":".env"}`),
+		json.RawMessage(`{"source":"~/.ssh/id_rsa"}`),
+		json.RawMessage(`{"nested":{"input_files":["out/report.txt",".env"]}}`),
+		json.RawMessage(`{"nested":{"outputFiles":["out/report.txt",".env"]}}`),
+		json.RawMessage(`{"args":"rm -rf /"}`),
+	} {
+		report := guard.Scan(safety.Request{
+			Backend: safety.BackendUnknown, RawArguments: raw,
+		})
+		require.Equal(t, safety.DecisionDeny, report.Decision, string(raw))
+		require.Contains(t, []string{"sensitive.path", "dangerous.rm_rf"}, report.RuleID, string(raw))
 	}
 }
 
@@ -121,6 +156,97 @@ func TestGuardHandlesCaseSensitiveAttachedConfigOptions(t *testing.T) {
 		report := guard.Scan(safety.Request{Command: tc.command})
 		require.Equal(t, tc.decision, report.Decision, tc.command)
 		require.Equal(t, tc.rule, report.RuleID, tc.command)
+	}
+}
+
+func TestGuardScansCommandExecutionIndirection(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, tc := range []struct {
+		name     string
+		request  safety.Request
+		decision safety.Decision
+		rule     string
+	}{
+		{
+			"git shell alias", safety.Request{Command: `git -c alias.pwn='!rm -rf .' pwn`},
+			safety.DecisionDeny, "git.shell_alias",
+		},
+		{
+			"git attached shell alias", safety.Request{Command: `git -calias.pwn='!rm -rf .' pwn`},
+			safety.DecisionDeny, "git.shell_alias",
+		},
+		{
+			"git config env shell alias", safety.Request{
+				Command: `git --config-env=alias.pwn=LANG pwn`,
+				Env:     map[string]string{"LANG": "!rm -rf ."},
+			},
+			safety.DecisionDeny, "git.shell_alias",
+		},
+		{
+			"git executable selector", safety.Request{Command: `git -c core.fsmonitor='rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git hooks path", safety.Request{Command: `git -c core.hooksPath=./hooks status`},
+			safety.DecisionNeedsHumanReview, "git.execution_config",
+		},
+		{
+			"git included config", safety.Request{Command: `git -c include.path=.git/evil pwn`},
+			safety.DecisionNeedsHumanReview, "git.execution_config",
+		},
+		{
+			"git diff driver command", safety.Request{Command: `git -c diff.audit.command='rm -rf .' diff`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git merge driver command", safety.Request{Command: `git -c merge.audit.driver='rm -rf .' merge branch`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"git pager command", safety.Request{Command: `git -c pager.status='rm -rf .' status`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar checkpoint exec", safety.Request{Command: `tar --checkpoint=1 --checkpoint-action=exec='rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar to command", safety.Request{Command: `tar -xf in.tar --to-command='rm -rf .'`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"tar compressor command", safety.Request{Command: `tar -I 'rm -rf .' -cf out.tar .`},
+			safety.DecisionDeny, "dangerous.rm_rf",
+		},
+		{
+			"benign git config", safety.Request{Command: `git -c user.name=agent status`},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+		{
+			"benign difftool config", safety.Request{Command: `git -c difftool.prompt=false status`},
+			safety.DecisionAllow, "safety.no_findings",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report := guard.Scan(tc.request)
+			require.Equal(t, tc.decision, report.Decision)
+			require.Equal(t, tc.rule, report.RuleID)
+		})
+	}
+}
+
+func TestGuardRejectsAllowlistedEnvironmentCodeInjection(t *testing.T) {
+	for _, key := range []string{
+		"BASH_ENV", "PYTHONPATH", "NODE_OPTIONS", "RUBYOPT", "PERL5OPT",
+		"JAVA_TOOL_OPTIONS", "GIT_CONFIG_COUNT",
+	} {
+		policy := safety.DefaultPolicy()
+		policy.EnvAllowlist = append(policy.EnvAllowlist, key)
+		report := mustGuard(t, policy).Scan(safety.Request{
+			Command: "go test", Env: map[string]string{key: "./bootstrap"},
+		})
+		require.Equal(t, safety.DecisionDeny, report.Decision, key)
+		require.Equal(t, "environment.code_injection", report.RuleID, key)
 	}
 }
 
@@ -619,7 +745,7 @@ func TestGuardEnforcesResourcePolicy(t *testing.T) {
 		want     safety.Decision
 		wantRule string
 	}{
-		{"environment variable", safety.Request{Command: "go test ./...", Env: map[string]string{"PATH": "/usr/bin", "API_TOKEN": "secret-value"}}, safety.DecisionDeny, "environment.variable"},
+		{"environment variable", safety.Request{Command: "go test ./...", Env: map[string]string{"PATH": "/usr/bin", "API_TOKEN": "secret-value"}}, safety.DecisionDeny, "environment.executable_path"},
 		{"timeout", safety.Request{Command: "go test ./...", TimeoutSeconds: 301}, safety.DecisionDeny, "resource.timeout"},
 		{"output budget", safety.Request{Command: "go test ./...", MaxOutputBytes: 4*1024*1024 + 1}, safety.DecisionDeny, "resource.output_limit"},
 		{"host background", safety.Request{Backend: safety.BackendHostExec, Command: "go test ./...", TimeoutSeconds: 300, Background: true}, safety.DecisionDeny, "host.background"},
@@ -713,6 +839,63 @@ func TestGuardScansAliasedLanguageProcessBridges(t *testing.T) {
 		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
 		require.Equal(t, safety.DecisionDeny, report.Decision, block.Language)
 		require.Equal(t, "code.process_bridge", report.RuleID, block.Language)
+	}
+}
+
+func TestGuardScansNotebookAndPythonProcessBridges(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, code := range []string{
+		`!rm -rf /`,
+		`get_ipython().system("rm -rf /")`,
+		`import os as operating_system; operating_system.system("rm -rf /")`,
+		`__import__("os").system("rm -rf /")`,
+		`from os import system; system("rm -rf /")`,
+		`from subprocess import run as runner; runner(["rm", "-rf", "/"])`,
+		`get_ipython().run_line_magic("system", "rm -rf /")`,
+		`get_ipython().run_cell_magic("bash", "", "rm -rf /")`,
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "python", Code: code,
+		}}})
+		require.Equal(t, safety.DecisionDeny, report.Decision, code)
+		require.Equal(t, "code.process_bridge", report.RuleID, code)
+	}
+}
+
+func TestGuardUsesPythonScannerForDefaultCodeLanguage(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	safe := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+		Code: "print(1)",
+	}}})
+	require.Equal(t, safety.DecisionAllow, safe.Decision)
+
+	dangerous := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{{
+		Code: `import os; os.system("rm -rf /")`,
+	}}})
+	require.Equal(t, safety.DecisionDeny, dangerous.Decision)
+	require.Equal(t, "code.process_bridge", dangerous.RuleID)
+}
+
+func TestGuardIgnoresNotebookEscapesInPythonStrings(t *testing.T) {
+	report := mustGuard(t, safety.DefaultPolicy()).Scan(safety.Request{
+		CodeBlocks: []codeexecutor.CodeBlock{{
+			Language: "python",
+			Code:     "text = \"\"\"\n!rm -rf /\n\"\"\"\nprint(text)",
+		}},
+	})
+	require.Equal(t, safety.DecisionAllow, report.Decision)
+}
+
+func TestGuardReviewsCodeLanguagesWithoutAConservativeScanner(t *testing.T) {
+	guard := mustGuard(t, safety.DefaultPolicy())
+	for _, block := range []codeexecutor.CodeBlock{
+		{Language: "r", Code: `system("rm -rf /")`},
+		{Language: "java", Code: `Runtime.getRuntime().exec("rm -rf /");`},
+		{Language: "custom-kernel", Code: `run_external("rm -rf /")`},
+	} {
+		report := guard.Scan(safety.Request{CodeBlocks: []codeexecutor.CodeBlock{block}})
+		require.Equal(t, safety.DecisionNeedsHumanReview, report.Decision, block.Language)
+		require.Equal(t, "code.unsupported_language", report.RuleID, block.Language)
 	}
 }
 

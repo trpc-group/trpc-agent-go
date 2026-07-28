@@ -24,9 +24,9 @@
     "risk_level": "critical",
     "rule_id": "dangerous.rm_rf",
     "evidence": [
-      "rm -rf targets /"
+      "rm recursively targets the current directory or forcibly targets /"
     ],
-    "recommendation": "remove the root operand and use a narrowly scoped path",
+    "recommendation": "remove the broad operand and use a narrowly scoped path",
     "tool_name": "workspace_exec",
     "command": "rm -rf /",
     "backend": "workspaceexec",
@@ -40,9 +40,9 @@
         "risk_level": "critical",
         "rule_id": "dangerous.rm_rf",
         "evidence": [
-          "rm -rf targets /"
+          "rm recursively targets the current directory or forcibly targets /"
         ],
-        "recommendation": "remove the root operand and use a narrowly scoped path"
+        "recommendation": "remove the broad operand and use a narrowly scoped path"
       },
       {
         "decision": "deny",

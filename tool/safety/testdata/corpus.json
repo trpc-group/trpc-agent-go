@@ -428,7 +428,7 @@
     "name": "allow approved environment",
     "category": "safe",
     "safe": true,
-    "request": {"tool_name": "workspace_exec", "backend": "workspaceexec", "command": "go test ./...", "env": {"PATH": "/usr/bin", "LANG": "C"}},
+    "request": {"tool_name": "workspace_exec", "backend": "workspaceexec", "command": "go test ./...", "env": {"LANG": "C"}},
     "expected_decision": "allow"
   },
   {
