@@ -1,0 +1,47 @@
+{
+  "task_id": "02_security_issue",
+  "diff_summary": "1 file, 1 modified, 14 additions, 3 deletions",
+  "findings": [
+    {
+      "id": "",
+      "severity": "critical",
+      "category": "security",
+      "file": "handler.go",
+      "line": 6,
+      "title": "Potential SQL injection: string concatenation in SQL query",
+      "evidence": "query := \"SELECT * FROM users WHERE id = \" + id",
+      "recommendation": "Use parameterized queries or prepared statements instead of string concatenation",
+      "confidence": "high",
+      "source": "custom_rule",
+      "rule_id": "GO_SECURITY_INJECTION"
+    }
+  ],
+  "warnings": [],
+  "risk_summary": {
+    "total": 1,
+    "by_severity": { "critical": 1 },
+    "by_category": { "security": 1 },
+    "need_human_review": 0
+  },
+  "permission_log": [],
+  "sandbox_summary": {
+    "total_runs": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "timed_out": 0,
+    "total_duration_ms": 0
+  },
+  "monitoring": {
+    "total_duration_ms": 8,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 0,
+    "permission_denied": 0,
+    "permission_asked": 0,
+    "finding_count": 1,
+    "warning_count": 0,
+    "severity_distribution": { "critical": 1 },
+    "error_count": 0
+  },
+  "recommendations": ["Use parameterized queries or prepared statements instead of string concatenation"],
+  "generated_at": "2026-07-28T09:00:00Z"
+}

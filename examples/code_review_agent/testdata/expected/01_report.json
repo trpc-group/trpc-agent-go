@@ -1,0 +1,33 @@
+{
+  "task_id": "01_clean_diff",
+  "diff_summary": "1 file, 1 modified, 8 additions, 2 deletions",
+  "findings": [],
+  "warnings": [],
+  "risk_summary": {
+    "total": 0,
+    "by_severity": {},
+    "by_category": {},
+    "need_human_review": 0
+  },
+  "permission_log": [],
+  "sandbox_summary": {
+    "total_runs": 0,
+    "succeeded": 0,
+    "failed": 0,
+    "timed_out": 0,
+    "total_duration_ms": 0
+  },
+  "monitoring": {
+    "total_duration_ms": 12,
+    "sandbox_duration_ms": 0,
+    "tool_call_count": 0,
+    "permission_denied": 0,
+    "permission_asked": 0,
+    "finding_count": 0,
+    "warning_count": 0,
+    "severity_distribution": {},
+    "error_count": 0
+  },
+  "recommendations": [],
+  "generated_at": "2026-07-28T09:00:00Z"
+}

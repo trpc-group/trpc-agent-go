@@ -1,0 +1,20 @@
+diff --git a/config.go b/config.go
+index abc..def 100644
+--- /dev/null
++++ b/config.go
+@@ -0,0 +1,15 @@
++package main
++
++const (
++	// Hardcoded OpenAI API key — sensitive info leak
++	openAIKey = "sk-abc123def456ghi789jkl012mnop345"
++
++	// Hardcoded GitHub token
++	gitHubToken = "ghp_abc123def456ghi789jkl012mnop345qrs678tuv"
++)
++
++func getConfig() map[string]string {
++	return map[string]string{
++		"openai_key": openAIKey,
++	}
++}

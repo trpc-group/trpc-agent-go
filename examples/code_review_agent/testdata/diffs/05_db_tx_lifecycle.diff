@@ -1,0 +1,23 @@
+diff --git a/db.go b/db.go
+index abc..def 100644
+--- /dev/null
++++ b/db.go
+@@ -0,0 +1,20 @@
++package main
++
++import "database/sql"
++
++func transferFunds(db *sql.DB, from, to string, amount float64) error {
++	tx, err := db.Begin()
++	if err != nil {
++		return err
++	}
++	// No defer tx.Rollback() — if anything fails, transaction leaks
++	if _, err := tx.Exec("UPDATE accounts SET balance = balance - ? WHERE id = ?", amount, from); err != nil {
++		return err
++	}
++	if _, err := tx.Exec("UPDATE accounts SET balance = balance + ? WHERE id = ?", amount, to); err != nil {
++		return err // tx not rolled back on error!
++	}
++	return tx.Commit()
++}

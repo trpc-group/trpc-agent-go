@@ -1,0 +1,17 @@
+diff --git a/user.go b/user.go
+index abc..def 100644
+--- /dev/null
++++ b/user.go
+@@ -0,0 +1,12 @@
++package main
++
++// NewUser creates a new user in the system.
++// Note: there is no corresponding user_test.go with a TestNewUser function.
++func NewUser(name, email string) *User {
++	return &User{Name: name, Email: email}
++}
++
++type User struct {
++	Name  string
++	Email string
++}
