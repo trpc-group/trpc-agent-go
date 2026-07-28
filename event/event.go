@@ -450,22 +450,73 @@ func redactedEventForLogging(e *Event) Event {
 	return redacted
 }
 
-func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
-	eventStr := snapshotEvent(e)
+// trySendReady performs a non-blocking channel send with panic recovery.
+// The recover scope is intentionally limited to the channel send operation
+// only; logging must be performed by the caller after this function returns
+// so that logging failures are not misreported as closed-channel errors.
+func trySendReady(ch chan<- *Event, e *Event) (sent bool, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			redactedEvent := redactedEventForLogging(e)
-			log.WarnfContext(ctx, "tryEmitReadyEvent: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
-			handled = true
 			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
 		}
 	}()
 	select {
 	case ch <- e:
-		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", eventStr)
+		return true, nil
+	default:
+		return false, nil
+	}
+}
+
+// sendBlocking performs a blocking channel send with optional timeout and
+// panic recovery. The recover scope is intentionally limited to the channel
+// send operation only; logging must be performed by the caller after this
+// function returns so that logging failures are not misreported as
+// closed-channel errors.
+func sendBlocking(ctx context.Context, ch chan<- *Event, e *Event,
+	timeout time.Duration) (sent bool, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
+		}
+	}()
+
+	if timeout == EmitWithoutTimeout {
+		select {
+		case ch <- e:
+			return true, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	}
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case ch <- e:
 		return true, nil
 	case <-ctx.Done():
-		err = ctx.Err()
+		return false, ctx.Err()
+	case <-timer.C:
+		return false, DefaultEmitTimeoutErr
+	}
+}
+
+func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled bool, err error) {
+	eventStr := snapshotEvent(e)
+
+	sent, sendErr := trySendReady(ch, e)
+	if sendErr != nil {
+		redactedEvent := redactedEventForLogging(e)
+		log.WarnfContext(ctx, "tryEmitReadyEvent: recovered from panic sending to closed channel: %v, event: %+v", sendErr, redactedEvent)
+		return true, sendErr
+	}
+	if sent {
+		log.TracefContext(ctx, "tryEmitReadyEvent: event sent, event: %s", eventStr)
+		return true, nil
+	}
+
+	if err = ctx.Err(); err != nil {
 		redactedEvent := redactedEventForLogging(e)
 		log.WarnfContext(
 			ctx,
@@ -474,9 +525,9 @@ func tryEmitReadyEvent(ctx context.Context, ch chan<- *Event, e *Event) (handled
 			redactedEvent,
 		)
 		return true, err
-	default:
-		return false, nil
 	}
+
+	return false, nil
 }
 
 // EmitEventWithTimeout sends an event to the channel with optional timeout.
@@ -486,17 +537,12 @@ func EmitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 }
 
 // emitEventWithTimeout sends an event to the channel with optional timeout.
-// An optional barrier channel can be passed to synchronize with the fast-path completion (for testing only).
 func emitEventWithTimeout(ctx context.Context, ch chan<- *Event,
-	e *Event, timeout time.Duration, barrier ...chan<- struct{}) (err error) {
+	e *Event, timeout time.Duration) (err error) {
 	if e == nil || ch == nil {
 		return nil
 	}
 
-	// If the context is already cancelled, prefer returning immediately
-	// rather than attempting to send. This avoids a racy select where both
-	// the send and the ctx.Done() cases are ready, which could otherwise
-	// result in emitting an event after cancellation.
 	if err = ctx.Err(); err != nil {
 		redactedEvent := redactedEventForLogging(e)
 		log.WarnfContext(
@@ -511,73 +557,39 @@ func emitEventWithTimeout(ctx context.Context, ch chan<- *Event,
 	log.TracefContext(ctx, "[EmitEventWithTimeout]queue monitoring: RequestID: %s, channel capacity: %d, current length: %d, branch: %s",
 		e.RequestID, cap(ch), len(ch), e.Branch)
 
-	// Fast path: try non-blocking send first.
-	// tryEmitReadyEvent has its own recover() to handle closed channel panics.
 	if handled, err := tryEmitReadyEvent(ctx, ch, e); handled {
 		return err
 	}
 
-	// Notify that fast-path is complete (for testing synchronization).
-	if len(barrier) > 0 && barrier[0] != nil {
-		close(barrier[0])
-	}
-
-	// Slow path: blocking send with optional timeout.
-	// Use a direct blocking select with recover() to handle closed channel panics.
-	// This avoids goroutine leaks when timeout or ctx.Done() fires before the send completes.
-	// Snapshot before send to avoid data race - receiver may mutate the event.
 	eventStr := snapshotEvent(e)
-	defer func() {
-		if r := recover(); r != nil {
-			redactedEvent := redactedEventForLogging(e)
-			log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %+v", r, redactedEvent)
-			err = fmt.Errorf("%w: %v", ErrClosedChannelSend, r)
-		}
-	}()
+	sent, sendErr := sendBlocking(ctx, ch, e, timeout)
 
-	if timeout == EmitWithoutTimeout {
-		select {
-		case ch <- e:
-			log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
-			return nil
-		case <-ctx.Done():
-			err = ctx.Err()
-			redactedEvent := redactedEventForLogging(e)
-			log.WarnfContext(
-				ctx,
-				"EmitEventWithTimeout: context error: %v, event: %+v",
-				err,
-				redactedEvent,
-			)
-			return err
-		}
+	if errors.Is(sendErr, ErrClosedChannelSend) {
+		redactedEvent := redactedEventForLogging(e)
+		log.WarnfContext(ctx, "EmitEventWithTimeout: recovered from panic sending to closed channel: %v, event: %+v", sendErr, redactedEvent)
+		return sendErr
 	}
-
-	timer := time.NewTimer(timeout)
-	defer timer.Stop()
-	select {
-	case ch <- e:
+	if sent {
 		log.TracefContext(ctx, "EmitEventWithTimeout: event sent, event: %s", eventStr)
 		return nil
-	case <-ctx.Done():
-		err = ctx.Err()
-		redactedEvent := redactedEventForLogging(e)
+	}
+
+	redactedEvent := redactedEventForLogging(e)
+	if errors.Is(sendErr, context.Canceled) || errors.Is(sendErr, context.DeadlineExceeded) {
 		log.WarnfContext(
 			ctx,
 			"EmitEventWithTimeout: context error: %v, event: %+v",
-			err,
+			sendErr,
 			redactedEvent,
 		)
-		return err
-	case <-timer.C:
-		redactedEvent := redactedEventForLogging(e)
+	} else {
 		log.WarnfContext(
 			ctx,
 			"EmitEventWithTimeout: timeout, event: %+v",
 			redactedEvent,
 		)
-		return DefaultEmitTimeoutErr
 	}
+	return sendErr
 }
 
 // MarshalJSON implements json.Marshaler and produces a format that
