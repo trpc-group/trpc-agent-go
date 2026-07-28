@@ -414,7 +414,7 @@ func checkResourceAbuse(cmd string) (Result, bool) {
 					Decision:       tool.PermissionActionDeny,
 					RiskLevel:      RiskLevelHigh,
 					RuleID:         "RULE_EXCESSIVE_SLEEP",
-					Evidence:       fmt.Sprintf("Unparseable sleep duration %q; malformed input may attempt to bypass safety checks", val),
+					Evidence:       fmt.Sprintf("Unparsable sleep duration %q; malformed input may attempt to bypass safety checks", val),
 					Recommendation: "Provide a valid sleep duration in seconds or a recognized suffix (s, m, h, d)",
 				}, true
 			}

@@ -23,7 +23,7 @@ import (
 )
 
 func createTestReq(toolName, cmd string) *tool.PermissionRequest {
-	args, _ := json.Marshal(map[string]interface{}{
+	args, _ := json.Marshal(map[string]any{
 		"command": cmd,
 	})
 	return &tool.PermissionRequest{
@@ -414,7 +414,7 @@ func TestExtractScanRequest_Variants(t *testing.T) {
 
 	// hostexec variants: hostexec, host_exec, exec_command, hostexec_exec_command
 	for _, toolName := range []string{"hostexec", "host_exec", "exec_command", "hostexec_exec_command"} {
-		args, _ := json.Marshal(map[string]interface{}{"command": "echo hi"})
+		args, _ := json.Marshal(map[string]any{"command": "echo hi"})
 		req := &tool.PermissionRequest{ToolName: toolName, Arguments: args}
 		_, err := guard.CheckToolPermission(ctx, req)
 		require.NoError(t, err)
@@ -423,30 +423,30 @@ func TestExtractScanRequest_Variants(t *testing.T) {
 
 	// codeexec / code_exec backend
 	for _, toolName := range []string{"codeexec", "code_exec"} {
-		args, _ := json.Marshal(map[string]interface{}{"script": "print('hi')"})
+		args, _ := json.Marshal(map[string]any{"script": "print('hi')"})
 		req := &tool.PermissionRequest{ToolName: toolName, Arguments: args}
 		_, err := guard.CheckToolPermission(ctx, req)
 		require.NoError(t, err)
 	}
 
 	// cmd field
-	args, _ := json.Marshal(map[string]interface{}{"cmd": "echo hello"})
+	args, _ := json.Marshal(map[string]any{"cmd": "echo hello"})
 	req := &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
 	_, err := guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
 
 	// code field
-	args, _ = json.Marshal(map[string]interface{}{"code": "print('hello')"})
+	args, _ = json.Marshal(map[string]any{"code": "print('hello')"})
 	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
 	_, err = guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
 
 	// args, cwd, env fields
-	args, _ = json.Marshal(map[string]interface{}{
+	args, _ = json.Marshal(map[string]any{
 		"command": "go test",
-		"args":    []interface{}{"./..."},
+		"args":    []any{"./..."},
 		"cwd":     "/workspace",
-		"env":     map[string]interface{}{"GOPATH": "/go"},
+		"env":     map[string]any{"GOPATH": "/go"},
 	})
 	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
 	_, err = guard.CheckToolPermission(ctx, req)
@@ -463,7 +463,7 @@ func TestExtractScanRequest_Variants(t *testing.T) {
 	require.NoError(t, err)
 
 	// JSON with no command fields — falls back to raw arguments
-	args, _ = json.Marshal(map[string]interface{}{"other": "value"})
+	args, _ = json.Marshal(map[string]any{"other": "value"})
 	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
 	_, err = guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
@@ -521,10 +521,10 @@ func TestResourceAbuse_SleepVariants(t *testing.T) {
 		blocked bool
 	}{
 		{"sleep 10m", true},         // 600s > 300s
-		{"sleep 2d", true},           // 2 days
-		{"sleep 60", false},          // 60s <= 300s, allowed
-		{"sleep abc", true},          // unparseable — deny to prevent bypass
-		{"for ((;;)) echo x", true},  // infinite loop
+		{"sleep 2d", true},          // 2 days
+		{"sleep 60", false},         // 60s <= 300s, allowed
+		{"sleep abc", true},         // unparsable — deny to prevent bypass
+		{"for ((;;)) echo x", true}, // infinite loop
 	}
 
 	for _, c := range cases {
@@ -544,7 +544,7 @@ func TestCheckHostExecBackground(t *testing.T) {
 	ctx := context.Background()
 
 	// Background process should be denied
-	args, _ := json.Marshal(map[string]interface{}{"command": "sleep 10 &"})
+	args, _ := json.Marshal(map[string]any{"command": "sleep 10 &"})
 	req := &tool.PermissionRequest{ToolName: "hostexec", Arguments: args}
 	decision, err := guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)

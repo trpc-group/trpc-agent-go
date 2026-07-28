@@ -93,7 +93,7 @@ func main() {
 		fmt.Printf("\n[%d] %s\n", i+1, sample.description)
 		fmt.Printf("   Tool: %s | Command: %s\n", sample.toolName, sample.command)
 
-		argsPayload, _ := json.Marshal(map[string]interface{}{
+		argsPayload, _ := json.Marshal(map[string]any{
 			"command": sample.command,
 		})
 

@@ -212,7 +212,7 @@ func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanReque
 		return scanReq
 	}
 
-	var payload map[string]interface{}
+	var payload map[string]any
 	if err := json.Unmarshal(req.Arguments, &payload); err != nil {
 		scanReq.Command = string(req.Arguments)
 		return scanReq
@@ -230,7 +230,7 @@ func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanReque
 		scanReq.Command = string(req.Arguments)
 	}
 
-	if rawArgs, ok := payload["args"].([]interface{}); ok {
+	if rawArgs, ok := payload["args"].([]any); ok {
 		for _, a := range rawArgs {
 			if s, ok := a.(string); ok {
 				scanReq.Args = append(scanReq.Args, s)
@@ -242,7 +242,7 @@ func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanReque
 		scanReq.Cwd = cwd
 	}
 
-	if rawEnv, ok := payload["env"].(map[string]interface{}); ok {
+	if rawEnv, ok := payload["env"].(map[string]any); ok {
 		scanReq.Env = make(map[string]string)
 		for k, v := range rawEnv {
 			if s, ok := v.(string); ok {
