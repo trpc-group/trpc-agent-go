@@ -265,3 +265,19 @@ func TestSafetyGuard_SecretLeakage(t *testing.T) {
 	assert.Equal(t, "RULE_SECRET_LEAKAGE", report.RuleID)
 	assert.Equal(t, RiskLevelCritical, report.RiskLevel)
 }
+
+func TestSafetyGuard_InitErrAndDuration(t *testing.T) {
+	ctx := context.Background()
+
+	// Test InitErr when policy file doesn't exist
+	invalidGuard := NewGuard(WithPolicyFile("non_existent_file.yaml"))
+	assert.Error(t, invalidGuard.InitErr())
+
+	// Test sleep 1h parsing in checkResourceAbuse
+	guard := NewGuard()
+	req := createTestReq("workspace_exec", "sleep 1h")
+	decision, err := guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.Equal(t, "RULE_EXCESSIVE_SLEEP", guard.LastReport().RuleID)
+}

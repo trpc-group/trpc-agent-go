@@ -36,6 +36,7 @@ func DefaultPolicy() *Policy {
 	return &Policy{
 		DeniedCommands: []string{
 			"rm", "dd", "mkfs", "sudo", "su", "shutdown", "reboot", "init",
+			"sh", "bash", "zsh", "eval", "exec",
 		},
 		ForbiddenPaths: []string{
 			"~/.ssh", "/etc", "*.env", "*.pem", "*.key", "id_rsa",

@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/shellsafe"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -184,13 +185,14 @@ func checkShellSafeAndDangerous(cmd string, policy *Policy) (Result, bool) {
 
 func checkForbiddenPaths(cmd string, policy *Policy) (Result, bool) {
 	lowerCmd := strings.ToLower(cmd)
+	words := strings.Fields(lowerCmd)
+
 	for _, forbidden := range policy.ForbiddenPaths {
 		pattern := strings.ToLower(forbidden)
 		matched := false
 
 		if strings.Contains(pattern, "*") {
 			// Glob pattern
-			words := strings.Fields(lowerCmd)
 			for _, w := range words {
 				if m, _ := filepath.Match(pattern, filepath.Base(w)); m {
 					matched = true
@@ -198,7 +200,15 @@ func checkForbiddenPaths(cmd string, policy *Policy) (Result, bool) {
 				}
 			}
 		} else {
-			if strings.Contains(lowerCmd, pattern) {
+			// Per-token matching for non-glob paths
+			for _, w := range words {
+				cleanWord := strings.Trim(w, "'\"(),")
+				if cleanWord == pattern || strings.HasPrefix(cleanWord, pattern+"/") || strings.HasPrefix(cleanWord, pattern+"\\") {
+					matched = true
+					break
+				}
+			}
+			if !matched && strings.Contains(lowerCmd, pattern) {
 				matched = true
 			}
 		}
@@ -303,7 +313,7 @@ func checkHostExecAndBackground(cmd string, req *ScanRequest) (Result, bool) {
 	}
 
 	// HostExec backend special checks
-	if strings.EqualFold(req.Backend, "hostexec") {
+	if strings.EqualFold(req.Backend, BackendHostExec) {
 		lowerCmd := strings.ToLower(cmd)
 		if strings.Contains(lowerCmd, "top") || strings.Contains(lowerCmd, "htop") || strings.Contains(lowerCmd, "tail -f") {
 			return Result{
@@ -349,16 +359,36 @@ func checkResourceAbuse(cmd string) (Result, bool) {
 		}, true
 	}
 
-	// Excessive sleep check (e.g. sleep 3600)
+	// Excessive sleep check (e.g. sleep 3600, sleep 1h, sleep 10m)
 	if strings.HasPrefix(lowerCmd, "sleep ") {
 		parts := strings.Fields(lowerCmd)
 		if len(parts) >= 2 {
-			if secs, err := strconv.Atoi(parts[1]); err == nil && secs > 300 {
+			val := parts[1]
+			var totalSecs float64
+			if dur, err := time.ParseDuration(val); err == nil {
+				totalSecs = dur.Seconds()
+			} else if secs, err := strconv.Atoi(val); err == nil {
+				totalSecs = float64(secs)
+			} else if strings.HasSuffix(val, "m") {
+				if m, err := strconv.Atoi(strings.TrimSuffix(val, "m")); err == nil {
+					totalSecs = float64(m * 60)
+				}
+			} else if strings.HasSuffix(val, "h") {
+				if h, err := strconv.Atoi(strings.TrimSuffix(val, "h")); err == nil {
+					totalSecs = float64(h * 3600)
+				}
+			} else if strings.HasSuffix(val, "d") {
+				if d, err := strconv.Atoi(strings.TrimSuffix(val, "d")); err == nil {
+					totalSecs = float64(d * 86400)
+				}
+			}
+
+			if totalSecs > 300 {
 				return Result{
 					Decision:       tool.PermissionActionDeny,
 					RiskLevel:      RiskLevelHigh,
 					RuleID:         "RULE_EXCESSIVE_SLEEP",
-					Evidence:       fmt.Sprintf("Sleep duration of %d seconds exceeds 300s limit", secs),
+					Evidence:       fmt.Sprintf("Sleep duration of %.0f seconds exceeds 300s limit", totalSecs),
 					Recommendation: "Reduce sleep duration to avoid hanging tool execution",
 				}, true
 			}
