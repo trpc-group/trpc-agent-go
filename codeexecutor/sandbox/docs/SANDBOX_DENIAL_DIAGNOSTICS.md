@@ -132,14 +132,12 @@ rt := sandbox.NewRuntime(
     sandbox.WithDenialFilter(sandbox.DenialFilter{
         Ignore: []sandbox.DenialIgnoreRule{
             {
-                Scope: sandbox.DenialFilterAll,
                 Targets: []sandbox.DenialTargetMatcher{
                     {Prefix: "/dev/dtracehelper"},
                     {Prefix: "/System/Cryptexes/OS"},
                 },
             },
             {
-                Scope:   sandbox.DenialFilterAll,
                 RawContains: []string{"duplicate report"},
             },
         },
@@ -147,17 +145,15 @@ rt := sandbox.NewRuntime(
 )
 ```
 
-`DenialIgnoreRule` supports `Scope`, optional `Command` substring
-matching against `RunProgramSpec.Cmd` only, `Operations`, structured `Targets`
+`DenialIgnoreRule` supports optional `Command` substring matching against
+`RunProgramSpec.Cmd` only, `Operations`, structured `Targets`
 (`Exact`, `Prefix`, `Suffix`, `Glob`), and `RawContains`. `RawRegex` is
 intentionally not supported.
 
 Zero-value `DenialFilter` keeps automatic filters enabled. Rules in `Ignore` are
 disjunctive (any matching rule suppresses a denial). Within a rule, configured
 constraints are conjunctive. Within one `DenialTargetMatcher`, non-empty fields
-are alternatives. Empty `Scope` and `DenialFilterAll` apply broadly;
-`DenialFilterDenials` applies only to `Diagnostics.Denials`; unknown scopes never
-match.
+are alternatives. A rule with no constraints is ignored.
 
 Set `DisableAutomatic: true` to keep the three default daemon filters visible.
 

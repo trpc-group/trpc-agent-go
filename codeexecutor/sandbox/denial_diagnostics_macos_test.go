@@ -51,7 +51,6 @@ func TestSandboxDenialConfiguredFilters(t *testing.T) {
 	}}
 	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
-			Scope:   DenialFilterAll,
 			Targets: []DenialTargetMatcher{{Prefix: "/dev/dtracehelper"}},
 		}},
 	})
@@ -70,7 +69,6 @@ func TestSandboxDenialCommandPatternFilter(t *testing.T) {
 	}}
 	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/gh", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
-			Scope:   DenialFilterAll,
 			Command: "gh",
 			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
 		}},
@@ -80,7 +78,6 @@ func TestSandboxDenialCommandPatternFilter(t *testing.T) {
 	}
 	kept := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
 		Ignore: []DenialIgnoreRule{{
-			Scope:   DenialFilterAll,
 			Command: "gh",
 			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
 		}},
@@ -130,22 +127,6 @@ func TestSandboxDenialTargetSuffixGlobAndRawFilters(t *testing.T) {
 	})
 	if filtered != nil {
 		t.Fatalf("suffix/glob/raw filter = %#v, want nil", filtered)
-	}
-}
-
-func TestSandboxDenialFilterScopeMismatchDoesNotApply(t *testing.T) {
-	denials := []Denial{{
-		Operation: "file-read-data",
-		Target:    "/private/tmp/foo",
-	}}
-	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
-		Ignore: []DenialIgnoreRule{{
-			Scope:   DenialFilterScope("other"),
-			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
-		}},
-	})
-	if len(filtered) != 1 {
-		t.Fatalf("scope mismatch filter = %#v, want original denial", filtered)
 	}
 }
 
@@ -204,35 +185,10 @@ func TestSandboxDenialEmptyIgnoreRuleDoesNotMatch(t *testing.T) {
 		Target:    "/private/tmp/foo",
 	}}
 	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
-		Ignore: []DenialIgnoreRule{{Scope: DenialFilterDenials}},
+		Ignore: []DenialIgnoreRule{{}},
 	})
 	if len(filtered) != 1 {
 		t.Fatalf("empty ignore rule = %#v, want original denial", filtered)
-	}
-}
-
-func TestSandboxDenialFilterDenialsScope(t *testing.T) {
-	denials := []Denial{{
-		Operation: "file-read-data",
-		Target:    "/private/tmp/foo",
-	}}
-	if !macosDenialFilterScopeMatches(DenialFilterDenials, DenialFilterDenials) {
-		t.Fatal("denials scope should match denials output")
-	}
-	if !macosDenialFilterScopeMatches("", DenialFilterDenials) {
-		t.Fatal("empty scope should match denials output")
-	}
-	if macosDenialFilterScopeMatches(DenialFilterScope("other"), DenialFilterDenials) {
-		t.Fatal("unknown scope should not match denials output")
-	}
-	filtered := applyMacOSSandboxDenialFilters(denials, "/bin/cat", DenialFilter{
-		Ignore: []DenialIgnoreRule{{
-			Scope:   DenialFilterDenials,
-			Targets: []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
-		}},
-	})
-	if filtered != nil {
-		t.Fatalf("denials scope filter = %#v, want nil", filtered)
 	}
 }
 
@@ -451,7 +407,7 @@ func TestShouldFilterMacOSSandboxDenialSkipsNonMatchingOperations(t *testing.T) 
 			Targets:    []DenialTargetMatcher{{Exact: "/private/tmp/foo"}},
 		}},
 	}
-	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter, DenialFilterDenials) {
+	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter) {
 		t.Fatal("operation mismatch should not filter denial")
 	}
 }
@@ -571,11 +527,22 @@ func TestParseMacOSSandboxDenialEventUnrecognizedDenyFormat(t *testing.T) {
 	}
 }
 
-func TestParseMacOSLogTimestampFallsBackToNow(t *testing.T) {
-	before := time.Now()
-	got := parseMacOSLogTimestamp("not-a-timestamp")
-	if got.Before(before.Add(-time.Second)) {
-		t.Fatalf("fallback timestamp = %v, want recent time", got)
+func TestParseMacOSLogTimestampReturnsZeroOnFailure(t *testing.T) {
+	for _, timestamp := range []string{"", "not-a-timestamp"} {
+		if got := parseMacOSLogTimestamp(timestamp); !got.IsZero() {
+			t.Fatalf("timestamp %q parsed as %v, want zero time", timestamp, got)
+		}
+	}
+}
+
+func TestParseMacOSLogTimestampRecognizesEventTime(t *testing.T) {
+	const timestamp = "2026-07-28 11:10:12.123456+0800"
+	got := parseMacOSLogTimestamp(timestamp)
+	if got.IsZero() {
+		t.Fatalf("timestamp %q parsed as zero time", timestamp)
+	}
+	if got.Format("2006-01-02 15:04:05.999999-0700") != timestamp {
+		t.Fatalf("timestamp parsed as %v, want %q", got, timestamp)
 	}
 }
 
@@ -650,7 +617,7 @@ func TestShouldFilterMacOSSandboxDenialSkipsNonMatchingRawContains(t *testing.T)
 			RawContains: []string{"drop me"},
 		}},
 	}
-	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter, DenialFilterDenials) {
+	if shouldFilterMacOSSandboxDenial(denial, "/bin/cat", filter) {
 		t.Fatal("raw mismatch should not filter denial")
 	}
 }

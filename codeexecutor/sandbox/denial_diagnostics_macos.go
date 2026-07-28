@@ -1089,7 +1089,7 @@ func parseMacOSLogTimestamp(timestamp string) time.Time {
 			return ts
 		}
 	}
-	return time.Now()
+	return time.Time{}
 }
 
 func applyMacOSSandboxDenialFilters(
@@ -1103,7 +1103,7 @@ func applyMacOSSandboxDenialFilters(
 	out := make([]Denial, 0, len(denials))
 	seen := map[string]bool{}
 	for _, denial := range denials {
-		if shouldFilterMacOSSandboxDenial(denial, cmd, filter, DenialFilterDenials) {
+		if shouldFilterMacOSSandboxDenial(denial, cmd, filter) {
 			continue
 		}
 		key := denial.Operation + "\x00" + denial.Target
@@ -1129,7 +1129,6 @@ func cloneDenialFilter(filter DenialFilter) DenialFilter {
 	}
 	for i, rule := range filter.Ignore {
 		clone.Ignore[i] = DenialIgnoreRule{
-			Scope:       rule.Scope,
 			Command:     rule.Command,
 			Operations:  append([]string(nil), rule.Operations...),
 			Targets:     append([]DenialTargetMatcher(nil), rule.Targets...),
@@ -1143,15 +1142,11 @@ func shouldFilterMacOSSandboxDenial(
 	denial Denial,
 	cmd string,
 	filter DenialFilter,
-	scope DenialFilterScope,
 ) bool {
 	if !filter.DisableAutomatic && macosSandboxDenialAutoNoise(denial) {
 		return true
 	}
 	for _, rule := range filter.Ignore {
-		if !macosDenialFilterScopeMatches(rule.Scope, scope) {
-			continue
-		}
 		if rule.Command != "" && !strings.Contains(cmd, rule.Command) {
 			continue
 		}
@@ -1171,17 +1166,6 @@ func shouldFilterMacOSSandboxDenial(
 		return true
 	}
 	return false
-}
-
-func macosDenialFilterScopeMatches(ruleScope, want DenialFilterScope) bool {
-	switch ruleScope {
-	case "", DenialFilterAll:
-		return true
-	case DenialFilterDenials:
-		return want == DenialFilterDenials || want == DenialFilterAll
-	default:
-		return false
-	}
 }
 
 func macosDenialTargetMatches(target string, matchers []DenialTargetMatcher) bool {
