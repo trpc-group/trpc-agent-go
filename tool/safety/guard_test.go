@@ -506,7 +506,7 @@ func TestResourceAbuse_SleepVariants(t *testing.T) {
 		{"sleep 10m", true},         // 600s > 300s
 		{"sleep 2d", true},           // 2 days
 		{"sleep 60", false},          // 60s <= 300s, allowed
-		{"sleep abc", false},         // unparseable suffix: no duration match, not blocked by design
+		{"sleep abc", true},          // unparseable — deny to prevent bypass
 		{"for ((;;)) echo x", true},  // infinite loop
 	}
 

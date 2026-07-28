@@ -93,13 +93,15 @@ func EvaluateCommand(req *ScanRequest, policy *Policy) Result {
 		return res
 	}
 
-	// 6. Dependencies & Env Change / Ask Rules Check
-	if res, matched := checkAskRulesAndDependencies(cmdStr, policy); matched {
+	// 6. Dangerous Commands & Shell Safe Parsing
+	// (runs before ask rules so privilege-escalation combos like
+	//  "sudo apt install" are denied outright, not merely asking)
+	if res, matched := checkShellSafeAndDangerous(cmdStr, policy); matched {
 		return res
 	}
 
-	// 7. Dangerous Commands & Shell Safe Parsing
-	if res, matched := checkShellSafeAndDangerous(cmdStr, policy); matched {
+	// 7. Dependencies & Env Change / Ask Rules Check
+	if res, matched := checkAskRulesAndDependencies(cmdStr, policy); matched {
 		return res
 	}
 
@@ -379,22 +381,39 @@ func checkResourceAbuse(cmd string) (Result, bool) {
 		if len(parts) >= 2 {
 			val := parts[1]
 			var totalSecs float64
+			parsed := false
+
 			if dur, err := time.ParseDuration(val); err == nil {
 				totalSecs = dur.Seconds()
+				parsed = true
 			} else if secs, err := strconv.Atoi(val); err == nil {
 				totalSecs = float64(secs)
+				parsed = true
 			} else if strings.HasSuffix(val, "m") {
 				if m, err := strconv.Atoi(strings.TrimSuffix(val, "m")); err == nil {
 					totalSecs = float64(m * 60)
+					parsed = true
 				}
 			} else if strings.HasSuffix(val, "h") {
 				if h, err := strconv.Atoi(strings.TrimSuffix(val, "h")); err == nil {
 					totalSecs = float64(h * 3600)
+					parsed = true
 				}
 			} else if strings.HasSuffix(val, "d") {
 				if d, err := strconv.Atoi(strings.TrimSuffix(val, "d")); err == nil {
 					totalSecs = float64(d * 86400)
+					parsed = true
 				}
+			}
+
+			if !parsed {
+				return Result{
+					Decision:       tool.PermissionActionDeny,
+					RiskLevel:      RiskLevelHigh,
+					RuleID:         "RULE_EXCESSIVE_SLEEP",
+					Evidence:       fmt.Sprintf("Unparseable sleep duration %q; malformed input may attempt to bypass safety checks", val),
+					Recommendation: "Provide a valid sleep duration in seconds or a recognized suffix (s, m, h, d)",
+				}, true
 			}
 
 			if totalSecs > 300 {
