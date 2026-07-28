@@ -28,7 +28,27 @@ func (r *Runtime) RunProgram(
 	ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	return r.runProgram(ctx, ws, spec)
+	result, err := r.runProgram(ctx, ws, spec)
+	return normalizeRunProgramResult(result, err)
+}
+
+func normalizeRunProgramResult(
+	result codeexecutor.RunResult,
+	err error,
+) (codeexecutor.RunResult, error) {
+	if err == nil {
+		return result, nil
+	}
+	var classified *sandboxError
+	if errors.As(err, &classified) {
+		return result, err
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		return result, err
+	}
+	result.TimedOut = true
+	result.ExitCode = -1
+	return result, newSandboxError(ErrTimeout, "run", "", err)
 }
 
 func (r *Runtime) runProgram(
