@@ -773,7 +773,7 @@ go vet ./...
 
 ## Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=trpc-group/trpc-agent-go&type=Date)](https://star-history.com/#trpc-group/trpc-agent-go&Date)
+[![Star History Chart](https://raw.githubusercontent.com/trpc-group/trpc-agent-go/star-history/star-history.svg)](https://github.com/trpc-group/trpc-agent-go/tree/star-history)
 
 ---
 
