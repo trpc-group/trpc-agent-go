@@ -78,6 +78,14 @@ function historyPoints(stargazers, updated) {
   return mergePoint(points, { date: updated, stars });
 }
 
+function snapshotHistory(history, updated, stars) {
+  return {
+    ...history,
+    updated,
+    points: mergePoint(history.points, { date: updated, stars }),
+  };
+}
+
 function validateHistory(history, repository, historyFile) {
   if (
     history.repository !== repository ||
@@ -275,14 +283,11 @@ function bootstrap(repository, historyFile, svgFile) {
 function snapshot(repository, historyFile, svgFile) {
   const history = readHistory(historyFile, repository);
   const stars = fetchStarCount(repository);
-  if (history.points.at(-1).stars !== stars) {
-    const updated = new Date().toISOString().slice(0, 10);
-    history.updated = updated;
-    history.points = mergePoint(history.points, { date: updated, stars });
-  }
-  writeOutputs(history, historyFile, svgFile);
+  const updated = new Date().toISOString().slice(0, 10);
+  const snapshot = snapshotHistory(history, updated, stars);
+  writeOutputs(snapshot, historyFile, svgFile);
   console.log(
-    `snapshotted ${history.points.at(-1).stars} stars through ${history.updated}`,
+    `snapshotted ${snapshot.points.at(-1).stars} stars through ${updated}`,
   );
 }
 
@@ -308,6 +313,25 @@ function selfTest() {
       { date: "2026-07-27", stars: 3 },
       { date: "2026-07-28", stars: 3 },
     ],
+  );
+  assert.deepEqual(
+    snapshotHistory(
+      {
+        repository: "owner/repo",
+        updated: "2026-07-27",
+        points: [{ date: "2026-07-27", stars: 3 }],
+      },
+      "2026-07-28",
+      3,
+    ),
+    {
+      repository: "owner/repo",
+      updated: "2026-07-28",
+      points: [
+        { date: "2026-07-27", stars: 3 },
+        { date: "2026-07-28", stars: 3 },
+      ],
+    },
   );
   const svg = renderSVG({
     repository: "owner/repo",
