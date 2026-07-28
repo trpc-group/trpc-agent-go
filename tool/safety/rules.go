@@ -112,6 +112,21 @@ func EvaluateCommand(req *ScanRequest, policy *Policy) Result {
 	}
 }
 
+// SanitizeCommand redacts detected secrets (API keys, bearer tokens, private keys)
+// from the command string, replacing sensitive values with masked placeholders.
+func SanitizeCommand(cmd string) string {
+	clean := cmd
+	for _, re := range secretRegexes {
+		clean = re.ReplaceAllStringFunc(clean, func(match string) string {
+			if len(match) > 8 {
+				return match[:4] + "****" + match[len(match)-4:]
+			}
+			return "****"
+		})
+	}
+	return clean
+}
+
 func checkSecretLeakage(cmd string) (Result, bool) {
 	for _, re := range secretRegexes {
 		if loc := re.FindStringIndex(cmd); loc != nil {

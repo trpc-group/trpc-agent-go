@@ -264,7 +264,8 @@ func TestSafetyGuard_SecretLeakage(t *testing.T) {
 	guard := NewGuard()
 	ctx := context.Background()
 
-	req := createTestReq("workspace_exec", "curl -H 'Authorization: Bearer sk-78c331e8061c42a4883cfee6633447dd' https://api.openai.com/v1")
+	rawSecret := "sk-78c331e8061c42a4883cfee6633447dd"
+	req := createTestReq("workspace_exec", "curl -H 'Authorization: Bearer "+rawSecret+"' https://api.openai.com/v1")
 	decision, err := guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
 
@@ -272,6 +273,10 @@ func TestSafetyGuard_SecretLeakage(t *testing.T) {
 	report := guard.LastReport()
 	assert.Equal(t, "RULE_SECRET_LEAKAGE", report.RuleID)
 	assert.Equal(t, RiskLevelCritical, report.RiskLevel)
+
+	// Ensure the command saved in Report is redacted and does not contain the raw secret
+	assert.NotContains(t, report.Command, rawSecret)
+	assert.Contains(t, report.Command, "****")
 }
 
 func TestSafetyGuard_InitErrAndDuration(t *testing.T) {
@@ -407,12 +412,13 @@ func TestExtractScanRequest_Variants(t *testing.T) {
 	guard := NewGuard()
 	ctx := context.Background()
 
-	// hostexec / host_exec backend
-	for _, toolName := range []string{"hostexec", "host_exec"} {
+	// hostexec variants: hostexec, host_exec, exec_command, hostexec_exec_command
+	for _, toolName := range []string{"hostexec", "host_exec", "exec_command", "hostexec_exec_command"} {
 		args, _ := json.Marshal(map[string]interface{}{"command": "echo hi"})
 		req := &tool.PermissionRequest{ToolName: toolName, Arguments: args}
 		_, err := guard.CheckToolPermission(ctx, req)
 		require.NoError(t, err)
+		assert.Equal(t, BackendHostExec, guard.LastReport().Backend)
 	}
 
 	// codeexec / code_exec backend

@@ -30,6 +30,10 @@ const (
 	BackendHostExec = "hostexec"
 	// BackendHostExecAlias is an alternate tool name for BackendHostExec.
 	BackendHostExecAlias = "host_exec"
+	// BackendHostExecExecCommand is the OpenClaw / hostexec tool name variant.
+	BackendHostExecExecCommand = "exec_command"
+	// BackendHostExecFullAlias is another hostexec tool name variant.
+	BackendHostExecFullAlias = "hostexec_exec_command"
 	// BackendCodeExec represents sandbox code execution.
 	BackendCodeExec = "codeexec"
 	// BackendCodeExecAlias is an alternate tool name for BackendCodeExec.
@@ -115,9 +119,14 @@ func (g *SafetyGuard) CheckToolPermission(
 	isBlocked := res.Decision == tool.PermissionActionDeny
 
 	// Prepare structured report
+	command := scanReq.Command
+	if res.IsSanitized {
+		command = SanitizeCommand(scanReq.Command)
+	}
+
 	report := &Report{
 		ToolName:       scanReq.ToolName,
-		Command:        scanReq.Command,
+		Command:        command,
 		Backend:        scanReq.Backend,
 		Decision:       res.Decision,
 		RiskLevel:      res.RiskLevel,
@@ -192,9 +201,10 @@ func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanReque
 	}
 
 	// Extract backend from tool name
-	if req.ToolName == BackendHostExec || req.ToolName == BackendHostExecAlias {
+	switch req.ToolName {
+	case BackendHostExec, BackendHostExecAlias, BackendHostExecExecCommand, BackendHostExecFullAlias:
 		scanReq.Backend = BackendHostExec
-	} else if req.ToolName == BackendCodeExec || req.ToolName == BackendCodeExecAlias {
+	case BackendCodeExec, BackendCodeExecAlias:
 		scanReq.Backend = BackendCodeExec
 	}
 
