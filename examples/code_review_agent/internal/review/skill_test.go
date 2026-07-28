@@ -131,6 +131,34 @@ func TestSkillCheckScriptDetectsSecretShapes(t *testing.T) {
 	}
 }
 
+func TestSkillCheckScriptRedactsShortDeclarationSecretsInBothEngines(t *testing.T) {
+	skillRoot, err := SkillRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "opaque-short-declaration-credential"
+	diff := "diff --git a/config.go b/config.go\n" +
+		"--- a/config.go\n" +
+		"+++ b/config.go\n" +
+		"@@ -0,0 +1 @@\n" +
+		"+apiKey := \"" + secret + "\"\n"
+
+	for _, env := range [][]string{nil, fallbackScriptEnv(t)} {
+		payload := runSkillCheck(t, skillRoot, diff, env)
+		if got := countSkillRule(payload.Findings, "secret-leak"); got != 1 {
+			t.Fatalf("expected one secret finding, got %d: %+v", got, payload.Findings)
+		}
+		for _, finding := range payload.Findings {
+			if strings.Contains(finding.Evidence, secret) {
+				t.Fatalf("skill output leaked short-declaration secret: %+v", finding)
+			}
+			if finding.RuleID == "secret-leak" && !strings.Contains(finding.Evidence, "apiKey=[REDACTED]") {
+				t.Fatalf("secret finding did not preserve redaction marker: %+v", finding)
+			}
+		}
+	}
+}
+
 func TestSkillCheckScriptReportsMissingTestHintForAnyGoFile(t *testing.T) {
 	t.Parallel()
 
