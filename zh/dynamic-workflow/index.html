@@ -3252,6 +3252,8 @@ workflow。这样可以避免 workflow 意外获得写操作、凭证、shell �
 <p>默认不传 <code>instance_id</code> 时，每次 <code>agent(...)</code> 调用都会创建独立的子 Agent
 历史，适合并发分支。显式传相同 <code>instance_id</code> 表示复用同一条子历史；
 并发调用同一个 <code>instance_id</code> 会被串行执行，避免同时读写同一段会话历史。</p>
+<p>复用的历史包含子 Agent 的输入和产生的事件。动态 <code>instruction</code> 只配置当前这次
+调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 <code>input</code> 中。</p>
 <p>这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
 也不能新增基础 Agent 本来没有的宿主能力。</p>
 <h2 id="_3">一个完整例子</h2>
@@ -3418,6 +3420,10 @@ first analyze risk and rationale, then make an approval decision.</p>
 <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-11-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-11-1"><a id="__codelineno-11-1" name="__codelineno-11-1"></a><span class="n">facts</span> <span class="o">=</span> <span class="k">await</span> <span class="n">call_tool</span><span class="p">(</span><span class="s2">&quot;search_catalog&quot;</span><span class="p">,</span> <span class="n">query</span><span class="o">=</span><span class="s2">&quot;trail backpack&quot;</span><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p><code>call_tool</code> 只能调用 <code>WithCodeCallableTools</code> 显式传入的工具。它不会自动看到根 Agent 的工具。</p>
+<p><code>agent(..., tools=[...])</code> 只是授权子 Agent 使用这些工具，并不保证模型一定调用；
+结构化输出约束的是子 Agent 最终回答的形状，而不是字段的数据来源。如果 Python
+控制流必须使用宿主工具的精确结果，应先通过 <code>call_tool</code> 取得原始数据，再交给
+Agent 解读。</p>
 <p>不要把执行类工具、<code>run_workflow</code> 自身、<code>execute_tool_code</code>、<code>transfer_to_agent</code>、
 <code>await_user_reply</code>、workspace 工具或 AgentTool 放进 <code>WithCodeCallableTools</code>。这些工具容易形成
 递归或混合控制流边界；workflow 调用子 Agent 应使用 <code>agent(...)</code>。</p>
@@ -3447,8 +3453,38 @@ Go 框架掌控。</p>
 <p>相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
 Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。</p>
-<p>生产环境应提供自己的 <code>dynamicworkflow.Runtime</code>，例如容器、microVM 或远端 sandbox，
-并在里面落实文件系统、网络、进程、依赖和资源限制。</p>
+<p>需要本地 OS 隔离时，可以直接使用内置 sandbox runner：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-12-1">1</a></span>
+<span class="normal"><a href="#__codelineno-12-2">2</a></span>
+<span class="normal"><a href="#__codelineno-12-3">3</a></span>
+<span class="normal"><a href="#__codelineno-12-4">4</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+</span><span id="__span-12-2"><a id="__codelineno-12-2" name="__codelineno-12-2"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewSandboxRunner</span><span class="p">(),</span>
+</span><span id="__span-12-3"><a id="__codelineno-12-3" name="__codelineno-12-3"></a><span class="w">    </span><span class="nx">childAgents</span><span class="p">,</span>
+</span><span id="__span-12-4"><a id="__codelineno-12-4" name="__codelineno-12-4"></a><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>使用上面不带 option 的构造方式时，每次 workflow 都会使用一次性 workspace 和
+clean process environment。该 runner 复用 <code>codeexecutor/sandbox</code>，默认限制网络；
+sandbox 初始化失败时会直接报错，不会 fallback 到本地执行。Linux 需要
+<code>bubblewrap</code>，macOS 使用 <code>/usr/bin/sandbox-exec</code>，Windows 尚未实现 managed
+backend。</p>
+<p><code>SandboxRunner.Timeout</code> 会为完整 workflow 设置 deadline，并把取消信号传导给 guest、
+宿主 Tool 和子 Agent callback。Go context 采用协作式取消，call handler 必须在
+context 结束后及时返回。零值不会额外添加 deadline，而是依赖调用方 context；生产
+环境必须为调用方 context 设置 deadline，或者显式配置该 timeout。两者同时存在时，
+以更早到期者为准。CPU、内存和进程数配额仍应由外层容器、microVM 或远端 runtime
+提供。</p>
+<p><code>SandboxRunner.Python</code> 为空时，sandbox 会从自己的 clean PATH 解析 <code>python3</code>。任何
+非空值（包括显式的 <code>"python3"</code>）都会先通过宿主 PATH 解析并转换成绝对路径。如果
+解释器不在 backend 默认开放的 runtime 路径中，还需要通过
+<code>sandbox.WorkspaceWriteProfile().WithReadPaths(...)</code> 扩展 managed permission
+profile，并将其传给 <code>sandbox.WithPermissionProfile(...)</code>。</p>
+<p>OS sandbox 仍然运行在宿主机上，并会开放启动 Python 所需的平台与 runtime 路径；
+具体只读可见范围因 backend 而异。它不等价于 microVM 级租户边界。如果 guest 不能
+看到任何宿主文件，或者需要更强的资源与租户隔离，应使用容器、microVM 或远端
+<code>Runtime</code>。</p>
+<p>可运行代码见
+<a href="https://github.com/trpc-group/trpc-agent-go/tree/main/examples/dynamicworkflow/sandbox">Sandbox Dynamic Workflow 示例</a>：
+生成的 workflow 在 managed sandbox 中运行，子 Agent 工具与事件仍留在 Go 框架内。</p>
 <p>生成的 workflow 代码应该调用宿主工具，而不是直接调用 HTTP API。认证、授权、
 重试、幂等、审计、限流和 API 版本适配仍应由业务工具在 Go 侧掌控。</p>
 <h2 id="_5">如何选择能力</h2>
@@ -3503,7 +3539,7 @@ Python 子集。这些是有意的行为变化，但不会构成安全 sandbox �
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 08:08:46 UTC">2026-07-24 08:08:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:18:21 UTC">2026-07-28 06:18:21</span>
   </span>
 
     

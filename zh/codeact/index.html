@@ -3001,7 +3001,11 @@
 <span class="normal"><a href="#__codelineno-0-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1"></a>LLM -&gt; execute_tool_code -&gt; Runtime -&gt; guest call_tool(name, JSON args)
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2"></a>                                  -&gt; Go Gateway -&gt; trpc Tool
 </span></code></pre></div></td></tr></table></div>
-<p><code>Gateway</code> 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。<code>Runtime</code> 是传输/执行边界：内置 <code>LocalRunner</code> 用 Python stdio guest 实现；远端 sandbox、microVM、容器服务或平台原生 callback 后端应直接实现 <code>codeact.Runtime</code>，并把 sandbox 产生的 <code>ToolCall</code> 路由给传入的 <code>ToolCallHandler</code>。</p>
+<p><code>Gateway</code> 是能力边界，负责 allowlist、schema 校验和真实 Go tool 调用。<code>Runtime</code>
+是传输/执行边界：<code>LocalRunner</code> 直接运行 Python stdio guest；<code>SandboxRunner</code> 在每次
+调用新建的 OS sandbox workspace 中运行同一套 callback 协议。远端服务或 microVM
+平台应直接实现 <code>codeact.Runtime</code>，并把 guest 产生的 <code>ToolCall</code> 路由给传入的
+<code>ToolCallHandler</code>。</p>
 <h2 id="_2">安全边界</h2>
 <p><code>LocalRunner</code> 仅用于开发或已经隔离的容器/VM；它不是安全 sandbox。它使用共享的
 local Python runtime，为本地生成代码执行提供 defense-in-depth 防护，包括限制源码大小、
@@ -3014,7 +3018,30 @@ Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程
 <p>相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
 目录，并会拒绝超过 64 KiB 的生成源码，除非调用方显式调整限制。这些是有意的行为
 变化，但不会构成安全 sandbox 边界。</p>
-<p>生产应用应基于已有远端 sandbox、microVM 或容器服务实现 <code>codeact.Runtime</code>，并由应用侧配置隔离、资源和依赖策略。</p>
+<p>需要本地 OS 隔离时，可以在原来传入 <code>LocalRunner</code> 的位置改用：</p>
+<div class="language-go highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span>
+<span class="normal"><a href="#__codelineno-1-2">2</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nx">runtime</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">codeact</span><span class="p">.</span><span class="nx">NewSandboxRunner</span><span class="p">()</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2"></a><span class="nx">orchestrator</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">toolcode</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span><span class="nx">runtime</span><span class="p">,</span><span class="w"> </span><span class="nx">managedTools</span><span class="p">)</span>
+</span></code></pre></div></td></tr></table></div>
+<p>使用上面不带 option 的构造方式时，每次执行都会使用一次性 workspace 和 clean
+environment。它使用 <code>codeexecutor/sandbox</code> 的 managed backend，默认限制网络；
+如果 sandbox 初始化失败，会直接报错，不会 fallback 到 <code>LocalRunner</code>。Linux 需要
+<code>bubblewrap</code>，macOS 使用 <code>/usr/bin/sandbox-exec</code>，Windows 尚未实现 managed
+sandbox。</p>
+<p><code>SandboxRunner.Timeout</code> 会为完整执行设置 deadline，并把取消信号传导给 guest 和宿主
+Tool 调用。Go context 采用协作式取消，Tool handler 必须在 context 结束后及时返回。
+零值不会额外添加 deadline，而是依赖调用方 context；生产环境必须为调用方 context
+设置 deadline，或者显式配置该 timeout。两者同时存在时，以更早到期者为准。CPU、
+内存和进程数配额仍应由外层容器、microVM 或远端 runtime 提供。</p>
+<p><code>SandboxRunner.Python</code> 为空时，sandbox 会从自己的 clean PATH 解析 <code>python3</code>。任何
+非空值（包括显式的 <code>"python3"</code>）都会先通过宿主 PATH 解析并转换成绝对路径。如果
+解释器不在 backend 默认开放的 runtime 路径中，还需要通过
+<code>sandbox.WorkspaceWriteProfile().WithReadPaths(...)</code> 扩展 managed permission
+profile，并将其传给 <code>sandbox.WithPermissionProfile(...)</code>。</p>
+<p>OS sandbox 仍然运行在宿主机上，并会开放启动解释器所需的平台与 runtime 路径；具体
+只读可见范围因 backend 而异。它不等价于 microVM 级租户边界。如果 guest 不能看到
+任何宿主文件，或者需要更强的 CPU、内存和租户隔离，应使用容器、microVM 或远端
+<code>Runtime</code>。</p>
 <h2 id="http-api">为什么不让生成代码直接调用 HTTP API？</h2>
 <p>工具代码编排把动态控制流和系统能力访问分开：生成代码适合循环、分支和数据转换，业务 API 访问仍应是宿主侧工具。这样认证、授权、重试与幂等策略、API 版本适配、审计和限流仍由应用代码掌控，而不是落在模型生成的代码中。</p>
 <p>确实需要 HTTP 能力时，应把具体业务操作做成宿主 adapter tool；如果需要一组较宽但明确受限的 HTTP 能力，可暴露受约束的 <code>http_request</code> 类工具，由宿主控制允许的域名和方法、凭证以及响应大小限制。不能把 <code>LocalRunner</code> 的通用 Python 环境当作安全控制；生产 runtime 必须自行落实网络和进程策略。</p>
@@ -3047,7 +3074,7 @@ Workflow 不同，不应用 AST 或 builtin allowlist。二者共享的是进程
 <p>工具 A/B 的小型结构化数据经 JSON 传递；中间结果留在 guest 代码中，只有最终 <code>value</code> 和捕获的 <code>stdout</code> 会作为外层工具结果返回。应返回紧凑的聚合结果、标识符或 artifact/workspace 引用，而不是把大块原始数据交回模型。大数据应返回 artifact/workspace 引用，由 guest 在挂载 workspace 中处理。业务语义不匹配必须用显式转换代码或宿主 adapter tool 处理，CodeAct 不会猜测字段或单位含义。</p>
 <p>要运行 Agent 的多工具编排示例（产品搜索 → 库存筛选 → 创建报价），设置
 <code>OPENAI_API_KEY</code>（以及可选的 <code>OPENAI_BASE_URL</code>）后执行：</p>
-<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-1-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1"></a><span class="nb">cd</span><span class="w"> </span>examples<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>./codeact<span class="w"> </span>-model<span class="w"> </span>gpt-5
+<div class="language-bash highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-2-1">1</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="nb">cd</span><span class="w"> </span>examples<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span>go<span class="w"> </span>run<span class="w"> </span>./codeact<span class="w"> </span>-model<span class="w"> </span>gpt-5
 </span></code></pre></div></td></tr></table></div>
 <p>该示例只把 <code>execute_tool_code</code> 暴露给模型；<code>search_catalog</code>、<code>get_inventory</code> 和
 <code>create_quote</code> 仅能由 guest Python 经 allowlist 调用。它不设置 <code>GenerationConfig</code>，
@@ -3113,7 +3140,7 @@ tools 自动推导。应优先放业务工具、数据工具和宿主侧 adapter
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月24日 08:08:46 UTC">2026-07-24 08:08:46</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:18:21 UTC">2026-07-28 06:18:21</span>
   </span>
 
     
