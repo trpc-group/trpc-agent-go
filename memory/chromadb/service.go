@@ -540,15 +540,15 @@ func (svc *Service) embed(ctx context.Context, text string) ([]float32, error) {
 	if len(values) == 0 {
 		return nil, errors.New("generate embedding: received empty embedding")
 	}
-	if err := svc.validateDimension(len(values)); err != nil {
-		return nil, err
-	}
 	result := make([]float32, len(values))
 	for i, value := range values {
 		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > math.MaxFloat32 {
 			return nil, fmt.Errorf("embedding value %d is not a finite float32", i)
 		}
 		result[i] = float32(value)
+	}
+	if err := svc.validateDimension(len(values)); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

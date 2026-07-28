@@ -307,6 +307,13 @@ func TestOptionsRejectInvalidFinalState(t *testing.T) {
 			match: "query",
 		},
 		{
+			name: "URL empty query",
+			options: []ServiceOpt{
+				WithBaseURL("https://example.com?"), WithEmbedder(embedder),
+			},
+			match: "query",
+		},
+		{
 			name: "URL fragment",
 			options: []ServiceOpt{
 				WithBaseURL("https://example.com/#fragment"), WithEmbedder(embedder),
@@ -447,6 +454,20 @@ func TestCanonicalHTTPHeaders(t *testing.T) {
 			_, err := canonicalHTTPHeaders(map[string]string{name: "value"})
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "invalid HTTP header name")
+		})
+	}
+
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{name: "NUL value", value: "before\x00after"},
+		{name: "DEL value", value: "before\x7fafter"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := canonicalHTTPHeaders(map[string]string{"X-Test": tt.value})
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "invalid value")
 		})
 	}
 }

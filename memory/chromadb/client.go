@@ -114,8 +114,11 @@ func copyHTTPClient(client *http.Client) (*http.Client, *http.Transport) {
 		copied := *client
 		return &copied, nil
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	return &http.Client{Transport: transport}, transport
+	if transport, ok := http.DefaultTransport.(*http.Transport); ok {
+		owned := transport.Clone()
+		return &http.Client{Transport: owned}, owned
+	}
+	return &http.Client{Transport: http.DefaultTransport}, nil
 }
 
 // collectSecretValues gathers configured credentials for response redaction.

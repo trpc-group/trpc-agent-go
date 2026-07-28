@@ -64,7 +64,10 @@ func (svc *Service) SearchMemories(
 	if err != nil {
 		return nil, err
 	}
-	results = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results)
+	results, err = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results)
+	if err != nil {
+		return nil, err
+	}
 	if searchOpts.HybridSearch {
 		results, err = svc.applyHybridSearch(ctx, scope, searchOpts, results)
 		if err != nil {
@@ -113,20 +116,26 @@ func (svc *Service) applyKindFallback(
 	embedding []float32,
 	opts memory.SearchOptions,
 	results []*memory.Entry,
-) []*memory.Entry {
+) ([]*memory.Entry, error) {
 	if opts.Kind == "" || !opts.KindFallback ||
 		len(results) >= imemory.MinKindFallbackResults {
-		return results
+		return results, nil
 	}
 	limit := opts.MaxResults
 	fallbackOpts := opts
 	fallbackOpts.Kind = ""
 	fallbackOpts.KindFallback = false
 	fallback, err := svc.searchDense(ctx, scope, embedding, fallbackOpts)
-	if err != nil || len(fallback) == 0 {
-		return results
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return results, nil
 	}
-	return imemory.MergeSearchResults(results, fallback, opts.Kind, limit)
+	if len(fallback) == 0 {
+		return results, nil
+	}
+	return imemory.MergeSearchResults(results, fallback, opts.Kind, limit), nil
 }
 
 // applyHybridSearch fuses dense and bounded local keyword ranks with shared RRF logic.

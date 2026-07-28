@@ -751,6 +751,27 @@ func TestServiceEmbedValidatesVectors(t *testing.T) {
 	}
 }
 
+func TestServiceEmbedDoesNotCommitDimensionOnInvalidVector(t *testing.T) {
+	service := &Service{
+		opts: serviceOpts{
+			embedder: &testEmbedder{
+				values: map[string][]float64{
+					"invalid": {math.NaN()},
+					"valid":   {1, 0},
+				},
+			},
+		},
+	}
+
+	_, err := service.embed(context.Background(), "invalid")
+	require.ErrorContains(t, err, "finite float32")
+
+	values, err := service.embed(context.Background(), "valid")
+	require.NoError(t, err)
+	assert.Equal(t, []float32{1, 0}, values)
+	assert.Equal(t, 2, service.indexDimension)
+}
+
 func ExampleNewService() {
 	embedder := openaiembedder.New(
 		openaiembedder.WithModel("text-embedding-3-small"),

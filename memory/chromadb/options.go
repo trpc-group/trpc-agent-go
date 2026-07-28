@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/net/http/httpguts"
+
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/embedder"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	"trpc.group/trpc-go/trpc-agent-go/memory/extractor"
@@ -216,7 +218,7 @@ func validateBaseURL(opts serviceOpts) (*url.URL, error) {
 	if parsed.User != nil {
 		return nil, errors.New("base URL must not contain user information")
 	}
-	if parsed.RawQuery != "" {
+	if parsed.RawQuery != "" || parsed.ForceQuery {
 		return nil, errors.New("base URL must not contain a query")
 	}
 	if parsed.Fragment != "" {
@@ -256,7 +258,7 @@ func canonicalHTTPHeaders(headers map[string]string) (map[string]string, error) 
 			return nil, fmt.Errorf("duplicate HTTP header %q", canonical)
 		}
 		value := headers[name]
-		if strings.ContainsAny(value, "\r\n") {
+		if !httpguts.ValidHeaderFieldValue(value) {
 			return nil, fmt.Errorf("invalid value for HTTP header %q", canonical)
 		}
 		result[canonical] = value

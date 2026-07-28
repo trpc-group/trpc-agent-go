@@ -9,8 +9,12 @@
 package chromadb
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"testing"
 	"time"
@@ -98,6 +102,69 @@ func TestServiceSearchMemoriesKindFallback(t *testing.T) {
 	assert.Equal(t, memory.KindEpisode, results[0].Memory.Kind)
 	assert.Equal(t, "episode", results[0].Memory.Memory)
 	assert.Equal(t, 4, embedder.callCount())
+}
+
+func TestServiceSearchMemoriesPropagatesKindFallbackCancellation(t *testing.T) {
+	metadata := validTestMetadata()
+	metadata[metadataKindKey] = string(memory.KindEpisode)
+	responseBody, err := json.Marshal(map[string]any{
+		"ids":       [][]string{{"id"}},
+		"documents": [][]string{{"episode"}},
+		"metadatas": [][]map[string]any{{metadata}},
+		"distances": [][]float64{{0}},
+		"include":   []string{"documents", "metadatas", "distances"},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requestCount := 0
+	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		requestCount++
+		if requestCount == 2 {
+			cancel()
+			return nil, context.Canceled
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(responseBody)),
+		}, nil
+	})
+	service := &Service{
+		opts: serviceOpts{
+			embedder:            &testEmbedder{dimension: 2},
+			maxResults:          3,
+			similarityThreshold: 0.3,
+		},
+		client: &apiClient{
+			baseURL:    "http://chroma.test",
+			httpClient: &http.Client{Transport: transport},
+			headers:    make(http.Header),
+			timeout:    time.Second,
+		},
+		collection: collectionRef{
+			databaseRef: databaseRef{tenant: "tenant", database: "database"},
+			id:          "00000000-0000-0000-0000-000000000001",
+		},
+		indexDimension: 2,
+	}
+
+	_, err = service.SearchMemories(
+		ctx,
+		memory.UserKey{AppName: "app", UserID: "user"},
+		"query",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:               "query",
+			Kind:                memory.KindEpisode,
+			KindFallback:        true,
+			MaxResults:          3,
+			SimilarityThreshold: 0.3,
+		}),
+	)
+
+	assert.Equal(t, 2, requestCount)
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestServiceSearchMemoriesTimeFilterIncludesFacts(t *testing.T) {

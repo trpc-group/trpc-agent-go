@@ -725,6 +725,28 @@ func TestClientDeleteRequiresSelector(t *testing.T) {
 	assert.Contains(t, err.Error(), "requires")
 }
 
+func TestCopyHTTPClientDoesNotPanicForCustomDefaultTransport(t *testing.T) {
+	original := http.DefaultTransport
+	t.Cleanup(func() {
+		http.DefaultTransport = original
+	})
+	http.DefaultTransport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return nil, context.Canceled
+	})
+
+	var (
+		client         *http.Client
+		ownedTransport *http.Transport
+	)
+	require.NotPanics(t, func() {
+		client, ownedTransport = copyHTTPClient(nil)
+	})
+	require.NotNil(t, client)
+	if ownedTransport != nil {
+		t.Cleanup(ownedTransport.CloseIdleConnections)
+	}
+}
+
 func deleteResponse(value int) *deleteRecordsResponse {
 	return &deleteRecordsResponse{
 		Deleted: responseField[int]{value: value, present: true},
