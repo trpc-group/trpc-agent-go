@@ -93,6 +93,41 @@ func TestClientRetriesTransientStatusAndClosesBodies(t *testing.T) {
 	}
 }
 
+func TestClientRetriesTruncatedSuccessfulJSONIntoFreshResponse(t *testing.T) {
+	var calls atomic.Int32
+	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		call := calls.Add(1)
+		body := `{"first":"stale","second":`
+		if call == 2 {
+			body = `{"second":"fresh"}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})
+	client := &apiClient{
+		baseURL:    "http://chroma.test",
+		httpClient: &http.Client{Transport: transport},
+		headers:    make(http.Header),
+		timeout:    time.Second,
+	}
+	response := struct {
+		First  string `json:"first"`
+		Second string `json:"second"`
+	}{}
+
+	err := client.do(context.Background(), requestSpec{
+		method: http.MethodGet, path: "/", expectedStatus: http.StatusOK,
+	}, &response)
+
+	require.NoError(t, err)
+	assert.Equal(t, int32(2), calls.Load())
+	assert.Empty(t, response.First)
+	assert.Equal(t, "fresh", response.Second)
+}
+
 func TestClientSendsAuthenticationAndCustomHeaders(t *testing.T) {
 	var authorization, apiKey, custom string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -169,6 +204,33 @@ func TestClientRedactsSecretsFromErrorResponse(t *testing.T) {
 	var apiErr *apiError
 	require.ErrorAs(t, err, &apiErr)
 	assert.LessOrEqual(t, len(apiErr.message), maxErrorBodyPreview+len("…"))
+}
+
+func TestClientRedactsSecretAcrossErrorPreviewBoundary(t *testing.T) {
+	const secret = "boundary-crossing-api-key"
+	visibleSecretBytes := len(secret) - 1
+	body := strings.Repeat("x", maxErrorBodyPreview-visibleSecretBytes) +
+		secret +
+		strings.Repeat("y", maxErrorBodyPreview)
+	server := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		writer.WriteHeader(http.StatusBadRequest)
+		_, _ = writer.Write([]byte(body))
+	}))
+	defer server.Close()
+	opts := defaultServiceOpts()
+	opts.baseURL = server.URL
+	opts.apiKey = secret
+	client := newAPIClient(opts)
+
+	err := client.do(context.Background(), requestSpec{
+		method: http.MethodGet, path: "/error", expectedStatus: http.StatusOK,
+	}, nil)
+
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), secret[:visibleSecretBytes])
 }
 
 func TestClientRejectsUnsafeRedirectBeforeSendingCredentials(t *testing.T) {

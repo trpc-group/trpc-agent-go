@@ -53,6 +53,43 @@ func TestRecordRoundTripPreservesMetadata(t *testing.T) {
 	assert.Equal(t, eventTime, *decoded.entry.Memory.EventTime)
 }
 
+func TestRecordRoundTripPreservesNanosecondBoundaryEventTimes(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventTime time.Time
+	}{
+		{name: "minimum", eventTime: time.Unix(0, math.MinInt64).UTC()},
+		{name: "maximum", eventTime: time.Unix(0, math.MaxInt64).UTC()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			record := newAddRecord(
+				recordScope{appName: "app", userID: "user"},
+				"episode",
+				nil,
+				&memory.Metadata{
+					Kind:      memory.KindEpisode,
+					EventTime: &tt.eventTime,
+				},
+				time.Unix(0, 0).UTC(),
+			)
+			encoded, err := json.Marshal(addMetadata(record))
+			require.NoError(t, err)
+			decodedMetadata := map[string]any{}
+			decoder := json.NewDecoder(bytes.NewReader(encoded))
+			decoder.UseNumber()
+			require.NoError(t, decoder.Decode(&decodedMetadata))
+			document := record.entry.Memory.Memory
+
+			decoded, err := decodeStoredRecord(record.entry.ID, &document, decodedMetadata)
+
+			require.NoError(t, err)
+			require.NotNil(t, decoded.entry.Memory.EventTime)
+			assert.True(t, decoded.entry.Memory.EventTime.Equal(tt.eventTime))
+		})
+	}
+}
+
 func TestRecordCodecUpdateClearsOptionalMetadataWithNull(t *testing.T) {
 	now := time.Now().UTC()
 	record := newAddRecord(

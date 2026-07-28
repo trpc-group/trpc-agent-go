@@ -123,25 +123,28 @@ type fakeRecord struct {
 }
 
 type fakeChroma struct {
-	mu               sync.Mutex
-	server           *httptest.Server
-	records          map[string]*fakeRecord
-	collectionExists bool
-	collectionID     string
-	collectionName   string
-	dimension        *int
-	omitDimension    bool
-	metric           string
-	index            string
-	metadata         map[string]any
-	schema           *collectionSchema
-	maxBatch         int
-	requestHook      func(string)
-	status           map[string]int
-	addAfterWrite    int
-	addFailuresLeft  int
-	deleteCount      *int
-	ignoreGetOffset  bool
+	mu                 sync.Mutex
+	server             *httptest.Server
+	records            map[string]*fakeRecord
+	collectionExists   bool
+	collectionID       string
+	collectionName     string
+	dimension          *int
+	omitDimension      bool
+	metric             string
+	index              string
+	metadata           map[string]any
+	schema             *collectionSchema
+	maxBatch           int
+	requestHook        func(string)
+	getHook            func(getRecordsRequest)
+	status             map[string]int
+	addAfterWrite      int
+	addFailuresLeft    int
+	deleteAfterWrite   int
+	deleteFailuresLeft int
+	deleteCount        *int
+	ignoreGetOffset    bool
 }
 
 func newFakeChroma() *fakeChroma {
@@ -352,6 +355,9 @@ func (f *fakeChroma) handleGet(writer http.ResponseWriter, request *http.Request
 		writeTestJSON(writer, http.StatusBadRequest, map[string]any{"message": err.Error()})
 		return
 	}
+	if f.getHook != nil {
+		f.getHook(payload)
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	ids := f.filteredIDs(payload.IDs, payload.Where)
@@ -405,6 +411,13 @@ func (f *fakeChroma) handleDelete(writer http.ResponseWriter, request *http.Requ
 	}
 	for _, id := range ids {
 		delete(f.records, id)
+	}
+	if f.deleteFailuresLeft > 0 {
+		f.deleteFailuresLeft--
+		writeTestJSON(writer, f.deleteAfterWrite, map[string]any{
+			"error": "response_lost", "message": "simulated response loss",
+		})
+		return
 	}
 	deleted := len(ids)
 	if f.deleteCount != nil {

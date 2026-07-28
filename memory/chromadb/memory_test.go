@@ -111,6 +111,37 @@ func TestServiceAddMemoryIsIdempotentAndReplacesTopics(t *testing.T) {
 	assert.Equal(t, eventTime, *entries[0].Memory.EventTime)
 }
 
+func TestServiceAddMemoryRejectsOutOfRangeEventTime(t *testing.T) {
+	tests := []struct {
+		name      string
+		eventTime time.Time
+	}{
+		{name: "before minimum", eventTime: time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC)},
+		{name: "after maximum", eventTime: time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+
+			err := service.AddMemory(
+				context.Background(),
+				memory.UserKey{AppName: "app", UserID: "user"},
+				"episode",
+				nil,
+				memory.WithMetadata(&memory.Metadata{
+					Kind:      memory.KindEpisode,
+					EventTime: &tt.eventTime,
+				}),
+			)
+
+			require.Error(t, err)
+			fake.mu.Lock()
+			defer fake.mu.Unlock()
+			assert.Empty(t, fake.records)
+		})
+	}
+}
+
 func TestServiceAddMemoryEnforcesCapacity(t *testing.T) {
 	service, _ := newTestChromaService(
 		t,
@@ -234,6 +265,37 @@ func TestServiceUpdateMemoryRotatesID(t *testing.T) {
 	assert.Equal(t, []string{"new"}, entries[0].Memory.Topics)
 }
 
+func TestServiceUpdateMemoryRejectsOutOfRangeEventTime(t *testing.T) {
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "source", []string{"original"}))
+	source := readTestMemories(t, service, userKey)[0]
+	eventTime := time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC)
+	result := &memory.UpdateResult{MemoryID: "unchanged"}
+
+	err := service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: source.ID,
+		},
+		"target",
+		[]string{"updated"},
+		memory.WithUpdateMetadata(&memory.Metadata{
+			Kind:      memory.KindEpisode,
+			EventTime: &eventTime,
+		}),
+		memory.WithUpdateResult(result),
+	)
+
+	require.Error(t, err)
+	assert.Equal(t, "unchanged", result.MemoryID)
+	entries := readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, source.ID, entries[0].ID)
+	assert.Equal(t, []string{"original"}, entries[0].Memory.Topics)
+}
+
 func TestServiceUpdateMemoryRejectsActiveTargetWithoutMutation(t *testing.T) {
 	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
 	ctx := context.Background()
@@ -339,6 +401,49 @@ func TestServiceUpdateMemoryHardDeleteReplacesSoftDeletedTarget(t *testing.T) {
 	assert.Equal(t, targetID, entries[0].ID)
 	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
 	assert.True(t, entries[0].CreatedAt.Equal(sourceCreatedAt))
+}
+
+func TestServiceUpdateMemoryHardDeleteRecoversLostTombstoneDeleteResponse(t *testing.T) {
+	fake := newFakeChroma()
+	t.Cleanup(fake.close)
+	embedder := &testEmbedder{dimension: 3}
+	softService := newTestChromaServiceWithFake(
+		t,
+		fake,
+		embedder,
+		WithSoftDelete(true),
+	)
+	hardService := newTestChromaServiceWithFake(t, fake, embedder)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "lost-tombstone-delete"}
+	require.NoError(t, softService.AddMemory(ctx, userKey, "source", nil))
+	require.NoError(t, softService.AddMemory(ctx, userKey, "target", nil))
+	entries := readTestMemories(t, softService, userKey)
+	sourceID := testMemoryEntryByContent(t, entries, "source").ID
+	targetID := testMemoryEntryByContent(t, entries, "target").ID
+	require.NoError(t, softService.DeleteMemory(ctx, memory.Key{
+		AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: targetID,
+	}))
+	fake.deleteAfterWrite = http.StatusServiceUnavailable
+	fake.deleteFailuresLeft = 1
+	result := &memory.UpdateResult{}
+
+	err := hardService.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName: userKey.AppName, UserID: userKey.UserID, MemoryID: sourceID,
+		},
+		"target",
+		[]string{"replacement"},
+		memory.WithUpdateResult(result),
+	)
+
+	require.NoError(t, err)
+	assert.Equal(t, targetID, result.MemoryID)
+	entries = readTestMemories(t, hardService, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, targetID, entries[0].ID)
+	assert.Equal(t, []string{"replacement"}, entries[0].Memory.Topics)
 }
 
 func TestServiceUpdateMemoryHardDeleteRejectsTombstoneSource(t *testing.T) {
@@ -856,6 +961,24 @@ func TestServiceClearMemoriesRejectsDeleteCountMismatch(t *testing.T) {
 	assert.Contains(t, err.Error(), "made no progress")
 }
 
+func TestServiceClearMemoriesRecoversLostDeleteResponse(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	putFakeRecord(fake, newAddRecord(scope, "memory", nil, nil, time.Now().UTC()))
+	fake.deleteAfterWrite = http.StatusServiceUnavailable
+	fake.deleteFailuresLeft = 1
+
+	err := service.ClearMemories(
+		context.Background(),
+		memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+	)
+
+	require.NoError(t, err)
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	assert.Empty(t, fake.records)
+}
+
 func TestServiceReadMemoriesSortsAcrossPages(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	scope := recordScope{appName: "app", userID: "user"}
@@ -884,6 +1007,96 @@ func TestServiceReadMemoriesSortsAcrossPages(t *testing.T) {
 	require.Len(t, entries, 2)
 	assert.Equal(t, want[0], entries[0].ID)
 	assert.Equal(t, want[1], entries[1].ID)
+}
+
+func TestServiceReadMemoriesSerializesPaginationWithLocalDelete(t *testing.T) {
+	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	const recordCount = defaultReadPageSize + 1
+	lastID := fmt.Sprintf("id-%03d", recordCount-1)
+	for i := 0; i < recordCount; i++ {
+		record := newAddRecord(
+			scope,
+			fmt.Sprintf("memory-%03d", i),
+			nil,
+			nil,
+			time.Unix(int64(i), 0).UTC(),
+		)
+		record.entry.ID = fmt.Sprintf("id-%03d", i)
+		putFakeRecord(fake, record)
+	}
+	secondPageStarted := make(chan struct{})
+	releaseSecondPage := make(chan struct{})
+	var blockOnce sync.Once
+	fake.getHook = func(request getRecordsRequest) {
+		if len(request.IDs) > 0 || request.Offset == nil ||
+			*request.Offset != defaultReadPageSize {
+			return
+		}
+		blockOnce.Do(func() {
+			close(secondPageStarted)
+			<-releaseSecondPage
+		})
+	}
+	type readResult struct {
+		entries []*memory.Entry
+		err     error
+	}
+	readDone := make(chan readResult, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		entries, err := service.ReadMemories(ctx, memory.UserKey{
+			AppName: scope.appName, UserID: scope.userID,
+		}, 0)
+		readDone <- readResult{entries: entries, err: err}
+	}()
+	select {
+	case <-secondPageStarted:
+	case <-ctx.Done():
+		t.Fatal("second read page did not start")
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseSecondPage)
+		})
+	}
+	defer release()
+	lock := service.writeLock(scope)
+	readHoldsLock := !lock.TryLock()
+	if !readHoldsLock {
+		lock.Unlock()
+	}
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- service.DeleteMemory(ctx, memory.Key{
+			AppName: scope.appName, UserID: scope.userID, MemoryID: "id-000",
+		})
+	}()
+	var result readResult
+	var deleteErr error
+	if readHoldsLock {
+		release()
+		result = <-readDone
+		deleteErr = <-deleteDone
+	} else {
+		deleteErr = <-deleteDone
+		release()
+		result = <-readDone
+	}
+
+	require.NoError(t, deleteErr)
+	require.NoError(t, result.err)
+	assert.Equal(t, recordCount, len(result.entries))
+	foundLastRecord := false
+	for _, entry := range result.entries {
+		if entry.ID == lastID {
+			foundLastRecord = true
+			break
+		}
+	}
+	assert.True(t, foundLastRecord, "last paginated record was skipped")
 }
 
 func TestServiceReadMemoriesRejectsPaginationWithoutProgress(t *testing.T) {

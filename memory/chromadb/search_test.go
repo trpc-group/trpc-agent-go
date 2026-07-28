@@ -10,6 +10,8 @@ package chromadb
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -129,6 +131,39 @@ func TestServiceSearchMemoriesTimeFilterIncludesFacts(t *testing.T) {
 	assert.NotContains(t, contents, "early event")
 }
 
+func TestServiceSearchMemoriesRejectsOutOfRangeTimeFilters(t *testing.T) {
+	beforeMinimum := time.Date(1600, 1, 1, 0, 0, 0, 0, time.UTC)
+	afterMaximum := time.Date(2300, 1, 1, 0, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name string
+		opts memory.SearchOptions
+	}{
+		{
+			name: "time after before minimum",
+			opts: memory.SearchOptions{Query: "query", TimeAfter: &beforeMinimum},
+		},
+		{
+			name: "time before after maximum",
+			opts: memory.SearchOptions{Query: "query", TimeBefore: &afterMaximum},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, _ := newTestChromaService(t, &testEmbedder{dimension: 2})
+
+			results, err := service.SearchMemories(
+				context.Background(),
+				memory.UserKey{AppName: "app", UserID: "user"},
+				"query",
+				memory.WithSearchOptions(tt.opts),
+			)
+
+			require.Error(t, err)
+			assert.Nil(t, results)
+		})
+	}
+}
+
 func TestServiceSearchMemoriesHybridAddsExactKeywordMatch(t *testing.T) {
 	embedder := &testEmbedder{
 		dimension: 2,
@@ -158,6 +193,135 @@ func TestServiceSearchMemoriesHybridAddsExactKeywordMatch(t *testing.T) {
 		assert.Greater(t, result.Score, 0.0)
 		assert.Less(t, result.Score, 0.1)
 	}
+}
+
+func TestServiceSearchMemoriesHybridKeepsDenseCandidatesBelowCosineThreshold(t *testing.T) {
+	embedder := &testEmbedder{
+		dimension: 2,
+		values: map[string][]float64{
+			"general memory":       {0.2, 0.979795897},
+			"device code is ZX-42": {1, 0},
+			"ZX-42":                {1, 0},
+		},
+	}
+	service, _ := newTestChromaService(t, embedder)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, service.AddMemory(ctx, userKey, "general memory", nil))
+	require.NoError(t, service.AddMemory(ctx, userKey, "device code is ZX-42", nil))
+
+	results, err := service.SearchMemories(
+		ctx,
+		userKey,
+		"ZX-42",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query: "ZX-42", HybridSearch: true, SimilarityThreshold: 0.9,
+			MaxResults: 10,
+		}),
+	)
+
+	require.NoError(t, err)
+	contents := resultContents(results)
+	assert.Contains(t, contents, "device code is ZX-42")
+	assert.Contains(t, contents, "general memory")
+}
+
+func TestServiceSearchMemoriesSerializesHybridPaginationWithLocalDelete(t *testing.T) {
+	service, fake := newTestChromaService(
+		t,
+		&testEmbedder{dimension: 3},
+		WithHybridCandidateLimit(defaultReadPageSize+1),
+	)
+	scope := recordScope{appName: "app", userID: "user"}
+	const recordCount = defaultReadPageSize + 1
+	lastID := fmt.Sprintf("id-%03d", recordCount-1)
+	for i := 0; i < recordCount; i++ {
+		content := fmt.Sprintf("ordinary memory %03d", i)
+		if i == recordCount-1 {
+			content = "device code is ZX-42"
+		}
+		record := newAddRecord(
+			scope,
+			content,
+			nil,
+			nil,
+			time.Unix(int64(i), 0).UTC(),
+		)
+		record.entry.ID = fmt.Sprintf("id-%03d", i)
+		putFakeRecord(fake, record)
+	}
+	fake.mu.Lock()
+	fake.records[lastID].embedding = []float32{-1, 0, 0}
+	fake.mu.Unlock()
+	secondPageStarted := make(chan struct{})
+	releaseSecondPage := make(chan struct{})
+	var blockOnce sync.Once
+	fake.getHook = func(request getRecordsRequest) {
+		if len(request.IDs) > 0 || request.Offset == nil ||
+			*request.Offset != defaultReadPageSize {
+			return
+		}
+		blockOnce.Do(func() {
+			close(secondPageStarted)
+			<-releaseSecondPage
+		})
+	}
+	type searchResult struct {
+		entries []*memory.Entry
+		err     error
+	}
+	searchDone := make(chan searchResult, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	go func() {
+		entries, err := service.SearchMemories(
+			ctx,
+			memory.UserKey{AppName: scope.appName, UserID: scope.userID},
+			"ZX-42",
+			memory.WithSearchOptions(memory.SearchOptions{
+				Query: "ZX-42", HybridSearch: true, MaxResults: 2,
+			}),
+		)
+		searchDone <- searchResult{entries: entries, err: err}
+	}()
+	select {
+	case <-secondPageStarted:
+	case <-ctx.Done():
+		t.Fatal("second hybrid-search page did not start")
+	}
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseSecondPage)
+		})
+	}
+	defer release()
+	lock := service.writeLock(scope)
+	searchHoldsLock := !lock.TryLock()
+	if !searchHoldsLock {
+		lock.Unlock()
+	}
+	deleteDone := make(chan error, 1)
+	go func() {
+		deleteDone <- service.DeleteMemory(ctx, memory.Key{
+			AppName: scope.appName, UserID: scope.userID, MemoryID: "id-000",
+		})
+	}()
+	var result searchResult
+	var deleteErr error
+	if searchHoldsLock {
+		release()
+		result = <-searchDone
+		deleteErr = <-deleteDone
+	} else {
+		deleteErr = <-deleteDone
+		release()
+		result = <-searchDone
+	}
+
+	require.NoError(t, deleteErr)
+	require.NoError(t, result.err)
+	assert.Contains(t, resultContents(result.entries), "device code is ZX-42")
 }
 
 func TestServiceSearchMemoriesDeduplicatesContent(t *testing.T) {
