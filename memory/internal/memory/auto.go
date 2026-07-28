@@ -180,6 +180,16 @@ type stagedOperationExtractor interface {
 	) (primary, assistantResults []*extractor.Operation, err error)
 }
 
+// postPolicyOperationObserver is an internal capability implemented by
+// diagnostic extractor wrappers that need to distinguish model output from
+// the operations selected by reconciliation and update policy.
+type postPolicyOperationObserver interface {
+	ObservePostPolicyMemoryOperations(
+		ctx context.Context,
+		primary, assistantResults []*extractor.Operation,
+	)
+}
+
 // ConfigureExtractorEnabledTools passes enabled tool flags to the
 // extractor if it implements EnabledToolsConfigurer.
 func ConfigureExtractorEnabledTools(
@@ -485,6 +495,9 @@ func (w *AutoMemoryWorker) createAutoMemory(
 	assistantResults = w.applyAssistantResultPolicy(
 		ctx, userKey, assistantResults, existing,
 	)
+	observePostPolicyMemoryOperations(
+		ctx, w.config.Extractor, ops, assistantResults,
+	)
 	ops = append(ops, assistantResults...)
 
 	// Execute operations.
@@ -510,6 +523,48 @@ func extractOperationStages(
 	}
 	ops, err := ext.Extract(ctx, messages, existing)
 	return ops, nil, err
+}
+
+func observePostPolicyMemoryOperations(
+	ctx context.Context,
+	ext extractor.MemoryExtractor,
+	primary, assistantResults []*extractor.Operation,
+) {
+	observer, ok := ext.(postPolicyOperationObserver)
+	if !ok {
+		return
+	}
+	observer.ObservePostPolicyMemoryOperations(
+		ctx,
+		cloneMemoryOperations(primary),
+		cloneMemoryOperations(assistantResults),
+	)
+}
+
+func cloneMemoryOperations(
+	operations []*extractor.Operation,
+) []*extractor.Operation {
+	if operations == nil {
+		return nil
+	}
+	cloned := make([]*extractor.Operation, 0, len(operations))
+	for _, operation := range operations {
+		if operation == nil {
+			cloned = append(cloned, nil)
+			continue
+		}
+		item := *operation
+		item.Topics = append([]string(nil), operation.Topics...)
+		item.Participants = append(
+			[]string(nil), operation.Participants...,
+		)
+		if operation.EventTime != nil {
+			eventTime := *operation.EventTime
+			item.EventTime = &eventTime
+		}
+		cloned = append(cloned, &item)
+	}
+	return cloned
 }
 
 // searchRelevantMemories builds a query from the conversation messages

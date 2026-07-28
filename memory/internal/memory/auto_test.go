@@ -52,6 +52,24 @@ type mockStagedExtractor struct {
 	assistantOps []*extractor.Operation
 }
 
+type mockPostPolicyExtractor struct {
+	*mockStagedExtractor
+	observedPrimary   []*extractor.Operation
+	observedAssistant []*extractor.Operation
+}
+
+func (m *mockPostPolicyExtractor) ObservePostPolicyMemoryOperations(
+	ctx context.Context,
+	primary, assistantResults []*extractor.Operation,
+) {
+	m.observedPrimary = primary
+	m.observedAssistant = assistantResults
+	if len(primary) > 0 && primary[0] != nil {
+		primary[0].Memory = "observer mutation"
+		primary[0].Topics = append(primary[0].Topics, "observer")
+	}
+}
+
 func (m *mockStagedExtractor) ExtractOperationStages(
 	ctx context.Context,
 	messages []model.Message,
@@ -115,6 +133,7 @@ type mockOperator struct {
 	// A nil value keeps the default behavior (reuse ReadMemories).
 	searchResults []*memory.Entry
 	searchQueries []string
+	addMemories   []string
 }
 
 func newMockOperator() *mockOperator {
@@ -183,6 +202,7 @@ func (m *mockOperator) AddMemory(
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.addCalls++
+	m.addMemories = append(m.addMemories, memoryStr)
 	return nil
 }
 
@@ -270,6 +290,45 @@ func TestExtractOperationStages(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, primary, gotPrimary)
 	assert.Equal(t, assistantResults, gotResults)
+}
+
+func TestAutoMemoryWorker_ObservesPostPolicyOperations(t *testing.T) {
+	ext := &mockPostPolicyExtractor{
+		mockStagedExtractor: &mockStagedExtractor{
+			mockExtractor: &mockExtractor{
+				ops: []*extractor.Operation{{
+					Type:     extractor.OperationUpdate,
+					MemoryID: "old-job",
+					Memory:   "Works at Globex.",
+					Topics:   []string{"work"},
+				}},
+				metadata: map[string]any{
+					extractorMetadataUpdatePolicy: string(extractor.UpdatePolicyAddOnly),
+				},
+			},
+			assistantOps: []*extractor.Operation{{
+				Type:     extractor.OperationDelete,
+				MemoryID: "old-result",
+			}},
+		},
+	}
+	operator := newMockOperator()
+	worker := NewAutoMemoryWorker(
+		AutoMemoryConfig{Extractor: ext},
+		operator,
+	)
+
+	err := worker.createAutoMemory(
+		context.Background(),
+		memory.UserKey{AppName: "app", UserID: "user"},
+		[]model.Message{model.NewUserMessage("I changed jobs.")},
+	)
+	require.NoError(t, err)
+	require.Len(t, ext.observedPrimary, 1)
+	assert.Equal(t, extractor.OperationAdd, ext.observedPrimary[0].Type)
+	assert.Empty(t, ext.observedPrimary[0].MemoryID)
+	assert.Empty(t, ext.observedAssistant)
+	assert.Equal(t, []string{"Works at Globex."}, operator.addMemories)
 }
 
 func TestAutoMemoryWorker_StartStop(t *testing.T) {
