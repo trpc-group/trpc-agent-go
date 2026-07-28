@@ -1371,6 +1371,8 @@ database。非 loopback 地址只要携带认证或任意自定义请求头，�
 
 - 更换 embedding 模型时，即使新旧模型维度相同，也必须使用新 collection，或
   对全部记录重新生成 embedding。
+- `EventTime` 和检索时间边界必须能以有符号 64 位 Unix 纳秒表示，即位于 UTC
+  1677-09-21 至 2262-04-11 之间；超出范围的值会在请求 ChromaDB 前被拒绝。
 - `WithHybridCandidateLimit` 是本地关键词候选扫描的硬上限，与
   `WithMemoryLimit` 无关。
 - Chroma 没有为本流程提供跨请求事务或分页 snapshot token，因此多 Service

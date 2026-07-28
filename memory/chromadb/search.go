@@ -60,9 +60,6 @@ func (svc *Service) SearchMemories(
 		searchOpts.SimilarityThreshold = svc.opts.similarityThreshold
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
-	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
 	results, err := svc.searchDense(ctx, scope, queryEmbedding, searchOpts)
 	if err != nil {
 		return nil, err
@@ -136,6 +133,9 @@ func (svc *Service) applyHybridSearch(
 	opts memory.SearchOptions,
 	dense []*memory.Entry,
 ) []*memory.Entry {
+	lock := svc.writeLock(scope)
+	lock.Lock()
+	defer lock.Unlock()
 	limit := opts.MaxResults
 	records, err := svc.listRecords(
 		ctx,

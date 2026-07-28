@@ -32,6 +32,7 @@ import (
 const (
 	maxHTTPAttempts     = 3
 	maxHTTPRedirects    = 10
+	maxErrorBodySize    = 10 << 20
 	maxErrorBodyPreview = 512
 	initialBackoff      = 100 * time.Millisecond
 )
@@ -317,15 +318,24 @@ func ensureJSONEnd(decoder *json.Decoder) error {
 	return nil
 }
 
-// decodeAPIError reads a bounded response preview and redacts configured secrets.
+// decodeAPIError reads a bounded error body, redacts configured secrets, then truncates it.
 func (cl *apiClient) decodeAPIError(resp *http.Response) error {
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyPreview+1))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodySize+1))
 	if err != nil {
 		return &transportError{err: fmt.Errorf("read error response: %w", err)}
 	}
-	truncated := len(body) > maxErrorBodyPreview
-	if truncated {
-		body = body[:maxErrorBodyPreview]
+	traceID := cl.redact(resp.Header.Get("chroma-trace-id"))
+	if len(traceID) > maxErrorBodyPreview {
+		traceID = traceID[:maxErrorBodyPreview]
+		traceID += "…"
+	}
+	if len(body) > maxErrorBodySize {
+		return &apiError{
+			statusCode: resp.StatusCode,
+			message:    "error response body too large",
+			traceID:    traceID,
+			retryAfter: resp.Header.Get("Retry-After"),
+		}
 	}
 	payload := struct {
 		Code    string `json:"error"`
@@ -333,43 +343,35 @@ func (cl *apiClient) decodeAPIError(resp *http.Response) error {
 	}{}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
+	var message string
 	if err := decoder.Decode(&payload); err != nil {
-		payload.Message = strings.TrimSpace(string(body))
+		if len(cl.secretValues) > 0 {
+			// A malformed or truncated body may contain JSON-escaped credentials that
+			// cannot be matched safely against their decoded configured values.
+			message = "[redacted]"
+		} else {
+			message = strings.TrimSpace(string(body))
+		}
+	} else {
+		message = payload.Message
+	}
+	message = cl.redact(message)
+	if len(message) > maxErrorBodyPreview {
+		message = message[:maxErrorBodyPreview]
+		message += "…"
+	}
+	code := cl.redact(payload.Code)
+	if len(code) > maxErrorBodyPreview {
+		code = code[:maxErrorBodyPreview]
+		code += "…"
 	}
 	return &apiError{
 		statusCode: resp.StatusCode,
-		code:       cl.redact(payload.Code),
-		message:    cl.sanitizeErrorPreview(payload.Message, truncated),
-		traceID:    cl.redact(resp.Header.Get("chroma-trace-id")),
+		code:       code,
+		message:    message,
+		traceID:    traceID,
 		retryAfter: resp.Header.Get("Retry-After"),
 	}
-}
-
-// sanitizeErrorPreview masks a secret cut by the read limit before bounding the message.
-func (cl *apiClient) sanitizeErrorPreview(value string, truncated bool) string {
-	if truncated {
-		for _, secret := range cl.secretValues {
-			maxPrefix := len(secret) - 1
-			if maxPrefix > len(value) {
-				maxPrefix = len(value)
-			}
-			for prefixLength := maxPrefix; prefixLength > 0; prefixLength-- {
-				if !strings.HasSuffix(value, secret[:prefixLength]) {
-					continue
-				}
-				value = value[:len(value)-prefixLength] + "[redacted]"
-				break
-			}
-		}
-	}
-	value = cl.redact(value)
-	if len(value) > maxErrorBodyPreview {
-		value = value[:maxErrorBodyPreview]
-	}
-	if truncated {
-		value += "…"
-	}
-	return value
 }
 
 // redact replaces every configured sensitive value before it reaches an error.
@@ -408,7 +410,8 @@ func isTransientNetworkError(err error) bool {
 	if errors.As(err, &networkErr) && networkErr.Timeout() {
 		return true
 	}
-	return errors.Is(err, io.ErrUnexpectedEOF) ||
+	return errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNREFUSED) ||
 		errors.Is(err, syscall.ECONNRESET) ||
 		errors.Is(err, syscall.EPIPE) ||

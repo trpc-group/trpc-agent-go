@@ -1281,6 +1281,9 @@ Keep these operational constraints in mind:
 
 - Changing the embedding model requires a new collection or re-embedding every
   record, even when the old and new models have the same vector dimension.
+- `EventTime` values and search time bounds must fit in signed 64-bit Unix
+  nanoseconds, from 1677-09-21 through 2262-04-11 UTC. Values outside this
+  range are rejected before a ChromaDB request is made.
 - `WithHybridCandidateLimit` is the hard cap for the local keyword candidate
   scan; it is independent of `WithMemoryLimit`.
 - Capacity checks, ID rotation, and paginated reads are best-effort across

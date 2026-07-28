@@ -128,6 +128,49 @@ func TestClientRetriesTruncatedSuccessfulJSONIntoFreshResponse(t *testing.T) {
 	assert.Equal(t, "fresh", response.Second)
 }
 
+func TestClientRetriesEmptySuccessfulJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{name: "empty"},
+		{name: "whitespace", body: " \n\t"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls atomic.Int32
+			transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+				body := tt.body
+				if calls.Add(1) == 2 {
+					body = `{"value":"fresh"}`
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(body)),
+				}, nil
+			})
+			client := &apiClient{
+				baseURL:    "http://chroma.test",
+				httpClient: &http.Client{Transport: transport},
+				headers:    make(http.Header),
+				timeout:    time.Second,
+			}
+			response := struct {
+				Value string `json:"value"`
+			}{}
+
+			err := client.do(context.Background(), requestSpec{
+				method: http.MethodGet, path: "/", expectedStatus: http.StatusOK,
+			}, &response)
+
+			require.NoError(t, err)
+			assert.Equal(t, int32(2), calls.Load())
+			assert.Equal(t, "fresh", response.Value)
+		})
+	}
+}
+
 func TestClientSendsAuthenticationAndCustomHeaders(t *testing.T) {
 	var authorization, apiKey, custom string
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -231,6 +274,90 @@ func TestClientRedactsSecretAcrossErrorPreviewBoundary(t *testing.T) {
 
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), secret[:visibleSecretBytes])
+}
+
+func TestClientRedactsJSONEscapedSecretsFromTruncatedError(t *testing.T) {
+	tests := []struct {
+		name          string
+		secret        string
+		encodedSecret string
+		visibleBytes  int
+		leak          string
+	}{
+		{
+			name:          "quote escape",
+			secret:        `sensitive-token-123456789"tail`,
+			encodedSecret: `sensitive-token-123456789\"tail`,
+			visibleBytes:  len(`sensitive-token-123456789\`),
+			leak:          "sensitive-token-123456789",
+		},
+		{
+			name:          "unicode escape",
+			secret:        "secret-token",
+			encodedSecret: `\u0073\u0065\u0063\u0072\u0065\u0074\u002d\u0074\u006f\u006b\u0065\u006e`,
+			visibleBytes:  len(`\u0073\u0065\u0063\u0072\u0065\u0074`),
+			leak:          `\u0073\u0065\u0063\u0072\u0065\u0074`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			const jsonPrefix = `{"message":"`
+			body := jsonPrefix +
+				strings.Repeat(
+					"x",
+					maxErrorBodyPreview-len(jsonPrefix)-tt.visibleBytes,
+				) +
+				tt.encodedSecret +
+				strings.Repeat("y", maxErrorBodyPreview) +
+				`"}`
+			server := httptest.NewServer(http.HandlerFunc(func(
+				writer http.ResponseWriter,
+				_ *http.Request,
+			) {
+				writer.WriteHeader(http.StatusBadRequest)
+				_, _ = writer.Write([]byte(body))
+			}))
+			defer server.Close()
+			opts := defaultServiceOpts()
+			opts.baseURL = server.URL
+			opts.apiKey = tt.secret
+			client := newAPIClient(opts)
+
+			err := client.do(context.Background(), requestSpec{
+				method: http.MethodGet, path: "/error", expectedStatus: http.StatusOK,
+			}, nil)
+
+			require.Error(t, err)
+			assert.NotContains(t, err.Error(), tt.leak)
+			assert.Contains(t, err.Error(), "[redacted]")
+		})
+	}
+}
+
+func TestClientRejectsOversizedErrorResponse(t *testing.T) {
+	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     make(http.Header),
+			Body: io.NopCloser(
+				strings.NewReader(strings.Repeat("x", maxErrorBodySize+1)),
+			),
+		}, nil
+	})
+	client := &apiClient{
+		baseURL:    "http://chroma.test",
+		httpClient: &http.Client{Transport: transport},
+		headers:    make(http.Header),
+		timeout:    time.Second,
+	}
+
+	err := client.do(context.Background(), requestSpec{
+		method: http.MethodGet, path: "/", expectedStatus: http.StatusOK,
+	}, nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "error response body too large")
+	assert.Less(t, len(err.Error()), maxErrorBodyPreview)
 }
 
 func TestClientRejectsUnsafeRedirectBeforeSendingCredentials(t *testing.T) {
