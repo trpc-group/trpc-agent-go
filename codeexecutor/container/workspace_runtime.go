@@ -429,9 +429,12 @@ func (r *workspaceRuntime) RunProgram(
 	if t <= 0 {
 		t = 10 * time.Second
 	}
-	setupCtx, cancelSetup := context.WithTimeout(ctx, t)
-	defer cancelSetup()
-	if err := r.ce.ensureContainer(setupCtx); err != nil {
+	// This runtime is bound to the generation that created its workspace. It
+	// must not recreate a container after a timeout invalidates that generation:
+	// the caller must reacquire and provision a new workspace through the
+	// registry instead. The generation-aware lookup also rejects unready direct
+	// runtime calls without performing a Docker operation.
+	if _, _, err := r.containerClient(); err != nil {
 		return codeexecutor.RunResult{}, err
 	}
 	_, span := atrace.Tracer.Start(ctx,

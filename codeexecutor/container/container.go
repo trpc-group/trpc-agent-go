@@ -39,6 +39,9 @@ const (
 	// Use root as default working dir to avoid Docker trying to
 	// mkdir a custom path (e.g., /workspace) on read-only roots.
 	defaultContainerWorkingDir = "/"
+	// defaultInitTimeoutSec bounds image and container initialization when the
+	// caller did not provide a deadline (for example, a registry worker).
+	defaultInitTimeoutSec = 60
 )
 
 // CodeExecutor executes code using a Docker container.
@@ -71,8 +74,9 @@ func New(opts ...Option) (*CodeExecutor, error) {
 }
 
 // NewWithContext creates a CodeExecutor and uses ctx only for image
-// preparation and container startup. Cancelling ctx after this function
-// returns does not close the executor. A nil ctx returns an error.
+// preparation and container startup. A context without a deadline is bounded
+// to 60 seconds for initialization. Cancelling ctx after this function returns
+// does not close the executor. A nil ctx returns an error.
 func NewWithContext(ctx context.Context, opts ...Option) (*CodeExecutor, error) {
 	if ctx == nil {
 		return nil, fmt.Errorf("context must not be nil")
@@ -335,10 +339,13 @@ func (c *CodeExecutor) ensureWSLocked(ctx context.Context) (*workspaceRuntime, e
 }
 
 // InstanceID identifies the current physical container generation for
-// WorkspaceRegistry. When an earlier timed-out attach invalidated the
-// container, it recreates that physical instance with the caller's context
-// before returning. This keeps the registry's pre- and post-create probes
-// stable while preserving cancellation for image and container startup.
+// WorkspaceRegistry. It returns an error until the executor has a Docker
+// client and a physical container to identify. When an earlier timed-out
+// attach invalidated a configured container, it recreates that physical
+// instance with the caller's context before returning. A context without a
+// deadline is bounded to 60 seconds for initialization. This keeps the
+// registry's pre- and post-create probes stable while preserving cancellation
+// for image and container startup.
 func (c *CodeExecutor) InstanceID(ctx context.Context) (codeexecutor.WorkspaceInstanceID, error) {
 	if ctx == nil {
 		return "", fmt.Errorf("context must not be nil")
@@ -351,7 +358,10 @@ func (c *CodeExecutor) InstanceID(ctx context.Context) (codeexecutor.WorkspaceIn
 	if c.closed {
 		return "", fmt.Errorf("container executor is closed")
 	}
-	if c.container == nil && c.client != nil {
+	if c.container == nil {
+		if c.client == nil {
+			return "", fmt.Errorf("container executor is not initialized")
+		}
 		if err := c.ensureContainerLocked(ctx); err != nil {
 			return "", err
 		}
@@ -447,11 +457,14 @@ func (c *CodeExecutor) containerClientForGeneration(generation uint64) (*client.
 	if c.closed {
 		return nil, "", fmt.Errorf("container executor is closed")
 	}
-	if c.client == nil || c.container == nil {
-		return nil, "", fmt.Errorf("container not initialized")
-	}
+	// A generation-bound runtime must fail stale before considering whether a
+	// replacement container exists. Otherwise an old workspace operation could
+	// rebuild a physical container only to fail on its later client lookup.
 	if generation != 0 && generation != c.generation {
 		return nil, "", fmt.Errorf("%w: container generation %d replaced runtime generation %d", codeexecutor.ErrWorkspaceStale, c.generation, generation)
+	}
+	if c.client == nil || c.container == nil {
+		return nil, "", fmt.Errorf("container not initialized")
 	}
 	return c.client, c.container.ID, nil
 }
@@ -760,8 +773,34 @@ func (c *CodeExecutor) verifyPythonInstallation(ctx context.Context) error {
 	return nil
 }
 
-// initContainer initializes the Docker container
+func initializationContext(ctx context.Context) (context.Context, context.CancelFunc, error) {
+	if ctx == nil {
+		return nil, nil, fmt.Errorf("context must not be nil")
+	}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		bounded, cancel := context.WithTimeout(ctx, defaultInitTimeoutSec*time.Second)
+		return bounded, cancel, nil
+	}
+	return ctx, func() {}, nil
+}
+
+// failedInitializationCleanupContext uses only the initialization operation's
+// remaining budget. It deliberately ignores caller cancellation so a created
+// container can be removed, but never extends the initialization deadline.
+func failedInitializationCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(context.Background(), deadline)
+	}
+	return context.WithTimeout(context.Background(), defaultRmTimeoutSec*time.Second)
+}
+
+// initContainer initializes the Docker container.
 func (c *CodeExecutor) initContainer(ctx context.Context) error {
+	ctx, cancel, err := initializationContext(ctx)
+	if err != nil {
+		return err
+	}
+	defer cancel()
 	if c.client == nil {
 		return fmt.Errorf("docker client is not initialized")
 	}
@@ -794,7 +833,7 @@ func (c *CodeExecutor) initContainer(ctx context.Context) error {
 		if succeeded {
 			return
 		}
-		cleanupCtx, cancel := context.WithTimeout(context.Background(), defaultRmTimeoutSec*time.Second)
+		cleanupCtx, cancel := failedInitializationCleanupContext(ctx)
 		defer cancel()
 		if removeErr := c.client.ContainerRemove(cleanupCtx, resp.ID, container.RemoveOptions{Force: true}); removeErr != nil {
 			log.DebugfContext(cleanupCtx, "Failed to remove failed container %s: %v", resp.ID, removeErr)

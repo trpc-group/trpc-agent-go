@@ -122,6 +122,28 @@ func writeHijackStream(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdou
 	}()
 }
 
+// writeHijackStreamEOF finishes the response with a TCP half-close. Lifecycle
+// tests can make several short attach requests in one sequence, so they use
+// this helper rather than a delayed full close that may reset a later reader
+// on Windows before it observes the framed EOF.
+func writeHijackStreamEOF(t *testing.T, conn net.Conn, buf *bufio.ReadWriter, stdout, stderr string) {
+	t.Helper()
+	_, err := buf.WriteString("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: tcp\r\nContent-Type: application/vnd.docker.raw-stream\r\n\r\n")
+	require.NoError(t, err)
+	if stdout != "" {
+		writeDockerFrame(t, buf, 1, stdout)
+	}
+	if stderr != "" {
+		writeDockerFrame(t, buf, 2, stderr)
+	}
+	require.NoError(t, buf.Flush())
+	if closer, ok := conn.(interface{ CloseWrite() error }); ok {
+		require.NoError(t, closer.CloseWrite())
+		return
+	}
+	require.NoError(t, conn.Close())
+}
+
 func writeDockerFrame(t *testing.T, w io.Writer, streamType byte, data string) {
 	t.Helper()
 
@@ -384,22 +406,18 @@ func TestEnsureWS_CachesRuntime(t *testing.T) {
 	assert.Same(t, rt1, rt2)
 }
 
-func TestWorkspaceGenerationInvalidatesOldHandlesWithoutRebuilding(t *testing.T) {
+func TestWorkspaceGenerationInvalidatesOldHandles(t *testing.T) {
 	c := &CodeExecutor{generation: 1}
 	ws := codeexecutor.Workspace{ID: "task", Path: "/tmp/run/ws_task"}
 	c.rememberWorkspace(ws, 1)
-	before, err := c.InstanceID(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, codeexecutor.WorkspaceInstanceID("container-1"), before)
+	_, err := c.InstanceID(context.Background())
+	require.Error(t, err, "a zero-value executor has no physical instance")
 
 	// This models abortContainer after a timed-out attach. The old workspace
 	// remains known, but the physical execution instance has been replaced.
 	c.containerMu.Lock()
 	c.generation++
 	c.containerMu.Unlock()
-	after, err := c.InstanceID(context.Background())
-	require.NoError(t, err)
-	assert.NotEqual(t, before, after)
 	require.ErrorIs(t, c.validateWorkspace(ws), codeexecutor.ErrWorkspaceStale)
 
 	_, err = c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{Cmd: "true"})
@@ -454,7 +472,7 @@ func TestInstanceIDRecreatesInvalidatedContainerBeforeReportingGeneration(t *tes
 			strings.Contains(r.URL.Path, "/exec/replacement-workspace/start")):
 			conn, buf, err := w.(http.Hijacker).Hijack()
 			require.NoError(t, err)
-			writeHijackStream(t, conn, buf, "", "")
+			writeHijackStreamEOF(t, conn, buf, "", "")
 		case r.Method == http.MethodGet && (strings.Contains(r.URL.Path, "/exec/verify/json") ||
 			strings.Contains(r.URL.Path, "/exec/old-workspace/json") ||
 			strings.Contains(r.URL.Path, "/exec/replacement-workspace/json")):
@@ -473,6 +491,14 @@ func TestInstanceIDRecreatesInvalidatedContainerBeforeReportingGeneration(t *tes
 	require.NotEmpty(t, firstWorkspace.Path)
 
 	exec.abortContainer()
+	// A fresh runtime may be requested before the registry performs its
+	// instance probe. It must recreate the physical container with the caller's
+	// context while preserving the old workspace generation as stale.
+	runtime, err := exec.ensureWS(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, runtime)
+	assert.Equal(t, uint64(3), runtime.generation)
+
 	secondWorkspace, err := registry.Acquire(context.Background(), exec, "task")
 	require.NoError(t, err)
 	require.NotEmpty(t, secondWorkspace.Path)
@@ -494,6 +520,115 @@ func TestEnsureWSHonorsCanceledContext(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
+func TestLifecycleGuardsRejectInvalidState(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ws := codeexecutor.Workspace{Path: "/work"}
+
+	zero := &CodeExecutor{}
+	_, err := zero.ensureWS(nil)
+	require.Error(t, err)
+	_, err = zero.InstanceID(nil)
+	require.Error(t, err)
+	_, err = zero.runtimeForWorkspace(ctx, ws)
+	require.ErrorIs(t, err, context.Canceled)
+	_, _, err = zero.containerClientForGeneration(1)
+	require.Error(t, err)
+	require.Error(t, zero.requireContainer())
+
+	stale := &CodeExecutor{generation: 2}
+	stale.rememberWorkspace(ws, 1)
+	_, err = stale.runtimeForWorkspace(context.Background(), ws)
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+
+	closed := &CodeExecutor{closed: true}
+	_, err = closed.ensureWS(context.Background())
+	require.Error(t, err)
+	_, err = closed.InstanceID(context.Background())
+	require.Error(t, err)
+	_, _, err = closed.containerClientForGeneration(0)
+	require.Error(t, err)
+	require.Error(t, closed.requireContainer())
+	closed.abortContainer() // A closed or unconfigured executor is a safe no-op.
+}
+
+func TestInitializationContextsAreBoundedAndCleanupUsesRemainingBudget(t *testing.T) {
+	initCtx, cancel, err := initializationContext(context.Background())
+	require.NoError(t, err)
+	defer cancel()
+	initDeadline, ok := initCtx.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, time.Now().Add(defaultInitTimeoutSec*time.Second), initDeadline, time.Second)
+
+	parent, parentCancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer parentCancel()
+	cleanupCtx, cleanupCancel := failedInitializationCleanupContext(parent)
+	defer cleanupCancel()
+	cleanupDeadline, ok := cleanupCtx.Deadline()
+	require.True(t, ok)
+	parentDeadline, ok := parent.Deadline()
+	require.True(t, ok)
+	require.WithinDuration(t, parentDeadline, cleanupDeadline, time.Millisecond)
+	select {
+	case <-parent.Done():
+	case <-time.After(time.Second):
+		t.Fatal("initialization deadline did not expire")
+	}
+	select {
+	case <-cleanupCtx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("cleanup exceeded the initialization deadline")
+	}
+}
+
+func TestStaleRuntimeRunProgramDoesNotRecreateContainer(t *testing.T) {
+	var requests atomic.Int32
+	cli, cleanup := newFakeDockerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		t.Errorf("stale runtime unexpectedly contacted Docker: %s %s", r.Method, r.URL.Path)
+	})
+	defer cleanup()
+
+	// The runtime belongs to a container that was already invalidated. A
+	// replacement has not been created yet; stale work must fail before it can
+	// issue a Docker request or recreate one behind the old workspace handle.
+	c := &CodeExecutor{client: cli, generation: 2}
+	runtime := &workspaceRuntime{ce: c, generation: 1}
+	_, err := runtime.RunProgram(context.Background(), codeexecutor.Workspace{Path: "/work"}, codeexecutor.RunProgramSpec{Cmd: "true"})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	assert.Zero(t, requests.Load())
+}
+
+func TestRegistryContainerRebuildHonorsCallerDeadline(t *testing.T) {
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	cli, cleanup := newFakeDockerClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || !strings.Contains(r.URL.Path, "/images/json") {
+			t.Errorf("unexpected Docker request: %s %s", r.Method, r.URL.Path)
+			return
+		}
+		close(started)
+		<-r.Context().Done()
+		close(finished)
+	})
+	defer cleanup()
+	c := &CodeExecutor{client: cli, containerConfig: tcontainer.Config{Image: defaultImageTag}}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, err := codeexecutor.NewWorkspaceRegistry().Acquire(ctx, c, "deadline")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("registry did not start container initialization")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("container initialization did not observe the registry deadline")
+	}
+}
+
 func TestEngine_NonNil(t *testing.T) {
 	c := &CodeExecutor{}
 	eng := c.Engine()
@@ -503,6 +638,7 @@ func TestEngine_NonNil(t *testing.T) {
 func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 	c := &CodeExecutor{}
 	ctx := context.Background()
+	ws := codeexecutor.Workspace{ID: "id", Path: "/work"}
 
 	// CreateWorkspace should fail when executor is not ready.
 	_, err := c.CreateWorkspace(ctx, "id", codeexecutor.WorkspacePolicy{})
@@ -520,6 +656,20 @@ func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 	err = c.PutDirectory(ctx, codeexecutor.Workspace{}, "", "to")
 	assert.Error(t, err)
 
+	// Forwarding wrappers must preserve runtime failures rather than hiding
+	// missing container state. These calls exercise the same lifecycle guard
+	// used by real workspace operations without needing a Docker daemon.
+	err = c.PutFiles(ctx, ws, []codeexecutor.PutFile{{Path: "note.txt", Content: []byte("note")}})
+	assert.Error(t, err)
+	err = c.StageDirectory(ctx, ws, filepath.Join(t.TempDir(), "missing"), "work", codeexecutor.StageOptions{})
+	assert.Error(t, err)
+	err = c.StageInputs(ctx, ws, []codeexecutor.InputSpec{{From: "host:///missing", To: "work/input"}})
+	assert.Error(t, err)
+	_, err = c.CollectOutputs(ctx, ws, codeexecutor.OutputSpec{Globs: []string{"**"}})
+	assert.Error(t, err)
+	_, err = c.Collect(ctx, ws, []string{"**"})
+	assert.Error(t, err)
+
 	// ExecuteInline should fail when executor is not ready.
 	_, err = c.ExecuteInline(ctx, "id", nil, time.Second)
 	assert.Error(t, err)
@@ -527,7 +677,7 @@ func TestWorkspaceWrappers_MinimalPaths(t *testing.T) {
 
 func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 	const execID = "exec-wrap"
-	var startCalls int
+	var startCalls atomic.Int32
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost &&
@@ -542,12 +692,14 @@ func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 			assert.True(t, ok)
 			conn, buf, err := hj.Hijack()
 			assert.NoError(t, err)
-			if startCalls == 0 {
+			call := startCalls.Add(1) - 1
+			if call == 0 {
 				writeHijackStream(t, conn, buf, "ok\n", "")
+			} else if call == 1 {
+				writeHijackStream(t, conn, buf, "abcdef", "")
 			} else {
 				writeHijackStream(t, conn, buf, "", "")
 			}
-			startCalls++
 		case r.Method == http.MethodGet &&
 			strings.Contains(r.URL.Path, "/exec/"+execID+"/json"):
 			w.Header().Set("Content-Type", "application/json")
@@ -574,6 +726,20 @@ func TestWrappers_RunProgram_And_Collect(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Contains(t, res.Stdout, "ok")
+
+	// Bounded output is surfaced through structured truncation metadata rather
+	// than a sentinel string. Supplying stdin also exercises the attach writer
+	// close path used by interactive commands.
+	res, err = c.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:            "bash",
+		Args:           []string{"-lc", "echo abcdef"},
+		Stdin:          "input\n",
+		Timeout:        time.Second,
+		MaxOutputBytes: 2,
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, "ab", res.Stdout)
+	assert.True(t, res.StdoutTruncated)
 
 	// Collect with no patterns should return empty without copy out.
 	files, err := c.Collect(ctx, ws, nil)
