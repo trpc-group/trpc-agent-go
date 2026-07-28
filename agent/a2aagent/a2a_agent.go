@@ -46,13 +46,14 @@ import (
 )
 
 const (
-	defaultStreamingChannelSize         = 1024
-	defaultNonStreamingChannelSize      = 10
-	defaultUserIDHeader                 = "X-User-ID"
-	anonymousUserIDCookieName           = "trpc_agent_a2a_anon"
-	anonymousUserIDPrefix               = "A2A_ANONYMOUS_"
-	anonymousUserIDCookieStateKeyPrefix = "trpc.agent.a2a.anonymous_user_id_cookie."
-	anonymousUserIDCookieEncodedBytes   = 16
+	defaultStreamingChannelSize          = 1024
+	defaultNonStreamingChannelSize       = 10
+	defaultUserIDHeader                  = "X-User-ID"
+	anonymousUserIDCookieName            = "trpc_agent_a2a_anon"
+	anonymousUserIDPrefix                = "A2A_ANONYMOUS_"
+	anonymousUserIDCookieStateKeyPrefix  = "trpc.agent.a2a.anonymous_user_id_cookie."
+	anonymousUserIDCookieSecureKeySuffix = ".secure"
+	anonymousUserIDCookieEncodedBytes    = 16
 )
 
 // A2AAgent is an agent that communicates with a remote A2A agent via A2A protocol.
@@ -403,21 +404,26 @@ func (s *anonymousCookieState) initializationScope() (anonymousCookieInitScope, 
 }
 
 func (s *anonymousCookieState) load() (string, bool) {
+	cookieValue, _, ok := s.loadWithSecurity()
+	return cookieValue, ok
+}
+
+func (s *anonymousCookieState) loadWithSecurity() (string, bool, bool) {
 	if s == nil {
-		return "", false
+		return "", false, false
 	}
 	if hasPersistentSessionKey(s.persistSession) {
-		if cookieValue, ok := loadAnonymousCookieFromSession(s.persistSession, s.key); ok {
-			return cookieValue, true
+		if cookieValue, secure, ok := loadAnonymousCookieStateFromSession(s.persistSession, s.key); ok {
+			return cookieValue, secure, true
 		}
 	}
-	if cookieValue, ok := loadAnonymousCookieFromSession(s.session, s.key); ok {
-		return cookieValue, true
+	if cookieValue, secure, ok := loadAnonymousCookieStateFromSession(s.session, s.key); ok {
+		return cookieValue, secure, true
 	}
 	if s.persistSession != s.session {
-		return loadAnonymousCookieFromSession(s.persistSession, s.key)
+		return loadAnonymousCookieStateFromSession(s.persistSession, s.key)
 	}
-	return "", false
+	return "", false, false
 }
 
 func loadAnonymousCookieFromSession(sess *session.Session, key string) (string, bool) {
@@ -435,6 +441,37 @@ func loadAnonymousCookieFromSession(sess *session.Session, key string) (string, 
 	return cookieValue, true
 }
 
+func loadAnonymousCookieStateFromSession(
+	sess *session.Session,
+	key string,
+) (string, bool, bool) {
+	cookieValue, ok := loadAnonymousCookieFromSession(sess, key)
+	if !ok {
+		return "", false, false
+	}
+	rawSecure, ok := sess.GetState(key + anonymousUserIDCookieSecureKeySuffix)
+	secure := ok && strings.EqualFold(strings.TrimSpace(string(rawSecure)), "true")
+	return cookieValue, secure, true
+}
+
+func storeAnonymousCookieState(
+	sess *session.Session,
+	key string,
+	cookieValue string,
+	secure bool,
+) {
+	if sess == nil || key == "" {
+		return
+	}
+	// Store the secure marker first so a concurrent reader never observes a
+	// newly acquired HTTPS credential without its send restriction.
+	sess.SetState(
+		key+anonymousUserIDCookieSecureKeySuffix,
+		[]byte(strconv.FormatBool(secure)),
+	)
+	sess.SetState(key, []byte(cookieValue))
+}
+
 func (s *anonymousCookieState) reload(ctx context.Context) error {
 	if s == nil || s.sessionService == nil {
 		return nil
@@ -450,20 +487,24 @@ func (s *anonymousCookieState) reload(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("reload anonymous A2A cookie state: %w", err)
 	}
-	cookieValue, ok := loadAnonymousCookieFromSession(persistedSession, s.key)
+	cookieValue, secure, ok := loadAnonymousCookieStateFromSession(persistedSession, s.key)
 	if !ok {
 		return nil
 	}
-	if s.session != nil {
-		s.session.SetState(s.key, []byte(cookieValue))
-	}
-	if s.persistSession != nil {
-		s.persistSession.SetState(s.key, []byte(cookieValue))
-	}
+	storeAnonymousCookieState(s.session, s.key, cookieValue, secure)
+	storeAnonymousCookieState(s.persistSession, s.key, cookieValue, secure)
 	return nil
 }
 
 func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) error {
+	return s.captureWithSecurity(ctx, cookieValue, false)
+}
+
+func (s *anonymousCookieState) captureWithSecurity(
+	ctx context.Context,
+	cookieValue string,
+	secure bool,
+) error {
 	if s == nil || s.key == "" {
 		return nil
 	}
@@ -471,28 +512,32 @@ func (s *anonymousCookieState) capture(ctx context.Context, cookieValue string) 
 	if !isAnonymousUserIDCookieValue(cookieValue) {
 		return nil
 	}
-	if persistedValue, ok := loadAnonymousCookieFromSession(s.persistSession, s.key); ok && persistedValue == cookieValue {
-		if s.session != nil {
-			s.session.SetState(s.key, []byte(cookieValue))
-		}
+	if persistedValue, persistedSecure, ok := loadAnonymousCookieStateFromSession(s.persistSession, s.key); ok &&
+		persistedValue == cookieValue && (!secure || persistedSecure) {
+		storeAnonymousCookieState(s.session, s.key, cookieValue, persistedSecure)
 		return nil
 	}
 	if !hasPersistentSessionKey(s.persistSession) || s.sessionService == nil {
-		currentValue, ok := loadAnonymousCookieFromSession(s.session, s.key)
-		if ok && currentValue == cookieValue {
+		currentValue, currentSecure, ok := loadAnonymousCookieStateFromSession(s.session, s.key)
+		if ok && currentValue == cookieValue && (!secure || currentSecure) {
 			return nil
 		}
 	}
-	if err := s.persist(ctx, cookieValue); err != nil {
+	if currentValue, currentSecure, ok := s.loadWithSecurity(); ok && currentValue == cookieValue {
+		secure = secure || currentSecure
+	}
+	if err := s.persist(ctx, cookieValue, secure); err != nil {
 		return err
 	}
-	if s.session != nil {
-		s.session.SetState(s.key, []byte(cookieValue))
-	}
+	storeAnonymousCookieState(s.session, s.key, cookieValue, secure)
 	return nil
 }
 
-func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) error {
+func (s *anonymousCookieState) persist(
+	ctx context.Context,
+	cookieValue string,
+	secure bool,
+) error {
 	if s == nil ||
 		s.sessionService == nil ||
 		!hasPersistentSessionKey(s.persistSession) {
@@ -501,7 +546,10 @@ func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	state := session.StateMap{s.key: []byte(cookieValue)}
+	state := session.StateMap{
+		s.key: []byte(cookieValue),
+		s.key + anonymousUserIDCookieSecureKeySuffix: []byte(strconv.FormatBool(secure)),
+	}
 	key := session.Key{
 		AppName:   s.persistSession.AppName,
 		UserID:    s.persistSession.UserID,
@@ -510,7 +558,7 @@ func (s *anonymousCookieState) persist(ctx context.Context, cookieValue string) 
 	if err := s.sessionService.UpdateSessionState(ctx, key, state); err != nil {
 		return fmt.Errorf("persist anonymous A2A cookie state: %w", err)
 	}
-	s.persistSession.SetState(s.key, []byte(cookieValue))
+	storeAnonymousCookieState(s.persistSession, s.key, cookieValue, secure)
 	return nil
 }
 
@@ -548,7 +596,7 @@ type anonymousCookieHTTPReqHandler struct {
 type anonymousCookieCaptureResult struct {
 	mu       sync.Mutex
 	err      error
-	captured map[string]struct{}
+	captured map[string]bool
 }
 
 func (r *anonymousCookieCaptureResult) record(err error) {
@@ -575,6 +623,7 @@ func (r *anonymousCookieCaptureResult) capture(
 	ctx context.Context,
 	cookie *anonymousCookieState,
 	cookieValue string,
+	secure bool,
 ) {
 	if cookie == nil {
 		return
@@ -586,16 +635,16 @@ func (r *anonymousCookieCaptureResult) capture(
 	if r != nil {
 		r.mu.Lock()
 		if r.captured == nil {
-			r.captured = make(map[string]struct{})
+			r.captured = make(map[string]bool)
 		}
-		if _, ok := r.captured[cookieValue]; ok {
+		if capturedSecure, ok := r.captured[cookieValue]; ok && (capturedSecure || !secure) {
 			r.mu.Unlock()
 			return
 		}
-		r.captured[cookieValue] = struct{}{}
+		r.captured[cookieValue] = secure
 		r.mu.Unlock()
 	}
-	r.record(cookie.capture(ctx, cookieValue))
+	r.record(cookie.captureWithSecurity(ctx, cookieValue, secure))
 }
 
 func (h *anonymousCookieHTTPReqHandler) Handle(
@@ -684,7 +733,12 @@ func (h *anonymousCookieHTTPReqHandler) captureResponseCookie(
 	}
 	for _, responseCookie := range resp.Cookies() {
 		if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
-			result.capture(ctx, cookie, responseCookie.Value)
+			result.capture(
+				ctx,
+				cookie,
+				responseCookie.Value,
+				anonymousCookieResponseIsSecure(responseURL, responseCookie),
+			)
 		}
 	}
 }
@@ -710,7 +764,12 @@ func (t *anonymousCookieRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	if resp != nil && t.cookie != nil && t.scope.matches(request.URL) {
 		for _, responseCookie := range resp.Cookies() {
 			if responseCookie != nil && responseCookie.Name == anonymousUserIDCookieName {
-				t.result.capture(request.Context(), t.cookie, responseCookie.Value)
+				t.result.capture(
+					request.Context(),
+					t.cookie,
+					responseCookie.Value,
+					anonymousCookieResponseIsSecure(request.URL, responseCookie),
+				)
 			}
 		}
 	}
@@ -729,10 +788,10 @@ func setAnonymousCookieHeader(
 		req.Header = make(http.Header)
 	}
 	stripAnonymousCookieHeader(req)
-	if cookie == nil || !scope.matches(req.URL) {
+	if cookie == nil {
 		return
 	}
-	if cookieValue, ok := cookie.load(); ok {
+	if cookieValue, secure, ok := cookie.loadWithSecurity(); ok && scope.matchesForSend(req.URL, secure) {
 		req.AddCookie(&http.Cookie{
 			Name:  anonymousUserIDCookieName,
 			Value: cookieValue,
@@ -829,7 +888,12 @@ func (j *anonymousCookieJar) SetCookies(u *url.URL, cookies []*http.Cookie) {
 		}
 		if cookie.Name == anonymousUserIDCookieName {
 			if j.cookie != nil && j.scope.matches(u) {
-				j.result.capture(j.ctx, j.cookie, cookie.Value)
+				j.result.capture(
+					j.ctx,
+					j.cookie,
+					cookie.Value,
+					anonymousCookieResponseIsSecure(u, cookie),
+				)
 			}
 			continue
 		}
@@ -852,7 +916,7 @@ func (j *anonymousCookieJar) Cookies(u *url.URL) []*http.Cookie {
 		}
 	}
 	if j.cookie != nil {
-		if cookieValue, ok := j.cookie.load(); ok && j.scope.matches(u) {
+		if cookieValue, secure, ok := j.cookie.loadWithSecurity(); ok && j.scope.matchesForSend(u, secure) {
 			cookies = append(cookies, &http.Cookie{
 				Name:  anonymousUserIDCookieName,
 				Value: cookieValue,
@@ -909,6 +973,18 @@ func (s anonymousCookieURLScope) matches(u *url.URL) bool {
 	}
 	reqPath := canonicalAnonymousCookieURLPath(u)
 	return reqPath == basePath || strings.HasPrefix(reqPath, basePath+"/")
+}
+
+func (s anonymousCookieURLScope) matchesForSend(u *url.URL, secure bool) bool {
+	if secure && (u == nil || !strings.EqualFold(u.Scheme, "https")) {
+		return false
+	}
+	return s.matches(u)
+}
+
+func anonymousCookieResponseIsSecure(u *url.URL, cookie *http.Cookie) bool {
+	return cookie != nil &&
+		(cookie.Secure || (u != nil && strings.EqualFold(u.Scheme, "https")))
 }
 
 func anonymousCookieURLPort(u *url.URL) int {

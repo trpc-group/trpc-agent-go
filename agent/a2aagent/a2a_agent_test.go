@@ -2185,11 +2185,26 @@ func TestAnonymousCookieURLScopeBoundaries(t *testing.T) {
 }
 
 type anonymousCookieRedirectTransport struct {
-	mu              sync.Mutex
-	receivedCookies []string
+	mu       sync.Mutex
+	received []anonymousCookieRedirectRequest
+}
+
+type anonymousCookieRedirectRequest struct {
+	scheme string
+	cookie string
 }
 
 func (t *anonymousCookieRedirectTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	cookieValue := ""
+	if cookie, err := req.Cookie(anonymousUserIDCookieName); err == nil {
+		cookieValue = cookie.Value
+	}
+	t.mu.Lock()
+	t.received = append(t.received, anonymousCookieRedirectRequest{
+		scheme: req.URL.Scheme,
+		cookie: cookieValue,
+	})
+	t.mu.Unlock()
 	if req.URL.Scheme == "http" {
 		return &http.Response{
 			StatusCode: http.StatusFound,
@@ -2203,13 +2218,6 @@ func (t *anonymousCookieRedirectTransport) RoundTrip(req *http.Request) (*http.R
 	if req.URL.Scheme != "https" {
 		return nil, fmt.Errorf("unexpected URL scheme %q", req.URL.Scheme)
 	}
-	cookieValue := ""
-	if cookie, err := req.Cookie(anonymousUserIDCookieName); err == nil {
-		cookieValue = cookie.Value
-	}
-	t.mu.Lock()
-	t.receivedCookies = append(t.receivedCookies, cookieValue)
-	t.mu.Unlock()
 	if cookieValue == "" {
 		cookieValue = anonymousTestCookieValue(1)
 	}
@@ -2228,21 +2236,22 @@ func (t *anonymousCookieRedirectTransport) RoundTrip(req *http.Request) (*http.R
 func TestAnonymousCookieHTTPRedirectToHTTPSReusesPrincipal(t *testing.T) {
 	const agentURL = "http://example.com/a2a"
 
-	state := newAnonymousCookieState(
-		&session.Session{AppName: "app", ID: "session-a"},
-		nil,
-		nil,
-		anonymousCookieStateKey(agentURL),
-	)
+	sess := &session.Session{AppName: "app", ID: "session-a"}
 	transport := &anonymousCookieRedirectTransport{}
-	handler := &anonymousCookieHTTPReqHandler{
-		next:   &httpClientDoHandler{},
-		cookie: state,
-		scope:  anonymousCookieURLScopeFromAgentURL(agentURL),
-	}
 	httpClient := &http.Client{Transport: transport}
 
 	for i := 0; i < 2; i++ {
+		state := newAnonymousCookieState(
+			sess,
+			nil,
+			nil,
+			anonymousCookieStateKey(agentURL),
+		)
+		handler := &anonymousCookieHTTPReqHandler{
+			next:   &httpClientDoHandler{},
+			cookie: state,
+			scope:  anonymousCookieURLScopeFromAgentURL(agentURL),
+		}
 		req, err := http.NewRequest(http.MethodGet, agentURL, nil)
 		require.NoError(t, err)
 		resp, err := handler.Handle(context.Background(), httpClient, req)
@@ -2251,9 +2260,20 @@ func TestAnonymousCookieHTTPRedirectToHTTPSReusesPrincipal(t *testing.T) {
 	}
 
 	transport.mu.Lock()
-	receivedCookies := append([]string(nil), transport.receivedCookies...)
+	received := append([]anonymousCookieRedirectRequest(nil), transport.received...)
 	transport.mu.Unlock()
-	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, receivedCookies)
+	require.Equal(t, []anonymousCookieRedirectRequest{
+		{scheme: "http", cookie: ""},
+		{scheme: "https", cookie: ""},
+		{scheme: "http", cookie: ""},
+		{scheme: "https", cookie: anonymousTestCookieValue(1)},
+	}, received)
+	state := newAnonymousCookieState(
+		sess,
+		nil,
+		nil,
+		anonymousCookieStateKey(agentURL),
+	)
 	cookieValue, ok := state.load()
 	require.True(t, ok)
 	require.Equal(t, anonymousTestCookieValue(1), cookieValue)

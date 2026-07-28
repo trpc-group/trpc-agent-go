@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"net/url"
 	"sync"
@@ -359,6 +360,93 @@ func TestNewAnonymousA2AClientInstallsCookieJar(t *testing.T) {
 	received := append([]string(nil), receivedCookies...)
 	mu.Unlock()
 	require.Equal(t, []string{"", anonymousTestCookieValue(1)}, received)
+}
+
+func TestNewAnonymousA2AClientPreservesConfiguredCookieJar(t *testing.T) {
+	const (
+		routingCookieName = "route"
+		serverCookieName  = "server"
+	)
+	wantAnonymousCookie := anonymousTestCookieValue(7)
+	var (
+		mu                       sync.Mutex
+		receivedAnonymousCookies []string
+		receivedRoutingCookies   []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		anonymousCookie := ""
+		if cookie, err := r.Cookie(anonymousUserIDCookieName); err == nil {
+			anonymousCookie = cookie.Value
+		}
+		routingCookie := ""
+		if cookie, err := r.Cookie(routingCookieName); err == nil {
+			routingCookie = cookie.Value
+		}
+		mu.Lock()
+		receivedAnonymousCookies = append(receivedAnonymousCookies, anonymousCookie)
+		receivedRoutingCookies = append(receivedRoutingCookies, routingCookie)
+		mu.Unlock()
+		http.SetCookie(w, &http.Cookie{
+			Name:  anonymousUserIDCookieName,
+			Value: wantAnonymousCookie,
+			Path:  "/",
+		})
+		http.SetCookie(w, &http.Cookie{
+			Name:  serverCookieName,
+			Value: "updated",
+			Path:  "/",
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			JSONRPC string           `json:"jsonrpc"`
+			ID      any              `json:"id"`
+			Result  protocol.Message `json:"result"`
+		}{
+			JSONRPC: "2.0",
+			Result: protocol.Message{
+				Kind:      protocol.KindMessage,
+				MessageID: "response",
+				Role:      protocol.MessageRoleAgent,
+				Parts:     []protocol.Part{protocol.NewTextPart("test response")},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	serverURL, err := url.Parse(srv.URL)
+	require.NoError(t, err)
+	jar.SetCookies(serverURL, []*http.Cookie{
+		{Name: anonymousUserIDCookieName, Value: wantAnonymousCookie},
+		{Name: routingCookieName, Value: "kept"},
+	})
+	httpClient := &http.Client{Jar: jar}
+	directClient, err := NewAnonymousA2AClient(
+		srv.URL,
+		client.WithHTTPClient(httpClient),
+	)
+	require.NoError(t, err)
+	message := protocol.NewMessage(
+		protocol.MessageRoleUser,
+		[]protocol.Part{protocol.NewTextPart("hello")},
+	)
+	require.NoError(t, sendDirectClientMessage(directClient, message))
+
+	mu.Lock()
+	receivedAnonymous := append([]string(nil), receivedAnonymousCookies...)
+	receivedRouting := append([]string(nil), receivedRoutingCookies...)
+	mu.Unlock()
+	require.Equal(t, []string{wantAnonymousCookie}, receivedAnonymous)
+	require.Equal(t, []string{"kept"}, receivedRouting)
+	require.Same(t, jar, httpClient.Jar)
+	cookies := make(map[string]string)
+	for _, cookie := range jar.Cookies(serverURL) {
+		cookies[cookie.Name] = cookie.Value
+	}
+	require.Equal(t, wantAnonymousCookie, cookies[anonymousUserIDCookieName])
+	require.Equal(t, "kept", cookies[routingCookieName])
+	require.Equal(t, "updated", cookies[serverCookieName])
 }
 
 func TestAnonymousA2AClientsDoNotModifySharedHTTPClient(t *testing.T) {

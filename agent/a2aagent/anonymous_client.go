@@ -79,6 +79,9 @@ func (h *anonymousA2AClientInitHandler) Handle(
 	if httpClient == nil || req == nil {
 		return h.next.Handle(ctx, httpClient, req)
 	}
+	if err := h.middleware.ensureCookieJar(httpClient.Jar); err != nil {
+		return nil, err
+	}
 	if !h.middleware.needsInitialization(req) {
 		requestClient, err := h.middleware.clientWithCookieJar(httpClient)
 		if err != nil {
@@ -93,9 +96,6 @@ func (h *anonymousA2AClientInitHandler) Handle(
 	}
 	defer release()
 
-	if err := h.middleware.ensureCookieJar(); err != nil {
-		return nil, err
-	}
 	// The first request owns the gate until the HTTP client has processed its
 	// response and stored Set-Cookie in the jar. A waiter can then send through
 	// the same jar and continue under the principal established by the winner.
@@ -114,10 +114,14 @@ func (m *anonymousA2AClientInitMiddleware) needsInitialization(
 	return anonymousA2AClientJarNeedsInitialization(m.jar, req)
 }
 
-func (m *anonymousA2AClientInitMiddleware) ensureCookieJar() error {
+func (m *anonymousA2AClientInitMiddleware) ensureCookieJar(configured http.CookieJar) error {
 	m.jarMu.Lock()
 	defer m.jarMu.Unlock()
 	if m.jar != nil {
+		return nil
+	}
+	if configured != nil {
+		m.jar = configured
 		return nil
 	}
 	jar, err := cookiejar.New(nil)
@@ -134,7 +138,7 @@ func (m *anonymousA2AClientInitMiddleware) clientWithCookieJar(
 	if httpClient == nil {
 		return nil, nil
 	}
-	if err := m.ensureCookieJar(); err != nil {
+	if err := m.ensureCookieJar(httpClient.Jar); err != nil {
 		return nil, err
 	}
 	m.jarMu.Lock()
