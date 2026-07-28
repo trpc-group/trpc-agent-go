@@ -145,7 +145,8 @@ track 比较重点：
 规则：
 
 - `section` 必填，不能是空字符串或 `*`
-- `path` 必填，并且必须在 JSONPath 根节点下包含具体字段或固定索引；除 `*`、`**`、`***` 这类纯通配符外，`$`、`$*`、`$.*`、`$[*]` 等仅包含根节点的模式同样无效
+- `path` 必填，必须从声明的 section 根路径开始，并且在该根路径之后包含具体字段、quoted key 或固定索引
+- `$`、`$*`、`$.*`、`$[*]` 等全局根模式，`*`、`**`、`***` 等纯通配符，以及 `$.memory`、`$.memory*`、`$.memory.*`、`$.memory[*]` 等 section 根模式均无效
 - `backend_a` 和 `backend_b` 必填，不能是空字符串或 `*`
 - `reason` 必填且不能为空白
 - backend pair 支持左右顺序互换
@@ -161,6 +162,7 @@ ID 和时间类差异应优先通过 normalize 或 runner 修正，不应使用 
 
 - 默认本地测试不需要外部服务
 - backend 名称非空、没有首尾空白；该名称同时是 report 与 `allowed_diff` 使用的身份
+- 配置 memory service 支持的正数 `Backend.MemoryReadLimit`；alias 解析与最终 snapshot 共用该上限，返回条目数触及上限时 runner 会失败，而不会比较可能被截断的结果
 - 后端生成的 ID 与 response 时间元数据通过 normalize 处理，同时保留调用方提供的事件时间戳
 - summary 与 track 语义与现有后端一致
 - 新后端差异必须先由异常注入测试证明可定位，再评估是否需要 `allowed_diff`

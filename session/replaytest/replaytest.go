@@ -43,7 +43,11 @@ type Backend struct {
 	SessionService session.Service
 	TrackService   session.TrackService
 	MemoryService  memory.Service
-	SetSummaryText func(string)
+	// MemoryReadLimit is the positive backend-supported limit used for alias
+	// resolution and final snapshots. It must exceed the number of memories a
+	// replay case can return so truncated results are never compared.
+	MemoryReadLimit int
+	SetSummaryText  func(string)
 }
 
 // MemoryOperation identifies a memory mutation used by a replay case.
@@ -265,6 +269,12 @@ func validateBackend(backend Backend) error {
 	if backend.MemoryService == nil {
 		return fmt.Errorf("replay backend %q has nil memory service", backend.Name)
 	}
+	if backend.MemoryReadLimit <= 0 {
+		return fmt.Errorf(
+			"replay backend %q has non-positive memory read limit %d",
+			backend.Name, backend.MemoryReadLimit,
+		)
+	}
 	return nil
 }
 
@@ -394,7 +404,9 @@ func appendTracks(ctx context.Context, backend Backend, key session.Key, tc Case
 func applyMemoryOperations(ctx context.Context, backend Backend, userKey memory.UserKey, tc Case) error {
 	aliases := make(map[string]string)
 	for i, op := range tc.Memories {
-		if err := applyMemoryOp(ctx, backend.MemoryService, userKey, aliases, op); err != nil {
+		if err := applyMemoryOp(
+			ctx, backend.MemoryService, backend.MemoryReadLimit, userKey, aliases, op,
+		); err != nil {
 			return fmt.Errorf("memory operation %d for case %q: %w", i, tc.Name, err)
 		}
 	}
@@ -539,7 +551,7 @@ func buildResult(ctx context.Context, backend Backend, key session.Key, userKey 
 	if got == nil {
 		return Result{}, fmt.Errorf("get final session for case %q returned nil", caseName)
 	}
-	memories, err := backend.MemoryService.ReadMemories(ctx, userKey, 0)
+	memories, err := readMemoriesForReplay(ctx, backend.MemoryService, userKey, backend.MemoryReadLimit)
 	if err != nil {
 		return Result{}, fmt.Errorf("read final memories for case %q: %w", caseName, err)
 	}
@@ -585,7 +597,14 @@ func createSummary(ctx context.Context, backend Backend, key session.Key, spec S
 	return nil
 }
 
-func applyMemoryOp(ctx context.Context, service memory.Service, userKey memory.UserKey, aliases map[string]string, op MemoryOp) error {
+func applyMemoryOp(
+	ctx context.Context,
+	service memory.Service,
+	memoryReadLimit int,
+	userKey memory.UserKey,
+	aliases map[string]string,
+	op MemoryOp,
+) error {
 	switch op.Operation {
 	case MemoryAdd:
 		var opts []memory.AddOption
@@ -596,7 +615,7 @@ func applyMemoryOp(ctx context.Context, service memory.Service, userKey memory.U
 			return err
 		}
 		if op.ResultAlias != "" {
-			id, err := findMemoryID(ctx, service, userKey, op)
+			id, err := findMemoryID(ctx, service, userKey, op, memoryReadLimit)
 			if err != nil {
 				return err
 			}
@@ -723,8 +742,14 @@ func canonicalIdentityParticipants(values []string) []string {
 	return out
 }
 
-func findMemoryID(ctx context.Context, service memory.Service, userKey memory.UserKey, op MemoryOp) (string, error) {
-	entries, err := service.ReadMemories(ctx, userKey, 0)
+func findMemoryID(
+	ctx context.Context,
+	service memory.Service,
+	userKey memory.UserKey,
+	op MemoryOp,
+	memoryReadLimit int,
+) (string, error) {
+	entries, err := readMemoriesForReplay(ctx, service, userKey, memoryReadLimit)
 	if err != nil {
 		return "", err
 	}
@@ -751,6 +776,28 @@ func findMemoryID(ctx context.Context, service memory.Service, userKey memory.Us
 	default:
 		return "", fmt.Errorf("memory identity %+v is ambiguous across IDs %q", want, matches)
 	}
+}
+
+func readMemoriesForReplay(
+	ctx context.Context,
+	service memory.Service,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	if limit <= 0 {
+		return nil, fmt.Errorf("memory read limit must be positive, got %d", limit)
+	}
+	entries, err := service.ReadMemories(ctx, userKey, limit)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) >= limit {
+		return nil, fmt.Errorf(
+			"memory read returned %d entries at configured limit %d; increase MemoryReadLimit to avoid truncated replay results",
+			len(entries), limit,
+		)
+	}
+	return entries, nil
 }
 
 func applyMemoriesConcurrently(ctx context.Context, service memory.Service, userKey memory.UserKey, ops []MemoryOp) error {
@@ -1325,18 +1372,108 @@ func (rule AllowedDiffRule) matches(entry Diff) bool {
 	backendA := strings.TrimSpace(rule.BackendA)
 	backendB := strings.TrimSpace(rule.BackendB)
 	reason := strings.TrimSpace(rule.Reason)
-	if section == "" || section == "*" || path == "" || !allowedPathHasConcreteSegment(path) ||
+	if section == "" || section == "*" || path == "" || !allowedPathHasConcreteSegment(section, path) ||
 		backendA == "" || backendA == "*" || backendB == "" || backendB == "*" || reason == "" {
 		return false
 	}
 	return section == entry.Section && wildcardMatch(path, entry.Path) && backendRuleMatches(backendA, backendB, entry.BackendA, entry.BackendB)
 }
 
-func allowedPathHasConcreteSegment(path string) bool {
+func allowedPathHasConcreteSegment(section, path string) bool {
+	section = strings.TrimSpace(section)
 	path = strings.TrimSpace(path)
-	path = strings.TrimPrefix(path, "$")
-	path = strings.ReplaceAll(path, "*", "")
-	return strings.Trim(path, " \t\r\n.[]\"'") != ""
+	root := "$." + section
+	if section == "" || !strings.HasPrefix(path, root) {
+		return false
+	}
+	remainder := strings.TrimPrefix(path, root)
+	if remainder == "" {
+		return false
+	}
+
+	hasConcrete := false
+	for remainder != "" {
+		switch remainder[0] {
+		case '.':
+			segment, rest, ok := allowedPathDotSegment(remainder)
+			if !ok {
+				return false
+			}
+			candidate := strings.ReplaceAll(segment, "*", "x")
+			if !isPathIdent(candidate) {
+				return false
+			}
+			hasConcrete = hasConcrete || strings.Trim(segment, "*") != ""
+			remainder = rest
+		case '[':
+			segment, rest, ok := allowedPathBracketSegment(remainder)
+			if !ok {
+				return false
+			}
+			concrete, valid := allowedBracketSegmentIsConcrete(segment)
+			if !valid {
+				return false
+			}
+			hasConcrete = hasConcrete || concrete
+			remainder = rest
+		default:
+			return false
+		}
+	}
+	return hasConcrete
+}
+
+func allowedPathDotSegment(path string) (string, string, bool) {
+	if len(path) < 2 || path[0] != '.' {
+		return "", path, false
+	}
+	end := strings.IndexAny(path[1:], ".[")
+	if end < 0 {
+		return path[1:], "", true
+	}
+	end++
+	if end == 1 {
+		return "", path, false
+	}
+	return path[1:end], path[end:], true
+}
+
+func allowedPathBracketSegment(path string) (string, string, bool) {
+	if len(path) < 3 || path[0] != '[' {
+		return "", path, false
+	}
+	inString := false
+	escaped := false
+	for i := 1; i < len(path); i++ {
+		switch {
+		case escaped:
+			escaped = false
+		case inString && path[i] == '\\':
+			escaped = true
+		case path[i] == '"':
+			inString = !inString
+		case !inString && path[i] == ']':
+			return path[1:i], path[i+1:], true
+		}
+	}
+	return "", path, false
+}
+
+func allowedBracketSegmentIsConcrete(segment string) (bool, bool) {
+	if segment == "" {
+		return false, false
+	}
+	if strings.Trim(segment, "*") == "" {
+		return false, true
+	}
+	if _, err := strconv.ParseUint(segment, 10, 64); err == nil {
+		return true, true
+	}
+	var key string
+	if segment[0] == '"' && json.Unmarshal([]byte(segment), &key) == nil {
+		return true, true
+	}
+	return false, false
 }
 
 func backendRuleMatches(ruleA, ruleB, entryA, entryB string) bool {

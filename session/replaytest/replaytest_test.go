@@ -29,6 +29,8 @@ import (
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 )
 
+const testMemoryReadLimit = 1000
+
 func TestRunRejectsInvalidBackendNames(t *testing.T) {
 	tests := []struct {
 		name string
@@ -58,6 +60,88 @@ func TestRunRejectsMissingServices(t *testing.T) {
 		SessionService: sessionService,
 	}, Case{Name: "invalid"})
 	require.EqualError(t, err, `replay backend "missing-memory" has nil memory service`)
+
+	memoryService := meminmemory.NewMemoryService()
+	defer memoryService.Close()
+	_, err = Run(ctx, Backend{
+		Name: "zero-memory-limit", SessionService: sessionService,
+		MemoryService: memoryService,
+	}, Case{Name: "invalid"})
+	require.EqualError(t, err, `replay backend "zero-memory-limit" has non-positive memory read limit 0`)
+	_, err = Run(ctx, Backend{
+		Name: "negative-memory-limit", SessionService: sessionService,
+		MemoryService: memoryService, MemoryReadLimit: -1,
+	}, Case{Name: "invalid"})
+	require.EqualError(t, err, `replay backend "negative-memory-limit" has non-positive memory read limit -1`)
+	got, err := sessionService.GetSession(ctx, replayKey("invalid"))
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestRunUsesConfiguredMemoryReadLimit(t *testing.T) {
+	tests := []struct {
+		name      string
+		tc        Case
+		wantReads int
+		wantFinal string
+	}{
+		{name: "final snapshot", tc: Case{Name: "positive-limit-final"}, wantReads: 1},
+		{
+			name: "alias and final snapshot",
+			tc: Case{
+				Name: "positive-limit-alias",
+				Memories: []MemoryOp{
+					{Operation: MemoryAdd, Content: "initial", ResultAlias: "memory"},
+					{Operation: MemoryUpdate, Ref: "memory", Content: "updated"},
+				},
+			},
+			wantReads: 2,
+			wantFinal: "updated",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			sessionService := sessinmemory.NewSessionService()
+			defer sessionService.Close()
+			memoryService := &positiveLimitMemoryService{Service: meminmemory.NewMemoryService()}
+			defer memoryService.Close()
+
+			result, err := Run(context.Background(), Backend{
+				Name: "positive_limit", SessionService: sessionService,
+				MemoryService: memoryService, MemoryReadLimit: testMemoryReadLimit,
+			}, test.tc)
+			require.NoError(t, err)
+			require.Equal(t, test.wantReads, len(memoryService.limits))
+			for _, limit := range memoryService.limits {
+				require.Equal(t, testMemoryReadLimit, limit)
+			}
+			if test.wantFinal == "" {
+				require.Empty(t, result.Snapshot.Memory)
+				return
+			}
+			require.Len(t, result.Snapshot.Memory, 1)
+			require.Equal(t, test.wantFinal, result.Snapshot.Memory[0].Content)
+		})
+	}
+}
+
+func TestRunRejectsPotentiallyTruncatedMemoryRead(t *testing.T) {
+	sessionService := sessinmemory.NewSessionService()
+	defer sessionService.Close()
+	memoryService := &positiveLimitMemoryService{Service: meminmemory.NewMemoryService()}
+	defer memoryService.Close()
+
+	_, err := Run(context.Background(), Backend{
+		Name: "limited", SessionService: sessionService,
+		MemoryService: memoryService, MemoryReadLimit: 1,
+	}, Case{
+		Name:     "truncated-memory",
+		Memories: []MemoryOp{{Operation: MemoryAdd, Content: "at limit"}},
+	})
+	require.EqualError(t, err,
+		`read final memories for case "truncated-memory": memory read returned 1 entries at configured limit 1; increase MemoryReadLimit to avoid truncated replay results`)
+	require.Equal(t, []int{1}, memoryService.limits)
 }
 
 func TestRunReportsInvalidCaseOperations(t *testing.T) {
@@ -135,10 +219,11 @@ func TestRunReportsInvalidCaseOperations(t *testing.T) {
 				trackService = nil
 			}
 			_, err := Run(context.Background(), Backend{
-				Name:           "in_memory",
-				SessionService: sessionService,
-				TrackService:   trackService,
-				MemoryService:  memoryService,
+				Name:            "in_memory",
+				SessionService:  sessionService,
+				TrackService:    trackService,
+				MemoryService:   memoryService,
+				MemoryReadLimit: testMemoryReadLimit,
 			}, test.tc)
 			require.EqualError(t, err, test.want)
 		})
@@ -204,7 +289,8 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	}
 	result, err := Run(context.Background(), Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
-		SetSummaryText: func(text string) { summarizer.text = text },
+		MemoryReadLimit: testMemoryReadLimit,
+		SetSummaryText:  func(text string) { summarizer.text = text },
 	}, Case{
 		Name:   "summary-timeline",
 		Events: events,
@@ -232,6 +318,7 @@ func TestRunAcceptsFullTrackPayloadDomain(t *testing.T) {
 	result, err := Run(context.Background(), Backend{
 		Name: "in_memory", SessionService: sessionService,
 		TrackService: sessionService, MemoryService: memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "track-payload-domain",
 		Tracks: []TrackSpec{
@@ -297,9 +384,10 @@ func TestRunPropagatesBackendErrors(t *testing.T) {
 			defer memoryService.Close()
 			test.wrap(memoryService)
 			_, err := Run(context.Background(), Backend{
-				Name:           "in_memory",
-				SessionService: sessionService,
-				MemoryService:  memoryService,
+				Name:            "in_memory",
+				SessionService:  sessionService,
+				MemoryService:   memoryService,
+				MemoryReadLimit: testMemoryReadLimit,
 			}, test.tc)
 			require.EqualError(t, err, test.want)
 		})
@@ -313,9 +401,10 @@ func TestRunAddsAndDeletesAliasedMemory(t *testing.T) {
 	defer memoryService.Close()
 
 	result, err := Run(context.Background(), Backend{
-		Name:           "in_memory",
-		SessionService: sessionService,
-		MemoryService:  memoryService,
+		Name:            "in_memory",
+		SessionService:  sessionService,
+		MemoryService:   memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "delete-memory",
 		Memories: []MemoryOp{
@@ -339,9 +428,10 @@ func TestRunRefreshesUpdatedMemoryAlias(t *testing.T) {
 	defer memoryService.Close()
 
 	result, err := Run(context.Background(), Backend{
-		Name:           "in_memory",
-		SessionService: sessionService,
-		MemoryService:  memoryService,
+		Name:            "in_memory",
+		SessionService:  sessionService,
+		MemoryService:   memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "update-memory-alias",
 		Memories: []MemoryOp{
@@ -362,9 +452,10 @@ func TestRunRejectsEmptyUpdatedMemoryID(t *testing.T) {
 	defer memoryService.Close()
 
 	_, err := Run(context.Background(), Backend{
-		Name:           "empty_update_result",
-		SessionService: sessionService,
-		MemoryService:  memoryService,
+		Name:            "empty_update_result",
+		SessionService:  sessionService,
+		MemoryService:   memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "empty-update-result",
 		Memories: []MemoryOp{
@@ -384,9 +475,10 @@ func TestRunResolvesAddAliasByCanonicalIdentity(t *testing.T) {
 	defer memoryService.Close()
 
 	result, err := Run(context.Background(), Backend{
-		Name:           "ordered_memory",
-		SessionService: sessionService,
-		MemoryService:  memoryService,
+		Name:            "ordered_memory",
+		SessionService:  sessionService,
+		MemoryService:   memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "same-content-episodes",
 		Memories: []MemoryOp{
@@ -422,9 +514,10 @@ func TestRunResolvesIdempotentAddAlias(t *testing.T) {
 	defer memoryService.Close()
 
 	result, err := Run(context.Background(), Backend{
-		Name:           "in_memory",
-		SessionService: sessionService,
-		MemoryService:  memoryService,
+		Name:            "in_memory",
+		SessionService:  sessionService,
+		MemoryService:   memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, Case{
 		Name: "idempotent-add-alias",
 		Memories: []MemoryOp{
@@ -456,7 +549,7 @@ func TestFindMemoryIDRejectsAmbiguousIdentity(t *testing.T) {
 			Kind: memory.KindEpisode, EventTime: &at,
 			Participants: []string{"Alice"}, Location: "Kyoto",
 		},
-	})
+	}, testMemoryReadLimit)
 	require.ErrorContains(t, err, `ambiguous across IDs ["a-id" "z-id"]`)
 }
 
@@ -493,7 +586,7 @@ func TestFindMemoryIDReportsResolutionErrors(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			_, err := findMemoryID(context.Background(), test.service, userKey, op)
+			_, err := findMemoryID(context.Background(), test.service, userKey, op, testMemoryReadLimit)
 			require.ErrorContains(t, err, test.want)
 		})
 	}
@@ -595,6 +688,7 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 
 	_, err := Run(ctx, Backend{
 		Name: "in_memory", SessionService: sessionService, MemoryService: memoryService,
+		MemoryReadLimit: testMemoryReadLimit,
 	}, tc)
 	require.NoError(t, err)
 	peerKey := replayKey(tc.Name)
@@ -646,6 +740,7 @@ func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
 
 			_, err := Run(ctx, Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+				MemoryReadLimit: testMemoryReadLimit,
 			}, tc)
 			require.ErrorIs(t, err, context.Canceled)
 			if test.deleteErr != nil {
@@ -752,6 +847,7 @@ func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 
 			_, err := Run(context.Background(), Backend{
 				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+				MemoryReadLimit: testMemoryReadLimit,
 			}, replayStateScopeCase(strings.ReplaceAll(test.name, " ", "-")))
 			require.Error(t, err)
 			for _, want := range test.wantErrors {
@@ -784,6 +880,23 @@ func (s *emptyUpdateResultMemoryService) UpdateMemory(
 
 type orderedReadMemoryService struct {
 	memory.Service
+}
+
+type positiveLimitMemoryService struct {
+	memory.Service
+	limits []int
+}
+
+func (s *positiveLimitMemoryService) ReadMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
+	if limit <= 0 {
+		return nil, errors.New("test memory service requires a positive read limit")
+	}
+	s.limits = append(s.limits, limit)
+	return s.Service.ReadMemories(ctx, userKey, limit)
 }
 
 func (s *orderedReadMemoryService) ReadMemories(
@@ -830,7 +943,7 @@ func addAndReadMemoryID(t *testing.T, userKey memory.UserKey, op MemoryOp) strin
 	require.NoError(t, service.AddMemory(
 		context.Background(), userKey, op.Content, append([]string(nil), op.Topics...), opts...,
 	))
-	entries, err := service.ReadMemories(context.Background(), userKey, 0)
+	entries, err := service.ReadMemories(context.Background(), userKey, testMemoryReadLimit)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	return entries[0].ID
@@ -1243,13 +1356,33 @@ func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {
 	require.False(t, HasUnallowedDiffs(diffs))
 }
 
-func TestAllowedDiffRulesRejectRootOnlyWildcards(t *testing.T) {
-	invalid := []string{"$", "$*", "$**", "$.*", "$[*]", "*", "**", "***"}
-	for _, path := range invalid {
-		require.Falsef(t, allowedPathHasConcreteSegment(path), "path=%q", path)
+func TestAllowedDiffRulesRequireConcreteSegmentBelowSectionRoot(t *testing.T) {
+	for _, section := range []string{"session", "events", "state", "memory", "summary", "tracks"} {
+		for _, suffix := range []string{"", "*", ".*", "[*]"} {
+			path := "$." + section + suffix
+			require.Falsef(t, allowedPathHasConcreteSegment(section, path), "section=%q path=%q", section, path)
+		}
 	}
-	require.True(t, allowedPathHasConcreteSegment("$.memory[0].content"))
-	require.True(t, allowedPathHasConcreteSegment("$.memory[*].content"))
+	for _, path := range []string{
+		"$", "$*", "$**", "$.*", "$[*]", "*", "**", "***",
+		"$.memory[", "$.memory[abc]", "$.memory..content", "$.memory.content]",
+	} {
+		require.Falsef(t, allowedPathHasConcreteSegment("memory", path), "path=%q", path)
+	}
+	require.False(t, allowedPathHasConcreteSegment("summary", "$.memory[0].content"))
+	for _, test := range []struct {
+		section string
+		path    string
+	}{
+		{section: "memory", path: "$.memory[0]"},
+		{section: "memory", path: "$.memory[0].content"},
+		{section: "memory", path: "$.memory[*].content"},
+		{section: "state", path: "$.state.allowed"},
+		{section: "summary", path: `$.summary["filter]key"]`},
+	} {
+		require.Truef(t, allowedPathHasConcreteSegment(test.section, test.path),
+			"section=%q path=%q", test.section, test.path)
+	}
 
 	newEntries := func() []Diff {
 		return []Diff{
@@ -1257,12 +1390,14 @@ func TestAllowedDiffRulesRejectRootOnlyWildcards(t *testing.T) {
 			{Section: "memory", Path: "$.memory[0].topics[0]", BackendA: "left", BackendB: "right"},
 		}
 	}
-	rootWildcardEntries := newEntries()
-	applyAllowedDiffRules(rootWildcardEntries, []AllowedDiffRule{{
-		Section: "memory", Path: "$*", BackendA: "left", BackendB: "right", Reason: "too broad",
-	}})
-	require.False(t, rootWildcardEntries[0].Allowed)
-	require.False(t, rootWildcardEntries[1].Allowed)
+	for _, path := range []string{"$.memory", "$.memory*", "$.memory.*", "$.memory[*]"} {
+		rootWildcardEntries := newEntries()
+		applyAllowedDiffRules(rootWildcardEntries, []AllowedDiffRule{{
+			Section: "memory", Path: path, BackendA: "left", BackendB: "right", Reason: "too broad",
+		}})
+		require.Falsef(t, rootWildcardEntries[0].Allowed, "path=%q", path)
+		require.Falsef(t, rootWildcardEntries[1].Allowed, "path=%q", path)
+	}
 
 	partialWildcardEntries := newEntries()
 	applyAllowedDiffRules(partialWildcardEntries, []AllowedDiffRule{{

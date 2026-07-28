@@ -145,7 +145,8 @@ Example:
 Rules:
 
 - `section` is required and cannot be empty or `*`
-- `path` is required and must contain a concrete field or fixed index below the JSONPath root; root-only patterns such as `$`, `$*`, `$.*`, and `$[*]` are rejected together with pure wildcards such as `*`, `**`, and `***`
+- `path` is required, must start at the declared section root, and must contain a concrete field, quoted key, or fixed index below that root
+- global-root patterns such as `$`, `$*`, `$.*`, and `$[*]`, pure wildcards such as `*`, `**`, and `***`, and section-root patterns such as `$.memory`, `$.memory*`, `$.memory.*`, and `$.memory[*]` are rejected
 - `backend_a` and `backend_b` are required and cannot be empty or `*`
 - `reason` is required and cannot be blank
 - backend pairs match in either order
@@ -161,6 +162,7 @@ When adding a backend:
 
 - keep default local tests free of external-service dependencies
 - give the backend a non-empty name with no surrounding whitespace; the name is the report and `allowed_diff` identity
+- configure a positive `Backend.MemoryReadLimit` supported by that memory service; alias resolution and final snapshots share this limit, and the runner fails instead of comparing results when the returned entry count reaches the limit
 - normalize backend-generated IDs and response timing metadata while preserving caller-supplied event timestamps
 - preserve summary and track semantics across backends
 - prove new backend differences are precisely locatable through anomaly tests before considering `allowed_diff`

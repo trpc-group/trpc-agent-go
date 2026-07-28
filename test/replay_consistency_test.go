@@ -42,6 +42,7 @@ type backendBundle struct {
 	sessionService    session.Service
 	trackService      session.TrackService
 	memoryService     memory.Service
+	memoryReadLimit   int
 	sqliteMemoryDB    *sql.DB
 	sqliteMemoryTable string
 	summarizer        *deterministicSummarizer
@@ -198,7 +199,10 @@ type replayRetryComparison struct {
 
 var replayBaseTime = time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 
-const replaySQLiteMemoryTableName = "memories"
+const (
+	replaySQLiteMemoryTableName = "memories"
+	replayMemoryReadLimit       = 1000
+)
 
 var _ sessionsummary.SessionSummarizer = (*deterministicSummarizer)(nil)
 
@@ -266,17 +270,19 @@ func makeReplayBackends(t *testing.T) []backendBundle {
 
 	backends := []backendBundle{
 		{
-			name:           "in_memory",
-			sessionService: inMemorySessionService,
-			trackService:   inMemorySessionService,
-			memoryService:  inMemoryMemoryService,
-			summarizer:     inMemorySummarizer,
+			name:            "in_memory",
+			sessionService:  inMemorySessionService,
+			trackService:    inMemorySessionService,
+			memoryService:   inMemoryMemoryService,
+			memoryReadLimit: replayMemoryReadLimit,
+			summarizer:      inMemorySummarizer,
 		},
 		{
 			name:              "sqlite",
 			sessionService:    sqliteSessionService,
 			trackService:      sqliteSessionService,
 			memoryService:     sqliteMemoryService,
+			memoryReadLimit:   replayMemoryReadLimit,
 			sqliteMemoryDB:    sqliteMemoryDB,
 			sqliteMemoryTable: replaySQLiteMemoryTableName,
 			summarizer:        sqliteSummarizer,
@@ -409,10 +415,11 @@ func runReplayCaseOnBackend(
 
 func toReplayTestBackend(backend backendBundle) replaytest.Backend {
 	return replaytest.Backend{
-		Name:           backend.name,
-		SessionService: backend.sessionService,
-		TrackService:   backend.trackService,
-		MemoryService:  backend.memoryService,
+		Name:            backend.name,
+		SessionService:  backend.sessionService,
+		TrackService:    backend.trackService,
+		MemoryService:   backend.memoryService,
+		MemoryReadLimit: backend.memoryReadLimit,
 		SetSummaryText: func(text string) {
 			backend.summarizer.text = text
 		},
@@ -477,8 +484,10 @@ func refreshReplayCaseResultSnapshot(
 	memories, err := backend.memoryService.ReadMemories(ctx, memory.UserKey{
 		AppName: key.AppName,
 		UserID:  key.UserID,
-	}, 0)
+	}, backend.memoryReadLimit)
 	require.NoError(t, err)
+	require.Less(t, len(memories), backend.memoryReadLimit,
+		"memory snapshot reached configured limit and may be truncated")
 	return replayCaseResult{
 		backend:  backend.name,
 		key:      key,
@@ -2750,6 +2759,46 @@ func TestReplayConsistencyAllowedDiffRules_RequireExplicitMatch(t *testing.T) {
 			rules: []allowedDiffRule{{
 				Section:  "memory",
 				Path:     "$[*]",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "section root path rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$.memory",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "section root wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$.memory*",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "section root child wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$.memory.*",
+				BackendA: "in_memory",
+				BackendB: "sqlite",
+				Reason:   "too broad",
+			}},
+		},
+		{
+			name: "section root index wildcard rejected",
+			rules: []allowedDiffRule{{
+				Section:  "memory",
+				Path:     "$.memory[*]",
 				BackendA: "in_memory",
 				BackendB: "sqlite",
 				Reason:   "too broad",
