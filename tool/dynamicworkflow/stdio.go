@@ -365,9 +365,6 @@ func finishWorkflowGuest(
 	}
 	_ = guest.stdin.Close()
 	waitErr := waitWorkflowGuest(ctx, guest)
-	if guest.stderrDone != nil {
-		<-guest.stderrDone
-	}
 	if guest.stderr.Exceeded() && state.guestErr == nil {
 		state.guestErr = fmt.Errorf(
 			"dynamicworkflow: guest stderr exceeds %d bytes",
@@ -432,6 +429,9 @@ func workflowGuestScannerError(err error) error {
 func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 	waitCh := make(chan error, 1)
 	go func() {
+		if guest.stderrDone != nil {
+			<-guest.stderrDone
+		}
 		waitCh <- guest.process.Wait()
 	}()
 	timer := time.NewTimer(workflowGuestExitGrace)

@@ -179,6 +179,73 @@ func TestSandboxRunnerOptionalTimeoutStopsBusyWorkflow(t *testing.T) {
 	require.Less(t, time.Since(started), 5*time.Second)
 }
 
+func TestSandboxRunnerDrainsGuestStderrBeforeWait(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell wrapper is Unix-specific")
+	}
+	wrapper := filepath.Join(t.TempDir(), "python-with-stderr-burst")
+	require.NoError(t, os.WriteFile(
+		wrapper,
+		[]byte(`#!/bin/sh
+i=0
+while [ "$i" -lt 8192 ]; do
+  printf '0123456789abcdef0123456789abcdef'
+  i=$((i + 1))
+done >&2
+printf '\nfinal stderr marker\n' >&2
+exit 97
+`),
+		0o700,
+	))
+	runner := NewSandboxRunner(
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+	runner.Python = wrapper
+
+	_, err := Execute(
+		context.Background(),
+		runner,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		"return None",
+	)
+	require.ErrorContains(t, err, "final stderr marker")
+}
+
+func TestSandboxRunnerKillsDescendantHoldingStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is Unix-specific")
+	}
+	wrapper := filepath.Join(t.TempDir(), "python-with-stderr-descendant")
+	require.NoError(t, os.WriteFile(
+		wrapper,
+		[]byte(`#!/bin/sh
+/bin/sleep 30 &
+printf '{"type":"done","result":"done"}\n'
+exit 0
+`),
+		0o700,
+	))
+	runner := NewSandboxRunner(
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+	runner.Python = wrapper
+
+	started := time.Now()
+	result, err := Execute(
+		context.Background(),
+		runner,
+		callHandlerFunc(func(context.Context, Call) (json.RawMessage, error) {
+			return nil, nil
+		}),
+		"return None",
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result.Value))
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
 func TestSandboxRunnerTimeoutCancelsCallbackAndCleansWorkspace(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 is not installed")

@@ -120,11 +120,10 @@ func (p *sandboxStdioProcess) diagnosticOutput() string {
 }
 
 func (p *sandboxStdioProcess) Wait() error {
-	err := p.process.Wait()
 	if p.stderrDone != nil {
 		<-p.stderrDone
 	}
-	return err
+	return p.process.Wait()
 }
 
 type sandboxStderrCapture struct {

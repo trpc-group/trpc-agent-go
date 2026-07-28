@@ -208,14 +208,17 @@ func (p *Process) Stderr() io.ReadCloser {
 	return p.stderr
 }
 
-// Wait waits for process exit and releases backend resources exactly once.
-// Concurrent and repeated calls return the same result.
+// Wait waits for process exit and releases backend resources exactly once. On
+// Unix-like systems it also makes a best-effort attempt to terminate remaining
+// members of the process group after the leader exits. Concurrent and repeated
+// calls return the same result.
 func (p *Process) Wait() error {
 	if p == nil || p.prepared == nil || p.prepared.cmd == nil {
 		return nil
 	}
 	p.waitOnce.Do(func() {
 		p.waitErr = p.prepared.cmd.Wait()
+		cleanupProcessTree(p.prepared.cmd)
 		if p.waitErr != nil {
 			processErr := p.waitErr
 			switch p.prepared.runCtx.Err() {

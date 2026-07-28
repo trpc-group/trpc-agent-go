@@ -175,6 +175,68 @@ func TestSandboxRunnerIncludesGuestStderrInFailure(t *testing.T) {
 	require.ErrorContains(t, err, "guest bootstrap failed")
 }
 
+func TestSandboxRunnerDrainsGuestStderrBeforeWait(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell wrapper is Unix-specific")
+	}
+	wrapper := filepath.Join(t.TempDir(), "python-with-stderr-burst")
+	require.NoError(t, os.WriteFile(
+		wrapper,
+		[]byte(`#!/bin/sh
+IFS= read -r _
+i=0
+while [ "$i" -lt 8192 ]; do
+  printf '0123456789abcdef0123456789abcdef'
+  i=$((i + 1))
+done >&2
+printf '\nfinal stderr marker\n' >&2
+exit 97
+`),
+		0o700,
+	))
+	runner := NewSandboxRunner(
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+	runner.Python = wrapper
+
+	_, err := Execute(
+		context.Background(),
+		runner,
+		fakeToolCallHandler{},
+		"return None",
+	)
+	require.ErrorContains(t, err, "final stderr marker")
+}
+
+func TestSandboxRunnerKillsDescendantHoldingStderr(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-group cleanup is Unix-specific")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	originalTimeout := completedGuestWaitTimeout
+	completedGuestWaitTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { completedGuestWaitTimeout = originalTimeout })
+	runner := NewSandboxRunner(
+		sandbox.WithPermissionProfile(sandbox.DangerFullAccessProfile()),
+	)
+
+	started := time.Now()
+	result, err := Execute(
+		context.Background(),
+		runner,
+		fakeToolCallHandler{},
+		"import subprocess, sys\n"+
+			"subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], "+
+			"stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL)\n"+
+			"return 'done'",
+	)
+	require.NoError(t, err)
+	require.JSONEq(t, `"done"`, string(result.Value))
+	require.Less(t, time.Since(started), 2*time.Second)
+}
+
 func TestSandboxStderrCaptureBoundsOutput(t *testing.T) {
 	capture := newSandboxStderrCapture(4)
 	n, err := capture.Write([]byte("abcdef"))
