@@ -832,6 +832,26 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 				left:  []byte{0xff},
 				right: []byte(`{"kind":"bytes","base64":"/w=="}`),
 			},
+			{
+				name:  "invalid UTF-8 and replacement character",
+				left:  []byte{'"', 0xff, '"'},
+				right: []byte(`"\ufffd"`),
+			},
+			{
+				name:  "unpaired high surrogate and replacement character",
+				left:  []byte(`"\ud800"`),
+				right: []byte(`"\ufffd"`),
+			},
+			{
+				name:  "unpaired low surrogate and replacement character",
+				left:  []byte(`"\udc00"`),
+				right: []byte(`"\ufffd"`),
+			},
+			{
+				name:  "high surrogate followed by non-low escape",
+				left:  []byte(`"\ud800\u0061"`),
+				right: []byte(`"\ufffda"`),
+			},
 		}
 		for _, test := range tests {
 			t.Run(test.name, func(t *testing.T) {
@@ -849,6 +869,22 @@ func TestComparisonAndNormalizationEdgeCases(t *testing.T) {
 					t.Fatal("Compare() did not distinguish state representations")
 				}
 			})
+		}
+	})
+	t.Run("valid surrogate pair remains JSON", func(t *testing.T) {
+		escaped := normalizeState(session.StateMap{"value": []byte(`"\ud83d\ude00"`)}, "session")
+		encoded := normalizeState(session.StateMap{
+			"value": {'"', 0xf0, 0x9f, 0x98, 0x80, '"'},
+		}, "session")
+		if !reflect.DeepEqual(escaped, encoded) {
+			t.Fatalf("equivalent surrogate pair encodings differ: %v != %v", escaped, encoded)
+		}
+	})
+	t.Run("escaped surrogate text remains JSON", func(t *testing.T) {
+		state := normalizeState(session.StateMap{"value": []byte(`"\\ud800"`)}, "session")
+		value, ok := state["value"].(CanonicalMap)
+		if !ok || value["kind"] != "json" {
+			t.Fatalf("escaped surrogate text = %#v, want JSON", state["value"])
 		}
 	})
 	t.Run("timestamp forms", func(t *testing.T) {

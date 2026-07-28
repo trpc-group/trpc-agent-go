@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -323,7 +324,7 @@ func normalizeStatePreserving(
 			continue
 		}
 		var decoded any
-		if decodeJSON(value, &decoded) == nil {
+		if decodeLosslessJSON(value, &decoded) {
 			raw, _ := json.Marshal(decoded)
 			output[key] = CanonicalMap{
 				"kind": "json",
@@ -337,6 +338,43 @@ func normalizeStatePreserving(
 		}
 	}
 	return output
+}
+
+func decodeLosslessJSON(raw []byte, output any) bool {
+	if !utf8.Valid(raw) || decodeJSON(raw, output) != nil {
+		return false
+	}
+	return validJSONSurrogatePairs(raw)
+}
+
+// raw has passed decodeJSON, but encoding/json replaces unpaired UTF-16
+// surrogate escapes with U+FFFD instead of rejecting them.
+func validJSONSurrogatePairs(raw []byte) bool {
+	for index := 0; index < len(raw); index++ {
+		if raw[index] != '\\' {
+			continue
+		}
+		index++
+		if raw[index] != 'u' {
+			continue
+		}
+		code, _ := strconv.ParseUint(string(raw[index+1:index+5]), 16, 16)
+		index += 4
+		switch {
+		case code >= 0xd800 && code <= 0xdbff:
+			if index+6 >= len(raw) || raw[index+1] != '\\' || raw[index+2] != 'u' {
+				return false
+			}
+			low, _ := strconv.ParseUint(string(raw[index+3:index+7]), 16, 16)
+			if low < 0xdc00 || low > 0xdfff {
+				return false
+			}
+			index += 6
+		case code >= 0xdc00 && code <= 0xdfff:
+			return false
+		}
+	}
+	return true
 }
 
 func normalizeMemories(entries []*memory.Entry) ([]CanonicalMap, error) {
