@@ -390,8 +390,8 @@ func (s *Service) softDeleteSessionTrackEvents(
 ) error {
 	nowMicro := now.UTC().UnixMicro()
 	err := s.chClient.Exec(ctx,
-		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event_index, event, created_at, updated_at, deleted_at)
-			SELECT app_name, user_id, session_id, track, event_index, event, created_at,
+		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event_index, event_id, event, created_at, updated_at, deleted_at)
+			SELECT app_name, user_id, session_id, track, event_index, event_id, event, created_at,
 				fromUnixTimestamp64Micro(?) AS updated_at, fromUnixTimestamp64Micro(?) AS deleted_at
 			FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`,

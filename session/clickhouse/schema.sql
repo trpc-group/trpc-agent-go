@@ -60,13 +60,14 @@ CREATE TABLE IF NOT EXISTS session_track_events (
     session_id  String,
     track       String,
     event_index UInt64,
+    event_id    String COMMENT 'Immutable row identity for concurrent appends',
     event       String COMMENT 'Track event encoded as JSON text',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
-ORDER BY (app_name, user_id, session_id, track, event_index)
+ORDER BY (app_name, user_id, session_id, track, event_index, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session track events table';
 

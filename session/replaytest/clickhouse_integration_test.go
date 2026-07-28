@@ -96,6 +96,13 @@ func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
 	backend, err := newClickHouseBackend(dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
+	secondService, err := sessionclickhouse.NewService(
+		sessionclickhouse.WithClickHouseDSN(dsn),
+		sessionclickhouse.WithTablePrefix(clickHouseReplayTablePrefix),
+		sessionclickhouse.WithSummarizer(manualReplaySummarizer{}),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, secondService.Close()) })
 
 	key := session.Key{
 		AppName:   replayApp,
@@ -103,10 +110,14 @@ func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
 		SessionID: fmt.Sprintf("concurrent-tracks-%d", time.Now().UnixNano()),
 	}
 	t.Cleanup(func() { cleanupReplaySession(t, backend, key) })
-	sess, err := backend.Session.CreateSession(ctx, key, nil)
+	firstSession, err := backend.Session.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
-	trackService, ok := backend.Session.(session.TrackService)
+	secondSession, err := secondService.GetSession(ctx, key)
+	require.NoError(t, err)
+	firstTrackService, ok := backend.Session.(session.TrackService)
 	require.True(t, ok)
+	trackServices := []session.TrackService{firstTrackService, secondService}
+	sessions := []*session.Session{firstSession, secondSession}
 
 	const eventCount = 24
 	errs := make(chan error, eventCount)
@@ -120,7 +131,8 @@ func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
 				errs <- marshalErr
 				return
 			}
-			errs <- trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+			serviceIndex := i % len(trackServices)
+			errs <- trackServices[serviceIndex].AppendTrackEvent(ctx, sessions[serviceIndex], &session.TrackEvent{
 				Track:     "model",
 				Payload:   payload,
 				Timestamp: time.Now().UTC(),
@@ -137,6 +149,17 @@ func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, persisted.Tracks, session.Track("model"))
 	require.Len(t, persisted.Tracks["model"].Events, eventCount)
+	counts := make(map[int]int, eventCount)
+	for _, trackEvent := range persisted.Tracks["model"].Events {
+		var payload struct {
+			Index int `json:"index"`
+		}
+		require.NoError(t, json.Unmarshal(trackEvent.Payload, &payload))
+		counts[payload.Index]++
+	}
+	for i := 0; i < eventCount; i++ {
+		require.Equal(t, 1, counts[i], "payload %d must be persisted exactly once", i)
+	}
 }
 
 func newClickHouseBackend(dsn string) (Backend, error) {

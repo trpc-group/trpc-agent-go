@@ -12,23 +12,26 @@ package clickhouse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
 type trackAppendLock struct {
-	mu   sync.Mutex
-	refs int
+	token chan struct{}
+	refs  int
 }
 
 // AppendTrackEvent persists a track event and appends it to the supplied
 // session. Track rows are append-only and use an event index to preserve the
 // caller's order within a track. Concurrent appends through the same Service
-// are serialized per app, user, and session.
+// are serialized per app, user, and session. Independent service instances
+// retain every append, with event IDs providing a deterministic tie-break when
+// they concurrently choose the same event index.
 func (s *Service) AppendTrackEvent(
 	ctx context.Context,
 	sess *session.Session,
@@ -45,10 +48,14 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
-	unlock := s.lockTrackAppend(key)
+	unlock, err := s.lockTrackAppend(ctx, key)
+	if err != nil {
+		return fmt.Errorf("wait to append track event: %w", err)
+	}
 	defer unlock()
 
-	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+	staged := sess.Clone()
+	if err := staged.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event to session: %w", err)
 	}
 
@@ -74,19 +81,55 @@ func (s *Service) AppendTrackEvent(
 		return fmt.Errorf("marshal track event: %w", err)
 	}
 	now := time.Now().UTC().UnixMicro()
+	eventID := uuid.NewString()
 	err = s.chClient.Exec(ctx, fmt.Sprintf(`INSERT INTO %s
-		(app_name, user_id, session_id, track, event_index, event, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`,
+		(app_name, user_id, session_id, track, event_index, event_id, event, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?))`,
 		s.tableSessionTrackEvents), key.AppName, key.UserID, key.SessionID,
-		string(trackEvent.Track), eventIndex, string(data), now, now)
+		string(trackEvent.Track), eventIndex, eventID, string(data), now, now)
 	if err != nil {
 		return fmt.Errorf("persist track event: %w", err)
 	}
-	trackIndex := sess.State["tracks"]
+	trackIndex := staged.SnapshotTracksState()
 	if err := s.UpdateSessionState(ctx, key, session.StateMap{"tracks": trackIndex}); err != nil {
+		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		rollbackAt := time.Now().UTC().UnixMicro()
+		if rollbackAt <= now {
+			rollbackAt = now + 1
+		}
+		if rollbackErr := s.softDeleteTrackEvent(
+			rollbackCtx, key, trackEvent.Track, eventID, rollbackAt,
+		); rollbackErr != nil {
+			return errors.Join(
+				fmt.Errorf("persist track index: %w", err),
+				fmt.Errorf("compensate track event: %w", rollbackErr),
+			)
+		}
 		return fmt.Errorf("persist track index: %w", err)
 	}
+	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
+		return fmt.Errorf("commit track event to session: %w", err)
+	}
 	return nil
+}
+
+func (s *Service) softDeleteTrackEvent(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	eventID string,
+	deletedAt int64,
+) error {
+	return s.chClient.Exec(ctx, fmt.Sprintf(`INSERT INTO %s
+		(app_name, user_id, session_id, track, event_index, event_id, event, created_at, updated_at, deleted_at)
+		SELECT app_name, user_id, session_id, track, event_index, event_id, event, created_at,
+			fromUnixTimestamp64Micro(?), fromUnixTimestamp64Micro(?)
+		FROM %s FINAL
+		WHERE app_name = ? AND user_id = ? AND session_id = ? AND track = ?
+			AND event_id = ? AND deleted_at IS NULL`,
+		s.tableSessionTrackEvents, s.tableSessionTrackEvents),
+		deletedAt, deletedAt, key.AppName, key.UserID, key.SessionID, string(track), eventID)
 }
 
 func (s *Service) getTrackEvents(
@@ -126,7 +169,7 @@ func (s *Service) getTrackEventsList(
 
 	rows, err := s.chClient.Query(ctx, fmt.Sprintf(`SELECT app_name, user_id, session_id, track, event FROM %s FINAL
 		WHERE (%s) AND deleted_at IS NULL
-		ORDER BY app_name ASC, user_id ASC, session_id ASC, track ASC, event_index ASC`,
+		ORDER BY app_name ASC, user_id ASC, session_id ASC, track ASC, event_index ASC, event_id ASC`,
 		s.tableSessionTrackEvents, strings.Join(conditions, " OR ")), args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch get track events: %w", err)
@@ -171,7 +214,7 @@ func (s *Service) getTrackEventsList(
 	return result, nil
 }
 
-func (s *Service) lockTrackAppend(key session.Key) func() {
+func (s *Service) lockTrackAppend(ctx context.Context, key session.Key) (func(), error) {
 	lockKey := trackSessionKey(key.AppName, key.UserID, key.SessionID)
 
 	s.trackLocksMu.Lock()
@@ -180,22 +223,33 @@ func (s *Service) lockTrackAppend(key session.Key) func() {
 	}
 	lock := s.trackLocks[lockKey]
 	if lock == nil {
-		lock = &trackAppendLock{}
+		lock = &trackAppendLock{token: make(chan struct{}, 1)}
+		lock.token <- struct{}{}
 		s.trackLocks[lockKey] = lock
 	}
 	lock.refs++
 	s.trackLocksMu.Unlock()
 
-	lock.mu.Lock()
-	return func() {
-		lock.mu.Unlock()
-
+	select {
+	case <-ctx.Done():
 		s.trackLocksMu.Lock()
 		lock.refs--
 		if lock.refs == 0 {
 			delete(s.trackLocks, lockKey)
 		}
 		s.trackLocksMu.Unlock()
+		return nil, ctx.Err()
+	case <-lock.token:
+		return func() {
+			lock.token <- struct{}{}
+
+			s.trackLocksMu.Lock()
+			lock.refs--
+			if lock.refs == 0 {
+				delete(s.trackLocks, lockKey)
+			}
+			s.trackLocksMu.Unlock()
+		}, nil
 	}
 }
 

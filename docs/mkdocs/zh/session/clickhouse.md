@@ -185,20 +185,23 @@ CREATE TABLE IF NOT EXISTS session_track_events (
     session_id  String,
     track       String,
     event_index UInt64,
+    event_id    String COMMENT '并发追加时保持行唯一的不可变标识',
     event       String COMMENT '以 JSON 文本编码的 track 事件',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
     deleted_at  Nullable(DateTime64(6)) COMMENT '软删除时间'
 ) ENGINE = ReplacingMergeTree(updated_at)
 PARTITION BY (app_name, cityHash64(user_id) % 64)
-ORDER BY (app_name, user_id, session_id, track, event_index)
+ORDER BY (app_name, user_id, session_id, track, event_index, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session track events table';
 ```
 
-`event_index` 保留同一 track 内的写入顺序。Track 事件与 session 共用生命周期：
-删除或过期 session 时会写入墓碑版本，之后可由 `WithDeletedRetention`
-配置的清理任务执行物理删除。
+`event_index` 保留同一 track 内串行追加的写入顺序。多个独立 Service 实例
+同时追加时可能得到相同的下一个索引；`event_id` 保证每一行互不覆盖，并提供
+确定性的并列排序。此类跨实例并发追加不保证严格的实时先后顺序。Track 事件与
+session 共用生命周期：删除或过期 session 时会写入墓碑版本，之后可由
+`WithDeletedRetention` 配置的清理任务执行物理删除。
 
 ### session_summaries
 

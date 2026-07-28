@@ -25,7 +25,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
-func TestAppendTrackEventSerializesEventIndex(t *testing.T) {
+func TestAppendTrackEventSerializesEventIndexWithinService(t *testing.T) {
 	const appendCount = 24
 
 	var mu sync.Mutex
@@ -92,6 +92,203 @@ func TestAppendTrackEventSerializesEventIndex(t *testing.T) {
 		require.Equal(t, uint64(i), index)
 	}
 	require.Empty(t, service.trackLocks)
+}
+
+func TestAppendTrackEventRetainsConcurrentCrossServiceWrites(t *testing.T) {
+	state := SessionState{
+		ID:        "session",
+		State:     make(session.StateMap),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	stateJSON, err := json.Marshal(state)
+	require.NoError(t, err)
+
+	var mu sync.Mutex
+	countCalls := 0
+	countBarrier := make(chan struct{})
+	var indexes []uint64
+	var eventIDs []string
+	var payloads []string
+	client := &mockClient{}
+	client.queryFunc = func(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+		if !strings.Contains(query, "SELECT count()") {
+			return newMockRows([][]any{{string(stateJSON)}}), nil
+		}
+
+		mu.Lock()
+		countCalls++
+		if countCalls == 2 {
+			close(countBarrier)
+		}
+		mu.Unlock()
+		<-countBarrier
+		return newMockRows([][]any{{uint64(0)}}), nil
+	}
+	client.execFunc = func(_ context.Context, query string, args ...any) error {
+		if !strings.Contains(query, "INSERT INTO session_track_events") ||
+			!strings.Contains(query, "VALUES") {
+			return nil
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		indexes = append(indexes, args[4].(uint64))
+		eventIDs = append(eventIDs, args[5].(string))
+		payloads = append(payloads, args[6].(string))
+		return nil
+	}
+
+	newService := func() *Service {
+		return &Service{
+			chClient:                client,
+			tableSessionStates:      "session_states",
+			tableSessionTrackEvents: "session_track_events",
+		}
+	}
+	services := []*Service{newService(), newService()}
+	sessions := []*session.Session{
+		session.NewSession("app", "user", "session"),
+		session.NewSession("app", "user", "session"),
+	}
+
+	errs := make(chan error, len(services))
+	for i := range services {
+		go func(i int) {
+			errs <- services[i].AppendTrackEvent(
+				context.Background(),
+				sessions[i],
+				&session.TrackEvent{
+					Track:   "model",
+					Payload: json.RawMessage(fmt.Sprintf(`{"service":%d}`, i)),
+				},
+			)
+		}(i)
+	}
+	for range services {
+		require.NoError(t, <-errs)
+	}
+
+	require.Equal(t, []uint64{0, 0}, indexes)
+	require.Len(t, eventIDs, 2)
+	require.NotEqual(t, eventIDs[0], eventIDs[1])
+	slices.Sort(payloads)
+	require.Contains(t, payloads[0], `"service":0`)
+	require.Contains(t, payloads[1], `"service":1`)
+}
+
+func TestLockTrackAppendHonorsContextCancellation(t *testing.T) {
+	service := &Service{}
+	key := session.Key{AppName: "app", UserID: "user", SessionID: "session"}
+	unlock, err := service.lockTrackAppend(context.Background(), key)
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = service.lockTrackAppend(ctx, key)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, service.trackLocks, 1)
+
+	unlock()
+	require.Empty(t, service.trackLocks)
+}
+
+func TestAppendTrackEventFailureDoesNotMutateSession(t *testing.T) {
+	tests := []struct {
+		name             string
+		event            *session.TrackEvent
+		failQuery        bool
+		failInsert       bool
+		failStatePersist bool
+		wantCompensation bool
+	}{
+		{
+			name: "marshal",
+			event: &session.TrackEvent{
+				Track:   "model",
+				Payload: json.RawMessage(`{`),
+			},
+		},
+		{
+			name:      "count query",
+			event:     &session.TrackEvent{Track: "model"},
+			failQuery: true,
+		},
+		{
+			name:       "event insert",
+			event:      &session.TrackEvent{Track: "model"},
+			failInsert: true,
+		},
+		{
+			name:             "state insert",
+			event:            &session.TrackEvent{Track: "model"},
+			failStatePersist: true,
+			wantCompensation: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := SessionState{
+				ID:        "session",
+				State:     make(session.StateMap),
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			}
+			stateJSON, err := json.Marshal(state)
+			require.NoError(t, err)
+
+			var compensation bool
+			var insertedEventID string
+			var compensatedEventID string
+			client := &mockClient{}
+			client.queryFunc = func(_ context.Context, query string, _ ...any) (driver.Rows, error) {
+				if strings.Contains(query, "SELECT count()") {
+					if tt.failQuery {
+						return nil, assert.AnError
+					}
+					return newMockRows([][]any{{uint64(0)}}), nil
+				}
+				return newMockRows([][]any{{string(stateJSON)}}), nil
+			}
+			client.execFunc = func(_ context.Context, query string, args ...any) error {
+				switch {
+				case strings.Contains(query, "INSERT INTO session_track_events") &&
+					strings.Contains(query, "VALUES"):
+					if tt.failInsert {
+						return assert.AnError
+					}
+					insertedEventID = args[5].(string)
+				case strings.Contains(query, "INSERT INTO session_states"):
+					if tt.failStatePersist {
+						return assert.AnError
+					}
+				case strings.Contains(query, "INSERT INTO session_track_events") &&
+					strings.Contains(query, "SELECT"):
+					compensation = true
+					compensatedEventID = args[6].(string)
+				}
+				return nil
+			}
+			service := &Service{
+				chClient:                client,
+				tableSessionStates:      "session_states",
+				tableSessionTrackEvents: "session_track_events",
+			}
+			sess := session.NewSession("app", "user", "session")
+
+			err = service.AppendTrackEvent(context.Background(), sess, tt.event)
+			require.Error(t, err)
+			_, trackErr := sess.GetTrackEvents("model")
+			require.ErrorIs(t, trackErr, session.ErrTracksEmpty)
+			require.Nil(t, sess.SnapshotTracksState())
+			require.Equal(t, tt.wantCompensation, compensation)
+			if tt.wantCompensation {
+				require.NotEmpty(t, insertedEventID)
+				require.Equal(t, insertedEventID, compensatedEventID)
+				require.ErrorIs(t, err, assert.AnError)
+			}
+		})
+	}
 }
 
 func TestGetTrackEventsList(t *testing.T) {
