@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="650" viewBox="0 0 960 650" role="img" aria-labelledby="title description">
+  <title id="title">trpc-group/trpc-agent-go Star History</title>
+  <desc id="description">GitHub stars by date, data through 2026-07-28</desc>
+  <defs>
+    <filter id="rough" x="-4%" y="-4%" width="108%" height="108%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.045" numOctaves="1" seed="17" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
+  <style>
+    .background { fill: #ffffff; }
+    .axis, .tick, .legend-box { fill: none; stroke: #151515; }
+    .axis { stroke-linecap: round; stroke-linejoin: round; stroke-width: 3.5; }
+    .tick { stroke-width: 2; }
+    .legend-box { fill: #ffffff; stroke-width: 2.5; }
+    .series { fill: none; stroke: #e64b2f; stroke-linecap: round; stroke-linejoin: round; stroke-width: 4; }
+    .swatch { fill: #e64b2f; }
+    .title, .label, .axis-title, .legend {
+      fill: #151515;
+      font-family: "Comic Sans MS", "Bradley Hand", "Segoe Print", "Chalkboard SE", cursive;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .label { font-size: 17px; }
+    .axis-title { font-size: 21px; font-weight: 600; }
+    .legend { font-size: 19px; }
+    .meta {
+      fill: #6e7781;
+      font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      .background { fill: #0d1117; }
+      .axis, .tick, .legend-box { stroke: #f0f6fc; }
+      .legend-box { fill: #161b22; }
+      .title, .label, .axis-title, .legend { fill: #f0f6fc; }
+      .series { stroke: #ff6b4a; }
+      .swatch { fill: #ff6b4a; }
+      .meta { fill: #8b949e; }
+    }
+  </style>
+  <rect class="background" width="960" height="650"/>
+  <text class="title" x="480" y="54" text-anchor="middle">Star History</text>
+  <g filter="url(#rough)">
+    <path class="axis" d="M 112 142 V 562 H 912"/>
+    <path class="tick" d="M 105 515.3 H 112"/><text class="label" x="94" y="521.3" text-anchor="end">200</text><path class="tick" d="M 105 468.7 H 112"/><text class="label" x="94" y="474.7" text-anchor="end">400</text><path class="tick" d="M 105 422.0 H 112"/><text class="label" x="94" y="428.0" text-anchor="end">600</text><path class="tick" d="M 105 375.3 H 112"/><text class="label" x="94" y="381.3" text-anchor="end">800</text><path class="tick" d="M 105 328.7 H 112"/><text class="label" x="94" y="334.7" text-anchor="end">1,000</text><path class="tick" d="M 105 282.0 H 112"/><text class="label" x="94" y="288.0" text-anchor="end">1,200</text><path class="tick" d="M 105 235.3 H 112"/><text class="label" x="94" y="241.3" text-anchor="end">1,400</text><path class="tick" d="M 105 188.7 H 112"/><text class="label" x="94" y="194.7" text-anchor="end">1,600</text><path class="tick" d="M 105 142.0 H 112"/><text class="label" x="94" y="148.0" text-anchor="end">1,800</text>
+    <path class="tick" d="M 112.0 562 V 569"/><text class="label" x="112.0" y="594" text-anchor="middle">Jul 2025</text><path class="tick" d="M 312.0 562 V 569"/><text class="label" x="312.0" y="594" text-anchor="middle">Oct</text><path class="tick" d="M 512.0 562 V 569"/><text class="label" x="512.0" y="594" text-anchor="middle">2026</text><path class="tick" d="M 712.0 562 V 569"/><text class="label" x="712.0" y="594" text-anchor="middle">Apr</text><path class="tick" d="M 912.0 562 V 569"/><text class="label" x="912.0" y="594" text-anchor="middle">Jul</text>
+    <rect class="legend-box" x="128" y="160" width="336" height="52" rx="6"/>
+    <rect class="swatch" x="144" y="178" width="14" height="14" rx="2"/>
+    <path class="series" d="M 112.0 561.8 L 141.2 561.5 L 153.7 561.1 L 172.4 559.7 L 174.5 559.0 L 178.7 558.5 L 180.8 557.8 L 189.1 557.3 L 195.3 556.9 L 199.5 556.6 L 201.6 555.7 L 209.9 555.0 L 212.0 552.0 L 214.1 549.6 L 216.2 549.2 L 218.3 548.7 L 222.4 548.5 L 224.5 548.0 L 226.6 547.5 L 228.7 546.1 L 230.8 544.7 L 232.8 544.0 L 234.9 543.8 L 237.0 543.6 L 239.1 542.9 L 241.2 542.2 L 243.3 541.2 L 245.3 540.5 L 251.6 540.1 L 253.7 539.1 L 255.8 538.0 L 257.8 537.5 L 262.0 537.3 L 268.3 537.0 L 270.3 536.3 L 276.6 535.9 L 278.7 535.6 L 280.8 535.2 L 284.9 534.9 L 289.1 534.7 L 295.3 534.5 L 297.4 534.0 L 299.5 533.8 L 303.7 533.3 L 305.8 533.1 L 307.8 532.4 L 309.9 531.9 L 312.0 529.3 L 314.1 511.8 L 316.2 509.3 L 318.3 508.1 L 320.3 506.2 L 322.4 505.3 L 326.6 504.1 L 328.7 503.9 L 330.8 503.2 L 332.8 502.3 L 334.9 498.5 L 337.0 498.1 L 339.1 497.6 L 341.2 460.0 L 343.3 429.0 L 345.3 425.7 L 347.4 421.5 L 349.5 419.9 L 351.6 419.7 L 353.7 419.2 L 355.8 416.6 L 357.8 415.7 L 359.9 415.2 L 362.0 413.8 L 364.1 412.2 L 366.2 411.7 L 368.3 411.5 L 370.3 410.3 L 372.4 407.8 L 374.5 407.3 L 376.6 406.1 L 378.7 405.7 L 384.9 405.2 L 387.0 404.7 L 389.1 403.6 L 391.2 402.4 L 393.3 401.9 L 395.3 401.2 L 399.5 400.8 L 401.6 400.3 L 403.7 399.8 L 405.8 399.1 L 407.8 398.9 L 409.9 398.7 L 412.0 398.4 L 414.1 398.2 L 416.2 396.6 L 418.3 395.9 L 420.3 395.4 L 422.4 394.7 L 426.6 394.2 L 428.7 394.0 L 430.8 393.8 L 432.8 393.5 L 434.9 393.1 L 437.0 392.1 L 439.1 391.9 L 441.2 391.7 L 443.3 391.4 L 445.3 391.0 L 447.4 390.3 L 449.5 389.1 L 451.6 388.4 L 453.7 388.2 L 459.9 387.7 L 462.0 387.0 L 464.1 386.8 L 466.2 386.5 L 472.4 385.8 L 474.5 385.1 L 476.6 384.4 L 484.9 383.7 L 487.0 383.0 L 489.1 381.9 L 491.2 381.2 L 493.3 380.2 L 495.3 379.5 L 497.4 379.1 L 499.5 378.8 L 501.6 377.9 L 503.7 377.7 L 505.8 377.0 L 507.8 376.0 L 509.9 375.3 L 514.1 375.1 L 516.2 373.9 L 518.3 373.2 L 520.3 372.8 L 522.4 372.1 L 524.5 371.8 L 532.8 371.6 L 534.9 370.7 L 537.0 370.0 L 539.1 369.5 L 541.2 369.3 L 547.4 368.6 L 549.5 368.3 L 551.6 367.6 L 553.7 367.2 L 555.8 366.7 L 557.8 366.2 L 559.9 365.5 L 562.0 364.4 L 564.1 363.4 L 566.2 363.2 L 568.3 362.3 L 570.3 362.0 L 574.5 361.8 L 578.7 361.6 L 580.8 360.9 L 587.0 360.6 L 591.2 359.7 L 593.3 357.8 L 595.3 352.0 L 597.4 349.0 L 599.5 346.4 L 601.6 345.7 L 603.7 344.8 L 605.8 343.1 L 607.8 342.0 L 609.9 340.8 L 612.0 339.9 L 614.1 339.6 L 618.3 339.2 L 620.3 337.3 L 622.4 335.7 L 624.5 331.7 L 626.6 331.0 L 628.7 330.8 L 630.8 330.3 L 632.8 329.6 L 634.9 328.7 L 637.0 327.5 L 641.2 327.0 L 645.3 326.8 L 647.4 326.1 L 649.5 325.2 L 651.6 324.2 L 653.7 323.8 L 655.8 322.8 L 657.8 321.9 L 659.9 321.7 L 662.0 321.0 L 664.1 320.3 L 666.2 319.3 L 670.3 318.6 L 672.4 318.2 L 674.5 317.7 L 676.6 317.2 L 678.7 316.1 L 680.8 315.8 L 682.8 314.0 L 684.9 311.6 L 689.1 311.4 L 691.2 310.5 L 693.3 308.8 L 695.3 308.1 L 699.5 307.4 L 701.6 307.2 L 703.7 307.0 L 705.8 306.5 L 707.8 305.6 L 709.9 304.9 L 712.0 303.9 L 714.1 303.0 L 716.2 302.8 L 720.3 302.3 L 722.4 301.8 L 724.5 301.1 L 726.6 300.9 L 728.7 300.4 L 732.8 300.2 L 734.9 299.7 L 737.0 299.5 L 739.1 298.8 L 741.2 298.3 L 743.3 296.9 L 745.3 296.0 L 749.5 295.1 L 751.6 293.2 L 753.7 292.0 L 755.8 291.3 L 759.9 290.9 L 762.0 290.6 L 764.1 289.5 L 766.2 288.1 L 768.3 286.7 L 770.3 286.0 L 772.4 285.3 L 774.5 284.6 L 776.6 283.9 L 778.7 283.6 L 780.8 283.2 L 782.8 282.5 L 784.9 281.5 L 787.0 280.4 L 789.1 280.1 L 791.2 279.2 L 793.3 278.5 L 795.3 277.6 L 797.4 277.1 L 799.5 275.5 L 801.6 274.3 L 803.7 272.0 L 805.8 270.8 L 807.8 268.0 L 809.9 259.6 L 812.0 255.9 L 814.1 251.2 L 816.2 248.6 L 818.3 248.2 L 820.3 247.9 L 822.4 246.5 L 824.5 245.1 L 826.6 243.3 L 828.7 241.6 L 830.8 240.9 L 832.8 240.5 L 834.9 240.0 L 837.0 238.4 L 839.1 237.9 L 841.2 236.3 L 843.3 234.6 L 845.3 233.7 L 847.4 233.0 L 849.5 231.8 L 851.6 229.5 L 853.7 223.9 L 855.8 219.5 L 857.8 215.7 L 859.9 213.4 L 862.0 212.5 L 864.1 211.8 L 866.2 209.4 L 868.3 208.5 L 870.3 206.9 L 872.4 205.2 L 876.6 204.5 L 878.7 204.1 L 880.8 203.4 L 882.8 202.4 L 884.9 201.5 L 887.0 199.9 L 889.1 198.7 L 891.2 198.5 L 893.3 198.0 L 895.3 196.6 L 897.4 195.4 L 899.5 194.3 L 901.6 192.9 L 903.7 192.4 L 905.8 191.7 L 907.8 190.8 L 909.9 188.9 L 912.0 188.4"/>
+  </g>
+  <text class="legend" x="170" y="196">trpc-group/trpc-agent-go</text>
+  <text class="axis-title" x="512" y="628" text-anchor="middle">Date</text>
+  <text class="axis-title" x="-352" y="38" text-anchor="middle" transform="rotate(-90)">GitHub Stars</text>
+  <text class="meta" x="912" y="628" text-anchor="end">updated 2026-07-28 · 1,601 stars</text>
+</svg>
