@@ -12,12 +12,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	cragent "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/agent"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/llm"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
 // Options 保存 CLI 参数。
@@ -53,6 +58,23 @@ type Options struct {
 
 // Run 将 CLI 参数交给 Agent。
 func Run(opts Options) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return runWithContext(ctx, opts, newReviewAgent)
+}
+
+type reviewAgent interface {
+	Run(context.Context, cragent.Request) (review.Result, error)
+	Close() error
+}
+
+type reviewAgentFactory func(cragent.Config) (reviewAgent, error)
+
+func newReviewAgent(cfg cragent.Config) (reviewAgent, error) {
+	return cragent.New(cfg)
+}
+
+func runWithContext(ctx context.Context, opts Options, newAgent reviewAgentFactory) error {
 	var err error
 	opts, err = resolveOptions(opts)
 	if err != nil {
@@ -115,18 +137,17 @@ func Run(opts Options) error {
 	if cfg.FixturesRoot == "" {
 		cfg.FixturesRoot = filepath.Join("testdata", "fixtures")
 	}
-	ag, err := cragent.New(cfg)
+	ag, err := newAgent(cfg)
 	if err != nil {
 		return err
 	}
-	defer ag.Close()
 
 	// RunChecks 仅保留兼容性。
 	_ = opts.RunChecks
 	// Streaming 兼容官方 examples/runner 的 -streaming 参数；当前报告仍一次性生成。
 	_ = opts.Streaming
-	_, err = ag.Run(context.Background(), req)
-	return err
+	_, runErr := ag.Run(ctx, req)
+	return errors.Join(runErr, ag.Close())
 }
 
 func withInferredInput(opts Options) Options {

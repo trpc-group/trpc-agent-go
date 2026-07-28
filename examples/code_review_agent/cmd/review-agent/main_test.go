@@ -11,13 +11,107 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	cragent "trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/agent"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
+
+type stubReviewAgent struct {
+	run      func(context.Context, cragent.Request) error
+	closeErr error
+	closed   bool
+}
+
+func (a *stubReviewAgent) Run(ctx context.Context, req cragent.Request) (review.Result, error) {
+	return review.Result{}, a.run(ctx, req)
+}
+
+func (a *stubReviewAgent) Close() error {
+	a.closed = true
+	return a.closeErr
+}
+
+func TestRunWithContextPropagatesCancellationAndClosesAgent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	ag := &stubReviewAgent{
+		run: func(ctx context.Context, _ cragent.Request) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+
+	err := runWithContext(ctx, testRunOptions(t), func(cragent.Config) (reviewAgent, error) {
+		return ag, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if !ag.closed {
+		t.Fatal("expected Agent.Close to run after cancellation")
+	}
+}
+
+func TestRunWithContextJoinsRunAndCleanupErrors(t *testing.T) {
+	runErr := errors.New("review failed")
+	closeErr := errors.New("cleanup failed")
+	ag := &stubReviewAgent{
+		run:      func(context.Context, cragent.Request) error { return runErr },
+		closeErr: closeErr,
+	}
+
+	err := runWithContext(context.Background(), testRunOptions(t), func(cragent.Config) (reviewAgent, error) {
+		return ag, nil
+	})
+	if !errors.Is(err, runErr) || !errors.Is(err, closeErr) {
+		t.Fatalf("expected joined run and cleanup errors, got %v", err)
+	}
+	if !ag.closed {
+		t.Fatal("expected Agent.Close to run")
+	}
+}
+
+func TestRunWithContextReturnsCleanupFailureAfterSuccessfulReview(t *testing.T) {
+	closeErr := errors.New("cleanup failed")
+	ag := &stubReviewAgent{
+		run:      func(context.Context, cragent.Request) error { return nil },
+		closeErr: closeErr,
+	}
+
+	err := runWithContext(context.Background(), testRunOptions(t), func(cragent.Config) (reviewAgent, error) {
+		return ag, nil
+	})
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("expected cleanup error, got %v", err)
+	}
+}
+
+func testRunOptions(t *testing.T) Options {
+	t.Helper()
+	dir := t.TempDir()
+	diffPath := filepath.Join(dir, "sample.diff")
+	if err := os.WriteFile(diffPath, []byte(""+
+		"diff --git a/foo.go b/foo.go\n"+
+		"--- a/foo.go\n"+
+		"+++ b/foo.go\n"+
+		"@@ -1 +1 @@\n"+
+		"+package foo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return Options{
+		DiffFile:   diffPath,
+		OutputDir:  dir,
+		Mode:       cragent.ModeRuleOnly,
+		Runtime:    cragent.RuntimeLocalFallback,
+		SkillsRoot: filepath.Join("..", "..", "skills"),
+	}
+}
 
 func TestRunWritesReportFiles(t *testing.T) {
 	dir := t.TempDir()
