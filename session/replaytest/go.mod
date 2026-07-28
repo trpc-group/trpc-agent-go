@@ -1,18 +1,25 @@
 module trpc.group/trpc-go/trpc-agent-go/session/replaytest
 
-go 1.21
+go 1.21.0
 
 require (
 	github.com/alicebob/miniredis/v2 v2.35.0
 	github.com/mattn/go-sqlite3 v1.14.32
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
+	trpc.group/trpc-go/trpc-agent-go/memory/mysql v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/postgres v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/redis v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/memory/sqlite v0.0.0-00010101000000-000000000000
+	trpc.group/trpc-go/trpc-agent-go/session/mysql v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/session/postgres v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/session/redis v0.0.0-00010101000000-000000000000
 	trpc.group/trpc-go/trpc-agent-go/session/sqlite v0.0.0-00010101000000-000000000000
+)
+
+require (
+	filippo.io/edwards25519 v1.1.1 // indirect
+	github.com/go-sql-driver/mysql v1.9.3 // indirect
 )
 
 require (
@@ -45,7 +52,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.29.0 // indirect
 	go.opentelemetry.io/otel/trace v1.29.0 // indirect
 	go.opentelemetry.io/proto/otlp v1.3.1 // indirect
-	go.uber.org/multierr v1.10.0 // indirect
+	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.32.0 // indirect
 	golang.org/x/net v0.34.0 // indirect
@@ -58,6 +65,7 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	trpc.group/trpc-go/trpc-a2a-go v0.2.5 // indirect
+	trpc.group/trpc-go/trpc-agent-go/storage/mysql v0.5.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/postgres v0.8.0 // indirect
 	trpc.group/trpc-go/trpc-agent-go/storage/redis v0.2.0 // indirect
 )
@@ -70,6 +78,10 @@ replace trpc.group/trpc-go/trpc-agent-go/memory/redis => ../../memory/redis
 
 replace trpc.group/trpc-go/trpc-agent-go/memory/postgres => ../../memory/postgres
 
+replace trpc.group/trpc-go/trpc-agent-go/memory/mysql => ../../memory/mysql
+
+replace trpc.group/trpc-go/trpc-agent-go/session/mysql => ../mysql
+
 replace trpc.group/trpc-go/trpc-agent-go/session/redis => ../redis
 
 replace trpc.group/trpc-go/trpc-agent-go/session/postgres => ../postgres
@@ -77,5 +89,7 @@ replace trpc.group/trpc-go/trpc-agent-go/session/postgres => ../postgres
 replace trpc.group/trpc-go/trpc-agent-go/storage/redis => ../../storage/redis
 
 replace trpc.group/trpc-go/trpc-agent-go/storage/postgres => ../../storage/postgres
+
+replace trpc.group/trpc-go/trpc-agent-go/storage/mysql => ../../storage/mysql
 
 replace trpc.group/trpc-go/trpc-agent-go/session/sqlite => ../sqlite

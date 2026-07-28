@@ -18,9 +18,6 @@ durations, JSON map order, and generated IDs normalize. Backends can omit
 implementation-owned fields with `Backend.PrivateMetadataPaths`, such as
 `events.*.extensions.storage_private`.
 
-`Backend.Unsupported` declares unsupported paths such as `tracks`; matching
-differences become `allowed_diff`.
-
 Optional Redis, Postgres, MySQL, and ClickHouse integrations are enabled by
 passing factories to `LoadOptionalBackends` with `REPLAYTEST_REDIS_URL`,
 `REPLAYTEST_POSTGRES_DSN`, `REPLAYTEST_MYSQL_DSN`, or
@@ -43,8 +40,7 @@ Run lightweight mode with:
 cd session/replaytest && go test ./...
 ```
 
-Redis runs through MiniRedis by default; `REPLAYTEST_REDIS_URL` additionally
-tests a configured Redis instance:
+`REPLAYTEST_REDIS_URL` tests a configured Redis instance:
 
 ```bash
 cd session/replaytest && REPLAYTEST_REDIS_URL=redis://127.0.0.1:6379 go test ./... -run TestRedisReplay
@@ -54,4 +50,10 @@ Set `REPLAYTEST_POSTGRES_DSN` to run the Postgres Session and Memory replay:
 
 ```bash
 cd session/replaytest && REPLAYTEST_POSTGRES_DSN='postgres://postgres:postgres@127.0.0.1:5432/replaytest?sslmode=disable' go test ./... -run TestPostgresReplay
+```
+
+Set `REPLAYTEST_MYSQL_DSN` to run the MySQL Session and Memory replay:
+
+```bash
+cd session/replaytest && REPLAYTEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/replaytest?parseTime=true' go test ./... -run TestMySQLReplay
 ```
