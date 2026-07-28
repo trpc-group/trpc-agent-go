@@ -29,7 +29,7 @@ const (
 	resultNewCoverage         = 0.70
 
 	changeMarkerEnglishPattern = `\b(?:now|currently|no longer|instead|` +
-		`chang(?:e|ed)|used to|decid(?:e|ed)|booked|` +
+		`chang(?:e|ed)|used to|decide(?:d)?|booked|` +
 		`cho(?:ose|se|sen)|select(?:ed)?|start(?:ed)?|stop(?:ped)?|` +
 		`cancel(?:ed|led)?|complete(?:d)?|finish(?:ed)?)\b`
 	changeMarkerCJKPattern = `(?:现在|目前|不再|改为|变成|而是|曾经|` +

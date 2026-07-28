@@ -6,6 +6,8 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
+// Package ranking combines backend search rankings with shared memory-aware
+// ranking signals.
 package ranking
 
 import (

@@ -973,38 +973,7 @@ func (w *AutoMemoryWorker) decideAddOp(
 	if err != nil || len(candidates) == 0 {
 		return op
 	}
-	// Pick the candidate that produces the strongest reconcile
-	// decision tier, not the highest Jaccard alone. Otherwise a
-	// high-score duplicate could be shadowed by a candidate with
-	// slightly higher token overlap that still sits below all
-	// reconcile thresholds, causing the Add to be kept despite a
-	// clearly duplicate entry existing.
-	var best *memory.Entry
-	bestJaccard := 0.0
-	bestTier := -1
-	for _, c := range candidates {
-		if c == nil || c.Memory == nil {
-			continue
-		}
-		if !reconcileMetadataCompatible(op, c.Memory) {
-			continue
-		}
-		j := tokenJaccard(op.Memory, c.Memory.Memory)
-		tier := reconcileDecisionTier(c.Score, j)
-		if tier != reconcileTierNone &&
-			!reconcileAddPreservesStoredMemory(op, c.Memory) {
-			tier = reconcileTierNone
-		}
-		if best == nil ||
-			tier > bestTier ||
-			(tier == bestTier &&
-				(c.Score > best.Score ||
-					(c.Score == best.Score && j > bestJaccard))) {
-			best = c
-			bestJaccard = j
-			bestTier = tier
-		}
-	}
+	best, bestJaccard, bestTier := selectReconcileCandidate(op, candidates)
 	if best == nil || best.Memory == nil || best.ID == "" {
 		return op
 	}
@@ -1040,6 +1009,41 @@ func (w *AutoMemoryWorker) decideAddOp(
 	default:
 		return op
 	}
+}
+
+// selectReconcileCandidate prioritizes the strongest reconciliation decision
+// before backend score and lexical overlap. This prevents a high-overlap
+// non-match from shadowing a slightly lower-scored duplicate.
+func selectReconcileCandidate(
+	op *extractor.Operation,
+	candidates []*memory.Entry,
+) (*memory.Entry, float64, int) {
+	var best *memory.Entry
+	bestJaccard := 0.0
+	bestTier := -1
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.Memory == nil ||
+			!reconcileMetadataCompatible(op, candidate.Memory) {
+			continue
+		}
+		jaccard := tokenJaccard(op.Memory, candidate.Memory.Memory)
+		tier := reconcileDecisionTier(candidate.Score, jaccard)
+		if tier != reconcileTierNone &&
+			!reconcileAddPreservesStoredMemory(op, candidate.Memory) {
+			tier = reconcileTierNone
+		}
+		if best == nil ||
+			tier > bestTier ||
+			(tier == bestTier &&
+				(candidate.Score > best.Score ||
+					(candidate.Score == best.Score &&
+						jaccard > bestJaccard))) {
+			best = candidate
+			bestJaccard = jaccard
+			bestTier = tier
+		}
+	}
+	return best, bestJaccard, bestTier
 }
 
 // reconcileAddPreservesStoredMemory prevents a similar but narrower Add from
