@@ -113,7 +113,7 @@ type Node struct {
 	Name        string
 	Description string
 	Function    NodeFunc
-	Type        NodeType // Type of the node (function, llm, tool, etc.)
+	Type        NodeType // Type of the node (function, LLM operation, tool, etc.)
 
 	// userInputKey is the state key used as one-shot input for LLM and
 	// Agent nodes. When empty, StateKeyUserInput is used.
