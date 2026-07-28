@@ -525,6 +525,7 @@ agent := llmagent.New(
 - If both finalization policies become eligible on the same LLM call, the LLM-limit instruction takes precedence.
 - Both limits are independent and can be used separately or together.
 - These limits are per-invocation; different `runner.Run()` calls maintain independent counts.
+- `(*agent.Invocation).ToolIterationCount()` provides read-only access to the tool-iteration limit enforcement counter. It remains zero when `MaxToolIterations` is not positive, includes the over-limit tool-call response that is rejected without execution, starts from zero in `Clone()`, and is preserved by `View()`. It is not a general tool-usage metric.
 
 **Recommended Usage:**
 

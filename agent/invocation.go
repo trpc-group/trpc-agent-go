@@ -2187,6 +2187,24 @@ func (inv *Invocation) IncLLMCallCount() error {
 	return nil
 }
 
+// ToolIterationCount reports the current MaxToolIterations enforcement
+// counter.
+//
+// This is not a general tool-usage metric. The count remains zero while
+// MaxToolIterations is non-positive because IncToolIteration is then a no-op.
+// A tool-call response that exceeds the configured limit is included even
+// though its tools are not executed. Clone starts a new counter at zero,
+// while View preserves the current value.
+//
+// The counter follows Invocation's execution ownership and is not synchronized
+// for concurrent reads and writes.
+func (inv *Invocation) ToolIterationCount() int {
+	if inv == nil {
+		return 0
+	}
+	return inv.toolIterationCount
+}
+
 // IncToolIteration increments the tool iteration counter and reports whether
 // the MaxToolIterations limit has been exceeded. A "tool iteration" is
 // defined as an assistant response that contains tool calls and triggers the

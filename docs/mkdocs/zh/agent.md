@@ -479,6 +479,7 @@ agent := llmagent.New(
 - 如果两个收尾策略在同一次 LLM 调用上同时满足条件，优先使用 LLM 上限对应的 instruction。
 - 两个限制相互独立，可以单独使用或组合使用。
 - 这些限制是每次调用级别的，不同的 `runner.Run()` 调用会各自独立计数。
+- `(*agent.Invocation).ToolIterationCount()` 提供工具迭代上限执行计数器的只读访问。`MaxToolIterations` 非正数时该值始终为 0；超过上限且未执行工具的那次 tool-call response 也会计入；`Clone()` 从 0 重新开始，`View()` 则保留当前值。它不是通用的工具使用量指标。
 
 **推荐用法：**
 
