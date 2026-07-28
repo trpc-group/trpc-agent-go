@@ -7,7 +7,19 @@
 //
 //
 
-// Package a2a provides utilities for creating a2a servers.
+// Package a2a exposes a runner.Runner as an A2A Protocol v1.0 server.
+//
+// The Runner and its session service own agent execution and conversation
+// context. The A2A task manager is a separate protocol concern. By default,
+// New installs a stateless task manager: the current request can return or
+// stream a task lifecycle, but task state is not retained for later lookup,
+// listing, cancellation, or resubscription. Use WithTaskManagerBuilder with a
+// memory, Redis, or custom manager when the retained A2A task control plane is
+// required; doing so does not replace Runner session storage.
+//
+// The /v1 import-path suffix identifies the A2A Protocol v1.0 integration; it
+// does not require a v1 module tag for trpc-agent-go. The trpc-a2a-go/v2 module
+// version is independent of the A2A protocol version.
 package a2a
 
 import (

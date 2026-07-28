@@ -7,7 +7,22 @@
 //
 //
 
-// Package a2aagent provides an agent that can communicate with remote A2A agents.
+// Package a2aagent adapts a remote A2A Protocol v1.0 agent to the agent.Agent
+// interface.
+//
+// An A2AAgent discovers the remote endpoint from an Agent Card, selects
+// blocking or streaming message delivery, and converts A2A messages, task
+// updates, artifacts, and tool calls to trpc-agent-go events. When it is used
+// with a Runner, the Runner's session service remains responsible for local
+// conversation history.
+//
+// This package handles message delivery only. Use trpc-a2a-go/v2/client
+// directly for the retained task control plane, including lookup, listing,
+// cancellation, resubscription, and push configuration.
+//
+// The /v1 import-path suffix identifies the A2A Protocol v1.0 integration; it
+// does not require a v1 module tag for trpc-agent-go. The trpc-a2a-go/v2 module
+// version is independent of the A2A protocol version.
 package a2aagent
 
 import (
