@@ -576,6 +576,10 @@ func TestRunReportsReplayFailures(t *testing.T) {
 	require.True(t, report.HasDisallowedDifferences())
 	require.Equal(t, "replay", report.Differences[0].Path)
 	require.Equal(t, "backend replay failed", report.Differences[0].Reason)
+	require.Equal(t, "actual_failure", report.Differences[1].Case)
+	require.Equal(t, actual.Name, report.Differences[1].Backend)
+	require.Equal(t, "replay", report.Differences[1].Path)
+	require.Equal(t, "backend replay failed", report.Differences[1].Reason)
 
 	allowed := Report{Differences: []Difference{{AllowedDiff: true}}}
 	require.False(t, allowed.HasDisallowedDifferences())
