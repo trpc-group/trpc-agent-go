@@ -207,3 +207,11 @@ func TestInvariant_CleanEnv_LocalFallbackHonorsPolicy(t *testing.T) {
 		"local fallback engine must support CleanEnv for policy mode")
 	require.NoError(t, checkSkillRunnerSupportsPolicy(eng))
 }
+
+func TestPreauthorizeSkillCommand_BeforeMutation(t *testing.T) {
+	rt := &RunTool{allowedCmds: map[string]struct{}{"echo": {}}}
+	require.NoError(t, preauthorizeSkillCommand(rt, "echo hi"))
+	require.Error(t, preauthorizeSkillCommand(rt, "curl http://x"))
+	rt2 := &RunTool{deniedCmds: map[string]struct{}{"rm": {}}}
+	require.Error(t, preauthorizeSkillCommand(rt2, "rm -rf /"))
+}
