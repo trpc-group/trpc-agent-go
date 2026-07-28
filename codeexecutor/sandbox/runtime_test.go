@@ -180,6 +180,21 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		t.Fatalf("start error = %v, want ErrSetupFailed", err)
 	}
 
+	expiredCtx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+	expiredRes, expiredErr := rt.RunProgram(expiredCtx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+	})
+	if !isKind(expiredErr, ErrTimeout) {
+		t.Fatalf("expired context error = %v, want ErrTimeout", expiredErr)
+	}
+	if !expiredRes.TimedOut || expiredRes.ExitCode != -1 {
+		t.Fatalf("expired context result = %#v, want timed out exit -1", expiredRes)
+	}
+
 	res, err := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
 		Cmd:  "bash",
 		Args: []string{"-c", "sleep 1"},
