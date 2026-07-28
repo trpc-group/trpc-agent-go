@@ -53,7 +53,7 @@ type storedJSONFields struct {
 	Values   map[string]int  `json:"values"`
 	Raw      json.RawMessage `json:"raw"`
 	Ignored  string          `json:"-"`
-	Default  string
+	Default  int
 	private  string
 }
 
@@ -67,7 +67,7 @@ func TestNormalizeStoredJSONCoversTypedShapes(t *testing.T) {
 		"array":    []any{"false"},
 		"values":   map[string]any{"one": "1"},
 		"raw":      map[string]any{"kept": "as-is"},
-		"Default":  "value",
+		"Default":  "14",
 		"unknown":  "ignored",
 	}
 	normalized := normalizeStoredJSON(input, reflect.TypeFor[*storedJSONFields](), false)
@@ -83,6 +83,7 @@ func TestNormalizeStoredJSONCoversTypedShapes(t *testing.T) {
 	require.Equal(t, [1]bool{false}, got.Array)
 	require.Equal(t, map[string]int{"one": 1}, got.Values)
 	require.JSONEq(t, `{"kept":"as-is"}`, string(got.Raw))
+	require.Equal(t, 14, got.Default)
 
 	require.Equal(t, "value", normalizeStoredJSON("value", nil, false))
 	require.Equal(t, "value", normalizeStoredJSON("value", reflect.TypeFor[storedJSONFields](), false))
