@@ -272,15 +272,22 @@ type Metrics struct {
 	// directory is atomically published. Publication is intentionally excluded
 	// because the report itself contains this metric.
 	PreparationDurationMS int64 `json:"preparation_duration_ms"`
-	// TotalDurationMS measures completed work up to the terminal Store
-	// finalization boundary. TotalDurationScope states whether a value is an
-	// immutable pre-publication report snapshot, a finalized Store value, or a
-	// completed failure-audit value.
+	// FinalizationDurationMS measures the first terminal Store transaction that
+	// makes a completed review durable after report publication.
+	FinalizationDurationMS int64 `json:"finalization_duration_ms"`
+	// VerificationDurationMS measures the durable Store read and consistency
+	// checks performed after terminal finalization.
+	VerificationDurationMS int64 `json:"verification_duration_ms"`
+	// TotalDurationMS measures completed review work through the first durable
+	// Store finalization and its read-back verification. The derived timing
+	// fields are then persisted in a separate metadata update, which cannot be
+	// included in the value it stores.
 	TotalDurationMS int64 `json:"total_duration_ms"`
 	// TotalDurationScope identifies the completed phases included in
-	// TotalDurationMS: "pre_publication_snapshot", "finalization_complete", or
-	// "failure_audit". Query the finalized SQLite record for the canonical value
-	// rather than treating an immutable report artifact's pre-publication
+	// TotalDurationMS: "pre_publication_snapshot",
+	// "verified_before_metric_persistence", "recovered_publication", or
+	// "failure_audit". Query the finalized SQLite record for the canonical
+	// value rather than treating an immutable report artifact's pre-publication
 	// snapshot as final.
 	TotalDurationScope   string         `json:"total_duration_scope"`
 	SandboxDurationMS    int64          `json:"sandbox_duration_ms"`

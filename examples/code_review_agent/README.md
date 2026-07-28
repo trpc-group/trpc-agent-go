@@ -91,11 +91,13 @@ go test -count=1 -cover ./internal/review
 Core tests cover diff line mapping, file-list traversal, rule fixtures, clean-diff false positives, deduplication, credential redaction, Permission decisions, sandbox failure recovery, safe repository snapshots, SQLite round trips, and report sections.
 
 Report files are immutable pre-publication snapshots. Query SQLite by task ID
-for the canonical terminal task timestamp and total duration, which include
-durable report publication and are recorded at the terminal Store finalization
-boundary.
+for the canonical terminal task timestamp and total duration. The canonical
+duration includes report publication, the first durable terminal Store
+finalization, and its read-back verification; its scope is explicitly
+`verified_before_metric_persistence` because the subsequent write that stores
+this derived metric cannot be included in its own value.
 
-The current core-package coverage is `86.4% of statements`; the command above
+The current core-package coverage is `89.0% of statements`; the command above
 is the source of truth and coverage must remain at or above 85%.
 
 ## Framework integration

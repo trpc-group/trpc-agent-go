@@ -148,14 +148,8 @@ func (s *sqliteStore) Save(ctx context.Context, report Report) error {
 	if _, err = tx.ExecContext(ctx, `INSERT INTO review_inputs(task_id,digest,files_changed,go_files,added_lines,deleted_lines) VALUES(?,?,?,?,?,?)`, report.Task.ID, report.Input.Digest, report.Input.FilesChanged, report.Input.GoFiles, report.Input.AddedLines, report.Input.DeletedLines); err != nil {
 		return err
 	}
-	for index, run := range report.SandboxRuns {
-		payload, err := json.Marshal(run)
-		if err != nil {
-			return fmt.Errorf("encode sandbox run %d: %w", index, err)
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO sandbox_runs(task_id,ordinal,command,executor,status,exit_code,error_type,payload_json) VALUES(?,?,?,?,?,?,?,?)`, report.Task.ID, index, run.Command, run.Executor, run.Status, run.ExitCode, run.ErrorType, string(payload)); err != nil {
-			return err
-		}
+	if err := saveSandboxRuns(ctx, tx, report.Task.ID, report.SandboxRuns); err != nil {
+		return err
 	}
 	for index, decision := range report.PermissionDecisions {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO permission_decisions(task_id,ordinal,command,action,reason,created_at) VALUES(?,?,?,?,?,?)`, report.Task.ID, index, decision.Command, decision.Action, redact(decision.Reason), decision.CreatedAt.UTC().Format(timeFormat)); err != nil {
@@ -214,6 +208,15 @@ func (s *sqliteStore) Finalize(ctx context.Context, report Report) error {
 	if rows, err := result.RowsAffected(); err != nil || rows != 1 {
 		return fmt.Errorf("finalize review task: rows=%d err=%v", rows, err)
 	}
+	// A late failure appends a sandbox run after Save. Replace the normalized
+	// rows in the same transaction as the report payload so Load and LoadRuns
+	// always describe one coherent audit record.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sandbox_runs WHERE task_id=?`, report.Task.ID); err != nil {
+		return err
+	}
+	if err := saveSandboxRuns(ctx, tx, report.Task.ID, report.SandboxRuns); err != nil {
+		return err
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM artifacts WHERE task_id=?`, report.Task.ID); err != nil {
 		return err
 	}
@@ -237,6 +240,19 @@ func (s *sqliteStore) Finalize(ctx context.Context, report Report) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func saveSandboxRuns(ctx context.Context, tx *sql.Tx, taskID string, runs []SandboxRun) error {
+	for index, run := range runs {
+		payload, err := json.Marshal(run)
+		if err != nil {
+			return fmt.Errorf("encode sandbox run %d: %w", index, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO sandbox_runs(task_id,ordinal,command,executor,status,exit_code,error_type,payload_json) VALUES(?,?,?,?,?,?,?,?)`, taskID, index, run.Command, run.Executor, run.Status, run.ExitCode, run.ErrorType, string(payload)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *sqliteStore) Load(ctx context.Context, taskID string) (Report, error) {

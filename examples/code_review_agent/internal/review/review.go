@@ -11,7 +11,9 @@ package review
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -47,6 +49,11 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 		return Report{}, ReportPaths{}, fmt.Errorf("open review store: %w", err)
 	}
 	defer store.Close()
+	if recovered, paths, ok, err := recoverPublishedReview(ctx, store, cfg, taskID); err != nil {
+		return Report{}, ReportPaths{}, err
+	} else if ok {
+		return recovered, paths, nil
+	}
 	input, mode, inputDecisions, err := loadInput(ctx, cfg, baseDir)
 	if err != nil {
 		return persistFailure(ctx, store, cfg, Task{ID: taskID, Status: TaskRunning, InputMode: firstNonEmpty(mode, "input_error"), StartedAt: started}, DiffSummary{}, inputDecisions, "load_input", err)
@@ -126,11 +133,12 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	// task timestamp and duration, so a process interruption cannot leave a
 	// partially finalized completed record behind.
 	report.Task.EndedAt = time.Now()
-	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
-	report.Metrics.TotalDurationScope = "finalization_complete"
+	finalizationStarted := time.Now()
 	if err := store.Finalize(ctx, report); err != nil {
 		return failPublishedReview("finalize_report", err)
 	}
+	report.Metrics.FinalizationDurationMS = time.Since(finalizationStarted).Milliseconds()
+	verificationStarted := time.Now()
 	stored, err = store.Load(ctx, report.Task.ID)
 	if err != nil {
 		return failPublishedReview("verify_final_store", err)
@@ -138,7 +146,90 @@ func Run(ctx context.Context, cfg Config) (Report, ReportPaths, error) {
 	if stored.Task.Status != TaskCompleted || stored.Metrics.PreparationDurationMS != report.Metrics.PreparationDurationMS || stored.Metrics.TotalDurationMS != report.Metrics.TotalDurationMS {
 		return failPublishedReview("verify_final_store", errors.New("finalized review verification mismatch"))
 	}
+	// The first terminal transaction above is independently verified before we
+	// persist the composite end-to-end timing fields. This keeps the canonical
+	// metric inclusive of report publication, terminal durability, and the
+	// read-back consistency check rather than labelling a pre-verification
+	// timestamp as the total review duration. Persisting the derived metric is
+	// necessarily a subsequent operation, so the scope names that boundary
+	// instead of implying self-inclusive timing.
+	report.Metrics.VerificationDurationMS = time.Since(verificationStarted).Milliseconds()
+	report.Task.EndedAt = time.Now()
+	report.Metrics.TotalDurationMS = time.Since(started).Milliseconds()
+	report.Metrics.TotalDurationScope = "verified_before_metric_persistence"
+	if err := store.Finalize(ctx, report); err != nil {
+		return failPublishedReview("persist_end_to_end_metrics", err)
+	}
 	return report, paths, nil
+}
+
+// recoverPublishedReview closes the interruption window between publishing the
+// immutable report directory and finalizing its Store record. A matching
+// running record is finalized from the already-published JSON. Incomplete or
+// malformed publication is rolled back with its running record so the task ID
+// can be retried without overwriting a completed audit.
+func recoverPublishedReview(ctx context.Context, store Store, cfg Config, taskID string) (Report, ReportPaths, bool, error) {
+	stored, err := store.Load(ctx, taskID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Report{}, ReportPaths{}, false, nil
+	}
+	if err != nil {
+		return Report{}, ReportPaths{}, true, fmt.Errorf("load existing task %s: %w", taskID, err)
+	}
+	if stored.Task.Status != TaskRunning {
+		return Report{}, ReportPaths{}, false, nil
+	}
+	paths := reportPaths(cfg.OutputDir, taskID)
+	data, readErr := os.ReadFile(paths.JSON)
+	if readErr == nil {
+		if _, err := os.Stat(paths.Markdown); err != nil {
+			readErr = err
+		}
+	}
+	if readErr != nil {
+		if !os.IsNotExist(readErr) {
+			return Report{}, ReportPaths{}, true, fmt.Errorf("read interrupted report %s: %w", taskID, readErr)
+		}
+		return rollbackInterruptedReview(ctx, store, cfg.OutputDir, taskID)
+	}
+	var published Report
+	if err := json.Unmarshal(data, &published); err != nil || !matchesRunningReport(stored, published) {
+		return rollbackInterruptedReview(ctx, store, cfg.OutputDir, taskID)
+	}
+	published = redactReport(published)
+	published.Task.Status = TaskCompleted
+	published.Task.EndedAt = time.Now()
+	// The durable report was already published before interruption. Its
+	// pre-publication duration is the only trustworthy elapsed-time value, so
+	// preserve it and mark the Store record as a recovered terminal audit.
+	published.Metrics.TotalDurationScope = "recovered_publication"
+	if err := store.Finalize(ctx, published); err != nil {
+		return Report{}, ReportPaths{}, true, fmt.Errorf("recover published task %s: %w", taskID, err)
+	}
+	return published, paths, true, nil
+}
+
+func rollbackInterruptedReview(ctx context.Context, store Store, outputDir, taskID string) (Report, ReportPaths, bool, error) {
+	if err := os.RemoveAll(filepath.Join(outputDir, taskID)); err != nil {
+		return Report{}, ReportPaths{}, true, fmt.Errorf("roll back interrupted report %s: %w", taskID, err)
+	}
+	if err := store.Delete(ctx, taskID); err != nil {
+		return Report{}, ReportPaths{}, true, fmt.Errorf("remove interrupted task %s: %w", taskID, err)
+	}
+	return Report{}, ReportPaths{}, false, nil
+}
+
+func matchesRunningReport(stored, published Report) bool {
+	return published.Task.ID == stored.Task.ID &&
+		published.Task.Status == TaskCompleted &&
+		published.Input.Digest != "" &&
+		published.Input.Digest == stored.Input.Digest &&
+		published.Task.StartedAt.Equal(stored.Task.StartedAt)
+}
+
+func reportPaths(outputDir, taskID string) ReportPaths {
+	taskDir := filepath.Join(outputDir, taskID, "report")
+	return ReportPaths{JSON: filepath.Join(taskDir, "review_report.json"), Markdown: filepath.Join(taskDir, "review_report.md")}
 }
 
 func markStoredFailure(ctx context.Context, store Store, cfg Config, report Report, operation string, cause error) error {

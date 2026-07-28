@@ -65,7 +65,9 @@ clear message. The example never reads or prints key contents.
 - `network-policy-agent-enforcement`: uses a real LLMAgent and `workspace_exec`
   to verify restricted networking through an actual model call.
 - `timeout`: verifies long-running commands are timed out.
-- `output-cap`: verifies large output is capped and marked as truncated.
+- `output-cap`: verifies large output is capped and reports truncation through
+  the structured `StdoutTruncated` result field. The output bytes themselves
+  remain within the configured cap and do not include an out-of-band marker.
 - `additional-permissions`: verifies a host path grant is scoped to one
   operation and expires afterward.
 - `shell-environment-policy-default-all`: verifies the default shell environment

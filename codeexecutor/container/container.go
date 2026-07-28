@@ -59,6 +59,8 @@ type CodeExecutor struct {
 	containerConfig container.Config     // Configuration for the container
 	containerName   string               // Name of the Docker container which is created. If empty, will autogenerate a name.
 	ws              *workspaceRuntime    // workspace runtime
+	generation      uint64               // Monotonic physical container generation.
+	workspaceGen    map[string]uint64    // Generation that created each live logical workspace path.
 	// autoInputs controls mapping of inputs-host into workspace.
 	autoInputs bool
 }
@@ -297,10 +299,16 @@ func (c *CodeExecutor) CodeBlockDelimiter() codeexecutor.CodeBlockDelimiter {
 
 // Workspace methods
 
-func (c *CodeExecutor) ensureWS() (*workspaceRuntime, error) {
+func (c *CodeExecutor) ensureWS(ctx context.Context) (*workspaceRuntime, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	c.containerMu.Lock()
 	defer c.containerMu.Unlock()
-	return c.ensureWSLocked(context.Background())
+	return c.ensureWSLocked(ctx)
 }
 
 func (c *CodeExecutor) ensureWSLocked(ctx context.Context) (*workspaceRuntime, error) {
@@ -326,6 +334,90 @@ func (c *CodeExecutor) ensureWSLocked(ctx context.Context) (*workspaceRuntime, e
 	return rt, nil
 }
 
+// InstanceID identifies the current physical container generation for
+// WorkspaceRegistry. When an earlier timed-out attach invalidated the
+// container, it recreates that physical instance with the caller's context
+// before returning. This keeps the registry's pre- and post-create probes
+// stable while preserving cancellation for image and container startup.
+func (c *CodeExecutor) InstanceID(ctx context.Context) (codeexecutor.WorkspaceInstanceID, error) {
+	if ctx == nil {
+		return "", fmt.Errorf("context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.closed {
+		return "", fmt.Errorf("container executor is closed")
+	}
+	if c.container == nil && c.client != nil {
+		if err := c.ensureContainerLocked(ctx); err != nil {
+			return "", err
+		}
+	}
+	return codeexecutor.WorkspaceInstanceID(fmt.Sprintf("container-%d", c.generation)), nil
+}
+
+func (c *CodeExecutor) rememberWorkspace(ws codeexecutor.Workspace, generation uint64) {
+	if ws.Path == "" {
+		return
+	}
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.workspaceGen == nil {
+		c.workspaceGen = make(map[string]uint64)
+	}
+	c.workspaceGen[ws.Path] = generation
+}
+
+func (c *CodeExecutor) validateWorkspace(ws codeexecutor.Workspace) error {
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	return c.validateWorkspaceLocked(ws)
+}
+
+func (c *CodeExecutor) validateWorkspaceLocked(ws codeexecutor.Workspace) error {
+	if ws.Path == "" {
+		return nil
+	}
+	if generation, known := c.workspaceGen[ws.Path]; known && generation != c.generation {
+		return fmt.Errorf("%w: container generation %d replaced workspace generation %d", codeexecutor.ErrWorkspaceStale, c.generation, generation)
+	}
+	return nil
+}
+
+// runtimeForWorkspace atomically validates a workspace handle and chooses the
+// runtime that will use it. abortContainer cannot replace the physical
+// container between these operations while the lifecycle lock is held; if it
+// replaces it immediately afterward, the runtime's generation check reports
+// ErrWorkspaceStale instead of executing against the replacement.
+func (c *CodeExecutor) runtimeForWorkspace(ctx context.Context, ws codeexecutor.Workspace) (*workspaceRuntime, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("context must not be nil")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if err := c.validateWorkspaceLocked(ws); err != nil {
+		return nil, err
+	}
+	return c.ensureWSLocked(ctx)
+}
+
+func (c *CodeExecutor) forgetWorkspace(ws codeexecutor.Workspace, generation uint64) {
+	if ws.Path == "" {
+		return
+	}
+	c.containerMu.Lock()
+	defer c.containerMu.Unlock()
+	if c.workspaceGen[ws.Path] == generation {
+		delete(c.workspaceGen, ws.Path)
+	}
+}
+
 // ensureContainer recreates the isolated execution container after a timed-out
 // attach has invalidated it. It must not reuse a container that may still be
 // running an untrusted process.
@@ -346,6 +438,10 @@ func (c *CodeExecutor) ensureContainerLocked(ctx context.Context) error {
 }
 
 func (c *CodeExecutor) containerClient() (*client.Client, string, error) {
+	return c.containerClientForGeneration(0)
+}
+
+func (c *CodeExecutor) containerClientForGeneration(generation uint64) (*client.Client, string, error) {
 	c.containerMu.Lock()
 	defer c.containerMu.Unlock()
 	if c.closed {
@@ -353,6 +449,9 @@ func (c *CodeExecutor) containerClient() (*client.Client, string, error) {
 	}
 	if c.client == nil || c.container == nil {
 		return nil, "", fmt.Errorf("container not initialized")
+	}
+	if generation != 0 && generation != c.generation {
+		return nil, "", fmt.Errorf("%w: container generation %d replaced runtime generation %d", codeexecutor.ErrWorkspaceStale, c.generation, generation)
 	}
 	return c.client, c.container.ID, nil
 }
@@ -400,6 +499,7 @@ func (c *CodeExecutor) abortContainer() {
 	// fresh isolated container.
 	c.container = nil
 	c.ws = nil
+	c.generation++
 }
 
 // Engine exposes the container runtime as an Engine for skills.
@@ -413,12 +513,8 @@ func (c *CodeExecutor) abortContainer() {
 // policy mode on SupportsCleanEnv (tool/workspaceexec) therefore no
 // longer fail closed on the container backend (issue #1845).
 func (c *CodeExecutor) Engine() codeexecutor.Engine {
-	rt, err := c.ensureWS()
-	if err != nil {
-		return nil
-	}
 	return codeexecutor.NewEngineWithCapabilities(
-		rt, rt, rt,
+		c, c, c,
 		codeexecutor.Capabilities{SupportsCleanEnv: true},
 	)
 }
@@ -428,22 +524,30 @@ func (c *CodeExecutor) CreateWorkspace(
 	ctx context.Context, execID string,
 	pol codeexecutor.WorkspacePolicy,
 ) (codeexecutor.Workspace, error) {
-	rt, err := c.ensureWS()
+	rt, err := c.ensureWS(ctx)
 	if err != nil {
 		return codeexecutor.Workspace{}, err
 	}
-	return rt.CreateWorkspace(ctx, execID, pol)
+	ws, err := rt.CreateWorkspace(ctx, execID, pol)
+	if err == nil {
+		c.rememberWorkspace(ws, rt.generation)
+	}
+	return ws, err
 }
 
 // Cleanup removes a workspace via the container runtime.
 func (c *CodeExecutor) Cleanup(
 	ctx context.Context, ws codeexecutor.Workspace,
 ) error {
-	rt, err := c.ensureWS()
+	rt, err := c.runtimeForWorkspace(ctx, ws)
 	if err != nil {
 		return err
 	}
-	return rt.Cleanup(ctx, ws)
+	if err := rt.Cleanup(ctx, ws); err != nil {
+		return err
+	}
+	c.forgetWorkspace(ws, rt.generation)
+	return nil
 }
 
 // PutFiles writes files into a workspace in the container.
@@ -451,7 +555,10 @@ func (c *CodeExecutor) PutFiles(
 	ctx context.Context, ws codeexecutor.Workspace,
 	files []codeexecutor.PutFile,
 ) error {
-	rt, err := c.ensureWS()
+	if len(files) == 0 {
+		return nil
+	}
+	rt, err := c.runtimeForWorkspace(ctx, ws)
 	if err != nil {
 		return err
 	}
@@ -463,11 +570,47 @@ func (c *CodeExecutor) PutDirectory(
 	ctx context.Context, ws codeexecutor.Workspace,
 	hostPath, to string,
 ) error {
-	rt, err := c.ensureWS()
+	rt, err := c.runtimeForWorkspace(ctx, ws)
 	if err != nil {
 		return err
 	}
 	return rt.PutDirectory(ctx, ws, hostPath, to)
+}
+
+// StageDirectory stages a host directory with the requested workspace policy.
+func (c *CodeExecutor) StageDirectory(
+	ctx context.Context, ws codeexecutor.Workspace,
+	src, to string, opt codeexecutor.StageOptions,
+) error {
+	rt, err := c.runtimeForWorkspace(ctx, ws)
+	if err != nil {
+		return err
+	}
+	return rt.StageDirectory(ctx, ws, src, to, opt)
+}
+
+// StageInputs maps declared external inputs into a workspace.
+func (c *CodeExecutor) StageInputs(
+	ctx context.Context, ws codeexecutor.Workspace,
+	specs []codeexecutor.InputSpec,
+) error {
+	rt, err := c.runtimeForWorkspace(ctx, ws)
+	if err != nil {
+		return err
+	}
+	return rt.StageInputs(ctx, ws, specs)
+}
+
+// CollectOutputs collects workspace output according to the declared spec.
+func (c *CodeExecutor) CollectOutputs(
+	ctx context.Context, ws codeexecutor.Workspace,
+	spec codeexecutor.OutputSpec,
+) (codeexecutor.OutputManifest, error) {
+	rt, err := c.runtimeForWorkspace(ctx, ws)
+	if err != nil {
+		return codeexecutor.OutputManifest{}, err
+	}
+	return rt.CollectOutputs(ctx, ws, spec)
 }
 
 // RunProgram runs a command inside the workspace.
@@ -475,7 +618,13 @@ func (c *CodeExecutor) RunProgram(
 	ctx context.Context, ws codeexecutor.Workspace,
 	spec codeexecutor.RunProgramSpec,
 ) (codeexecutor.RunResult, error) {
-	rt, err := c.ensureWS()
+	timeout := spec.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	setupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	rt, err := c.runtimeForWorkspace(setupCtx, ws)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -487,7 +636,7 @@ func (c *CodeExecutor) Collect(
 	ctx context.Context, ws codeexecutor.Workspace,
 	patterns []string,
 ) ([]codeexecutor.File, error) {
-	rt, err := c.ensureWS()
+	rt, err := c.runtimeForWorkspace(ctx, ws)
 	if err != nil {
 		return nil, err
 	}
@@ -500,7 +649,7 @@ func (c *CodeExecutor) ExecuteInline(
 	blocks []codeexecutor.CodeBlock,
 	timeout time.Duration,
 ) (codeexecutor.RunResult, error) {
-	rt, err := c.ensureWS()
+	rt, err := c.ensureWS(ctx)
 	if err != nil {
 		return codeexecutor.RunResult{}, err
 	}
@@ -682,6 +831,7 @@ func (c *CodeExecutor) initContainer(ctx context.Context) error {
 		Image: containerJSON.Image,
 		State: containerJSON.State.Status,
 	}
+	c.generation++
 
 	log.DebugfContext(ctx, "Container %s started successfully and is running", c.container.ID)
 
@@ -746,6 +896,7 @@ func (c *CodeExecutor) cleanupLocked() {
 	// stopped. The lifecycle lock remains held until removal completes.
 	c.container = nil
 	c.ws = nil
+	c.generation++
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

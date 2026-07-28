@@ -36,9 +36,9 @@ func (s stagedReport) commit() error {
 }
 
 // rollback removes a report directory that was published before its matching
-// database finalization completed. A process interruption can still leave a
-// running task with staged artifacts, but the Store is never marked completed
-// before the directory rename succeeds.
+// database finalization completed. A subsequent Run recovers a matching
+// running task from its immutable JSON report; malformed or incomplete
+// publication is rolled back with its running Store record.
 func (s stagedReport) rollback() error {
 	if s.finalDir == "" {
 		return nil
@@ -149,7 +149,14 @@ func atomicWrite(target string, data []byte) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
-	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
+	if info, err := os.Lstat(target); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("atomic write target is not a regular file: %s", target)
+		}
+		if err := os.Remove(target); err != nil {
+			return err
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 	return os.Rename(name, target)

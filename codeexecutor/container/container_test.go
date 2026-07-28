@@ -248,9 +248,9 @@ func TestCodeExecutor_WrapperMethods_Basic(t *testing.T) {
 	require.NotNil(t, eng)
 
 	// ensureWS caches instance.
-	rt1, err := c.ensureWS()
+	rt1, err := c.ensureWS(context.Background())
 	require.NoError(t, err)
-	rt2, err := c.ensureWS()
+	rt2, err := c.ensureWS(context.Background())
 	require.NoError(t, err)
 	require.Equal(t, rt1, rt2)
 
@@ -376,12 +376,122 @@ func TestWithBindMountOption(t *testing.T) {
 
 func TestEnsureWS_CachesRuntime(t *testing.T) {
 	c := &CodeExecutor{}
-	rt1, err := c.ensureWS()
+	rt1, err := c.ensureWS(context.Background())
 	assert.NoError(t, err)
 	assert.NotNil(t, rt1)
-	rt2, err := c.ensureWS()
+	rt2, err := c.ensureWS(context.Background())
 	assert.NoError(t, err)
 	assert.Same(t, rt1, rt2)
+}
+
+func TestWorkspaceGenerationInvalidatesOldHandlesWithoutRebuilding(t *testing.T) {
+	c := &CodeExecutor{generation: 1}
+	ws := codeexecutor.Workspace{ID: "task", Path: "/tmp/run/ws_task"}
+	c.rememberWorkspace(ws, 1)
+	before, err := c.InstanceID(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, codeexecutor.WorkspaceInstanceID("container-1"), before)
+
+	// This models abortContainer after a timed-out attach. The old workspace
+	// remains known, but the physical execution instance has been replaced.
+	c.containerMu.Lock()
+	c.generation++
+	c.containerMu.Unlock()
+	after, err := c.InstanceID(context.Background())
+	require.NoError(t, err)
+	assert.NotEqual(t, before, after)
+	require.ErrorIs(t, c.validateWorkspace(ws), codeexecutor.ErrWorkspaceStale)
+
+	_, err = c.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{Cmd: "true"})
+	require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+	_, ok := c.Engine().Manager().(codeexecutor.WorkspaceInstanceProvider)
+	assert.True(t, ok)
+}
+
+func TestCleanupForgetsOnlyCurrentWorkspaceGeneration(t *testing.T) {
+	c := &CodeExecutor{generation: 3, workspaceGen: map[string]uint64{
+		"/tmp/current": 3,
+		"/tmp/stale":   2,
+	}}
+	c.forgetWorkspace(codeexecutor.Workspace{Path: "/tmp/current"}, 3)
+	assert.NotContains(t, c.workspaceGen, "/tmp/current")
+	c.forgetWorkspace(codeexecutor.Workspace{Path: "/tmp/stale"}, 3)
+	assert.Equal(t, uint64(2), c.workspaceGen["/tmp/stale"])
+}
+
+func TestInstanceIDRecreatesInvalidatedContainerBeforeReportingGeneration(t *testing.T) {
+	var replacementExecCalls int
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/old/kill"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/containers/old"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/images/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[{"RepoTags":["python:3.9-slim"]}]`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/create"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"replacement"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/replacement/start"):
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/containers/replacement/json"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ID":"replacement","State":{"Running":true,"Status":"running"}}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/old/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"Id":"old-workspace"}`))
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/containers/replacement/exec"):
+			w.Header().Set("Content-Type", "application/json")
+			replacementExecCalls++
+			if replacementExecCalls == 1 {
+				_, _ = w.Write([]byte(`{"Id":"verify"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"Id":"replacement-workspace"}`))
+		case r.Method == http.MethodPost && (strings.Contains(r.URL.Path, "/exec/verify/start") ||
+			strings.Contains(r.URL.Path, "/exec/old-workspace/start") ||
+			strings.Contains(r.URL.Path, "/exec/replacement-workspace/start")):
+			conn, buf, err := w.(http.Hijacker).Hijack()
+			require.NoError(t, err)
+			writeHijackStream(t, conn, buf, "", "")
+		case r.Method == http.MethodGet && (strings.Contains(r.URL.Path, "/exec/verify/json") ||
+			strings.Contains(r.URL.Path, "/exec/old-workspace/json") ||
+			strings.Contains(r.URL.Path, "/exec/replacement-workspace/json")):
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ExitCode":0}`))
+		default:
+			assert.Failf(t, "unexpected request", "%s %s", r.Method, r.URL.Path)
+		}
+	}
+	cli, cleanup := newFakeDockerClient(t, handler)
+	defer cleanup()
+	exec := &CodeExecutor{client: cli, container: &tcontainer.Summary{ID: "old"}, generation: 1, containerConfig: tcontainer.Config{Image: defaultImageTag}}
+	registry := codeexecutor.NewWorkspaceRegistry()
+	firstWorkspace, err := registry.Acquire(context.Background(), exec, "task")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstWorkspace.Path)
+
+	exec.abortContainer()
+	secondWorkspace, err := registry.Acquire(context.Background(), exec, "task")
+	require.NoError(t, err)
+	require.NotEmpty(t, secondWorkspace.Path)
+	assert.NotEqual(t, firstWorkspace.Path, secondWorkspace.Path)
+
+	first, err := exec.InstanceID(context.Background())
+	require.NoError(t, err)
+	second, err := exec.InstanceID(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, first, second)
+	assert.NotNil(t, exec.container)
+	assert.Equal(t, codeexecutor.WorkspaceInstanceID("container-3"), first)
+}
+
+func TestEnsureWSHonorsCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := (&CodeExecutor{}).ensureWS(ctx)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestEngine_NonNil(t *testing.T) {

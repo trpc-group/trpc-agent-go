@@ -476,7 +476,13 @@ func runOutputCap(ctx context.Context, cfg config) error {
 	if err != nil {
 		return err
 	}
-	return expectContains(res.Stdout, "[truncated]")
+	if !res.StdoutTruncated {
+		return errors.New("expected stdout truncation metadata")
+	}
+	if len(res.Stdout) > 96 {
+		return fmt.Errorf("stdout exceeded output cap: %d", len(res.Stdout))
+	}
+	return nil
 }
 
 func runAdditionalPermissions(ctx context.Context, cfg config) error {

@@ -10,6 +10,7 @@ package review
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"os"
 	"os/exec"
@@ -50,6 +51,16 @@ func TestGitWorkingDiffIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	}
 }
 
+func TestGitWorkingDiffRejectsNonRepository(t *testing.T) {
+	_, decisions, err := gitWorkingDiff(context.Background(), t.TempDir())
+	if err == nil {
+		t.Fatal("non-repository was accepted as git input")
+	}
+	if len(decisions) != 2 || decisions[0].Action != PermissionAllow || decisions[1].Action != PermissionAllow {
+		t.Fatalf("failed git input did not retain audited decisions: %+v", decisions)
+	}
+}
+
 func TestFileListBuildsBoundedSyntheticDiff(t *testing.T) {
 	repo := t.TempDir()
 	writeFile(t, filepath.Join(repo, "nested", "file.go"), "package nested\n\nconst value = 1\n")
@@ -65,6 +76,53 @@ func TestFileListBuildsBoundedSyntheticDiff(t *testing.T) {
 	}
 	if parsed.Summary.FilesChanged != 1 || parsed.Lines[0].Package != "nested" {
 		t.Fatalf("unexpected synthetic diff: %+v", parsed)
+	}
+}
+
+func TestLoadInputExercisesSupportedModesAndRejectsAmbiguity(t *testing.T) {
+	base, err := exampleDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1,2 @@\n package a\n+const changed = true\n"
+	diffPath := filepath.Join(t.TempDir(), "change.diff")
+	writeFile(t, diffPath, diff)
+	parsed, mode, _, err := loadInput(context.Background(), Config{DiffFile: "  " + diffPath + "  "}, base)
+	if err != nil || mode != "diff_file" || parsed.Summary.GoFiles != 1 {
+		t.Fatalf("diff-file mode = parsed=%+v mode=%q err=%v", parsed, mode, err)
+	}
+
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "nested", "file.go"), "package nested\n\nconst Value = 1\n")
+	list := filepath.Join(repo, "files.txt")
+	writeFile(t, list, "nested/file.go\n")
+	parsed, mode, _, err = loadInput(context.Background(), Config{RepoPath: repo, FileList: list}, base)
+	if err != nil || mode != "file_list" || len(parsed.Hunks) != 1 || parsed.Hunks[0].Package != "nested" {
+		t.Fatalf("file-list mode = parsed=%+v mode=%q err=%v", parsed, mode, err)
+	}
+
+	if _, _, _, err := loadInput(context.Background(), Config{Fixture: "../clean"}, base); err == nil {
+		t.Fatal("fixture traversal was accepted")
+	}
+	if _, _, _, err := loadInput(context.Background(), Config{DiffFile: diffPath, Fixture: "clean"}, base); err == nil {
+		t.Fatal("ambiguous input modes were accepted")
+	}
+	fixture, mode, _, err := loadInput(context.Background(), Config{Fixture: "clean"}, base)
+	if err != nil || mode != "fixture:clean" || fixture.Summary.FilesChanged == 0 {
+		t.Fatalf("fixture mode = parsed=%+v mode=%q err=%v", fixture, mode, err)
+	}
+
+	gitRepo := t.TempDir()
+	runGit(t, gitRepo, "init")
+	runGit(t, gitRepo, "config", "user.email", "review@example.com")
+	runGit(t, gitRepo, "config", "user.name", "Review Test")
+	writeFile(t, filepath.Join(gitRepo, "tracked.go"), "package tracked\n\nconst Value = 1\n")
+	runGit(t, gitRepo, "add", ".")
+	runGit(t, gitRepo, "commit", "-m", "baseline")
+	writeFile(t, filepath.Join(gitRepo, "tracked.go"), "package tracked\n\nconst Value = 2\n")
+	fromRepo, mode, decisions, err := loadInput(context.Background(), Config{RepoPath: gitRepo}, base)
+	if err != nil || mode != "repo_path" || fromRepo.Summary.FilesChanged != 1 || len(decisions) != 2 {
+		t.Fatalf("repo-path mode = parsed=%+v mode=%q decisions=%+v err=%v", fromRepo, mode, decisions, err)
 	}
 }
 
@@ -100,6 +158,61 @@ func TestReadBoundedRejectsOversizeInput(t *testing.T) {
 	}
 }
 
+func TestInputHelpersFailClosedOnReadAndPathErrors(t *testing.T) {
+	if _, err := readBoundedReader(failingReader{}, "broken input"); err == nil {
+		t.Fatal("read failure was accepted")
+	}
+	if _, err := diffFromFileList("", filepath.Join(t.TempDir(), "files.txt")); err == nil {
+		t.Fatal("file list without repository was accepted")
+	}
+	root := t.TempDir()
+	if _, err := synthesizeFiles(root, []string{"../escape.go"}); err == nil {
+		t.Fatal("escaping file-list path was accepted")
+	}
+	if _, err := synthesizeFiles(root, []string{"missing.go"}); err == nil {
+		t.Fatal("missing file-list path was accepted")
+	}
+	parsed, err := ParseUnifiedDiff("diff --git a/broken.go b/broken.go\n--- a/broken.go\n+++ b/broken.go\n@@ -1 +1 @@\n+package (\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, "broken.go"), "package (\n")
+	if err := enrichPackagesFromRepo(&parsed, root); err == nil {
+		t.Fatal("invalid Go package source was accepted")
+	}
+}
+
+func TestCommandOutputBoundedRejectsStartFailureNonZeroExitAndOversizeOutput(t *testing.T) {
+	if _, err := commandOutputBounded(exec.Command(filepath.Join(t.TempDir(), "missing-command")), "missing command"); err == nil {
+		t.Fatal("missing command was started")
+	}
+	for _, mode := range []string{"fail", "oversize"} {
+		t.Run(mode, func(t *testing.T) {
+			cmd := exec.Command(os.Args[0], "-test.run=TestCommandOutputBoundedHelper")
+			cmd.Env = append(os.Environ(), "GO_WANT_REVIEW_HELPER="+mode)
+			if _, err := commandOutputBounded(cmd, "helper output"); err == nil {
+				t.Fatalf("helper mode %q was accepted", mode)
+			}
+		})
+	}
+}
+
+func TestCommandOutputBoundedHelper(t *testing.T) {
+	mode := os.Getenv("GO_WANT_REVIEW_HELPER")
+	if mode == "" {
+		return
+	}
+	if mode == "oversize" {
+		_, _ = os.Stdout.WriteString(strings.Repeat("x", maxInputBytes+1))
+		os.Exit(0)
+	}
+	os.Exit(3)
+}
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
 func TestNewSandboxModes(t *testing.T) {
 	base, err := exampleDir()
 	if err != nil {
@@ -124,6 +237,14 @@ func TestNewSandboxModes(t *testing.T) {
 	}
 	if _, err := newSandbox(context.Background(), Config{Executor: "unknown"}, base); err == nil {
 		t.Fatal("unknown executor was accepted")
+	}
+	fakeFailure, err := newSandbox(context.Background(), Config{Executor: ExecutorFakeFailure}, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runs, _, artifacts, err := fakeFailure.run(context.Background(), "fake-failure", "", ParsedInput{})
+	if err != nil || len(runs) != 1 || runs[0].Status != RunFailed || len(artifacts) != 0 {
+		t.Fatalf("fake failure did not preserve failed-script semantics: runs=%+v artifacts=%+v err=%v", runs, artifacts, err)
 	}
 }
 
@@ -154,6 +275,21 @@ func TestRemoteSandboxFactoriesAndCapabilityGate(t *testing.T) {
 	container, err = newSandbox(context.Background(), Config{Executor: "container"}, base)
 	if err != nil || container.initErr == nil || container.engine != nil {
 		t.Fatalf("clean-environment capability was not enforced: %+v, %v", container, err)
+	}
+	e2bFactory = func(context.Context, Config, string) (codeexecutor.Engine, func() error, error) {
+		return nil, nil, errors.New("remote unavailable")
+	}
+	e2b, err = newSandbox(context.Background(), Config{Executor: "e2b", Timeout: time.Second}, base)
+	if err != nil || e2b.initErr == nil || e2b.engine != nil {
+		t.Fatalf("e2b initialization failure was not retained: %+v, %v", e2b, err)
+	}
+}
+
+func TestSafeSnapshotCleansUpOnInvalidRepository(t *testing.T) {
+	_, cleanup, err := safeSnapshot(filepath.Join(t.TempDir(), "missing"))
+	defer cleanup()
+	if err == nil {
+		t.Fatal("missing repository was snapshotted")
 	}
 }
 
@@ -500,10 +636,14 @@ func TestStoreRoundTripsCompleteAuditRecords(t *testing.T) {
 
 	report.Task.Status = TaskCompleted
 	report.Task.EndedAt = now.Add(time.Second)
+	report.SandboxRuns = append(report.SandboxRuns, SandboxRun{Command: "finalize_report", Executor: ExecutorContainer, Status: RunFailed, ErrorType: "setup_error"})
 	report.Artifacts = append(report.Artifacts, Artifact{Name: "review_report.json", Path: "report/review_report.json", MIMEType: "application/json", SizeBytes: 5})
 	report.Conclusion = "review complete"
 	if err := store.Finalize(context.Background(), report); err != nil {
 		t.Fatalf("finalize complete audit report: %v", err)
+	}
+	if runs, err := store.LoadRuns(context.Background(), report.Task.ID); err != nil || len(runs) != len(report.SandboxRuns) || runs[1].Command != "finalize_report" {
+		t.Fatalf("finalized sandbox runs are stale: runs=%+v report=%+v err=%v", runs, report.SandboxRuns, err)
 	}
 	loaded, err := store.Load(context.Background(), report.Task.ID)
 	if err != nil || loaded.Task.Status != TaskCompleted || loaded.Conclusion != "review complete" {
@@ -512,6 +652,92 @@ func TestStoreRoundTripsCompleteAuditRecords(t *testing.T) {
 	artifacts, err := store.LoadArtifacts(context.Background(), report.Task.ID)
 	if err != nil || len(artifacts) != 2 || !hasArtifactProvenance(artifacts, "diff_stats.json", "validated_sandbox_script") {
 		t.Fatalf("final artifacts round trip failed: artifacts=%+v err=%v", artifacts, err)
+	}
+}
+
+func TestStoreRejectsCorruptedSerializedRecords(t *testing.T) {
+	storeValue, err := openStore(filepath.Join(t.TempDir(), "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storeValue.Close()
+	store := storeValue.(*sqliteStore)
+	now := time.Now().UTC().Round(0)
+	report := Report{Task: Task{ID: "corrupt", Status: TaskRunning, InputMode: "fixture", StartedAt: now, EndedAt: now}, Input: DiffSummary{Digest: "digest"}, SandboxRuns: []SandboxRun{{Command: "check", Status: RunSuccess}}, PermissionDecisions: []PermissionDecision{{Command: "bash", Action: PermissionAllow, CreatedAt: now}}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE review_reports SET payload_json='{' WHERE task_id=?`, report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("corrupted report payload was accepted")
+	}
+	if _, err := store.db.Exec(`UPDATE review_metrics SET payload_json='{' WHERE task_id=?`, report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadMetrics(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("corrupted metrics payload was accepted")
+	}
+	if _, err := store.db.Exec(`UPDATE sandbox_runs SET payload_json='{' WHERE task_id=?`, report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadRuns(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("corrupted sandbox run payload was accepted")
+	}
+	if _, err := store.db.Exec(`UPDATE review_tasks SET started_at='invalid' WHERE id=?`, report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadTask(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("corrupted task timestamp was accepted")
+	}
+	if artifacts, err := store.LoadArtifacts(context.Background(), report.Task.ID); err != nil || len(artifacts) != 0 {
+		t.Fatalf("empty artifacts query = %+v, %v", artifacts, err)
+	}
+	if _, err := store.db.Exec(`UPDATE permission_decisions SET created_at='invalid' WHERE task_id=?`, report.Task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LoadDecisions(context.Background(), report.Task.ID); err == nil {
+		t.Fatal("corrupted decision timestamp was accepted")
+	}
+}
+
+func TestClosedStoreOperationsReturnErrors(t *testing.T) {
+	storeValue, err := openStore(filepath.Join(t.TempDir(), "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := storeValue.(*sqliteStore)
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Round(0)
+	report := Report{Task: Task{ID: "closed", Status: TaskRunning, InputMode: "fixture", StartedAt: now, EndedAt: now}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	checks := []struct {
+		name string
+		run  func() error
+	}{
+		{name: "save", run: func() error { return store.Save(context.Background(), report) }},
+		{name: "finalize", run: func() error { return store.Finalize(context.Background(), report) }},
+		{name: "load", run: func() error { _, err := store.Load(context.Background(), report.Task.ID); return err }},
+		{name: "load task", run: func() error { _, err := store.LoadTask(context.Background(), report.Task.ID); return err }},
+		{name: "load runs", run: func() error { _, err := store.LoadRuns(context.Background(), report.Task.ID); return err }},
+		{name: "load decisions", run: func() error { _, err := store.LoadDecisions(context.Background(), report.Task.ID); return err }},
+		{name: "load filters", run: func() error { _, err := store.LoadFilterDecisions(context.Background(), report.Task.ID); return err }},
+		{name: "load metrics", run: func() error { _, err := store.LoadMetrics(context.Background(), report.Task.ID); return err }},
+		{name: "load findings", run: func() error {
+			_, err := store.LoadFindings(context.Background(), report.Task.ID, "finding")
+			return err
+		}},
+		{name: "load artifacts", run: func() error { _, err := store.LoadArtifacts(context.Background(), report.Task.ID); return err }},
+		{name: "delete", run: func() error { return store.Delete(context.Background(), report.Task.ID) }},
+	}
+	for _, check := range checks {
+		t.Run(check.name, func(t *testing.T) {
+			if err := check.run(); err == nil {
+				t.Fatal("closed store operation unexpectedly succeeded")
+			}
+		})
 	}
 }
 
@@ -534,6 +760,134 @@ func TestOpenStorePreservesExistingDirectoryMode(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o755 {
 		t.Fatalf("existing directory mode changed to %o", got)
+	}
+}
+
+func TestOpenStoreMigratesLegacyArtifactSchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.sqlite")
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE artifacts (task_id TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL, mime_type TEXT NOT NULL, size_bytes INTEGER NOT NULL, PRIMARY KEY(task_id, name))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStore(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	rows, err := store.(*sqliteStore).db.Query(`PRAGMA table_info(artifacts)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var hasProvenance bool
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, fieldType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &fieldType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		hasProvenance = hasProvenance || name == "provenance"
+	}
+	if err := rows.Err(); err != nil || !hasProvenance {
+		t.Fatalf("legacy provenance migration failed: present=%t err=%v", hasProvenance, err)
+	}
+}
+
+func TestAtomicWriteRejectsDirectoryTarget(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "report")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWrite(target, []byte("data")); err == nil {
+		t.Fatal("atomic write replaced a directory target")
+	}
+}
+
+func TestStageReportPublishesDeferredDiffStatisticsWithReportPair(t *testing.T) {
+	dir := t.TempDir()
+	report := Report{
+		Task:      Task{ID: "deferred-stats", Status: TaskCompleted},
+		Artifacts: []Artifact{{Name: "diff_stats.json", Path: "diff_stats.json", MIMEType: "application/json", content: `{"files_changed":1}`}},
+		Metrics:   Metrics{SeverityDistribution: map[string]int{}},
+	}
+	stagedReportValue, paths, staged, err := stageReport(report, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer staged.cleanup()
+	if err := staged.commit(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, report.Task.ID, "diff_stats.json"))
+	if err != nil || string(data) != `{"files_changed":1}` {
+		t.Fatalf("deferred statistics were not published: %q, %v", data, err)
+	}
+	for _, path := range []string{paths.JSON, paths.Markdown} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("report pair is incomplete: %v", err)
+		}
+	}
+	if len(stagedReportValue.Artifacts) != 3 || stagedReportValue.Artifacts[1].SizeBytes == 0 || stagedReportValue.Artifacts[2].SizeBytes == 0 {
+		t.Fatalf("report artifact sizes did not converge: %+v", stagedReportValue.Artifacts)
+	}
+}
+
+func TestSafeSnapshotCopiesEligibleFilesAndSkipsIgnoredTrees(t *testing.T) {
+	repo := t.TempDir()
+	writeFile(t, filepath.Join(repo, "go.mod"), "module example.com/snapshot\n")
+	writeFile(t, filepath.Join(repo, "nested", "service.go"), "package nested\n")
+	writeFile(t, filepath.Join(repo, "vendor", "ignored.go"), "package ignored\n")
+	writeFile(t, filepath.Join(repo, "notes.txt"), "not staged\n")
+	snapshot, cleanup, err := safeSnapshot(repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanup()
+	for _, rel := range []string{"go.mod", filepath.Join("nested", "service.go")} {
+		if _, err := os.Stat(filepath.Join(snapshot, rel)); err != nil {
+			t.Fatalf("eligible file %q was not copied: %v", rel, err)
+		}
+	}
+	for _, rel := range []string{filepath.Join("vendor", "ignored.go"), "notes.txt"} {
+		if _, err := os.Stat(filepath.Join(snapshot, rel)); !os.IsNotExist(err) {
+			t.Fatalf("ignored file %q was copied: %v", rel, err)
+		}
+	}
+}
+
+func TestSnapshotCopyFailsClosedForOversizeAndUnstableSources(t *testing.T) {
+	root := t.TempDir()
+	large := filepath.Join(root, "large.go")
+	file, err := os.Create(large)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxSnapshotBytes + 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, cleanup, err := safeSnapshot(root); err == nil {
+		cleanup()
+		t.Fatal("oversized source tree was snapshotted")
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := copyBoundedFile(root, filepath.Join(t.TempDir(), "copy"), info); err == nil {
+		t.Fatal("directory source was copied as a regular file")
+	}
+	if err := copyBoundedFile(filepath.Join(root, "missing.go"), filepath.Join(t.TempDir(), "copy"), info); err == nil {
+		t.Fatal("missing source was copied")
 	}
 }
 

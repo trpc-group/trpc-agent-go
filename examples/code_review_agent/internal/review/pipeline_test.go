@@ -333,9 +333,215 @@ func TestRunPersistsFailureWhenFinalizationFails(t *testing.T) {
 	if err != nil || report.Task.Status != TaskFailed || len(report.SandboxRuns) == 0 || report.SandboxRuns[len(report.SandboxRuns)-1].Command != "finalize_report" || report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS || report.Metrics.TotalDurationScope != "failure_audit" {
 		t.Fatalf("finalization failure was not retained for audit: report=%+v err=%v", report, err)
 	}
+	runs, err := store.LoadRuns(context.Background(), "finalization-failure")
+	if err != nil || len(runs) != len(report.SandboxRuns) || runs[len(runs)-1].Command != "finalize_report" {
+		t.Fatalf("normalized failure runs diverged from report: runs=%+v report=%+v err=%v", runs, report.SandboxRuns, err)
+	}
 	if _, err := os.Stat(filepath.Join(dir, "finalization-failure")); !os.IsNotExist(err) {
 		t.Fatalf("published report remained after finalization failed: %v", err)
 	}
+}
+
+func TestRunRecoversPublishedRunningTask(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "reviews.sqlite")
+	store, err := openStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Round(0)
+	stored := Report{
+		Task:    Task{ID: "recover-publication", Status: TaskRunning, InputMode: "fixture", StartedAt: now, EndedAt: now},
+		Input:   DiffSummary{Digest: "recover-digest"},
+		Metrics: Metrics{SeverityDistribution: map[string]int{}},
+	}
+	if err := store.Save(context.Background(), stored); err != nil {
+		t.Fatal(err)
+	}
+	published := stored
+	published.Task.Status = TaskCompleted
+	published.Task.EndedAt = now.Add(time.Second)
+	published.Metrics.TotalDurationMS = 1
+	published.Metrics.TotalDurationScope = "pre_publication_snapshot"
+	_, _, staged, err := stageReport(published, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := staged.commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	recovered, paths, err := Run(context.Background(), Config{
+		TaskID: "recover-publication", Fixture: "clean", DryRun: true,
+		OutputDir: dir, DatabasePath: dbPath,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Task.Status != TaskCompleted || recovered.Metrics.TotalDurationScope != "recovered_publication" {
+		t.Fatalf("published running task was not recovered: %+v", recovered)
+	}
+	if _, err := os.Stat(paths.JSON); err != nil {
+		t.Fatalf("recovered report was removed: %v", err)
+	}
+}
+
+func TestRecoverPublishedReviewRollsBackIncompleteOrMalformedPublication(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		publish func(t *testing.T, dir, taskID string)
+	}{
+		{name: "no published directory"},
+		{
+			name: "missing markdown report",
+			publish: func(t *testing.T, dir, taskID string) {
+				path := filepath.Join(dir, taskID, "report")
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(path, "review_report.json"), "{}")
+			},
+		},
+		{
+			name: "mismatched published task",
+			publish: func(t *testing.T, dir, taskID string) {
+				path := filepath.Join(dir, taskID, "report")
+				if err := os.MkdirAll(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				writeFile(t, filepath.Join(path, "review_report.json"), `{"task":{"id":"other","status":"completed"}}`)
+				writeFile(t, filepath.Join(path, "review_report.md"), "# incomplete")
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			const taskID = "rollback-publication"
+			now := time.Now().UTC().Round(0)
+			report := Report{
+				Task:  Task{ID: taskID, Status: TaskRunning, InputMode: "fixture", StartedAt: now, EndedAt: now},
+				Input: DiffSummary{Digest: "rollback-digest"}, Metrics: Metrics{SeverityDistribution: map[string]int{}},
+			}
+			if err := store.Save(context.Background(), report); err != nil {
+				t.Fatal(err)
+			}
+			if test.publish != nil {
+				test.publish(t, dir, taskID)
+			}
+			_, _, recovered, err := recoverPublishedReview(context.Background(), store, Config{OutputDir: dir}, taskID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if recovered {
+				t.Fatal("incomplete publication was recovered")
+			}
+			_, err = store.Load(context.Background(), taskID)
+			if err == nil {
+				t.Fatal("rolled-back task remained in store")
+			}
+			_, err = os.Stat(filepath.Join(dir, taskID))
+			if !os.IsNotExist(err) {
+				t.Fatalf("rolled-back report directory remained: %v", err)
+			}
+		})
+	}
+}
+
+func TestRecoverPublishedReviewLeavesTerminalTasksToDuplicateProtection(t *testing.T) {
+	dir := t.TempDir()
+	store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC().Round(0)
+	report := Report{Task: Task{ID: "completed", Status: TaskCompleted, InputMode: "fixture", StartedAt: now, EndedAt: now}, Input: DiffSummary{Digest: "digest"}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	_, _, recovered, err := recoverPublishedReview(context.Background(), store, Config{OutputDir: dir}, report.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered {
+		t.Fatal("terminal task was unexpectedly recovered")
+	}
+	loaded, err := store.Load(context.Background(), report.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Task.Status != TaskCompleted {
+		t.Fatalf("terminal status changed: %s", loaded.Task.Status)
+	}
+}
+
+func TestRecoverPublishedReviewRetainsAuditOnReadOrFinalizeFailure(t *testing.T) {
+	t.Run("unreadable published JSON", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		report := saveRunningRecoveryReport(t, store, "read-failure")
+		path := filepath.Join(dir, report.Task.ID, "report", "review_report.json")
+		if err := os.MkdirAll(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, recovered, err := recoverPublishedReview(context.Background(), store, Config{OutputDir: dir}, report.Task.ID); err == nil || !recovered {
+			t.Fatalf("unreadable publication was not retained for inspection: recovered=%t err=%v", recovered, err)
+		}
+		if _, err := store.Load(context.Background(), report.Task.ID); err != nil {
+			t.Fatalf("running audit was deleted after read failure: %v", err)
+		}
+	})
+
+	t.Run("finalize failure", func(t *testing.T) {
+		dir := t.TempDir()
+		store, err := openStore(filepath.Join(dir, "reviews.sqlite"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		report := saveRunningRecoveryReport(t, store, "finalize-failure")
+		published := report
+		published.Task.Status = TaskCompleted
+		published.Task.EndedAt = time.Now()
+		published.Metrics.TotalDurationScope = "pre_publication_snapshot"
+		_, _, staged, err := stageReport(published, dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := staged.commit(); err != nil {
+			t.Fatal(err)
+		}
+		failing := &failOnceFinalizeStore{Store: store, err: errors.New("finalize unavailable")}
+		if _, _, recovered, err := recoverPublishedReview(context.Background(), failing, Config{OutputDir: dir}, report.Task.ID); err == nil || !recovered {
+			t.Fatalf("finalization failure was not retained for retry: recovered=%t err=%v", recovered, err)
+		}
+		loaded, err := store.Load(context.Background(), report.Task.ID)
+		if err != nil || loaded.Task.Status != TaskRunning {
+			t.Fatalf("running audit changed after failed recovery: report=%+v err=%v", loaded, err)
+		}
+	})
+}
+
+func saveRunningRecoveryReport(t *testing.T, store Store, taskID string) Report {
+	t.Helper()
+	now := time.Now().UTC().Round(0)
+	report := Report{Task: Task{ID: taskID, Status: TaskRunning, InputMode: "fixture", StartedAt: now, EndedAt: now}, Input: DiffSummary{Digest: taskID}, Metrics: Metrics{SeverityDistribution: map[string]int{}}}
+	if err := store.Save(context.Background(), report); err != nil {
+		t.Fatal(err)
+	}
+	return report
 }
 
 func TestRunPublishesReportBeforeCompletingStore(t *testing.T) {
@@ -508,7 +714,7 @@ func TestRunUsesInjectedStoreFactory(t *testing.T) {
 	}
 }
 
-func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
+func TestTotalDurationIncludesTerminalFinalizationAndVerification(t *testing.T) {
 	dir := t.TempDir()
 	const delay = 25 * time.Millisecond
 	report, paths, err := Run(context.Background(), Config{
@@ -527,7 +733,7 @@ func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	if report.Metrics.PreparationDurationMS < delay.Milliseconds() {
 		t.Fatalf("preparation duration %dms excluded persistence delay", report.Metrics.PreparationDurationMS)
 	}
-	if report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS {
+	if report.Metrics.TotalDurationMS < report.Metrics.PreparationDurationMS+2*delay.Milliseconds() {
 		t.Fatalf("total duration %dms precedes preparation duration %dms", report.Metrics.TotalDurationMS, report.Metrics.PreparationDurationMS)
 	}
 	data, err := os.ReadFile(paths.JSON)
@@ -550,7 +756,7 @@ func TestTotalDurationIncludesInitialPersistence(t *testing.T) {
 	}
 	defer store.Close()
 	metrics, err := store.LoadMetrics(context.Background(), report.Task.ID)
-	if err != nil || metrics.TotalDurationMS != report.Metrics.TotalDurationMS || metrics.TotalDurationScope != "finalization_complete" {
+	if err != nil || metrics.TotalDurationMS != report.Metrics.TotalDurationMS || metrics.TotalDurationScope != "verified_before_metric_persistence" || metrics.FinalizationDurationMS < delay.Milliseconds() || metrics.VerificationDurationMS < delay.Milliseconds() {
 		t.Fatalf("persisted total duration mismatch: metrics=%+v err=%v", metrics, err)
 	}
 	task, err := store.LoadTask(context.Background(), report.Task.ID)
@@ -567,6 +773,16 @@ type delayedStore struct {
 func (s delayedStore) Save(ctx context.Context, report Report) error {
 	time.Sleep(s.delay)
 	return s.Store.Save(ctx, report)
+}
+
+func (s delayedStore) Finalize(ctx context.Context, report Report) error {
+	time.Sleep(s.delay)
+	return s.Store.Finalize(ctx, report)
+}
+
+func (s delayedStore) Load(ctx context.Context, taskID string) (Report, error) {
+	time.Sleep(s.delay)
+	return s.Store.Load(ctx, taskID)
 }
 
 type failOnceFinalizeStore struct {
@@ -603,6 +819,19 @@ func TestTaskIDValidation(t *testing.T) {
 		if err := normalizeConfig(&cfg); err == nil {
 			t.Fatalf("task id %q was accepted", value)
 		}
+	}
+}
+
+func TestRunReportsConfigurationAndStoreInitializationFailures(t *testing.T) {
+	if _, _, err := Run(context.Background(), Config{TaskID: "../invalid", Fixture: "clean", DryRun: true}); err == nil {
+		t.Fatal("invalid task ID reached the review pipeline")
+	}
+	storeErr := errors.New("store unavailable")
+	if _, _, err := Run(context.Background(), Config{
+		TaskID: "store-failure", Fixture: "clean", DryRun: true,
+		StoreFactory: func(context.Context, Config) (Store, error) { return nil, storeErr },
+	}); !errors.Is(err, storeErr) {
+		t.Fatalf("store initialization error was not returned: %v", err)
 	}
 }
 

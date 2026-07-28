@@ -60,15 +60,16 @@ const (
 
 // workspaceRuntime provides workspace execution on Docker.
 type workspaceRuntime struct {
-	ce  *CodeExecutor
-	cfg runtimeConfig
+	ce         *CodeExecutor
+	cfg        runtimeConfig
+	generation uint64
 }
 
 func (r *workspaceRuntime) containerClient() (*client.Client, string, error) {
 	if r == nil || r.ce == nil {
 		return nil, "", fmt.Errorf("container executor not ready")
 	}
-	return r.ce.containerClient()
+	return r.ce.containerClientForGeneration(r.generation)
 }
 
 type runtimeConfig struct {
@@ -100,7 +101,7 @@ func newWorkspaceRuntime(c *CodeExecutor) (*workspaceRuntime, error) {
 		)
 		cfg.autoMapInputs = c.autoInputs
 	}
-	return &workspaceRuntime{ce: c, cfg: cfg}, nil
+	return &workspaceRuntime{ce: c, cfg: cfg, generation: c.generation}, nil
 }
 
 // findBindSource returns the host path whose bind dest equals dest.
