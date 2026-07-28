@@ -53,7 +53,6 @@ func (s *Service) getSession(
 		}
 		return nil
 	}, stateQuery, stateArgs...)
-
 	if err != nil {
 		return nil, fmt.Errorf("get session state failed: %w", err)
 	}
@@ -177,7 +176,6 @@ func (s *Service) listSessions(
 		}
 		return nil
 	}, listQuery, listArgs...)
-
 	if err != nil {
 		return nil, fmt.Errorf("list session states failed: %w", err)
 	}
@@ -312,7 +310,7 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, updatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -323,14 +321,13 @@ func (s *Service) addEvent(ctx context.Context, key session.Key, event *event.Ev
 			_, err = tx.ExecContext(ctx,
 				fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event, created_at, updated_at)
 				 VALUES ($1, $2, $3, $4, $5, $6)`, s.tableSessionEvents),
-				key.AppName, key.UserID, key.SessionID, eventBytes, now, now)
+				key.AppName, key.UserID, key.SessionID, string(eventBytes), now, now)
 			if err != nil {
 				return fmt.Errorf("insert event failed: %w", err)
 			}
 		}
 		return nil
 	})
-
 	if err != nil {
 		return fmt.Errorf("store event failed: %w", err)
 	}
@@ -395,7 +392,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 			 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, updatedAt, expiresAt,
+			string(updatedStateBytes), updatedAt, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("update session state failed: %w", err)
@@ -405,7 +402,7 @@ func (s *Service) addTrackEvent(ctx context.Context, key session.Key, trackEvent
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event, created_at, updated_at, expires_at)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, s.tableSessionTracks),
-			key.AppName, key.UserID, key.SessionID, trackEvent.Track, eventBytes,
+			key.AppName, key.UserID, key.SessionID, trackEvent.Track, string(eventBytes),
 			trackEvent.Timestamp, trackEvent.Timestamp, expiresAt)
 		if err != nil {
 			return fmt.Errorf("insert track event failed: %w", err)
@@ -533,7 +530,6 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 
 		return nil
 	})
-
 	if err != nil {
 		return fmt.Errorf("postgres session service delete session state failed: %w", err)
 	}
@@ -702,7 +698,6 @@ func (s *Service) getEventsList(
 		}
 		return nil
 	}, query, args...)
-
 	if err != nil {
 		return nil, fmt.Errorf("query events failed: %w", err)
 	}
@@ -944,7 +939,6 @@ func (s *Service) getSummariesList(
 		}
 		return nil
 	}, summaryQuery, sessionKeys[0].AppName, sessionKeys[0].UserID, sessionIDs, time.Now())
-
 	if err != nil {
 		return nil, fmt.Errorf("query summaries failed: %w", err)
 	}

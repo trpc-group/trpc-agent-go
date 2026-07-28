@@ -30,8 +30,10 @@ import (
 	storage "trpc.group/trpc-go/trpc-agent-go/storage/postgres"
 )
 
-var _ session.Service = (*Service)(nil)
-var _ session.TrackService = (*Service)(nil)
+var (
+	_ session.Service      = (*Service)(nil)
+	_ session.TrackService = (*Service)(nil)
+)
 
 var errSessionNotFound = errors.New("session not found")
 
@@ -288,7 +290,7 @@ func (s *Service) CreateSession(
 	_, err = s.pgClient.ExecContext(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, state, created_at, updated_at, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`, s.tableSessionStates),
-		key.AppName, key.UserID, key.SessionID, sessBytes, sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
+		key.AppName, key.UserID, key.SessionID, string(sessBytes), sessState.CreatedAt, sessState.UpdatedAt, expiresAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create session failed: %w", err)
@@ -452,7 +454,6 @@ func (s *Service) ListAppStates(ctx context.Context, appName string) (session.St
 		AND (expires_at IS NULL OR expires_at > $2)
 		AND deleted_at IS NULL`, s.tableAppStates),
 		appName, time.Now())
-
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service list app states failed: %w", err)
 	}
@@ -544,7 +545,6 @@ func (s *Service) ListUserStates(ctx context.Context, userKey session.UserKey) (
 		AND (expires_at IS NULL OR expires_at > $3)
 		AND deleted_at IS NULL`, s.tableUserStates),
 		userKey.AppName, userKey.UserID, time.Now())
-
 	if err != nil {
 		return nil, fmt.Errorf("postgres session service list user states failed: %w", err)
 	}
@@ -609,7 +609,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 		_, err = tx.ExecContext(ctx,
 			fmt.Sprintf(`UPDATE %s SET state = $1, updated_at = $2, expires_at = $3
 		 WHERE app_name = $4 AND user_id = $5 AND session_id = $6 AND deleted_at IS NULL`, s.tableSessionStates),
-			updatedStateBytes, now, expiresAt,
+			string(updatedStateBytes), now, expiresAt,
 			key.AppName, key.UserID, key.SessionID)
 		if err != nil {
 			return fmt.Errorf("postgres session service update session state failed: %w", err)
