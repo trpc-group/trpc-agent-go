@@ -197,7 +197,7 @@ func TestRunInterleavesEventsAndSummaries(t *testing.T) {
 	defer memoryService.Close()
 
 	firstPrefix, finalPrefix := 2, 4
-	baseTime := time.Date(2026, time.July, 28, 1, 2, 3, 0, time.UTC)
+	baseTime := time.Now().UTC().Add(time.Minute).Truncate(time.Second)
 	events := make([]*event.Event, 0, finalPrefix)
 	for i, id := range []string{"event-0", "event-1", "event-2", "event-3"} {
 		events = append(events, replayTimelineEvent(id, baseTime.Add(time.Duration(i)*time.Second)))
@@ -611,6 +611,63 @@ func TestRunValidatesStateScopesAndCleansPeer(t *testing.T) {
 	}, mergeScopedState(session.StateMap{"nil": nil}, session.StateMap{"nil": nil}))
 }
 
+func TestRunCleansStateScopePeerAfterCallerCancellation(t *testing.T) {
+	type contextKey string
+	const (
+		traceKey   contextKey = "trace"
+		traceValue            = "state-scope-cleanup"
+	)
+	cleanupErr := errors.New("cleanup failed")
+	tests := []struct {
+		name      string
+		deleteErr error
+	}{
+		{name: "cleanup succeeds"},
+		{name: "cleanup error is joined", deleteErr: cleanupErr},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			base := sessinmemory.NewSessionService()
+			defer base.Close()
+			memoryService := meminmemory.NewMemoryService()
+			defer memoryService.Close()
+
+			ctx, cancel := context.WithCancel(context.WithValue(context.Background(), traceKey, traceValue))
+			defer cancel()
+			tc := replayStateScopeCase(strings.ReplaceAll(test.name, " ", "-"))
+			sessionService := &scopeSessionService{
+				Service:                      base,
+				cancelAfterPeerCreate:        cancel,
+				honorPeerContextCancellation: true,
+				deleteErr:                    test.deleteErr,
+				deleteContextValueKey:        traceKey,
+			}
+
+			_, err := Run(ctx, Backend{
+				Name: "scope_fake", SessionService: sessionService, MemoryService: memoryService,
+			}, tc)
+			require.ErrorIs(t, err, context.Canceled)
+			if test.deleteErr != nil {
+				require.ErrorIs(t, err, cleanupErr)
+				require.ErrorContains(t, err, "delete state-scope peer")
+			}
+			require.Equal(t, 1, sessionService.deleteCalls)
+			require.True(t, sessionService.deleteDelegated)
+			require.NoError(t, sessionService.deleteContextErr)
+			require.True(t, sessionService.deleteContextHasDeadline)
+			require.True(t, sessionService.deleteContextDeadlineActive)
+			require.Equal(t, traceValue, sessionService.deleteContextValue)
+
+			peerKey := replayKey(tc.Name)
+			peerKey.SessionID += "-scope-peer"
+			peer, getErr := base.GetSession(context.Background(), peerKey)
+			require.NoError(t, getErr)
+			require.Nil(t, peer)
+		})
+	}
+}
+
 func TestRunRejectsIncorrectStateScopes(t *testing.T) {
 	tests := []struct {
 		name            string
@@ -800,16 +857,24 @@ func replayStateScopeCase(name string) Case {
 
 type scopeSessionService struct {
 	session.Service
-	emptyAppState  bool
-	stripPeerState bool
-	deleteErr      error
-	listAppErr     error
-	listUserErr    error
-	createPeerErr  error
-	getPeerErr     error
-	nilCreatePeer  bool
-	nilGetPeer     bool
-	deleteCalls    int
+	emptyAppState                bool
+	stripPeerState               bool
+	deleteErr                    error
+	listAppErr                   error
+	listUserErr                  error
+	createPeerErr                error
+	getPeerErr                   error
+	nilCreatePeer                bool
+	nilGetPeer                   bool
+	cancelAfterPeerCreate        context.CancelFunc
+	honorPeerContextCancellation bool
+	deleteCalls                  int
+	deleteDelegated              bool
+	deleteContextErr             error
+	deleteContextHasDeadline     bool
+	deleteContextDeadlineActive  bool
+	deleteContextValueKey        any
+	deleteContextValue           any
 }
 
 func (s *scopeSessionService) ListAppStates(ctx context.Context, appName string) (session.StateMap, error) {
@@ -842,8 +907,13 @@ func (s *scopeSessionService) CreateSession(
 		return nil, s.createPeerErr
 	}
 	got, err := s.Service.CreateSession(ctx, key, state, opts...)
-	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") && s.nilCreatePeer {
-		return nil, nil
+	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") {
+		if s.cancelAfterPeerCreate != nil {
+			s.cancelAfterPeerCreate()
+		}
+		if s.nilCreatePeer {
+			return nil, nil
+		}
 	}
 	return got, err
 }
@@ -855,6 +925,11 @@ func (s *scopeSessionService) GetSession(
 ) (*session.Session, error) {
 	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.getPeerErr != nil {
 		return nil, s.getPeerErr
+	}
+	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.honorPeerContextCancellation {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 	}
 	got, err := s.Service.GetSession(ctx, key, opts...)
 	if err == nil && strings.HasSuffix(key.SessionID, "-scope-peer") && s.nilGetPeer {
@@ -877,6 +952,19 @@ func (s *scopeSessionService) DeleteSession(
 	opts ...session.Option,
 ) error {
 	s.deleteCalls++
+	s.deleteContextErr = ctx.Err()
+	deadline, ok := ctx.Deadline()
+	s.deleteContextHasDeadline = ok
+	s.deleteContextDeadlineActive = ok && time.Until(deadline) > 0
+	if s.deleteContextValueKey != nil {
+		s.deleteContextValue = ctx.Value(s.deleteContextValueKey)
+	}
+	if strings.HasSuffix(key.SessionID, "-scope-peer") && s.honorPeerContextCancellation {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+	}
+	s.deleteDelegated = true
 	if err := s.Service.DeleteSession(ctx, key, opts...); err != nil {
 		return err
 	}

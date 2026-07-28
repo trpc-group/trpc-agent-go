@@ -33,6 +33,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+const stateScopePeerCleanupTimeout = 5 * time.Second
+
 // Backend groups the services needed to execute a replay case.
 type Backend struct {
 	// Name identifies the backend within one comparison. It must be non-empty
@@ -459,7 +461,11 @@ func validateStateScopes(ctx context.Context, backend Backend, key session.Key, 
 		return fmt.Errorf("create state-scope peer for case %q on backend %q: %w", tc.Name, backend.Name, err)
 	}
 	defer func() {
-		if deleteErr := backend.SessionService.DeleteSession(ctx, peerKey); deleteErr != nil {
+		cleanupCtx, cancel := context.WithTimeout(
+			context.WithoutCancel(ctx), stateScopePeerCleanupTimeout,
+		)
+		defer cancel()
+		if deleteErr := backend.SessionService.DeleteSession(cleanupCtx, peerKey); deleteErr != nil {
 			err = errors.Join(err, fmt.Errorf(
 				"delete state-scope peer %q for case %q on backend %q: %w",
 				peerKey.SessionID, tc.Name, backend.Name, deleteErr,
