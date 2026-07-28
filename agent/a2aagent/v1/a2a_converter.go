@@ -11,6 +11,7 @@ package a2aagent
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -59,19 +60,29 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 	}
 
 	var events []*event.Event
+	appendMessage := func(msg *protocol.Message) error {
+		evt, err := d.buildRespEvent(false, msg, agentName, invocation)
+		if err != nil {
+			return err
+		}
+		if evt != nil {
+			events = append(events, evt)
+		}
+		return nil
+	}
 
 	switch v := result.Result.(type) {
 	case *protocol.Message:
 		// Single message: build event from its parts
-		if evt := d.buildRespEvent(false, v, agentName, invocation); evt != nil {
-			events = append(events, evt)
+		if err := appendMessage(v); err != nil {
+			return nil, err
 		}
 	case *protocol.Task:
 		// Task with history: convert history messages first, then artifacts
 		// History contains intermediate messages (tool calls, tool responses, etc.)
 		for i := range v.History {
-			if evt := d.buildRespEvent(false, &v.History[i], agentName, invocation); evt != nil {
-				events = append(events, evt)
+			if err := appendMessage(&v.History[i]); err != nil {
+				return nil, err
 			}
 		}
 		if isTaskFailureState(v.Status.State) {
@@ -81,13 +92,8 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				Metadata:  v.Metadata,
 				Status:    v.Status,
 			})
-			if evt := d.buildRespEvent(
-				false,
-				statusMsg,
-				agentName,
-				invocation,
-			); evt != nil {
-				events = append(events, evt)
+			if err := appendMessage(statusMsg); err != nil {
+				return nil, err
 			}
 			break
 		}
@@ -101,8 +107,8 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 				Metadata:  v.Metadata,
 				Status:    v.Status,
 			})
-			if evt := d.buildRespEvent(false, statusMsg, agentName, invocation); evt != nil {
-				events = append(events, evt)
+			if err := appendMessage(statusMsg); err != nil {
+				return nil, err
 			}
 		}
 		// Artifacts contain the final response
@@ -117,8 +123,8 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 					v.Metadata,
 				),
 			}
-			if evt := d.buildRespEvent(false, artifactMsg, agentName, invocation); evt != nil {
-				events = append(events, evt)
+			if err := appendMessage(artifactMsg); err != nil {
+				return nil, err
 			}
 		}
 	default:
@@ -127,8 +133,8 @@ func (d *defaultA2AEventConverter) ConvertToEvents(
 			Role:  protocol.MessageRoleAgent,
 			Parts: []*protocol.Part{protocol.NewTextPart("Received unknown response type")},
 		}
-		if evt := d.buildRespEvent(false, responseMsg, agentName, invocation); evt != nil {
-			events = append(events, evt)
+		if err := appendMessage(responseMsg); err != nil {
+			return nil, err
 		}
 	}
 
@@ -184,7 +190,11 @@ func (d *defaultA2AEventConverter) ConvertStreamingToEvents(
 		return nil, nil
 	}
 
-	if evt := d.buildRespEvent(true, responseMsg, agentName, invocation); evt != nil {
+	evt, err := d.buildRespEvent(true, responseMsg, agentName, invocation)
+	if err != nil {
+		return nil, err
+	}
+	if evt != nil {
 		markTerminalStructuredErrorEvent(evt, result.Result)
 		events = append(events, evt)
 	}
@@ -309,8 +319,8 @@ func appendFilePart(parts []*protocol.Part, cp model.ContentPart) []*protocol.Pa
 		fp.Metadata = metadata
 		return append(parts, fp)
 	}
-	if cp.File.FileID != "" {
-		fp := protocol.NewFilePart(cp.File.FileID, fileName, cp.File.MimeType)
+	if cp.File.URL != "" {
+		fp := protocol.NewFilePart(cp.File.URL, fileName, cp.File.MimeType)
 		fp.Metadata = metadata
 		return append(parts, fp)
 	}
@@ -322,13 +332,24 @@ func (d *defaultA2AEventConverter) buildRespEvent(
 	isStreaming bool,
 	msg *protocol.Message,
 	agentName string,
-	invocation *agent.Invocation) *event.Event {
+	invocation *agent.Invocation,
+) (*event.Event, error) {
 
 	// Parse A2A message parts to extract content and tool information
-	parseResult := parseA2AMessagePartsWithMappers(msg, d.dataPartMappers)
+	parseResult, err := parseA2AMessagePartsWithMappers(msg, d.dataPartMappers)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create event with appropriate response structure
-	return buildEventResponse(isStreaming, msg.MessageID, parseResult, invocation, agentName, msg.Role)
+	return buildEventResponse(
+		isStreaming,
+		msg.MessageID,
+		parseResult,
+		invocation,
+		agentName,
+		msg.Role,
+	), nil
 }
 
 // parseResult holds the parsed information from A2A message parts
@@ -438,13 +459,14 @@ func applyDataPartMappingResult(dst *parseResult, mapped *A2ADataPartMappingResu
 
 // parseA2AMessageParts processes all parts in the A2A message and extracts content and tool information
 func parseA2AMessageParts(msg *protocol.Message) *parseResult {
-	return parseA2AMessagePartsWithMappers(msg, nil)
+	result, _ := parseA2AMessagePartsWithMappers(msg, nil)
+	return result
 }
 
 func parseA2AMessagePartsWithMappers(
 	msg *protocol.Message,
 	mappers []A2ADataPartMapper,
-) *parseResult {
+) (*parseResult, error) {
 	parts := msg.Parts
 	result := &parseResult{}
 	var textBuilder strings.Builder
@@ -467,7 +489,9 @@ func parseA2AMessagePartsWithMappers(
 			}
 		case protocol.Data:
 			flushParseResultText(result, &textBuilder, &finalTextBuilder, &reasoningBuilder)
-			processDataPartWithMappers(part, result, mappers)
+			if err := processDataPartWithMappers(part, result, mappers); err != nil {
+				return nil, err
+			}
 		case protocol.Raw, protocol.URL:
 			flushParseResultText(result, &textBuilder, &finalTextBuilder, &reasoningBuilder)
 			if contentPart := convertResponseFilePart(part); contentPart != nil {
@@ -498,7 +522,7 @@ func parseA2AMessagePartsWithMappers(
 		result.textContent,
 		model.ErrorTypeFlowError,
 	)
-	return result
+	return result, nil
 }
 
 func convertResponseFilePart(part *protocol.Part) *model.ContentPart {
@@ -606,19 +630,19 @@ func processTextPart(part *protocol.Part) (text string, isThought bool) {
 
 // processDataPart processes a DataPart and updates the parseResult accordingly
 func processDataPart(part *protocol.Part, result *parseResult) {
-	processDataPartWithMappers(part, result, nil)
+	_ = processDataPartWithMappers(part, result, nil)
 }
 
 func processDataPartWithMappers(
 	part *protocol.Part,
 	result *parseResult,
 	mappers []A2ADataPartMapper,
-) {
+) error {
 	if part == nil {
-		return
+		return nil
 	}
 	if _, ok := part.Content.(protocol.Data); !ok {
-		return
+		return nil
 	}
 	d := part
 
@@ -651,29 +675,29 @@ func processDataPartWithMappers(
 	}
 
 	if builtInHandled {
-		return
+		return nil
 	}
 
-	for _, mapper := range mappers {
+	for i, mapper := range mappers {
 		if mapper == nil {
 			continue
 		}
 		mappedResult := newDataPartMappingResult(result)
 		matched, err := mapper(d, mappedResult)
 		if err != nil {
-			log.Warnf("A2ADataPartMapper returns error, skip part: %v", err)
-			continue
+			return fmt.Errorf("A2A DataPart mapper %d: %w", i, err)
 		}
 		if matched {
 			applyDataPartMappingResult(result, mappedResult)
-			return
+			return nil
 		}
 	}
 	if typeStr == "" {
 		log.Debugf("unknown DataPart with empty type skipped")
-		return
+		return nil
 	}
 	log.Debugf("unknown DataPart type skipped: %s", typeStr)
+	return nil
 }
 
 // processFunctionCall processes a function call DataPart and returns the ToolCall
@@ -1287,6 +1311,18 @@ func mergeTaskMetadata(
 
 // convertTaskToMessage converts a Task to a Message
 func convertTaskToMessage(task *protocol.Task) *protocol.Message {
+	if len(task.Artifacts) == 0 && task.Status.Message != nil {
+		cloned := *task.Status.Message
+		cloned.TaskID = &task.ID
+		cloned.ContextID = &task.ContextID
+		cloned.Metadata = mergeTaskMetadata(
+			task.Status.State,
+			cloned.Metadata,
+			task.Metadata,
+		)
+		return &cloned
+	}
+
 	var (
 		parts     []*protocol.Part
 		messageID string

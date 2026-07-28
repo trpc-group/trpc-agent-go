@@ -32,6 +32,15 @@ cd examples
 go run ./a2aagent/v1/server
 ```
 
+To listen on all interfaces while advertising a reachable address, keep the
+listen and discovery addresses separate:
+
+```bash
+go run ./a2aagent/v1/server \
+  -host 0.0.0.0:8888 \
+  -card-address 192.0.2.10:8888
+```
+
 In another terminal, start the client:
 
 ```bash

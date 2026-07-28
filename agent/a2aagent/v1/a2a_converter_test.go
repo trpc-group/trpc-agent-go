@@ -10,6 +10,7 @@ package a2aagent
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
@@ -132,6 +133,85 @@ func TestConvertStreamingCompletedStatusPreservesMessage(t *testing.T) {
 		t.Fatalf("ConvertStreamingToEvents failed: %v", err)
 	}
 	assertStreamingEventContentAndMetadata(t, events, "already streamed")
+}
+
+func TestConvertStreamingTaskSnapshotPreservesStatusMessage(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		state protocol.TaskState
+	}{
+		{name: "completed", state: protocol.TaskStateCompleted},
+		{name: "failed", state: protocol.TaskStateFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			statusMessage := protocol.NewMessage(
+				protocol.MessageRoleAgent,
+				[]*protocol.Part{protocol.NewTextPart(test.name + " details")},
+			)
+			statusMessage.Metadata = map[string]any{"message": "metadata"}
+			task := protocol.NewTask("task", "context")
+			task.Status = protocol.TaskStatus{
+				State:   test.state,
+				Message: &statusMessage,
+			}
+			task.Metadata = map[string]any{"task": "metadata"}
+
+			events, err := (&defaultA2AEventConverter{}).ConvertStreamingToEvents(
+				protocol.NewStreamResponseTask(task),
+				"remote",
+				&agent.Invocation{InvocationID: "invocation"},
+			)
+			if err != nil {
+				t.Fatalf("ConvertStreamingToEvents failed: %v", err)
+			}
+			if len(events) != 1 || events[0].Response == nil {
+				t.Fatalf("events = %#v, want one response", events)
+			}
+			if test.state == protocol.TaskStateFailed {
+				if events[0].Response.Error == nil ||
+					events[0].Response.Error.Message != "failed details" {
+					t.Fatalf("failed task response = %#v", events[0].Response)
+				}
+				return
+			}
+			if got := events[0].Response.Choices[0].Delta.Content; got != "completed details" {
+				t.Fatalf("completed task content = %q", got)
+			}
+		})
+	}
+}
+
+func TestDataPartMapperErrorIsPropagated(t *testing.T) {
+	wantErr := errors.New("invalid custom data")
+	converter := &defaultA2AEventConverter{
+		dataPartMappers: []A2ADataPartMapper{
+			func(*protocol.Part, *A2ADataPartMappingResult) (bool, error) {
+				return false, wantErr
+			},
+		},
+	}
+	part := protocol.NewDataPart(map[string]any{"custom": true})
+	part.Metadata = map[string]any{ia2a.DataPartMetadataTypeKey: "custom"}
+	message := protocol.NewMessage(
+		protocol.MessageRoleAgent,
+		[]*protocol.Part{part},
+	)
+	invocation := &agent.Invocation{InvocationID: "invocation"}
+
+	if _, err := converter.ConvertToEvents(
+		*protocol.NewSendMessageResponseMessage(&message),
+		"remote",
+		invocation,
+	); !errors.Is(err, wantErr) {
+		t.Fatalf("unary mapper error = %v, want %v", err, wantErr)
+	}
+	if _, err := converter.ConvertStreamingToEvents(
+		protocol.NewStreamResponseMessage(&message),
+		"remote",
+		invocation,
+	); !errors.Is(err, wantErr) {
+		t.Fatalf("streaming mapper error = %v, want %v", err, wantErr)
+	}
 }
 
 func assertStreamingEventContentAndMetadata(

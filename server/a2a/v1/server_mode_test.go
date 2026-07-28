@@ -47,6 +47,29 @@ func (r *modeTestRunner) Run(
 
 func (*modeTestRunner) Close() error { return nil }
 
+type inputRequiredEventConverter struct{}
+
+func (*inputRequiredEventConverter) ConvertStreamingToA2AMessage(
+	_ context.Context,
+	_ *event.Event,
+	options EventToA2AStreamingOptions,
+) (protocol.StreamEvent, error) {
+	message := protocol.NewMessage(
+		protocol.MessageRoleAgent,
+		[]*protocol.Part{protocol.NewTextPart("more input is required")},
+	)
+	status := protocol.NewTaskStatusUpdateEvent(
+		options.TaskID,
+		options.CtxID,
+		protocol.TaskStatus{
+			State:   protocol.TaskStateInputRequired,
+			Message: &message,
+		},
+		true,
+	)
+	return &status, nil
+}
+
 func TestNewRequiresRunnerAndAgentCard(t *testing.T) {
 	card := a2aserver.AgentCard{
 		Name: "agent",
@@ -250,6 +273,125 @@ func TestMessageProcessorManagerModes(t *testing.T) {
 			t.Fatalf("artifact content = %q, want final answer", got)
 		}
 	})
+
+	t.Run("stateless deduplicates no-ID multimodal snapshot", func(t *testing.T) {
+		snapshot := model.Message{
+			Content: "answer",
+			ContentParts: []model.ContentPart{{
+				Type: model.ContentTypeFile,
+				File: &model.File{
+					Name:     "result.txt",
+					URL:      "https://example.com/result.txt",
+					MimeType: "text/plain",
+				},
+			}},
+		}
+		processor, err := buildProcessor("agent", &options{
+			runner: &modeTestRunner{events: []*event.Event{
+				{
+					Response: &model.Response{
+						IsPartial: true,
+						Choices: []model.Choice{{
+							Delta: snapshot,
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Done: true,
+						Choices: []model.Choice{{
+							Message: snapshot,
+						}},
+					},
+				},
+				{
+					Response: &model.Response{
+						Object: model.ObjectTypeRunnerCompletion,
+						Done:   true,
+					},
+				},
+			}},
+			errorHandler: defaultErrorHandler,
+		})
+		if err != nil {
+			t.Fatalf("buildProcessor failed: %v", err)
+		}
+		manager, err := stateless.NewTaskManager(processor)
+		if err != nil {
+			t.Fatalf("stateless.NewTaskManager failed: %v", err)
+		}
+		response, err := manager.OnSendMessage(ctx, request)
+		if err != nil {
+			t.Fatalf("OnSendMessage failed: %v", err)
+		}
+		task := response.GetTask()
+		if task == nil || len(task.Artifacts) != 1 {
+			t.Fatalf("task = %#v, want one artifact", task)
+		}
+		parts := task.Artifacts[0].Parts
+		if len(parts) != 2 {
+			t.Fatalf("artifact parts = %#v, want one text and one file", parts)
+		}
+		if parts[0].TextContent() != "answer" ||
+			parts[1].URLContent() != "https://example.com/result.txt" {
+			t.Fatalf("artifact parts = %#v", parts)
+		}
+	})
+}
+
+func TestConverterTaskEndStateIsRetained(t *testing.T) {
+	processor, err := buildProcessor("agent", &options{
+		runner: &modeTestRunner{events: []*event.Event{
+			{
+				Response: &model.Response{
+					ID:        "response",
+					IsPartial: true,
+					Choices: []model.Choice{{
+						Delta: model.Message{Content: "ignored"},
+					}},
+				},
+			},
+			{
+				Response: &model.Response{
+					Object: model.ObjectTypeRunnerCompletion,
+					Done:   true,
+				},
+			},
+		}},
+		eventToA2AConverter: &inputRequiredEventConverter{},
+		errorHandler:        defaultErrorHandler,
+	})
+	if err != nil {
+		t.Fatalf("buildProcessor failed: %v", err)
+	}
+	manager, err := memory.NewTaskManager(processor)
+	if err != nil {
+		t.Fatalf("memory.NewTaskManager failed: %v", err)
+	}
+	response, err := manager.OnSendMessage(
+		NewContextWithUserID(context.Background(), "user"),
+		protocol.SendMessageParams{Message: protocol.NewMessage(
+			protocol.MessageRoleUser,
+			[]*protocol.Part{protocol.NewTextPart("hi")},
+		)},
+	)
+	if err != nil {
+		t.Fatalf("OnSendMessage failed: %v", err)
+	}
+	task := response.GetTask()
+	if task == nil || task.Status.State != protocol.TaskStateInputRequired {
+		t.Fatalf("response task = %#v, want input-required", task)
+	}
+	stored, err := manager.OnGetTask(
+		context.Background(),
+		protocol.TaskQueryParams{ID: task.ID},
+	)
+	if err != nil {
+		t.Fatalf("OnGetTask failed: %v", err)
+	}
+	if stored.Status.State != protocol.TaskStateInputRequired {
+		t.Fatalf("stored task state = %s, want input-required", stored.Status.State)
+	}
 }
 
 func TestResponseRewriterRunsBeforeTaskAggregation(t *testing.T) {
@@ -460,6 +602,7 @@ func TestNewAgentCardAdvertisesV1JSONRPCInterface(t *testing.T) {
 	card, err := NewAgentCard(
 		"agent",
 		"description",
+		"1.0.0",
 		"127.0.0.1:8888",
 		true,
 	)

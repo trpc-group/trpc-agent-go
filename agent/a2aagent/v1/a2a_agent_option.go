@@ -189,6 +189,7 @@ func cloneA2AExtensions(
 // first. Mappers are invoked only when the DataPart is not consumed by the
 // built-ins. Returning matched=true means this mapper consumed the part.
 // Returning matched=false leaves the part ignored by the default converter.
+// Returning an error aborts response conversion.
 type A2ADataPartMapper func(part *protocol.Part, result *A2ADataPartMappingResult) (
 	matched bool,
 	err error,

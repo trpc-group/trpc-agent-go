@@ -190,10 +190,12 @@ func (r *A2AAgent) setupInvocation(invocation *agent.Invocation) {
 
 // Run implements the Agent interface
 func (r *A2AAgent) Run(ctx context.Context, invocation *agent.Invocation) (<-chan *event.Event, error) {
-	var err error
-	if invocation != nil {
-		r.setupInvocation(invocation)
+	if invocation == nil {
+		return nil, errors.New("invocation is required")
 	}
+
+	var err error
+	r.setupInvocation(invocation)
 	useStreaming := r.shouldUseStreaming(invocation)
 	ctx, span, startedSpan := itrace.StartSpan(
 		ctx,
@@ -476,17 +478,31 @@ func (r *A2AAgent) processStreamingEvents(
 	invocation *agent.Invocation,
 	eventChan chan<- *event.Event,
 	streamChan <-chan protocol.StreamResponse,
-) streamingEventResult {
-	var result streamingEventResult
+) (result streamingEventResult) {
 	var contentBuilder strings.Builder
+	artifactContent := make(map[string]string)
+	artifactContentParts := make(map[string][]model.ContentPart)
+	var artifactOrder []string
+	defer func() {
+		finalizeStreamingContent(
+			&result,
+			&contentBuilder,
+			artifactContent,
+			artifactContentParts,
+			artifactOrder,
+		)
+	}()
 
 	for streamEvent := range streamChan {
 		if err := agent.CheckContextCancelled(ctx); err != nil {
-			result.aggregatedContent = contentBuilder.String()
 			result.aborted = true
 			return result
 		}
 		result.observeTaskLifecycle(streamEvent.Result)
+
+		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
+		var artifactChunk strings.Builder
+		var artifactChunkParts []model.ContentPart
 
 		events, err := r.eventConverter.ConvertStreamingToEvents(streamEvent, r.name, invocation)
 		if err != nil {
@@ -496,7 +512,6 @@ func (r *A2AAgent) processStreamingEvents(
 				invocation,
 				fmt.Errorf("custom event converter failed: %w", err),
 			)
-			result.aggregatedContent = contentBuilder.String()
 			return result
 		}
 
@@ -524,17 +539,29 @@ func (r *A2AAgent) processStreamingEvents(
 				&contentBuilder,
 				&result.aggregatedContentParts,
 			)
+			r.aggregateArtifactEventContent(
+				artifactUpdate,
+				evt,
+				&artifactChunk,
+				&artifactChunkParts,
+			)
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 			if evt.Response != nil &&
 				evt.Response.Error != nil &&
 				evt.Response.Done {
-				result.aggregatedContent = contentBuilder.String()
 				result.terminalError = evt.Response.Error
 				return result
 			}
 		}
+		recordArtifactChunk(
+			artifactUpdate,
+			artifactChunk.String(),
+			artifactChunkParts,
+			artifactContent,
+			artifactContentParts,
+			&artifactOrder,
+		)
 	}
-	result.aggregatedContent = contentBuilder.String()
 	if result.sawTask && !result.sawTaskEnd {
 		result.terminalError = r.sendErrorEvent(
 			ctx,
@@ -544,6 +571,67 @@ func (r *A2AAgent) processStreamingEvents(
 		)
 	}
 	return result
+}
+
+func finalizeStreamingContent(
+	result *streamingEventResult,
+	contentBuilder *strings.Builder,
+	artifactContent map[string]string,
+	artifactContentParts map[string][]model.ContentPart,
+	artifactOrder []string,
+) {
+	if len(artifactOrder) == 0 {
+		result.aggregatedContent = contentBuilder.String()
+		return
+	}
+	var artifacts strings.Builder
+	var parts []model.ContentPart
+	for _, artifactID := range artifactOrder {
+		artifacts.WriteString(artifactContent[artifactID])
+		parts = append(parts, artifactContentParts[artifactID]...)
+	}
+	result.aggregatedContent = artifacts.String()
+	result.aggregatedContentParts = parts
+}
+
+func (r *A2AAgent) aggregateArtifactEventContent(
+	update *protocol.TaskArtifactUpdateEvent,
+	evt *event.Event,
+	contentBuilder *strings.Builder,
+	contentParts *[]model.ContentPart,
+) {
+	if update == nil {
+		return
+	}
+	r.aggregateEventContent(evt, "", contentBuilder, contentParts)
+}
+
+func recordArtifactChunk(
+	update *protocol.TaskArtifactUpdateEvent,
+	content string,
+	contentParts []model.ContentPart,
+	artifactContent map[string]string,
+	artifactContentParts map[string][]model.ContentPart,
+	artifactOrder *[]string,
+) {
+	if update == nil {
+		return
+	}
+	artifactID := update.Artifact.ArtifactID
+	if _, ok := artifactContent[artifactID]; !ok {
+		*artifactOrder = append(*artifactOrder, artifactID)
+	}
+	appendChunk := update.Append != nil && *update.Append
+	if appendChunk {
+		artifactContent[artifactID] += content
+		artifactContentParts[artifactID] = append(
+			artifactContentParts[artifactID],
+			contentParts...,
+		)
+		return
+	}
+	artifactContent[artifactID] = content
+	artifactContentParts[artifactID] = contentParts
 }
 
 func (r *streamingEventResult) observeTaskLifecycle(streamEvent protocol.StreamEvent) {

@@ -12,6 +12,7 @@ package a2a
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"trpc.group/trpc-go/trpc-a2a-go/v2/protocol"
@@ -46,12 +47,16 @@ func WithCardTools(tools ...tool.Tool) AgentCardOption {
 func NewAgentCard(
 	name string,
 	description string,
+	version string,
 	host string,
 	streaming bool,
 	opts ...AgentCardOption,
 ) (a2aprotocolserver.AgentCard, error) {
 	if name == "" {
 		return a2aprotocolserver.AgentCard{}, errors.New("agent name is required")
+	}
+	if version == "" {
+		return a2aprotocolserver.AgentCard{}, errors.New("agent version is required")
 	}
 	if host == "" {
 		return a2aprotocolserver.AgentCard{}, errors.New("host is required")
@@ -68,6 +73,7 @@ func NewAgentCard(
 	return a2aprotocolserver.AgentCard{
 		Name:        name,
 		Description: description,
+		Version:     version,
 		URL:         url,
 		SupportedInterfaces: []a2aprotocolserver.AgentInterface{
 			{
@@ -103,6 +109,7 @@ func buildSkillsFromCardTools(
 ) []a2aprotocolserver.AgentSkill {
 	descCopy := agentDesc
 	defaultSkill := a2aprotocolserver.AgentSkill{
+		ID:          "agent",
 		Name:        agentName,
 		Description: &descCopy,
 		InputModes:  []string{"text"},
@@ -116,6 +123,7 @@ func buildSkillsFromCardTools(
 
 	skills := make([]a2aprotocolserver.AgentSkill, 0, len(tools)+1)
 	skills = append(skills, defaultSkill)
+	skillIDCounts := make(map[string]int)
 
 	for _, t := range tools {
 		if t == nil {
@@ -125,8 +133,14 @@ func buildSkillsFromCardTools(
 		if decl == nil {
 			continue
 		}
+		skillID := "tool-" + decl.Name
+		skillIDCounts[skillID]++
+		if count := skillIDCounts[skillID]; count > 1 {
+			skillID = fmt.Sprintf("%s-%d", skillID, count)
+		}
 		toolDesc := decl.Description
 		skills = append(skills, a2aprotocolserver.AgentSkill{
+			ID:          skillID,
 			Name:        decl.Name,
 			Description: &toolDesc,
 			InputModes:  []string{"text"},

@@ -114,6 +114,10 @@ func TestNewFetchesCardAndInstallsDefaultMapper(t *testing.T) {
 func TestRunValidationAndStreamingSelection(t *testing.T) {
 	invocation := &agent.Invocation{InvocationID: "invocation"}
 	remote := &A2AAgent{name: "remote"}
+	if _, err := remote.Run(context.Background(), nil); err == nil ||
+		!strings.Contains(err.Error(), "invocation is required") {
+		t.Fatalf("nil invocation error = %v", err)
+	}
 	if _, err := remote.Run(context.Background(), invocation); err == nil ||
 		!strings.Contains(err.Error(), "client is nil") {
 		t.Fatalf("Run error = %v, want nil client", err)
@@ -419,4 +423,33 @@ func TestStreamingLifecycleAndAggregationHelpers(t *testing.T) {
 		time.Time{},
 		nil,
 	)
+
+	artifactContent := make(map[string]string)
+	artifactParts := make(map[string][]model.ContentPart)
+	var artifactOrder []string
+	recordArtifactChunk(
+		&protocol.TaskArtifactUpdateEvent{
+			Artifact: protocol.Artifact{ArtifactID: "artifact"},
+		},
+		"one",
+		nil,
+		artifactContent,
+		artifactParts,
+		&artifactOrder,
+	)
+	appendChunk := true
+	recordArtifactChunk(
+		&protocol.TaskArtifactUpdateEvent{
+			Artifact: protocol.Artifact{ArtifactID: "artifact"},
+			Append:   &appendChunk,
+		},
+		"two",
+		nil,
+		artifactContent,
+		artifactParts,
+		&artifactOrder,
+	)
+	if artifactContent["artifact"] != "onetwo" || len(artifactOrder) != 1 {
+		t.Fatalf("appended artifact = %#v, order = %#v", artifactContent, artifactOrder)
+	}
 }

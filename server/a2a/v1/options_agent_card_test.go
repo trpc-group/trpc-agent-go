@@ -54,10 +54,13 @@ func (*optionEventConverter) ConvertStreamingToA2AMessage(
 }
 
 func TestAgentCardValidationToolsAndHandler(t *testing.T) {
-	if _, err := NewAgentCard("", "description", "localhost:8080", false); err == nil {
+	if _, err := NewAgentCard("", "description", "1.0.0", "localhost:8080", false); err == nil {
 		t.Fatal("NewAgentCard accepted an empty name")
 	}
-	if _, err := NewAgentCard("agent", "description", "", false); err == nil {
+	if _, err := NewAgentCard("agent", "description", "", "localhost:8080", false); err == nil {
+		t.Fatal("NewAgentCard accepted an empty version")
+	}
+	if _, err := NewAgentCard("agent", "description", "1.0.0", "", false); err == nil {
 		t.Fatal("NewAgentCard accepted an empty host")
 	}
 
@@ -65,6 +68,7 @@ func TestAgentCardValidationToolsAndHandler(t *testing.T) {
 	card, err := NewAgentCard(
 		"agent",
 		"description",
+		"1.0.0",
 		"localhost:8080",
 		streaming,
 		WithCardTools(
@@ -74,14 +78,24 @@ func TestAgentCardValidationToolsAndHandler(t *testing.T) {
 				Name:        "lookup",
 				Description: "look things up",
 			}},
+			&cardTestTool{declaration: &tool.Declaration{
+				Name:        "lookup",
+				Description: "look things up again",
+			}},
 		),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard failed: %v", err)
 	}
-	if len(card.Skills) != 2 || card.Skills[0].Name != "agent" ||
-		card.Skills[1].Name != "lookup" {
+	if len(card.Skills) != 3 || card.Skills[0].Name != "agent" ||
+		card.Skills[1].Name != "lookup" || card.Skills[2].Name != "lookup" {
 		t.Fatalf("skills = %#v", card.Skills)
+	}
+	if card.Version != "1.0.0" || card.Skills[0].ID == "" ||
+		card.Skills[1].ID == "" || card.Skills[2].ID == "" ||
+		card.Skills[0].ID == card.Skills[1].ID ||
+		card.Skills[1].ID == card.Skills[2].ID {
+		t.Fatalf("card identity fields = %#v", card)
 	}
 	if card.Capabilities.Streaming == nil || !*card.Capabilities.Streaming {
 		t.Fatalf("streaming capability = %#v", card.Capabilities.Streaming)
@@ -114,6 +128,19 @@ func TestAgentCardValidationToolsAndHandler(t *testing.T) {
 				}
 				if got.Name != card.Name {
 					t.Fatalf("card name = %q, want %q", got.Name, card.Name)
+				}
+				if got.Version != card.Version || len(got.Skills) != len(card.Skills) {
+					t.Fatalf("serialized card identity = %#v", got)
+				}
+				seenSkillIDs := make(map[string]struct{}, len(got.Skills))
+				for _, skill := range got.Skills {
+					if skill.ID == "" {
+						t.Fatalf("serialized skill ID is empty: %#v", skill)
+					}
+					if _, exists := seenSkillIDs[skill.ID]; exists {
+						t.Fatalf("serialized skill ID is duplicated: %q", skill.ID)
+					}
+					seenSkillIDs[skill.ID] = struct{}{}
 				}
 			}
 		})

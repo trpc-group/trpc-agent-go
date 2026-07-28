@@ -34,7 +34,12 @@ var (
 	host = flag.String(
 		"host",
 		"127.0.0.1:8888",
-		"A2A server address",
+		"A2A server listen address",
+	)
+	cardAddress = flag.String(
+		"card-address",
+		"",
+		"Reachable A2A address advertised by the Agent Card (default: host)",
 	)
 	modelName = flag.String(
 		"model",
@@ -55,6 +60,9 @@ var (
 
 func main() {
 	flag.Parse()
+	if *cardAddress == "" {
+		*cardAddress = *host
+	}
 	currentTimeTool := function.NewFunctionTool(
 		func(_ context.Context, args currentTimeArgs) (currentTimeResult, error) {
 			location := time.Local
@@ -96,7 +104,8 @@ func main() {
 	card, err := a2aserver.NewAgentCard(
 		info.Name,
 		info.Description,
-		*host,
+		"1.0.0",
+		*cardAddress,
 		*streaming,
 		a2aserver.WithCardTools(llmAgent.Tools()...),
 	)
@@ -136,6 +145,7 @@ func main() {
 	}
 
 	fmt.Printf("A2A protocol v1.0 server listening on %s\n", *host)
+	fmt.Printf("Agent Card address: %s\n", *cardAddress)
 	fmt.Printf("Model: %s\n", *modelName)
 	fmt.Printf("Streaming: %t\n", *streaming)
 	fmt.Printf("Task manager: %s\n", taskManagerName)

@@ -264,9 +264,8 @@ func (c *defaultEventToA2AMessage) convertCodeExecutionToA2AMessage(
 	return &msg, nil
 }
 
-// convertContentToA2AMessage converts message content to A2A message.
-// It creates a message with text parts containing the content.
-func (c *defaultEventToA2AMessage) buildTextParts(msg model.Message) []*protocol.Part {
+// buildMessageParts converts text and multimodal message content to A2A parts.
+func (c *defaultEventToA2AMessage) buildMessageParts(msg model.Message) []*protocol.Part {
 	var parts []*protocol.Part
 
 	// Add reasoning content as a separate TextPart with thought metadata
@@ -282,7 +281,82 @@ func (c *defaultEventToA2AMessage) buildTextParts(msg model.Message) []*protocol
 		parts = append(parts, protocol.NewTextPart(msg.Content))
 	}
 
+	for _, contentPart := range msg.ContentParts {
+		var part *protocol.Part
+		switch contentPart.Type {
+		case model.ContentTypeText:
+			if contentPart.Text != nil {
+				part = protocol.NewTextPart(*contentPart.Text)
+			}
+		case model.ContentTypeImage:
+			if contentPart.Image == nil {
+				continue
+			}
+			if len(contentPart.Image.Data) > 0 {
+				part = protocol.NewRawPart(
+					contentPart.Image.Data,
+					contentPart.Image.Format,
+				)
+			} else if contentPart.Image.URL != "" {
+				part = protocol.NewURLPart(
+					contentPart.Image.URL,
+					contentPart.Image.Format,
+				)
+			}
+			setFilePartContentType(
+				part,
+				ia2a.FilePartMetadataContentTypeImage,
+			)
+		case model.ContentTypeAudio:
+			if contentPart.Audio == nil || len(contentPart.Audio.Data) == 0 {
+				continue
+			}
+			part = protocol.NewRawPart(
+				contentPart.Audio.Data,
+				contentPart.Audio.Format,
+			)
+			setFilePartContentType(
+				part,
+				ia2a.FilePartMetadataContentTypeAudio,
+			)
+		case model.ContentTypeFile:
+			if contentPart.File == nil {
+				continue
+			}
+			if len(contentPart.File.Data) > 0 {
+				part = protocol.NewRawPart(
+					contentPart.File.Data,
+					contentPart.File.MimeType,
+				)
+			} else if contentPart.File.URL != "" {
+				part = protocol.NewURLPart(
+					contentPart.File.URL,
+					contentPart.File.MimeType,
+				)
+			}
+			if part != nil {
+				part.Filename = contentPart.File.Name
+			}
+			setFilePartContentType(
+				part,
+				ia2a.FilePartMetadataContentTypeFile,
+			)
+		}
+		if part != nil {
+			parts = append(parts, part)
+		}
+	}
+
 	return parts
+}
+
+func setFilePartContentType(part *protocol.Part, contentType string) {
+	if part == nil {
+		return
+	}
+	part.Metadata = map[string]any{
+		ia2a.FilePartMetadataContentTypeKey: contentType,
+	}
 }
 
 // ConvertStreamingToA2AMessage converts an Agent event to an A2A protocol
@@ -441,7 +515,7 @@ func (c *defaultEventToA2AMessage) convertDeltaContentToA2AStreamingMessage(
 	if !event.Response.IsPartial {
 		message = choice.Message
 	}
-	parts := c.buildTextParts(message)
+	parts := c.buildMessageParts(message)
 
 	mapperParts, err := c.runEventPartMappers(ctx, event)
 	if err != nil {
@@ -470,17 +544,19 @@ func isToolCallEvent(event *event.Event) bool {
 
 	// Check if this event contains tool calls in the response choices
 	for _, choice := range event.Response.Choices {
-		// Check for tool call requests (assistant making tool calls)
-		if len(choice.Message.ToolCalls) > 0 {
-			return true
-		}
-		// Check for tool call responses (tool returning results)
-		if choice.Message.Role == model.RoleTool {
-			return true
-		}
-		// Check for tool ID in the message (indicates tool response)
-		if choice.Message.ToolID != "" {
-			return true
+		for _, message := range []model.Message{choice.Message, choice.Delta} {
+			// Check for tool call requests (assistant making tool calls)
+			if len(message.ToolCalls) > 0 {
+				return true
+			}
+			// Check for tool call responses (tool returning results)
+			if message.Role == model.RoleTool {
+				return true
+			}
+			// Check for tool ID in the message (indicates tool response)
+			if message.ToolID != "" {
+				return true
+			}
 		}
 	}
 
@@ -507,39 +583,35 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 
 	var parts []*protocol.Part
 
-	// Handle tool call requests (assistant making function calls)
-	// OpenAI returns tool calls in a single choice with multiple ToolCalls
-	choice := event.Response.Choices[0]
-	if len(choice.Message.ToolCalls) > 0 {
-		for _, toolCall := range choice.Message.ToolCalls {
-			// Convert ToolCall to map for DataPart
-			toolCallData := map[string]any{
-				ia2a.ToolCallFieldID:   toolCall.ID,
-				ia2a.ToolCallFieldType: toolCall.Type,
-				ia2a.ToolCallFieldName: toolCall.Function.Name,
-				ia2a.ToolCallFieldArgs: string(toolCall.Function.Arguments),
+	for _, choice := range event.Response.Choices {
+		for _, message := range []model.Message{choice.Message, choice.Delta} {
+			// Handle tool call requests (assistant making function calls).
+			for _, toolCall := range message.ToolCalls {
+				toolCallData := map[string]any{
+					ia2a.ToolCallFieldID:   toolCall.ID,
+					ia2a.ToolCallFieldType: toolCall.Type,
+					ia2a.ToolCallFieldName: toolCall.Function.Name,
+					ia2a.ToolCallFieldArgs: string(toolCall.Function.Arguments),
+				}
+
+				dataPart := protocol.NewDataPart(toolCallData)
+				c.setPartTypeMetadata(dataPart, ia2a.DataPartMetadataTypeFunctionCall)
+				parts = append(parts, dataPart)
 			}
 
-			dataPart := protocol.NewDataPart(toolCallData)
-			c.setPartTypeMetadata(dataPart, ia2a.DataPartMetadataTypeFunctionCall)
-			parts = append(parts, dataPart)
-		}
-	}
-
-	// Handle tool call responses (tool returning results)
-	// OpenAI returns each tool response in a separate choice
-	for _, choice := range event.Response.Choices {
-		if choice.Message.Role == model.RoleTool || choice.Message.ToolID != "" {
-			// Convert tool response to DataPart
+			// Handle tool call responses (tool returning results).
+			if message.Role != model.RoleTool && message.ToolID == "" {
+				continue
+			}
 			toolResponseData := map[string]any{
-				ia2a.ToolCallFieldName: choice.Message.ToolName,
-				ia2a.ToolCallFieldID:   choice.Message.ToolID,
+				ia2a.ToolCallFieldName: message.ToolName,
+				ia2a.ToolCallFieldID:   message.ToolID,
 			}
 
 			// Pass content as-is without parsing
 			// Client will receive the raw response string and display it directly
-			if choice.Message.Content != "" {
-				toolResponseData[ia2a.ToolCallFieldResponse] = choice.Message.Content
+			if message.Content != "" {
+				toolResponseData[ia2a.ToolCallFieldResponse] = message.Content
 			}
 
 			dataPart := protocol.NewDataPart(toolResponseData)
@@ -663,12 +735,12 @@ func convertFilePart(filePart *protocol.Part) []model.ContentPart {
 				},
 			}}
 		default:
-			// Audio with URI and other file types all use ContentTypeFile with FileID.
+			// Audio with URI and other file types use URL-backed files.
 			return []model.ContentPart{{
 				Type: model.ContentTypeFile,
 				File: &model.File{
 					Name:     name,
-					FileID:   uri,
+					URL:      uri,
 					MimeType: mimeType,
 				},
 			}}

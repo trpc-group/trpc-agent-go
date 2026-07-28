@@ -17,7 +17,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
+	"reflect"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -239,51 +239,45 @@ type messageProcessor struct {
 // selected TaskManager's responsibility.
 type taskOutputState struct {
 	seenArtifactIDs  map[string]struct{}
-	partialResponses map[string]string
+	partialParts     map[string][]*protocol.Part
 	fallbackArtifact string
 	lastArtifactID   string
 	finalMessage     *protocol.Message
 	finalMetadata    map[string]any
 	terminalError    bool
 	sawCompletion    bool
+	roundEnded       bool
 }
 
-func streamEventText(result protocol.StreamEvent) (string, bool) {
-	var parts []*protocol.Part
+func taskStateEndsRound(state protocol.TaskState) bool {
+	return state.Terminal() ||
+		state == protocol.TaskStateInputRequired ||
+		state == protocol.TaskStateAuthRequired
+}
+
+func streamEventParts(result protocol.StreamEvent) ([]*protocol.Part, bool) {
 	switch value := result.(type) {
 	case *protocol.TaskArtifactUpdateEvent:
 		if value == nil {
-			return "", false
+			return nil, false
 		}
-		parts = value.Artifact.Parts
+		return value.Artifact.Parts, true
 	case *protocol.Message:
 		if value == nil {
-			return "", false
+			return nil, false
 		}
-		parts = value.Parts
+		return value.Parts, true
 	default:
-		return "", false
+		return nil, false
 	}
-	var content strings.Builder
-	for _, part := range parts {
-		if part == nil {
-			continue
-		}
-		text, ok := part.Content.(protocol.Text)
-		if !ok {
-			return "", false
-		}
-		content.WriteString(string(text))
-	}
-	return content.String(), len(parts) > 0
 }
 
 func suppressRepeatedPartialSnapshot(
 	result protocol.StreamEvent,
-	partialText string,
+	partialParts []*protocol.Part,
 ) protocol.StreamEvent {
-	text, textOnly := streamEventText(result)
-	if partialText == "" || !textOnly || text != partialText {
+	parts, ok := streamEventParts(result)
+	if !ok || !equivalentPartSnapshots(partialParts, parts) {
 		return result
 	}
 	switch value := result.(type) {
@@ -299,6 +293,57 @@ func suppressRepeatedPartialSnapshot(
 	default:
 		return result
 	}
+}
+
+func equivalentPartSnapshots(left, right []*protocol.Part) bool {
+	if len(left) == 0 || len(right) == 0 {
+		return false
+	}
+	return reflect.DeepEqual(
+		coalesceTextParts(left),
+		coalesceTextParts(right),
+	)
+}
+
+func coalesceTextParts(parts []*protocol.Part) []*protocol.Part {
+	coalesced := make([]*protocol.Part, 0, len(parts))
+	for _, part := range parts {
+		if part == nil {
+			continue
+		}
+		text, isText := part.Content.(protocol.Text)
+		if !isText || len(coalesced) == 0 {
+			coalesced = append(coalesced, part)
+			continue
+		}
+		previous := coalesced[len(coalesced)-1]
+		previousText, previousIsText := previous.Content.(protocol.Text)
+		if !previousIsText ||
+			previous.Filename != part.Filename ||
+			previous.MediaType != part.MediaType ||
+			!reflect.DeepEqual(previous.Metadata, part.Metadata) {
+			coalesced = append(coalesced, part)
+			continue
+		}
+		merged := *previous
+		merged.Content = previousText + text
+		coalesced[len(coalesced)-1] = &merged
+	}
+	return coalesced
+}
+
+func streamingPartStateKey(
+	result protocol.StreamEvent,
+	responseID string,
+) string {
+	if artifact, ok := result.(*protocol.TaskArtifactUpdateEvent); ok &&
+		artifact != nil {
+		return "artifact:" + artifact.Artifact.ArtifactID
+	}
+	if responseID != "" {
+		return "response:" + responseID
+	}
+	return ""
 }
 
 func isFinalStreamingEvent(evt *event.Event) bool {
@@ -762,7 +807,7 @@ func (m *messageProcessor) streamAgentEvents(
 
 	state := &taskOutputState{
 		seenArtifactIDs:  make(map[string]struct{}),
-		partialResponses: make(map[string]string),
+		partialParts:     make(map[string][]*protocol.Part),
 		fallbackArtifact: protocol.GenerateArtifactID(),
 	}
 
@@ -776,7 +821,7 @@ func (m *messageProcessor) streamAgentEvents(
 		return
 	}
 
-	if state.terminalError {
+	if state.terminalError || state.roundEnded {
 		return
 	}
 
@@ -1028,24 +1073,57 @@ func (m *messageProcessor) processStreamingEvent(
 	}
 	prepareTaskOutputEvent(outbound, state)
 	responseID := agentEvent.Response.ID
-	if responseID != "" && !agentEvent.Response.IsPartial {
+	partStateKey := streamingPartStateKey(outbound, responseID)
+	if partStateKey != "" && !agentEvent.Response.IsPartial {
 		outbound = suppressRepeatedPartialSnapshot(
 			outbound,
-			state.partialResponses[responseID],
+			state.partialParts[partStateKey],
 		)
 	}
+	recordTaskOutputEvent(outbound, state, taskID, a2aMsg.ContextID)
+	if err := sendPreparedEvent(ctx, out, outbound); err != nil {
+		log.ErrorfContext(
+			ctx,
+			"failed to send streaming message event: %v",
+			err,
+		)
+		return false, fmt.Errorf("failed to send streaming message event: %w", err)
+	}
+	if state.roundEnded {
+		return true, nil
+	}
+	if partStateKey != "" && agentEvent.Response.IsPartial {
+		if parts, ok := streamEventParts(outbound); ok {
+			state.partialParts[partStateKey] = append(
+				state.partialParts[partStateKey],
+				parts...,
+			)
+		}
+	}
+
+	return false, nil
+}
+
+func recordTaskOutputEvent(
+	outbound protocol.StreamEvent,
+	state *taskOutputState,
+	taskID string,
+	contextID *string,
+) {
 	switch converted := outbound.(type) {
 	case *protocol.TaskArtifactUpdateEvent:
 		artifactID := converted.Artifact.ArtifactID
 		state.seenArtifactIDs[artifactID] = struct{}{}
 		state.lastArtifactID = artifactID
+	case *protocol.TaskStatusUpdateEvent:
+		state.roundEnded = taskStateEndsRound(converted.Status.State)
 	case *protocol.Message:
 		if state.finalMessage == nil {
 			message := protocol.NewMessageWithContext(
 				protocol.MessageRoleAgent,
 				nil,
 				&taskID,
-				a2aMsg.ContextID,
+				contextID,
 			)
 			state.finalMessage = &message
 		}
@@ -1055,21 +1133,6 @@ func (m *messageProcessor) processStreamingEvent(
 		)
 		mergeMessageMetadata(state.finalMessage, converted.Metadata)
 	}
-	if err := sendPreparedEvent(ctx, out, outbound); err != nil {
-		log.ErrorfContext(
-			ctx,
-			"failed to send streaming message event: %v",
-			err,
-		)
-		return false, fmt.Errorf("failed to send streaming message event: %w", err)
-	}
-	if responseID != "" && agentEvent.Response.IsPartial {
-		if text, ok := streamEventText(outbound); ok {
-			state.partialResponses[responseID] += text
-		}
-	}
-
-	return false, nil
 }
 
 // prepareTaskOutputEvent fills request-local artifact framing without recording

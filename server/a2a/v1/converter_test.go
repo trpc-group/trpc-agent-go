@@ -306,6 +306,65 @@ func TestDefaultEventConverterStreamingBranches(t *testing.T) {
 	})
 }
 
+func TestDefaultEventConverterForwardsContentParts(t *testing.T) {
+	text := "content part"
+	contentParts := []model.ContentPart{
+		{Type: model.ContentTypeText, Text: &text},
+		{Type: model.ContentTypeImage, Image: &model.Image{
+			Data: []byte("image"), Format: "image/png",
+		}},
+		{Type: model.ContentTypeImage, Image: &model.Image{
+			URL: "https://example.com/image.png", Format: "image/png",
+		}},
+		{Type: model.ContentTypeAudio, Audio: &model.Audio{
+			Data: []byte("audio"), Format: "audio/wav",
+		}},
+		{Type: model.ContentTypeFile, File: &model.File{
+			Name: "raw.pdf", Data: []byte("file"), MimeType: "application/pdf",
+		}},
+		{Type: model.ContentTypeFile, File: &model.File{
+			Name: "url.pdf", URL: "https://example.com/url.pdf", MimeType: "application/pdf",
+		}},
+	}
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "message-send", true: "message-stream"}[partial], func(t *testing.T) {
+			message := model.Message{ContentParts: contentParts}
+			choice := model.Choice{Message: message}
+			if partial {
+				choice = model.Choice{Delta: message}
+			}
+			result, err := (&defaultEventToA2AMessage{}).ConvertStreamingToA2AMessage(
+				context.Background(),
+				event.New("inv", "agent", event.WithResponse(&model.Response{
+					ID:        "response",
+					IsPartial: partial,
+					Choices:   []model.Choice{choice},
+				})),
+				EventToA2AStreamingOptions{CtxID: "context", TaskID: "task"},
+			)
+			if err != nil {
+				t.Fatalf("ConvertStreamingToA2AMessage failed: %v", err)
+			}
+			update := result.(*protocol.TaskArtifactUpdateEvent)
+			if len(update.Artifact.Parts) != len(contentParts) {
+				t.Fatalf("part count = %d, want %d", len(update.Artifact.Parts), len(contentParts))
+			}
+			if _, ok := update.Artifact.Parts[1].Content.(protocol.Raw); !ok {
+				t.Fatalf("image data part = %#v, want Raw", update.Artifact.Parts[1])
+			}
+			if got := update.Artifact.Parts[2].URLContent(); got != "https://example.com/image.png" {
+				t.Fatalf("image URL = %q", got)
+			}
+			if _, ok := update.Artifact.Parts[4].Content.(protocol.Raw); !ok {
+				t.Fatalf("file data part = %#v, want Raw", update.Artifact.Parts[4])
+			}
+			if got := update.Artifact.Parts[5].URLContent(); got != "https://example.com/url.pdf" {
+				t.Fatalf("file URL = %q", got)
+			}
+		})
+	}
+}
+
 func TestDefaultEventConverterToolAndCodeEvents(t *testing.T) {
 	converter := &defaultEventToA2AMessage{adkCompatibility: true}
 	options := EventToA2AStreamingOptions{CtxID: "context", TaskID: "task"}
@@ -345,6 +404,39 @@ func TestDefaultEventConverterToolAndCodeEvents(t *testing.T) {
 			part.Metadata[ia2a.GetADKMetadataKey(ia2a.DataPartMetadataTypeKey)] == nil {
 			t.Fatalf("tool part metadata = %#v", part.Metadata)
 		}
+	}
+	deltaToolEvent := event.New("inv", "agent", event.WithResponse(&model.Response{
+		ID:        "delta-tool-response",
+		IsPartial: true,
+		Choices: []model.Choice{
+			{Delta: model.Message{
+				ToolCalls: []model.ToolCall{{
+					ID:   "delta-call",
+					Type: "function",
+					Function: model.FunctionDefinitionParam{
+						Name:      "lookup",
+						Arguments: []byte(`{"city":"Shenzhen"}`),
+					},
+				}},
+			}},
+			{Delta: model.Message{
+				Role:     model.RoleTool,
+				ToolID:   "delta-call",
+				ToolName: "lookup",
+				Content:  `{"temperature":30}`,
+			}},
+		},
+	}))
+	deltaResult, err := converter.ConvertStreamingToA2AMessage(
+		context.Background(),
+		deltaToolEvent,
+		options,
+	)
+	if err != nil {
+		t.Fatalf("delta tool conversion failed: %v", err)
+	}
+	if got := len(deltaResult.(*protocol.TaskArtifactUpdateEvent).Artifact.Parts); got != 2 {
+		t.Fatalf("delta tool part count = %d, want 2", got)
 	}
 	streamed, err := converter.ConvertStreamingToA2AMessage(
 		context.Background(),
@@ -459,6 +551,11 @@ func TestConvertFilePartResolution(t *testing.T) {
 			parts := convertFilePart(test.part)
 			if len(parts) != 1 || parts[0].Type != test.wantType {
 				t.Fatalf("converted parts = %#v, want %s", parts, test.wantType)
+			}
+			if _, ok := test.part.Content.(protocol.URL); ok &&
+				parts[0].Type == model.ContentTypeFile &&
+				(parts[0].File == nil || parts[0].File.URL != test.part.URLContent()) {
+				t.Fatalf("converted URL part = %#v", parts[0])
 			}
 		})
 	}

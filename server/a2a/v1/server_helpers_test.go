@@ -150,15 +150,15 @@ func TestTraceMiddlewareAndBasePath(t *testing.T) {
 	}
 }
 
-func TestStreamEventTextAndSnapshotSuppression(t *testing.T) {
+func TestStreamEventPartsAndSnapshotSuppression(t *testing.T) {
 	textParts := []*protocol.Part{
 		nil,
 		protocol.NewTextPart("hello"),
 		protocol.NewTextPart(" world"),
 	}
 	message := protocol.NewMessage(protocol.MessageRoleAgent, textParts)
-	if text, ok := streamEventText(&message); !ok || text != "hello world" {
-		t.Fatalf("message text = (%q, %v)", text, ok)
+	if parts, ok := streamEventParts(&message); !ok || len(parts) != 3 {
+		t.Fatalf("message parts = (%d, %v)", len(parts), ok)
 	}
 	artifact := protocol.NewTaskArtifactUpdateEvent(
 		"task",
@@ -166,39 +166,56 @@ func TestStreamEventTextAndSnapshotSuppression(t *testing.T) {
 		protocol.Artifact{Parts: textParts},
 		false,
 	)
-	if text, ok := streamEventText(&artifact); !ok || text != "hello world" {
-		t.Fatalf("artifact text = (%q, %v)", text, ok)
+	if parts, ok := streamEventParts(&artifact); !ok || len(parts) != 3 {
+		t.Fatalf("artifact parts = (%d, %v)", len(parts), ok)
 	}
-	if _, ok := streamEventText((*protocol.Message)(nil)); ok {
-		t.Fatal("typed nil message reported text")
+	if _, ok := streamEventParts((*protocol.Message)(nil)); ok {
+		t.Fatal("typed nil message reported parts")
 	}
-	if _, ok := streamEventText((*protocol.TaskArtifactUpdateEvent)(nil)); ok {
-		t.Fatal("typed nil artifact reported text")
+	if _, ok := streamEventParts((*protocol.TaskArtifactUpdateEvent)(nil)); ok {
+		t.Fatal("typed nil artifact reported parts")
 	}
 	status := protocol.NewTaskStatusUpdateEvent(
 		"task", "context", protocol.TaskStatus{}, false,
 	)
-	if _, ok := streamEventText(&status); ok {
-		t.Fatal("status event reported text")
-	}
-	mixed := protocol.NewMessage(
-		protocol.MessageRoleAgent,
-		[]*protocol.Part{protocol.NewTextPart("text"), protocol.NewDataPart("data")},
-	)
-	if _, ok := streamEventText(&mixed); ok {
-		t.Fatal("mixed message reported text-only content")
+	if _, ok := streamEventParts(&status); ok {
+		t.Fatal("status event reported parts")
 	}
 
-	suppressed := suppressRepeatedPartialSnapshot(&message, "hello world")
+	accumulated := []*protocol.Part{protocol.NewTextPart("hello world")}
+	suppressed := suppressRepeatedPartialSnapshot(&message, accumulated)
 	if got := len(suppressed.(*protocol.Message).Parts); got != 0 {
 		t.Fatalf("suppressed message part count = %d", got)
 	}
-	suppressed = suppressRepeatedPartialSnapshot(&artifact, "hello world")
+	suppressed = suppressRepeatedPartialSnapshot(&artifact, accumulated)
 	if got := len(suppressed.(*protocol.TaskArtifactUpdateEvent).Artifact.Parts); got != 0 {
 		t.Fatalf("suppressed artifact part count = %d", got)
 	}
-	if got := suppressRepeatedPartialSnapshot(&message, "different"); got != &message {
+	if got := suppressRepeatedPartialSnapshot(
+		&message,
+		[]*protocol.Part{protocol.NewTextPart("different")},
+	); got != &message {
 		t.Fatal("different snapshot was replaced")
+	}
+
+	mixedParts := []*protocol.Part{
+		protocol.NewTextPart("text"),
+		protocol.NewDataPart(map[string]any{"key": "value"}),
+		protocol.NewURLPart("https://example.com/file", "text/plain"),
+	}
+	mixed := protocol.NewMessage(protocol.MessageRoleAgent, mixedParts)
+	suppressed = suppressRepeatedPartialSnapshot(&mixed, mixedParts)
+	if got := len(suppressed.(*protocol.Message).Parts); got != 0 {
+		t.Fatalf("suppressed mixed message part count = %d", got)
+	}
+	if got := streamingPartStateKey(&artifact, ""); got != "artifact:"+artifact.Artifact.ArtifactID {
+		t.Fatalf("artifact state key = %q", got)
+	}
+	if got := streamingPartStateKey(&message, "response"); got != "response:response" {
+		t.Fatalf("message state key = %q", got)
+	}
+	if got := streamingPartStateKey(&message, ""); got != "" {
+		t.Fatalf("empty message state key = %q", got)
 	}
 }
 

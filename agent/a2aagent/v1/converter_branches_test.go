@@ -46,8 +46,9 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 					Name: "report.pdf", Data: []byte("file"), MimeType: "application/pdf",
 				}},
 				{Type: model.ContentTypeFile, File: &model.File{
-					FileID: "https://example.com/file", MimeType: "application/pdf",
+					URL: "https://example.com/file", MimeType: "application/pdf",
 				}},
+				{Type: model.ContentTypeFile, File: &model.File{FileID: "provider-file-id"}},
 				{Type: model.ContentTypeFile},
 				{Type: model.ContentType("unknown")},
 			},
@@ -72,6 +73,9 @@ func TestDefaultInvocationConverterContentPartsAndMetadata(t *testing.T) {
 		message.Parts[4].Metadata[ia2a.FilePartMetadataContentTypeKey] !=
 			ia2a.FilePartMetadataContentTypeAudio {
 		t.Fatalf("file part metadata = %#v / %#v", message.Parts[2].Metadata, message.Parts[4].Metadata)
+	}
+	if got := message.Parts[6].URLContent(); got != "https://example.com/file" {
+		t.Fatalf("file URL = %q, want https://example.com/file", got)
 	}
 
 	empty, err := (&defaultEventA2AConverter{}).ConvertToA2AMessage(
@@ -279,12 +283,20 @@ func TestParseA2AMessagePartsBuiltInsAndMappers(t *testing.T) {
 			map[string][]byte{"key": []byte(`"value"`)},
 		),
 	}
-	result := parseA2AMessagePartsWithMappers(&message, []A2ADataPartMapper{
-		nil,
-		func(*protocol.Part, *A2ADataPartMappingResult) (bool, error) {
-			mapperCalls++
-			return false, errors.New("skip")
+	wantErr := errors.New("mapper failed")
+	if _, err := parseA2AMessagePartsWithMappers(
+		&message,
+		[]A2ADataPartMapper{
+			func(*protocol.Part, *A2ADataPartMappingResult) (bool, error) {
+				return false, wantErr
+			},
 		},
+	); !errors.Is(err, wantErr) {
+		t.Fatalf("mapper error = %v, want %v", err, wantErr)
+	}
+
+	result, err := parseA2AMessagePartsWithMappers(&message, []A2ADataPartMapper{
+		nil,
 		func(*protocol.Part, *A2ADataPartMappingResult) (bool, error) {
 			mapperCalls++
 			return false, nil
@@ -305,7 +317,10 @@ func TestParseA2AMessagePartsBuiltInsAndMappers(t *testing.T) {
 			return true, nil
 		},
 	})
-	if mapperCalls != 3 || result.textContent != "before mapped" ||
+	if err != nil {
+		t.Fatalf("parseA2AMessagePartsWithMappers failed: %v", err)
+	}
+	if mapperCalls != 2 || result.textContent != "before mapped" ||
 		result.finalTextContent != "after" ||
 		result.reasoningContent != "reasoning adk mapped reasoning" ||
 		len(result.toolCalls) != 2 || len(result.toolResponses) != 2 ||
