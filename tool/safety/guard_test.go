@@ -281,3 +281,225 @@ func TestSafetyGuard_InitErrAndDuration(t *testing.T) {
 	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
 	assert.Equal(t, "RULE_EXCESSIVE_SLEEP", guard.LastReport().RuleID)
 }
+
+func TestAuditLogger_NewAuditLogger(t *testing.T) {
+	var buf bytes.Buffer
+	logger := NewAuditLogger(&buf)
+	require.NotNil(t, logger)
+
+	event := AuditEvent{
+		ToolName:  "workspace_exec",
+		Decision:  tool.PermissionActionAllow,
+		RiskLevel: RiskLevelNone,
+		RuleID:    "RULE_ALLOW_PASSED",
+	}
+	require.NoError(t, logger.Log(event))
+	assert.Contains(t, buf.String(), "RULE_ALLOW_PASSED")
+
+	// Close on a non-file logger should return nil
+	require.NoError(t, logger.Close())
+
+	// nil logger should be safe
+	var nilLogger *AuditLogger
+	require.NoError(t, nilLogger.Log(event))
+	require.NoError(t, nilLogger.Close())
+}
+
+func TestWithPolicy(t *testing.T) {
+	p := DefaultPolicy()
+	p.DeniedCommands = []string{"forbidden_cmd"}
+	guard := NewGuard(WithPolicy(p))
+	require.NotNil(t, guard)
+
+	// WithPolicy(nil) should not overwrite the default
+	guard2 := NewGuard(WithPolicy(nil))
+	require.NotNil(t, guard2)
+}
+
+func TestLoadPolicyJSON(t *testing.T) {
+	jsonData := `{"denied_commands":["rm"],"forbidden_paths":["~/.ssh"]}`
+	p, err := LoadPolicyJSON([]byte(jsonData))
+	require.NoError(t, err)
+	assert.Contains(t, p.DeniedCommands, "rm")
+
+	// Invalid JSON
+	_, err = LoadPolicyJSON([]byte("not-json"))
+	assert.Error(t, err)
+}
+
+func TestLoadPolicyFile_JSONAndUnknownExt(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// JSON file
+	jsonFile := filepath.Join(tmpDir, "policy.json")
+	jsonContent := `{"denied_commands":["dd"]}`
+	require.NoError(t, os.WriteFile(jsonFile, []byte(jsonContent), 0600))
+	p, err := LoadPolicyFile(jsonFile)
+	require.NoError(t, err)
+	assert.Contains(t, p.DeniedCommands, "dd")
+
+	// Unknown extension, valid JSON
+	unknownFile := filepath.Join(tmpDir, "policy.cfg")
+	require.NoError(t, os.WriteFile(unknownFile, []byte(jsonContent), 0600))
+	p2, err := LoadPolicyFile(unknownFile)
+	require.NoError(t, err)
+	assert.Contains(t, p2.DeniedCommands, "dd")
+
+	// Unknown extension, invalid JSON and invalid YAML
+	badFile := filepath.Join(tmpDir, "bad.cfg")
+	require.NoError(t, os.WriteFile(badFile, []byte("{ bad json\x00"), 0600))
+	_, err = LoadPolicyFile(badFile)
+	assert.Error(t, err)
+
+	// Non-existent file
+	_, err = LoadPolicyFile(filepath.Join(tmpDir, "missing.json"))
+	assert.Error(t, err)
+}
+
+func TestReportSaveJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+	reportPath := filepath.Join(tmpDir, "report.json")
+
+	r := &Report{
+		ToolName:  "workspace_exec",
+		Command:   "echo hi",
+		Decision:  tool.PermissionActionAllow,
+		RiskLevel: RiskLevelNone,
+		RuleID:    "RULE_ALLOW_PASSED",
+	}
+	require.NoError(t, r.SaveJSON(reportPath))
+
+	data, err := os.ReadFile(reportPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "RULE_ALLOW_PASSED")
+
+	// Unwritable path should return error
+	err = r.SaveJSON(filepath.Join(tmpDir, "nonexistent_dir", "report.json"))
+	assert.Error(t, err)
+}
+
+func TestExtractScanRequest_Variants(t *testing.T) {
+	guard := NewGuard()
+	ctx := context.Background()
+
+	// hostexec / host_exec backend
+	for _, toolName := range []string{"hostexec", "host_exec"} {
+		args, _ := json.Marshal(map[string]interface{}{"command": "echo hi"})
+		req := &tool.PermissionRequest{ToolName: toolName, Arguments: args}
+		_, err := guard.CheckToolPermission(ctx, req)
+		require.NoError(t, err)
+	}
+
+	// codeexec / code_exec backend
+	for _, toolName := range []string{"codeexec", "code_exec"} {
+		args, _ := json.Marshal(map[string]interface{}{"script": "print('hi')"})
+		req := &tool.PermissionRequest{ToolName: toolName, Arguments: args}
+		_, err := guard.CheckToolPermission(ctx, req)
+		require.NoError(t, err)
+	}
+
+	// cmd field
+	args, _ := json.Marshal(map[string]interface{}{"cmd": "echo hello"})
+	req := &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
+	_, err := guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+
+	// code field
+	args, _ = json.Marshal(map[string]interface{}{"code": "print('hello')"})
+	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
+	_, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+
+	// args, cwd, env fields
+	args, _ = json.Marshal(map[string]interface{}{
+		"command": "go test",
+		"args":    []interface{}{"./..."},
+		"cwd":     "/workspace",
+		"env":     map[string]interface{}{"GOPATH": "/go"},
+	})
+	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
+	_, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+
+	// Empty arguments
+	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: nil}
+	_, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+
+	// Non-JSON raw arguments
+	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: []byte("echo raw")}
+	_, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+
+	// JSON with no command fields — falls back to raw arguments
+	args, _ = json.Marshal(map[string]interface{}{"other": "value"})
+	req = &tool.PermissionRequest{ToolName: "workspace_exec", Arguments: args}
+	_, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+}
+
+func TestCheckDomainInArgs_AllWhitelisted(t *testing.T) {
+	// checkDomainInArgs is called when a net tool (curl/wget/nc/ssh) is used
+	// without an explicit HTTP URL — e.g. "ssh github.com" or "nc github.com 443".
+	guard := NewGuard()
+	ctx := context.Background()
+
+	// Whitelisted domain via ssh — should be allowed
+	req := createTestReq("workspace_exec", "ssh github.com")
+	decision, err := guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	// Non-whitelisted domain via ssh — should be denied
+	req = createTestReq("workspace_exec", "ssh evil.com")
+	decision, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.Equal(t, "RULE_NETWORK_NON_WHITELIST", guard.LastReport().RuleID)
+
+	// nc with no domain-like word — denied (no whitelisted domain found)
+	req = createTestReq("workspace_exec", "nc -z 192.168.1.1 80")
+	decision, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+}
+
+func TestResourceAbuse_SleepVariants(t *testing.T) {
+	guard := NewGuard()
+	ctx := context.Background()
+
+	cases := []struct {
+		cmd     string
+		blocked bool
+	}{
+		{"sleep 10m", true},  // 600s > 300s
+		{"sleep 2d", true},   // 2 days
+		{"sleep 60", false},  // 60s <= 300s, allowed
+		{"sleep abc", false}, // unparseable, not blocked
+		{"for ((;;)) echo x", true}, // infinite loop
+	}
+
+	for _, c := range cases {
+		req := createTestReq("workspace_exec", c.cmd)
+		decision, err := guard.CheckToolPermission(ctx, req)
+		require.NoError(t, err)
+		if c.blocked {
+			assert.Equal(t, tool.PermissionActionDeny, decision.Action, "cmd=%q should be denied", c.cmd)
+		} else {
+			assert.NotEqual(t, tool.PermissionActionDeny, decision.Action, "cmd=%q should not be denied", c.cmd)
+		}
+	}
+}
+
+func TestCheckHostExecBackground(t *testing.T) {
+	guard := NewGuard()
+	ctx := context.Background()
+
+	// Background process should be denied
+	args, _ := json.Marshal(map[string]interface{}{"command": "sleep 10 &"})
+	req := &tool.PermissionRequest{ToolName: "hostexec", Arguments: args}
+	decision, err := guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.Equal(t, "RULE_BACKGROUND_PROCESS", guard.LastReport().RuleID)
+}
