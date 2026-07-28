@@ -414,6 +414,13 @@ func CompareEvaluations(baseline, candidate EvaluationResult) DeltaSummary {
 	baselineAggregate, baselineErrors := summarizeEvaluation(baseline)
 	candidateAggregate, candidateErrors := summarizeEvaluation(candidate)
 	d := DeltaSummary{ScoreDelta: round(candidateAggregate.OverallScore - baselineAggregate.OverallScore)}
+	if baseline.EvalSetID != candidate.EvalSetID {
+		d.CaseSetErrors = append(d.CaseSetErrors, fmt.Sprintf(
+			"evaluation set ID mismatch: baseline %q, candidate %q",
+			baseline.EvalSetID,
+			candidate.EvalSetID,
+		))
+	}
 	for _, err := range baselineErrors {
 		d.CaseSetErrors = append(d.CaseSetErrors, "invalid baseline aggregate: "+err)
 	}
@@ -553,6 +560,13 @@ func validateGateEvaluationInputs(
 	baselineAggregate, baselineErrors := summarizeEvaluation(baseline)
 	candidateAggregate, candidateErrors := summarizeEvaluation(candidate)
 	validationErrors := append([]string(nil), delta.CaseSetErrors...)
+	if baseline.EvalSetID != candidate.EvalSetID {
+		validationErrors = append(validationErrors, fmt.Sprintf(
+			"evaluation set ID mismatch: baseline %q, candidate %q",
+			baseline.EvalSetID,
+			candidate.EvalSetID,
+		))
+	}
 	for _, err := range baselineErrors {
 		validationErrors = append(validationErrors, "invalid baseline aggregate: "+err)
 	}

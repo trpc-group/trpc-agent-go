@@ -268,6 +268,35 @@ func TestMissingCandidateCaseUpdatesSummaryCounters(t *testing.T) {
 	if delta.NewlyFailed != 1 || delta.Regressed != 1 {
 		t.Fatalf("missing case was absent from delta counters: %+v", delta)
 	}
+	report := &OptimizationReport{
+		BaselineValidation: base,
+		Rounds: []RoundAudit{{
+			Round:       1,
+			CandidateID: "candidate",
+			Validation:  candidate,
+			Delta:       delta,
+			Gate:        GateDecision{Reasons: []string{"missing candidate case"}},
+		}},
+	}
+	markdown := MarkdownReport(report)
+	if !strings.Contains(markdown, "- Newly passed / failed: 0 / 1") ||
+		!strings.Contains(markdown, "| missing | 0.600 | 0.000 | -0.600 | new fail |") {
+		t.Fatalf("missing case was inconsistent in Markdown report:\n%s", markdown)
+	}
+}
+
+func TestGateRejectsMismatchedEvaluationSetIDs(t *testing.T) {
+	base := evaluationFromCases(CaseResult{CaseID: "case", Score: .5, Passed: true})
+	candidate := evaluationFromCases(CaseResult{CaseID: "case", Score: .8, Passed: true})
+	base.EvalSetID = "validation"
+	candidate.EvalSetID = "training"
+
+	delta := CompareEvaluations(base, candidate)
+	gate := ApplyGate(GateConfig{MinValidationGain: .1}, base, candidate, delta)
+	reasons := strings.Join(gate.Reasons, " ")
+	if gate.Accepted || !strings.Contains(reasons, `evaluation set ID mismatch: baseline "validation", candidate "training"`) {
+		t.Fatalf("mismatched evaluation sets were accepted: delta=%+v gate=%+v", delta, gate)
+	}
 }
 
 func TestGateRejectsMissingProtectedCaseEvenWithHigherScore(t *testing.T) {

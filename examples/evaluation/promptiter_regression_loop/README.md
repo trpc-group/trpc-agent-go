@@ -14,6 +14,7 @@ each engine round and Evaluation Service result into the same candidate and
 case result structures before applying the shared regression gate.
 Mapped aggregate score, pass/fail counts, cost, latency, and tool-call totals
 are recomputed from case results before any gate decision.
+Mapped baseline and candidate results must also use the same evaluation-set ID.
 
 ## Run
 
