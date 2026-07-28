@@ -200,16 +200,15 @@ func checkForbiddenPaths(cmd string, policy *Policy) (Result, bool) {
 				}
 			}
 		} else {
-			// Per-token matching for non-glob paths
+			// Per-token matching for non-glob paths: match only when a token equals
+			// the pattern or starts with it followed by a path separator, avoiding
+			// false positives such as "/etc" matching "/etcetera/notes.txt".
 			for _, w := range words {
 				cleanWord := strings.Trim(w, "'\"(),")
 				if cleanWord == pattern || strings.HasPrefix(cleanWord, pattern+"/") || strings.HasPrefix(cleanWord, pattern+"\\") {
 					matched = true
 					break
 				}
-			}
-			if !matched && strings.Contains(lowerCmd, pattern) {
-				matched = true
 			}
 		}
 

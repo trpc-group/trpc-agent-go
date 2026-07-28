@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -24,8 +25,14 @@ func main() {
 	fmt.Println("🛡️  tRPC-Agent-Go Tool Safety Guard Demonstration")
 	fmt.Println("==================================================")
 
+	// Runtime output is written to output/ to avoid overwriting the committed
+	// sample fixtures (tool_safety_audit.jsonl, tool_safety_report.json).
+	if err := os.MkdirAll("output", 0750); err != nil {
+		log.Fatalf("failed to create output dir: %v", err)
+	}
+
 	// 1. Initialize SafetyGuard with policy, audit log and report outputs
-	auditLogger, err := safety.NewFileAuditLogger("tool_safety_audit.jsonl")
+	auditLogger, err := safety.NewFileAuditLogger("output/tool_safety_audit.jsonl")
 	if err != nil {
 		log.Fatalf("failed to create audit logger: %v", err)
 	}
@@ -34,7 +41,7 @@ func main() {
 	guard := safety.NewGuard(
 		safety.WithPolicyFile("tool_safety_policy.yaml"),
 		safety.WithAuditLogger(auditLogger),
-		safety.WithReportPath("tool_safety_report.json"),
+		safety.WithReportPath("output/tool_safety_report.json"),
 	)
 
 	ctx := context.Background()
@@ -111,7 +118,7 @@ func main() {
 	}
 
 	fmt.Println("\n==================================================")
-	fmt.Println("✅ Safety scan reports saved to tool_safety_report.json and tool_safety_audit.jsonl")
+	fmt.Println("✅ Safety scan reports saved to output/tool_safety_report.json and output/tool_safety_audit.jsonl")
 
 	// Integration hint with agent
 	_ = agent.WithToolPermissionPolicy(guard)

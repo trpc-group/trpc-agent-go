@@ -28,8 +28,12 @@ const (
 	BackendWorkspaceExec = "workspace_exec"
 	// BackendHostExec represents host terminal PTY execution.
 	BackendHostExec = "hostexec"
+	// BackendHostExecAlias is an alternate tool name for BackendHostExec.
+	BackendHostExecAlias = "host_exec"
 	// BackendCodeExec represents sandbox code execution.
 	BackendCodeExec = "codeexec"
+	// BackendCodeExecAlias is an alternate tool name for BackendCodeExec.
+	BackendCodeExecAlias = "code_exec"
 )
 
 // SafetyGuard enforces safety policies on tool executions.
@@ -188,9 +192,9 @@ func (g *SafetyGuard) extractScanRequest(req *tool.PermissionRequest) *ScanReque
 	}
 
 	// Extract backend from tool name
-	if req.ToolName == "hostexec" || req.ToolName == "host_exec" {
+	if req.ToolName == BackendHostExec || req.ToolName == BackendHostExecAlias {
 		scanReq.Backend = BackendHostExec
-	} else if req.ToolName == "codeexec" || req.ToolName == "code_exec" {
+	} else if req.ToolName == BackendCodeExec || req.ToolName == BackendCodeExecAlias {
 		scanReq.Backend = BackendCodeExec
 	}
 

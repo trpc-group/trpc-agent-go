@@ -16,7 +16,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -241,15 +240,24 @@ func TestSafetyGuard_Performance500Samples(t *testing.T) {
 	req := createTestReq("workspace_exec", "echo hello_world")
 	ctx := context.Background()
 
-	start := time.Now()
+	// Verify correctness across 500 invocations without a machine-specific
+	// wall-clock assertion. Throughput is measured by BenchmarkSafetyGuard.
 	for i := 0; i < 500; i++ {
-		_, err := guard.CheckToolPermission(ctx, req)
+		decision, err := guard.CheckToolPermission(ctx, req)
 		require.NoError(t, err)
+		assert.Equal(t, tool.PermissionActionAllow, decision.Action)
 	}
-	duration := time.Since(start)
+}
 
-	t.Logf("Time for 500 scans: %v", duration)
-	assert.Less(t, duration, 1*time.Second, "Scanning 500 samples must finish within 1 second")
+// BenchmarkSafetyGuard measures repeated CheckToolPermission throughput.
+func BenchmarkSafetyGuard(b *testing.B) {
+	guard := NewGuard()
+	req := createTestReq("workspace_exec", "echo hello_world")
+	ctx := context.Background()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = guard.CheckToolPermission(ctx, req)
+	}
 }
 
 func TestSafetyGuard_SecretLeakage(t *testing.T) {
@@ -306,14 +314,31 @@ func TestAuditLogger_NewAuditLogger(t *testing.T) {
 }
 
 func TestWithPolicy(t *testing.T) {
+	ctx := context.Background()
+
+	// Custom policy: only "forbidden_cmd" is denied.
 	p := DefaultPolicy()
 	p.DeniedCommands = []string{"forbidden_cmd"}
+	p.NetworkWhitelist = []string{"github.com"}
 	guard := NewGuard(WithPolicy(p))
 	require.NotNil(t, guard)
 
-	// WithPolicy(nil) should not overwrite the default
+	// The custom policy should deny forbidden_cmd.
+	decision, err := guard.CheckToolPermission(ctx, createTestReq("workspace_exec", "forbidden_cmd arg1"))
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+
+	// The custom policy should allow an otherwise-safe command.
+	decision, err = guard.CheckToolPermission(ctx, createTestReq("workspace_exec", "echo hello"))
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	// WithPolicy(nil) should not overwrite the default; rm is still denied.
 	guard2 := NewGuard(WithPolicy(nil))
 	require.NotNil(t, guard2)
+	decision, err = guard2.CheckToolPermission(ctx, createTestReq("workspace_exec", "rm -rf /"))
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
 }
 
 func TestLoadPolicyJSON(t *testing.T) {
@@ -472,11 +497,11 @@ func TestResourceAbuse_SleepVariants(t *testing.T) {
 		cmd     string
 		blocked bool
 	}{
-		{"sleep 10m", true},  // 600s > 300s
-		{"sleep 2d", true},   // 2 days
-		{"sleep 60", false},  // 60s <= 300s, allowed
-		{"sleep abc", false}, // unparseable, not blocked
-		{"for ((;;)) echo x", true}, // infinite loop
+		{"sleep 10m", true},         // 600s > 300s
+		{"sleep 2d", true},           // 2 days
+		{"sleep 60", false},          // 60s <= 300s, allowed
+		{"sleep abc", false},         // unparseable suffix: no duration match, not blocked by design
+		{"for ((;;)) echo x", true},  // infinite loop
 	}
 
 	for _, c := range cases {

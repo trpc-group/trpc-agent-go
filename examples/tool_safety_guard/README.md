@@ -4,7 +4,7 @@
 
 ## 核心特性
 
-- **静态扫描与解析**：集成并扩展 `internal/shellsafe`，在命令执行前分析可执行程序名、语法结构与管道逻辑，防止套娃命令（如 `sh -c`、`eval`、`sudo`）绕过限制。
+- **静态扫描与解析**：集成并扩展 `internal/shellsafe`，在命令执行前分析可执行程序名、语法结构与管道逻辑。当策略配置将 `sh`、`bash`、`eval`、`sudo` 等列入黑名单时，可阻止套娃命令绕过限制；零配置（`NewGuard()` 默认策略）已将上述命令加入 `denied_commands`。
 - **动态策略配置**：支持从 JSON/YAML 策略配置文件（如 `tool_safety_policy.yaml` / `tool_safety_policy.json`）中读取黑白名单、禁止路径、域名白名单、耗时与资源限制等。
 - **无缝对接 `tool.PermissionPolicy`**：可以直接通过 `agent.WithToolPermissionPolicy(guard)` 作为框架门卫，在工具真正运行前返回 `allow` / `deny` / `ask` 决策。
 - **结构化报告与审计日志**：产出符合标准的 `tool_safety_report.json` 与 JSONL 格式的 `tool_safety_audit.jsonl`，全面记录命中规则、证据摘要与处置结果。
