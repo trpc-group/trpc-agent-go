@@ -518,7 +518,7 @@ func TestFilesAreNormalizedAndPassedToGit(t *testing.T) {
 	if gotRepo != "repo" {
 		t.Fatalf("repo path = %q, want repo", gotRepo)
 	}
-	wantArgs := []string{"diff", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
+	wantArgs := []string{"--literal-pathspecs", "diff", "HEAD", "--", "a.go", "b.go", "pkg/c.go"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("git args = %#v, want %#v", gotArgs, wantArgs)
 	}
@@ -861,7 +861,12 @@ func TestRepoPathLocalRunnerStagesRepositoryOnce(t *testing.T) {
 	})
 	mustRunGit(t, repoRoot, "init")
 	mustRunGit(t, repoRoot, "add", "go.mod", "review.go")
-	snapshot, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, maxSandboxSnapshotBytes)
+	snapshot, err := prepareSandboxRepoSnapshot(
+		context.Background(),
+		repoRoot,
+		nil,
+		maxSandboxSnapshotBytes,
+	)
 	if err != nil {
 		t.Fatalf("prepare snapshot: %v", err)
 	}
@@ -921,7 +926,12 @@ func TestRepositorySnapshotCopiesOnlyTrackedRegularFiles(t *testing.T) {
 	mustWriteFile(t, filepath.Join(repoRoot, "untracked.go"), "package untracked\n")
 	mustRunGit(t, repoRoot, "add", "go.mod", "pkg/review.go", ".gitignore")
 
-	snapshot, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, maxSandboxSnapshotBytes)
+	snapshot, err := prepareSandboxRepoSnapshot(
+		context.Background(),
+		repoRoot,
+		nil,
+		maxSandboxSnapshotBytes,
+	)
 	if err != nil {
 		t.Fatalf("prepare snapshot: %v", err)
 	}
@@ -939,6 +949,140 @@ func TestRepositorySnapshotCopiesOnlyTrackedRegularFiles(t *testing.T) {
 	}
 	if snapshot.Files != 3 || snapshot.Bytes == 0 {
 		t.Fatalf("snapshot metadata = %+v", snapshot)
+	}
+}
+
+func TestRepositorySnapshotHonorsLiteralFileScope(t *testing.T) {
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	mustWriteFile(t, filepath.Join(repoRoot, "pkg", "review.go"), "package pkg\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "other", "outside.go"), "package other\n")
+	mustRunGit(t, repoRoot, "add", "pkg/review.go", "other/outside.go")
+
+	snapshot, err := prepareSandboxRepoSnapshot(
+		context.Background(),
+		repoRoot,
+		[]string{"pkg/review.go"},
+		maxSandboxSnapshotBytes,
+	)
+	if err != nil {
+		t.Fatalf("prepare scoped snapshot: %v", err)
+	}
+	defer os.RemoveAll(snapshot.Root)
+
+	if _, err := os.Stat(filepath.Join(snapshot.Root, "pkg", "review.go")); err != nil {
+		t.Fatalf("scoped file missing from snapshot: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot.Root, "other", "outside.go")); !os.IsNotExist(err) {
+		t.Fatalf("out-of-scope file err = %v, want not exist", err)
+	}
+	if snapshot.Files != 1 {
+		t.Fatalf("snapshot metadata = %+v, want one file", snapshot)
+	}
+
+	magicSnapshot, err := prepareSandboxRepoSnapshot(
+		context.Background(),
+		repoRoot,
+		[]string{":(glob)**"},
+		maxSandboxSnapshotBytes,
+	)
+	if err != nil {
+		t.Fatalf("prepare literal pathspec snapshot: %v", err)
+	}
+	defer os.RemoveAll(magicSnapshot.Root)
+	if magicSnapshot.Files != 0 {
+		t.Fatalf("magic-looking literal snapshot = %+v, want no files", magicSnapshot)
+	}
+}
+
+func TestRepositorySnapshotRejectsUnsafeScope(t *testing.T) {
+	tests := []struct {
+		name  string
+		scope string
+	}{
+		{name: "empty", scope: ""},
+		{name: "absolute", scope: "/repo/review.go"},
+		{name: "parent escape", scope: "../review.go"},
+		{name: "git metadata", scope: ".git/config"},
+		{name: "nul", scope: "review\x00.go"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := cleanSnapshotScope([]string{tt.scope}); err == nil {
+				t.Fatalf("cleanSnapshotScope(%q) succeeded, want error", tt.scope)
+			}
+		})
+	}
+}
+
+func TestGovernancePassesFileScopeToRepositorySnapshot(t *testing.T) {
+	repoRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	mustWriteFile(t, filepath.Join(repoRoot, "hello.go"), "package hello\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "outside.go"), "package hello\n")
+	mustRunGit(t, repoRoot, "add", "hello.go", "outside.go")
+
+	runner := &snapshotInspectingRunner{
+		included: "hello.go",
+		excluded: "outside.go",
+	}
+	gitRunner := func(_ context.Context, _ string, _ []string) ([]byte, []byte, error) {
+		return []byte(minimalDiff()), nil, nil
+	}
+	code, stdout, stderr := runForTestWithHooks(t, []string{
+		"--repo-path", repoRoot,
+		"--files", "hello.go",
+		"--runtime", "fake",
+	}, nil, gitRunner, runtimeHooks{
+		sandboxRunner: runner,
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
+	}
+	if runner.inspectErr != nil {
+		t.Fatal(runner.inspectErr)
+	}
+	if !runner.inspected {
+		t.Fatal("repository snapshot was not inspected")
+	}
+	var summary reviewSummary
+	mustUnmarshalSummary(t, stdout, &summary)
+	if summary.Warnings != 0 {
+		t.Fatalf("summary = %+v, want no warnings", summary)
+	}
+}
+
+func TestRepositorySnapshotRejectsSymlinkedParentEscape(t *testing.T) {
+	repoRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	mustRunGit(t, repoRoot, "init")
+	mustWriteFile(t, filepath.Join(repoRoot, "linked", "review.go"), "package linked\n")
+	mustRunGit(t, repoRoot, "add", "linked/review.go")
+
+	if err := os.RemoveAll(filepath.Join(repoRoot, "linked")); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteFile(t, filepath.Join(outsideRoot, "review.go"), "outside repository\n")
+	if err := os.Symlink(outsideRoot, filepath.Join(repoRoot, "linked")); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+
+	runner := &recordingSandboxRunner{}
+	gov, err := runGovernance(context.Background(), config{}, reviewInput{
+		kind:     inputKindRepoPath,
+		repoRoot: repoRoot,
+	}, parseUnifiedDiff([]byte(minimalDiff())), runtimeHooks{
+		sandboxRunner: runner,
+	})
+	if err != nil {
+		t.Fatalf("runGovernance: %v", err)
+	}
+	if len(runner.calls) != 1 || runner.calls[0].Kind != commandCheckGoVersion {
+		t.Fatalf("runner calls = %+v, want only go version", runner.calls)
+	}
+	if len(gov.Warnings) != 1 || gov.Warnings[0].RuleID != ruleSandboxSnapshotUnavailable ||
+		!strings.Contains(gov.Warnings[0].Evidence, "resolves outside the repository") {
+		t.Fatalf("warnings = %+v, want symlink snapshot warning", gov.Warnings)
 	}
 }
 
@@ -967,7 +1111,7 @@ func TestRepositorySnapshotLimitSkipsRepositoryChecks(t *testing.T) {
 	mustRunGit(t, repoRoot, "init")
 	mustWriteFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/large\n\ngo 1.21\n")
 	mustRunGit(t, repoRoot, "add", "go.mod")
-	if _, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, 1); err == nil ||
+	if _, err := prepareSandboxRepoSnapshot(context.Background(), repoRoot, nil, 1); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("prepare snapshot err = %v, want size limit", err)
 	}
@@ -1384,7 +1528,7 @@ func TestRepoPathUsesGitDiffArgumentArray(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr)
 	}
-	wantArgs := []string{"diff", "HEAD", "--"}
+	wantArgs := []string{"--literal-pathspecs", "diff", "HEAD", "--"}
 	if !reflect.DeepEqual(gotArgs, wantArgs) {
 		t.Fatalf("git args = %#v, want %#v", gotArgs, wantArgs)
 	}
@@ -1986,6 +2130,88 @@ func TestResourceCleanupSameFunctionSuppressesFinding(t *testing.T) {
 	}
 }
 
+func TestResourceCleanupShadowedBindingDoesNotSuppressFinding(t *testing.T) {
+	repoRoot := t.TempDir()
+	source := strings.Join([]string{
+		"package scoped",
+		"",
+		"import \"os\"",
+		"",
+		"func shadowed(outer string, inner string) error {",
+		"\tf, err := os.Open(outer)",
+		"\tif err != nil { return err }",
+		"\t{",
+		"\t\tf, err := os.Open(inner)",
+		"\t\tif err != nil { return err }",
+		"\t\t_ = f",
+		"\t}",
+		"\tdefer f.Close()",
+		"\treturn nil",
+		"}",
+	}, "\n")
+	mustWriteFile(t, filepath.Join(repoRoot, "shadowed.go"), source)
+	diff := strings.Join([]string{
+		"diff --git a/shadowed.go b/shadowed.go",
+		"--- a/shadowed.go",
+		"+++ b/shadowed.go",
+		"@@ -9,0 +9,3 @@ func shadowed(outer string, inner string) error {",
+		"+\t\tf, err := os.Open(inner)",
+		"+\t\tif err != nil { return err }",
+		"+\t\t_ = f",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), repoRoot))
+	if len(finalized.Findings) != 1 || finalized.Findings[0].RuleID != ruleUnclosedFile ||
+		finalized.Findings[0].Line != 9 {
+		t.Fatalf("finalized = %+v, want shadowed unclosed file finding", finalized)
+	}
+}
+
+func TestDiffOnlyResourceCleanupUsesLexicalBinding(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/shadowed.go b/shadowed.go",
+		"--- a/shadowed.go",
+		"+++ b/shadowed.go",
+		"@@ -1,2 +1,13 @@",
+		" package scoped",
+		"+func shadowed(outer string, inner string) error {",
+		"+\tf, err := os.Open(outer)",
+		"+\tif err != nil { return err }",
+		"+\t{",
+		"+\t\tf, err := os.Open(inner)",
+		"+\t\tif err != nil { return err }",
+		"+\t\t_ = f",
+		"+\t}",
+		"+\tdefer f.Close()",
+		"+\treturn nil",
+		"+}",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), ""))
+	if len(finalized.Findings) != 1 || finalized.Findings[0].RuleID != ruleUnclosedFile ||
+		!strings.Contains(finalized.Findings[0].Evidence, "os.Open(inner)") {
+		t.Fatalf("finalized = %+v, want only inner shadowed resource finding", finalized)
+	}
+}
+
+func TestDiffOnlyResourceCleanupSameBindingSuppressesFinding(t *testing.T) {
+	diff := strings.Join([]string{
+		"diff --git a/safe.go b/safe.go",
+		"--- a/safe.go",
+		"+++ b/safe.go",
+		"@@ -1,2 +1,7 @@",
+		" package safe",
+		"+func safe(name string) error {",
+		"+\tf, err := os.Open(name)",
+		"+\tif err != nil { return err }",
+		"+\tdefer f.Close()",
+		"+\treturn nil",
+		"+}",
+	}, "\n")
+	finalized := finalizeRuleMatches(runRules(parseUnifiedDiff([]byte(diff)), ""))
+	if len(finalized.Findings) != 0 || len(finalized.Warnings) != 0 {
+		t.Fatalf("finalized = %+v, want no resource finding", finalized)
+	}
+}
+
 func TestDiffOnlyResourceCleanupUsesHunkFunctionWindow(t *testing.T) {
 	diff := strings.Join([]string{
 		"diff --git a/window.go b/window.go",
@@ -2246,6 +2472,38 @@ type recordingSandboxRunner struct {
 
 func (r *recordingSandboxRunner) RunSandboxCommand(_ context.Context, spec commandSpec) sandboxRun {
 	r.calls = append(r.calls, spec)
+	return sandboxRun{
+		Runtime:    runtimeFake,
+		Command:    string(spec.Kind),
+		ExitCode:   0,
+		Stdout:     "ok",
+		TimedOut:   false,
+		DurationMS: 1,
+	}
+}
+
+type snapshotInspectingRunner struct {
+	included   string
+	excluded   string
+	inspected  bool
+	inspectErr error
+}
+
+func (r *snapshotInspectingRunner) RunSandboxCommand(_ context.Context, spec commandSpec) sandboxRun {
+	if spec.Kind == commandCheckGoTest {
+		if len(spec.Inputs) != 1 {
+			r.inspectErr = errors.New("repository command has no snapshot input")
+		} else {
+			root := filepath.FromSlash(strings.TrimPrefix(spec.Inputs[0].From, "host://"))
+			if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(r.included))); err != nil {
+				r.inspectErr = err
+			} else if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(r.excluded))); !os.IsNotExist(err) {
+				r.inspectErr = errors.New("out-of-scope file was staged")
+			} else {
+				r.inspected = true
+			}
+		}
+	}
 	return sandboxRun{
 		Runtime:    runtimeFake,
 		Command:    string(spec.Kind),

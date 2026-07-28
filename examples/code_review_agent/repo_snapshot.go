@@ -32,6 +32,7 @@ type repoSnapshot struct {
 func prepareSandboxRepoSnapshot(
 	ctx context.Context,
 	repoRoot string,
+	filesScope []string,
 	maxBytes int64,
 ) (repoSnapshot, error) {
 	root := strings.TrimSpace(repoRoot)
@@ -42,7 +43,15 @@ func prepareSandboxRepoSnapshot(
 	if err != nil {
 		return repoSnapshot{}, fmt.Errorf("resolve repository path: %w", err)
 	}
-	tracked, err := gitTrackedFiles(ctx, absRoot)
+	resolvedRoot, err := resolveExistingPath(absRoot)
+	if err != nil {
+		return repoSnapshot{}, fmt.Errorf("resolve repository symlinks: %w", err)
+	}
+	scope, err := cleanSnapshotScope(filesScope)
+	if err != nil {
+		return repoSnapshot{}, err
+	}
+	tracked, err := gitTrackedFiles(ctx, resolvedRoot, scope)
 	if err != nil {
 		return repoSnapshot{}, err
 	}
@@ -58,14 +67,14 @@ func prepareSandboxRepoSnapshot(
 	}()
 
 	var total int64
-	var files int
+	var fileCount int
 	for _, raw := range tracked {
 		rel, err := cleanTrackedPath(raw)
 		if err != nil {
 			return repoSnapshot{}, err
 		}
-		src := filepath.Join(absRoot, filepath.FromSlash(rel))
-		if !pathStaysWithin(absRoot, src) {
+		src := filepath.Join(resolvedRoot, filepath.FromSlash(rel))
+		if !pathStaysWithin(resolvedRoot, src) {
 			return repoSnapshot{}, fmt.Errorf("tracked path %q escapes the repository", raw)
 		}
 		info, err := os.Lstat(src)
@@ -78,7 +87,21 @@ func prepareSandboxRepoSnapshot(
 		if !info.Mode().IsRegular() {
 			continue
 		}
-		if total+info.Size() > maxBytes {
+		resolvedSrc, err := resolveExistingPath(src)
+		if err != nil {
+			return repoSnapshot{}, fmt.Errorf("resolve tracked file %q: %w", rel, err)
+		}
+		if !pathStaysWithin(resolvedRoot, resolvedSrc) {
+			return repoSnapshot{}, fmt.Errorf("tracked path %q resolves outside the repository", raw)
+		}
+		resolvedInfo, err := os.Stat(resolvedSrc)
+		if err != nil {
+			return repoSnapshot{}, fmt.Errorf("stat resolved tracked file %q: %w", rel, err)
+		}
+		if !resolvedInfo.Mode().IsRegular() {
+			continue
+		}
+		if total+resolvedInfo.Size() > maxBytes {
 			return repoSnapshot{}, fmt.Errorf(
 				"repository snapshot exceeds %d bytes before %q",
 				maxBytes,
@@ -86,18 +109,40 @@ func prepareSandboxRepoSnapshot(
 			)
 		}
 		dst := filepath.Join(snapshotRoot, filepath.FromSlash(rel))
-		if err := copyRegularFile(src, dst, info.Mode().Perm()); err != nil {
+		if err := copyRegularFile(resolvedSrc, dst, resolvedInfo.Mode().Perm()); err != nil {
 			return repoSnapshot{}, err
 		}
-		total += info.Size()
-		files++
+		total += resolvedInfo.Size()
+		fileCount++
 	}
 	cleanupOnError = false
-	return repoSnapshot{Root: snapshotRoot, Files: files, Bytes: total}, nil
+	return repoSnapshot{Root: snapshotRoot, Files: fileCount, Bytes: total}, nil
 }
 
-func gitTrackedFiles(ctx context.Context, repoRoot string) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", repoRoot, "ls-files", "-z", "--")
+func cleanSnapshotScope(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	cleaned := make([]string, 0, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for _, item := range raw {
+		rel, err := cleanTrackedPath(item)
+		if err != nil {
+			return nil, fmt.Errorf("invalid snapshot scope: %w", err)
+		}
+		if seen[rel] {
+			continue
+		}
+		seen[rel] = true
+		cleaned = append(cleaned, rel)
+	}
+	return cleaned, nil
+}
+
+func gitTrackedFiles(ctx context.Context, repoRoot string, filesScope []string) ([]string, error) {
+	args := []string{"--literal-pathspecs", "-C", repoRoot, "ls-files", "-z", "--"}
+	args = append(args, filesScope...)
+	cmd := exec.CommandContext(ctx, "git", args...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -114,14 +159,14 @@ func gitTrackedFiles(ctx context.Context, repoRoot string) ([]string, error) {
 		return nil, nil
 	}
 	parts := bytes.Split(raw, []byte{0})
-	files := make([]string, 0, len(parts))
+	tracked := make([]string, 0, len(parts))
 	for _, part := range parts {
 		if len(part) == 0 {
 			continue
 		}
-		files = append(files, string(part))
+		tracked = append(tracked, string(part))
 	}
-	return files, nil
+	return tracked, nil
 }
 
 func cleanTrackedPath(raw string) (string, error) {
@@ -159,6 +204,40 @@ func pathStaysWithin(root string, candidate string) bool {
 		return false
 	}
 	return rel == "." || rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func resolveExistingPath(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absPath)
+	if err == nil {
+		return filepath.Abs(resolved)
+	}
+	hasSymlink, inspectErr := pathHasSymlinkComponent(absPath)
+	if inspectErr != nil || hasSymlink {
+		return "", err
+	}
+	return absPath, nil
+}
+
+func pathHasSymlinkComponent(path string) (bool, error) {
+	current := filepath.Clean(path)
+	for {
+		info, err := os.Lstat(current)
+		if err != nil {
+			return false, err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return true, nil
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false, nil
+		}
+		current = parent
+	}
 }
 
 func copyRegularFile(src string, dst string, mode os.FileMode) error {

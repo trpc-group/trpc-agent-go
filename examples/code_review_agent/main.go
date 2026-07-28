@@ -86,6 +86,7 @@ type reviewInput struct {
 	source          string
 	diff            []byte
 	repoRoot        string
+	repoFiles       []string
 	sandboxRepoRoot string
 }
 
@@ -444,7 +445,7 @@ func loadReviewInput(
 	case cfg.repoPath != "":
 		runCtx, cancel := context.WithTimeout(ctx, gitDiffTimeout)
 		defer cancel()
-		args := append([]string{"diff", "HEAD", "--"}, []string(cfg.files)...)
+		args := append([]string{"--literal-pathspecs", "diff", "HEAD", "--"}, []string(cfg.files)...)
 		stdout, stderr, err := gitRunner(runCtx, cfg.repoPath, args)
 		if err != nil {
 			msg := strings.TrimSpace(string(stderr))
@@ -457,10 +458,11 @@ func loadReviewInput(
 			return reviewInput{}, fmt.Errorf("git diff output exceeds %d bytes", maxDiffBytes)
 		}
 		return reviewInput{
-			kind:     inputKindRepoPath,
-			source:   cfg.repoPath,
-			diff:     stdout,
-			repoRoot: cfg.repoPath,
+			kind:      inputKindRepoPath,
+			source:    cfg.repoPath,
+			diff:      stdout,
+			repoRoot:  cfg.repoPath,
+			repoFiles: append([]string(nil), cfg.files...),
 		}, nil
 	default:
 		return reviewInput{}, errors.New("no review input configured")

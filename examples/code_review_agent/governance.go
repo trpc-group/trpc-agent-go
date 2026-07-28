@@ -167,6 +167,7 @@ func runGovernance(
 		snapshot, snapshotErr := prepareSandboxRepoSnapshot(
 			snapshotCtx,
 			input.repoRoot,
+			input.repoFiles,
 			maxSandboxSnapshotBytes,
 		)
 		cancel()

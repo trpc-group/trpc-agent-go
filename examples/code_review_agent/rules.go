@@ -11,8 +11,10 @@ package main
 
 import (
 	"go/ast"
+	"go/importer"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -412,24 +414,95 @@ func repoFunctionContainsCleanup(
 	if fn == nil || fn.Body == nil {
 		return false
 	}
+	return functionContainsBoundCleanup(
+		fset,
+		parsedFile,
+		fn,
+		candidate.Line,
+		matcher,
+	)
+}
+
+func functionContainsBoundCleanup(
+	fset *token.FileSet,
+	parsedFile *ast.File,
+	fn *ast.FuncDecl,
+	candidateLine int,
+	matcher cleanupMatcher,
+) bool {
+	info := &types.Info{
+		Defs: make(map[*ast.Ident]types.Object),
+		Uses: make(map[*ast.Ident]types.Object),
+	}
+	config := &types.Config{
+		Importer: importer.Default(),
+		Error:    func(error) {},
+	}
+	_, _ = config.Check(parsedFile.Name.Name, fset, []*ast.File{parsedFile}, info)
+
+	candidateObject := candidateBindingObject(
+		fn.Body,
+		fset,
+		info,
+		matcher.variable,
+		candidateLine,
+	)
+	if candidateObject == nil {
+		return false
+	}
 	found := false
 	ast.Inspect(fn.Body, func(node ast.Node) bool {
 		if found {
 			return false
 		}
 		call, ok := node.(*ast.CallExpr)
-		if !ok || !matcher.callMatches(call.Fun) {
+		if !ok {
+			return true
+		}
+		receiver := matcher.callReceiver(call.Fun)
+		if receiver == nil || info.Uses[receiver] != candidateObject {
 			return true
 		}
 		cleanupLine := fset.Position(call.Pos()).Line
-		if cleanupLine <= candidate.Line ||
-			variableRedeclaredBetween(fn.Body, fset, matcher.variable, candidate.Line, cleanupLine) {
+		if cleanupLine <= candidateLine {
 			return true
 		}
 		found = true
 		return false
 	})
 	return found
+}
+
+func candidateBindingObject(
+	body *ast.BlockStmt,
+	fset *token.FileSet,
+	info *types.Info,
+	variable string,
+	line int,
+) types.Object {
+	var object types.Object
+	ast.Inspect(body, func(node ast.Node) bool {
+		if object != nil {
+			return false
+		}
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok || assign.Tok != token.DEFINE || fset.Position(assign.Pos()).Line != line {
+			return true
+		}
+		for _, lhs := range assign.Lhs {
+			ident, ok := lhs.(*ast.Ident)
+			if !ok || ident.Name != variable {
+				continue
+			}
+			object = info.Defs[ident]
+			if object == nil {
+				object = info.Uses[ident]
+			}
+			break
+		}
+		return object == nil
+	})
+	return object
 }
 
 func enclosingFunctionForLine(
@@ -451,77 +524,27 @@ func enclosingFunctionForLine(
 	return nil
 }
 
-func variableRedeclaredBetween(
-	body *ast.BlockStmt,
-	fset *token.FileSet,
-	variable string,
-	startLine int,
-	endLine int,
-) bool {
-	redeclared := false
-	ast.Inspect(body, func(node ast.Node) bool {
-		if redeclared || node == nil {
-			return false
-		}
-		line := fset.Position(node.Pos()).Line
-		if line <= startLine || line >= endLine {
-			return true
-		}
-		switch stmt := node.(type) {
-		case *ast.AssignStmt:
-			if stmt.Tok == token.DEFINE && identListContains(stmt.Lhs, variable) {
-				redeclared = true
-			}
-		case *ast.ValueSpec:
-			for _, name := range stmt.Names {
-				if name.Name == variable {
-					redeclared = true
-					break
-				}
-			}
-		case *ast.RangeStmt:
-			if stmt.Tok == token.DEFINE &&
-				(exprIdentName(stmt.Key) == variable || exprIdentName(stmt.Value) == variable) {
-				redeclared = true
-			}
-		}
-		return !redeclared
-	})
-	return redeclared
-}
-
-func identListContains(values []ast.Expr, want string) bool {
-	for _, value := range values {
-		if exprIdentName(value) == want {
-			return true
-		}
-	}
-	return false
-}
-
-func exprIdentName(expr ast.Expr) string {
-	ident, ok := expr.(*ast.Ident)
-	if !ok {
-		return ""
-	}
-	return ident.Name
-}
-
-func (m cleanupMatcher) callMatches(expr ast.Expr) bool {
+func (m cleanupMatcher) callReceiver(expr ast.Expr) *ast.Ident {
 	selector, ok := expr.(*ast.SelectorExpr)
 	if !ok || !m.methods[selector.Sel.Name] {
-		return false
+		return nil
 	}
 	if m.body {
 		inner, ok := selector.X.(*ast.SelectorExpr)
 		if !ok || inner.Sel.Name != "Body" {
-			return false
+			return nil
 		}
 		ident, ok := inner.X.(*ast.Ident)
-		return ok && ident.Name == m.variable
+		if !ok || ident.Name != m.variable {
+			return nil
+		}
+		return ident
 	}
 	ident, ok := selector.X.(*ast.Ident)
-	return ok && ident.Name == m.variable
+	if !ok || ident.Name != m.variable {
+		return nil
+	}
+	return ident
 }
 
 func hunkFunctionWindowContainsCleanup(
@@ -553,20 +576,41 @@ func hunkFunctionWindowContainsCleanup(
 			break
 		}
 	}
-	for i := candidate.HunkLineIndex + 1; i < end; i++ {
+	var source strings.Builder
+	source.WriteString("package review\n")
+	sourceLine := 1
+	candidateSourceLine := 0
+	for i := start; i < end; i++ {
 		line := hunk.Lines[i]
 		if line.Kind != diffLineAdded && line.Kind != diffLineContext {
 			continue
 		}
-		trimmed := strings.TrimSpace(line.Text)
-		if variableDeclaredInLine(trimmed, matcher.variable) {
-			return false
+		sourceLine++
+		if i == candidate.HunkLineIndex {
+			candidateSourceLine = sourceLine
 		}
-		if matcher.lineMatches(trimmed) {
-			return true
-		}
+		source.WriteString(line.Text)
+		source.WriteByte('\n')
 	}
-	return false
+	if candidateSourceLine == 0 {
+		return false
+	}
+	fset := token.NewFileSet()
+	parsedFile, err := parser.ParseFile(fset, "review_hunk.go", source.String(), 0)
+	if err != nil {
+		return false
+	}
+	fn := enclosingFunctionForLine(fset, parsedFile, candidateSourceLine)
+	if fn == nil || fn.Body == nil {
+		return false
+	}
+	return functionContainsBoundCleanup(
+		fset,
+		parsedFile,
+		fn,
+		candidateSourceLine,
+		matcher,
+	)
 }
 
 func isFunctionStartLine(line diffLine) bool {
@@ -574,38 +618,6 @@ func isFunctionStartLine(line diffLine) bool {
 		return false
 	}
 	return strings.HasPrefix(strings.TrimSpace(line.Text), "func ")
-}
-
-func variableDeclaredInLine(line string, variable string) bool {
-	if strings.HasPrefix(line, "var "+variable+" ") ||
-		strings.HasPrefix(line, "var "+variable+"=") {
-		return true
-	}
-	if !strings.Contains(line, ":=") {
-		return false
-	}
-	left := strings.SplitN(line, ":=", 2)[0]
-	for _, part := range strings.Split(left, ",") {
-		if strings.TrimSpace(part) == variable {
-			return true
-		}
-	}
-	return false
-}
-
-func (m cleanupMatcher) lineMatches(line string) bool {
-	for method := range m.methods {
-		if m.body {
-			if strings.Contains(line, m.variable+".Body."+method+"(") {
-				return true
-			}
-			continue
-		}
-		if strings.Contains(line, m.variable+"."+method+"(") {
-			return true
-		}
-	}
-	return false
 }
 
 func hunkText(hunk diffHunk) string {
