@@ -841,6 +841,18 @@ func TestToolCalls_NotConfigured(t *testing.T) {
 	require.EqualError(t, err, errKillToolNotConfigured)
 }
 
+func TestWriteStdin_UnknownSession(t *testing.T) {
+	tool := &writeStdinTool{mgr: newManager()}
+	_, err := tool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"session_id": "missing",
+			"chars":      "hello",
+		}),
+	)
+	require.ErrorIs(t, err, errUnknownSession)
+}
+
 func TestWriteStdin_CanceledBeforePoll(t *testing.T) {
 	mgr := newManager()
 	sess := newSession("session", "cat", defaultMaxLines)
