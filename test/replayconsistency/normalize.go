@@ -72,6 +72,9 @@ func canonicalJSON(raw []byte) string {
 	if len(raw) == 0 {
 		return ""
 	}
+	// Decoding to any and re-encoding is what sorts the keys: encoding/json
+	// emits map keys in sorted order at every nesting depth, including inside
+	// arrays, so no explicit sorting pass is needed.
 	var v any
 	if err := json.Unmarshal(raw, &v); err != nil {
 		return string(raw)
@@ -79,32 +82,10 @@ func canonicalJSON(raw []byte) string {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	if err := enc.Encode(sortJSON(v)); err != nil {
+	if err := enc.Encode(v); err != nil {
 		return string(raw)
 	}
 	return string(bytes.TrimRight(buf.Bytes(), "\n"))
-}
-
-// sortJSON rebuilds decoded JSON so that encoding it yields sorted keys.
-// encoding/json already emits map keys in sorted order, so this only needs to
-// recurse and hand back plain maps and slices.
-func sortJSON(v any) any {
-	switch t := v.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(t))
-		for k, val := range t {
-			out[k] = sortJSON(val)
-		}
-		return out
-	case []any:
-		out := make([]any, len(t))
-		for i, val := range t {
-			out[i] = sortJSON(val)
-		}
-		return out
-	default:
-		return v
-	}
 }
 
 // StateEntry is one state key projected for comparison.

@@ -203,7 +203,8 @@ func (o CreateSummary) apply(ctx context.Context, tgt *target) error {
 	if err != nil {
 		return err
 	}
-	tgt.summarizer.setSpec(o.Summary)
+	done := tgt.summarizer.setSpec(o.Summary)
+	defer done()
 	return tgt.session.CreateSessionSummary(ctx, sess, o.Summary.FilterKey, o.Summary.Force)
 }
 

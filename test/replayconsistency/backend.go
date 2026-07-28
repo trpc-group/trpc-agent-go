@@ -326,12 +326,24 @@ type scriptedSummarizer struct {
 	set  bool
 }
 
-// setSpec records the summary the next Summarize call must return.
-func (s *scriptedSummarizer) setSpec(spec SummarySpec) {
+// setSpec records the summary to return while one CreateSummary op is in
+// flight, and returns the func that retires it.
+//
+// The spec is scoped to the op rather than latched for the rest of the run.
+// A summarizer that keeps answering yes after its op has finished would report
+// that summarization is due for every later event, which is not what the script
+// asked for and would only show up once a case used a non-forced summary.
+func (s *scriptedSummarizer) setSpec(spec SummarySpec) func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.spec = spec
 	s.set = true
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.spec = SummarySpec{}
+		s.set = false
+	}
 }
 
 // ShouldSummarize reports whether the scenario asked for a summary.

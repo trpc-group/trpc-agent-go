@@ -105,13 +105,13 @@ func TestFaultDetection(t *testing.T) {
 			name:     "summary filed under the wrong filter key",
 			scenario: summaryLifecycle(),
 			fault:    MisfileSummaryFilterKey("not-the-requested-branch"),
-			wantPath: `summaries[filterKey=`,
+			wantPath: `summaries[filterKey="not-the-requested-branch"]`,
 		},
 		{
 			name:     "summary attributed to the wrong session",
 			scenario: summaryOwnership,
 			fault:    MisattributeSummary(ref("u-own", "s-own-other")),
-			wantPath: `sessions[ref="replay/u-own/s-own-`,
+			wantPath: `sessions[ref="replay/u-own/s-own-other"].summaries[filterKey=""]`,
 		},
 		{
 			name:     "state key lost",
@@ -129,7 +129,7 @@ func TestFaultDetection(t *testing.T) {
 			name:     "track events lost",
 			scenario: trackEvents(),
 			fault:    DropTrackEvents(),
-			wantPath: `tracks[track=`,
+			wantPath: `tracks[track="timing"]`,
 		},
 	}
 
