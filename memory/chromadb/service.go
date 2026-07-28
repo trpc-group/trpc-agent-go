@@ -33,6 +33,9 @@ const (
 	fnvPrime64  = uint64(1099511628211)
 )
 
+// scopeGate serializes one lock stripe while allowing acquisition to be canceled.
+type scopeGate chan struct{}
+
 // Service stores and searches memories through a ChromaDB REST server.
 //
 // The Service owns HTTP resources that it creates, but it never closes a client or
@@ -45,7 +48,7 @@ type Service struct {
 
 	dimensionMu    sync.Mutex
 	indexDimension int
-	writeLocks     [defaultWriteLockStripes]sync.Mutex
+	writeLocks     [defaultWriteLockStripes]scopeGate
 
 	lifecycleMu sync.RWMutex
 	enqueueMu   sync.RWMutex
@@ -79,6 +82,10 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	service := &Service{
 		opts:   opts,
 		client: client,
+	}
+	for i := range service.writeLocks {
+		service.writeLocks[i] = make(scopeGate, 1)
+		service.writeLocks[i] <- struct{}{}
 	}
 	if err := service.initialize(); err != nil {
 		client.closeIdleConnections()
@@ -447,8 +454,34 @@ func (svc *Service) endOperation() {
 	svc.lifecycleMu.RUnlock()
 }
 
-// writeLock maps one app/user scope to a stable in-process lock stripe.
-func (svc *Service) writeLock(scope recordScope) *sync.Mutex {
+// acquire waits for the gate or returns when the caller's context is canceled.
+func (gate scopeGate) acquire(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-gate:
+		if err := ctx.Err(); err != nil {
+			gate <- struct{}{}
+			return err
+		}
+		return nil
+	}
+}
+
+// release leaves a successfully acquired gate.
+func (gate scopeGate) release() {
+	select {
+	case gate <- struct{}{}:
+	default:
+		panic("chromadb scope gate released without acquisition")
+	}
+}
+
+// writeLock maps one app/user scope to a stable in-process gate stripe.
+func (svc *Service) writeLock(scope recordScope) scopeGate {
 	hash := fnvOffset64
 	for _, value := range []string{scope.appName, "\x00", scope.userID} {
 		for i := 0; i < len(value); i++ {
@@ -456,7 +489,7 @@ func (svc *Service) writeLock(scope recordScope) *sync.Mutex {
 			hash *= fnvPrime64
 		}
 	}
-	return &svc.writeLocks[hash%uint64(len(svc.writeLocks))]
+	return svc.writeLocks[hash%uint64(len(svc.writeLocks))]
 }
 
 // Tools returns the memory tools exposed by the service configuration.

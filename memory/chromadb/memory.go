@@ -36,8 +36,10 @@ func (svc *Service) ReadMemories(
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer lock.release()
 	records, err := svc.listRecords(ctx, activeScopeWhere(scope), 0)
 	if err != nil {
 		return nil, fmt.Errorf("read memories: %w", err)
@@ -200,8 +202,10 @@ func (svc *Service) AddMemory(
 	record.embedding = embedding
 
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return err
+	}
+	defer lock.release()
 	return svc.storeAddRecord(ctx, scope, record)
 }
 
@@ -338,8 +342,10 @@ func (svc *Service) UpdateMemory(
 	}
 	scope := recordScope{appName: memoryKey.AppName, userID: memoryKey.UserID}
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return err
+	}
+	defer lock.release()
 	effectiveID, err := svc.applyUpdate(ctx, command, embedding, token)
 	if err != nil {
 		return err
@@ -580,8 +586,10 @@ func (svc *Service) DeleteMemory(ctx context.Context, memoryKey memory.Key) erro
 	}
 	scope := recordScope{appName: memoryKey.AppName, userID: memoryKey.UserID}
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return err
+	}
+	defer lock.release()
 	return svc.retireRecord(ctx, scope, memoryKey.MemoryID)
 }
 
@@ -636,8 +644,10 @@ func (svc *Service) ClearMemories(ctx context.Context, userKey memory.UserKey) e
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return err
+	}
+	defer lock.release()
 	cutoff := time.Now().UTC().UnixNano()
 	if svc.opts.softDelete {
 		return svc.softDeleteAll(ctx, scope, cutoff)

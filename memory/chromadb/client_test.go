@@ -36,8 +36,9 @@ func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error)
 }
 
 type trackingBody struct {
-	reader io.Reader
-	closed bool
+	reader   io.Reader
+	closed   bool
+	closeErr error
 }
 
 func (b *trackingBody) Read(value []byte) (int, error) {
@@ -46,7 +47,7 @@ func (b *trackingBody) Read(value []byte) (int, error) {
 
 func (b *trackingBody) Close() error {
 	b.closed = true
-	return nil
+	return b.closeErr
 }
 
 func TestClientRetriesTransientStatusAndClosesBodies(t *testing.T) {
@@ -91,6 +92,35 @@ func TestClientRetriesTransientStatusAndClosesBodies(t *testing.T) {
 	for _, body := range responseBodies {
 		assert.True(t, body.closed)
 	}
+}
+
+func TestClientIgnoresCloseErrorAfterConsumedSuccess(t *testing.T) {
+	body := &trackingBody{
+		reader:   strings.NewReader(`{}`),
+		closeErr: errors.New("close response"),
+	}
+	transport := roundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusCreated,
+			Header:     make(http.Header),
+			Body:       body,
+		}, nil
+	})
+	client := &apiClient{
+		baseURL:    "http://chroma.test",
+		httpClient: &http.Client{Transport: transport},
+		headers:    make(http.Header),
+		timeout:    time.Second,
+	}
+
+	err := client.do(context.Background(), requestSpec{
+		method:         http.MethodPost,
+		path:           "/add",
+		expectedStatus: http.StatusCreated,
+	}, nil)
+
+	require.NoError(t, err)
+	assert.True(t, body.closed)
 }
 
 func TestClientRetriesTruncatedSuccessfulJSONIntoFreshResponse(t *testing.T) {

@@ -122,6 +122,15 @@ type fakeRecord struct {
 	metadata  map[string]any
 }
 
+func tryAcquireScopeGate(gate scopeGate) bool {
+	select {
+	case <-gate:
+		return true
+	default:
+		return false
+	}
+}
+
 type fakeChroma struct {
 	mu                 sync.Mutex
 	server             *httptest.Server

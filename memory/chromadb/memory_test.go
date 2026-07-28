@@ -1065,9 +1065,9 @@ func TestServiceReadMemoriesSerializesPaginationWithLocalDelete(t *testing.T) {
 	}
 	defer release()
 	lock := service.writeLock(scope)
-	readHoldsLock := !lock.TryLock()
+	readHoldsLock := !tryAcquireScopeGate(lock)
 	if !readHoldsLock {
-		lock.Unlock()
+		lock.release()
 	}
 	deleteDone := make(chan error, 1)
 	go func() {

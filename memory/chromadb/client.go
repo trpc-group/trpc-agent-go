@@ -247,7 +247,7 @@ func (cl *apiClient) doAttempt(
 	ctx context.Context,
 	spec requestSpec,
 	out any,
-) (resultErr error) {
+) error {
 	requestURL := cl.baseURL + "/" + strings.TrimLeft(spec.path, "/")
 	req, err := http.NewRequestWithContext(ctx, spec.method, requestURL, bytes.NewReader(spec.body))
 	if err != nil {
@@ -263,11 +263,7 @@ func (cl *apiClient) doAttempt(
 	if err != nil {
 		return &transportError{err: fmt.Errorf("send request: %w", err)}
 	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil && resultErr == nil {
-			resultErr = fmt.Errorf("close response: %w", err)
-		}
-	}()
+	defer resp.Body.Close()
 
 	if resp.StatusCode != spec.expectedStatus {
 		return cl.decodeAPIError(resp)

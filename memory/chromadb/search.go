@@ -66,7 +66,10 @@ func (svc *Service) SearchMemories(
 	}
 	results = svc.applyKindFallback(ctx, scope, queryEmbedding, searchOpts, results)
 	if searchOpts.HybridSearch {
-		results = svc.applyHybridSearch(ctx, scope, searchOpts, results)
+		results, err = svc.applyHybridSearch(ctx, scope, searchOpts, results)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return finalizeSearchResults(results, searchOpts), nil
 }
@@ -132,10 +135,12 @@ func (svc *Service) applyHybridSearch(
 	scope recordScope,
 	opts memory.SearchOptions,
 	dense []*memory.Entry,
-) []*memory.Entry {
+) ([]*memory.Entry, error) {
 	lock := svc.writeLock(scope)
-	lock.Lock()
-	defer lock.Unlock()
+	if err := lock.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer lock.release()
 	limit := opts.MaxResults
 	records, err := svc.listRecords(
 		ctx,
@@ -143,7 +148,10 @@ func (svc *Service) applyHybridSearch(
 		svc.opts.hybridCandidateLimit,
 	)
 	if err != nil {
-		return dense
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return dense, nil
 	}
 	entries := make([]*memory.Entry, len(records))
 	for i, record := range records {
@@ -161,9 +169,9 @@ func (svc *Service) applyHybridSearch(
 		limit,
 	)
 	if len(keyword) == 0 {
-		return dense
+		return dense, nil
 	}
-	return imemory.MergeHybridResults(dense, keyword, opts.HybridRRFK, limit)
+	return imemory.MergeHybridResults(dense, keyword, opts.HybridRRFK, limit), nil
 }
 
 // decodeQueryResponse unwraps Chroma's single-query batch and checks every column.

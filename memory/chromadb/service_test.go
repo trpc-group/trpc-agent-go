@@ -491,6 +491,45 @@ func TestServiceCloseWaitsForInflightRequest(t *testing.T) {
 	assert.NoError(t, service.Close())
 }
 
+func TestServiceScopeLockWaitHonorsContextCancellation(t *testing.T) {
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+	scope := recordScope{appName: "app", userID: "user"}
+	lock := service.writeLock(scope)
+	require.NoError(t, lock.acquire(context.Background()))
+	defer lock.release()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		result <- service.DeleteMemory(ctx, memory.Key{
+			AppName: scope.appName, UserID: scope.userID, MemoryID: "missing",
+		})
+	}()
+	<-started
+	cancel()
+
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		t.Fatal("canceled operation did not stop waiting for the scope lock")
+	}
+	assert.False(t, tryAcquireScopeGate(lock), "canceled waiter released the lock holder's token")
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- service.Close()
+	}()
+	select {
+	case err := <-closeDone:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("canceled lock waiter delayed Close")
+	}
+}
+
 func TestServiceCloseDrainsWorkerBeforeClosingHTTPClient(t *testing.T) {
 	fake := newFakeChroma()
 	defer fake.close()

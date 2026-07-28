@@ -297,9 +297,9 @@ func TestServiceSearchMemoriesSerializesHybridPaginationWithLocalDelete(t *testi
 	}
 	defer release()
 	lock := service.writeLock(scope)
-	searchHoldsLock := !lock.TryLock()
+	searchHoldsLock := !tryAcquireScopeGate(lock)
 	if !searchHoldsLock {
-		lock.Unlock()
+		lock.release()
 	}
 	deleteDone := make(chan error, 1)
 	go func() {
