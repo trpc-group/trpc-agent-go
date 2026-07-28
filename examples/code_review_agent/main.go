@@ -66,6 +66,9 @@ func run(args []string) (err error) {
 	if *executor != "container" && *executor != "local" {
 		return errors.New("--executor must be container or local")
 	}
+	if !*dryRun && *executor == "local" && strings.TrimSpace(*files) != "" {
+		return errors.New("--files requires the container executor when sandbox checks are enabled")
+	}
 
 	// Create output directory if it doesn't exist.
 	if *outputDir != "." {

@@ -64,6 +64,16 @@ func TestMainInvalidInvocationStillFails(t *testing.T) {
 	require.Contains(t, output, "either --diff-file or --repo-path is required")
 }
 
+func TestRunRejectsFilteredLocalSandbox(t *testing.T) {
+	err := run([]string{
+		"--repo-path", t.TempDir(),
+		"--executor", "local",
+		"--files", "selected.go",
+		"--dry-run=false",
+	})
+	require.ErrorContains(t, err, "--files requires the container executor")
+}
+
 func TestRunClosesStorageWhenReportWriteFails(t *testing.T) {
 	temp := t.TempDir()
 	output := filepath.Join(temp, "out")

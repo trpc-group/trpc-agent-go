@@ -11,9 +11,12 @@ package internal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,17 +44,35 @@ func gitAdd(t *testing.T, repo string, paths ...string) {
 	require.NoError(t, cmd.Run())
 }
 
+func gitCommit(t *testing.T, repo string) {
+	t.Helper()
+	cmd := exec.Command(
+		"git",
+		"-c", "user.name=test",
+		"-c", "user.email=test@example.com",
+		"commit", "-m", "test snapshot",
+	)
+	cmd.Dir = repo
+	require.NoError(t, cmd.Run())
+}
+
 func TestStageReviewSnapshotIncludesOnlyTrackedAndReviewChanges(t *testing.T) {
 	repo := initGitRepository(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.secret\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package tracked\n"), 0o600))
+	gitAdd(t, repo, ".gitignore", "tracked.go")
+	gitCommit(t, repo)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package modified\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.go"), []byte("package untracked\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "ignored.secret"), []byte("sentinel-secret\n"), 0o600))
-	gitAdd(t, repo, ".gitignore", "tracked.go")
 
 	snapshot, cleanup, err := stageReviewSnapshot(context.Background(), repo, 1024*1024)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
+	data, err := os.ReadFile(filepath.Join(snapshot, "tracked.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package modified\n", string(data))
 	_, err = os.Stat(filepath.Join(snapshot, "tracked.go"))
 	require.NoError(t, err)
 	_, err = os.Stat(filepath.Join(snapshot, "untracked.go"))
@@ -62,12 +83,148 @@ func TestStageReviewSnapshotIncludesOnlyTrackedAndReviewChanges(t *testing.T) {
 	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
+func TestStageReviewSnapshotAppliesOnlySelectedWorkspaceChanges(t *testing.T) {
+	repo := initGitRepository(t)
+	for name, content := range map[string]string{
+		"selected.go": "package baseline\n",
+		"outside.go":  "package baseline\n",
+		"deleted.go":  "package baseline\n",
+	} {
+		require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(content), 0o600))
+		gitAdd(t, repo, name)
+	}
+	gitCommit(t, repo)
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected.go"), []byte("package selected\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "outside.go"), []byte("package outside\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected_new.go"), []byte("package selected\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "outside_new.go"), []byte("package outside\n"), 0o600))
+	require.NoError(t, os.Remove(filepath.Join(repo, "deleted.go")))
+	gitAdd(t, repo, "selected.go")
+
+	snapshot, cleanup, err := stageReviewSnapshotForPaths(
+		context.Background(),
+		repo,
+		[]string{"selected.go", "selected_new.go", "deleted.go"},
+		1024*1024,
+	)
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+
+	data, err := os.ReadFile(filepath.Join(snapshot, "selected.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package selected\n", string(data))
+	data, err = os.ReadFile(filepath.Join(snapshot, "selected_new.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package selected\n", string(data))
+	_, err = os.Stat(filepath.Join(snapshot, "deleted.go"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+
+	data, err = os.ReadFile(filepath.Join(snapshot, "outside.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package baseline\n", string(data))
+	_, err = os.Stat(filepath.Join(snapshot, "outside_new.go"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestContainerSandboxReusesImmutableSnapshotWithinReview(t *testing.T) {
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected.go"), []byte("package baseline\n"), 0o600))
+	gitAdd(t, repo, "selected.go")
+	gitCommit(t, repo)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected.go"), []byte("package first\n"), 0o600))
+
+	commit, err := resolveGitCommit(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	pathspecs, err := literalGitPathspecs([]string{"selected.go"})
+	require.NoError(t, err)
+	diff, err := loadGitWorkspaceDiffAt(context.Background(), repo, pathspecs, commit)
+	require.NoError(t, err)
+	sum := sha256.Sum256(diff)
+	scope := ReviewScope{
+		FilePaths:  []string{"selected.go"},
+		HeadCommit: commit,
+		DiffSHA256: hex.EncodeToString(sum[:]),
+	}
+	sandbox := &ContainerSandbox{
+		config:   DefaultSandboxConfig(),
+		repoPath: repo,
+	}
+	t.Cleanup(sandbox.clearSnapshot)
+
+	first, err := sandbox.snapshotForReview(context.Background(), "task-1", scope)
+	require.NoError(t, err)
+	data, err := os.ReadFile(filepath.Join(first, "selected.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package first\n", string(data))
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected.go"), []byte("package second\n"), 0o600))
+	second, err := sandbox.snapshotForReview(context.Background(), "task-1", scope)
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	data, err = os.ReadFile(filepath.Join(second, "selected.go"))
+	require.NoError(t, err)
+	require.Equal(t, "package first\n", string(data))
+
+	_, err = sandbox.snapshotForReview(context.Background(), "task-2", scope)
+	require.ErrorContains(t, err, "workspace changed")
+}
+
 func TestStageReviewSnapshotRejectsOversizedInput(t *testing.T) {
 	repo := initGitRepository(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "large.go"), []byte("package large\n"), 0o600))
 	gitAdd(t, repo, "large.go")
+	gitCommit(t, repo)
 	_, _, err := stageReviewSnapshot(context.Background(), repo, 4)
 	require.ErrorContains(t, err, "exceeds")
+}
+
+func TestStageReviewSnapshotAppliesSelectedChangesBeforeSizeCheck(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		change func(t *testing.T, repo string)
+	}{
+		{
+			name: "deletion",
+			change: func(t *testing.T, repo string) {
+				require.NoError(t, os.Remove(filepath.Join(repo, "large.go")))
+			},
+		},
+		{
+			name: "shrink",
+			change: func(t *testing.T, repo string) {
+				require.NoError(t, os.WriteFile(
+					filepath.Join(repo, "large.go"),
+					[]byte("x"),
+					0o600,
+				))
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initGitRepository(t)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(repo, "large.go"),
+				[]byte(strings.Repeat("x", 128)),
+				0o600,
+			))
+			require.NoError(t, os.WriteFile(filepath.Join(repo, "keep.go"), []byte("keep"), 0o600))
+			gitAdd(t, repo, "large.go", "keep.go")
+			gitCommit(t, repo)
+			test.change(t, repo)
+
+			snapshot, cleanup, err := stageReviewSnapshotForPaths(
+				context.Background(),
+				repo,
+				[]string{"large.go"},
+				16,
+			)
+			require.NoError(t, err)
+			t.Cleanup(cleanup)
+			_, err = os.Stat(filepath.Join(snapshot, "keep.go"))
+			require.NoError(t, err)
+		})
+	}
 }
 
 func TestStageReviewSnapshotRejectsTrackedSymlink(t *testing.T) {
@@ -79,8 +236,63 @@ func TestStageReviewSnapshotRejectsTrackedSymlink(t *testing.T) {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	gitAdd(t, repo, "linked.go")
+	gitCommit(t, repo)
 	_, _, err := stageReviewSnapshot(context.Background(), repo, 1024*1024)
 	require.ErrorContains(t, err, "not a regular file")
+}
+
+func TestStageReviewSnapshotAllowsSelectedSymlinkRemoval(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink behavior is platform-dependent on Windows")
+	}
+	for _, test := range []struct {
+		name        string
+		replaceLink bool
+	}{
+		{name: "delete"},
+		{name: "replace with regular file", replaceLink: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			repo := initGitRepository(t)
+			require.NoError(t, os.WriteFile(
+				filepath.Join(repo, "keep.go"),
+				[]byte("package keep\n"),
+				0o600,
+			))
+			link := filepath.Join(repo, "linked.go")
+			require.NoError(t, os.Symlink("keep.go", link))
+			gitAdd(t, repo, "keep.go", "linked.go")
+			gitCommit(t, repo)
+			require.NoError(t, os.Remove(link))
+			if test.replaceLink {
+				require.NoError(t, os.WriteFile(
+					link,
+					[]byte("package replacement\n"),
+					0o600,
+				))
+			}
+
+			snapshot, cleanup, err := stageReviewSnapshotForPaths(
+				context.Background(),
+				repo,
+				[]string{"linked.go"},
+				1024*1024,
+			)
+			require.NoError(t, err)
+			t.Cleanup(cleanup)
+			if test.replaceLink {
+				info, err := os.Lstat(filepath.Join(snapshot, "linked.go"))
+				require.NoError(t, err)
+				require.True(t, info.Mode().IsRegular())
+				data, err := os.ReadFile(filepath.Join(snapshot, "linked.go"))
+				require.NoError(t, err)
+				require.Equal(t, "package replacement\n", string(data))
+			} else {
+				_, err := os.Lstat(filepath.Join(snapshot, "linked.go"))
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+		})
+	}
 }
 
 func TestHardenedHostConfigEnforcesResources(t *testing.T) {
@@ -171,7 +383,7 @@ func TestDefaultDependencySetupUsesVendoredSnapshot(t *testing.T) {
 	require.NoError(t, cmd.Run(), "vendored external dependency was not usable by the isolated default")
 }
 
-func TestDefaultDependencySetupPlansIsolatedDownload(t *testing.T) {
+func TestDefaultDependencySetupPlansFailClosedPreparation(t *testing.T) {
 	repo := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/reviewed\n\ngo 1.21\n\nrequire example.com/dependency v1.0.0\n"), 0o600))
 
@@ -186,9 +398,10 @@ func TestDefaultDependencySetupPlansIsolatedDownload(t *testing.T) {
 	require.False(t, vendor)
 }
 
-func TestSandboxDockerfileSelectsNonRootUser(t *testing.T) {
+func TestSandboxDockerfileUsesCompatibleNonRootImage(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join("..", "skills", "code-review", "sandbox", "Dockerfile"))
 	require.NoError(t, err)
+	require.Contains(t, string(data), "FROM golang:1.24")
 	require.Contains(t, string(data), "USER reviewer:reviewer")
 }
 
@@ -201,6 +414,9 @@ func TestContainerSandboxRunsWithUnprivilegedIdentity(t *testing.T) {
 	}
 
 	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "README.md"), []byte("sandbox fixture\n"), 0o600))
+	gitAdd(t, repo, "README.md")
+	gitCommit(t, repo)
 	dockerfilePath, err := filepath.Abs(filepath.Join("..", "skills", "code-review", "sandbox"))
 	require.NoError(t, err)
 	sandbox, err := NewContainerSandbox(DefaultSandboxConfig(), repo, dockerfilePath)

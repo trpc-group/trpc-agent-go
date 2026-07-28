@@ -62,6 +62,14 @@ type SandboxConfig struct {
 	AllowedEnvVars     []string // whitelist of env vars to pass through
 }
 
+// ReviewScope binds sandbox execution to the repository state whose diff was
+// parsed by the review agent.
+type ReviewScope struct {
+	FilePaths  []string
+	HeadCommit string
+	DiffSHA256 string
+}
+
 // DefaultSandboxConfig returns safe default sandbox settings.
 func DefaultSandboxConfig() SandboxConfig {
 	return SandboxConfig{
@@ -111,7 +119,14 @@ type Sandbox struct {
 // SandboxExecutor is implemented by isolated production runtimes and by the
 // local development fallback.
 type SandboxExecutor interface {
-	Execute(context.Context, string, string, Decision, string) *SandboxRun
+	ExecuteReview(
+		context.Context,
+		string,
+		string,
+		Decision,
+		string,
+		ReviewScope,
+	) *SandboxRun
 }
 
 // NewSandbox creates a Sandbox with the given config.
@@ -204,6 +219,33 @@ func (s *Sandbox) Execute(
 
 	run.Status = SandboxStatusSuccess
 	return run
+}
+
+// ExecuteReview runs the local development fallback. Unlike the production
+// container executor, this fallback runs in its configured working directory
+// and therefore does not provide workspace snapshot isolation.
+func (s *Sandbox) ExecuteReview(
+	ctx context.Context,
+	taskID string,
+	command string,
+	decision Decision,
+	reason string,
+	scope ReviewScope,
+) *SandboxRun {
+	if len(scope.FilePaths) > 0 {
+		return &SandboxRun{
+			ID:                 uuid.NewString(),
+			TaskID:             taskID,
+			Command:            command,
+			PermissionDecision: decision,
+			PermissionReason:   reason,
+			Status:             SandboxStatusError,
+			ExitCode:           -1,
+			Error: "local executor cannot isolate a filtered review; " +
+				"use the container executor or omit --files",
+		}
+	}
+	return s.Execute(ctx, taskID, command, decision, reason)
 }
 
 // buildEnv returns a filtered environment containing only whitelisted

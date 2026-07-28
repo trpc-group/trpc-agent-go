@@ -13,11 +13,13 @@ package internal
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -27,6 +29,17 @@ const maxInputDiffBytes = 16 * 1024 * 1024
 // diff. FilePaths limits a workspace review to the named repository-relative
 // paths. Git is invoked without external diff helpers or optional locks.
 func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, error) {
+	return loadReviewInputAt(ctx, input, "HEAD")
+}
+
+// loadReviewInputAt is the pinned-commit variant used by Review. Resolving
+// HEAD before reading the workspace prevents a concurrent ref update from
+// changing the baseline between diff capture and sandbox construction.
+func loadReviewInputAt(
+	ctx context.Context,
+	input ReviewInput,
+	baseCommit string,
+) ([]byte, string, error) {
 	if input.DiffFile != "" {
 		info, err := os.Stat(input.DiffFile)
 		if err != nil {
@@ -56,28 +69,66 @@ func LoadReviewInput(ctx context.Context, input ReviewInput) ([]byte, string, er
 	if err != nil {
 		return nil, "", err
 	}
-	args := []string{"-c", "diff.external=", "diff", "--no-ext-diff", "--no-textconv", "HEAD", "--"}
+	if baseCommit == "" {
+		return nil, "", fmt.Errorf("workspace review base commit is required")
+	}
+	data, err := loadGitWorkspaceDiffAt(ctx, repo, pathspecs, baseCommit)
+	if err != nil {
+		return nil, "", err
+	}
+	return data, "git-workspace", nil
+}
+
+func loadGitWorkspaceDiffAt(
+	ctx context.Context,
+	repo string,
+	pathspecs []string,
+	baseCommit string,
+) ([]byte, error) {
+	commit, err := resolveGitCommit(ctx, repo, baseCommit)
+	if err != nil {
+		return nil, err
+	}
+	view, cleanup, err := newIsolatedGitView(ctx, repo, commit)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+	args := []string{
+		"diff",
+		"--no-ext-diff",
+		"--no-textconv",
+		"--ignore-submodules=dirty",
+		"--",
+	}
 	args = append(args, pathspecs...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
-	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = view.env
 	var stdout, stderr limitedBuffer
 	stdout.limit = maxInputDiffBytes
 	stderr.limit = 64 * 1024
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return nil, "", fmt.Errorf("read git workspace diff: %w: %s", err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("read git workspace diff: %w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	if stdout.exceeded {
-		return nil, "", fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
+		return nil, fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
 	}
-	if err := appendUntrackedDiffs(ctx, repo, pathspecs, &stdout); err != nil {
-		return nil, "", err
+	if err := appendUntrackedDiffsWithEnv(
+		ctx,
+		repo,
+		pathspecs,
+		&stdout,
+		maxInputDiffBytes,
+		view.env,
+	); err != nil {
+		return nil, err
 	}
 	if stdout.exceeded {
-		return nil, "", fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
+		return nil, fmt.Errorf("git diff exceeds %d-byte limit", maxInputDiffBytes)
 	}
-	return stdout.Bytes(), "git-workspace", nil
+	return append([]byte(nil), stdout.Bytes()...), nil
 }
 
 func literalGitPathspecs(filePaths []string) ([]string, error) {
@@ -112,11 +163,29 @@ func appendUntrackedDiffsWithPathLimit(
 	output *limitedBuffer,
 	pathListLimit int,
 ) error {
+	return appendUntrackedDiffsWithEnv(
+		ctx,
+		repo,
+		pathspecs,
+		output,
+		pathListLimit,
+		isolatedGitEnv(),
+	)
+}
+
+func appendUntrackedDiffsWithEnv(
+	ctx context.Context,
+	repo string,
+	pathspecs []string,
+	output *limitedBuffer,
+	pathListLimit int,
+	env []string,
+) error {
 	args := []string{"ls-files", "--others", "--exclude-standard", "-z", "--"}
 	args = append(args, pathspecs...)
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repo
-	cmd.Env = append(filteredGitEnv(), "GIT_OPTIONAL_LOCKS=0")
+	cmd.Env = env
 	var names, stderr limitedBuffer
 	names.limit = pathListLimit
 	stderr.limit = 64 * 1024
@@ -180,19 +249,209 @@ func appendUntrackedDiffsWithPathLimit(
 		if bytes.IndexByte(content, 0) >= 0 {
 			return fmt.Errorf("untracked binary file %q cannot be reviewed safely", name)
 		}
-		lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
-		if len(content) == 0 {
-			lines = nil
-		}
 		oldToken := quoteGitPathToken("a/" + name)
 		newToken := quoteGitPathToken("b/" + name)
-		header := fmt.Sprintf("diff --git %s %s\nnew file mode 100644\n--- /dev/null\n+++ %s\n@@ -0,0 +1,%d @@\n", oldToken, newToken, newToken, len(lines))
+		gitMode := "100644"
+		if openedInfo.Mode()&0o111 != 0 {
+			gitMode = "100755"
+		}
+		lineCount := bytes.Count(content, []byte{'\n'})
+		if len(content) > 0 && content[len(content)-1] != '\n' {
+			lineCount++
+		}
+		header := fmt.Sprintf(
+			"diff --git %s %s\nnew file mode %s\n--- /dev/null\n+++ %s\n@@ -0,0 +1,%d @@\n",
+			oldToken,
+			newToken,
+			gitMode,
+			newToken,
+			lineCount,
+		)
 		_, _ = output.Write([]byte(header))
-		for _, line := range lines {
-			_, _ = output.Write([]byte("+" + strings.TrimSuffix(line, "\r") + "\n"))
+		for len(content) > 0 {
+			newline := bytes.IndexByte(content, '\n')
+			_, _ = output.Write([]byte("+"))
+			if newline < 0 {
+				_, _ = output.Write(content)
+				_, _ = output.Write([]byte("\n\\ No newline at end of file\n"))
+				break
+			}
+			_, _ = output.Write(content[:newline+1])
+			content = content[newline+1:]
 		}
 	}
 	return nil
+}
+
+type isolatedGitView struct {
+	env []string
+}
+
+// newIsolatedGitView creates throwaway Git metadata whose index is the fixed
+// review commit. Host repository config is deliberately not loaded: a
+// repository can otherwise execute core.fsmonitor or clean/process filters
+// while a supposedly read-only diff is captured. Attributes come from an
+// empty tree so built-in conversions cannot make two different workspace byte
+// streams produce the same review diff.
+func newIsolatedGitView(
+	ctx context.Context,
+	root string,
+	commit string,
+) (*isolatedGitView, func(), error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("resolve repository: %w", err)
+	}
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("resolve repository links: %w", err)
+	}
+	objectDir, err := repositoryObjectDir(ctx, root)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if strings.ContainsAny(objectDir, "\r\n") {
+		return nil, func() {}, fmt.Errorf("Git object directory contains a line break")
+	}
+	gitDir, err := os.MkdirTemp("", "code-review-git-")
+	if err != nil {
+		return nil, func() {}, fmt.Errorf("create isolated Git metadata: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(gitDir) }
+	if err := os.MkdirAll(filepath.Join(gitDir, "objects", "info"), 0o700); err != nil {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("create isolated Git object directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(gitDir, "refs", "heads"), 0o700); err != nil {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("create isolated Git refs: %w", err)
+	}
+	coreCompatibility := ""
+	if runtime.GOOS == "windows" {
+		coreCompatibility = "\tfilemode = false\n\tignorecase = true\n"
+	}
+	config := "[core]\n\trepositoryformatversion = 0\n\tbare = false\n" +
+		coreCompatibility
+	switch len(commit) {
+	case 40:
+	case 64:
+		config = "[core]\n\trepositoryformatversion = 1\n\tbare = false\n" +
+			coreCompatibility +
+			"[extensions]\n\tobjectformat = sha256\n"
+	default:
+		cleanup()
+		return nil, func() {}, fmt.Errorf("unsupported Git object ID length")
+	}
+	for path, content := range map[string]string{
+		"HEAD":   "ref: refs/heads/isolated\n",
+		"config": config,
+		filepath.Join("objects", "info", "alternates"): objectDir + "\n",
+	} {
+		if err := os.WriteFile(filepath.Join(gitDir, path), []byte(content), 0o600); err != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("initialize isolated Git metadata: %w", err)
+		}
+	}
+	env := append(
+		isolatedGitEnv(),
+		"GIT_DIR="+gitDir,
+		"GIT_WORK_TREE="+root,
+		"GIT_INDEX_FILE="+filepath.Join(gitDir, "index"),
+	)
+	emptyTree, err := runIsolatedGit(
+		ctx,
+		root,
+		env,
+		strings.NewReader(""),
+		"create empty attribute tree",
+		"hash-object",
+		"-w",
+		"-t",
+		"tree",
+		"--stdin",
+	)
+	if err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	emptyTree = strings.TrimSpace(emptyTree)
+	if _, err := hex.DecodeString(emptyTree); err != nil || len(emptyTree) != len(commit) {
+		cleanup()
+		return nil, func() {}, fmt.Errorf("Git returned invalid empty tree ID")
+	}
+	env = append(env, "GIT_ATTR_SOURCE="+emptyTree)
+	if _, err := runIsolatedGit(
+		ctx,
+		root,
+		env,
+		nil,
+		"initialize isolated review index",
+		"read-tree",
+		commit,
+	); err != nil {
+		cleanup()
+		return nil, func() {}, err
+	}
+	return &isolatedGitView{env: env}, cleanup, nil
+}
+
+func repositoryObjectDir(ctx context.Context, root string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--git-path", "objects")
+	cmd.Dir = root
+	cmd.Env = isolatedGitEnv()
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = 16*1024, 64*1024
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf(
+			"resolve Git object directory: %w: %s",
+			err,
+			strings.TrimSpace(stderr.String()),
+		)
+	}
+	if stdout.exceeded {
+		return "", fmt.Errorf("Git object directory exceeds output limit")
+	}
+	objectDir := strings.TrimSpace(stdout.String())
+	if !filepath.IsAbs(objectDir) {
+		objectDir = filepath.Join(root, objectDir)
+	}
+	objectDir, err := filepath.EvalSymlinks(objectDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve Git object directory links: %w", err)
+	}
+	info, err := os.Stat(objectDir)
+	if err != nil {
+		return "", fmt.Errorf("stat Git object directory: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("Git object directory is not a directory")
+	}
+	return objectDir, nil
+}
+
+func runIsolatedGit(
+	ctx context.Context,
+	root string,
+	env []string,
+	stdin io.Reader,
+	operation string,
+	args ...string,
+) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = root
+	cmd.Env = env
+	cmd.Stdin = stdin
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = 16*1024, 64*1024
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%s: %w: %s", operation, err, strings.TrimSpace(stderr.String()))
+	}
+	if stdout.exceeded {
+		return "", fmt.Errorf("%s output exceeds limit", operation)
+	}
+	return stdout.String(), nil
 }
 
 // quoteGitPathToken emits the byte-oriented C quoting used by Git diff
@@ -291,4 +550,54 @@ func filteredGitEnv() []string {
 		}
 	}
 	return env
+}
+
+func isolatedGitEnv() []string {
+	return append(
+		filteredGitEnv(),
+		"GIT_CONFIG_GLOBAL="+os.DevNull,
+		"GIT_CONFIG_SYSTEM="+os.DevNull,
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_COUNT=5",
+		"GIT_CONFIG_KEY_0=core.fsmonitor",
+		"GIT_CONFIG_VALUE_0=",
+		"GIT_CONFIG_KEY_1=core.hooksPath",
+		"GIT_CONFIG_VALUE_1="+os.DevNull,
+		"GIT_CONFIG_KEY_2=diff.external",
+		"GIT_CONFIG_VALUE_2=",
+		"GIT_CONFIG_KEY_3=protocol.allow",
+		"GIT_CONFIG_VALUE_3=never",
+		"GIT_CONFIG_KEY_4=submodule.recurse",
+		"GIT_CONFIG_VALUE_4=false",
+		"GIT_OPTIONAL_LOCKS=0",
+		"GIT_ALLOW_PROTOCOL=",
+		"GIT_NO_LAZY_FETCH=1",
+		"GIT_NO_REPLACE_OBJECTS=1",
+	)
+}
+
+func resolveGitCommit(ctx context.Context, root, ref string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--verify", ref+"^{commit}")
+	cmd.Dir = root
+	cmd.Env = isolatedGitEnv()
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = 1024, 64*1024
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf(
+			"resolve Git commit %q: %w: %s",
+			ref,
+			err,
+			strings.TrimSpace(stderr.String()),
+		)
+	}
+	if stdout.exceeded {
+		return "", fmt.Errorf("resolved Git commit %q exceeds output limit", ref)
+	}
+	commit := strings.TrimSpace(stdout.String())
+	raw, err := hex.DecodeString(commit)
+	if err != nil || (len(raw) != 20 && len(raw) != 32) {
+		return "", fmt.Errorf("Git returned invalid commit ID for %q", ref)
+	}
+	return commit, nil
 }

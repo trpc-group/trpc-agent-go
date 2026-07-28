@@ -37,8 +37,8 @@ CGO_ENABLED=1 go test ./...
 |------|--------|------|
 | `--diff-file` | "" | unified diff 文件；与 `--repo-path` 至少提供一个 |
 | `--repo-path` | "" | Git 工作区输入及沙箱检查使用的仓库路径 |
-| `--files` | "" | 逗号分隔的仓库相对路径过滤器 |
-| `--executor` | container | 沙箱执行器：container\|local（local 仅供开发） |
+| `--files` | "" | 逗号分隔的仓库相对路径过滤器；沙箱仅叠加这些路径的工作区改动 |
+| `--executor` | container | 沙箱执行器：container\|local（local 仅供开发，且拒绝 `--files` 过滤评审） |
 | `--dockerfile` | 自动探测 | 自定义容器 Dockerfile 所在目录 |
 | `--trusted-module-cache` | false | 只对可信仓库只读挂载宿主机 Go 模块缓存；默认使用容器内空缓存 |
 | `--dry-run` | true | 仅运行规则，跳过沙箱执行 |
@@ -105,8 +105,10 @@ CGO_ENABLED=1 go test ./...
 - 高风险命令（rm、curl、wget）被 PermissionPolicy 拒绝
 - 需审查命令（docker、git push）进入 needs_human_review
 - 默认使用无网络、非特权、只读根文件系统的 `codeexecutor/container` 隔离 workspace；本地执行仅为显式 fallback
-- 只复制 Git 已跟踪和未忽略的工作区文件；拒绝符号链接、特殊文件、越界路径和超出大小上限的快照
-- 默认不暴露宿主机 Go 模块缓存；可信仓库可显式使用 `--trusted-module-cache`
+- 沙箱固定一次 commit/工作区快照并在 vet/test 间复用；`--files` 模式以 commit 为基线，仅叠加选中路径的改动
+- 宿主侧 Git 检查使用独立临时 config/index，不加载被审仓库的 fsmonitor 或 clean/process filter
+- 拒绝符号链接、特殊文件、越界路径和超出大小上限的快照，并禁止宿主 Git 为缺失对象联网
+- 默认不暴露宿主机 Go 模块缓存；非 vendor 外部依赖会失败关闭，可信仓库可显式使用 `--trusted-module-cache`
 - 沙箱超时 30 秒；超时会回收整个容器，并限制 CPU、内存、PID 和 workspace 大小
 - stdout/stderr 在读取时分别限制为 1MB，超限内容只丢弃而不继续占用内存
 - 环境变量白名单（仅 PATH、HOME、GOROOT、GOPATH）

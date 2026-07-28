@@ -66,6 +66,22 @@ func TestSandbox_ExecuteBlocked(t *testing.T) {
 	require.Contains(t, run.Error, "blocked")
 }
 
+func TestSandboxExecuteReviewRejectsFilteredLocalExecution(t *testing.T) {
+	sandbox := NewDefaultSandbox()
+	run := sandbox.ExecuteReview(
+		context.Background(),
+		"task-filtered",
+		platformCommand("printf unsafe", "cmd /c echo unsafe"),
+		DecisionAllow,
+		"",
+		ReviewScope{FilePaths: []string{"selected.go"}},
+	)
+	require.Equal(t, SandboxStatusError, run.Status)
+	require.Equal(t, -1, run.ExitCode)
+	require.Contains(t, run.Error, "cannot isolate a filtered review")
+	require.Empty(t, run.Stdout)
+}
+
 func TestSandbox_ExecuteTimeout(t *testing.T) {
 	sandbox := NewSandbox(SandboxConfig{
 		Timeout:        100 * time.Millisecond,

@@ -22,6 +22,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsolatedGitEnvironmentDisablesHostSideObjectFetching(t *testing.T) {
+	env := isolatedGitEnv()
+	require.Contains(t, env, "GIT_NO_LAZY_FETCH=1")
+	require.Contains(t, env, "GIT_NO_REPLACE_OBJECTS=1")
+	require.Contains(t, env, "GIT_OPTIONAL_LOCKS=0")
+	require.Contains(t, env, "GIT_ALLOW_PROTOCOL=")
+	require.Contains(t, env, "GIT_CONFIG_KEY_0=core.fsmonitor")
+	require.Contains(t, env, "GIT_CONFIG_VALUE_0=")
+}
+
 func TestLoadReviewInputDiffFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "change.diff")
 	require.NoError(t, os.WriteFile(path, []byte("diff --git a/a.go b/a.go\n"), 0o600))
@@ -112,6 +122,125 @@ func TestLoadReviewInputIncludesUntrackedFiles(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(data), "new file mode")
 	require.Contains(t, string(data), "+var apiKey")
+}
+
+func TestLoadReviewInputPreservesUntrackedBytesAndMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode bits are not portable on Windows")
+	}
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "README.md"),
+		[]byte("tracked\n"),
+		0o600,
+	))
+	gitAdd(t, repo, "README.md")
+	gitCommit(t, repo)
+	path := filepath.Join(repo, "new.go")
+
+	require.NoError(t, os.WriteFile(path, []byte("package demo\r\n"), 0o600))
+	crlf, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.Contains(t, string(crlf), "new file mode 100644")
+	require.Contains(t, string(crlf), "+package demo\r\n")
+
+	require.NoError(t, os.WriteFile(path, []byte("package demo\n"), 0o600))
+	lf, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.NotEqual(t, crlf, lf)
+
+	require.NoError(t, os.WriteFile(path, []byte("package demo"), 0o600))
+	noFinalNewline, _, err := LoadReviewInput(
+		context.Background(),
+		ReviewInput{RepoPath: repo},
+	)
+	require.NoError(t, err)
+	require.Contains(t, string(noFinalNewline), "\\ No newline at end of file")
+	require.NotEqual(t, lf, noFinalNewline)
+
+	require.NoError(t, os.Chmod(path, 0o700))
+	executable, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.Contains(t, string(executable), "new file mode 100755")
+	require.NotEqual(t, noFinalNewline, executable)
+}
+
+func TestLoadReviewInputDoesNotExecuteRepositoryFSMonitor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX hook script")
+	}
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "review.go"),
+		[]byte("package review\n"),
+		0o600,
+	))
+	gitAdd(t, repo, "review.go")
+	gitCommit(t, repo)
+	hook := filepath.Join(t.TempDir(), "fsmonitor.sh")
+	require.NoError(t, os.WriteFile(
+		hook,
+		[]byte("#!/bin/sh\n: > \"$0.called\"\nexit 0\n"),
+		0o700,
+	))
+	configure := exec.Command("git", "config", "core.fsmonitor", hook)
+	configure.Dir = repo
+	require.NoError(t, configure.Run())
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "review.go"),
+		[]byte("package review\n\nconst Changed = true\n"),
+		0o600,
+	))
+
+	data, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.Contains(t, string(data), "Changed")
+	_, err = os.Stat(hook + ".called")
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestLoadReviewInputDoesNotExecuteRepositoryCleanFilter(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX filter script")
+	}
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, ".gitattributes"),
+		[]byte("*.go filter=evil\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "review.go"),
+		[]byte("package review\n"),
+		0o600,
+	))
+	gitAdd(t, repo, ".gitattributes", "review.go")
+	gitCommit(t, repo)
+	filter := filepath.Join(t.TempDir(), "clean-filter.sh")
+	require.NoError(t, os.WriteFile(
+		filter,
+		[]byte("#!/bin/sh\n: > \"$0.called\"\ncat\n"),
+		0o700,
+	))
+	for _, setting := range [][]string{
+		{"filter.evil.clean", filter},
+		{"filter.evil.required", "true"},
+	} {
+		configure := exec.Command("git", "config", setting[0], setting[1])
+		configure.Dir = repo
+		require.NoError(t, configure.Run())
+	}
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "review.go"),
+		[]byte("package review\n\nconst Changed = true\n"),
+		0o600,
+	))
+
+	data, _, err := LoadReviewInput(context.Background(), ReviewInput{RepoPath: repo})
+	require.NoError(t, err)
+	require.Contains(t, string(data), "Changed")
+	_, err = os.Stat(filter + ".called")
+	require.ErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestAppendUntrackedDiffsBoundsManySmallPaths(t *testing.T) {

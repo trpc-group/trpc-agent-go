@@ -12,9 +12,10 @@ package internal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -125,7 +126,18 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	taskPersisted = true
 
 	// 2. Parse diff.
-	diffContent, inputType, err := LoadReviewInput(ctx, input)
+	var reviewCommit string
+	if input.RepoPath != "" && (input.DiffFile == "" || !input.DryRun) {
+		root, resolveErr := filepath.Abs(input.RepoPath)
+		if resolveErr != nil {
+			return nil, fmt.Errorf("resolve repository path: %w", resolveErr)
+		}
+		reviewCommit, resolveErr = resolveGitCommit(ctx, root, "HEAD")
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+	}
+	diffContent, inputType, err := loadReviewInputAt(ctx, input, reviewCommit)
 	if err != nil {
 		return nil, err
 	}
@@ -179,9 +191,20 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 	var sandboxRuns []SandboxRun
 
 	if !input.DryRun && input.RepoPath != "" {
-		sandboxCommands, err := a.determineSandboxCommands(files, input.RepoPath)
+		sandboxCommands, err := a.determineSandboxCommandsAt(
+			ctx,
+			files,
+			input.RepoPath,
+			reviewCommit,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("determine sandbox commands: %w", err)
+		}
+		diffHash := sha256.Sum256(diffContent)
+		reviewScope := ReviewScope{
+			FilePaths:  append([]string(nil), input.FilePaths...),
+			HeadCommit: reviewCommit,
+			DiffSHA256: hex.EncodeToString(diffHash[:]),
 		}
 
 		for _, cmd := range sandboxCommands {
@@ -207,7 +230,18 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 
 			// Execute in sandbox.
 			monitor.StartSandbox()
-			run := a.sandbox.Execute(ctx, taskID, cmd, decision, reason)
+			run := a.sandbox.ExecuteReview(
+				ctx,
+				taskID,
+				cmd,
+				decision,
+				reason,
+				ReviewScope{
+					FilePaths:  append([]string(nil), reviewScope.FilePaths...),
+					HeadCommit: reviewScope.HeadCommit,
+					DiffSHA256: reviewScope.DiffSHA256,
+				},
+			)
 			sandboxRuns = append(sandboxRuns, *run)
 			monitor.EndSandbox()
 
@@ -295,18 +329,91 @@ func (a *ReviewAgent) Review(ctx context.Context, input ReviewInput) (result *Re
 
 // determineSandboxCommands figures out what commands to run in the
 // sandbox based on the changed files.
-func (a *ReviewAgent) determineSandboxCommands(files []DiffFile, repoPath string) ([]string, error) {
+func (a *ReviewAgent) determineSandboxCommands(
+	ctx context.Context,
+	files []DiffFile,
+	repoPath string,
+) ([]string, string, error) {
+	root, err := filepath.Abs(repoPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve repository path: %w", err)
+	}
+	headCommit, err := resolveGitCommit(ctx, root, "HEAD")
+	if err != nil {
+		return nil, "", err
+	}
+	commands, err := a.determineSandboxCommandsAt(
+		ctx,
+		files,
+		root,
+		headCommit,
+	)
+	if err != nil {
+		return nil, "", err
+	}
+	return commands, headCommit, nil
+}
+
+func (a *ReviewAgent) determineSandboxCommandsAt(
+	ctx context.Context,
+	files []DiffFile,
+	repoPath string,
+	headCommit string,
+) ([]string, error) {
 	root, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve repository path: %w", err)
 	}
-	modules := map[string]bool{}
-	for _, f := range files {
-		base := filepath.Base(filepath.FromSlash(f.Path))
-		if !strings.HasSuffix(f.Path, ".go") && base != "go.mod" && base != "go.sum" {
-			continue
+	selectedModuleStates := make(map[string]bool)
+	for _, file := range files {
+		if file.IsRename && file.OldPath != "" &&
+			filepath.Base(filepath.FromSlash(file.OldPath)) == "go.mod" {
+			clean, err := cleanChangedPath(file.OldPath)
+			if err != nil {
+				return nil, err
+			}
+			selectedModuleStates[filepath.ToSlash(clean)] = false
 		}
-		module, err := owningGoModule(root, f.Path)
+		if filepath.Base(filepath.FromSlash(file.Path)) == "go.mod" {
+			clean, err := cleanChangedPath(file.Path)
+			if err != nil {
+				return nil, err
+			}
+			selectedModuleStates[filepath.ToSlash(clean)] = !file.IsDeleted
+		}
+	}
+	var ownerPaths []string
+	for _, f := range files {
+		paths := []string{f.Path}
+		if f.IsRename && f.OldPath != "" && f.OldPath != f.Path {
+			paths = append(paths, f.OldPath)
+		}
+		for _, path := range paths {
+			base := filepath.Base(filepath.FromSlash(path))
+			if !strings.HasSuffix(path, ".go") && base != "go.mod" && base != "go.sum" {
+				continue
+			}
+			ownerPaths = append(ownerPaths, path)
+		}
+	}
+	if len(ownerPaths) == 0 {
+		return nil, nil
+	}
+	headModuleStates, err := loadModuleStatesAtCommit(
+		ctx,
+		root,
+		headCommit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	modules := map[string]bool{}
+	for _, path := range ownerPaths {
+		module, err := owningGoModule(
+			path,
+			selectedModuleStates,
+			headModuleStates,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -332,19 +439,32 @@ func (a *ReviewAgent) determineSandboxCommands(files []DiffFile, repoPath string
 	return cmds, nil
 }
 
-func owningGoModule(root, changedPath string) (string, error) {
+func cleanChangedPath(changedPath string) (string, error) {
 	clean := filepath.Clean(filepath.FromSlash(changedPath))
 	if filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("changed Go file escapes repository: %q", changedPath)
 	}
+	return clean, nil
+}
+
+func owningGoModule(
+	changedPath string,
+	selectedModuleStates map[string]bool,
+	headModuleStates map[string]bool,
+) (string, error) {
+	clean, err := cleanChangedPath(changedPath)
+	if err != nil {
+		return "", err
+	}
 	dir := filepath.Dir(clean)
 	for {
-		info, err := os.Stat(filepath.Join(root, dir, "go.mod"))
-		if err == nil && !info.IsDir() {
+		modulePath := filepath.ToSlash(filepath.Join(dir, "go.mod"))
+		exists, selected := selectedModuleStates[modulePath]
+		if selected && exists {
 			return dir, nil
 		}
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("inspect module for %q: %w", changedPath, err)
+		if !selected && headModuleStates[modulePath] {
+			return dir, nil
 		}
 		if dir == "." {
 			break
@@ -352,4 +472,46 @@ func owningGoModule(root, changedPath string) (string, error) {
 		dir = filepath.Dir(dir)
 	}
 	return "", fmt.Errorf("no go.mod owns changed Go file %q", changedPath)
+}
+
+func loadModuleStatesAtCommit(
+	ctx context.Context,
+	root string,
+	headCommit string,
+) (map[string]bool, error) {
+	output, err := runSnapshotGitList(
+		ctx,
+		root,
+		[]string{"ls-tree", "-r", "-z", "--full-tree", headCommit},
+		"list HEAD files for module discovery",
+	)
+	if err != nil {
+		return nil, err
+	}
+	modules := make(map[string]bool)
+	for _, record := range strings.Split(string(output), "\x00") {
+		if record == "" {
+			continue
+		}
+		metadata, rawPath, ok := strings.Cut(record, "\t")
+		if !ok {
+			return nil, fmt.Errorf("malformed HEAD tree entry during module discovery")
+		}
+		if filepath.Base(filepath.FromSlash(rawPath)) != "go.mod" {
+			continue
+		}
+		fields := strings.Fields(metadata)
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("malformed HEAD tree metadata for %q", rawPath)
+		}
+		if fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") {
+			return nil, fmt.Errorf("HEAD path %q is not a regular file", rawPath)
+		}
+		clean, err := cleanChangedPath(rawPath)
+		if err != nil {
+			return nil, err
+		}
+		modules[filepath.ToSlash(clean)] = true
+	}
+	return modules, nil
 }

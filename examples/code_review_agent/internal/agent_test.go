@@ -256,18 +256,180 @@ func TestAgentRejectsDuplicateTaskIDWithoutReplacingGraph(t *testing.T) {
 	require.Equal(t, firstFindings, after)
 }
 
+type recordingScopedSandbox struct {
+	scopes       [][]string
+	reviewScopes []ReviewScope
+}
+
+func (s *recordingScopedSandbox) ExecuteReview(
+	_ context.Context,
+	taskID string,
+	command string,
+	decision Decision,
+	reason string,
+	scope ReviewScope,
+) *SandboxRun {
+	s.scopes = append(s.scopes, append([]string(nil), scope.FilePaths...))
+	s.reviewScopes = append(s.reviewScopes, ReviewScope{
+		FilePaths:  append([]string(nil), scope.FilePaths...),
+		HeadCommit: scope.HeadCommit,
+		DiffSHA256: scope.DiffSHA256,
+	})
+	return successfulSandboxRun(taskID, command, decision, reason)
+}
+
+func successfulSandboxRun(
+	taskID string,
+	command string,
+	decision Decision,
+	reason string,
+) *SandboxRun {
+	return &SandboxRun{
+		ID:                 uuid.NewString(),
+		TaskID:             taskID,
+		Command:            command,
+		PermissionDecision: decision,
+		PermissionReason:   reason,
+		Status:             SandboxStatusSuccess,
+	}
+}
+
+func TestAgentPassesSelectedPathsToScopedSandbox(t *testing.T) {
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "go.mod"),
+		[]byte("module example.com/review\n\ngo 1.21\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "selected.go"), []byte("package review\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "outside.go"), []byte("package review\n"), 0o600))
+	gitAdd(t, repo, "go.mod", "selected.go", "outside.go")
+	gitCommit(t, repo)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "selected.go"),
+		[]byte("package review\n\nconst Selected = true\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "outside.go"),
+		[]byte("package review\n\nconst Outside = true\n"),
+		0o600,
+	))
+
+	sandbox := &recordingScopedSandbox{}
+	agent := NewReviewAgentWithSandbox(newTestStorage(t), sandbox)
+	_, err := agent.Review(context.Background(), ReviewInput{
+		RepoPath:  repo,
+		FilePaths: []string{"selected.go"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, [][]string{{"selected.go"}, {"selected.go"}}, sandbox.scopes)
+}
+
+type advanceHEADAfterDiffStorage struct {
+	Storage
+	advance func() error
+}
+
+func (s *advanceHEADAfterDiffStorage) UpdateTaskDiff(
+	ctx context.Context,
+	taskID string,
+	inputType string,
+	inputPath string,
+	diffSummary string,
+) error {
+	if err := s.Storage.UpdateTaskDiff(
+		ctx,
+		taskID,
+		inputType,
+		inputPath,
+		diffSummary,
+	); err != nil {
+		return err
+	}
+	if s.advance == nil {
+		return nil
+	}
+	advance := s.advance
+	s.advance = nil
+	return advance()
+}
+
+func TestAgentPinsHEADBeforeCapturingWorkspaceDiff(t *testing.T) {
+	repo := initGitRepository(t)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "go.mod"),
+		[]byte("module example.com/review\n\ngo 1.21\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "selected.go"),
+		[]byte("package review\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "outside.txt"),
+		[]byte("baseline\n"),
+		0o600,
+	))
+	gitAdd(t, repo, "go.mod", "selected.go", "outside.txt")
+	gitCommit(t, repo)
+	capturedCommit, err := resolveGitCommit(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "selected.go"),
+		[]byte("package review\n\nconst Selected = true\n"),
+		0o600,
+	))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(repo, "outside.txt"),
+		[]byte("advanced\n"),
+		0o600,
+	))
+
+	baseStorage := newTestStorage(t)
+	storage := &advanceHEADAfterDiffStorage{
+		Storage: baseStorage,
+		advance: func() error {
+			gitAdd(t, repo, "outside.txt")
+			gitCommit(t, repo)
+			return nil
+		},
+	}
+	sandbox := &recordingScopedSandbox{}
+	agent := NewReviewAgentWithSandbox(storage, sandbox)
+	_, err = agent.Review(context.Background(), ReviewInput{
+		RepoPath:  repo,
+		FilePaths: []string{"selected.go"},
+	})
+	require.NoError(t, err)
+	require.Len(t, sandbox.reviewScopes, 2)
+	advancedCommit, err := resolveGitCommit(context.Background(), repo, "HEAD")
+	require.NoError(t, err)
+	require.NotEqual(t, capturedCommit, advancedCommit)
+	for _, scope := range sandbox.reviewScopes {
+		require.Equal(t, capturedCommit, scope.HeadCommit)
+		require.NotEmpty(t, scope.DiffSHA256)
+	}
+}
+
 func TestDetermineSandboxCommandsChecksEveryChangedModule(t *testing.T) {
-	repo := t.TempDir()
+	repo := initGitRepository(t)
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n\ngo 1.21\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "root.go"), []byte("package root\n"), 0o600))
 	require.NoError(t, os.MkdirAll(filepath.Join(repo, "nested"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "go.mod"), []byte("module example.com/nested\n\ngo 1.21\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested.go"), []byte("package nested\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested_test.go"), []byte("package nested\nimport \"testing\"\nfunc TestFailure(t *testing.T) { t.Fatal(\"nested module checked\") }\n"), 0o600))
+	gitAdd(t, repo, "go.mod", "root.go", "nested/go.mod", "nested/nested.go", "nested/nested_test.go")
+	gitCommit(t, repo)
 
 	agent := NewReviewAgent(newTestStorage(t))
-	commands, err := agent.determineSandboxCommands([]DiffFile{
-		{Path: "root.go"}, {Path: "nested/go.mod"},
-	}, repo)
+	commands, _, err := agent.determineSandboxCommands(
+		context.Background(),
+		[]DiffFile{{Path: "root.go"}, {Path: "nested/go.mod"}},
+		repo,
+	)
 	require.NoError(t, err)
 	require.Equal(t, []string{
 		"go vet ./...", "go test ./... -count=1 -timeout=30s",
@@ -277,4 +439,116 @@ func TestDetermineSandboxCommandsChecksEveryChangedModule(t *testing.T) {
 	sandbox := NewSandbox(SandboxConfig{WorkDir: repo, Timeout: 30 * time.Second})
 	run := sandbox.Execute(context.Background(), "nested-module", commands[3], DecisionAllow, "test")
 	require.Equal(t, SandboxStatusFailed, run.Status, "nested failing test was not executed: %+v", run)
+}
+
+func TestDetermineSandboxCommandsIgnoresOutOfScopeModuleChanges(t *testing.T) {
+	t.Run("deleted nested module", func(t *testing.T) {
+		repo := initGitRepository(t)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n\ngo 1.21\n"), 0o600))
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, "nested"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "go.mod"), []byte("module example.com/nested\n\ngo 1.21\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested.go"), []byte("package nested\n"), 0o600))
+		gitAdd(t, repo, "go.mod", "nested/go.mod", "nested/nested.go")
+		gitCommit(t, repo)
+		require.NoError(t, os.Remove(filepath.Join(repo, "nested", "go.mod")))
+
+		agent := NewReviewAgent(newTestStorage(t))
+		commands, _, err := agent.determineSandboxCommands(
+			context.Background(),
+			[]DiffFile{{Path: "nested/nested.go"}},
+			repo,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"go -C ./nested vet ./...",
+			"go -C ./nested test ./... -count=1 -timeout=30s",
+		}, commands)
+	})
+
+	t.Run("untracked nested module", func(t *testing.T) {
+		repo := initGitRepository(t)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/root\n\ngo 1.21\n"), 0o600))
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, "nested"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "nested.go"), []byte("package root\n"), 0o600))
+		gitAdd(t, repo, "go.mod", "nested/nested.go")
+		gitCommit(t, repo)
+		require.NoError(t, os.WriteFile(filepath.Join(repo, "nested", "go.mod"), []byte("module example.com/unselected\n\ngo 1.21\n"), 0o600))
+
+		agent := NewReviewAgent(newTestStorage(t))
+		commands, _, err := agent.determineSandboxCommands(
+			context.Background(),
+			[]DiffFile{{Path: "nested/nested.go"}},
+			repo,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"go vet ./...",
+			"go test ./... -count=1 -timeout=30s",
+		}, commands)
+	})
+}
+
+func TestDetermineSandboxCommandsChecksBothSidesOfCrossModuleRenames(t *testing.T) {
+	t.Run("Go source rename", func(t *testing.T) {
+		repo := initGitRepository(t)
+		for _, module := range []string{"old", "new"} {
+			require.NoError(t, os.MkdirAll(filepath.Join(repo, module), 0o700))
+			require.NoError(t, os.WriteFile(
+				filepath.Join(repo, module, "go.mod"),
+				[]byte("module example.com/"+module+"\n\ngo 1.21\n"),
+				0o600,
+			))
+		}
+		gitAdd(t, repo, "old/go.mod", "new/go.mod")
+		gitCommit(t, repo)
+
+		agent := NewReviewAgent(newTestStorage(t))
+		commands, _, err := agent.determineSandboxCommands(
+			context.Background(),
+			[]DiffFile{{
+				Path: "new/moved.go", OldPath: "old/moved.go", IsRename: true,
+			}},
+			repo,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"go -C ./new vet ./...",
+			"go -C ./new test ./... -count=1 -timeout=30s",
+			"go -C ./old vet ./...",
+			"go -C ./old test ./... -count=1 -timeout=30s",
+		}, commands)
+	})
+
+	t.Run("go.mod rename", func(t *testing.T) {
+		repo := initGitRepository(t)
+		require.NoError(t, os.WriteFile(
+			filepath.Join(repo, "go.mod"),
+			[]byte("module example.com/root\n\ngo 1.21\n"),
+			0o600,
+		))
+		require.NoError(t, os.MkdirAll(filepath.Join(repo, "old"), 0o700))
+		require.NoError(t, os.WriteFile(
+			filepath.Join(repo, "old", "go.mod"),
+			[]byte("module example.com/old\n\ngo 1.21\n"),
+			0o600,
+		))
+		gitAdd(t, repo, "go.mod", "old/go.mod")
+		gitCommit(t, repo)
+
+		agent := NewReviewAgent(newTestStorage(t))
+		commands, _, err := agent.determineSandboxCommands(
+			context.Background(),
+			[]DiffFile{{
+				Path: "new/go.mod", OldPath: "old/go.mod", IsRename: true,
+			}},
+			repo,
+		)
+		require.NoError(t, err)
+		require.Equal(t, []string{
+			"go vet ./...",
+			"go test ./... -count=1 -timeout=30s",
+			"go -C ./new vet ./...",
+			"go -C ./new test ./... -count=1 -timeout=30s",
+		}, commands)
+	})
 }
