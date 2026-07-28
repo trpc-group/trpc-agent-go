@@ -12,19 +12,21 @@ acknowledgement-loss retry recovery.
 Each case has fixed logical IDs and payloads. `Capture` reloads events, state,
 memories, tracks, and the summaries returned by `ListSessions`, retaining a
 summary's filter-key, boundary version, last event ID, text, and normalized
-update-presence. `WithMemorySearchQueries` preserves retrieval order and memory
-identity while normalizing backend-specific similarity scores. This makes
-summary loss, overwrite, wrong scope, wrong session identity, and memory
-ordering observable. JSON decoding makes map ordering irrelevant. Generated
-event/response IDs, clock values, JSON object order, and backend private timing
-values are normalized.
+update-presence. Memory snapshots include explicit app and user scope,
+identity, content, and metadata. `WithMemorySearchQueries` preserves result
+order and identity while normalizing similarity scores. Track events retain
+sequence and normalized timestamps; duration and latency values normalize.
+This makes summary loss, overwrite, wrong scope or session, memory ordering,
+and track ordering observable. JSON decoding removes map ordering. Generated
+event/response IDs and clock values normalize. Backends can omit
+implementation-owned fields with `Backend.PrivateMetadataPaths`, such as
+`events.*.extensions.storage_private`.
 
 Set `Backend.Unsupported` with a data-relative path such as `tracks` or
 `memories.search` and a reason. Matching differences become `allowed_diff`,
 and the report also contains an explicit `supported`/`unsupported` record. The
 sample `testdata/session_memory_summary_track_diff_report.json` shows both a
-blocking mismatch and an allowed difference. Every other difference contains
-the case, backend, session ID, field path, baseline JSON, and actual JSON.
+blocking mismatch and an allowed difference.
 
 Optional Redis, Postgres, MySQL, and ClickHouse integrations are enabled by
 passing factories to `LoadOptionalBackends` with `REPLAYTEST_REDIS_URL`,

@@ -36,6 +36,11 @@ type Backend struct {
 	Session     session.Service
 	Memory      memory.Service
 	Unsupported []Unsupported
+	// PrivateMetadataPaths lists dot-separated paths in Snapshot.Data that
+	// contain backend-owned metadata. Use * for an array element, for example
+	// "events.*.extensions.storage_private". These fields are omitted before
+	// snapshots are compared.
+	PrivateMetadataPaths []string
 }
 
 // Unsupported declares a snapshot field that a backend cannot provide. Path
@@ -310,9 +315,9 @@ func Capture(
 		"state":         state,
 		"summaries":     summaries,
 		"tracks":        tracks,
-		"memories":      entries,
+		"memories":      captureMemoryEntries(entries),
 		"memory_search": memorySearch,
-	})
+	}, backend.PrivateMetadataPaths)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("normalize snapshot: %w", err)
 	}
@@ -324,8 +329,8 @@ func loadMemorySearches(
 	service memory.Service,
 	key session.Key,
 	queries []string,
-) (map[string][]*memory.Entry, error) {
-	results := make(map[string][]*memory.Entry, len(queries))
+) (map[string][]map[string]any, error) {
+	results := make(map[string][]map[string]any, len(queries))
 	userKey := memory.UserKey{AppName: key.AppName, UserID: key.UserID}
 	for _, query := range queries {
 		entries, err := service.SearchMemories(ctx, userKey, query)
@@ -335,9 +340,31 @@ func loadMemorySearches(
 		if entries == nil {
 			entries = []*memory.Entry{}
 		}
-		results[query] = entries
+		results[query] = captureMemoryEntries(entries)
 	}
 	return results, nil
+}
+
+func captureMemoryEntries(entries []*memory.Entry) []map[string]any {
+	captured := make([]map[string]any, len(entries))
+	for index, entry := range entries {
+		if entry == nil {
+			captured[index] = map[string]any{}
+			continue
+		}
+		captured[index] = map[string]any{
+			"id":       entry.ID,
+			"app_name": entry.AppName,
+			"scope": map[string]string{
+				"app_name": entry.AppName,
+				"user_id":  entry.UserID,
+			},
+			"memory":  entry.Memory,
+			"user_id": entry.UserID,
+			"score":   entry.Score,
+		}
+	}
+	return captured
 }
 
 func loadSummaries(
@@ -407,6 +434,11 @@ func validateBackend(backend Backend) error {
 			return fmt.Errorf("backend %q unsupported path and reason are required", backend.Name)
 		}
 	}
+	for _, path := range backend.PrivateMetadataPaths {
+		if strings.TrimSpace(path) == "" {
+			return fmt.Errorf("backend %q private metadata path is required", backend.Name)
+		}
+	}
 	return nil
 }
 
@@ -465,8 +497,9 @@ func marshalValue(value any) json.RawMessage {
 }
 
 // normalize uses JSON semantics to make map ordering irrelevant and removes
-// generated IDs and clock values that are not part of a replay contract.
-func normalize(value any) (any, error) {
+// generated IDs, clock values, durations, and backend-private metadata that
+// are not part of a replay contract.
+func normalize(value any, privateMetadataPaths []string) (any, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {
 		return nil, err
@@ -475,38 +508,98 @@ func normalize(value any) (any, error) {
 	if err := json.Unmarshal(encoded, &normalized); err != nil {
 		return nil, err
 	}
-	return stripVolatile(normalized, nil), nil
+	return stripVolatile(normalized, nil, privateMetadataPaths), nil
 }
 
-func stripVolatile(value any, path []string) any {
+func stripVolatile(value any, path, privateMetadataPaths []string) any {
 	switch current := value.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(current))
 		for key, child := range current {
+			childPath := append(path, key)
+			if isPrivateMetadataPath(childPath, privateMetadataPaths) {
+				continue
+			}
 			if isVolatileKey(key, path) {
 				if key == "updated_at" && containsPath(path, "summaries") {
 					// Summary recency is part of the contract, but exact wall-clock
 					// values differ across backends. Preserve its presence.
 					out[key] = "normalized"
 				}
+				if key == "timestamp" && containsPath(path, "tracks") {
+					// Track order remains observable through the event slice while
+					// wall-clock timestamps are backend-specific.
+					out[key] = "normalized"
+				}
 				continue
 			}
-			if key == "score" && containsPath(path, "memory_search") {
+			if key == "score" && (containsPath(path, "memory_search") || containsPath(path, "memories")) {
 				out[key] = "normalized"
 				continue
 			}
-			out[key] = stripVolatile(child, append(path, key))
+			if isDurationKey(key, path) {
+				out[key] = "normalized"
+				continue
+			}
+			out[key] = stripVolatile(child, childPath, privateMetadataPaths)
 		}
 		return out
 	case []any:
 		out := make([]any, len(current))
 		for i, child := range current {
-			out[i] = stripVolatile(child, path)
+			out[i] = stripVolatile(child, append(path, "*"), privateMetadataPaths)
+			if containsPath(path, "tracks") && lastPathComponent(path) == "events" {
+				if trackEvent, ok := out[i].(map[string]any); ok {
+					// JSON decoding represents numeric values as float64. Keep the
+					// generated ordinal in the same form so cloned snapshots remain
+					// byte-for-byte comparable.
+					trackEvent["sequence"] = float64(i)
+				}
+			}
 		}
 		return out
 	default:
 		return value
 	}
+}
+
+func isPrivateMetadataPath(path, privateMetadataPaths []string) bool {
+	for _, candidate := range privateMetadataPaths {
+		components := strings.Split(candidate, ".")
+		if len(components) != len(path) {
+			continue
+		}
+		matches := true
+		for index, component := range components {
+			if component != "*" && component != path[index] {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+func isDurationKey(key string, path []string) bool {
+	if !containsPath(path, "tracks") {
+		return false
+	}
+	switch key {
+	case "duration", "duration_ms", "elapsed", "elapsed_ms", "latency", "latency_ms":
+		return true
+	default:
+		return false
+	}
+}
+
+func lastPathComponent(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	return path[len(path)-1]
 }
 
 func containsPath(path []string, target string) bool {

@@ -102,6 +102,9 @@ func TestCaptureNormalizesVolatileFieldsAndPreservesMemoryID(t *testing.T) {
 	require.NotContains(t, events[0].(map[string]any), "id")
 	memories := snapshot.Data["memories"].([]any)
 	require.NotEmpty(t, memories[0].(map[string]any)["id"])
+	scope := memories[0].(map[string]any)["scope"].(map[string]any)
+	require.Equal(t, replayApp, scope["app_name"])
+	require.Equal(t, replayUser, scope["user_id"])
 }
 
 func TestRunValidatesBackends(t *testing.T) {
@@ -181,7 +184,34 @@ func TestTrackCasePreservesReplayFields(t *testing.T) {
 	payload := events[1].(map[string]any)["payload"].(map[string]any)
 	require.Equal(t, "exception", payload["event_type"])
 	require.Equal(t, "timeout", payload["error"])
-	require.Equal(t, float64(15), payload["duration_ms"])
+	require.Equal(t, "normalized", payload["duration_ms"])
+	require.Equal(t, "normalized", events[0].(map[string]any)["timestamp"])
+	require.Equal(t, float64(0), events[0].(map[string]any)["sequence"])
+	require.Equal(t, float64(1), events[1].(map[string]any)["sequence"])
+}
+
+func TestTrackNormalizationPreservesOrderAndIgnoresBackendTiming(t *testing.T) {
+	baseline, err := normalize(map[string]any{"tracks": map[string]any{"tool": map[string]any{
+		"events": []any{
+			map[string]any{"timestamp": "2026-01-01T00:00:00Z", "payload": map[string]any{"duration_ms": 5}},
+			map[string]any{"timestamp": "2026-01-01T00:00:01Z", "payload": map[string]any{"duration_ms": 10}},
+		},
+	}}}, nil)
+	require.NoError(t, err)
+	actual, err := normalize(map[string]any{"tracks": map[string]any{"tool": map[string]any{
+		"events": []any{
+			map[string]any{"timestamp": "2026-02-01T00:00:00Z", "payload": map[string]any{"duration_ms": 500}},
+			map[string]any{"timestamp": "2026-02-01T00:01:00Z", "payload": map[string]any{"duration_ms": 1000}},
+		},
+	}}}, nil)
+	require.NoError(t, err)
+	require.Empty(t, Compare("tracks", "injected", Snapshot{Data: baseline.(map[string]any)}, Snapshot{Data: actual.(map[string]any)}))
+
+	wrongOrder := cloneSnapshot(t, Snapshot{Data: actual.(map[string]any)})
+	wrongOrder.Data["tracks"].(map[string]any)["tool"].(map[string]any)["events"].([]any)[1].(map[string]any)["sequence"] = float64(0)
+	differences := Compare("tracks", "injected", Snapshot{Data: baseline.(map[string]any)}, wrongOrder)
+	require.NotEmpty(t, differences)
+	require.Equal(t, "data.tracks.tool.events[1].sequence", differences[0].Path)
 }
 
 func TestUnsupportedBackendSkipsTrackCaseWithAllowedReport(t *testing.T) {
@@ -215,6 +245,18 @@ func TestMemoryDifferencesUseMemoryIDInPath(t *testing.T) {
 	require.Equal(t, "data.memories[memory_id=memory-1].memory", differences[0].Path)
 }
 
+func TestMemoryScopeDifferencesUseMemoryIDInPath(t *testing.T) {
+	baseline := Snapshot{SessionID: "s", Data: map[string]any{
+		"memories": []any{map[string]any{"id": "memory-1", "scope": map[string]any{"app_name": "app", "user_id": "user-a"}}},
+	}}
+	actual := cloneSnapshot(t, baseline)
+	actual.Data["memories"].([]any)[0].(map[string]any)["scope"].(map[string]any)["user_id"] = "user-b"
+
+	differences := Compare("memory", "injected", baseline, actual)
+	require.Len(t, differences, 1)
+	require.Equal(t, "data.memories[memory_id=memory-1].scope.user_id", differences[0].Path)
+}
+
 func TestStateAndMemoryCasesPreserveFinalStateAndRetrievalOrder(t *testing.T) {
 	backend := newInMemoryBackend(t)
 	cases := map[string]Case{}
@@ -232,6 +274,25 @@ func TestStateAndMemoryCasesPreserveFinalStateAndRetrievalOrder(t *testing.T) {
 	results := searches["prefers"].([]any)
 	require.NotEmpty(t, results)
 	require.Equal(t, "prefers concise answers", results[0].(map[string]any)["memory"].(map[string]any)["memory"])
+}
+
+func TestCaptureOmitsDeclaredPrivateMetadata(t *testing.T) {
+	backend := newInMemoryBackend(t)
+	backend.PrivateMetadataPaths = []string{"events.*.extensions.storage_private"}
+	key := session.Key{AppName: replayApp, UserID: replayUser, SessionID: "private-metadata"}
+	sess, err := backend.Session.CreateSession(context.Background(), key, nil)
+	require.NoError(t, err)
+	event := newReplayEvent("event", model.RoleUser, "hello", "")
+	if event.Extensions == nil {
+		event.Extensions = make(map[string]json.RawMessage)
+	}
+	event.Extensions["storage_private"] = json.RawMessage(`{"connection":"one"}`)
+	require.NoError(t, backend.Session.AppendEvent(context.Background(), sess, event))
+
+	snapshot, err := Capture(context.Background(), backend, key)
+	require.NoError(t, err)
+	extensions := snapshot.Data["events"].([]any)[0].(map[string]any)["extensions"].(map[string]any)
+	require.NotContains(t, extensions, "storage_private")
 }
 
 func TestToolCasePreservesBranchTagStateAndExtension(t *testing.T) {
