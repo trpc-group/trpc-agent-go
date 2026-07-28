@@ -114,7 +114,7 @@ track 比较重点：
 
 ## 异常检测
 
-测试框架包含三类异常注入：
+测试框架包含五类异常注入：
 
 - snapshot mutation：partial event loss、event timestamp drift、summary loss、wrong session attribution、wrong summary filter key、large JSON-number drift、state byte representation drift、track payload drift、embedded track drift、outer track-container drift、track order drift
 - service-contract mutation：事件交错追加后仍返回旧 summary boundary、错误的外层 track 身份，以及 JSON null 被恢复成 nil raw payload

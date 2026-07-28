@@ -1330,6 +1330,12 @@ func TestPathParsersRejectMalformedPaths(t *testing.T) {
 
 	_, ok = summaryFilterKey(`$.summary["unterminated"`)
 	require.False(t, ok)
+	_, ok = summaryFilterKey(`$.summary["bad\x"].summary`)
+	require.False(t, ok)
+	_, ok = summaryFilterKey(`$.summary["key"]suffix`)
+	require.False(t, ok)
+	_, ok = summaryFilterKey(`$.summary[0].summary`)
+	require.False(t, ok)
 	_, ok = summaryFilterKey("$.events[0]")
 	require.False(t, ok)
 	key, ok := summaryFilterKey("$.summary.branch.boundary.version")
@@ -1338,6 +1344,35 @@ func TestPathParsersRejectMalformedPaths(t *testing.T) {
 	key, ok = summaryFilterKey("$.summary.branch[0]")
 	require.True(t, ok)
 	require.Equal(t, "branch", key)
+}
+
+func TestCompareSnapshotsPreservesSpecialSummaryFilterKeyContext(t *testing.T) {
+	filterKeys := []string{
+		"root/tools]weather",
+		`root/"quoted"`,
+		`root\tools`,
+		"\u6839/\u5de5\u5177/\u5929\u6c14",
+		`root/]"quoted"\tools`,
+	}
+
+	for _, filterKey := range filterKeys {
+		t.Run(filterKey, func(t *testing.T) {
+			left := Snapshot{Summary: map[string]SummaryEntry{
+				filterKey: {Summary: "left"},
+			}}
+			right := Snapshot{Summary: map[string]SummaryEntry{
+				filterKey: {Summary: "right"},
+			}}
+
+			diffs := CompareSnapshots(
+				"special-summary-key", "session-1", "left", "right",
+				left, right, nil,
+			)
+			require.Len(t, diffs, 1)
+			require.Equal(t, appendPath("$.summary", filterKey)+".summary", diffs[0].Path)
+			require.Equal(t, filterKey, diffs[0].Context["summary_filter_key"])
+		})
+	}
 }
 
 func TestCompareSnapshotsAddsContextAndAppliesExplicitRule(t *testing.T) {

@@ -1332,13 +1332,17 @@ func nestedPathIndex(path, marker string) (int, bool) {
 func summaryFilterKey(path string) (string, bool) {
 	const bracketPrefix = "$.summary["
 	if strings.HasPrefix(path, bracketPrefix) {
-		start := len(bracketPrefix)
-		end := strings.Index(path[start:], "]")
-		if end < 0 {
+		segment, rest, ok := allowedPathBracketSegment(
+			strings.TrimPrefix(path, "$.summary"),
+		)
+		if !ok || rest != "" && rest[0] != '.' && rest[0] != '[' {
 			return "", false
 		}
-		value, err := strconv.Unquote(path[start : start+end])
-		return value, err == nil
+		var value string
+		if err := json.Unmarshal([]byte(segment), &value); err != nil {
+			return "", false
+		}
+		return value, true
 	}
 	const dotPrefix = "$.summary."
 	if !strings.HasPrefix(path, dotPrefix) {

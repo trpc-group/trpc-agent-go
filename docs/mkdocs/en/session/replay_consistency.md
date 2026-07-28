@@ -114,7 +114,7 @@ Note that `AppendTrackEvent` maintains `state["tracks"]`. When debugging track d
 
 ## Anomaly Detection
 
-The test harness includes three kinds of anomaly injection:
+The test harness includes five kinds of anomaly injection:
 
 - snapshot mutation: partial event loss, event timestamp drift, summary loss, wrong session attribution, wrong summary filter key, large JSON-number drift, state byte representation drift, track payload drift, embedded track drift, outer track-container drift, and track order drift
 - service-contract mutation: a stale summary boundary after interleaved event appends, an incorrect outer track identity, and JSON null restored as a nil raw payload
