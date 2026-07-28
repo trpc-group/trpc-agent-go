@@ -174,7 +174,6 @@ func TestWorkspaceRegistry_Release(t *testing.T) {
 	require.NoError(t, r.Release(ctx, wm, "missing"))
 }
 
-
 type failOnceWM struct {
 	mu       sync.Mutex
 	cleanErr error
@@ -287,4 +286,69 @@ func TestWorkspaceRegistry_Release_SerializesAcquire(t *testing.T) {
 	wm.mu.Lock()
 	require.Equal(t, 2, wm.creates)
 	wm.mu.Unlock()
+}
+
+func TestWorkspaceRegistry_Release_WaitsForInflightCreate(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &blockingWM{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ctx := context.Background()
+	acqDone := make(chan error, 1)
+	go func() {
+		_, err := r.Acquire(ctx, wm, "create-then-release")
+		acqDone <- err
+	}()
+	<-wm.entered // create blocked
+
+	relDone := make(chan error, 1)
+	go func() {
+		relDone <- r.Release(ctx, wm, "create-then-release")
+	}()
+
+	// Release must not return success while create is still in flight.
+	select {
+	case err := <-relDone:
+		t.Fatalf("Release returned early: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(wm.release)
+	require.NoError(t, <-acqDone)
+	require.NoError(t, <-relDone)
+	_, ok := r.Get("create-then-release")
+	require.False(t, ok, "registry entry must be gone after release")
+	// Create once, cleanup once (blockingWM tracks creates via calls).
+	wm.mu.Lock()
+	require.Equal(t, 1, wm.calls)
+	wm.mu.Unlock()
+}
+
+func TestWorkspaceRegistry_Release_CallerCancelReturnsWhileCleanupContinues(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &blockingCleanupWM{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ctx := context.Background()
+	_, err := r.Acquire(ctx, wm, "cancel-release")
+	require.NoError(t, err)
+
+	callCtx, cancel := context.WithCancel(ctx)
+	relErr := make(chan error, 1)
+	go func() {
+		relErr <- r.Release(callCtx, wm, "cancel-release")
+	}()
+	<-wm.entered
+	cancel()
+	err = <-relErr
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+
+	// Cleanup still in flight / coalesced: second Release should wait and succeed.
+	close(wm.release)
+	require.NoError(t, r.Release(ctx, wm, "cancel-release"))
+	_, ok := r.Get("cancel-release")
+	require.False(t, ok)
 }

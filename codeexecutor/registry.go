@@ -135,49 +135,65 @@ func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
 // underlying workspace when m is non-nil.
 //
 // Release is serialized with Acquire for the same id: a concurrent
-// Acquire waits until cleanup finishes. If cleanup fails, the entry is
-// restored so a later Release can retry. If the id is unknown and no
-// release is in flight, Release is a no-op and returns nil.
+// Acquire waits until cleanup finishes. If a first-time Acquire is still
+// creating the workspace, Release waits for creation then cleans up so
+// it cannot report success while leaving a live workspace. Cleanup runs
+// in a detached goroutine so the initiating caller can honor ctx
+// cancellation via waitWorkspaceRelease; if cleanup fails, the entry is
+// restored so a later Release can retry.
 func (r *WorkspaceRegistry) Release(
 	ctx context.Context, m WorkspaceManager, id string,
 ) error {
-	r.mu.Lock()
-	if rel, ok := r.releasing[id]; ok {
+	for {
+		r.mu.Lock()
+		if rel, ok := r.releasing[id]; ok {
+			r.mu.Unlock()
+			return waitWorkspaceRelease(ctx, rel)
+		}
+		if call, ok := r.inflight[id]; ok {
+			// Creation still running: wait, then retry release.
+			r.mu.Unlock()
+			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
+				// Create failed: nothing to clean up.
+				return nil
+			}
+			continue
+		}
+		ws, ok := r.byID[id]
+		if !ok {
+			r.mu.Unlock()
+			return nil
+		}
+		delete(r.byID, id)
+		if r.releasing == nil {
+			r.releasing = map[string]*workspaceReleaseCall{}
+		}
+		rel := &workspaceReleaseCall{done: make(chan struct{})}
+		r.releasing[id] = rel
+		cleanupCtx := context.WithoutCancel(ctx)
 		r.mu.Unlock()
+
+		go func(ws Workspace, rel *workspaceReleaseCall) {
+			var err error
+			if m != nil {
+				err = m.Cleanup(cleanupCtx, ws)
+			}
+			r.mu.Lock()
+			if err != nil {
+				// Keep the entry so Release remains retryable.
+				if r.byID == nil {
+					r.byID = map[string]Workspace{}
+				}
+				r.byID[id] = ws
+			}
+			rel.err = err
+			delete(r.releasing, id)
+			close(rel.done)
+			r.mu.Unlock()
+		}(ws, rel)
+
 		return waitWorkspaceRelease(ctx, rel)
 	}
-	ws, ok := r.byID[id]
-	if !ok {
-		r.mu.Unlock()
-		return nil
-	}
-	delete(r.byID, id)
-	if r.releasing == nil {
-		r.releasing = map[string]*workspaceReleaseCall{}
-	}
-	rel := &workspaceReleaseCall{done: make(chan struct{})}
-	r.releasing[id] = rel
-	cleanupCtx := context.WithoutCancel(ctx)
-	r.mu.Unlock()
-
-	var err error
-	if m != nil {
-		err = m.Cleanup(cleanupCtx, ws)
-	}
-
-	r.mu.Lock()
-	if err != nil {
-		// Keep the entry so Release remains retryable.
-		if r.byID == nil {
-			r.byID = map[string]Workspace{}
-		}
-		r.byID[id] = ws
-	}
-	rel.err = err
-	delete(r.releasing, id)
-	close(rel.done)
-	r.mu.Unlock()
-	return err
 }
 
 func waitWorkspaceRelease(ctx context.Context, rel *workspaceReleaseCall) error {

@@ -1663,7 +1663,6 @@ func TestInvariant_Isolation_SkillRegistryKeyMatchesSessionKey(t *testing.T) {
 	require.Equal(t, wsEmpty.Path, wsReg.Path)
 }
 
-
 // TestInvariant_Isolation_EmptySessionRejected ensures placeholder sessions
 // (empty ID) do not collapse to one durable PerSession workspace.
 func TestInvariant_Isolation_EmptySessionRejected(t *testing.T) {
@@ -1708,7 +1707,6 @@ func TestInvariant_Error_DirectStubUsesNeutralSentinel(t *testing.T) {
 	err := exec.StageInputs(context.Background(), ws, nil)
 	require.Error(t, err)
 	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
-	require.True(t, errors.Is(err, ErrNotImplementedV1), "alias must still match")
 	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{})
 	require.Error(t, err)
 	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))

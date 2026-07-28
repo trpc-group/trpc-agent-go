@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -63,6 +64,11 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.
+//
+// If the invocation carries a Session but that session lacks a stable ID,
+// CreateWorkspace fails closed instead of falling back to the tool name.
+// Otherwise placeholder sessions that share a skill name would reuse one
+// durable registry workspace.
 func (r *Resolver) CreateWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -75,6 +81,13 @@ func (r *Resolver) CreateWorkspace(
 	}
 	sid := name
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if inv.Session != nil && strings.TrimSpace(inv.Session.ID) == "" {
+			return codeexecutor.Workspace{}, errors.New(
+				"workspacesession: invocation session is present but Session.ID " +
+					"is empty; refuse to fall back to a shared tool name as the " +
+					"durable workspace key",
+			)
+		}
 		if key := KeyFromInvocation(inv); key != "" {
 			sid = key
 		}

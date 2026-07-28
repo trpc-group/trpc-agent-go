@@ -199,7 +199,6 @@ func TestInvariant_Preflight_InputsBeforePrepare(t *testing.T) {
 	require.True(t, errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported))
 }
 
-
 func TestInvariant_CleanEnv_LocalFallbackHonorsPolicy(t *testing.T) {
 	rt := &RunTool{exec: nil, wsr: nil}
 	eng := rt.ensureEngine()

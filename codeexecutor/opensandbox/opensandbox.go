@@ -924,7 +924,7 @@ func (c *CodeExecutor) Collect(
 // StageInputs maps external inputs into the sandbox workspace.
 //
 // Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported
-// (ErrNotImplementedV1 is an alias). Callers should use
+// Callers should use
 // errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) and fall
 // back to PutFiles.
 func (c *CodeExecutor) StageInputs(
@@ -937,7 +937,7 @@ func (c *CodeExecutor) StageInputs(
 // CollectOutputs applies the declarative output spec in the sandbox.
 //
 // Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported
-// (ErrNotImplementedV1 is an alias). Callers should use
+// Callers should use
 // errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) and fall
 // back to Collect.
 func (c *CodeExecutor) CollectOutputs(
@@ -1156,16 +1156,8 @@ func (c *CodeExecutor) Close() error {
 	return nil
 }
 
-// ErrNotImplementedV1 is a deprecated alias of
-// codeexecutor.ErrDeclarativeIONotSupported kept for older call sites
-// that already match on this name. New code should use
-// errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) for both
-// Engine().FS() and direct CodeExecutor StageInputs/CollectOutputs.
-//
-// Direct stubs return the neutral sentinel so callers have one
-// errors.Is path regardless of access surface.
-var ErrNotImplementedV1 = codeexecutor.ErrDeclarativeIONotSupported
-
 // errNotImplementedV1 is the package-private alias used by
-// StageInputs/CollectOutputs stubs in workspace_collect.go.
+// StageInputs/CollectOutputs stubs. It equals
+// codeexecutor.ErrDeclarativeIONotSupported so external callers use one
+// errors.Is path. Do not re-export a V1-named public sentinel.
 var errNotImplementedV1 = codeexecutor.ErrDeclarativeIONotSupported

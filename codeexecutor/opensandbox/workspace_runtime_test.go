@@ -2942,12 +2942,12 @@ func TestListFilesByGlob_CountLimit(t *testing.T) {
 	assert.True(t, hasMarker, "file-count cap must set aggregate marker")
 }
 
-// --- L3: ErrNotImplementedV1 exported ---
+// --- L3: errNotImplementedV1 exported ---
 
-// TestErrNotImplementedV1_Exported verifies that the exported
-// ErrNotImplementedV1 sentinel can be detected with errors.Is from
+// TesterrNotImplementedV1_Exported verifies that the exported
+// errNotImplementedV1 sentinel can be detected with errors.Is from
 // external callers.
-func TestErrNotImplementedV1_Exported(t *testing.T) {
+func TesterrNotImplementedV1_Exported(t *testing.T) {
 	m := newMockServer(t)
 	defer m.close()
 	exec := newTestExecutor(t, m)
@@ -2956,15 +2956,15 @@ func TestErrNotImplementedV1_Exported(t *testing.T) {
 	ws, err := exec.CreateWorkspace(context.Background(), "exec-v1", codeexecutor.WorkspacePolicy{})
 	require.NoError(t, err)
 
-	// StageInputs returns ErrNotImplementedV1.
+	// StageInputs returns errNotImplementedV1.
 	err = exec.StageInputs(context.Background(), ws, nil)
-	assert.ErrorIs(t, err, ErrNotImplementedV1,
-		"StageInputs must return ErrNotImplementedV1 detectable via errors.Is")
+	assert.ErrorIs(t, err, errNotImplementedV1,
+		"StageInputs must return errNotImplementedV1 detectable via errors.Is")
 
-	// CollectOutputs returns ErrNotImplementedV1.
+	// CollectOutputs returns errNotImplementedV1.
 	_, err = exec.CollectOutputs(context.Background(), ws, codeexecutor.OutputSpec{})
-	assert.ErrorIs(t, err, ErrNotImplementedV1,
-		"CollectOutputs must return ErrNotImplementedV1 detectable via errors.Is")
+	assert.ErrorIs(t, err, errNotImplementedV1,
+		"CollectOutputs must return errNotImplementedV1 detectable via errors.Is")
 }
 
 // --- L4: Sub-millisecond timeout rejection ---

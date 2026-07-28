@@ -264,7 +264,6 @@ func TestKeyFromInvocation_Injective(t *testing.T) {
 	require.NotEqual(t, c, e)
 }
 
-
 func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
 	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
 	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
@@ -273,4 +272,26 @@ func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
 	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
 		ID: "only-id",
 	}}))
+}
+
+func TestResolver_CreateWorkspace_RejectsEmptySessionID(t *testing.T) {
+	mgr := &resolverStubMgr{}
+	eng := newResolverStubEngine(mgr)
+	r := NewResolver(nil, nil)
+
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+	_, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Session.ID")
+	require.Empty(t, mgr.created, "must not fall back to skill name workspace")
+
+	// Two empty-ID sessions must both fail, not share skill-name workspace.
+	inv2 := agent.NewInvocation()
+	inv2.Session = &session.Session{}
+	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
+	_, err = r.CreateWorkspace(ctx2, eng, "skill-name")
+	require.Error(t, err)
+	require.Empty(t, mgr.created)
 }
