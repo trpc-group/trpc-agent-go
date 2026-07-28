@@ -392,6 +392,12 @@ func scanNotebookShellBridges(policy Policy, language, code string) []Finding {
 	if language != "python" {
 		return nil
 	}
+	findings := scanNotebookLineEscapes(policy, code)
+	findings = append(findings, scanIPythonLineMagics(policy, code)...)
+	return append(findings, scanIPythonCellMagics(policy, code)...)
+}
+
+func scanNotebookLineEscapes(policy Policy, code string) []Finding {
 	var findings []Finding
 	lines := strings.Split(code, "\n")
 	lineOffset := 0
@@ -423,6 +429,11 @@ func scanNotebookShellBridges(policy Policy, language, code string) []Finding {
 			break
 		}
 	}
+	return findings
+}
+
+func scanIPythonLineMagics(policy Policy, code string) []Finding {
+	var findings []Finding
 	for _, args := range findCallArguments(code, "get_ipython().run_line_magic") {
 		if len(args) < 2 {
 			continue
@@ -437,6 +448,11 @@ func scanNotebookShellBridges(policy Policy, language, code string) []Finding {
 			policy, payload[0], "IPython line magic executes an embedded command",
 		)...)
 	}
+	return findings
+}
+
+func scanIPythonCellMagics(policy Policy, code string) []Finding {
+	var findings []Finding
 	for _, args := range findCallArguments(code, "get_ipython().run_cell_magic") {
 		if len(args) < 3 {
 			continue
@@ -454,54 +470,63 @@ func scanNotebookShellBridges(policy Policy, language, code string) []Finding {
 	return findings
 }
 
+type pythonLineState struct {
+	quote   byte
+	triple  bool
+	escaped bool
+	comment bool
+}
+
 func pythonLineExecutable(code string, position int) bool {
-	var quote byte
-	triple := false
-	escaped := false
-	comment := false
+	var state pythonLineState
 	for index := 0; index < position; index++ {
 		current := code[index]
-		if comment {
+		if state.comment {
 			if current == '\n' {
-				comment = false
+				state.comment = false
 			}
 			continue
 		}
-		if quote != 0 {
-			if escaped {
-				escaped = false
-				continue
-			}
-			if current == '\\' {
-				escaped = true
-				continue
-			}
-			if triple && current == quote && index+2 < position &&
-				code[index+1] == quote && code[index+2] == quote {
-				quote = 0
-				triple = false
-				index += 2
-				continue
-			}
-			if !triple && current == quote {
-				quote = 0
-			}
+		if state.quote != 0 {
+			index += state.consumeQuoted(code, index, position)
 			continue
 		}
 		if current == '#' {
-			comment = true
+			state.comment = true
 			continue
 		}
 		if current != '\'' && current != '"' {
 			continue
 		}
-		quote = current
+		state.quote = current
 		if index+2 < position && code[index+1] == current && code[index+2] == current {
-			triple = true
+			state.triple = true
 			index += 2
 		}
 	}
-	return quote == 0 && !comment
+	return state.quote == 0 && !state.comment
+}
+
+func (s *pythonLineState) consumeQuoted(code string, index, position int) int {
+	current := code[index]
+	if s.escaped {
+		s.escaped = false
+		return 0
+	}
+	if current == '\\' {
+		s.escaped = true
+		return 0
+	}
+	if s.triple && current == s.quote && index+2 < position &&
+		code[index+1] == s.quote && code[index+2] == s.quote {
+		s.quote = 0
+		s.triple = false
+		return 2
+	}
+	if !s.triple && current == s.quote {
+		s.quote = 0
+	}
+	return 0
 }
 
 func quotedLiterals(code string) []string {

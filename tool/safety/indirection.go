@@ -102,6 +102,10 @@ func scanGitExecutionConfig(policy Policy, config string) []Finding {
 
 func gitExecutionConfigKey(key string) bool {
 	key = strings.ToLower(strings.TrimSpace(key))
+	return gitExecutionNamespaceKey(key) || gitExecutionExactKey(key)
+}
+
+func gitExecutionNamespaceKey(key string) bool {
 	if strings.HasPrefix(key, "alias.") || strings.HasPrefix(key, "pager.") ||
 		key == "include.path" ||
 		strings.HasPrefix(key, "includeif.") && strings.HasSuffix(key, ".path") {
@@ -126,6 +130,10 @@ func gitExecutionConfigKey(key string) bool {
 			strings.HasSuffix(key, ".process")) {
 		return true
 	}
+	return false
+}
+
+func gitExecutionExactKey(key string) bool {
 	switch key {
 	case "core.sshcommand", "core.fsmonitor", "core.hookspath",
 		"diff.external", "credential.helper", "gpg.program",
