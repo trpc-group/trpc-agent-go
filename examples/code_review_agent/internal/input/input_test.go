@@ -18,6 +18,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/review"
 )
 
 func TestReadFileListBuildsDiffAndMetadata(t *testing.T) {
@@ -125,6 +127,56 @@ func TestReadFileListPreservesBlankLinesAndLineNumbers(t *testing.T) {
 	}
 	if !strings.Contains(string(diff), "@@ -0,0 +1,3 @@\n+package handler\n+\n+func Serve() {}\n") {
 		t.Fatalf("synthetic diff must preserve blank lines and physical line count: %s", diff)
+	}
+}
+
+func TestReadNonGitDirectoryIncludesNestedFiles(t *testing.T) {
+	t.Parallel()
+
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "internal", "service")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("make nested directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "root.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "handler.go"), []byte("package service\n"), 0o644); err != nil {
+		t.Fatalf("write nested source: %v", err)
+	}
+
+	diff, _, err := Read(Config{}, Request{RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	for _, want := range []string{
+		"diff --git a/root.go b/root.go",
+		"diff --git a/internal/service/handler.go b/internal/service/handler.go",
+	} {
+		if !strings.Contains(string(diff), want) {
+			t.Fatalf("generated diff missing %q: %s", want, diff)
+		}
+	}
+}
+
+func TestReadNonGitDirectoryRejectsOversizedNestedInput(t *testing.T) {
+	t.Parallel()
+
+	repo := t.TempDir()
+	nested := filepath.Join(repo, "internal")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("make nested directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "root.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write root source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "large.go"), []byte(strings.Repeat("x", 128)), 0o644); err != nil {
+		t.Fatalf("write nested source: %v", err)
+	}
+
+	_, _, err := Read(Config{MaxInputBytes: 100}, Request{RepoPath: repo})
+	if !errors.Is(err, errInputTooLarge) {
+		t.Fatalf("Read error = %v, want input size limit rejection", err)
 	}
 }
 
@@ -331,6 +383,38 @@ func TestReadRepoPathRejectsUntrackedSymlink(t *testing.T) {
 	_, _, err := Read(Config{}, Request{RepoPath: repo})
 	if err == nil || !strings.Contains(err.Error(), "not a regular file") {
 		t.Fatalf("Read error = %v, want untracked symlink rejection", err)
+	}
+}
+
+func TestReadRepoPathQuotesUntrackedNewlineFilename(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init")
+	git(t, repo, "config", "user.email", "reviewer@example.com")
+	git(t, repo, "config", "user.name", "Review Agent Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.go"), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write tracked source: %v", err)
+	}
+	git(t, repo, "add", "tracked.go")
+	git(t, repo, "commit", "-m", "initial")
+
+	name := "line\nbreak.go"
+	if err := os.WriteFile(filepath.Join(repo, name), []byte("package sample\n"), 0o644); err != nil {
+		t.Fatalf("write untracked source: %v", err)
+	}
+
+	diff, _, err := Read(Config{}, Request{RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Read returned error: %v", err)
+	}
+	if !strings.Contains(string(diff), "diff --git \"a/line\\nbreak.go\" \"b/line\\nbreak.go\"") {
+		t.Fatalf("generated diff must quote newline filename: %s", diff)
+	}
+	parsed, err := review.ParseUnifiedDiff(string(diff))
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	if len(parsed.Files) != 1 || parsed.Files[0].Path != name {
+		t.Fatalf("parsed files = %+v, want decoded path %q", parsed.Files, name)
 	}
 }
 

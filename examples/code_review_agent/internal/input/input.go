@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -343,23 +344,42 @@ func isNotGitRepositoryError(err error) bool {
 }
 
 func diffFromDirectory(repoPath string, maxBytes int64) ([]byte, error) {
+	root, err := filepath.EvalSymlinks(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve directory %q: %w", repoPath, err)
+	}
+	info, err := os.Stat(root)
+	if err != nil {
+		return nil, fmt.Errorf("stat directory %q: %w", repoPath, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("repo path %q is not a directory", repoPath)
+	}
+
 	b := newLimitedBuffer(maxBytes, "directory diff")
-	entries, err := os.ReadDir(repoPath)
+	err = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == root || entry.IsDir() {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return fmt.Errorf("directory file %q is not a regular file", path)
+		}
+
+		display, err := filepath.Rel(root, path)
+		if err != nil {
+			return fmt.Errorf("resolve directory file %q: %w", path, err)
+		}
+		content, err := readFileWithLimit(path, b.Remaining(), fmt.Sprintf("directory file %q", display))
+		if err != nil {
+			return fmt.Errorf("read directory file %q: %w", display, err)
+		}
+		return diffForNewFile(b, display, content)
+	})
 	if err != nil {
 		return nil, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		path := filepath.Join(repoPath, entry.Name())
-		content, err := readFileWithLimit(path, b.Remaining(), fmt.Sprintf("directory file %q", entry.Name()))
-		if err != nil {
-			continue
-		}
-		if err := diffForNewFile(b, entry.Name(), content); err != nil {
-			return nil, err
-		}
 	}
 	return b.Bytes(), nil
 }
@@ -431,10 +451,10 @@ func resolveListedFile(name string, baseDir string, restrictToBase bool) (string
 func diffForNewFile(b *limitedBuffer, name string, content []byte) error {
 	display := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(name), string(filepath.Separator)))
 	lines := contentLines(content)
-	if _, err := fmt.Fprintf(b, "diff --git a/%s b/%s\n", display, display); err != nil {
+	if _, err := fmt.Fprintf(b, "diff --git %s %s\n", quoteDiffPath("a/"+display), quoteDiffPath("b/"+display)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(b, "--- /dev/null\n+++ b/%s\n", display); err != nil {
+	if _, err := fmt.Fprintf(b, "--- /dev/null\n+++ %s\n", quoteDiffPath("b/"+display)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", len(lines)); err != nil {
@@ -446,6 +466,18 @@ func diffForNewFile(b *limitedBuffer, name string, content []byte) error {
 		}
 	}
 	return nil
+}
+
+func quoteDiffPath(path string) string {
+	if strings.ContainsAny(path, " \t\n\r\\\"") {
+		return strconv.Quote(path)
+	}
+	for _, r := range path {
+		if r < 0x20 || r == 0x7f {
+			return strconv.Quote(path)
+		}
+	}
+	return path
 }
 
 func contentLines(content []byte) []string {
