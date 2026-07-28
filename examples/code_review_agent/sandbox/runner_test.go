@@ -54,11 +54,18 @@ func TestLocalRunner_OutputLimit(t *testing.T) {
 	r := sandbox.LocalRunner{}
 	limits := safety.DefaultLimits()
 	limits.MaxStdoutBytes = 32
+	// printf is portable and does not depend on python3 being installed.
 	res := r.Run(context.Background(), sandbox.Spec{
-		Command: "python3 -c 'print(\"x\"*1000)'",
+		Command: "printf %02000d 0",
 	}, limits)
+	if res.Summary.Status != "ok" && res.Summary.Status != "truncated" {
+		t.Fatalf("probe failed: status=%s err=%s", res.Summary.Status, res.Summary.Error)
+	}
 	if res.Summary.StdoutBytes > 32 {
 		t.Fatalf("stdout exceeded limit: %d", res.Summary.StdoutBytes)
+	}
+	if res.Summary.StdoutBytes == 0 {
+		t.Fatal("expected truncated non-empty stdout from probe")
 	}
 }
 
@@ -66,10 +73,17 @@ func TestLocalRunner_OutputLimit(t *testing.T) {
 func TestLocalRunner_ForbiddenEnvNotForwarded(t *testing.T) {
 	r := sandbox.LocalRunner{}
 	res := r.Run(context.Background(), sandbox.Spec{
-		Command: `python3 -c 'import os; print(os.environ.get("SECRET_API_KEY","missing"))'`,
+		Command: "env",
 		Env:     []string{"SECRET_API_KEY=should-not-leak", "PATH=" + os.Getenv("PATH")},
 	}, safety.DefaultLimits())
-	if strings.Contains(res.Stdout, "should-not-leak") {
+	if res.Summary.Status != "ok" {
+		t.Fatalf("env probe failed: status=%s err=%s stderr=%q",
+			res.Summary.Status, res.Summary.Error, res.Stderr)
+	}
+	if !strings.Contains(res.Stdout, "PATH=") {
+		t.Fatalf("probe did not run (missing PATH=): stdout=%q", res.Stdout)
+	}
+	if strings.Contains(res.Stdout, "should-not-leak") || strings.Contains(res.Stdout, "SECRET_API_KEY=") {
 		t.Fatalf("forbidden env leaked: stdout=%q", res.Stdout)
 	}
 }
@@ -113,6 +127,26 @@ func TestFailingRunner_DoesNotPanic(t *testing.T) {
 	}
 	if !strings.Contains(res.Stderr, "forced sandbox failure") {
 		t.Fatalf("stderr=%q", res.Stderr)
+	}
+}
+
+// TestNewRunner_RejectsLongLivedBackends avoids leaking container/e2b resources.
+func TestNewRunner_RejectsLongLivedBackends(t *testing.T) {
+	for _, name := range []string{"", "container", "e2b", "CONTAINER"} {
+		_, err := sandbox.NewRunner(name)
+		if err == nil {
+			t.Fatalf("NewRunner(%q) should fail", name)
+		}
+		if !strings.Contains(err.Error(), "Create") {
+			t.Fatalf("NewRunner(%q) err=%v want Create guidance", name, err)
+		}
+	}
+	r, err := sandbox.NewRunner("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Name() != "fake" {
+		t.Fatalf("name=%s", r.Name())
 	}
 }
 

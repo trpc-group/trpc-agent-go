@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,19 +127,22 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 	}
 }
 
+// closerOf returns a Close wrapper for executors that implement Close.
+// The returned function is safe for concurrent use and closes at most once,
+// caching and returning the first Close error on later calls.
 func closerOf(ce codeexecutor.CodeExecutor) func() error {
 	type closer interface{ Close() error }
 	c, ok := ce.(closer)
 	if !ok {
 		return nil
 	}
-	var once bool
+	var (
+		once sync.Once
+		err  error
+	)
 	return func() error {
-		if once {
-			return nil
-		}
-		once = true
-		return c.Close()
+		once.Do(func() { err = c.Close() })
+		return err
 	}
 }
 
@@ -170,6 +174,9 @@ type CodeExecRunner struct {
 func (r *CodeExecRunner) Name() string { return r.name }
 
 // Run implements Runner via Engine.RunProgram.
+// Stdout/stderr are truncated after capture to MaxStdoutBytes/MaxStderrBytes:
+// RunProgram ResourceLimits do not currently expose byte caps, so this is a
+// post-capture bound for report/storage safety rather than a streaming limit.
 func (r *CodeExecRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Result {
 	id := uuid.NewString()
 	start := time.Now().UTC()
@@ -385,12 +392,30 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// NewRunner is retained for compatibility; prefer Create.
-// It does not silently fall back for container/e2b.
+// NewRunner is retained for local/fake compatibility tests.
+// Container and E2B backends own long-lived resources and must be created via
+// Create so callers can defer CreateResult.Closer; NewRunner refuses them to
+// avoid leaking Docker containers or remote sandboxes.
 func NewRunner(name string) (Runner, error) {
+	n := strings.ToLower(strings.TrimSpace(name))
+	switch n {
+	case "", "container", "e2b":
+		return nil, fmt.Errorf(
+			"sandbox.NewRunner(%q) would leak a long-lived executor; use sandbox.Create and defer CreateResult.Closer",
+			name,
+		)
+	}
 	res, err := Create(CreateOptions{Name: name, AllowLocalFallback: false})
 	if err != nil {
 		return nil, err
+	}
+	// local/fake closers are nil today; close anyway if a future backend adds one.
+	if res.Closer != nil {
+		_ = res.Closer()
+		return nil, fmt.Errorf(
+			"sandbox.NewRunner(%q) obtained a Closer-backed executor; use sandbox.Create instead",
+			name,
+		)
 	}
 	return res.Runner, nil
 }

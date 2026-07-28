@@ -92,12 +92,12 @@ func TestParseUnifiedDiff_Empty(t *testing.T) {
 // (StagedOnly). This avoids creating a nested .git which some environments
 // block.
 func TestParseRepoDiff_StagedPlusUnstaged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake git helper is a POSIX shell script")
+	}
 	binDir := t.TempDir()
 	argsPath := filepath.Join(binDir, "git.args")
 	script := filepath.Join(binDir, "git")
-	if runtime.GOOS == "windows" {
-		script += ".bat"
-	}
 	// Fake git: require -C <dir> diff HEAD, reject --cached / bare "diff".
 	body := `#!/bin/sh
 printf '%s\n' "$@" > "$GIT_FAKE_ARGS"

@@ -110,10 +110,8 @@ Host rule-engine findings are authoritative; your role is orchestration assist.`
 		llmagent.WithWorkspaceExecAllowedCommands(
 			"skills/code-review/scripts/run_checks.sh",
 			"skills/code-review/scripts/run_go_vet.sh",
+			"skills/code-review/scripts/run_go_test.sh",
 			"skills/code-review/scripts/run_staticcheck.sh",
-			"run_checks.sh",
-			"run_go_vet.sh",
-			"run_staticcheck.sh",
 		),
 		llmagent.WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
 			Files: []codeexecutor.WorkspaceFile{{

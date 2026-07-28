@@ -12,13 +12,15 @@ package sandbox
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
 
 	"trpc.group/trpc-go/trpc-agent-go/codeexecutor"
 )
 
-// TestCloserOf_ExactlyOnce verifies owned executor cleanup is idempotent.
+// TestCloserOf_ExactlyOnce verifies owned executor cleanup is idempotent,
+// including under concurrent callers.
 func TestCloserOf_ExactlyOnce(t *testing.T) {
 	var closes atomic.Int32
 	fake := &countingCloser{closes: &closes}
@@ -34,6 +36,23 @@ func TestCloserOf_ExactlyOnce(t *testing.T) {
 	}
 	if got := closes.Load(); got != 1 {
 		t.Fatalf("closes=%d want 1", got)
+	}
+
+	closes.Store(0)
+	fake2 := &countingCloser{closes: &closes}
+	closer2 := closerOf(fake2)
+	const n = 32
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_ = closer2()
+		}()
+	}
+	wg.Wait()
+	if got := closes.Load(); got != 1 {
+		t.Fatalf("concurrent closes=%d want 1", got)
 	}
 }
 
