@@ -2,9 +2,9 @@
   "reports": [
     {
       "spec_name": "concurrent_writes",
-      "started_at": "2026-07-28T03:21:28.4969219Z",
-      "completed_at": "2026-07-28T03:21:28.5459116Z",
-      "duration_ms": 48,
+      "started_at": "2026-07-28T07:55:25.1994874Z",
+      "completed_at": "2026-07-28T07:55:25.3987806Z",
+      "duration_ms": 199,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -49,9 +49,9 @@
     },
     {
       "spec_name": "error_recovery",
-      "started_at": "2026-07-28T03:21:28.5464926Z",
-      "completed_at": "2026-07-28T03:21:28.5590235Z",
-      "duration_ms": 12,
+      "started_at": "2026-07-28T07:55:25.3992987Z",
+      "completed_at": "2026-07-28T07:55:25.4146911Z",
+      "duration_ms": 15,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -68,7 +68,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -80,7 +80,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -102,16 +102,18 @@
             "UserID": "user1",
             "SessionID": "sess-error-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e"
+          ]
         }
       ],
       "summary": "All 3 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "full_cycle",
-      "started_at": "2026-07-28T03:21:28.5595388Z",
-      "completed_at": "2026-07-28T03:21:28.5877109Z",
-      "duration_ms": 28,
+      "started_at": "2026-07-28T07:55:25.4146911Z",
+      "completed_at": "2026-07-28T07:55:25.4443183Z",
+      "duration_ms": 29,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -128,19 +130,6 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "session_full",
-          "reference_backend": "inmemory",
-          "compared_backend": "redis",
-          "status": "pass",
-          "diffs": null,
-          "session_key": {
-            "AppName": "test-app",
-            "UserID": "user1",
-            "SessionID": "sess-full-1"
-          },
-          "track_name": "booking, flight_search"
-        },
-        {
           "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
@@ -151,7 +140,10 @@
             "UserID": "user1",
             "SessionID": "sess-full-1"
           },
-          "track_name": "booking, flight_search"
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
         },
         {
           "what": "state",
@@ -164,7 +156,10 @@
             "UserID": "user1",
             "SessionID": "sess-full-1"
           },
-          "track_name": "booking, flight_search"
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
         },
         {
           "what": "tracks",
@@ -177,7 +172,26 @@
             "UserID": "user1",
             "SessionID": "sess-full-1"
           },
-          "track_name": "booking, flight_search"
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "redis",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-full-1"
+          },
+          "track_names": [
+            "booking",
+            "flight_search"
+          ]
         },
         {
           "what": "memories",
@@ -190,15 +204,18 @@
             "UserID": "user1",
             "SessionID": "sess-full-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e"
+          ]
         }
       ],
       "summary": "All 5 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "injection_comprehensive",
-      "started_at": "2026-07-28T03:21:28.5882272Z",
-      "completed_at": "2026-07-28T03:21:28.6012365Z",
+      "started_at": "2026-07-28T07:55:25.4443183Z",
+      "completed_at": "2026-07-28T07:55:25.4579319Z",
       "duration_ms": 13,
       "backends_tested": {
         "session": [
@@ -226,8 +243,12 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "summary_filter_key": "main",
-          "track_name": "search_timing"
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
         },
         {
           "what": "session_full",
@@ -240,8 +261,12 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "summary_filter_key": "main",
-          "track_name": "search_timing"
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
         },
         {
           "what": "events",
@@ -254,8 +279,12 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "summary_filter_key": "main",
-          "track_name": "search_timing"
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
         },
         {
           "what": "state",
@@ -268,8 +297,12 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "summary_filter_key": "main",
-          "track_name": "search_timing"
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
         },
         {
           "what": "summary",
@@ -282,8 +315,12 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "summary_filter_key": "main",
-          "track_name": "search_timing"
+          "summary_filter_keys": [
+            "main"
+          ],
+          "track_names": [
+            "search_timing"
+          ]
         },
         {
           "what": "memories",
@@ -296,15 +333,18 @@
             "UserID": "user1",
             "SessionID": "sess-injection-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e"
+          ]
         }
       ],
       "summary": "All 6 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "memory_writes",
-      "started_at": "2026-07-28T03:21:28.6012365Z",
-      "completed_at": "2026-07-28T03:21:28.609005Z",
+      "started_at": "2026-07-28T07:55:25.4584449Z",
+      "completed_at": "2026-07-28T07:55:25.4657071Z",
       "duration_ms": 7,
       "backends_tested": {
         "session": [
@@ -332,7 +372,12 @@
             "UserID": "user1",
             "SessionID": "sess-mem-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e, \u003cmem-id-3\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e",
+            "\u003cmem-id-3\u003e"
+          ]
         },
         {
           "what": "memory_search",
@@ -345,16 +390,21 @@
             "UserID": "user1",
             "SessionID": "sess-mem-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e, \u003cmem-id-3\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e",
+            "\u003cmem-id-3\u003e"
+          ]
         }
       ],
       "summary": "All 2 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "multi_turn",
-      "started_at": "2026-07-28T03:21:28.6095287Z",
-      "completed_at": "2026-07-28T03:21:28.61978Z",
-      "duration_ms": 10,
+      "started_at": "2026-07-28T07:55:25.4662268Z",
+      "completed_at": "2026-07-28T07:55:25.4796164Z",
+      "duration_ms": 13,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -387,9 +437,9 @@
     },
     {
       "spec_name": "out_of_order",
-      "started_at": "2026-07-28T03:21:28.6202887Z",
-      "completed_at": "2026-07-28T03:21:28.6319935Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-28T07:55:25.4796164Z",
+      "completed_at": "2026-07-28T07:55:25.5041084Z",
+      "duration_ms": 24,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -428,16 +478,20 @@
             "UserID": "user1",
             "SessionID": "sess-order-1"
           },
-          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e"
+          "memory_ids": [
+            "\u003cmem-id-0\u003e",
+            "\u003cmem-id-1\u003e",
+            "\u003cmem-id-2\u003e"
+          ]
         }
       ],
       "summary": "All 2 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "single_turn",
-      "started_at": "2026-07-28T03:21:28.6319935Z",
-      "completed_at": "2026-07-28T03:21:28.6397267Z",
-      "duration_ms": 7,
+      "started_at": "2026-07-28T07:55:25.5046349Z",
+      "completed_at": "2026-07-28T07:55:25.5152312Z",
+      "duration_ms": 10,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -454,7 +508,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -466,7 +520,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -482,9 +536,9 @@
     },
     {
       "spec_name": "state_updates",
-      "started_at": "2026-07-28T03:21:28.6402894Z",
-      "completed_at": "2026-07-28T03:21:28.6485995Z",
-      "duration_ms": 8,
+      "started_at": "2026-07-28T07:55:25.5152312Z",
+      "completed_at": "2026-07-28T07:55:25.5229638Z",
+      "duration_ms": 7,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -529,8 +583,8 @@
     },
     {
       "spec_name": "summary_generation",
-      "started_at": "2026-07-28T03:21:28.6485995Z",
-      "completed_at": "2026-07-28T03:21:28.6647754Z",
+      "started_at": "2026-07-28T07:55:25.5229638Z",
+      "completed_at": "2026-07-28T07:55:25.5389737Z",
       "duration_ms": 16,
       "backends_tested": {
         "session": [
@@ -558,7 +612,11 @@
             "UserID": "user1",
             "SessionID": "sess-summary-1"
           },
-          "summary_filter_key": ", dev, main"
+          "summary_filter_keys": [
+            "",
+            "dev",
+            "main"
+          ]
         },
         {
           "what": "events",
@@ -571,16 +629,20 @@
             "UserID": "user1",
             "SessionID": "sess-summary-1"
           },
-          "summary_filter_key": ", dev, main"
+          "summary_filter_keys": [
+            "",
+            "dev",
+            "main"
+          ]
         }
       ],
       "summary": "All 2 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "summary_truncation",
-      "started_at": "2026-07-28T03:21:28.6647754Z",
-      "completed_at": "2026-07-28T03:21:28.6835039Z",
-      "duration_ms": 18,
+      "started_at": "2026-07-28T07:55:25.5394882Z",
+      "completed_at": "2026-07-28T07:55:25.5572021Z",
+      "duration_ms": 17,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -607,7 +669,9 @@
             "UserID": "user1",
             "SessionID": "sess-trunc-1"
           },
-          "summary_filter_key": "main"
+          "summary_filter_keys": [
+            "main"
+          ]
         },
         {
           "what": "events",
@@ -620,7 +684,9 @@
             "UserID": "user1",
             "SessionID": "sess-trunc-1"
           },
-          "summary_filter_key": "main"
+          "summary_filter_keys": [
+            "main"
+          ]
         },
         {
           "what": "state",
@@ -633,15 +699,17 @@
             "UserID": "user1",
             "SessionID": "sess-trunc-1"
           },
-          "summary_filter_key": "main"
+          "summary_filter_keys": [
+            "main"
+          ]
         }
       ],
       "summary": "All 3 verifications passed across 2 session + 2 memory backends."
     },
     {
       "spec_name": "tool_calls",
-      "started_at": "2026-07-28T03:21:28.6835039Z",
-      "completed_at": "2026-07-28T03:21:28.6954938Z",
+      "started_at": "2026-07-28T07:55:25.5572021Z",
+      "completed_at": "2026-07-28T07:55:25.569142Z",
       "duration_ms": 11,
       "backends_tested": {
         "session": [
@@ -659,7 +727,7 @@
       "diff_count": 0,
       "verifications": [
         {
-          "what": "state",
+          "what": "events",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -671,7 +739,7 @@
           }
         },
         {
-          "what": "events",
+          "what": "state",
           "reference_backend": "inmemory",
           "compared_backend": "redis",
           "status": "pass",
@@ -687,9 +755,9 @@
     },
     {
       "spec_name": "track_events",
-      "started_at": "2026-07-28T03:21:28.6954938Z",
-      "completed_at": "2026-07-28T03:21:28.7071607Z",
-      "duration_ms": 11,
+      "started_at": "2026-07-28T07:55:25.569142Z",
+      "completed_at": "2026-07-28T07:55:25.5824474Z",
+      "duration_ms": 13,
       "backends_tested": {
         "session": [
           "inmemory",
@@ -716,7 +784,11 @@
             "UserID": "user1",
             "SessionID": "sess-track-1"
           },
-          "track_name": "error_log, sub_task, tool_execution"
+          "track_names": [
+            "error_log",
+            "sub_task",
+            "tool_execution"
+          ]
         }
       ],
       "summary": "All 1 verifications passed across 2 session + 2 memory backends."

@@ -449,6 +449,109 @@ func TestNormalizerChain_RunsInOrder(t *testing.T) {
 	}
 }
 
+// 9. ConcurrentEventSorter
+
+func TestConcurrentEventSorter_SortsByStableKey(t *testing.T) {
+	n := &concurrentEventSorter{}
+	sess := session.NewSession("app", "u1", "s1")
+	sess.Events = []event.Event{
+		{Author: "tool", Tag: "b", FilterKey: "main",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "result B"}}}},
+		},
+		{Author: "tool", Tag: "a", FilterKey: "main",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "result A"}}}},
+		},
+		{Author: "user1", Tag: "z", FilterKey: "main",
+			Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Content: "msg"}}}},
+		},
+	}
+	snap := &SessionSnapshot{Session: sess}
+	result, err := n.NormalizeSession(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sorted: tool < user1 (author), then tag=a < tag=b (within tool).
+	if result.Session.Events[0].Author != "tool" {
+		t.Errorf("first should be tool, got %s", result.Session.Events[0].Author)
+	}
+	if result.Session.Events[0].Tag != "a" {
+		t.Errorf("first event tag should be a, got %s", result.Session.Events[0].Tag)
+	}
+	if result.Session.Events[1].Tag != "b" {
+		t.Errorf("second event tag should be b, got %s", result.Session.Events[1].Tag)
+	}
+	if result.Session.Events[2].Author != "user1" {
+		t.Errorf("last should be user1, got %s", result.Session.Events[2].Author)
+	}
+}
+
+// 10. idNormalizer Reset
+
+func TestIDNormalizer_Reset(t *testing.T) {
+	n := &idNormalizer{idMap: make(map[string]string)}
+
+	// First snapshot.
+	sess1 := session.NewSession("app", "u1", "s1")
+	sess1.Events = []event.Event{{ID: "aaa"}, {ID: "bbb"}}
+	n.NormalizeSession(&SessionSnapshot{Session: sess1})
+	idAfter := sess1.Events[0].ID
+
+	// Reset.
+	n.Reset()
+
+	// Second snapshot — IDs should restart from <evt-id-0>.
+	sess2 := session.NewSession("app", "u2", "s2")
+	sess2.Events = []event.Event{{ID: "xxx"}}
+	n.NormalizeSession(&SessionSnapshot{Session: sess2})
+	if sess2.Events[0].ID != idAfter {
+		t.Errorf("after reset, first ID should be %s (restarted), got %s", idAfter, sess2.Events[0].ID)
+	}
+}
+
+// 11. sliceOrderNormalizer content-based sort
+
+func TestSliceOrderNormalizer_SortsByContent(t *testing.T) {
+	n := &sliceOrderNormalizer{}
+	snap := &MemorySnapshot{
+		Memories: []*memory.Entry{
+			{ID: "z", Memory: &memory.Memory{Memory: "banana"}},
+			{ID: "a", Memory: &memory.Memory{Memory: "apple"}},
+			{ID: "m", Memory: &memory.Memory{Memory: "cherry"}},
+		},
+	}
+	result, err := n.NormalizeMemory(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Memories[0].Memory.Memory != "apple" {
+		t.Errorf("first should be apple, got %s", result.Memories[0].Memory.Memory)
+	}
+	if result.Memories[1].Memory.Memory != "banana" {
+		t.Errorf("second should be banana, got %s", result.Memories[1].Memory.Memory)
+	}
+	if result.Memories[2].Memory.Memory != "cherry" {
+		t.Errorf("third should be cherry, got %s", result.Memories[2].Memory.Memory)
+	}
+}
+
+func TestSliceOrderNormalizer_ContentTiebreakByID(t *testing.T) {
+	n := &sliceOrderNormalizer{}
+	snap := &MemorySnapshot{
+		Memories: []*memory.Entry{
+			{ID: "z", Memory: &memory.Memory{Memory: "same"}},
+			{ID: "a", Memory: &memory.Memory{Memory: "same"}},
+		},
+	}
+	result, err := n.NormalizeMemory(snap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same content → fall back to ID sort.
+	if result.Memories[0].ID != "a" {
+		t.Errorf("first should be a (ID tiebreak), got %s", result.Memories[0].ID)
+	}
+}
+
 // helpers
 
 func keysOf(raw json.RawMessage) []string {

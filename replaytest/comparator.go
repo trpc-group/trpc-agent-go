@@ -23,6 +23,7 @@ import (
 // DiffKind classifies the type of difference found.
 type DiffKind string
 
+// Diff result classification constants.
 const (
 	DiffValueMismatch DiffKind = "value_mismatch"
 	DiffMissingKey    DiffKind = "missing_key"
@@ -36,6 +37,7 @@ const (
 // DiffSeverity indicates how severe a difference is.
 type DiffSeverity string
 
+// Diff severity constants.
 const (
 	SeverityError   DiffSeverity = "error"
 	SeverityWarning DiffSeverity = "warning"
@@ -844,6 +846,34 @@ func jsonPathEscape(s string) string {
 	return s
 }
 
+// derefPointers handles pointer nil checks and dereferencing for CompareJSON.
+func derefPointers(left, right any, lv, rv reflect.Value, basePath string) ([]DiffResult, bool) {
+	if lv.Kind() != reflect.Ptr && rv.Kind() != reflect.Ptr {
+		return nil, false
+	}
+	if lv.Kind() == reflect.Ptr {
+		lvNil := lv.IsNil()
+		rvNil := rv.Kind() == reflect.Ptr && rv.IsNil()
+		if lvNil && rvNil {
+			return nil, true
+		}
+		if lvNil {
+			return []DiffResult{{Path: basePath, Kind: DiffMissingEntry, Severity: SeverityError,
+				Left: nil, Right: right, Message: "left pointer is nil"}}, true
+		}
+		if rvNil {
+			return []DiffResult{{Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
+				Left: left, Right: nil, Message: "right pointer is nil"}}, true
+		}
+		return CompareJSON(lv.Elem().Interface(), right, basePath), true
+	}
+	if rv.IsNil() {
+		return []DiffResult{{Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
+			Left: left, Right: nil, Message: "right pointer is nil"}}, true
+	}
+	return CompareJSON(left, rv.Elem().Interface(), basePath), true
+}
+
 // CompareJSON compares two JSON values deeply and returns diffs.
 // This is a general-purpose deep comparison for arbitrary JSON.
 func CompareJSON(left, right any, basePath string) []DiffResult {
@@ -870,36 +900,8 @@ func CompareJSON(left, right any, basePath string) []DiffResult {
 	}
 
 	// Dereference pointers.
-	if lv.Kind() == reflect.Ptr {
-		lvNil := lv.IsNil()
-		rvIsPtr := rv.Kind() == reflect.Ptr
-		rvNil := rvIsPtr && rv.IsNil()
-
-		if lvNil && rvNil {
-			return diffs
-		}
-		if lvNil {
-			return []DiffResult{{
-				Path: basePath, Kind: DiffMissingEntry, Severity: SeverityError,
-				Left: nil, Right: right, Message: "left pointer is nil",
-			}}
-		}
-		if rvNil {
-			return []DiffResult{{
-				Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
-				Left: left, Right: nil, Message: "right pointer is nil",
-			}}
-		}
-		return CompareJSON(lv.Elem().Interface(), right, basePath)
-	}
-	if rv.Kind() == reflect.Ptr {
-		if rv.IsNil() {
-			return []DiffResult{{
-				Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
-				Left: left, Right: nil, Message: "right pointer is nil",
-			}}
-		}
-		return CompareJSON(left, rv.Elem().Interface(), basePath)
+	if d, ok := derefPointers(left, right, lv, rv, basePath); ok {
+		return d
 	}
 
 	if lv.Kind() != rv.Kind() {

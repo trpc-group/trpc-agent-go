@@ -56,102 +56,31 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 		refMemBackend = spec.Backends.Memory[0]
 	}
 	// ---- session-scoped verifications (compute once, filter by path) ----
-	sessionWhats := map[string]bool{}
-	for _, vs := range spec.Verifies {
-		switch vs.What {
-		case "session_full", "events", "state", "summary", "tracks":
-			sessionWhats[vs.What] = true
-		}
-	}
-	// Track capability pre-check.
-	allTrackCapable := true
-	for _, name := range harness.ActiveSessionBackends {
-		if !harness.TrackSupported[name] {
-			allTrackCapable = false
-		}
-	}
-	if sessionWhats["tracks"] && !allTrackCapable {
-		for _, name := range harness.ActiveSessionBackends {
-			if !harness.TrackSupported[name] {
-				report.AddVerification(VerificationResult{
-					What: "tracks", ReferenceBackend: name,
-					ComparedBackend: name, Status: StatusSkip,
-					SessionKey: harness.sessionKey,
-					Diffs: []DiffResult{{Path: "$.tracks", Kind: DiffMissingEntry,
-						Severity: SeverityInfo,
-						Message:  fmt.Sprintf("backend %q does not implement TrackService; track persistence not supported", name),
-					}},
-				})
-			}
-		}
-		delete(sessionWhats, "tracks")
-	}
-
-	if len(sessionWhats) > 0 {
-		refSnap, ok := sessionSnapshots[refBackend]
-		if ok {
-			normChain.Reset()
-			refNorm, err := normChain.NormalizeSession(refSnap[VerifySessionFull])
-			if err != nil {
-				return nil, fmt.Errorf("normalize reference session %s: %w", refBackend, err)
-			}
-			for _, backendName := range harness.ActiveSessionBackends {
-				if backendName == refBackend {
-					continue
-				}
-				cmpSnap, ok := sessionSnapshots[backendName]
-				if !ok {
-					continue
-				}
-				normChain.Reset()
-				cmpNorm, err := normChain.NormalizeSession(cmpSnap[VerifySessionFull])
-				if err != nil {
-					return nil, fmt.Errorf("normalize session %s: %w", backendName, err)
-				}
-				allDiffs := comp.CompareSessions(refNorm, cmpNorm, refBackend, backendName)
-
-				for what := range sessionWhats {
-					scoped := filterDiffsByScope(allDiffs, what)
-					vr := VerificationResult{
-						What:             what,
-						ReferenceBackend: refBackend,
-						ComparedBackend:  backendName,
-						SessionKey:       harness.sessionKey,
-						Diffs:            scoped,
-					}
-					populateSessionLocalization(&vr, refNorm)
-					if len(scoped) == 0 {
-						vr.Status = StatusPass
-					} else {
-						vr.Status = StatusFail
-					}
-					report.AddVerification(vr)
-				}
-
-				// Summary existence check (once per backend pair).
-				for _, vs := range spec.Verifies {
-					if vs.What == "summary" && len(vs.Expect) > 0 {
-						expectDiffs := checkSummaryExpectations(refNorm, vs)
-						if len(expectDiffs) > 0 {
-							expectVr := VerificationResult{
-								What: "summary_expect", ReferenceBackend: refBackend,
-								ComparedBackend: backendName, SessionKey: harness.sessionKey,
-								Diffs: expectDiffs, Status: StatusFail,
-							}
-							populateSessionLocalization(&expectVr, refNorm)
-							report.AddVerification(expectVr)
-						}
-					}
-				}
-			}
-		}
+	if err := runSessionVerifications(report, harness, comp, normChain, spec, sessionSnapshots, refBackend); err != nil {
+		return nil, err
 	}
 
 	// ---- non-session verifications (memories, memory_search) ----
+	if err := runMemoryVerifications(report, harness, comp, normChain, spec, memorySnapshots, refMemBackend); err != nil {
+		return nil, err
+	}
+
+	report.Finalize()
+	return report, nil
+}
+
+// runMemoryVerifications handles memories and memory_search verifications.
+func runMemoryVerifications(
+	report *DiffReport,
+	harness *Harness,
+	comp *Comparator,
+	normChain *NormalizerChain,
+	spec *Spec,
+	memorySnapshots map[string]map[string]*MemorySnapshot,
+	refMemBackend string,
+) error {
 	for _, verifySpec := range spec.Verifies {
 		switch verifySpec.What {
-		case "session_full", "events", "state", "summary", "tracks":
-			// Handled above.
 		case "memories", "memory_search":
 			refMemSnap, ok := memorySnapshots[refMemBackend]
 			if !ok {
@@ -160,7 +89,7 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 			normChain.Reset()
 			refMemNorm, err := normChain.NormalizeMemory(refMemSnap[VerifyMemories])
 			if err != nil {
-				return nil, fmt.Errorf("normalize reference memory %s: %w", refMemBackend, err)
+				return fmt.Errorf("normalize reference memory %s: %w", refMemBackend, err)
 			}
 			for _, backendName := range spec.Backends.Memory {
 				if backendName == refMemBackend {
@@ -173,7 +102,7 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 				normChain.Reset()
 				cmpMemNorm, err := normChain.NormalizeMemory(cmpMemSnap[VerifyMemories])
 				if err != nil {
-					return nil, fmt.Errorf("normalize memory %s: %w", backendName, err)
+					return fmt.Errorf("normalize memory %s: %w", backendName, err)
 				}
 
 				basePath := "$.memories"
@@ -184,12 +113,12 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 					normChain.Reset()
 					refSearchNorm, err := normChain.NormalizeMemory(refMemSnap[VerifyMemorySearch])
 					if err != nil {
-						return nil, fmt.Errorf("normalize reference search: %w", err)
+						return fmt.Errorf("normalize reference search: %w", err)
 					}
 					normChain.Reset()
 					cmpSearchNorm, err := normChain.NormalizeMemory(cmpMemSnap[VerifyMemorySearch])
 					if err != nil {
-						return nil, fmt.Errorf("normalize compared search: %w", err)
+						return fmt.Errorf("normalize compared search: %w", err)
 					}
 					leftEntries = refSearchNorm.SearchResults
 					rightEntries = cmpSearchNorm.SearchResults
@@ -213,9 +142,7 @@ func RunSpec(ctx context.Context, spec *Spec, dbURL string) (*DiffReport, error)
 			}
 		}
 	}
-
-	report.Finalize()
-	return report, nil
+	return nil
 }
 
 // populateSessionLocalization extracts summary filter keys and track names from the reference session snapshot for diff report localization.
@@ -230,7 +157,7 @@ func populateSessionLocalization(vr *VerificationResult, snap *SessionSnapshot) 
 			keys = append(keys, k)
 		}
 		sort.Strings(keys)
-		vr.SummaryFilterKey = strings.Join(keys, ", ")
+		vr.SummaryFilterKeys = keys
 	}
 	// Collect track names.
 	if len(snap.Session.Tracks) > 0 {
@@ -239,7 +166,7 @@ func populateSessionLocalization(vr *VerificationResult, snap *SessionSnapshot) 
 			names = append(names, string(k))
 		}
 		sort.Strings(names)
-		vr.TrackName = strings.Join(names, ", ")
+		vr.TrackNames = names
 	}
 }
 
@@ -260,7 +187,7 @@ func populateMemoryLocalization(vr *VerificationResult, snap *MemorySnapshot) {
 			}
 		}
 		sort.Strings(ids)
-		vr.MemoryID = strings.Join(ids, ", ")
+		vr.MemoryIDs = ids
 	}
 }
 
@@ -322,6 +249,100 @@ func filterDiffsByScope(diffs []DiffResult, what string) []DiffResult {
 	return out
 }
 
+// runSessionVerifications computes CompareSessions once per backend pair and
+// distributes diffs by scope prefix (events/state/summary/tracks) to avoid
+// duplicate reporting across multiple what tags.
+func runSessionVerifications(
+	report *DiffReport,
+	harness *Harness,
+	comp *Comparator,
+	normChain *NormalizerChain,
+	spec *Spec,
+	sessionSnapshots map[string]map[string]*SessionSnapshot,
+	refBackend string,
+) error {
+	sessionWhats := map[string]bool{}
+	for _, vs := range spec.Verifies {
+		switch vs.What {
+		case "session_full", "events", "state", "summary", "tracks":
+			sessionWhats[vs.What] = true
+		}
+	}
+	if len(sessionWhats) == 0 {
+		return nil
+	}
+	refSnap, ok := sessionSnapshots[refBackend]
+	if !ok {
+		return nil
+	}
+	normChain.Reset()
+	refNorm, err := normChain.NormalizeSession(refSnap[VerifySessionFull])
+	if err != nil {
+		return fmt.Errorf("normalize reference session %s: %w", refBackend, err)
+	}
+	for _, backendName := range harness.ActiveSessionBackends {
+		if backendName == refBackend {
+			continue
+		}
+		cmpSnap, ok := sessionSnapshots[backendName]
+		if !ok {
+			continue
+		}
+		normChain.Reset()
+		cmpNorm, err := normChain.NormalizeSession(cmpSnap[VerifySessionFull])
+		if err != nil {
+			return fmt.Errorf("normalize session %s: %w", backendName, err)
+		}
+		allDiffs := comp.CompareSessions(refNorm, cmpNorm, refBackend, backendName)
+
+		for what := range sessionWhats {
+			if what == "tracks" && (!harness.TrackSupported[refBackend] || !harness.TrackSupported[backendName]) {
+				report.AddVerification(VerificationResult{
+					What: "tracks", ReferenceBackend: refBackend,
+					ComparedBackend: backendName, Status: StatusSkip,
+					SessionKey: harness.sessionKey,
+					Diffs: []DiffResult{{Path: "$.tracks", Kind: DiffMissingEntry,
+						Severity: SeverityInfo,
+						Message:  "one or both backends do not implement TrackService",
+					}},
+				})
+				continue
+			}
+			scoped := filterDiffsByScope(allDiffs, what)
+			vr := VerificationResult{
+				What:             what,
+				ReferenceBackend: refBackend,
+				ComparedBackend:  backendName,
+				SessionKey:       harness.sessionKey,
+				Diffs:            scoped,
+			}
+			populateSessionLocalization(&vr, refNorm)
+			if len(scoped) == 0 {
+				vr.Status = StatusPass
+			} else {
+				vr.Status = StatusFail
+			}
+			report.AddVerification(vr)
+		}
+	}
+	// Summary existence check (once, outside per-backend loop).
+	for _, vs := range spec.Verifies {
+		if vs.What == "summary" && len(vs.Expect) > 0 {
+			expectDiffs := checkSummaryExpectations(refNorm, vs)
+			if len(expectDiffs) > 0 {
+				expectVr := VerificationResult{
+					What: "summary_expect", ReferenceBackend: refBackend,
+					ComparedBackend: refBackend, SessionKey: harness.sessionKey,
+					Diffs: expectDiffs, Status: StatusFail,
+				}
+				populateSessionLocalization(&expectVr, refNorm)
+				report.AddVerification(expectVr)
+			}
+		}
+	}
+	return nil
+}
+
 // RunSpecs executes multiple specs and returns all reports.
 func RunSpecs(ctx context.Context, specs []*Spec, dbURL string) ([]*DiffReport, error) {
 	var reports []*DiffReport
@@ -368,7 +389,7 @@ func WriteCombinedReport(reports []*DiffReport, path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal combined report: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write combined report: %w", err)
 	}
 	return nil

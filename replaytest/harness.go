@@ -11,6 +11,7 @@ package replaytest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -72,6 +73,8 @@ type MemorySnapshot struct {
 	Memories      []*memory.Entry `json:"memories,omitempty"`
 	SearchResults []*memory.Entry `json:"search_results,omitempty"`
 }
+
+var errNotHandled = errors.New("operation not handled by this dispatch group")
 
 // Harness drives operations against a set of backends and captures results.
 type Harness struct {
@@ -188,6 +191,13 @@ func (h *Harness) Execute(ctx context.Context) error {
 }
 
 func (h *Harness) executeOp(ctx context.Context, op Operation, _ int) error {
+	if err := h.executeSessionOp(ctx, op); err != errNotHandled {
+		return err
+	}
+	return h.executeMemoryOrConcurrentOp(ctx, op)
+}
+
+func (h *Harness) executeSessionOp(ctx context.Context, op Operation) error {
 	switch op.Op {
 	case OpCreateSession:
 		return h.execSessionOp(ctx, op, func(ctx context.Context, svc session.Service) error {
@@ -256,35 +266,30 @@ func (h *Harness) executeOp(ctx context.Context, op Operation, _ int) error {
 		return h.execSessionOp(ctx, op, func(ctx context.Context, svc session.Service) error {
 			return h.appendTrackEvent(ctx, svc, op.Params)
 		})
+	}
+	return errNotHandled
+}
+
+func (h *Harness) executeMemoryOrConcurrentOp(ctx context.Context, op Operation) error {
+	switch op.Op {
 	case OpAddMemory:
-		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
-			return h.addMemory(ctx, svc, op.Params)
-		})
+		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error { return h.addMemory(ctx, svc, op.Params) })
 	case OpUpdateMemory:
-		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
-			return h.updateMemory(ctx, svc, op.Params)
-		})
+		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error { return h.updateMemory(ctx, svc, op.Params) })
 	case OpDeleteMemory:
-		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
-			return h.deleteMemory(ctx, svc, op.Params)
-		})
+		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error { return h.deleteMemory(ctx, svc, op.Params) })
 	case OpClearMemories:
-		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
-			return svc.ClearMemories(ctx, h.memoryUserKey)
-		})
+		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error { return svc.ClearMemories(ctx, h.memoryUserKey) })
 	case OpSearchMemories:
-		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
-			return h.searchMemories(ctx, svc, op.Params)
-		})
+		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error { return h.searchMemories(ctx, svc, op.Params) })
 	case OpAddMemoryWithMetadata:
 		return h.execMemoryOp(ctx, op, func(ctx context.Context, svc memory.Service) error {
 			return h.addMemoryWithMetadata(ctx, svc, op.Params)
 		})
 	case OpAppendConcurrentEvents:
 		return h.appendConcurrentEvents(ctx, op.Params)
-	default:
-		return fmt.Errorf("unknown operation: %q", op.Op)
 	}
+	return fmt.Errorf("unknown operation: %q", op.Op)
 }
 
 func (h *Harness) execSessionOp(ctx context.Context, op Operation, fn func(context.Context, session.Service) error) error {

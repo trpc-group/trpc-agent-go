@@ -11,6 +11,7 @@ package replaytest
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -322,6 +323,23 @@ func TestInjectionDetection(t *testing.T) {
 		right := makeSessionWithEvents(event.Event{Author: "user1", Branch: "alt", Response: &model.Response{Choices: []model.Choice{{Message: model.Message{Role: model.RoleUser, Content: "hi"}}}}})
 		diffs := c.CompareSessions(left, right, "a", "b")
 		assertHasDiff(t, diffs, "$.events[0].branch", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("memory_eventTime_mismatch", func(t *testing.T) {
+		t1 := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+		t2 := time.Date(2025, 6, 30, 18, 0, 0, 0, time.UTC)
+		left := []*memory.Entry{{ID: "mem-1", Memory: &memory.Memory{Memory: "x", EventTime: &t1}}}
+		right := []*memory.Entry{{ID: "mem-1", Memory: &memory.Memory{Memory: "x", EventTime: &t2}}}
+		diffs := c.CompareMemories(left, right, "$.memories")
+		assertHasDiff(t, diffs, "$.memories.[mem-1].memory.eventTime", DiffValueMismatch, SeverityWarning)
+	})
+
+	t.Run("memory_eventTime_presence_mismatch", func(t *testing.T) {
+		t1 := time.Date(2025, 1, 15, 12, 0, 0, 0, time.UTC)
+		left := []*memory.Entry{{ID: "mem-1", Memory: &memory.Memory{Memory: "x", EventTime: &t1}}}
+		right := []*memory.Entry{{ID: "mem-1", Memory: &memory.Memory{Memory: "x"}}}
+		diffs := c.CompareMemories(left, right, "$.memories")
+		assertHasDiff(t, diffs, "$.memories.[mem-1].memory.eventTime", DiffValueMismatch, SeverityWarning)
 	})
 
 	// --- Comprehensive detection rate check ---

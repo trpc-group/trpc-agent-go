@@ -596,6 +596,106 @@ func TestCompareJSON_SliceLengthMismatch(t *testing.T) {
 }
 
 // helpers
+// DiffRule.MatchPath — segment boundaries.
+
+func TestDiffRule_MatchPath_SegmentBoundary(t *testing.T) {
+	r := DiffRule{Path: "$.state[*]"}
+	if !r.MatchPath("$.state.app:version") {
+		t.Error("$.state[*] should match $.state.app:version (single segment)")
+	}
+	if r.MatchPath("$.state.a.b") {
+		t.Error("$.state[*] should NOT match $.state.a.b (crosses segment boundary)")
+	}
+	if r.MatchPath("$.state.a.b.c") {
+		t.Error("$.state[*] should NOT match $.state.a.b.c")
+	}
+}
+
+func TestDiffRule_MatchPath_MemoriesWildcard(t *testing.T) {
+	r := DiffRule{Path: "$.memories[*].memory.eventTime"}
+	if !r.MatchPath("$.memories.[mem-1].memory.eventTime") {
+		t.Error("$.memories[*].memory.eventTime should match comparator output path")
+	}
+}
+
+// tokenizePath.
+
+func TestTokenizePath_Basic(t *testing.T) {
+	got := tokenizePath("$.events[3].id")
+	want := []string{"$", "events", "3", "id"}
+	assertSegs(t, got, want)
+}
+
+func TestTokenizePath_BracketedKey(t *testing.T) {
+	got := tokenizePath("$.memories.[mem-1].memory.memory")
+	want := []string{"$", "memories", "mem-1", "memory", "memory"}
+	assertSegs(t, got, want)
+}
+
+func TestTokenizePath_QuotedKey(t *testing.T) {
+	got := tokenizePath("$.memories.[\"a-b\"].score")
+	want := []string{"$", "memories", "a-b", "score"}
+	assertSegs(t, got, want)
+}
+
+func TestTokenizePath_Wildcard(t *testing.T) {
+	got := tokenizePath("$.events[*].timestamp")
+	want := []string{"$", "events", "*", "timestamp"}
+	assertSegs(t, got, want)
+}
+
+// CompareJSON — pointer safety.
+
+func TestCompareJSON_LeftNilPtr(t *testing.T) {
+	var x *int
+	y := 5
+	// Should not panic.
+	diffs := CompareJSON(x, y, "$")
+	if len(diffs) == 0 {
+		t.Error("expected diff for nil pointer vs int")
+	}
+}
+
+func TestCompareJSON_RightNilPtr(t *testing.T) {
+	x := 5
+	var y *int
+	diffs := CompareJSON(x, y, "$")
+	if len(diffs) == 0 {
+		t.Error("expected diff for int vs nil pointer")
+	}
+}
+
+func TestCompareJSON_BothNilPtr(t *testing.T) {
+	var x *int
+	var y *int
+	diffs := CompareJSON(x, y, "$")
+	if len(diffs) != 0 {
+		t.Errorf("both nil pointers should have 0 diffs, got %d", len(diffs))
+	}
+}
+
+func TestCompareJSON_LeftPtrRightStruct(t *testing.T) {
+	x := new(int)
+	*x = 42
+	y := "hello"
+	diffs := CompareJSON(x, y, "$")
+	if len(diffs) == 0 {
+		t.Error("expected type_mismatch for *int vs string")
+	}
+}
+
+func assertSegs(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("length mismatch: got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Errorf("at [%d]: got %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func makeEvent(author, content, branch, tag, filterKey string) event.Event {
 	return event.Event{
 		Author:    author,

@@ -20,6 +20,7 @@ import (
 // VerificationStatus is the outcome of a single verification.
 type VerificationStatus string
 
+// Verification status constants.
 const (
 	StatusPass VerificationStatus = "pass"
 	StatusFail VerificationStatus = "fail"
@@ -35,25 +36,25 @@ type VerificationResult struct {
 	Diffs            []DiffResult       `json:"diffs"`
 	SessionKey       session.Key        `json:"session_key"`
 	// Additional context for localization.
-	SummaryFilterKey string `json:"summary_filter_key,omitempty"`
-	TrackName        string `json:"track_name,omitempty"`
-	MemoryID         string `json:"memory_id,omitempty"`
+	SummaryFilterKeys []string `json:"summary_filter_keys,omitempty"`
+	TrackNames        []string `json:"track_names,omitempty"`
+	MemoryIDs         []string `json:"memory_ids,omitempty"`
 }
 
 // DiffReport is the top-level report output.
 type DiffReport struct {
-	SpecName       string               `json:"spec_name"`
-	StartedAt      time.Time            `json:"started_at"`
-	CompletedAt    time.Time            `json:"completed_at"`
-	DurationMS     int64                `json:"duration_ms"`
+	SpecName        string               `json:"spec_name"`
+	StartedAt       time.Time            `json:"started_at"`
+	CompletedAt     time.Time            `json:"completed_at"`
+	DurationMS      int64                `json:"duration_ms"`
 	BackendsTested  BackendConfig        `json:"backends_tested"`
 	SkippedBackends map[string]string    `json:"skipped_backends,omitempty"`
 	PassCount       int                  `json:"pass_count"`
-	FailCount      int                  `json:"fail_count"`
-	SkipCount      int                  `json:"skip_count"`
-	DiffCount      int                  `json:"diff_count"`
-	Verifications  []VerificationResult `json:"verifications"`
-	Summary        string               `json:"summary"`
+	FailCount       int                  `json:"fail_count"`
+	SkipCount       int                  `json:"skip_count"`
+	DiffCount       int                  `json:"diff_count"`
+	Verifications   []VerificationResult `json:"verifications"`
+	Summary         string               `json:"summary"`
 }
 
 // NewDiffReport creates an empty report for a spec.
@@ -129,7 +130,7 @@ func (r *DiffReport) WriteJSON(path string) error {
 	if err != nil {
 		return fmt.Errorf("marshal report: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0644); err != nil {
+	if err := os.WriteFile(path, data, 0600); err != nil {
 		return fmt.Errorf("write report: %w", err)
 	}
 	return nil
