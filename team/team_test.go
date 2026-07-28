@@ -2160,17 +2160,12 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesCoordinatorAndMemberPatches(
 	tm, err := New(coordinator, []agent.Agent{member})
 	require.NoError(t, err)
 	snapshot := mustExportTeamSnapshot(t, tm)
-	coordinatorNodeID := requireTeamNodeIDByNameAndKind(
-		t,
-		snapshot,
-		"team",
-		structure.NodeKindLLM,
-	)
+	coordinatorNodeID := "team/coordinator"
 	memberNodeID := requireTeamNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"researcher",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var coordinatorPatch agent.SurfacePatch
 	coordinatorPatch.SetInstruction("coordinator patched instruction")
@@ -2252,13 +2247,13 @@ func TestRunnerRun_WithSurfacePatchForNode_AppliesSwarmMemberPatches(
 		t,
 		snapshot,
 		"alpha",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	betaNodeID := requireTeamNodeIDByNameAndKind(
 		t,
 		snapshot,
 		"beta",
-		structure.NodeKindLLM,
+		structure.NodeKindAgent,
 	)
 	var alphaPatch agent.SurfacePatch
 	alphaPatch.SetInstruction("alpha patched instruction")

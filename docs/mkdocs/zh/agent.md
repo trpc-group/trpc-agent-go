@@ -1501,7 +1501,7 @@ for evt := range events {
 每个步骤都会带上这些稳定字段：
 
 - `NodeID`：本次执行对应的静态节点路径
-- `NodeType`：节点的语义类型（`function`、`llm`、`tool` 或 `agent`），与静态结构中的节点类型一致
+- `NodeType`：节点的语义类型（`function`、`llm`、`tool` 或 `agent`），与静态结构中的节点类型一致；`agent` 表示 Agent 执行单元（包括 `LLMAgent`），`llm` 表示显式 LLM 操作节点
 - `PredecessorStepIDs`：这次运行里该步骤的直接前驱步骤
 - `Input` 和 `Output`：步骤输入输出的稳定文本快照
 - `Error`：步骤失败时记录的终态错误
