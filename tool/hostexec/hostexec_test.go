@@ -56,6 +56,35 @@ func TestNewToolSet_Foreground(t *testing.T) {
 	require.Empty(t, mgr.sessions)
 }
 
+func TestNewToolSet_ForegroundHonorsMaxLines(t *testing.T) {
+	if _, _, err := shellSpec(); err != nil {
+		t.Skip(err.Error())
+	}
+
+	set, err := NewToolSet(WithMaxLines(3))
+	require.NoError(t, err)
+	defer set.Close()
+
+	execTool, _, _, _ := toolSetTools(t, set)
+	out, err := execTool.Call(
+		context.Background(),
+		mustJSON(t, map[string]any{
+			"command": "printf 'l1\\nl2\\nl3\\nl4\\nl5\\n'",
+			"yieldMs": 0,
+		}),
+	)
+	require.NoError(t, err)
+
+	res := out.(map[string]any)
+	require.Equal(t, programStatusExited, res["status"])
+	output := outputField(res)
+	require.Contains(t, output, "l5")
+	require.NotContains(
+		t, output, "l1",
+		"foreground output exceeded the configured max lines",
+	)
+}
+
 func TestNewToolSet_BaseDirAndRelativeWorkdir(t *testing.T) {
 	if _, _, err := shellSpec(); err != nil {
 		t.Skip(err.Error())
@@ -524,6 +553,7 @@ func TestRunForeground_ContextCancel(t *testing.T) {
 		execParams{Command: "sleep 5"},
 		5*time.Second,
 		nil,
+		defaultMaxLines,
 	)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Empty(t, output)
