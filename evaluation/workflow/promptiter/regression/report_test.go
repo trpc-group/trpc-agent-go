@@ -297,6 +297,165 @@ func TestWriteArtifactsValidatesPathsAndPublishesCanonicalJSONLast(t *testing.T)
 	require.ErrorContains(t, WriteArtifacts(nil, jsonPath, markdownPath), "report is nil")
 }
 
+func TestWriteArtifactsRejectsRelativeAbsoluteDestinationAlias(t *testing.T) {
+	report := testReport(t)
+	path := filepath.Join(t.TempDir(), "report")
+	workingDirectory, err := os.Getwd()
+	require.NoError(t, err)
+	relativePath, err := filepath.Rel(workingDirectory, path)
+	require.NoError(t, err)
+
+	err = WriteArtifacts(report, relativePath, path)
+	require.ErrorContains(t, err, "different")
+	require.NoFileExists(t, path)
+}
+
+func TestWriteArtifactsRejectsSymlinkParentDestinationAlias(t *testing.T) {
+	report := testReport(t)
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real")
+	aliasParent := filepath.Join(root, "alias")
+	require.NoError(t, os.Mkdir(realParent, 0o700))
+	if err := os.Symlink(realParent, aliasParent); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+	path := filepath.Join(realParent, "report")
+
+	err := WriteArtifacts(report, path, filepath.Join(aliasParent, "report"))
+	require.ErrorContains(t, err, "different")
+	require.NoFileExists(t, path)
+}
+
+func TestWriteArtifactsUsesDestinationFilesystemCaseBehavior(t *testing.T) {
+	report := testReport(t)
+	dir := t.TempDir()
+	caseInsensitive := testDirectoryCaseInsensitive(t, dir)
+	lowerPath := filepath.Join(dir, "case-report")
+	upperPath := filepath.Join(dir, "CASE-REPORT")
+
+	err := WriteArtifacts(report, lowerPath, upperPath)
+	probes, globErr := filepath.Glob(filepath.Join(dir, ".artifact-case-probe-*"))
+	require.NoError(t, globErr)
+	require.Empty(t, probes)
+	if caseInsensitive {
+		require.ErrorContains(t, err, "different")
+		require.NoFileExists(t, lowerPath)
+		require.NoFileExists(t, upperPath)
+		return
+	}
+	require.NoError(t, err)
+	require.FileExists(t, lowerPath)
+	require.FileExists(t, upperPath)
+}
+
+func TestWriteArtifactsRejectsExactDestination(t *testing.T) {
+	report := testReport(t)
+	path := filepath.Join(t.TempDir(), "report")
+
+	err := WriteArtifacts(report, path, path)
+	require.ErrorContains(t, err, "different")
+	require.NoFileExists(t, path)
+}
+
+func TestWriteUsesResolvedOutputNames(t *testing.T) {
+	report := testReport(t)
+	report.ResolvedConfig.Output = OutputConfig{
+		JSON:     "custom-result.json",
+		Markdown: "custom-result.md",
+	}
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, report.ResolvedConfig.Output.JSON)
+	markdownPath := filepath.Join(dir, report.ResolvedConfig.Output.Markdown)
+
+	require.NoError(t, Write(report, dir))
+	require.FileExists(t, jsonPath)
+	require.FileExists(t, markdownPath)
+	require.NoFileExists(t, filepath.Join(dir, "optimization_report.json"))
+	require.NoFileExists(t, filepath.Join(dir, "optimization_report.md"))
+
+	jsonData, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+	var decoded Report
+	require.NoError(t, json.Unmarshal(jsonData, &decoded))
+	expected := ArtifactReferences{JSON: jsonPath, Markdown: markdownPath}
+	require.Equal(t, expected, decoded.Artifacts)
+	require.Equal(t, report.ResolvedConfig.Output, decoded.ResolvedConfig.Output)
+
+	markdownData, err := os.ReadFile(markdownPath)
+	require.NoError(t, err)
+	require.Contains(t, string(markdownData), jsonPath)
+	require.Contains(t, string(markdownData), markdownPath)
+}
+
+func TestWriteRejectsInvalidResolvedOutputNamesWithoutEscaping(t *testing.T) {
+	tests := []struct {
+		name      string
+		configure func(*Report, string)
+	}{
+		{
+			name: "JSON traversal",
+			configure: func(report *Report, _ string) {
+				report.ResolvedConfig.Output.JSON = "../escaped.json"
+			},
+		},
+		{
+			name: "Markdown absolute path",
+			configure: func(report *Report, root string) {
+				report.ResolvedConfig.Output.Markdown = filepath.Join(root, "escaped.md")
+			},
+		},
+		{
+			name: "JSON current directory",
+			configure: func(report *Report, _ string) {
+				report.ResolvedConfig.Output.JSON = "."
+			},
+		},
+		{
+			name: "JSON parent directory",
+			configure: func(report *Report, _ string) {
+				report.ResolvedConfig.Output.JSON = ".."
+			},
+		},
+		{
+			name: "Markdown current directory",
+			configure: func(report *Report, _ string) {
+				report.ResolvedConfig.Output.Markdown = "."
+			},
+		},
+		{
+			name: "Markdown parent directory",
+			configure: func(report *Report, _ string) {
+				report.ResolvedConfig.Output.Markdown = ".."
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			report := testReport(t)
+			report.Status = PipelineRunFailed
+			report.StopReason = StopNecessaryRunFailed
+			root := t.TempDir()
+			outputDir := filepath.Join(root, "output")
+			test.configure(report, root)
+
+			err := Write(report, outputDir)
+			require.ErrorContains(t, err, "resolved output config")
+			entries, readErr := os.ReadDir(root)
+			require.NoError(t, readErr)
+			require.Empty(t, entries)
+		})
+	}
+}
+
+func TestWriteRejectsNilReport(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "output")
+
+	require.ErrorContains(t, Write(nil, outputDir), "report is nil")
+	_, err := os.Stat(outputDir)
+	require.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorContains(t, Write(nil, ""), "output directory is empty")
+}
+
 func TestWriteArtifactsRestrictsOverwrittenFilesWithoutChangingExistingDirectory(t *testing.T) {
 	report := testReport(t)
 	dir := filepath.Join(t.TempDir(), "existing")
@@ -319,6 +478,27 @@ func TestWriteArtifactsRestrictsOverwrittenFilesWithoutChangingExistingDirectory
 		require.NoError(t, statErr)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
+}
+
+func testDirectoryCaseInsensitive(t *testing.T, dir string) bool {
+	t.Helper()
+	probe, err := os.CreateTemp(dir, ".case-probe-*")
+	require.NoError(t, err)
+	probePath := probe.Name()
+	require.NoError(t, probe.Close())
+	t.Cleanup(func() {
+		require.NoError(t, os.Remove(probePath))
+	})
+
+	probeInfo, err := os.Stat(probePath)
+	require.NoError(t, err)
+	foldedPath := filepath.Join(dir, strings.ToUpper(filepath.Base(probePath)))
+	foldedInfo, err := os.Stat(foldedPath)
+	if os.IsNotExist(err) {
+		return false
+	}
+	require.NoError(t, err)
+	return os.SameFile(probeInfo, foldedInfo)
 }
 
 func TestWriteArtifactsReturnsPublishFailure(t *testing.T) {

@@ -150,6 +150,10 @@ func TestConfigurationValidatorsRejectEveryInvalidFieldClass(t *testing.T) {
 		{JSON: "report.json", Markdown: ""},
 		{JSON: filepath.Join("nested", "report.json"), Markdown: "report.md"},
 		{JSON: "report.json", Markdown: filepath.Join("nested", "report.md")},
+		{JSON: ".", Markdown: "report.md"},
+		{JSON: "..", Markdown: "report.md"},
+		{JSON: "report.json", Markdown: "."},
+		{JSON: "report.json", Markdown: ".."},
 		{JSON: "report.json", Markdown: "REPORT.JSON"},
 	} {
 		require.Error(t, validateOutputConfig(output))

@@ -618,9 +618,11 @@ func validateOutputConfig(output OutputConfig) error {
 		return errors.New("output JSON name is empty")
 	case markdownName == "":
 		return errors.New("output Markdown name is empty")
-	case filepath.IsAbs(jsonName) || filepath.Base(jsonName) != jsonName:
+	case jsonName == "." || jsonName == ".." ||
+		filepath.IsAbs(jsonName) || filepath.Base(jsonName) != jsonName:
 		return errors.New("output JSON must be a file name")
-	case filepath.IsAbs(markdownName) || filepath.Base(markdownName) != markdownName:
+	case markdownName == "." || markdownName == ".." ||
+		filepath.IsAbs(markdownName) || filepath.Base(markdownName) != markdownName:
 		return errors.New("output Markdown must be a file name")
 	case strings.EqualFold(filepath.Clean(jsonName), filepath.Clean(markdownName)):
 		return errors.New("output JSON and Markdown names collide")

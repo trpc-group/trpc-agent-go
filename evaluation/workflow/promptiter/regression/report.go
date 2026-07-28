@@ -148,9 +148,6 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	}
 	jsonPath = filepath.Clean(jsonPath)
 	markdownPath = filepath.Clean(markdownPath)
-	if jsonPath == markdownPath {
-		return errors.New("JSON and Markdown output paths must be different")
-	}
 
 	reportCopy := *report
 	reportCopy.Artifacts = ArtifactReferences{JSON: jsonPath, Markdown: markdownPath}
@@ -172,6 +169,9 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	if err := os.MkdirAll(filepath.Dir(jsonPath), 0o700); err != nil {
 		return fmt.Errorf("create JSON output directory: %w", err)
 	}
+	if err := validateArtifactDestinations(jsonPath, markdownPath); err != nil {
+		return err
+	}
 	markdownTemp, err := writeClosedTemp(markdownPath, markdownData)
 	if err != nil {
 		return fmt.Errorf("prepare Markdown artifact: %w", err)
@@ -192,16 +192,108 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	return nil
 }
 
-// Write writes the canonical artifact names below outputDir.
+// Write writes the artifact names from report.ResolvedConfig.Output below
+// outputDir. Use WriteArtifacts when the caller already has full output paths.
 func Write(report *Report, outputDir string) error {
 	if strings.TrimSpace(outputDir) == "" {
 		return errors.New("output directory is empty")
 	}
+	if report == nil {
+		return errors.New("report is nil")
+	}
+	if err := validateOutputConfig(report.ResolvedConfig.Output); err != nil {
+		return fmt.Errorf("resolved output config: %w", err)
+	}
 	return WriteArtifacts(
 		report,
-		filepath.Join(outputDir, "optimization_report.json"),
-		filepath.Join(outputDir, "optimization_report.md"),
+		filepath.Join(outputDir, report.ResolvedConfig.Output.JSON),
+		filepath.Join(outputDir, report.ResolvedConfig.Output.Markdown),
 	)
+}
+
+func validateArtifactDestinations(jsonPath, markdownPath string) error {
+	jsonAbsolute, err := filepath.Abs(filepath.Clean(jsonPath))
+	if err != nil {
+		return fmt.Errorf("resolve JSON output path: %w", err)
+	}
+	markdownAbsolute, err := filepath.Abs(filepath.Clean(markdownPath))
+	if err != nil {
+		return fmt.Errorf("resolve Markdown output path: %w", err)
+	}
+	if jsonAbsolute == markdownAbsolute {
+		return errors.New("JSON and Markdown output paths must be different")
+	}
+
+	jsonParent := filepath.Dir(jsonAbsolute)
+	markdownParent := filepath.Dir(markdownAbsolute)
+	jsonParentInfo, err := os.Stat(jsonParent)
+	if err != nil {
+		return fmt.Errorf("inspect JSON output directory: %w", err)
+	}
+	markdownParentInfo, err := os.Stat(markdownParent)
+	if err != nil {
+		return fmt.Errorf("inspect Markdown output directory: %w", err)
+	}
+	if !os.SameFile(jsonParentInfo, markdownParentInfo) {
+		return nil
+	}
+
+	jsonName := filepath.Base(jsonAbsolute)
+	markdownName := filepath.Base(markdownAbsolute)
+	if jsonName == markdownName {
+		return errors.New("JSON and Markdown output paths must be different")
+	}
+	if !strings.EqualFold(jsonName, markdownName) {
+		return nil
+	}
+	caseInsensitive, err := directoryResolvesCaseVariants(jsonParent)
+	if err != nil {
+		return fmt.Errorf("detect output directory case behavior: %w", err)
+	}
+	if caseInsensitive {
+		return errors.New("JSON and Markdown output paths must be different")
+	}
+	return nil
+}
+
+func directoryResolvesCaseVariants(directory string) (_ bool, resultErr error) {
+	probe, err := os.CreateTemp(directory, ".artifact-case-probe-*")
+	if err != nil {
+		return false, fmt.Errorf("create probe: %w", err)
+	}
+	probePath := probe.Name()
+	defer func() {
+		err := os.Remove(probePath)
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		cleanupErr := fmt.Errorf("remove probe: %w", err)
+		if resultErr == nil {
+			resultErr = cleanupErr
+			return
+		}
+		resultErr = errors.Join(resultErr, cleanupErr)
+	}()
+
+	if err := probe.Close(); err != nil {
+		return false, fmt.Errorf("close probe: %w", err)
+	}
+	probeInfo, err := os.Stat(probePath)
+	if err != nil {
+		return false, fmt.Errorf("inspect probe: %w", err)
+	}
+	variantPath := filepath.Join(
+		directory,
+		strings.ToUpper(filepath.Base(probePath)),
+	)
+	variantInfo, err := os.Stat(variantPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("inspect case-variant probe: %w", err)
+	}
+	return os.SameFile(probeInfo, variantInfo), nil
 }
 
 func sanitizedReport(report *Report) (*Report, error) {
