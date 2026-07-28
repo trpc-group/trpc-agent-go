@@ -3101,6 +3101,9 @@
 <p>workflow 语言是 Runtime 的选择，不是 Dynamic Workflow 的本质约束。当前内置
 Runtime 使用 Python；对已注册 Agent 和工具的调用会通过显式 bridge/RPC 回到 Go
 宿主，而不是在脚本中运行另一套 Agent SDK。</p>
+<p>模型生成的 workflow 代码应保持为简短的编排胶水：只表达角色委派、数据流、分支、
+并发和有界循环，具体的调研、写作、编码或工具操作交给子 Agent。不要把任务报告、
+源码文件或大段 shell 脚本直接嵌入 workflow 代码。</p>
 <h2 id="_2">最小接入</h2>
 <p>下面是最小接入方式：注册一个中性的基础 Agent，然后把 <code>run_workflow</code>
 挂到根 Agent 上。</p>
@@ -3149,7 +3152,10 @@ Agent。</p>
 <span class="normal"><a href="#__codelineno-2-39">39</a></span>
 <span class="normal"><a href="#__codelineno-2-40">40</a></span>
 <span class="normal"><a href="#__codelineno-2-41">41</a></span>
-<span class="normal"><a href="#__codelineno-2-42">42</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
+<span class="normal"><a href="#__codelineno-2-42">42</a></span>
+<span class="normal"><a href="#__codelineno-2-43">43</a></span>
+<span class="normal"><a href="#__codelineno-2-44">44</a></span>
+<span class="normal"><a href="#__codelineno-2-45">45</a></span></pre></div></td><td class="code"><div><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1"></a><span class="kn">import</span><span class="w"> </span><span class="p">(</span>
 </span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent&quot;</span>
 </span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/agent/llmagent&quot;</span>
 </span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4"></a><span class="w">    </span><span class="s">&quot;trpc.group/trpc-go/trpc-agent-go/model/openai&quot;</span>
@@ -3169,28 +3175,31 @@ Agent。</p>
 </span><span id="__span-2-18"><a id="__codelineno-2-18" name="__codelineno-2-18"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span>
 </span><span id="__span-2-19"><a id="__codelineno-2-19" name="__codelineno-2-19"></a><span class="w">        </span><span class="s">&quot;Follow the dynamic instruction supplied for this workflow-local role.&quot;</span><span class="p">,</span>
 </span><span id="__span-2-20"><a id="__codelineno-2-20" name="__codelineno-2-20"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="p">)</span>
-</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a>
-</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23"></a><span class="c1">// 创建 run_workflow 工具。</span>
-</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24"></a><span class="c1">// LocalRunner 会启动本地 Python 进程，只适合开发或已隔离的环境。</span>
-</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
-</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">LocalRunner</span><span class="p">{},</span>
-</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27"></a><span class="w">    </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">general</span><span class="p">},</span>
-</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28"></a><span class="p">)</span>
-</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
-</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="c1">// 生产代码中应按需处理错误</span>
-</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31"></a><span class="p">}</span>
-</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a>
-</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a><span class="c1">// 把 run_workflow 挂到根 Agent 上。</span>
-</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a><span class="nx">root</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
-</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
-</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
-</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span>
-</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a><span class="w">        </span><span class="s">&quot;Answer simple requests directly. Use run_workflow for tasks that &quot;</span><span class="w"> </span><span class="o">+</span>
-</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a><span class="w">            </span><span class="s">&quot;need temporary child-agent collaboration.&quot;</span><span class="p">,</span>
-</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a><span class="w">    </span><span class="p">),</span>
-</span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">workflow</span><span class="p">}),</span>
-</span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42"></a><span class="p">)</span>
+</span><span id="__span-2-21"><a id="__codelineno-2-21" name="__codelineno-2-21"></a><span class="w">    </span><span class="c1">// 让每个临时角色只关注自己的分支；同一 workflow 请求内复用</span>
+</span><span id="__span-2-22"><a id="__codelineno-2-22" name="__codelineno-2-22"></a><span class="w">    </span><span class="c1">// instance_id 时仍会共享对应历史。</span>
+</span><span id="__span-2-23"><a id="__codelineno-2-23" name="__codelineno-2-23"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithMessageFilterMode</span><span class="p">(</span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">IsolatedRequest</span><span class="p">),</span>
+</span><span id="__span-2-24"><a id="__codelineno-2-24" name="__codelineno-2-24"></a><span class="p">)</span>
+</span><span id="__span-2-25"><a id="__codelineno-2-25" name="__codelineno-2-25"></a>
+</span><span id="__span-2-26"><a id="__codelineno-2-26" name="__codelineno-2-26"></a><span class="c1">// 创建 run_workflow 工具。</span>
+</span><span id="__span-2-27"><a id="__codelineno-2-27" name="__codelineno-2-27"></a><span class="c1">// LocalRunner 会启动本地 Python 进程，只适合开发或已隔离的环境。</span>
+</span><span id="__span-2-28"><a id="__codelineno-2-28" name="__codelineno-2-28"></a><span class="nx">workflow</span><span class="p">,</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">NewTool</span><span class="p">(</span>
+</span><span id="__span-2-29"><a id="__codelineno-2-29" name="__codelineno-2-29"></a><span class="w">    </span><span class="nx">dynamicworkflow</span><span class="p">.</span><span class="nx">LocalRunner</span><span class="p">{},</span>
+</span><span id="__span-2-30"><a id="__codelineno-2-30" name="__codelineno-2-30"></a><span class="w">    </span><span class="p">[]</span><span class="nx">agent</span><span class="p">.</span><span class="nx">Agent</span><span class="p">{</span><span class="nx">general</span><span class="p">},</span>
+</span><span id="__span-2-31"><a id="__codelineno-2-31" name="__codelineno-2-31"></a><span class="p">)</span>
+</span><span id="__span-2-32"><a id="__codelineno-2-32" name="__codelineno-2-32"></a><span class="k">if</span><span class="w"> </span><span class="nx">err</span><span class="w"> </span><span class="o">!=</span><span class="w"> </span><span class="kc">nil</span><span class="w"> </span><span class="p">{</span>
+</span><span id="__span-2-33"><a id="__codelineno-2-33" name="__codelineno-2-33"></a><span class="w">    </span><span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span><span class="w"> </span><span class="c1">// 生产代码中应按需处理错误</span>
+</span><span id="__span-2-34"><a id="__codelineno-2-34" name="__codelineno-2-34"></a><span class="p">}</span>
+</span><span id="__span-2-35"><a id="__codelineno-2-35" name="__codelineno-2-35"></a>
+</span><span id="__span-2-36"><a id="__codelineno-2-36" name="__codelineno-2-36"></a><span class="c1">// 把 run_workflow 挂到根 Agent 上。</span>
+</span><span id="__span-2-37"><a id="__codelineno-2-37" name="__codelineno-2-37"></a><span class="nx">root</span><span class="w"> </span><span class="o">:=</span><span class="w"> </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">New</span><span class="p">(</span>
+</span><span id="__span-2-38"><a id="__codelineno-2-38" name="__codelineno-2-38"></a><span class="w">    </span><span class="s">&quot;assistant&quot;</span><span class="p">,</span>
+</span><span id="__span-2-39"><a id="__codelineno-2-39" name="__codelineno-2-39"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithModel</span><span class="p">(</span><span class="nx">modelInstance</span><span class="p">),</span>
+</span><span id="__span-2-40"><a id="__codelineno-2-40" name="__codelineno-2-40"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithInstruction</span><span class="p">(</span>
+</span><span id="__span-2-41"><a id="__codelineno-2-41" name="__codelineno-2-41"></a><span class="w">        </span><span class="s">&quot;Answer simple requests directly. Use run_workflow for tasks that &quot;</span><span class="w"> </span><span class="o">+</span>
+</span><span id="__span-2-42"><a id="__codelineno-2-42" name="__codelineno-2-42"></a><span class="w">            </span><span class="s">&quot;need temporary child-agent collaboration.&quot;</span><span class="p">,</span>
+</span><span id="__span-2-43"><a id="__codelineno-2-43" name="__codelineno-2-43"></a><span class="w">    </span><span class="p">),</span>
+</span><span id="__span-2-44"><a id="__codelineno-2-44" name="__codelineno-2-44"></a><span class="w">    </span><span class="nx">llmagent</span><span class="p">.</span><span class="nx">WithTools</span><span class="p">([]</span><span class="nx">tool</span><span class="p">.</span><span class="nx">Tool</span><span class="p">{</span><span class="nx">workflow</span><span class="p">}),</span>
+</span><span id="__span-2-45"><a id="__codelineno-2-45" name="__codelineno-2-45"></a><span class="p">)</span>
 </span></code></pre></div></td></tr></table></div>
 <p>这段代码只把 <code>run_workflow</code> 暴露给根 Agent。根 Agent 的其他工具不会自动进入
 workflow。这样可以避免 workflow 意外获得写操作、凭证、shell 执行或控制面工具。</p>
@@ -3250,12 +3259,23 @@ workflow。这样可以避免 workflow 意外获得写操作、凭证、shell �
 <li><code>instance_id</code>：同一个 workflow 内多次调用复用同一个子 Agent 历史。</li>
 </ul>
 <p>默认不传 <code>instance_id</code> 时，每次 <code>agent(...)</code> 调用都会创建独立的子 Agent
-历史，适合并发分支。显式传相同 <code>instance_id</code> 表示复用同一条子历史；
-并发调用同一个 <code>instance_id</code> 会被串行执行，避免同时读写同一段会话历史。</p>
+历史，适合并发分支。对于 <code>LLMAgent</code> 模板，如果临时角色不应继承根分支对话，
+请像上例一样配置 <code>llmagent.IsolatedRequest</code>。显式传相同 <code>instance_id</code> 表示
+复用同一条子历史；并发调用同一个 <code>instance_id</code> 会被串行执行，避免同时读写
+同一段会话历史。</p>
 <p>复用的历史包含子 Agent 的输入和产生的事件。动态 <code>instruction</code> 只配置当前这次
 调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 <code>input</code> 中。</p>
 <p>这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
 也不能新增基础 Agent 本来没有的宿主能力。</p>
+<p><code>agent(...)</code> 返回的 envelope 包含 <code>text</code>、可选的 <code>structured</code> 结果和执行元数据。
+下游需要普通文本时应传 <code>result["text"]</code>，需要稳定字段时传
+<code>result["structured"]</code>；除非确实需要元数据，否则不要继续传递完整 envelope。
+后续分支或循环需要稳定字段时，应请求 <code>schema</code> 并使用 <code>structured</code>，不要要求子
+Agent 返回 JSON 文本后再在 workflow 中解析。</p>
+<p>如果一个角色必须明确调用工具，而后续代码又需要结构化判断，应拆成两次子 Agent
+调用：先获取未结构化但有工具依据的文本，再把这份证据交给带 <code>schema</code>、且
+<code>tools=[]</code> 的子 Agent。这样无需依赖模型服务在同一轮里同时支持工具调用和结构化
+响应模式。</p>
 <h2 id="_3">一个完整例子</h2>
 <p>假设用户要求：</p>
 <blockquote>
@@ -3366,7 +3386,8 @@ first analyze risk and rationale, then make an approval decision.</p>
 里猜字段、单位或业务含义。如果模型服务不支持 JSON Schema 响应格式，这次结构化
 调用可能失败；不需要稳定字段时，可以不传 <code>structured_output</code>。</p>
 <h2 id="_4">并发与批处理</h2>
-<p><code>parallel</code> 用于同时执行互不依赖的分支，并按输入顺序返回结果：</p>
+<p><code>parallel</code> 用于同时执行互不依赖的分支，并按输入顺序返回结果；失败的独立分支返回
+<code>None</code>：</p>
 <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-8-1">1</a></span>
 <span class="normal"><a href="#__codelineno-8-2">2</a></span>
 <span class="normal"><a href="#__codelineno-8-3">3</a></span>
@@ -3382,6 +3403,15 @@ first analyze risk and rationale, then make an approval decision.</p>
 <p><code>pipeline(items, stage1, stage2, ...)</code> 用于对一批对象执行重复的多阶段处理。
 每个 item 会按 stage 顺序前进；一个 item 完成前一阶段后，就可以进入下一阶段，
 不需要等待整批 item。</p>
+<p>每个 stage 可以接收一、二或三个位置参数：</p>
+<ul>
+<li><code>stage(previous)</code></li>
+<li><code>stage(previous, original)</code></li>
+<li><code>stage(previous, original, index)</code></li>
+</ul>
+<p>第一阶段的 <code>previous</code> 就是原始 item。简单阶段可以只写一个参数；后续阶段仍可按需
+读取原始 item 和 index。所有 stage 的签名会在任何 item 启动前完成校验。如果某个
+stage 失败或返回 <code>None</code>，该 item 的最终结果就是 <code>None</code>，后续 stage 不再执行。</p>
 <div class="language-python highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"><a href="#__codelineno-9-1"> 1</a></span>
 <span class="normal"><a href="#__codelineno-9-2"> 2</a></span>
 <span class="normal"><a href="#__codelineno-9-3"> 3</a></span>
@@ -3429,8 +3459,10 @@ Agent 解读。</p>
 递归或混合控制流边界；workflow 调用子 Agent 应使用 <code>agent(...)</code>。</p>
 <h2 id="session">事件、Session 与执行边界</h2>
 <p>Dynamic Workflow 采用前台、一次性执行。workflow 代码负责表达编排逻辑，已注册的
-Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的对话上下文，同时仍属于
-当前运行。因此：</p>
+Agent 和工具仍在 Go 宿主中运行。省略 <code>instance_id</code> 时，每次子 Agent 调用都会获得
+独立的会话分支；显式复用同一个 <code>instance_id</code> 的调用会共享对应子历史。所有子 Agent
+调用仍属于当前运行；按上例配置 <code>IsolatedRequest</code> 后，子 Agent 只看到自己的分支。
+如果基础 Agent 选择了更宽的历史模式，它也可能看到祖先上下文。因此：</p>
 <ul>
 <li>前端可以从同一个 event stream 看到子 Agent 输出和工具调用进度。</li>
 <li>配置的 Session Service 会持久化这些事件。</li>
@@ -3439,6 +3471,9 @@ Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的
 </ul>
 <p>event stream 遵循框架统一的流式消费约定：持续消费直到运行结束；如果提前停止，应取消
 本次运行的 context。</p>
+<p>workflow 执行不具备事务性。如果子 Agent 或代码可调用工具已经修改了外部状态，而后续
+步骤失败，这些副作用不会自动回滚。当根 Agent 或应用可能重试 workflow 时，应让有
+副作用的操作保持串行，并尽量具备幂等性。</p>
 <p>这也是 Dynamic Workflow 和“让模型写一个普通脚本自己跑完”的关键区别：临时
 workflow 具备代码的灵活性，但 Agent 执行、工具边界、事件流和 Session 持久化仍由
 Go 框架掌控。</p>
@@ -3450,6 +3485,9 @@ Go 框架掌控。</p>
 配置的可选全流程 timeout。
 默认 timeout 会刻意保持未设置，LocalRunner 只继承调用方 context，避免意外截断
 耗时较长的 Agent workflow。</p>
+<p>推荐直接编写以 <code>return</code> 结束的 workflow body。为了兼容模型常见输出，如果整段
+workflow 只有一个可选 docstring 和一个无参数的 <code>async def run()</code> 或
+<code>async def main()</code>，LocalRunner 也会自动调用它；其他未调用的 helper 仍会校验失败。</p>
 <p>相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
 Python 子集。这些是有意的行为变化，但不会构成安全 sandbox 边界。</p>
@@ -3539,7 +3577,7 @@ profile，并将其传给 <code>sandbox.WithPermissionProfile(...)</code>。</p>
     <span class="md-icon" title="最后更新">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:18:21 UTC">2026-07-28 06:18:21</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-iso_datetime" title="2026年7月28日 06:18:42 UTC">2026-07-28 06:18:42</span>
   </span>
 
     
