@@ -247,6 +247,101 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 	}
 }
 
+func TestRunProgramExpiredDeadlineWhileWaitingForSerialLock(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(DangerFullAccessProfile()),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencySerial}),
+	)
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"run/serial-expired-deadline",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithDeadline(
+		context.Background(),
+		time.Now().Add(-time.Second),
+	)
+	defer cancel()
+	result, err := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd: "bash",
+	})
+	if !isKind(err, ErrTimeout) {
+		t.Fatalf("expired context error = %v, want ErrTimeout", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired context error = %v, want deadline cause", err)
+	}
+	if !result.TimedOut || result.ExitCode != -1 {
+		t.Fatalf("result = %#v, want timed out exit -1", result)
+	}
+	if len(rt.runLocks) != 0 {
+		t.Fatalf("run locks retained after expired wait: %#v", rt.runLocks)
+	}
+}
+
+func TestNormalizeRunProgramResultErrorPrecedence(t *testing.T) {
+	baseResult := codeexecutor.RunResult{
+		Stdout:   "preserved",
+		ExitCode: 23,
+		Duration: time.Second,
+	}
+	for name, cause := range map[string]error{
+		"raw deadline":     context.DeadlineExceeded,
+		"wrapped deadline": errors.Join(errors.New("wrapped"), context.DeadlineExceeded),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := normalizeRunProgramResult(baseResult, cause)
+			if !isKind(err, ErrTimeout) {
+				t.Fatalf("error = %v, want ErrTimeout", err)
+			}
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("error = %v, want deadline cause", err)
+			}
+			if !result.TimedOut || result.ExitCode != -1 {
+				t.Fatalf("result = %#v, want timed out exit -1", result)
+			}
+			if result.Stdout != baseResult.Stdout || result.Duration != baseResult.Duration {
+				t.Fatalf("result = %#v, want existing fields preserved", result)
+			}
+		})
+	}
+
+	classifiedSetup := newSandboxError(
+		ErrSetupFailed, "run", "", context.DeadlineExceeded,
+	)
+	classifiedPolicy := deniedf(
+		ErrPolicyViolation, "run", "", "invalid request",
+	)
+	classifiedTimeout := newSandboxError(
+		ErrTimeout, "run", "", context.DeadlineExceeded,
+	)
+	for name, wantErr := range map[string]error{
+		"canceled":           context.Canceled,
+		"classified setup":   classifiedSetup,
+		"classified policy":  classifiedPolicy,
+		"classified timeout": classifiedTimeout,
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := normalizeRunProgramResult(baseResult, wantErr)
+			if err != wantErr {
+				t.Fatalf("error = %v, want original %v", err, wantErr)
+			}
+			if result != baseResult {
+				t.Fatalf("result = %#v, want unchanged %#v", result, baseResult)
+			}
+		})
+	}
+
+	result, err := normalizeRunProgramResult(baseResult, nil)
+	if err != nil || result != baseResult {
+		t.Fatalf("success = (%#v, %v), want unchanged result and nil error", result, err)
+	}
+}
+
 func TestRuntimeRunProgramSerialTimeoutStartsAfterLock(t *testing.T) {
 	rt := NewRuntime(
 		WithWorkspaceRoot(t.TempDir()),
