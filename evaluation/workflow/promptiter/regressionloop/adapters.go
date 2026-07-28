@@ -192,8 +192,11 @@ func promptSurfaceRunOption(surfaceID, prompt string) (agent.RunOption, error) {
 // BuildPromptProfile builds a PromptIter initial profile from a prompt file for
 // one instruction, global-instruction, or tool-description surface.
 func BuildPromptProfile(surfaceIDs []string, prompt string) (*promptiter.Profile, error) {
-	if strings.TrimSpace(prompt) == "" || len(surfaceIDs) == 0 {
+	if len(surfaceIDs) == 0 {
 		return nil, nil
+	}
+	if strings.TrimSpace(prompt) == "" {
+		return nil, errors.New("prompt source is empty")
 	}
 	if len(surfaceIDs) != 1 {
 		return nil, fmt.Errorf("built-in prompt profile requires exactly one target surface id; got %v", surfaceIDs)

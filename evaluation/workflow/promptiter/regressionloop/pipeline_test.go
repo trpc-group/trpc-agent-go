@@ -211,7 +211,7 @@ func TestPipelineUsesCostProviderWithEstimatedModelCallFallback(t *testing.T) {
 		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
 		TargetSurfaceIDs:    []string{"agent#instruction"},
 		PromptIter:          PromptIterConfig{MaxRounds: 1},
-		Gate:                GateConfig{RequireEngineAccepted: false, MaxCost: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false, MaxCost: 1, ExpectedCostCurrency: "USD"},
 	}
 	result, err := pipeline.Run(context.Background(), cfg)
 	require.NoError(t, err)
@@ -911,6 +911,21 @@ func TestPipelineRejectsNilBaselineEvaluationResults(t *testing.T) {
 		PromptIterator: &capturingPromptIterator{},
 	}.Run(context.Background(), cfg)
 	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
+
+	_, err = Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: evalResult("train", []caseSpec{{
+					id: "case", metric: "metric", status: status.EvalStatusUnknown,
+				}}),
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
 }
 
 func TestPipelineRejectsBaselineCasesWithoutMetricCoverage(t *testing.T) {
@@ -941,6 +956,51 @@ func TestPipelineRejectsBaselineCasesWithoutMetricCoverage(t *testing.T) {
 				{id: "validation", metric: "metric", score: 1, status: status.EvalStatusPassed},
 			}),
 		}},
+		PromptIterator: &capturingPromptIterator{},
+	}.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
+}
+
+func TestPipelineRejectsBaselineCaseWithIncompleteMetricAmongCompleteMetrics(t *testing.T) {
+	dir := t.TempDir()
+	promptPath := filepath.Join(dir, "prompt.txt")
+	metricsPath := filepath.Join(dir, "metrics.json")
+	require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+	require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        promptPath,
+		MetricsPath:         metricsPath,
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          filepath.Join(dir, "optimization_report.json"),
+		OutputMarkdown:      filepath.Join(dir, "optimization_report.md"),
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{RequireEngineAccepted: false},
+	}
+	baselineTrain := &promptiterengine.EvaluationResult{
+		EvalSets: []promptiterengine.EvalSetResult{{
+			EvalSetID: "train",
+			Cases: []promptiterengine.CaseResult{{
+				EvalSetID:  "train",
+				EvalCaseID: "case",
+				Metrics: []promptiterengine.MetricResult{
+					{MetricName: "covered", Score: 1, Status: status.EvalStatusPassed},
+					{MetricName: "incomplete", Score: 0, Status: status.EvalStatusUnknown},
+				},
+			}},
+		}},
+	}
+	_, err := Pipeline{
+		Evaluator: &scriptedEvaluator{
+			results: map[Phase]*promptiterengine.EvaluationResult{
+				PhaseBaselineTrain: baselineTrain,
+				PhaseBaselineValidation: evalResult("validation", []caseSpec{
+					{id: "validation_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+				}),
+			},
+		},
 		PromptIterator: &capturingPromptIterator{},
 	}.Run(context.Background(), cfg)
 	assert.ErrorContains(t, err, "baseline_train evaluator returned result without metric coverage")
@@ -978,6 +1038,35 @@ func TestPipelineRejectsMissingCollaboratorsAndMetricsPath(t *testing.T) {
 	assert.ErrorContains(t, err, "read metrics path")
 }
 
+func TestPipelineRejectsEmptyPromptSourceForBuiltInSurfaces(t *testing.T) {
+	for _, targetSurfaceID := range []string{"agent#instruction", "agent#tool.lookup"} {
+		t.Run(targetSurfaceID, func(t *testing.T) {
+			dir := t.TempDir()
+			promptPath := filepath.Join(dir, "prompt.txt")
+			metricsPath := filepath.Join(dir, "metrics.json")
+			require.NoError(t, os.WriteFile(promptPath, []byte(" \n\t"), 0o644))
+			require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+			iterator := &capturingPromptIterator{}
+			_, err := Pipeline{
+				Evaluator:      &scriptedEvaluator{},
+				PromptIterator: iterator,
+			}.Run(context.Background(), Config{
+				AppName:             "app",
+				PromptSource:        promptPath,
+				MetricsPath:         metricsPath,
+				TrainEvalSetID:      "train",
+				ValidationEvalSetID: "validation",
+				OutputJSON:          filepath.Join(dir, "report.json"),
+				OutputMarkdown:      filepath.Join(dir, "report.md"),
+				TargetSurfaceIDs:    []string{targetSurfaceID},
+				PromptIter:          PromptIterConfig{MaxRounds: 1},
+			})
+			assert.ErrorContains(t, err, "prompt source is empty")
+			assert.Nil(t, iterator.request)
+		})
+	}
+}
+
 func TestPipelinePropagatesPromptProfileAndReportErrors(t *testing.T) {
 	dir := t.TempDir()
 	metricsPath := filepath.Join(dir, "metrics.json")
@@ -998,8 +1087,12 @@ func TestPipelinePropagatesPromptProfileAndReportErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "read prompt source")
 
 	promptPath := filepath.Join(dir, "prompt.txt")
-	require.NoError(t, os.WriteFile(promptPath, []byte("prompt"), 0o644))
+	require.NoError(t, os.WriteFile(promptPath, []byte(" \n\t"), 0o644))
 	cfg.PromptSource = promptPath
+	_, err = pipeline.Run(context.Background(), cfg)
+	assert.ErrorContains(t, err, "prompt source is empty")
+
+	require.NoError(t, os.WriteFile(promptPath, []byte("prompt"), 0o644))
 	cfg.TargetSurfaceIDs = []string{"agent#model"}
 	pipeline.Evaluator = &scriptedEvaluator{
 		results: map[Phase]*promptiterengine.EvaluationResult{
@@ -1017,7 +1110,120 @@ func TestPipelinePropagatesPromptProfileAndReportErrors(t *testing.T) {
 	assert.ErrorContains(t, err, "write JSON report")
 }
 
-func TestPipelineDocumentsSkillTargetRequiresCustomPromptIteratorProfilePath(t *testing.T) {
+func TestPipelineRejectsUnmatchedGateSelectors(t *testing.T) {
+	tests := []struct {
+		name    string
+		gate    GateConfig
+		wantErr string
+	}{
+		{
+			name:    "hard metric typo",
+			gate:    GateConfig{HardFailMetricNames: []string{"final_respnose"}},
+			wantErr: "gate hard fail metric names not found in metrics: [final_respnose]",
+		},
+		{
+			name:    "critical case typo",
+			gate:    GateConfig{CriticalCaseIDs: []string{"missing_case"}},
+			wantErr: "gate critical case ids not found in baseline validation: [missing_case]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			promptPath := filepath.Join(dir, "prompt.txt")
+			metricsPath := filepath.Join(dir, "metrics.json")
+			require.NoError(t, os.WriteFile(promptPath, []byte("prompt"), 0o644))
+			require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[{"metricName":"final_response"}]}`), 0o644))
+			iterator := &capturingPromptIterator{}
+			_, err := Pipeline{
+				Evaluator: &scriptedEvaluator{
+					results: map[Phase]*promptiterengine.EvaluationResult{
+						PhaseBaselineTrain: evalResult("train", []caseSpec{
+							{id: "train_case", metric: "final_response", score: 1, status: status.EvalStatusPassed},
+						}),
+						PhaseBaselineValidation: evalResult("validation", []caseSpec{
+							{id: "case", metric: "final_response", score: 1, status: status.EvalStatusPassed},
+						}),
+					},
+				},
+				PromptIterator: iterator,
+			}.Run(context.Background(), Config{
+				AppName:             "app",
+				PromptSource:        promptPath,
+				MetricsPath:         metricsPath,
+				TrainEvalSetID:      "train",
+				ValidationEvalSetID: "validation",
+				OutputJSON:          filepath.Join(dir, "report.json"),
+				OutputMarkdown:      filepath.Join(dir, "report.md"),
+				TargetSurfaceIDs:    []string{"agent#instruction"},
+				PromptIter:          PromptIterConfig{MaxRounds: 1},
+				Gate:                tt.gate,
+			})
+			assert.ErrorContains(t, err, tt.wantErr)
+			assert.Nil(t, iterator.request)
+		})
+	}
+}
+
+func TestPipelineRejectsCandidateIncompleteMetricStatusInGate(t *testing.T) {
+	for _, candidateStatus := range []status.EvalStatus{
+		status.EvalStatusUnknown,
+		status.EvalStatusNotEvaluated,
+		status.EvalStatus("invalid"),
+	} {
+		t.Run(string(candidateStatus), func(t *testing.T) {
+			dir := t.TempDir()
+			promptPath := filepath.Join(dir, "prompt.txt")
+			metricsPath := filepath.Join(dir, "metrics.json")
+			require.NoError(t, os.WriteFile(promptPath, []byte("baseline prompt"), 0o644))
+			require.NoError(t, os.WriteFile(metricsPath, []byte(`{"metrics":[]}`), 0o644))
+			candidatePrompt := "candidate prompt"
+			result, err := Pipeline{
+				Evaluator: &scriptedEvaluator{
+					results: map[Phase]*promptiterengine.EvaluationResult{
+						PhaseBaselineTrain: evalResult("train", []caseSpec{
+							{id: "train_case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+						}),
+						PhaseBaselineValidation: evalResult("validation", []caseSpec{
+							{id: "case", metric: "metric", score: 0, status: status.EvalStatusFailed},
+						}),
+						PhaseCandidateValidation: evalResult("validation", []caseSpec{
+							{id: "case", metric: "metric", score: 0, status: candidateStatus},
+						}),
+					},
+				},
+				PromptIterator: &capturingPromptIterator{
+					result: &promptiterengine.RunResult{Rounds: []promptiterengine.RoundResult{{
+						Round: 1,
+						OutputProfile: &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+							SurfaceID: "agent#instruction",
+							Value:     astructure.SurfaceValue{Text: &candidatePrompt},
+						}}},
+						Acceptance: &promptiterengine.AcceptanceDecision{Accepted: true},
+					}}},
+				},
+				Clock: &sequenceClock{times: []time.Time{time.Unix(1, 0), time.Unix(2, 0)}},
+			}.Run(context.Background(), Config{
+				AppName:             "app",
+				PromptSource:        promptPath,
+				MetricsPath:         metricsPath,
+				TrainEvalSetID:      "train",
+				ValidationEvalSetID: "validation",
+				OutputJSON:          filepath.Join(dir, "report.json"),
+				OutputMarkdown:      filepath.Join(dir, "report.md"),
+				TargetSurfaceIDs:    []string{"agent#instruction"},
+				PromptIter:          PromptIterConfig{MaxRounds: 1},
+				Gate:                GateConfig{RequireEngineAccepted: false},
+			})
+			require.NoError(t, err)
+			assert.False(t, result.Report.GateDecision.Accepted)
+			assert.Contains(t, result.Report.GateDecision.Reasons,
+				"candidate validation has incomplete metric statuses: [case/metric="+string(candidateStatus)+"]")
+		})
+	}
+}
+
+func TestPipelineAllowsCustomSurfacePathWithProfileBuilderAndValidator(t *testing.T) {
 	dir := t.TempDir()
 	promptPath := filepath.Join(dir, "prompt.txt")
 	metricsPath := filepath.Join(dir, "metrics.json")
@@ -1050,6 +1256,47 @@ func TestPipelineDocumentsSkillTargetRequiresCustomPromptIteratorProfilePath(t *
 	}.Run(context.Background(), cfg)
 	assert.ErrorContains(t, err, "supports only instruction, global_instruction, or tool")
 	assert.Nil(t, iterator.request)
+
+	iterator = &capturingPromptIterator{result: &promptiterengine.RunResult{
+		Status: promptiterengine.RunStatusSucceeded,
+		BaselineValidation: evalResult("validation", []caseSpec{
+			{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+		}),
+	}}
+	evaluator := &scriptedEvaluator{
+		results: map[Phase]*promptiterengine.EvaluationResult{
+			PhaseBaselineTrain: evalResult("train", []caseSpec{
+				{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+			}),
+			PhaseBaselineValidation: evalResult("validation", []caseSpec{
+				{id: "case", metric: "m", score: 1, status: status.EvalStatusPassed},
+			}),
+		},
+	}
+	_, err = Pipeline{
+		Evaluator:      evaluator,
+		PromptIterator: iterator,
+		ProfileBuilder: PromptProfileBuilderFunc(func(surfaceIDs []string, prompt string) (*promptiter.Profile, error) {
+			require.Equal(t, []string{"agent#skill.refund_policy"}, surfaceIDs)
+			return &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{
+				SurfaceID: "agent#skill.refund_policy",
+				Value: astructure.SurfaceValue{Skills: []astructure.SkillRef{{
+					ID:          "refund_policy",
+					Description: prompt,
+				}}},
+			}}}, nil
+		}),
+		CandidateProfileValidator: CandidateProfileValidatorFunc(func(*promptiter.Profile, []string) error {
+			return nil
+		}),
+	}.Run(context.Background(), cfg)
+	require.NoError(t, err)
+	require.NotNil(t, iterator.request)
+	require.NotNil(t, iterator.request.InitialProfile)
+	require.Len(t, iterator.request.InitialProfile.Overrides, 1)
+	assert.Equal(t, "agent#skill.refund_policy", iterator.request.InitialProfile.Overrides[0].SurfaceID)
+	require.Len(t, iterator.request.InitialProfile.Overrides[0].Value.Skills, 1)
+	assert.Equal(t, "prompt", iterator.request.InitialProfile.Overrides[0].Value.Skills[0].Description)
 }
 
 func TestPipelinePropagatesEvaluatorAndIteratorErrors(t *testing.T) {

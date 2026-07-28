@@ -30,8 +30,9 @@ type Config struct {
 	Scenario            string `json:"scenario,omitempty"`
 	OutputJSON          string `json:"outputJson"`
 	OutputMarkdown      string `json:"outputMarkdown"`
-	// IncludeRawSnapshots opts into storing raw trace input/output payloads in
-	// audit reports. It is disabled by default because snapshots can be sensitive.
+	// IncludeRawSnapshots opts into storing raw trace input/output payloads and
+	// raw failure reasons/evidence in audit reports. It is disabled by default
+	// because snapshots and trace-derived failure details can be sensitive.
 	IncludeRawSnapshots bool              `json:"includeRawSnapshots,omitempty"`
 	TargetSurfaceIDs    []string          `json:"targetSurfaceIds"`
 	Gate                GateConfig        `json:"gate"`
@@ -56,8 +57,16 @@ type PromptIterConfig struct {
 	SurfaceParallelism         int      `json:"surfaceParallelism,omitempty"`
 }
 
-// Validate checks required regression-loop inputs.
+type configValidationOptions struct {
+	allowCustomTargetSurfaces bool
+}
+
+// Validate checks required regression-loop inputs for the built-in profile path.
 func (c Config) Validate() error {
+	return c.validate(configValidationOptions{})
+}
+
+func (c Config) validate(options configValidationOptions) error {
 	var errs []error
 	if strings.TrimSpace(c.AppName) == "" {
 		errs = append(errs, errors.New("app name is empty"))
@@ -88,7 +97,11 @@ func (c Config) Validate() error {
 			errs = append(errs, errors.New("target surface id is empty"))
 		}
 	}
-	if err := validateBuiltInTargetSurfaces(c.TargetSurfaceIDs); err != nil {
+	if !options.allowCustomTargetSurfaces {
+		if err := validateBuiltInTargetSurfaces(c.TargetSurfaceIDs); err != nil {
+			errs = append(errs, err)
+		}
+	} else if err := validatePromptSurfaceIDSyntax(c.TargetSurfaceIDs); err != nil {
 		errs = append(errs, err)
 	}
 	if c.PromptIter.MaxRounds <= 0 {
@@ -102,6 +115,9 @@ func (c Config) Validate() error {
 	}
 	if c.Gate.MaxCost < 0 {
 		errs = append(errs, errors.New("gate max cost must be non-negative"))
+	}
+	if c.Gate.MaxCost > 0 && strings.TrimSpace(c.Gate.ExpectedCostCurrency) == "" {
+		errs = append(errs, errors.New("gate expected cost currency is required when max cost is set"))
 	}
 	if c.Gate.MaxLatency != nil && c.Gate.MaxLatency.Duration < 0 {
 		errs = append(errs, errors.New("gate max latency must be non-negative"))
@@ -131,6 +147,19 @@ func (c Config) Validate() error {
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func validatePromptSurfaceIDSyntax(surfaceIDs []string) error {
+	for _, surfaceID := range surfaceIDs {
+		surfaceID = strings.TrimSpace(surfaceID)
+		if surfaceID == "" {
+			continue
+		}
+		if _, _, _, err := parsePromptSurfaceID(surfaceID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func validateBuiltInTargetSurfaces(surfaceIDs []string) error {

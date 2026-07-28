@@ -13,6 +13,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -55,8 +56,10 @@ func BuildReport(input ReportInput) OptimizationReport {
 			Judge:   input.AttributionJudge,
 		})
 	}
-	attributions := append([]CaseAttribution(nil), baselineAttributions...)
-	attributions = append(attributions, candidateAttributions...)
+	reportBaselineAttributions := reportAttributionsWithOptions(baselineAttributions, input.Config.IncludeRawSnapshots)
+	reportCandidateAttributions := reportAttributionsWithOptions(candidateAttributions, input.Config.IncludeRawSnapshots)
+	reportAttributions := append([]CaseAttribution(nil), reportBaselineAttributions...)
+	reportAttributions = append(reportAttributions, reportCandidateAttributions...)
 	report := OptimizationReport{
 		Metadata: RunMetadata{
 			AppName:          input.Config.AppName,
@@ -81,16 +84,16 @@ func BuildReport(input ReportInput) OptimizationReport {
 		Rounds:                             buildRoundAuditWithOptions(input.PromptIterRun, input.BaselineValidation, input.Config.Gate.CriticalCaseIDs, input.Config.IncludeRawSnapshots),
 		Delta:                              delta,
 		GateDecision:                       gate,
-		BaselineFailureAttributions:        baselineAttributions,
-		BaselineFailureAttributionSummary:  SummarizeAttributions(baselineAttributions),
-		CandidateFailureAttributions:       candidateAttributions,
-		CandidateFailureAttributionSummary: SummarizeAttributions(candidateAttributions),
-		FailureAttributions:                attributions,
-		FailureAttributionSummary:          SummarizeAttributions(attributions),
+		BaselineFailureAttributions:        reportBaselineAttributions,
+		BaselineFailureAttributionSummary:  SummarizeAttributions(reportBaselineAttributions),
+		CandidateFailureAttributions:       reportCandidateAttributions,
+		CandidateFailureAttributionSummary: SummarizeAttributions(reportCandidateAttributions),
+		FailureAttributions:                reportAttributions,
+		FailureAttributionSummary:          SummarizeAttributions(reportAttributions),
 		Cost:                               input.Cost,
 		Latency:                            input.Latency,
 		CandidatePrompt:                    CandidatePrompt(input.PromptIterRun),
-		CandidateSurfaces:                  CandidateSurfaces(input.PromptIterRun),
+		CandidateSurfaces:                  candidateSurfacesWithOptions(input.PromptIterRun, input.Config.IncludeRawSnapshots),
 	}
 	return report
 }
@@ -137,12 +140,14 @@ func buildRoundAuditWithOptions(
 			Round:           round.Round,
 			TrainScore:      scoreOf(round.Train),
 			ValidationScore: scoreOf(round.Validation),
-			Patches:         patchesAudit(round.Patches),
+			Patches:         patchesAuditWithOptions(round.Patches, includeRawSnapshots),
 			Validation:      evaluationReportFromResultWithOptions(round.Validation, includeRawSnapshots),
 		}
 		if round.Acceptance != nil {
 			audit.Accepted = round.Acceptance.Accepted
-			audit.Reason = round.Acceptance.Reason
+			if includeRawSnapshots {
+				audit.Reason = round.Acceptance.Reason
+			}
 		}
 		if round.Validation != nil {
 			delta := ComputeDelta(baselineValidation, round.Validation, criticalCaseIDs)
@@ -555,6 +560,7 @@ func categoryList(categories []FailureCategory) string {
 
 func markdownCell(text string) string {
 	text = strings.Join(strings.Fields(text), " ")
+	text = html.EscapeString(text)
 	text = strings.ReplaceAll(text, `\`, `\\`)
 	text = strings.ReplaceAll(text, "|", `\|`)
 	return truncateMarkdownCell(text, 180)
@@ -572,6 +578,10 @@ func truncateMarkdownCell(text string, limit int) string {
 }
 
 func patchesAudit(patches *promptiter.PatchSet) []PatchAudit {
+	return patchesAuditWithOptions(patches, false)
+}
+
+func patchesAuditWithOptions(patches *promptiter.PatchSet, includeRawSnapshots bool) []PatchAudit {
 	if patches == nil {
 		return nil
 	}
@@ -579,8 +589,10 @@ func patchesAudit(patches *promptiter.PatchSet) []PatchAudit {
 	for _, patch := range patches.Patches {
 		audit := PatchAudit{
 			SurfaceID: patch.SurfaceID,
-			Reason:    patch.Reason,
 			Value:     patchValueAudit(patch.Value),
+		}
+		if includeRawSnapshots {
+			audit.Reason = patch.Reason
 		}
 		out = append(out, audit)
 	}
@@ -592,9 +604,13 @@ func patchesAudit(patches *promptiter.PatchSet) []PatchAudit {
 // If an integration only records round patches, use the latest patch set as
 // the audited candidate surface without implying engine acceptance.
 func CandidateSurfaces(run *promptiterengine.RunResult) []PatchAudit {
+	return candidateSurfacesWithOptions(run, false)
+}
+
+func candidateSurfacesWithOptions(run *promptiterengine.RunResult, includeRawSnapshots bool) []PatchAudit {
 	profile := finalCandidateProfile(run)
 	if profile == nil || len(profile.Overrides) == 0 {
-		return latestRoundPatches(run)
+		return latestRoundPatchesWithOptions(run, includeRawSnapshots)
 	}
 	out := make([]PatchAudit, 0, len(profile.Overrides))
 	for _, override := range profile.Overrides {
@@ -607,11 +623,15 @@ func CandidateSurfaces(run *promptiterengine.RunResult) []PatchAudit {
 }
 
 func latestRoundPatches(run *promptiterengine.RunResult) []PatchAudit {
+	return latestRoundPatchesWithOptions(run, false)
+}
+
+func latestRoundPatchesWithOptions(run *promptiterengine.RunResult, includeRawSnapshots bool) []PatchAudit {
 	if run == nil {
 		return nil
 	}
 	for i := len(run.Rounds) - 1; i >= 0; i-- {
-		if patches := patchesAudit(run.Rounds[i].Patches); len(patches) > 0 {
+		if patches := patchesAuditWithOptions(run.Rounds[i].Patches, includeRawSnapshots); len(patches) > 0 {
 			return patches
 		}
 	}
@@ -767,11 +787,15 @@ func evaluationReportFromResultWithOptions(result *promptiterengine.EvaluationRe
 				Metrics:    make([]MetricReport, 0, len(evalCase.Metrics)),
 			}
 			for _, metric := range evalCase.Metrics {
+				reason := ""
+				if includeRawSnapshots {
+					reason = metric.Reason
+				}
 				caseReport.Metrics = append(caseReport.Metrics, MetricReport{
 					MetricName: metric.MetricName,
 					Score:      metric.Score,
 					Status:     string(metric.Status),
-					Reason:     metric.Reason,
+					Reason:     reason,
 				})
 			}
 			setReport.Cases = append(setReport.Cases, caseReport)
@@ -797,6 +821,10 @@ func traceReportFromTraceWithOptions(trace *atrace.Trace, includeRawSnapshots bo
 		Steps:            make([]StepReport, 0, len(trace.Steps)),
 	}
 	for _, step := range trace.Steps {
+		stepError := ""
+		if includeRawSnapshots {
+			stepError = step.Error
+		}
 		out.Steps = append(out.Steps, StepReport{
 			StepID:             step.StepID,
 			InvocationID:       step.InvocationID,
@@ -808,10 +836,65 @@ func traceReportFromTraceWithOptions(trace *atrace.Trace, includeRawSnapshots bo
 			AppliedSurfaceIDs:  append([]string(nil), step.AppliedSurfaceIDs...),
 			Input:              snapshotReportFromSnapshotWithOptions(step.Input, includeRawSnapshots),
 			Output:             snapshotReportFromSnapshotWithOptions(step.Output, includeRawSnapshots),
-			Error:              step.Error,
+			Error:              stepError,
 		})
 	}
 	return out
+}
+
+func reportAttributionsWithOptions(attributions []CaseAttribution, includeRawSnapshots bool) []CaseAttribution {
+	if len(attributions) == 0 {
+		return nil
+	}
+	out := make([]CaseAttribution, 0, len(attributions))
+	for _, attr := range attributions {
+		copied := attr
+		copied.SecondaryCategories = append([]FailureCategory(nil), attr.SecondaryCategories...)
+		copied.Evidence = append([]string(nil), attr.Evidence...)
+		if !includeRawSnapshots {
+			copied.Reason = reportOmittedFailureDetailsReason(copied)
+			copied.Evidence = safeAttributionEvidence(copied.Evidence)
+		}
+		out = append(out, copied)
+	}
+	return out
+}
+
+func reportOmittedFailureDetailsReason(attr CaseAttribution) string {
+	if strings.TrimSpace(attr.Method) == "" {
+		return fmt.Sprintf("classified as %s; raw failure details omitted", attr.Category)
+	}
+	return fmt.Sprintf("classified as %s by %s; raw failure details omitted", attr.Category, attr.Method)
+}
+
+func safeAttributionEvidence(evidence []string) []string {
+	if len(evidence) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(evidence))
+	for _, item := range evidence {
+		item = strings.TrimSpace(item)
+		if item == "" || !isSafeAttributionEvidence(item) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return out
+}
+
+func isSafeAttributionEvidence(item string) bool {
+	switch {
+	case strings.HasPrefix(item, "metric="),
+		strings.HasPrefix(item, "trace_status="),
+		strings.HasPrefix(item, "actual_tools="),
+		strings.HasPrefix(item, "expected_tools="),
+		strings.HasPrefix(item, "configured_hint="),
+		strings.HasPrefix(item, "metric_definition_hint="),
+		item == "tool_diff_truncated=true":
+		return true
+	default:
+		return false
+	}
 }
 
 func snapshotReportFromSnapshot(snapshot *atrace.Snapshot) *SnapshotReport {

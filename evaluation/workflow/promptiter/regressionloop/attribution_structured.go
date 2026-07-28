@@ -400,10 +400,32 @@ func extractCallEmittingToolCalls(value any, stepID string, out *[]structuredToo
 				return
 			}
 		}
-		if call, ok := toolCallFromMap(typed); ok {
+		if standaloneToolCallEnvelope(typed) {
+			call, ok := toolCallFromMap(typed)
+			if !ok {
+				return
+			}
 			call.StepID = stepID
 			*out = append(*out, call)
 		}
+	}
+}
+
+func standaloneToolCallEnvelope(object map[string]any) bool {
+	if _, ok := object["function"].(map[string]any); ok {
+		return true
+	}
+	if strings.TrimSpace(stringField(object, "tool_name")) != "" {
+		return true
+	}
+	if strings.TrimSpace(firstStringField(object, "tool_call_id", "tool_id")) != "" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(stringField(object, "type"))) {
+	case "tool_call", "function_call", "function":
+		return true
+	default:
+		return false
 	}
 }
 

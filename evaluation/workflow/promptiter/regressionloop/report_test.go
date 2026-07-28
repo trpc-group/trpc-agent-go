@@ -73,6 +73,40 @@ func TestMarkdownCellEscapesAndTruncatesUnicode(t *testing.T) {
 	assert.Equal(t, "abc", truncateMarkdownCell("abc", 3))
 }
 
+func TestRenderMarkdownEscapesActiveHTMLInTableCells(t *testing.T) {
+	report := OptimizationReport{
+		Metadata:     RunMetadata{AppName: "app"},
+		GateDecision: GateDecision{Accepted: false},
+		CandidateSurfaces: []PatchAudit{{
+			SurfaceID: "agent#tool.lookup",
+			Value: &PatchValueAudit{Tools: []PatchToolAudit{{
+				ID:          "lookup",
+				Description: `<details><summary>hidden</summary>spoof</details>`,
+			}}},
+			Reason: `<script>alert("patch")</script>`,
+		}},
+		FailureAttributions: []CaseAttribution{{
+			EvalSetID:  "validation",
+			EvalCaseID: "case",
+			MetricName: "metric",
+			Category:   FailureRubricFailure,
+			Reason:     `<img src=x onerror=alert(1)>`,
+			Evidence:   []string{`<details>evidence</details>`},
+		}},
+		FailureAttributionSummary: SummarizeAttributions([]CaseAttribution{{
+			EvalSetID: "validation", EvalCaseID: "case", MetricName: "metric", Category: FailureRubricFailure,
+		}}),
+	}
+
+	md := RenderMarkdown(report)
+	assert.NotContains(t, md, "<details>")
+	assert.NotContains(t, md, "<script>")
+	assert.NotContains(t, md, "<img")
+	assert.Contains(t, md, "&lt;details&gt;")
+	assert.Contains(t, md, "&lt;script&gt;")
+	assert.Contains(t, md, "&lt;img")
+}
+
 func TestWriteReportsWritesJSONAndMarkdown(t *testing.T) {
 	dir := t.TempDir()
 	report := OptimizationReport{
@@ -311,12 +345,13 @@ func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing
 	assert.Equal(t, "candidate prompt", report.CandidatePrompt)
 	require.Len(t, report.CandidateSurfaces, 1)
 	assert.Equal(t, "agent#instruction", report.CandidateSurfaces[0].SurfaceID)
+	assert.Empty(t, report.CandidateSurfaces[0].Reason)
 	require.NotNil(t, report.CandidateSurfaces[0].Value)
 	require.NotNil(t, report.CandidateSurfaces[0].Value.Text)
 	assert.Equal(t, "candidate prompt", *report.CandidateSurfaces[0].Value.Text)
 	require.Len(t, report.Rounds, 1)
 	require.Len(t, report.Rounds[0].Patches, 1)
-	assert.Equal(t, "test patch", report.Rounds[0].Patches[0].Reason)
+	assert.Empty(t, report.Rounds[0].Patches[0].Reason)
 	assert.Equal(t, 1, report.BaselineFailureAttributionSummary.ByCategory[FailureRouteError])
 	assert.Equal(t, 1, report.CandidateFailureAttributionSummary.ByCategory[FailureFinalResponseMismatch])
 	assert.Equal(t, 1, report.FailureAttributionSummary.ByCategory[FailureFinalResponseMismatch])
@@ -328,8 +363,9 @@ func TestBuildReportIncludesAcceptedCandidateAttributionAndRoundAudit(t *testing
 	assert.Contains(t, md, "### Baseline")
 	assert.Contains(t, md, "### Candidate")
 	assert.Contains(t, md, "### Failure Details")
-	assert.Contains(t, md, "| train | train | router_decision | route_error |  | route error | router=general_support |")
-	assert.Contains(t, md, "final response mismatch")
+	assert.Contains(t, md, "| train | train | router_decision | route_error |  | classified as route_error")
+	assert.Contains(t, md, "raw failure details omitted")
+	assert.NotContains(t, md, "final response mismatch")
 }
 
 func TestCandidatePromptCoversProfileValueVariants(t *testing.T) {
@@ -478,6 +514,132 @@ func TestEvaluationReportIncludesRawSnapshotsOnlyWithExplicitOptIn(t *testing.T)
 	assert.Contains(t, string(optInBytes), "controlled trace payload")
 }
 
+func TestBuildReportOmitsFailedTraceSensitiveDerivedFieldsByDefault(t *testing.T) {
+	result := &promptiterengine.EvaluationResult{
+		EvalSets: []promptiterengine.EvalSetResult{{
+			EvalSetID: "validation",
+			Cases: []promptiterengine.CaseResult{{
+				EvalSetID:  "validation",
+				EvalCaseID: "case",
+				Trace: &atrace.Trace{
+					Status: atrace.TraceStatusFailed,
+					Steps: []atrace.Step{{
+						StepID: "step",
+						Input: &atrace.Snapshot{
+							Text: `{"prompt":"email Alice at alice@example.com","api_key":"input-secret-token"}`,
+						},
+						Output: &atrace.Snapshot{
+							Text: `{"final_output":"customer Alice SSN 123-45-6789","authorization":"Bearer output-secret-token"}`,
+						},
+						Error: "tool failed for alice@example.com with token=step-secret-token",
+					}},
+				},
+				Metrics: []promptiterengine.MetricResult{{
+					MetricName: "metric",
+					Score:      0,
+					Status:     status.EvalStatusFailed,
+					Reason:     "final_output for alice@example.com used password=reason-secret-token",
+				}},
+			}},
+		}},
+	}
+
+	report := BuildReport(ReportInput{
+		BaselineValidation: evalResult("validation", []caseSpec{
+			{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+		}),
+		CandidateValidation: result,
+	})
+	defaultJSON, err := json.Marshal(report)
+	require.NoError(t, err)
+	defaultMarkdown := RenderMarkdown(report)
+	for _, artifact := range []string{string(defaultJSON), defaultMarkdown} {
+		assert.NotContains(t, artifact, "Alice")
+		assert.NotContains(t, artifact, "alice@example.com")
+		assert.NotContains(t, artifact, "123-45-6789")
+		assert.NotContains(t, artifact, "input-secret-token")
+		assert.NotContains(t, artifact, "output-secret-token")
+		assert.NotContains(t, artifact, "step-secret-token")
+		assert.NotContains(t, artifact, "reason-secret-token")
+		assert.Contains(t, artifact, "raw failure details omitted")
+	}
+
+	rawReport := BuildReport(ReportInput{
+		Config: Config{IncludeRawSnapshots: true},
+		BaselineValidation: evalResult("validation", []caseSpec{
+			{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},
+		}),
+		CandidateValidation: result,
+	})
+	rawJSON, err := json.Marshal(rawReport)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawJSON), "alice@example.com")
+	assert.Contains(t, string(rawJSON), "output-secret-token")
+	assert.Contains(t, string(rawJSON), "reason-secret-token")
+}
+
+func TestBuildReportOmitsRoundAcceptanceReasonByDefault(t *testing.T) {
+	run := &promptiterengine.RunResult{
+		Rounds: []promptiterengine.RoundResult{{
+			Round: 1,
+			Acceptance: &promptiterengine.AcceptanceDecision{
+				Accepted: false,
+				Reason:   "final_output contains acceptance-secret",
+			},
+		}},
+	}
+
+	defaultReport := BuildReport(ReportInput{PromptIterRun: run})
+	defaultJSON, err := json.Marshal(defaultReport)
+	require.NoError(t, err)
+	assert.Empty(t, defaultReport.Rounds[0].Reason)
+	assert.NotContains(t, string(defaultJSON), "acceptance-secret")
+
+	rawReport := BuildReport(ReportInput{
+		Config:        Config{IncludeRawSnapshots: true},
+		PromptIterRun: run,
+	})
+	rawJSON, err := json.Marshal(rawReport)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawJSON), "acceptance-secret")
+}
+
+func TestBuildReportOmitsRoundPatchReasonByDefault(t *testing.T) {
+	prompt := "candidate prompt"
+	run := &promptiterengine.RunResult{
+		Rounds: []promptiterengine.RoundResult{{
+			Round: 1,
+			Patches: &promptiter.PatchSet{Patches: []promptiter.SurfacePatch{{
+				SurfaceID: "agent#instruction",
+				Value:     astructure.SurfaceValue{Text: &prompt},
+				Reason:    "patch derived from final_output for alice@example.com with token=patch-secret-token",
+			}}},
+		}},
+	}
+
+	defaultReport := BuildReport(ReportInput{PromptIterRun: run})
+	defaultJSON, err := json.Marshal(defaultReport)
+	require.NoError(t, err)
+	defaultMarkdown := RenderMarkdown(defaultReport)
+	for _, artifact := range []string{string(defaultJSON), defaultMarkdown} {
+		assert.NotContains(t, artifact, "alice@example.com")
+		assert.NotContains(t, artifact, "patch-secret-token")
+		assert.NotContains(t, artifact, "final_output")
+	}
+	require.Len(t, defaultReport.Rounds, 1)
+	require.Len(t, defaultReport.Rounds[0].Patches, 1)
+	assert.Empty(t, defaultReport.Rounds[0].Patches[0].Reason)
+
+	rawReport := BuildReport(ReportInput{
+		Config:        Config{IncludeRawSnapshots: true},
+		PromptIterRun: run,
+	})
+	rawJSON, err := json.Marshal(rawReport)
+	require.NoError(t, err)
+	assert.Contains(t, string(rawJSON), "alice@example.com")
+	assert.Contains(t, string(rawJSON), "patch-secret-token")
+}
+
 func TestBuildReportUsesRejectedFinalCandidateForAudit(t *testing.T) {
 	prompt := "rejected candidate prompt"
 	report := BuildReport(ReportInput{
@@ -577,7 +739,8 @@ func TestBuildReportPropagatesContextToAttributionJudge(t *testing.T) {
 	report := BuildReport(ReportInput{
 		Ctx: ctx,
 		Config: Config{
-			Gate: GateConfig{},
+			IncludeRawSnapshots: true,
+			Gate:                GateConfig{},
 		},
 		BaselineValidation: evalResult("validation", []caseSpec{
 			{id: "case", metric: "metric", score: 1, status: status.EvalStatusPassed},

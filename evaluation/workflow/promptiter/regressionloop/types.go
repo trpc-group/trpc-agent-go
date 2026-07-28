@@ -129,6 +129,7 @@ type GateConfig struct {
 	HardFailMetricNames    []string  `json:"hardFailMetricNames,omitempty"`
 	MaxModelCalls          int       `json:"maxModelCalls,omitempty"`
 	MaxCost                float64   `json:"maxCost,omitempty"`
+	ExpectedCostCurrency   string    `json:"expectedCostCurrency,omitempty"`
 	MaxLatency             *Duration `json:"maxLatency,omitempty"`
 	RequireEngineAccepted  bool      `json:"requireEngineAccepted"`
 }

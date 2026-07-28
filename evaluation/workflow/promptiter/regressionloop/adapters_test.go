@@ -744,7 +744,7 @@ func TestPromptSurfaceRunOptionSupportsTextSurfaceTypesAndErrors(t *testing.T) {
 
 func TestBuildPromptProfileCoversEmptyInvalidAndUnsupportedSurfaces(t *testing.T) {
 	profile, err := BuildPromptProfile([]string{"support_agent#instruction"}, "")
-	require.NoError(t, err)
+	assert.ErrorContains(t, err, "prompt source is empty")
 	assert.Nil(t, profile)
 
 	profile, err = BuildPromptProfile(nil, "prompt")

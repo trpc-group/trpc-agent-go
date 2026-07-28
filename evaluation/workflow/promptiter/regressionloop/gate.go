@@ -11,6 +11,8 @@ package regressionloop
 import (
 	"fmt"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 // EvaluateGate applies the production release policy to the candidate.
@@ -48,6 +50,10 @@ func EvaluateGate(
 	if missing := missingCandidateMetrics(delta); len(missing) > 0 {
 		accepted = false
 		reasons = append(reasons, fmt.Sprintf("candidate validation missing baseline metrics: %v", missing))
+	}
+	if incomplete := incompleteCandidateMetrics(delta); len(incomplete) > 0 {
+		accepted = false
+		reasons = append(reasons, fmt.Sprintf("candidate validation has incomplete metric statuses: %v", incomplete))
 	}
 	hardFailures := hardFailRegressions(delta, cfg.HardFailMetricNames)
 	if len(hardFailures) == 0 && delta.Summary.NewlyFailed == 0 {
@@ -108,11 +114,33 @@ func EvaluateGate(
 		if !hasMeasuredAmount(cost) {
 			accepted = false
 			reasons = append(reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
+		} else if strings.TrimSpace(cost.Currency) == "" {
+			accepted = false
+			reasons = append(reasons, "cost currency unavailable; configure CostProvider currency to enforce maxCost")
+		} else if !sameCurrency(cost.Currency, cfg.ExpectedCostCurrency) {
+			accepted = false
+			reasons = append(reasons, fmt.Sprintf(
+				"cost currency %s does not match expected %s",
+				strings.TrimSpace(cost.Currency),
+				strings.TrimSpace(cfg.ExpectedCostCurrency),
+			))
 		} else if cost.Amount <= cfg.MaxCost+scoreEpsilon {
-			reasons = append(reasons, fmt.Sprintf("cost %.4f within budget %.4f", cost.Amount, cfg.MaxCost))
+			reasons = append(reasons, fmt.Sprintf(
+				"cost %.4f %s within budget %.4f %s",
+				cost.Amount,
+				strings.TrimSpace(cost.Currency),
+				cfg.MaxCost,
+				strings.TrimSpace(cfg.ExpectedCostCurrency),
+			))
 		} else {
 			accepted = false
-			reasons = append(reasons, fmt.Sprintf("cost %.4f exceeds budget %.4f", cost.Amount, cfg.MaxCost))
+			reasons = append(reasons, fmt.Sprintf(
+				"cost %.4f %s exceeds budget %.4f %s",
+				cost.Amount,
+				strings.TrimSpace(cost.Currency),
+				cfg.MaxCost,
+				strings.TrimSpace(cfg.ExpectedCostCurrency),
+			))
 		}
 	}
 	if cfg.MaxLatency != nil && cfg.MaxLatency.Duration > 0 {
@@ -134,6 +162,10 @@ func hasMeasuredModelCalls(cost CostSummary) bool {
 	return cost.Source == CostSourceProvider && cost.ModelCallsMeasured
 }
 
+func sameCurrency(left, right string) bool {
+	return strings.EqualFold(strings.TrimSpace(left), strings.TrimSpace(right))
+}
+
 func missingCandidateMetrics(delta DeltaReport) []string {
 	missing := make([]string, 0)
 	for _, item := range delta.Cases {
@@ -143,6 +175,19 @@ func missingCandidateMetrics(delta DeltaReport) []string {
 		missing = append(missing, fmt.Sprintf("%s/%s", item.EvalCaseID, item.MetricName))
 	}
 	return missing
+}
+
+func incompleteCandidateMetrics(delta DeltaReport) []string {
+	incomplete := make([]string, 0)
+	for _, item := range delta.Cases {
+		switch item.CandidateStatus {
+		case string(status.EvalStatusPassed), string(status.EvalStatusFailed), statusAbsent:
+			continue
+		default:
+			incomplete = append(incomplete, fmt.Sprintf("%s/%s=%s", item.EvalCaseID, item.MetricName, item.CandidateStatus))
+		}
+	}
+	return incomplete
 }
 
 func hardFailRegressions(delta DeltaReport, hardFailMetricNames []string) []string {

@@ -4,8 +4,8 @@
     "startedAt": "2026-07-10T08:00:00Z",
     "finishedAt": "2026-07-10T08:00:00.15Z",
     "duration": "150ms",
-    "promptSource": "F:\\犀牛鸟离职后\\trpc-agent-go-issue2003\\examples\\evaluation\\promptiter\\regressionloop\\data\\eval-optimization-regression-app\\baseline_prompt.txt",
-    "metricsPath": "F:\\犀牛鸟离职后\\trpc-agent-go-issue2003\\examples\\evaluation\\promptiter\\regressionloop\\data\\eval-optimization-regression-app\\metrics.json",
+    "promptSource": "data\\eval-optimization-regression-app\\baseline_prompt.txt",
+    "metricsPath": "data\\eval-optimization-regression-app\\metrics.json",
     "metricNames": [
       "final_response",
       "json_format",
@@ -62,8 +62,7 @@
               {
                 "metricName": "tool_trajectory",
                 "score": 0,
-                "status": "failed",
-                "reason": "tool argument parameter mismatch: invoice_id was omitted"
+                "status": "failed"
               }
             ]
           },
@@ -92,8 +91,7 @@
               {
                 "metricName": "router_decision",
                 "score": 0,
-                "status": "failed",
-                "reason": "route error: selected general_support instead of routing_helper"
+                "status": "failed"
               }
             ]
           },
@@ -122,8 +120,7 @@
               {
                 "metricName": "knowledge_recall",
                 "score": 0,
-                "status": "failed",
-                "reason": "knowledge recall gap: refund policy date omitted"
+                "status": "failed"
               }
             ]
           }
@@ -163,8 +160,7 @@
               {
                 "metricName": "tool_trajectory",
                 "score": 0,
-                "status": "failed",
-                "reason": "missing tool call: invoice question was not sent to billing_lookup"
+                "status": "failed"
               }
             ]
           },
@@ -193,8 +189,7 @@
               {
                 "metricName": "json_format",
                 "score": 0,
-                "status": "failed",
-                "reason": "format error: response uses prose instead of JSON"
+                "status": "failed"
               }
             ]
           },
@@ -223,8 +218,7 @@
               {
                 "metricName": "final_response",
                 "score": 1,
-                "status": "passed",
-                "reason": "baseline preserves the validation refund cutoff date"
+                "status": "passed"
               }
             ]
           }
@@ -266,8 +260,7 @@
               {
                 "metricName": "tool_trajectory",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           },
@@ -298,8 +291,7 @@
               {
                 "metricName": "json_format",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           },
@@ -330,8 +322,7 @@
               {
                 "metricName": "final_response",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           }
@@ -371,8 +362,7 @@
               {
                 "metricName": "tool_trajectory",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           },
@@ -401,8 +391,7 @@
               {
                 "metricName": "json_format",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           },
@@ -431,8 +420,7 @@
               {
                 "metricName": "final_response",
                 "score": 1,
-                "status": "passed",
-                "reason": "candidate satisfies metric after prompt optimization"
+                "status": "passed"
               }
             ]
           }
@@ -446,7 +434,6 @@
       "trainScore": 1,
       "validationScore": 1,
       "accepted": true,
-      "reason": "candidate score gain satisfies acceptance policy",
       "delta": {
         "overallScoreDelta": 0.6666666666666667,
         "summary": {
@@ -527,8 +514,7 @@
                   {
                     "metricName": "tool_trajectory",
                     "score": 1,
-                    "status": "passed",
-                    "reason": "candidate satisfies metric after prompt optimization"
+                    "status": "passed"
                   }
                 ]
               },
@@ -559,8 +545,7 @@
                   {
                     "metricName": "json_format",
                     "score": 1,
-                    "status": "passed",
-                    "reason": "candidate satisfies metric after prompt optimization"
+                    "status": "passed"
                   }
                 ]
               },
@@ -591,8 +576,7 @@
                   {
                     "metricName": "final_response",
                     "score": 1,
-                    "status": "passed",
-                    "reason": "candidate satisfies metric after prompt optimization"
+                    "status": "passed"
                   }
                 ]
               }
@@ -670,12 +654,10 @@
       "severity": "P0",
       "method": "configured_hint",
       "confidence": 0.95,
-      "reason": "route error: selected general_support instead of routing_helper",
+      "reason": "classified as route_error by configured_hint; raw failure details omitted",
       "evidence": [
         "metric=router_decision status=failed score=0.000",
-        "metric_reason=route error: selected general_support instead of routing_helper",
-        "trace_status=completed",
-        "final_output=trace output for train_optimization_ineffective"
+        "trace_status=completed"
       ]
     },
     {
@@ -689,12 +671,10 @@
       "severity": "P2",
       "method": "configured_hint",
       "confidence": 0.95,
-      "reason": "knowledge recall gap: refund policy date omitted",
+      "reason": "classified as knowledge_recall_gap by configured_hint; raw failure details omitted",
       "evidence": [
         "metric=knowledge_recall status=failed score=0.000",
-        "metric_reason=knowledge recall gap: refund policy date omitted",
-        "trace_status=completed",
-        "final_output=trace output for train_overfit_success"
+        "trace_status=completed"
       ]
     },
     {
@@ -709,12 +689,10 @@
       "severity": "P1",
       "method": "deterministic_rules",
       "confidence": 0.85,
-      "reason": "tool argument parameter mismatch: invoice_id was omitted",
+      "reason": "classified as tool_argument_error by deterministic_rules; raw failure details omitted",
       "evidence": [
         "metric=tool_trajectory status=failed score=0.000",
-        "metric_reason=tool argument parameter mismatch: invoice_id was omitted",
         "trace_status=completed",
-        "final_output=trace output for train_prompt_fix_success",
         "metric_definition_hint=tool_call_error superseded_by_reason_signal"
       ]
     },
@@ -726,12 +704,10 @@
       "severity": "P1",
       "method": "structured_diff",
       "confidence": 0.9,
-      "reason": "format error: response uses prose instead of JSON",
+      "reason": "classified as format_error by structured_diff; raw failure details omitted",
       "evidence": [
         "metric=json_format status=failed score=0.000",
-        "metric_reason=format error: response uses prose instead of JSON",
-        "trace_status=completed",
-        "final_output=trace output for val_optimization_ineffective"
+        "trace_status=completed"
       ]
     },
     {
@@ -742,12 +718,10 @@
       "severity": "P1",
       "method": "deterministic_rules",
       "confidence": 0.85,
-      "reason": "missing tool call: invoice question was not sent to billing_lookup",
+      "reason": "classified as tool_call_error by deterministic_rules; raw failure details omitted",
       "evidence": [
         "metric=tool_trajectory status=failed score=0.000",
-        "metric_reason=missing tool call: invoice question was not sent to billing_lookup",
-        "trace_status=completed",
-        "final_output=trace output for val_prompt_fix_generalizes"
+        "trace_status=completed"
       ]
     }
   ],
@@ -806,12 +780,10 @@
       "severity": "P0",
       "method": "configured_hint",
       "confidence": 0.95,
-      "reason": "route error: selected general_support instead of routing_helper",
+      "reason": "classified as route_error by configured_hint; raw failure details omitted",
       "evidence": [
         "metric=router_decision status=failed score=0.000",
-        "metric_reason=route error: selected general_support instead of routing_helper",
-        "trace_status=completed",
-        "final_output=trace output for train_optimization_ineffective"
+        "trace_status=completed"
       ]
     },
     {
@@ -825,12 +797,10 @@
       "severity": "P2",
       "method": "configured_hint",
       "confidence": 0.95,
-      "reason": "knowledge recall gap: refund policy date omitted",
+      "reason": "classified as knowledge_recall_gap by configured_hint; raw failure details omitted",
       "evidence": [
         "metric=knowledge_recall status=failed score=0.000",
-        "metric_reason=knowledge recall gap: refund policy date omitted",
-        "trace_status=completed",
-        "final_output=trace output for train_overfit_success"
+        "trace_status=completed"
       ]
     },
     {
@@ -845,12 +815,10 @@
       "severity": "P1",
       "method": "deterministic_rules",
       "confidence": 0.85,
-      "reason": "tool argument parameter mismatch: invoice_id was omitted",
+      "reason": "classified as tool_argument_error by deterministic_rules; raw failure details omitted",
       "evidence": [
         "metric=tool_trajectory status=failed score=0.000",
-        "metric_reason=tool argument parameter mismatch: invoice_id was omitted",
         "trace_status=completed",
-        "final_output=trace output for train_prompt_fix_success",
         "metric_definition_hint=tool_call_error superseded_by_reason_signal"
       ]
     },
@@ -862,12 +830,10 @@
       "severity": "P1",
       "method": "structured_diff",
       "confidence": 0.9,
-      "reason": "format error: response uses prose instead of JSON",
+      "reason": "classified as format_error by structured_diff; raw failure details omitted",
       "evidence": [
         "metric=json_format status=failed score=0.000",
-        "metric_reason=format error: response uses prose instead of JSON",
-        "trace_status=completed",
-        "final_output=trace output for val_optimization_ineffective"
+        "trace_status=completed"
       ]
     },
     {
@@ -878,12 +844,10 @@
       "severity": "P1",
       "method": "deterministic_rules",
       "confidence": 0.85,
-      "reason": "missing tool call: invoice question was not sent to billing_lookup",
+      "reason": "classified as tool_call_error by deterministic_rules; raw failure details omitted",
       "evidence": [
         "metric=tool_trajectory status=failed score=0.000",
-        "metric_reason=missing tool call: invoice question was not sent to billing_lookup",
-        "trace_status=completed",
-        "final_output=trace output for val_prompt_fix_generalizes"
+        "trace_status=completed"
       ]
     }
   ],

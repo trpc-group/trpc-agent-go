@@ -1145,6 +1145,26 @@ func TestAttributeFailuresIncludesTraceToolDiffEvidence(t *testing.T) {
 	assert.Contains(t, evidence, "expected")
 }
 
+func TestAttributeFailuresDoesNotParseOrdinaryOutputObjectAsToolCall(t *testing.T) {
+	result := structuredEvalResult("validation", []promptiterengine.CaseResult{
+		{
+			EvalCaseID: "domain_object",
+			Trace: &atrace.Trace{Steps: []atrace.Step{{
+				Output: &atrace.Snapshot{Text: `{"id":"customer-1","name":"Alice"}`},
+			}}},
+			Metrics: []promptiterengine.MetricResult{
+				{MetricName: "generic_quality", Status: status.EvalStatusFailed, Reason: "failed"},
+			},
+		},
+	})
+
+	attrs := AttributeFailures(result)
+	require.Len(t, attrs, 1)
+	assert.NotEqual(t, FailureToolCallError, attrs[0].Category)
+	evidence := strings.Join(attrs[0].Evidence, " ")
+	assert.NotContains(t, evidence, "actual_tools=")
+}
+
 func TestClassifyToolDiffRejectsMismatchedCallCounts(t *testing.T) {
 	actual := []structuredToolCall{{Name: "lookup"}}
 	expected := []structuredToolCall{

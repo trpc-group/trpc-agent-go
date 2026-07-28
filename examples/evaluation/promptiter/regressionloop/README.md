@@ -155,8 +155,9 @@ root does not select the nested evaluation module.
 - `maxModelCalls`: requires a pipeline `CostProvider` that reports measured
   model calls; the built-in phase-count estimate is audit metadata only and is
   not used to pass this gate.
-- `maxCost`: requires a pipeline `CostProvider`; without one the gate rejects
-  because token and amount data are unavailable.
+- `maxCost`: requires `expectedCostCurrency` and a pipeline `CostProvider`
+  that reports measured amount and matching currency; without amount or with a
+  missing/mismatched currency the gate rejects.
 - `requireEngineAccepted`: candidate must have been accepted by PromptIter before release.
 - `attribution.metricCategoryHints`: optional promptiter.json overrides that
   map custom metric names to failure categories such as `route_error`,
@@ -206,7 +207,7 @@ The example default already drives the real PromptIter engine with fake collabor
 - `regressionloop.TextPromptSurfaceApplier` applies `promptSource` to configured prompt `targetSurfaceIds` through evaluation run options, so the baseline evaluator uses the prompt file rather than a separately constructed static agent prompt.
 - `regressionloop.EnginePromptIterator` wraps `evaluation/workflow/promptiter/engine.Engine` for real PromptIter execution.
 
-That lets callers reuse the same pipeline with local evaluation service, trace mode, tool trajectory metrics, LLM rubrics, and real PromptIter worker agents. The built-in PromptIter profile path accepts exactly one target surface: `#instruction`, `#global_instruction`, or a tool-description surface such as `#tool.lookup`. Router prompts are ordinary instruction/global-instruction surfaces on the router node. Tool-description surfaces compile to declaration-only patches so the original callable tools, schemas, and sibling tools remain available during baseline and final validation. Few-shot, skill, multi-surface, and model-selection targets require a custom `PromptApplier` plus a matching `PromptIterator` path so baseline and final validation preserve the same runtime capabilities.
+That lets callers reuse the same pipeline with local evaluation service, trace mode, tool trajectory metrics, LLM rubrics, and real PromptIter worker agents. The built-in PromptIter profile path accepts exactly one target surface: `#instruction`, `#global_instruction`, or a tool-description surface such as `#tool.lookup`. Router prompts are ordinary instruction/global-instruction surfaces on the router node. Tool-description surfaces compile to declaration-only patches so the original callable tools, schemas, and sibling tools remain available during baseline and final validation. Few-shot, skill, multi-surface, and model-selection targets require a custom `PromptApplier`, `PromptProfileBuilder`, `CandidateProfileValidator`, and matching `PromptIterator` path so baseline and final validation preserve the same runtime capabilities.
 
 Production wiring:
 
@@ -260,7 +261,7 @@ if err != nil {
 fmt.Println(result.Report.GateDecision.Accepted)
 ```
 
-The pipeline reads `cfg.PromptSource`, applies it to one supported target surface such as `support_agent#instruction`, `support_agent#global_instruction`, `router#instruction`, or `support_agent#tool.lookup`, and also passes the same value into PromptIter as `RunRequest.InitialProfile`. It parses `cfg.MetricsPath`, records metric names in the report, and deterministic fake evaluators reject sample cases whose metric name is absent from the metrics file. It then runs baseline train and validation before invoking PromptIter. Train failures are attributed with deterministic metric-name, reason, and trace rules and injected into `RunRequest.Train[0].LossHints`, while the wrapped engine still performs the normal PromptIter train, backward, aggregation, optimization, validation, and engine acceptance stages. Without `CostProvider`, the report marks cost as a model-call estimate only; `maxModelCalls`, token, and amount budgets require provider data.
+The pipeline reads `cfg.PromptSource`, rejects an empty or whitespace-only source, applies it to one supported target surface such as `support_agent#instruction`, `support_agent#global_instruction`, `router#instruction`, or `support_agent#tool.lookup`, and also passes the same value into PromptIter as `RunRequest.InitialProfile`. It parses `cfg.MetricsPath`, records metric names in the report, and deterministic fake evaluators reject sample cases whose metric name is absent from the metrics file. It then runs baseline train and validation before invoking PromptIter. Train failures are attributed with deterministic metric-name, reason, and trace rules and injected into `RunRequest.Train[0].LossHints`, while the wrapped engine still performs the normal PromptIter train, backward, aggregation, optimization, validation, and engine acceptance stages. Without `CostProvider`, the report marks cost as a model-call estimate only; `maxModelCalls`, token, and amount budgets require provider data, and `maxCost` also requires provider currency to match `expectedCostCurrency`.
 After PromptIter returns a final candidate profile, the pipeline applies the
 candidate prompt and explicitly reruns the validation set once more. The report
 uses this outer candidate validation pass for the final delta and gate decision,

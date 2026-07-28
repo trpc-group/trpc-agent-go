@@ -241,3 +241,22 @@ func TestConfigValidateRejectsNegativeBudgets(t *testing.T) {
 	assert.ErrorContains(t, err, "gate max cost must be non-negative")
 	assert.ErrorContains(t, err, "gate max latency must be non-negative")
 }
+
+func TestConfigValidateRequiresExpectedCostCurrencyWithMaxCost(t *testing.T) {
+	cfg := Config{
+		AppName:             "app",
+		PromptSource:        "prompt.txt",
+		MetricsPath:         "metrics.json",
+		TrainEvalSetID:      "train",
+		ValidationEvalSetID: "validation",
+		OutputJSON:          "report.json",
+		OutputMarkdown:      "report.md",
+		TargetSurfaceIDs:    []string{"agent#instruction"},
+		PromptIter:          PromptIterConfig{MaxRounds: 1},
+		Gate:                GateConfig{MaxCost: 1},
+	}
+	assert.ErrorContains(t, cfg.Validate(), "gate expected cost currency is required when max cost is set")
+
+	cfg.Gate.ExpectedCostCurrency = "USD"
+	require.NoError(t, cfg.Validate())
+}

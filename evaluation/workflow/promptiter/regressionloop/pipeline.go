@@ -32,6 +32,38 @@ type PromptIterator interface {
 	Run(ctx context.Context, request *promptiterengine.RunRequest) (*promptiterengine.RunResult, error)
 }
 
+// PromptProfileBuilder builds the initial PromptIter profile from the prompt source.
+type PromptProfileBuilder interface {
+	BuildPromptProfile(surfaceIDs []string, prompt string) (*promptiter.Profile, error)
+}
+
+// PromptProfileBuilderFunc adapts a function to PromptProfileBuilder.
+type PromptProfileBuilderFunc func(surfaceIDs []string, prompt string) (*promptiter.Profile, error)
+
+// BuildPromptProfile implements PromptProfileBuilder.
+func (f PromptProfileBuilderFunc) BuildPromptProfile(
+	surfaceIDs []string,
+	prompt string,
+) (*promptiter.Profile, error) {
+	return f(surfaceIDs, prompt)
+}
+
+// CandidateProfileValidator validates the final candidate profile before rerunning validation.
+type CandidateProfileValidator interface {
+	ValidateCandidateProfile(profile *promptiter.Profile, targetSurfaceIDs []string) error
+}
+
+// CandidateProfileValidatorFunc adapts a function to CandidateProfileValidator.
+type CandidateProfileValidatorFunc func(profile *promptiter.Profile, targetSurfaceIDs []string) error
+
+// ValidateCandidateProfile implements CandidateProfileValidator.
+func (f CandidateProfileValidatorFunc) ValidateCandidateProfile(
+	profile *promptiter.Profile,
+	targetSurfaceIDs []string,
+) error {
+	return f(profile, targetSurfaceIDs)
+}
+
 // CostProvider returns cumulative cost after a run.
 type CostProvider interface {
 	CostSummary() CostSummary
@@ -60,11 +92,13 @@ type EvaluationRequest struct {
 
 // Pipeline orchestrates baseline evaluation, attribution, PromptIter, gating, and reports.
 type Pipeline struct {
-	Evaluator        Evaluator
-	PromptIterator   PromptIterator
-	CostProvider     CostProvider
-	AttributionJudge AttributionJudge
-	Clock            Clock
+	Evaluator                 Evaluator
+	PromptIterator            PromptIterator
+	ProfileBuilder            PromptProfileBuilder
+	CandidateProfileValidator CandidateProfileValidator
+	CostProvider              CostProvider
+	AttributionJudge          AttributionJudge
+	Clock                     Clock
 }
 
 // Result stores the generated report and artifact paths.
@@ -76,7 +110,9 @@ type Result struct {
 
 // Run executes the full regression loop.
 func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
-	if err := cfg.Validate(); err != nil {
+	if err := cfg.validate(configValidationOptions{
+		allowCustomTargetSurfaces: p.ProfileBuilder != nil,
+	}); err != nil {
 		return nil, err
 	}
 	if p.Evaluator == nil {
@@ -95,11 +131,18 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("read prompt source: %w", err)
 	}
 	prompt := string(promptBytes)
+	if strings.TrimSpace(prompt) == "" {
+		return nil, errors.New("prompt source is empty")
+	}
 	metrics, err := LoadMetricDefinitions(cfg.MetricsPath)
 	if err != nil {
 		return nil, err
 	}
-	initialProfile, err := BuildPromptProfile(cfg.TargetSurfaceIDs, prompt)
+	profileBuilder := p.ProfileBuilder
+	if profileBuilder == nil {
+		profileBuilder = PromptProfileBuilderFunc(BuildPromptProfile)
+	}
+	initialProfile, err := profileBuilder.BuildPromptProfile(cfg.TargetSurfaceIDs, prompt)
 	if err != nil {
 		return nil, fmt.Errorf("build initial prompt profile: %w", err)
 	}
@@ -129,6 +172,9 @@ func (p Pipeline) Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("evaluate baseline validation: %w", err)
 	}
 	if err := validateBaselineEvaluationResult(PhaseBaselineValidation, baselineValidation); err != nil {
+		return nil, err
+	}
+	if err := validateGateSelectors(cfg.Gate, metrics, baselineValidation); err != nil {
 		return nil, err
 	}
 	attributionHints := AttributionHints(cfg, metrics)
@@ -198,7 +244,11 @@ func (p Pipeline) evaluateFinalCandidate(
 	if candidateProfile == nil || len(candidateProfile.Overrides) == 0 {
 		return nil, false, nil
 	}
-	if err := validateCandidateProfileTargets(candidateProfile, cfg.TargetSurfaceIDs); err != nil {
+	validator := p.CandidateProfileValidator
+	if validator == nil {
+		validator = CandidateProfileValidatorFunc(validateCandidateProfileTargets)
+	}
+	if err := validator.ValidateCandidateProfile(candidateProfile, cfg.TargetSurfaceIDs); err != nil {
 		return nil, false, err
 	}
 	candidatePrompt, _ := profilePromptText(candidateProfile)
@@ -270,17 +320,15 @@ func validateBaselineEvaluationResult(phase Phase, result *promptiterengine.Eval
 		}
 		for _, evalCase := range evalSet.Cases {
 			sawCase = true
-			caseCovered := false
-			for _, metric := range evalCase.Metrics {
-				if strings.TrimSpace(metric.MetricName) != "" &&
-					metric.Status != status.EvalStatusNotEvaluated &&
-					!math.IsNaN(metric.Score) && !math.IsInf(metric.Score, 0) {
-					caseCovered = true
-					break
-				}
-			}
-			if !caseCovered {
+			if len(evalCase.Metrics) == 0 {
 				return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
+			}
+			for _, metric := range evalCase.Metrics {
+				if strings.TrimSpace(metric.MetricName) == "" ||
+					!isCompleteMetricStatus(metric.Status) ||
+					math.IsNaN(metric.Score) || math.IsInf(metric.Score, 0) {
+					return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
+				}
 			}
 		}
 	}
@@ -288,6 +336,75 @@ func validateBaselineEvaluationResult(phase Phase, result *promptiterengine.Eval
 		return fmt.Errorf("%s evaluator returned result without metric coverage", phase)
 	}
 	return nil
+}
+
+func isCompleteMetricStatus(metricStatus status.EvalStatus) bool {
+	return metricStatus == status.EvalStatusPassed || metricStatus == status.EvalStatusFailed
+}
+
+func validateGateSelectors(
+	gate GateConfig,
+	metrics []MetricDefinition,
+	baselineValidation *promptiterengine.EvaluationResult,
+) error {
+	var errs []error
+	if missing := unresolvedHardFailMetricNames(gate.HardFailMetricNames, metrics); len(missing) > 0 {
+		errs = append(errs, fmt.Errorf("gate hard fail metric names not found in metrics: %v", missing))
+	}
+	if missing := unresolvedCriticalCaseIDs(gate.CriticalCaseIDs, baselineValidation); len(missing) > 0 {
+		errs = append(errs, fmt.Errorf("gate critical case ids not found in baseline validation: %v", missing))
+	}
+	return errors.Join(errs...)
+}
+
+func unresolvedHardFailMetricNames(selectors []string, metrics []MetricDefinition) []string {
+	if len(selectors) == 0 {
+		return nil
+	}
+	available := make(map[string]struct{}, len(metrics))
+	for _, metric := range metrics {
+		if name := strings.TrimSpace(metric.MetricName); name != "" {
+			available[name] = struct{}{}
+		}
+	}
+	var missing []string
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if _, ok := available[selector]; !ok {
+			missing = append(missing, selector)
+		}
+	}
+	return missing
+}
+
+func unresolvedCriticalCaseIDs(selectors []string, baselineValidation *promptiterengine.EvaluationResult) []string {
+	if len(selectors) == 0 {
+		return nil
+	}
+	available := make(map[string]struct{})
+	if baselineValidation != nil {
+		for _, evalSet := range baselineValidation.EvalSets {
+			for _, evalCase := range evalSet.Cases {
+				if id := strings.TrimSpace(evalCase.EvalCaseID); id != "" {
+					available[id] = struct{}{}
+				}
+			}
+		}
+	}
+	var missing []string
+	for _, selector := range selectors {
+		selector = strings.TrimSpace(selector)
+		if selector == "" {
+			continue
+		}
+		if _, ok := available[selector]; !ok {
+			missing = append(missing, selector)
+		}
+	}
+	return missing
 }
 
 func estimateCost(run *promptiterengine.RunResult, reranCandidateValidation ...bool) CostSummary {
@@ -319,7 +436,7 @@ func normalizeProviderCost(cost, fallback CostSummary) CostSummary {
 	if !measuredModelCalls && cost.ModelCalls == 0 {
 		cost.ModelCalls = fallback.ModelCalls
 	}
-	if cost.Amount != 0 || cost.Currency != "" {
+	if cost.Amount != 0 {
 		cost.AmountMeasured = true
 	}
 	cost.Estimated = !measuredModelCalls

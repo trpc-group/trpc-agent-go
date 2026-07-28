@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
 func TestEvaluateGateAcceptsCleanValidationGain(t *testing.T) {
@@ -54,7 +55,12 @@ func TestEvaluateGateOnlyBlocksConfiguredHardFailMetrics(t *testing.T) {
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 			Cases: []CaseDelta{
-				{EvalCaseID: "soft_case", MetricName: "rubric", Kind: DeltaNewlyFailed},
+				{
+					EvalCaseID:      "soft_case",
+					MetricName:      "rubric",
+					CandidateStatus: string(status.EvalStatusFailed),
+					Kind:            DeltaNewlyFailed,
+				},
 			},
 		},
 		CostSummary{},
@@ -73,7 +79,12 @@ func TestEvaluateGateOnlyBlocksConfiguredHardFailMetrics(t *testing.T) {
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 			Cases: []CaseDelta{
-				{EvalCaseID: "hard_case", MetricName: "final_response", Kind: DeltaNewlyFailed},
+				{
+					EvalCaseID:      "hard_case",
+					MetricName:      "final_response",
+					CandidateStatus: string(status.EvalStatusFailed),
+					Kind:            DeltaNewlyFailed,
+				},
 			},
 		},
 		CostSummary{},
@@ -158,7 +169,12 @@ func TestEvaluateGateReportsCriticalCasesCleanAndDeduplicatesRegressions(t *test
 		GateConfig{CriticalCaseIDs: []string{"must_keep"}},
 		true,
 		DeltaReport{
-			Cases: []CaseDelta{{EvalCaseID: "must_keep", Kind: DeltaUnchanged, Critical: true}},
+			Cases: []CaseDelta{{
+				EvalCaseID:      "must_keep",
+				CandidateStatus: string(status.EvalStatusPassed),
+				Kind:            DeltaUnchanged,
+				Critical:        true,
+			}},
 		},
 		CostSummary{},
 		Duration{},
@@ -178,15 +194,15 @@ func TestEvaluateGateReportsCriticalCasesCleanAndDeduplicatesRegressions(t *test
 func TestEvaluateGateRejectsBudgets(t *testing.T) {
 	maxLatency := Duration{Duration: time.Second}
 	decision := EvaluateGate(
-		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, MaxLatency: &maxLatency},
+		GateConfig{MaxModelCalls: 2, MaxCost: 0.01, ExpectedCostCurrency: "USD", MaxLatency: &maxLatency},
 		true,
 		DeltaReport{},
-		CostSummary{ModelCalls: 3, ModelCallsMeasured: true, Amount: 0.02, AmountMeasured: true, Source: CostSourceProvider},
+		CostSummary{ModelCalls: 3, ModelCallsMeasured: true, Amount: 0.02, AmountMeasured: true, Currency: "USD", Source: CostSourceProvider},
 		Duration{Duration: 2 * time.Second},
 	)
 	assert.False(t, decision.Accepted)
 	assert.Contains(t, decision.Reasons, "model calls 3 exceed budget 2")
-	assert.Contains(t, decision.Reasons, "cost 0.0200 exceeds budget 0.0100")
+	assert.Contains(t, decision.Reasons, "cost 0.0200 USD exceeds budget 0.0100 USD")
 	assert.Contains(t, decision.Reasons, "latency 2s exceeds budget 1s")
 }
 
@@ -214,7 +230,7 @@ func TestEvaluateGateRejectsMaxModelCallsWithoutMeasuredProviderCount(t *testing
 
 func TestEvaluateGateRejectsMaxCostWithoutMeasuredAmount(t *testing.T) {
 	decision := EvaluateGate(
-		GateConfig{MaxCost: 1},
+		GateConfig{MaxCost: 1, ExpectedCostCurrency: "USD"},
 		true,
 		DeltaReport{},
 		CostSummary{ModelCalls: 3, Estimated: true, Source: CostSourceModelCallEstimate},
@@ -224,7 +240,7 @@ func TestEvaluateGateRejectsMaxCostWithoutMeasuredAmount(t *testing.T) {
 	assert.Contains(t, decision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
 
 	decision = EvaluateGate(
-		GateConfig{MaxCost: 1},
+		GateConfig{MaxCost: 1, ExpectedCostCurrency: "USD"},
 		true,
 		DeltaReport{},
 		CostSummary{ModelCalls: 3, Source: CostSourceProvider},
@@ -232,6 +248,62 @@ func TestEvaluateGateRejectsMaxCostWithoutMeasuredAmount(t *testing.T) {
 	)
 	assert.False(t, decision.Accepted)
 	assert.Contains(t, decision.Reasons, "cost amount unavailable; configure CostProvider to enforce maxCost")
+}
+
+func TestEvaluateGateRejectsMaxCostCurrencyMismatchOrMissing(t *testing.T) {
+	decision := EvaluateGate(
+		GateConfig{MaxCost: 1, ExpectedCostCurrency: "USD"},
+		true,
+		DeltaReport{},
+		CostSummary{Amount: 0.5, AmountMeasured: true, Source: CostSourceProvider},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "cost currency unavailable; configure CostProvider currency to enforce maxCost")
+
+	decision = EvaluateGate(
+		GateConfig{MaxCost: 1, ExpectedCostCurrency: "USD"},
+		true,
+		DeltaReport{},
+		CostSummary{Amount: 0.5, AmountMeasured: true, Currency: "CNY", Source: CostSourceProvider},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "cost currency CNY does not match expected USD")
+}
+
+func TestEvaluateGateRejectsIncompleteCandidateStatuses(t *testing.T) {
+	decision := EvaluateGate(
+		GateConfig{},
+		true,
+		DeltaReport{Cases: []CaseDelta{
+			{
+				EvalCaseID:      "case",
+				MetricName:      "metric",
+				BaselineStatus:  string(status.EvalStatusFailed),
+				CandidateStatus: string(status.EvalStatusUnknown),
+				Kind:            DeltaUnchanged,
+			},
+			{
+				EvalCaseID:      "case",
+				MetricName:      "other",
+				BaselineStatus:  string(status.EvalStatusFailed),
+				CandidateStatus: string(status.EvalStatusNotEvaluated),
+				Kind:            DeltaUnchanged,
+			},
+			{
+				EvalCaseID:      "case",
+				MetricName:      "invalid",
+				BaselineStatus:  string(status.EvalStatusFailed),
+				CandidateStatus: "invalid",
+				Kind:            DeltaUnchanged,
+			},
+		}},
+		CostSummary{},
+		Duration{},
+	)
+	assert.False(t, decision.Accepted)
+	assert.Contains(t, decision.Reasons, "candidate validation has incomplete metric statuses: [case/metric=unknown case/other=not_evaluated case/invalid=invalid]")
 }
 
 func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing.T) {
@@ -242,6 +314,7 @@ func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing
 			AllowNewHardFail:       true,
 			MaxModelCalls:          5,
 			MaxCost:                1,
+			ExpectedCostCurrency:   "USD",
 			MaxLatency:             &maxLatency,
 		},
 		false,
@@ -249,7 +322,7 @@ func TestEvaluateGateAllowsConfiguredNewFailuresAndBudgetsWithinLimit(t *testing
 			OverallScoreDelta: 0.2,
 			Summary:           DeltaSummary{NewlyFailed: 1},
 		},
-		CostSummary{ModelCalls: 5, ModelCallsMeasured: true, Amount: 0.5, AmountMeasured: true, Source: CostSourceProvider},
+		CostSummary{ModelCalls: 5, ModelCallsMeasured: true, Amount: 0.5, AmountMeasured: true, Currency: "USD", Source: CostSourceProvider},
 		Duration{Duration: 500 * time.Millisecond},
 	)
 	assert.True(t, decision.Accepted)
