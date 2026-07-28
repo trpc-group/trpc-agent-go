@@ -163,35 +163,50 @@ func (s *Service) initDB(ctx context.Context) error {
 	// service instances observe the same event count. ClickHouse only permits a
 	// new sorting-key expression to reference columns added by the same ALTER,
 	// so old tables need a combined migration while new tables need no ALTER.
-	rows, err := s.chClient.Query(ctx, `SELECT count() FROM system.tables
-		WHERE database = currentDatabase() AND name = ? AND position(sorting_key, 'event_id') > 0`,
-		s.tableSessionTrackEvents)
+	hasTrackEventIdentity, err := s.hasTrackEventIdentity(ctx)
 	if err != nil {
-		return fmt.Errorf("check track event order key failed: %w", err)
+		return err
 	}
-	var hasTrackEventIdentity uint64
-	if rows.Next() {
-		if err := rows.Scan(&hasTrackEventIdentity); err != nil {
-			_ = rows.Close()
-			return fmt.Errorf("scan track event order key failed: %w", err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return fmt.Errorf("check track event order key failed: %w", err)
-	}
-	if err := rows.Close(); err != nil {
-		return fmt.Errorf("close track event order key rows failed: %w", err)
-	}
-	if hasTrackEventIdentity == 0 {
-		if err := s.chClient.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s
+	if !hasTrackEventIdentity {
+		migrationErr := s.chClient.Exec(ctx, fmt.Sprintf(`ALTER TABLE %s
 			ADD COLUMN event_id String AFTER event_index,
 			MODIFY ORDER BY (app_name, user_id, session_id, track, event_index, event_id)`,
-			s.tableSessionTrackEvents)); err != nil {
-			return fmt.Errorf("migrate track event identity failed: %w", err)
+			s.tableSessionTrackEvents))
+		if migrationErr != nil {
+			hasTrackEventIdentity, err = s.hasTrackEventIdentity(ctx)
+			if err != nil {
+				return fmt.Errorf("verify track event identity after migration failed: %w", err)
+			}
+			if !hasTrackEventIdentity {
+				return fmt.Errorf("migrate track event identity failed: %w", migrationErr)
+			}
 		}
 	}
 
 	log.Info("clickhouse session database schema initialized successfully")
 	return nil
+}
+
+func (s *Service) hasTrackEventIdentity(ctx context.Context) (bool, error) {
+	rows, err := s.chClient.Query(ctx, `SELECT count() FROM system.tables
+		WHERE database = currentDatabase() AND name = ? AND position(sorting_key, 'event_id') > 0`,
+		s.tableSessionTrackEvents)
+	if err != nil {
+		return false, fmt.Errorf("check track event order key failed: %w", err)
+	}
+	var hasTrackEventIdentity uint64
+	if rows.Next() {
+		if err := rows.Scan(&hasTrackEventIdentity); err != nil {
+			_ = rows.Close()
+			return false, fmt.Errorf("scan track event order key failed: %w", err)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return false, fmt.Errorf("check track event order key failed: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return false, fmt.Errorf("close track event order key rows failed: %w", err)
+	}
+	return hasTrackEventIdentity > 0, nil
 }
