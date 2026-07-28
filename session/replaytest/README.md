@@ -34,29 +34,29 @@ report, err := replaytest.Run(ctx, append([]replaytest.Backend{inMemory, sqlite}
 Run lightweight mode with:
 
 ```bash
-cd session/replaytest && go test ./...
+cd test && go test ./replaytest
 ```
 
 `REPLAYTEST_REDIS_URL` tests a configured Redis instance:
 
 ```bash
-cd session/replaytest && REPLAYTEST_REDIS_URL=redis://127.0.0.1:6379 go test ./... -run TestRedisReplay
+cd test && REPLAYTEST_REDIS_URL=redis://127.0.0.1:6379 go test ./replaytest -run TestRedisReplay
 ```
 
 Set `REPLAYTEST_POSTGRES_DSN` to run the Postgres Session and Memory replay:
 
 ```bash
-cd session/replaytest && REPLAYTEST_POSTGRES_DSN='postgres://postgres:postgres@127.0.0.1:5432/replaytest?sslmode=disable' go test ./... -run TestPostgresReplay
+cd test && REPLAYTEST_POSTGRES_DSN='postgres://postgres:postgres@127.0.0.1:5432/replaytest?sslmode=disable' go test ./replaytest -run TestPostgresReplay
 ```
 
 Set `REPLAYTEST_MYSQL_DSN` to run the MySQL Session and Memory replay:
 
 ```bash
-cd session/replaytest && REPLAYTEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/replaytest?parseTime=true' go test ./... -run TestMySQLReplay
+cd test && REPLAYTEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/replaytest?parseTime=true' go test ./replaytest -run TestMySQLReplay
 ```
 
 Set `REPLAYTEST_CLICKHOUSE_DSN` for ClickHouse Session and Memory replay. ClickHouse 24.8 requires its experimental JSON setting:
 
 ```bash
-cd session/replaytest && REPLAYTEST_CLICKHOUSE_DSN='clickhouse://user:password@127.0.0.1:9000/database?allow_experimental_json_type=1' go test ./... -run 'TestClickHouse(Replay|MemoryLifecycle)'
+cd test && REPLAYTEST_CLICKHOUSE_DSN='clickhouse://user:password@127.0.0.1:9000/database?allow_experimental_json_type=1' go test ./replaytest -run 'TestClickHouse(Replay|MemoryLifecycle)'
 ```

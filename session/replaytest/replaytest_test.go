@@ -11,25 +11,19 @@ package replaytest
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
-	"time"
 
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
-	memsqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
-	sesssqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 	"trpc.group/trpc-go/trpc-agent-go/session/summary"
 )
 
@@ -53,21 +47,6 @@ func (staticSummarizer) SetModel(model.Model) {}
 func (staticSummarizer) Metadata() map[string]any { return nil }
 
 var _ summary.SessionSummarizer = staticSummarizer{}
-
-func TestStandardCasesAreConsistentAcrossLightweightBackends(t *testing.T) {
-	backends := newLightweightBackends(t)
-	report, err := Run(context.Background(), backends, StandardCases())
-	require.NoError(t, err)
-	require.False(t, report.HasDisallowedDifferences(), "report: %+v", report.Differences)
-}
-
-func TestLightweightSuiteCompletesWithinThirtySeconds(t *testing.T) {
-	started := time.Now()
-	report, err := Run(context.Background(), newLightweightBackends(t), StandardCases())
-	require.NoError(t, err)
-	require.False(t, report.HasDisallowedDifferences())
-	require.Less(t, time.Since(started), 30*time.Second)
-}
 
 func TestStandardCasesDetectInjectedDifferences(t *testing.T) {
 	for _, replayCase := range StandardCases() {
@@ -588,11 +567,6 @@ func (m *closeTrackingMemory) Close() error {
 	return m.closeErr
 }
 
-func newLightweightBackends(t *testing.T) []Backend {
-	t.Helper()
-	return []Backend{newInMemoryBackend(t), newSQLiteBackend(t)}
-}
-
 func newInMemoryBackend(t *testing.T) Backend {
 	t.Helper()
 	sessionService := sessinmemory.NewSessionService(
@@ -605,31 +579,6 @@ func newInMemoryBackend(t *testing.T) Backend {
 		require.NoError(t, sessionService.Close())
 	})
 	return Backend{Name: "inmemory", Session: sessionService, Memory: memoryService}
-}
-
-func newSQLiteBackend(t *testing.T) Backend {
-	t.Helper()
-	sessionDB := openSQLite(t, "session.db")
-	sessionService, err := sesssqlite.NewService(sessionDB,
-		sesssqlite.WithSummarizer(staticSummarizer{}),
-		sesssqlite.WithAsyncSummaryNum(0),
-	)
-	require.NoError(t, err)
-	memoryDB := openSQLite(t, "memory.db")
-	memoryService, err := memsqlite.NewService(memoryDB)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, memoryService.Close())
-		require.NoError(t, sessionService.Close())
-	})
-	return Backend{Name: "sqlite", Session: sessionService, Memory: memoryService}
-}
-
-func openSQLite(t *testing.T, name string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite3", filepath.Join(t.TempDir(), name))
-	require.NoError(t, err)
-	return db
 }
 
 func readReportFixture(t *testing.T) []byte {

@@ -8,13 +8,13 @@ replace (
 )
 
 require (
+	github.com/ClickHouse/clickhouse-go/v2 v2.34.0
 	trpc.group/trpc-go/trpc-agent-go v0.5.0
 	trpc.group/trpc-go/trpc-agent-go/storage/clickhouse v1.1.2-0.20260108033914-7a20241f1ad5
 )
 
 require (
 	github.com/ClickHouse/ch-go v0.65.1 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.34.0 // indirect
 	github.com/andybalholm/brotli v1.1.1 // indirect
 	github.com/go-ego/gse v1.0.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect

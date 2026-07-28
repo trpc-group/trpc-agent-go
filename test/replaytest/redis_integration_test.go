@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package replaytest
+package replaytest_test
 
 import (
 	"context"
@@ -18,7 +18,6 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/stretchr/testify/require"
 	memoryredis "trpc.group/trpc-go/trpc-agent-go/memory/redis"
-	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionredis "trpc.group/trpc-go/trpc-agent-go/session/redis"
 )
 
@@ -74,10 +73,6 @@ func newRedisBackend(url, keyPrefix string) (Backend, error) {
 	}
 	return Backend{Name: "redis", Session: sessionService, Memory: memoryService}, nil
 }
-
-type manualReplaySummarizer struct{ staticSummarizer }
-
-func (manualReplaySummarizer) ShouldSummarize(*session.Session) bool { return false }
 
 func redisReplayKeyPrefix(t *testing.T) string {
 	t.Helper()

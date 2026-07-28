@@ -7,7 +7,7 @@
 // trpc-agent-go is licensed under the Apache License Version 2.0.
 //
 
-package replaytest
+package replaytest_test
 
 import (
 	"context"
@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
@@ -105,32 +104,4 @@ func newPostgresBackend(dsn string) (Backend, error) {
 		return Backend{}, fmt.Errorf("create postgres memory service: %w", err)
 	}
 	return Backend{Name: "postgres", Session: sessionService, Memory: memoryService}, nil
-}
-
-func cleanupReplayBackend(t *testing.T, backend Backend) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, replayCase := range StandardCases() {
-		if err := backend.Session.DeleteSession(ctx, session.Key{
-			AppName: replayApp, UserID: replayUser, SessionID: replayCase.Name,
-		}); err != nil {
-			t.Errorf("delete %s replay session %q: %v", backend.Name, replayCase.Name, err)
-		}
-	}
-	if err := backend.Memory.ClearMemories(ctx, memory.UserKey{AppName: replayApp, UserID: replayUser}); err != nil {
-		t.Errorf("clear %s replay memories: %v", backend.Name, err)
-	}
-	if err := closeBackends(backend); err != nil {
-		t.Errorf("close %s replay backend: %v", backend.Name, err)
-	}
-}
-
-func cleanupReplaySession(t *testing.T, backend Backend, key session.Key) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := backend.Session.DeleteSession(ctx, key); err != nil {
-		t.Errorf("delete %s replay session %q: %v", backend.Name, key.SessionID, err)
-	}
 }
