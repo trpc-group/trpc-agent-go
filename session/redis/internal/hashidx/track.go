@@ -57,7 +57,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		tracksVal,
 	}
 
-	result, err := luaAppendTrackEvent.Run(ctx, c.client, keys, args...).Int64()
+	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()
 	if err != nil {
 		return fmt.Errorf("append track event: %w", err)
 	}
@@ -107,7 +107,7 @@ func (c *Client) loadTrackEventsViaLua(
 	minScore, maxScore string,
 	limit int,
 ) ([]session.TrackEvent, error) {
-	rawEvents, err := luaLoadTrackEvents.Run(ctx, c.client,
+	rawEvents, err := c.runScript(ctx, luaLoadTrackEvents,
 		[]string{
 			c.keys.TrackDataKey(key, track),
 			c.keys.TrackTimeIndexKey(key, track),
