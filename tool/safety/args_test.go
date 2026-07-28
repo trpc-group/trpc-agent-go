@@ -102,10 +102,11 @@ func TestRequestsFromToolCall_ParsesKnownToolArguments(t *testing.T) {
 		{
 			name:     "skill_output_collection_paths",
 			toolName: "skill_run",
-			args:     []byte(`{"command":"true","output_files":[".env"],"outputs":{"globs":["out/*.txt"]}}`),
+			args:     []byte(`{"command":"true","output_files":[".env"],"outputs":{"globs":["out/*.txt"]},"inputs":[{"from":"host:///etc/passwd","to":"inputs/passwd","mode":"copy"}]}`),
 			assert: func(t *testing.T, reqs []ScanRequest) {
 				require.Len(t, reqs, 1)
 				require.ElementsMatch(t, []string{".env", "out/*.txt"}, reqs[0].CollectionPaths)
+				require.ElementsMatch(t, []string{"host:///etc/passwd", "inputs/passwd"}, reqs[0].InputPaths)
 			},
 		},
 		{
@@ -339,7 +340,7 @@ func TestRequestsFromPermissionRequest_UsesRenamedToolSchemas(t *testing.T) {
 	require.Len(t, hostScanReqs, 1)
 	require.Equal(t, BackendHost, hostScanReqs[0].Backend)
 	require.Equal(t, filepath.Clean(hostBase), filepath.Clean(hostScanReqs[0].Cwd))
-	require.True(t, hostScanReqs[0].CwdResolved)
+	require.True(t, hostScanReqs[0].cwdResolved)
 	report, err := MustDefaultScanner(Policy{
 		DeniedPaths: []string{filepath.Join(hostBase, "passwd")},
 	}).Scan(context.Background(), hostScanReqs[0])
@@ -359,6 +360,32 @@ func TestRequestsFromPermissionRequest_UsesRenamedToolSchemas(t *testing.T) {
 	require.Equal(t, BackendCodeExec, codeScanReqs[0].Backend)
 	require.Equal(t, "python", codeScanReqs[0].Language)
 }
+
+func TestRequestsFromPermissionRequest_DoesNotInferCustomParserFromSchema(t *testing.T) {
+	custom := &testPermissionTool{decl: &tool.Declaration{
+		Name: "custom_exec",
+		InputSchema: &tool.Schema{Properties: map[string]*tool.Schema{
+			"command": {Type: "string"},
+			"cwd":     {Type: "string"},
+		}},
+	}}
+	reqs, err := requestsFromPermissionRequest(&tool.PermissionRequest{
+		Tool:      custom,
+		ToolName:  "custom_exec",
+		Arguments: []byte(`{"command":"echo ok","cwd":".","url":"https://evil.example"}`),
+	}, BackendUnknown, nil)
+	require.NoError(t, err)
+	require.Len(t, reqs, 1)
+	require.Equal(t, BackendUnknown, reqs[0].Backend)
+	require.Empty(t, reqs[0].Command)
+	require.NotEmpty(t, reqs[0].RawArguments)
+}
+
+type testPermissionTool struct {
+	decl *tool.Declaration
+}
+
+func (t *testPermissionTool) Declaration() *tool.Declaration { return t.decl }
 
 func TestUnmarshalCodeBlocks_RejectsStringifiedInvalidJSON(t *testing.T) {
 	_, err := unmarshalCodeBlocks(json.RawMessage(`"not-json"`))

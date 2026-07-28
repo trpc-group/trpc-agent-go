@@ -79,6 +79,9 @@ type executeCodeTool struct {
 	cfg      config
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*executeCodeTool) SafetyParserKind() string { return "execute_code" }
+
 // Declaration returns the tool's declaration.
 func (t *executeCodeTool) Declaration() *tool.Declaration {
 	langEnum := make([]any, len(t.cfg.languages))

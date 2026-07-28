@@ -93,6 +93,7 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 	findings = append(findings, s.scanEnv(req.Env)...)
 	findings = append(findings, s.scanCwd(req)...)
 	findings = append(findings, s.scanCollectionPaths(req)...)
+	findings = append(findings, s.scanInputPaths(req)...)
 	findings = append(findings, s.scanOutputLimit(req)...)
 	switch {
 	case req.Command != "":
@@ -149,7 +150,7 @@ func (s *DefaultScanner) scanRequest(ctx context.Context, req ScanRequest) []Fin
 }
 
 func (s *DefaultScanner) scanCwd(req ScanRequest) []Finding {
-	if req.CwdResolutionRequired && !req.CwdResolved {
+	if req.cwdResolutionRequired && !req.cwdResolved {
 		return []Finding{{
 			RuleID:         "path.workdir_unresolved",
 			RiskLevel:      RiskHigh,
@@ -189,8 +190,8 @@ func (s *DefaultScanner) scanCollectionPaths(req ScanRequest) []Finding {
 	var findings []Finding
 	for _, collectionPath := range req.CollectionPaths {
 		for _, denied := range s.policy.DeniedPaths {
-			if !sensitivePathMatch(collectionPath, denied) &&
-				!sensitivePathMatch(joinCwdPath(req.Cwd, collectionPath), denied) {
+			if !sensitivePathOrGlobMatch(collectionPath, denied) &&
+				!sensitivePathOrGlobMatch(joinCwdPath(req.Cwd, collectionPath), denied) {
 				continue
 			}
 			findings = append(findings, Finding{
@@ -204,6 +205,91 @@ func (s *DefaultScanner) scanCollectionPaths(req ScanRequest) []Finding {
 		}
 	}
 	return findings
+}
+
+func (s *DefaultScanner) scanInputPaths(req ScanRequest) []Finding {
+	if len(req.InputPaths) == 0 {
+		return nil
+	}
+	var findings []Finding
+	for _, inputPath := range req.InputPaths {
+		for _, denied := range s.policy.DeniedPaths {
+			if !sensitivePathMatch(inputPath, denied) &&
+				!sensitivePathMatch(joinCwdPath(req.Cwd, inputPath), denied) {
+				continue
+			}
+			findings = append(findings, Finding{
+				RuleID:         "path.input_staging",
+				RiskLevel:      RiskCritical,
+				Decision:       DecisionDeny,
+				Evidence:       "<redacted>",
+				Recommendation: "do not stage credential or secret paths into tool workspaces",
+				Redacted:       true,
+			})
+		}
+	}
+	return findings
+}
+
+func sensitivePathOrGlobMatch(value, denied string) bool {
+	return sensitivePathMatch(value, denied) || globMayMatchDenied(value, denied)
+}
+
+func globMayMatchDenied(pattern, denied string) bool {
+	pattern = slashNormalizedPathText(pattern)
+	if !strings.ContainsAny(pattern, "*?[") {
+		return false
+	}
+	matcher := globRegexp(pattern)
+	if matcher == nil {
+		return true
+	}
+	candidates := sensitivePathCandidates(denied)
+	meta := strings.IndexAny(pattern, "*?[")
+	prefix := strings.TrimSuffix(pattern[:meta], "/")
+	for _, candidate := range candidates {
+		if matcher.MatchString(slashNormalizedPathText(candidate)) {
+			return true
+		}
+		if prefix != "" && matcher.MatchString(prefix+"/"+strings.TrimLeft(slashNormalizedPathText(candidate), "/")) {
+			return true
+		}
+	}
+	return false
+}
+
+func globRegexp(pattern string) *regexp.Regexp {
+	var b strings.Builder
+	b.WriteString("^")
+	for i := 0; i < len(pattern); {
+		switch {
+		case strings.HasPrefix(pattern[i:], "**/"):
+			b.WriteString("(?:.*/)?")
+			i += 3
+		case pattern[i] == '*':
+			b.WriteString("[^/]*")
+			i++
+		case pattern[i] == '?':
+			b.WriteString("[^/]")
+			i++
+		case pattern[i] == '[':
+			end := strings.IndexByte(pattern[i+1:], ']')
+			if end < 0 {
+				return nil
+			}
+			b.WriteString("[^/]")
+			i += end + 2
+		default:
+			b.WriteString(regexp.QuoteMeta(pattern[i : i+1]))
+			i++
+		}
+	}
+	b.WriteString("$")
+	matcher, err := regexp.Compile(b.String())
+	if err != nil {
+		return nil
+	}
+	return matcher
 }
 
 func (s *DefaultScanner) scanSize(req ScanRequest) []Finding {

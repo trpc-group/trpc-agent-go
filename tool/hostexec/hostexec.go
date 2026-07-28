@@ -170,6 +170,9 @@ type execCommandTool struct {
 	baseDir string
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*execCommandTool) SafetyParserKind() string { return "exec_command" }
+
 func (t *execCommandTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolExecCommand,
@@ -322,6 +325,9 @@ type writeStdinTool struct {
 	mgr *manager
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*writeStdinTool) SafetyParserKind() string { return "write_stdin" }
+
 func (t *writeStdinTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{
 		Name: toolWriteStdin,
@@ -430,6 +436,9 @@ func (t *writeStdinTool) Call(
 type killSessionTool struct {
 	mgr *manager
 }
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*killSessionTool) SafetyParserKind() string { return "kill_session" }
 
 func (t *killSessionTool) Declaration() *tool.Declaration {
 	return &tool.Declaration{

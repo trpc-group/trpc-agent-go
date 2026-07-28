@@ -112,10 +112,16 @@ type ExecTool struct {
 	clock    func() time.Time
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*ExecTool) SafetyParserKind() string { return "skill_exec" }
+
 // WriteStdinTool writes stdin to running skill sessions.
 type WriteStdinTool struct {
 	exec *ExecTool
 }
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*WriteStdinTool) SafetyParserKind() string { return "write_stdin" }
 
 // PollSessionTool polls running skill sessions for new output.
 type PollSessionTool struct {
@@ -126,6 +132,9 @@ type PollSessionTool struct {
 type KillSessionTool struct {
 	exec *ExecTool
 }
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*KillSessionTool) SafetyParserKind() string { return "kill_session" }
 
 // NewExecTool creates the interactive skill execution tool.
 func NewExecTool(run *RunTool) *ExecTool {

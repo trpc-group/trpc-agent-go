@@ -63,6 +63,9 @@ type RunTool struct {
 	outputLimits       RunOutputLimits
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*RunTool) SafetyParserKind() string { return "skill_exec" }
+
 // RunOutputLimits controls how much inline text skill_run returns.
 //
 // These limits apply to stdout/stderr and primary_output selection only.

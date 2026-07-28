@@ -440,6 +440,33 @@ func TestDefaultScanner_GatesCollectedSecretPaths(t *testing.T) {
 	require.True(t, report.Redacted)
 }
 
+func TestDefaultScanner_GatesBroadSecretCollectionGlobs(t *testing.T) {
+	for _, collectionPath := range []string{"**/.*", "out/**"} {
+		report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+			ToolName:        "skill_run",
+			Backend:         BackendHost,
+			Command:         "true",
+			CollectionPaths: []string{collectionPath},
+		})
+		require.NoError(t, err)
+		require.Equal(t, DecisionDeny, report.Decision, collectionPath)
+		require.Equal(t, "path.output_collection", report.RuleID, collectionPath)
+	}
+}
+
+func TestDefaultScanner_GatesSecretInputStaging(t *testing.T) {
+	report, err := MustDefaultScanner(Policy{}).Scan(context.Background(), ScanRequest{
+		ToolName:   "skill_run",
+		Backend:    BackendHost,
+		Command:    "true",
+		InputPaths: []string{"host:///etc/passwd", "inputs/passwd"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, DecisionDeny, report.Decision)
+	require.Equal(t, "path.input_staging", report.RuleID)
+	require.True(t, report.Redacted)
+}
+
 func TestDefaultScanner_AppliesNetworkAllowlistToProxyEnv(t *testing.T) {
 	for _, proxy := range []string{"http://evil.example:8080", "evil.example:8080"} {
 		report, err := MustDefaultScanner(Policy{

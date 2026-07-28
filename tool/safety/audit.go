@@ -102,8 +102,53 @@ func auditEventFromReport(report Report, deniedPaths []string) AuditEvent {
 }
 
 func redactAuditRecommendation(recommendation string, deniedPaths []string) (string, bool) {
-	out, redacted := redactReportTextWithDeniedPaths(recommendation, deniedPaths)
+	out, redacted := redactNarrativeTextWithDeniedPaths(recommendation, deniedPaths)
 	return singleLine(out), redacted
+}
+
+func redactNarrativeTextWithDeniedPaths(text string, deniedPaths []string) (string, bool) {
+	out, redacted := redactString(text)
+	deniedPaths = append([]string(nil), deniedPaths...)
+	sort.SliceStable(deniedPaths, func(i, j int) bool {
+		return len(deniedPaths[i]) > len(deniedPaths[j])
+	})
+	for _, denied := range deniedPaths {
+		if strings.TrimSpace(denied) == "" {
+			continue
+		}
+		next := redactSensitivePathTokens(out, denied)
+		if next != out {
+			redacted = true
+			out = next
+		}
+	}
+	return out, redacted
+}
+
+func redactSensitivePathTokens(text, denied string) string {
+	needles := sensitivePathNeedles(denied)
+	if len(needles) == 0 {
+		return text
+	}
+	var b strings.Builder
+	start := 0
+	for _, span := range sensitiveTokenSpans(text) {
+		b.WriteString(text[start:span[0]])
+		token := text[span[0]:span[1]]
+		candidate := token
+		if idx := strings.Index(candidate, "="); idx >= 0 {
+			candidate = candidate[idx+1:]
+		}
+		if isPathLikeCandidate(strings.Trim(candidate, `"'`)) {
+			if next, ok := redactSensitiveToken(token, needles); ok {
+				token = next
+			}
+		}
+		b.WriteString(token)
+		start = span[1]
+	}
+	b.WriteString(text[start:])
+	return b.String()
 }
 
 func redactReportTextWithDeniedPaths(text string, deniedPaths []string) (string, bool) {
@@ -129,6 +174,9 @@ func normalizeReportText(report Report, deniedPaths []string) Report {
 	redact := func(text string) (string, bool) {
 		return redactReportTextWithDeniedPaths(text, deniedPaths)
 	}
+	redactNarrative := func(text string) (string, bool) {
+		return redactNarrativeTextWithDeniedPaths(text, deniedPaths)
+	}
 	var changed bool
 	if report.Command, changed = redact(report.Command); changed {
 		report.Redacted = true
@@ -136,7 +184,7 @@ func normalizeReportText(report Report, deniedPaths []string) Report {
 	if report.Evidence, changed = redact(report.Evidence); changed {
 		report.Redacted = true
 	}
-	if report.Recommendation, changed = redact(report.Recommendation); changed {
+	if report.Recommendation, changed = redactNarrative(report.Recommendation); changed {
 		report.Redacted = true
 	}
 	for i := range report.Findings {
@@ -144,7 +192,7 @@ func normalizeReportText(report Report, deniedPaths []string) Report {
 			report.Findings[i].Redacted = true
 			report.Redacted = true
 		}
-		if report.Findings[i].Recommendation, changed = redact(report.Findings[i].Recommendation); changed {
+		if report.Findings[i].Recommendation, changed = redactNarrative(report.Findings[i].Recommendation); changed {
 			report.Findings[i].Redacted = true
 			report.Redacted = true
 		}

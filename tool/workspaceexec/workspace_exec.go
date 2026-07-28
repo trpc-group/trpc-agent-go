@@ -83,15 +83,24 @@ type ExecTool struct {
 	clock    func() time.Time
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*ExecTool) SafetyParserKind() string { return "workspace_exec" }
+
 // WriteStdinTool sends additional stdin to a running workspace_exec session.
 type WriteStdinTool struct {
 	exec *ExecTool
 }
 
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*WriteStdinTool) SafetyParserKind() string { return "write_stdin" }
+
 // KillSessionTool terminates a running workspace_exec session.
 type KillSessionTool struct {
 	exec *ExecTool
 }
+
+// SafetyParserKind identifies the built-in parser required for this tool.
+func (*KillSessionTool) SafetyParserKind() string { return "kill_session" }
 
 type execSession struct {
 	mu sync.Mutex

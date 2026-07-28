@@ -143,42 +143,30 @@ func parserKindForPermissionRequest(req *tool.PermissionRequest) parserKind {
 		return parserUnknown
 	}
 	if semantic := internaltool.ResolveSemantic(req.Tool); semantic != nil {
-		if kind := parserKindFromDeclaration(semantic.Declaration()); kind != parserUnknown {
+		if kind := parserKindFromSemanticTool(semantic); kind != parserUnknown {
 			return kind
 		}
-	}
-	if kind := parserKindFromDeclaration(req.Declaration); kind != parserUnknown {
-		return kind
 	}
 	return parserKindFromToolName(req.ToolName)
 }
 
-func parserKindFromDeclaration(decl *tool.Declaration) parserKind {
-	if decl == nil || decl.InputSchema == nil {
+type safetyParserKindProvider interface {
+	SafetyParserKind() string
+}
+
+func parserKindFromSemanticTool(t tool.Tool) parserKind {
+	provider, ok := t.(safetyParserKindProvider)
+	if !ok {
 		return parserUnknown
 	}
-	props := decl.InputSchema.Properties
-	if _, ok := props["code_blocks"]; ok {
-		return parserCodeExec
+	kind := parserKind(provider.SafetyParserKind())
+	switch kind {
+	case parserWorkspaceExec, parserHostExec, parserSkillExec,
+		parserWriteStdin, parserKillSession, parserCodeExec:
+		return kind
+	default:
+		return parserUnknown
 	}
-	if _, ok := props["command"]; ok {
-		if _, ok := props["skill"]; ok {
-			return parserSkillExec
-		}
-		if _, ok := props["workdir"]; ok {
-			return parserHostExec
-		}
-		if _, ok := props["cwd"]; ok {
-			return parserWorkspaceExec
-		}
-	}
-	if _, ok := props["chars"]; ok {
-		return parserWriteStdin
-	}
-	if _, ok := props["session_id"]; ok {
-		return parserKillSession
-	}
-	return parserUnknown
 }
 
 func inferBackendForParser(toolName string, kind parserKind) Backend {
@@ -262,8 +250,13 @@ func parseExecArgs(
 		}
 	}
 	var collectionPaths []string
+	var inputPaths []string
 	if toolKind == parserSkillExec {
 		collectionPaths, err = collectionPathsField(raw)
+		if err != nil {
+			return nil, err
+		}
+		inputPaths, err = inputPathsField(raw)
 		if err != nil {
 			return nil, err
 		}
@@ -297,11 +290,38 @@ func parseExecArgs(
 		TTY:                   tty,
 		RawArguments:          append([]byte(nil), args...),
 		CollectionPaths:       collectionPaths,
-		CwdResolutionRequired: resolveHostCwd,
-		CwdResolved:           cwdResolved,
+		InputPaths:            inputPaths,
 		Metadata:              metadata,
+		cwdResolutionRequired: resolveHostCwd,
+		cwdResolved:           cwdResolved,
 	}
 	return []ScanRequest{req}, nil
+}
+
+type inputPathSpec struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+func inputPathsField(raw map[string]json.RawMessage) ([]string, error) {
+	b, ok := raw["inputs"]
+	if !ok || string(b) == "null" {
+		return nil, nil
+	}
+	var inputs []inputPathSpec
+	if err := json.Unmarshal(b, &inputs); err != nil {
+		return nil, fmt.Errorf("inputs: expected input spec array: %w", err)
+	}
+	paths := make([]string, 0, len(inputs)*2)
+	for _, input := range inputs {
+		if strings.TrimSpace(input.From) != "" {
+			paths = append(paths, input.From)
+		}
+		if strings.TrimSpace(input.To) != "" {
+			paths = append(paths, input.To)
+		}
+	}
+	return dedupeStrings(paths), nil
 }
 
 func resolveEffectiveWorkdir(parserTool tool.Tool, raw string) (string, bool, error) {
