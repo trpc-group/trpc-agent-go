@@ -18,11 +18,20 @@
 ## 快速开始
 
 ```bash
-# 运行轻量模式（InMemory vs SQLite，约 110ms，零外部依赖）
+# 运行轻量模式（InMemory vs SQLite，约 110ms，零外部服务）
 cd test && go test ./replaytest/... -v
 
 # 运行指定用例
 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
+```
+
+## 环境要求
+
+SQLite 后端使用 `github.com/mattn/go-sqlite3`，需启用 **CGO** 并安装 **C 编译器**（Linux 用 GCC，macOS 用 Clang）。以 `CGO_ENABLED=0` 运行会导致构建失败。
+
+```bash
+# 运行测试前确认 CGO 已启用：
+go env CGO_ENABLED   # 应输出 1
 ```
 
 ## 支持的后端
@@ -158,19 +167,21 @@ go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 
 ## 运行测试
 
+所有命令需在 `test/` 目录下执行，且必须启用 **CGO**（`CGO_ENABLED=1`）。SQLite 需要 C 编译器。
+
 ```bash
 # 全部测试（单元 + 集成）
-go test ./replaytest/... -v
+CGO_ENABLED=1 go test ./replaytest/... -v
 
 # 仅集成测试
-go test ./replaytest/... -run TestReplayConsistency_AllCases -v
+CGO_ENABLED=1 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 
 # 仅单元测试
-go test ./replaytest/... -run "Test(Normalize|Recursive|Wildcard|Apply|Build|Parse|Write|Has|Capture)" -v
+CGO_ENABLED=1 go test ./replaytest/... -run "Test(Normalize|Recursive|Wildcard|Apply|Build|Parse|Write|Has|Capture)" -v
 
 # 竞态检测
-go test ./replaytest/... -race -count=1
+CGO_ENABLED=1 go test ./replaytest/... -race -count=1
 
 # 自定义报告路径
-TRPC_AGENT_REPLAY_REPORT_PATH=./my_report.json go test ./replaytest/... -v
+CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=./my_report.json go test ./replaytest/... -v
 ```

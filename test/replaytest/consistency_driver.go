@@ -258,10 +258,33 @@ func RunReplayCase(
 	// session creation (which uses wall-clock time.Now() inside the
 	// first step).  This prevents SQLite's getSummariesList from
 	// discarding summaries.
+	//
+	// If the caller set an explicit BaseTime it must be current or
+	// future; a historical BaseTime causes SQLite to silently drop
+	// summaries whose UpdatedAt (derived from event timestamps)
+	// predates the session's wall-clock CreatedAt, producing a false
+	// backend difference.
 	baseTime := rc.BaseTime
+	now := time.Now()
 	if baseTime.IsZero() {
-		baseTime = time.Now().UTC().Truncate(time.Second)
+		baseTime = now.UTC().Truncate(time.Second)
+	} else if baseTime.Before(now.Add(-5 * time.Second)) {
+		t.Fatalf(
+			"BaseTime %v is too far in the past (current time: %v); "+
+				"set BaseTime to a current or future time so event "+
+				"timestamps postdate session creation and SQLite "+
+				"does not discard summaries",
+			baseTime, now,
+		)
 	}
+
+	// Copy the backend so fault wrappers are installed on a per-run
+	// copy and never mutate the caller's shared ReplayBackend.  This
+	// is essential for t.Parallel() safety: without a copy, two
+	// concurrent runs race on SessionService / TrackService /
+	// MemoryService assignments and nextFault consumption.
+	local := *backend
+	backend = &local
 
 	// Scan steps for fault-injection configs. If any step uses faults,
 	// wrap the backend services so faults fire transparently during the
@@ -482,7 +505,7 @@ func RunReplayCase(
 	if err != nil {
 		t.Fatalf("read memories: %v", err)
 	}
-	snap := CaptureSnapshot(backend.Name, sess, memories)
+	snap := CaptureSnapshot(backend.Name, sess, memories, collectExplicitEventIDs(rc.Steps))
 
 	// When events order is intentionally non-deterministic (e.g.
 	// concurrent writes), sort the normalised events so that

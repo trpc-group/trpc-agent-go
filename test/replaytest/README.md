@@ -18,11 +18,20 @@
 ## Quick Start
 
 ```bash
-# Run lightweight mode (InMemory vs SQLite, ~110ms, zero external deps)
+# Run lightweight mode (InMemory vs SQLite, ~110ms, zero external services)
 cd test && go test ./replaytest/... -v
 
 # Run specific cases
 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
+```
+
+## Prerequisites
+
+The SQLite backend uses `github.com/mattn/go-sqlite3`, which requires **CGO** and a working **C compiler** (GCC on Linux, Clang on macOS). Running the suite with `CGO_ENABLED=0` will fail to build.
+
+```bash
+# Verify CGO is available before running tests:
+go env CGO_ENABLED   # should print 1
 ```
 
 ## Supported Backends
@@ -158,19 +167,21 @@ If integrated backends (Redis, Postgres, MySQL, ClickHouse) have gaps when added
 
 ## Running Tests
 
+All commands must run from the `test/` directory with **CGO enabled** (`CGO_ENABLED=1`). SQLite requires a C compiler.
+
 ```bash
 # All tests (unit + integration)
-go test ./replaytest/... -v
+CGO_ENABLED=1 go test ./replaytest/... -v
 
 # Integration only
-go test ./replaytest/... -run TestReplayConsistency_AllCases -v
+CGO_ENABLED=1 go test ./replaytest/... -run TestReplayConsistency_AllCases -v
 
 # Unit tests only
-go test ./replaytest/... -run "Test(Normalize|Recursive|Wildcard|Apply|Build|Parse|Write|Has|Capture)" -v
+CGO_ENABLED=1 go test ./replaytest/... -run "Test(Normalize|Recursive|Wildcard|Apply|Build|Parse|Write|Has|Capture)" -v
 
 # Race detection
-go test ./replaytest/... -race -count=1
+CGO_ENABLED=1 go test ./replaytest/... -race -count=1
 
 # Custom report path
-TRPC_AGENT_REPLAY_REPORT_PATH=./my_report.json go test ./replaytest/... -v
+CGO_ENABLED=1 TRPC_AGENT_REPLAY_REPORT_PATH=./my_report.json go test ./replaytest/... -v
 ```

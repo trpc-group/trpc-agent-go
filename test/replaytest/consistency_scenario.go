@@ -300,6 +300,16 @@ func validateSteps(step ReplayStep, index int) error {
 		if expected := memoryTypeOp[step.Type]; step.Memory.Op != expected {
 			return fmt.Errorf("step %d: type %q requires op %q, got %q", index, step.Type, expected, step.Memory.Op)
 		}
+
+		// Reject non-empty event_time that is not valid RFC 3339 so
+		// malformed timestamps are caught at load time rather than
+		// silently dropped during metadata construction.
+		if step.Memory.Meta != nil && step.Memory.Meta.EventTime != "" {
+			if _, err := time.Parse(time.RFC3339, step.Memory.Meta.EventTime); err != nil {
+				return fmt.Errorf("step %d (%s): memory metadata event_time %q is not valid RFC 3339", index, step.Type, step.Memory.Meta.EventTime)
+			}
+		}
+
 	case StepCreateSummary:
 		if step.Summary == nil {
 			return fmt.Errorf("step %d (%s): summary is required", index, step.Type)
@@ -353,4 +363,26 @@ var validConcurrentStepTypes = map[string]bool{
 	StepAddMemory:    true,
 	StepUpdateMemory: true,
 	StepDeleteMemory: true,
+}
+
+// collectExplicitEventIDs returns the set of all non-empty event IDs that
+// are explicitly defined in the scenario steps (including nested concurrent
+// steps).  These IDs are preserved during normalization so that a backend
+// which silently rewrites or drops a scenario-defined event ID produces a
+// visible cross-backend diff.
+func collectExplicitEventIDs(steps []ReplayStep) map[string]bool {
+	ids := make(map[string]bool)
+	var walk func([]ReplayStep)
+	walk = func(s []ReplayStep) {
+		for _, step := range s {
+			if step.Event != nil && step.Event.ID != "" {
+				ids[step.Event.ID] = true
+			}
+			if len(step.Concurrent) > 0 {
+				walk(step.Concurrent)
+			}
+		}
+	}
+	walk(steps)
+	return ids
 }

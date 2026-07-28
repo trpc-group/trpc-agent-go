@@ -78,10 +78,17 @@ type trackEventSnap struct {
 // CaptureSnapshot creates a normalized ReplaySnapshot from a session and
 // its memories. Auto-generated IDs and timestamps are stripped; JSON
 // ordering is normalized so cross-backend comparisons are deterministic.
+//
+// explicitEventIDs is an optional set of event IDs that were defined in
+// the scenario.  When non-empty, these IDs are preserved in the snapshot
+// so that a backend which silently rewrites or drops a scenario-defined
+// event ID produces a visible diff.  IDs not in this set (i.e. backend-
+// assigned values) continue to be stripped.
 func CaptureSnapshot(
 	backendName string,
 	sess *session.Session,
 	memories []*memory.Entry,
+	explicitEventIDs map[string]bool,
 ) *ReplaySnapshot {
 	if sess == nil {
 		return &ReplaySnapshot{
@@ -99,7 +106,7 @@ func CaptureSnapshot(
 			App:    sess.AppName,
 			UserID: sess.UserID,
 		},
-		Events:    normalizeEvents(sess.GetEvents()),
+		Events:    normalizeEvents(sess.GetEvents(), explicitEventIDs),
 		State:     normalizeState(sess.SnapshotState()),
 		Memories:  normalizeMemories(memories),
 		Summaries: normalizeSummaries(sess),
@@ -107,7 +114,7 @@ func CaptureSnapshot(
 	}
 }
 
-func normalizeEvents(events []event.Event) []map[string]any {
+func normalizeEvents(events []event.Event, explicitIDs map[string]bool) []map[string]any {
 	out := make([]map[string]any, 0, len(events))
 	for _, evt := range events {
 		encoded, err := json.Marshal(evt)
@@ -118,11 +125,18 @@ func normalizeEvents(events []event.Event) []map[string]any {
 		if err := json.Unmarshal(encoded, &normalized); err != nil {
 			panic("unmarshal replay event: " + err.Error())
 		}
-		delete(normalized, "id")
+		// Strip auto-generated IDs but preserve scenario-defined
+		// explicit IDs.  A backend that rewrites or drops an
+		// explicit event ID must produce a visible diff.
+		if id, _ := normalized["id"].(string); !explicitIDs[id] {
+			delete(normalized, "id")
+		}
 		delete(normalized, "timestamp")
 		delete(normalized, "created")
 		if response, ok := normalized["response"].(map[string]any); ok {
-			delete(response, "id")
+			if rid, _ := response["id"].(string); !explicitIDs[rid] {
+				delete(response, "id")
+			}
 			delete(response, "timestamp")
 			if len(response) == 0 {
 				delete(normalized, "response")

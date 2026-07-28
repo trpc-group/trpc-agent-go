@@ -457,6 +457,24 @@ func TestReplayConsistency_InjectedInconsistencies(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "explicit_event_id_rewritten", section: "events",
+			ref: refSummary, // summary_truncation has explicit evt-001..evt-006
+			inject: func(s *ReplaySnapshot) {
+				// Corrupt a non-boundary event ID.  evt-005 is
+				// a post-truncation event whose ID is NOT the
+				// summary boundary's LastEventID — this tests
+				// that scenario-defined IDs outside the boundary
+				// are preserved and compared.
+				for i, evt := range s.Events {
+					if id, ok := evt["id"].(string); ok && id == "evt-005" {
+						evt["id"] = "evt-005-corrupted"
+						s.Events[i] = evt
+						break
+					}
+				}
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -556,6 +574,61 @@ func TestReplayConsistency_SessionID(t *testing.T) {
 		}
 		seen[rc.SessionID] = rc.Name
 	}
+}
+
+// TestReplayConsistency_HistoricalBaseTimeRejected verifies that an
+// explicitly-set BaseTime in the past (before session creation wall-clock
+// time) is rejected at the start of RunReplayCase.  A historical BaseTime
+// causes SQLite to silently discard summaries whose UpdatedAt predates the
+// session's CreatedAt, producing a false backend difference.
+func TestReplayConsistency_HistoricalBaseTimeRejected(t *testing.T) {
+	cases, err := LoadReplayCasesFromDir(testdataDir(t))
+	require.NoError(t, err)
+
+	var rc *ReplayCase
+	for _, c := range cases {
+		if c.Name == "summary_truncation" {
+			rc = c
+			break
+		}
+	}
+	require.NotNil(t, rc, "summary_truncation case not found")
+
+	ctx := context.Background()
+	backends := NewReplayBackends(t)
+
+	rc.BaseTime = time.Now().Add(-24 * time.Hour) // historical — should fail.
+
+	// RunReplayCase calls t.Fatalf for historical BaseTime.  Capture
+	// the failure with a custom TB that records Fatalf rather than
+	// terminating the test process.
+	ft := &fatalTB{TB: t}
+	func() {
+		defer func() { recover() }()
+		_ = RunReplayCase(ft, ctx, backends[0], rc)
+	}()
+	if !ft.fatalCalled {
+		t.Error("expected RunReplayCase to call Fatalf for historical BaseTime, but it did not")
+	}
+}
+
+// fatalTB wraps testing.TB and records whether Fatalf was called, without
+// actually terminating the test.
+type fatalTB struct {
+	testing.TB
+	fatalCalled bool
+}
+
+func (f *fatalTB) Fatalf(format string, args ...any) {
+	f.fatalCalled = true
+	panic(fatalPanic{})
+}
+
+type fatalPanic struct{}
+
+func (f *fatalTB) Fatal(args ...any) {
+	f.fatalCalled = true
+	panic(fatalPanic{})
 }
 
 // ---------------------------------------------------------------------------
@@ -743,6 +816,14 @@ func TestReplayCase_Validate_RejectsMalformed(t *testing.T) {
 				},
 			},
 			wantContain: "not allowed inside concurrent_events",
+		},
+
+		{
+			name: "memory_event_time_malformed",
+			steps: []ReplayStep{
+				{Type: StepAddMemory, Memory: &actionMemory{Op: "add", Content: "x", Meta: &memoryMeta{EventTime: "not-a-timestamp"}}},
+			},
+			wantContain: "event_time",
 		},
 		{
 			name: "nested concurrent valid (sanity check)",
@@ -980,6 +1061,52 @@ func TestReplayCase_Load_RejectsUnknownFields(t *testing.T) {
 		_, err := LoadReplayCase(path)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "trailing data")
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Parallel safety — fault wrappers must not race
+// ---------------------------------------------------------------------------
+
+func TestReplayConsistency_ParallelFaultAndNonFault(t *testing.T) {
+	cases, err := LoadReplayCasesFromDir(testdataDir(t))
+	require.NoError(t, err)
+
+	findCase := func(name string) *ReplayCase {
+		t.Helper()
+		for _, rc := range cases {
+			if rc.Name == name {
+				return rc
+			}
+		}
+		t.Fatalf("case %q not found", name)
+		return nil
+	}
+
+	ctx := context.Background()
+	backends := NewReplayBackends(t)
+
+	// Run a faulted case and a non-faulted case concurrently on the
+	// same backend pair.  Without the per-run backend copy in
+	// RunReplayCase this races on SessionService / TrackService /
+	// MemoryService assignments and on Summarizer.SetText text.
+	t.Run("parallel", func(t *testing.T) {
+		t.Run("fault", func(t *testing.T) {
+			t.Parallel()
+			rc := findCase("error_recovery")
+			rc.AppName = "replaytest-parallel-fault"
+			rc.BaseTime = time.Now().UTC().Truncate(time.Second)
+			_ = RunReplayCase(t, ctx, backends[0], rc)
+			_ = RunReplayCase(t, ctx, backends[1], rc)
+		})
+		t.Run("non_fault", func(t *testing.T) {
+			t.Parallel()
+			rc := findCase("single_turn")
+			rc.AppName = "replaytest-parallel-clean"
+			rc.BaseTime = time.Now().UTC().Truncate(time.Second)
+			_ = RunReplayCase(t, ctx, backends[0], rc)
+			_ = RunReplayCase(t, ctx, backends[1], rc)
+		})
 	})
 }
 

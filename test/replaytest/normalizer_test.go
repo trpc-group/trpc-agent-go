@@ -44,7 +44,7 @@ func TestNormalizeEvents_StripsIDAndTimestamp(t *testing.T) {
 		Version:   event.CurrentVersion,
 	}
 
-	out := normalizeEvents([]event.Event{evt})
+	out := normalizeEvents([]event.Event{evt}, nil)
 	require.Len(t, out, 1)
 
 	// ID, timestamp, created must be stripped — Response is embedded
@@ -72,7 +72,7 @@ func TestNormalizeEvents_PreservesContent(t *testing.T) {
 		Version:   event.CurrentVersion,
 	}
 
-	out := normalizeEvents([]event.Event{evt})
+	out := normalizeEvents([]event.Event{evt}, nil)
 	require.Len(t, out, 1)
 	assert.Equal(t, "agent", out[0]["author"])
 	assert.Equal(t, "chat", out[0]["branch"])
@@ -81,7 +81,7 @@ func TestNormalizeEvents_PreservesContent(t *testing.T) {
 }
 
 func TestNormalizeEvents_NilSlice(t *testing.T) {
-	out := normalizeEvents(nil)
+	out := normalizeEvents(nil, nil)
 	assert.Len(t, out, 0)
 }
 
@@ -247,7 +247,7 @@ func TestNormalizeTracks_TrackEventsPayload(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCaptureSnapshot_NilSession(t *testing.T) {
-	snap := CaptureSnapshot("test", nil, nil)
+	snap := CaptureSnapshot("test", nil, nil, nil)
 	assert.Equal(t, "test", snap.BackendName)
 	assert.Empty(t, snap.State)
 	assert.Empty(t, snap.Memories)
@@ -260,7 +260,7 @@ func TestCaptureSnapshot_SessionMetadata(t *testing.T) {
 		AppName: "app",
 		UserID:  "uid",
 	}
-	snap := CaptureSnapshot("b", sess, nil)
+	snap := CaptureSnapshot("b", sess, nil, nil)
 	assert.Equal(t, "sid", snap.Session.ID)
 	assert.Equal(t, "app", snap.Session.App)
 	assert.Equal(t, "uid", snap.Session.UserID)

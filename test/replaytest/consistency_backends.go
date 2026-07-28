@@ -12,6 +12,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -40,12 +41,15 @@ type ReplayBackend struct {
 // DeterministicSummarizer implements session.SessionSummarizer without
 // calling any LLM API, keeping the framework dependency-free.
 type DeterministicSummarizer struct {
+	mu   sync.Mutex
 	text string
 }
 
 func (s *DeterministicSummarizer) ShouldSummarize(*session.Session) bool { return true }
 
 func (s *DeterministicSummarizer) Summarize(_ context.Context, _ *session.Session) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.text == "" {
 		return "replay summary", nil
 	}
@@ -59,7 +63,11 @@ func (s *DeterministicSummarizer) Metadata() map[string]any {
 }
 
 // SetText sets the text that the next Summarize call will return.
-func (s *DeterministicSummarizer) SetText(text string) { s.text = text }
+func (s *DeterministicSummarizer) SetText(text string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.text = text
+}
 
 // NewReplayBackends returns the lightweight backend pair (InMemory + SQLite).
 func NewReplayBackends(t testing.TB) []*ReplayBackend {
