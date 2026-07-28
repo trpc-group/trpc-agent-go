@@ -785,7 +785,7 @@ func TestWorkflowStreamableCallPreservesMultilineAgentError(t *testing.T) {
 		}),
 	)
 	raw, err := json.Marshal(map[string]string{
-		"code": `return await agent("review", instruction="Review.", tools=[])`,
+		"code": `return await agent("review", template="reviewer", instruction="Review.", tools=[])`,
 	})
 	require.NoError(t, err)
 	reader, err := workflow.(tool.StreamableTool).StreamableCall(
