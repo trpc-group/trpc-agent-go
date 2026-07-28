@@ -10,7 +10,7 @@
 
 ## 2. Skill 设计
 
-`skills/code-review/` 提供 `SKILL.md`、`docs/rules.md`、`docs/usage.md` 与脚本目录。规则覆盖：安全（SQL 拼接 / TLS）、敏感信息、goroutine/context、资源关闭、数据库连接/事务、错误处理、测试缺失。脚本包括 `run_checks.sh`、`run_go_vet.sh`、`run_go_test.sh`、`run_staticcheck.sh`（后两者可选）。宿主 Orchestrator 加载 Skill 工作副本路径，在 Permission 允许后于沙箱执行。
+`skills/code-review/` 提供 `SKILL.md`、`docs/rules.md`、`docs/usage.md` 与脚本目录。规则覆盖：安全（SQL 拼接 / TLS）、敏感信息、goroutine/context、资源关闭、数据库连接/事务、错误处理、测试缺失。脚本包括 `run_checks.sh`、`run_go_vet.sh`、`run_go_test.sh`、`run_staticcheck.sh`（`--enable-go-test` / `--enable-staticcheck` 需 `--repo-path`，会把仓库挂到 `work/repo`）。宿主 Orchestrator 加载 Skill 工作副本路径，在 Permission 允许后于沙箱执行。
 
 ## 3. 沙箱隔离策略
 
@@ -30,7 +30,7 @@ SQLite 默认实现 `ReviewStore`（接口可换 SQL 后端）。表：`review_t
 
 ## 7. 输入输出
 
-输入：`--diff-file`、`--repo-path`、`--files`（路径列表/`@listfile`）、`--fixture`。输出：`review_report.json`、`review_report.md` 与 SQLite。公开 9 类 fixture（含 `expected.json`）与隐藏评测集（检出≥80%、误报≤15%）。
+输入：`--diff-file`、`--repo-path`、`--files`（路径列表/`@listfile`）、`--fixture`。输出：每任务目录下的 `review_report.json` / `review_report.md` 与 SQLite。公开 9 类 fixture（含 `expected.json`）与隐藏评测集（检出≥80%、误报≤15%）。
 
 ## 8. 方案摘要（300–500 字）
 

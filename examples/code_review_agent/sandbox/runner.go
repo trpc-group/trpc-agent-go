@@ -31,6 +31,7 @@ type Spec struct {
 	DiffText     string // redacted unified diff staged into the workspace
 	DiffHostPath string // optional host path fallback when DiffText is empty
 	SkillsRoot   string // host skills root staged into workspace skills/
+	RepoHostPath string // optional host repository staged to work/repo for go checks
 }
 
 // Result is the outcome of one run.

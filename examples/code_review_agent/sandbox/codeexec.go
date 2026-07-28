@@ -32,6 +32,7 @@ import (
 const (
 	stagedDiffRel     = "work/inputs/diff.patch"
 	stagedSkillsRel   = "skills"
+	stagedRepoRel     = "work/repo"
 	skillScriptPrefix = "skills/code-review/scripts/"
 )
 
@@ -223,6 +224,9 @@ func (r *CodeExecRunner) Run(ctx context.Context, spec Spec, limits safety.Limit
 	env := buildEnvMap(spec.Env, limits)
 	env["REVIEW_DIFF_PATH"] = stagedDiffRel
 	env["REVIEW_OUT_DIR"] = codeexecutor.DirWork
+	if spec.RepoHostPath != "" {
+		env["REVIEW_REPO_PATH"] = stagedRepoRel
+	}
 
 	cmd, args := splitCommand(spec.Command)
 	res, err := eng.Runner().RunProgram(runCtx, ws, codeexecutor.RunProgramSpec{
@@ -311,6 +315,18 @@ func (r *CodeExecRunner) stageInputs(
 	}}); err != nil {
 		return fmt.Errorf("stage diff: %w", err)
 	}
+	if spec.RepoHostPath != "" {
+		abs, err := filepath.Abs(spec.RepoHostPath)
+		if err != nil {
+			return fmt.Errorf("repo path: %w", err)
+		}
+		if err := eng.FS().StageDirectory(ctx, ws, abs, stagedRepoRel, codeexecutor.StageOptions{
+			ReadOnly:   true,
+			AllowMount: true,
+		}); err != nil {
+			return fmt.Errorf("stage repo: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -390,32 +406,4 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
-}
-
-// NewRunner is retained for local/fake compatibility tests.
-// Container and E2B backends own long-lived resources and must be created via
-// Create so callers can defer CreateResult.Closer; NewRunner refuses them to
-// avoid leaking Docker containers or remote sandboxes.
-func NewRunner(name string) (Runner, error) {
-	n := strings.ToLower(strings.TrimSpace(name))
-	switch n {
-	case "", "container", "e2b":
-		return nil, fmt.Errorf(
-			"sandbox.NewRunner(%q) would leak a long-lived executor; use sandbox.Create and defer CreateResult.Closer",
-			name,
-		)
-	}
-	res, err := Create(CreateOptions{Name: name, AllowLocalFallback: false})
-	if err != nil {
-		return nil, err
-	}
-	// local/fake closers are nil today; close anyway if a future backend adds one.
-	if res.Closer != nil {
-		_ = res.Closer()
-		return nil, fmt.Errorf(
-			"sandbox.NewRunner(%q) obtained a Closer-backed executor; use sandbox.Create instead",
-			name,
-		)
-	}
-	return res.Runner, nil
 }

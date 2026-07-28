@@ -205,17 +205,19 @@ func intPtr(v int) *int { return &v }
 
 // FakeModelOptions configures the scripted review model.
 type FakeModelOptions struct {
-	DiffSummary string
-	DiffDigest  string
-	DiffPath    string
+	DiffSummary       string
+	DiffDigest        string
+	DiffPath          string
+	DeniedExecCommand string // if set, turn 2 issues this workspace_exec command
 }
 
 // FakeModel is a deterministic model that drives skill_load then workspace_exec.
 type FakeModel struct {
-	turn        atomic.Int32
-	diffSummary string
-	diffDigest  string
-	diffPath    string
+	turn              atomic.Int32
+	diffSummary       string
+	diffDigest        string
+	diffPath          string
+	deniedExecCommand string
 }
 
 // NewFakeModel returns a scripted review model (no API key).
@@ -225,6 +227,7 @@ func NewFakeModel(opts ...FakeModelOptions) *FakeModel {
 		m.diffSummary = opts[0].DiffSummary
 		m.diffDigest = opts[0].DiffDigest
 		m.diffPath = opts[0].DiffPath
+		m.deniedExecCommand = opts[0].DeniedExecCommand
 	}
 	return m
 }
@@ -245,14 +248,20 @@ func (m *FakeModel) GenerateContent(_ context.Context, req *model.Request) (<-ch
 			"skill": "code-review",
 		}))
 	case n == 2:
-		// Allowlisted skill script only (no bash -lc wrapper).
-		ch <- toolCallResponse("call-exec", "workspace_exec", mustJSON(map[string]any{
-			"command": assistChecksCmd,
-			"env": map[string]string{
-				"REVIEW_DIFF_PATH": assistDiffRel,
-				"REVIEW_OUT_DIR":   "work",
-			},
-		}))
+		cmd := assistChecksCmd
+		env := map[string]string{
+			"REVIEW_DIFF_PATH": assistDiffRel,
+			"REVIEW_OUT_DIR":   "work",
+		}
+		if m.deniedExecCommand != "" {
+			cmd = m.deniedExecCommand
+			env = nil
+		}
+		payload := map[string]any{"command": cmd}
+		if env != nil {
+			payload["env"] = env
+		}
+		ch <- toolCallResponse("call-exec", "workspace_exec", mustJSON(payload))
 	default:
 		summary := m.diffSummary
 		if summary == "" {

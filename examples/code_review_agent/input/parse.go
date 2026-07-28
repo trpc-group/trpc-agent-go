@@ -21,13 +21,19 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 )
 
 // DiffBundle is the normalized review input.
 type DiffBundle struct {
-	Kind        string
-	Digest      string
-	Summary     string
+	Kind    string
+	Digest  string
+	Summary string
+	// RawRedacted is the unified-diff text after secret redaction. Parsers
+	// always populate this field already redacted for persistence and sandbox
+	// staging. File hunk text may still contain secrets so the rule engine can
+	// emit CR-SEC-* findings; those findings are redacted before report/DB write.
 	RawRedacted string
 	Files       []ChangedFile
 }
@@ -59,6 +65,8 @@ type DiffLine struct {
 }
 
 // ParseUnifiedDiff parses unified diff text into a DiffBundle.
+// The returned RawRedacted field is always secret-redacted; file hunks retain
+// original text so rule analysis can still detect hardcoded secrets.
 func ParseUnifiedDiff(kind, raw string) (*DiffBundle, error) {
 	raw = strings.ReplaceAll(raw, "\r\n", "\n")
 	files, err := parseFiles(raw)
@@ -71,12 +79,13 @@ func ParseUnifiedDiff(kind, raw string) (*DiffBundle, error) {
 	}
 	added, removed := countChanges(files)
 	summary := fmt.Sprintf("%d files, +%d/-%d", len(files), added, removed)
-	digest := sha256Hex(raw)
+	redacted := safety.Redact(raw)
+	digest := sha256Hex(redacted)
 	return &DiffBundle{
 		Kind:        kind,
 		Digest:      digest,
 		Summary:     summary,
-		RawRedacted: raw, // caller should redact before persist
+		RawRedacted: redacted,
 		Files:       files,
 	}, nil
 }
@@ -91,14 +100,15 @@ func ParseDiffFile(path string) (*DiffBundle, error) {
 }
 
 // ParseRepoDiff collects the HEAD-to-worktree diff from a repository path.
-// It uses `git diff HEAD` so staged and unstaged edits are composed into the
-// final tracked worktree delta (not a concatenation of two independent patches).
+// It uses `git diff --no-ext-diff --no-textconv HEAD` so staged and unstaged
+// edits compose into the final tracked worktree delta without invoking
+// repository-configured external diff or textconv helpers on the host.
 func ParseRepoDiff(repoPath string) (*DiffBundle, error) {
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := runGit(abs, "diff", "HEAD")
+	raw, err := runGit(abs, "diff", "--no-ext-diff", "--no-textconv", "HEAD")
 	if err != nil {
 		return nil, err
 	}
@@ -174,13 +184,20 @@ func parseFiles(raw string) ([]ChangedFile, error) {
 			if cur == nil {
 				cur = &ChangedFile{}
 			}
-			p := strings.TrimPrefix(line, "+++ ")
-			p = strings.TrimSpace(p)
-			if strings.HasPrefix(p, "b/") {
-				p = strings.TrimPrefix(p, "b/")
-			}
-			if p != "/dev/null" && p != "" {
+			p := parseDiffFileHeaderPath(line)
+			if p != "/dev/null" && p != "" && p != "unknown" {
 				cur.Path = p
+			}
+		case strings.HasPrefix(line, "--- "):
+			// Prefer +++ for the final path; keep --- only when +++ is absent.
+			if cur == nil {
+				cur = &ChangedFile{}
+			}
+			if cur.Path == "" {
+				p := parseDiffFileHeaderPath(line)
+				if p != "/dev/null" && p != "" && p != "unknown" {
+					cur.Path = p
+				}
 			}
 		case strings.HasPrefix(line, "@@ "):
 			flushHunk()
@@ -219,20 +236,6 @@ func parseFiles(raw string) ([]ChangedFile, error) {
 	}
 	flushFile()
 	return files, nil
-}
-
-// parseDiffGitPath extracts the path from a diff --git header line.
-func parseDiffGitPath(line string) string {
-	// diff --git a/path b/path
-	parts := strings.Fields(line)
-	if len(parts) >= 4 {
-		p := parts[3]
-		return strings.TrimPrefix(p, "b/")
-	}
-	if len(parts) >= 3 {
-		return strings.TrimPrefix(parts[2], "a/")
-	}
-	return "unknown"
 }
 
 // parseHunkHeader parses a unified-diff @@ hunk header.

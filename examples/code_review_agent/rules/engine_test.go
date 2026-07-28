@@ -74,6 +74,41 @@ func TestEngine_Goroutine(t *testing.T) {
 	}
 }
 
+// TestEngine_QuotedGoPathFindingLocation keeps path spaces from skipping Go rules.
+func TestEngine_QuotedGoPathFindingLocation(t *testing.T) {
+	raw := `diff --git "a/pkg/my worker/file.go" "b/pkg/my worker/file.go"
+--- "a/pkg/my worker/file.go"
++++ "b/pkg/my worker/file.go"
+@@ -1,3 +1,5 @@
+ package worker
+ 
+-func Start() {}
++func Start() {
++	go func() { doWork() }()
++}
+`
+	b, err := input.ParseUnifiedDiff("fixture", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := rules.Engine{}.Analyze(b)
+	found := false
+	for _, f := range out {
+		if f.RuleID == "CR-CON-001" {
+			found = true
+			if f.File != "pkg/my worker/file.go" {
+				t.Fatalf("finding file=%q", f.File)
+			}
+			if f.Line <= 0 {
+				t.Fatalf("expected positive line, got %d", f.Line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing CR-CON-001 for quoted path: %+v", out)
+	}
+}
+
 // TestEngine_ErrorHandling verifies related behavior.
 func TestEngine_ErrorHandling(t *testing.T) {
 	raw := `diff --git a/pkg/svc/svc.go b/pkg/svc/svc.go

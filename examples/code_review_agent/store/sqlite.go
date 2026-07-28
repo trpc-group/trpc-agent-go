@@ -55,8 +55,8 @@ type ReportRecord struct {
 }
 
 // TaskBundle is the full queryable review package.
+// Task metadata lives in the scalar fields below (not a nested Report).
 type TaskBundle struct {
-	Task        review.Report // status/mode/executor/conclusion via fields
 	TaskID      string
 	Status      string
 	Mode        string

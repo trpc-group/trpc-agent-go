@@ -130,23 +130,19 @@ func TestFailingRunner_DoesNotPanic(t *testing.T) {
 	}
 }
 
-// TestNewRunner_RejectsLongLivedBackends avoids leaking container/e2b resources.
-func TestNewRunner_RejectsLongLivedBackends(t *testing.T) {
-	for _, name := range []string{"", "container", "e2b", "CONTAINER"} {
-		_, err := sandbox.NewRunner(name)
-		if err == nil {
-			t.Fatalf("NewRunner(%q) should fail", name)
-		}
-		if !strings.Contains(err.Error(), "Create") {
-			t.Fatalf("NewRunner(%q) err=%v want Create guidance", name, err)
-		}
-	}
-	r, err := sandbox.NewRunner("fake")
+// TestNewRunner removed: Create is the single ownership-aware entry point.
+
+// TestCreate_FakeHasNoCloser verifies fake Create owns nothing to close.
+func TestCreate_FakeHasNoCloser(t *testing.T) {
+	res, err := sandbox.Create(sandbox.CreateOptions{Name: "fake"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.Name() != "fake" {
-		t.Fatalf("name=%s", r.Name())
+	if res.Closer != nil {
+		t.Fatal("fake Create should not return a Closer")
+	}
+	if res.Runner.Name() != "fake" {
+		t.Fatalf("name=%s", res.Runner.Name())
 	}
 }
 

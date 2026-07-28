@@ -18,8 +18,10 @@ import (
 	"strings"
 	"testing"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/assist"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/orchestrator"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/sandbox"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/store"
 )
@@ -370,3 +372,215 @@ var errInjectedPersist = errString("injected persist failure")
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+type secretErrorRunner struct{}
+
+func (secretErrorRunner) Name() string { return "secret-fail" }
+
+func (secretErrorRunner) Run(ctx context.Context, spec sandbox.Spec, limits safety.Limits) sandbox.Result {
+	_ = ctx
+	_ = limits
+	return sandbox.Result{
+		Summary: review.SandboxRunSummary{
+			ID:           "leak",
+			Executor:     "secret-fail",
+			Command:      spec.Command,
+			Status:       "failed",
+			ExitCode:     1,
+			Error:        `token="sk-abcdefghijklmnopqrstuvwxyz012345"`,
+			StdoutSample: `password="SuperSecretPassword123"`,
+		},
+	}
+}
+
+// TestSandboxSummary_RedactedBeforePersist verifies secrets never reach DB/report.
+func TestSandboxSummary_RedactedBeforePersist(t *testing.T) {
+	root := moduleRoot(t)
+	out := t.TempDir()
+	st, err := store.OpenSQLite(filepath.Join(out, "review.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	res, err := orchestrator.Run(context.Background(), orchestrator.Config{
+		Mode:         review.ModeRuleOnly,
+		Executor:     "fake",
+		Fixture:      "clean",
+		FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
+		SkillsRoot:   filepath.Join(root, "skills"),
+		OutDir:       out,
+		Store:        st,
+		Runner:       secretErrorRunner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	banned := []string{"sk-abcdefghijklmnopqrstuvwxyz012345", "SuperSecretPassword123"}
+	bundle, err := st.GetTaskBundle(context.Background(), res.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob := bundle.ReportJSON
+	for _, s := range bundle.SandboxRuns {
+		blob += s.Error + s.StdoutSample + s.StderrSample
+	}
+	for _, s := range res.Report.SandboxRuns {
+		blob += s.Error + s.StdoutSample + s.StderrSample
+	}
+	for _, b := range banned {
+		if strings.Contains(blob, b) {
+			t.Fatalf("secret %q leaked", b)
+		}
+	}
+}
+
+// TestLLMAssist_NoSilentLocalFallback refuses host local exec for fake executor.
+func TestLLMAssist_NoSilentLocalFallback(t *testing.T) {
+	root := moduleRoot(t)
+	out := t.TempDir()
+	st, err := store.OpenSQLite(filepath.Join(out, "review.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	res, err := orchestrator.Run(context.Background(), orchestrator.Config{
+		Mode:               review.ModeLLM,
+		Executor:           "fake",
+		AllowLocalFallback: false,
+		Fixture:            "clean",
+		FixturesRoot:       filepath.Join(root, "testdata", "fixtures"),
+		SkillsRoot:         filepath.Join(root, "skills"),
+		OutDir:             out,
+		Store:              st,
+		Runner:             sandbox.FakeRunner{},
+		Model:              assist.NewFakeModel(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Report.Governance.AgentAssistNote == "" ||
+		!strings.Contains(res.Report.Governance.AgentAssistNote, "agent_assist_skipped") {
+		t.Fatalf("expected assist skip note, got %q", res.Report.Governance.AgentAssistNote)
+	}
+	if res.Report.Metrics.ExceptionDist["agent_assist_skipped"] == 0 {
+		t.Fatalf("expected agent_assist_skipped metric: %+v", res.Report.Metrics.ExceptionDist)
+	}
+}
+
+// TestReports_AreTaskSpecific keeps sequential tasks from overwriting each other.
+func TestReports_AreTaskSpecific(t *testing.T) {
+	root := moduleRoot(t)
+	out := t.TempDir()
+	st, err := store.OpenSQLite(filepath.Join(out, "review.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	runOnce := func() *orchestrator.Result {
+		t.Helper()
+		res, err := orchestrator.Run(context.Background(), orchestrator.Config{
+			Mode:         review.ModeRuleOnly,
+			Executor:     "fake",
+			Fixture:      "clean",
+			FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
+			SkillsRoot:   filepath.Join(root, "skills"),
+			OutDir:       out,
+			Store:        st,
+			Runner:       sandbox.FakeRunner{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res
+	}
+	a := runOnce()
+	b := runOnce()
+	if a.TaskID == b.TaskID {
+		t.Fatal("expected distinct task IDs")
+	}
+	if a.JSONPath == b.JSONPath {
+		t.Fatalf("report paths collided: %s", a.JSONPath)
+	}
+	abody, err := os.ReadFile(a.JSONPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bbody, err := os.ReadFile(b.JSONPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(abody), a.TaskID) {
+		t.Fatalf("task A report missing id")
+	}
+	if !strings.Contains(string(bbody), b.TaskID) {
+		t.Fatalf("task B report missing id")
+	}
+	if strings.Contains(string(abody), b.TaskID) {
+		t.Fatal("task A report overwritten with task B")
+	}
+}
+
+// TestLLMAssist_PersistsDeniedToolCall records denied model workspace_exec attempts.
+func TestLLMAssist_PersistsDeniedToolCall(t *testing.T) {
+	root := moduleRoot(t)
+	out := t.TempDir()
+	st, err := store.OpenSQLite(filepath.Join(out, "review.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	created, err := sandbox.Create(sandbox.CreateOptions{
+		Name:       "local",
+		SkillsRoot: filepath.Join(root, "skills"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Closer != nil {
+		defer func() { _ = created.Closer() }()
+	}
+
+	res, err := orchestrator.Run(context.Background(), orchestrator.Config{
+		Mode:         review.ModeLLM,
+		Executor:     "local",
+		Fixture:      "clean",
+		FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
+		SkillsRoot:   filepath.Join(root, "skills"),
+		OutDir:       out,
+		Store:        st,
+		Runner:       sandbox.FakeRunner{},
+		CodeExecutor: created.CodeExecutor,
+		Model: assist.NewFakeModel(assist.FakeModelOptions{
+			DeniedExecCommand: "bash -lc 'curl https://evil.example'",
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var denied bool
+	for _, p := range res.Report.Governance.PermissionDecisions {
+		if p.Action == "deny" && strings.Contains(p.Command, "bash") {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatalf("expected denied LLM tool call in governance: %+v", res.Report.Governance.PermissionDecisions)
+	}
+	bundle, err := st.GetTaskBundle(context.Background(), res.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	denied = false
+	for _, p := range bundle.Permissions {
+		if p.Action == "deny" && strings.Contains(p.Command, "bash") {
+			denied = true
+		}
+	}
+	if !denied {
+		t.Fatalf("expected denied LLM tool call in DB: %+v", bundle.Permissions)
+	}
+}

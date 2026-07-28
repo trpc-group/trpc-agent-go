@@ -99,9 +99,9 @@ Runtime outputs under `./out/` are gitignored. Committed sample reports live in
 | `--model` | `gpt-4o-mini` | model name for openai/auto |
 | `--base-url` | | OpenAI-compatible base URL (`OPENAI_BASE_URL`) |
 | `--model-variant` | | optional `openai\|deepseek\|...` |
-| `--enable-go-test` | `false` | schedule `run_go_vet.sh` |
-| `--enable-staticcheck` | `false` | schedule `run_staticcheck.sh` (skips if missing) |
-| `--db` / `--out` | `./out/...` | persistence + reports |
+| `--enable-go-test` | `false` | schedule `run_go_test.sh` (requires `--repo-path`; skipped otherwise) |
+| `--enable-staticcheck` | `false` | schedule `run_staticcheck.sh` (requires `--repo-path`; skipped if missing) |
+| `--db` / `--out` | `./out/...` | SQLite + per-task reports under `out/<taskID>/` |
 | `--confidence-threshold` | `0.75` | findings threshold |
 
 Governance demo commands (`curl`, broad `go test ./...`) are injected for `--fixture` runs only, so real reviews are not polluted with intentional deny/ask probes. Persist/store errors fail the run instead of being ignored.

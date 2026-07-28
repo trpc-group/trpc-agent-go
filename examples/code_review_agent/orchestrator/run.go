@@ -91,6 +91,7 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Parsers already redact; keep a defensive pass for caller-supplied bundles.
 	bundle.RawRedacted = safety.Redact(bundle.RawRedacted)
 
 	runner, codeExec, executorFallback, closer, err := resolveRunner(cfg)
@@ -147,9 +148,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, err
 	}
 
-	agentNote, assistPartial := runAgentAssist(ctx, cfg, codeExec, bundle, &metrics)
+	agentNote, assistPerms, assistPartial := runAgentAssist(ctx, cfg, codeExec, bundle, &metrics)
 	if assistPartial {
 		partial = true
+	}
+	for _, pd := range assistPerms {
+		perms = append(perms, pd)
+		if err := cfg.Store.SavePermission(ctx, taskID, pd); err != nil {
+			failMsg = err.Error()
+			return nil, fmt.Errorf("save assist permission: %w", err)
+		}
+		switch pd.Action {
+		case safety.ActionDeny:
+			metrics.PermissionDenyCount++
+		case safety.ActionAsk:
+			metrics.PermissionAskCount++
+		}
 	}
 
 	findings, warnings := analyzeFindings(cfg, bundle)
@@ -166,8 +180,8 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	conclusion := buildConclusion(findings, warnings, perms, status)
 
-	jsonPath := filepath.Join(cfg.OutDir, "review_report.json")
-	mdPath := filepath.Join(cfg.OutDir, "review_report.md")
+	jsonPath := filepath.Join(cfg.OutDir, taskID, "review_report.json")
+	mdPath := filepath.Join(cfg.OutDir, taskID, "review_report.md")
 	rep := &review.Report{
 		TaskID:      taskID,
 		Status:      status,
@@ -195,12 +209,13 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		Conclusion: conclusion,
 	}
 
-	jsonPath, jsonText, err := report.WriteJSON(cfg.OutDir, rep)
+	taskOut := filepath.Join(cfg.OutDir, taskID)
+	jsonPath, jsonText, err := report.WriteJSON(taskOut, rep)
 	if err != nil {
 		failMsg = err.Error()
 		return nil, err
 	}
-	mdPath, mdText, err := report.WriteMarkdown(cfg.OutDir, rep)
+	mdPath, mdText, err := report.WriteMarkdown(taskOut, rep)
 	if err != nil {
 		failMsg = err.Error()
 		return nil, err
@@ -213,12 +228,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		metrics.ExceptionDist["artifact_dropped"] += dropped
 		rep.Metrics = metrics
 		rep.Artifacts = arts
-		jsonPath, jsonText, err = report.WriteJSON(cfg.OutDir, rep)
+		jsonPath, jsonText, err = report.WriteJSON(taskOut, rep)
 		if err != nil {
 			failMsg = err.Error()
 			return nil, err
 		}
-		mdPath, mdText, err = report.WriteMarkdown(cfg.OutDir, rep)
+		mdPath, mdText, err = report.WriteMarkdown(taskOut, rep)
 		if err != nil {
 			failMsg = err.Error()
 			return nil, err
@@ -325,6 +340,12 @@ func runChecks(
 	diffText string,
 	metrics *review.MetricsSummary,
 ) (perms []review.PermissionDecision, sandboxes []review.SandboxRunSummary, partial bool, err error) {
+	if cfg.EnableGoTest && strings.TrimSpace(cfg.RepoPath) == "" {
+		metrics.ExceptionDist["go_test_skipped_no_repo"]++
+	}
+	if cfg.EnableStaticcheck && strings.TrimSpace(cfg.RepoPath) == "" {
+		metrics.ExceptionDist["staticcheck_skipped_no_repo"]++
+	}
 	for _, command := range planCommands(cfg) {
 		dec := cfg.Gate.Check(command)
 		pd := safety.ToReviewDecision(command, dec)
@@ -346,27 +367,50 @@ func runChecks(
 		if cfg.Mode == review.ModeDryRun {
 			continue
 		}
+		env := []string{
+			"REVIEW_DIFF_PATH=work/inputs/diff.patch",
+			"REVIEW_OUT_DIR=work",
+		}
+		repoHost := ""
+		if needsRepoPath(command) {
+			if strings.TrimSpace(cfg.RepoPath) == "" {
+				metrics.ExceptionDist["repo_check_skipped_no_repo"]++
+				continue
+			}
+			repoHost = cfg.RepoPath
+			env = append(env, "REVIEW_REPO_PATH=work/repo")
+		}
 		sbStart := time.Now()
 		res := runner.Run(ctx, sandbox.Spec{
-			Command:    command,
-			DiffText:   diffText,
-			SkillsRoot: cfg.SkillsRoot,
-			Env: []string{
-				"REVIEW_DIFF_PATH=work/inputs/diff.patch",
-				"REVIEW_OUT_DIR=work",
-			},
+			Command:      command,
+			DiffText:     diffText,
+			SkillsRoot:   cfg.SkillsRoot,
+			RepoHostPath: repoHost,
+			Env:          env,
 		}, cfg.Limits)
 		metrics.SandboxDurationMS += time.Since(sbStart).Milliseconds()
-		sandboxes = append(sandboxes, res.Summary)
-		if err := cfg.Store.SaveSandboxRun(ctx, taskID, res.Summary); err != nil {
+		sum := safety.RedactSandboxSummary(res.Summary)
+		sandboxes = append(sandboxes, sum)
+		if err := cfg.Store.SaveSandboxRun(ctx, taskID, sum); err != nil {
 			return perms, sandboxes, partial, fmt.Errorf("save sandbox run: %w", err)
 		}
-		if res.Summary.Status != "ok" {
+		if sum.Status != "ok" {
 			partial = true
-			metrics.ExceptionDist[res.Summary.Status]++
+			metrics.ExceptionDist[sum.Status]++
 		}
 	}
 	return perms, sandboxes, partial, nil
+}
+
+// needsRepoPath reports whether a skill script requires REVIEW_REPO_PATH.
+func needsRepoPath(command string) bool {
+	base := filepath.Base(command)
+	switch base {
+	case "run_go_test.sh", "run_go_vet.sh", "run_staticcheck.sh":
+		return true
+	default:
+		return false
+	}
 }
 
 // runAgentAssist optionally runs the Skills/LLM assist pass.
@@ -376,12 +420,18 @@ func runAgentAssist(
 	codeExec codeexecutor.CodeExecutor,
 	bundle *input.DiffBundle,
 	metrics *review.MetricsSummary,
-) (note string, partial bool) {
+) (note string, perms []review.PermissionDecision, partial bool) {
 	if cfg.Mode != review.ModeLLM {
-		return "", false
+		return "", nil, false
 	}
 	var assistCloser func() error
 	if codeExec == nil {
+		execName := strings.ToLower(strings.TrimSpace(cfg.Executor))
+		allowLocal := execName == "local" || cfg.AllowLocalFallback
+		if !allowLocal {
+			metrics.ExceptionDist["agent_assist_skipped"]++
+			return "agent_assist_skipped: no CodeExecutor (set --executor=local or --allow-local-fallback)", nil, true
+		}
 		created, err := sandbox.Create(sandbox.CreateOptions{
 			Name:               "local",
 			SkillsRoot:         cfg.SkillsRoot,
@@ -390,7 +440,7 @@ func runAgentAssist(
 		})
 		if err != nil {
 			metrics.ExceptionDist["agent_assist_error"]++
-			return "agent_assist_error: " + err.Error(), true
+			return "agent_assist_error: " + err.Error(), nil, true
 		}
 		codeExec = created.CodeExecutor
 		assistCloser = created.Closer
@@ -398,11 +448,12 @@ func runAgentAssist(
 	if assistCloser != nil {
 		defer func() { _ = assistCloser() }()
 	}
+	recorder := safety.NewRecordingToolPolicy(cfg.Gate.AsToolPolicy())
 	assistRes, aerr := assist.Run(ctx, assist.Config{
 		SkillsRoot:  cfg.SkillsRoot,
 		Executor:    codeExec,
 		Model:       cfg.Model,
-		Policy:      cfg.Gate.AsToolPolicy(),
+		Policy:      recorder,
 		DiffSummary: bundle.Summary,
 		DiffDigest:  bundle.Digest,
 		DiffText:    bundle.RawRedacted,
@@ -411,12 +462,13 @@ func runAgentAssist(
 			bundle.Summary, bundle.Digest,
 		),
 	})
+	perms = recorder.Decisions()
 	if aerr != nil {
 		metrics.ExceptionDist["agent_assist_error"]++
-		return "agent_assist_error: " + aerr.Error(), true
+		return "agent_assist_error: " + aerr.Error(), perms, true
 	}
 	if assistRes == nil {
-		return "", false
+		return "", perms, false
 	}
 	metrics.ToolCallCount += assistRes.ToolCalls
 	note = fmt.Sprintf(
@@ -426,9 +478,9 @@ func runAgentAssist(
 	if assistRes.Warning != "" {
 		note += "; warning=" + assistRes.Warning
 		metrics.ExceptionDist["agent_assist_warning"]++
-		return note, true
+		return note, perms, true
 	}
-	return note, false
+	return note, perms, false
 }
 
 // analyzeFindings runs the rule engine, dedup, redact, and classify steps.
@@ -514,10 +566,10 @@ func planCommands(cfg Config) []string {
 		cmds = append(cmds, "skills/code-review/scripts/"+name)
 	}
 	addScript("run_checks.sh")
-	if cfg.EnableGoTest {
-		addScript("run_go_vet.sh")
+	if cfg.EnableGoTest && strings.TrimSpace(cfg.RepoPath) != "" {
+		addScript("run_go_test.sh")
 	}
-	if cfg.EnableStaticcheck {
+	if cfg.EnableStaticcheck && strings.TrimSpace(cfg.RepoPath) != "" {
 		addScript("run_staticcheck.sh")
 	}
 	if len(cmds) == 0 {

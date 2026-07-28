@@ -109,4 +109,10 @@ func TestSQLiteStore_GetTaskBundle(t *testing.T) {
 	if bundle.ReportJSON != "{}" {
 		t.Fatalf("report=%q", bundle.ReportJSON)
 	}
+	if bundle.TaskID != id {
+		t.Fatalf("taskID=%s", bundle.TaskID)
+	}
+	if bundle.Mode != review.ModeRuleOnly || bundle.Executor != "local" {
+		t.Fatalf("metadata mode=%s executor=%s", bundle.Mode, bundle.Executor)
+	}
 }

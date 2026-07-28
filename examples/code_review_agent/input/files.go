@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
 )
 
 // ParseFileList builds a DiffBundle from explicit file paths.
@@ -76,11 +78,12 @@ func ParseFileList(paths []string) (*DiffBundle, error) {
 	}
 	rawText := raw.String()
 	added, removed := countChanges(files)
+	redacted := safety.Redact(rawText)
 	return &DiffBundle{
 		Kind:        "file_list",
-		Digest:      sha256Hex(rawText),
+		Digest:      sha256Hex(redacted),
 		Summary:     fmt.Sprintf("%d files, +%d/-%d", len(files), added, removed),
-		RawRedacted: rawText,
+		RawRedacted: redacted,
 		Files:       files,
 	}, nil
 }
