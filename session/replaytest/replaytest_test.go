@@ -315,6 +315,19 @@ func TestToolCasePreservesBranchTagStateAndExtension(t *testing.T) {
 	require.Contains(t, toolResult["extensions"].(map[string]any), event.ToolCallArgsExtensionKey)
 }
 
+func TestToolEventsRoundTripThroughJSON(t *testing.T) {
+	call, result, err := newReplayToolEvents()
+	require.NoError(t, err)
+	for _, original := range []*event.Event{call, result} {
+		encoded, err := json.Marshal(original)
+		require.NoError(t, err)
+		var decoded event.Event
+		require.NoError(t, json.Unmarshal(encoded, &decoded), string(encoded))
+		require.NotNil(t, decoded.Response)
+		require.True(t, decoded.IsValidContent())
+	}
+}
+
 func TestLoadOptionalBackendsSkipsAndEnablesFromEnvironment(t *testing.T) {
 	t.Setenv(EnvRedisURL, "")
 	backends, skipped, err := LoadOptionalBackends(context.Background(), OptionalBackend{

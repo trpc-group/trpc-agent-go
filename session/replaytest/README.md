@@ -22,11 +22,8 @@ event/response IDs and clock values normalize. Backends can omit
 implementation-owned fields with `Backend.PrivateMetadataPaths`, such as
 `events.*.extensions.storage_private`.
 
-Set `Backend.Unsupported` with a data-relative path such as `tracks` or
-`memories.search` and a reason. Matching differences become `allowed_diff`,
-and the report also contains an explicit `supported`/`unsupported` record. The
-sample `testdata/session_memory_summary_track_diff_report.json` shows both a
-blocking mismatch and an allowed difference.
+`Backend.Unsupported` declares unsupported paths such as `tracks`; matching
+differences become `allowed_diff`.
 
 Optional Redis, Postgres, MySQL, and ClickHouse integrations are enabled by
 passing factories to `LoadOptionalBackends` with `REPLAYTEST_REDIS_URL`,
@@ -48,4 +45,11 @@ Run lightweight mode with:
 
 ```bash
 cd session/replaytest && go test ./...
+```
+
+Redis runs through MiniRedis by default; `REPLAYTEST_REDIS_URL` additionally
+tests a configured Redis instance:
+
+```bash
+cd session/replaytest && REPLAYTEST_REDIS_URL=redis://127.0.0.1:6379 go test ./... -run TestRedisReplay
 ```

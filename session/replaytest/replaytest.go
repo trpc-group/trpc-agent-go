@@ -287,9 +287,13 @@ func Capture(
 	for _, option := range options {
 		option(&captureConfig)
 	}
-	summaries, err := loadSummaries(ctx, backend.Session, key, captureConfig.summaryFilterKeys)
-	if err != nil {
-		return Snapshot{}, err
+	summaries := selectSummaries(sess.Summaries, captureConfig.summaryFilterKeys)
+	if len(summaries) == 0 {
+		var err error
+		summaries, err = loadSummaries(ctx, backend.Session, key, captureConfig.summaryFilterKeys)
+		if err != nil {
+			return Snapshot{}, err
+		}
 	}
 	memorySearch, err := loadMemorySearches(ctx, backend.Memory, key, captureConfig.memoryQueries)
 	if err != nil {

@@ -81,6 +81,22 @@ func replayToolCall(ctx context.Context, backend Backend) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	user := newReplayEvent("tool-user", model.RoleUser, "what is the weather", "tools")
+	call, result, err := newReplayToolEvents()
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := appendEvents(ctx, backend, sess,
+		user,
+		call,
+		result,
+	); err != nil {
+		return Snapshot{}, err
+	}
+	return Capture(ctx, backend, key)
+}
+
+func newReplayToolEvents() (*event.Event, *event.Event, error) {
 	call := newReplayEvent("tool-call", model.RoleAssistant, "", "tools")
 	call.Tag = "tool-call"
 	call.Choices[0].Message.ToolCalls = []model.ToolCall{{
@@ -98,16 +114,9 @@ func replayToolCall(ctx context.Context, backend Backend) (Snapshot, error) {
 	result.Choices[0].Message.ToolName = "weather"
 	if err := event.SetExtension(result, event.ToolCallArgsExtensionKey,
 		map[string]any{"weather-1": map[string]any{"city": "Shenzhen"}}); err != nil {
-		return Snapshot{}, err
+		return nil, nil, fmt.Errorf("set tool arguments extension: %w", err)
 	}
-	if err := appendEvents(ctx, backend, sess,
-		newReplayEvent("tool-user", model.RoleUser, "what is the weather", "tools"),
-		call,
-		result,
-	); err != nil {
-		return Snapshot{}, err
-	}
-	return Capture(ctx, backend, key)
+	return call, result, nil
 }
 
 func replayStateUpdates(ctx context.Context, backend Backend) (Snapshot, error) {
