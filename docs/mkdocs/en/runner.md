@@ -574,6 +574,10 @@ With the option enabled:
 - Each result event is saved separately in the Session.
 - Results from parallel tools arrive in completion order, which may differ
   from the order in which the model requested the tools.
+- `StateDelta` and `Actions.SkipSummarization` describe the whole tool-call
+  round, not an individual result. Earlier result events do not carry them;
+  read them from the last result event, or from the terminal error event if
+  the round ends early.
 
 For example, if the model requests A and then B, but B finishes first:
 

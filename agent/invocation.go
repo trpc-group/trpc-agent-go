@@ -974,6 +974,8 @@ func WithToolExecutionFilter(filter tool.FilterFunc) RunOption {
 // its tool call completes in framework-executed, non-long-running multi-tool
 // rounds. No additional aggregate event is emitted, and the next model call
 // still waits for all results. Other rounds keep the existing behavior.
+// Round-level StateDelta and Actions.SkipSummarization are carried only by the
+// last result event, or by the terminal error if the round ends early.
 // Disabled by default.
 func WithToolResultEventPerCallEnabled(enabled bool) RunOption {
 	return func(opts *RunOptions) {

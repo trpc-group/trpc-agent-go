@@ -598,7 +598,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 	}
 	toolresultround.Mark(errorEvent, true)
 	emitErr := agent.EmitEvent(ctx, invocation, eventChan, errorEvent)
-	if emitErr != nil && len(errorEvent.StateDelta) > 0 {
+	if emitErr != nil {
 		if persistErr := persistFunctionResponseAfterDeadline(
 			ctx,
 			invocation,
@@ -606,7 +606,7 @@ func (p *FunctionCallResponseProcessor) handleFunctionCallsAndSendPerCallResultE
 		); persistErr != nil {
 			log.WarnfContext(
 				ctx,
-				"Persist failed tool-round state failed: %v",
+				"Persist terminal tool-round event failed: %v",
 				persistErr,
 			)
 		}
@@ -628,6 +628,10 @@ func persistFunctionResponseAfterDeadline(
 	)
 	defer cancel()
 	routeEvent := sessionroute.SnapshotEventIdentity(functionResponseEvent)
+	hasToolResultRoundMarker :=
+		toolresultround.HasMarker(functionResponseEvent)
+	toolResultRoundIncomplete :=
+		toolresultround.IsIncomplete(functionResponseEvent)
 	var parentMetadata *event.ParentInvocationMetadata
 	if functionResponseEvent.ParentMetadata != nil {
 		metadata := *functionResponseEvent.ParentMetadata
@@ -640,6 +644,12 @@ func persistFunctionResponseAfterDeadline(
 	)
 	restoreEventRoutingFields(functionResponseEvent, routeEvent)
 	functionResponseEvent.ParentMetadata = parentMetadata
+	if hasToolResultRoundMarker {
+		toolresultround.Mark(
+			functionResponseEvent,
+			toolResultRoundIncomplete,
+		)
+	}
 
 	attached, err := appender.Invoke(
 		persistCtx,

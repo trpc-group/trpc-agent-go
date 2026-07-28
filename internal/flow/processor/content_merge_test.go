@@ -478,6 +478,7 @@ func Test_rearrangeAsyncFuncRespHist_OmitsIncompleteToolRoundWithoutResults(
 	)
 	assert.Empty(t, out[0].GetToolCallIDs())
 	assert.True(t, out[1].IsError())
+	assert.Equal(t, nextUser, out[2])
 	for _, evt := range out {
 		assert.False(t, evt.IsToolResultResponse())
 	}

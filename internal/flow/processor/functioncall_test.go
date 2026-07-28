@@ -3445,6 +3445,84 @@ func TestPerToolCallResultEventsParallelCancellationKeepsReadyState(
 	}
 }
 
+func TestPerToolCallResultEventsCanceledBeforeFirstResultPersistsRoundMarker(
+	t *testing.T,
+) {
+	ctx, cancel := context.WithCancel(context.Background())
+	hookErr := errors.New("after-tool hook failed")
+	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
+		hook: func(
+			context.Context,
+			*plugin.AfterToolMessagesArgs,
+		) (*plugin.AfterToolMessagesResult, error) {
+			cancel()
+			return nil, hookErr
+		},
+	})
+	t.Cleanup(func() {
+		require.NoError(t, mgr.Close(context.Background()))
+	})
+	tools := map[string]tool.Tool{
+		"first": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "first"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "first-result", nil
+			},
+		},
+		"second": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "second"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "second-result", nil
+			},
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{ID: "call-first", Function: model.FunctionDefinitionParam{Name: "first"}},
+		{ID: "call-second", Function: model.FunctionDefinitionParam{Name: "second"}},
+	}
+	inv := agent.NewInvocation(
+		agent.WithInvocationID("inv-per-call-canceled-before-result"),
+		agent.WithInvocationAgent(&mockAgentWithTools{name: "tester"}),
+		agent.WithInvocationPlugins(mgr),
+		agent.WithInvocationRunOptions(agent.RunOptions{
+			ToolResultEventPerCallEnabled: true,
+		}),
+	)
+	var persisted *event.Event
+	appender.Attach(inv, func(appendCtx context.Context, ev *event.Event) error {
+		require.NoError(t, appendCtx.Err())
+		persisted = ev
+		return nil
+	})
+	t.Cleanup(func() {
+		appender.Clear(inv)
+	})
+	eventChan := make(chan *event.Event, 1)
+
+	_, err := NewFunctionCallResponseProcessor(
+		false,
+		nil,
+	).handleFunctionCallsAndSendEventWithRequest(
+		ctx,
+		inv,
+		&model.Request{Tools: tools},
+		newToolCallResponseWithCalls(toolCalls),
+		eventChan,
+	)
+
+	require.ErrorIs(t, err, hookErr)
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.NotNil(t, persisted)
+	require.True(t, persisted.IsError())
+	require.True(t, toolresultround.IsIncomplete(persisted))
+	require.Empty(t, persisted.StateDelta)
+	select {
+	case emitted := <-eventChan:
+		t.Fatalf("unexpected event after cancellation: %+v", emitted)
+	default:
+	}
+}
+
 func TestPerToolCallResultEventsKeepLongRunnerBatchOnLegacyPath(t *testing.T) {
 	longRunning := &mockLongRunningTool{
 		mockTool:      &mockTool{name: "long"},
@@ -4884,6 +4962,7 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 		TriggerID:   "call-1",
 		TriggerName: "echo",
 	}
+	toolresultround.Mark(original, true)
 
 	err := persistFunctionResponseAfterDeadline(ctx, inv, original)
 
@@ -4902,6 +4981,7 @@ func TestPersistFunctionResponseAfterDeadline_AppliesEventPlugins(
 	require.Equal(t, "mutated-trigger", original.ParentMetadata.TriggerID)
 	require.Equal(t, original.Branch, persisted.Branch)
 	require.Equal(t, original.FilterKey, persisted.FilterKey)
+	require.True(t, toolresultround.IsIncomplete(persisted))
 }
 
 func TestPersistFunctionResponseAfterDeadline_PluginErrorPersistsOriginal(
