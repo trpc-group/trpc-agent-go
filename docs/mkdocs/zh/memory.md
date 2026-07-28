@@ -499,15 +499,16 @@ if err != nil {
 
 **快速选择指南**：
 
-| 场景               | 推荐后端         | 原因                       |
-| ------------------ | ---------------- | -------------------------- |
-| 本地开发           | InMemory         | 零配置，快速启动           |
-| 高并发读写         | Redis            | 内存级性能，支持分布式     |
-| 需要复杂查询       | MySQL/PostgreSQL | 关系型数据库，SQL 支持     |
-| 需要 JSON 高级操作 | PostgreSQL       | JSONB 类型，高效 JSON 查询 |
-| MySQL 向量检索     | MySQLVec         | MySQL 9.0+ 相似度检索      |
-| 向量数据库服务     | ChromaDB         | REST 余弦与混合检索        |
-| 需要审计追踪       | MySQL/PostgreSQL | 支持软删除，可恢复数据     |
+| 场景                 | 推荐后端         | 原因                             |
+| -------------------- | ---------------- | -------------------------------- |
+| 本地开发             | InMemory         | 零配置，快速启动                 |
+| 高并发读写           | Redis            | 内存级性能，支持分布式           |
+| 需要复杂查询         | MySQL/PostgreSQL | 关系型数据库，SQL 支持           |
+| 需要 JSON 高级操作   | PostgreSQL       | JSONB 类型，高效 JSON 查询       |
+| 需要审计追踪         | MySQL/PostgreSQL | 支持软删除，可恢复数据           |
+| MySQL 向量检索       | MySQLVec         | MySQL 余弦与混合检索             |
+| PostgreSQL 向量检索  | pgvector         | PostgreSQL 余弦与混合检索        |
+| 独立向量数据库服务   | ChromaDB         | REST 余弦检索与客户端混合结果融合 |
 
 ### 记忆工具配置
 
