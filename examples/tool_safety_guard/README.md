@@ -7,7 +7,9 @@
 - **静态扫描与解析**：集成并扩展 `internal/shellsafe`，在命令执行前分析可执行程序名、语法结构与管道逻辑。当策略配置将 `sh`、`bash`、`eval`、`sudo` 等列入黑名单时，可阻止套娃命令绕过限制；零配置（`NewGuard()` 默认策略）已将上述命令加入 `denied_commands`。
 - **动态策略配置**：支持从 JSON/YAML 策略配置文件（如 `tool_safety_policy.yaml` / `tool_safety_policy.json`）中读取黑白名单、禁止路径、域名白名单、耗时与资源限制等。
 - **无缝对接 `tool.PermissionPolicy`**：可以直接通过 `agent.WithToolPermissionPolicy(guard)` 作为框架门卫，在工具真正运行前返回 `allow` / `deny` / `ask` 决策。
-- **结构化报告与审计日志**：产出符合标准的 `tool_safety_report.json` 与 JSONL 格式的 `tool_safety_audit.jsonl`，全面记录命中规则、证据摘要与处置结果。
+- **结构化报告与审计日志**：运行时输出写入 `output/` 目录（与仓库中的静态示例文件隔离），产出 `tool_safety_report.json` 与 JSONL 格式的 `tool_safety_audit.jsonl`，全面记录命中规则、证据摘要与处置结果。检测到密钥时自动脱敏，不落盘明文凭据。
+- **网络外连全量扫描**：不依赖特定工具名（`curl`/`wget` 等），无条件对命令中的 URL 做域名白名单校验，防止通过 `python -c`、`ruby -e` 等非标准工具绕过。
+- **提权命令优先拦截**：危险命令检查（`sudo`、`su`、`sh` 等）在审批规则之前执行，确保提权组合命令（如 `sudo apt install`）直接拒绝，不降级为人工确认。
 - **OpenTelemetry 预留**：自动为当前 Context 的 Span 填充 `tool.safety.decision`、`tool.safety.risk_level`、`tool.safety.rule_id`、`tool.safety.backend` 属性，对接分布式可观测平台。
 
 ---
@@ -62,14 +64,19 @@ cd examples/tool_safety_guard
 go run main.go
 ```
 
+> 运行时输出写入 `output/` 子目录（已被 `.gitignore` 忽略），不会覆盖仓库中提交的静态示例文件 `tool_safety_audit.jsonl` / `tool_safety_report.json`。
+
 ### 2. 在 Agent 中引入 Safety Guard
 
 ```go
 // 1. 加载策略并创建 SafetyGuard
+auditLogger, _ := safety.NewFileAuditLogger("output/tool_safety_audit.jsonl")
+defer auditLogger.Close()
+
 guard := safety.NewGuard(
     safety.WithPolicyFile("tool_safety_policy.yaml"),
     safety.WithAuditLogger(auditLogger),
-    safety.WithReportPath("tool_safety_report.json"),
+    safety.WithReportPath("output/tool_safety_report.json"),
 )
 
 // 2. 将 SafetyGuard 配置给 Agent 运行选项
