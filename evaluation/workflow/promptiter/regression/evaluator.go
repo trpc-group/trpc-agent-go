@@ -106,19 +106,13 @@ func (e *LocalEvaluator) Evaluate(
 	if !utf8.ValidString(prompt) {
 		return nil, errors.New("prompt is not valid UTF-8")
 	}
-	markedVariant, marked := promptVariantID(prompt)
+	// LocalEvaluator 不再要求 candidate prompt 包含 marker（Pipeline 已在
+	// validateCandidate 中验证 ProfilePrompt）。但仍拒绝 baseline prompt
+	// 意外包含 marker，以防止调用方误用 candidate prompt 作为 baseline。
 	if variantID == "baseline" {
-		if marked {
-			return nil, fmt.Errorf("baseline prompt unexpectedly contains candidate marker %q", markedVariant)
+		if _, marked := promptVariantID(prompt); marked {
+			return nil, errors.New("baseline prompt unexpectedly contains a candidate marker")
 		}
-	} else {
-		if !marked {
-			return nil, fmt.Errorf("candidate prompt does not contain a deterministic variant marker for %q", variantID)
-		}
-		if markedVariant != variantID {
-			return nil, fmt.Errorf("candidate prompt marker %q does not match requested variant %q", markedVariant, variantID)
-		}
-		variantID = markedVariant
 	}
 	passThreshold := *set.PassThreshold
 	summary := &EvaluationSummary{
@@ -190,7 +184,7 @@ func (e *LocalEvaluator) evaluateCase(
 			e.fallbackVariant,
 		)
 	}
-	semanticPromptSHA256 := HashText(semanticPromptContent(prompt))
+	semanticPromptSHA256 := HashText(strings.TrimSpace(prompt))
 	if !usedFallback && variantID != "baseline" && output.PromptSemanticSHA256 == "" {
 		return nil, fmt.Errorf("variant %q has no prompt semantic hash binding", variantID)
 	}

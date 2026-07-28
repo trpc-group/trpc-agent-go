@@ -234,7 +234,7 @@ func TestValidateCandidateBoundaries(t *testing.T) {
 	optimizer, err := NewDeterministicPromptIter(config)
 	require.NoError(t, err)
 	pipeline := &Pipeline{config: config}
-	newCandidate := func(t *testing.T) *Candidate {
+	newCandidate := func(t *testing.T) *candidate {
 		t.Helper()
 		proposal, err := optimizer.Propose(context.Background(), OptimizeRequest{
 			Round:          1,
@@ -252,41 +252,41 @@ func TestValidateCandidateBoundaries(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		mutate func(*Candidate)
+		mutate func(*candidate)
 		round  int
 		seen   map[string]struct{}
 		want   string
 	}{
-		{name: "invalid id", mutate: func(candidate *Candidate) { candidate.ID = "invalid id" }, round: 1, want: "id"},
-		{name: "reserved id", mutate: func(candidate *Candidate) { candidate.ID = "baseline" }, round: 1, want: "reserved"},
-		{name: "wrong configured id", mutate: func(candidate *Candidate) { candidate.ID = "different" }, round: 1, want: "configured round"},
+		{name: "invalid id", mutate: func(candidate *candidate) { candidate.ID = "invalid id" }, round: 1, want: "id"},
+		{name: "reserved id", mutate: func(candidate *candidate) { candidate.ID = "baseline" }, round: 1, want: "reserved"},
+		{name: "wrong configured id", mutate: func(candidate *candidate) { candidate.ID = "different" }, round: 1, want: "configured round"},
 		{name: "duplicate id", round: 1, seen: map[string]struct{}{"accepted": {}}, want: "already evaluated"},
-		{name: "wrong round", mutate: func(candidate *Candidate) { candidate.Round = 2 }, round: 1, want: "does not match"},
-		{name: "empty prompt", mutate: func(candidate *Candidate) { candidate.Prompt = " " }, round: 1, want: "prompt is empty"},
-		{name: "invalid utf8", mutate: func(candidate *Candidate) { candidate.Reason = string([]byte{0xff}) }, round: 1, want: "valid UTF-8"},
-		{name: "missing marker", mutate: func(candidate *Candidate) { candidate.Prompt = "plain prompt" }, round: 1, want: "exactly one"},
-		{name: "duplicate marker", mutate: func(candidate *Candidate) { candidate.Prompt += "\n" + candidate.Prompt }, round: 1, want: "exactly one"},
-		{name: "marker id", mutate: func(candidate *Candidate) {
-			candidate.Prompt = "prompt\n\n[[trpc-promptiter-candidate:overfit;seed:424242]]"
+		{name: "wrong round", mutate: func(candidate *candidate) { candidate.Round = 2 }, round: 1, want: "does not match"},
+		{name: "empty prompt", mutate: func(candidate *candidate) { candidate.ProfilePrompt = " " }, round: 1, want: "prompt is empty"},
+		{name: "invalid utf8", mutate: func(candidate *candidate) { candidate.Reason = string([]byte{0xff}) }, round: 1, want: "valid UTF-8"},
+		{name: "missing marker", mutate: func(candidate *candidate) { candidate.ProfilePrompt = "plain prompt" }, round: 1, want: "exactly one"},
+		{name: "duplicate marker", mutate: func(candidate *candidate) { candidate.ProfilePrompt += "\n" + candidate.ProfilePrompt }, round: 1, want: "exactly one"},
+		{name: "marker id", mutate: func(candidate *candidate) {
+			candidate.ProfilePrompt = "prompt\n\n[[trpc-promptiter-candidate:overfit;seed:424242]]"
 		}, round: 1, want: "does not match id"},
-		{name: "marker seed", mutate: func(candidate *Candidate) {
-			candidate.Prompt = "prompt\n\n[[trpc-promptiter-candidate:accepted;seed:7]]"
+		{name: "marker seed", mutate: func(candidate *candidate) {
+			candidate.ProfilePrompt = "prompt\n\n[[trpc-promptiter-candidate:accepted;seed:7]]"
 		}, round: 1, want: "does not match config seed"},
-		{name: "hash", mutate: func(candidate *Candidate) { candidate.PromptHash = "wrong" }, round: 1, want: "computed hash"},
-		{name: "surface", mutate: func(candidate *Candidate) { candidate.SurfaceID = "wrong" }, round: 1, want: "does not match target"},
-		{name: "reason", mutate: func(candidate *Candidate) { candidate.Reason = " " }, round: 1, want: "reason is empty"},
-		{name: "profile", mutate: func(candidate *Candidate) { candidate.Profile = nil }, round: 1, want: "profile and patch set"},
-		{name: "patch set", mutate: func(candidate *Candidate) { candidate.PatchSet = nil }, round: 1, want: "profile and patch set"},
-		{name: "structure", mutate: func(candidate *Candidate) { candidate.Profile.StructureID = "wrong" }, round: 1, want: "exactly one target"},
-		{name: "overrides", mutate: func(candidate *Candidate) { candidate.Profile.Overrides = nil }, round: 1, want: "exactly one target"},
-		{name: "override surface", mutate: func(candidate *Candidate) { candidate.Profile.Overrides[0].SurfaceID = "wrong" }, round: 1, want: "override does not match"},
-		{name: "override prompt", mutate: func(candidate *Candidate) {
+		{name: "hash", mutate: func(candidate *candidate) { candidate.PromptHash = "wrong" }, round: 1, want: "computed hash"},
+		{name: "surface", mutate: func(candidate *candidate) { candidate.SurfaceID = "wrong" }, round: 1, want: "does not match target"},
+		{name: "reason", mutate: func(candidate *candidate) { candidate.Reason = " " }, round: 1, want: "reason is empty"},
+		{name: "profile", mutate: func(candidate *candidate) { candidate.Profile = nil }, round: 1, want: "profile and patch set"},
+		{name: "patch set", mutate: func(candidate *candidate) { candidate.PatchSet = nil }, round: 1, want: "profile and patch set"},
+		{name: "structure", mutate: func(candidate *candidate) { candidate.Profile.StructureID = "wrong" }, round: 1, want: "exactly one target"},
+		{name: "overrides", mutate: func(candidate *candidate) { candidate.Profile.Overrides = nil }, round: 1, want: "exactly one target"},
+		{name: "override surface", mutate: func(candidate *candidate) { candidate.Profile.Overrides[0].SurfaceID = "wrong" }, round: 1, want: "override does not match"},
+		{name: "override prompt", mutate: func(candidate *candidate) {
 			wrong := "wrong"
 			candidate.Profile.Overrides[0].Value.Text = &wrong
 		}, round: 1, want: "override does not match"},
-		{name: "patch count", mutate: func(candidate *Candidate) { candidate.PatchSet.Patches = nil }, round: 1, want: "exactly one patch"},
-		{name: "patch surface", mutate: func(candidate *Candidate) { candidate.PatchSet.Patches[0].SurfaceID = "wrong" }, round: 1, want: "patch does not match"},
-		{name: "patch reason", mutate: func(candidate *Candidate) { candidate.PatchSet.Patches[0].Reason = "wrong" }, round: 1, want: "patch does not match"},
+		{name: "patch count", mutate: func(candidate *candidate) { candidate.PatchSet.Patches = nil }, round: 1, want: "exactly one patch"},
+		{name: "patch surface", mutate: func(candidate *candidate) { candidate.PatchSet.Patches[0].SurfaceID = "wrong" }, round: 1, want: "patch does not match"},
+		{name: "patch reason", mutate: func(candidate *candidate) { candidate.PatchSet.Patches[0].Reason = "wrong" }, round: 1, want: "patch does not match"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -299,6 +299,27 @@ func TestValidateCandidateBoundaries(t *testing.T) {
 			assert.ErrorContains(t, err, test.want)
 		})
 	}
+}
+
+// TestMaterializeCandidateAcceptsFullReplacementPrompt 验证 Optimizer 返回
+// 完全重写的 prompt（不保留 baseline 前缀）也能被 Pipeline 接受。
+// 原生 PromptIter optimizer 返回替换型 SurfacePatch，并非 append-only。
+func TestMaterializeCandidateAcceptsFullReplacementPrompt(t *testing.T) {
+	config := newReportPipelineTestConfig()
+	pipeline := &Pipeline{config: config}
+	proposal := &PromptProposal{
+		Prompt: "完全不同的 prompt 内容，不保留任何 baseline 前缀",
+		Reason: "测试完整替换",
+	}
+	candidate, err := pipeline.materializeCandidate(proposal, 1, "原始 baseline")
+	require.NoError(t, err)
+	// EvaluationPrompt 是干净版本（不含 marker，不含 baseline 前缀）
+	assert.NotContains(t, candidate.EvaluationPrompt, "原始 baseline")
+	assert.NotContains(t, candidate.EvaluationPrompt, promptVariantMarkerPrefix)
+	assert.Contains(t, candidate.EvaluationPrompt, "完全不同的 prompt 内容")
+	// ProfilePrompt 是带 marker 的版本，用于审计
+	assert.Contains(t, candidate.ProfilePrompt, "完全不同的 prompt 内容")
+	assert.Contains(t, candidate.ProfilePrompt, promptVariantMarkerPrefix)
 }
 
 func TestConfigValidationBoundaries(t *testing.T) {

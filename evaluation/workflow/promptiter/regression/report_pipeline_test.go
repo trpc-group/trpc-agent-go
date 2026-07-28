@@ -88,7 +88,7 @@ func TestDeterministicPromptIterBuildsProfileAndPatchSet(t *testing.T) {
 	expectedSurfaceID := structure.SurfaceID("candidate", structure.SurfaceTypeInstruction)
 	assert.Equal(t, "accepted", candidate.ID)
 	assert.Equal(t, 1, candidate.Round)
-	assert.Equal(t, expectedPrompt, candidate.Prompt)
+	assert.Equal(t, expectedPrompt, candidate.ProfilePrompt)
 	assert.Equal(t, HashText(expectedPrompt), candidate.PromptHash)
 	assert.Equal(t, expectedSurfaceID, candidate.SurfaceID)
 
@@ -447,6 +447,39 @@ func TestReportArtifactsContainRequiredFieldsAndUseAtomicWrites(t *testing.T) {
 	assertNoAtomicReportTemps(t, outputDir)
 }
 
+// TestCleanupStaleReportArtifacts 验证崩溃恢复：残留的 staging/backup 文件
+// 能被 CleanupStaleReportArtifacts 清理，使 outputDir 回到干净状态。
+func TestCleanupStaleReportArtifacts(t *testing.T) {
+	outputDir := t.TempDir()
+
+	// 模拟崩溃后残留的 staging 和 backup 文件
+	staleTemp := filepath.Join(outputDir, ".optimization-report-stage-123456789")
+	staleBackup := filepath.Join(outputDir, ".optimization-report-backup-987654321")
+	require.NoError(t, os.WriteFile(staleTemp, []byte("stale-temp"), 0o600))
+	require.NoError(t, os.WriteFile(staleBackup, []byte("stale-backup"), 0o600))
+
+	// 正常报告文件应保留
+	jsonPath := filepath.Join(outputDir, JSONReportName)
+	require.NoError(t, os.WriteFile(jsonPath, []byte("valid-json"), 0o600))
+
+	// 清理残留
+	require.NoError(t, CleanupStaleReportArtifacts(outputDir))
+
+	// 残留文件已删除
+	_, err := os.Stat(staleTemp)
+	assert.True(t, os.IsNotExist(err))
+	_, err = os.Stat(staleBackup)
+	assert.True(t, os.IsNotExist(err))
+
+	// 正常文件保留
+	content, err := os.ReadFile(jsonPath)
+	require.NoError(t, err)
+	assert.Equal(t, "valid-json", string(content))
+
+	// 不存在的目录不报错
+	require.NoError(t, CleanupStaleReportArtifacts(filepath.Join(t.TempDir(), "nonexistent")))
+}
+
 func runReportPipelineTest(t *testing.T) *Report {
 	t.Helper()
 	config := newReportPipelineTestConfig()
@@ -654,9 +687,9 @@ func reportPipelinePromptSemanticHash(variant string) string {
 			candidate,
 			[]FailureCategory{FailureFinalResponseMismatch},
 		)
-		prompt := proposedPrompt + "\n\n" +
-			"[[trpc-promptiter-candidate:" + candidate.ID + ";seed:424242]]"
-		return HashText(semanticPromptContent(prompt))
+		// Evaluator 收到的是干净的 EvaluationPrompt（不含 marker），
+		// semantic hash 直接基于干净 prompt 计算。
+		return HashText(proposedPrompt)
 	}
 	return ""
 }

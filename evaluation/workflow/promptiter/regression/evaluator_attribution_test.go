@@ -129,12 +129,13 @@ func TestLocalEvaluatorFailureAttributionDeterminismAndUsage(t *testing.T) {
 		},
 	}
 
-	testPrompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
-	first, err := evaluator.Evaluate(context.Background(), set, "candidate", testPrompt)
+	// Evaluator 收到的是干净 prompt（不含 marker），
+	// Pipeline 会在调用 Evaluate 前用 EvaluationPrompt 字段。
+	first, err := evaluator.Evaluate(context.Background(), set, "candidate", testSemanticPrompt)
 	if err != nil {
 		t.Fatalf("Evaluate() first run error = %v", err)
 	}
-	second, err := evaluator.Evaluate(context.Background(), set, "candidate", testPrompt)
+	second, err := evaluator.Evaluate(context.Background(), set, "candidate", testSemanticPrompt)
 	if err != nil {
 		t.Fatalf("Evaluate() second run error = %v", err)
 	}
@@ -299,7 +300,7 @@ func TestLocalEvaluatorWrongToolNameCannotEarnArgumentOrResultCredit(t *testing.
 			},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -341,7 +342,7 @@ func TestLocalEvaluatorOmittedRouteArgumentsAndResultAreUnconstrained(t *testing
 			},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -379,7 +380,7 @@ func TestLocalEvaluatorTraceToolTimeoutIsHardFailure(t *testing.T) {
 			},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -410,7 +411,7 @@ func TestLocalEvaluatorTraceModeRequiresAndReplaysRecordedTrace(t *testing.T) {
 			FakeOutput{Response: "recorded answer", Usage: Usage{ModelCalls: 1, LatencyMS: 1}},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err == nil || !strings.Contains(err.Error(), "has no recorded trace") {
 		t.Fatalf("trace mode missing-trace error = %v", err)
@@ -464,7 +465,7 @@ func TestLocalEvaluatorFakeModeRejectsContradictoryTrace(t *testing.T) {
 			},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err == nil || !strings.Contains(err.Error(), "does not match output response") {
 		t.Fatalf("contradictory trace error = %v", err)
@@ -495,7 +496,7 @@ func TestLocalEvaluatorRejectsUnknownTraceStatus(t *testing.T) {
 			},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err == nil || !strings.Contains(err.Error(), "unknown status") {
 		t.Fatalf("unknown trace status error = %v", err)
@@ -523,7 +524,7 @@ func TestLocalEvaluatorRejectsMultipleYAMLDocuments(t *testing.T) {
 			FakeOutput{Response: "answer: one\n---\nanswer: two", Usage: Usage{ModelCalls: 1}},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)
@@ -554,7 +555,7 @@ func TestLocalEvaluatorExecutionErrorCannotPassZeroThreshold(t *testing.T) {
 			FakeOutput{Error: "model unavailable", Usage: Usage{ModelCalls: 1}},
 		)},
 	}
-	prompt := "test\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	if err != nil {
 		t.Fatal(err)

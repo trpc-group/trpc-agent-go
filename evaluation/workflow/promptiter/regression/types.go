@@ -36,6 +36,10 @@ const (
 	RuntimeModeFake RuntimeMode = "fake"
 	// RuntimeModeTrace evaluates strict trace replays.
 	RuntimeModeTrace RuntimeMode = "trace"
+	// RuntimeModeLive delegates evaluation to an external Evaluation Service.
+	// Pipeline 跳过 fakeResponses 校验，但仍强制覆盖率、prompt hash 绑定和 gate 完整性。
+	// 生产 adapter 必须自行保证 EvaluationSummary 的完整性和 case 覆盖。
+	RuntimeModeLive RuntimeMode = "live"
 )
 
 // FailureCategory is a stable, machine-readable failure attribution label.
@@ -455,16 +459,19 @@ type Config struct {
 	FakeEngine    FakeEngineConfig  `json:"fakeEngine"`
 }
 
-// Candidate is a concrete PromptIter profile and patch proposal.
-type Candidate struct {
-	ID         string               `json:"id"`
-	Round      int                  `json:"round"`
-	Prompt     string               `json:"prompt"`
-	PromptHash string               `json:"promptHash"`
-	SurfaceID  string               `json:"surfaceId"`
-	Reason     string               `json:"reason"`
-	PatchSet   *promptiter.PatchSet `json:"-"`
-	Profile    *promptiter.Profile  `json:"-"`
+// candidate is a concrete PromptIter profile and patch proposal.
+// 它仅在 regression 包内部使用；外部 adapter 应通过 Optimizer.Propose 返回
+// PromptProposal，Pipeline 自动构造 candidate 对象。
+type candidate struct {
+	ID               string               `json:"id"`
+	Round            int                  `json:"round"`
+	EvaluationPrompt string               `json:"-"`          // 干净 prompt，传给 Evaluator（不含 marker）
+	ProfilePrompt    string               `json:"prompt"`     // 带 marker，用于 PatchSet/Snapshot 审计
+	PromptHash       string               `json:"promptHash"` // = HashText(ProfilePrompt)
+	SurfaceID        string               `json:"surfaceId"`
+	Reason           string               `json:"reason"`
+	PatchSet         *promptiter.PatchSet `json:"-"`
+	Profile          *promptiter.Profile  `json:"-"`
 }
 
 // PromptSnapshot records prompt content and integrity hash for audit.

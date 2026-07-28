@@ -133,7 +133,7 @@ func (p *Pipeline) Run(
 	}
 	totalRunUsage := baselineUsage
 	baselineHash := HashText(baselinePrompt)
-	baselineSemanticHash := HashText(semanticPromptContent(baselinePrompt))
+	baselineSemanticHash := HashText(strings.TrimSpace(baselinePrompt))
 	surfaceID := surfaceIDFromConfig(p.config.Surface)
 	report := &Report{
 		SchemaVersion: ReportSchemaVersion,
@@ -185,13 +185,15 @@ func (p *Pipeline) Run(
 		if err := p.validateCandidate(candidate, round, seenCandidateIDs); err != nil {
 			return nil, fmt.Errorf("validate round %d candidate: %w", round, err)
 		}
-		candidate.PromptHash = HashText(candidate.Prompt)
+		candidate.PromptHash = HashText(candidate.ProfilePrompt)
 		seenCandidateIDs[candidate.ID] = struct{}{}
-		candidateTrain, err := p.evaluate(ctx, train, candidate.ID, candidate.Prompt)
+		// 传给 Evaluator 的是干净 EvaluationPrompt（不含 marker），
+		// 这样生产 Evaluator 无需理解私有 marker 协议。
+		candidateTrain, err := p.evaluate(ctx, train, candidate.ID, candidate.EvaluationPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate round %d candidate train: %w", round, err)
 		}
-		candidateValidation, err := p.evaluate(ctx, validation, candidate.ID, candidate.Prompt)
+		candidateValidation, err := p.evaluate(ctx, validation, candidate.ID, candidate.EvaluationPrompt)
 		if err != nil {
 			return nil, fmt.Errorf("evaluate round %d candidate validation: %w", round, err)
 		}
@@ -231,16 +233,16 @@ func (p *Pipeline) Run(
 			BaselineUsage:       baselineUsage,
 			CandidateUsage:      candidateUsage,
 			BaselinePromptHash:  baselineSemanticHash,
-			CandidatePromptHash: HashText(semanticPromptContent(candidate.Prompt)),
+			CandidatePromptHash: HashText(candidate.EvaluationPrompt),
 		})
 		if err != nil {
 			return nil, fmt.Errorf("evaluate round %d gate: %w", round, err)
 		}
 		candidateSnapshot := PromptSnapshot{
 			ID:             candidate.ID,
-			Content:        candidate.Prompt,
+			Content:        candidate.ProfilePrompt,
 			SHA256:         candidate.PromptHash,
-			SemanticSHA256: HashText(semanticPromptContent(candidate.Prompt)),
+			SemanticSHA256: HashText(candidate.EvaluationPrompt),
 			SurfaceID:      candidate.SurfaceID,
 			PatchReason:    candidate.Reason,
 		}
@@ -289,11 +291,18 @@ func (p *Pipeline) Run(
 }
 
 func (p *Pipeline) validateEvalSetVariants(set *RegressionEvalSet) error {
+	// live 模式下不需要 fakeResponses，由外部 Evaluator 提供结果
+	if p.config.Mode == RuntimeModeLive {
+		return nil
+	}
 	allowed := map[string]struct{}{"baseline": {}}
 	for _, candidate := range p.config.Candidates {
 		allowed[candidate.ID] = struct{}{}
 	}
 	for _, evalCase := range set.Cases {
+		if len(evalCase.FakeResponses) == 0 {
+			return fmt.Errorf("case %q fakeResponses are empty", evalCase.EvalID)
+		}
 		if _, ok := evalCase.FakeResponses["baseline"]; !ok {
 			return fmt.Errorf("case %q has no baseline fake response", evalCase.EvalID)
 		}
@@ -346,7 +355,7 @@ func (p *Pipeline) evaluate(
 	if err := validateEvaluationSummary(summary); err != nil {
 		return nil, err
 	}
-	expectedSemanticHash := HashText(semanticPromptContent(prompt))
+	expectedSemanticHash := HashText(strings.TrimSpace(prompt))
 	for _, evalCase := range summary.Cases {
 		if evalCase.UsedFallback {
 			if evalCase.ResponseVariantID != p.config.FakeEngine.FallbackVariant {
@@ -623,7 +632,7 @@ func equalAttributionStats(left, right map[FailureCategory]int) bool {
 }
 
 func (p *Pipeline) validateCandidate(
-	candidate *Candidate,
+	candidate *candidate,
 	round int,
 	seen map[string]struct{},
 ) error {
@@ -645,23 +654,23 @@ func (p *Pipeline) validateCandidate(
 	if candidate.Round != round {
 		return fmt.Errorf("candidate round %d does not match requested round %d", candidate.Round, round)
 	}
-	if stringsTrimmedEmpty(candidate.Prompt) {
+	if stringsTrimmedEmpty(candidate.ProfilePrompt) {
 		return errors.New("candidate prompt is empty")
 	}
-	if !utf8.ValidString(candidate.Prompt) || !utf8.ValidString(candidate.Reason) {
+	if !utf8.ValidString(candidate.ProfilePrompt) || !utf8.ValidString(candidate.Reason) {
 		return errors.New("candidate prompt and reason must be valid UTF-8")
 	}
-	if strings.Count(candidate.Prompt, promptVariantMarkerPrefix) != 1 {
+	if strings.Count(candidate.ProfilePrompt, promptVariantMarkerPrefix) != 1 {
 		return errors.New("candidate prompt must contain exactly one deterministic variant marker")
 	}
-	markerID, markerSeed, marked := promptVariantMetadata(candidate.Prompt)
+	markerID, markerSeed, marked := promptVariantMetadata(candidate.ProfilePrompt)
 	if !marked || markerID != candidate.ID {
 		return fmt.Errorf("candidate prompt marker %q does not match id %q", markerID, candidate.ID)
 	}
 	if markerSeed != p.config.Seed {
 		return fmt.Errorf("candidate prompt marker seed %d does not match config seed %d", markerSeed, p.config.Seed)
 	}
-	computedHash := HashText(candidate.Prompt)
+	computedHash := HashText(candidate.ProfilePrompt)
 	if candidate.PromptHash != "" && candidate.PromptHash != computedHash {
 		return fmt.Errorf("candidate prompt hash %q does not match computed hash %q", candidate.PromptHash, computedHash)
 	}
@@ -679,14 +688,14 @@ func (p *Pipeline) validateCandidate(
 		return errors.New("candidate profile does not contain exactly one target structure override")
 	}
 	override := candidate.Profile.Overrides[0]
-	if override.SurfaceID != expectedSurfaceID || !textSurfaceValueMatches(override.Value, candidate.Prompt) {
+	if override.SurfaceID != expectedSurfaceID || !textSurfaceValueMatches(override.Value, candidate.ProfilePrompt) {
 		return errors.New("candidate profile override does not match candidate prompt")
 	}
 	if len(candidate.PatchSet.Patches) != 1 {
 		return errors.New("candidate patch set must contain exactly one patch")
 	}
 	patch := candidate.PatchSet.Patches[0]
-	if patch.SurfaceID != expectedSurfaceID || !textSurfaceValueMatches(patch.Value, candidate.Prompt) ||
+	if patch.SurfaceID != expectedSurfaceID || !textSurfaceValueMatches(patch.Value, candidate.ProfilePrompt) ||
 		!reflect.DeepEqual(override.Value, patch.Value) || patch.Reason != candidate.Reason {
 		return errors.New("candidate patch does not match target prompt")
 	}

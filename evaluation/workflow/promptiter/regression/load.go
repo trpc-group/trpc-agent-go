@@ -243,9 +243,8 @@ func validateEvalSet(set *RegressionEvalSet) error {
 				return fmt.Errorf("case %q expected tool %d is nil or unnamed", evalCase.EvalID, toolIndex)
 			}
 		}
-		if len(evalCase.FakeResponses) == 0 {
-			return fmt.Errorf("case %q fakeResponses are empty", evalCase.EvalID)
-		}
+		// fakeResponses 非空校验由 Pipeline.validateEvalSetVariants 负责，
+		// 以便 live 模式可以跳过回放数据要求。
 		if evalCase.Expectations.MinRetrievedDocuments < 0 {
 			return fmt.Errorf("case %q minRetrievedDocuments cannot be negative", evalCase.EvalID)
 		}
@@ -317,8 +316,8 @@ func validateConfig(cfg *Config) error {
 	if cfg.SchemaVersion != ConfigSchemaVersion {
 		return fmt.Errorf("schemaVersion %q is unsupported; use %q", cfg.SchemaVersion, ConfigSchemaVersion)
 	}
-	if cfg.Mode != RuntimeModeFake && cfg.Mode != RuntimeModeTrace {
-		return fmt.Errorf("mode %q is unsupported; use fake or trace", cfg.Mode)
+	if cfg.Mode != RuntimeModeFake && cfg.Mode != RuntimeModeTrace && cfg.Mode != RuntimeModeLive {
+		return fmt.Errorf("mode %q is unsupported; use fake, trace, or live", cfg.Mode)
 	}
 	if cfg.MaxRounds <= 0 {
 		return errors.New("maxRounds must be greater than 0")

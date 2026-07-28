@@ -112,8 +112,8 @@ func buildProposedPrompt(
 func (p *Pipeline) materializeCandidate(
 	proposal *PromptProposal,
 	round int,
-	baselinePrompt string,
-) (*Candidate, error) {
+	_ string, // baselinePrompt 保留为未来扩展点，当前不再要求 proposal 保留 baseline 前缀
+) (*candidate, error) {
 	if proposal == nil {
 		return nil, errors.New("optimizer returned a nil proposal")
 	}
@@ -129,33 +129,34 @@ func (p *Pipeline) materializeCandidate(
 	if !utf8.ValidString(proposal.Prompt) || !utf8.ValidString(proposal.Reason) {
 		return nil, errors.New("optimizer prompt and reason must be valid UTF-8")
 	}
-	trimmedBaseline := strings.TrimSpace(baselinePrompt)
-	trimmedProposal := strings.TrimSpace(proposal.Prompt)
-	if trimmedProposal != trimmedBaseline && !strings.HasPrefix(trimmedProposal, trimmedBaseline+"\n") {
-		return nil, errors.New("optimizer proposal does not preserve the baseline prompt")
-	}
+	// 不再要求 proposal 保留 baseline 前缀。
+	// 原生 PromptIter optimizer 返回替换型 SurfacePatch，可以重写、缩短或重排
+	// instruction；只要 proposal 是非空 UTF-8 且不含保留 marker，Pipeline 就
+	// 接受它并自动追加候选 marker、构造 Profile/PatchSet。
 	if strings.Contains(proposal.Prompt, promptVariantMarkerPrefix) {
 		return nil, errors.New("optimizer proposal contains a reserved candidate marker")
 	}
 	candidateConfig := p.config.Candidates[round-1]
-	prompt := trimmedProposal + "\n\n" +
+	evaluationPrompt := strings.TrimSpace(proposal.Prompt)
+	profilePrompt := evaluationPrompt + "\n\n" +
 		fmt.Sprintf("%s%s;seed:%d]]", promptVariantMarkerPrefix, candidateConfig.ID, p.config.Seed)
 	surfaceType := astructure.SurfaceType(p.config.Surface.Type)
 	surfaceID := astructure.SurfaceID(p.config.Surface.NodeID, surfaceType)
 	patch := promptiter.SurfacePatch{
 		SurfaceID: surfaceID,
 		Value: astructure.SurfaceValue{
-			Text: &prompt,
+			Text: &profilePrompt,
 		},
 		Reason: proposal.Reason,
 	}
-	return &Candidate{
-		ID:         candidateConfig.ID,
-		Round:      round,
-		Prompt:     prompt,
-		PromptHash: HashText(prompt),
-		SurfaceID:  surfaceID,
-		Reason:     proposal.Reason,
+	return &candidate{
+		ID:               candidateConfig.ID,
+		Round:            round,
+		EvaluationPrompt: evaluationPrompt, // Evaluator 看到干净的 prompt
+		ProfilePrompt:    profilePrompt,    // Snapshot/PatchSet 用带 marker 的
+		PromptHash:       HashText(profilePrompt),
+		SurfaceID:        surfaceID,
+		Reason:           proposal.Reason,
 		PatchSet: &promptiter.PatchSet{
 			Patches: []promptiter.SurfacePatch{patch},
 		},
@@ -216,14 +217,6 @@ func promptVariantMetadata(prompt string) (string, int64, bool) {
 		return "", 0, false
 	}
 	return id, seed, true
-}
-
-func semanticPromptContent(prompt string) string {
-	if _, ok := promptVariantID(prompt); ok {
-		start := strings.LastIndex(prompt, promptVariantMarkerPrefix)
-		return strings.TrimSpace(prompt[:start])
-	}
-	return strings.TrimSpace(prompt)
 }
 
 // HashText returns the lowercase SHA-256 digest used in audit records.

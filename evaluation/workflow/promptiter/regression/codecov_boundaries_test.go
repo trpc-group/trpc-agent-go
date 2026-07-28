@@ -65,7 +65,7 @@ func TestValidateEvalSetFailClosedBoundaries(t *testing.T) {
 		{name: "unnamed expected tool", mutate: func(set *RegressionEvalSet) {
 			set.Cases[0].Conversation[0].Tools = []*evalset.Tool{{Name: " "}}
 		}, want: "nil or unnamed"},
-		{name: "responses", mutate: func(set *RegressionEvalSet) { set.Cases[0].FakeResponses = nil }, want: "fakeResponses are empty"},
+		// fakeResponses 非空校验已移至 Pipeline.validateEvalSetVariants（live 模式可跳过）
 		{name: "documents", mutate: func(set *RegressionEvalSet) {
 			set.Cases[0].Expectations.MinRetrievedDocuments = -1
 		}, want: "minRetrievedDocuments"},
@@ -311,8 +311,16 @@ func TestCaseAndMetricValidationBoundaries(t *testing.T) {
 }
 
 func TestGateInputAndBudgetBoundaries(t *testing.T) {
-	baseline := deltaTestSummary("validation", 0.6, deltaTestCase("case", 0.6, true, false))
-	candidate := deltaTestSummary("validation", 0.7, deltaTestCase("case", 0.7, true, false))
+	// 每次 clone 一份新的 summary，避免子检查之间通过共享指针相互污染。
+	// 这比依赖手动复位更稳健：即使后续重排或新增子检查，也不会因漏掉复位而 silently 破坏隔离。
+	freshBaseline := func() *EvaluationSummary {
+		return deltaTestSummary("validation", 0.6, deltaTestCase("case", 0.6, true, false))
+	}
+	freshCandidate := func() *EvaluationSummary {
+		return deltaTestSummary("validation", 0.7, deltaTestCase("case", 0.7, true, false))
+	}
+	baseline := freshBaseline()
+	candidate := freshCandidate()
 	delta := deltaTestDelta(t, baseline, candidate)
 	valid := GateInput{
 		Delta:               delta,
@@ -327,7 +335,7 @@ func TestGateInputAndBudgetBoundaries(t *testing.T) {
 	for _, input := range []GateInput{
 		{},
 		{Delta: delta},
-		{Delta: delta, BaselineValidation: baseline},
+		{Delta: delta, BaselineValidation: freshBaseline()},
 	} {
 		_, err := EvaluateGate(GatePolicy{}, input)
 		assert.ErrorContains(t, err, "are required")
@@ -349,16 +357,19 @@ func TestGateInputAndBudgetBoundaries(t *testing.T) {
 	input.CandidateUsage.ToolCalls = -1
 	_, err = EvaluateGate(GatePolicy{}, input)
 	assert.ErrorContains(t, err, "candidate usage")
+	// gate usage 子检查使用独立的 summary clone，无需在断言后手动复位
+	gateUsageBaseline := freshBaseline()
 	input = valid
+	input.BaselineValidation = gateUsageBaseline
 	input.BaselineValidation.Usage.ModelCalls = 1
 	_, err = EvaluateGate(GatePolicy{}, input)
 	assert.ErrorContains(t, err, "baseline gate usage")
-	baseline.Usage.ModelCalls = 0
+	gateUsageCandidate := freshCandidate()
 	input = valid
+	input.CandidateValidation = gateUsageCandidate
 	input.CandidateValidation.Usage.ToolCalls = 1
 	_, err = EvaluateGate(GatePolicy{}, input)
 	assert.ErrorContains(t, err, "candidate gate usage")
-	candidate.Usage.ToolCalls = 0
 
 	mismatchBaseline := deltaTestSummary("one", 0.6, deltaTestCase("case", 0.6, true, false))
 	mismatchCandidate := deltaTestSummary("two", 0.7, deltaTestCase("case", 0.7, true, false))
@@ -371,6 +382,8 @@ func TestGateInputAndBudgetBoundaries(t *testing.T) {
 	zero := 0
 	zeroFloat := 0.0
 	zeroLatency := int64(0)
+	// baseline/candidate 仍是干净状态（gate usage 子检查用的是独立 clone），
+	// 因此 ComputeDelta 和 regression gate 检查都能基于 pristine 数据运行。
 	regressed := deltaTestSummary("validation", 0.4, deltaTestCase("case", 0.4, false, false))
 	regressionDelta, err := ComputeDelta(baseline, regressed)
 	require.NoError(t, err)
@@ -459,7 +472,6 @@ func TestSummaryAndOptimizerBoundaries(t *testing.T) {
 		{name: "round", proposal: &PromptProposal{Prompt: "prompt", Reason: "reason"}, round: 0, baseline: "prompt", want: "outside"},
 		{name: "prompt", proposal: &PromptProposal{Reason: "reason"}, round: 1, baseline: "prompt", want: "empty prompt"},
 		{name: "reason", proposal: &PromptProposal{Prompt: "prompt"}, round: 1, baseline: "prompt", want: "empty reason"},
-		{name: "baseline", proposal: &PromptProposal{Prompt: "prompt-forged", Reason: "reason"}, round: 1, baseline: "prompt", want: "preserve"},
 		{name: "marker", proposal: &PromptProposal{
 			Prompt: "prompt\n[[trpc-promptiter-candidate:forged;seed:1]]",
 			Reason: "reason",
@@ -474,6 +486,17 @@ func TestSummaryAndOptimizerBoundaries(t *testing.T) {
 			assert.ErrorContains(t, err, test.want)
 		})
 	}
+
+	// 验证 baseline 前缀检查已移除：proposal 不保留 baseline 前缀也应成功
+	t.Run("materialize full replacement", func(t *testing.T) {
+		candidate, err := pipeline.materializeCandidate(
+			&PromptProposal{Prompt: "completely different prompt", Reason: "reason"},
+			1,
+			"baseline prompt",
+		)
+		require.NoError(t, err)
+		assert.NotContains(t, candidate.EvaluationPrompt, "baseline prompt")
+	})
 
 	for _, prompt := range []string{
 		"plain",

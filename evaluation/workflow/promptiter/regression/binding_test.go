@@ -32,14 +32,14 @@ func TestLocalEvaluatorBindsExplicitCandidateOutputToSemanticPrompt(t *testing.T
 			FakeOutput{Response: "answer", Usage: Usage{ModelCalls: 1}},
 		)},
 	}
-	prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	require.NoError(t, err)
 	assert.False(t, summary.Cases[0].UsedFallback)
 	assert.Equal(t, "candidate", summary.Cases[0].ResponseVariantID)
 	assert.Equal(t, HashText(testSemanticPrompt), summary.Cases[0].ResponsePromptSHA256)
 
-	changedPrompt := testSemanticPrompt + " changed\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	changedPrompt := testSemanticPrompt + " changed"
 	_, err = evaluator.Evaluate(context.Background(), set, "candidate", changedPrompt)
 	require.ErrorContains(t, err, "does not match evaluated prompt")
 
@@ -66,7 +66,7 @@ func TestLocalEvaluatorAuditsBaselineFallback(t *testing.T) {
 	delete(evalCase.FakeResponses, "candidate")
 	evalCase.FakeResponses["baseline"] = baselineOutput
 	set := &RegressionEvalSet{EvalSet: evalset.EvalSet{EvalSetID: "fallback"}, PassThreshold: testScore(1), Cases: []RegressionEvalCase{evalCase}}
-	prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	require.NoError(t, err)
 	result := summary.Cases[0]
@@ -90,7 +90,7 @@ func TestValidateEvaluationSummaryRejectsInvalidResponseProvenance(t *testing.T)
 			FakeOutput{Response: "answer", Usage: Usage{ModelCalls: 1}},
 		)},
 	}
-	prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+	prompt := testSemanticPrompt
 	summary, err := evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	require.NoError(t, err)
 	require.NoError(t, validateEvaluationSummary(summary))

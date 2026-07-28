@@ -33,7 +33,7 @@ func TestStrictTraceReplayRequiresCompleteEvidence(t *testing.T) {
 				"case", "answer", nil, Expectations{}, output,
 			)},
 		}
-		prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+		prompt := testSemanticPrompt
 		return evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	}
 
@@ -241,7 +241,7 @@ func TestStrictTraceReplayAuditsFailedExecutionEvidence(t *testing.T) {
 				"case", "answer", nil, Expectations{}, output,
 			)},
 		}
-		prompt := testSemanticPrompt + "\n\n[[trpc-promptiter-candidate:candidate;seed:1]]"
+		prompt := testSemanticPrompt
 		return evaluator.Evaluate(context.Background(), set, "candidate", prompt)
 	}
 

@@ -979,7 +979,7 @@ go run . -output-dir "$(mktemp -d)"
 1. 将 baseline Agent 导出为 structure；
 2. 用真实 Evaluation 结果构建 losses；
 3. 调用原生 PromptIter Engine；
-4. 将 accepted/round patch 转成 `regression.Candidate`；
+4. 通过 `Optimizer.Propose` 返回 `PromptProposal`（仅包含 prompt 内容和 reason），Pipeline 会自动构造内部 candidate 对象（含 marker、Profile、PatchSet）；
 5. 继续使用现有 delta、gate 和 report。
 
 不能省略 candidate validation rerun，也不能让 PromptIter 原生总分 acceptance 直接绕过赛题 gate。

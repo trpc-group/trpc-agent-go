@@ -178,8 +178,12 @@ func writeCaseDeltaTable(builder *strings.Builder, title string, cases []CaseDel
 	builder.WriteString("\n")
 }
 
-// WriteReports atomically writes optimization_report.json and
-// optimization_report.md to outputDir.
+// WriteReports writes optimization_report.json and optimization_report.md
+// to outputDir with best-effort atomicity.
+//
+// 函数返回错误时会回滚到原始状态；但进程崩溃可能留下半发布状态
+// （一个文件已更新、另一个未更新，或残留 staging/backup 文件）。
+// 调用方应在启动时调用 CleanupStaleReportArtifacts 清理残留。
 func WriteReports(report *Report, outputDir string) error {
 	if outputDir == "" {
 		return errors.New("output directory is empty")
@@ -202,6 +206,28 @@ func WriteReports(report *Report, outputDir string) error {
 		[]byte(markdown),
 	); err != nil {
 		return fmt.Errorf("write report pair: %w", err)
+	}
+	return nil
+}
+
+// CleanupStaleReportArtifacts 移除上次发布过程中可能残留的 staging 和 backup 文件。
+// 应在程序启动时调用，以保证 outputDir 处于干净状态。
+func CleanupStaleReportArtifacts(outputDir string) error {
+	entries, err := os.ReadDir(outputDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		// 匹配 writeAtomic 和 writeReportPairAtomic 使用的临时文件前缀
+		if strings.HasPrefix(name, ".optimization-report-") {
+			if err := os.Remove(filepath.Join(outputDir, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
 	}
 	return nil
 }
