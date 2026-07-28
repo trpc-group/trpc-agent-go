@@ -63,14 +63,14 @@ func main() {
 		os.Exit(1)
 	}
 	if *showWorkflowCode {
-		workflowTool = debugWorkflowCodeTool{inner: workflowTool}
+		workflowTool = workflowCodePrintingTool{inner: workflowTool}
 	}
 
 	root := llmagent.New(
 		"workflow_assistant",
 		llmagent.WithModel(modelInstance),
 		llmagent.WithDescription("Creates temporary, role-based workflows for tasks that need collaboration or revision."),
-		llmagent.WithInstruction(`Answer simple requests directly. For tasks that require role delegation, multi-step collaboration, concurrent analysis, or conditional iteration, call run_workflow exactly once and do not answer with Python source. This example registers one neutral general_agent template, so template is usually omitted. Use agent(...) to create workflow-local roles; the template fixes model, executor, tools, and permissions, while each dynamic instruction defines the temporary business role. For ordinary drafting, analysis, summaries, and non-policy pipeline stages, pass tools=[]. Only when a child is explicitly reviewing, approving, or rejecting against a team collaboration guideline should it use tools=["lookup_policy"] and be instructed to call lookup_policy before deciding. If a child must visibly demonstrate the policy lookup, prefer plain text output over structured_output for that child.`),
+		llmagent.WithInstruction(`Answer simple requests directly. For tasks that require role delegation, multi-step collaboration, concurrent analysis, or conditional iteration, call run_workflow exactly once and do not answer with Python source. This example registers one neutral general_agent template, so template is usually omitted. Use agent(...) to create workflow-local roles; every call should provide a concrete instruction and tools list. The template fixes model, executor, tools, and permissions, while each dynamic instruction defines the temporary business role. Use schema for values that control later branches or loops instead of asking a child for JSON text. For ordinary drafting, analysis, summaries, and non-policy pipeline stages, pass tools=[]. Only when a child is explicitly reviewing, approving, or rejecting against a team collaboration guideline should it use tools=["lookup_policy"] and be instructed to call lookup_policy before deciding. For provider-portable visible tool use, do not also request structured_output from that tool-using child: first collect its policy-grounded text, then pass that evidence to a tools=[] child for any structured decision.`),
 		llmagent.WithTools([]tool.Tool{workflowTool}),
 	)
 	r := runner.NewRunner("dynamic-workflow-example", root)
@@ -178,7 +178,8 @@ func buildWorkflowTool(m model.Model) (tool.CallableTool, error) {
 		"general_agent",
 		llmagent.WithModel(m),
 		llmagent.WithDescription("A neutral execution template for one workflow-local role defined by its dynamic instruction."),
-		llmagent.WithInstruction(`Follow the dynamic instance instruction as the complete definition of your current role. Treat the input as JSON context. Do not assume a business domain from this template. Use lookup_policy only when your dynamic instruction explicitly asks you to review, approve, or reject something against a team collaboration guideline, or explicitly tells you to call lookup_policy. Do not use lookup_policy for ordinary summaries, generic analysis, operational-risk review, or pipeline stages that are not policy reviews. When a structured output contract is requested, return data that conforms to it.`),
+		llmagent.WithInstruction(`Follow the dynamic instance instruction as the complete definition of your current role. Treat the input as JSON context. Do not assume a business domain from this template. Unless structured output is requested, return the requested content directly instead of wrapping it in a JSON object. Use lookup_policy only when your dynamic instruction explicitly asks you to review, approve, or reject something against a team collaboration guideline, or explicitly tells you to call lookup_policy. Do not use lookup_policy for ordinary summaries, generic analysis, operational-risk review, or pipeline stages that are not policy reviews. When a structured output contract is requested, return data that conforms to it.`),
+		llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
 		llmagent.WithTools([]tool.Tool{policyTool}),
 	)
 
@@ -223,15 +224,44 @@ func lookupPolicy(_ context.Context, req policyLookupRequest) (policyLookupResul
 	}
 }
 
-type debugWorkflowCodeTool struct {
+type workflowCodePrintingTool struct {
 	inner tool.CallableTool
 }
 
-func (t debugWorkflowCodeTool) Declaration() *tool.Declaration {
+func (t workflowCodePrintingTool) Declaration() *tool.Declaration {
 	return t.inner.Declaration()
 }
 
-func (t debugWorkflowCodeTool) Call(ctx context.Context, raw []byte) (any, error) {
+func (t workflowCodePrintingTool) Call(
+	ctx context.Context,
+	raw []byte,
+) (any, error) {
+	t.printWorkflowCode(raw)
+	return t.inner.Call(ctx, raw)
+}
+
+func (t workflowCodePrintingTool) StreamableCall(
+	ctx context.Context,
+	raw []byte,
+) (*tool.StreamReader, error) {
+	t.printWorkflowCode(raw)
+	streamable, ok := t.inner.(tool.StreamableTool)
+	if !ok {
+		return nil, fmt.Errorf(
+			"workflow code printer: inner tool is not streamable",
+		)
+	}
+	return streamable.StreamableCall(ctx, raw)
+}
+
+func (t workflowCodePrintingTool) TRPCAgentGoStructuredStreamErrorsOptIn() bool {
+	structured, ok := t.inner.(interface {
+		TRPCAgentGoStructuredStreamErrorsOptIn() bool
+	})
+	return ok && structured.TRPCAgentGoStructuredStreamErrorsOptIn()
+}
+
+func (t workflowCodePrintingTool) printWorkflowCode(raw []byte) {
 	var input struct {
 		Code string `json:"code"`
 	}
@@ -242,7 +272,6 @@ func (t debugWorkflowCodeTool) Call(ctx context.Context, raw []byte) (any, error
 		fmt.Fprintln(os.Stderr, "===== end generated dynamic workflow code =====")
 		fmt.Fprintln(os.Stderr)
 	}
-	return t.inner.Call(ctx, raw)
 }
 
 func printEvents(events <-chan *event.Event) {

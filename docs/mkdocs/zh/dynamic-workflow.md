@@ -45,6 +45,10 @@ workflow 语言是 Runtime 的选择，不是 Dynamic Workflow 的本质约束�
 Runtime 使用 Python；对已注册 Agent 和工具的调用会通过显式 bridge/RPC 回到 Go
 宿主，而不是在脚本中运行另一套 Agent SDK。
 
+模型生成的 workflow 代码应保持为简短的编排胶水：只表达角色委派、数据流、分支、
+并发和有界循环，具体的调研、写作、编码或工具操作交给子 Agent。不要把任务报告、
+源码文件或大段 shell 脚本直接嵌入 workflow 代码。
+
 ## 最小接入
 
 下面是最小接入方式：注册一个中性的基础 Agent，然后把 `run_workflow`
@@ -77,6 +81,9 @@ general := llmagent.New(
     llmagent.WithInstruction(
         "Follow the dynamic instruction supplied for this workflow-local role.",
     ),
+    // 让每个临时角色只关注自己的分支；同一 workflow 请求内复用
+    // instance_id 时仍会共享对应历史。
+    llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
 )
 
 // 创建 run_workflow 工具。
@@ -154,14 +161,27 @@ review = await agent(
 - `instance_id`：同一个 workflow 内多次调用复用同一个子 Agent 历史。
 
 默认不传 `instance_id` 时，每次 `agent(...)` 调用都会创建独立的子 Agent
-历史，适合并发分支。显式传相同 `instance_id` 表示复用同一条子历史；
-并发调用同一个 `instance_id` 会被串行执行，避免同时读写同一段会话历史。
+历史，适合并发分支。对于 `LLMAgent` 模板，如果临时角色不应继承根分支对话，
+请像上例一样配置 `llmagent.IsolatedRequest`。显式传相同 `instance_id` 表示
+复用同一条子历史；并发调用同一个 `instance_id` 会被串行执行，避免同时读写
+同一段会话历史。
 
 复用的历史包含子 Agent 的输入和产生的事件。动态 `instruction` 只配置当前这次
 调用，不会作为对话消息持久化；后续调用必须记住的事实应放在 `input` 中。
 
 这些选项只影响当前这次子 Agent 调用。workflow 不能借它改变模型、权限策略，
 也不能新增基础 Agent 本来没有的宿主能力。
+
+`agent(...)` 返回的 envelope 包含 `text`、可选的 `structured` 结果和执行元数据。
+下游需要普通文本时应传 `result["text"]`，需要稳定字段时传
+`result["structured"]`；除非确实需要元数据，否则不要继续传递完整 envelope。
+后续分支或循环需要稳定字段时，应请求 `schema` 并使用 `structured`，不要要求子
+Agent 返回 JSON 文本后再在 workflow 中解析。
+
+如果一个角色必须明确调用工具，而后续代码又需要结构化判断，应拆成两次子 Agent
+调用：先获取未结构化但有工具依据的文本，再把这份证据交给带 `schema`、且
+`tools=[]` 的子 Agent。这样无需依赖模型服务在同一轮里同时支持工具调用和结构化
+响应模式。
 
 ## 一个完整例子
 
@@ -238,7 +258,8 @@ return {
 
 ## 并发与批处理
 
-`parallel` 用于同时执行互不依赖的分支，并按输入顺序返回结果：
+`parallel` 用于同时执行互不依赖的分支，并按输入顺序返回结果；失败的独立分支返回
+`None`：
 
 ```python
 reviews = await parallel([
@@ -255,6 +276,16 @@ reviews = await parallel([
 `pipeline(items, stage1, stage2, ...)` 用于对一批对象执行重复的多阶段处理。
 每个 item 会按 stage 顺序前进；一个 item 完成前一阶段后，就可以进入下一阶段，
 不需要等待整批 item。
+
+每个 stage 可以接收一、二或三个位置参数：
+
+- `stage(previous)`
+- `stage(previous, original)`
+- `stage(previous, original, index)`
+
+第一阶段的 `previous` 就是原始 item。简单阶段可以只写一个参数；后续阶段仍可按需
+读取原始 item 和 index。所有 stage 的签名会在任何 item 启动前完成校验。如果某个
+stage 失败或返回 `None`，该 item 的最终结果就是 `None`，后续 stage 不再执行。
 
 ```python
 async def analyze(previous, original, index):
@@ -304,8 +335,10 @@ Agent 解读。
 ## 事件、Session 与执行边界
 
 Dynamic Workflow 采用前台、一次性执行。workflow 代码负责表达编排逻辑，已注册的
-Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的对话上下文，同时仍属于
-当前运行。因此：
+Agent 和工具仍在 Go 宿主中运行。省略 `instance_id` 时，每次子 Agent 调用都会获得
+独立的会话分支；显式复用同一个 `instance_id` 的调用会共享对应子历史。所有子 Agent
+调用仍属于当前运行；按上例配置 `IsolatedRequest` 后，子 Agent 只看到自己的分支。
+如果基础 Agent 选择了更宽的历史模式，它也可能看到祖先上下文。因此：
 
 - 前端可以从同一个 event stream 看到子 Agent 输出和工具调用进度。
 - 配置的 Session Service 会持久化这些事件。
@@ -314,6 +347,10 @@ Agent 和工具仍在 Go 宿主中运行。每次子 Agent 调用都有隔离的
 
 event stream 遵循框架统一的流式消费约定：持续消费直到运行结束；如果提前停止，应取消
 本次运行的 context。
+
+workflow 执行不具备事务性。如果子 Agent 或代码可调用工具已经修改了外部状态，而后续
+步骤失败，这些副作用不会自动回滚。当根 Agent 或应用可能重试 workflow 时，应让有
+副作用的操作保持串行，并尽量具备幂等性。
 
 这也是 Dynamic Workflow 和“让模型写一个普通脚本自己跑完”的关键区别：临时
 workflow 具备代码的灵活性，但 Agent 执行、工具边界、事件流和 Session 持久化仍由
@@ -327,6 +364,10 @@ Go 框架掌控。
 配置的可选全流程 timeout。
 默认 timeout 会刻意保持未设置，LocalRunner 只继承调用方 context，避免意外截断
 耗时较长的 Agent workflow。
+
+推荐直接编写以 `return` 结束的 workflow body。为了兼容模型常见输出，如果整段
+workflow 只有一个可选 docstring 和一个无参数的 `async def run()` 或
+`async def main()`，LocalRunner 也会自动调用它；其他未调用的 helper 仍会校验失败。
 
 相较之前的 LocalRunner，强化后的默认行为不再继承宿主环境，默认使用空的临时工作
 目录，会拒绝超过 64 KiB 的生成源码（除非显式调整限制），并执行文档声明的受限
