@@ -649,6 +649,45 @@ func TestCalculateDeltaFailsClosed(t *testing.T) {
 		_, err := CalculateDelta("vs_released", before, after, policy)
 		require.ErrorContains(t, err, "case-b")
 	})
+	t.Run("candidate omits expected case", func(t *testing.T) {
+		before := testSnapshot(
+			"before",
+			[]string{"case-a", "case-b"},
+			[]string{"quality"},
+		)
+		after := testSnapshot(
+			"after",
+			before.Inventory.CaseIDs,
+			before.Inventory.MetricNames,
+		)
+		setSnapshotCases(
+			before,
+			1,
+			testCase("case-a", true, 1),
+			testCase("case-b", true, 1),
+		)
+		setSnapshotCases(after, 1, testCase("case-a", true, 1))
+		_, err := CalculateDelta("vs_released", before, after, policy)
+		require.ErrorContains(t, err, "case-b")
+	})
+	t.Run("before snapshot is not evaluable", func(t *testing.T) {
+		before, after := validPair("quality")
+		before.Status = EvaluationNotEvaluable
+		_, err := CalculateDelta("vs_released", before, after, policy)
+		require.ErrorContains(t, err, string(EvaluationNotEvaluable))
+	})
+	t.Run("candidate snapshot run failed", func(t *testing.T) {
+		before, after := validPair("quality")
+		after.Status = EvaluationRunFailed
+		_, err := CalculateDelta("vs_released", before, after, policy)
+		require.ErrorContains(t, err, string(EvaluationRunFailed))
+	})
+	t.Run("explicit no-tool expectation drift", func(t *testing.T) {
+		before, after := validPair("quality")
+		after.Cases[0].ExpectNoTools = !before.Cases[0].ExpectNoTools
+		_, err := CalculateDelta("vs_released", before, after, policy)
+		require.ErrorContains(t, err, "explicit no-tool expectation changed")
+	})
 	t.Run("metric inventory incomplete", func(t *testing.T) {
 		before, after := validPair("quality", "safety")
 		after.Cases[0].Metrics = after.Cases[0].Metrics[:1]

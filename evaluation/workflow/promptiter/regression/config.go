@@ -1148,9 +1148,16 @@ func validateConfiguredCases(config RegressionConfig, validation DatasetSpec) er
 		{role: "critical", ids: config.CriticalCaseIDs},
 		{role: "hard failure", ids: config.HardFailureCaseIDs},
 	} {
+		if err := validateUniqueNonEmpty(item.role+" case id", item.ids); err != nil {
+			return err
+		}
 		for _, caseID := range item.ids {
 			if _, exists := validationIDs[caseID]; !exists {
-				return fmt.Errorf("%s case id %q is not in validation inventory", item.role, caseID)
+				return fmt.Errorf(
+					"%s case id %q is not in validation inventory (held-out validation)",
+					item.role,
+					caseID,
+				)
 			}
 		}
 	}
@@ -1164,7 +1171,10 @@ func validateGateMetrics(policy GatePolicy, metricNames []string) error {
 	}
 	for metricName := range policy.MetricDirections {
 		if _, exists := known[metricName]; !exists {
-			return fmt.Errorf("gate metric direction references unknown metric %q", metricName)
+			return fmt.Errorf(
+				"metric direction inventory references unknown metric %q",
+				metricName,
+			)
 		}
 	}
 	for _, metricName := range metricNames {

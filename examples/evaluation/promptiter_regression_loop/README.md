@@ -40,11 +40,14 @@ The command writes:
 ```text
 output/optimization_report.json
 output/optimization_report.md
+output/traces/<sha256>.json
 ```
 
-`example_output` contains the checked-in deterministic result. Its profile hashes, cases, scores, deltas, decisions, stop reason, model-call count, and token totals are regeneration-tested. Only measured wall-clock latency and artifact paths are normalized by that test.
+`optimization_report.json` is a readable manifest: profiles, evaluation snapshots, and snapshot-pair deltas are stored once and candidates reference them by ID. Passing cases keep their identity, status, and scores in the manifest, while their complete bounded case evidence travels with the trace sidecar; failed cases additionally retain bounded evidence, trajectories, and attribution inline. Full sanitized traces are content-addressed under `traces/`; every case reference includes the exact-byte SHA-256. The manifest is published last after its sidecars and Markdown summary. Callers must serialize writers that target the same output paths.
 
-Read the Markdown report from top to bottom for the baseline, each candidate's reason and case deltas, separate search/release decisions, pointer transitions, final released prompt, and cumulative resources. Use the JSON report for complete per-metric evidence, provenance, all three delta sets, and automated audit checks.
+`example_output` contains the checked-in deterministic bundle. Its profile hashes, cases, scores, deltas, decisions, stop reason, model-call count, token totals, trace references, hashes, and sidecar bytes are regeneration-tested. Only measured wall-clock latency and artifact paths are normalized by that test.
+
+Read the Markdown report from top to bottom for the baseline, each candidate's reason and case deltas, separate search/release decisions, pointer transitions, final released prompt, and cumulative resources. Use the JSON manifest and referenced trace sidecars together for per-metric evidence, provenance, all three delta sets, and automated audit checks.
 
 ## Verify
 

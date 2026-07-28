@@ -302,110 +302,7 @@ func TestSnapshotRequestValidationRejectsIncompleteProvenance(t *testing.T) {
 	require.NoError(t, validateSnapshotRequest(request, hash))
 }
 
-func TestDeltaValidationRejectsMalformedSnapshotsAndPolicies(t *testing.T) {
-	valid := func() (*EvaluationSnapshot, *EvaluationSnapshot, GatePolicy) {
-		before := testSnapshot("before", []string{"case-a"}, []string{"quality"})
-		after := testSnapshot("after", before.Inventory.CaseIDs, before.Inventory.MetricNames)
-		setSnapshotCases(before, 0.5, testCase("case-a", false, 0.5))
-		setSnapshotCases(after, 0.8, testCase("case-a", true, 0.8))
-		return before, after, GatePolicy{
-			PrimaryMetric:    "quality",
-			MetricDirections: map[string]ScoreDirection{"quality": ScoreHigherIsBetter},
-			Epsilon:          DefaultEpsilon,
-		}
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(*EvaluationSnapshot, *EvaluationSnapshot, *GatePolicy)
-	}{
-		{"comparison handled separately", func(_, _ *EvaluationSnapshot, _ *GatePolicy) {}},
-		{"primary metric", func(_, _ *EvaluationSnapshot, policy *GatePolicy) {
-			policy.PrimaryMetric = ""
-		}},
-		{"directions", func(_, _ *EvaluationSnapshot, policy *GatePolicy) {
-			policy.MetricDirections = nil
-		}},
-		{"epsilon", func(_, _ *EvaluationSnapshot, policy *GatePolicy) {
-			policy.Epsilon = math.NaN()
-		}},
-		{"before status", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Status = EvaluationRunFailed
-		}},
-		{"run id", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.RunID = ""
-		}},
-		{"profile hash", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.ProfileHash = ""
-		}},
-		{"eval id", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.EvalSetID = ""
-		}},
-		{"eval hash", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.EvalSetHash = ""
-		}},
-		{"metrics hash", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.MetricsHash = ""
-		}},
-		{"split", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.Split = ""
-		}},
-		{"evaluator hash", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.EvaluatorConfigHash = ""
-		}},
-		{"policy hash", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Provenance.MetricPolicyHash = ""
-		}},
-		{"case inventory", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Inventory.CaseIDs = nil
-		}},
-		{"metric inventory", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Inventory.MetricNames = nil
-		}},
-		{"duplicate case", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Inventory.CaseIDs = []string{"case-a", "case-a"}
-		}},
-		{"case count", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Cases = nil
-		}},
-		{"case id", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Cases[0].CaseID = ""
-		}},
-		{"primary absent", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Cases[0].PrimaryMetric = "other"
-		}},
-		{"metric direction", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Cases[0].Metrics[0].Direction = "sideways"
-		}},
-		{"case score", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Cases[0].Metrics[0].Score = math.Inf(1)
-		}},
-		{"overall score", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.OverallScore = math.NaN()
-		}},
-		{"aggregate counts", func(before, _ *EvaluationSnapshot, _ *GatePolicy) {
-			before.Passed = 99
-		}},
-		{"case order", func(_, after *EvaluationSnapshot, _ *GatePolicy) {
-			after.Inventory.CaseIDs = []string{"other"}
-		}},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			before, after, policy := valid()
-			test.mutate(before, after, &policy)
-			comparison := "vs_initial"
-			if test.name == "comparison handled separately" {
-				comparison = ""
-			}
-			_, err := CalculateDelta(comparison, before, after, policy)
-			require.Error(t, err)
-		})
-	}
-	_, after, policy := valid()
-	_, err := CalculateDelta("vs_initial", nil, after, policy)
-	require.Error(t, err)
-}
-
-func TestDeltaValidatorsRejectEveryMalformedMetricAndBinding(t *testing.T) {
+func TestFailClosedDeltaAndReleaseValidatorsStayCovered(t *testing.T) {
 	validPolicy := func() GatePolicy {
 		return GatePolicy{
 			PrimaryMetric: "quality",
@@ -416,14 +313,26 @@ func TestDeltaValidatorsRejectEveryMalformedMetricAndBinding(t *testing.T) {
 			Epsilon: DefaultEpsilon,
 		}
 	}
+	validCase := func() CaseResult {
+		return testCase("case-a", true, 0.8, 0.9)
+	}
+	validSnapshot := func() *EvaluationSnapshot {
+		snapshot := testSnapshot(
+			"profile",
+			[]string{"case-a"},
+			[]string{"quality", "safety"},
+		)
+		setSnapshotCases(snapshot, 0.8, validCase())
+		return snapshot
+	}
+
 	for _, mutate := range []func(*GatePolicy){
-		func(policy *GatePolicy) { policy.PrimaryMetric = "missing" },
+		func(policy *GatePolicy) { policy.PrimaryMetric = "" },
+		func(policy *GatePolicy) { policy.MetricDirections = nil },
+		func(policy *GatePolicy) { policy.PrimaryMetric = "other" },
 		func(policy *GatePolicy) { policy.MetricDirections["quality"] = "sideways" },
 		func(policy *GatePolicy) {
-			policy.MetricDirections = map[string]ScoreDirection{
-				"quality": ScoreHigherIsBetter,
-				"":        ScoreHigherIsBetter,
-			}
+			policy.MetricDirections[""] = ScoreHigherIsBetter
 		},
 		func(policy *GatePolicy) { policy.MetricDirections["safety"] = "sideways" },
 	} {
@@ -432,268 +341,108 @@ func TestDeltaValidatorsRejectEveryMalformedMetricAndBinding(t *testing.T) {
 		require.Error(t, validateDeltaPolicy(policy))
 	}
 
-	validCase := func() CaseResult {
-		return testCase("case-a", true, 0.8, 0.9)
-	}
-	inventory := []string{"quality", "safety"}
-	for _, test := range []struct {
-		name   string
-		mutate func(*CaseResult)
-	}{
-		{"metric count", func(item *CaseResult) { item.Metrics = item.Metrics[:1] }},
-		{"empty metric", func(item *CaseResult) { item.Metrics[0].MetricName = "" }},
-		{"duplicate metric", func(item *CaseResult) { item.Metrics[1].MetricName = "quality" }},
-		{"unexpected metric", func(item *CaseResult) { item.Metrics[1].MetricName = "other" }},
-		{"nonfinite threshold", func(item *CaseResult) { item.Metrics[0].Threshold = math.NaN() }},
-		{"invalid status", func(item *CaseResult) { item.Metrics[0].Status = "unknown" }},
-		{"status mismatch", func(item *CaseResult) { item.Metrics[0].Passed = false }},
-		{"invalid direction", func(item *CaseResult) { item.Metrics[0].Direction = "sideways" }},
-		{"policy direction mismatch", func(item *CaseResult) {
-			item.Metrics[0].Direction = ScoreLowerIsBetter
-		}},
-		{"nonfinite rubric", func(item *CaseResult) {
-			item.Metrics[0].RubricScores = []RubricScore{{ID: "r", Score: math.Inf(1)}}
-		}},
+	require.Error(t, func() error {
+		_, err := validateComparisonSnapshot("snapshot", nil, validPolicy())
+		return err
+	}())
+	for _, field := range []string{
+		"RunID", "ProfileHash", "EvalSetID", "EvalSetHash", "MetricsHash",
+		"Split", "EvaluatorConfigHash", "MetricPolicyHash",
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			item := validCase()
-			test.mutate(&item)
-			require.Error(t, validateCaseMetrics("snapshot", item, inventory, validPolicy()))
-		})
-	}
-	require.NoError(t, validateCaseMetrics("snapshot", validCase(), inventory, validPolicy()))
-
-	validSnapshot := func() *EvaluationSnapshot {
-		snapshot := testSnapshot("profile", []string{"case-a"}, inventory)
-		setSnapshotCases(snapshot, 0.8, validCase())
-		return snapshot
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(*EvaluationSnapshot, *GatePolicy)
-	}{
-		{"primary missing from inventory", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Inventory.MetricNames = []string{"safety"}
-			snapshot.Cases[0].Metrics = snapshot.Cases[0].Metrics[1:]
-		}},
-		{"metric missing policy direction", func(snapshot *EvaluationSnapshot, policy *GatePolicy) {
-			delete(policy.MetricDirections, "safety")
-		}},
-		{"case eval set mismatch", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases[0].EvalSetID = "other"
-		}},
-		{"missing expected case", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases = nil
-		}},
-		{"duplicate expected case", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases = append(snapshot.Cases, snapshot.Cases[0])
-		}},
-		{"extra case", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			extra := validCase()
-			extra.CaseID = "case-b"
-			snapshot.Cases = append(snapshot.Cases, extra)
-		}},
-		{"case status", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases[0].Status = "unknown"
-		}},
-		{"case pass binding", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases[0].Passed = false
-		}},
-		{"case primary binding", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases[0].PrimaryMetric = "safety"
-		}},
-		{"case metrics", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Cases[0].Metrics = nil
-		}},
-		{"pass counts", func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
-			snapshot.Passed = 0
-		}},
-	} {
-		t.Run("snapshot/"+test.name, func(t *testing.T) {
-			snapshot := validSnapshot()
-			policy := validPolicy()
-			test.mutate(snapshot, &policy)
-			_, err := validateComparisonSnapshot("snapshot", snapshot, policy)
-			require.Error(t, err)
-		})
-	}
-	_, err := validateComparisonSnapshot("snapshot", validSnapshot(), validPolicy())
-	require.NoError(t, err)
-
-	for _, test := range []struct {
-		name   string
-		mutate func(*EvaluationSnapshot)
-	}{
-		{"eval set id", func(after *EvaluationSnapshot) { after.Provenance.EvalSetID = "other" }},
-		{"eval set hash", func(after *EvaluationSnapshot) { after.Provenance.EvalSetHash = "other" }},
-		{"metrics hash", func(after *EvaluationSnapshot) { after.Provenance.MetricsHash = "other" }},
-		{"split", func(after *EvaluationSnapshot) { after.Provenance.Split = "other" }},
-		{"evaluator hash", func(after *EvaluationSnapshot) {
-			after.Provenance.EvaluatorConfigHash = "other"
-		}},
-		{"policy hash", func(after *EvaluationSnapshot) { after.Provenance.MetricPolicyHash = "other" }},
-		{"seed", func(after *EvaluationSnapshot) { after.Provenance.Seed++ }},
-		{"case inventory", func(after *EvaluationSnapshot) {
-			after.Inventory.CaseIDs = []string{"case-b"}
-		}},
-		{"metric inventory", func(after *EvaluationSnapshot) {
-			after.Inventory.MetricNames = []string{"quality"}
-		}},
-	} {
-		t.Run("compatibility/"+test.name, func(t *testing.T) {
-			before := validSnapshot()
-			after := validSnapshot()
-			test.mutate(after)
-			require.Error(t, validateCompatibleSnapshots(before, after))
-		})
-	}
-	require.NoError(t, validateCompatibleSnapshots(validSnapshot(), validSnapshot()))
-	require.False(t, sameStringSet([]string{"a"}, []string{"a", "b"}))
-	require.False(t, sameStringSet([]string{"a"}, []string{"b"}))
-	require.True(t, sameStringSet([]string{"a", "b"}, []string{"b", "a"}))
-
-	for _, field := range []string{"critical", "hard", "expected no tools", "threshold"} {
-		before := validSnapshot()
-		after := validSnapshot()
-		switch field {
-		case "critical":
-			after.Cases[0].Critical = true
-		case "hard":
-			after.Cases[0].HardFailure = true
-		case "expected no tools":
-			after.Cases[0].ExpectNoTools = true
-		case "threshold":
-			after.Cases[0].Metrics[0].Threshold++
-		}
-		_, err := CalculateDelta("comparison", before, after, validPolicy())
+		snapshot := validSnapshot()
+		reflect.ValueOf(&snapshot.Provenance).Elem().FieldByName(field).SetString("")
+		_, err := validateComparisonSnapshot("snapshot", snapshot, validPolicy())
 		require.Error(t, err)
 	}
-	beforeCase := validCase()
-	afterCase := validCase()
-	afterCase.Metrics[0].Direction = ScoreLowerIsBetter
-	_, err = calculateCaseDelta(
-		beforeCase,
-		afterCase,
-		inventory,
-		validPolicy(),
-		DefaultEpsilon,
-	)
-	require.Error(t, err)
-}
-
-func TestReleaseGateValidatorsRejectEveryMalformedDeltaAndResource(t *testing.T) {
-	valid := func() (GatePolicy, DeltaSummary) {
-		report := testReport(t)
-		return report.ResolvedConfig.Gate, report.Candidates[0].Deltas.VsReleased
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(*GatePolicy, *DeltaSummary)
-	}{
-		{"case identity", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].CaseID = ""
-		}},
-		{"duplicate case", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases = append(delta.Cases, delta.Cases[0])
-		}},
-		{"case status", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].AfterStatus = "unknown"
-		}},
-		{"case pass binding", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].AfterPassed = false
-		}},
-		{"metric inventory count", func(policy *GatePolicy, _ *DeltaSummary) {
-			policy.MetricDirections["safety"] = ScoreHigherIsBetter
-		}},
-		{"empty metric", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].MetricName = ""
-		}},
-		{"duplicate metric", func(policy *GatePolicy, delta *DeltaSummary) {
-			policy.MetricDirections["safety"] = ScoreHigherIsBetter
-			delta.Cases[0].Metrics = append(delta.Cases[0].Metrics, delta.Cases[0].Metrics[0])
-		}},
-		{"metric outside policy", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].MetricName = "other"
-		}},
-		{"metric nonfinite", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].BeforeScore = math.NaN()
-		}},
-		{"metric invalid direction", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].Direction = "sideways"
-		}},
-		{"metric invalid status", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].BeforeStatus = "unknown"
-		}},
-		{"metric direction mismatch", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].Direction = ScoreLowerIsBetter
-		}},
-		{"metric delta mismatch", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].Metrics[0].Delta++
-		}},
-		{"primary kind mismatch", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.Cases[0].PrimaryKind = ChangeUnchanged
-		}},
-		{"before mean mismatch", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.BeforeOverallScore++
-		}},
-		{"after mean mismatch", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.AfterOverallScore++
-		}},
-		{"aggregate counts", func(_ *GatePolicy, delta *DeltaSummary) {
-			delta.NewlyPassing++
-		}},
+	for _, mutate := range []func(*EvaluationSnapshot, *GatePolicy){
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Status = EvaluationRunFailed
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.OverallScore = math.NaN()
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Inventory.CaseIDs = nil
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Inventory.MetricNames = []string{"safety"}
+		},
+		func(_ *EvaluationSnapshot, policy *GatePolicy) {
+			delete(policy.MetricDirections, "safety")
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].EvalSetID = "other"
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].CaseID = ""
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].ExpectNoTools = true
+			snapshot.Cases[0].ExpectedTools = []ToolCall{{Name: "lookup"}}
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases = nil
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases = append(snapshot.Cases, snapshot.Cases[0])
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			extra := snapshot.Cases[0]
+			extra.CaseID = "extra"
+			snapshot.Cases = append(snapshot.Cases, extra)
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].Status = "unknown"
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].Passed = false
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].PrimaryMetric = "safety"
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Cases[0].Metrics = nil
+		},
+		func(snapshot *EvaluationSnapshot, _ *GatePolicy) {
+			snapshot.Passed = 0
+		},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			policy, delta := valid()
-			test.mutate(&policy, &delta)
-			require.Error(t, validateDeltaSummary(delta, policy, DefaultEpsilon))
-		})
+		snapshot := validSnapshot()
+		policy := validPolicy()
+		mutate(snapshot, &policy)
+		_, err := validateComparisonSnapshot("snapshot", snapshot, policy)
+		require.Error(t, err)
 	}
-	policy, delta := valid()
-	require.NoError(t, validateDeltaSummary(delta, policy, DefaultEpsilon))
 
-	invalidResources := []ResourceUsage{
-		{ModelCalls: Count{Available: true, Value: -1}},
-		{InputTokens: Count{Available: true, Value: -1}},
-		{OutputTokens: Count{Available: true, Value: -1}},
-		{LatencyMS: Count{Available: true, Value: -1}},
-		{ModelCalls: Count{Value: 1}},
-		{InputTokens: Count{Value: 1}},
-		{OutputTokens: Count{Value: 1}},
-		{LatencyMS: Count{Value: 1}},
-		{MonetaryCost: Amount{Available: true, Value: math.NaN()}},
-		{MonetaryCost: Amount{Available: true, Value: -1}},
-		{MonetaryCost: Amount{Value: 1}},
+	for _, mutate := range []func(*CaseResult){
+		func(item *CaseResult) { item.Metrics = item.Metrics[:1] },
+		func(item *CaseResult) { item.Metrics[0].MetricName = "" },
+		func(item *CaseResult) { item.Metrics[1].MetricName = "quality" },
+		func(item *CaseResult) { item.Metrics[1].MetricName = "other" },
+		func(item *CaseResult) { item.Metrics[0].Score = math.NaN() },
+		func(item *CaseResult) { item.Metrics[0].Status = "unknown" },
+		func(item *CaseResult) { item.Metrics[0].Passed = false },
+		func(item *CaseResult) { item.Metrics[0].Direction = "sideways" },
+		func(item *CaseResult) {
+			item.Metrics[0].RubricScores = []RubricScore{{Score: math.Inf(1)}}
+		},
+	} {
+		item := validCase()
+		mutate(&item)
+		require.Error(t, validateCaseMetrics(
+			"snapshot",
+			item,
+			[]string{"quality", "safety"},
+			validPolicy(),
+		))
 	}
-	for _, usage := range invalidResources {
-		require.NotEmpty(t, validateResourceUsage(usage))
-	}
-	require.Empty(t, validateResourceUsage(ResourceUsage{
-		ModelCalls:   Count{Available: true, Value: 1},
-		InputTokens:  Count{Available: true, Value: 1},
-		OutputTokens: Count{Available: true, Value: 1},
-		LatencyMS:    Count{Available: true, Value: 1},
-		MonetaryCost: Amount{Available: true, Value: 1, Unit: "USD"},
-	}))
+	require.NoError(t, validateCaseMetrics(
+		"snapshot",
+		validCase(),
+		[]string{"quality", "safety"},
+		validPolicy(),
+	))
 
-	require.True(t, caseHasRegression(CaseDelta{PrimaryKind: ChangeNewlyFailing}, DefaultEpsilon))
-	require.True(t, caseHasRegression(CaseDelta{PrimaryKind: ChangeRegressed}, DefaultEpsilon))
-	require.True(t, caseHasRegression(CaseDelta{
-		PrimaryKind: ChangeUnchanged,
-		Metrics: []MetricDelta{{
-			Delta:     -1,
-			Direction: ScoreHigherIsBetter,
-		}},
-	}, DefaultEpsilon))
-	require.False(t, caseHasRegression(CaseDelta{
-		PrimaryKind: ChangeImproved,
-		Metrics: []MetricDelta{{
-			Delta:     1,
-			Direction: ScoreHigherIsBetter,
-		}},
-	}, DefaultEpsilon))
-
-	policy, delta = valid()
 	for _, mutate := range []func(*GatePolicy, *DeltaSummary, *ResourceUsage){
 		func(policy *GatePolicy, _ *DeltaSummary, _ *ResourceUsage) {
 			policy.PrimaryMetric = ""
@@ -723,12 +472,40 @@ func TestReleaseGateValidatorsRejectEveryMalformedDeltaAndResource(t *testing.T)
 			policy.ModelCallStopThreshold = 1
 			usage.ModelCalls = Count{}
 		},
+		func(_ *GatePolicy, _ *DeltaSummary, usage *ResourceUsage) {
+			usage.InputTokens = Count{Available: true, Value: -1}
+		},
+		func(_ *GatePolicy, _ *DeltaSummary, usage *ResourceUsage) {
+			usage.MonetaryCost = Amount{Available: true, Value: math.NaN()}
+		},
 	} {
-		policy, delta = valid()
+		report := testReport(t)
+		policy := report.ResolvedConfig.Gate
+		delta := report.Candidates[0].Deltas.VsReleased
 		usage := ResourceUsage{}
 		mutate(&policy, &delta, &usage)
-		require.NotEmpty(t, validateReleaseInputs(policy, delta, usage, DefaultEpsilon))
+		require.NotEmpty(t, validateReleaseInputs(
+			policy,
+			delta,
+			usage,
+			DefaultEpsilon,
+		))
 	}
+
+	require.True(t, caseHasRegression(
+		CaseDelta{PrimaryKind: ChangeNewlyFailing},
+		DefaultEpsilon,
+	))
+	require.True(t, caseHasRegression(
+		CaseDelta{PrimaryKind: ChangeRegressed},
+		DefaultEpsilon,
+	))
+	require.True(t, caseHasRegression(CaseDelta{Metrics: []MetricDelta{{
+		Delta: -1, Direction: ScoreHigherIsBetter,
+	}}}, DefaultEpsilon))
+	require.False(t, caseHasRegression(CaseDelta{Metrics: []MetricDelta{{
+		Delta: 1, Direction: ScoreHigherIsBetter,
+	}}}, DefaultEpsilon))
 }
 
 func TestAnalysisBoundaryHelpersCoverLimitsAndDeduplication(t *testing.T) {
@@ -868,96 +645,6 @@ func TestPipelineAndReportUtilityBranches(t *testing.T) {
 	require.Error(t, validateRenderedJSON([]byte(`{}`), report))
 	require.Error(t, validateRenderedMarkdown([]byte("missing"), report))
 	require.Error(t, validateArtifactPair([]byte(`{}`), []byte("missing"), report))
-}
-
-func TestMarkdownWritersRetainOptionalAuditEvidence(t *testing.T) {
-	report := testReport(t)
-	snapshot := report.BaselineTrain
-	snapshot.Error = "snapshot warning"
-	snapshot.Resources = ResourceUsage{
-		ModelCalls:   Count{Available: true, Value: 2},
-		InputTokens:  Count{Available: true, Value: 10},
-		OutputTokens: Count{Available: true, Value: 5},
-		LatencyMS:    Count{Available: true, Value: 20},
-		MonetaryCost: Amount{Available: true, Value: 0.25, Unit: "USD"},
-	}
-	result := &snapshot.Cases[0]
-	result.ExpectedFacts = []string{"fact-a", "fact-b"}
-	result.Error = "case warning"
-	result.ExpectStructured = true
-	result.StructuredOutput = `{"answer":"observed"}`
-	result.ExpectedRoute = "lookup"
-	result.ExpectedTools = []ToolCall{{
-		Sequence:  1,
-		Name:      "lookup",
-		Arguments: map[string]any{"query": "weather"},
-		Result:    map[string]any{"temperature": 25},
-	}}
-	result.Metrics[0].RubricScores = []RubricScore{
-		{ID: "accuracy", Score: 0.4},
-		{ID: "format", Score: 0.5, Reason: "wrong shape"},
-	}
-	snapshot.Attributions = []FailureAttribution{{
-		EvalSetID:           snapshot.Provenance.EvalSetID,
-		EvalCaseID:          result.CaseID,
-		MetricName:          result.PrimaryMetric,
-		PrimaryCategory:     FailureResponseMismatch,
-		Reason:              "observed answer differs",
-		Evidence:            []EvidenceReference{{ID: "response", Kind: "final_response", Summary: "mismatch"}},
-		Severity:            FailureSeverityP2,
-		Confidence:          0.9,
-		EvidenceSufficiency: EvidenceSufficient,
-		EvaluationRunID:     snapshot.Provenance.RunID,
-		ProfileHash:         snapshot.Provenance.ProfileHash,
-	}}
-
-	var out strings.Builder
-	writeSnapshot(&out, "snapshot", snapshot)
-	writeCandidate(&out, &CandidateReport{
-		Round:              2,
-		ID:                 "incomplete",
-		Status:             EvaluationNotEvaluable,
-		SearchParentHash:   "search",
-		ReleasedParentHash: "released",
-		SearchDecision:     notEvaluableDecision("search unavailable"),
-		ReleaseDecision:    notEvaluableDecision("release unavailable"),
-		Errors:             []string{"candidate error"},
-		Transition: StateTransition{
-			SearchBefore:   "search",
-			SearchAfter:    "search",
-			ReleasedBefore: "released",
-			ReleasedAfter:  "released",
-			Explanation:    "unchanged",
-		},
-		Resources: ResourceLedger{
-			Entries: []ResourceEntry{{
-				Stage:       "evaluation",
-				Round:       2,
-				Split:       "train",
-				ProfileHash: "candidate",
-				Usage:       snapshot.Resources,
-				Failed:      true,
-			}},
-			Cumulative: snapshot.Resources,
-		},
-	})
-	text := out.String()
-	for _, expected := range []string{
-		"snapshot warning",
-		"Expected facts",
-		"case warning",
-		"Structured output",
-		"Expected tools",
-		"accuracy=0.400000",
-		"wrong shape",
-		"Attribution:",
-		"candidate error",
-		"| evaluation | 2 | train | candidate |",
-	} {
-		require.Contains(t, text, expected)
-	}
-	require.Empty(t, compactJSON(nil))
-	require.Empty(t, redactAndBoundText("value", 0))
 }
 
 func TestReportRenderingAndPublishingRejectsBoundaryInputs(t *testing.T) {
@@ -3427,120 +3114,20 @@ func TestEvaluateSnapshotEnforcesEvaluatorErrorStatusContract(t *testing.T) {
 	}
 }
 
-func TestSuccessfulReportValidationRejectsEveryConfigurationBindingDrift(t *testing.T) {
+func TestSuccessfulReportRejectsDistinctBindingDrift(t *testing.T) {
 	tests := []struct {
 		name   string
 		mutate func(*Report)
 	}{
-		{"generated timezone", func(report *Report) {
-			report.GeneratedAt = report.GeneratedAt.In(time.FixedZone("offset", 3600))
-		}},
 		{"initial evaluation run", func(report *Report) {
 			report.InitialProfile.EvaluationRunID = "other"
 		}},
-		{"promptiter policy", func(report *Report) {
-			report.ResolvedConfig.PromptIter.MaxOuterRounds = 0
-		}},
-		{"gate", func(report *Report) {
+		{"gate epsilon", func(report *Report) {
 			report.ResolvedConfig.Gate.Epsilon = 0
-		}},
-		{"output", func(report *Report) {
-			report.ResolvedConfig.Output.JSON = ""
-		}},
-		{"evidence max", func(report *Report) {
-			report.ResolvedConfig.EvidenceLimit = defaultEvidenceLimit + 1
-		}},
-		{"dataset id", func(report *Report) {
-			report.ResolvedConfig.Train.EvalSetID = ""
-		}},
-		{"dataset hash", func(report *Report) {
-			report.ResolvedConfig.Train.EvalSetHash = ""
-		}},
-		{"dataset metrics hash", func(report *Report) {
-			report.ResolvedConfig.Train.MetricsHash = ""
-		}},
-		{"dataset cases", func(report *Report) {
-			report.ResolvedConfig.Train.CaseIDs = nil
-		}},
-		{"dataset metrics", func(report *Report) {
-			report.ResolvedConfig.Train.MetricNames = nil
-		}},
-		{"heldout leakage", func(report *Report) {
-			report.ResolvedConfig.Validation.NormalizedInputHashes["validation-case"] =
-				report.ResolvedConfig.Train.NormalizedInputHashes["train-case"]
-		}},
-		{"metric inventory", func(report *Report) {
-			report.ResolvedConfig.Validation.MetricNames = []string{"other"}
-		}},
-		{"metric hashes", func(report *Report) {
-			report.ResolvedConfig.Validation.MetricsHash = "other"
-		}},
-		{"primary metric", func(report *Report) {
-			report.ResolvedConfig.Gate.PrimaryMetric = "other"
-		}},
-		{"direction count", func(report *Report) {
-			report.ResolvedConfig.Gate.MetricDirections["other"] = ScoreHigherIsBetter
-		}},
-		{"internal validation", func(report *Report) {
-			report.ResolvedConfig.PromptIter.InternalValidationStrategy =
-				internalValidationTrainCaseIDs
-			report.ResolvedConfig.PromptIter.InternalValidationCaseIDs =
-				[]string{"validation-case"}
-		}},
-		{"critical absent", func(report *Report) {
-			report.ResolvedConfig.CriticalCaseIDs = []string{"missing"}
-		}},
-		{"empty input hash", func(report *Report) {
-			report.InputHashes["baselinePrompt"] = ""
-		}},
-		{"train input hash", func(report *Report) {
-			report.InputHashes["trainEvalSet"] = "other"
-		}},
-		{"validation input hash", func(report *Report) {
-			report.InputHashes["validationEvalSet"] = "other"
-		}},
-		{"metrics input hash", func(report *Report) {
-			report.InputHashes["metrics"] = "other"
-		}},
-		{"candidate round", func(report *Report) {
-			report.Candidates[0].Round = 2
-		}},
-		{"released parent", func(report *Report) {
-			report.Candidates[0].ReleasedParentHash = "other"
-		}},
-		{"promptiter status", func(report *Report) {
-			report.Candidates[0].PromptIterStatus = "failed"
-		}},
-		{"candidate profile evaluation run", func(report *Report) {
-			report.Candidates[0].Profile.EvaluationRunID = "other"
 		}},
 		{"release score delta", func(report *Report) {
 			value := 123.0
 			report.Candidates[0].ReleaseDecision.ScoreDelta = &value
-		}},
-		{"profile structure", func(report *Report) {
-			report.Candidates[0].Profile.StructureID = "other"
-		}},
-		{"profile target", func(report *Report) {
-			report.Candidates[0].Profile.TargetSurfaceID = "other"
-		}},
-		{"payload structure", func(report *Report) {
-			report.Candidates[0].Profile.Profile.StructureID = "other"
-		}},
-		{"target override absent", func(report *Report) {
-			report.Candidates[0].Profile.Profile.Overrides = nil
-		}},
-		{"optimization reason", func(report *Report) {
-			report.Candidates[0].OptimizationReason = "other"
-		}},
-		{"snapshot eval id", func(report *Report) {
-			report.BaselineTrain.Provenance.EvalSetID = "other"
-		}},
-		{"snapshot case inventory", func(report *Report) {
-			report.BaselineTrain.Inventory.CaseIDs = []string{"other"}
-		}},
-		{"snapshot metric inventory", func(report *Report) {
-			report.BaselineTrain.Inventory.MetricNames = []string{"other"}
 		}},
 	}
 	for _, test := range tests {

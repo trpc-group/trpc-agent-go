@@ -31,15 +31,6 @@ type attributionCorpus struct {
 	} `json:"cases"`
 }
 
-type toolMatrixCorpus struct {
-	Cases []struct {
-		ID       string     `json:"id"`
-		Expected []ToolCall `json:"expected"`
-		Actual   []ToolCall `json:"actual"`
-		Mismatch bool       `json:"mismatch"`
-	} `json:"cases"`
-}
-
 type gateCorpusCase struct {
 	ID                     string                    `json:"id"`
 	Direction              ScoreDirection            `json:"direction"`
@@ -68,18 +59,6 @@ type gateCorpusCase struct {
 
 type gateCorpus struct {
 	Cases []gateCorpusCase `json:"cases"`
-}
-
-type invalidDeltaCorpus struct {
-	Cases []struct {
-		ID               string           `json:"id"`
-		InventoryCaseIDs []string         `json:"inventoryCaseIds"`
-		BeforeCaseIDs    []string         `json:"beforeCaseIds"`
-		AfterCaseIDs     []string         `json:"afterCaseIds"`
-		BeforeStatus     EvaluationStatus `json:"beforeStatus"`
-		AfterStatus      EvaluationStatus `json:"afterStatus"`
-		WantError        string           `json:"wantError"`
-	} `json:"cases"`
 }
 
 func TestAttributionCorpusMeetsAccuracyAndAbstentionRequirements(t *testing.T) {
@@ -149,70 +128,32 @@ func TestAttributionCorpusMeetsAccuracyAndAbstentionRequirements(t *testing.T) {
 	require.GreaterOrEqual(t, accuracy, 0.75)
 }
 
-func TestInvalidDeltaCorpusFailsClosed(t *testing.T) {
-	var corpus invalidDeltaCorpus
-	readCorpus(t, "delta_invalid_corpus.json", &corpus)
-	require.NotEmpty(t, corpus.Cases)
-	policy := GatePolicy{
-		PrimaryMetric: "quality",
-		MetricDirections: map[string]ScoreDirection{
-			"quality": ScoreHigherIsBetter,
-		},
-		Epsilon: 1e-9,
-	}
-	for _, fixture := range corpus.Cases {
-		before := testSnapshot(
-			"before-"+fixture.ID,
-			fixture.InventoryCaseIDs,
-			[]string{"quality"},
-		)
-		after := testSnapshot(
-			"after-"+fixture.ID,
-			fixture.InventoryCaseIDs,
-			[]string{"quality"},
-		)
-		beforeCases := make([]CaseResult, 0, len(fixture.BeforeCaseIDs))
-		for _, caseID := range fixture.BeforeCaseIDs {
-			beforeCases = append(beforeCases, testCase(caseID, true, 1))
-		}
-		afterCases := make([]CaseResult, 0, len(fixture.AfterCaseIDs))
-		for _, caseID := range fixture.AfterCaseIDs {
-			afterCases = append(afterCases, testCase(caseID, true, 1))
-		}
-		setSnapshotCases(before, 1, beforeCases...)
-		setSnapshotCases(after, 1, afterCases...)
-		before.Status = fixture.BeforeStatus
-		after.Status = fixture.AfterStatus
-		_, err := CalculateDelta("vs_released", before, after, policy)
-		require.ErrorContains(
-			t,
-			err,
-			fixture.WantError,
-			"corpus case %s",
-			fixture.ID,
-		)
-	}
-}
-
 func TestSearchReleaseToolMatrixIsExhaustive(t *testing.T) {
-	var corpus toolMatrixCorpus
-	readCorpus(t, "tool_matrix.json", &corpus)
-	require.Len(t, corpus.Cases, 16)
-	for _, fixture := range corpus.Cases {
-		finding, ambiguous := compareTools(fixture.Expected, fixture.Actual)
-		require.Nil(t, ambiguous, "corpus case %s", fixture.ID)
-		if fixture.Mismatch {
-			require.NotNil(t, finding, "corpus case %s", fixture.ID)
-			require.Equal(
-				t,
-				FailureWrongTool,
-				finding.category,
-				"corpus case %s",
-				fixture.ID,
-			)
-			continue
+	trajectories := []struct {
+		name  string
+		tools []ToolCall
+	}{
+		{name: "none"},
+		{name: "search", tools: []ToolCall{{Sequence: 1, Name: "Search"}}},
+		{name: "release", tools: []ToolCall{{Sequence: 1, Name: "Release"}}},
+		{name: "search-release", tools: []ToolCall{
+			{Sequence: 1, Name: "Search"},
+			{Sequence: 2, Name: "Release"},
+		}},
+	}
+	for _, expected := range trajectories {
+		for _, actual := range trajectories {
+			t.Run(expected.name+"-"+actual.name, func(t *testing.T) {
+				finding, ambiguous := compareTools(expected.tools, actual.tools)
+				require.Nil(t, ambiguous)
+				if expected.name == actual.name {
+					require.Nil(t, finding)
+					return
+				}
+				require.NotNil(t, finding)
+				require.Equal(t, FailureWrongTool, finding.category)
+			})
 		}
-		require.Nil(t, finding, "corpus case %s", fixture.ID)
 	}
 }
 

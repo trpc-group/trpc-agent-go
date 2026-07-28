@@ -963,62 +963,8 @@ func validateRunConfig(config *RunConfig) error {
 		{name: "train", dataset: config.Train},
 		{name: "validation", dataset: config.Validation},
 	} {
-		name := item.name
-		dataset := item.dataset
-		if strings.TrimSpace(dataset.EvalSetID) == "" ||
-			strings.TrimSpace(dataset.EvalSetHash) == "" ||
-			strings.TrimSpace(dataset.MetricsHash) == "" {
-			return fmt.Errorf("%s dataset provenance is incomplete", name)
-		}
-		if len(dataset.CaseIDs) == 0 {
-			return fmt.Errorf("%s case inventory is empty", name)
-		}
-		if len(dataset.MetricNames) == 0 {
-			return fmt.Errorf("%s metric inventory is empty", name)
-		}
-		if err := validateUniqueNonempty(name+" case", dataset.CaseIDs); err != nil {
+		if err := validateResolvedDataset(item.name, item.dataset); err != nil {
 			return err
-		}
-		if err := validateUniqueNonempty(name+" metric", dataset.MetricNames); err != nil {
-			return err
-		}
-		if len(dataset.NormalizedInputHashes) != len(dataset.CaseIDs) {
-			return fmt.Errorf(
-				"%s normalized input hash inventory has %d entries, want %d",
-				name,
-				len(dataset.NormalizedInputHashes),
-				len(dataset.CaseIDs),
-			)
-		}
-		hashOwners := make(map[string]string, len(dataset.CaseIDs))
-		caseIDs := stringSet(dataset.CaseIDs)
-		for caseID := range dataset.NormalizedInputHashes {
-			if _, ok := caseIDs[caseID]; !ok {
-				return fmt.Errorf(
-					"%s normalized input hash has unexpected case %q",
-					name,
-					caseID,
-				)
-			}
-		}
-		for _, caseID := range dataset.CaseIDs {
-			inputHash := strings.TrimSpace(dataset.NormalizedInputHashes[caseID])
-			if inputHash == "" {
-				return fmt.Errorf(
-					"%s normalized input hash for case %q is missing",
-					name,
-					caseID,
-				)
-			}
-			if previous, exists := hashOwners[inputHash]; exists {
-				return fmt.Errorf(
-					"%s cases %q and %q have duplicate normalized input hashes",
-					name,
-					previous,
-					caseID,
-				)
-			}
-			hashOwners[inputHash] = caseID
 		}
 	}
 	if err := validateHeldoutExclusion(config.Train, config.Validation); err != nil {
@@ -1030,45 +976,21 @@ func validateRunConfig(config *RunConfig) error {
 	if config.Train.MetricsHash != config.Validation.MetricsHash {
 		return errors.New("train and validation metrics hashes differ")
 	}
-	metricNames := stringSet(config.Train.MetricNames)
-	if _, ok := metricNames[config.Gate.PrimaryMetric]; !ok {
-		return fmt.Errorf("primary metric %q is not in dataset inventory", config.Gate.PrimaryMetric)
+	if err := validateGateMetrics(config.Gate, config.Train.MetricNames); err != nil {
+		return err
 	}
-	if len(config.Gate.MetricDirections) != len(metricNames) {
-		return fmt.Errorf(
-			"metric direction inventory has %d entries, want %d",
-			len(config.Gate.MetricDirections),
-			len(metricNames),
-		)
+	if err := validateInternalValidation(
+		config.PromptIter,
+		config.Train,
+		config.Validation,
+	); err != nil {
+		return err
 	}
-	for metricName := range config.Gate.MetricDirections {
-		if _, ok := metricNames[metricName]; !ok {
-			return fmt.Errorf("metric direction has unexpected metric %q", metricName)
-		}
-	}
-	for _, metricName := range config.Train.MetricNames {
-		switch config.Gate.MetricDirections[metricName] {
-		case ScoreHigherIsBetter, ScoreLowerIsBetter:
-		default:
-			return fmt.Errorf("metric %q has no valid score direction", metricName)
-		}
-	}
-	validationCases := stringSet(config.Validation.CaseIDs)
-	for _, item := range []struct {
-		name    string
-		caseIDs []string
-	}{
-		{name: "critical case", caseIDs: config.CriticalCaseIDs},
-		{name: "hard failure case", caseIDs: config.HardFailureCaseIDs},
-	} {
-		if err := validateUniqueNonempty(item.name, item.caseIDs); err != nil {
-			return err
-		}
-		for _, caseID := range item.caseIDs {
-			if _, ok := validationCases[caseID]; !ok {
-				return fmt.Errorf("%s %q is not in held-out validation", item.name, caseID)
-			}
-		}
+	if err := validateConfiguredCases(RegressionConfig{
+		CriticalCaseIDs:    config.CriticalCaseIDs,
+		HardFailureCaseIDs: config.HardFailureCaseIDs,
+	}, config.Validation); err != nil {
+		return err
 	}
 	requiredInputHashes := []string{
 		"trainEvalSet",
@@ -1129,9 +1051,6 @@ func validateRunConfig(config *RunConfig) error {
 	}
 	if config.sourceConfigHash != expectedSourceHash {
 		return errors.New("source configuration does not match the loaded input binding")
-	}
-	if _, err := resolveInternalValidation(config.Train, config.PromptIter); err != nil {
-		return err
 	}
 	return nil
 }

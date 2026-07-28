@@ -9,6 +9,7 @@
 package regression
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -25,16 +26,46 @@ import (
 func TestReportJSONAndMarkdownShareCanonicalIdentity(t *testing.T) {
 	report := testReport(t)
 	report.BaselineTrain.Cases[0].ExpectNoTools = true
+	report.BaselineTrain.Attributions = []FailureAttribution{{
+		EvalCaseID:      report.BaselineTrain.Cases[0].CaseID,
+		MetricName:      "quality",
+		PrimaryCategory: FailureResponseMismatch,
+		Reason:          "final response differs from the expected answer",
+		Severity:        FailureSeverityP2,
+		Confidence:      0.9,
+	}}
 	jsonData, err := RenderJSON(report)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(jsonData, &decoded))
+	decoded := decodeReportManifest(t, jsonData)
 	require.Equal(t, report.SchemaVersion, decoded.SchemaVersion)
 	require.Equal(t, report.ReportID, decoded.ReportID)
 	require.Equal(t, report.RunID, decoded.RunID)
 	require.Equal(t, report.StopReason, decoded.StopReason)
 	require.Len(t, decoded.Candidates, len(report.Candidates))
-	require.True(t, decoded.BaselineTrain.Cases[0].ExpectNoTools)
+	require.Contains(t, decoded.Profiles, decoded.ProfileRefs.Initial)
+	require.Contains(t, decoded.Profiles, decoded.Candidates[0].ProfileRef)
+	require.NotNil(t, decoded.Candidates[0].DeltaRefs)
+	require.Equal(
+		t,
+		decoded.Candidates[0].DeltaRefs.VsInitial,
+		decoded.Candidates[0].DeltaRefs.VsSearchParent,
+	)
+	delta, ok := decoded.Deltas[decoded.Candidates[0].DeltaRefs.VsReleased]
+	require.True(t, ok)
+	require.Equal(t, decoded.BaselineSnapshotRefs.Validation, delta.BeforeSnapshotRef)
+	require.Equal(
+		t,
+		decoded.Candidates[0].SnapshotRefs.Validation,
+		delta.AfterSnapshotRef,
+	)
+	baselineTrain := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	)
+	require.True(t, baselineTrain.Cases[0].ExpectNoTools)
+	require.NotEmpty(t, baselineTrain.Cases[0].TraceRef)
+	require.NotEmpty(t, baselineTrain.Cases[0].TraceHash)
 
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
@@ -46,18 +77,291 @@ func TestReportJSONAndMarkdownShareCanonicalIdentity(t *testing.T) {
 	require.Contains(t, text, "Release: ACCEPTED")
 	require.Contains(t, text, "vs_initial")
 	require.Contains(t, text, report.ReleasedProfile.Prompt)
-	require.Contains(t, text, "| quality | 0.800000 |")
-	require.Contains(t, text, "Observed tools:")
-	require.Contains(t, text, "Expected tool trajectory: `[]` (explicit no-tool requirement)")
-	require.Contains(t, text, "Trace:")
+	require.Contains(t, text, "quality=0.800000")
+	require.Contains(t, text, "Failed-case attribution")
+	require.Contains(t, text, string(FailureResponseMismatch))
+	require.Contains(t, text, "final response differs from the expected answer")
+	require.Contains(t, text, "## Configuration and Provenance")
+	require.Contains(t, text, "Model config")
+	require.Contains(
+		t,
+		text,
+		"hash-bound trace sidecars retain sanitized and bounded audit evidence",
+	)
+	require.NotContains(t, text, "retains complete")
+	require.NotContains(t, text, "Final response:")
+	require.NotContains(t, text, "Expected response:")
+	require.NotContains(t, text, "Structured output:")
+	require.NotContains(t, text, "Observed tools:")
+	require.NotContains(t, text, "Expected tools:")
+	require.NotContains(t, text, "Trace:")
+}
+
+func TestManifestResourceProjectionPreservesKnownZeroAndUnavailable(t *testing.T) {
+	projected := projectResourceUsage(ResourceUsage{
+		ModelCalls: Count{Available: true},
+		InputTokens: Count{
+			Available: true,
+			Value:     12,
+		},
+		MonetaryCost: Amount{
+			Available: true,
+			Value:     1.25,
+			Unit:      "USD",
+		},
+	})
+	require.NotNil(t, projected.ModelCalls)
+	require.Zero(t, *projected.ModelCalls)
+	require.NotNil(t, projected.InputTokens)
+	require.Equal(t, int64(12), *projected.InputTokens)
+	require.Nil(t, projected.OutputTokens)
+	require.Nil(t, projected.LatencyMS)
+	require.Equal(
+		t,
+		&reportManifestAmount{Value: 1.25, Unit: "USD"},
+		projected.MonetaryCost,
+	)
 }
 
 func TestRenderMarkdownUsesDynamicFence(t *testing.T) {
 	report := testReport(t)
-	report.BaselineTrain.Cases[0].FinalResponse = "Explain this:\n```json\n{}\n```"
+	report.Status = PipelineRunFailed
+	report.StopReason = StopNecessaryRunFailed
+	report.InitialProfile.Prompt = "Explain this:\n```json\n{}\n```"
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), "````")
+}
+
+func TestRenderMarkdownIncludesRejectedIntermediateCandidatePrompt(t *testing.T) {
+	report := testReport(t)
+	report.Status = PipelineRunFailed
+	report.StopReason = StopNecessaryRunFailed
+	intermediatePrompt := "rejected-intermediate-prompt\napi_key=secret\n" +
+		strings.Repeat("x", defaultPromptTextLimit+64) +
+		"rejected-intermediate-tail-canary"
+	intermediate := testProfileRecord(t, ProfileCandidate, intermediatePrompt)
+	for _, lifecycle := range []ProfileRecord{
+		report.InitialProfile,
+		report.SearchProfile,
+		report.ReleasedProfile,
+	} {
+		require.NotEqual(t, intermediate.Hash, lifecycle.Hash)
+	}
+
+	rejected := report.Candidates[0]
+	rejected.Round = 2
+	rejected.ID = "rejected-intermediate"
+	rejected.Profile = &intermediate
+	rejected.Patches = []PatchRecord{{
+		SurfaceID: intermediate.TargetSurfaceID,
+		Value:     intermediate.Prompt,
+		Reason:    "candidate rejected by both policies",
+	}}
+	rejected.SearchDecision = Decision{
+		Status:  DecisionRejected,
+		Reasons: []string{"search rejected"},
+	}
+	rejected.ReleaseDecision = Decision{
+		Status:  DecisionRejected,
+		Reasons: []string{"release rejected"},
+	}
+	report.Candidates = append(report.Candidates, rejected)
+
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+	text := string(markdown)
+	start := strings.Index(text, "### Round 2 — rejected-intermediate")
+	require.NotEqual(t, -1, start)
+	endOffset := strings.Index(text[start:], "\n## Configuration and Provenance")
+	require.NotEqual(t, -1, endOffset)
+	section := text[start : start+endOffset]
+	require.Contains(t, section, "#### Candidate prompt")
+	require.Contains(t, section, "rejected-intermediate-prompt")
+	require.Contains(t, section, "api_key=[REDACTED]")
+	require.NotContains(t, section, "secret")
+	require.NotContains(t, section, "rejected-intermediate-tail-canary")
+}
+
+func TestValidateRenderedMarkdownRequiresExactOrderedUniqueHeadings(t *testing.T) {
+	report := testReport(t)
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+	valid := string(markdown)
+
+	tests := []struct {
+		name      string
+		markdown  string
+		wantError string
+	}{
+		{
+			name: "wrong heading level",
+			markdown: strings.Replace(
+				valid,
+				"## Prompt State",
+				"### Prompt State",
+				1,
+			),
+			wantError: `missing exact heading "## Prompt State"`,
+		},
+		{
+			name: "heading has suffix",
+			markdown: strings.Replace(
+				valid,
+				"## Candidates",
+				"## Candidates extra",
+				1,
+			),
+			wantError: `missing exact heading "## Candidates"`,
+		},
+		{
+			name: "duplicate heading",
+			markdown: strings.Replace(
+				valid,
+				"## Baseline Evaluations",
+				"## Prompt State\n\n## Baseline Evaluations",
+				1,
+			),
+			wantError: `heading "## Prompt State" appears 2 times`,
+		},
+		{
+			name: "headings out of order",
+			markdown: func() string {
+				swapped := strings.Replace(
+					valid,
+					"## Configuration and Provenance",
+					"## HEADING SWAP PLACEHOLDER",
+					1,
+				)
+				swapped = strings.Replace(
+					swapped,
+					"## Cumulative Resources",
+					"## Configuration and Provenance",
+					1,
+				)
+				return strings.Replace(
+					swapped,
+					"## HEADING SWAP PLACEHOLDER",
+					"## Cumulative Resources",
+					1,
+				)
+			}(),
+			wantError: `heading "## Cumulative Resources" is out of order`,
+		},
+		{
+			name: "code block cannot spoof heading",
+			markdown: strings.Replace(
+				valid,
+				"## Artifacts",
+				"### Artifacts",
+				1,
+			) + "\n```\n## Artifacts\n```\n",
+			wantError: `missing exact heading "## Artifacts"`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateRenderedMarkdown([]byte(test.markdown), report)
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
+func TestValidateRenderedMarkdownRequiresCanonicalUniqueHeaderFields(t *testing.T) {
+	report := testReport(t)
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+	valid := string(markdown)
+	fields := []string{
+		fmt.Sprintf("- Schema: `%s`", markdownInline(report.SchemaVersion)),
+		fmt.Sprintf("- Report: `%s`", markdownInline(report.ReportID)),
+		fmt.Sprintf("- Run: `%s`", markdownInline(report.RunID)),
+	}
+
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			spoofed := strings.Replace(valid, field, field+" extra", 1) +
+				"\n```\n" + field + "\n```\n"
+			err := validateRenderedMarkdown([]byte(spoofed), report)
+			require.ErrorContains(t, err, "missing exact header field")
+		})
+	}
+
+	duplicated := strings.Replace(valid, fields[1], fields[1]+"\n"+fields[1], 1)
+	err = validateRenderedMarkdown([]byte(duplicated), report)
+	require.ErrorContains(t, err, "header field")
+	require.ErrorContains(t, err, "appears 2 times")
+}
+
+func TestValidateMarkdownHeadingSequenceChecksFenceClosures(t *testing.T) {
+	const heading = "# Required"
+
+	t.Run("non-whitespace suffix does not close fence", func(t *testing.T) {
+		data := "```\n```not-a-close\n" + heading + "\n```\n"
+		err := validateMarkdownHeadingSequence([]byte(data), []string{heading})
+		require.ErrorContains(t, err, "missing exact heading")
+	})
+
+	t.Run("whitespace suffix closes fence", func(t *testing.T) {
+		data := "```\ncontent\n``` \t\n" + heading + "\n"
+		require.NoError(t, validateMarkdownHeadingSequence([]byte(data), []string{heading}))
+	})
+
+	t.Run("unclosed fence at EOF", func(t *testing.T) {
+		data := heading + "\n```\ncontent\n"
+		err := validateMarkdownHeadingSequence([]byte(data), []string{heading})
+		require.ErrorContains(t, err, "unclosed fenced code block")
+	})
+}
+
+func TestRenderMarkdownOmitsRawCaseAuditPayloads(t *testing.T) {
+	report := testReport(t)
+	result := &report.BaselineTrain.Cases[0]
+	result.FinalResponse = "raw-final-response-canary"
+	result.ExpectedResponse = "raw-expected-response-canary"
+	result.StructuredOutput = `{"canary":"raw-structured-output-canary"}`
+	result.ExpectStructured = true
+	result.Route = "raw-route-canary"
+	result.ExpectedFacts = []string{"raw-expected-fact-canary"}
+	result.ToolTrajectory[0].Arguments = map[string]any{
+		"canary": "raw-tool-arguments-canary",
+	}
+	result.ToolTrajectory[0].Result = map[string]any{
+		"canary": "raw-tool-result-canary",
+	}
+	result.Trace[0].Input = "raw-trace-input-canary"
+	result.Trace[0].Output = "raw-trace-output-canary"
+	report.BaselineTrain.Attributions = []FailureAttribution{{
+		EvalCaseID:      result.CaseID,
+		MetricName:      result.PrimaryMetric,
+		PrimaryCategory: FailureResponseMismatch,
+		Reason:          "concise attribution reason",
+		Severity:        FailureSeverityP2,
+		Confidence:      0.9,
+		Evidence: []EvidenceReference{{
+			Summary: "raw-attribution-evidence-canary",
+		}},
+	}}
+
+	markdown, err := RenderMarkdown(report)
+	require.NoError(t, err)
+	text := string(markdown)
+	require.Contains(t, text, result.CaseID)
+	require.Contains(t, text, "concise attribution reason")
+	for _, omitted := range []string{
+		"raw-final-response-canary",
+		"raw-expected-response-canary",
+		"raw-structured-output-canary",
+		"raw-route-canary",
+		"raw-expected-fact-canary",
+		"raw-tool-arguments-canary",
+		"raw-tool-result-canary",
+		"raw-trace-input-canary",
+		"raw-trace-output-canary",
+		"raw-attribution-evidence-canary",
+	} {
+		require.NotContains(t, text, omitted)
+	}
 }
 
 func TestRedactAndBoundEvidence(t *testing.T) {
@@ -80,9 +384,12 @@ func TestRenderJSONRedactsAndBoundsPersistedEvidence(t *testing.T) {
 
 	data, err := RenderJSON(report)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	result := decoded.BaselineTrain.Cases[0]
+	decoded := decodeReportManifest(t, data)
+	result := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	).Cases[0]
 	require.LessOrEqual(t, len(result.FinalResponse), defaultMarkdownTextLimit+3)
 	arguments, ok := result.ToolTrajectory[0].Arguments.(map[string]any)
 	require.True(t, ok)
@@ -90,7 +397,7 @@ func TestRenderJSONRedactsAndBoundsPersistedEvidence(t *testing.T) {
 	require.LessOrEqual(t, len(arguments["payload"].(string)), defaultMarkdownTextLimit+3)
 	require.NotContains(t, string(data), "private")
 	require.NotContains(t, string(data), "secret")
-	require.Equal(t, report.InitialProfile.Hash, decoded.InitialProfile.Hash)
+	require.Equal(t, report.InitialProfile.Hash, decoded.ProfileRefs.Initial)
 }
 
 func TestRenderRedactsCredentialContainersPluralsAndSuffixes(t *testing.T) {
@@ -139,18 +446,23 @@ func TestRenderRedactsCredentialContainersPluralsAndSuffixes(t *testing.T) {
 			require.NotContains(t, rendered, secret)
 		}
 		require.Contains(t, rendered, "[REDACTED]")
-		require.Contains(t, rendered, "visible")
 	}
+	require.Contains(t, string(jsonData), "visible")
+	require.NotContains(t, string(markdownData), "visible")
 
-	var decoded Report
-	require.NoError(t, json.Unmarshal(jsonData, &decoded))
+	decoded := decodeReportManifest(t, jsonData)
 	require.Equal(t, "[REDACTED]", decoded.Runtime.Model["apiKeys"])
 	require.Equal(t, "[REDACTED]", decoded.Runtime.Model["openai_api_key"])
 	require.Equal(t, "[REDACTED]", decoded.Runtime.Model["credentials"])
 	require.Equal(t, float64(4096), decoded.Runtime.Model["maxTokens"])
+	baselineTrain := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	)
 	require.Contains(
 		t,
-		decoded.BaselineTrain.Cases[0].FinalResponse,
+		baselineTrain.Cases[0].FinalResponse,
 		`"credentials":"[REDACTED]"`,
 	)
 }
@@ -179,11 +491,14 @@ func TestRenderJSONBoundsEvidenceCollectionsAndNestedArguments(t *testing.T) {
 
 	data, err := RenderJSON(report)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	result := decoded.BaselineTrain.Cases[0]
+	decoded := decodeReportManifest(t, data)
+	result := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	).Cases[0]
 	require.Len(t, result.ToolTrajectory, 2)
-	require.Len(t, decoded.BaselineTrain.Attributions[0].Evidence, 2)
+	require.Len(t, result.Attributions[0].Evidence, 2)
 	arguments, ok := result.ToolTrajectory[0].Arguments.(map[string]any)
 	require.True(t, ok)
 	require.Len(t, arguments["a_items"], 2)
@@ -214,12 +529,8 @@ func TestRenderJSONDoesNotTruncateCoreCollectionsAt1024(t *testing.T) {
 			},
 		}
 	}
-	report.BaselineTrain.Inventory.CaseIDs = make([]string, collectionSize)
-	report.BaselineTrain.Inventory.MetricNames = make([]string, collectionSize)
 	report.BaselineTrain.Cases = make([]CaseResult, collectionSize)
 	for i := 0; i < collectionSize; i++ {
-		report.BaselineTrain.Inventory.CaseIDs[i] = fmt.Sprintf("case-%04d", i)
-		report.BaselineTrain.Inventory.MetricNames[i] = fmt.Sprintf("metric-%04d", i)
 		report.BaselineTrain.Cases[i] = CaseResult{
 			EvalSetID: "train-set",
 			CaseID:    fmt.Sprintf("case-%04d", i),
@@ -235,13 +546,15 @@ func TestRenderJSONDoesNotTruncateCoreCollectionsAt1024(t *testing.T) {
 
 	data, err := RenderJSON(report)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(data, &decoded))
+	decoded := decodeReportManifest(t, data)
+	baselineTrain := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	)
 	require.Len(t, decoded.Candidates, collectionSize)
-	require.Len(t, decoded.BaselineTrain.Cases, collectionSize)
-	require.Len(t, decoded.BaselineTrain.Cases[0].Metrics, collectionSize)
-	require.Len(t, decoded.BaselineTrain.Inventory.CaseIDs, collectionSize)
-	require.Len(t, decoded.BaselineTrain.Inventory.MetricNames, collectionSize)
+	require.Len(t, baselineTrain.Cases, collectionSize)
+	require.Len(t, baselineTrain.Cases[0].Metrics, collectionSize)
 	require.NotContains(t, string(data), "__report_truncated__")
 }
 
@@ -252,14 +565,22 @@ func TestRenderedProfileHashRetainsPreSanitizationEvaluationIdentity(t *testing.
 
 	data, err := RenderJSON(report)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	rendered := decoded.Candidates[0].Profile
-	require.Equal(t, profile.Hash, rendered.Hash)
+	decoded := decodeReportManifest(t, data)
+	profileRef := decoded.Candidates[0].ProfileRef
+	rendered, ok := decoded.Profiles[profileRef]
+	require.True(t, ok)
+	require.Equal(t, profile.Hash, profileRef)
 	require.NotContains(t, rendered.Prompt, "secret")
-	sanitizedPayloadHash, err := ProfileFingerprint(rendered.Profile)
+	prompt := rendered.Prompt
+	sanitizedPayloadHash, err := ProfileFingerprint(&promptiter.Profile{
+		StructureID: rendered.StructureID,
+		Overrides: []promptiter.SurfaceOverride{{
+			SurfaceID: rendered.TargetSurfaceID,
+			Value:     astructure.SurfaceValue{Text: &prompt},
+		}},
+	})
 	require.NoError(t, err)
-	require.NotEqual(t, rendered.Hash, sanitizedPayloadHash)
+	require.NotEqual(t, profileRef, sanitizedPayloadHash)
 
 	markdown, err := RenderMarkdown(report)
 	require.NoError(t, err)
@@ -285,9 +606,63 @@ func TestWriteArtifactsValidatesPathsAndPublishesCanonicalJSONLast(t *testing.T)
 	}
 	jsonData, err := os.ReadFile(jsonPath)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(jsonData, &decoded))
+	decoded := decodeReportManifest(t, jsonData)
 	require.Equal(t, report.ReportID, decoded.ReportID)
+	require.NotContains(t, string(jsonData), `"trace":`)
+	require.NotContains(t, string(jsonData), `"traceArtifacts"`)
+	traceDir := filepath.Join(filepath.Dir(jsonPath), "traces")
+	traceDirInfo, err := os.Stat(traceDir)
+	require.NoError(t, err)
+	require.Equal(t, os.FileMode(0o700), traceDirInfo.Mode().Perm())
+	traceHashes := make(map[string]string)
+	passingEvidenceSeen := false
+	for _, snapshot := range decoded.Snapshots {
+		for _, result := range snapshot.Cases {
+			if result.TraceRef == "" {
+				continue
+			}
+			tracePath := filepath.Join(
+				filepath.Dir(jsonPath),
+				filepath.FromSlash(result.TraceRef),
+			)
+			traceData, readErr := os.ReadFile(tracePath)
+			require.NoError(t, readErr)
+			var sidecar reportManifestTraceSidecar
+			require.NoError(t, json.Unmarshal(traceData, &sidecar))
+			require.Equal(
+				t,
+				result.TraceHash,
+				fmt.Sprintf("%x", sha256.Sum256(traceData)),
+			)
+			traceInfo, statErr := os.Stat(tracePath)
+			require.NoError(t, statErr)
+			require.Equal(t, os.FileMode(0o600), traceInfo.Mode().Perm())
+			traceHashes[result.TraceRef] = result.TraceHash
+			if result.Status == "passed" {
+				require.NotNil(t, sidecar.PassingCaseEvidence)
+				require.Equal(t, result.CaseID, sidecar.PassingCaseEvidence.CaseID)
+				require.NotEmpty(t, sidecar.PassingCaseEvidence.FinalResponse)
+				require.NotEmpty(t, sidecar.PassingCaseEvidence.ExpectedResponse)
+				require.NotEmpty(t, sidecar.PassingCaseEvidence.ToolTrajectory)
+				require.Empty(t, sidecar.PassingCaseEvidence.Trace)
+				passingEvidenceSeen = true
+			} else {
+				require.Nil(t, sidecar.PassingCaseEvidence)
+			}
+		}
+	}
+	require.NotEmpty(t, traceHashes)
+	require.True(t, passingEvidenceSeen)
+	baselineTrain := manifestSnapshot(
+		t,
+		decoded,
+		decoded.BaselineSnapshotRefs.Train,
+	)
+	require.Equal(
+		t,
+		traceHashes[baselineTrain.Cases[0].TraceRef],
+		baselineTrain.Cases[0].TraceHash,
+	)
 	markdown, err := os.ReadFile(markdownPath)
 	require.NoError(t, err)
 	require.Contains(t, string(markdown), report.ReportID)
@@ -295,6 +670,116 @@ func TestWriteArtifactsValidatesPathsAndPublishesCanonicalJSONLast(t *testing.T)
 	err = WriteArtifacts(report, jsonPath, jsonPath)
 	require.ErrorContains(t, err, "different")
 	require.ErrorContains(t, WriteArtifacts(nil, jsonPath, markdownPath), "report is nil")
+}
+
+func TestWriteArtifactsRejectsTamperedContentAddressedTrace(t *testing.T) {
+	report := testReport(t)
+	_, traces, err := renderJSONBundle(report)
+	require.NoError(t, err)
+	require.NotEmpty(t, traces)
+
+	dir := t.TempDir()
+	traceDir := filepath.Join(dir, "traces")
+	require.NoError(t, os.Mkdir(traceDir, 0o700))
+	tracePath := filepath.Join(dir, filepath.FromSlash(traces[0].Ref))
+	require.NoError(t, os.WriteFile(tracePath, []byte("tampered"), 0o600))
+
+	jsonPath := filepath.Join(dir, "optimization_report.json")
+	markdownPath := filepath.Join(dir, "optimization_report.md")
+	err = WriteArtifacts(report, jsonPath, markdownPath)
+	require.ErrorContains(t, err, "different bytes")
+	require.NoFileExists(t, jsonPath)
+	require.NoFileExists(t, markdownPath)
+	require.Equal(t, []byte("tampered"), mustReadFile(t, tracePath))
+}
+
+func TestWriteArtifactsSanitizesPassingCaseSidecarEvidence(t *testing.T) {
+	report := testReport(t)
+	passing := &report.Candidates[0].Validation.Cases[0]
+	passing.FinalResponse = `{"api_key":"passing-secret","answer":"visible"}`
+	passing.ToolTrajectory[0].Arguments = map[string]any{
+		"authorization": "Bearer private-token",
+	}
+
+	dir := t.TempDir()
+	jsonPath := filepath.Join(dir, "optimization_report.json")
+	require.NoError(
+		t,
+		WriteArtifacts(
+			report,
+			jsonPath,
+			filepath.Join(dir, "optimization_report.md"),
+		),
+	)
+	manifest := decodeReportManifest(t, mustReadFile(t, jsonPath))
+	candidateSnapshot := manifestSnapshot(
+		t,
+		manifest,
+		manifest.Candidates[0].SnapshotRefs.Validation,
+	)
+	tracePath := filepath.Join(
+		dir,
+		filepath.FromSlash(candidateSnapshot.Cases[0].TraceRef),
+	)
+	sidecar := mustReadFile(t, tracePath)
+	require.NotContains(t, string(sidecar), "passing-secret")
+	require.NotContains(t, string(sidecar), "private-token")
+	require.Contains(t, string(sidecar), "[REDACTED]")
+	require.Contains(t, string(sidecar), "visible")
+}
+
+func TestWriteArtifactsRejectsSymlinkTraceDirectory(t *testing.T) {
+	report := testReport(t)
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "output")
+	realTraceDir := filepath.Join(root, "real-traces")
+	require.NoError(t, os.Mkdir(outputDir, 0o700))
+	require.NoError(t, os.Mkdir(realTraceDir, 0o700))
+	if err := os.Symlink(realTraceDir, filepath.Join(outputDir, "traces")); err != nil {
+		t.Skipf("directory symlinks are unavailable: %v", err)
+	}
+
+	jsonPath := filepath.Join(outputDir, "optimization_report.json")
+	markdownPath := filepath.Join(outputDir, "optimization_report.md")
+	err := WriteArtifacts(report, jsonPath, markdownPath)
+	require.ErrorContains(t, err, "trace output directory must be a real directory")
+	require.NoFileExists(t, jsonPath)
+	require.NoFileExists(t, markdownPath)
+	entries, readErr := os.ReadDir(realTraceDir)
+	require.NoError(t, readErr)
+	require.Empty(t, entries)
+}
+
+func TestWriteArtifactsRejectsTraceDirectoryOutputCollision(t *testing.T) {
+	tests := []struct {
+		name         string
+		jsonName     string
+		markdownName string
+	}{
+		{
+			name:         "JSON output",
+			jsonName:     "traces",
+			markdownName: "optimization_report.md",
+		},
+		{
+			name:         "Markdown output",
+			jsonName:     "optimization_report.json",
+			markdownName: "traces",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			jsonPath := filepath.Join(dir, test.jsonName)
+			markdownPath := filepath.Join(dir, test.markdownName)
+
+			err := WriteArtifacts(testReport(t), jsonPath, markdownPath)
+			require.ErrorContains(t, err, "trace output directory collides")
+			require.NoFileExists(t, jsonPath)
+			require.NoFileExists(t, markdownPath)
+			require.NoDirExists(t, filepath.Join(dir, "traces"))
+		})
+	}
 }
 
 func TestWriteArtifactsRejectsRelativeAbsoluteDestinationAlias(t *testing.T) {
@@ -375,8 +860,7 @@ func TestWriteUsesResolvedOutputNames(t *testing.T) {
 
 	jsonData, err := os.ReadFile(jsonPath)
 	require.NoError(t, err)
-	var decoded Report
-	require.NoError(t, json.Unmarshal(jsonData, &decoded))
+	decoded := decodeReportManifest(t, jsonData)
 	expected := ArtifactReferences{JSON: jsonPath, Markdown: markdownPath}
 	require.Equal(t, expected, decoded.Artifacts)
 	require.Equal(t, report.ResolvedConfig.Output, decoded.ResolvedConfig.Output)
@@ -478,6 +962,13 @@ func TestWriteArtifactsRestrictsOverwrittenFilesWithoutChangingExistingDirectory
 		require.NoError(t, statErr)
 		require.Equal(t, os.FileMode(0o600), info.Mode().Perm())
 	}
+}
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	return data
 }
 
 func testDirectoryCaseInsensitive(t *testing.T, dir string) bool {
@@ -668,21 +1159,21 @@ func TestRenderSuccessfulReportRejectsIncompleteOrForgedAuditBindings(t *testing
 			mutate: func(report *Report) {
 				report.Candidates[0].Deltas.VsInitial.Comparison = "forged"
 			},
-			wantError: "comparison",
+			wantError: "does not match its bound snapshots",
 		},
 		{
 			name: "delta before profile hash",
 			mutate: func(report *Report) {
 				report.Candidates[0].Deltas.VsSearchParent.BeforeProfileHash = "forged"
 			},
-			wantError: "before profile hash",
+			wantError: "does not match its bound snapshots",
 		},
 		{
 			name: "delta aggregate validated",
 			mutate: func(report *Report) {
 				report.Candidates[0].Deltas.VsReleased.NewlyPassing = 0
 			},
-			wantError: "aggregate change counts",
+			wantError: "does not match its bound snapshots",
 		},
 		{
 			name: "accepted search transition",
@@ -841,6 +1332,30 @@ func TestRenderAllowsCompletedEvaluationWithNotEvaluableGateAndNoPointerUpdates(
 	candidate.Transition.ReleasedAfter = candidate.Profile.Hash
 	_, err = RenderJSON(report)
 	require.ErrorContains(t, err, "not-evaluable decision that updates a profile pointer")
+}
+
+func decodeReportManifest(t *testing.T, data []byte) reportManifest {
+	t.Helper()
+	var manifest reportManifest
+	require.NoError(t, json.Unmarshal(data, &manifest))
+	require.Equal(
+		t,
+		reportArtifactFormatVersion,
+		manifest.ArtifactFormatVersion,
+	)
+	return manifest
+}
+
+func manifestSnapshot(
+	t *testing.T,
+	manifest reportManifest,
+	ref string,
+) reportManifestSnapshot {
+	t.Helper()
+	require.NotEmpty(t, ref)
+	snapshot, ok := manifest.Snapshots[ref]
+	require.Truef(t, ok, "snapshot ref %q is absent", ref)
+	return snapshot
 }
 
 func testReport(t *testing.T) *Report {

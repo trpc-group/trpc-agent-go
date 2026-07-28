@@ -9,6 +9,7 @@
 package regression
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,24 +40,35 @@ var (
 	)
 )
 
-// RenderJSON renders the complete, sanitized machine-readable report.
+// RenderJSON renders only the sanitized machine-readable manifest; it does not
+// return the referenced sidecar bytes. Use Write or WriteArtifacts to publish a
+// complete bundle.
 func RenderJSON(report *Report) ([]byte, error) {
-	sanitized, err := sanitizedReport(report)
-	if err != nil {
-		return nil, err
-	}
-	data, err := json.MarshalIndent(sanitized, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshal report: %w", err)
-	}
-	data = append(data, '\n')
-	if err := validateRenderedJSON(data, sanitized); err != nil {
-		return nil, err
-	}
-	return data, nil
+	data, _, err := renderJSONBundle(report)
+	return data, err
 }
 
-// RenderMarkdown renders a complete, sanitized human-readable audit report.
+func renderJSONBundle(report *Report) ([]byte, []traceArtifact, error) {
+	sanitized, err := sanitizedReport(report)
+	if err != nil {
+		return nil, nil, err
+	}
+	manifest, traces, err := buildReportManifest(sanitized)
+	if err != nil {
+		return nil, nil, fmt.Errorf("build report manifest: %w", err)
+	}
+	data, err := marshalReportManifest(manifest)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateRenderedManifest(data, manifest); err != nil {
+		return nil, nil, err
+	}
+	return data, traces, nil
+}
+
+// RenderMarkdown renders a concise, sanitized human-readable summary. The JSON
+// manifest and its trace sidecars form the canonical machine-readable bundle.
 func RenderMarkdown(report *Report) ([]byte, error) {
 	sanitized, err := sanitizedReport(report)
 	if err != nil {
@@ -73,6 +85,14 @@ func RenderMarkdown(report *Report) ([]byte, error) {
 	fmt.Fprintf(&out, "- Stop reason: `%s`\n", markdownInline(string(sanitized.StopReason)))
 	writeDecision(&out, "Final", sanitized.FinalDecision)
 	writeErrors(&out, sanitized.Errors)
+
+	fmt.Fprintln(&out)
+	fmt.Fprintln(
+		&out,
+		"> This Markdown is a review summary. The JSON manifest and its hash-bound "+
+			"trace sidecars retain sanitized and bounded audit evidence, including "+
+			"responses, structured outputs, tool trajectories, traces, and rubric details.",
+	)
 
 	fmt.Fprintln(&out)
 	fmt.Fprintln(&out, "## Prompt State")
@@ -102,12 +122,8 @@ func RenderMarkdown(report *Report) ([]byte, error) {
 	}
 
 	fmt.Fprintln(&out)
-	fmt.Fprintln(&out, "## Final Released Prompt")
-	writeCodeBlock(&out, sanitized.ReleasedProfile.Prompt, "")
-
-	fmt.Fprintln(&out)
-	fmt.Fprintln(&out, "## Resolved Configuration")
-	writeJSONBlock(&out, sanitized.ResolvedConfig)
+	fmt.Fprintln(&out, "## Configuration and Provenance")
+	writeResolvedConfig(&out, sanitized.ResolvedConfig)
 
 	fmt.Fprintln(&out)
 	fmt.Fprintln(&out, "### Input hashes")
@@ -115,7 +131,7 @@ func RenderMarkdown(report *Report) ([]byte, error) {
 
 	fmt.Fprintln(&out)
 	fmt.Fprintln(&out, "### Runtime")
-	writeJSONBlock(&out, sanitized.Runtime)
+	writeRuntime(&out, sanitized.Runtime)
 
 	fmt.Fprintln(&out)
 	fmt.Fprintln(&out, "## Cumulative Resources")
@@ -133,9 +149,10 @@ func RenderMarkdown(report *Report) ([]byte, error) {
 	return data, nil
 }
 
-// WriteArtifacts publishes Markdown first and canonical JSON last. Each file is
-// fully written and closed in a temporary file in its destination directory
-// before the first rename.
+// WriteArtifacts publishes trace sidecars first, Markdown second, and canonical
+// JSON last. Each file is fully written and closed in a temporary file in its
+// destination directory before publication. Callers must serialize writers
+// that target the same artifact paths.
 func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	if report == nil {
 		return errors.New("report is nil")
@@ -151,7 +168,7 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 
 	reportCopy := *report
 	reportCopy.Artifacts = ArtifactReferences{JSON: jsonPath, Markdown: markdownPath}
-	jsonData, err := RenderJSON(&reportCopy)
+	jsonData, traceArtifacts, err := renderJSONBundle(&reportCopy)
 	if err != nil {
 		return fmt.Errorf("render JSON report: %w", err)
 	}
@@ -172,6 +189,15 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	if err := validateArtifactDestinations(jsonPath, markdownPath); err != nil {
 		return err
 	}
+	preparedTraces, err := prepareTraceArtifacts(
+		jsonPath,
+		markdownPath,
+		traceArtifacts,
+	)
+	if err != nil {
+		return fmt.Errorf("prepare trace artifacts: %w", err)
+	}
+	defer cleanupPreparedTraceArtifacts(preparedTraces)
 	markdownTemp, err := writeClosedTemp(markdownPath, markdownData)
 	if err != nil {
 		return fmt.Errorf("prepare Markdown artifact: %w", err)
@@ -183,6 +209,9 @@ func WriteArtifacts(report *Report, jsonPath, markdownPath string) error {
 	}
 	defer os.Remove(jsonTemp)
 
+	if err := publishTraceArtifacts(preparedTraces); err != nil {
+		return fmt.Errorf("publish trace artifacts: %w", err)
+	}
 	if err := os.Rename(markdownTemp, markdownPath); err != nil {
 		return fmt.Errorf("publish Markdown artifact: %w", err)
 	}
@@ -254,6 +283,158 @@ func validateArtifactDestinations(jsonPath, markdownPath string) error {
 		return errors.New("JSON and Markdown output paths must be different")
 	}
 	return nil
+}
+
+type preparedTraceArtifact struct {
+	target string
+	temp   string
+	data   []byte
+}
+
+func prepareTraceArtifacts(
+	jsonPath string,
+	markdownPath string,
+	artifacts []traceArtifact,
+) ([]preparedTraceArtifact, error) {
+	if len(artifacts) == 0 {
+		return nil, nil
+	}
+	traceDir := filepath.Join(filepath.Dir(jsonPath), "traces")
+	for _, output := range []struct {
+		label string
+		path  string
+	}{
+		{label: "JSON", path: jsonPath},
+		{label: "Markdown", path: markdownPath},
+	} {
+		if err := validateArtifactDestinations(traceDir, output.path); err != nil {
+			return nil, fmt.Errorf(
+				"trace output directory collides with %s output: %w",
+				output.label,
+				err,
+			)
+		}
+	}
+	if err := os.MkdirAll(traceDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create trace output directory: %w", err)
+	}
+	traceDirInfo, err := os.Lstat(traceDir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect trace output directory: %w", err)
+	}
+	if traceDirInfo.Mode()&os.ModeSymlink != 0 || !traceDirInfo.IsDir() {
+		return nil, errors.New("trace output directory must be a real directory")
+	}
+
+	prepared := make([]preparedTraceArtifact, 0, len(artifacts))
+	seen := make(map[string]struct{}, len(artifacts))
+	for _, artifact := range artifacts {
+		if err := validateTraceArtifact(artifact); err != nil {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, err
+		}
+		target := filepath.Join(
+			filepath.Dir(jsonPath),
+			filepath.FromSlash(artifact.Ref),
+		)
+		if filepath.Dir(target) != traceDir {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, fmt.Errorf(
+				"trace artifact ref %q escapes the trace directory",
+				artifact.Ref,
+			)
+		}
+		if _, exists := seen[target]; exists {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, fmt.Errorf("duplicate trace artifact target %q", target)
+		}
+		seen[target] = struct{}{}
+		if err := validateArtifactDestinations(target, markdownPath); err != nil {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, fmt.Errorf(
+				"trace artifact %q collides with another output: %w",
+				artifact.Ref,
+				err,
+			)
+		}
+
+		item := preparedTraceArtifact{target: target, data: artifact.Data}
+		if err := verifyExistingTraceArtifact(target, artifact.Data); err == nil {
+			prepared = append(prepared, item)
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, err
+		}
+		item.temp, err = writeClosedTemp(target, artifact.Data)
+		if err != nil {
+			cleanupPreparedTraceArtifacts(prepared)
+			return nil, err
+		}
+		prepared = append(prepared, item)
+	}
+	return prepared, nil
+}
+
+func verifyExistingTraceArtifact(target string, expected []byte) error {
+	info, err := os.Lstat(target)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return fmt.Errorf("trace artifact target %q is not a regular file", target)
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return fmt.Errorf("read existing trace artifact %q: %w", target, err)
+	}
+	if !bytes.Equal(data, expected) {
+		return fmt.Errorf(
+			"existing content-addressed trace artifact %q has different bytes",
+			target,
+		)
+	}
+	if err := os.Chmod(target, 0o600); err != nil {
+		return fmt.Errorf("restrict trace artifact %q: %w", target, err)
+	}
+	return nil
+}
+
+func publishTraceArtifacts(prepared []preparedTraceArtifact) error {
+	for i := range prepared {
+		item := &prepared[i]
+		if item.temp == "" {
+			if err := verifyExistingTraceArtifact(item.target, item.data); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.Link(item.temp, item.target); err != nil {
+			if !errors.Is(err, os.ErrExist) {
+				return fmt.Errorf(
+					"publish trace artifact %q: %w",
+					item.target,
+					err,
+				)
+			}
+			if err := verifyExistingTraceArtifact(item.target, item.data); err != nil {
+				return err
+			}
+		}
+		if err := os.Remove(item.temp); err != nil {
+			return fmt.Errorf("remove trace artifact temp %q: %w", item.temp, err)
+		}
+		item.temp = ""
+	}
+	return nil
+}
+
+func cleanupPreparedTraceArtifacts(prepared []preparedTraceArtifact) {
+	for _, item := range prepared {
+		if item.temp != "" {
+			os.Remove(item.temp)
+		}
+	}
 }
 
 func directoryResolvesCaseVariants(directory string) (_ bool, resultErr error) {
@@ -628,30 +809,11 @@ func validateSuccessfulReportConfig(
 			"resolved train and validation metrics hashes differ",
 		)
 	}
-	metricNames := make(map[string]struct{}, len(config.Train.MetricNames))
-	for _, name := range config.Train.MetricNames {
-		metricNames[name] = struct{}{}
-	}
-	if _, ok := metricNames[config.Gate.PrimaryMetric]; !ok {
+	if err := validateGateMetrics(config.Gate, config.Train.MetricNames); err != nil {
 		return reportProvenanceBinding{}, fmt.Errorf(
-			"resolved primary metric %q is absent from the metric inventory",
-			config.Gate.PrimaryMetric,
+			"resolved gate metric inventory: %w",
+			err,
 		)
-	}
-	if len(config.Gate.MetricDirections) != len(metricNames) {
-		return reportProvenanceBinding{}, fmt.Errorf(
-			"resolved metric direction inventory has %d entries, want %d",
-			len(config.Gate.MetricDirections),
-			len(metricNames),
-		)
-	}
-	for name := range config.Gate.MetricDirections {
-		if _, ok := metricNames[name]; !ok {
-			return reportProvenanceBinding{}, fmt.Errorf(
-				"resolved metric direction has unexpected metric %q",
-				name,
-			)
-		}
 	}
 	if err := validateInternalValidation(
 		config.PromptIter,
@@ -663,29 +825,14 @@ func validateSuccessfulReportConfig(
 			err,
 		)
 	}
-	validationCases := make(map[string]struct{}, len(config.Validation.CaseIDs))
-	for _, caseID := range config.Validation.CaseIDs {
-		validationCases[caseID] = struct{}{}
-	}
-	for _, item := range []struct {
-		label   string
-		caseIDs []string
-	}{
-		{label: "critical case", caseIDs: config.CriticalCaseIDs},
-		{label: "hard failure case", caseIDs: config.HardFailureCaseIDs},
-	} {
-		if err := validateUniqueNonempty(item.label, item.caseIDs); err != nil {
-			return reportProvenanceBinding{}, err
-		}
-		for _, caseID := range item.caseIDs {
-			if _, ok := validationCases[caseID]; !ok {
-				return reportProvenanceBinding{}, fmt.Errorf(
-					"resolved %s %q is absent from held-out validation",
-					item.label,
-					caseID,
-				)
-			}
-		}
+	if err := validateConfiguredCases(RegressionConfig{
+		CriticalCaseIDs:    config.CriticalCaseIDs,
+		HardFailureCaseIDs: config.HardFailureCaseIDs,
+	}, config.Validation); err != nil {
+		return reportProvenanceBinding{}, fmt.Errorf(
+			"resolved validation case policy: %w",
+			err,
+		)
 	}
 
 	requiredInputHashes := []string{
@@ -1303,46 +1450,11 @@ func validateCandidateDeltas(
 		},
 	}
 	for _, comparison := range comparisons {
-		delta := comparison.delta
-		if delta.Comparison != comparison.name {
-			return fmt.Errorf(
-				"%s delta comparison is %q, want %q",
-				label,
-				delta.Comparison,
-				comparison.name,
-			)
-		}
 		if comparison.before == nil {
 			return fmt.Errorf(
 				"%s delta %s has no parent snapshot",
 				label,
 				comparison.name,
-			)
-		}
-		if delta.BeforeProfileHash != comparison.before.Provenance.ProfileHash {
-			return fmt.Errorf(
-				"%s delta %s before profile hash %q does not match parent %q",
-				label,
-				comparison.name,
-				delta.BeforeProfileHash,
-				comparison.before.Provenance.ProfileHash,
-			)
-		}
-		if delta.AfterProfileHash != candidate.Profile.Hash {
-			return fmt.Errorf(
-				"%s delta %s after profile hash %q does not match candidate %q",
-				label,
-				comparison.name,
-				delta.AfterProfileHash,
-				candidate.Profile.Hash,
-			)
-		}
-		if err := validateDeltaSummary(delta, gate, gate.Epsilon); err != nil {
-			return fmt.Errorf(
-				"%s delta %s is invalid: %w",
-				label,
-				comparison.name,
-				err,
 			)
 		}
 		expected, err := CalculateDelta(
@@ -1359,7 +1471,7 @@ func validateCandidateDeltas(
 				err,
 			)
 		}
-		if !reflect.DeepEqual(delta, expected) {
+		if !reflect.DeepEqual(comparison.delta, expected) {
 			return fmt.Errorf(
 				"%s delta %s does not match its bound snapshots",
 				label,
@@ -1637,36 +1749,204 @@ func validEvaluationStatus(status EvaluationStatus) bool {
 }
 
 func validateRenderedJSON(data []byte, expected *Report) error {
-	var decoded Report
+	sanitized, err := sanitizedReport(expected)
+	if err != nil {
+		return err
+	}
+	manifest, _, err := buildReportManifest(sanitized)
+	if err != nil {
+		return fmt.Errorf("build expected report manifest: %w", err)
+	}
+	return validateRenderedManifest(data, manifest)
+}
+
+func validateRenderedManifest(data []byte, expected *reportManifest) error {
+	var decoded reportManifest
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return fmt.Errorf("validate rendered JSON: %w", err)
 	}
-	if decoded.SchemaVersion != expected.SchemaVersion ||
-		decoded.ReportID != expected.ReportID ||
-		decoded.RunID != expected.RunID ||
-		len(decoded.Candidates) != len(expected.Candidates) {
+	expectedData, err := marshalReportManifest(expected)
+	if err != nil {
+		return fmt.Errorf("marshal expected report manifest: %w", err)
+	}
+	var normalizedExpected reportManifest
+	if err := json.Unmarshal(expectedData, &normalizedExpected); err != nil {
+		return fmt.Errorf("normalize expected report manifest: %w", err)
+	}
+	if !reflect.DeepEqual(decoded, normalizedExpected) {
 		return errors.New("rendered JSON lost canonical report identity")
 	}
 	return nil
 }
 
 func validateRenderedMarkdown(data []byte, expected *Report) error {
-	text := string(data)
-	required := []string{
+	requiredHeadings := []string{
 		"# Prompt Optimization Report",
-		markdownInline(expected.SchemaVersion),
-		markdownInline(expected.ReportID),
-		markdownInline(expected.RunID),
-		string(expected.Status),
-		string(expected.StopReason),
-		"## Final Released Prompt",
+		"## Prompt State",
+		"### Initial",
+		"### Search",
+		"### Released",
+		"## Baseline Evaluations",
+		"## Candidates",
+		"## Configuration and Provenance",
+		"## Cumulative Resources",
+		"## Artifacts",
 	}
-	for _, item := range required {
-		if item != "" && !strings.Contains(text, item) {
-			return fmt.Errorf("rendered Markdown is missing %q", item)
+	if err := validateMarkdownHeadingSequence(data, requiredHeadings); err != nil {
+		return err
+	}
+
+	requiredHeaderFields := []string{
+		fmt.Sprintf("- Schema: `%s`", markdownInline(expected.SchemaVersion)),
+		fmt.Sprintf("- Report: `%s`", markdownInline(expected.ReportID)),
+		fmt.Sprintf("- Run: `%s`", markdownInline(expected.RunID)),
+		fmt.Sprintf(
+			"- Generated: `%s`",
+			expected.GeneratedAt.Format("2006-01-02T15:04:05Z07:00"),
+		),
+		fmt.Sprintf(
+			"- Pipeline status: `%s`",
+			markdownInline(string(expected.Status)),
+		),
+		fmt.Sprintf(
+			"- Stop reason: `%s`",
+			markdownInline(string(expected.StopReason)),
+		),
+		fmt.Sprintf(
+			"- Final: %s",
+			strings.ToUpper(string(expected.FinalDecision.Status)),
+		),
+	}
+	return validateMarkdownExactUniqueLines(
+		data,
+		requiredHeaderFields,
+		"header field",
+	)
+}
+
+func validateMarkdownHeadingSequence(data []byte, required []string) error {
+	locations, err := markdownLineLocationsOutsideFences(data, required)
+	if err != nil {
+		return err
+	}
+
+	previous := -1
+	for _, heading := range required {
+		found := locations[heading]
+		switch len(found) {
+		case 0:
+			return fmt.Errorf("rendered Markdown is missing exact heading %q", heading)
+		case 1:
+		default:
+			return fmt.Errorf(
+				"rendered Markdown heading %q appears %d times",
+				heading,
+				len(found),
+			)
+		}
+		if found[0] <= previous {
+			return fmt.Errorf(
+				"rendered Markdown heading %q is out of order",
+				heading,
+			)
+		}
+		previous = found[0]
+	}
+	return nil
+}
+
+func validateMarkdownExactUniqueLines(
+	data []byte,
+	required []string,
+	label string,
+) error {
+	locations, err := markdownLineLocationsOutsideFences(data, required)
+	if err != nil {
+		return err
+	}
+	for _, line := range required {
+		switch found := locations[line]; len(found) {
+		case 0:
+			return fmt.Errorf(
+				"rendered Markdown is missing exact %s %q",
+				label,
+				line,
+			)
+		case 1:
+		default:
+			return fmt.Errorf(
+				"rendered Markdown %s %q appears %d times",
+				label,
+				line,
+				len(found),
+			)
 		}
 	}
 	return nil
+}
+
+func markdownLineLocationsOutsideFences(
+	data []byte,
+	required []string,
+) (map[string][]int, error) {
+	requiredSet := make(map[string]struct{}, len(required))
+	for _, heading := range required {
+		requiredSet[heading] = struct{}{}
+	}
+	locations := make(map[string][]int, len(required))
+	var fenceMarker byte
+	fenceLength := 0
+	for index, rawLine := range strings.Split(string(data), "\n") {
+		line := strings.TrimSuffix(rawLine, "\r")
+		marker, length, suffix, isFence := markdownFenceMarker(line)
+		if fenceMarker != 0 {
+			if isFence &&
+				marker == fenceMarker &&
+				length >= fenceLength &&
+				strings.TrimSpace(suffix) == "" {
+				fenceMarker = 0
+				fenceLength = 0
+			}
+			continue
+		}
+		if isFence {
+			fenceMarker = marker
+			fenceLength = length
+			continue
+		}
+		if _, ok := requiredSet[line]; ok {
+			locations[line] = append(locations[line], index)
+		}
+	}
+	if fenceMarker != 0 {
+		return nil, errors.New(
+			"rendered Markdown contains an unclosed fenced code block",
+		)
+	}
+	return locations, nil
+}
+
+func markdownFenceMarker(line string) (byte, int, string, bool) {
+	leadingSpaces := 0
+	for leadingSpaces < len(line) && line[leadingSpaces] == ' ' {
+		leadingSpaces++
+	}
+	if leadingSpaces > 3 || leadingSpaces == len(line) {
+		return 0, 0, "", false
+	}
+	line = line[leadingSpaces:]
+	marker := line[0]
+	if marker != '`' && marker != '~' {
+		return 0, 0, "", false
+	}
+	length := 0
+	for length < len(line) && line[length] == marker {
+		length++
+	}
+	if length < 3 {
+		return 0, 0, "", false
+	}
+	return marker, length, line[length:], true
 }
 
 func validateArtifactPair(jsonData, markdownData []byte, expected *Report) error {
@@ -1712,6 +1992,16 @@ func writeCandidate(out *strings.Builder, candidate *CandidateReport) {
 	fmt.Fprintf(out, "- Evaluation status: `%s`\n", markdownInline(string(candidate.Status)))
 	fmt.Fprintf(out, "- Search parent: `%s`\n", markdownInline(candidate.SearchParentHash))
 	fmt.Fprintf(out, "- Released parent: `%s`\n", markdownInline(candidate.ReleasedParentHash))
+	if candidate.Profile != nil {
+		fmt.Fprintf(out, "- Candidate profile: `%s`\n", markdownInline(candidate.Profile.Hash))
+		fmt.Fprintf(out, "- Candidate structure: `%s`; target surface: `%s`\n",
+			markdownInline(candidate.Profile.StructureID),
+			markdownInline(candidate.Profile.TargetSurfaceID))
+		if candidate.Profile.EvaluationRunID != "" {
+			fmt.Fprintf(out, "- Candidate evaluation run: `%s`\n",
+				markdownInline(candidate.Profile.EvaluationRunID))
+		}
+	}
 	if candidate.PromptIterRunID != "" {
 		fmt.Fprintf(out, "- PromptIter run: `%s`\n", markdownInline(candidate.PromptIterRunID))
 	}
@@ -1725,6 +2015,7 @@ func writeCandidate(out *strings.Builder, candidate *CandidateReport) {
 	writeDecision(out, "Search", candidate.SearchDecision)
 	writeDecision(out, "Release", candidate.ReleaseDecision)
 	writeErrors(out, candidate.Errors)
+	writeCandidatePrompt(out, candidate)
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "#### State transition")
@@ -1743,35 +2034,36 @@ func writeCandidate(out *strings.Builder, candidate *CandidateReport) {
 		fmt.Fprintf(out, "\n%s\n", markdownText(candidate.Transition.Explanation, defaultMarkdownTextLimit))
 	}
 
-	if candidate.Profile != nil {
-		writeProfile(out, "Candidate profile", candidate.Profile)
-	}
-	if len(candidate.Patches) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "#### Patches")
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "| Surface | Value | Reason |")
-		fmt.Fprintln(out, "|---|---|---|")
-		for _, patch := range candidate.Patches {
-			fmt.Fprintf(out, "| %s | %s | %s |\n",
-				markdownTable(patch.SurfaceID),
-				markdownTable(redactAndBoundText(patch.Value, defaultMarkdownTextLimit)),
-				markdownTable(redactAndBoundText(patch.Reason, defaultMarkdownTextLimit)))
-		}
-	}
-
-	writeSnapshot(out, "Candidate training", candidate.Train)
-	writeSnapshot(out, "Candidate held-out validation", candidate.Validation)
+	writeSnapshotAtLevel(out, 4, "Candidate training", candidate.Train)
+	writeSnapshotAtLevel(out, 4, "Candidate held-out validation", candidate.Validation)
 	if candidate.Deltas != nil {
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, "#### Three held-out deltas")
-		writeDelta(out, "vs_initial", candidate.Deltas.VsInitial)
-		writeDelta(out, "vs_search_parent", candidate.Deltas.VsSearchParent)
-		writeDelta(out, "vs_released", candidate.Deltas.VsReleased)
+		fmt.Fprintln(out, "#### Held-out per-case deltas")
+		writeDelta(out, "vsInitial", candidate.Deltas.VsInitial)
+		writeDelta(out, "vsSearchParent", candidate.Deltas.VsSearchParent)
+		writeDelta(out, "vsReleased", candidate.Deltas.VsReleased)
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "#### Candidate resources")
-	writeResourceLedger(out, candidate.Resources)
+	writeResourceUsage(out, candidate.Resources.Cumulative)
+}
+
+func writeCandidatePrompt(out *strings.Builder, candidate *CandidateReport) {
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "#### Candidate prompt")
+	fmt.Fprintln(out)
+	if candidate.Profile != nil {
+		writeCodeBlock(out, candidate.Profile.Prompt, "")
+		return
+	}
+	if len(candidate.Patches) == 0 {
+		fmt.Fprintln(out, "_Not available._")
+		return
+	}
+	for _, patch := range candidate.Patches {
+		fmt.Fprintf(out, "- Surface: `%s`\n\n", markdownInline(patch.SurfaceID))
+		writeCodeBlock(out, patch.Value, "")
+	}
 }
 
 func writeProfile(out *strings.Builder, title string, profile *ProfileRecord) {
@@ -1793,190 +2085,152 @@ func writeProfile(out *strings.Builder, title string, profile *ProfileRecord) {
 }
 
 func writeSnapshot(out *strings.Builder, title string, snapshot *EvaluationSnapshot) {
+	writeSnapshotAtLevel(out, 3, title, snapshot)
+}
+
+func writeSnapshotAtLevel(
+	out *strings.Builder,
+	level int,
+	title string,
+	snapshot *EvaluationSnapshot,
+) {
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "### %s\n\n", markdownInline(title))
+	fmt.Fprintf(out, "%s %s\n\n", strings.Repeat("#", level), markdownInline(title))
 	if snapshot == nil {
 		fmt.Fprintln(out, "_Not available._")
 		return
 	}
-	fmt.Fprintf(out, "- Status: `%s`\n", markdownInline(string(snapshot.Status)))
-	fmt.Fprintf(out, "- Eval set: `%s`\n", markdownInline(snapshot.Provenance.EvalSetID))
-	fmt.Fprintf(out, "- Split: `%s`\n", markdownInline(snapshot.Provenance.Split))
-	fmt.Fprintf(out, "- Evaluation run: `%s`\n", markdownInline(snapshot.Provenance.RunID))
-	fmt.Fprintf(out, "- Profile hash: `%s`\n", markdownInline(snapshot.Provenance.ProfileHash))
-	fmt.Fprintf(out, "- Score: `%.6f`; passed: `%d`; failed: `%d`; latency: `%d ms`\n",
-		snapshot.OverallScore, snapshot.Passed, snapshot.Failed, snapshot.LatencyMS)
+	fmt.Fprintf(
+		out,
+		"- Status: `%s`; score: `%.6f`; passed: `%d`; failed: `%d`; latency: `%d ms`\n",
+		markdownInline(string(snapshot.Status)),
+		snapshot.OverallScore,
+		snapshot.Passed,
+		snapshot.Failed,
+		snapshot.LatencyMS,
+	)
+	fmt.Fprintf(
+		out,
+		"- Provenance: run `%s`; profile `%s`; eval set `%s` (`%s`); split `%s`; "+
+			"metrics `%s`; seed `%d`; evaluator `%s`; metric policy `%s`\n",
+		markdownInline(snapshot.Provenance.RunID),
+		markdownInline(snapshot.Provenance.ProfileHash),
+		markdownInline(snapshot.Provenance.EvalSetID),
+		markdownInline(snapshot.Provenance.EvalSetHash),
+		markdownInline(snapshot.Provenance.Split),
+		markdownInline(snapshot.Provenance.MetricsHash),
+		snapshot.Provenance.Seed,
+		markdownInline(snapshot.Provenance.EvaluatorConfigHash),
+		markdownInline(snapshot.Provenance.MetricPolicyHash),
+	)
 	if snapshot.Error != "" {
 		fmt.Fprintf(out, "- Error: %s\n", markdownText(snapshot.Error, defaultMarkdownTextLimit))
 	}
+	fmt.Fprintf(out, "- Resources: %s\n", resourceUsageText(snapshot.Resources))
 
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "| Case | Status | Passed | Hard | Critical | Primary metric | Error |")
-	fmt.Fprintln(out, "|---|---|---:|---:|---:|---|---|")
+	fmt.Fprintln(out, "| Case | Status | Passed | Metric scores | Hard | Critical | Error |")
+	fmt.Fprintln(out, "|---|---|---:|---|---:|---:|---|")
 	for _, result := range snapshot.Cases {
-		fmt.Fprintf(out, "| %s | %s | %t | %t | %t | %s | %s |\n",
+		fmt.Fprintf(out, "| %s | %s | %t | %s | %t | %t | %s |\n",
 			markdownTable(result.CaseID),
 			markdownTable(result.Status),
 			result.Passed,
+			markdownTable(metricScoreSummary(result.Metrics)),
 			result.HardFailure,
 			result.Critical,
-			markdownTable(result.PrimaryMetric),
 			markdownTable(redactAndBoundText(result.Error, defaultMarkdownTextLimit)))
 	}
-	for i := range snapshot.Cases {
-		writeCaseEvidence(out, &snapshot.Cases[i])
-	}
-
-	for _, attribution := range snapshot.Attributions {
-		fmt.Fprintln(out)
-		fmt.Fprintf(out, "#### Attribution: %s / %s\n\n",
-			markdownInline(attribution.EvalCaseID),
-			markdownInline(attribution.MetricName))
-		fmt.Fprintf(out, "- Category: `%s`; severity: `%s`; confidence: `%.3f`; evidence: `%s`\n",
-			markdownInline(string(attribution.PrimaryCategory)),
-			markdownInline(string(attribution.Severity)),
-			attribution.Confidence,
-			markdownInline(string(attribution.EvidenceSufficiency)))
-		fmt.Fprintf(out, "- Reason: %s\n", markdownText(attribution.Reason, defaultMarkdownTextLimit))
-		for _, evidence := range attribution.Evidence {
-			fmt.Fprintf(out, "  - `%s` `%s`: %s\n",
-				markdownInline(evidence.ID),
-				markdownInline(evidence.Kind),
-				markdownText(evidence.Summary, defaultMarkdownTextLimit))
-		}
-	}
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "#### Snapshot resources")
-	writeResourceUsage(out, snapshot.Resources)
+	writeFailureAttributionSummary(out, snapshot)
 }
 
-func writeCaseEvidence(out *strings.Builder, result *CaseResult) {
-	fmt.Fprintln(out)
-	fmt.Fprintf(out, "#### Case evidence: %s\n\n", markdownInline(result.CaseID))
-	fmt.Fprintf(out, "- Route: `%s`; expected route: `%s`\n",
-		markdownInline(result.Route),
-		markdownInline(result.ExpectedRoute))
-	if len(result.ExpectedFacts) > 0 {
-		fmt.Fprintf(out, "- Expected facts: %s\n",
-			markdownText(strings.Join(result.ExpectedFacts, "; "), defaultMarkdownTextLimit))
+func metricScoreSummary(metrics []MetricResult) string {
+	parts := make([]string, 0, len(metrics))
+	for _, metric := range metrics {
+		parts = append(parts, fmt.Sprintf("%s=%.6f", metric.MetricName, metric.Score))
 	}
-	if result.Error != "" {
-		fmt.Fprintf(out, "- Error: %s\n", markdownText(result.Error, defaultMarkdownTextLimit))
-	}
-
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Metrics:")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "| Metric | Score | Threshold | Direction | Status | Passed | Reason | Rubrics |")
-	fmt.Fprintln(out, "|---|---:|---:|---|---|---:|---|---|")
-	for _, item := range result.Metrics {
-		fmt.Fprintf(out, "| %s | %.6f | %.6f | %s | %s | %t | %s | %s |\n",
-			markdownTable(item.MetricName),
-			item.Score,
-			item.Threshold,
-			markdownTable(string(item.Direction)),
-			markdownTable(item.Status),
-			item.Passed,
-			markdownTable(redactAndBoundText(item.Reason, defaultMarkdownTextLimit)),
-			markdownTable(rubricSummary(item.RubricScores)))
-	}
-
-	if result.FinalResponse != "" {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Final response:")
-		writeBoundedCodeBlock(out, result.FinalResponse, "", defaultMarkdownTextLimit)
-	}
-	if result.ExpectedResponse != "" {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Expected response:")
-		writeBoundedCodeBlock(out, result.ExpectedResponse, "", defaultMarkdownTextLimit)
-	}
-	if result.ExpectStructured || result.StructuredOutput != "" {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Structured output:")
-		writeBoundedCodeBlock(out, result.StructuredOutput, "json", defaultMarkdownTextLimit)
-	}
-	if result.ExpectNoTools {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Expected tool trajectory: `[]` (explicit no-tool requirement)")
-	}
-	writeToolCalls(out, "Observed tools", result.ToolTrajectory)
-	writeToolCalls(out, "Expected tools", result.ExpectedTools)
-	writeTrace(out, result.Trace)
-}
-
-func rubricSummary(scores []RubricScore) string {
-	parts := make([]string, 0, len(scores))
-	for _, score := range scores {
-		part := fmt.Sprintf("%s=%.6f", score.ID, score.Score)
-		if score.Reason != "" {
-			part += ": " + redactAndBoundText(score.Reason, defaultMarkdownTextLimit)
-		}
-		parts = append(parts, part)
+	if len(parts) == 0 {
+		return "unavailable"
 	}
 	return strings.Join(parts, "; ")
 }
 
-func writeToolCalls(out *strings.Builder, title string, calls []ToolCall) {
-	if len(calls) == 0 {
+func writeFailureAttributionSummary(
+	out *strings.Builder,
+	snapshot *EvaluationSnapshot,
+) {
+	hasFailure := false
+	for _, result := range snapshot.Cases {
+		if !result.Passed {
+			hasFailure = true
+			break
+		}
+	}
+	if !hasFailure {
 		return
 	}
+
 	fmt.Fprintln(out)
-	fmt.Fprintf(out, "%s:\n\n", markdownInline(title))
-	fmt.Fprintln(out, "| Sequence | Name | Arguments | Result |")
-	fmt.Fprintln(out, "|---:|---|---|---|")
-	for _, call := range calls {
-		fmt.Fprintf(out, "| %d | %s | %s | %s |\n",
-			call.Sequence,
-			markdownTable(call.Name),
-			markdownTable(compactJSON(call.Arguments)),
-			markdownTable(compactJSON(call.Result)))
+	fmt.Fprintln(out, "**Failed-case attribution**")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "| Case | Metric | Category | Severity | Confidence | Reason |")
+	fmt.Fprintln(out, "|---|---|---|---|---:|---|")
+	for _, result := range snapshot.Cases {
+		if result.Passed {
+			continue
+		}
+		matched := false
+		for _, attribution := range snapshot.Attributions {
+			if attribution.EvalCaseID != result.CaseID {
+				continue
+			}
+			matched = true
+			fmt.Fprintf(out, "| %s | %s | %s | %s | %.3f | %s |\n",
+				markdownTable(result.CaseID),
+				markdownTable(attribution.MetricName),
+				markdownTable(string(attribution.PrimaryCategory)),
+				markdownTable(string(attribution.Severity)),
+				attribution.Confidence,
+				markdownTable(redactAndBoundText(
+					attribution.Reason,
+					defaultMarkdownTextLimit,
+				)))
+		}
+		if !matched {
+			fmt.Fprintf(out, "| %s | %s | unavailable | unavailable | 0.000 | %s |\n",
+				markdownTable(result.CaseID),
+				markdownTable(result.PrimaryMetric),
+				markdownTable(failureReasonFallback(result)))
+		}
 	}
 }
 
-func writeTrace(out *strings.Builder, trace []TraceStep) {
-	if len(trace) == 0 {
-		return
+func failureReasonFallback(result CaseResult) string {
+	if result.Error != "" {
+		return redactAndBoundText(result.Error, defaultMarkdownTextLimit)
 	}
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Trace:")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "| Step | Node | Agent | Branch | Applied surfaces | Input | Output | Error |")
-	fmt.Fprintln(out, "|---|---|---|---|---|---|---|---|")
-	for _, step := range trace {
-		fmt.Fprintf(out, "| %s | %s | %s | %s | %s | %s | %s | %s |\n",
-			markdownTable(step.StepID),
-			markdownTable(step.NodeID),
-			markdownTable(step.AgentName),
-			markdownTable(step.Branch),
-			markdownTable(strings.Join(step.AppliedSurfaceIDs, ", ")),
-			markdownTable(redactAndBoundText(step.Input, defaultMarkdownTextLimit)),
-			markdownTable(redactAndBoundText(step.Output, defaultMarkdownTextLimit)),
-			markdownTable(redactAndBoundText(step.Error, defaultMarkdownTextLimit)))
+	for _, metric := range result.Metrics {
+		if !metric.Passed && metric.Reason != "" {
+			return redactAndBoundText(metric.Reason, defaultMarkdownTextLimit)
+		}
 	}
-}
-
-func compactJSON(value any) string {
-	if value == nil {
-		return ""
-	}
-	data, err := json.Marshal(value)
-	if err != nil {
-		return redactAndBoundText(fmt.Sprintf("<unrenderable: %v>", err), defaultMarkdownTextLimit)
-	}
-	return redactAndBoundText(string(data), defaultMarkdownTextLimit)
+	return "no failure attribution recorded; see the JSON audit artifact"
 }
 
 func writeDelta(out *strings.Builder, label string, delta DeltaSummary) {
 	fmt.Fprintln(out)
 	fmt.Fprintf(out, "##### %s\n\n", markdownInline(label))
-	fmt.Fprintf(out, "- Comparison: `%s`\n", markdownInline(delta.Comparison))
-	fmt.Fprintf(out, "- Profiles: `%s` → `%s`\n",
+	fmt.Fprintf(out, "- Comparison: `%s`; profiles: `%s` → `%s`\n",
+		markdownInline(delta.Comparison),
 		markdownInline(delta.BeforeProfileHash),
 		markdownInline(delta.AfterProfileHash))
-	fmt.Fprintf(out, "- Score: `%.6f` → `%.6f` (`%+.6f`)\n",
-		delta.BeforeOverallScore, delta.AfterOverallScore, delta.ScoreDelta)
-	fmt.Fprintf(out, "- Newly passing: `%d`; newly failing: `%d`; improved: `%d`; regressed: `%d`; unchanged: `%d`\n",
+	fmt.Fprintf(
+		out,
+		"- Score: `%.6f` → `%.6f` (`%+.6f`); newly passing: `%d`; newly failing: `%d`; "+
+			"improved: `%d`; regressed: `%d`; unchanged: `%d`\n",
+		delta.BeforeOverallScore,
+		delta.AfterOverallScore,
+		delta.ScoreDelta,
 		delta.NewlyPassing, delta.NewlyFailing, delta.Improved, delta.Regressed, delta.Unchanged)
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "| Case | Before | After | Change | Hard | Critical | Reason |")
@@ -2014,36 +2268,32 @@ func writeErrors(out *strings.Builder, errorsList []string) {
 }
 
 func writeResourceLedger(out *strings.Builder, ledger ResourceLedger) {
-	if len(ledger.Entries) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprintln(out, "| Stage | Round | Split | Profile | Calls | Input | Output | Latency | Cost | Failed |")
-		fmt.Fprintln(out, "|---|---:|---|---|---:|---:|---:|---:|---:|---:|")
-		for _, entry := range ledger.Entries {
-			fmt.Fprintf(out, "| %s | %d | %s | %s | %s | %s | %s | %s | %s | %t |\n",
-				markdownTable(entry.Stage),
-				entry.Round,
-				markdownTable(entry.Split),
-				markdownTable(entry.ProfileHash),
-				countText(entry.Usage.ModelCalls),
-				countText(entry.Usage.InputTokens),
-				countText(entry.Usage.OutputTokens),
-				countText(entry.Usage.LatencyMS),
-				amountText(entry.Usage.MonetaryCost),
-				entry.Failed)
+	failed := 0
+	for _, entry := range ledger.Entries {
+		if entry.Failed {
+			failed++
 		}
 	}
 	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Cumulative:")
-	writeResourceUsage(out, ledger.Cumulative)
+	fmt.Fprintf(out, "- Recorded stages: `%d`; failed stages: `%d`\n",
+		len(ledger.Entries),
+		failed)
+	fmt.Fprintf(out, "- Cumulative %s\n", resourceUsageText(ledger.Cumulative))
 }
 
 func writeResourceUsage(out *strings.Builder, usage ResourceUsage) {
-	fmt.Fprintf(out, "- Model calls: `%s`; input tokens: `%s`; output tokens: `%s`; latency ms: `%s`; monetary cost: `%s`\n",
+	fmt.Fprintf(out, "- %s\n", resourceUsageText(usage))
+}
+
+func resourceUsageText(usage ResourceUsage) string {
+	return fmt.Sprintf(
+		"Model calls: `%s`; input tokens: `%s`; output tokens: `%s`; latency ms: `%s`; monetary cost: `%s`",
 		countText(usage.ModelCalls),
 		countText(usage.InputTokens),
 		countText(usage.OutputTokens),
 		countText(usage.LatencyMS),
-		amountText(usage.MonetaryCost))
+		amountText(usage.MonetaryCost),
+	)
 }
 
 func countText(count Count) string {
@@ -2061,6 +2311,105 @@ func amountText(amount Amount) string {
 		return fmt.Sprintf("%.6f", amount.Value)
 	}
 	return fmt.Sprintf("%.6f %s", amount.Value, markdownTable(amount.Unit))
+}
+
+func writeResolvedConfig(out *strings.Builder, config ResolvedConfig) {
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "- Seed: `%d`; evidence limit: `%d`\n", config.Seed, config.EvidenceLimit)
+	fmt.Fprintf(out, "- Critical cases: %s\n",
+		markdownText(listSummary(config.CriticalCaseIDs), defaultMarkdownTextLimit))
+	fmt.Fprintf(out, "- Hard-failure cases: %s\n",
+		markdownText(listSummary(config.HardFailureCaseIDs), defaultMarkdownTextLimit))
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "### Datasets")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "| Split | Eval set | Eval-set hash | Cases | Metrics | Metrics hash |")
+	fmt.Fprintln(out, "|---|---|---|---|---|---|")
+	for _, item := range []struct {
+		label   string
+		dataset DatasetSpec
+	}{
+		{label: "train", dataset: config.Train},
+		{label: "held-out validation", dataset: config.Validation},
+	} {
+		fmt.Fprintf(out, "| %s | %s | `%s` | %s | %s | `%s` |\n",
+			markdownTable(item.label),
+			markdownTable(item.dataset.EvalSetID),
+			markdownInline(item.dataset.EvalSetHash),
+			markdownTable(listSummary(item.dataset.CaseIDs)),
+			markdownTable(listSummary(item.dataset.MetricNames)),
+			markdownInline(item.dataset.MetricsHash))
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "### PromptIter")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "- Target surface: `%s`; max outer rounds: `%d`; search minimum gain: `%.6f`\n",
+		markdownInline(config.PromptIter.TargetSurfaceID),
+		config.PromptIter.MaxOuterRounds,
+		config.PromptIter.SearchMinScoreGain)
+	fmt.Fprintf(out, "- Internal validation: `%s`; cases: %s\n",
+		markdownInline(config.PromptIter.InternalValidationStrategy),
+		markdownText(
+			listSummary(config.PromptIter.InternalValidationCaseIDs),
+			defaultMarkdownTextLimit,
+		))
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "### Release gates")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "- Primary metric: `%s`; directions: `%s`; epsilon: `%g`\n",
+		markdownInline(config.Gate.PrimaryMetric),
+		markdownInline(compactJSON(config.Gate.MetricDirections)),
+		config.Gate.Epsilon)
+	fmt.Fprintf(
+		out,
+		"- Minimum validation gain: `%.6f`; no new hard failures: `%t`; "+
+			"no critical regressions: `%t`; model-call stop threshold: `%d`\n",
+		config.Gate.MinValidationGain,
+		config.Gate.NoNewHardFailures,
+		config.Gate.NoCriticalRegressions,
+		config.Gate.ModelCallStopThreshold,
+	)
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "### Report outputs")
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "- JSON name: `%s`; Markdown name: `%s`\n",
+		markdownInline(config.Output.JSON),
+		markdownInline(config.Output.Markdown))
+}
+
+func writeRuntime(out *strings.Builder, runtime RuntimeConfig) {
+	fmt.Fprintln(out)
+	fmt.Fprintf(out, "- Engine: `%s`; seed: `%d`\n",
+		markdownInline(runtime.Engine),
+		runtime.Seed)
+	fmt.Fprintf(out, "- Model config: `%s`\n",
+		markdownInline(compactJSON(runtime.Model)))
+	fmt.Fprintf(out, "- Evaluator config: `%s`\n",
+		markdownInline(compactJSON(runtime.Evaluator)))
+	fmt.Fprintf(out, "- Fake-engine config: `%s`\n",
+		markdownInline(compactJSON(runtime.FakeEngine)))
+}
+
+func listSummary(values []string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+	return strings.Join(values, ", ")
+}
+
+func compactJSON(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return redactAndBoundText(
+			fmt.Sprintf("<unrenderable: %v>", err),
+			defaultMarkdownTextLimit,
+		)
+	}
+	return redactAndBoundText(string(data), defaultMarkdownTextLimit)
 }
 
 func writeStringMap(out *strings.Builder, values map[string]string) {
@@ -2082,6 +2431,8 @@ func writeStringMap(out *strings.Builder, values map[string]string) {
 	}
 }
 
+// writeJSONBlock is kept for package-level rendering coverage. The canonical
+// Markdown summary intentionally does not use it for case evidence or config.
 func writeJSONBlock(out *strings.Builder, value any) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
