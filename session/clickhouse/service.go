@@ -908,6 +908,7 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 			})
 		if err != nil {
 			log.Errorf("batch soft delete expired sessions failed: %v", err)
+			return
 		}
 
 		// Soft delete events, track events, and summaries for expired sessions

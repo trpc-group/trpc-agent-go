@@ -148,12 +148,15 @@ func TestService_Cleanup_PhysicalDelete(t *testing.T) {
 	}
 
 	execCount := 0
+	var execQueries []string
 	mockCli.execFunc = func(ctx context.Context, query string, args ...any) error {
 		execCount++
+		execQueries = append(execQueries, query)
 		return nil
 	}
 
 	s.cleanupDeletedData(context.Background(), time.Now())
 	// Expect 6 Exec calls (session states, events, tracks, summaries, app states, user states)
 	assert.Equal(t, 6, execCount)
+	assert.Contains(t, strings.Join(execQueries, "\n"), s.tableSessionTrackEvents)
 }
