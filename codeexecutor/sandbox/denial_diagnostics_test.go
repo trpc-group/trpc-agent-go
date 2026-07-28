@@ -183,7 +183,6 @@ func TestWithDenialFilterOption(t *testing.T) {
 	filter := DenialFilter{
 		DisableAutomatic: true,
 		Ignore: []DenialIgnoreRule{{
-			Scope:      DenialFilterDenials,
 			Operations: []string{"file-read-data"},
 		}},
 	}

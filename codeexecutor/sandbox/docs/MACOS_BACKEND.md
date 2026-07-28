@@ -126,11 +126,13 @@ agent layer.
 
 `Runtime.DiagnosticsCapability()` reports whether log streaming and deny-message
 tagging were detected at runtime. Capabilities are cached per macOS version for
-the process lifetime. The production unified-log monitor is also tied to the
-`Runtime`/process lifetime and has no explicit shutdown API today.
+the process lifetime. The production unified-log monitor belongs to the
+`Runtime` and remains active until `Runtime.Close()` (or the owning
+`CodeExecutor.Close()`) stops it. Callers must close the owner when it is no
+longer needed.
 
 See [`SANDBOX_DENIAL_DIAGNOSTICS.md`](SANDBOX_DENIAL_DIAGNOSTICS.md) for the
-data flow, filtering model, and limitations.
+caller lifecycle responsibilities, data flow, filtering model, and limitations.
 
 ## Capability Matrix
 

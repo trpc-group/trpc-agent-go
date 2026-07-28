@@ -34,7 +34,9 @@ type Denial struct {
 	// Raw contains the backend's original diagnostic text. It is intended for
 	// human debugging, is not a stable machine-readable format, and may include
 	// host paths or process names.
-	Raw        string
+	Raw string
+	// Timestamp is the backend-reported event time. It is zero when the backend
+	// omits the timestamp or its format is not recognized.
 	Timestamp  time.Time
 	Source     DenialSource
 	Confidence DenialConfidence
@@ -65,16 +67,6 @@ type Diagnostics struct {
 	Truncated bool
 }
 
-// DenialFilterScope selects which diagnostic outputs a filter rule applies to.
-type DenialFilterScope string
-
-const (
-	// DenialFilterDenials applies only to Diagnostics.Denials.
-	DenialFilterDenials DenialFilterScope = "denials"
-	// DenialFilterAll applies to all diagnostic outputs.
-	DenialFilterAll DenialFilterScope = "all"
-)
-
 // DenialTargetMatcher matches denial targets using structured fields.
 // Within a single matcher, Exact/Prefix/Suffix/Glob are alternatives: any
 // non-empty field that matches the denial target is enough for that matcher to
@@ -92,11 +84,8 @@ type DenialTargetMatcher struct {
 // must be a substring of RunProgramSpec.Cmd, Operations must contain the denial
 // operation when set, Targets must match via any listed matcher when set, and
 // RawContains must find at least one substring in Denial.Raw when set. A rule
-// with every constraint empty is ignored. Scope "" and DenialFilterAll apply to
-// every diagnostic output; DenialFilterDenials applies only when collecting
-// Diagnostics.Denials; any other Scope value never matches.
+// with every constraint empty is ignored.
 type DenialIgnoreRule struct {
-	Scope DenialFilterScope
 	// Command, when non-empty, must be a substring of RunProgramSpec.Cmd. It
 	// intentionally does not match Args because arguments may contain secrets.
 	Command     string

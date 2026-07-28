@@ -64,21 +64,8 @@ func (r *Runtime) runProgram(
 	diagnostics := sandboxDenialRun{}
 	if diagnosticsCh != nil && prep.profile.enforcement() == enforcementManaged {
 		_ = r.ensureDenialMonitor(runCtx)
-		if err := runCtx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				return codeexecutor.RunResult{
-						TimedOut: true,
-						Duration: time.Since(start),
-						ExitCode: -1,
-					}, &sandboxError{
-						Kind: ErrTimeout,
-						Op:   "run",
-						Err:  context.DeadlineExceeded,
-					}
-			}
-			return codeexecutor.RunResult{
-				Duration: time.Since(start),
-			}, err
+		if result, err, done := runContextResult(runCtx, start); done {
+			return result, err
 		}
 		if r.sandboxDenialCollectingReady() {
 			diagnostics = r.sandboxDenialRunForCollecting(prep.profile)
@@ -88,6 +75,9 @@ func (r *Runtime) runProgram(
 		runCtx, prep.profile, ws, prep.cwd, env, spec, diagnostics,
 	)
 	if err != nil {
+		if result, ctxErr, done := runContextResult(runCtx, start); done {
+			return result, ctxErr
+		}
 		return codeexecutor.RunResult{}, err
 	}
 	if cleanup != nil {
@@ -109,6 +99,9 @@ func (r *Runtime) runProgram(
 	cmd.WaitDelay = 2 * time.Second
 	err = cmd.Start()
 	if err != nil {
+		if result, ctxErr, done := runContextResult(runCtx, start); done {
+			return result, ctxErr
+		}
 		return codeexecutor.RunResult{}, backendError(ErrSetupFailed, backendName, err)
 	}
 	waitErr := cmd.Wait()
@@ -148,6 +141,29 @@ func (r *Runtime) runProgram(
 		}
 	}
 	return result, nil
+}
+
+func runContextResult(
+	ctx context.Context,
+	start time.Time,
+) (codeexecutor.RunResult, error, bool) {
+	err := ctx.Err()
+	if err == nil {
+		return codeexecutor.RunResult{}, nil, false
+	}
+	result := codeexecutor.RunResult{
+		Duration: time.Since(start),
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		result.TimedOut = true
+		result.ExitCode = -1
+		return result, &sandboxError{
+			Kind: ErrTimeout,
+			Op:   "run",
+			Err:  context.DeadlineExceeded,
+		}, true
+	}
+	return result, err, true
 }
 
 type runPreparation struct {

@@ -998,6 +998,84 @@ func TestRunProgramWithDiagnosticsCanceledContextReturnsPromptly(t *testing.T) {
 	}
 }
 
+func TestRunProgramColdPreflightShortTimeoutReturnsErrTimeout(t *testing.T) {
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	t.Cleanup(func() { _ = rt.Close() })
+	<-rt.preflightGate
+	t.Cleanup(func() { rt.preflightGate <- struct{}{} })
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"macos/cold-preflight-short-timeout",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	res, runErr := rt.RunProgram(context.Background(), ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-c", "echo ok"},
+		Timeout: 50 * time.Millisecond,
+	})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("cold preflight timeout took too long: %s", time.Since(start))
+	}
+	if !isKind(runErr, ErrTimeout) {
+		t.Fatalf("run error = %v, want ErrTimeout", runErr)
+	}
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Fatalf("result = %#v, want TimedOut with ExitCode -1", res)
+	}
+}
+
+func TestRunProgramWarmDiagnosticsCachePreflightTimeoutReturnsErrTimeout(t *testing.T) {
+	resetDiagnosticsCapsCacheForTest()
+	t.Cleanup(resetDiagnosticsCapsCacheForTest)
+	storeCachedDiagnosticsCaps(DiagnosticsCapability{
+		Supported:      true,
+		ProbeCompleted: true,
+	})
+	rt := NewRuntime(
+		WithWorkspaceRoot(t.TempDir()),
+		WithPermissionProfile(WorkspaceWriteProfile()),
+	)
+	t.Cleanup(func() { _ = rt.Close() })
+	<-rt.preflightGate
+	t.Cleanup(func() { rt.preflightGate <- struct{}{} })
+	ws, err := rt.CreateWorkspace(
+		context.Background(),
+		"macos/warm-diagnostics-cache-preflight-timeout",
+		codeexecutor.WorkspacePolicy{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, diagnosticsCh := WithDiagnostics(context.Background())
+	start := time.Now()
+	res, runErr := rt.RunProgram(ctx, ws, codeexecutor.RunProgramSpec{
+		Cmd:     "bash",
+		Args:    []string{"-c", "echo ok"},
+		Timeout: 50 * time.Millisecond,
+	})
+	if time.Since(start) > 2*time.Second {
+		t.Fatalf("warm-cache preflight timeout took too long: %s", time.Since(start))
+	}
+	if !isKind(runErr, ErrTimeout) {
+		t.Fatalf("run error = %v, want ErrTimeout", runErr)
+	}
+	if !res.TimedOut || res.ExitCode != -1 {
+		t.Fatalf("result = %#v, want TimedOut with ExitCode -1", res)
+	}
+	select {
+	case <-diagnosticsCh:
+	case <-time.After(time.Second):
+		t.Fatal("diagnostics channel did not deliver")
+	}
+}
+
 func TestRunProgramWithDiagnosticsShortTimeoutReturnsErrTimeout(t *testing.T) {
 	if _, err := os.Stat(macosSandboxExecPath); err != nil {
 		t.Skip("sandbox-exec not available")
