@@ -28,7 +28,7 @@ Redis 存储适用于生产环境和分布式应用，提供高性能和自动�
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | 每个会话存储的最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话状态和事件的 TTL，负值等同于 0 |
-| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。传入 `0` 表示 Track event 不过期 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。非正数表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用级状态的 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户级状态的 TTL |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key 前缀，所有 key 将以 `prefix:` 开头。适用于多应用共享同一 Redis 实例的场景 |

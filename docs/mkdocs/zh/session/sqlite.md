@@ -45,7 +45,7 @@ defer sessionService.Close()
 
 ## 配置选项
 
-- TTL 与清理：`WithSessionTTL`、`WithTrackEventTTL`、`WithAppStateTTL`、`WithUserStateTTL`、`WithCleanupInterval`
+- TTL 与清理：`WithSessionTTL`、`WithTrackEventTTL`（默认继承 SessionTTL，非正数表示 Track event 不过期）、`WithAppStateTTL`、`WithUserStateTTL`、`WithCleanupInterval`
 - 保留策略：`WithSessionEventLimit`
 - 异步持久化：`WithEnableAsyncPersist`、`WithAsyncPersisterNum`
 - 软删除：`WithSoftDelete`（默认开启）

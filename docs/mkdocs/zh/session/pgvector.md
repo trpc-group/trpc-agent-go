@@ -41,7 +41,7 @@ PGVector 会话存储基于 `session/postgres` 扩展，在常规 PostgreSQL Ses
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | 每个会话最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话 TTL |
-| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。传入 `0` 表示 Track event 不过期 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。非正数表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用状态 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户状态 TTL |
 | `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0`（自动确定） | TTL 清理间隔；只要配置了任意 TTL，默认会回落到 5 分钟 |

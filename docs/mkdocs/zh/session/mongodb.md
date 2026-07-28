@@ -35,7 +35,7 @@ MongoDB 会话存储要求部署支持多文档事务，例如副本集或分片
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | context-window 模式下每个会话最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话 TTL |
-| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。传入 `0` 表示 Track event 不过期 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。非正数表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用状态 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户状态 TTL |
 | `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0`（自动确定） | 事件和 Track 清理间隔，默认 5 分钟（如果配置了会话或 Track event TTL） |

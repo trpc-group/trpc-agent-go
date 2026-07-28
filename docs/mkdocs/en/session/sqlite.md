@@ -48,7 +48,8 @@ defer sessionService.Close()
 
 ## Configuration Options
 
-- **TTL and cleanup**: `WithSessionTTL`, `WithTrackEventTTL`,
+- **TTL and cleanup**: `WithSessionTTL`, `WithTrackEventTTL` (inherits
+  `SessionTTL`; non-positive values disable track event expiry),
   `WithAppStateTTL`, `WithUserStateTTL`, `WithCleanupInterval`
 - **Retention**: `WithSessionEventLimit`
 - **Persistence**: `WithEnableAsyncPersist`, `WithAsyncPersisterNum`
