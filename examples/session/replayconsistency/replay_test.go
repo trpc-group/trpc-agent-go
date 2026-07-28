@@ -58,7 +58,8 @@ func TestServiceBackendsReplayThroughRealAPIs(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if diffs := Compare(tc.Name, sqliteBackend.Name(), left, right); len(diffs) != 0 {
+		backendPair := memoryBackend.Name() + "-vs-" + sqliteBackend.Name()
+		if diffs := CompareBackends(tc.Name, backendPair, left, right); len(diffs) != 0 {
 			t.Fatalf("%s backend mismatch: %+v", tc.Name, diffs)
 		}
 		for _, result := range []struct {
