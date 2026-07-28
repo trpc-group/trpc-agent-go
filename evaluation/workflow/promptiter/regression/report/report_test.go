@@ -82,12 +82,12 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 			PromptIterStopReason: "target score reached",
 			RoundUsage: regression.UsageSummary{
 				Calls: 2, TotalTokens: 30,
-				CostEstimate:      regression.CostEstimate{EstimatedCost: .1, CostKnown: true},
+				CostEstimate:      regression.CostEstimate{EstimatedCost: .1, CostKnown: true, Currency: regression.CostCurrencyUSD},
 				PromptIterLatency: 100 * time.Millisecond, Complete: true,
 			},
 			CumulativeUsage: regression.UsageSummary{
 				Calls: 5, TotalTokens: 70,
-				CostEstimate:      regression.CostEstimate{EstimatedCost: .25, CostKnown: true},
+				CostEstimate:      regression.CostEstimate{EstimatedCost: .25, CostKnown: true, Currency: regression.CostCurrencyUSD},
 				PromptIterLatency: 250 * time.Millisecond, Complete: true,
 			},
 			TrainDelta: &regression.DeltaReport{BaselineScore: .2, CandidateScore: .8, WeightedScoreDelta: .6},
@@ -134,8 +134,8 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 		"## Optimization progress", "| 0 | 0.3 | 0 | n/a | baseline | n/a |",
 		"| 0.25 | 0.2 |",
 		"Target surfaces: `agent#instruction`",
-		"### Resources", "| round | 2 | 30 | 0.100000 | true | 100ms | true |",
-		"| cumulative | 5 | 70 | 0.250000 | true | 250ms | true |",
+		"### Resources", "| round | 2 | 30 | 0.100000 | USD | true | 100ms | true |",
+		"| cumulative | 5 | 70 | 0.250000 | USD | true | 250ms | true |",
 	} {
 		if !strings.Contains(string(markdown), expected) {
 			t.Fatalf("markdown omitted %q:\n%s", expected, markdown)
@@ -154,6 +154,29 @@ func TestMarkdownIncludesPromptDeltaCasesAndGateReasons(t *testing.T) {
 	} {
 		assert.Contains(t, string(encoded), expected)
 	}
+}
+
+func TestRenderersSanitizeUnknownAttributionCategories(t *testing.T) {
+	const secret = "api_key=attribution-secret"
+	result := &regression.RunResult{
+		RunID: "run-1", Status: regression.RunStatusSucceeded,
+		Spec: &regression.RunSpec{TargetSurfaceID: "agent#instruction"},
+		Attributions: []regression.AttributionResult{{
+			CaseID: "case-1", Category: regression.FailureCategory(secret), Reason: "failed",
+		}},
+		AttributionCounts: map[regression.FailureCategory]int{
+			regression.FailureCategory(secret): 1,
+		},
+	}
+	encoded, err := JSON(result)
+	require.NoError(t, err)
+	markdown, err := Markdown(result)
+	require.NoError(t, err)
+	for _, rendered := range []string{string(encoded), string(markdown)} {
+		assert.NotContains(t, rendered, secret)
+		assert.Contains(t, rendered, string(regression.FailureUnknown))
+	}
+	assert.Contains(t, string(encoded), `"attributionCounts":{"unknown":1}`)
 }
 
 func TestScenarioPromptAndMetadataCannotBreakMarkdownStructure(t *testing.T) {

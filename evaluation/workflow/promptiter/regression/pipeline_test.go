@@ -160,7 +160,7 @@ func TestAnalyzerRejectsInconsistentUsageEvidence(t *testing.T) {
 	}{
 		{name: "negative model calls", engineUsage: promptiter.Usage{Calls: -1}},
 		{name: "negative latency", supplement: regression.UsageSupplement{PromptIterLatency: -time.Second}},
-		{name: "non-finite cost", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, EstimatedCost: math.NaN(), PricingSource: "test"}}}},
+		{name: "non-finite cost", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, EstimatedCost: math.NaN(), Currency: regression.CostCurrencyUSD, PricingSource: "test"}}}},
 		{name: "unknown cost carries a value", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{EstimatedCost: .5}}}},
 		{name: "unknown cost carries a pricing source", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{PricingSource: "test"}}}},
 		{name: "known cost has no pricing source", supplement: regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true}}}},
@@ -335,7 +335,7 @@ func TestAnalyzerPropagatesAuditDependencyFailures(t *testing.T) {
 			result, err := analyzer.Analyze(
 				context.Background(), auditSpec(),
 				promptIterResult(profile("baseline"), profile("candidate"), true),
-				regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, PricingSource: "test"}}},
+				regression.UsageSupplement{CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{CostKnown: true, Currency: regression.CostCurrencyUSD, PricingSource: "test"}}},
 			)
 			if err == nil || result.Status != regression.RunStatusFailed {
 				t.Fatalf("result=%+v err=%v", result, err)
@@ -367,7 +367,7 @@ func TestAnalyzerAuditsPromptIterResultWithoutReevaluation(t *testing.T) {
 	result, err := analyzer.Analyze(context.Background(), auditSpec(), source, regression.UsageSupplement{
 		PromptIterLatency: time.Second,
 		CostBreakdown: regression.CostBreakdown{
-			CostEstimate:        regression.CostEstimate{CostKnown: true, PricingSource: "test"},
+			CostEstimate:        regression.CostEstimate{CostKnown: true, Currency: regression.CostCurrencyUSD, PricingSource: "test"},
 			RoundEstimatedCosts: map[int]float64{1: 0, 2: 0},
 		},
 	})
@@ -882,7 +882,7 @@ func TestAnalyzerUsesPerRoundAndCumulativeUsageForCandidateGates(t *testing.T) {
 	result := analyzeWith(t, spec, source, regression.UsageSupplement{
 		CostBreakdown: regression.CostBreakdown{
 			CostEstimate: regression.CostEstimate{
-				EstimatedCost: 0.5, CostKnown: true, PricingSource: "test-pricing",
+				EstimatedCost: 0.5, CostKnown: true, Currency: regression.CostCurrencyUSD, PricingSource: "test-pricing",
 			},
 			BaselineEstimatedCost: 0.1,
 			RoundEstimatedCosts:   map[int]float64{1: 0.2, 2: 0.2},
@@ -948,7 +948,7 @@ func analyze(t *testing.T, source *engine.RunResult) *regression.RunResult {
 	t.Helper()
 	return analyzeWith(t, auditSpec(), source, regression.UsageSupplement{
 		CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{
-			CostKnown: true, PricingSource: "test",
+			CostKnown: true, Currency: regression.CostCurrencyUSD, PricingSource: "test",
 		}},
 	})
 }

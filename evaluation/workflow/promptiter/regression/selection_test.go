@@ -20,7 +20,7 @@ func TestSelectedProfileReturnsOnlyRegressionAuthorizedProfile(t *testing.T) {
 	profile := testProfile("target", "selected")
 	result := &RunResult{
 		Decision: DecisionAccepted, SelectedCandidateID: "candidate",
-		Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate", Profile: profile}}},
+		Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate", Profile: profile}, Gate: &GateDecision{Decision: DecisionAccepted}}},
 	}
 	selected, err := result.SelectedProfile()
 	require.NoError(t, err)
@@ -42,13 +42,21 @@ func TestSelectedProfileRejectsMissingOrAmbiguousSelection(t *testing.T) {
 		{name: "selected id absent", result: &RunResult{Decision: DecisionAccepted, SelectedCandidateID: "missing"}},
 		{name: "selected profile absent", result: &RunResult{
 			Decision: DecisionAccepted, SelectedCandidateID: "candidate",
-			Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate"}}},
+			Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate"}, Gate: &GateDecision{Decision: DecisionAccepted}}},
+		}},
+		{name: "selected gate is absent", result: &RunResult{
+			Decision: DecisionAccepted, SelectedCandidateID: "candidate",
+			Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate", Profile: profile}}},
+		}},
+		{name: "selected gate rejected", result: &RunResult{
+			Decision: DecisionAccepted, SelectedCandidateID: "candidate",
+			Candidates: []CandidateResult{{Candidate: Candidate{ID: "candidate", Profile: profile}, Gate: &GateDecision{Decision: DecisionRejected}}},
 		}},
 		{name: "duplicate selected id", result: &RunResult{
 			Decision: DecisionAccepted, SelectedCandidateID: "candidate",
 			Candidates: []CandidateResult{
-				{Candidate: Candidate{ID: "candidate", Profile: profile}},
-				{Candidate: Candidate{ID: "candidate", Profile: profile}},
+				{Candidate: Candidate{ID: "candidate", Profile: profile}, Gate: &GateDecision{Decision: DecisionAccepted}},
+				{Candidate: Candidate{ID: "candidate", Profile: profile}, Gate: &GateDecision{Decision: DecisionAccepted}},
 			},
 		}},
 	}
@@ -75,8 +83,8 @@ func TestSelectedProfileAllowsRepeatedProfileWithUniqueCandidateIDs(t *testing.T
 	result := &RunResult{
 		Decision: DecisionAccepted, SelectedCandidateID: "round-2",
 		Candidates: []CandidateResult{
-			{Candidate: Candidate{ID: "round-1", Profile: repeated}},
-			{Candidate: Candidate{ID: "round-2", Profile: repeated}},
+			{Candidate: Candidate{ID: "round-1", Profile: repeated}, Gate: &GateDecision{Decision: DecisionAccepted}},
+			{Candidate: Candidate{ID: "round-2", Profile: repeated}, Gate: &GateDecision{Decision: DecisionAccepted}},
 		},
 	}
 	selected, err := result.SelectedProfile()

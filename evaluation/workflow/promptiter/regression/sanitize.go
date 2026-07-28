@@ -244,6 +244,7 @@ func sanitizeAttribution(
 	result.CandidateID = sanitizeContent(policy, source.CandidateID)
 	result.EvalSetID = sanitizeContent(policy, source.EvalSetID)
 	result.CaseID = sanitizeContent(policy, source.CaseID)
+	result.Category = sanitizedFailureCategory(source.Category)
 	result.Reason = sanitizeContent(policy, source.Reason)
 	if len(source.Evidence) > 0 {
 		result.Evidence = make([]Evidence, len(source.Evidence))
@@ -344,14 +345,18 @@ func SanitizeRunResult(source *RunResult) (*RunResult, error) {
 		result.Spec.Metadata = sanitizeMetadata(result.Spec.Metadata, policy)
 	}
 	result.ErrorMessage = sanitizeContent(policy, result.ErrorMessage)
-	result.Usage.TelemetrySource = sanitizeContent(policy, result.Usage.TelemetrySource)
-	result.Usage.PricingSource = sanitizeContent(policy, result.Usage.PricingSource)
+	sanitizeUsageSummary(&result.Usage, policy)
 	result.BaselineProfile = sanitizeProfile(result.BaselineProfile, policy)
 	sanitizeSnapshot(result.BaselineTrain, policy)
 	sanitizeSnapshot(result.BaselineValidation, policy)
 	for index := range result.Attributions {
 		sanitized := sanitizeAttribution(&result.Attributions[index], policy)
 		result.Attributions[index] = *sanitized
+	}
+	if len(result.Attributions) > 0 {
+		rebuildAttributionCounts(&result)
+	} else {
+		result.AttributionCounts = sanitizeAttributionCounts(result.AttributionCounts)
 	}
 	for index := range result.Candidates {
 		sanitizeCandidateResult(&result.Candidates[index], policy)
@@ -407,6 +412,34 @@ func sanitizeCandidateResult(result *CandidateResult, policy AuditPolicy) {
 	sanitizeDeltaReport(result.TrainDelta, policy)
 	sanitizeDeltaReport(result.ValidationDelta, policy)
 	result.Gate = sanitizeGateDecision(result.Gate, policy)
+	sanitizeUsageSummary(&result.RoundUsage, policy)
+	sanitizeUsageSummary(&result.CumulativeUsage, policy)
+}
+
+func sanitizeUsageSummary(result *UsageSummary, policy AuditPolicy) {
+	if result == nil {
+		return
+	}
+	result.TelemetrySource = sanitizeContent(policy, result.TelemetrySource)
+	result.PricingSource = sanitizeContent(policy, result.PricingSource)
+	if result.Currency != CostCurrencyUSD {
+		result.Currency = ""
+	}
+}
+
+func sanitizeAttributionCounts(
+	source map[FailureCategory]int,
+) map[FailureCategory]int {
+	if len(source) == 0 {
+		return nil
+	}
+	result := make(map[FailureCategory]int, len(source))
+	for category, count := range source {
+		if count > 0 {
+			result[sanitizedFailureCategory(category)] += count
+		}
+	}
+	return result
 }
 
 func sanitizeSnapshot(snapshot *EvaluationSnapshot, policy AuditPolicy) {

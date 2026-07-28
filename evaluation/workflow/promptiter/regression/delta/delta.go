@@ -19,17 +19,30 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter/regression"
 )
 
-// Engine compares snapshots with a configurable floating-point tolerance.
+// Engine compares snapshots with a configurable floating-point tolerance. Its
+// zero value uses an exact comparison; use New to configure a tolerance.
 type Engine struct {
-	Epsilon float64
+	epsilon float64
 }
 
-// New creates a delta engine.
+// New creates a delta engine. A finite non-negative epsilon treats score
+// differences within that tolerance as unchanged; invalid values use zero.
 func New(epsilon float64) *Engine {
-	if math.IsNaN(epsilon) || math.IsInf(epsilon, 0) || epsilon < 0 {
-		epsilon = 0
+	return &Engine{epsilon: normalizedEpsilon(epsilon)}
+}
+
+func normalizedEpsilon(value float64) float64 {
+	if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 {
+		return 0
 	}
-	return &Engine{Epsilon: epsilon}
+	return value
+}
+
+func (e *Engine) effectiveEpsilon() float64 {
+	if e == nil {
+		return 0
+	}
+	return normalizedEpsilon(e.epsilon)
 }
 
 // Compare returns stable deltas aligned by case ID and metric name.
@@ -238,7 +251,8 @@ func (e *Engine) compareMetric(
 	}
 	policy, exists := policies[name]
 	scoreDelta := candidateMetric.Score - baselineMetric.Score
-	kind := classify(baselineMetric.Passed, candidateMetric.Passed, scoreDelta, e.Epsilon)
+	epsilon := e.effectiveEpsilon()
+	kind := classify(baselineMetric.Passed, candidateMetric.Passed, scoreDelta, epsilon)
 	if !exists {
 		return regression.MetricDelta{
 				MetricName:      name,
@@ -248,7 +262,7 @@ func (e *Engine) compareMetric(
 				BaselinePassed:  baselineMetric.Passed,
 				CandidatePassed: candidateMetric.Passed,
 			}, metricContribution{
-				regressed: kind == regression.ChangeNewFail || scoreDelta < -e.Epsilon,
+				regressed: kind == regression.ChangeNewFail || scoreDelta < -epsilon,
 				complete:  false,
 			}, nil
 	}
@@ -268,7 +282,7 @@ func (e *Engine) compareMetric(
 			weightedDelta:  scoreDelta * policy.Weight,
 			weight:         policy.Weight,
 			newHardFailure: newHardFailure,
-			regressed:      kind == regression.ChangeNewFail || scoreDelta < -e.Epsilon,
+			regressed:      kind == regression.ChangeNewFail || scoreDelta < -epsilon,
 			complete:       true,
 		}, nil
 }

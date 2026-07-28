@@ -9,6 +9,7 @@
 package regression
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,10 +25,14 @@ import (
 )
 
 func adaptEvaluation(
+	ctx context.Context,
 	source *engine.EvaluationResult,
 	profile *promptiter.Profile,
 	critical map[string]struct{},
 ) (*EvaluationSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if source == nil || profile == nil {
 		return nil, errors.New("evaluation result and profile are required")
 	}
@@ -48,6 +53,9 @@ func adaptEvaluation(
 	seenCases := make(map[string]struct{})
 	runScores := make(runMetricScores)
 	for _, evalSet := range source.EvalSets {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if strings.TrimSpace(evalSet.EvalSetID) == "" {
 			return nil, errors.New("evaluation set id is empty")
 		}
@@ -57,6 +65,9 @@ func adaptEvaluation(
 		seenEvalSets[evalSet.EvalSetID] = struct{}{}
 		evalSetIDs = append(evalSetIDs, evalSet.EvalSetID)
 		for _, sourceCase := range evalSet.Cases {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			key := evalSet.EvalSetID + "\x00" + sourceCase.EvalCaseID
 			if _, exists := seenCases[key]; exists {
 				return nil, fmt.Errorf(
@@ -65,7 +76,7 @@ func adaptEvaluation(
 				)
 			}
 			seenCases[key] = struct{}{}
-			caseResult, complete, err := adaptCase(
+			caseResult, complete, err := adaptCase(ctx,
 				sourceCase, evalSet.EvalSetID, critical, runScores,
 			)
 			if err != nil {
@@ -91,11 +102,15 @@ func adaptEvaluation(
 }
 
 func adaptCase(
+	ctx context.Context,
 	source engine.CaseResult,
 	evalSetID string,
 	critical map[string]struct{},
 	runScores runMetricScores,
 ) (CaseResult, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return CaseResult{}, false, err
+	}
 	result := CaseResult{EvalSetID: evalSetID, CaseID: source.EvalCaseID, Passed: true}
 	if strings.TrimSpace(source.EvalCaseID) == "" {
 		return CaseResult{}, false, errors.New("evaluation case id is empty")
@@ -104,6 +119,9 @@ func adaptCase(
 	complete := source.EvalCaseID != "" && len(source.Metrics) > 0
 	aggregateMetrics := make(map[string]MetricResult, len(source.Metrics))
 	for _, metric := range source.Metrics {
+		if err := ctx.Err(); err != nil {
+			return CaseResult{}, false, err
+		}
 		if strings.TrimSpace(metric.MetricName) == "" {
 			return CaseResult{}, false, errors.New("metric name is empty")
 		}
@@ -165,6 +183,9 @@ func adaptCase(
 	detailIDs := make(map[int]struct{}, len(source.RunDetails))
 	runIndexes := make(map[int]int, len(source.RunDetails))
 	for _, run := range source.RunDetails {
+		if err := ctx.Err(); err != nil {
+			return CaseResult{}, false, err
+		}
 		if run != nil {
 			if run.RunID <= 0 {
 				return CaseResult{}, false, fmt.Errorf("run detail id %d must be positive", run.RunID)
@@ -193,6 +214,9 @@ func adaptCase(
 	}
 	resultIDs := make(map[int]struct{}, len(source.RunResults))
 	for _, run := range source.RunResults {
+		if err := ctx.Err(); err != nil {
+			return CaseResult{}, false, err
+		}
 		if run == nil {
 			complete = false
 			continue

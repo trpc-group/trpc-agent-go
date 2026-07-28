@@ -20,7 +20,11 @@ import (
 
 func TestRulesAttributeValidatesRequiredCaseEvidence(t *testing.T) {
 	rules := NewRules()
-	_, err := rules.Attribute(context.Background(), nil)
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := rules.Attribute(canceled, &regression.CaseResult{CaseID: "case"})
+	assert.ErrorIs(t, err, context.Canceled)
+	_, err = rules.Attribute(context.Background(), nil)
 	require.ErrorContains(t, err, "case result is nil")
 
 	_, err = rules.Attribute(context.Background(), &regression.CaseResult{})

@@ -38,7 +38,7 @@ func buildTrainIndex(
 		if err != nil {
 			return nil, fmt.Errorf("hash round %d input profile: %w", round.Round, err)
 		}
-		snapshot, err := adaptEvaluation(round.Train, round.InputProfile, critical)
+		snapshot, err := adaptEvaluation(ctx, round.Train, round.InputProfile, critical)
 		if err != nil {
 			return nil, fmt.Errorf("adapt round %d train: %w", round.Round, err)
 		}
@@ -52,11 +52,15 @@ func buildTrainIndex(
 }
 
 func candidateTrain(
+	ctx context.Context,
 	values []trainEvidence,
 	candidateRound int,
-) *EvaluationSnapshot {
+) (*EvaluationSnapshot, error) {
 	var selected *trainEvidence
 	for index := range values {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		current := &values[index]
 		if current.round <= candidateRound {
 			continue
@@ -66,12 +70,13 @@ func candidateTrain(
 		}
 	}
 	if selected == nil {
-		return nil
+		return nil, nil
 	}
-	return selected.snapshot
+	return selected.snapshot, nil
 }
 
 func roundCandidateTrain(
+	ctx context.Context,
 	round engine.RoundResult,
 	fallback []trainEvidence,
 	critical map[string]struct{},
@@ -79,9 +84,9 @@ func roundCandidateTrain(
 	expectedRuns int,
 ) (*EvaluationSnapshot, error) {
 	if round.CandidateTrain == nil {
-		return candidateTrain(fallback, round.Round), nil
+		return candidateTrain(ctx, fallback, round.Round)
 	}
-	snapshot, err := adaptEvaluation(
+	snapshot, err := adaptEvaluation(ctx,
 		round.CandidateTrain,
 		round.OutputProfile,
 		critical,
@@ -95,49 +100,59 @@ func roundCandidateTrain(
 }
 
 func profileOnlyChangesTarget(
+	ctx context.Context,
 	baseline *promptiter.Profile,
 	candidate *promptiter.Profile,
 	targetSurfaceID string,
-) (bool, string) {
+) (bool, string, error) {
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
 	if baseline == nil || candidate == nil {
-		return false, "baseline or candidate profile is nil"
+		return false, "baseline or candidate profile is nil", nil
 	}
 	if baseline.StructureID != candidate.StructureID {
-		return false, "candidate structure id differs from baseline"
+		return false, "candidate structure id differs from baseline", nil
 	}
-	baselineOverrides, err := overrideJSON(baseline)
+	baselineOverrides, err := overrideJSON(ctx, baseline)
 	if err != nil {
-		return false, "baseline profile is invalid: " + err.Error()
+		return false, "", fmt.Errorf("baseline profile is invalid: %w", err)
 	}
-	candidateOverrides, err := overrideJSON(candidate)
+	candidateOverrides, err := overrideJSON(ctx, candidate)
 	if err != nil {
-		return false, "candidate profile is invalid: " + err.Error()
+		return false, "", fmt.Errorf("candidate profile is invalid: %w", err)
 	}
 	for surfaceID, baselineValue := range baselineOverrides {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
 		if surfaceID == targetSurfaceID {
 			continue
 		}
 		candidateValue, exists := candidateOverrides[surfaceID]
 		if !exists || candidateValue != baselineValue {
-			return false, fmt.Sprintf("candidate modifies non-target surface %q", surfaceID)
+			return false, fmt.Sprintf("candidate modifies non-target surface %q", surfaceID), nil
 		}
 	}
 	for surfaceID := range candidateOverrides {
+		if err := ctx.Err(); err != nil {
+			return false, "", err
+		}
 		if surfaceID != targetSurfaceID {
 			if _, exists := baselineOverrides[surfaceID]; !exists {
-				return false, fmt.Sprintf("candidate adds non-target surface %q", surfaceID)
+				return false, fmt.Sprintf("candidate adds non-target surface %q", surfaceID), nil
 			}
 		}
 	}
-	if _, exists := candidateOverrides[targetSurfaceID]; !exists {
-		return false, fmt.Sprintf("candidate omits target surface %q", targetSurfaceID)
-	}
-	return true, "candidate changes only the configured target surface"
+	return true, "candidate changes only the configured target surface", nil
 }
 
-func overrideJSON(profile *promptiter.Profile) (map[string]string, error) {
+func overrideJSON(ctx context.Context, profile *promptiter.Profile) (map[string]string, error) {
 	result := make(map[string]string, len(profile.Overrides))
 	for _, override := range profile.Overrides {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if override.SurfaceID == "" {
 			return nil, fmt.Errorf("profile override surface id is empty")
 		}

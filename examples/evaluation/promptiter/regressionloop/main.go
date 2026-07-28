@@ -289,6 +289,7 @@ func summarizeUsage(
 			CostEstimate: regression.CostEstimate{
 				EstimatedCost: 0,
 				CostKnown:     true,
+				Currency:      regression.CostCurrencyUSD,
 				PricingSource: "deterministic_example_zero_cost",
 			},
 			RoundEstimatedCosts: roundCosts,

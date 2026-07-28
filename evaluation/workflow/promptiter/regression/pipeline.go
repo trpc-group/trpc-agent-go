@@ -241,7 +241,7 @@ func (a *analyzer) buildAudit(
 	}
 	critical := stringSet(result.Spec.CriticalCaseIDs)
 	var err error
-	result.BaselineValidation, err = adaptEvaluation(
+	result.BaselineValidation, err = adaptEvaluation(ctx,
 		source.BaselineValidation, baselineProfile, critical,
 	)
 	if err != nil {
@@ -252,7 +252,7 @@ func (a *analyzer) buildAudit(
 	}
 	markConfiguredMetricCoverage(result.BaselineValidation, result.Spec.MetricPolicies)
 	markExpectedRunCoverage(result.BaselineValidation, result.Spec.Runtime.NumRuns)
-	result.BaselineTrain, err = adaptEvaluation(
+	result.BaselineTrain, err = adaptEvaluation(ctx,
 		source.Rounds[0].Train, baselineProfile, critical,
 	)
 	if err != nil {
@@ -282,7 +282,7 @@ func (a *analyzer) buildAudit(
 			return err
 		}
 		candidateResult, err := a.auditRound(
-			result, baselineProfile, round, trainByProfile, critical,
+			ctx, result, baselineProfile, round, trainByProfile, critical,
 			candidateUsages[round.Round],
 		)
 		if err != nil {
@@ -370,6 +370,9 @@ func (a *analyzer) attributeSnapshot(
 			len(attribution.Evidence) == 0 {
 			return fmt.Errorf("attribute case %q returned incomplete evidence", caseResult.CaseID)
 		}
+		if !validFailureCategory(attribution.Category) {
+			return fmt.Errorf("attribute case %q returned an unsupported category", caseResult.CaseID)
+		}
 		for _, evidence := range attribution.Evidence {
 			if strings.TrimSpace(evidence.Reason) == "" {
 				return fmt.Errorf("attribute case %q returned empty evidence reason", caseResult.CaseID)
@@ -395,6 +398,10 @@ func finalizeAttributions(result *RunResult) {
 		}
 		return result.Attributions[i].CaseID < result.Attributions[j].CaseID
 	})
+	rebuildAttributionCounts(result)
+}
+
+func rebuildAttributionCounts(result *RunResult) {
 	result.AttributionCounts = make(map[FailureCategory]int, len(result.Attributions))
 	for _, attribution := range result.Attributions {
 		result.AttributionCounts[attribution.Category]++
@@ -402,6 +409,7 @@ func finalizeAttributions(result *RunResult) {
 }
 
 func (a *analyzer) auditRound(
+	ctx context.Context,
 	result *RunResult,
 	baselineProfile *promptiter.Profile,
 	round engine.RoundResult,
@@ -413,7 +421,7 @@ func (a *analyzer) auditRound(
 	if err != nil {
 		return nil, fmt.Errorf("hash round %d output profile: %w", round.Round, err)
 	}
-	validation, err := adaptEvaluation(
+	validation, err := adaptEvaluation(ctx,
 		round.Validation, round.OutputProfile, critical,
 	)
 	if err != nil {
@@ -441,7 +449,7 @@ func (a *analyzer) auditRound(
 		RoundUsage:      usage.round,
 		CumulativeUsage: usage.cumulative,
 	}
-	profileChanged, err := profileChanged(round.InputProfile, round.OutputProfile)
+	profileChanged, err := profileChanged(ctx, round.InputProfile, round.OutputProfile)
 	if err != nil {
 		return nil, fmt.Errorf("compare round %d input and output profiles: %w", round.Round, err)
 	}
@@ -453,6 +461,7 @@ func (a *analyzer) auditRound(
 		candidate.PromptIterStopReason = round.Stop.Reason
 	}
 	train, err := roundCandidateTrain(
+		ctx,
 		round,
 		trainByProfile[hash],
 		critical,
@@ -473,11 +482,15 @@ func (a *analyzer) auditRound(
 			return nil, fmt.Errorf("compare round %d train: %w", round.Round, err)
 		}
 	}
-	profileValid, profileReason := profileOnlyChangesTarget(
+	profileValid, profileReason, err := profileOnlyChangesTarget(
+		ctx,
 		baselineProfile,
 		round.OutputProfile,
 		result.Spec.TargetSurfaceID,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("validate round %d profile scope: %w", round.Round, err)
+	}
 	gateDecision, err := a.deps.Gate.Decide(&GateInput{
 		Spec:                    result.Spec,
 		PromptIterAccepted:      candidate.PromptIterAccepted,
@@ -503,9 +516,17 @@ func (a *analyzer) auditRound(
 	return candidate, nil
 }
 
-func profileChanged(input, output *promptiter.Profile) (bool, error) {
+func profileChanged(ctx context.Context, input, output *promptiter.Profile) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	// Engine canonicalizes profiles after applying patches, so this comparison
+	// observes effective profile changes rather than no-op override syntax.
 	matches, err := sameProfile(input, output)
 	if err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
 		return false, err
 	}
 	return !matches, nil

@@ -29,7 +29,10 @@ func NewRules() *Rules {
 }
 
 // Attribute returns one primary, explainable failure category for a case.
-func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*regression.AttributionResult, error) {
+func (r *Rules) Attribute(ctx context.Context, result *regression.CaseResult) (*regression.AttributionResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if result == nil {
 		return nil, errors.New("case result is nil")
 	}
@@ -37,7 +40,13 @@ func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*re
 		return nil, errors.New("case id is empty")
 	}
 	for runIndex, run := range result.Runs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		for toolIndex, tool := range run.Tools {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if strings.TrimSpace(tool.Error) == "" {
 				continue
 			}
@@ -56,6 +65,9 @@ func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*re
 				"execution", fmt.Sprintf("runs[%d].error", runIndex), run.Error), nil
 		}
 		for stepIndex, step := range run.Trace {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			if step.Error == "" {
 				continue
 			}
@@ -72,6 +84,9 @@ func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*re
 
 	failed := make([]classifiedMetric, 0, len(result.Metrics))
 	for _, metric := range result.Metrics {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if metric.Passed {
 			continue
 		}
@@ -88,7 +103,10 @@ func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*re
 		}
 		return failed[i].metric.Name < failed[j].metric.Name
 	})
-	structured := classifyExecutionEvidence(result)
+	structured, err := classifyExecutionEvidence(ctx, result)
+	if err != nil {
+		return nil, err
+	}
 	if structured != nil && (len(failed) == 0 ||
 		categoryPriority(structured.Category) < categoryPriority(failed[0].category)) {
 		return structured, nil
@@ -110,16 +128,22 @@ func (r *Rules) Attribute(_ context.Context, result *regression.CaseResult) (*re
 		"case", "passed", "false"), nil
 }
 
-func classifyExecutionEvidence(result *regression.CaseResult) *regression.AttributionResult {
+func classifyExecutionEvidence(
+	ctx context.Context,
+	result *regression.CaseResult,
+) (*regression.AttributionResult, error) {
 	for runIndex, run := range result.Runs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if toolIndex, category, reason := compareToolTrajectory(run.ExpectedTools, run.Tools); category != regression.FailureUnknown {
 			return attributed(result.EvalSetID, result.CaseID, category, reason,
-				"tool_trajectory", fmt.Sprintf("runs[%d].tools[%d]", runIndex, toolIndex), reason)
+				"tool_trajectory", fmt.Sprintf("runs[%d].tools[%d]", runIndex, toolIndex), reason), nil
 		}
 		if expected, actual := strings.TrimSpace(run.ExpectedRoute), strings.TrimSpace(run.Route); expected != "" && expected != actual {
 			reason := fmt.Sprintf("expected route %q, observed %q", expected, actual)
 			return attributed(result.EvalSetID, result.CaseID, regression.FailureRoute, reason,
-				"trace", fmt.Sprintf("runs[%d].route", runIndex), reason)
+				"trace", fmt.Sprintf("runs[%d].route", runIndex), reason), nil
 		}
 		expected := strings.TrimSpace(run.ExpectedFinalResponse)
 		actual := strings.TrimSpace(run.FinalResponse)
@@ -133,9 +157,9 @@ func classifyExecutionEvidence(result *regression.CaseResult) *regression.Attrib
 			reason = "final response does not satisfy the expected structured-output format"
 		}
 		return attributed(result.EvalSetID, result.CaseID, category, reason,
-			"final_response", fmt.Sprintf("runs[%d].finalResponse", runIndex), reason)
+			"final_response", fmt.Sprintf("runs[%d].finalResponse", runIndex), reason), nil
 	}
-	return nil
+	return nil, nil
 }
 
 func compareToolTrajectory(

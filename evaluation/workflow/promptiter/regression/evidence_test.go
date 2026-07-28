@@ -9,6 +9,7 @@
 package regression
 
 import (
+	"context"
 	"errors"
 	"math"
 	"testing"
@@ -98,15 +99,22 @@ func TestAdaptEvaluationRejectsMalformedEvidence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			value := richEvidenceEvaluation()
 			test.mutate(value)
-			_, err := adaptEvaluation(value, testProfile("target", "prompt"), nil)
+			_, err := adaptEvaluation(context.Background(), value, testProfile("target", "prompt"), nil)
 			require.ErrorContains(t, err, test.error)
 		})
 	}
 
-	_, err := adaptEvaluation(nil, testProfile("target", "prompt"), nil)
+	_, err := adaptEvaluation(context.Background(), nil, testProfile("target", "prompt"), nil)
 	require.ErrorContains(t, err, "evaluation result and profile are required")
-	_, err = adaptEvaluation(richEvidenceEvaluation(), nil, nil)
+	_, err = adaptEvaluation(context.Background(), richEvidenceEvaluation(), nil, nil)
 	require.ErrorContains(t, err, "evaluation result and profile are required")
+}
+
+func TestAdaptEvaluationHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := adaptEvaluation(ctx, richEvidenceEvaluation(), testProfile("target", "prompt"), nil)
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestAdaptEvaluationPreservesRichRepeatedRunEvidence(t *testing.T) {
@@ -124,7 +132,7 @@ func TestAdaptEvaluationPreservesRichRepeatedRunEvidence(t *testing.T) {
 	caseValue.RunDetails = append(caseValue.RunDetails, thirdDetail)
 	caseValue.RunResults = append(caseValue.RunResults, thirdResult)
 
-	snapshot, err := adaptEvaluation(value, testProfile("target", "prompt"), map[string]struct{}{"case": {}})
+	snapshot, err := adaptEvaluation(context.Background(), value, testProfile("target", "prompt"), map[string]struct{}{"case": {}})
 	require.NoError(t, err)
 	require.True(t, snapshot.Complete)
 	require.Len(t, snapshot.Cases, 1)

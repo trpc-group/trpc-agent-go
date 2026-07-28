@@ -184,9 +184,21 @@ func TestScenarioMalformedEvaluationEvidenceIsRejectedAtDeltaBoundary(t *testing
 
 func TestNewNormalizesInvalidEpsilon(t *testing.T) {
 	for _, epsilon := range []float64{-1, math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if actual := New(epsilon).Epsilon; actual != 0 {
+		if actual := New(epsilon).effectiveEpsilon(); actual != 0 {
 			t.Fatalf("epsilon %v normalized to %v, want 0", epsilon, actual)
 		}
+	}
+}
+
+func TestZeroValueEngineUsesExactComparison(t *testing.T) {
+	baseline := snapshot(true, .8, []regression.MetricResult{{Name: "quality", Score: .8, Passed: true}})
+	candidate := snapshot(true, .8001, []regression.MetricResult{{Name: "quality", Score: .8001, Passed: true}})
+	report, err := (&Engine{}).Compare(baseline, candidate, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Cases[0].Metrics[0].Kind != regression.ChangeImproved {
+		t.Fatalf("zero-value engine did not use exact comparison: %+v", report.Cases[0].Metrics[0])
 	}
 }
 

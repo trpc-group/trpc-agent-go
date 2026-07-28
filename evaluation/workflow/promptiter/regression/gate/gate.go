@@ -179,6 +179,9 @@ func (b *decisionBuilder) addBudgetRules(input *regression.GateInput) {
 	if budget.RequireKnownCost || budget.MaxEstimatedCost > 0 {
 		b.add("known_cost", usage.CostKnown, booleanValue(usage.CostKnown), booleanValue(true),
 			"estimated cost is unknown", true)
+		b.add("cost_currency", usage.CostKnown && usage.Currency == regression.CostCurrencyUSD,
+			regression.TextRuleValue(usage.Currency), regression.TextRuleValue(regression.CostCurrencyUSD),
+			"estimated cost must declare the canonical USD currency", true)
 	}
 	if budget.MaxCalls > 0 {
 		b.add("call_budget", usage.Calls <= budget.MaxCalls,
@@ -209,7 +212,7 @@ func (b *decisionBuilder) addCostRule(
 	if budget.MaxEstimatedCost <= 0 {
 		return
 	}
-	if usage.CostKnown {
+	if usage.CostKnown && usage.Currency == regression.CostCurrencyUSD {
 		b.add("cost_budget", usage.EstimatedCost <= budget.MaxEstimatedCost,
 			numberValue(usage.EstimatedCost), numberValue(budget.MaxEstimatedCost),
 			"estimated cost budget exceeded", false)

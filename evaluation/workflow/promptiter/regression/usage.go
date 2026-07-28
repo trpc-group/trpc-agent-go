@@ -62,6 +62,7 @@ func buildCandidateUsages(
 			round.Usage, round.Duration, CostEstimate{
 				EstimatedCost: roundCost,
 				CostKnown:     supplement.CostKnown,
+				Currency:      supplement.Currency,
 				PricingSource: supplement.PricingSource,
 			},
 		)
@@ -75,6 +76,7 @@ func buildCandidateUsages(
 			cumulativeTelemetry, cumulativeLatency, CostEstimate{
 				EstimatedCost: cumulativeCost,
 				CostKnown:     supplement.CostKnown,
+				Currency:      supplement.Currency,
 				PricingSource: supplement.PricingSource,
 			},
 		)
@@ -104,13 +106,17 @@ func (cost CostEstimate) validate() error {
 		return errors.New("estimated cost must be finite and non-negative")
 	}
 	if !cost.CostKnown {
-		if cost.EstimatedCost != 0 || strings.TrimSpace(cost.PricingSource) != "" {
-			return errors.New("cost value or pricing source is set while cost is marked unknown")
+		if cost.EstimatedCost != 0 || strings.TrimSpace(cost.Currency) != "" ||
+			strings.TrimSpace(cost.PricingSource) != "" {
+			return errors.New("cost value, currency, or pricing source is set while cost is marked unknown")
 		}
 		return nil
 	}
 	if strings.TrimSpace(cost.PricingSource) == "" {
 		return errors.New("known estimated cost requires a pricing source")
+	}
+	if currency := strings.TrimSpace(cost.Currency); currency != "" && currency != CostCurrencyUSD {
+		return fmt.Errorf("known estimated cost currency %q is unsupported; use %s", currency, CostCurrencyUSD)
 	}
 	return nil
 }

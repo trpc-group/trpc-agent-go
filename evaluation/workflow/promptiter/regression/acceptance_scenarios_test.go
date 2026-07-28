@@ -156,7 +156,7 @@ func TestReleaseDecisionCompletePipelineScenarios(t *testing.T) {
 				spec.Budget.MaxEstimatedCost = .5
 				*usage = regression.UsageSupplement{
 					CostBreakdown: regression.CostBreakdown{CostEstimate: regression.CostEstimate{
-						EstimatedCost: 1, CostKnown: true, PricingSource: "test",
+						EstimatedCost: 1, CostKnown: true, Currency: regression.CostCurrencyUSD, PricingSource: "test",
 					}},
 				}
 			},

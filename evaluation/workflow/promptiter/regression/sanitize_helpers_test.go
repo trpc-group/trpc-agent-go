@@ -73,3 +73,31 @@ func TestHasExecutionErrorChecksEveryObservation(t *testing.T) {
 	_, err := SanitizeRunResult(nil)
 	require.ErrorContains(t, err, "run result is nil")
 }
+
+func TestSanitizeRunResultRedactsUsageProvenanceAcrossScopes(t *testing.T) {
+	const secret = "api_key=usage-secret"
+	result, err := SanitizeRunResult(&RunResult{
+		Usage: UsageSummary{CostEstimate: CostEstimate{Currency: secret, PricingSource: secret}},
+		Candidates: []CandidateResult{{
+			RoundUsage:      UsageSummary{CostEstimate: CostEstimate{Currency: secret, PricingSource: secret}},
+			CumulativeUsage: UsageSummary{CostEstimate: CostEstimate{Currency: secret, PricingSource: secret}},
+		}},
+	})
+	require.NoError(t, err)
+	for _, usage := range []UsageSummary{
+		result.Usage, result.Candidates[0].RoundUsage, result.Candidates[0].CumulativeUsage,
+	} {
+		assert.Empty(t, usage.Currency)
+		assert.NotContains(t, usage.PricingSource, "usage-secret")
+	}
+}
+
+func TestSanitizeRunResultPreservesLegacyAttributionCountsSafely(t *testing.T) {
+	result, err := SanitizeRunResult(&RunResult{AttributionCounts: map[FailureCategory]int{
+		FailureFormat:                           2,
+		FailureCategory("api_key=count-secret"): 1,
+	}})
+	require.NoError(t, err)
+	assert.Equal(t, 2, result.AttributionCounts[FailureFormat])
+	assert.Equal(t, 1, result.AttributionCounts[FailureUnknown])
+}

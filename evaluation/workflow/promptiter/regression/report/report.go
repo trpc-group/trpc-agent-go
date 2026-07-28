@@ -121,8 +121,8 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 		}
 		writeCodeBlock(&builder, profileText(candidate.Candidate.Profile, result.Spec.TargetSurfaceID))
 		builder.WriteString("### Resources\n\n")
-		builder.WriteString("| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |\n")
-		builder.WriteString("|---|---:|---:|---:|---:|---:|---:|\n")
+		builder.WriteString("| Scope | Calls | Tokens | Estimated cost | Currency | Cost known | PromptIter latency | Complete |\n")
+		builder.WriteString("|---|---:|---:|---|---:|---:|---:|---:|\n")
 		writeUsageRow(&builder, "round", candidate.RoundUsage)
 		writeUsageRow(&builder, "cumulative", candidate.CumulativeUsage)
 		builder.WriteString("\n")
@@ -173,10 +173,11 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 	}
 
 	builder.WriteString("## Usage\n\n")
-	fmt.Fprintf(&builder, "Calls: %d; tokens: %d; estimated cost: %.6f (known: %t); PromptIter latency: %s; complete: %t; telemetry source: `%s`; pricing source: `%s`.\n",
+	fmt.Fprintf(&builder, "Calls: %d; tokens: %d; estimated cost: %.6f %s (known: %t); PromptIter latency: %s; complete: %t; telemetry source: `%s`; pricing source: `%s`.\n",
 		result.Usage.Calls,
 		result.Usage.TotalTokens,
 		result.Usage.EstimatedCost,
+		escapeCell(result.Usage.Currency),
 		result.Usage.CostKnown,
 		result.Usage.PromptIterLatency,
 		result.Usage.Complete,
@@ -187,9 +188,9 @@ func Markdown(result *regression.RunResult) ([]byte, error) {
 }
 
 func writeUsageRow(builder *strings.Builder, scope string, usage regression.UsageSummary) {
-	fmt.Fprintf(builder, "| %s | %d | %d | %.6f | %t | %s | %t |\n",
+	fmt.Fprintf(builder, "| %s | %d | %d | %.6f | %s | %t | %s | %t |\n",
 		scope, usage.Calls, usage.TotalTokens, usage.EstimatedCost,
-		usage.CostKnown, usage.PromptIterLatency, usage.Complete,
+		escapeCell(usage.Currency), usage.CostKnown, usage.PromptIterLatency, usage.Complete,
 	)
 }
 

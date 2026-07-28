@@ -150,12 +150,30 @@ func TestPolicyDecideAppliesBudgetRulesAndWarnings(t *testing.T) {
 			decision: regression.DecisionInconclusive, rule: "known_cost",
 		},
 		{
+			name: "missing cost currency is inconclusive",
+			configure: func(input *regression.GateInput) {
+				input.Spec.Budget.RequireKnownCost = true
+				input.TotalUsage.CostKnown = true
+				input.TotalUsage.Currency = ""
+			},
+			decision: regression.DecisionInconclusive, rule: "cost_currency",
+		},
+		{
+			name: "mismatched cost currency is inconclusive",
+			configure: func(input *regression.GateInput) {
+				input.Spec.Budget.MaxEstimatedCost = 1
+				input.TotalUsage.CostKnown = true
+				input.TotalUsage.Currency = "EUR"
+			},
+			decision: regression.DecisionInconclusive, rule: "cost_currency",
+		},
+		{
 			name: "call token cost and time limits reject",
 			configure: func(input *regression.GateInput) {
 				input.Spec.Budget = regression.BudgetPolicy{MaxCalls: 1, MaxTokens: 2, MaxEstimatedCost: .1, MaxPromptIterLatency: time.Second}
 				input.TotalUsage = regression.UsageSummary{
 					Calls: 2, TotalTokens: 3, PromptIterLatency: 2 * time.Second, Complete: true,
-					CostEstimate: regression.CostEstimate{EstimatedCost: .2, CostKnown: true},
+					CostEstimate: regression.CostEstimate{EstimatedCost: .2, CostKnown: true, Currency: regression.CostCurrencyUSD},
 				}
 			},
 			decision: regression.DecisionRejected, rule: "call_budget",
@@ -203,7 +221,7 @@ func validInput() *regression.GateInput {
 			BaselineScore: 0, CandidateScore: .2, Complete: true, WeightedScoreDelta: .2,
 		},
 		TotalUsage: regression.UsageSummary{
-			Complete: true, CostEstimate: regression.CostEstimate{CostKnown: true},
+			Complete: true, CostEstimate: regression.CostEstimate{CostKnown: true, Currency: regression.CostCurrencyUSD},
 		},
 	}
 }

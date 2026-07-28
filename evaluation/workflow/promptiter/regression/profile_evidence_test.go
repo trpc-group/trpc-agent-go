@@ -30,34 +30,42 @@ func TestProfileOnlyChangesTargetValidatesProfileScope(t *testing.T) {
 	}{
 		{name: "nil candidate", candidate: nil},
 		{name: "different structure", candidate: &promptiter.Profile{StructureID: "other"}},
-		{name: "target omitted", candidate: testProfile("other", "stable")},
+		{
+			name:      "canonical candidate resets target to static value",
+			candidate: testProfile("other", "stable"),
+			valid:     true,
+		},
 		{name: "non target changed", candidate: testProfile("target", "after", "other", "changed")},
 		{name: "non target added", candidate: testProfile("target", "after", "other", "stable", "added", "value")},
 		{name: "target only changed", candidate: testProfile("target", "after", "other", "stable"), valid: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			valid, reason := profileOnlyChangesTarget(baseline, test.candidate, "target")
+			valid, reason, err := profileOnlyChangesTarget(context.Background(), baseline, test.candidate, "target")
+			require.NoError(t, err)
 			assert.Equal(t, test.valid, valid)
 			assert.NotEmpty(t, reason)
 		})
 	}
+	changed, err := profileChanged(context.Background(), baseline, testProfile("other", "stable"))
+	require.NoError(t, err)
+	assert.True(t, changed)
 }
 
 func TestOverrideJSONRejectsInvalidProfiles(t *testing.T) {
-	_, err := overrideJSON(&promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{}}})
+	_, err := overrideJSON(context.Background(), &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{}}})
 	require.ErrorContains(t, err, "surface id is empty")
-	_, err = overrideJSON(&promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{SurfaceID: "target"}, {SurfaceID: "target"}}})
+	_, err = overrideJSON(context.Background(), &promptiter.Profile{Overrides: []promptiter.SurfaceOverride{{SurfaceID: "target"}, {SurfaceID: "target"}}})
 	require.ErrorContains(t, err, "duplicate profile override")
 }
 
 func TestRoundCandidateTrainUsesFutureFallbackWhenTerminalEvidenceIsAbsent(t *testing.T) {
 	snapshot := &EvaluationSnapshot{EvalSetID: "train"}
-	actual, err := roundCandidateTrain(engine.RoundResult{Round: 1}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
+	actual, err := roundCandidateTrain(context.Background(), engine.RoundResult{Round: 1}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
 	require.NoError(t, err)
 	assert.Same(t, snapshot, actual)
 
-	actual, err = roundCandidateTrain(engine.RoundResult{Round: 2}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
+	actual, err = roundCandidateTrain(context.Background(), engine.RoundResult{Round: 2}, []trainEvidence{{round: 2, snapshot: snapshot}}, nil, nil, 1)
 	require.NoError(t, err)
 	assert.Nil(t, actual)
 }
@@ -87,7 +95,7 @@ func TestRoundCandidateTrainPrefersDirectTerminalEvidence(t *testing.T) {
 			}},
 		}},
 	}}}
-	actual, err := roundCandidateTrain(engine.RoundResult{
+	actual, err := roundCandidateTrain(context.Background(), engine.RoundResult{
 		Round: 1, OutputProfile: profile, CandidateTrain: direct,
 	}, nil, nil, nil, 1)
 	require.NoError(t, err)
@@ -96,7 +104,7 @@ func TestRoundCandidateTrainPrefersDirectTerminalEvidence(t *testing.T) {
 	assert.False(t, actual.Complete)
 
 	direct.OverallScore = math.NaN()
-	_, err = roundCandidateTrain(engine.RoundResult{
+	_, err = roundCandidateTrain(context.Background(), engine.RoundResult{
 		Round: 1, OutputProfile: profile, CandidateTrain: direct,
 	}, nil, nil, nil, 1)
 	require.ErrorContains(t, err, "overall score must be finite")

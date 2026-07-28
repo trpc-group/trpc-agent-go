@@ -2948,9 +2948,7 @@ func TestNormalizeProfileApplyPatchSetAndScopeHelpers(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	require.NotNil(t, applied)
-	require.Len(t, applied.Overrides, 1)
-	assert.Equal(t, testSurfaceID, applied.Overrides[0].SurfaceID)
-	assert.Equal(t, "base prompt", *applied.Overrides[0].Value.Text)
+	assert.Empty(t, applied.Overrides, "a patch equal to the static baseline is not an effective candidate change")
 	applied, err = applyPatchSet(structure, profile, &promptiter.PatchSet{
 		Patches: []promptiter.SurfacePatch{
 			{

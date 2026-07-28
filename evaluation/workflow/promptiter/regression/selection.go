@@ -26,22 +26,25 @@ func (r *RunResult) SelectedProfile() (*promptiter.Profile, error) {
 	if r == nil || r.Decision != DecisionAccepted || r.SelectedCandidateID == "" {
 		return nil, ErrNoSelectedCandidate
 	}
-	var selected *promptiter.Profile
+	var selected *CandidateResult
 	for index := range r.Candidates {
-		candidate := &r.Candidates[index].Candidate
-		if candidate.ID != r.SelectedCandidateID {
+		candidate := &r.Candidates[index]
+		if candidate.Candidate.ID != r.SelectedCandidateID {
 			continue
 		}
 		if selected != nil {
 			return nil, fmt.Errorf("duplicate selected candidate id %q", r.SelectedCandidateID)
 		}
-		if candidate.Profile == nil {
+		if candidate.Gate == nil || candidate.Gate.Decision != DecisionAccepted {
+			return nil, fmt.Errorf("selected candidate %q is not gate-accepted", r.SelectedCandidateID)
+		}
+		if candidate.Candidate.Profile == nil {
 			return nil, fmt.Errorf("selected candidate %q has no profile", r.SelectedCandidateID)
 		}
-		selected = candidate.Profile
+		selected = candidate
 	}
 	if selected == nil {
 		return nil, fmt.Errorf("selected candidate %q is absent", r.SelectedCandidateID)
 	}
-	return promptiter.CloneProfile(selected), nil
+	return promptiter.CloneProfile(selected.Candidate.Profile), nil
 }

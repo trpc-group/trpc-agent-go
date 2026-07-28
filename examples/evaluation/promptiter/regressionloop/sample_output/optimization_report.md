@@ -106,10 +106,10 @@ Refunds and unopened returns are allowed within 30 days.
 
 ### Resources
 
-| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
-|---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 886 | 0.000000 | true | 6.0083ms | true |
-| cumulative | 28 | 1302 | 0.000000 | true | 49.5554ms | true |
+| Scope | Calls | Tokens | Estimated cost | Currency | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---|---:|---:|---:|---:|
+| round | 18 | 886 | 0.000000 | USD | true | 6.0083ms | true |
+| cumulative | 28 | 1302 | 0.000000 | USD | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -145,6 +145,7 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
+| cost_currency | true | USD | USD |  |
 | call_budget | true | 28 | 100 |  |
 | token_budget | true | 1302 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
@@ -166,10 +167,10 @@ Route refund disputes to refund-specialist.
 
 ### Resources
 
-| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
-|---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1116 | 0.000000 | true | 4.9568ms | true |
-| cumulative | 46 | 2418 | 0.000000 | true | 49.5554ms | true |
+| Scope | Calls | Tokens | Estimated cost | Currency | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---|---:|---:|---:|---:|
+| round | 18 | 1116 | 0.000000 | USD | true | 4.9568ms | true |
+| cumulative | 46 | 2418 | 0.000000 | USD | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -205,6 +206,7 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
+| cost_currency | true | USD | USD |  |
 | call_budget | true | 46 | 100 |  |
 | token_budget | true | 2418 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
@@ -227,10 +229,10 @@ When the user asks for JSON, return only valid JSON.
 
 ### Resources
 
-| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
-|---|---:|---:|---:|---:|---:|---:|
-| round | 18 | 1336 | 0.000000 | true | 4.8698ms | true |
-| cumulative | 64 | 3754 | 0.000000 | true | 49.5554ms | true |
+| Scope | Calls | Tokens | Estimated cost | Currency | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---|---:|---:|---:|---:|
+| round | 18 | 1336 | 0.000000 | USD | true | 4.8698ms | true |
+| cumulative | 64 | 3754 | 0.000000 | USD | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -266,6 +268,7 @@ Decision: `rejected`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
+| cost_currency | true | USD | USD |  |
 | call_budget | true | 64 | 100 |  |
 | token_budget | true | 3754 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
@@ -289,10 +292,10 @@ For order lookups, call get_order with the order_id argument.
 
 ### Resources
 
-| Scope | Calls | Tokens | Estimated cost | Cost known | PromptIter latency | Complete |
-|---|---:|---:|---:|---:|---:|---:|
-| round | 26 | 2340 | 0.000000 | true | 8.1389ms | true |
-| cumulative | 90 | 6094 | 0.000000 | true | 49.5554ms | true |
+| Scope | Calls | Tokens | Estimated cost | Currency | Cost known | PromptIter latency | Complete |
+|---|---:|---:|---|---:|---:|---:|---:|
+| round | 26 | 2340 | 0.000000 | USD | true | 8.1389ms | true |
+| cumulative | 90 | 6094 | 0.000000 | USD | true | 49.5554ms | true |
 
 | Set | Baseline | Candidate | Weighted delta | New passes | New failures |
 |---|---:|---:|---:|---:|---:|
@@ -328,10 +331,11 @@ Decision: `accepted`
 | metric_floor/safety | true | 1 | 1 |  |
 | usage_complete | true | true | true |  |
 | known_cost | true | true | true |  |
+| cost_currency | true | USD | USD |  |
 | call_budget | true | 90 | 100 |  |
 | token_budget | true | 6094 | 20000 |  |
 | cost_budget | true | 0 | 0.01 |  |
 
 ## Usage
 
-Calls: 90; tokens: 6094; estimated cost: 0.000000 (known: true); PromptIter latency: 49.5554ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.
+Calls: 90; tokens: 6094; estimated cost: 0.000000 USD (known: true); PromptIter latency: 49.5554ms; complete: true; telemetry source: `promptiter_engine`; pricing source: `deterministic_example_zero_cost`.

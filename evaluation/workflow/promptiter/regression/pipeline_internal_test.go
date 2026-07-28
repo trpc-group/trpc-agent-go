@@ -71,6 +71,11 @@ func TestAttributeSnapshotRejectsInvalidAttributorResults(t *testing.T) {
 			return value
 		}(), want: "returned eval set"},
 		{name: "missing category", result: func() *AttributionResult { value := validEdgeAttribution("case"); value.Category = ""; return value }(), want: "incomplete evidence"},
+		{name: "unsupported category", result: func() *AttributionResult {
+			value := validEdgeAttribution("case")
+			value.Category = FailureCategory("api_key=attribution-secret")
+			return value
+		}(), want: "unsupported category"},
 		{name: "missing reason", result: func() *AttributionResult { value := validEdgeAttribution("case"); value.Reason = " "; return value }(), want: "incomplete evidence"},
 		{name: "missing evidence", result: func() *AttributionResult { value := validEdgeAttribution("case"); value.Evidence = nil; return value }(), want: "incomplete evidence"},
 		{name: "empty evidence reason", result: func() *AttributionResult {

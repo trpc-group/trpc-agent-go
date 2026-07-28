@@ -44,7 +44,9 @@ the measured complete `Engine.Run` latency as a lower bound so framework
 overhead and overlapping stages cannot hide a latency-budget breach. A caller
 may supplement only facts the Engine cannot
 derive: measured PromptIter latency and an exact baseline/per-round cost
-breakdown with its pricing source. The Analyzer rejects missing, extra, or
+breakdown with its pricing source and ISO 4217 currency. Cost budgets use USD,
+so known cost evidence must declare `USD` whenever a cost policy is enabled.
+The Analyzer rejects missing, extra, or
 inconsistent cost entries before any budget rule runs. `promptIterLatency`
 measures only the `Engine.Run` interval, not report rendering or the
 surrounding application pipeline.

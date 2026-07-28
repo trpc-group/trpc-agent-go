@@ -122,7 +122,7 @@ func corpusGateInput(entry releaseCorpusEntry) *regression.GateInput {
 		ValidationDelta:         validationDelta,
 		TotalUsage: regression.UsageSummary{
 			Complete:     true,
-			CostEstimate: regression.CostEstimate{CostKnown: entry.CostKnown, EstimatedCost: entry.Cost},
+			CostEstimate: regression.CostEstimate{CostKnown: entry.CostKnown, EstimatedCost: entry.Cost, Currency: regression.CostCurrencyUSD},
 		},
 	}
 }

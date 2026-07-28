@@ -39,9 +39,9 @@ func TestCostBreakdownRequiresExactPerRoundAccounting(t *testing.T) {
 		{name: "invalid round id", cost: CostBreakdown{RoundEstimatedCosts: map[int]float64{0: 1}}, want: "must be positive"},
 		{name: "non finite baseline", cost: CostBreakdown{BaselineEstimatedCost: math.NaN()}, want: "finite and non-negative"},
 		{name: "unknown cost has breakdown", cost: CostBreakdown{BaselineEstimatedCost: 1}, want: "marked unknown"},
-		{name: "known cost missing entries", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, PricingSource: "table"}}, want: "one cost entry for every round"},
-		{name: "known cost missing round", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, PricingSource: "table", EstimatedCost: 2}, RoundEstimatedCosts: map[int]float64{1: 1, 3: 1}}, want: "missing round 2"},
-		{name: "known cost total mismatch", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, PricingSource: "table", EstimatedCost: 4}, BaselineEstimatedCost: 1, RoundEstimatedCosts: map[int]float64{1: 1, 2: 1}}, want: "do not match total"},
+		{name: "known cost missing entries", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, Currency: CostCurrencyUSD, PricingSource: "table"}}, want: "one cost entry for every round"},
+		{name: "known cost missing round", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, Currency: CostCurrencyUSD, PricingSource: "table", EstimatedCost: 2}, RoundEstimatedCosts: map[int]float64{1: 1, 3: 1}}, want: "missing round 2"},
+		{name: "known cost total mismatch", cost: CostBreakdown{CostEstimate: CostEstimate{CostKnown: true, Currency: CostCurrencyUSD, PricingSource: "table", EstimatedCost: 4}, BaselineEstimatedCost: 1, RoundEstimatedCosts: map[int]float64{1: 1, 2: 1}}, want: "do not match total"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -83,7 +83,7 @@ func TestBuildCandidateUsagesSeparatesRoundAndCumulativeTotals(t *testing.T) {
 		},
 	}
 	supplement := UsageSupplement{CostBreakdown: CostBreakdown{
-		CostEstimate:          CostEstimate{CostKnown: true, EstimatedCost: .6, PricingSource: "fixture"},
+		CostEstimate:          CostEstimate{CostKnown: true, EstimatedCost: .6, Currency: CostCurrencyUSD, PricingSource: "fixture"},
 		BaselineEstimatedCost: .1,
 		RoundEstimatedCosts:   map[int]float64{1: .2, 2: .3},
 	}}
