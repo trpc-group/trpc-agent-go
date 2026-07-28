@@ -88,11 +88,12 @@ type protocolMessage struct {
 }
 
 type workflowGuestProcess struct {
-	process workflowProcess
-	stdin   io.WriteCloser
-	stdout  io.Reader
-	stderr  *limitedBuffer
-	code    string
+	process    workflowProcess
+	stdin      io.WriteCloser
+	stdout     io.Reader
+	stderr     *limitedBuffer
+	stderrDone <-chan struct{}
+	code       string
 }
 
 type workflowProcess interface {
@@ -428,6 +429,9 @@ func workflowGuestScannerError(err error) error {
 func waitWorkflowGuest(ctx context.Context, guest *workflowGuestProcess) error {
 	waitCh := make(chan error, 1)
 	go func() {
+		if guest.stderrDone != nil {
+			<-guest.stderrDone
+		}
 		waitCh <- guest.process.Wait()
 	}()
 	timer := time.NewTimer(workflowGuestExitGrace)
