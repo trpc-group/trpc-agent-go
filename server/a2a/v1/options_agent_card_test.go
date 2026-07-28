@@ -82,19 +82,25 @@ func TestAgentCardValidationToolsAndHandler(t *testing.T) {
 				Name:        "lookup",
 				Description: "look things up again",
 			}},
+			&cardTestTool{declaration: &tool.Declaration{
+				Name:        "lookup-2",
+				Description: "look things up by alternate name",
+			}},
 		),
 	)
 	if err != nil {
 		t.Fatalf("NewAgentCard failed: %v", err)
 	}
-	if len(card.Skills) != 3 || card.Skills[0].Name != "agent" ||
-		card.Skills[1].Name != "lookup" || card.Skills[2].Name != "lookup" {
+	if len(card.Skills) != 4 || card.Skills[0].Name != "agent" ||
+		card.Skills[1].Name != "lookup" || card.Skills[2].Name != "lookup" ||
+		card.Skills[3].Name != "lookup-2" {
 		t.Fatalf("skills = %#v", card.Skills)
 	}
-	if card.Version != "1.0.0" || card.Skills[0].ID == "" ||
-		card.Skills[1].ID == "" || card.Skills[2].ID == "" ||
-		card.Skills[0].ID == card.Skills[1].ID ||
-		card.Skills[1].ID == card.Skills[2].ID {
+	if card.Version != "1.0.0" ||
+		card.Skills[0].ID != "agent" ||
+		card.Skills[1].ID != "tool-lookup" ||
+		card.Skills[2].ID != "tool-lookup-2" ||
+		card.Skills[3].ID != "tool-lookup-2-2" {
 		t.Fatalf("card identity fields = %#v", card)
 	}
 	if card.Capabilities.Streaming == nil || !*card.Capabilities.Streaming {
@@ -223,6 +229,7 @@ func TestServerContextAuthenticationAndOptions(t *testing.T) {
 		WithEventToA2APartMapper(partMapper),
 		WithDebugLogging(true),
 		WithErrorHandler(handler),
+		WithErrorHandler(nil),
 	} {
 		option(opts)
 	}
@@ -236,6 +243,13 @@ func TestServerContextAuthenticationAndOptions(t *testing.T) {
 		len(opts.eventPartMappers) != 1 || !opts.debugLogging ||
 		opts.errorHandler == nil {
 		t.Fatalf("options not applied: %#v", opts)
+	}
+	if _, err := opts.errorHandler(
+		context.Background(),
+		nil,
+		errors.New("source"),
+	); err == nil || err.Error() != "handled" {
+		t.Fatalf("nil error handler replaced custom handler: %v", err)
 	}
 	opts.processorHook(nil)
 	if !hookCalled {

@@ -372,16 +372,27 @@ func TestDataPartAndTextHelperBranches(t *testing.T) {
 		t.Fatalf("string-argument function call = %#v", got)
 	}
 
-	content, id, name := processFunctionResponse(protocol.NewDataPart("invalid"))
-	if content != "" || id != "" || name != "" {
+	content, contentParts, id, name := processFunctionResponse(
+		protocol.NewDataPart("invalid"),
+	)
+	if content != "" || len(contentParts) != 0 || id != "" || name != "" {
 		t.Fatalf("invalid function response = (%q, %q, %q)", content, id, name)
 	}
+	partText := "content-parts-only result"
 	response := protocol.NewDataPart(map[string]any{
 		ia2a.ToolCallFieldResponse: map[string]any{"ok": true},
+		ia2a.ToolCallFieldContentParts: []map[string]any{{
+			"type": "text",
+			"text": partText,
+		}},
 	})
-	content, _, _ = processFunctionResponse(response)
+	content, contentParts, _, _ = processFunctionResponse(response)
 	if content != `{"ok":true}` {
 		t.Fatalf("structured function response = %q", content)
+	}
+	if len(contentParts) != 1 || contentParts[0].Text == nil ||
+		*contentParts[0].Text != partText {
+		t.Fatalf("function response content parts = %#v", contentParts)
 	}
 
 	data := map[string]any{"fallback": "value"}

@@ -1112,12 +1112,21 @@ func recordTaskOutputEvent(
 ) {
 	switch converted := outbound.(type) {
 	case *protocol.TaskArtifactUpdateEvent:
+		if converted == nil {
+			return
+		}
 		artifactID := converted.Artifact.ArtifactID
 		state.seenArtifactIDs[artifactID] = struct{}{}
 		state.lastArtifactID = artifactID
 	case *protocol.TaskStatusUpdateEvent:
+		if converted == nil {
+			return
+		}
 		state.roundEnded = taskStateEndsRound(converted.Status.State)
 	case *protocol.Message:
+		if converted == nil {
+			return
+		}
 		if state.finalMessage == nil {
 			message := protocol.NewMessageWithContext(
 				protocol.MessageRoleAgent,
@@ -1194,11 +1203,20 @@ func normalizeStreamingResult(
 ) protocol.StreamEvent {
 	switch v := result.(type) {
 	case *protocol.Message:
-		return normalizeProtocolMessage(v)
+		if normalized := normalizeProtocolMessage(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskArtifactUpdateEvent:
-		return normalizeTaskArtifactUpdateEvent(v)
+		if normalized := normalizeTaskArtifactUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	case *protocol.TaskStatusUpdateEvent:
-		return normalizeTaskStatusUpdateEvent(v)
+		if normalized := normalizeTaskStatusUpdateEvent(v); normalized != nil {
+			return normalized
+		}
+		return nil
 	default:
 		return result
 	}

@@ -613,6 +613,9 @@ func (c *defaultEventToA2AMessage) convertToolCallToA2AMessage(
 			if message.Content != "" {
 				toolResponseData[ia2a.ToolCallFieldResponse] = message.Content
 			}
+			if len(message.ContentParts) > 0 {
+				toolResponseData[ia2a.ToolCallFieldContentParts] = message.ContentParts
+			}
 
 			dataPart := protocol.NewDataPart(toolResponseData)
 			c.setPartTypeMetadata(dataPart, ia2a.DataPartMetadataTypeFunctionResp)

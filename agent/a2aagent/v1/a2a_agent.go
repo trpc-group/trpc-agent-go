@@ -52,7 +52,7 @@ type A2AAgent struct {
 	name                string
 	description         string
 	agentCard           *server.AgentCard      // Agent card and resolution state
-	agentURL            string                 // URL of the remote A2A agent
+	agentCardURL        string                 // URL used to discover the remote agent
 	eventConverter      A2AEventConverter      // Custom A2A event converters
 	dataPartMappers     []A2ADataPartMapper    // Lightweight inbound DataPart mappers for default converter
 	a2aMessageConverter InvocationA2AConverter // Custom A2A message converters for requests
@@ -94,12 +94,14 @@ func New(opts ...Option) (*A2AAgent, error) {
 	}
 
 	var agentURL string
+	var agentCardURL string
 	if agent.agentCard != nil {
 		// v1.0 cards advertise endpoints via supportedInterfaces; the top-level
 		// URL is deprecated. PrimaryURL prefers the former and falls back.
 		agentURL = agent.agentCard.PrimaryURL()
-	} else if agent.agentURL != "" {
-		agentURL = agent.agentURL
+	} else if agent.agentCardURL != "" {
+		agentCardURL = ia2a.NormalizeURL(agent.agentCardURL)
+		agentURL = agentCardURL
 	} else {
 		log.Info("agent card or agent card url not set")
 	}
@@ -116,9 +118,16 @@ func New(opts ...Option) (*A2AAgent, error) {
 
 	// If agent card is not set, fetch it using A2A client's GetAgentCard method
 	if agent.agentCard == nil {
-		agentCard, err := a2aClient.GetAgentCard(context.Background(), "")
+		agentCard, err := a2aClient.GetAgentCard(
+			context.Background(),
+			agentCardURL,
+		)
 		if err != nil {
-			return nil, fmt.Errorf("failed to fetch agent card from %s: %w", agentURL, err)
+			return nil, fmt.Errorf(
+				"failed to fetch agent card from %s: %w",
+				agentCardURL,
+				err,
+			)
 		}
 
 		agent.agentCard = agentCard
@@ -501,6 +510,10 @@ func (r *A2AAgent) processStreamingEvents(
 		result.observeTaskLifecycle(streamEvent.Result)
 
 		artifactUpdate, _ := streamEvent.Result.(*protocol.TaskArtifactUpdateEvent)
+		replacesArtifact := artifactUpdateReplacesSnapshot(
+			artifactUpdate,
+			artifactContent,
+		)
 		var artifactChunk strings.Builder
 		var artifactChunkParts []model.ContentPart
 
@@ -545,6 +558,10 @@ func (r *A2AAgent) processStreamingEvents(
 				&artifactChunk,
 				&artifactChunkParts,
 			)
+			// A repeated append=false update replaces the previous artifact
+			// value. Expose it as a Message snapshot so consumers do not append
+			// it to an earlier Delta.
+			markArtifactReplacementSnapshot(evt, replacesArtifact)
 			agent.EmitEvent(ctx, invocation, eventChan, evt)
 			if evt.Response != nil &&
 				evt.Response.Error != nil &&
@@ -571,6 +588,29 @@ func (r *A2AAgent) processStreamingEvents(
 		)
 	}
 	return result
+}
+
+func artifactUpdateReplacesSnapshot(
+	update *protocol.TaskArtifactUpdateEvent,
+	artifactContent map[string]string,
+) bool {
+	if update == nil {
+		return false
+	}
+	_, seen := artifactContent[update.Artifact.ArtifactID]
+	appendChunk := update.Append != nil && *update.Append
+	return seen && !appendChunk
+}
+
+func markArtifactReplacementSnapshot(evt *event.Event, replacement bool) {
+	if !replacement || evt == nil || evt.Response == nil ||
+		!evt.Response.IsPartial {
+		return
+	}
+	for i := range evt.Response.Choices {
+		evt.Response.Choices[i].Message = evt.Response.Choices[i].Delta
+		evt.Response.Choices[i].Delta = model.Message{}
+	}
 }
 
 func finalizeStreamingContent(
