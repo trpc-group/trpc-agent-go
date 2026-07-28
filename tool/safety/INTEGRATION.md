@@ -156,10 +156,14 @@ After a scan, you can build a structured report and emit OTel span attributes:
 import "trpc.group/trpc-go/trpc-agent-go/tool/safety"
 
 report := safety.NewReport(scanResult, scanInput, "exec_command", elapsed)
-event := safety.NewAuditEvent(report)
+redactor := safety.NewRedactor()
+redactedReport := redactor.RedactReport(report)
+event := redactor.RedactAuditEvent(safety.NewAuditEvent(redactedReport))
 
 // Write to a JSONL file or your log pipeline.
-io.WriteString(auditFile, event.ToolName + ... + "\n")
+// Always persist the redacted event so secrets are never leaked to
+// durable storage or downstream log aggregators.
+json.NewEncoder(auditFile).Encode(event)
 ```
 
 For OpenTelemetry, set the standard span attributes:

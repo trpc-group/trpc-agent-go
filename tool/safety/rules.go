@@ -9,6 +9,7 @@
 package safety
 
 import (
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -34,6 +35,11 @@ func combineInput(input ScanInput) string {
 		if cb.Code != "" {
 			parts = append(parts, cb.Code)
 			parts = append(parts, resolveRelativePaths(input.Workdir, cb.Code)...)
+		}
+	}
+	for _, url := range input.URLs {
+		if url != "" {
+			parts = append(parts, url)
 		}
 	}
 	return strings.ToLower(strings.Join(parts, " "))
@@ -521,6 +527,12 @@ func (r *NetworkAccessRule) ID() string { return "network_002" }
 // host is missing from the allow list, or if any host matches the deny
 // list, the result remains DecisionDeny.
 func (r *NetworkAccessRule) Check(input ScanInput) *ScanResult {
+	// Check explicit URLs first: web_fetch / web_search tools expose their
+	// target URLs directly via ScanInput.URLs and we must evaluate those
+	// even when the substring scanner cannot find a keyword in Command.
+	if res := r.checkURLs(input.URLs); res != nil {
+		return res
+	}
 	cmd := combineInput(input)
 	if cmd == "" {
 		return nil
@@ -649,6 +661,27 @@ func parseHosts(cmd string) []string {
 	return hosts
 }
 
+// parseSingleHost extracts the host component from a single URL string.
+// It attempts url.Parse first; on failure it falls back to the schemeRe
+// regex used by parseHosts for a single host extraction.
+func parseSingleHost(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err == nil && u.Host != "" {
+		return strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	}
+	// Fallback: try the scheme regex from parseHosts.
+	lower := strings.ToLower(raw)
+	schemeRe := regexp.MustCompile(`[a-z][a-z0-9+.\-]*://(?:[^/@\s]+@)?([a-z0-9._\-]+)`)
+	if m := schemeRe.FindStringSubmatch(lower); len(m) > 1 {
+		return strings.TrimSuffix(strings.TrimSpace(m[1]), ".")
+	}
+	return ""
+}
+
 // hostMatchesPattern reports whether host is an exact match for pattern,
 // or a valid subdomain of pattern when pattern starts with "*.". The
 // match is performed on the lower-cased forms. Substring matching is
@@ -673,6 +706,86 @@ func hostMatchesPattern(host, pattern string) bool {
 		return true
 	}
 	return strings.HasSuffix(host, "."+pattern)
+}
+
+// checkURLs evaluates an explicit list of URLs against the deny/allow lists
+// without requiring the substring keyword match that substring-based scanning
+// relies on. This is the primary path for web_fetch / web_search tools where
+// the target URL is the single most important attribute.
+func (r *NetworkAccessRule) checkURLs(urls []string) *ScanResult {
+	if len(urls) == 0 {
+		return nil
+	}
+	foundHost := false
+	for _, rawURL := range urls {
+		host := parseSingleHost(rawURL)
+		if host == "" {
+			continue
+		}
+		foundHost = true
+		// Deny list takes precedence.
+		if matched := r.hostMatchesList(host, r.deniedDomains); matched != "" {
+			return &ScanResult{
+				Decision:  DecisionDeny,
+				RiskLevel: RiskHigh,
+				RuleID:    r.ID(),
+				Evidence:  rawURL,
+				Reason:    "network access to denied host via URL: " + host,
+			}
+		}
+		// Allow list configured: any unlisted host means deny.
+		if len(r.allowedDomains) > 0 {
+			if matched := r.hostMatchesList(host, r.allowedDomains); matched == "" {
+				return &ScanResult{
+					Decision:  DecisionDeny,
+					RiskLevel: RiskHigh,
+					RuleID:    r.ID(),
+					Evidence:  rawURL,
+					Reason:    "network access to unlisted host via URL: " + host,
+				}
+			}
+		}
+	}
+	// When no deny/allow domain policy is configured but URLs target
+	// external hosts, deny by default. This matches the substring-based
+	// scanner's behaviour where any keyword-matched command accessing the
+	// network is denied unless the host is explicitly allow-listed.
+	noPolicy := len(r.allowedDomains) == 0 && len(r.deniedDomains) == 0
+	if foundHost && noPolicy {
+		return &ScanResult{
+			Decision:  DecisionDeny,
+			RiskLevel: RiskHigh,
+			RuleID:    r.ID(),
+			Evidence:  strings.Join(urls, ", "),
+			Reason:    "network access via URL denied by default",
+		}
+	}
+	// All hosts matched the allow list.
+	if len(r.allowedDomains) > 0 {
+		return &ScanResult{
+			Decision:  DecisionAsk,
+			RiskLevel: RiskMedium,
+			RuleID:    r.ID(),
+			Evidence:  strings.Join(urls, ", "),
+			Reason:    "network access to allowlisted URLs",
+		}
+	}
+	return nil
+}
+
+// hostMatchesList checks whether a host matches any pattern in list.
+// It returns the matching pattern when found, or empty string otherwise.
+func (r *NetworkAccessRule) hostMatchesList(host string, list []string) string {
+	for _, pattern := range list {
+		pattern = strings.ToLower(strings.TrimSpace(pattern))
+		if pattern == "" {
+			continue
+		}
+		if hostMatchesPattern(host, pattern) {
+			return pattern
+		}
+	}
+	return ""
 }
 
 // matchesAllowlist reports whether every host extracted from cmd is in

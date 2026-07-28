@@ -75,7 +75,19 @@ func (p *ParsedCommand) Executables() []string {
 		if len(seg) == 0 || seg[0] == "" {
 			continue
 		}
-		out = append(out, seg[0])
+		name := seg[0]
+		// Strip any leading path so callers compare against the basename.
+		if i := lastIndexAny(name, "/\\"); i >= 0 {
+			name = name[i+1:]
+		}
+		// Strip common Windows executable suffixes.
+		for _, ext := range executableExts {
+			if len(name) > len(ext) && name[len(name)-len(ext):] == ext {
+				name = name[:len(name)-len(ext)]
+				break
+			}
+		}
+		out = append(out, name)
 	}
 	return out
 }
@@ -89,6 +101,11 @@ func (p *ParsedCommand) FirstExecutable() string {
 	}
 	return p.Segments[0][0]
 }
+
+// executableExts lists common Windows executable extensions stripped by
+// Executables and IsShellWrapper when normalising an executable path to
+// a basename.
+var executableExts = []string{".exe", ".cmd", ".bat", ".com", ".ps1"}
 
 // shellWrapper is a small, conservative list of shell wrappers and
 // re-executing builtins. Membership is independent of the shellsafe
@@ -141,7 +158,7 @@ func IsShellWrapper(name string) bool {
 		low = low[i+1:]
 	}
 	// Strip a Windows-style executable suffix.
-	for _, ext := range []string{".exe", ".cmd", ".bat", ".com", ".ps1"} {
+	for _, ext := range executableExts {
 		if len(low) > len(ext) && low[len(low)-len(ext):] == ext {
 			low = low[:len(low)-len(ext)]
 			break

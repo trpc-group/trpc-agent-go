@@ -13,12 +13,14 @@ import (
 	"testing"
 )
 
-// newBenchScanner builds a Scanner with the full 8-rule default pipeline
-// (the same set NewDefaultScanner would expose to callers). It is used by
-// every benchmark/performance test in this file so the numbers reflect the
+// newBenchScanner builds a Scanner with the full 10-rule default pipeline
+// used by NewGuard when no custom rules are supplied. It is used by every
+// benchmark/performance test in this file so the numbers reflect the
 // production scanner path rather than a subset.
 func newBenchScanner() *Scanner {
 	return NewScanner(
+		NewParseFailureRule(),
+		NewShellWrapperRule(),
 		NewDangerousCommandRule(),
 		NewNetworkAccessRule(),
 		NewShellBypassRule(),

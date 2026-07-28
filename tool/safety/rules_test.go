@@ -1083,3 +1083,112 @@ func TestGuard_DefaultExtractor_ReadsCodeBlocks(t *testing.T) {
 		t.Fatalf("expected DecisionDeny for code-block dangerous payload, got %+v", res)
 	}
 }
+
+// ---------- parseSingleHost ----------
+
+func TestParseSingleHost(t *testing.T) {
+	tests := []struct {
+		raw  string
+		host string
+	}{
+		{"https://evil.com/api", "evil.com"},
+		{"http://api.github.com/repo", "api.github.com"},
+		{"https://sub.example.com:8080/path", "sub.example.com"},
+		{"ftp://files.example.com.", "files.example.com"}, // trailing dot stripped
+		{"not a url", ""},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.raw, func(t *testing.T) {
+			got := parseSingleHost(tt.raw)
+			if got != tt.host {
+				t.Errorf("parseSingleHost(%q) = %q, want %q", tt.raw, got, tt.host)
+			}
+		})
+	}
+}
+
+// ---------- NetworkAccessRule checkURLs ----------
+
+func TestNetworkAccessRule_CheckURLs(t *testing.T) {
+	t.Run("deny by URL without command keyword", func(t *testing.T) {
+		rule := NewNetworkAccessRule()
+		// No curl/wget/etc keyword, but URLs contains evil.com.
+		in := ScanInput{URLs: []string{"https://evil.com/api"}}
+		res := rule.Check(in)
+		if res == nil || res.Decision != DecisionDeny {
+			t.Errorf("expected deny for URL to unlisted host, got %+v", res)
+		}
+	})
+
+	t.Run("allow-listed URL downgrades to ask", func(t *testing.T) {
+		rule := NewNetworkAccessRuleWithAllowlist([]string{"api.github.com"})
+		in := ScanInput{URLs: []string{"https://api.github.com/repos"}}
+		res := rule.Check(in)
+		if res == nil || res.Decision != DecisionAsk {
+			t.Errorf("expected ask for allow-listed URL, got %+v", res)
+		}
+	})
+
+	t.Run("deny list takes precedence over allow list for URL", func(t *testing.T) {
+		rule := NewNetworkAccessRuleWithAllowlist([]string{"evil.com"}).
+			WithDeniedDomains([]string{"evil.com"})
+		in := ScanInput{URLs: []string{"https://evil.com/malware"}}
+		res := rule.Check(in)
+		if res == nil || res.Decision != DecisionDeny {
+			t.Errorf("expected deny for denied URL, got %+v", res)
+		}
+	})
+
+	t.Run("mixed allow-listed and unlisted URLs denies", func(t *testing.T) {
+		rule := NewNetworkAccessRuleWithAllowlist([]string{"safe.com"})
+		in := ScanInput{URLs: []string{"https://safe.com", "https://unsafe.com"}}
+		res := rule.Check(in)
+		if res == nil || res.Decision != DecisionDeny {
+			t.Errorf("expected deny for mixed URLs, got %+v", res)
+		}
+	})
+
+	t.Run("empty URLs falls through to substring scan", func(t *testing.T) {
+		rule := NewNetworkAccessRule()
+		in := ScanInput{Command: "curl http://evil.com"}
+		res := rule.Check(in)
+		if res == nil || res.Decision != DecisionDeny {
+			t.Errorf("expected deny for command-line network access, got %+v", res)
+		}
+	})
+}
+
+// ---------- NewReport unknown Decision ----------
+
+func TestNewReport_UnknownDecision(t *testing.T) {
+	result := &ScanResult{Decision: "bogus", RuleID: "custom_999"}
+	report := NewReport(result, ScanInput{Command: "ls"}, "exec_command", 0)
+	if !report.Blocked {
+		t.Error("unknown decision should set Blocked=true (fail-closed)")
+	}
+	if report.Recommendation != "unknown safety decision, denied by default" {
+		t.Errorf("unexpected recommendation: %q", report.Recommendation)
+	}
+}
+
+func TestNewReport_DecisionAllowNotBlocked(t *testing.T) {
+	result := &ScanResult{Decision: DecisionAllow, RuleID: "allow_000"}
+	report := NewReport(result, ScanInput{Command: "ls"}, "exec_command", 0)
+	if report.Blocked {
+		t.Error("DecisionAllow should not set Blocked=true")
+	}
+}
+
+// ---------- combineInput with URLs ----------
+
+func TestCombineInput_WithURLs(t *testing.T) {
+	in := ScanInput{
+		Command: "ls",
+		URLs:    []string{"https://evil.com/api", "https://safe.com"},
+	}
+	combined := combineInput(in)
+	if !strings.Contains(combined, "evil.com") {
+		t.Errorf("combineInput should include URLs, got %q", combined)
+	}
+}

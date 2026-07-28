@@ -195,12 +195,17 @@ func NewReport(result *ScanResult, input ScanInput, toolName string, dur time.Du
 	r.Blocked = result.Decision != DecisionAllow
 
 	switch result.Decision {
+	case DecisionAllow:
+		r.Recommendation = "command allowed"
 	case DecisionDeny:
 		r.Recommendation = "command blocked, use a safe alternative"
 	case DecisionAsk:
 		r.Recommendation = "requires human review before execution"
 	default:
-		r.Recommendation = "command allowed"
+		// Unknown decisions must be fail-closed in reporting to match the
+		// Guard's runtime behaviour (anything except DecisionAllow is denied).
+		r.Blocked = true
+		r.Recommendation = "unknown safety decision, denied by default"
 	}
 	return r
 }

@@ -93,8 +93,30 @@ func NewGuard(opts ...GuardOption) *Guard {
 // Scanner, and translates the resulting Decision into a tool.PermissionDecision.
 func (g *Guard) CheckToolPermission(ctx context.Context, req *tool.PermissionRequest) (tool.PermissionDecision, error) {
 	_ = ctx // reserved for future per-context policy overrides (e.g. user-specific allowlists).
-	input := g.extract(req.Arguments, req.ToolName)
-	res := g.scanner.Scan(input)
+	if g == nil {
+		return tool.DenyPermission("safety guard is nil"), nil
+	}
+	extract := g.extract
+	if extract == nil {
+		extract = defaultExtractor
+	}
+	scanner := g.scanner
+	if scanner == nil {
+		scanner = NewScanner(
+			NewParseFailureRule(),
+			NewShellWrapperRule(),
+			NewDangerousCommandRule(),
+			NewNetworkAccessRule(),
+			NewShellBypassRule(),
+			NewInstallAndMutateRule(),
+			NewHostExecRiskRule(),
+			NewResourceAbuseRule(),
+			NewSensitiveInfoLeakRule(),
+			NewAskForReviewRule(),
+		)
+	}
+	input := extract(req.Arguments, req.ToolName)
+	res := scanner.Scan(input)
 
 	switch res.Decision {
 	case DecisionAllow:
@@ -154,10 +176,39 @@ func defaultExtractor(args []byte, toolName string) ScanInput {
 		return in
 	}
 
-	appendCharsCodeBlock(&in, raw)
-	in.Command = firstStringField(raw, "command", "code")
-	mergeStdinPayload(&in, raw, toolName)
-	appendParsedCodeBlocks(&in, raw)
+	// Tool-aware routing: different tools map their arguments to different
+	// ScanInput fields so that the rules inspect the right payload shape.
+	// - Code-exec tools (execute_tool_code, execute_python_code, ...):
+	//   primary payload is "code", placed into CodeBlocks
+	// - Web-fetch tools (web_fetch, web_search, ...):
+	//   primary payload is "url" / "urls", placed into URLs
+	// - Shell / exec tools (exec_command, hostexec, workspaceexec, ...):
+	//   primary payload is "command", placed into Command
+	// - write_stdin: continuation payload is "chars", placed into CodeBlocks
+	if isCodeExecTool(toolName) {
+		appendCharsCodeBlock(&in, raw)
+		code := firstStringField(raw, "code", "command")
+		if code != "" {
+			in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: code})
+		}
+		mergeStdinPayload(&in, raw, toolName)
+		appendParsedCodeBlocks(&in, raw)
+	} else if isWebFetchTool(toolName) {
+		appendCharsCodeBlock(&in, raw)
+		if urls := stringSliceField(raw, "urls"); len(urls) > 0 {
+			in.URLs = urls
+		} else if url := firstStringField(raw, "url"); url != "" {
+			in.URLs = []string{url}
+		}
+		in.Command = firstStringField(raw, "command", "code")
+		mergeStdinPayload(&in, raw, toolName)
+		appendParsedCodeBlocks(&in, raw)
+	} else {
+		appendCharsCodeBlock(&in, raw)
+		in.Command = firstStringField(raw, "command", "code")
+		mergeStdinPayload(&in, raw, toolName)
+		appendParsedCodeBlocks(&in, raw)
+	}
 
 	// Extract workdir so sensitive-path rules can resolve relative
 	// traversals ("../.ssh/id_rsa") against the actual working directory.
@@ -234,9 +285,11 @@ func stringField(raw map[string]json.RawMessage, key string) (string, bool) {
 
 func mergeStdinPayload(in *ScanInput, raw map[string]json.RawMessage, toolName string) {
 	_ = toolName
-	// "stdin" piped to exec-command tools is executable code. Fold it
-	// into Command so that command-line rules (shell wrappers, dangerous
-	// commands, network access) can inspect it alongside the command.
+	// "stdin" piped to exec-command tools is executable code. Push it into
+	// CodeBlocks so code-aware rules can inspect it. We intentionally avoid
+	// constructing a shell here-doc ("<<<") because that is not how the
+	// executor actually interprets stdin at runtime — the Guard must reason
+	// about the real execution model, not a synthetic shell snippet.
 	stdin, ok := stringField(raw, "stdin")
 	if !ok || stdin == "" {
 		return
@@ -256,13 +309,15 @@ func mergeStdinPayload(in *ScanInput, raw map[string]json.RawMessage, toolName s
 	}
 	if isInterpreterCommand(in.Command) {
 		// Interactive interpreter: stdin is the real payload.
+		// Use stdin as the primary scan target and also push it into
+		// CodeBlocks so code-aware rules see it.
 		in.Command = stdin
-		// Also push into CodeBlocks so code-aware rules see it.
 		in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: stdin})
 		return
 	}
-	// Non-interpreter: prepend the command so rules see the full intent.
-	in.Command = in.Command + " <<< " + stdin
+	// Non-interpreter: push stdin as a CodeBlock so rules inspect it
+	// independently, rather than fusing it into Command with a <<< here-doc.
+	in.CodeBlocks = append(in.CodeBlocks, CodeBlock{Code: stdin})
 }
 
 func isInterpreterCommand(cmd string) bool {
@@ -366,4 +421,61 @@ func codeBlockFromMap(m map[string]any) (CodeBlock, bool) {
 		cb.Language = s
 	}
 	return cb, cb.Code != ""
+}
+
+// codeExecToolSuffixes lists tool names whose primary payload is a code
+// block. When the extractor sees any of these suffixes in the tool name
+// it routes the "code" field into CodeBlocks rather than Command.
+var codeExecToolSuffixes = []string{
+	"code_exec", "codeexec",
+	"execute_code", "execute_tool_code",
+	"run_code", "run_python_code",
+	"python_code", "shell_command",
+	"execute_python", "execute_shell", "execute_javascript",
+}
+
+// isCodeExecTool reports whether toolName matches a code-execution tool.
+func isCodeExecTool(toolName string) bool {
+	toolName = strings.ToLower(toolName)
+	for _, suffix := range codeExecToolSuffixes {
+		if strings.HasSuffix(toolName, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// webFetchToolKeywords lists tool names whose primary payload is a URL.
+// When the extractor sees any of these substrings in the tool name it
+// routes the "url" / "urls" field into ScanInput.URLs.
+var webFetchToolKeywords = []string{
+	"web_fetch", "web_fetch_url",
+	"web_search", "web_search_url",
+	"fetch_url", "fetch_page",
+	"http_fetch", "http_get",
+}
+
+// isWebFetchTool reports whether toolName matches a web-fetch / URL tool.
+func isWebFetchTool(toolName string) bool {
+	toolName = strings.ToLower(toolName)
+	for _, kw := range webFetchToolKeywords {
+		if strings.HasSuffix(toolName, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// stringSliceField reads a JSON array-of-strings from raw.
+// If the key is missing or the value is not valid, it returns nil.
+func stringSliceField(raw map[string]json.RawMessage, key string) []string {
+	v, ok := raw[key]
+	if !ok {
+		return nil
+	}
+	var arr []string
+	if err := json.Unmarshal(v, &arr); err != nil {
+		return nil
+	}
+	return arr
 }

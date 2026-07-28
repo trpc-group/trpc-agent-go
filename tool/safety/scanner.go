@@ -69,6 +69,11 @@ type ScanInput struct {
 	// CodeBlocks is used by codeexec.
 	CodeBlocks []CodeBlock
 
+	// URLs is an explicit list of network targets supplied by tools such
+	// as web_fetch. NetworkAccessRule consumes these directly instead of
+	// relying on substring parsing inside Command.
+	URLs []string
+
 	// ExecutorType tells the Scanner which backend will run the code.
 	// "local" means highest risk.
 	ExecutorType string
