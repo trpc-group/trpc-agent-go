@@ -19,6 +19,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evaluator/llm/operator/responsescorer"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	scorepkg "trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
@@ -88,6 +89,7 @@ func (e *hallucinationResponseScorer) ScoreBasedOnResponse(ctx context.Context, 
 		reasons = append(reasons, strings.TrimSpace(annotatedReason))
 	}
 	result.Score = total / float64(len(matches))
+	result.Value = &scorepkg.Value{Kind: scorepkg.KindNumeric, Numeric: &result.Score}
 	result.Reason = strings.Join(reasons, "\n")
 	return result, nil
 }

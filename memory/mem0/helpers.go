@@ -42,8 +42,6 @@ const (
 	queryKeyPageSize = "page_size"
 	queryKeyTopK     = "top_k"
 
-	memoryUserRole = "user"
-
 	defaultListPageSize = 100
 	defaultSearchTopK   = 20
 	maxOSSListTopK      = 1000

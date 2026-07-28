@@ -48,8 +48,6 @@ func TestConstants(t *testing.T) {
 	assert.Equal(t, "langfuse.release", release)
 	assert.Equal(t, "langfuse.version", version)
 
-	// Test internal attribute constants
-	assert.Equal(t, "langfuse.internal.as_root", asRoot)
 }
 
 func TestConstantTypes(t *testing.T) {
@@ -61,7 +59,7 @@ func TestConstantTypes(t *testing.T) {
 		observationInput, observationOutput,
 		observationCompletionStartTime, observationModel, observationModelParameters,
 		observationUsageDetails, observationCostDetails, observationPromptName, observationPromptVersion,
-		environment, release, version, asRoot,
+		environment, release, version,
 	}
 
 	for _, constant := range constants {
@@ -78,7 +76,7 @@ func TestConstantUniqueness(t *testing.T) {
 		observationInput, observationOutput,
 		observationCompletionStartTime, observationModel, observationModelParameters,
 		observationUsageDetails, observationCostDetails, observationPromptName, observationPromptVersion,
-		environment, release, version, asRoot,
+		environment, release, version,
 	}
 
 	// Check for duplicates
@@ -98,7 +96,7 @@ func TestConstantNamingConvention(t *testing.T) {
 		observationInput, observationOutput, observationCompletionStartTime,
 		observationModel, observationModelParameters, observationUsageDetails,
 		observationCostDetails, observationPromptName, observationPromptVersion,
-		environment, release, version, asRoot,
+		environment, release, version,
 	}
 
 	for _, constant := range langfuseConstants {

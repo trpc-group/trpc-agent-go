@@ -23,6 +23,8 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/model"
 )
 
+const currentDatePlaceholder = "{current_date}"
+
 // mockModel is a mock implementation of model.Model for testing.
 type mockModel struct {
 	name      string

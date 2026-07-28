@@ -176,7 +176,8 @@ func TestStageConversationFiles_Warnings(t *testing.T) {
 			collectErr: fmt.Errorf("collect failed"),
 		}, nil)
 
-		staged, warnings := StageConversationFiles(ctx, eng, ws)
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Len(t, warnings, 1)
 		require.Contains(t, warnings[0], "load metadata")
@@ -187,7 +188,8 @@ func TestStageConversationFiles_Warnings(t *testing.T) {
 		fs := &stubFS{putErr: fmt.Errorf("put failed")}
 		eng := codeexecutor.NewEngine(nil, fs, nil)
 
-		staged, warnings := StageConversationFiles(ctx, eng, ws)
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Len(t, warnings, 1)
 		require.Contains(t, warnings[0], "stage files")
@@ -206,7 +208,8 @@ func TestStageConversationFiles_Warnings(t *testing.T) {
 		runner := &stubRunner{err: fmt.Errorf("move failed")}
 		eng := codeexecutor.NewEngine(nil, fs, runner)
 
-		staged, warnings := StageConversationFiles(ctx, eng, ws)
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.NoError(t, err)
 		require.Len(t, staged, 1)
 		require.Len(t, warnings, 1)
 		require.Contains(t, warnings[0], "save metadata")
@@ -219,6 +222,45 @@ func TestStageConversationFiles_Warnings(t *testing.T) {
 		require.Equal(t, "report.txt", staged[0].OriginalName)
 		require.Equal(t, "text/plain", staged[0].MIMEType)
 		require.Equal(t, int64(5), staged[0].SizeBytes)
+	})
+
+	t.Run("load metadata stale", func(t *testing.T) {
+		ctx := newInvocationCtx(msg, nil, nil, nil)
+		eng := codeexecutor.NewEngine(nil, &stubFS{
+			collectErr: fmt.Errorf("collect: %w", codeexecutor.ErrWorkspaceStale),
+		}, nil)
+
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.Nil(t, staged)
+		require.Empty(t, warnings)
+	})
+
+	t.Run("put files stale", func(t *testing.T) {
+		ctx := newInvocationCtx(msg, nil, nil, nil)
+		fs := &stubFS{
+			putErr: fmt.Errorf("put: %w", codeexecutor.ErrWorkspaceStale),
+		}
+		eng := codeexecutor.NewEngine(nil, fs, nil)
+
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.Nil(t, staged)
+		require.Empty(t, warnings)
+	})
+
+	t.Run("save metadata stale", func(t *testing.T) {
+		ctx := newInvocationCtx(msg, nil, nil, nil)
+		fs := &stubFS{}
+		runner := &stubRunner{
+			err: fmt.Errorf("move: %w", codeexecutor.ErrWorkspaceStale),
+		}
+		eng := codeexecutor.NewEngine(nil, fs, runner)
+
+		staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+		require.ErrorIs(t, err, codeexecutor.ErrWorkspaceStale)
+		require.Len(t, staged, 1)
+		require.Empty(t, warnings)
 	})
 }
 
@@ -523,7 +565,8 @@ func TestStageConversationFiles_MergesSessionAndMessageFiles(t *testing.T) {
 	)
 
 	ctx := newInvocationCtx(message, sess, nil, nil)
-	staged, warnings := StageConversationFiles(ctx, eng, ws)
+	staged, warnings, err := StageConversationFiles(ctx, eng, ws)
+	require.NoError(t, err)
 
 	require.Len(t, staged, 2)
 	require.Empty(t, warnings)
@@ -570,22 +613,24 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 	ws := codeexecutor.Workspace{ID: "ws"}
 
 	t.Run("no invocation", func(t *testing.T) {
-		staged, warnings := StageConversationFiles(
+		staged, warnings, err := StageConversationFiles(
 			context.Background(),
 			codeexecutor.NewEngine(nil, &stubFS{}, nil),
 			ws,
 		)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Nil(t, warnings)
 	})
 
 	t.Run("locked helper without invocation", func(t *testing.T) {
-		staged, warnings := stageConversationFilesLocked(
+		staged, warnings, err := stageConversationFilesLocked(
 			context.Background(),
 			codeexecutor.NewEngine(nil, &stubFS{}, nil),
 			ws,
 			[]model.File{{Name: "report.txt", Data: []byte("data")}},
 		)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Nil(t, warnings)
 	})
@@ -597,11 +642,12 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 		ctx, cancel := context.WithCancel(ctx)
 		cancel()
 
-		staged, warnings := StageConversationFiles(
+		staged, warnings, err := StageConversationFiles(
 			ctx,
 			codeexecutor.NewEngine(nil, &stubFS{}, nil),
 			ws,
 		)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Len(t, warnings, 1)
 		require.Contains(t, warnings[0], "lock metadata")
@@ -609,11 +655,12 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 
 	t.Run("no files", func(t *testing.T) {
 		ctx := newInvocationCtx(model.NewUserMessage("no files"), nil, nil, nil)
-		staged, warnings := StageConversationFiles(
+		staged, warnings, err := StageConversationFiles(
 			ctx,
 			codeexecutor.NewEngine(nil, &stubFS{}, nil),
 			ws,
 		)
+		require.NoError(t, err)
 		require.Nil(t, staged)
 		require.Nil(t, warnings)
 	})
@@ -644,11 +691,12 @@ func TestStageConversationFiles_CoversEmptyAndReusePaths(t *testing.T) {
 		})
 		ctx := newInvocationCtx(msg, nil, nil, nil)
 
-		staged, warnings := StageConversationFiles(
+		staged, warnings, err := StageConversationFiles(
 			ctx,
 			codeexecutor.NewEngine(nil, fs, &stubRunner{}),
 			ws,
 		)
+		require.NoError(t, err)
 		require.Len(t, staged, 1)
 		require.Empty(t, warnings)
 		require.Equal(

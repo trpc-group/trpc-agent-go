@@ -492,10 +492,6 @@ func equalFoldedStringSets(left, right []string) bool {
 	return true
 }
 
-// currentDatePlaceholder is replaced in the prompt template with
-// the actual reference date.
-const currentDatePlaceholder = "{current_date}"
-
 // buildSystemPrompt builds the system prompt with existing memories
 // and available actions based on enabled tools.
 // refDate is substituted into the prompt's {current_date} placeholder

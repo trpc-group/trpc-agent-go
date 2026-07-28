@@ -19,6 +19,7 @@ import (
 
 const (
 	minimumStructuredAssistantResultItems = 3
+	assistantResultCurrentDatePlaceholder = "{current_date}"
 	assistantResultRecoveryUserSuffix     = "Re-check the structured assistant " +
 		"response above and store only a concrete requested result, if present."
 )
@@ -97,7 +98,7 @@ func (e *memoryExtractor) buildAssistantResultRecoveryPrompt(
 	var result strings.Builder
 	result.WriteString(strings.ReplaceAll(
 		assistantResultRecoveryPrompt,
-		currentDatePlaceholder,
+		assistantResultCurrentDatePlaceholder,
 		referenceDate(ctx).UTC().Format(time.DateOnly),
 	))
 	result.WriteString("\n<available_actions>\n- ")
