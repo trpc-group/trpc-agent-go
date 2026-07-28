@@ -153,3 +153,35 @@ func TestFmtSprintfVerbVNotFlagged(t *testing.T) {
 		t.Error("PF-002 should fire for the d verb")
 	}
 }
+
+// A parameterless goroutine inside a loop that captures nothing loop-scoped is
+// not a data race, so MT-002 must stay quiet.
+func TestDataRaceLoopWithoutCaptureNotFlagged(t *testing.T) {
+	diff := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,5 @@\n" +
+		"+func f(items []int) {\n" +
+		"+\tfor range items {\n" +
+		"+\t\tgo func() { doWork() }()\n" +
+		"+\t}\n" +
+		"+}\n"
+	if hasRule(findingsFor(t, diff), "MT-002") {
+		t.Error("MT-002 should not fire when the goroutine captures no loop variable")
+	}
+}
+
+// A checked http.Get whose body is deferred-closed is handled by RL-002; RL-001
+// must not also fire (it would look for a non-existent resp.Close()).
+func TestHTTPResponseNotDoubleFlagged(t *testing.T) {
+	diff := "--- a/x.go\n+++ b/x.go\n@@ -1,1 +1,5 @@\n" +
+		"+\tresp, err := http.Get(\"http://x\")\n" +
+		"+\tif err != nil {\n" +
+		"+\t\treturn err\n" +
+		"+\t}\n" +
+		"+\tdefer resp.Body.Close()\n"
+	findings := findingsFor(t, diff)
+	if hasRule(findings, "RL-001") {
+		t.Error("RL-001 should not fire for an http.Get with a deferred Body.Close()")
+	}
+	if hasRule(findings, "RL-002") {
+		t.Error("RL-002 should not fire when the response body is deferred-closed")
+	}
+}

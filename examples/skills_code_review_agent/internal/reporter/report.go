@@ -70,6 +70,33 @@ func ToJSON(r Report) (string, error) {
 	return string(b), err
 }
 
+// mdInlineCode makes a user-derived string safe inside a Markdown inline code
+// span and table cell: control characters are escaped, and the pipe and
+// backtick that would break the cell or the span are neutralised. Paths come
+// from decoded Git-quoted diffs, so they may contain arbitrary bytes.
+func mdInlineCode(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r < 0x20:
+			b.WriteString(fmt.Sprintf(`\x%02x`, r))
+		case r == '|':
+			b.WriteString(`\|`)
+		case r == '`':
+			b.WriteRune('\'')
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
 // ToMarkdown converts the report to a Markdown document.
 func ToMarkdown(r Report) string {
 	var sb strings.Builder
@@ -96,7 +123,7 @@ func ToMarkdown(r Report) string {
 			sb.WriteString("| Field | Value |\n|---|---|\n")
 			sb.WriteString(fmt.Sprintf("| Rule | `%s` |\n", f.RuleID))
 			sb.WriteString(fmt.Sprintf("| Category | %s |\n", f.Category))
-			sb.WriteString(fmt.Sprintf("| File | `%s:%d` |\n", f.File, f.Line))
+			sb.WriteString(fmt.Sprintf("| File | `%s:%d` |\n", mdInlineCode(f.File), f.Line))
 			sb.WriteString(fmt.Sprintf("| Confidence | %s |\n\n", f.Confidence))
 			sb.WriteString(fmt.Sprintf("**Evidence:**\n```go\n%s\n```\n\n", f.Evidence))
 			sb.WriteString(fmt.Sprintf("**Recommendation:** %s\n\n", f.Recommendation))

@@ -198,7 +198,15 @@ func runLocalVet(taskID string, db *storage.DB, diffs []parser.FileDiff) (durati
 		modRoot, target := moduleRootAndTarget(repoPath, pkg)
 		cmd := exec.CommandContext(ctx, "go", "vet", target)
 		cmd.Dir = modRoot
-		out, runErr := cmd.CombinedOutput()
+		// Bound memory while vet runs: CombinedOutput would buffer everything and
+		// only cap afterwards, so a package that streams diagnostics for the whole
+		// timeout could exhaust memory. Keep the same writer for stdout and stderr
+		// so os/exec serialises the two copiers.
+		capped := &cappedBuffer{limit: 4096}
+		cmd.Stdout = capped
+		cmd.Stderr = capped
+		runErr := cmd.Run()
+		out := capped.bytes()
 		cancel()
 		ms := time.Since(t0).Milliseconds()
 
@@ -207,7 +215,7 @@ func runLocalVet(taskID string, db *storage.DB, diffs []parser.FileDiff) (durati
 		if cmd.ProcessState != nil {
 			exitCode = cmd.ProcessState.ExitCode()
 		} else if runErr != nil {
-			log.Printf("sandbox go vet failed to start: %v", runErr)
+			log.Printf("go vet failed to start: %v", runErr)
 		}
 
 		runID := uuid.New().String()
@@ -228,6 +236,27 @@ func runLocalVet(taskID string, db *storage.DB, diffs []parser.FileDiff) (durati
 	}
 	return time.Since(start).Milliseconds(), toolCalls, findings
 }
+
+// cappedBuffer keeps at most limit bytes of what is written to it while still
+// reporting every write as fully consumed, so an attached subprocess never
+// blocks and memory stays bounded regardless of how much it emits.
+type cappedBuffer struct {
+	buf   []byte
+	limit int
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	if room := c.limit - len(c.buf); room > 0 {
+		if len(p) > room {
+			c.buf = append(c.buf, p[:room]...)
+		} else {
+			c.buf = append(c.buf, p...)
+		}
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) bytes() []byte { return c.buf }
 
 // vetFinding maps a `go vet` outcome for pkg to a finding, or nil when it passed.
 // A positive exit means vet reported issues; a negative exit means it never

@@ -99,3 +99,28 @@ func TestParseConcatenatedDiffWithoutGitHeader(t *testing.T) {
 		}
 	}
 }
+
+// A removed line whose content begins with "-- " followed by an added "++ " line
+// (legal inside a Go raw string) encodes as "--- "/"+++ ". While the hunk still
+// has declared lines to consume, these must stay hunk content, not a new header.
+func TestParseHeaderLikeContentInsideHunk(t *testing.T) {
+	diff := "--- a/q.go\n" +
+		"+++ b/q.go\n" +
+		"@@ -1,2 +1,2 @@\n" +
+		" s := `x`\n" +
+		"--- foo\n" +
+		"+++ bar\n"
+	files, err := parser.Parse(strings.NewReader(diff))
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("header-like hunk content split into %d files, want 1", len(files))
+	}
+	if files[0].NewPath != "q.go" {
+		t.Errorf("wrong file: got %q, want q.go", files[0].NewPath)
+	}
+	if len(files[0].Hunks) != 1 || len(files[0].Hunks[0].Lines) != 3 {
+		t.Fatalf("hunk body not preserved: %+v", files[0].Hunks)
+	}
+}

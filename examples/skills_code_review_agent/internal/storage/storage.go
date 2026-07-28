@@ -12,7 +12,6 @@ package storage
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -227,10 +226,4 @@ func (db *DB) QueryTaskFindings(taskID string) ([]FindingRow, error) {
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// MarshalJSON is a helper to marshal any value to a JSON string.
-func MarshalJSON(v any) (string, error) {
-	b, err := json.MarshalIndent(v, "", "  ")
-	return string(b), err
 }

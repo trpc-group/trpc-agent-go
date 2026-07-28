@@ -37,12 +37,18 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 	var files []FileDiff
 	var cur *FileDiff
 	var curHunk *Hunk
+	// Remaining old/new-side body lines the active hunk still expects, derived
+	// from its `@@ -a,b +c,d @@` counts. While a hunk is unfinished, a content
+	// line such as a removed `--- ` or added `+++ ` must not be read as a file
+	// header (both are legal inside a Go raw string).
+	oldRem, newRem := 0, 0
 
 	reader := bufio.NewReader(r)
 	for {
 		raw, err := reader.ReadString('\n')
 		line := strings.TrimRight(raw, "\r\n")
 		if line != "" {
+			hunkOpen := curHunk != nil && (oldRem > 0 || newRem > 0)
 			switch {
 			case strings.HasPrefix(line, "diff --git "):
 				// Explicit file boundary in git diffs: flush the current file before
@@ -55,11 +61,24 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 					files = append(files, *cur)
 					cur = nil
 				}
-			case strings.HasPrefix(line, "--- ") && (curHunk == nil || nextLineStartsWith(reader, "+++ ")):
+				oldRem, newRem = 0, 0
+			case hunkOpen && (strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ")):
+				// Hunk body: consume against the declared line counts before any
+				// header can be recognised again.
+				curHunk.Lines = append(curHunk.Lines, line)
+				switch line[0] {
+				case '+':
+					newRem--
+				case '-':
+					oldRem--
+				default:
+					oldRem--
+					newRem--
+				}
+			case strings.HasPrefix(line, "--- "):
 				// New file header. A concatenated diff without `diff --git` reaches
-				// here with a hunk still open, so flush it (and the previous file)
-				// before starting this one. The `+++ ` lookahead distinguishes a
-				// real header from a removed line whose content starts with "--- ".
+				// here with the previous hunk already consumed, so flush it and the
+				// previous file before starting this one.
 				if curHunk != nil {
 					cur.Hunks = append(cur.Hunks, *curHunk)
 					curHunk = nil
@@ -79,8 +98,10 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 					cur.Hunks = append(cur.Hunks, *curHunk)
 				}
 				startLine := parseHunkStart(line)
+				oldRem, newRem = parseHunkCounts(line)
 				curHunk = &Hunk{StartLine: startLine}
 			case curHunk != nil && (strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") || strings.HasPrefix(line, " ")):
+				// Trailing body lines past the declared counts (malformed headers).
 				curHunk.Lines = append(curHunk.Lines, line)
 			}
 		}
@@ -98,13 +119,6 @@ func Parse(r io.Reader) ([]FileDiff, error) {
 		files = append(files, *cur)
 	}
 	return files, nil
-}
-
-// nextLineStartsWith reports whether the next unread line begins with prefix,
-// without consuming input. Used to pair a "--- " header with its "+++ " partner.
-func nextLineStartsWith(reader *bufio.Reader, prefix string) bool {
-	b, _ := reader.Peek(len(prefix))
-	return string(b) == prefix
 }
 
 // stripDiffTimestamp removes the tab-separated timestamp that traditional
@@ -146,6 +160,33 @@ func parseHunkStart(header string) int {
 		return 1
 	}
 	return n
+}
+
+// parseHunkCounts extracts the old (b) and new (d) body-line counts from an
+// "@@ -a,b +c,d @@" header. A missing count means 1 (unified-diff default).
+func parseHunkCounts(header string) (oldCount, newCount int) {
+	body := header
+	if i := strings.Index(body[2:], "@@"); i >= 0 {
+		body = body[:i+2]
+	}
+	minus := strings.Index(body, " -")
+	plus := strings.Index(body, " +")
+	if minus < 0 || plus < 0 {
+		return 0, 0
+	}
+	return sideCount(body[minus+2 : plus]), sideCount(body[plus+2:])
+}
+
+// sideCount reads the count from a "start,count" (or bare "start") hunk side.
+func sideCount(s string) int {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, ','); i >= 0 {
+		if n, err := strconv.Atoi(strings.TrimSpace(s[i+1:])); err == nil {
+			return n
+		}
+		return 1
+	}
+	return 1
 }
 
 // AddedLines returns only the lines added in a hunk ('+' prefix stripped).

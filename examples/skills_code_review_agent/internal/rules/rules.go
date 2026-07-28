@@ -183,7 +183,10 @@ func contextLeakRule(file string, hunk parser.Hunk, startLine int, seen map[dedu
 	}
 }
 
-var reResourceOpen = regexp.MustCompile(`\bos\.Open\b|\bos\.Create\b|\bhttp\.Get\b|\bnet\.Dial\b|\bos\.OpenFile\b|\bsql\.Open\b`)
+// http.Get/Post/Do are intentionally absent: their resource is the response
+// body, which RL-002 owns. Matching them here would flag a correctly
+// `defer resp.Body.Close()`d response as a leak.
+var reResourceOpen = regexp.MustCompile(`\bos\.Open\b|\bos\.Create\b|\bnet\.Dial\b|\bos\.OpenFile\b|\bsql\.Open\b`)
 
 // reResourceVar captures the variable a resource is opened into, e.g. `f` in
 // `f, _ := os.Open(...)`, so suppression can require that exact variable's Close.
@@ -455,16 +458,40 @@ func mutexNoDeferRule(file string, hunk parser.Hunk, startLine int, seen map[ded
 var reGoFuncClose = regexp.MustCompile(`\bgo\s+func\s*\(\s*\)`)
 var reSyncPrim = regexp.MustCompile(`\batomic\.\w+|\bsync\.\w+|\bmu\.`)
 
+// reLoopVars pulls the variables a `for` header introduces, e.g. `i` and `v`
+// from `for i, v := range xs`. A `for {` / `for cond {` header introduces none.
+var reLoopVars = regexp.MustCompile(`^for\s+(\w+)(?:\s*,\s*(\w+))?\s*:=`)
+
+// referencesWord reports whether s mentions any of words as a whole identifier.
+func referencesWord(s string, words []string) bool {
+	for _, w := range words {
+		if regexp.MustCompile(`\b` + regexp.QuoteMeta(w) + `\b`).MatchString(s) {
+			return true
+		}
+	}
+	return false
+}
+
 func dataRaceRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeKey]struct{}, out *[]Finding) {
 	added, lineNums := hunk.AddedLinesNumbered()
 	inLoop := false
+	var loopVars []string
 	for i, l := range added {
 		trimmed := strings.TrimSpace(l)
 		if strings.HasPrefix(trimmed, "for ") || trimmed == "for {" {
 			inLoop = true
+			loopVars = nil
+			if m := reLoopVars.FindStringSubmatch(trimmed); m != nil {
+				for _, v := range m[1:] {
+					if v != "" && v != "_" {
+						loopVars = append(loopVars, v)
+					}
+				}
+			}
 		}
 		if inLoop && strings.Contains(trimmed, "}") {
 			inLoop = false
+			loopVars = nil
 		}
 		// Only a parameterless goroutine launched inside a loop is a likely
 		// loop-variable-capture data race; a bare go func() elsewhere captures
@@ -478,6 +505,12 @@ func dataRaceRule(file string, hunk parser.Hunk, startLine int, seen map[dedupeK
 		}
 		block := strings.Join(window, "\n")
 		if reSyncPrim.MatchString(block) {
+			continue
+		}
+		// Loop placement alone is not capture: require the goroutine body to
+		// reference a loop variable. `for {}` and `go func(){ doWork() }()` with
+		// no such reference are left alone.
+		if len(loopVars) == 0 || !referencesWord(block, loopVars) {
 			continue
 		}
 		emit(out, seen, Finding{
