@@ -166,6 +166,7 @@ func TestRuntimeRunProgramErrorsAndTimeout(t *testing.T) {
 		WithWorkspaceRoot(t.TempDir()),
 		WithPermissionProfile(DangerFullAccessProfile()),
 		WithDefaultTimeout(25*time.Millisecond),
+		WithSessionPolicy(SessionPolicy{RunConcurrency: SessionRunConcurrencyParallel}),
 	)
 	ws, err := rt.CreateWorkspace(context.Background(), "run/errors", codeexecutor.WorkspacePolicy{})
 	if err != nil {
