@@ -11,9 +11,9 @@ package workspacesession
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/artifact"
@@ -21,6 +21,8 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 )
+
+var ephemeralSessionSeq uint64
 
 // Resolver owns shared engine and session-workspace resolution for tools
 // that should operate on the same invocation workspace.
@@ -58,8 +60,6 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 		"workspacesession: falling back to local engine; " +
 			"executor does not expose EngineProvider",
 	)
-	// Use local.CodeExecutor.Engine so SupportsCleanEnv/DeclarativeIO match
-	// the audited local backend (policy mode can honor CleanEnv).
 	return localexec.New().Engine()
 }
 
@@ -76,10 +76,9 @@ func (r *Resolver) CreateWorkspace(
 // CreateWorkspaceHandle acquires the invocation-scoped workspace together with
 // the registry token required for ABA-safe conditional invalidation.
 //
-// If the invocation carries a Session but that session lacks a stable ID,
-// CreateWorkspaceHandle fails closed instead of falling back to the tool name.
-// Otherwise placeholder sessions that share a skill name would reuse one
-// durable registry workspace.
+// If the invocation carries a Session without a stable ID, an ephemeral
+// workspace key is used so placeholder sessions cannot share a durable
+// tool/skill name key.
 func (r *Resolver) CreateWorkspaceHandle(
 	ctx context.Context,
 	eng codeexecutor.Engine,
@@ -91,16 +90,17 @@ func (r *Resolver) CreateWorkspaceHandle(
 		r.reg = reg
 	}
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
-		if inv.Session != nil && strings.TrimSpace(inv.Session.ID) == "" {
-			return codeexecutor.WorkspaceHandle{}, errors.New(
-				"workspacesession: invocation session is present but Session.ID " +
-					"is empty; refuse to fall back to a shared tool name as the " +
-					"durable workspace key",
-			)
-		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
 	sid := workspaceKey(ctx, name)
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil && inv.Session != nil {
+		if strings.TrimSpace(inv.Session.ID) == "" {
+			sid = fmt.Sprintf(
+				"ephemeral-empty-session-%d",
+				atomic.AddUint64(&ephemeralSessionSeq, 1),
+			)
+		}
+	}
 	return reg.AcquireHandle(ctx, eng.Manager(), sid)
 }
 
@@ -126,11 +126,8 @@ func workspaceKey(ctx context.Context, fallback string) string {
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
 //
-// The encoding is injective over (AppName, UserID, ID): every field is
-// length-prefixed so empty parts and embedded "/" cannot collide
-// (e.g. App="a/b",User="c",ID="d" vs App="a",User="b/c",ID="d").
-// Session.ID is required; empty/whitespace ID returns "" so callers can
-// fail closed instead of collapsing placeholder sessions.
+// Encoding is injective over (AppName, UserID, ID) via length prefixes.
+// Session.ID is required; empty/whitespace ID returns "".
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
@@ -145,10 +142,6 @@ func KeyFromInvocation(inv *agent.Invocation) string {
 		len(app), app, len(user), user, len(id), id)
 }
 
-// withWorkspaceArtifactContext mirrors internal/workspaceinput.withArtifactContext:
-// inject artifact service when present, then session info when Session is set.
-// Workspace init hooks and StageInputs during CreateWorkspace then resolve
-// artifact:// references consistently with other artifact-backed staging paths.
 func withWorkspaceArtifactContext(
 	ctx context.Context,
 	inv *agent.Invocation,

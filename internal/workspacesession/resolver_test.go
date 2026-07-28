@@ -11,6 +11,7 @@ package workspacesession
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -303,14 +304,22 @@ func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
 	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}}))
 }
 
-func TestResolver_CreateWorkspace_RejectsEmptySessionID(t *testing.T) {
+func TestResolver_CreateWorkspace_EmptySessionIDUsesEphemeralKey(t *testing.T) {
 	mgr := &resolverStubMgr{}
 	eng := newResolverStubEngine(mgr)
 	r := NewResolver(nil, nil)
 	inv := agent.NewInvocation()
 	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
-	_, err := r.CreateWorkspace(ctx, eng, "skill-name")
-	require.Error(t, err)
-	require.Empty(t, mgr.created)
+	ws1, err := r.CreateWorkspace(ctx, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, "skill-name", ws1.ID)
+	require.True(t, strings.HasPrefix(ws1.ID, "ephemeral-empty-session-"))
+	inv2 := agent.NewInvocation()
+	inv2.Session = &session.Session{}
+	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
+	ws2, err := r.CreateWorkspace(ctx2, eng, "skill-name")
+	require.NoError(t, err)
+	require.NotEqual(t, ws1.ID, ws2.ID)
+	require.NotContains(t, mgr.created, "skill-name")
 }

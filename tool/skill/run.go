@@ -489,23 +489,7 @@ func (t *RunTool) Call(
 	if err := preflightSkillExecution(eng, t, in); err != nil {
 		return nil, err
 	}
-	prepared, err := t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
-	if err != nil {
-		return nil, err
-	}
-	rr, err := t.runPrepared(prepared, in)
-	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-		t.invalidateWorkspaceHandle(prepared.handle)
-		if codeexecutor.IsWorkspaceRetrySafe(err) {
-			prepared, err = t.prepareWorkspaceForRun(ctx, in)
-			if err == nil {
-				rr, err = t.runPrepared(prepared, in)
-			}
-			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
-				t.invalidateWorkspaceHandle(prepared.handle)
-			}
-		}
-	}
+	prepared, rr, err := t.prepareAndRun(ctx, eng, in)
 	if err != nil {
 		return nil, err
 	}
@@ -659,6 +643,34 @@ func (t *RunTool) applyArtifactSaveOverrides(
 		}
 	}
 	return in, saveRequested, outputsSaveSkipReason
+}
+
+func (t *RunTool) prepareAndRun(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, codeexecutor.RunResult, error) {
+	prepared, err := t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
+	if err != nil {
+		return prepared, codeexecutor.RunResult{}, err
+	}
+	rr, err := t.runPrepared(prepared, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, err = t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
+			if err == nil {
+				rr, err = t.runPrepared(prepared, in)
+			}
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.invalidateWorkspaceHandle(prepared.handle)
+			}
+		}
+	}
+	if err != nil {
+		return prepared, codeexecutor.RunResult{}, err
+	}
+	return prepared, rr, nil
 }
 
 func (t *RunTool) prepareWorkspaceForRun(
@@ -990,16 +1002,21 @@ func normalizeInputTo(to string) string {
 
 // ensureEngine gets engine from executor or builds a local one.
 func (t *RunTool) ensureEngine() codeexecutor.Engine {
-	if t.wsr == nil {
-		log.Warnf(
-			"skill_run: falling back to local engine; " +
-				"workspace resolver is not configured",
-		)
-		// Audited local capabilities (SupportsCleanEnv=true) so policy
-		// mode with allowed/denied commands still works on the fallback.
-		return localexec.New().Engine()
+	if t != nil {
+		if ep, ok := t.exec.(codeexecutor.EngineProvider); ok && ep != nil {
+			if e := ep.Engine(); e != nil {
+				return e
+			}
+		}
+		if t.wsr != nil {
+			return t.wsr.EnsureEngine()
+		}
 	}
-	return t.wsr.EnsureEngine()
+	log.Warnf(
+		"skill_run: falling back to local engine; " +
+			"workspace resolver is not configured",
+	)
+	return localexec.New().Engine()
 }
 
 func (t *RunTool) createWorkspace(
@@ -1242,12 +1259,10 @@ func (t *RunTool) buildRunProgramSpec(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
-	// Policy: CleanEnv capability + bare-command allow/deny before PutFiles.
+	// Policy mode requires CleanEnv before any PutFiles/editor staging.
+	// Full allow/deny matching needs skill-local path context and runs below.
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
-			return codeexecutor.RunProgramSpec{}, err
-		}
-		if err := preauthorizeSkillCommand(t, in.Command); err != nil {
 			return codeexecutor.RunProgramSpec{}, err
 		}
 	}
@@ -1953,17 +1968,31 @@ func preauthorizeSkillCommand(t *RunTool, command string) error {
 		return errors.New("skill_run: empty command")
 	}
 	cmd := argv[0]
-	base := cmd
-	if i := strings.LastIndexAny(cmd, `/\`); i >= 0 {
-		base = cmd[i+1:]
-	}
-	if len(t.deniedCmds) > 0 && (cmdInList(t.deniedCmds, cmd) || cmdInList(t.deniedCmds, base)) {
+	if cmdInList(t.deniedCmds, cmd) {
 		return fmt.Errorf("skill_run: command %q is denied by denied_commands", cmd)
 	}
-	if len(t.allowedCmds) > 0 && !(cmdInList(t.allowedCmds, cmd) || cmdInList(t.allowedCmds, base)) {
-		return fmt.Errorf("skill_run: command %q is not allowed by allowed_commands", cmd)
+	if _, ok := matchSkillLocalCommand(t.deniedCmds, cmd, "", ""); ok {
+		return fmt.Errorf("skill_run: command %q is denied by denied_commands", cmd)
 	}
-	return nil
+	if len(t.allowedCmds) == 0 {
+		return nil
+	}
+	if cmdInList(t.allowedCmds, cmd) {
+		return nil
+	}
+	if _, ok := matchSkillLocalCommand(t.allowedCmds, cmd, "", ""); ok {
+		return nil
+	}
+	for allowed := range t.allowedCmds {
+		base := allowed
+		if k := strings.LastIndexAny(allowed, `/\`); k >= 0 {
+			base = allowed[k+1:]
+		}
+		if base == cmd {
+			return nil
+		}
+	}
+	return fmt.Errorf("skill_run: command %q is not allowed by allowed_commands", cmd)
 }
 
 func preflightDeclarativeOutputs(
