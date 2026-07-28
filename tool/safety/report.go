@@ -52,7 +52,7 @@ func (r *Report) SaveJSON(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("marshal report failed: %w", err)
 	}
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	if err := os.WriteFile(filePath, data, 0600); err != nil {
 		return fmt.Errorf("write report file failed: %w", err)
 	}
 	return nil

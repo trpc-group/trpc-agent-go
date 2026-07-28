@@ -7,6 +7,8 @@
 //
 //
 
+// Package safety provides tool invocation safety guards, including policy-based
+// permission control, risk assessment, audit logging, and report generation.
 package safety
 
 import (
