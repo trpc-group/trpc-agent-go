@@ -483,18 +483,13 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	// Fail closed before prepare/run: unsupported declarative contracts and
-	// CleanEnv-incapable policy mode must not create/stage workspaces first.
+	// Fail closed before prepare/run on a pinned engine so preflight and
+	// prepare/run share one capability snapshot.
 	eng := t.ensureEngine()
-	if err := preflightDeclarativeOutputs(eng, in); err != nil {
+	if err := preflightSkillExecution(eng, t, in); err != nil {
 		return nil, err
 	}
-	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
-		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
-			return nil, err
-		}
-	}
-	prepared, err := t.prepareWorkspaceForRun(ctx, in)
+	prepared, err := t.prepareWorkspaceForRunWithEngine(ctx, eng, in)
 	if err != nil {
 		return nil, err
 	}
@@ -670,7 +665,18 @@ func (t *RunTool) prepareWorkspaceForRun(
 	ctx context.Context,
 	in runInput,
 ) (workspaceRunPreparation, error) {
-	eng := t.ensureEngine()
+	return t.prepareWorkspaceForRunWithEngine(ctx, t.ensureEngine(), in)
+}
+
+func (t *RunTool) prepareWorkspaceForRunWithEngine(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, error) {
+	// skill_exec also enters here so StreamableCall cannot bypass Call preflight.
+	if err := preflightSkillExecution(eng, t, in); err != nil {
+		return workspaceRunPreparation{}, err
+	}
 	prepared, acquired, err := t.prepareWorkspaceAttempt(ctx, eng, in)
 	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
 		if acquired {
@@ -1236,9 +1242,12 @@ func (t *RunTool) buildRunProgramSpec(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
-	// Policy mode requires CleanEnv before any PutFiles/editor staging.
+	// Policy: CleanEnv capability + bare-command allow/deny before PutFiles.
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
+			return codeexecutor.RunProgramSpec{}, err
+		}
+		if err := preauthorizeSkillCommand(t, in.Command); err != nil {
 			return codeexecutor.RunProgramSpec{}, err
 		}
 	}
@@ -1920,6 +1929,41 @@ func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
 		return false
 	}
 	return true
+}
+
+func preflightSkillExecution(eng codeexecutor.Engine, t *RunTool, in runInput) error {
+	if err := preflightDeclarativeOutputs(eng, in); err != nil {
+		return err
+	}
+	if t != nil && (len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0) {
+		return checkSkillRunnerSupportsPolicy(eng)
+	}
+	return nil
+}
+
+func preauthorizeSkillCommand(t *RunTool, command string) error {
+	if t == nil {
+		return nil
+	}
+	argv, err := splitCommandLine(command)
+	if err != nil {
+		return err
+	}
+	if len(argv) == 0 {
+		return errors.New("skill_run: empty command")
+	}
+	cmd := argv[0]
+	base := cmd
+	if i := strings.LastIndexAny(cmd, `/\`); i >= 0 {
+		base = cmd[i+1:]
+	}
+	if len(t.deniedCmds) > 0 && (cmdInList(t.deniedCmds, cmd) || cmdInList(t.deniedCmds, base)) {
+		return fmt.Errorf("skill_run: command %q is denied by denied_commands", cmd)
+	}
+	if len(t.allowedCmds) > 0 && !(cmdInList(t.allowedCmds, cmd) || cmdInList(t.allowedCmds, base)) {
+		return fmt.Errorf("skill_run: command %q is not allowed by allowed_commands", cmd)
+	}
+	return nil
 }
 
 func preflightDeclarativeOutputs(

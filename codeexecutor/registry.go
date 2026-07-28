@@ -281,8 +281,8 @@ func (r *WorkspaceRegistry) Get(id string) (Workspace, bool) {
 	return entry.ws, ok
 }
 
-// Release removes id from the registry and optionally cleans up the
-// underlying workspace when m is non-nil.
+// Release removes the current cache entry for id (generation-blind).
+// Prefer ReleaseHandle when holding a WorkspaceHandle.
 //
 // Lifecycle symmetry (all wings):
 //   - concurrent Acquire waits for in-flight Release
@@ -331,6 +331,67 @@ func (r *WorkspaceRegistry) Release(
 					r.byID = map[string]workspaceRegistryEntry{}
 				}
 				r.byID[id] = entry
+			}
+			rel.err = err
+			delete(r.releasing, id)
+			close(rel.done)
+			r.mu.Unlock()
+		}(entry, rel)
+
+		return waitWorkspaceRelease(ctx, rel)
+	}
+}
+
+// ReleaseHandle destroys only the exact generation in handle. If the cache
+// already holds a newer token, this is a no-op and does not Cleanup the newer
+// workspace.
+func (r *WorkspaceRegistry) ReleaseHandle(
+	ctx context.Context, m WorkspaceManager, handle WorkspaceHandle,
+) error {
+	if r == nil || handle.registry != r || handle.entryToken == 0 {
+		return nil
+	}
+	id := handle.registryID
+	for {
+		r.mu.Lock()
+		if rel, ok := r.releasing[id]; ok {
+			r.mu.Unlock()
+			return waitWorkspaceRelease(ctx, rel)
+		}
+		if call, ok := r.inflight[id]; ok {
+			r.mu.Unlock()
+			if _, err := waitWorkspaceCreate(ctx, call); err != nil {
+				return nil
+			}
+			continue
+		}
+		entry, ok := r.byID[id]
+		if !ok || entry.entryToken != handle.entryToken {
+			r.mu.Unlock()
+			return nil
+		}
+		delete(r.byID, id)
+		if r.releasing == nil {
+			r.releasing = map[string]*workspaceReleaseCall{}
+		}
+		rel := &workspaceReleaseCall{done: make(chan struct{})}
+		r.releasing[id] = rel
+		cleanupCtx := context.WithoutCancel(ctx)
+		r.mu.Unlock()
+
+		go func(entry workspaceRegistryEntry, rel *workspaceReleaseCall) {
+			var err error
+			if m != nil {
+				err = m.Cleanup(cleanupCtx, entry.ws)
+			}
+			r.mu.Lock()
+			if err != nil {
+				if r.byID == nil {
+					r.byID = map[string]workspaceRegistryEntry{}
+				}
+				if _, exists := r.byID[id]; !exists {
+					r.byID[id] = entry
+				}
 			}
 			rel.err = err
 			delete(r.releasing, id)

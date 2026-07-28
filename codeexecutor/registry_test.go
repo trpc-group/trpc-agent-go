@@ -12,6 +12,7 @@ package codeexecutor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -515,4 +516,163 @@ func TestWorkspaceRegistry_Invalidate_LegacyLateStaleCannotEvictNewToken(
 	require.NoError(t, err)
 	require.Equal(t, current.entryToken, got.entryToken)
 	require.Equal(t, 2, wm.callCount())
+}
+
+type countingCleanupWM struct {
+	mu      sync.Mutex
+	creates int
+	cleans  int
+	paths   []string
+	block   chan struct{}
+	entered chan struct{}
+	fail    error
+}
+
+func (c *countingCleanupWM) CreateWorkspace(_ context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.creates++
+	path := "/tmp/" + id + "-" + string(rune('a'+c.creates-1))
+	// keep path unique per create without non-ascii
+	path = fmt.Sprintf("/tmp/%s-%d", id, c.creates)
+	return Workspace{ID: id, Path: path}, nil
+}
+
+func (c *countingCleanupWM) Cleanup(_ context.Context, ws Workspace) error {
+	c.mu.Lock()
+	c.cleans++
+	c.paths = append(c.paths, ws.Path)
+	fail := c.fail
+	entered := c.entered
+	block := c.block
+	c.mu.Unlock()
+	if entered != nil {
+		select {
+		case <-entered:
+		default:
+			close(entered)
+		}
+	}
+	if block != nil {
+		<-block
+	}
+	return fail
+}
+
+func TestWorkspaceRegistry_ReleaseHandle_IgnoresNewerGeneration(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &countingCleanupWM{}
+	ctx := context.Background()
+	h1, err := r.AcquireHandle(ctx, wm, "gen")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(h1))
+	h2, err := r.AcquireHandle(ctx, wm, "gen")
+	require.NoError(t, err)
+	require.NotEqual(t, h1.Workspace.Path, h2.Workspace.Path)
+
+	// Releasing the stale handle must not cleanup the newer workspace.
+	require.NoError(t, r.ReleaseHandle(ctx, wm, h1))
+	wm.mu.Lock()
+	require.Equal(t, 0, wm.cleans)
+	wm.mu.Unlock()
+	got, ok := r.Get("gen")
+	require.True(t, ok)
+	require.Equal(t, h2.Workspace.Path, got.Path)
+
+	require.NoError(t, r.ReleaseHandle(ctx, wm, h2))
+	wm.mu.Lock()
+	require.Equal(t, 1, wm.cleans)
+	require.Equal(t, []string{h2.Workspace.Path}, wm.paths)
+	wm.mu.Unlock()
+	_, ok = r.Get("gen")
+	require.False(t, ok)
+}
+
+func TestWorkspaceRegistry_Release_WaitsInflightCreateAndCleans(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	entered := make(chan struct{})
+	releaseCreate := make(chan struct{})
+	wm := &blockingCreateThenCleanWM{entered: entered, releaseCreate: releaseCreate}
+	ctx := context.Background()
+	acqErr := make(chan error, 1)
+	go func() {
+		_, err := r.Acquire(ctx, wm, "inflight-rel")
+		acqErr <- err
+	}()
+	<-entered
+	relErr := make(chan error, 1)
+	go func() { relErr <- r.Release(ctx, wm, "inflight-rel") }()
+	select {
+	case e := <-relErr:
+		t.Fatalf("Release returned before create finished: %v", e)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseCreate)
+	require.NoError(t, <-acqErr)
+	require.NoError(t, <-relErr)
+	_, ok := r.Get("inflight-rel")
+	require.False(t, ok)
+	require.Equal(t, 1, wm.cleans)
+}
+
+type blockingCreateThenCleanWM struct {
+	entered       chan struct{}
+	releaseCreate chan struct{}
+	mu            sync.Mutex
+	cleans        int
+	once          sync.Once
+}
+
+func (b *blockingCreateThenCleanWM) CreateWorkspace(ctx context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
+	b.once.Do(func() { close(b.entered) })
+	select {
+	case <-b.releaseCreate:
+		return Workspace{ID: id, Path: "/tmp/" + id}, nil
+	case <-ctx.Done():
+		return Workspace{}, ctx.Err()
+	}
+}
+
+func (b *blockingCreateThenCleanWM) Cleanup(_ context.Context, _ Workspace) error {
+	b.mu.Lock()
+	b.cleans++
+	b.mu.Unlock()
+	return nil
+}
+
+func TestWorkspaceRegistry_Release_RetryAfterCleanupFailure(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &countingCleanupWM{fail: errors.New("boom")}
+	ctx := context.Background()
+	_, err := r.Acquire(ctx, wm, "retry")
+	require.NoError(t, err)
+	err = r.Release(ctx, wm, "retry")
+	require.Error(t, err)
+	_, ok := r.Get("retry")
+	require.True(t, ok, "entry restored after failed cleanup")
+	wm.fail = nil
+	require.NoError(t, r.Release(ctx, wm, "retry"))
+	_, ok = r.Get("retry")
+	require.False(t, ok)
+}
+
+func TestWorkspaceRegistry_Release_CallerCancelDoesNotAbortCleanup(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	entered := make(chan struct{})
+	block := make(chan struct{})
+	wm := &countingCleanupWM{entered: entered, block: block}
+	ctx := context.Background()
+	_, err := r.Acquire(ctx, wm, "cancel-rel")
+	require.NoError(t, err)
+	callCtx, cancel := context.WithCancel(ctx)
+	errCh := make(chan error, 1)
+	go func() { errCh <- r.Release(callCtx, wm, "cancel-rel") }()
+	<-entered
+	cancel()
+	require.ErrorIs(t, <-errCh, context.Canceled)
+	close(block)
+	// Coalesced waiters / later Release should finish cleanup.
+	require.NoError(t, r.Release(ctx, wm, "cancel-rel"))
+	_, ok := r.Get("cancel-rel")
+	require.False(t, ok)
 }
