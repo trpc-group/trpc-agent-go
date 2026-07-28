@@ -3257,9 +3257,26 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	const stateKey = "completed"
-	tools, toolCalls := newStopErrorFirstToolRound(stateKey)
 	hookErr := errors.New("after-tool hook failed")
+	tools := map[string]tool.Tool{
+		"fast": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "fast"},
+			callFn: func(context.Context, []byte) (any, error) {
+				return "ok", nil
+			},
+		},
+		"stop": &mockCallableTool{
+			declaration: &tool.Declaration{Name: "stop"},
+			callFn: func(ctx context.Context, _ []byte) (any, error) {
+				<-ctx.Done()
+				return nil, agent.NewStopError("late stop")
+			},
+		},
+	}
+	toolCalls := []model.ToolCall{
+		{ID: "call-fast", Function: model.FunctionDefinitionParam{Name: "fast"}},
+		{ID: "call-stop", Function: model.FunctionDefinitionParam{Name: "stop"}},
+	}
 	mgr := plugin.MustNewManager(afterToolMessagesTestPlugin{
 		hook: func(
 			context.Context,
@@ -3287,13 +3304,11 @@ func TestPerToolCallResultEventsParallelStopErrorWinsAfterToolMessagesError(
 		newToolCallResponseWithCalls(toolCalls),
 		eventChan,
 	)
-	require.Error(t, err)
-	_, ok := agent.AsStopError(err)
+	stopErr, ok := agent.AsStopError(err)
 	require.True(t, ok)
+	require.Equal(t, "late stop", stopErr.Error())
 	require.Len(t, eventChan, 1)
-	errEvent := <-eventChan
-	require.Equal(t, model.ObjectTypeError, errEvent.Object)
-	require.Equal(t, []byte("good"), errEvent.StateDelta[stateKey])
+	require.Equal(t, model.ObjectTypeError, (<-eventChan).Object)
 }
 
 func TestPerToolCallResultEventsSequentialStopErrorCarriesCompletedState(

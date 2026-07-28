@@ -930,7 +930,12 @@ func (p *FunctionCallResponseProcessor) executeToolCallsInParallelAndEmitPerCall
 	for result := range resultChan {
 		received++
 		if result.err != nil {
-			if toolErr == nil && processingErr == nil {
+			if _, isStop := agent.AsStopError(result.err); isStop {
+				if _, alreadyStop := agent.AsStopError(toolErr); !alreadyStop {
+					toolErr = result.err
+				}
+				cancel()
+			} else if toolErr == nil && processingErr == nil {
 				toolErr = result.err
 				cancel()
 			}

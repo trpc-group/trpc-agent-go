@@ -533,6 +533,9 @@ tool(result B)
 合并的 `tool.response` 事件。如果希望改为每个工具调用完成后分别发送一个结果事件，
 可以为本次 `Run` 开启以下选项：
 
+该选项仅适用于全部由 Runner 处理且不含 long-running 工具的多工具轮次；其他轮次
+仍沿用原有的执行和事件行为。
+
 ```go
 eventChan, err := r.Run(
     ctx,

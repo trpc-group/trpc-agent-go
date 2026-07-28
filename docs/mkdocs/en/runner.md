@@ -555,6 +555,10 @@ of them to finish and emits one combined `tool.response` event. To emit one
 result event as each tool call completes instead, enable this option for the
 `Run` call:
 
+This option applies only to multi-tool rounds handled entirely by Runner with
+no long-running tools; all other rounds keep their existing execution and event
+behavior.
+
 ```go
 eventChan, err := r.Run(
     ctx,
