@@ -9102,11 +9102,12 @@ func TestMergeCurrentTurnMessagesIntoSeed_ReplacesLastUserMessageWhenItMatchesOr
 		model.NewUserMessage("ctx"),
 		model.NewUserMessage("rewritten"),
 	}
-	merged := mergeCurrentTurnMessagesIntoSeed(
+	merged, start := mergeCurrentTurnMessagesIntoSeed(
 		seed,
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
+	require.Equal(t, 1, start)
 	require.Equal(t, []model.Message{
 		model.NewUserMessage("first"),
 		model.NewUserMessage("ctx"),
@@ -9125,11 +9126,12 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOnlyOlderMessageMatchesOrig
 		model.NewUserMessage("ctx"),
 		model.NewUserMessage("rewritten"),
 	}
-	merged := mergeCurrentTurnMessagesIntoSeed(
+	merged, start := mergeCurrentTurnMessagesIntoSeed(
 		seed,
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
+	require.Equal(t, 3, start)
 	require.Equal(t, []model.Message{
 		model.NewUserMessage("current"),
 		model.NewAssistantMessage("after"),
@@ -9148,11 +9150,12 @@ func TestMergeCurrentTurnMessagesIntoSeed_AppendsWhenOriginalMissing(t *testing.
 		model.NewUserMessage("ctx"),
 		model.NewUserMessage("rewritten"),
 	}
-	merged := mergeCurrentTurnMessagesIntoSeed(
+	merged, start := mergeCurrentTurnMessagesIntoSeed(
 		seed,
 		model.NewUserMessage("current"),
 		currentTurn,
 	)
+	require.Equal(t, 2, start)
 	require.Equal(t, []model.Message{
 		model.NewUserMessage("first"),
 		model.NewAssistantMessage("after"),
@@ -9166,11 +9169,12 @@ func TestMergeCurrentTurnMessagesIntoSeed_PreservesSeedWhenCurrentTurnIsEmpty(t 
 		model.NewUserMessage("first"),
 		model.NewUserMessage("current"),
 	}
-	merged := mergeCurrentTurnMessagesIntoSeed(
+	merged, start := mergeCurrentTurnMessagesIntoSeed(
 		seed,
 		model.NewUserMessage("current"),
 		nil,
 	)
+	require.Equal(t, -1, start)
 	require.Equal(t, seed, merged)
 }
 

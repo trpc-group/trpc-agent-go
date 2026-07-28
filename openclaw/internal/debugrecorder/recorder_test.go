@@ -1117,10 +1117,11 @@ func TestSummarizeRequest_StoresRequestPrompts(t *testing.T) {
 	t.Parallel()
 
 	req := gwproto.MessageRequest{
-		Channel:                  "gateway",
-		Text:                     "hello",
-		RequestSystemPrompt:      "Use the active persona for tone.",
-		RequestLateContextPrompt: "Current request environment.",
+		Channel:                     "gateway",
+		Text:                        "hello",
+		RequestSystemPrompt:         "Use the active persona for tone.",
+		RequestSessionContextPrompt: "Durable request environment.",
+		RequestLateContextPrompt:    "Current request environment.",
 	}
 
 	summary, err := SummarizeRequest(nil, req)
@@ -1130,6 +1131,11 @@ func TestSummarizeRequest_StoresRequestPrompts(t *testing.T) {
 		t,
 		"Use the active persona for tone.",
 		summary.RequestSystemPrompt,
+	)
+	require.Equal(
+		t,
+		"Durable request environment.",
+		summary.RequestSessionContextPrompt,
 	)
 	require.Equal(
 		t,
