@@ -37,7 +37,7 @@ func (a *Agent) persist(ctx context.Context, task storage.Task, result review.Re
 	if result.Metrics.RedactionCount > 0 {
 		record.FilterDecisions = append(record.FilterDecisions, storage.FilterDecisionRecord{
 			TaskID: task.ID,
-			Target: "finding.evidence",
+			Target: "finding.fields",
 			Action: "redact",
 			Reason: "secret pattern",
 			At:     now,

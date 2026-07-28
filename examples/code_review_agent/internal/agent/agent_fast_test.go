@@ -126,6 +126,40 @@ func TestFinalizeReviewResultRecordsRequestedAndEnteredCapabilities(t *testing.T
 	}
 }
 
+func TestRedactionCountIncludesAllSanitizedFieldsAndMarkers(t *testing.T) {
+	finding := review.Finding{
+		Severity:       "[REDACTED]",
+		Category:       "[REDACTED]",
+		File:           "[REDACTED]",
+		Title:          "[REDACTED]",
+		Evidence:       "[REDACTED_PRIVATE_KEY]",
+		Recommendation: "[REDACTED]",
+		Confidence:     "[REDACTED]",
+		RuleID:         "[REDACTED]",
+		Status:         "[REDACTED]",
+	}
+	if got := redactionCount([]review.Finding{finding}, nil); got != 9 {
+		t.Fatalf("redaction count = %d, want 9", got)
+	}
+}
+
+func TestPersistRecordsRedactionsAcrossFindingFields(t *testing.T) {
+	store := &fastStore{}
+	ag := &Agent{store: store}
+	err := ag.persist(context.Background(), storage.Task{ID: "task-redaction"}, review.Result{
+		Metrics: review.Metrics{RedactionCount: 1},
+	}, nil, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if len(store.reviewRecord.FilterDecisions) != 1 {
+		t.Fatalf("filter decisions = %+v, want one redaction decision", store.reviewRecord.FilterDecisions)
+	}
+	if got := store.reviewRecord.FilterDecisions[0].Target; got != "finding.fields" {
+		t.Fatalf("filter decision target = %q, want finding.fields", got)
+	}
+}
+
 func TestSandboxWithoutRepositoryProducesAuditedHumanReview(t *testing.T) {
 	result, decision, run := sandboxUnavailableAudit("task-no-repo")
 	if decision.Action != "skipped" || run.Status != "skipped" || run.ExecutionStarted {
@@ -165,6 +199,7 @@ type fastStore struct {
 	saveTaskErrAt int
 	saveTaskErr   error
 	saveReviewErr error
+	reviewRecord  storage.ReviewRecord
 }
 
 func (s *fastStore) SaveTask(context.Context, storage.Task) error {
@@ -203,7 +238,8 @@ func (*fastStore) SaveReport(context.Context, string, []byte, []byte) error {
 	return nil
 }
 
-func (s *fastStore) SaveReview(context.Context, storage.ReviewRecord) error {
+func (s *fastStore) SaveReview(_ context.Context, record storage.ReviewRecord) error {
+	s.reviewRecord = record
 	return s.saveReviewErr
 }
 

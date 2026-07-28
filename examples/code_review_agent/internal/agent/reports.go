@@ -226,8 +226,20 @@ func severityCounts(findings, warnings []review.Finding) map[string]int {
 func redactionCount(findings, warnings []review.Finding) int {
 	total := 0
 	for _, finding := range append(findings, warnings...) {
-		if strings.Contains(finding.Evidence, "[REDACTED]") {
-			total++
+		for _, value := range []string{
+			finding.Severity,
+			finding.Category,
+			finding.File,
+			finding.Title,
+			finding.Evidence,
+			finding.Recommendation,
+			finding.Confidence,
+			finding.RuleID,
+			finding.Status,
+		} {
+			for _, marker := range []string{"[REDACTED]", "[REDACTED_PRIVATE_KEY]"} {
+				total += strings.Count(value, marker)
+			}
 		}
 	}
 	return total
