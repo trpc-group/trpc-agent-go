@@ -59,8 +59,8 @@ func WithExtraOptions(extraOptions ...any) ServiceOpt {
 }
 
 // WithTableName sets the table used to store memories. The default is
-// "memories". The name must start with a letter or underscore and contain only
-// letters, digits, and underscores.
+// "memories". It panics unless the name starts with a letter or underscore and
+// contains only letters, digits, and underscores.
 func WithTableName(tableName string) ServiceOpt {
 	return func(opts *serviceOpts) {
 		if !validTableName(tableName) {

@@ -176,6 +176,30 @@ COMMENT 'Session events table';
 
 服务会为已有的 `session_events` 表自动添加 `event_raw`。该列保留原始扩展 key 与 metadata，避免 ClickHouse JSON 路径规范化改写它们。
 
+### session_track_events
+
+```sql
+CREATE TABLE IF NOT EXISTS session_track_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    track       String,
+    event_index UInt64,
+    event       String COMMENT '以 JSON 文本编码的 track 事件',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    deleted_at  Nullable(DateTime64(6)) COMMENT '软删除时间'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, track, event_index)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session track events table';
+```
+
+`event_index` 保留同一 track 内的写入顺序。Track 事件与 session 共用生命周期：
+删除或过期 session 时会写入墓碑版本，之后可由 `WithDeletedRetention`
+配置的清理任务执行物理删除。
+
 ### session_summaries
 
 ```sql

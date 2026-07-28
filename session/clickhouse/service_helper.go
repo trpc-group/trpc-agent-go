@@ -203,6 +203,12 @@ func (s *Service) listSessions(
 		return nil, fmt.Errorf("get events list failed: %w", err)
 	}
 
+	// Batch load track events for all sessions
+	tracksList, err := s.getTrackEventsList(ctx, sessionKeys, sessionCreatedAts)
+	if err != nil {
+		return nil, fmt.Errorf("get track events list failed: %w", err)
+	}
+
 	// Batch load summaries for all sessions
 	summariesList, err := s.getSummariesList(ctx, sessionKeys, sessionCreatedAts)
 	if err != nil {
@@ -223,6 +229,9 @@ func (s *Service) listSessions(
 			session.WithSessionCreatedAt(sessState.CreatedAt),
 			session.WithSessionUpdatedAt(sessState.UpdatedAt),
 		)
+		if len(tracksList[i]) > 0 {
+			sess.Tracks = tracksList[i]
+		}
 		sessions = append(sessions, mergeState(appState, userState, sess))
 	}
 
@@ -367,9 +376,20 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 		return fmt.Errorf("soft delete session summaries failed: %w", err)
 	}
 
-	// Soft delete session track events.
-	nowMicro := time.Now().UTC().UnixMicro()
-	err = s.chClient.Exec(ctx,
+	if err := s.softDeleteSessionTrackEvents(ctx, key, now); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) softDeleteSessionTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	now time.Time,
+) error {
+	nowMicro := now.UTC().UnixMicro()
+	err := s.chClient.Exec(ctx,
 		fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, track, event_index, event, created_at, updated_at, deleted_at)
 			SELECT app_name, user_id, session_id, track, event_index, event, created_at,
 				fromUnixTimestamp64Micro(?) AS updated_at, fromUnixTimestamp64Micro(?) AS deleted_at
@@ -380,7 +400,6 @@ func (s *Service) deleteSessionState(ctx context.Context, key session.Key) error
 	if err != nil {
 		return fmt.Errorf("soft delete session track events failed: %w", err)
 	}
-
 	return nil
 }
 

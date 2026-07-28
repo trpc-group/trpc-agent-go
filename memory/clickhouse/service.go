@@ -80,6 +80,12 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 			return nil, fmt.Errorf("initialize clickhouse memory schema: %w", err)
 		}
 	}
+	seedCtx, seedCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer seedCancel()
+	if err := s.seedLastWriteAt(seedCtx); err != nil {
+		_ = client.Close()
+		return nil, err
+	}
 	s.tools = imemory.BuildToolsList(nil, imemory.AllToolCreators,
 		imemory.DefaultEnabledTools, nil, nil, s.cachedTools)
 	return s, nil
@@ -356,4 +362,19 @@ func (s *Service) nextWriteAt() time.Time {
 	}
 	s.lastWriteAt = now
 	return now
+}
+
+func (s *Service) seedLastWriteAt(ctx context.Context) error {
+	var updatedAtMicro int64
+	query := fmt.Sprintf(
+		"SELECT coalesce(max(toUnixTimestamp64Micro(updated_at)), 0) FROM %s FINAL",
+		s.tableName,
+	)
+	if err := s.client.QueryRow(ctx, []any{&updatedAtMicro}, query); err != nil {
+		return fmt.Errorf("read latest clickhouse memory version: %w", err)
+	}
+	if updatedAtMicro > 0 {
+		s.lastWriteAt = time.UnixMicro(updatedAtMicro).UTC()
+	}
+	return nil
 }

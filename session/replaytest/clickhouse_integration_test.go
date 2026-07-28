@@ -11,13 +11,17 @@ package replaytest
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memoryclickhouse "trpc.group/trpc-go/trpc-agent-go/memory/clickhouse"
+	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionclickhouse "trpc.group/trpc-go/trpc-agent-go/session/clickhouse"
 )
 
@@ -81,6 +85,57 @@ func TestClickHouseMemoryLifecycleFromEnvironment(t *testing.T) {
 	entries, err = service.ReadMemories(ctx, userKey, 0)
 	require.NoError(t, err)
 	require.Empty(t, entries)
+}
+
+func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
+	dsn := os.Getenv(EnvClickHouseDSN)
+	if dsn == "" {
+		t.Skip(EnvClickHouseDSN + " is not set")
+	}
+	ctx := context.Background()
+	backend, err := newClickHouseBackend(dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupSQLReplayBackend(t, backend) })
+
+	key := session.Key{
+		AppName:   replayApp,
+		UserID:    replayUser,
+		SessionID: fmt.Sprintf("concurrent-tracks-%d", time.Now().UnixNano()),
+	}
+	sess, err := backend.Session.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	trackService, ok := backend.Session.(session.TrackService)
+	require.True(t, ok)
+
+	const eventCount = 24
+	errs := make(chan error, eventCount)
+	var wg sync.WaitGroup
+	for i := 0; i < eventCount; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			payload, marshalErr := json.Marshal(map[string]int{"index": i})
+			if marshalErr != nil {
+				errs <- marshalErr
+				return
+			}
+			errs <- trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "model",
+				Payload:   payload,
+				Timestamp: time.Now().UTC(),
+			})
+		}(i)
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	persisted, err := backend.Session.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.Contains(t, persisted.Tracks, session.Track("model"))
+	require.Len(t, persisted.Tracks["model"].Events, eventCount)
 }
 
 func newClickHouseBackend(dsn string) (Backend, error) {

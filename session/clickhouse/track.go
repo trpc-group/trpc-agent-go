@@ -13,14 +13,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/session"
 )
 
+type trackAppendLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // AppendTrackEvent persists a track event and appends it to the supplied
 // session. Track rows are append-only and use an event index to preserve the
-// caller's order within a track.
+// caller's order within a track. Concurrent appends through the same Service
+// are serialized per app, user, and session.
 func (s *Service) AppendTrackEvent(
 	ctx context.Context,
 	sess *session.Session,
@@ -37,6 +45,9 @@ func (s *Service) AppendTrackEvent(
 	if err := key.CheckSessionKey(); err != nil {
 		return err
 	}
+	unlock := s.lockTrackAppend(key)
+	defer unlock()
+
 	if err := sess.AppendTrackEvent(trackEvent, opts...); err != nil {
 		return fmt.Errorf("append track event to session: %w", err)
 	}
@@ -53,6 +64,9 @@ func (s *Service) AppendTrackEvent(
 		if err := rows.Scan(&eventIndex); err != nil {
 			return fmt.Errorf("scan track event count: %w", err)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("count track events: %w", err)
 	}
 
 	data, err := json.Marshal(trackEvent)
@@ -80,19 +94,49 @@ func (s *Service) getTrackEvents(
 	key session.Key,
 	sessionCreatedAt time.Time,
 ) (map[session.Track]*session.TrackEvents, error) {
-	rows, err := s.chClient.Query(ctx, fmt.Sprintf(`SELECT track, event FROM %s FINAL
-		WHERE app_name = ? AND user_id = ? AND session_id = ? AND created_at >= ?
-		AND deleted_at IS NULL ORDER BY track ASC, event_index ASC`, s.tableSessionTrackEvents),
-		key.AppName, key.UserID, key.SessionID, sessionCreatedAt)
+	tracksList, err := s.getTrackEventsList(
+		ctx,
+		[]session.Key{key},
+		[]time.Time{sessionCreatedAt},
+	)
 	if err != nil {
-		return nil, fmt.Errorf("get track events: %w", err)
+		return nil, err
+	}
+	return tracksList[0], nil
+}
+
+func (s *Service) getTrackEventsList(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	sessionCreatedAts []time.Time,
+) ([]map[session.Track]*session.TrackEvents, error) {
+	if len(sessionKeys) == 0 {
+		return nil, nil
+	}
+	if len(sessionKeys) != len(sessionCreatedAts) {
+		return nil, fmt.Errorf("session keys and createdAts length mismatch")
+	}
+
+	conditions := make([]string, len(sessionKeys))
+	args := make([]any, 0, len(sessionKeys)*4)
+	for i, key := range sessionKeys {
+		conditions[i] = "(app_name = ? AND user_id = ? AND session_id = ? AND created_at >= ?)"
+		args = append(args, key.AppName, key.UserID, key.SessionID, sessionCreatedAts[i])
+	}
+
+	rows, err := s.chClient.Query(ctx, fmt.Sprintf(`SELECT app_name, user_id, session_id, track, event FROM %s FINAL
+		WHERE (%s) AND deleted_at IS NULL
+		ORDER BY app_name ASC, user_id ASC, session_id ASC, track ASC, event_index ASC`,
+		s.tableSessionTrackEvents, strings.Join(conditions, " OR ")), args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch get track events: %w", err)
 	}
 	defer rows.Close()
 
-	tracks := make(map[session.Track]*session.TrackEvents)
+	tracksBySession := make(map[string]map[session.Track]*session.TrackEvents)
 	for rows.Next() {
-		var trackName, data string
-		if err := rows.Scan(&trackName, &data); err != nil {
+		var appName, userID, sessionID, trackName, data string
+		if err := rows.Scan(&appName, &userID, &sessionID, &trackName, &data); err != nil {
 			return nil, fmt.Errorf("scan track event: %w", err)
 		}
 		var trackEvent session.TrackEvent
@@ -101,10 +145,60 @@ func (s *Service) getTrackEvents(
 		}
 		track := session.Track(trackName)
 		trackEvent.Track = track
+		sessionKey := trackSessionKey(appName, userID, sessionID)
+		tracks := tracksBySession[sessionKey]
+		if tracks == nil {
+			tracks = make(map[session.Track]*session.TrackEvents)
+			tracksBySession[sessionKey] = tracks
+		}
 		if tracks[track] == nil {
 			tracks[track] = &session.TrackEvents{Track: track}
 		}
 		tracks[track].Events = append(tracks[track].Events, trackEvent)
 	}
-	return tracks, nil
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate track events: %w", err)
+	}
+
+	result := make([]map[session.Track]*session.TrackEvents, len(sessionKeys))
+	for i, key := range sessionKeys {
+		tracks := tracksBySession[trackSessionKey(key.AppName, key.UserID, key.SessionID)]
+		if tracks == nil {
+			tracks = make(map[session.Track]*session.TrackEvents)
+		}
+		result[i] = tracks
+	}
+	return result, nil
+}
+
+func (s *Service) lockTrackAppend(key session.Key) func() {
+	lockKey := trackSessionKey(key.AppName, key.UserID, key.SessionID)
+
+	s.trackLocksMu.Lock()
+	if s.trackLocks == nil {
+		s.trackLocks = make(map[string]*trackAppendLock)
+	}
+	lock := s.trackLocks[lockKey]
+	if lock == nil {
+		lock = &trackAppendLock{}
+		s.trackLocks[lockKey] = lock
+	}
+	lock.refs++
+	s.trackLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+
+		s.trackLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(s.trackLocks, lockKey)
+		}
+		s.trackLocksMu.Unlock()
+	}
+}
+
+func trackSessionKey(appName, userID, sessionID string) string {
+	return appName + "\x00" + userID + "\x00" + sessionID
 }

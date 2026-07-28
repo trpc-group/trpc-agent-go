@@ -51,6 +51,11 @@ type Service struct {
 	persistWg      sync.WaitGroup               // wait group for persist workers
 	once           sync.Once
 
+	// trackLocks contains one entry per session with an active or waiting track
+	// append. The last caller to leave removes the entry.
+	trackLocksMu sync.Mutex
+	trackLocks   map[string]*trackAppendLock
+
 	// Table names with prefix applied
 	tableSessionStates      string
 	tableSessionEvents      string
@@ -110,6 +115,7 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		tableSessionSummaries:   tableSessionSummaries,
 		tableAppStates:          tableAppStates,
 		tableUserStates:         tableUserStates,
+		trackLocks:              make(map[string]*trackAppendLock),
 	}
 
 	// Initialize database if needed
@@ -823,6 +829,14 @@ func (s *Service) cleanupDeletedData(ctx context.Context, now time.Time) {
 		log.Errorf("cleanup deleted session events failed: %v", err)
 	}
 
+	// Physical delete of soft-deleted session track events
+	err = s.chClient.Exec(ctx,
+		fmt.Sprintf(`ALTER TABLE %s DELETE WHERE deleted_at IS NOT NULL AND deleted_at <= ?`, s.tableSessionTrackEvents),
+		cutoff)
+	if err != nil {
+		log.Errorf("cleanup deleted session track events failed: %v", err)
+	}
+
 	// Physical delete of soft-deleted session summaries
 	err = s.chClient.Exec(ctx,
 		fmt.Sprintf(`ALTER TABLE %s DELETE WHERE deleted_at IS NOT NULL AND deleted_at <= ?`, s.tableSessionSummaries),
@@ -896,7 +910,7 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 			log.Errorf("batch soft delete expired sessions failed: %v", err)
 		}
 
-		// Soft delete events and summaries for expired sessions
+		// Soft delete events, track events, and summaries for expired sessions
 		for _, es := range expiredSessions {
 			key := session.Key{
 				AppName:   es.appName,
@@ -904,6 +918,9 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 				SessionID: es.sessionID,
 			}
 			s.softDeleteSessionEvents(ctx, key, now)
+			if err := s.softDeleteSessionTrackEvents(ctx, key, now); err != nil {
+				log.Errorf("soft delete expired session track events failed: %v", err)
+			}
 			s.softDeleteSessionSummaries(ctx, key, now)
 		}
 	}

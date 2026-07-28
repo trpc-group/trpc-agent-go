@@ -173,6 +173,30 @@ COMMENT 'Session events table';
 
 `event_raw` is added automatically to existing `session_events` tables. It preserves extension keys and metadata that ClickHouse JSON path normalization would otherwise rewrite.
 
+### session_track_events
+
+```sql
+CREATE TABLE IF NOT EXISTS session_track_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    track       String,
+    event_index UInt64,
+    event       String COMMENT 'Track event encoded as JSON text',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, track, event_index)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session track events table';
+```
+
+`event_index` preserves insertion order within each track. Track events follow
+the session lifecycle: deleting or expiring a session writes tombstone versions,
+and `WithDeletedRetention` can physically remove those versions later.
+
 ### session_summaries
 
 ```sql

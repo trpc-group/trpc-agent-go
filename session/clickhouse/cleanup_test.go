@@ -23,12 +23,13 @@ import (
 func TestService_Cleanup_SoftDeleteExpired(t *testing.T) {
 	mockCli := &mockClient{}
 	s := &Service{
-		chClient:              mockCli,
-		tableSessionStates:    "session_states",
-		tableSessionEvents:    "session_events",
-		tableSessionSummaries: "session_summaries",
-		tableAppStates:        "app_states",
-		tableUserStates:       "user_states",
+		chClient:                mockCli,
+		tableSessionStates:      "session_states",
+		tableSessionEvents:      "session_events",
+		tableSessionTrackEvents: "session_track_events",
+		tableSessionSummaries:   "session_summaries",
+		tableAppStates:          "app_states",
+		tableUserStates:         "user_states",
 		opts: ServiceOpts{
 			sessionTTL:   time.Hour,
 			appStateTTL:  time.Hour,
@@ -66,6 +67,12 @@ func TestService_Cleanup_SoftDeleteExpired(t *testing.T) {
 		batchCount++
 		return fn(&mockBatch{})
 	}
+	execCount := 0
+	mockCli.execFunc = func(_ context.Context, query string, _ ...any) error {
+		execCount++
+		assert.Contains(t, query, s.tableSessionTrackEvents)
+		return nil
+	}
 
 	s.softDeleteExpiredSessions(ctx, now)
 
@@ -78,6 +85,7 @@ func TestService_Cleanup_SoftDeleteExpired(t *testing.T) {
 	// 6. BatchInsert summaries
 	assert.Equal(t, 3, callCount)
 	assert.Equal(t, 3, batchCount)
+	assert.Equal(t, 1, execCount)
 }
 
 func TestService_Cleanup_SoftDeleteExpiredAppUser(t *testing.T) {
@@ -131,11 +139,12 @@ func TestService_Cleanup_PhysicalDelete(t *testing.T) {
 		opts: ServiceOpts{
 			deletedRetention: time.Hour,
 		},
-		tableSessionStates:    "session_states",
-		tableSessionEvents:    "session_events",
-		tableSessionSummaries: "session_summaries",
-		tableAppStates:        "app_states",
-		tableUserStates:       "user_states",
+		tableSessionStates:      "session_states",
+		tableSessionEvents:      "session_events",
+		tableSessionTrackEvents: "session_track_events",
+		tableSessionSummaries:   "session_summaries",
+		tableAppStates:          "app_states",
+		tableUserStates:         "user_states",
 	}
 
 	execCount := 0
@@ -145,6 +154,6 @@ func TestService_Cleanup_PhysicalDelete(t *testing.T) {
 	}
 
 	s.cleanupDeletedData(context.Background(), time.Now())
-	// Expect 5 Exec calls (session states, events, summaries, app states, user states)
-	assert.Equal(t, 5, execCount)
+	// Expect 6 Exec calls (session states, events, tracks, summaries, app states, user states)
+	assert.Equal(t, 6, execCount)
 }
