@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS session_events (
     session_id  String,
     event_id    String,
     event       JSON COMMENT 'Event data in JSON format',
+    event_raw   String COMMENT 'Exact event JSON for lossless metadata round trips',
     extra_data  JSON COMMENT 'Additional metadata',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
@@ -48,6 +49,26 @@ PARTITION BY (app_name, cityHash64(user_id) % 64)
 ORDER BY (app_name, user_id, session_id, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session events table';
+
+-- ============================================================================
+-- Table: session_track_events
+-- Description: Stores ordered execution tracks associated with a session
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS session_track_events (
+    app_name    String,
+    user_id     String,
+    session_id  String,
+    track       String,
+    event_index UInt64,
+    event       String COMMENT 'Track event encoded as JSON text',
+    created_at  DateTime64(6),
+    updated_at  DateTime64(6),
+    deleted_at  Nullable(DateTime64(6)) COMMENT 'Soft delete timestamp'
+) ENGINE = ReplacingMergeTree(updated_at)
+PARTITION BY (app_name, cityHash64(user_id) % 64)
+ORDER BY (app_name, user_id, session_id, track, event_index)
+SETTINGS allow_nullable_key = 1
+COMMENT 'Session track events table';
 
 -- ============================================================================
 -- Table: session_summaries

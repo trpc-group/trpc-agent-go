@@ -11,6 +11,7 @@ ClickHouse storage is suitable for production environments and massive data scen
 - ✅ Data compression
 - ✅ Batch write support
 - ✅ Table prefix support
+- ✅ Persistent track events
 
 ## Configuration Options
 
@@ -157,6 +158,7 @@ CREATE TABLE IF NOT EXISTS session_events (
     session_id  String,
     event_id    String,
     event       JSON COMMENT 'Event data in JSON format',
+    event_raw   String COMMENT 'Exact event JSON for lossless metadata round trips',
     extra_data  JSON COMMENT 'Additional metadata',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
@@ -168,6 +170,8 @@ ORDER BY (app_name, user_id, session_id, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session events table';
 ```
+
+`event_raw` is added automatically to existing `session_events` tables. It preserves extension keys and metadata that ClickHouse JSON path normalization would otherwise rewrite.
 
 ### session_summaries
 

@@ -11,6 +11,7 @@ ClickHouse 存储适用于生产环境和海量数据场景，利用 ClickHouse 
 - ✅ 数据压缩
 - ✅ 支持批量写入
 - ✅ 支持表前缀
+- ✅ 持久化 Track 事件
 
 ## 配置选项
 
@@ -160,6 +161,7 @@ CREATE TABLE IF NOT EXISTS session_events (
     session_id  String,
     event_id    String,
     event       JSON COMMENT 'Event data in JSON format',
+    event_raw   String COMMENT '用于无损回放元数据的原始事件 JSON',
     extra_data  JSON COMMENT 'Additional metadata',
     created_at  DateTime64(6),
     updated_at  DateTime64(6),
@@ -171,6 +173,8 @@ ORDER BY (app_name, user_id, session_id, event_id)
 SETTINGS allow_nullable_key = 1
 COMMENT 'Session events table';
 ```
+
+服务会为已有的 `session_events` 表自动添加 `event_raw`。该列保留原始扩展 key 与 metadata，避免 ClickHouse JSON 路径规范化改写它们。
 
 ### session_summaries
 

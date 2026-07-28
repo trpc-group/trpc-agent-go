@@ -29,6 +29,7 @@ import (
 )
 
 var _ session.Service = (*Service)(nil)
+var _ session.TrackService = (*Service)(nil)
 
 // SessionState is the state of a session.
 type SessionState struct {
@@ -51,11 +52,12 @@ type Service struct {
 	once           sync.Once
 
 	// Table names with prefix applied
-	tableSessionStates    string
-	tableSessionEvents    string
-	tableSessionSummaries string
-	tableAppStates        string
-	tableUserStates       string
+	tableSessionStates      string
+	tableSessionEvents      string
+	tableSessionTrackEvents string
+	tableSessionSummaries   string
+	tableAppStates          string
+	tableUserStates         string
 }
 
 type sessionEventPair struct {
@@ -93,19 +95,21 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 	// Build table names with prefix
 	tableSessionStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionStates)
 	tableSessionEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionEvents)
+	tableSessionTrackEvents := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionTrackEvents)
 	tableSessionSummaries := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameSessionSummaries)
 	tableAppStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameAppStates)
 	tableUserStates := sqldb.BuildTableName(opts.tablePrefix, sqldb.TableNameUserStates)
 
 	// Create service
 	s := &Service{
-		opts:                  opts,
-		chClient:              chClient,
-		tableSessionStates:    tableSessionStates,
-		tableSessionEvents:    tableSessionEvents,
-		tableSessionSummaries: tableSessionSummaries,
-		tableAppStates:        tableAppStates,
-		tableUserStates:       tableUserStates,
+		opts:                    opts,
+		chClient:                chClient,
+		tableSessionStates:      tableSessionStates,
+		tableSessionEvents:      tableSessionEvents,
+		tableSessionTrackEvents: tableSessionTrackEvents,
+		tableSessionSummaries:   tableSessionSummaries,
+		tableAppStates:          tableAppStates,
+		tableUserStates:         tableUserStates,
 	}
 
 	// Initialize database if needed
@@ -512,7 +516,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	// Get current session state using FINAL
 	var currentStateStr string
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT state FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
+		fmt.Sprintf(`SELECT toJSONString(state) FROM %s FINAL WHERE app_name = ? AND user_id = ? AND session_id = ? AND deleted_at IS NULL`, s.tableSessionStates),
 		key.AppName, key.UserID, key.SessionID)
 
 	if err != nil {
@@ -530,7 +534,7 @@ func (s *Service) UpdateSessionState(ctx context.Context, key session.Key, state
 	// Unmarshal current state
 	var sessState SessionState
 	if len(currentStateStr) > 0 {
-		if err := json.Unmarshal([]byte(currentStateStr), &sessState); err != nil {
+		if err := unmarshalStoredJSON(currentStateStr, &sessState); err != nil {
 			return fmt.Errorf("clickhouse session service update session state failed: unmarshal state: %w", err)
 		}
 	}
@@ -850,7 +854,7 @@ func (s *Service) cleanupDeletedData(ctx context.Context, now time.Time) {
 func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) {
 	// Query expired but not yet deleted sessions
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT app_name, user_id, session_id, state, created_at, expires_at FROM %s FINAL
+		fmt.Sprintf(`SELECT app_name, user_id, session_id, toJSONString(state), created_at, expires_at FROM %s FINAL
 			WHERE expires_at IS NOT NULL AND expires_at <= ?
 			AND deleted_at IS NULL`, s.tableSessionStates),
 		now)
@@ -908,7 +912,7 @@ func (s *Service) softDeleteExpiredSessions(ctx context.Context, now time.Time) 
 // softDeleteSessionEvents marks all events for a session as deleted.
 func (s *Service) softDeleteSessionEvents(ctx context.Context, key session.Key, now time.Time) {
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT event_id, event, created_at, updated_at FROM %s FINAL
+		fmt.Sprintf(`SELECT event_id, if(event_raw != '', event_raw, toJSONString(event)), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionEvents),
 		key.AppName, key.UserID, key.SessionID)
@@ -935,11 +939,11 @@ func (s *Service) softDeleteSessionEvents(ctx context.Context, key session.Key, 
 
 	if len(events) > 0 {
 		err = s.chClient.BatchInsert(ctx,
-			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, extra_data, created_at, updated_at, deleted_at)`,
+			fmt.Sprintf(`INSERT INTO %s (app_name, user_id, session_id, event_id, event, event_raw, extra_data, created_at, updated_at, deleted_at)`,
 				s.tableSessionEvents),
 			func(batch driver.Batch) error {
 				for _, e := range events {
-					if err := batch.Append(key.AppName, key.UserID, key.SessionID, e.eventID, e.eventData, "{}", e.createdAt, now, now); err != nil {
+					if err := batch.Append(key.AppName, key.UserID, key.SessionID, e.eventID, e.eventData, e.eventData, "{}", e.createdAt, now, now); err != nil {
 						return err
 					}
 				}
@@ -954,7 +958,7 @@ func (s *Service) softDeleteSessionEvents(ctx context.Context, key session.Key, 
 // softDeleteSessionSummaries marks all summaries for a session as deleted.
 func (s *Service) softDeleteSessionSummaries(ctx context.Context, key session.Key, now time.Time) {
 	rows, err := s.chClient.Query(ctx,
-		fmt.Sprintf(`SELECT filter_key, summary, created_at, updated_at FROM %s FINAL
+		fmt.Sprintf(`SELECT filter_key, toJSONString(summary), created_at, updated_at FROM %s FINAL
 			WHERE app_name = ? AND user_id = ? AND session_id = ?
 			AND deleted_at IS NULL`, s.tableSessionSummaries),
 		key.AppName, key.UserID, key.SessionID)

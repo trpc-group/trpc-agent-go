@@ -18,12 +18,9 @@ durations, JSON map order, and generated IDs normalize. Backends can omit
 implementation-owned fields with `Backend.PrivateMetadataPaths`, such as
 `events.*.extensions.storage_private`.
 
-Optional Redis, Postgres, MySQL, and ClickHouse integrations are enabled by
-passing factories to `LoadOptionalBackends` with `REPLAYTEST_REDIS_URL`,
-`REPLAYTEST_POSTGRES_DSN`, `REPLAYTEST_MYSQL_DSN`, or
-`REPLAYTEST_CLICKHOUSE_DSN`. Unset variables produce a reported skip, so the
-lightweight suite remains deterministic. Factories keep connection ownership
-and credentials with the implementation-specific modules.
+Optional integrations use `REPLAYTEST_REDIS_URL`, `REPLAYTEST_POSTGRES_DSN`,
+`REPLAYTEST_MYSQL_DSN`, or `REPLAYTEST_CLICKHOUSE_DSN`. Unset variables
+produce reported skips; factories retain connection ownership and credentials.
 
 ```go
 optional, skipped, err := replaytest.LoadOptionalBackends(ctx,
@@ -56,4 +53,10 @@ Set `REPLAYTEST_MYSQL_DSN` to run the MySQL Session and Memory replay:
 
 ```bash
 cd session/replaytest && REPLAYTEST_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/replaytest?parseTime=true' go test ./... -run TestMySQLReplay
+```
+
+Set `REPLAYTEST_CLICKHOUSE_DSN` for ClickHouse Session and Memory replay. ClickHouse 24.8 requires its experimental JSON setting:
+
+```bash
+cd session/replaytest && REPLAYTEST_CLICKHOUSE_DSN='clickhouse://user:password@127.0.0.1:9000/database?allow_experimental_json_type=1' go test ./... -run 'TestClickHouse(Replay|MemoryLifecycle)'
 ```
