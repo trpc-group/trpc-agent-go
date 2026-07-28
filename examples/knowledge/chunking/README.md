@@ -30,7 +30,7 @@ The bundled samples cover the default Readers and several boundary cases:
 |--------|-------------------|
 | [`sample.md`](./samples/sample.md) | Markdown headings, a table, mixed-language boundaries, a long fenced Go block, emoji, and a long token |
 | [`sample-edge.md`](./samples/sample-edge.md) | Sparse heading levels, nested blocks, a wide table, an oversized code block, combining characters, and fallback boundaries |
-| [`sample-boundaries.md`](./samples/sample-boundaries.md) | Strict overlap budgets, CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback |
+| [`sample-boundaries.md`](./samples/sample-boundaries.md) | Strict overlap budgets, Markdown section packing, CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback |
 | [`sample-catalog.md`](./samples/sample-catalog.md) | A realistic reference-document shape with grouped rows, several short tables, and a long table cell |
 | [`sample.txt`](./samples/sample.txt) | Plain-text paragraphs, punctuation, whitespace, logs, CJK text, emoji, and an unbroken token |
 | [`sample.csv`](./samples/sample.csv) | Multilingual records, empty fields, long values, URLs, and CSVReader normalization |
@@ -150,14 +150,19 @@ behavior without hiding or correcting it.
 | Markdown | Preserves heading scope and fenced code blocks, then splits oversized blocks by line, sentence, punctuation, whitespace, or rune boundaries |
 | JSON | Traverses object keys deterministically, visits array indices numerically, and splits long strings on UTF-8-safe byte boundaries |
 
-Tail rebalancing stays inside the same oversized logical block. Markdown
-paragraphs prefer sentence and punctuation boundaries, tables and fenced code
-prefer complete lines, and an unbroken token uses UTF-8-safe rune boundaries.
-CSVReader enables `WithPreserveLines`, so a normalized record that fits the
-active new-content budget stays intact; only an oversized record is refined
-internally. Rebalancing does not merge unrelated headings, short sections, JSON
-values, or CSV records merely to make all chunks the same size, so semantically
-complete small chunks may still appear.
+Within an oversized logical block, tail rebalancing keeps the split at natural
+boundaries. Markdown paragraphs prefer sentence and punctuation boundaries,
+tables and fenced code prefer complete lines, and an unbroken token uses
+UTF-8-safe rune boundaries. CSVReader enables `WithPreserveLines`, so a
+normalized record that fits the active new-content budget stays intact; only
+an oversized record is refined internally. Markdown headings are preferred
+boundaries, not mandatory chunk boundaries: adjacent small sections are packed
+in source order when they fit the active budget, and a heading without body
+text stays with the following section when possible. The final Markdown pair
+may move one complete semantic unit between chunks when that produces a more
+balanced tail without exceeding either budget. A chunk spanning sibling
+sections reports their common parent as its Markdown header path. JSON values
+and CSV records are not merged merely to make all chunks the same size.
 
 The default overlap is zero. Pass an explicit overlap value to inspect
 overlapping boundaries. Overlap is a maximum: it may move to a natural boundary

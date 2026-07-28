@@ -80,7 +80,7 @@ var sampleDocuments = []SampleDocument{
 		ID:          "markdown-boundaries",
 		Name:        "sample-boundaries.md",
 		Label:       "Text boundary cases",
-		Description: "Strict overlap budgets, English and CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback.",
+		Description: "Strict overlap budgets, Markdown section packing, English and CJK boundaries, numeric dots, version labels, punctuation clusters, and rune fallback.",
 		Content:     sampleBoundariesMarkdown,
 	},
 	{

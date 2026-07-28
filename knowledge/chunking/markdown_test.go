@@ -417,7 +417,7 @@ func TestMarkdownChunkingBalancesLongFencedCodeTail(t *testing.T) {
 	}
 }
 
-func TestMarkdownChunking_FullHeaderPath(t *testing.T) {
+func TestMarkdownChunking_HeaderPathUsesValidAncestor(t *testing.T) {
 	content := `# Root
 
 root context marker.
@@ -458,16 +458,185 @@ sibling context marker.`
 					}
 				}
 				require.NotNil(t, matchingChunk, "missing chunk containing %q", marker)
-				require.Equal(
+				actualPath, _ := matchingChunk.Metadata[source.MetaMarkdownHeaderPath].(string)
+				require.True(
 					t,
-					expectedPath,
-					matchingChunk.Metadata[source.MetaMarkdownHeaderPath],
-					"unexpected header path for %q",
+					actualPath == expectedPath ||
+						strings.HasPrefix(expectedPath, actualPath+" > "),
+					"unexpected header path %q for %q; expected %q or a common ancestor",
+					actualPath,
 					marker,
+					expectedPath,
 				)
 			}
 		})
 	}
+}
+
+func TestMarkdownChunkingMergesAdjacentSmallSections(t *testing.T) {
+	content := `# Root
+
+Root introduction.
+
+## First
+
+First section has enough text to represent one semantic unit.
+
+## Second
+
+Second section has enough text to represent another semantic unit.
+
+## Third
+
+Third section has enough text to represent the final semantic unit.`
+	const chunkSize = 180
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "small-sections",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	require.Less(t, len(chunks), 4)
+	require.Contains(t, chunks[0].Content, "## First")
+	for i, chunk := range chunks {
+		require.LessOrEqual(
+			t,
+			utf8.RuneCountInString(chunk.Content),
+			chunkSize,
+			"chunk %d exceeds budget",
+			i,
+		)
+	}
+	require.Equal(
+		t,
+		"Root",
+		chunks[0].Metadata[source.MetaMarkdownHeaderPath],
+	)
+}
+
+func TestMarkdownChunkingMergesHeadingOnlySectionForward(t *testing.T) {
+	content := `# Root
+
+## Previous
+
+Previous section content is deliberately long enough that the empty heading
+could fit behind it, but the following section could not.
+
+## Heading Only One
+
+## Heading Only Two
+
+## Heading Only Three
+
+## Following
+
+Following section content should stay with all heading-only sections before it.`
+	const chunkSize = 170
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "heading-only",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	var headingChunk *document.Document
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "## Heading Only One") {
+			headingChunk = chunk
+			break
+		}
+	}
+	require.NotNil(t, headingChunk)
+	require.Contains(t, headingChunk.Content, "## Heading Only Two")
+	require.Contains(t, headingChunk.Content, "## Heading Only Three")
+	require.Contains(t, headingChunk.Content, "## Following")
+	require.NotContains(t, headingChunk.Content, "Previous section content")
+	require.LessOrEqual(
+		t,
+		utf8.RuneCountInString(headingChunk.Content),
+		chunkSize,
+	)
+}
+
+func TestMarkdownChunkingPreservesFullPathWithinSection(t *testing.T) {
+	content := `# Root
+
+Root introduction.
+
+## Section
+
+Section introduction.
+
+### Child
+
+` + strings.Repeat("Child prefix filler sentence. ", 12) + `
+
+child exact marker.
+
+` + strings.Repeat("Child suffix filler sentence. ", 12)
+	const chunkSize = 120
+	chunks, err := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).Chunk(&document.Document{
+		ID:      "exact-header-path",
+		Content: content,
+	})
+
+	require.NoError(t, err)
+	var markerChunk *document.Document
+	for _, chunk := range chunks {
+		if strings.Contains(chunk.Content, "child exact marker") {
+			markerChunk = chunk
+			break
+		}
+	}
+	require.NotNil(t, markerChunk)
+	require.Equal(
+		t,
+		"Root > Section > Child",
+		markerChunk.Metadata[source.MetaMarkdownHeaderPath],
+	)
+}
+
+func TestCommonMarkdownHeaderPathKeepsHeadingTextIntact(t *testing.T) {
+	require.Equal(t, []string{"Root"}, commonMarkdownHeaderPath(
+		[]string{"Root", "Alpha > One"},
+		[]string{"Root", "Alpha > Two"},
+	))
+	require.Nil(t, commonMarkdownHeaderPath(
+		[]string{"Alpha > One"},
+		[]string{"Alpha > Two"},
+	))
+}
+
+func TestMarkdownChunkingRebalancesSemanticTail(t *testing.T) {
+	const chunkSize = 1500
+	parts := []markdownChunk{
+		newMarkdownChunk(strings.Repeat("a", 600), []string{"Root"}),
+		newMarkdownChunk(strings.Repeat("b", 400), []string{"Root", "One"}),
+		newMarkdownChunk(strings.Repeat("c", 350), []string{"Root", "Two"}),
+		newMarkdownChunk(strings.Repeat("d", 250), []string{"Root", "Three"}),
+	}
+	var content strings.Builder
+	for i := range parts {
+		if i > 0 {
+			content.WriteString("\n\n")
+		}
+		content.WriteString(parts[i].content)
+	}
+
+	chunks := NewMarkdownChunking(
+		WithMarkdownChunkSize(chunkSize),
+	).mergeAdjacentChunks(content.String(), parts)
+
+	require.Len(t, chunks, 2)
+	require.Equal(t, 1002, utf8.RuneCountInString(chunks[0].content))
+	require.Equal(t, 602, utf8.RuneCountInString(chunks[1].content))
+	require.Equal(t, []string{"Root"}, chunks[0].headerPath)
+	require.Equal(t, []string{"Root"}, chunks[1].headerPath)
 }
 
 // TestMarkdownChunking_MixedContent tests mixed English and Chinese content

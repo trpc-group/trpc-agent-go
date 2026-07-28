@@ -593,6 +593,9 @@
         ? selection.strategy
         : strategyInput.value;
       const isJSON = effectiveStrategy === "json";
+      const markdownNote = effectiveStrategy === "markdown"
+        ? " Markdown headings are preferred boundaries; adjacent small sections are packed when they share the active budget."
+        : "";
       overlapInput.disabled = isJSON;
       if (isJSON) overlapInput.value = "0";
       if (strategyInput.value === "reader") {
@@ -603,7 +606,8 @@
         parameterNote.textContent =
           `${selection.reader} selects ${strategyDisplayName(selection.strategy)} ` +
           `for ${selection.extension}. Chunk size 0 uses its default (${defaultSize}).` +
-          csvNote;
+          csvNote +
+          markdownNote;
       } else {
         const fixedCSVNote = selection.reader === "CSVReader" &&
           effectiveStrategy === "fixed"
@@ -612,7 +616,8 @@
         parameterNote.textContent = isJSON
           ? "Advanced override: JSONChunking uses serialized bytes, JSON-path connectors, and no overlap; size 0 uses 2000."
           : "Advanced override: size 0 uses 1024 runes; explicit sizes must be at least 32, and size minus overlap at least 16." +
-            fixedCSVNote;
+            fixedCSVNote +
+            markdownNote;
       }
     }
 

@@ -6,6 +6,11 @@ select **RecursiveChunking**, set the chunk size to `120`, and use an overlap of
 stress case: every final chunk should still remain within 120 Unicode runes
 even though only a small part of each chunk is new content.
 
+To inspect Markdown section packing, select **MarkdownChunking**, set the chunk
+size to `1500`, and use zero overlap. Headings remain preferred semantic
+boundaries, while adjacent small sections share a chunk when the combined
+content fits the configured budget.
+
 ## Budget and Overlap
 
 Reliable document ingestion requires the configured chunk size to describe the
