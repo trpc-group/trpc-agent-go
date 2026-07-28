@@ -39,7 +39,7 @@ func TestMySQLReplayFromEnvironment(t *testing.T) {
 		t.Skip(EnvMySQLDSN + " is not set")
 	}
 	backend := backends[0]
-	t.Cleanup(func() { cleanupSQLReplayBackend(t, backend) })
+	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
 
 	report, err := Run(ctx, []Backend{newInMemoryBackend(t), backend}, StandardCases())
 	require.NoError(t, err)

@@ -45,7 +45,7 @@ func TestClickHouseReplayFromEnvironment(t *testing.T) {
 		t.Skip(EnvClickHouseDSN + " is not set")
 	}
 	backend := backends[0]
-	t.Cleanup(func() { cleanupSQLReplayBackend(t, backend) })
+	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
 
 	report, err := Run(ctx, []Backend{newInMemoryBackend(t), backend}, StandardCases())
 	require.NoError(t, err)
@@ -95,13 +95,14 @@ func TestClickHouseConcurrentTrackAppendFromEnvironment(t *testing.T) {
 	ctx := context.Background()
 	backend, err := newClickHouseBackend(dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { cleanupSQLReplayBackend(t, backend) })
+	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
 
 	key := session.Key{
 		AppName:   replayApp,
 		UserID:    replayUser,
 		SessionID: fmt.Sprintf("concurrent-tracks-%d", time.Now().UnixNano()),
 	}
+	t.Cleanup(func() { cleanupReplaySession(t, backend, key) })
 	sess, err := backend.Session.CreateSession(ctx, key, nil)
 	require.NoError(t, err)
 	trackService, ok := backend.Session.(session.TrackService)

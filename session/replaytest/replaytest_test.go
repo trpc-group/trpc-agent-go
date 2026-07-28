@@ -13,6 +13,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -165,6 +166,12 @@ func TestUnsupportedFieldsAreReportedAsAllowedDifferences(t *testing.T) {
 	}})
 	require.Len(t, unsupported, 1)
 	require.True(t, unsupported[0].AllowedDiff)
+
+	stateDifference := []Difference{{Path: "data.state.tracks"}}
+	markAllowedUnsupported(stateDifference, []Unsupported{{
+		Path: "tracks", Reason: "backend has no track storage",
+	}})
+	require.False(t, stateDifference[0].AllowedDiff)
 }
 
 func TestTrackCasePreservesReplayFields(t *testing.T) {
@@ -214,7 +221,7 @@ func TestTrackNormalizationPreservesOrderAndIgnoresBackendTiming(t *testing.T) {
 	require.Equal(t, "data.tracks.tool.events[1].sequence", differences[0].Path)
 }
 
-func TestUnsupportedBackendSkipsTrackCaseWithAllowedReport(t *testing.T) {
+func TestUnsupportedTrackStorageDoesNotHideStateDifference(t *testing.T) {
 	limited := newInMemoryBackend(t)
 	limited.Name = "limited"
 	limited.Unsupported = []Unsupported{{
@@ -222,15 +229,20 @@ func TestUnsupportedBackendSkipsTrackCaseWithAllowedReport(t *testing.T) {
 	}}
 	report, err := Run(context.Background(), []Backend{newInMemoryBackend(t), limited}, StandardCases())
 	require.NoError(t, err)
-	require.False(t, report.HasDisallowedDifferences(), "report: %+v", report.Differences)
-	var found bool
+	require.True(t, report.HasDisallowedDifferences())
+	var foundAllowedTrack, foundStateDifference bool
 	for _, difference := range report.Differences {
 		if difference.Case == "track_events" && difference.Path == "data.tracks" {
-			found = true
+			foundAllowedTrack = true
 			require.True(t, difference.AllowedDiff)
 		}
+		if difference.Case == "track_events" && difference.Path == "data.state.tracks" {
+			foundStateDifference = true
+			require.False(t, difference.AllowedDiff)
+		}
 	}
-	require.True(t, found)
+	require.True(t, foundAllowedTrack)
+	require.True(t, foundStateDifference)
 }
 
 func TestMemoryDifferencesUseMemoryIDInPath(t *testing.T) {
@@ -351,6 +363,195 @@ func TestLoadOptionalBackendsSkipsAndEnablesFromEnvironment(t *testing.T) {
 	require.Empty(t, skipped)
 }
 
+func TestLoadOptionalBackendsClosesServicesOnFactoryFailure(t *testing.T) {
+	const (
+		firstEnvironment  = "REPLAYTEST_FIRST_BACKEND"
+		secondEnvironment = "REPLAYTEST_SECOND_BACKEND"
+	)
+	t.Setenv(firstEnvironment, "first")
+	t.Setenv(secondEnvironment, "second")
+
+	firstSession := &closeTrackingSession{}
+	firstMemory := &closeTrackingMemory{}
+	secondSession := &closeTrackingSession{}
+	secondMemory := &closeTrackingMemory{closeErr: errors.New("close memory")}
+	factoryErr := errors.New("factory failed")
+
+	backends, skipped, err := LoadOptionalBackends(
+		context.Background(),
+		OptionalBackend{
+			Name:        "first",
+			Environment: firstEnvironment,
+			Factory: func(context.Context, string) (Backend, error) {
+				return Backend{
+					Name:    "first",
+					Session: firstSession,
+					Memory:  firstMemory,
+				}, nil
+			},
+		},
+		OptionalBackend{
+			Name:        "second",
+			Environment: secondEnvironment,
+			Factory: func(context.Context, string) (Backend, error) {
+				return Backend{
+					Name:    "second",
+					Session: secondSession,
+					Memory:  secondMemory,
+				}, factoryErr
+			},
+		},
+	)
+	require.ErrorIs(t, err, factoryErr)
+	require.ErrorIs(t, err, secondMemory.closeErr)
+	require.Nil(t, backends)
+	require.Nil(t, skipped)
+	require.Equal(t, 1, firstSession.closeCalls)
+	require.Equal(t, 1, firstMemory.closeCalls)
+	require.Equal(t, 1, secondSession.closeCalls)
+	require.Equal(t, 1, secondMemory.closeCalls)
+}
+
+func TestLoadOptionalBackendsClosesServicesOnValidationFailure(t *testing.T) {
+	const (
+		firstEnvironment  = "REPLAYTEST_VALID_BACKEND"
+		secondEnvironment = "REPLAYTEST_INVALID_BACKEND"
+	)
+	t.Setenv(firstEnvironment, "first")
+	t.Setenv(secondEnvironment, "second")
+
+	firstSession := &closeTrackingSession{}
+	firstMemory := &closeTrackingMemory{}
+	invalidSession := &closeTrackingSession{}
+	_, _, err := LoadOptionalBackends(
+		context.Background(),
+		OptionalBackend{
+			Name:        "first",
+			Environment: firstEnvironment,
+			Factory: func(context.Context, string) (Backend, error) {
+				return Backend{
+					Name:    "first",
+					Session: firstSession,
+					Memory:  firstMemory,
+				}, nil
+			},
+		},
+		OptionalBackend{
+			Name:        "invalid",
+			Environment: secondEnvironment,
+			Factory: func(context.Context, string) (Backend, error) {
+				return Backend{
+					Name:    "invalid",
+					Session: invalidSession,
+				}, nil
+			},
+		},
+	)
+	require.EqualError(t, err, `backend "invalid" memory service is required`)
+	require.Equal(t, 1, firstSession.closeCalls)
+	require.Equal(t, 1, firstMemory.closeCalls)
+	require.Equal(t, 1, invalidSession.closeCalls)
+}
+
+func TestSortMemoryEntriesHandlesNilEntries(t *testing.T) {
+	entries := []*memory.Entry{
+		nil,
+		{ID: "memory-b"},
+		{ID: "memory-a"},
+		nil,
+	}
+	sortMemoryEntries(entries)
+	require.Equal(t, "memory-a", entries[0].ID)
+	require.Equal(t, "memory-b", entries[1].ID)
+	require.Nil(t, entries[2])
+	require.Nil(t, entries[3])
+}
+
+func TestNormalizationScopesGeneratedFields(t *testing.T) {
+	normalized, err := normalize(map[string]any{
+		"state": map[string]any{
+			"timestamp":    "business timestamp",
+			"updated_at":   "business update",
+			"last_updated": "business memory label",
+		},
+		"events": []any{map[string]any{
+			"id":        "generated event id",
+			"timestamp": "generated event timestamp",
+			"created":   123,
+			"extensions": map[string]any{
+				"timestamp":  "extension timestamp",
+				"updated_at": "extension update",
+			},
+		}},
+		"summaries": map[string]any{
+			"branch": map[string]any{
+				"updated_at": "summary update",
+				"boundary": map[string]any{
+					"cutoff_at": "summary cutoff",
+					"version":   1,
+				},
+			},
+		},
+		"tracks": map[string]any{
+			"tool": map[string]any{
+				"events": []any{map[string]any{
+					"timestamp": "track timestamp",
+					"payload": map[string]any{
+						"timestamp": "payload timestamp",
+					},
+				}},
+			},
+		},
+		"memories": []any{map[string]any{
+			"memory": map[string]any{
+				"last_updated": "generated memory timestamp",
+				"memory":       "content",
+			},
+		}},
+		"memory_search": map[string]any{
+			"query": []any{map[string]any{
+				"memory": map[string]any{
+					"last_updated": "generated search timestamp",
+					"memory":       "search content",
+				},
+			}},
+		},
+	}, nil)
+	require.NoError(t, err)
+	data := normalized.(map[string]any)
+
+	state := data["state"].(map[string]any)
+	require.Equal(t, "business timestamp", state["timestamp"])
+	require.Equal(t, "business update", state["updated_at"])
+	require.Equal(t, "business memory label", state["last_updated"])
+
+	event := data["events"].([]any)[0].(map[string]any)
+	require.NotContains(t, event, "id")
+	require.NotContains(t, event, "timestamp")
+	require.NotContains(t, event, "created")
+	extensions := event["extensions"].(map[string]any)
+	require.Equal(t, "extension timestamp", extensions["timestamp"])
+	require.Equal(t, "extension update", extensions["updated_at"])
+
+	summary := data["summaries"].(map[string]any)["branch"].(map[string]any)
+	require.Equal(t, "normalized", summary["updated_at"])
+	boundary := summary["boundary"].(map[string]any)
+	require.NotContains(t, boundary, "cutoff_at")
+	require.Equal(t, float64(1), boundary["version"])
+
+	trackEvent := data["tracks"].(map[string]any)["tool"].(map[string]any)["events"].([]any)[0].(map[string]any)
+	require.Equal(t, "normalized", trackEvent["timestamp"])
+	payload := trackEvent["payload"].(map[string]any)
+	require.Equal(t, "payload timestamp", payload["timestamp"])
+
+	memoryPayload := data["memories"].([]any)[0].(map[string]any)["memory"].(map[string]any)
+	require.NotContains(t, memoryPayload, "last_updated")
+	require.Equal(t, "content", memoryPayload["memory"])
+	searchPayload := data["memory_search"].(map[string]any)["query"].([]any)[0].(map[string]any)["memory"].(map[string]any)
+	require.NotContains(t, searchPayload, "last_updated")
+	require.Equal(t, "search content", searchPayload["memory"])
+}
+
 func TestReportFixtureDocumentsDiffAndAllowedDiff(t *testing.T) {
 	fixture := readReportFixture(t)
 	var report Report
@@ -363,6 +564,28 @@ func TestReportFixtureDocumentsDiffAndAllowedDiff(t *testing.T) {
 	generated, err := report.JSON()
 	require.NoError(t, err)
 	require.JSONEq(t, string(fixture), string(generated))
+}
+
+type closeTrackingSession struct {
+	session.Service
+	closeCalls int
+	closeErr   error
+}
+
+func (s *closeTrackingSession) Close() error {
+	s.closeCalls++
+	return s.closeErr
+}
+
+type closeTrackingMemory struct {
+	memory.Service
+	closeCalls int
+	closeErr   error
+}
+
+func (m *closeTrackingMemory) Close() error {
+	m.closeCalls++
+	return m.closeErr
 }
 
 func newLightweightBackends(t *testing.T) []Backend {

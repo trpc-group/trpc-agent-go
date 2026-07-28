@@ -12,12 +12,14 @@ package replaytest
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	memorypostgres "trpc.group/trpc-go/trpc-agent-go/memory/postgres"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessionpostgres "trpc.group/trpc-go/trpc-agent-go/session/postgres"
 )
@@ -42,11 +44,47 @@ func TestPostgresReplayFromEnvironment(t *testing.T) {
 		t.Skip(EnvPostgresDSN + " is not set")
 	}
 	backend := backends[0]
-	t.Cleanup(func() { cleanupSQLReplayBackend(t, backend) })
+	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
 
 	report, err := Run(ctx, []Backend{newInMemoryBackend(t), backend}, StandardCases())
 	require.NoError(t, err)
 	require.False(t, report.HasDisallowedDifferences(), "report: %+v", report.Differences)
+}
+
+func TestPostgresSummaryVisibleFromNonUTCSession(t *testing.T) {
+	dsn := os.Getenv(EnvPostgresDSN)
+	if dsn == "" {
+		t.Skip(EnvPostgresDSN + " is not set")
+	}
+	ctx := context.Background()
+	backend, err := newPostgresBackend(dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { cleanupReplayBackend(t, backend) })
+
+	key := session.Key{
+		AppName:   replayApp,
+		UserID:    replayUser,
+		SessionID: fmt.Sprintf("non-utc-summary-%d", time.Now().UnixNano()),
+	}
+	t.Cleanup(func() { cleanupReplaySession(t, backend, key) })
+	sess, err := backend.Session.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	require.NoError(t, backend.Session.AppendEvent(
+		ctx,
+		sess,
+		newReplayEvent("non-utc-event", model.RoleUser, "visible summary", ""),
+	))
+	fresh, err := backend.Session.GetSession(ctx, key)
+	require.NoError(t, err)
+	require.NoError(t, backend.Session.CreateSessionSummary(ctx, fresh, "", true))
+
+	persisted, err := backend.Session.GetSession(ctx, key)
+	require.NoError(t, err)
+	persisted.Summaries = nil
+	persisted.CreatedAt = persisted.CreatedAt.In(time.FixedZone("UTC+08", 8*60*60))
+	text, ok := backend.Session.GetSessionSummaryText(ctx, persisted)
+	require.True(t, ok)
+	require.Equal(t, "replay summary: visible summary", text)
 }
 
 func newPostgresBackend(dsn string) (Backend, error) {
@@ -69,7 +107,7 @@ func newPostgresBackend(dsn string) (Backend, error) {
 	return Backend{Name: "postgres", Session: sessionService, Memory: memoryService}, nil
 }
 
-func cleanupSQLReplayBackend(t *testing.T, backend Backend) {
+func cleanupReplayBackend(t *testing.T, backend Backend) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -83,10 +121,16 @@ func cleanupSQLReplayBackend(t *testing.T, backend Backend) {
 	if err := backend.Memory.ClearMemories(ctx, memory.UserKey{AppName: replayApp, UserID: replayUser}); err != nil {
 		t.Errorf("clear %s replay memories: %v", backend.Name, err)
 	}
-	if err := backend.Memory.Close(); err != nil {
-		t.Errorf("close %s replay memory: %v", backend.Name, err)
+	if err := closeBackends(backend); err != nil {
+		t.Errorf("close %s replay backend: %v", backend.Name, err)
 	}
-	if err := backend.Session.Close(); err != nil {
-		t.Errorf("close %s replay session: %v", backend.Name, err)
+}
+
+func cleanupReplaySession(t *testing.T, backend Backend, key session.Key) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := backend.Session.DeleteSession(ctx, key); err != nil {
+		t.Errorf("delete %s replay session %q: %v", backend.Name, key.SessionID, err)
 	}
 }

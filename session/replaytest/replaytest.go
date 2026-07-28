@@ -32,9 +32,13 @@ import (
 // Session and Memory must use the same logical application and user namespace.
 // Track cases require Session to also implement session.TrackService.
 type Backend struct {
-	Name        string
-	Session     session.Service
-	Memory      memory.Service
+	// Name identifies the backend in reports.
+	Name string
+	// Session provides the session behavior exercised by replay cases.
+	Session session.Service
+	// Memory provides the memory behavior exercised by replay cases.
+	Memory memory.Service
+	// Unsupported declares intentionally unavailable observable capabilities.
 	Unsupported []Unsupported
 	// PrivateMetadataPaths lists dot-separated paths in Snapshot.Data that
 	// contain backend-owned metadata. Use * for an array element, for example
@@ -47,7 +51,9 @@ type Backend struct {
 // is relative to Snapshot.Data, for example "tracks" or "memories.search".
 // The harness records matching differences as allowed and explains why.
 type Unsupported struct {
-	Path   string
+	// Path identifies the unsupported field relative to Snapshot.Data.
+	Path string
+	// Reason explains why the difference is allowed.
 	Reason string
 }
 
@@ -58,9 +64,12 @@ type BackendFactory func(context.Context, string) (Backend, error)
 // OptionalBackend configures a backend that is enabled only when Environment
 // has a non-empty value.
 type OptionalBackend struct {
-	Name        string
+	// Name identifies the backend in skip records and construction errors.
+	Name string
+	// Environment names the variable containing the backend endpoint.
 	Environment string
-	Factory     BackendFactory
+	// Factory constructs the backend when Environment is set.
+	Factory BackendFactory
 }
 
 // Environment variables conventionally used for optional integration
@@ -77,7 +86,10 @@ const (
 // Implementations should use a case-specific session ID so cases can share a
 // backend without affecting one another.
 type Case struct {
-	Name   string
+	// Name identifies the case in reports and is also used as its session ID by
+	// the standard case set.
+	Name string
+	// Replay performs the mutation sequence and captures its observable result.
 	Replay func(context.Context, Backend) (Snapshot, error)
 }
 
@@ -109,31 +121,45 @@ func WithMemorySearchQueries(queries ...string) CaptureOption {
 // Snapshot is the normalized observable result of a replay case.
 // Data must contain only JSON-compatible values after normalization.
 type Snapshot struct {
-	SessionID string         `json:"session_id"`
-	Data      map[string]any `json:"data"`
+	// SessionID identifies the session whose data was captured.
+	SessionID string `json:"session_id"`
+	// Data contains normalized session, state, memory, summary, and track data.
+	Data map[string]any `json:"data"`
 }
 
 // Difference identifies one observable mismatch between two snapshots.
 type Difference struct {
-	Case        string          `json:"case"`
-	Backend     string          `json:"backend"`
-	SessionID   string          `json:"session_id"`
-	Path        string          `json:"path"`
-	Baseline    json.RawMessage `json:"baseline"`
-	Actual      json.RawMessage `json:"actual"`
-	AllowedDiff bool            `json:"allowed_diff"`
-	Reason      string          `json:"reason,omitempty"`
+	// Case identifies the replay case that produced the difference.
+	Case string `json:"case"`
+	// Backend identifies the non-baseline backend.
+	Backend string `json:"backend"`
+	// SessionID identifies the compared session.
+	SessionID string `json:"session_id"`
+	// Path identifies the differing field.
+	Path string `json:"path"`
+	// Baseline contains the baseline JSON value.
+	Baseline json.RawMessage `json:"baseline"`
+	// Actual contains the compared backend JSON value.
+	Actual json.RawMessage `json:"actual"`
+	// AllowedDiff reports whether Unsupported permits this difference.
+	AllowedDiff bool `json:"allowed_diff"`
+	// Reason explains an allowed difference or replay failure.
+	Reason string `json:"reason,omitempty"`
 }
 
 // Report contains all differences found while replaying cases. An empty
 // Differences slice means every backend agreed with the baseline.
 type Report struct {
-	Baseline    string       `json:"baseline"`
+	// Baseline identifies the backend used as the comparison source.
+	Baseline string `json:"baseline"`
+	// Differences contains every observed mismatch in deterministic order.
 	Differences []Difference `json:"differences"`
 }
 
 // LoadOptionalBackends builds integrations whose environment variables are
-// set. It returns human-readable skip records for unset integrations.
+// set. It returns human-readable skip records for unset integrations. If any
+// configured backend fails construction or validation, it closes every service
+// created during the call before returning the error.
 func LoadOptionalBackends(
 	ctx context.Context,
 	configs ...OptionalBackend,
@@ -142,7 +168,8 @@ func LoadOptionalBackends(
 	skipped := make([]string, 0, len(configs))
 	for _, config := range configs {
 		if config.Name == "" || config.Environment == "" {
-			return nil, nil, errors.New("optional backend name and environment are required")
+			err := errors.New("optional backend name and environment are required")
+			return nil, nil, joinBackendCloseError(err, backends)
 		}
 		endpoint := strings.TrimSpace(os.Getenv(config.Environment))
 		if endpoint == "" {
@@ -150,17 +177,19 @@ func LoadOptionalBackends(
 			continue
 		}
 		if config.Factory == nil {
-			return nil, nil, fmt.Errorf("optional backend %q factory is required", config.Name)
+			err := fmt.Errorf("optional backend %q factory is required", config.Name)
+			return nil, nil, joinBackendCloseError(err, backends)
 		}
 		backend, err := config.Factory(ctx, endpoint)
 		if err != nil {
-			return nil, nil, fmt.Errorf("create optional backend %q: %w", config.Name, err)
+			cause := fmt.Errorf("create optional backend %q: %w", config.Name, err)
+			return nil, nil, joinBackendCloseError(cause, append(backends, backend))
 		}
 		if backend.Name == "" {
 			backend.Name = config.Name
 		}
 		if err := validateBackend(backend); err != nil {
-			return nil, nil, err
+			return nil, nil, joinBackendCloseError(err, append(backends, backend))
 		}
 		backends = append(backends, backend)
 	}
@@ -282,7 +311,7 @@ func Capture(
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read memories: %w", err)
 	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].ID < entries[j].ID })
+	sortMemoryEntries(entries)
 	captureConfig := captureOptions{}
 	for _, option := range options {
 		option(&captureConfig)
@@ -371,6 +400,18 @@ func captureMemoryEntries(entries []*memory.Entry) []map[string]any {
 	return captured
 }
 
+func sortMemoryEntries(entries []*memory.Entry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i] == nil {
+			return false
+		}
+		if entries[j] == nil {
+			return true
+		}
+		return entries[i].ID < entries[j].ID
+	})
+}
+
 func loadSummaries(
 	ctx context.Context,
 	service session.Service,
@@ -449,8 +490,7 @@ func validateBackend(backend Backend) error {
 func markAllowedUnsupported(differences []Difference, unsupported []Unsupported) {
 	for index := range differences {
 		for _, capability := range unsupported {
-			if (capability.Path == "tracks" && differences[index].Path == "data.state.tracks") ||
-				differences[index].Path == "data."+capability.Path ||
+			if differences[index].Path == "data."+capability.Path ||
 				strings.HasPrefix(differences[index].Path, "data."+capability.Path+".") ||
 				strings.HasPrefix(differences[index].Path, "data."+capability.Path+"[") {
 				differences[index].AllowedDiff = true
@@ -525,12 +565,12 @@ func stripVolatile(value any, path, privateMetadataPaths []string) any {
 				continue
 			}
 			if isVolatileKey(key, path) {
-				if key == "updated_at" && containsPath(path, "summaries") {
+				if key == "updated_at" && isSummaryRecordPath(path) {
 					// Summary recency is part of the contract, but exact wall-clock
 					// values differ across backends. Preserve its presence.
 					out[key] = "normalized"
 				}
-				if key == "timestamp" && containsPath(path, "tracks") {
+				if key == "timestamp" && isTrackEventPath(path) {
 					// Track order remains observable through the event slice while
 					// wall-clock timestamps are backend-specific.
 					out[key] = "normalized"
@@ -616,17 +656,73 @@ func containsPath(path []string, target string) bool {
 }
 
 func isVolatileKey(key string, path []string) bool {
-	switch key {
-	case "timestamp", "created", "created_at", "updated_at", "last_updated", "cutoff_at":
-		return true
-	case "id":
-		for _, component := range path {
-			if component == "events" || component == "response" {
-				return true
-			}
+	if isEventRecordPath(path) || isEventResponsePath(path) {
+		switch key {
+		case "id", "timestamp", "created", "created_at":
+			return true
 		}
 	}
-	return false
+	if isSummaryRecordPath(path) && key == "updated_at" {
+		return true
+	}
+	if isSummaryBoundaryPath(path) && key == "cutoff_at" {
+		return true
+	}
+	if isMemoryPayloadPath(path) && key == "last_updated" {
+		return true
+	}
+	return isTrackEventPath(path) && key == "timestamp"
+}
+
+func isEventRecordPath(path []string) bool {
+	return len(path) == 2 && path[0] == "events" && path[1] == "*"
+}
+
+func isEventResponsePath(path []string) bool {
+	return len(path) == 3 && path[0] == "events" &&
+		path[1] == "*" && path[2] == "response"
+}
+
+func isSummaryRecordPath(path []string) bool {
+	return len(path) == 2 && path[0] == "summaries"
+}
+
+func isSummaryBoundaryPath(path []string) bool {
+	return len(path) == 3 && path[0] == "summaries" && path[2] == "boundary"
+}
+
+func isMemoryPayloadPath(path []string) bool {
+	if len(path) == 3 {
+		return path[0] == "memories" && path[1] == "*" && path[2] == "memory"
+	}
+	return len(path) == 4 && path[0] == "memory_search" &&
+		path[2] == "*" && path[3] == "memory"
+}
+
+func isTrackEventPath(path []string) bool {
+	return len(path) == 4 && path[0] == "tracks" &&
+		path[2] == "events" && path[3] == "*"
+}
+
+func closeBackends(backends ...Backend) error {
+	var closeErr error
+	for i := len(backends) - 1; i >= 0; i-- {
+		backend := backends[i]
+		if backend.Memory != nil {
+			closeErr = errors.Join(closeErr, backend.Memory.Close())
+		}
+		if backend.Session != nil {
+			closeErr = errors.Join(closeErr, backend.Session.Close())
+		}
+	}
+	return closeErr
+}
+
+func joinBackendCloseError(cause error, backends []Backend) error {
+	if closeErr := closeBackends(backends...); closeErr != nil {
+		return errors.Join(cause, fmt.Errorf("close optional backends: %w", closeErr))
+	}
+	return cause
 }
 
 func compareValue(path string, left, right any, add func(string, any, any)) {

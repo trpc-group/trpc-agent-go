@@ -359,10 +359,13 @@ func TestGetSessionSummaryText_Success(t *testing.T) {
 	defer db.Close()
 
 	sess := &session.Session{
-		ID:        "test-session",
-		AppName:   "test-app",
-		UserID:    "test-user",
-		CreatedAt: time.Now().Add(-time.Hour),
+		ID:      "test-session",
+		AppName: "test-app",
+		UserID:  "test-user",
+		CreatedAt: time.Date(
+			2026, time.July, 28, 12, 30, 0, 0,
+			time.FixedZone("UTC+08", 8*60*60),
+		),
 	}
 
 	// Mock summary query
