@@ -292,6 +292,30 @@ func TestCloneSurfaceValue_PreservesEmptyCollections(t *testing.T) {
 	require.NotNil(t, input.Default)
 }
 
+func TestCloneSurfaceValue_ClonesTypedSchemaValues(t *testing.T) {
+	typedMap := map[string]string{"state": "source"}
+	typedSlice := []string{"source"}
+	pointerValue := map[string]any{"state": "source"}
+	typedMapSlice := []map[string]string{{"state": "source"}}
+	value := SurfaceValue{Tools: []ToolRef{{InputSchema: &tool.Schema{
+		AdditionalProperties: &pointerValue,
+		Default:              typedMapSlice,
+		Enum:                 []any{typedMap, typedSlice},
+	}}}}
+
+	cloned := CloneSurfaceValue(value)
+	clonedSchema := cloned.Tools[0].InputSchema
+	clonedSchema.Enum[0].(map[string]string)["state"] = "clone"
+	clonedSchema.Enum[1].([]string)[0] = "clone"
+	(*clonedSchema.AdditionalProperties.(*map[string]any))["state"] = "clone"
+	clonedSchema.Default.([]map[string]string)[0]["state"] = "clone"
+
+	assert.Equal(t, "source", typedMap["state"])
+	assert.Equal(t, "source", typedSlice[0])
+	assert.Equal(t, "source", pointerValue["state"])
+	assert.Equal(t, "source", typedMapSlice[0]["state"])
+}
+
 func TestModelRef_JSONOmitsEmptyFields(t *testing.T) {
 	data, err := json.Marshal(ModelRef{Name: "gpt-5.2"})
 	require.NoError(t, err)
