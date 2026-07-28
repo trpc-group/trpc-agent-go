@@ -13,6 +13,7 @@ package chunking
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -214,25 +215,47 @@ func (j *JSONChunking) jsonSplit(
 
 func orderedJSONKeys(data map[string]any) []string {
 	keys := make([]string, 0, len(data))
+	numericKeys := make(map[string]*big.Int)
 	for key := range data {
 		keys = append(keys, key)
+		if value, ok := parseJSONIntegerKey(key); ok {
+			numericKeys[key] = value
+		}
 	}
 	sort.Slice(keys, func(i, k int) bool {
-		left, leftErr := strconv.Atoi(keys[i])
-		right, rightErr := strconv.Atoi(keys[k])
-		leftNumeric := leftErr == nil
-		rightNumeric := rightErr == nil
+		left, leftNumeric := numericKeys[keys[i]]
+		right, rightNumeric := numericKeys[keys[k]]
 		if leftNumeric != rightNumeric {
 			return leftNumeric
 		}
 		if leftNumeric {
-			if left != right {
-				return left < right
+			if comparison := left.Cmp(right); comparison != 0 {
+				return comparison < 0
 			}
 		}
 		return keys[i] < keys[k]
 	})
 	return keys
+}
+
+func parseJSONIntegerKey(key string) (*big.Int, bool) {
+	if key == "" {
+		return nil, false
+	}
+	digitStart := 0
+	if key[0] == '+' || key[0] == '-' {
+		digitStart = 1
+	}
+	if digitStart == len(key) {
+		return nil, false
+	}
+	for i := digitStart; i < len(key); i++ {
+		if key[i] < '0' || key[i] > '9' {
+			return nil, false
+		}
+	}
+	value, ok := new(big.Int).SetString(key, 10)
+	return value, ok
 }
 
 func (j *JSONChunking) addStringValue(
@@ -422,6 +445,9 @@ func (j *JSONChunking) arrayToMap(arr []any) map[string]any {
 
 // SplitJSON splits JSON data into chunks and returns them as strings.
 func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]string, error) {
+	if _, err := json.Marshal(data); err != nil {
+		return nil, fmt.Errorf("invalid JSON data: %w", err)
+	}
 	chunks, err := j.splitJSON(data, convertLists)
 	if err != nil {
 		return nil, err

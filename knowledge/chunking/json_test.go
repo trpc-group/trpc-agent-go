@@ -22,17 +22,44 @@ import (
 
 func TestOrderedJSONKeysMixedNumericAndLexical(t *testing.T) {
 	data := map[string]any{
-		"1a": nil,
-		"10": nil,
-		"2":  nil,
-		"02": nil,
+		"-100000000000000000000": nil,
+		"-99999999999999999999":  nil,
+		"1a":                     nil,
+		"10":                     nil,
+		"2":                      nil,
+		"02":                     nil,
+		"99999999999999999999":   nil,
+		"100000000000000000000":  nil,
 	}
-	want := []string{"02", "2", "10", "1a"}
+	want := []string{
+		"-100000000000000000000",
+		"-99999999999999999999",
+		"02",
+		"2",
+		"10",
+		"99999999999999999999",
+		"100000000000000000000",
+		"1a",
+	}
 
 	for i := 0; i < 1000; i++ {
 		if got := orderedJSONKeys(data); !slices.Equal(got, want) {
 			t.Fatalf("orderedJSONKeys() = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestJSONChunkingSplitJSONRejectsCycles(t *testing.T) {
+	data := map[string]any{}
+	data["a"] = data
+	data["z"] = "after cycle"
+
+	_, err := NewJSONChunking().SplitJSON(data, false)
+	if err == nil {
+		t.Fatal("SplitJSON() error = nil, want cycle error")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("SplitJSON() error = %q, want cycle error", err)
 	}
 }
 

@@ -107,7 +107,8 @@ has no frontend framework or build step, and listens on localhost by default.
 Use `-addr` to opt into another listen address. To keep the local demo bounded,
 the server accepts documents up to 1 MiB, explicit chunk sizes of at least 32,
 at least 16 units of new-content budget after overlap, at most 5000 output
-chunks, and two concurrent chunking requests.
+chunks, at most 8 MiB of estimated and generated chunk content, and two
+concurrent chunking requests.
 
 ## What the Reader selects
 

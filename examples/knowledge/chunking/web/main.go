@@ -236,7 +236,7 @@ func validateRequest(request chunkRequest) error {
 			maxNameRunes,
 		)
 	}
-	if request.ChunkSize > 0 && request.ChunkSize < minChunkSize {
+	if request.ChunkSize != 0 && request.ChunkSize < minChunkSize {
 		return fmt.Errorf(
 			"chunk size must be 0 or at least %d in the viewer",
 			minChunkSize,
@@ -290,6 +290,22 @@ func validateRequest(request chunkRequest) error {
 			"request may produce about %d chunks, exceeding the viewer limit of %d",
 			estimatedChunks,
 			maxChunkCount,
+		)
+	}
+	maxChunkBytes := effectiveChunkSize
+	if !jsonStrategy {
+		if maxChunkBytes > maxResponseChunkBytes/utf8.UTFMax {
+			return fmt.Errorf(
+				"chunk size may exceed the viewer output limit of %d bytes",
+				maxResponseChunkBytes,
+			)
+		}
+		maxChunkBytes *= utf8.UTFMax
+	}
+	if estimatedChunks > maxResponseChunkBytes/maxChunkBytes {
+		return fmt.Errorf(
+			"request may exceed the viewer output limit of %d bytes",
+			maxResponseChunkBytes,
 		)
 	}
 	return nil
