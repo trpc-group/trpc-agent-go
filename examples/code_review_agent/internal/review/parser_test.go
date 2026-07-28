@@ -38,6 +38,10 @@ func TestParseUnifiedDiffExtractsFileAndHunk(t *testing.T) {
 	if len(parsed.Files[0].Hunks) != 1 {
 		t.Fatalf("expected 1 hunk, got %d", len(parsed.Files[0].Hunks))
 	}
+	hunk := parsed.Files[0].Hunks[0]
+	if hunk.OldLines != 2 || hunk.NewLines != 3 {
+		t.Fatalf("hunk line counts = old:%d new:%d, want old:2 new:3", hunk.OldLines, hunk.NewLines)
+	}
 }
 
 func TestParseUnifiedDiffHandlesLongAddedLine(t *testing.T) {
@@ -99,5 +103,73 @@ func TestParseUnifiedDiffDecodesQuotedPathsAndInfersLanguage(t *testing.T) {
 	}
 	if len(parsed.Files) != 1 || parsed.Files[0].Path != "docs/汉\t.md" || parsed.Files[0].Language != "markdown" {
 		t.Fatalf("quoted path parsing = %+v, want decoded markdown file", parsed.Files)
+	}
+}
+
+func TestParseUnifiedDiffRejectsHunksWithoutTargetFileHeader(t *testing.T) {
+	tests := []struct {
+		name string
+		diff string
+	}{
+		{
+			name: "leading hunk",
+			diff: "@@ -1 +1 @@\n+line\n",
+		},
+		{
+			name: "missing target header",
+			diff: "diff --git a/main.go b/main.go\n--- a/main.go\n@@ -1 +1 @@\n+line\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseUnifiedDiff(tt.diff)
+			if err == nil || !strings.Contains(err.Error(), "target file header") {
+				t.Fatalf("ParseUnifiedDiff error = %v, want target file header error", err)
+			}
+		})
+	}
+}
+
+func TestParseUnifiedDiffIgnoresNoNewlineMarkers(t *testing.T) {
+	diff := "diff --git a/main.go b/main.go\n" +
+		"--- a/main.go\n" +
+		"+++ b/main.go\n" +
+		"@@ -4 +4 @@\n" +
+		"-old value\n" +
+		"\\ No newline at end of file\n" +
+		"+new value\n" +
+		"\\ No newline at end of file\n"
+
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	hunk := parsed.Files[0].Hunks[0]
+	if len(hunk.Lines) != 2 {
+		t.Fatalf("parsed lines = %d, want 2", len(hunk.Lines))
+	}
+	if got := hunk.CandidateLines; len(got) != 1 || got[0] != 4 {
+		t.Fatalf("candidate lines = %v, want [4]", got)
+	}
+	if got := hunk.Lines[1].NewLine; got != 4 {
+		t.Fatalf("added line number = %d, want 4", got)
+	}
+}
+
+func TestParseUnifiedDiffParsesOmittedAndZeroHunkLineCounts(t *testing.T) {
+	diff := "diff --git a/main.go b/main.go\n" +
+		"--- a/main.go\n" +
+		"+++ b/main.go\n" +
+		"@@ -1 +1,0 @@\n" +
+		"-removed\n"
+
+	parsed, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatalf("ParseUnifiedDiff returned error: %v", err)
+	}
+	hunk := parsed.Files[0].Hunks[0]
+	if hunk.OldLines != 1 || hunk.NewLines != 0 {
+		t.Fatalf("hunk line counts = old:%d new:%d, want old:1 new:0", hunk.OldLines, hunk.NewLines)
 	}
 }

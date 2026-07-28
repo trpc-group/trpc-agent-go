@@ -29,6 +29,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 
 	var current *ParsedFile
 	var currentHunk *Hunk
+	hasTargetFileHeader := false
 	oldLine := 0
 	newLine := 0
 
@@ -57,6 +58,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 				parsed.Files = append(parsed.Files, *current)
 			}
 			current = &ParsedFile{}
+			hasTargetFileHeader = false
 		case strings.HasPrefix(line, "--- "):
 			if current == nil {
 				current = &ParsedFile{}
@@ -65,6 +67,7 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			if current == nil {
 				current = &ParsedFile{}
 			}
+			hasTargetFileHeader = true
 			path := normalizeDiffPath(strings.TrimPrefix(line, "+++ "))
 			if path != "/dev/null" {
 				current.Path = filepath.ToSlash(path)
@@ -73,6 +76,9 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			}
 		case strings.HasPrefix(line, "@@ "):
 			flushHunk()
+			if current == nil || !hasTargetFileHeader {
+				return ParsedDiff{}, fmt.Errorf("hunk header without target file header: %q", line)
+			}
 			m := hunkHeader.FindStringSubmatch(line)
 			if len(m) != 5 {
 				return ParsedDiff{}, fmt.Errorf("invalid hunk header: %q", line)
@@ -82,10 +88,14 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 			currentHunk = &Hunk{
 				File:     current.Path,
 				OldStart: oldLine,
+				OldLines: hunkLineCount(m[2]),
 				NewStart: newLine,
+				NewLines: hunkLineCount(m[4]),
 			}
 		case currentHunk != nil:
 			switch {
+			case line == `\ No newline at end of file`:
+				// This is diff metadata, not a changed source line.
 			case strings.HasPrefix(line, "+"):
 				currentHunk.Lines = append(currentHunk.Lines, Line{NewLine: newLine, Kind: "add", Text: strings.TrimPrefix(line, "+")})
 				currentHunk.CandidateLines = append(currentHunk.CandidateLines, newLine)
@@ -109,6 +119,14 @@ func ParseUnifiedDiff(input string) (ParsedDiff, error) {
 		parsed.Files = append(parsed.Files, *current)
 	}
 	return parsed, nil
+}
+
+func hunkLineCount(raw string) int {
+	if raw == "" {
+		return 1
+	}
+	count, _ := strconv.Atoi(raw)
+	return count
 }
 
 func normalizeDiffPath(raw string) string {
