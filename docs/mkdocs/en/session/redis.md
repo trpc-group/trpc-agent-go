@@ -33,6 +33,7 @@ Redis storage is suitable for production environments and distributed applicatio
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key prefix; all keys will start with `prefix:`. Useful when multiple apps share one Redis instance |
 | `WithCompatMode(mode CompatMode)` | `CompatMode` | `CompatModeLegacy` | Storage compatibility mode. Options: `CompatModeNone`, `CompatModeLegacy`, `CompatModeTransition`. See [Storage Compatibility Mode (CompatMode)](#storage-compatibility-mode-compatmode) |
 | `WithEnableUserSessionIndex(enable bool)` | `bool` | `false` | Enable the per-user session index for HashIdx. See [User Session Index](#user-session-index) |
+| `WithDisableScriptCache(disable bool)` | `bool` | `false` | Keep `EVALSHA`-first execution by default. When enabled, run Lua scripts via `EVAL` only for backends with unreliable script caches, at the cost of sending the full script body on every call |
 
 **Async Persistence:**
 

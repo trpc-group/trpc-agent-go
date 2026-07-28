@@ -20,12 +20,17 @@ not grant new host capabilities.
 
 This example deliberately keeps the root agent prompt lean. The
 `run_workflow` tool declaration teaches the current Python workflow DSL itself (`await agent`,
-`parallel`, `pipeline`, `schema`, direct `return`, and the no-wrapper rules),
+`parallel`, `pipeline`, `schema`, and direct `return`),
 while the example's root prompt focuses only on when to call
 `run_workflow` and how to constrain `lookup_policy`. If you copy this
 example into an application, keep that layering: put workflow-language rules in
 the tool description, and keep the root prompt focused on task-routing policy
 and capability boundaries.
+
+Generated Python should remain short orchestration glue. Pass only
+`result["text"]` or `result["structured"]` between roles unless metadata is
+needed; substantive drafts, reviews, and other deliverables belong in child
+Agent calls rather than in the Python source.
 
 The `general_agent` base agent also has one ordinary child-agent tool,
 `lookup_policy`. It is not exposed to the root agent and is not exposed as a
@@ -71,7 +76,7 @@ export OPENAI_BASE_URL="https://your-endpoint/v1"
 
 ```bash
 cd examples
-go run ./dynamicworkflow -model gpt-5
+go run ./dynamicworkflow/basic -model gpt-5
 ```
 
 With no `-prompt`, the example starts an interactive chat loop and keeps one
@@ -85,12 +90,13 @@ Commands:
 For a single-turn run, pass `-prompt`:
 
 ```bash
-go run ./dynamicworkflow -model gpt-5 \
+go run ./dynamicworkflow/basic -model gpt-5 \
   -prompt 'Build a temporary team: propose a collaboration plan for a remote team, have a reviewer check it against the team collaboration guideline using lookup_policy, and revise the plan with the feedback.'
 ```
 
-The example prints the model-generated workflow source by default. Disable it
-with `-show-workflow-code=false`.
+Pass `-show-workflow-code=true` to print the model-generated workflow source
+separately before execution. Tool-event output also includes the `run_workflow`
+arguments.
 
 The event printer also shows child Agent tool calls. A typical run includes
 lines like:
@@ -101,9 +107,9 @@ lines like:
 ```
 
 Those lines come from child Agent events in the same stream as the parent run.
-For a child role that must demonstrate tool use, prefer returning text from
-that child instead of also requesting `structured_output`; some providers tend
-to satisfy a strict structured response directly instead of calling a tool.
+For provider-portable visible tool use, do not request `structured_output` from
+the same child that must call a tool. Let that child return policy-grounded
+text, then pass the evidence to a `tools=[]` child for any structured decision.
 
 ## End-to-end walkthrough
 
@@ -272,9 +278,13 @@ item in the batch. Its returned list contains each item's final-stage result,
 so a later stage must explicitly retain earlier data needed by the final
 summary:
 
+Stages may accept `previous`, `(previous, original)`, or
+`(previous, original, index)`. On the first stage, `previous` is the original
+item.
+
 ```python
-async def analyze(previous, original, index):
-    return await agent({"file": previous}, {"instruction": "Analyze this file."})
+async def analyze(file):
+    return await agent({"file": file}, {"instruction": "Analyze this file."})
 
 async def verify(analysis, original, index):
     return await agent(
@@ -287,11 +297,13 @@ results = await pipeline(files, analyze, verify)
 
 ## Runtime and session behavior
 
-The workflow is foreground and one-shot. Each child role has an isolated
-conversation context. `parallel` branches run concurrently (up to the
-framework's per-workflow limit) with distinct child instances by default.
-Child Agent output and tool-call progress remain visible through the same event
-stream and are persisted by the configured Session Service.
+The workflow is foreground and one-shot. This example configures the base
+`LLMAgent` with `IsolatedRequest`, so each child role sees its own branch
+instead of the root conversation; reusing an `instance_id` still shares that
+role's history within the workflow. `parallel` branches run concurrently (up
+to the framework's per-workflow limit) with distinct child instances by
+default. Child Agent output and tool-call progress remain visible through the
+same event stream and are persisted by the configured Session Service.
 
 `LocalRunner` starts a local Python process and is not a security sandbox. In
 production, provide a `dynamicworkflow.Runtime` backed by a container, microVM,

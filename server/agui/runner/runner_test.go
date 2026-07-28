@@ -32,6 +32,7 @@ import (
 	baserunner "trpc.group/trpc-go/trpc-agent-go/runner"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/adapter"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/multimodal"
+	"trpc.group/trpc-go/trpc-agent-go/server/agui/internal/source"
 	aguitool "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/tool"
 	aguitrack "trpc.group/trpc-go/trpc-agent-go/server/agui/internal/track"
 	"trpc.group/trpc-go/trpc-agent-go/server/agui/translator"
@@ -2331,12 +2332,10 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	r := &runner{tracker: tracker}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
 	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
-
-	err := r.recordUserMessage(context.Background(), key, msg)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, nil))
 	require.NoError(t, err)
 	assert.Empty(t, msg.ID)
 	assert.Empty(t, msg.Name)
-
 	tracker.mu.Lock()
 	defer tracker.mu.Unlock()
 	require.Len(t, tracker.events, 1)
@@ -2351,6 +2350,137 @@ func TestRecordUserMessageTracksCustomEvent(t *testing.T) {
 	content, ok := userMessage.ContentString()
 	require.True(t, ok)
 	assert.Equal(t, "hi", content)
+}
+
+func TestRecordUserMessageTracksForwardedPropsSourceMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	forwardedProps := map[string]any{
+		"file_url": "https://example.com/demo.png",
+		"attachments": []any{
+			map[string]any{"id": "file-1", "mimeType": "image/png"},
+		},
+	}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	got, ok := custom.GetBaseEvent().RawEvent.(runForwardedPropsSourceMetadata)
+	require.True(t, ok)
+	assert.Equal(t, "run", got.RunID)
+	metadata, ok := source.FromRawEvent(got)
+	require.True(t, ok)
+	assert.Equal(t, "demo-user", metadata.Author)
+	assert.Equal(t, forwardedProps, metadata.ForwardedProps)
+	payload, err := custom.ToJSON()
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(payload, &decoded))
+	rawEvent, ok := decoded["rawEvent"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "run", rawEvent["runId"])
+}
+
+func TestRecordUserMessageSkipsForwardedPropsMetadataByDefault(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"file_url": "https://example.com/demo.png"},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsInvalidForwardedPropsMetadata(t *testing.T) {
+	originalErrorfContext := log.ErrorfContext
+	errorCalls := 0
+	var gotFormat string
+	log.ErrorfContext = func(_ context.Context, format string, _ ...any) {
+		errorCalls++
+		gotFormat = format
+	}
+	t.Cleanup(func() {
+		log.ErrorfContext = originalErrorfContext
+	})
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: map[string]any{"bad": func() {}},
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+	assert.Equal(t, 1, errorCalls)
+	assert.Contains(t, gotFormat, "marshal forwardedProps source metadata")
+}
+
+func TestRecordUserMessageSkipsNilForwardedPropsMetadata(t *testing.T) {
+	var forwardedProps map[string]any
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID:       "thread",
+		RunID:          "run",
+		ForwardedProps: forwardedProps,
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
+}
+
+func TestRecordUserMessageSkipsMissingForwardedPropsMetadata(t *testing.T) {
+	tracker := &recordingTracker{}
+	r := &runner{tracker: tracker, eventSourceMetadataEnabled: true}
+	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
+	msg := &types.Message{Role: types.RoleUser, Content: "hi"}
+	runAgentInput := &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+	}
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, msg, runAgentInput))
+	require.NoError(t, err)
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	require.Len(t, tracker.events, 1)
+	custom, ok := tracker.events[0].(*aguievents.CustomEvent)
+	require.True(t, ok)
+	assert.Nil(t, custom.GetBaseEvent().RawEvent)
 }
 
 func TestRunUsesResolvedAppNameForTrackKey(t *testing.T) {
@@ -2526,12 +2656,31 @@ func TestResolveAppNameReturnsResolverError(t *testing.T) {
 func TestRecordUserMessageRejectsNilAndNonUserRole(t *testing.T) {
 	r := &runner{}
 	key := session.Key{AppName: "app", UserID: "demo-user", SessionID: "thread"}
-
-	err := r.recordUserMessage(context.Background(), key, nil)
+	err := r.recordUserMessage(context.Background(), recordUserMessageInput(key, nil, nil))
 	assert.ErrorContains(t, err, "user message is nil")
-
-	err = r.recordUserMessage(context.Background(), key, &types.Message{Role: types.RoleTool, Content: "hi"})
+	err = r.recordUserMessage(context.Background(), recordUserMessageInput(
+		key,
+		&types.Message{Role: types.RoleTool, Content: "hi"},
+		nil,
+	))
 	assert.ErrorContains(t, err, "user message role must be user")
+}
+
+func recordUserMessageInput(
+	key session.Key,
+	message *types.Message,
+	runAgentInput *adapter.RunAgentInput,
+) *runInput {
+	if runAgentInput == nil {
+		runAgentInput = &adapter.RunAgentInput{}
+	}
+	return &runInput{
+		key:           key,
+		threadID:      runAgentInput.ThreadID,
+		runID:         runAgentInput.RunID,
+		runAgentInput: runAgentInput,
+		messages:      &runAgentMessages{userMessage: message},
+	}
 }
 
 func TestRunUserMessageRecordedInTrackAsCustomEventWithStringContent(t *testing.T) {
@@ -4306,6 +4455,146 @@ func TestRunUsesCanonicalToolCallIDFromInstalledPlugin(t *testing.T) {
 	require.Equal(t, startID, resultID)
 	require.NotEqual(t, "call-1", startID)
 	require.Contains(t, startID, "trpc-agent-go-toolcall:")
+}
+
+func TestRunEmitsToolResultsAsEachParallelCallCompletes(t *testing.T) {
+	slowStarted := make(chan struct{})
+	releaseSlow := make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() {
+			close(releaseSlow)
+		})
+	}
+	t.Cleanup(release)
+
+	slowTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			close(slowStarted)
+			select {
+			case <-releaseSlow:
+				return "slow", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("slow"),
+		function.WithDescription("Waits until released."),
+	)
+	fastTool := function.NewFunctionTool(
+		func(ctx context.Context, _ struct{}) (string, error) {
+			select {
+			case <-slowStarted:
+				return "fast", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		function.WithName("fast"),
+		function.WithDescription("Returns after the slow tool starts."),
+	)
+	modelStub := &toolCallIDRunnerIntegrationModel{
+		responses: [][]*model.Response{
+			{{
+				ID:     "tool-calls",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index: 0,
+					Message: model.Message{
+						Role: model.RoleAssistant,
+						ToolCalls: []model.ToolCall{
+							{
+								ID:   "call-slow",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "slow",
+									Arguments: []byte(`{}`),
+								},
+							},
+							{
+								ID:   "call-fast",
+								Type: "function",
+								Function: model.FunctionDefinitionParam{
+									Name:      "fast",
+									Arguments: []byte(`{}`),
+								},
+							},
+						},
+					},
+				}},
+			}},
+			{{
+				ID:     "final",
+				Object: model.ObjectTypeChatCompletion,
+				Done:   true,
+				Choices: []model.Choice{{
+					Index:   0,
+					Message: model.NewAssistantMessage("done"),
+				}},
+			}},
+		},
+	}
+	ag := llmagent.New(
+		"assistant",
+		llmagent.WithModel(modelStub),
+		llmagent.WithTools([]tool.Tool{slowTool, fastTool}),
+		llmagent.WithEnableParallelTools(true),
+	)
+	underlying := baserunner.NewRunner("per-tool-result-agui-app", ag)
+	t.Cleanup(func() {
+		require.NoError(t, underlying.Close())
+	})
+	r := New(
+		underlying,
+		WithRunOptionResolver(func(
+			context.Context,
+			*adapter.RunAgentInput,
+		) ([]agent.RunOption, error) {
+			return []agent.RunOption{
+				agent.WithToolResultEventPerCallEnabled(true),
+			}, nil
+		}),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	eventCh, err := r.Run(ctx, &adapter.RunAgentInput{
+		ThreadID: "thread",
+		RunID:    "run",
+		Messages: []types.Message{{Role: types.RoleUser, Content: "run tools"}},
+	})
+	require.NoError(t, err)
+
+	var events []aguievents.Event
+	for {
+		select {
+		case evt, ok := <-eventCh:
+			require.True(t, ok, "event stream closed before the first tool result")
+			events = append(events, evt)
+			result, ok := evt.(*aguievents.ToolCallResultEvent)
+			if !ok {
+				continue
+			}
+			require.Equal(t, "call-fast", result.ToolCallID)
+			goto firstResultReceived
+		case <-ctx.Done():
+			require.FailNow(t, "timeout waiting for the first tool result")
+		}
+	}
+
+firstResultReceived:
+	release()
+	events = append(events, collectEvents(t, eventCh)...)
+
+	var resultIDs []string
+	for _, evt := range events {
+		if result, ok := evt.(*aguievents.ToolCallResultEvent); ok {
+			resultIDs = append(resultIDs, result.ToolCallID)
+		}
+	}
+	require.Equal(t, []string{"call-fast", "call-slow"}, resultIDs)
+	require.NoError(t, aguievents.ValidateSequence(events))
 }
 
 func TestRunGraphToolMetadataUsesCanonicalToolCallID(t *testing.T) {

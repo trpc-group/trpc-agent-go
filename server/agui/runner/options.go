@@ -66,7 +66,7 @@ type Options struct {
 	GraphNodeInterruptActivityEnabled         bool                  // GraphNodeInterruptActivityEnabled enables graph interrupt activity events.
 	GraphNodeInterruptActivityTopLevelOnly    bool                  // GraphNodeInterruptActivityTopLevelOnly drops nested graph interrupt activity events.
 	ReasoningContentEnabled                   bool                  // ReasoningContentEnabled controls whether reasoning content events are emitted.
-	EventSourceMetadataEnabled                bool                  // EventSourceMetadataEnabled attaches original trpc-agent-go source metadata to translated AG-UI events.
+	EventSourceMetadataEnabled                bool                  // EventSourceMetadataEnabled attaches source metadata to AG-UI rawEvent fields.
 	ToolResultInputTranslationEnabled         bool                  // ToolResultInputTranslationEnabled controls whether tool-result inputs are translated before emission.
 	ToolCallDeltaStreamingEnabled             bool                  // ToolCallDeltaStreamingEnabled streams partial tool-call arguments.
 	StreamingToolResultActivityEnabled        bool                  // StreamingToolResultActivityEnabled rewrites partial tool results as activity events.
@@ -309,8 +309,10 @@ func WithReasoningContentEnabled(enabled bool) Option {
 	}
 }
 
-// WithEventSourceMetadataEnabled controls whether translated AG-UI events
-// carry source metadata from the original trpc-agent-go event in rawEvent.
+// WithEventSourceMetadataEnabled controls whether AG-UI events carry source
+// metadata in rawEvent. Translated events use the original trpc-agent-go event,
+// and message snapshots include request forwardedProps under rawEvent.runs when
+// present.
 func WithEventSourceMetadataEnabled(enabled bool) Option {
 	return func(o *Options) {
 		o.EventSourceMetadataEnabled = enabled

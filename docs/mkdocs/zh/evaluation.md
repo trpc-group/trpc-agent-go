@@ -1591,9 +1591,22 @@ type JudgeModelOptions struct {
 type JudgeTemplateOptions struct {
 	Prompt                   string                     // Prompt 是裁判模板文本
 	ResponseScorerName       string                     // ResponseScorerName 是响应解析器名称
+	StructuredOutputName     string                     // StructuredOutputName 是结构化输出器名称
+	ResponseScorerOptions    *ResponseScorerOptions     // ResponseScorerOptions 是响应解析器配置
 	VariableBindings         []*TemplateVariableBinding // VariableBindings 是变量绑定列表
 	SampleAggregatorName     string                     // SampleAggregatorName 是样本聚合器名称，可选
 	InvocationAggregatorName string                     // InvocationAggregatorName 是多轮聚合器名称，可选
+}
+
+// ResponseScorerOptions 表示响应解析器专属配置
+type ResponseScorerOptions struct {
+	Categories []*CategoryScore // Categories 将分类标签映射为数值分数
+}
+
+// CategoryScore 将一个分类标签映射为数值分数
+type CategoryScore struct {
+	Label string  // Label 是分类标签
+	Score float64 // Score 是 0 到 1 之间的数值分数
 }
 
 // TemplateVariableBinding 表示单个模板变量绑定
@@ -1607,6 +1620,7 @@ type TemplateVariableSource struct {
 	Scope    TemplateVariableScope     // Scope 是来源作用域
 	Field    TemplateVariableField     // Field 是来源字段
 	Selector *TemplateVariableSelector // Selector 是 trace step 选择器，可选
+	Path     string                    // Path 是可选 JSONPath，用于从来源值中继续提取子字段
 }
 
 // TemplateVariableSelector 表示模板变量选择器
@@ -1620,6 +1634,7 @@ type TemplateVariableScope string
 const (
 	TemplateVariableScopeActual   TemplateVariableScope = "actual"
 	TemplateVariableScopeExpected TemplateVariableScope = "expected"
+	TemplateVariableScopeMetric   TemplateVariableScope = "metric"
 )
 
 // TemplateVariableField 表示模板变量来源字段
@@ -1630,6 +1645,7 @@ const (
 	TemplateVariableFieldFinalResponse   TemplateVariableField = "finalResponse"
 	TemplateVariableFieldTraceStepInput  TemplateVariableField = "traceStepInput"
 	TemplateVariableFieldTraceStepOutput TemplateVariableField = "traceStepOutput"
+	TemplateVariableFieldRubrics         TemplateVariableField = "rubrics"
 )
 
 // Rubric 表示一条评估细则
@@ -1705,24 +1721,59 @@ type RubricContent struct {
 
 目标 metric 使用 `criterion.llmJudge` 承载 rubric 列表。内置 rubric evaluator 会读取合并后的细则，并默认使用结构化输出让裁判按 `rubricScores` 返回逐条评分。每次 `Evaluate` 执行时，框架会先合并 metric 级 rubrics 与 `EvalCase.rubrics`，再在调用裁判模型前校验参与结构化输出的 merged rubric：每条 rubric 都必须具备非空且唯一的 `id`。如果校验失败，评估会返回类似 `llm judge rubric id is required for structured output` 或 `duplicate llm judge rubric id "accuracy"` 的错误。排查时请检查 metric 配置与 case 级 rubrics 合并后的 `criterion.llmJudge.rubrics` 及其 `id`。自定义 rubric evaluator 按同一字段读取即可。
 
-`template` 仅用于 `llm_judge_template`。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器不读取 `rubrics`，评估标准应直接写入 `template.prompt`。
+`template` 仅用于 `llm_judge_template`。它将模板化评估限制在“prompt 不同，但评估编排逻辑相同”的场景，不要求框架把所有评估器都表达成模板。模板评估器默认不会像 `llm_rubric_*` 系列那样按结构化 `rubrics` 执行评估；如果模板需要引用当前指标的 rubric 内容，可以通过 `metric.rubrics` 显式绑定到 prompt。
 
 `template.prompt` 使用双大括号模板语法，例如 `{{question}}`、`{{answer}}`。每个占位符都必须在 `variableBindings` 中显式绑定；未绑定变量、未知变量或绑定解析失败都会直接报错，不存在“可选变量”或空字符串兜底。
 
-`template.variableBindings` 支持从当前评分轮的 `actual` 和 `expected` 中取值：
+`template.variableBindings` 支持从当前评分轮的 `actual`、`expected` 以及当前指标配置 `metric` 中取值：
 
 - `actual.userContent`
 - `actual.finalResponse`
 - `actual.traceStepInput`
 - `actual.traceStepOutput`
 - `expected.finalResponse`
+- `metric.rubrics`
 
-其中 `actual.userContent`、`actual.finalResponse`、`expected.finalResponse` 分别渲染当前评分轮的用户输入、实际最终回答和预期最终回答；`actual.traceStepInput` 与 `actual.traceStepOutput` 需要在 `source.selector.nodeID` 中指定 trace step 的 `NodeID`，解析器会在当前 invocation 的 `executionTrace.steps` 中选择最后一个匹配 step，并分别读取 `Input.Text` 或 `Output.Text`。使用 trace source 时，发起评估需要传入 `agent.WithExecutionTraceEnabled(true)`；如果当前 actual invocation 没有 `ExecutionTrace`，评估会报错。`expected.finalResponse` 要求当前预期轮必须存在 `finalResponse`；如果模板绑定了该字段，但预期轮只有占位 `userContent`、没有 `finalResponse`，评估会直接报错。
+其中 `actual.userContent`、`actual.finalResponse`、`expected.finalResponse` 分别渲染当前评分轮的用户输入、实际最终回答和预期最终回答；`actual.traceStepInput` 与 `actual.traceStepOutput` 需要在 `source.selector.nodeID` 中指定 trace step 的 `NodeID`，解析器会在当前 invocation 的 `executionTrace.steps` 中选择最后一个匹配 step，并分别读取 `Input.Text` 或 `Output.Text`。使用 trace source 时，发起评估需要传入 `agent.WithExecutionTraceEnabled(true)`；如果当前 actual invocation 没有 `ExecutionTrace`，评估会报错。`expected.finalResponse` 要求当前预期轮必须存在 `finalResponse`；如果模板绑定了该字段，但预期轮只有占位 `userContent`、没有 `finalResponse`，评估会直接报错。`metric.rubrics` 会把当前指标生效的 `criterion.llmJudge.rubrics` 渲染为 JSON 字符串，包含 case 级 rubric 合并后的结果。
+
+`source.path` 是可选字段，用于在来源值解析完成后继续提取 JSON 子字段。它支持受限 JSONPath：根选择器 `$`、对象字段 `.field`、数组下标 `[index]`，例如 `$[0].content.text`；不支持带引号的方括号 key、通配符、过滤表达式、字段名中包含点号的 key，也不支持数组下标后省略分隔符。来源值不是合法 JSON、路径语法非法、字段或下标不存在、越界或类型不匹配时，评估会失败。提取到字符串时会原样渲染，提取到对象或数组时会重新编码为 JSON 字符串。
+
+例如，模板可以把当前指标的第一条 rubric 文本绑定为一个变量：
+
+```json
+{
+  "templateVariable": "first_rubric",
+  "source": {
+    "scope": "metric",
+    "field": "rubrics",
+    "path": "$[0].content.text"
+  }
+}
+```
+
+如果 agent 的最终回答本身是合法 JSON 字符串，也可以用 `path` 提取其中字段。例如 `actual.finalResponse.content` 为 `{"answer":"Paris","confidence":0.98}` 时：
+
+```json
+{
+  "templateVariable": "answer",
+  "source": {
+    "scope": "actual",
+    "field": "finalResponse",
+    "path": "$.answer"
+  }
+}
+```
+
+普通自然语言文本、Markdown code fence 包裹的 JSON 或带额外前后缀的内容不会被自动裁剪或修正。
 
 `template.responseScorerName` 用于指定如何解析裁判输出，当前支持：
 
 - `single_score`：要求裁判输出 `{"score": number, "reason": string}`。
 - `rubric_scores`：要求裁判输出 `{"rubricScores": [{"id": string, "score": number, "reason": string}]}`。
+- `boolean`：要求裁判输出 `{"passed": boolean, "reason": string}`。`passed=true` 映射为分数 `1`，`passed=false` 映射为分数 `0`。
+- `categorical`：要求裁判输出 `{"category": string, "reason": string}`。需要通过 `template.responseScorerOptions.categories` 配置允许的分类标签，并把每个标签映射为 `0` 到 `1` 之间的数值分数。
+
+`template.structuredOutputName` 为可选字段。不配置时，模板评估器会尝试使用与 `responseScorerName` 同名的结构化输出器；当裁判 JSON schema 与响应解析器需要独立命名时，可以显式配置该字段，例如平台用自定义 schema 约束模型输出，再用另一个 scorer 名称解析结果。
 
 `template.sampleAggregatorName` 与 `template.invocationAggregatorName` 为可选字段，默认分别使用 `majority_vote` 与 `average`。模板评估器复用 LLM Judge 的统一多次采样与多轮聚合编排。
 
@@ -2017,6 +2068,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalresult"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2050,6 +2102,7 @@ type PerInvocationResult struct {
 type PerInvocationDetails struct {
 	Reason       string                    // Reason 是本轮打分解释
 	Score        float64                   // Score 是本轮得分
+	Value        *score.Value              // Value 是本轮类型化分数
 	RubricScores []*evalresult.RubricScore // RubricScores 是评估细则分数列表
 }
 ```
@@ -2057,6 +2110,8 @@ type PerInvocationDetails struct {
 Evaluator 的输入是两组 Invocation 列表。actuals 表示推理阶段采集到的实际轨迹，expecteds 表示 EvalSet 中的预期轨迹。框架会以 EvalCase 为粒度调用 Evaluate，actuals 与 expecteds 分别表示 EvalCase 的实际轨迹与预期轨迹，并按轮次对齐。大多数评估器要求两者轮数一致，否则会直接返回错误。
 
 Evaluator 的输出包含整体结果与逐轮明细。整体分数通常由逐轮分数聚合得到，整体状态通常由整体分数与 `threshold` 对比得到。对确定性评估器，`reason` 通常用于记录不匹配原因。对 LLM Judge 类评估器，`reason` 与 `rubricScores` 会用于保留裁判依据。
+
+`Score` 仍然是框架的统一数值分数，取值通常归一到 0 到 1，并继续用于阈值判断、状态计算和结果聚合。`Details.Value` 是可选的类型化分数明细，用于保留评估器原始输出形态，便于平台展示或做后续处理。`Details.Value` 存在时，由其中的 `kind` 决定读取哪个字段；未写入 value 表示没有类型化明细。框架内置三类类型化分数：`numeric`、`boolean` 与 `categorical`。当前内置数值型评估器会写入 `numeric` value；自定义评估器也可以在不改变 `Score` 语义的前提下写入 `boolean` 或 `categorical` value。
 
 #### 工具轨迹评估器
 
@@ -2465,15 +2520,15 @@ LLM 成对比较评估指标配置示例如下：
 
 ##### LLM 模板评估器
 
-LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM Judge 类评估器。它适用于这样一类场景：评估执行链路本身没有变化，但希望通过自定义 prompt、变量绑定和响应解析策略来减少新评估器定义数量。与 `llm_rubric_*` 系列不同，模板评估器不消费结构化 `rubrics`，评估标准应直接写入 `criterion.llmJudge.template.prompt`。
+LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM Judge 类评估器。它适用于这样一类场景：评估执行链路本身没有变化，但希望通过自定义 prompt、变量绑定和响应解析策略来减少新评估器定义数量。与 `llm_rubric_*` 系列不同，模板评估器默认不会按结构化 `rubrics` 执行评估；评估标准通常直接写入 `criterion.llmJudge.template.prompt`，需要复用当前指标 rubric 时再通过 `metric.rubrics` 显式绑定。
 
-模板评估器通常配合 `evaluatorName: "llm_judge_template"` 使用，并让 `metricName` 仅承担指标实例名的职责。这样一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，它们都复用同一个评估器实现，但结果中的 `metricName` 彼此独立。
+模板评估器通常配合 `evaluatorName: "llm_judge_template"` 使用，并让 `metricName` 仅承担指标实例名的职责。这样一份指标文件里可以同时配置多条模板评估指标，例如一条走 `single_score`，另一条走 `rubric_scores`，另一条走平台注册的 scorer，它们都复用同一个评估器实现，但结果中的 `metricName` 彼此独立。
 
 模板评估器的运行方式如下：
 
 1. `messagesconstructor/template` 使用 `template.prompt` 与 `template.variableBindings` 渲染当前轮唯一的裁判输入。
-2. 裁判模型按 `responseScorerName` 对应的结构化输出 schema 返回 JSON。
-3. `responsescorer/singlescore` 或 `responsescorer/rubricscores` 解析裁判输出。
+2. 裁判模型按 `structuredOutputName` 对应的结构化输出 schema 返回 JSON；如果未配置 `structuredOutputName`，则使用与 `responseScorerName` 同名的结构化输出器。
+3. `responseScorerName` 选中的响应解析器解析裁判输出。
 4. 样本聚合默认使用 `majority_vote`，多轮聚合默认使用 `average`，也可以分别通过 `template.sampleAggregatorName` 和 `template.invocationAggregatorName` 显式指定。
 
 变量绑定支持以下来源：
@@ -2483,13 +2538,71 @@ LLM 模板评估器对应的评估器名称为 `llm_judge_template`，属于 LLM
 - `actual.traceStepInput`
 - `actual.traceStepOutput`
 - `expected.finalResponse`
+- `metric.rubrics`
 
-模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`actual.traceStepInput` 与 `actual.traceStepOutput` 需要配置 `source.selector.nodeID`，解析器会选择当前 invocation execution trace 中最后一个 `NodeID` 匹配的 step。使用 trace source 时，评估调用方需要开启 `agent.WithExecutionTraceEnabled(true)`；`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`，如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。
+模板中的每个占位符都必须在 `variableBindings` 中显式绑定。`actual.traceStepInput` 与 `actual.traceStepOutput` 需要配置 `source.selector.nodeID`，解析器会选择当前 invocation execution trace 中最后一个 `NodeID` 匹配的 step。使用 trace source 时，评估调用方需要开启 `agent.WithExecutionTraceEnabled(true)`；`expected.finalResponse` 绑定要求当前预期轮存在 `finalResponse`，如果模板使用了该字段但预期轮没有最终回答，评估会直接报错。`metric.rubrics` 会把当前指标生效的 `criterion.llmJudge.rubrics` 渲染为 JSON 字符串，包含 case 级 rubric 合并后的结果。
 
-模板评估器当前支持两种响应解析模式：
+`source.path` 可以从来源值中继续提取 JSON 子字段，支持 `$`、`.field`、`[index]` 这类受限 JSONPath；不支持带引号的方括号 key、通配符、过滤表达式、字段名中包含点号的 key，也不支持数组下标后省略分隔符。来源值不是合法 JSON 或路径解析失败时，评估会失败。例如：
+
+```json
+{
+  "templateVariable": "first_rubric",
+  "source": {
+    "scope": "metric",
+    "field": "rubrics",
+    "path": "$[0].content.text"
+  }
+}
+```
+
+如果 agent 的最终回答本身是合法 JSON 字符串，也可以用 `path` 提取其中字段。例如 `actual.finalResponse.content` 为 `{"answer":"Paris","confidence":0.98}` 时：
+
+```json
+{
+  "templateVariable": "answer",
+  "source": {
+    "scope": "actual",
+    "field": "finalResponse",
+    "path": "$.answer"
+  }
+}
+```
+
+模板评估器当前内置四种响应解析模式：
 
 - `single_score`：裁判返回 `score` 与 `reason`
 - `rubric_scores`：裁判返回 `rubricScores`
+- `boolean`：裁判返回 `passed` 与 `reason`
+- `categorical`：裁判返回 `category` 与 `reason`；需要通过 `responseScorerOptions.categories` 将标签映射为数值分数
+
+平台可以注册自定义模板 operator，并在创建 evaluator 时注入。自定义结构化输出器是可选的；当需要用平台自己的 JSON schema 约束裁判模型输出时再注册。
+
+```go
+opRegistry := operatorregistry.New()
+_ = opRegistry.RegisterResponseScorer("platform_score", platformScorer{})
+_ = opRegistry.RegisterStructuredOutput("platform_schema", platformStructuredOutput{})
+
+evalRegistry := evaluatorregistry.New(
+	evaluatorregistry.WithLLMOperatorRegistry(opRegistry),
+)
+
+agentEvaluator, err := evaluation.New(
+	"app",
+	runner,
+	evaluation.WithRegistry(evalRegistry),
+)
+```
+
+指标配置中引用注册名称即可：
+
+```json
+{
+  "template": {
+    "responseScorerName": "platform_score",
+    "structuredOutputName": "platform_schema"
+  }
+}
+```
 
 模板评估指标配置示例如下：
 
@@ -2913,6 +3026,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/epochtime"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/evalset"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric/criterion"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/score"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/status"
 )
 
@@ -2953,6 +3067,7 @@ type EvalMetricResult struct {
 type EvalMetricResultDetails struct {
 	Reason       string         // Reason 是该指标的打分解释
 	Score        float64        // Score 是该指标得分
+	Value        *score.Value   // Value 是类型化分数明细
 	RubricScores []*RubricScore // RubricScores 是评估细则分数列表
 }
 
@@ -2972,6 +3087,12 @@ type RubricScore struct {
 ```
 
 整体结果会将每个指标的输出写入 `overallEvalMetricResults`，逐轮明细会写入 `evalMetricResultPerInvocation` 并保留 `actualInvocation` 与 `expectedInvocation` 两侧轨迹，便于问题定位。`EvalCaseResult.score` 表示评估用例级别的聚合分数，`finalEvalStatus` 表示评估用例级别的最终状态；它们由 Service 的用例结果聚合器计算。
+
+指标明细中的 `details.value` 表示类型化分数明细。它不替代 `score`，也不参与框架默认的阈值判断；默认通过逻辑仍然由评估器产出的数值 `score` 与 `threshold` 决定。`details.value` 存在时，由 `kind` 决定读取哪个字段；没有 `details.value` 表示评估器没有提供类型化明细。数值 0 和布尔值 false 都是有效值。类型化分数主要用于逐轮指标明细；整体指标明细保留聚合后的数值结果，不默认聚合类型化分数。平台如果需要区分“数值分”“布尔结论”或“分类标签”，可以读取 `details.value.kind` 与对应字段：
+
+- `kind: "numeric"` 使用 `numeric` 字段，例如 `{"kind": "numeric", "numeric": 0.9}`。
+- `kind: "boolean"` 使用 `boolean` 字段，例如 `{"kind": "boolean", "boolean": true}`。
+- `kind: "categorical"` 使用 `categorical` 字段，例如 `{"kind": "categorical", "categorical": "good"}`。
 
 对于 `llm_judge_template`，结果中的 `criterion.llmJudge.template.prompt` 需要区分两层语义：
 
@@ -2994,7 +3115,35 @@ type RubricScore struct {
           "metricName": "tool_trajectory_avg_score",
           "score": 1,
           "evalStatus": "passed",
-          "threshold": 1
+          "threshold": 1,
+          "details": {
+            "score": 1
+          }
+        }
+      ],
+      "evalMetricResultPerInvocation": [
+        {
+          "actualInvocation": {
+            "invocationId": "turn-1"
+          },
+          "expectedInvocation": {
+            "invocationId": "turn-1"
+          },
+          "evalMetricResults": [
+            {
+              "metricName": "tool_trajectory_avg_score",
+              "score": 1,
+              "evalStatus": "passed",
+              "threshold": 1,
+              "details": {
+                "score": 1,
+                "value": {
+                  "kind": "numeric",
+                  "numeric": 1
+                }
+              }
+            }
+          ]
         }
       ]
     }

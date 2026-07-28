@@ -258,11 +258,50 @@ func TestAggregateUsesDefaultUUIDSessionID(t *testing.T) {
 	assert.NoError(t, parseErr)
 	assert.NotNil(t, r.lastRunOpts.StructuredOutput)
 	assert.Equal(t, model.StructuredOutputJSONSchema, r.lastRunOpts.StructuredOutput.Type)
+	requireStructuredOutputSchema(t, r.lastRunOpts.StructuredOutput.JSONSchema.Schema)
 	assert.Equal(
 		t,
 		reflect.TypeOf((*aggregatedGradientProposal)(nil)),
 		r.lastRunOpts.StructuredOutputType,
 	)
+}
+
+func requireStructuredOutputSchema(t *testing.T, schema map[string]any) {
+	t.Helper()
+	properties, ok := schema["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientsSchema, ok := properties["Gradients"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	itemSchema, ok := gradientsSchema["items"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	itemProperties, ok := itemSchema["properties"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	gradientSchema, ok := itemProperties["Gradient"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, "string", gradientSchema["type"])
+	severitySchema, ok := itemProperties["Severity"].(map[string]any)
+	assert.True(t, ok)
+	if !ok {
+		return
+	}
+	assert.Equal(t, []string{"P0", "P1", "P2", "P3"}, severitySchema["enum"])
+	assert.Equal(t, false, itemSchema["additionalProperties"])
+	assert.Equal(t, false, schema["additionalProperties"])
 }
 
 func TestAggregateFallsBackToFinalContent(t *testing.T) {
@@ -566,7 +605,7 @@ func TestAggregateRejectsMissingRuntimeDependencies(t *testing.T) {
 	assert.EqualError(t, err, "session id supplier is nil")
 }
 
-func TestAggregateRejectsMessageBuildAndEmptyDecodedGradient(t *testing.T) {
+func TestAggregateHandlesMessageBuildAndEmptyDecodedGradient(t *testing.T) {
 	t.Run("message builder error", func(t *testing.T) {
 		ag, err := New(
 			context.Background(),
@@ -587,7 +626,7 @@ func TestAggregateRejectsMessageBuildAndEmptyDecodedGradient(t *testing.T) {
 		assert.Nil(t, result)
 		assert.EqualError(t, runErr, "build aggregation message: boom")
 	})
-	t.Run("empty decoded gradient", func(t *testing.T) {
+	t.Run("empty decoded gradient falls back to request gradients", func(t *testing.T) {
 		ag, err := New(context.Background(), &fakeRunner{
 			events: []*event.Event{
 				event.NewResponseEvent(
@@ -607,10 +646,59 @@ func TestAggregateRejectsMessageBuildAndEmptyDecodedGradient(t *testing.T) {
 			SurfaceID: "surf_1",
 			NodeID:    "node_1",
 			Type:      astructure.SurfaceTypeInstruction,
-			Gradients: []promptiter.SurfaceGradient{{SurfaceID: "surf_1", Gradient: "citation issue"}},
+			Gradients: []promptiter.SurfaceGradient{{
+				EvalSetID:  "set_a",
+				EvalCaseID: "case_1",
+				StepID:     "s1",
+				SurfaceID:  "surf_1",
+				Severity:   promptiter.LossSeverityP1,
+				Gradient:   "citation issue",
+			}},
 		})
-		assert.Nil(t, result)
-		assert.EqualError(t, runErr, "sanitize aggregated gradient proposal: aggregated gradient is empty")
+		assert.NoError(t, runErr)
+		assert.NotNil(t, result)
+		if result == nil || result.Gradient == nil {
+			return
+		}
+		assert.Equal(t, []promptiter.SurfaceGradient{{
+			EvalSetID:  "set_a",
+			EvalCaseID: "case_1",
+			StepID:     "s1",
+			SurfaceID:  "surf_1",
+			Severity:   promptiter.LossSeverityP1,
+			Gradient:   "citation issue",
+		}}, result.Gradient.Gradients)
+	})
+	t.Run("empty structured gradients fall back to request gradients", func(t *testing.T) {
+		ag, err := New(context.Background(), &fakeRunner{
+			events: []*event.Event{
+				event.NewResponseEvent(
+					"invocation-id",
+					"aggregator",
+					&model.Response{Done: true},
+					event.WithStructuredOutputPayload(map[string]any{
+						"Gradients": []any{},
+					}),
+				),
+			},
+		})
+		assert.NoError(t, err)
+		result, runErr := ag.Aggregate(context.Background(), &Request{
+			SurfaceID: "surf_1",
+			NodeID:    "node_1",
+			Type:      astructure.SurfaceTypeInstruction,
+			Gradients: []promptiter.SurfaceGradient{{
+				SurfaceID: "surf_1",
+				Severity:  promptiter.LossSeverityP1,
+				Gradient:  "citation issue",
+			}},
+		})
+		assert.NoError(t, runErr)
+		assert.NotNil(t, result)
+		if result == nil || result.Gradient == nil {
+			return
+		}
+		assert.Equal(t, "citation issue", result.Gradient.Gradients[0].Gradient)
 	})
 }
 
@@ -795,8 +883,10 @@ func TestNormalizeRequestAndSanitizeAggregatedGradient(t *testing.T) {
 			{Gradient: ""},
 		},
 	})
-	assert.Nil(t, gradient)
-	assert.EqualError(t, err, "aggregated gradient is empty")
+	assert.NoError(t, err)
+	assert.NotNil(t, gradient)
+	assert.Equal(t, "grounding", gradient.Gradients[0].Gradient)
+	assert.Equal(t, "detail", gradient.Gradients[1].Gradient)
 	gradient, err = sanitizeAggregatedGradientProposal(validRequest, &aggregatedGradientProposal{
 		Gradients: []gradientProposal{
 			{Gradient: "detail", Severity: promptiter.LossSeverityP2},
