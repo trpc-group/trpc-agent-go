@@ -359,7 +359,8 @@ Supports setting Time To Live for session data with automatic cleanup of expired
 
 - **SessionTTL**: Expiration time for session state and events
 - **TrackEventTTL**: Expiration time for track events where supported. Defaults
-  to SessionTTL unless configured; setting it to `0` disables track event expiry
+  to SessionTTL unless configured; setting it to a non-positive value disables
+  track event expiry
 - **AppStateTTL**: Expiration time for app-level state
 - **UserStateTTL**: Expiration time for user-level state
 
@@ -729,14 +730,14 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// Read track events already loaded in the session snapshot
+// Read track events from this in-memory session snapshot
 trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
 
 `Session.GetTrackEvents` reads only the track events already loaded into a
-session snapshot. AG-UI history uses persisted track history internally when the
-configured session service supports it, and falls back to the session snapshot
-otherwise.
+session object. Reload the session before treating it as a history snapshot.
+AG-UI history uses persisted track history internally when the configured
+session service supports it, and falls back to the session snapshot otherwise.
 
 ## Semantic Recall (PGVector Only)
 

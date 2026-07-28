@@ -181,6 +181,28 @@ func (s *searchableWindowTrackService) GetEventWindow(
 	return s.Service.getEventWindow(ctx, s.WindowService, req)
 }
 
+type searchableWindowTrackReaderService struct {
+	*Service
+	session.SearchableService
+	session.WindowService
+	session.TrackService
+	trackEventReader
+}
+
+func (s *searchableWindowTrackReaderService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.Service.searchEvents(ctx, s.SearchableService, req)
+}
+
+func (s *searchableWindowTrackReaderService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.Service.getEventWindow(ctx, s.WindowService, req)
+}
+
 type searchableTrackReaderService struct {
 	*Service
 	session.SearchableService
@@ -250,6 +272,14 @@ func wrapTrackOptionalInterfaces(
 	hasReader bool,
 ) session.Service {
 	switch {
+	case hasSearch && hasWindow && hasReader:
+		return &searchableWindowTrackReaderService{
+			Service:           base,
+			SearchableService: searchable,
+			WindowService:     window,
+			TrackService:      track,
+			trackEventReader:  reader,
+		}
 	case hasSearch && hasWindow:
 		return &searchableWindowTrackService{
 			Service:           base,

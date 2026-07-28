@@ -408,16 +408,18 @@ func boolToInt(b bool) int {
 }
 
 // DeleteSession deletes a session and all associated data in HashIdx storage,
-// including track keys discovered from session state.
+// including track keys discovered from session state and the track index.
 // When EnableUserSessionIndex is true, also removes the session index entry.
 func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 	keys := c.keys.SessionKeys(key)
-
-	tracks, _ := c.ListTracksForSession(ctx, key)
+	tracks, err := c.listTracksForDelete(ctx, key)
+	if err != nil {
+		return fmt.Errorf("delete session: list tracks: %w", err)
+	}
 	for _, t := range tracks {
 		keys = append(keys, c.keys.TrackKeys(key, t)...)
 	}
-
+	keys = append(keys, c.keys.TrackIndexKey(key))
 	if c.cfg.EnableUserSessionIndex {
 		if err := c.removeSessionFromUserIndex(ctx, keys, key); err != nil {
 			return err
@@ -428,6 +430,39 @@ func (c *Client) DeleteSession(ctx context.Context, key session.Key) error {
 		}
 	}
 	return nil
+}
+
+func (c *Client) listTracksForDelete(ctx context.Context, key session.Key) ([]session.Track, error) {
+	tracks, _ := c.ListTracksForSession(ctx, key)
+	indexedTracks, err := c.client.SMembers(ctx, c.keys.TrackIndexKey(key)).Result()
+	if err != nil && err != redis.Nil {
+		return nil, err
+	}
+	return mergeTrackNames(tracks, indexedTracks), nil
+}
+
+func mergeTrackNames(tracks []session.Track, indexedTracks []string) []session.Track {
+	if len(indexedTracks) == 0 {
+		return tracks
+	}
+	result := make([]session.Track, 0, len(tracks)+len(indexedTracks))
+	seen := make(map[session.Track]struct{}, len(tracks)+len(indexedTracks))
+	for _, track := range tracks {
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	for _, indexedTrack := range indexedTracks {
+		track := session.Track(indexedTrack)
+		if _, ok := seen[track]; ok {
+			continue
+		}
+		seen[track] = struct{}{}
+		result = append(result, track)
+	}
+	return result
 }
 
 // TrimConversations trims the most recent N conversations from the session (HashIdx).

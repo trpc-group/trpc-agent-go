@@ -50,6 +50,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		c.keys.TrackDataKey(key, track),
 		c.keys.TrackTimeIndexKey(key, track),
 		c.keys.SessionMetaKey(key),
+		c.keys.TrackIndexKey(key),
 	}
 	args := []any{
 		string(eventJSON),
@@ -57,6 +58,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		ttlSeconds,
 		boolToInt(c.cfg.TrackEventTTL != nil),
 		tracksVal,
+		string(track),
 	}
 
 	result, err := c.runScript(ctx, luaAppendTrackEvent, keys, args...).Int64()

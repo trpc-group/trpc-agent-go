@@ -832,6 +832,17 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 				behavior: &optionalBehavior{window: windowResult},
 			},
 		},
+		{
+			name:       "search window track reader",
+			wantSearch: true,
+			wantWindow: true,
+			wantTrack:  true,
+			wantReader: true,
+			inner: &searchWindowTrackReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults, window: windowResult},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1535,6 +1546,44 @@ func (s *windowTrackReaderOnlyService) AppendTrackEvent(
 }
 
 func (s *windowTrackReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type searchWindowTrackReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchWindowTrackReaderOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchWindowTrackReaderOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *searchWindowTrackReaderOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+func (s *searchWindowTrackReaderOnlyService) GetTrackEvents(
 	ctx context.Context,
 	key session.Key,
 	track session.Track,

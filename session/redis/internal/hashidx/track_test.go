@@ -126,11 +126,14 @@ func TestClient_AppendTrackEvent_TrackTTLZeroPersistsTrackKeys(t *testing.T) {
 	}, tracksJSON)
 	require.NoError(t, err)
 	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
-	trackIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
 	assert.True(t, mr.Exists(trackDataKey))
-	assert.True(t, mr.Exists(trackIndexKey))
+	assert.True(t, mr.Exists(trackTimeIndexKey))
+	assert.True(t, mr.Exists(trackNamesKey))
 	assert.Equal(t, time.Duration(0), mr.TTL(trackDataKey))
-	assert.Equal(t, time.Duration(0), mr.TTL(trackIndexKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackNamesKey))
 }
 
 func TestClient_AppendTrackEvent_SubSecondTrackTTLExpiresTrackKeys(t *testing.T) {
@@ -154,9 +157,11 @@ func TestClient_AppendTrackEvent_SubSecondTrackTTLExpiresTrackKeys(t *testing.T)
 	}, tracksJSON)
 	require.NoError(t, err)
 	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
-	trackIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
 	assert.Equal(t, time.Second, mr.TTL(trackDataKey))
-	assert.Equal(t, time.Second, mr.TTL(trackIndexKey))
+	assert.Equal(t, time.Second, mr.TTL(trackTimeIndexKey))
+	assert.Equal(t, time.Second, mr.TTL(trackNamesKey))
 }
 
 func TestClient_GetTrackEvents(t *testing.T) {
