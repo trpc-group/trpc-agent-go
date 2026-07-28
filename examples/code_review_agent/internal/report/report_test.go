@@ -74,7 +74,7 @@ func TestToMarkdown(t *testing.T) {
 			{File: "helper.go", Line: 5, Severity: finding.SeverityLow, Category: finding.CategoryBestPractice,
 				Title: "Style issue", Confidence: finding.ConfidenceLow},
 		},
-		RiskSummary: RiskSummary{Total: 2, BySeverity: map[string]int{"critical": 1}},
+		RiskSummary:    RiskSummary{Total: 2, BySeverity: map[string]int{"critical": 1}},
 		SandboxSummary: SandboxSummary{TotalRuns: 3, Succeeded: 2, Failed: 1, TotalDurationMs: 500},
 		PermissionLog: []PermissionDecisionSummary{
 			{ToolName: "workspace_exec", Decision: "deny", Reason: "rm is denied"},

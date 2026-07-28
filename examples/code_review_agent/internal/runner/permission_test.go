@@ -83,7 +83,7 @@ func TestCRPermissionPolicy_AsToolPermissionPolicy_Deny(t *testing.T) {
 	toolPolicy := policy.AsToolPermissionPolicy()
 
 	decision, err := toolPolicy.CheckToolPermission(context.Background(), &tool.PermissionRequest{
-		ToolName: "workspace_exec",
+		ToolName:  "workspace_exec",
 		Arguments: []byte(`rm -rf /`),
 	})
 	assert.NoError(t, err)

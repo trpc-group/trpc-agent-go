@@ -268,8 +268,8 @@ func TestHiddenSamples(t *testing.T) {
 
 	type result struct {
 		name        string
-		hasHighRisk bool   // labeled
-		foundHigh   bool   // detected by agent
+		hasHighRisk bool // labeled
+		foundHigh   bool // detected by agent
 		findings    int
 		highCount   int
 	}
@@ -290,8 +290,8 @@ func TestHiddenSamples(t *testing.T) {
 		// Run all rules against the diff content.
 		var allFindings []finding.Finding
 		for _, rule := range reg.AllRules() {
-		 for _, fi := range diff.NonTestFiles(diff.GoFileFilter(fileInfos)) {
-		  findings, err := rule.Check(nil, fi, string(data))
+			for _, fi := range diff.NonTestFiles(diff.GoFileFilter(fileInfos)) {
+				findings, err := rule.Check(nil, fi, string(data))
 				if err != nil {
 					continue
 				}
@@ -316,11 +316,11 @@ func TestHiddenSamples(t *testing.T) {
 		foundHigh := highCount > 0
 
 		r := result{
-			name:      df,
+			name:        df,
 			hasHighRisk: hasHigh,
-			foundHigh: foundHigh,
-			findings:  len(allFindings),
-			highCount: highCount,
+			foundHigh:   foundHigh,
+			findings:    len(allFindings),
+			highCount:   highCount,
 		}
 		results = append(results, r)
 
