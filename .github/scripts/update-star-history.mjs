@@ -121,14 +121,17 @@ function readHistory(historyFile, repository) {
   );
 }
 
-function niceMaximum(value) {
+function niceTickStep(value) {
   if (value <= 0) {
     return 1;
   }
-  const magnitude = 10 ** Math.floor(Math.log10(value));
-  return [1, 2, 5, 10]
-    .map((step) => step * magnitude)
-    .find((candidate) => candidate >= value);
+  const rawStep = value / 9;
+  const magnitude = 10 ** Math.floor(Math.log10(rawStep));
+  const normalized = rawStep / magnitude;
+  const multiplier = [1, 2, 2.5, 5, 10].find(
+    (candidate) => candidate >= normalized,
+  );
+  return Math.max(1, multiplier * magnitude);
 }
 
 function escapeXML(value) {
@@ -147,11 +150,11 @@ function escapeXML(value) {
 
 function renderSVG(history) {
   const width = 960;
-  const height = 520;
-  const left = 80;
-  const right = 32;
-  const top = 94;
-  const bottom = 64;
+  const height = 650;
+  const left = 112;
+  const right = 48;
+  const top = 142;
+  const bottom = 88;
   const plotWidth = width - left - right;
   const plotHeight = height - top - bottom;
 
@@ -161,8 +164,13 @@ function renderSVG(history) {
   const minimumTime = Math.min(...timestamps);
   const maximumTime = Math.max(...timestamps);
   const timeSpan = Math.max(maximumTime - minimumTime, DAY);
-  const maximumStars = niceMaximum(
-    Math.max(...history.points.map(({ stars }) => stars)),
+  const latestStars = Math.max(
+    ...history.points.map(({ stars }) => stars),
+  );
+  const tickStep = niceTickStep(latestStars);
+  const maximumStars = Math.max(
+    tickStep,
+    Math.ceil(latestStars / tickStep) * tickStep,
   );
   const x = (timestamp) =>
     history.points.length === 1
@@ -181,62 +189,94 @@ function renderSVG(history) {
         `${index === 0 ? "M" : "L"} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`,
     )
     .join(" ");
-  const area = `${line} L ${coordinates.at(-1).x.toFixed(1)} ${height - bottom} L ${coordinates[0].x.toFixed(1)} ${height - bottom} Z`;
 
   const number = new Intl.NumberFormat("en-US");
-  const date = new Intl.DateTimeFormat("en-US", {
-    day: "numeric",
+  const month = new Intl.DateTimeFormat("en-US", {
     month: "short",
+    timeZone: "UTC",
+  });
+  const year = new Intl.DateTimeFormat("en-US", {
     year: "numeric",
     timeZone: "UTC",
   });
-  const horizontalGrid = Array.from({ length: 6 }, (_, index) => {
-    const stars = (maximumStars * index) / 5;
-    const position = y(stars);
-    return `<path class="grid" d="M ${left} ${position.toFixed(1)} H ${width - right}"/><text class="label" x="${left - 12}" y="${(position + 4).toFixed(1)}" text-anchor="end">${number.format(stars)}</text>`;
-  }).join("");
-  const verticalGrid = Array.from({ length: 5 }, (_, index) => {
+  const horizontalTicks = Array.from(
+    { length: Math.floor(maximumStars / tickStep) },
+    (_, index) => {
+      const stars = tickStep * (index + 1);
+      const position = y(stars);
+      return `<path class="tick" d="M ${left - 7} ${position.toFixed(1)} H ${left}"/><text class="label" x="${left - 18}" y="${(position + 6).toFixed(1)}" text-anchor="end">${number.format(stars)}</text>`;
+    },
+  ).join("");
+  const verticalTicks = Array.from({ length: 5 }, (_, index) => {
     const timestamp = minimumTime + (timeSpan * index) / 4;
     const position = left + (plotWidth * index) / 4;
-    const anchor = index === 0 ? "start" : index === 4 ? "end" : "middle";
-    return `<path class="grid" d="M ${position.toFixed(1)} ${top} V ${height - bottom}"/><text class="label" x="${position.toFixed(1)}" y="${height - bottom + 28}" text-anchor="${anchor}">${date.format(timestamp)}</text>`;
+    const date = new Date(timestamp);
+    let label = month.format(date);
+    if (index === 0) {
+      label = `${label} ${year.format(date)}`;
+    } else if (date.getUTCMonth() === 0) {
+      label = year.format(date);
+    }
+    return `<path class="tick" d="M ${position.toFixed(1)} ${height - bottom} V ${height - bottom + 7}"/><text class="label" x="${position.toFixed(1)}" y="${height - bottom + 32}" text-anchor="middle">${label}</text>`;
   }).join("");
 
   const latest = history.points.at(-1);
   const escapedRepository = escapeXML(history.repository);
+  const legendWidth = Math.min(420, 72 + history.repository.length * 11);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title description">
   <title id="title">${escapedRepository} Star History</title>
   <desc id="description">GitHub stars by date, data through ${history.updated}</desc>
+  <defs>
+    <filter id="rough" x="-4%" y="-4%" width="108%" height="108%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.012 0.045" numOctaves="1" seed="17" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.8" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </defs>
   <style>
     .background { fill: #ffffff; }
-    .grid { fill: none; stroke: #d0d7de; stroke-width: 1; }
-    .label, .subtitle { fill: #57606a; font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .heading, .value { fill: #1f2328; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-    .heading { font-size: 20px; font-weight: 600; }
-    .value { font-size: 24px; font-weight: 600; }
-    .area { fill: #006eff; opacity: .12; }
-    .line { fill: none; stroke: #006eff; stroke-linecap: round; stroke-linejoin: round; stroke-width: 3; }
-    .point { fill: #006eff; stroke: #ffffff; stroke-width: 2; }
+    .axis, .tick, .legend-box { fill: none; stroke: #151515; }
+    .axis { stroke-linecap: round; stroke-linejoin: round; stroke-width: 3.5; }
+    .tick { stroke-width: 2; }
+    .legend-box { fill: #ffffff; stroke-width: 2.5; }
+    .series { fill: none; stroke: #e64b2f; stroke-linecap: round; stroke-linejoin: round; stroke-width: 4; }
+    .swatch { fill: #e64b2f; }
+    .title, .label, .axis-title, .legend {
+      fill: #151515;
+      font-family: "Comic Sans MS", "Bradley Hand", "Segoe Print", "Chalkboard SE", cursive;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .label { font-size: 17px; }
+    .axis-title { font-size: 21px; font-weight: 600; }
+    .legend { font-size: 19px; }
+    .meta {
+      fill: #6e7781;
+      font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
     @media (prefers-color-scheme: dark) {
       .background { fill: #0d1117; }
-      .grid { stroke: #30363d; }
-      .label, .subtitle { fill: #8b949e; }
-      .heading, .value { fill: #f0f6fc; }
-      .area { fill: #58a6ff; }
-      .line { stroke: #58a6ff; }
-      .point { fill: #58a6ff; stroke: #0d1117; }
+      .axis, .tick, .legend-box { stroke: #f0f6fc; }
+      .legend-box { fill: #161b22; }
+      .title, .label, .axis-title, .legend { fill: #f0f6fc; }
+      .series { stroke: #ff6b4a; }
+      .swatch { fill: #ff6b4a; }
+      .meta { fill: #8b949e; }
     }
   </style>
-  <rect class="background" width="${width}" height="${height}" rx="8"/>
-  <text class="heading" x="${left}" y="38">${escapedRepository} Star History</text>
-  <text class="subtitle" x="${left}" y="62">GitHub stars by date · data through ${history.updated}</text>
-  <text class="value" x="${width - right}" y="40" text-anchor="end">★ ${number.format(latest.stars)}</text>
-  ${horizontalGrid}
-  ${verticalGrid}
-  <path class="area" d="${area}"/>
-  <path class="line" d="${line}"/>
-  <circle class="point" cx="${coordinates.at(-1).x.toFixed(1)}" cy="${coordinates.at(-1).y.toFixed(1)}" r="5"/>
+  <rect class="background" width="${width}" height="${height}"/>
+  <text class="title" x="${width / 2}" y="54" text-anchor="middle">Star History</text>
+  <g filter="url(#rough)">
+    <path class="axis" d="M ${left} ${top} V ${height - bottom} H ${width - right}"/>
+    ${horizontalTicks}
+    ${verticalTicks}
+    <rect class="legend-box" x="${left + 16}" y="${top + 18}" width="${legendWidth}" height="52" rx="6"/>
+    <rect class="swatch" x="${left + 32}" y="${top + 36}" width="14" height="14" rx="2"/>
+    <path class="series" d="${line}"/>
+  </g>
+  <text class="legend" x="${left + 58}" y="${top + 54}">${escapedRepository}</text>
+  <text class="axis-title" x="${left + plotWidth / 2}" y="${height - 22}" text-anchor="middle">Date</text>
+  <text class="axis-title" x="${-(top + plotHeight / 2)}" y="38" text-anchor="middle" transform="rotate(-90)">GitHub Stars</text>
+  <text class="meta" x="${width - right}" y="${height - 22}" text-anchor="end">updated ${history.updated} · ${number.format(latest.stars)} stars</text>
 </svg>
 `;
 }
@@ -292,6 +332,7 @@ function snapshot(repository, historyFile, svgFile) {
 }
 
 function selfTest() {
+  assert.equal(niceTickStep(1601), 200);
   assert.deepEqual(
     mergePoint([{ date: "2026-07-27", stars: 2 }], {
       date: "2026-07-27",
@@ -340,6 +381,9 @@ function selfTest() {
   });
   assert.match(svg, /owner\/repo Star History/);
   assert.match(svg, /data through 2026-07-28/);
+  assert.match(svg, /filter id="rough"/);
+  assert.match(svg, /class="series"/);
+  assert.doesNotMatch(svg, /class="area"/);
   console.log("star history self-test passed");
 }
 
