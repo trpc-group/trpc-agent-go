@@ -360,6 +360,7 @@ sessionService := inmemory.NewSessionService(
 **支持的 TTL 类型：**
 
 - **SessionTTL**：会话状态和事件的过期时间
+- **TrackEventTTL**：支持的存储后端中 Track event 的过期时间。默认继承 SessionTTL，显式设置为 `0` 表示 Track event 不过期
 - **AppStateTTL**：应用级状态的过期时间
 - **UserStateTTL**：用户级状态的过期时间
 
@@ -698,7 +699,9 @@ Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目�
 
 **接口说明**：
 
-Track 事件的 API 定义在 `session.TrackService` 接口上，它独立于 `session.Service`：
+Track 事件写入定义在可选的 `session.TrackService` 接口上。支持持久化
+Track 历史读取的存储后端，会在各自的具体 service 类型上暴露
+`GetTrackEvents` 方法。
 
 ```go
 type TrackService interface {
@@ -706,18 +709,18 @@ type TrackService interface {
 }
 ```
 
-并非所有存储后端都实现了 `TrackService`。使用时需要通过类型断言获取：
+并非所有存储后端都实现了 Track event API。使用时需要通过类型断言获取：
 
-| 存储后端 | 是否实现 TrackService |
-| --- | --- |
-| 内存存储（inmemory） | ✅ |
-| SQLite | ✅ |
-| Redis 存储 | ✅ |
-| PostgreSQL 存储 | ✅ |
-| PGVector | ✅ |
-| MySQL 存储 | ✅ |
-| MongoDB 存储 | ✅ |
-| ClickHouse 存储 | ❌ |
+| 存储后端 | 是否实现 TrackService | 是否有 GetTrackEvents |
+| --- | --- | --- |
+| 内存存储（inmemory） | ✅ | ✅ |
+| SQLite | ✅ | ✅ |
+| Redis 存储 | ✅ | ✅ |
+| PostgreSQL 存储 | ✅ | ✅ |
+| PGVector | ✅ | ✅ |
+| MySQL 存储 | ✅ | ✅ |
+| MongoDB 存储 | ✅ | ✅ |
+| ClickHouse 存储 | ❌ | ❌ |
 
 **基本用法**：
 
@@ -736,9 +739,25 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// 从会话中获取 Track 事件
-trackEvents, err := sess.GetTrackEvents("ui-events")
+// 支持时，直接读取持久化 Track 事件
+type trackEventReader interface {
+    GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
+}
+reader, ok := sessionService.(trackEventReader)
+if !ok {
+    log.Fatal("当前存储后端未暴露 GetTrackEvents")
+}
+trackEvents, err := reader.GetTrackEvents(ctx, session.Key{
+    AppName:   sess.AppName,
+    UserID:    sess.UserID,
+    SessionID: sess.ID,
+}, "ui-events")
 ```
+
+`Session.GetTrackEvents` 只读取已经加载到 session 快照中的 Track 事件。
+AG-UI 历史记录这类持久化历史视图应优先使用
+backend 的 `GetTrackEvents` 方法，因为它直接读取 Track 存储，不依赖
+session state 中的 track 索引。
 
 ## 语义召回（仅 PGVector）
 

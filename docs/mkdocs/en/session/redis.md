@@ -6,7 +6,7 @@ Redis storage is suitable for production environments and distributed applicatio
 
 - Redis-based persistence for sessions, events, and state
 - Supports Redis Standalone / Sentinel / Cluster deployment modes
-- Independent TTL control for Session, AppState, and UserState
+- Independent TTL control for Session, TrackEvent, AppState, and UserState
 - Optional async persistence to reduce write latency
 - Optional OpenTelemetry tracing
 - Async session summary generation
@@ -28,6 +28,7 @@ Redis storage is suitable for production environments and distributed applicatio
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | Maximum events per session |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for session state and events; negative values are treated as 0 |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | Inherits SessionTTL | TTL for track events. Passing `0` disables track event expiry |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for app-level state |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0` (no expiry) | TTL for user-level state |
 | `WithKeyPrefix(prefix string)` | `string` | `""` | Redis key prefix; all keys will start with `prefix:`. Useful when multiple apps share one Redis instance |

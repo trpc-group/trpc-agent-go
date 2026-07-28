@@ -29,6 +29,7 @@ import (
 // Config holds configuration for ZSet session storage client.
 type Config struct {
 	SessionTTL        time.Duration
+	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
@@ -37,6 +38,13 @@ type Config struct {
 	// Script.Run. Enable for proxy/cluster backends whose script cache is not
 	// reliably maintained (e.g. a Tendis cluster fronted by twemproxy).
 	DisableScriptCache bool
+}
+
+func (cfg Config) effectiveTrackEventTTL() time.Duration {
+	if cfg.TrackEventTTL != nil {
+		return *cfg.TrackEventTTL
+	}
+	return cfg.SessionTTL
 }
 
 // Client implements ZSet session storage logic.
@@ -401,8 +409,11 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 				Score:  float64(trackEvent.Timestamp.UnixNano()),
 				Member: eventBytes,
 			})
-			if c.cfg.SessionTTL > 0 {
-				pipe.Expire(ctx, trackKey, c.cfg.SessionTTL)
+			trackTTL := c.cfg.effectiveTrackEventTTL()
+			if trackTTL > 0 {
+				pipe.Expire(ctx, trackKey, trackTTL)
+			} else if c.cfg.TrackEventTTL != nil {
+				pipe.Persist(ctx, trackKey)
 			}
 		},
 	)
@@ -613,12 +624,41 @@ func (c *Client) getTrackEvents(
 	if err != nil {
 		return nil, err
 	}
+	return c.getTrackEventsByTrackLists(ctx, sessionKeys, trackLists, limit, afterTime)
+}
 
+// GetTrackEvents retrieves persisted track events for the given session tracks.
+func (c *Client) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	tracks []session.Track,
+	limit int,
+	afterTime time.Time,
+) (map[session.Track][]session.TrackEvent, error) {
+	if len(tracks) == 0 {
+		return make(map[session.Track][]session.TrackEvent), nil
+	}
+	results, err := c.getTrackEventsByTrackLists(ctx, []session.Key{key}, [][]session.Track{tracks}, limit, afterTime)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return make(map[session.Track][]session.TrackEvent), nil
+	}
+	return results[0], nil
+}
+
+func (c *Client) getTrackEventsByTrackLists(
+	ctx context.Context,
+	sessionKeys []session.Key,
+	trackLists [][]session.Track,
+	limit int,
+	afterTime time.Time,
+) ([]map[session.Track][]session.TrackEvent, error) {
 	queries := make([]*trackQuery, 0)
 	dataPipe := c.client.Pipeline()
 	minScore := fmt.Sprintf("%d", afterTime.UnixNano())
 	maxScore := fmt.Sprintf("%d", time.Now().UnixNano())
-
 	for i, key := range sessionKeys {
 		tracks := trackLists[i]
 		for _, track := range tracks {

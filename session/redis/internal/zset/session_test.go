@@ -731,6 +731,44 @@ func TestAppendTrackEvent(t *testing.T) {
 	})
 }
 
+func TestAppendTrackEvent_TrackTTLZeroPersistsTrackKey(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = 10 * time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "track-ttl-zero"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	err = appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "tool_calls",
+		Payload:   json.RawMessage(`{"fn":"add"}`),
+		Timestamp: time.Now(),
+	})
+	require.NoError(t, err)
+	trackKey := createClient.trackKey(key, "tool_calls")
+	assert.True(t, mr.Exists(trackKey))
+	assert.Equal(t, time.Duration(0), mr.TTL(trackKey))
+}
+
+func TestGetTrackEvents_EmptyAndMissingTracks(t *testing.T) {
+	_, rdb := setupMiniredis(t)
+	c := NewClient(rdb, defaultConfig())
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "s1"}
+	empty, err := c.GetTrackEvents(ctx, key, nil, 0, time.Time{})
+	require.NoError(t, err)
+	require.Empty(t, empty)
+	missing, err := c.GetTrackEvents(ctx, key, []session.Track{"missing"}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Contains(t, missing, session.Track("missing"))
+	require.Empty(t, missing["missing"])
+}
+
 func TestUpdateSessionStateCAS_RetriesOnConflict(t *testing.T) {
 	_, rdb := setupMiniredis(t)
 	c := NewClient(rdb, defaultConfig())

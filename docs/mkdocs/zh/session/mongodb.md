@@ -35,9 +35,10 @@ MongoDB 会话存储要求部署支持多文档事务，例如副本集或分片
 | --- | --- | --- | --- |
 | `WithSessionEventLimit(limit int)` | `int` | `1000` | context-window 模式下每个会话最大事件数量 |
 | `WithSessionTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 会话 TTL |
+| `WithTrackEventTTL(ttl time.Duration)` | `time.Duration` | 继承 SessionTTL | Track event TTL。传入 `0` 表示 Track event 不过期 |
 | `WithAppStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 应用状态 TTL |
 | `WithUserStateTTL(ttl time.Duration)` | `time.Duration` | `0`（不过期） | 用户状态 TTL |
-| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0`（自动确定） | 事件和 Track 清理间隔，默认 5 分钟（如果配置了会话 TTL） |
+| `WithCleanupInterval(interval time.Duration)` | `time.Duration` | `0`（自动确定） | 事件和 Track 清理间隔，默认 5 分钟（如果配置了会话或 Track event TTL） |
 | `WithSoftDelete(enable bool)` | `bool` | `true` | 启用或禁用软删除 |
 
 ### 异步持久化配置
@@ -116,7 +117,7 @@ sessionService, err := mongodb.NewService(
 
 会话状态、应用状态和用户状态使用 MongoDB `expires_at` TTL 索引。摘要不设置独立 TTL，跟随会话生命周期。
 
-Session events 和 track events 不使用 TTL 索引。它们由服务按会话维度整组清理，避免仍然活跃的会话历史被局部删除，并通过 `updated_at` cleanup 索引支撑分组清理扫描。
+Session events 和 track events 不使用 TTL 索引。默认情况下，它们由服务按会话维度整组清理，避免仍然活跃的会话历史被局部删除。配置 `WithTrackEventTTL` 后，track events 使用该 TTL 独立清理，并通过 `updated_at` cleanup 索引支撑清理扫描。
 
 ## 存储结构
 

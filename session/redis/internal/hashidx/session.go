@@ -24,6 +24,7 @@ import (
 // Config holds configuration for HashIdx session storage client.
 type Config struct {
 	SessionTTL        time.Duration
+	TrackEventTTL     *time.Duration
 	AppStateTTL       time.Duration
 	UserStateTTL      time.Duration
 	SessionEventLimit int
@@ -39,6 +40,13 @@ type Config struct {
 	// cache is not reliably maintained (e.g. a Tendis cluster fronted by twemproxy),
 	// avoiding repeated NOSCRIPT round-trips and the resulting monitoring noise.
 	DisableScriptCache bool
+}
+
+func (cfg Config) effectiveTrackEventTTL() time.Duration {
+	if cfg.TrackEventTTL != nil {
+		return *cfg.TrackEventTTL
+	}
+	return cfg.SessionTTL
 }
 
 // Client implements HashIdx session storage logic.

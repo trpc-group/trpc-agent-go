@@ -87,6 +87,86 @@ func TestService_AppendTrackEvent_Persistence(t *testing.T) {
 	assert.Len(t, alpha.Events, 3)
 }
 
+func TestService_GetTrackEvents_ReadsTrackStorage(t *testing.T) {
+	tests := []struct {
+		name string
+		mode CompatMode
+	}{
+		{name: "hashidx", mode: CompatModeNone},
+		{name: "zset", mode: CompatModeTransition},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redisURL, cleanup := setupTestRedis(t)
+			defer cleanup()
+			service, err := NewService(WithRedisClientURL(redisURL), WithCompatMode(tt.mode))
+			require.NoError(t, err)
+			defer service.Close()
+			ctx := context.Background()
+			key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session123"}
+			sess, err := service.CreateSession(ctx, key, session.StateMap{})
+			require.NoError(t, err)
+			baseTime := time.Now().Add(-time.Hour)
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"old"`),
+				Timestamp: baseTime,
+			}))
+			require.NoError(t, service.AppendTrackEvent(ctx, sess, &session.TrackEvent{
+				Track:     "alpha",
+				Payload:   json.RawMessage(`"new"`),
+				Timestamp: baseTime.Add(time.Second),
+			}))
+			require.NoError(t, service.UpdateSessionState(ctx, key, session.StateMap{"tracks": []byte("[]")}))
+			got, err := service.GetTrackEvents(ctx, key, "alpha", session.WithEventNum(1))
+			require.NoError(t, err)
+			require.Equal(t, session.Track("alpha"), got.Track)
+			require.Len(t, got.Events, 1)
+			require.JSONEq(t, `"new"`, string(got.Events[0].Payload))
+			missing, err := service.GetTrackEvents(ctx, key, "missing")
+			require.NoError(t, err)
+			require.Equal(t, session.Track("missing"), missing.Track)
+			require.Empty(t, missing.Events)
+		})
+	}
+}
+
+func TestService_GetTrackEvents_EmptyAndErrors(t *testing.T) {
+	t.Run("invalid key", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		service, err := NewService(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer service.Close()
+		_, err = service.GetTrackEvents(context.Background(), session.Key{UserID: "user123", SessionID: "session123"}, "alpha")
+		require.Error(t, err)
+		assert.ErrorIs(t, err, session.ErrAppNameRequired)
+	})
+	t.Run("missing session", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		defer cleanup()
+		service, err := NewService(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer service.Close()
+		key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "missing"}
+		got, err := service.GetTrackEvents(context.Background(), key, "alpha")
+		require.NoError(t, err)
+		require.Equal(t, session.Track("alpha"), got.Track)
+		require.Empty(t, got.Events)
+	})
+	t.Run("exists check error", func(t *testing.T) {
+		redisURL, cleanup := setupTestRedis(t)
+		service, err := NewService(WithRedisClientURL(redisURL))
+		require.NoError(t, err)
+		defer service.Close()
+		cleanup()
+		key := session.Key{AppName: "testapp", UserID: "user123", SessionID: "session123"}
+		_, err = service.GetTrackEvents(context.Background(), key, "alpha")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "check session exists")
+	})
+}
+
 func TestService_GetSessionTrackAfterTime(t *testing.T) {
 	redisURL, cleanup := setupTestRedis(t)
 	defer cleanup()

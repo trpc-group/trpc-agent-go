@@ -358,6 +358,8 @@ Supports setting Time To Live for session data with automatic cleanup of expired
 **Supported TTL types:**
 
 - **SessionTTL**: Expiration time for session state and events
+- **TrackEventTTL**: Expiration time for track events where supported. Defaults
+  to SessionTTL unless configured; setting it to `0` disables track event expiry
 - **AppStateTTL**: Expiration time for app-level state
 - **UserStateTTL**: Expiration time for user-level state
 
@@ -687,7 +689,9 @@ Track events are a trajectory storage mechanism in Session that is independent o
 
 **Interface**:
 
-The Track event API is defined on the `session.TrackService` interface, which is separate from `session.Service`:
+Track event writes are exposed through the optional `session.TrackService`
+interface. Storage backends that support persisted track history also expose a
+`GetTrackEvents` method on their concrete service types.
 
 ```go
 type TrackService interface {
@@ -695,18 +699,18 @@ type TrackService interface {
 }
 ```
 
-Not all storage backends implement `TrackService`. A type assertion is required:
+Not all storage backends implement track event APIs. A type assertion is required:
 
-| Storage Backend | Implements TrackService |
-| --- | --- |
-| Memory (inmemory) | ✅ |
-| SQLite | ✅ |
-| Redis | ✅ |
-| PostgreSQL | ✅ |
-| PGVector | ✅ |
-| MySQL | ✅ |
-| MongoDB | ✅ |
-| ClickHouse | ❌ |
+| Storage Backend | Implements TrackService | Has GetTrackEvents |
+| --- | --- | --- |
+| Memory (inmemory) | ✅ | ✅ |
+| SQLite | ✅ | ✅ |
+| Redis | ✅ | ✅ |
+| PostgreSQL | ✅ | ✅ |
+| PGVector | ✅ | ✅ |
+| MySQL | ✅ | ✅ |
+| MongoDB | ✅ | ✅ |
+| ClickHouse | ❌ | ❌ |
 
 **Basic usage**:
 
@@ -725,9 +729,25 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// Retrieve track events from session
-trackEvents, err := sess.GetTrackEvents("ui-events")
+// Retrieve persisted track events directly when supported
+type trackEventReader interface {
+    GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
+}
+reader, ok := sessionService.(trackEventReader)
+if !ok {
+    log.Fatal("current storage backend does not expose GetTrackEvents")
+}
+trackEvents, err := reader.GetTrackEvents(ctx, session.Key{
+    AppName:   sess.AppName,
+    UserID:    sess.UserID,
+    SessionID: sess.ID,
+}, "ui-events")
 ```
+
+`Session.GetTrackEvents` reads only the track events already loaded into a
+session snapshot. Use the backend `GetTrackEvents` method for persisted history
+views such as AG-UI history, because it reads the track storage directly and
+does not depend on the session state's track index.
 
 ## Semantic Recall (PGVector Only)
 

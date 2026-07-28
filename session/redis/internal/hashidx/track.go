@@ -33,8 +33,9 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 	}
 
 	ttlSeconds := int64(0)
-	if c.cfg.SessionTTL > 0 {
-		ttlSeconds = int64(c.cfg.SessionTTL.Seconds())
+	trackTTL := c.cfg.effectiveTrackEventTTL()
+	if trackTTL > 0 {
+		ttlSeconds = int64(trackTTL.Seconds())
 	}
 
 	// Encode tracksState as base64 to match Go's json.Marshal behavior for []byte.
@@ -54,6 +55,7 @@ func (c *Client) AppendTrackEvent(ctx context.Context, key session.Key, trackEve
 		string(eventJSON),
 		trackEvent.Timestamp.UnixNano(),
 		ttlSeconds,
+		boolToInt(c.cfg.TrackEventTTL != nil),
 		tracksVal,
 	}
 

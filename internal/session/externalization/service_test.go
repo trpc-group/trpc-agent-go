@@ -636,6 +636,9 @@ func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 	if _, ok := wrapped.(session.TrackService); !ok {
 		t.Fatal("wrapped inmemory service does not implement TrackService")
 	}
+	if _, ok := wrapped.(trackEventReader); !ok {
+		t.Fatal("wrapped inmemory service does not implement track event reader")
+	}
 	if _, ok := wrapped.(session.WindowService); !ok {
 		t.Fatal("wrapped inmemory service does not implement WindowService")
 	}
@@ -678,6 +681,9 @@ func TestWrapPreservesOptionalInterfaces(t *testing.T) {
 	}
 	if _, ok := searchWrapped.(session.TrackService); ok {
 		t.Fatal("wrapped search-only service unexpectedly implements TrackService")
+	}
+	if _, ok := searchWrapped.(trackEventReader); ok {
+		t.Fatal("wrapped search-only service unexpectedly implements track event reader")
 	}
 	results, err := searchable.SearchEvents(ctx, session.EventSearchRequest{
 		UserKey: session.UserKey{AppName: key.AppName, UserID: key.UserID},
@@ -726,6 +732,7 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 		wantSearch bool
 		wantWindow bool
 		wantTrack  bool
+		wantReader bool
 	}{
 		{
 			name:       "search window",
@@ -764,6 +771,67 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 				behavior: &optionalBehavior{results: searchResults, window: windowResult},
 			},
 		},
+		{
+			name: "reader",
+			inner: &readerOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{},
+			},
+		},
+		{
+			name:       "search reader",
+			wantSearch: true,
+			inner: &searchReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults},
+			},
+		},
+		{
+			name:       "window reader",
+			wantWindow: true,
+			inner: &windowReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{window: windowResult},
+			},
+		},
+		{
+			name:       "track reader",
+			wantTrack:  true,
+			wantReader: true,
+			inner: &trackReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{},
+			},
+		},
+		{
+			name:       "search window reader",
+			wantSearch: true,
+			wantWindow: true,
+			inner: &searchWindowReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults, window: windowResult},
+			},
+		},
+		{
+			name:       "search track reader",
+			wantSearch: true,
+			wantTrack:  true,
+			wantReader: true,
+			inner: &searchTrackReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{results: searchResults},
+			},
+		},
+		{
+			name:       "window track reader",
+			wantWindow: true,
+			wantTrack:  true,
+			wantReader: true,
+			inner: &windowTrackReaderOnlyService{
+				Service:  sessionmem.NewSessionService(),
+				behavior: &optionalBehavior{window: windowResult},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -798,6 +866,17 @@ func TestWrapOptionalInterfaceCombinationMethods(t *testing.T) {
 			} else if ok {
 				if err := track.AppendTrackEvent(ctx, &session.Session{}, &session.TrackEvent{Track: "trace"}); err != nil {
 					t.Fatalf("AppendTrackEvent() error = %v", err)
+				}
+			}
+			if reader, ok := wrapped.(trackEventReader); ok != tt.wantReader {
+				t.Fatalf("trackEventReader ok = %v, want %v", ok, tt.wantReader)
+			} else if ok {
+				result, err := reader.GetTrackEvents(ctx, key, "trace")
+				if err != nil {
+					t.Fatalf("GetTrackEvents() error = %v", err)
+				}
+				if result == nil || result.Track != "trace" {
+					t.Fatalf("GetTrackEvents() = %#v, want trace track", result)
 				}
 			}
 		})
@@ -1292,6 +1371,176 @@ func (s *searchWindowTrackService) AppendTrackEvent(
 ) error {
 	s.behavior.trackCalled = true
 	return nil
+}
+
+type readerOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *readerOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type searchReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchReaderOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type windowReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *windowReaderOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *windowReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type trackReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *trackReaderOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+func (s *trackReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type searchWindowReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchWindowReaderOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchWindowReaderOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *searchWindowReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type searchTrackReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *searchTrackReaderOnlyService) SearchEvents(
+	ctx context.Context,
+	req session.EventSearchRequest,
+) ([]session.EventSearchResult, error) {
+	return s.behavior.results, nil
+}
+
+func (s *searchTrackReaderOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+func (s *searchTrackReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
+}
+
+type windowTrackReaderOnlyService struct {
+	session.Service
+	behavior *optionalBehavior
+}
+
+func (s *windowTrackReaderOnlyService) GetEventWindow(
+	ctx context.Context,
+	req session.EventWindowRequest,
+) (*session.EventWindow, error) {
+	return s.behavior.window, nil
+}
+
+func (s *windowTrackReaderOnlyService) AppendTrackEvent(
+	ctx context.Context,
+	sess *session.Session,
+	event *session.TrackEvent,
+	opts ...session.Option,
+) error {
+	s.behavior.trackCalled = true
+	return nil
+}
+
+func (s *windowTrackReaderOnlyService) GetTrackEvents(
+	ctx context.Context,
+	key session.Key,
+	track session.Track,
+	opts ...session.Option,
+) (*session.TrackEvents, error) {
+	return &session.TrackEvents{Track: track}, nil
 }
 
 type loadArtifactService struct {
