@@ -64,7 +64,7 @@ func newReport(req ExecutionRequest, command string, findings []Finding, durMS f
 	ruleIDs = moveRuleFirst(ruleIDs, primary)
 	report := Report{
 		SchemaVersion:  "1",
-		RequestID:      req.ID,
+		RequestID:      nonEmpty(req.ID, req.ToolCallID),
 		ToolName:       nonEmpty(req.ToolName, "unknown"),
 		Backend:        normalizeBackend(req.Backend),
 		Command:        command,

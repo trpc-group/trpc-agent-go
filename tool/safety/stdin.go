@@ -21,6 +21,15 @@ func (s *Scanner) scanStdin(req ExecutionRequest) []Finding {
 	}
 	var findings []Finding
 	for i, argv := range pipe.Commands {
+		if !curlDisablesDefaultConfig(argv) {
+			findings = append(findings, finding(
+				RuleShellParseUnsafe, CategoryShellBypass, RiskHigh, DecisionDeny,
+				"curl may load an implicit user configuration file",
+				fmt.Sprintf("command.segment[%d]", i),
+				"Pass -q or --disable as curl's first argument.",
+			))
+			continue
+		}
 		if config := curlFileConfig(argv); config != "" {
 			findings = append(findings, finding(
 				RuleShellParseUnsafe, CategoryShellBypass, RiskHigh, DecisionDeny,
@@ -47,6 +56,17 @@ func (s *Scanner) scanStdin(req ExecutionRequest) []Finding {
 		findings = append(findings, s.scanArgvInCwd(configArgv, loc, req.Cwd)...)
 	}
 	return findings
+}
+
+func curlDisablesDefaultConfig(argv []string) bool {
+	if len(argv) == 0 || normalizeCommandName(argv[0]) != "curl" {
+		return true
+	}
+	if len(argv) < 2 {
+		return false
+	}
+	first := strings.ToLower(strings.TrimSpace(argv[1]))
+	return first == "-q" || first == "--disable"
 }
 
 func curlFileConfig(argv []string) string {

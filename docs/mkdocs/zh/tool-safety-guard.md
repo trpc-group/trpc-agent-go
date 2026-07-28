@@ -12,9 +12,11 @@ Tool Safety Guard 在工具真正执行前扫描执行请求，适用于能够�
 
 `workspace_exec` 在 codeexecutor workspace 中执行，边界包括工作区路径、输出限制、命令策略和环境隔离。`hostexec` 直接通过宿主机 shell 执行，风险更高；包括普通前台命令在内的所有请求都会应用 `backend_rules.hostexec.default_action`，PTY 会话、后台进程、提权命令和进程清理还会触发更具体的规则。`codeexecutor` 和 sandbox backend 提供运行时隔离，但仍然需要执行前扫描和审计；代码块语言会在执行前匹配 `backend_rules.codeexec.allowed_languages`。
 
-策略文件采用严格解析：未知 JSON/YAML 字段和尾随的第二个文档都会报错，避免拼写错误导致安全配置被静默忽略。启用 `audit.enabled` 后，`NewScanner` 会打开 `audit.path` 并为每次扫描写入一条 JSONL 事件；`audit.fail_closed` 为 true 时，审计文件创建或写入失败会阻止执行。Scanner 不再使用时应调用 `Scanner.Close`。`redaction.enabled` 默认开启，并保留显式配置的 false。
+策略文件采用严格解析：未知 JSON/YAML 字段和尾随的第二个文档都会报错。目前只接受策略版本 `1`，`rules` 下的每个 key 都必须匹配 safety package 导出的 Rule ID，避免拼写错误导致安全配置被静默忽略。没有注册语义扫描器的 backend 会采用 `default_action`，而不是默认放行。启用 `audit.enabled` 后，`NewScanner` 会打开 `audit.path` 并为每次扫描写入一条 JSONL 事件；`audit.fail_closed` 为 true 时，审计文件创建或写入失败会阻止执行。Scanner 不再使用时应调用 `Scanner.Close`。`redaction.enabled` 默认开启，并保留显式配置的 false。
 
-workspace、host 和 code execution 适配器会对返回给调用方的输出执行脱敏，并应用 `resource_limits.max_output_bytes`。上限按单次工具响应计算，长会话的每次 poll 分别受限。
+直接扫描的 `curl` 命令必须把 `-q` 或 `--disable` 放在第一个参数位置，防止 curl 隐式加载用户配置并注入未经检查的代理、目标地址或输出路径。满足该前置条件后，显式代理参数和通过 stdin 提供的 curl 配置仍会继续扫描。
+
+workspace、host 和 code execution 适配器会对返回给调用方的输出执行脱敏，并应用 `resource_limits.max_output_bytes`。上限按单次工具响应计算，长会话的每次 poll 分别受限。向 host 或 workspace 运行中会话发送的非空 stdin 会在写入进程前再次扫描。
 
 ## 不能替代沙箱
 

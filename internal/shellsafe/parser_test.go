@@ -580,6 +580,21 @@ func TestIsImplicitlyDeniedCommand(t *testing.T) {
 	}
 }
 
+func TestWindowsExecutableSuffixesAreDenied(t *testing.T) {
+	p := PolicyFromLists(nil, []string{"rm"})
+	for _, command := range []string{"rm.com", "rm.ps1"} {
+		if err := p.checkSegmentForGOOS([]string{command}, "windows"); err == nil {
+			t.Fatalf("explicit deny accepted %q", command)
+		}
+	}
+	p = PolicyFromLists([]string{"echo"}, nil)
+	for _, command := range []string{"sh.com", "sh.ps1"} {
+		if err := p.checkSegmentForGOOS([]string{command}, "windows"); err == nil {
+			t.Fatalf("implicit deny accepted %q", command)
+		}
+	}
+}
+
 // TestPolicy_AllowRejectsPathfulBasenameBypass guards the
 // asymmetric matching contract documented on Policy: an allow
 // entry "echo" must let through bare "echo" but reject "./echo",
@@ -1000,6 +1015,12 @@ func TestPreviewList(t *testing.T) {
 	if got != "a, b, ... (3 more)" {
 		t.Fatalf("truncation: got %q", got)
 	}
+}
+
+func withParser(p commandParser) (restore func()) {
+	prev := parseCommand
+	parseCommand = p
+	return func() { parseCommand = prev }
 }
 
 // TestParser_SeamAllowsReplacement is a contract test for the

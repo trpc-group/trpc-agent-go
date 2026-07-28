@@ -76,7 +76,6 @@ type Pipeline struct {
 type commandParser func(src string) ([][]string, error)
 
 // parseCommand is wired at package init by the implementation file.
-// Tests may temporarily replace it through withParser.
 var parseCommand commandParser = parseCommandSimple
 
 // Parse validates command against the structural rules described in
@@ -96,16 +95,6 @@ func Parse(command string) (*Pipeline, error) {
 		return nil, errors.New("command is empty")
 	}
 	return &Pipeline{Commands: cmds}, nil
-}
-
-// withParser swaps the active parser for the duration of the
-// returned cleanup function and returns the previous parser. It is
-// intended for tests that exercise the Pipeline / Policy layer
-// without exercising the underlying parser implementation.
-func withParser(p commandParser) (restore func()) {
-	prev := parseCommand
-	parseCommand = p
-	return func() { parseCommand = prev }
 }
 
 // implicitDeny is the set of executable names that are always
@@ -189,6 +178,13 @@ func IsImplicitlyDeniedCommand(command string) bool {
 	base := basenameForGOOS(strings.TrimSpace(command), runtime.GOOS)
 	_, ok := implicitDeny[normalizeName(base, runtime.GOOS)]
 	return ok
+}
+
+// NormalizeExecutableName returns the executable basename using the same
+// platform-specific normalization as command policy matching.
+func NormalizeExecutableName(command, goos string) string {
+	base := basenameForGOOS(strings.TrimSpace(command), goos)
+	return normalizeName(base, goos)
 }
 
 // Policy holds the executable-name allow/deny lists that should be
@@ -411,10 +407,6 @@ func matchAllow(set []string, name, base, goos string) bool {
 		}
 	}
 	return false
-}
-
-func basename(s string) string {
-	return basenameForGOOS(s, runtime.GOOS)
 }
 
 // basenameForGOOS returns just the path basename of s without any

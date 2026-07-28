@@ -34,6 +34,37 @@ const (
 	RuleHumanReview          = "TSG-HUMAN-REVIEW"
 )
 
+var knownRuleIDs = map[string]struct{}{
+	RuleAllowSafeCommand:     {},
+	RuleDangerousDelete:      {},
+	RuleDangerousOverwrite:   {},
+	RuleForbiddenPath:        {},
+	RuleNetworkDeniedDomain:  {},
+	RuleNetworkAllowedDomain: {},
+	RuleShellParseUnsafe:     {},
+	RuleShellWrapper:         {},
+	RuleShellBypassConstruct: {},
+	RuleHostPTY:              {},
+	RuleHostBackground:       {},
+	RuleHostDefault:          {},
+	RuleHostPrivilege:        {},
+	RuleCodeExecLanguage:     {},
+	RuleDependencyInstall:    {},
+	RuleResourceTimeout:      {},
+	RuleResourceOutput:       {},
+	RuleResourceLongRunning:  {},
+	RuleResourceParallelism:  {},
+	RuleSecretLeak:           {},
+	RuleEnvNotAllowed:        {},
+	RulePolicyInvalid:        {},
+	RuleHumanReview:          {},
+}
+
+func isKnownRuleID(id string) bool {
+	_, ok := knownRuleIDs[id]
+	return ok
+}
+
 func stricterDecision(a, b Decision) Decision {
 	if decisionRank(b) > decisionRank(a) {
 		return b

@@ -10,7 +10,7 @@ package safety
 import (
 	"context"
 	"fmt"
-	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +98,45 @@ func (s *Scanner) Scan(ctx context.Context, req ExecutionRequest) (Report, error
 	findings := s.scanRequest(req)
 	dur := float64(s.now().Sub(start).Microseconds()) / 1000.0
 	report := newReport(req, commandSummary, findings, dur, s.redactor)
+	if s.audit != nil {
+		if err := s.audit.WriteAuditEvent(
+			ctx,
+			auditEventFromReport(s.now(), report),
+		); err != nil && s.auditFailClosed {
+			return report, fmt.Errorf("write safety audit: %w", err)
+		}
+	}
+	return report, nil
+}
+
+// ScanSessionInput scans follow-up stdin before it is forwarded to an already
+// running process. It uses the original command context without reapplying
+// command, resource, or backend findings that were handled at process start.
+func (s *Scanner) ScanSessionInput(
+	ctx context.Context,
+	req ExecutionRequest,
+) (Report, error) {
+	if s == nil {
+		return Report{}, fmt.Errorf("nil safety scanner")
+	}
+	select {
+	case <-ctx.Done():
+		return Report{}, ctx.Err()
+	default:
+	}
+	start := s.now()
+	req.Backend = normalizeBackend(req.Backend)
+	if req.ToolName == "" {
+		req.ToolName = "unknown"
+	}
+	findings := s.scanSecretTextAt(req.Stdin, "stdin")
+	if strings.TrimSpace(req.Command) != "" {
+		findings = append(findings, s.scanStdin(req)...)
+	}
+	findings = s.applyOverrides(findings)
+	findings = dedupeFindings(findings)
+	dur := float64(s.now().Sub(start).Microseconds()) / 1000.0
+	report := newReport(req, req.Command, findings, dur, s.redactor)
 	if s.audit != nil {
 		if err := s.audit.WriteAuditEvent(
 			ctx,
@@ -391,11 +430,11 @@ func finding(ruleID string, cat Category, risk RiskLevel, action Decision, evide
 }
 
 func normalizeCommandName(s string) string {
-	base := filepath.Base(strings.TrimSpace(s))
-	base = strings.TrimSuffix(base, ".exe")
-	base = strings.TrimSuffix(base, ".cmd")
-	base = strings.TrimSuffix(base, ".bat")
-	return strings.ToLower(base)
+	return normalizeCommandNameForGOOS(s, runtime.GOOS)
+}
+
+func normalizeCommandNameForGOOS(s, goos string) string {
+	return shellsafe.NormalizeExecutableName(s, goos)
 }
 
 func inList(cmd string, list []string) bool {

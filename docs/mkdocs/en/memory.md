@@ -473,9 +473,40 @@ memoryService := memoryinmemory.NewMemoryService(
   episodic metadata. Topics are intentionally excluded, so changing tags does
   not create a new memory. Adding the same content and identity metadata for the
   same user is idempotent and overwrites the existing entry (not append).
-  UpdatedAt is refreshed.
+  UpdatedAt is refreshed. If that canonical ID belongs to a soft-deleted row,
+  `AddMemory` reactivates it.
 - If you need append semantics or different duplicate-handling strategies, you can
   implement custom tools or extend the service with policy options (e.g. allow/overwrite/ignore).
+
+### Update Semantics and ID Rotation
+
+`UpdateMemory` first applies the requested content, topics, and episodic
+metadata, then recalculates the canonical memory ID. Topics are not part of the
+ID, so a topics-only update stays on the same ID.
+
+The operation follows this state machine:
+
+| State after applying the update | Result |
+| ------------------------------- | ------ |
+| Source is missing or soft-deleted | Return a not-found error without changing `UpdateResult` |
+| Canonical ID is unchanged | Update the active source in place |
+| New ID does not exist | Create the target and retire the source |
+| New ID is soft-deleted | Reactivate the target; hard-delete mode replaces the stale tombstone |
+| New ID is already active | Return a conflict error without modifying either record |
+
+For backends with soft deletion enabled, a successful ID rotation preserves
+the old source as a tombstone. With hard deletion, the old source is removed.
+SQL backends perform target preparation and source retirement atomically.
+
+Timestamp behavior is also stable across SQL backends:
+
+- A newly inserted target inherits the source `CreatedAt`.
+- A reactivated target preserves its own `CreatedAt`.
+- A hard-delete replacement of a stale target inherits the source `CreatedAt`.
+- Every successful update refreshes `UpdatedAt`.
+
+On success, `UpdateResult.MemoryID` receives the effective canonical ID. On
+error, the caller-provided result remains unchanged.
 
 ### Custom Tool Implementation
 
@@ -922,6 +953,13 @@ redisService, err := memoryredis.NewService(
 
 **Note**: `WithRedisClientURL` takes priority over `WithRedisInstance`
 
+**Redis ACL requirement**: `UpdateMemory` uses a server-side Lua script to
+atomically validate and rotate memory IDs. ACL users must be allowed to run
+`EVALSHA` and `EVAL` (`EVAL` is required when the script is not yet cached), in
+addition to the script's `HEXISTS`, `HSET`, and `HDEL` commands and access to
+the configured memory-key pattern. Do not remove `EVAL` after warm-up because
+the Redis script cache can be cleared by a restart or `SCRIPT FLUSH`.
+
 **Key prefix example**:
 
 ```go
@@ -1205,7 +1243,7 @@ ACID Requirements → MySQL/PostgreSQL (transaction guarantees)
 Complex JSON → PostgreSQL (JSONB indexing and queries)
 MySQL Vector Search → mysqlvec (similarity search on MySQL 9.0+)
 Vector Search → pgvector (similarity search with embeddings)
-Audit Trail → MySQL/PostgreSQL/pgvector (soft delete support)
+Audit Trail → MySQL/PostgreSQL/pgvector/SQLite/SQLiteVec (soft delete support)
 ```
 
 **Register PostgreSQL Instance (Optional):**
@@ -1349,7 +1387,7 @@ Search: "写代码" ❌ No match (different words)
 
 **Support status**:
 
-- ✅ MySQL, PostgreSQL, pgvector: support soft delete
+- ✅ MySQL, PostgreSQL, pgvector, SQLite, SQLiteVec: support soft delete
 - ❌ InMemory, Redis: not supported (hard delete only)
 
 **Soft delete configuration**:
@@ -1367,7 +1405,7 @@ mysqlService, err := memorymysql.NewService(
 | --------- | ----------------- | ---------------------------------------- |
 | Delete    | Immediate removal | Set `deleted_at` field                   |
 | Query     | Not visible       | Auto-filtered (WHERE deleted_at IS NULL) |
-| Recovery  | Cannot recover    | Can manually clear `deleted_at`          |
+| Recovery  | Cannot recover    | Re-add or rotate an update to the same ID |
 | Storage   | Saves space       | Occupies space                           |
 
 **Migration trap**:
@@ -1719,6 +1757,10 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithHost(url)` | Override the mem0 API host/base URL. | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | Use the self-hosted Mem0 OSS REST API (`/memories`, `/search`, `X-API-Key`). When enabled without `WithHost`, the host defaults to `http://localhost:8888`; the hosted-platform default host is rejected in OSS mode. | disabled |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | Include legacy OSS records that do not carry `metadata.trpc_app_name`; records tagged for a different app remain hidden. | disabled |
+| `WithSelfHostedIngestPrompt(prompt)` | Set the extraction prompt for every self-hosted ingestion request from this service. | server default |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | Resolve the `expiration_date` independently for each self-hosted ingestion request. | omitted |
+| `WithIngestInference(bool)` | Control whether Mem0 extracts memories from transcripts. This applies to hosted and self-hosted ingestion. | `true` |
+| `WithSelfHostedProceduralMemory()` | Create self-hosted procedural memories. An `agent_id` is required. | disabled |
 | `WithOrgProject(orgID, projectID)` | Add hosted-platform `org_id` / `project_id`; unsupported with self-hosted OSS. | empty |
 | `WithAsyncMode(bool)` | Controls hosted-platform `async_mode`; self-hosted OSS writes are synchronous at the REST layer. | `true` |
 | `WithVersion(v)` | Sets the hosted-platform ingestion API version field. | `v2` |
@@ -1727,6 +1769,118 @@ In short, `MemoryService` means "the framework manages memories directly", while
 | `WithAsyncMemoryNum(n)` | Number of background ingest workers. | `1` |
 | `WithMemoryQueueSize(n)` | Queue size per ingest worker. | `10` |
 | `WithMemoryJobTimeout(d)` | Timeout for queued jobs and synchronous fallback ingest. | `30s` |
+
+### Self-Hosted OSS Request Fields
+
+The standard Runner path supplies the session ID as `run_id` and the active
+agent name as `agent_id`. Mem0-specific behavior is configured once when the
+service is created, so `IngestSession` remains the only ingestion API:
+
+| Mem0 OSS create field | Source |
+| --------------------- | ------ |
+| `messages` | The non-empty session delta selected by the ingestor. |
+| `user_id` | `session.Session.UserID`. |
+| `agent_id` | `session.WithIngestAgentID`; Runner supplies the active agent name. |
+| `run_id` | `session.WithIngestRunID`; Runner supplies the session ID. |
+| `metadata` | `session.WithIngestMetadata`, plus the internal tRPC app scope. |
+| `prompt` | `WithSelfHostedIngestPrompt`. |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`. |
+| `infer` | `WithIngestInference`; defaults to `true`. |
+| `memory_type` | `WithSelfHostedProceduralMemory`; omitted for ordinary memories. |
+
+```go
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
+    }
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt(
+            "Extract reusable deployment procedures.",
+        ),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
+}
+
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
+```
+
+`newRawMemoryService` stores adapter-normalized non-system message text
+without LLM extraction. It deliberately uses a separate service without a
+custom prompt or procedural memory. Mem0 still invokes its embedder to persist
+and search these raw memories.
+
+- `session.WithIngestMetadata`, `session.WithIngestAgentID`, and
+  `session.WithIngestRunID` continue to set common fields for an individual
+  `IngestSession` call. Runner supplies the agent and run IDs automatically.
+- `WithSelfHostedIngestPrompt` forwards the service's extraction prompt on
+  every self-hosted create request with inference enabled.
+- `WithSelfHostedIngestExpirationDateResolver` runs once for each valid,
+  non-empty ingestion before the watermark advances. The callback receives the
+  request context and session, and returns a `time.Time`; its calendar date in
+  that value's location is sent as `YYYY-MM-DD`. A zero value omits the field.
+  An error aborts ingestion without sending a request or advancing the
+  watermark. The callback may run concurrently and must treat the session as
+  read-only. Expiration hides a memory from normal reads after the date; it does
+  not delete the stored record.
+- `WithIngestInference` controls Mem0's `infer` field. Its default remains
+  `true`; `false` sends normalized non-system messages for direct import
+  without LLM extraction and cannot be combined with a custom extraction
+  prompt or procedural memory. Self-hosted OSS stores both user and assistant
+  direct-import messages; the hosted platform currently retains only user-role
+  direct-import messages. Static incompatible combinations are rejected by
+  `NewService`.
+- `WithSelfHostedProceduralMemory` selects Mem0's
+  `procedural_memory` mode. Mem0's public create API otherwise infers ordinary
+  memories; procedural memory requires an `agent_id` and always uses inference.
+- Prompt, expiration-date resolver, and memory type are OSS-only and are
+  rejected in hosted-platform mode rather than silently ignored. `infer` is
+  supported in both modes.
+- The pinned OSS REST create schema does not expose `timestamp`; the underlying
+  `Memory.add` implementation marks a non-empty timestamp as platform-only and
+  rejects it. This adapter therefore does not expose that field.
+- These self-hosted request fields are validated against Mem0 OSS 2.0.11 at
+  `mem0ai/mem0@3b9aed8`. Older OSS releases are not supported for these fields
+  and may silently ignore request properties that their REST schema does not
+  recognize.
+
+Self-hosted reads and searches use the same `ReadMemories` and
+`SearchMemories` methods as the hosted adapter. `MaxResults` caps the final
+locally filtered result set. The adapter may request a larger `top_k` candidate
+set so framework-side kind and time filters can still fill that result budget.
+In self-hosted mode, a non-zero `SimilarityThreshold` is also forwarded as
+`threshold`. Results are mapped to
+`memory.Entry`, including ID, text, score, timestamps, and the structured
+tRPC memory fields stored in metadata. Provider-only diagnostics that have no
+representation in `memory.Entry` are intentionally not exposed as a second
+public result model.
 
 For the official self-hosted OSS server, configure the server-side LLM and
 embedder independently when they use different endpoints or API keys. The OSS
@@ -1741,7 +1895,7 @@ access the OSS server's internal vector store directly.
 - All reads remain scoped to the current `<appName, userID>`.
 - Self-hosted OSS app isolation uses `metadata.trpc_app_name` because the OSS API has no top-level `app_id`. Existing OSS records without this metadata are hidden by default until reingested or backfilled. Use `WithSelfHostedOSSIncludeUnscopedMemories()` only for migrations that need those legacy records visible.
 - The current OSS `GET /memories` API is capped at 1000 user-level results, is not pageable, and cannot express `metadata.trpc_app_name` as a server-side filter. `ReadMemories` therefore requires a positive limit no larger than 1000 and applies app isolation as a best-effort local filter over the first 1000 OSS records returned for the user.
-- Runner automatically passes session context into ingest. Custom callers can also use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` when needed.
+- Runner automatically passes session context into `IngestSession`. Custom callers can use `session.WithIngestMetadata`, `session.WithIngestAgentID`, and `session.WithIngestRunID` for per-call common fields; Mem0-specific fields are service options.
 - `WithPreloadMemory(N)` works with mem0 when the same service is configured via `runner.WithSessionIngestor(mem0Svc)`. Use a positive budget in production.
 - When mem0 metadata is available, search results can still carry structured fields such as `Topics`, `Kind`, `EventTime`, `Participants`, and `Location`.
 - Call `Close()` on the service so background workers shut down cleanly.

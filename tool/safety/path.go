@@ -94,11 +94,20 @@ func configuredBarePath(value string, patterns []string) string {
 	}
 	for _, pattern := range patterns {
 		pattern = strings.TrimSpace(filepath.ToSlash(pattern))
-		if pattern == "" || strings.Contains(pattern, "/") {
+		if pattern == "" {
 			continue
 		}
-		if ok, _ := doublestar.PathMatch(pattern, value); ok {
-			return filepath.ToSlash(filepath.Clean(value))
+		for candidate := pattern; ; candidate = strings.TrimPrefix(candidate, "**/") {
+			if strings.Contains(candidate, "/") {
+				if !strings.HasPrefix(candidate, "**/") {
+					break
+				}
+				continue
+			}
+			if ok, _ := doublestar.PathMatch(candidate, value); ok {
+				return filepath.ToSlash(filepath.Clean(value))
+			}
+			break
 		}
 	}
 	return ""

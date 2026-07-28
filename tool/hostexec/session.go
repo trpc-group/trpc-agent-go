@@ -33,6 +33,7 @@ const (
 type session struct {
 	id      string
 	command string
+	cwd     string
 
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser

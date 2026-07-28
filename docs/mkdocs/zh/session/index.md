@@ -17,10 +17,10 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 - **事件限制**：控制每个会话存储的最大事件数量，防止内存溢出
 - **事件分页**：PostgreSQL/MySQL 支持 `GetSession` 历史事件分页读取
 - **TTL 管理**：支持会话数据的自动过期清理
-- **多存储后端**：支持内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 存储
+- **灵活的持久化方式**：支持 Noop 无持久化，以及内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB 存储
 - **并发安全**：内置读写锁保证并发访问安全
 - **自动管理**：集成 Runner 后自动处理会话创建、加载和更新
-- **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse 支持软删除，数据可恢复
+- **软删除支持**：SQLite/PostgreSQL/PGVector/MySQL/ClickHouse/MongoDB 支持软删除，数据可恢复
 - **内容外存**：可选地将 session event 中的 inline image/audio/file payload 外存到 Artifact 存储
 
 ## 快速开始
@@ -29,9 +29,11 @@ Session 用于管理当前会话的上下文，隔离维度为 `<appName, userID
 
 tRPC-Agent-Go 的会话管理通过 `runner.WithSessionService` 集成到 Runner 中，Runner 会自动处理会话的创建、加载、更新和持久化。
 
-**支持的存储后端：** 内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse
+**支持的持久化方式：** [Noop](noop.md)（无持久化）、内存（Memory）、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB
 
 **默认行为：** 如果不配置 `runner.WithSessionService`，Runner 会默认使用内存存储（Memory），数据在进程重启后会丢失。
+
+如果上游业务自行维护完整对话历史、不希望 Runner 跨请求保存 Session，请显式使用 [Noop](noop.md)。
 
 ### 基础示例
 
@@ -61,7 +63,7 @@ func main() {
         summary.WithChecksAny( // 任一条件满足即触发摘要
             summary.CheckEventThreshold(20),           // 超过 20 个事件后触发
             summary.CheckTokenThreshold(4000),         // 超过 4000 个 token 后触发
-            summary.CheckTimeThreshold(5*time.Minute), // 在摘要检查时判断；若最近一个待摘要事件已超过 5 分钟则触发
+            summary.CheckTimeThreshold(5*time.Minute), // Runner 路径：下一请求到来前的空闲时间超过 5 分钟时触发
         ),
         summary.WithMaxSummaryWords(200), // 限制摘要在 200 字以内
     )
@@ -386,13 +388,15 @@ TTL 仅在**写操作**时刷新（如 CreateSession、AppendEvent、UpdateSessi
 | PGVector | 定期扫描（软删除或硬删除） | 是 |
 | MySQL | 定期扫描（软删除或硬删除） | 是 |
 | ClickHouse | 应用层清理 + Native TTL | 是 |
+| MongoDB | TTL 索引 + 定期清理事件与 Track 事件 | 是 |
 
 ## 存储后端对比
 
-tRPC-Agent-Go 提供七种会话存储后端，满足不同场景需求：
+tRPC-Agent-Go 提供无持久化模式和八种会话存储后端，满足不同场景需求：
 
 | 存储类型 | 适用场景 | 持久化 | 分布式 | 复杂查询 |
 | --- | --- | --- | --- | --- |
+| [Noop](noop.md) | 业务自管历史、无跨请求持久化 | ❌ | ❌ | ❌ |
 | [内存存储](inmemory.md) | 开发测试、小规模 | ❌ | ❌ | ❌ |
 | [SQLite](sqlite.md) | 本地持久化、单机 | ✅ | ❌ | ✅ |
 | [Redis 存储](redis.md) | 生产环境、分布式 | ✅ | ✅ | ❌ |
@@ -400,6 +404,7 @@ tRPC-Agent-Go 提供七种会话存储后端，满足不同场景需求：
 | [PGVector](pgvector.md) | 生产环境、语义召回 | ✅ | ✅ | ✅ |
 | [MySQL](mysql.md) | 生产环境、复杂查询 | ✅ | ✅ | ✅ |
 | [ClickHouse](clickhouse.md) | 生产环境、海量日志 | ✅ | ✅ | ✅ |
+| [MongoDB](mongodb.md) | 生产环境、文档存储 | ✅ | ✅ | ✅ |
 
 ## Hook 能力
 
@@ -459,7 +464,7 @@ sessionService := inmemory.NewSessionService(
 
 **责任链执行**：Hook 通过 `next()` 形成链式调用，可提前返回以短路后续逻辑，错误会向上传递。
 
-**跨后端一致**：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
+**跨后端一致**：内存、SQLite、Redis、PostgreSQL、PGVector、MySQL、ClickHouse、MongoDB 所有存储后端均已统一接入 Hook 机制，构造服务时注入 Hook 切片即可，使用方式完全一致。
 
 ## 高级用法
 
@@ -711,6 +716,7 @@ type TrackService interface {
 | PostgreSQL 存储 | ✅ |
 | PGVector | ✅ |
 | MySQL 存储 | ✅ |
+| MongoDB 存储 | ✅ |
 | ClickHouse 存储 | ❌ |
 
 **基本用法**：
@@ -764,6 +770,7 @@ system prompt 中。
 ## 相关文档
 
 - [会话摘要](summary.md) - 自动压缩长对话历史
+- [Noop 无持久化](noop.md) - 业务自管历史、无跨请求持久化
 - [内存存储](inmemory.md) - 开发测试环境
 - [SQLite 存储](sqlite.md) - 本地持久化、单机
 - [Redis 存储](redis.md) - 生产环境分布式存储
@@ -771,9 +778,11 @@ system prompt 中。
 - [PGVector 会话存储](pgvector.md) - 基于 PostgreSQL 的语义会话检索
 - [MySQL 存储](mysql.md) - 关系型数据库存储
 - [ClickHouse 存储](clickhouse.md) - 海量数据存储
+- [MongoDB 存储](mongodb.md) - 分布式文档数据库存储
 
 ## 参考资源
 
 - [会话示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runner)
+- [Noop + RunWithMessages 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/runwithmessages)
 - [摘要示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/summary)
 - [Hook 示例](https://github.com/trpc-group/trpc-agent-go/tree/main/examples/session/hook)

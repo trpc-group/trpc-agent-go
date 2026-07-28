@@ -472,6 +472,8 @@ agent:
   context_compaction_oversized_tool_result_max_tokens: 2048
   max_history_runs: 123
   max_llm_calls: 22
+  deadline_finalization_window: "45s"
+  deadline_finalization_max_input_tokens: 3000
   max_tool_iterations: 123
   preload_memory: 2
   tool_call_arguments_json_repair: false
@@ -499,6 +501,8 @@ agent:
 		"-max-history-runs", "9",
 		"-max-llm-calls", "4",
 		"-finalize-before-max-llm-calls",
+		"-deadline-finalization-window", "2m",
+		"-deadline-finalization-max-input-tokens", "1200",
 		"-max-tool-iterations", "6",
 		"-preload-memory", "-1",
 		"-tool-call-arguments-json-repair=true",
@@ -524,6 +528,8 @@ agent:
 	require.Equal(t, 9, opts.MaxHistoryRuns)
 	require.Equal(t, 4, opts.MaxLLMCalls)
 	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
+	require.Equal(t, 2*time.Minute, opts.DeadlineFinalizationWindow)
+	require.Equal(t, 1200, opts.DeadlineFinalizationMaxInputTokens)
 	require.Equal(t, 6, opts.MaxToolIterations)
 	require.Equal(t, -1, opts.PreloadMemory)
 	require.True(t, opts.ToolCallArgumentsJSONRepair)
@@ -564,6 +570,90 @@ func TestParseRunOptions_MaxLLMCallsNegativeFails(t *testing.T) {
 	_, err := parseRunOptions([]string{"-max-llm-calls", "-1"})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "invalid max LLM calls")
+}
+
+func TestParseRunOptions_DeadlineFinalizationWindowNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-deadline-finalization-window",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"invalid deadline finalization window",
+	)
+}
+
+func TestParseRunOptions_DeadlineFinalizationWindowYAMLNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_window: "-1s"
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"agent.deadline_finalization_window must be >= 0",
+	)
+}
+
+func TestParseRunOptions_DeadlineFinalizationWindowYAMLInvalidFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_window: "definitely-not-a-duration"
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "agent.deadline_finalization_window")
+}
+
+func TestParseRunOptions_DeadlineFinalizationMaxInputTokensNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-deadline-finalization-max-input-tokens",
+		"-1",
+	})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"invalid deadline finalization max input tokens",
+	)
+}
+
+func TestParseRunOptions_DeadlineFinalizationMaxInputTokensYAMLNegativeFails(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+agent:
+  deadline_finalization_max_input_tokens: -1
+`)
+	_, err := parseRunOptions([]string{"-config", cfgPath})
+	require.Error(t, err)
+	require.Contains(
+		t,
+		err.Error(),
+		"agent.deadline_finalization_max_input_tokens must be >= 0",
+	)
 }
 
 func TestParseRunOptions_ModelGenerationConfig_DefaultsStreamTrue(
@@ -878,6 +968,8 @@ agent:
   max_history_runs: 50
   max_llm_calls: 13
   finalize_before_max_llm_calls: true
+  deadline_finalization_window: "90s"
+  deadline_finalization_max_input_tokens: 3200
   max_tool_iterations: 11
   preload_memory: 10
   tool_call_arguments_json_repair: false
@@ -1053,6 +1145,8 @@ memory:
 	require.Equal(t, 50, opts.MaxHistoryRuns)
 	require.Equal(t, 13, opts.MaxLLMCalls)
 	require.True(t, opts.FinalizeBeforeMaxLLMCalls)
+	require.Equal(t, 90*time.Second, opts.DeadlineFinalizationWindow)
+	require.Equal(t, 3200, opts.DeadlineFinalizationMaxInputTokens)
 	require.Equal(t, 11, opts.MaxToolIterations)
 	require.Equal(t, 10, opts.PreloadMemory)
 	require.False(t, opts.ToolCallArgumentsJSONRepair)
@@ -1314,6 +1408,7 @@ tools:
   host_exec_default_timeout: "60s"
   host_exec_max_timeout: "45s"
   host_exec_max_yield: "2s"
+  host_exec_max_idle_wait: "20s"
 `)
 	opts, err := parseRunOptions([]string{"-config", cfgPath})
 	require.NoError(t, err)
@@ -1326,6 +1421,7 @@ tools:
 	require.Equal(t, time.Minute, opts.HostExecDefaultTimeout)
 	require.Equal(t, 45*time.Second, opts.HostExecMaxTimeout)
 	require.Equal(t, 2*time.Second, opts.HostExecMaxYield)
+	require.Equal(t, 20*time.Second, opts.HostExecMaxIdleWait)
 }
 
 func TestParseRunOptions_DynamicAgentTimeoutFlagOverridesConfig(t *testing.T) {
@@ -1409,6 +1505,23 @@ tools:
 	require.Equal(t, 45*time.Second, opts.HostExecMaxYield)
 }
 
+func TestParseRunOptions_HostExecMaxIdleWaitFlagOverridesConfig(
+	t *testing.T,
+) {
+	t.Parallel()
+
+	cfgPath := writeTempConfig(t, `
+tools:
+  host_exec_max_idle_wait: "3m"
+`)
+	opts, err := parseRunOptions([]string{
+		"-config", cfgPath,
+		"-host-exec-max-idle-wait", "45s",
+	})
+	require.NoError(t, err)
+	require.Equal(t, 45*time.Second, opts.HostExecMaxIdleWait)
+}
+
 func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
 	t *testing.T,
 ) {
@@ -1420,6 +1533,7 @@ func TestParseRunOptions_HostExecMaxConfigInvalidDurationFails(
 	}{
 		{name: "timeout", key: "host_exec_max_timeout"},
 		{name: "yield", key: "host_exec_max_yield"},
+		{name: "idle wait", key: "host_exec_max_idle_wait"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -1509,6 +1623,17 @@ func TestParseRunOptions_HostExecMaxYieldNegativeFails(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "host exec max yield")
+}
+
+func TestParseRunOptions_HostExecMaxIdleWaitNegativeFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseRunOptions([]string{
+		"-host-exec-max-idle-wait",
+		"-1s",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "host exec max idle wait")
 }
 
 func TestParseRunOptions_DeferToolSurfaceDefaultsToOff(t *testing.T) {

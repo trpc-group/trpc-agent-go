@@ -453,7 +453,7 @@ func TestScannerReviewRegressionCases(t *testing.T) {
 			req: ExecutionRequest{
 				ToolName: "workspace_exec",
 				Backend:  BackendWorkspaceExec,
-				Command:  "curl --output=.env https://proxy.example.test",
+				Command:  "curl -q --output=.env https://proxy.example.test",
 			},
 			wantDecision: DecisionDeny,
 			wantRule:     RuleForbiddenPath,

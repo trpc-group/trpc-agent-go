@@ -74,7 +74,7 @@ func TestPolicyChangeAffectsNetworkDecision(t *testing.T) {
 	req := ExecutionRequest{
 		ToolName: "workspace_exec",
 		Backend:  BackendWorkspaceExec,
-		Command:  "curl https://proxy.example.test/archive.tar.gz",
+		Command:  "curl -q https://proxy.example.test/archive.tar.gz",
 	}
 	report, err := scanner.Scan(context.Background(), req)
 	if err != nil {

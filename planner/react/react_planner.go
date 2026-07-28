@@ -159,27 +159,6 @@ func (p *Planner) ProcessPlanningResponse(
 	return &processedResponse
 }
 
-// hasValidToolCalls checks if the response contains any valid tool calls.
-func (p *Planner) hasValidToolCalls(response *model.Response) bool {
-	if response == nil || len(response.Choices) == 0 {
-		return false
-	}
-	for _, choice := range response.Choices {
-		if len(choice.Message.ToolCalls) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-// getResponseContent extracts the text content from the response.
-func (p *Planner) getResponseContent(response *model.Response) string {
-	if response == nil || len(response.Choices) == 0 {
-		return ""
-	}
-	return response.Choices[0].Message.Content
-}
-
 // isIntentDescription checks if the content appears to be an intent
 // description rather than a final answer. Intent descriptions typically
 // indicate the agent wants to take an action but hasn't properly formed
@@ -267,20 +246,6 @@ func (p *Planner) hasFinalAnswerTag(content string) bool {
 		}
 	}
 	return true
-}
-
-// splitByLastPattern splits text by the last occurrence of a separator.
-// Returns the text before the last separator and the text after it.
-// The separator itself is not included in either returned part.
-func (p *Planner) splitByLastPattern(
-	text string,
-	separator string,
-) (string, string) {
-	index := strings.LastIndex(text, separator)
-	if index == -1 {
-		return text, ""
-	}
-	return text[:index], text[index+len(separator):]
 }
 
 // buildPlannerInstruction builds the comprehensive planning instruction

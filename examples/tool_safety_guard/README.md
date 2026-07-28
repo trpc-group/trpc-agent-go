@@ -39,7 +39,14 @@ ask findings instead of default allow decisions.
 Policy parsing rejects unknown fields. Command arguments and working directories
 participate in semantic path and dependency checks, code block languages use the
 configured allowlist, and host execution always applies its backend default
-action.
+action. Policy version `1` is the only supported schema version, and rule
+overrides must name a rule ID exported by the safety package.
+
+Scanned `curl` commands must pass `-q` or `--disable` as the first argument so
+curl cannot load an implicit user configuration file. Proxy endpoints and
+explicit stdin configuration are then evaluated from the visible arguments.
+Backends without a registered semantic scanner use the policy's conservative
+`default_action` instead of being allowed implicitly.
 
 `tool.PermissionPolicy` is the normal framework interception point. It runs
 after tool arguments are finalized and before the tool executes. `tool.FilterFunc`
@@ -56,6 +63,10 @@ resource controls.
 When these tools are configured with the scanner, returned output is redacted
 and bounded by `resource_limits.max_output_bytes`. Each response or session poll
 gets its own byte budget.
+
+Follow-up input sent to a running host or workspace session is scanned before
+it reaches the process. This prevents credentials introduced through a later
+stdin write from bypassing the initial command scan.
 
 This guard cannot replace sandbox isolation. It is a pre-execution policy,
 reporting, audit, and telemetry layer. Production systems should combine it with

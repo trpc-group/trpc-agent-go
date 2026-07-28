@@ -563,8 +563,36 @@ memoryService := memoryinmemory.NewMemoryService(
 
 ### 覆盖语义（ID 与重复）
 
-- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。
+- 记忆 ID 基于「内容 + appName + userID + 规范化事件元数据」生成；主题不参与 ID。对同一用户重复添加相同内容与身份元数据是幂等的：会覆盖原有记录（非追加），并刷新 topics 与 UpdatedAt。如果该规范 ID 对应软删除记录，`AddMemory` 会将其重新激活。
 - 如需“允许重复/只返回已存在/忽略重复”等策略，可通过自定义工具或扩展服务策略配置实现。
+
+### 更新语义与 ID 轮转
+
+`UpdateMemory` 会先应用新的内容、topics 和事件元数据，再重新计算规范 Memory
+ID。topics 不参与 ID 计算，因此只修改 topics 时 ID 保持不变。
+
+更新遵循以下状态机：
+
+| 应用更新后的状态 | 结果 |
+| ---------------- | ---- |
+| source 不存在或已软删除 | 返回 not-found 错误，且不修改 `UpdateResult` |
+| 规范 ID 不变 | 原地更新 active source |
+| newID 不存在 | 创建 target，再淘汰 source |
+| newID 是软删除记录 | 重新激活 target；硬删除模式会替换旧 tombstone |
+| newID 已是 active | 返回冲突错误，source 和 target 都不修改 |
+
+启用软删除时，成功的 ID 轮转会把旧 source 保留为 tombstone；硬删除模式则移除旧
+source。SQL 后端会原子地完成 target 准备和 source 淘汰。
+
+SQL 后端的时间戳语义保持一致：
+
+- 新插入的 target 继承 source 的 `CreatedAt`。
+- 重新激活的 target 保留自己的 `CreatedAt`。
+- 硬删除模式替换旧 target tombstone 时，replacement 继承 source 的 `CreatedAt`。
+- 每次成功更新都会刷新 `UpdatedAt`。
+
+成功时，`UpdateResult.MemoryID` 返回最终生效的规范 ID；失败时，调用方传入的
+result 保持不变。
 
 ### 自定义工具实现
 
@@ -1011,6 +1039,12 @@ redisService, err := memoryredis.NewService(
 
 **注意**：`WithRedisClientURL` 优先级高于 `WithRedisInstance`
 
+**Redis ACL 要求**：`UpdateMemory` 使用服务端 Lua 脚本，以原子方式校验并
+轮换记忆 ID。除脚本使用的 `HEXISTS`、`HSET`、`HDEL` 命令和对应记忆 key
+访问权限外，ACL 用户还必须具有 `EVALSHA` 和 `EVAL` 权限；脚本尚未缓存时
+需要 `EVAL`。Redis 重启或执行 `SCRIPT FLUSH` 后脚本缓存可能被清除，因此
+不能只在预热阶段临时授予 `EVAL`。
+
 **Key 前缀示例**：
 
 ```go
@@ -1414,7 +1448,7 @@ mysqlService, err := memorymysql.NewService(
 | ---- | -------- | ------------------------------------ |
 | 删除 | 立即移除 | 设置 `deleted_at` 字段               |
 | 查询 | 不可见   | 自动过滤（WHERE deleted_at IS NULL） |
-| 恢复 | 无法恢复 | 可手动清除 `deleted_at`              |
+| 恢复 | 无法恢复 | 重新 Add，或将更新轮转到相同 ID      |
 | 存储 | 节省空间 | 占用空间                             |
 
 **迁移陷阱**：
@@ -1752,6 +1786,10 @@ defer r.Close()
 | `WithHost(url)` | 覆盖 mem0 API Host / Base URL。 | `https://api.mem0.ai` |
 | `WithSelfHostedOSS()` | 使用本地 Mem0 OSS REST API（`/memories`、`/search`、`X-API-Key`）。开启后如果没有设置 `WithHost`，host 默认 `http://localhost:8888`；OSS 模式会拒绝托管平台默认 host。 | 关闭 |
 | `WithSelfHostedOSSIncludeUnscopedMemories()` | 包含没有 `metadata.trpc_app_name` 的历史 OSS 记录；已标记为其他 app 的记录仍会隐藏。 | 关闭 |
+| `WithSelfHostedIngestPrompt(prompt)` | 为该 service 的所有本地 Mem0 写入设置提取 prompt。 | 服务端默认值 |
+| `WithSelfHostedIngestExpirationDateResolver(resolver)` | 为每次本地 Mem0 写入独立解析 `expiration_date`。 | 不发送 |
+| `WithIngestInference(bool)` | 控制 Mem0 是否从 transcript 中提取记忆；同时适用于托管和本地写入。 | `true` |
+| `WithSelfHostedProceduralMemory()` | 创建本地 procedural memory；必须提供 `agent_id`。 | 关闭 |
 | `WithOrgProject(orgID, projectID)` | 追加托管平台的 `org_id` / `project_id`；本地 OSS 不支持。 | 空 |
 | `WithAsyncMode(bool)` | 控制托管平台 ingest 请求里的 `async_mode`；本地 OSS 在 REST 层同步写入。 | `true` |
 | `WithVersion(v)` | 设置托管平台 mem0 ingest 请求里的版本字段。 | `v2` |
@@ -1760,6 +1798,105 @@ defer r.Close()
 | `WithAsyncMemoryNum(n)` | 后台 ingest worker 数量。 | `1` |
 | `WithMemoryQueueSize(n)` | 每个 worker 的队列长度。 | `10` |
 | `WithMemoryJobTimeout(d)` | 队列任务与同步 fallback ingest 的超时时间。 | `30s` |
+
+### 本地 OSS 请求字段
+
+标准 Runner 路径会把 session ID 作为 `run_id`、当前 Agent 名称作为
+`agent_id`。Mem0 专属行为在创建 service 时统一配置，因此
+`IngestSession` 仍是唯一的写入 API：
+
+| Mem0 OSS create 字段 | 来源 |
+| -------------------- | ---- |
+| `messages` | ingestor 从 session 中选出的非空增量。 |
+| `user_id` | `session.Session.UserID`。 |
+| `agent_id` | `session.WithIngestAgentID`；Runner 自动提供当前 Agent 名称。 |
+| `run_id` | `session.WithIngestRunID`；Runner 自动提供 session ID。 |
+| `metadata` | `session.WithIngestMetadata`，以及适配层内部追加的 tRPC app scope。 |
+| `prompt` | `WithSelfHostedIngestPrompt`。 |
+| `expiration_date` | `WithSelfHostedIngestExpirationDateResolver`。 |
+| `infer` | `WithIngestInference`，默认为 `true`。 |
+| `memory_type` | `WithSelfHostedProceduralMemory`；普通记忆不发送该字段。 |
+
+```go
+package example
+
+import (
+    "context"
+    "time"
+
+    memorymem0 "trpc.group/trpc-go/trpc-agent-go/memory/mem0"
+    "trpc.group/trpc-go/trpc-agent-go/session"
+)
+
+func newProceduralMemoryService() (*memorymem0.Service, error) {
+    expirationForSession := func(
+        _ context.Context,
+        sess *session.Session,
+    ) (time.Time, error) {
+        if sess.CreatedAt.IsZero() {
+            return time.Time{}, nil
+        }
+        return sess.CreatedAt.AddDate(0, 0, 30), nil
+    }
+
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithSelfHostedIngestPrompt("提取可复用的部署流程。"),
+        memorymem0.WithSelfHostedIngestExpirationDateResolver(
+            expirationForSession,
+        ),
+        memorymem0.WithSelfHostedProceduralMemory(),
+    )
+}
+
+func newRawMemoryService() (*memorymem0.Service, error) {
+    return memorymem0.NewService(
+        memorymem0.WithSelfHostedOSS(),
+        memorymem0.WithHost("http://localhost:8888"),
+        memorymem0.WithIngestInference(false),
+    )
+}
+```
+
+`newRawMemoryService` 跳过 LLM 提取，保存适配层规范化后的非 system 消息文本。
+它特意使用一个不包含自定义 prompt 和 procedural memory 的独立 service。
+Mem0 仍会调用 embedding 模型来持久化和检索这些原始记忆。
+
+- `session.WithIngestMetadata`、`session.WithIngestAgentID` 与
+  `session.WithIngestRunID` 仍用于设置单次 `IngestSession` 的通用字段；
+  Runner 会自动提供 agent ID 和 run ID。
+- `WithSelfHostedIngestPrompt` 在每次本地 create 请求中透传该 service 的提取
+  prompt；该选项要求开启 inference。
+- `WithSelfHostedIngestExpirationDateResolver` 会在每次有效且非空的 ingestion
+  中、推进 watermark 之前执行一次。回调接收请求 context 和 session，并返回
+  `time.Time`；适配层使用该值所在时区的日历日期，以 `YYYY-MM-DD` 发送。返回零值
+  时省略该字段；返回错误时不发送请求，也不推进 watermark。resolver 可能并发执行，
+  因此必须支持并发，并把传入的 session 视为只读。到期只会让普通读取隐藏该记忆，
+  不会删除底层记录。
+- `WithIngestInference` 控制 Mem0 的 `infer` 字段。默认值仍为 `true`；设为
+  `false` 时，适配层会把规范化后的非 system 消息发送给 Mem0 进行 direct import，
+  不经过 LLM 提取，并且不能再配置自定义提取 prompt 或 procedural memory。本地
+  OSS 会保存 user 和 assistant 两种角色；托管平台当前只保留 user 角色的 direct
+  import 消息。静态不兼容组合会在 `NewService` 阶段直接返回错误。
+- `WithSelfHostedProceduralMemory` 选择 Mem0 的 `procedural_memory` 模式。
+  未配置时，Mem0 的公开 create API 会自行提取普通记忆；procedural memory 必须
+  同时提供 `agent_id`，并且始终使用 inference。
+- prompt、expiration-date resolver 与 memory type 仅供本地 OSS 使用；托管模式会
+  明确报错，不会静默忽略。`infer` 在两种模式下都支持。
+- 当前锁定的 OSS REST create schema 不暴露 `timestamp`；底层 `Memory.add` 会把
+  非空 timestamp 视为仅供平台使用并拒绝该值，因此适配层不暴露这个字段。
+- 这些本地请求字段以 Mem0 OSS 2.0.11（`mem0ai/mem0@3b9aed8`）为兼容基线。
+  更早的 OSS 版本不在这些字段的支持范围内，并且可能静默忽略 REST schema
+  无法识别的请求属性。
+
+本地模式与托管模式共用 `ReadMemories` 和 `SearchMemories`。`MaxResults` 限制
+本地过滤后的最终结果数量。为了让 kind 和时间等框架侧过滤仍能填满该数量，适配层
+可能通过更大的 `top_k` 向服务端获取候选；在本地模式下，还会把非零
+`SimilarityThreshold` 作为 `threshold` 发送。返回值统一映射为
+`memory.Entry`，包括 ID、正文、score、时间戳，以及 metadata 中保存的 tRPC
+结构化记忆字段。对于 `memory.Entry` 无法表达的 provider 专属诊断信息，适配层
+不会额外引入第二套公共结果模型。
 
 如果使用官方本地 Mem0 OSS server，并且 LLM 与 embedding 使用不同 endpoint 或
 API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`：
@@ -1773,7 +1910,7 @@ API key，需要在 server 侧分别配置。OSS server 提供 `POST /configure`
 - 所有读取仍然基于当前 `<appName, userID>` 做隔离。
 - 本地 OSS 没有 top-level `app_id`，适配层使用 `metadata.trpc_app_name` 做 app 隔离。已有 OSS 记录如果缺少这个 metadata，默认会被隐藏，直到重新 ingest 或回填 metadata。迁移期确实需要读取这些历史记录时，可显式开启 `WithSelfHostedOSSIncludeUnscopedMemories()`。
 - 当前 OSS `GET /memories` API 最多返回 1000 条 user 级结果，不支持分页，也不能在服务端表达 `metadata.trpc_app_name` 过滤。因此 `ReadMemories` 要求传入大于 0 且不超过 1000 的 limit，并且只会在 OSS 返回的前 1000 条 user 级记录内尽力做本地 app 隔离。
-- Runner 会自动把 session 上下文带入 ingest；如果有需要，也可以通过 `session.WithIngestMetadata`、`session.WithIngestAgentID`、`session.WithIngestRunID` 追加信息。
+- Runner 会自动把 session 上下文带入 `IngestSession`。自定义调用方可通过 `session.WithIngestMetadata`、`session.WithIngestAgentID` 与 `session.WithIngestRunID` 设置单次调用的通用字段；Mem0 专属字段通过 service option 配置。
 - 当同一个 mem0 service 通过 `runner.WithSessionIngestor(mem0Svc)` 配置后，`WithPreloadMemory(N)` 可以使用 mem0 的只读能力；生产环境建议使用正数预算。
 - 当 mem0 返回结构化 metadata 时，检索结果仍可携带 `Topics`、`Kind`、`EventTime`、`Participants`、`Location` 等字段。
 - 使用完成后请调用 `Close()`，确保后台 worker 干净退出。

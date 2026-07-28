@@ -7,7 +7,10 @@
 
 package safety
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 	var findings []Finding
@@ -46,7 +49,8 @@ func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 		}
 	case BackendWorkspaceExec:
 		if s.policy.BackendRules.WorkspaceExec.RequireWorkspaceRelativeCwd && req.Cwd != "" &&
-			(strings.HasPrefix(req.Cwd, "/") || strings.HasPrefix(req.Cwd, "~") || strings.HasPrefix(req.Cwd, "..")) {
+			(isAbsolutePathAnyPlatform(req.Cwd) || strings.HasPrefix(req.Cwd, "~") ||
+				strings.HasPrefix(filepath.ToSlash(req.Cwd), "..")) {
 			findings = append(findings, finding(RuleForbiddenPath, CategoryPolicy, RiskCritical, DecisionDeny,
 				"workspace cwd must be relative: "+req.Cwd, "cwd", "Use a path relative to the workspace root."))
 		}
@@ -70,6 +74,25 @@ func (s *Scanner) scanBackend(req ExecutionRequest) []Finding {
 				"Confirm session cleanup and output limits before background execution.",
 			))
 		}
+	case BackendMCP, BackendSkill, BackendUnknown:
+		findings = append(findings, finding(
+			RuleHumanReview, CategoryPolicy, RiskMedium, s.policy.DefaultAction,
+			"execution backend has no registered semantic scanner: "+string(req.Backend),
+			"backend",
+			"Register a supported backend or require explicit approval for this tool.",
+		))
 	}
 	return findings
+}
+
+func isAbsolutePathAnyPlatform(path string) bool {
+	path = strings.TrimSpace(path)
+	if filepath.IsAbs(path) || strings.HasPrefix(path, `\\`) ||
+		strings.HasPrefix(path, "//") {
+		return true
+	}
+	return len(path) >= 3 &&
+		((path[0] >= 'a' && path[0] <= 'z') ||
+			(path[0] >= 'A' && path[0] <= 'Z')) &&
+		path[1] == ':' && (path[2] == '/' || path[2] == '\\')
 }

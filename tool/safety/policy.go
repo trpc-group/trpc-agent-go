@@ -15,6 +15,8 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
+const supportedPolicyVersion = "1"
+
 // Policy configures scanner decisions. YAML and JSON use the same field names.
 type Policy struct {
 	Version               string                        `json:"version" yaml:"version"`
@@ -174,6 +176,7 @@ func DefaultPolicy() Policy {
 
 func (p Policy) normalized() (Policy, error) {
 	def := DefaultPolicy()
+	p.Version = strings.TrimSpace(p.Version)
 	if p.Version == "" {
 		p.Version = def.Version
 	}
@@ -256,7 +259,7 @@ func (p Policy) normalized() (Policy, error) {
 	p.DependencyCommands = deps
 	rules := make(map[string]RulePolicyOverride, len(p.Rules))
 	for id, rule := range p.Rules {
-		rules[id] = rule
+		rules[strings.TrimSpace(id)] = rule
 	}
 	p.Rules = rules
 	return p, nil
@@ -289,6 +292,9 @@ func boolPointer(v bool) *bool {
 }
 
 func (p Policy) validate() error {
+	if err := validatePolicyVersion(p.Version); err != nil {
+		return err
+	}
 	if err := validateForbiddenPathPatterns(p.ForbiddenPaths); err != nil {
 		return err
 	}
@@ -312,16 +318,8 @@ func (p Policy) validate() error {
 			return fmt.Errorf("dependency command %q: invalid action %q", dc.Command, dc.Action)
 		}
 	}
-	for id, override := range p.Rules {
-		if strings.TrimSpace(id) == "" {
-			return errors.New("rule override id cannot be empty")
-		}
-		if override.Action != "" && !validDecision(override.Action) {
-			return fmt.Errorf("rule %q: invalid action %q", id, override.Action)
-		}
-		if override.RiskLevel != "" && !validRisk(override.RiskLevel) {
-			return fmt.Errorf("rule %q: invalid risk level %q", id, override.RiskLevel)
-		}
+	if err := validateRuleOverrides(p.Rules); err != nil {
+		return err
 	}
 	if p.ResourceLimits.MaxTimeoutMS < 0 ||
 		p.ResourceLimits.MaxOutputBytes < 0 ||
@@ -330,6 +328,37 @@ func (p Policy) validate() error {
 		p.ResourceLimits.MaxSleepSeconds < 0 ||
 		p.ResourceLimits.MaxParallelismHint < 0 {
 		return errors.New("resource limits cannot be negative")
+	}
+	return nil
+}
+
+func validatePolicyVersion(version string) error {
+	if version != supportedPolicyVersion {
+		return fmt.Errorf("unsupported policy version %q", version)
+	}
+	return nil
+}
+
+func validateRuleOverrides(rules map[string]RulePolicyOverride) error {
+	seen := make(map[string]struct{}, len(rules))
+	for id, override := range rules {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			return errors.New("rule override id cannot be empty")
+		}
+		if !isKnownRuleID(id) {
+			return fmt.Errorf("unknown rule override id %q", id)
+		}
+		if _, ok := seen[id]; ok {
+			return fmt.Errorf("duplicate rule override id %q", id)
+		}
+		seen[id] = struct{}{}
+		if override.Action != "" && !validDecision(override.Action) {
+			return fmt.Errorf("rule %q: invalid action %q", id, override.Action)
+		}
+		if override.RiskLevel != "" && !validRisk(override.RiskLevel) {
+			return fmt.Errorf("rule %q: invalid risk level %q", id, override.RiskLevel)
+		}
 	}
 	return nil
 }

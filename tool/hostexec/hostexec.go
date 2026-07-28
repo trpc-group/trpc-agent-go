@@ -449,6 +449,28 @@ func (t *writeStdinTool) Call(
 		return nil, errors.New(errSessionIDRequired)
 	}
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if t.safety != nil && in.Chars != "" {
+		sess, err := t.mgr.get(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		report, err := t.safety.ScanSessionInput(ctx, safety.ExecutionRequest{
+			ToolName: toolWriteStdin,
+			Backend:  safety.BackendHostExec,
+			Command:  sess.command,
+			Cwd:      sess.cwd,
+			Stdin:    in.Chars,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if report.Blocked {
+			return nil, safety.NewBlockedError(report)
+		}
+	}
 	if err := t.mgr.write(
 		sessionID,
 		in.Chars,
@@ -467,7 +489,6 @@ func (t *writeStdinTool) Call(
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
 		case <-timer.C:
 		}
 	}

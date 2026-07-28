@@ -91,20 +91,33 @@ func (s *Scanner) scanCurlProxyEndpoints(argv []string, loc string) []Finding {
 }
 
 func curlProxyEndpoints(argv []string) []string {
+	longOptions := []string{
+		"--proxy", "--preproxy", "--proxy1.0", "--socks4",
+		"--socks4a", "--socks5", "--socks5-hostname",
+	}
 	var out []string
 	for i := 1; i < len(argv); i++ {
 		arg := argv[i]
 		value := ""
-		switch {
-		case strings.HasPrefix(arg, "--proxy="):
-			value = arg[len("--proxy="):]
-		case strings.HasPrefix(arg, "--preproxy="):
-			value = arg[len("--preproxy="):]
-		case arg == "--proxy" || arg == "--preproxy" || arg == "-x":
-			if i+1 < len(argv) {
-				i++
-				value = argv[i]
+		for _, option := range longOptions {
+			switch {
+			case arg == option:
+				if i+1 < len(argv) {
+					i++
+					value = argv[i]
+				}
+			case strings.HasPrefix(arg, option+"="):
+				value = strings.TrimPrefix(arg, option+"=")
 			}
+			if value != "" {
+				break
+			}
+		}
+		switch {
+		case value != "":
+		case arg == "-x" && i+1 < len(argv):
+			i++
+			value = argv[i]
 		case strings.HasPrefix(arg, "-x") && len(arg) > 2:
 			value = arg[2:]
 		}

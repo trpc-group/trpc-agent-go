@@ -36,6 +36,7 @@ nav:
       - Tool Safety Guard: tool-safety-guard.md
       - Session:
           - Overview: session/index.md
+          - Noop Session: session/noop.md
           - Session Summary: session/summary.md
           - Memory Session: session/inmemory.md
           - SQLite Session: session/sqlite.md
@@ -144,6 +145,7 @@ plugins:
                 - Tool Safety Guard: tool-safety-guard.md
                 - Session:
                     - Overview: session/index.md
+                    - Noop Session: session/noop.md
                     - Session Summary: session/summary.md
                     - Memory Session: session/inmemory.md
                     - SQLite Session: session/sqlite.md

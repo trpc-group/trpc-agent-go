@@ -14,6 +14,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	defaultWorkspaceTimeoutSeconds = 300
+	defaultHostTimeoutSeconds      = 1800
+)
+
 // RequestFromPermission normalizes a tool permission request for scanning.
 func RequestFromPermission(req *tool.PermissionRequest) ExecutionRequest {
 	return requestFromPermission(req, nil)
@@ -79,6 +84,8 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 		Timeout       int               `json:"timeout"`
 		TimeoutSec    *int              `json:"timeout_sec"`
 		TimeoutSecOld *int              `json:"timeoutSec"`
+		YieldTimeMS   *int              `json:"yield-time_ms"`
+		YieldMS       *int              `json:"yieldMs"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		out.Script = string(raw)
@@ -92,8 +99,16 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 	}
 	out.Env = in.Env
 	out.Stdin = in.Stdin
-	out.Background = in.Background
 	out.TTY = boolPtrValue(in.TTY) || boolPtrValue(in.PTY)
+	yield := in.YieldTimeMS
+	if yield == nil {
+		yield = in.YieldMS
+	}
+	if workspace {
+		out.Background = in.Background || yield != nil && *yield > 0
+	} else {
+		out.Background = in.Background || yield == nil || *yield > 0
+	}
 	timeout := 0
 	if in.TimeoutSec != nil {
 		timeout = *in.TimeoutSec
@@ -103,9 +118,14 @@ func fillExecLike(out *ExecutionRequest, raw []byte, workspace bool) {
 	if workspace && timeout <= 0 {
 		timeout = in.Timeout
 	}
-	if timeout > 0 {
-		out.TimeoutMS = int64(timeout) * 1000
+	if timeout <= 0 {
+		if workspace {
+			timeout = defaultWorkspaceTimeoutSeconds
+		} else {
+			timeout = defaultHostTimeoutSeconds
+		}
 	}
+	out.TimeoutMS = int64(timeout) * 1000
 }
 
 func fillCodeExec(out *ExecutionRequest, raw []byte) {

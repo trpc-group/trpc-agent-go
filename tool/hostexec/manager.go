@@ -322,6 +322,7 @@ func startSession(
 	cmd.Env = mergedEnv(baseEnv, params.Env)
 
 	sess := newSession(id, params.Command, maxLines)
+	sess.cwd = params.Workdir
 	sess.sanitizer = params.Sanitizer
 	sess.cancel = cancel
 	sess.cmd = cmd

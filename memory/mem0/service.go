@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/memory"
@@ -34,6 +35,7 @@ type Service struct {
 	c    *client
 
 	ingestWorker *ingestWorker
+	ingestLocks  *ingestSessionLocks
 
 	precomputedTools []tool.Tool
 }
@@ -51,12 +53,23 @@ func NewService(options ...ServiceOpt) (*Service, error) {
 		if opts.orgID != "" || opts.projectID != "" {
 			return nil, errors.New("mem0: org/project identifiers are not supported by self-hosted OSS")
 		}
+	} else if opts.ingest.prompt != "" ||
+		opts.ingest.expirationDateResolver != nil ||
+		opts.ingest.memoryType != "" {
+		return nil, errors.New("mem0: self-hosted ingest options require self-hosted OSS mode")
+	}
+	if err := validateIngestConfig(opts.ingest); err != nil {
+		return nil, err
 	}
 	c, err := newClient(opts)
 	if err != nil {
 		return nil, err
 	}
-	svc := &Service{opts: opts, c: c}
+	svc := &Service{
+		opts:        opts,
+		c:           c,
+		ingestLocks: &ingestSessionLocks{},
+	}
 	svc.ingestWorker = newIngestWorker(c, opts)
 	svc.precomputedTools = buildReadOnlyTools(svc)
 	return svc, nil
@@ -73,10 +86,8 @@ func (s *Service) Tools() []tool.Tool {
 
 // IngestSession enqueues session transcript ingestion into mem0.
 //
-// Per-request settings are configured via session.IngestOption helpers
-// (e.g. session.WithIngestMetadata, session.WithIngestAgentID,
-// session.WithIngestRunID). The resolved snapshot is forwarded to mem0's
-// POST /v1/memories/ payload as metadata, agent_id and run_id respectively.
+// Per-request metadata and scopes are configured via session.IngestOption
+// helpers. Mem0-specific ingestion behavior is configured on the service.
 //
 // An invalid session scope (empty AppName / UserID) is surfaced as an error
 // rather than silently dropped, so caller misconfiguration is distinguishable
@@ -96,19 +107,53 @@ func (s *Service) IngestSession(
 	if err := userKey.CheckUserKey(); err != nil {
 		return err
 	}
+	lock := s.ingestLocks.lockFor(sess)
+	lock.Lock()
 	since := readLastExtractAt(sess)
 	latestTs, messages := scanDeltaSince(sess, since)
 	if len(messages) == 0 {
+		lock.Unlock()
+		return nil
+	}
+	if !hasIngestibleMessages(messages) {
+		writeLastExtractAt(sess, latestTs)
+		lock.Unlock()
+		return nil
+	}
+	lock.Unlock()
+
+	reqOpts := resolveSessionIngestOptions(s.opts.ingest, opts)
+	if err := validateIngestOptions(reqOpts); err != nil {
+		return err
+	}
+	expirationDate, err := resolveIngestExpirationDate(
+		ctx,
+		sess,
+		s.opts.ingest.expirationDateResolver,
+	)
+	if err != nil {
+		return err
+	}
+	reqOpts.expirationDate = expirationDate
+
+	// The option callbacks and expiration resolver above are caller code and
+	// must not run while the session lock is held. Re-read the delta before
+	// committing the watermark so overlapping calls cannot enqueue it twice.
+	lock.Lock()
+	since = readLastExtractAt(sess)
+	latestTs, messages = scanDeltaSince(sess, since)
+	if len(messages) == 0 {
+		lock.Unlock()
+		return nil
+	}
+	if !hasIngestibleMessages(messages) {
+		writeLastExtractAt(sess, latestTs)
+		lock.Unlock()
 		return nil
 	}
 	writeLastExtractAt(sess, latestTs)
-	var reqOpts session.IngestOptions
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		opt(&reqOpts)
-	}
+	lock.Unlock()
+
 	job := &ingestJob{
 		Ctx:      context.WithoutCancel(ctx),
 		UserKey:  userKey,
@@ -133,13 +178,82 @@ func (s *Service) IngestSession(
 	return s.ingestWorker.ingest(syncCtx, userKey, sess, messages, reqOpts)
 }
 
+func resolveIngestExpirationDate(
+	ctx context.Context,
+	sess *session.Session,
+	resolver *ingestExpirationDateResolver,
+) (string, error) {
+	if resolver == nil {
+		return "", nil
+	}
+	expirationDate, err := resolver.resolve(ctx, sess)
+	if err != nil {
+		return "", fmt.Errorf("mem0: resolve ingest expiration date: %w", err)
+	}
+	if expirationDate.IsZero() {
+		return "", nil
+	}
+	if year := expirationDate.Year(); year < 1 || year > 9999 {
+		return "", fmt.Errorf("mem0: expiration date year %d is outside the supported range [1, 9999]", year)
+	}
+	return expirationDate.Format(time.DateOnly), nil
+}
+
+func resolveSessionIngestOptions(
+	config ingestConfig,
+	options []session.IngestOption,
+) ingestOptions {
+	var sessionOpts session.IngestOptions
+	for _, option := range options {
+		if option == nil {
+			continue
+		}
+		option(&sessionOpts)
+	}
+	return ingestOptions{
+		metadata:   cloneMetadata(sessionOpts.Metadata),
+		agentID:    sessionOpts.AgentID,
+		runID:      sessionOpts.RunID,
+		prompt:     config.prompt,
+		infer:      config.infer,
+		memoryType: config.memoryType,
+	}
+}
+
+func validateIngestOptions(opts ingestOptions) error {
+	if opts.memoryType != "" && opts.memoryType != memoryTypeProcedural {
+		return fmt.Errorf("mem0: unsupported memory type %q", opts.memoryType)
+	}
+	if err := validateIngestConfig(ingestConfig{
+		prompt:     opts.prompt,
+		infer:      opts.infer,
+		memoryType: opts.memoryType,
+	}); err != nil {
+		return err
+	}
+	if opts.memoryType == memoryTypeProcedural && strings.TrimSpace(opts.agentID) == "" {
+		return errors.New("mem0: procedural memory requires an agent ID")
+	}
+	return nil
+}
+
+func validateIngestConfig(config ingestConfig) error {
+	if !config.infer && config.memoryType == memoryTypeProcedural {
+		return errors.New("mem0: procedural memory requires inference")
+	}
+	if !config.infer && strings.TrimSpace(config.prompt) != "" {
+		return errors.New("mem0: custom ingest prompt requires inference")
+	}
+	return nil
+}
+
 // ReadMemories reads memories for a user.
 func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
 	if err := userKey.CheckUserKey(); err != nil {
 		return nil, err
 	}
 	if s.opts.apiMode == apiModeSelfHostedOSS {
-		return s.readOSSMemories(ctx, userKey, limit)
+		return s.readSelfHostedMemories(ctx, userKey, limit)
 	}
 	pageSize := defaultListPageSize
 	if limit > 0 && limit < pageSize {
@@ -187,7 +301,11 @@ func (s *Service) ReadMemories(ctx context.Context, userKey memory.UserKey, limi
 	return entries, nil
 }
 
-func (s *Service) readOSSMemories(ctx context.Context, userKey memory.UserKey, limit int) ([]*memory.Entry, error) {
+func (s *Service) readSelfHostedMemories(
+	ctx context.Context,
+	userKey memory.UserKey,
+	limit int,
+) ([]*memory.Entry, error) {
 	if limit <= 0 {
 		return nil, errors.New("mem0: self-hosted OSS ReadMemories requires a positive limit")
 	}
@@ -251,6 +369,12 @@ func (s *Service) SearchMemories(ctx context.Context, userKey memory.UserKey, qu
 		Query:   searchOpts.Query,
 		Filters: filters,
 		TopK:    searchCandidateLimit(searchOpts, maxResults),
+	}
+	if s.opts.apiMode == apiModeSelfHostedOSS {
+		if searchOpts.SimilarityThreshold > 0 && searchOpts.SimilarityThreshold <= 1 {
+			threshold := searchOpts.SimilarityThreshold
+			req.Threshold = &threshold
+		}
 	}
 	var resp searchV2Response
 	if err := s.c.doJSON(ctx, httpMethodPost, path, nil, req, &resp); err != nil {

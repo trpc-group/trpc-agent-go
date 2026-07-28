@@ -118,6 +118,12 @@ type httpToolConfig struct {
 	Timeout   time.Duration `yaml:"timeout,omitempty"`
 }
 
+type duckDuckGoToolConfig struct {
+	httpToolConfig `yaml:",inline"`
+
+	BlockedResultURLPatterns []string `yaml:"blocked_result_url_patterns,omitempty"`
+}
+
 func newBrowserTools(
 	_ registry.ToolProviderDeps,
 	spec registry.PluginSpec,
@@ -138,12 +144,12 @@ func newDuckDuckGoTools(
 	_ registry.ToolProviderDeps,
 	spec registry.PluginSpec,
 ) ([]tool.Tool, error) {
-	var cfg httpToolConfig
+	var cfg duckDuckGoToolConfig
 	if err := registry.DecodeStrict(spec.Config, &cfg); err != nil {
 		return nil, err
 	}
 
-	opts := make([]duckduckgo.Option, 0, 4)
+	opts := make([]duckduckgo.Option, 0, 5)
 	if backend := strings.TrimSpace(cfg.Backend); backend != "" {
 		if !isSupportedDuckDuckGoBackend(backend) {
 			return nil, fmt.Errorf(
@@ -161,6 +167,14 @@ func newDuckDuckGoTools(
 	}
 	if cfg.Timeout > 0 {
 		opts = append(opts, duckduckgo.WithTimeout(cfg.Timeout))
+	}
+	if len(cfg.BlockedResultURLPatterns) > 0 {
+		opts = append(
+			opts,
+			duckduckgo.WithBlockedResultURLPatterns(
+				cfg.BlockedResultURLPatterns...,
+			),
+		)
 	}
 
 	return []tool.Tool{duckduckgo.NewTool(opts...)}, nil
@@ -192,11 +206,13 @@ func isSupportedDuckDuckGoBackend(backend string) bool {
 }
 
 type httpWebFetchConfig struct {
-	AllowedDomains  []string      `yaml:"allowed_domains,omitempty"`
-	BlockedDomains  []string      `yaml:"blocked_domains,omitempty"`
-	AllowAll        bool          `yaml:"allow_all_domains,omitempty"`
-	Timeout         time.Duration `yaml:"timeout,omitempty"`
-	MainContentOnly bool          `yaml:"main_content_only,omitempty"`
+	AllowedDomains     []string      `yaml:"allowed_domains,omitempty"`
+	BlockedDomains     []string      `yaml:"blocked_domains,omitempty"`
+	AllowAll           bool          `yaml:"allow_all_domains,omitempty"`
+	Timeout            time.Duration `yaml:"timeout,omitempty"`
+	MainContentOnly    bool          `yaml:"main_content_only,omitempty"`
+	AllowSearchPages   *bool         `yaml:"allow_search_result_pages,omitempty"`
+	DetectBlockedPages *bool         `yaml:"detect_blocked_pages,omitempty"`
 
 	MaxContentLength      int `yaml:"max_content_length,omitempty"`
 	MaxTotalContentLength int `yaml:"max_total_content_length,omitempty"`
@@ -240,6 +256,12 @@ func newHTTPWebFetchTools(
 	}
 	if cfg.MainContentOnly {
 		opts = append(opts, httpfetch.WithMainContentExtraction(true))
+	}
+	if cfg.AllowSearchPages == nil || !*cfg.AllowSearchPages {
+		opts = append(opts, httpfetch.WithSearchResultPageBlocking(true))
+	}
+	if cfg.DetectBlockedPages == nil || *cfg.DetectBlockedPages {
+		opts = append(opts, httpfetch.WithBlockedPageDetection(true))
 	}
 	if len(cfg.AllowedDomains) > 0 {
 		opts = append(opts, httpfetch.WithAllowedDomains(cfg.AllowedDomains))

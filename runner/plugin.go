@@ -30,6 +30,10 @@ type afterToolMessagesManager interface {
 	) (*plugin.AfterToolMessagesResult, error)
 }
 
+type afterRunManager interface {
+	AfterRun(context.Context, *plugin.AfterRunArgs) error
+}
+
 func newPluginManagerChain(managers ...agent.PluginManager) agent.PluginManager {
 	filtered := make([]agent.PluginManager, 0, len(managers))
 	for _, manager := range managers {
@@ -144,6 +148,20 @@ func (c pluginManagerChain) OnEvent(ctx context.Context, invocation *agent.Invoc
 		}
 	}
 	return current, nil
+}
+
+func (c pluginManagerChain) AfterRun(ctx context.Context, args *plugin.AfterRunArgs) error {
+	var errs []error
+	for _, manager := range c {
+		hooks, ok := manager.(afterRunManager)
+		if !ok {
+			continue
+		}
+		if err := hooks.AfterRun(ctx, args); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c pluginManagerChain) AfterToolMessages(
