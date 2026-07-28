@@ -13,6 +13,7 @@ package sandboxrunner
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -41,6 +42,8 @@ type Config struct {
 	// It stays optional because the binary may be absent in the sandbox.
 	EnableStaticcheck bool
 	Timeout           time.Duration
+	// goFlags carries the offline -mod flag chosen by offlineGoDeps.
+	goFlags string
 }
 
 // Result is the audit trail from sandbox execution.
@@ -61,6 +64,8 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 	if cfg.EnableStaticcheck {
 		commands = append(commands, "staticcheck ./...")
 	}
+	deps := offlineGoDeps(cfg.RepoPath)
+	cfg.goFlags = deps.goFlags
 	var out Result
 	for _, command := range commands {
 		decision := permission.Decide(command)
@@ -78,6 +83,17 @@ func RunChecks(ctx context.Context, cfg Config) Result {
 				Command: command,
 				Status:  "skipped",
 				Error:   "dry-run/mock mode did not execute external commands",
+			})
+			continue
+		}
+		// Network-isolated sandboxes cannot download modules, so an
+		// unvendored dependency set is an explicit skipped condition
+		// rather than a misleading resolution failure.
+		if isolatedSandbox(cfg.SandboxKind) && !deps.ok {
+			out.Runs = append(out.Runs, review.SandboxRun{
+				Command: command,
+				Status:  "skipped",
+				Error:   deps.reason,
 			})
 			continue
 		}
@@ -222,26 +238,81 @@ func engineRun(command string, start time.Time, res codeexecutor.RunResult, err 
 	return run
 }
 
+// isolatedSandbox reports whether the sandbox kind blocks network access
+// and therefore cannot download Go module dependencies on demand.
+func isolatedSandbox(kind string) bool {
+	switch kind {
+	case "managed", "sandbox", "container", "e2b":
+		return true
+	default:
+		return false
+	}
+}
+
+// offlineDeps describes how sandboxed Go checks resolve dependencies.
+type offlineDeps struct {
+	ok      bool   // checks can resolve dependencies offline
+	reason  string // why checks are skipped when !ok
+	goFlags string // GOFLAGS applied to sandboxed go commands
+}
+
+// offlineGoDeps decides the offline dependency policy for the repo:
+// vendored modules run with -mod=vendor, dependency-free modules run
+// directly, and everything else becomes an explicit skipped condition
+// because the isolated sandboxes cannot reach a module proxy.
+func offlineGoDeps(repoPath string) offlineDeps {
+	data, err := os.ReadFile(filepath.Join(repoPath, "go.mod"))
+	if err != nil {
+		// No module file: run the go tool so it reports the real error.
+		return offlineDeps{ok: true}
+	}
+	if !hasRequire(data) {
+		return offlineDeps{ok: true}
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, "vendor", "modules.txt")); err == nil {
+		return offlineDeps{ok: true, goFlags: "-mod=vendor"}
+	}
+	return offlineDeps{
+		ok: false,
+		reason: "module declares external dependencies without a vendor " +
+			"directory; the sandbox runs offline, so vendor the module " +
+			"or use --sandbox local-dev",
+	}
+}
+
+// hasRequire reports whether go.mod declares any required module.
+func hasRequire(gomod []byte) bool {
+	for _, line := range strings.Split(string(gomod), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "require") {
+			return true
+		}
+	}
+	return false
+}
+
 // sandboxEnv supplies per-runtime Go environment for sandboxed commands.
 func sandboxEnv(cfg Config) map[string]string {
+	env := map[string]string{}
 	switch cfg.SandboxKind {
 	case "managed", "sandbox":
-		if runtime.GOROOT() == "" {
-			return nil
-		}
-		return map[string]string{
-			"GOROOT": runtime.GOROOT(),
+		if runtime.GOROOT() != "" {
+			env["GOROOT"] = runtime.GOROOT()
 		}
 	case "container":
-		return map[string]string{
-			"GOCACHE": "/tmp/go-build",
-			"GOPATH":  "/tmp/go",
-			"HOME":    "/tmp",
-			"PATH":    "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-		}
+		env["GOCACHE"] = "/tmp/go-build"
+		env["GOPATH"] = "/tmp/go"
+		env["HOME"] = "/tmp"
+		env["PATH"] = "/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 	default:
 		return nil
 	}
+	// Fail fast on any accidental module download instead of hanging
+	// against a proxy the isolated sandbox can never reach.
+	env["GOPROXY"] = "off"
+	if cfg.goFlags != "" {
+		env["GOFLAGS"] = cfg.goFlags
+	}
+	return env
 }
 
 // runFromOutput builds an audited run from raw process output and exit status.

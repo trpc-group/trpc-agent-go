@@ -43,6 +43,52 @@ func TestScanSecretAndDedup(t *testing.T) {
 	}
 }
 
+// TestScanSecretRetrievalIsNotCritical verifies env/config lookups are
+// not classified as hard-coded credentials with critical confidence.
+func TestScanSecretRetrievalIsNotCritical(t *testing.T) {
+	diff := []byte(`diff --git a/cfg.go b/cfg.go
+--- a/cfg.go
++++ b/cfg.go
+@@ -1,3 +1,6 @@
+ package cfg
+ 
++var token = os.Getenv("TOKEN")
++var password = cfg.Password
++var apiKey = "sk-abcdefghijklmnopqrstuvwxyz123456"
+`)
+	files, err := diffparser.ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := Scan(files)
+	var criticalSecrets, softSecrets int
+	all := append(append(append([]review.Finding{}, result.Findings...),
+		result.Warnings...), result.NeedsHumanReview...)
+	for _, f := range all {
+		if f.RuleID != "SEC001" {
+			continue
+		}
+		if f.Severity == review.SeverityCritical {
+			criticalSecrets++
+			if f.Line != 5 {
+				t.Fatalf("critical secret at line %d, want the literal on line 5", f.Line)
+			}
+			continue
+		}
+		softSecrets++
+		if f.Confidence >= lowConfidence {
+			t.Fatalf("retrieval pattern got confidence %.2f, want < %.2f: %+v",
+				f.Confidence, lowConfidence, f)
+		}
+	}
+	if criticalSecrets != 1 {
+		t.Fatalf("critical secrets = %d, want only the literal assignment", criticalSecrets)
+	}
+	if softSecrets != 2 {
+		t.Fatalf("low-confidence secret notes = %d, want 2", softSecrets)
+	}
+}
+
 // TestDeduplicateKeepsHigherSeverity verifies dedup keeps the worst finding.
 func TestDeduplicateKeepsHigherSeverity(t *testing.T) {
 	in := []review.Finding{

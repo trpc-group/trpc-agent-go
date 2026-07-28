@@ -67,3 +67,66 @@ func TestParseUnifiedDiffPlainMultiFile(t *testing.T) {
 		t.Fatalf("hunks=%d,%d, want 1,1", len(files[0].Hunks), len(files[1].Hunks))
 	}
 }
+
+// TestParseUnifiedDiffGitStyleDeletion verifies a git-style deletion
+// keeps the file with its old path instead of vanishing from the diff.
+func TestParseUnifiedDiffGitStyleDeletion(t *testing.T) {
+	diff := []byte(`diff --git a/gone.go b/gone.go
+deleted file mode 100644
+--- a/gone.go
++++ /dev/null
+@@ -1,3 +0,0 @@
+-package gone
+-
+-func Gone() {}
+`)
+	files, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("files=%d, want 1", len(files))
+	}
+	f := files[0]
+	if !f.Deleted {
+		t.Fatalf("file not marked deleted: %+v", f)
+	}
+	if f.NewPath != "gone.go" || f.OldPath != "gone.go" {
+		t.Fatalf("paths=%q/%q, want gone.go display path", f.OldPath, f.NewPath)
+	}
+	if f.Language != "go" {
+		t.Fatalf("language=%q, want go", f.Language)
+	}
+	if len(f.Hunks) != 1 || len(f.Hunks[0].Lines) != 3 {
+		t.Fatalf("deleted hunk lines lost: %+v", f.Hunks)
+	}
+}
+
+// TestParseUnifiedDiffPlainDeletion verifies a plain unified deletion
+// followed by another file still yields both entries.
+func TestParseUnifiedDiffPlainDeletion(t *testing.T) {
+	diff := []byte(`--- gone.go
++++ /dev/null
+@@ -1,2 +0,0 @@
+-package gone
+-func Gone() {}
+--- a/kept.go
++++ b/kept.go
+@@ -1,1 +1,2 @@
+ package kept
++func Kept() {}
+`)
+	files, err := ParseUnifiedDiff(diff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files=%d, want 2", len(files))
+	}
+	if !files[0].Deleted || files[0].NewPath != "gone.go" {
+		t.Fatalf("deletion entry wrong: %+v", files[0])
+	}
+	if files[1].Deleted || files[1].NewPath != "kept.go" {
+		t.Fatalf("kept entry wrong: %+v", files[1])
+	}
+}

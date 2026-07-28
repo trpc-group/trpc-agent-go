@@ -14,6 +14,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -140,6 +141,61 @@ func TestRunChecksNoRepoNoRuns(t *testing.T) {
 	if len(result.Runs) != 0 || len(result.Decisions) != 0 {
 		t.Fatalf("no repo should produce no runs, got %d/%d",
 			len(result.Runs), len(result.Decisions))
+	}
+}
+
+// TestRunChecksSkipsUnvendoredModuleInSandbox asserts an isolated sandbox
+// reports unavailable dependencies as an explicit skip instead of running
+// checks that can only fail on module resolution.
+func TestRunChecksSkipsUnvendoredModuleInSandbox(t *testing.T) {
+	repo := writeRepo(t, map[string]string{
+		"go.mod":  "module example.com/app\n\ngo 1.24\n\nrequire github.com/google/uuid v1.6.0\n",
+		"main.go": "package main\n\nfunc main() {}\n",
+	})
+	result := RunChecks(context.Background(), Config{
+		TaskID:      "test-offline",
+		RepoPath:    repo,
+		SandboxKind: "managed",
+	})
+	if len(result.Runs) != 2 {
+		t.Fatalf("expected 2 runs, got %d", len(result.Runs))
+	}
+	for _, run := range result.Runs {
+		if run.Status != "skipped" || !strings.Contains(run.Error, "vendor") {
+			t.Fatalf("unvendored module should skip with vendor hint: %+v", run)
+		}
+	}
+}
+
+// TestOfflineGoDepsPolicy covers each offline dependency classification.
+func TestOfflineGoDepsPolicy(t *testing.T) {
+	noDeps := writeRepo(t, map[string]string{
+		"go.mod": "module example.com/plain\n\ngo 1.24\n",
+	})
+	if deps := offlineGoDeps(noDeps); !deps.ok || deps.goFlags != "" {
+		t.Fatalf("dependency-free module should run directly: %+v", deps)
+	}
+	vendored := writeRepo(t, map[string]string{
+		"go.mod":             "module example.com/app\n\ngo 1.24\n\nrequire github.com/google/uuid v1.6.0\n",
+		"vendor/modules.txt": "# github.com/google/uuid v1.6.0\n",
+	})
+	if deps := offlineGoDeps(vendored); !deps.ok || deps.goFlags != "-mod=vendor" {
+		t.Fatalf("vendored module should run with -mod=vendor: %+v", deps)
+	}
+	if deps := offlineGoDeps(t.TempDir()); !deps.ok {
+		t.Fatalf("missing go.mod should defer to the go tool: %+v", deps)
+	}
+}
+
+// TestSandboxEnvAppliesOfflineFlags verifies isolated sandboxes disable
+// the module proxy and forward the vendor flag.
+func TestSandboxEnvAppliesOfflineFlags(t *testing.T) {
+	env := sandboxEnv(Config{SandboxKind: "container", goFlags: "-mod=vendor"})
+	if env["GOPROXY"] != "off" || env["GOFLAGS"] != "-mod=vendor" {
+		t.Fatalf("container env missing offline settings: %+v", env)
+	}
+	if env := sandboxEnv(Config{SandboxKind: "managed"}); env["GOPROXY"] != "off" {
+		t.Fatalf("managed env missing GOPROXY=off: %+v", env)
 	}
 }
 

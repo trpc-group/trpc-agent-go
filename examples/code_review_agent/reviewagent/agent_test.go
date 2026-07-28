@@ -91,3 +91,65 @@ func TestBuildPromptContainsFileAndLines(t *testing.T) {
 		}
 	}
 }
+
+// TestBuildPromptNeverExceedsCap feeds a megabyte-sized diff line and
+// asserts the prompt stays within the documented byte cap.
+func TestBuildPromptNeverExceedsCap(t *testing.T) {
+	huge := strings.Repeat("payload ", 1<<17) // ~1 MiB single line
+	files := []review.ChangedFile{{
+		NewPath: "big/big.go",
+		Hunks: []review.Hunk{{Lines: []review.DiffLine{
+			{Kind: "added", NewLine: 1, Content: huge},
+			{Kind: "added", NewLine: 2, Content: "never reached"},
+		}}},
+	}}
+	prompt := BuildPrompt(files)
+	if len(prompt) > promptByteCap {
+		t.Fatalf("prompt length %d exceeds cap %d", len(prompt), promptByteCap)
+	}
+	if !strings.Contains(prompt, "[diff truncated]") {
+		t.Fatalf("oversized prompt missing truncation marker:\n%s", prompt[:200])
+	}
+	if strings.Contains(prompt, "never reached") {
+		t.Fatal("content after the cap leaked into the prompt")
+	}
+}
+
+// TestReviewRedactsRemoteModelBoundary places secrets in both the line
+// content and the file path, then verifies the prompt built inside
+// Review and the model echo never carry the raw values.
+func TestReviewRedactsRemoteModelBoundary(t *testing.T) {
+	files := []review.ChangedFile{{
+		NewPath: "cfg/AKIA1234567890ABCDEF.go",
+		Hunks: []review.Hunk{{Lines: []review.DiffLine{{
+			Kind: "added", NewLine: 1,
+			Content: `password = "hunter2-super-secret"`,
+		}}}},
+	}}
+	// The exact pipeline Review uses before the model boundary.
+	prompt := BuildPrompt(redactFiles(files))
+	for _, raw := range []string{"AKIA1234567890ABCDEF", "hunter2-super-secret"} {
+		if strings.Contains(prompt, raw) {
+			t.Fatalf("prompt leaks %q:\n%s", raw, prompt)
+		}
+	}
+	if !strings.Contains(prompt, "[REDACTED_SECRET]") {
+		t.Fatalf("prompt missing redaction placeholder:\n%s", prompt)
+	}
+	// End to end: the fake model echoes the first added line back as
+	// evidence, so a leak would surface in the finding.
+	out, err := Review(context.Background(), Config{
+		Mode:    ModeFakeModel,
+		TaskID:  "cr-redact",
+		Timeout: 10 * time.Second,
+	}, files)
+	if err != nil {
+		t.Fatalf("fake-model review failed: %v", err)
+	}
+	if len(out.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1", len(out.Findings))
+	}
+	if strings.Contains(out.Findings[0].Evidence, "hunter2-super-secret") {
+		t.Fatalf("model evidence leaks the secret: %q", out.Findings[0].Evidence)
+	}
+}

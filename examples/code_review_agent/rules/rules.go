@@ -28,6 +28,10 @@ const (
 
 var secretLineRE = regexp.MustCompile(`(?i)(api[_-]?key|token|password|passwd|secret)\s*[:=]`)
 
+// literalValueRE matches an assignment whose value starts with a quoted
+// literal, the signature of a credential written into the source itself.
+var literalValueRE = regexp.MustCompile("[:=]\\s*[\"'`]")
+
 // Result separates high-confidence findings from review warnings.
 type Result struct {
 	Findings         []review.Finding
@@ -92,7 +96,7 @@ func scanHunk(file review.ChangedFile, hunk review.Hunk) []review.Finding {
 			findings = append(findings, f)
 		}
 		if secretLineRE.MatchString(trimmed) || strings.Contains(trimmed, "sk-") || strings.Contains(trimmed, "ghp_") {
-			add(review.Finding{
+			finding := review.Finding{
 				Severity:       review.SeverityCritical,
 				Category:       "security",
 				Title:          "Potential hard-coded secret",
@@ -101,7 +105,17 @@ func scanHunk(file review.ChangedFile, hunk review.Hunk) []review.Finding {
 				Confidence:     0.96,
 				Source:         "rule-only",
 				RuleID:         "SEC001",
-			})
+			}
+			// Retrieval patterns such as os.Getenv("TOKEN") or
+			// cfg.Password carry no literal credential, so they stay a
+			// low-confidence heads-up instead of a critical finding.
+			if !literalSecretValue(trimmed) {
+				finding.Severity = review.SeverityMedium
+				finding.Title = "Secret-named variable assigned from a non-literal source"
+				finding.Recommendation = "Verify the assigned value comes from a secret manager or environment, not an obfuscated literal."
+				finding.Confidence = 0.40
+			}
+			add(finding)
 		}
 		if strings.Contains(trimmed, "go func(") || strings.Contains(trimmed, "go func()") {
 			confidence := 0.78
@@ -346,6 +360,17 @@ func hunkText(h review.Hunk) string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+// literalSecretValue reports whether a secret-related line carries an
+// inline literal credential: a quoted value right after the assignment
+// or a raw token prefix. Lookup expressions such as os.Getenv("TOKEN")
+// or cfg.Password do not qualify.
+func literalSecretValue(line string) bool {
+	if strings.Contains(line, "sk-") || strings.Contains(line, "ghp_") {
+		return true
+	}
+	return literalValueRE.MatchString(line)
 }
 
 // opensResource reports whether the line acquires a closable resource.

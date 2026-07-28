@@ -257,6 +257,40 @@ func TestRunRejectsUnknownMode(t *testing.T) {
 	}
 }
 
+// TestSkillsRootIgnoresWorkingDirectory ensures a reviewed repository
+// cannot shadow the bundled skills by planting its own skills tree in
+// the working directory; only --skills-root may point elsewhere.
+func TestSkillsRootIgnoresWorkingDirectory(t *testing.T) {
+	forged := t.TempDir()
+	forgedSkill := filepath.Join(forged, "skills", "code-review")
+	if err := os.MkdirAll(forgedSkill, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(forged); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
+
+	got := resolveSkillsRoot("")
+	if abs, err := filepath.Abs(got); err == nil {
+		got = abs
+	}
+	if strings.HasPrefix(got, forged) {
+		t.Fatalf("default skills root %q trusts the working directory", got)
+	}
+	if want := filepath.Join(exampleDir(), "skills"); got != want {
+		t.Fatalf("skills root = %q, want bundled %q", got, want)
+	}
+	// An explicit flag still wins so users can opt into custom skills.
+	if got := resolveSkillsRoot(forgedSkill); got != forgedSkill {
+		t.Fatalf("explicit skills root = %q, want %q", got, forgedSkill)
+	}
+}
+
 // TestExpectedOutputsStayInSync re-runs every fixture and compares the
 // result against the curated files under testdata/expected, so the samples
 // never drift from the real reports. Regenerate them with

@@ -45,7 +45,14 @@ func ParseUnifiedDiff(data []byte) ([]review.ChangedFile, error) {
 	}
 	flushFile := func() {
 		flushHunk()
-		if current != nil && current.NewPath != "" {
+		if current != nil && (current.NewPath != "" || current.OldPath != "") {
+			// A deletion clears NewPath via "+++ /dev/null"; keep the
+			// file with its old path as the display path so it stays
+			// visible in reports, prompts, and audit records.
+			if current.NewPath == "" {
+				current.NewPath = current.OldPath
+				current.Deleted = true
+			}
 			current.Language = languageForPath(current.NewPath)
 			current.PackageName = detectPackage(*current)
 			files = append(files, *current)
@@ -69,7 +76,8 @@ func ParseUnifiedDiff(data []byte) ([]review.ChangedFile, error) {
 			// "--- " line after a file with parsed hunks starts the next
 			// file. The hunk check keeps git-style headers (which set
 			// NewPath before any hunk) attached to the same file.
-			if current != nil && current.NewPath != "" &&
+			if current != nil &&
+				(current.NewPath != "" || current.OldPath != "") &&
 				(len(current.Hunks) > 0 || currentHunk != nil) {
 				flushFile()
 			}

@@ -27,6 +27,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 	sessioninmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/redaction"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 )
 
@@ -72,7 +73,9 @@ between 0 and 1 and reflect how certain you are.`
 
 // Review runs the review agent and returns validated model findings.
 // Failures are returned as errors so the caller can degrade to rule-only
-// results instead of aborting the review task.
+// results instead of aborting the review task. Every field that reaches
+// the prompt is redacted here, so no caller can bypass the guarantee
+// that secrets never leave the process toward a remote model.
 func Review(ctx context.Context, cfg Config, files []review.ChangedFile) (Output, error) {
 	mdl, err := buildModel(cfg)
 	if err != nil {
@@ -83,7 +86,7 @@ func Review(ctx context.Context, cfg Config, files []review.ChangedFile) (Output
 	}
 	start := time.Now()
 	out := Output{ModelCalls: 1}
-	content, err := invoke(ctx, cfg, mdl, BuildPrompt(files))
+	content, err := invoke(ctx, cfg, mdl, BuildPrompt(redactFiles(files)))
 	out.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
 		return out, err
@@ -168,39 +171,88 @@ func collectFinalContent(eventCh <-chan *event.Event) (string, error) {
 	return content, nil
 }
 
+// redactFiles deep-copies the changed files and redacts every field
+// rendered into the prompt: paths, package names, and line contents.
+func redactFiles(files []review.ChangedFile) []review.ChangedFile {
+	out := make([]review.ChangedFile, len(files))
+	copy(out, files)
+	for i := range out {
+		out[i].OldPath = redaction.RedactText(out[i].OldPath)
+		out[i].NewPath = redaction.RedactText(out[i].NewPath)
+		out[i].PackageName = redaction.RedactText(out[i].PackageName)
+		out[i].Hunks = make([]review.Hunk, len(files[i].Hunks))
+		copy(out[i].Hunks, files[i].Hunks)
+		for j := range out[i].Hunks {
+			out[i].Hunks[j].Lines = make([]review.DiffLine, len(files[i].Hunks[j].Lines))
+			copy(out[i].Hunks[j].Lines, files[i].Hunks[j].Lines)
+			for k := range out[i].Hunks[j].Lines {
+				out[i].Hunks[j].Lines[k].Content = redaction.RedactText(out[i].Hunks[j].Lines[k].Content)
+			}
+		}
+	}
+	return out
+}
+
 // BuildPrompt renders changed files into the diff prompt sent to the model.
-// Callers must pass redacted files so secrets never reach a remote model.
+// The result never exceeds promptByteCap bytes: the remaining budget is
+// checked before each chunk is appended, so one oversized diff line in an
+// untrusted input cannot inflate the prompt past the cap.
 func BuildPrompt(files []review.ChangedFile) string {
+	const truncationMarker = "[diff truncated]\n"
 	var b strings.Builder
 	b.WriteString("Review this Go diff and answer with the JSON contract only.\n\n")
+	// Reserve room for the marker so the cap holds even when truncating.
+	budget := promptByteCap - b.Len() - len(truncationMarker)
+	truncated := false
 fileLoop:
 	for _, file := range files {
-		fmt.Fprintf(&b, "FILE: %s", file.NewPath)
+		header := "FILE: " + file.NewPath
 		if file.PackageName != "" {
-			fmt.Fprintf(&b, " (package %s)", file.PackageName)
+			header += " (package " + file.PackageName + ")"
 		}
-		b.WriteByte('\n')
+		if !appendWithinBudget(&b, header+"\n", &budget) {
+			truncated = true
+			break fileLoop
+		}
 		for _, hunk := range file.Hunks {
 			for _, line := range hunk.Lines {
+				var text string
 				switch line.Kind {
 				case "added":
-					fmt.Fprintf(&b, "+ %d: %s\n", line.NewLine, line.Content)
+					text = fmt.Sprintf("+ %d: %s\n", line.NewLine, line.Content)
 				case "removed":
-					fmt.Fprintf(&b, "- %d: %s\n", line.OldLine, line.Content)
+					text = fmt.Sprintf("- %d: %s\n", line.OldLine, line.Content)
 				default:
-					fmt.Fprintf(&b, "  %d: %s\n", line.NewLine, line.Content)
+					text = fmt.Sprintf("  %d: %s\n", line.NewLine, line.Content)
 				}
-				// The cap must hold per line: one oversized hunk in an
-				// untrusted diff must not produce an unbounded prompt.
-				if b.Len() > promptByteCap {
-					b.WriteString("[diff truncated]\n")
+				if !appendWithinBudget(&b, text, &budget) {
+					truncated = true
 					break fileLoop
 				}
 			}
 		}
-		b.WriteByte('\n')
+		if !appendWithinBudget(&b, "\n", &budget) {
+			truncated = true
+			break fileLoop
+		}
+	}
+	if truncated {
+		b.WriteString(truncationMarker)
 	}
 	return b.String()
+}
+
+// appendWithinBudget writes text to b, clipping at the remaining budget.
+// It returns false once the budget is exhausted.
+func appendWithinBudget(b *strings.Builder, text string, budget *int) bool {
+	if len(text) <= *budget {
+		b.WriteString(text)
+		*budget -= len(text)
+		return true
+	}
+	b.WriteString(text[:*budget])
+	*budget = 0
+	return false
 }
 
 // intPtr returns a pointer to i.

@@ -379,17 +379,20 @@ func resolveFixturePath(name string) string {
 	)
 }
 
-// resolveSkillsRoot locates the bundled skills directory when
-// --skills-root is not set.
+// resolveSkillsRoot locates the skill directory. Only an explicit
+// --skills-root is trusted from user input; the default resolves to
+// the bundled source directory or the executable's directory so a
+// reviewed repository cannot shadow the allow-listed scripts with its
+// own skills/code-review tree in the working directory.
 func resolveSkillsRoot(root string) string {
 	if root != "" {
 		return root
 	}
-	return firstExistingPath(
-		filepath.Join("code_review_agent", "skills"),
-		"skills",
-		filepath.Join(exampleDir(), "skills"),
-	)
+	candidates := []string{filepath.Join(exampleDir(), "skills")}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "skills"))
+	}
+	return firstExistingPath(candidates...)
 }
 
 // exampleDir returns the directory of this source file so bundled

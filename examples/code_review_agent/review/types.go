@@ -46,7 +46,10 @@ type ChangedFile struct {
 	NewPath     string `json:"new_path"`
 	Language    string `json:"language,omitempty"`
 	PackageName string `json:"package_name,omitempty"`
-	Hunks       []Hunk `json:"hunks"`
+	// Deleted marks a file removed by the diff; NewPath then carries
+	// the old path so reports and prompts can still display it.
+	Deleted bool   `json:"deleted,omitempty"`
+	Hunks   []Hunk `json:"hunks"`
 }
 
 // Hunk is one unified diff hunk.
