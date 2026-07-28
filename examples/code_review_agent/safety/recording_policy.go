@@ -21,16 +21,29 @@ import (
 
 // RecordingToolPolicy wraps a PermissionPolicy and records every decision for
 // audit persistence (LLM assist tool calls included).
+//
+// The inner policy is required: NewRecordingToolPolicy(nil) installs a deny-all
+// fallback, and a nil receiver denies. Failed Inner checks are still recorded
+// before the error is returned.
 type RecordingToolPolicy struct {
-	Inner tool.PermissionPolicy
+	inner tool.PermissionPolicy
 
 	mu        sync.Mutex
 	decisions []review.PermissionDecision
 }
 
 // NewRecordingToolPolicy returns a recording wrapper around inner.
+// A nil inner is replaced with a deny-all policy so misconfiguration cannot
+// silently allow tool calls or skip audit records.
 func NewRecordingToolPolicy(inner tool.PermissionPolicy) *RecordingToolPolicy {
-	return &RecordingToolPolicy{Inner: inner}
+	if inner == nil {
+		inner = tool.PermissionPolicyFunc(func(
+			context.Context, *tool.PermissionRequest,
+		) (tool.PermissionDecision, error) {
+			return tool.DenyPermission("permission policy is required"), nil
+		})
+	}
+	return &RecordingToolPolicy{inner: inner}
 }
 
 // CheckToolPermission implements tool.PermissionPolicy.
@@ -38,13 +51,10 @@ func (r *RecordingToolPolicy) CheckToolPermission(
 	ctx context.Context,
 	req *tool.PermissionRequest,
 ) (tool.PermissionDecision, error) {
-	if r == nil || r.Inner == nil {
-		return tool.AllowPermission(), nil
+	if r == nil {
+		return tool.DenyPermission("recording permission policy is nil"), nil
 	}
-	dec, err := r.Inner.CheckToolPermission(ctx, req)
-	if err != nil {
-		return dec, err
-	}
+	dec, err := r.inner.CheckToolPermission(ctx, req)
 	cmd, _ := extractExecCommand(req)
 	toolName := ""
 	if req != nil {
@@ -53,17 +63,32 @@ func (r *RecordingToolPolicy) CheckToolPermission(
 	if cmd == "" {
 		cmd = toolName
 	}
+	action := string(dec.Action)
+	reason := dec.Reason
+	if err != nil {
+		if action == "" {
+			action = ActionDeny
+		}
+		if reason == "" {
+			reason = err.Error()
+		} else {
+			reason = reason + "; " + err.Error()
+		}
+	}
+	if action == "" {
+		action = ActionDeny
+	}
 	pd := review.PermissionDecision{
 		ToolName:  toolName,
 		Command:   Redact(cmd),
-		Action:    string(dec.Action),
-		Reason:    Redact(dec.Reason),
+		Action:    action,
+		Reason:    Redact(reason),
 		CreatedAt: time.Now().UTC(),
 	}
 	r.mu.Lock()
 	r.decisions = append(r.decisions, pd)
 	r.mu.Unlock()
-	return dec, nil
+	return dec, err
 }
 
 // Decisions returns a copy of recorded permission decisions.
