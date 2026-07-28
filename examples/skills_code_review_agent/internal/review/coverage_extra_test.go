@@ -12,10 +12,13 @@ package review
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -92,6 +95,52 @@ func (m *mockWorkspaceEngine) RunProgram(_ context.Context, _ codeexecutor.Works
 	default:
 		return codeexecutor.RunResult{ExitCode: 127}, errors.New("unknown command")
 	}
+}
+
+type capturingReviewModel struct {
+	mu       sync.Mutex
+	requests []string
+}
+
+func (m *capturingReviewModel) Info() model.Info {
+	return model.Info{Name: "capturing-review-model"}
+}
+
+func (m *capturingReviewModel) GenerateContent(ctx context.Context, request *model.Request) (<-chan *model.Response, error) {
+	var content strings.Builder
+	for _, message := range request.Messages {
+		content.WriteString(message.Content)
+		content.WriteByte('\n')
+	}
+	m.mu.Lock()
+	m.requests = append(m.requests, content.String())
+	m.mu.Unlock()
+	response := &model.Response{
+		ID:      "capturing-review",
+		Object:  model.ObjectTypeChatCompletion,
+		Created: time.Now().Unix(),
+		Done:    true,
+		Choices: []model.Choice{{
+			Index: 0,
+			Message: model.Message{
+				Role:    model.RoleAssistant,
+				Content: "[]",
+			},
+		}},
+	}
+	out := make(chan *model.Response, 1)
+	select {
+	case <-ctx.Done():
+	case out <- response:
+	}
+	close(out)
+	return out, nil
+}
+
+func (m *capturingReviewModel) text() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return strings.Join(m.requests, "\n")
 }
 
 type snapshotAwareSecretsEngine struct {
@@ -200,6 +249,96 @@ func TestLoadInputDiffSourcesAndValidation(t *testing.T) {
 	}
 	if _, _, err := loadInputDiff(testContext(t), ReviewConfig{Fixture: "missing_fixture"}); err == nil {
 		t.Fatal("expected missing fixture error")
+	}
+}
+
+func TestDiffAcquisitionEnforcesTrackedUntrackedAndDiffFileBudgets(t *testing.T) {
+	makeRepo := func(t *testing.T) string {
+		t.Helper()
+		repo := t.TempDir()
+		runGit(t, repo, "init", "-q")
+		writeTestFile(t, filepath.Join(repo, "go.mod"), "module example.com/budget\n\ngo 1.23\n")
+		writeTestFile(t, filepath.Join(repo, "main.go"), "package main\n")
+		runGit(t, repo, "add", ".")
+		runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-qm", "init")
+		return repo
+	}
+	assertBudgetError := func(t *testing.T, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatal("expected diff input budget error")
+		}
+		var budgetErr *diffInputBudgetError
+		if !errors.As(err, &budgetErr) {
+			t.Fatalf("expected diffInputBudgetError, got %T %v", err, err)
+		}
+	}
+
+	t.Run("tracked", func(t *testing.T) {
+		repo := makeRepo(t)
+		writeTestFile(t, filepath.Join(repo, "main.go"),
+			"package main\n\nvar oversized = \""+strings.Repeat("x", reviewDiffMaxFileBytes)+"\"\n")
+		_, err := gitDiff(testContext(t), repo)
+		assertBudgetError(t, err)
+	})
+
+	t.Run("untracked", func(t *testing.T) {
+		repo := makeRepo(t)
+		writeTestFile(t, filepath.Join(repo, "untracked.go"),
+			"package main\n\nvar oversized = \""+strings.Repeat("x", reviewDiffMaxFileBytes)+"\"\n")
+		_, err := gitDiff(testContext(t), repo)
+		assertBudgetError(t, err)
+	})
+
+	t.Run("unborn-cached", func(t *testing.T) {
+		repo := t.TempDir()
+		runGit(t, repo, "init", "-q")
+		writeTestFile(t, filepath.Join(repo, "cached.go"),
+			"package cached\n\nvar oversized = \""+strings.Repeat("x", reviewDiffMaxFileBytes)+"\"\n")
+		runGit(t, repo, "add", "cached.go")
+		_, err := gitDiff(testContext(t), repo)
+		assertBudgetError(t, err)
+	})
+
+	t.Run("diff-file", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "oversized.diff")
+		if err := os.WriteFile(path, []byte(strings.Repeat("x", reviewDiffMaxTotalBytes+1)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := loadInputDiff(testContext(t), ReviewConfig{DiffFile: path})
+		assertBudgetError(t, err)
+	})
+}
+
+func TestDiffAcquisitionHonorsCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input.diff")
+	if err := os.WriteFile(path, []byte("diff --git a/a.go b/a.go\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := readReviewInputFile(ctx, path, path, reviewDiffMaxTotalBytes); !errors.Is(err, context.Canceled) {
+		t.Fatalf("readReviewInputFile error = %v, want context.Canceled", err)
+	}
+	if _, err := fileListSyntheticDiffContext(ctx, path); !errors.Is(err, context.Canceled) {
+		t.Fatalf("fileListSyntheticDiffContext error = %v, want context.Canceled", err)
+	}
+
+	fakeGitDir := t.TempDir()
+	fakeGitPath := filepath.Join(fakeGitDir, "git")
+	fakeGit := "#!/bin/sh\nprintf 'start\\n'\nsleep 5\n"
+	if runtime.GOOS == "windows" {
+		fakeGitPath += ".bat"
+		fakeGit = "@echo off\r\necho start\r\nping -n 6 127.0.0.1 >nul\r\n"
+	}
+	if err := os.WriteFile(fakeGitPath, []byte(fakeGit), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeGitDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	gitCtx, gitCancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer gitCancel()
+	if _, err := gitOutputLimited(gitCtx, t.TempDir(), reviewDiffMaxTotalBytes, "diff"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("gitOutputLimited error = %v, want context.DeadlineExceeded", err)
 	}
 }
 
@@ -792,6 +931,39 @@ replace example.com/localmod => ./localmod
 	}
 }
 
+func TestWorkspaceSandboxRunnerRejectsSymlinkedLocalReplaceManifest(t *testing.T) {
+	repo := t.TempDir()
+	external := t.TempDir()
+	runGit(t, repo, "init", "-q")
+	writeTestFile(t, filepath.Join(repo, "go.mod"), `module example.com/deps
+
+go 1.23
+
+require example.com/localmod v0.0.0
+
+replace example.com/localmod => ./localmod
+`)
+	writeTestFile(t, filepath.Join(external, "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
+	writeTestFile(t, filepath.Join(repo, "localmod", "README.md"), "tracked sibling file\n")
+	if err := os.Symlink(filepath.Join(external, "go.mod"), filepath.Join(repo, "localmod", "go.mod")); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	plan, err := buildSandboxSnapshotPlan(testContext(t), repo, sandboxSnapshotMaxFiles)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.fileSet["localmod/go.mod"] || !plan.fileSet["localmod/README.md"] {
+		t.Fatalf("expected symlinked manifest and tracked sibling in snapshot plan: %+v", plan.fileSet)
+	}
+	if !repoHasUnvendoredExternalModulesForSnapshot(repo, plan) {
+		t.Fatal("symlinked local replacement manifest should not be treated as available in the sandbox snapshot")
+	}
+	if localReplaceTargetWithinSnapshot(repo, plan, "./localmod") {
+		t.Fatal("symlinked local replacement manifest unexpectedly passed snapshot validation")
+	}
+}
+
 func TestLocalReplaceTargetWithinSnapshotRejectsNilFileSet(t *testing.T) {
 	repo := t.TempDir()
 	writeTestFile(t, filepath.Join(repo, "localmod", "go.mod"), "module example.com/localmod\n\ngo 1.23\n")
@@ -1017,10 +1189,116 @@ func TestSmallParserRuleAndRedactionBranches(t *testing.T) {
 		"Bearer abcdefghijklmnopqrstuvwxyz",
 		"Basic YWRtaW46cGFzc3dvcmQxMjM0NQ==",
 		`postgres://alice:S3cr3tPass@db.internal/app`,
+		"password := `raw-string-secret`",
+		"var password string = `typed-raw-string-secret`",
+		"const clientSecret string = `typed-const-raw-secret`",
+		"cfg := Config{Password: `composite-raw-string-secret`}",
+		"var (\n\tpassword string = `block-raw-string-secret`\n)",
 	} {
-		if got := redactSecrets(raw); strings.Contains(got, "abcdefghijklmnopqrstuvwxyz") || strings.Contains(got, "S3cr3tPass") {
+		if got := redactSecrets(raw); strings.Contains(got, "abcdefghijklmnopqrstuvwxyz") ||
+			strings.Contains(got, "S3cr3tPass") || strings.Contains(got, "raw-string-secret") ||
+			strings.Contains(got, "typed-raw-string-secret") || strings.Contains(got, "typed-const-raw-secret") ||
+			strings.Contains(got, "composite-raw-string-secret") || strings.Contains(got, "block-raw-string-secret") {
 			t.Fatalf("secret leaked after redaction: %q -> %q", raw, got)
 		}
+	}
+}
+
+func TestRawStringCredentialRedactionCoversModelDatabaseAndReports(t *testing.T) {
+	const secret = "raw-password-secret-7f2c9a"
+	diff := "diff --git a/credentials.go b/credentials.go\n" +
+		"new file mode 100644\n" +
+		"--- /dev/null\n" +
+		"+++ b/credentials.go\n" +
+		"@@ -0,0 +1,3 @@\n" +
+		"+package credentials\n" +
+		"+\n" +
+		"+var password string = `" + secret + "`\n"
+	diffPath := filepath.Join(t.TempDir(), "raw-secret.diff")
+	if err := os.WriteFile(diffPath, []byte(diff), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	captured := &capturingReviewModel{}
+	originalModelFactory := newFakeReviewModelForRun
+	newFakeReviewModelForRun = func(fakeReviewAnchor) model.Model {
+		return captured
+	}
+	defer func() {
+		newFakeReviewModelForRun = originalModelFactory
+	}()
+
+	outputDir := t.TempDir()
+	dbPath := filepath.Join(outputDir, "reviews.sqlite")
+	report, _, _, err := RunReview(testContext(t), ReviewConfig{
+		DiffFile:  diffPath,
+		OutputDir: outputDir,
+		DBPath:    dbPath,
+		DryRun:    true,
+		FakeModel: true,
+		LLMReview: true,
+		Executor:  "fake",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if modelInput := captured.text(); strings.Contains(modelInput, secret) ||
+		!strings.Contains(modelInput, "[REDACTED]") {
+		t.Fatalf("model input leaked raw-string credential: %q", modelInput)
+	}
+
+	store, err := OpenStore(testContext(t), dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	db := store.(*Store).db
+	var preview string
+	if err := db.QueryRowContext(testContext(t),
+		`SELECT diff_preview FROM review_inputs WHERE task_id = ?`, report.Task.ID,
+	).Scan(&preview); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(preview, secret) {
+		t.Fatalf("database diff preview leaked raw-string credential: %q", preview)
+	}
+	rows, err := db.QueryContext(testContext(t),
+		`SELECT evidence, recommendation FROM findings WHERE task_id = ?`, report.Task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var evidence, recommendation string
+		if err := rows.Scan(&evidence, &recommendation); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(evidence, secret) || strings.Contains(recommendation, secret) {
+			t.Fatalf("database finding leaked raw-string credential: evidence=%q recommendation=%q", evidence, recommendation)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	err = filepath.WalkDir(outputDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) == ".sqlite" {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(data), secret) {
+			return fmt.Errorf("report artifact %s leaked raw-string credential", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

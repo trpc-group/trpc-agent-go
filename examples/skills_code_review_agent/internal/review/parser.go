@@ -10,6 +10,7 @@
 package review
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -21,6 +22,20 @@ import (
 
 var hunkHeaderRE = regexp.MustCompile(`^@@ -([0-9]+)(?:,([0-9]+))? \+([0-9]+)(?:,([0-9]+))? @@`)
 var packageDeclRE = regexp.MustCompile(`^\s*package\s+([A-Za-z_][A-Za-z0-9_]*)\b`)
+
+func scanDiffLines(raw string, maxLineBytes int, visit func(string) error) error {
+	scanner := bufio.NewScanner(strings.NewReader(raw))
+	scanner.Buffer(make([]byte, 32<<10), maxLineBytes)
+	for scanner.Scan() {
+		if err := visit(scanner.Text()); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan diff: %w", err)
+	}
+	return nil
+}
 
 func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 	sum := sha256.Sum256([]byte(raw))
@@ -55,7 +70,7 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 		}
 	}
 
-	for _, line := range strings.Split(raw, "\n") {
+	err := scanDiffLines(raw, reviewDiffMaxFileBytes, func(line string) error {
 		switch {
 		case strings.HasPrefix(line, "diff --git "):
 			flushFile()
@@ -69,7 +84,7 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 			flushHunk()
 			m := hunkHeaderRE.FindStringSubmatch(line)
 			if m == nil {
-				return ParsedDiff{}, fmt.Errorf("invalid hunk header: %s", line)
+				return fmt.Errorf("invalid hunk header: %s", line)
 			}
 			oldStart := atoiDefault(m[1], 0)
 			oldCount := atoiDefault(m[2], 1)
@@ -86,7 +101,7 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 			}
 		case currentHunk != nil:
 			if line == `\ No newline at end of file` {
-				continue
+				return nil
 			}
 			kind := byte(' ')
 			text := line
@@ -117,6 +132,10 @@ func ParseUnifiedDiff(raw string) (ParsedDiff, error) {
 			currentFile.NewPath = cleanDiffPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
 			currentFile.Deleted = currentFile.NewPath == "" && currentFile.OldPath != ""
 		}
+		return nil
+	})
+	if err != nil {
+		return ParsedDiff{}, err
 	}
 	flushFile()
 	pd.Summary.FilesChanged = len(pd.Files)

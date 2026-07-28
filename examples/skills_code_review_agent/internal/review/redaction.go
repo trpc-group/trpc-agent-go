@@ -9,10 +9,16 @@
 
 package review
 
-import "regexp"
+import (
+	"go/scanner"
+	"go/token"
+	"regexp"
+	"sort"
+)
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|id[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|private[_-]?key)\s*:?=\s*["'][^"']+["']`),
+	regexp.MustCompile("(?i)(api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|id[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|private[_-]?key)\\s*:?=\\s*`[^`]*`"),
 	regexp.MustCompile("(?i)(api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|id[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|private[_-]?key)\\s*:?=\\s*[^\"'`\\s,;]+"),
 	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|id[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|private[_-]?key)\s*:\s*["'][^"']+["']`),
 	regexp.MustCompile(`(?i)(api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|id[_-]?token|auth[_-]?token|token|secret|credential|password|passwd|private[_-]?key)\s*:\s*[A-Za-z0-9._~+/=-]{12,}`),
@@ -39,11 +45,83 @@ var secretPatterns = []*regexp.Regexp{
 }
 
 func redactSecrets(s string) string {
-	out := s
+	out := redactGoCredentialStringLiterals(s)
 	for _, re := range secretPatterns {
 		out = re.ReplaceAllStringFunc(out, redactMatch)
 	}
 	return out
+}
+
+type secretReplacement struct {
+	start int
+	end   int
+	text  string
+}
+
+func redactGoCredentialStringLiterals(s string) string {
+	if s == "" {
+		return s
+	}
+	fset := token.NewFileSet()
+	file := fset.AddFile("redaction.go", fset.Base(), len(s))
+	var scan scanner.Scanner
+	scan.Init(file, []byte(s), nil, 0)
+	var replacements []secretReplacement
+	state := goCredentialRedactionState{}
+	for {
+		pos, tok, lit := scan.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.SEMICOLON {
+			state = goCredentialRedactionState{}
+			continue
+		}
+		switch tok {
+		case token.IDENT:
+			if credentialNameLike(lit) {
+				state.credentialSeen = true
+			}
+		case token.ASSIGN, token.DEFINE, token.COLON:
+			if state.credentialSeen {
+				state.assignmentSeen = true
+			}
+		case token.STRING:
+			if state.credentialSeen && state.assignmentSeen {
+				start := fset.Position(pos).Offset
+				if start >= 0 && start+len(lit) <= len(s) {
+					replacements = append(replacements, secretReplacement{
+						start: start,
+						end:   start + len(lit),
+						text:  redactedStringLiteral(lit),
+					})
+				}
+			}
+		}
+	}
+	if len(replacements) == 0 {
+		return s
+	}
+	sort.Slice(replacements, func(i, j int) bool {
+		return replacements[i].start > replacements[j].start
+	})
+	out := s
+	for _, r := range replacements {
+		out = out[:r.start] + r.text + out[r.end:]
+	}
+	return out
+}
+
+type goCredentialRedactionState struct {
+	credentialSeen bool
+	assignmentSeen bool
+}
+
+func redactedStringLiteral(lit string) string {
+	if len(lit) >= 2 && lit[0] == '`' {
+		return "`[REDACTED]`"
+	}
+	return `"[REDACTED]"`
 }
 
 func redactMatch(s string) string {

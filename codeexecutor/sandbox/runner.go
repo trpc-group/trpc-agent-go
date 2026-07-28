@@ -48,10 +48,7 @@ func (r *Runtime) RunProgram(
 	if cleanup != nil {
 		defer cleanup()
 	}
-	maxOutputBytes := r.outputMaxBytes
-	if spec.MaxOutputBytes > 0 {
-		maxOutputBytes = spec.MaxOutputBytes
-	}
+	maxOutputBytes := effectiveOutputMaxBytes(r.outputMaxBytes, spec.MaxOutputBytes)
 	outputLimiter := codeexecutor.NewOutputLimiter(maxOutputBytes)
 	stdout := outputLimiter.NewWriter()
 	stderr := outputLimiter.NewWriter()
@@ -98,6 +95,16 @@ func (r *Runtime) RunProgram(
 		}
 	}
 	return result, nil
+}
+
+func effectiveOutputMaxBytes(runtimeLimit, requestedLimit int) int {
+	if runtimeLimit <= 0 {
+		return requestedLimit
+	}
+	if requestedLimit > 0 && requestedLimit < runtimeLimit {
+		return requestedLimit
+	}
+	return runtimeLimit
 }
 
 type runPreparation struct {

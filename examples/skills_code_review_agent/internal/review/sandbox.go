@@ -642,8 +642,30 @@ func regularFileWithinSnapshot(filePath string, plan sandboxSnapshotPlan) bool {
 	if rel == "" || !plan.fileSet[rel] {
 		return false
 	}
+	if !pathHasSymlinkWithinSnapshot(root, absFile) {
+		return false
+	}
 	info, err := os.Lstat(absFile)
 	return err == nil && info.Mode().IsRegular()
+}
+
+func pathHasSymlinkWithinSnapshot(root, target string) bool {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	current := root
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func goModHasRequire(data string) bool {
@@ -770,18 +792,9 @@ func localReplaceTargetWithinSnapshot(moduleDir string, plan sandboxSnapshotPlan
 	if err != nil {
 		return false
 	}
-	info, err := os.Stat(absTarget)
+	info, err := os.Lstat(absTarget)
 	if err != nil || !info.IsDir() {
 		return false
-	}
-	if _, err := os.Stat(filepath.Join(absTarget, "go.mod")); err != nil {
-		return false
-	}
-	if realRoot, err := filepath.EvalSymlinks(root); err == nil {
-		root = realRoot
-	}
-	if realTarget, err := filepath.EvalSymlinks(absTarget); err == nil {
-		absTarget = realTarget
 	}
 	rel, err := filepath.Rel(root, absTarget)
 	if err != nil {
@@ -792,9 +805,9 @@ func localReplaceTargetWithinSnapshot(moduleDir string, plan sandboxSnapshotPlan
 	}
 	rel = filepath.ToSlash(rel)
 	if rel == "." {
-		return plan.fileSet["go.mod"]
+		return regularFileWithinSnapshot(filepath.Join(root, "go.mod"), plan)
 	}
-	return plan.fileSet[rel+"/go.mod"]
+	return regularFileWithinSnapshot(filepath.Join(root, rel, "go.mod"), plan)
 }
 
 func prepareSandboxRepoSnapshotForPath(ctx context.Context, repoPath string) (string, string, func() error, error) {

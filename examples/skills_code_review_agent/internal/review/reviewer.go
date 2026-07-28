@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +28,68 @@ import (
 )
 
 var reviewAuditPersistenceTimeout = 5 * time.Second
+
+const (
+	reviewDiffMaxTotalBytes    = 16 << 20
+	reviewDiffMaxFileBytes     = 4 << 20
+	reviewDiffMaxFileListBytes = 1 << 20
+	reviewDiffMaxFiles         = 4096
+	reviewDiffReadChunkSize    = 32 << 10
+)
+
+type diffInputBudgetError struct {
+	path   string
+	reason string
+	limit  int64
+	got    int64
+}
+
+func (e *diffInputBudgetError) Error() string {
+	return fmt.Sprintf("review diff input %s for %s: got %d, limit %d", e.reason, e.path, e.got, e.limit)
+}
+
+type diffInputBudget struct {
+	maxTotal int64
+	used     int64
+}
+
+func newDiffInputBudget(maxTotal int64) *diffInputBudget {
+	return &diffInputBudget{maxTotal: maxTotal}
+}
+
+func (b *diffInputBudget) remaining() int64 {
+	if b == nil || b.maxTotal <= 0 {
+		return 0
+	}
+	return b.maxTotal - b.used
+}
+
+func (b *diffInputBudget) reserve(path string, n int64) error {
+	if n <= 0 {
+		return nil
+	}
+	if b == nil {
+		return nil
+	}
+	if b.maxTotal <= 0 {
+		return &diffInputBudgetError{
+			path:   path,
+			reason: "total-byte budget exceeded",
+			limit:  b.maxTotal,
+			got:    n,
+		}
+	}
+	if b.used+n > b.maxTotal {
+		return &diffInputBudgetError{
+			path:   path,
+			reason: "total-byte budget exceeded",
+			limit:  b.maxTotal,
+			got:    b.used + n,
+		}
+	}
+	b.used += n
+	return nil
+}
 
 func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, string, error) {
 	ctx, span := atrace.Tracer.Start(ctx, "examples.code_review_agent.review")
@@ -109,7 +172,7 @@ func RunReview(ctx context.Context, cfg ReviewConfig) (ReviewReport, string, str
 		return persistFailure("parse_diff", err)
 	}
 	if cfg.RepoPath != "" {
-		enrichPackageInfoFromRepo(&pd, cfg.RepoPath)
+		enrichPackageInfoFromRepoContext(ctx, &pd, cfg.RepoPath)
 	}
 	task.Status = StatusCompleted
 	findings, warnings, needsHuman := AnalyzeDiff(pd)
@@ -222,21 +285,30 @@ func contextErrorClass(err error) string {
 }
 
 func enrichPackageInfoFromRepo(pd *ParsedDiff, repoPath string) {
+	enrichPackageInfoFromRepoContext(context.Background(), pd, repoPath)
+}
+
+func enrichPackageInfoFromRepoContext(ctx context.Context, pd *ParsedDiff, repoPath string) {
 	for i := range pd.Files {
 		file := &pd.Files[i]
 		if !file.IsGo || file.PackageName != "" {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(file.NewPath)))
+		data, err := readReviewInputFile(
+			ctx,
+			filepath.Join(repoPath, filepath.FromSlash(file.NewPath)),
+			file.NewPath,
+			reviewDiffMaxFileBytes,
+		)
 		if err != nil {
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
+		_ = scanDiffLines(string(data), reviewDiffMaxFileBytes, func(line string) error {
 			if m := packageDeclRE.FindStringSubmatch(line); m != nil {
 				file.PackageName = m[1]
-				break
 			}
-		}
+			return nil
+		})
 	}
 	attachPackageInfoFromFiles(pd)
 }
@@ -282,21 +354,27 @@ func loadInputDiff(ctx context.Context, cfg ReviewConfig) (string, string, error
 	}
 	switch {
 	case cfg.DiffFile != "":
-		data, err := os.ReadFile(cfg.DiffFile)
+		data, err := readReviewInputFile(ctx, cfg.DiffFile, cfg.DiffFile, reviewDiffMaxTotalBytes)
 		if err != nil {
+			return "", "", err
+		}
+		if err := validateDiffChunkPerFile(string(data)); err != nil {
 			return "", "", err
 		}
 		return string(data), "diff-file", nil
 	case cfg.FileList != "":
-		diff, err := fileListSyntheticDiff(cfg.FileList)
+		diff, err := fileListSyntheticDiffContext(ctx, cfg.FileList)
 		if err != nil {
 			return "", "", err
 		}
 		return diff, "file-list", nil
 	case cfg.Fixture != "":
 		path := filepath.Join(exampleDir(), "fixtures", cfg.Fixture+".diff")
-		data, err := os.ReadFile(path)
+		data, err := readReviewInputFile(ctx, path, path, reviewDiffMaxTotalBytes)
 		if err != nil {
+			return "", "", err
+		}
+		if err := validateDiffChunkPerFile(string(data)); err != nil {
 			return "", "", err
 		}
 		return string(data), "fixture:" + cfg.Fixture, nil
@@ -338,33 +416,53 @@ func selectedInputs(cfg ReviewConfig) []string {
 }
 
 func gitDiff(ctx context.Context, repoPath string) (string, error) {
+	budget := newDiffInputBudget(reviewDiffMaxTotalBytes)
 	var chunks []string
 	var out []byte
 	var err error
 	if gitHasHEAD(ctx, repoPath) {
-		out, err = gitOutput(ctx, repoPath, "diff", "HEAD", "--no-ext-diff", "--no-color", "--unified=3")
-	} else {
-		out, err = gitOutput(ctx, repoPath, "ls-files", "--cached", "-z")
+		out, err = gitOutputLimited(ctx, repoPath, budget.remaining(), "diff", "HEAD", "--no-ext-diff", "--no-color", "--unified=3")
 		if err == nil && len(out) > 0 {
-			diff, diffErr := worktreeFileDiffs(repoPath, out, true)
+			if err := validateDiffChunkPerFile(string(out)); err != nil {
+				return "", err
+			}
+			if err := appendDiffChunk(&chunks, string(out), budget, "git diff"); err != nil {
+				return "", err
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("git diff: %w", err)
+		}
+	} else {
+		out, err = gitOutputLimited(ctx, repoPath, reviewDiffMaxFileListBytes, "ls-files", "--cached", "-z")
+		if err == nil && len(out) > 0 {
+			diff, diffErr := worktreeFileDiffsWithLimit(ctx, repoPath, out, true, budget.remaining())
 			if diffErr != nil {
 				return "", diffErr
 			}
 			out = []byte(diff)
+			if err := appendDiffChunk(&chunks, string(out), budget, "cached worktree files"); err != nil {
+				return "", err
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("git ls-files: %w", err)
 		}
 	}
-	if err == nil && len(out) > 0 {
-		chunks = append(chunks, string(out))
-	}
-	untracked, untrackedErr := gitOutput(ctx, repoPath, "ls-files", "--others", "--exclude-standard", "-z")
+	untracked, untrackedErr := gitOutputLimited(ctx, repoPath, reviewDiffMaxFileListBytes, "ls-files", "--others", "--exclude-standard", "-z")
 	if untrackedErr == nil && len(untracked) > 0 {
-		untrackedDiff, err := untrackedFileDiffs(repoPath, untracked)
+		untrackedDiff, err := worktreeFileDiffsWithLimit(ctx, repoPath, untracked, false, budget.remaining())
 		if err != nil {
 			return "", err
 		}
 		if untrackedDiff != "" {
-			chunks = append(chunks, untrackedDiff)
+			if err := appendDiffChunk(&chunks, untrackedDiff, budget, "untracked worktree files"); err != nil {
+				return "", err
+			}
 		}
+	}
+	if untrackedErr != nil {
+		return "", fmt.Errorf("git ls-files: %w", untrackedErr)
 	}
 	if len(chunks) > 0 {
 		return strings.Join(chunks, "\n"), nil
@@ -398,42 +496,94 @@ func gitOutput(ctx context.Context, repoPath string, args ...string) ([]byte, er
 }
 
 func fileListSyntheticDiff(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	return fileListSyntheticDiffContext(context.Background(), path)
+}
+
+func fileListSyntheticDiffContext(ctx context.Context, path string) (string, error) {
+	data, err := readReviewInputFile(ctx, path, path, reviewDiffMaxFileListBytes)
 	if err != nil {
 		return "", fmt.Errorf("read file list: %w", err)
 	}
 	var files []string
-	for _, line := range strings.Split(string(data), "\n") {
-		file := filepath.ToSlash(strings.TrimSpace(line))
-		if file == "" || strings.HasPrefix(file, "#") {
-			continue
+	if err := scanDiffLines(string(data), reviewDiffMaxFileListBytes, func(line string) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		files = append(files, file)
+		file := filepath.ToSlash(strings.TrimSpace(line))
+		if file != "" && !strings.HasPrefix(file, "#") {
+			files = append(files, file)
+		}
+		return nil
+	}); err != nil {
+		return "", err
 	}
 	sort.Strings(files)
-	var b strings.Builder
-	for _, file := range files {
-		writeSyntheticFileDiff(&b, file)
+	if len(files) > reviewDiffMaxFiles {
+		return "", &diffInputBudgetError{
+			path:   path,
+			reason: "file-count budget exceeded",
+			limit:  reviewDiffMaxFiles,
+			got:    int64(len(files)),
+		}
 	}
-	return b.String(), nil
+	budget := newDiffInputBudget(reviewDiffMaxTotalBytes)
+	var chunks []string
+	for _, file := range files {
+		var b strings.Builder
+		writeSyntheticFileDiff(&b, file)
+		if err := appendDiffChunk(&chunks, b.String(), budget, file); err != nil {
+			return "", err
+		}
+	}
+	return strings.Join(chunks, "\n"), nil
 }
 
 func untrackedFileDiffs(repoPath string, raw []byte) (string, error) {
-	return worktreeFileDiffs(repoPath, raw, false)
+	return worktreeFileDiffsWithLimit(context.Background(), repoPath, raw, false, reviewDiffMaxTotalBytes)
 }
 
 func worktreeFileDiffs(repoPath string, raw []byte, allowMissing bool) (string, error) {
+	return worktreeFileDiffsWithLimit(context.Background(), repoPath, raw, allowMissing, reviewDiffMaxTotalBytes)
+}
+
+func worktreeFileDiffsWithLimit(
+	ctx context.Context,
+	repoPath string,
+	raw []byte,
+	allowMissing bool,
+	maxTotalBytes int64,
+) (string, error) {
+	if len(raw) > reviewDiffMaxFileListBytes {
+		return "", &diffInputBudgetError{
+			path:   "worktree file list",
+			reason: "file-list byte budget exceeded",
+			limit:  reviewDiffMaxFileListBytes,
+			got:    int64(len(raw)),
+		}
+	}
 	parts := bytes.Split(raw, []byte{0})
 	var files []string
 	for _, part := range parts {
 		file := filepath.ToSlash(strings.TrimSpace(string(part)))
 		if file != "" {
+			if len(files)+1 > reviewDiffMaxFiles {
+				return "", &diffInputBudgetError{
+					path:   file,
+					reason: "file-count budget exceeded",
+					limit:  reviewDiffMaxFiles,
+					got:    int64(len(files) + 1),
+				}
+			}
 			files = append(files, file)
 		}
 	}
 	sort.Strings(files)
-	var b strings.Builder
+	budget := newDiffInputBudget(maxTotalBytes)
+	var chunks []string
 	for _, file := range files {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		abs := filepath.Join(repoPath, filepath.FromSlash(file))
 		info, err := os.Lstat(abs)
 		if err != nil {
@@ -450,27 +600,203 @@ func worktreeFileDiffs(repoPath string, raw []byte, allowMissing bool) (string, 
 			if err != nil {
 				return "", fmt.Errorf("read worktree symlink %s: %w", file, err)
 			}
+			var b strings.Builder
 			writeNewFileDiff(&b, file, []string{filepath.ToSlash(target)}, false)
+			if err := validateDiffSectionSize(b.String(), file); err != nil {
+				return "", err
+			}
+			if err := appendDiffChunk(&chunks, b.String(), budget, file); err != nil {
+				return "", err
+			}
 			continue
 		}
-		data, err := os.ReadFile(abs)
+		data, err := readReviewInputFile(ctx, abs, file, reviewDiffMaxFileBytes)
 		if err != nil {
 			return "", fmt.Errorf("read worktree file %s: %w", file, err)
 		}
 		if bytes.Contains(data, []byte{0}) {
+			var b strings.Builder
 			fmt.Fprintf(&b, "diff --git a/%s b/%s\nnew file mode 100644\nBinary files /dev/null and b/%s differ\n", file, file, file)
+			if err := validateDiffSectionSize(b.String(), file); err != nil {
+				return "", err
+			}
+			if err := appendDiffChunk(&chunks, b.String(), budget, file); err != nil {
+				return "", err
+			}
 			continue
 		}
 		text := string(data)
 		noNewline := text != "" && !strings.HasSuffix(text, "\n")
 		text = strings.TrimSuffix(text, "\n")
-		lines := []string{}
-		if text != "" {
-			lines = strings.Split(text, "\n")
+		var b strings.Builder
+		writeNewFileDiffText(&b, file, text, noNewline)
+		if err := validateDiffSectionSize(b.String(), file); err != nil {
+			return "", err
 		}
-		writeNewFileDiff(&b, file, lines, noNewline)
+		if err := appendDiffChunk(&chunks, b.String(), budget, file); err != nil {
+			return "", err
+		}
 	}
-	return b.String(), nil
+	return strings.Join(chunks, "\n"), nil
+}
+
+func appendDiffChunk(chunks *[]string, chunk string, budget *diffInputBudget, path string) error {
+	if chunk == "" {
+		return nil
+	}
+	extra := int64(len(chunk))
+	if len(*chunks) > 0 {
+		extra++
+	}
+	if err := budget.reserve(path, extra); err != nil {
+		return err
+	}
+	*chunks = append(*chunks, chunk)
+	return nil
+}
+
+func validateDiffSectionSize(section, path string) error {
+	if int64(len(section)) > reviewDiffMaxFileBytes {
+		return &diffInputBudgetError{
+			path:   path,
+			reason: "per-file diff byte budget exceeded",
+			limit:  reviewDiffMaxFileBytes,
+			got:    int64(len(section)),
+		}
+	}
+	return nil
+}
+
+func readReviewInputFile(ctx context.Context, path, label string, maxBytes int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	var out bytes.Buffer
+	buf := make([]byte, reviewDiffReadChunkSize)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			if maxBytes > 0 && int64(out.Len()+n) > maxBytes {
+				return nil, &diffInputBudgetError{
+					path:   label,
+					reason: "per-input byte budget exceeded",
+					limit:  maxBytes,
+					got:    int64(out.Len() + n),
+				}
+			}
+			_, _ = out.Write(buf[:n])
+		}
+		if errors.Is(readErr, io.EOF) {
+			return out.Bytes(), nil
+		}
+		if readErr != nil {
+			return nil, readErr
+		}
+	}
+}
+
+func gitOutputLimited(ctx context.Context, repoPath string, maxBytes int64, args ...string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	cmdArgs := append([]string{"-C", repoPath}, args...)
+	cmd := exec.CommandContext(ctx, "git", cmdArgs...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	out, readErr := io.ReadAll(io.LimitReader(stdout, maxBytes+1))
+	if readErr != nil {
+		_ = cmd.Wait()
+		return nil, readErr
+	}
+	if err := ctx.Err(); err != nil {
+		_ = cmd.Wait()
+		return nil, err
+	}
+	if maxBytes >= 0 && int64(len(out)) > maxBytes {
+		if cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		_ = cmd.Wait()
+		return nil, &diffInputBudgetError{
+			path:   strings.Join(args, " "),
+			reason: "git stdout byte budget exceeded",
+			limit:  maxBytes,
+			got:    int64(len(out)),
+		}
+	}
+	waitErr := cmd.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if waitErr != nil && strings.TrimSpace(stderr.String()) != "" {
+		return nil, fmt.Errorf("%w: %s", waitErr, strings.TrimSpace(stderr.String()))
+	}
+	return out, waitErr
+}
+
+func validateDiffChunkPerFile(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	sections := splitDiffSections(raw)
+	if len(sections) == 0 {
+		sections = []string{raw}
+	}
+	for _, section := range sections {
+		if int64(len(section)) > reviewDiffMaxFileBytes {
+			return &diffInputBudgetError{
+				path:   diffSectionLabel(section),
+				reason: "per-file diff byte budget exceeded",
+				limit:  reviewDiffMaxFileBytes,
+				got:    int64(len(section)),
+			}
+		}
+	}
+	return nil
+}
+
+func diffSectionLabel(section string) string {
+	line, _, _ := strings.Cut(section, "\n")
+	return strings.TrimSpace(line)
+}
+
+func writeNewFileDiffText(b *strings.Builder, file, text string, noNewline bool) {
+	lineCount := 0
+	if text != "" {
+		lineCount = strings.Count(text, "\n") + 1
+	}
+	fmt.Fprintf(b, "diff --git a/%s b/%s\n", file, file)
+	fmt.Fprintf(b, "new file mode 100644\n")
+	fmt.Fprintf(b, "--- /dev/null\n")
+	fmt.Fprintf(b, "+++ b/%s\n", file)
+	fmt.Fprintf(b, "@@ -0,0 +1,%d @@\n", lineCount)
+	for start := 0; start < len(text); {
+		end := strings.IndexByte(text[start:], '\n')
+		if end < 0 {
+			fmt.Fprintf(b, "+%s\n", text[start:])
+			break
+		}
+		fmt.Fprintf(b, "+%s\n", text[start:start+end])
+		start += end + 1
+	}
+	if noNewline {
+		b.WriteString("\\ No newline at end of file\n")
+	}
 }
 
 func writeSyntheticFileDiff(b *strings.Builder, file string) {

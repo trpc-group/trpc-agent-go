@@ -533,18 +533,21 @@ func splitDiffForLLMWithLimit(raw string, maxBytes, maxChunks int) ([]string, bo
 }
 
 func splitDiffSections(raw string) []string {
-	lines := strings.Split(raw, "\n")
 	var sections []string
-	var current []string
-	for _, line := range lines {
-		if strings.HasPrefix(line, "diff --git ") && len(current) > 0 {
-			sections = append(sections, strings.Join(current, "\n"))
-			current = nil
+	var current strings.Builder
+	_ = scanDiffLines(raw, reviewDiffMaxTotalBytes, func(line string) error {
+		if strings.HasPrefix(line, "diff --git ") && current.Len() > 0 {
+			sections = append(sections, current.String())
+			current.Reset()
 		}
-		current = append(current, line)
-	}
-	if len(current) > 0 {
-		sections = append(sections, strings.Join(current, "\n"))
+		if current.Len() > 0 {
+			current.WriteByte('\n')
+		}
+		current.WriteString(line)
+		return nil
+	})
+	if current.Len() > 0 {
+		sections = append(sections, current.String())
 	}
 	return sections
 }
@@ -553,15 +556,29 @@ func splitLargeDiffSection(section string, maxBytes int) ([]string, bool) {
 	if len(section) <= maxBytes {
 		return []string{section}, false
 	}
-	lines := strings.Split(section, "\n")
-	headerEnd := len(lines)
-	for i, line := range lines {
+	var headerBuilder strings.Builder
+	var hunks []string
+	var hunk strings.Builder
+	inHunk := false
+	_ = scanDiffLines(section, reviewDiffMaxTotalBytes, func(line string) error {
 		if strings.HasPrefix(line, "@@ ") {
-			headerEnd = i
-			break
+			if inHunk && hunk.Len() > 0 {
+				hunks = append(hunks, hunk.String())
+				hunk.Reset()
+			}
+			inHunk = true
 		}
-	}
-	header := strings.Join(lines[:headerEnd], "\n")
+		target := &headerBuilder
+		if inHunk {
+			target = &hunk
+		}
+		if target.Len() > 0 {
+			target.WriteByte('\n')
+		}
+		target.WriteString(line)
+		return nil
+	})
+	header := headerBuilder.String()
 	if len(header) >= maxBytes {
 		return []string{truncate(section, maxBytes)}, true
 	}
@@ -569,13 +586,10 @@ func splitLargeDiffSection(section string, maxBytes int) ([]string, bool) {
 	var current strings.Builder
 	current.WriteString(header)
 	truncated := false
-	for i := headerEnd; i < len(lines); {
-		hunkStart := i
-		i++
-		for i < len(lines) && !strings.HasPrefix(lines[i], "@@ ") {
-			i++
-		}
-		hunk := strings.Join(lines[hunkStart:i], "\n")
+	if hunk.Len() > 0 {
+		hunks = append(hunks, hunk.String())
+	}
+	for _, hunk := range hunks {
 		addedLen := len(hunk)
 		if current.Len() > 0 {
 			addedLen++
