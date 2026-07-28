@@ -10,15 +10,11 @@ summary plus later events, tracks, deterministic concurrent interleaving, and
 acknowledgement-loss retry recovery.
 
 Each case has fixed logical IDs and payloads. `Capture` reloads events, state,
-memories, tracks, and the summaries returned by `ListSessions`, retaining a
-summary's filter-key, boundary version, last event ID, text, and normalized
-update-presence. Memory snapshots include explicit app and user scope,
+memories, tracks, and summaries, retaining filter-key, boundary version, last
+event ID, text, and normalized update-presence. Memory snapshots retain scope,
 identity, content, and metadata. `WithMemorySearchQueries` preserves result
-order and identity while normalizing similarity scores. Track events retain
-sequence and normalized timestamps; duration and latency values normalize.
-This makes summary loss, overwrite, wrong scope or session, memory ordering,
-and track ordering observable. JSON decoding removes map ordering. Generated
-event/response IDs and clock values normalize. Backends can omit
+order while normalizing similarity scores. Tracks retain sequence; timestamps,
+durations, JSON map order, and generated IDs normalize. Backends can omit
 implementation-owned fields with `Backend.PrivateMetadataPaths`, such as
 `events.*.extensions.storage_private`.
 
@@ -52,4 +48,10 @@ tests a configured Redis instance:
 
 ```bash
 cd session/replaytest && REPLAYTEST_REDIS_URL=redis://127.0.0.1:6379 go test ./... -run TestRedisReplay
+```
+
+Set `REPLAYTEST_POSTGRES_DSN` to run the Postgres Session and Memory replay:
+
+```bash
+cd session/replaytest && REPLAYTEST_POSTGRES_DSN='postgres://postgres:postgres@127.0.0.1:5432/replaytest?sslmode=disable' go test ./... -run TestPostgresReplay
 ```

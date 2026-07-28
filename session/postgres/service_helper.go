@@ -892,7 +892,10 @@ func (s *Service) getSummariesList(
 		}
 		sessionCreatedAtMap = make(map[string]time.Time, len(sessionKeys))
 		for i, key := range sessionKeys {
-			sessionCreatedAtMap[key.SessionID] = sessionCreatedAts[0][i]
+			// PostgreSQL TIMESTAMP columns are stored without timezone information.
+			// Summary timestamps are persisted in UTC, so compare them against the
+			// equivalent UTC session creation time rather than the caller's location.
+			sessionCreatedAtMap[key.SessionID] = sessionCreatedAts[0][i].UTC()
 		}
 	}
 
