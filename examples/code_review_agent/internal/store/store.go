@@ -73,6 +73,8 @@ type SandboxRun struct {
 	Stderr          string `json:"stderr,omitempty"`
 	ErrorType       string `json:"error_type,omitempty"`
 	Error           string `json:"error,omitempty"`
+	ResultSHA256    string `json:"result_sha256,omitempty"`
+	ResultSizeBytes int64  `json:"result_size_bytes,omitempty"`
 }
 
 // Decision records durable filter or permission evidence.

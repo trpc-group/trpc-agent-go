@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -279,6 +280,74 @@ func TestRunCompositeRealDocker(t *testing.T) {
 	for _, run := range review.Runs {
 		if run.Status == "failed" || run.Status == "timeout" {
 			t.Fatalf("container fixture run = %#v", run)
+		}
+	}
+}
+
+func TestReviewerRunExecutableSnapshotRealDocker(t *testing.T) {
+	if os.Getenv("CODE_REVIEW_DOCKER_TEST") != "1" {
+		t.Skip("set CODE_REVIEW_DOCKER_TEST=1 for real Docker acceptance")
+	}
+	root := mainExampleRoot(t)
+	repo := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":     "module executablefixture\n\ngo 1.23\n",
+		".gitignore": ".env\n",
+		".env":       "ignored-sentinel\n",
+		"helper.sh":  "#!/bin/sh\nexit 0\n",
+		"helper_test.go": `package executablefixture
+import (
+	"os"
+	"os/exec"
+	"testing"
+)
+func TestStagedSnapshot(t *testing.T) {
+	if _, err := os.Stat(".env"); !os.IsNotExist(err) {
+		t.Fatalf("ignored file is visible: %v", err)
+	}
+	if err := os.WriteFile("write-must-fail", []byte("unsafe"), 0o600); err == nil {
+		t.Fatal("sandbox UID can write staged repository")
+	}
+	if output, err := exec.Command("./helper.sh").CombinedOutput(); err != nil {
+		t.Fatalf("execute helper: %v: %s", err, output)
+	}
+}
+`,
+	} {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(repo, "helper.sh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("git", "-c", "safe.directory=*", "-C", repo, "init", "--quiet")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, output)
+	}
+	for _, args := range [][]string{
+		{"add", ".gitignore", "go.mod", "helper.sh", "helper_test.go"},
+		{"update-index", "--chmod=+x", "helper.sh"},
+	} {
+		command = exec.Command("git", append([]string{"-c", "safe.directory=*", "-C", repo}, args...)...)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, output)
+		}
+	}
+	databasePath := filepath.Join(t.TempDir(), "review.db")
+	outputDir := t.TempDir()
+	var output bytes.Buffer
+	args := reviewArgs(root, "container", databasePath, outputDir, "--repo-path", repo)
+	if err := runWithOutput(context.Background(), args, &output); err != nil {
+		t.Fatalf("Reviewer.Run(container) error = %v", err)
+	}
+	review := loadCLIReview(t, databasePath, output.Bytes())
+	if review.Task.Status != storemodel.StatusCompleted || len(review.Runs) != 2 || len(review.Artifacts) != 0 {
+		t.Fatalf("review = %#v", review)
+	}
+	for _, run := range review.Runs {
+		if run.ResultSHA256 == "" || run.ResultSizeBytes <= 0 {
+			t.Fatalf("run evidence = %#v", run)
 		}
 	}
 }

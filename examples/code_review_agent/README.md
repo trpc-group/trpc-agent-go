@@ -39,17 +39,21 @@ table-driven evaluator instead of duplicating repository trees. The
 Exactly one of `--diff-file`, `--repo-path`, or `--fixture composite` is
 required. Repository mode supports staged, unstaged, untracked, rename,
 delete, binary, and no-HEAD repositories. `--files-file` accepts only validated
-repository-relative paths.
+repository-relative paths. Repository snapshots contain tracked files plus
+non-ignored untracked files; ignored files and `.git` metadata are excluded.
+An explicit file list may opt in an otherwise ignored file.
 
 Each run writes `review_report.json`, `review_report.md`, and SQLite state.
 Use a fresh, caller-private `--output-dir` for each run; report files are
 atomically published and never overwritten. Do not share that directory with
 unrelated writers.
 `GetReview(taskID)` returns task, input summary, sandbox runs, governance
-decisions, findings, metrics, artifacts, and canonical reports from one
+decisions, findings, metrics, durable artifacts, and canonical reports from one
 read-only SQLite transaction, so a concurrent finalization cannot produce a
 mixed aggregate. Raw diff and source are never persisted. Findings are
 normalized by bucket and deduplicated by cleaned file, line, and category.
+Sandbox result files are private workspace temporaries and are never reported
+as durable artifacts; their validated SHA-256 and size are stored on each run.
 
 ## Security model
 
@@ -63,10 +67,13 @@ artifact collection, and unconditional cleanup. Deny, ask, policy error, or
 decision persistence failure prevents staging and execution. Secret redaction
 is applied again at report, SQLite, CLI, telemetry, error, and artifact
 boundaries.
+The host snapshot root remains caller-private. Staged files are readable by the
+sandbox UID, preserve executable semantics, and remain non-writable.
 
-For Go dependencies, the host cache is never mounted wholesale. Changed Go
-packages and changed `go.mod`/`go.sum` files select a bounded, sorted set of
-module roots. Those roots are included in the governance decision, and each
+For Go dependencies, the host cache is never mounted wholesale. Every changed
+old and new path selects a bounded, sorted set of module roots; deterministic
+source analysis still accepts only Go files. Those roots are included in the
+governance decision, and each
 receives the same fixed check under one total timeout and output limit.
 `GOWORK=off` prevents an ambient workspace from widening that set. The
 application selects only checksummed versions from every selected module's
@@ -87,6 +94,12 @@ container teardown.
 validated review snapshot becomes immutable, immediately before external report
 publication and SQLite finalization. The same finished time and metric snapshot
 are used by the final report, database record, and telemetry.
+
+SQLite databases created before sandbox result evidence was introduced are
+migrated transactionally. Legacy `check-result` artifact digests and sizes move
+onto their sandbox runs, the now-dead temporary artifact rows are removed, and
+reports that embedded those rows are regenerated without temporary paths.
+External report paths are cleared because those older copies are stale.
 
 ## Verification
 

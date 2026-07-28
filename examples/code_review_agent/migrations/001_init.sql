@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS sandbox_runs (
     stdout TEXT NOT NULL,
     stderr TEXT NOT NULL,
     error_type TEXT NOT NULL,
-    error TEXT NOT NULL
+    error TEXT NOT NULL,
+    result_sha256 TEXT NOT NULL DEFAULT '',
+    result_size_bytes INTEGER NOT NULL DEFAULT 0 CHECK (result_size_bytes >= 0)
 );
 CREATE INDEX IF NOT EXISTS idx_sandbox_runs_task ON sandbox_runs(task_id);
 

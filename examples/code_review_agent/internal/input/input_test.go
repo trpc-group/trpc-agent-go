@@ -12,6 +12,7 @@ package input
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,6 +96,42 @@ func TestCollectGitDiffUsesFinalWorktreeState(t *testing.T) {
 		t.Fatalf("intermediate index state leaked into final diff: %s", data)
 	}
 }
+
+func TestVerifyRawUnchangedDetectsHeadMove(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	runTestGit(t, root, "config", "user.email", "review@example.com")
+	runTestGit(t, root, "config", "user.name", "Review Test")
+	path := filepath.Join(root, "state.go")
+	writeTestFile(t, path, []byte("package demo\n\nconst state = \"safe\"\n"))
+	runTestGit(t, root, "add", "state.go")
+	runTestGit(t, root, "commit", "--quiet", "-m", "initial")
+	writeTestFile(t, path, []byte("package demo\n\nconst state = \"new\"\n"))
+	runTestGit(t, root, "add", "state.go")
+	runTestGit(t, root, "commit", "--quiet", "-m", "second")
+	config := Config{
+		RepoPath: root,
+		Limits:   Limits{1 << 20, 1 << 20, 10, 100, 1000},
+	}
+	kind, repoRoot, raw, err := loadRaw(ctx, config, nil)
+	if err != nil || len(raw) != 0 {
+		t.Fatalf("loadRaw() kind=%q root=%q raw=%q error=%v",
+			kind, repoRoot, raw, err)
+	}
+	runTestGit(t, root, "reset", "--soft", "HEAD~1")
+	if err := verifyRawUnchanged(
+		ctx,
+		config,
+		nil,
+		kind,
+		repoRoot,
+		raw,
+	); err == nil || !strings.Contains(err.Error(), "review diff changed") {
+		t.Fatalf("verifyRawUnchanged() error = %v", err)
+	}
+}
+
 func TestCollectUnbornDiffUsesWorktreeInsteadOfIndex(t *testing.T) {
 	root := t.TempDir()
 	runTestGit(t, root, "init", "--quiet")
@@ -113,7 +150,7 @@ func TestCollectUnbornDiffUsesWorktreeInsteadOfIndex(t *testing.T) {
 func runTestGit(t *testing.T, root string, args ...string) {
 	t.Helper()
 	requireTestGit(t)
-	cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+	cmd := exec.Command("git", append([]string{"-c", "safe.directory=*", "-C", root}, args...)...)
 	cmd.Env = gitEnvironment()
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v: %v: %s", args, err, output)
@@ -264,9 +301,10 @@ func TestPureHelpers(t *testing.T) {
 		{NewPath: "other/go.sum"},
 		{NewPath: "pkg/value.go"},
 		{OldPath: "oldmod/value.go", NewPath: "newmod/value.go"},
+		{NewPath: "nested/migrations/001.sql"},
 		{NewPath: "README.md"},
 	})
-	if !slices.Equal(hints, []string{"nested", "newmod", "oldmod", "other", "pkg"}) {
+	if !slices.Equal(hints, []string{".", "nested", "nested/migrations", "newmod", "oldmod", "other", "pkg"}) {
 		t.Fatalf("ResolveModuleHints() = %v", hints)
 	}
 	var buffer boundedBuffer
@@ -328,8 +366,12 @@ func TestInputErrorAndBoundaryBranches(t *testing.T) {
 	requireError(t, "non-positive git output limit", err)
 	_, err = runGit(context.Background(), root, 1024, "definitely-not-a-git-subcommand")
 	requireError(t, "invalid git subcommand", err)
+	writeTestFile(t, filepath.Join(root, ".git"), []byte("not a git directory\n"))
 	_, err = collectGitDiff(context.Background(), root, testLimits())
 	requireError(t, "non-git directory", err)
+	if err := os.Remove(filepath.Join(root, ".git")); err != nil {
+		t.Fatal(err)
+	}
 	runTestGit(t, root, "init", "--quiet")
 	err = appendListedFiles(root, testLimits(), &bytes.Buffer{}, []byte(filepath.Clean(filePath)+"\x00"))
 	requireError(t, "absolute listed path", err)
@@ -396,8 +438,12 @@ func TestLoadUsesImmutableRepositorySnapshot(t *testing.T) {
 	if string(got) != "package main\n" {
 		t.Fatalf("snapshot content = %q", got)
 	}
-	if err := os.WriteFile(filepath.Join(summary.RepoRoot, "main.go"), []byte("package mutated\n"), 0o600); err == nil {
-		t.Fatal("snapshot file remained writable")
+	info, err := os.Stat(filepath.Join(summary.RepoRoot, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o222 != 0 {
+		t.Fatalf("snapshot file mode = %04o, want read-only", info.Mode().Perm())
 	}
 }
 
@@ -446,6 +492,9 @@ func TestSnapshotAndDigestExcludeOnlyGitMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(metadata, "hook"), []byte("ignored"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: elsewhere\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	sourceDigest, err := DigestRepository(root)
 	if err != nil {
 		t.Fatal(err)
@@ -467,6 +516,162 @@ func TestSnapshotAndDigestExcludeOnlyGitMetadata(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(snapshot, ".git-hooks", "hook")); err != nil {
 		t.Fatalf("snapshot tracked .git-* directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(snapshot, ".git")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot contains .git file: %v", err)
+	}
+}
+
+func TestLoadRepoSnapshotUsesGitInventory(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	writeTestFile(t, filepath.Join(root, ".gitignore"), []byte(".env\n"))
+	writeTestFile(t, filepath.Join(root, "tracked.go"), []byte("package review\n"))
+	writeTestFile(t, filepath.Join(root, "untracked.go"), []byte("package review\n"))
+	writeTestFile(t, filepath.Join(root, ".env"), []byte("arbitrary-secret-one\n"))
+	runTestGit(t, root, "add", ".gitignore", "tracked.go")
+
+	first := mustLoad(t, Config{RepoPath: root, Limits: testLimits()})
+	defer assertSnapshotCleanup(t, first.RepoRoot, first.Cleanup)
+	for _, name := range []string{".gitignore", "tracked.go", "untracked.go"} {
+		if _, err := os.Stat(filepath.Join(first.RepoRoot, name)); err != nil {
+			t.Fatalf("snapshot missing %q: %v", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(first.RepoRoot, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("snapshot contains ignored file: %v", err)
+	}
+
+	writeTestFile(t, filepath.Join(root, ".env"), []byte("arbitrary-secret-two\n"))
+	second := mustLoad(t, Config{RepoPath: root, Limits: testLimits()})
+	defer assertSnapshotCleanup(t, second.RepoRoot, second.Cleanup)
+	if first.RepositoryDigest != second.RepositoryDigest {
+		t.Fatalf("ignored file changed repository digest: %q != %q", first.RepositoryDigest, second.RepositoryDigest)
+	}
+}
+
+func TestLoadFilesSnapshotCanOptInIgnoredFile(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	writeTestFile(t, filepath.Join(root, ".gitignore"), []byte(".env\n"))
+	writeTestFile(t, filepath.Join(root, ".env"), []byte("explicit input\n"))
+	list := filepath.Join(t.TempDir(), "files.txt")
+	writeTestFile(t, list, []byte(".env\n"))
+
+	summary := mustLoad(t, Config{RepoPath: root, FilesFile: list, Limits: testLimits()})
+	defer assertSnapshotCleanup(t, summary.RepoRoot, summary.Cleanup)
+	if _, err := os.Stat(filepath.Join(summary.RepoRoot, ".env")); err != nil {
+		t.Fatalf("explicit ignored file missing from snapshot: %v", err)
+	}
+}
+
+func TestRepositoryInventoryUsesGitModesAndSkipsGitlinks(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	writeTestFile(t, filepath.Join(root, "helper.sh"), []byte("#!/bin/sh\nexit 0\n"))
+	runTestGit(t, root, "add", "helper.sh")
+	runTestGit(t, root, "update-index", "--chmod=+x", "helper.sh")
+	runTestGit(t, root, "update-index", "--add", "--cacheinfo",
+		"160000,1111111111111111111111111111111111111111,vendor/submodule")
+
+	inventory, err := repositoryInventory(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory) != 1 || inventory[0].Path != "helper.sh" || !inventory[0].Executable {
+		t.Fatalf("inventory = %#v", inventory)
+	}
+	summary := mustLoad(t, Config{RepoPath: root, Limits: testLimits()})
+	defer assertSnapshotCleanup(t, summary.RepoRoot, summary.Cleanup)
+	if !slices.Equal(summary.ExecutablePaths, []string{"helper.sh"}) {
+		t.Fatalf("executable paths = %v", summary.ExecutablePaths)
+	}
+}
+
+func TestRepositoryInventoryRejectsUnmergedIndex(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	hashes := make([]string, 3)
+	for index, content := range []string{"base\n", "ours\n", "theirs\n"} {
+		name := fmt.Sprintf("blob-%d", index)
+		writeTestFile(t, filepath.Join(root, name), []byte(content))
+		cmd := exec.Command(
+			"git",
+			"-c",
+			"safe.directory=*",
+			"-C",
+			root,
+			"hash-object",
+			"-w",
+			name,
+		)
+		cmd.Env = gitEnvironment()
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git hash-object: %v: %s", err, output)
+		}
+		hashes[index] = strings.TrimSpace(string(output))
+	}
+	cmd := exec.Command(
+		"git",
+		"-c",
+		"safe.directory=*",
+		"-C",
+		root,
+		"update-index",
+		"--index-info",
+	)
+	cmd.Env = gitEnvironment()
+	cmd.Stdin = strings.NewReader(fmt.Sprintf(
+		"100644 %s 1\tconflict.go\n"+
+			"100644 %s 2\tconflict.go\n"+
+			"100755 %s 3\tconflict.go\n",
+		hashes[0],
+		hashes[1],
+		hashes[2],
+	))
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git update-index: %v: %s", err, output)
+	}
+	if _, err := repositoryInventory(context.Background(), root); err == nil ||
+		!strings.Contains(err.Error(), "unresolved merge") {
+		t.Fatalf("repositoryInventory() error = %v", err)
+	}
+}
+
+func TestLoadRejectsSymlinkToIgnoredFile(t *testing.T) {
+	requireTestGit(t)
+	root := t.TempDir()
+	runTestGit(t, root, "init", "--quiet")
+	writeTestFile(t, filepath.Join(root, ".gitignore"), []byte(".env\n"))
+	writeTestFile(t, filepath.Join(root, ".env"), []byte("arbitrary credential\n"))
+	if err := os.Symlink(".env", filepath.Join(root, "reviewed.go")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	runTestGit(t, root, "add", ".gitignore", "reviewed.go")
+	if _, err := Load(context.Background(), Config{RepoPath: root, Limits: testLimits()}); err == nil ||
+		!strings.Contains(err.Error(), "outside snapshot inventory") {
+		t.Fatalf("Load() error = %v", err)
+	}
+}
+
+func TestReadSnapshotFileRejectsChangedSource(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "changing.go")
+	writeTestFile(t, path, []byte("package review\n"))
+	expected, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("package review\nvar changed = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSnapshotFile(path, expected, 1<<20, "changing.go"); err == nil ||
+		!strings.Contains(err.Error(), "changed before read") {
+		t.Fatalf("readSnapshotFile() error = %v", err)
 	}
 }
 

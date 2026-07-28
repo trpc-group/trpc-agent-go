@@ -22,6 +22,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -59,12 +60,12 @@ var ErrLifecycle = errors.New("sandbox lifecycle failure")
 
 // Run records one sandbox check result and its bounded evidence.
 type Run struct {
-	CheckID, Runtime, Status, Stdout, Stderr, Error, Artifact, SHA256 string
-	ContainerName                                                     string
-	ExitCode                                                          int
-	TimedOut, Truncated                                               bool
-	Duration                                                          time.Duration
-	ArtifactBytes                                                     int64
+	CheckID, Runtime, Status, Stdout, Stderr, Error, ResultSHA256 string
+	ContainerName                                                 string
+	ExitCode                                                      int
+	TimedOut, Truncated                                           bool
+	Duration                                                      time.Duration
+	ResultSizeBytes                                               int64
 }
 type runnerResult struct {
 	CheckID         string `json:"check_id"`
@@ -83,7 +84,7 @@ type Container struct {
 	Authorizer                           governance.Authorizer
 	BuildContext, SkillRoot, ModuleCache string
 	RepositoryDigest                     string
-	Packages                             []string
+	Packages, ExecutablePaths            []string
 	factory                              func(string) (containerExecutor, error)
 }
 type containerExecutor interface {
@@ -98,6 +99,7 @@ type checkRequest struct {
 	checkID, artifact, workspaceID, repoPath string
 	timeout                                  time.Duration
 	spec                                     governance.CheckSpec
+	executablePaths                          []string
 }
 
 // Check authorizes, stages, runs, collects, and destroys one container.
@@ -139,7 +141,7 @@ func (c Container) Check(ctx context.Context, checkID, repoPath string, timeout 
 	if err != nil {
 		return result, err
 	}
-	request := checkRequest{checkID: checkID, artifact: artifact, workspaceID: workspaceID, repoPath: repoPath, timeout: timeout, spec: spec}
+	request := checkRequest{checkID: checkID, artifact: artifact, workspaceID: workspaceID, repoPath: repoPath, timeout: timeout, spec: spec, executablePaths: append([]string(nil), c.ExecutablePaths...)}
 	result, runErr := executeContainer(ctx, executor, request, c.Authorizer)
 	result.ContainerName = workspaceID
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerCleanupTimeout)
@@ -178,7 +180,34 @@ func executeContainer(ctx context.Context, executor containerExecutor, request c
 	if err := engine.FS().StageDirectory(ctx, workspace, request.repoPath, codeexecutor.DirWork, codeexecutor.StageOptions{ReadOnly: true, AllowMount: false}); err != nil {
 		return run, fmt.Errorf("stage reviewed repository: %w", err)
 	}
+	if err := restoreExecutableModes(ctx, engine, workspace, request.executablePaths); err != nil {
+		return run, err
+	}
 	return runWorkspace(ctx, engine, workspace, request)
+}
+
+func restoreExecutableModes(ctx context.Context, engine codeexecutor.Engine, workspace codeexecutor.Workspace, paths []string) error {
+	const chunkSize = 256
+	for start := 0; start < len(paths); start += chunkSize {
+		end := start + chunkSize
+		if end > len(paths) {
+			end = len(paths)
+		}
+		args := []string{"a+x", "--"}
+		for _, value := range paths[start:end] {
+			clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+			if value == "" || filepath.IsAbs(value) || clean == "." || clean == ".." ||
+				strings.HasPrefix(clean, "../") || clean == ".git" || strings.HasPrefix(clean, ".git/") {
+				return fmt.Errorf("invalid executable snapshot path %q", value)
+			}
+			args = append(args, path.Join(codeexecutor.DirWork, clean))
+		}
+		result, err := engine.Runner().RunProgram(ctx, workspace, codeexecutor.RunProgramSpec{Cmd: "/bin/chmod", Args: args, CleanEnv: true, Cwd: ".", Timeout: outerGrace})
+		if err != nil || result.ExitCode != 0 || result.TimedOut || result.Stdout != "" || result.Stderr != "" {
+			return errors.Join(err, fmt.Errorf("restore executable snapshot modes: exit=%d timeout=%t", result.ExitCode, result.TimedOut))
+		}
+	}
+	return nil
 }
 func runWorkspace(ctx context.Context, engine codeexecutor.Engine, workspace codeexecutor.Workspace, request checkRequest) (Run, error) {
 	run := failedRun(request.checkID)
@@ -190,6 +219,10 @@ func runWorkspace(ctx context.Context, engine codeexecutor.Engine, workspace cod
 	}
 	outer, runErr := engine.Runner().RunProgram(ctx, workspace, codeexecutor.RunProgramSpec{Cmd: "/usr/local/bin/cr-checkrunner", Args: runnerArgs, Env: request.spec.Env, CleanEnv: true, Cwd: ".", Timeout: outerTimeout})
 	run.Duration = time.Since(callStarted)
+	run.ExitCode, run.TimedOut = outer.ExitCode, outer.TimedOut
+	if outer.TimedOut {
+		run.Status = "timeout"
+	}
 	if runErr != nil {
 		run.Error = redact.String(runErr.Error())
 		return run, runErr
@@ -220,10 +253,6 @@ func resultFromContent(content string, request checkRequest) (Run, error) {
 	if len(content) > maxResultBytes {
 		return run, errors.New("result exceeds artifact limit")
 	}
-	run.Artifact = "out/" + request.artifact
-	run.ArtifactBytes = int64(len(content))
-	digest := sha256.Sum256([]byte(content))
-	run.SHA256 = hex.EncodeToString(digest[:])
 	parsed, err := decodeRunnerResult(content)
 	if err != nil {
 		return run, fmt.Errorf("decode runner result: %w", err)
@@ -234,6 +263,9 @@ func resultFromContent(content string, request checkRequest) (Run, error) {
 	if err := validateRunnerResult(parsed, request); err != nil {
 		return run, err
 	}
+	run.ResultSizeBytes = int64(len(content))
+	digest := sha256.Sum256([]byte(content))
+	run.ResultSHA256 = hex.EncodeToString(digest[:])
 	run.ExitCode, run.TimedOut = parsed.ExitCode, parsed.TimedOut
 	run.Truncated = parsed.StdoutTruncated || parsed.StderrTruncated
 	run.Stdout, run.Stderr, run.Error = redact.String(parsed.Stdout), redact.String(parsed.Stderr), redact.String(parsed.Error)
@@ -361,8 +393,8 @@ func (f Fake) Check(ctx context.Context, checkID, repoPath string, timeout time.
 	content := []byte("fake:" + checkID)
 	digest := sha256.Sum256(content)
 	result.Status, result.ExitCode = "completed", 0
-	result.Artifact, result.ArtifactBytes = "out/"+artifact, int64(len(content))
-	result.SHA256 = hex.EncodeToString(digest[:])
+	result.ResultSizeBytes = int64(len(content))
+	result.ResultSHA256 = hex.EncodeToString(digest[:])
 	result.Duration = time.Since(started)
 	return result, nil
 }
@@ -405,7 +437,11 @@ func (l Local) Check(ctx context.Context, checkID, repoPath string, timeout time
 		return result, err
 	}
 	defer func() {
-		resultErr = errors.Join(resultErr, os.RemoveAll(workRoot))
+		if cleanupErr := os.RemoveAll(workRoot); cleanupErr != nil {
+			result.Status = "failed"
+			result.Error = redact.String(cleanupErr.Error())
+			resultErr = errors.Join(resultErr, fmt.Errorf("%w: cleanup local workspace: %v", ErrLifecycle, cleanupErr))
+		}
 	}()
 	token, err := randomToken()
 	if err != nil {
@@ -451,6 +487,9 @@ func runLocalCommand(ctx context.Context, spec governance.CheckSpec) (result Run
 	result = failedRun(spec.ID)
 	result.Runtime = "local"
 	result.Status = ""
+	defer func() {
+		setLocalResultEvidence(&result)
+	}()
 	timedCtx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
 	stdout, stderr := &limitedBuffer{limit: localOutputBytes}, &limitedBuffer{limit: localOutputBytes}
@@ -489,6 +528,33 @@ func runLocalCommand(ctx context.Context, spec governance.CheckSpec) (result Run
 	result.Status, result.ExitCode = "completed", 0
 	return result, nil
 }
+
+func setLocalResultEvidence(result *Run) {
+	stdoutDigest := sha256.Sum256([]byte(result.Stdout))
+	stderrDigest := sha256.Sum256([]byte(result.Stderr))
+	content, _ := json.Marshal(struct {
+		CheckID, Runtime, Status, Error    string
+		StdoutSHA256, StderrSHA256         string
+		StdoutBytes, StderrBytes, ExitCode int
+		TimedOut, Truncated                bool
+	}{
+		result.CheckID,
+		result.Runtime,
+		result.Status,
+		result.Error,
+		hex.EncodeToString(stdoutDigest[:]),
+		hex.EncodeToString(stderrDigest[:]),
+		len(result.Stdout),
+		len(result.Stderr),
+		result.ExitCode,
+		result.TimedOut,
+		result.Truncated,
+	})
+	digest := sha256.Sum256(content)
+	result.ResultSHA256 = hex.EncodeToString(digest[:])
+	result.ResultSizeBytes = int64(len(content))
+}
+
 func localEnvironment(root, repoPath string) map[string]string {
 	temporary := filepath.Join(root, "tmp")
 	return map[string]string{"PATH": os.Getenv("PATH"), "HOME": filepath.Join(root, "home"), "GOCACHE": filepath.Join(root, "gocache"), "GOMODCACHE": filepath.Join(root, "gomodcache"), "GOTMPDIR": temporary, "TMPDIR": temporary, "TMP": temporary, "TEMP": temporary, "GOMAXPROCS": "2", "GOPROXY": "off", "GOSUMDB": "off", "GOENV": "off", "GOWORK": "off", "CR_REPO_DIR": repoPath, "SYSTEMROOT": os.Getenv("SYSTEMROOT")}

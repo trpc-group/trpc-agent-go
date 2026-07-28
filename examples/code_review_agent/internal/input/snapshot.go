@@ -26,9 +26,22 @@ const (
 	maxSnapshotFiles = 100_000
 )
 
+type snapshotEntry struct {
+	Path       string
+	Executable bool
+}
+
 // snapshotRepository copies a repository into a private, read-only tree and
 // returns a digest over relative paths and contents.
 func snapshotRepository(source string, limits Limits) (string, string, func() error, error) {
+	paths, err := snapshotTreePaths(source)
+	if err != nil {
+		return "", "", nil, err
+	}
+	return snapshotRepositoryPaths(source, paths, limits)
+}
+
+func snapshotRepositoryPaths(source string, paths []snapshotEntry, limits Limits) (string, string, func() error, error) {
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		return "", "", nil, err
@@ -42,78 +55,68 @@ func snapshotRepository(source string, limits Limits) (string, string, func() er
 		return "", "", nil, err
 	}
 	cleanup := func() error { return removeSnapshot(root) }
+	authorized := authorizedSnapshotPaths(paths)
 	var files int
 	var total int64
-	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, relErr := filepath.Rel(source, path)
-		if relErr != nil {
-			return relErr
-		}
-		if rel == "." {
-			return nil
-		}
-		if entry.IsDir() && excludedSnapshotDirectory(entry.Name()) {
-			return filepath.SkipDir
-		}
-		if entry.IsDir() {
-			return nil
-		}
+	for _, entry := range paths {
 		if files >= maxSnapshotFiles {
-			return fmt.Errorf("snapshot exceeds %d files", maxSnapshotFiles)
+			err = fmt.Errorf("snapshot exceeds %d files", maxSnapshotFiles)
+			break
 		}
-		copyPath, fileInfo, statErr := snapshotFileInfo(source, path, entry.Type())
+		clean, cleanErr := cleanSnapshotPath(entry.Path)
+		if cleanErr != nil {
+			err = cleanErr
+			break
+		}
+		path := filepath.Join(source, filepath.FromSlash(clean))
+		pathInfo, statErr := os.Lstat(path)
 		if statErr != nil {
-			return statErr
+			err = statErr
+			break
 		}
-		if fileInfo.Size() < 0 || fileInfo.Size() > limits.MaxFileBytes {
-			return fmt.Errorf("snapshot file exceeds limit: %s", rel)
+		copyPath, fileInfo, statErr := snapshotFileInfo(source, path, pathInfo.Mode(), authorized)
+		if statErr != nil {
+			err = statErr
+			break
 		}
-		rel = filepath.ToSlash(rel)
-		target := filepath.Join(root, rel)
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
+		target := filepath.Join(root, filepath.FromSlash(clean))
+		if mkdirErr := os.MkdirAll(filepath.Dir(target), 0o755); mkdirErr != nil {
+			err = mkdirErr
+			break
 		}
-		in, openErr := os.Open(copyPath)
-		if openErr != nil {
-			return openErr
+		remaining := min64(limits.MaxFileBytes, maxSnapshotBytes-total)
+		data, readErr := readSnapshotFile(copyPath, fileInfo, remaining, clean)
+		if readErr != nil {
+			err = readErr
+			break
 		}
-		openedInfo, openErr := in.Stat()
-		if openErr != nil || !openedInfo.Mode().IsRegular() {
-			_ = in.Close()
-			return errors.Join(openErr, fmt.Errorf("snapshot source is not a regular file: %s", rel))
+		createMode := os.FileMode(0o600)
+		if entry.Executable {
+			createMode = 0o700
 		}
-		out, createErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		out, createErr := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, createMode)
 		if createErr == nil {
-			remaining := min64(limits.MaxFileBytes, maxSnapshotBytes-total)
-			var data []byte
-			data, createErr = io.ReadAll(io.LimitReader(in, remaining+1))
-			if createErr == nil && int64(len(data)) > remaining {
-				createErr = fmt.Errorf("snapshot content exceeds limit: %s", rel)
-			}
-			if createErr == nil {
-				_, createErr = out.Write(data)
-			}
+			_, createErr = out.Write(data)
 			if createErr == nil {
 				total += int64(len(data))
 				files++
 			}
 		}
-		_ = in.Close()
 		if out != nil {
 			_ = out.Close()
 		}
-		return createErr
-	})
+		if createErr != nil {
+			err = createErr
+			break
+		}
+	}
 	if err != nil {
 		return "", "", nil, errors.Join(err, cleanup())
 	}
 	if err := setSnapshotReadOnly(root); err != nil {
 		return "", "", nil, errors.Join(err, cleanup())
 	}
-	digest, err := digestTree(root, limits.MaxFileBytes)
+	digest, err := digestPaths(root, paths, limits.MaxFileBytes)
 	if err != nil {
 		return "", "", nil, errors.Join(err, cleanup())
 	}
@@ -121,65 +124,116 @@ func snapshotRepository(source string, limits Limits) (string, string, func() er
 }
 
 func digestTree(root string, maxFileBytes int64) (string, error) {
-	var paths []string
-	var total int64
+	paths, err := snapshotTreePaths(root)
+	if err != nil {
+		return "", err
+	}
+	return digestPaths(root, paths, maxFileBytes)
+}
+
+func snapshotTreePaths(root string) ([]snapshotEntry, error) {
+	var paths []snapshotEntry
 	if err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			if excludedSnapshotDirectory(info.Name()) {
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		if rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if excludedSnapshotPath(rel) {
+			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			var resolveErr error
-			_, info, resolveErr = snapshotFileInfo(root, path, info.Mode())
-			if resolveErr != nil {
-				return resolveErr
-			}
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("unsupported repository file: %s", path)
+		if info.IsDir() {
+			return nil
 		}
 		if len(paths) >= maxSnapshotFiles {
 			return fmt.Errorf("repository exceeds %d files", maxSnapshotFiles)
 		}
-		if info.Size() < 0 || info.Size() > maxFileBytes {
-			return fmt.Errorf("repository file exceeds limit: %s", path)
+		resolved, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
 		}
-		total += info.Size()
-		if total > maxSnapshotBytes {
-			return fmt.Errorf("repository exceeds %d bytes", maxSnapshotBytes)
+		if !resolved.Mode().IsRegular() {
+			return fmt.Errorf("unsupported repository file: %s", path)
 		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		paths = append(paths, filepath.ToSlash(rel))
+		paths = append(paths, snapshotEntry{Path: rel, Executable: resolved.Mode().Perm()&0o111 != 0})
 		return nil
 	}); err != nil {
-		return "", err
+		return nil, err
 	}
-	slices.Sort(paths)
+	slices.SortFunc(paths, func(left, right snapshotEntry) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return paths, nil
+}
+
+func digestPaths(root string, paths []snapshotEntry, maxFileBytes int64) (string, error) {
+	var total int64
 	hasher := sha256.New()
-	for _, rel := range paths {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+	authorized := authorizedSnapshotPaths(paths)
+	for _, entry := range paths {
+		clean, err := cleanSnapshotPath(entry.Path)
 		if err != nil {
 			return "", err
 		}
-		_, _ = fmt.Fprintf(hasher, "%s\x00%d\x00", rel, len(data))
+		path := filepath.Join(root, filepath.FromSlash(clean))
+		info, err := os.Lstat(path)
+		if err != nil {
+			return "", err
+		}
+		copyPath, resolvedInfo, err := snapshotFileInfo(root, path, info.Mode(), authorized)
+		if err != nil {
+			return "", err
+		}
+		remaining := min64(maxFileBytes, maxSnapshotBytes-total)
+		data, err := readSnapshotFile(copyPath, resolvedInfo, remaining, clean)
+		if err != nil {
+			return "", err
+		}
+		total += int64(len(data))
+		executable := 0
+		if entry.Executable {
+			executable = 1
+		}
+		_, _ = fmt.Fprintf(hasher, "%s\x00%d\x00%d\x00", clean, executable, len(data))
 		_, _ = hasher.Write(data)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
-func excludedSnapshotDirectory(name string) bool {
-	return name == ".git"
+func authorizedSnapshotPaths(entries []snapshotEntry) map[string]bool {
+	result := make(map[string]bool, len(entries))
+	for _, entry := range entries {
+		result[filepath.ToSlash(entry.Path)] = true
+	}
+	return result
 }
 
-func snapshotFileInfo(root, path string, mode os.FileMode) (string, os.FileInfo, error) {
+func cleanSnapshotPath(value string) (string, error) {
+	if value == "" || filepath.IsAbs(value) || strings.ContainsRune(value, 0) {
+		return "", fmt.Errorf("invalid snapshot path %q", value)
+	}
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(value)))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || excludedSnapshotPath(clean) {
+		return "", fmt.Errorf("invalid snapshot path %q", value)
+	}
+	return clean, nil
+}
+
+func excludedSnapshotPath(value string) bool {
+	value = filepath.ToSlash(value)
+	return value == ".git" || strings.HasPrefix(value, ".git/")
+}
+
+func snapshotFileInfo(root, path string, mode os.FileMode, authorized map[string]bool) (string, os.FileInfo, error) {
 	if mode&os.ModeSymlink == 0 {
 		info, err := os.Stat(path)
 		return path, info, err
@@ -192,6 +246,10 @@ func snapshotFileInfo(root, path string, mode os.FileMode) (string, os.FileInfo,
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", nil, fmt.Errorf("symlink escapes repository: %s", path)
 	}
+	rel, err = cleanSnapshotPath(filepath.ToSlash(rel))
+	if err != nil || !authorized[rel] {
+		return "", nil, errors.Join(err, fmt.Errorf("symlink target is outside snapshot inventory: %s", path))
+	}
 	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", nil, err
@@ -200,6 +258,35 @@ func snapshotFileInfo(root, path string, mode os.FileMode) (string, os.FileInfo,
 		return "", nil, fmt.Errorf("symlink target is not a regular file: %s", path)
 	}
 	return resolved, info, nil
+}
+
+func readSnapshotFile(path string, expected os.FileInfo, limit int64, name string) (data []byte, resultErr error) {
+	if expected == nil || !expected.Mode().IsRegular() || expected.Size() < 0 || expected.Size() > limit {
+		return nil, fmt.Errorf("snapshot file exceeds limit or is not regular: %s", name)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		resultErr = errors.Join(resultErr, file.Close())
+	}()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(expected, opened) || opened.Size() != expected.Size() {
+		return nil, errors.Join(err, fmt.Errorf("snapshot source changed before read: %s", name))
+	}
+	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("snapshot content exceeds limit: %s", name)
+	}
+	after, err := file.Stat()
+	if err != nil || !os.SameFile(opened, after) || after.Size() != opened.Size() || int64(len(data)) != after.Size() {
+		return nil, errors.Join(err, fmt.Errorf("snapshot source changed while reading: %s", name))
+	}
+	return data, nil
 }
 
 func min64(left, right int64) int64 {
@@ -220,9 +307,14 @@ func setSnapshotReadOnly(root string) error {
 		if err != nil {
 			return err
 		}
-		mode := os.FileMode(0o500)
-		if !info.IsDir() {
-			mode = 0o400
+		mode := os.FileMode(0o555)
+		if path == root {
+			mode = 0o500
+		} else if !info.IsDir() {
+			mode = 0o444
+			if info.Mode().Perm()&0o111 != 0 {
+				mode = 0o555
+			}
 		}
 		return os.Chmod(path, mode)
 	})

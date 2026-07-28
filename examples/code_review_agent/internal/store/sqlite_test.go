@@ -21,10 +21,12 @@ import (
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/internal/reviewmodel"
+	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/migrations"
 )
 
 const testSecret = "password=super-secret-value"
 const testRedacted = "[REDACTED:named_secret:00000000]"
+const testResultSHA256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 var _ Store = (*SQLiteStore)(nil)
 
@@ -40,7 +42,8 @@ func TestStoreFullRoundTripAndRedaction(t *testing.T) {
 		t.Fatalf("SaveInputSummary() error = %v", err)
 	}
 	run := SandboxRun{ID: "run-1", CheckID: "go-test", Runtime: "container",
-		Status: "passed", DurationMS: 12, Stdout: testSecret}
+		Status: "passed", DurationMS: 12, Stdout: testSecret,
+		ResultSHA256: testResultSHA256, ResultSizeBytes: 42}
 	if err := database.SaveRun(ctx, "task-roundtrip", run); err != nil {
 		t.Fatalf("SaveRun() error = %v", err)
 	}
@@ -134,6 +137,245 @@ func TestStoreConstraintsAndNotFound(t *testing.T) {
 	}
 }
 
+func TestSaveRunRejectsInvalidResultEvidence(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t)
+	createTestTask(t, database, "task-invalid-evidence", testTime())
+	for _, run := range []SandboxRun{
+		{ID: "run-size-only", ResultSizeBytes: 1},
+		{ID: "run-digest-only", ResultSHA256: testResultSHA256},
+		{ID: "run-bad-digest", ResultSHA256: "not-a-digest", ResultSizeBytes: 1},
+		{ID: "run-too-large", ResultSHA256: testResultSHA256, ResultSizeBytes: (160 << 10) + 1},
+	} {
+		if err := database.SaveRun(ctx, "task-invalid-evidence", run); err == nil {
+			t.Fatalf("SaveRun(%s) error = nil", run.ID)
+		}
+	}
+}
+
+func TestFinalizeRejectsTemporaryResultArtifact(t *testing.T) {
+	ctx := context.Background()
+	database := openTestStore(t)
+	createTestTask(t, database, "task-temp-artifact", testTime())
+	request := completeRequest(
+		"task-temp-artifact",
+		"",
+		testTime().Add(time.Second),
+	)
+	request.Artifacts = []Artifact{{
+		ID:        "temporary-result",
+		Kind:      "check-result",
+		Path:      "out/result.json",
+		SHA256:    testResultSHA256,
+		SizeBytes: 42,
+		CreatedAt: testTime(),
+	}}
+	if err := database.Finalize(ctx, request); err == nil ||
+		!strings.Contains(err.Error(), "cannot be persisted") {
+		t.Fatalf("Finalize(temporary artifact) error = %v", err)
+	}
+	review, err := database.GetReview(ctx, "task-temp-artifact")
+	if err != nil || review.Task.Status != StatusRunning ||
+		len(review.Artifacts) != 0 || len(review.Findings) != 0 {
+		t.Fatalf("rolled-back review = %#v, %v", review, err)
+	}
+}
+
+func TestLegacyDatabaseBackfillsResultEvidence(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-data.db")
+	raw := createLegacyDatabase(t, path)
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO review_tasks
+			(id,status,input_kind,input_digest,started_at,conclusion,error)
+			VALUES('legacy-task','running','','','2026-01-01T00:00:00Z','','');
+		INSERT INTO sandbox_runs
+			(id,task_id,check_id,runtime,status,duration_ms,exit_code,
+			 timed_out,output_truncated,stdout,stderr,error_type,error)
+			VALUES('legacy-run','legacy-task','','','passed',0,0,0,0,'','','','');
+		INSERT INTO artifacts
+			(id,task_id,run_id,kind,path,sha256,size_bytes,created_at)
+			VALUES(
+				'legacy-result','legacy-task','legacy-run','check-result',
+				'out/result.json','`+testResultSHA256+`',42,
+				'2026-01-01T00:00:00Z'
+			);
+		INSERT INTO artifacts
+			(id,task_id,run_id,kind,path,sha256,size_bytes,created_at)
+			VALUES(
+				'durable-log','legacy-task','legacy-run','audit-log',
+				'audit.log','`+testResultSHA256+`',7,
+				'2026-01-01T00:00:00Z'
+			);
+		INSERT INTO reports
+			(task_id,schema_version,conclusion,canonical_json,
+			 canonical_markdown,json_path,json_sha256,markdown_path,
+			 markdown_sha256)
+			VALUES(
+				'legacy-task','1','',
+				'{"sandbox_runs":[{"id":"legacy-run"}],
+				  "artifacts":[{"id":"legacy-result","kind":"check-result",
+				  "path":"out/result.json"},{"id":"durable-log",
+				  "kind":"audit-log","path":"audit.log"}]}',
+				'old report
+
+## Sandbox runs
+- go-test: passed, 0 ms, exit=0, timeout=false, truncated=false
+
+## Monitoring
+
+## Artifacts
+- check-result: out/result.json
+- audit-log: audit.log',
+				'old.json','old-json-digest','old.md','old-md-digest'
+			);
+	`); err != nil {
+		t.Fatalf("insert legacy data: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	database, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("Open(legacy data) error = %v", err)
+	}
+	defer database.Close()
+	review, err := database.GetReview(ctx, "legacy-task")
+	if err != nil {
+		t.Fatalf("GetReview(legacy data) error = %v", err)
+	}
+	if len(review.Runs) != 1 ||
+		review.Runs[0].ResultSHA256 != testResultSHA256 ||
+		review.Runs[0].ResultSizeBytes != 42 {
+		t.Fatalf("legacy run evidence = %#v", review.Runs)
+	}
+	if len(review.Artifacts) != 1 ||
+		review.Artifacts[0].ID != "durable-log" ||
+		strings.Contains(review.Report.JSON, "out/result.json") ||
+		strings.Contains(review.Report.Markdown, "out/result.json") ||
+		!strings.Contains(review.Report.JSON, testResultSHA256) ||
+		!strings.Contains(review.Report.JSON, "audit.log") ||
+		!strings.Contains(review.Report.Markdown, "audit.log") ||
+		!strings.Contains(review.Report.Markdown, "result=42 bytes") ||
+		review.Report.SchemaVersion != evidenceReportSchemaVersion ||
+		!strings.Contains(
+			review.Report.JSON,
+			`"schema_version": "`+evidenceReportSchemaVersion+`"`,
+		) ||
+		review.Report.JSONPath != "" || review.Report.MarkdownPath != "" ||
+		review.Report.JSONSHA256 == "" ||
+		review.Report.MarkdownSHA256 == "" {
+		t.Fatalf("stale legacy output remained: %#v", review)
+	}
+}
+
+func TestLegacyDatabaseRejectsInvalidResultEvidence(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-invalid.db")
+	raw := createLegacyDatabase(t, path)
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO review_tasks
+			(id,status,input_kind,input_digest,started_at,conclusion,error)
+			VALUES('legacy-task','running','','','2026-01-01T00:00:00Z','','');
+		INSERT INTO sandbox_runs
+			(id,task_id,check_id,runtime,status,duration_ms,exit_code,
+			 timed_out,output_truncated,stdout,stderr,error_type,error)
+			VALUES('legacy-run','legacy-task','','','passed',0,0,0,0,'','','','');
+		INSERT INTO artifacts
+			(id,task_id,run_id,kind,path,sha256,size_bytes,created_at)
+			VALUES(
+				'legacy-result','legacy-task','legacy-run','check-result',
+				'out/result.json','not-a-digest',42,
+				'2026-01-01T00:00:00Z'
+			);
+	`); err != nil {
+		t.Fatalf("insert invalid legacy data: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	database, err := Open(ctx, path)
+	if database != nil {
+		_ = database.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "invalid sandbox result evidence") {
+		t.Fatalf("Open(invalid legacy data) = %#v, %v", database, err)
+	}
+}
+
+func TestMigrateLegacyReportJSONRejectsNullDocument(t *testing.T) {
+	if _, err := migrateLegacyReportJSON(
+		"null",
+		legacyResultEvidence{},
+	); err == nil || !strings.Contains(err.Error(), "must be an object") {
+		t.Fatalf("migrateLegacyReportJSON(null) error = %v", err)
+	}
+}
+
+func TestLegacyDatabaseRejectsCrossTaskResultArtifact(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-cross-task.db")
+	raw := createLegacyDatabase(t, path)
+	if _, err := raw.ExecContext(ctx, `
+		INSERT INTO review_tasks
+			(id,status,input_kind,input_digest,started_at,conclusion,error)
+			VALUES
+				('task-one','running','','','2026-01-01T00:00:00Z','',''),
+				('task-two','running','','','2026-01-01T00:00:00Z','','');
+		INSERT INTO sandbox_runs
+			(id,task_id,check_id,runtime,status,duration_ms,exit_code,
+			 timed_out,output_truncated,stdout,stderr,error_type,error)
+			VALUES('run-two','task-two','','','passed',0,0,0,0,'','','','');
+		INSERT INTO artifacts
+			(id,task_id,run_id,kind,path,sha256,size_bytes,created_at)
+			VALUES(
+				'cross-task','task-one','run-two','check-result',
+				'out/result.json','`+testResultSHA256+`',42,
+				'2026-01-01T00:00:00Z'
+			);
+	`); err != nil {
+		t.Fatalf("insert cross-task legacy data: %v", err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+	database, err := Open(ctx, path)
+	if database != nil {
+		_ = database.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), "crosses review tasks") {
+		t.Fatalf("Open(cross-task legacy data) = %#v, %v", database, err)
+	}
+}
+
+func TestConcurrentLegacySchemaMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "legacy-empty.db")
+	if err := createLegacyDatabase(t, path).Close(); err != nil {
+		t.Fatalf("close legacy database: %v", err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-start
+			database, err := Open(ctx, path)
+			if database != nil {
+				err = errors.Join(err, database.Close())
+			}
+			results <- err
+		}()
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatalf("concurrent Open() error = %v", err)
+		}
+	}
+}
+
 func TestMemoryStoresAreIsolated(t *testing.T) {
 	ctx := context.Background()
 	first := openTestStore(t)
@@ -142,6 +384,30 @@ func TestMemoryStoresAreIsolated(t *testing.T) {
 	if _, err := second.GetReview(ctx, "task-isolated"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("second GetReview() error = %v", err)
 	}
+}
+
+func createLegacyDatabase(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	legacySchema := strings.Replace(
+		migrations.InitialSchema,
+		"    error TEXT NOT NULL,\n"+
+			"    result_sha256 TEXT NOT NULL DEFAULT '',\n"+
+			"    result_size_bytes INTEGER NOT NULL DEFAULT 0 CHECK (result_size_bytes >= 0)\n",
+		"    error TEXT NOT NULL\n",
+		1,
+	)
+	if legacySchema == migrations.InitialSchema {
+		t.Fatal("legacy schema replacement did not match")
+	}
+	database, err := sql.Open(driverName, path)
+	if err != nil {
+		t.Fatalf("sql.Open(legacy) error = %v", err)
+	}
+	if _, err := database.Exec(legacySchema); err != nil {
+		_ = database.Close()
+		t.Fatalf("create legacy schema: %v", err)
+	}
+	return database
 }
 
 func TestTaskIDRoundTripsWithoutRedaction(t *testing.T) {
@@ -274,8 +540,8 @@ func completeRequest(taskID, runID string, finished time.Time) FinalizeRequest {
 		Conclusion: "changes requested", Findings: []reviewmodel.Finding{finding},
 		Metrics: Metrics{TotalDurationMS: 20, SandboxDurationMS: 12, ToolCalls: 1,
 			FindingCount: 1, SeverityCounts: map[string]int{"high": 1}, ErrorTypeCounts: map[string]int{}},
-		Artifacts: []Artifact{{ID: "artifact-1", RunID: runID, Kind: "check-result",
-			Path: "result.json", SHA256: "artifact-digest", SizeBytes: 10, CreatedAt: finished}},
+		Artifacts: []Artifact{{ID: "artifact-1", RunID: runID, Kind: "audit-log",
+			Path: "audit.log", SHA256: "artifact-digest", SizeBytes: 10, CreatedAt: finished}},
 		Report: Report{SchemaVersion: "1", Conclusion: "changes requested",
 			JSON: `{"evidence":"` + testRedacted + `"}`, Markdown: testRedacted,
 			JSONPath: "review_report.json", JSONSHA256: "json-digest",
@@ -290,6 +556,9 @@ func assertCompleteReview(t *testing.T, review Review) {
 	if len(review.Runs) != 1 || len(review.Decisions) != 1 || len(review.Findings) != 1 ||
 		len(review.Artifacts) != 1 || review.Metrics.FindingCount != 1 || review.Report.JSON == "" {
 		t.Fatalf("incomplete review = %#v", review)
+	}
+	if review.Runs[0].ResultSHA256 != testResultSHA256 || review.Runs[0].ResultSizeBytes != 42 {
+		t.Fatalf("sandbox result evidence = %#v", review.Runs[0])
 	}
 }
 

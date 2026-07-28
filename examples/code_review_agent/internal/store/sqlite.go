@@ -13,6 +13,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,6 +119,11 @@ func insertArtifacts(ctx context.Context, tx *sql.Tx, taskID string, artifacts [
 	const query = `INSERT INTO artifacts
         (id,task_id,run_id,kind,path,sha256,size_bytes,created_at) VALUES(?,?,?,?,?,?,?,?)`
 	for _, artifact := range artifacts {
+		if artifact.Kind == "check-result" {
+			return errors.New(
+				"temporary check result cannot be persisted as an artifact",
+			)
+		}
 		var runID any
 		if artifact.RunID != "" {
 			runID = artifact.RunID
@@ -285,7 +291,8 @@ func loadInputSummary(ctx context.Context, db reviewQueryer, taskID string) (Inp
 }
 func loadRuns(ctx context.Context, db reviewQueryer, taskID string) (result []SandboxRun, resultErr error) {
 	const query = `SELECT id,check_id,runtime,status,duration_ms,exit_code,timed_out,
-        output_truncated,stdout,stderr,error_type,error FROM sandbox_runs WHERE task_id=? ORDER BY id`
+        output_truncated,stdout,stderr,error_type,error,result_sha256,result_size_bytes
+        FROM sandbox_runs WHERE task_id=? ORDER BY id`
 	rows, err := db.QueryContext(ctx, query, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("query sandbox runs: %w", err)
@@ -295,7 +302,7 @@ func loadRuns(ctx context.Context, db reviewQueryer, taskID string) (result []Sa
 	}()
 	for rows.Next() {
 		var run SandboxRun
-		if err := rows.Scan(&run.ID, &run.CheckID, &run.Runtime, &run.Status, &run.DurationMS, &run.ExitCode, &run.TimedOut, &run.OutputTruncated, &run.Stdout, &run.Stderr, &run.ErrorType, &run.Error); err != nil {
+		if err := rows.Scan(&run.ID, &run.CheckID, &run.Runtime, &run.Status, &run.DurationMS, &run.ExitCode, &run.TimedOut, &run.OutputTruncated, &run.Stdout, &run.Stderr, &run.ErrorType, &run.Error, &run.ResultSHA256, &run.ResultSizeBytes); err != nil {
 			return nil, fmt.Errorf("scan sandbox run: %w", err)
 		}
 		result = append(result, run)
@@ -413,10 +420,11 @@ func parseTime(value string) (time.Time, error) {
 }
 
 const (
-	driverName      = "sqlite3"
-	busyTimeoutMS   = "5000"
-	maxConnections  = 1
-	foreignKeysFlag = "on"
+	driverName                  = "sqlite3"
+	busyTimeoutMS               = "5000"
+	maxConnections              = 1
+	foreignKeysFlag             = "on"
+	evidenceReportSchemaVersion = "1.1.0"
 )
 
 // SQLiteStore persists complete review aggregates in SQLite.
@@ -461,11 +469,379 @@ func (s *SQLiteStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, migrations.InitialSchema); err != nil {
 		return fmt.Errorf("apply review migration: %w", err)
 	}
+	if err := s.ensureSandboxRunEvidenceColumns(ctx); err != nil {
+		return err
+	}
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("ping review database: %w", err)
 	}
 	return nil
 }
+
+func (s *SQLiteStore) ensureSandboxRunEvidenceColumns(ctx context.Context) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open migration connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return fmt.Errorf("begin sandbox run evidence migration: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(context.Background(), `ROLLBACK`)
+		}
+	}()
+
+	rows, err := conn.QueryContext(ctx, `PRAGMA table_info(sandbox_runs)`)
+	if err != nil {
+		return fmt.Errorf("inspect sandbox run schema: %w", err)
+	}
+	columns := make(map[string]bool)
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return errors.Join(fmt.Errorf("scan sandbox run schema: %w", err), rows.Close())
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return errors.Join(fmt.Errorf("read sandbox run schema: %w", err), rows.Close())
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close sandbox run schema rows: %w", err)
+	}
+	evidenceMigrations := []struct {
+		name, statement string
+	}{
+		{"result_sha256", `ALTER TABLE sandbox_runs ADD COLUMN result_sha256 TEXT NOT NULL DEFAULT ''`},
+		{"result_size_bytes", `ALTER TABLE sandbox_runs ADD COLUMN result_size_bytes INTEGER NOT NULL DEFAULT 0 CHECK (result_size_bytes >= 0)`},
+	}
+	missing := false
+	for _, migration := range evidenceMigrations {
+		if !columns[migration.name] {
+			missing = true
+			break
+		}
+	}
+	if missing {
+		legacyEvidence, err := loadLegacyResultEvidence(ctx, conn)
+		if err != nil {
+			return err
+		}
+		for _, migration := range evidenceMigrations {
+			if columns[migration.name] {
+				continue
+			}
+			if _, err := conn.ExecContext(ctx, migration.statement); err != nil {
+				return fmt.Errorf("add sandbox run %s: %w", migration.name, err)
+			}
+		}
+		for runID, evidence := range legacyEvidence.byRun {
+			if _, err := conn.ExecContext(ctx, `
+				UPDATE sandbox_runs
+				SET result_sha256=?, result_size_bytes=?
+				WHERE id=?
+			`, evidence.ResultSHA256, evidence.ResultSizeBytes, runID); err != nil {
+				return fmt.Errorf("backfill sandbox run evidence: %w", err)
+			}
+		}
+		if err := migrateLegacyReports(ctx, conn, legacyEvidence); err != nil {
+			return err
+		}
+		if _, err := conn.ExecContext(ctx,
+			`DELETE FROM artifacts WHERE kind = 'check-result'`,
+		); err != nil {
+			return fmt.Errorf("remove legacy result artifacts: %w", err)
+		}
+	}
+
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return fmt.Errorf("commit sandbox run evidence migration: %w", err)
+	}
+	committed = true
+	return nil
+}
+
+type legacyResultEvidence struct {
+	byRun         map[string]SandboxRun
+	artifactIDs   map[string]bool
+	affectedTasks map[string]bool
+}
+
+func loadLegacyResultEvidence(
+	ctx context.Context,
+	conn *sql.Conn,
+) (legacyResultEvidence, error) {
+	result := legacyResultEvidence{
+		byRun:         make(map[string]SandboxRun),
+		artifactIDs:   make(map[string]bool),
+		affectedTasks: make(map[string]bool),
+	}
+	rows, err := conn.QueryContext(ctx, `
+		SELECT
+			artifacts.id,
+			artifacts.task_id,
+			artifacts.run_id,
+			artifacts.sha256,
+			artifacts.size_bytes,
+			sandbox_runs.task_id
+		FROM artifacts
+		LEFT JOIN sandbox_runs ON sandbox_runs.id=artifacts.run_id
+		WHERE artifacts.kind='check-result'
+		ORDER BY artifacts.id
+	`)
+	if err != nil {
+		return result, fmt.Errorf("query legacy result artifacts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var artifactID, taskID, digest string
+		var runID, runTaskID sql.NullString
+		var size int64
+		if err := rows.Scan(
+			&artifactID,
+			&taskID,
+			&runID,
+			&digest,
+			&size,
+			&runTaskID,
+		); err != nil {
+			return result, fmt.Errorf("scan legacy result artifact: %w", err)
+		}
+		result.artifactIDs[artifactID] = true
+		result.affectedTasks[taskID] = true
+		if !runID.Valid {
+			continue
+		}
+		if !runTaskID.Valid || runTaskID.String != taskID {
+			return result, fmt.Errorf(
+				"legacy result artifact %q crosses review tasks",
+				artifactID,
+			)
+		}
+		evidence := SandboxRun{
+			ResultSHA256:    digest,
+			ResultSizeBytes: size,
+		}
+		if err := validateRunEvidence(evidence); err != nil {
+			return result, fmt.Errorf(
+				"validate legacy result artifact %q: %w",
+				artifactID,
+				err,
+			)
+		}
+		if _, exists := result.byRun[runID.String]; exists {
+			return result, fmt.Errorf(
+				"multiple legacy result artifacts for run %q",
+				runID.String,
+			)
+		}
+		result.byRun[runID.String] = evidence
+	}
+	if err := rows.Err(); err != nil {
+		return result, fmt.Errorf("read legacy result artifacts: %w", err)
+	}
+	return result, nil
+}
+
+func migrateLegacyReports(
+	ctx context.Context,
+	conn *sql.Conn,
+	evidence legacyResultEvidence,
+) error {
+	for taskID := range evidence.affectedTasks {
+		var canonicalJSON, canonicalMarkdown string
+		err := conn.QueryRowContext(ctx, `
+			SELECT canonical_json,canonical_markdown
+			FROM reports WHERE task_id=?
+		`, taskID).Scan(&canonicalJSON, &canonicalMarkdown)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("load legacy report %q: %w", taskID, err)
+		}
+		migratedJSON, err := migrateLegacyReportJSON(
+			canonicalJSON,
+			evidence,
+		)
+		if err != nil {
+			return fmt.Errorf("migrate legacy report %q: %w", taskID, err)
+		}
+		migratedMarkdown, err := migrateLegacyReportMarkdown(
+			canonicalMarkdown,
+			canonicalJSON,
+			evidence,
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"migrate legacy report Markdown %q: %w",
+				taskID,
+				err,
+			)
+		}
+		jsonDigest := sha256.Sum256([]byte(migratedJSON))
+		markdownDigest := sha256.Sum256([]byte(migratedMarkdown))
+		if _, err := conn.ExecContext(ctx, `
+			UPDATE reports SET
+				schema_version=?,
+				canonical_json=?,
+				canonical_markdown=?,
+				json_path='',
+				json_sha256=?,
+				markdown_path='',
+				markdown_sha256=?
+			WHERE task_id=?
+		`,
+			evidenceReportSchemaVersion,
+			migratedJSON,
+			migratedMarkdown,
+			hex.EncodeToString(jsonDigest[:]),
+			hex.EncodeToString(markdownDigest[:]),
+			taskID,
+		); err != nil {
+			return fmt.Errorf("save migrated report %q: %w", taskID, err)
+		}
+	}
+	return nil
+}
+
+func migrateLegacyReportJSON(
+	value string,
+	evidence legacyResultEvidence,
+) (string, error) {
+	var document map[string]any
+	if err := json.Unmarshal([]byte(value), &document); err != nil {
+		return "", fmt.Errorf("decode canonical JSON: %w", err)
+	}
+	if document == nil {
+		return "", errors.New("canonical JSON must be an object")
+	}
+	document["schema_version"] = evidenceReportSchemaVersion
+	if runs, ok := document["sandbox_runs"].([]any); ok {
+		for _, value := range runs {
+			run, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			runID, _ := run["id"].(string)
+			if item, exists := evidence.byRun[runID]; exists {
+				run["result_sha256"] = item.ResultSHA256
+				run["result_size_bytes"] = item.ResultSizeBytes
+			}
+		}
+	}
+	if artifacts, ok := document["artifacts"].([]any); ok {
+		filtered := artifacts[:0]
+		for _, value := range artifacts {
+			artifact, ok := value.(map[string]any)
+			artifactID, _ := artifact["id"].(string)
+			if ok && evidence.artifactIDs[artifactID] {
+				continue
+			}
+			filtered = append(filtered, value)
+		}
+		document["artifacts"] = filtered
+	}
+	content, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode canonical JSON: %w", err)
+	}
+	return string(append(content, '\n')), nil
+}
+
+func migrateLegacyReportMarkdown(
+	value string,
+	canonicalJSON string,
+	evidence legacyResultEvidence,
+) (string, error) {
+	var index struct {
+		SandboxRuns []struct {
+			ID string `json:"id"`
+		} `json:"sandbox_runs"`
+		Artifacts []struct {
+			ID string `json:"id"`
+		} `json:"artifacts"`
+	}
+	if err := json.Unmarshal([]byte(canonicalJSON), &index); err != nil {
+		return "", fmt.Errorf("decode canonical JSON index: %w", err)
+	}
+
+	const (
+		runsHeading       = "\n## Sandbox runs\n"
+		monitoringHeading = "\n## Monitoring\n"
+		artifactsHeading  = "\n## Artifacts\n"
+	)
+	runsStart := strings.Index(value, runsHeading)
+	monitoringStart := strings.Index(value, monitoringHeading)
+	artifactsStart := strings.Index(value, artifactsHeading)
+	if runsStart < 0 || monitoringStart < runsStart ||
+		artifactsStart < monitoringStart {
+		return "", errors.New("canonical Markdown sections are missing")
+	}
+	runsBodyStart := runsStart + len(runsHeading)
+	runsBody := value[runsBodyStart:monitoringStart]
+	runLines := strings.Split(runsBody, "\n")
+	runIndex := 0
+	for lineIndex, line := range runLines {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		if runIndex >= len(index.SandboxRuns) {
+			return "", errors.New("canonical Markdown has extra sandbox runs")
+		}
+		runID := index.SandboxRuns[runIndex].ID
+		if item, exists := evidence.byRun[runID]; exists {
+			runLines[lineIndex] += fmt.Sprintf(
+				", result=%d bytes, sha256=%s",
+				item.ResultSizeBytes,
+				item.ResultSHA256,
+			)
+		}
+		runIndex++
+	}
+	if runIndex != len(index.SandboxRuns) {
+		return "", errors.New("canonical Markdown sandbox runs are incomplete")
+	}
+	migratedRuns := strings.Join(runLines, "\n")
+
+	artifactsBodyStart := artifactsStart + len(artifactsHeading)
+	artifactLines := strings.Split(value[artifactsBodyStart:], "\n")
+	artifactIndex := 0
+	keptArtifacts := 0
+	filteredLines := make([]string, 0, len(artifactLines))
+	for _, line := range artifactLines {
+		if !strings.HasPrefix(line, "- ") {
+			filteredLines = append(filteredLines, line)
+			continue
+		}
+		if artifactIndex >= len(index.Artifacts) {
+			return "", errors.New("canonical Markdown has extra artifacts")
+		}
+		artifactID := index.Artifacts[artifactIndex].ID
+		artifactIndex++
+		if evidence.artifactIDs[artifactID] {
+			continue
+		}
+		keptArtifacts++
+		filteredLines = append(filteredLines, line)
+	}
+	if artifactIndex != len(index.Artifacts) {
+		return "", errors.New("canonical Markdown artifacts are incomplete")
+	}
+	if keptArtifacts == 0 {
+		filteredLines = []string{"No artifacts.", ""}
+	}
+	migratedArtifacts := strings.Join(filteredLines, "\n")
+	return value[:runsBodyStart] + migratedRuns +
+		value[monitoringStart:artifactsBodyStart] + migratedArtifacts, nil
+}
+
 func errorsJoinClose(operationErr error, db *sql.DB) error {
 	closeErr := db.Close()
 	if closeErr == nil {
@@ -516,12 +892,30 @@ func (s *SQLiteStore) SaveInputSummary(ctx context.Context, taskID string, summa
 
 // SaveRun persists one sandbox execution record.
 func (s *SQLiteStore) SaveRun(ctx context.Context, taskID string, run SandboxRun) error {
+	if err := validateRunEvidence(run); err != nil {
+		return err
+	}
 	const query = `INSERT INTO sandbox_runs
-        (id,task_id,check_id,runtime,status,duration_ms,exit_code,timed_out,output_truncated,stdout,stderr,error_type,error)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`
-	_, err := s.db.ExecContext(ctx, query, run.ID, taskID, redact.String(run.CheckID), redact.String(run.Runtime), redact.String(run.Status), run.DurationMS, run.ExitCode, run.TimedOut, run.OutputTruncated, redact.String(run.Stdout), redact.String(run.Stderr), redact.String(run.ErrorType), redact.String(run.Error))
+        (id,task_id,check_id,runtime,status,duration_ms,exit_code,timed_out,output_truncated,stdout,stderr,error_type,error,result_sha256,result_size_bytes)
+        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	_, err := s.db.ExecContext(ctx, query, run.ID, taskID, redact.String(run.CheckID), redact.String(run.Runtime), redact.String(run.Status), run.DurationMS, run.ExitCode, run.TimedOut, run.OutputTruncated, redact.String(run.Stdout), redact.String(run.Stderr), redact.String(run.ErrorType), redact.String(run.Error), run.ResultSHA256, run.ResultSizeBytes)
 	if err != nil {
 		return fmt.Errorf("save sandbox run: %w", err)
+	}
+	return nil
+}
+
+func validateRunEvidence(run SandboxRun) error {
+	if run.ResultSHA256 == "" && run.ResultSizeBytes == 0 {
+		return nil
+	}
+	if run.ResultSizeBytes <= 0 || run.ResultSizeBytes > 160<<10 ||
+		run.ResultSHA256 != strings.ToLower(run.ResultSHA256) {
+		return errors.New("invalid sandbox result evidence")
+	}
+	decoded, err := hex.DecodeString(run.ResultSHA256)
+	if err != nil || len(decoded) != sha256.Size {
+		return errors.New("invalid sandbox result evidence")
 	}
 	return nil
 }

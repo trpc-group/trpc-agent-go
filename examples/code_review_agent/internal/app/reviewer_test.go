@@ -37,8 +37,13 @@ func TestReviewerFakeFullRoundTrip(t *testing.T) {
 		t.Fatalf("Reviewer.Run() error = %v", err)
 	}
 	if result.Review.Task.Status != storemodel.StatusCompleted || len(result.Review.Findings) == 0 ||
-		len(result.Review.Runs) != 2 || len(result.Review.Decisions) != 4 || len(result.Review.Artifacts) != 2 {
+		len(result.Review.Runs) != 2 || len(result.Review.Decisions) != 4 || len(result.Review.Artifacts) != 0 {
 		t.Fatalf("review = %#v", result.Review)
+	}
+	for _, run := range result.Review.Runs {
+		if run.ResultSHA256 == "" || run.ResultSizeBytes <= 0 {
+			t.Fatalf("sandbox run lacks durable result evidence: %#v", run)
+		}
 	}
 	if result.Review.Report.JSON == "" || result.Review.Report.Markdown == "" {
 		t.Fatal("canonical reports are empty")

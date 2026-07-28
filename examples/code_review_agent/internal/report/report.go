@@ -30,7 +30,7 @@ import (
 
 // SchemaVersion is the public report contract version.
 const (
-	SchemaVersion = "1.0.0"
+	SchemaVersion = "1.1.0"
 	maxJSONBytes  = 4 << 20
 	maxMarkdown   = 4 << 20
 )
@@ -256,7 +256,7 @@ No actionable findings.
 {{end}}
 
 ## Sandbox runs
-{{range .SandboxRuns}}- {{md .CheckID}}: {{md .Status}}, {{.DurationMS}} ms, exit={{.ExitCode}}, timeout={{.TimedOut}}, truncated={{.OutputTruncated}}
+{{range .SandboxRuns}}- {{md .CheckID}}: {{md .Status}}, {{.DurationMS}} ms, exit={{.ExitCode}}, timeout={{.TimedOut}}, truncated={{.OutputTruncated}}{{if .ResultSHA256}}, result={{.ResultSizeBytes}} bytes, sha256={{md .ResultSHA256}}{{end}}
 {{else}}No sandbox runs.
 {{end}}
 

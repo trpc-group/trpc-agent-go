@@ -126,12 +126,13 @@ func TestContainerCheckWithFakeEngine(t *testing.T) {
 	runtime := &fakeRuntime{}
 	recorder := &testRecorder{}
 	container := testContainer(t, runtime, recorder)
+	container.ExecutablePaths = []string{"scripts/helper.sh"}
 	repo := t.TempDir()
 	result, err := container.Check(context.Background(), "go-test", repo, time.Second)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)
 	}
-	if result.Status != "completed" || result.ExitCode != 0 || result.SHA256 == "" || result.ArtifactBytes == 0 {
+	if result.Status != "completed" || result.ExitCode != 0 || result.ResultSHA256 == "" || result.ResultSizeBytes == 0 {
 		t.Fatalf("result = %#v", result)
 	}
 	if len(recorder.values) != 2 {
@@ -142,6 +143,18 @@ func TestContainerCheckWithFakeEngine(t *testing.T) {
 	}
 	if runtime.stageCalls != 1 || runtime.stageSource != repo || runtime.stageDestination != codeexecutor.DirWork || !runtime.stageOptions.ReadOnly || runtime.stageOptions.AllowMount {
 		t.Fatalf("staging calls=%d source=%q destination=%q options=%+v", runtime.stageCalls, runtime.stageSource, runtime.stageDestination, runtime.stageOptions)
+	}
+	if runtime.runCalls != 3 {
+		t.Fatalf("run calls = %d, want chmod + runner + result read", runtime.runCalls)
+	}
+}
+
+func TestRestoreExecutableModesRejectsUnsafePath(t *testing.T) {
+	runtime := &fakeRuntime{}
+	engine := codeexecutor.NewEngineWithCapabilities(runtime, runtime, runtime, codeexecutor.Capabilities{SupportsCleanEnv: true})
+	err := restoreExecutableModes(context.Background(), engine, codeexecutor.Workspace{Path: "/tmp/run/ws_cr-test"}, []string{"../escape"})
+	if err == nil || !strings.Contains(err.Error(), "invalid executable snapshot path") || runtime.runCalls != 0 {
+		t.Fatalf("restoreExecutableModes() error=%v calls=%d", err, runtime.runCalls)
 	}
 }
 func TestContainerCheckFailures(t *testing.T) {
@@ -192,6 +205,25 @@ func TestContainerCheckFailures(t *testing.T) {
 	}
 }
 
+func TestContainerRunnerErrorPreservesTimeoutResult(t *testing.T) {
+	runtime := &fakeRuntime{
+		runResult: codeexecutor.RunResult{ExitCode: -1, TimedOut: true},
+		runErr:    context.DeadlineExceeded,
+	}
+	container := testContainer(t, runtime, &testRecorder{})
+	result, err := container.Check(
+		context.Background(),
+		"go-test",
+		t.TempDir(),
+		time.Second,
+	)
+	if !errors.Is(err, context.DeadlineExceeded) ||
+		result.Status != "timeout" || !result.TimedOut ||
+		result.ExitCode != -1 {
+		t.Fatalf("Check() result=%#v error=%v", result, err)
+	}
+}
+
 func TestContainerRunnerStatusesFromArtifact(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -213,7 +245,7 @@ func TestContainerRunnerStatusesFromArtifact(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Check() error = %v", err)
 			}
-			if result.Status != test.wantStatus || result.ExitCode != test.wantExit || result.Truncated != test.truncated || result.ArtifactBytes == 0 || result.SHA256 == "" {
+			if result.Status != test.wantStatus || result.ExitCode != test.wantExit || result.Truncated != test.truncated || result.ResultSizeBytes == 0 || result.ResultSHA256 == "" {
 				t.Fatalf("result = %#v", result)
 			}
 		})
@@ -290,7 +322,7 @@ func TestFakeCheckPreservesGovernanceWithoutExecution(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fake.Check() error = %v", err)
 	}
-	if result.Runtime != "fake" || result.Status != "completed" || result.ExitCode != 0 || result.Artifact == "" || result.SHA256 == "" || len(recorder.values) != 2 {
+	if result.Runtime != "fake" || result.Status != "completed" || result.ExitCode != 0 || result.ResultSizeBytes == 0 || result.ResultSHA256 == "" || len(recorder.values) != 2 {
 		t.Fatalf("result = %#v, decisions = %#v", result, recorder.values)
 	}
 }
@@ -314,7 +346,8 @@ func TestLocalCheckRunsFixedOfflineCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Local.Check() error = %v", err)
 	}
-	if result.Runtime != "local" || result.Status != "completed" || result.ExitCode != 0 || len(recorder.values) != 2 {
+	if result.Runtime != "local" || result.Status != "completed" || result.ExitCode != 0 ||
+		result.ResultSizeBytes == 0 || result.ResultSHA256 == "" || len(recorder.values) != 2 {
 		t.Fatalf("result = %#v, decisions = %#v", result, recorder.values)
 	}
 	if recorder.values[0].Risk != "high" {
@@ -375,6 +408,21 @@ func TestLocalHelpersAreBounded(t *testing.T) {
 	}
 	if _, err := (Local{WorkRoot: blockedRoot}).createWorkRoot(t.TempDir()); err == nil {
 		t.Fatal("file accepted as local work root")
+	}
+}
+
+func TestLocalResultEvidenceIsBoundedForWorstCaseOutput(t *testing.T) {
+	result := Run{
+		CheckID: "go-test",
+		Runtime: "local",
+		Status:  "failed",
+		Stdout:  strings.Repeat("\x00", localOutputBytes),
+		Stderr:  strings.Repeat("\x00", localOutputBytes),
+	}
+	setLocalResultEvidence(&result)
+	if result.ResultSHA256 == "" || result.ResultSizeBytes <= 0 ||
+		result.ResultSizeBytes > maxResultBytes {
+		t.Fatalf("local result evidence = %#v", result)
 	}
 }
 func writeLocalFixture(t *testing.T, root, name, content string) {
@@ -632,7 +680,7 @@ func TestContainerCheckRealDocker(t *testing.T) {
 		BuildContext: root, SkillRoot: filepath.Join(root, "skills", "code-review"),
 	}
 	result, err := runner.Check(context.Background(), "go-test", filepath.Join(root, "fixtures", "composite", "repo"), 30*time.Second)
-	if err != nil || result.Status != "completed" || result.ExitCode != 0 || result.ArtifactBytes <= 0 || result.SHA256 == "" || recorder.count != 2 {
+	if err != nil || result.Status != "completed" || result.ExitCode != 0 || result.ResultSizeBytes <= 0 || result.ResultSHA256 == "" || recorder.count != 2 {
 		t.Fatalf("Check() result=%#v decisions=%d error=%v", result, recorder.count, err)
 	}
 }

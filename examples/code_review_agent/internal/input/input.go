@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -226,6 +227,7 @@ func splitFileLines(data []byte) [][]byte {
 
 const maxGitErrorBytes = 64 << 10
 const gitProbeBytes = 1024
+const maxGitInventoryBytes = 16 << 20
 
 func collectGitDiff(ctx context.Context, root string, limits Limits) ([]byte, error) {
 	hasHead, err := gitHasHead(ctx, root)
@@ -254,12 +256,17 @@ func gitHasHead(ctx context.Context, root string) (bool, error) {
 	return false, err
 }
 func collectUnbornDiff(ctx context.Context, root string, limits Limits) ([]byte, error) {
-	listed, err := runGit(ctx, root, limits.MaxDiffBytes, "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--")
+	inventory, err := repositoryInventory(ctx, root)
 	if err != nil {
 		return nil, err
 	}
+	var listed bytes.Buffer
+	for _, entry := range inventory {
+		listed.WriteString(entry.Path)
+		listed.WriteByte(0)
+	}
 	all := &bytes.Buffer{}
-	if err := appendListedFiles(root, limits, all, listed); err != nil {
+	if err := appendListedFiles(root, limits, all, listed.Bytes()); err != nil {
 		return nil, err
 	}
 	return all.Bytes(), nil
@@ -305,7 +312,7 @@ func runGit(ctx context.Context, root string, limit int64, args ...string) ([]by
 	}
 	// args are selected only by the fixed callers in this package.
 	//nolint:gosec
-	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager", "-C", root}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--no-pager", "-c", "safe.directory=*", "-C", root}, args...)...)
 	cmd.Env = gitEnvironment()
 	var out, errOut boundedBuffer
 	out.limit, errOut.limit = limit, maxGitErrorBytes
@@ -317,6 +324,109 @@ func runGit(ctx context.Context, root string, limit int64, args ...string) ([]by
 		return nil, errors.New("git output exceeds diff limit")
 	}
 	return out.Bytes(), nil
+}
+
+func repositoryInventory(ctx context.Context, root string) ([]snapshotEntry, error) {
+	tracked, err := runGit(ctx, root, maxGitInventoryBytes, "ls-files", "--stage", "--cached", "-z", "--")
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]snapshotEntry)
+	for _, raw := range bytes.Split(tracked, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		tab := bytes.IndexByte(raw, '\t')
+		if tab < 0 {
+			return nil, errors.New("invalid git index entry")
+		}
+		fields := bytes.Fields(raw[:tab])
+		if len(fields) != 3 {
+			return nil, errors.New("invalid git index metadata")
+		}
+		if string(fields[2]) != "0" {
+			return nil, errors.New(
+				"repository index contains unresolved merge entries",
+			)
+		}
+		mode := string(fields[0])
+		if mode == "160000" {
+			continue
+		}
+		path, cleanErr := cleanSnapshotPath(string(raw[tab+1:]))
+		if cleanErr != nil {
+			return nil, cleanErr
+		}
+		_, statErr := os.Lstat(filepath.Join(root, filepath.FromSlash(path)))
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		if statErr != nil {
+			return nil, statErr
+		}
+		seen[path] = snapshotEntry{Path: path, Executable: mode == "100755"}
+		if len(seen) > maxSnapshotFiles {
+			return nil, fmt.Errorf("repository exceeds %d files", maxSnapshotFiles)
+		}
+	}
+	untracked, err := runGit(ctx, root, maxGitInventoryBytes, "ls-files", "--others", "--exclude-standard", "-z", "--")
+	if err != nil {
+		return nil, err
+	}
+	for _, raw := range bytes.Split(untracked, []byte{0}) {
+		if len(raw) == 0 {
+			continue
+		}
+		path, cleanErr := cleanSnapshotPath(string(raw))
+		if cleanErr != nil {
+			return nil, cleanErr
+		}
+		info, statErr := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+		if statErr != nil {
+			return nil, statErr
+		}
+		seen[path] = snapshotEntry{Path: path, Executable: info.Mode().Perm()&0o111 != 0}
+		if len(seen) > maxSnapshotFiles {
+			return nil, fmt.Errorf("repository exceeds %d files", maxSnapshotFiles)
+		}
+	}
+	result := make([]snapshotEntry, 0, len(seen))
+	for _, entry := range seen {
+		result = append(result, entry)
+	}
+	slices.SortFunc(result, func(left, right snapshotEntry) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return result, nil
+}
+
+func mergeInventory(root string, inventory []snapshotEntry, explicit []string) ([]snapshotEntry, error) {
+	seen := make(map[string]snapshotEntry, len(inventory)+len(explicit))
+	for _, entry := range inventory {
+		seen[entry.Path] = entry
+	}
+	for _, value := range explicit {
+		path, err := cleanSnapshotPath(value)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(path)))
+		if err != nil {
+			return nil, err
+		}
+		seen[path] = snapshotEntry{Path: path, Executable: info.Mode().Perm()&0o111 != 0}
+	}
+	result := make([]snapshotEntry, 0, len(seen))
+	for _, entry := range seen {
+		result = append(result, entry)
+	}
+	slices.SortFunc(result, func(left, right snapshotEntry) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return result, nil
 }
 
 type boundedBuffer struct {
@@ -365,10 +475,12 @@ type Summary struct {
 	// ModuleHints includes changed Go packages and module metadata directories.
 	// It is ephemeral execution input and is not persisted as package metadata.
 	ModuleHints []string
-	Sources     map[string][]byte
-	RawDiff     []byte
-	Hunks       int
-	Added       int
+	// ExecutablePaths preserves Git index execution semantics for staging.
+	ExecutablePaths []string
+	Sources         map[string][]byte
+	RawDiff         []byte
+	Hunks           int
+	Added           int
 }
 
 // PersistableMetadata excludes raw diff and source content.
@@ -389,13 +501,36 @@ func (s Summary) Metadata() PersistableMetadata {
 // Load resolves the selected input and enforces aggregate limits.
 func Load(ctx context.Context, config Config) (Summary, error) {
 	var sourceRoot, sourceDigest string
+	var inventory []snapshotEntry
+	var explicitPaths []string
+	var selectedInventory, includeGitInventory bool
 	if config.RepoPath != "" {
 		var err error
 		sourceRoot, err = secureRepoRoot(config.RepoPath)
 		if err != nil {
 			return Summary{}, err
 		}
-		sourceDigest, err = digestTree(sourceRoot, config.Limits.MaxFileBytes)
+		if config.FilesFile != "" {
+			explicitPaths, err = readFileList(sourceRoot, config.FilesFile, config.Limits)
+			if err != nil {
+				return Summary{}, err
+			}
+		}
+		inventory, err = repositoryInventory(ctx, sourceRoot)
+		if err != nil && config.FilesFile == "" {
+			return Summary{}, fmt.Errorf("list repository snapshot: %w", err)
+		}
+		if err == nil {
+			includeGitInventory = true
+		} else {
+			inventory = nil
+		}
+		inventory, err = mergeInventory(sourceRoot, inventory, explicitPaths)
+		if err != nil {
+			return Summary{}, err
+		}
+		selectedInventory = true
+		sourceDigest, err = digestPaths(sourceRoot, inventory, config.Limits.MaxFileBytes)
 		if err != nil {
 			return Summary{}, fmt.Errorf("digest repository before diff: %w", err)
 		}
@@ -407,7 +542,7 @@ func Load(ctx context.Context, config Config) (Summary, error) {
 			return Summary{}, fmt.Errorf("digest fixture before diff: %w", err)
 		}
 	}
-	kind, repoRoot, raw, err := loadRaw(ctx, config)
+	kind, repoRoot, raw, err := loadRaw(ctx, config, explicitPaths)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -416,16 +551,67 @@ func Load(ctx context.Context, config Config) (Summary, error) {
 	}
 	var cleanup func() error
 	var snapshotDigest string
+	var executablePaths []string
 	if repoRoot != "" {
 		originalRoot := repoRoot
-		snapshot, digest, snapshotCleanup, snapshotErr := snapshotRepository(originalRoot, config.Limits)
+		var snapshot string
+		var digest string
+		var snapshotCleanup func() error
+		var snapshotErr error
+		if selectedInventory {
+			snapshot, digest, snapshotCleanup, snapshotErr = snapshotRepositoryPaths(originalRoot, inventory, config.Limits)
+		} else {
+			snapshot, digest, snapshotCleanup, snapshotErr = snapshotRepository(originalRoot, config.Limits)
+		}
 		if snapshotErr != nil {
 			return Summary{}, fmt.Errorf("snapshot repository: %w", snapshotErr)
 		}
+		snapshotEntries := inventory
+		if !selectedInventory {
+			snapshotEntries, snapshotErr = snapshotTreePaths(snapshot)
+			if snapshotErr != nil {
+				return Summary{}, errors.Join(snapshotErr, snapshotCleanup())
+			}
+		}
+		for _, entry := range snapshotEntries {
+			if entry.Executable {
+				executablePaths = append(executablePaths, entry.Path)
+			}
+		}
 		if sourceDigest != "" {
-			afterDigest, digestErr := digestTree(originalRoot, config.Limits.MaxFileBytes)
-			if digestErr != nil || afterDigest != sourceDigest || afterDigest != digest {
+			afterInventory := inventory
+			var inventoryErr error
+			if selectedInventory && includeGitInventory {
+				afterInventory, inventoryErr = repositoryInventory(ctx, originalRoot)
+				if inventoryErr == nil {
+					afterInventory, inventoryErr = mergeInventory(originalRoot, afterInventory, explicitPaths)
+				}
+			}
+			var afterDigest string
+			var digestErr error
+			if selectedInventory {
+				afterDigest, digestErr = digestPaths(originalRoot, afterInventory, config.Limits.MaxFileBytes)
+			} else {
+				afterDigest, digestErr = digestTree(originalRoot, config.Limits.MaxFileBytes)
+			}
+			if inventoryErr != nil || digestErr != nil || !slices.Equal(afterInventory, inventory) || afterDigest != sourceDigest || afterDigest != digest {
+				digestErr = errors.Join(inventoryErr, digestErr)
 				return Summary{}, errors.Join(errors.New("repository changed while loading review input"), digestErr, snapshotCleanup())
+			}
+		}
+		if config.RepoPath != "" {
+			if rawErr := verifyRawUnchanged(
+				ctx,
+				config,
+				explicitPaths,
+				kind,
+				originalRoot,
+				raw,
+			); rawErr != nil {
+				return Summary{}, errors.Join(
+					rawErr,
+					snapshotCleanup(),
+				)
 			}
 		}
 		repoRoot, cleanup = snapshot, snapshotCleanup
@@ -446,7 +632,30 @@ func Load(ctx context.Context, config Config) (Summary, error) {
 	digest := sha256.Sum256(raw)
 	packages := ResolvePackages(repoRoot, files)
 	moduleHints := ResolveModuleHints(files)
-	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, RepositoryDigest: snapshotDigest, Cleanup: cleanup, Files: files, Packages: packages, ModuleHints: moduleHints, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
+	return Summary{Kind: kind, Digest: hex.EncodeToString(digest[:]), RepoRoot: repoRoot, RepositoryDigest: snapshotDigest, Cleanup: cleanup, Files: files, Packages: packages, ModuleHints: moduleHints, ExecutablePaths: executablePaths, Sources: sources, RawDiff: raw, Hunks: hunks, Added: added}, nil
+}
+
+func verifyRawUnchanged(
+	ctx context.Context,
+	config Config,
+	explicitPaths []string,
+	kind string,
+	root string,
+	raw []byte,
+) error {
+	afterKind, afterRoot, afterRaw, err := loadRaw(
+		ctx,
+		config,
+		explicitPaths,
+	)
+	if err != nil || afterKind != kind || afterRoot != root ||
+		!bytes.Equal(afterRaw, raw) {
+		return errors.Join(
+			errors.New("review diff changed while loading input"),
+			err,
+		)
+	}
+	return nil
 }
 
 func cleanupLoadSnapshot(cleanup func() error, cause error) error {
@@ -481,7 +690,7 @@ func loadChangedSources(root string, files []diffparse.ChangedFile, limits Limit
 	}
 	return result, nil
 }
-func loadRaw(ctx context.Context, config Config) (string, string, []byte, error) {
+func loadRaw(ctx context.Context, config Config, explicitPaths []string) (string, string, []byte, error) {
 	switch {
 	case config.DiffFile != "":
 		data, err := readBoundedFile(config.DiffFile, config.Limits.MaxDiffBytes)
@@ -499,11 +708,7 @@ func loadRaw(ctx context.Context, config Config) (string, string, []byte, error)
 			return "", "", nil, err
 		}
 		if config.FilesFile != "" {
-			paths, readErr := readFileList(root, config.FilesFile, config.Limits)
-			if readErr != nil {
-				return "", "", nil, readErr
-			}
-			data, diffErr := newFilesDiff(root, paths, config.Limits)
+			data, diffErr := newFilesDiff(root, explicitPaths, config.Limits)
 			return "files", root, data, diffErr
 		}
 		data, gitErr := collectGitDiff(ctx, root, config.Limits)
@@ -570,10 +775,6 @@ func ResolveModuleHints(files []diffparse.ChangedFile) []string {
 	for _, file := range files {
 		for _, filePath := range []string{file.OldPath, file.NewPath} {
 			if filePath == "" {
-				continue
-			}
-			base := filepath.Base(filePath)
-			if filepath.Ext(filePath) != ".go" && base != "go.mod" && base != "go.sum" {
 				continue
 			}
 			seen[filepath.ToSlash(filepath.Dir(filePath))] = struct{}{}

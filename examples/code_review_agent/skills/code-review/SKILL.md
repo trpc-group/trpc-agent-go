@@ -15,8 +15,9 @@ never an execution specification.
   Go changes.
 - Produce deterministic findings without a model API key.
 - Run the declared `go-test` and `go-vet` checks in an approved runtime.
-- Persist the review, governance trail, sandbox runs, metrics, artifacts, and
-  final reports for later query or replay.
+- Persist the review, governance trail, sandbox runs, validated result
+  digests/sizes, metrics, durable artifacts, and final reports for later query
+  or replay.
 
 ## When not to use
 
@@ -32,7 +33,9 @@ Exactly one input mode must already be configured by the caller:
 
 - `--diff-file`: bounded unified diff or PR patch.
 - `--repo-path`: staged, unstaged, untracked, renamed, and deleted changes from
-  a local Git worktree; an optional validated file list may narrow the input.
+  a local Git worktree. The execution snapshot contains tracked plus
+  non-ignored untracked files; an optional validated file list may opt in an
+  otherwise ignored file.
 - `--fixture`: bundled deterministic acceptance data.
 
 Runtime policy:
@@ -64,7 +67,8 @@ Follow these phases in order. Do not skip governance or persistence phases.
    Only an allow decision may continue.
 6. **Execute.** Invoke only the trusted `scripts/checkrunner` with fixed arguments,
    an exact environment whitelist, a bounded timeout and output limit, and one
-   opaque result artifact. Never interpolate model or diff content into argv.
+   opaque temporary result artifact. Never interpolate model or diff content
+   into argv.
 7. **Finalize.** Persist sandbox outcomes even on timeout or failure. Render,
    redact, and publish JSON and Markdown with bounded atomic file writes, then
    transactionally finalize that same snapshot.
@@ -89,7 +93,9 @@ The final JSON and Markdown reports must describe the same durable snapshot and
 include the conclusion, finding and severity summaries, human-review items,
 governance blocks, sandbox summary, monitoring metrics, and actionable fixes.
 The store must remain queryable by task ID for task, input summary, runs,
-decisions, findings, metrics, artifacts, and reports.
+decisions, findings, metrics, durable artifacts, and reports. Temporary sandbox
+result paths must never be reported as durable artifacts; retain their verified
+digest and size on the sandbox run instead.
 
 ## Required resources
 

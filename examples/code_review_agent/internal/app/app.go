@@ -151,7 +151,7 @@ func (s *runState) runChecks(ctx context.Context) error {
 	recorder := &decisionRecorder{store: s.reviewer.Store, taskID: s.taskID, tracker: s.tracker}
 	authorizer := governance.Authorizer{Policy: tool.PermissionPolicyFunc(governance.DefaultPolicy), Recorder: recorder}
 	moduleHints := append(append([]string(nil), s.summary.Packages...), s.summary.ModuleHints...)
-	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, RepositoryDigest: s.summary.RepositoryDigest, Packages: moduleHints, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
+	checker, err := s.reviewer.CheckerFactory(authorizer, CheckerConfig{Runtime: s.config.Runtime, SkillPath: s.skill.Path, BuildContext: s.reviewer.BuildContext, RepositoryDigest: s.summary.RepositoryDigest, Packages: moduleHints, ExecutablePaths: s.summary.ExecutablePaths, DryRun: s.config.DryRun, AllowLocal: s.config.AllowLocal})
 	if err != nil {
 		return fmt.Errorf("create sandbox checker: %w", err)
 	}
@@ -180,18 +180,11 @@ func (s *runState) persistRun(ctx context.Context, run sandbox.Run, runErr error
 		run.Error = redact.String(runErr.Error())
 	}
 	s.tracker.RecordRun(run.Duration, errorType)
-	record := storemodel.SandboxRun{ID: runID, CheckID: run.CheckID, Runtime: run.Runtime, Status: run.Status, DurationMS: run.Duration.Milliseconds(), ExitCode: run.ExitCode, TimedOut: run.TimedOut, OutputTruncated: run.Truncated, Stdout: run.Stdout, Stderr: run.Stderr, ErrorType: errorType, Error: run.Error}
+	record := storemodel.SandboxRun{ID: runID, CheckID: run.CheckID, Runtime: run.Runtime, Status: run.Status, DurationMS: run.Duration.Milliseconds(), ExitCode: run.ExitCode, TimedOut: run.TimedOut, OutputTruncated: run.Truncated, Stdout: run.Stdout, Stderr: run.Stderr, ErrorType: errorType, Error: run.Error, ResultSHA256: run.ResultSHA256, ResultSizeBytes: run.ResultSizeBytes}
 	persistCtx, cancel := terminalContext(ctx)
 	defer cancel()
 	if err := s.reviewer.Store.SaveRun(persistCtx, s.taskID, record); err != nil {
 		return fmt.Errorf("save sandbox run: %w", err)
-	}
-	if run.Artifact != "" {
-		artifactID, err := newTaskID()
-		if err != nil {
-			return err
-		}
-		s.artifacts = append(s.artifacts, storemodel.Artifact{ID: artifactID, RunID: runID, Kind: "check-result", Path: run.Artifact, SHA256: run.SHA256, SizeBytes: run.ArtifactBytes, CreatedAt: s.reviewer.now().UTC()})
 	}
 	return nil
 }
@@ -228,7 +221,7 @@ func DefaultCheckerFactory(authorizer governance.Authorizer, config CheckerConfi
 		return sandbox.Fake{Authorizer: authorizer, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages}, nil
 	}
 	if config.Runtime == "container" {
-		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages}, nil
+		return sandbox.Container{Authorizer: authorizer, BuildContext: config.BuildContext, SkillRoot: config.SkillPath, RepositoryDigest: config.RepositoryDigest, Packages: config.Packages, ExecutablePaths: config.ExecutablePaths}, nil
 	}
 	if config.Runtime == "local" {
 		if !config.AllowLocal {
@@ -252,7 +245,6 @@ func (s *runState) complete(ctx context.Context) (Result, error) {
 	metrics := s.tracker.Snapshot(finished, s.findings)
 	s.sealedAt = &finished
 	aggregate.Task.FinishedAt, aggregate.Metrics = &finished, metrics
-	aggregate.Artifacts = s.artifacts
 	documents, err := report.Render(report.Build(aggregate))
 	if err != nil {
 		return Result{TaskID: s.taskID}, s.fail(ctx, err)
@@ -261,7 +253,7 @@ func (s *runState) complete(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{TaskID: s.taskID}, s.fail(ctx, err)
 	}
-	request := storemodel.FinalizeRequest{TaskID: s.taskID, Status: status, Conclusion: conclusion, Findings: s.findings, Metrics: metrics, Artifacts: s.artifacts, Report: written.StoreReport(documents, conclusion), FinishedAt: finished}
+	request := storemodel.FinalizeRequest{TaskID: s.taskID, Status: status, Conclusion: conclusion, Findings: s.findings, Metrics: metrics, Report: written.StoreReport(documents, conclusion), FinishedAt: finished}
 	finalizeCtx, cancel := terminalContext(ctx)
 	err = s.reviewer.Store.Finalize(finalizeCtx, request)
 	cancel()
@@ -449,7 +441,7 @@ type Checker interface {
 // CheckerConfig contains validated checker construction options.
 type CheckerConfig struct {
 	Runtime, SkillPath, BuildContext, RepositoryDigest string
-	Packages                                           []string
+	Packages, ExecutablePaths                          []string
 	DryRun, AllowLocal                                 bool
 }
 
@@ -472,18 +464,17 @@ type Result struct {
 	Written report.Written
 }
 type runState struct {
-	reviewer  *Reviewer
-	config    input.Config
-	taskID    string
-	started   time.Time
-	tracker   *Tracker
-	summary   input.Summary
-	skill     *Manifest
-	findings  []reviewmodel.Finding
-	warnings  bool
-	artifacts []storemodel.Artifact
-	created   bool
-	sealedAt  *time.Time
+	reviewer *Reviewer
+	config   input.Config
+	taskID   string
+	started  time.Time
+	tracker  *Tracker
+	summary  input.Summary
+	skill    *Manifest
+	findings []reviewmodel.Finding
+	warnings bool
+	created  bool
+	sealedAt *time.Time
 }
 
 // Run executes one review and guarantees a terminal state after task creation.

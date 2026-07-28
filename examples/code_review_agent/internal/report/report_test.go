@@ -48,7 +48,8 @@ func TestRenderParityAndRedaction(t *testing.T) {
 		t.Fatalf("report summary = %#v", decoded)
 	}
 	for _, expected := range []string{"Findings: 1", "Warnings: 1", "Needs human review: 1",
-		"Blocked decisions: 1", "Severity distribution", "high: 1", "Error type distribution", `sandbox\_timeout: 1`} {
+		"Blocked decisions: 1", "Severity distribution", "high: 1", "Error type distribution",
+		`sandbox\_timeout: 1`, `result=42 bytes, sha256=result\-digest`} {
 		if !strings.Contains(string(documents.Markdown), expected) {
 			t.Fatalf("Markdown missing %q", expected)
 		}
@@ -198,11 +199,12 @@ func reportTestReview() storemodel.Review {
 		AddedLines: 3, Packages: []string{"example/pkg"}}, Findings: findings,
 		Decisions: []storemodel.Decision{{ID: "decision-1", Stage: "permission", CheckID: "go-test",
 			Action: "deny", Reason: reportTestSecret, At: started}},
-		Runs: []storemodel.SandboxRun{{ID: "run-1", CheckID: "go-test", Status: "passed", DurationMS: 10}},
+		Runs: []storemodel.SandboxRun{{ID: "run-1", CheckID: "go-test", Status: "passed", DurationMS: 10,
+			ResultSHA256: "result-digest", ResultSizeBytes: 42}},
 		Metrics: storemodel.Metrics{TotalDurationMS: 20, SandboxDurationMS: 10, ToolCalls: 1,
 			PermissionBlocks: 1, FindingCount: 3, SeverityCounts: map[string]int{"high": 1},
 			ErrorTypeCounts: map[string]int{"sandbox_timeout": 1}},
-		Artifacts: []storemodel.Artifact{{ID: "artifact-1", Kind: "check-result", Path: "result.json",
+		Artifacts: []storemodel.Artifact{{ID: "artifact-1", Kind: "audit-log", Path: "audit.log",
 			SHA256: "digest", SizeBytes: 10, CreatedAt: finished}}}
 }
 
