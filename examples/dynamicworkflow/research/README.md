@@ -19,7 +19,14 @@ research_assistant
 The template fixes the model, Runner, callbacks, and maximum capability set.
 Each `agent(...)` call supplies a temporary instruction and an explicit
 `tools=[...]` list. A role cannot select tools that are not registered on the
-template.
+template. The base `LLMAgent` uses `IsolatedRequest`, so a temporary role sees
+its own branch rather than the root conversation.
+
+Workflow Python is short orchestration glue. Source files, reports, shell
+scripts, and other substantive artifacts should be produced by the relevant
+child Agent rather than embedded in the workflow source. In a review loop,
+pass every reported issue into the next implementation call so an attempt
+cannot simply repeat unchanged work.
 
 ## What It Demonstrates
 
@@ -35,6 +42,10 @@ Web search uses the existing DuckDuckGo HTML search tool. Host execution uses
 the existing `hostexec` ToolSet and starts commands in the directory selected
 by `-base-dir`, but it still executes real commands on the local machine and is
 not path-isolated.
+
+For reliable visible tool use across model providers, keep tool-using roles
+unstructured and pass their text evidence to a separate `tools=[]` role when a
+typed decision is required.
 
 ## Run
 

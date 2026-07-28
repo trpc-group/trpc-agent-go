@@ -50,6 +50,11 @@ Workflow. The current built-in Runtime uses Python. Calls to registered Agents
 and tools cross an explicit bridge/RPC back into the Go host instead of running
 through a separate Agent SDK inside the script.
 
+Keep generated workflow code as short orchestration glue. It should express
+delegation, data flow, branches, concurrency, and bounded loops while child
+Agents perform the substantive research, writing, coding, or tool use. Do not
+embed the task's report, source files, or large shell scripts in workflow code.
+
 ## Minimal setup
 
 The minimal setup registers one neutral base Agent and attaches `run_workflow`
@@ -84,6 +89,9 @@ general := llmagent.New(
     llmagent.WithInstruction(
         "Follow the dynamic instruction supplied for this workflow-local role.",
     ),
+    // Keep each temporary role focused on its own branch. Reusing an
+    // instance_id still shares history inside the current workflow request.
+    llmagent.WithMessageFilterMode(llmagent.IsolatedRequest),
 )
 
 // Create the run_workflow tool.
@@ -169,10 +177,12 @@ The common options are:
 - `instance_id`: reuses the same child Agent history within one workflow.
 
 When `instance_id` is omitted, each `agent(...)` call creates an independent
-child Agent history, which is the right default for parallel branches. Passing
-the same `instance_id` explicitly means the calls share one child history; if
-those calls happen concurrently, they are serialized to avoid concurrent reads
-and writes to the same conversation branch.
+child Agent history, which is the right default for parallel branches. For
+`LLMAgent` templates, use `llmagent.IsolatedRequest` as shown above when a
+temporary role should not inherit the root branch's conversation. Passing the
+same `instance_id` explicitly means the calls share one child history; if those
+calls happen concurrently, they are serialized to avoid concurrent reads and
+writes to the same conversation branch.
 
 The shared history contains child inputs and emitted events. A dynamic
 `instruction` is configuration for that call only and is not persisted as a
@@ -181,6 +191,19 @@ conversation message. Put facts that a later call must remember in `input`.
 These options affect only the current child Agent call. A workflow cannot use
 them to change the model, permission policy, or add host capabilities that the
 base Agent did not already have.
+
+`agent(...)` returns an envelope containing `text`, optional `structured`
+output, and execution metadata. Pass `result["text"]` downstream for plain text
+and `result["structured"]` for typed data. Avoid forwarding the complete
+envelope unless the next step actually needs its metadata. When a later branch
+or loop needs stable fields, request `schema` and use `structured`; do not ask
+for JSON text and parse it inside the workflow.
+
+When a role must visibly call a tool and later code needs a typed decision,
+split it into two child calls: first collect unstructured, tool-grounded text;
+then pass that evidence to a `tools=[]` child with `schema`. This avoids relying
+on a model provider to combine tool calling and structured response mode in one
+turn.
 
 ## A complete example
 
@@ -262,7 +285,7 @@ this structured call may fail; if stable fields are unnecessary, omit
 ## Concurrency and batch work
 
 Use `parallel` when independent branches can run at the same time. Results are
-returned in input order:
+returned in input order; a failed independent branch produces `None`:
 
 ```python
 reviews = await parallel([
@@ -281,6 +304,18 @@ Use `pipeline(items, stage1, stage2, ...)` for repeated multi-stage work over a
 batch of items. Each item moves through the stages in order. Once one item's
 previous stage finishes, it can enter the next stage without waiting for the
 whole batch.
+
+A stage can accept one, two, or three positional arguments:
+
+- `stage(previous)`
+- `stage(previous, original)`
+- `stage(previous, original, index)`
+
+For the first stage, `previous` is the original item. This keeps simple first
+stages concise while preserving access to the original item and index when a
+later stage needs them. Stage signatures are checked before any item starts.
+If a stage fails or returns `None`, that item's final result is `None` and its
+later stages are skipped.
 
 ```python
 async def analyze(previous, original, index):
@@ -336,8 +371,11 @@ boundaries. Workflows should call child Agents through `agent(...)`.
 
 Dynamic Workflow is foreground and one-shot. Workflow code expresses the
 orchestration logic, while registered Agents and tools continue to run in the
-Go host. Each child Agent call has an isolated conversation context and remains
-part of the current run. Therefore:
+Go host. When `instance_id` is omitted, each child Agent call gets a distinct
+conversation branch; calls that explicitly reuse an `instance_id` share that
+child history. Every child call remains part of the current run. With
+`IsolatedRequest` configured as above, a child sees only its branch; an Agent
+configured for broader history may also see ancestor context. Therefore:
 
 - Frontends can observe child Agent output and tool-call progress from the same
   event stream.
@@ -348,6 +386,11 @@ part of the current run. Therefore:
 
 The event stream follows the framework's normal streaming contract: consume it
 until the run finishes, or cancel the run context when stopping early.
+
+Workflow execution is not transactional. If a child Agent or code-callable
+tool changes external state and a later step fails, that side effect is not
+rolled back. Keep mutating operations sequential and make them idempotent when
+the root Agent or application may retry the workflow.
 
 This is the key difference from asking the model to write and run an ordinary
 standalone script: the temporary workflow gets code-level flexibility, while
@@ -365,6 +408,12 @@ full-execution timeout configured with
 `dynamicworkflow.NewLocalRunner(dynamicworkflow.LocalRunnerConfig{Timeout: ...})`.
 The default timeout is intentionally unset; LocalRunner inherits the caller's
 context so long Agent workflows are not cut off unexpectedly.
+
+The direct-body form ending in `return` is preferred. For compatibility with a
+common model-generated shape, LocalRunner also invokes a workflow consisting
+only of an optional docstring and one zero-argument `async def run()` or
+`async def main()` definition. Other uncalled helper definitions still fail
+validation.
 
 Compared with the earlier LocalRunner behavior, the hardened runner no longer
 inherits the host environment, uses an empty temporary working directory by
