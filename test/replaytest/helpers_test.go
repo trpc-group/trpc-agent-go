@@ -85,8 +85,7 @@ func newLightweightBackends(t *testing.T) []Backend {
 func newInMemoryBackend(t *testing.T) Backend {
 	t.Helper()
 	sessionService := sessinmemory.NewSessionService(
-		sessinmemory.WithSummarizer(staticSummarizer{}),
-		sessinmemory.WithAsyncSummaryNum(0),
+		sessinmemory.WithSummarizer(manualReplaySummarizer{}),
 	)
 	memoryService := meminmemory.NewMemoryService()
 	t.Cleanup(func() {
@@ -100,8 +99,7 @@ func newSQLiteBackend(t *testing.T) Backend {
 	t.Helper()
 	sessionDB := openSQLite(t, "session.db")
 	sessionService, err := sesssqlite.NewService(sessionDB,
-		sesssqlite.WithSummarizer(staticSummarizer{}),
-		sesssqlite.WithAsyncSummaryNum(0),
+		sesssqlite.WithSummarizer(manualReplaySummarizer{}),
 	)
 	require.NoError(t, err)
 	memoryDB := openSQLite(t, "memory.db")
