@@ -85,7 +85,8 @@ type Call struct {
 
 // CallHandler is the host capability boundary. Runtimes must route every
 // sandbox-originated call through this handler rather than accessing host
-// services directly.
+// services directly. Handlers must honor context cancellation and return
+// promptly after the context is done.
 type CallHandler interface {
 	HandleWorkflowCall(context.Context, Call) (json.RawMessage, error)
 }

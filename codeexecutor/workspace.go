@@ -250,14 +250,13 @@ type Capabilities struct {
 	ReadOnlyMount  bool
 	Streaming      bool
 	MaxDiskBytes   int64
-	// SupportsCleanEnv reports whether this runtime actually
-	// honors RunProgramSpec.CleanEnv - i.e. it can start the
-	// spawned program with the spec.Env only, instead of the
-	// inherited process environment. Tool layers that depend on
-	// CleanEnv for security (e.g. tool/workspaceexec policy mode)
-	// must gate on this capability and fail closed when it is
-	// false, because the alternative is silently degrading the
-	// policy contract on backends that ignore CleanEnv.
+	// SupportsCleanEnv reports whether ProgramRunner.RunProgram honors
+	// RunProgramSpec.CleanEnv - i.e. it can start the spawned program with
+	// spec.Env only, instead of the inherited process environment. Tool layers
+	// that depend on CleanEnv for security (e.g. tool/workspaceexec policy
+	// mode) must gate on this capability and fail closed when it is false,
+	// because the alternative is silently degrading the policy contract on
+	// backends that ignore CleanEnv.
 	//
 	// Defaults to false so any backend that has not been audited
 	// for CleanEnv support is treated as "does not support" until

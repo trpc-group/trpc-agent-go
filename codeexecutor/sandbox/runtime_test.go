@@ -456,10 +456,24 @@ func TestRuntimeDefaultsDescribeAndHelpers(t *testing.T) {
 	if sameOrChild(filepath.Join(string(os.PathSeparator), "tmp", "a"), filepath.Join(string(os.PathSeparator), "tmp", "ab")) {
 		t.Fatalf("sibling path matched as child")
 	}
-	firstLock := rt.runLock(codeexecutor.Workspace{ID: "lock"})
-	secondLock := rt.runLock(codeexecutor.Workspace{ID: "lock"})
+	lockWorkspace := codeexecutor.Workspace{ID: "lock"}
+	firstKey, firstLock := rt.retainWorkspaceRunLock(lockWorkspace)
+	secondKey, secondLock := rt.retainWorkspaceRunLock(lockWorkspace)
 	if firstLock != secondLock {
 		t.Fatalf("runLock did not reuse lock")
+	}
+	if firstKey != secondKey || firstLock.refs != 2 {
+		t.Fatalf(
+			"retained run lock = (%q, %d refs), want (%q, 2 refs)",
+			secondKey,
+			firstLock.refs,
+			firstKey,
+		)
+	}
+	rt.releaseWorkspaceRunLock(secondKey, secondLock)
+	rt.releaseWorkspaceRunLock(firstKey, firstLock)
+	if len(rt.runLocks) != 0 {
+		t.Fatalf("released run lock remained registered: %#v", rt.runLocks)
 	}
 	missingRoot := filepath.Join(t.TempDir(), "missing-root")
 	if err := ensureNoSymlinkEscape(missingRoot, filepath.Join(missingRoot, "child")); err != nil {

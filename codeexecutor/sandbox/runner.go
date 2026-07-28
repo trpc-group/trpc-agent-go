@@ -32,9 +32,11 @@ func (r *Runtime) RunProgram(
 		return codeexecutor.RunResult{}, err
 	}
 	if r.sessionPolicy.RunConcurrency == SessionRunConcurrencySerial {
-		lock := r.runLock(ws)
-		lock.Lock()
-		defer lock.Unlock()
+		unlock, err := r.lockWorkspaceRunContext(ctx, ws)
+		if err != nil {
+			return codeexecutor.RunResult{}, err
+		}
+		defer unlock()
 	}
 	runCtx, cancel := context.WithTimeout(ctx, prep.timeout)
 	defer cancel()

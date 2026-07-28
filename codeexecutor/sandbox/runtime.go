@@ -41,7 +41,7 @@ type Runtime struct {
 	defaultTimeout   time.Duration
 
 	mu       sync.Mutex
-	runLocks map[string]*sync.Mutex
+	runLocks map[string]*workspaceRunLock
 
 	preflightOnce  sync.Once
 	preflightErr   error
@@ -60,7 +60,7 @@ func NewRuntime(opts ...Option) *Runtime {
 		envPolicy:      normalizeShellEnvironmentPolicy(ShellEnvironmentPolicy{}),
 		outputMaxBytes: DefaultOutputMaxBytes,
 		defaultTimeout: defaultRunTimeout,
-		runLocks:       map[string]*sync.Mutex{},
+		runLocks:       map[string]*workspaceRunLock{},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -213,19 +213,89 @@ func workspacePathForID(root string, id string) (string, string) {
 	return filepath.Join(pathParts...), strings.Join(parts, "_")
 }
 
-func (r *Runtime) runLock(ws codeexecutor.Workspace) *sync.Mutex {
+type workspaceRunLock struct {
+	token chan struct{}
+	// refs is guarded by Runtime.mu and counts holders plus waiters.
+	refs int
+}
+
+func newWorkspaceRunLock() *workspaceRunLock {
+	lock := &workspaceRunLock{token: make(chan struct{}, 1)}
+	lock.token <- struct{}{}
+	return lock
+}
+
+func (l *workspaceRunLock) LockContext(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-l.token:
+	}
+	if err := ctx.Err(); err != nil {
+		l.Unlock()
+		return err
+	}
+	return nil
+}
+
+func (l *workspaceRunLock) Unlock() {
+	select {
+	case l.token <- struct{}{}:
+	default:
+		panic("sandbox: unlock of unlocked workspace run lock")
+	}
+}
+
+func workspaceRunLockKey(ws codeexecutor.Workspace) string {
+	if ws.Path != "" {
+		return ws.Path
+	}
+	return ws.ID
+}
+
+func (r *Runtime) lockWorkspaceRunContext(
+	ctx context.Context,
+	ws codeexecutor.Workspace,
+) (func(), error) {
+	key, lock := r.retainWorkspaceRunLock(ws)
+	if err := lock.LockContext(ctx); err != nil {
+		r.releaseWorkspaceRunLock(key, lock)
+		return nil, err
+	}
+	return func() {
+		lock.Unlock()
+		r.releaseWorkspaceRunLock(key, lock)
+	}, nil
+}
+
+func (r *Runtime) retainWorkspaceRunLock(
+	ws codeexecutor.Workspace,
+) (string, *workspaceRunLock) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	key := ws.Path
-	if key == "" {
-		key = ws.ID
+	key := workspaceRunLockKey(ws)
+	lock := r.runLocks[key]
+	if lock == nil {
+		lock = newWorkspaceRunLock()
+		r.runLocks[key] = lock
 	}
-	if l := r.runLocks[key]; l != nil {
-		return l
+	lock.refs++
+	return key, lock
+}
+
+func (r *Runtime) releaseWorkspaceRunLock(
+	key string,
+	lock *workspaceRunLock,
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if lock.refs <= 0 {
+		panic("sandbox: release of unretained workspace run lock")
 	}
-	l := &sync.Mutex{}
-	r.runLocks[key] = l
-	return l
+	lock.refs--
+	if lock.refs == 0 && r.runLocks[key] == lock {
+		delete(r.runLocks, key)
+	}
 }
 
 func (r *Runtime) applyManifestPolicy() {
