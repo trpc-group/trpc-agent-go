@@ -127,7 +127,7 @@ func TestRecordCodecRejectsMissingRequiredMetadata(t *testing.T) {
 	_, err := decodeStoredRecord("id", &document, metadata)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), metadataKindKey)
+	assert.Contains(t, err.Error(), metadataHasEventTimeKey)
 }
 
 func TestRecordCodecRejectsInvalidEnvelope(t *testing.T) {

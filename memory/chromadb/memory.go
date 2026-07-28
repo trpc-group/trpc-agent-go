@@ -18,23 +18,6 @@ import (
 	imemory "trpc.group/trpc-go/trpc-agent-go/memory/internal/memory"
 )
 
-// validateInputMetadata rejects values that cannot be represented by the Chroma schema.
-func validateInputMetadata(metadata *memory.Metadata) error {
-	if metadata == nil {
-		return nil
-	}
-	switch metadata.Kind {
-	case "", memory.KindFact, memory.KindEpisode:
-	default:
-		return fmt.Errorf(
-			"metadata %s has invalid value %q",
-			metadataKindKey,
-			metadata.Kind,
-		)
-	}
-	return validateNanosecondTime("event time", metadata.EventTime)
-}
-
 // ReadMemories reads memories for a user in reverse update order.
 //
 // The scan is serialized with writes by this Service instance. ChromaDB limit/offset
@@ -200,8 +183,10 @@ func (svc *Service) AddMemory(
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
 	metadata := memory.ResolveAddOptions(opts)
-	if err := validateInputMetadata(metadata); err != nil {
-		return err
+	if metadata != nil {
+		if err := validateNanosecondTime("event time", metadata.EventTime); err != nil {
+			return err
+		}
 	}
 	record := newAddRecord(
 		scope,
@@ -336,8 +321,10 @@ func (svc *Service) UpdateMemory(
 		return err
 	}
 	metadata := memory.ResolveUpdateOptions(opts)
-	if err := validateInputMetadata(metadata); err != nil {
-		return err
+	if metadata != nil {
+		if err := validateNanosecondTime("event time", metadata.EventTime); err != nil {
+			return err
+		}
 	}
 	command := updateCommand{
 		key:      memoryKey,

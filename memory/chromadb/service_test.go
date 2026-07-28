@@ -706,6 +706,131 @@ func TestServiceOperationsFailAfterClose(t *testing.T) {
 	}
 }
 
+func TestServicePreservesCustomKind(t *testing.T) {
+	const (
+		initialKind = memory.Kind("procedural")
+		updatedKind = memory.Kind("summary")
+	)
+	ctx := context.Background()
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	service, _ := newTestChromaService(t, &testEmbedder{dimension: 3})
+
+	require.NoError(t, service.AddMemory(
+		ctx,
+		userKey,
+		"memory",
+		nil,
+		memory.WithMetadata(&memory.Metadata{Kind: initialKind}),
+	))
+	entries := readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, initialKind, entries[0].Memory.Kind)
+	oldID := entries[0].ID
+
+	results, err := service.SearchMemories(
+		ctx,
+		userKey,
+		"memory",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:      "memory",
+			Kind:       initialKind,
+			MaxResults: 10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, initialKind, results[0].Memory.Kind)
+
+	result := &memory.UpdateResult{}
+	require.NoError(t, service.UpdateMemory(
+		ctx,
+		memory.Key{
+			AppName:  userKey.AppName,
+			UserID:   userKey.UserID,
+			MemoryID: oldID,
+		},
+		"memory",
+		nil,
+		memory.WithUpdateMetadata(&memory.Metadata{Kind: updatedKind}),
+		memory.WithUpdateResult(result),
+	))
+	require.NotEmpty(t, result.MemoryID)
+	assert.NotEqual(t, oldID, result.MemoryID)
+
+	entries = readTestMemories(t, service, userKey)
+	require.Len(t, entries, 1)
+	assert.Equal(t, result.MemoryID, entries[0].ID)
+	assert.Equal(t, updatedKind, entries[0].Memory.Kind)
+
+	results, err = service.SearchMemories(
+		ctx,
+		userKey,
+		"memory",
+		memory.WithSearchOptions(memory.SearchOptions{
+			Query:      "memory",
+			Kind:       updatedKind,
+			MaxResults: 10,
+		}),
+	)
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	assert.Equal(t, result.MemoryID, results[0].ID)
+	assert.Equal(t, updatedKind, results[0].Memory.Kind)
+}
+
+func TestServiceDefaultsMissingKindToFact(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "missing",
+			mutate: func(metadata map[string]any) {
+				delete(metadata, metadataKindKey)
+			},
+		},
+		{
+			name: "null",
+			mutate: func(metadata map[string]any) {
+				metadata[metadataKindKey] = nil
+			},
+		},
+		{
+			name: "empty",
+			mutate: func(metadata map[string]any) {
+				metadata[metadataKindKey] = ""
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
+			scope := recordScope{appName: "app", userID: "user"}
+			record := newAddRecord(scope, "memory", nil, nil, time.Now().UTC())
+			putFakeRecord(fake, record)
+
+			fake.mu.Lock()
+			tt.mutate(fake.records[record.entry.ID].metadata)
+			fake.mu.Unlock()
+
+			userKey := memory.UserKey{AppName: scope.appName, UserID: scope.userID}
+			entries := readTestMemories(t, service, userKey)
+			require.Len(t, entries, 1)
+			assert.Equal(t, memory.KindFact, entries[0].Memory.Kind)
+
+			results, err := service.SearchMemories(
+				context.Background(),
+				userKey,
+				"memory",
+			)
+			require.NoError(t, err)
+			require.Len(t, results, 1)
+			assert.Equal(t, memory.KindFact, results[0].Memory.Kind)
+		})
+	}
+}
+
 func TestServiceEmbedValidatesVectors(t *testing.T) {
 	tests := []struct {
 		name           string

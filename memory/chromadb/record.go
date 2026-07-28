@@ -213,7 +213,7 @@ func decodeRecordMetadata(metadata map[string]any) (*decodedMetadata, error) {
 	if err != nil {
 		return nil, err
 	}
-	kind, err := requiredKind(metadata)
+	kindValue, err := optionalString(metadata, metadataKindKey)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +248,7 @@ func decodeRecordMetadata(metadata map[string]any) (*decodedMetadata, error) {
 	return &decodedMetadata{
 		appName:      appName,
 		userID:       userID,
-		kind:         kind,
+		kind:         memory.Kind(kindValue),
 		topics:       topics,
 		eventTime:    eventTime,
 		participants: participants,
@@ -396,19 +396,6 @@ func setNullableMetadata(metadata map[string]any, key string, value any, present
 		return
 	}
 	metadata[key] = nil
-}
-
-// requiredKind parses and validates the stored memory kind.
-func requiredKind(metadata map[string]any) (memory.Kind, error) {
-	value, err := requiredString(metadata, metadataKindKey)
-	if err != nil {
-		return "", err
-	}
-	kind := memory.Kind(value)
-	if kind != memory.KindFact && kind != memory.KindEpisode {
-		return "", fmt.Errorf("metadata %s has invalid value %q", metadataKindKey, value)
-	}
-	return kind, nil
 }
 
 // requiredString reads a non-empty required string metadata field.

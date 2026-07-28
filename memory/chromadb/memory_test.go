@@ -1118,57 +1118,6 @@ func TestServiceReadMemoriesRejectsPaginationWithoutProgress(t *testing.T) {
 	assert.Contains(t, err.Error(), "pagination made no progress")
 }
 
-func TestServiceRejectsInvalidKindWithoutPersistence(t *testing.T) {
-	const invalidKind = memory.Kind("invalid")
-	ctx := context.Background()
-	userKey := memory.UserKey{AppName: "app", UserID: "user"}
-
-	t.Run("add", func(t *testing.T) {
-		service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
-
-		err := service.AddMemory(
-			ctx,
-			userKey,
-			"memory",
-			nil,
-			memory.WithMetadata(&memory.Metadata{Kind: invalidKind}),
-		)
-
-		require.ErrorContains(t, err, metadataKindKey)
-		fake.mu.Lock()
-		recordCount := len(fake.records)
-		fake.mu.Unlock()
-		assert.Zero(t, recordCount)
-	})
-
-	t.Run("update", func(t *testing.T) {
-		service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
-		require.NoError(t, service.AddMemory(ctx, userKey, "memory", nil))
-		entries := readTestMemories(t, service, userKey)
-		require.Len(t, entries, 1)
-
-		err := service.UpdateMemory(
-			ctx,
-			memory.Key{
-				AppName:  userKey.AppName,
-				UserID:   userKey.UserID,
-				MemoryID: entries[0].ID,
-			},
-			"memory",
-			nil,
-			memory.WithUpdateMetadata(&memory.Metadata{Kind: invalidKind}),
-		)
-
-		require.ErrorContains(t, err, metadataKindKey)
-		fake.mu.Lock()
-		recordCount := len(fake.records)
-		_, sourceExists := fake.records[entries[0].ID]
-		fake.mu.Unlock()
-		assert.Equal(t, 1, recordCount)
-		assert.True(t, sourceExists)
-	})
-}
-
 func TestDecodeGetResponseRejectsMalformedColumns(t *testing.T) {
 	document := "memory"
 	documents := []*string{&document}
