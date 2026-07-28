@@ -132,6 +132,7 @@ func buildEvalSetRunSummaries(runCaseResults map[int][]*evalresult.EvalCaseResul
 
 type caseAgg struct {
 	runStatusCounts evalresult.EvalStatusCounts
+	runStatuses     []status.EvalStatus
 	hasRunError     bool
 	runSummaries    []*evalresult.EvalCaseRunSummary
 	metricAgg       map[string]*metricAgg
@@ -153,6 +154,7 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 				agg = &caseAgg{metricAgg: make(map[string]*metricAgg)}
 				aggs[caseID] = agg
 			}
+			agg.runStatuses = append(agg.runStatuses, caseResult.FinalEvalStatus)
 			if caseResult.ErrorMessage != "" {
 				agg.hasRunError = true
 			}
@@ -175,7 +177,7 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 	caseStatuses := make([]status.EvalStatus, 0, len(aggs))
 	for caseID, agg := range aggs {
 		metricSummaries := buildMetricSummaries(agg.metricAgg)
-		overallStatus, err := summarizeOverallFromMetricSummaries(metricSummaries, agg.hasRunError)
+		overallStatus, err := summarizeCaseSummaryStatus(metricSummaries, agg.runStatuses, agg.hasRunError, len(runIDs))
 		if err != nil {
 			return nil, status.EvalStatusFailed, fmt.Errorf("summarize case %s status: %w", caseID, err)
 		}
@@ -198,7 +200,17 @@ func buildEvalCaseSummaries(runCaseResults map[int][]*evalresult.EvalCaseResult,
 	return caseSummaries, overallStatus, nil
 }
 
-func summarizeOverallFromMetricSummaries(metricSummaries []*evalresult.EvalMetricSummary, hasRunError bool) (status.EvalStatus, error) {
+func summarizeCaseSummaryStatus(metricSummaries []*evalresult.EvalMetricSummary, runStatuses []status.EvalStatus, hasRunError bool, numRuns int) (status.EvalStatus, error) {
+	if numRuns <= 1 {
+		overallStatus, err := istatus.Summarize(runStatuses)
+		if err != nil {
+			return status.EvalStatusFailed, err
+		}
+		if overallStatus == status.EvalStatusNotEvaluated && hasRunError {
+			return status.EvalStatusFailed, nil
+		}
+		return overallStatus, nil
+	}
 	statuses := make([]status.EvalStatus, 0, len(metricSummaries))
 	for _, summary := range metricSummaries {
 		if summary == nil {

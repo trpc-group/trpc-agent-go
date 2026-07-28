@@ -173,16 +173,6 @@ func (ga *GraphAgent) runWithoutBarrier(ctx context.Context, invocation *agent.I
 	)
 }
 
-func (ga *GraphAgent) forwardEventStream(ctx context.Context, innerChan <-chan *event.Event, out chan<- *event.Event) {
-	defer close(out)
-	for evt := range innerChan {
-		if err := event.EmitEvent(ctx, out, evt); err != nil {
-			log.Errorf("graphagent: emit event failed: %v.", err)
-			return
-		}
-	}
-}
-
 // runWithBarrier emits a start barrier, waits for completion, then runs the graph with callbacks
 // pipeline and forwards all events to the provided output channel.
 func (ga *GraphAgent) runWithBarrier(ctx context.Context, invocation *agent.Invocation, out chan<- *event.Event) {

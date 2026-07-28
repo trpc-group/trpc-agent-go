@@ -58,42 +58,70 @@ func (r *Resolver) EnsureEngine() codeexecutor.Engine {
 		"workspacesession: falling back to local engine; " +
 			"executor does not expose EngineProvider",
 	)
-	// Use local.CodeExecutor.Engine so SupportsCleanEnv/DeclarativeIO
-	// match the audited local backend (policy mode can honor CleanEnv).
+	// Use local.CodeExecutor.Engine so SupportsCleanEnv/DeclarativeIO match
+	// the audited local backend (policy mode can honor CleanEnv).
 	return localexec.New().Engine()
 }
 
 // CreateWorkspace acquires the invocation-scoped workspace for a tool run.
-//
-// If the invocation carries a Session but that session lacks a stable ID,
-// CreateWorkspace fails closed instead of falling back to the tool name.
-// Otherwise placeholder sessions that share a skill name would reuse one
-// durable registry workspace.
 func (r *Resolver) CreateWorkspace(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	name string,
 ) (codeexecutor.Workspace, error) {
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
+}
+
+// CreateWorkspaceHandle acquires the invocation-scoped workspace together with
+// the registry token required for ABA-safe conditional invalidation.
+//
+// If the invocation carries a Session but that session lacks a stable ID,
+// CreateWorkspaceHandle fails closed instead of falling back to the tool name.
+// Otherwise placeholder sessions that share a skill name would reuse one
+// durable registry workspace.
+func (r *Resolver) CreateWorkspaceHandle(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	name string,
+) (codeexecutor.WorkspaceHandle, error) {
 	reg := r.reg
 	if reg == nil {
 		reg = codeexecutor.NewWorkspaceRegistry()
 		r.reg = reg
 	}
-	sid := name
 	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
 		if inv.Session != nil && strings.TrimSpace(inv.Session.ID) == "" {
-			return codeexecutor.Workspace{}, errors.New(
+			return codeexecutor.WorkspaceHandle{}, errors.New(
 				"workspacesession: invocation session is present but Session.ID " +
 					"is empty; refuse to fall back to a shared tool name as the " +
 					"durable workspace key",
 			)
 		}
-		if key := KeyFromInvocation(inv); key != "" {
-			sid = key
-		}
 		ctx = withWorkspaceArtifactContext(ctx, inv)
 	}
-	return reg.Acquire(ctx, eng.Manager(), sid)
+	sid := workspaceKey(ctx, name)
+	return reg.AcquireHandle(ctx, eng.Manager(), sid)
+}
+
+// InvalidateWorkspaceHandle conditionally removes the exact registry entry
+// represented by handle.
+func (r *Resolver) InvalidateWorkspaceHandle(
+	handle codeexecutor.WorkspaceHandle,
+) bool {
+	if r == nil || r.reg == nil {
+		return false
+	}
+	return r.reg.Invalidate(handle)
+}
+
+func workspaceKey(ctx context.Context, fallback string) string {
+	if inv, ok := agent.InvocationFromContext(ctx); ok && inv != nil {
+		if key := KeyFromInvocation(inv); key != "" {
+			return key
+		}
+	}
+	return fallback
 }
 
 // KeyFromInvocation derives the shared workspace key for an invocation.
@@ -101,8 +129,8 @@ func (r *Resolver) CreateWorkspace(
 // The encoding is injective over (AppName, UserID, ID): every field is
 // length-prefixed so empty parts and embedded "/" cannot collide
 // (e.g. App="a/b",User="c",ID="d" vs App="a",User="b/c",ID="d").
-// This matches opensandbox.encodeSessionWorkspaceKey so registry keys and
-// OpenSandbox PerSession keys agree when a full session is present.
+// Session.ID is required; empty/whitespace ID returns "" so callers can
+// fail closed instead of collapsing placeholder sessions.
 func KeyFromInvocation(inv *agent.Invocation) string {
 	if inv == nil || inv.Session == nil {
 		return ""
@@ -110,12 +138,9 @@ func KeyFromInvocation(inv *agent.Invocation) string {
 	app := inv.Session.AppName
 	user := inv.Session.UserID
 	id := inv.Session.ID
-	// Require a non-empty Session.ID so placeholder sessions do not all
-	// collapse to the same durable registry key (e.g. "0:/0:/0:").
 	if strings.TrimSpace(id) == "" {
 		return ""
 	}
-	// Always three length-prefixed fields (including empty app/user).
 	return fmt.Sprintf("%d:%s/%d:%s/%d:%s",
 		len(app), app, len(user), user, len(id), id)
 }

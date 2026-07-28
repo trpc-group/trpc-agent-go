@@ -51,6 +51,15 @@ func (t *translator) closeTextStreamsBeforeQueuedUserMessage() []aguievents.Even
 	return t.closeCurrentTextStream()
 }
 
+func (t *translator) closeTextStreamsBeforeToolEvent() []aguievents.Event {
+	if t.concurrentMessageStreamsEnabled {
+		events := t.closeOpenTextStreams()
+		t.clearGraphTextAppendTarget()
+		return events
+	}
+	return t.closeCurrentTextStream()
+}
+
 func (t *translator) translateReasoningMessageEvents(rsp *model.Response) ([]aguievents.Event, error) {
 	if t.concurrentMessageStreamsEnabled {
 		return t.concurrentReasoningEvents(rsp)

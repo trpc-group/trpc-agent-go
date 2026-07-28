@@ -139,6 +139,157 @@ evoSvc := evolution.NewService(reviewerModel,
 )
 ```
 
+## Offline Reflective Optimization
+
+The asynchronous reviewer learns one candidate from one completed session.
+For skills that have a repeatable benchmark, `evolution/optimization` adds a
+separate pure-Go search loop inspired by GEPA. It does not require DSPy,
+Python, or a companion process.
+
+`optimization.Optimizer` is the algorithm-neutral execution contract. The
+built-in `NewGEPA` implementation owns GEPA's reflection and Pareto search,
+while dataset isolation, budgets, experiment records, holdout verification,
+and optional revision submission remain in a shared lifecycle. Applications
+choose an implementation during wiring rather than through a runtime algorithm
+string.
+
+The optimizer:
+
+1. evaluates the seed skill on a validation split;
+2. evaluates a Pareto-selected parent on a feedback minibatch and sends the
+   current skill, case input and expected value, score, output, evaluator
+   feedback, and trace to a reflection model after bounding each text field and
+   applying best-effort credential redaction;
+3. changes exactly one `SkillSpec` component and accepts the child only when it
+   strictly improves the paired minibatch;
+4. tracks per-case validation winners and samples parents by instance-level
+   Pareto coverage;
+5. compares the final candidate with the seed on an unseen holdout split; and
+6. optionally submits the candidate to the existing revision store. External
+   submissions initially stop at `pending_approval` and never update the live
+   skill directly. By default they remain there until reviewed. If the service
+   enables `WithApprovalTimeout`, the existing auto-expiration sweeper may
+   later promote and publish a stale revision without human approval.
+
+The application supplies both a task-specific evaluator and a reflection
+`model.Model`. Configure the reflection model with the same provider adapters
+used by other agents; it may be the task model or a separate reviewer model.
+The evaluator is the only new domain-specific integration:
+
+```go
+type benchmarkEvaluator struct {
+    // runner/sandbox/test harness dependencies
+}
+
+func (e *benchmarkEvaluator) Evaluate(
+    ctx context.Context,
+    candidate *evolution.SkillSpec,
+    cases []optimization.Case,
+    seed int64,
+) ([]optimization.Evaluation, error) {
+    // Load candidate in an isolated repository, run every case, and return
+    // one normalized [0,1] score plus actionable feedback/trace per case.
+    return evaluations, nil
+}
+```
+
+Revision submission is a separate optional capability from asynchronous session
+learning. The default service implements `evolution.RevisionSubmitter`, while a
+custom `evolution.Service` may omit it. Resolve that capability once during
+application wiring so a configuration error is found before an optimization
+run starts:
+
+Submission uses the configured skill repository as a write boundary. An update
+must target an existing skill and, when `WithManagedSkillsDir` is configured,
+that skill must reside below the managed directory. A create must not collide
+with an existing repository skill. Pass the same repository used by the agent
+so these checks see bundled, user-authored, and evolution-managed skills.
+
+```go
+revisionSubmitter, ok := evoSvc.(evolution.RevisionSubmitter)
+if !ok {
+    return fmt.Errorf("evolution service does not support revision submission")
+}
+
+optimizer, err := optimization.NewGEPA(
+    reflectionModel,
+    evaluator,
+    optimization.WithMaxIterations(10),
+    optimization.WithReflectionBatchSize(3),
+    optimization.WithRandomSeed(7),
+    optimization.WithStoreDir("./evolution/experiments"),
+    optimization.WithRevisionSubmitter(revisionSubmitter),
+)
+if err != nil {
+    return err
+}
+
+result, err := optimizer.Optimize(ctx, optimization.Request{
+    Seed:             baselineSpec,
+    ParentRevisionID: activeRevisionID,
+    Submit:           true,
+    Dataset: optimization.Dataset{
+        ID:         "managed-skill-regression",
+        Version:    "v1",
+        Feedback:   feedbackCases,
+        Validation: validationCases,
+        Holdout:    holdoutCases,
+    },
+})
+if err != nil {
+    // Search may already have selected a candidate when holdout or an optional
+    // delivery step fails. Preserve a non-nil result for diagnosis or retry.
+    if result != nil {
+        fmt.Printf("optimization %s completed but delivery failed: %v\n",
+            result.ExperimentID, err)
+    }
+    return err
+}
+fmt.Printf("selected skill %q; validation=%.3f holdout=%.3f; promote=%t (%s)\n",
+    result.Spec.Name,
+    result.CandidateValidation.Score,
+    result.CandidateHoldout.Score,
+    result.PromotionEligible,
+    result.PromotionReason,
+)
+```
+
+The optimizer borrows the submitter. The application still owns and closes
+`evoSvc`. Once search has selected a candidate, a later holdout, recording, or
+submission failure is returned together with the non-nil partial result; fields
+describe the phases that completed, and `SubmissionReason` records a submission
+failure.
+
+`WithStoreDir` is an optional, node-local experiment recorder, distinct from
+the revision `CandidateStore`. Every run owns a UUID-named directory; on
+permission-aware filesystems, files use `0600` and directories use `0700`.
+Each persisted evaluator output, feedback, or trace field is capped at 16 KiB.
+The dataset is stored once in `experiment.json`; evaluation records reference
+its cases by ID instead of duplicating inputs and expected values on every
+iteration.
+It is not a distributed job coordinator or a remote durable store. Concurrent
+nodes may use the same POSIX-compatible shared root because experiments do not
+share directories, but exactly one node must write each experiment. On
+ephemeral or non-shared pod disks, upload the completed directory to
+application-owned durable storage. Revision `CandidateStore` and
+`ActivePointer` are pluggable, but their interface does not define a
+cross-backend transaction; a multi-node deployment must assign revision
+mutations to one owner or serialize them externally.
+
+Case IDs must be unique across splits. Scores must be finite and normalized to
+`[0,1]`. `PromotionEligible` and `PromotionReason` are populated even when
+`Submit` is false, so callers do not need to duplicate the holdout threshold
+and critical-case policy. Submission requires at least ten cases in each split.
+Keep holdout cases hidden from the search. Before applying the same best-effort
+credential-pattern redaction used by the online reviewer, the optimizer
+projects each model-bound text field to a bounded UTF-8-safe head and tail.
+This keeps redaction memory bounded, but does not identify tenant-specific
+sensitive data. Applications must sanitize
+the seed skill, case input and expected value, evaluator output, feedback, and
+trace before returning them, and run candidate agents without production
+credentials or side-effecting tools. Filesystem records also contain dataset
+metadata and these sanitized values.
+
 ## Review Policy
 
 Evolution decides whether to review after each task completion. The built-in `DefaultReviewPolicy` triggers when any of these conditions hold:
@@ -206,7 +357,7 @@ Deterministic content safety scan:
 Outcome-based quality check:
 
 - Session result `fail` or `agent_error` → revision rejected
-- Session score < 80 → revision held in `pending_eval`
+- Normalized session score < 0.8 → revision held in `pending_eval`
 
 Requires an Outcome to be attached to the learning job:
 
@@ -215,7 +366,7 @@ evoSvc.EnqueueLearningJob(ctx, evolution.LearningJob{
     Session: sess,
     Outcome: &evolution.Outcome{
         Status: evolution.OutcomeSuccess,
-        Score:  floatPtr(95.0), // 0-100
+        Score:  floatPtr(0.95), // normalized to 0-1
         Notes:  "all assertions passed",
     },
 })

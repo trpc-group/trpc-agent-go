@@ -483,9 +483,8 @@ func (t *RunTool) Call(
 		ctx,
 		in,
 	)
-	// INV-PRE / INV-CLEAN: fail closed before prepareWorkspaceForRun so
-	// create/stage/PutFiles do not run when the engine cannot honor the
-	// requested output contract or command policy CleanEnv.
+	// Fail closed before prepare/run: unsupported declarative contracts and
+	// CleanEnv-incapable policy mode must not create/stage workspaces first.
 	eng := t.ensureEngine()
 	if err := preflightDeclarativeOutputs(eng, in); err != nil {
 		return nil, err
@@ -495,28 +494,50 @@ func (t *RunTool) Call(
 			return nil, err
 		}
 	}
-	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.
-		prepareWorkspaceForRun(
-			ctx,
-			in,
-		)
+	prepared, err := t.prepareWorkspaceForRun(ctx, in)
 	if err != nil {
 		return nil, err
 	}
-	cwd := resolveCWD(in.Cwd, skillRoot)
-	rr, err := t.runProgram(ctxIO, eng, ws, skillRoot, cwd, in)
+	rr, err := t.runPrepared(prepared, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, err = t.prepareWorkspaceForRun(ctx, in)
+			if err == nil {
+				rr, err = t.runPrepared(prepared, in)
+			}
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.invalidateWorkspaceHandle(prepared.handle)
+			}
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 
-	autoFiles := t.autoExportWorkspaceOut(ctxIO, eng, ws, in)
-	files, manifest, outputWarn, err := t.prepareOutputs(
-		ctxIO,
-		eng,
+	ws := prepared.handle.Workspace
+	autoFiles, err := t.autoExportWorkspaceOut(
+		prepared.ctxIO, prepared.eng, ws, in,
+	)
+	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			t.invalidateWorkspaceHandle(prepared.handle)
+		}
+		return nil, err
+	}
+	files, manifest, outputWarn, partialStale, err := t.prepareOutputs(
+		prepared.ctxIO,
+		prepared.eng,
 		ws,
 		in,
 	)
+	if partialStale {
+		t.invalidateWorkspaceHandle(prepared.handle)
+	}
 	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			t.invalidateWorkspaceHandle(prepared.handle)
+		}
 		return nil, err
 	}
 	filteredOutputs := filterFailedEmptyOutputs(rr, files, manifest)
@@ -541,9 +562,9 @@ func (t *RunTool) Call(
 	if len(outputWarn) > 0 {
 		out.Warnings = append(out.Warnings, outputWarn...)
 	}
-	out.StagedInputs = staged
-	if len(stageWarn) > 0 {
-		out.Warnings = append(out.Warnings, stageWarn...)
+	out.StagedInputs = prepared.staged
+	if len(prepared.warnings) > 0 {
+		out.Warnings = append(out.Warnings, prepared.warnings...)
 	}
 	if len(filteredOutputs.omittedNames) > 0 {
 		toolcache.DeleteSkillRunOutputFilesFromContext(
@@ -648,38 +669,89 @@ func (t *RunTool) applyArtifactSaveOverrides(
 func (t *RunTool) prepareWorkspaceForRun(
 	ctx context.Context,
 	in runInput,
-) (
-	codeexecutor.Engine,
-	codeexecutor.Workspace,
-	string,
-	context.Context,
-	[]stagedInput,
-	[]string,
-	error,
-) {
+) (workspaceRunPreparation, error) {
 	eng := t.ensureEngine()
-	ws, err := t.createWorkspace(ctx, eng, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
-	if err != nil {
-		return nil, codeexecutor.Workspace{}, "", nil, nil, nil, err
-	}
-	staged, stageWarn := t.stageUserFileInputs(ctx, eng, ws)
-	ctxIO := withArtifactContext(ctx)
-	if len(in.Inputs) > 0 {
-		if err := eng.FS().StageInputs(ctxIO, ws, in.Inputs); err != nil {
-			// StageInputs cannot fall back to PutFiles without losing
-			// scheme/pin/link semantics. Propagate (including
-			// ErrDeclarativeIONotSupported for engines that advertise
-			// SupportsDeclarativeIO=false) so skill_run fails closed.
-			return nil, codeexecutor.Workspace{}, "", nil, nil,
-				nil, fmt.Errorf("stage inputs: %w", err)
+	prepared, acquired, err := t.prepareWorkspaceAttempt(ctx, eng, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		if acquired {
+			t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+		}
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, acquired, err = t.prepareWorkspaceAttempt(ctx, eng, in)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+				t.wsr.InvalidateWorkspaceHandle(prepared.handle)
+			}
 		}
 	}
-	return eng, ws, stageRes.WorkspaceSkillDir, ctxIO, staged, stageWarn,
-		nil
+	if err != nil {
+		return workspaceRunPreparation{}, err
+	}
+	return prepared, nil
+}
+
+type workspaceRunPreparation struct {
+	eng       codeexecutor.Engine
+	handle    codeexecutor.WorkspaceHandle
+	skillRoot string
+	ctxIO     context.Context
+	staged    []stagedInput
+	warnings  []string
+}
+
+func (t *RunTool) prepareWorkspaceAttempt(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	in runInput,
+) (workspaceRunPreparation, bool, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, in.Skill)
+	if err != nil {
+		return workspaceRunPreparation{}, false, err
+	}
+	prepared := workspaceRunPreparation{eng: eng, handle: handle}
+	ws := handle.Workspace
+	stageRes, err := t.stageSkillForRun(ctx, eng, ws, in.Skill)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.skillRoot = stageRes.WorkspaceSkillDir
+	prepared.staged, prepared.warnings, err = t.stageUserFileInputs(
+		ctx, eng, ws,
+	)
+	if err != nil {
+		return prepared, true, err
+	}
+	prepared.ctxIO = withArtifactContext(ctx)
+	if len(in.Inputs) > 0 {
+		if err := eng.FS().StageInputs(
+			prepared.ctxIO, ws, in.Inputs,
+		); err != nil {
+			return prepared, true, err
+		}
+	}
+	return prepared, true, nil
+}
+
+func (t *RunTool) runPrepared(
+	prepared workspaceRunPreparation,
+	in runInput,
+) (codeexecutor.RunResult, error) {
+	cwd := resolveCWD(in.Cwd, prepared.skillRoot)
+	return t.runProgram(
+		prepared.ctxIO,
+		prepared.eng,
+		prepared.handle.Workspace,
+		prepared.skillRoot,
+		cwd,
+		in,
+	)
+}
+
+func (t *RunTool) invalidateWorkspaceHandle(
+	handle codeexecutor.WorkspaceHandle,
+) {
+	if t != nil && t.wsr != nil {
+		t.wsr.InvalidateWorkspaceHandle(handle)
+	}
 }
 
 func (t *RunTool) stageSkillForRun(
@@ -766,7 +838,7 @@ func (t *RunTool) stageUserFileInputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
-) ([]stagedInput, []string) {
+) ([]stagedInput, []string, error) {
 	return workspaceinput.StageConversationFiles(ctx, eng, ws)
 }
 
@@ -836,21 +908,27 @@ func (t *RunTool) autoExportWorkspaceOut(
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) []codeexecutor.File {
+) ([]codeexecutor.File, error) {
 	if eng == nil || in.Outputs != nil || len(in.OutputFiles) > 0 {
-		return nil
+		return nil, nil
 	}
 	files, err := eng.FS().Collect(ctx, ws,
 		[]string{defaultAutoExportPattern})
-	if err != nil || len(files) == 0 {
-		return nil
+	if err != nil {
+		if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if len(files) == 0 {
+		return nil, nil
 	}
 	if len(files) > defaultAutoExportMax {
 		files = files[:defaultAutoExportMax]
 	}
 	trimTruncatedUTF8TextFiles(files)
 	toolcache.StoreSkillRunOutputFilesFromContext(ctx, files)
-	return files
+	return files, nil
 }
 
 // parseRunArgs validates and decodes input args.
@@ -921,13 +999,20 @@ func (t *RunTool) ensureEngine() codeexecutor.Engine {
 func (t *RunTool) createWorkspace(
 	ctx context.Context, eng codeexecutor.Engine, name string,
 ) (codeexecutor.Workspace, error) {
+	handle, err := t.createWorkspaceHandle(ctx, eng, name)
+	return handle.Workspace, err
+}
+
+func (t *RunTool) createWorkspaceHandle(
+	ctx context.Context, eng codeexecutor.Engine, name string,
+) (codeexecutor.WorkspaceHandle, error) {
 	if t.reg == nil || t.wsr == nil {
 		if t.reg == nil {
 			t.reg = codeexecutor.NewWorkspaceRegistry()
 		}
 		t.wsr = workspacesession.NewResolver(t.exec, t.reg)
 	}
-	return t.wsr.CreateWorkspace(ctx, eng, name)
+	return t.wsr.CreateWorkspaceHandle(ctx, eng, name)
 }
 
 // stageSkill materializes the skill source under skills/<name>.
@@ -1151,16 +1236,15 @@ func (t *RunTool) buildRunProgramSpec(
 	cwd string,
 	in runInput,
 ) (codeexecutor.RunProgramSpec, error) {
-	timeout := time.Duration(in.Timeout) * time.Second
-	if in.Timeout <= 0 {
-		timeout = defaultSkillRunTimeout
-	}
-	// INV-CLEAN: fail closed before prepareEditorEnv/PutFiles when policy
-	// mode is active on a runtime that cannot honor CleanEnv.
+	// Policy mode requires CleanEnv before any PutFiles/editor staging.
 	if len(t.allowedCmds) > 0 || len(t.deniedCmds) > 0 {
 		if err := checkSkillRunnerSupportsPolicy(eng); err != nil {
 			return codeexecutor.RunProgramSpec{}, err
 		}
+	}
+	timeout := time.Duration(in.Timeout) * time.Second
+	if in.Timeout <= 0 {
+		timeout = defaultSkillRunTimeout
 	}
 	env := cloneStringMap(in.Env)
 	t.maybeInjectSkillEnv(ctx, in.Skill, env)
@@ -1809,10 +1893,35 @@ func withArtifactContext(ctx context.Context) context.Context {
 	return ctxIO
 }
 
-// preflightDeclarativeOutputs fails closed before runProgram when the
+// prepareOutputs collects files either through OutputSpec or legacy
+// output_files patterns. The bool result reports a non-fatal partial commit
+// that also carried ErrWorkspaceStale, allowing callers to invalidate the
+// exact handle while preserving the partial output result.
+
+// preflightDeclarativeOutputs fails closed before prepare/run when the
 // engine has audited SupportsDeclarativeIO=false and the request needs
-// CollectOutputs features that cannot be emulated by Collect(globs).
-// Globs-only OutputSpec and legacy output_files remain allowed.
+// StageInputs/CollectOutputs features that cannot be emulated.
+
+// outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be
+// safely honoured by Collect(globs) alone when CollectOutputs is not
+// supported. Only zero-valued extras (no Save, no NameTemplate, no
+// limits, no Inline) are allowed.
+func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
+	if spec.Save {
+		return false
+	}
+	if strings.TrimSpace(spec.NameTemplate) != "" {
+		return false
+	}
+	if spec.MaxFiles != 0 || spec.MaxFileBytes != 0 || spec.MaxTotalBytes != 0 {
+		return false
+	}
+	if spec.Inline {
+		return false
+	}
+	return true
+}
+
 func preflightDeclarativeOutputs(
 	eng codeexecutor.Engine, in runInput,
 ) error {
@@ -1821,10 +1930,8 @@ func preflightDeclarativeOutputs(
 	}
 	cap := eng.Describe().SupportsDeclarativeIO
 	if cap == nil || *cap {
-		// nil = unknown/unaudited (leave path alone); true = full support.
 		return nil
 	}
-	// Inputs require StageInputs; cannot be emulated without declarative I/O.
 	if len(in.Inputs) > 0 {
 		return codeexecutor.ErrDeclarativeIONotSupported
 	}
@@ -1839,7 +1946,6 @@ func preflightDeclarativeOutputs(
 
 // checkSkillRunnerSupportsPolicy fails closed when skill_run is configured
 // with allowed/denied command lists but the engine cannot honor CleanEnv.
-// Mirrors tool/workspaceexec.checkRunnerSupportsPolicy.
 func checkSkillRunnerSupportsPolicy(eng codeexecutor.Engine) error {
 	if eng == nil {
 		return nil
@@ -1855,63 +1961,37 @@ func checkSkillRunnerSupportsPolicy(eng codeexecutor.Engine) error {
 	)
 }
 
-// outputSpecAllowsGlobsOnlyFallback reports whether an OutputSpec can be
-// safely honoured by Collect(globs) alone when CollectOutputs is not
-// supported. Only the zero-valued extras (no Save, no NameTemplate, no
-// limits, no Inline) are allowed; any richer field would be silently
-// dropped by a globs-only fallback.
-func outputSpecAllowsGlobsOnlyFallback(spec codeexecutor.OutputSpec) bool {
-	if spec.Save {
-		return false
-	}
-	if strings.TrimSpace(spec.NameTemplate) != "" {
-		return false
-	}
-	if spec.MaxFiles != 0 || spec.MaxFileBytes != 0 || spec.MaxTotalBytes != 0 {
-		return false
-	}
-	// Inline relies on CollectOutputs producing a manifest; without it
-	// skill would return empty OutputFiles while claiming Inline success.
-	if spec.Inline {
-		return false
-	}
-	return true
-}
-
-// prepareOutputs collects files either through OutputSpec or legacy
-// output_files patterns. It returns collected files and optional
-// manifest.
 func (t *RunTool) prepareOutputs(
 	ctx context.Context,
 	eng codeexecutor.Engine,
 	ws codeexecutor.Workspace,
 	in runInput,
-) ([]codeexecutor.File, *codeexecutor.OutputManifest, []string, error) {
+) (
+	[]codeexecutor.File,
+	*codeexecutor.OutputManifest,
+	[]string,
+	bool,
+	error,
+) {
 	var files []codeexecutor.File
 	var manifest *codeexecutor.OutputManifest
 	if in.Outputs != nil && len(in.OutputFiles) == 0 {
 		m, err := eng.FS().CollectOutputs(ctx, ws, *in.Outputs)
+		stale := errors.Is(err, codeexecutor.ErrWorkspaceStale)
 		if err != nil &&
 			!errors.Is(err, codeexecutor.ErrPartialOutputCommit) &&
 			!errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
-			return nil, nil, nil, err
+			return nil, nil, nil, false, err
 		}
 		if errors.Is(err, codeexecutor.ErrDeclarativeIONotSupported) {
-			// Engine doesn't support declarative output collection.
-			// Globs-only OutputSpec can fall back to Collect without
-			// changing the public contract. Any richer field (Save,
-			// NameTemplate, MaxFiles/MaxFileBytes/MaxTotalBytes,
-			// Inline via manifest) cannot be silently emulated —
-			// returning the unsupported error is preferable to a
-			// successful run that drops requested artifacts.
 			if !outputSpecAllowsGlobsOnlyFallback(*in.Outputs) {
-				return nil, nil, nil, err
+				return nil, nil, nil, false, err
 			}
 			fs, ferr := t.collectFiles(ctx, eng, ws, in.Outputs.Globs)
 			if ferr != nil {
-				return nil, nil, nil, ferr
+				return nil, nil, nil, false, ferr
 			}
-			return fs, nil, nil, nil
+			return fs, nil, nil, false, nil
 		}
 		manifest = &m
 		if in.Outputs.Inline {
@@ -1920,15 +2000,15 @@ func (t *RunTool) prepareOutputs(
 		if err != nil {
 			return files, manifest, []string{
 				warnPartialOutputCommit,
-			}, nil
+			}, stale, nil
 		}
-		return files, manifest, nil, nil
+		return files, manifest, nil, false, nil
 	}
 	fs, err := t.collectFiles(ctx, eng, ws, in.OutputFiles)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, false, err
 	}
-	return fs, nil, nil, nil
+	return fs, nil, nil, false, nil
 }
 
 func outputFilesFromManifest(

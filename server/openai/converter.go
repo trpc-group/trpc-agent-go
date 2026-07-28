@@ -408,42 +408,22 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 	if len(events) == 0 {
 		return nil, fmt.Errorf("no events to aggregate")
 	}
-	// Find the final event with usage.
-	var finalEvent *event.Event
-	var allContent strings.Builder
-	var toolCalls []model.ToolCall
-	for _, evt := range events {
-		if evt.Response != nil && evt.Usage != nil {
-			finalEvent = evt
-		}
-		if evt.Response != nil && len(evt.Response.Choices) > 0 {
-			choice := evt.Response.Choices[0]
-			// Handle streaming delta content.
-			if choice.Delta.Content != "" {
-				allContent.WriteString(choice.Delta.Content)
-			}
-			// Handle non-streaming message content (for compatibility).
-			if choice.Message.Content != "" && allContent.Len() == 0 {
-				allContent.WriteString(choice.Message.Content)
-			}
-			// Handle streaming delta tool calls.
-			if len(choice.Delta.ToolCalls) > 0 {
-				toolCalls = append(toolCalls, choice.Delta.ToolCalls...)
-			}
-			// Handle non-streaming message tool calls (for compatibility).
-			if len(choice.Message.ToolCalls) > 0 && len(toolCalls) == 0 {
-				toolCalls = append(toolCalls, choice.Message.ToolCalls...)
-			}
-		}
+	finalEvent, usageEvent, content, toolCalls := scanStreamingEvents(events)
+	if finalEvent == nil {
+		finalEvent = usageEvent
 	}
 	if finalEvent == nil {
-		// Use the last event if no event with usage found.
+		// Use the last event if no completion or usage event was found.
 		finalEvent = events[len(events)-1]
 	}
+	if finalEvent == nil {
+		return nil, fmt.Errorf("no response events to aggregate")
+	}
+	content, toolCalls = applyFinalMessageChoice(content, toolCalls, finalEvent)
 	// Build the aggregated message.
 	msg := model.Message{
 		Role:      model.RoleAssistant,
-		Content:   allContent.String(),
+		Content:   content,
 		ToolCalls: toolCalls,
 	}
 	openAIMsg, err := c.convertModelMessageToOpenAI(msg)
@@ -473,14 +453,87 @@ func (c *converter) aggregateStreamingEvents(events []*event.Event) (*openAIResp
 			},
 		},
 	}
-	if finalEvent.Usage != nil {
+	if usageEvent == nil {
+		usageEvent = finalEvent
+	}
+	if usageEvent.Usage != nil {
 		response.Usage = &openAIUsage{
-			PromptTokens:     finalEvent.Usage.PromptTokens,
-			CompletionTokens: finalEvent.Usage.CompletionTokens,
-			TotalTokens:      finalEvent.Usage.TotalTokens,
+			PromptTokens:     usageEvent.Usage.PromptTokens,
+			CompletionTokens: usageEvent.Usage.CompletionTokens,
+			TotalTokens:      usageEvent.Usage.TotalTokens,
 		}
 	}
 	return response, nil
+}
+
+func scanStreamingEvents(events []*event.Event) (*event.Event, *event.Event, string, []model.ToolCall) {
+	var finalEvent *event.Event
+	var usageEvent *event.Event
+	var allContent strings.Builder
+	var toolCalls []model.ToolCall
+	for _, evt := range events {
+		if evt == nil {
+			continue
+		}
+		if evt.Response != nil && evt.Usage != nil {
+			usageEvent = evt
+		}
+		if isAssistantCompletionEvent(evt) {
+			finalEvent = evt
+		}
+		if choice, ok := firstResponseChoice(evt); ok {
+			appendStreamingChoice(&allContent, &toolCalls, choice)
+		}
+	}
+	return finalEvent, usageEvent, allContent.String(), toolCalls
+}
+
+func appendStreamingChoice(allContent *strings.Builder, toolCalls *[]model.ToolCall, choice model.Choice) {
+	if choice.Delta.Content != "" {
+		allContent.WriteString(choice.Delta.Content)
+	}
+	if choice.Message.Content != "" && allContent.Len() == 0 {
+		allContent.WriteString(choice.Message.Content)
+	}
+	if len(choice.Delta.ToolCalls) > 0 {
+		*toolCalls = append(*toolCalls, choice.Delta.ToolCalls...)
+	}
+	if len(choice.Message.ToolCalls) > 0 && len(*toolCalls) == 0 {
+		*toolCalls = append(*toolCalls, choice.Message.ToolCalls...)
+	}
+}
+
+func isAssistantCompletionEvent(evt *event.Event) bool {
+	if evt == nil || evt.Response == nil || evt.Response.IsPartial {
+		return false
+	}
+	rsp := evt.Response
+	if rsp.Object != model.ObjectTypeChatCompletion || len(rsp.Choices) == 0 {
+		return false
+	}
+	return !rsp.IsToolCallResponse() && !rsp.IsToolResultResponse()
+}
+
+func applyFinalMessageChoice(content string, toolCalls []model.ToolCall, evt *event.Event) (string, []model.ToolCall) {
+	choice, ok := firstResponseChoice(evt)
+	if !ok {
+		return content, toolCalls
+	}
+	if choice.Message.Content == "" && len(choice.Message.ToolCalls) == 0 {
+		return content, toolCalls
+	}
+	if choice.Message.Content != "" {
+		content = choice.Message.Content
+	}
+	toolCalls = append([]model.ToolCall(nil), choice.Message.ToolCalls...)
+	return content, toolCalls
+}
+
+func firstResponseChoice(evt *event.Event) (model.Choice, bool) {
+	if evt == nil || evt.Response == nil || len(evt.Response.Choices) == 0 {
+		return model.Choice{}, false
+	}
+	return evt.Response.Choices[0], true
 }
 
 // generateResponseID generates a unique response ID.

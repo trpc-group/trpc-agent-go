@@ -74,7 +74,7 @@ func TestPrepareOutputs_DeclarativeIO_GlobsOnlyFallback(t *testing.T) {
 	rt := &RunTool{}
 	eng := unsupportedEngine{fs: unsupportedIOFS{}}
 	ws := codeexecutor.Workspace{Path: "/tmp/ws"}
-	files, mf, warns, err := rt.prepareOutputs(context.Background(), eng, ws, runInput{
+	files, mf, warns, _, err := rt.prepareOutputs(context.Background(), eng, ws, runInput{
 		Outputs: &codeexecutor.OutputSpec{Globs: []string{"**/*.txt"}},
 	})
 	require.NoError(t, err)
@@ -88,7 +88,7 @@ func TestPrepareOutputs_DeclarativeIO_SaveRejected(t *testing.T) {
 	rt := &RunTool{}
 	eng := unsupportedEngine{fs: unsupportedIOFS{}}
 	ws := codeexecutor.Workspace{Path: "/tmp/ws"}
-	_, _, _, err := rt.prepareOutputs(context.Background(), eng, ws, runInput{
+	_, _, _, _, err := rt.prepareOutputs(context.Background(), eng, ws, runInput{
 		Outputs: &codeexecutor.OutputSpec{
 			Globs: []string{"**/*.txt"},
 			Save:  true,

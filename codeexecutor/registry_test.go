@@ -156,199 +156,363 @@ func TestWorkspaceRegistry_Acquire_CanceledMissDoesNotCreate(t *testing.T) {
 	require.Equal(t, 0, wm.callCount())
 }
 
-func TestWorkspaceRegistry_Release(t *testing.T) {
-	r := NewWorkspaceRegistry()
-	wm := &fakeWM{ws: Workspace{Path: "/tmp/w"}}
-	ctx := context.Background()
-	ws, err := r.Acquire(ctx, wm, "abc")
-	require.NoError(t, err)
-	got, ok := r.Get("abc")
-	require.True(t, ok)
-	require.Equal(t, ws, got)
+type rotatingWM struct {
+	mu sync.Mutex
 
-	require.NoError(t, r.Release(ctx, wm, "abc"))
-	_, ok = r.Get("abc")
-	require.False(t, ok)
+	instanceID  WorkspaceInstanceID
+	createErr   error
+	providerErr error
+	calls       int
 
-	// unknown id is no-op
-	require.NoError(t, r.Release(ctx, wm, "missing"))
+	rebuildEntered chan struct{}
+	rebuildRelease chan struct{}
+	rebuildOnce    sync.Once
 }
 
-type failOnceWM struct {
-	mu       sync.Mutex
-	cleanErr error
-	cleans   int
-	creates  int
-	ws       Workspace
-}
+func (m *rotatingWM) CreateWorkspace(
+	ctx context.Context,
+	id string,
+	_ WorkspacePolicy,
+) (Workspace, error) {
+	m.mu.Lock()
+	m.calls++
+	call := m.calls
+	err := m.createErr
+	entered := m.rebuildEntered
+	release := m.rebuildRelease
+	m.mu.Unlock()
 
-func (f *failOnceWM) CreateWorkspace(_ context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.creates++
-	f.ws = Workspace{ID: id, Path: "/tmp/" + id}
-	return f.ws, nil
-}
-
-func (f *failOnceWM) Cleanup(_ context.Context, _ Workspace) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.cleans++
-	if f.cleanErr != nil {
-		err := f.cleanErr
-		f.cleanErr = nil
-		return err
+	if call > 1 && entered != nil {
+		m.rebuildOnce.Do(func() { close(entered) })
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return Workspace{}, ctx.Err()
+		}
 	}
-	return nil
-}
-
-func TestWorkspaceRegistry_Release_RetryOnCleanupFailure(t *testing.T) {
-	r := NewWorkspaceRegistry()
-	wm := &failOnceWM{cleanErr: errors.New("cleanup boom")}
-	ctx := context.Background()
-	ws, err := r.Acquire(ctx, wm, "retry-id")
-	require.NoError(t, err)
-
-	err = r.Release(ctx, wm, "retry-id")
-	require.Error(t, err)
-	got, ok := r.Get("retry-id")
-	require.True(t, ok)
-	require.Equal(t, ws, got)
-
-	require.NoError(t, r.Release(ctx, wm, "retry-id"))
-	_, ok = r.Get("retry-id")
-	require.False(t, ok)
-}
-
-type blockingCleanupWM struct {
-	entered chan struct{}
-	release chan struct{}
-	mu      sync.Mutex
-	creates int
-	cleans  int
-}
-
-func (b *blockingCleanupWM) CreateWorkspace(_ context.Context, id string, _ WorkspacePolicy) (Workspace, error) {
-	b.mu.Lock()
-	b.creates++
-	b.mu.Unlock()
+	if err != nil {
+		return Workspace{}, err
+	}
+	// Keep the workspace deterministic across instances. The registry token,
+	// not Workspace equality, prevents late invalidation of a refreshed entry.
 	return Workspace{ID: id, Path: "/tmp/" + id}, nil
 }
 
-func (b *blockingCleanupWM) Cleanup(ctx context.Context, _ Workspace) error {
-	b.mu.Lock()
-	b.cleans++
-	b.mu.Unlock()
-	close(b.entered)
-	select {
-	case <-b.release:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+func (*rotatingWM) Cleanup(context.Context, Workspace) error {
+	return nil
 }
 
-func TestWorkspaceRegistry_Release_SerializesAcquire(t *testing.T) {
+func (m *rotatingWM) InstanceID(
+	context.Context,
+) (WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.instanceID, m.providerErr
+}
+
+func (m *rotatingWM) setInstanceID(id WorkspaceInstanceID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.instanceID = id
+}
+
+func (m *rotatingWM) setCreateError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createErr = err
+}
+
+func (m *rotatingWM) setProviderError(err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.providerErr = err
+}
+
+func (m *rotatingWM) callCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.calls
+}
+
+func TestWorkspaceRegistry_Acquire_InstanceAwareStable(t *testing.T) {
 	r := NewWorkspaceRegistry()
-	wm := &blockingCleanupWM{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	ctx := context.Background()
-	_, err := r.Acquire(ctx, wm, "serial-id")
+	wm := &rotatingWM{instanceID: "instance-1"}
+
+	ws1, err := r.Acquire(context.Background(), wm, "stable")
+	require.NoError(t, err)
+	ws2, err := r.Acquire(context.Background(), wm, "stable")
 	require.NoError(t, err)
 
-	doneRelease := make(chan error, 1)
-	go func() {
-		doneRelease <- r.Release(ctx, wm, "serial-id")
-	}()
-	<-wm.entered
-
-	acquired := make(chan struct{})
-	var acqWS Workspace
-	var acqErr error
-	go func() {
-		acqWS, acqErr = r.Acquire(ctx, wm, "serial-id")
-		close(acquired)
-	}()
-
-	select {
-	case <-acquired:
-		t.Fatal("Acquire must wait for in-flight Release")
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(wm.release)
-	require.NoError(t, <-doneRelease)
-	<-acquired
-	require.NoError(t, acqErr)
-	require.Equal(t, "serial-id", acqWS.ID)
-	wm.mu.Lock()
-	require.Equal(t, 2, wm.creates)
-	wm.mu.Unlock()
+	require.Equal(t, ws1, ws2)
+	require.Equal(t, 1, wm.callCount())
 }
 
-func TestWorkspaceRegistry_Release_WaitsForInflightCreate(t *testing.T) {
+func TestWorkspaceRegistry_Acquire_InstanceChangeRecreates(t *testing.T) {
 	r := NewWorkspaceRegistry()
-	wm := &blockingWM{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	ctx := context.Background()
-	acqDone := make(chan error, 1)
-	go func() {
-		_, err := r.Acquire(ctx, wm, "create-then-release")
-		acqDone <- err
-	}()
-	<-wm.entered // create blocked
+	wm := &rotatingWM{instanceID: "instance-1"}
 
-	relDone := make(chan error, 1)
-	go func() {
-		relDone <- r.Release(ctx, wm, "create-then-release")
-	}()
-
-	// Release must not return success while create is still in flight.
-	select {
-	case err := <-relDone:
-		t.Fatalf("Release returned early: %v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	close(wm.release)
-	require.NoError(t, <-acqDone)
-	require.NoError(t, <-relDone)
-	_, ok := r.Get("create-then-release")
-	require.False(t, ok, "registry entry must be gone after release")
-	// Create once, cleanup once (blockingWM tracks creates via calls).
-	wm.mu.Lock()
-	require.Equal(t, 1, wm.calls)
-	wm.mu.Unlock()
-}
-
-func TestWorkspaceRegistry_Release_CallerCancelReturnsWhileCleanupContinues(t *testing.T) {
-	r := NewWorkspaceRegistry()
-	wm := &blockingCleanupWM{
-		entered: make(chan struct{}),
-		release: make(chan struct{}),
-	}
-	ctx := context.Background()
-	_, err := r.Acquire(ctx, wm, "cancel-release")
+	ws1, err := r.Acquire(context.Background(), wm, "rotating")
+	require.NoError(t, err)
+	wm.setInstanceID("instance-2")
+	ws2, err := r.Acquire(context.Background(), wm, "rotating")
 	require.NoError(t, err)
 
-	callCtx, cancel := context.WithCancel(ctx)
-	relErr := make(chan error, 1)
-	go func() {
-		relErr <- r.Release(callCtx, wm, "cancel-release")
-	}()
-	<-wm.entered
-	cancel()
-	err = <-relErr
+	require.Equal(t, ws1, ws2, "deterministic handles may be reused across instances")
+	require.Equal(t, 2, wm.callCount())
+	_, err = r.Acquire(context.Background(), wm, "rotating")
+	require.NoError(t, err)
+	require.Equal(t, 2, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Acquire_RejectsEmptyInstanceID(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &rotatingWM{}
+
+	_, err := r.Acquire(context.Background(), wm, "empty-instance")
 	require.Error(t, err)
-	require.ErrorIs(t, err, context.Canceled)
+	require.Contains(t, err.Error(), "empty instance ID")
+}
 
-	// Cleanup still in flight / coalesced: second Release should wait and succeed.
-	close(wm.release)
-	require.NoError(t, r.Release(ctx, wm, "cancel-release"))
-	_, ok := r.Get("cancel-release")
-	require.False(t, ok)
+func TestWorkspaceRegistry_Acquire_ValidationFailureKeepsEntry(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &rotatingWM{instanceID: "instance-1"}
+	ctx := context.Background()
+
+	want, err := r.Acquire(ctx, wm, "validation")
+	require.NoError(t, err)
+	probeErr := errors.New("probe failed")
+	wm.setProviderError(probeErr)
+	_, err = r.Acquire(ctx, wm, "validation")
+	require.ErrorIs(t, err, probeErr)
+	require.Equal(t, 1, wm.callCount())
+
+	wm.setProviderError(nil)
+	got, err := r.Acquire(ctx, wm, "validation")
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+	require.Equal(t, 1, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Acquire_RebuildFailureKeepsEntry(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &rotatingWM{instanceID: "instance-1"}
+	ctx := context.Background()
+
+	_, err := r.Acquire(ctx, wm, "rebuild")
+	require.NoError(t, err)
+	wm.setInstanceID("instance-2")
+	rebuildErr := errors.New("rebuild failed")
+	wm.setCreateError(rebuildErr)
+	_, err = r.Acquire(ctx, wm, "rebuild")
+	require.ErrorIs(t, err, rebuildErr)
+	require.Equal(t, 2, wm.callCount())
+
+	wm.setCreateError(nil)
+	_, err = r.Acquire(ctx, wm, "rebuild")
+	require.NoError(t, err)
+	require.Equal(t, 3, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Acquire_ConcurrentRefreshCreatesOnce(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &rotatingWM{instanceID: "instance-1"}
+	_, err := r.Acquire(context.Background(), wm, "concurrent-refresh")
+	require.NoError(t, err)
+
+	wm.setInstanceID("instance-2")
+	wm.rebuildEntered = make(chan struct{})
+	wm.rebuildRelease = make(chan struct{})
+
+	const n = 32
+	start := make(chan struct{})
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := r.Acquire(
+				context.Background(),
+				wm,
+				"concurrent-refresh",
+			)
+			errs <- err
+		}()
+	}
+	close(start)
+	select {
+	case <-wm.rebuildEntered:
+	case <-time.After(time.Second):
+		t.Fatal("refresh did not start")
+	}
+	close(wm.rebuildRelease)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	require.Equal(t, 2, wm.callCount())
+}
+
+func TestWorkspaceRegistry_Invalidate_IsConditional(t *testing.T) {
+	r := NewWorkspaceRegistry()
+	wm := &rotatingWM{instanceID: "instance-1"}
+	ctx := context.Background()
+
+	handle, err := r.AcquireHandle(ctx, wm, "invalidate")
+	require.NoError(t, err)
+	require.False(t, r.Invalidate(WorkspaceHandle{}))
+	require.False(t, NewWorkspaceRegistry().Invalidate(handle))
+	require.True(t, r.Invalidate(handle))
+
+	_, err = r.Acquire(ctx, wm, "invalidate")
+	require.NoError(t, err)
+	require.Equal(t, 2, wm.callCount())
+
+	wm.setInstanceID("instance-2")
+	refreshed, err := r.AcquireHandle(ctx, wm, "invalidate")
+	require.NoError(t, err)
+	require.Equal(t, 3, wm.callCount())
+	require.False(t, r.Invalidate(handle),
+		"a stale instance must not evict the refreshed deterministic handle")
+	require.True(t, r.Invalidate(refreshed))
+}
+
+type instanceProbeResult struct {
+	id  WorkspaceInstanceID
+	err error
+}
+
+type fencedWM struct {
+	mu       sync.Mutex
+	probes   []instanceProbeResult
+	creates  int
+	cleanups int
+}
+
+func (m *fencedWM) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ WorkspacePolicy,
+) (Workspace, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.creates++
+	return Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (m *fencedWM) Cleanup(context.Context, Workspace) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cleanups++
+	return nil
+}
+
+func (m *fencedWM) InstanceID(
+	context.Context,
+) (WorkspaceInstanceID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.probes) == 0 {
+		return "", errors.New("unexpected instance probe")
+	}
+	result := m.probes[0]
+	m.probes = m.probes[1:]
+	return result.id, result.err
+}
+
+func (m *fencedWM) addProbes(results ...instanceProbeResult) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.probes = append(m.probes, results...)
+}
+
+func TestWorkspaceRegistry_AcquireHandle_GenerationFence(t *testing.T) {
+	t.Run("stable generation installs handle", func(t *testing.T) {
+		r := NewWorkspaceRegistry()
+		wm := &fencedWM{probes: []instanceProbeResult{
+			{id: "instance-a"},
+			{id: "instance-a"},
+		}}
+
+		handle, err := r.AcquireHandle(context.Background(), wm, "stable")
+		require.NoError(t, err)
+		require.Equal(t, WorkspaceInstanceID("instance-a"),
+			handle.InstanceID)
+		require.NotZero(t, handle.entryToken)
+		require.Equal(t, 1, wm.creates)
+	})
+
+	t.Run("rotation during creation is not cached or cleaned", func(t *testing.T) {
+		r := NewWorkspaceRegistry()
+		wm := &fencedWM{probes: []instanceProbeResult{
+			{id: "instance-a"},
+			{id: "instance-b"},
+		}}
+
+		_, err := r.AcquireHandle(context.Background(), wm, "rotated")
+		require.ErrorIs(t, err, ErrWorkspaceStale)
+		require.NotContains(t, r.byID, "rotated")
+		require.Equal(t, 1, wm.creates)
+		require.Zero(t, wm.cleanups)
+
+		wm.addProbes(
+			instanceProbeResult{id: "instance-b"},
+			instanceProbeResult{id: "instance-b"},
+		)
+		handle, err := r.AcquireHandle(
+			context.Background(), wm, "rotated",
+		)
+		require.NoError(t, err)
+		require.Equal(t, WorkspaceInstanceID("instance-b"),
+			handle.InstanceID)
+		require.Equal(t, 2, wm.creates)
+	})
+}
+
+func TestWorkspaceRegistry_AcquireHandle_PostflightErrorKeepsOldEntry(
+	t *testing.T,
+) {
+	r := NewWorkspaceRegistry()
+	wm := &fencedWM{probes: []instanceProbeResult{
+		{id: "instance-a"},
+		{id: "instance-a"},
+	}}
+	old, err := r.AcquireHandle(context.Background(), wm, "postflight")
+	require.NoError(t, err)
+
+	postErr := errors.New("postflight failed")
+	wm.addProbes(
+		instanceProbeResult{id: "instance-b"}, // cache validation
+		instanceProbeResult{id: "instance-b"}, // creation preflight
+		instanceProbeResult{err: postErr},     // creation postflight
+	)
+	_, err = r.AcquireHandle(context.Background(), wm, "postflight")
+	require.ErrorIs(t, err, postErr)
+	require.Equal(t, old.entryToken, r.byID["postflight"].entryToken)
+	require.Equal(t, 2, wm.creates)
+}
+
+func TestWorkspaceRegistry_Invalidate_LegacyLateStaleCannotEvictNewToken(
+	t *testing.T,
+) {
+	r := NewWorkspaceRegistry()
+	wm := &fakeWM{}
+	ctx := context.Background()
+
+	old, err := r.AcquireHandle(ctx, wm, "legacy")
+	require.NoError(t, err)
+	require.True(t, r.Invalidate(old))
+	current, err := r.AcquireHandle(ctx, wm, "legacy")
+	require.NoError(t, err)
+	require.Equal(t, old.Workspace, current.Workspace)
+	require.NotEqual(t, old.entryToken, current.entryToken)
+
+	require.False(t, r.Invalidate(old))
+	require.False(t, r.Invalidate(old))
+	got, err := r.AcquireHandle(ctx, wm, "legacy")
+	require.NoError(t, err)
+	require.Equal(t, current.entryToken, got.entryToken)
+	require.Equal(t, 2, wm.callCount())
 }

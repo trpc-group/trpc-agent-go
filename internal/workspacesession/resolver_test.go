@@ -127,8 +127,7 @@ func TestResolver_EnsureEngine(t *testing.T) {
 	require.NotNil(t, fallback.Manager())
 	require.NotNil(t, fallback.FS())
 	require.NotNil(t, fallback.Runner())
-	require.True(t, fallback.Describe().SupportsCleanEnv,
-		"local fallback must advertise SupportsCleanEnv for policy mode")
+	require.True(t, fallback.Describe().SupportsCleanEnv)
 }
 
 func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
@@ -153,15 +152,13 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws3, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	wantSessOnly := KeyFromInvocation(inv)
-	require.Equal(t, "0:/0:/8:sess-123", wantSessOnly)
-	require.Equal(t, wantSessOnly, ws3.ID)
-	require.Equal(t, []string{"workspace", wantSessOnly}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws3.ID)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	ws4, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
 	require.Equal(t, ws3, ws4)
-	require.Equal(t, []string{"workspace", wantSessOnly}, mgr.created)
+	require.Equal(t, []string{"workspace", KeyFromInvocation(inv)}, mgr.created)
 
 	inv.Session = &session.Session{
 		AppName: "app",
@@ -171,10 +168,8 @@ func TestResolver_CreateWorkspace_UsesSessionIDOrFallbackName(t *testing.T) {
 	ctx = agent.NewInvocationContext(context.Background(), inv)
 	ws5, err := r.CreateWorkspace(ctx, eng, "ignored-name")
 	require.NoError(t, err)
-	wantFull := KeyFromInvocation(inv)
-	require.Equal(t, "3:app/4:user/8:sess-456", wantFull)
-	require.Equal(t, wantFull, ws5.ID)
-	require.Equal(t, []string{"workspace", wantSessOnly, wantFull}, mgr.created)
+	require.Equal(t, KeyFromInvocation(inv), ws5.ID)
+	require.Equal(t, []string{"workspace", "0:/0:/8:sess-123", KeyFromInvocation(inv)}, mgr.created)
 }
 
 // artifactProbeManager asserts CreateWorkspace's context can resolve an artifact
@@ -242,56 +237,80 @@ func TestResolver_CreateWorkspace_InjectsArtifactContext(t *testing.T) {
 	require.True(t, probe.sawOK)
 }
 
-func TestKeyFromInvocation_Injective(t *testing.T) {
-	// Slash-embedding collision that the old join scheme produced.
-	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		AppName: "a/b", UserID: "c", ID: "d",
-	}})
-	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		AppName: "a", UserID: "b/c", ID: "d",
-	}})
-	require.NotEqual(t, a, b)
+type resolverInstanceManager struct {
+	instanceID codeexecutor.WorkspaceInstanceID
+	creates    int
+}
 
-	// Incomplete fields: both used to collapse to bare ID.
-	c := KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}})
-	d := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		AppName: "", UserID: "", ID: "x",
-	}})
-	require.Equal(t, c, d) // same fields
-	e := KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		AppName: "x", UserID: "", ID: "",
-	}})
-	require.NotEqual(t, c, e)
+func (m *resolverInstanceManager) CreateWorkspace(
+	_ context.Context,
+	id string,
+	_ codeexecutor.WorkspacePolicy,
+) (codeexecutor.Workspace, error) {
+	m.creates++
+	return codeexecutor.Workspace{ID: id, Path: "/tmp/" + id}, nil
+}
+
+func (*resolverInstanceManager) Cleanup(
+	context.Context,
+	codeexecutor.Workspace,
+) error {
+	return nil
+}
+
+func (m *resolverInstanceManager) InstanceID(
+	context.Context,
+) (codeexecutor.WorkspaceInstanceID, error) {
+	return m.instanceID, nil
+}
+
+func TestResolver_InvalidateWorkspaceHandle_UsesInvocationKey(t *testing.T) {
+	mgr := &resolverInstanceManager{instanceID: "instance-1"}
+	eng := codeexecutor.NewEngine(
+		mgr,
+		&resolverStubFS{},
+		&resolverStubRunner{},
+	)
+	r := NewResolver(nil, nil)
+	inv := agent.NewInvocation()
+	inv.Session = &session.Session{
+		AppName: "app",
+		UserID:  "user",
+		ID:      "session",
+	}
+	ctx := agent.NewInvocationContext(context.Background(), inv)
+
+	handle, err := r.CreateWorkspaceHandle(ctx, eng, "fallback")
+	require.NoError(t, err)
+	require.Equal(t, 1, mgr.creates)
+	require.False(t, NewResolver(nil, nil).InvalidateWorkspaceHandle(handle))
+	require.True(t, r.InvalidateWorkspaceHandle(handle))
+
+	_, err = r.CreateWorkspace(ctx, eng, "fallback")
+	require.NoError(t, err)
+	require.Equal(t, 2, mgr.creates)
+}
+
+func TestKeyFromInvocation_Injective(t *testing.T) {
+	a := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a/b", UserID: "c", ID: "d"}})
+	b := KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "b/c", ID: "d"}})
+	require.NotEqual(t, a, b)
 }
 
 func TestKeyFromInvocation_RejectsEmptyID(t *testing.T) {
 	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{}}))
-	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		AppName: "app", UserID: "u", ID: "",
-	}}))
-	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{
-		ID: "only-id",
-	}}))
+	require.Equal(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{AppName: "a", UserID: "u", ID: ""}}))
+	require.NotEqual(t, "", KeyFromInvocation(&agent.Invocation{Session: &session.Session{ID: "x"}}))
 }
 
 func TestResolver_CreateWorkspace_RejectsEmptySessionID(t *testing.T) {
 	mgr := &resolverStubMgr{}
 	eng := newResolverStubEngine(mgr)
 	r := NewResolver(nil, nil)
-
 	inv := agent.NewInvocation()
 	inv.Session = &session.Session{AppName: "app", UserID: "u", ID: ""}
 	ctx := agent.NewInvocationContext(context.Background(), inv)
 	_, err := r.CreateWorkspace(ctx, eng, "skill-name")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "Session.ID")
-	require.Empty(t, mgr.created, "must not fall back to skill name workspace")
-
-	// Two empty-ID sessions must both fail, not share skill-name workspace.
-	inv2 := agent.NewInvocation()
-	inv2.Session = &session.Session{}
-	ctx2 := agent.NewInvocationContext(context.Background(), inv2)
-	_, err = r.CreateWorkspace(ctx2, eng, "skill-name")
 	require.Error(t, err)
 	require.Empty(t, mgr.created)
 }

@@ -1150,6 +1150,15 @@ func appendWorkspaceExecToolWithExecutor(
 			),
 		)
 	}
+	if options != nil &&
+		options.workspaceExecOutputLimits.MaxOutputBytes > 0 {
+		toolOpts = append(
+			toolOpts,
+			toolworkspaceexec.WithOutputLimits(
+				options.workspaceExecOutputLimits,
+			),
+		)
+	}
 	execTool := toolworkspaceexec.NewExecTool(exec, toolOpts...)
 	allTools = append(
 		allTools,
@@ -1527,7 +1536,7 @@ func (a *LLMAgent) Run(ctx context.Context, invocation *agent.Invocation) (e <-c
 			},
 		)
 		if traceLease.Owns {
-			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "llm")
+			tracecapture.SetStepNodeType(traceCtx, traceLease.StepID, "agent")
 		}
 	}
 	ctx = a.withWorkspace(ctx, invocation)
