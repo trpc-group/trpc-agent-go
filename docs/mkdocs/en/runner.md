@@ -548,6 +548,52 @@ If you want the implementation-level mapping, this happens after one
 
 Runnable example: `examples/steer/`
 
+#### Receive a Result Event for Each Tool Call
+
+When one model response requests multiple tools, Runner normally waits for all
+of them to finish and emits one combined `tool.response` event. To emit one
+result event as each tool call completes instead, enable this option for the
+`Run` call:
+
+This option applies only to multi-tool rounds handled entirely by Runner with
+no long-running tools; all other rounds keep their existing execution and event
+behavior.
+
+```go
+eventChan, err := r.Run(
+    ctx,
+    userID,
+    sessionID,
+    message,
+    agent.WithToolResultEventPerCallEnabled(true),
+)
+```
+
+With the option enabled:
+
+- `eventChan` receives one final `tool.response` event as each call completes.
+  Each event contains one call result; use the result message's `ToolID` to
+  match it to the original call.
+- No additional combined result event is emitted.
+- Each result event is saved separately in the Session.
+- Results from parallel tools arrive in completion order, which may differ
+  from the order in which the model requested the tools.
+- `StateDelta` and `Actions.SkipSummarization` describe the whole tool-call
+  round, not an individual result. Earlier result events do not carry them;
+  read them from the last result event, or from the terminal error event if
+  the round ends early.
+
+For example, if the model requests A and then B, but B finishes first:
+
+```text
+eventChan receives: result B -> result A
+results sent to model: result A -> result B
+```
+
+This option only changes when your application receives the results. Runner
+still waits for every tool call to finish before making the next model
+request, and sends the results to the model in the original tool-call order.
+
 #### Per-Request App Name Override (multi-tenant isolation)
 
 By default, Runner uses the `appName` supplied at construction for session keys

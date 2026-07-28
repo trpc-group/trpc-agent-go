@@ -1319,6 +1319,17 @@ func TestWithModelName(t *testing.T) {
 	require.Equal(t, "gpt-4", opts.ModelName)
 }
 
+func TestWithToolResultEventPerCallEnabled(t *testing.T) {
+	opts := NewRunOptions()
+	require.False(t, opts.ToolResultEventPerCallEnabled)
+
+	WithToolResultEventPerCallEnabled(true)(&opts)
+	require.True(t, opts.ToolResultEventPerCallEnabled)
+
+	WithToolResultEventPerCallEnabled(false)(&opts)
+	require.False(t, opts.ToolResultEventPerCallEnabled)
+}
+
 func TestWithModelContextWindow(t *testing.T) {
 	window, ok := ModelContextWindowFromRunOptions(nil)
 	require.False(t, ok)
