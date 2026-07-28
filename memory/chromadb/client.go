@@ -20,6 +20,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"slices"
 	"sort"
 	"strconv"
@@ -209,10 +210,24 @@ func (cl *apiClient) do(ctx context.Context, spec requestSpec, out any) error {
 	requestCtx, cancel := context.WithTimeout(ctx, cl.timeout)
 	defer cancel()
 
+	var outputValue reflect.Value
+	if out != nil {
+		outputValue = reflect.ValueOf(out)
+		if outputValue.Kind() != reflect.Pointer || outputValue.IsNil() {
+			return errors.New("response output must be a non-nil pointer")
+		}
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxHTTPAttempts; attempt++ {
-		err := cl.doAttempt(requestCtx, spec, out)
+		attemptOutput := out
+		if out != nil {
+			attemptOutput = reflect.New(outputValue.Elem().Type()).Interface()
+		}
+		err := cl.doAttempt(requestCtx, spec, attemptOutput)
 		if err == nil {
+			if out != nil {
+				outputValue.Elem().Set(reflect.ValueOf(attemptOutput).Elem())
+			}
 			return nil
 		}
 		lastErr = err
@@ -262,7 +277,13 @@ func (cl *apiClient) doAttempt(
 		}
 		return nil
 	}
-	return decodeJSONResponse(resp.Body, out)
+	if err := decodeJSONResponse(resp.Body, out); err != nil {
+		if isTransientNetworkError(err) {
+			return &transportError{err: err}
+		}
+		return err
+	}
+	return nil
 }
 
 // copyRequestHeaders copies configured values into a newly constructed request.
@@ -315,16 +336,40 @@ func (cl *apiClient) decodeAPIError(resp *http.Response) error {
 	if err := decoder.Decode(&payload); err != nil {
 		payload.Message = strings.TrimSpace(string(body))
 	}
-	if truncated {
-		payload.Message += "…"
-	}
 	return &apiError{
 		statusCode: resp.StatusCode,
 		code:       cl.redact(payload.Code),
-		message:    cl.redact(payload.Message),
+		message:    cl.sanitizeErrorPreview(payload.Message, truncated),
 		traceID:    cl.redact(resp.Header.Get("chroma-trace-id")),
 		retryAfter: resp.Header.Get("Retry-After"),
 	}
+}
+
+// sanitizeErrorPreview masks a secret cut by the read limit before bounding the message.
+func (cl *apiClient) sanitizeErrorPreview(value string, truncated bool) string {
+	if truncated {
+		for _, secret := range cl.secretValues {
+			maxPrefix := len(secret) - 1
+			if maxPrefix > len(value) {
+				maxPrefix = len(value)
+			}
+			for prefixLength := maxPrefix; prefixLength > 0; prefixLength-- {
+				if !strings.HasSuffix(value, secret[:prefixLength]) {
+					continue
+				}
+				value = value[:len(value)-prefixLength] + "[redacted]"
+				break
+			}
+		}
+	}
+	value = cl.redact(value)
+	if len(value) > maxErrorBodyPreview {
+		value = value[:maxErrorBodyPreview]
+	}
+	if truncated {
+		value += "…"
+	}
+	return value
 }
 
 // redact replaces every configured sensitive value before it reaches an error.

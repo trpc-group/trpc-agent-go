@@ -945,12 +945,13 @@ func TestServiceClearMemoriesUsesFixedCutoff(t *testing.T) {
 	assert.Equal(t, "new memory", entries[0].Memory.Memory)
 }
 
-func TestServiceClearMemoriesRejectsDeleteCountMismatch(t *testing.T) {
+func TestServiceClearMemoriesRejectsDeleteWithoutProgress(t *testing.T) {
 	service, fake := newTestChromaService(t, &testEmbedder{dimension: 3})
 	scope := recordScope{appName: "app", userID: "user"}
 	putFakeRecord(fake, newAddRecord(scope, "memory", nil, nil, time.Now().UTC()))
 	zero := 0
 	fake.deleteCount = &zero
+	fake.deleteNoop = true
 
 	err := service.ClearMemories(
 		context.Background(),
@@ -958,7 +959,7 @@ func TestServiceClearMemoriesRejectsDeleteCountMismatch(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "made no progress")
+	assert.Contains(t, err.Error(), "remained active")
 }
 
 func TestServiceClearMemoriesRecoversLostDeleteResponse(t *testing.T) {

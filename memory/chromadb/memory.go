@@ -20,8 +20,8 @@ import (
 
 // ReadMemories reads memories for a user in reverse update order.
 //
-// ChromaDB limit/offset pagination does not provide a snapshot token, so a scan is
-// best-effort when another Service instance writes the same user concurrently.
+// The scan is serialized with writes by this Service instance. ChromaDB limit/offset
+// pagination does not provide a snapshot token, so cross-instance writes remain best-effort.
 func (svc *Service) ReadMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -35,6 +35,9 @@ func (svc *Service) ReadMemories(
 		return nil, err
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
+	lock := svc.writeLock(scope)
+	lock.Lock()
+	defer lock.Unlock()
 	records, err := svc.listRecords(ctx, activeScopeWhere(scope), 0)
 	if err != nil {
 		return nil, fmt.Errorf("read memories: %w", err)
@@ -161,7 +164,7 @@ func (svc *Service) countActiveAtLeast(
 // AddMemory adds a memory or refreshes an existing record with the same canonical ID.
 //
 // Capacity checking and persistence are serialized for the app and user within this
-// Service instance.
+// Service instance. AddMemory rejects event times outside the signed 64-bit nanosecond range.
 func (svc *Service) AddMemory(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -177,11 +180,17 @@ func (svc *Service) AddMemory(
 		return err
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
+	metadata := memory.ResolveAddOptions(opts)
+	if metadata != nil {
+		if err := validateNanosecondTime("event time", metadata.EventTime); err != nil {
+			return err
+		}
+	}
 	record := newAddRecord(
 		scope,
 		content,
 		topics,
-		memory.ResolveAddOptions(opts),
+		metadata,
 		time.Now().UTC(),
 	)
 	embedding, err := svc.embed(ctx, content)
@@ -292,6 +301,7 @@ func (svc *Service) ensureCapacity(ctx context.Context, scope recordScope) error
 //
 // A content change may rotate the deterministic memory ID. The rotation is recoverable
 // after a retry, but it is not a transaction across multiple Service instances.
+// UpdateMemory rejects event times outside the signed 64-bit nanosecond range.
 func (svc *Service) UpdateMemory(
 	ctx context.Context,
 	memoryKey memory.Key,
@@ -306,11 +316,17 @@ func (svc *Service) UpdateMemory(
 	if err := memoryKey.CheckMemoryKey(); err != nil {
 		return err
 	}
+	metadata := memory.ResolveUpdateOptions(opts)
+	if metadata != nil {
+		if err := validateNanosecondTime("event time", metadata.EventTime); err != nil {
+			return err
+		}
+	}
 	command := updateCommand{
 		key:      memoryKey,
 		content:  content,
 		topics:   topics,
-		metadata: memory.ResolveUpdateOptions(opts),
+		metadata: metadata,
 	}
 	token, err := updateToken(command)
 	if err != nil {
@@ -450,7 +466,7 @@ func (svc *Service) ensureRotationTarget(
 		return nil
 	}
 
-	response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
+	_, err = svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
 		IDs: []string{target.entry.ID},
 		Where: andWhere(
 			ownedScopeWhere(scope),
@@ -460,7 +476,11 @@ func (svc *Service) ensureRotationTarget(
 	if err != nil {
 		return fmt.Errorf("delete update target tombstone %s: %w", target.entry.ID, err)
 	}
-	if response.Deleted.value != 1 {
+	remaining, err := svc.fetchRecordByID(ctx, target.entry.ID, nil)
+	if err != nil {
+		return fmt.Errorf("verify deleted update target tombstone %s: %w", target.entry.ID, err)
+	}
+	if remaining != nil {
 		return fmt.Errorf("memory update target %s changed concurrently", record.entry.ID)
 	}
 	if err := svc.client.addRecords(ctx, svc.collection, addRequest(record)); err != nil {
@@ -637,19 +657,12 @@ func (svc *Service) hardDeleteAll(ctx context.Context, scope recordScope, cutoff
 		if len(ids) == 0 {
 			return nil
 		}
-		response, err := svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
+		_, err = svc.client.deleteRecords(ctx, svc.collection, deleteRecordsRequest{
 			IDs:   ids,
 			Where: where,
 		})
 		if err != nil {
 			return fmt.Errorf("hard delete memories: %w", err)
-		}
-		if response.Deleted.value != len(ids) {
-			return fmt.Errorf(
-				"hard delete memories made no progress: targeted %d, deleted %d",
-				len(ids),
-				response.Deleted.value,
-			)
 		}
 		if err := svc.verifyInactiveIDs(ctx, scope, ids); err != nil {
 			return fmt.Errorf("verify hard deleted memories: %w", err)

@@ -144,6 +144,7 @@ type fakeChroma struct {
 	deleteAfterWrite   int
 	deleteFailuresLeft int
 	deleteCount        *int
+	deleteNoop         bool
 	ignoreGetOffset    bool
 }
 
@@ -409,8 +410,10 @@ func (f *fakeChroma) handleDelete(writer http.ResponseWriter, request *http.Requ
 	if payload.Limit != nil && len(ids) > *payload.Limit {
 		ids = ids[:*payload.Limit]
 	}
-	for _, id := range ids {
-		delete(f.records, id)
+	if !f.deleteNoop {
+		for _, id := range ids {
+			delete(f.records, id)
+		}
 	}
 	if f.deleteFailuresLeft > 0 {
 		f.deleteFailuresLeft--

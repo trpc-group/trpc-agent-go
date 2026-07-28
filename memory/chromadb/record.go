@@ -70,6 +70,20 @@ type tokenMetadata struct {
 	Location     string      `json:"location,omitempty"`
 }
 
+// validateNanosecondTime rejects instants that the schema cannot encode as int64 nanoseconds.
+func validateNanosecondTime(name string, value *time.Time) error {
+	if value == nil {
+		return nil
+	}
+	normalized := value.UTC()
+	minimum := time.Unix(0, math.MinInt64).UTC()
+	maximum := time.Unix(0, math.MaxInt64).UTC()
+	if normalized.Before(minimum) || normalized.After(maximum) {
+		return fmt.Errorf("%s is outside the supported nanosecond range", name)
+	}
+	return nil
+}
+
 // newAddRecord normalizes an Add request into the persisted Chroma representation.
 func newAddRecord(
 	scope recordScope,

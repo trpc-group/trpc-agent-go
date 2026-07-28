@@ -20,8 +20,9 @@ import (
 
 // SearchMemories searches memories for a user using cosine similarity.
 //
-// Hybrid search applies the configured local keyword candidate cap. Pagination used
-// to build those candidates is best-effort during cross-instance concurrent writes.
+// Hybrid search fuses unfiltered dense and bounded keyword ranks using RRF. The scan is
+// serialized with writes by this Service, while cross-instance pagination remains best-effort.
+// SearchMemories rejects time bounds outside the signed 64-bit nanosecond range.
 func (svc *Service) SearchMemories(
 	ctx context.Context,
 	userKey memory.UserKey,
@@ -37,6 +38,12 @@ func (svc *Service) SearchMemories(
 	}
 
 	searchOpts := memory.ResolveSearchOptions(query, opts)
+	if err := validateNanosecondTime("time after", searchOpts.TimeAfter); err != nil {
+		return nil, err
+	}
+	if err := validateNanosecondTime("time before", searchOpts.TimeBefore); err != nil {
+		return nil, err
+	}
 	searchOpts.Query = strings.TrimSpace(searchOpts.Query)
 	if searchOpts.Query == "" {
 		return []*memory.Entry{}, nil
@@ -53,6 +60,9 @@ func (svc *Service) SearchMemories(
 		searchOpts.SimilarityThreshold = svc.opts.similarityThreshold
 	}
 	scope := recordScope{appName: userKey.AppName, userID: userKey.UserID}
+	lock := svc.writeLock(scope)
+	lock.Lock()
+	defer lock.Unlock()
 	results, err := svc.searchDense(ctx, scope, queryEmbedding, searchOpts)
 	if err != nil {
 		return nil, err
@@ -64,7 +74,7 @@ func (svc *Service) SearchMemories(
 	return finalizeSearchResults(results, searchOpts), nil
 }
 
-// searchDense runs cosine retrieval and applies the configured similarity threshold.
+// searchDense runs cosine retrieval and applies the threshold outside hybrid search.
 func (svc *Service) searchDense(
 	ctx context.Context,
 	scope recordScope,
@@ -84,7 +94,7 @@ func (svc *Service) searchDense(
 	if err != nil {
 		return nil, fmt.Errorf("decode memory search results: %w", err)
 	}
-	if opts.SimilarityThreshold <= 0 {
+	if opts.HybridSearch || opts.SimilarityThreshold <= 0 {
 		return results, nil
 	}
 	filtered := results[:0]

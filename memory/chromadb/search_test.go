@@ -372,7 +372,10 @@ func TestServiceSearchMemoriesHybridCandidateLimitIsIndependent(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.Len(t, results, 1)
+	assert.ElementsMatch(t, []string{
+		"code ZX-42 first",
+		"code ZX-42 second",
+	}, resultContents(results))
 }
 
 func TestServiceSearchMemoriesReturnsDenseWhenKeywordReadFails(t *testing.T) {
