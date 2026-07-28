@@ -25,7 +25,7 @@
     { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response 4 - all done", "branch": "main" } }
   ],
   "verifies": [
-    { "what": "summary", "params": {} },
+    { "what": "summary", "expect": {"filter_keys": ["main"]} },
     { "what": "events", "params": {} },
     { "what": "state", "params": {} }
   ],

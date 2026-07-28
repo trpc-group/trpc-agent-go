@@ -65,32 +65,80 @@ func (r *DiffRule) MatchPath(diffPath string) bool {
 	return matchPathPattern(r.Path, diffPath)
 }
 
-// matchPathPattern does simple glob matching for path patterns.
-// Supports [*] as a wildcard for array indices and map keys.
+// matchPathPattern does segment-by-segment glob matching.
+// [*] in the pattern matches exactly one path segment in the target.
+// A segment is delimited by '.' or '[' / ']' boundaries.
+// $.state[*] matches $.state.a but not $.state.a.b.
 func matchPathPattern(pattern, target string) bool {
-	patternParts := strings.Split(pattern, "[*]")
-	if len(patternParts) == 1 {
-		return pattern == target
-	}
-
-	if !strings.HasPrefix(target, patternParts[0]) {
+	patSegs := tokenizePath(pattern)
+	tgtSegs := tokenizePath(target)
+	if len(patSegs) != len(tgtSegs) {
 		return false
 	}
-
-	remaining := strings.TrimPrefix(target, patternParts[0])
-
-	for i := 1; i < len(patternParts); i++ {
-		part := patternParts[i]
-		if part == "" {
-			return true
+	for i, ps := range patSegs {
+		if ps == "*" {
+			continue
 		}
-		idx := strings.Index(remaining, part)
-		if idx < 0 {
+		if ps != tgtSegs[i] {
 			return false
 		}
-		remaining = remaining[idx+len(part):]
 	}
-	return remaining == ""
+	return true
+}
+
+// tokenizePath splits a JSONPath-like string into segments.
+// "$.events[3].id"   → ["$", "events", "3", "id"]
+// "$.events[*].id"   → ["$", "events", "*", "id"]
+// "$.memories.[x].y" → ["$", "memories", "x", "y"]
+func tokenizePath(s string) []string {
+	var segs []string
+	cur := strings.Builder{}
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+		switch ch {
+		case '.':
+			if cur.Len() > 0 {
+				segs = append(segs, cur.String())
+				cur.Reset()
+			}
+		case '[':
+			if cur.Len() > 0 {
+				segs = append(segs, cur.String())
+				cur.Reset()
+			}
+			// Collect content inside [ ... ] as one segment.
+			j := i + 1
+			for j < len(s) && s[j] != ']' {
+				j++
+			}
+			inner := s[i+1 : j]
+			// Strip quotes if present: ["key"] → key
+			if len(inner) >= 2 && inner[0] == '"' && inner[len(inner)-1] == '"' {
+				inner = inner[1 : len(inner)-1]
+			}
+			segs = append(segs, inner)
+			i = j // loop will advance past ']'
+		case ']':
+			// closing bracket: start new empty segment
+		case '*':
+			// Preserve [*] wildcard as a segment.
+			if cur.Len() > 0 {
+				segs = append(segs, cur.String())
+				cur.Reset()
+			}
+			segs = append(segs, "*")
+			// skip past the closing ']' if present
+			if i+1 < len(s) && s[i+1] == ']' {
+				i++
+			}
+		default:
+			cur.WriteByte(ch)
+		}
+	}
+	if cur.Len() > 0 {
+		segs = append(segs, cur.String())
+	}
+	return segs
 }
 
 // MatchBackend reports whether the rule applies to the given backend name.
@@ -180,13 +228,6 @@ func DefaultDiffRules() []DiffRule {
 			Note:     "Response IDs are auto-generated per call.",
 		},
 		{
-			Path:     "$.summaries[*].updated_at",
-			Kind:     "timestamp_drift",
-			Strategy: "allow_drift",
-			MaxDrift: &DriftSpec{DurationMS: 5000},
-			Note:     "Summary update timestamps drift across backends.",
-		},
-		{
 			Path:     "$.tracks[*].events[*].timestamp",
 			Kind:     "timestamp_drift",
 			Strategy: "allow_drift",
@@ -194,18 +235,18 @@ func DefaultDiffRules() []DiffRule {
 			Note:     "Track event timestamps drift across backends.",
 		},
 		{
-			Path:     "$.memories[*].created_at",
+			Path:     "$.memories[*].memory.eventTime",
 			Kind:     "timestamp_drift",
 			Strategy: "allow_drift",
 			MaxDrift: &DriftSpec{DurationMS: 5000},
-			Note:     "Memory creation timestamps drift across backends.",
+			Note:     "Memory eventTime may drift after normalization.",
 		},
 		{
-			Path:     "$.memories[*].updated_at",
-			Kind:     "timestamp_drift",
+			Path:     "$.memories[*].score",
+			Kind:     "float_precision",
 			Strategy: "allow_drift",
-			MaxDrift: &DriftSpec{DurationMS: 5000},
-			Note:     "Memory update timestamps drift across backends.",
+			MaxDrift: &DriftSpec{FloatEpsilon: 1e-4},
+			Note:     "Memory search scores may differ by floating epsilon.",
 		},
 	}
 }

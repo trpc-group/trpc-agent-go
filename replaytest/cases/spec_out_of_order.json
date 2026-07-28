@@ -1,7 +1,7 @@
 {
   "name": "out_of_order",
   "description": "Out-of-order writes: verify final replay order and normalized results across backends",
-  "tags": ["lightweight", "ordering"],
+  "tags": ["lightweight", "concurrent", "ordering"],
   "backends": {
     "session": ["inmemory", "sqlite"],
     "memory": ["inmemory", "sqlite"]
@@ -14,9 +14,15 @@
   },
   "operations": [
     { "op": "create_session", "backend": "session", "params": {} },
-    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 1", "branch": "main", "tag": "first" } },
-    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Message 2", "branch": "main", "tag": "second" } },
-    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response to all messages", "branch": "main", "tag": "third" } },
+    { "op": "append_user_event", "backend": "session", "params": { "author": "user1", "content": "Trigger concurrent operations", "branch": "main", "tag": "trigger" } },
+    { "op": "append_concurrent_events", "backend": "session", "params": {
+      "events": [
+        { "author": "user1", "content": "Message C - concurrent", "branch": "main", "tag": "c" },
+        { "author": "user1", "content": "Message A - concurrent", "branch": "main", "tag": "a" },
+        { "author": "user1", "content": "Message B - concurrent", "branch": "main", "tag": "b" }
+      ]
+    }},
+    { "op": "append_assistant_event", "backend": "session", "params": { "author": "assistant", "content": "Response after concurrent group", "branch": "main", "tag": "response" } },
     { "op": "add_memory", "backend": "memory", "params": { "memory": "First memory - ordering test", "topics": ["order"] } },
     { "op": "add_memory", "backend": "memory", "params": { "memory": "Second memory - ordering test", "topics": ["order"] } },
     { "op": "add_memory", "backend": "memory", "params": { "memory": "Third memory - ordering test", "topics": ["order"] } }

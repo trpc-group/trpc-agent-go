@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,29 +25,57 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/memory"
 	meminmemory "trpc.group/trpc-go/trpc-agent-go/memory/inmemory"
 	memsqlite "trpc.group/trpc-go/trpc-agent-go/memory/sqlite"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/replaytest"
 	"trpc.group/trpc-go/trpc-agent-go/session"
 	sessinmemory "trpc.group/trpc-go/trpc-agent-go/session/inmemory"
 	sesssqlite "trpc.group/trpc-go/trpc-agent-go/session/sqlite"
 )
 
+// fakeSummarizer builds deterministic summaries from session events so that summary storage consistency can be tested without LLM non-determinism.
+type fakeSummarizer struct{}
+
+func (f *fakeSummarizer) ShouldSummarize(sess *session.Session) bool { return len(sess.Events) > 0 }
+func (f *fakeSummarizer) Summarize(ctx context.Context, sess *session.Session) (string, error) {
+	var parts []string
+	for _, ev := range sess.Events {
+		if ev.Response != nil && len(ev.Response.Choices) > 0 {
+			c := ev.Response.Choices[0].Message.Content
+			if c != "" {
+				parts = append(parts, c)
+			}
+		}
+	}
+	return strings.Join(parts, " | "), nil
+}
+func (f *fakeSummarizer) SetPrompt(p string)       {}
+func (f *fakeSummarizer) Prompt() string           { return "" }
+func (f *fakeSummarizer) SetModel(m model.Model)   {}
+func (f *fakeSummarizer) Metadata() map[string]any { return nil }
+
 func init() {
 	// Register inmemory session backend.
 	replaytest.RegisterSessionFactory("inmemory", func(ctx context.Context, dbURL string) (session.Service, error) {
-		return sessinmemory.NewSessionService(), nil
+		return sessinmemory.NewSessionService(
+			sessinmemory.WithSummarizer(&fakeSummarizer{}),
+		), nil
 	})
 
-	// Register sqlite session backend (one shared DB per test run).
+	// Register sqlite session backend (shared-cache memory DSN, single-conn pool).
 	replaytest.RegisterSessionFactory("sqlite", func(ctx context.Context, dbURL string) (session.Service, error) {
 		url := dbURL
 		if url == "" {
-			url = ":memory:"
+			url = "file::memory:?cache=shared"
 		}
 		db, err := sql.Open("sqlite3", url)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)
 		}
-		svc, err := sesssqlite.NewService(db, sesssqlite.WithSkipDBInit(false))
+		db.SetMaxOpenConns(1)
+		svc, err := sesssqlite.NewService(db,
+			sesssqlite.WithSkipDBInit(false),
+			sesssqlite.WithSummarizer(&fakeSummarizer{}),
+		)
 		if err != nil {
 			db.Close()
 			return nil, fmt.Errorf("create sqlite session: %w", err)
@@ -59,16 +88,17 @@ func init() {
 		return meminmemory.NewMemoryService(), nil
 	})
 
-	// Register sqlite memory backend.
+	// Register sqlite memory backend (shared-cache memory DSN, single-conn pool).
 	replaytest.RegisterMemoryFactory("sqlite", func(ctx context.Context, dbURL string) (memory.Service, error) {
 		url := dbURL
 		if url == "" {
-			url = ":memory:"
+			url = "file::memory:?cache=shared"
 		}
 		db, err := sql.Open("sqlite3", url)
 		if err != nil {
 			return nil, fmt.Errorf("open sqlite: %w", err)
 		}
+		db.SetMaxOpenConns(1)
 		svc, err := memsqlite.NewService(db)
 		if err != nil {
 			db.Close()
@@ -133,7 +163,7 @@ func TestLightweight(t *testing.T) {
 	}
 
 	// Write combined report.
-	reportPath := filepath.Join(moduleRoot, "replaytest", "session_memory_summary_track_diff_report.json")
+	reportPath := filepath.Join(moduleRoot, "replaytest", "session_memory_summary_track_diff_report_lightweight.json")
 	if err := replaytest.WriteCombinedReport(allReports, reportPath); err != nil {
 		t.Errorf("write combined report: %v", err)
 	} else {

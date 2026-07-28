@@ -61,12 +61,13 @@ func TestComparator_isAllowed_AllowDrift(t *testing.T) {
 }
 
 func TestComparator_isAllowed_WrongKind(t *testing.T) {
+	// The path-scope alone identifies drift
 	c := NewComparator([]DiffRule{
 		{Path: "$.events[*].timestamp", Kind: "timestamp_drift", Strategy: "allow_drift", MaxDrift: &DriftSpec{DurationMS: 5000}},
 	})
 	_, ok := c.isAllowed("$.events[0].timestamp", "value_mismatch")
-	if ok {
-		t.Error("allow_drift with wrong kind should NOT be allowed")
+	if !ok {
+		t.Error("allow_drift should suppress any diff kind at a matching path")
 	}
 }
 

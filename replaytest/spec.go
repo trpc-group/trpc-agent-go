@@ -102,7 +102,28 @@ func (s *Spec) HasTag(tag string) bool {
 	return slices.Contains(s.Tags, tag)
 }
 
-// Validate checks that the Spec has all required fields.
+// validOps and validWhats are maps of known operation names and verify targets.
+var validOps = map[string]bool{
+	OpCreateSession: true, OpGetSession: true, OpDeleteSession: true,
+	OpListSessions: true, OpAppendUserEvent: true, OpAppendAssistantEvent: true,
+	OpAppendToolCallEvent: true, OpAppendToolResponseEvent: true,
+	OpUpdateAppState: true, OpUpdateUserState: true, OpUpdateSessionState: true,
+	OpDeleteAppStateKey: true, OpDeleteUserStateKey: true,
+	OpCreateSummary: true, OpEnqueueSummary: true, OpAppendTrackEvent: true,
+	OpAddMemory: true, OpUpdateMemory: true, OpDeleteMemory: true,
+	OpClearMemories: true, OpSearchMemories: true, OpAddMemoryWithMetadata: true,
+	OpAppendConcurrentEvents: true,
+}
+
+var validWhats = map[string]bool{
+	VerifySessionFull: true, VerifyEvents: true, VerifyState: true,
+	VerifySummary: true, VerifyTracks: true, VerifyMemories: true,
+	VerifyMemorySearch: true,
+}
+
+var validBackendTypes = map[string]bool{"session": true, "memory": true}
+
+// Validate checks that the Spec has all required fields, and that operations and verifications reference known names so that misconfiguration is caught at load time.
 func (s *Spec) Validate() error {
 	if s.Name == "" {
 		return fmt.Errorf("name is required")
@@ -124,6 +145,25 @@ func (s *Spec) Validate() error {
 	}
 	if s.Setup.SessionID == "" {
 		return fmt.Errorf("setup.session_id is required")
+	}
+	if len(s.Operations) == 0 {
+		return fmt.Errorf("at least one operation is required")
+	}
+	for i, op := range s.Operations {
+		if !validOps[op.Op] {
+			return fmt.Errorf("operation %d: unknown op %q", i, op.Op)
+		}
+		if !validBackendTypes[op.Backend] {
+			return fmt.Errorf("operation %d: unknown backend %q (expected \"session\" or \"memory\")", i, op.Backend)
+		}
+	}
+	if len(s.Verifies) == 0 {
+		return fmt.Errorf("at least one verify is required")
+	}
+	for i, v := range s.Verifies {
+		if !validWhats[v.What] {
+			return fmt.Errorf("verify %d: unknown what %q", i, v.What)
+		}
 	}
 	return nil
 }

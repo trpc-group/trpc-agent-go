@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,29 +32,63 @@ type errSkip string
 
 func (e errSkip) Error() string { return string(e) }
 
+// Shared miniredis instance, lazily created once per test binary lifetime and explicitly closed by TestIntegration.
+// Cleanup to avoid leaking TCP listeners and goroutines.
+var (
+	miniredisOnce     sync.Once
+	miniredisInstance *miniredis.Miniredis
+	miniredisAddr     string
+)
+
+func getMiniredisAddr() (string, error) {
+	var err error
+	miniredisOnce.Do(func() {
+		mr, e := miniredis.Run()
+		if e != nil {
+			err = e
+			return
+		}
+		miniredisInstance = mr
+		miniredisAddr = mr.Addr()
+	})
+	if err != nil {
+		return "", err
+	}
+	return miniredisAddr, nil
+}
+
+func closeMiniredis() {
+	if miniredisInstance != nil {
+		miniredisInstance.Close()
+	}
+}
+
 func init() {
-	// ---- Redis session (P0: miniredis fallback, zero external deps) ----
+	// ---- Redis session (P0: shared miniredis fallback, zero external deps) ----
 	replaytest.RegisterSessionFactory("redis", func(ctx context.Context, dbURL string) (session.Service, error) {
 		url := firstNonEmpty(dbURL, os.Getenv("REPLAY_REDIS_URL"))
 		if url == "" {
-			mr, err := miniredis.Run()
+			addr, err := getMiniredisAddr()
 			if err != nil {
 				return nil, errSkip("miniredis: " + err.Error())
 			}
-			url = "redis://" + mr.Addr()
+			url = "redis://" + addr
 		}
-		return sessredis.NewService(sessredis.WithRedisClientURL(url))
+		return sessredis.NewService(
+			sessredis.WithRedisClientURL(url),
+			sessredis.WithSummarizer(&fakeSummarizer{}),
+		)
 	})
 
 	// ---- Redis memory ----
 	replaytest.RegisterMemoryFactory("redis", func(ctx context.Context, dbURL string) (memory.Service, error) {
 		url := firstNonEmpty(dbURL, os.Getenv("REPLAY_REDIS_URL"))
 		if url == "" {
-			mr, err := miniredis.Run()
+			addr, err := getMiniredisAddr()
 			if err != nil {
 				return nil, errSkip("miniredis: " + err.Error())
 			}
-			url = "redis://" + mr.Addr()
+			url = "redis://" + addr
 		}
 		return memredis.NewService(memredis.WithRedisClientURL(url))
 	})
@@ -67,6 +102,7 @@ func init() {
 		return sesspostgres.NewService(
 			sesspostgres.WithPostgresClientDSN(dsn),
 			sesspostgres.WithSkipDBInit(false),
+			sesspostgres.WithSummarizer(&fakeSummarizer{}),
 		)
 	})
 
@@ -93,6 +129,7 @@ func TestIntegration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration replay test in short mode")
 	}
+	t.Cleanup(closeMiniredis)
 
 	sessionBackends := getEnvBackends("REPLAY_SESSION_BACKENDS", "inmemory,sqlite")
 	memoryBackends := getEnvBackends("REPLAY_MEMORY_BACKENDS", "inmemory,sqlite")
@@ -142,7 +179,7 @@ func TestIntegration(t *testing.T) {
 		})
 	}
 
-	reportPath := filepath.Join(moduleRoot, "replaytest", "session_memory_summary_track_diff_report.json")
+	reportPath := filepath.Join(moduleRoot, "replaytest", "session_memory_summary_track_diff_report_integration.json")
 	if err := replaytest.WriteCombinedReport(allReports, reportPath); err != nil {
 		t.Errorf("write combined report: %v", err)
 	} else {

@@ -46,8 +46,9 @@ type DiffReport struct {
 	StartedAt      time.Time            `json:"started_at"`
 	CompletedAt    time.Time            `json:"completed_at"`
 	DurationMS     int64                `json:"duration_ms"`
-	BackendsTested BackendConfig        `json:"backends_tested"`
-	PassCount      int                  `json:"pass_count"`
+	BackendsTested  BackendConfig        `json:"backends_tested"`
+	SkippedBackends map[string]string    `json:"skipped_backends,omitempty"`
+	PassCount       int                  `json:"pass_count"`
 	FailCount      int                  `json:"fail_count"`
 	SkipCount      int                  `json:"skip_count"`
 	DiffCount      int                  `json:"diff_count"`
@@ -85,7 +86,12 @@ func (r *DiffReport) Finalize() {
 		r.DiffCount += len(v.Diffs)
 	}
 
-	if r.FailCount == 0 && r.SkipCount == 0 {
+	if r.PassCount == 0 && r.FailCount == 0 && r.SkipCount == 0 {
+		r.Summary = fmt.Sprintf("No verifications produced — check that ≥2 backends are available "+
+			"(session: %d, memory: %d). Skipped: %v",
+			len(r.BackendsTested.Session), len(r.BackendsTested.Memory),
+			r.SkippedBackends)
+	} else if r.FailCount == 0 && r.SkipCount == 0 {
 		r.Summary = fmt.Sprintf("All %d verifications passed across %d session + %d memory backends.",
 			r.PassCount, len(r.BackendsTested.Session), len(r.BackendsTested.Memory))
 	} else {

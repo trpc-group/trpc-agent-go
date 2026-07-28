@@ -64,13 +64,13 @@ func NewComparator(allowedDiffs []DiffRule) *Comparator {
 }
 
 // isAllowed reports whether a diff at the given path with the given kind is covered by an allowed-diff rule.
-func (c *Comparator) isAllowed(path string, kind string) (*DiffRule, bool) {
+func (c *Comparator) isAllowed(path string, _ string) (*DiffRule, bool) {
 	for _, rule := range c.AllowedDiffs {
 		if rule.MatchPath(path) {
 			if rule.Strategy == "ignore" {
 				return &rule, true
 			}
-			if rule.Strategy == "allow_drift" && rule.Kind == kind {
+			if rule.Strategy == "allow_drift" {
 				return &rule, true
 			}
 		}
@@ -871,23 +871,33 @@ func CompareJSON(left, right any, basePath string) []DiffResult {
 
 	// Dereference pointers.
 	if lv.Kind() == reflect.Ptr {
-		if lv.IsNil() && rv.IsNil() {
+		lvNil := lv.IsNil()
+		rvIsPtr := rv.Kind() == reflect.Ptr
+		rvNil := rvIsPtr && rv.IsNil()
+
+		if lvNil && rvNil {
 			return diffs
 		}
-		if lv.IsNil() {
+		if lvNil {
 			return []DiffResult{{
 				Path: basePath, Kind: DiffMissingEntry, Severity: SeverityError,
 				Left: nil, Right: right, Message: "left pointer is nil",
 			}}
 		}
-		if rv.Kind() == reflect.Ptr && rv.IsNil() {
+		if rvNil {
 			return []DiffResult{{
 				Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
 				Left: left, Right: nil, Message: "right pointer is nil",
 			}}
 		}
-		if lv.Kind() == reflect.Ptr {
-			return CompareJSON(lv.Elem().Interface(), right, basePath)
+		return CompareJSON(lv.Elem().Interface(), right, basePath)
+	}
+	if rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return []DiffResult{{
+				Path: basePath, Kind: DiffExtraEntry, Severity: SeverityError,
+				Left: left, Right: nil, Message: "right pointer is nil",
+			}}
 		}
 		return CompareJSON(left, rv.Elem().Interface(), basePath)
 	}

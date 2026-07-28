@@ -82,6 +82,14 @@ type Harness struct {
 	sessionClose    []session.Service
 	memoryClose     []memory.Service
 
+	// Active backends after Setup.
+	ActiveSessionBackends []string
+	ActiveMemoryBackends  []string
+	SkippedBackends       map[string]string // name → reason
+
+	// TrackSupport records which session backends implement TrackService.
+	TrackSupported map[string]bool
+
 	sessionKey    session.Key
 	userKey       session.UserKey
 	memoryUserKey memory.UserKey
@@ -116,17 +124,21 @@ func NewHarness(spec *Spec, dbURL string) *Harness {
 }
 
 // Setup creates session/memory services and creates the initial session on all configured backends.
-// Before creating new data, it cleans up any leftover data from previous runs to ensure idempotent execution
+// Before creating new data, it cleans up any leftover data from previous runs to ensure idempotent execution.
 func (h *Harness) Setup(ctx context.Context) error {
-	var activeSession []string
+	h.SkippedBackends = make(map[string]string)
+	h.TrackSupported = make(map[string]bool)
+
 	for _, name := range h.Spec.Backends.Session {
 		svc, err := NewSessionService(ctx, name, h.dbURL)
 		if err != nil {
+			h.SkippedBackends[name] = fmt.Sprintf("session: %v", err)
 			continue
 		}
 		h.sessionServices[name] = svc
 		h.sessionClose = append(h.sessionClose, svc)
-		activeSession = append(activeSession, name)
+		h.ActiveSessionBackends = append(h.ActiveSessionBackends, name)
+		_, h.TrackSupported[name] = svc.(session.TrackService)
 
 		// Clean up leftover data from previous runs (critical for Redis).
 		_ = svc.DeleteSession(ctx, h.sessionKey)
@@ -144,25 +156,23 @@ func (h *Harness) Setup(ctx context.Context) error {
 			}
 		}
 	}
-	h.Spec.Backends.Session = activeSession
 
-	var activeMemory []string
 	for _, name := range h.Spec.Backends.Memory {
 		svc, err := NewMemoryService(ctx, name, h.dbURL)
 		if err != nil {
+			h.SkippedBackends[name] = fmt.Sprintf("memory: %v", err)
 			continue
 		}
 		h.memoryServices[name] = svc
 		h.memoryClose = append(h.memoryClose, svc)
-		activeMemory = append(activeMemory, name)
+		h.ActiveMemoryBackends = append(h.ActiveMemoryBackends, name)
 
 		// Clean up leftover memories from previous runs.
 		_ = svc.ClearMemories(ctx, h.memoryUserKey)
 	}
-	h.Spec.Backends.Memory = activeMemory
 
-	if len(h.sessionServices) == 0 && len(h.memoryServices) == 0 {
-		return fmt.Errorf("no backends could be initialized")
+	if len(h.ActiveSessionBackends) == 0 && len(h.ActiveMemoryBackends) == 0 {
+		return fmt.Errorf("no backends could be initialized; skipped: %v", h.SkippedBackends)
 	}
 	return nil
 }
@@ -278,7 +288,7 @@ func (h *Harness) executeOp(ctx context.Context, op Operation, _ int) error {
 }
 
 func (h *Harness) execSessionOp(ctx context.Context, op Operation, fn func(context.Context, session.Service) error) error {
-	for _, name := range h.Spec.Backends.Session {
+	for _, name := range h.ActiveSessionBackends {
 		svc := h.sessionServices[name]
 		if err := fn(ctx, svc); err != nil {
 			if op.Op == OpCreateSession && strings.Contains(err.Error(), "already exists") {
@@ -292,7 +302,7 @@ func (h *Harness) execSessionOp(ctx context.Context, op Operation, fn func(conte
 }
 
 func (h *Harness) execMemoryOp(ctx context.Context, _ Operation, fn func(context.Context, memory.Service) error) error {
-	for _, name := range h.Spec.Backends.Memory {
+	for _, name := range h.ActiveMemoryBackends {
 		svc := h.memoryServices[name]
 		if err := fn(ctx, svc); err != nil {
 			return fmt.Errorf("backend %q: %w", name, err)
@@ -306,7 +316,7 @@ func (h *Harness) Verify(ctx context.Context) (map[string]map[string]*SessionSna
 	sessionSnapshots := make(map[string]map[string]*SessionSnapshot)
 	memorySnapshots := make(map[string]map[string]*MemorySnapshot)
 
-	for _, name := range h.Spec.Backends.Session {
+	for _, name := range h.ActiveSessionBackends {
 		snap, err := h.collectSessionSnapshot(ctx, name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("collect session snapshot %q: %w", name, err)
@@ -314,7 +324,7 @@ func (h *Harness) Verify(ctx context.Context) (map[string]map[string]*SessionSna
 		sessionSnapshots[name] = snap
 	}
 
-	for _, name := range h.Spec.Backends.Memory {
+	for _, name := range h.ActiveMemoryBackends {
 		snap, err := h.collectMemorySnapshot(ctx, name)
 		if err != nil {
 			return nil, nil, fmt.Errorf("collect memory snapshot %q: %w", name, err)
@@ -333,25 +343,19 @@ func (h *Harness) collectSessionSnapshot(ctx context.Context, backendName string
 	if err != nil {
 		return nil, err
 	}
-	if sess != nil {
-		result[VerifySessionFull] = &SessionSnapshot{Session: sess}
-	}
+	result[VerifySessionFull] = &SessionSnapshot{Session: sess}
 
 	appState, err := svc.ListAppStates(ctx, h.Spec.Setup.AppName)
 	if err != nil {
 		return nil, fmt.Errorf("list app states: %w", err)
 	}
-	if result[VerifySessionFull] != nil {
-		result[VerifySessionFull].AppState = appState
-	}
+	result[VerifySessionFull].AppState = appState
 
 	userState, err := svc.ListUserStates(ctx, h.userKey)
 	if err != nil {
 		return nil, fmt.Errorf("list user states: %w", err)
 	}
-	if result[VerifySessionFull] != nil {
-		result[VerifySessionFull].UserState = userState
-	}
+	result[VerifySessionFull].UserState = userState
 
 	return result, nil
 }
@@ -368,7 +372,7 @@ func (h *Harness) collectMemorySnapshot(ctx context.Context, backendName string)
 
 	results, err := svc.SearchMemories(ctx, h.memoryUserKey, "test")
 	if err != nil {
-		results = nil
+		return nil, fmt.Errorf("search memories: %w", err)
 	}
 	result[VerifyMemorySearch] = &MemorySnapshot{SearchResults: results}
 
@@ -557,7 +561,11 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 		return nil
 	}
 
-	for _, name := range h.Spec.Backends.Session {
+	// Pre-assign a unique, deterministic index
+	startIdx := h.lastEventIndex
+	h.lastEventIndex += len(params.Events)
+
+	for _, name := range h.ActiveSessionBackends {
 		svc := h.sessionServices[name]
 
 		var wg sync.WaitGroup
@@ -565,8 +573,9 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 
 		for i := range params.Events {
 			args := params.Events[i]
+			idx := startIdx + i
 			wg.Add(1)
-			go func(a appendEventArgs) {
+			go func(a appendEventArgs, eventIdx int) {
 				defer wg.Done()
 				sess, err := svc.GetSession(ctx, h.sessionKey)
 				if err != nil {
@@ -577,11 +586,11 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 					errCh <- fmt.Errorf("concurrent session not found on %q", name)
 					return
 				}
-				ev := h.buildConcurrentEvent(a)
+				ev := h.buildConcurrentEventAt(a, eventIdx)
 				if err := svc.AppendEvent(ctx, sess, ev); err != nil {
 					errCh <- fmt.Errorf("concurrent append on %q: %w", name, err)
 				}
-			}(args)
+			}(args, idx)
 		}
 
 		wg.Wait()
@@ -592,9 +601,16 @@ func (h *Harness) appendConcurrentEvents(ctx context.Context, raw json.RawMessag
 			return err
 		}
 	}
-
-	h.lastEventIndex += len(params.Events)
 	return nil
+}
+
+// buildConcurrentEventAt creates an event using the given stable index so that concurrent goroutines produce deterministic, non-colliding IDs.
+func (h *Harness) buildConcurrentEventAt(args appendEventArgs, idx int) *event.Event {
+	origIdx := h.lastEventIndex
+	h.lastEventIndex = idx
+	ev := h.buildConcurrentEvent(args)
+	h.lastEventIndex = origIdx
+	return ev
 }
 
 // buildConcurrentEvent creates an event from args for concurrent appends.

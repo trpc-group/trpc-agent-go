@@ -25,7 +25,7 @@
     { "op": "enqueue_summary", "backend": "session", "params": { "filterKey": "main", "force": true } }
   ],
   "verifies": [
-    { "what": "summary", "params": {} },
+    { "what": "summary", "expect": {"filter_keys": ["main", "dev"]} },
     { "what": "events", "params": {} }
   ],
   "allowed_diffs": [

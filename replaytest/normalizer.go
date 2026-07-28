@@ -30,6 +30,12 @@ type Normalizer interface {
 	NormalizeMemory(snap *MemorySnapshot) (*MemorySnapshot, error)
 }
 
+// Resetter is an optional interface for normalizers that carry per-snapshot state (e.g. ID counters).
+// NormalizerChain.Reset() calls Reset() on every normalizer that implements it.
+type Resetter interface {
+	Reset()
+}
+
 // NormalizerChain applies a sequence of normalizers in order.
 type NormalizerChain struct {
 	normalizers []Normalizer
@@ -71,19 +77,28 @@ func (c *NormalizerChain) Append(n Normalizer) {
 	c.normalizers = append(c.normalizers, n)
 }
 
+// Reset resets all stateful normalizers in the chain, ensuring that independent snapshots get their own deterministic placeholder sequences.
+func (c *NormalizerChain) Reset() {
+	for _, n := range c.normalizers {
+		if r, ok := n.(Resetter); ok {
+			r.Reset()
+		}
+	}
+}
+
 // --- DefaultNormalizerChain returns the standard normalization pipeline ---
 
 // DefaultNormalizerChain returns the standard chain of all built-in normalizers.
 func DefaultNormalizerChain() *NormalizerChain {
 	return NewNormalizerChain(
 		&backendMetadataStripper{},
+		&sliceOrderNormalizer{},
 		&idNormalizer{idMap: make(map[string]string), nextSeq: 0},
 		&timestampNormalizer{},
 		&jsonFieldOrderNormalizer{},
 		&floatSimilarityNormalizer{epsilon: 1e-4},
 		&nullEquivalentNormalizer{},
 		&versionFieldNormalizer{},
-		&sliceOrderNormalizer{},
 	)
 }
 
@@ -129,6 +144,12 @@ type idNormalizer struct {
 }
 
 func (n *idNormalizer) Name() string { return "id-normalizer" }
+
+// Reset clears the internal ID mapping so the normalizer can be reused across independent snapshots without cross-contamination.
+func (n *idNormalizer) Reset() {
+	n.idMap = make(map[string]string)
+	n.nextSeq = 0
+}
 
 func (n *idNormalizer) NormalizeSession(snap *SessionSnapshot) (*SessionSnapshot, error) {
 	if snap == nil || snap.Session == nil {
@@ -440,21 +461,28 @@ func (n *sliceOrderNormalizer) NormalizeMemory(snap *MemorySnapshot) (*MemorySna
 	if snap == nil {
 		return snap, nil
 	}
-	// Sort memories by ID for deterministic comparison.
-	sort.SliceStable(snap.Memories, func(i, j int) bool {
-		return snap.Memories[i].ID < snap.Memories[j].ID
-	})
-	sort.SliceStable(snap.SearchResults, func(i, j int) bool {
-		return snap.SearchResults[i].ID < snap.SearchResults[j].ID
-	})
+	// Sort by memory content for deterministic comparison across backends.
+	// IDs differ per backend, so sorting by ID before idNormalizer runs would not produce stable ordering.
+	sortMemories := func(entries []*memory.Entry) {
+		sort.SliceStable(entries, func(i, j int) bool {
+			mi, mj := entries[i].Memory, entries[j].Memory
+			if mi != nil && mj != nil {
+				if mi.Memory != mj.Memory {
+					return mi.Memory < mj.Memory
+				}
+			}
+			return entries[i].ID < entries[j].ID
+		})
+	}
+	sortMemories(snap.Memories)
+	sortMemories(snap.SearchResults)
 	return snap, nil
 }
 
 // --- 9. ConcurrentEventSorter ---
 
-// concurrentEventSorter sorts events by a stable composite key to provide
-// order-independent comparison for concurrent write scenarios. It is only
-// added to the normalizer chain when a spec has the "concurrent" tag.
+// concurrentEventSorter sorts events by a stable composite key to provide order-independent comparison for concurrent write scenarios.
+// It is only added to the normalizer chain when a spec has the "concurrent" tag.
 type concurrentEventSorter struct{}
 
 func (n *concurrentEventSorter) Name() string { return "concurrent-event-sorter" }

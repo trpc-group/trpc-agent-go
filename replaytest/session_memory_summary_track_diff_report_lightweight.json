@@ -1,0 +1,537 @@
+{
+  "reports": [
+    {
+      "spec_name": "concurrent_writes",
+      "started_at": "2026-07-28T03:08:45.1848253Z",
+      "completed_at": "2026-07-28T03:08:45.197928Z",
+      "duration_ms": 13,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-concurrent-1"
+          }
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-concurrent-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "error_recovery",
+      "started_at": "2026-07-28T03:08:45.197928Z",
+      "completed_at": "2026-07-28T03:08:45.2254807Z",
+      "duration_ms": 27,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 3,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          }
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          }
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-error-1"
+          },
+          "memory_id": "\u003cmem-id-0\u003e"
+        }
+      ],
+      "summary": "All 3 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "memory_writes",
+      "started_at": "2026-07-28T03:08:45.2260052Z",
+      "completed_at": "2026-07-28T03:08:45.2301929Z",
+      "duration_ms": 4,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-mem-1"
+          },
+          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e, \u003cmem-id-3\u003e"
+        },
+        {
+          "what": "memory_search",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-mem-1"
+          },
+          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e, \u003cmem-id-3\u003e"
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "multi_turn",
+      "started_at": "2026-07-28T03:08:45.2307103Z",
+      "completed_at": "2026-07-28T03:08:45.2380995Z",
+      "duration_ms": 7,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 1,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-multi-turn-1"
+          }
+        }
+      ],
+      "summary": "All 1 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "out_of_order",
+      "started_at": "2026-07-28T03:08:45.2386282Z",
+      "completed_at": "2026-07-28T03:08:45.2439149Z",
+      "duration_ms": 5,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-order-1"
+          }
+        },
+        {
+          "what": "memories",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-order-1"
+          },
+          "memory_id": "\u003cmem-id-0\u003e, \u003cmem-id-1\u003e, \u003cmem-id-2\u003e"
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "single_turn",
+      "started_at": "2026-07-28T03:08:45.2439149Z",
+      "completed_at": "2026-07-28T03:08:45.2487064Z",
+      "duration_ms": 4,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-single-turn-1"
+          }
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-single-turn-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "state_updates",
+      "started_at": "2026-07-28T03:08:45.2487064Z",
+      "completed_at": "2026-07-28T03:08:45.2512916Z",
+      "duration_ms": 2,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-state-1"
+          }
+        },
+        {
+          "what": "session_full",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-state-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "summary_generation",
+      "started_at": "2026-07-28T03:08:45.2518054Z",
+      "completed_at": "2026-07-28T03:08:45.2607144Z",
+      "duration_ms": 8,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-summary-1"
+          },
+          "summary_filter_key": ", dev, main"
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-summary-1"
+          },
+          "summary_filter_key": ", dev, main"
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "summary_truncation",
+      "started_at": "2026-07-28T03:08:45.2607144Z",
+      "completed_at": "2026-07-28T03:08:45.2714732Z",
+      "duration_ms": 10,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 3,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "summary",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_key": "main"
+        },
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_key": "main"
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-trunc-1"
+          },
+          "summary_filter_key": "main"
+        }
+      ],
+      "summary": "All 3 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "tool_calls",
+      "started_at": "2026-07-28T03:08:45.2714732Z",
+      "completed_at": "2026-07-28T03:08:45.2765753Z",
+      "duration_ms": 5,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 2,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "events",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-tool-calls-1"
+          }
+        },
+        {
+          "what": "state",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-tool-calls-1"
+          }
+        }
+      ],
+      "summary": "All 2 verifications passed across 2 session + 2 memory backends."
+    },
+    {
+      "spec_name": "track_events",
+      "started_at": "2026-07-28T03:08:45.277128Z",
+      "completed_at": "2026-07-28T03:08:45.2819196Z",
+      "duration_ms": 4,
+      "backends_tested": {
+        "session": [
+          "inmemory",
+          "sqlite"
+        ],
+        "memory": [
+          "inmemory",
+          "sqlite"
+        ]
+      },
+      "pass_count": 1,
+      "fail_count": 0,
+      "skip_count": 0,
+      "diff_count": 0,
+      "verifications": [
+        {
+          "what": "tracks",
+          "reference_backend": "inmemory",
+          "compared_backend": "sqlite",
+          "status": "pass",
+          "diffs": null,
+          "session_key": {
+            "AppName": "test-app",
+            "UserID": "user1",
+            "SessionID": "sess-track-1"
+          },
+          "track_name": "error_log, sub_task, tool_execution"
+        }
+      ],
+      "summary": "All 1 verifications passed across 2 session + 2 memory backends."
+    }
+  ],
+  "summary": {
+    "total_specs": 11,
+    "total_passed": 11,
+    "total_failed": 0,
+    "total_diffs": 0
+  }
+}
