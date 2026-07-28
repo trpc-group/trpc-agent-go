@@ -75,6 +75,10 @@ type Options struct {
 	Inputs *resolvedInputs
 	// DataDir holds the evalset, metric, and prompt source files.
 	DataDir string
+	// ConfigPath is the configuration file this run was loaded from. It is
+	// only used to render the promotion command in the report; empty falls
+	// back to the binary's own default resolution.
+	ConfigPath string
 	// OutputDir receives reports, audit files, and the candidate prompt.
 	OutputDir string
 	// Mode selects fake or real model sourcing.
@@ -612,7 +616,9 @@ func publishFiles(files []stagedFile) error {
 // gate. The instruction text additionally lands in candidate_prompt.txt. The
 // engine normalizes away no-op overrides, so an accepted profile whose patches
 // only touched non-instruction surfaces legitimately carries no instruction
-// text: that keeps the baseline prompt in force. Write-back stages the same
+// text: that keeps the baseline prompt in force, and the stable prompt artifact
+// is staged for removal so an earlier acceptance's prompt cannot outlive the
+// run that stopped changing the instruction. Write-back stages the same
 // effective profile as the next run's baseline: the instruction text over the
 // prompt source, and the merged profile into baseline_profile.json beside it,
 // keeping consecutive write-backs lossless.
@@ -649,13 +655,22 @@ func stageCandidateArtifacts(opts Options, inputs *resolvedInputs, result *Resul
 		path:    result.CandidateProfilePath,
 		content: profileFileContent,
 	}}
+	promptPath := filepath.Join(opts.OutputDir, candidatePromptFileName)
 	if promptText != "" {
 		result.CandidatePrompt = promptText
-		result.CandidatePromptPath = filepath.Join(opts.OutputDir, candidatePromptFileName)
+		result.CandidatePromptPath = promptPath
 		staged = append(staged, stagedFile{
-			path:    result.CandidatePromptPath,
+			path:    promptPath,
 			content: []byte(promptText + "\n"),
 		})
+	} else {
+		// Tool-only acceptance: the effective profile keeps the baseline
+		// instruction, so this run publishes no prompt artifact. A
+		// candidate_prompt.txt left in the same output dir by an earlier
+		// instruction-changing acceptance would otherwise survive and let
+		// consumers of the stable prompt path deploy text the latest accepted
+		// run never evaluated. Clear it inside the same rollback unit.
+		staged = append(staged, stagedFile{path: promptPath, remove: true})
 	}
 	if opts.WriteBack {
 		if promptText != "" {

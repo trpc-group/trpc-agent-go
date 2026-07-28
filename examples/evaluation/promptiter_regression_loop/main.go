@@ -37,12 +37,13 @@ import (
 // Default real-mode model names, overridable through -model, -worker-model,
 // and -judge-model. Every role resolves against the single OpenAI-compatible
 // endpoint configured by OPENAI_BASE_URL / OPENAI_API_KEY, so that endpoint
-// must serve every configured model name. The defaults mix a DeepSeek
-// candidate with GPT workers and therefore assume a gateway exposing both
-// families; when your endpoint serves a single provider, override the flags
-// with model names from that provider (e.g. -model gpt-5.2).
+// must serve every configured model name. The defaults therefore name one
+// family that the default endpoint (api.openai.com, used when OPENAI_BASE_URL
+// is unset) serves, so a plain -mode real run works without further flags;
+// point the flags at your own model names when the endpoint serves another
+// provider (e.g. -model deepseek-v3.2 against a DeepSeek-capable gateway).
 const (
-	defaultRealCandidateModel = "deepseek-v3.2"
+	defaultRealCandidateModel = "gpt-5.2"
 	defaultRealWorkerModel    = "gpt-5.2"
 	defaultRealJudgeModel     = "gpt-5.2"
 )
@@ -53,6 +54,9 @@ var (
 	configPath = flag.String("config", "", "Pipeline configuration file (default <data-dir>/promptiter-regression-app/promptiter.json)")
 	mode       = flag.String("mode", "fake", "Model sourcing mode: fake (deterministic, no API key) or real (OPENAI_API_KEY)")
 	writeBack  = flag.Bool("write-back", false, "Overwrite the baseline prompt source on acceptance instead of only emitting output/candidate_prompt.txt")
+	promote    = flag.Bool("promote", false,
+		"Promote the accepted candidate artifacts in -output-dir into the baseline prompt source and baseline_profile.json, then exit; "+
+			"both artifacts are validated and published atomically")
 
 	candidateModelName = flag.String("model", defaultRealCandidateModel,
 		"Real-mode model for the candidate agent; must be served by the OPENAI_BASE_URL endpoint")
@@ -71,10 +75,6 @@ func main() {
 }
 
 func run(ctx context.Context, logger *log.Logger) error {
-	pipelineMode, err := parseMode(*mode)
-	if err != nil {
-		return err
-	}
 	// The config file lives inside the data dir by default so that -data-dir
 	// alone relocates every input, including the prompt source and write-back
 	// target resolved relative to the config file.
@@ -83,6 +83,18 @@ func run(ctx context.Context, logger *log.Logger) error {
 		path = filepath.Join(*dataDir, "promptiter-regression-app", "promptiter.json")
 	}
 	config, err := LoadConfig(path)
+	if err != nil {
+		return err
+	}
+	// Promotion is a standalone action over an earlier run's artifacts: it
+	// needs no model, and therefore no mode or credentials.
+	if *promote {
+		if *writeBack {
+			return errors.New("-promote installs the artifacts of an earlier run and cannot be combined with -write-back")
+		}
+		return runPromote(config, logger)
+	}
+	pipelineMode, err := parseMode(*mode)
 	if err != nil {
 		return err
 	}
@@ -100,6 +112,7 @@ func run(ctx context.Context, logger *log.Logger) error {
 	defer closeComponents()
 	result, err := runPipeline(ctx, Options{
 		Config:     config,
+		ConfigPath: path,
 		Inputs:     inputs,
 		OutputDir:  *outputDir,
 		DataDir:    *dataDir,
@@ -113,6 +126,23 @@ func run(ctx context.Context, logger *log.Logger) error {
 		return err
 	}
 	logger.Printf("pipeline finished: status=%s %s", result.Status, result.Message)
+	return nil
+}
+
+// runPromote installs the accepted candidate artifacts as the new baseline.
+func runPromote(config *Config, logger *log.Logger) error {
+	promotion, err := promoteCandidate(config, *outputDir)
+	if err != nil {
+		return err
+	}
+	if promotion.PromptPromoted {
+		logger.Printf("promoted candidate prompt to %s and effective profile to %s",
+			promotion.PromptSourcePath, promotion.BaselineProfilePath)
+		return nil
+	}
+	logger.Printf("promoted effective profile to %s; baseline prompt %s is unchanged "+
+		"(the accepted candidate touched no instruction surface)",
+		promotion.BaselineProfilePath, promotion.PromptSourcePath)
 	return nil
 }
 

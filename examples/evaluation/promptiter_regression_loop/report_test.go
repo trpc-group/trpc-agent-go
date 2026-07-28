@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -216,11 +217,12 @@ func TestReportMarkdownAcceptPath(t *testing.T) {
 	assert.Contains(t, markdown, "| min_validation_score_gain |")
 	assert.Contains(t, markdown, "canary")
 	assert.Contains(t, markdown, "evalset/recorder")
-	// The promotion step installs both accepted artifacts, not the prompt
-	// alone: prompt into the prompt source, effective profile into the
-	// adjacent baseline_profile.json.
-	assert.Contains(t, markdown, "cp output/candidate_prompt.txt baseline_prompt.txt")
-	assert.Contains(t, markdown, "cp output/candidate_profile.json baseline_profile.json")
+	// The promotion step installs both accepted artifacts through one
+	// failure-atomic command, not two chained copies.
+	assert.Contains(t, markdown, "go run . -promote")
+	assert.Contains(t, markdown, "baseline_prompt.txt")
+	assert.Contains(t, markdown, "baseline_profile.json")
+	assert.NotContains(t, markdown, "cp output/candidate_prompt.txt")
 	assert.Contains(t, markdown, "优化后的指令")
 	// Train delta section renders when known.
 	assert.Contains(t, markdown, "逐 case delta（train）")
@@ -231,29 +233,72 @@ func TestReportMarkdownAcceptPath(t *testing.T) {
 }
 
 // TestWriteBackStepPromotesFullProfile locks the promotion contract: the
-// recommended command installs the effective profile alongside the prompt (a
-// prompt-only copy would drop accepted non-instruction overrides), a
-// tool-only acceptance (no instruction text, CandidatePromptPath empty)
-// promotes just the profile, and the write-back notice names both targets.
+// recommended step is the single failure-atomic promotion command (two chained
+// copies could leave the prompt updated against an old profile) and it names
+// both baseline targets; a tool-only acceptance (no instruction text,
+// CandidatePromptPath empty) promotes just the profile; and the write-back
+// notice names both targets.
 func TestWriteBackStepPromotesFullProfile(t *testing.T) {
 	opts, result := reportFixture(t, true)
+	opts.ConfigPath = filepath.Join("data", "promptiter-regression-app", "promptiter.json")
 
 	both := writeBackStep(opts, result)
-	assert.Contains(t, both, "cp output/candidate_prompt.txt baseline_prompt.txt")
-	assert.Contains(t, both, "cp output/candidate_profile.json baseline_profile.json")
+	assert.Contains(t, both, "go run . -promote")
+	assert.Contains(t, both, "-config "+opts.ConfigPath)
+	assert.Contains(t, both, "baseline_prompt.txt")
+	assert.Contains(t, both, "baseline_profile.json")
+	// No chained shell copies: a failure on the second would leave a baseline
+	// combination that never passed the gate.
+	assert.NotContains(t, both, "cp ")
+	assert.NotContains(t, both, "&&")
 
 	toolOnly := *result
 	toolOnly.CandidatePrompt = ""
 	toolOnly.CandidatePromptPath = ""
 	step := writeBackStep(opts, &toolOnly)
-	assert.Contains(t, step, "cp output/candidate_profile.json baseline_profile.json")
-	assert.NotContains(t, step, "candidate_prompt.txt")
+	assert.Contains(t, step, "go run . -promote")
+	assert.Contains(t, step, "baseline_profile.json")
 	assert.Contains(t, step, "prompt 保持 baseline")
 
 	opts.WriteBack = true
 	written := writeBackStep(opts, result)
 	assert.Contains(t, written, "baseline_prompt.txt")
 	assert.Contains(t, written, "baseline_profile.json")
+	assert.NotContains(t, written, "-promote")
+}
+
+// TestPromoteCommandQuotesHostilePaths locks the shell safety of the generated
+// promotion command: a configured path containing whitespace stays one
+// argument, and shell metacharacters inside it are never left interpretable.
+func TestPromoteCommandQuotesHostilePaths(t *testing.T) {
+	opts, result := reportFixture(t, true)
+	opts.ConfigPath = "/tmp/my configs/$(whoami);rm -rf ~/promptiter.json"
+	opts.OutputDir = "/tmp/out dir/`id`"
+
+	step := writeBackStep(opts, result)
+	assert.Contains(t, step, `-config '/tmp/my configs/$(whoami);rm -rf ~/promptiter.json'`)
+	assert.Contains(t, step, "-output-dir '/tmp/out dir/")
+	// Every metacharacter stays inside single quotes: nothing between the
+	// flag and the closing quote can start a new command or expansion.
+	assert.NotContains(t, step, "-config /tmp/my")
+	assert.NotContains(t, step, "-output-dir /tmp/out")
+
+	// A single quote in a path cannot break out of the quoting either.
+	opts.OutputDir = "/tmp/out'; rm -rf /"
+	assert.Contains(t, writeBackStep(opts, result), `-output-dir '/tmp/out'\''; rm -rf /'`)
+}
+
+// TestMarkdownCodeContainsBacktickRuns locks the code-span rendering used for
+// the promotion command: a value containing backticks cannot close the span
+// and inject Markdown, and its shell quoting survives verbatim.
+func TestMarkdownCodeContainsBacktickRuns(t *testing.T) {
+	assert.Equal(t, "`go run . -promote`", markdownCode("go run . -promote"))
+	assert.Equal(t, "``a `b` c``", markdownCode("a `b` c"))
+	assert.Equal(t, "`` ` ``", markdownCode("`"))
+	// The quoting of a hostile path is reproduced unescaped.
+	assert.Equal(t, `'/tmp/out'\''x'`, strings.Trim(markdownCode(shellQuote("/tmp/out'x")), "`"))
+	// Newlines would end the list item carrying the command.
+	assert.Equal(t, "`a b`", markdownCode("a\nb"))
 }
 
 // TestReportMarkdownRejectPath asserts the reject wording, overfitting call

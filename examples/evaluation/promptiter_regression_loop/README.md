@@ -20,6 +20,8 @@ directories:
 - `fake.go` — deterministic scripted model and PromptIter workers (no API key).
 - `config.go` — `promptiter.json` loading, defaulting, and validation.
 - `pipeline.go` — S1–S6 orchestration.
+- `promote.go` — the `-promote` action installing accepted artifacts as the
+  new baseline.
 - `evaluate.go` — case snapshots, metric locator, and cost tracking.
 - `attribution.go` — the failure attribution rule engine.
 - `gate.go` — per-case delta computation and the acceptance gate.
@@ -54,9 +56,11 @@ Finishes in well under a second and produces:
   acceptance), not just this run's patches. The reports and the candidate
   artifacts are published as **one transaction**: a rejecting run removes any
   stale accepted candidate in the same unit that writes its rejection report,
-  and a failure anywhere in the publication rolls everything back, so the
-  stable paths never show reports that disagree with the candidate state
-  next to them.
+  an acceptance that changes no instruction (only e.g. a tool description)
+  removes the prompt artifact of an earlier acceptance in the same output dir
+  instead of leaving unevaluated text on the stable prompt path, and a failure
+  anywhere in the publication rolls everything back, so the stable paths never
+  show reports that disagree with the candidate state next to them.
 - With `-write-back`, acceptance also updates the on-disk baseline:
   `baseline_prompt.txt` receives the instruction text, and
   `baseline_profile.json` (next to it) receives the **merged effective
@@ -65,6 +69,20 @@ Finishes in well under a second and produces:
   the improved tool description. The next run reloads this profile as its
   baseline: the instruction still comes from `baseline_prompt.txt`, and tool
   descriptions are restored into the agent.
+- Without `-write-back`, the accepted artifacts are promoted later, after
+  review, by the same binary:
+
+  ```bash
+  go run . -promote -config ./data/promptiter-regression-app/promptiter.json -output-dir ./output
+  ```
+
+  This is what the report recommends. It validates that
+  `candidate_prompt.txt` and `candidate_profile.json` agree on the
+  instruction, then installs both in one rollback unit. Two chained `cp`
+  commands would not be failure-atomic: a failure on the second leaves
+  `baseline_prompt.txt` updated against an old `baseline_profile.json` — a
+  baseline combination that never passed the gate. Paths reach the command as
+  flag arguments, so whitespace and shell metacharacters in them are inert.
 - `output/audit/<runID>/` — run meta (seed, mode, config snapshot), every
   engine event per round, per-round cost/latency, attributions, candidates,
   and the gate decision, isolated per execution so reruns never mix audit
@@ -79,20 +97,24 @@ business outcome; only pipeline execution errors exit non-zero.
 ```bash
 export OPENAI_API_KEY="..."
 export OPENAI_BASE_URL="..."   # optional, defaults to the OpenAI endpoint
-go run . -mode real \
-  -model deepseek-v3.2 \
-  -worker-model gpt-5.2 \
-  -judge-model gpt-5.2
+go run . -mode real            # every role defaults to gpt-5.2
 ```
 
 Real mode assembles OpenAI-compatible models for the candidate (`-model`),
 the PromptIter workers (`-worker-model`, backwarder/aggregator/optimizer),
 and the judge used by `llmJudge` metrics (`-judge-model`). **All roles
 resolve against the single `OPENAI_BASE_URL` endpoint, so that endpoint must
-serve every configured model name.** The defaults mix a DeepSeek candidate
-with GPT workers and therefore assume an OpenAI-compatible gateway exposing
-both families; when your endpoint serves a single provider, point every flag
-at model names from that provider (e.g. `-model gpt-5.2`).
+serve every configured model name.** All three default to `gpt-5.2`, which
+the default endpoint (`api.openai.com`, used when `OPENAI_BASE_URL` is unset)
+serves, so the command above runs as written. Point the flags at your own
+model names when the endpoint serves another provider:
+
+```bash
+go run . -mode real \
+  -model deepseek-v3.2 \
+  -worker-model deepseek-v3.2 \
+  -judge-model deepseek-v3.2
+```
 
 To add an LLM-judged metric, append to `metrics.json`:
 
@@ -222,8 +244,9 @@ Covers the four required domains plus the end-to-end paths: gate rules and
 candidate selection (`gate_test.go`), per-case delta classification
 (`gate_test.go`), attribution — six categories, causal folding, hint
 overrides (`attribution_test.go`), report generation for both verdicts
-(`report_test.go`), and both end-to-end gate outcomes over the shipped data
-(`pipeline_test.go`).
+(`report_test.go`), promotion — including its failure atomicity and paths
+containing whitespace or shell metacharacters (`promote_test.go`), and both
+end-to-end gate outcomes over the shipped data (`pipeline_test.go`).
 
 ## 方案设计说明
 
@@ -259,6 +282,9 @@ override 注入引擎；引擎每轮事件由 Observer 流式落盘。
 明细，报告中的外部数据（case ID、理由、模型证据、候选 prompt）经 Markdown
 转义与动态围栏渲染，防止模型输出注入报告结构。报告与可部署候选产物（含
 回写基线）在同一发布单元内原子生效：接受即一并写入，拒绝即一并清除历史
-候选，任一步失败整体回滚，稳定路径上不会出现报告与候选状态不一致的中间
-态。fake 模式下评测分数、归因与 gate 决策完全确定：同输入必得同结论；
+候选，仅接受非指令 override 时同样清除历史 prompt 产物，任一步失败整体
+回滚，稳定路径上不会出现报告与候选状态不一致的中间态。人工晋升同样由
+`-promote` 子命令完成：先校验 prompt 与 effective profile 一致，再在一个
+回滚单元内回写基线，避免"prompt 已更新、profile 仍是旧版"这种从未过闸的
+基线组合；路径以参数传入，不经 shell 拼接。fake 模式下评测分数、归因与 gate 决策完全确定：同输入必得同结论；
 runId、时间戳、耗时等审计字段随每次运行变化。

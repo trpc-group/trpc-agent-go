@@ -26,6 +26,7 @@ import (
 	evalsetlocal "trpc.group/trpc-go/trpc-agent-go/evaluation/evalset/local"
 	"trpc.group/trpc-go/trpc-agent-go/evaluation/metric"
 	metriclocal "trpc.group/trpc-go/trpc-agent-go/evaluation/metric/local"
+	"trpc.group/trpc-go/trpc-agent-go/evaluation/workflow/promptiter"
 	"trpc.group/trpc-go/trpc-agent-go/runner"
 )
 
@@ -59,7 +60,14 @@ func loadExampleInputs(t *testing.T) (*Config, *resolvedInputs) {
 // still declares Go 1.21.
 func copyTestData(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	return copyTestDataInto(t, t.TempDir())
+}
+
+// copyTestDataInto clones the committed data dir into an explicit directory,
+// letting a test choose a path whose name exercises quoting.
+func copyTestDataInto(t *testing.T, dir string) string {
+	t.Helper()
+	require.NoError(t, os.MkdirAll(dir, 0o755))
 	source := os.DirFS(testDataDir)
 	require.NoError(t, fs.WalkDir(source, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -436,6 +444,74 @@ func TestConsecutiveWriteBacksKeepToolOverride(t *testing.T) {
 	_, reloaded := loadInputsAt(t, dataDir)
 	assert.Equal(t, improved, reloaded.baselineToolDescriptions[ToolQueryOrder])
 	assert.Contains(t, reloaded.baselinePrompt, OptimizedMarker)
+}
+
+// TestToolOnlyAcceptanceClearsStalePromptArtifact locks the stable prompt
+// path against a stale artifact: an instruction-changing acceptance publishes
+// candidate_prompt.txt, and a later tool-only acceptance into the same output
+// dir keeps the baseline instruction in force, so that prompt file must go —
+// otherwise consumers of the stable path deploy text the latest accepted run
+// never evaluated.
+func TestToolOnlyAcceptanceClearsStalePromptArtifact(t *testing.T) {
+	dataDir := copyTestData(t)
+	outputDir := t.TempDir()
+	promptPath := filepath.Join(outputDir, "candidate_prompt.txt")
+	relax := func(config *Config) {
+		config.Gate.ProtectedCases = nil
+		config.Gate.MaxRegressedCases = 1
+		config.Gate.MaxNewHardFails = 1
+	}
+
+	// First run: instruction-only optimization, accepted and written back, so
+	// the output dir holds a candidate prompt and the baseline carries the
+	// marker instruction.
+	config, inputs := loadInputsAt(t, dataDir)
+	relax(config)
+	config.TargetSurfaces = []TargetSurface{{Node: "candidate", Type: "instruction"}}
+	inputs, err := resolveInputs(dataDir, config)
+	require.NoError(t, err)
+	first := runExamplePipeline(t, config, inputs, dataDir, outputDir, true)
+	require.Equal(t, StatusAccepted, first.Status)
+	require.FileExists(t, promptPath)
+	stalePrompt, err := os.ReadFile(promptPath)
+	require.NoError(t, err)
+	require.Contains(t, string(stalePrompt), OptimizedMarker)
+
+	// Second run over the written-back baseline, optimizing the tool surface
+	// only — the shape a round takes when the instruction collects no gradient.
+	// The initial instruction override then equals the agent's instruction and
+	// the engine normalizes it away, so the accepted profile carries only the
+	// tool override and the baseline prompt stays in force.
+	config, inputs = loadInputsAt(t, dataDir)
+	relax(config)
+	zeroGain := 0.0
+	config.Engine.MinScoreGain = &zeroGain
+	config.Gate.MinValidationScoreGain = 0
+	toolSurfaceID, err := TargetSurface{Node: "candidate", Type: "tool", Name: ToolQueryOrder}.ID()
+	require.NoError(t, err)
+	require.Contains(t, inputs.targetSurfaceIDs, toolSurfaceID)
+	inputs.targetSurfaceIDs = []string{toolSurfaceID}
+	second := runExamplePipeline(t, config, inputs, dataDir, outputDir, false)
+	require.Equal(t, StatusAccepted, second.Status)
+	require.Empty(t, second.CandidatePromptPath,
+		"the accepted profile must carry no instruction override for this scenario")
+
+	assert.NoFileExists(t, promptPath,
+		"a tool-only acceptance must clear the prompt artifact of the earlier acceptance")
+	profileContent, err := os.ReadFile(filepath.Join(outputDir, "candidate_profile.json"))
+	require.NoError(t, err)
+	assert.Contains(t, string(profileContent), ImprovedToolDescriptions[ToolQueryOrder],
+		"the tool-only acceptance still publishes its effective profile")
+	publishedProfile := &promptiter.Profile{}
+	require.NoError(t, json.Unmarshal(profileContent, publishedProfile))
+	instruction := ""
+	for _, override := range publishedProfile.Overrides {
+		if override.SurfaceID == "candidate#instruction" && override.Value.Text != nil {
+			instruction = *override.Value.Text
+		}
+	}
+	assert.Equal(t, inputs.baselinePrompt, instruction,
+		"the effective profile keeps the baseline instruction in force")
 }
 
 // TestResolveInputsRejectsUnknownProtectedCase locks the fail-closed rule: a

@@ -281,22 +281,95 @@ func writeBackStep(opts Options, result *Result) string {
 			markdownEscape(promptSourcePath), markdownEscape(baselineProfilePath),
 		)
 	}
-	profileCommand := fmt.Sprintf("cp %s %s",
-		markdownEscape(result.CandidateProfilePath), markdownEscape(baselineProfilePath))
+	// The promotion is a single command that validates both artifacts and
+	// publishes them in one rollback unit. Two chained shell copies would not
+	// be failure-atomic: a failure on the second leaves the prompt updated
+	// against an old profile, a baseline combination that never passed the
+	// gate. The paths reach the command as flag arguments, so whitespace or
+	// shell metacharacters in them cannot split or reinterpret it.
+	command := promoteCommand(opts)
 	if result.CandidatePromptPath == "" {
 		// The accepted profile touched no instruction surface: the baseline
-		// prompt stays in force and only the profile needs promotion.
+		// prompt stays in force and only the profile is promoted.
 		return fmt.Sprintf(
-			"确认后晋升候选（本次仅接受非指令 override，prompt 保持 baseline）：%s。",
-			profileCommand,
+			"确认后执行晋升命令（本次仅接受非指令 override，prompt 保持 baseline，只回写 %s）：%s。",
+			markdownEscape(baselineProfilePath), command,
 		)
 	}
-	promptCommand := fmt.Sprintf("cp %s %s",
-		markdownEscape(result.CandidatePromptPath), markdownEscape(promptSourcePath))
 	return fmt.Sprintf(
-		"确认后一并晋升候选 prompt 与 effective profile（只回写 prompt 会丢失非指令 override）：%s && %s。",
-		promptCommand, profileCommand,
+		"确认后执行晋升命令，一并晋升候选 prompt（→ %s）与 effective profile（→ %s）："+
+			"%s。该命令校验两个产物一致后原子回写，任一步失败整体回滚，不会留下 prompt 已更新而 profile 仍是旧版的基线。",
+		markdownEscape(promptSourcePath), markdownEscape(baselineProfilePath), command,
 	)
+}
+
+// promoteCommand renders the promotion command as a Markdown code span. The
+// config path is omitted when the caller did not record one: the binary then
+// resolves the same default it used for this run.
+func promoteCommand(opts Options) string {
+	arguments := []string{"go run .", "-promote"}
+	if opts.ConfigPath != "" {
+		arguments = append(arguments, "-config", shellQuote(opts.ConfigPath))
+	}
+	arguments = append(arguments, "-output-dir", shellQuote(opts.OutputDir))
+	return markdownCode(strings.Join(arguments, " "))
+}
+
+// shellQuote renders one path as a single POSIX shell argument. Paths come
+// from configuration, so whitespace must not split the promotion command into
+// two arguments and metacharacters must not be interpreted by the shell.
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if strings.IndexFunc(value, func(r rune) bool {
+		return !isShellSafeRune(r)
+	}) < 0 {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// isShellSafeRune reports whether a rune needs no shell quoting. The set is
+// deliberately narrow: anything outside it, including non-ASCII, gets quoted.
+func isShellSafeRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune("@%_+=:,./-", r)
+}
+
+// markdownCode renders a value as a Markdown code span. The fence is longer
+// than any backtick run inside the value, so the value can neither close the
+// span nor inject Markdown structure, and its content is reproduced verbatim —
+// unlike markdownEscape, which would corrupt the shell quoting of a generated
+// command. Newlines are the one exception: they would end the list item that
+// carries the command, so they collapse to spaces.
+func markdownCode(value string) string {
+	flattened := strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(value)
+	fence := strings.Repeat("`", maxBacktickRun(flattened)+1)
+	padding := ""
+	if strings.HasPrefix(flattened, "`") || strings.HasSuffix(flattened, "`") {
+		padding = " "
+	}
+	return fence + padding + flattened + padding + fence
+}
+
+// maxBacktickRun returns the length of the longest consecutive backtick run.
+func maxBacktickRun(value string) int {
+	longest, current := 0, 0
+	for _, r := range value {
+		if r != '`' {
+			current = 0
+			continue
+		}
+		current++
+		if current > longest {
+			longest = current
+		}
+	}
+	return longest
 }
 
 func formatStageDurations(durations map[string]time.Duration) map[string]string {
@@ -525,19 +598,7 @@ func RenderMarkdown(report *Report) (string, error) {
 		// backtick run inside the code, preventing model output from closing the
 		// fence and injecting arbitrary Markdown into the audit report.
 		"codeBlock": func(language, code string) string {
-			maxRun := 0
-			currentRun := 0
-			for _, r := range code {
-				if r == '`' {
-					currentRun++
-					if currentRun > maxRun {
-						maxRun = currentRun
-					}
-				} else {
-					currentRun = 0
-				}
-			}
-			fenceLen := maxRun + 1
+			fenceLen := maxBacktickRun(code) + 1
 			if fenceLen < 3 {
 				fenceLen = 3
 			}
