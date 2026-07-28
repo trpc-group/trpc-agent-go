@@ -86,10 +86,18 @@ func (w *AutoMemoryWorker) applyUpdatePolicy(
 	ops []*extractor.Operation,
 	existing []*memory.Entry,
 ) []*extractor.Operation {
-	if w.updatePolicy == extractor.UpdatePolicyAddOnly {
+	switch w.updatePolicy {
+	case extractor.UpdatePolicyConservative:
+		return w.reconcileOps(
+			ctx,
+			userKey,
+			historyPreservingOperations(ctx, userKey, ops),
+		)
+	case extractor.UpdatePolicyAddOnly:
 		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
+	default:
+		return w.reconcileOps(ctx, userKey, ops)
 	}
-	return w.reconcileOps(ctx, userKey, ops)
 }
 
 func (w *AutoMemoryWorker) applyAssistantResultPolicy(
@@ -101,12 +109,57 @@ func (w *AutoMemoryWorker) applyAssistantResultPolicy(
 	if len(ops) == 0 {
 		return nil
 	}
-	if w.updatePolicy == extractor.UpdatePolicyAddOnly {
+	switch w.updatePolicy {
+	case extractor.UpdatePolicyConservative:
+		ops = historyPreservingOperations(ctx, userKey, ops)
+		if len(ops) == 0 {
+			return nil
+		}
+	case extractor.UpdatePolicyAddOnly:
 		return w.applyAddOnlyPolicy(ctx, userKey, ops, existing)
 	}
 	return w.applyAssistantResultPreservingPolicy(
 		ctx, userKey, ops, existing,
 	)
+}
+
+func historyPreservingOperations(
+	ctx context.Context,
+	userKey memory.UserKey,
+	ops []*extractor.Operation,
+) []*extractor.Operation {
+	out := make([]*extractor.Operation, 0, len(ops))
+	for _, op := range ops {
+		if op == nil {
+			continue
+		}
+		switch op.Type {
+		case extractor.OperationAdd:
+			out = append(out, op)
+		case extractor.OperationUpdate:
+			out = append(out, asAddOperation(op))
+			logPolicyDecision(
+				ctx,
+				string(extractor.UpdatePolicyConservative),
+				userKey,
+				op,
+				nil,
+				"add",
+				"history-preserving policy",
+			)
+		default:
+			logPolicyDecision(
+				ctx,
+				string(extractor.UpdatePolicyConservative),
+				userKey,
+				op,
+				nil,
+				"no-op",
+				"history-preserving policy",
+			)
+		}
+	}
+	return out
 }
 
 func (w *AutoMemoryWorker) applyAssistantResultPreservingPolicy(

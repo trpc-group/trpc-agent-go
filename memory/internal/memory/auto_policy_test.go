@@ -49,7 +49,7 @@ func TestUpdatePolicyFromMetadata(t *testing.T) {
 	assert.Equal(t, extractor.UpdatePolicyReconcile, updatePolicyFromMetadata(nil))
 }
 
-func TestConservativePolicy_ReconcilesAddsAndPreservesExplicitForget(t *testing.T) {
+func TestConservativePolicy_ReconcilesAddsAndPreservesHistory(t *testing.T) {
 	stored := []*memory.Entry{{
 		ID: "job",
 		Memory: &memory.Memory{
@@ -72,14 +72,46 @@ func TestConservativePolicy_ReconcilesAddsAndPreservesExplicitForget(t *testing.
 				Memory: "Works at Acme as an engineer.",
 				Topics: []string{"work"},
 			},
+			{
+				Type:     extractor.OperationUpdate,
+				MemoryID: "job",
+				Memory:   "Now works at Globex as an engineer.",
+				Topics:   []string{"work"},
+			},
 			{Type: extractor.OperationDelete, MemoryID: "obsolete"},
 			{Type: extractor.OperationClear},
 		},
 		stored,
 	)
-	require.Len(t, out, 2)
-	assert.Equal(t, extractor.OperationDelete, out[0].Type)
-	assert.Equal(t, extractor.OperationClear, out[1].Type)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
+	assert.Equal(t, "Now works at Globex as an engineer.", out[0].Memory)
+}
+
+func TestConservativePolicy_FiltersDestructiveAssistantOperations(
+	t *testing.T,
+) {
+	worker := NewAutoMemoryWorker(AutoMemoryConfig{}, newMockOperator())
+	worker.updatePolicy = extractor.UpdatePolicyConservative
+
+	out := worker.applyAssistantResultPolicy(
+		context.Background(),
+		reconcileUserKey(),
+		[]*extractor.Operation{
+			{
+				Type:     extractor.OperationUpdate,
+				MemoryID: "old-result",
+				Memory:   "Assistant result: Updated recommendation.",
+			},
+			{Type: extractor.OperationDelete, MemoryID: "old-result"},
+			{Type: extractor.OperationClear},
+		},
+		nil,
+	)
+	require.Len(t, out, 1)
+	assert.Equal(t, extractor.OperationAdd, out[0].Type)
+	assert.Empty(t, out[0].MemoryID)
 }
 
 func TestUpdatePoliciesPreserveDistinctResult(t *testing.T) {
