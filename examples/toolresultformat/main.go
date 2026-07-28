@@ -31,11 +31,11 @@ const (
 	xmlLikeToolName = "bash_xml_like"
 	defaultToolName = "bash_default_json"
 
-	sampleCommand = `rg --json 'ResultFormatter' tool internal`
-	sampleArgs    = `{"command":"rg --json 'ResultFormatter' tool internal"}`
-	sampleOutput  = `{"type":"match","data":{"path":{"text":"tool/resultformat/formatter.go"},"lines":{"text":"type Formatter interface {\n"},"line_number":20}}
+	sampleCommand = `rg --json '^(type Formatter interface|func WithResultFormatter|func resultFormatterForTool)' tool internal`
+	sampleArgs    = `{"command":"` + sampleCommand + `"}`
+	sampleOutput  = `{"type":"match","data":{"path":{"text":"tool/resultformat/formatter.go"},"lines":{"text":"type Formatter interface {\n"},"line_number":22}}
 {"type":"match","data":{"path":{"text":"tool/function/function_tool.go"},"lines":{"text":"func WithResultFormatter(formatter resultformat.Formatter) Option {\n"},"line_number":122}}
-{"type":"match","data":{"path":{"text":"internal/flow/processor/functioncall.go"},"lines":{"text":"content, err := formatter.Format(ctx, result)\n"},"line_number":3661}}
+{"type":"match","data":{"path":{"text":"internal/flow/processor/functioncall.go"},"lines":{"text":"func resultFormatterForTool(tl tool.Tool) resultformat.Formatter {\n"},"line_number":2097}}
 {"type":"summary","data":{"elapsed_total":{"human":"0.004s"},"stats":{"searches":1,"searches_with_match":1,"bytes_searched":48291,"bytes_printed":615,"matched_lines":3,"matches":3}}}`
 )
 

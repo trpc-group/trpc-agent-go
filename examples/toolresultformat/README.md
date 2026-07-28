@@ -17,7 +17,7 @@ embedded quotes, backslashes, and line breaks, while the XML-like observation
 can keep that output as-is. The program prints the model-visible content and a
 model-agnostic estimate from `model.NewSimpleTokenCounter`; exact token counts
 depend on the model and tokenizer. For this sample, the simple counter estimates
-190 tokens for the XML-like content and 209 for the default JSON content.
+212 tokens for the XML-like content and 231 for the default JSON content.
 
 ## Run
 
@@ -29,15 +29,15 @@ go run ./toolresultformat
 ## Expected Output
 
 ```text
-bash_xml_like (estimated content tokens: 190):
+bash_xml_like (estimated content tokens: 212):
 <returncode>0</returncode>
 <output>
-$ rg --json 'ResultFormatter' tool internal
+$ rg --json '^(type Formatter interface|func WithResultFormatter|func resultFormatterForTool)' tool internal
 {"type":"match","data":{"path":{"text":"tool/resultformat/formatter.go"},...}}
 ...</output>
 
-bash_default_json (estimated content tokens: 209):
-{"returncode":0,"output":"$ rg --json 'ResultFormatter' tool internal\n{\"type\":\"match\",...}"}
+bash_default_json (estimated content tokens: 231):
+{"returncode":0,"output":"$ rg --json '^(type Formatter interface|func WithResultFormatter|func resultFormatterForTool)' tool internal\n{\"type\":\"match\",...}"}
 ```
 
 ## Key Configuration

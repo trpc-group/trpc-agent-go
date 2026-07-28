@@ -113,9 +113,9 @@ type toolEventStateDelta struct {
 	sessionBaseline session.StateMap
 	args            []byte
 	choice          model.Choice
-	// stateDeltaResultJSON is the JSON consumed by existing StateDelta
-	// providers. It is separate from model-visible formatted content.
-	stateDeltaResultJSON []byte
+	// stateDeltaInput is the final tool result encoded as JSON. It is separate
+	// from model-visible formatted content.
+	stateDeltaInput []byte
 }
 
 type resolvedToolContextKey struct{}
@@ -152,10 +152,13 @@ func (e *toolResultRoundError) Unwrap() error {
 	return e.cause
 }
 
-// toolCallResultData carries execution data that is not part of the
-// model-visible tool response.
-type toolCallResultData struct {
-	stateDeltaResultJSON []byte
+type toolCallExecution struct {
+	ctx               context.Context
+	choices           []model.Choice
+	modifiedArgs      []byte
+	stateDeltaInput   []byte
+	shouldIgnoreError bool
+	skipSummarization bool
 }
 
 // Default message used when transferring to a sub-agent without an explicit message.
@@ -1483,19 +1486,19 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		defer span.End()
 	}
 	startTime := time.Now()
-	var resultData toolCallResultData
-	ctx, choices, modifiedArgs, shouldIgnoreError, skipSummarization, err :=
-		p.executeToolCallWithResultData(
-			ctx,
-			invocation,
-			toolCall,
-			tools,
-			index,
-			eventChan,
-			&resultData,
-		)
+	execution, err := p.executeToolCall(
+		ctx,
+		invocation,
+		toolCall,
+		tools,
+		index,
+		eventChan,
+	)
+	ctx = execution.ctx
+	choices := execution.choices
+	modifiedArgs := execution.modifiedArgs
 	if err != nil {
-		if shouldIgnoreError {
+		if execution.shouldIgnoreError {
 			// Create error choice for ignorable errors
 			choice := p.createErrorChoice(index, toolCall.ID, err.Error())
 			choices = []model.Choice{*choice}
@@ -1513,7 +1516,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 		toolCall,
 		index,
 		modifiedArgs,
-		skipSummarization,
+		execution.skipSummarization,
 	)
 	if toolEvent == nil {
 		return toolResult{index: index, toolArgs: modifiedArgs}, nil
@@ -1532,7 +1535,7 @@ func (p *FunctionCallResponseProcessor) executeSingleToolCallSequentialResult(
 			invocation,
 			modifiedArgs,
 			choices,
-			resultData.stateDeltaResultJSON,
+			execution.stateDeltaInput,
 		)
 	}
 
@@ -1832,17 +1835,17 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 	}
 	startTime := time.Now()
 	// Execute the tool (streamable or callable) with callbacks.
-	var resultData toolCallResultData
-	ctx, choices, modifiedArgs, shouldIgnoreError, skipSummarization, err :=
-		p.executeToolCallWithResultData(
-			ctx,
-			invocation,
-			tc,
-			tools,
-			index,
-			eventChan,
-			&resultData,
-		)
+	execution, err := p.executeToolCall(
+		ctx,
+		invocation,
+		tc,
+		tools,
+		index,
+		eventChan,
+	)
+	ctx = execution.ctx
+	choices := execution.choices
+	modifiedArgs := execution.modifiedArgs
 	toolArgs = modifiedArgs
 	// Handle errors based on whether they are ignorable or critical.
 	if err != nil {
@@ -1867,12 +1870,12 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 			errorEvent,
 			tools,
 			tc,
-			skipSummarization,
+			execution.skipSummarization,
 			!shouldSkipToolSkipSummarization(ctx),
 		)
 		// Only propagate the error if it's not ignorable (e.g., stop errors)
 		var returnErr error
-		if !shouldIgnoreError {
+		if !execution.shouldIgnoreError {
 			returnErr = err
 		}
 		sendResult(toolResult{
@@ -1896,7 +1899,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		tc,
 		index,
 		modifiedArgs,
-		skipSummarization,
+		execution.skipSummarization,
 	)
 	if toolCallResponseEvent == nil {
 		sendResult(toolResult{
@@ -1935,7 +1938,7 @@ func (p *FunctionCallResponseProcessor) runParallelToolCall(
 		invocation,
 		modifiedArgs,
 		choices,
-		resultData.stateDeltaResultJSON,
+		execution.stateDeltaInput,
 	)
 	if startedSpan {
 		itelemetry.TraceToolCall(span, sess, decl, modifiedArgs, toolCallResponseEvent, err)
@@ -2110,30 +2113,30 @@ func toolProvidesStateDelta(tl tool.Tool) bool {
 	return ok
 }
 
-// marshalStateDeltaResultJSON serializes the final tool result for an existing
+// marshalStateDeltaInput serializes the final tool result for an existing
 // StateDelta provider. A custom formatter may support values that JSON cannot,
 // so both marshal errors and panics must fail the tool response explicitly.
-func marshalStateDeltaResultJSON(result any) (b []byte, err error) {
+func marshalStateDeltaInput(result any) (b []byte, err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("state delta result marshal panic: %v", r)
+			err = fmt.Errorf("marshal state delta input panic: %v", r)
 		}
 	}()
 	return marshalJSONNoHTMLEscape(result)
 }
 
-// attachStateDeltaWithResultJSON copies a tool-provided state delta using the
-// explicit JSON representation of the final tool result. Model-visible content
-// is never used as the state protocol.
-func (p *FunctionCallResponseProcessor) attachStateDeltaWithResultJSON(
+// attachStateDelta copies a tool-provided state delta using the final tool
+// result encoded as JSON. Model-visible content is never used as the state
+// protocol.
+func (p *FunctionCallResponseProcessor) attachStateDelta(
 	inv *agent.Invocation,
 	tl tool.Tool,
 	args []byte,
-	stateDeltaResultJSON []byte,
+	stateDeltaInput []byte,
 	choice *model.Choice,
 	ev *event.Event,
 ) {
-	if tl == nil || choice == nil || ev == nil || stateDeltaResultJSON == nil {
+	if tl == nil || choice == nil || ev == nil || stateDeltaInput == nil {
 		return
 	}
 	toolCallID := choice.Message.ToolID
@@ -2141,9 +2144,9 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaWithResultJSON(
 	var delta map[string][]byte
 	providerTool := itool.ResolveSemantic(tl)
 	if isdp, ok := providerTool.(invocationStateDeltaProvider); ok {
-		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, stateDeltaResultJSON)
+		delta = isdp.StateDeltaForInvocation(inv, toolCallID, args, stateDeltaInput)
 	} else if sdp, ok := providerTool.(stateDeltaProvider); ok {
-		delta = sdp.StateDelta(toolCallID, args, stateDeltaResultJSON)
+		delta = sdp.StateDelta(toolCallID, args, stateDeltaInput)
 	} else {
 		return
 	}
@@ -2175,12 +2178,12 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	invocation *agent.Invocation,
 	args []byte,
 	choices []model.Choice,
-	stateDeltaResultJSON []byte,
+	stateDeltaInput []byte,
 ) *toolEventStateDelta {
 	if len(choices) == 0 ||
 		hasSyntheticStateOnlyToolChoice(ctx) ||
 		shouldSkipToolStateDelta(ctx) ||
-		stateDeltaResultJSON == nil {
+		stateDeltaInput == nil {
 		return nil
 	}
 	tl, ok := resolvedToolFromContext(ctx)
@@ -2189,12 +2192,12 @@ func (p *FunctionCallResponseProcessor) buildToolEventStateDelta(
 	}
 	stateDeltaInv := newStateDeltaSnapshot(ctx, invocation)
 	return &toolEventStateDelta{
-		tool:                 tl,
-		invocation:           stateDeltaInv,
-		sessionBaseline:      stateDeltaSessionBaseline(ctx),
-		args:                 args,
-		choice:               choices[0],
-		stateDeltaResultJSON: stateDeltaResultJSON,
+		tool:            tl,
+		invocation:      stateDeltaInv,
+		sessionBaseline: stateDeltaSessionBaseline(ctx),
+		args:            args,
+		choice:          choices[0],
+		stateDeltaInput: stateDeltaInput,
 	}
 }
 
@@ -2399,11 +2402,11 @@ func (p *FunctionCallResponseProcessor) attachStateDeltaToToolResults(
 					priorStateDelta,
 				)
 			}
-			p.attachStateDeltaWithResultJSON(
+			p.attachStateDelta(
 				stateDeltaInv,
 				result.stateDelta.tool,
 				result.stateDelta.args,
-				result.stateDelta.stateDeltaResultJSON,
+				result.stateDelta.stateDeltaInput,
 				&result.stateDelta.choice,
 				result.event,
 			)
@@ -2561,7 +2564,7 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 	return mergedEvent
 }
 
-// executeToolCall executes a single tool call and returns the choice.
+// executeToolCall executes a single tool call.
 // Parameters:
 //   - ctx: context for cancellation and tracing
 //   - invocation: agent invocation context containing agent name, model info, etc.
@@ -2569,15 +2572,6 @@ func (p *FunctionCallResponseProcessor) buildMergedParallelEvent(
 //   - tools: map of available tools by name
 //   - index: index of this tool call in the batch (for error reporting)
 //   - eventChan: channel for emitting events during execution
-//
-// Returns:
-//   - context.Context: updated context from callbacks (if any)
-//   - []model.Choice: tool response choices (nil if no response is emitted)
-//   - []byte: the modified arguments after before-tool callbacks (for telemetry)
-//   - bool: shouldIgnoreError - true if the error is ignorable (e.g., tool not found, marshal error), false for critical errors (e.g., stop errors)
-//   - bool: skipSummarization - true if callbacks requested ending the turn
-//     after the tool response
-//   - error: any error that occurred during execution (no longer swallowed)
 func (p *FunctionCallResponseProcessor) executeToolCall(
 	ctx context.Context,
 	invocation *agent.Invocation,
@@ -2585,31 +2579,16 @@ func (p *FunctionCallResponseProcessor) executeToolCall(
 	tools map[string]tool.Tool,
 	index int,
 	eventChan chan<- *event.Event,
-) (context.Context, []model.Choice, []byte, bool, bool, error) {
-	return p.executeToolCallWithResultData(
-		ctx,
-		invocation,
-		toolCall,
-		tools,
-		index,
-		eventChan,
-		nil,
-	)
-}
-
-func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
-	ctx context.Context,
-	invocation *agent.Invocation,
-	toolCall model.ToolCall,
-	tools map[string]tool.Tool,
-	index int,
-	eventChan chan<- *event.Event,
-	resultData *toolCallResultData,
-) (context.Context, []model.Choice, []byte, bool, bool, error) {
+) (toolCallExecution, error) {
+	execution := toolCallExecution{
+		ctx:          ctx,
+		modifiedArgs: toolCall.Function.Arguments,
+	}
 	toolCall, tl, shouldIgnoreError, err := p.resolveToolCallTarget(ctx, invocation, toolCall, tools)
+	execution.modifiedArgs = toolCall.Function.Arguments
+	execution.shouldIgnoreError = shouldIgnoreError
 	if err != nil || tl == nil {
-		return ctx, nil, toolCall.Function.Arguments, shouldIgnoreError,
-			false, err
+		return execution, err
 	}
 
 	log.DebugfContext(
@@ -2629,33 +2608,41 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 		eventChan,
 	)
 	ctx = withResolvedToolContext(ctx, tl)
+	execution.ctx = ctx
+	execution.modifiedArgs = modifiedArgs
+	execution.skipSummarization = skipSummarization
 	// Only return error when it's a stop error
 	if err != nil {
 		if _, ok := agent.AsStopError(err); ok {
-			return ctx, nil, modifiedArgs, false, skipSummarization, err
+			execution.shouldIgnoreError = false
+			return execution, err
 		}
-		return ctx, nil, modifiedArgs, true, skipSummarization, err
+		execution.shouldIgnoreError = true
+		return execution, err
 	}
+	execution.shouldIgnoreError = true
 	//  allow to return nil not provide function response.
 	if r, ok := itool.ResolveDeclaration(tl).(function.LongRunner); ok && r.LongRunning() {
 		if result == nil {
-			return ctx, nil, modifiedArgs, true, skipSummarization, nil
+			return execution, nil
 		}
 	}
-	permissionResult := isPermissionResult(result)
-	var formatter resultformat.Formatter
 	// Permission and state-only results are framework protocol messages, not
 	// normal tool output. Keep their default JSON representation.
-	if !permissionResult && !suppressDefaultToolMessage {
+	var (
+		formatter            resultformat.Formatter
+		needsStateDeltaInput bool
+	)
+	if !isPermissionResult(result) && !suppressDefaultToolMessage {
 		formatter = resultFormatterForTool(tl)
+		needsStateDeltaInput = toolProvidesStateDelta(tl)
 	}
-	defaultMsg, stateDeltaResultJSON, err := buildDefaultToolMessageWithFormatter(
+	defaultMsg, stateDeltaInput, err := buildDefaultToolMessage(
 		ctx,
 		toolCall.ID,
 		result,
 		formatter,
-		!permissionResult && !suppressDefaultToolMessage &&
-			toolProvidesStateDelta(tl),
+		needsStateDeltaInput,
 	)
 	if err != nil {
 		log.WarnfContext(
@@ -2664,14 +2651,13 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 			toolCall.Function.Name,
 			err,
 		)
-		return ctx, nil, modifiedArgs, true, skipSummarization, err
+		return execution, err
 	}
 	defaultMsg.ToolName = toolCall.Function.Name
-	if resultData != nil {
-		resultData.stateDeltaResultJSON = stateDeltaResultJSON
-	}
+	execution.stateDeltaInput = stateDeltaInput
 	if suppressDefaultToolMessage {
 		ctx = markSyntheticStateOnlyToolChoice(ctx)
+		execution.ctx = ctx
 		choices, cbErr := p.buildToolResultChoices(
 			ctx,
 			toolCall,
@@ -2682,10 +2668,10 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 			defaultMsg,
 		)
 		if cbErr != nil {
-			return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
+			return execution, cbErr
 		}
-		return ctx, choices, modifiedArgs, true,
-			skipSummarization, nil
+		execution.choices = choices
+		return execution, nil
 	}
 
 	choices, cbErr := p.buildToolResultChoices(
@@ -2698,7 +2684,7 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 		defaultMsg,
 	)
 	if cbErr != nil {
-		return ctx, nil, modifiedArgs, true, skipSummarization, cbErr
+		return execution, cbErr
 	}
 
 	log.DebugfContext(
@@ -2708,7 +2694,8 @@ func (p *FunctionCallResponseProcessor) executeToolCallWithResultData(
 		defaultMsg.Content,
 	)
 
-	return ctx, choices, modifiedArgs, true, skipSummarization, nil
+	execution.choices = choices
+	return execution, nil
 }
 
 func (p *FunctionCallResponseProcessor) buildToolResultChoices(
@@ -3598,41 +3585,31 @@ func extractResultError(result any) bool {
 }
 
 func buildDefaultToolMessage(
-	toolCallID string,
-	result any,
-) (model.Message, error) {
-	// Preserve legacy tool message serialization for default fallback content.
-	// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
-	// code containing "<-done") are preserved verbatim instead of being escaped
-	// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
-	resultBytes, err := marshalJSONNoHTMLEscape(result)
-	if err != nil {
-		return model.Message{}, err
-	}
-	return model.Message{
-		Role:    model.RoleTool,
-		Content: string(resultBytes),
-		ToolID:  toolCallID,
-	}, nil
-}
-
-func buildDefaultToolMessageWithFormatter(
 	ctx context.Context,
 	toolCallID string,
 	result any,
 	formatter resultformat.Formatter,
-	needsStateDeltaResultJSON bool,
+	needsStateDeltaInput bool,
 ) (model.Message, []byte, error) {
 	if formatter == nil {
-		msg, err := buildDefaultToolMessage(toolCallID, result)
+		// Preserve legacy tool message serialization for default fallback content.
+		// Use marshalJSONNoHTMLEscape so that <, >, & in tool output (e.g. Go source
+		// code containing "<-done") are preserved verbatim instead of being escaped
+		// to \u003c, \u003e, \u0026 which confuses LLMs reading the content.
+		resultBytes, err := marshalJSONNoHTMLEscape(result)
 		if err != nil {
 			return model.Message{}, nil,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
 		}
-		if !needsStateDeltaResultJSON {
+		msg := model.Message{
+			Role:    model.RoleTool,
+			Content: string(resultBytes),
+			ToolID:  toolCallID,
+		}
+		if !needsStateDeltaInput {
 			return msg, nil, nil
 		}
-		return msg, []byte(msg.Content), nil
+		return msg, resultBytes, nil
 	}
 
 	content, err := formatToolResultWithRecover(ctx, formatter, result)
@@ -3640,9 +3617,9 @@ func buildDefaultToolMessageWithFormatter(
 		return model.Message{}, nil,
 			fmt.Errorf("%s: %w", ErrorFormatResult, err)
 	}
-	var stateDeltaResultJSON []byte
-	if needsStateDeltaResultJSON {
-		stateDeltaResultJSON, err = marshalStateDeltaResultJSON(result)
+	var stateDeltaInput []byte
+	if needsStateDeltaInput {
+		stateDeltaInput, err = marshalStateDeltaInput(result)
 		if err != nil {
 			return model.Message{}, nil,
 				fmt.Errorf("%s: %w", ErrorMarshalResult, err)
@@ -3652,7 +3629,7 @@ func buildDefaultToolMessageWithFormatter(
 		Role:    model.RoleTool,
 		Content: content,
 		ToolID:  toolCallID,
-	}, stateDeltaResultJSON, nil
+	}, stateDeltaInput, nil
 }
 
 // formatToolResultWithRecover converts formatter panics into flow errors so a

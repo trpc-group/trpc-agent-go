@@ -49,7 +49,7 @@ func executeResultFormatToolCall(
 			Arguments: []byte(`{}`),
 		},
 	}
-	_, choices, _, ignorable, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		context.Background(),
 		inv,
 		toolCall,
@@ -57,7 +57,7 @@ func executeResultFormatToolCall(
 		0,
 		make(chan *event.Event, 32),
 	)
-	return choices, ignorable, err
+	return execution.choices, execution.shouldIgnoreError, err
 }
 
 func requireResultFormatToolCall(
@@ -502,7 +502,7 @@ func TestExecuteToolCall_StreamableFormatsOnlyFinalResult(t *testing.T) {
 	}
 	eventChan := make(chan *event.Event, 32)
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		context.Background(),
 		inv,
 		toolCall,
@@ -512,8 +512,8 @@ func TestExecuteToolCall_StreamableFormatsOnlyFinalResult(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Len(t, choices, 1)
-	assert.Equal(t, "formatted:final", choices[0].Message.Content)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, "formatted:final", execution.choices[0].Message.Content)
 	assert.Equal(t, 1, formatterCalls)
 	close(eventChan)
 	var sawPartial bool
@@ -564,7 +564,7 @@ func TestExecuteToolCall_StateOnlyStreamSkipsResultFormatter(t *testing.T) {
 	}
 	eventChan := make(chan *event.Event, 8)
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		context.Background(),
 		inv,
 		toolCall,
@@ -574,11 +574,11 @@ func TestExecuteToolCall_StateOnlyStreamSkipsResultFormatter(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Len(t, choices, 1)
-	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
-	assert.Equal(t, "state_only", choices[0].Message.ToolName)
-	assert.Equal(t, "call-state", choices[0].Message.ToolID)
-	assert.Equal(t, "null", choices[0].Message.Content)
+	require.Len(t, execution.choices, 1)
+	assert.Equal(t, model.RoleTool, execution.choices[0].Message.Role)
+	assert.Equal(t, "state_only", execution.choices[0].Message.ToolName)
+	assert.Equal(t, "call-state", execution.choices[0].Message.ToolID)
+	assert.Equal(t, "null", execution.choices[0].Message.Content)
 	assert.Equal(t, "null", defaultMessage.Content)
 	assert.Equal(t, int32(1), toolCalls.Load())
 	assert.Zero(t, formatterCalls.Load())
@@ -1093,7 +1093,7 @@ func testStateDeltaProjectionFailure[O any](
 	assert.Nil(t, stateful.stateContent)
 }
 
-func TestExecuteToolCall_StateDeltaResultJSONFailureIsExplicit(t *testing.T) {
+func TestExecuteToolCall_StateDeltaInputMarshalFailureIsExplicit(t *testing.T) {
 	t.Run("marshal error", func(t *testing.T) {
 		testStateDeltaProjectionFailure(
 			t,

@@ -908,9 +908,10 @@ func TestExecuteToolCall_MapsSubAgentToTransfer(t *testing.T) {
 		},
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.NotNil(t, choices)
 	require.NotEmpty(t, choices)
@@ -981,7 +982,7 @@ func TestExecuteSingleToolCallSequential_AttachesMappedToolStateDelta(
 	require.Equal(t, []byte("1"), ev.StateDelta[mappedStateKey])
 }
 
-func TestFunctionCallResponseProcessor_AttachStateDeltaWithResultJSON(t *testing.T) {
+func TestFunctionCallResponseProcessor_AttachStateDelta(t *testing.T) {
 	const (
 		deltaKey1 = "k1"
 		deltaVal1 = "v1"
@@ -1009,7 +1010,7 @@ func TestFunctionCallResponseProcessor_AttachStateDeltaWithResultJSON(t *testing
 			deltaKey1: []byte(deltaVal1),
 		},
 	}
-	p.attachStateDeltaWithResultJSON(inv, tl, args, resultJSON, choice, ev)
+	p.attachStateDelta(inv, tl, args, resultJSON, choice, ev)
 	require.Equal(t, []byte(deltaVal1), ev.StateDelta[deltaKey1])
 
 	ev2 := &event.Event{}
@@ -1019,11 +1020,11 @@ func TestFunctionCallResponseProcessor_AttachStateDeltaWithResultJSON(t *testing
 			deltaKey2: []byte(deltaVal2),
 		},
 	}
-	p.attachStateDeltaWithResultJSON(inv, tl2, args, resultJSON, choice, ev2)
+	p.attachStateDelta(inv, tl2, args, resultJSON, choice, ev2)
 	require.Equal(t, []byte(deltaVal2), ev2.StateDelta[deltaKey2])
 
 	evWithoutResultJSON := &event.Event{}
-	p.attachStateDeltaWithResultJSON(inv, tl, args, nil, choice, evWithoutResultJSON)
+	p.attachStateDelta(inv, tl, args, nil, choice, evWithoutResultJSON)
 	require.Empty(t, evWithoutResultJSON.StateDelta)
 }
 
@@ -1823,9 +1824,9 @@ func TestAttachStateDeltaToToolResults_ReplaysPendingStateDeltas(
 					readKey:  readKey,
 					writeKey: writeKey,
 				},
-				args:                 []byte(`{}`),
-				choice:               choice,
-				stateDeltaResultJSON: []byte(choice.Message.Content),
+				args:            []byte(`{}`),
+				choice:          choice,
+				stateDeltaInput: []byte(choice.Message.Content),
 			},
 		},
 	}
@@ -2025,9 +2026,10 @@ func TestExecuteToolCall(t *testing.T) {
 		},
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
+	choices := execution.choices
 	res, _ := json.Marshal("Tokyo'weather is good")
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
@@ -2057,7 +2059,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultSkipsNullToolMessage(t *t
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -2065,6 +2067,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultSkipsNullToolMessage(t *t
 		0,
 		eventCh,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	require.Equal(t, model.RoleTool, choices[0].Message.Role)
@@ -2116,9 +2119,10 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Nil_NoOverride(t *testing.T)
 		},
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.True(t, called, "ToolResultMessages callback should be invoked")
 	require.Len(t, choices, 1)
@@ -2534,9 +2538,10 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithSingleMessage(t 
 		},
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 
@@ -2584,9 +2589,10 @@ func TestExecuteToolCall_ToolResultMessagesCallback_OverrideWithMultipleMessages
 		},
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.Len(t, choices, 2)
 
@@ -2627,12 +2633,12 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Error(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnore, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
 	require.Error(t, err)
-	require.True(t, shouldIgnore)
-	require.Nil(t, choices)
+	require.True(t, execution.shouldIgnoreError)
+	require.Nil(t, execution.choices)
 	assert.Contains(t, err.Error(), "tool callback error")
 }
 
@@ -2672,9 +2678,9 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Panic(t *testing.T) {
 
 	const panicErrStage = "tool result messages callback panic"
 	var err error
-	var shouldIgnore bool
+	var execution toolCallExecution
 	require.NotPanics(t, func() {
-		_, _, _, shouldIgnore, _, err = p.executeToolCall(
+		execution, err = p.executeToolCall(
 			ctx,
 			inv,
 			tc,
@@ -2684,7 +2690,7 @@ func TestExecuteToolCall_ToolResultMessagesCallback_Panic(t *testing.T) {
 		)
 	})
 	require.Error(t, err)
-	require.True(t, shouldIgnore)
+	require.True(t, execution.shouldIgnoreError)
 	assert.Contains(t, err.Error(), "tool callback error")
 	assert.Contains(t, err.Error(), panicErrStage)
 }
@@ -2719,17 +2725,17 @@ func TestExecuteToolCall_ToolResultMessagesCallback_UnsupportedReturnType(t *tes
 		},
 	}
 
-	_, choices, _, shouldIgnore, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
 	require.NoError(t, err)
-	require.True(t, shouldIgnore)
-	require.Len(t, choices, 1)
+	require.True(t, execution.shouldIgnoreError)
+	require.Len(t, execution.choices, 1)
 
 	wantBytes, err := json.Marshal(resultValue)
 	require.NoError(t, err)
-	assert.Equal(t, model.RoleTool, choices[0].Message.Role)
-	assert.Equal(t, string(wantBytes), choices[0].Message.Content)
+	assert.Equal(t, model.RoleTool, execution.choices[0].Message.Role)
+	assert.Equal(t, string(wantBytes), execution.choices[0].Message.Content)
 }
 
 func TestAfterToolMessagesHook_ReplacesToolResultMessages(t *testing.T) {
@@ -6189,12 +6195,12 @@ func TestExecuteToolCall_ToolNotFound_ReturnsErrorChoice(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc2, tools, 0, nil,
 	)
-	require.True(t, shouldIgnoreError)
+	require.True(t, execution.shouldIgnoreError)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
-	require.Nil(t, choices)
+	require.Nil(t, execution.choices)
 }
 
 func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
@@ -6213,12 +6219,12 @@ func TestExecuteToolCall_ToolNotFoundSuggestsSimilarTool(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, call, tools, 0, nil,
 	)
 
-	require.True(t, shouldIgnoreError)
-	require.Nil(t, choices)
+	require.True(t, execution.shouldIgnoreError)
+	require.Nil(t, execution.choices)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Contains(t, err.Error(), "alpha_too")
@@ -6240,12 +6246,12 @@ func TestExecuteToolCall_ToolNotFoundOmitsDistantSuggestions(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, call, tools, 0, nil,
 	)
 
-	require.True(t, shouldIgnoreError)
-	require.Nil(t, choices)
+	require.True(t, execution.shouldIgnoreError)
+	require.Nil(t, execution.choices)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Contains(t, err.Error(), "totally_missing")
@@ -6271,12 +6277,12 @@ func TestExecuteToolCall_ToolNameSuggestionsCanBeDisabled(t *testing.T) {
 		},
 	}
 
-	_, choices, _, shouldIgnoreError, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, call, tools, 0, nil,
 	)
 
-	require.True(t, shouldIgnoreError)
-	require.Nil(t, choices)
+	require.True(t, execution.shouldIgnoreError)
+	require.Nil(t, execution.choices)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), ErrorToolNotFound)
 	require.Contains(t, err.Error(), "alpha_too")
@@ -6550,12 +6556,12 @@ func TestExecuteToolCall_MarshalError_IsIgnorable(t *testing.T) {
 	tools := map[string]tool.Tool{
 		"bad": &badResultTool{dec: &tool.Declaration{Name: "bad"}},
 	}
-	_, choices, _, ignorable, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, pc, tools, 0, nil,
 	)
 	require.Error(t, err)
-	require.True(t, ignorable)
-	require.Nil(t, choices)
+	require.True(t, execution.shouldIgnoreError)
+	require.Nil(t, execution.choices)
 	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
@@ -7018,12 +7024,12 @@ func TestExecuteToolCall_MarshalErrorIgnored(t *testing.T) {
 			Arguments: []byte(`{}`),
 		},
 	}
-	_, choices, _, ign, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx, inv, tc, tools, 0, nil,
 	)
-	require.True(t, ign)
+	require.True(t, execution.shouldIgnoreError)
 	require.Error(t, err)
-	require.Nil(t, choices)
+	require.Nil(t, execution.choices)
 	require.Contains(t, err.Error(), ErrorMarshalResult)
 }
 
@@ -10071,7 +10077,7 @@ func TestExecuteToolCall_LocalAfterToolCustomResultProducesToolMessage(
 	}
 	tools := map[string]tool.Tool{"mcp_tool": tl}
 
-	_, choices, _, _, _, err := proc.executeToolCall(
+	execution, err := proc.executeToolCall(
 		context.Background(),
 		inv,
 		toolCall,
@@ -10079,6 +10085,7 @@ func TestExecuteToolCall_LocalAfterToolCustomResultProducesToolMessage(
 		0,
 		nil,
 	)
+	choices := execution.choices
 	// choices should not be nil; the custom result should appear as a
 	// RoleTool message.
 	require.NoError(t, err)
@@ -10534,7 +10541,7 @@ func TestExecuteToolCall_ToolPermissionResultSkipsToolResultMessagesCallback(
 		)),
 	}
 
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		context.Background(),
 		inv,
 		model.ToolCall{
@@ -10548,6 +10555,7 @@ func TestExecuteToolCall_ToolPermissionResultSkipsToolResultMessagesCallback(
 		0,
 		nil,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.False(t, calledTool)
 	require.False(t, calledResultMessages)
@@ -10785,7 +10793,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplaceme
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -10793,6 +10801,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultAfterToolContextReplaceme
 		0,
 		eventCh,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	require.Equal(t, model.RoleTool, choices[0].Message.Role)
@@ -10853,7 +10862,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultStillRunsToolResultMessag
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -10861,6 +10870,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultStillRunsToolResultMessag
 		0,
 		eventCh,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.True(t, called)
 	require.Equal(t, model.RoleTool, gotDefault.Role)
@@ -10901,7 +10911,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackError(t *testing.
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -10909,8 +10919,10 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackError(t *testing.
 		0,
 		eventCh,
 	)
+	choices := execution.choices
 	require.ErrorContains(t, err, "callback boom")
 	require.Nil(t, choices)
+	require.True(t, hasSyntheticStateOnlyToolChoice(execution.ctx))
 }
 
 func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackFallsBackToDefaultChoice(t *testing.T) {
@@ -10943,7 +10955,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackFallsBackToDefaul
 		},
 	}
 	eventCh := make(chan *event.Event, 4)
-	_, choices, _, _, _, err := p.executeToolCall(
+	execution, err := p.executeToolCall(
 		ctx,
 		inv,
 		tc,
@@ -10951,6 +10963,7 @@ func TestExecuteToolCall_StreamableFinalStateOnlyResultCallbackFallsBackToDefaul
 		0,
 		eventCh,
 	)
+	choices := execution.choices
 	require.NoError(t, err)
 	require.Len(t, choices, 1)
 	require.Equal(t, model.RoleTool, choices[0].Message.Role)
@@ -11472,7 +11485,9 @@ func TestBuildDefaultToolMessage_NoHTMLEscape(t *testing.T) {
 		"output":    "    <-done\n    for i := 0; i < 10; i++ {\n        fmt.Println(i)\n    }",
 		"status":    "exited",
 	}
-	msg, err := buildDefaultToolMessage("call-123", result)
+	msg, _, err := buildDefaultToolMessage(
+		context.Background(), "call-123", result, nil, false,
+	)
 	require.NoError(t, err)
 	assert.Equal(t, "call-123", msg.ToolID)
 	assert.Contains(t, msg.Content, "<-done",
@@ -11507,7 +11522,9 @@ func TestBuildDefaultToolMessage_BackwardCompat(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg, err := buildDefaultToolMessage("id-1", tt.result)
+			msg, _, err := buildDefaultToolMessage(
+				context.Background(), "id-1", tt.result, nil, false,
+			)
 			require.NoError(t, err)
 			// Compare with what json.Marshal would produce (they should
 			// be identical for inputs without < > &).
