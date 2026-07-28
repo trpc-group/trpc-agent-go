@@ -203,7 +203,7 @@ func (r *workspaceRuntime) resolveSandboxPaths(
 
 // StageInputs maps external inputs into the sandbox workspace.
 //
-// Not implemented in v1; returns ErrNotImplementedV1.
+// Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported.
 func (r *workspaceRuntime) StageInputs(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
@@ -217,7 +217,7 @@ func (r *workspaceRuntime) StageInputs(
 
 // CollectOutputs applies the declarative output spec in the sandbox.
 //
-// Not implemented in v1; returns ErrNotImplementedV1.
+// Not implemented in v1; returns codeexecutor.ErrDeclarativeIONotSupported.
 func (r *workspaceRuntime) CollectOutputs(
 	ctx context.Context,
 	ws codeexecutor.Workspace,
