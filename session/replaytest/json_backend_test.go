@@ -238,6 +238,173 @@ func TestJSONMemoryServiceErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestJSONSessionServicePagingAndHelperBranches(t *testing.T) {
+	ctx := context.Background()
+	svc := NewJSONSessionService(WithJSONSessionPath(filepath.Join(t.TempDir(), "session.json")))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+	userKey := session.UserKey{AppName: "app", UserID: "user"}
+	keys := []session.Key{
+		{AppName: "app", UserID: "user", SessionID: "s1"},
+		{AppName: "app", UserID: "user", SessionID: "s2"},
+		{AppName: "app", UserID: "user", SessionID: "s3"},
+	}
+	for _, key := range keys {
+		_, err := svc.CreateSession(ctx, key, nil)
+		require.NoError(t, err)
+	}
+	require.NoError(t, svc.withSessionStore(true, func(store *jsonSessionStore) error {
+		store.Sessions[sessionKeyString(keys[0])].UpdatedAt = baseTime.Add(time.Second)
+		store.Sessions[sessionKeyString(keys[1])].UpdatedAt = baseTime.Add(2 * time.Second)
+		store.Sessions[sessionKeyString(keys[2])].UpdatedAt = baseTime.Add(2 * time.Second)
+		store.Sessions[sessionKeyString(session.Key{AppName: "app", UserID: "other", SessionID: "skip"})] = nil
+		return nil
+	}))
+
+	page, err := svc.ListSessions(ctx, userKey, session.WithListSessionPage(1, 10))
+	require.NoError(t, err)
+	require.Equal(t, []string{"s3", "s1"}, []string{page[0].ID, page[1].ID})
+	empty, err := svc.ListSessions(ctx, userKey, session.WithListSessionPage(3, 1))
+	require.NoError(t, err)
+	require.Empty(t, empty)
+
+	trackEvents := []session.TrackEvent{
+		{Timestamp: baseTime},
+		{Timestamp: baseTime.Add(time.Second)},
+		{Timestamp: baseTime.Add(2 * time.Second)},
+	}
+	filtered := filterJSONTrackEvents(trackEvents, baseTime.Add(time.Second), 1)
+	require.Len(t, filtered, 1)
+	require.True(t, filtered[0].Timestamp.Equal(baseTime.Add(2*time.Second)))
+	require.Len(t, filterJSONTrackEvents(trackEvents, time.Time{}, 10), 3)
+
+	applyJSONTrackFiltering(nil, &session.Options{})
+	applyJSONTrackFiltering(&session.Session{}, nil)
+	require.Nil(t, cloneSessionSliceJSON(nil))
+	require.Nil(t, cloneEventJSON(nil))
+	require.Nil(t, cloneTrackEventJSON(nil))
+	require.Nil(t, cloneStateJSON(nil))
+	require.Nil(t, cloneMemoryEntryJSON(nil))
+	require.Nil(t, cloneMemoryEntriesJSON(nil))
+}
+
+func TestJSONSessionServiceErrorBranches(t *testing.T) {
+	ctx := context.Background()
+	svc := NewJSONSessionService(
+		WithJSONSessionPath(filepath.Join(t.TempDir(), "session.json")),
+		WithJSONSessionSummarizer(staticSummary{}),
+		WithJSONSessionSummaryFilterAllowlist("agent/main"),
+	)
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	_, err := svc.GetSession(ctx, session.Key{})
+	require.Error(t, err)
+	_, err = svc.ListSessions(ctx, session.UserKey{})
+	require.Error(t, err)
+	require.Error(t, svc.DeleteSession(ctx, session.Key{}))
+	require.Error(t, svc.UpdateAppState(ctx, "", nil))
+	require.Error(t, svc.DeleteAppState(ctx, "", "k"))
+	_, err = svc.ListAppStates(ctx, "")
+	require.Error(t, err)
+	require.Error(t, svc.UpdateUserState(ctx, session.UserKey{}, nil))
+	_, err = svc.ListUserStates(ctx, session.UserKey{})
+	require.Error(t, err)
+	require.Error(t, svc.DeleteUserState(ctx, session.UserKey{}, "k"))
+	require.Error(t, svc.UpdateSessionState(ctx, session.Key{}, nil))
+	require.Error(t, svc.AppendEvent(ctx, nil, &event.Event{}))
+	require.Error(t, svc.AppendEvent(ctx, session.NewSession("app", "user", "missing"), nil))
+	require.Error(t, svc.AppendTrackEvent(ctx, nil, &session.TrackEvent{}))
+	require.Error(t, svc.AppendTrackEvent(ctx, session.NewSession("app", "user", "missing"), nil))
+	_, err = svc.SummaryOwnerIDs(ctx, session.Key{})
+	require.Error(t, err)
+
+	sess := session.NewSession("app", "user", "missing")
+	require.Error(t, svc.CreateSessionSummary(ctx, nil, "agent/main", true))
+	require.Error(t, svc.EnqueueSummaryJob(ctx, nil, "agent/main", true))
+	require.Error(t, svc.CreateSessionSummary(ctx, sess, "agent/main", true))
+	require.Error(t, svc.AppendTrackEvent(ctx, sess, &session.TrackEvent{Track: "tool"}))
+	require.Error(t, svc.UpdateSessionState(ctx, session.Key{AppName: "app", UserID: "user", SessionID: "missing"}, session.StateMap{"k": []byte("v")}))
+
+	plain := NewJSONSessionService(WithJSONSessionPath(filepath.Join(t.TempDir(), "plain.json")))
+	require.NoError(t, plain.CreateSessionSummary(ctx, sess, "agent/main", true))
+	require.NoError(t, plain.EnqueueSummaryJob(ctx, sess, "agent/main", true))
+	require.NoError(t, plain.Close())
+}
+
+func TestJSONMemoryServiceUpdateConflictAndInvalidKeys(t *testing.T) {
+	ctx := context.Background()
+	svc := NewJSONMemoryService(WithJSONMemoryPath(filepath.Join(t.TempDir(), "memory.json")))
+	t.Cleanup(func() { require.NoError(t, svc.Close()) })
+
+	require.Error(t, svc.UpdateMemory(ctx, memory.Key{}, "bad", nil))
+	require.Error(t, svc.DeleteMemory(ctx, memory.Key{}))
+	require.Error(t, svc.ClearMemories(ctx, memory.UserKey{}))
+	_, err := svc.ReadMemories(ctx, memory.UserKey{}, 0)
+	require.Error(t, err)
+	_, err = svc.SearchMemories(ctx, memory.UserKey{}, "bad")
+	require.Error(t, err)
+
+	userKey := memory.UserKey{AppName: "app", UserID: "user"}
+	require.NoError(t, svc.withMemoryStore(true, func(store *jsonMemoryStore) error {
+		scope := memoryScope(userKey)
+		store.Entries[scope] = map[string]*memory.Entry{
+			"nil-memory": {ID: "nil-memory"},
+		}
+		return nil
+	}))
+	updateResult := &memory.UpdateResult{}
+	require.NoError(t, svc.UpdateMemory(
+		ctx,
+		memory.Key{AppName: "app", UserID: "user", MemoryID: "nil-memory"},
+		"rewritten",
+		[]string{"topic"},
+		memory.WithUpdateResult(updateResult),
+	))
+	require.NotEmpty(t, updateResult.MemoryID)
+
+	require.NoError(t, svc.AddMemory(ctx, userKey, "first", nil))
+	require.NoError(t, svc.AddMemory(ctx, userKey, "second", nil))
+	entries, err := svc.ReadMemories(ctx, userKey, 0)
+	require.NoError(t, err)
+	var firstID string
+	for _, entry := range entries {
+		if entry.Memory.Memory == "first" {
+			firstID = entry.ID
+		}
+	}
+	require.NotEmpty(t, firstID)
+	require.Error(t, svc.UpdateMemory(ctx, memory.Key{AppName: "app", UserID: "user", MemoryID: firstID}, "second", nil))
+}
+
+func TestJSONMemoryMetadataAndRoundTripHelpers(t *testing.T) {
+	eventTime := baseTime.Add(3 * time.Second)
+	require.Nil(t, metadataFromMemory(nil))
+	applyJSONMemoryMetadata(nil, &memory.Metadata{Kind: memory.KindEpisode})
+	applyJSONMemoryMetadataPatch(nil, &memory.Metadata{Kind: memory.KindEpisode})
+
+	mem := &memory.Memory{Memory: "  remember this  "}
+	applyJSONMemoryMetadata(mem, nil)
+	require.Equal(t, "remember this", mem.Memory)
+	require.Equal(t, memory.KindFact, mem.Kind)
+
+	applyJSONMemoryMetadataPatch(mem, &memory.Metadata{
+		Kind:         memory.KindEpisode,
+		EventTime:    &eventTime,
+		Participants: []string{" User ", "user", "Agent"},
+		Location:     " Remote ",
+	})
+	require.Equal(t, memory.KindEpisode, mem.Kind)
+	require.Equal(t, []string{"Agent", "User"}, mem.Participants)
+	require.Equal(t, "Remote", mem.Location)
+	require.True(t, mem.EventTime.Equal(eventTime.UTC()))
+
+	require.Panics(t, func() {
+		mustRoundTripJSON(func() {}, &struct{}{})
+	})
+	require.Panics(t, func() {
+		mustRoundTripJSON(map[string]string{"k": "v"}, 1)
+	})
+}
+
 func TestReplayRuntimeBranches(t *testing.T) {
 	ctx := context.Background()
 	cfg := RunConfig{AppName: "app", UserID: "user", SessionID: "runtime"}
@@ -256,6 +423,9 @@ func TestReplayRuntimeBranches(t *testing.T) {
 	require.Error(t, rt.apply(ctx, appendEvent(nil)))
 	require.Error(t, rt.apply(ctx, Operation{Kind: OperationCreateSummary}))
 	require.Error(t, rt.apply(ctx, Operation{Kind: OperationAddMemory}))
+	require.Error(t, rt.apply(ctx, Operation{Kind: OperationUpdateMemory}))
+	require.Error(t, rt.apply(ctx, Operation{Kind: OperationDeleteMemory}))
+	require.Error(t, rt.apply(ctx, Operation{Kind: OperationAppendTrack}))
 	require.NoError(t, rt.apply(ctx, addMemory("runtime memory", nil, nil)))
 	require.NoError(t, rt.apply(ctx, Operation{
 		Kind:   OperationUpdateMemory,
@@ -272,12 +442,30 @@ func TestReplayRuntimeBranches(t *testing.T) {
 
 	noMemory := &replayRuntime{backend: Backend{Name: "no-memory", Session: backend.Session}, cfg: RunConfig{AppName: "app", UserID: "user", SessionID: "no-memory"}}
 	require.NoError(t, noMemory.apply(ctx, addMemory("ignored", nil, nil)))
+	require.NoError(t, noMemory.apply(ctx, Operation{
+		Kind:   OperationUpdateMemory,
+		Memory: &MemoryOperation{Content: "ignored"},
+	}))
+	require.NoError(t, noMemory.apply(ctx, Operation{
+		Kind:   OperationDeleteMemory,
+		Memory: &MemoryOperation{Content: "ignored"},
+	}))
 
 	noTrack := &replayRuntime{
 		backend: Backend{Name: "no-track", Session: sessionOnlyService{Service: backend.Session}},
 		cfg:     RunConfig{AppName: "app", UserID: "user", SessionID: "no-track"},
 	}
 	require.NoError(t, noTrack.apply(ctx, appendTrack("ignored", 1, map[string]any{"event_type": "ignored"})))
+
+	existingKey := session.Key{AppName: "app", UserID: "user", SessionID: "existing"}
+	_, err = backend.Session.CreateSession(ctx, existingKey, nil)
+	require.NoError(t, err)
+	existing := &replayRuntime{
+		backend: backend,
+		cfg:     RunConfig{AppName: existingKey.AppName, UserID: existingKey.UserID, SessionID: existingKey.SessionID},
+	}
+	require.NoError(t, existing.ensureSession(ctx))
+	require.Equal(t, existingKey.SessionID, existing.sess.ID)
 }
 
 func TestComparatorAndNormalizerBranches(t *testing.T) {

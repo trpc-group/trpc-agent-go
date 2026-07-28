@@ -2,16 +2,14 @@
 
 `session/replaytest` provides a backend-neutral replay harness for session,
 memory, summary, and track consistency checks. The default lightweight test
-compares InMemory with a JSON file-backed local persistent simulator without modifying
-existing repository go.mod files. The standalone `tests/replay_consistency`
-module compares InMemory with SQLite when CGO is available.
+compares InMemory with a JSON file-backed local persistent simulator without
+modifying existing repository go.mod files.
 
 ## Lightweight Run
 
 ```bash
 go test ./session/replaytest
-cd tests/replay_consistency && go test ./...
-cd tests/replay_consistency && go test -tags replay_sqlite ./...
+go test ./tests/replay_consistency
 ```
 
 The default lightweight mode uses:
@@ -20,15 +18,14 @@ The default lightweight mode uses:
 - `replaytest.JSONSessionService` and `replaytest.JSONMemoryService`
 - a deterministic test summarizer, so no API key is required
 
-The standalone module also has a default JSON local-persistence test. Its SQLite
-test uses `session/sqlite` and `memory/sqlite`; run it with `-tags replay_sqlite`.
-It requires `CGO_ENABLED=1` and a working C compiler because it depends on
-`github.com/mattn/go-sqlite3`.
+The `tests/replay_consistency` package runs the same public cases against
+InMemory and the JSON local-persistence backend. It intentionally avoids extra
+module dependencies so root `go mod tidy` remains unchanged.
 
 ## Optional Integration Mode
 
-Additional persistent backends should be registered in `tests/replay_consistency`
-behind environment variables and skipped when unset:
+Additional persistent backends should be registered in replay-only integration
+packages behind environment variables and skipped when unset:
 
 - `REPLAY_REDIS_URL`
 - `REPLAY_POSTGRES_DSN`
