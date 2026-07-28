@@ -89,34 +89,33 @@ func runCommand(ctx context.Context, options commandOptions) (*regression.Optimi
 	if err := os.MkdirAll(options.outputDir, 0o700); err != nil {
 		return nil, err
 	}
-	jsonFile, err := openReport(filepath.Join(options.outputDir, "optimization_report.json"))
-	if err != nil {
+	if err := writeReport(filepath.Join(options.outputDir, "optimization_report.json"), func(writer io.Writer) error {
+		return regression.WriteJSON(writer, report)
+	}); err != nil {
 		return nil, err
 	}
-	jsonErr := regression.WriteJSON(jsonFile, report)
-	closeErr := jsonFile.Close()
-	if jsonErr != nil || closeErr != nil {
-		return nil, errors.Join(jsonErr, closeErr)
-	}
-	markdownFile, err := openReport(filepath.Join(options.outputDir, "optimization_report.md"))
-	if err != nil {
+	if err := writeReport(filepath.Join(options.outputDir, "optimization_report.md"), func(writer io.Writer) error {
+		return regression.WriteMarkdown(writer, report)
+	}); err != nil {
 		return nil, err
-	}
-	markdownErr := regression.WriteMarkdown(markdownFile, report)
-	closeErr = markdownFile.Close()
-	if markdownErr != nil || closeErr != nil {
-		return nil, errors.Join(markdownErr, closeErr)
 	}
 	return report, nil
 }
 
-func openReport(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+func writeReport(path string, write func(io.Writer) error) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".report-*")
 	if err != nil {
-		return nil, err
+		return err
 	}
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
 	if err := file.Chmod(0o600); err != nil {
-		return nil, errors.Join(err, file.Close())
+		return errors.Join(err, file.Close())
 	}
-	return file, nil
+	writeErr := write(file)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return errors.Join(writeErr, closeErr)
+	}
+	return os.Rename(temporaryPath, path)
 }

@@ -9,11 +9,13 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -108,15 +110,16 @@ func loadConfig(paths fixturePaths, seed int64) (loopConfig, error) {
 	config.inputs = append(config.inputs, audit)
 	var promptConfig promptIterConfig
 	files := []struct {
-		name string
-		path string
-		out  any
+		name   string
+		path   string
+		out    any
+		strict bool
 	}{
 		{name: "train_evalset", path: paths.train, out: &config.train},
 		{name: "validation_evalset", path: paths.validation, out: &config.validation},
 		{name: "metrics", path: paths.metrics, out: &config.metrics},
-		{name: "promptiter", path: paths.promptiter, out: &promptConfig},
-		{name: "fake_engine", path: paths.fakeEngine, out: &config.engine},
+		{name: "promptiter", path: paths.promptiter, out: &promptConfig, strict: true},
+		{name: "fake_engine", path: paths.fakeEngine, out: &config.engine, strict: true},
 	}
 	hasher := sha256.New()
 	hasher.Write(baseline)
@@ -125,7 +128,7 @@ func loadConfig(paths fixturePaths, seed int64) (loopConfig, error) {
 		if err != nil {
 			return loopConfig{}, err
 		}
-		if err := json.Unmarshal(data, file.out); err != nil {
+		if err := decodeConfigJSON(data, file.out, file.strict); err != nil {
 			return loopConfig{}, fmt.Errorf("decode %s: %w", file.name, err)
 		}
 		config.inputs = append(config.inputs, input)
@@ -148,6 +151,25 @@ func loadConfig(paths fixturePaths, seed int64) (loopConfig, error) {
 		return loopConfig{}, err
 	}
 	return config, nil
+}
+
+func decodeConfigJSON(data []byte, destination any, strict bool) error {
+	if !strict {
+		return json.Unmarshal(data, destination)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("multiple JSON values")
+		}
+		return err
+	}
+	return nil
 }
 
 func readInput(name, path string) ([]byte, regression.AuditInput, error) {

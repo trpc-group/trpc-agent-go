@@ -90,6 +90,56 @@ func TestRunCommandPreservesExistingOutputDirectoryPermissions(t *testing.T) {
 	}
 }
 
+func TestRunCommandReplacesReportSymlinkWithoutModifyingTarget(t *testing.T) {
+	root := t.TempDir()
+	outputDir := filepath.Join(root, "output")
+	if err := os.Mkdir(outputDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := filepath.Join(root, "target.json")
+	targetContent := []byte("do not replace")
+	if err := os.WriteFile(targetPath, targetContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(targetPath, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	reportPath := filepath.Join(outputDir, "optimization_report.json")
+	if err := os.Symlink(targetPath, reportPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runCommand(context.Background(), commandOptions{
+		paths: defaultPaths(), outputDir: outputDir, seed: 2003,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gotTarget, err := os.ReadFile(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotTarget) != string(targetContent) {
+		t.Fatalf("symlink target content = %q, want %q", gotTarget, targetContent)
+	}
+	targetInfo, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if targetInfo.Mode().Perm() != 0o640 {
+		t.Fatalf("symlink target permissions = %o, want 640", targetInfo.Mode().Perm())
+	}
+	reportInfo, err := os.Lstat(reportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reportInfo.Mode().IsRegular() {
+		t.Fatalf("report mode = %v, want regular file", reportInfo.Mode())
+	}
+	if reportInfo.Mode().Perm() != 0o600 {
+		t.Fatalf("report permissions = %o, want 600", reportInfo.Mode().Perm())
+	}
+}
+
 func TestPromptIterConsumesFailureHints(t *testing.T) {
 	config, err := loadConfig(defaultPaths(), 2003)
 	if err != nil {

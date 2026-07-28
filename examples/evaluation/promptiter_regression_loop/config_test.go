@@ -55,6 +55,71 @@ func TestLoadConfigRejectsUnreadableAndInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestLoadConfigRejectsInvalidControlConfigContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		configName  string
+		content     string
+		setPath     func(*fixturePaths, string)
+		wantMessage string
+	}{
+		{
+			name:       "unknown promptiter gate field",
+			configName: "promptiter",
+			content: `{
+				"candidates": ["candidate"],
+				"maxRounds": 1,
+				"gate": {"maxToken": 700, "rejectNewHardFails": true}
+			}`,
+			setPath: func(paths *fixturePaths, path string) {
+				paths.promptiter = path
+			},
+			wantMessage: `unknown field "maxToken"`,
+		},
+		{
+			name:        "unknown fake engine field",
+			configName:  "fake_engine",
+			content:     `{"engineId": "fake", "promptToken": 1}`,
+			setPath:     func(paths *fixturePaths, path string) { paths.fakeEngine = path },
+			wantMessage: `unknown field "promptToken"`,
+		},
+		{
+			name:        "trailing promptiter value",
+			configName:  "promptiter",
+			content:     `{"candidates":["candidate"],"maxRounds":1,"gate":{}} {}`,
+			setPath:     func(paths *fixturePaths, path string) { paths.promptiter = path },
+			wantMessage: "multiple JSON values",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), test.configName+".json")
+			if err := os.WriteFile(path, []byte(test.content), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			paths := defaultPaths()
+			test.setPath(&paths, path)
+			_, err := loadConfig(paths, 1)
+			if err == nil || !strings.Contains(err.Error(), "decode "+test.configName) ||
+				!strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("loadConfig() error = %v, want %q", err, test.wantMessage)
+			}
+		})
+	}
+}
+
+func TestDecodeConfigJSONKeepsFrameworkInputsForwardCompatible(t *testing.T) {
+	var value struct {
+		Known int `json:"known"`
+	}
+	if err := decodeConfigJSON([]byte(`{"known":1,"future":2}`), &value, false); err != nil {
+		t.Fatalf("decodeConfigJSON() error = %v", err)
+	}
+	if value.Known != 1 {
+		t.Fatalf("decoded known field = %d, want 1", value.Known)
+	}
+}
+
 func TestValidateConfigRejectsInvalidFixtures(t *testing.T) {
 	valid, err := loadConfig(defaultPaths(), 2003)
 	if err != nil {
