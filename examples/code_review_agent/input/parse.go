@@ -90,21 +90,19 @@ func ParseDiffFile(path string) (*DiffBundle, error) {
 	return ParseUnifiedDiff("diff_file", string(b))
 }
 
-// ParseRepoDiff collects git diff from a repository path.
+// ParseRepoDiff collects the HEAD-to-worktree diff from a repository path.
+// It uses `git diff HEAD` so staged and unstaged edits are composed into the
+// final tracked worktree delta (not a concatenation of two independent patches).
 func ParseRepoDiff(repoPath string) (*DiffBundle, error) {
 	abs, err := filepath.Abs(repoPath)
 	if err != nil {
 		return nil, err
 	}
-	unstaged, err := runGit(abs, "diff")
+	raw, err := runGit(abs, "diff", "HEAD")
 	if err != nil {
 		return nil, err
 	}
-	staged, err := runGit(abs, "diff", "--cached")
-	if err != nil {
-		return nil, err
-	}
-	raw := strings.TrimSpace(unstaged + "\n" + staged)
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ParseUnifiedDiff("repo", "")
 	}

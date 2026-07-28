@@ -13,6 +13,7 @@ package sandbox
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -25,6 +26,12 @@ import (
 	localexec "trpc.group/trpc-go/trpc-agent-go/codeexecutor/local"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/review"
 	"trpc.group/trpc-go/trpc-agent-go/examples/code_review_agent/safety"
+)
+
+const (
+	stagedDiffRel     = "work/inputs/diff.patch"
+	stagedSkillsRel   = "skills"
+	skillScriptPrefix = "skills/code-review/scripts/"
 )
 
 // CreateOptions configures CodeExecutor-backed runners.
@@ -40,6 +47,9 @@ type CreateResult struct {
 	Runner           Runner
 	ExecutorFallback string
 	CodeExecutor     codeexecutor.CodeExecutor // for llmagent wiring; may be nil for fake
+	// Closer releases executors owned by Create. Caller-supplied executors
+	// are never closed here. Nil when nothing was owned.
+	Closer func() error
 }
 
 // Create builds a Runner backed by framework CodeExecutors when possible.
@@ -52,6 +62,7 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	skillsRoot := opts.SkillsRoot
 
 	switch name {
 	case "fake":
@@ -62,11 +73,12 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 			localexec.WithCleanTempFiles(true),
 		)
 		return &CreateResult{
-			Runner:       &CodeExecRunner{name: "local", exec: ce},
+			Runner:       &CodeExecRunner{name: "local", exec: ce, skillsRoot: skillsRoot},
 			CodeExecutor: ce,
+			Closer:       closerOf(ce),
 		}, nil
 	case "container":
-		ce, err := newContainerExecutor(opts.SkillsRoot)
+		ce, err := newContainerExecutor(skillsRoot)
 		if err != nil {
 			if !opts.AllowLocalFallback {
 				return nil, fmt.Errorf("container executor: %w (pass --executor=local or --allow-local-fallback)", err)
@@ -76,14 +88,16 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 				localexec.WithCleanTempFiles(true),
 			)
 			return &CreateResult{
-				Runner:           &CodeExecRunner{name: "local", exec: local},
+				Runner:           &CodeExecRunner{name: "local", exec: local, skillsRoot: skillsRoot},
 				CodeExecutor:     local,
+				Closer:           closerOf(local),
 				ExecutorFallback: "container_unavailable: " + err.Error(),
 			}, nil
 		}
 		return &CreateResult{
-			Runner:       &CodeExecRunner{name: "container", exec: ce},
+			Runner:       &CodeExecRunner{name: "container", exec: ce, skillsRoot: skillsRoot},
 			CodeExecutor: ce,
+			Closer:       closerOf(ce),
 		}, nil
 	case "e2b":
 		ce, err := e2bexec.New()
@@ -96,17 +110,35 @@ func Create(opts CreateOptions) (*CreateResult, error) {
 				localexec.WithCleanTempFiles(true),
 			)
 			return &CreateResult{
-				Runner:           &CodeExecRunner{name: "local", exec: local},
+				Runner:           &CodeExecRunner{name: "local", exec: local, skillsRoot: skillsRoot},
 				CodeExecutor:     local,
+				Closer:           closerOf(local),
 				ExecutorFallback: "e2b_unavailable: " + err.Error(),
 			}, nil
 		}
 		return &CreateResult{
-			Runner:       &CodeExecRunner{name: "e2b", exec: ce},
+			Runner:       &CodeExecRunner{name: "e2b", exec: ce, skillsRoot: skillsRoot},
 			CodeExecutor: ce,
+			Closer:       closerOf(ce),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown executor %q (want local|container|e2b|fake)", name)
+	}
+}
+
+func closerOf(ce codeexecutor.CodeExecutor) func() error {
+	type closer interface{ Close() error }
+	c, ok := ce.(closer)
+	if !ok {
+		return nil
+	}
+	var once bool
+	return func() error {
+		if once {
+			return nil
+		}
+		once = true
+		return c.Close()
 	}
 }
 
@@ -126,16 +158,18 @@ func absPath(p string) (string, error) {
 	return filepath.Abs(p)
 }
 
-// CodeExecRunner adapts codeexecutor.CodeExecutor to sandbox.Runner.
+// CodeExecRunner adapts codeexecutor.CodeExecutor to sandbox.Runner via the
+// workspace Engine.RunProgram contract (exit code, CleanEnv, staged inputs).
 type CodeExecRunner struct {
-	name string
-	exec codeexecutor.CodeExecutor
+	name       string
+	exec       codeexecutor.CodeExecutor
+	skillsRoot string
 }
 
 // Name implements Runner.
 func (r *CodeExecRunner) Name() string { return r.name }
 
-// Run implements Runner via ExecuteCode (bash).
+// Run implements Runner via Engine.RunProgram.
 func (r *CodeExecRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Result {
 	id := uuid.NewString()
 	start := time.Now().UTC()
@@ -146,74 +180,209 @@ func (r *CodeExecRunner) Run(ctx context.Context, spec Spec, limits safety.Limit
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Prefer writing a small bash snippet so cwd/env can be expressed in-script.
-	script := buildBashScript(spec, limits)
-	out, err := r.exec.ExecuteCode(runCtx, codeexecutor.CodeExecutionInput{
-		CodeBlocks: []codeexecutor.CodeBlock{{
-			Language: "bash",
-			Code:     script,
-		}},
-		ExecutionID: id,
+	sum := review.SandboxRunSummary{
+		ID:       id,
+		Executor: r.name,
+		Command:  spec.Command,
+	}
+
+	provider, ok := r.exec.(codeexecutor.EngineProvider)
+	if !ok {
+		sum.Status = "failed"
+		sum.ExitCode = 1
+		sum.Error = "executor does not expose workspace Engine"
+		sum.DurationMS = time.Since(start).Milliseconds()
+		return Result{Summary: sum, Stderr: sum.Error}
+	}
+	eng := provider.Engine()
+	ws, err := eng.Manager().CreateWorkspace(runCtx, id, codeexecutor.WorkspacePolicy{})
+	if err != nil {
+		sum.Status = "failed"
+		sum.ExitCode = 1
+		sum.Error = err.Error()
+		sum.DurationMS = time.Since(start).Milliseconds()
+		return Result{Summary: sum, Stderr: err.Error()}
+	}
+	defer func() { _ = eng.Manager().Cleanup(context.Background(), ws) }()
+
+	if err := r.stageInputs(runCtx, eng, ws, spec); err != nil {
+		sum.Status = "failed"
+		sum.ExitCode = 1
+		sum.Error = err.Error()
+		sum.DurationMS = time.Since(start).Milliseconds()
+		return Result{Summary: sum, Stderr: err.Error()}
+	}
+
+	env := buildEnvMap(spec.Env, limits)
+	env["REVIEW_DIFF_PATH"] = stagedDiffRel
+	env["REVIEW_OUT_DIR"] = codeexecutor.DirWork
+
+	cmd, args := splitCommand(spec.Command)
+	res, err := eng.Runner().RunProgram(runCtx, ws, codeexecutor.RunProgramSpec{
+		Cmd:      cmd,
+		Args:     args,
+		Env:      env,
+		CleanEnv: true,
+		Cwd:      ".",
+		Timeout:  timeout,
 	})
 
-	dur := time.Since(start).Milliseconds()
-	stdout := out.Output
+	stdout := res.Stdout
+	stderr := res.Stderr
 	truncated := false
 	if limits.MaxStdoutBytes > 0 && len(stdout) > limits.MaxStdoutBytes {
 		stdout = stdout[:limits.MaxStdoutBytes]
 		truncated = true
 	}
-
-	sum := review.SandboxRunSummary{
-		ID:           id,
-		Executor:     r.name,
-		Command:      spec.Command,
-		DurationMS:   dur,
-		StdoutBytes:  len(stdout),
-		Truncated:    truncated,
-		StdoutSample: trimSample(stdout, 512),
+	if limits.MaxStderrBytes > 0 && len(stderr) > limits.MaxStderrBytes {
+		stderr = stderr[:limits.MaxStderrBytes]
+		truncated = true
 	}
-	if runCtx.Err() == context.DeadlineExceeded {
+
+	sum.DurationMS = time.Since(start).Milliseconds()
+	sum.StdoutBytes = len(stdout)
+	sum.StderrBytes = len(stderr)
+	sum.Truncated = truncated
+	sum.StdoutSample = trimSample(stdout, 512)
+	sum.StderrSample = trimSample(stderr, 512)
+	sum.ExitCode = res.ExitCode
+
+	switch {
+	case runCtx.Err() == context.DeadlineExceeded || res.TimedOut:
 		sum.Status = "timeout"
 		sum.ExitCode = -1
 		sum.Error = fmt.Sprintf("command timed out after %s", timeout)
-		return Result{Summary: sum, Stdout: stdout}
-	}
-	if err != nil {
+	case err != nil:
 		sum.Status = "failed"
-		sum.ExitCode = 1
-		sum.Error = err.Error()
-		sum.StderrSample = trimSample(err.Error(), 512)
-		if truncated {
-			sum.Status = "truncated"
+		if sum.ExitCode == 0 {
+			sum.ExitCode = 1
 		}
-		return Result{Summary: sum, Stdout: stdout, Stderr: err.Error()}
-	}
-	sum.Status = "ok"
-	sum.ExitCode = 0
-	if truncated {
+		sum.Error = err.Error()
+	case res.ExitCode != 0:
+		sum.Status = "failed"
+		sum.Error = fmt.Sprintf("exit code %d", res.ExitCode)
+	case truncated:
 		sum.Status = "truncated"
+	default:
+		sum.Status = "ok"
 	}
-	return Result{Summary: sum, Stdout: stdout}
+	return Result{Summary: sum, Stdout: stdout, Stderr: stderr}
 }
 
-// buildBashScript builds a bash snippet that applies cwd/env then runs the command.
-func buildBashScript(spec Spec, limits safety.Limits) string {
-	var b strings.Builder
-	b.WriteString("set -euo pipefail\n")
-	if spec.Dir != "" {
-		fmt.Fprintf(&b, "cd %q\n", spec.Dir)
+func (r *CodeExecRunner) stageInputs(
+	ctx context.Context,
+	eng codeexecutor.Engine,
+	ws codeexecutor.Workspace,
+	spec Spec,
+) error {
+	skillsRoot := firstNonEmpty(spec.SkillsRoot, r.skillsRoot)
+	if skillsRoot != "" {
+		if abs, err := filepath.Abs(skillsRoot); err == nil {
+			if err := eng.FS().StageDirectory(ctx, ws, abs, stagedSkillsRel, codeexecutor.StageOptions{
+				ReadOnly:   true,
+				AllowMount: true,
+			}); err != nil {
+				// Fallback: copy individual allowlisted scripts.
+				if copyErr := stageSkillScripts(ctx, eng, ws, abs); copyErr != nil {
+					return fmt.Errorf("stage skills: %w (fallback: %v)", err, copyErr)
+				}
+			}
+		}
 	}
-	for _, e := range spec.Env {
+	diff := spec.DiffText
+	if diff == "" && spec.DiffHostPath != "" {
+		b, err := os.ReadFile(spec.DiffHostPath)
+		if err != nil {
+			return fmt.Errorf("read diff: %w", err)
+		}
+		diff = string(b)
+	}
+	if err := eng.FS().PutFiles(ctx, ws, []codeexecutor.PutFile{{
+		Path:    stagedDiffRel,
+		Content: []byte(diff),
+		Mode:    0o644,
+	}}); err != nil {
+		return fmt.Errorf("stage diff: %w", err)
+	}
+	return nil
+}
+
+func stageSkillScripts(ctx context.Context, eng codeexecutor.Engine, ws codeexecutor.Workspace, skillsRoot string) error {
+	dir := filepath.Join(skillsRoot, "code-review", "scripts")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	var files []codeexecutor.PutFile
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sh") {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, e.Name()))
+		if err != nil {
+			return err
+		}
+		files = append(files, codeexecutor.PutFile{
+			Path:    skillScriptPrefix + e.Name(),
+			Content: b,
+			Mode:    0o755,
+		})
+	}
+	if len(files) == 0 {
+		return fmt.Errorf("no skill scripts under %s", dir)
+	}
+	return eng.FS().PutFiles(ctx, ws, files)
+}
+
+func buildEnvMap(env []string, limits safety.Limits) map[string]string {
+	out := map[string]string{}
+	// Seed CleanEnv runs with allowlisted host variables (PATH, etc.) so
+	// binaries resolve without inheriting secrets from the ambient process.
+	for _, e := range os.Environ() {
 		key, val, ok := strings.Cut(e, "=")
 		if !ok || !limits.IsEnvAllowed(key) {
 			continue
 		}
-		fmt.Fprintf(&b, "export %s=%q\n", key, val)
+		out[key] = val
 	}
-	b.WriteString(spec.Command)
-	b.WriteByte('\n')
-	return b.String()
+	for _, e := range env {
+		key, val, ok := strings.Cut(e, "=")
+		if !ok || !limits.IsEnvAllowed(key) {
+			continue
+		}
+		out[key] = val
+	}
+	return out
+}
+
+// splitCommand turns an allowlisted skill script path into bash + script args.
+// Other allowlisted binaries keep their argv fields.
+func splitCommand(command string) (cmd string, args []string) {
+	command = strings.Trim(strings.TrimSpace(command), `"'`)
+	slash := filepath.ToSlash(command)
+	if strings.Contains(slash, skillScriptPrefix) ||
+		strings.HasPrefix(slash, skillScriptPrefix) {
+		// Run via bash so shebang scripts work across backends.
+		rel := slash
+		if i := strings.Index(slash, skillScriptPrefix); i >= 0 {
+			rel = slash[i:]
+		}
+		return "bash", []string{rel}
+	}
+	fields := strings.Fields(command)
+	if len(fields) == 0 {
+		return "false", nil
+	}
+	return fields[0], fields[1:]
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // NewRunner is retained for compatibility; prefer Create.

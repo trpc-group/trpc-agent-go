@@ -8,3 +8,5 @@
 .env
 *.swp
 *~
+testdata/_tmp/
+**/testdata/_tmp/

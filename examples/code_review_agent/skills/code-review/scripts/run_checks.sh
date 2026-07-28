@@ -2,8 +2,8 @@
 # Sandbox check entrypoint. Emits JSON findings array to stdout.
 set -euo pipefail
 
-DIFF_PATH="${REVIEW_DIFF_PATH:-}"
-if [[ -z "${DIFF_PATH}" || ! -f "${DIFF_PATH}" ]]; then
+DIFF_PATH="${REVIEW_DIFF_PATH:-work/inputs/diff.patch}"
+if [[ ! -f "${DIFF_PATH}" ]]; then
   echo '[]'
   exit 0
 fi

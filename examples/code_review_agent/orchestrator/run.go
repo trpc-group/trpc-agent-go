@@ -93,9 +93,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	bundle.RawRedacted = safety.Redact(bundle.RawRedacted)
 
-	runner, codeExec, executorFallback, err := resolveRunner(cfg)
+	runner, codeExec, executorFallback, closer, err := resolveRunner(cfg)
 	if err != nil {
 		return nil, err
+	}
+	if closer != nil {
+		defer func() { _ = closer() }()
 	}
 	if cfg.ForceSandboxFail || cfg.Fixture == "sandbox_fail" {
 		runner = sandbox.FailingRunner{Inner: runner}
@@ -115,27 +118,36 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := cfg.Store.UpdateTaskStatus(ctx, taskID, review.StatusRunning, "", ""); err != nil {
 		return nil, fmt.Errorf("update task status: %w", err)
 	}
-	if err := persistInput(ctx, cfg.Store, taskID, bundle); err != nil {
-		return nil, err
-	}
 
-	workDir, diffPath, err := stageWorkspace(bundle.RawRedacted)
-	if err != nil {
+	finalized := false
+	var failMsg string
+	defer func() {
+		if finalized {
+			return
+		}
+		msg := failMsg
+		if msg == "" {
+			msg = "review aborted"
+		}
+		_ = cfg.Store.UpdateTaskStatus(context.Background(), taskID, review.StatusFailed, "", safety.Redact(msg))
+	}()
+
+	if err := persistInput(ctx, cfg.Store, taskID, bundle); err != nil {
+		failMsg = err.Error()
 		return nil, err
 	}
-	defer func() { _ = os.RemoveAll(workDir) }()
 
 	metrics := review.MetricsSummary{
 		SeverityDist:  map[string]int{},
 		ExceptionDist: map[string]int{},
 	}
-	perms, sandboxes, partial, err := runChecks(ctx, cfg, runner, taskID, workDir, diffPath, &metrics)
+	perms, sandboxes, partial, err := runChecks(ctx, cfg, runner, taskID, bundle.RawRedacted, &metrics)
 	if err != nil {
-		_ = cfg.Store.UpdateTaskStatus(ctx, taskID, review.StatusFailed, "", err.Error())
+		failMsg = err.Error()
 		return nil, err
 	}
 
-	agentNote, assistPartial := runAgentAssist(ctx, cfg, codeExec, bundle, diffPath, &metrics)
+	agentNote, assistPartial := runAgentAssist(ctx, cfg, codeExec, bundle, &metrics)
 	if assistPartial {
 		partial = true
 	}
@@ -185,10 +197,12 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 
 	jsonPath, jsonText, err := report.WriteJSON(cfg.OutDir, rep)
 	if err != nil {
+		failMsg = err.Error()
 		return nil, err
 	}
 	mdPath, mdText, err := report.WriteMarkdown(cfg.OutDir, rep)
 	if err != nil {
+		failMsg = err.Error()
 		return nil, err
 	}
 	arts, dropped := safety.ClampArtifacts([]review.ArtifactRef{
@@ -199,13 +213,14 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		metrics.ExceptionDist["artifact_dropped"] += dropped
 		rep.Metrics = metrics
 		rep.Artifacts = arts
-		// Rare: rewrite once so on-disk reports match clamped artifacts.
 		jsonPath, jsonText, err = report.WriteJSON(cfg.OutDir, rep)
 		if err != nil {
+			failMsg = err.Error()
 			return nil, err
 		}
 		mdPath, mdText, err = report.WriteMarkdown(cfg.OutDir, rep)
 		if err != nil {
+			failMsg = err.Error()
 			return nil, err
 		}
 	} else {
@@ -215,8 +230,10 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := persistResults(ctx, cfg.Store, taskID, findings, warnings, arts, metrics, store.ReportRecord{
 		JSONPath: jsonPath, MDPath: mdPath, ReportJSON: jsonText, ReportMD: mdText,
 	}, status, conclusion); err != nil {
+		failMsg = err.Error()
 		return nil, err
 	}
+	finalized = true
 
 	return &Result{
 		TaskID:       taskID,
@@ -250,16 +267,14 @@ func normalizeConfig(cfg Config) Config {
 	if cfg.Gate == nil {
 		cfg.Gate = safety.DefaultGate()
 	}
-	if cfg.Limits.Timeout == 0 {
-		cfg.Limits = safety.DefaultLimits()
-	}
+	cfg.Limits = safety.MergeLimits(cfg.Limits)
 	return cfg
 }
 
 // resolveRunner selects the sandbox runner and optional CodeExecutor.
-func resolveRunner(cfg Config) (sandbox.Runner, codeexecutor.CodeExecutor, string, error) {
+func resolveRunner(cfg Config) (sandbox.Runner, codeexecutor.CodeExecutor, string, func() error, error) {
 	if cfg.Runner != nil {
-		return cfg.Runner, cfg.CodeExecutor, "", nil
+		return cfg.Runner, cfg.CodeExecutor, "", nil, nil
 	}
 	created, err := sandbox.Create(sandbox.CreateOptions{
 		Name:               cfg.Executor,
@@ -268,13 +283,17 @@ func resolveRunner(cfg Config) (sandbox.Runner, codeexecutor.CodeExecutor, strin
 		Timeout:            cfg.Limits.Timeout,
 	})
 	if err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", nil, err
 	}
 	codeExec := cfg.CodeExecutor
+	closer := created.Closer
 	if codeExec == nil {
 		codeExec = created.CodeExecutor
+	} else if created.Closer != nil {
+		// Caller owns CodeExecutor; still close Create-owned executor used by Runner.
+		closer = created.Closer
 	}
-	return created.Runner, codeExec, created.ExecutorFallback, nil
+	return created.Runner, codeExec, created.ExecutorFallback, closer, nil
 }
 
 // persistInput stores the redacted input metadata for a task.
@@ -297,29 +316,16 @@ func persistInput(ctx context.Context, st store.ReviewStore, taskID string, bund
 	return nil
 }
 
-// stageWorkspace creates a temp workdir and writes the review diff.
-func stageWorkspace(diffText string) (workDir, diffPath string, err error) {
-	workDir, err = os.MkdirTemp("", "cr-review-*")
-	if err != nil {
-		return "", "", err
-	}
-	diffPath = filepath.Join(workDir, "diff.patch")
-	if err := os.WriteFile(diffPath, []byte(diffText), 0o644); err != nil {
-		_ = os.RemoveAll(workDir)
-		return "", "", err
-	}
-	return workDir, diffPath, nil
-}
-
 // runChecks evaluates permissions and executes sandbox commands.
 func runChecks(
 	ctx context.Context,
 	cfg Config,
 	runner sandbox.Runner,
-	taskID, workDir, diffPath string,
+	taskID string,
+	diffText string,
 	metrics *review.MetricsSummary,
 ) (perms []review.PermissionDecision, sandboxes []review.SandboxRunSummary, partial bool, err error) {
-	for _, command := range planCommands(cfg, workDir) {
+	for _, command := range planCommands(cfg) {
 		dec := cfg.Gate.Check(command)
 		pd := safety.ToReviewDecision(command, dec)
 		perms = append(perms, pd)
@@ -342,13 +348,12 @@ func runChecks(
 		}
 		sbStart := time.Now()
 		res := runner.Run(ctx, sandbox.Spec{
-			Command: command,
-			Dir:     workDir,
+			Command:    command,
+			DiffText:   diffText,
+			SkillsRoot: cfg.SkillsRoot,
 			Env: []string{
-				"REVIEW_DIFF_PATH=" + diffPath,
-				"REVIEW_OUT_DIR=" + workDir,
-				"PATH=" + os.Getenv("PATH"),
-				"HOME=" + os.Getenv("HOME"),
+				"REVIEW_DIFF_PATH=work/inputs/diff.patch",
+				"REVIEW_OUT_DIR=work",
 			},
 		}, cfg.Limits)
 		metrics.SandboxDurationMS += time.Since(sbStart).Milliseconds()
@@ -370,15 +375,16 @@ func runAgentAssist(
 	cfg Config,
 	codeExec codeexecutor.CodeExecutor,
 	bundle *input.DiffBundle,
-	diffPath string,
 	metrics *review.MetricsSummary,
 ) (note string, partial bool) {
 	if cfg.Mode != review.ModeLLM {
 		return "", false
 	}
+	var assistCloser func() error
 	if codeExec == nil {
 		created, err := sandbox.Create(sandbox.CreateOptions{
 			Name:               "local",
+			SkillsRoot:         cfg.SkillsRoot,
 			AllowLocalFallback: cfg.AllowLocalFallback,
 			Timeout:            cfg.Limits.Timeout,
 		})
@@ -387,6 +393,10 @@ func runAgentAssist(
 			return "agent_assist_error: " + err.Error(), true
 		}
 		codeExec = created.CodeExecutor
+		assistCloser = created.Closer
+	}
+	if assistCloser != nil {
+		defer func() { _ = assistCloser() }()
 	}
 	assistRes, aerr := assist.Run(ctx, assist.Config{
 		SkillsRoot:  cfg.SkillsRoot,
@@ -395,9 +405,9 @@ func runAgentAssist(
 		Policy:      cfg.Gate.AsToolPolicy(),
 		DiffSummary: bundle.Summary,
 		DiffDigest:  bundle.Digest,
-		DiffPath:    diffPath,
+		DiffText:    bundle.RawRedacted,
 		Prompt: fmt.Sprintf(
-			"Review Go changes (%s, digest=%s). Load code-review skill, run scripts/run_checks.sh via workspace_exec using REVIEW_DIFF_PATH, then summarize. Findings are finalized by the host rule engine.",
+			"Review Go changes (%s, digest=%s). Load code-review skill, then run skills/code-review/scripts/run_checks.sh via workspace_exec with REVIEW_DIFF_PATH=work/inputs/diff.patch. Findings are finalized by the host rule engine.",
 			bundle.Summary, bundle.Digest,
 		),
 	})
@@ -492,17 +502,16 @@ func demoGovernanceEnabled(cfg Config) bool {
 }
 
 // planCommands builds the sandbox command plan for one review.
-func planCommands(cfg Config, workDir string) []string {
+func planCommands(cfg Config) []string {
 	skillScripts := filepath.Join(cfg.SkillsRoot, "code-review", "scripts")
 	var cmds []string
 	addScript := func(name string) {
-		script := filepath.Join(skillScripts, name)
-		if abs, err := filepath.Abs(script); err == nil {
-			script = abs
+		host := filepath.Join(skillScripts, name)
+		if _, err := os.Stat(host); err != nil {
+			return
 		}
-		if _, err := os.Stat(script); err == nil {
-			cmds = append(cmds, fmt.Sprintf("bash %q", script))
-		}
+		// Workspace-relative auditable path (Gate + RunProgram staging).
+		cmds = append(cmds, "skills/code-review/scripts/"+name)
 	}
 	addScript("run_checks.sh")
 	if cfg.EnableGoTest {
@@ -512,10 +521,8 @@ func planCommands(cfg Config, workDir string) []string {
 		addScript("run_staticcheck.sh")
 	}
 	if len(cmds) == 0 {
-		cmds = append(cmds, fmt.Sprintf("bash -lc 'echo [] > %q'", filepath.Join(workDir, "findings.json")))
-	}
-	if cfg.ForceSandboxFail || cfg.Fixture == "sandbox_fail" {
-		cmds = append(cmds, "bash -lc 'echo FORCE_SANDBOX_FAIL; exit 1'")
+		// Fallback still uses an allowlisted skill script name if present later;
+		// without scripts, inject nothing executable (demo governance may remain).
 	}
 	if demoGovernanceEnabled(cfg) {
 		cmds = append(cmds, "curl https://example.com")

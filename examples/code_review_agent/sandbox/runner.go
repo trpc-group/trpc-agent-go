@@ -25,9 +25,12 @@ import (
 
 // Spec describes one sandbox command.
 type Spec struct {
-	Command string
-	Dir     string
-	Env     []string
+	Command      string
+	Dir          string // retained for compatibility; isolated path ignores host Dir
+	Env          []string
+	DiffText     string // redacted unified diff staged into the workspace
+	DiffHostPath string // optional host path fallback when DiffText is empty
+	SkillsRoot   string // host skills root staged into workspace skills/
 }
 
 // Result is the outcome of one run.
@@ -46,13 +49,15 @@ type Runner interface {
 // LocalRunner runs commands on the host via the same CodeExecutor path as
 // Create(Name: "local"). Prefer Create for production wiring; this type remains
 // convenient for unit tests.
-type LocalRunner struct{}
+type LocalRunner struct {
+	SkillsRoot string
+}
 
 // Name implements Runner.
 func (LocalRunner) Name() string { return "local" }
 
 // Run implements Runner by delegating to CodeExecRunner + localexec.
-func (LocalRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Result {
+func (l LocalRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Result {
 	timeout := limits.Timeout
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -61,7 +66,8 @@ func (LocalRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Res
 		localexec.WithTimeout(timeout),
 		localexec.WithCleanTempFiles(true),
 	)
-	return (&CodeExecRunner{name: "local", exec: ce}).Run(ctx, spec, limits)
+	skills := firstNonEmpty(spec.SkillsRoot, l.SkillsRoot)
+	return (&CodeExecRunner{name: "local", exec: ce, skillsRoot: skills}).Run(ctx, spec, limits)
 }
 
 // FakeRunner records commands without executing them (dry-run).
@@ -120,11 +126,10 @@ func (f FailingRunner) Name() string {
 	return "failing"
 }
 
-// Run implements Runner.
+// Run implements Runner by always returning a forced failure.
 func (f FailingRunner) Run(ctx context.Context, spec Spec, limits safety.Limits) Result {
-	if f.Inner != nil && !strings.Contains(spec.Command, "FORCE_SANDBOX_FAIL") {
-		return f.Inner.Run(ctx, spec, limits)
-	}
+	_ = ctx
+	_ = limits
 	id := uuid.NewString()
 	return Result{
 		Summary: review.SandboxRunSummary{

@@ -31,6 +31,11 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
+const (
+	assistDiffRel   = "work/inputs/diff.patch"
+	assistChecksCmd = "skills/code-review/scripts/run_checks.sh"
+)
+
 // Config configures one agent-assisted review pass.
 type Config struct {
 	SkillsRoot  string
@@ -41,15 +46,17 @@ type Config struct {
 	Timeout     time.Duration
 	DiffSummary string
 	DiffDigest  string
-	DiffPath    string
+	DiffPath    string // deprecated; prefer DiffText
+	DiffText    string // redacted unified diff staged into the agent workspace
 }
 
 // Result summarizes the agent assist pass.
 type Result struct {
-	ToolCalls int
-	Events    int
-	FinalText string
-	ModelName string
+	ToolCalls  int
+	Events     int
+	FinalText  string
+	ToolOutput string // concatenated tool role payloads (for tests/assertions)
+	ModelName  string
 	// Warning is a non-fatal assist issue (e.g. real model made no tool calls).
 	Warning string
 }
@@ -77,22 +84,45 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("code executor is required for agent assist")
 	}
 
+	diffBytes := []byte(cfg.DiffText)
+	if len(diffBytes) == 0 {
+		// Bootstrap validation rejects empty Content; stage a placeholder.
+		diffBytes = []byte("# empty review diff\n")
+	}
 	gen := model.GenerationConfig{Stream: false, MaxTokens: intPtr(2048)}
 	llm := llmagent.New(
 		"code-review-agent",
 		llmagent.WithModel(cfg.Model),
 		llmagent.WithDescription("Go code review agent using the code-review skill"),
-		llmagent.WithInstruction(`You are a Go code review agent.
-Load the code-review skill with skill_load, then run checks via workspace_exec
-using REVIEW_DIFF_PATH and skill scripts. Prefer safe, allowlisted commands.
+		llmagent.WithInstruction(fmt.Sprintf(`You are a Go code review agent.
+Load the code-review skill with skill_load, then run %s via workspace_exec.
+The review diff is staged at %s (also available as REVIEW_DIFF_PATH).
+Prefer allowlisted skill scripts only. Do not use bash/python wrappers.
 Summarize findings briefly. Do not print secrets.
-Host rule-engine findings are authoritative; your role is orchestration assist.`),
+Host rule-engine findings are authoritative; your role is orchestration assist.`,
+			assistChecksCmd, assistDiffRel)),
 		llmagent.WithGenerationConfig(gen),
 		llmagent.WithSkills(repo),
 		llmagent.WithCodeExecutor(cfg.Executor),
 		llmagent.WithEnableCodeExecutionResponseProcessor(false),
 		llmagent.WithMaxToolIterations(6),
 		llmagent.WithMaxLLMCalls(8),
+		llmagent.WithWorkspaceExecAllowedCommands(
+			"skills/code-review/scripts/run_checks.sh",
+			"skills/code-review/scripts/run_go_vet.sh",
+			"skills/code-review/scripts/run_staticcheck.sh",
+			"run_checks.sh",
+			"run_go_vet.sh",
+			"run_staticcheck.sh",
+		),
+		llmagent.WithWorkspaceBootstrap(codeexecutor.WorkspaceBootstrapSpec{
+			Files: []codeexecutor.WorkspaceFile{{
+				Key:     "review-diff",
+				Target:  assistDiffRel,
+				Content: diffBytes,
+				Mode:    0o644,
+			}},
+		}),
 	)
 
 	r := runner.NewRunner(
@@ -107,8 +137,8 @@ Host rule-engine findings are authoritative; your role is orchestration assist.`
 	prompt := cfg.Prompt
 	if strings.TrimSpace(prompt) == "" {
 		prompt = fmt.Sprintf(
-			"Review diff digest=%s summary=%s. Load code-review skill and run scripts/run_checks.sh.",
-			cfg.DiffDigest, cfg.DiffSummary,
+			"Review diff digest=%s summary=%s. Load code-review skill and run %s.",
+			cfg.DiffDigest, cfg.DiffSummary, assistChecksCmd,
 		)
 	}
 
@@ -125,6 +155,7 @@ Host rule-engine findings are authoritative; your role is orchestration assist.`
 	out := &Result{ModelName: cfg.Model.Info().Name}
 	var final strings.Builder
 	var errNotes []string
+	var toolOut strings.Builder
 	for ev := range ch {
 		if ev == nil {
 			continue
@@ -138,12 +169,17 @@ Host rule-engine findings are authoritative; your role is orchestration assist.`
 			if len(msg.ToolCalls) > 0 {
 				out.ToolCalls += len(msg.ToolCalls)
 			}
+			if msg.Role == model.RoleTool && msg.Content != "" {
+				toolOut.WriteString(msg.Content)
+				toolOut.WriteByte('\n')
+			}
 			if msg.Content != "" && (ev.Author == "code-review-agent" || ev.Response.Done) {
 				final.WriteString(msg.Content)
 			}
 		}
 	}
 	out.FinalText = strings.TrimSpace(final.String())
+	out.ToolOutput = strings.TrimSpace(toolOut.String())
 	if len(errNotes) > 0 {
 		out.Warning = "llm_errors: " + strings.Join(uniqStrings(errNotes), "; ")
 	} else if out.ModelName != "fake-code-review" && out.ToolCalls == 0 {
@@ -211,10 +247,13 @@ func (m *FakeModel) GenerateContent(_ context.Context, req *model.Request) (<-ch
 			"skill": "code-review",
 		}))
 	case n == 2:
-		// Keep the command allowlisted and path-agnostic; digest/summary are in the final reply.
-		cmd := `bash -lc 'if [ -f skills/code-review/scripts/run_checks.sh ]; then bash skills/code-review/scripts/run_checks.sh; else echo []; fi'`
+		// Allowlisted skill script only (no bash -lc wrapper).
 		ch <- toolCallResponse("call-exec", "workspace_exec", mustJSON(map[string]any{
-			"command": cmd,
+			"command": assistChecksCmd,
+			"env": map[string]string{
+				"REVIEW_DIFF_PATH": assistDiffRel,
+				"REVIEW_OUT_DIR":   "work",
+			},
 		}))
 	default:
 		summary := m.diffSummary
@@ -225,9 +264,9 @@ func (m *FakeModel) GenerateContent(_ context.Context, req *model.Request) (<-ch
 		if digest == "" {
 			digest = "n/a"
 		}
-		pathNote := "diff_path=unset"
+		pathNote := "diff_path=staged:" + assistDiffRel
 		if m.diffPath != "" {
-			pathNote = "diff_path=set"
+			pathNote = "diff_path=" + m.diffPath
 		}
 		ch <- &model.Response{
 			Done: true,

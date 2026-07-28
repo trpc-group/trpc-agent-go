@@ -241,3 +241,132 @@ func TestSandboxFailure_DoesNotCrash(t *testing.T) {
 		t.Fatalf("should not crash: %v", err)
 	}
 }
+
+// TestPersistFailure_MarksTaskFailed ensures durable status is finalized on errors
+// at each persistence stage after the task is marked running.
+func TestPersistFailure_MarksTaskFailed(t *testing.T) {
+	root := moduleRoot(t)
+	stages := []string{
+		"SaveInput",
+		"SavePermission",
+		"SaveSandboxRun",
+		"SaveFindings",
+		"SaveArtifacts",
+		"SaveMetrics",
+		"SaveReport",
+		"Finalize",
+	}
+	for _, stage := range stages {
+		t.Run(stage, func(t *testing.T) {
+			out := t.TempDir()
+			base, err := store.OpenSQLite(filepath.Join(out, "review.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer base.Close()
+
+			failing := &failingStore{ReviewStore: base, failAt: stage}
+			_, err = orchestrator.Run(context.Background(), orchestrator.Config{
+				Mode:         review.ModeRuleOnly,
+				Executor:     "fake",
+				Fixture:      "clean",
+				FixturesRoot: filepath.Join(root, "testdata", "fixtures"),
+				SkillsRoot:   filepath.Join(root, "skills"),
+				OutDir:       out,
+				Store:        failing,
+				Runner:       sandbox.FakeRunner{},
+			})
+			if err == nil {
+				t.Fatal("expected persist error")
+			}
+			if failing.taskID == "" {
+				t.Fatal("expected task to be created")
+			}
+			bundle, gerr := base.GetTaskBundle(context.Background(), failing.taskID)
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			if bundle.Status != review.StatusFailed {
+				t.Fatalf("status=%s want failed (err=%q)", bundle.Status, bundle.Error)
+			}
+			if bundle.Error == "" {
+				t.Fatal("expected redacted error message on failed task")
+			}
+		})
+	}
+}
+
+type failingStore struct {
+	store.ReviewStore
+	failAt string
+	taskID string
+}
+
+func (f *failingStore) CreateTask(ctx context.Context, req store.CreateTaskReq) (string, error) {
+	id, err := f.ReviewStore.CreateTask(ctx, req)
+	f.taskID = id
+	return id, err
+}
+
+func (f *failingStore) SaveInput(ctx context.Context, taskID string, in store.InputRecord) error {
+	if f.failAt == "SaveInput" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveInput(ctx, taskID, in)
+}
+
+func (f *failingStore) SavePermission(ctx context.Context, taskID string, d review.PermissionDecision) error {
+	if f.failAt == "SavePermission" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SavePermission(ctx, taskID, d)
+}
+
+func (f *failingStore) SaveSandboxRun(ctx context.Context, taskID string, run review.SandboxRunSummary) error {
+	if f.failAt == "SaveSandboxRun" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveSandboxRun(ctx, taskID, run)
+}
+
+func (f *failingStore) SaveFindings(ctx context.Context, taskID string, findings, warnings []review.Finding) error {
+	if f.failAt == "SaveFindings" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveFindings(ctx, taskID, findings, warnings)
+}
+
+func (f *failingStore) SaveArtifacts(ctx context.Context, taskID string, arts []review.ArtifactRef) error {
+	if f.failAt == "SaveArtifacts" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveArtifacts(ctx, taskID, arts)
+}
+
+func (f *failingStore) SaveMetrics(ctx context.Context, taskID string, m review.MetricsSummary) error {
+	if f.failAt == "SaveMetrics" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveMetrics(ctx, taskID, m)
+}
+
+func (f *failingStore) SaveReport(ctx context.Context, taskID string, rep store.ReportRecord) error {
+	if f.failAt == "SaveReport" {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.SaveReport(ctx, taskID, rep)
+}
+
+func (f *failingStore) UpdateTaskStatus(ctx context.Context, taskID, status, conclusion, errMsg string) error {
+	// Fail the successful finalize path only; deferred failure finalizer must still work.
+	if f.failAt == "Finalize" && status != review.StatusFailed && status != review.StatusRunning {
+		return errInjectedPersist
+	}
+	return f.ReviewStore.UpdateTaskStatus(ctx, taskID, status, conclusion, errMsg)
+}
+
+var errInjectedPersist = errString("injected persist failure")
+
+type errString string
+
+func (e errString) Error() string { return string(e) }

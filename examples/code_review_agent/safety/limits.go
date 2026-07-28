@@ -61,3 +61,32 @@ func (l Limits) IsEnvAllowed(key string) bool {
 	}
 	return false
 }
+
+// MergeLimits starts from DefaultLimits and overlays each non-zero / non-nil
+// field from partial so callers can set timeout, output, artifact, or env
+// limits independently without wiping the rest.
+func MergeLimits(partial Limits) Limits {
+	out := DefaultLimits()
+	if partial.Timeout > 0 {
+		out.Timeout = partial.Timeout
+	}
+	if partial.MaxStdoutBytes > 0 {
+		out.MaxStdoutBytes = partial.MaxStdoutBytes
+	}
+	if partial.MaxStderrBytes > 0 {
+		out.MaxStderrBytes = partial.MaxStderrBytes
+	}
+	if partial.MaxArtifactFiles > 0 {
+		out.MaxArtifactFiles = partial.MaxArtifactFiles
+	}
+	if partial.MaxArtifactFileBytes > 0 {
+		out.MaxArtifactFileBytes = partial.MaxArtifactFileBytes
+	}
+	if partial.MaxArtifactTotalBytes > 0 {
+		out.MaxArtifactTotalBytes = partial.MaxArtifactTotalBytes
+	}
+	if partial.EnvWhitelist != nil {
+		out.EnvWhitelist = append([]string(nil), partial.EnvWhitelist...)
+	}
+	return out
+}
