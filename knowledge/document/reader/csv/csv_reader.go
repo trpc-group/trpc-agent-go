@@ -72,10 +72,10 @@ func New(opts ...reader.Option) reader.Reader {
 // Oversized records are refined by natural text boundaries.
 func buildDefaultChunkingStrategy(chunkSize, overlap int) chunking.Strategy {
 	opts := []chunking.Option{chunking.WithPreserveLines()}
-	if chunkSize > 0 {
+	if chunkSize != 0 {
 		opts = append(opts, chunking.WithChunkSize(chunkSize))
 	}
-	if overlap > 0 {
+	if overlap != 0 {
 		opts = append(opts, chunking.WithOverlap(overlap))
 	}
 	return chunking.NewFixedSizeChunking(opts...)

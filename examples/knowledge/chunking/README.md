@@ -88,7 +88,7 @@ chunks. You can:
 - follow connector lines from each chunk to its source range
 - click a chunk to jump the source view directly to its mapped position
 - scroll the mapped source and chunk list together
-- compare highlighted overlap on both sides
+- compare the same shared boundary highlighted in both the source and chunk views
 - inspect syntax-highlighted JSON and tabular CSV source/chunk views
 - inspect full chunk content and use **Show metadata** to reveal metadata
 

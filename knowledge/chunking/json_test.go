@@ -11,6 +11,8 @@ package chunking
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -46,6 +48,68 @@ func TestOrderedJSONKeysMixedNumericAndLexical(t *testing.T) {
 		if got := orderedJSONKeys(data); !slices.Equal(got, want) {
 			t.Fatalf("orderedJSONKeys() = %v, want %v", got, want)
 		}
+	}
+}
+
+func TestJSONChunkingEmitsNumericKeysInNumericOrder(t *testing.T) {
+	data := map[string]any{
+		"items": []any{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+	}
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(1000),
+	).SplitJSON(data, true)
+	if err != nil {
+		t.Fatalf("SplitJSON() error = %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("SplitJSON() chunks = %d, want 1", len(chunks))
+	}
+	want := `{"items":{"0":0,"1":1,"2":2,"3":3,"4":4,"5":5,"6":6,"7":7,"8":8,"9":9,"10":10,"11":11}}`
+	if chunks[0] != want {
+		t.Fatalf("SplitJSON() chunk = %s, want %s", chunks[0], want)
+	}
+}
+
+func TestJSONChunkingChunkEmitsArrayIndexesInOrder(t *testing.T) {
+	values := make([]string, 15)
+	for i := range values {
+		values[i] = fmt.Sprintf("value-%d-xxxxxxxx", i)
+	}
+	content, err := json.Marshal(map[string]any{"items": values})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	chunks, err := NewJSONChunking(
+		WithJSONChunkSize(100),
+	).Chunk(&document.Document{Content: string(content)})
+	if err != nil {
+		t.Fatalf("Chunk() error = %v", err)
+	}
+
+	var contents []string
+	for _, chunk := range chunks {
+		contents = append(contents, chunk.Content)
+	}
+	joined := strings.Join(contents, "\n")
+	previous := -1
+	for i := range values {
+		position := strings.Index(joined, fmt.Sprintf(`"%d":`, i))
+		if position < 0 {
+			t.Fatalf("Chunk() output does not contain index %d: %s", i, joined)
+		}
+		if position <= previous {
+			t.Fatalf("Chunk() index %d is out of order: %s", i, joined)
+		}
+		previous = position
+	}
+}
+
+func TestJSONChunkingRejectsInvalidChunkSize(t *testing.T) {
+	_, err := NewJSONChunking(
+		WithJSONChunkSize(-1),
+	).SplitJSON(map[string]any{"value": "text"}, false)
+	if !errors.Is(err, ErrInvalidChunkSize) {
+		t.Fatalf("SplitJSON() error = %v, want %v", err, ErrInvalidChunkSize)
 	}
 }
 

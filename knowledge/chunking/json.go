@@ -11,6 +11,7 @@
 package chunking
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -84,7 +85,7 @@ func (j *JSONChunking) Chunk(doc *document.Document) ([]*document.Document, erro
 	// Convert chunks to documents.
 	var documents []*document.Document
 	for i, chunk := range chunks {
-		chunkJSON, err := json.Marshal(chunk)
+		chunkJSON, err := marshalOrderedJSON(chunk)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal chunk %d: %w", i, err)
 		}
@@ -102,6 +103,10 @@ func (j *JSONChunking) splitJSON(
 	data map[string]any,
 	convertLists bool,
 ) ([]map[string]any, error) {
+	if j.maxChunkSize <= 0 {
+		return nil, ErrInvalidChunkSize
+	}
+
 	// Preprocess data if convertLists is true.
 	if convertLists {
 		processed := j.listToDictPreprocessing(data)
@@ -258,6 +263,56 @@ func parseJSONIntegerKey(key string) (*big.Int, bool) {
 	return value, ok
 }
 
+func marshalOrderedJSON(value any) ([]byte, error) {
+	var buffer bytes.Buffer
+	if err := writeOrderedJSON(&buffer, value); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
+}
+
+func writeOrderedJSON(buffer *bytes.Buffer, value any) error {
+	switch typed := value.(type) {
+	case map[string]any:
+		buffer.WriteByte('{')
+		for i, key := range orderedJSONKeys(typed) {
+			if i > 0 {
+				buffer.WriteByte(',')
+			}
+			encodedKey, err := json.Marshal(key)
+			if err != nil {
+				return err
+			}
+			buffer.Write(encodedKey)
+			buffer.WriteByte(':')
+			if err := writeOrderedJSON(buffer, typed[key]); err != nil {
+				return err
+			}
+		}
+		buffer.WriteByte('}')
+		return nil
+	case []any:
+		buffer.WriteByte('[')
+		for i, item := range typed {
+			if i > 0 {
+				buffer.WriteByte(',')
+			}
+			if err := writeOrderedJSON(buffer, item); err != nil {
+				return err
+			}
+		}
+		buffer.WriteByte(']')
+		return nil
+	default:
+		encodedValue, err := json.Marshal(value)
+		if err != nil {
+			return err
+		}
+		buffer.Write(encodedValue)
+		return nil
+	}
+}
+
 func (j *JSONChunking) addStringValue(
 	chunks []map[string]any,
 	path []string,
@@ -382,7 +437,7 @@ func cloneJSONValue(value any) any {
 
 // jsonSize calculates the size of the serialized JSON object.
 func (j *JSONChunking) jsonSize(data map[string]any) int {
-	jsonBytes, err := json.Marshal(data)
+	jsonBytes, err := marshalOrderedJSON(data)
 	if err != nil {
 		return 0
 	}
@@ -455,7 +510,7 @@ func (j *JSONChunking) SplitJSON(data map[string]any, convertLists bool) ([]stri
 
 	var result []string
 	for _, chunk := range chunks {
-		jsonBytes, err := json.Marshal(chunk)
+		jsonBytes, err := marshalOrderedJSON(chunk)
 		if err != nil {
 			return nil, fmt.Errorf("failed to marshal chunk: %w", err)
 		}

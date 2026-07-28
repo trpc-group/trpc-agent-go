@@ -213,6 +213,9 @@ registry.
 
 > `overlap` only applies to FixedSizeChunking, RecursiveChunking, and MarkdownChunking. It is a maximum: the strategy may move the overlap start to a natural boundary or reduce it so the final chunk remains within `chunkSize`. A large overlap leaves less room for new content and produces more chunks. JSONChunking does not support overlap.
 
+Overlap is the content shared by the end of one chunk and the beginning of the
+next. It does not add separate overlap regions to both ends of a single chunk.
+
 The implicit text-strategy overlap changed from `128` to `0`. This affects
 knowledge bases created without an explicit overlap: chunk boundaries and
 embedding inputs will change. To keep an overlapping window, configure the

@@ -987,10 +987,17 @@
     }
 
     function compareJSONKeys(left, right) {
-      const integerPattern = /^-?\d+$/;
-      if (integerPattern.test(left) && integerPattern.test(right)) {
-        const difference = Number(left) - Number(right);
-        if (difference !== 0) return difference;
+      const integerPattern = /^[+-]?\d+$/;
+      const leftIsInteger = integerPattern.test(left);
+      const rightIsInteger = integerPattern.test(right);
+      if (leftIsInteger !== rightIsInteger) {
+        return leftIsInteger ? -1 : 1;
+      }
+      if (leftIsInteger) {
+        const leftValue = BigInt(left);
+        const rightValue = BigInt(right);
+        if (leftValue < rightValue) return -1;
+        if (leftValue > rightValue) return 1;
       }
       return left < right ? -1 : left > right ? 1 : 0;
     }
@@ -1213,21 +1220,11 @@
     }
 
     function normalizeCSVReaderField(field) {
-      let start = 0;
-      let end = field.length;
-      while (start < end && (field[start] === "\"" || field[start] === "'")) {
-        start++;
-      }
-      while (
-        end > start &&
-        (field[end - 1] === "\"" || field[end - 1] === "'")
-      ) {
-        end--;
-      }
       return field
-        .slice(start, end)
-        .trim()
-        .replace(/\s+/g, " ");
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
+        .replace(/\n/g, " ")
+        .trim();
     }
 
     function rowIndexAtOffset(rowStarts, offset) {
