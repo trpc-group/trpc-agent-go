@@ -699,9 +699,8 @@ Track 事件是 Session 中独立于主对话事件的轨迹存储机制，目�
 
 **接口说明**：
 
-Track 事件写入定义在可选的 `session.TrackService` 接口上。支持持久化
-Track 历史读取的存储后端，会在各自的具体 service 类型上暴露
-`GetTrackEvents` 方法。
+Track 事件写入定义在可选的 `session.TrackService` 接口上。支持 Track
+历史的存储后端会随 session 数据持久化这些事件。
 
 ```go
 type TrackService interface {
@@ -709,18 +708,18 @@ type TrackService interface {
 }
 ```
 
-并非所有存储后端都实现了 Track event API。使用时需要通过类型断言获取：
+并非所有存储后端都实现了 Track event 写入。使用时需要通过类型断言获取：
 
-| 存储后端 | 是否实现 TrackService | 是否有 GetTrackEvents |
-| --- | --- | --- |
-| 内存存储（inmemory） | ✅ | ✅ |
-| SQLite | ✅ | ✅ |
-| Redis 存储 | ✅ | ✅ |
-| PostgreSQL 存储 | ✅ | ✅ |
-| PGVector | ✅ | ✅ |
-| MySQL 存储 | ✅ | ✅ |
-| MongoDB 存储 | ✅ | ✅ |
-| ClickHouse 存储 | ❌ | ❌ |
+| 存储后端 | 是否实现 TrackService |
+| --- | --- |
+| 内存存储（inmemory） | ✅ |
+| SQLite | ✅ |
+| Redis 存储 | ✅ |
+| PostgreSQL 存储 | ✅ |
+| PGVector | ✅ |
+| MySQL 存储 | ✅ |
+| MongoDB 存储 | ✅ |
+| ClickHouse 存储 | ❌ |
 
 **基本用法**：
 
@@ -739,25 +738,13 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// 支持时，直接读取持久化 Track 事件
-type trackEventReader interface {
-    GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
-}
-reader, ok := sessionService.(trackEventReader)
-if !ok {
-    log.Fatal("当前存储后端未暴露 GetTrackEvents")
-}
-trackEvents, err := reader.GetTrackEvents(ctx, session.Key{
-    AppName:   sess.AppName,
-    UserID:    sess.UserID,
-    SessionID: sess.ID,
-}, "ui-events")
+// 读取已经加载到 session 快照中的 Track 事件
+trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
 
 `Session.GetTrackEvents` 只读取已经加载到 session 快照中的 Track 事件。
-AG-UI 历史记录这类持久化历史视图应优先使用
-backend 的 `GetTrackEvents` 方法，因为它直接读取 Track 存储，不依赖
-session state 中的 track 索引。
+AG-UI 历史记录会在配置的 session service 支持时内部使用持久化 Track
+历史，否则回退到 session 快照。
 
 ## 语义召回（仅 PGVector）
 

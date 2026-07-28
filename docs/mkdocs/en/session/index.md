@@ -690,8 +690,8 @@ Track events are a trajectory storage mechanism in Session that is independent o
 **Interface**:
 
 Track event writes are exposed through the optional `session.TrackService`
-interface. Storage backends that support persisted track history also expose a
-`GetTrackEvents` method on their concrete service types.
+interface. Storage backends that support track history persist these events with
+the session data.
 
 ```go
 type TrackService interface {
@@ -699,18 +699,18 @@ type TrackService interface {
 }
 ```
 
-Not all storage backends implement track event APIs. A type assertion is required:
+Not all storage backends implement track event writes. A type assertion is required:
 
-| Storage Backend | Implements TrackService | Has GetTrackEvents |
-| --- | --- | --- |
-| Memory (inmemory) | ✅ | ✅ |
-| SQLite | ✅ | ✅ |
-| Redis | ✅ | ✅ |
-| PostgreSQL | ✅ | ✅ |
-| PGVector | ✅ | ✅ |
-| MySQL | ✅ | ✅ |
-| MongoDB | ✅ | ✅ |
-| ClickHouse | ❌ | ❌ |
+| Storage Backend | Implements TrackService |
+| --- | --- |
+| Memory (inmemory) | ✅ |
+| SQLite | ✅ |
+| Redis | ✅ |
+| PostgreSQL | ✅ |
+| PGVector | ✅ |
+| MySQL | ✅ |
+| MongoDB | ✅ |
+| ClickHouse | ❌ |
 
 **Basic usage**:
 
@@ -729,25 +729,14 @@ err := trackService.AppendTrackEvent(ctx, sess, &session.TrackEvent{
     Timestamp: time.Now(),
 })
 
-// Retrieve persisted track events directly when supported
-type trackEventReader interface {
-    GetTrackEvents(ctx context.Context, key session.Key, track session.Track, opts ...session.Option) (*session.TrackEvents, error)
-}
-reader, ok := sessionService.(trackEventReader)
-if !ok {
-    log.Fatal("current storage backend does not expose GetTrackEvents")
-}
-trackEvents, err := reader.GetTrackEvents(ctx, session.Key{
-    AppName:   sess.AppName,
-    UserID:    sess.UserID,
-    SessionID: sess.ID,
-}, "ui-events")
+// Read track events already loaded in the session snapshot
+trackEvents, err := sess.GetTrackEvents("ui-events")
 ```
 
 `Session.GetTrackEvents` reads only the track events already loaded into a
-session snapshot. Use the backend `GetTrackEvents` method for persisted history
-views such as AG-UI history, because it reads the track storage directly and
-does not depend on the session state's track index.
+session snapshot. AG-UI history uses persisted track history internally when the
+configured session service supports it, and falls back to the session snapshot
+otherwise.
 
 ## Semantic Recall (PGVector Only)
 
