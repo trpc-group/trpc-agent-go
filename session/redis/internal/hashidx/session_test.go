@@ -361,19 +361,62 @@ func TestClient_DeleteSession_WithTracks(t *testing.T) {
 	tracksJSON, _ := json.Marshal([]string{"alpha"})
 	require.NoError(t, c.AppendTrackEvent(ctx, key, te, tracksJSON))
 
-	// Verify track keys exist
+	// Verify track keys exist.
 	trkDataKey := c.keys.TrackDataKey(key, "alpha")
 	trkIdxKey := c.keys.TrackTimeIndexKey(key, "alpha")
-	n, err := rdb.Exists(ctx, trkDataKey, trkIdxKey).Result()
+	trkNamesKey := c.keys.TrackIndexKey(key)
+	n, err := rdb.Exists(ctx, trkDataKey, trkIdxKey, trkNamesKey).Result()
 	require.NoError(t, err)
-	assert.Equal(t, int64(2), n)
+	assert.Equal(t, int64(3), n)
 
 	require.NoError(t, c.DeleteSession(ctx, key))
 
-	// All keys should be gone
-	n, err = rdb.Exists(ctx, trkDataKey, trkIdxKey, c.keys.SessionMetaKey(key)).Result()
+	// All keys should be gone.
+	n, err = rdb.Exists(ctx, trkDataKey, trkIdxKey, trkNamesKey, c.keys.SessionMetaKey(key)).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), n)
+}
+
+func TestClient_DeleteSession_WithRetainedTracksAfterSessionMetaExpired(t *testing.T) {
+	mr, rdb := setupMiniredis(t)
+	createCfg := defaultConfig()
+	createCfg.SessionTTL = time.Second
+	createClient := NewClient(rdb, createCfg)
+	trackTTL := time.Duration(0)
+	appendCfg := createCfg
+	appendCfg.TrackEventTTL = &trackTTL
+	appendClient := NewClient(rdb, appendCfg)
+	ctx := context.Background()
+	key := session.Key{AppName: "app", UserID: "u1", SessionID: "retained-track-delete"}
+	_, err := createClient.CreateSession(ctx, key, nil)
+	require.NoError(t, err)
+	tracksJSON, err := json.Marshal([]string{"alpha"})
+	require.NoError(t, err)
+	require.NoError(t, appendClient.AppendTrackEvent(ctx, key, &session.TrackEvent{
+		Track:     "alpha",
+		Payload:   json.RawMessage(`"payload"`),
+		Timestamp: time.Now(),
+	}, tracksJSON))
+	metaKey := createClient.keys.SessionMetaKey(key)
+	trackDataKey := createClient.keys.TrackDataKey(key, "alpha")
+	trackTimeIndexKey := createClient.keys.TrackTimeIndexKey(key, "alpha")
+	trackNamesKey := createClient.keys.TrackIndexKey(key)
+	assert.True(t, mr.Exists(metaKey))
+	assert.True(t, mr.Exists(trackDataKey))
+	assert.True(t, mr.Exists(trackTimeIndexKey))
+	assert.True(t, mr.Exists(trackNamesKey))
+	mr.FastForward(2 * time.Second)
+	assert.False(t, mr.Exists(metaKey))
+	got, err := appendClient.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
+	require.NoError(t, err)
+	require.Len(t, got["alpha"], 1)
+	require.NoError(t, createClient.DeleteSession(ctx, key))
+	got, err = appendClient.GetTrackEvents(ctx, key, []session.Track{"alpha"}, 0, time.Time{})
+	require.NoError(t, err)
+	assert.Empty(t, got["alpha"])
+	assert.False(t, mr.Exists(trackDataKey))
+	assert.False(t, mr.Exists(trackTimeIndexKey))
+	assert.False(t, mr.Exists(trackNamesKey))
 }
 
 func TestClient_DeleteEvent(t *testing.T) {

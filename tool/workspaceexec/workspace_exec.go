@@ -103,6 +103,7 @@ type execSession struct {
 	mu sync.Mutex
 
 	proc        codeexecutor.ProgramSession
+	handle      codeexecutor.WorkspaceHandle
 	exitedAt    time.Time
 	finalized   bool
 	finalizedAt time.Time
@@ -160,12 +161,13 @@ type OutputLimits struct {
 }
 
 type execRequest struct {
-	background bool
-	tty        bool
-	yield      *int
-	eng        codeexecutor.Engine
-	ws         codeexecutor.Workspace
-	spec       codeexecutor.RunProgramSpec
+	background      bool
+	tty             bool
+	yield           *int
+	eng             codeexecutor.Engine
+	ws              codeexecutor.Workspace
+	workspaceHandle codeexecutor.WorkspaceHandle
+	spec            codeexecutor.RunProgramSpec
 }
 
 type killOutput struct {
@@ -619,10 +621,7 @@ func (t *ExecTool) Call(ctx context.Context, args []byte) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	if t.sessional {
-		return t.callSessional(ctx, req)
-	}
-	return t.callNonSessional(ctx, req)
+	return t.callWithWorkspaceRetry(ctx, req)
 }
 
 func parseExecInput(args []byte) (execInput, error) {
@@ -658,13 +657,6 @@ func (t *ExecTool) prepareExec(
 	if err := checkRunnerSupportsPolicy(eng, policyActive); err != nil {
 		return execRequest{}, err
 	}
-	ws, err := t.resolver.CreateWorkspace(ctx, eng, "workspace")
-	if err != nil {
-		return execRequest{}, err
-	}
-	if err := t.reconcileWorkspace(ctx, eng, ws); err != nil {
-		return execRequest{}, err
-	}
 	timeout := firstIntValue(in.TimeoutSec, in.TimeoutSecOld)
 	if timeout <= 0 {
 		timeout = in.Timeout
@@ -674,7 +666,6 @@ func (t *ExecTool) prepareExec(
 		tty:        firstBoolValue(in.TTY, in.PTY),
 		yield:      firstIntPtr(in.YieldTimeMS, in.YieldMs),
 		eng:        eng,
-		ws:         ws,
 		spec: codeexecutor.RunProgramSpec{
 			Cmd:      "sh",
 			Args:     shellArgsForPolicy(policyActive, in.Command),
@@ -757,6 +748,57 @@ func (t *ExecTool) scanOutput(ctx context.Context, out execOutput) execOutput {
 	}
 	out.Output, _ = safety.TruncateOutput(out.Output, policy)
 	return out
+}
+
+func (t *ExecTool) callWithWorkspaceRetry(
+	ctx context.Context,
+	base execRequest,
+) (execOutput, error) {
+	req := base
+	out, acquired, err := t.executeWorkspaceAttempt(ctx, &req)
+	if err == nil || !errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		return out, err
+	}
+	if acquired {
+		t.resolver.InvalidateWorkspaceHandle(req.workspaceHandle)
+	}
+	if !codeexecutor.IsWorkspaceRetrySafe(err) {
+		return out, err
+	}
+	retry := base
+	out, acquired, err = t.executeWorkspaceAttempt(ctx, &retry)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) && acquired {
+		t.resolver.InvalidateWorkspaceHandle(retry.workspaceHandle)
+	}
+	return out, err
+}
+
+// executeWorkspaceAttempt keeps Acquire, reconciliation, and process start in
+// one retry unit. Stale always invalidates the exact acquired handle, while the
+// caller separately checks reconciliation's retry-safety marker before replay.
+func (t *ExecTool) executeWorkspaceAttempt(
+	ctx context.Context,
+	req *execRequest,
+) (execOutput, bool, error) {
+	handle, err := t.resolver.CreateWorkspaceHandle(
+		ctx,
+		req.eng,
+		"workspace",
+	)
+	if err != nil {
+		return execOutput{}, false, err
+	}
+	req.workspaceHandle = handle
+	req.ws = handle.Workspace
+	if err := t.reconcileWorkspace(ctx, req.eng, req.ws); err != nil {
+		return execOutput{}, true, err
+	}
+	if t.sessional {
+		out, err := t.callSessional(ctx, *req)
+		return out, true, err
+	}
+	out, err := t.callNonSessional(ctx, *req)
+	return out, true, err
 }
 
 // checkCommandPolicy enforces the optional allow/deny lists. When no
@@ -941,7 +983,10 @@ func (t *ExecTool) startInteractive(
 	if err != nil {
 		return execOutput{}, err
 	}
-	t.putSession(proc.ID(), &execSession{proc: proc})
+	t.putSession(proc.ID(), &execSession{
+		proc:   proc,
+		handle: req.workspaceHandle,
+	})
 	poll := initialPoll(proc, req.background, req.yield)
 	out := pollOutput(proc.ID(), poll)
 	out = t.limitOutput(out)
@@ -994,6 +1039,7 @@ func (t *WriteStdinTool) Call(ctx context.Context, args []byte) (any, error) {
 			return nil, err
 		}
 		if err := sess.proc.Write(in.Chars, appendNewline); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 	}
@@ -1035,6 +1081,7 @@ func (t *KillSessionTool) Call(_ context.Context, args []byte) (any, error) {
 	poll := sess.proc.Poll(nil)
 	if poll.Status == codeexecutor.ProgramStatusRunning {
 		if err := sess.proc.Kill(programsession.DefaultSessionKill); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 		status = "killed"
@@ -1061,7 +1108,7 @@ func (t *ExecTool) reconcileWorkspace(
 	ws codeexecutor.Workspace,
 ) error {
 	if t == nil || len(t.providers) == 0 {
-		_, warnings := workspaceinput.StageConversationFiles(ctx, eng, ws)
+		_, warnings, err := workspaceinput.StageConversationFiles(ctx, eng, ws)
 		for _, warning := range warnings {
 			log.WarnfContext(
 				ctx,
@@ -1069,7 +1116,7 @@ func (t *ExecTool) reconcileWorkspace(
 				warning,
 			)
 		}
-		return nil
+		return err
 	}
 	inv, _ := agent.InvocationFromContext(ctx)
 	var all []workspaceprep.Requirement
@@ -1152,6 +1199,7 @@ func (t *ExecTool) finalizeAndRemoveSession(id string) error {
 	}
 	t.markSessionFinalized(sess)
 	if err := sess.proc.Close(); err != nil {
+		t.invalidateSessionWorkspaceIfStale(sess, err)
 		return err
 	}
 	_, err = t.removeSession(id)
@@ -1177,8 +1225,20 @@ func (t *ExecTool) cleanupExpiredLocked() {
 		if expired {
 			if err := sess.proc.Close(); err == nil {
 				delete(t.sessions, id)
+			} else {
+				t.invalidateSessionWorkspaceIfStale(sess, err)
 			}
 		}
+	}
+}
+
+func (t *ExecTool) invalidateSessionWorkspaceIfStale(
+	sess *execSession,
+	err error,
+) {
+	if t != nil && t.resolver != nil &&
+		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.resolver.InvalidateWorkspaceHandle(sess.handle)
 	}
 }
 

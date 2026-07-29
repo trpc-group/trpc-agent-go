@@ -12,6 +12,7 @@ package skill
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -87,9 +88,10 @@ type sessionKillOutput struct {
 type execSession struct {
 	mu sync.Mutex
 
-	proc codeexecutor.ProgramSession
-	eng  codeexecutor.Engine
-	ws   codeexecutor.Workspace
+	proc   codeexecutor.ProgramSession
+	eng    codeexecutor.Engine
+	ws     codeexecutor.Workspace
+	handle codeexecutor.WorkspaceHandle
 
 	in                    runInput
 	staged                []stagedInput
@@ -354,48 +356,28 @@ func (t *ExecTool) StreamableCall(
 	runIn, saveRequested, outputsSaveSkipReason := t.run.
 		applyArtifactSaveOverrides(ctx, in.runInput)
 	in.runInput = runIn
-	eng, ws, skillRoot, ctxIO, staged, stageWarn, err := t.run.
-		prepareWorkspaceForRun(ctx, in.runInput)
-	if err != nil {
-		return nil, err
+	prepared, proc, err := t.startProgramAttempt(ctx, in)
+	if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.run.invalidateWorkspaceHandle(prepared.handle)
+		if codeexecutor.IsWorkspaceRetrySafe(err) {
+			prepared, proc, err = t.startProgramAttempt(ctx, in)
+			if errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+				t.run.invalidateWorkspaceHandle(prepared.handle)
+			}
+		}
 	}
-	runner, ok := eng.Runner().(codeexecutor.InteractiveProgramRunner)
-	if !ok {
-		return nil, fmt.Errorf(
-			"skill_exec is not supported by the current executor",
-		)
-	}
-	cwd := resolveCWD(in.Cwd, skillRoot)
-	spec, err := t.run.buildRunProgramSpec(
-		ctxIO,
-		eng,
-		ws,
-		skillRoot,
-		cwd,
-		in.runInput,
-	)
-	if err != nil {
-		return nil, err
-	}
-	proc, err := runner.StartProgram(
-		ctxIO,
-		ws,
-		codeexecutor.InteractiveProgramSpec{
-			RunProgramSpec: spec,
-			TTY:            in.TTY,
-		},
-	)
 	if err != nil {
 		return nil, err
 	}
 
 	sess := &execSession{
 		proc:                  proc,
-		eng:                   eng,
-		ws:                    ws,
+		eng:                   prepared.eng,
+		ws:                    prepared.handle.Workspace,
+		handle:                prepared.handle,
 		in:                    in.runInput,
-		staged:                staged,
-		stageWarnings:         stageWarn,
+		staged:                prepared.staged,
+		stageWarnings:         prepared.warnings,
 		saveRequested:         saveRequested,
 		outputsSaveSkipReason: outputsSaveSkipReason,
 	}
@@ -411,6 +393,47 @@ func (t *ExecTool) StreamableCall(
 		return nil, err
 	}
 	return buildExecStream(poll.Output, result), nil
+}
+
+func (t *ExecTool) startProgramAttempt(
+	ctx context.Context,
+	in execInput,
+) (
+	workspaceRunPreparation,
+	codeexecutor.ProgramSession,
+	error,
+) {
+	prepared, err := t.run.prepareWorkspaceForRun(ctx, in.runInput)
+	if err != nil {
+		return prepared, nil, err
+	}
+	runner, ok := prepared.eng.Runner().(codeexecutor.InteractiveProgramRunner)
+	if !ok {
+		return prepared, nil, fmt.Errorf(
+			"skill_exec is not supported by the current executor",
+		)
+	}
+	cwd := resolveCWD(in.Cwd, prepared.skillRoot)
+	spec, err := t.run.buildRunProgramSpec(
+		prepared.ctxIO,
+		prepared.eng,
+		prepared.handle.Workspace,
+		prepared.skillRoot,
+		cwd,
+		in.runInput,
+	)
+	if err != nil {
+		return prepared, nil, err
+	}
+	proc, err := runner.StartProgram(
+		prepared.ctxIO,
+		prepared.handle.Workspace,
+		codeexecutor.InteractiveProgramSpec{
+			RunProgramSpec: spec,
+			TTY:            in.TTY,
+		},
+	)
+	return prepared, proc, err
 }
 
 // StreamableCall writes stdin to a running skill session.
@@ -431,6 +454,7 @@ func (t *WriteStdinTool) StreamableCall(
 	}
 	if in.Chars != "" || in.Submit {
 		if err := sess.proc.Write(in.Chars, in.Submit); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 	}
@@ -498,11 +522,14 @@ func (t *KillSessionTool) Call(
 	poll := sess.proc.Poll(nil)
 	if poll.Status == codeexecutor.ProgramStatusRunning {
 		if err := sess.proc.Kill(defaultSessionKill); err != nil {
+			t.exec.invalidateSessionWorkspaceIfStale(sess, err)
 			return nil, err
 		}
 		status = "killed"
 	}
-	_ = sess.proc.Close()
+	if err := sess.proc.Close(); err != nil {
+		t.exec.invalidateSessionWorkspaceIfStale(sess, err)
+	}
 	if _, err := t.exec.removeSession(in.SessionID); err != nil {
 		return nil, err
 	}
@@ -560,7 +587,9 @@ func (t *ExecTool) cleanupExpiredLocked() {
 			now.Sub(sess.exitedAt) >= t.ttl
 		sess.mu.Unlock()
 		if expired {
-			_ = sess.proc.Close()
+			if err := sess.proc.Close(); err != nil {
+				t.invalidateSessionWorkspaceIfStale(sess, err)
+			}
 			delete(t.sessions, id)
 		}
 	}
@@ -574,6 +603,7 @@ func (t *ExecTool) buildExecOutput(
 ) (execOutput, error) {
 	result, err := t.captureFinalResult(ctx, sess, poll)
 	if err != nil {
+		t.invalidateSessionWorkspaceIfStale(sess, err)
 		return execOutput{}, err
 	}
 	out := execOutput{
@@ -605,18 +635,24 @@ func (t *ExecTool) captureFinalResult(
 	}
 
 	ctxIO := withArtifactContext(ctx)
-	autoFiles := t.run.autoExportWorkspaceOut(
+	autoFiles, err := t.run.autoExportWorkspaceOut(
 		ctxIO,
 		sess.eng,
 		sess.ws,
 		sess.in,
 	)
-	files, manifest, outputWarn, err := t.run.prepareOutputs(
+	if err != nil {
+		return nil, err
+	}
+	files, manifest, outputWarn, partialStale, err := t.run.prepareOutputs(
 		ctxIO,
 		sess.eng,
 		sess.ws,
 		sess.in,
 	)
+	if partialStale {
+		t.run.invalidateWorkspaceHandle(sess.handle)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -660,8 +696,20 @@ func (t *ExecTool) captureFinalResult(
 	sess.finalized = true
 	sess.finalizedAt = t.clock()
 	sess.exitedAt = sess.finalizedAt
-	_ = sess.proc.Close()
+	if err := sess.proc.Close(); err != nil {
+		t.invalidateSessionWorkspaceIfStale(sess, err)
+	}
 	return sess.final, nil
+}
+
+func (t *ExecTool) invalidateSessionWorkspaceIfStale(
+	sess *execSession,
+	err error,
+) {
+	if t != nil && t.run != nil &&
+		errors.Is(err, codeexecutor.ErrWorkspaceStale) {
+		t.run.invalidateWorkspaceHandle(sess.handle)
+	}
 }
 
 func sessionRunResult(
