@@ -1,0 +1,17 @@
+--- a/repo/user.go
++++ b/repo/user.go
+@@ -10,3 +10,12 @@
+
+ func GetUser(db *sql.DB, id int) (*User, error) {
++	conn, err := db.Conn(context.Background())
++	if err != nil {
++		return nil, err
++	}
++	row := conn.QueryRow("SELECT * FROM users WHERE id = ?", id)
++	var u User
++	err = row.Scan(&u.ID, &u.Name, &u.Email)
++	if err != nil {
++		return nil, err
++	}
++	return &u, nil
+ }

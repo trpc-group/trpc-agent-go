@@ -1,0 +1,75 @@
+{
+  "task_id": "task-20260729-232426",
+  "start_time": "2026-07-29T23:24:26+08:00",
+  "end_time": "2026-07-29T23:24:26+08:00",
+  "duration": "1ms",
+  "input_type": "diff_file",
+  "input_path": "testdata/security_issue.diff",
+  "files_count": 1,
+  "go_files_count": 1,
+  "summary": {
+    "total_findings": 2,
+    "total_warnings": 0,
+    "dedup_removed": 0,
+    "by_severity": {
+      "high": 2
+    },
+    "by_category": {
+      "security": 2
+    }
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "category": "security",
+      "rule_id": "SEC-AST-001",
+      "title": "Token 感知：疑似硬编码密钥",
+      "file": "config.go",
+      "line": 9,
+      "evidence": "\tAPIKey    string = \"sk-abc123secretkey2024\"",
+      "recommendation": "将密钥移至环境变量或密钥管理服务",
+      "confidence": 0.9,
+      "source": "token:hardcoded_secret",
+      "timestamp": "2026-07-29T23:24:26+08:00"
+    },
+    {
+      "severity": "high",
+      "category": "security",
+      "rule_id": "SEC-AST-001",
+      "title": "Token 感知：疑似硬编码密钥",
+      "file": "config.go",
+      "line": 10,
+      "evidence": "\tDBPassword string = \"admin123456\"",
+      "recommendation": "将密钥移至环境变量或密钥管理服务",
+      "confidence": 0.9,
+      "source": "token:hardcoded_secret",
+      "timestamp": "2026-07-29T23:24:26+08:00"
+    }
+  ],
+  "warnings": null,
+  "governance": {
+    "total_checks": 0,
+    "allowed": 0,
+    "denied": 0,
+    "ask_human": 0
+  },
+  "sandbox_summary": {
+    "total_runs": 0,
+    "successful": 0,
+    "failed": 0,
+    "timed_out": 0,
+    "total_duration": "0s"
+  },
+  "monitor": {
+    "total_duration": "1ms",
+    "rule_duration": "0s",
+    "sandbox_duration": "0s",
+    "tool_call_count": 2,
+    "rule_count": 6,
+    "files_scanned": 1,
+    "permission_denied": 0,
+    "exception_count": 0,
+    "risk_score": 30,
+    "risk_grade": "B"
+  }
+}

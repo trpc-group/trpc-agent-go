@@ -1,0 +1,18 @@
+--- a/config/secrets.go
++++ b/config/secrets.go
+@@ -5,2 +5,12 @@
+ type Config struct {
+ 	Host string
++	// AWS 密钥
++	AccessKey string = "AKIAIOSFODNN7EXAMPLE"
++	// GitHub Token
++	GitHubToken string = "ghp_FAKEtestTokenForDetection000000000000"
++	// 数据库密码
++	DBPassword string = "SuperSecret123!"
++	// 数据库连接串
++	DSN string = "postgres://admin:password123@db.example.com:5432/mydb"
++	// JWT Token
++	AuthToken string = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
++	// 私钥（部分）
++	PrivateKey string = "-----BEGIN RSA PRIVATE KEY-----"
+ }

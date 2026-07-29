@@ -1,0 +1,12 @@
+--- a/config.go
++++ b/config.go
+@@ -5,6 +5,9 @@
+ type Config struct {
+ 	Host string
+ 	Port int
++	// API 密钥（注意：不应硬编码）
++	APIKey    string = "sk-abc123secretkey2024"
++	DBPassword string = "admin123456"
+ }
+
+ func LoadConfig() *Config {

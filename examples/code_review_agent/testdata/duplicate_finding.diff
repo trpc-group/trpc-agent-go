@@ -1,0 +1,10 @@
+--- a/config.go
++++ b/config.go
+@@ -5,2 +5,6 @@
+ type Config struct {
+ 	Host string
++	APIKey    string = "sk-realapikey123456789"
++	SecretKey string = "mysecretkey123456789"
++	Token     string = "bearer-token-abcdefghij"
++	DBPass    string = "dbpassword123456"
+ }
