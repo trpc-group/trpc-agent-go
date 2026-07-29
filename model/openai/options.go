@@ -110,7 +110,7 @@ type options struct {
 	// ContextWindow is the model context window size in tokens.
 	ContextWindow int
 	// ContextWindowResolver resolves provider-scoped model context windows.
-	ContextWindowResolver func(modelName string) (int, bool)
+	ContextWindowResolver model.ContextWindowResolver
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *model.TokenTailoringConfig
 	// ShowToolCallDelta controls whether to expose tool call
@@ -404,7 +404,7 @@ func WithContextWindow(tokens int) Option {
 // value. Returning ok=false or a non-positive value preserves the default
 // model-name lookup behavior.
 func WithContextWindowResolver(
-	resolver func(modelName string) (tokens int, ok bool),
+	resolver model.ContextWindowResolver,
 ) Option {
 	return func(opts *options) {
 		opts.ContextWindowResolver = resolver

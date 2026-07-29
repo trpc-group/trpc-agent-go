@@ -56,6 +56,12 @@ type Model interface {
 	Info() Info
 }
 
+// ContextWindowResolver resolves context-window metadata for a model name.
+// It returns ok=false when the model is unknown.
+type ContextWindowResolver func(
+	modelName string,
+) (tokens int, ok bool)
+
 // Seq is a callback-based sequence that yields values.
 type Seq[T any] func(yield func(T) bool)
 
