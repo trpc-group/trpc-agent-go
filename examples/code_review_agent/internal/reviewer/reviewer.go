@@ -231,25 +231,6 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 		}
 	}()
 
-	ctx, langfuseOptions, cleanupLangfuse, err := setupLangfuseRun(
-		ctx, userID, sessionID, r.config.Sandbox.Backend, prepared.Message,
-	)
-	if err != nil {
-		return outcome, fmt.Errorf("prepare Langfuse tracing: %w", err)
-	}
-	defer func() {
-		flushCtx, cancel := context.WithTimeout(
-			context.WithoutCancel(ctx),
-			langfuseCleanupTimeout,
-		)
-		defer cancel()
-		if err := cleanupLangfuse(flushCtx); err != nil {
-			// Langfuse is optional telemetry for the example. A bounded flush
-			// cannot strand task cleanup; real-agent acceptance separately
-			// requires querying the resulting trace before declaring success.
-			log.Printf("Failed to clean up Langfuse tracing: %v", err)
-		}
-	}()
 	ctx = withWorkspaceArtifactContext(ctx, r.dependencies.ArtifactService, sessionInfo)
 	events, err := reviewRunner.Run(
 		ctx,
@@ -259,12 +240,10 @@ func (r *reviewer) Review(ctx context.Context, spec reviewinput.Spec) (
 			Role:    model.RoleUser,
 			Content: prepared.Message,
 		},
-		append(langfuseOptions,
-			agent.WithRuntimeState(map[string]any{
-				runtimeStateReviewTaskID: taskID,
-			}),
-			agent.WithToolPermissionPolicy(governance.PermissionPolicy()),
-		)...,
+		agent.WithRuntimeState(map[string]any{
+			runtimeStateReviewTaskID: taskID,
+		}),
+		agent.WithToolPermissionPolicy(governance.PermissionPolicy()),
 	)
 	if err != nil {
 		return outcome, err

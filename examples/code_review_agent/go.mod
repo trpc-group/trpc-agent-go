@@ -11,7 +11,6 @@ replace (
 require (
 	github.com/docker/docker v28.4.0+incompatible
 	github.com/sourcegraph/go-diff v0.8.0
-	go.opentelemetry.io/otel v1.38.0
 	golang.org/x/mod v0.33.0
 	modernc.org/sqlite v1.50.0
 	trpc.group/trpc-go/trpc-agent-go v1.6.1-0.20260311094958-7b74ee59e339
@@ -59,6 +58,7 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	go.opentelemetry.io/auto/sdk v1.1.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.63.0 // indirect
+	go.opentelemetry.io/otel v1.38.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.29.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.29.0 // indirect
