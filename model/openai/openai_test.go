@@ -1085,6 +1085,40 @@ func TestWithContextWindow(t *testing.T) {
 	require.Zero(t, m.Info().ContextWindow)
 }
 
+func TestWithContextWindowResolver(t *testing.T) {
+	const (
+		modelName = "provider-model"
+		window    = 65536
+	)
+	resolver := func(name string) (int, bool) {
+		if name == modelName {
+			return window, true
+		}
+		return 0, false
+	}
+
+	m := New(modelName, WithContextWindowResolver(resolver))
+	require.Equal(t, window, m.Info().ContextWindow)
+
+	m = New("unknown-model", WithContextWindowResolver(resolver))
+	require.Zero(t, m.Info().ContextWindow)
+
+	m = New(
+		modelName,
+		WithContextWindowResolver(func(string) (int, bool) {
+			return 0, true
+		}),
+	)
+	require.Zero(t, m.Info().ContextWindow)
+
+	m = New(
+		modelName,
+		WithContextWindow(204800),
+		WithContextWindowResolver(resolver),
+	)
+	require.Equal(t, 204800, m.Info().ContextWindow)
+}
+
 // stubTool implements tool.Tool for testing purposes.
 type stubTool struct{ decl *tool.Declaration }
 

@@ -109,6 +109,8 @@ type options struct {
 	MaxInputTokens int
 	// ContextWindow is the model context window size in tokens.
 	ContextWindow int
+	// ContextWindowResolver resolves provider-scoped model context windows.
+	ContextWindowResolver func(modelName string) (int, bool)
 	// TokenTailoringConfig allows customization of token tailoring parameters.
 	TokenTailoringConfig *model.TokenTailoringConfig
 	// ShowToolCallDelta controls whether to expose tool call
@@ -394,6 +396,18 @@ func WithContextWindow(tokens int) Option {
 		if tokens > 0 {
 			opts.ContextWindow = tokens
 		}
+	}
+}
+
+// WithContextWindowResolver sets a provider-scoped context window resolver.
+// The resolver is used only when WithContextWindow does not set a positive
+// value. Returning ok=false or a non-positive value preserves the default
+// model-name lookup behavior.
+func WithContextWindowResolver(
+	resolver func(modelName string) (tokens int, ok bool),
+) Option {
+	return func(opts *options) {
+		opts.ContextWindowResolver = resolver
 	}
 }
 

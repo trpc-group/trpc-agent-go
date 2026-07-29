@@ -482,6 +482,12 @@ func New(name string, opts ...Option) *Model {
 	if o.TailoringStrategy == nil {
 		o.TailoringStrategy = model.NewMiddleOutStrategy(o.TokenCounter)
 	}
+	contextWindow := o.ContextWindow
+	if contextWindow <= 0 && o.ContextWindowResolver != nil {
+		if resolved, ok := o.ContextWindowResolver(name); ok && resolved > 0 {
+			contextWindow = resolved
+		}
+	}
 	variantCfg := variantConfigs[o.Variant]
 	if o.textOnlyMessageContent != nil {
 		variantCfg.textOnlyMessageContent = *o.textOnlyMessageContent
@@ -508,7 +514,7 @@ func New(name string, opts ...Option) *Model {
 		batchMetadata:              o.BatchMetadata,
 		batchBaseURL:               o.BatchBaseURL,
 		enableTokenTailoring:       o.EnableTokenTailoring,
-		contextWindow:              o.ContextWindow,
+		contextWindow:              contextWindow,
 		tokenCounter:               o.TokenCounter,
 		tailoringStrategy:          o.TailoringStrategy,
 		maxInputTokens:             o.MaxInputTokens,
