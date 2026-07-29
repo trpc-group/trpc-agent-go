@@ -858,9 +858,8 @@ func (t *RunTool) scanRunOutput(
 		if originalSize <= 0 {
 			originalSize = int64(len(out.PrimaryOutput.Content))
 		}
-		content, truncated, nextRemaining := t.scanRunOutputText(ctx, in, "primary_output",
+		content, truncated, _ := t.scanRunOutputText(ctx, in, "primary_output",
 			out.PrimaryOutput.Name, out.PrimaryOutput.Content, policy, remaining)
-		remaining = nextRemaining
 		out.PrimaryOutput.Content = content
 		if truncated {
 			if out.PrimaryOutput.SizeBytes <= 0 {

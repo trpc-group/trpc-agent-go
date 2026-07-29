@@ -349,26 +349,7 @@ func RequestFromPermission(req *tool.PermissionRequest) (Request, bool, error) {
 		r, err := parseHostExec(name, req.Arguments)
 		return r, true, err
 	case isMCPCommandTool(name):
-		r, err := parseWorkspaceExec(name, req.Arguments)
-		if err == nil {
-			rawArgs := string(req.Arguments)
-			r.RawArgs = rawArgs
-			if mcpCommandHasUnsupportedFields(req.Arguments) {
-				return Request{
-					ToolName: name,
-					Backend:  BackendUnknown,
-					RawArgs:  rawArgs,
-				}, false, nil
-			}
-			if strings.TrimSpace(r.Command) == "" {
-				return Request{
-					ToolName: name,
-					Backend:  BackendUnknown,
-					RawArgs:  rawArgs,
-				}, false, nil
-			}
-		}
-		return r, true, err
+		return parseMCPCommand(name, req.Arguments)
 	default:
 		return Request{
 			ToolName: name,
@@ -376,6 +357,23 @@ func RequestFromPermission(req *tool.PermissionRequest) (Request, bool, error) {
 			RawArgs:  string(req.Arguments),
 		}, false, nil
 	}
+}
+
+func parseMCPCommand(name string, args []byte) (Request, bool, error) {
+	r, err := parseWorkspaceExec(name, args)
+	if err != nil {
+		return r, true, err
+	}
+	rawArgs := string(args)
+	r.RawArgs = rawArgs
+	if mcpCommandHasUnsupportedFields(args) || strings.TrimSpace(r.Command) == "" {
+		return Request{
+			ToolName: name,
+			Backend:  BackendUnknown,
+			RawArgs:  rawArgs,
+		}, false, nil
+	}
+	return r, true, nil
 }
 
 func parseByBackend(name string, backend Backend, args []byte) (Request, bool, error) {
