@@ -13,6 +13,7 @@ package review
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 )
 
@@ -21,26 +22,42 @@ const SchemaVersion = "review/v1"
 
 var errInvalidValue = errors.New("invalid value")
 
-// Status describes the lifecycle state of a task or sandbox run.
-type Status string
+// TaskStatus describes the lifecycle state of a review task.
+type TaskStatus string
 
 const (
-	// StatusPending indicates that work has not started.
-	StatusPending Status = "pending"
-	// StatusRunning indicates that work is in progress.
-	StatusRunning Status = "running"
-	// StatusCompleted indicates that work finished successfully.
-	StatusCompleted Status = "completed"
-	// StatusFailed indicates that work finished with an error.
-	StatusFailed Status = "failed"
-	// StatusCanceled indicates that work stopped after cancellation.
-	StatusCanceled Status = "canceled"
-	// StatusSkipped indicates that a sandbox run was intentionally not started.
-	StatusSkipped Status = "skipped"
-	// StatusTimedOut indicates that a sandbox run exceeded its time limit.
-	StatusTimedOut Status = "timed_out"
-	// StatusUnavailable indicates that an optional sandbox checker was unavailable.
-	StatusUnavailable Status = "unavailable"
+	// TaskStatusPending indicates that task work has not started.
+	TaskStatusPending TaskStatus = "pending"
+	// TaskStatusRunning indicates that task work is in progress.
+	TaskStatusRunning TaskStatus = "running"
+	// TaskStatusCompleted indicates that the task finished successfully.
+	TaskStatusCompleted TaskStatus = "completed"
+	// TaskStatusFailed indicates that the task finished with an error.
+	TaskStatusFailed TaskStatus = "failed"
+	// TaskStatusCanceled indicates that the task stopped after cancellation.
+	TaskStatusCanceled TaskStatus = "canceled"
+)
+
+// SandboxStatus describes the lifecycle state of a sandbox run.
+type SandboxStatus string
+
+const (
+	// SandboxStatusPending indicates that the run has not started.
+	SandboxStatusPending SandboxStatus = "pending"
+	// SandboxStatusRunning indicates that the run is in progress.
+	SandboxStatusRunning SandboxStatus = "running"
+	// SandboxStatusCompleted indicates that the command exited successfully.
+	SandboxStatusCompleted SandboxStatus = "completed"
+	// SandboxStatusFailed indicates that the command exited unsuccessfully.
+	SandboxStatusFailed SandboxStatus = "failed"
+	// SandboxStatusCanceled indicates that the run stopped after cancellation.
+	SandboxStatusCanceled SandboxStatus = "canceled"
+	// SandboxStatusSkipped indicates that the run was intentionally not started.
+	SandboxStatusSkipped SandboxStatus = "skipped"
+	// SandboxStatusTimedOut indicates that the run exceeded its time limit.
+	SandboxStatusTimedOut SandboxStatus = "timed_out"
+	// SandboxStatusUnavailable indicates that an optional checker was unavailable.
+	SandboxStatusUnavailable SandboxStatus = "unavailable"
 )
 
 // Phase identifies the current stage of a review task.
@@ -61,6 +78,18 @@ const (
 	PhaseFinalize Phase = "finalize"
 	// PhaseCompleted indicates that task finalization has completed.
 	PhaseCompleted Phase = "completed"
+)
+
+// Mode identifies the configured review execution mode.
+type Mode string
+
+const (
+	// ModeRuleOnly runs deterministic review without constructing a model.
+	ModeRuleOnly Mode = "rule-only"
+	// ModeFakeModel runs the deterministic fake-model integration path.
+	ModeFakeModel Mode = "fake-model"
+	// ModeModel runs deterministic review with optional model assistance.
+	ModeModel Mode = "model"
 )
 
 // InputSource identifies how review input was obtained.
@@ -151,17 +180,17 @@ const (
 
 // Task records the lifecycle state of one review.
 type Task struct {
-	SchemaVersion string    `json:"schema_version"`
-	ID            string    `json:"id"`
-	Status        Status    `json:"status"`
-	Phase         Phase     `json:"phase"`
-	Mode          string    `json:"mode"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
-	TerminalError string    `json:"terminal_error,omitempty"`
+	SchemaVersion string     `json:"schema_version"`
+	ID            string     `json:"id"`
+	Status        TaskStatus `json:"status"`
+	Phase         Phase      `json:"phase"`
+	Mode          Mode       `json:"mode"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
+	TerminalError string     `json:"terminal_error,omitempty"`
 }
 
-// Validate checks that Task contains a supported schema and closed enum values.
+// Validate checks Task schema, enums, timestamps, and lifecycle invariants.
 func (t Task) Validate() error {
 	if err := validateSchema(t.SchemaVersion); err != nil {
 		return fmt.Errorf("validate task: %w", err)
@@ -169,14 +198,42 @@ func (t Task) Validate() error {
 	if err := requireString("id", t.ID); err != nil {
 		return fmt.Errorf("validate task: %w", err)
 	}
-	if !t.Status.validTask() {
+	if !t.Status.valid() {
 		return fmt.Errorf("validate task status %q: %w", t.Status, errInvalidValue)
 	}
 	if !t.Phase.valid() {
 		return fmt.Errorf("validate task phase %q: %w", t.Phase, errInvalidValue)
 	}
-	if err := requireString("mode", t.Mode); err != nil {
-		return fmt.Errorf("validate task: %w", err)
+	if !t.Mode.valid() {
+		return fmt.Errorf("validate task mode %q: %w", t.Mode, errInvalidValue)
+	}
+	if t.CreatedAt.IsZero() {
+		return fmt.Errorf("validate task created at: %w", errInvalidValue)
+	}
+	if t.UpdatedAt.IsZero() {
+		return fmt.Errorf("validate task updated at: %w", errInvalidValue)
+	}
+	if t.UpdatedAt.Before(t.CreatedAt) {
+		return fmt.Errorf("validate task timestamps: %w", errInvalidValue)
+	}
+	if t.Status == TaskStatusPending && t.Phase != PhaseCreated {
+		return fmt.Errorf("validate task pending phase %q: %w", t.Phase, errInvalidValue)
+	}
+	if t.Status == TaskStatusRunning && t.Phase == PhaseCreated {
+		return fmt.Errorf("validate task running phase %q: %w", t.Phase, errInvalidValue)
+	}
+	if (t.Status == TaskStatusCompleted) != (t.Phase == PhaseCompleted) {
+		return fmt.Errorf("validate task completed status and phase: %w", errInvalidValue)
+	}
+	switch t.Status {
+	case TaskStatusFailed, TaskStatusCanceled:
+		if t.TerminalError == "" {
+			return fmt.Errorf("validate task terminal error: %w", errInvalidValue)
+		}
+	default:
+		if t.TerminalError != "" {
+			return fmt.Errorf("validate task terminal error: %w", errInvalidValue)
+		}
 	}
 	return nil
 }
@@ -212,16 +269,17 @@ type SandboxRun struct {
 	SchemaVersion string        `json:"schema_version"`
 	TaskID        string        `json:"task_id"`
 	Command       string        `json:"command"`
-	Status        Status        `json:"status"`
+	Status        SandboxStatus `json:"status"`
 	Duration      time.Duration `json:"duration"`
-	ExitCode      int           `json:"exit_code"`
+	ExitCode      *int          `json:"exit_code,omitempty"`
 	TimedOut      bool          `json:"timed_out"`
 	Stdout        string        `json:"stdout,omitempty"`
 	Stderr        string        `json:"stderr,omitempty"`
 	Truncated     bool          `json:"truncated"`
 }
 
-// Validate checks that SandboxRun contains a supported status and required identifiers.
+// Validate checks SandboxRun identity, status, duration, exit code, and timeout
+// consistency.
 func (r SandboxRun) Validate() error {
 	if err := validateSchema(r.SchemaVersion); err != nil {
 		return fmt.Errorf("validate sandbox run: %w", err)
@@ -232,8 +290,28 @@ func (r SandboxRun) Validate() error {
 	if err := requireString("command", r.Command); err != nil {
 		return fmt.Errorf("validate sandbox run: %w", err)
 	}
-	if !r.Status.validSandboxRun() {
+	if !r.Status.valid() {
 		return fmt.Errorf("validate sandbox run status %q: %w", r.Status, errInvalidValue)
+	}
+	if r.Duration < 0 {
+		return fmt.Errorf("validate sandbox run duration: %w", errInvalidValue)
+	}
+	switch r.Status {
+	case SandboxStatusCompleted:
+		if r.ExitCode == nil || *r.ExitCode != 0 {
+			return fmt.Errorf("validate sandbox run completed exit code: %w", errInvalidValue)
+		}
+	case SandboxStatusFailed:
+		if r.ExitCode == nil || *r.ExitCode == 0 {
+			return fmt.Errorf("validate sandbox run failed exit code: %w", errInvalidValue)
+		}
+	default:
+		if r.ExitCode != nil {
+			return fmt.Errorf("validate sandbox run exit code for status %q: %w", r.Status, errInvalidValue)
+		}
+	}
+	if (r.Status == SandboxStatusTimedOut) != r.TimedOut {
+		return fmt.Errorf("validate sandbox run timed out status: %w", errInvalidValue)
 	}
 	return nil
 }
@@ -260,14 +338,12 @@ func (d GovernanceDecision) Validate() error {
 	if !d.Action.valid() {
 		return fmt.Errorf("validate governance decision action %q: %w", d.Action, errInvalidValue)
 	}
-	for name, value := range map[string]string{
-		"tool":   d.Tool,
-		"reason": d.Reason,
-		"rule":   d.Rule,
-	} {
-		if err := requireString(name, value); err != nil {
-			return fmt.Errorf("validate governance decision: %w", err)
-		}
+	if err := requireStrings(
+		namedString{name: "tool", value: d.Tool},
+		namedString{name: "reason", value: d.Reason},
+		namedString{name: "rule", value: d.Rule},
+	); err != nil {
+		return fmt.Errorf("validate governance decision: %w", err)
 	}
 	return nil
 }
@@ -308,18 +384,16 @@ func (f Finding) Validate() error {
 	if !f.Disposition.valid() {
 		return fmt.Errorf("validate finding disposition %q: %w", f.Disposition, errInvalidValue)
 	}
-	for name, value := range map[string]string{
-		"category":       f.Category,
-		"file":           f.File,
-		"title":          f.Title,
-		"evidence":       f.Evidence,
-		"recommendation": f.Recommendation,
-		"rule id":        f.RuleID,
-		"fingerprint":    f.Fingerprint,
-	} {
-		if err := requireString(name, value); err != nil {
-			return fmt.Errorf("validate finding: %w", err)
-		}
+	if err := requireStrings(
+		namedString{name: "category", value: f.Category},
+		namedString{name: "file", value: f.File},
+		namedString{name: "title", value: f.Title},
+		namedString{name: "evidence", value: f.Evidence},
+		namedString{name: "recommendation", value: f.Recommendation},
+		namedString{name: "rule id", value: f.RuleID},
+		namedString{name: "fingerprint", value: f.Fingerprint},
+	); err != nil {
+		return fmt.Errorf("validate finding: %w", err)
 	}
 	if f.Line < 1 {
 		return fmt.Errorf("validate finding line %d: %w", f.Line, errInvalidValue)
@@ -346,16 +420,14 @@ func (a ArtifactRecord) Validate() error {
 	if err := validateSchema(a.SchemaVersion); err != nil {
 		return fmt.Errorf("validate artifact record: %w", err)
 	}
-	for name, value := range map[string]string{
-		"task id":   a.TaskID,
-		"name":      a.Name,
-		"reference": a.Reference,
-		"digest":    a.Digest,
-		"mime type": a.MIMEType,
-	} {
-		if err := requireString(name, value); err != nil {
-			return fmt.Errorf("validate artifact record: %w", err)
-		}
+	if err := requireStrings(
+		namedString{name: "task id", value: a.TaskID},
+		namedString{name: "name", value: a.Name},
+		namedString{name: "reference", value: a.Reference},
+		namedString{name: "digest", value: a.Digest},
+		namedString{name: "mime type", value: a.MIMEType},
+	); err != nil {
+		return fmt.Errorf("validate artifact record: %w", err)
 	}
 	if a.Size < 0 {
 		return fmt.Errorf("validate artifact record size %d: %w", a.Size, errInvalidValue)
@@ -386,23 +458,34 @@ func (m Metrics) Validate() error {
 	if m.TotalDuration < 0 || m.SandboxDuration < 0 {
 		return fmt.Errorf("validate metrics duration: %w", errInvalidValue)
 	}
-	for name, value := range map[string]int{
-		"tool invocations":   m.ToolInvocations,
-		"permission blocks":  m.PermissionBlocks,
-		"finding total":      m.FindingTotal,
-		"warning count":      m.WarningCount,
-		"human review count": m.HumanReviewCount,
-	} {
-		if value < 0 {
-			return fmt.Errorf("validate metrics %s %d: %w", name, value, errInvalidValue)
-		}
+	if err := nonnegativeInts(
+		namedInt{name: "tool invocations", value: m.ToolInvocations},
+		namedInt{name: "permission blocks", value: m.PermissionBlocks},
+		namedInt{name: "finding total", value: m.FindingTotal},
+		namedInt{name: "warning count", value: m.WarningCount},
+		namedInt{name: "human review count", value: m.HumanReviewCount},
+	); err != nil {
+		return fmt.Errorf("validate metrics: %w", err)
 	}
-	for severity, count := range m.SeverityCounts {
+	severities := make([]string, 0, len(m.SeverityCounts))
+	for severity := range m.SeverityCounts {
+		severities = append(severities, string(severity))
+	}
+	sort.Strings(severities)
+	for _, value := range severities {
+		severity := Severity(value)
+		count := m.SeverityCounts[severity]
 		if !severity.valid() || count < 0 {
 			return fmt.Errorf("validate metrics severity %q count %d: %w", severity, count, errInvalidValue)
 		}
 	}
-	for errorType, count := range m.ErrorTypeCounts {
+	errorTypes := make([]string, 0, len(m.ErrorTypeCounts))
+	for errorType := range m.ErrorTypeCounts {
+		errorTypes = append(errorTypes, errorType)
+	}
+	sort.Strings(errorTypes)
+	for _, errorType := range errorTypes {
+		count := m.ErrorTypeCounts[errorType]
 		if errorType == "" || count < 0 {
 			return fmt.Errorf("validate metrics error type %q count %d: %w", errorType, count, errInvalidValue)
 		}
@@ -423,7 +506,8 @@ type Report struct {
 	Conclusion          string               `json:"conclusion"`
 }
 
-// Validate checks the report schema and each nested canonical record.
+// Validate checks the report schema, nested records, task identity, and metrics
+// consistency.
 func (r Report) Validate() error {
 	if err := validateSchema(r.SchemaVersion); err != nil {
 		return fmt.Errorf("validate report: %w", err)
@@ -434,24 +518,49 @@ func (r Report) Validate() error {
 	if err := r.Input.Validate(); err != nil {
 		return fmt.Errorf("validate report: %w", err)
 	}
+	if r.Input.TaskID != r.Task.ID {
+		return fmt.Errorf("validate report input task id %q: %w", r.Input.TaskID, errInvalidValue)
+	}
 	for index, run := range r.SandboxRuns {
 		if err := run.Validate(); err != nil {
 			return fmt.Errorf("validate report sandbox run %d: %w", index, err)
+		}
+		if run.TaskID != r.Task.ID {
+			return fmt.Errorf("validate report sandbox run %d task id %q: %w", index, run.TaskID, errInvalidValue)
 		}
 	}
 	for index, decision := range r.GovernanceDecisions {
 		if err := decision.Validate(); err != nil {
 			return fmt.Errorf("validate report governance decision %d: %w", index, err)
 		}
+		if decision.TaskID != r.Task.ID {
+			return fmt.Errorf("validate report governance decision %d task id %q: %w", index, decision.TaskID, errInvalidValue)
+		}
 	}
+	severityCounts := make(map[Severity]int)
+	warningCount := 0
+	humanReviewCount := 0
 	for index, finding := range r.Findings {
 		if err := finding.Validate(); err != nil {
 			return fmt.Errorf("validate report finding %d: %w", index, err)
+		}
+		if finding.TaskID != r.Task.ID {
+			return fmt.Errorf("validate report finding %d task id %q: %w", index, finding.TaskID, errInvalidValue)
+		}
+		severityCounts[finding.Severity]++
+		switch finding.Disposition {
+		case DispositionWarning:
+			warningCount++
+		case DispositionNeedsHumanReview:
+			humanReviewCount++
 		}
 	}
 	for index, artifact := range r.Artifacts {
 		if err := artifact.Validate(); err != nil {
 			return fmt.Errorf("validate report artifact %d: %w", index, err)
+		}
+		if artifact.TaskID != r.Task.ID {
+			return fmt.Errorf("validate report artifact %d task id %q: %w", index, artifact.TaskID, errInvalidValue)
 		}
 	}
 	if err := r.Metrics.Validate(); err != nil {
@@ -459,6 +568,26 @@ func (r Report) Validate() error {
 	}
 	if err := requireString("conclusion", r.Conclusion); err != nil {
 		return fmt.Errorf("validate report: %w", err)
+	}
+	if r.Metrics.FindingTotal != len(r.Findings) {
+		return fmt.Errorf("validate report finding total %d: %w", r.Metrics.FindingTotal, errInvalidValue)
+	}
+	for _, severity := range [...]Severity{
+		SeverityCritical,
+		SeverityHigh,
+		SeverityMedium,
+		SeverityLow,
+		SeverityInfo,
+	} {
+		if r.Metrics.SeverityCounts[severity] != severityCounts[severity] {
+			return fmt.Errorf("validate report severity %s count %d: %w", severity, r.Metrics.SeverityCounts[severity], errInvalidValue)
+		}
+	}
+	if r.Metrics.WarningCount != warningCount {
+		return fmt.Errorf("validate report warning count %d: %w", r.Metrics.WarningCount, errInvalidValue)
+	}
+	if r.Metrics.HumanReviewCount != humanReviewCount {
+		return fmt.Errorf("validate report human review count %d: %w", r.Metrics.HumanReviewCount, errInvalidValue)
 	}
 	return nil
 }
@@ -477,20 +606,58 @@ func requireString(name, value string) error {
 	return nil
 }
 
-func (s Status) validTask() bool {
+type namedString struct {
+	name  string
+	value string
+}
+
+func requireStrings(values ...namedString) error {
+	for _, value := range values {
+		if err := requireString(value.name, value.value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type namedInt struct {
+	name  string
+	value int
+}
+
+func nonnegativeInts(values ...namedInt) error {
+	for _, value := range values {
+		if value.value < 0 {
+			return fmt.Errorf("%s %d: %w", value.name, value.value, errInvalidValue)
+		}
+	}
+	return nil
+}
+
+func (s TaskStatus) valid() bool {
 	switch s {
-	case StatusPending, StatusRunning, StatusCompleted, StatusFailed,
-		StatusCanceled:
+	case TaskStatusPending, TaskStatusRunning, TaskStatusCompleted,
+		TaskStatusFailed, TaskStatusCanceled:
 		return true
 	default:
 		return false
 	}
 }
 
-func (s Status) validSandboxRun() bool {
+func (s SandboxStatus) valid() bool {
 	switch s {
-	case StatusPending, StatusRunning, StatusCompleted, StatusFailed,
-		StatusCanceled, StatusSkipped, StatusTimedOut, StatusUnavailable:
+	case SandboxStatusPending, SandboxStatusRunning, SandboxStatusCompleted,
+		SandboxStatusFailed, SandboxStatusCanceled, SandboxStatusSkipped,
+		SandboxStatusTimedOut, SandboxStatusUnavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m Mode) valid() bool {
+	switch m {
+	case ModeRuleOnly, ModeFakeModel, ModeModel:
 		return true
 	default:
 		return false
